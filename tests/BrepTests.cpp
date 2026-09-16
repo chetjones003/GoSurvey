@@ -4104,7 +4104,11 @@ TEST_CASE("Loft stays accurate on a tilted frame at survey magnitude", "[brep][r
 TEST_CASE("Translate moves every point of a lofted NURBS face by exactly the offset", "[brep][req315]") {
   Problem why = Problem::Ok;
   Solid s;
-  REQUIRE(brep::Loft({CircleProfile(World(), 4.0), CircleProfile(PlaneAlong(World(), 6.0), 6.0)}, &s, &why));
+  // Three circles: a two-circle coaxial loft is built as an analytic cone since issue #515, and this
+  // case is about NURBS faces.
+  REQUIRE(brep::Loft({CircleProfile(World(), 4.0), CircleProfile(PlaneAlong(World(), 6.0), 6.0),
+                      CircleProfile(PlaneAlong(World(), 9.0), 5.0)},
+                     &s, &why));
   const Vec3 delta{-3.5e6, 1.24e7, -812.0};
   const Solid moved = brep::Translate(s, delta);
   REQUIRE(brep::Validate(moved) == Problem::Ok);
@@ -6851,5 +6855,234 @@ TEST_CASE("Radial cross-hole through a coaxial stack refuses when out of scope (
   SECTION("cutter axis not perpendicular to the stack axis") {
     CHECK_FALSE(brep::SubtractRadialCrossHoleThroughStack(
         stack, brep::Vec3{0.0, 0.0, 2.0}, brep::Vec3{1, 0, 1}, 0.3, &cut, &why));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #515 (D-2026-09-16-c): a cylinder or cone cuts the same way however it was made.
+// Slice and SectionLoop recognise curved solids by their recipe; Extrude, Revolve and Loft now
+// describe a result that IS a cylinder or cone, and a two-circle coaxial Loft is BUILT as one.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Slice both solids at the same plane and require the same outcome: both refuse with the same
+/// reason, or both succeed with pieces of the same volume.
+void RequireSameSlice(const Solid& made, const Solid& primitive, const Vec3& p, const Vec3& n) {
+  Solid ma, mb, pa, pb;
+  Problem mw = Problem::Ok, pw = Problem::Ok;
+  const bool mok = brep::Slice(made, p, n, brep::SliceKeep::Both, &ma, &mb, &mw);
+  const bool pok = brep::Slice(primitive, p, n, brep::SliceKeep::Both, &pa, &pb, &pw);
+  INFO("plane point (" << p.x << "," << p.y << "," << p.z << ") normal (" << n.x << "," << n.y << "," << n.z << ")");
+  REQUIRE(mok == pok);
+  if (!mok) {
+    REQUIRE(mw == pw);
+    return;
+  }
+  REQUIRE(brep::ComputeMassProperties(ma).volume == Approx(brep::ComputeMassProperties(pa).volume).epsilon(1e-9));
+  REQUIRE(brep::ComputeMassProperties(mb).volume == Approx(brep::ComputeMassProperties(pb).volume).epsilon(1e-9));
+}
+
+/// The planes the primitive recognisers handle for a solid standing on z = 0 up to \p h: across
+/// the axis (a circle), tilted between the caps (an ellipse), and one they refuse (along the axis).
+void RequireSameCutsAsPrimitive(const Solid& made, const Solid& primitive, double h) {
+  RequireSameSlice(made, primitive, Vec3{0, 0, 0.4 * h}, Vec3{0, 0, 1});
+  RequireSameSlice(made, primitive, Vec3{0, 0, 0.5 * h}, Vec3{0.05, 0.0, 1.0});
+  RequireSameSlice(made, primitive, Vec3{0, 0, 0.5 * h}, Vec3{1, 0, 0});
+
+  ucs::Ucs pm, pp;
+  brep::Path lm, lp;
+  Problem wm = Problem::Ok, wp = Problem::Ok;
+  REQUIRE(brep::SectionLoop(made, Vec3{0, 0, 0.4 * h}, Vec3{0, 0, 1}, &pm, &lm, &wm));
+  REQUIRE(brep::SectionLoop(primitive, Vec3{0, 0, 0.4 * h}, Vec3{0, 0, 1}, &pp, &lp, &wp));
+  REQUIRE(lm.segs.size() == lp.segs.size());
+  REQUIRE(std::hypot(lm.start.x, lm.start.y) == Approx(std::hypot(lp.start.x, lp.start.y)).epsilon(1e-12));
+}
+
+brep::Profile XzProfile(const std::vector<ucs::Point2D>& pts) {
+  ucs::Ucs xz;
+  REQUIRE(ucs::FromNormal(Vec3{0, 0, 0}, Vec3{0, 1, 0}, &xz));
+  return PolyProfile(xz, pts);
+}
+
+}  // namespace
+
+TEST_CASE("An extruded circle is described as the cylinder it is, and cuts like one", "[brep][issue515]") {
+  Problem why = Problem::Ok;
+  const double r = 30.0, h = 50.0;
+  Solid prim;
+  REQUIRE(brep::MakeCylinder(World(), r, h, &prim, &why));
+
+  SECTION("extruded up from its base") {
+    Solid ext;
+    REQUIRE(brep::Extrude(CircleProfile(World(), r), h, &ext, &why));
+    REQUIRE(ext.recipe.kind == brep::PrimitiveKind::Cylinder);
+    REQUIRE(ext.recipe.radius == Approx(r));
+    REQUIRE(ext.recipe.height == Approx(h));
+    REQUIRE(ext.recipe.frame.origin.z == Approx(0.0).margin(1e-12));
+    REQUIRE(ext.recipe.frame.zAxis.z == Approx(1.0));
+    RequireSameCutsAsPrimitive(ext, prim, h);
+  }
+
+  SECTION("extruded DOWN from its top: the base is where the solid starts, not where the profile was") {
+    Solid ext;
+    REQUIRE(brep::Extrude(CircleProfile(PlaneAlong(World(), h), r), -h, &ext, &why));
+    REQUIRE(ext.recipe.kind == brep::PrimitiveKind::Cylinder);
+    const brep::Recipe& rc = ext.recipe;
+    // Either orientation describes the same solid; what matters is that it spans z 0..h.
+    const double z0 = rc.frame.origin.z, z1 = rc.frame.origin.z + rc.frame.zAxis.z * rc.height;
+    REQUIRE(std::min(z0, z1) == Approx(0.0).margin(1e-9));
+    REQUIRE(std::max(z0, z1) == Approx(h));
+    RequireSameCutsAsPrimitive(ext, prim, h);
+  }
+
+  SECTION("its topology is untouched: the recipe is description, not geometry") {
+    Solid ext;
+    REQUIRE(brep::Extrude(CircleProfile(World(), r), h, &ext, &why));
+    REQUIRE(ext.faces.size() == prim.faces.size());
+    REQUIRE(brep::ComputeMassProperties(ext).volume == Approx(kPi * r * r * h).epsilon(1e-12));
+  }
+
+  SECTION("a rectangle extrudes with no recipe, as before") {
+    Solid ext;
+    REQUIRE(brep::Extrude(PolyProfile(World(), {{0, 0}, {4, 0}, {4, 3}, {0, 3}}), 5.0, &ext, &why));
+    REQUIRE(ext.recipe.kind == brep::PrimitiveKind::None);
+  }
+
+  SECTION("a closed loop of arcs that is NOT one circle keeps no recipe") {
+    // Two half-turn arcs about DIFFERENT centres: a stadium-less lens that only resembles a circle.
+    brep::Profile lens = CircleProfile(World(), r);
+    lens.edges[1].centre = Vec3{0.0, 0.5, 0.0};
+    Solid ext;
+    if (brep::Extrude(lens, h, &ext, &why))
+      REQUIRE(ext.recipe.kind == brep::PrimitiveKind::None);
+  }
+}
+
+TEST_CASE("A full-turn revolve of a right profile about its edge is described as a cylinder or cone",
+          "[brep][issue515]") {
+  Problem why = Problem::Ok;
+  const double r = 4.0, h = 9.0;
+
+  SECTION("rectangle -> cylinder, and it cuts like the primitive") {
+    Solid rev, prim;
+    REQUIRE(brep::Revolve(XzProfile({{0, 0}, {r, 0}, {r, h}, {0, h}}), Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest,
+                          &rev, &why));
+    REQUIRE(rev.recipe.kind == brep::PrimitiveKind::Cylinder);
+    REQUIRE(rev.recipe.radius == Approx(r));
+    REQUIRE(rev.recipe.height == Approx(h));
+    REQUIRE(brep::MakeCylinder(World(), r, h, &prim, &why));
+    RequireSameCutsAsPrimitive(rev, prim, h);
+  }
+
+  SECTION("right trapezoid -> cone frustum, the wider end as the base whichever end it is") {
+    Solid rev, prim;
+    REQUIRE(brep::Revolve(XzProfile({{0, 0}, {2, 0}, {6, h}, {0, h}}), Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest,
+                          &rev, &why));
+    REQUIRE(rev.recipe.kind == brep::PrimitiveKind::Cone);
+    REQUIRE(rev.recipe.radius == Approx(6.0));
+    REQUIRE(rev.recipe.radius2 == Approx(2.0));
+    REQUIRE(rev.recipe.frame.origin.z == Approx(h));
+    REQUIRE(rev.recipe.frame.zAxis.z == Approx(-1.0));
+    // The primitive built the same way up: base r 6 at z = h pointing down.
+    ucs::Ucs down;
+    REQUIRE(ucs::FromNormal(Vec3{0, 0, h}, Vec3{0, 0, -1}, &down));
+    REQUIRE(brep::MakeCone(down, 6.0, 2.0, h, &prim, &why));
+    RequireSameCutsAsPrimitive(rev, prim, h);
+  }
+
+  SECTION("right triangle -> cone with an apex") {
+    Solid rev, prim;
+    REQUIRE(brep::Revolve(XzProfile({{0, 0}, {5, 0}, {0, 12}}), Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &rev,
+                          &why));
+    REQUIRE(rev.recipe.kind == brep::PrimitiveKind::Cone);
+    REQUIRE(rev.recipe.radius == Approx(5.0));
+    REQUIRE(rev.recipe.radius2 == Approx(0.0).margin(1e-12));
+    REQUIRE(brep::MakeCone(World(), 5.0, 0.0, 12.0, &prim, &why));
+    RequireSameCutsAsPrimitive(rev, prim, 12.0);
+  }
+
+  SECTION("a partial revolve is not a cylinder") {
+    Solid rev;
+    REQUIRE(brep::Revolve(XzProfile({{0, 0}, {r, 0}, {r, h}, {0, h}}), Vec3{0, 0, 0}, Vec3{0, 0, 1}, kPi, &rev,
+                          &why));
+    REQUIRE(rev.recipe.kind == brep::PrimitiveKind::None);
+  }
+
+  SECTION("a stepped shaft is not one primitive: no recipe, and the cutter still refuses it by name") {
+    // Two cylinders stacked: every face a cylinder or plane, one edge on the axis — and not a
+    // CYLINDER or CONE, so it must not be described as one.
+    Solid rev;
+    REQUIRE(brep::Revolve(XzProfile({{0, 0}, {r, 0}, {r, 3}, {2, 3}, {2, h}, {0, h}}), Vec3{0, 0, 0},
+                          Vec3{0, 0, 1}, kTwoPiTest, &rev, &why));
+    REQUIRE(rev.recipe.kind == brep::PrimitiveKind::None);
+    Solid a, b;
+    REQUIRE_FALSE(brep::Slice(rev, Vec3{0, 0, 4}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceCurvedFace);
+  }
+}
+
+TEST_CASE("A loft between two coaxial circles is built as the cylinder or cone it is", "[brep][issue515]") {
+  Problem why = Problem::Ok;
+
+  SECTION("equal radii -> cylinder with analytic faces, cutting like the primitive") {
+    Solid s, prim;
+    REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAlong(World(), 8.0), 5.0)}, &s, &why));
+    REQUIRE(s.recipe.kind == brep::PrimitiveKind::Cylinder);
+    for (const brep::Face& f : s.faces)
+      REQUIRE(f.surface.kind != brep::SurfaceKind::Nurbs);
+    REQUIRE(brep::ComputeMassProperties(s).volume == Approx(kPi * 25.0 * 8.0).epsilon(1e-12));
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 8.0, &prim, &why));
+    RequireSameCutsAsPrimitive(s, prim, 8.0);
+  }
+
+  SECTION("growing radius -> cone, the wider circle as the base") {
+    Solid s, prim;
+    REQUIRE(brep::Loft({CircleProfile(World(), 3.0), CircleProfile(PlaneAlong(World(), 10.0), 6.0)}, &s, &why));
+    REQUIRE(s.recipe.kind == brep::PrimitiveKind::Cone);
+    REQUIRE(s.recipe.radius == Approx(6.0));
+    REQUIRE(s.recipe.radius2 == Approx(3.0));
+    REQUIRE(brep::ComputeMassProperties(s).volume ==
+            Approx(kPi * 10.0 / 3.0 * (9.0 + 18.0 + 36.0)).epsilon(1e-12));
+    ucs::Ucs down;
+    REQUIRE(ucs::FromNormal(Vec3{0, 0, 10}, Vec3{0, 0, -1}, &down));
+    REQUIRE(brep::MakeCone(down, 6.0, 3.0, 10.0, &prim, &why));
+    RequireSameCutsAsPrimitive(s, prim, 10.0);
+  }
+
+  SECTION("circles NOT on a shared axis keep the freeform loft and no recipe") {
+    Solid s;
+    ucs::Ucs shifted = PlaneAlong(World(), 8.0);
+    shifted.origin.x += 2.0;
+    REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(shifted, 5.0)}, &s, &why));
+    REQUIRE(s.recipe.kind == brep::PrimitiveKind::None);
+    bool sawNurbs = false;
+    for (const brep::Face& f : s.faces)
+      sawNurbs = sawNurbs || f.surface.kind == brep::SurfaceKind::Nurbs;
+    REQUIRE(sawNurbs);
+  }
+
+  SECTION("three circles stay a freeform stack") {
+    Solid s;
+    REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAlong(World(), 4.0), 8.0),
+                        CircleProfile(PlaneAlong(World(), 11.0), 3.5)},
+                       &s, &why));
+    REQUIRE(s.recipe.kind == brep::PrimitiveKind::None);
+  }
+
+  SECTION("the answer holds at survey magnitude on a tilted frame") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid s, prim;
+    REQUIRE(brep::Loft({CircleProfile(base, 5.0), CircleProfile(PlaneAlong(base, 8.0), 5.0)}, &s, &why));
+    REQUIRE(s.recipe.kind == brep::PrimitiveKind::Cylinder);
+    REQUIRE(brep::MakeCylinder(base, 5.0, 8.0, &prim, &why));
+    REQUIRE(brep::ComputeMassProperties(s).volume ==
+            Approx(brep::ComputeMassProperties(prim).volume).epsilon(1e-9));
+    // A cut across the axis at mid-height, in the tilted frame.
+    const Vec3 mid = ray3d::Add(base.origin, ray3d::Scale(base.zAxis, 4.0));
+    Solid a, b, pa, pb;
+    REQUIRE(brep::Slice(s, mid, base.zAxis, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(brep::Slice(prim, mid, base.zAxis, brep::SliceKeep::Both, &pa, &pb, &why));
+    REQUIRE(brep::ComputeMassProperties(a).volume == Approx(brep::ComputeMassProperties(pa).volume).epsilon(1e-9));
   }
 }

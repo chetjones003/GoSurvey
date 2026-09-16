@@ -225,7 +225,10 @@ enum class Justify : std::uint8_t { Left, Center, Right };
 ///
 /// A solid produced by an operation that is not one of the seven primitives — a Phase 4 boolean —
 /// carries \ref PrimitiveKind::None and no parameters. That is the case the recipe cannot describe,
-/// and it is why the topology, not the recipe, is the stored truth.
+/// and it is why the topology, not the recipe, is the stored truth. The exception is a feature
+/// result that IS a primitive: an extruded circle, a full-turn revolve of a right profile about its
+/// edge, and a two-circle coaxial loft carry the `Cylinder` / `Cone` recipe (GitHub #515, ADR-046
+/// amendment (o)), because `Slice` recognises curved solids by their recipe.
 struct Recipe {
   PrimitiveKind kind = PrimitiveKind::None;
   ucs::Ucs frame;        ///< Placement. Origin is the base centre, except Sphere/Torus (the centre).
@@ -681,6 +684,9 @@ struct Profile {
 /// (\ref Problem::ProfileArcRadiusMismatch), a loop that crosses itself
 /// (\ref Problem::ProfileSelfIntersects), and a degenerate placement frame
 /// (\ref Problem::DegenerateFrame).
+///
+/// A profile that is one full circle extrudes to exactly the solid `MakeCylinder` builds and carries
+/// its `Cylinder` recipe; any other profile carries none (GitHub #515, ADR-046 amendment (o)).
 [[nodiscard]] bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWhy);
 
 /// Revolve \p profile about the axis through \p axisPoint in direction \p axisDir, through
@@ -699,6 +705,10 @@ struct Profile {
 /// degenerate axis (\ref Problem::RevolveAxisDegenerate), an axis off the plane
 /// (\ref Problem::RevolveAxisNotInPlane), a profile that straddles the axis
 /// (\ref Problem::RevolveProfileCrossesAxis), and a bad angle (\ref Problem::NonPositiveAngle).
+///
+/// A full turn of a rectangle, right trapezoid or right triangle with one edge on the axis is exactly
+/// a `MakeCylinder` / `MakeCone` solid and carries that recipe; anything else carries none (GitHub
+/// #515, ADR-046 amendment (o)).
 [[nodiscard]] bool Revolve(const Profile& profile, const Vec3& axisPoint, const Vec3& axisDir,
                            double angleRad, Solid* out, Problem* outWhy);
 
@@ -720,7 +730,9 @@ struct Profile {
 /// (\ref Problem::ProfileMalformed, \ref Problem::ProfileTooFewEdges), a vertex or arc centre off its
 /// profile plane (\ref Problem::ProfilePointOffPlane), a self-crossing profile
 /// (\ref Problem::ProfileSelfIntersects), a reflex profile arc (\ref Problem::ProfileArcReflex), and
-/// a degenerate profile frame (\ref Problem::DegenerateFrame). The result carries no recipe.
+/// a degenerate profile frame (\ref Problem::DegenerateFrame). The result carries no recipe — except
+/// that exactly two coaxial full circles on parallel planes loft to the analytic cylinder or cone
+/// `MakeCylinder` / `MakeCone` build, recipe included (GitHub #515, ADR-048 amendment).
 [[nodiscard]] bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy);
 
 /// One segment of a \ref SweepPath: the span from `points[k]` to `points[k+1]`.

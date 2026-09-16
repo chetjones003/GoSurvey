@@ -24,7 +24,9 @@ CLICK 0 0
 CLICK 0 10
 CMD 360
 EXPECT SOLIDS 1
-EXPECT SOLIDKIND 0 Solid
+# Issue #515 (D-2026-09-16-c): a rectangle revolved a full turn about one of its edges IS a cylinder,
+# and is described as one so SECTION and SLICE cut it the way they cut the CYLINDER primitive.
+EXPECT SOLIDKIND 0 Cylinder
 EXPECT LOG "Solid created"
 # the source polyline is left in place
 EXPECT POLYLINES 1

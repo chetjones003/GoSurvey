@@ -6472,6 +6472,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
   dimple, counterbore) and B2b (general analytic intersection curve — ellipse / quartic). The
   curved-SUBTRACT acceptance lines deferred by D-2026-09-02-b are met in B2a. ADR-045 (d) amended.
 
+  2026-09-16 — **an extrude or revolve that IS a cylinder or cone is described as one**
+  (D-2026-09-16-c, ADR-046 amendment (o), TASK-261, GitHub issue #515). `SLICE` and `SECTION` cut a
+  curved solid only when its recipe says `Cylinder` / `Cone`, and a feature result had none — so a
+  circle extruded into a cylinder was refused by the cuts the identical `CYLINDER` primitive
+  accepts. A circle extruded along its normal, and a full-turn revolve of a rectangle, right
+  trapezoid or right triangle with one edge on the axis, now carry the primitive's recipe; the
+  topology is unchanged, and a profile that only resembles those shapes keeps none. Acceptance added
+  to the ones above: **a cut is decided by the geometry, not by the command that made the solid** —
+  `SLICE` and `SECTION` give the same answer for `CYLINDER` / `CONE` and for the extrusion or
+  revolve that builds the same solid. Visible: such a solid now lists as `Cylinder` / `Cone`, not
+  `Solid`.
+
 ### REQ-337 — Composite-operand analytic Booleans (GitHub issue #493, continues REQ-314)
 - Purpose: REQ-314's Boolean increments (B1/B2a/B2b-1/B2b-2, plus the branch-pipe and sphere∩cylinder
   work tracked on #242/#283) already recognise a wide set of *single-primitive-pair* curved
@@ -7091,6 +7103,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   rule — confirmed against independent examples rather than assumed, and recorded above rather than
   left as a surprise. Issue #259 is now fully addressed, the third item narrower than the other two
   but for stated, verified reasons rather than left unstated.
+
+  2026-09-16 — **a loft between two coaxial circles is built as the cylinder or cone it is**
+  (D-2026-09-16-c, ADR-048 amendment, TASK-261, GitHub issue #515). Two profiles, each one full
+  circle, on parallel planes with the second centre on the first's axis, loft to analytic cylinder /
+  cone faces with the primitive's recipe instead of NURBS ribbons with none — so `SLICE` and
+  `SECTION` cut it exactly as they cut `CYLINDER` / `CONE`. Same volume, area and topology as before.
+  Circles off a shared axis and lofts of three or more profiles are unchanged. Visible: the solid
+  lists as `Cylinder` / `Cone`, not `Solid`.
 
 ### REQ-316 — Polylines have arc segments; POLYLINE draws them and JOIN builds them
 

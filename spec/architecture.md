@@ -2849,6 +2849,35 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (m) states the rule both follow — *a recipe that can still describe its solid is kept and updated;
   one that cannot is dropped.* A rotated box is still a box; a box with a corner pulled out is not.
 
+**(o) An extrude or revolve that IS a cylinder or cone says so.**
+(2026-09-16, D-2026-09-16-c, REQ-314 amended, TASK-261, GitHub issue #515.)
+
+  **Context.** `Slice` — and `SectionLoop`, built on it — cuts a curved solid only through the
+  cylinder/cone recognisers, and those read the recipe. Under (e) a feature result carried none, so a
+  circle `EXTRUDE`d into a cylinder, or a rectangle `REVOLVE`d a full turn about one of its edges,
+  was refused by every cut the identical `CYLINDER` primitive accepts. Same geometry, different
+  answer, decided by the command that made it.
+
+  **Decision.** When the result is *exactly* a right circular cylinder or cone, the operation stamps
+  the primitive's recipe — the same `Cylinder` / `Cone` recipe `MakeCylinder` / `MakeCone` write:
+  - `Extrude` of a profile that is one full circle, along its own normal → `Cylinder`;
+  - a full-turn `Revolve` of an all-straight profile of three or four edges with one edge on the axis
+    and the edges leaving its ends perpendicular to it (rectangle → `Cylinder`; right trapezoid →
+    `Cone` frustum; right triangle → `Cone` with an apex).
+
+  The larger circle is the base, as `MakeCone` requires. The **topology is untouched**: the stamp
+  runs only after the operation has built and validated its own result, so every refusal (e) and
+  the operation already make is unchanged, and a profile that merely resembles one of these shapes
+  keeps `PrimitiveKind::None`. Tolerances are the operations' own (`planeEps`, `axisEps`: 1e-6 of
+  model scale).
+
+  **This refines (e) rather than contradicting it.** (e) said extrude and revolve *may* record a
+  recipe; this is the first increment that does, and only where the recipe is a true description.
+  The recipe is still never read by validity, mass properties or tessellation. **Visible
+  consequence, accepted by the user when the choice was put:** `SOLIDLIST`, the Properties panel and
+  `.gs` now call such a solid `Cylinder` / `Cone` rather than `Solid`. `.gs` already persists a
+  recipe, so no format version bump.
+
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
 - **Status:** accepted (2026-09-02, D-2026-09-02-e). Storage is a parallel per-vertex bulge array —
@@ -3128,6 +3157,20 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
      two-or-more equal-edge-count planar profiles.
   2. **Sweep** — a profile along a line / arc / bulge-polyline path with a rotation-minimizing frame
      and optional twist; agreement asserted against extrude and revolve where the path is analytic.
+- **Amendment (2026-09-16, D-2026-09-16-c, REQ-315 amended, TASK-261, GitHub issue #515) — a loft
+  between two coaxial circles is BUILT as the cylinder or cone it is.** (g) stored every loft as
+  topology with NURBS ribbon sides and no recipe, so a loft between two circles on a shared axis —
+  exactly the solid `MakeCylinder` / `MakeCone` build — was refused by every cut the primitive
+  accepts, because `Slice`'s curved recognisers read the recipe. Stamping a `Cone` recipe on that
+  loft would describe an analytic cone while its stored faces were NURBS, so the loft is instead
+  **built** by `MakeCylinder` / `MakeCone` — analytic faces and the primitive's recipe — when it has
+  exactly two profiles, both one full circle, on parallel planes, with the second centre on the
+  first's normal. It runs after the ordinary loft has built and validated, so every refusal stands;
+  circles off a shared axis, and every loft of three or more profiles, keep the freeform ribbon and
+  no recipe. Volume, area and topology (4 vertices, 6 edges, 4 faces) are those the ribbon already
+  produced, now in closed form. The sibling case for flat faces — a loft between similar parallel
+  polygons, whose sides are planar but stored as NURBS — is GitHub #519, not this amendment.
+
 ### ADR-050 — POLYSOLID: offset-and-mitre in the kernel   (2026-09-03, accepted)
 - Context: REQ-317 asks for a wall swept along a picked path. ADR-045 settled how a *primitive* is
   built — a formula, a frame, a closed shell — and ADR-046 settled the feature operations that cut
