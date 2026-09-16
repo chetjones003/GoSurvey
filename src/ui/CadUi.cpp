@@ -10418,15 +10418,22 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       ImGui::GetWindowDrawList()->AddLine(ImVec2(gmx - 18.f, gy), ImVec2(gmx + 18.f, gy), gc, 1.4f);
     }
 
-    // Jump to the newest lines: on the frame the console opens (its InputTextMultiline child is
-    // freshly created with no scroll history of its own, and defaults to the top) and whenever
-    // the log grows while it stays open. SetNextWindowScroll targets the very next Begin — which
-    // InputTextMultiline's internal child window is — so this must be called right before it.
+    // Jump to the newest lines: on the frame the console opens and whenever the log grows while
+    // it stays open. SetNextWindowScroll targets the very next Begin — InputTextMultiline's
+    // internal child window — so it must be called right before it. One call is not enough: that
+    // child window's ScrollMax reflects last frame's content size, so on the exact frame the log
+    // grows (or the console first opens), FLT_MAX clamps against a stale, too-small ScrollMax and
+    // lands short of the real bottom. cmdConsoleScrollFramesRemaining re-issues the scroll for one
+    // extra frame once the child's content size has caught up, which reaches the true bottom.
     const bool cmdConsoleLogGrew = log.size() != cmd.commandLogLastSizeForAutoscroll;
     if (cmdConsoleLogGrew)
       cmd.commandLogLastSizeForAutoscroll = log.size();
     if (cmdConsoleJustOpened || cmdConsoleLogGrew)
+      cmd.cmdConsoleScrollFramesRemaining = 2;
+    if (cmd.cmdConsoleScrollFramesRemaining > 0) {
       ImGui::SetNextWindowScroll(ImVec2(0.0f, FLT_MAX));
+      --cmd.cmdConsoleScrollFramesRemaining;
+    }
 
     ImGui::PushStyleColor(ImGuiCol_FrameBg, barFieldBg);  // the field step
     ImGui::InputTextMultiline("##CmdConsole", cmd.commandLogCacheBytes.data(), cmd.commandLogCacheBytes.size(),
