@@ -44,6 +44,7 @@ struct UiChrome {
   bool  axisBadges;
   ImU32 axisX, axisY, axisZ;
   ImU32 axisText;
+  ImU32 axisDistance, axisAngle;  // dynamic-input band colors for distance/angle fields (REQ-024)
 
   /// Ribbon band vertical gradient (DrawRibbonBar paints over ChildBg).
   ImU32 ribbonBandTop;
