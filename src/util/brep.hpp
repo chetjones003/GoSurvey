@@ -756,7 +756,8 @@ struct Profile {
 /// profile plane (\ref Problem::ProfilePointOffPlane), a self-crossing profile
 /// (\ref Problem::ProfileSelfIntersects), a reflex profile arc (\ref Problem::ProfileArcReflex), and
 /// a degenerate profile frame (\ref Problem::DegenerateFrame). The result carries no recipe — except
-/// that exactly two coaxial full circles on parallel planes loft to the analytic cylinder or cone
+/// that exactly two coaxial full circles on parallel planes, paired vertex-for-vertex without a
+/// twist, loft to the analytic cylinder or cone
 /// `MakeCylinder` / `MakeCone` build, recipe included (GitHub #515, ADR-048 amendment).
 [[nodiscard]] bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy);
 

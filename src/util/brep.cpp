@@ -5082,6 +5082,7 @@ namespace {
   if (!(r > 0.0) || !std::isfinite(r))
     return false;
   const double tol = 1e-6 * std::max(r, 1.0);  // the kernel's own planeEps scale
+  const Vec3 axis = ray3d::Normalize(profile.plane.zAxis);
   double total = 0.0;
   for (std::size_t i = 0; i < n; ++i) {
     const ProfileEdge& e = profile.edges[i];
@@ -5090,6 +5091,15 @@ namespace {
     if ((e.sweep > 0.0) != (profile.edges.front().sweep > 0.0))
       return false;
     if (std::fabs(ray3d::Length(ray3d::Sub(profile.vertices[i], c)) - r) > tol)
+      return false;
+    // Each arc must actually carry vertex i to vertex i+1 (code review on #515): a shared centre, a
+    // constant radius and sweeps totalling a turn are also true of arcs whose endpoints disagree with
+    // their sweeps, and neither Extrude nor Validate checks that.
+    const Vec3 v = ray3d::Sub(profile.vertices[i], c);
+    const double ca = std::cos(e.sweep), sa = std::sin(e.sweep);
+    const Vec3 turned = ray3d::Add(ray3d::Add(ray3d::Scale(v, ca), ray3d::Scale(ray3d::Cross(axis, v), sa)),
+                                   ray3d::Scale(axis, ray3d::Dot(axis, v) * (1.0 - ca)));
+    if (ray3d::Length(ray3d::Sub(ray3d::Add(c, turned), profile.vertices[(i + 1) % n])) > tol)
       return false;
     total += e.sweep;
   }
@@ -5122,7 +5132,11 @@ struct Conical {
   out->rBase = aIsBase ? rA : rB;
   out->rTop = aIsBase ? rB : rA;
   out->height = h;
-  out->cylinder = std::fabs(out->rBase - out->rTop) <= 1e-6 * scale;  // the recognisers' own tolerance
+  // Equal radii are judged against the RADIUS, not the height (code review on #515): scaled by the
+  // height, a real taper of 0.0009 over 1000 ft passed as a cylinder, and the slice pieces rebuilt
+  // from that recipe came out 1.4 cubic ft too large. Radius-relative, the tolerance still absorbs
+  // float storage noise on a genuinely equal pair.
+  out->cylinder = std::fabs(out->rBase - out->rTop) <= 1e-6 * out->rBase;
   return true;
 }
 
@@ -5624,21 +5638,45 @@ bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy) {
   // BUILT as one — analytic cylinder / cone faces rather than the NURBS ribbons above, with the
   // primitive's recipe — so every planar-and-conical operation treats it as the shape it is. Only a
   // loft that has already validated reaches this, so every refusal above stands.
+  //
+  // "Coaxial" is not enough (code review on #515): the loft pairs vertex j of one circle with vertex
+  // j of the other, and when those are not at the same angle about the axis the ribbon between them
+  // TWISTS — two circles 90 degrees out of step loft to a pinched band of about two thirds the
+  // cylinder's volume. So each rail must lie in a plane through the axis. Tolerances are relative to
+  // the model, like planeEps, because a circle's normal is stored in float while its centre is double:
+  // a fixed 1e-9 refused every coaxial pair drawn in a tilted UCS.
   if (profiles.size() == 2) {
     Vec3 c0{}, c1{};
     double r0 = 0.0, r1 = 0.0;
     Conical c;
     if (ProfileIsFullCircle(profiles[0], &c0, &r0) && ProfileIsFullCircle(profiles[1], &c1, &r1) &&
         ConicalBetween(c0, r0, c1, r1, &c)) {
-      const double h = c.height;
       const Vec3 axisU = c.frame.zAxis;
-      const Vec3 n0 = ray3d::Normalize(profiles[0].plane.zAxis);
-      const Vec3 n1 = ray3d::Normalize(profiles[1].plane.zAxis);
-      const bool coaxial = ray3d::Length(ray3d::Cross(n0, n1)) <= 1e-9 && ray3d::Length(ray3d::Cross(axisU, n0)) <= 1e-9 && h > 0.0;
+      const double modelEps = 1e-6 * std::max({c.height, r0, r1});
+      // The second centre on the first circle's normal: its offset from that line, in model units.
+      const Vec3 axisVec = ray3d::Sub(c1, c0);
+      bool straight = ray3d::Length(ray3d::Cross(axisVec, ray3d::Normalize(prep[0].up))) <= modelEps;
+      // Every rail in a plane through the axis, running the same way round (no twist).
+      for (int j = 0; straight && j < n; ++j) {
+        const std::size_t jj = static_cast<std::size_t>(j);
+        const Vec3 w0 = ray3d::Sub(prep[0].walk[jj], c0);
+        const Vec3 w1 = ray3d::Sub(prep[1].walk[jj], c1);
+        const Vec3 rad0 = ray3d::Sub(w0, ray3d::Scale(axisU, ray3d::Dot(w0, axisU)));
+        const Vec3 rad1 = ray3d::Sub(w1, ray3d::Scale(axisU, ray3d::Dot(w1, axisU)));
+        const double l0 = ray3d::Length(rad0), l1 = ray3d::Length(rad1);
+        if (!(l0 > modelEps) || !(l1 > modelEps) || ray3d::Dot(rad0, rad1) <= 0.0) {
+          straight = false;
+          break;
+        }
+        // The rim point of profile 1 against the direction of profile 0's: sideways offset, in units.
+        const double sideways = ray3d::Length(ray3d::Cross(ray3d::Scale(rad0, 1.0 / l0), rad1));
+        if (sideways > modelEps)
+          straight = false;
+      }
       Solid prim;
       Problem pw = Problem::Ok;
-      if (coaxial && (c.cylinder ? MakeCylinder(c.frame, c.rBase, h, &prim, &pw)
-                                 : MakeCone(c.frame, c.rBase, c.rTop, h, &prim, &pw)))
+      if (straight && (c.cylinder ? MakeCylinder(c.frame, c.rBase, c.height, &prim, &pw)
+                                  : MakeCone(c.frame, c.rBase, c.rTop, c.height, &prim, &pw)))
         s = std::move(prim);
     }
   }

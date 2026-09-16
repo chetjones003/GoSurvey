@@ -4178,7 +4178,15 @@ TEST_CASE("Loft refuses bad input by name and stores nothing", "[brep][req315]")
 TEST_CASE("A lofted-prism volume does not move when tessellation quality changes", "[brep][req315]") {
   Problem why = Problem::Ok;
   Solid s;
-  REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAlong(World(), 8.0), 5.0)}, &s, &why));
+  // Three coaxial circles, so the sides stay NURBS: a two-circle coaxial loft is built as an analytic
+  // cylinder since #515, and this case is about the freeform faces' volume.
+  REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAlong(World(), 4.0), 5.0),
+                      CircleProfile(PlaneAlong(World(), 8.0), 5.0)},
+                     &s, &why));
+  bool sawNurbs = false;
+  for (const brep::Face& f : s.faces)
+    sawNurbs = sawNurbs || f.surface.kind == brep::SurfaceKind::Nurbs;
+  REQUIRE(sawNurbs);
   const double v = brep::ComputeMassProperties(s).volume;
   REQUIRE(v == Approx(kPi * 25.0 * 8.0).epsilon(1e-6));
 
@@ -6965,11 +6973,62 @@ TEST_CASE("An extruded circle is described as the cylinder it is, and cuts like 
 
   SECTION("a closed loop of arcs that is NOT one circle keeps no recipe") {
     // Two half-turn arcs about DIFFERENT centres: a stadium-less lens that only resembles a circle.
+    // Extrude itself refuses this one, so nothing is described either way — asserted, so the case
+    // cannot silently check nothing.
     brep::Profile lens = CircleProfile(World(), r);
     lens.edges[1].centre = Vec3{0.0, 0.5, 0.0};
     Solid ext;
-    if (brep::Extrude(lens, h, &ext, &why))
-      REQUIRE(ext.recipe.kind == brep::PrimitiveKind::None);
+    REQUIRE_FALSE(brep::Extrude(lens, h, &ext, &why));
+    REQUIRE(ext.faces.empty());
+  }
+
+  SECTION("a stadium — two half-circles joined by straight sides — builds, and keeps no recipe") {
+    brep::Profile stadium;
+    stadium.plane = World();
+    stadium.vertices = {Vec3{-5, -3, 0}, Vec3{5, -3, 0}, Vec3{5, 3, 0}, Vec3{-5, 3, 0}};
+    brep::ProfileEdge line;
+    brep::ProfileEdge arcR;
+    arcR.arc = true;
+    arcR.centre = Vec3{5, 0, 0};
+    arcR.sweep = kPi;
+    brep::ProfileEdge arcL = arcR;
+    arcL.centre = Vec3{-5, 0, 0};
+    stadium.edges = {line, arcR, line, arcL};
+    Solid ext;
+    REQUIRE(brep::Extrude(stadium, h, &ext, &why));  // accepted, so the recipe check below is real
+    REQUIRE(ext.recipe.kind == brep::PrimitiveKind::None);
+  }
+
+  SECTION("arcs whose sweeps do not carry one vertex to the next are not a circle") {
+    // Shared centre, constant radius, sweeps totalling a turn — and the second vertex at 90 degrees
+    // rather than 180, so the arcs contradict their own endpoints (code review on #515).
+    brep::Profile bent = CircleProfile(World(), r);
+    bent.vertices[1] = Vec3{0.0, r, 0.0};
+    Solid ext;
+    Problem bw = Problem::Ok;
+    // Measured: Extrude refuses this before any recipe is considered (the arcs do not close the loop
+    // they claim to), and so does Loft, which prepares profiles the same way. The endpoint check added to
+    // ProfileIsFullCircle is therefore defence in depth; this pins the refusal it backs up.
+    REQUIRE_FALSE(brep::Extrude(bent, h, &ext, &bw));
+    REQUIRE(bw == Problem::NotClosed);
+
+    // The same with four vertices at the quarter points: consistent quarter sweeps ARE a circle,
+    // and a set that still totals one turn but disagrees with the vertices is refused.
+    brep::Profile four = CircleProfile(World(), r);
+    four.vertices = {Vec3{r, 0, 0}, Vec3{0, r, 0}, Vec3{-r, 0, 0}, Vec3{0, -r, 0}};
+    const brep::ProfileEdge q = four.edges[0];
+    four.edges = {q, q, q, q};
+    for (brep::ProfileEdge& e : four.edges)
+      e.sweep = kPi / 2;
+    Solid quarters;
+    REQUIRE(brep::Extrude(four, h, &quarters, &bw));
+    REQUIRE(quarters.recipe.kind == brep::PrimitiveKind::Cylinder);
+    four.edges[0].sweep = kPi;
+    four.edges[1].sweep = kPi / 2;
+    four.edges[2].sweep = kPi / 4;
+    four.edges[3].sweep = kPi / 4;
+    Solid wrong;
+    REQUIRE_FALSE(brep::Extrude(four, h, &wrong, &bw));
   }
 }
 
@@ -7027,6 +7086,16 @@ TEST_CASE("A full-turn revolve of a right profile about its edge is described as
     const double z0 = rc.frame.origin.z, z1 = rc.frame.origin.z + rc.frame.zAxis.z * rc.height;
     REQUIRE(std::min(z0, z1) == Approx(0.0).margin(1e-6));
     REQUIRE(std::max(z0, z1) == Approx(h));
+  }
+
+  SECTION("a slight taper over a long height is a cone, and slices to the right volume") {
+    Solid rev, a, b;
+    REQUIRE(brep::Revolve(XzProfile({{0, 0}, {0.5, 0}, {0.5009, 1000}, {0, 1000}}), Vec3{0, 0, 0}, Vec3{0, 0, 1},
+                          kTwoPiTest, &rev, &why));
+    REQUIRE(rev.recipe.kind == brep::PrimitiveKind::Cone);
+    REQUIRE(brep::Slice(rev, Vec3{0, 0, 500}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(brep::ComputeMassProperties(a).volume + brep::ComputeMassProperties(b).volume ==
+            Approx(brep::ComputeMassProperties(rev).volume).epsilon(1e-9));
   }
 
   SECTION("a partial revolve is not a cylinder") {
@@ -7087,6 +7156,56 @@ TEST_CASE("A loft between two coaxial circles is built as the cylinder or cone i
     for (const brep::Face& f : s.faces)
       sawNurbs = sawNurbs || f.surface.kind == brep::SurfaceKind::Nurbs;
     REQUIRE(sawNurbs);
+  }
+
+  SECTION("circles out of step with each other TWIST, so they are not a cylinder") {
+    // The loft pairs vertex j with vertex j. Turn the top circle's vertices 90 degrees about the axis
+    // and the ribbon twists into a pinched band: same axis, same radii, a different solid (code
+    // review on #515 measured 418.88 against the cylinder's 628.32).
+    Solid s;
+    const ucs::Ucs top = ucs::RotatedAboutZ(PlaneAlong(World(), 8.0), 90.0);
+    REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(top, 5.0)}, &s, &why));
+    REQUIRE(s.recipe.kind == brep::PrimitiveKind::None);
+    REQUIRE(brep::ComputeMassProperties(s).volume < 0.9 * kPi * 25.0 * 8.0);
+  }
+
+  SECTION("a top circle facing DOWN is out of step by 180 degrees and twists the same way") {
+    ucs::Ucs down;
+    REQUIRE(ucs::FromNormal(Vec3{0, 0, 8}, Vec3{0, 0, -1}, &down));
+    Solid s;
+    REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(down, 5.0)}, &s, &why));
+    // Measured: the pinched band of volume 209.44 (the cylinder would be 628.32), with no recipe.
+    REQUIRE(brep::ComputeMassProperties(s).volume == Approx(209.4395102).epsilon(1e-6));
+    REQUIRE(s.recipe.kind == brep::PrimitiveKind::None);
+  }
+
+  SECTION("a coaxial pair drawn in a tilted UCS, with a float-stored normal, is still recognised") {
+    // Circle normals are stored in float, centres in double; a fixed 1e-9 on the axis test refused
+    // every such pair (code review on #515 measured 2.67e-8).
+    const ucs::Ucs tilted = TiltedAt(1000.0, 2000.0, 50.0);
+    ucs::Ucs base;
+    const Vec3 nF{static_cast<float>(tilted.zAxis.x), static_cast<float>(tilted.zAxis.y),
+                  static_cast<float>(tilted.zAxis.z)};
+    REQUIRE(ucs::FromNormal(tilted.origin, nF, &base));
+    ucs::Ucs top = base;
+    top.origin = ray3d::Add(tilted.origin, ray3d::Scale(tilted.zAxis, 8.0));  // the double-precision axis
+    Solid s, prim;
+    REQUIRE(brep::Loft({CircleProfile(base, 5.0), CircleProfile(top, 5.0)}, &s, &why));
+    REQUIRE(s.recipe.kind == brep::PrimitiveKind::Cylinder);
+    REQUIRE(brep::MakeCylinder(base, 5.0, 8.0, &prim, &why));
+    REQUIRE(brep::ComputeMassProperties(s).volume ==
+            Approx(brep::ComputeMassProperties(prim).volume).epsilon(1e-9));
+  }
+
+  SECTION("a slight taper over a long height is a cone, not a cylinder") {
+    // r 0.5 -> 0.5009 over 1000: a tolerance scaled by the HEIGHT called this a cylinder, and slices
+    // rebuilt from that recipe came out 1.4 cubic units too large (code review on #515).
+    Solid s;
+    REQUIRE(brep::Loft({CircleProfile(World(), 0.5), CircleProfile(PlaneAlong(World(), 1000.0), 0.5009)}, &s,
+                       &why));
+    REQUIRE(s.recipe.kind == brep::PrimitiveKind::Cone);
+    const double frustum = kPi * 1000.0 / 3.0 * (0.25 + 0.5 * 0.5009 + 0.5009 * 0.5009);
+    REQUIRE(brep::ComputeMassProperties(s).volume == Approx(frustum).epsilon(1e-9));
   }
 
   SECTION("three circles stay a freeform stack") {
