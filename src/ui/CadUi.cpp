@@ -226,6 +226,28 @@ std::string g_cmdSuggestComplete;
 /// the field it was set for.
 bool g_keepSelectAllOnActivate = false;
 
+/// Non-null while drawing an unlocked live-tracking dynamic-input field (X/Y/distance/angle,
+/// REQ-024): the text it should read RIGHT NOW, refreshed every frame from the cursor. Needed
+/// because ImGui::InputText copies its caller's buffer into its own internal edit state only when
+/// the item becomes active, and ignores further external changes to that buffer for as long as it
+/// stays active — so once a field takes keyboard focus (which the dynamic-input group does
+/// immediately, to land the user on it), simply re-snprintf'ing the live value into the buffer each
+/// frame stopped reaching the screen. The CallbackAlways callback below re-syncs the widget's
+/// internal buffer to this text every frame instead. Set immediately before the field's
+/// ImGui::InputText call and cleared immediately after, so it never leaks onto an unrelated field.
+const char* g_liveInputRefreshText = nullptr;
+
+/// Paired with g_liveInputRefreshText: the text WE last pushed into this same field (persists
+/// across frames — points at a `static std::string` local to that field's own code, not a shared
+/// scratch, so one field's history never bleeds into another's). Needed to tell "nothing has
+/// touched this field since our last refresh, safe to push the newer live value" apart from "the
+/// user just typed a character into it" — both look identical as a data->Buf that differs from
+/// g_liveInputRefreshText, but only the first should be overwritten. Without this, a keystroke into
+/// a still-live field was silently discarded the instant this callback's refresh logic ran: it saw
+/// the user's freshly-edited buffer differ from the live text and unconditionally replaced it,
+/// which is what made typing into these fields appear to do nothing at all.
+std::string* g_liveInputLastPushed = nullptr;
+
 int CommandLineInputCallback(ImGuiInputTextCallbackData* data) {
   if (data->EventFlag == ImGuiInputTextFlags_CallbackCompletion) {
     if (!g_cmdSuggestComplete.empty()) {
@@ -248,6 +270,43 @@ int CommandLineInputCallback(ImGuiInputTextCallbackData* data) {
     else {
       data->CursorPos = data->BufTextLen;
       data->SelectionStart = data->SelectionEnd = data->CursorPos;
+    }
+  }
+
+  // Re-sync an active live-tracking field to this frame's cursor-derived value (see
+  // g_liveInputRefreshText's comment) and keep its whole text SELECTED the entire time it stays
+  // live — AutoCAD's own dynamic input reads this way: the box shows a value nobody typed, so the
+  // first keystroke should replace it outright (type-to-overwrite) rather than insert into it.
+  if (g_liveInputRefreshText && g_liveInputLastPushed) {
+    if (justActivated) {
+      g_liveInputLastPushed->assign(data->Buf, static_cast<size_t>(data->BufTextLen));
+      data->SelectionStart = 0;
+      data->SelectionEnd = data->BufTextLen;
+      data->CursorPos = data->BufTextLen;
+    } else {
+      const bool unchangedSinceLastPush =
+          static_cast<size_t>(data->BufTextLen) == g_liveInputLastPushed->size() &&
+          std::memcmp(data->Buf, g_liveInputLastPushed->data(), g_liveInputLastPushed->size()) == 0;
+      if (unchangedSinceLastPush) {
+        const size_t len = std::strlen(g_liveInputRefreshText);
+        if (static_cast<size_t>(data->BufTextLen) != len ||
+            std::memcmp(data->Buf, g_liveInputRefreshText, len) != 0) {
+          data->DeleteChars(0, data->BufTextLen);
+          data->InsertChars(0, g_liveInputRefreshText);
+        }
+        // Re-select every frame, even when the text didn't change: a mouse click into the field
+        // (still live, nothing typed yet) collapses ImGui's own selection, and this is the only
+        // place left each frame to restore it.
+        data->SelectionStart = 0;
+        data->SelectionEnd = data->BufTextLen;
+        data->CursorPos = data->BufTextLen;
+        *g_liveInputLastPushed = g_liveInputRefreshText;
+      } else {
+        // The user typed since our last push — leave their edit alone. IsItemEdited() will lock
+        // the field right after this InputText call returns, so this branch won't run again for
+        // it; still record the new baseline in case it does.
+        g_liveInputLastPushed->assign(data->Buf, static_cast<size_t>(data->BufTextLen));
+      }
     }
   }
   return 0;
@@ -403,6 +462,9 @@ void ApplyCadDarkTheme() {
   const ImVec4 success    = Hex(0x3E7643);  // L* 44.8  H 127   4.84:1
   const ImVec4 info       = Hex(0x3C6FB5);  // L* 46.5  H 215   4.54:1
   const ImVec4 infoText   = Hex(0x6BA5E0);  //  5.68:1  the same info hue, lightened to be readable AS text
+  // Distance/angle dynamic-input bands (REQ-024 amendment): warm hues distinct from the X/Y/Z triad.
+  const ImVec4 distance   = Hex(0xB5893C);  // amber
+  const ImVec4 angle      = Hex(0x8B5CC9);  // violet
 
   colors[ImGuiCol_Text]                  = text;
   colors[ImGuiCol_TextDisabled]          = textDim;
@@ -511,6 +573,8 @@ void ApplyCadDarkTheme() {
   g_chrome.axisY           = ImGui::ColorConvertFloat4ToU32(success);
   g_chrome.axisZ           = ImGui::ColorConvertFloat4ToU32(info);
   g_chrome.axisText        = HexU32(0xF2F2F2);
+  g_chrome.axisDistance    = ImGui::ColorConvertFloat4ToU32(distance);
+  g_chrome.axisAngle       = ImGui::ColorConvertFloat4ToU32(angle);
   g_chrome.ribbonBandTop         = BlueTintHexU32(0x424242, kBlueTint);
   g_chrome.ribbonBandBottom      = BlueTintHexU32(0x2A2A2A, kBlueTint);
   g_chrome.ribbonBandEdgeTop     = BlueTintHexU32(0x555555, kBlueTint);
@@ -9585,19 +9649,62 @@ static bool CadAnchoredDistanceAnglePrompt(const AppCommandState& cmd, ray3d::Ve
   return true;
 }
 
+// Formats a DIRECTIONAL angle for the dynamic-input box using the UNITS dialog's angle display
+// (REQ-021/ADR-004: DD vs DMS, precision, clockwise, base) — the same formatting the Properties
+// panel's derived bearing already gets (BearingDegreesCwFromNorth + FormatBearing). `mathDeg` is
+// the angle in the app's INTERNAL/ENTRY convention (measured CCW from the UCS's local +X, the
+// convention `@dist<angle` typed input and ucs::AngleInRotationPlaneDeg both use — REQ-024/154),
+// which is NOT what should be shown: at the default settings (base = North, clockwise) that
+// convention reads North as 90, not 0. Converting math-CCW-from-+X to canonical CW-from-north
+// bearing degrees is a fixed +90/negate/wrap (+X=East=90, +Y=North=0 in the bearing frame), then
+// FormatBearing applies the user's actual clockwise/base choice on top.
+static std::string FormatDynInputAngle(double mathDeg, const AngleDisplaySettings& s) {
+  const double bearingDeg = anglefmt_detail::Normalize360(90.0 - mathDeg);
+  return FormatBearing(bearingDeg, s);
+}
+
+// Resolves a dynamic-input distance+angle pair (REQ-024/REQ-154's polar boxes) straight to a
+// submittable point string, bypassing the command line's own point grammar entirely: that grammar
+// (ParseWorldPointD / ParsePointComponents) has never implemented AutoCAD's `@dist<angle` polar
+// notation — only plain `x,y` and relative `@dx,dy` — so building an `@dist<angle` string here (as
+// this UI used to) always failed to parse once a distance/angle field was actually typed into. This
+// does the polar-to-Cartesian resolution directly instead and hands the parser a form it already
+// understands. `mathAngleDeg` is in the app's internal convention (CCW from the UCS's local +X,
+// matching AngleInRotationPlaneDeg/UcsVectorToWorld — NOT the compass bearing the box displays).
+static std::string ResolveDynDistanceAngleToPointText(const AppCommandState& cmd, const ray3d::Vec3& anchorWorld,
+                                                       double distance, double mathAngleDeg) {
+  const double rad = mathAngleDeg * (3.14159265358979323846 / 180.0);
+  const ray3d::Vec3 ucsOffset{distance * std::cos(rad), distance * std::sin(rad), 0.0};
+  const ray3d::Vec3 worldTarget = ray3d::Add(anchorWorld, ucs::UcsVectorToWorld(cmd.activeUcs, ucsOffset));
+  char buf[96];
+  if (ucs::IsWorld(cmd.activeUcs)) {
+    std::snprintf(buf, sizeof(buf), "%.6f,%.6f", worldTarget.x, worldTarget.y);
+  } else {
+    const ray3d::Vec3 ucsLocal = ucs::WorldToUcs(cmd.activeUcs, worldTarget);
+    std::snprintf(buf, sizeof(buf), "%.6f,%.6f", ucsLocal.x, ucsLocal.y);
+  }
+  return buf;
+}
+
 // A multi-field dynamic-input group (REQ-024's 2026-09-15 amendment) reads as ONE box unless each
 // field is visibly its own — the global theme leaves ImGuiCol_FrameBg close to the floating
 // palette's own window background (fields there are "read by their recess, not by an outline"),
 // which is fine for a single field but lets two of them melt into one strip with a stray "<" in the
 // middle. A short, explicit border + a background a step darker than the window gives each field
 // its own edge, the way AutoCAD's own boxes read. Used at all three two/three-field groups below.
-static void PushDynFieldGroupStyle() {
-  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.2f);
-  ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(132, 136, 144, 190));
+// `accent` colors the field's border band to match the value it carries (X/Y/Z/distance/angle,
+// REQ-024's color-band amendment) — 0 keeps the neutral gray border used for non-semantic fields.
+// NavHighlight is suppressed here too: ImGui draws its own accent-colored focus rectangle over a
+// keyboard-focused item (these fields are focused programmatically via SetKeyboardFocusHere), which
+// otherwise painted a blue ring over the field that fought with its color band.
+static void PushDynFieldGroupStyle(ImU32 accent = 0) {
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.5f);
+  ImGui::PushStyleColor(ImGuiCol_Border, accent ? accent : IM_COL32(132, 136, 144, 190));
   ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(38, 40, 46, 255));
+  ImGui::PushStyleColor(ImGuiCol_NavHighlight, IM_COL32(0, 0, 0, 0));
 }
 static void PopDynFieldGroupStyle() {
-  ImGui::PopStyleColor(2);
+  ImGui::PopStyleColor(3);
   ImGui::PopStyleVar(1);
 }
 
@@ -10108,6 +10215,19 @@ static ImVec2 s_lastCrosshairScreen = ImVec2(-1.f, -1.f);
 static bool   s_cmdSugPopupOpen = false;
 static ImVec2 s_cmdSugPopupMin = ImVec2(0.f, 0.f);
 static ImVec2 s_cmdSugPopupMax = ImVec2(0.f, 0.f);
+
+// Screen rect of the floating command bar (icons/input row + whatever is expanded above it —
+// history chips or the F2 console), captured at the END of the PREVIOUS call to
+// DrawCommandLinePanel. Same one-frame-behind pattern as s_cmdSugPopupMin/Max above, needed for
+// the same reason: DrawDrawingViewport runs BEFORE DrawCommandLinePanel each frame, so ImGui's
+// own overlap detection (IsItemHovered's AllowWhenOverlappedByWindow) cannot yet know the command
+// bar will cover this screen region THIS frame — it hasn't been drawn yet. Without this, the
+// viewport's crosshair, click routing, and pan/zoom all treated the space under the (visually
+// opaque) command bar as bare viewport, exactly like overViewCube/overUcsDropdown below have to
+// work around for those two other overlays.
+static bool   s_cmdBarRectValid = false;
+static ImVec2 s_cmdBarRectMin = ImVec2(0.f, 0.f);
+static ImVec2 s_cmdBarRectMax = ImVec2(0.f, 0.f);
 static bool        s_cmdInputActiveFrame = false;
 static std::string s_cmdFuzzyPrimaryFrame;
 
@@ -10236,17 +10356,27 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     cmd.cmdLogLastSizeForFade = log.size();
     cmd.cmdLogLastChangeTime = ImGui::GetTime();
   }
+  // Set when F2 just opened the console this frame, so the console block below knows to jump
+  // to the newest lines immediately rather than showing wherever InputTextMultiline's internal
+  // scroll happened to be left (its default is the top, since the child window is freshly
+  // recreated open with no prior scroll position of its own).
+  bool cmdConsoleJustOpened = false;
   {
     // F2 toggles the expanded console; Ctrl+9 hides/restores the bar. ESC is left to
     // command-cancel (handled elsewhere) and never closes the console.
     ImGuiIO& iok = ImGui::GetIO();
-    if (floating && ImGui::IsKeyPressed(ImGuiKey_F2, false))
+    if (floating && ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
       cmd.cmdConsoleOpen = !cmd.cmdConsoleOpen;
+      if (cmd.cmdConsoleOpen)
+        cmdConsoleJustOpened = true;
+    }
     if (floating && iok.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_9, false))
       cmd.cmdBarVisible = !cmd.cmdBarVisible;
   }
-  if (floating && !cmd.cmdBarVisible)
+  if (floating && !cmd.cmdBarVisible) {
+    s_cmdBarRectValid = false;
     return;  // bar hidden; Ctrl+9 (or the View menu) restores it.
+  }
 
   const float barRounding = 5.f;
   ImGuiWindowFlags winFlags = 0;
@@ -10258,25 +10388,33 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     // Width is user-resizable (default ~half the viewport); the bar is pinned to the viewport
     // bottom (Y locked) and only slides left/right (X). Anchor is the bottom-LEFT corner.
+    // `barW`/`anchorX` are the values used to lay out THIS frame only. They must not be written
+    // back into cmd.cmdBarWidth/cmd.cmdBarAnchorX (the persisted fields) except when the user
+    // actually drags/resizes the bar (handled further below) or on first-ever init. Doing that
+    // clamp-and-store unconditionally used to corrupt the saved position/size: a transient small
+    // ImGui viewport on an early startup frame (before the window finishes async-maximizing, see
+    // the glfwMaximizeWindow comment in main.cpp) clamped the stored width/anchor down to fit
+    // that tiny frame, and the shrunken value then got written to gosurvey-user.json at exit —
+    // so the bar could drift smaller/off-center a little more on every launch.
     const float barW = std::clamp(cmd.cmdBarWidth > 1.f ? cmd.cmdBarWidth : vp->WorkSize.x * 0.5f, 320.f,
                                   std::max(360.f, vp->WorkSize.x - 16.f));
-    cmd.cmdBarWidth = barW;
     if (!cmd.cmdBarAnchorValid) {
       cmd.cmdBarAnchorX = vp->WorkPos.x + (vp->WorkSize.x - barW) * 0.5f;
       cmd.cmdBarAnchorValid = true;
     }
-    // Clamp X on-screen. Guard the upper bound: when the bar is wider than the viewport
-    // (or WorkSize is tiny on the first frame) the max would fall below the min, which is
-    // undefined for std::clamp (and asserts in debug).
+    // Clamp X on-screen for THIS frame's draw only (`anchorX`); the stored cmd.cmdBarAnchorX is
+    // left untouched so a transient small viewport cannot permanently corrupt it. Guard the upper
+    // bound: when the bar is wider than the viewport (or WorkSize is tiny on the first frame) the
+    // max would fall below the min, which is undefined for std::clamp (and asserts in debug).
     const float xMin = vp->WorkPos.x + 4.f;
     const float xMax = vp->WorkPos.x + vp->WorkSize.x - barW - 4.f;
-    cmd.cmdBarAnchorX = std::clamp(cmd.cmdBarAnchorX, xMin, std::max(xMin, xMax));
+    const float anchorX = std::clamp(cmd.cmdBarAnchorX, xMin, std::max(xMin, xMax));
     // Pin the bar's bottom edge just above the status-bar strip (Y locked) — never below it.
     // The gap matters: with the bar's bottom flush on the strip the two read as one
     // welded block, and the bar stops looking like it floats over the drawing.
     constexpr float kCmdBarLift = 10.f;
     const float bottomY = vp->WorkPos.y + vp->WorkSize.y - CadStatusBarStripHeightPx() - kCmdBarLift;
-    ImGui::SetNextWindowPos(ImVec2(cmd.cmdBarAnchorX, bottomY), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowPos(ImVec2(anchorX, bottomY), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
     ImGui::SetNextWindowSizeConstraints(ImVec2(barW, 0.f), ImVec2(barW, FLT_MAX));  // fixed width, auto height
     ImGui::SetNextWindowBgAlpha(0.f);  // transparent; the bar background and history chips are painted manually
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 4.f));
@@ -10286,6 +10424,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   }
   ImGui::PushStyleColor(ImGuiCol_WindowBg, floating ? ImVec4(0, 0, 0, 0) : consoleBg);
   if (!ImGui::Begin(floating ? "##CommandBarFloat" : "Command line", nullptr, winFlags)) {
+    s_cmdBarRectValid = false;
     ImGui::End();
     ImGui::PopStyleColor();
     if (floating) ImGui::PopStyleVar(2);
@@ -10420,15 +10559,48 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       ImGui::GetWindowDrawList()->AddLine(ImVec2(gmx - 18.f, gy), ImVec2(gmx + 18.f, gy), gc, 1.4f);
     }
 
+    // Jump to the newest lines: on the frame the console opens and whenever the log grows while
+    // it stays open. SetNextWindowScroll targets the very next Begin — InputTextMultiline's
+    // internal child window — so it must be called right before it.
+    //
+    // Two things make one naive call insufficient:
+    //  1) FLT_MAX is ImGui's internal sentinel for "no scroll target set" (see
+    //     CalcNextScrollFromScrollTargetAndClamp's `if (ScrollTarget[axis] < FLT_MAX)` — FLT_MAX
+    //     itself fails that test), so passing FLT_MAX as "scroll all the way down" is silently a
+    //     no-op. A large FINITE value is required; it gets clamped to the real ScrollMax.
+    //  2) that child window's ScrollMax reflects last frame's content size, so on the exact frame
+    //     the log grows (or the console first opens), the clamp uses a stale, too-small ScrollMax
+    //     and lands short of the real bottom. cmdConsoleScrollFramesRemaining re-issues the scroll
+    //     for one extra frame once the child's content size has caught up.
+    constexpr float kScrollToBottom = 1.0e9f;  // finite “effectively infinite”; see point 1 above
+    const bool cmdConsoleLogGrew = log.size() != cmd.commandLogLastSizeForAutoscroll;
+    if (cmdConsoleLogGrew)
+      cmd.commandLogLastSizeForAutoscroll = log.size();
+    if (cmdConsoleJustOpened || cmdConsoleLogGrew)
+      cmd.cmdConsoleScrollFramesRemaining = 2;
+    if (cmd.cmdConsoleScrollFramesRemaining > 0) {
+      ImGui::SetNextWindowScroll(ImVec2(0.0f, kScrollToBottom));
+      --cmd.cmdConsoleScrollFramesRemaining;
+    }
+
     ImGui::PushStyleColor(ImGuiCol_FrameBg, barFieldBg);  // the field step
     ImGui::InputTextMultiline("##CmdConsole", cmd.commandLogCacheBytes.data(), cmd.commandLogCacheBytes.size(),
                               ImVec2(-FLT_MIN, consoleH), ImGuiInputTextFlags_ReadOnly);
     ImGui::PopStyleColor();
-  } else {
+  } else if (!log.empty()) {
     // --- Recent-history chips floating above the bar; fade out after the idle delay. ---
+    // Layout (the Dummy calls that reserve each chip's screen space) runs unconditionally
+    // whenever there is history to show, independent of `alpha`: gating the loop itself on
+    // alpha (as before) made the floating window's AlwaysAutoResize height flip between
+    // "chips shown" and "chips gone" for one frame right as each fade finished. Because
+    // SetNextWindowPos anchors this window by its BOTTOM-left corner, that one-frame height
+    // change (computed a frame late, as ImGui only knows a new AlwaysAutoResize size after
+    // End()) visibly popped the whole bar up then back down — the reported fade-out
+    // "blink"/stutter. Only the drawing below (rect + text) is gated on alpha now, so the
+    // window's height no longer moves as part of the fade itself.
     const float alpha = cmdbar::HistoryAlpha(ImGui::GetTime() - cmd.cmdLogLastChangeTime,
                                              static_cast<double>(cmd.cmdBarFadeDelaySec), 0.8);
-    if (alpha > 0.004f && !log.empty()) {
+    {
       ImDrawList* dl = ImGui::GetWindowDrawList();
       const size_t startIx = cmdbar::LogTailStart(log.size(), cmd.cmdBarHistoryLines);
       for (size_t i = startIx; i < log.size(); ++i) {
@@ -10436,9 +10608,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
         const ImVec2 ts = ImGui::CalcTextSize(s.c_str());
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float padx = 6.f, pady = 2.f;
-        dl->AddRectFilled(ImVec2(p.x - padx + 4.f, p.y - pady), ImVec2(p.x + ts.x + padx, p.y + ts.y + pady),
-                          ImGui::GetColorU32(BlueTintHex(0x222222, kCmdTint, 0.55f * alpha)), 3.f);
-        dl->AddText(p, ImGui::GetColorU32(BlueTintNeutral(ImVec4(0.86f, 0.88f, 0.92f, alpha), kCmdTint)), s.c_str());
+        if (alpha > 0.004f) {
+          dl->AddRectFilled(ImVec2(p.x - padx + 4.f, p.y - pady), ImVec2(p.x + ts.x + padx, p.y + ts.y + pady),
+                            ImGui::GetColorU32(BlueTintHex(0x222222, kCmdTint, 0.55f * alpha)), 3.f);
+          dl->AddText(p, ImGui::GetColorU32(BlueTintNeutral(ImVec4(0.86f, 0.88f, 0.92f, alpha), kCmdTint)), s.c_str());
+        }
         ImGui::Dummy(ImVec2(ts.x + padx, ts.y + pady));
       }
     }
@@ -10768,6 +10942,18 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   }
 
   ImGui::PopID();
+
+  // Capture the bar's on-screen rect for next frame's viewport hover/click gating (see
+  // s_cmdBarRectMin/Max above) while the window is still current — GetWindowPos/Size are only
+  // valid before End().
+  if (floating) {
+    s_cmdBarRectValid = true;
+    s_cmdBarRectMin = ImGui::GetWindowPos();
+    const ImVec2 sz = ImGui::GetWindowSize();
+    s_cmdBarRectMax = ImVec2(s_cmdBarRectMin.x + sz.x, s_cmdBarRectMin.y + sz.y);
+  } else {
+    s_cmdBarRectValid = false;
+  }
 
   // FramePadding was pushed AFTER Begin (inside the window) so it must be popped BEFORE End;
   // WindowPadding + WindowBorderSize were pushed BEFORE Begin so they pop after End.
@@ -12534,15 +12720,29 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // ActiveId right after Enter) is active elsewhere — which silently starved the dynamic-input
   // palette's `inImage` visibility gate of ever going true until an unrelated event (e.g. the
   // command bar losing focus on its own) cleared that ActiveId.
-  // AllowWhenOverlappedByWindow: the command-autocomplete popup (`##CmdSuggestPopup`, drawn right at
-  // the crosshair position so it's exactly where the mouse sits while typing a command name) is a
-  // real separate window layered on top of the viewport image at that spot. Without this flag,
-  // IsItemHovered() reads false wherever that popup visually overlaps the image — which is right
-  // under the cursor — so the palette stayed hidden after Enter until the mouse moved somewhere the
-  // (by-then-closed) popup never covered. A command typed with the mouse already in the viewport
-  // should show its dynamic input the instant it starts, not wait on either of these.
-  const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
-                                             ImGuiHoveredFlags_AllowWhenOverlappedByWindow);
+  //
+  // Overlap is handled by NAMING the specific windows the viewport should see through, not by
+  // blanket-allowing ImGuiHoveredFlags_AllowWhenOverlappedByWindow: that flag used to be set here,
+  // and it made the viewport read as hovered under ANY overlapping window — including a floating
+  // tool window (Layers, Drawing Units, Viewports, Toolspace, ...) the user had deliberately brought
+  // to the front, so it kept stealing mouse/keyboard input from those instead of yielding to them.
+  // The two windows that genuinely need to be seen through are our own crosshair-anchored overlays,
+  // which are drawn AFTER this viewport each frame and so cannot be excluded by IsItemHovered's own
+  // per-frame overlap test (it doesn't know about a window not yet submitted this frame) — each is
+  // tracked as a rect captured at the end of the PREVIOUS frame instead, the same one-frame-behind
+  // pattern already used for both:
+  //  - the command-autocomplete popup (`##CmdSuggestPopup`, s_cmdSugPopupMin/Max) — sits right at
+  //    the crosshair while typing a command name;
+  //  - the floating command bar (REQ-040, s_cmdBarRectMin/Max).
+  // Both are explicitly ADDED into `hovered` below instead of being reached via the blanket flag, so
+  // an unrelated tool window still correctly occludes the viewport.
+  const bool overOwnCmdPopup = s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
+  const ImVec2 cmdBarTestMouse = ImGui::GetIO().MousePos;
+  const bool overCommandBar = s_cmdBarRectValid && cmdBarTestMouse.x >= s_cmdBarRectMin.x &&
+                              cmdBarTestMouse.x <= s_cmdBarRectMax.x && cmdBarTestMouse.y >= s_cmdBarRectMin.y &&
+                              cmdBarTestMouse.y <= s_cmdBarRectMax.y;
+  const bool hovered =
+      (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) || overOwnCmdPopup) && !overCommandBar;
   // ImGui's GLFW backend snaps io.MousePos to (-FLT_MAX,-FLT_MAX) on OS focus loss (e.g. Alt+Tab
   // away) and GLFW does not re-emit a cursor-position event on focus regain without an actual
   // mouse move, so the sentinel value would otherwise survive into the first several frames after
@@ -12588,6 +12788,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const bool overUcsDropdown = modelSpace && avail.x > 200.f && avail.y > 200.f && vcMouse.x >= ucsDropX &&
                                vcMouse.x <= ucsDropX + ucsDropW && vcMouse.y >= ucsDropY &&
                                vcMouse.y <= ucsDropY + ucsDropH;
+  // `overCommandBar` is computed earlier, alongside `hovered`, since it needs to gate wheel-zoom
+  // and middle-drag-pan too (see the comment there).
 
   // Advance any in-flight ViewCube animation (REQ-059).
   CadTickViewAnimation(cmd, ImGui::GetIO().DeltaTime);
@@ -14533,7 +14735,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   const bool overCmdSugPopup =
       s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
-  if (modelSpace && hovered && !overCmdSugPopup && !overViewCube && !overUcsDropdown &&
+  if (modelSpace && hovered && !overCmdSugPopup && !overViewCube && !overUcsDropdown && !overCommandBar &&
       cmd.active != AppCommandState::Kind::Pan && cmd.active != AppCommandState::Kind::Orbit &&
       ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
       mx < avail.x && my >= 0 && my < avail.y) {
@@ -18072,7 +18274,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // mouse is over the viewport's own rectangle does not depend on what else ImGui drew on top of it
   // this frame, so it is not susceptible to any of that.
   const bool inImage = mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y && !overViewCube &&
-                       !overUcsDropdown;
+                       !overUcsDropdown && !overCommandBar;
 
   const bool showViewportCmdPalette =
       (cmd.active != VK::None || paperSelStep) && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged &&
@@ -18166,8 +18368,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // keyboard produce identical input rather than two parallel code paths.
       static char distBuf[48] = {0};
       static char angBuf[48] = {0};
-      static bool polarLocked = false;
-      if (promptChanged) polarLocked = false;
+      // Locked independently (REQ-024: "each independently lockable/tabbable") — typing into one
+      // must not freeze the other or strip its Tab-in select-all.
+      static bool distLocked = false, angLocked = false;
+      if (promptChanged) { distLocked = false; angLocked = false; }
 
       double liveWx = 0.0, liveWy = 0.0;
       if (outCursorX && outCursorY)
@@ -18176,18 +18380,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const ray3d::Vec3 cursorWorld{liveWx, liveWy, polarBase.z};
       const ray3d::Vec3 dir = ray3d::Sub(cursorWorld, polarBase);
       const int prec = cmd.displayLinearPrecision;
-      if (!polarLocked) {
+      // The live numeric angle (UCS-plane degrees from +X), kept separate from angBuf's DISPLAY
+      // text: angBuf shows the UNITS dialog's configured format (DD/DMS/precision, REQ-021/ADR-004),
+      // which isn't itself a parseable `@dist<angle` operand, so commit below uses this number
+      // directly for an unlocked (never-typed) field instead of re-parsing the formatted buffer.
+      double angDeg = 0.0;
+      const bool haveAngDeg = ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &angDeg);
+      if (haveAngDeg)
+        while (angDeg < 0.0) angDeg += 360.0;
+      if (!distLocked)
         std::snprintf(distBuf, sizeof(distBuf), "%s", FormatLinear(ray3d::Length(dir), prec).c_str());
-        double angDeg = 0.0;
-        // Measured in the ACTIVE frame's XY plane from its +X — the same reference the two-point
-        // form uses, so a number read here and a number typed there mean the same rotation.
-        if (ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &angDeg)) {
-          while (angDeg < 0.0) angDeg += 360.0;
-          std::snprintf(angBuf, sizeof(angBuf), "%.0f", angDeg);
-        } else {
-          std::snprintf(angBuf, sizeof(angBuf), "0");
-        }
-      }
+      if (!angLocked)
+        std::snprintf(angBuf, sizeof(angBuf), "%s",
+                      FormatDynInputAngle(haveAngDeg ? angDeg : 0.0, CadAngleDisplaySettings(cmd)).c_str());
 
       const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
       const float boxW = 74.f * io.FontGlobalScale;
@@ -18213,26 +18418,35 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           ImGui::SetKeyboardFocusHere();
         } else if (io.InputQueueCharacters.Size > 0) {
           distBuf[0] = '\0';
-          polarLocked = true;
+          distLocked = true;
           RouteQueuedCharsToCmdBuf(distBuf, static_cast<int>(sizeof(distBuf)), io);
           ImGui::SetKeyboardFocusHere();
         }
       }
 
-      PushDynFieldGroupStyle();
+      static std::string distLastPushed, angLastPushed;
+      PushDynFieldGroupStyle(g_chrome.axisDistance);
       ImGui::SetNextItemWidth(boxW);
+      g_liveInputRefreshText = distLocked ? nullptr : distBuf;
+      g_liveInputLastPushed = distLocked ? nullptr : &distLastPushed;
       const bool distEnter = ImGui::InputText("##ucsDist", distBuf, sizeof(distBuf), pf, CommandLineInputCallback);
-      if (ImGui::IsItemActivated() && !polarLocked) { distBuf[0] = '\0'; polarLocked = true; }
-      if (ImGui::IsItemEdited()) polarLocked = true;
+      g_liveInputRefreshText = nullptr;
+      g_liveInputLastPushed = nullptr;
+      if (ImGui::IsItemEdited()) distLocked = true;
+      PopDynFieldGroupStyle();
       ImGui::SameLine(0.f, 8.f);
       // The angle box wears its own "<", so the pair reads as the polar notation it produces rather
       // than as two unrelated numbers.
       ImGui::TextUnformatted("<");
       ImGui::SameLine(0.f, 8.f);
+      PushDynFieldGroupStyle(g_chrome.axisAngle);
       ImGui::SetNextItemWidth(boxW);
+      g_liveInputRefreshText = angLocked ? nullptr : angBuf;
+      g_liveInputLastPushed = angLocked ? nullptr : &angLastPushed;
       const bool angEnter = ImGui::InputText("##ucsAng", angBuf, sizeof(angBuf), pf, CommandLineInputCallback);
-      if (ImGui::IsItemActivated() && !polarLocked) { angBuf[0] = '\0'; polarLocked = true; }
-      if (ImGui::IsItemEdited()) polarLocked = true;
+      g_liveInputRefreshText = nullptr;
+      g_liveInputLastPushed = nullptr;
+      if (ImGui::IsItemEdited()) angLocked = true;
       PopDynFieldGroupStyle();
 
       if (distEnter || angEnter) {
@@ -18249,19 +18463,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (!std::isfinite(useDist) || useDist == 0.0)
             useDist = 1.0;
         }
-        // A blank angle means "the direction I am pointing", so the live value stands in for it.
-        std::string angText = StringUtil::trimCopy(std::string(angBuf));
-        if (angText.empty()) {
-          double liveAng = 0.0;
-          if (ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &liveAng)) {
-            while (liveAng < 0.0) liveAng += 360.0;
-          }
-          char ab[32];
-          std::snprintf(ab, sizeof(ab), "%.4f", liveAng);
-          angText = ab;
+        // A blank/unlocked angle means "the direction I am pointing", so the live math angle stands
+        // in for it. A locked (typed) angle is a plain number in the box's own displayed convention
+        // (a compass bearing, REQ-021/ADR-004 — the box no longer shows a raw math angle), so it is
+        // converted back to the internal math convention before use; an unparseable typed value
+        // falls back to the live direction the same way a blank one does.
+        double useMathAngleDeg = haveAngDeg ? angDeg : 0.0;
+        if (angLocked) {
+          std::string angText = StringUtil::trimCopy(std::string(angBuf));
+          double typedBearingDeg = 0.0;
+          std::istringstream ai{angText};
+          if (!angText.empty() && (ai >> typedBearingDeg))
+            useMathAngleDeg = anglefmt_detail::Normalize360(90.0 - typedBearingDeg);
         }
+        const std::string pointText = ResolveDynDistanceAngleToPointText(cmd, polarBase, useDist, useMathAngleDeg);
         char polarBuf[160];
-        std::snprintf(polarBuf, sizeof(polarBuf), "@%.6f<%s", useDist, angText.c_str());
+        std::snprintf(polarBuf, sizeof(polarBuf), "%s", pointText.c_str());
         ProcessCommandLineSubmit(polarBuf, static_cast<int>(sizeof(polarBuf)), cmd, log);
       }
     } else if (anchoredPrompt) {
@@ -18271,8 +18488,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // and this is a separate generalization to ordinary drawing prompts.
       static char distBuf2[48] = {0};
       static char angBuf2[48] = {0};
-      static bool anchLocked = false;
-      if (promptChanged) anchLocked = false;
+      static bool dist2Locked = false, ang2Locked = false;
+      if (promptChanged) { dist2Locked = false; ang2Locked = false; }
 
       double liveWx = 0.0, liveWy = 0.0;
       if (outCursorX && outCursorY)
@@ -18281,16 +18498,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const ray3d::Vec3 cursorWorld{liveWx, liveWy, anchorBase.z};
       const ray3d::Vec3 dir = ray3d::Sub(cursorWorld, anchorBase);
       const int prec = cmd.displayLinearPrecision;
-      if (!anchLocked) {
+      // See the UCS polar pair above: angBuf2 shows the UNITS-configured display format, so an
+      // unlocked (never-typed) commit uses this raw number instead of re-parsing that text.
+      double angDeg = 0.0;
+      const bool haveAngDeg = ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &angDeg);
+      if (haveAngDeg)
+        while (angDeg < 0.0) angDeg += 360.0;
+      if (!dist2Locked)
         std::snprintf(distBuf2, sizeof(distBuf2), "%s", FormatLinear(ray3d::Length(dir), prec).c_str());
-        double angDeg = 0.0;
-        if (ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &angDeg)) {
-          while (angDeg < 0.0) angDeg += 360.0;
-          std::snprintf(angBuf2, sizeof(angBuf2), "%.0f", angDeg);
-        } else {
-          std::snprintf(angBuf2, sizeof(angBuf2), "0");
-        }
-      }
+      if (!ang2Locked)
+        std::snprintf(angBuf2, sizeof(angBuf2), "%s",
+                      FormatDynInputAngle(haveAngDeg ? angDeg : 0.0, CadAngleDisplaySettings(cmd)).c_str());
 
       const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
       const float boxW = 74.f * io.FontGlobalScale;
@@ -18306,24 +18524,33 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           ImGui::SetKeyboardFocusHere();
         } else if (io.InputQueueCharacters.Size > 0) {
           distBuf2[0] = '\0';
-          anchLocked = true;
+          dist2Locked = true;
           RouteQueuedCharsToCmdBuf(distBuf2, static_cast<int>(sizeof(distBuf2)), io);
           ImGui::SetKeyboardFocusHere();
         }
       }
 
-      PushDynFieldGroupStyle();
+      static std::string dist2LastPushed, ang2LastPushed;
+      PushDynFieldGroupStyle(g_chrome.axisDistance);
       ImGui::SetNextItemWidth(boxW);
+      g_liveInputRefreshText = dist2Locked ? nullptr : distBuf2;
+      g_liveInputLastPushed = dist2Locked ? nullptr : &dist2LastPushed;
       const bool distEnter2 = ImGui::InputText("##anchDist", distBuf2, sizeof(distBuf2), pf, CommandLineInputCallback);
-      if (ImGui::IsItemActivated() && !anchLocked) { distBuf2[0] = '\0'; anchLocked = true; }
-      if (ImGui::IsItemEdited()) anchLocked = true;
+      g_liveInputRefreshText = nullptr;
+      g_liveInputLastPushed = nullptr;
+      if (ImGui::IsItemEdited()) dist2Locked = true;
+      PopDynFieldGroupStyle();
       ImGui::SameLine(0.f, 8.f);
       ImGui::TextUnformatted("<");
       ImGui::SameLine(0.f, 8.f);
+      PushDynFieldGroupStyle(g_chrome.axisAngle);
       ImGui::SetNextItemWidth(boxW);
+      g_liveInputRefreshText = ang2Locked ? nullptr : angBuf2;
+      g_liveInputLastPushed = ang2Locked ? nullptr : &ang2LastPushed;
       const bool angEnter2 = ImGui::InputText("##anchAng", angBuf2, sizeof(angBuf2), pf, CommandLineInputCallback);
-      if (ImGui::IsItemActivated() && !anchLocked) { angBuf2[0] = '\0'; anchLocked = true; }
-      if (ImGui::IsItemEdited()) anchLocked = true;
+      g_liveInputRefreshText = nullptr;
+      g_liveInputLastPushed = nullptr;
+      if (ImGui::IsItemEdited()) ang2Locked = true;
       PopDynFieldGroupStyle();
 
       if (distEnter2 || angEnter2) {
@@ -18335,18 +18562,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (!std::isfinite(useDist) || useDist == 0.0)
             useDist = 1.0;
         }
-        std::string angText = StringUtil::trimCopy(std::string(angBuf2));
-        if (angText.empty()) {
-          double liveAng = 0.0;
-          if (ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &liveAng)) {
-            while (liveAng < 0.0) liveAng += 360.0;
-          }
-          char ab[32];
-          std::snprintf(ab, sizeof(ab), "%.4f", liveAng);
-          angText = ab;
+        double useMathAngleDeg = haveAngDeg ? angDeg : 0.0;
+        if (ang2Locked) {
+          std::string angText = StringUtil::trimCopy(std::string(angBuf2));
+          double typedBearingDeg = 0.0;
+          std::istringstream ai{angText};
+          if (!angText.empty() && (ai >> typedBearingDeg))
+            useMathAngleDeg = anglefmt_detail::Normalize360(90.0 - typedBearingDeg);
         }
+        const std::string pointText = ResolveDynDistanceAngleToPointText(cmd, anchorBase, useDist, useMathAngleDeg);
         char anchBuf[160];
-        std::snprintf(anchBuf, sizeof(anchBuf), "@%.6f<%s", useDist, angText.c_str());
+        std::snprintf(anchBuf, sizeof(anchBuf), "%s", pointText.c_str());
         ProcessCommandLineSubmit(anchBuf, static_cast<int>(sizeof(anchBuf)), cmd, log);
       }
     } else if (pointEntry) {
@@ -18359,18 +18585,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // first box of the pair instead of the only one.
       static char xBuf[80] = {0};
       static char yBuf[80] = {0};
-      static bool xyLocked = false;
-      if (promptChanged) xyLocked = false;
+      // Locked independently (REQ-024: "each independently lockable/tabbable") — typing a plain
+      // number into X must not freeze Y or strip its Tab-in select-all. The one exception is a
+      // compound value (relative/bearing/`x,y`) typed into X, which locks both by spec; that's
+      // applied below, right after X's own edit is detected, once its text is known.
+      static bool xLocked = false, yLocked = false;
+      if (promptChanged) { xLocked = false; yLocked = false; }
 
       double liveWx = 0.0, liveWy = 0.0;
       if (outCursorX && outCursorY)
         CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
                                  &liveWy);
       const int prec = cmd.displayLinearPrecision;
-      if (!xyLocked) {
+      if (!xLocked)
         std::snprintf(xBuf, sizeof(xBuf), "%s", FormatLinear(liveWx, prec).c_str());
+      if (!yLocked)
         std::snprintf(yBuf, sizeof(yBuf), "%s", FormatLinear(liveWy, prec).c_str());
-      }
 
       const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
       const float boxW = std::max(56.f * io.FontGlobalScale,
@@ -18394,22 +18624,39 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           ImGui::SetKeyboardFocusHere();
         } else if (io.InputQueueCharacters.Size > 0) {
           xBuf[0] = '\0';
-          xyLocked = true;
+          xLocked = true;
           RouteQueuedCharsToCmdBuf(xBuf, static_cast<int>(sizeof(xBuf)), io);
           ImGui::SetKeyboardFocusHere();
         }
       }
 
-      PushDynFieldGroupStyle();
+      static std::string xLastPushed, yLastPushed;
+      PushDynFieldGroupStyle(g_chrome.axisX);
       ImGui::SetNextItemWidth(boxW);
+      g_liveInputRefreshText = xLocked ? nullptr : xBuf;
+      g_liveInputLastPushed = xLocked ? nullptr : &xLastPushed;
       const bool xEnter = ImGui::InputText("##dynX", xBuf, sizeof(xBuf), pf, CommandLineInputCallback);
-      if (ImGui::IsItemActivated() && !xyLocked) { xBuf[0] = '\0'; xyLocked = true; }
-      if (ImGui::IsItemEdited()) xyLocked = true;
+      g_liveInputRefreshText = nullptr;
+      g_liveInputLastPushed = nullptr;
+      if (ImGui::IsItemEdited()) {
+        xLocked = true;
+        // A relative/bearing/`x,y` value typed into X carries its own syntax and is submitted
+        // whole from X (see xIsCompound below), so it locks Y too instead of leaving it live.
+        const std::string xNow = StringUtil::trimCopy(std::string(xBuf));
+        if (xNow.find(',') != std::string::npos || xNow.find('@') != std::string::npos ||
+            xNow.find('<') != std::string::npos)
+          yLocked = true;
+      }
+      PopDynFieldGroupStyle();
       ImGui::SameLine(0.f, 12.f);
+      PushDynFieldGroupStyle(g_chrome.axisY);
       ImGui::SetNextItemWidth(boxW);
+      g_liveInputRefreshText = yLocked ? nullptr : yBuf;
+      g_liveInputLastPushed = yLocked ? nullptr : &yLastPushed;
       const bool yEnter = ImGui::InputText("##dynY", yBuf, sizeof(yBuf), pf, CommandLineInputCallback);
-      if (ImGui::IsItemActivated() && !xyLocked) { yBuf[0] = '\0'; xyLocked = true; }
-      if (ImGui::IsItemEdited()) xyLocked = true;
+      g_liveInputRefreshText = nullptr;
+      g_liveInputLastPushed = nullptr;
+      if (ImGui::IsItemEdited()) yLocked = true;
       PopDynFieldGroupStyle();
 
       if (xEnter || yEnter) {
@@ -18561,11 +18808,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // or cancelled (buffer cleared on Esc).
   const bool typingCommand =
       (cmd.active == AppCommandState::Kind::None) && cmdBuf && cmdBuf[0] != '\0';
-  // Excludes the ViewCube and the UCS dropdown (plain screen-rect tests, not widget hovers — see
-  // `overViewCube`/`overUcsDropdown` above): both are their own clickable navigation controls, so
-  // the system cursor belongs there, not the drawn crosshair.
+  // Excludes the ViewCube, the UCS dropdown, and the floating command bar (plain screen-rect
+  // tests, not widget hovers — see `overViewCube`/`overUcsDropdown`/`overCommandBar` above): each
+  // is its own real control (or, for the command bar, sits visually on top of the viewport as a
+  // separate later-drawn window), so the system cursor belongs there, not the drawn crosshair.
   const bool liveHover = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y &&
-                         !overViewCube && !overUcsDropdown;
+                         !overViewCube && !overUcsDropdown && !overCommandBar;
   const bool frozenHair = typingCommand && s_lastCrosshairScreen.x >= 0.f;
   // PAN command (REQ-045): show a hand instead of the CAD crosshair while pan mode is active.
   // ORBIT (REQ-084 (c)) is a drag mode too: the crosshair would say "pick a point", which is not

@@ -33468,16 +33468,37 @@ SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st) {
     return SectionClipIndicator{};
 
   // Sized as #478 sizes it (D-2026-09-16-b): the drawing extents, else centred on the view.
-  brep::Bounds bb;
-  bb.valid = ComputeSectionClipIndicatorBounds(st, &bb.mn, &bb.mx);
-  if (!bb.valid) {
+  //
+  // Cached against `cadGpuRevision` and the active tab (code review on #478, findings 8/13): the
+  // extents walk and `ComputeBounds` (64-point marches along Intersection edges) are not free, and
+  // this function is now called several times a frame (indicator, grips, graphics) against
+  // REQ-100's 16 ms budget.
+  static struct {
+    bool cached = false;
+    uint32_t revision = 0;
+    uint32_t tabUid = 0;
+    bool valid = false;
+    ray3d::Vec3 mn, mx;
+  } s_clipBounds;
+  const uint32_t tabUid =
+      (st.activeDrawingIdx >= 0 && static_cast<size_t>(st.activeDrawingIdx) < st.drawingTabs.size())
+          ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].uid
+          : 0u;
+  if (!s_clipBounds.cached || s_clipBounds.revision != st.cadGpuRevision || s_clipBounds.tabUid != tabUid) {
+    s_clipBounds.valid = ComputeSectionClipIndicatorBounds(st, &s_clipBounds.mn, &s_clipBounds.mx);
+    s_clipBounds.revision = st.cadGpuRevision;
+    s_clipBounds.tabUid = tabUid;
+    s_clipBounds.cached = true;
+  }
+  ray3d::Vec3 bbMin = s_clipBounds.mn;
+  ray3d::Vec3 bbMax = s_clipBounds.mx;
+  if (!s_clipBounds.valid) {
     const Camera viewCam = CadViewCamera(st);
     const double r = std::max(10.0, static_cast<double>(viewCam.orthoHalfH));
-    bb.valid = true;
-    bb.mn = ray3d::Vec3{viewCam.targetX - r, viewCam.targetY - r, viewCam.targetZ};
-    bb.mx = ray3d::Vec3{viewCam.targetX + r, viewCam.targetY + r, viewCam.targetZ};
+    bbMin = ray3d::Vec3{viewCam.targetX - r, viewCam.targetY - r, viewCam.targetZ};
+    bbMax = ray3d::Vec3{viewCam.targetX + r, viewCam.targetY + r, viewCam.targetZ};
   }
-  return SectionClipIndicatorQuad(p, bb.mn, bb.mx, 0.15, st.viewportSectionClipExtent);
+  return SectionClipIndicatorQuad(p, bbMin, bbMax, 0.15, st.viewportSectionClipExtent);
 }
 
 SectionPlaneGrips CadSectionPlaneGrips(const AppCommandState& st) {

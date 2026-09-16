@@ -1806,6 +1806,12 @@ struct AppCommandState {
   float cmdBarWidth = 0.f;            ///< user-resized bar width (px); 0 → default. Persisted.
   float cmdConsoleHeight = 0.f;       ///< user-resized F2 console height (px); 0 → default. Persisted.
   bool cmdConsoleOpen = false;        ///< F2 expanded console (not persisted).
+  /// Frames left to force-scroll the F2 console to its newest line. >1 because the console's
+  /// InputTextMultiline is a child window whose ScrollMax reflects last frame's content size —
+  /// on the very frame the log grows (or the console first opens), asking to scroll to FLT_MAX
+  /// clamps against the STALE (too-small) ScrollMax and lands short of the true bottom. Counting
+  /// down over 2 frames covers that one-frame lag once the child's content size has caught up.
+  int cmdConsoleScrollFramesRemaining = 0;
   float cmdBarFadeDelaySec = 4.f;     ///< idle seconds before recent-history lines start fading. Persisted.
   float cmdBarOpacity = 0.92f;        ///< bar / console background opacity. Persisted.
   int cmdBarHistoryLines = 3;         ///< recent log lines floated above the bar. Persisted.
