@@ -9100,6 +9100,13 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   }
   if (cmd.active == AppCommandState::Kind::TrimState)
     return "TRIMSTATE — 0 = draw a line to trim, 1 = pick cutting edges:";
+  // REQ-341. The three keywords are bracketed so they draw as LINKS: clicking one submits its own
+  // shortcut, which `Kind::SectionClip` is waiting to consume. Written all-caps deliberately —
+  // `VariantShortcut` takes the leading uppercase run, so `ON`/`OFF`/`FLIP` submit `on`/`off`/`flip`
+  // in full, which is exactly what the parser accepts. A mixed-case spelling like `OFf` would
+  // submit `of`, which it does not.
+  if (cmd.active == AppCommandState::Kind::SectionClip)
+    return "SECTIONCLIP — [ON/OFF/FLIP] or an offset along the UCS Z:";
   if (cmd.active == AppCommandState::Kind::Arc) {
     switch (cmd.arcPhase) {
     case AppCommandState::ArcPhase::WaitStart:
@@ -9221,6 +9228,13 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     static std::string sliceHint;
     sliceHint = CadSlicePromptText(cmd);
     return sliceHint.c_str();
+  }
+  // REQ-335 increment 2. Computed like SLICE's for the same reason: the prompt changes with the
+  // phase, so a literal would be wrong at three of the four steps.
+  if (cmd.active == AppCommandState::Kind::Section) {
+    static std::string sectionHint;
+    sectionHint = CadSectionPromptText(cmd);
+    return sectionHint.c_str();
   }
   if (cmd.active == AppCommandState::Kind::Boolean) {
     static std::string boolHint;
@@ -12525,6 +12539,37 @@ void DrawPerfHud(const AppCommandState& cmd) {
   ImGui::End();
 }
 
+/// The whole SOLID a viewport hover or click names (REQ-313 / REQ-341), in the one place all three
+/// of those paths ask — so what highlights is what selects, down to the tolerance (code review on
+/// #478, findings 4, 10 and 15). Solids sit below linework and survey points and above filled
+/// regions: a line or a point lying over a solid is the more specific thing to mean, and a fill is a
+/// decoration on the plane beneath it. \p surveyPointUnderCursor is the caller's own
+/// `PickSurveyPointAtCursor` answer, computed with its view metrics.
+///
+/// Which part of a solid answers follows the visual style, and the section clip, inside
+/// `PickClosestSolidEntity` — see there.
+static bool PickSolidUnderCursor(const AppCommandState& cmd, bool modelSpace, const ray3d::Ray& ray,
+                                 bool surveyPointUnderCursor, SelectedEntity* out) {
+  if (!modelSpace || cmd.cadSolids.empty() || surveyPointUnderCursor)
+    return false;
+  return PickClosestSolidEntity(cmd, ray, CadOffsetEntityPickTolWorld(cmd), out);
+}
+
+/// A plain click adds \p hit to the selection, Shift+click removes it — the rule every other
+/// entity click in `DrawDrawingViewport` follows.
+static void ClickToggleSolid(AppCommandState& cmd, const SelectedEntity& hit, bool keyShift) {
+  auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+    return x.type == SelectedEntity::Type::Solid && x.index == hit.index;
+  });
+  if (keyShift) {
+    if (it != cmd.selection.end())
+      cmd.selection.erase(it);
+  } else if (it == cmd.selection.end()) {
+    cmd.selection.push_back(hit);
+  }
+  EnsureAttrCounts(cmd);
+}
+
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
                          char* cmdBuf, int cmdBufSize, double* panX, double* panY, float* zoom, double* outCursorX,
                          double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
@@ -14031,8 +14076,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // CHAMFER is the identical shape and joins it here now that REQ-331 gives a `Ctrl`+click
       // during CHAMFER something to name — which is the one line TASK-221 DEBT-1 said it would be.
       const bool cornerEntityPick = cmd.active == AK::Fillet || cmd.active == AK::Chamfer;
+      // Every "select objects" step earns hover feedback, by this block's OWN stated rule: what
+      // buys suppression is that a command's "clicks mean coordinates rather than objects", and a
+      // selection step's clicks mean objects by definition. Expressed through the existing
+      // predicate rather than by naming commands, so the next command with a selection phase is
+      // covered when it is written instead of when someone reports that nothing lights up — which
+      // is how SECTION, and ALIGN before it, each arrived here (user report, 2026-09-10).
+      const bool objectSelectionStep = ViewportIsObjectSelectionStep(cmd);
       const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick && !extendEntityPick &&
-                                     !breakEntityPick && !lengthenEntityPick && !cornerEntityPick) ||
+                                     !breakEntityPick && !lengthenEntityPick && !cornerEntityPick &&
+                                     !objectSelectionStep) ||
                                     cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
       // REQ-089: the rollover readout rides on this exact condition. Model space only — a sheet has
@@ -14158,6 +14211,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           // while the click measured the true distance from the ray, and off plan view those two
           // disagree: the XY distance over-measures along the foreshortened screen direction, so
           // geometry the click would take highlighted on one side of the cursor and not the other.
+          SelectedEntity solidHover{};
+          // A solid is a VOLUME, so its pick is a ray-versus-triangle test and there is nothing
+          // sensible to do with a bare plan XY. `cursorRayPtr` is deliberately null in plan view to
+          // keep REQ-058's byte-identical pre-3D path — but that guarantee is about entities that
+          // ALREADY had a plan-view pick, and a solid never did: `PickClosestCadEntity` has never
+          // returned one. So building a ray here for the solid pick alone cannot change any
+          // existing answer, and without it the highlight would work only when orbited, which is
+          // not the view most drawings sit in.
+          const bool solidPickable = modelSpace && !cmd.cadSolids.empty();
+          const ray3d::Ray solidRay =
+              solidPickable ? CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y) : ray3d::Ray{};
+          const bool surveyUnderHover =
+              solidPickable && !cmd.surveyPoints.empty() &&
+              PickSurveyPointAtCursor(cmd, rawX, rawY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
           std::vector<CadPickCandidate> hoverCandidates;
           if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2, cursorRayPtr,
                                    &hoverCandidates)) {
@@ -14170,6 +14237,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
               cmd.viewportPickCandidates.clear();
               cmd.viewportPickAmbiguous = false;
             }
+          } else if (solidPickable &&
+                     PickSolidUnderCursor(cmd, modelSpace, solidRay, surveyUnderHover, &solidHover)) {
+            cmd.viewportHoverEntityValid = true;
+            cmd.viewportHoverEntity = solidHover;
+            // The disambiguation list belongs to the linework pick that produced it; a solid
+            // answered instead, so there is no ambiguity to offer (beta's #22ba365 invariant).
+            cmd.viewportPickCandidates.clear();
+            cmd.viewportPickAmbiguous = false;
           } else {
             cmd.viewportPickCandidates.clear();
             cmd.viewportPickAmbiguous = false;
@@ -14837,6 +14912,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
 
+      // A whole SOLID — see `PickSolidUnderCursor`. Before this, `ComputeSelectionFromRect` was the
+      // only thing that ever put a solid in a selection, so a solid could be chosen by dragging a
+      // rectangle around it and by no other gesture, in this step or any other.
+      if (!handled && modelSpace && !cmd.cadSolids.empty()) {
+        SelectedEntity solidHit{};
+        const bool surveyUnder =
+            !cmd.surveyPoints.empty() &&
+            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
+        if (PickSolidUnderCursor(cmd, modelSpace, pickCam.ScreenRay(mx, my, avail.x, avail.y), surveyUnder,
+                                 &solidHit)) {
+          ClickToggleSolid(cmd, solidHit, keyShift);
+          handled = true;
+        }
+      }
+
       if (!handled) {
         const int frIx = PickFilledRegionAt(cmd, rawPickX, rawPickY);
         if (frIx >= 0) {
@@ -15411,6 +15501,24 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             cmd.selBoxWaitingSecond = false;
             handled = true;
           }
+        }
+      }
+
+      // A whole SOLID — see `PickSolidUnderCursor`. Idle click-to-select never reached a solid before
+      // this, which is half of why "the section command will not let me select the object" was
+      // reported — the gesture did not exist anywhere, not only inside SECTION.
+      if (!handled && modelSpace && !cmd.cadSolids.empty()) {
+        SelectedEntity solidHit{};
+        const bool surveyUnder =
+            !cmd.surveyPoints.empty() &&
+            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
+        if (PickSolidUnderCursor(cmd, modelSpace, pickCam.ScreenRay(mx, my, avail.x, avail.y), surveyUnder,
+                                 &solidHit)) {
+          AbortMtextGripInteraction(cmd);
+          ClearDimGripInteraction(cmd);
+          ClickToggleSolid(cmd, solidHit, keyShift);
+          cmd.selBoxWaitingSecond = false;
+          handled = true;
         }
       }
 

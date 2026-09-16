@@ -857,6 +857,11 @@ if(GOSURVEY_BUILD_TESTS)
     tests/UcsTests.cpp
     tests/Ray3dTests.cpp
     tests/CameraTests.cpp
+    # REQ-341 live section clip (GitHub #149 acceptance 6). Header-only and pure for the same reason
+    # Camera is, and for one more: the plane the shader receives is NOT in world coordinates, and a
+    # version that forgets that is exact at the origin and 2,196,000 ft out at state-plane
+    # coordinates. That cannot be checked by looking at a window.
+    tests/SectionClipTests.cpp
     # REQ-310 3D crosshair (GitHub #144). Header-only and pure for the same reason Camera is: an
     # axis arm drawn along the wrong screen direction still looks like a 3D cursor, so the sign
     # conventions need a test that does not depend on a window.
@@ -1160,6 +1165,10 @@ if(GOSURVEY_BUILD_TESTS)
     # reference, mutual exclusion and cross-solid depth order. Needs gosurvey_domain for
     # SubmitSubObjectPick / ExpireSubObjectSelection, like ViewportUcsTests above.
     tests/SubObjectSelectionTests.cpp
+    # REQ-341 (code review on #478): the section clip's command-layer half — per-tab state, picks
+    # and snaps that honour it, SECTION's selection guard, and the indicator's sizing. Needs
+    # gosurvey_domain, like SubObjectSelectionTests above.
+    tests/SectionClipStateTests.cpp
     # REQ-060 (issue #148 Phase 5 slice 4b) — the TRANSLATE gizmo: the skew-line solve, the anchor,
     # and the two negatives (a click that misses every handle, an empty selection). Needs
     # gosurvey_domain for SubmitGizmoClick / ApplyTranslationToSelection.

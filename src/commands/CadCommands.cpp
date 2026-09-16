@@ -78,6 +78,9 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.viewportRollDeg        = cmd.viewportRollDeg;       // screen roll under a tilted-UCS PLAN (#153)
   doc.viewportProjection     = cmd.viewportProjection;    // projection likewise (REQ-309)
   doc.viewportFovDeg         = cmd.viewportFovDeg;
+  doc.viewportSectionClip       = cmd.viewportSectionClip;  // per tab, never to .gs (REQ-341)
+  doc.viewportSectionClipOffset = cmd.viewportSectionClipOffset;
+  doc.viewportSectionClipFlip   = cmd.viewportSectionClipFlip;
   // The coordinate system is per-drawing (REQ-154). Without this, switching tabs would carry one
   // drawing's UCS into another's — and every coordinate typed afterwards would be read in a frame
   // belonging to a different drawing, with nothing on screen to say so.
@@ -169,6 +172,9 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.viewportRollDeg            = doc.viewportRollDeg;  // #153
   cmd.viewportProjection         = doc.viewportProjection;  // REQ-309
   cmd.viewportFovDeg             = doc.viewportFovDeg;
+  cmd.viewportSectionClip        = doc.viewportSectionClip;  // per tab (REQ-341, D-2026-09-16-b)
+  cmd.viewportSectionClipOffset  = doc.viewportSectionClipOffset;
+  cmd.viewportSectionClipFlip    = doc.viewportSectionClipFlip;
   cmd.viewAnimActive             = false;  // never resume another tab's animation
   cmd.activeUcs                  = doc.activeUcs;  // per-drawing coordinate system (REQ-154)
   cmd.ucsPrevious                = doc.ucsPrevious;
@@ -6393,6 +6399,7 @@ const CmdEntry kRegistry[] = {
      "REQ-100 frame-budget benchmark: BENCH [segments] | BENCH SURFACE [points] | BENCH MESH [triangles] | BENCH SOLID [count]"},
     {"visualstyle", "vs, vscurrent", "Viewport visual style: 2D / HIDDEN / SHADED"},
     {"perspective", "projection, persp", "View projection: ON (perspective) / OFF (orthographic)"},
+    {"sectionclip", "sclip, clip", "Live section clip by the UCS plane: ON / OFF / FLIP / <offset>"},
     {"fov", "lens", "Perspective field of view, in degrees"},
     {"crosshair3d", "cursor3d, xhair3d", "3D crosshair cursor showing the UCS axes: ON / OFF"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
@@ -6408,7 +6415,7 @@ const CmdEntry kRegistry[] = {
     {"presspull", "pp",
      "Move a solid FACE, or turn a closed shape into a solid: PRESSPULL, select a target, then a distance"},
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
-    {"section",     "", "Cross-section of the selected solids by the active UCS plane, as a closed polyline"},
+    {"section",     "", "Cross-section of solids by a plane through three points (or the UCS), as a closed polyline"},
     {"solidcheck", "scheck", "Check every solid (or the selection): closed, manifold, oriented, self-intersecting"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
@@ -13311,6 +13318,19 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       return;
     }
     SubmitSliceViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  // SECTION (REQ-335 increment 2), the same shape as SLICE above. During the selection phase a
+  // click must fall through to ordinary SELECTING — that is what makes picking the solid work —
+  // and only afterwards does a click mean a point on the plane.
+  if (st.active == K::Section) {
+    if (st.sectionPhase == AppCommandState::SectionPhase::SelectSolids) {
+      if (st.selBoxWaitingSecond)
+        finishBox();
+      return;
+    }
+    SubmitSectionViewportPick(st, wx, wy, log);
     return;
   }
 
@@ -20390,6 +20410,34 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   *outMxX = mxX;
   *outMnY = mnY;
   *outMxY = mxY;
+  return true;
+}
+
+bool ComputeSectionClipIndicatorBounds(const AppCommandState& st, ray3d::Vec3* outMin, ray3d::Vec3* outMax) {
+  if (!outMin || !outMax)
+    return false;
+  double mnX = 0.0, mxX = 0.0, mnY = 0.0, mxY = 0.0;
+  if (!ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
+    return false;
+  // Z from the solids' analytic bounds — the only kind here with a real vertical extent worth
+  // covering. Everything else is drawn near an elevation, and a flat box still gets a drawable
+  // rectangle (`SectionClipIndicatorQuad` pads a zero span).
+  bool haveZ = false;
+  double mnZ = 0.0, mxZ = 0.0;
+  for (const CadSolidPtr& sp : st.cadSolids) {
+    if (!sp)
+      continue;
+    const brep::Bounds b = brep::ComputeBounds(*sp);
+    if (!b.valid)
+      continue;
+    mnZ = haveZ ? std::min(mnZ, b.mn.z) : b.mn.z;
+    mxZ = haveZ ? std::max(mxZ, b.mx.z) : b.mx.z;
+    haveZ = true;
+  }
+  if (!haveZ)
+    mnZ = mxZ = CadActiveUcsStorage(st).origin.z;
+  *outMin = ray3d::Vec3{mnX, mnY, mnZ};
+  *outMax = ray3d::Vec3{mxX, mxY, mxZ};
   return true;
 }
 
@@ -28186,9 +28234,14 @@ void ToggleSubObjectSelection(AppCommandState& st, const SelectedSubObject& pick
 
 bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
                               const solidpick::Tolerance& tol, SelectedSubObject* out,
-                              solidpick::Pick* outPick) {
+                              solidpick::Pick* outPick, bool facesPickable) {
   if (!out)
     return false;
+  const SectionClipPlane clip = CadActiveSectionClip(st);
+  const solidpick::KeepHalfSpace keep{clip.nx, clip.ny, clip.nz, clip.c};
+  const solidpick::KeepHalfSpace* keepPtr = clip.active ? &keep : nullptr;
+  static const std::vector<float> kNoTriVerts;
+  static const std::vector<int> kNoTriFaceIds;
   bool any = false;
   double bestT = 0.0;
   SelectedSubObject best{};
@@ -28205,7 +28258,8 @@ bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
     if (ce == st.solidDisplayCache.end() || ce->empty())
       continue;  // never tessellate here — a pick must not cost a tessellation (REQ-318 item 7)
     solidpick::Pick p;
-    if (!solidpick::PickSubObject(*sp, ce->triVerts, ce->triFaceIds, ray, tol, &p))
+    if (!solidpick::PickSubObject(*sp, facesPickable ? ce->triVerts : kNoTriVerts,
+                                  facesPickable ? ce->triFaceIds : kNoTriFaceIds, ray, tol, &p, keepPtr))
       continue;
     // DEBT-1 from TASK-189, closed here. PickSubObject's occlusion rule is per-solid — it cannot
     // know that a nearer solid stands in front of this one — so the cross-solid order is the
@@ -28225,6 +28279,30 @@ bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
   *out = best;
   if (outPick)
     *outPick = bestPick;
+  return true;
+}
+
+bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, float tolWorld,
+                            SelectedEntity* out, double* outRayT) {
+  if (!out)
+    return false;
+  solidpick::Tolerance tol;
+  tol.vertex = static_cast<double>(tolWorld);
+  tol.edge = tol.vertex;
+  SelectedSubObject sub{};
+  solidpick::Pick pick{};
+  // 2D Wireframe draws no faces, so none is clickable there (D-2026-09-16-b).
+  const bool facesPickable = st.viewportVisualStyle != VisualStyle::Wireframe2D;
+  if (!PickSubObjectAcrossSolids(st, ray, tol, &sub, &pick, facesPickable))
+    return false;
+  if (sub.solidIndex < 0 || static_cast<std::size_t>(sub.solidIndex) >= st.cadSolids.size())
+    return false;
+  SelectedEntity e{};
+  e.type = SelectedEntity::Type::Solid;
+  e.index = sub.solidIndex;
+  *out = e;
+  if (outRayT)
+    *outRayT = pick.rayT;
   return true;
 }
 
@@ -28843,21 +28921,31 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
 /// (REQ-316 / ADR-047), so a cylinder's circular section is a circle and not a polygon — the
 /// kernel hands back a `brep::Path` of lines and arcs precisely so nothing has to be flattened
 /// here.
-void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log) {
-  std::vector<int> solids;
-  for (const SelectedEntity& e : st.selection)
-    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 &&
-        static_cast<std::size_t>(e.index) < st.cadSolids.size())
-      solids.push_back(e.index);
-
-  if (solids.empty()) {
-    log.push_back("SECTION — select one or more solids first.");
-    return;
+/// Section \p solids by the plane through \p planePoint with normal \p planeNormal.
+///
+/// Split out from `CadSectionSelection` so the plane can come from anywhere: the active UCS (the
+/// original form, REQ-335 increment 1) or three picked points (increment 2). Everything below this
+/// line was already here and is unchanged — only where the plane comes from moved out.
+static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>& solids,
+                                    const std::vector<std::weak_ptr<const brep::Solid>>& owners,
+                                    const ray3d::Vec3& planePoint, const ray3d::Vec3& planeNormal,
+                                    std::vector<std::string>& log) {
+  // The indices were resolved at the SELECTION step, up to three picks ago, and an index alone is
+  // not a durable reference: anything that replaces or reorders `cadSolids` in between — an UNDO,
+  // an erase, a tab switch that swaps the whole store — leaves it naming a DIFFERENT solid, and a
+  // bounds check cannot see that. So each index is held to the solid it named when it was picked,
+  // the way the sub-object selection is (REQ-318), and a changed selection refuses rather than
+  // cutting whatever now sits at that slot (code review on #478, finding 9).
+  for (std::size_t k = 0; k < solids.size(); ++k) {
+    const int idx = solids[k];
+    const bool same = k < owners.size() && idx >= 0 && static_cast<std::size_t>(idx) < st.cadSolids.size() &&
+                      !owners[k].expired() && owners[k].lock() == st.cadSolids[static_cast<std::size_t>(idx)];
+    if (!same) {
+      log.push_back("SECTION — the selected solids changed before the plane was picked. Nothing was "
+                    "sectioned; run SECTION again.");
+      return;
+    }
   }
-
-  const ucs::Ucs frame = CadActiveUcsStorage(st);
-  const ray3d::Vec3 planePoint = frame.origin;
-  const ray3d::Vec3 planeNormal = frame.zAxis;
 
   // Section everything BEFORE touching the document, so a failure part-way leaves nothing behind
   // (REQ-201) — the same all-or-nothing shape SLICE already uses.
@@ -28868,6 +28956,9 @@ void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log) {
   std::vector<Cut> cuts;
   cuts.reserve(solids.size());
   for (const int idx : solids) {
+    // Already held to its owner above; the range test stays so this loop is safe on its own.
+    if (idx < 0 || static_cast<std::size_t>(idx) >= st.cadSolids.size())
+      continue;
     const CadSolidPtr& sp = st.cadSolids[static_cast<std::size_t>(idx)];
     if (!sp)
       continue;
@@ -28946,6 +29037,175 @@ void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log) {
                   attempted, attempted == 1 ? "" : "s", solids.size() == 1 ? " is" : "s are");
   }
   log.push_back(msg);
+}
+
+std::string CadSectionPromptText(const AppCommandState& st) {
+  switch (st.sectionPhase) {
+  case AppCommandState::SectionPhase::SelectSolids:
+    return "SECTION — select solids, Enter when done. ESC cancels.";
+  case AppCommandState::SectionPhase::WaitP1:
+    // `[UCS]` is bracketed so it draws as a clickable option (REQ-040), and it is what keeps
+    // increment 1's behaviour reachable: the active work plane, without picking three points.
+    return "SECTION — first point on the section plane, or [UCS] for the work plane. ESC cancels.";
+  case AppCommandState::SectionPhase::WaitP2:
+    return "SECTION — second point on the plane. ESC cancels.";
+  case AppCommandState::SectionPhase::WaitP3:
+    return "SECTION — third point on the plane. ESC cancels.";
+  }
+  return "SECTION";
+}
+
+/// Resolve the selection into solid indices and move to the plane phase, or say why not.
+static void SectionEnterPlanePhase(AppCommandState& st, std::vector<std::string>& log) {
+  st.sectionSolidIndices.clear();
+  const int nSolid = static_cast<int>(st.cadSolids.size());
+  for (const SelectedEntity& e : st.selection)
+    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && e.index < nSolid)
+      st.sectionSolidIndices.push_back(e.index);
+  // Deduplicated, as SLICE does with the same data. A solid can reach `selection` twice — a
+  // rectangle merged into an existing selection, or a pick-first set carried in from another
+  // command — and without this SECTION would cut the same solid twice and lay two identical closed
+  // polylines on top of each other, then report "2 section outlines created" for one solid.
+  std::sort(st.sectionSolidIndices.begin(), st.sectionSolidIndices.end());
+  st.sectionSolidIndices.erase(
+      std::unique(st.sectionSolidIndices.begin(), st.sectionSolidIndices.end()),
+      st.sectionSolidIndices.end());
+  st.sectionSolidOwners.clear();
+  for (const int idx : st.sectionSolidIndices)
+    st.sectionSolidOwners.push_back(st.cadSolids[static_cast<std::size_t>(idx)]);
+  if (st.sectionSolidIndices.empty()) {
+    // Stays in the selection phase rather than ending: the user picked something, it just was not
+    // a solid, and throwing them out of the command for that is the behaviour this increment exists
+    // to remove.
+    log.push_back("SECTION — that is not a solid. Select one or more solids, Enter when done.");
+    st.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
+    return;
+  }
+  st.sectionPhase = AppCommandState::SectionPhase::WaitP1;
+  log.push_back(CadSectionPromptText(st));
+}
+
+void CancelSectionCommand(AppCommandState& st) {
+  st.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
+  st.sectionSolidIndices.clear();
+  st.sectionSolidOwners.clear();
+}
+
+/// `SECTION` — choose solids, then define the section plane by three points (REQ-335 increment 2).
+///
+/// Pick-first is honoured: with solids already selected it goes straight to the plane, which is the
+/// convention every modify command in this application already follows.
+void StartSectionCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelSectionCommand(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Section;
+  st.lastCommand = AppCommandState::Kind::Section;
+  st.selBoxWaitingSecond = false;
+  if (!st.selection.empty()) {
+    SectionEnterPlanePhase(st, log);
+    if (st.sectionPhase != AppCommandState::SectionPhase::SelectSolids)
+      return;
+    st.selection.clear();
+  }
+  st.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
+  log.push_back(CadSectionPromptText(st));
+}
+
+/// Build the plane from the three picked points and section with it.
+static void CommitSectionFromPoints(AppCommandState& st, std::vector<std::string>& log) {
+  const ray3d::Vec3 n =
+      ray3d::Cross(ray3d::Sub(st.sectionP2, st.sectionP1), ray3d::Sub(st.sectionP3, st.sectionP1));
+  if (!(ray3d::Length(n) > 1e-9)) {
+    // Collinear points are a plane with no orientation. Said, not guessed at — and the command
+    // stays open at the third point so the pick can simply be repeated.
+    log.push_back("SECTION — the three points are in a line; they do not define a plane.");
+    st.sectionPhase = AppCommandState::SectionPhase::WaitP3;
+    log.push_back(CadSectionPromptText(st));
+    return;
+  }
+  CadSectionSolidsByPlane(st, st.sectionSolidIndices, st.sectionSolidOwners, st.sectionP1, ray3d::Normalize(n),
+                          log);
+  st.active = AppCommandState::Kind::None;
+  CancelSectionCommand(st);
+}
+
+/// Section by the ACTIVE UCS plane — increment 1's behaviour, reached now by the `[UCS]` option.
+static void CommitSectionByUcs(AppCommandState& st, std::vector<std::string>& log) {
+  const ucs::Ucs frame = CadActiveUcsStorage(st);
+  CadSectionSolidsByPlane(st, st.sectionSolidIndices, st.sectionSolidOwners, frame.origin, frame.zAxis, log);
+  st.active = AppCommandState::Kind::None;
+  CancelSectionCommand(st);
+}
+
+bool HandleSectionTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Section)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  using SP = AppCommandState::SectionPhase;
+
+  if (st.sectionPhase == SP::SelectSolids) {
+    if (!line.empty())
+      return false;  // a typed line during selection is not ours; let the dispatcher have it
+    if (st.selection.empty()) {
+      log.push_back("SECTION — nothing selected. Click a solid, or ESC.");
+      return true;
+    }
+    SectionEnterPlanePhase(st, log);
+    return true;
+  }
+
+  if (line.empty())
+    return true;  // Enter at a point prompt: nothing to accept, keep waiting
+
+  if (st.sectionPhase == SP::WaitP1) {
+    const std::string low = StringUtil::toLowerAsciiCopy(line);
+    if (low == "ucs" || low == "u") {
+      CommitSectionByUcs(st, log);
+      return true;
+    }
+  }
+
+  ray3d::Vec3 p{};
+  if (!ParseSolidBasePoint(st, line, &p, log, "SECTION"))
+    return true;  // it has already said why, once (code review on #478, finding 11)
+  if (st.sectionPhase == SP::WaitP1) {
+    st.sectionP1 = p;
+    st.sectionPhase = SP::WaitP2;
+  } else if (st.sectionPhase == SP::WaitP2) {
+    st.sectionP2 = p;
+    st.sectionPhase = SP::WaitP3;
+  } else {
+    st.sectionP3 = p;
+    CommitSectionFromPoints(st, log);
+    return true;
+  }
+  log.push_back(CadSectionPromptText(st));
+  return true;
+}
+
+void SubmitSectionViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Section)
+    return;
+  using SP = AppCommandState::SectionPhase;
+  const ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
+                      static_cast<double>(CadCommitElevation(st))};
+  switch (st.sectionPhase) {
+  case SP::WaitP1:
+    st.sectionP1 = p;
+    st.sectionPhase = SP::WaitP2;
+    break;
+  case SP::WaitP2:
+    st.sectionP2 = p;
+    st.sectionPhase = SP::WaitP3;
+    break;
+  case SP::WaitP3:
+    st.sectionP3 = p;
+    CommitSectionFromPoints(st, log);
+    return;
+  case SP::SelectSolids:
+    return;
+  }
+  log.push_back(CadSectionPromptText(st));
 }
 
 /// `SOLIDCHECK` — say whether each solid is sound, and if not, why (REQ-313 as amended,
@@ -32902,6 +33162,123 @@ bool ApplyFovValue(AppCommandState& st, const std::string& raw, std::vector<std:
   log.push_back(buf);
   return true;
 }
+
+/// One line describing the clip's current state, used by the bare command and after every change so
+/// a user never has to guess where the plane is (REQ-341).
+std::string SectionClipReport(const AppCommandState& st) {
+  if (!st.viewportSectionClip)
+    return "Section clip = OFF.";
+  // The drawing's own linear precision, through the shared formatter — NOT `%.4g`, which was four
+  // significant figures and therefore threw away exactly the precision the parser is careful to
+  // keep. `SECTIONCLIP 200000.01` reported "offset 2e+05": an offset stated to 0.01 ft read back
+  // with about 10 ft of error, on the one line that tells a user where the plane is. Any offset
+  // above 9999.5 was reported wrong. The parse comment a few functions down argues for `double`
+  // because REQ-101 is +/-0.002 ft; printing it at four figures contradicted that in the same
+  // breath.
+  return std::string("Section clip = ON at offset ") +
+         FormatLinear(st.viewportSectionClipOffset, st.displayLinearPrecision) +
+         " along the UCS Z" + (st.viewportSectionClipFlip ? ", flipped" : "") + ".";
+}
+
+/// `SECTIONCLIP` — hide everything in front of a plane so the inside of a model can be looked at
+/// (REQ-341 / ADR-058, GitHub issue #149 acceptance 6).
+///
+/// `ON` / `OFF` toggle it, `FLIP` swaps which half survives, and a bare number sets the offset of
+/// the plane along the active UCS Z. A bare `SECTIONCLIP` reports — the same report-or-set shape as
+/// `PERSPECTIVE` and `CROSSHAIR3D` (REQ-309, REQ-310), so a third view toggle behaves like the two
+/// that came before it.
+///
+/// **This is a view state, not an edit.** No undo entry, no geometry touched, nothing appended: the
+/// clip is a uniform the renderer re-reads every frame. That is also what makes it live — setting
+/// the offset changes the next frame and invalidates no cached geometry, so there is no rebuild
+/// step between moving the plane and seeing the result. Compare `SECTION` (REQ-335), which is the
+/// same plane asked a different question and DOES create geometry.
+///
+/// A number is accepted with or without `OFFSET` in front of it, because "SECTIONCLIP 12" is what a
+/// user types once they know the command; the keyword exists so the help line can name the unit.
+bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
+  // The shared helper, not a hand-rolled loop — `HandleSectionTextInput`, added in this same
+  // change, already uses it for the identical job a few hundred lines up.
+  const std::string v = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(raw));
+
+  // **No numeric aliases for ON and OFF here**, unlike `PERSPECTIVE` and `CROSSHAIR3D` which accept
+  // `1` and `0`. Those two have nothing but on and off to say, so a digit is unambiguous. This
+  // command's main argument is a DISTANCE, and `SECTIONCLIP 0` — the most natural way to ask for a
+  // cut exactly at the UCS plane — would otherwise be read as "off" and switch the feature off
+  // instead. For a command that takes a number, digits mean the number. Caught in the real GUI
+  // (TASK-249); a transcript had typed `SECTIONCLIP 0` and only checked that nothing was rebuilt.
+  if (v == "on" || v == "yes") {
+    st.viewportSectionClip = true;
+    log.push_back(SectionClipReport(st));
+    return true;
+  }
+  if (v == "off" || v == "no") {
+    st.viewportSectionClip = false;
+    log.push_back(SectionClipReport(st));
+    return true;
+  }
+  if (v == "flip" || v == "reverse" || v == "invert") {
+    // Flipping while the clip is off would silently change what ON later means, so it turns the
+    // clip on as well: the user asked to see the other half, and the other half is a visible thing.
+    st.viewportSectionClipFlip = !st.viewportSectionClipFlip;
+    st.viewportSectionClip = true;
+    log.push_back(SectionClipReport(st));
+    return true;
+  }
+
+  // `OFFSET <n>` and a bare `<n>` are the same request.
+  std::string numTok = v;
+  if (v.rfind("offset", 0) == 0)
+    numTok = StringUtil::trimCopy(v.substr(6));
+
+  // Parsed as a DOUBLE, not through `ParseOneFloat`: this offset is a coordinate the user typed,
+  // the field it lands in is a double, and REQ-101 is +/-0.002 ft. A float round trip resolves that
+  // only up to about 16,000 ft — narrowing it here and widening it again on the next line is
+  // precisely the one-narrowing-point defect ADR-054 Phase D audited out.
+  double parsed = 0.0;
+  {
+    // `strtod` with an end pointer, not `istringstream >> double`: the stream stops at the first
+    // character it cannot use and reports success for whatever it managed to read, so `12abc` set
+    // the offset to 12, `4 8` set it to 4, and `12,5` — an ordinary decimal comma outside the US —
+    // silently set 12 instead of 12.5. Each reported "Section clip = ON at offset ..." as though it
+    // had understood. Every other refusal in this function leaves the previous state alone and says
+    // why; this one committed a wrong number and claimed success.
+    //
+    // The whole token must be consumed, which is the pattern `ParseSolidBasePoint` already uses.
+    const char* first = numTok.c_str();
+    char* end = nullptr;
+    parsed = std::strtod(first, &end);
+    const bool consumedAll = (end != first) && (*end == '\0');
+    if (numTok.empty() || !consumedAll || !std::isfinite(parsed)) {
+      log.push_back("SECTIONCLIP - enter ON, OFF, FLIP, or an offset distance along the UCS Z.");
+      return false;
+    }
+  }
+  // A non-finite offset would produce a plane constant that clips everything or nothing with no
+  // way back, so it is refused above rather than stored (REQ-201).
+  st.viewportSectionClipOffset = parsed;
+  st.viewportSectionClip = true;  // typing an offset means "show me that cut"
+  log.push_back(SectionClipReport(st));
+  return true;
+}
+
+/// Bare `SECTIONCLIP` — report the current state, then WAIT, so the keywords can be clicked.
+///
+/// The waiting state is the whole point. A bracketed option in the command hint
+/// (`CommandInputHint`) draws as a link, and clicking it submits that option's shortcut as the next
+/// line of input — which only means anything if a command is waiting to consume it. A one-shot
+/// command that printed `ON | OFF | FLIP` and returned to idle would render three links that submit
+/// `on`, `off` and `flip` into nothing.
+///
+/// The inline forms (`SECTIONCLIP ON`, `SECTIONCLIP 12`) are untouched and never enter this state:
+/// a user who already knows what they want should not be made to answer a prompt.
+void StartSectionClipCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::SectionClip;
+  log.push_back(SectionClipReport(st));
+}
+
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper space: geometry + viewports
     const bool hadEntities = !st.selectedPaperEntities.empty();
@@ -33542,6 +33919,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("SLICE canceled.");
     CancelSliceCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::Section) {
+    log.push_back("SECTION canceled — nothing was drawn.");
+    CancelSectionCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Loft) {
     log.push_back("LOFT canceled.");
     CancelLoftCommand(st);
@@ -33572,6 +33953,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("RECT canceled.");
   else if (st.active == AppCommandState::Kind::TrimState)
     log.push_back("TRIMSTATE unchanged (" + std::to_string(st.trimState) + ").");
+  else if (st.active == AppCommandState::Kind::SectionClip)
+    log.push_back("SECTIONCLIP canceled. " + SectionClipReport(st));
   else if (st.active == AppCommandState::Kind::Elev)
     log.push_back("Elevation unchanged.");
   else if (st.active == AppCommandState::Kind::Ucs)
@@ -34274,6 +34657,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandlePolysolidTextInput(line, st, log);
       return;
     }
+    // REQ-341 SECTIONCLIP: a bare Enter accepts the current state and closes the prompt, the way
+    // TRIMSTATE's system-variable prompt does. Handled HERE for the reason every note above gives —
+    // this block consumes a blank line and the Kind-keyed branch further down never sees one.
+    if (st.active == K::SectionClip) {
+      log.push_back(SectionClipReport(st));
+      st.active = K::None;
+      return;
+    }
     if (st.active == K::Pan) {
       // Enter (or right-click in Enter mode) exits PAN; Esc exits via CancelActiveCommand.
       st.active = K::None;
@@ -34374,6 +34765,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandleSweepTextInput("", st, log);
     } else if (st.active == K::Slice) {
       (void)HandleSliceTextInput("", st, log);
+    } else if (st.active == K::Section) {
+      // Enter CONFIRMS the solid selection. This is the step that turns SECTION from a refusal into
+      // a prompt (REQ-335 increment 2) — without it, the command ends before the first click.
+      (void)HandleSectionTextInput("", st, log);
     } else if (st.active == K::Boolean) {
       (void)HandleBooleanTextInput("", st, log);
     } else if (st.active == K::Offset) {
@@ -34737,11 +35132,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       CadReportSolids(st, log);
       return;
     }
-    // SECTION (REQ-335): the cross-section of the selected solids by the active UCS plane, drawn as
-    // a closed polyline. The solids themselves are untouched -- it inspects rather than cuts, which
-    // is what separates it from SLICE.
+    // SECTION (REQ-335 increment 2): choose solids, then three points defining the plane — the
+    // same order SLICE asks in, and the same order AutoCAD's SECTION asks in. The solids themselves
+    // are untouched: it inspects rather than cuts, which is what separates it from SLICE.
     if (plotTok == "section") {
-      CadSectionSelection(st, log);
+      StartSectionCommand(st, log);
       return;
     }
     // SOLIDCHECK (REQ-313 as amended, D-2026-09-09-j): validity, and separately self-intersection —
@@ -34806,6 +35201,25 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       } else {
         log.push_back(std::string("Projection = ") + ProjectionName(st.viewportProjection) +
                       ". Usage: PERSPECTIVE ON | OFF.");
+      }
+      return;
+    }
+    // SECTIONCLIP (REQ-341): live section clipping — hide what is in front of the active UCS plane
+    // so the interior can be inspected. Report-or-set, same shape as PERSPECTIVE and CROSSHAIR3D.
+    // A view state: no undo entry and no geometry, which is what separates it from SECTION.
+    if (plotTok == "sectionclip" || plotTok == "sclip" || plotTok == "clip") {
+      // The REST of the line, not one token: `OFFSET -4` is two words and is a documented form, so
+      // reading a single token would silently drop the number and refuse a request that was
+      // perfectly well formed. `ON` and a bare `-4` come through the same path unchanged.
+      std::string clipArg;
+      std::getline(issIdle, clipArg);
+      clipArg = StringUtil::trimCopy(clipArg);
+      if (!clipArg.empty()) {
+        ApplySectionClipValue(st, clipArg, log);
+      } else {
+        // Bare form: report and WAIT, so the keywords in the hint are clickable. The usage text
+        // that used to live here is now the hint itself, where the options are links.
+        StartSectionClipCommand(st, log);
       }
       return;
     }
@@ -35352,6 +35766,22 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     if (ApplyTrimStateValue(st, tv, log))
+      st.active = AppCommandState::Kind::None;
+    return;
+  }
+
+  // SECTIONCLIP's keyword prompt (REQ-341). Reached by a typed answer OR by clicking one of the
+  // `[ON/OFF/FLIP]` links in the hint, which submit `on`, `off` and `flip` — the same three tokens
+  // `ApplySectionClipValue` already accepts, so the click path and the typed path are one path.
+  if (st.active == AppCommandState::Kind::SectionClip) {
+    // A bare Enter never arrives here — the `line.empty()` block far above consumes every blank
+    // line, and that is where this command's Enter is handled. No empty check, deliberately: one
+    // that looked live here would be dead code inviting the next reader to maintain two answers.
+    const std::string scIn = StringUtil::trimCopy(line);
+    // A refusal keeps the prompt OPEN rather than dropping to idle: the links are still on screen
+    // and still the fastest way to answer, so throwing the user out for a typo would take away the
+    // thing they were most likely reaching for.
+    if (ApplySectionClipValue(st, scIn, log))
       st.active = AppCommandState::Kind::None;
     return;
   }
@@ -36411,6 +36841,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleSliceTextInput(line, st, log))
       return;
     log.push_back(CadSlicePromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Section) {
+    if (HandleSectionTextInput(line, st, log))
+      return;
+    log.push_back(CadSectionPromptText(st));
     return;
   }
 

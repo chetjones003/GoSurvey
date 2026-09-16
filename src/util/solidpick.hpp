@@ -90,6 +90,19 @@ struct Tolerance {
   double edge = 0.0;
 };
 
+/// The half-space a live section clip keeps (REQ-341): a point survives when `dot(n, p) <= c`, the
+/// same predicate as `SectionClipPlane::KeepsWorldPoint`, restated here so this util stays free of
+/// the render layer. A pick passed one ignores whatever the clip has hidden — a triangle hit, vertex
+/// or edge point on the removed side neither answers nor occludes, so the pick agrees with the
+/// picture (code review on #478, finding 5).
+struct KeepHalfSpace {
+  double nx = 0.0;
+  double ny = 0.0;
+  double nz = 1.0;
+  double c = 0.0;
+  [[nodiscard]] bool Keeps(const Vec3& p) const { return nx * p.x + ny * p.y + nz * p.z <= c; }
+};
+
 /// The nearest sub-object of \p solid under \p ray, or false for a miss.
 ///
 /// \p triVerts and \p triFaceIds are the solid's **already-built** display triangles — nine floats
@@ -147,8 +160,11 @@ struct Tolerance {
 /// cannot come within the larger tolerance of the solid's bounds, and buffers whose sizes disagree
 /// (`triVerts.size() != 9 * triFaceIds.size()`), rather than reading past the end of one of them or
 /// reporting a pick it cannot justify (REQ-201).
+///
+/// \p keep, when given, is an active section clip in the same storage coordinates: geometry on its
+/// removed side is invisible, so it is skipped rather than picked.
 [[nodiscard]] bool PickSubObject(const brep::Solid& solid, const std::vector<float>& triVerts,
                                  const std::vector<int>& triFaceIds, const Ray& ray,
-                                 const Tolerance& tol, Pick* out);
+                                 const Tolerance& tol, Pick* out, const KeepHalfSpace* keep = nullptr);
 
 }  // namespace solidpick

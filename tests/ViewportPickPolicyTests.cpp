@@ -57,6 +57,10 @@ TEST_CASE("Every pick-driven command is routed by the model-space viewport", "[v
       K::Mirror, K::Lengthen, K::Extend, K::Break, K::Stretch,
       // Entity designators and view tools that take a click.
       K::DesignateBreakline, K::DesignateBoundary, K::Zoom, K::Hatch,
+      // REQ-335 increment 2. Absent from this list is exactly how SECTION shipped a selection
+      // prompt whose clicks went nowhere: the state machine had the phase, the policy did not, so
+      // the prompt appeared and nothing could be picked. Reported from the real app.
+      K::Section,
   };
 
   for (K kind : kPickDriven) {
@@ -418,4 +422,34 @@ TEST_CASE("PLAN takes no viewport click at all", "[viewport][pick][req154]") {
   REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::Ignore);
   st.planPhase = AppCommandState::PlanPhase::WaitNamedName;
   REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::Ignore);
+}
+
+TEST_CASE("REQ-335: SECTION selects solids by click, then takes three snapped points",
+          "[viewport][pick][req335]") {
+  // The bug this pins, reported from the real app: "it gets to the select-an-object stage, and then
+  // when selecting the object it takes me out of the section and just selects the object by itself."
+  //
+  // SECTION's state machine had a SelectSolids phase and its prompt appeared correctly, but this
+  // policy had no case for the command, so a click routed to `Ignore` and the selection never
+  // happened. A prompt with nowhere for its clicks to go is invisible from the code and obvious in
+  // the app, which is why it is tested here rather than only in a transcript.
+  using SecP = AppCommandState::SectionPhase;
+
+  AppCommandState sel = AtFirstPrompt(K::Section);
+  sel.sectionPhase = SecP::SelectSolids;
+  REQUIRE(ViewportClickRouteFor(sel) != ViewportClickRoute::Ignore);
+  CHECK(ViewportClickRouteFor(sel) == ViewportClickRoute::SelectionAccumulate);
+
+  // ...and it must be recognised as an object-selection step, or its fence corners would come from
+  // SNAPPED coordinates while its six siblings use unsnapped ones — the ALIGN accident, repeated.
+  CHECK(ViewportIsObjectSelectionStep(sel));
+
+  // Every point phase takes a coordinate, not a selection.
+  for (const SecP phase : {SecP::WaitP1, SecP::WaitP2, SecP::WaitP3}) {
+    AppCommandState pt = AtFirstPrompt(K::Section);
+    pt.sectionPhase = phase;
+    INFO("phase " << static_cast<int>(phase));
+    CHECK(ViewportClickRouteFor(pt) == ViewportClickRoute::SnappedPointPick);
+    CHECK_FALSE(ViewportIsObjectSelectionStep(pt));
+  }
 }

@@ -35,6 +35,9 @@ CMD 90
 BOX -40 -40 40 40
 EXPECT SELECTED 1
 CMD SECTION
+# REQ-335 increment 2: SECTION now ASKS for its plane instead of silently taking the work plane.
+# UCS is the option that gives increment 1's answer - the same cut, one keystroke away.
+CMD UCS
 
 EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
 
@@ -81,9 +84,86 @@ EXPECT SOLIDS 2
 BOX 180 180 220 220
 EXPECT SELECTED 1
 CMD SECTION
+# Same as above: ask for the plane, answer UCS.
+CMD UCS
 
 EXPECT LOG "SECTION — This release slices solids with flat faces only (a box or a straight extrusion)."
 
 EXPECT POLYLINES 1
 EXPECT SOLIDS 2
 CHECK ALL
+
+# --- REQ-335 increment 2: SECTION ASKS, it does not refuse -----------------------------------
+#
+# Reported from the real app: "it gets to the select-an-object stage, and then selecting the object
+# takes me out of the section and just selects the object by itself."
+#
+# That was exact. Increment 1's SECTION had no phases: with nothing selected it printed
+# "SECTION — select one or more solids first." and ENDED. The text reads as a prompt and the command
+# behaves as a refusal, so the next click lands with nothing running and merely selects the solid.
+# These cases pin the difference — the command must still be RUNNING after the message, and must
+# still be running after the click.
+
+NEW
+CMD BOX 0,0 20 14 12
+EXPECT SOLIDS 1
+
+CMD SECTION
+EXPECT ACTIVE SECTION
+EXPECT LOG "select solids, Enter when done."
+
+# Selecting WHILE the command runs: the click reaches the selection and the command survives it.
+BOX -1 -1 21 15
+EXPECT SELECTED 1
+EXPECT ACTIVE SECTION
+
+# Enter confirms the selection and moves to the plane.
+CMD
+EXPECT ACTIVE SECTION
+EXPECT LOG "first point on the section plane"
+
+# Three points; the third commits.
+CMD 0,0,6
+CMD 20,0,6
+CMD 0,14,6
+EXPECT ACTIVE NONE
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+
+# --- Enter with nothing selected keeps the prompt open ---------------------------------------
+NEW
+CMD BOX 0,0 20 14 12
+CMD SECTION
+CMD
+EXPECT LOG "nothing selected. Click a solid, or ESC."
+EXPECT ACTIVE SECTION
+ESC
+EXPECT ACTIVE NONE
+EXPECT POLYLINES 0
+
+# --- Three points in a LINE do not define a plane, and the command stays open -----------------
+NEW
+CMD BOX 0,0 20 14 12
+BOX -1 -1 21 15
+CMD SECTION
+CMD 0,0,6
+CMD 5,0,6
+CMD 10,0,6
+EXPECT LOG "the three points are in a line"
+EXPECT ACTIVE SECTION
+EXPECT POLYLINES 0
+# A different third point still works, without restarting the command.
+CMD 0,14,6
+EXPECT ACTIVE NONE
+EXPECT POLYLINES 1
+
+# --- Pick-first goes straight to the plane ----------------------------------------------------
+NEW
+CMD BOX 0,0 20 14 12
+BOX -1 -1 21 15
+EXPECT SELECTED 1
+CMD SECTION
+EXPECT ACTIVE SECTION
+EXPECT LOG "first point on the section plane"
+ESC
+EXPECT ACTIVE NONE

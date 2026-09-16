@@ -357,8 +357,16 @@ int main()
 #endif
   LoadUserStartupPrefs(cmd);
 #ifdef GOSURVEY_DEVELOPER_SHELL
-  if (devshellCli)
+  if (devshellCli) {
     cmd.authGateResolved = true;
+    // REQ-336's What's New opens as a MODAL on the first launch of a version, and a modal blocks
+    // hover and clicks everywhere else — so every GUI test that clicks or hovers failed silently
+    // behind it (the ON/OFF/FLIP links, the chamfer edge hover) once a new version string made it
+    // auto-open again. An automated run is not a user's first look at a release; skipped the same
+    // way the sign-in gate and the update check above and below are. The user's dismissal
+    // preference is not touched.
+    cmd.whatsNewAutoOpenedThisLaunch = true;
+  }
 #endif
   const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
 
@@ -406,7 +414,7 @@ int main()
   // REQ-078 before REQ-336: if the splash check found an update, do not auto-open What's New.
   if (updateState.phase == update::Phase::UpdateReady)
     cmd.whatsNewAutoOpenedThisLaunch = true;
-  else if (cmd.activeDrawingIdx == 0 &&
+  else if (cmd.activeDrawingIdx == 0 && !cmd.whatsNewAutoOpenedThisLaunch &&
            WhatsNewShouldAutoOpen(GOSURVEY_VERSION_FULL, cmd.whatsNewDismissedVersion, false))
     cmd.whatsNewOpeningPending = true;
 
@@ -1330,6 +1338,50 @@ int main()
     tuning.bgR = std::clamp(cmd.viewportBgR, 0.f, 1.f);
     tuning.bgG = std::clamp(cmd.viewportBgG, 0.f, 1.f);
     tuning.bgB = std::clamp(cmd.viewportBgB, 0.f, 1.f);
+    // REQ-341 — the live section clip. Derived from the ACTIVE UCS every frame rather than stored
+    // as a plane, which is what makes it track the UCS: move or turn the work plane and the cut
+    // follows on the next frame, with no command to re-run and no geometry rebuilt. The same
+    // derivation the solid pick and the snap read, so the three agree on where the cut is.
+    tuning.sectionClip = CadActiveSectionClip(cmd);
+    if (tuning.sectionClip.active) {
+      // REQ-341: and the rectangle that SHOWS where it cuts. Sized here rather than in the renderer
+      // because this is the side that knows how big the drawing is — the renderer is handed four
+      // corners and draws them.
+      //
+      // Sized from the drawing's extents — everything the clip cuts, as ZOOM EXTENTS measures it —
+      // and cached against `cadGpuRevision`, which bumps on every geometry change: the extents walk
+      // and `ComputeBounds` (64-point marches along Intersection edges) are not free, and this used
+      // to run them every frame the clip was on, against REQ-100's 16 ms budget (code review on
+      // #478, findings 8 and 13). An empty drawing centres the rectangle on the VIEW, which is the
+      // one place it is guaranteed to be seen — the old UCS-origin fallback sat millions of feet
+      // off screen in a state-plane drawing.
+      static struct {
+        bool cached = false;
+        uint32_t revision = 0;
+        uint32_t tabUid = 0;
+        bool valid = false;
+        ray3d::Vec3 mn, mx;
+      } s_clipBounds;
+      const uint32_t tabUid =
+          (cmd.activeDrawingIdx >= 0 && static_cast<size_t>(cmd.activeDrawingIdx) < cmd.drawingTabs.size())
+              ? cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].uid
+              : 0u;
+      if (!s_clipBounds.cached || s_clipBounds.revision != cmd.cadGpuRevision || s_clipBounds.tabUid != tabUid) {
+        s_clipBounds.valid = ComputeSectionClipIndicatorBounds(cmd, &s_clipBounds.mn, &s_clipBounds.mx);
+        s_clipBounds.revision = cmd.cadGpuRevision;
+        s_clipBounds.tabUid = tabUid;
+        s_clipBounds.cached = true;
+      }
+      ray3d::Vec3 bbMin = s_clipBounds.mn;
+      ray3d::Vec3 bbMax = s_clipBounds.mx;
+      if (!s_clipBounds.valid) {
+        const Camera viewCam = CadViewCamera(cmd);
+        const double r = std::max(10.0, static_cast<double>(viewCam.orthoHalfH));
+        bbMin = ray3d::Vec3{viewCam.targetX - r, viewCam.targetY - r, viewCam.targetZ};
+        bbMax = ray3d::Vec3{viewCam.targetX + r, viewCam.targetY + r, viewCam.targetZ};
+      }
+      tuning.sectionClipIndicator = SectionClipIndicatorQuad(tuning.sectionClip, bbMin, bbMax);
+    }
     // Build PDF render list: committed attachments + cursor-follow preview when picking insert point.
     std::vector<PdfAttachment> pdfRenderList;
     if (!cmd.pdfAttachments.empty())
@@ -1505,6 +1557,19 @@ int main()
     // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);
+#ifdef GOSURVEY_DEVELOPER_SHELL
+    // REQ-161 (TASK-249): a devshell test capturing the VIEWPORT, serviced here because this is the
+    // one point in the frame where the renderer has just drawn and its framebuffer still holds the
+    // image.
+    //
+    // Separate from `DevShell_RequestScreenshot`, which reads the WINDOW's GL_FRONT buffer, and the
+    // reason is measured rather than assumed: on a window the compositor is not presenting — which
+    // is the normal case for an automated run — that read returns **pure black**, and six
+    // screenshots of a clip plane moving came back byte-identical. Reading the renderer's own
+    // `fbo_` through `CaptureThumbnailBmp` does not depend on the window being composited at all,
+    // so it captures what was actually drawn.
+    DevShell_ServiceViewportCapture(activeRenderer);
+#endif
     }
 
     // Frame profiler overlay (PERFHUD) — after the render so its render-ms is this frame's, not

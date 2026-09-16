@@ -13,6 +13,7 @@
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
+#include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
 // util/ray3d beside it, so the coordinate-system rules are testable without a window.
 #include "util/ucs.hpp"
@@ -1115,6 +1116,12 @@ struct DrawingDocument {
   /// tabs cannot carry one drawing's projection into another's.
   Camera::Projection viewportProjection = Camera::Projection::Orthographic;
   float  viewportFovDeg = kDefaultFovDeg;
+  /// The section clip is per TAB (REQ-341, D-2026-09-16-b): a clip set in one drawing must not hide
+  /// half of another when the user switches to it, and switching back restores it. A fresh document
+  /// starts with it off, which is what keeps NEW and OPEN clean. Still never written to `.gs`.
+  bool   viewportSectionClip = false;
+  double viewportSectionClipOffset = 0.0;
+  bool   viewportSectionClipFlip = false;
   /// The UCS is per drawing, not per session (REQ-154): switching tabs must not carry one drawing's
   /// coordinate frame into another's, which is the "UCS state does not leak between viewports"
   /// condition in as strong a form as a one-model-view-per-tab application can state it.
@@ -1511,6 +1518,13 @@ struct AppCommandState {
     Rect,
     /// TRIMSTATE: system-variable prompt waiting for a new value (REQ-056).
     TrimState,
+    /// SECTIONCLIP: keyword prompt waiting for ON / OFF / FLIP or an offset (REQ-341).
+    ///
+    /// The prompt exists so the three keywords can be CLICKED rather than typed: a bracketed
+    /// option in `CommandInputHint` becomes a link that submits its own shortcut, and that
+    /// submission is only meaningful while a command is waiting to consume it. Without a waiting
+    /// state, clicking `ON` would submit `on` as a top-level command, which is nothing.
+    SectionClip,
     Elev,        ///< Set the elevation new geometry is drawn at (REQ-058).
     /// ORBIT: interactive free orbit — left-drag tumbles the model view; Esc/Enter/right-click
     /// exits (REQ-084 (c)). Deliberately shaped like \c Kind::Pan, and reuses the same
@@ -1545,6 +1559,8 @@ struct AppCommandState {
     /// SLICE (REQ-314 / ADR-046, GitHub #147): select solids, define a cutting plane with three
     /// points, then pick which side to keep (or both).
     Slice,
+    /// SECTION: choose solids, then three points defining the plane (REQ-335 increment 2).
+    Section,
     /// LOFT (REQ-315 / ADR-048, GitHub #241): select two or more closed polylines / circles in
     /// lofting order, Enter to skin a solid through them (SurfaceKind::Nurbs side faces). One
     /// select-objects phase and nothing else — no height, no axis.
@@ -1612,6 +1628,7 @@ struct AppCommandState {
     case Kind::VpThaw:        return "VPTHAW";
     case Kind::Rect:          return "RECT";
     case Kind::TrimState:     return "TRIMSTATE";
+    case Kind::SectionClip:   return "SECTIONCLIP";
     case Kind::Orbit:         return "ORBIT";
     case Kind::Ucs:           return "UCS";
     case Kind::Plan:          return "PLAN";
@@ -1631,6 +1648,7 @@ struct AppCommandState {
     case Kind::Extrude:           return "EXTRUDE";
     case Kind::Revolve:          return "REVOLVE";
     case Kind::Slice:            return "SLICE";
+    case Kind::Section:          return "SECTION";
     case Kind::Loft:             return "LOFT";
     case Kind::Sweep:            return "SWEEP";
     case Kind::Boolean:          return "BOOLEAN";
@@ -2346,6 +2364,31 @@ struct AppCommandState {
     WaitP3,
     WaitKeepSide,   ///< Pick a point on the side to keep, or [B]oth.
   } slicePhase = SlicePhase::SelectSolids;
+
+  // --- The SECTION command (REQ-335 increment 2, GitHub #149) -----------------------------------
+  //
+  // Deliberately the SAME shape as SLICE above, because it is the same gesture: choose solids, then
+  // define a plane by three points. The two commands ask one question and keep different answers —
+  // SLICE keeps the pieces, SECTION keeps the outline — so a user who has learned one has learned
+  // the other, and AutoCAD's own SECTION prompts in exactly this order.
+  //
+  // Increment 1 had no phases at all: it read the current selection and used the active UCS plane,
+  // so typing SECTION with nothing selected printed "select one or more solids first" and ENDED.
+  // That reads as a prompt and behaves as a refusal — the next click lands with the command already
+  // over and merely selects the solid, which is precisely how it was reported.
+  enum class SectionPhase {
+    SelectSolids,  ///< Accumulate a selection of solids; Enter confirms.
+    WaitP1,        ///< First of three points defining the section plane, or [UCS] for the work plane.
+    WaitP2,
+    WaitP3,
+  } sectionPhase = SectionPhase::SelectSolids;
+  std::vector<int> sectionSolidIndices;  ///< resolved at the end of the selection phase
+  /// The solid each index named when it was resolved, so a changed store refuses instead of cutting
+  /// whatever now occupies the slot. Parallel to \ref sectionSolidIndices.
+  std::vector<std::weak_ptr<const brep::Solid>> sectionSolidOwners;
+  ray3d::Vec3 sectionP1{};
+  ray3d::Vec3 sectionP2{};
+  ray3d::Vec3 sectionP3{};
 
   // --- The LOFT command (REQ-315 / ADR-048, GitHub #241) ---------------------------------------
 
@@ -3636,6 +3679,26 @@ struct AppCommandState {
   /// UCS. **Off by default** — on, the cursor changes colour and orientation, and a display change
   /// no one asked for is the one thing REQ-064 was careful to avoid when it added visual styles.
   bool viewportCrosshair3d = false;
+  /// Live section clipping (REQ-341 / ADR-058, GitHub issue #149 acceptance 6): hide everything on
+  /// the far side of a plane so the inside of a model can be looked at, updating as the plane moves.
+  ///
+  /// **The plane is the active UCS plane**, slid along its own Z by \ref viewportSectionClipOffset —
+  /// the same decision `SECTION` made (D-2026-09-09-i) and for the same reason, so the two commands
+  /// cut on the same plane and a user can section exactly what they are looking into.
+  ///
+  /// **Deliberately NOT persisted to `.gs`**, unlike \ref viewportProjection which sits beside a
+  /// named view. This is an inspection mode, not a property of the drawing: opening a file to find
+  /// half of it invisible, with the reason three menus away, is the failure this avoids. REQ-341
+  /// records persistence as a possible increment rather than an oversight.
+  ///
+  /// It IS per tab: `SaveDocumentToSnapshot` / `RestoreDocumentFromSnapshot` carry these three with
+  /// the camera, so another open drawing never inherits the clip (D-2026-09-16-b).
+  bool viewportSectionClip = false;
+  /// Offset of the clip plane from the UCS origin, along the UCS Z, in drawing units.
+  double viewportSectionClipOffset = 0.0;
+  /// Which half survives. False keeps the half the UCS +Z points AWAY from — so the material in
+  /// front of the plane is what disappears, which is the direction that reads as "cut towards me".
+  bool viewportSectionClipFlip = false;
   /// Viewport background (model-space clear color): RGB 0–1. Default #141A24 steel-blue tint.
   float viewportBgR = 0.08f;
   float viewportBgG = 0.10f;
@@ -4346,6 +4409,15 @@ inline ucs::Ucs CadActiveUcsStorage(const AppCommandState& st) {
   return u;
 }
 
+/// The live section clip as it stands (REQ-341), in STORAGE coordinates like everything the renderer
+/// and the picks see. Inactive when the clip is off. The one derivation the renderer, the solid pick
+/// and the snap all read, so the three cannot disagree about where the cut is.
+inline SectionClipPlane CadActiveSectionClip(const AppCommandState& st) {
+  if (!st.viewportSectionClip)
+    return SectionClipPlane{};
+  return SectionClipFromUcs(CadActiveUcsStorage(st), st.viewportSectionClipOffset, st.viewportSectionClipFlip);
+}
+
 /// The active work plane (UCS XY) a viewport click resolves against (REQ-058 / ADR-025 (e)).
 /// In storage space, because that is the space the ray is in.
 inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) { return ucs::WorkPlane(CadActiveUcsStorage(st)); }
@@ -4834,10 +4906,6 @@ void CancelPolysolidCommand(AppCommandState& st);
 /// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log);
 
-/// REQ-335 — SECTION: the cross-section of every selected solid by the active UCS plane, drawn as a
-/// closed polyline. Non-destructive: the solids are left exactly as they were.
-void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log);
-
 /// REQ-313 as amended (D-2026-09-09-j) — SOLIDCHECK: report each solid's validity, and separately
 /// whether its surface passes through itself. Read-only; nothing is repaired.
 void CadCheckSolids(AppCommandState& st, std::vector<std::string>& log);
@@ -4975,6 +5043,16 @@ void CancelSliceCommand(AppCommandState& st);
 [[nodiscard]] bool HandleSliceTextInput(const std::string& line, AppCommandState& st,
                                         std::vector<std::string>& log);
 void SubmitSliceViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+// SECTION (REQ-335 increment 2) — the same five entry points as SLICE above, because it is the same
+// gesture: choose solids, then define a plane. Increment 1 had none of these; it read the current
+// selection and ended, which is why a click during "select an object" fell through to plain picking.
+void StartSectionCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelSectionCommand(AppCommandState& st);
+[[nodiscard]] std::string CadSectionPromptText(const AppCommandState& st);
+[[nodiscard]] bool HandleSectionTextInput(const std::string& line, AppCommandState& st,
+                                          std::vector<std::string>& log);
+void SubmitSectionViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need
@@ -5736,6 +5814,32 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
 /// From a non-empty candidate list, pick the entity nearest the camera (ray mode) or highest Z (plan).
 bool PickCadEntityByDepth(const std::vector<CadPickCandidate>& candidates, SelectedEntity* out,
                           const ray3d::Ray* pickRay);
+/// The nearest whole SOLID under \p ray, as a `SelectedEntity` of `Type::Solid`. False if none.
+///
+/// **`PickClosestCadEntity` above cannot answer this and never could**: it returns only `LineSeg`,
+/// `Arc`, `Circle`, `Ellipse` and `Polyline`. Every consumer of it — the hover pre-highlight and
+/// every click that selects one entity — therefore behaved as though solids were not there, and the
+/// only thing that ever put a solid in a selection was `ComputeSelectionFromRect`. So a solid could
+/// be selected by dragging a rectangle around it and by nothing else, with no highlight beforehand,
+/// in every command and when idle. Reported from the real app twice in one session, as two separate
+/// complaints that turned out to be this one gap.
+///
+/// Built on \ref PickSubObjectAcrossSolids, which already does ray-versus-solid hit testing for the
+/// `Ctrl`+click sub-object pick (REQ-318): the geometry was there, only a whole-solid caller was
+/// missing. **Which hit names the solid follows the visual style, as in AutoCAD** (D-2026-09-16-b):
+/// in 2D Wireframe no face is drawn, so only an edge or a vertex answers — a click inside the
+/// outline starts a selection box, and an edge seen through the solid can be clicked. In Hidden and
+/// Shaded a visible face answers too. Clicking anywhere on a face in plan view had been taking
+/// clicks meant for survey points and selection boxes inside a building pad (code review on #478,
+/// finding 4).
+///
+/// Geometry the live section clip has hidden does not answer (finding 5) — see
+/// \ref PickSubObjectAcrossSolids.
+///
+/// Like the sub-object pick it never tessellates (REQ-318 item 7) — a solid absent from the display
+/// cache is simply not picked.
+[[nodiscard]] bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, float tolWorld,
+                                          SelectedEntity* out, double* outRayT = nullptr);
 /// True if (x,y) is inside the filled region: inside its outer loop (0) and outside every hole loop (REQ-042).
 bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y);
 /// HATCH command (REQ-043): begin picking an internal point.
@@ -5822,9 +5926,15 @@ void ToggleSubObjectSelection(AppCommandState& st, const SelectedSubObject& pick
 /// renderer is not drawing (the rule REQ-084 (d) already applies to the entity pick). Solids with no
 /// cached tessellation are skipped rather than tessellated: a pick must not cost a tessellation
 /// (REQ-318 item 7).
+///
+/// Honours the live section clip (REQ-341) the same way: a face, edge or vertex on the removed side
+/// is not drawn, so it neither answers nor hides a solid behind it.
+///
+/// \p facesPickable false skips the triangles entirely — no face answers and nothing occludes —
+/// which is what a 2D Wireframe view shows.
 [[nodiscard]] bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
                                              const solidpick::Tolerance& tol, SelectedSubObject* out,
-                                             solidpick::Pick* outPick = nullptr);
+                                             solidpick::Pick* outPick = nullptr, bool facesPickable = true);
 
 /// ONE sub-object click, whole: pick along \p ray, apply the mutual-exclusion rule, update the
 /// store, and say what happened. Returns true when something was picked.
@@ -6186,6 +6296,16 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
                                double* outMxY, int* outSkipped, const Viewport* vpFilter = nullptr);
 // The camera side of zoom-extents is `zoomframing::FrameWorldRect` (ZoomFraming.hpp) — pure, shared
 // by every fit path, and tested there (REQ-122).
+
+/// The box the section-clip indicator is sized to cover (REQ-341, D-2026-09-16-b), in storage
+/// coordinates: the drawing's extents as ZOOM EXTENTS measures them — every entity kind the clip can
+/// cut, not only solids — with the Z range of the solids when there are any, and the active UCS
+/// origin's elevation otherwise. False for an empty drawing; the caller then centres on the view.
+///
+/// Sized from the whole model rather than the solids alone because the clip cuts linework, meshes,
+/// surfaces and PDFs too, and because the old fallback — centred on the UCS origin — sat millions of
+/// feet off screen in a state-plane drawing with no solids (code review on #478, finding 8).
+bool ComputeSectionClipIndicatorBounds(const AppCommandState& st, ray3d::Vec3* outMin, ray3d::Vec3* outMax);
 
 bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float cy, float* ox, float* oy,
                          float* r);
