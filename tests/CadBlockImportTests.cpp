@@ -738,6 +738,52 @@ TEST_CASE("BCONNECTEDIT updates role, engagement, and compatibility tag on an ex
   CHECK(out.compatibilityTag == "ansi150");
 }
 
+TEST_CASE("BCONNECTMODE adds two modes with a single default on a connection point",
+          "[issue496][block][connector][bedit]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  CadBlockConnection c;
+  c.name = "P1";
+  def.connections.push_back(c);
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+
+  std::istringstream m1("P1, pipe, pipe-end, inlet, 0.25, , 1");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectmode", m1, log));
+  std::istringstream m2("P1, flange, flange-face, inlet, 0, class150, 0");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectmode", m2, log));
+
+  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  REQUIRE(di >= 0);
+  const CadBlockConnection& out = st.blockDefs[static_cast<size_t>(di)].connections[0];
+  REQUIRE(out.modes.size() == 2);
+  CHECK(out.modes[0].target == CadConnectionModeTarget::PipeEnd);
+  CHECK(out.modes[0].isDefault);
+  CHECK(out.modes[1].target == CadConnectionModeTarget::FlangeFace);
+  CHECK(out.modes[1].compatibilityTag == "class150");
+  CHECK_FALSE(out.modes[1].isDefault);
+
+  // Setting a new default clears the previous one, so exactly one mode stays default.
+  std::istringstream m1Again("P1, pipe, pipe-end, inlet, 0.25, , 0");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectmode", m1Again, log));
+  std::istringstream m2Default("P1, flange, flange-face, inlet, 0, class150, 1");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectmode", m2Default, log));
+  const CadBlockConnection& out2 = st.blockDefs[static_cast<size_t>(di)].connections[0];
+  REQUIRE(out2.modes.size() == 2);
+  CHECK_FALSE(out2.modes[0].isDefault);
+  CHECK(out2.modes[1].isDefault);
+
+  std::istringstream removeArgs("P1, pipe, remove");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectmode", removeArgs, log));
+  const CadBlockConnection& out3 = st.blockDefs[static_cast<size_t>(di)].connections[0];
+  REQUIRE(out3.modes.size() == 1);
+  CHECK(out3.modes[0].name == "flange");
+}
+
 TEST_CASE("BLOCKFITTING tags a block definition with piping metadata", "[issue486][block][fitting][bedit]") {
   AppCommandState st;
   CadBlockDefinition def;

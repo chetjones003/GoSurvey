@@ -1273,6 +1273,47 @@ bool FindNearestDrawingConnector(const AppCommandState& st, float px, float py, 
   return true;
 }
 
+/// Nearest bare line/polyline endpoint to (px,py,pz) within maxDist (issue #496): the "pipe end"
+/// smart-mode target. Outward normal points away from the segment, matching the sense of a
+/// `CadBlockConnection` normal so `CadBlockSnapInsertToConnection` orients the fitting the same way
+/// it would against another fitting's port.
+static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float py, float pz, float maxDist,
+                                    float* outX, float* outY, float* outZ, float* outNx, float* outNy,
+                                    float* outNz) {
+  bool any = false;
+  float bestD = maxDist * maxDist;
+  auto consider = [&](float ex, float ey, float ez, float dirx, float diry, float dirz) {
+    const float dx = ex - px;
+    const float dy = ey - py;
+    const float dz = ez - pz;
+    const float d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 > bestD)
+      return;
+    const float l = std::sqrt(dirx * dirx + diry * diry + dirz * dirz);
+    if (l <= 1.e-8f)
+      return;
+    bestD = d2;
+    any = true;
+    *outX = ex;
+    *outY = ey;
+    *outZ = ez;
+    *outNx = dirx / l;
+    *outNy = diry / l;
+    *outNz = dirz / l;
+  };
+  for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
+    const float x0 = static_cast<float>(st.userLinesFlat[i]);
+    const float y0 = static_cast<float>(st.userLinesFlat[i + 1]);
+    const float z0 = static_cast<float>(st.userLinesFlat[i + 2]);
+    const float x1 = static_cast<float>(st.userLinesFlat[i + 3]);
+    const float y1 = static_cast<float>(st.userLinesFlat[i + 4]);
+    const float z1 = static_cast<float>(st.userLinesFlat[i + 5]);
+    consider(x0, y0, z0, x0 - x1, y0 - y1, z0 - z1);
+    consider(x1, y1, z1, x1 - x0, y1 - y0, z1 - z0);
+  }
+  return any;
+}
+
 const CadBlockConnection* InsertSourceConnection(const AppCommandState& st) {
   const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
   if (di < 0)
@@ -1296,9 +1337,22 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
 
   constexpr float kSnap = 2.f;
   CadBlockWorldConnection tgt;
-  if (!FindNearestDrawingConnector(st, wx, wy, wz, kSnap, &tgt)) {
+  const bool foundPort = FindNearestDrawingConnector(st, wx, wy, wz, kSnap, &tgt);
+  float pipeX = 0.f, pipeY = 0.f, pipeZ = 0.f, pipeNx = 0.f, pipeNy = 0.f, pipeNz = 0.f;
+  const bool foundPipeEnd =
+      FindNearestPipeEndpoint(st, wx, wy, wz, kSnap, &pipeX, &pipeY, &pipeZ, &pipeNx, &pipeNy, &pipeNz);
+  if (!foundPort && !foundPipeEnd) {
     log.push_back("INSERT — no connection port near that point (within 2 ft).");
     return false;
+  }
+  // A block connection port and a bare pipe endpoint could both be within range; prefer whichever
+  // is actually nearer (issue #496 — the two are now distinct smart-mode targets).
+  bool usePipeEnd = foundPipeEnd && !foundPort;
+  if (foundPort && foundPipeEnd) {
+    const float portD2 = (tgt.x - wx) * (tgt.x - wx) + (tgt.y - wy) * (tgt.y - wy) + (tgt.z - wz) * (tgt.z - wz);
+    const float pipeD2 =
+        (pipeX - wx) * (pipeX - wx) + (pipeY - wy) * (pipeY - wy) + (pipeZ - wz) * (pipeZ - wz);
+    usePipeEnd = pipeD2 < portD2;
   }
   const CadBlockConnection* src = InsertSourceConnection(st);
   if (!src) {
@@ -1306,14 +1360,30 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
     return false;
   }
 
+  const CadConnectionModeTarget target =
+      usePipeEnd ? CadConnectionModeTarget::PipeEnd : CadBlockClassifyPortTarget(tgt.ownerPartType);
+  const CadBlockConnectionMode* mode = CadBlockResolveMode(*src, target);
+
   CadBlockXform xf;
   xf.sx = st.insertBlockSx;
   xf.sy = st.insertBlockSy;
   xf.sz = st.insertBlockSz;
   ApplyInsertDialogRotations(st, &xf);
-  CadBlockSnapInsertToConnection(*src, tgt.x, tgt.y, tgt.z, tgt.nx, tgt.ny, tgt.nz, &xf);
+  const float tX = usePipeEnd ? pipeX : tgt.x;
+  const float tY = usePipeEnd ? pipeY : tgt.y;
+  const float tZ = usePipeEnd ? pipeZ : tgt.z;
+  const float tNx = usePipeEnd ? pipeNx : tgt.nx;
+  const float tNy = usePipeEnd ? pipeNy : tgt.ny;
+  const float tNz = usePipeEnd ? pipeNz : tgt.nz;
+  CadBlockSnapInsertToConnection(*src, tX, tY, tZ, tNx, tNy, tNz, &xf);
+  CadBlockApplyConnectionModeOffset(*src, mode, &xf);
   ApplyInsertXformToDialog(xf, st);
-  log.push_back("INSERT — snapped to connection \"" + tgt.name + "\".");
+  const std::string targetName = usePipeEnd ? std::string("pipe end") : tgt.name;
+  std::string msg = "INSERT — snapped to " + targetName + " (" + std::string(CadConnectionModeTargetTag(target)) + ")";
+  if (mode)
+    msg += ", mode \"" + mode->name + "\"";
+  msg += ".";
+  log.push_back(msg);
   InsertAdvanceAfterPoint(st, log);
   return true;
 }
@@ -2247,6 +2317,92 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       c.compatibilityTag = f[4];
     st.blockEditorDirty = true;
     log.push_back("BCONNECTEDIT — updated \"" + f[0] + "\".");
+    return true;
+  }
+
+  if (tok == "bconnectmode") {
+    if (st.blockEditorName.empty()) {
+      log.push_back("BCONNECTMODE — open a block with BEDIT first.");
+      return true;
+    }
+    const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
+    if (di < 0)
+      return true;
+    CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    const std::vector<std::string> f = SplitCommaRest(args);
+    if (f.empty()) {
+      log.push_back("BCONNECTMODE — usage: BCONNECTMODE <connName>[, <modeName>, remove]"
+                    "[, <modeName>, <target>, <role>, <engagementLength>, <compatibilityTag>, <isDefault:0|1>]. "
+                    "target = pipe-end|flange-face|generic-port.");
+      return true;
+    }
+    const int ci = CadBlockFindConnection(def, f[0]);
+    if (ci < 0) {
+      log.push_back("BCONNECTMODE — no connection named \"" + f[0] + "\".");
+      return true;
+    }
+    CadBlockConnection& conn = def.connections[static_cast<size_t>(ci)];
+    if (f.size() == 1) {
+      if (conn.modes.empty()) {
+        log.push_back("BCONNECTMODE — \"" + f[0] + "\" has no modes (legacy single-mode connection).");
+        return true;
+      }
+      std::ostringstream oss;
+      oss << "BCONNECTMODE " << f[0];
+      for (const CadBlockConnectionMode& m : conn.modes)
+        oss << "\n" << m.name << "," << CadConnectionModeTargetTag(m.target) << ","
+            << CadBlockConnectionRoleTag(m.role) << "," << m.engagementLength << "," << m.compatibilityTag << ","
+            << (m.isDefault ? 1 : 0);
+      log.push_back(oss.str());
+      return true;
+    }
+    // f[1] = mode name
+    int mi = -1;
+    for (int i = 0; i < static_cast<int>(conn.modes.size()); ++i) {
+      if (CadBlockEqCi(conn.modes[static_cast<size_t>(i)].name, f[1])) {
+        mi = i;
+        break;
+      }
+    }
+    if (f.size() >= 3 && CadBlockEqCi(f[2], "remove")) {
+      if (mi < 0) {
+        log.push_back("BCONNECTMODE — no mode named \"" + f[1] + "\" on \"" + f[0] + "\".");
+        return true;
+      }
+      conn.modes.erase(conn.modes.begin() + mi);
+      st.blockEditorDirty = true;
+      log.push_back("BCONNECTMODE — removed mode \"" + f[1] + "\" from \"" + f[0] + "\".");
+      return true;
+    }
+    if (f.size() < 7) {
+      log.push_back("BCONNECTMODE — usage: BCONNECTMODE <connName>, <modeName>, <target>, <role>, "
+                    "<engagementLength>, <compatibilityTag>, <isDefault:0|1>.");
+      return true;
+    }
+    CadBlockConnectionMode mode;
+    mode.name = f[1];
+    mode.target = ParseCadConnectionModeTarget(f[2]);
+    mode.role = ParseCadBlockConnectionRole(f[3]);
+    if (!TryParseF(f[4], mode.engagementLength)) {
+      log.push_back("BCONNECTMODE — engagement length must be a number.");
+      return true;
+    }
+    mode.compatibilityTag = f[5];
+    mode.isDefault = (f[6] == "1");
+    if (mode.isDefault) {
+      // Exactly one default per connection point (issue #496 AC: "one mode ... designated default").
+      for (CadBlockConnectionMode& other : conn.modes)
+        other.isDefault = false;
+    }
+    if (mi >= 0)
+      conn.modes[static_cast<size_t>(mi)] = mode;
+    else
+      conn.modes.push_back(mode);
+    if (!conn.modes.empty() && std::none_of(conn.modes.begin(), conn.modes.end(),
+                                            [](const CadBlockConnectionMode& m) { return m.isDefault; }))
+      conn.modes.front().isDefault = true;
+    st.blockEditorDirty = true;
+    log.push_back("BCONNECTMODE — set mode \"" + f[1] + "\" on \"" + f[0] + "\".");
     return true;
   }
 

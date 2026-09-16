@@ -333,3 +333,72 @@ TEST_CASE("CadBlockCollectWorldSolids refuses non-uniform scale on solids", "[is
   CadBlockCollectWorldSolids(defs, r, EntityAttributes{}, &ws);
   CHECK(ws.empty());
 }
+
+TEST_CASE("CadBlockResolveMode matches target, falls back to default, and is null when legacy",
+          "[issue496][block][connector]") {
+  CadBlockConnection legacy;
+  CHECK(CadBlockResolveMode(legacy, CadConnectionModeTarget::PipeEnd) == nullptr);
+
+  CadBlockConnection conn;
+  CadBlockConnectionMode pipeMode;
+  pipeMode.name = "pipe";
+  pipeMode.target = CadConnectionModeTarget::PipeEnd;
+  pipeMode.engagementLength = 0.25f;
+  conn.modes.push_back(pipeMode);
+
+  CadBlockConnectionMode flangeMode;
+  flangeMode.name = "flange";
+  flangeMode.target = CadConnectionModeTarget::FlangeFace;
+  flangeMode.isDefault = true;
+  conn.modes.push_back(flangeMode);
+
+  const CadBlockConnectionMode* pm = CadBlockResolveMode(conn, CadConnectionModeTarget::PipeEnd);
+  REQUIRE(pm != nullptr);
+  CHECK(pm->name == "pipe");
+
+  const CadBlockConnectionMode* fm = CadBlockResolveMode(conn, CadConnectionModeTarget::FlangeFace);
+  REQUIRE(fm != nullptr);
+  CHECK(fm->name == "flange");
+
+  // No mode targets GenericPort explicitly, so the default (FlangeFace) applies.
+  const CadBlockConnectionMode* gm = CadBlockResolveMode(conn, CadConnectionModeTarget::GenericPort);
+  REQUIRE(gm != nullptr);
+  CHECK(gm->name == "flange");
+}
+
+TEST_CASE("CadBlockClassifyPortTarget distinguishes flange faces from generic ports",
+          "[issue496][block][connector]") {
+  CHECK(CadBlockClassifyPortTarget(CadPipePartType::Flange) == CadConnectionModeTarget::FlangeFace);
+  CHECK(CadBlockClassifyPortTarget(CadPipePartType::Elbow90) == CadConnectionModeTarget::GenericPort);
+  CHECK(CadBlockClassifyPortTarget(CadPipePartType::None) == CadConnectionModeTarget::GenericPort);
+}
+
+TEST_CASE("CadBlockApplyConnectionModeOffset slides the fitting along its port normal",
+          "[issue496][block][connector]") {
+  CadBlockConnection src;
+  src.x = 0.f;
+  src.y = 0.f;
+  src.z = 0.f;
+  src.nx = 0.f;
+  src.ny = 0.f;
+  src.nz = 1.f;
+
+  CadBlockXform xf;
+  xf.sx = xf.sy = xf.sz = 1.f;
+  CadBlockSnapInsertToConnection(src, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, &xf);
+
+  CadBlockConnectionMode mode;
+  mode.engagementLength = 1.5f;
+  CadBlockApplyConnectionModeOffset(src, &mode, &xf);
+
+  // src's normal anti-aligns with the target normal (0,0,1), so the fitting's world-space
+  // connection normal now points toward -Z; the offset should push it further in that direction.
+  CHECK(xf.z == Catch::Approx(-1.5f).margin(0.01));
+
+  // A legacy (nullptr) mode must be a no-op.
+  CadBlockXform noModeXf;
+  noModeXf.sx = noModeXf.sy = noModeXf.sz = 1.f;
+  CadBlockSnapInsertToConnection(src, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, &noModeXf);
+  CadBlockApplyConnectionModeOffset(src, nullptr, &noModeXf);
+  CHECK(noModeXf.z == Catch::Approx(0.f).margin(0.001));
+}
