@@ -62,7 +62,7 @@ No Commands, UI, renderer or IO change: every command reaches these kernel funct
 
 ## Test approach and results
 
-- `BrepTests [issue515]`, 3 cases / 14 sections: extruded circle up and down (recipe fields, frame
+- `BrepTests [issue515]`, 3 cases / 15 sections: extruded circle up and down (recipe fields, frame
   spans the solid, topology untouched), rectangle extrude keeps none, a non-circle arc loop keeps
   none; revolve rectangle → cylinder, right trapezoid → cone with the WIDER end as base, right
   triangle → apex cone, partial turn → none, stepped shaft → none and still refused by name; loft
@@ -91,3 +91,15 @@ mass-property tests confirm.
   The cut-time recogniser the user did not choose would cover those.
 - **DEBT-2.** A revolve profile with extra collinear vertices (a rectangle drawn with a midpoint on
   one side) is not recognised; four straight edges are required.
+
+## Final review (after the PR opened)
+
+Re-read the diff as someone else's. Every consumer of `recipe.kind == Cylinder / Cone` was listed:
+the four slice recognisers (which rebuild pieces from the recipe — the same-volume assertions cover
+them), `PrimitiveKindName`, `.gs`, and `Translate` / `Rotate` / `Scale` (which keep a recipe that
+still describes the solid); every modifying operation already drops it. No UI reads it.
+
+One defect found and fixed: `RevolveProfileIsConical` scaled its tolerance by `|t|`, the distance from
+the **picked axis point** — so an axis clicked far along the axis loosened the test (1 ft at 1e6).
+It now scales by the profile's own extent, as `Revolve`'s `axisEps` does, with a case that picks the
+axis point 500,000 ft away. Full suite re-run: 1513/1520, the same 7 `beta` failures.

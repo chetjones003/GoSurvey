@@ -7002,6 +7002,19 @@ TEST_CASE("A full-turn revolve of a right profile about its edge is described as
     RequireSameCutsAsPrimitive(rev, prim, 12.0);
   }
 
+  SECTION("the axis point may be picked anywhere along the axis") {
+    // The recognition tolerance follows the profile's size, not the distance to the picked point.
+    Solid rev;
+    REQUIRE(brep::Revolve(XzProfile({{0, 0}, {r, 0}, {r, h}, {0, h}}), Vec3{0, 0, -5.0e5}, Vec3{0, 0, 1},
+                          kTwoPiTest, &rev, &why));
+    REQUIRE(rev.recipe.kind == brep::PrimitiveKind::Cylinder);
+    // Either end may be the base of a cylinder; what matters is that the description spans z 0..h.
+    const brep::Recipe& rc = rev.recipe;
+    const double z0 = rc.frame.origin.z, z1 = rc.frame.origin.z + rc.frame.zAxis.z * rc.height;
+    REQUIRE(std::min(z0, z1) == Approx(0.0).margin(1e-6));
+    REQUIRE(std::max(z0, z1) == Approx(h));
+  }
+
   SECTION("a partial revolve is not a cylinder") {
     Solid rev;
     REQUIRE(brep::Revolve(XzProfile({{0, 0}, {r, 0}, {r, h}, {0, h}}), Vec3{0, 0, 0}, Vec3{0, 0, 1}, kPi, &rev,

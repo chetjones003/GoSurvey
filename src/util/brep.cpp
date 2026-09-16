@@ -5131,15 +5131,19 @@ void StampConicalRecipe(Solid* s, const Conical& c) {
       return false;
   std::vector<double> t(static_cast<std::size_t>(n));
   std::vector<double> d(static_cast<std::size_t>(n));
-  double scale = 1.0;
+  double tMin = 1e300, tMax = -1e300, dMax = 0.0;
   for (int i = 0; i < n; ++i) {
     const std::size_t k = static_cast<std::size_t>(i);
     const Vec3 w = ray3d::Sub(profile.vertices[k], axisPoint);
     t[k] = ray3d::Dot(w, axisUnit);
     d[k] = ray3d::Length(ray3d::Sub(w, ray3d::Scale(axisUnit, t[k])));
-    scale = std::max({scale, std::fabs(t[k]), d[k]});
+    tMin = std::min(tMin, t[k]);
+    tMax = std::max(tMax, t[k]);
+    dMax = std::max(dMax, d[k]);
   }
-  const double tol = 1e-6 * scale;  // Revolve's own axisEps
+  // Scaled by the PROFILE's own extent, as Revolve's axisEps is — not by how far along the axis the
+  // picked axis point happens to lie, which would loosen the test for a point clicked far away.
+  const double tol = 1e-6 * std::max({tMax - tMin, dMax, 1e-9});
   const auto on = [&](int i) { return d[static_cast<std::size_t>((i % n + n) % n)] <= tol; };
   const auto tt = [&](int i) { return t[static_cast<std::size_t>((i % n + n) % n)]; };
   const auto dd = [&](int i) { return d[static_cast<std::size_t>((i % n + n) % n)]; };
