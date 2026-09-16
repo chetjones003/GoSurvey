@@ -9107,6 +9107,10 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   // submit `of`, which it does not.
   if (cmd.active == AppCommandState::Kind::SectionClip)
     return "SECTIONCLIP — [ON/OFF/FLIP] or an offset along the UCS Z:";
+  // REQ-342. No bracketed options: the answer is a click on a face, not a keyword, and a link that
+  // submits text here would have nothing to consume it.
+  if (cmd.active == AppCommandState::Kind::SectionPlane)
+    return CadSectionPlanePromptText();
   if (cmd.active == AppCommandState::Kind::Arc) {
     switch (cmd.arcPhase) {
     case AppCommandState::ArcPhase::WaitStart:
@@ -13651,6 +13655,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         // snapped point drives the pick, exactly as the model path feeds CadSnap into SubmitViewportPick.
         double curMX = mLocalX, curMY = mLocalY;
         cmd.viewportSnapPickValid = false;
+        cmd.viewportSnapPickKind = -1;  // REQ-344: no kind recorded yet this frame
         const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
                             cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
         // REQ-121 rule (1), floating model space (REQ-036). The same suppression as the model-space
@@ -13920,6 +13925,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // floating hover/snap/cursor (REQ-036).
   if (!InFloatingModelSpace(cmd)) {
     cmd.viewportSnapPickValid = false;
+    cmd.viewportSnapPickKind = -1;  // REQ-344: no kind recorded yet this frame
   }
   // THE model-space input seam (REQ-058). Everything downstream — snap, hover, entity picking,
   // hatch tracing, command submission — consumes rawX/rawY, so orbit-awareness is this one
@@ -14120,7 +14126,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // hover, it is the same budget. It also SUPPRESSES the entity hover rather than drawing beside
       // it — two highlights answering one cursor is the defect, not the feature.
       // (The live gizmo drag, which covers a face drag too since slice 4c, is a few lines below.)
-      const bool subObjectHovering = modelSpace && !blockEntityHover && ImGui::GetIO().KeyCtrl &&
+      // REQ-342: OR'd with the face-pick step, because a command that ASKS for a face must
+      // pre-highlight one without the user also having to know about Ctrl. Ctrl remains the way to
+      // reach a sub-object when no command is asking.
+      const bool subObjectHovering = modelSpace && !blockEntityHover &&
+                                     (ImGui::GetIO().KeyCtrl || ViewportIsFacePickStep(cmd)) &&
                                      !cmd.gizmoDragActive;
       if (subObjectHovering) {
         cmd.viewportHoverEntityValid = false;
@@ -14168,6 +14178,37 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       } else if (cmd.gizmoHoverAxis >= 0 && !cmd.gizmoDragActive) {
         cmd.gizmoHoverAxis = -1;
+        BumpCadGpuCache(cmd);
+      }
+      // REQ-343 — the section plane handle under the cursor.
+      //
+      // Outside `runHoverPick`, like the gizmo above and for the same reason: six ray-to-point
+      // tests against widgets whose positions are already known, not a walk of the drawing.
+      //
+      // The live DRAG is deliberately NOT here. It runs after the object snap is computed, several
+      // hundred lines down, because REQ-344 lets the drag land on a snapped point and reading last
+      // frame's snap would leave the plane one frame behind its own glyph.
+      // Gated on the same conditions the CLICK is, so the two cannot disagree. A handle that lights
+      // up must be a handle that grabs (`ViewportRenderer.hpp`), and the click only reaches
+      // `SubmitSectionPlaneClick` from the `IdleSelection` route with Ctrl up — so during LINE, or a
+      // re-run of SECTIONPLANE, a lit handle was a lie: the click placed a vertex or a face pick
+      // instead. Ctrl is part of the gate rather than a skip, so releasing it inside the block
+      // clears a stale highlight instead of stranding one.
+      const bool spHoverEligible = modelSpace && cmd.viewportSectionClip &&
+                                   cmd.sectionPlaneGripDrag < 0 && !ImGui::GetIO().KeyCtrl &&
+                                   ViewportClickRouteFor(cmd) == ViewportClickRoute::IdleSelection;
+      if (spHoverEligible) {
+        {
+          const ray3d::Ray spRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+          const int wasHot = cmd.sectionPlaneGripHover;
+          UpdateSectionPlaneGripHover(cmd, spRay,
+                                      static_cast<double>(CadSnap::WorldToleranceFromPixels(
+                                          avail.y, halfH, kGizmoHandleGrabPx)));
+          if (cmd.sectionPlaneGripHover != wasHot)
+            BumpCadGpuCache(cmd);
+        }
+      } else if (cmd.sectionPlaneGripHover >= 0 && cmd.sectionPlaneGripDrag < 0) {
+        cmd.sectionPlaneGripHover = -1;
         BumpCadGpuCache(cmd);
       }
       if (blockEntityHover) {
@@ -14278,8 +14319,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const auto perfSnapT0 = std::chrono::steady_clock::now();
     {
       cmd.viewportSnapPickValid = false;
+      cmd.viewportSnapPickKind = -1;  // REQ-344: no kind recorded yet this frame
+      // REQ-344: a section-plane handle drag counts as mid-command, exactly as the three grip drags
+      // beside it already do. No `Kind` is active during one — the plane is a view state, not a
+      // command — so without this the snap would be computed as though the user were idle, and a
+      // drag that is placing a plane at a midpoint would get neither the marker nor the pull.
       const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
-                          cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
+                          cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
+                          cmd.mtextGripMoveActive || cmd.sectionPlaneGripDrag >= 0;
       // REQ-121 rule (1). During an object-selection step OSNAP has no effect: no marker is drawn
       // and the cursor does not jump, because there is no coordinate being placed. The pick itself
       // was already hit-tested against the raw cursor (`RawEntityPick`'s own comment says why), so
@@ -14310,6 +14357,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cmd.viewportSnapPickLocalX = snap.x;
           cmd.viewportSnapPickLocalY = snap.y;
           cmd.viewportSnapPickLocalZ = snap.z;  // osnap overrides the work-plane elevation (REQ-058)
+          cmd.viewportSnapPickKind = static_cast<int>(snap.kind);  // REQ-344: named feature, or not
           if (out_snap)
             *out_snap = snap;
           const double dx = static_cast<double>(snap.x) - rawX;
@@ -14359,6 +14407,64 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
     }
+  }
+
+  // REQ-343/340 — the section plane's live handle drag.
+  //
+  // HERE, after the object snap has been computed for this frame, rather than up with the hover.
+  // The drag can land on a snapped point (REQ-344), and the snap the user is looking at is the one
+  // computed just above; reading the previous frame's would leave the plane one frame behind its
+  // own marker, which at drag speed is visible as the plane trailing the glyph it is supposed to be
+  // locked to.
+  //
+  // The plane has to follow the cursor every frame or the gesture is not direct manipulation at
+  // all — and for this widget that also means the CUT moves, since the offset the drag writes is
+  // the uniform the shader reads on the next frame.
+  if (modelSpace && cmd.viewportSectionClip && cmd.sectionPlaneGripDrag >= 0) {
+    const ray3d::Ray spRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+    // The snapped point in **STORAGE** coordinates — the frame everything else in this drag is
+    // already in, and the frame `CadSnap` answers in.
+    //
+    // This converted to world first, which was simply wrong and is the bug behind "it is snapping
+    // too far the other direction". A section plane's frame comes from a solid's face
+    // (`brep::Surface::frame`), and solids are stored in the local frame like every other store —
+    // nothing in the section-plane path converts by `worldDocumentOrigin`. So the anchor, the drag
+    // axis and the camera ray were all storage-space while the snapped point alone had the document
+    // origin added to it, putting the two a whole origin apart. It reads as "close but wrong, and
+    // wrong the other way when the axis points the other way", which is exactly what was reported.
+    ray3d::Vec3 snapLocal{};
+    const ray3d::Vec3* snapPtr = nullptr;
+    // ONLY a named feature steers the plane (REQ-344 amended, user report 2026-09-11).
+    //
+    // `Surface`, `Edge` and `Face` answer with the point on the object nearest the cursor, so with
+    // 3D OSNAP on there is a snap under the cursor at essentially every position on a solid. Fed to
+    // an ABSOLUTE placement, that stops being a snap at all and becomes "put the plane wherever the
+    // cursor happens to be touching the model" — the plane skates across the box as the pointer
+    // moves, ending up well past what was aimed at. Reported as the plane "cutting off more of the
+    // box than it needs to" and "not snapping to the section quite right".
+    //
+    // `SnapClass` is the distinction D-2026-09-11-a already drew for exactly this family, reused
+    // rather than restated. A midpoint, endpoint, centre, quadrant, intersection, face centroid or
+    // knot places the plane; "somewhere on that face" does not, and the drag follows the cursor
+    // instead — which is what the user is doing when no feature is under it.
+    //
+    // The `>= 0` is not belt-and-braces. Three places set `viewportSnapPickValid` and only the
+    // block above records a kind — the grip magnet sets the flag from a 2D grip with no kind and no
+    // Z, and `Kind::Endpoint` is 0, so a missing kind would read as a named feature and place the
+    // plane absolutely through a point the user never aimed at, at a stale elevation.
+    const bool namedFeature =
+        cmd.viewportSnapPickValid && cmd.viewportSnapPickKind >= 0 &&
+        CadSnap::SnapClass(static_cast<CadSnap::Kind>(cmd.viewportSnapPickKind)) == 1;
+    if (namedFeature) {
+      // Taken straight through, at full precision. The old conversion also narrowed X and Y to
+      // `float` on the way — the very thing the `double` widening of these fields (ADR-054 Phase C)
+      // exists to prevent, and which breaks the snap's bit-exactness above about 10,000 ft local.
+      snapLocal = ray3d::Vec3{cmd.viewportSnapPickLocalX, cmd.viewportSnapPickLocalY,
+                              cmd.viewportSnapPickLocalZ};
+      snapPtr = &snapLocal;
+    }
+    UpdateSectionPlaneGripDrag(cmd, spRay, snapPtr);
+    BumpCadGpuCache(cmd);
   }
 
   // Surface rollover readout (REQ-089): advance the dwell, and on the one frame it elapses, ask what
@@ -14972,6 +15078,26 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       SubmitTrimViewportPick(cmd, tx, ty, trimTol, log, pickRayPtr);
       break;
     }
+    // REQ-342 — SECTIONPLANE is asking for one FACE of a solid.
+    //
+    // Its own case rather than a branch inside `IdleSelection` below, which is where the sub-object
+    // pick has always lived. That placement would have been silently dead: `IdleSelection` is a
+    // DIFFERENT route, so a command routed to `SubObjectFacePick` never reaches it, the click would
+    // have fallen out of this switch doing nothing, and `/W4` does not include MSVC's
+    // unhandled-enumerator warning (C4061/C4062), so nothing would have said so at build time.
+    // Caught by reading the switch; it compiled clean either way.
+    case ViewportClickRoute::SubObjectFacePick: {
+      // The RAY, not the plan point, and built here because the command layer has neither the
+      // camera nor the pixel scale. Plan view is the default view and a solid has faces to pick in
+      // it, so this must not depend on `pickRayPtr`, which is null when the view is not orbited.
+      const ray3d::Ray faceRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+      solidpick::Tolerance faceTol;
+      faceTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
+      faceTol.edge = faceTol.vertex;
+      (void)SubmitSectionPlaneFacePick(cmd, faceRay, faceTol, log);
+      BumpCadGpuCache(cmd);
+      break;
+    }
     case ViewportClickRoute::Ignore:
       // PAN/ORBIT (drag-driven), TRIMSTATE/ELEV (text prompts), VPFREEZE/VPTHAW (floating
       // viewports only), PaperRectViewport (paper space only), PDFATTACH outside its
@@ -15011,6 +15137,26 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                              log)) {
           BumpCadGpuCache(cmd);
           handled = true;  // the click was the gizmo's; nothing below may also act on it
+        }
+      }
+      // REQ-343 — the section plane and its handles, on the same terms as the gizmo above and for
+      // the same reason: a handle sits over the thing it moves, so a click that selected straight
+      // through it would leave the plane undraggable.
+      //
+      // AFTER the gizmo, because the gizmo belongs to a selection the user made deliberately and
+      // the section plane is a view aid that can cover a large part of the drawing. Where both are
+      // reachable, the one the user was already working with wins.
+      //
+      // `SubmitSectionPlaneClick` returns false unless the click actually lands on the plane or one
+      // of its handles, so a click anywhere else means exactly what it always meant.
+      if (!handled && modelSpace && !ImGui::GetIO().KeyCtrl) {
+        const ray3d::Ray spRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        if (SubmitSectionPlaneClick(cmd, spRay,
+                                    static_cast<double>(CadSnap::WorldToleranceFromPixels(
+                                        avail.y, halfH, kGizmoHandleGrabPx)),
+                                    log)) {
+          BumpCadGpuCache(cmd);
+          handled = true;
         }
       }
       const bool subObjectClick = !handled && modelSpace && ImGui::GetIO().KeyCtrl;

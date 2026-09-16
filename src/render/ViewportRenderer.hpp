@@ -34,6 +34,18 @@ struct RenderTuning {
   /// is the side that knows how big the drawing is; the renderer only draws it. Invalid means draw
   /// nothing, which is what every existing call site gets by default.
   SectionClipIndicator sectionClipIndicator{};
+  /// REQ-342 — the hatch and section line that make that rectangle findable at a glance. Built from
+  /// the indicator by `SectionPlaneGraphicsFor`, on the same side and for the same reason. Invalid
+  /// means the plane draws as REQ-341 shipped it, fill and outline only.
+  SectionPlaneGraphics sectionPlaneGraphics{};
+  /// REQ-343 — the handles on a SELECTED section plane. Invalid when it is not selected, which is
+  /// the only "should these be drawn?" test there is.
+  SectionPlaneGrips sectionPlaneGrips{};
+  /// Which handle is under the cursor, and which is being dragged (`SectionPlaneGrip`, -1 for
+  /// none). Both are drawn brighter and larger, so the handle that lights up is the handle that
+  /// grabs — the rule REQ-318's sub-object hover already follows.
+  int sectionPlaneGripHover = -1;
+  int sectionPlaneGripDrag = -1;
 };
 
 class ViewportRenderer {

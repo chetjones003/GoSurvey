@@ -41,6 +41,10 @@
 #include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
 #include "util/cadsolid.hpp"   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
 #include "util/solidpick.hpp"  // solidpick::Kind, for SelectedSubObject (REQ-318 / ADR-049)
+// SectionPlaneExtent / SectionPlaneGrip, for the section plane's stored size and handles
+// (REQ-342/339). GL-free and header-only, like every other header in this list — the reason
+// `SectionClip.hpp` was written that way (ADR-002).
+#include "render/SectionClip.hpp"
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
 // gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
 // above it.
@@ -1525,6 +1529,13 @@ struct AppCommandState {
     /// submission is only meaningful while a command is waiting to consume it. Without a waiting
     /// state, clicking `ON` would submit `on` as a top-level command, which is nothing.
     SectionClip,
+    /// SECTIONPLANE: waiting for the user to pick a solid FACE to put the section plane on
+    /// (REQ-342 / ADR-059, GitHub issue #479 acceptance 1).
+    ///
+    /// A single phase, so there is no `SectionPlanePhase` enum: being active IS "waiting for a
+    /// face". The phases arrive with the manipulation slice, and an enum with one value now would
+    /// be an abstraction with no second use.
+    SectionPlane,
     Elev,        ///< Set the elevation new geometry is drawn at (REQ-058).
     /// ORBIT: interactive free orbit — left-drag tumbles the model view; Esc/Enter/right-click
     /// exits (REQ-084 (c)). Deliberately shaped like \c Kind::Pan, and reuses the same
@@ -1629,6 +1640,7 @@ struct AppCommandState {
     case Kind::Rect:          return "RECT";
     case Kind::TrimState:     return "TRIMSTATE";
     case Kind::SectionClip:   return "SECTIONCLIP";
+    case Kind::SectionPlane:  return "SECTIONPLANE";
     case Kind::Orbit:         return "ORBIT";
     case Kind::Ucs:           return "UCS";
     case Kind::Plan:          return "PLAN";
@@ -1763,6 +1775,23 @@ struct AppCommandState {
   /// ELEV is 5 must give you that endpoint, not a point 5 above it (AutoCAD-faithful, REQ-058).
   /// Only meaningful while \ref viewportSnapPickValid.
   double viewportSnapPickLocalZ = 0.0;
+  /// WHICH snap answered, as a `CadSnap::Kind` (REQ-344 amended). Only meaningful while
+  /// \ref viewportSnapPickValid.
+  ///
+  /// Stored as an `int` because `CadSnap::Kind` lives in a Viewport header and Commands may not
+  /// include one (architecture §11.1) — the same reason `objectSnapKindOverrideKind` beside it is
+  /// an `int`. Added because a caller can need to know not just WHERE the snap is but whether it is
+  /// a **named feature** or one of the "anywhere on the object" family: a section-plane drag
+  /// honours the first and must ignore the second, or `Face` — which answers at essentially every
+  /// cursor position on a solid — drags the plane across the model continuously.
+  ///
+  /// **-1 means "no kind was recorded", and is the value every frame starts at.** Three separate
+  /// places set \ref viewportSnapPickValid and only one of them knows a `CadSnap::Kind` — the grip
+  /// magnet sets the flag from a 2D grip position with no kind and no Z at all. `Kind::Endpoint` is
+  /// 0, so a default-initialised field reads as a named feature and would let one of those drive an
+  /// absolute plane placement through a point the user never aimed at. Starting at -1 makes the
+  /// omission fail closed instead: a consumer that needs the kind checks for it.
+  int viewportSnapPickKind = -1;
   /// Command-line log cache for the selectable read-only multiline (rebuilt each frame from \ref log).
   std::vector<char> commandLogCacheBytes;
   size_t commandLogLastSizeForAutoscroll = 0;
@@ -3699,6 +3728,63 @@ struct AppCommandState {
   /// Which half survives. False keeps the half the UCS +Z points AWAY from — so the material in
   /// front of the plane is what disappears, which is the direction that reads as "cut towards me".
   bool viewportSectionClipFlip = false;
+  /// **One clip plane, two ways to aim it** (REQ-342 / D-2026-09-11-b, GitHub issue #479).
+  ///
+  /// When false the plane is the active UCS plane, exactly as REQ-341 shipped it: derived every
+  /// frame, so it follows the work plane. When true it is \ref viewportSectionClipFrame, which
+  /// `SECTIONPLANE` set from a solid's face and which does NOT follow the UCS.
+  ///
+  /// Two independent planes were the alternative and were rejected: they can disagree, and the
+  /// first thing a user would do is turn one on while the other was already cutting and see a
+  /// result neither command explains. \ref viewportSectionClipOffset and
+  /// \ref viewportSectionClipFlip apply to whichever frame is in force, so `SECTIONCLIP OFF`,
+  /// `FLIP` and a typed offset keep working on a face-defined plane without a second vocabulary.
+  bool viewportSectionClipFrameValid = false;
+  /// The face-derived clip frame. Its Z is the face's **outward** normal (`brep::Surface::frame`,
+  /// measured across every primitive, Boolean and oblique-slice result in probe P1/P2), so at
+  /// offset 0 the whole solid is on the kept side and nothing disappears — the plane simply
+  /// appears on the face it was made from, which is what AutoCAD does and what the user asked for.
+  ucs::Ucs viewportSectionClipFrame{};
+  /// The rectangle's size, once the user has stretched it (REQ-343). Invalid means "derive it from
+  /// the model", which is what a freshly placed plane uses. Reset whenever the plane is re-aimed,
+  /// for the reason the offset is: it was measured against a face that is no longer in force.
+  SectionPlaneExtent viewportSectionClipExtent{};
+  /// True while the section plane is SELECTED and showing its handles (REQ-343).
+  ///
+  /// Not a `SelectedEntity`. The plane is still a view state — it has no layer, no attributes and
+  /// no place in `.gs` — so putting it in `selection` would put a branch for it in every consumer
+  /// of that vector (MOVE, DELETE, DXF export, the property panel, the highlight walk), and the
+  /// first one that forgot would be a view setting silently exported or erased. That is the same
+  /// argument `SelectedSubObject` records for keeping its own store.
+  bool sectionPlaneSelected = false;
+  /// The handle currently being dragged, or `None`. Cast to \ref SectionPlaneGrip.
+  int sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
+  /// The handle under the cursor, for the pre-highlight. `None` when there is none.
+  int sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
+  /// Where the drag started along its own axis, and the plane's state at that moment — so the drag
+  /// is a DELTA from the grab rather than an absolute reading of the cursor, and the handle does
+  /// not jump to the cursor on the first frame.
+  double sectionPlaneGripStartParam = 0.0;
+  double sectionPlaneGripStartOffset = 0.0;
+  SectionPlaneExtent sectionPlaneGripStartExtent{};
+  /// Whether the plane was ALREADY user-sized when the handle was grabbed (REQ-343).
+  ///
+  /// \ref sectionPlaneGripStartExtent is seeded from the drawn rectangle when there was no stored
+  /// extent, because the stretch arithmetic needs a valid one to work from — so it cannot itself
+  /// answer "was this plane user-sized before?". ESC needs that answer: restoring the seeded extent
+  /// after an aborted first stretch would leave the plane pinned at that size and no longer
+  /// tracking the model, which is a state the user never asked for and cannot see.
+  bool sectionPlaneGripStartExtentWasValid = false;
+  /// The drag axis, FROZEN at the moment of the grab (REQ-343).
+  ///
+  /// It has to be frozen, and this is not a refinement. The handle sits on the plane, so dragging
+  /// the plane moves the handle — re-deriving the axis each frame measures every frame's delta from
+  /// where the plane has already got to, which makes the delta collapse to zero on the second
+  /// frame. Held still, the cursor would then snap the plane back to where it was grabbed, and
+  /// moving would oscillate. Found by a test asserting that the click which DROPS a drag changes
+  /// nothing.
+  ray3d::Vec3 sectionPlaneGripAnchor{};
+  ray3d::Vec3 sectionPlaneGripAxis{};
   /// Viewport background (model-space clear color): RGB 0–1. Default #141A24 steel-blue tint.
   float viewportBgR = 0.08f;
   float viewportBgG = 0.10f;
@@ -4412,10 +4498,13 @@ inline ucs::Ucs CadActiveUcsStorage(const AppCommandState& st) {
 /// The live section clip as it stands (REQ-341), in STORAGE coordinates like everything the renderer
 /// and the picks see. Inactive when the clip is off. The one derivation the renderer, the solid pick
 /// and the snap all read, so the three cannot disagree about where the cut is.
+[[nodiscard]] ucs::Ucs CadEffectiveSectionClipFrame(const AppCommandState& st);
 inline SectionClipPlane CadActiveSectionClip(const AppCommandState& st) {
   if (!st.viewportSectionClip)
     return SectionClipPlane{};
-  return SectionClipFromUcs(CadActiveUcsStorage(st), st.viewportSectionClipOffset, st.viewportSectionClipFlip);
+  // REQ-342: the face SECTIONPLANE was given, or the active UCS when it was never given one.
+  return SectionClipFromUcs(CadEffectiveSectionClipFrame(st), st.viewportSectionClipOffset,
+                            st.viewportSectionClipFlip);
 }
 
 /// The active work plane (UCS XY) a viewport click resolves against (REQ-058 / ADR-025 (e)).
@@ -5840,6 +5929,89 @@ bool PickCadEntityByDepth(const std::vector<CadPickCandidate>& candidates, Selec
 /// cache is simply not picked.
 [[nodiscard]] bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, float tolWorld,
                                           SelectedEntity* out, double* outRayT = nullptr);
+
+// --- SECTIONPLANE (REQ-342 / ADR-059, GitHub issue #479) -------------------------------------
+
+/// `SECTIONPLANE` — place the section clip plane on a solid's flat face. Opens the face-select step.
+void StartSectionPlaneCommand(AppCommandState& st, std::vector<std::string>& log);
+/// End the face-select step without placing anything (ESC).
+void CancelSectionPlaneCommand(AppCommandState& st);
+/// The one prompt the command shows, so the hint and the log cannot word it differently.
+[[nodiscard]] const char* CadSectionPlanePromptText();
+/// The viewport click that answers "select a flat face". Returns true when a plane was placed;
+/// on any refusal the command stays open and the reason is in \p log.
+bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
+                                const solidpick::Tolerance& tol, std::vector<std::string>& log);
+/// The frame the clip plane is currently built from: the face `SECTIONPLANE` was given, or the
+/// active UCS when it was never given one (D-2026-09-11-b).
+[[nodiscard]] ucs::Ucs CadEffectiveSectionClipFrame(const AppCommandState& st);
+
+// --- The section plane as a manipulable object (REQ-343, GitHub issue #479 acceptance 4-7) -----
+
+/// The clip plane as the renderer will build it this frame. Inactive when the clip is off.
+[[nodiscard]] SectionClipPlane CadSectionClipPlane(const AppCommandState& st);
+
+/// The rectangle the section plane is DRAWN as, built from the same inputs the renderer uses.
+///
+/// **One function, called by both sides.** The renderer draws this rectangle and the pick tests
+/// against it; if they computed it separately and ever differed, the user would click where the
+/// plane is drawn and grab nothing. It also owns the model-bounds walk that `main.cpp` used to do
+/// inline, which is what made two copies possible in the first place.
+[[nodiscard]] SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st);
+
+/// Handles for the selected section plane. Invalid when the plane is off or not selected.
+[[nodiscard]] SectionPlaneGrips CadSectionPlaneGrips(const AppCommandState& st);
+
+/// Which handle \p ray hits, or `None`. \p tolWorld is the grab aperture in drawing units.
+[[nodiscard]] SectionPlaneGrip PickSectionPlaneGrip(const AppCommandState& st, const ray3d::Ray& ray,
+                                                    double tolWorld);
+
+/// One click on the section plane or its handles, in the command layer where a test can drive it.
+///
+/// Grabs a handle, commits an armed drag, toggles the flip handle, or selects/deselects the plane.
+/// Returns true when the click was the section plane's — the caller must then NOT also treat it as
+/// an ordinary selection click.
+bool SubmitSectionPlaneClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorld,
+                             std::vector<std::string>& log);
+
+/// Refresh the armed drag from the cursor. No-op when nothing is armed.
+///
+/// \p snapPoint, when given, is the object-snap point under the cursor (REQ-344). The handle then
+/// lands where that point projects onto its drag axis, so a section plane can be placed exactly on
+/// a midpoint, an endpoint or a face centre instead of wherever the cursor happened to be — which
+/// is what makes the cut a measured thing rather than an eyeballed one.
+///
+/// **In STORAGE coordinates, like \p ray and like the plane itself** — `local = world - origin`.
+/// Everything in this drag is in that frame: the clip frame comes from a solid's face, solids are
+/// stored local like every other store, and the camera ray is the same one the sub-object pick
+/// casts at them. Passing a world point here puts the snap a whole `worldDocumentOrigin` away from
+/// the anchor it is measured against; it was documented as world and called with world until a user
+/// reported the plane "snapping too far the other direction" (2026-09-11).
+///
+/// Only a NAMED feature should be passed. `Surface`, `Edge` and `Face` answer with the point
+/// nearest the cursor, so under 3D OSNAP one is available almost everywhere on a solid, and an
+/// absolute placement driven by those makes the plane skate across the model — see
+/// `CadSnap::SnapClass`, and the gate in `CadUi.cpp` that applies it.
+void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& ray,
+                                const ray3d::Vec3* snapPoint = nullptr);
+
+/// Refresh \ref AppCommandState::sectionPlaneGripHover. No-op while a drag is armed.
+void UpdateSectionPlaneGripHover(AppCommandState& st, const ray3d::Ray& ray, double tolWorld);
+
+/// Disarm and leave the plane where the drag has already put it. Every command start does this,
+/// through `ResetAllCadDraftTools` — a drag left armed keeps rewriting the clip offset while the
+/// NEXT command takes its picks.
+void CancelSectionPlaneGripDrag(AppCommandState& st);
+
+/// A TRUE cancel: put the plane back where it was when the handle was grabbed, then disarm.
+///
+/// What ESC means. The drag writes the offset and the extent every frame, so disarming alone would
+/// COMMIT whatever the cursor last did — and REQ-343 records that a slide makes no undo entry, so
+/// there would be no way back.
+void AbortSectionPlaneGripDrag(AppCommandState& st);
+
+/// Reverse which half of the model survives, and say so. Also what the flip handle does.
+void ToggleSectionClipFlip(AppCommandState& st, std::vector<std::string>& log);
 /// True if (x,y) is inside the filled region: inside its outer loop (0) and outside every hole loop (REQ-042).
 bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y);
 /// HATCH command (REQ-043): begin picking an internal point.

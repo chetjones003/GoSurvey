@@ -457,3 +457,367 @@ TEST_CASE("The indicator holds at survey coordinate magnitudes",
           Approx(p.c).margin(0.002));
   }
 }
+
+// -------------------------------------------------------------------------------------------
+// REQ-342 / ADR-059 (GitHub issue #479 acceptance 3) — how the plane is DRAWN.
+//
+// The hatch is what makes the plane findable, and it is geometry rebuilt every frame from the
+// rectangle, so the two failures worth pinning are "it is not on the plane" and "it does not stay
+// inside the rectangle". A hatch line that escapes its quad draws a stray line across the model
+// with nothing to explain it; one off the plane draws a shape that is believed and is wrong.
+// -------------------------------------------------------------------------------------------
+
+TEST_CASE("An invalid rectangle produces no plane graphics", "[sectionplane][req342][req479]") {
+  const SectionPlaneGraphics g = SectionPlaneGraphicsFor(SectionClipIndicator{});
+  CHECK_FALSE(g.valid);
+  CHECK(g.hatch.empty());
+}
+
+TEST_CASE("Every hatch endpoint lies ON the plane", "[sectionplane][req342][req479]") {
+  // Same requirement the indicator corners have, and for the same reason: this is drawn unclipped
+  // and will be believed. A tilted frame, because an axis-aligned one is satisfied by arithmetic
+  // that has dropped a basis vector entirely.
+  const ucs::Ucs tilted =
+      ucs::WithOrigin(ucs::RotatedAboutY(ucs::RotatedAboutX(ucs::Ucs{}, 25.0), 40.0),
+                      ray3d::Vec3{3.0, -7.0, 11.0});
+  for (const double offset : {-6.0, 0.0, 4.5}) {
+    const SectionClipPlane p = SectionClipFromUcs(tilted, offset, false);
+    const SectionClipIndicator ind =
+        SectionClipIndicatorQuad(p, ray3d::Vec3{-20, -14, -2}, ray3d::Vec3{20, 14, 30});
+    REQUIRE(ind.valid);
+    const SectionPlaneGraphics g = SectionPlaneGraphicsFor(ind);
+    REQUIRE(g.valid);
+    REQUIRE_FALSE(g.hatch.empty());
+    for (size_t i = 0; i < g.hatch.size(); ++i) {
+      INFO("offset " << offset << " hatch point " << i);
+      CHECK(p.nx * g.hatch[i].x + p.ny * g.hatch[i].y + p.nz * g.hatch[i].z ==
+            Approx(p.c).margin(1e-9));
+    }
+    // The section line is an edge of the rectangle, so it is on the plane too.
+    CHECK(p.nx * g.lineA.x + p.ny * g.lineA.y + p.nz * g.lineA.z == Approx(p.c).margin(1e-9));
+    CHECK(p.nx * g.lineB.x + p.ny * g.lineB.y + p.nz * g.lineB.z == Approx(p.c).margin(1e-9));
+  }
+}
+
+TEST_CASE("Every hatch endpoint stays inside the rectangle", "[sectionplane][req342][req479]") {
+  // Measured in the rectangle's OWN axes rather than in world XY, so this holds for a tilted plane
+  // — and a tilted plane is where a clipping mistake would otherwise hide.
+  const ucs::Ucs tilted = ucs::RotatedAboutX(ucs::Ucs{}, 35.0);
+  const SectionClipPlane p = SectionClipFromUcs(tilted, 2.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-30, -9, 0}, ray3d::Vec3{30, 9, 14});
+  REQUIRE(ind.valid);
+  const SectionPlaneGraphics g = SectionPlaneGraphicsFor(ind);
+  REQUIRE(g.valid);
+
+  const ray3d::Vec3 eu = ray3d::Sub(ind.corner[1], ind.corner[0]);
+  const ray3d::Vec3 ev = ray3d::Sub(ind.corner[3], ind.corner[0]);
+  const double lu = ray3d::Length(eu);
+  const double lv = ray3d::Length(ev);
+  REQUIRE(lu > 1e-9);
+  REQUIRE(lv > 1e-9);
+  const ray3d::Vec3 u = ray3d::Scale(eu, 1.0 / lu);
+  const ray3d::Vec3 v = ray3d::Scale(ev, 1.0 / lv);
+  for (size_t i = 0; i < g.hatch.size(); ++i) {
+    const ray3d::Vec3 d = ray3d::Sub(g.hatch[i], ind.corner[0]);
+    const double s = ray3d::Dot(d, u);
+    const double t = ray3d::Dot(d, v);
+    INFO("hatch point " << i << " at (s,t) = (" << s << ", " << t << ") in a "
+                        << lu << " x " << lv << " rectangle");
+    CHECK(s >= -1e-9);
+    CHECK(s <= lu + 1e-9);
+    CHECK(t >= -1e-9);
+    CHECK(t <= lv + 1e-9);
+  }
+}
+
+TEST_CASE("The hatch comes in drawable pairs and is bounded", "[sectionplane][req342][req479]") {
+  const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 0.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-40, -30, 0}, ray3d::Vec3{40, 30, 12});
+  REQUIRE(ind.valid);
+  const SectionPlaneGraphics g = SectionPlaneGraphicsFor(ind);
+  REQUIRE(g.valid);
+
+  // GL_LINES order: an odd count would draw one endpoint into whatever followed it in the buffer.
+  CHECK(g.hatch.size() % 2 == 0);
+  CHECK(static_cast<int>(g.hatch.size() / 2) <= kSectionPlaneHatchMaxSegments);
+  // Enough lines to read as a hatch rather than as a couple of stray diagonals.
+  CHECK(g.hatch.size() / 2 >= 8);
+  // No zero-length segments: they cost an upload and draw nothing.
+  for (size_t i = 0; i + 1 < g.hatch.size(); i += 2)
+    CHECK(ray3d::Length(ray3d::Sub(g.hatch[i + 1], g.hatch[i])) > 1e-6);
+}
+
+TEST_CASE("The hatch is scale-invariant, not distance-dependent", "[sectionplane][req342][req479]") {
+  // Density comes from the rectangle's own diagonal, so a 4 ft fitting and a 900 ft parcel get the
+  // same NUMBER of lines. Were it a world spacing instead, one of those two would be either a solid
+  // block of ink or a single line, and the segment count at survey scale could run away.
+  const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 0.0, false);
+  const SectionPlaneGraphics small = SectionPlaneGraphicsFor(
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-2, -2, 0}, ray3d::Vec3{2, 2, 1}));
+  const SectionPlaneGraphics large = SectionPlaneGraphicsFor(
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-450, -450, 0}, ray3d::Vec3{450, 450, 40}));
+  REQUIRE(small.valid);
+  REQUIRE(large.valid);
+  CHECK(small.hatch.size() == large.hatch.size());
+}
+
+TEST_CASE("The hatch holds at survey coordinate magnitudes", "[sectionplane][req342][req479][req101]") {
+  // The whole feature's hazard is that everything is exact at the origin. The pattern is built from
+  // the rectangle's corners, which at E 2,196,000 are large numbers whose DIFFERENCES are small —
+  // the same shape as the anchor-rebasing bug, so it is checked rather than assumed.
+  const ucs::Ucs frame = ucs::WithOrigin(ucs::Ucs{}, ray3d::Vec3{2196000.0, 1400000.0, 0.0});
+  const SectionClipPlane p = SectionClipFromUcs(frame, 6.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{2195980.0, 1399985.0, 0.0},
+                               ray3d::Vec3{2196020.0, 1400015.0, 12.0});
+  REQUIRE(ind.valid);
+  const SectionPlaneGraphics g = SectionPlaneGraphicsFor(ind);
+  REQUIRE(g.valid);
+  REQUIRE_FALSE(g.hatch.empty());
+  for (size_t i = 0; i < g.hatch.size(); ++i) {
+    INFO("hatch point " << i);
+    // REQ-101's own tolerance, not a looser one: the point of the case is that nothing is lost.
+    CHECK(p.nx * g.hatch[i].x + p.ny * g.hatch[i].y + p.nz * g.hatch[i].z ==
+          Approx(p.c).margin(0.002));
+  }
+  // And the count matches the same rectangle drawn at the origin — the pattern is a function of
+  // the shape, not of where it sits.
+  const SectionClipPlane atOrigin = SectionClipFromUcs(ucs::Ucs{}, 6.0, false);
+  const SectionPlaneGraphics og = SectionPlaneGraphicsFor(
+      SectionClipIndicatorQuad(atOrigin, ray3d::Vec3{-20, -15, 0}, ray3d::Vec3{20, 15, 12}));
+  REQUIRE(og.valid);
+  CHECK(og.hatch.size() == g.hatch.size());
+}
+
+TEST_CASE("The section line runs through the middle of the plane", "[sectionplane][req343][req479]") {
+  // REQ-343 moved it here from the lowest EDGE, which REQ-342 had used. An edge coincides with the
+  // rectangle's own outline, so it added no information and left the middle — where the handles
+  // have to be — unmarked. This is the bright line across the centre of AutoCAD's section plane.
+  const ucs::Ucs upright = ucs::RotatedAboutX(ucs::Ucs{}, 90.0);  // normal now horizontal
+  const SectionClipPlane p = SectionClipFromUcs(upright, 0.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-20, -15, 0}, ray3d::Vec3{20, 15, 25});
+  REQUIRE(ind.valid);
+  const SectionPlaneGraphics g = SectionPlaneGraphicsFor(ind);
+  REQUIRE(g.valid);
+
+  const ray3d::Vec3 eu = ray3d::Sub(ind.corner[1], ind.corner[0]);
+  const ray3d::Vec3 ev = ray3d::Sub(ind.corner[3], ind.corner[0]);
+  const ray3d::Vec3 centre{ind.corner[0].x + 0.5 * (eu.x + ev.x),
+                           ind.corner[0].y + 0.5 * (eu.y + ev.y),
+                           ind.corner[0].z + 0.5 * (eu.z + ev.z)};
+
+  // Its midpoint IS the rectangle's centre.
+  const ray3d::Vec3 mid{0.5 * (g.lineA.x + g.lineB.x), 0.5 * (g.lineA.y + g.lineB.y),
+                        0.5 * (g.lineA.z + g.lineB.z)};
+  CHECK(ray3d::Length(ray3d::Sub(mid, centre)) == Approx(0.0).margin(1e-9));
+
+  // It spans the full width, along u — not a diagonal, and not a fraction of the way across.
+  const ray3d::Vec3 line = ray3d::Sub(g.lineB, g.lineA);
+  CHECK(ray3d::Length(line) == Approx(ray3d::Length(eu)).margin(1e-9));
+  const ray3d::Vec3 cross = ray3d::Cross(ray3d::Normalize(line), ray3d::Normalize(eu));
+  CHECK(ray3d::Length(cross) == Approx(0.0).margin(1e-9));  // parallel to the u edge
+
+  // And both ends are on the plane and on the rectangle's boundary, not floating inside it.
+  CHECK(p.nx * g.lineA.x + p.ny * g.lineA.y + p.nz * g.lineA.z == Approx(p.c).margin(1e-9));
+  CHECK(p.nx * g.lineB.x + p.ny * g.lineB.y + p.nz * g.lineB.z == Approx(p.c).margin(1e-9));
+}
+
+// -------------------------------------------------------------------------------------------
+// REQ-343 (GitHub issue #479 acceptance 5-7) — the handles, and the stored size they write.
+//
+// Everything here is geometry with no window and no command state, which is the whole reason
+// `SectionClip.hpp` is header-only and GL-free (ADR-002). The command-layer half — what a click
+// and a drag DO — is in `SubObjectSelectionTests` under `[sectionplanegrip]`.
+// -------------------------------------------------------------------------------------------
+
+TEST_CASE("An invalid rectangle has no handles", "[sectionplane][req343][req479]") {
+  const SectionPlaneGrips g = SectionPlaneGripsFor(SectionClipIndicator{}, SectionClipPlane{});
+  CHECK_FALSE(g.valid);
+}
+
+TEST_CASE("Every handle lies on the plane, and on the rectangle", "[sectionplane][req343][req479]") {
+  // A handle off the plane is a handle that cannot be aimed at: the pick tests a ray against the
+  // handle POINT, so if it is drawn somewhere the arithmetic does not put it, clicking it misses.
+  const ucs::Ucs tilted =
+      ucs::WithOrigin(ucs::RotatedAboutY(ucs::RotatedAboutX(ucs::Ucs{}, 25.0), 40.0),
+                      ray3d::Vec3{3.0, -7.0, 11.0});
+  const SectionClipPlane p = SectionClipFromUcs(tilted, 3.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-20, -14, -2}, ray3d::Vec3{20, 14, 30});
+  REQUIRE(ind.valid);
+  const SectionPlaneGrips g = SectionPlaneGripsFor(ind, p);
+  REQUIRE(g.valid);
+
+  ray3d::Vec3 u{}, v{};
+  REQUIRE(SectionClipPlaneBasis(p, &u, &v));
+  const ray3d::Vec3 eu = ray3d::Sub(ind.corner[1], ind.corner[0]);
+  const ray3d::Vec3 ev = ray3d::Sub(ind.corner[3], ind.corner[0]);
+  const double lu = ray3d::Length(eu);
+  const double lv = ray3d::Length(ev);
+
+  for (int i = 0; i < kSectionPlaneGripCount; ++i) {
+    INFO("handle " << i);
+    CHECK(p.nx * g.at[i].x + p.ny * g.at[i].y + p.nz * g.at[i].z == Approx(p.c).margin(1e-9));
+    const ray3d::Vec3 d = ray3d::Sub(g.at[i], ind.corner[0]);
+    const double s = ray3d::Dot(d, u);
+    const double t = ray3d::Dot(d, v);
+    CHECK(s >= -1e-9);
+    CHECK(s <= lu + 1e-9);
+    CHECK(t >= -1e-9);
+    CHECK(t <= lv + 1e-9);
+  }
+}
+
+TEST_CASE("The handles sit where their job says they should", "[sectionplane][req343][req479]") {
+  const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 0.0, false);
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-40, -30, 0}, ray3d::Vec3{40, 30, 12});
+  REQUIRE(ind.valid);
+  const SectionPlaneGrips g = SectionPlaneGripsFor(ind, p);
+  REQUIRE(g.valid);
+  const SectionPlaneGraphics gfx = SectionPlaneGraphicsFor(ind);
+  REQUIRE(gfx.valid);
+
+  const ray3d::Vec3 eu = ray3d::Sub(ind.corner[1], ind.corner[0]);
+  const ray3d::Vec3 ev = ray3d::Sub(ind.corner[3], ind.corner[0]);
+  const ray3d::Vec3 centre{ind.corner[0].x + 0.5 * (eu.x + ev.x),
+                           ind.corner[0].y + 0.5 * (eu.y + ev.y),
+                           ind.corner[0].z + 0.5 * (eu.z + ev.z)};
+
+  const auto at = [&](SectionPlaneGrip k) { return g.at[static_cast<int>(k)]; };
+  const auto dir = [&](SectionPlaneGrip k) { return g.dir[static_cast<int>(k)]; };
+
+  // Move is at the centre and drags along the NORMAL — the gesture the whole feature exists for.
+  CHECK(ray3d::Length(ray3d::Sub(at(SectionPlaneGrip::Move), centre)) == Approx(0.0).margin(1e-9));
+  CHECK(dir(SectionPlaneGrip::Move).z == Approx(1.0));
+
+  // The length pair sits at the section line's two ENDS, so the line is what they visibly resize.
+  CHECK(ray3d::Length(ray3d::Sub(at(SectionPlaneGrip::LengthNeg), gfx.lineA)) ==
+        Approx(0.0).margin(1e-9));
+  CHECK(ray3d::Length(ray3d::Sub(at(SectionPlaneGrip::LengthPos), gfx.lineB)) ==
+        Approx(0.0).margin(1e-9));
+
+  // The height pair is on the two u-parallel edges, half a rectangle apart.
+  CHECK(ray3d::Length(ray3d::Sub(at(SectionPlaneGrip::HeightPos), at(SectionPlaneGrip::HeightNeg))) ==
+        Approx(ray3d::Length(ev)).margin(1e-9));
+
+  // Flip is NOT at the centre — it must not be grabbable by accident when the user means to slide
+  // the plane — and it is a click, so it has no drag direction at all.
+  CHECK(ray3d::Length(ray3d::Sub(at(SectionPlaneGrip::Flip), centre)) > 1e-6);
+  CHECK(ray3d::Length(dir(SectionPlaneGrip::Flip)) == Approx(0.0).margin(1e-12));
+
+  // Every draggable handle's direction is a unit vector, or the drag parameter would be scaled.
+  for (const SectionPlaneGrip k : {SectionPlaneGrip::Move, SectionPlaneGrip::LengthNeg,
+                                   SectionPlaneGrip::LengthPos, SectionPlaneGrip::HeightNeg,
+                                   SectionPlaneGrip::HeightPos}) {
+    INFO("handle " << static_cast<int>(k));
+    CHECK(ray3d::Length(dir(k)) == Approx(1.0).margin(1e-9));
+  }
+  // The two of each pair point OPPOSITE ways, which is what makes "positive delta grows it" true
+  // for both without the caller having to know which end it grabbed.
+  CHECK(ray3d::Dot(dir(SectionPlaneGrip::LengthNeg), dir(SectionPlaneGrip::LengthPos)) ==
+        Approx(-1.0).margin(1e-9));
+  CHECK(ray3d::Dot(dir(SectionPlaneGrip::HeightNeg), dir(SectionPlaneGrip::HeightPos)) ==
+        Approx(-1.0).margin(1e-9));
+}
+
+TEST_CASE("Sliding the plane moves the handles with it", "[sectionplane][req343][req479]") {
+  // The handles are derived from the rectangle, which is derived from the plane, so this holds by
+  // construction — and it is asserted because the alternative (handles cached when the plane was
+  // selected) is the obvious implementation and would leave them behind on the first drag frame.
+  const SectionClipIndicator a = SectionClipIndicatorQuad(SectionClipFromUcs(ucs::Ucs{}, 0.0, false),
+                                                          ray3d::Vec3{-20, -15, 0},
+                                                          ray3d::Vec3{20, 15, 12});
+  const SectionClipPlane pb = SectionClipFromUcs(ucs::Ucs{}, 7.0, false);
+  const SectionClipIndicator b =
+      SectionClipIndicatorQuad(pb, ray3d::Vec3{-20, -15, 0}, ray3d::Vec3{20, 15, 12});
+  const SectionPlaneGrips ga =
+      SectionPlaneGripsFor(a, SectionClipFromUcs(ucs::Ucs{}, 0.0, false));
+  const SectionPlaneGrips gb = SectionPlaneGripsFor(b, pb);
+  REQUIRE(ga.valid);
+  REQUIRE(gb.valid);
+  for (int i = 0; i < kSectionPlaneGripCount; ++i) {
+    INFO("handle " << i);
+    CHECK(gb.at[i].z - ga.at[i].z == Approx(7.0).margin(1e-9));
+    CHECK(gb.at[i].x - ga.at[i].x == Approx(0.0).margin(1e-9));
+  }
+}
+
+TEST_CASE("A stored extent overrides the model-derived size", "[sectionplane][req343][req479]") {
+  const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 0.0, false);
+  const SectionClipIndicator derived =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-40, -30, 0}, ray3d::Vec3{40, 30, 12});
+  REQUIRE(derived.valid);
+
+  SectionPlaneExtent e = SectionPlaneExtentFromQuad(derived, p);
+  REQUIRE(e.valid);
+
+  // Round trip: the extent read off the derived rectangle rebuilds that same rectangle. This is
+  // what lets the first stretch keep the size the user is looking at instead of snapping to a
+  // default and then resizing, which reads as the plane jumping.
+  const SectionClipIndicator same =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-40, -30, 0}, ray3d::Vec3{40, 30, 12}, 0.15, e);
+  REQUIRE(same.valid);
+  for (int i = 0; i < 4; ++i) {
+    INFO("corner " << i);
+    CHECK(ray3d::Length(ray3d::Sub(same.corner[i], derived.corner[i])) == Approx(0.0).margin(1e-9));
+  }
+
+  // Now stretch it, and the MODEL bounds stop mattering entirely — including bounds that would
+  // have produced a completely different rectangle.
+  e.halfU = 5.0;
+  e.halfV = 2.0;
+  const SectionClipIndicator stretched =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-900, -900, 0}, ray3d::Vec3{900, 900, 40}, 0.15, e);
+  REQUIRE(stretched.valid);
+  CHECK(ray3d::Length(ray3d::Sub(stretched.corner[1], stretched.corner[0])) == Approx(10.0));
+  CHECK(ray3d::Length(ray3d::Sub(stretched.corner[3], stretched.corner[0])) == Approx(4.0));
+}
+
+TEST_CASE("The stored extent survives the plane sliding", "[sectionplane][req343][req479]") {
+  // The extent is stated in the plane's own basis, and the basis depends only on the NORMAL — so an
+  // offset change cannot touch it. Stored as four world corners it would have had to be rewritten
+  // on every frame of a slide, and any path that forgot would leave the rectangle behind the cut.
+  SectionPlaneExtent e;
+  e.valid = true;
+  e.cu = 3.0;
+  e.cv = -2.0;
+  e.halfU = 9.0;
+  e.halfV = 4.0;
+  const ray3d::Vec3 mn{-40, -30, 0}, mx{40, 30, 12};
+  const SectionClipIndicator a =
+      SectionClipIndicatorQuad(SectionClipFromUcs(ucs::Ucs{}, 0.0, false), mn, mx, 0.15, e);
+  const SectionClipIndicator b =
+      SectionClipIndicatorQuad(SectionClipFromUcs(ucs::Ucs{}, 6.0, false), mn, mx, 0.15, e);
+  REQUIRE(a.valid);
+  REQUIRE(b.valid);
+  for (int i = 0; i < 4; ++i) {
+    INFO("corner " << i);
+    CHECK(b.corner[i].z - a.corner[i].z == Approx(6.0).margin(1e-9));
+    CHECK(b.corner[i].x == Approx(a.corner[i].x).margin(1e-9));
+    CHECK(b.corner[i].y == Approx(a.corner[i].y).margin(1e-9));
+  }
+}
+
+TEST_CASE("A stretched plane still hatches and still has a centre line",
+          "[sectionplane][req343][req479]") {
+  // The appearance is derived from the rectangle, so a user-sized rectangle must produce a proper
+  // one — including a hatch count that does not collapse on a long thin plane.
+  const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 0.0, false);
+  SectionPlaneExtent e;
+  e.valid = true;
+  e.halfU = 60.0;
+  e.halfV = 1.5;  // deliberately long and thin
+  const SectionClipIndicator ind =
+      SectionClipIndicatorQuad(p, ray3d::Vec3{-10, -10, 0}, ray3d::Vec3{10, 10, 5}, 0.15, e);
+  REQUIRE(ind.valid);
+  const SectionPlaneGraphics g = SectionPlaneGraphicsFor(ind);
+  REQUIRE(g.valid);
+  CHECK(g.hatch.size() % 2 == 0);
+  CHECK(g.hatch.size() >= 2);
+  CHECK(static_cast<int>(g.hatch.size() / 2) <= kSectionPlaneHatchMaxSegments);
+  CHECK(ray3d::Length(ray3d::Sub(g.lineB, g.lineA)) == Approx(120.0).margin(1e-9));
+}

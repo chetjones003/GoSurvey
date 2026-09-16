@@ -2629,6 +2629,31 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glDrawArrays(GL_TRIANGLES, 0, 6);
       glDisable(GL_BLEND);
     }
+    // REQ-342: the hatch. Drawn between the fill and the outline so the outline stays the crispest
+    // thing on the plane, and dimmer than it, because the hatch is texture rather than an edge —
+    // hatch as bright as the border reads as a solid panel and hides the model behind it.
+    //
+    // Unclipped like everything else in this block, and for the same reason: these lines lie
+    // exactly ON the clip plane, so a clipped copy would be cut by itself and half of every line
+    // would vanish at the driver's discretion.
+    const SectionPlaneGraphics& gfx = tuning.sectionPlaneGraphics;
+    if (gfx.valid && !gfx.hatch.empty()) {
+      std::vector<float> verts;
+      verts.reserve(gfx.hatch.size() * 3);
+      for (const ray3d::Vec3& p : gfx.hatch) {
+        verts.push_back(static_cast<float>(p.x - viewAnchorX));
+        verts.push_back(static_cast<float>(p.y - viewAnchorY));
+        verts.push_back(static_cast<float>(p.z));
+      }
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glUniform4f(locCol, 0.35f, 0.70f, 1.f, 0.45f);
+      glLineWidth(kLwMain);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
+                   verts.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(gfx.hatch.size()));
+      glDisable(GL_BLEND);
+    }
     // The outline, as a closed loop of four lines.
     {
       float loop[24];
@@ -2642,6 +2667,160 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glBufferData(GL_ARRAY_BUFFER, sizeof(loop), loop, GL_STREAM_DRAW);
       glDrawArrays(GL_LINES, 0, 8);
       glLineWidth(kLwMain);
+    }
+    // REQ-342: the section line — the plane's base edge, heavier and brighter than the rest of the
+    // outline. It is what tells you which way is down on a plane you are looking at edge-on, where
+    // fill and hatch both collapse to nothing.
+    if (gfx.valid) {
+      const float seg[6] = {
+          static_cast<float>(gfx.lineA.x - viewAnchorX), static_cast<float>(gfx.lineA.y - viewAnchorY),
+          static_cast<float>(gfx.lineA.z),
+          static_cast<float>(gfx.lineB.x - viewAnchorX), static_cast<float>(gfx.lineB.y - viewAnchorY),
+          static_cast<float>(gfx.lineB.z)};
+      glUniform4f(locCol, 0.60f, 0.82f, 1.f, 1.f);
+      glLineWidth(kLwHiLine * 2.f);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(seg), seg, GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, 2);
+      glLineWidth(kLwMain);
+    }
+    // REQ-343: the handles, when the plane is selected.
+    //
+    // Each is a small square drawn in the PLANE's own axes rather than screen-aligned, so it lies
+    // flat on the plane it belongs to and cannot be mistaken for a marker floating in front of it.
+    // Sized from the rectangle, for the same reason the hatch density is: a screen-derived size
+    // would change with zoom, and these are built once per frame from world quantities.
+    const SectionPlaneGrips& grips = tuning.sectionPlaneGrips;
+    if (grips.valid) {
+      ray3d::Vec3 gu{}, gv{}, gn{};
+      if (SectionClipPlaneBasis(tuning.sectionClip, &gu, &gv, &gn)) {
+        const ray3d::Vec3 e0 = ray3d::Sub(tuning.sectionClipIndicator.corner[1],
+                                          tuning.sectionClipIndicator.corner[0]);
+        const ray3d::Vec3 e1 = ray3d::Sub(tuning.sectionClipIndicator.corner[3],
+                                          tuning.sectionClipIndicator.corner[0]);
+        const double diag = std::sqrt(ray3d::Dot(e0, e0) + ray3d::Dot(e1, e1));
+        const double r = std::max(diag * 0.014, 1e-6);
+        std::vector<float> quads;
+        std::vector<float> outlines;
+        quads.reserve(static_cast<size_t>(kSectionPlaneGripCount) * 36);
+
+        // REQ-344: each handle is drawn as the SHAPE ITS JOB SUGGESTS, not as a generic square.
+        // Six identical squares made the user read the plane to work out which one flipped it; a
+        // symbol that points the way the handle moves does not have to be learned. The shapes
+        // follow AutoCAD's, which is what the user asked for by name.
+        //
+        //   Move   — a diamond with a double-headed arrow along the NORMAL, drawn poking out of
+        //            both faces of the plane. It is the one handle whose travel leaves the plane,
+        //            and the only symbol here that is not flat.
+        //   Flip   — two solid triangles back to back along the normal, pointing away from each
+        //            other: "this side or that side".
+        //   Length — a solid arrowhead at each end of the section line, pointing outward along it.
+        //   Height — a solid triangle on each u-parallel edge, pointing outward across it.
+        //
+        // All in the plane's own basis (bar Move's stem), so they lie ON the plane and cannot be
+        // mistaken for markers floating in front of it.
+        for (int i = 0; i < kSectionPlaneGripCount; ++i) {
+          const bool lit = (i == tuning.sectionPlaneGripHover) || (i == tuning.sectionPlaneGripDrag);
+          const double base = static_cast<SectionPlaneGrip>(i) == SectionPlaneGrip::Flip
+                                  ? r * kSectionPlaneFlipScale
+                                  : r;
+          const double s = lit ? base * 1.5 : base;  // the handle that lights up is the handle that grabs
+          const ray3d::Vec3& c = grips.at[i];
+          const auto P = [&](double a, double b, double h) {
+            return ray3d::Vec3{c.x + (gu.x * a + gv.x * b + gn.x * h) * s,
+                               c.y + (gu.y * a + gv.y * b + gn.y * h) * s,
+                               c.z + (gu.z * a + gv.z * b + gn.z * h) * s};
+          };
+          const auto emitTri = [&](const ray3d::Vec3& a, const ray3d::Vec3& b,
+                                   const ray3d::Vec3& d) {
+            for (const ray3d::Vec3* p : {&a, &b, &d}) {
+              quads.push_back(static_cast<float>(p->x - viewAnchorX));
+              quads.push_back(static_cast<float>(p->y - viewAnchorY));
+              quads.push_back(static_cast<float>(p->z));
+            }
+          };
+          const auto emitSeg = [&](const ray3d::Vec3& a, const ray3d::Vec3& b) {
+            outlines.push_back(static_cast<float>(a.x - viewAnchorX));
+            outlines.push_back(static_cast<float>(a.y - viewAnchorY));
+            outlines.push_back(static_cast<float>(a.z));
+            outlines.push_back(static_cast<float>(b.x - viewAnchorX));
+            outlines.push_back(static_cast<float>(b.y - viewAnchorY));
+            outlines.push_back(static_cast<float>(b.z));
+          };
+          /// A solid arrowhead: tip at (tu,tv) in the plane, base a half-width across behind it.
+          const auto emitHead = [&](double tu, double tv, double bu, double bv, double halfW) {
+            const double du = tu - bu, dv = tv - bv;
+            const double len = std::sqrt(du * du + dv * dv);
+            if (len < 1e-12)
+              return;
+            const double pu = -dv / len * halfW, pv = du / len * halfW;  // perpendicular, in-plane
+            const ray3d::Vec3 tip = P(tu, tv, 0.0);
+            const ray3d::Vec3 l = P(bu + pu, bv + pv, 0.0);
+            const ray3d::Vec3 rr = P(bu - pu, bv - pv, 0.0);
+            emitTri(tip, l, rr);
+            emitSeg(tip, l);
+            emitSeg(l, rr);
+            emitSeg(rr, tip);
+          };
+
+          switch (static_cast<SectionPlaneGrip>(i)) {
+          case SectionPlaneGrip::Move: {
+            // The diamond body, flat on the plane.
+            const ray3d::Vec3 n0 = P(0, 1, 0), e = P(1, 0, 0), s0 = P(0, -1, 0), w = P(-1, 0, 0);
+            emitTri(n0, e, s0);
+            emitTri(n0, s0, w);
+            emitSeg(n0, e); emitSeg(e, s0); emitSeg(s0, w); emitSeg(w, n0);
+            // ...and the stem THROUGH it, along the normal, with a head at each end. This is the
+            // one handle that travels out of the plane, and the symbol says so.
+            const ray3d::Vec3 up = P(0, 0, 2.1), dn = P(0, 0, -2.1);
+            emitSeg(dn, up);
+            emitTri(up, P(0.55, 0, 1.25), P(-0.55, 0, 1.25));
+            emitTri(dn, P(0.55, 0, -1.25), P(-0.55, 0, -1.25));
+            break;
+          }
+          case SectionPlaneGrip::Flip: {
+            // Two solid triangles back to back along the normal, pointing apart.
+            emitTri(P(0, 0, 1.9), P(0.8, 0, 0.35), P(-0.8, 0, 0.35));
+            emitTri(P(0, 0, -1.9), P(0.8, 0, -0.35), P(-0.8, 0, -0.35));
+            emitSeg(P(-0.9, 0, 0.0), P(0.9, 0, 0.0));  // the plane they flip about
+            break;
+          }
+          case SectionPlaneGrip::LengthNeg:
+            emitHead(-1.9, 0.0, 0.2, 0.0, 0.85);
+            break;
+          case SectionPlaneGrip::LengthPos:
+            emitHead(1.9, 0.0, -0.2, 0.0, 0.85);
+            break;
+          case SectionPlaneGrip::HeightNeg:
+            emitHead(0.0, -1.9, 0.0, 0.2, 0.85);
+            break;
+          case SectionPlaneGrip::HeightPos:
+            emitHead(0.0, 1.9, 0.0, -0.2, 0.85);
+            break;
+          case SectionPlaneGrip::None:
+          case SectionPlaneGrip::Count:
+            break;
+          }
+        }
+        if (!quads.empty()) {
+          // Blending back ON for the fill: the hatch block above turns it off when it finishes, and
+          // the outline and section line in between are opaque so neither noticed. Without it the
+          // 0.85 alpha below is simply discarded and the six symbols paint as solid blocks over the
+          // hatch they sit on — the opposite of the translucent widget the code describes.
+          glEnable(GL_BLEND);
+          glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+          glUniform4f(locCol, 0.20f, 0.70f, 1.f, 0.85f);
+          glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(quads.size() * sizeof(float)),
+                       quads.data(), GL_STREAM_DRAW);
+          glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(quads.size() / 3));
+          glDisable(GL_BLEND);
+          glUniform4f(locCol, 0.85f, 0.95f, 1.f, 1.f);
+          glLineWidth(kLwHiLine);
+          glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(outlines.size() * sizeof(float)),
+                       outlines.data(), GL_STREAM_DRAW);
+          glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(outlines.size() / 3));
+          glLineWidth(kLwMain);
+        }
+      }
     }
     glBindVertexArray(0);
   }
