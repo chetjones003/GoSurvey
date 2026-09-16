@@ -6819,8 +6819,8 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float cz, float r, fl
   }
   BumpCadGpuCache(st);
   ResetCircleDraft(st);
+  st.active = AppCommandState::Kind::None;
   log.push_back("Circle complete.");
-  log.push_back("CIRCLE — center + radius (or 3P). ESC to exit.");
 }
 
 /// CIRCLE's centre-and-radius commit, given the centre pick and the rim pick (REQ-312).
