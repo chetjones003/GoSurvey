@@ -1415,6 +1415,27 @@ TEST_CASE("Handles are only pickable while the plane is selected", "[sectionplan
   CHECK_FALSE(SubmitSectionPlaneClick(st, atMove, 1.0, log));
 }
 
+TEST_CASE("The flip handle is grabbed from further away, matching its larger symbol",
+          "[sectionplanegrip][req340]") {
+  // User GUI pass, 2026-09-16: the flip symbol was at times hard to see, so it is drawn
+  // kSectionPlaneFlipScale times larger — and a bigger symbol that grabbed no further out would be a
+  // target that looks easier than it is.
+  std::vector<std::string> log;
+  AppCommandState st = SectionPlaneOnBoxTop(log);
+  REQUIRE(kSectionPlaneFlipScale > 1.0);
+  const auto missBy = [&](SectionPlaneGrip k, double miss) {
+    const ray3d::Ray at = RayAtGrip(st, k);
+    // Shift the whole ray sideways, perpendicular to its direction (-60, -40, -100), by `miss`.
+    const ray3d::Vec3 side = ray3d::Normalize(ray3d::Vec3{40.0, -60.0, 0.0});
+    ray3d::Ray r = at;
+    r.origin = ray3d::Add(at.origin, ray3d::Vec3{side.x * miss, side.y * miss, side.z * miss});
+    return r;
+  };
+  const double miss = 1.3;  // outside a 1.0 tolerance, inside 1.0 * the flip scale
+  CHECK(PickSectionPlaneGrip(st, missBy(SectionPlaneGrip::Flip, miss), 1.0) == SectionPlaneGrip::Flip);
+  CHECK(PickSectionPlaneGrip(st, missBy(SectionPlaneGrip::LengthPos, miss), 1.0) == SectionPlaneGrip::None);
+}
+
 TEST_CASE("ESC drops an armed drag and leaves the plane where it was", "[sectionplanegrip][req339]") {
   std::vector<std::string> log;
   AppCommandState st = SectionPlaneOnBoxTop(log);

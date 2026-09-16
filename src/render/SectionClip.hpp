@@ -339,6 +339,12 @@ enum class SectionPlaneGrip : int {
 
 inline constexpr int kSectionPlaneGripCount = static_cast<int>(SectionPlaneGrip::Count);
 
+/// How much larger the FLIP handle is drawn, and grabbed, than the other five (REQ-340). From the
+/// user's GUI pass (2026-09-16): every other handle was easy to find, the flip symbol "at times
+/// hard to see". A first step up, to be tuned from there — so it is one number, used by both the
+/// renderer and `PickSectionPlaneGrip`, and what looks bigger is also easier to click.
+inline constexpr double kSectionPlaneFlipScale = 1.6;
+
 /// Where each handle sits, in world coordinates.
 struct SectionPlaneGrips {
   bool valid = false;

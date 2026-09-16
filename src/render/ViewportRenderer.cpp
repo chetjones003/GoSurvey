@@ -2720,7 +2720,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         // mistaken for markers floating in front of it.
         for (int i = 0; i < kSectionPlaneGripCount; ++i) {
           const bool lit = (i == tuning.sectionPlaneGripHover) || (i == tuning.sectionPlaneGripDrag);
-          const double s = lit ? r * 1.5 : r;  // the handle that lights up is the handle that grabs
+          const double base = static_cast<SectionPlaneGrip>(i) == SectionPlaneGrip::Flip
+                                  ? r * kSectionPlaneFlipScale
+                                  : r;
+          const double s = lit ? base * 1.5 : base;  // the handle that lights up is the handle that grabs
           const ray3d::Vec3& c = grips.at[i];
           const auto P = [&](double a, double b, double h) {
             return ray3d::Vec3{c.x + (gu.x * a + gv.x * b + gn.x * h) * s,

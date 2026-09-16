@@ -33517,7 +33517,10 @@ SectionPlaneGrip PickSectionPlaneGrip(const AppCommandState& st, const ray3d::Ra
       continue;  // behind the camera
     const ray3d::Vec3 onRay{ray.origin.x + ray.dir.x * t, ray.origin.y + ray.dir.y * t,
                             ray.origin.z + ray.dir.z * t};
-    const double d = ray3d::Length(ray3d::Sub(g.at[i], onRay));
+    // The flip symbol is drawn larger (kSectionPlaneFlipScale), so its grab zone is too; the
+    // distance is shrunk by the same factor so it still competes fairly on "nearest".
+    const double scale = static_cast<SectionPlaneGrip>(i) == SectionPlaneGrip::Flip ? kSectionPlaneFlipScale : 1.0;
+    const double d = ray3d::Length(ray3d::Sub(g.at[i], onRay)) / scale;
     if (d <= bestD) {
       bestD = d;
       best = static_cast<SectionPlaneGrip>(i);
