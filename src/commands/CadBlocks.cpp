@@ -1683,15 +1683,17 @@ void BConnectSubmitLine(AppCommandState& st, const std::string& lineIn, std::vec
     if (!line.empty())
       st.bconnectCompatTagPending = line;
     st.bconnectPhase = Ph::WaitPoint;
-    log.push_back("BCONNECT — pick a flat solid face in the viewport, or type x,y,z,nx,ny,nz "
-                  "(Enter with nothing to pick a face):");
+    // Arm the face pick immediately (issue #496 follow-up) rather than waiting for an extra blank
+    // Enter — a click in the viewport works right away, and typing coordinates instead still works
+    // because BConnectSubmitLine keeps routing here first (see the K::BConnect check in
+    // ProcessCommandLineSubmit) as long as st.active hasn't been cleared yet.
+    st.bconnectAwaitingFace = true;
+    log.push_back("BCONNECT — pick a flat solid face in the viewport, or type x,y,z,nx,ny,nz:");
     return;
   }
   if (st.bconnectPhase == Ph::WaitPoint) {
     if (line.empty()) {
-      st.active = AppCommandState::Kind::None;
-      st.bconnectAwaitingFace = true;
-      log.push_back("BCONNECT — pick a flat solid face for connection \"" + std::string(st.bconnectNameBuf) + "\".");
+      log.push_back("BCONNECT — pick a flat solid face in the viewport, or type x,y,z,nx,ny,nz:");
       return;
     }
     std::istringstream ss(line);
@@ -1699,9 +1701,10 @@ void BConnectSubmitLine(AppCommandState& st, const std::string& lineIn, std::vec
     float x = 0.f, y = 0.f, z = 0.f, nx = 0.f, ny = 0.f, nz = 0.f;
     if (f.size() != 6 || !TryParseF(f[0], x) || !TryParseF(f[1], y) || !TryParseF(f[2], z) ||
         !TryParseF(f[3], nx) || !TryParseF(f[4], ny) || !TryParseF(f[5], nz)) {
-      log.push_back("BCONNECT — type 6 comma-separated numbers x,y,z,nx,ny,nz, or press Enter to pick a face.");
+      log.push_back("BCONNECT — type 6 comma-separated numbers x,y,z,nx,ny,nz, or click a flat face.");
       return;
     }
+    st.bconnectAwaitingFace = false;
     const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
     if (di < 0) {
       log.push_back("BCONNECT — the block being edited no longer exists.");
@@ -1999,6 +2002,10 @@ bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const so
   st.bconnectRolePending = CadBlockConnectionRole::Inlet;
   st.bconnectEngagementPending = 0.f;
   st.bconnectCompatTagPending.clear();
+  // The BCONNECT wizard (issue #496) keeps st.active == Kind::BConnect through the face-pick step
+  // so ESC still cancels it as one command; release it now that the pick has committed.
+  if (st.active == AppCommandState::Kind::BConnect)
+    st.active = AppCommandState::Kind::None;
   log.push_back("BCONNECT — added connection \"" + addedName + "\".");
   return true;
 }

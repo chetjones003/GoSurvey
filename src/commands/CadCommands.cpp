@@ -34453,6 +34453,12 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.bconnectAwaitingFace = false;
     st.bconnectNameBuf[0] = '\0';
     st.bconnectSizeBuf[0] = '\0';
+    st.bconnectCompatTagPending.clear();
+    // The BCONNECT wizard (issue #496) is still st.active == Kind::BConnect during the face-pick
+    // step (so a click routes here regardless of st.active) — release it on cancel too, or it
+    // would stay stuck open with no way to type into it again.
+    if (st.active == AppCommandState::Kind::BConnect)
+      st.active = AppCommandState::Kind::None;
     log.push_back("BCONNECT canceled.");
     return;
   }
