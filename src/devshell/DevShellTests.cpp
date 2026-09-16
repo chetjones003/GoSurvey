@@ -101,7 +101,7 @@ bool CadLogHas(std::string_view needle)
   return DevShell_CommandLogContains(needle);
 }
 
-/// Click a clickable prompt option in the command bar by its visible text (REQ-040 / REQ-337).
+/// Click a clickable prompt option in the command bar by its visible text (REQ-040 / REQ-341).
 ///
 /// By ID rather than by path, and the reason is worth keeping: the option links ARE ordinary ImGui
 /// items — a gather of the command bar lists them as `ON`, `OFF`, `FLIP` — but they are not
@@ -244,13 +244,13 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   };
 
 
-  // --- REQ-337 live section clip, driven through the REAL GUI (TASK-249) -------------------------
+  // --- REQ-341 live section clip, driven through the REAL GUI (TASK-249) -------------------------
   //
   // GitHub #149 acceptance 6 is the one criterion in the whole phase that is about PIXELS, and two
   // of its failure modes cannot be reached anywhere else:
   //
   //   * whether the clip actually removes geometry from the screen. `SectionClipTests` proves the
-  //     plane arithmetic and `headless.req337-section-clip` proves the command surface, but neither
+  //     plane arithmetic and `headless.req341-section-clip` proves the command surface, but neither
   //     has a GL context, so neither can see a single pixel disappear.
   //   * whether the clip STAYS in the viewport. `gl_ClipDistance` is global GL state, and ImGui
   //     draws the entire interface immediately after `RenderScene` with shaders that never write
@@ -262,7 +262,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   // The screenshots are the evidence for the first; the test surviving to its own end — every
   // `SubmitCad` after the clip is on still finding its widgets and the log still readable — is the
   // assertion for the second.
-  // --- REQ-337: the ON / OFF / FLIP keywords are CLICKABLE (TASK-249 increment) ------------------
+  // --- REQ-341: the ON / OFF / FLIP keywords are CLICKABLE (TASK-249 increment) ------------------
   //
   // The whole point of the prompt is that these three can be clicked instead of typed, and that
   // cannot be checked anywhere but the real GUI: the transcript can only type the tokens the links
@@ -272,13 +272,13 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   //
   // So the test CLICKS them by name. That covers both halves at once: the link exists as a real
   // ImGui item with that label, and clicking it reaches the command.
-  // --- REQ-337 REPRO: what a user actually sees, with nothing set up for them -------------------
+  // --- REQ-341 REPRO: what a user actually sees, with nothing set up for them -------------------
   //
   // The other GUI test forces `VISUALSTYLE SHADED` and an orbited camera before it clips anything.
   // A user typing SECTIONCLIP on a fresh box has neither, and reported the feature as not working.
   // This captures the DEFAULT path, one frame per step, so the difference can be looked at rather
   // than guessed at.
-  ImGuiTest* sclipRepro = IM_REGISTER_TEST(engine, "gosurvey", "req337-section-clip-repro");
+  ImGuiTest* sclipRepro = IM_REGISTER_TEST(engine, "gosurvey", "req341-section-clip-repro");
   sclipRepro->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
     if (s_cmd->activeDrawingIdx == 0) {
@@ -329,7 +329,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
   };
 
-  ImGuiTest* sclipLinks = IM_REGISTER_TEST(engine, "gosurvey", "req337-section-clip-links");
+  ImGuiTest* sclipLinks = IM_REGISTER_TEST(engine, "gosurvey", "req341-section-clip-links");
   sclipLinks->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
     if (s_cmd->activeDrawingIdx == 0) {
@@ -388,7 +388,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
   };
 
-  ImGuiTest* sclip = IM_REGISTER_TEST(engine, "gosurvey", "req337-section-clip-viewport");
+  ImGuiTest* sclip = IM_REGISTER_TEST(engine, "gosurvey", "req341-section-clip-viewport");
   sclip->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
 
@@ -422,7 +422,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
 
     // 1 — the whole box, for comparison.
     IM_CHECK(!s_cmd->viewportSectionClip);
-    DevShell_RequestViewportCapture("devshell-req337-clip-0-off.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req341-clip-0-off.bmp", 1400);
     ctx->Yield(4);
 
     // 2 — cut at the UCS plane (z = 0). The box spans z 0..12, so this removes ALL of it: the
@@ -432,7 +432,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     ctx->Yield(6);
     IM_CHECK(s_cmd->viewportSectionClip);
     IM_CHECK(std::fabs(s_cmd->viewportSectionClipOffset - 0.0) < 1e-9);
-    DevShell_RequestViewportCapture("devshell-req337-clip-1-at-zero.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req341-clip-1-at-zero.bmp", 1400);
     ctx->Yield(4);
 
     // 3 and 4 — the plane MOVES, which is the word acceptance 6 actually uses. Two heights through
@@ -440,27 +440,27 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     SubmitCad(ctx, "SECTIONCLIP 4");
     ctx->Yield(6);
     IM_CHECK(std::fabs(s_cmd->viewportSectionClipOffset - 4.0) < 1e-9);
-    DevShell_RequestViewportCapture("devshell-req337-clip-2-at-four.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req341-clip-2-at-four.bmp", 1400);
     ctx->Yield(4);
 
     SubmitCad(ctx, "SECTIONCLIP 8");
     ctx->Yield(6);
     IM_CHECK(std::fabs(s_cmd->viewportSectionClipOffset - 8.0) < 1e-9);
-    DevShell_RequestViewportCapture("devshell-req337-clip-3-at-eight.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req341-clip-3-at-eight.bmp", 1400);
     ctx->Yield(4);
 
     // 5 — FLIP keeps the other half. Together with shot 3 this covers the whole box between them.
     SubmitCad(ctx, "SECTIONCLIP FLIP");
     ctx->Yield(6);
     IM_CHECK(s_cmd->viewportSectionClipFlip);
-    DevShell_RequestViewportCapture("devshell-req337-clip-4-flipped.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req341-clip-4-flipped.bmp", 1400);
     ctx->Yield(4);
 
     // 6 — and OFF restores the whole box, so the clip left nothing behind.
     SubmitCad(ctx, "SECTIONCLIP OFF");
     ctx->Yield(6);
     IM_CHECK(!s_cmd->viewportSectionClip);
-    DevShell_RequestViewportCapture("devshell-req337-clip-5-off-again.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req341-clip-5-off-again.bmp", 1400);
     ctx->Yield(4);
 
     // The solid is untouched by all of it — a view state changed nothing in the document. Checked

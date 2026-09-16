@@ -389,7 +389,7 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Elev:
     return R::Ignore;  // system-variable text prompts, answered on the command line
   case K::SectionClip:
-    // REQ-337. Same shape as the two above: the bare `SECTIONCLIP` prompt is waiting for ON, OFF,
+    // REQ-341. Same shape as the two above: the bare `SECTIONCLIP` prompt is waiting for ON, OFF,
     // FLIP or a distance, all of which arrive on the command line — a viewport click answers none
     // of them. Stated rather than left to the tail return, because this switch has no `default:`
     // precisely so that every Kind carries a decision someone made.

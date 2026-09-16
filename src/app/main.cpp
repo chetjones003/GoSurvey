@@ -1330,13 +1330,13 @@ int main()
     tuning.bgR = std::clamp(cmd.viewportBgR, 0.f, 1.f);
     tuning.bgG = std::clamp(cmd.viewportBgG, 0.f, 1.f);
     tuning.bgB = std::clamp(cmd.viewportBgB, 0.f, 1.f);
-    // REQ-337 — the live section clip. Derived from the ACTIVE UCS every frame rather than stored
+    // REQ-341 — the live section clip. Derived from the ACTIVE UCS every frame rather than stored
     // as a plane, which is what makes it track the UCS: move or turn the work plane and the cut
     // follows on the next frame, with no command to re-run and no geometry rebuilt.
     if (cmd.viewportSectionClip) {
       tuning.sectionClip = SectionClipFromUcs(CadActiveUcsStorage(cmd), cmd.viewportSectionClipOffset,
                                               cmd.viewportSectionClipFlip);
-      // REQ-337: and the rectangle that SHOWS where it cuts. Sized here rather than in the renderer
+      // REQ-341: and the rectangle that SHOWS where it cuts. Sized here rather than in the renderer
       // because this is the side that knows how big the drawing is — the renderer is handed four
       // corners and draws them.
       //

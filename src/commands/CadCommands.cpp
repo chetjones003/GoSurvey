@@ -33108,7 +33108,7 @@ bool ApplyFovValue(AppCommandState& st, const std::string& raw, std::vector<std:
 }
 
 /// One line describing the clip's current state, used by the bare command and after every change so
-/// a user never has to guess where the plane is (REQ-337).
+/// a user never has to guess where the plane is (REQ-341).
 std::string SectionClipReport(const AppCommandState& st) {
   if (!st.viewportSectionClip)
     return "Section clip = OFF.";
@@ -33125,7 +33125,7 @@ std::string SectionClipReport(const AppCommandState& st) {
 }
 
 /// `SECTIONCLIP` — hide everything in front of a plane so the inside of a model can be looked at
-/// (REQ-337 / ADR-057, GitHub issue #149 acceptance 6).
+/// (REQ-341 / ADR-058, GitHub issue #149 acceptance 6).
 ///
 /// `ON` / `OFF` toggle it, `FLIP` swaps which half survives, and a bare number sets the offset of
 /// the plane along the active UCS Z. A bare `SECTIONCLIP` reports — the same report-or-set shape as
@@ -34601,7 +34601,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandlePolysolidTextInput(line, st, log);
       return;
     }
-    // REQ-337 SECTIONCLIP: a bare Enter accepts the current state and closes the prompt, the way
+    // REQ-341 SECTIONCLIP: a bare Enter accepts the current state and closes the prompt, the way
     // TRIMSTATE's system-variable prompt does. Handled HERE for the reason every note above gives —
     // this block consumes a blank line and the Kind-keyed branch further down never sees one.
     if (st.active == K::SectionClip) {
@@ -35148,7 +35148,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
       return;
     }
-    // SECTIONCLIP (REQ-337): live section clipping — hide what is in front of the active UCS plane
+    // SECTIONCLIP (REQ-341): live section clipping — hide what is in front of the active UCS plane
     // so the interior can be inspected. Report-or-set, same shape as PERSPECTIVE and CROSSHAIR3D.
     // A view state: no undo entry and no geometry, which is what separates it from SECTION.
     if (plotTok == "sectionclip" || plotTok == "sclip" || plotTok == "clip") {
@@ -35714,7 +35714,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
-  // SECTIONCLIP's keyword prompt (REQ-337). Reached by a typed answer OR by clicking one of the
+  // SECTIONCLIP's keyword prompt (REQ-341). Reached by a typed answer OR by clicking one of the
   // `[ON/OFF/FLIP]` links in the hint, which submit `on`, `off` and `flip` — the same three tokens
   // `ApplySectionClipValue` already accepts, so the click path and the typed path are one path.
   if (st.active == AppCommandState::Kind::SectionClip) {
