@@ -1,4 +1,4 @@
-# TASK-251 — Grabbing the section plane: slide, flip, resize
+# TASK-259 — Grabbing the section plane: slide, flip, resize
 
 - Type:    feat (new requirement + ADR extension)
 - Status:  review
@@ -8,10 +8,10 @@
 
 ## 1. Authority
 
-- **REQ-339** (new, accepted 2026-09-11, D-2026-09-11-c) — the requirement this delivers.
-- **ADR-058** extended with **(g)** the frozen drag axis and **(h)** selecting a view state by a
+- **REQ-343** (new, accepted 2026-09-11, D-2026-09-11-c) — the requirement this delivers.
+- **ADR-059** extended with **(g)** the frozen drag axis and **(h)** selecting a view state by a
   bool rather than through `selection`.
-- **REQ-338 / D-2026-09-11-b** — the plane this manipulates. Its revision note is amended: the "no
+- **REQ-342 / D-2026-09-11-b** — the plane this manipulates. Its revision note is amended: the "no
   grips" increment is now delivered, and the section line has moved.
 - **REQ-060 / ADR-025** — the translate gizmo, whose grab/update/commit shape this follows and whose
   `CadAxisDragParam` it reuses. Reused, not copied: the skew-line solve has one implementation.
@@ -29,7 +29,7 @@ The user's request, 2026-09-11, with four AutoCAD screenshots:
 > plane and view the other side ... there are also the horizontal and vertical grab points that can
 > be used to stretch the sectionplane
 
-Four things, and REQ-338 delivered none of them: the plane could only be aimed by typing an offset,
+Four things, and REQ-342 delivered none of them: the plane could only be aimed by typing an offset,
 and its section line sat on the lowest edge where it added nothing.
 
 ## 3. Approach
@@ -105,7 +105,7 @@ two cannot drift into meaning different things.
 
 - **DEBT-1.** Manipulating the plane makes **no undo entry**. Consistent with it being a view state
   — there is no geometry to restore — but it means `UNDO` will not step a slide back. Written into
-  REQ-339 rather than left to be discovered.
+  REQ-343 rather than left to be discovered.
 - **DEBT-2.** No automated test drives a real mouse drag, or asserts that any handle is drawn. There
   is no GL context in the test suite, and the devshell's engine drives items rather than pixels.
   Every number here is geometry; the pixels are the user's check.

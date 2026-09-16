@@ -459,7 +459,7 @@ TEST_CASE("The indicator holds at survey coordinate magnitudes",
 }
 
 // -------------------------------------------------------------------------------------------
-// REQ-338 / ADR-058 (GitHub issue #479 acceptance 3) — how the plane is DRAWN.
+// REQ-342 / ADR-059 (GitHub issue #479 acceptance 3) — how the plane is DRAWN.
 //
 // The hatch is what makes the plane findable, and it is geometry rebuilt every frame from the
 // rectangle, so the two failures worth pinning are "it is not on the plane" and "it does not stay
@@ -467,13 +467,13 @@ TEST_CASE("The indicator holds at survey coordinate magnitudes",
 // with nothing to explain it; one off the plane draws a shape that is believed and is wrong.
 // -------------------------------------------------------------------------------------------
 
-TEST_CASE("An invalid rectangle produces no plane graphics", "[sectionplane][req338][req479]") {
+TEST_CASE("An invalid rectangle produces no plane graphics", "[sectionplane][req342][req479]") {
   const SectionPlaneGraphics g = SectionPlaneGraphicsFor(SectionClipIndicator{});
   CHECK_FALSE(g.valid);
   CHECK(g.hatch.empty());
 }
 
-TEST_CASE("Every hatch endpoint lies ON the plane", "[sectionplane][req338][req479]") {
+TEST_CASE("Every hatch endpoint lies ON the plane", "[sectionplane][req342][req479]") {
   // Same requirement the indicator corners have, and for the same reason: this is drawn unclipped
   // and will be believed. A tilted frame, because an axis-aligned one is satisfied by arithmetic
   // that has dropped a basis vector entirely.
@@ -499,7 +499,7 @@ TEST_CASE("Every hatch endpoint lies ON the plane", "[sectionplane][req338][req4
   }
 }
 
-TEST_CASE("Every hatch endpoint stays inside the rectangle", "[sectionplane][req338][req479]") {
+TEST_CASE("Every hatch endpoint stays inside the rectangle", "[sectionplane][req342][req479]") {
   // Measured in the rectangle's OWN axes rather than in world XY, so this holds for a tilted plane
   // — and a tilted plane is where a clipping mistake would otherwise hide.
   const ucs::Ucs tilted = ucs::RotatedAboutX(ucs::Ucs{}, 35.0);
@@ -531,7 +531,7 @@ TEST_CASE("Every hatch endpoint stays inside the rectangle", "[sectionplane][req
   }
 }
 
-TEST_CASE("The hatch comes in drawable pairs and is bounded", "[sectionplane][req338][req479]") {
+TEST_CASE("The hatch comes in drawable pairs and is bounded", "[sectionplane][req342][req479]") {
   const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 0.0, false);
   const SectionClipIndicator ind =
       SectionClipIndicatorQuad(p, ray3d::Vec3{-40, -30, 0}, ray3d::Vec3{40, 30, 12});
@@ -549,7 +549,7 @@ TEST_CASE("The hatch comes in drawable pairs and is bounded", "[sectionplane][re
     CHECK(ray3d::Length(ray3d::Sub(g.hatch[i + 1], g.hatch[i])) > 1e-6);
 }
 
-TEST_CASE("The hatch is scale-invariant, not distance-dependent", "[sectionplane][req338][req479]") {
+TEST_CASE("The hatch is scale-invariant, not distance-dependent", "[sectionplane][req342][req479]") {
   // Density comes from the rectangle's own diagonal, so a 4 ft fitting and a 900 ft parcel get the
   // same NUMBER of lines. Were it a world spacing instead, one of those two would be either a solid
   // block of ink or a single line, and the segment count at survey scale could run away.
@@ -563,7 +563,7 @@ TEST_CASE("The hatch is scale-invariant, not distance-dependent", "[sectionplane
   CHECK(small.hatch.size() == large.hatch.size());
 }
 
-TEST_CASE("The hatch holds at survey coordinate magnitudes", "[sectionplane][req338][req479][req101]") {
+TEST_CASE("The hatch holds at survey coordinate magnitudes", "[sectionplane][req342][req479][req101]") {
   // The whole feature's hazard is that everything is exact at the origin. The pattern is built from
   // the rectangle's corners, which at E 2,196,000 are large numbers whose DIFFERENCES are small —
   // the same shape as the anchor-rebasing bug, so it is checked rather than assumed.
@@ -591,8 +591,8 @@ TEST_CASE("The hatch holds at survey coordinate magnitudes", "[sectionplane][req
   CHECK(og.hatch.size() == g.hatch.size());
 }
 
-TEST_CASE("The section line runs through the middle of the plane", "[sectionplane][req339][req479]") {
-  // REQ-339 moved it here from the lowest EDGE, which REQ-338 had used. An edge coincides with the
+TEST_CASE("The section line runs through the middle of the plane", "[sectionplane][req343][req479]") {
+  // REQ-343 moved it here from the lowest EDGE, which REQ-342 had used. An edge coincides with the
   // rectangle's own outline, so it added no information and left the middle — where the handles
   // have to be — unmarked. This is the bright line across the centre of AutoCAD's section plane.
   const ucs::Ucs upright = ucs::RotatedAboutX(ucs::Ucs{}, 90.0);  // normal now horizontal
@@ -626,19 +626,19 @@ TEST_CASE("The section line runs through the middle of the plane", "[sectionplan
 }
 
 // -------------------------------------------------------------------------------------------
-// REQ-339 (GitHub issue #479 acceptance 5-7) — the handles, and the stored size they write.
+// REQ-343 (GitHub issue #479 acceptance 5-7) — the handles, and the stored size they write.
 //
 // Everything here is geometry with no window and no command state, which is the whole reason
 // `SectionClip.hpp` is header-only and GL-free (ADR-002). The command-layer half — what a click
 // and a drag DO — is in `SubObjectSelectionTests` under `[sectionplanegrip]`.
 // -------------------------------------------------------------------------------------------
 
-TEST_CASE("An invalid rectangle has no handles", "[sectionplane][req339][req479]") {
+TEST_CASE("An invalid rectangle has no handles", "[sectionplane][req343][req479]") {
   const SectionPlaneGrips g = SectionPlaneGripsFor(SectionClipIndicator{}, SectionClipPlane{});
   CHECK_FALSE(g.valid);
 }
 
-TEST_CASE("Every handle lies on the plane, and on the rectangle", "[sectionplane][req339][req479]") {
+TEST_CASE("Every handle lies on the plane, and on the rectangle", "[sectionplane][req343][req479]") {
   // A handle off the plane is a handle that cannot be aimed at: the pick tests a ray against the
   // handle POINT, so if it is drawn somewhere the arithmetic does not put it, clicking it misses.
   const ucs::Ucs tilted =
@@ -671,7 +671,7 @@ TEST_CASE("Every handle lies on the plane, and on the rectangle", "[sectionplane
   }
 }
 
-TEST_CASE("The handles sit where their job says they should", "[sectionplane][req339][req479]") {
+TEST_CASE("The handles sit where their job says they should", "[sectionplane][req343][req479]") {
   const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 0.0, false);
   const SectionClipIndicator ind =
       SectionClipIndicatorQuad(p, ray3d::Vec3{-40, -30, 0}, ray3d::Vec3{40, 30, 12});
@@ -724,7 +724,7 @@ TEST_CASE("The handles sit where their job says they should", "[sectionplane][re
         Approx(-1.0).margin(1e-9));
 }
 
-TEST_CASE("Sliding the plane moves the handles with it", "[sectionplane][req339][req479]") {
+TEST_CASE("Sliding the plane moves the handles with it", "[sectionplane][req343][req479]") {
   // The handles are derived from the rectangle, which is derived from the plane, so this holds by
   // construction — and it is asserted because the alternative (handles cached when the plane was
   // selected) is the obvious implementation and would leave them behind on the first drag frame.
@@ -746,7 +746,7 @@ TEST_CASE("Sliding the plane moves the handles with it", "[sectionplane][req339]
   }
 }
 
-TEST_CASE("A stored extent overrides the model-derived size", "[sectionplane][req339][req479]") {
+TEST_CASE("A stored extent overrides the model-derived size", "[sectionplane][req343][req479]") {
   const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 0.0, false);
   const SectionClipIndicator derived =
       SectionClipIndicatorQuad(p, ray3d::Vec3{-40, -30, 0}, ray3d::Vec3{40, 30, 12});
@@ -777,7 +777,7 @@ TEST_CASE("A stored extent overrides the model-derived size", "[sectionplane][re
   CHECK(ray3d::Length(ray3d::Sub(stretched.corner[3], stretched.corner[0])) == Approx(4.0));
 }
 
-TEST_CASE("The stored extent survives the plane sliding", "[sectionplane][req339][req479]") {
+TEST_CASE("The stored extent survives the plane sliding", "[sectionplane][req343][req479]") {
   // The extent is stated in the plane's own basis, and the basis depends only on the NORMAL — so an
   // offset change cannot touch it. Stored as four world corners it would have had to be rewritten
   // on every frame of a slide, and any path that forgot would leave the rectangle behind the cut.
@@ -803,7 +803,7 @@ TEST_CASE("The stored extent survives the plane sliding", "[sectionplane][req339
 }
 
 TEST_CASE("A stretched plane still hatches and still has a centre line",
-          "[sectionplane][req339][req479]") {
+          "[sectionplane][req343][req479]") {
   // The appearance is derived from the rectangle, so a user-sized rectangle must produce a proper
   // one — including a hatch count that does not collapse on a long thin plane.
   const SectionClipPlane p = SectionClipFromUcs(ucs::Ucs{}, 0.0, false);

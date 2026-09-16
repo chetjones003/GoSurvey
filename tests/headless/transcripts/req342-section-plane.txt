@@ -1,4 +1,4 @@
-# REQ-338 / ADR-058 (D-2026-09-11-b, TASK-250) — SECTIONPLANE, slice 1.
+# REQ-342 / ADR-059 (D-2026-09-11-b, TASK-258) — SECTIONPLANE, slice 1.
 #
 # GitHub #479 acceptance 1, 2 and 3: pick a flat face, get the section plane on it, drawn so it can
 # be found.

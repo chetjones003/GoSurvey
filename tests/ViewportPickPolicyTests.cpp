@@ -61,7 +61,7 @@ TEST_CASE("Every pick-driven command is routed by the model-space viewport", "[v
       // prompt whose clicks went nowhere: the state machine had the phase, the policy did not, so
       // the prompt appeared and nothing could be picked. Reported from the real app.
       K::Section,
-      // REQ-338. SECTIONPLANE's one and only step is a click, so an `Ignore` here is the whole
+      // REQ-342. SECTIONPLANE's one and only step is a click, so an `Ignore` here is the whole
       // command.
       K::SectionPlane,
   };
@@ -457,7 +457,7 @@ TEST_CASE("REQ-335: SECTION selects solids by click, then takes three snapped po
   }
 }
 
-TEST_CASE("REQ-338: SECTIONPLANE asks the viewport for a face", "[viewport][pick][req338]") {
+TEST_CASE("REQ-342: SECTIONPLANE asks the viewport for a face", "[viewport][pick][req342]") {
   // Three separate things have to be true for the face-select step to work in the app, and each
   // one of them shipped BROKEN on the previous slice's equivalent step. They are asserted apart
   // rather than together, so a failure names which.

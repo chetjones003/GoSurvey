@@ -592,13 +592,13 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
   };
 
-  // --- REQ-340: the section-plane handles, captured for LOOKING at (user GUI pass, 2026-09-16) ------
+  // --- REQ-344: the section-plane handles, captured for LOOKING at (user GUI pass, 2026-09-16) ------
   //
   // The flip symbol was reported "at times hard to see" and was enlarged by
   // kSectionPlaneFlipScale, with "we can adjust from there". Size is a judgement made by eye, so this
   // test's job is to produce the frame to judge — orbited and shaded, the view the report came from —
   // and to assert only that the plane and its handles are really there to be seen.
-  ImGuiTest* planeGrips = IM_REGISTER_TEST(engine, "gosurvey", "req340-section-plane-handles");
+  ImGuiTest* planeGrips = IM_REGISTER_TEST(engine, "gosurvey", "req344-section-plane-handles");
   planeGrips->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
     IM_CHECK(OpenFreshDrawing(ctx));
@@ -625,7 +625,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     s_cmd->viewportPanZ = 6.f;
     s_cmd->viewportZoom = 2.4f;
     ctx->Yield(10);
-    DevShell_RequestViewportCapture("devshell-req340-plane-handles.bmp", 1400);
+    DevShell_RequestViewportCapture("devshell-req344-plane-handles.bmp", 1400);
     ctx->Yield(4);
     IM_CHECK(CancelToIdle(ctx));
   };

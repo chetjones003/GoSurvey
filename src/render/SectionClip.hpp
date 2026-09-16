@@ -108,7 +108,7 @@ struct SectionClipIndicator {
   ray3d::Vec3 corner[4]{};  ///< world space, wound counter-clockwise about the plane normal
 };
 
-/// The plane's own in-plane axes, as one function so every consumer agrees on them (REQ-339).
+/// The plane's own in-plane axes, as one function so every consumer agrees on them (REQ-343).
 ///
 /// The rectangle, the hatch, the grips and the grip PICK all work in this basis. If any two of them
 /// derived it separately and differed, the user would click one place and grab another — so it is
@@ -139,9 +139,9 @@ struct SectionClipIndicator {
 }
 
 /// A section plane's rectangle stated in its OWN basis — centre and half-sizes along
-/// \ref SectionClipPlaneBasis's u and v (REQ-339).
+/// \ref SectionClipPlaneBasis's u and v (REQ-343).
 ///
-/// Invalid means "derive it from the model", which is what REQ-338 shipped and what a freshly
+/// Invalid means "derive it from the model", which is what REQ-342 shipped and what a freshly
 /// placed plane uses. It becomes valid the moment a stretch grip is dragged, because from then on
 /// the size is something the user chose and must not be silently re-derived on the next frame.
 ///
@@ -157,7 +157,7 @@ struct SectionPlaneExtent {
 
 /// Build the indicator rectangle for \p p, sized to cover the world box \p bbMin..\p bbMax with a
 /// margin so its edges stand clear of the model rather than coinciding with it — or, when \p ext is
-/// valid, to the size the user stretched it to (REQ-339).
+/// valid, to the size the user stretched it to (REQ-343).
 ///
 /// The rectangle is built in the plane's OWN axes, not in world X/Y, so it stays a rectangle on the
 /// plane under any orientation — a tilted UCS included.
@@ -224,7 +224,7 @@ struct SectionPlaneExtent {
   return out;
 }
 
-/// How the section plane is DRAWN (REQ-338 / ADR-058, GitHub issue #479 acceptance 3).
+/// How the section plane is DRAWN (REQ-342 / ADR-059, GitHub issue #479 acceptance 3).
 ///
 /// A translucent rectangle with an outline is enough to say "a plane is here"; it is not enough to
 /// find at a glance in a busy drawing, and at a grazing angle it is very nearly nothing at all.
@@ -308,10 +308,10 @@ inline constexpr int kSectionPlaneHatchMaxSegments = 256;
   }
 
   // The section line runs through the MIDDLE of the rectangle, along its u axis — the bright line
-  // across the centre of AutoCAD's section plane, and where its two length grips live (REQ-339,
+  // across the centre of AutoCAD's section plane, and where its two length grips live (REQ-343,
   // user request 2026-09-11 with a screenshot).
   //
-  // REQ-338 put it on the lowest edge instead. That was wrong in the way an edge is always wrong
+  // REQ-342 put it on the lowest edge instead. That was wrong in the way an edge is always wrong
   // here: it coincides with the rectangle's own outline, so it adds no information, and it leaves
   // the middle of the plane — where the grips have to be — unmarked.
   out.lineA = ray3d::Vec3{org.x + u.x * 0.0 + v.x * (lv * 0.5), org.y + u.y * 0.0 + v.y * (lv * 0.5),
@@ -321,7 +321,7 @@ inline constexpr int kSectionPlaneHatchMaxSegments = 256;
   return out;
 }
 
-/// The handles on a selected section plane (REQ-339, GitHub issue #479 acceptance 5-7).
+/// The handles on a selected section plane (REQ-343, GitHub issue #479 acceptance 5-7).
 ///
 /// Deliberately a small fixed set, in the order the user asked for them. `Move` slides the plane
 /// along its own normal, which is the gesture the whole feature exists for; `Flip` reverses which
@@ -339,7 +339,7 @@ enum class SectionPlaneGrip : int {
 
 inline constexpr int kSectionPlaneGripCount = static_cast<int>(SectionPlaneGrip::Count);
 
-/// How much larger the FLIP handle is drawn, and grabbed, than the other five (REQ-340). From the
+/// How much larger the FLIP handle is drawn, and grabbed, than the other five (REQ-344). From the
 /// user's GUI pass (2026-09-16): every other handle was easy to find, the flip symbol "at times
 /// hard to see". A first step up, to be tuned from there — so it is one number, used by both the
 /// renderer and `PickSectionPlaneGrip`, and what looks bigger is also easier to click.
@@ -354,7 +354,7 @@ struct SectionPlaneGrips {
   ray3d::Vec3 dir[kSectionPlaneGripCount]{};
 };
 
-/// Build the handles for the rectangle in \p ind on plane \p p (REQ-339).
+/// Build the handles for the rectangle in \p ind on plane \p p (REQ-343).
 ///
 /// Positions come from the RECTANGLE, not from the stored extent, so a plane still sized to the
 /// model gets grips in the right place before it has ever been stretched — and so the grip a user
@@ -411,7 +411,7 @@ struct SectionPlaneGrips {
   return g;
 }
 
-/// The rectangle in \p ind restated as a stored extent (REQ-339).
+/// The rectangle in \p ind restated as a stored extent (REQ-343).
 ///
 /// Used to SEED the stored extent the first time a stretch grip is dragged: the plane keeps exactly
 /// the size it is showing, and only the dragged edge moves. Without this, the first stretch would
@@ -441,7 +441,7 @@ struct SectionPlaneGrips {
   return e;
 }
 
-/// Smallest half-size a stretch grip may leave, in drawing units (REQ-339).
+/// Smallest half-size a stretch grip may leave, in drawing units (REQ-343).
 ///
 /// A rectangle dragged through zero would invert — the corners would cross and the hatch would run
 /// the other way — and a zero-size one cannot be grabbed again to undo the mistake. Clamping is the

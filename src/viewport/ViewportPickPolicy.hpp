@@ -105,7 +105,7 @@ enum class ViewportClickRoute : std::uint8_t {
   InsertBlockAlignFacePick,
   /// BCONNECT face pick while BEDIT is open (issue #475 inc5).
   BconnectFacePick,
-  /// A command is asking for one **face of a solid** — `SECTIONPLANE`'s only step (REQ-338).
+  /// A command is asking for one **face of a solid** — `SECTIONPLANE`'s only step (REQ-342).
   ///
   /// A sub-object pick, not an entity pick, and until now it existed only as `Ctrl`+click in
   /// `CadUi.cpp`, dispatched ABOVE this table and invisible to it. That is exactly how REQ-335's
@@ -255,7 +255,7 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     }
     return R::Ignore;
   }
-  // SECTIONPLANE (REQ-338): one step, and it wants a FACE. Unlike SECTION above it never asks which
+  // SECTIONPLANE (REQ-342): one step, and it wants a FACE. Unlike SECTION above it never asks which
   // solids to cut — a clip plane is a property of the view and cuts everything, so there is nothing
   // to select but the face the plane goes on.
   case K::SectionPlane:
@@ -475,7 +475,7 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   case R::RawEntityPick:
   case R::TrimPick:
   // A face of a solid IS an object to point at, so the pickbox cursor and the OSNAP suppression
-  // that go with a selection step are both right here (REQ-338). What it is NOT is an ENTITY
+  // that go with a selection step are both right here (REQ-342). What it is NOT is an ENTITY
   // selection — see ViewportIsFacePickStep, which is what the click and hover gates test.
   case R::SubObjectFacePick:
     return true;
@@ -494,7 +494,7 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   return false;  // unreachable; see ViewportClickRouteFor's tail note
 }
 
-/// True while a command is asking for one **face of a solid** (REQ-338, GitHub issue #479).
+/// True while a command is asking for one **face of a solid** (REQ-342, GitHub issue #479).
 ///
 /// Two gates in `CadUi.cpp` decide whether a sub-object is picked and whether one pre-highlights,
 /// and both required `Ctrl` to be held:

@@ -19,8 +19,8 @@
 
 #include "CadCommands.hpp"
 #include "viewport/TransformPreview.hpp"  // BuildSubObjectHighlight
-#include "render/SectionClip.hpp"       // SectionClipPlane, for REQ-338's keep-side check
-#include "viewport/CadSnap.hpp"         // CadSnap::SnapClass, for REQ-340's named-feature rule
+#include "render/SectionClip.hpp"       // SectionClipPlane, for REQ-342's keep-side check
+#include "viewport/CadSnap.hpp"         // CadSnap::SnapClass, for REQ-344's named-feature rule
 
 namespace {
 
@@ -941,7 +941,7 @@ TEST_CASE("A hovered solid draws a highlight", "[subobject][solidentity]") {
   }
 }
 
-// --- SECTIONPLANE's face rules (REQ-338 / ADR-058, GitHub issue #479 acceptance 1-2) ------------
+// --- SECTIONPLANE's face rules (REQ-342 / ADR-059, GitHub issue #479 acceptance 1-2) ------------
 //
 // These live here rather than in the transcript because they turn on the PICK TOLERANCE, and the
 // headless driver cannot state one: `CadOffsetEntityPickTolWorld` is screen-derived, and with no
@@ -951,7 +951,7 @@ TEST_CASE("A hovered solid draws a highlight", "[subobject][solidentity]") {
 // SUBOBJECT verb takes explicit tolerances for exactly this reason; here they are arguments.
 
 TEST_CASE("SECTIONPLANE takes a flat face and refuses a curved one",
-          "[subobject][sectionplaneface][req338]") {
+          "[subobject][sectionplaneface][req342]") {
   AppCommandState st;
   st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
   AddBox(st, World(), 20.0, 10.0, 8.0);  // x [-10,10], y [-5,5], z [0,8]
@@ -1042,7 +1042,7 @@ TEST_CASE("SECTIONPLANE takes a flat face and refuses a curved one",
   }
 }
 
-TEST_CASE("SECTIONPLANE refuses a cylinder's wall by name", "[subobject][sectionplaneface][req338]") {
+TEST_CASE("SECTIONPLANE refuses a cylinder's wall by name", "[subobject][sectionplaneface][req342]") {
   // The refusal that matters most, and the one a plausible implementation gets wrong: a curved face
   // carries a `ucs::Ucs` frame exactly like a flat one, so nothing stops it being used. Its Z is the
   // surface's AXIS, though — straight up the middle of the cylinder — so the plane would come out at
@@ -1079,7 +1079,7 @@ TEST_CASE("SECTIONPLANE refuses a cylinder's wall by name", "[subobject][section
   CHECK(st.active == AppCommandState::Kind::None);
 }
 
-TEST_CASE("The clip frame falls back to the UCS until a face is given", "[sectionplaneface][req338]") {
+TEST_CASE("The clip frame falls back to the UCS until a face is given", "[sectionplaneface][req342]") {
   // One plane, two ways to aim it (D-2026-09-11-b). `CadEffectiveSectionClipFrame` is the single
   // place that decides which, so the renderer and the report line cannot name different planes.
   AppCommandState st;
@@ -1098,7 +1098,7 @@ TEST_CASE("The clip frame falls back to the UCS until a face is given", "[sectio
   CHECK(CadEffectiveSectionClipFrame(st).zAxis.x == Catch::Approx(-1.0));
 }
 
-// --- Selecting and dragging the section plane (REQ-339, GitHub #479 acceptance 4-7) ------------
+// --- Selecting and dragging the section plane (REQ-343, GitHub #479 acceptance 4-7) ------------
 //
 // The geometry half is in `SectionClipTests` under `[sectionplane]`. This is what a CLICK and a
 // DRAG do, which is where the interaction can go wrong in ways geometry cannot see: a handle that
@@ -1138,7 +1138,7 @@ ray3d::Ray RayAtGrip(const AppCommandState& st, SectionPlaneGrip k) {
 
 }  // namespace
 
-TEST_CASE("A placed section plane comes up selected, with handles", "[sectionplanegrip][req339]") {
+TEST_CASE("A placed section plane comes up selected, with handles", "[sectionplanegrip][req343]") {
   std::vector<std::string> log;
   AppCommandState st = SectionPlaneOnBoxTop(log);
   // Selected on creation: the user placed it in order to move it, and making them click it again
@@ -1156,7 +1156,7 @@ TEST_CASE("A placed section plane comes up selected, with handles", "[sectionpla
 }
 
 TEST_CASE("The SECTION LINE is what selects the plane, not the rectangle",
-          "[sectionplanegrip][req339]") {
+          "[sectionplanegrip][req343]") {
   // The rectangle is sized to the model plus a margin, so in plan view its screen projection covers
   // everything in the drawing. Treating its whole interior as a click target consumed every click
   // that landed inside it, and while the clip was on no solid, grip, survey point or selection
@@ -1205,7 +1205,7 @@ TEST_CASE("The SECTION LINE is what selects the plane, not the rectangle",
   CHECK_FALSE(st.sectionPlaneSelected);
 }
 
-TEST_CASE("Dragging the centre handle slides the plane along its normal", "[sectionplanegrip][req339]") {
+TEST_CASE("Dragging the centre handle slides the plane along its normal", "[sectionplanegrip][req343]") {
   // Acceptance 5, and the gesture the whole feature exists for.
   std::vector<std::string> log;
   AppCommandState st = SectionPlaneOnBoxTop(log);
@@ -1252,7 +1252,7 @@ TEST_CASE("Dragging the centre handle slides the plane along its normal", "[sect
   CHECK(st.viewportSectionClipOffset == Catch::Approx(-5.0).margin(1e-6));
 }
 
-TEST_CASE("Sliding a flipped plane still follows the drag", "[sectionplanegrip][req339]") {
+TEST_CASE("Sliding a flipped plane still follows the drag", "[sectionplanegrip][req343]") {
   // A flipped plane has its normal negated, so the raw drag parameter runs backwards. Without the
   // correction, dragging towards the model would pull the cut away from it — the plane would run
   // away from the cursor, which is the most confusing possible response to a direct manipulation.
@@ -1279,7 +1279,7 @@ TEST_CASE("Sliding a flipped plane still follows the drag", "[sectionplanegrip][
         Catch::Approx(-5.0).margin(1e-6));
 }
 
-TEST_CASE("The flip handle is a click, and it shows the other half", "[sectionplanegrip][req339]") {
+TEST_CASE("The flip handle is a click, and it shows the other half", "[sectionplanegrip][req343]") {
   // Acceptance 6. Flipping is a discrete choice — there is no halfway between looking at one half
   // and the other — so a drag gesture would be pretending it has a magnitude.
   std::vector<std::string> log;
@@ -1306,7 +1306,7 @@ TEST_CASE("The flip handle is a click, and it shows the other half", "[sectionpl
   CHECK(after.KeepsWorldPoint(0.0, 0.0, 4.0));
 }
 
-TEST_CASE("Stretch handles resize the plane without changing the cut", "[sectionplanegrip][req339]") {
+TEST_CASE("Stretch handles resize the plane without changing the cut", "[sectionplanegrip][req343]") {
   // Acceptance 7, and the distinction that matters: resizing changes what you SEE of the plane,
   // never what is hidden. The cut is unbounded. If geometry appeared or disappeared while a user
   // dragged a corner, that would be the bug.
@@ -1352,7 +1352,7 @@ TEST_CASE("Stretch handles resize the plane without changing the cut", "[section
   CHECK(st.viewportSectionClipOffset == Catch::Approx(-4.0));
 }
 
-TEST_CASE("A stretch cannot turn the plane inside out", "[sectionplanegrip][req339]") {
+TEST_CASE("A stretch cannot turn the plane inside out", "[sectionplanegrip][req343]") {
   // Dragged through zero the rectangle would invert — its corners would cross — and a zero-size one
   // cannot be grabbed again to undo the mistake. Clamping leaves the user a way back.
   std::vector<std::string> log;
@@ -1379,7 +1379,7 @@ TEST_CASE("A stretch cannot turn the plane inside out", "[sectionplanegrip][req3
   CHECK(ray3d::Length(ray3d::Sub(ind.corner[1], ind.corner[0])) > 1.0);
 }
 
-TEST_CASE("Re-aiming the plane forgets the size it was stretched to", "[sectionplanegrip][req339]") {
+TEST_CASE("Re-aiming the plane forgets the size it was stretched to", "[sectionplanegrip][req343]") {
   // The extent is stated in the plane's own basis, and that basis comes from the normal — so a
   // length measured across one face means something else entirely on another.
   std::vector<std::string> log;
@@ -1399,7 +1399,7 @@ TEST_CASE("Re-aiming the plane forgets the size it was stretched to", "[sectionp
   CHECK(ray3d::Length(ray3d::Sub(ind.corner[1], ind.corner[0])) > 8.0);
 }
 
-TEST_CASE("Handles are only pickable while the plane is selected", "[sectionplanegrip][req339]") {
+TEST_CASE("Handles are only pickable while the plane is selected", "[sectionplanegrip][req343]") {
   std::vector<std::string> log;
   AppCommandState st = SectionPlaneOnBoxTop(log);
   const ray3d::Ray atMove = RayAtGrip(st, SectionPlaneGrip::Move);
@@ -1416,7 +1416,7 @@ TEST_CASE("Handles are only pickable while the plane is selected", "[sectionplan
 }
 
 TEST_CASE("The flip handle is grabbed from further away, matching its larger symbol",
-          "[sectionplanegrip][req340]") {
+          "[sectionplanegrip][req344]") {
   // User GUI pass, 2026-09-16: the flip symbol was at times hard to see, so it is drawn
   // kSectionPlaneFlipScale times larger — and a bigger symbol that grabbed no further out would be a
   // target that looks easier than it is.
@@ -1436,7 +1436,7 @@ TEST_CASE("The flip handle is grabbed from further away, matching its larger sym
   CHECK(PickSectionPlaneGrip(st, missBy(SectionPlaneGrip::LengthPos, miss), 1.0) == SectionPlaneGrip::None);
 }
 
-TEST_CASE("ESC drops an armed drag and leaves the plane where it was", "[sectionplanegrip][req339]") {
+TEST_CASE("ESC drops an armed drag and leaves the plane where it was", "[sectionplanegrip][req343]") {
   std::vector<std::string> log;
   AppCommandState st = SectionPlaneOnBoxTop(log);
   st.viewportSectionClipOffset = -2.0;
@@ -1452,9 +1452,9 @@ TEST_CASE("ESC drops an armed drag and leaves the plane where it was", "[section
   CHECK(st.viewportSectionClip);
 }
 
-// --- Snapping a section-plane drag (REQ-340, GitHub #479) --------------------------------------
+// --- Snapping a section-plane drag (REQ-344, GitHub #479) --------------------------------------
 
-TEST_CASE("A snapped point lands the plane exactly through it", "[sectionplanegrip][req340]") {
+TEST_CASE("A snapped point lands the plane exactly through it", "[sectionplanegrip][req344]") {
   // The gesture from the user's screenshot: drag the section plane and drop it on a midpoint, with
   // the Midpoint marker showing. What makes it worth having is that the result is EXACT — the cut
   // is then a measured thing rather than an eyeballed one, which is the whole difference between a
@@ -1486,8 +1486,8 @@ TEST_CASE("A snapped point lands the plane exactly through it", "[sectionplanegr
   CHECK(std::fabs(d) < 0.002);
 }
 
-TEST_CASE("Without a snap the drag still follows the cursor", "[sectionplanegrip][req340]") {
-  // The snap is an addition, not a replacement. A null snap must leave REQ-339's behaviour exactly
+TEST_CASE("Without a snap the drag still follows the cursor", "[sectionplanegrip][req344]") {
+  // The snap is an addition, not a replacement. A null snap must leave REQ-343's behaviour exactly
   // as it was — including the frozen axis, so the held-cursor case stays stable.
   std::vector<std::string> log;
   AppCommandState st = SectionPlaneOnBoxTop(log);
@@ -1505,7 +1505,7 @@ TEST_CASE("Without a snap the drag still follows the cursor", "[sectionplanegrip
 }
 
 TEST_CASE("A snap survives being held, and releasing it hands back to the cursor",
-          "[sectionplanegrip][req340]") {
+          "[sectionplanegrip][req344]") {
   // Two frames of the same snap must not drift — the snapped parameter is absolute, not an
   // accumulating delta, so this would catch a version that added the projection each frame.
   std::vector<std::string> log;
@@ -1528,7 +1528,7 @@ TEST_CASE("A snap survives being held, and releasing it hands back to the cursor
   CHECK(st.viewportSectionClipOffset == Catch::Approx(-5.0).margin(1e-6));
 }
 
-TEST_CASE("A stretch handle snaps too, and still leaves the cut alone", "[sectionplanegrip][req340]") {
+TEST_CASE("A stretch handle snaps too, and still leaves the cut alone", "[sectionplanegrip][req344]") {
   // Snapping is not special-cased to the Move handle. "Make the plane reach exactly that corner" is
   // the same kind of request as "cut exactly at that midpoint", and the projection onto the
   // handle's own axis means the same thing for both.
@@ -1570,7 +1570,7 @@ TEST_CASE("A stretch handle snaps too, and still leaves the cut alone", "[sectio
 }
 
 TEST_CASE("A snap lands on the point however off-centre the handle was grabbed",
-          "[sectionplanegrip][req340]") {
+          "[sectionplanegrip][req344]") {
   // The bug this pins, reported from the real app 2026-09-11: "when trying to snap to the section
   // with the sectionplane it seems to be a little off ... it looks like it is going to snap too far
   // and then snaps too close."
@@ -1616,7 +1616,7 @@ TEST_CASE("A snap lands on the point however off-centre the handle was grabbed",
 }
 
 TEST_CASE("An off-centre grab still drags relatively when there is no snap",
-          "[sectionplanegrip][req340]") {
+          "[sectionplanegrip][req344]") {
   // The other half of the same distinction. Without a snap the drag IS relative, and subtracting
   // the grab's own parameter is exactly right — the plane must move by how far the cursor moved,
   // not jump so the handle lands under the cursor.
@@ -1639,7 +1639,7 @@ TEST_CASE("An off-centre grab still drags relatively when there is no snap",
   CHECK(st.viewportSectionClipOffset == Catch::Approx(3.0).margin(1e-6));
 }
 
-TEST_CASE("Releasing the mouse keeps the snapped placement", "[sectionplanegrip][req340]") {
+TEST_CASE("Releasing the mouse keeps the snapped placement", "[sectionplanegrip][req344]") {
   // The bug: the drop click re-ran the drag from its own ray, and the click path is never given a
   // snapped point — so letting go recomputed the placement from the raw cursor and threw the snap
   // away. The plane jumped off the feature it had just locked onto, at the instant of release.
@@ -1671,7 +1671,7 @@ TEST_CASE("Releasing the mouse keeps the snapped placement", "[sectionplanegrip]
   CHECK(std::fabs(d) < 0.002);
 }
 
-TEST_CASE("A nearest-on-face snap is not a placement", "[sectionplanegrip][req340]") {
+TEST_CASE("A nearest-on-face snap is not a placement", "[sectionplanegrip][req344]") {
   // `Surface`, `Edge` and `Face` answer with the point on the object nearest the cursor, so with 3D
   // OSNAP on there is one under the cursor at essentially every position on a solid. Fed to an
   // absolute placement they stop being snaps and become "put the plane wherever the pointer is
@@ -1697,7 +1697,7 @@ TEST_CASE("A nearest-on-face snap is not a placement", "[sectionplanegrip][req34
 }
 
 TEST_CASE("The snapped point is read in STORAGE coordinates, not world",
-          "[sectionplanegrip][req340]") {
+          "[sectionplanegrip][req344]") {
   // The bug behind "it is snapping too far the other direction" (2026-09-11). The viewport was
   // converting the snapped point to WORLD before handing it to the drag, but every other quantity
   // in that drag is in the LOCAL storage frame — the clip frame comes from a solid's face, solids
@@ -1707,7 +1707,7 @@ TEST_CASE("The snapped point is read in STORAGE coordinates, not world",
   //
   // The document origin is ZERO in a fresh drawing, which is why this survived three rounds of
   // testing: at the origin the wrong frame and the right one are the same frame — the same shape as
-  // the anchor-rebasing hazard REQ-337 records. So this case sets one.
+  // the anchor-rebasing hazard REQ-341 records. So this case sets one.
   std::vector<std::string> log;
   AppCommandState st;
   st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
@@ -1719,7 +1719,7 @@ TEST_CASE("The snapped point is read in STORAGE coordinates, not world",
 
   // A SIDE face, so the plane's normal is horizontal. On a level plane the normal is +Z while the
   // document origin offsets X and Y, so the wrong frame and the right one give the same answer and
-  // this case would prove nothing — the same blind spot REQ-337 records for its own anchor
+  // this case would prove nothing — the same blind spot REQ-341 records for its own anchor
   // rebasing, where "a horizontal cut is exact in both versions".
   StartSectionPlaneCommand(st, log);
   REQUIRE(SubmitSectionPlaneFacePick(st, RayAt({-100, 0, 4}, {-10, 0, 4}), Tol(0.5, 0.5), log));
@@ -1751,10 +1751,10 @@ TEST_CASE("The snapped point is read in STORAGE coordinates, not world",
   CHECK(std::fabs(wrongOffset - rightOffset) == Catch::Approx(2196000.0).margin(1e-3));
 }
 
-TEST_CASE("DELETE erases a selected section plane", "[sectionplanegrip][req339]") {
+TEST_CASE("DELETE erases a selected section plane", "[sectionplanegrip][req343]") {
   // Reported 2026-09-15: "it will not let me use the delete command or button ... to delete it."
   //
-  // The plane is deliberately not in `st.selection` (ADR-058 (h)), which is what keeps every
+  // The plane is deliberately not in `st.selection` (ADR-059 (h)), which is what keeps every
   // consumer of that vector free of a branch for a view state — and the cost, unnoticed until
   // someone tried it, was that DELETE walked past a plane the user could see was selected and
   // opened a "click objects" prompt instead. The flag has to be tested somewhere, and DELETE is
@@ -1786,7 +1786,7 @@ TEST_CASE("DELETE erases a selected section plane", "[sectionplanegrip][req339]"
 }
 
 TEST_CASE("A deleted section plane does not come back on SECTIONCLIP ON",
-          "[sectionplanegrip][req339]") {
+          "[sectionplanegrip][req343]") {
   // The frame and the stretched size are cleared too. Leaving them would make the next
   // `SECTIONCLIP ON` resurrect the plane in its old place on its old face, which is not what
   // "delete" means anywhere else in the application.
@@ -1817,13 +1817,13 @@ TEST_CASE("A deleted section plane does not come back on SECTIONCLIP ON",
 }
 
 TEST_CASE("DELETE with no section plane selected behaves exactly as before",
-          "[sectionplanegrip][req339]") {
+          "[sectionplanegrip][req343]") {
   // The new branch must not shadow DELETE's existing behaviour. Two cases: a plane that exists but
   // is NOT selected is left alone, and an empty selection still opens the selection step.
   std::vector<std::string> log;
   AppCommandState st = SectionPlaneOnBoxTop(log);
   st.viewportSectionClipOffset = -4.0;
-  ClearCadSelection(st);  // deselects the plane; the CUT stays, which is REQ-339's own rule
+  ClearCadSelection(st);  // deselects the plane; the CUT stays, which is REQ-343's own rule
   REQUIRE_FALSE(st.sectionPlaneSelected);
   REQUIRE(st.viewportSectionClip);
 
@@ -1834,14 +1834,14 @@ TEST_CASE("DELETE with no section plane selected behaves exactly as before",
   CHECK(st.active == AppCommandState::Kind::Delete);
 }
 
-TEST_CASE("Flipping a stretched plane leaves it where it is", "[sectionplanegrip][req339]") {
+TEST_CASE("Flipping a stretched plane leaves it where it is", "[sectionplanegrip][req343]") {
   // `SectionClipPlaneBasis` derives u from the normal, so flipping — which negates the normal —
   // negates u while leaving v alone. The stored extent's `cu` is an ABSOLUTE `dot(centre, u)`, so
   // leaving it untouched mirrors the rectangle about the STORAGE ORIGIN.
   //
   // Measured on a model 400 ft out: the plane jumped 800 ft, off screen, taking every handle with
   // it and leaving a cut that was still correct with no visible plane to grab. Invisible at the
-  // origin, which is where every other flip case runs — the same blind spot REQ-337 records.
+  // origin, which is where every other flip case runs — the same blind spot REQ-341 records.
   std::vector<std::string> log;
   AppCommandState st;
   st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
@@ -1883,10 +1883,10 @@ TEST_CASE("Flipping a stretched plane leaves it where it is", "[sectionplanegrip
   CHECK(ray3d::Length(ray3d::Sub(after.corner[1], after.corner[0])) == Catch::Approx(28.0));
 }
 
-TEST_CASE("ESC puts an aborted drag back where it was grabbed", "[sectionplanegrip][req339]") {
+TEST_CASE("ESC puts an aborted drag back where it was grabbed", "[sectionplanegrip][req343]") {
   // A section-plane drag writes the live offset every frame — that is what makes the cut follow the
   // handle — so by the time ESC is pressed the plane has already moved. Disarming alone would
-  // COMMIT it, and REQ-339 records that a slide makes no undo entry, so there is no way back.
+  // COMMIT it, and REQ-343 records that a slide makes no undo entry, so there is no way back.
   std::vector<std::string> log;
   AppCommandState st = SectionPlaneOnBoxTop(log);
   st.viewportSectionClipOffset = -2.0;
@@ -1902,7 +1902,7 @@ TEST_CASE("ESC puts an aborted drag back where it was grabbed", "[sectionplanegr
   CHECK(st.viewportSectionClip);                               // the plane is still there
 }
 
-TEST_CASE("An aborted first stretch does not pin the plane's size", "[sectionplanegrip][req339]") {
+TEST_CASE("An aborted first stretch does not pin the plane's size", "[sectionplanegrip][req343]") {
   // The stretch arithmetic needs a valid extent to work from, so a FIRST stretch seeds one from the
   // drawn rectangle. Restoring that on abort would leave the plane user-sized and no longer
   // tracking the model — a state the user never asked for and cannot see, since the size is
@@ -1924,7 +1924,7 @@ TEST_CASE("An aborted first stretch does not pin the plane's size", "[sectionpla
   CHECK_FALSE(st.viewportSectionClipExtent.valid);  // ...and the abort took that back too
 }
 
-TEST_CASE("Starting a command disarms a live section-plane drag", "[sectionplanegrip][req339]") {
+TEST_CASE("Starting a command disarms a live section-plane drag", "[sectionplanegrip][req343]") {
   // The drag runs off the frame loop, gated only on the clip being on. Left armed it kept rewriting
   // the offset while the NEXT command took its picks: grab the Move handle, type LINE, and the cut
   // slid across the model as the line was drawn.

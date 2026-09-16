@@ -1,4 +1,4 @@
-# TASK-252 — Snapping the section plane, and drawing its handles as what they do
+# TASK-260 — Snapping the section plane, and drawing its handles as what they do
 
 - Type:    feat (new requirement)
 - Status:  review
@@ -8,8 +8,8 @@
 
 ## 1. Authority
 
-- **REQ-340** (new, accepted 2026-09-11, D-2026-09-11-d) — the requirement this delivers.
-- **REQ-339 / D-2026-09-11-c** — the handles this snaps and re-draws. Its frozen drag axis is what
+- **REQ-344** (new, accepted 2026-09-11, D-2026-09-11-d) — the requirement this delivers.
+- **REQ-343 / D-2026-09-11-c** — the handles this snaps and re-draws. Its frozen drag axis is what
   the snapped parameter is measured against.
 - **REQ-062 / REQ-326 / REQ-325** — the object snap system. Reused whole; this adds a caller, not a
   snap kind.
@@ -29,7 +29,7 @@ The first screenshot shows a section plane mid-drag with the Midpoint marker up 
 to land on it. The second shows AutoCAD's grip symbols: arrowheads at the section line's ends, a
 back-to-back arrow pair for flip, and small triangles for the height extents.
 
-REQ-339's drag ignored OSNAP entirely and drew all six handles as identical squares.
+REQ-343's drag ignored OSNAP entirely and drew all six handles as identical squares.
 
 ## 3. Approach
 
@@ -100,7 +100,7 @@ when following the cursor, with the reason written at both.
 cases — six of them, 60 assertions — was blind to it in the same way, because they all built their
 rays the same way.
 
-`[req340]` now grabs **off-centre on purpose**, at 0, +1.5 and −2.25 ft along the drag axis, and
+`[req344]` now grabs **off-centre on purpose**, at 0, +1.5 and −2.25 ft along the drag axis, and
 asserts all three land the plane in exactly the same place: where the grab landed carries no
 information about where the snap is, so it must not influence the result at all. Reinstated, the bug
 puts the plane 2.25 ft out on the 2.25 ft grab — the reported symptom, reproduced to the foot.
@@ -169,7 +169,7 @@ widened these fields to `double` to prevent, and which breaks the snap's bit-exa
    frame. Every test and every quick check had a zero origin.
 2. **On a LEVEL plane it is invisible even with an origin set** — the normal is +Z while the origin
    offsets X and Y, so the projection along the normal is unaffected. This is the same blind spot
-   REQ-337 records for its own anchor rebasing, in the same words: *a horizontal cut is exact in
+   REQ-341 records for its own anchor rebasing, in the same words: *a horizontal cut is exact in
    both versions*.
 
 The first draft of the regression case fell into (2) and passed against the bug. It now sets a
@@ -181,7 +181,7 @@ where it lands, do not check that two numbers are unequal.
 
 **Full suite 1515/1515**, up from 1506.
 
-`SubObjectSelectionTests` `[req340]`, 9 cases inside `[sectionplanegrip]` (19 cases / 183
+`SubObjectSelectionTests` `[req344]`, 9 cases inside `[sectionplanegrip]` (19 cases / 183
 assertions):
 
 - **an off-centre grab lands the plane in the same place as a dead-centre one** — §5a, the case that
@@ -209,17 +209,17 @@ the drop click's re-apply back moves the plane 3 ft off the snap on release.
 
 - **DEBT-1.** Nothing automated sees the symbols. There is no GL context in the suite, so their
   geometry is unit-tested through `SectionPlaneGripsFor` and their appearance is the user's check.
-  This is the same gap REQ-338 and REQ-339 record, unchanged.
+  This is the same gap REQ-342 and REQ-343 record, unchanged.
 - **DEBT-2.** The section line still carries no direction arrows, so which half is kept is shown
   only by what has disappeared and by the Flip symbol's orientation.
 - **ASSUMPTION-1.** Snapping every draggable handle, rather than only Move, is what the user wants.
   Stated because the screenshot shows only a Move drag; the stretch case is a reasonable reading of
   the same request and is cheap to narrow if it proves noisy.
-- **Repair carried in this task:** TASK-251's commit left **REQ-100** split — its heading and
-  statement in one place, its four-cost-profile body stranded inside REQ-339 — from an insert that
+- **Repair carried in this task:** TASK-259's commit left **REQ-100** split — its heading and
+  statement in one place, its four-cost-profile body stranded inside REQ-343 — from an insert that
   landed on a blank line inside REQ-100 and a later relocation that carried the orphan along. The
   heading is reunited with its body here. No text was lost; verified by heading count (194 → 195,
-  the new one being REQ-340) and by the body appearing exactly once before and after.
+  the new one being REQ-344) and by the body appearing exactly once before and after.
 
 ## 8. Result
 

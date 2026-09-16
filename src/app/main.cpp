@@ -806,10 +806,10 @@ int main()
       }
       else if (cmd.sectionPlaneGripDrag >= 0)
       {
-        // A TRUE cancel, and here it is load-bearing rather than a courtesy (REQ-339). Unlike the
+        // A TRUE cancel, and here it is load-bearing rather than a courtesy (REQ-343). Unlike the
         // gizmo below, a section-plane drag writes the live offset on EVERY frame — that is what
         // makes the cut follow the handle — so by the time ESC is pressed the plane has already
-        // moved, and merely disarming would commit it. REQ-339 also records that a slide makes no
+        // moved, and merely disarming would commit it. REQ-343 also records that a slide makes no
         // undo entry, so there would be no way back at all. `AbortSectionPlaneGripDrag` restores
         // the offset and extent recorded at the grab.
         //
@@ -1353,7 +1353,7 @@ int main()
     tuning.bgR = std::clamp(cmd.viewportBgR, 0.f, 1.f);
     tuning.bgG = std::clamp(cmd.viewportBgG, 0.f, 1.f);
     tuning.bgB = std::clamp(cmd.viewportBgB, 0.f, 1.f);
-    // REQ-337/338/339 — the live section clip.
+    // REQ-341/338/339 — the live section clip.
     //
     // Every part of it comes from the COMMAND layer now, through `CadSectionClipIndicator`, which
     // the pick also calls. Two copies of "where is the rectangle?" is how a user ends up clicking
@@ -1362,11 +1362,11 @@ int main()
     if (cmd.viewportSectionClip) {
       tuning.sectionClip = CadSectionClipPlane(cmd);
       tuning.sectionClipIndicator = CadSectionClipIndicator(cmd);
-      // REQ-338: the hatch and the centre line that make the plane findable. Derived from the
+      // REQ-342: the hatch and the centre line that make the plane findable. Derived from the
       // rectangle rather than stored, for the same reason the rectangle itself is: the plane can
       // move every frame, and geometry that has to be rebuilt by a command is not live.
       tuning.sectionPlaneGraphics = SectionPlaneGraphicsFor(tuning.sectionClipIndicator);
-      // REQ-339: the handles, drawn only while the plane is selected. `CadSectionPlaneGrips`
+      // REQ-343: the handles, drawn only while the plane is selected. `CadSectionPlaneGrips`
       // answers invalid when it is not, so there is no separate "should these be drawn?" flag for a
       // caller to get wrong — the rule REQ-060's gizmo already follows.
       tuning.sectionPlaneGrips = CadSectionPlaneGrips(cmd);

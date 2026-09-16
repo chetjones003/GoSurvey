@@ -6286,7 +6286,7 @@ void ResetDistDraft(AppCommandState& st) {
 }
 
 void ResetAllCadDraftTools(AppCommandState& st) {
-  // An armed section-plane handle drag (REQ-339). Every command start calls this, which is exactly
+  // An armed section-plane handle drag (REQ-343). Every command start calls this, which is exactly
   // where a live drag has to end: the drag runs off the frame loop and is gated only on the clip
   // being on, so a drag left armed kept rewriting the clip offset while the NEXT command took its
   // picks — grab the Move handle, type LINE, and the cut slides across the model as the line is
@@ -22523,7 +22523,7 @@ void ClearCadSelection(AppCommandState& st) {
   // gone leaves a drag with nothing to move and an anchor pointing at where something used to be.
   CancelGizmoDrag(st);
   st.gizmoHoverAxis = -1;
-  // The section plane's handles too (REQ-339). It is not in `selection` — it is a view state, not
+  // The section plane's handles too (REQ-343). It is not in `selection` — it is a view state, not
   // an entity — but every caller here means "nothing is selected now", and a set of handles left
   // floating after ESC is a selection the user was told they no longer had. The PLANE itself stays
   // exactly where it is: deselecting is not turning the clip off.
@@ -33241,7 +33241,7 @@ bool ApplySectionClipValue(AppCommandState& st, const std::string& raw, std::vec
     // Flipping while the clip is off would silently change what ON later means, so it turns the
     // clip on as well: the user asked to see the other half, and the other half is a visible thing.
     //
-    // Shared with the flip HANDLE (REQ-339) rather than written twice, so the typed command and the
+    // Shared with the flip HANDLE (REQ-343) rather than written twice, so the typed command and the
     // click cannot drift into meaning different things.
     ToggleSectionClipFlip(st, log);
     return true;
@@ -33301,11 +33301,11 @@ void StartSectionClipCommand(AppCommandState& st, std::vector<std::string>& log)
 }
 
 // ---------------------------------------------------------------------------------------------
-// SECTIONPLANE (REQ-338 / ADR-058, GitHub issue #479 acceptance 1-3)
+// SECTIONPLANE (REQ-342 / ADR-059, GitHub issue #479 acceptance 1-3)
 // ---------------------------------------------------------------------------------------------
 
 /// The frame the clip plane is currently built from — the face `SECTIONPLANE` was given, or the
-/// active UCS when it was never given one (REQ-338 / D-2026-09-11-b).
+/// active UCS when it was never given one (REQ-342 / D-2026-09-11-b).
 ///
 /// One function so the renderer, the report line and the tests cannot disagree about which plane is
 /// in force. See \ref AppCommandState::viewportSectionClipFrameValid for why there is one plane
@@ -33325,7 +33325,7 @@ void CancelSectionPlaneCommand(AppCommandState& st) {
     st.active = AppCommandState::Kind::None;
 }
 
-/// `SECTIONPLANE` — put a section plane on a face of a solid, and show it (REQ-338).
+/// `SECTIONPLANE` — put a section plane on a face of a solid, and show it (REQ-342).
 ///
 /// The command has one step, so being active IS "waiting for a face". Note what it does NOT do:
 /// it does not ask which solids to section, the way `SECTION` does. A clip plane is a property of
@@ -33394,7 +33394,7 @@ static bool ApplySectionPlaneFromFace(AppCommandState& st, const brep::Solid& so
   // next gesture, and the manipulation slice is what makes that direct.
   st.viewportSectionClipOffset = 0.0;
   st.viewportSectionClipFlip = false;
-  // The stretched size goes too (REQ-339). It was stated in the OLD plane's basis, and that basis
+  // The stretched size goes too (REQ-343). It was stated in the OLD plane's basis, and that basis
   // is derived from the normal — so keeping it would apply a length measured across one face to a
   // completely different direction on another.
   st.viewportSectionClipExtent = SectionPlaneExtent{};
@@ -33409,7 +33409,7 @@ static bool ApplySectionPlaneFromFace(AppCommandState& st, const brep::Solid& so
   return true;
 }
 
-/// The viewport click that answers "select a flat face" (REQ-338 acceptance 1).
+/// The viewport click that answers "select a flat face" (REQ-342 acceptance 1).
 ///
 /// Takes the cursor RAY and a world tolerance rather than a plan-space point, because a face is a
 /// 3D thing and plan view is the default view: `PickSubObjectAcrossSolids` is the same entry point
@@ -33452,7 +33452,7 @@ bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
 }
 
 // ---------------------------------------------------------------------------------------------
-// The section plane as a manipulable object (REQ-339, GitHub issue #479 acceptance 4-7)
+// The section plane as a manipulable object (REQ-343, GitHub issue #479 acceptance 4-7)
 // ---------------------------------------------------------------------------------------------
 
 SectionClipPlane CadSectionClipPlane(const AppCommandState& st) {
@@ -33467,7 +33467,7 @@ SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st) {
   if (!p.active)
     return SectionClipIndicator{};
 
-  // Sized as #478 sizes it (D-2026-09-16-a): the drawing extents, else centred on the view.
+  // Sized as #478 sizes it (D-2026-09-16-b): the drawing extents, else centred on the view.
   brep::Bounds bb;
   bb.valid = ComputeSectionClipIndicatorBounds(st, &bb.mn, &bb.mx);
   if (!bb.valid) {
@@ -33558,7 +33558,7 @@ void AbortSectionPlaneGripDrag(AppCommandState& st) {
   // A TRUE cancel, not a disarm — the wording the gizmo's own ESC branch uses, and the same
   // reasoning. The drag writes the offset and the extent on every frame, so by the time ESC is
   // pressed the plane is already 40 ft into the model; disarming alone would COMMIT that, and
-  // REQ-339 records that a slide makes no undo entry, so there would be no way back at all.
+  // REQ-343 records that a slide makes no undo entry, so there would be no way back at all.
   //
   // `sectionPlaneGripStartOffset` and `sectionPlaneGripStartExtent` were recorded at the grab
   // precisely so this can put them back. Until now nothing read them.
@@ -33606,7 +33606,7 @@ void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& rayIn,
   // different in kind, and conflating them is the bug this shape exists to prevent.
   double delta = 0.0;
   if (snapPoint) {
-    // REQ-340 — land on the object snap.
+    // REQ-344 — land on the object snap.
     //
     // **ABSOLUTE, and that is the whole point.** `anchor` IS the handle's position at the grab, so
     // the snapped point's projection onto the axis is already the distance the handle must travel
@@ -33620,7 +33620,7 @@ void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& rayIn,
     // going to snap too far and then snaps too close" (2026-09-11).
     //
     // Every test missed it because every fixture aimed its grab ray straight at the handle, which
-    // makes that term exactly zero. `[req340]` now grabs off-centre on purpose.
+    // makes that term exactly zero. `[req344]` now grabs off-centre on purpose.
     //
     // The snapped point almost never lies ON the axis — the axis is a line through the handle, a
     // midpoint is out in the model — so the handle goes where it PROJECTS. That is the only reading
@@ -33808,10 +33808,10 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  // A SELECTED SECTION PLANE is what DELETE means first (REQ-339 amended, user report 2026-09-15:
+  // A SELECTED SECTION PLANE is what DELETE means first (REQ-343 amended, user report 2026-09-15:
   // "it will not let me use the delete command or button ... to delete it").
   //
-  // It is not in `st.selection` — ADR-058 (h) keeps a view state out of that vector so no consumer
+  // It is not in `st.selection` — ADR-059 (h) keeps a view state out of that vector so no consumer
   // of it needs a branch for one — and the consequence, unnoticed until someone tried it, is that
   // DELETE walked straight past a plane the user could plainly see was selected and opened a
   // "click objects" prompt instead. The flag has to be tested somewhere; here is the only place
@@ -33819,7 +33819,7 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   //
   // Deleting it turns the clip OFF rather than erasing geometry, because there is no geometry: the
   // plane IS the clip. And it makes no undo entry, for the same reason the slide does not —
-  // consistent with REQ-337's view-state decision, and stated in REQ-339 rather than left to be
+  // consistent with REQ-341's view-state decision, and stated in REQ-343 rather than left to be
   // discovered.
   //
   // Before the survey-point branch, and above the selection branch, because the two are mutually
@@ -35771,7 +35771,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
       return;
     }
-    // SECTIONPLANE (REQ-338): put that same clip plane on a face of a solid, and draw it hatched so
+    // SECTIONPLANE (REQ-342): put that same clip plane on a face of a solid, and draw it hatched so
     // it can be found. Aiming, not a new cut — see D-2026-09-11-b for why there is one plane.
     if (plotTok == "sectionplane" || plotTok == "splane") {
       StartSectionPlaneCommand(st, log);

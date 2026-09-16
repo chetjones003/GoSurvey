@@ -2629,7 +2629,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glDrawArrays(GL_TRIANGLES, 0, 6);
       glDisable(GL_BLEND);
     }
-    // REQ-338: the hatch. Drawn between the fill and the outline so the outline stays the crispest
+    // REQ-342: the hatch. Drawn between the fill and the outline so the outline stays the crispest
     // thing on the plane, and dimmer than it, because the hatch is texture rather than an edge —
     // hatch as bright as the border reads as a solid panel and hides the model behind it.
     //
@@ -2668,7 +2668,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glDrawArrays(GL_LINES, 0, 8);
       glLineWidth(kLwMain);
     }
-    // REQ-338: the section line — the plane's base edge, heavier and brighter than the rest of the
+    // REQ-342: the section line — the plane's base edge, heavier and brighter than the rest of the
     // outline. It is what tells you which way is down on a plane you are looking at edge-on, where
     // fill and hatch both collapse to nothing.
     if (gfx.valid) {
@@ -2683,7 +2683,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glDrawArrays(GL_LINES, 0, 2);
       glLineWidth(kLwMain);
     }
-    // REQ-339: the handles, when the plane is selected.
+    // REQ-343: the handles, when the plane is selected.
     //
     // Each is a small square drawn in the PLANE's own axes rather than screen-aligned, so it lies
     // flat on the plane it belongs to and cannot be mistaken for a marker floating in front of it.
@@ -2703,7 +2703,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         std::vector<float> outlines;
         quads.reserve(static_cast<size_t>(kSectionPlaneGripCount) * 36);
 
-        // REQ-340: each handle is drawn as the SHAPE ITS JOB SUGGESTS, not as a generic square.
+        // REQ-344: each handle is drawn as the SHAPE ITS JOB SUGGESTS, not as a generic square.
         // Six identical squares made the user read the plane to work out which one flipped it; a
         // symbol that points the way the handle moves does not have to be learned. The shapes
         // follow AutoCAD's, which is what the user asked for by name.

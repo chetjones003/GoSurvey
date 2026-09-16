@@ -1,4 +1,4 @@
-# TASK-250 — SECTIONPLANE: put the clip plane on a face, and make it visible
+# TASK-258 — SECTIONPLANE: put the clip plane on a face, and make it visible
 
 - Type:    feat (new requirement + new ADR)
 - Status:  review
@@ -8,11 +8,11 @@
 
 ## 1. Authority
 
-- **REQ-338** (new, accepted 2026-09-11, D-2026-09-11-b) — the requirement this delivers.
-- **ADR-058** (new) — the six decisions behind it. A new selection kind and a new render behaviour
+- **REQ-342** (new, accepted 2026-09-11, D-2026-09-11-b) — the requirement this delivers.
+- **ADR-059** (new) — the six decisions behind it. A new selection kind and a new render behaviour
   need an ADR and an accepted REQ before implementation (CLAUDE.md §4); both were drafted locally
   and ship here with the code, per the one-PR rule.
-- **REQ-337 / ADR-057 / D-2026-09-10-e** — the clip plane this aims. Slice 1 changes how the plane
+- **REQ-341 / ADR-058 / D-2026-09-10-e** — the clip plane this aims. Slice 1 changes how the plane
   is *chosen*, not how it is *applied*: `SectionClipToShaderVec4` and the `gl_ClipDistance` path are
   untouched.
 - **REQ-311 / D-2026-08-31-e** — `ucs::Ucs` IS the plane abstraction. This is the decision that makes
@@ -30,7 +30,7 @@
 
 Two gaps, one obvious and one not.
 
-**The obvious one.** REQ-337's plane is "the active UCS plane, offset along its Z". A face-derived
+**The obvious one.** REQ-341's plane is "the active UCS plane, offset along its Z". A face-derived
 plane is an arbitrary world plane that must *not* follow the UCS, so that representation cannot
 express it at all.
 
@@ -70,7 +70,7 @@ Irrelevant to the plane maths, fatal to the drawing.
 2. The route: `ViewportClickRoute::SubObjectFacePick` + `ViewportIsFacePickStep`.
 3. The command: `StartSectionPlaneCommand`, `SubmitSectionPlaneFacePick`, and
    `CadEffectiveSectionClipFrame` as the single place that decides which plane is in force.
-4. The draw, beside REQ-337's existing indicator block, in the overlay pass.
+4. The draw, beside REQ-341's existing indicator block, in the overlay pass.
 
 ## 4. A wrong answer the probe produced first
 
@@ -135,8 +135,8 @@ and the previous slice; none of them would have been flagged.
 |---|---|
 | `SectionClipTests` `[sectionplane]` | 7 cases / 390 assertions |
 | `SubObjectSelectionTests` `[sectionplaneface]` | 3 cases / 52 assertions |
-| `ViewportPickPolicyTests` `[req338]` | the route, the predicate, and the exhaustive-command list |
-| `headless.req338-section-plane` | 71 steps |
+| `ViewportPickPolicyTests` `[req342]` | the route, the predicate, and the exhaustive-command list |
+| `headless.req342-section-plane` | 71 steps |
 
 **Every new behaviour was proven to bite**, by reinstating it as a bug and watching the test fail:
 
@@ -179,6 +179,6 @@ than left to be discovered:
 
 **PASS** for #479 acceptance 1, 2 and 3.
 
-Acceptance 4–8 are the remaining slices and are stated as such in REQ-338's revision note: the plane
+Acceptance 4–8 are the remaining slices and are stated as such in REQ-342's revision note: the plane
 is not yet an entity (no selection, erase, Properties or `.gs`), has no grips, and its section line
 carries no direction arrows.

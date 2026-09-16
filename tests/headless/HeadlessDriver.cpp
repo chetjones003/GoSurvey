@@ -657,7 +657,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         SubmitViewportPick(run.st, x, y, run.log);
       }
       break;
-    // REQ-338 — SECTIONPLANE's face pick. Needs its own case here for the reason this whole verb
+    // REQ-342 — SECTIONPLANE's face pick. Needs its own case here for the reason this whole verb
     // exists: a route with no case falls out of the switch doing nothing, and MSVC's /W4 does not
     // include the unhandled-enumerator warning, so the transcript would pass while the command did
     // nothing at all.
@@ -1989,7 +1989,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
     } else if (what == "SECTIONCLIPFRAME") {
-      // EXPECT SECTIONCLIPFRAME <UCS|FACE> — which plane the clip is built on (REQ-338).
+      // EXPECT SECTIONCLIPFRAME <UCS|FACE> — which plane the clip is built on (REQ-342).
       //
       // There is ONE clip plane and two ways to aim it (D-2026-09-11-b), so "is it on?" and "where
       // is it?" no longer answer "which command put it there?". A transcript that ran SECTIONPLANE
@@ -2015,7 +2015,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
     } else if (what == "SECTIONCLIPNORMAL") {
-      // EXPECT SECTIONCLIPNORMAL <nx> <ny> <nz> — the clip frame's Z axis (REQ-338).
+      // EXPECT SECTIONCLIPNORMAL <nx> <ny> <nz> — the clip frame's Z axis (REQ-342).
       //
       // WHICH face was picked, which SECTIONCLIPFRAME cannot say: every face of a box answers
       // "FACE" and offset 0. Without this, a transcript aiming at the bottom of a box and silently
@@ -2026,7 +2026,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "parse", "EXPECT SECTIONCLIPNORMAL needs <nx> <ny> <nz>", sourceLine);
         return false;
       }
-      // The EFFECTIVE frame, the single decider ADR-058 (a) names — not the raw stored one, which
+      // The EFFECTIVE frame, the single decider ADR-059 (a) names — not the raw stored one, which
       // is never written in UCS-aimed mode and reads as a default (0,0,1). A transcript asserting
       // the true normal under a rotated UCS would have failed, and one asserting (0,0,1) would have
       // passed while proving nothing, which is the failure this verb exists to prevent.

@@ -9043,7 +9043,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   // submit `of`, which it does not.
   if (cmd.active == AppCommandState::Kind::SectionClip)
     return "SECTIONCLIP — [ON/OFF/FLIP] or an offset along the UCS Z:";
-  // REQ-338. No bracketed options: the answer is a click on a face, not a keyword, and a link that
+  // REQ-342. No bracketed options: the answer is a click on a face, not a keyword, and a link that
   // submits text here would have nothing to consume it.
   if (cmd.active == AppCommandState::Kind::SectionPlane)
     return CadSectionPlanePromptText();
@@ -13453,7 +13453,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         // snapped point drives the pick, exactly as the model path feeds CadSnap into SubmitViewportPick.
         double curMX = mLocalX, curMY = mLocalY;
         cmd.viewportSnapPickValid = false;
-        cmd.viewportSnapPickKind = -1;  // REQ-340: no kind recorded yet this frame
+        cmd.viewportSnapPickKind = -1;  // REQ-344: no kind recorded yet this frame
         const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
                             cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
         // REQ-121 rule (1), floating model space (REQ-036). The same suppression as the model-space
@@ -13723,7 +13723,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // floating hover/snap/cursor (REQ-036).
   if (!InFloatingModelSpace(cmd)) {
     cmd.viewportSnapPickValid = false;
-    cmd.viewportSnapPickKind = -1;  // REQ-340: no kind recorded yet this frame
+    cmd.viewportSnapPickKind = -1;  // REQ-344: no kind recorded yet this frame
   }
   // THE model-space input seam (REQ-058). Everything downstream — snap, hover, entity picking,
   // hatch tracing, command submission — consumes rawX/rawY, so orbit-awareness is this one
@@ -13924,7 +13924,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // hover, it is the same budget. It also SUPPRESSES the entity hover rather than drawing beside
       // it — two highlights answering one cursor is the defect, not the feature.
       // (The live gizmo drag, which covers a face drag too since slice 4c, is a few lines below.)
-      // REQ-338: OR'd with the face-pick step, because a command that ASKS for a face must
+      // REQ-342: OR'd with the face-pick step, because a command that ASKS for a face must
       // pre-highlight one without the user also having to know about Ctrl. Ctrl remains the way to
       // reach a sub-object when no command is asking.
       const bool subObjectHovering = modelSpace && !blockEntityHover &&
@@ -13978,13 +13978,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.gizmoHoverAxis = -1;
         BumpCadGpuCache(cmd);
       }
-      // REQ-339 — the section plane handle under the cursor.
+      // REQ-343 — the section plane handle under the cursor.
       //
       // Outside `runHoverPick`, like the gizmo above and for the same reason: six ray-to-point
       // tests against widgets whose positions are already known, not a walk of the drawing.
       //
       // The live DRAG is deliberately NOT here. It runs after the object snap is computed, several
-      // hundred lines down, because REQ-340 lets the drag land on a snapped point and reading last
+      // hundred lines down, because REQ-344 lets the drag land on a snapped point and reading last
       // frame's snap would leave the plane one frame behind its own glyph.
       // Gated on the same conditions the CLICK is, so the two cannot disagree. A handle that lights
       // up must be a handle that grabs (`ViewportRenderer.hpp`), and the click only reaches
@@ -14117,8 +14117,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const auto perfSnapT0 = std::chrono::steady_clock::now();
     {
       cmd.viewportSnapPickValid = false;
-      cmd.viewportSnapPickKind = -1;  // REQ-340: no kind recorded yet this frame
-      // REQ-340: a section-plane handle drag counts as mid-command, exactly as the three grip drags
+      cmd.viewportSnapPickKind = -1;  // REQ-344: no kind recorded yet this frame
+      // REQ-344: a section-plane handle drag counts as mid-command, exactly as the three grip drags
       // beside it already do. No `Kind` is active during one — the plane is a view state, not a
       // command — so without this the snap would be computed as though the user were idle, and a
       // drag that is placing a plane at a midpoint would get neither the marker nor the pull.
@@ -14155,7 +14155,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cmd.viewportSnapPickLocalX = snap.x;
           cmd.viewportSnapPickLocalY = snap.y;
           cmd.viewportSnapPickLocalZ = snap.z;  // osnap overrides the work-plane elevation (REQ-058)
-          cmd.viewportSnapPickKind = static_cast<int>(snap.kind);  // REQ-340: named feature, or not
+          cmd.viewportSnapPickKind = static_cast<int>(snap.kind);  // REQ-344: named feature, or not
           if (out_snap)
             *out_snap = snap;
           const double dx = static_cast<double>(snap.x) - rawX;
@@ -14207,10 +14207,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
   }
 
-  // REQ-339/340 — the section plane's live handle drag.
+  // REQ-343/340 — the section plane's live handle drag.
   //
   // HERE, after the object snap has been computed for this frame, rather than up with the hover.
-  // The drag can land on a snapped point (REQ-340), and the snap the user is looking at is the one
+  // The drag can land on a snapped point (REQ-344), and the snap the user is looking at is the one
   // computed just above; reading the previous frame's would leave the plane one frame behind its
   // own marker, which at drag speed is visible as the plane trailing the glyph it is supposed to be
   // locked to.
@@ -14232,7 +14232,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // wrong the other way when the axis points the other way", which is exactly what was reported.
     ray3d::Vec3 snapLocal{};
     const ray3d::Vec3* snapPtr = nullptr;
-    // ONLY a named feature steers the plane (REQ-340 amended, user report 2026-09-11).
+    // ONLY a named feature steers the plane (REQ-344 amended, user report 2026-09-11).
     //
     // `Surface`, `Edge` and `Face` answer with the point on the object nearest the cursor, so with
     // 3D OSNAP on there is a snap under the cursor at essentially every position on a solid. Fed to
@@ -14876,7 +14876,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       SubmitTrimViewportPick(cmd, tx, ty, trimTol, log, pickRayPtr);
       break;
     }
-    // REQ-338 — SECTIONPLANE is asking for one FACE of a solid.
+    // REQ-342 — SECTIONPLANE is asking for one FACE of a solid.
     //
     // Its own case rather than a branch inside `IdleSelection` below, which is where the sub-object
     // pick has always lived. That placement would have been silently dead: `IdleSelection` is a
@@ -14937,7 +14937,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           handled = true;  // the click was the gizmo's; nothing below may also act on it
         }
       }
-      // REQ-339 — the section plane and its handles, on the same terms as the gizmo above and for
+      // REQ-343 — the section plane and its handles, on the same terms as the gizmo above and for
       // the same reason: a handle sits over the thing it moves, so a click that selected straight
       // through it would leave the plane undraggable.
       //
