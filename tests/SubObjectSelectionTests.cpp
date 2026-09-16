@@ -1002,6 +1002,10 @@ TEST_CASE("SECTIONPLANE takes a flat face and refuses a curved one",
     REQUIRE(SubmitSectionPlaneFacePick(st, RayAt({0, 0, 100}, {0, 0, 8}), Tol(0.5, 0.5), log));
     st.viewportSectionClipOffset = 4.0;  // as though the user had slid it
     st.viewportSectionClipFlip = true;
+    // Flipped at +4 the clip keeps only z >= 12 — the whole box is hidden, and since #478 a hidden
+    // face cannot be picked. Turn the clip off so the -X face is visible to aim at; the offset and
+    // flip being reset by the new pick is still what this section checks.
+    st.viewportSectionClip = false;
 
     // Now the -X face, from outside it.
     StartSectionPlaneCommand(st, log);
