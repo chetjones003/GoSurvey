@@ -1599,6 +1599,15 @@ struct AppCommandState {
     /// target/role/engagement/compatibility/default, each its own phase/prompt rather than one
     /// comma-separated line.
     BConnectMode,
+    /// BCONNECT (issue #496): prompted authoring of a new connection point — name, nominal size,
+    /// role, engagement, compatibility tag, then either pick a flat solid face or type coordinates.
+    BConnect,
+    /// BCONNECTEDIT (issue #496): prompted editing (or removal) of an existing connection point's
+    /// nominal size/role/engagement/compatibility tag.
+    BConnectEdit,
+    /// BLOCKFITTING (issue #496): prompted tagging of the block being edited as a piping catalog
+    /// part — part type, nominal size, pressure class, part number.
+    BlockFitting,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1672,6 +1681,9 @@ struct AppCommandState {
     case Kind::Polysolid:          return "POLYSOLID";  // REQ-317
     case Kind::PressPull:          return "PRESSPULL";
     case Kind::BConnectMode:       return "BCONNECTMODE";
+    case Kind::BConnect:           return "BCONNECT";
+    case Kind::BConnectEdit:       return "BCONNECTEDIT";
+    case Kind::BlockFitting:       return "BLOCKFITTING";
     default:                  return "";
     }
   }
@@ -2761,6 +2773,56 @@ struct AppCommandState {
   /// (issue #486 increment A2).
   CadBlockConnectionRole bconnectRolePending = CadBlockConnectionRole::Inlet;
   float bconnectEngagementPending = 0.f;
+  /// Compatibility tag queued from the BCONNECT wizard, applied once the point resolves (typed
+  /// coordinates or a face pick) — issue #496.
+  std::string bconnectCompatTagPending;
+
+  // -------------------------------------------------------------------------
+  // BCONNECT wizard (issue #496): one value prompted per step. The final step either picks a flat
+  // solid face (reusing the existing bconnectAwaitingFace pick mechanism) or accepts typed
+  // "x,y,z,nx,ny,nz".
+  // -------------------------------------------------------------------------
+  enum class BConnectPhase {
+    WaitName,
+    WaitNominalSize,
+    WaitRole,
+    WaitEngagement,
+    WaitCompatTag,
+    WaitPoint,
+  } bconnectPhase = BConnectPhase::WaitName;
+
+  // -------------------------------------------------------------------------
+  // BCONNECTEDIT wizard (issue #496): one value prompted per step, each showing the port's
+  // current value with Enter-to-keep, plus a remove option.
+  // -------------------------------------------------------------------------
+  enum class BConnectEditPhase {
+    WaitConnName,
+    WaitRemoveConfirm, ///< Only reached when the typed connection name exists.
+    WaitNominalSize,
+    WaitRole,
+    WaitEngagement,
+    WaitCompatTag,
+  } bconnectEditPhase = BConnectEditPhase::WaitConnName;
+  std::string bconnectEditConnName;
+  std::string bconnectEditNominalSizePending;
+  CadBlockConnectionRole bconnectEditRolePending = CadBlockConnectionRole::Inlet;
+  float bconnectEditEngagementPending = 0.f;
+  std::string bconnectEditCompatTagPending;
+
+  // -------------------------------------------------------------------------
+  // BLOCKFITTING wizard (issue #496): one value prompted per step, each showing the current value
+  // with Enter-to-keep.
+  // -------------------------------------------------------------------------
+  enum class BlockFittingPhase {
+    WaitPartType,
+    WaitNominalSize,
+    WaitPressureClass,
+    WaitPartNumber,
+  } blockFittingPhase = BlockFittingPhase::WaitPartType;
+  CadPipePartType blockFittingPartTypePending = CadPipePartType::None;
+  std::string blockFittingNominalSizePending;
+  CadPipePressureClass blockFittingPressureClassPending = CadPipePressureClass::None;
+  std::string blockFittingPartNumberPending;
 
   // -------------------------------------------------------------------------
   // BCONNECTMODE wizard (issue #496): one value prompted per step, instead of a

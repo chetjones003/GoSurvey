@@ -676,7 +676,8 @@ TEST_CASE("INSERT connector snap places the fitting port on the target", "[issue
   CHECK(dot == Catch::Approx(-1.f).margin(0.02));
 }
 
-TEST_CASE("BEDIT BCONNECT typed coords persist on the definition", "[issue475][block][connector][bedit]") {
+TEST_CASE("BEDIT BCONNECT wizard: typed coords persist on the definition",
+          "[issue475][issue496][block][connector][bedit]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "FIT";
@@ -685,8 +686,17 @@ TEST_CASE("BEDIT BCONNECT typed coords persist on the definition", "[issue475][b
   std::vector<std::string> log;
   std::istringstream beditArgs("FIT");
   REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
-  std::istringstream bconnArgs("P1, 4in, 0, 0, 0, 0, 0, 1");
+
+  std::istringstream bconnArgs("P1");
   REQUIRE(CadBlocksTryIdleCommand(st, "bconnect", bconnArgs, log));
+  REQUIRE(st.active == AppCommandState::Kind::BConnect);
+  BConnectSubmitLine(st, "4in", log); // nominal size
+  BConnectSubmitLine(st, "", log);    // role: keep inlet
+  BConnectSubmitLine(st, "", log);    // engagement: keep 0
+  BConnectSubmitLine(st, "", log);    // compat tag: skip
+  BConnectSubmitLine(st, "0, 0, 0, 0, 0, 1", log); // typed point instead of a face pick
+  CHECK(st.active == AppCommandState::Kind::None);
+
   const int di = CadBlockFindDef(st.blockDefs, "FIT");
   REQUIRE(di >= 0);
   REQUIRE(st.blockDefs[static_cast<size_t>(di)].connections.size() == 1);
@@ -694,8 +704,8 @@ TEST_CASE("BEDIT BCONNECT typed coords persist on the definition", "[issue475][b
   CHECK(st.blockDefs[static_cast<size_t>(di)].connections[0].nz == Catch::Approx(1.f));
 }
 
-TEST_CASE("BEDIT BCONNECT typed coords accept role, engagement, and compatibility tag",
-          "[issue486][block][connector][bedit]") {
+TEST_CASE("BEDIT BCONNECT wizard: role, engagement, and compatibility tag prompts are honored",
+          "[issue486][issue496][block][connector][bedit]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "FIT";
@@ -704,8 +714,15 @@ TEST_CASE("BEDIT BCONNECT typed coords accept role, engagement, and compatibilit
   std::vector<std::string> log;
   std::istringstream beditArgs("FIT");
   REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
-  std::istringstream bconnArgs("P1, 4in, 0, 0, 0, 0, 0, 1, branch, 0.25, class150");
+
+  std::istringstream bconnArgs("P1");
   REQUIRE(CadBlocksTryIdleCommand(st, "bconnect", bconnArgs, log));
+  BConnectSubmitLine(st, "4in", log);
+  BConnectSubmitLine(st, "branch", log);
+  BConnectSubmitLine(st, "0.25", log);
+  BConnectSubmitLine(st, "class150", log);
+  BConnectSubmitLine(st, "0, 0, 0, 0, 0, 1", log);
+
   const int di = CadBlockFindDef(st.blockDefs, "FIT");
   REQUIRE(di >= 0);
   const CadBlockConnection& c = st.blockDefs[static_cast<size_t>(di)].connections[0];
@@ -714,8 +731,8 @@ TEST_CASE("BEDIT BCONNECT typed coords accept role, engagement, and compatibilit
   CHECK(c.compatibilityTag == "class150");
 }
 
-TEST_CASE("BCONNECTEDIT updates role, engagement, and compatibility tag on an existing port",
-          "[issue486][block][connector][bedit]") {
+TEST_CASE("BCONNECTEDIT wizard updates role, engagement, and compatibility tag on an existing port",
+          "[issue486][issue496][block][connector][bedit]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "FIT";
@@ -728,14 +745,45 @@ TEST_CASE("BCONNECTEDIT updates role, engagement, and compatibility tag on an ex
   std::vector<std::string> log;
   std::istringstream beditArgs("FIT");
   REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
-  std::istringstream editArgs("P1, 4in, outlet, 0.5, ansi150");
+
+  std::istringstream editArgs("P1");
   REQUIRE(CadBlocksTryIdleCommand(st, "bconnectedit", editArgs, log));
+  REQUIRE(st.active == AppCommandState::Kind::BConnectEdit);
+  BConnectEditSubmitLine(st, "n", log);        // don't remove
+  BConnectEditSubmitLine(st, "4in", log);      // nominal size unchanged
+  BConnectEditSubmitLine(st, "outlet", log);   // role
+  BConnectEditSubmitLine(st, "0.5", log);      // engagement
+  BConnectEditSubmitLine(st, "ansi150", log);  // compat tag
+  CHECK(st.active == AppCommandState::Kind::None);
+
   const int di = CadBlockFindDef(st.blockDefs, "FIT");
   REQUIRE(di >= 0);
   const CadBlockConnection& out = st.blockDefs[static_cast<size_t>(di)].connections[0];
   CHECK(out.role == CadBlockConnectionRole::Outlet);
   CHECK(out.engagementLength == Catch::Approx(0.5f));
   CHECK(out.compatibilityTag == "ansi150");
+}
+
+TEST_CASE("BCONNECTEDIT wizard removes a port when the user confirms",
+          "[issue486][issue496][block][connector][bedit]") {
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "FIT";
+  CadBlockConnection c;
+  c.name = "P1";
+  def.connections.push_back(c);
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream beditArgs("FIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  std::istringstream editArgs("P1");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bconnectedit", editArgs, log));
+  BConnectEditSubmitLine(st, "y", log);
+
+  const int di = CadBlockFindDef(st.blockDefs, "FIT");
+  REQUIRE(di >= 0);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].connections.empty());
 }
 
 TEST_CASE("BCONNECTMODE adds two modes with a single default on a connection point",
@@ -829,7 +877,8 @@ TEST_CASE("BCONNECTMODE cancels cleanly on an unknown connection or ESC", "[issu
   CHECK(st.active == AppCommandState::Kind::None);
 }
 
-TEST_CASE("BLOCKFITTING tags a block definition with piping metadata", "[issue486][block][fitting][bedit]") {
+TEST_CASE("BLOCKFITTING wizard tags a block definition with piping metadata",
+          "[issue486][issue496][block][fitting][bedit]") {
   AppCommandState st;
   CadBlockDefinition def;
   def.name = "ELBOW90-4IN";
@@ -838,8 +887,15 @@ TEST_CASE("BLOCKFITTING tags a block definition with piping metadata", "[issue48
   std::vector<std::string> log;
   std::istringstream beditArgs("ELBOW90-4IN");
   REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
-  std::istringstream fittingArgs("elbow-90, 4in, CS150, ACME-E90-4");
+  std::istringstream fittingArgs("");
   REQUIRE(CadBlocksTryIdleCommand(st, "blockfitting", fittingArgs, log));
+  REQUIRE(st.active == AppCommandState::Kind::BlockFitting);
+  BlockFittingSubmitLine(st, "elbow-90", log);
+  BlockFittingSubmitLine(st, "4in", log);
+  BlockFittingSubmitLine(st, "CS150", log);
+  BlockFittingSubmitLine(st, "ACME-E90-4", log);
+  CHECK(st.active == AppCommandState::Kind::None);
+
   const int di = CadBlockFindDef(st.blockDefs, "ELBOW90-4IN");
   REQUIRE(di >= 0);
   const CadBlockDefinition& out = st.blockDefs[static_cast<size_t>(di)];

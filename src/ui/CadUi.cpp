@@ -5249,19 +5249,34 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }});
     }
     {
-      // Smart connection modes (issue #496): starts the prompted BCONNECTMODE wizard, which asks
-      // for the connection point, then walks one field at a time rather than a comma-separated line.
+      // Piping/connection authoring (issue #496): each button starts a prompted wizard — one value
+      // asked at a time, rather than a comma-separated command line.
       ribbonlayout::RibbonSectionSpec spec;
       spec.groups = {columnOfButtons({
+          rowBtn("##BeConnAdd", (int)RibbonIconKind::BeParameters, nullptr, "Add Connection", false,
+                 "Add Connection — BCONNECT. Prompts for a name, size, role, engagement and "
+                 "compatibility tag, then pick a flat face (or type coordinates).",
+                 false),
+          rowBtn("##BeConnEdit", (int)RibbonIconKind::BeParameters, nullptr, "Edit Connection", false,
+                 "Edit Connection — BCONNECTEDIT. Pick an existing connection point, remove it or "
+                 "walk through its fields.",
+                 false),
           rowBtn("##BeConnMode", (int)RibbonIconKind::BeParameters, nullptr, "Connection Modes", false,
                  "Connection Modes — BCONNECTMODE. Add/edit/remove a snap-target-specific mode on a "
                  "connection point, and set its default.",
+                 false),
+          rowBtn("##BeFitting", (int)RibbonIconKind::BeParameters, nullptr, "Fitting Properties", false,
+                 "Fitting Properties — BLOCKFITTING. Tag this block as a piping catalog part: part "
+                 "type, nominal size, pressure class, part number.",
                  false),
       })};
       const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
       ribbonSpecs.push_back({w, w, [&, spec]() {
         drawRibbonSectionSpec("RibbonSecBeConn", "Piping", spec, [&](const std::string& id) {
-          if (id == "##BeConnMode") beditSubmit("BCONNECTMODE");
+          if (id == "##BeConnAdd") beditSubmit("BCONNECT");
+          else if (id == "##BeConnEdit") beditSubmit("BCONNECTEDIT");
+          else if (id == "##BeConnMode") beditSubmit("BCONNECTMODE");
+          else if (id == "##BeFitting") beditSubmit("BLOCKFITTING");
         });
       }});
     }

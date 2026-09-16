@@ -34600,6 +34600,12 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   else if (st.active == AppCommandState::Kind::BConnectMode)
     log.push_back("BCONNECTMODE canceled.");
+  else if (st.active == AppCommandState::Kind::BConnect)
+    log.push_back("BCONNECT canceled.");
+  else if (st.active == AppCommandState::Kind::BConnectEdit)
+    log.push_back("BCONNECTEDIT canceled.");
+  else if (st.active == AppCommandState::Kind::BlockFitting)
+    log.push_back("BLOCKFITTING canceled.");
   else if (st.active == AppCommandState::Kind::Align) {
     st.alignControlPts.clear();
     st.alignSelectionSnapshot.clear();
@@ -36528,6 +36534,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
   if (st.active == K::BConnectMode) {
     BConnectModeSubmitLine(st, line, log);
+    return;
+  }
+
+  if (st.active == K::BConnect) {
+    BConnectSubmitLine(st, line, log);
+    return;
+  }
+
+  if (st.active == K::BConnectEdit) {
+    BConnectEditSubmitLine(st, line, log);
+    return;
+  }
+
+  if (st.active == K::BlockFitting) {
+    BlockFittingSubmitLine(st, line, log);
     return;
   }
 
