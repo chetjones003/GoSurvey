@@ -38,6 +38,7 @@ EXPECT SOLIDKIND 0 Cylinder
 EXPECT SOLIDKIND 1 Cylinder
 EXPECT SOLIDPROPS 1 141371.6694115545 15079.644737231007 4 6 4
 
+
 # SECTION across the axis at z = 0: before #515 the extrusion was refused with "flat faces only".
 CMD SELECT
 ESC
@@ -92,6 +93,9 @@ CLICK 0 10
 CMD 360
 EXPECT SOLIDS 1
 EXPECT SOLIDKIND 0 Cylinder
+# The creation message names what the solid is, as SOLIDLIST does (code review on #515). This is the
+# only solid in the drawing so far, so the line can only be REVOLVE's.
+EXPECT LOG "Cylinder created — volume 502.6548"
 
 # Two coaxial circles, r 6 at z -5 and r 3 at z 5: the frustum CONE 300,0,-5 6 3 10 builds.
 CMD ELEV
@@ -118,6 +122,8 @@ EXPECT SELECTED 2
 CMD LOFT
 EXPECT SOLIDS 2
 EXPECT SOLIDKIND 1 Cone
+# Before the CONE primitive below exists, so this line can only be LOFT's.
+EXPECT LOG "Cone created — volume 659.7345"
 CMD CONE 500,0,-5 6 3 10
 EXPECT SOLIDKIND 2 Cone
 # The same volume and topology as the primitive — built as one, not approximated by a ribbon.

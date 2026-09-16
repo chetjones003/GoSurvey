@@ -2869,7 +2869,9 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   runs only after the operation has built and validated its own result, so every refusal (e) and
   the operation already make is unchanged, and a profile that merely resembles one of these shapes
   keeps `PrimitiveKind::None`. Tolerances are the operations' own (`planeEps`, `axisEps`: 1e-6 of
-  model scale).
+  model scale) — except equal radii, which are judged against the RADIUS (1e-6 of it), because a
+  height-scaled tolerance called a real taper of 0.0009 over 1000 ft a cylinder (code review on #515,
+  corrected 2026-09-16). A profile's arcs must also carry each vertex to the next.
 
   **This refines (e) rather than contradicting it.** (e) said extrude and revolve *may* record a
   recipe; this is the first increment that does, and only where the recipe is a true description.
@@ -3165,10 +3167,15 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   loft would describe an analytic cone while its stored faces were NURBS, so the loft is instead
   **built** by `MakeCylinder` / `MakeCone` — analytic faces and the primitive's recipe — when it has
   exactly two profiles, both one full circle, on parallel planes, with the second centre on the
-  first's normal. It runs after the ordinary loft has built and validated, so every refusal stands;
-  circles off a shared axis, and every loft of three or more profiles, keep the freeform ribbon and
-  no recipe. Volume, area and topology (4 vertices, 6 edges, 4 faces) are those the ribbon already
-  produced, now in closed form. The sibling case for flat faces — a loft between similar parallel
+  first's normal, **and no twist**: the loft pairs vertex j with vertex j, so every such pair must lie
+  in one plane through the axis on the same side of it. Two circles out of step (a top circle turned
+  90 degrees, or one facing down) loft to a pinched band, not a cylinder, and keep the ribbon. The
+  axis and twist tests are relative to the model's size, because circle normals are stored in float
+  and a fixed 1e-9 refused every pair drawn in a tilted UCS. (The twist and tolerance rules were added
+  after the code review on #515, 2026-09-16.) It runs after the ordinary loft has built and validated,
+  so every refusal stands; circles off a shared axis, out of step with each other, and every loft of
+  three or more profiles keep the freeform ribbon and no recipe. Volume, area and topology (4
+  vertices, 6 edges, 4 faces) are those the ribbon already produced, now in closed form. The sibling case for flat faces — a loft between similar parallel
   polygons, whose sides are planar but stored as NURBS — is GitHub #519, not this amendment.
 
 ### ADR-050 — POLYSOLID: offset-and-mitre in the kernel   (2026-09-03, accepted)

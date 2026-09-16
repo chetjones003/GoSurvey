@@ -103,3 +103,34 @@ One defect found and fixed: `RevolveProfileIsConical` scaled its tolerance by `|
 the **picked axis point** — so an axis clicked far along the axis loosened the test (1 ft at 1e6).
 It now scales by the profile's own extent, as `Revolve`'s `axisEps` does, with a case that picks the
 axis point 500,000 ft away. Full suite re-run: 1513/1520, the same 7 `beta` failures.
+
+## Code review on #523, after merge — follow-up (2026-09-16)
+
+`/code-review` (xhigh) returned eleven findings on the merged change. The first three were
+**confirmed by running the kernel**, and the user asked for findings 1–7 to be fixed in a follow-up PR.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | A two-circle loft whose vertices are out of step TWISTS (volume 209.44 when the top circle faces down; 418.88 at 90°), but was replaced by a straight cylinder (628.32) | The rebuild now requires every rail j to lie in a plane through the axis on the same side: no twist, no rebuild |
+| 2 | Equal radii were judged at 1e-6 of max(height, radius), so r 0.5 → 0.5009 over 1000 was a "cylinder", and its slices were rebuilt 1.4 cubic units too big | Judged at 1e-6 of the radius |
+| 3 | The loft's coaxial test used a fixed 1e-9 on unit vectors; circle normals are float, so a pair in a tilted UCS measured 2.67e-8 and was never recognised | Axis and twist offsets measured in model units against 1e-6 of the model size |
+| 4 | `ProfileIsFullCircle` never checked that each arc's sweep carries vertex i to i+1 | Checked (Rodrigues about the plane normal). Measured: `Extrude` and `Loft` already refuse such a profile (`Problem::NotClosed`), so this is defence in depth, and the test pins the upstream refusal |
+| 5 | "A lofted-prism volume does not move when tessellation quality changes" still used two coaxial circles, so it tested analytic faces, not NURBS | Three circles, with a NURBS assertion; `req315-loft` gains a three-circle NURBS loft through the command and its `.gs` round-trip |
+| 6 | EXTRUDE / LOFT / REVOLVE / SWEEP / PRESSPULL logged "Solid created" while SOLIDLIST said `Cylinder` | All seven sites log the stored solid's kind |
+| 7 | The look-alike "lens" section only asserted inside `if (Extrude(...))` — and Extrude refuses the lens, so it asserted nothing | The refusal is asserted, and a stadium profile Extrude does accept now carries the "no recipe" check |
+
+**Proven to bite:** the five new kernel sections fail against `beta`'s unfixed `brep.cpp` (5
+assertions) and pass with the fix; the new creation-message check fails against `beta`'s
+`CadCommands.cpp`.
+
+### Debt recorded from the same review (not fixed)
+
+- **DEBT-3** (finding 8). `.gs` loading treats the recipe frame as cosmetic and ignores a failed frame
+  parse, but `Slice` rebuilds pieces from it. A damaged frame on a Cylinder/Cone would slice at the
+  origin. Pre-existing for primitives; this change put recipes on more solids.
+- **DEBT-4** (finding 9). Recognition happens at build time only, so drawings saved before #515 keep
+  their extruded / revolved / lofted cylinders unrecognised until rebuilt, as do Boolean results that
+  are plain cylinders and straight sweeps (DEBT-1 above). `ClassifyCylinder` already recognises a
+  cylinder from its faces and could back a cut-time fallback.
+- **DEBT-5** (finding 10). A two-circle loft still builds and validates the NURBS solid before
+  replacing it, and the LOFT preview pays that every frame.

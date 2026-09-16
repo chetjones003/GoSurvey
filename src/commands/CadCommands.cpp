@@ -29493,7 +29493,7 @@ void CadExtrudeSelection(AppCommandState& st, const std::string& rest, std::vect
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
     st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
     st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
-    log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+    log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   }
   BumpCadGpuCache(st);
   st.selection.clear();
@@ -29641,7 +29641,7 @@ static void CommitExtrude(AppCommandState& st, double height, std::vector<std::s
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
     st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
     st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
-    log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+    log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   }
   BumpCadGpuCache(st);
   st.selection.clear();
@@ -29751,7 +29751,7 @@ static void CommitLoft(AppCommandState& st, std::vector<std::string>& log) {
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
   st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
-  log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+  log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   if (skipped > 0)
     log.push_back("LOFT — " + std::to_string(skipped) +
                   " selected object(s) are not profiles and were ignored.");
@@ -30065,7 +30065,7 @@ static void CommitSweep(AppCommandState& st, std::vector<std::string>& log) {
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
   st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
-  log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+  log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   BumpCadGpuCache(st);
   st.selection.clear();
   CancelSweepCommand(st);
@@ -30280,7 +30280,7 @@ static void CommitRevolve(AppCommandState& st, double angleDeg, std::vector<std:
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
     st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
     st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
-    log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+    log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   }
   BumpCadGpuCache(st);
   st.selection.clear();
@@ -30732,7 +30732,7 @@ void CommitBoolean(AppCommandState& st, CadBooleanOp op, const std::vector<int>&
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
     st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
     st.cadSolidAttrs.push_back(attrs);
-    log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+    log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   }
   BumpCadGpuCache(st);
   st.selection.clear();
@@ -31037,7 +31037,7 @@ bool CadCommitPressPullTarget(AppCommandState& st, const PressPullTarget& t, dou
   const brep::MassProperties mp = brep::ComputeMassProperties(built);
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(built)));
   st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
-  log.push_back(SolidCreatedMessage(brep::PrimitiveKind::None, mp));
+  log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   BumpCadGpuCache(st);
   return true;
 }

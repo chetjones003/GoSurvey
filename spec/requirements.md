@@ -7111,6 +7111,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   `SECTION` cut it exactly as they cut `CYLINDER` / `CONE`. Same volume, area and topology as before.
   Circles off a shared axis and lofts of three or more profiles are unchanged. Visible: the solid
   lists as `Cylinder` / `Cone`, not `Solid`.
+  2026-09-16 (later, code review on #515) — **a twisted pair is not a cylinder.** The loft pairs
+  vertex j of one circle with vertex j of the other; circles out of step (one turned about the axis,
+  or facing down) loft to a pinched band, and before this correction were replaced by a straight
+  cylinder of a different volume. They now keep the freeform result. The shared-axis test is also
+  relative to the model's size, so coaxial circles drawn in a tilted UCS are recognised, and equal
+  radii are judged against the radius, so a long slight taper is a cone. The creation message names
+  the kind (`Cylinder created`), matching `SOLIDLIST`.
 
 ### REQ-316 — Polylines have arc segments; POLYLINE draws them and JOIN builds them
 
