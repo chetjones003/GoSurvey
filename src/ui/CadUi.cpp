@@ -12353,6 +12353,37 @@ void DrawPerfHud(const AppCommandState& cmd) {
   ImGui::End();
 }
 
+/// The whole SOLID a viewport hover or click names (REQ-313 / REQ-341), in the one place all three
+/// of those paths ask — so what highlights is what selects, down to the tolerance (code review on
+/// #478, findings 4, 10 and 15). Solids sit below linework and survey points and above filled
+/// regions: a line or a point lying over a solid is the more specific thing to mean, and a fill is a
+/// decoration on the plane beneath it. \p surveyPointUnderCursor is the caller's own
+/// `PickSurveyPointAtCursor` answer, computed with its view metrics.
+///
+/// Which part of a solid answers follows the visual style, and the section clip, inside
+/// `PickClosestSolidEntity` — see there.
+static bool PickSolidUnderCursor(const AppCommandState& cmd, bool modelSpace, const ray3d::Ray& ray,
+                                 bool surveyPointUnderCursor, SelectedEntity* out) {
+  if (!modelSpace || cmd.cadSolids.empty() || surveyPointUnderCursor)
+    return false;
+  return PickClosestSolidEntity(cmd, ray, CadOffsetEntityPickTolWorld(cmd), out);
+}
+
+/// A plain click adds \p hit to the selection, Shift+click removes it — the rule every other
+/// entity click in `DrawDrawingViewport` follows.
+static void ClickToggleSolid(AppCommandState& cmd, const SelectedEntity& hit, bool keyShift) {
+  auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+    return x.type == SelectedEntity::Type::Solid && x.index == hit.index;
+  });
+  if (keyShift) {
+    if (it != cmd.selection.end())
+      cmd.selection.erase(it);
+  } else if (it == cmd.selection.end()) {
+    cmd.selection.push_back(hit);
+  }
+  EnsureAttrCounts(cmd);
+}
+
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
                          char* cmdBuf, int cmdBufSize, double* panX, double* panY, float* zoom, double* outCursorX,
                          double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
@@ -13989,6 +14020,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const bool solidPickable = modelSpace && !cmd.cadSolids.empty();
           const ray3d::Ray solidRay =
               solidPickable ? CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y) : ray3d::Ray{};
+          const bool surveyUnderHover =
+              solidPickable && !cmd.surveyPoints.empty() &&
+              PickSurveyPointAtCursor(cmd, rawX, rawY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
           std::vector<CadPickCandidate> hoverCandidates;
           if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2, cursorRayPtr,
                                    &hoverCandidates)) {
@@ -14001,10 +14035,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
               cmd.viewportPickCandidates.clear();
               cmd.viewportPickAmbiguous = false;
             }
-          } else if (solidPickable && PickClosestSolidEntity(cmd, solidRay, hoverTol, &solidHover)) {
-            // Solids sit below linework and above filled regions. Below linework because a line
-            // lying over a solid is the more specific thing to mean by a click; above fills because
-            // a solid is real geometry and a fill is a decoration on the plane beneath it.
+          } else if (solidPickable &&
+                     PickSolidUnderCursor(cmd, modelSpace, solidRay, surveyUnderHover, &solidHover)) {
             cmd.viewportHoverEntityValid = true;
             cmd.viewportHoverEntity = solidHover;
             // The disambiguation list belongs to the linework pick that produced it; a solid
@@ -14678,24 +14710,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
 
-      // A whole SOLID, below linework and above fills — the same order the hover pick uses, because
-      // what highlights has to be what selects. Before this, `ComputeSelectionFromRect` was the only
-      // thing that ever put a solid in a selection, so a solid could be chosen by dragging a
+      // A whole SOLID — see `PickSolidUnderCursor`. Before this, `ComputeSelectionFromRect` was the
+      // only thing that ever put a solid in a selection, so a solid could be chosen by dragging a
       // rectangle around it and by no other gesture, in this step or any other.
       if (!handled && modelSpace && !cmd.cadSolids.empty()) {
         SelectedEntity solidHit{};
-        const ray3d::Ray solidRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
-        if (PickClosestSolidEntity(cmd, solidRay, CadOffsetEntityPickTolWorld(cmd), &solidHit)) {
-          auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
-            return x.type == SelectedEntity::Type::Solid && x.index == solidHit.index;
-          });
-          if (keyShift) {
-            if (it != cmd.selection.end())
-              cmd.selection.erase(it);
-          } else if (it == cmd.selection.end()) {
-            cmd.selection.push_back(solidHit);
-          }
-          EnsureAttrCounts(cmd);
+        const bool surveyUnder =
+            !cmd.surveyPoints.empty() &&
+            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
+        if (PickSolidUnderCursor(cmd, modelSpace, pickCam.ScreenRay(mx, my, avail.x, avail.y), surveyUnder,
+                                 &solidHit)) {
+          ClickToggleSolid(cmd, solidHit, keyShift);
           handled = true;
         }
       }
@@ -15277,26 +15302,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
 
-      // A whole SOLID, in the same slot it takes in the hover chain and in SelectionAccumulate:
-      // below linework, above fills. Idle click-to-select never reached a solid before this, which
-      // is half of why "the section command will not let me select the object" was reported — the
-      // gesture did not exist anywhere, not only inside SECTION.
+      // A whole SOLID — see `PickSolidUnderCursor`. Idle click-to-select never reached a solid before
+      // this, which is half of why "the section command will not let me select the object" was
+      // reported — the gesture did not exist anywhere, not only inside SECTION.
       if (!handled && modelSpace && !cmd.cadSolids.empty()) {
         SelectedEntity solidHit{};
-        const ray3d::Ray solidRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
-        if (PickClosestSolidEntity(cmd, solidRay, CadOffsetEntityPickTolWorld(cmd), &solidHit)) {
+        const bool surveyUnder =
+            !cmd.surveyPoints.empty() &&
+            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
+        if (PickSolidUnderCursor(cmd, modelSpace, pickCam.ScreenRay(mx, my, avail.x, avail.y), surveyUnder,
+                                 &solidHit)) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
-          auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
-            return x.type == SelectedEntity::Type::Solid && x.index == solidHit.index;
-          });
-          if (keyShift) {
-            if (it != cmd.selection.end())
-              cmd.selection.erase(it);
-          } else if (it == cmd.selection.end()) {
-            cmd.selection.push_back(solidHit);
-          }
-          EnsureAttrCounts(cmd);
+          ClickToggleSolid(cmd, solidHit, keyShift);
           cmd.selBoxWaitingSecond = false;
           handled = true;
         }

@@ -1165,6 +1165,10 @@ if(GOSURVEY_BUILD_TESTS)
     # reference, mutual exclusion and cross-solid depth order. Needs gosurvey_domain for
     # SubmitSubObjectPick / ExpireSubObjectSelection, like ViewportUcsTests above.
     tests/SubObjectSelectionTests.cpp
+    # REQ-341 (code review on #478): the section clip's command-layer half — per-tab state, picks
+    # and snaps that honour it, SECTION's selection guard, and the indicator's sizing. Needs
+    # gosurvey_domain, like SubObjectSelectionTests above.
+    tests/SectionClipStateTests.cpp
     # REQ-060 (issue #148 Phase 5 slice 4b) — the TRANSLATE gizmo: the skew-line solve, the anchor,
     # and the two negatives (a click that misses every handle, an empty selection). Needs
     # gosurvey_domain for SubmitGizmoClick / ApplyTranslationToSelection.

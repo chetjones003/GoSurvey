@@ -1558,3 +1558,63 @@ TEST_CASE("A named feature beats nearest-on-face, which is a fallback and not a 
     CHECK(CadSnap::SnapClass(hit.kind) == 1);  // a named point, not nearest-anywhere
   }
 }
+
+TEST_CASE("A centre accepted only because the cursor is over its shape does not outrank a face",
+          "[CadSnap][req313][snapclass]") {
+  // Code review on #478, finding 2. `SnapClass` ranks a named feature ahead of Face/Edge/Surface —
+  // but several named kinds are ACCEPTED on a "cursor is anywhere over the shape" heuristic: a
+  // closed polyline's GeometricCenter anywhere inside it, a circle's Center anywhere inside it,
+  // CenterOfFace anywhere on the face. Given class priority, a centroid 140 ft away beat the Face
+  // point under the cursor. A feature only earns its class when its true point is in the aperture.
+  AppCommandState st;  // shipped defaults: GeometricCenter, Surface and NearestFace are all ON
+  st.objectSnapEnabled = true;
+  REQUIRE(st.objectSnapGeometricCenter);
+  REQUIRE(st.objectSnap3dNearestFace);
+
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 14.0, 12.0, &box, &why));
+  InstallSolid(st, std::move(box));
+
+  // A boundary polyline enclosing the box, as a site boundary around a building pad would. Its
+  // centroid is (100, 100, 0) — about 140 ft from the face being aimed at.
+  st.userPolylineVerts = {-300.f, -300.f, 0.f, 500.f, -300.f, 0.f, 500.f, 500.f, 0.f, -300.f, 500.f, 0.f};
+  st.userPolylineOffsets = {0, 4};
+  st.userPolylineClosed = {1};
+  st.userPolylineAttrs.emplace_back();
+
+  constexpr float kW = 1280.f;
+  constexpr float kH = 720.f;
+  Camera cam = Camera::Plan(0.0, 0.0, 30.f);
+  cam.azimuthDeg = 135.f;
+  cam.elevationDeg = 22.f;
+  const auto snapAt = [&](double x, double y, double z) {
+    float px = 0.f, py = 0.f;
+    cam.WorldToScreen(x, y, z, kW, kH, &px, &py);
+    const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+    const double t = (0.0 - ray.origin.z) / ray.dir.z;
+    return CadSnap::FindBest(ray.origin.x + t * ray.dir.x, ray.origin.y + t * ray.dir.y, st,
+                             /*commandActive=*/true, /*tolWorld=*/1.f, {}, &ray);
+  };
+
+  SECTION("inside a closed polyline, the face under the cursor wins over its far centroid") {
+    const CadSnap::Hit hit = snapAt(2.0, 2.0, 12.0);  // on the TOP face, the one this camera sees
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Face);
+    CHECK(hit.z == Approx(12.f).margin(1e-3));
+  }
+
+  SECTION("with Center of face on, Face is still reachable away from the centroid") {
+    st.objectSnap3dCenterFace = true;
+    const CadSnap::Hit hit = snapAt(6.0, 3.0, 12.0);  // ~6.7 ft from the top face's centroid (0,0,12)
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Face);
+  }
+
+  SECTION("...and Center of face still wins when the cursor is on the centroid") {
+    st.objectSnap3dCenterFace = true;
+    const CadSnap::Hit hit = snapAt(0.0, 0.0, 12.0);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::CenterOfFace);
+  }
+}

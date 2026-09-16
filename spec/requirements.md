@@ -7517,6 +7517,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   increment 2 *was about* while every one of the eleven acceptance bullets tested the query. The two
   behavioural choices it turned on — `Ctrl`+click for entry, and a depth-tested face fill against
   never-occluded edge and vertex linework — were put to the user and are recorded as D-2026-09-04-a.
+  2026-09-16 — item 8's plain click on a WHOLE solid (added by TASK-249 §13, which had first made a
+  solid clickable at all) **follows the visual style, as AutoCAD's does** (D-2026-09-16-a): in 2D
+  Wireframe only an edge or a vertex names the solid, so a click inside its outline starts a
+  selection box and an edge seen through it can be clicked; in Hidden and Shaded a visible face
+  names it too. A survey point under the cursor wins over the solid, and hover and click share one
+  tolerance. The `Ctrl`+click sub-object pick is unchanged.
 
 ### REQ-319 — Push/pull a solid's face: the first operation that EDITS a solid
 
@@ -8614,6 +8620,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   saved view, this is an inspection mode: opening a file to find half of it invisible, with the
   reason three menus away, is the failure that choice avoids.
 
+  **It belongs to the drawing TAB it was set in** (D-2026-09-16-a). Switching to another open
+  drawing does not carry the clip there, and switching back restores it — the same rule the camera
+  and the UCS already follow. A new or opened drawing starts with it off.
+
   **Live means no rebuild.** The plane reaches the GPU as a shader uniform re-read every frame, so
   moving it changes the next frame and invalidates no cached geometry — nothing is re-tessellated
   and nothing is re-uploaded. See ADR-058.
@@ -8626,16 +8636,19 @@ capability that does not exist. They are recorded here rather than quietly dropp
   captures of that case that came back byte-identical. The indicator is drawn **unclipped**, because
   it lies exactly on the clip plane and a clipped copy would cut itself in half.
 
-  Sized from the solids' combined bounds; a drawing with no solids still gets a plane, sized around
-  the UCS origin, so turning the clip on always shows something — an indicator that appeared only
-  once a user happened to own a solid would be missing exactly when they were working out what the
-  command does.
+  Sized from the **drawing's extents as ZOOM EXTENTS measures them** — every kind of geometry the
+  clip cuts, not only solids — with the solids' vertical range (D-2026-09-16-a). An empty drawing
+  still gets a plane, centred on the **current view**, so turning the clip on always shows something.
+  The rule this replaces sized from solids alone and fell back to the UCS origin, which in a
+  state-plane drawing with no solids sat millions of feet off screen.
 
   **Scope boundary — what the clip reaches.** It cuts everything drawn through OpenGL: solids,
   meshes, surfaces, linework, filled regions and PDF underlays. It does **not** cut the grid, which
   is a drafting aid drawn on the UCS plane and therefore coincident with the clip plane at offset 0;
   nor any UI overlay (selection highlights, snap glyphs, grips, gizmos), which are never occluded by
-  policy. It also does **not** cut **dimensions, annotation text or line-pattern hatches**, because
+  policy. **What the clip hides cannot be picked or snapped to** either: a hidden solid, face, edge
+  or vertex neither answers a click nor stands in front of the solid behind it, and a hidden point
+  is not offered as a snap. It also does **not** cut **dimensions, annotation text or line-pattern hatches**, because
   those are drawn by the ImGui overlay through `Camera::WorldToScreen` rather than by the renderer,
   and a GPU clip plane cannot reach them. That last exclusion is a **stated limit of increment 1**,
   decided 2026-09-10, not an accident of pass ordering — see ADR-058 (e) and the Revisions note.
@@ -8663,6 +8676,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - the indicator's corners lie **on** the plane to REQ-101, at survey magnitudes and on a tilted
     frame, and the rectangle covers every corner of the model's bounds;
   - the clip does not survive into a new drawing;
+  - the clip belongs to its drawing tab: another open drawing is unaffected, and switching back
+    restores it;
+  - a TIN surface — its triangles, band fills, cut/fill map, contours and border — is clipped;
+  - a tilted cut **stays put while the view pans within the display cache's drift budget** — the
+    frame drawn from cached geometry matches a frame freshly uploaded at the same pan;
+  - a solid, face, edge or vertex the clip hides is not picked, does not hide a solid behind it,
+    and is not offered as a snap;
+  - the indicator is sized from the drawing's extents, and an empty drawing centres it on the view;
   - the interface is unaffected while the clip is on.
 - Owner-layer: Render (`src/render/SectionClip.hpp`, `ViewportRenderer`), Commands
 - Status: accepted (2026-09-10) — see D-2026-09-10-e.
@@ -8675,6 +8696,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
   clipping those on the CPU at each `WorldToScreen` site or moving them into GL. (3) A one-off
   three-point plane, and persistence to `.gs`, each if asked for. Phase 6 of GitHub #120, filed as
   #149, **acceptance 6 — the last of that issue's eight criteria.**
+
+  **2026-09-16 — amended after the code review on #478 (D-2026-09-16-a, TASK-249 §15).** Five
+  changes, each closing a finding. (1) **The cut no longer slides as the view pans.** Solids, meshes
+  and cached linework are drawn from buffers uploaded against an OLDER pan point, and the plane was
+  packed against the current one, so a tilted cut sat `n.xy · (cachedAnchor − pan)` off until the
+  cache rebuilt — the exact defect ADR-058 (c) set out to prevent, reached by a route the pure tests
+  could not see. (2) **TIN surfaces are clipped**, as the scope boundary above always said; they are
+  drawn among the overlays and had been switched off with them. (3) **The clip is per tab.**
+  (4) **Picks and snaps honour it.** (5) **The indicator is sized from the drawing**, not from
+  solids with a UCS-origin fallback. The first four were defects against the text as written; the
+  fifth and the per-tab rule were decisions, put to the user and recorded.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -9081,6 +9113,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
   edge midpoint well inside the aperture, so under the new rule the midpoint legitimately wins. Its
   subject is the FLAG, and precedence has its own case; leaving both in play would test precedence
   twice and stop testing the flag.
+
+  **2026-09-16 — a feature earns its class only when its point is IN the aperture**
+  (D-2026-09-16-a, code review on #478). Several named kinds are *accepted* on a "cursor is over the
+  shape" heuristic — a circle's or closed polyline's centre anywhere inside it, a survey point
+  across its marker, `CenterOfFace` anywhere on the face. Ranked by class, those beat the Surface or
+  Face point under the cursor from any distance: inside a boundary polyline over a TIN, the snap
+  jumped to the polyline's centroid, and with Center of face on, `Face` could never win. Now a named
+  kind ranks as a feature only when its true point is within the aperture; accepted by the
+  heuristic alone, it competes on distance, exactly as before `SnapClass` existed. Pinned with the
+  shipped defaults, which is how the reviewer found it.
 
 ### REQ-327 — TRIM resolves through the pick ray and finds true 3D crossings (issue #399)
 
@@ -9853,7 +9895,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-334 | Domain | accepted, increment 1 delivered (GitHub issue #149 acceptance 4, D-2026-09-09-h, ADR-055, TASK-237). The volume **centroid**, the first of #120's mass properties that needed a genuinely new integrand — the first moments of volume, with no closed form previously written for any surface kind. Integrated by 16-point Gauss-Legendre over the **exact analytic** surfaces (never the display mesh), in **world axes** because the integrand `1/2 r_k^2 n_k` is not frame-covariant, about a **solid-local** reference point because otherwise it loses its low bits at survey magnitude. Planar faces go through Green's theorem along the boundary with quadrature per edge, which is what makes one path cover a straight-edged face and an **arc-bounded** cap alike. Reported through its own `centroidValid` flag: a `Nurbs` face, a general trim loop, a face with holes or an `Ellipse`/`Intersection` boundary edge is **refused by name** (increment 2's work) while the volume and surface area stay untouched. Two errors were measured out during development and are now pinned by tests that would otherwise pass: a per-face-frame moment rotated into world is exact for every axis-aligned solid and **3.2 ft wrong on a tilted box**, and a symmetric primitive's centroid comes out right even from a badly wrong integrand, so the wedge, pyramid and frustum carry the load. `BrepTests [req334]` — 8 cases: seven primitives against closed forms, a tilted frame, survey magnitudes (tilted included), translation covariance, a Boolean result against the composite of its parts, the two refusals, and the uncovered-face case that keeps its volume | accepted |
 | REQ-335 | Domain/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 5, D-2026-09-09-i, TASK-238). `SECTION` — the cross-section of the selected solids by the **active UCS plane**, as a closed polyline, leaving the solids alone. `brep::SectionLoop` returns the section as a closed `brep::Path` of lines and arcs — the kernel's existing vocabulary, so no new type and no knowledge of document entities (ADR-048 (a)) — and arcs reach the drawing as **bulges** (REQ-316/ADR-047), so a cylinder's circular section is a circle and not a polygon. **The cut is `Slice`'s, unchanged**: sectioning asks the same question and keeps a different answer, so the accepted set is inherited rather than restated and a refusal carries `Slice`'s own `Problem` — asserted by a test that reads the reason off `Slice` and compares. Non-destructive is structural (const reference in, pieces discarded) and asserted byte-for-byte anyway. Refused by name: an oblique cylinder cut (`Ellipse` boundary), a section with holes, a plane that misses, a degenerate normal. `BrepTests [req335]` — 9 cases incl. the `A/cos θ` oblique-area check that a plan projection would fail, and `headless.req335-section`, which pins the command's one-undo-step behaviour and that a refusal leaves the document unchanged. **Increment 2**: a three-point plane form matching SLICE's, elliptical boundaries, sections with holes | accepted |
 | REQ-336 | UI/IO/Build | planned (D-2026-09-10-d, ADR-056). What's New billboard: `resources/whats-new.md` + vendored md4c + ImGui draw layer; auto-open once per launch from Start unless prefs dismiss version matches; Help → About reopens same window without clearing dismiss; releases-list URL; missing-file fallback; CI presence gate; agent rule + git hook authoring lock | accepted |
-| REQ-341 | Render/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 6 — **the last of that issue's eight criteria**, D-2026-09-10-e, ADR-058, TASK-249). `SECTIONCLIP` — hide the model in front of the **active UCS plane**, offset along its Z, `FLIP` to keep the other half. A **view state**: no geometry, no undo entry, not persisted to `.gs`. **Live means no rebuild** — the plane is a `gl_ClipDistance[0]` uniform re-read every frame, so moving it invalidates no cached geometry; the transcript asserts the display-regeneration counter is unchanged across five plane moves, a flip and an off/on. `uMVP` and every REQ-058 camera path are untouched, which is what keeps plan-view parity intact. **The decision that carries the risk is the anchor rebasing** (ADR-058 (c)): vertices arrive with XY relative to the view anchor and the anchor IS the pan point, so a world-stated plane is **bit-identical to the correct one at the origin**, sits **2,196,000 ft out at easting 2.196e6**, and **moves one foot per foot of pan** — while a horizontal cut is exact in *both*, so neither an origin test nor a level plane can catch it. `SectionClipTests` (9 cases: the UCS plane and its offset, FLIP, a moved-and-turned frame, CPU/shader predicate parity, survey magnitudes on an axis-aligned/oblique/horizontal plane, the origin bit-identity, an anchor sweep, and REQ-101 resolution at 0.002 ft steps on a 2.2e6 constant) **measures where the plane actually lands by bisection** rather than checking that two answers differ — the P3 lesson. **Proven to bite:** removing the anchor term fails 4 of the 9 cases and 13 assertions. Plus `headless.req341-section-clip` (87 steps: every spelling and refusal with the previous state surviving each, UNDO reaching *past* the clip to the previous edit, the solid byte-identical, the no-rebuild sweep, and the clip not surviving a new drawing). Full suite **1451/1451**, up from 1441. **Two limits stated as increments, not gaps:** dimensions, annotation text and line-pattern hatches are ImGui-overlay drawn and **no GPU clip plane can reach them**; and the cut is **uncapped**, so a clipped solid shows its interior — `brep::SectionLoop` (REQ-335) is already the geometry a cap needs. **The GUI check `--devshell-run req341-section-clip-viewport` RAN GREEN** (six viewport captures: the whole box; only the BOTTOM FACE surviving a cut at offset 0, which places the plane exactly where it was asked for; a third and then two thirds of the box at offsets 4 and 8, both open at the top — ADR-058 (f)'s uncapped cut seen directly; the COMPLEMENT slab under FLIP; and `off-again` byte-identical to `off`). **It caught a bug nothing else did: `SECTIONCLIP 0` switched the clip OFF**, because the command had copied `PERSPECTIVE`'s `1`/`0` aliases into a command whose argument is a distance. The numeric aliases are removed and four transcript lines pin `0` and `1` as offsets. It reached the GUI because the transcript's liveness block already typed `SECTIONCLIP 0` and asserted only that nothing was rebuilt — which is trivially true of a command that did nothing. Two harness facts were established getting there and are recorded in TASK-249: the devshell is **compiled out of Release builds** (CMakeLists:148, REQ-161) so it needs `build/debug`, and `DevShell_RequestScreenshot` reads the window's `GL_FRONT` and returns **pure black** on an uncomposited window — six identical black frames that read exactly like "the clip does nothing". `DevShell_RequestViewportCapture` was added, reading the renderer's own framebuffer through `CaptureThumbnailBmp` (REQ-308). **Still correct-by-construction rather than observed:** the unconditional `glDisable(GL_CLIP_DISTANCE0)` at `finish_render` that keeps the clip out of ImGui's draws — the captures hold no UI and the test engine drives items, not pixels | accepted |
+| REQ-341 | Render/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 6 — **the last of that issue's eight criteria**, D-2026-09-10-e, ADR-058, TASK-249). `SECTIONCLIP` — hide the model in front of the **active UCS plane**, offset along its Z, `FLIP` to keep the other half. A **view state**: no geometry, no undo entry, not persisted to `.gs`. **Live means no rebuild** — the plane is a `gl_ClipDistance[0]` uniform re-read every frame, so moving it invalidates no cached geometry; the transcript asserts the display-regeneration counter is unchanged across five plane moves, a flip and an off/on. `uMVP` and every REQ-058 camera path are untouched, which is what keeps plan-view parity intact. **The decision that carries the risk is the anchor rebasing** (ADR-058 (c)): vertices arrive with XY relative to the view anchor and the anchor IS the pan point, so a world-stated plane is **bit-identical to the correct one at the origin**, sits **2,196,000 ft out at easting 2.196e6**, and **moves one foot per foot of pan** — while a horizontal cut is exact in *both*, so neither an origin test nor a level plane can catch it. `SectionClipTests` (9 cases: the UCS plane and its offset, FLIP, a moved-and-turned frame, CPU/shader predicate parity, survey magnitudes on an axis-aligned/oblique/horizontal plane, the origin bit-identity, an anchor sweep, and REQ-101 resolution at 0.002 ft steps on a 2.2e6 constant) **measures where the plane actually lands by bisection** rather than checking that two answers differ — the P3 lesson. **Proven to bite:** removing the anchor term fails 4 of the 9 cases and 13 assertions. Plus `headless.req341-section-clip` (87 steps: every spelling and refusal with the previous state surviving each, UNDO reaching *past* the clip to the previous edit, the solid byte-identical, the no-rebuild sweep, and the clip not surviving a new drawing). Full suite **1451/1451**, up from 1441. **Two limits stated as increments, not gaps:** dimensions, annotation text and line-pattern hatches are ImGui-overlay drawn and **no GPU clip plane can reach them**; and the cut is **uncapped**, so a clipped solid shows its interior — `brep::SectionLoop` (REQ-335) is already the geometry a cap needs. **The GUI check `--devshell-run req341-section-clip-viewport` RAN GREEN** (six viewport captures: the whole box; only the BOTTOM FACE surviving a cut at offset 0, which places the plane exactly where it was asked for; a third and then two thirds of the box at offsets 4 and 8, both open at the top — ADR-058 (f)'s uncapped cut seen directly; the COMPLEMENT slab under FLIP; and `off-again` byte-identical to `off`). **It caught a bug nothing else did: `SECTIONCLIP 0` switched the clip OFF**, because the command had copied `PERSPECTIVE`'s `1`/`0` aliases into a command whose argument is a distance. The numeric aliases are removed and four transcript lines pin `0` and `1` as offsets. It reached the GUI because the transcript's liveness block already typed `SECTIONCLIP 0` and asserted only that nothing was rebuilt — which is trivially true of a command that did nothing. Two harness facts were established getting there and are recorded in TASK-249: the devshell is **compiled out of Release builds** (CMakeLists:148, REQ-161) so it needs `build/debug`, and `DevShell_RequestScreenshot` reads the window's `GL_FRONT` and returns **pure black** on an uncomposited window — six identical black frames that read exactly like "the clip does nothing". `DevShell_RequestViewportCapture` was added, reading the renderer's own framebuffer through `CaptureThumbnailBmp` (REQ-308). **Still correct-by-construction rather than observed:** the unconditional `glDisable(GL_CLIP_DISTANCE0)` at `finish_render` that keeps the clip out of ImGui's draws — the captures hold no UI and the test engine drives items, not pixels. **Amended 2026-09-16 after the code review on #478** (D-2026-09-16-a, TASK-249 §15): the plane is packed against each draw's OWN cached anchor, so a tilted cut no longer slides while the view pans (GUI-measured: a cached frame and a freshly uploaded frame at the same pan differ by 0 px); TIN surfaces clip; the clip is per tab; picks and snaps ignore what it hides; the indicator sizes from the drawing's extents | accepted |
 
 ---
 

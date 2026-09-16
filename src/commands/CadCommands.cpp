@@ -78,6 +78,9 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.viewportRollDeg        = cmd.viewportRollDeg;       // screen roll under a tilted-UCS PLAN (#153)
   doc.viewportProjection     = cmd.viewportProjection;    // projection likewise (REQ-309)
   doc.viewportFovDeg         = cmd.viewportFovDeg;
+  doc.viewportSectionClip       = cmd.viewportSectionClip;  // per tab, never to .gs (REQ-341)
+  doc.viewportSectionClipOffset = cmd.viewportSectionClipOffset;
+  doc.viewportSectionClipFlip   = cmd.viewportSectionClipFlip;
   // The coordinate system is per-drawing (REQ-154). Without this, switching tabs would carry one
   // drawing's UCS into another's — and every coordinate typed afterwards would be read in a frame
   // belonging to a different drawing, with nothing on screen to say so.
@@ -169,6 +172,9 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.viewportRollDeg            = doc.viewportRollDeg;  // #153
   cmd.viewportProjection         = doc.viewportProjection;  // REQ-309
   cmd.viewportFovDeg             = doc.viewportFovDeg;
+  cmd.viewportSectionClip        = doc.viewportSectionClip;  // per tab (REQ-341, D-2026-09-16-a)
+  cmd.viewportSectionClipOffset  = doc.viewportSectionClipOffset;
+  cmd.viewportSectionClipFlip    = doc.viewportSectionClipFlip;
   cmd.viewAnimActive             = false;  // never resume another tab's animation
   cmd.activeUcs                  = doc.activeUcs;  // per-drawing coordinate system (REQ-154)
   cmd.ucsPrevious                = doc.ucsPrevious;
@@ -6409,7 +6415,7 @@ const CmdEntry kRegistry[] = {
     {"presspull", "pp",
      "Move a solid FACE, or turn a closed shape into a solid: PRESSPULL, select a target, then a distance"},
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
-    {"section",     "", "Cross-section of the selected solids by the active UCS plane, as a closed polyline"},
+    {"section",     "", "Cross-section of solids by a plane through three points (or the UCS), as a closed polyline"},
     {"solidcheck", "scheck", "Check every solid (or the selection): closed, manifold, oriented, self-intersecting"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
@@ -20407,6 +20413,34 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   return true;
 }
 
+bool ComputeSectionClipIndicatorBounds(const AppCommandState& st, ray3d::Vec3* outMin, ray3d::Vec3* outMax) {
+  if (!outMin || !outMax)
+    return false;
+  double mnX = 0.0, mxX = 0.0, mnY = 0.0, mxY = 0.0;
+  if (!ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
+    return false;
+  // Z from the solids' analytic bounds — the only kind here with a real vertical extent worth
+  // covering. Everything else is drawn near an elevation, and a flat box still gets a drawable
+  // rectangle (`SectionClipIndicatorQuad` pads a zero span).
+  bool haveZ = false;
+  double mnZ = 0.0, mxZ = 0.0;
+  for (const CadSolidPtr& sp : st.cadSolids) {
+    if (!sp)
+      continue;
+    const brep::Bounds b = brep::ComputeBounds(*sp);
+    if (!b.valid)
+      continue;
+    mnZ = haveZ ? std::min(mnZ, b.mn.z) : b.mn.z;
+    mxZ = haveZ ? std::max(mxZ, b.mx.z) : b.mx.z;
+    haveZ = true;
+  }
+  if (!haveZ)
+    mnZ = mxZ = CadActiveUcsStorage(st).origin.z;
+  *outMin = ray3d::Vec3{mnX, mnY, mnZ};
+  *outMax = ray3d::Vec3{mxX, mxY, mxZ};
+  return true;
+}
+
 namespace {
 
 struct EntityBox {
@@ -28200,9 +28234,14 @@ void ToggleSubObjectSelection(AppCommandState& st, const SelectedSubObject& pick
 
 bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
                               const solidpick::Tolerance& tol, SelectedSubObject* out,
-                              solidpick::Pick* outPick) {
+                              solidpick::Pick* outPick, bool facesPickable) {
   if (!out)
     return false;
+  const SectionClipPlane clip = CadActiveSectionClip(st);
+  const solidpick::KeepHalfSpace keep{clip.nx, clip.ny, clip.nz, clip.c};
+  const solidpick::KeepHalfSpace* keepPtr = clip.active ? &keep : nullptr;
+  static const std::vector<float> kNoTriVerts;
+  static const std::vector<int> kNoTriFaceIds;
   bool any = false;
   double bestT = 0.0;
   SelectedSubObject best{};
@@ -28219,7 +28258,8 @@ bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
     if (ce == st.solidDisplayCache.end() || ce->empty())
       continue;  // never tessellate here — a pick must not cost a tessellation (REQ-318 item 7)
     solidpick::Pick p;
-    if (!solidpick::PickSubObject(*sp, ce->triVerts, ce->triFaceIds, ray, tol, &p))
+    if (!solidpick::PickSubObject(*sp, facesPickable ? ce->triVerts : kNoTriVerts,
+                                  facesPickable ? ce->triFaceIds : kNoTriFaceIds, ray, tol, &p, keepPtr))
       continue;
     // DEBT-1 from TASK-189, closed here. PickSubObject's occlusion rule is per-solid — it cannot
     // know that a nearer solid stands in front of this one — so the cross-solid order is the
@@ -28251,7 +28291,9 @@ bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, fl
   tol.edge = tol.vertex;
   SelectedSubObject sub{};
   solidpick::Pick pick{};
-  if (!PickSubObjectAcrossSolids(st, ray, tol, &sub, &pick))
+  // 2D Wireframe draws no faces, so none is clickable there (D-2026-09-16-a).
+  const bool facesPickable = st.viewportVisualStyle != VisualStyle::Wireframe2D;
+  if (!PickSubObjectAcrossSolids(st, ray, tol, &sub, &pick, facesPickable))
     return false;
   if (sub.solidIndex < 0 || static_cast<std::size_t>(sub.solidIndex) >= st.cadSolids.size())
     return false;
@@ -28885,8 +28927,25 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
 /// original form, REQ-335 increment 1) or three picked points (increment 2). Everything below this
 /// line was already here and is unchanged — only where the plane comes from moved out.
 static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>& solids,
+                                    const std::vector<std::weak_ptr<const brep::Solid>>& owners,
                                     const ray3d::Vec3& planePoint, const ray3d::Vec3& planeNormal,
                                     std::vector<std::string>& log) {
+  // The indices were resolved at the SELECTION step, up to three picks ago, and an index alone is
+  // not a durable reference: anything that replaces or reorders `cadSolids` in between — an UNDO,
+  // an erase, a tab switch that swaps the whole store — leaves it naming a DIFFERENT solid, and a
+  // bounds check cannot see that. So each index is held to the solid it named when it was picked,
+  // the way the sub-object selection is (REQ-318), and a changed selection refuses rather than
+  // cutting whatever now sits at that slot (code review on #478, finding 9).
+  for (std::size_t k = 0; k < solids.size(); ++k) {
+    const int idx = solids[k];
+    const bool same = k < owners.size() && idx >= 0 && static_cast<std::size_t>(idx) < st.cadSolids.size() &&
+                      !owners[k].expired() && owners[k].lock() == st.cadSolids[static_cast<std::size_t>(idx)];
+    if (!same) {
+      log.push_back("SECTION — the selected solids changed before the plane was picked. Nothing was "
+                    "sectioned; run SECTION again.");
+      return;
+    }
+  }
 
   // Section everything BEFORE touching the document, so a failure part-way leaves nothing behind
   // (REQ-201) — the same all-or-nothing shape SLICE already uses.
@@ -28897,13 +28956,7 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
   std::vector<Cut> cuts;
   cuts.reserve(solids.size());
   for (const int idx : solids) {
-    // Bounds-checked, and not defensively. These indices were resolved at the SELECTION step, one
-    // to three picks before this runs, and `cadSolids` can be a different vector by now — switching
-    // drawing tabs swaps the store through `RestoreDocumentFromSnapshot` without touching
-    // `st.active`, `st.sectionPhase` or `st.sectionSolidIndices`. An out-of-range `operator[]` is
-    // undefined behaviour that the `!sp` test below cannot catch, because the read has already
-    // happened. `CommitSlice` guards the identical situation the identical way; this function was
-    // split out of the selection path and lost it on the way.
+    // Already held to its owner above; the range test stays so this loop is safe on its own.
     if (idx < 0 || static_cast<std::size_t>(idx) >= st.cadSolids.size())
       continue;
     const CadSolidPtr& sp = st.cadSolids[static_cast<std::size_t>(idx)];
@@ -29017,6 +29070,9 @@ static void SectionEnterPlanePhase(AppCommandState& st, std::vector<std::string>
   st.sectionSolidIndices.erase(
       std::unique(st.sectionSolidIndices.begin(), st.sectionSolidIndices.end()),
       st.sectionSolidIndices.end());
+  st.sectionSolidOwners.clear();
+  for (const int idx : st.sectionSolidIndices)
+    st.sectionSolidOwners.push_back(st.cadSolids[static_cast<std::size_t>(idx)]);
   if (st.sectionSolidIndices.empty()) {
     // Stays in the selection phase rather than ending: the user picked something, it just was not
     // a solid, and throwing them out of the command for that is the behaviour this increment exists
@@ -29032,6 +29088,7 @@ static void SectionEnterPlanePhase(AppCommandState& st, std::vector<std::string>
 void CancelSectionCommand(AppCommandState& st) {
   st.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
   st.sectionSolidIndices.clear();
+  st.sectionSolidOwners.clear();
 }
 
 /// `SECTION` — choose solids, then define the section plane by three points (REQ-335 increment 2).
@@ -29066,7 +29123,8 @@ static void CommitSectionFromPoints(AppCommandState& st, std::vector<std::string
     log.push_back(CadSectionPromptText(st));
     return;
   }
-  CadSectionSolidsByPlane(st, st.sectionSolidIndices, st.sectionP1, ray3d::Normalize(n), log);
+  CadSectionSolidsByPlane(st, st.sectionSolidIndices, st.sectionSolidOwners, st.sectionP1, ray3d::Normalize(n),
+                          log);
   st.active = AppCommandState::Kind::None;
   CancelSectionCommand(st);
 }
@@ -29074,7 +29132,7 @@ static void CommitSectionFromPoints(AppCommandState& st, std::vector<std::string
 /// Section by the ACTIVE UCS plane — increment 1's behaviour, reached now by the `[UCS]` option.
 static void CommitSectionByUcs(AppCommandState& st, std::vector<std::string>& log) {
   const ucs::Ucs frame = CadActiveUcsStorage(st);
-  CadSectionSolidsByPlane(st, st.sectionSolidIndices, frame.origin, frame.zAxis, log);
+  CadSectionSolidsByPlane(st, st.sectionSolidIndices, st.sectionSolidOwners, frame.origin, frame.zAxis, log);
   st.active = AppCommandState::Kind::None;
   CancelSectionCommand(st);
 }
@@ -29108,10 +29166,8 @@ bool HandleSectionTextInput(const std::string& lineIn, AppCommandState& st, std:
   }
 
   ray3d::Vec3 p{};
-  if (!ParseSolidBasePoint(st, line, &p, log, "SECTION")) {
-    log.push_back("SECTION — could not read the point. Use X,Y or X,Y,Z.");
-    return true;
-  }
+  if (!ParseSolidBasePoint(st, line, &p, log, "SECTION"))
+    return true;  // it has already said why, once (code review on #478, finding 11)
   if (st.sectionPhase == SP::WaitP1) {
     st.sectionP1 = p;
     st.sectionPhase = SP::WaitP2;

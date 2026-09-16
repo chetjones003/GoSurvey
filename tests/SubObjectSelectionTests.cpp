@@ -813,6 +813,9 @@ TEST_CASE("A face drag applies to the face GRABBED, not to whatever is selected 
 TEST_CASE("A whole solid is picked by a ray, as a Solid entity", "[subobject][solidentity]") {
   AppCommandState st;
   st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  // Shaded, where a face is drawn and so answers a click (D-2026-09-16-a). 2D Wireframe — where
+  // only edges and vertices do — has its own case below.
+  st.viewportVisualStyle = VisualStyle::Shaded;
   AddBox(st, World(), 20.0, 10.0, 8.0);  // x [-10,10], y [-5,5], z [0,8]
 
   SECTION("a ray onto the top face names the solid") {
@@ -852,6 +855,42 @@ TEST_CASE("A whole solid is picked by a ray, as a Solid entity", "[subobject][so
 
   SECTION("a null out is refused rather than crashed on") {
     CHECK_FALSE(PickClosestSolidEntity(st, RayAt({0, 0, 100}, {0, 0, 8}), 0.5f, nullptr));
+  }
+}
+
+TEST_CASE("In 2D Wireframe only a solid's edges and vertices answer a click, as in AutoCAD",
+          "[subobject][solidentity]") {
+  // Code review on #478, finding 4 (D-2026-09-16-a). A face hit naming the solid in plan view took
+  // every click inside a building pad's footprint — survey points inside it could not be clicked,
+  // and a selection box could not be started there. 2D Wireframe draws no faces, so none answers.
+  AppCommandState st;
+  st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
+  REQUIRE(st.viewportVisualStyle == VisualStyle::Wireframe2D);  // the shipped default
+  AddBox(st, World(), 20.0, 10.0, 8.0);                         // x [-10,10], y [-5,5], z [0,8]
+  SelectedEntity e{};
+
+  SECTION("plan view, inside the outline: nothing, so the click can start a box") {
+    CHECK_FALSE(PickClosestSolidEntity(st, RayAt({2, 1, 100}, {2, 1, 8}), 0.5f, &e));
+  }
+
+  SECTION("an edge and a vertex still name the solid") {
+    REQUIRE(PickClosestSolidEntity(st, RayAt({0, -5, 100}, {0, -5, 8}), 0.5f, &e));  // on an edge, in plan
+    CHECK(e.index == 0);
+    REQUIRE(PickClosestSolidEntity(st, RayAt({-40, -40, 40}, {-10, -5, 8}), 0.5f, &e));  // corner
+    CHECK(e.index == 0);
+  }
+
+  SECTION("an edge seen THROUGH the solid can be clicked, because no face hides it") {
+    // The bottom-front edge (y = -5, z = 0), aimed at from above and behind the top face: in a
+    // shaded view the top face occludes it, in wireframe it is drawn and so is clickable.
+    REQUIRE(PickClosestSolidEntity(st, RayAt({0, 20, 40}, {0, -5, 0}), 0.3f, &e));
+    CHECK(e.index == 0);
+  }
+
+  SECTION("Hidden draws faces, so a face click answers there") {
+    st.viewportVisualStyle = VisualStyle::Hidden;
+    REQUIRE(PickClosestSolidEntity(st, RayAt({2, 1, 100}, {2, 1, 8}), 0.5f, &e));
+    CHECK(e.index == 0);
   }
 }
 

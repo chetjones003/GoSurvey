@@ -4097,3 +4097,24 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   `gl_ClipDistance` is the hardware path built for exactly this. *Let the caller pass an
   anchor-relative plane* — spreads knowledge of a renderer-private precision device to every call
   site, and would have to be recomputed by the caller on every pan.
+- **Amendment (2026-09-16, D-2026-09-16-a, code review on #478).**
+
+  **(g) One anchor per DRAW, not per frame.** (c) rebased the plane onto the view anchor once a
+  frame, and that is right only for geometry uploaded against the view anchor that frame. The
+  linework cache, the solid batches and the meshes are uploaded once and drawn against the anchor
+  *they* were built at until the pan drifts past a budget, with the difference absorbed in their own
+  `uMVP`. Packed against the current pan, a non-horizontal cut on those sat
+  `n.xy · (cachedAnchor − pan)` off, slid as the user panned, and jumped back when the cache rebuilt —
+  (c)'s "moves one foot per foot of pan", reached by a second route. So every draw that sets its own
+  anchored `uMVP` also re-packs `uClipPlane` against that same anchor and restores the view anchor
+  after. `SectionClipTests` could not see this, because it tests the packing on its own; the evidence
+  is the `req341-section-clip-pan` GUI test, where a frame drawn from the cache and a frame freshly
+  uploaded at the same pan differ by 0 pixels. The uniform locations are looked up once at link time.
+
+  **(h) TIN surfaces are model geometry.** They are drawn after the overlay switch, for draw order,
+  and had been left unclipped with the overlays. The surface passes now turn the clip back on.
+
+  **(i) Picks and snaps honour the clip.** `solidpick::PickSubObject` takes an optional kept
+  half-space, and a triangle hit, vertex or edge point on the removed side neither answers nor
+  occludes; `CadSnap::FindBest` drops candidates on the removed side. Both read the plane through
+  `CadActiveSectionClip`, the same derivation the renderer is handed, so the three cannot disagree.

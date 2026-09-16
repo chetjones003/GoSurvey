@@ -629,3 +629,81 @@ found, because the midpoint path was never broken.
 
 Full suite **1475/1475**. This changes snapping for **every** command, not only the one that
 surfaced it — recorded as D-2026-09-11-a for that reason.
+
+## 15. Code review on #478, and the rebase onto `beta` (2026-09-16)
+
+`/code-review` at xhigh returned fifteen findings against `154e688`. Before fixing any of them the
+branch was rebased onto `upstream/beta` (06123ab), which had moved 69 commits and **claimed three of
+this PR's identifiers** in the meantime: REQ-337 (composite Booleans), ADR-057 (shared-boundary weld)
+and TASK-253 (BEDIT round-trip). Renumbered to **REQ-341 / ADR-058 / TASK-257**, done on the old base
+first, where none of the three existed, so a blanket rename could not touch beta's own uses. The
+rebase's union resolution of `spec/project.md` duplicated two decision rows across the earlier
+renumber commits; they were rebuilt from the pre-rebase file.
+
+### What changed, by finding
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | Clip packed against the CURRENT pan; solids, meshes and cached linework are drawn against the anchor they were uploaded at, so a tilted cut slid while panning | `setClipAnchor` per draw, with that draw's own anchor, restored after (ADR-058 (g)) |
+| 2 | Heuristically-accepted named snaps (Center inside a circle, GeometricCenter inside a closed polyline, CenterOfFace anywhere on a face) outranked Face/Surface from any distance | a named kind earns class 1 only when its true point is inside the aperture (REQ-326 amended) |
+| 3 | TIN surfaces drawn after the overlay switch, so never clipped | the surface passes turn the clip back on (ADR-058 (h)) |
+| 4 | A face hit named the solid in plan view, taking survey-point clicks and box starts | **decision**: AutoCAD rule — 2D Wireframe picks edges/vertices only; survey points win (REQ-318 amended) |
+| 5 | Picks and snaps saw clipped geometry | `solidpick::KeepHalfSpace`; `FindBest` drops removed-side candidates (ADR-058 (i)) |
+| 6 | Clip was app-wide, followed the user into other drawings | **decision**: per tab, in `DrawingDocument` |
+| 7 | GUI tests shared one drawing and state | `OpenFreshDrawing` — always a new tab, visual style reset |
+| 8 | Indicator fell back to the UCS origin — millions of feet off screen at state plane | **decision**: sized from ZOOM EXTENTS' extents; empty drawing centres on the view |
+| 9 | SECTION's indices could name a different solid by commit | held to `weak_ptr` owners; a changed selection refuses by name |
+| 10 | Hover and click used different tolerances | one helper, one tolerance |
+| 11 | Bad point at SECTION logged twice | SECTION's own second line removed |
+| 12 | Registry help described the one-shot UCS form | updated |
+| 13 | Bounds and uniform lookups every frame | bounds cached on `cadGpuRevision` + tab; locations looked up at link |
+| 14 | SECTION's state machine copies SLICE's | **not done** — a shared "select solids, then three points" helper touches SLICE, which is not this PR's; recorded as debt |
+| 15 | Three copies of the whole-solid pick | folded into `PickSolidUnderCursor` / `ClickToggleSolid`. Moving solids *into* `PickClosestCadEntity` was not done: it would change every RawEntityPick command's candidate set, which is beyond this PR |
+
+The three decisions were put to the user with a recommendation each, and all three recommendations
+were taken — D-2026-09-16-a.
+
+### Tests, and each one made to fail first
+
+- `SectionClipStateTests.cpp` (new): per-tab save/restore; a clipped solid neither answers nor
+  occludes, in both the whole-solid and sub-object picks; a clipped vertex is not picked; a clipped
+  endpoint is not snapped to; SECTION refuses a replaced solid; a bad point logs once; the indicator
+  bounds at state-plane origin, with and without a solid, and empty.
+- `CadSnapTests`: *a centre accepted only because the cursor is over its shape does not outrank a
+  face*, at shipped defaults, plus Center of face both reachable and not over-reaching.
+- `SubObjectSelectionTests`: the whole-solid cases now run Shaded; a new case pins the 2D Wireframe
+  rule, including an edge seen THROUGH the solid, and that Hidden answers a face.
+- **Negative runs.** With the aperture condition reverted, the snap case fails three assertions;
+  with the pick's kept half-space dropped, the clip pick cases fail four.
+- **`--devshell-run req341-section-clip-pan`** (new GUI test) — the only thing that can see finding 1.
+  A vertical cut, panned 3 ft inside the drift budget and captured; then forced to re-upload at the
+  same pan and captured again. **0 differing pixels** with the fix; with the four per-draw calls
+  reverted to the view anchor, **212**, and the test fails. The clip-off frame differs by 2,089, so
+  the captures are real — and both frames were opened and looked at.
+
+### Two GUI failures that arrived with the rebase, not with these fixes
+
+`req341-section-clip-links` (clicking `ON` does not reach the command) and `req331-chamfer-viewport`
+(no sub-object hover under Ctrl) both fail — and **both fail identically on a Debug build of the
+rebased branch WITHOUT this section's changes**, in a separate worktree. Before the rebase both were
+green. The likely cause is `beta`'s dynamic-input palette (#507), which now follows the cursor over
+the viewport and moves keyboard focus when a prompt appears; not diagnosed further, and raised with
+the user rather than fixed inside this PR.
+
+### `beta` itself is not green
+
+A full `ctest` shows seven failures besides the one this section updated. **All seven fail on
+`upstream/beta` (06123ab) built on its own**: `headless.issue402-offset-ucs`,
+`headless.regression-58-offset-entity-id`, `headless.req068-surface-selection`,
+`headless.req087-feature-line-modify`, `headless.req313-solid-isolines`,
+`headless.req313-solid-primitives`, and *Gizmo/MOVE: a block reference's insertion carries its
+elevation*. None touches this PR's code.
+
+### Debt
+
+- **DEBT-15-1** — SECTION and SLICE share a state machine by copy (finding 14). SLICE also still logs a
+  bad point twice, the same shape as finding 11.
+- **DEBT-15-2** — whole-solid picking lives beside `PickClosestCadEntity`, not inside it (finding 15),
+  so a line behind a solid is still checked before the solid rather than by depth.
+- **DEBT-15-3** — the indicator's extents use ZOOM EXTENTS' walk, which does not skip layers that are
+  off, so a hidden layer's geometry still widens the rectangle.

@@ -187,6 +187,11 @@ private:
 
   unsigned int lineProgram_ = 0;
   unsigned int vcLineProgram_ = 0;
+  /// `uClipPlane` in each clipped program (REQ-341), looked up once at link rather than every frame.
+  int clipLocLine_ = -1;
+  int clipLocVcLine_ = -1;
+  int clipLocShaded_ = -1;
+  int clipLocTex_ = -1;
   /// Diffuse-lit triangles for the Shaded style (REQ-064). Its own VAO because its vertex layout is
   /// position + normal, unlike every other program here.
   unsigned int shadedProgram_ = 0;

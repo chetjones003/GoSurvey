@@ -18,6 +18,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -94,6 +95,66 @@ void SubmitCad(ImGuiTestContext* ctx, const char* line)
   std::snprintf(buf, sizeof(buf), "%s", line);
   ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), *s_cmd, *log);
   ctx->Yield();
+}
+
+/// Open a NEW drawing tab for a test that asserts on document contents, and put the app-wide view
+/// settings a test may have changed back to their defaults.
+///
+/// Always a new tab, never "only when on the Start tab": the GUI tests run in ONE process, so a test
+/// that reused whatever drawing the previous one left saw its BOX, its visual style and its section
+/// clip, and asserted `cadSolids.size() == 1` against two solids (code review on #478, finding 7).
+/// Per-tab state (the camera, the UCS, the section clip) starts fresh with the tab; the visual
+/// style is app-wide, so it is reset here explicitly.
+///
+/// `NewDrawingInTab` is what the start screen's "New Drawing" button and the tab strip's "+" both
+/// call — reached directly for the reason the headless driver reaches `SetActiveSpace` directly.
+bool OpenFreshDrawing(ImGuiTestContext* ctx)
+{
+  assert(ctx != nullptr);
+  assert(s_cmd != nullptr);
+  std::vector<std::string>* log = DevShell_CommandLog();
+  IM_CHECK_NO_RET(log != nullptr);
+  if (!log)
+    return false;
+  NewDrawingInTab(*s_cmd, *log);
+  ctx->Yield(6);
+  SubmitCad(ctx, "VISUALSTYLE 2D");
+  ctx->Yield(2);
+  const bool fresh = s_cmd->activeDrawingIdx != 0 && s_cmd->cadSolids.empty() && !s_cmd->viewportSectionClip &&
+                     s_cmd->viewportVisualStyle == VisualStyle::Wireframe2D;
+  IM_CHECK_NO_RET(fresh);
+  return fresh;
+}
+
+/// Pixels that differ between two viewport captures written by `DevShell_RequestViewportCapture`
+/// (24-bit, 54-byte header), by more than \p tol in any channel. -1 when either file is unreadable or
+/// the two are not the same size — which a caller must treat as a failure, never as "no difference".
+long CountDifferingPixels(const char* pathA, const char* pathB, int tol)
+{
+  const auto slurp = [](const char* p, std::vector<unsigned char>* out) {
+    std::FILE* f = std::fopen(p, "rb");
+    if (!f)
+      return false;
+    unsigned char buf[65536];
+    std::size_t n = 0;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+      out->insert(out->end(), buf, buf + n);
+    std::fclose(f);
+    return out->size() > 54;
+  };
+  std::vector<unsigned char> a, b;
+  if (!slurp(pathA, &a) || !slurp(pathB, &b) || a.size() != b.size())
+    return -1;
+  long diff = 0;
+  for (std::size_t i = 54; i + 2 < a.size(); i += 3) {
+    for (int c = 0; c < 3; ++c) {
+      if (std::abs(static_cast<int>(a[i + c]) - static_cast<int>(b[i + c])) > tol) {
+        ++diff;
+        break;
+      }
+    }
+  }
+  return diff;
 }
 
 bool CadLogHas(std::string_view needle)
@@ -281,12 +342,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   ImGuiTest* sclipRepro = IM_REGISTER_TEST(engine, "gosurvey", "req341-section-clip-repro");
   sclipRepro->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
-    if (s_cmd->activeDrawingIdx == 0) {
-      std::vector<std::string>* log = DevShell_CommandLog();
-      IM_CHECK(log != nullptr);
-      NewDrawingInTab(*s_cmd, *log);
-      ctx->Yield(6);
-    }
+    IM_CHECK(OpenFreshDrawing(ctx));
     SubmitCad(ctx, "SECTIONCLIP OFF");
     SubmitCad(ctx, "BOX 0,0 20 14 12");
     ctx->Yield(4);
@@ -332,12 +388,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   ImGuiTest* sclipLinks = IM_REGISTER_TEST(engine, "gosurvey", "req341-section-clip-links");
   sclipLinks->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
-    if (s_cmd->activeDrawingIdx == 0) {
-      std::vector<std::string>* log = DevShell_CommandLog();
-      IM_CHECK(log != nullptr);
-      NewDrawingInTab(*s_cmd, *log);
-      ctx->Yield(6);
-    }
+    IM_CHECK(OpenFreshDrawing(ctx));
     IM_CHECK(s_cmd->activeDrawingIdx != 0);
 
     // A known starting state, so each click below is a visible transition rather than a no-op.
@@ -393,12 +444,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
 
     // The app opens on the Start tab (REQ-308, index 0), which draws no 3D viewport at all.
-    if (s_cmd->activeDrawingIdx == 0) {
-      std::vector<std::string>* log = DevShell_CommandLog();
-      IM_CHECK(log != nullptr);
-      NewDrawingInTab(*s_cmd, *log);
-      ctx->Yield(6);
-    }
+    IM_CHECK(OpenFreshDrawing(ctx));
     IM_CHECK(s_cmd->activeDrawingIdx != 0);
 
     // A box tall enough that a horizontal cut through it is unmistakable, shaded so the cut shows
@@ -474,6 +520,69 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
   };
 
+  // --- REQ-341: a TILTED cut does not move when the view pans (code review on #478, finding 1) -----
+  //
+  // Solids, meshes and linework are uploaded once against the pan point of the moment and then
+  // drawn from that cache until the pan drifts past a budget; the MVP absorbs the difference. The
+  // clip plane has to be packed against that SAME cached anchor. Packed against the current pan
+  // instead, a non-horizontal cut slides by the pan distance while the cache holds, then jumps back
+  // when it rebuilds — invisible to `SectionClipTests`, which test the packing on its own, and to a
+  // level cut, which the anchoring never touches.
+  //
+  // So: pan a little (the cache holds), capture; force a re-upload at that SAME pan by panning far
+  // away and back, capture again. Same camera, same plane, so the two frames must agree. With the
+  // bug the first frame's cut is 3 ft off, about 100 px here.
+  ImGuiTest* sclipPan = IM_REGISTER_TEST(engine, "gosurvey", "req341-section-clip-pan");
+  sclipPan->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    SubmitCad(ctx, "BOX 0,0 20 14 12");
+    ctx->Yield(4);
+    IM_CHECK_EQ(s_cmd->cadSolids.size(), static_cast<std::size_t>(1));
+    // A vertical cut through the box, normal along world Y, so the plane's anchor term is n.y * panY.
+    SubmitCad(ctx, "UCS");
+    SubmitCad(ctx, "X");
+    SubmitCad(ctx, "90");
+    IM_CHECK(std::fabs(s_cmd->activeUcs.zAxis.y + 1.0) < 1e-9);  // +Z now world -Y
+    SubmitCad(ctx, "SECTIONCLIP 0");
+    ctx->Yield(2);
+    IM_CHECK(s_cmd->viewportSectionClip);
+
+    s_cmd->viewportPanX = 0.f;
+    s_cmd->viewportPanY = 0.f;
+    s_cmd->viewportPanZ = 0.f;
+    s_cmd->viewportZoom = 2.4f;  // orthoHalfH ~20.8, so the drift budget is ~10 ft
+    ctx->Yield(8);               // uploaded at anchor (0, 0)
+
+    s_cmd->viewportPanY = 3.f;  // inside the budget: the cache is drawn with a 3 ft MVP offset
+    ctx->Yield(8);
+    DevShell_RequestViewportCapture("devshell-req341-pan-cached.bmp", 1400);
+    ctx->Yield(4);
+
+    s_cmd->viewportPanY = 200.f;  // past the budget: re-uploaded at 200
+    ctx->Yield(8);
+    s_cmd->viewportPanY = 3.f;  // and past it again: re-uploaded at exactly this pan
+    ctx->Yield(8);
+    DevShell_RequestViewportCapture("devshell-req341-pan-fresh.bmp", 1400);
+    ctx->Yield(4);
+
+    // Not a black or empty frame (the GL_FRONT trap TASK-249 recorded): the clip-off frame must differ.
+    SubmitCad(ctx, "SECTIONCLIP OFF");
+    ctx->Yield(8);
+    DevShell_RequestViewportCapture("devshell-req341-pan-noclip.bmp", 1400);
+    ctx->Yield(4);
+
+    const long cutMoved =
+        CountDifferingPixels("devshell-req341-pan-cached.bmp", "devshell-req341-pan-fresh.bmp", 8);
+    const long clipShows =
+        CountDifferingPixels("devshell-req341-pan-fresh.bmp", "devshell-req341-pan-noclip.bmp", 8);
+    DevShell_Logf("ui", "req341-pan: cached-vs-fresh differing px=%ld, clip-vs-noclip=%ld", cutMoved, clipShows);
+    IM_CHECK(cutMoved >= 0);
+    IM_CHECK(clipShows > 500);        // the captures are real, and the clip reaches them
+    IM_CHECK(cutMoved < 50);          // and the cut did not move with the pan
+    IM_CHECK(CancelToIdle(ctx));
+  };
+
   // --- REQ-331 CHAMFER, driven through the REAL GUI (TASK-229) -----------------------------------
   //
   // Everything else about the solid chamfer is covered by unit tests and headless transcripts. Two
@@ -494,17 +603,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
 
     // The app opens on the Start tab (REQ-308, index 0), which backs no document and draws no 3D
     // viewport at all. Everything below needs a real drawing, so make one the way a user does.
-    if (s_cmd->activeDrawingIdx == 0) {
-      // `NewDrawingInTab` is what the start screen's "New Drawing" button and the tab strip's "+"
-      // both call. Reached directly rather than by clicking, for the reason the headless driver
-      // reaches `SetActiveSpace` directly: the button is inside a child region whose ImGui path is an
-      // implementation detail of the start screen, and this test is about the CHAMFER, not about how
-      // that screen is laid out.
-      std::vector<std::string>* log = DevShell_CommandLog();
-      IM_CHECK(log != nullptr);
-      NewDrawingInTab(*s_cmd, *log);
-      ctx->Yield(6);
-    }
+    IM_CHECK(OpenFreshDrawing(ctx));
     IM_CHECK(s_cmd->activeDrawingIdx != 0);
 
     SubmitCad(ctx, "BOX 0,0 20 10 8");

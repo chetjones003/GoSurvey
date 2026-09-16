@@ -15,6 +15,7 @@
 #include <memory>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -754,6 +755,7 @@ bool ViewportRenderer::EnsureShader() {
   lineProgram_ = LinkProgram(vs, fs);
   if (!lineProgram_)
     return false;
+  clipLocLine_ = glGetUniformLocation(lineProgram_, "uClipPlane");
 
   gridProgram_ = lineProgram_;
 
@@ -764,6 +766,7 @@ bool ViewportRenderer::EnsureShader() {
   vcLineProgram_ = LinkProgram(vcVs, vcFs);
   if (!vcLineProgram_)
     return false;
+  clipLocVcLine_ = glGetUniformLocation(vcLineProgram_, "uClipPlane");
 
   GLuint shVs = CompileShader(GL_VERTEX_SHADER, kShadedVs);
   GLuint shFs = CompileShader(GL_FRAGMENT_SHADER, kShadedFs);
@@ -772,6 +775,7 @@ bool ViewportRenderer::EnsureShader() {
   shadedProgram_ = LinkProgram(shVs, shFs);
   if (!shadedProgram_)
     return false;
+  clipLocShaded_ = glGetUniformLocation(shadedProgram_, "uClipPlane");
   glGenVertexArrays(1, &vaoShaded_);
   glGenBuffers(1, &vboShaded_);
   glBindVertexArray(vaoShaded_);
@@ -818,6 +822,7 @@ bool ViewportRenderer::EnsureShader() {
   if (texVs && texFs) {
     texProgram_ = LinkProgram(texVs, texFs);
     if (texProgram_) {
+      clipLocTex_ = glGetUniformLocation(texProgram_, "uClipPlane");
       glGenVertexArrays(1, &vaoTex_);
       glGenBuffers(1, &vboTex_);
       glBindVertexArray(vaoTex_);
@@ -1166,30 +1171,40 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
 
   // --- REQ-341 / ADR-058: the live section clip ---------------------------------------------------
   //
-  // Rebased onto the view anchor HERE, where the anchor is known, and set on every program that
-  // draws model geometry once per frame. Uniforms are per-program state that survives until the
-  // next `glUseProgram` of that program, so setting them once is enough and the passes below only
-  // ever flip `GL_CLIP_DISTANCE0`.
+  // Rebased onto an anchor and set on every program that draws model geometry. The plane must be
+  // packed against the SAME anchor the vertices were uploaded against — and that is not always the
+  // view anchor: the linework cache, the solid batches and the meshes each keep the anchor they were
+  // uploaded at and absorb the drift in their own MVP. Packing those against the view anchor puts
+  // the cut `n.xy * (cachedAnchor - pan)` out, so a tilted cut slides as the view pans and snaps
+  // back when the cache rebuilds (code review on #478, finding 1). So every draw that sets its own
+  // `uMVP` translation also calls `setClipAnchor` with that same anchor, and restores the view
+  // anchor after — the rule is "one anchor per draw, used for both uniforms".
   //
-  // Doing it once per frame is also what makes the clip LIVE in the sense acceptance 6 asks for:
-  // the plane is re-read and re-packed every frame from `tuning`, so moving it changes the next
-  // frame and invalidates NO cached geometry — `cadGpuRevision`, the mesh cache and the solid batch
-  // signature are all untouched by it. Nothing is re-tessellated and nothing is re-uploaded.
-  float clipVec[4];
-  if (tuning.sectionClip.active)
-    SectionClipToShaderVec4(tuning.sectionClip, viewAnchorX, viewAnchorY, clipVec);
-  else
-    SectionClipDisabledVec4(clipVec);
+  // Repacking per frame is also what makes the clip LIVE in the sense acceptance 6 asks for: the
+  // plane is re-read from `tuning`, so moving it changes the next frame and invalidates NO cached
+  // geometry — `cadGpuRevision`, the mesh cache and the solid batch signature are all untouched by
+  // it. Nothing is re-tessellated and nothing is re-uploaded.
   const bool sectionClipOn = tuning.sectionClip.active;
+  // Uploads to the CURRENTLY BOUND program; \p loc is that program's cached `uClipPlane`.
+  const auto setClipAnchor = [&](int loc, double anchorX, double anchorY) {
+    if (loc < 0)
+      return;
+    float v[4];
+    if (sectionClipOn)
+      SectionClipToShaderVec4(tuning.sectionClip, anchorX, anchorY, v);
+    else
+      SectionClipDisabledVec4(v);
+    glUniform4fv(loc, 1, v);
+  };
   {
-    const unsigned int clipped[] = {lineProgram_, vcLineProgram_, shadedProgram_, texProgram_};
-    for (const unsigned int prog : clipped) {
-      if (!prog)
+    const std::pair<unsigned int, int> clipped[] = {
+        {lineProgram_, clipLocLine_}, {vcLineProgram_, clipLocVcLine_},
+        {shadedProgram_, clipLocShaded_}, {texProgram_, clipLocTex_}};
+    for (const auto& [prog, loc] : clipped) {
+      if (!prog || loc < 0)
         continue;
       glUseProgram(prog);
-      const GLint loc = glGetUniformLocation(prog, "uClipPlane");
-      if (loc >= 0)
-        glUniform4fv(loc, 1, clipVec);
+      setClipAnchor(loc, viewAnchorX, viewAnchorY);
     }
   }
   // Model geometry clips; UI overlays do not. This is the same split `depthForGeometry` /
@@ -1584,6 +1599,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       float meshMvp[16];
       MulMat4(projRot, meshModel, meshMvp);
       glUniformMatrix4fv(locShMvp, 1, GL_FALSE, meshMvp);
+      setClipAnchor(clipLocShaded_, entry->anchorX, entry->anchorY);
 
       glBindVertexArray(entry->vao);
       for (const CadMeshPart& part : mp->parts) {
@@ -1602,6 +1618,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       }
     }
     glBindVertexArray(0);
+    setClipAnchor(clipLocShaded_, viewAnchorX, viewAnchorY);  // back to the shared anchor
     glUseProgram(lineProgram_);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
   }
@@ -1740,6 +1757,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         float solidMvp[16];
         MulMat4(projRot, solidModel, solidMvp);
         glUniformMatrix4fv(locSolidMvp, 1, GL_FALSE, solidMvp);
+        setClipAnchor(clipLocShaded_, e.anchorX, e.anchorY);
         glUniform4f(locSolidColor, e.rgba[0], e.rgba[1], e.rgba[2], 1.f);
         glBindVertexArray(e.faceVao);
         glDrawArrays(GL_TRIANGLES, 0, e.faceVertCount);
@@ -1747,6 +1765,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
       glDisable(GL_POLYGON_OFFSET_FILL);
       glBindVertexArray(0);
+      setClipAnchor(clipLocShaded_, viewAnchorX, viewAnchorY);
     }
 
     // The edges, in every style EXCEPT Shaded — 2D Wireframe needs them (they are the only thing a
@@ -1764,6 +1783,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         float solidMvp[16];
         MulMat4(projRot, solidModel, solidMvp);
         glUniformMatrix4fv(locMvp, 1, GL_FALSE, solidMvp);
+        setClipAnchor(clipLocLine_, e.anchorX, e.anchorY);
         glUniform4f(locCol, e.rgba[0], e.rgba[1], e.rgba[2], e.rgba[3]);
         glLineWidth(e.lineweightMm >= 0.f ? LineweightMmToDevicePx(e.lineweightMm) : kLwMain);
         glBindVertexArray(e.edgeVao);
@@ -1772,6 +1792,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glLineWidth(kLwMain);
       glBindVertexArray(0);
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);  // restore the shared MVP for later line passes
+      setClipAnchor(clipLocLine_, viewAnchorX, viewAnchorY);
     }
   } else if (!solidGpu_.empty()) {
     // No solids to draw this frame (all erased, all hidden, or the drawing was replaced). Free the
@@ -2180,6 +2201,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     // "Anchor offset composes before the view rotation" test in CameraTests.
     MulMat4(projRot, cachedModel, cachedMvp);
     glUniformMatrix4fv(locVcMvp, 1, GL_FALSE, cachedMvp);
+    setClipAnchor(clipLocVcLine_, cachedViewAnchorX_, cachedViewAnchorY_);
     if (!cpuVcLines_.empty()) {
       glBindVertexArray(vaoVcLines_);
       if (vcLineBatches_.empty())
@@ -2229,7 +2251,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // once meshes land (REQ-063), when there will be real surfaces to hide behind.
   // ============================================================================================
   depthForOverlay();
-  clipForOverlay();  // REQ-341: everything from here down is UI, and UI is never clipped away
+  clipForOverlay();  // REQ-341: UI is never clipped away — the TIN surface passes below turn it back on
 
   // --- Hover highlight (subtle blue stroke drawn before selection so selection always wins) ---
   if (hoverLines && !hoverLines->empty() && hoverLines->size() % 6 == 0) {
@@ -2448,6 +2470,13 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
   }
 
+  // REQ-341: a TIN surface is MODEL geometry even though it is drawn down here among the overlays
+  // (draw order puts it under the survey markers). The scope boundary names surfaces as clipped, so
+  // the band fills, the cut/fill map and the surface linework clip; everything after them does not.
+  // All three are uploaded against the view anchor every frame, which is the anchor the shared
+  // `uClipPlane` is packed against. Code review on #478, finding 3.
+  clipForGeometry();
+
   // --- REQ-072 band fills (ADR-036 (g)) ---
   // Drawn FIRST, before any surface linework, so the wireframe/contours/border/arrows below all read
   // on top of the opaque interior. One draw call per band, on the same unlit `lineProgram_` used
@@ -2519,6 +2548,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     if (programBound)
       glLineWidth(kLwMain);  // restore, so the overlay passes below inherit the shared default
   }
+
+  clipForOverlay();  // REQ-341: the surface passes above were the last model geometry
 
   // --- Survey points (X markers, apparent size ~constant on screen) ---
   if (surveyMarkers && !surveyMarkers->empty() && surveyMarkers->size() % 6 == 0) {

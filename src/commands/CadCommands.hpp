@@ -13,6 +13,7 @@
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
+#include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
 // util/ray3d beside it, so the coordinate-system rules are testable without a window.
 #include "util/ucs.hpp"
@@ -1115,6 +1116,12 @@ struct DrawingDocument {
   /// tabs cannot carry one drawing's projection into another's.
   Camera::Projection viewportProjection = Camera::Projection::Orthographic;
   float  viewportFovDeg = kDefaultFovDeg;
+  /// The section clip is per TAB (REQ-341, D-2026-09-16-a): a clip set in one drawing must not hide
+  /// half of another when the user switches to it, and switching back restores it. A fresh document
+  /// starts with it off, which is what keeps NEW and OPEN clean. Still never written to `.gs`.
+  bool   viewportSectionClip = false;
+  double viewportSectionClipOffset = 0.0;
+  bool   viewportSectionClipFlip = false;
   /// The UCS is per drawing, not per session (REQ-154): switching tabs must not carry one drawing's
   /// coordinate frame into another's, which is the "UCS state does not leak between viewports"
   /// condition in as strong a form as a one-model-view-per-tab application can state it.
@@ -2370,6 +2377,9 @@ struct AppCommandState {
     WaitP3,
   } sectionPhase = SectionPhase::SelectSolids;
   std::vector<int> sectionSolidIndices;  ///< resolved at the end of the selection phase
+  /// The solid each index named when it was resolved, so a changed store refuses instead of cutting
+  /// whatever now occupies the slot. Parallel to \ref sectionSolidIndices.
+  std::vector<std::weak_ptr<const brep::Solid>> sectionSolidOwners;
   ray3d::Vec3 sectionP1{};
   ray3d::Vec3 sectionP2{};
   ray3d::Vec3 sectionP3{};
@@ -3674,6 +3684,9 @@ struct AppCommandState {
   /// named view. This is an inspection mode, not a property of the drawing: opening a file to find
   /// half of it invisible, with the reason three menus away, is the failure this avoids. REQ-341
   /// records persistence as a possible increment rather than an oversight.
+  ///
+  /// It IS per tab: `SaveDocumentToSnapshot` / `RestoreDocumentFromSnapshot` carry these three with
+  /// the camera, so another open drawing never inherits the clip (D-2026-09-16-a).
   bool viewportSectionClip = false;
   /// Offset of the clip plane from the UCS origin, along the UCS Z, in drawing units.
   double viewportSectionClipOffset = 0.0;
@@ -4388,6 +4401,15 @@ inline ucs::Ucs CadActiveUcsStorage(const AppCommandState& st) {
   u.origin.x -= st.worldDocumentOriginX;
   u.origin.y -= st.worldDocumentOriginY;
   return u;
+}
+
+/// The live section clip as it stands (REQ-341), in STORAGE coordinates like everything the renderer
+/// and the picks see. Inactive when the clip is off. The one derivation the renderer, the solid pick
+/// and the snap all read, so the three cannot disagree about where the cut is.
+inline SectionClipPlane CadActiveSectionClip(const AppCommandState& st) {
+  if (!st.viewportSectionClip)
+    return SectionClipPlane{};
+  return SectionClipFromUcs(CadActiveUcsStorage(st), st.viewportSectionClipOffset, st.viewportSectionClipFlip);
 }
 
 /// The active work plane (UCS XY) a viewport click resolves against (REQ-058 / ADR-025 (e)).
@@ -5798,9 +5820,15 @@ bool PickCadEntityByDepth(const std::vector<CadPickCandidate>& candidates, Selec
 ///
 /// Built on \ref PickSubObjectAcrossSolids, which already does ray-versus-solid hit testing for the
 /// `Ctrl`+click sub-object pick (REQ-318): the geometry was there, only a whole-solid caller was
-/// missing. **Any sub-object hit — face, edge or vertex — names the solid**, so clicking anywhere on
-/// it works rather than only on an edge. That is more forgiving than AutoCAD's wireframe behaviour
-/// and deliberately so: the reported problem was a solid that could not be selected at all.
+/// missing. **Which hit names the solid follows the visual style, as in AutoCAD** (D-2026-09-16-a):
+/// in 2D Wireframe no face is drawn, so only an edge or a vertex answers — a click inside the
+/// outline starts a selection box, and an edge seen through the solid can be clicked. In Hidden and
+/// Shaded a visible face answers too. Clicking anywhere on a face in plan view had been taking
+/// clicks meant for survey points and selection boxes inside a building pad (code review on #478,
+/// finding 4).
+///
+/// Geometry the live section clip has hidden does not answer (finding 5) — see
+/// \ref PickSubObjectAcrossSolids.
 ///
 /// Like the sub-object pick it never tessellates (REQ-318 item 7) — a solid absent from the display
 /// cache is simply not picked.
@@ -5892,9 +5920,15 @@ void ToggleSubObjectSelection(AppCommandState& st, const SelectedSubObject& pick
 /// renderer is not drawing (the rule REQ-084 (d) already applies to the entity pick). Solids with no
 /// cached tessellation are skipped rather than tessellated: a pick must not cost a tessellation
 /// (REQ-318 item 7).
+///
+/// Honours the live section clip (REQ-341) the same way: a face, edge or vertex on the removed side
+/// is not drawn, so it neither answers nor hides a solid behind it.
+///
+/// \p facesPickable false skips the triangles entirely — no face answers and nothing occludes —
+/// which is what a 2D Wireframe view shows.
 [[nodiscard]] bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
                                              const solidpick::Tolerance& tol, SelectedSubObject* out,
-                                             solidpick::Pick* outPick = nullptr);
+                                             solidpick::Pick* outPick = nullptr, bool facesPickable = true);
 
 /// ONE sub-object click, whole: pick along \p ray, apply the mutual-exclusion rule, update the
 /// store, and say what happened. Returns true when something was picked.
@@ -6256,6 +6290,16 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
                                double* outMxY, int* outSkipped, const Viewport* vpFilter = nullptr);
 // The camera side of zoom-extents is `zoomframing::FrameWorldRect` (ZoomFraming.hpp) — pure, shared
 // by every fit path, and tested there (REQ-122).
+
+/// The box the section-clip indicator is sized to cover (REQ-341, D-2026-09-16-a), in storage
+/// coordinates: the drawing's extents as ZOOM EXTENTS measures them — every entity kind the clip can
+/// cut, not only solids — with the Z range of the solids when there are any, and the active UCS
+/// origin's elevation otherwise. False for an empty drawing; the caller then centres on the view.
+///
+/// Sized from the whole model rather than the solids alone because the clip cuts linework, meshes,
+/// surfaces and PDFs too, and because the old fallback — centred on the UCS origin — sat millions of
+/// feet off screen in a state-plane drawing with no solids (code review on #478, finding 8).
+bool ComputeSectionClipIndicatorBounds(const AppCommandState& st, ray3d::Vec3* outMin, ray3d::Vec3* outMax);
 
 bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float cy, float* ox, float* oy,
                          float* r);
