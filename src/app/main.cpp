@@ -357,8 +357,16 @@ int main()
 #endif
   LoadUserStartupPrefs(cmd);
 #ifdef GOSURVEY_DEVELOPER_SHELL
-  if (devshellCli)
+  if (devshellCli) {
     cmd.authGateResolved = true;
+    // REQ-336's What's New opens as a MODAL on the first launch of a version, and a modal blocks
+    // hover and clicks everywhere else — so every GUI test that clicks or hovers failed silently
+    // behind it (the ON/OFF/FLIP links, the chamfer edge hover) once a new version string made it
+    // auto-open again. An automated run is not a user's first look at a release; skipped the same
+    // way the sign-in gate and the update check above and below are. The user's dismissal
+    // preference is not touched.
+    cmd.whatsNewAutoOpenedThisLaunch = true;
+  }
 #endif
   const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
 
@@ -406,7 +414,7 @@ int main()
   // REQ-078 before REQ-336: if the splash check found an update, do not auto-open What's New.
   if (updateState.phase == update::Phase::UpdateReady)
     cmd.whatsNewAutoOpenedThisLaunch = true;
-  else if (cmd.activeDrawingIdx == 0 &&
+  else if (cmd.activeDrawingIdx == 0 && !cmd.whatsNewAutoOpenedThisLaunch &&
            WhatsNewShouldAutoOpen(GOSURVEY_VERSION_FULL, cmd.whatsNewDismissedVersion, false))
     cmd.whatsNewOpeningPending = true;
 

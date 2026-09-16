@@ -681,14 +681,29 @@ were taken — D-2026-09-16-a.
   reverted to the view anchor, **212**, and the test fails. The clip-off frame differs by 2,089, so
   the captures are real — and both frames were opened and looked at.
 
-### Two GUI failures that arrived with the rebase, not with these fixes
+### Two GUI failures that arrived with the rebase — diagnosed and fixed
 
-`req341-section-clip-links` (clicking `ON` does not reach the command) and `req331-chamfer-viewport`
-(no sub-object hover under Ctrl) both fail — and **both fail identically on a Debug build of the
-rebased branch WITHOUT this section's changes**, in a separate worktree. Before the rebase both were
-green. The likely cause is `beta`'s dynamic-input palette (#507), which now follows the cursor over
-the viewport and moves keyboard focus when a prompt appears; not diagnosed further, and raised with
-the user rather than fixed inside this PR.
+`req341-section-clip-links` (clicking `ON` did not reach the command) and `req331-chamfer-viewport`
+(no sub-object hover under Ctrl) both failed, and **both failed identically on a Debug build of the
+rebased branch WITHOUT this section's changes**, in a separate worktree. The first guess — `beta`'s
+dynamic-input palette (#507) — was wrong, and a logged probe of ImGui's own state at the moment of
+the click is what showed it: `HoveredWindow` was **none** and `NavWindow` was
+`What's New##GoSurvey336`. Two causes, neither of them the links:
+
+1. **REQ-336's What's New is a modal, and it auto-opens on a version's first launch.** A modal
+   blocks hover and clicks in every other window, so every GUI test that clicks or hovers failed
+   silently behind it once `beta` brought a new version string. `main.cpp` now skips the auto-open
+   for a `--devshell-run`, alongside the sign-in gate and update check it already skipped there. The
+   user's dismissal preference is untouched, and a real launch behaves as before. With that alone,
+   `ON` clicked through and the chamfer test passed.
+2. **`FLIP` was clipped off the command bar.** The floating bar's width is a persisted user
+   preference, and its prompt is one line that never wraps (REQ-040). At the 360 px this machine's
+   preferences held, `FLIP` sat at x 381–417 past a bar ending at 364: ImGui clipped it, and the
+   gathered item had no label to find. The test now pins `cmdBarWidth` for its run and restores it.
+   A user with a bar that narrow also cannot see `FLIP`; that is REQ-040's no-wrap design, older than
+   this PR, and not changed here.
+
+All five GUI tests — repro, links, viewport, pan and chamfer — pass in one process.
 
 ### `beta` itself is not green
 

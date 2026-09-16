@@ -391,6 +391,14 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(OpenFreshDrawing(ctx));
     IM_CHECK(s_cmd->activeDrawingIdx != 0);
 
+    // The floating bar's width is a persisted USER preference (`cmdBarWidth`), and it lays its
+    // prompt out on one line that never wraps (REQ-040). At the 360 px a real preferences file held,
+    // `FLIP` sat past the bar's right edge, so ImGui clipped it and there was no item to click — the
+    // test was reading the machine's settings, not the feature. Pinned for the test, restored after.
+    const float savedBarWidth = s_cmd->cmdBarWidth;
+    s_cmd->cmdBarWidth = 1200.f;
+    ctx->Yield(2);
+
     // A known starting state, so each click below is a visible transition rather than a no-op.
     SubmitCad(ctx, "SECTIONCLIP OFF");
     ctx->Yield(2);
@@ -436,6 +444,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(!s_cmd->viewportSectionClip);
     IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::None);
 
+    s_cmd->cmdBarWidth = savedBarWidth;
     IM_CHECK(CancelToIdle(ctx));
   };
 
