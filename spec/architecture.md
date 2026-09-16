@@ -4097,7 +4097,7 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   `gl_ClipDistance` is the hardware path built for exactly this. *Let the caller pass an
   anchor-relative plane* — spreads knowledge of a renderer-private precision device to every call
   site, and would have to be recomputed by the caller on every pan.
-- **Amendment (2026-09-16, D-2026-09-16-a, code review on #478).**
+- **Amendment (2026-09-16, D-2026-09-16-b, code review on #478).**
 
   **(g) One anchor per DRAW, not per frame.** (c) rebased the plane onto the view anchor once a
   frame, and that is right only for geometry uploaded against the view anchor that frame. The

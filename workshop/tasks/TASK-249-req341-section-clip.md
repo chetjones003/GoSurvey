@@ -661,7 +661,7 @@ renumber commits; they were rebuilt from the pre-rebase file.
 | 15 | Three copies of the whole-solid pick | folded into `PickSolidUnderCursor` / `ClickToggleSolid`. Moving solids *into* `PickClosestCadEntity` was not done: it would change every RawEntityPick command's candidate set, which is beyond this PR |
 
 The three decisions were put to the user with a recommendation each, and all three recommendations
-were taken — D-2026-09-16-a.
+were taken — D-2026-09-16-b.
 
 ### Tests, and each one made to fail first
 

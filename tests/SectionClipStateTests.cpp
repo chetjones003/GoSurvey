@@ -1,7 +1,7 @@
 // REQ-341 live section clip — the parts of it that live in the COMMAND layer rather than in the plane
 // arithmetic `SectionClipTests` covers: that the clip belongs to one drawing tab, that picking and
 // snapping honour it, the SECTION selection it shares a review with, and what the indicator is
-// sized from. Each case is one finding from the code review on #478 (D-2026-09-16-a).
+// sized from. Each case is one finding from the code review on #478 (D-2026-09-16-b).
 //
 // Linked into GoSurveySnapTests: these call into gosurvey_domain (`SaveDocumentToSnapshot`,
 // `PickClosestSolidEntity`, `CadSnap::FindBest`), like SubObjectSelectionTests.

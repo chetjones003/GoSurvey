@@ -172,7 +172,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.viewportRollDeg            = doc.viewportRollDeg;  // #153
   cmd.viewportProjection         = doc.viewportProjection;  // REQ-309
   cmd.viewportFovDeg             = doc.viewportFovDeg;
-  cmd.viewportSectionClip        = doc.viewportSectionClip;  // per tab (REQ-341, D-2026-09-16-a)
+  cmd.viewportSectionClip        = doc.viewportSectionClip;  // per tab (REQ-341, D-2026-09-16-b)
   cmd.viewportSectionClipOffset  = doc.viewportSectionClipOffset;
   cmd.viewportSectionClipFlip    = doc.viewportSectionClipFlip;
   cmd.viewAnimActive             = false;  // never resume another tab's animation
@@ -28291,7 +28291,7 @@ bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, fl
   tol.edge = tol.vertex;
   SelectedSubObject sub{};
   solidpick::Pick pick{};
-  // 2D Wireframe draws no faces, so none is clickable there (D-2026-09-16-a).
+  // 2D Wireframe draws no faces, so none is clickable there (D-2026-09-16-b).
   const bool facesPickable = st.viewportVisualStyle != VisualStyle::Wireframe2D;
   if (!PickSubObjectAcrossSolids(st, ray, tol, &sub, &pick, facesPickable))
     return false;

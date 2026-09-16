@@ -813,7 +813,7 @@ TEST_CASE("A face drag applies to the face GRABBED, not to whatever is selected 
 TEST_CASE("A whole solid is picked by a ray, as a Solid entity", "[subobject][solidentity]") {
   AppCommandState st;
   st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
-  // Shaded, where a face is drawn and so answers a click (D-2026-09-16-a). 2D Wireframe — where
+  // Shaded, where a face is drawn and so answers a click (D-2026-09-16-b). 2D Wireframe — where
   // only edges and vertices do — has its own case below.
   st.viewportVisualStyle = VisualStyle::Shaded;
   AddBox(st, World(), 20.0, 10.0, 8.0);  // x [-10,10], y [-5,5], z [0,8]
@@ -860,7 +860,7 @@ TEST_CASE("A whole solid is picked by a ray, as a Solid entity", "[subobject][so
 
 TEST_CASE("In 2D Wireframe only a solid's edges and vertices answer a click, as in AutoCAD",
           "[subobject][solidentity]") {
-  // Code review on #478, finding 4 (D-2026-09-16-a). A face hit naming the solid in plan view took
+  // Code review on #478, finding 4 (D-2026-09-16-b). A face hit naming the solid in plan view took
   // every click inside a building pad's footprint — survey points inside it could not be clicked,
   // and a selection box could not be started there. 2D Wireframe draws no faces, so none answers.
   AppCommandState st;

@@ -1116,7 +1116,7 @@ struct DrawingDocument {
   /// tabs cannot carry one drawing's projection into another's.
   Camera::Projection viewportProjection = Camera::Projection::Orthographic;
   float  viewportFovDeg = kDefaultFovDeg;
-  /// The section clip is per TAB (REQ-341, D-2026-09-16-a): a clip set in one drawing must not hide
+  /// The section clip is per TAB (REQ-341, D-2026-09-16-b): a clip set in one drawing must not hide
   /// half of another when the user switches to it, and switching back restores it. A fresh document
   /// starts with it off, which is what keeps NEW and OPEN clean. Still never written to `.gs`.
   bool   viewportSectionClip = false;
@@ -3686,7 +3686,7 @@ struct AppCommandState {
   /// records persistence as a possible increment rather than an oversight.
   ///
   /// It IS per tab: `SaveDocumentToSnapshot` / `RestoreDocumentFromSnapshot` carry these three with
-  /// the camera, so another open drawing never inherits the clip (D-2026-09-16-a).
+  /// the camera, so another open drawing never inherits the clip (D-2026-09-16-b).
   bool viewportSectionClip = false;
   /// Offset of the clip plane from the UCS origin, along the UCS Z, in drawing units.
   double viewportSectionClipOffset = 0.0;
@@ -5820,7 +5820,7 @@ bool PickCadEntityByDepth(const std::vector<CadPickCandidate>& candidates, Selec
 ///
 /// Built on \ref PickSubObjectAcrossSolids, which already does ray-versus-solid hit testing for the
 /// `Ctrl`+click sub-object pick (REQ-318): the geometry was there, only a whole-solid caller was
-/// missing. **Which hit names the solid follows the visual style, as in AutoCAD** (D-2026-09-16-a):
+/// missing. **Which hit names the solid follows the visual style, as in AutoCAD** (D-2026-09-16-b):
 /// in 2D Wireframe no face is drawn, so only an edge or a vertex answers — a click inside the
 /// outline starts a selection box, and an edge seen through the solid can be clicked. In Hidden and
 /// Shaded a visible face answers too. Clicking anywhere on a face in plan view had been taking
@@ -6291,7 +6291,7 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
 // The camera side of zoom-extents is `zoomframing::FrameWorldRect` (ZoomFraming.hpp) — pure, shared
 // by every fit path, and tested there (REQ-122).
 
-/// The box the section-clip indicator is sized to cover (REQ-341, D-2026-09-16-a), in storage
+/// The box the section-clip indicator is sized to cover (REQ-341, D-2026-09-16-b), in storage
 /// coordinates: the drawing's extents as ZOOM EXTENTS measures them — every entity kind the clip can
 /// cut, not only solids — with the Z range of the solids when there are any, and the active UCS
 /// origin's elevation otherwise. False for an empty drawing; the caller then centres on the view.
