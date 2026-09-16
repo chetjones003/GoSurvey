@@ -10090,6 +10090,19 @@ static ImVec2 s_lastCrosshairScreen = ImVec2(-1.f, -1.f);
 static bool   s_cmdSugPopupOpen = false;
 static ImVec2 s_cmdSugPopupMin = ImVec2(0.f, 0.f);
 static ImVec2 s_cmdSugPopupMax = ImVec2(0.f, 0.f);
+
+// Screen rect of the floating command bar (icons/input row + whatever is expanded above it —
+// history chips or the F2 console), captured at the END of the PREVIOUS call to
+// DrawCommandLinePanel. Same one-frame-behind pattern as s_cmdSugPopupMin/Max above, needed for
+// the same reason: DrawDrawingViewport runs BEFORE DrawCommandLinePanel each frame, so ImGui's
+// own overlap detection (IsItemHovered's AllowWhenOverlappedByWindow) cannot yet know the command
+// bar will cover this screen region THIS frame — it hasn't been drawn yet. Without this, the
+// viewport's crosshair, click routing, and pan/zoom all treated the space under the (visually
+// opaque) command bar as bare viewport, exactly like overViewCube/overUcsDropdown below have to
+// work around for those two other overlays.
+static bool   s_cmdBarRectValid = false;
+static ImVec2 s_cmdBarRectMin = ImVec2(0.f, 0.f);
+static ImVec2 s_cmdBarRectMax = ImVec2(0.f, 0.f);
 static bool        s_cmdInputActiveFrame = false;
 static std::string s_cmdFuzzyPrimaryFrame;
 
@@ -10218,17 +10231,27 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     cmd.cmdLogLastSizeForFade = log.size();
     cmd.cmdLogLastChangeTime = ImGui::GetTime();
   }
+  // Set when F2 just opened the console this frame, so the console block below knows to jump
+  // to the newest lines immediately rather than showing wherever InputTextMultiline's internal
+  // scroll happened to be left (its default is the top, since the child window is freshly
+  // recreated open with no prior scroll position of its own).
+  bool cmdConsoleJustOpened = false;
   {
     // F2 toggles the expanded console; Ctrl+9 hides/restores the bar. ESC is left to
     // command-cancel (handled elsewhere) and never closes the console.
     ImGuiIO& iok = ImGui::GetIO();
-    if (floating && ImGui::IsKeyPressed(ImGuiKey_F2, false))
+    if (floating && ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
       cmd.cmdConsoleOpen = !cmd.cmdConsoleOpen;
+      if (cmd.cmdConsoleOpen)
+        cmdConsoleJustOpened = true;
+    }
     if (floating && iok.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_9, false))
       cmd.cmdBarVisible = !cmd.cmdBarVisible;
   }
-  if (floating && !cmd.cmdBarVisible)
+  if (floating && !cmd.cmdBarVisible) {
+    s_cmdBarRectValid = false;
     return;  // bar hidden; Ctrl+9 (or the View menu) restores it.
+  }
 
   const float barRounding = 5.f;
   ImGuiWindowFlags winFlags = 0;
@@ -10240,25 +10263,33 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     // Width is user-resizable (default ~half the viewport); the bar is pinned to the viewport
     // bottom (Y locked) and only slides left/right (X). Anchor is the bottom-LEFT corner.
+    // `barW`/`anchorX` are the values used to lay out THIS frame only. They must not be written
+    // back into cmd.cmdBarWidth/cmd.cmdBarAnchorX (the persisted fields) except when the user
+    // actually drags/resizes the bar (handled further below) or on first-ever init. Doing that
+    // clamp-and-store unconditionally used to corrupt the saved position/size: a transient small
+    // ImGui viewport on an early startup frame (before the window finishes async-maximizing, see
+    // the glfwMaximizeWindow comment in main.cpp) clamped the stored width/anchor down to fit
+    // that tiny frame, and the shrunken value then got written to gosurvey-user.json at exit —
+    // so the bar could drift smaller/off-center a little more on every launch.
     const float barW = std::clamp(cmd.cmdBarWidth > 1.f ? cmd.cmdBarWidth : vp->WorkSize.x * 0.5f, 320.f,
                                   std::max(360.f, vp->WorkSize.x - 16.f));
-    cmd.cmdBarWidth = barW;
     if (!cmd.cmdBarAnchorValid) {
       cmd.cmdBarAnchorX = vp->WorkPos.x + (vp->WorkSize.x - barW) * 0.5f;
       cmd.cmdBarAnchorValid = true;
     }
-    // Clamp X on-screen. Guard the upper bound: when the bar is wider than the viewport
-    // (or WorkSize is tiny on the first frame) the max would fall below the min, which is
-    // undefined for std::clamp (and asserts in debug).
+    // Clamp X on-screen for THIS frame's draw only (`anchorX`); the stored cmd.cmdBarAnchorX is
+    // left untouched so a transient small viewport cannot permanently corrupt it. Guard the upper
+    // bound: when the bar is wider than the viewport (or WorkSize is tiny on the first frame) the
+    // max would fall below the min, which is undefined for std::clamp (and asserts in debug).
     const float xMin = vp->WorkPos.x + 4.f;
     const float xMax = vp->WorkPos.x + vp->WorkSize.x - barW - 4.f;
-    cmd.cmdBarAnchorX = std::clamp(cmd.cmdBarAnchorX, xMin, std::max(xMin, xMax));
+    const float anchorX = std::clamp(cmd.cmdBarAnchorX, xMin, std::max(xMin, xMax));
     // Pin the bar's bottom edge just above the status-bar strip (Y locked) — never below it.
     // The gap matters: with the bar's bottom flush on the strip the two read as one
     // welded block, and the bar stops looking like it floats over the drawing.
     constexpr float kCmdBarLift = 10.f;
     const float bottomY = vp->WorkPos.y + vp->WorkSize.y - CadStatusBarStripHeightPx() - kCmdBarLift;
-    ImGui::SetNextWindowPos(ImVec2(cmd.cmdBarAnchorX, bottomY), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowPos(ImVec2(anchorX, bottomY), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
     ImGui::SetNextWindowSizeConstraints(ImVec2(barW, 0.f), ImVec2(barW, FLT_MAX));  // fixed width, auto height
     ImGui::SetNextWindowBgAlpha(0.f);  // transparent; the bar background and history chips are painted manually
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 4.f));
@@ -10268,6 +10299,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   }
   ImGui::PushStyleColor(ImGuiCol_WindowBg, floating ? ImVec4(0, 0, 0, 0) : consoleBg);
   if (!ImGui::Begin(floating ? "##CommandBarFloat" : "Command line", nullptr, winFlags)) {
+    s_cmdBarRectValid = false;
     ImGui::End();
     ImGui::PopStyleColor();
     if (floating) ImGui::PopStyleVar(2);
@@ -10402,15 +10434,48 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       ImGui::GetWindowDrawList()->AddLine(ImVec2(gmx - 18.f, gy), ImVec2(gmx + 18.f, gy), gc, 1.4f);
     }
 
+    // Jump to the newest lines: on the frame the console opens and whenever the log grows while
+    // it stays open. SetNextWindowScroll targets the very next Begin — InputTextMultiline's
+    // internal child window — so it must be called right before it.
+    //
+    // Two things make one naive call insufficient:
+    //  1) FLT_MAX is ImGui's internal sentinel for "no scroll target set" (see
+    //     CalcNextScrollFromScrollTargetAndClamp's `if (ScrollTarget[axis] < FLT_MAX)` — FLT_MAX
+    //     itself fails that test), so passing FLT_MAX as "scroll all the way down" is silently a
+    //     no-op. A large FINITE value is required; it gets clamped to the real ScrollMax.
+    //  2) that child window's ScrollMax reflects last frame's content size, so on the exact frame
+    //     the log grows (or the console first opens), the clamp uses a stale, too-small ScrollMax
+    //     and lands short of the real bottom. cmdConsoleScrollFramesRemaining re-issues the scroll
+    //     for one extra frame once the child's content size has caught up.
+    constexpr float kScrollToBottom = 1.0e9f;  // finite “effectively infinite”; see point 1 above
+    const bool cmdConsoleLogGrew = log.size() != cmd.commandLogLastSizeForAutoscroll;
+    if (cmdConsoleLogGrew)
+      cmd.commandLogLastSizeForAutoscroll = log.size();
+    if (cmdConsoleJustOpened || cmdConsoleLogGrew)
+      cmd.cmdConsoleScrollFramesRemaining = 2;
+    if (cmd.cmdConsoleScrollFramesRemaining > 0) {
+      ImGui::SetNextWindowScroll(ImVec2(0.0f, kScrollToBottom));
+      --cmd.cmdConsoleScrollFramesRemaining;
+    }
+
     ImGui::PushStyleColor(ImGuiCol_FrameBg, barFieldBg);  // the field step
     ImGui::InputTextMultiline("##CmdConsole", cmd.commandLogCacheBytes.data(), cmd.commandLogCacheBytes.size(),
                               ImVec2(-FLT_MIN, consoleH), ImGuiInputTextFlags_ReadOnly);
     ImGui::PopStyleColor();
-  } else {
+  } else if (!log.empty()) {
     // --- Recent-history chips floating above the bar; fade out after the idle delay. ---
+    // Layout (the Dummy calls that reserve each chip's screen space) runs unconditionally
+    // whenever there is history to show, independent of `alpha`: gating the loop itself on
+    // alpha (as before) made the floating window's AlwaysAutoResize height flip between
+    // "chips shown" and "chips gone" for one frame right as each fade finished. Because
+    // SetNextWindowPos anchors this window by its BOTTOM-left corner, that one-frame height
+    // change (computed a frame late, as ImGui only knows a new AlwaysAutoResize size after
+    // End()) visibly popped the whole bar up then back down — the reported fade-out
+    // "blink"/stutter. Only the drawing below (rect + text) is gated on alpha now, so the
+    // window's height no longer moves as part of the fade itself.
     const float alpha = cmdbar::HistoryAlpha(ImGui::GetTime() - cmd.cmdLogLastChangeTime,
                                              static_cast<double>(cmd.cmdBarFadeDelaySec), 0.8);
-    if (alpha > 0.004f && !log.empty()) {
+    {
       ImDrawList* dl = ImGui::GetWindowDrawList();
       const size_t startIx = cmdbar::LogTailStart(log.size(), cmd.cmdBarHistoryLines);
       for (size_t i = startIx; i < log.size(); ++i) {
@@ -10418,9 +10483,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
         const ImVec2 ts = ImGui::CalcTextSize(s.c_str());
         const ImVec2 p = ImGui::GetCursorScreenPos();
         const float padx = 6.f, pady = 2.f;
-        dl->AddRectFilled(ImVec2(p.x - padx + 4.f, p.y - pady), ImVec2(p.x + ts.x + padx, p.y + ts.y + pady),
-                          ImGui::GetColorU32(BlueTintHex(0x222222, kCmdTint, 0.55f * alpha)), 3.f);
-        dl->AddText(p, ImGui::GetColorU32(BlueTintNeutral(ImVec4(0.86f, 0.88f, 0.92f, alpha), kCmdTint)), s.c_str());
+        if (alpha > 0.004f) {
+          dl->AddRectFilled(ImVec2(p.x - padx + 4.f, p.y - pady), ImVec2(p.x + ts.x + padx, p.y + ts.y + pady),
+                            ImGui::GetColorU32(BlueTintHex(0x222222, kCmdTint, 0.55f * alpha)), 3.f);
+          dl->AddText(p, ImGui::GetColorU32(BlueTintNeutral(ImVec4(0.86f, 0.88f, 0.92f, alpha), kCmdTint)), s.c_str());
+        }
         ImGui::Dummy(ImVec2(ts.x + padx, ts.y + pady));
       }
     }
@@ -10750,6 +10817,18 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   }
 
   ImGui::PopID();
+
+  // Capture the bar's on-screen rect for next frame's viewport hover/click gating (see
+  // s_cmdBarRectMin/Max above) while the window is still current — GetWindowPos/Size are only
+  // valid before End().
+  if (floating) {
+    s_cmdBarRectValid = true;
+    s_cmdBarRectMin = ImGui::GetWindowPos();
+    const ImVec2 sz = ImGui::GetWindowSize();
+    s_cmdBarRectMax = ImVec2(s_cmdBarRectMin.x + sz.x, s_cmdBarRectMin.y + sz.y);
+  } else {
+    s_cmdBarRectValid = false;
+  }
 
   // FramePadding was pushed AFTER Begin (inside the window) so it must be popped BEFORE End;
   // WindowPadding + WindowBorderSize were pushed BEFORE Begin so they pop after End.
@@ -12492,8 +12571,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // under the cursor — so the palette stayed hidden after Enter until the mouse moved somewhere the
   // (by-then-closed) popup never covered. A command typed with the mouse already in the viewport
   // should show its dynamic input the instant it starts, not wait on either of these.
+  // The floating command bar (REQ-040) is a separate, later-drawn overlay window: DrawCommandLinePanel
+  // runs AFTER this viewport each frame, so ImGui has no way yet to know it will cover this screen
+  // region this frame, and IsItemHovered's AllowWhenOverlappedByWindow (needed for the popup case
+  // above) cannot exclude a window that has not been submitted yet either. s_cmdBarRectMin/Max is the
+  // bar's rect as of the end of the PREVIOUS frame (set in DrawCommandLinePanel) — one frame behind,
+  // same pattern this file already uses for s_cmdSugPopupMin/Max. Folded directly into `hovered` (not
+  // just the later overViewCube-style checks) so it also gates the wheel-zoom and middle-drag-pan
+  // handling below, which key off `hovered` alone.
+  const ImVec2 cmdBarTestMouse = ImGui::GetIO().MousePos;
+  const bool overCommandBar = s_cmdBarRectValid && cmdBarTestMouse.x >= s_cmdBarRectMin.x &&
+                              cmdBarTestMouse.x <= s_cmdBarRectMax.x && cmdBarTestMouse.y >= s_cmdBarRectMin.y &&
+                              cmdBarTestMouse.y <= s_cmdBarRectMax.y;
   const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
-                                             ImGuiHoveredFlags_AllowWhenOverlappedByWindow);
+                                             ImGuiHoveredFlags_AllowWhenOverlappedByWindow) &&
+                       !overCommandBar;
   // ImGui's GLFW backend snaps io.MousePos to (-FLT_MAX,-FLT_MAX) on OS focus loss (e.g. Alt+Tab
   // away) and GLFW does not re-emit a cursor-position event on focus regain without an actual
   // mouse move, so the sentinel value would otherwise survive into the first several frames after
@@ -12539,6 +12631,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const bool overUcsDropdown = modelSpace && avail.x > 200.f && avail.y > 200.f && vcMouse.x >= ucsDropX &&
                                vcMouse.x <= ucsDropX + ucsDropW && vcMouse.y >= ucsDropY &&
                                vcMouse.y <= ucsDropY + ucsDropH;
+  // `overCommandBar` is computed earlier, alongside `hovered`, since it needs to gate wheel-zoom
+  // and middle-drag-pan too (see the comment there).
 
   // Advance any in-flight ViewCube animation (REQ-059).
   CadTickViewAnimation(cmd, ImGui::GetIO().DeltaTime);
@@ -14352,7 +14446,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   const bool overCmdSugPopup =
       s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
-  if (modelSpace && hovered && !overCmdSugPopup && !overViewCube && !overUcsDropdown &&
+  if (modelSpace && hovered && !overCmdSugPopup && !overViewCube && !overUcsDropdown && !overCommandBar &&
       cmd.active != AppCommandState::Kind::Pan && cmd.active != AppCommandState::Kind::Orbit &&
       ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
       mx < avail.x && my >= 0 && my < avail.y) {
@@ -17818,7 +17912,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // mouse is over the viewport's own rectangle does not depend on what else ImGui drew on top of it
   // this frame, so it is not susceptible to any of that.
   const bool inImage = mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y && !overViewCube &&
-                       !overUcsDropdown;
+                       !overUcsDropdown && !overCommandBar;
 
   const bool showViewportCmdPalette =
       (cmd.active != VK::None || paperSelStep) && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged &&
@@ -18307,11 +18401,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // or cancelled (buffer cleared on Esc).
   const bool typingCommand =
       (cmd.active == AppCommandState::Kind::None) && cmdBuf && cmdBuf[0] != '\0';
-  // Excludes the ViewCube and the UCS dropdown (plain screen-rect tests, not widget hovers — see
-  // `overViewCube`/`overUcsDropdown` above): both are their own clickable navigation controls, so
-  // the system cursor belongs there, not the drawn crosshair.
+  // Excludes the ViewCube, the UCS dropdown, and the floating command bar (plain screen-rect
+  // tests, not widget hovers — see `overViewCube`/`overUcsDropdown`/`overCommandBar` above): each
+  // is its own real control (or, for the command bar, sits visually on top of the viewport as a
+  // separate later-drawn window), so the system cursor belongs there, not the drawn crosshair.
   const bool liveHover = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y &&
-                         !overViewCube && !overUcsDropdown;
+                         !overViewCube && !overUcsDropdown && !overCommandBar;
   const bool frozenHair = typingCommand && s_lastCrosshairScreen.x >= 0.f;
   // PAN command (REQ-045): show a hand instead of the CAD crosshair while pan mode is active.
   // ORBIT (REQ-084 (c)) is a drag mode too: the crosshair would say "pick a point", which is not
