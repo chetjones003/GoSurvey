@@ -1969,14 +1969,31 @@ bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const so
     return false;
   }
   const brep::Face& f = sp->faces[static_cast<size_t>(sub.index)];
-  if (f.surface.kind != brep::SurfaceKind::Plane) {
-    log.push_back("BCONNECT — pick a flat face for the connection port.");
+  ray3d::Vec3 centre;
+  ray3d::Vec3 n;
+  if (f.surface.kind == brep::SurfaceKind::Plane) {
+    centre = brep::PlanarFaceCentroid(*sp, f);
+    n = f.surface.frame.zAxis;
+    if (f.surface.inward)
+      n = ray3d::Scale(n, -1.0);
+  } else if (f.surface.kind == brep::SurfaceKind::Cylinder) {
+    // A pipe's mating surface is often a bore or a hub OD, not a flat face at all (issue #496
+    // follow-up) — pick the nearer axial end of the cylinder the click landed on, and connect
+    // along its axis, same as a flat face connects along its normal.
+    const ray3d::Vec3 axis = ray3d::Normalize(f.surface.frame.zAxis);
+    const ray3d::Vec3 base = f.surface.frame.origin;
+    const double t = ray3d::Dot(ray3d::Sub(pick.point, base), axis);
+    if (t <= f.surface.height * 0.5) {
+      centre = base;
+      n = ray3d::Scale(axis, -1.0);
+    } else {
+      centre = ray3d::Add(base, ray3d::Scale(axis, f.surface.height));
+      n = axis;
+    }
+  } else {
+    log.push_back("BCONNECT — pick a flat face or a pipe's cylindrical bore/hub for the connection port.");
     return false;
   }
-  const brep::Vec3 centre = brep::PlanarFaceCentroid(*sp, f);
-  ray3d::Vec3 n = f.surface.frame.zAxis;
-  if (f.surface.inward)
-    n = ray3d::Scale(n, -1.0);
 
   const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
   if (di < 0)
