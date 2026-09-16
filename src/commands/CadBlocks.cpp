@@ -1242,6 +1242,50 @@ bool PickSolidFaceAcrossDrawing(const AppCommandState& st, const ray3d::Ray& ray
   return true;
 }
 
+/// Nearest front-facing triangle whose face id names a real face — no vertex/edge precedence, unlike
+/// `solidpick::PickSubObject` (issue #496 follow-up). BCONNECT wants exactly what the "Center of
+/// face" object snap already resolves for the same click (an aim at the middle of a bore looking
+/// straight down its axis is a graze against the rim EDGE by `PickSubObject`'s rules, which then
+/// refuses the whole pick — the same shape as `CadSnap::RayHitSolidFace`, reproduced here rather than
+/// exported, since that one lives in an anonymous namespace in CadSnap.cpp).
+bool RayHitAnySolidFace(const AppCommandState& st, const ray3d::Ray& ray, CadSolidPtr* outSolid, int* outFaceIndex,
+                        ray3d::Vec3* outHit) {
+  bool any = false;
+  double bestT = 0.0;
+  const auto trySolid = [&](const CadSolidPtr& sp) {
+    if (!sp)
+      return;
+    const auto ce = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
+                                 [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+    if (ce == st.solidDisplayCache.end() || ce->empty())
+      return;
+    for (size_t i = 0, ti = 0; i + 8 < ce->triVerts.size(); i += 9, ++ti) {
+      const ray3d::Vec3 a{ce->triVerts[i], ce->triVerts[i + 1], ce->triVerts[i + 2]};
+      const ray3d::Vec3 b{ce->triVerts[i + 3], ce->triVerts[i + 4], ce->triVerts[i + 5]};
+      const ray3d::Vec3 c{ce->triVerts[i + 6], ce->triVerts[i + 7], ce->triVerts[i + 8]};
+      ray3d::Vec3 hit;
+      double t = 0.0;
+      if (!ray3d::RayTriangleIntersect(ray, a, b, c, &hit, &t))
+        continue;
+      if (any && !(t < bestT))
+        continue;
+      const int fi = ti < ce->triFaceIds.size() ? ce->triFaceIds[ti] : -1;
+      if (fi < 0 || static_cast<size_t>(fi) >= sp->faces.size())
+        continue;
+      any = true;
+      bestT = t;
+      *outSolid = sp;
+      *outFaceIndex = fi;
+      *outHit = hit;
+    }
+  };
+  for (const CadSolidPtr& sp : st.cadSolids)
+    trySolid(sp);
+  for (const CadSolidPtr& sp : st.blockRefWorldSolids)
+    trySolid(sp);
+  return any;
+}
+
 } // namespace
 
 bool FindNearestDrawingConnector(const AppCommandState& st, float px, float py, float pz, float maxDist,
@@ -1945,8 +1989,11 @@ void BlockFittingSubmitLine(AppCommandState& st, const std::string& lineIn, std:
   }
 }
 
-bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
+bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& /*tol*/,
                             std::vector<std::string>& log) {
+  // No vertex/edge tolerance needed any more (issue #496 follow-up): RayHitAnySolidFace picks the
+  // nearest front face by triangle hit alone, matching "Center of face" rather than
+  // solidpick::PickSubObject's vertex/edge-precedence pick.
   if (!st.blockEditActive || !st.bconnectAwaitingFace)
     return false;
   if (st.bconnectNameBuf[0] == '\0') {
@@ -1957,32 +2004,40 @@ bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const so
 
   RefreshSolidDisplayGeometry(st);
 
-  SelectedSubObject sub;
-  solidpick::Pick pick;
-  if (!PickSolidFaceAcrossDrawing(st, ray, tol, &sub, &pick)) {
-    log.push_back("BCONNECT — no flat solid face under the cursor.");
+  // Nearest-front-triangle pick, the same shape as the "Center of face" object snap the user can
+  // already see land correctly on this geometry (issue #496 follow-up) — not `PickSolidFaceAcrossDrawing`
+  // / `solidpick::PickSubObject`, whose vertex/edge precedence refuses the whole pick as soon as the
+  // ray's closest approach to a nearby rim edge is within tolerance, which is exactly what happens
+  // aiming down the axis of a bore or hub.
+  CadSolidPtr sp;
+  int faceIndex = -1;
+  ray3d::Vec3 hit;
+  if (!RayHitAnySolidFace(st, ray, &sp, &faceIndex, &hit)) {
+    log.push_back("BCONNECT — no solid face under the cursor.");
     return false;
   }
-  const CadSolidPtr sp = sub.owner.lock();
-  if (!sp || sub.index < 0 || static_cast<size_t>(sub.index) >= sp->faces.size()) {
+  if (!sp || faceIndex < 0 || static_cast<size_t>(faceIndex) >= sp->faces.size()) {
     log.push_back("BCONNECT — that face is no longer there.");
     return false;
   }
-  const brep::Face& f = sp->faces[static_cast<size_t>(sub.index)];
-  ray3d::Vec3 centre;
+  const brep::Face& f = sp->faces[static_cast<size_t>(faceIndex)];
+  // The face's own center, exactly what "Center of face" would offer for the same click — the user
+  // does not need the exact clicked point, just this face, and its center is unambiguous for both a
+  // flat gasket face and a curved bore/hub.
+  ray3d::Vec3 centre = f.surface.kind == brep::SurfaceKind::Plane ? brep::PlanarFaceCentroid(*sp, f)
+                                                                  : brep::CurvedFaceMidpoint(f);
   ray3d::Vec3 n;
   if (f.surface.kind == brep::SurfaceKind::Plane) {
-    centre = brep::PlanarFaceCentroid(*sp, f);
     n = f.surface.frame.zAxis;
     if (f.surface.inward)
       n = ray3d::Scale(n, -1.0);
   } else if (f.surface.kind == brep::SurfaceKind::Cylinder) {
-    // A pipe's mating surface is often a bore or a hub OD, not a flat face at all (issue #496
-    // follow-up) — pick the nearer axial end of the cylinder the click landed on, and connect
-    // along its axis, same as a flat face connects along its normal.
+    // A pipe's mating surface is often a bore or a hub OD, not a flat face at all — connect along
+    // the cylinder's axis, at whichever end the click landed nearer to, same as a flat face
+    // connects along its normal.
     const ray3d::Vec3 axis = ray3d::Normalize(f.surface.frame.zAxis);
     const ray3d::Vec3 base = f.surface.frame.origin;
-    const double t = ray3d::Dot(ray3d::Sub(pick.point, base), axis);
+    const double t = ray3d::Dot(ray3d::Sub(hit, base), axis);
     if (t <= f.surface.height * 0.5) {
       centre = base;
       n = ray3d::Scale(axis, -1.0);
