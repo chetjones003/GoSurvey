@@ -168,7 +168,7 @@ ESC
 BOX -8 -8 10 8
 CMD SECTION
 CMD UCS
-EXPECT LOG "SECTION — This release slices solids with flat faces only"
+EXPECT LOG "SECTION — The cut crosses a curved face of this solid, which is not supported yet."
 
 # --- and a rectangle still extrudes to a plain Solid ---------------------------------------------
 NEW

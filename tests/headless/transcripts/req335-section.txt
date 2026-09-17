@@ -87,7 +87,7 @@ CMD SECTION
 # Same as above: ask for the plane, answer UCS.
 CMD UCS
 
-EXPECT LOG "SECTION — This release slices solids with flat faces only (a box or a straight extrusion)."
+EXPECT LOG "SECTION — The cut crosses a curved face of this solid, which is not supported yet."
 
 EXPECT POLYLINES 1
 EXPECT SOLIDS 2

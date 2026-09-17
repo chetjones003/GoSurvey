@@ -1822,6 +1822,8 @@ const char* ProblemText(Problem p) {
     return "A tilted cut that crosses the end of a cylinder or cone is not supported yet.";
   case Problem::SliceCutConeOffAxis:
     return "A cut parallel to a cone's axis but not through it is a hyperbola, which is not supported yet.";
+  case Problem::SliceCutCrossesCurvedFace:
+    return "The cut crosses a curved face of this solid, which is not supported yet.";
   case Problem::SliceCutTooSteepForCone:
     return "A cut steeper than a cone's own side is not supported yet.";
   case Problem::SliceCutSeveralOutlines:
@@ -7480,6 +7482,433 @@ struct ConeCutTransition {
   return Succeed(outWhy);
 }
 
+/// The signed-distance range `[lo, hi]` a boundary edge covers relative to a plane (GitHub #518).
+///
+/// Exact for a line (its endpoints), and for an arc or ellipse, whose distance along the curve is
+/// `k + A cos(th) + B sin(th)`: the extremes are the endpoints and the stationary angles that fall
+/// inside the sweep. An intersection curve is marched and widened by \p margin, because its polyline
+/// is only close to the curve.
+struct DistRange {
+  double lo = 1e300;
+  double hi = -1e300;
+  void add(double d) {
+    lo = std::min(lo, d);
+    hi = std::max(hi, d);
+  }
+};
+
+[[nodiscard]] DistRange EdgeDistRange(const Solid& s, const Edge& e, const Vec3& planePoint, const Vec3& pn,
+                                      double margin) {
+  auto sd = [&](const Vec3& p) { return ray3d::Dot(ray3d::Sub(p, planePoint), pn); };
+  DistRange r;
+  r.add(sd(s.vertices[static_cast<std::size_t>(e.v0)].p));
+  r.add(sd(s.vertices[static_cast<std::size_t>(e.v1)].p));
+  if (e.kind == CurveKind::Line)
+    return r;
+  if (e.kind == CurveKind::Arc || e.kind == CurveKind::Ellipse) {
+    const double r2 = e.kind == CurveKind::Arc ? e.radius : e.radius2;
+    const double k = sd(e.frame.origin);
+    const double A = e.radius * ray3d::Dot(e.frame.xAxis, pn);
+    const double B = r2 * ray3d::Dot(e.frame.yAxis, pn);
+    const double th0 = e.kind == CurveKind::Arc ? 0.0 : EllipseParamOf(e, s.vertices[static_cast<std::size_t>(e.v0)].p);
+    const double lo = std::min(th0, th0 + e.sweep);
+    const double hi = std::max(th0, th0 + e.sweep);
+    const double star = std::atan2(B, A);  // the maximum; the minimum is half a turn on
+    for (const double base : {star, star + kPi}) {
+      // Every angle base + 2*pi*n inside [lo, hi].
+      double th = base + kTwoPi * std::ceil((lo - base) / kTwoPi);
+      for (; th <= hi; th += kTwoPi)
+        r.add(k + A * std::cos(th) + B * std::sin(th));
+    }
+    return r;
+  }
+  for (const Vec3& p : MarchIntersectionCurve(s, e, 256))
+    r.add(sd(p));
+  r.lo -= margin;
+  r.hi += margin;
+  return r;
+}
+
+/// Cut a solid that has curved faces by a plane that crosses only its FLAT faces (GitHub #518).
+///
+/// A filleted box, or a box with a drilled hole, was refused at every plane because one of its faces
+/// is curved — including planes nowhere near that face. Here each face is classified by the range of
+/// signed distance it covers:
+/// - a face wholly on one side (touching the plane is allowed) goes to that piece **unchanged**, with
+///   its surface, parameter range and every loop, so a fillet or a bore is carried, not rebuilt;
+/// - a planar face the plane crosses is split along the plane, as the all-planar cutter does, keeping
+///   each whole arc or ellipse edge of its boundary on the side it lies on, and any hole loop on the
+///   side it lies on;
+/// - a curved face, or a curved edge, the plane crosses is refused as
+///   \ref Problem::SliceCutCrossesCurvedFace.
+///
+/// The range of a plane, cylinder or cone face is the range of its boundary: a linear function on
+/// those surfaces is linear along each straight generator, so an interior extreme would run out to
+/// the boundary. A sphere, torus or NURBS face can bulge past its boundary, so its range also takes
+/// the tessellation's vertices and is widened by the chord tolerance — conservative, so a plane
+/// grazing such a face is refused rather than cut wrongly.
+///
+/// The all-planar solids keep their own cutter: this one runs only for a solid with a curved face or
+/// edge that the primitive recognisers did not take.
+[[nodiscard]] bool SliceCarryingCurvedFaces(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                            SliceKeep keep, Solid* outAbove, Solid* outBelow, Problem* outWhy) {
+  const double scale = ModelScale(solid);
+  const double eps = 1e-7 * scale;
+  const double margin = 1e-4 * scale;
+  auto sd = [&](const Vec3& p) { return ray3d::Dot(ray3d::Sub(p, planePoint), pn); };
+
+  // --- Classify every face by the distance range it covers -------------------------------------
+  std::vector<DistRange> edgeRange(solid.edges.size());
+  for (std::size_t i = 0; i < solid.edges.size(); ++i)
+    edgeRange[i] = EdgeDistRange(solid, solid.edges[i], planePoint, pn, margin);
+
+  bool needMesh = false;
+  for (const Face& f : solid.faces)
+    if (f.surface.kind == SurfaceKind::Sphere || f.surface.kind == SurfaceKind::Torus ||
+        f.surface.kind == SurfaceKind::Nurbs)
+      needMesh = true;
+  std::vector<DistRange> meshRange(solid.faces.size());
+  if (needMesh) {
+    Tessellation t;
+    Problem tw = Problem::Ok;
+    if (!Tessellate(solid, margin, &t, &tw))
+      return Fail(tw, outWhy);
+    for (std::size_t tri = 0; tri < t.triFace.size(); ++tri) {
+      const std::size_t fi = static_cast<std::size_t>(t.triFace[tri]);
+      for (int c = 0; c < 3; ++c) {
+        const std::size_t vi = t.indices[3 * tri + static_cast<std::size_t>(c)];
+        meshRange[fi].add(sd(Vec3{t.vertsXyz[3 * vi], t.vertsXyz[3 * vi + 1], t.vertsXyz[3 * vi + 2]}));
+      }
+    }
+  }
+
+  enum class Side { Above, Below, Split };
+  std::vector<Side> side(solid.faces.size());
+  bool anyAbove = false;
+  bool anyBelow = false;
+  for (std::size_t fi = 0; fi < solid.faces.size(); ++fi) {
+    const Face& f = solid.faces[fi];
+    DistRange r;
+    for (const Loop& lp : f.loops)
+      for (const EdgeUse& u : lp.uses) {
+        const DistRange& er = edgeRange[static_cast<std::size_t>(u.edge)];
+        r.add(er.lo);
+        r.add(er.hi);
+      }
+    const bool meshed = f.surface.kind == SurfaceKind::Sphere || f.surface.kind == SurfaceKind::Torus ||
+                        f.surface.kind == SurfaceKind::Nurbs;
+    if (meshed && meshRange[fi].hi >= meshRange[fi].lo) {
+      r.add(meshRange[fi].lo - margin);
+      r.add(meshRange[fi].hi + margin);
+    }
+    if (r.hi > eps)
+      anyAbove = true;
+    if (r.lo < -eps)
+      anyBelow = true;
+    if (r.lo >= -eps)
+      side[fi] = Side::Above;
+    else if (r.hi <= eps)
+      side[fi] = Side::Below;
+    else if (f.surface.kind != SurfaceKind::Plane)
+      return Fail(Problem::SliceCutCrossesCurvedFace, outWhy);
+    else
+      side[fi] = Side::Split;
+  }
+  if (!anyAbove || !anyBelow)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+
+  // --- Each piece as a list of faces, each loop a ring of segments ------------------------------
+  // A segment runs from `p` to the next segment's `p`. `src` is the source edge it reproduces whole
+  // (with its use direction), or -1 for a straight segment the cut made or shortened.
+  struct Seg {
+    Vec3 p;
+    int src = -1;
+    bool rev = false;
+  };
+  struct PieceFace {
+    Face face;  // surface and parameter data; its loops are rebuilt from `rings`
+    std::vector<std::vector<Seg>> rings;
+  };
+  std::vector<PieceFace> above;
+  std::vector<PieceFace> below;
+  std::vector<std::pair<Vec3, Vec3>> cutSegs;
+
+  const double weldEps = std::max(1e-7 * scale, 1e-12);
+  auto same = [&](const Vec3& a, const Vec3& b) { return ray3d::Length(ray3d::Sub(a, b)) <= weldEps; };
+  auto addCutSeg = [&](const Vec3& a, const Vec3& b) {
+    if (same(a, b))
+      return;
+    for (const auto& c : cutSegs)
+      if ((same(c.first, a) && same(c.second, b)) || (same(c.first, b) && same(c.second, a)))
+        return;  // an on-plane edge is shared by two faces; record it once
+    cutSegs.push_back({a, b});
+  };
+  auto startOf = [&](const EdgeUse& u) {
+    const Edge& e = solid.edges[static_cast<std::size_t>(u.edge)];
+    return solid.vertices[static_cast<std::size_t>(u.reversed ? e.v1 : e.v0)].p;
+  };
+  auto wholeRing = [&](const Loop& lp) {
+    std::vector<Seg> ring;
+    for (const EdgeUse& u : lp.uses) {
+      const bool curved = solid.edges[static_cast<std::size_t>(u.edge)].kind != CurveKind::Line;
+      ring.push_back(Seg{startOf(u), curved ? u.edge : -1, u.reversed});
+    }
+    return ring;
+  };
+
+  for (std::size_t fi = 0; fi < solid.faces.size(); ++fi) {
+    const Face& f = solid.faces[fi];
+    // A straight boundary edge lying IN the plane is part of the cap loop, whichever side it is on.
+    for (const Loop& lp : f.loops)
+      for (const EdgeUse& u : lp.uses) {
+        const Edge& e = solid.edges[static_cast<std::size_t>(u.edge)];
+        const DistRange& er = edgeRange[static_cast<std::size_t>(u.edge)];
+        if (er.lo >= -eps && er.hi <= eps) {
+          if (e.kind != CurveKind::Line)
+            return Fail(Problem::SliceCutCrossesCurvedFace, outWhy);  // the cap would need a curve
+          addCutSeg(solid.vertices[static_cast<std::size_t>(e.v0)].p, solid.vertices[static_cast<std::size_t>(e.v1)].p);
+        }
+      }
+
+    if (side[fi] != Side::Split) {
+      PieceFace pf{f, {}};
+      for (const Loop& lp : f.loops)
+        pf.rings.push_back(wholeRing(lp));
+      (side[fi] == Side::Above ? above : below).push_back(std::move(pf));
+      continue;
+    }
+
+    if (!f.paramLoops.empty())
+      return Fail(Problem::SliceResultInvalid, outWhy);  // a trimmed plane is not split here
+
+    // Split the outer loop. A curved edge on it lies wholly on one side (its face was not crossed,
+    // or this face would have been refused above), so it is copied whole to that side.
+    const std::vector<EdgeUse>& uses = f.loops[0].uses;
+    const std::size_t m = uses.size();
+    std::vector<Vec3> P(m);
+    std::vector<double> d(m);
+    for (std::size_t i = 0; i < m; ++i) {
+      P[i] = startOf(uses[i]);
+      d[i] = sd(P[i]);
+    }
+    std::vector<Seg> ra;
+    std::vector<Seg> rb;
+    std::vector<Vec3> cross;
+    for (std::size_t i = 0; i < m; ++i) {
+      const std::size_t j = (i + 1) % m;
+      const double di = d[i];
+      const double dj = d[j];
+      const Edge& e = solid.edges[static_cast<std::size_t>(uses[i].edge)];
+      const bool curved = e.kind != CurveKind::Line;
+      const DistRange& er = edgeRange[static_cast<std::size_t>(uses[i].edge)];
+      if (curved && er.lo < -eps && er.hi > eps)
+        return Fail(Problem::SliceCutCrossesCurvedFace, outWhy);
+      if (curved && std::fabs(di) <= eps && std::fabs(dj) <= eps)
+        return Fail(Problem::SliceCutCrossesCurvedFace, outWhy);  // its chord would need a curved cap
+      const bool edgeAbove = curved ? er.lo >= -eps : (di >= -eps && dj >= -eps);
+      const bool edgeBelow = curved ? er.hi <= eps : (di <= eps && dj <= eps);
+      if (di >= -eps)
+        ra.push_back(Seg{P[i], curved && edgeAbove ? uses[i].edge : -1, uses[i].reversed});
+      if (di <= eps)
+        rb.push_back(Seg{P[i], curved && edgeBelow ? uses[i].edge : -1, uses[i].reversed});
+      if (!curved && ((di > eps && dj < -eps) || (di < -eps && dj > eps))) {
+        const double t = di / (di - dj);
+        const Vec3 x = ray3d::Add(P[i], ray3d::Scale(ray3d::Sub(P[j], P[i]), t));
+        ra.push_back(Seg{x});
+        rb.push_back(Seg{x});
+        cross.push_back(x);
+      } else if (std::fabs(di) <= eps && ((dj > eps) != (dj < -eps))) {
+        cross.push_back(P[i]);
+      }
+    }
+    if (cross.size() != 2)
+      return Fail(Problem::SliceCutSeveralOutlines, outWhy);
+    addCutSeg(cross[0], cross[1]);
+
+    PieceFace fa{f, {}};
+    PieceFace fb{f, {}};
+    if (ra.size() >= 2)
+      fa.rings.push_back(std::move(ra));
+    if (rb.size() >= 2)
+      fb.rings.push_back(std::move(rb));
+    // A hole in the face lies wholly on one side (a plane through it would cross the hole's wall).
+    for (std::size_t li = 1; li < f.loops.size(); ++li) {
+      DistRange r;
+      for (const EdgeUse& u : f.loops[li].uses) {
+        r.add(edgeRange[static_cast<std::size_t>(u.edge)].lo);
+        r.add(edgeRange[static_cast<std::size_t>(u.edge)].hi);
+      }
+      if (r.lo >= -eps && !fa.rings.empty())
+        fa.rings.push_back(wholeRing(f.loops[li]));
+      else if (r.hi <= eps && !fb.rings.empty())
+        fb.rings.push_back(wholeRing(f.loops[li]));
+      else
+        return Fail(Problem::SliceCutSeveralOutlines, outWhy);
+    }
+    if (!fa.rings.empty())
+      above.push_back(std::move(fa));
+    if (!fb.rings.empty())
+      below.push_back(std::move(fb));
+  }
+
+  if (cutSegs.size() < 3)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+
+  // --- Chain the cut into one loop, as the all-planar cutter does -------------------------------
+  std::vector<Vec3> capRing;
+  std::vector<char> used(cutSegs.size(), 0);
+  capRing.push_back(cutSegs[0].first);
+  capRing.push_back(cutSegs[0].second);
+  used[0] = 1;
+  for (std::size_t guard = 0; guard <= cutSegs.size() + 2; ++guard) {
+    const Vec3 tail = capRing.back();
+    if (capRing.size() > 2 && same(tail, capRing.front())) {
+      capRing.pop_back();
+      break;
+    }
+    bool found = false;
+    for (std::size_t k = 0; k < cutSegs.size() && !found; ++k) {
+      if (used[k])
+        continue;
+      if (same(cutSegs[k].first, tail)) {
+        capRing.push_back(cutSegs[k].second);
+        used[k] = 1;
+        found = true;
+      } else if (same(cutSegs[k].second, tail)) {
+        capRing.push_back(cutSegs[k].first);
+        used[k] = 1;
+        found = true;
+      }
+    }
+    if (!found)
+      break;
+  }
+  for (char c : used)
+    if (!c)
+      return Fail(Problem::SliceCutSeveralOutlines, outWhy);
+  if (capRing.size() < 3)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+  std::vector<Vec3> capAbove = capRing;
+  if (RingSignedAreaAbout(capAbove, ray3d::Scale(pn, -1.0)) < 0.0)
+    std::reverse(capAbove.begin(), capAbove.end());
+  const std::vector<Vec3> capBelow(capAbove.rbegin(), capAbove.rend());
+  auto capFace = [&](const std::vector<Vec3>& ring, const Vec3& outward) {
+    PieceFace pf;
+    pf.face.surface = PlaneSurface(planePoint, outward);  // exactly the caller's plane
+    std::vector<Seg> segs;
+    for (const Vec3& p : ring)
+      segs.push_back(Seg{p});
+    pf.rings.push_back(std::move(segs));
+    return pf;
+  };
+
+  // --- Weld one piece: vertices by position, straight edges by their ends, curved edges by source -
+  auto weld = [&](const std::vector<PieceFace>& faces, Solid* dst) -> bool {
+    Solid s;
+    std::map<std::tuple<long long, long long, long long>, int> vmap;
+    auto quant = [&](double v) { return static_cast<long long>(std::llround(v / weldEps)); };
+    auto addV = [&](const Vec3& p) {
+      const auto key = std::make_tuple(quant(p.x), quant(p.y), quant(p.z));
+      const auto it = vmap.find(key);
+      if (it != vmap.end())
+        return it->second;
+      const int idx = AddVertex(&s, p);
+      vmap.emplace(key, idx);
+      return idx;
+    };
+    std::map<std::tuple<int, int, int>, int> emap;  // (lower vertex, higher vertex, source edge or -1)
+
+    for (const PieceFace& pf : faces) {
+      Face out = pf.face;
+      out.loops.clear();
+      for (const std::vector<Seg>& ring : pf.rings) {
+        // Drop repeated points so a split exactly at a vertex makes no zero-length segment.
+        std::vector<Seg> segs;
+        for (const Seg& sg : ring) {
+          if (!segs.empty() && segs.back().src < 0 && same(segs.back().p, sg.p)) {
+            segs.back() = sg;  // keep a whole curved edge that starts at the same point
+            continue;
+          }
+          segs.push_back(sg);
+        }
+        while (segs.size() > 1 && segs.back().src < 0 && same(segs.back().p, segs.front().p))
+          segs.pop_back();
+        Loop lp;
+        const std::size_t n = segs.size();
+        for (std::size_t i = 0; i < n; ++i) {
+          const Seg& sg = segs[i];
+          if (sg.src >= 0) {
+            const Edge& e = solid.edges[static_cast<std::size_t>(sg.src)];
+            const int a = addV(solid.vertices[static_cast<std::size_t>(e.v0)].p);
+            const int b = addV(solid.vertices[static_cast<std::size_t>(e.v1)].p);
+            const std::tuple<int, int, int> key{std::min(a, b), std::max(a, b), sg.src};
+            auto it = emap.find(key);
+            int ei;
+            if (it != emap.end()) {
+              ei = it->second;
+            } else {
+              Edge copy = e;
+              copy.v0 = a;
+              copy.v1 = b;
+              s.edges.push_back(std::move(copy));
+              ei = static_cast<int>(s.edges.size()) - 1;
+              emap.emplace(key, ei);
+            }
+            lp.uses.push_back(EdgeUse{ei, sg.rev});
+            continue;
+          }
+          const int a = addV(sg.p);
+          const int b = addV(segs[(i + 1) % n].p);
+          if (a == b)
+            return Fail(Problem::SliceResultComplex, outWhy);
+          const std::tuple<int, int, int> key{std::min(a, b), std::max(a, b), -1};
+          auto it = emap.find(key);
+          int ei;
+          if (it != emap.end()) {
+            ei = it->second;
+          } else {
+            ei = AddLine(&s, std::min(a, b), std::max(a, b));
+            emap.emplace(key, ei);
+          }
+          lp.uses.push_back(EdgeUse{ei, a > b});
+        }
+        if (!lp.uses.empty())
+          out.loops.push_back(std::move(lp));
+      }
+      if (out.loops.empty())
+        continue;
+      s.faces.push_back(std::move(out));
+    }
+    if (s.faces.size() < 3)
+      return Fail(Problem::SliceResultComplex, outWhy);
+    AddSingleShell(&s);
+    const Problem why = Validate(s);
+    if (why != Problem::Ok) {
+      const bool topo = why == Problem::EdgeNotUsedTwice || why == Problem::ShellOpenAtEdge ||
+                        why == Problem::EdgeNonManifold || why == Problem::EdgeOrientationInconsistent ||
+                        why == Problem::NotClosed || why == Problem::LoopNotClosed;
+      return Fail(topo ? Problem::SliceResultComplex : Problem::SliceResultInvalid, outWhy);
+    }
+    *dst = std::move(s);
+    return true;
+  };
+
+  above.push_back(capFace(capAbove, ray3d::Scale(pn, -1.0)));
+  below.push_back(capFace(capBelow, pn));
+  // Prove both pieces before writing either (REQ-201).
+  Solid pieceAbove;
+  Solid pieceBelow;
+  if (!weld(above, &pieceAbove) || !weld(below, &pieceBelow))
+    return false;
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+  if (wantAbove && outAbove)
+    *outAbove = std::move(pieceAbove);
+  if (wantBelow && outBelow)
+    *outBelow = std::move(pieceBelow);
+  return Succeed(outWhy);
+}
+
 } // namespace
 
 bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, SliceKeep keep,
@@ -7522,12 +7951,15 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
       // the cut is steeper than its side.
       if (solid.recipe.kind == PrimitiveKind::Cone)
         return Fail(Problem::SliceCutTooSteepForCone, outWhy);
-      return Fail(Problem::SliceCurvedFace, outWhy);
+      // Any other curved solid — a filleted box, a box with a drilled hole, a sphere — is cut when
+      // the plane crosses only its flat faces, the curved ones carried whole (GitHub #518).
+      return SliceCarryingCurvedFaces(solid, planePoint, upn, keep, outAbove, outBelow, outWhy);
     }
   }
   for (const Edge& e : solid.edges) {
     if (e.kind != CurveKind::Line)
-      return Fail(Problem::SliceCurvedFace, outWhy);
+      return SliceCarryingCurvedFaces(solid, planePoint, ray3d::Normalize(planeNormal), keep, outAbove,
+                                      outBelow, outWhy);
   }
 
   const Vec3 pn = ray3d::Normalize(planeNormal);
