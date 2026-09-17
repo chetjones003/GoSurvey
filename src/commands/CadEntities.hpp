@@ -468,6 +468,26 @@ struct CadArc {
   float nz = 1.f;
 };
 
+/// A pipe run's path (GitHub issue #486 increment B1 / REQ-345): an ordered polyline of vertices
+/// that owns TOPOLOGY, not geometry — the swept pipe solid is derived from this path plus
+/// \ref nominalSize each time it changes (see `CadBuildPipeRunSolids` in cadpiperun.hpp), never
+/// stored itself, the same "piping owns topology, blocks own geometry" split the issue's
+/// architectural notes call for. Model space only (3D piping has no paper-space counterpart), so
+/// unlike \ref CadArc this does not need to be dependency-free for PaperSpace.hpp's sake — it
+/// still lives here so every other model-space entity vector sits beside it.
+struct CadPipeRun {
+  /// Path vertices, 3 doubles each (x,y,z, REQ-057 absolute storage coords), size() a multiple of
+  /// 3. At least 2 vertices (one segment) for a valid run; fewer is refused at creation, not here.
+  std::vector<double> vertsXyz;
+  /// NPS label used for BOTH display and catalog lookup (D-2026-09-12 decision 4), e.g. "4in".
+  /// Not parametric — `CadPipeNominalOdFeet` (cadpiperun.hpp) is the one place it becomes a size.
+  std::string nominalSize;
+  /// "CS150" / "CS300" (D-2026-09-12 decision 1) or empty for an unclassified run. Kept a string,
+  /// not `CadPipePressureClass`, so this header stays free of cadblock.hpp's heavier includes;
+  /// `ParseCadPipePressureClass` / `CadPipePressureClassTag` convert at the few sites that need it.
+  std::string pressureClassTag;
+};
+
 // ---------------------------------------------------------------------------------------------
 // Curve plane normals (REQ-312).
 //
