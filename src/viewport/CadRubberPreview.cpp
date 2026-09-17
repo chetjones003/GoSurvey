@@ -4,6 +4,7 @@
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "geom2d.hpp"
+#include "util/cadpiperun.hpp"  // CadBuildPipeRunSolids (issue #486 increment B2 / REQ-345)
 
 #include <vector>
 
@@ -681,6 +682,55 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
         for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
           PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
                                static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+      }
+    }
+  }
+  // PIPERUN (issue #486 increment B2 / REQ-345). The pipe the cursor is currently proposing, drawn
+  // from the SAME `CadBuildPipeRunSolids` the next click commits and Enter finishes — POLYSOLID's
+  // own reasoning above, applied to a pipe run: what is on screen is the run that will be created.
+  //
+  // Nothing is drawn while the cursor point is degenerate (coincides with the last committed
+  // vertex) — an empty preview is the honest picture of "there is no new segment there".
+  if (cmd.active == AppCommandState::Kind::PipeRun &&
+      cmd.pipeRunPhase == AppCommandState::PipeRunPhase::WaitNextPoint) {
+    // Compass (REQ-346): the ghost segment snaps exactly the way the click that would commit it
+    // does (ApplyPipeRunCompassFromAnchor in SubmitPipeRunViewportPick) — same function, same
+    // anchor, so the preview never shows a direction the pick would then land somewhere else on.
+    double gx = curX;
+    double gy = curY;
+    double gz = static_cast<double>(CadCommitElevation(cmd));
+    const std::size_t n = cmd.pipeRunDraftVerts.size();
+    if (n >= 3) {
+      const float lastX = static_cast<float>(cmd.pipeRunDraftVerts[n - 3]);
+      const float lastY = static_cast<float>(cmd.pipeRunDraftVerts[n - 2]);
+      const float lastZ = static_cast<float>(cmd.pipeRunDraftVerts[n - 1]);
+      float wx = static_cast<float>(curX);
+      float wy = static_cast<float>(curY);
+      float wz = static_cast<float>(gz);
+      const float targetZ = static_cast<float>(gz);
+      ApplyPipeRunCompassFromAnchor(cmd, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
+      gx = static_cast<double>(wx);
+      gy = static_cast<double>(wy);
+      gz = static_cast<double>(wz);
+    }
+    CadPipeRun ghostRun;
+    ghostRun.vertsXyz = cmd.pipeRunDraftVerts;
+    ghostRun.vertsXyz.push_back(gx);
+    ghostRun.vertsXyz.push_back(gy);
+    ghostRun.vertsXyz.push_back(gz);
+    ghostRun.nominalSize = cmd.pipeRunNominalSize;
+    std::vector<CadSolidPtr> ghostSolids;
+    if (CadBuildPipeRunSolids(ghostRun, &ghostSolids)) {
+      brep::Problem why = brep::Problem::Ok;
+      for (const CadSolidPtr& gs : ghostSolids) {
+        if (!gs)
+          continue;
+        std::vector<double> segs;
+        if (brep::TessellateEdges(*gs, kSolidChordToleranceFt, &segs, &why)) {
+          for (std::size_t i = 0; i + 5 < segs.size(); i += 6)
+            PushRubberSegViewRel(rubberLines, segs[i], segs[i + 1], segs[i + 3], segs[i + 4], 0., 0.,
+                                 static_cast<float>(segs[i + 2]), static_cast<float>(segs[i + 5]));
+        }
       }
     }
   }

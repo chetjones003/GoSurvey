@@ -1508,6 +1508,8 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadSolidAttrs        = st.cadSolidAttrs;
   snap.cadTables            = st.cadTables;
   snap.cadTableAttrs        = st.cadTableAttrs;
+  snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
+  snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
   snap.blockDefs            = st.blockDefs;
   snap.cadBlockRefs         = st.cadBlockRefs;
   snap.cadBlockRefAttrs     = st.cadBlockRefAttrs;
@@ -1587,6 +1589,9 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadSolidAttrs        = snap.cadSolidAttrs;
   st.cadTables            = snap.cadTables;
   st.cadTableAttrs        = snap.cadTableAttrs;
+  st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
+  st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
+  st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
   st.blockDefs            = snap.blockDefs;
   st.cadBlockRefs         = snap.cadBlockRefs;
   st.cadBlockRefAttrs     = snap.cadBlockRefAttrs;
@@ -6432,6 +6437,7 @@ const CmdEntry kRegistry[] = {
     {"section",     "", "Cross-section of solids by a plane through three points (or the UCS), as a closed polyline"},
     {"solidcheck", "scheck", "Check every solid (or the selection): closed, manifold, oriented, self-intersecting"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
+    {"piperun", "pipe", "Route a pipe run: PIPERUN, nominal size [class], then points (U undo, END/Enter finishes)"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
     {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
@@ -13363,6 +13369,11 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     return;
   }
 
+  if (st.active == K::PipeRun) {
+    SubmitPipeRunViewportPick(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::Circle) {
     switch (st.circlePhase) {
     case AppCommandState::CirclePhase::WaitCenterOrMode:
@@ -14043,8 +14054,10 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
       break;
     case T::Mesh:
     case T::Surface:
-      // Display-only (REQ-063, REQ-068 / ADR-036 (b)): every transform refuses them by name, so a
-      // gizmo anchored partly on one would advertise a move that will not happen to it.
+    case T::PipeRun:
+      // Display-only (REQ-063, REQ-068 / ADR-036 (b); PipeRun issue #486 — the same stated
+      // boundary Solid has, on the enum's own doc comment): every transform refuses them by name,
+      // so a gizmo anchored partly on one would advertise a move that will not happen to it.
       break;
     }
   }
@@ -20970,11 +20983,13 @@ static ray3d::Vec3 ApproximateOnWorkPlaneFromXy(const ucs::Ucs& frame, double x,
   return ray3d::Vec3{x, y, z};
 }
 
-void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
-                                   bool polar, float anchorZ, float targetZ, float* wz) {
-  if (!polar || !st.polarMode || !wx || !wy)
-    return;
-  const ucs::Ucs frame = CadActiveUcsStorage(st);
+// Shared core of ApplyPolarConstrainFromAnchor and ApplyPipeRunCompassFromAnchor: snap *wx/*wy (and,
+// if resolvable, *wz) onto the nearest ray from anchor at a multiple of incrementDeg or one of
+// extraAnglesDeg, measured in frame's XY plane from its +X. Callers decide their own gate (POLAR's
+// st.polarMode, PIPERUN's st.pipeRunCompassOn) and pass the already-checked increment/extra angles.
+static void SnapPointToAngleSet(const ucs::Ucs& frame, float anchorX, float anchorY, float* wx, float* wy,
+                                float anchorZ, float targetZ, float* wz, double incrementDeg,
+                                const std::vector<double>& extraAnglesDeg) {
   // Prefer the REAL, already-resolved elevation of each point (issue #371) over solving the plane
   // equation for Z, which only has a real answer while the plane is close to horizontal.
   const bool haveRealZ = std::isfinite(anchorZ) && std::isfinite(targetZ);
@@ -20982,16 +20997,54 @@ void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
                                          : ApproximateOnWorkPlaneFromXy(frame, anchorX, anchorY);
   const ray3d::Vec3 targetPt =
       haveRealZ ? ray3d::Vec3{*wx, *wy, targetZ} : ApproximateOnWorkPlaneFromXy(frame, *wx, *wy);
-  const std::vector<double>& extra = st.polarExtraAnglesDeg;
-  const ray3d::Vec3 snapped = ucs::SnapToPolarRay(frame, anchorPt, targetPt, st.polarIncrementDeg,
-                                                  extra.empty() ? nullptr : extra.data(),
-                                                  static_cast<int>(extra.size()));
+  const ray3d::Vec3 snapped = ucs::SnapToPolarRay(frame, anchorPt, targetPt, incrementDeg,
+                                                  extraAnglesDeg.empty() ? nullptr : extraAnglesDeg.data(),
+                                                  static_cast<int>(extraAnglesDeg.size()));
   if (!std::isfinite(snapped.x) || !std::isfinite(snapped.y))
     return;  // leave the point alone rather than move it somewhere undefined (REQ-201)
   *wx = static_cast<float>(snapped.x);
   *wy = static_cast<float>(snapped.y);
   if (wz && std::isfinite(snapped.z))
     *wz = static_cast<float>(snapped.z);
+}
+
+void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool polar, float anchorZ, float targetZ, float* wz) {
+  if (!polar || !st.polarMode || !wx || !wy)
+    return;
+  SnapPointToAngleSet(CadActiveUcsStorage(st), anchorX, anchorY, wx, wy, anchorZ, targetZ, wz,
+                      st.polarIncrementDeg, st.polarExtraAnglesDeg);
+}
+
+void ApplyPipeRunCompassFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool compass, float anchorZ, float targetZ, float* wz) {
+  if (!compass || !st.pipeRunCompassOn || !wx || !wy)
+    return;
+  const ucs::Ucs frame = CadActiveUcsStorage(st);
+  // Unlike ordinary POLAR (fed a mouse pick that already lies ON the work plane, so an out-of-plane
+  // offset never arises), PIPERUN's compass is routinely fed an object-snap hit on a real 3D
+  // FEATURE — a flange face, an existing pipe's own wall — that can sit off the anchor's own UCS
+  // plane. SnapToPolarRay's documented contract PRESERVES that offset unchanged; silently carrying
+  // it through here would pull the new segment off the flat disc the compass ring promises on
+  // screen, landing the pipe somewhere the ring never showed. So the pick is FLATTENED onto the
+  // anchor's own plane first — the compass is a 2D dial, not a free 3D reach.
+  const bool haveRealZ = std::isfinite(anchorZ) && std::isfinite(targetZ);
+  const ray3d::Vec3 anchorPt = haveRealZ ? ray3d::Vec3{anchorX, anchorY, anchorZ}
+                                         : ApproximateOnWorkPlaneFromXy(frame, anchorX, anchorY);
+  const ray3d::Vec3 targetPt =
+      haveRealZ ? ray3d::Vec3{*wx, *wy, targetZ} : ApproximateOnWorkPlaneFromXy(frame, *wx, *wy);
+  const ucs::Ucs anchoredFrame = ucs::WithOrigin(frame, anchorPt);
+  const ucs::Point2D flatUv = ucs::WorldToPlane(anchoredFrame, targetPt);
+  const ray3d::Vec3 flatTarget = ucs::PlaneToWorld(anchoredFrame, flatUv);  // offset 0: exactly on plane
+  float fwx = static_cast<float>(flatTarget.x);
+  float fwy = static_cast<float>(flatTarget.y);
+  float fwz = static_cast<float>(flatTarget.z);
+  SnapPointToAngleSet(frame, anchorX, anchorY, &fwx, &fwy, anchorZ, fwz, &fwz, st.polarIncrementDeg,
+                      st.polarExtraAnglesDeg);
+  *wx = fwx;
+  *wy = fwy;
+  if (wz)
+    *wz = fwz;
 }
 
 void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
@@ -22582,6 +22635,10 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  while (st.cadPipeRunAttrs.size() < st.cadPipeRuns.size()) {  // issue #486
+    st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+    grew = true;
+  }
   while (st.cadTableAttrs.size() < st.cadTables.size()) {
     st.cadTableAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -23484,6 +23541,7 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
       case T::Table:        otherKinds.insert("table"); break;
       case T::Solid:        otherKinds.insert("solid"); break;
       case T::PdfUnderlay:  otherKinds.insert("PDF underlay"); break;
+      case T::PipeRun:      otherKinds.insert("pipe run"); break;
     }
   }
   std::sort(polyIdx.begin(), polyIdx.end());
@@ -24009,6 +24067,22 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     st.cadSolids.erase(st.cadSolids.begin() + static_cast<std::ptrdiff_t>(idx));
     if (static_cast<size_t>(idx) < st.cadSolidAttrs.size())
       st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  // Pipe runs (issue #486) — same shape as the B-rep solids just above: display-and-erase only,
+  // the caller's one undo snapshot already covers this removal.
+  std::set<int> pipeRunIx;
+  const size_t nPipeRun = st.cadPipeRuns.size();
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::PipeRun && e.index >= 0 && static_cast<size_t>(e.index) < nPipeRun)
+      pipeRunIx.insert(e.index);
+  }
+  std::vector<int> prv(pipeRunIx.begin(), pipeRunIx.end());
+  std::sort(prv.begin(), prv.end(), std::greater<int>());
+  for (int idx : prv) {
+    st.cadPipeRuns.erase(st.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadPipeRunAttrs.size())
+      st.cadPipeRunAttrs.erase(st.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
@@ -25129,6 +25203,7 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
   case T::FilledRegion:
   case T::PdfUnderlay:
   case T::Mesh:
+  case T::PipeRun:
     return static_cast<double>(e.index);
   }
   return 0.0;
@@ -28328,6 +28403,56 @@ bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
   return true;
 }
 
+static bool PipeRunWorldSolidVisible(const AppCommandState& st, size_t solidIndex);
+
+/// The nearest PIPE RUN solid under \p ray, as a `SelectedEntity` of `Type::PipeRun` (issue #486).
+/// A whole-entity pick only — deliberately NOT routed through `PickSubObjectAcrossSolids`/
+/// `SelectedSubObject`, which is scoped to `st.cadSolids` throughout the sub-object selection
+/// system (FILLET/CHAMFER/PRESSPULL edge-and-face picking): a pipe run's derived solid was never
+/// meant to be sub-object-edited, only selected/highlighted/erased/reported, the same boundary
+/// `Type::Solid` itself states on its own doc comment.
+static bool PickClosestPipeRunEntity(const AppCommandState& st, const ray3d::Ray& ray, float tolWorld,
+                                     SelectedEntity* out, double* outRayT) {
+  if (!out)
+    return false;
+  solidpick::Tolerance tol;
+  tol.vertex = static_cast<double>(tolWorld);
+  tol.edge = tol.vertex;
+  const bool facesPickable = st.viewportVisualStyle != VisualStyle::Wireframe2D;
+  bool any = false;
+  double bestT = 0.0;
+  int bestOwner = -1;
+  for (size_t i = 0; i < st.pipeRunWorldSolids.size(); ++i) {
+    if (!PipeRunWorldSolidVisible(st, i))
+      continue;
+    const CadSolidPtr& sp = st.pipeRunWorldSolids[i];
+    const auto ce = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
+                                 [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+    if (ce == st.solidDisplayCache.end() || ce->empty())
+      continue;  // never tessellate here — a pick must not cost a tessellation (REQ-318 item 7)
+    static const std::vector<float> kNoTriVerts;
+    static const std::vector<int> kNoTriFaceIds;
+    solidpick::Pick p;
+    if (!solidpick::PickSubObject(*sp, facesPickable ? ce->triVerts : kNoTriVerts,
+                                  facesPickable ? ce->triFaceIds : kNoTriFaceIds, ray, tol, &p, nullptr))
+      continue;
+    if (any && !(p.rayT < bestT))
+      continue;
+    any = true;
+    bestT = p.rayT;
+    bestOwner = i < st.pipeRunWorldSolidOwnerIndex.size() ? st.pipeRunWorldSolidOwnerIndex[i] : -1;
+  }
+  if (!any || bestOwner < 0)
+    return false;
+  SelectedEntity e{};
+  e.type = SelectedEntity::Type::PipeRun;
+  e.index = bestOwner;
+  *out = e;
+  if (outRayT)
+    *outRayT = bestT;
+  return true;
+}
+
 bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, float tolWorld,
                             SelectedEntity* out, double* outRayT) {
   if (!out)
@@ -28339,17 +28464,32 @@ bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, fl
   solidpick::Pick pick{};
   // 2D Wireframe draws no faces, so none is clickable there (D-2026-09-16-b).
   const bool facesPickable = st.viewportVisualStyle != VisualStyle::Wireframe2D;
-  if (!PickSubObjectAcrossSolids(st, ray, tol, &sub, &pick, facesPickable))
-    return false;
-  if (sub.solidIndex < 0 || static_cast<std::size_t>(sub.solidIndex) >= st.cadSolids.size())
-    return false;
-  SelectedEntity e{};
-  e.type = SelectedEntity::Type::Solid;
-  e.index = sub.solidIndex;
-  *out = e;
-  if (outRayT)
-    *outRayT = pick.rayT;
-  return true;
+  const bool haveSolid = PickSubObjectAcrossSolids(st, ray, tol, &sub, &pick, facesPickable) &&
+                        sub.solidIndex >= 0 && static_cast<std::size_t>(sub.solidIndex) < st.cadSolids.size();
+
+  // Pipe runs (issue #486): whichever of a real solid or a pipe run's derived solid the ray hits
+  // FIRST wins — the same "nearer one answers" rule every other entity-vs-entity precedence in
+  // this codebase follows, not a fixed priority between the two kinds.
+  SelectedEntity pipeRunHit{};
+  double pipeRunT = 0.0;
+  const bool havePipeRun = PickClosestPipeRunEntity(st, ray, tolWorld, &pipeRunHit, &pipeRunT);
+
+  if (haveSolid && (!havePipeRun || pick.rayT <= pipeRunT)) {
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::Solid;
+    e.index = sub.solidIndex;
+    *out = e;
+    if (outRayT)
+      *outRayT = pick.rayT;
+    return true;
+  }
+  if (havePipeRun) {
+    *out = pipeRunHit;
+    if (outRayT)
+      *outRayT = pipeRunT;
+    return true;
+  }
+  return false;
 }
 
 bool BuildSubObjectHoverRow(const AppCommandState& st, const SelectedSubObject& s,
@@ -28524,6 +28664,7 @@ static void RebuildPipeRunWorldSolids(AppCommandState& st) {
   st.pipeRunWorldSolidsSig = sig;
   st.pipeRunWorldSolids.clear();
   st.pipeRunWorldSolidAttrs.clear();
+  st.pipeRunWorldSolidOwnerIndex.clear();
   for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
     const EntityAttributes runAttr = ri < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[ri] : EntityAttributes{};
     std::vector<CadSolidPtr> segSolids;
@@ -28531,6 +28672,7 @@ static void RebuildPipeRunWorldSolids(AppCommandState& st) {
     for (CadSolidPtr& sp : segSolids) {
       st.pipeRunWorldSolids.push_back(std::move(sp));
       st.pipeRunWorldSolidAttrs.push_back(runAttr);
+      st.pipeRunWorldSolidOwnerIndex.push_back(static_cast<int>(ri));
     }
   }
 }
@@ -33005,6 +33147,254 @@ void SubmitPolysolidViewportPick(AppCommandState& st, float wx, float wy,
   AddPolysolidPoint(st, ucs::WorldToPlane(PolysolidFrame(st), pt), log);
 }
 
+// ---------------------------------------------------------------------------------------------
+// PIPERUN (issue #486 increment B2 / REQ-345): prompted nominal size + pressure class, then
+// click-to-add straight vertices — a `CadPipeRun`'s path, committed as one entity on Enter/END.
+// Shaped after POLYSOLID immediately above: a path-building command with its own Kind, its own
+// draft state, and one prompt-text function both the status bar and the typed-line echo share.
+// Unlike POLYSOLID's plane-relative path, a pipe run's vertices are stored as absolute
+// storage-coordinate xyz (REQ-057) — the same form `CadPipeRun::vertsXyz` itself uses, so commit
+// is a plain copy with no second representation to keep in step.
+// ---------------------------------------------------------------------------------------------
+
+void CancelPipeRunCommand(AppCommandState& st) {
+  st.pipeRunDraftVerts.clear();
+  st.pipeRunPhase = AppCommandState::PipeRunPhase::WaitNominalSize;
+  // Nominal size and pressure class deliberately SURVIVE the cancel — remembered for the next run,
+  // the same reason POLYSOLID's width/height/justify survive its own cancel.
+}
+
+std::string CadPipeRunPromptText(const AppCommandState& st) {
+  using PRP = AppCommandState::PipeRunPhase;
+  const std::string classSuffix =
+      st.pipeRunPressureClassTag.empty() ? std::string() : (" " + st.pipeRunPressureClassTag);
+  char buf[256];
+  if (st.pipeRunPhase == PRP::WaitNominalSize) {
+    if (st.pipeRunNominalSize.empty())
+      return "PIPERUN - nominal size (e.g. 4in), optional pressure class (CS150/CS300):";
+    std::snprintf(buf, sizeof(buf), "PIPERUN - nominal size [%s%s], Enter to keep:",
+                  st.pipeRunNominalSize.c_str(), classSuffix.c_str());
+    return buf;
+  }
+  if (st.pipeRunPhase == PRP::WaitFirstPoint) {
+    std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s] - start point, or ESC to cancel:",
+                  st.pipeRunNominalSize.c_str(), classSuffix.c_str());
+    return buf;
+  }
+  std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s] - next point (compass %s), or Undo/End/Compass, Enter to finish:",
+                st.pipeRunNominalSize.c_str(), classSuffix.c_str(), st.pipeRunCompassOn ? "on" : "off");
+  return buf;
+}
+
+namespace {
+
+/// Store the run built from the path so far and end the command.
+void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.pipeRunDraftVerts.size() < 6) {  // fewer than 2 vertices
+    log.push_back("PIPERUN - a run needs at least two points; Esc cancels.");
+    return;
+  }
+  CadPipeRun run;
+  run.vertsXyz = st.pipeRunDraftVerts;
+  run.nominalSize = st.pipeRunNominalSize;
+  run.pressureClassTag = st.pipeRunPressureClassTag;
+  // The size itself was already validated when it was set (below), but the swept solid can still
+  // refuse: a corner too tight for a 1.5x-nominal-size long-radius fillet (CadBuildPipeRunSolids's
+  // own doc comment) has no valid geometry to build, so this is a real, reachable failure — not
+  // belt-and-braces — and the run stays open so U/Esc can fix the offending corner.
+  std::vector<CadSolidPtr> preview;
+  if (!CadBuildPipeRunSolids(run, &preview)) {
+    log.push_back("PIPERUN - could not build a pipe solid — a corner may be too tight for this "
+                  "size's fillet radius. U to remove the last point, or Esc to cancel.");
+    return;
+  }
+  PushUndoSnapshot(st, "Create Pipe Run");
+  const size_t nVerts = run.vertsXyz.size() / 3;
+  st.cadPipeRuns.push_back(std::move(run));
+  st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  log.push_back("PIPERUN - run created: " + std::to_string(nVerts) + " point(s).");
+  CancelPipeRunCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+/// Append \p pt as the run's start (WaitFirstPoint) or next vertex (WaitNextPoint), refusing a
+/// point identical to the last one committed.
+void AddPipeRunPoint(AppCommandState& st, const ray3d::Vec3& pt, std::vector<std::string>& log) {
+  using PRP = AppCommandState::PipeRunPhase;
+  if (st.pipeRunPhase == PRP::WaitFirstPoint) {
+    st.pipeRunDraftVerts = {pt.x, pt.y, pt.z};
+    st.pipeRunPhase = PRP::WaitNextPoint;
+    log.push_back(CadPipeRunPromptText(st));
+    return;
+  }
+  const size_t n = st.pipeRunDraftVerts.size();
+  if (n >= 3) {
+    const double lx = st.pipeRunDraftVerts[n - 3];
+    const double ly = st.pipeRunDraftVerts[n - 2];
+    const double lz = st.pipeRunDraftVerts[n - 1];
+    if (std::fabs(pt.x - lx) < 1e-9 && std::fabs(pt.y - ly) < 1e-9 && std::fabs(pt.z - lz) < 1e-9) {
+      log.push_back("PIPERUN - that is the same point as the last one.");
+      return;
+    }
+  }
+  st.pipeRunDraftVerts.push_back(pt.x);
+  st.pipeRunDraftVerts.push_back(pt.y);
+  st.pipeRunDraftVerts.push_back(pt.z);
+  log.push_back(CadPipeRunPromptText(st));
+}
+
+} // namespace
+
+void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelPipeRunCommand(st);
+  st.active = AppCommandState::Kind::PipeRun;
+  log.push_back(CadPipeRunPromptText(st));
+}
+
+bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  using PRP = AppCommandState::PipeRunPhase;
+  const std::string line = StringUtil::trimCopy(lineIn);
+
+  if (st.pipeRunPhase == PRP::WaitNominalSize) {
+    if (line.empty()) {
+      if (st.pipeRunNominalSize.empty()) {
+        log.push_back("PIPERUN - a nominal size is required, e.g. 4in.");
+        return true;
+      }
+      st.pipeRunPhase = PRP::WaitFirstPoint;
+      log.push_back(CadPipeRunPromptText(st));
+      return true;
+    }
+    std::istringstream iss(line);
+    std::string sizeTok;
+    std::string classTok;
+    iss >> sizeTok >> classTok;
+    double odFeet = 0.0;
+    if (!CadPipeNominalOdFeet(sizeTok, &odFeet)) {
+      log.push_back("PIPERUN - unknown nominal size \"" + sizeTok +
+                    "\". Known NPS sizes: 0.5in, 0.75in, 1in, 1.25in, 1.5in, 2in, 2.5in, 3in, 4in, "
+                    "6in, 8in, 10in, 12in.");
+      return true;
+    }
+    std::string classTag;
+    if (!classTok.empty()) {
+      const CadPipePressureClass pc = ParseCadPipePressureClass(classTok);
+      if (pc == CadPipePressureClass::None) {
+        log.push_back("PIPERUN - unknown pressure class \"" + classTok + "\". Use CS150 or CS300.");
+        return true;
+      }
+      classTag = std::string(CadPipePressureClassTag(pc));
+    }
+    st.pipeRunNominalSize = sizeTok;
+    st.pipeRunPressureClassTag = classTag;
+    st.pipeRunPhase = PRP::WaitFirstPoint;
+    log.push_back(CadPipeRunPromptText(st));
+    return true;
+  }
+
+  if (line.empty()) {
+    if (st.pipeRunPhase == PRP::WaitFirstPoint) {
+      log.push_back("PIPERUN canceled — no points picked.");
+      CancelPipeRunCommand(st);
+      st.active = AppCommandState::Kind::None;
+      return true;
+    }
+    CommitPipeRunDraft(st, log);
+    return true;
+  }
+
+  const std::string low = StringUtil::toLowerAsciiCopy(line);
+  if (low == "end") {
+    if (st.pipeRunPhase != PRP::WaitNextPoint)
+      log.push_back("PIPERUN END - need at least one segment after the start point.");
+    else
+      CommitPipeRunDraft(st, log);
+    return true;
+  }
+  if (low == "u" || low == "undo") {
+    // Mirrors POLYLINE's own U guard: cannot undo past the first point (that's what ESC is for).
+    if (st.pipeRunPhase != PRP::WaitNextPoint || st.pipeRunDraftVerts.size() < 6) {
+      log.push_back("PIPERUN - nothing to undo yet.");
+      return true;
+    }
+    st.pipeRunDraftVerts.resize(st.pipeRunDraftVerts.size() - 3);
+    log.push_back(CadPipeRunPromptText(st));
+    return true;
+  }
+  if (low == "compass") {
+    // Scoped to this command only (REQ-346) — does not touch st.polarMode, which governs ordinary
+    // POLAR tracking in every other command.
+    st.pipeRunCompassOn = !st.pipeRunCompassOn;
+    log.push_back(st.pipeRunCompassOn ? "PIPERUN - compass ON." : "PIPERUN - compass OFF.");
+    log.push_back(CadPipeRunPromptText(st));
+    return true;
+  }
+
+  // Compass typed-distance entry (REQ-346): a bare number, while a direction is snapped, commits a
+  // segment of exactly that length along the snapped ray — the same "direction from the compass,
+  // distance from the keyboard" idea AutoCAD's own direct-distance entry uses for ORTHO/POLAR.
+  if (st.pipeRunPhase == PRP::WaitNextPoint && st.pipeRunCompassOn && st.pipeRunDraftVerts.size() >= 3) {
+    char* distEnd = nullptr;
+    const double dist = std::strtod(line.c_str(), &distEnd);
+    if (distEnd && *distEnd == '\0' && !line.empty() && std::isfinite(dist) && dist > 0.0) {
+      const size_t n = st.pipeRunDraftVerts.size();
+      const float lastX = static_cast<float>(st.pipeRunDraftVerts[n - 3]);
+      const float lastY = static_cast<float>(st.pipeRunDraftVerts[n - 2]);
+      const float lastZ = static_cast<float>(st.pipeRunDraftVerts[n - 1]);
+      // Prefer a live object-snap point over the raw cursor, matching SubmitPipeRunViewportPick and
+      // the compass overlay (CadUi.cpp) — the three must agree on what "the current direction" is.
+      float wx = st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalX) : st.uiCursorWorldX;
+      float wy = st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalY) : st.uiCursorWorldY;
+      float wz = lastZ;
+      const float targetZ = static_cast<float>(CadCommitElevation(st));
+      ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
+      // The FULL 3D direction, not just X/Y: under a Front/Left/Right-style UCS the snapped ray runs
+      // along world Z (or another axis carried entirely by the resolved wz), so an X/Y-only length
+      // came out ~0 and fell through to the point parser below — which is what produced "could not
+      // read the base point" for a plain typed distance under those UCS orientations.
+      const double dx = static_cast<double>(wx) - lastX;
+      const double dy = static_cast<double>(wy) - lastY;
+      const double dz = static_cast<double>(wz) - lastZ;
+      const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
+      if (len > 1e-9) {
+        const double ux = dx / len;
+        const double uy = dy / len;
+        const double uz = dz / len;
+        const ray3d::Vec3 pt{lastX + ux * dist, lastY + uy * dist, lastZ + uz * dist};
+        AddPipeRunPoint(st, pt, log);
+        return true;
+      }
+    }
+  }
+
+  ray3d::Vec3 pt{};
+  if (!ParseSolidBasePoint(st, line, &pt, log, "PIPERUN"))
+    return true;  // the reason has been reported; the prompt stands
+  AddPipeRunPoint(st, pt, log);
+  return true;
+}
+
+void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using PRP = AppCommandState::PipeRunPhase;
+  if (st.pipeRunPhase == PRP::WaitNominalSize) {
+    log.push_back("PIPERUN - type a nominal size first (e.g. 4in), optionally followed by a "
+                  "pressure class.");
+    return;
+  }
+  // Compass (REQ-346): only meaningful once a start point exists to measure the angle from.
+  const size_t n = st.pipeRunDraftVerts.size();
+  if (st.pipeRunPhase == PRP::WaitNextPoint && n >= 3) {
+    const float lastX = static_cast<float>(st.pipeRunDraftVerts[n - 3]);
+    const float lastY = static_cast<float>(st.pipeRunDraftVerts[n - 2]);
+    const float lastZ = static_cast<float>(st.pipeRunDraftVerts[n - 1]);
+    const float targetZ = static_cast<float>(CadCommitElevation(st));
+    ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ);
+  }
+  const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st)};
+  AddPipeRunPoint(st, pt, log);
+}
+
 namespace {
 
 /// Append the straight run \p from -> \p to, in \p frame's plane, refusing a point off that plane.
@@ -34627,6 +35017,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("POLYSOLID canceled.");
     CancelPolysolidCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::PipeRun) {
+    log.push_back("PIPERUN canceled.");
+    CancelPipeRunCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
   else if (st.active == AppCommandState::Kind::FeatureLine)
@@ -35801,6 +36195,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // argument count, so there is no one-line form to offer.
     if (plotTok == "polysolid" || plotTok == "psolid") {
       StartPolysolidCommand(st, log);
+      return;
+    }
+    // PIPERUN (issue #486 increment B2 / REQ-345): prompted only, same reason POLYSOLID is — a
+    // routed path has no fixed argument count.
+    if (plotTok == "piperun" || plotTok == "pipe") {
+      StartPipeRunCommand(st, log);
       return;
     }
     if (plotTok == "isolines") {
@@ -37583,6 +37983,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandlePolysolidTextInput(line, st, log))
       return;
     log.push_back(CadPolysolidPromptText(st));
+    return;
+  }
+
+  // PIPERUN (issue #486 increment B2 / REQ-345), the same self-contained shape as POLYSOLID above:
+  // a nominal-size/class line, then points.
+  if (st.active == AppCommandState::Kind::PipeRun) {
+    if (HandlePipeRunTextInput(line, st, log))
+      return;
+    log.push_back(CadPipeRunPromptText(st));
     return;
   }
 

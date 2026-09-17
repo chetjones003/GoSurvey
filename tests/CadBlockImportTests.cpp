@@ -676,6 +676,233 @@ TEST_CASE("INSERT connector snap places the fitting port on the target", "[issue
   CHECK(dot == Catch::Approx(-1.f).margin(0.02));
 }
 
+TEST_CASE("INSERT connector snap reaches a CadPipeRun's own end (issue #486)",
+          "[issue475][issue486][block][connector][insert][piperun]") {
+  AppCommandState st;
+
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+
+  CadBlockDefinition flange;
+  flange.name = "FLANGE";
+  CadBlockConnection fc;
+  fc.name = "P1";
+  fc.x = 0.f;
+  fc.y = 0.f;
+  fc.z = 0.f;
+  fc.nx = 0.f;
+  fc.ny = 0.f;
+  fc.nz = 1.f;
+  flange.connections.push_back(fc);
+  st.blockDefs.push_back(flange);
+
+  std::vector<std::string> log;
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "FLANGE");
+  st.insertBlockSpecifyConnectorSnap = true;
+  st.insertBlockSpecifyPoint = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+
+  // Click near the run's END (10,0,0), not exactly on it — the snap is a nearest-within-2ft search.
+  REQUIRE(SubmitInsertBlockConnectorPick(st, 9.99f, 0.f, 0.f, log));
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  const bool sawPipeEnd =
+      std::any_of(log.begin(), log.end(), [](const std::string& s) { return s.find("pipe end") != std::string::npos; });
+  CHECK(sawPipeEnd);
+
+  std::vector<CadBlockWorldConnection> world;
+  CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[0], 0, &world);
+  REQUIRE(world.size() == 1);
+  CHECK(world[0].x == Catch::Approx(10.f).margin(0.002));
+  CHECK(world[0].y == Catch::Approx(0.f).margin(0.002));
+}
+
+TEST_CASE("A connection point configured only for pipe end ignores a CLOSER but incompatible port "
+          "(user request 2026-09-17)",
+          "[issue486][issue496][block][connector][insert]") {
+  AppCommandState st;
+
+  // A pipe run end at (10,0,0) — farther from the click point than the host port below.
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+
+  // A real block connection port (generic — no part type) at (9,0,0), CLOSER to the click point.
+  CadBlockDefinition host;
+  host.name = "HOST";
+  CadBlockConnection hc;
+  hc.name = "P1";
+  hc.x = 9.f;
+  hc.y = 0.f;
+  hc.z = 0.f;
+  hc.nz = 1.f;
+  host.connections.push_back(hc);
+  st.blockDefs.push_back(host);
+  CadBlockXform hostXf;
+  std::vector<std::string> setupLog;
+  REQUIRE(CadBlockPlaceInsert(st, "HOST", hostXf, false, setupLog));
+  REQUIRE(st.cadBlockRefs.size() == 1);
+
+  // The fitting being inserted has a port configured ONLY for a pipe end — no FlangeFace/GenericPort
+  // mode and no isDefault fallback, so a generic block port must never be an acceptable target for it.
+  CadBlockDefinition flange;
+  flange.name = "FLANGE";
+  CadBlockConnection fc;
+  fc.name = "P1";
+  fc.nz = 1.f;
+  CadBlockConnectionMode pipeMode;
+  pipeMode.name = "ToPipe";
+  pipeMode.target = CadConnectionModeTarget::PipeEnd;
+  pipeMode.isDefault = false;
+  fc.modes.push_back(pipeMode);
+  flange.connections.push_back(fc);
+  st.blockDefs.push_back(flange);
+
+  std::vector<std::string> log;
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "FLANGE");
+  st.insertBlockSpecifyConnectorSnap = true;
+  st.insertBlockSpecifyPoint = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+
+  // Click at (9.3,0,0): 0.3 ft from the host port, 0.7 ft from the pipe end — the host port is
+  // geometrically nearer, but incompatible with this connection point's configured mode.
+  REQUIRE(SubmitInsertBlockConnectorPick(st, 9.3f, 0.f, 0.f, log));
+  REQUIRE(st.cadBlockRefs.size() == 2);  // HOST (setup) + the placed FLANGE
+
+  const bool sawPipeEnd =
+      std::any_of(log.begin(), log.end(), [](const std::string& s) { return s.find("pipe end") != std::string::npos; });
+  CHECK(sawPipeEnd);
+
+  std::vector<CadBlockWorldConnection> world;
+  CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[1], 1, &world);
+  REQUIRE(world.size() == 1);
+  CHECK(world[0].x == Catch::Approx(10.f).margin(0.002));  // landed on the FARTHER but compatible pipe end
+  CHECK(world[0].y == Catch::Approx(0.f).margin(0.002));
+}
+
+TEST_CASE("INSERT auto-picks the block's WELD-NECK port (not the FIRST-defined gasket-face port) "
+          "when snapping to a pipe end (issue #486 user bug report)",
+          "[issue486][issue496][block][connector][insert]") {
+  AppCommandState st;
+
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+
+  // A flange with TWO connection points, gasketFace defined FIRST (reproducing the reported bug:
+  // InsertSourceConnection used to always default to connections.front()), each with exactly ONE
+  // mode aimed at a different target — exactly the setup in the user's screenshots.
+  CadBlockDefinition flange;
+  flange.name = "WELD_NECK_FLANGE";
+  CadBlockConnection gasketFace;
+  gasketFace.name = "gasketFace";
+  gasketFace.nz = 1.f;
+  CadBlockConnectionMode gasketMode;
+  gasketMode.name = "Mode 1";
+  gasketMode.target = CadConnectionModeTarget::FlangeFace;
+  gasketMode.isDefault = true;  // matches the reported scenario: the UI's natural single-mode state
+  gasketFace.modes.push_back(gasketMode);
+  flange.connections.push_back(gasketFace);
+
+  CadBlockConnection weldNeckFace;
+  weldNeckFace.name = "weldNeckFace";
+  weldNeckFace.nz = 1.f;
+  CadBlockConnectionMode weldMode;
+  weldMode.name = "Mode 1";
+  weldMode.target = CadConnectionModeTarget::PipeEnd;
+  weldMode.isDefault = true;    // both flagged default is exactly what made the wrong port "match"
+  weldNeckFace.modes.push_back(weldMode);
+  flange.connections.push_back(weldNeckFace);
+  st.blockDefs.push_back(flange);
+
+  std::vector<std::string> log;
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "WELD_NECK_FLANGE");
+  st.insertBlockConnectorName[0] = '\0';  // no explicit choice — auto-detect, the reported scenario
+  st.insertBlockSpecifyConnectorSnap = true;
+  st.insertBlockSpecifyPoint = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+
+  REQUIRE(SubmitInsertBlockConnectorPick(st, 9.99f, 0.f, 0.f, log));
+  REQUIRE(st.cadBlockRefs.size() == 1);
+
+  const bool usedWeldNeck = std::any_of(log.begin(), log.end(), [](const std::string& s) {
+    return s.find("pipe end") != std::string::npos;
+  });
+  CHECK(usedWeldNeck);
+
+  // weldNeckFace was authored at the block's local origin (0,0,0), same as gasketFace — but the
+  // POINT that mattered is which port's world connection actually lands on the pipe end (10,0,0).
+  std::vector<CadBlockWorldConnection> world;
+  CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[0], 0, &world);
+  REQUIRE(world.size() == 2);
+  const auto weldNeckWorld = std::find_if(world.begin(), world.end(),
+                                          [](const CadBlockWorldConnection& c) { return c.name == "weldNeckFace"; });
+  REQUIRE(weldNeckWorld != world.end());
+  CHECK(weldNeckWorld->x == Catch::Approx(10.f).margin(0.002));
+  CHECK(weldNeckWorld->y == Catch::Approx(0.f).margin(0.002));
+}
+
+TEST_CASE("A connection point configured only for a flange face ignores a nearby pipe end",
+          "[issue486][issue496][block][connector][insert]") {
+  AppCommandState st;
+
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+
+  CadBlockDefinition flange;
+  flange.name = "FLANGE";
+  CadBlockConnection fc;
+  fc.name = "P1";
+  fc.nz = 1.f;
+  CadBlockConnectionMode faceMode;
+  faceMode.name = "ToFace";
+  faceMode.target = CadConnectionModeTarget::FlangeFace;
+  faceMode.isDefault = false;
+  fc.modes.push_back(faceMode);
+  flange.connections.push_back(fc);
+  st.blockDefs.push_back(flange);
+
+  std::vector<std::string> log;
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "FLANGE");
+  st.insertBlockSpecifyConnectorSnap = true;
+  st.insertBlockSpecifyPoint = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+
+  // Only a pipe end is nearby (no flange face anywhere) — this port must refuse rather than snap
+  // to a target kind it was never configured to mate with.
+  REQUIRE_FALSE(SubmitInsertBlockConnectorPick(st, 9.99f, 0.f, 0.f, log));
+  CHECK(st.cadBlockRefs.empty());
+  const bool sawRefusal = std::any_of(log.begin(), log.end(), [](const std::string& s) {
+    return s.find("configured mode") != std::string::npos;
+  });
+  CHECK(sawRefusal);
+}
+
 TEST_CASE("BEDIT BCONNECT wizard: typed coords persist on the definition",
           "[issue475][issue496][block][connector][bedit]") {
   AppCommandState st;

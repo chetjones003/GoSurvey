@@ -95,7 +95,13 @@ struct SelectedEntity {
     /// it belongs with #120's Phase 5 direct-modelling requirement. Every transform command refuses
     /// a solid with a stated reason (REQ-201) rather than silently dropping it from the operation —
     /// the rule Surface already established.
-    Solid = 13
+    Solid = 13,
+    /// CadPipeRun (issue #486). Appended after Solid so existing type values stay stable. The SAME
+    /// stated boundary Solid has: display, select, highlight, hover-report and erase, but no
+    /// transform command moves it — a pipe run's geometry is DERIVED from its path via auto-fillet
+    /// sweeping (cadpiperun.hpp), so a direct drag would need the same re-solve REQ-070 declined for
+    /// a TIN surface's own derived geometry.
+    PipeRun = 14
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -1037,6 +1043,12 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
+  /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
+  /// swapped for exactly this reason ("hide everything that is not the block being edited",
+  /// LoadBlockPrimitivesIntoDrawing), and cadPipeRuns simply arrived after that pass was written.
+  std::vector<CadPipeRun>       cadPipeRuns;
+  std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
@@ -1608,6 +1620,12 @@ struct AppCommandState {
     /// BLOCKFITTING (issue #496): prompted tagging of the block being edited as a piping catalog
     /// part — part type, nominal size, pressure class, part number.
     BlockFitting,
+    /// PIPERUN (issue #486 increment B2 / REQ-345): prompted routing of a `CadPipeRun` — nominal
+    /// size (+ optional pressure class) first, then click-to-add straight vertices with a live
+    /// rubber-band pipe preview, Undo/End/ESC. Its own Kind for the same reason POLYSOLID has one:
+    /// a path built from a variable number of points needs different state than a fixed-parameter
+    /// command, and this one commits into `cadPipeRuns` rather than `cadSolids`.
+    PipeRun,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1684,6 +1702,7 @@ struct AppCommandState {
     case Kind::BConnect:           return "BCONNECT";
     case Kind::BConnectEdit:       return "BCONNECTEDIT";
     case Kind::BlockFitting:       return "BLOCKFITTING";
+    case Kind::PipeRun:            return "PIPERUN";
     default:                  return "";
     }
   }
@@ -2495,6 +2514,29 @@ struct AppCommandState {
   double polysolidHeight = 4.0;
   brep::Justify polysolidJustify = brep::Justify::Center;
 
+  // --- PIPERUN: interactive CadPipeRun routing (issue #486 increment B2 / REQ-345) --------------
+
+  enum class PipeRunPhase {
+    WaitNominalSize,  ///< first prompt of a run: nominal size, optional pressure class
+    WaitFirstPoint,   ///< size known; the next click/point is the run's start
+    WaitNextPoint,    ///< a run is under way; each further point commits a straight segment
+  } pipeRunPhase = PipeRunPhase::WaitNominalSize;
+
+  /// The path so far, storage-coordinate xyz triples (REQ-057) — exactly the form `CadPipeRun`
+  /// itself stores, so commit is a plain copy rather than a second representation to keep in step.
+  std::vector<double> pipeRunDraftVerts;
+  /// Remembered across runs the way POLYSOLID remembers width/height/justify (`polysolidWidth`
+  /// etc. above): a pipe run is almost always drawn at the same size as the last one.
+  std::string pipeRunNominalSize;
+  std::string pipeRunPressureClassTag;
+  /// Ortho/polar compass (REQ-346): while \c true, the next-vertex preview and pick snap to
+  /// REQ-108's angle set (\ref polarIncrementDeg / \ref polarExtraAnglesDeg) measured from the run's
+  /// last committed vertex. Its own toggle, independent of \ref polarMode, so PIPERUN keeps snapping
+  /// even with ordinary POLAR tracking off (and vice versa). On by default, matching AutoCAD Plant
+  /// 3D's own compass default. Not saved with the drawing — a per-command UI setting, like
+  /// \ref orthoMode / \ref polarMode.
+  bool pipeRunCompassOn = true;
+
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
     WaitRadius,       ///< Center set: radius click, number, or D + diameter
@@ -2762,6 +2804,13 @@ struct AppCommandState {
   std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<CadSolidPtr> pipeRunWorldSolids;
   std::vector<EntityAttributes> pipeRunWorldSolidAttrs;
+  /// Which `cadPipeRuns` index each `pipeRunWorldSolids` entry came from (issue #486, selection
+  /// follow-up) — NOT the same as the entry's own position, because a run that fails to build
+  /// (unresolvable size, unfillable corner) contributes nothing, so the two arrays can diverge in
+  /// length and offset. Selection/highlight/hover map a picked solid back to its owning run through
+  /// this, the same reason `CadBlockWorldSolid::blockRefIndex`/`CadBlockWorldConnection::blockRefIndex`
+  /// exist for block refs.
+  std::vector<int> pipeRunWorldSolidOwnerIndex;
   std::uint64_t pipeRunWorldSolidsSig = 0;
 
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
@@ -5088,6 +5137,19 @@ void CancelPolysolidCommand(AppCommandState& st);
 /// The frame a polysolid is built in: the active UCS anchored at the first picked point. Exposed so
 /// the viewport can put the cursor into the same plane the builder reads it from - one frame, not two.
 [[nodiscard]] ucs::Ucs CadPolysolidFrameFor(const AppCommandState& st);
+
+// --- PIPERUN (issue #486 increment B2 / REQ-345) -------------------------------------------------
+/// Open the command: prompt for a nominal size (+ optional pressure class).
+void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log);
+/// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
+[[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
+/// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false
+/// if not consumed.
+bool HandlePipeRunTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+/// Handle a viewport click: the run's start point, or a further vertex.
+void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Reset the draft path, keeping the remembered nominal size and pressure class.
+void CancelPipeRunCommand(AppCommandState& st);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.
 ///
 /// ONE builder for the preview, the click that commits a point and the Enter that finishes — a
@@ -5653,6 +5715,17 @@ void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
 /// applies here.
 void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
                                    bool polar, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float targetZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float* wz = nullptr);
+
+/// Piping ortho/polar compass (REQ-346): the PIPERUN counterpart of \ref ApplyPolarConstrainFromAnchor,
+/// snapping the next-vertex pick onto the nearest preset angle ray from the run's last committed
+/// vertex. Reuses REQ-108's own angle set (\ref AppCommandState::polarIncrementDeg /
+/// \c polarExtraAnglesDeg) rather than a second, piping-only list — deliberate, per D-2026-09-17-a —
+/// but is gated on its own toggle, \ref AppCommandState::pipeRunCompassOn, so turning it off does not
+/// touch ordinary POLAR tracking in other commands. No-op unless \p compass and \c pipeRunCompassOn.
+void ApplyPipeRunCompassFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool compass, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
                                    float targetZ = std::numeric_limits<float>::quiet_NaN(),
                                    float* wz = nullptr);
 

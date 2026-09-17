@@ -3,6 +3,7 @@
 #include "CadRubberPreview.hpp"
 #include "StringUtil.hpp"
 #include "util/cadsolid.hpp"
+#include "util/cadpiperun.hpp"  // CadPipeRunEndPorts (issue #486, "pipe end" connection port)
 #include "util/solidpick.hpp"
 #include "GsIo.hpp"
 #include "DxfIo.hpp"
@@ -268,6 +269,12 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadSurfaceAttrs.clear();
   st.cadTables.clear();
   st.cadTableAttrs.clear();
+  // Pipe runs (issue #486 / REQ-345) are model-space entities, never block content, so they hide
+  // the same way cadTables/cadSurfaces above do — a run drawn in the main drawing is not the block
+  // being edited. pipeRunWorldSolidsSig is left stale on purpose: it is a content hash, and this
+  // clear changes the content, so RefreshSolidDisplayGeometry's next pass re-derives it naturally.
+  st.cadPipeRuns.clear();
+  st.cadPipeRunAttrs.clear();
   st.cadBlockRefs.clear();
   st.cadBlockRefAttrs.clear();
   st.surveyPoints.clear();
@@ -1317,10 +1324,15 @@ bool FindNearestDrawingConnector(const AppCommandState& st, float px, float py, 
   return true;
 }
 
-/// Nearest bare line/polyline endpoint to (px,py,pz) within maxDist (issue #496): the "pipe end"
-/// smart-mode target. Outward normal points away from the segment, matching the sense of a
-/// `CadBlockConnection` normal so `CadBlockSnapInsertToConnection` orients the fitting the same way
-/// it would against another fitting's port.
+/// Nearest bare line/polyline endpoint, OR a `CadPipeRun`'s own end face centre (issue #486,
+/// user-specified 2026-09-17), to (px,py,pz) within maxDist (issue #496): the "pipe end" smart-mode
+/// target. Outward normal points away from the pipe, matching the sense of a `CadBlockConnection`
+/// normal so `CadBlockSnapInsertToConnection` orients the fitting the same way it would against
+/// another fitting's port. A `CadPipeRun` end is read from `CadPipeRunEndPorts` — the SAME geometry
+/// the run's own swept solid is built from (cadpiperun.hpp) — rather than the run's raw clicked
+/// vertices, because auto-filleting can move an end slightly off its clicked position; using
+/// anything else here would offer a connection point at a spot the rendered pipe does not actually
+/// end at.
 static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float py, float pz, float maxDist,
                                     float* outX, float* outY, float* outZ, float* outNx, float* outNy,
                                     float* outNz) {
@@ -1355,23 +1367,18 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
     consider(x0, y0, z0, x0 - x1, y0 - y1, z0 - z1);
     consider(x1, y1, z1, x1 - x0, y1 - y0, z1 - z0);
   }
-  return any;
-}
-
-const CadBlockConnection* InsertSourceConnection(const AppCommandState& st) {
-  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
-  if (di < 0)
-    return nullptr;
-  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
-  if (def.connections.empty())
-    return nullptr;
-  if (st.insertBlockConnectorName[0] != '\0') {
-    const int ci = CadBlockFindConnection(def, st.insertBlockConnectorName);
-    if (ci >= 0)
-      return &def.connections[static_cast<size_t>(ci)];
-    return nullptr;
+  for (const CadPipeRun& run : st.cadPipeRuns) {
+    CadPipeRunEndPort start, end;
+    if (!CadPipeRunEndPorts(run, &start, &end))
+      continue;  // an unfillable/unresolvable run offers no connection point (REQ-201)
+    consider(static_cast<float>(start.point.x), static_cast<float>(start.point.y),
+             static_cast<float>(start.point.z), static_cast<float>(start.outwardNormal.x),
+             static_cast<float>(start.outwardNormal.y), static_cast<float>(start.outwardNormal.z));
+    consider(static_cast<float>(end.point.x), static_cast<float>(end.point.y),
+             static_cast<float>(end.point.z), static_cast<float>(end.outwardNormal.x),
+             static_cast<float>(end.outwardNormal.y), static_cast<float>(end.outwardNormal.z));
   }
-  return &def.connections.front();
+  return any;
 }
 
 bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log) {
@@ -1379,33 +1386,87 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
   if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitConnectorTarget)
     return false;
 
-  constexpr float kSnap = 2.f;
-  CadBlockWorldConnection tgt;
-  const bool foundPort = FindNearestDrawingConnector(st, wx, wy, wz, kSnap, &tgt);
-  float pipeX = 0.f, pipeY = 0.f, pipeZ = 0.f, pipeNx = 0.f, pipeNy = 0.f, pipeNz = 0.f;
-  const bool foundPipeEnd =
-      FindNearestPipeEndpoint(st, wx, wy, wz, kSnap, &pipeX, &pipeY, &pipeZ, &pipeNx, &pipeNy, &pipeNz);
-  if (!foundPort && !foundPipeEnd) {
-    log.push_back("INSERT — no connection port near that point (within 2 ft).");
-    return false;
-  }
-  // A block connection port and a bare pipe endpoint could both be within range; prefer whichever
-  // is actually nearer (issue #496 — the two are now distinct smart-mode targets).
-  bool usePipeEnd = foundPipeEnd && !foundPort;
-  if (foundPort && foundPipeEnd) {
-    const float portD2 = (tgt.x - wx) * (tgt.x - wx) + (tgt.y - wy) * (tgt.y - wy) + (tgt.z - wz) * (tgt.z - wz);
-    const float pipeD2 =
-        (pipeX - wx) * (pipeX - wx) + (pipeY - wy) * (pipeY - wy) + (pipeZ - wz) * (pipeZ - wz);
-    usePipeEnd = pipeD2 < portD2;
-  }
-  const CadBlockConnection* src = InsertSourceConnection(st);
-  if (!src) {
+  const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
+  if (di < 0 || st.blockDefs[static_cast<size_t>(di)].connections.empty()) {
     log.push_back("INSERT — the block being inserted has no connection ports.");
     return false;
   }
+  const CadBlockDefinition& insertedDef = st.blockDefs[static_cast<size_t>(di)];
 
-  const CadConnectionModeTarget target =
-      usePipeEnd ? CadConnectionModeTarget::PipeEnd : CadBlockClassifyPortTarget(tgt.ownerPartType);
+  constexpr float kSnap = 2.f;
+  CadBlockWorldConnection tgt;
+  const bool foundPortRaw = FindNearestDrawingConnector(st, wx, wy, wz, kSnap, &tgt);
+  float pipeX = 0.f, pipeY = 0.f, pipeZ = 0.f, pipeNx = 0.f, pipeNy = 0.f, pipeNz = 0.f;
+  const bool foundPipeEndRaw =
+      FindNearestPipeEndpoint(st, wx, wy, wz, kSnap, &pipeX, &pipeY, &pipeZ, &pipeNx, &pipeNy, &pipeNz);
+  if (!foundPortRaw && !foundPipeEndRaw) {
+    log.push_back("INSERT — no connection port near that point (within 2 ft).");
+    return false;
+  }
+  const CadConnectionModeTarget portTarget = CadBlockClassifyPortTarget(tgt.ownerPartType);
+  const float portD2 = (tgt.x - wx) * (tgt.x - wx) + (tgt.y - wy) * (tgt.y - wy) + (tgt.z - wz) * (tgt.z - wz);
+  const float pipeD2 =
+      (pipeX - wx) * (pipeX - wx) + (pipeY - wy) * (pipeY - wy) + (pipeZ - wz) * (pipeZ - wz);
+
+  // Which of the BLOCK'S OWN connection points to try: the one explicitly chosen in the INSERT
+  // dialog, or — auto-detect (user request 2026-09-17, reported bug: a flange with a gasket-face
+  // port AND a separate weld-neck-to-pipe port always used the FIRST port defined, regardless of
+  // what was actually under the cursor) — every port the block has, so whichever one's OWN
+  // configured mode(s) actually match what is nearby wins, not whichever happened to be added
+  // first in BEDIT.
+  std::vector<const CadBlockConnection*> candidates;
+  if (st.insertBlockConnectorName[0] != '\0') {
+    const int ci = CadBlockFindConnection(insertedDef, st.insertBlockConnectorName);
+    if (ci < 0) {
+      log.push_back("INSERT — the selected connection point was not found on this block.");
+      return false;
+    }
+    candidates.push_back(&insertedDef.connections[static_cast<size_t>(ci)]);
+  } else {
+    for (const CadBlockConnection& c : insertedDef.connections)
+      candidates.push_back(&c);
+  }
+
+  // Among every candidate PORT crossed with every candidate TARGET it actually accepts
+  // (`CadBlockConnectionAcceptsTarget` — a legacy mode-less port accepts anything, unchanged), the
+  // nearest accepted pairing wins: "detect what we are snapping to and use that block's connection
+  // point logic," not always the first port defined.
+  const CadBlockConnection* src = nullptr;
+  bool usePipeEnd = false;
+  float bestD2 = 0.f;
+  // Two passes, EXACT matches before default-fallback ones: a port whose mode is tagged for the
+  // exact target under the cursor always outranks one that merely falls back to an `isDefault`
+  // mode for the same target — otherwise two single-mode ports that both happen to be flagged
+  // default (an easy authoring habit: it is the only mode, so "default" reads as "the one to use")
+  // would tie on distance and the wrong one could win, exactly the reported bug.
+  for (int pass = 0; pass < 2 && !src; ++pass) {
+    const bool exactOnly = pass == 0;
+    for (const CadBlockConnection* c : candidates) {
+      const bool portExact = foundPortRaw && CadBlockConnectionHasExactMode(*c, portTarget);
+      const bool pipeExact = foundPipeEndRaw && CadBlockConnectionHasExactMode(*c, CadConnectionModeTarget::PipeEnd);
+      const bool portOk = exactOnly ? portExact : (foundPortRaw && CadBlockConnectionAcceptsTarget(*c, portTarget));
+      const bool pipeOk = exactOnly
+                              ? pipeExact
+                              : (foundPipeEndRaw && CadBlockConnectionAcceptsTarget(*c, CadConnectionModeTarget::PipeEnd));
+      if (!portOk && !pipeOk)
+        continue;
+      const bool tryPipe = pipeOk && (!portOk || pipeD2 < portD2);
+      const float d2 = tryPipe ? pipeD2 : portD2;
+      if (!src || d2 < bestD2) {
+        src = c;
+        usePipeEnd = tryPipe;
+        bestD2 = d2;
+      }
+    }
+  }
+  if (!src) {
+    log.push_back(insertedDef.connections.size() > 1
+                      ? "INSERT — nothing near that point matches any of this block's connection points."
+                      : "INSERT — nothing near that point matches this connection point's configured mode(s).");
+    return false;
+  }
+
+  const CadConnectionModeTarget target = usePipeEnd ? CadConnectionModeTarget::PipeEnd : portTarget;
   const CadBlockConnectionMode* mode = CadBlockResolveMode(*src, target);
 
   CadBlockXform xf;

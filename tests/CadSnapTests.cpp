@@ -49,6 +49,26 @@ TEST_CASE("FindBest picks the line endpoint when it is closer than a large circl
   CHECK(hit.y == Catch::Approx(0.f));
 }
 
+TEST_CASE("FindBest offers a CadPipeRun's own end as an Endpoint candidate (issue #486)", "[CadSnap][piperun]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+
+  // Hovering near the run's END (10,0,0) — before this fix, a pipe run offered NO snap candidate
+  // at all (it is a swept solid, not a bare line), so a connection-port pick near it resolved to a
+  // work-plane guess nowhere near the pipe.
+  const CadSnap::Hit hit = CadSnap::FindBest(9.9, 0.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Endpoint);
+  CHECK(hit.x == Catch::Approx(10.f));
+  CHECK(hit.y == Catch::Approx(0.f));
+  CHECK(hit.z == Catch::Approx(0.f));
+}
+
 TEST_CASE("FindBest picks the circle center when it is closer than a nearby line endpoint", "[CadSnap]") {
   AppCommandState st;
   st.objectSnapEndpoint = true;

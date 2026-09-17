@@ -1147,6 +1147,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
     tests/GsIoDimAngularTests.cpp
+    tests/GsIoPipeRunTests.cpp
     tests/GsIoViewportCameraTests.cpp
     tests/GsMigrateLegacyBreaklineTests.cpp
     # REQ-302/ADR-053 (issue #323) — ribbon layout measure pass. Header-only, but needs a live
@@ -1185,6 +1186,10 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GizmoSubObjectMoveTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
+    # issue #486 increment B2 (REQ-345) — the PIPERUN command layer: StartPipeRunCommand /
+    # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
+    # with GoSurveySnapTests (gosurvey_domain), not GoSurveyTests, like CadBlockImportTests above.
+    tests/CadPipeRunCommandTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp

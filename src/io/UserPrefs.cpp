@@ -70,6 +70,19 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
     st.angleDisplayClockwise = s["angleDisplayClockwise"].get<bool>();
   if (s.contains("angleDisplayBaseDeg") && s["angleDisplayBaseDeg"].is_number())
     st.angleDisplayBaseDeg = s["angleDisplayBaseDeg"].get<double>();
+  // POLAR tracking angle set (REQ-108 amended, REQ-346 D-2026-09-17-a): previously runtime-only,
+  // resetting to the 90-degree default every launch. Clamped on load so a hand-edited or corrupted
+  // file cannot hand SnapToPolarRay a zero/negative increment.
+  if (s.contains("polarIncrementDeg") && s["polarIncrementDeg"].is_number())
+    st.polarIncrementDeg = std::clamp(s["polarIncrementDeg"].get<double>(), 0.01, 180.0);
+  if (s.contains("polarExtraAnglesDeg") && s["polarExtraAnglesDeg"].is_array()) {
+    std::vector<double> extra;
+    for (const auto& v : s["polarExtraAnglesDeg"]) {
+      if (v.is_number())
+        extra.push_back(v.get<double>());
+    }
+    st.polarExtraAnglesDeg = std::move(extra);
+  }
   if (s.contains("systemHardwareAcceleration") && s["systemHardwareAcceleration"].is_boolean())
     st.systemHardwareAcceleration = s["systemHardwareAcceleration"].get<bool>();
   if (s.contains("systemPreferIntegratedGpu") && s["systemPreferIntegratedGpu"].is_boolean())
@@ -352,6 +365,8 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["angleDisplayPrecision"]       = st.angleDisplayPrecision;
   s["angleDisplayClockwise"]       = st.angleDisplayClockwise;
   s["angleDisplayBaseDeg"]         = st.angleDisplayBaseDeg;
+  s["polarIncrementDeg"]           = st.polarIncrementDeg;
+  s["polarExtraAnglesDeg"]         = st.polarExtraAnglesDeg;
   s["systemHardwareAcceleration"]  = st.systemHardwareAcceleration;
   s["systemPreferIntegratedGpu"]   = st.systemPreferIntegratedGpu;
   s["gfxSmoothLineDisplay"]        = st.gfxSmoothLineDisplay;
