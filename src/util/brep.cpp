@@ -5524,6 +5524,41 @@ struct LoftProfilePrep {
 
 }  // namespace
 
+namespace {
+
+/// Whether the quadrilateral \p q (in loop order) is flat, and if so its unit normal — the Newell
+/// normal, which for a loop wound CCW about the outward direction points outward (GitHub #519).
+///
+/// Flat means every corner within `1e-9` of the strip's size of the plane through them, measured
+/// from the first corner so survey-magnitude coordinates do not enter the arithmetic.
+[[nodiscard]] bool RuledStripIsFlat(const std::array<Vec3, 4>& q, Vec3* outNormal) {
+  Vec3 acc{};
+  double size = 0.0;
+  for (std::size_t i = 0; i < 4; ++i) {
+    const Vec3 a = ray3d::Sub(q[i], q[0]);
+    const Vec3 b = ray3d::Sub(q[(i + 1) % 4], q[0]);
+    acc = ray3d::Add(acc, ray3d::Cross(a, b));
+    size = std::max(size, ray3d::Length(ray3d::Sub(q[(i + 1) % 4], q[i])));
+  }
+  const double len = ray3d::Length(acc);
+  if (!(size > 0.0) || !(len > 1e-12 * size * size))
+    return false;
+  // The two ring edges must run the same way round. Reversed, the strip is a bow-tie: its four
+  // corners still lie in one plane, but the face they would make crosses itself, so it stays the
+  // ruled patch it was.
+  if (!(ray3d::Dot(ray3d::Sub(q[1], q[0]), ray3d::Sub(q[2], q[3])) > 0.0))
+    return false;
+  const Vec3 nrm = ray3d::Scale(acc, 1.0 / len);
+  const double tol = std::max(1e-9 * size, 1e-9);
+  for (const Vec3& p : q)
+    if (std::fabs(ray3d::Dot(ray3d::Sub(p, q[0]), nrm)) > tol)
+      return false;
+  *outNormal = nrm;
+  return true;
+}
+
+} // namespace
+
 bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy) {
   if (!out)
     return false;
@@ -5653,11 +5688,26 @@ bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy) {
     s.faces.push_back(MakePlaneFace(prep.back().walk[0], prep.back().up, std::move(uses)));
   }
 
-  // Side faces: one NURBS patch per (band, edge), oriented so du x dv points outward.
+  // Side faces: one NURBS patch per (band, edge), oriented so du x dv points outward — except a
+  // straight edge whose ruled strip is exactly flat (its two ring edges coplanar, as between similar
+  // parallel polygons), which is stored as the `Plane` face it is (GitHub #519). A NURBS patch of a
+  // flat strip is the right shape but the wrong kind: SECTION, SLICE, SECTIONPLANE and every other
+  // planar-only operation refused it.
   for (std::size_t pi = 0; pi + 1 < prep.size(); ++pi)
     for (int j = 0; j < n; ++j) {
       const std::size_t jj = static_cast<std::size_t>(j);
       const std::size_t j1 = static_cast<std::size_t>((j + 1) % n);
+      Loop lp;
+      lp.uses = {EdgeUse{ringE[pi][jj], false}, EdgeUse{railE[pi][j1], false},
+                 EdgeUse{ringE[pi + 1][jj], true}, EdgeUse{railE[pi][jj], true}};
+      if (!prep[pi].arc[jj]) {
+        Vec3 normal{};
+        if (RuledStripIsFlat({prep[pi].walk[jj], prep[pi].walk[j1], prep[pi + 1].walk[j1], prep[pi + 1].walk[jj]},
+                             &normal)) {
+          s.faces.push_back(MakePlaneFace(prep[pi].walk[jj], normal, std::move(lp.uses)));
+          continue;
+        }
+      }
       Face f;
       f.surface.kind = SurfaceKind::Nurbs;
       if (prep[pi].arc[jj])
@@ -5673,9 +5723,6 @@ bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy) {
       f.uEnd = nurbs::UMax(f.surface.patch);
       f.vStart = nurbs::VMin(f.surface.patch);
       f.vEnd = nurbs::VMax(f.surface.patch);
-      Loop lp;
-      lp.uses = {EdgeUse{ringE[pi][jj], false}, EdgeUse{railE[pi][j1], false},
-                 EdgeUse{ringE[pi + 1][jj], true}, EdgeUse{railE[pi][jj], true}};
       f.loops.push_back(std::move(lp));
       s.faces.push_back(std::move(f));
     }

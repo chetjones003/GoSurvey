@@ -7180,6 +7180,23 @@ capability that does not exist. They are recorded here rather than quietly dropp
   radii are judged against the radius, so a long slight taper is a cone. The creation message names
   the kind (`Cylinder created`), matching `SOLIDLIST`.
 
+  2026-09-17 — **a loft's flat side strips are stored as flat faces** (TASK-267, GitHub issue #519). A
+  straight span between two profile edges that lie in one plane, as between similar parallel polygons,
+  is a flat strip. It was stored as a ruled NURBS patch, which had the right shape but the wrong kind.
+  `SECTION` and `SLICE` refused every cut, and `SECTIONPLANE` refused the side faces, of a square
+  frustum that `PYRAMID` builds and cuts without trouble. Such a strip is now a `Plane` face. A strip
+  that twists (a rotated or non-parallel profile edge) and every arc ribbon remain NURBS. Flat means
+  all four corners lie within 1e-9 of the strip's size of one plane, measured from its first corner.
+  No decision entry: the issue states this behaviour, and the strip is still the straight span the
+  statement above describes, stored as its exact kind.
+
+  Acceptance added:
+  - a loft between similar parallel polygons has planar side faces, with the same volume and area;
+  - `SECTION` of it matches the equivalent `PYRAMID` frustum corner for corner at a horizontal, a
+    vertical and a 45° plane, within REQ-101 and at survey magnitude;
+  - `SECTIONPLANE` accepts its side faces;
+  - a twisted loft keeps freeform sides.
+
 ### REQ-316 — Polylines have arc segments; POLYLINE draws them and JOIN builds them
 
 - Purpose: a polyline today is a chain of straight segments. Real survey and civil linework —
