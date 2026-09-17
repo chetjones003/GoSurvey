@@ -3,6 +3,7 @@
 #include "CadRubberPreview.hpp"
 #include "StringUtil.hpp"
 #include "util/cadsolid.hpp"
+#include "util/cadpiperun.hpp"  // CadPipeRunEndPorts (issue #486, "pipe end" connection port)
 #include "util/solidpick.hpp"
 #include "GsIo.hpp"
 #include "DxfIo.hpp"
@@ -1323,10 +1324,15 @@ bool FindNearestDrawingConnector(const AppCommandState& st, float px, float py, 
   return true;
 }
 
-/// Nearest bare line/polyline endpoint to (px,py,pz) within maxDist (issue #496): the "pipe end"
-/// smart-mode target. Outward normal points away from the segment, matching the sense of a
-/// `CadBlockConnection` normal so `CadBlockSnapInsertToConnection` orients the fitting the same way
-/// it would against another fitting's port.
+/// Nearest bare line/polyline endpoint, OR a `CadPipeRun`'s own end face centre (issue #486,
+/// user-specified 2026-09-17), to (px,py,pz) within maxDist (issue #496): the "pipe end" smart-mode
+/// target. Outward normal points away from the pipe, matching the sense of a `CadBlockConnection`
+/// normal so `CadBlockSnapInsertToConnection` orients the fitting the same way it would against
+/// another fitting's port. A `CadPipeRun` end is read from `CadPipeRunEndPorts` — the SAME geometry
+/// the run's own swept solid is built from (cadpiperun.hpp) — rather than the run's raw clicked
+/// vertices, because auto-filleting can move an end slightly off its clicked position; using
+/// anything else here would offer a connection point at a spot the rendered pipe does not actually
+/// end at.
 static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float py, float pz, float maxDist,
                                     float* outX, float* outY, float* outZ, float* outNx, float* outNy,
                                     float* outNz) {
@@ -1360,6 +1366,17 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
     const float z1 = static_cast<float>(st.userLinesFlat[i + 5]);
     consider(x0, y0, z0, x0 - x1, y0 - y1, z0 - z1);
     consider(x1, y1, z1, x1 - x0, y1 - y0, z1 - z0);
+  }
+  for (const CadPipeRun& run : st.cadPipeRuns) {
+    CadPipeRunEndPort start, end;
+    if (!CadPipeRunEndPorts(run, &start, &end))
+      continue;  // an unfillable/unresolvable run offers no connection point (REQ-201)
+    consider(static_cast<float>(start.point.x), static_cast<float>(start.point.y),
+             static_cast<float>(start.point.z), static_cast<float>(start.outwardNormal.x),
+             static_cast<float>(start.outwardNormal.y), static_cast<float>(start.outwardNormal.z));
+    consider(static_cast<float>(end.point.x), static_cast<float>(end.point.y),
+             static_cast<float>(end.point.z), static_cast<float>(end.outwardNormal.x),
+             static_cast<float>(end.outwardNormal.y), static_cast<float>(end.outwardNormal.z));
   }
   return any;
 }

@@ -676,6 +676,54 @@ TEST_CASE("INSERT connector snap places the fitting port on the target", "[issue
   CHECK(dot == Catch::Approx(-1.f).margin(0.02));
 }
 
+TEST_CASE("INSERT connector snap reaches a CadPipeRun's own end (issue #486)",
+          "[issue475][issue486][block][connector][insert][piperun]") {
+  AppCommandState st;
+
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+
+  CadBlockDefinition flange;
+  flange.name = "FLANGE";
+  CadBlockConnection fc;
+  fc.name = "P1";
+  fc.x = 0.f;
+  fc.y = 0.f;
+  fc.z = 0.f;
+  fc.nx = 0.f;
+  fc.ny = 0.f;
+  fc.nz = 1.f;
+  flange.connections.push_back(fc);
+  st.blockDefs.push_back(flange);
+
+  std::vector<std::string> log;
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "FLANGE");
+  st.insertBlockSpecifyConnectorSnap = true;
+  st.insertBlockSpecifyPoint = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+
+  // Click near the run's END (10,0,0), not exactly on it — the snap is a nearest-within-2ft search.
+  REQUIRE(SubmitInsertBlockConnectorPick(st, 9.99f, 0.f, 0.f, log));
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  const bool sawPipeEnd =
+      std::any_of(log.begin(), log.end(), [](const std::string& s) { return s.find("pipe end") != std::string::npos; });
+  CHECK(sawPipeEnd);
+
+  std::vector<CadBlockWorldConnection> world;
+  CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[0], 0, &world);
+  REQUIRE(world.size() == 1);
+  CHECK(world[0].x == Catch::Approx(10.f).margin(0.002));
+  CHECK(world[0].y == Catch::Approx(0.f).margin(0.002));
+  CHECK(world[0].z == Catch::Approx(0.f).margin(0.002));
+}
+
 TEST_CASE("BEDIT BCONNECT wizard: typed coords persist on the definition",
           "[issue475][issue496][block][connector][bedit]") {
   AppCommandState st;

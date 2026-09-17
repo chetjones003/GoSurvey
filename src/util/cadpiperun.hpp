@@ -180,8 +180,14 @@ inline constexpr double kCadPipeFilletStandardAnglesDeg[] = {90.0, 60.0, 45.0, 3
 /// of an adjoining leg — refuses the WHOLE run rather than silently drawing an overlapping or
 /// truncated bend (REQ-201): route with more spacing around a tight corner, or accept the nearest
 /// smaller standard angle by routing a second, shallower bend instead.
-[[nodiscard]] inline bool CadBuildPipeRunSweptSolid(const CadPipeRun& run, brep::Solid* out) {
-  if (!out)
+///
+/// Split out of \ref CadBuildPipeRunSweptSolid (rather than duplicated) so a connection-port query
+/// (\ref CadPipeRunEndPorts) reads EXACTLY the same geometry that gets rendered — no second path
+/// computation to ever drift out of sync with the first.
+[[nodiscard]] inline bool CadBuildPipeRunSweepPath(const CadPipeRun& run, brep::SweepPath* outPath,
+                                                    double* outPipeRadius, ray3d::Vec3* outStartTangent,
+                                                    ray3d::Vec3* outEndTangent) {
+  if (!outPath || !outPipeRadius || !outStartTangent || !outEndTangent)
     return false;
   double npsIn = 0.0;
   if (!CadParsePipeNominalSizeInches(run.nominalSize, &npsIn))
@@ -286,16 +292,81 @@ inline constexpr double kCadPipeFilletStandardAnglesDeg[] = {90.0, 60.0, 45.0, 3
   if (pathPoints.size() < 2)
     return false;
 
-  brep::Profile profile;
-  if (!CadBuildPipeProfile(pipeRadius, pathPoints[0], legDir[0], &profile))
+  *outPipeRadius = pipeRadius;
+  *outStartTangent = legDir[0];
+  *outEndTangent = curDir;
+  outPath->points = std::move(pathPoints);
+  outPath->segments = std::move(pathSegments);
+  return true;
+}
+
+/// Builds \p run's swept pipe solid, auto-filleted at every real bend over
+/// \ref cadpiperun_detail::kMinFilletTurnRad — see \ref CadBuildPipeRunSweepPath for the marching
+/// algorithm. A run with fewer than 2 vertices, an unresolvable nominal size, or a corner that
+/// cannot be filleted contributes nothing (REQ-201: nothing invalid is ever stored).
+///
+/// **A snapped angle cannot also hit the exact clicked vertex.** Each corner turns from the
+/// direction the pipe is ACTUALLY travelling (which already carries any upstream snapping error)
+/// toward the ORIGINAL next-vertex direction, by the SNAPPED amount — so a route with several
+/// close-together bends can drift visibly from the clicked polyline, and the run's own endpoint may
+/// land near, not exactly on, the last clicked point. This is the honest, stated consequence of
+/// snapping to a small angle set, not a bug: the alternative (hitting every vertex exactly) needs
+/// an off-angle, non-catalog fitting at every bend, which defeats the point of snapping at all.
+///
+/// A corner whose fillet cannot fit — the tangent setback needed would eat more than roughly half
+/// of an adjoining leg — refuses the WHOLE run rather than silently drawing an overlapping or
+/// truncated bend (REQ-201): route with more spacing around a tight corner, or accept the nearest
+/// smaller standard angle by routing a second, shallower bend instead.
+[[nodiscard]] inline bool CadBuildPipeRunSweptSolid(const CadPipeRun& run, brep::Solid* out) {
+  if (!out)
+    return false;
+  brep::SweepPath path;
+  double pipeRadius = 0.0;
+  ray3d::Vec3 startTangent{};
+  ray3d::Vec3 endTangent{};
+  if (!CadBuildPipeRunSweepPath(run, &path, &pipeRadius, &startTangent, &endTangent))
     return false;
 
-  brep::SweepPath path;
-  path.points = std::move(pathPoints);
-  path.segments = std::move(pathSegments);
+  brep::Profile profile;
+  if (!CadBuildPipeProfile(pipeRadius, path.points[0], startTangent, &profile))
+    return false;
 
   brep::Problem why = brep::Problem::Ok;
   return brep::Sweep(profile, path, brep::SweepOptions{}, out, &why);
+}
+
+/// A pipe run's own "pipe end" connection point (user-specified 2026-09-17): the centre of the
+/// pipe's actual end FACE — not necessarily the raw clicked vertex, since fillet-angle snapping can
+/// move it slightly (see \ref CadBuildPipeRunSweepPath) — with an outward unit normal pointing AWAY
+/// from the pipe, matching the sense `CadBlockConnection::nx/ny/nz` and `FindNearestPipeEndpoint`'s
+/// own bare-line endpoints already use (CadBlocks.cpp), so a fitting orienting against one behaves
+/// identically to orienting against the other.
+struct CadPipeRunEndPort {
+  ray3d::Vec3 point;
+  ray3d::Vec3 outwardNormal;
+};
+
+/// Computes \p run's two end ports. Returns false for the same reasons the swept solid itself would
+/// refuse to build — reading the SAME path computation (\ref CadBuildPipeRunSweepPath), so a port
+/// this reports always matches where the rendered pipe actually ends, never a second, independently
+/// (and potentially inconsistently) derived answer.
+[[nodiscard]] inline bool CadPipeRunEndPorts(const CadPipeRun& run, CadPipeRunEndPort* start,
+                                             CadPipeRunEndPort* end) {
+  if (!start || !end)
+    return false;
+  brep::SweepPath path;
+  double pipeRadius = 0.0;
+  ray3d::Vec3 startTangent{};
+  ray3d::Vec3 endTangent{};
+  if (!CadBuildPipeRunSweepPath(run, &path, &pipeRadius, &startTangent, &endTangent))
+    return false;
+  if (path.points.size() < 2)
+    return false;
+  start->point = path.points.front();
+  start->outwardNormal = ray3d::Normalize(ray3d::Scale(startTangent, -1.0));
+  end->point = path.points.back();
+  end->outwardNormal = ray3d::Normalize(endTangent);
+  return true;
 }
 
 /// Builds \p run's swept pipe solid (auto-filleted at every real bend, \ref

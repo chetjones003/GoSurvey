@@ -159,3 +159,46 @@ TEST_CASE("A multi-bend run (two right-angle turns) still builds one valid solid
   REQUIRE(solids.size() == 1);
   CHECK(brep::Validate(*solids[0]) == brep::Problem::Ok);
 }
+
+TEST_CASE("A straight run's end ports sit at the clicked vertices with outward-facing normals",
+          "[issue486][piperun][port]") {
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  CadPipeRunEndPort start, end;
+  REQUIRE(CadPipeRunEndPorts(run, &start, &end));
+  CHECK(start.point.x == Catch::Approx(0.0));
+  CHECK(start.point.y == Catch::Approx(0.0));
+  CHECK(start.point.z == Catch::Approx(0.0));
+  // Start normal points backward, away from the pipe (-X); end normal points forward (+X).
+  CHECK(start.outwardNormal.x == Catch::Approx(-1.0));
+  CHECK(end.point.x == Catch::Approx(10.0));
+  CHECK(end.outwardNormal.x == Catch::Approx(1.0));
+  // Both normals are unit length.
+  CHECK(ray3d::Length(start.outwardNormal) == Catch::Approx(1.0));
+  CHECK(ray3d::Length(end.outwardNormal) == Catch::Approx(1.0));
+}
+
+TEST_CASE("A bent run's end ports still read from the ACTUAL swept geometry, not the raw clicks",
+          "[issue486][piperun][port]") {
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 20.0, 0.0, 0.0, 20.0, 20.0, 0.0};
+  run.nominalSize = "4in";
+  CadPipeRunEndPort start, end;
+  REQUIRE(CadPipeRunEndPorts(run, &start, &end));
+  // The START end is untouched by the bend — exactly at the first clicked vertex, facing -X.
+  CHECK(start.point.x == Catch::Approx(0.0));
+  CHECK(start.point.y == Catch::Approx(0.0));
+  CHECK(start.outwardNormal.x == Catch::Approx(-1.0));
+  // The END end faces +Y (the pipe's final direction after the 90-degree bend).
+  CHECK(end.outwardNormal.y == Catch::Approx(1.0).margin(1e-6));
+  CHECK(end.outwardNormal.x == Catch::Approx(0.0).margin(1e-6));
+}
+
+TEST_CASE("End ports refuse for the same reasons the swept solid itself would", "[issue486][piperun][port]") {
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "9in";  // not in the NPS table
+  CadPipeRunEndPort start, end;
+  CHECK_FALSE(CadPipeRunEndPorts(run, &start, &end));
+}
