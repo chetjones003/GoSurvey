@@ -95,7 +95,13 @@ struct SelectedEntity {
     /// it belongs with #120's Phase 5 direct-modelling requirement. Every transform command refuses
     /// a solid with a stated reason (REQ-201) rather than silently dropping it from the operation —
     /// the rule Surface already established.
-    Solid = 13
+    Solid = 13,
+    /// CadPipeRun (issue #486). Appended after Solid so existing type values stay stable. The SAME
+    /// stated boundary Solid has: display, select, highlight, hover-report and erase, but no
+    /// transform command moves it — a pipe run's geometry is DERIVED from its path via auto-fillet
+    /// sweeping (cadpiperun.hpp), so a direct drag would need the same re-solve REQ-070 declined for
+    /// a TIN surface's own derived geometry.
+    PipeRun = 14
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -2791,6 +2797,13 @@ struct AppCommandState {
   std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<CadSolidPtr> pipeRunWorldSolids;
   std::vector<EntityAttributes> pipeRunWorldSolidAttrs;
+  /// Which `cadPipeRuns` index each `pipeRunWorldSolids` entry came from (issue #486, selection
+  /// follow-up) — NOT the same as the entry's own position, because a run that fails to build
+  /// (unresolvable size, unfillable corner) contributes nothing, so the two arrays can diverge in
+  /// length and offset. Selection/highlight/hover map a picked solid back to its owning run through
+  /// this, the same reason `CadBlockWorldSolid::blockRefIndex`/`CadBlockWorldConnection::blockRefIndex`
+  /// exist for block refs.
+  std::vector<int> pipeRunWorldSolidOwnerIndex;
   std::uint64_t pipeRunWorldSolidsSig = 0;
 
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.

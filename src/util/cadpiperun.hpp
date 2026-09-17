@@ -369,6 +369,34 @@ struct CadPipeRunEndPort {
   return true;
 }
 
+/// \p run's true centreline length (issue #486, hover/Properties follow-up) — the ACTUAL built path
+/// (straight legs + fillet arcs), reading the same \ref CadBuildPipeRunSweepPath geometry
+/// everything else in this file does, not a straight-line sum over the raw clicked vertices (which
+/// would overstate it: a fillet always shortens the straight run on both sides of a bend by more
+/// than the arc itself adds back). Returns false for the same reasons the swept solid would refuse.
+[[nodiscard]] inline bool CadPipeRunLength(const CadPipeRun& run, double* outLength) {
+  if (!outLength)
+    return false;
+  brep::SweepPath path;
+  double pipeRadius = 0.0;
+  ray3d::Vec3 startTangent{};
+  ray3d::Vec3 endTangent{};
+  if (!CadBuildPipeRunSweepPath(run, &path, &pipeRadius, &startTangent, &endTangent))
+    return false;
+  double total = 0.0;
+  for (size_t i = 0; i + 1 < path.points.size(); ++i) {
+    const brep::SweepSegment& seg = path.segments[i];
+    if (seg.arc) {
+      const double r = ray3d::Length(ray3d::Sub(path.points[i], seg.centre));
+      total += r * std::fabs(seg.sweep);
+    } else {
+      total += ray3d::Length(ray3d::Sub(path.points[i + 1], path.points[i]));
+    }
+  }
+  *outLength = total;
+  return true;
+}
+
 /// Builds \p run's swept pipe solid (auto-filleted at every real bend, \ref
 /// CadBuildPipeRunSweptSolid) and appends it to \p out (does not clear it first; always at most one
 /// element on success). A run with fewer than 2 vertices, an unresolvable nominal size, or a corner

@@ -3,6 +3,7 @@
 #include "SurveyPoints.hpp"
 #include "geom2d.hpp"
 #include "util/cadblock.hpp"
+#include "util/cadpiperun.hpp"
 #include "util/curveintersect.hpp"
 #include "util/solidpick.hpp"
 
@@ -981,6 +982,27 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
         Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, 0.5f * (z0 + z1));
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
+    }
+  }
+
+  // CadPipeRun ends (issue #486, user-specified follow-up): a pipe run is a swept SOLID, not a
+  // bare line, so it never fell into the `userLinesFlat` loop above — meaning it offered no
+  // endpoint snap candidate at all, and a connection-port pick near it resolved to a work-plane
+  // guess nowhere near the actual pipe surface. Offered the same way a bare line's endpoints are
+  // (Kind::Endpoint, gated on the same `wantEndpoint` toggle), reading the run's ACTUAL end-face
+  // centre (`CadPipeRunEndPorts`, cadpiperun.hpp) — the same geometry the rendered pipe and the
+  // BCONNECT/INSERT "pipe end" target (`FindNearestPipeEndpoint`, CadBlocks.cpp) both already read,
+  // so this is the third and last place that geometry needed to be reachable from, not a fourth
+  // independently-derived one.
+  if (wantEndpoint) {
+    for (const CadPipeRun& run : cmd.cadPipeRuns) {
+      CadPipeRunEndPort start, end;
+      if (!CadPipeRunEndPorts(run, &start, &end))
+        continue;
+      Consider(&acc, wx, wy, static_cast<float>(start.point.x), static_cast<float>(start.point.y), Kind::Endpoint,
+               tolWorld, static_cast<float>(start.point.z));
+      Consider(&acc, wx, wy, static_cast<float>(end.point.x), static_cast<float>(end.point.y), Kind::Endpoint,
+               tolWorld, static_cast<float>(end.point.z));
     }
   }
 

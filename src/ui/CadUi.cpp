@@ -27,6 +27,7 @@
 #include "HatchPattern.hpp"
 #include "CommandBar.hpp"
 #include "NumFormat.hpp"
+#include "util/cadpiperun.hpp"
 #include "util/cadtable.hpp"
 #include "util/SaveTrace.hpp"
 #include "DwgIo.hpp"
@@ -878,6 +879,37 @@ static void DrawSurveyPointRolloverReadout(const AppCommandState& cmd, int ix) {
   field("Northing", FormatLinear(static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing)), sprec));
   field("Easting", FormatLinear(static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting)), sprec));
   field("Elevation", FormatLinear(static_cast<double>(p.elevation), sprec));
+  ImGui::EndTooltip();
+}
+
+/// Same shape as \ref DrawSurveyPointRolloverReadout, one row set lower in precedence (issue #486,
+/// user-specified 2026-09-17: "the same as the survey point hover and surface hover"). Nothing
+/// latched here either — `cmd.viewportHoverEntity` already re-picks every frame for the ordinary
+/// solid hover highlight, and length/size are cheap to read fresh (no per-triangle walk like the
+/// surface readout's `BuildSurfaceHoverRows`).
+static void DrawPipeRunRolloverReadout(const AppCommandState& cmd, int ix) {
+  if (ix < 0 || static_cast<size_t>(ix) >= cmd.cadPipeRuns.size())
+    return;
+  const CadPipeRun& run = cmd.cadPipeRuns[static_cast<size_t>(ix)];
+
+  if (!ImGui::BeginTooltip())
+    return;
+
+  const float valueX = ImGui::CalcTextSize("Pressure Class").x + ImGui::GetStyle().ItemSpacing.x * 2.f;
+  const auto field = [valueX](const char* label, const std::string& value) {
+    ImGui::TextDisabled("%s", label);
+    ImGui::SameLine(valueX);
+    ImGui::TextUnformatted(value.c_str());
+  };
+
+  ImGui::TextUnformatted("Pipe Run");
+  ImGui::Spacing();
+  field("Name", run.name.empty() ? std::string("(unnamed)") : run.name);
+  field("Nominal Size", run.nominalSize.empty() ? std::string("-") : run.nominalSize);
+  field("Pressure Class", run.pressureClassTag.empty() ? std::string("-") : run.pressureClassTag);
+  double length = 0.0;
+  field("Length", CadPipeRunLength(run, &length) ? FormatLinear(length, cmd.displayLinearPrecision)
+                                                 : std::string("-"));
   ImGui::EndTooltip();
 }
 
@@ -8721,6 +8753,8 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int nPdf  = 0;
   int nSurf = 0;
   int firstSurfIx = -1;
+  int nPipeRun = 0;
+  int firstPipeRunIx = -1;
   for (const auto& e : sel) {
     if      (e.type == SelectedEntity::Type::LineSeg)    ++nLine;
     else if (e.type == SelectedEntity::Type::Circle)     ++nCirc;
@@ -8732,6 +8766,10 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       ++nSurf;
       if (firstSurfIx < 0)
         firstSurfIx = e.index;
+    } else if (e.type == SelectedEntity::Type::PipeRun) {
+      ++nPipeRun;
+      if (firstPipeRunIx < 0)
+        firstPipeRunIx = e.index;
     }
   }
 
@@ -8761,6 +8799,10 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     ImGui::TextDisabled("%d surfaces", nSurf);
   else if (nSurf == 1)
     ImGui::TextDisabled("TIN Surface");
+  else if (nPipeRun > 1)
+    ImGui::TextDisabled("%d pipe runs", nPipeRun);
+  else if (nPipeRun == 1)
+    ImGui::TextDisabled("Pipe Run");
   else if (nAnn == 1) {
     int ix = -1;
     for (const auto& e : sel) {
@@ -8828,6 +8870,37 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
         ImGui::EndTable();
       }
       ImGui::TextDisabled("Read-only. Edit the definition in the Surfaces panel.");
+    }
+  }
+
+  // Pipe run (issue #486). Name is editable (user request: "pipe runs need to be namable") —
+  // everything else is read-only, the Surface section's own reasoning above: nominal size /
+  // pressure class / length are all read FROM the entity's own path, so an editable copy here would
+  // be a second source of truth.
+  if (nPipeRun == 1 && firstPipeRunIx >= 0 && static_cast<size_t>(firstPipeRunIx) < cmd.cadPipeRuns.size()) {
+    CadPipeRun& r = cmd.cadPipeRuns[static_cast<size_t>(firstPipeRunIx)];
+    if (PropSectionHeader("Pipe Run")) {
+      char nameBuf[128];
+      std::snprintf(nameBuf, sizeof(nameBuf), "%s", r.name.c_str());
+      if (ImGui::InputText("Name##piperun", nameBuf, sizeof(nameBuf)))
+        r.name = nameBuf;
+      if (ImGui::BeginTable("props_piperun", 2, kPropTableFlags)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        const auto row = [](const char* k, const std::string& v) {
+          ImGui::TableNextRow();
+          PropValueCellBg();
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(k);
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(v.c_str());
+        };
+        row("Nominal Size", r.nominalSize.empty() ? std::string("\xe2\x80\x94") : r.nominalSize);
+        row("Pressure Class", r.pressureClassTag.empty() ? std::string("\xe2\x80\x94") : r.pressureClassTag);
+        double length = 0.0;
+        row("Length", CadPipeRunLength(r, &length) ? FormatLinear(length, cmd.displayLinearPrecision)
+                                                    : std::string("\xe2\x80\x94"));
+        row("Vertices", std::to_string(r.vertsXyz.size() / 3));
+        ImGui::EndTable();
+      }
     }
   }
 
@@ -12593,16 +12666,18 @@ void DrawPerfHud(const AppCommandState& cmd) {
 /// `PickClosestSolidEntity` — see there.
 static bool PickSolidUnderCursor(const AppCommandState& cmd, bool modelSpace, const ray3d::Ray& ray,
                                  bool surveyPointUnderCursor, SelectedEntity* out) {
-  if (!modelSpace || cmd.cadSolids.empty() || surveyPointUnderCursor)
+  if (!modelSpace || (cmd.cadSolids.empty() && cmd.pipeRunWorldSolids.empty()) || surveyPointUnderCursor)
     return false;
   return PickClosestSolidEntity(cmd, ray, CadOffsetEntityPickTolWorld(cmd), out);
 }
 
 /// A plain click adds \p hit to the selection, Shift+click removes it — the rule every other
-/// entity click in `DrawDrawingViewport` follows.
+/// entity click in `DrawDrawingViewport` follows. Works for both `Type::Solid` and `Type::PipeRun`
+/// (issue #486) — `PickSolidUnderCursor`/`PickClosestSolidEntity` answer with either, whichever the
+/// ray actually hit, so the toggle has to match on the SAME type as the hit, not a fixed one.
 static void ClickToggleSolid(AppCommandState& cmd, const SelectedEntity& hit, bool keyShift) {
   auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
-    return x.type == SelectedEntity::Type::Solid && x.index == hit.index;
+    return x.type == hit.type && x.index == hit.index;
   });
   if (keyShift) {
     if (it != cmd.selection.end())
@@ -14299,7 +14374,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           // returned one. So building a ray here for the solid pick alone cannot change any
           // existing answer, and without it the highlight would work only when orbited, which is
           // not the view most drawings sit in.
-          const bool solidPickable = modelSpace && !cmd.cadSolids.empty();
+          const bool solidPickable = modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty());
           const ray3d::Ray solidRay =
               solidPickable ? CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y) : ray3d::Ray{};
           const bool surveyUnderHover =
@@ -14554,8 +14629,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       else if (tick.elapsed)
         BuildSurfaceHoverRows(cmd, rawX, rawY, &cmd.surfaceHoverRows);
       const bool onPoint = cmd.viewportHoverSurveyPointIndex >= 0;
+      // Pipe run (issue #486): same precedence slot a solid's own hover would occupy (both come
+      // from the SAME `viewportHoverEntity` pick), one step below a survey point — "solids sit
+      // below linework and survey points" is `PickSolidUnderCursor`'s own stated ordering.
+      const bool onPipeRun =
+          cmd.viewportHoverEntityValid && cmd.viewportHoverEntity.type == SelectedEntity::Type::PipeRun;
       if (onPoint && tick.settled)
         DrawSurveyPointRolloverReadout(cmd, cmd.viewportHoverSurveyPointIndex);
+      else if (onPipeRun && tick.settled)
+        DrawPipeRunRolloverReadout(cmd, cmd.viewportHoverEntity.index);
       else
         DrawSurfaceRolloverReadout(cmd);
     } else {
@@ -15060,7 +15142,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // A whole SOLID — see `PickSolidUnderCursor`. Before this, `ComputeSelectionFromRect` was the
       // only thing that ever put a solid in a selection, so a solid could be chosen by dragging a
       // rectangle around it and by no other gesture, in this step or any other.
-      if (!handled && modelSpace && !cmd.cadSolids.empty()) {
+      if (!handled && modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty())) {
         SelectedEntity solidHit{};
         const bool surveyUnder =
             !cmd.surveyPoints.empty() &&
@@ -15692,7 +15774,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // A whole SOLID — see `PickSolidUnderCursor`. Idle click-to-select never reached a solid before
       // this, which is half of why "the section command will not let me select the object" was
       // reported — the gesture did not exist anywhere, not only inside SECTION.
-      if (!handled && modelSpace && !cmd.cadSolids.empty()) {
+      if (!handled && modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty())) {
         SelectedEntity solidHit{};
         const bool surveyUnder =
             !cmd.surveyPoints.empty() &&
@@ -19840,6 +19922,10 @@ static const EntityAttributes& SelectedEntityAttr(const AppCommandState& cmd, co
     if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadSolidAttrs.size())
       return cmd.cadSolidAttrs[static_cast<size_t>(e.index)];
     return kDef;
+  case T::PipeRun:
+    if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadPipeRunAttrs.size())
+      return cmd.cadPipeRunAttrs[static_cast<size_t>(e.index)];
+    return kDef;
   case T::PdfUnderlay:
     return kDef;
   }
@@ -19893,6 +19979,7 @@ static void FormatPickCandidateTypeLabel(const AppCommandState& cmd, const Selec
     std::snprintf(buf, bufSize, "Surface");
     break;
   case T::Solid:        std::snprintf(buf, bufSize, "Solid"); break;
+  case T::PipeRun:      std::snprintf(buf, bufSize, "Pipe Run"); break;
   default:              std::snprintf(buf, bufSize, "Object"); break;
   }
 }

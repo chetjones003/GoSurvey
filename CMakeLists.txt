@@ -1147,6 +1147,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
     tests/GsIoDimAngularTests.cpp
+    tests/GsIoPipeRunTests.cpp
     tests/GsIoViewportCameraTests.cpp
     tests/GsMigrateLegacyBreaklineTests.cpp
     # REQ-302/ADR-053 (issue #323) — ribbon layout measure pass. Header-only, but needs a live

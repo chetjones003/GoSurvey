@@ -166,3 +166,41 @@ TEST_CASE("BEDIT hides the main drawing's pipe runs, and restores them on close"
   REQUIRE(st.cadPipeRuns.size() == 1);
   CHECK(st.cadPipeRuns[0].nominalSize == "4in");
 }
+
+TEST_CASE("A pipe run is pickable as a whole SelectedEntity of Type::PipeRun", "[issue486][piperun][select]") {
+  AppCommandState st;
+  st.viewportVisualStyle = VisualStyle::Shaded;  // faces pickable — Wireframe2D draws none (D-2026-09-16-b)
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  RefreshSolidDisplayGeometry(st);
+  REQUIRE(st.pipeRunWorldSolids.size() == 1);
+
+  // A ray straight down through the pipe's middle (5,0,0), well within its cross-section.
+  const ray3d::Ray ray{ray3d::Vec3{5.0, 0.0, 5.0}, ray3d::Vec3{0.0, 0.0, -1.0}};
+  SelectedEntity hit{};
+  REQUIRE(PickClosestSolidEntity(st, ray, 0.01f, &hit));
+  CHECK(hit.type == SelectedEntity::Type::PipeRun);
+  CHECK(hit.index == 0);
+}
+
+TEST_CASE("DELETE removes a selected pipe run", "[issue486][piperun][select]") {
+  AppCommandState st;
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+
+  SelectedEntity sel{};
+  sel.type = SelectedEntity::Type::PipeRun;
+  sel.index = 0;
+  st.selection.push_back(sel);
+
+  std::vector<std::string> log;
+  ExecuteDeleteSelection(st, log);
+  CHECK(st.cadPipeRuns.empty());
+  CHECK(st.cadPipeRunAttrs.empty());
+}

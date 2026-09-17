@@ -1366,6 +1366,8 @@ json BuildRoot(const AppCommandState& st) {
     for (const CadPipeRun& r : st.cadPipeRuns) {
       json o;
       o["vertsXyz"] = r.vertsXyz;
+      if (!r.name.empty())  // issue #486, "pipe runs need to be namable"
+        o["name"] = r.name;
       if (!r.nominalSize.empty())
         o["nominalSize"] = r.nominalSize;
       if (!r.pressureClassTag.empty())
@@ -2571,12 +2573,15 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.cadPipeRunAttrs.clear();
   st.pipeRunWorldSolids.clear();
   st.pipeRunWorldSolidAttrs.clear();
+  st.pipeRunWorldSolidOwnerIndex.clear();
   st.pipeRunWorldSolidsSig = 0;
   if (doc.contains("pipeRuns") && doc["pipeRuns"].is_array()) {
     for (const auto& el : doc["pipeRuns"]) {
       CadPipeRun r;
       if (el.contains("vertsXyz") && el["vertsXyz"].is_array())
         r.vertsXyz = el["vertsXyz"].get<std::vector<double>>();
+      if (el.contains("name") && el["name"].is_string())
+        r.name = el["name"].get<std::string>();
       if (el.contains("nominalSize") && el["nominalSize"].is_string())
         r.nominalSize = el["nominalSize"].get<std::string>();
       if (el.contains("pressureClassTag") && el["pressureClassTag"].is_string())

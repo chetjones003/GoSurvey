@@ -1460,6 +1460,24 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
       hlLines->insert(hlLines->end(), t.edgeVerts.begin(), t.edgeVerts.end());
       break;
     }
+  } else if (e.type == SelectedEntity::Type::PipeRun) {
+    // Issue #486. Same omission as the Solid branch above, for the same reason: without this a
+    // selected pipe run drew no highlight at all. `e.index` is into `cadPipeRuns`, but the
+    // rendered geometry lives in the DERIVED `pipeRunWorldSolids` array — walk that array for the
+    // (at most one) solid this run actually built, matching `PickClosestSolidEntity`'s own mapping.
+    for (size_t si = 0; si < cmd.pipeRunWorldSolids.size(); ++si) {
+      if (si >= cmd.pipeRunWorldSolidOwnerIndex.size() ||
+          cmd.pipeRunWorldSolidOwnerIndex[si] != e.index || !cmd.pipeRunWorldSolids[si])
+        continue;
+      const CadSolidPtr& sp = cmd.pipeRunWorldSolids[si];
+      for (const CadSolidTessellation& t : cmd.solidDisplayCache) {
+        if (t.key.lock() != sp)
+          continue;
+        hlLines->insert(hlLines->end(), t.edgeVerts.begin(), t.edgeVerts.end());
+        break;
+      }
+      break;
+    }
   } else if (e.type == SelectedEntity::Type::BlockRef) {
     // Issue #496 follow-up, same omission as the Solid case above and the one PickClosestCadEntity
     // itself had: a piping fitting block whose content is a 3D solid (no lines/circles) drew NO

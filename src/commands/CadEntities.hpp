@@ -476,6 +476,10 @@ struct CadArc {
 /// unlike \ref CadArc this does not need to be dependency-free for PaperSpace.hpp's sake — it
 /// still lives here so every other model-space entity vector sits beside it.
 struct CadPipeRun {
+  /// User-facing name (issue #486, "pipe runs need to be namable"). Empty until the user renames
+  /// it — a hover/Properties readout falls back to a generic label the way an unnamed entity of any
+  /// other type already does, rather than showing a blank field.
+  std::string name;
   /// Path vertices, 3 doubles each (x,y,z, REQ-057 absolute storage coords), size() a multiple of
   /// 3. At least 2 vertices (one segment) for a valid run; fewer is refused at creation, not here.
   std::vector<double> vertsXyz;

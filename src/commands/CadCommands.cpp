@@ -14054,8 +14054,10 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
       break;
     case T::Mesh:
     case T::Surface:
-      // Display-only (REQ-063, REQ-068 / ADR-036 (b)): every transform refuses them by name, so a
-      // gizmo anchored partly on one would advertise a move that will not happen to it.
+    case T::PipeRun:
+      // Display-only (REQ-063, REQ-068 / ADR-036 (b); PipeRun issue #486 — the same stated
+      // boundary Solid has, on the enum's own doc comment): every transform refuses them by name,
+      // so a gizmo anchored partly on one would advertise a move that will not happen to it.
       break;
     }
   }
@@ -22593,6 +22595,10 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  while (st.cadPipeRunAttrs.size() < st.cadPipeRuns.size()) {  // issue #486
+    st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+    grew = true;
+  }
   while (st.cadTableAttrs.size() < st.cadTables.size()) {
     st.cadTableAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -23495,6 +23501,7 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
       case T::Table:        otherKinds.insert("table"); break;
       case T::Solid:        otherKinds.insert("solid"); break;
       case T::PdfUnderlay:  otherKinds.insert("PDF underlay"); break;
+      case T::PipeRun:      otherKinds.insert("pipe run"); break;
     }
   }
   std::sort(polyIdx.begin(), polyIdx.end());
@@ -24020,6 +24027,22 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     st.cadSolids.erase(st.cadSolids.begin() + static_cast<std::ptrdiff_t>(idx));
     if (static_cast<size_t>(idx) < st.cadSolidAttrs.size())
       st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  // Pipe runs (issue #486) — same shape as the B-rep solids just above: display-and-erase only,
+  // the caller's one undo snapshot already covers this removal.
+  std::set<int> pipeRunIx;
+  const size_t nPipeRun = st.cadPipeRuns.size();
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::PipeRun && e.index >= 0 && static_cast<size_t>(e.index) < nPipeRun)
+      pipeRunIx.insert(e.index);
+  }
+  std::vector<int> prv(pipeRunIx.begin(), pipeRunIx.end());
+  std::sort(prv.begin(), prv.end(), std::greater<int>());
+  for (int idx : prv) {
+    st.cadPipeRuns.erase(st.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadPipeRunAttrs.size())
+      st.cadPipeRunAttrs.erase(st.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
@@ -25140,6 +25163,7 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
   case T::FilledRegion:
   case T::PdfUnderlay:
   case T::Mesh:
+  case T::PipeRun:
     return static_cast<double>(e.index);
   }
   return 0.0;
@@ -28339,6 +28363,56 @@ bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
   return true;
 }
 
+static bool PipeRunWorldSolidVisible(const AppCommandState& st, size_t solidIndex);
+
+/// The nearest PIPE RUN solid under \p ray, as a `SelectedEntity` of `Type::PipeRun` (issue #486).
+/// A whole-entity pick only — deliberately NOT routed through `PickSubObjectAcrossSolids`/
+/// `SelectedSubObject`, which is scoped to `st.cadSolids` throughout the sub-object selection
+/// system (FILLET/CHAMFER/PRESSPULL edge-and-face picking): a pipe run's derived solid was never
+/// meant to be sub-object-edited, only selected/highlighted/erased/reported, the same boundary
+/// `Type::Solid` itself states on its own doc comment.
+static bool PickClosestPipeRunEntity(const AppCommandState& st, const ray3d::Ray& ray, float tolWorld,
+                                     SelectedEntity* out, double* outRayT) {
+  if (!out)
+    return false;
+  solidpick::Tolerance tol;
+  tol.vertex = static_cast<double>(tolWorld);
+  tol.edge = tol.vertex;
+  const bool facesPickable = st.viewportVisualStyle != VisualStyle::Wireframe2D;
+  bool any = false;
+  double bestT = 0.0;
+  int bestOwner = -1;
+  for (size_t i = 0; i < st.pipeRunWorldSolids.size(); ++i) {
+    if (!PipeRunWorldSolidVisible(st, i))
+      continue;
+    const CadSolidPtr& sp = st.pipeRunWorldSolids[i];
+    const auto ce = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
+                                 [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+    if (ce == st.solidDisplayCache.end() || ce->empty())
+      continue;  // never tessellate here — a pick must not cost a tessellation (REQ-318 item 7)
+    static const std::vector<float> kNoTriVerts;
+    static const std::vector<int> kNoTriFaceIds;
+    solidpick::Pick p;
+    if (!solidpick::PickSubObject(*sp, facesPickable ? ce->triVerts : kNoTriVerts,
+                                  facesPickable ? ce->triFaceIds : kNoTriFaceIds, ray, tol, &p, nullptr))
+      continue;
+    if (any && !(p.rayT < bestT))
+      continue;
+    any = true;
+    bestT = p.rayT;
+    bestOwner = i < st.pipeRunWorldSolidOwnerIndex.size() ? st.pipeRunWorldSolidOwnerIndex[i] : -1;
+  }
+  if (!any || bestOwner < 0)
+    return false;
+  SelectedEntity e{};
+  e.type = SelectedEntity::Type::PipeRun;
+  e.index = bestOwner;
+  *out = e;
+  if (outRayT)
+    *outRayT = bestT;
+  return true;
+}
+
 bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, float tolWorld,
                             SelectedEntity* out, double* outRayT) {
   if (!out)
@@ -28350,17 +28424,32 @@ bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, fl
   solidpick::Pick pick{};
   // 2D Wireframe draws no faces, so none is clickable there (D-2026-09-16-b).
   const bool facesPickable = st.viewportVisualStyle != VisualStyle::Wireframe2D;
-  if (!PickSubObjectAcrossSolids(st, ray, tol, &sub, &pick, facesPickable))
-    return false;
-  if (sub.solidIndex < 0 || static_cast<std::size_t>(sub.solidIndex) >= st.cadSolids.size())
-    return false;
-  SelectedEntity e{};
-  e.type = SelectedEntity::Type::Solid;
-  e.index = sub.solidIndex;
-  *out = e;
-  if (outRayT)
-    *outRayT = pick.rayT;
-  return true;
+  const bool haveSolid = PickSubObjectAcrossSolids(st, ray, tol, &sub, &pick, facesPickable) &&
+                        sub.solidIndex >= 0 && static_cast<std::size_t>(sub.solidIndex) < st.cadSolids.size();
+
+  // Pipe runs (issue #486): whichever of a real solid or a pipe run's derived solid the ray hits
+  // FIRST wins — the same "nearer one answers" rule every other entity-vs-entity precedence in
+  // this codebase follows, not a fixed priority between the two kinds.
+  SelectedEntity pipeRunHit{};
+  double pipeRunT = 0.0;
+  const bool havePipeRun = PickClosestPipeRunEntity(st, ray, tolWorld, &pipeRunHit, &pipeRunT);
+
+  if (haveSolid && (!havePipeRun || pick.rayT <= pipeRunT)) {
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::Solid;
+    e.index = sub.solidIndex;
+    *out = e;
+    if (outRayT)
+      *outRayT = pick.rayT;
+    return true;
+  }
+  if (havePipeRun) {
+    *out = pipeRunHit;
+    if (outRayT)
+      *outRayT = pipeRunT;
+    return true;
+  }
+  return false;
 }
 
 bool BuildSubObjectHoverRow(const AppCommandState& st, const SelectedSubObject& s,
@@ -28535,6 +28624,7 @@ static void RebuildPipeRunWorldSolids(AppCommandState& st) {
   st.pipeRunWorldSolidsSig = sig;
   st.pipeRunWorldSolids.clear();
   st.pipeRunWorldSolidAttrs.clear();
+  st.pipeRunWorldSolidOwnerIndex.clear();
   for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
     const EntityAttributes runAttr = ri < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[ri] : EntityAttributes{};
     std::vector<CadSolidPtr> segSolids;
@@ -28542,6 +28632,7 @@ static void RebuildPipeRunWorldSolids(AppCommandState& st) {
     for (CadSolidPtr& sp : segSolids) {
       st.pipeRunWorldSolids.push_back(std::move(sp));
       st.pipeRunWorldSolidAttrs.push_back(runAttr);
+      st.pipeRunWorldSolidOwnerIndex.push_back(static_cast<int>(ri));
     }
   }
 }
