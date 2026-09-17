@@ -577,8 +577,8 @@ enum class Problem {
 
   /// A tilted cut of a cylinder or cone whose curve would run off the side and across an end cap.
   SliceCutCrossesCurvedEnd,
-  /// A cut parallel to (or containing) a cylinder's or cone's axis.
-  SliceCutAlongCurvedAxis,
+  /// A cut parallel to a cone's axis that misses the axis — its curve is a hyperbola (issue #517).
+  SliceCutConeOffAxis,
   /// A cone cut steeper than the cone's own side, whose curve is not an ellipse.
   SliceCutTooSteepForCone,
   /// The cut surface would have more than one outline — a hole, or separate islands. Distinct from
@@ -863,10 +863,11 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 ///
 /// A cylinder or cone cut the curved recognisers do not take is refused for that cut, not for
 /// having curved faces (GitHub #516): a tilted cut crossing an end cap
-/// (\ref Problem::SliceCutCrossesCurvedEnd), a cut parallel to the axis
-/// (\ref Problem::SliceCutAlongCurvedAxis), a cone cut steeper than its side
+/// (\ref Problem::SliceCutCrossesCurvedEnd), a cut parallel to a cone's axis that misses the axis
+/// (\ref Problem::SliceCutConeOffAxis), a cone cut steeper than its side
 /// (\ref Problem::SliceCutTooSteepForCone), and pieces that failed validation
-/// (\ref Problem::SliceResultInvalid).
+/// (\ref Problem::SliceResultInvalid). A cut parallel to the axis of a cylinder, or through the axis
+/// of a cone, is taken: its pieces are bounded by straight seams and cap chords (GitHub #517).
 [[nodiscard]] bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                          SliceKeep keep, Solid* outAbove, Solid* outBelow, Problem* outWhy);
 
