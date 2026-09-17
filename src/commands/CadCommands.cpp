@@ -33067,19 +33067,22 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
   run.vertsXyz = st.pipeRunDraftVerts;
   run.nominalSize = st.pipeRunNominalSize;
   run.pressureClassTag = st.pipeRunPressureClassTag;
-  // The size was already validated when it was set (below), so this should always succeed; refused
-  // rather than assumed, the same belt-and-braces REQ-201 the solid commands already follow.
+  // The size itself was already validated when it was set (below), but the swept solid can still
+  // refuse: a corner too tight for a 1.5x-nominal-size long-radius fillet (CadBuildPipeRunSolids's
+  // own doc comment) has no valid geometry to build, so this is a real, reachable failure — not
+  // belt-and-braces — and the run stays open so U/Esc can fix the offending corner.
   std::vector<CadSolidPtr> preview;
   if (!CadBuildPipeRunSolids(run, &preview)) {
-    log.push_back("PIPERUN - could not build a pipe solid for \"" + run.nominalSize +
-                  "\"; the run stays open. U to remove a point, or Esc to cancel.");
+    log.push_back("PIPERUN - could not build a pipe solid — a corner may be too tight for this "
+                  "size's fillet radius. U to remove the last point, or Esc to cancel.");
     return;
   }
   PushUndoSnapshot(st, "Create Pipe Run");
+  const size_t nVerts = run.vertsXyz.size() / 3;
   st.cadPipeRuns.push_back(std::move(run));
   st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
-  log.push_back("PIPERUN - run created: " + std::to_string(preview.size()) + " segment(s).");
+  log.push_back("PIPERUN - run created: " + std::to_string(nVerts) + " point(s).");
   CancelPipeRunCommand(st);
   st.active = AppCommandState::Kind::None;
 }
