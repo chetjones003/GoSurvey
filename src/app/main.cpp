@@ -1128,6 +1128,7 @@ int main()
     DrawTextStyleManagerWindow(cmd, &cmdLog);
     DrawDimStyleWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);
+    DrawConnectionModesWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
     DrawSurfaceStyleWindow(cmd, &cmdLog);
     DrawVolumeDashboardWindow(cmd, &cmdLog);  // REQ-073 amendment (TASK-095)

@@ -2631,6 +2631,9 @@ struct AppCommandState {
   int ribbonTabBeforeBlockEditor = 0;
   bool blockEditorContextualRibbonArmed = false;
   bool blockAuthoringPaletteOpen = false;
+  /// Connection Modes window (issue #496 follow-up): a graphical alternative to the BCONNECTMODE
+  /// text wizard, for the same "which mode applies to which snap target" authoring.
+  bool showConnectionModesWindow = false;
   int blockAuthoringPaletteTab = 0;  ///< 0 Parameters, 1 Actions, 2 Parameter Sets, 3 Constraints
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,

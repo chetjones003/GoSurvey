@@ -5262,8 +5262,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                  "walk through its fields.",
                  false),
           rowBtn("##BeConnMode", (int)RibbonIconKind::BeParameters, nullptr, "Connection Modes", false,
-                 "Connection Modes — BCONNECTMODE. Add/edit/remove a snap-target-specific mode on a "
-                 "connection point, and set its default.",
+                 "Connection Modes — opens a window to add/edit/remove a snap-target-specific mode "
+                 "on a connection point, and set its default.",
                  false),
           rowBtn("##BeFitting", (int)RibbonIconKind::BeParameters, nullptr, "Fitting Properties", false,
                  "Fitting Properties — BLOCKFITTING. Tag this block as a piping catalog part: part "
@@ -5275,7 +5275,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         drawRibbonSectionSpec("RibbonSecBeConn", "Piping", spec, [&](const std::string& id) {
           if (id == "##BeConnAdd") beditSubmit("BCONNECT");
           else if (id == "##BeConnEdit") beditSubmit("BCONNECTEDIT");
-          else if (id == "##BeConnMode") beditSubmit("BCONNECTMODE");
+          else if (id == "##BeConnMode") cmd.showConnectionModesWindow = true;
           else if (id == "##BeFitting") beditSubmit("BLOCKFITTING");
         });
       }});

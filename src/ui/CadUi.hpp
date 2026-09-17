@@ -204,6 +204,10 @@ void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* 
 /// Point Group manager (REQ-067): create/rename/delete groups and edit their rules, with the
 /// resolved member count shown live so an empty or non-matching rule is visible immediately.
 void DrawPointGroupManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+/// Connection Modes window (issue #496 follow-up): graphical authoring of a BEDIT connection
+/// point's smart connection modes (snap target, role, engagement, compatibility tag, default) — the
+/// GUI counterpart of the BCONNECTMODE text wizard, for the same underlying data.
+void DrawConnectionModesWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 /// Surface Style editor (SURFSTYLE, REQ-070 / ADR-036 (i)): the named table of how a surface is
 /// DRAWN — contours, border, triangles, points. Editing a style changes every surface using it, and
 /// touches no surface definition, so nothing here can re-triangulate anything.
