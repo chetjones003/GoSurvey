@@ -7756,3 +7756,106 @@ TEST_CASE("A recipe that does not describe its solid is not used to cut it", "[b
     REQUIRE(std::hypot(start.x, start.y) == Approx(30.0).epsilon(1e-9));
   }
 }
+
+// ---------------------------------------------------------------------------
+// GitHub issue #519: a loft whose side strips are flat stores them as Plane faces.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A loft between similar parallel polygons has flat side faces and sections as the frustum",
+          "[brep][issue519]") {
+  Problem why = Problem::Ok;
+  auto square = [](const ucs::Ucs& plane, double half) {
+    return PolyProfile(plane, {{-half, -half}, {half, -half}, {half, half}, {-half, half}});
+  };
+
+  // The issue's loft: a 60 x 60 square at z -25 to a 30 x 30 square at z 25.
+  Solid loft;
+  REQUIRE(brep::Loft({square(PlaneAlong(World(), -25.0), 30.0), square(PlaneAlong(World(), 25.0), 15.0)}, &loft,
+                     &why));
+  REQUIRE(CountFaces(loft, brep::SurfaceKind::Plane) == 6);
+  REQUIRE(CountFaces(loft, brep::SurfaceKind::Nurbs) == 0);
+
+  // PYRAMID's corners sit on its frame's axes, so the same frustum is a 4-sided pyramid turned 45 degrees.
+  ucs::Ucs turned = PlaneAlong(World(), -25.0);
+  turned.xAxis = ray3d::Normalize(Vec3{1, 1, 0});
+  turned.yAxis = ray3d::Normalize(Vec3{-1, 1, 0});
+  Solid pyramid;
+  REQUIRE(brep::MakePyramid(turned, 4, 30.0 * std::sqrt(2.0), 15.0 * std::sqrt(2.0), 50.0, &pyramid, &why));
+
+  SECTION("volume and area are the frustum's") {
+    const brep::MassProperties ml = brep::ComputeMassProperties(loft);
+    const brep::MassProperties mp = brep::ComputeMassProperties(pyramid);
+    const double slant = std::sqrt(15.0 * 15.0 + 50.0 * 50.0);
+    REQUIRE(ml.volume == Approx(105000.0).epsilon(1e-12));
+    REQUIRE(ml.surfaceArea == Approx(3600.0 + 900.0 + 4.0 * 45.0 * slant).epsilon(1e-12));
+    REQUIRE(ml.volume == Approx(mp.volume).epsilon(1e-12));
+    REQUIRE(ml.surfaceArea == Approx(mp.surfaceArea).epsilon(1e-12));
+  }
+
+  SECTION("SECTION matches the pyramid frustum at three planes, corner for corner") {
+    const std::vector<std::pair<Vec3, Vec3>> planes = {
+        {Vec3{0, 0, 0}, Vec3{0, 0, 1}},                          // horizontal: a 45 x 45 square
+        {Vec3{0, 0, 0}, Vec3{0, 1, 0}},                          // vertical: a trapezoid
+        {Vec3{0, 0, 0}, ray3d::Normalize(Vec3{0, -1, 1})},       // 45 degrees
+    };
+    for (const auto& pl : planes) {
+      ucs::Ucs aPlane, bPlane;
+      brep::Path a, b;
+      REQUIRE(brep::SectionLoop(loft, pl.first, pl.second, &aPlane, &a, &why));
+      REQUIRE(brep::SectionLoop(pyramid, pl.first, pl.second, &bPlane, &b, &why));
+      RequireCorners(SectionCornersWorld(aPlane, a), SectionCornersWorld(bPlane, b));
+      REQUIRE(PathArea(a) == Approx(PathArea(b)).epsilon(1e-12));
+    }
+    ucs::Ucs hp;
+    brep::Path h;
+    REQUIRE(brep::SectionLoop(loft, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &hp, &h, &why));
+    REQUIRE(PathArea(h) == Approx(45.0 * 45.0).epsilon(1e-12));
+  }
+
+  SECTION("a rotated top profile twists the sides: they stay freeform") {
+    const ucs::Ucs top = PlaneAlong(World(), 25.0);
+    const double c = std::cos(0.3), s = std::sin(0.3);
+    std::vector<ucs::Point2D> pts;
+    for (const ucs::Point2D& q : std::vector<ucs::Point2D>{{-15, -15}, {15, -15}, {15, 15}, {-15, 15}})
+      pts.push_back({c * q.x - s * q.y, s * q.x + c * q.y});
+    Solid twisted;
+    REQUIRE(brep::Loft({square(PlaneAlong(World(), -25.0), 30.0), PolyProfile(top, pts)}, &twisted, &why));
+    REQUIRE(CountFaces(twisted, brep::SurfaceKind::Nurbs) == 4);
+    REQUIRE(CountFaces(twisted, brep::SurfaceKind::Plane) == 2);
+  }
+
+  SECTION("a rectangle over a square: not similar, but every side strip is flat, so every face is planar") {
+    Solid rect;
+    REQUIRE(brep::Loft({square(PlaneAlong(World(), -25.0), 30.0),
+                        PolyProfile(PlaneAlong(World(), 25.0), {{-15, -5}, {15, -5}, {15, 5}, {-15, 5}})},
+                       &rect, &why));
+    REQUIRE(CountFaces(rect, brep::SurfaceKind::Plane) == 6);
+    // Frustum-like prismatoid: V = h/6 (A0 + 4 Am + A1), Am the mid-height 45 x 35 rectangle.
+    REQUIRE(brep::ComputeMassProperties(rect).volume ==
+            Approx(50.0 / 6.0 * (3600.0 + 4.0 * 45.0 * 35.0 + 300.0)).epsilon(1e-12));
+  }
+
+  SECTION("a non-similar top profile whose edges are not parallel stays freeform") {
+    // A kite on top: no side strip has parallel ring edges, so none is flat.
+    Solid kite;
+    REQUIRE(brep::Loft({square(PlaneAlong(World(), -25.0), 30.0),
+                        PolyProfile(PlaneAlong(World(), 25.0), {{0, -20}, {10, 0}, {0, 10}, {-10, 0}})},
+                       &kite, &why));
+    REQUIRE(CountFaces(kite, brep::SurfaceKind::Nurbs) == 4);
+  }
+
+  SECTION("at survey magnitude on a tilted frame: still flat, and sections as the frustum within 0.002 ft") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid far;
+    REQUIRE(brep::Loft({square(base, 30.0), square(PlaneAlong(base, 50.0), 15.0)}, &far, &why));
+    REQUIRE(CountFaces(far, brep::SurfaceKind::Plane) == 6);
+    REQUIRE(brep::ComputeMassProperties(far).volume == Approx(105000.0).epsilon(1e-9));
+    const Vec3 mid = ucs::UcsToWorld(base, Vec3{0, 0, 25});
+    ucs::Ucs hp;
+    brep::Path h;
+    REQUIRE(brep::SectionLoop(far, mid, base.zAxis, &hp, &h, &why));
+    RequireCorners(SectionCornersWorld(hp, h),
+                   {ucs::UcsToWorld(base, Vec3{-22.5, -22.5, 25}), ucs::UcsToWorld(base, Vec3{22.5, -22.5, 25}),
+                    ucs::UcsToWorld(base, Vec3{22.5, 22.5, 25}), ucs::UcsToWorld(base, Vec3{-22.5, 22.5, 25})});
+  }
+}
