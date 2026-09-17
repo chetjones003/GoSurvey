@@ -19182,6 +19182,134 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
   }
 
+  // ---- PIPERUN ortho/polar compass overlay (REQ-346, D-2026-09-17-a) ---------------------------
+  // The dashed alignment ray + "dist < angle" readout, same drawing as ordinary POLAR's above, but
+  // anchored at the run's last committed vertex and gated on its own toggle (pipeRunCompassOn) so
+  // it is visible whether or not st.polarMode is on. The rubber-band pipe preview already snaps to
+  // this same ray (ApplyPipeRunCompassFromAnchor in CadRubberPreview.cpp); this only draws it.
+  if (modelSpace && cmd.active == AppCommandState::Kind::PipeRun && cmd.pipeRunCompassOn &&
+      cmd.pipeRunPhase == AppCommandState::PipeRunPhase::WaitNextPoint && liveHover && outCursorX &&
+      outCursorY && !InFloatingModelSpace(cmd) && cmd.pipeRunDraftVerts.size() >= 3) {
+    const size_t pn = cmd.pipeRunDraftVerts.size();
+    const ucs::Ucs frame = CadActiveUcsStorage(cmd);
+    const ray3d::Vec3 anchor{cmd.pipeRunDraftVerts[pn - 3], cmd.pipeRunDraftVerts[pn - 2],
+                             cmd.pipeRunDraftVerts[pn - 1]};
+    // Match the point the pipe preview itself is built from (AppendCadDraftRubberLines's own
+    // commitCurX/commitCurY in main.cpp): while an object snap is acquired, that is the snap point,
+    // not the raw cursor — an active OSNAP eases the preview toward it, sometimes most of the way.
+    // Drawing the ring from the raw cursor instead made the compass disagree with the tube it was
+    // meant to describe whenever a snap was live nearby.
+    const double cursorX = cmd.viewportSnapPickValid ? static_cast<double>(cmd.viewportSnapPickLocalX)
+                                                     : static_cast<double>(*outCursorX);
+    const double cursorY = cmd.viewportSnapPickValid ? static_cast<double>(cmd.viewportSnapPickLocalY)
+                                                     : static_cast<double>(*outCursorY);
+    const std::vector<double>& extra = cmd.polarExtraAnglesDeg;
+    // The SAME function the commit path and the pipe preview call (ApplyPipeRunCompassFromAnchor,
+    // CadCommands.cpp) — not a second, direct ucs::SnapToPolarRay call. That earlier direct call
+    // skipped the anchor-plane flattening the shared function does for an object-snap hit that sits
+    // off the anchor's own UCS plane (a flange face, an existing pipe wall), so the dashed ray drawn
+    // here pointed one way while the pipe it was meant to describe went another.
+    float snapWx = static_cast<float>(cursorX);
+    float snapWy = static_cast<float>(cursorY);
+    float snapWz = static_cast<float>(CadCommitElevation(cmd));
+    const float anchorZf = static_cast<float>(anchor.z);
+    const float targetZf = snapWz;
+    ApplyPipeRunCompassFromAnchor(cmd, static_cast<float>(anchor.x), static_cast<float>(anchor.y), &snapWx,
+                                  &snapWy, /*compass=*/true, anchorZf, targetZf, &snapWz);
+    const ray3d::Vec3 snapped{snapWx, snapWy, snapWz};
+    const ray3d::Vec3 d = ray3d::Sub(snapped, anchor);
+    if (ray3d::Length(d) > 1e-9) {
+      const Camera pcam = CadViewCamera(cmd);
+      auto toScreen = [&](const ray3d::Vec3& p) {
+        float sx = 0.f, sy = 0.f;
+        pcam.WorldToScreen(p.x, p.y, p.z, avail.x, avail.y, &sx, &sy);
+        return ImVec2(imgPos.x + sx, imgPos.y + sy);
+      };
+      const ImVec2 ac = toScreen(anchor);
+      const ImVec2 cs = toScreen(snapped);
+      const float segDx = cs.x - ac.x, segDy = cs.y - ac.y;
+      const float segLen = std::sqrt(segDx * segDx + segDy * segDy);
+      // Fixed WORLD-space radius, scaled off the run's own pipe size rather than the segment being
+      // drawn or the screen — it must not grow/shrink as the cursor moves (the segment-length-scaled
+      // first attempt did exactly that). Drawn as real points on the frame's own XY plane (not a
+      // screen-facing billboard circle), so under an orbited camera it foreshortens into an ellipse
+      // lying flat in that plane, the way the Plant 3D reference photograph shows it.
+      double odFeet = 0.0;
+      if (!CadPipeNominalOdFeet(cmd.pipeRunNominalSize, &odFeet) || odFeet <= 0.0)
+        odFeet = 0.5;
+      const double ringRadiusWorld = odFeet * 6.0;
+      auto onRing = [&](double angleDeg, double radius) {
+        const double r = angleDeg * ucs::detail::kDegToRad;
+        return ray3d::Add(anchor, ray3d::Add(ray3d::Scale(frame.xAxis, radius * std::cos(r)),
+                                             ray3d::Scale(frame.yAxis, radius * std::sin(r))));
+      };
+      const double reach = 1e6;
+      const ray3d::Vec3 dn = ray3d::Normalize(d);
+      const ImVec2 a0 = toScreen(ray3d::Sub(anchor, ray3d::Scale(dn, reach)));
+      const ImVec2 a1 = toScreen(ray3d::Add(anchor, ray3d::Scale(dn, reach)));
+      ImDrawList* pdl = ImGui::GetWindowDrawList();
+      pdl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
+      const float dx = a1.x - a0.x, dy = a1.y - a0.y;
+      const float len = std::sqrt(dx * dx + dy * dy);
+      const int seg = std::clamp(static_cast<int>(len / 12.f), 1, 4000);
+      constexpr ImU32 kCompassCol = IM_COL32(235, 175, 90, 210);  // piping's own orange (branch ports)
+      for (int i = 0; i < seg; i += 2) {
+        const float t0 = static_cast<float>(i) / static_cast<float>(seg);
+        const float t1 = static_cast<float>(i + 1) / static_cast<float>(seg);
+        pdl->AddLine(ImVec2(a0.x + dx * t0, a0.y + dy * t0), ImVec2(a0.x + dx * t1, a0.y + dy * t1), kCompassCol,
+                     1.6f);
+      }
+      // Compass ring at the anchor, echoing the Plant 3D reference: a dial with a tick at every
+      // preset angle, so the anchor reads as a compass rather than a bare crosshair. Every point is
+      // a real 3D point in the frame's own XY plane, projected — not a screen-space unit vector — so
+      // the ring, its ticks and the highlighted ray all foreshorten together and stay coplanar.
+      constexpr int kRingSegs = 64;
+      ImVec2 prevPt = toScreen(onRing(0.0, ringRadiusWorld));
+      for (int i = 1; i <= kRingSegs; ++i) {
+        const double a = 360.0 * static_cast<double>(i) / static_cast<double>(kRingSegs);
+        const ImVec2 nextPt = toScreen(onRing(a, ringRadiusWorld));
+        pdl->AddLine(prevPt, nextPt, IM_COL32(235, 175, 90, 150), 1.4f);
+        prevPt = nextPt;
+      }
+      const double tickInner = ringRadiusWorld * 0.85;
+      const double tickOuter = ringRadiusWorld * 1.15;
+      if (cmd.polarIncrementDeg >= 1e-6) {
+        for (double a = 0.0; a < 360.0 - 1e-6; a += cmd.polarIncrementDeg) {
+          pdl->AddLine(toScreen(onRing(a, tickInner)), toScreen(onRing(a, tickOuter)),
+                       IM_COL32(235, 175, 90, 200), 1.6f);
+        }
+      }
+      for (double a : extra) {
+        pdl->AddLine(toScreen(onRing(a, tickInner)), toScreen(onRing(a, tickOuter)),
+                     IM_COL32(255, 220, 120, 230), 2.f);
+      }
+      // Snapped direction highlighted brighter across the ring, so the ring's own "you are pointing
+      // here" reads at a glance.
+      double angDeg = 0.0;
+      (void)ucs::AngleInRotationPlaneDeg(frame, 'Z', d, &angDeg);
+      if (angDeg < 0.0)
+        angDeg += 360.0;
+      pdl->AddLine(toScreen(onRing(angDeg + 180.0, ringRadiusWorld)), toScreen(onRing(angDeg, ringRadiusWorld)),
+                   IM_COL32(255, 225, 150, 255), 2.2f);
+      char rd[80];
+      std::snprintf(rd, sizeof(rd), "%s < %.2f\xC2\xB0",
+                    FormatLinear(ray3d::Length(d), cmd.displayLinearPrecision).c_str(), angDeg);
+      // Label positioned along the segment's MIDPOINT, offset perpendicular to it, rather than at
+      // the raw mouse position — the floating command bar (REQ-040) is anchored near the bottom of
+      // the viewport and a mouse-pinned label collided with it whenever the cursor was drawing
+      // anywhere near there.
+      const ImVec2 mid((ac.x + cs.x) * 0.5f, (ac.y + cs.y) * 0.5f);
+      const float pdx = segLen > 1e-6 ? -segDy / segLen : 0.f;
+      const float pdy = segLen > 1e-6 ? segDx / segLen : -1.f;
+      const ImVec2 ts = ImGui::CalcTextSize(rd);
+      const ImVec2 tp(mid.x + pdx * 14.f - ts.x * 0.5f, mid.y + pdy * 14.f - ts.y * 0.5f);
+      pdl->AddRectFilled(ImVec2(tp.x - 3.f, tp.y - 2.f), ImVec2(tp.x + ts.x + 3.f, tp.y + ts.y + 2.f),
+                         IM_COL32(30, 24, 16, 220), 3.f);
+      pdl->AddText(tp, IM_COL32(245, 210, 165, 255), rd);
+      pdl->PopClipRect();
+    }
+  }
+
   // ---- Piping connection port gizmo (issue #486 increment A2) ----------------------------------
   // While BEDIT is open, mark each connection port on the block-being-edited so the author can see
   // the ports they've placed without a separate list command. Colored by role: inlet=green,

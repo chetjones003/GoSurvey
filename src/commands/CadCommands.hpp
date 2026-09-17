@@ -2529,6 +2529,13 @@ struct AppCommandState {
   /// etc. above): a pipe run is almost always drawn at the same size as the last one.
   std::string pipeRunNominalSize;
   std::string pipeRunPressureClassTag;
+  /// Ortho/polar compass (REQ-346): while \c true, the next-vertex preview and pick snap to
+  /// REQ-108's angle set (\ref polarIncrementDeg / \ref polarExtraAnglesDeg) measured from the run's
+  /// last committed vertex. Its own toggle, independent of \ref polarMode, so PIPERUN keeps snapping
+  /// even with ordinary POLAR tracking off (and vice versa). On by default, matching AutoCAD Plant
+  /// 3D's own compass default. Not saved with the drawing — a per-command UI setting, like
+  /// \ref orthoMode / \ref polarMode.
+  bool pipeRunCompassOn = true;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -5708,6 +5715,17 @@ void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
 /// applies here.
 void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
                                    bool polar, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float targetZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float* wz = nullptr);
+
+/// Piping ortho/polar compass (REQ-346): the PIPERUN counterpart of \ref ApplyPolarConstrainFromAnchor,
+/// snapping the next-vertex pick onto the nearest preset angle ray from the run's last committed
+/// vertex. Reuses REQ-108's own angle set (\ref AppCommandState::polarIncrementDeg /
+/// \c polarExtraAnglesDeg) rather than a second, piping-only list — deliberate, per D-2026-09-17-a —
+/// but is gated on its own toggle, \ref AppCommandState::pipeRunCompassOn, so turning it off does not
+/// touch ordinary POLAR tracking in other commands. No-op unless \p compass and \c pipeRunCompassOn.
+void ApplyPipeRunCompassFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool compass, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
                                    float targetZ = std::numeric_limits<float>::quiet_NaN(),
                                    float* wz = nullptr);
 

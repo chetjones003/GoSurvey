@@ -20983,11 +20983,13 @@ static ray3d::Vec3 ApproximateOnWorkPlaneFromXy(const ucs::Ucs& frame, double x,
   return ray3d::Vec3{x, y, z};
 }
 
-void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
-                                   bool polar, float anchorZ, float targetZ, float* wz) {
-  if (!polar || !st.polarMode || !wx || !wy)
-    return;
-  const ucs::Ucs frame = CadActiveUcsStorage(st);
+// Shared core of ApplyPolarConstrainFromAnchor and ApplyPipeRunCompassFromAnchor: snap *wx/*wy (and,
+// if resolvable, *wz) onto the nearest ray from anchor at a multiple of incrementDeg or one of
+// extraAnglesDeg, measured in frame's XY plane from its +X. Callers decide their own gate (POLAR's
+// st.polarMode, PIPERUN's st.pipeRunCompassOn) and pass the already-checked increment/extra angles.
+static void SnapPointToAngleSet(const ucs::Ucs& frame, float anchorX, float anchorY, float* wx, float* wy,
+                                float anchorZ, float targetZ, float* wz, double incrementDeg,
+                                const std::vector<double>& extraAnglesDeg) {
   // Prefer the REAL, already-resolved elevation of each point (issue #371) over solving the plane
   // equation for Z, which only has a real answer while the plane is close to horizontal.
   const bool haveRealZ = std::isfinite(anchorZ) && std::isfinite(targetZ);
@@ -20995,16 +20997,54 @@ void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
                                          : ApproximateOnWorkPlaneFromXy(frame, anchorX, anchorY);
   const ray3d::Vec3 targetPt =
       haveRealZ ? ray3d::Vec3{*wx, *wy, targetZ} : ApproximateOnWorkPlaneFromXy(frame, *wx, *wy);
-  const std::vector<double>& extra = st.polarExtraAnglesDeg;
-  const ray3d::Vec3 snapped = ucs::SnapToPolarRay(frame, anchorPt, targetPt, st.polarIncrementDeg,
-                                                  extra.empty() ? nullptr : extra.data(),
-                                                  static_cast<int>(extra.size()));
+  const ray3d::Vec3 snapped = ucs::SnapToPolarRay(frame, anchorPt, targetPt, incrementDeg,
+                                                  extraAnglesDeg.empty() ? nullptr : extraAnglesDeg.data(),
+                                                  static_cast<int>(extraAnglesDeg.size()));
   if (!std::isfinite(snapped.x) || !std::isfinite(snapped.y))
     return;  // leave the point alone rather than move it somewhere undefined (REQ-201)
   *wx = static_cast<float>(snapped.x);
   *wy = static_cast<float>(snapped.y);
   if (wz && std::isfinite(snapped.z))
     *wz = static_cast<float>(snapped.z);
+}
+
+void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool polar, float anchorZ, float targetZ, float* wz) {
+  if (!polar || !st.polarMode || !wx || !wy)
+    return;
+  SnapPointToAngleSet(CadActiveUcsStorage(st), anchorX, anchorY, wx, wy, anchorZ, targetZ, wz,
+                      st.polarIncrementDeg, st.polarExtraAnglesDeg);
+}
+
+void ApplyPipeRunCompassFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool compass, float anchorZ, float targetZ, float* wz) {
+  if (!compass || !st.pipeRunCompassOn || !wx || !wy)
+    return;
+  const ucs::Ucs frame = CadActiveUcsStorage(st);
+  // Unlike ordinary POLAR (fed a mouse pick that already lies ON the work plane, so an out-of-plane
+  // offset never arises), PIPERUN's compass is routinely fed an object-snap hit on a real 3D
+  // FEATURE — a flange face, an existing pipe's own wall — that can sit off the anchor's own UCS
+  // plane. SnapToPolarRay's documented contract PRESERVES that offset unchanged; silently carrying
+  // it through here would pull the new segment off the flat disc the compass ring promises on
+  // screen, landing the pipe somewhere the ring never showed. So the pick is FLATTENED onto the
+  // anchor's own plane first — the compass is a 2D dial, not a free 3D reach.
+  const bool haveRealZ = std::isfinite(anchorZ) && std::isfinite(targetZ);
+  const ray3d::Vec3 anchorPt = haveRealZ ? ray3d::Vec3{anchorX, anchorY, anchorZ}
+                                         : ApproximateOnWorkPlaneFromXy(frame, anchorX, anchorY);
+  const ray3d::Vec3 targetPt =
+      haveRealZ ? ray3d::Vec3{*wx, *wy, targetZ} : ApproximateOnWorkPlaneFromXy(frame, *wx, *wy);
+  const ucs::Ucs anchoredFrame = ucs::WithOrigin(frame, anchorPt);
+  const ucs::Point2D flatUv = ucs::WorldToPlane(anchoredFrame, targetPt);
+  const ray3d::Vec3 flatTarget = ucs::PlaneToWorld(anchoredFrame, flatUv);  // offset 0: exactly on plane
+  float fwx = static_cast<float>(flatTarget.x);
+  float fwy = static_cast<float>(flatTarget.y);
+  float fwz = static_cast<float>(flatTarget.z);
+  SnapPointToAngleSet(frame, anchorX, anchorY, &fwx, &fwy, anchorZ, fwz, &fwz, st.polarIncrementDeg,
+                      st.polarExtraAnglesDeg);
+  *wx = fwx;
+  *wy = fwy;
+  if (wz)
+    *wz = fwz;
 }
 
 void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
@@ -33141,8 +33181,8 @@ std::string CadPipeRunPromptText(const AppCommandState& st) {
                   st.pipeRunNominalSize.c_str(), classSuffix.c_str());
     return buf;
   }
-  std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s] - next point, or Undo/End, Enter to finish:",
-                st.pipeRunNominalSize.c_str(), classSuffix.c_str());
+  std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s] - next point (compass %s), or Undo/End/Compass, Enter to finish:",
+                st.pipeRunNominalSize.c_str(), classSuffix.c_str(), st.pipeRunCompassOn ? "on" : "off");
   return buf;
 }
 
@@ -33282,6 +33322,51 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
     log.push_back(CadPipeRunPromptText(st));
     return true;
   }
+  if (low == "compass") {
+    // Scoped to this command only (REQ-346) — does not touch st.polarMode, which governs ordinary
+    // POLAR tracking in every other command.
+    st.pipeRunCompassOn = !st.pipeRunCompassOn;
+    log.push_back(st.pipeRunCompassOn ? "PIPERUN - compass ON." : "PIPERUN - compass OFF.");
+    log.push_back(CadPipeRunPromptText(st));
+    return true;
+  }
+
+  // Compass typed-distance entry (REQ-346): a bare number, while a direction is snapped, commits a
+  // segment of exactly that length along the snapped ray — the same "direction from the compass,
+  // distance from the keyboard" idea AutoCAD's own direct-distance entry uses for ORTHO/POLAR.
+  if (st.pipeRunPhase == PRP::WaitNextPoint && st.pipeRunCompassOn && st.pipeRunDraftVerts.size() >= 3) {
+    char* distEnd = nullptr;
+    const double dist = std::strtod(line.c_str(), &distEnd);
+    if (distEnd && *distEnd == '\0' && !line.empty() && std::isfinite(dist) && dist > 0.0) {
+      const size_t n = st.pipeRunDraftVerts.size();
+      const float lastX = static_cast<float>(st.pipeRunDraftVerts[n - 3]);
+      const float lastY = static_cast<float>(st.pipeRunDraftVerts[n - 2]);
+      const float lastZ = static_cast<float>(st.pipeRunDraftVerts[n - 1]);
+      // Prefer a live object-snap point over the raw cursor, matching SubmitPipeRunViewportPick and
+      // the compass overlay (CadUi.cpp) — the three must agree on what "the current direction" is.
+      float wx = st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalX) : st.uiCursorWorldX;
+      float wy = st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalY) : st.uiCursorWorldY;
+      float wz = lastZ;
+      const float targetZ = static_cast<float>(CadCommitElevation(st));
+      ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
+      // The FULL 3D direction, not just X/Y: under a Front/Left/Right-style UCS the snapped ray runs
+      // along world Z (or another axis carried entirely by the resolved wz), so an X/Y-only length
+      // came out ~0 and fell through to the point parser below — which is what produced "could not
+      // read the base point" for a plain typed distance under those UCS orientations.
+      const double dx = static_cast<double>(wx) - lastX;
+      const double dy = static_cast<double>(wy) - lastY;
+      const double dz = static_cast<double>(wz) - lastZ;
+      const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
+      if (len > 1e-9) {
+        const double ux = dx / len;
+        const double uy = dy / len;
+        const double uz = dz / len;
+        const ray3d::Vec3 pt{lastX + ux * dist, lastY + uy * dist, lastZ + uz * dist};
+        AddPipeRunPoint(st, pt, log);
+        return true;
+      }
+    }
+  }
 
   ray3d::Vec3 pt{};
   if (!ParseSolidBasePoint(st, line, &pt, log, "PIPERUN"))
@@ -33296,6 +33381,15 @@ void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vec
     log.push_back("PIPERUN - type a nominal size first (e.g. 4in), optionally followed by a "
                   "pressure class.");
     return;
+  }
+  // Compass (REQ-346): only meaningful once a start point exists to measure the angle from.
+  const size_t n = st.pipeRunDraftVerts.size();
+  if (st.pipeRunPhase == PRP::WaitNextPoint && n >= 3) {
+    const float lastX = static_cast<float>(st.pipeRunDraftVerts[n - 3]);
+    const float lastY = static_cast<float>(st.pipeRunDraftVerts[n - 2]);
+    const float lastZ = static_cast<float>(st.pipeRunDraftVerts[n - 1]);
+    const float targetZ = static_cast<float>(CadCommitElevation(st));
+    ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ);
   }
   const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st)};
   AddPipeRunPoint(st, pt, log);
