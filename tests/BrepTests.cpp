@@ -7639,3 +7639,120 @@ TEST_CASE("A plane that misses a solid's curved faces cuts it, carrying them who
     REQUIRE(brep::ComputeMassProperties(farRounded).volume == before);  // the source is untouched
   }
 }
+
+// ---------------------------------------------------------------------------
+// GitHub issue #515 follow-up (D-2026-09-17-a): a cut trusts only a recipe that describes its solid,
+// and recognises a cylinder or cone from the geometry when there is none — a solid saved before #515,
+// a Boolean result, a straight sweep.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// \p s with its recipe removed — what a solid built before #515 looks like after it is loaded.
+Solid WithoutRecipe(Solid s) {
+  s.recipe = brep::Recipe{};
+  return s;
+}
+
+}  // namespace
+
+TEST_CASE("A cylinder or cone with no recipe is recognised from its geometry when it is cut",
+          "[brep][issue515][recognise]") {
+  Problem why = Problem::Ok;
+  const double r = 30.0, h = 50.0;
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), r, h, &cyl, &why));
+
+  SECTION("an extruded circle saved before #515") {
+    Solid ext;
+    REQUIRE(brep::Extrude(CircleProfile(World(), r), h, &ext, &why));
+    RequireSameCutsAsPrimitive(WithoutRecipe(ext), cyl, h);
+  }
+
+  SECTION("a revolved rectangle saved before #515 (a different topology from the primitive's)") {
+    Solid rev, prim;
+    REQUIRE(brep::Revolve(XzProfile({{0, 0}, {4, 0}, {4, 9}, {0, 9}}), Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest,
+                          &rev, &why));
+    REQUIRE(brep::MakeCylinder(World(), 4.0, 9.0, &prim, &why));
+    RequireSameCutsAsPrimitive(WithoutRecipe(rev), prim, 9.0);
+  }
+
+  SECTION("a revolved right triangle saved before #515: a cone with an apex") {
+    Solid rev, prim;
+    REQUIRE(brep::Revolve(XzProfile({{0, 0}, {5, 0}, {0, 12}}), Vec3{0, 0, 0}, Vec3{0, 0, 1}, kTwoPiTest, &rev,
+                          &why));
+    REQUIRE(brep::MakeCone(World(), 5.0, 0.0, 12.0, &prim, &why));
+    RequireSameCutsAsPrimitive(WithoutRecipe(rev), prim, 12.0);
+  }
+
+  SECTION("a loft of three equal coaxial circles: NURBS faces, still a cylinder") {
+    Solid loft, prim;
+    REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAlong(World(), 4.0), 5.0),
+                        CircleProfile(PlaneAlong(World(), 8.0), 5.0)},
+                       &loft, &why));
+    REQUIRE(loft.recipe.kind == brep::PrimitiveKind::None);
+    REQUIRE(brep::MakeCylinder(World(), 5.0, 8.0, &prim, &why));
+    RequireSameCutsAsPrimitive(loft, prim, 8.0);
+  }
+
+  SECTION("a circle swept along a straight path") {
+    Solid swept;
+    REQUIRE(brep::Sweep(CircleProfile(World(), r), LinePath(Vec3{0, 0, 0}, Vec3{0, 0, h}), brep::SweepOptions{},
+                        &swept, &why));
+    REQUIRE(swept.recipe.kind == brep::PrimitiveKind::None);
+    RequireSameCutsAsPrimitive(swept, cyl, h);
+  }
+
+  SECTION("look-alikes are still refused: a stepped shaft, a twisted loft, a three-circle barrel") {
+    Solid shaft;
+    REQUIRE(brep::Revolve(XzProfile({{0, 0}, {4, 0}, {4, 3}, {2, 3}, {2, 9}, {0, 9}}), Vec3{0, 0, 0},
+                          Vec3{0, 0, 1}, kTwoPiTest, &shaft, &why));
+    Solid a, b;
+    REQUIRE_FALSE(brep::Slice(shaft, Vec3{0, 0, 5}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedFace);  // #518 renamed this refusal
+
+    ucs::Ucs down;
+    REQUIRE(ucs::FromNormal(Vec3{0, 0, 8}, Vec3{0, 0, -1}, &down));
+    Solid twisted;
+    REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(down, 5.0)}, &twisted, &why));
+    REQUIRE_FALSE(brep::Slice(twisted, Vec3{0, 0, 4}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedFace);  // #518 renamed this refusal
+
+    Solid barrel;
+    REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAlong(World(), 4.0), 7.0),
+                        CircleProfile(PlaneAlong(World(), 8.0), 5.0)},
+                       &barrel, &why));
+    REQUIRE_FALSE(brep::Slice(barrel, Vec3{0, 0, 2}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedFace);  // #518 renamed this refusal
+  }
+}
+
+TEST_CASE("A recipe that does not describe its solid is not used to cut it", "[brep][issue515][recognise]") {
+  Problem why = Problem::Ok;
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(World(), 30.0, 50.0, &cyl, &why));
+
+  // What a damaged .gs frame looks like: the recipe says the cylinder stands 100 units away.
+  Solid moved = cyl;
+  moved.recipe.frame.origin.x += 100.0;
+
+  Solid a, b;
+  REQUIRE(brep::Slice(moved, Vec3{0, 0, 20}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  // The pieces come from the GEOMETRY: under the solid, not 100 units off.
+  const brep::Bounds whole = brep::ComputeBounds(cyl);
+  for (const Solid* piece : {&a, &b}) {
+    const brep::Bounds pb = brep::ComputeBounds(*piece);
+    REQUIRE(pb.mn.x >= whole.mn.x - 1e-6);
+    REQUIRE(pb.mx.x <= whole.mx.x + 1e-6);
+  }
+  REQUIRE(brep::ComputeMassProperties(a).volume + brep::ComputeMassProperties(b).volume ==
+          Approx(brep::ComputeMassProperties(cyl).volume).epsilon(1e-9));
+
+  SECTION("and the section outline is where the solid is") {
+    ucs::Ucs plane;
+    brep::Path loop;
+    REQUIRE(brep::SectionLoop(moved, Vec3{0, 0, 20}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    const Vec3 start = ucs::PlaneToWorld(plane, loop.start);
+    REQUIRE(std::hypot(start.x, start.y) == Approx(30.0).epsilon(1e-9));
+  }
+}

@@ -134,3 +134,39 @@ assertions) and pass with the fix; the new creation-message check fails against 
   cylinder from its faces and could back a cut-time fallback.
 - **DEBT-5** (finding 10). A two-circle loft still builds and validates the NURBS solid before
   replacing it, and the LOFT preview pays that every frame.
+
+## Debt 3–5 closed (2026-09-17)
+
+The user asked for the three debt items from the code review on #523 to be fixed as well, in a PR
+built on the follow-up branch (#525), because they touch the same loft code and this log.
+Recorded as D-2026-09-17-a and ADR-046 amendment (p).
+
+| Debt | What was open | Now |
+|---|---|---|
+| **DEBT-3** | A `.gs` recipe whose frame was missing or unreadable loaded at the world origin, and `Slice` would rebuild pieces there | The loader drops a described recipe whose frame cannot be read. `Slice` also refuses to cut from a Cylinder / Cone recipe whose primitive does not match the solid's volume, area and bounds, so a recipe that stops describing its solid for any reason cannot misplace a cut |
+| **DEBT-4** | Recognition only at build time: cylinders and cones saved before #515, Boolean results and straight sweeps stayed uncuttable | `ClassifyRightConical` recognises a right circular cylinder or cone from edges, faces (analytic or NURBS, sampled) and measured shape, per cut, without changing the stored recipe |
+| **DEBT-5** | A two-circle coaxial loft built and validated its NURBS solid only to replace it, and the LOFT preview did so every frame | The two-circle check moved ahead of the ribbon construction and returns the analytic primitive directly |
+
+**One regression caught by the full suite before commit.** The first loader change read the recipe
+frame only for a *described* solid. Thirteen save → open → save transcripts then failed `SAMEFILE`:
+a kind-None recipe still carries a frame that transforms move, and it was being reset on load. The
+frame is now read whenever present, and a new case (`a solid with NO recipe keeps the frame it
+carries`) fails against that first version.
+
+### Tests
+
+- `BrepTests [issue515][recognise]`: recognised with no recipe — an extruded circle, a revolved
+  rectangle (six-face topology), a revolved right triangle (apex cone), a three-circle equal-radius
+  NURBS loft, a straight circular sweep — each asserting `RequireSameCutsAsPrimitive`. Still refused:
+  stepped shaft, twisted loft, barrel. A cylinder whose recipe frame is displaced 100 units slices and
+  sections under the real solid.
+- `BrepJsonTests [issue515]`: intact frame kept; missing and malformed frames drop the recipe while
+  the solid loads with its volume; a kind-None frame round-trips byte-identically.
+- **Proven to bite:** with `ClassifyRightConical` returning false and the recipe trusted blindly, and
+  with the old loader, 3 of the new cases fail (8 assertions); the kind-None round-trip case fails
+  against the first loader version.
+- Full suite: 1596/1603, the 7 failures are `beta`'s own.
+
+### Remaining
+
+- Tilted and axis-parallel cuts the primitive itself refuses stay #517; refusal wording stays #516.

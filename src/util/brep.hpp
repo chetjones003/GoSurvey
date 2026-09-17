@@ -228,7 +228,10 @@ enum class Justify : std::uint8_t { Left, Center, Right };
 /// and it is why the topology, not the recipe, is the stored truth. The exception is a feature
 /// result that IS a primitive: an extruded circle, a full-turn revolve of a right profile about its
 /// edge, and a two-circle coaxial loft carry the `Cylinder` / `Cone` recipe (GitHub #515, ADR-046
-/// amendment (o)), because `Slice` recognises curved solids by their recipe.
+/// amendment (o)), because `Slice` recognises curved solids by their recipe. `Slice` trusts such a
+/// recipe only when the primitive it describes has the solid's measured shape, and recognises a
+/// recipe-less cylinder or cone from its geometry (ADR-046 amendment (p)); a `.gs` recipe whose frame
+/// cannot be read is dropped on load.
 struct Recipe {
   PrimitiveKind kind = PrimitiveKind::None;
   ucs::Ucs frame;        ///< Placement. Origin is the base centre, except Sphere/Torus (the centre).
@@ -877,6 +880,12 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 /// plane crosses only its flat faces: the curved faces, and the whole arcs of the flat faces, go to
 /// their piece unchanged (GitHub #518). A plane that crosses a curved face is refused as
 /// \ref Problem::SliceCutCrossesCurvedFace.
+///
+/// A curved solid is cut through the cylinder / cone recognisers, which rebuild the pieces from a
+/// recipe. That recipe is the solid's own only when the primitive it describes matches the solid's
+/// volume, area and bounds; otherwise the solid is recognised from its geometry when it is exactly
+/// one right circular cylinder or cone — saved before #515, a Boolean result, a straight sweep — and
+/// refused when it is not (GitHub #515 follow-up, ADR-046 amendment (p)).
 [[nodiscard]] bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                          SliceKeep keep, Solid* outAbove, Solid* outBelow, Problem* outWhy);
 

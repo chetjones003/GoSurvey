@@ -6535,6 +6535,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
     line, and at survey coordinate magnitudes;
   - a plane that crosses a fillet is refused by that name, and nothing is written.
 
+  2026-09-17 — **a cut recognises a cylinder or cone from its geometry, and trusts a recipe only
+  when it fits** (D-2026-09-17-a, ADR-046 amendment (p), TASK-261, GitHub issue #515 follow-up).
+  `SLICE` and `SECTION` now cut a solid that is exactly a right circular cylinder or cone even when it
+  carries no recipe — one saved before #515, a Boolean result, a straight sweep — and never cut from
+  a Cylinder / Cone recipe whose primitive has a different measured shape. A `.gs` recipe whose frame
+  is missing or unreadable is dropped on load, rather than kept at the world origin. Acceptance added:
+  a recipe-less cylinder or cone cuts exactly as the primitive does, a damaged recipe does not
+  misplace a cut, and look-alikes (stepped shaft, twisted loft, barrel) are still refused by name — as
+  `SliceCutCrossesCurvedFace` since the #518 revision above, for the cuts that cross their curved faces.
+
 ### REQ-337 — Composite-operand analytic Booleans (GitHub issue #493, continues REQ-314)
 - Purpose: REQ-314's Boolean increments (B1/B2a/B2b-1/B2b-2, plus the branch-pipe and sphere∩cylinder
   work tracked on #242/#283) already recognise a wide set of *single-primitive-pair* curved
