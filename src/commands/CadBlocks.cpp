@@ -1402,29 +1402,44 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
   if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitConnectorTarget)
     return false;
 
-  constexpr float kSnap = 2.f;
-  CadBlockWorldConnection tgt;
-  const bool foundPort = FindNearestDrawingConnector(st, wx, wy, wz, kSnap, &tgt);
-  float pipeX = 0.f, pipeY = 0.f, pipeZ = 0.f, pipeNx = 0.f, pipeNy = 0.f, pipeNz = 0.f;
-  const bool foundPipeEnd =
-      FindNearestPipeEndpoint(st, wx, wy, wz, kSnap, &pipeX, &pipeY, &pipeZ, &pipeNx, &pipeNy, &pipeNz);
-  if (!foundPort && !foundPipeEnd) {
-    log.push_back("INSERT — no connection port near that point (within 2 ft).");
+  const CadBlockConnection* src = InsertSourceConnection(st);
+  if (!src) {
+    log.push_back("INSERT — the block being inserted has no connection ports.");
     return false;
   }
-  // A block connection port and a bare pipe endpoint could both be within range; prefer whichever
-  // is actually nearer (issue #496 — the two are now distinct smart-mode targets).
+
+  constexpr float kSnap = 2.f;
+  CadBlockWorldConnection tgt;
+  const bool foundPortRaw = FindNearestDrawingConnector(st, wx, wy, wz, kSnap, &tgt);
+  float pipeX = 0.f, pipeY = 0.f, pipeZ = 0.f, pipeNx = 0.f, pipeNy = 0.f, pipeNz = 0.f;
+  const bool foundPipeEndRaw =
+      FindNearestPipeEndpoint(st, wx, wy, wz, kSnap, &pipeX, &pipeY, &pipeZ, &pipeNx, &pipeNy, &pipeNz);
+
+  // Filter each candidate by whether SRC's own configured connection mode(s) even accept a target
+  // of that kind (user request 2026-09-17: "if a connection point is set to pipe end, use it to
+  // snap to pipe end; if it's set to flange face, snap to flange face" — not whichever candidate
+  // happens to be geometrically nearer). A legacy (mode-less) port keeps the old any-kind behavior.
+  const bool foundPort =
+      foundPortRaw && CadBlockConnectionAcceptsTarget(*src, CadBlockClassifyPortTarget(tgt.ownerPartType));
+  const bool foundPipeEnd =
+      foundPipeEndRaw && CadBlockConnectionAcceptsTarget(*src, CadConnectionModeTarget::PipeEnd);
+
+  if (!foundPort && !foundPipeEnd) {
+    if (foundPortRaw || foundPipeEndRaw)
+      log.push_back("INSERT — nothing near that point matches this connection point's configured mode(s).");
+    else
+      log.push_back("INSERT — no connection port near that point (within 2 ft).");
+    return false;
+  }
+  // Both a compatible block connection port and a compatible bare pipe endpoint could be within
+  // range; prefer whichever is actually nearer (issue #496 — the two are distinct smart-mode
+  // targets), now that both have already passed the compatibility filter above.
   bool usePipeEnd = foundPipeEnd && !foundPort;
   if (foundPort && foundPipeEnd) {
     const float portD2 = (tgt.x - wx) * (tgt.x - wx) + (tgt.y - wy) * (tgt.y - wy) + (tgt.z - wz) * (tgt.z - wz);
     const float pipeD2 =
         (pipeX - wx) * (pipeX - wx) + (pipeY - wy) * (pipeY - wy) + (pipeZ - wz) * (pipeZ - wz);
     usePipeEnd = pipeD2 < portD2;
-  }
-  const CadBlockConnection* src = InsertSourceConnection(st);
-  if (!src) {
-    log.push_back("INSERT — the block being inserted has no connection ports.");
-    return false;
   }
 
   const CadConnectionModeTarget target =

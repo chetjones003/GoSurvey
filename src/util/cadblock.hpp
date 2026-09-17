@@ -253,6 +253,22 @@ struct CadBlockConnection {
   return fallback;
 }
 
+/// Whether `conn` should even be OFFERED as a candidate when the nearby thing under the cursor
+/// classifies as \p target (user request 2026-09-17: "detect what we are snapping to and use that
+/// block's connection point logic" — a port configured for pipe ends should snap to pipe ends, one
+/// configured for a flange face should snap to a flange face, not whichever happens to be closer).
+/// A LEGACY connection point (`modes` empty) accepts every target, unchanged — it never discriminated
+/// by kind and this does not start requiring it to. A multi-mode connection point accepts a target
+/// only when `CadBlockResolveMode` actually finds something for it (an exact match, or a mode flagged
+/// `isDefault` as a deliberate catch-all) — the same rule that already decides which mode APPLIES,
+/// now also deciding whether the port is a candidate at all.
+[[nodiscard]] inline bool CadBlockConnectionAcceptsTarget(const CadBlockConnection& conn,
+                                                          CadConnectionModeTarget target) {
+  if (conn.modes.empty())
+    return true;
+  return CadBlockResolveMode(conn, target) != nullptr;
+}
+
 /// A definition connection transformed into world/storage coordinates for a placed reference.
 struct CadBlockWorldConnection {
   float x = 0.f;
