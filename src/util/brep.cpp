@@ -7825,8 +7825,10 @@ struct DistRange {
         // Drop repeated points so a split exactly at a vertex makes no zero-length segment.
         std::vector<Seg> segs;
         for (const Seg& sg : ring) {
-          if (!segs.empty() && segs.back().src < 0 && same(segs.back().p, sg.p))
+          if (!segs.empty() && segs.back().src < 0 && same(segs.back().p, sg.p)) {
+            segs.back() = sg;  // keep a whole curved edge that starts at the same point
             continue;
+          }
           segs.push_back(sg);
         }
         while (segs.size() > 1 && segs.back().src < 0 && same(segs.back().p, segs.front().p))
