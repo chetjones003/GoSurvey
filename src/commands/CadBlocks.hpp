@@ -96,3 +96,32 @@ void CadBlocksCollectEditPickerNames(const AppCommandState& st, std::vector<std:
 void CadBlocksOpenEditPicker(AppCommandState& st, std::vector<std::string>& log);
 void CadBlocksEnterNamedEditor(AppCommandState& st, std::string_view name, std::vector<std::string>& log);
 void CadBlocksCommitEditPicker(AppCommandState& st, std::vector<std::string>& log);
+
+/// BCONNECTMODE wizard (issue #496): one prompt per value instead of a comma-separated line.
+/// Called from the idle command dispatcher to start the wizard (\p connNameArg pre-fills the first
+/// prompt when the caller already has it, e.g. `BCONNECTMODE P1` typed directly).
+void BConnectModeStart(AppCommandState& st, const std::string& connNameArg, std::vector<std::string>& log);
+/// Routes one typed line to whichever \c BConnectModePhase is active. Call only when
+/// `st.active == AppCommandState::Kind::BConnectMode`.
+void BConnectModeSubmitLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+
+/// BCONNECT wizard (issue #496): one prompt per value, ending in either a face pick (hands off to
+/// the existing \ref SubmitBconnectFacePick pick mechanism) or typed coordinates.
+void BConnectStart(AppCommandState& st, const std::string& nameArg, std::vector<std::string>& log);
+/// Routes one typed line to whichever \c BConnectPhase is active. Call only when
+/// `st.active == AppCommandState::Kind::BConnect`.
+void BConnectSubmitLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+
+/// BCONNECTEDIT wizard (issue #496): one prompt per value, with the connection point's current
+/// value shown and Enter-to-keep, plus a remove option.
+void BConnectEditStart(AppCommandState& st, const std::string& connNameArg, std::vector<std::string>& log);
+/// Routes one typed line to whichever \c BConnectEditPhase is active. Call only when
+/// `st.active == AppCommandState::Kind::BConnectEdit`.
+void BConnectEditSubmitLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+
+/// BLOCKFITTING wizard (issue #496): one prompt per value, with the current value shown and
+/// Enter-to-keep.
+void BlockFittingStart(AppCommandState& st, std::vector<std::string>& log);
+/// Routes one typed line to whichever \c BlockFittingPhase is active. Call only when
+/// `st.active == AppCommandState::Kind::BlockFitting`.
+void BlockFittingSubmitLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);

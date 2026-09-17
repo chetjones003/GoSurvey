@@ -125,74 +125,6 @@ enum class CadBlockConnectionRole : std::uint8_t { Inlet = 0, Outlet, Branch };
   return CadBlockConnectionRole::Inlet;
 }
 
-/// Pipe/fitting connection port on a block definition (issue #475 increment 5, extended by #486
-/// increment A2). Local point and outward unit direction in block space; nominal size is a tag
-/// only, not parametric. `engagementLength` is how far a mating pipe end slides into this port
-/// (drawing units) — auto-fitting insertion shortens the pipe segment by this amount instead of
-/// overlap-then-boolean trim (D-2026-09-12 decision 2).
-struct CadBlockConnection {
-  std::string name;
-  float x = 0.f;
-  float y = 0.f;
-  float z = 0.f;
-  float nx = 0.f;
-  float ny = 0.f;
-  float nz = 1.f;
-  std::string nominalSize;
-  CadBlockConnectionRole role = CadBlockConnectionRole::Inlet;
-  /// Optional tag restricting which ports this one may mate with (e.g. a flange face class).
-  /// Empty = no restriction beyond nominalSize matching.
-  std::string compatibilityTag;
-  float engagementLength = 0.f;
-};
-
-/// A definition connection transformed into world/storage coordinates for a placed reference.
-struct CadBlockWorldConnection {
-  float x = 0.f;
-  float y = 0.f;
-  float z = 0.f;
-  float nx = 0.f;
-  float ny = 0.f;
-  float nz = 1.f;
-  std::string name;
-  std::string nominalSize;
-  int blockRefIndex = -1;
-};
-
-struct CadBlockContent {
-  std::vector<double> lines;
-  std::vector<EntityAttributes> lineAttrs;
-  std::vector<std::string> lineVis;
-  std::vector<double> circles;
-  std::vector<EntityAttributes> circleAttrs;
-  std::vector<std::string> circleVis;
-  /// Plane normal per circle, 3 floats each (REQ-312) - the block-definition counterpart of
-  /// AppCommandState::userCircleNormals, and a third parallel array beside circleAttrs/circleVis
-  /// exactly as those two already are. Stored so that BLOCK and BEDIT cannot silently flatten a
-  /// tilted circle on the way in or out (REQ-201).
-  std::vector<float> circleNormals;
-  std::vector<CadArc> arcs;
-  std::vector<EntityAttributes> arcAttrs;
-  std::vector<CadEllipse> ellipses;
-  std::vector<EntityAttributes> ellAttrs;
-  std::vector<int> polyOffsets;
-  std::vector<double> polyVerts;
-  /// REQ-316 / ADR-047: per-vertex bulge, parallel to polyVerts (size()/3). Empty on a legacy
-  /// block definition, which reads as an all-straight polyline.
-  std::vector<float> polyVertsBulge;
-  std::vector<std::uint8_t> polyClosed;
-  std::vector<EntityAttributes> polyAttrs;
-  std::vector<CadAnnotation> texts;
-  std::vector<EntityAttributes> textAttrs;
-  std::vector<CadBlockNested> nested;
-  std::vector<std::shared_ptr<const CadMesh>> meshes;
-  std::vector<EntityAttributes> meshAttrs;
-  /// REQ-320 / ADR-051: B-rep solids (native or ACIS-imported), so INSERT/WBLOCK/BLOCKIMPORT round-
-  /// trip a 3D-solid block the same way \ref meshes already round-trips a mesh block.
-  std::vector<CadSolidPtr> solids;
-  std::vector<EntityAttributes> solidAttrs;
-};
-
 /// Piping catalog part type (issue #486 increment A1). `None` = not a piping fitting (ordinary
 /// block). Kept a closed enum, tagged as a string in .gs so the library/lookup keys stay stable.
 enum class CadPipePartType : std::uint8_t {
@@ -239,6 +171,137 @@ enum class CadPipePartType : std::uint8_t {
   if (s == "other") return CadPipePartType::Other;
   return CadPipePartType::None;
 }
+
+/// What kind of thing a fitting's connection point was snapped to (issue #496). Drives which
+/// `CadBlockConnectionMode` on the connection point is selected. Only two kinds of snap target
+/// exist in this codebase: another block's connection port, and a bare line/polyline endpoint
+/// (there is no separate "pipe" entity — pipes are just lines/polylines), so the vocabulary stays
+/// closed and fitting-scoped rather than folding into the general `CadSnap::Kind` system.
+enum class CadConnectionModeTarget : std::uint8_t { PipeEnd = 0, FlangeFace, GenericPort };
+
+[[nodiscard]] inline std::string_view CadConnectionModeTargetTag(CadConnectionModeTarget t) {
+  switch (t) {
+    case CadConnectionModeTarget::FlangeFace: return "flange-face";
+    case CadConnectionModeTarget::GenericPort: return "generic-port";
+    case CadConnectionModeTarget::PipeEnd:
+    default: return "pipe-end";
+  }
+}
+
+[[nodiscard]] inline CadConnectionModeTarget ParseCadConnectionModeTarget(std::string_view s) {
+  if (s == "flange-face") return CadConnectionModeTarget::FlangeFace;
+  if (s == "generic-port") return CadConnectionModeTarget::GenericPort;
+  return CadConnectionModeTarget::PipeEnd;
+}
+
+/// One named connection behavior a connection point offers for a particular kind of snapped
+/// target (issue #496). A connection point with an empty `modes` list keeps the pre-#496,
+/// single-behavior semantics (role/engagementLength/compatibilityTag live directly on
+/// `CadBlockConnection`) — existing fittings are unaffected.
+struct CadBlockConnectionMode {
+  std::string name;
+  CadConnectionModeTarget target = CadConnectionModeTarget::GenericPort;
+  CadBlockConnectionRole role = CadBlockConnectionRole::Inlet;
+  std::string compatibilityTag;
+  /// How far the mating part slides onto this port under this mode (drawing units), applied as an
+  /// extra translation along the port's outward normal on top of the base point-to-point snap.
+  float engagementLength = 0.f;
+  bool isDefault = false;
+};
+
+/// Pipe/fitting connection port on a block definition (issue #475 increment 5, extended by #486
+/// increment A2 and #496). Local point and outward unit direction in block space; nominal size is
+/// a tag only, not parametric. `engagementLength` is how far a mating pipe end slides into this
+/// port (drawing units) — auto-fitting insertion shortens the pipe segment by this amount instead
+/// of overlap-then-boolean trim (D-2026-09-12 decision 2). `role`/`compatibilityTag`/
+/// `engagementLength` are the legacy single-mode behavior, still used verbatim when `modes` is
+/// empty; when `modes` is non-empty they are selected per snapped-target via `CadBlockResolveMode`
+/// instead (issue #496).
+struct CadBlockConnection {
+  std::string name;
+  float x = 0.f;
+  float y = 0.f;
+  float z = 0.f;
+  float nx = 0.f;
+  float ny = 0.f;
+  float nz = 1.f;
+  std::string nominalSize;
+  CadBlockConnectionRole role = CadBlockConnectionRole::Inlet;
+  /// Optional tag restricting which ports this one may mate with (e.g. a flange face class).
+  /// Empty = no restriction beyond nominalSize matching.
+  std::string compatibilityTag;
+  float engagementLength = 0.f;
+  /// Smart multi-mode behaviors (issue #496). Empty = legacy single-mode connection point.
+  std::vector<CadBlockConnectionMode> modes;
+};
+
+/// Selects the `CadBlockConnectionMode` that applies when `conn` is snapped to a target of kind
+/// \p target (issue #496): an exact target match wins; otherwise the mode flagged `isDefault` is
+/// used as fallback. Returns `nullptr` for a legacy connection point (`modes` empty) — callers
+/// fall back to `conn`'s own top-level role/engagementLength/compatibilityTag in that case.
+[[nodiscard]] inline const CadBlockConnectionMode* CadBlockResolveMode(const CadBlockConnection& conn,
+                                                                       CadConnectionModeTarget target) {
+  if (conn.modes.empty())
+    return nullptr;
+  const CadBlockConnectionMode* fallback = nullptr;
+  for (const CadBlockConnectionMode& m : conn.modes) {
+    if (m.target == target)
+      return &m;
+    if (m.isDefault)
+      fallback = &m;
+  }
+  return fallback;
+}
+
+/// A definition connection transformed into world/storage coordinates for a placed reference.
+struct CadBlockWorldConnection {
+  float x = 0.f;
+  float y = 0.f;
+  float z = 0.f;
+  float nx = 0.f;
+  float ny = 0.f;
+  float nz = 1.f;
+  std::string name;
+  std::string nominalSize;
+  int blockRefIndex = -1;
+  /// The owning definition's piping part type (issue #496), used to classify this port as
+  /// `FlangeFace` vs `GenericPort` when resolving a connection mode.
+  CadPipePartType ownerPartType = CadPipePartType::None;
+};
+
+struct CadBlockContent {
+  std::vector<double> lines;
+  std::vector<EntityAttributes> lineAttrs;
+  std::vector<std::string> lineVis;
+  std::vector<double> circles;
+  std::vector<EntityAttributes> circleAttrs;
+  std::vector<std::string> circleVis;
+  /// Plane normal per circle, 3 floats each (REQ-312) - the block-definition counterpart of
+  /// AppCommandState::userCircleNormals, and a third parallel array beside circleAttrs/circleVis
+  /// exactly as those two already are. Stored so that BLOCK and BEDIT cannot silently flatten a
+  /// tilted circle on the way in or out (REQ-201).
+  std::vector<float> circleNormals;
+  std::vector<CadArc> arcs;
+  std::vector<EntityAttributes> arcAttrs;
+  std::vector<CadEllipse> ellipses;
+  std::vector<EntityAttributes> ellAttrs;
+  std::vector<int> polyOffsets;
+  std::vector<double> polyVerts;
+  /// REQ-316 / ADR-047: per-vertex bulge, parallel to polyVerts (size()/3). Empty on a legacy
+  /// block definition, which reads as an all-straight polyline.
+  std::vector<float> polyVertsBulge;
+  std::vector<std::uint8_t> polyClosed;
+  std::vector<EntityAttributes> polyAttrs;
+  std::vector<CadAnnotation> texts;
+  std::vector<EntityAttributes> textAttrs;
+  std::vector<CadBlockNested> nested;
+  std::vector<std::shared_ptr<const CadMesh>> meshes;
+  std::vector<EntityAttributes> meshAttrs;
+  /// REQ-320 / ADR-051: B-rep solids (native or ACIS-imported), so INSERT/WBLOCK/BLOCKIMPORT round-
+  /// trip a 3D-solid block the same way \ref meshes already round-trips a mesh block.
+  std::vector<CadSolidPtr> solids;
+  std::vector<EntityAttributes> solidAttrs;
+};
 
 /// Pressure class tag (issue #486, D-2026-09-12 decision 1). Fixed enum, not free text, so
 /// library lookup and UI pickers use exact matches.
@@ -490,6 +553,35 @@ inline void CadBlockSnapInsertToConnection(const CadBlockConnection& src, float 
   xf->z = tgtZ - wz;
 }
 
+/// Classifies a placed connection port as a smart-mode snap target (issue #496): a flange-typed
+/// fitting's port reads as `FlangeFace`, any other fitting/block's port reads as `GenericPort`.
+[[nodiscard]] inline CadConnectionModeTarget CadBlockClassifyPortTarget(CadPipePartType ownerPartType) {
+  return ownerPartType == CadPipePartType::Flange ? CadConnectionModeTarget::FlangeFace
+                                                   : CadConnectionModeTarget::GenericPort;
+}
+
+/// Applies a resolved mode's extra engagement translation on top of an already-computed snap
+/// transform (issue #496): slides the fitting further along its own connection normal, in world
+/// space, by \p mode's engagement length. No-op for a legacy connection (`mode == nullptr`) or a
+/// zero engagement length.
+inline void CadBlockApplyConnectionModeOffset(const CadBlockConnection& src, const CadBlockConnectionMode* mode,
+                                              CadBlockXform* xf) {
+  assert(xf != nullptr);
+  if (!mode || mode->engagementLength == 0.f)
+    return;
+  float wnx = 0.f, wny = 0.f, wnz = 0.f;
+  CadBlockXformDirection(*xf, src.nx, src.ny, src.nz, &wnx, &wny, &wnz);
+  const float l = std::sqrt(wnx * wnx + wny * wny + wnz * wnz);
+  if (l > 1.e-8f) {
+    wnx /= l;
+    wny /= l;
+    wnz /= l;
+  }
+  xf->x += wnx * mode->engagementLength;
+  xf->y += wny * mode->engagementLength;
+  xf->z += wnz * mode->engagementLength;
+}
+
 [[nodiscard]] inline CadBlockXform CadBlockCompose(const CadBlockXform& parent, const CadBlockXform& child) {
   float wx = 0.f, wy = 0.f, wz = 0.f;
   CadBlockXformPoint(parent, child.x, child.y, child.z, &wx, &wy, &wz);
@@ -540,6 +632,7 @@ inline void CadBlockCollectWorldConnections(const std::vector<CadBlockDefinition
     wc.name = c.name;
     wc.nominalSize = c.nominalSize;
     wc.blockRefIndex = refIndex;
+    wc.ownerPartType = def.partType;
     CadBlockXformPoint(ref.xf, c.x, c.y, c.z, &wc.x, &wc.y, &wc.z);
     CadBlockXformDirection(ref.xf, c.nx, c.ny, c.nz, &wc.nx, &wc.ny, &wc.nz);
     const float dl = std::sqrt(wc.nx * wc.nx + wc.ny * wc.ny + wc.nz * wc.nz);

@@ -500,6 +500,7 @@ add_executable(GoSurvey
   src/ui/PdfAttachDialog.cpp
   src/ui/CadUi_InsertBlock.cpp
   src/ui/CadUi_BlockAuthoring.cpp
+  src/ui/CadUi_ConnectionModes.cpp
 
   # I/O (windowed application only)
   src/io/PdfPlot.cpp

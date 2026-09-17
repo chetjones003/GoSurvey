@@ -455,6 +455,21 @@ json CadBlockDefToJson(const CadBlockDefinition& d) {
       if (!c.compatibilityTag.empty())
         cj["compatibilityTag"] = c.compatibilityTag;
       cj["engagementLength"] = c.engagementLength;
+      if (!c.modes.empty()) {
+        json modes = json::array();
+        for (const CadBlockConnectionMode& m : c.modes) {
+          json mj;
+          mj["name"] = m.name;
+          mj["target"] = std::string(CadConnectionModeTargetTag(m.target));
+          mj["role"] = std::string(CadBlockConnectionRoleTag(m.role));
+          if (!m.compatibilityTag.empty())
+            mj["compatibilityTag"] = m.compatibilityTag;
+          mj["engagementLength"] = m.engagementLength;
+          mj["isDefault"] = m.isDefault;
+          modes.push_back(std::move(mj));
+        }
+        cj["modes"] = std::move(modes);
+      }
       conns.push_back(std::move(cj));
     }
     o["connections"] = std::move(conns);
@@ -532,6 +547,18 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
       c.role = ParseCadBlockConnectionRole(cj.value("role", std::string()));
       c.compatibilityTag = cj.value("compatibilityTag", "");
       c.engagementLength = cj.value("engagementLength", 0.f);
+      if (cj.contains("modes") && cj["modes"].is_array()) {
+        for (const auto& mj : cj["modes"]) {
+          CadBlockConnectionMode m;
+          m.name = mj.value("name", "");
+          m.target = ParseCadConnectionModeTarget(mj.value("target", std::string()));
+          m.role = ParseCadBlockConnectionRole(mj.value("role", std::string()));
+          m.compatibilityTag = mj.value("compatibilityTag", "");
+          m.engagementLength = mj.value("engagementLength", 0.f);
+          m.isDefault = mj.value("isDefault", false);
+          c.modes.push_back(std::move(m));
+        }
+      }
       d.connections.push_back(std::move(c));
     }
   }

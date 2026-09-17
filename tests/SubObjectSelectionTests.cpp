@@ -941,6 +941,37 @@ TEST_CASE("A hovered solid draws a highlight", "[subobject][solidentity]") {
   }
 }
 
+TEST_CASE("A hovered block reference made entirely of solid geometry draws a highlight",
+          "[subobject][blockref][issue496]") {
+  // A piping fitting block whose content is a 3D solid and nothing else — the shape most of the
+  // real fitting library has. Before this, AppendEntityHighlight had no BlockRef case at all, so
+  // hover/selection drew nothing for it — only the transform gizmo, with no other on-screen
+  // confirmation of what was selected.
+  AppCommandState st;
+  brep::Solid box;
+  brep::Problem why{};
+  REQUIRE(brep::MakeBox(World(), 20.0, 10.0, 8.0, &box, &why));
+
+  CadBlockDefinition def;
+  def.name = "FIT";
+  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  st.blockDefs.push_back(def);
+
+  CadBlockRef r;
+  r.defName = "FIT";
+  st.cadBlockRefs.push_back(r);
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+
+  std::vector<float> hoverLines;
+  std::vector<float> hoverCircles;
+  st.viewportHoverEntityValid = true;
+  st.viewportHoverEntity.type = SelectedEntity::Type::BlockRef;
+  st.viewportHoverEntity.index = 0;
+  BuildHoverHighlight(st, &hoverLines, &hoverCircles);
+  // Same box as "A hovered solid draws a highlight" above: twelve edges, two xyz endpoints each.
+  CHECK(hoverLines.size() == static_cast<std::size_t>(12 * 6));
+}
+
 // --- SECTIONPLANE's face rules (REQ-342 / ADR-059, GitHub issue #479 acceptance 1-2) ------------
 //
 // These live here rather than in the transcript because they turn on the PICK TOLERANCE, and the

@@ -6557,6 +6557,10 @@ const CmdEntry kRegistry[] = {
     {"attedit", "", "Edit attribute values on selected inserts"},
     {"attsync", "", "Synchronize attributes from definitions"},
     {"attext", "", "Extract attributes to the command log / file"},
+    {"bconnect", "", "Add a connection port (in BEDIT): pick a face, or type its values"},
+    {"bconnectedit", "", "Edit or remove a connection port's role/engagement/tag (in BEDIT)"},
+    {"bconnectmode", "", "Add/edit/remove a smart connection mode on a port (in BEDIT)"},
+    {"blockfitting", "", "Tag the block being edited as a piping fitting (in BEDIT)"},
     {"blocklist", "", "List block definitions"},
     {"blockstats", "", "Definition statistics"},
     {"purge", "-purge", "Purge unused block definitions"},
@@ -25555,6 +25559,27 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
                            st.cadBlockRefs[bi].xf.x, st.cadBlockRefs[bi].xf.y, st.cadBlockRefs[bi].xf.z);
     for (const CadBlockWorldSeg& s : segs)
       bd2 = std::min(bd2, d2Segment(s.x0, s.y0, s.z0, s.x1, s.y1, s.z1));
+    // A fitting block whose content is entirely a 3D solid (a piping part, not a 2D symbol) had NO
+    // line segments to test above, so `bd2` fell back to the single insertion-origin point and the
+    // block was effectively unclickable across its whole visible body (issue #496 follow-up). Walk
+    // its solids' edges the same way the standalone-CadSolid loop above does.
+    std::vector<CadBlockWorldSolid> blockSolids;
+    CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[bi], dummy, &blockSolids);
+    for (const CadBlockWorldSolid& ws : blockSolids) {
+      if (!ws.solid)
+        continue;
+      for (const brep::Edge& ed : ws.solid->edges) {
+        const int steps = ed.kind == brep::CurveKind::Arc ? 24 : 1;
+        ray3d::Vec3 prev = brep::EdgePointAt(*ws.solid, ed, 0.0);
+        for (int i = 1; i <= steps; ++i) {
+          const ray3d::Vec3 next = brep::EdgePointAt(*ws.solid, ed, static_cast<double>(i) / steps);
+          bd2 = std::min(bd2, d2Segment(static_cast<float>(prev.x), static_cast<float>(prev.y),
+                                        static_cast<float>(prev.z), static_cast<float>(next.x),
+                                        static_cast<float>(next.y), static_cast<float>(next.z)));
+          prev = next;
+        }
+      }
+    }
     consider(e, bd2);
   }
 
@@ -34449,6 +34474,12 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.bconnectAwaitingFace = false;
     st.bconnectNameBuf[0] = '\0';
     st.bconnectSizeBuf[0] = '\0';
+    st.bconnectCompatTagPending.clear();
+    // The BCONNECT wizard (issue #496) is still st.active == Kind::BConnect during the face-pick
+    // step (so a click routes here regardless of st.active) — release it on cancel too, or it
+    // would stay stuck open with no way to type into it again.
+    if (st.active == AppCommandState::Kind::BConnect)
+      st.active = AppCommandState::Kind::None;
     log.push_back("BCONNECT canceled.");
     return;
   }
@@ -34594,6 +34625,14 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.paperVpPhase = 0;
     log.push_back("Rectangular viewport canceled.");
   }
+  else if (st.active == AppCommandState::Kind::BConnectMode)
+    log.push_back("BCONNECTMODE canceled.");
+  else if (st.active == AppCommandState::Kind::BConnect)
+    log.push_back("BCONNECT canceled.");
+  else if (st.active == AppCommandState::Kind::BConnectEdit)
+    log.push_back("BCONNECTEDIT canceled.");
+  else if (st.active == AppCommandState::Kind::BlockFitting)
+    log.push_back("BLOCKFITTING canceled.");
   else if (st.active == AppCommandState::Kind::Align) {
     st.alignControlPts.clear();
     st.alignSelectionSnapshot.clear();
@@ -36517,6 +36556,26 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     CommitDistSecondPoint(st, st.distFromX, st.distFromY, st.distFromZ, px, py, CadCommitElevation(st), log);
+    return;
+  }
+
+  if (st.active == K::BConnectMode) {
+    BConnectModeSubmitLine(st, line, log);
+    return;
+  }
+
+  if (st.active == K::BConnect) {
+    BConnectSubmitLine(st, line, log);
+    return;
+  }
+
+  if (st.active == K::BConnectEdit) {
+    BConnectEditSubmitLine(st, line, log);
+    return;
+  }
+
+  if (st.active == K::BlockFitting) {
+    BlockFittingSubmitLine(st, line, log);
     return;
   }
 
