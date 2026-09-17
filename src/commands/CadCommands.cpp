@@ -6432,6 +6432,7 @@ const CmdEntry kRegistry[] = {
     {"section",     "", "Cross-section of solids by a plane through three points (or the UCS), as a closed polyline"},
     {"solidcheck", "scheck", "Check every solid (or the selection): closed, manifold, oriented, self-intersecting"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
+    {"piperun", "pipe", "Route a pipe run: PIPERUN, nominal size [class], then points (U undo, END/Enter finishes)"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
     {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
@@ -13360,6 +13361,11 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
 
   if (st.active == K::Polysolid) {
     SubmitPolysolidViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::PipeRun) {
+    SubmitPipeRunViewportPick(st, wx, wy, log);
     return;
   }
 
@@ -33005,6 +33011,197 @@ void SubmitPolysolidViewportPick(AppCommandState& st, float wx, float wy,
   AddPolysolidPoint(st, ucs::WorldToPlane(PolysolidFrame(st), pt), log);
 }
 
+// ---------------------------------------------------------------------------------------------
+// PIPERUN (issue #486 increment B2 / REQ-345): prompted nominal size + pressure class, then
+// click-to-add straight vertices — a `CadPipeRun`'s path, committed as one entity on Enter/END.
+// Shaped after POLYSOLID immediately above: a path-building command with its own Kind, its own
+// draft state, and one prompt-text function both the status bar and the typed-line echo share.
+// Unlike POLYSOLID's plane-relative path, a pipe run's vertices are stored as absolute
+// storage-coordinate xyz (REQ-057) — the same form `CadPipeRun::vertsXyz` itself uses, so commit
+// is a plain copy with no second representation to keep in step.
+// ---------------------------------------------------------------------------------------------
+
+void CancelPipeRunCommand(AppCommandState& st) {
+  st.pipeRunDraftVerts.clear();
+  st.pipeRunPhase = AppCommandState::PipeRunPhase::WaitNominalSize;
+  // Nominal size and pressure class deliberately SURVIVE the cancel — remembered for the next run,
+  // the same reason POLYSOLID's width/height/justify survive its own cancel.
+}
+
+std::string CadPipeRunPromptText(const AppCommandState& st) {
+  using PRP = AppCommandState::PipeRunPhase;
+  const std::string classSuffix =
+      st.pipeRunPressureClassTag.empty() ? std::string() : (" " + st.pipeRunPressureClassTag);
+  char buf[256];
+  if (st.pipeRunPhase == PRP::WaitNominalSize) {
+    if (st.pipeRunNominalSize.empty())
+      return "PIPERUN - nominal size (e.g. 4in), optional pressure class (CS150/CS300):";
+    std::snprintf(buf, sizeof(buf), "PIPERUN - nominal size [%s%s], Enter to keep:",
+                  st.pipeRunNominalSize.c_str(), classSuffix.c_str());
+    return buf;
+  }
+  if (st.pipeRunPhase == PRP::WaitFirstPoint) {
+    std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s] - start point, or ESC to cancel:",
+                  st.pipeRunNominalSize.c_str(), classSuffix.c_str());
+    return buf;
+  }
+  std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s] - next point, or Undo/End, Enter to finish:",
+                st.pipeRunNominalSize.c_str(), classSuffix.c_str());
+  return buf;
+}
+
+namespace {
+
+/// Store the run built from the path so far and end the command.
+void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.pipeRunDraftVerts.size() < 6) {  // fewer than 2 vertices
+    log.push_back("PIPERUN - a run needs at least two points; Esc cancels.");
+    return;
+  }
+  CadPipeRun run;
+  run.vertsXyz = st.pipeRunDraftVerts;
+  run.nominalSize = st.pipeRunNominalSize;
+  run.pressureClassTag = st.pipeRunPressureClassTag;
+  // The size was already validated when it was set (below), so this should always succeed; refused
+  // rather than assumed, the same belt-and-braces REQ-201 the solid commands already follow.
+  std::vector<CadSolidPtr> preview;
+  if (!CadBuildPipeRunSolids(run, &preview)) {
+    log.push_back("PIPERUN - could not build a pipe solid for \"" + run.nominalSize +
+                  "\"; the run stays open. U to remove a point, or Esc to cancel.");
+    return;
+  }
+  PushUndoSnapshot(st, "Create Pipe Run");
+  st.cadPipeRuns.push_back(std::move(run));
+  st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  log.push_back("PIPERUN - run created: " + std::to_string(preview.size()) + " segment(s).");
+  CancelPipeRunCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+/// Append \p pt as the run's start (WaitFirstPoint) or next vertex (WaitNextPoint), refusing a
+/// point identical to the last one committed.
+void AddPipeRunPoint(AppCommandState& st, const ray3d::Vec3& pt, std::vector<std::string>& log) {
+  using PRP = AppCommandState::PipeRunPhase;
+  if (st.pipeRunPhase == PRP::WaitFirstPoint) {
+    st.pipeRunDraftVerts = {pt.x, pt.y, pt.z};
+    st.pipeRunPhase = PRP::WaitNextPoint;
+    log.push_back(CadPipeRunPromptText(st));
+    return;
+  }
+  const size_t n = st.pipeRunDraftVerts.size();
+  if (n >= 3) {
+    const double lx = st.pipeRunDraftVerts[n - 3];
+    const double ly = st.pipeRunDraftVerts[n - 2];
+    const double lz = st.pipeRunDraftVerts[n - 1];
+    if (std::fabs(pt.x - lx) < 1e-9 && std::fabs(pt.y - ly) < 1e-9 && std::fabs(pt.z - lz) < 1e-9) {
+      log.push_back("PIPERUN - that is the same point as the last one.");
+      return;
+    }
+  }
+  st.pipeRunDraftVerts.push_back(pt.x);
+  st.pipeRunDraftVerts.push_back(pt.y);
+  st.pipeRunDraftVerts.push_back(pt.z);
+  log.push_back(CadPipeRunPromptText(st));
+}
+
+} // namespace
+
+void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log) {
+  CancelPipeRunCommand(st);
+  st.active = AppCommandState::Kind::PipeRun;
+  log.push_back(CadPipeRunPromptText(st));
+}
+
+bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  using PRP = AppCommandState::PipeRunPhase;
+  const std::string line = StringUtil::trimCopy(lineIn);
+
+  if (st.pipeRunPhase == PRP::WaitNominalSize) {
+    if (line.empty()) {
+      if (st.pipeRunNominalSize.empty()) {
+        log.push_back("PIPERUN - a nominal size is required, e.g. 4in.");
+        return true;
+      }
+      st.pipeRunPhase = PRP::WaitFirstPoint;
+      log.push_back(CadPipeRunPromptText(st));
+      return true;
+    }
+    std::istringstream iss(line);
+    std::string sizeTok;
+    std::string classTok;
+    iss >> sizeTok >> classTok;
+    double odFeet = 0.0;
+    if (!CadPipeNominalOdFeet(sizeTok, &odFeet)) {
+      log.push_back("PIPERUN - unknown nominal size \"" + sizeTok +
+                    "\". Known NPS sizes: 0.5in, 0.75in, 1in, 1.25in, 1.5in, 2in, 2.5in, 3in, 4in, "
+                    "6in, 8in, 10in, 12in.");
+      return true;
+    }
+    std::string classTag;
+    if (!classTok.empty()) {
+      const CadPipePressureClass pc = ParseCadPipePressureClass(classTok);
+      if (pc == CadPipePressureClass::None) {
+        log.push_back("PIPERUN - unknown pressure class \"" + classTok + "\". Use CS150 or CS300.");
+        return true;
+      }
+      classTag = std::string(CadPipePressureClassTag(pc));
+    }
+    st.pipeRunNominalSize = sizeTok;
+    st.pipeRunPressureClassTag = classTag;
+    st.pipeRunPhase = PRP::WaitFirstPoint;
+    log.push_back(CadPipeRunPromptText(st));
+    return true;
+  }
+
+  if (line.empty()) {
+    if (st.pipeRunPhase == PRP::WaitFirstPoint) {
+      log.push_back("PIPERUN canceled — no points picked.");
+      CancelPipeRunCommand(st);
+      st.active = AppCommandState::Kind::None;
+      return true;
+    }
+    CommitPipeRunDraft(st, log);
+    return true;
+  }
+
+  const std::string low = StringUtil::toLowerAsciiCopy(line);
+  if (low == "end") {
+    if (st.pipeRunPhase != PRP::WaitNextPoint)
+      log.push_back("PIPERUN END - need at least one segment after the start point.");
+    else
+      CommitPipeRunDraft(st, log);
+    return true;
+  }
+  if (low == "u" || low == "undo") {
+    // Mirrors POLYLINE's own U guard: cannot undo past the first point (that's what ESC is for).
+    if (st.pipeRunPhase != PRP::WaitNextPoint || st.pipeRunDraftVerts.size() < 6) {
+      log.push_back("PIPERUN - nothing to undo yet.");
+      return true;
+    }
+    st.pipeRunDraftVerts.resize(st.pipeRunDraftVerts.size() - 3);
+    log.push_back(CadPipeRunPromptText(st));
+    return true;
+  }
+
+  ray3d::Vec3 pt{};
+  if (!ParseSolidBasePoint(st, line, &pt, log, "PIPERUN"))
+    return true;  // the reason has been reported; the prompt stands
+  AddPipeRunPoint(st, pt, log);
+  return true;
+}
+
+void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using PRP = AppCommandState::PipeRunPhase;
+  if (st.pipeRunPhase == PRP::WaitNominalSize) {
+    log.push_back("PIPERUN - type a nominal size first (e.g. 4in), optionally followed by a "
+                  "pressure class.");
+    return;
+  }
+  const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st)};
+  AddPipeRunPoint(st, pt, log);
+}
+
 namespace {
 
 /// Append the straight run \p from -> \p to, in \p frame's plane, refusing a point off that plane.
@@ -34627,6 +34824,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("POLYSOLID canceled.");
     CancelPolysolidCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::PipeRun) {
+    log.push_back("PIPERUN canceled.");
+    CancelPipeRunCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
   else if (st.active == AppCommandState::Kind::FeatureLine)
@@ -35801,6 +36002,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // argument count, so there is no one-line form to offer.
     if (plotTok == "polysolid" || plotTok == "psolid") {
       StartPolysolidCommand(st, log);
+      return;
+    }
+    // PIPERUN (issue #486 increment B2 / REQ-345): prompted only, same reason POLYSOLID is — a
+    // routed path has no fixed argument count.
+    if (plotTok == "piperun" || plotTok == "pipe") {
+      StartPipeRunCommand(st, log);
       return;
     }
     if (plotTok == "isolines") {
@@ -37583,6 +37790,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandlePolysolidTextInput(line, st, log))
       return;
     log.push_back(CadPolysolidPromptText(st));
+    return;
+  }
+
+  // PIPERUN (issue #486 increment B2 / REQ-345), the same self-contained shape as POLYSOLID above:
+  // a nominal-size/class line, then points.
+  if (st.active == AppCommandState::Kind::PipeRun) {
+    if (HandlePipeRunTextInput(line, st, log))
+      return;
+    log.push_back(CadPipeRunPromptText(st));
     return;
   }
 

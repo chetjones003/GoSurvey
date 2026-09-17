@@ -1608,6 +1608,12 @@ struct AppCommandState {
     /// BLOCKFITTING (issue #496): prompted tagging of the block being edited as a piping catalog
     /// part — part type, nominal size, pressure class, part number.
     BlockFitting,
+    /// PIPERUN (issue #486 increment B2 / REQ-345): prompted routing of a `CadPipeRun` — nominal
+    /// size (+ optional pressure class) first, then click-to-add straight vertices with a live
+    /// rubber-band pipe preview, Undo/End/ESC. Its own Kind for the same reason POLYSOLID has one:
+    /// a path built from a variable number of points needs different state than a fixed-parameter
+    /// command, and this one commits into `cadPipeRuns` rather than `cadSolids`.
+    PipeRun,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1684,6 +1690,7 @@ struct AppCommandState {
     case Kind::BConnect:           return "BCONNECT";
     case Kind::BConnectEdit:       return "BCONNECTEDIT";
     case Kind::BlockFitting:       return "BLOCKFITTING";
+    case Kind::PipeRun:            return "PIPERUN";
     default:                  return "";
     }
   }
@@ -2494,6 +2501,22 @@ struct AppCommandState {
   double polysolidWidth = 0.25;
   double polysolidHeight = 4.0;
   brep::Justify polysolidJustify = brep::Justify::Center;
+
+  // --- PIPERUN: interactive CadPipeRun routing (issue #486 increment B2 / REQ-345) --------------
+
+  enum class PipeRunPhase {
+    WaitNominalSize,  ///< first prompt of a run: nominal size, optional pressure class
+    WaitFirstPoint,   ///< size known; the next click/point is the run's start
+    WaitNextPoint,    ///< a run is under way; each further point commits a straight segment
+  } pipeRunPhase = PipeRunPhase::WaitNominalSize;
+
+  /// The path so far, storage-coordinate xyz triples (REQ-057) — exactly the form `CadPipeRun`
+  /// itself stores, so commit is a plain copy rather than a second representation to keep in step.
+  std::vector<double> pipeRunDraftVerts;
+  /// Remembered across runs the way POLYSOLID remembers width/height/justify (`polysolidWidth`
+  /// etc. above): a pipe run is almost always drawn at the same size as the last one.
+  std::string pipeRunNominalSize;
+  std::string pipeRunPressureClassTag;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -5088,6 +5111,19 @@ void CancelPolysolidCommand(AppCommandState& st);
 /// The frame a polysolid is built in: the active UCS anchored at the first picked point. Exposed so
 /// the viewport can put the cursor into the same plane the builder reads it from - one frame, not two.
 [[nodiscard]] ucs::Ucs CadPolysolidFrameFor(const AppCommandState& st);
+
+// --- PIPERUN (issue #486 increment B2 / REQ-345) -------------------------------------------------
+/// Open the command: prompt for a nominal size (+ optional pressure class).
+void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log);
+/// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
+[[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
+/// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false
+/// if not consumed.
+bool HandlePipeRunTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+/// Handle a viewport click: the run's start point, or a further vertex.
+void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Reset the draft path, keeping the remembered nominal size and pressure class.
+void CancelPipeRunCommand(AppCommandState& st);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.
 ///
 /// ONE builder for the preview, the click that commits a point and the Enter that finishes — a

@@ -9284,6 +9284,13 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     polysolidHint = CadPolysolidPromptText(cmd);
     return polysolidHint.c_str();
   }
+  // PIPERUN (issue #486 increment B2), computed for the same reason: the hint echoes the nominal
+  // size/class and phase in force.
+  if (cmd.active == AppCommandState::Kind::PipeRun) {
+    static std::string pipeRunHint;
+    pipeRunHint = CadPipeRunPromptText(cmd);
+    return pipeRunHint.c_str();
+  }
   if (cmd.active == AppCommandState::Kind::Circle) {
     using CP = AppCommandState::CirclePhase;
     switch (cmd.circlePhase) {

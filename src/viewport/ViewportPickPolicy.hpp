@@ -175,6 +175,13 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     return cmd.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject ? R::RawEntityPick
                                                                              : R::SnappedPointPick;
 
+  // PIPERUN (issue #486 increment B2 / REQ-345): every phase past the size prompt wants an
+  // ordinary snapped coordinate — the start point, then each further vertex. At the
+  // WaitNominalSize phase a click still routes here and `SubmitPipeRunViewportPick` reports the
+  // refusal, rather than being silently swallowed by `Ignore`.
+  case K::PipeRun:
+    return R::SnappedPointPick;
+
   // --- Select-then-point modify commands: window-select first, then coordinates. ---
   case K::Move:
   case K::Copy:
