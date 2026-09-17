@@ -6511,6 +6511,30 @@ capability that does not exist. They are recorded here rather than quietly dropp
   are the analytic half and segment volumes, and a cone's are halves, including at survey coordinate
   magnitudes (E 2,196,000).
 
+  2026-09-17 — **a plane that misses a solid's curved faces cuts it** (D-2026-09-17-c, TASK-266, GitHub
+  issue #518). A solid with any curved face that is not a cylinder or cone primitive was refused at
+  every plane, "flat faces only". That included a box with one filleted edge, cut nowhere near the
+  fillet. Now each face is classified by the range of signed distance it covers:
+  - a face wholly on one side, touching the plane allowed, goes to its piece **unchanged** (surface,
+    parameter range and every loop);
+  - a flat face the plane crosses is split along it, each whole arc or ellipse of its boundary and
+    each hole loop staying on the side it lies on;
+  - a plane that crosses a curved face or a curved edge is refused as `SliceCutCrossesCurvedFace`.
+
+  The range of a plane, cylinder or cone face is exactly that of its boundary. A sphere, torus or
+  NURBS face also takes its tessellation, widened by the chord tolerance, so a plane that grazes one
+  is refused rather than cut wrongly. The rule applies to every such solid, not only filleted ones:
+  a box with a drilled hole, a curved polysolid wall and a stepped shaft are cut wherever the plane
+  misses their curved faces. All-planar solids keep their own cutter unchanged.
+
+  This supersedes the 2026-09-17 #516 revision above for these solids: a sphere, torus or filleted
+  box cut across its curved face now reports `SliceCutCrossesCurvedFace`, not `SliceCurvedFace`.
+  Acceptance added:
+  - a filleted box (one edge, several edges, or a three-edge corner) is sectioned and sliced exactly
+    at planes that miss the fillets, including a plane that meets a fillet only along its tangent
+    line, and at survey coordinate magnitudes;
+  - a plane that crosses a fillet is refused by that name, and nothing is written.
+
 ### REQ-337 — Composite-operand analytic Booleans (GitHub issue #493, continues REQ-314)
 - Purpose: REQ-314's Boolean increments (B1/B2a/B2b-1/B2b-2, plus the branch-pipe and sphere∩cylinder
   work tracked on #242/#283) already recognise a wide set of *single-primitive-pair* curved
@@ -8596,6 +8620,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
   tilted cut between the caps keeps `SectionEllipse` ("This cut is an ellipse, which a section outline
   cannot hold yet."), which is the "refused by a name that says so" branch of #517's acceptance. A cone
   cut parallel to its axis but off it is refused as a hyperbola (REQ-314 revision of this date).
+
+  2026-09-17 — **a section past a fillet** (D-2026-09-17-c, TASK-266, GitHub issue #518). `SECTION`
+  inherits `SLICE`'s new rule (REQ-314 revision of this date). A solid with a rounded edge, a drilled
+  hole or another curved face is sectioned by any plane that crosses only its flat faces, and the
+  outline is the straight-sided polygon of that cut. A plane that crosses a curved face is refused with
+  "The cut crosses a curved face of this solid, which is not supported yet." That is also what a
+  sphere now reports, in place of "flat faces only". Acceptance added: a filleted box is sectioned
+  within REQ-101's ±0.002 ft at planes that miss its fillets, the solid is unchanged, and the command is
+  one undo step.
 
 ### REQ-336 — Start Screen Billboard (What's New)
 - Purpose: Users launching a new version do not know what changed unless they hunt for release notes.

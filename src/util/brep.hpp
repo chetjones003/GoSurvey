@@ -592,6 +592,9 @@ enum class Problem {
   SectionCurve,
   /// The section has a hole in it, which a single closed section outline cannot hold.
   SectionHasHole,
+  /// The cut crosses a curved face of a solid that is not a cylinder or cone primitive — a fillet, a
+  /// drilled hole's wall, a sphere. A cut that misses every curved face is taken (GitHub #518).
+  SliceCutCrossesCurvedFace,
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -868,6 +871,11 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 /// (\ref Problem::SliceCutTooSteepForCone), and pieces that failed validation
 /// (\ref Problem::SliceResultInvalid). A cut parallel to the axis of a cylinder, or through the axis
 /// of a cone, is taken: its pieces are bounded by straight seams and cap chords (GitHub #517).
+///
+/// Any other solid with a curved face (a filleted box, a box with a drilled hole) is cut when the
+/// plane crosses only its flat faces: the curved faces, and the whole arcs of the flat faces, go to
+/// their piece unchanged (GitHub #518). A plane that crosses a curved face is refused as
+/// \ref Problem::SliceCutCrossesCurvedFace.
 [[nodiscard]] bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                          SliceKeep keep, Solid* outAbove, Solid* outBelow, Problem* outWhy);
 

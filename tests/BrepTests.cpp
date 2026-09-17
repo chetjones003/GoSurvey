@@ -430,6 +430,7 @@ TEST_CASE("Every failure reason and every primitive has its own name", "[brep][r
       Problem::SectionEllipse,
       Problem::SectionCurve,
       Problem::SectionHasHole,
+      Problem::SliceCutCrossesCurvedFace,
   };
   std::vector<std::string> seen;
   for (Problem p : all) {
@@ -1694,11 +1695,11 @@ TEST_CASE("Slice refuses what it cannot do, by name", "[brep][req314]") {
                               brep::SliceKeep::Both, &a, &b, &why));
     REQUIRE(why == Problem::SliceCutCrossesCurvedEnd);
   }
-  SECTION("a sphere — no primitive pieces") {
+  SECTION("a sphere — every cut crosses its curved face (#518)") {
     Solid sph;
     REQUIRE(brep::MakeSphere(World(), 5, &sph, &why));
     REQUIRE_FALSE(brep::Slice(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
-    REQUIRE(why == Problem::SliceCurvedFace);
+    REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
   }
 }
 
@@ -5407,11 +5408,11 @@ TEST_CASE("A polysolid is an ordinary operand for extrude-era operations", "[bre
     REQUIRE(v == Approx(120.0 - 2.0 * 2.0 * 2.0).margin(1e-9));
   }
 
-  SECTION("a CURVED wall is refused, by the boundary REQ-314 states for itself") {
-    // Not a polysolid defect and not a gap in this requirement: SLICE handles flat faces only
-    // (increment 3a) and B1 combines uncurved operands only. This asserts WHICH refusal comes back,
-    // so that when those increments land, this test fails and says so rather than a curved wall
-    // quietly staying unusable.
+  SECTION("a CURVED wall: SLICE cuts its straight run, BOOLEAN still refuses it") {
+    // SLICE now cuts a curved solid where the plane crosses only flat faces (GitHub #518): x = 5
+    // crosses the wall's straight run, and the arc goes whole to the +x piece. B1 combines uncurved
+    // operands only, and this asserts WHICH refusal comes back, so that when that increment lands,
+    // this test fails and says so rather than a curved wall quietly staying unusable.
     Solid curved;
     brep::Path cp;
     cp.start = ucs::Point2D{0.0, 0.0};
@@ -5421,9 +5422,11 @@ TEST_CASE("A polysolid is an ordinary operand for extrude-era operations", "[bre
 
     Solid above;
     Solid below;
-    REQUIRE_FALSE(brep::Slice(curved, Vec3{5.0, 0.0, 0.0}, Vec3{1.0, 0.0, 0.0},
-                              brep::SliceKeep::Both, &above, &below, &why));
-    REQUIRE(why == Problem::SliceCurvedFace);
+    REQUIRE(brep::Slice(curved, Vec3{5.0, 0.0, 0.0}, Vec3{1.0, 0.0, 0.0},
+                        brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(5.0 * 2.0 * 5.0).epsilon(1e-12));
+    REQUIRE(brep::ComputeMassProperties(above).volume + brep::ComputeMassProperties(below).volume ==
+            Approx(brep::ComputeMassProperties(curved).volume).epsilon(1e-12));
 
     std::vector<Solid> out;
     REQUIRE_FALSE(brep::BooleanSubtract(curved, door, &out, &why));
@@ -7033,7 +7036,7 @@ TEST_CASE("A full-turn revolve of a right profile about its edge is described as
     REQUIRE(rev.recipe.kind == brep::PrimitiveKind::None);
   }
 
-  SECTION("a stepped shaft is not one primitive: no recipe, and the cutter still refuses it by name") {
+  SECTION("a stepped shaft is not one primitive: no recipe, and a cut across its side is refused by name") {
     // Two cylinders stacked: every face a cylinder or plane, one edge on the axis — and not a
     // CYLINDER or CONE, so it must not be described as one.
     Solid rev;
@@ -7042,7 +7045,7 @@ TEST_CASE("A full-turn revolve of a right profile about its edge is described as
     REQUIRE(rev.recipe.kind == brep::PrimitiveKind::None);
     Solid a, b;
     REQUIRE_FALSE(brep::Slice(rev, Vec3{0, 0, 4}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
-    REQUIRE(why == Problem::SliceCurvedFace);
+    REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
   }
 }
 
@@ -7157,11 +7160,11 @@ TEST_CASE("SECTION and SLICE name the limit a curved cut actually hit", "[brep][
     REQUIRE(brep::SectionLoop(cyl, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
   }
 
-  SECTION("a sphere still says 'flat faces only' — its limit is not a cut direction (#520)") {
+  SECTION("a sphere says the cut crosses a curved face — not a cut direction (#518, #520)") {
     Solid sph;
     REQUIRE(brep::MakeSphere(World(), 30.0, &sph, &why));
     REQUIRE_FALSE(brep::SectionLoop(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
-    REQUIRE(why == Problem::SliceCurvedFace);
+    REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
   }
 
   SECTION("a flat solid with a hole: 'more than one outline', not 'disjoint pieces'") {
@@ -7370,5 +7373,150 @@ TEST_CASE("A cut parallel to a cylinder's or cone's axis sections and slices", "
     // measured shape agrees.
     REQUIRE(brep::ComputeMassProperties(cyl).volume == before.volume);
     REQUIRE(cyl.recipe.kind == brep::PrimitiveKind::Cylinder);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #518: a solid with curved faces is cut by a plane that crosses only its flat faces.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// The straight edge of \p s whose midpoint is \p mid.
+int LineEdgeAt(const Solid& s, const Vec3& mid) {
+  for (std::size_t i = 0; i < s.edges.size(); ++i) {
+    const brep::Edge& e = s.edges[i];
+    if (e.kind == brep::CurveKind::Line && ray3d::Length(ray3d::Sub(brep::EdgePointAt(s, e, 0.5), mid)) < 1e-6)
+      return static_cast<int>(i);
+  }
+  FAIL("no straight edge at that midpoint");
+  return -1;
+}
+
+int CountFaces(const Solid& s, brep::SurfaceKind kind) {
+  int n = 0;
+  for (const brep::Face& f : s.faces)
+    n += f.surface.kind == kind ? 1 : 0;
+  return n;
+}
+
+} // namespace
+
+TEST_CASE("A plane that misses a solid's curved faces cuts it, carrying them whole", "[brep][issue518]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  Solid above, below;
+
+  // The issue's box: x -50..50, y -35..35, z -25..25, with its top edge at y = +35 rounded at r 10.
+  Solid box;
+  REQUIRE(brep::MakeBox(PlaneAlong(World(), -25.0), 100.0, 70.0, 50.0, &box, &why));
+  const double fillet = 10.0 * 10.0 * (1.0 - kPi / 4.0) * 100.0;  // the material a fillet removes
+  Solid rounded;
+  REQUIRE(brep::FilletEdge(box, LineEdgeAt(box, Vec3{0, 35, 25}), 10.0, &rounded, &why));
+  const double whole = brep::ComputeMassProperties(rounded).volume;
+  REQUIRE(whole == Approx(100.0 * 70.0 * 50.0 - fillet).epsilon(1e-12));
+
+  SECTION("horizontal, below the fillet: the full 100 x 70 rectangle, the fillet carried up") {
+    REQUIRE(brep::SectionLoop(rounded, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop), {{-50, -35, 0}, {50, -35, 0}, {50, 35, 0}, {-50, 35, 0}});
+    REQUIRE(PathArea(loop) == Approx(7000.0).epsilon(1e-12));
+
+    REQUIRE(brep::Slice(rounded, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(100.0 * 70.0 * 25.0 - fillet).epsilon(1e-12));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(100.0 * 70.0 * 25.0).epsilon(1e-12));
+    REQUIRE(CountFaces(above, brep::SurfaceKind::Cylinder) == 1);
+    REQUIRE(CountFaces(below, brep::SurfaceKind::Cylinder) == 0);
+    REQUIRE(MeshVolume(above, Vec3{}) == Approx(100.0 * 70.0 * 25.0 - fillet).epsilon(1e-3));
+  }
+
+  SECTION("vertical, beside the fillet: a 100 x 50 rectangle") {
+    REQUIRE(brep::SectionLoop(rounded, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    REQUIRE(PathArea(loop) == Approx(5000.0).epsilon(1e-12));
+    REQUIRE(brep::Slice(rounded, Vec3{0, 0, 0}, Vec3{0, 1, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(100.0 * 35.0 * 50.0 - fillet).epsilon(1e-12));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(100.0 * 35.0 * 50.0).epsilon(1e-12));
+  }
+
+  SECTION("45 degrees, touching the fillet only along its tangent line: 100 x 50 root 2") {
+    const Vec3 n = ray3d::Normalize(Vec3{0, -1, 1});  // the plane z = y, through the fillet's top edge line
+    REQUIRE(brep::SectionLoop(rounded, Vec3{0, 0, 0}, n, &plane, &loop, &why));
+    REQUIRE(PathArea(loop) == Approx(100.0 * 50.0 * std::sqrt(2.0)).epsilon(1e-12));
+    REQUIRE(brep::Slice(rounded, Vec3{0, 0, 0}, n, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(175000.0).epsilon(1e-12));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(175000.0 - fillet).epsilon(1e-12));
+  }
+
+  SECTION("a plane that crosses the fillet is refused by that name, and nothing is written") {
+    Solid untouchedAbove = box;
+    REQUIRE_FALSE(brep::Slice(rounded, Vec3{0, 0, 0}, Vec3{1, 0, 0}, brep::SliceKeep::Both, &untouchedAbove,
+                              &below, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
+    REQUIRE(untouchedAbove.faces.size() == box.faces.size());
+    REQUIRE_FALSE(brep::SectionLoop(rounded, Vec3{0, 0, 20}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
+    REQUIRE(std::string(brep::ProblemText(why)).find("curved face") != std::string::npos);
+  }
+
+  SECTION("several filleted edges: both long top edges") {
+    Solid two;
+    REQUIRE(brep::FilletEdges(box, {LineEdgeAt(box, Vec3{0, 35, 25}), LineEdgeAt(box, Vec3{0, -35, 25})}, 10.0,
+                              &two, &why));
+    REQUIRE(brep::SectionLoop(two, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(PathArea(loop) == Approx(7000.0).epsilon(1e-12));
+    REQUIRE(brep::Slice(two, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(100.0 * 70.0 * 25.0 - 2.0 * fillet).epsilon(1e-12));
+    REQUIRE(CountFaces(above, brep::SurfaceKind::Cylinder) == 2);
+  }
+
+  SECTION("three filleted edges meeting at a corner ball: a corner cut clear of all of them") {
+    Solid corner;
+    REQUIRE(brep::FilletEdges(box,
+                              {LineEdgeAt(box, Vec3{0, 35, 25}), LineEdgeAt(box, Vec3{50, 0, 25}),
+                               LineEdgeAt(box, Vec3{50, 35, 0})},
+                              10.0, &corner, &why));
+    REQUIRE(CountFaces(corner, brep::SurfaceKind::Sphere) == 1);
+    const double wholeCorner = brep::ComputeMassProperties(corner).volume;
+    // x + y + z = -80 cuts a 30-30-30 tetrahedron off the far corner (-50, -35, -25).
+    const Vec3 n = ray3d::Normalize(Vec3{1, 1, 1});
+    REQUIRE(brep::SectionLoop(corner, Vec3{-50, -35, 5}, n, &plane, &loop, &why));
+    REQUIRE(PathArea(loop) == Approx(std::sqrt(3.0) / 4.0 * 1800.0).epsilon(1e-12));
+    REQUIRE(brep::Slice(corner, Vec3{-50, -35, 5}, n, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(4500.0).epsilon(1e-12));
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(wholeCorner - 4500.0).epsilon(1e-12));
+    REQUIRE(CountFaces(above, brep::SurfaceKind::Sphere) == 1);
+    REQUIRE(CountFaces(above, brep::SurfaceKind::Cylinder) == 3);
+  }
+
+  SECTION("a box with a drilled hole: cut beside the hole, refused through it") {
+    Solid bore;
+    REQUIRE(brep::MakeCylinder(At(20.0, 0.0, -30.0), 5.0, 60.0, &bore, &why));
+    std::vector<Solid> drilled;
+    REQUIRE(brep::BooleanSubtract(box, bore, &drilled, &why));
+    REQUIRE(drilled.size() == 1);
+    REQUIRE(brep::Slice(drilled[0], Vec3{-10, 0, 0}, Vec3{1, 0, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(40.0 * 70.0 * 50.0).epsilon(1e-12));
+    REQUIRE(brep::ComputeMassProperties(above).volume ==
+            Approx(60.0 * 70.0 * 50.0 - kPi * 25.0 * 50.0).epsilon(1e-9));
+    REQUIRE_FALSE(brep::Slice(drilled[0], Vec3{20, 0, 0}, Vec3{1, 0, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
+  }
+
+  SECTION("at survey magnitude on a tilted frame: the section within 0.002 ft") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    auto at = [&](double x, double y, double z) { return ucs::UcsToWorld(base, Vec3{x, y, z}); };
+    Solid far;
+    REQUIRE(brep::MakeBox(base, 100.0, 70.0, 50.0, &far, &why));
+    Solid farRounded;
+    REQUIRE(brep::FilletEdge(far, LineEdgeAt(far, at(0, 35, 50)), 10.0, &farRounded, &why));
+    const double before = brep::ComputeMassProperties(farRounded).volume;
+    REQUIRE(brep::SectionLoop(farRounded, at(0, 0, 25), base.zAxis, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {at(-50, -35, 25), at(50, -35, 25), at(50, 35, 25), at(-50, 35, 25)});
+    REQUIRE(brep::Slice(farRounded, at(0, 0, 25), base.zAxis, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(100.0 * 70.0 * 25.0).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(100.0 * 70.0 * 25.0 - fillet).epsilon(1e-9));
+    REQUIRE(MeshVolume(above, base.origin) == Approx(100.0 * 70.0 * 25.0 - fillet).epsilon(1e-3));
+    REQUIRE(brep::ComputeMassProperties(farRounded).volume == before);  // the source is untouched
   }
 }
