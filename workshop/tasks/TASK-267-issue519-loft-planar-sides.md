@@ -27,6 +27,8 @@ square frustum with four flat sides, but `Loft` stored every straight span as a 
   - New `RuledStripIsFlat`: a quadrilateral's Newell normal, plus a flatness test with every corner
     within `max(1e-9 × strip size, 1e-9)` of the plane. Distances are measured from the first corner,
     so survey-magnitude coordinates stay out of the arithmetic.
+  - The two ring edges must run the same way round: reversed, the strip is a bow-tie whose corners are
+    coplanar but whose face would cross itself, so it stays a ruled patch (final review on #533).
   - `Loft` stores a straight span that passes the test as `MakePlaneFace`, with the same loop and the
     outward Newell normal. Arc ribbons and twisted strips keep their NURBS patch.
 - No command changed. All-planar lofts now take the planar paths in `Slice`, `SectionLoop` and
@@ -40,6 +42,8 @@ square frustum with four flat sides, but `Loft` stored every straight span as a 
   - `SECTION` matches the pyramid corner for corner at horizontal, vertical and 45° planes, with the
     45 × 45 square area checked;
   - a rotated top profile keeps four NURBS sides;
+  - a top profile turned half a turn makes bow-tie strips (flat, but self-crossing): they keep their
+    NURBS patch;
   - a kite-shaped top profile keeps four NURBS sides;
   - at survey magnitude on a tilted frame: planar, the volume, and the section corners within
     0.002 ft.

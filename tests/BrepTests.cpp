@@ -7835,6 +7835,16 @@ TEST_CASE("A loft between similar parallel polygons has flat side faces and sect
             Approx(50.0 / 6.0 * (3600.0 + 4.0 * 45.0 * 35.0 + 300.0)).epsilon(1e-12));
   }
 
+  SECTION("a top profile turned half a turn makes bow-tie strips: they stay freeform") {
+    // Every corner of such a strip lies in one plane, but the strip crosses itself, so it is not a
+    // face. Found by the final review on #533.
+    Solid bow;
+    REQUIRE(brep::Loft({square(PlaneAlong(World(), -25.0), 30.0),
+                        PolyProfile(PlaneAlong(World(), 25.0), {{15, 15}, {-15, 15}, {-15, -15}, {15, -15}})},
+                       &bow, &why));
+    REQUIRE(CountFaces(bow, brep::SurfaceKind::Nurbs) == 4);
+  }
+
   SECTION("a non-similar top profile whose edges are not parallel stays freeform") {
     // A kite on top: no side strip has parallel ring edges, so none is flat.
     Solid kite;

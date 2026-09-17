@@ -5543,6 +5543,11 @@ namespace {
   const double len = ray3d::Length(acc);
   if (!(size > 0.0) || !(len > 1e-12 * size * size))
     return false;
+  // The two ring edges must run the same way round. Reversed, the strip is a bow-tie: its four
+  // corners still lie in one plane, but the face they would make crosses itself, so it stays the
+  // ruled patch it was.
+  if (!(ray3d::Dot(ray3d::Sub(q[1], q[0]), ray3d::Sub(q[2], q[3])) > 0.0))
+    return false;
   const Vec3 nrm = ray3d::Scale(acc, 1.0 / len);
   const double tol = std::max(1e-9 * size, 1e-9);
   for (const Vec3& p : q)
