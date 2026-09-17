@@ -6484,6 +6484,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
   revolve that builds the same solid. Visible: such a solid now lists as `Cylinder` / `Cone`, not
   `Solid`.
 
+  2026-09-17 — **a refused cut names its own limit, and "disjoint pieces" means disjoint pieces**
+  (TASK-264, GitHub issue #516, REQ-201). `SliceResultComplex` had one message about a solid
+  splitting into disjoint pieces, but was returned for five different situations, and a curved cut
+  nobody took fell through to "flat faces only". Now:
+  - a tilted cut of a cylinder or cone that crosses an end cap → `SliceCutCrossesCurvedEnd`;
+  - a cut parallel to a cylinder's or cone's axis → `SliceCutAlongCurvedAxis`;
+  - a cone cut steeper than its side → `SliceCutTooSteepForCone`;
+  - a cut surface with more than one outline (a hole, or separate islands) → `SliceCutSeveralOutlines`;
+  - pieces that were built but failed validation → `SliceResultInvalid`.
+
+  `SliceResultComplex` is now returned only where a kept side really splits into separate pieces,
+  and `SliceCurvedFace` only for curved solids whose limit is not a cut direction (a sphere, a torus,
+  a filleted box). Acceptance added: each refusal names its own limit, and "disjoint pieces" is shown
+  only when a cut would produce disjoint pieces.
+
 ### REQ-337 — Composite-operand analytic Booleans (GitHub issue #493, continues REQ-314)
 - Purpose: REQ-314's Boolean increments (B1/B2a/B2b-1/B2b-2, plus the branch-pipe and sphere∩cylinder
   work tracked on #242/#283) already recognise a wide set of *single-primitive-pair* curved
@@ -8545,6 +8560,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
   So the requirement gains an acceptance clause it was missing: **a command that asks for a selection
   must still be running after it asks.** A message that names what to do next, from a command that
   has already ended, is worse than no message.
+
+  2026-09-17 — **a refused section names the limit it actually hit** (TASK-264, GitHub issue #516,
+  REQ-201). An oblique cut of a cylinder or cone that stays between its caps is sliced by the kernel
+  but its outline is an ellipse; `SECTION` said "this release slices solids with flat faces only".
+  It now says "This cut is an ellipse, which a section outline cannot hold yet." (`SectionEllipse`), a
+  marched intersection curve says the same of "a curve" (`SectionCurve`), and a section with a hole
+  says so (`SectionHasHole`). The cut refusals `SECTION` inherits from `SLICE` are named the same way
+  (REQ-314 revision of this date). Acceptance added: each refusal in the issue's table names its own
+  limit.
 
 ### REQ-336 — Start Screen Billboard (What's New)
 - Purpose: Users launching a new version do not know what changed unless they hunt for release notes.

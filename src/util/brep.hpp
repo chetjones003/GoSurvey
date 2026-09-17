@@ -363,7 +363,7 @@ enum class Problem {
   SliceDegeneratePlane,  ///< A slicing plane whose normal is zero or not finite.
   SlicePlaneMissesSolid, ///< The plane does not pass through the solid — nothing to cut.
   SliceCurvedFace,       ///< The solid has a curved face; increment 3a slices planar-faced solids only.
-  SliceResultComplex,    ///< The cut cross-section is not a single loop, or a side splits into pieces.
+  SliceResultComplex,    ///< A kept side splits into separate pieces (see also SliceCutSeveralOutlines, #516).
 
   // --- Booleans (REQ-314 increment 4, B1). ---
   /// A curved operand pair B1 cannot combine: a curved SUBTRACT (the hole wall faces inward, which
@@ -570,6 +570,28 @@ enum class Problem {
   /// An edge bounds three or more faces, so the surface is not a manifold: more than two sheets
   /// meet along it and there is no consistent inside.
   EdgeNonManifold,
+
+  // Curved-cut refusals that name their own limit (GitHub issue #516, REQ-201). Before these, a
+  // tilted cut clipping a cylinder's end reported "disjoint pieces" and an ellipse section reported
+  // "flat faces only" — both true of some other cut, neither of the one the user made.
+
+  /// A tilted cut of a cylinder or cone whose curve would run off the side and across an end cap.
+  SliceCutCrossesCurvedEnd,
+  /// A cut parallel to (or containing) a cylinder's or cone's axis.
+  SliceCutAlongCurvedAxis,
+  /// A cone cut steeper than the cone's own side, whose curve is not an ellipse.
+  SliceCutTooSteepForCone,
+  /// The cut surface would have more than one outline — a hole, or separate islands. Distinct from
+  /// \ref SliceResultComplex, which now means only that a side really splits into separate pieces.
+  SliceCutSeveralOutlines,
+  /// A cut whose pieces were built but did not pass validation — nothing is cut.
+  SliceResultInvalid,
+  /// The section is an ellipse, which a section outline (lines and circular arcs) cannot hold.
+  SectionEllipse,
+  /// The section is a general curve (an intersection curve), which a section outline cannot hold.
+  SectionCurve,
+  /// The section has a hole in it, which a single closed section outline cannot hold.
+  SectionHasHole,
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -838,6 +860,13 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 /// split a kept side into disjoint pieces, is refused rather than producing a sliver
 /// (\ref Problem::SlicePlaneMissesSolid, \ref Problem::SliceResultComplex). Nothing is written unless
 /// every kept piece passes \ref Validate (REQ-201). The results carry no recipe.
+///
+/// A cylinder or cone cut the curved recognisers do not take is refused for that cut, not for
+/// having curved faces (GitHub #516): a tilted cut crossing an end cap
+/// (\ref Problem::SliceCutCrossesCurvedEnd), a cut parallel to the axis
+/// (\ref Problem::SliceCutAlongCurvedAxis), a cone cut steeper than its side
+/// (\ref Problem::SliceCutTooSteepForCone), and pieces that failed validation
+/// (\ref Problem::SliceResultInvalid).
 [[nodiscard]] bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                          SliceKeep keep, Solid* outAbove, Solid* outBelow, Problem* outWhy);
 
@@ -859,10 +888,11 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 ///
 /// **The accepted set is \ref Slice's, inherited rather than restated**: sectioning asks the same
 /// geometric question and simply keeps a different answer, so a solid Slice declines is declined
-/// here with Slice's own reason. Additionally refuses \ref Problem::SliceCurvedFace for a section
-/// boundary that is not expressible as lines and arcs — an **oblique cut of a cylinder** meets it
-/// along an `Ellipse` — and \ref Problem::SliceResultComplex for a section with holes or with more
-/// than one face on the plane. Refused by name rather than approximated with a chord or a nearby
+/// here with Slice's own reason. Additionally refuses a section boundary that is not expressible as
+/// lines and arcs — \ref Problem::SectionEllipse for an **oblique cut of a cylinder or cone**, and
+/// \ref Problem::SectionCurve for a marched intersection curve — \ref Problem::SectionHasHole for a
+/// section with a hole, and \ref Problem::SliceCutSeveralOutlines for more than one face on the plane
+/// (GitHub #516). Refused by name rather than approximated with a chord or a nearby
 /// arc: a section is a measured figure, and one that is quietly the wrong shape is exactly the
 /// silent-wrong-answer failure REQ-201 exists to prevent.
 [[nodiscard]] bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,

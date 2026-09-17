@@ -419,6 +419,17 @@ TEST_CASE("Every failure reason and every primitive has its own name", "[brep][r
       // the user as "not closed".
       Problem::ShellOpenAtEdge,
       Problem::EdgeNonManifold,
+      // Curved-cut and section refusals that name their own limit (GitHub #516).
+      Problem::SliceCurvedFace,
+      Problem::SliceResultComplex,
+      Problem::SliceCutCrossesCurvedEnd,
+      Problem::SliceCutAlongCurvedAxis,
+      Problem::SliceCutTooSteepForCone,
+      Problem::SliceCutSeveralOutlines,
+      Problem::SliceResultInvalid,
+      Problem::SectionEllipse,
+      Problem::SectionCurve,
+      Problem::SectionHasHole,
   };
   std::vector<std::string> seen;
   for (Problem p : all) {
@@ -1681,7 +1692,7 @@ TEST_CASE("Slice refuses what it cannot do, by name", "[brep][req314]") {
     // Steep tilt near the top: the ellipse would run off the end of the cylinder.
     REQUIRE_FALSE(brep::Slice(cyl, Vec3{0, 0, 9.5}, ray3d::Normalize(Vec3{3, 0, 1}),
                               brep::SliceKeep::Both, &a, &b, &why));
-    REQUIRE(why == Problem::SliceResultComplex);
+    REQUIRE(why == Problem::SliceCutCrossesCurvedEnd);
   }
   SECTION("a sphere — no primitive pieces") {
     Solid sph;
@@ -1815,7 +1826,7 @@ TEST_CASE("Curved B2b-2 tail: an oblique plane slices a cone into two elliptical
   SECTION("a cut that would clip a cap is refused by name") {
     Solid up2, dn2;
     REQUIRE_FALSE(brep::Slice(cone, Vec3{0, 0, 0.5}, pn, brep::SliceKeep::Both, &up2, &dn2, &why));
-    REQUIRE(why == Problem::SliceResultComplex);
+    REQUIRE(why == Problem::SliceCutCrossesCurvedEnd);
   }
 
   SECTION("a steeper cut past the half-angle, tangent to the top cap, is still refused (two merged notches)") {
@@ -1826,7 +1837,7 @@ TEST_CASE("Curved B2b-2 tail: an oblique plane slices a cone into two elliptical
     Solid up2, dn2;
     const Vec3 steep = ray3d::Normalize(Vec3{2.0, 0.0, 1.0});  // well past atan(0.5) from the axis
     REQUIRE_FALSE(brep::Slice(cone, planePoint, steep, brep::SliceKeep::Both, &up2, &dn2, &why));
-    REQUIRE(why == Problem::SliceCurvedFace);
+    REQUIRE(why == Problem::SliceCutTooSteepForCone);
   }
 }
 
@@ -7097,5 +7108,76 @@ TEST_CASE("A loft between two coaxial circles is built as the cylinder or cone i
     REQUIRE(brep::Slice(s, mid, base.zAxis, brep::SliceKeep::Both, &a, &b, &why));
     REQUIRE(brep::Slice(prim, mid, base.zAxis, brep::SliceKeep::Both, &pa, &pb, &why));
     REQUIRE(brep::ComputeMassProperties(a).volume == Approx(brep::ComputeMassProperties(pa).volume).epsilon(1e-9));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #516: a refused cut of a cylinder or cone says which cut it was.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SECTION and SLICE name the limit a curved cut actually hit", "[brep][issue516]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  Solid a, b;
+  const Vec3 tilt45 = ray3d::Normalize(Vec3{0.0, -1.0, 1.0});  // UCS X 90 turned half-way: 45 degrees
+
+  SECTION("a tilted cut crossing an end cap: the end, not 'disjoint pieces'") {
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -25.0), 30.0, 50.0, &cyl, &why));  // z -25..25
+    REQUIRE_FALSE(brep::SectionLoop(cyl, Vec3{0, 0, 0}, tilt45, &plane, &loop, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedEnd);
+    REQUIRE_FALSE(brep::Slice(cyl, Vec3{0, 0, 0}, tilt45, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedEnd);
+    REQUIRE(std::string(brep::ProblemText(why)).find("disjoint") == std::string::npos);
+  }
+
+  SECTION("a tilted cut between the caps: SLICE cuts it, SECTION names the ellipse") {
+    Solid tall;
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -100.0), 30.0, 200.0, &tall, &why));  // z -100..100
+    REQUIRE(brep::Slice(tall, Vec3{0, 0, 0}, tilt45, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE_FALSE(brep::SectionLoop(tall, Vec3{0, 0, 0}, tilt45, &plane, &loop, &why));
+    REQUIRE(why == Problem::SectionEllipse);
+    REQUIRE(std::string(brep::ProblemText(why)).find("ellipse") != std::string::npos);
+  }
+
+  SECTION("a cut along the axis: the direction, not 'flat faces only'") {
+    Solid cyl, cone;
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -25.0), 30.0, 50.0, &cyl, &why));
+    REQUIRE(brep::MakeCone(PlaneAlong(World(), -25.0), 30.0, 15.0, 50.0, &cone, &why));
+    for (const Solid* s : {&cyl, &cone}) {
+      REQUIRE_FALSE(brep::SectionLoop(*s, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+      REQUIRE(why == Problem::SliceCutAlongCurvedAxis);
+      // A plane parallel to the axis but off it is the same limit.
+      REQUIRE_FALSE(brep::Slice(*s, Vec3{10, 0, 0}, Vec3{1, 0, 0}, brep::SliceKeep::Both, &a, &b, &why));
+      REQUIRE(why == Problem::SliceCutAlongCurvedAxis);
+    }
+  }
+
+  SECTION("a cut the kernel does take is unchanged: across the axis") {
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -25.0), 30.0, 50.0, &cyl, &why));
+    REQUIRE(brep::SectionLoop(cyl, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+  }
+
+  SECTION("a sphere still says 'flat faces only' — its limit is not a cut direction (#520)") {
+    Solid sph;
+    REQUIRE(brep::MakeSphere(World(), 30.0, &sph, &why));
+    REQUIRE_FALSE(brep::SectionLoop(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SliceCurvedFace);
+  }
+
+  SECTION("a flat solid with a hole: 'more than one outline', not 'disjoint pieces'") {
+    // A square tube: the cut across it is a ring, which is one piece above and one below.
+    Solid outer, inner;
+    REQUIRE(brep::MakeBox(World(), 20.0, 20.0, 10.0, &outer, &why));
+    REQUIRE(brep::MakeBox(PlaneAlong(World(), -1.0), 8.0, 8.0, 12.0, &inner, &why));
+    std::vector<Solid> tube;
+    REQUIRE(brep::BooleanSubtract(outer, inner, &tube, &why));
+    REQUIRE(tube.size() == 1);
+    REQUIRE_FALSE(brep::Slice(tube[0], Vec3{0, 0, 5}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    INFO(brep::ProblemText(why));
+    REQUIRE(why == Problem::SliceCutSeveralOutlines);
+    REQUIRE(std::string(brep::ProblemText(why)).find("disjoint") == std::string::npos);
   }
 }

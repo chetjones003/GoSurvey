@@ -1818,6 +1818,23 @@ const char* ProblemText(Problem p) {
   case Problem::EdgeNotUsedTwice: return "The surface is not closed: an edge does not bound exactly two faces.";
   case Problem::ShellOpenAtEdge: return "The surface is not closed: an edge bounds only one face.";
   case Problem::EdgeNonManifold: return "The surface is not manifold: an edge bounds more than two faces.";
+  case Problem::SliceCutCrossesCurvedEnd:
+    return "A tilted cut that crosses the end of a cylinder or cone is not supported yet.";
+  case Problem::SliceCutAlongCurvedAxis:
+    return "A cut parallel to a cylinder's or cone's axis is not supported yet.";
+  case Problem::SliceCutTooSteepForCone:
+    return "A cut steeper than a cone's own side is not supported yet.";
+  case Problem::SliceCutSeveralOutlines:
+    return "The cut surface would have more than one outline (a hole, or separate islands), which "
+           "this release cannot represent.";
+  case Problem::SliceResultInvalid:
+    return "The cut pieces did not pass validation, so nothing was cut.";
+  case Problem::SectionEllipse:
+    return "This cut is an ellipse, which a section outline cannot hold yet.";
+  case Problem::SectionCurve:
+    return "This cut is a curve that is not a line or a circular arc, which a section outline cannot hold yet.";
+  case Problem::SectionHasHole:
+    return "This section has a hole in it, which a section outline cannot hold yet.";
   case Problem::EdgeOrientationInconsistent: return "Two faces disagree about which way an edge runs.";
   case Problem::FaceHasNoLoop: return "A face has no boundary.";
   case Problem::DegenerateFace: return "A face has no area.";
@@ -6680,7 +6697,7 @@ struct PolyFace {
   const double a2 = -r * nl.y / nl.z;
   const double amp = std::sqrt(a1 * a1 + a2 * a2);
   if (a0 - amp <= eps || a0 + amp >= h - eps)
-    return Fail(Problem::SliceResultComplex, outWhy);  // the ellipse would clip a cap
+    return Fail(Problem::SliceCutCrossesCurvedEnd, outWhy);  // the ellipse would clip a cap
 
   // Ellipse geometry, in world.
   const Vec3 ec = ray3d::Add(fr.origin, ray3d::Scale(Z, a0));  // plane ∩ axis
@@ -6749,7 +6766,7 @@ struct PolyFace {
     AddSingleShell(&s);
     const Problem why = Validate(s);
     if (why != Problem::Ok)
-      return Fail(Problem::SliceResultComplex, outWhy);
+      return Fail(Problem::SliceResultInvalid, outWhy);
     *dst = std::move(s);
     return true;
   };
@@ -6910,7 +6927,7 @@ struct ConeObliqueEllipse {
     return false;  // parabola / hyperbola / tangent — a later slice
   *handled = true;
   if (ce.zLo <= eps || ce.zHi >= h - eps)
-    return Fail(Problem::SliceResultComplex, outWhy);  // the ellipse would clip a cap
+    return Fail(Problem::SliceCutCrossesCurvedEnd, outWhy);  // the ellipse would clip a cap
 
   const double k = (r1 - r0) / h;
   auto radiusAt = [&](double z) { return r0 + k * z; };
@@ -7016,7 +7033,7 @@ struct ConeObliqueEllipse {
     AddSingleShell(&s);
     const Problem why = Validate(s);
     if (why != Problem::Ok)
-      return Fail(Problem::SliceResultComplex, outWhy);
+      return Fail(Problem::SliceResultInvalid, outWhy);
     *dst = std::move(s);
     return true;
   };
@@ -7159,7 +7176,7 @@ struct ConeCutTransition {
   const double uB = trans[1].u;
   const double notchSweep = uB - uA;
   if (!(notchSweep > eps) || !(notchSweep < kTwoPi - eps))
-    return Fail(Problem::SliceResultComplex, outWhy);
+    return Fail(Problem::SliceCutCrossesCurvedEnd, outWhy);
 
   auto radiusAt = [&](double z) { return r0 + k * z; };
   auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(fr, Vec3{x, y, z}); };
@@ -7227,7 +7244,7 @@ struct ConeCutTransition {
     s.faces.push_back(std::move(wall));
     AddSingleShell(&s);
     if (Validate(s) != Problem::Ok || SelfIntersects(s))
-      return Fail(Problem::SliceResultComplex, outWhy);
+      return Fail(Problem::SliceResultInvalid, outWhy);
     *dst = std::move(s);
     return true;
   };
@@ -7295,7 +7312,7 @@ struct ConeCutTransition {
 
     AddSingleShell(&s);
     if (Validate(s) != Problem::Ok || SelfIntersects(s))
-      return Fail(Problem::SliceResultComplex, outWhy);
+      return Fail(Problem::SliceResultInvalid, outWhy);
     *dst = std::move(s);
     return true;
   };
@@ -7356,6 +7373,17 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
       ok = SliceConeObliqueOpenNotch(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
       if (handled)
         return ok;
+      // Nothing took the cut. For a cylinder or cone, say which cut it was rather than "flat faces
+      // only", which reads as though the user picked the wrong object (GitHub #516, REQ-201).
+      // Every tilted cylinder cut is handled above, so a cylinder reaches here only along its axis;
+      // a cone also reaches here when the cut is steeper than its side.
+      if (solid.recipe.kind == PrimitiveKind::Cylinder || solid.recipe.kind == PrimitiveKind::Cone) {
+        const double along = std::fabs(ray3d::Dot(upn, ray3d::Normalize(solid.recipe.frame.zAxis)));
+        if (along <= 1e-6)
+          return Fail(Problem::SliceCutAlongCurvedAxis, outWhy);
+        if (solid.recipe.kind == PrimitiveKind::Cone)
+          return Fail(Problem::SliceCutTooSteepForCone, outWhy);
+      }
       return Fail(Problem::SliceCurvedFace, outWhy);
     }
   }
@@ -7452,7 +7480,7 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
       }
     }
     if (cross.size() != 2)
-      return Fail(Problem::SliceResultComplex, outWhy);
+      return Fail(Problem::SliceCutSeveralOutlines, outWhy);
     if (ra.size() >= 3)
       above.push_back(PolyFace{ra, f.surface.frame.zAxis});
     if (rb.size() >= 3)
@@ -7494,7 +7522,7 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
   }
   for (char c : used) {
     if (!c)
-      return Fail(Problem::SliceResultComplex, outWhy);  // cross-section is more than one loop
+      return Fail(Problem::SliceCutSeveralOutlines, outWhy);  // cross-section is more than one loop
   }
   if (capRing.size() < 3)
     return Fail(Problem::SlicePlaneMissesSolid, outWhy);
@@ -7566,13 +7594,13 @@ bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNo
     if (std::fabs(ray3d::Dot(ray3d::Sub(f.surface.frame.origin, planePoint), frame.zAxis)) > 1e-9)
       continue;
     if (cut)
-      return fail(Problem::SliceResultComplex);  // more than one face on the plane
+      return fail(Problem::SliceCutSeveralOutlines);  // more than one face on the plane
     cut = &f;
   }
   if (!cut)
     return fail(Problem::SlicePlaneMissesSolid);
   if (cut->loops.size() != 1)
-    return fail(Problem::SliceResultComplex);  // a section with holes is increment 2
+    return fail(Problem::SectionHasHole);  // a section with holes is increment 2 (#520)
 
   // Every edge must be expressible as a straight or circular segment, because that is what a
   // \ref Path is. An `Ellipse` — what an OBLIQUE cut of a cylinder produces — and an `Intersection`
@@ -7580,11 +7608,13 @@ bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNo
   // measured figure, and one that is quietly the wrong shape is the failure REQ-201 exists to stop.
   const std::vector<EdgeUse>& uses = cut->loops.front().uses;
   if (uses.size() < 2)
-    return fail(Problem::SliceResultComplex);
+    return fail(Problem::SliceResultInvalid);
   for (const EdgeUse& u : uses) {
     const CurveKind k = above.edges[static_cast<std::size_t>(u.edge)].kind;
+    if (k == CurveKind::Ellipse)
+      return fail(Problem::SectionEllipse);  // named for what it is, not "flat faces only" (#516)
     if (k != CurveKind::Line && k != CurveKind::Arc)
-      return fail(Problem::SliceCurvedFace);
+      return fail(Problem::SectionCurve);
   }
 
   // The `above` piece's cut face looks DOWN — its outward normal points away from the material

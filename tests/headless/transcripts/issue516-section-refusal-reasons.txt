@@ -1,0 +1,84 @@
+# GitHub issue #516 — a refused cut of a cylinder or cone names the limit it actually hit.
+#
+# Before: a tilted cut clipping a cylinder's end said "the cut would split the solid into disjoint
+# pieces", and a tilted cut SLICE makes without complaint said, from SECTION, "this release slices
+# solids with flat faces only". Both are true of some other cut; neither of the one made here.
+# Each block below is one row of the issue's table, through the commands a user types.
+#
+# The UCS is turned rather than moved, because typed coordinates are two-dimensional outside 3DPOLY;
+# the solids are placed so the UCS plane through the origin crosses them where each row needs.
+
+NEW
+
+# --- a tilted cut that crosses an end cap ---------------------------------------------------------
+# CYLINDER r 30 from z -25 to 25, cut at 45 degrees through its centre: the ellipse runs off the side
+# and across both caps.
+CMD CYLINDER 0,0,-25 30 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A tilted cut that crosses the end of a cylinder or cone is not supported yet."
+ESC
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+
+# --- a tilted cut between the caps: SLICE cuts it, SECTION names the ellipse ------------------
+NEW
+CMD CYLINDER 0,0,-100 30 200
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — This cut is an ellipse, which a section outline cannot hold yet."
+ESC
+EXPECT POLYLINES 0
+CMD UCS
+CMD W
+CMD SELECT
+ESC
+BOX -300 -300 300 300
+CMD SLICE
+CMD 0,0
+CMD 10,0
+CMD 0,10,10
+CMD B
+EXPECT LOG "SLICE — 1 solid(s) cut into 2 piece(s)."
+EXPECT SOLIDS 2
+
+# --- a cut along the axis, of a cylinder and of a cone --------------------------------------------
+NEW
+CMD CYLINDER 0,0,-25 30 50
+CMD UCS
+CMD X
+CMD 90
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A cut parallel to a cylinder's or cone's axis is not supported yet."
+ESC
+
+NEW
+CMD CONE 0,0,-25 30 15 50
+CMD UCS
+CMD X
+CMD 90
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A cut parallel to a cylinder's or cone's axis is not supported yet."
+ESC
+
+# --- and the cut the kernel does take still works ---------------------------------------------
+NEW
+CMD CYLINDER 0,0,-25 30 50
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+CHECK ALL

@@ -71,7 +71,7 @@ CMD 258,0,-8
 CMD 262,0,18
 CMD 260,6,5
 CMD B
-EXPECT LOG "disjoint pieces"
+EXPECT LOG "A tilted cut that crosses the end of a cylinder or cone is not supported yet."
 EXPECT SOLIDS 7
 
 # --- Solids survive a .gs save and reopen ------------------------------------------------
