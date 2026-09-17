@@ -2753,6 +2753,17 @@ struct AppCommandState {
   std::vector<EntityAttributes> blockRefWorldSolidAttrs;
   std::uint64_t blockRefWorldSolidsSig = 0;
 
+  /// Pipe runs (issue #486 increment B1 / REQ-345). The entity IS the path (topology); the swept
+  /// solids below are derived display data, rebuilt from \ref cadPipeRuns whenever it changes and
+  /// never persisted — the same "piping owns topology, blocks own geometry" split CadPipeRun's own
+  /// doc comment explains, and the same shape \ref blockRefWorldSolids already uses for a derived
+  /// solid array.
+  std::vector<CadPipeRun> cadPipeRuns;
+  std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<CadSolidPtr> pipeRunWorldSolids;
+  std::vector<EntityAttributes> pipeRunWorldSolidAttrs;
+  std::uint64_t pipeRunWorldSolidsSig = 0;
+
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
   std::vector<EntityAttributes> cadTableAttrs;

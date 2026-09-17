@@ -954,6 +954,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/SurfaceVolumeTests.cpp
     tests/CadTableTests.cpp
     tests/CadBlockTests.cpp
+    tests/CadPipeRunTests.cpp
     tests/SurfaceStatsTests.cpp
     tests/WatershedTests.cpp
     tests/TinVolumeTests.cpp

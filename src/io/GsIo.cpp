@@ -1357,6 +1357,31 @@ json BuildRoot(const AppCommandState& st) {
     doc["solidAttrs"] = std::move(solidAttrs);
   }
 
+  // Pipe runs (issue #486 increment B1 / REQ-345). Additive and omitted when there are none. Only
+  // the PATH and its size/class labels are written — never the swept solid, which
+  // `RebuildPipeRunWorldSolids` derives from this on load, the same "topology, not geometry" split
+  // CadPipeRun's own doc comment explains.
+  if (!st.cadPipeRuns.empty()) {
+    json pipeRuns = json::array();
+    for (const CadPipeRun& r : st.cadPipeRuns) {
+      json o;
+      o["vertsXyz"] = r.vertsXyz;
+      if (!r.nominalSize.empty())
+        o["nominalSize"] = r.nominalSize;
+      if (!r.pressureClassTag.empty())
+        o["pressureClassTag"] = r.pressureClassTag;
+      pipeRuns.push_back(std::move(o));
+    }
+    doc["pipeRuns"] = std::move(pipeRuns);
+    json pipeRunAttrs = json::array();
+    for (const auto& a : st.cadPipeRunAttrs) {
+      json o;
+      EntityAttributesToJson(a, o);
+      pipeRunAttrs.push_back(std::move(o));
+    }
+    doc["pipeRunAttrs"] = std::move(pipeRunAttrs);
+  }
+
   // TIN surfaces (REQ-068). Additive and omitted when there are none, so a pre-REQ-068 drawing still
   // serializes byte-identically — the same ADR-020 (d) precedent the mesh section above follows.
   //
@@ -2537,6 +2562,32 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& o : doc["solidAttrs"])
       st.cadSolidAttrs.push_back(EntityAttributesFromJson(o));
   st.cadSolidAttrs.resize(st.cadSolids.size());  // keep the parallel arrays length-locked
+
+  // Pipe runs (issue #486 increment B1 / REQ-345). Guarded, so a drawing written before them
+  // simply has none. `pipeRunWorldSolidsSig` is left at its default (0) so the very next
+  // `RefreshSolidDisplayGeometry` call rebuilds the swept solids from the loaded path rather than
+  // trusting whatever was cached before the load.
+  st.cadPipeRuns.clear();
+  st.cadPipeRunAttrs.clear();
+  st.pipeRunWorldSolids.clear();
+  st.pipeRunWorldSolidAttrs.clear();
+  st.pipeRunWorldSolidsSig = 0;
+  if (doc.contains("pipeRuns") && doc["pipeRuns"].is_array()) {
+    for (const auto& el : doc["pipeRuns"]) {
+      CadPipeRun r;
+      if (el.contains("vertsXyz") && el["vertsXyz"].is_array())
+        r.vertsXyz = el["vertsXyz"].get<std::vector<double>>();
+      if (el.contains("nominalSize") && el["nominalSize"].is_string())
+        r.nominalSize = el["nominalSize"].get<std::string>();
+      if (el.contains("pressureClassTag") && el["pressureClassTag"].is_string())
+        r.pressureClassTag = el["pressureClassTag"].get<std::string>();
+      st.cadPipeRuns.push_back(std::move(r));
+    }
+  }
+  if (doc.contains("pipeRunAttrs") && doc["pipeRunAttrs"].is_array())
+    for (const auto& o : doc["pipeRunAttrs"])
+      st.cadPipeRunAttrs.push_back(EntityAttributesFromJson(o));
+  st.cadPipeRunAttrs.resize(st.cadPipeRuns.size());  // keep the parallel arrays length-locked
 
   // TIN surfaces (REQ-068). Guarded, so a drawing written before them simply has none.
   st.cadSurfaces.clear();

@@ -11,6 +11,7 @@
 #include "HatchBoundary.hpp"
 #include "geom2d.hpp"
 #include "util/benchscene.hpp"
+#include "util/cadpiperun.hpp"  // CadPipeRun solid generation (issue #486 increment B1 / REQ-345)
 #include "util/meshgeom.hpp"
 #include "util/tinbuild.hpp"
 #include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
@@ -28480,6 +28481,60 @@ static void RebuildBlockRefWorldSolids(AppCommandState& st) {
   }
 }
 
+static bool PipeRunWorldSolidVisible(const AppCommandState& st, size_t solidIndex) {
+  if (solidIndex >= st.pipeRunWorldSolids.size())
+    return false;
+  if (!st.pipeRunWorldSolids[solidIndex])
+    return false;
+  if (solidIndex >= st.pipeRunWorldSolidAttrs.size())
+    return true;
+  const EntityAttributes& a = st.pipeRunWorldSolidAttrs[solidIndex];
+  if (CadEntityIdHidden(&st.hiddenEntityIds, a.id))
+    return false;
+  const CadLayerRow* lr = FindDrawingLayerRowCi(st, a.layer);
+  return !(lr && (!lr->on || lr->frozen));
+}
+
+static std::uint64_t PipeRunWorldSolidsSig(const AppCommandState& st) {
+  std::uint64_t sig = 1469598103934665603ull;
+  const auto mix = [&sig](std::uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
+  mix(st.cadPipeRuns.size());
+  for (const CadPipeRun& r : st.cadPipeRuns) {
+    mix(r.vertsXyz.size());
+    for (double v : r.vertsXyz) {
+      std::uint64_t bits;
+      std::memcpy(&bits, &v, sizeof(bits));
+      mix(bits);
+    }
+    for (unsigned char c : r.nominalSize)
+      mix(c);
+  }
+  return sig;
+}
+
+/// Rebuilds \ref AppCommandState::pipeRunWorldSolids from \ref AppCommandState::cadPipeRuns
+/// (issue #486 increment B1) — the same "derived, gated by a signature over the real state" shape
+/// \ref RebuildBlockRefWorldSolids already uses. Each run can contribute more than one solid (one
+/// cylinder per straight segment, \ref CadBuildPipeRunSolids), so the run's own attributes are
+/// replicated across however many solids it actually produced.
+static void RebuildPipeRunWorldSolids(AppCommandState& st) {
+  const std::uint64_t sig = PipeRunWorldSolidsSig(st);
+  if (sig == st.pipeRunWorldSolidsSig)
+    return;
+  st.pipeRunWorldSolidsSig = sig;
+  st.pipeRunWorldSolids.clear();
+  st.pipeRunWorldSolidAttrs.clear();
+  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
+    const EntityAttributes runAttr = ri < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[ri] : EntityAttributes{};
+    std::vector<CadSolidPtr> segSolids;
+    (void)CadBuildPipeRunSolids(st.cadPipeRuns[ri], &segSolids);
+    for (CadSolidPtr& sp : segSolids) {
+      st.pipeRunWorldSolids.push_back(std::move(sp));
+      st.pipeRunWorldSolidAttrs.push_back(runAttr);
+    }
+  }
+}
+
 namespace {
 
 /// The default colour a solid draws in when nothing overrides it — a mid grey that reads as a
@@ -28547,6 +28602,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
                              st.solidDisplayCache.end());
 
   RebuildBlockRefWorldSolids(st);
+  RebuildPipeRunWorldSolids(st);
 
   const double tol = kSolidChordToleranceFt;
   const int isolines = std::clamp(st.viewportSolidIsolines, 0, kSolidMaxIsolines);
@@ -28599,6 +28655,8 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
   for (const CadSolidPtr& sp : st.cadSolids)
     tessellateSolidPtr(sp);
   for (const CadSolidPtr& sp : st.blockRefWorldSolids)
+    tessellateSolidPtr(sp);
+  for (const CadSolidPtr& sp : st.pipeRunWorldSolids)
     tessellateSolidPtr(sp);
 
   // ----- Assembly: coalesce visible solids into a handful of draw batches (GitHub issue #194) -----
@@ -28663,6 +28721,34 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
       continue;
     const EntityAttributes& attr =
         i < st.blockRefWorldSolidAttrs.size() ? st.blockRefWorldSolidAttrs[i] : kDefaultSolidAttrs;
+    const CadLayerRow* lr = FindDrawingLayerRowCi(st, attr.layer);
+    VisibleSolid vs;
+    vs.tess = &*it;
+    ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
+    vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
+    visible.push_back(vs);
+    mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
+    mix(it->triVerts.size());
+    mix(it->edgeVerts.size());
+    for (float c : vs.rgba) {
+      std::uint32_t bits;
+      std::memcpy(&bits, &c, sizeof(bits));
+      mix(bits);
+    }
+    std::uint32_t lwBits;
+    std::memcpy(&lwBits, &vs.lineweightMm, sizeof(lwBits));
+    mix(lwBits);
+  }
+  for (size_t i = 0; i < st.pipeRunWorldSolids.size(); ++i) {
+    if (!PipeRunWorldSolidVisible(st, i))
+      continue;
+    const CadSolidPtr& sp = st.pipeRunWorldSolids[i];
+    const auto it = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
+                                 [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
+    if (it == st.solidDisplayCache.end() || it->empty())
+      continue;
+    const EntityAttributes& attr =
+        i < st.pipeRunWorldSolidAttrs.size() ? st.pipeRunWorldSolidAttrs[i] : kDefaultSolidAttrs;
     const CadLayerRow* lr = FindDrawingLayerRowCi(st, attr.layer);
     VisibleSolid vs;
     vs.tess = &*it;
