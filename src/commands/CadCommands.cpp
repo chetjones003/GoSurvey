@@ -25559,6 +25559,27 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
                            st.cadBlockRefs[bi].xf.x, st.cadBlockRefs[bi].xf.y, st.cadBlockRefs[bi].xf.z);
     for (const CadBlockWorldSeg& s : segs)
       bd2 = std::min(bd2, d2Segment(s.x0, s.y0, s.z0, s.x1, s.y1, s.z1));
+    // A fitting block whose content is entirely a 3D solid (a piping part, not a 2D symbol) had NO
+    // line segments to test above, so `bd2` fell back to the single insertion-origin point and the
+    // block was effectively unclickable across its whole visible body (issue #496 follow-up). Walk
+    // its solids' edges the same way the standalone-CadSolid loop above does.
+    std::vector<CadBlockWorldSolid> blockSolids;
+    CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[bi], dummy, &blockSolids);
+    for (const CadBlockWorldSolid& ws : blockSolids) {
+      if (!ws.solid)
+        continue;
+      for (const brep::Edge& ed : ws.solid->edges) {
+        const int steps = ed.kind == brep::CurveKind::Arc ? 24 : 1;
+        ray3d::Vec3 prev = brep::EdgePointAt(*ws.solid, ed, 0.0);
+        for (int i = 1; i <= steps; ++i) {
+          const ray3d::Vec3 next = brep::EdgePointAt(*ws.solid, ed, static_cast<double>(i) / steps);
+          bd2 = std::min(bd2, d2Segment(static_cast<float>(prev.x), static_cast<float>(prev.y),
+                                        static_cast<float>(prev.z), static_cast<float>(next.x),
+                                        static_cast<float>(next.y), static_cast<float>(next.z)));
+          prev = next;
+        }
+      }
+    }
     consider(e, bd2);
   }
 

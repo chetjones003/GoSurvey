@@ -2038,3 +2038,34 @@ TEST_CASE("SUBTRACT still refuses when the bore is wider than the cone's narrow 
   }
   CHECK(refused);
 }
+
+TEST_CASE("PickClosestCadEntity finds a block reference made entirely of solid geometry",
+          "[issue496][block][solid][pick]") {
+  // A piping fitting block whose content is a 3D solid and nothing else (no lines/circles) — the
+  // shape most of the real fitting library actually has. Selection previously fell back to testing
+  // only the block's own insertion-origin point, so the block was unclickable anywhere across its
+  // visible body.
+  AppCommandState st;
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 2.0, 2.0, 4.0, &box, &why));  // x,y in [-1,1], z in [0,4]
+
+  CadBlockDefinition def;
+  def.name = "FIT";
+  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  st.blockDefs.push_back(def);
+
+  CadBlockRef r;
+  r.defName = "FIT";
+  st.cadBlockRefs.push_back(r);
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+
+  // On the box's top-face edge (y=1, x in [-1,1], z=4) but far from the insertion origin (0,0) —
+  // exactly the point the old origin-only fallback would miss by a wide margin.
+  SelectedEntity hit{};
+  float distSq = 0.f;
+  REQUIRE(PickClosestCadEntity(st, 0.0, 1.0, 0.01f, &hit, &distSq));
+  CHECK(hit.type == SelectedEntity::Type::BlockRef);
+  CHECK(hit.index == 0);
+}
