@@ -7220,11 +7220,17 @@ void RequireCorners(const std::vector<Vec3>& got, const std::vector<Vec3>& want)
   }
 }
 
-/// Volume of a tessellation, about a reference point so survey magnitudes do not cancel.
+/// Volume of a tessellation, about a reference point so survey magnitudes do not cancel. The edge and
+/// isoline passes the viewport also draws must succeed on the same piece.
 double MeshVolume(const Solid& s, const Vec3& ref) {
   brep::Tessellation t;
   Problem why = Problem::Ok;
   REQUIRE(brep::Tessellate(s, 0.01, &t, &why));
+  std::vector<double> lines;
+  REQUIRE(brep::TessellateEdges(s, 0.01, &lines, &why));
+  REQUIRE_FALSE(lines.empty());
+  lines.clear();
+  REQUIRE(brep::TessellateIsolines(s, 4, 0.01, &lines, &why));
   double v = 0.0;
   auto P = [&](std::uint32_t i) {
     return Vec3{t.vertsXyz[3 * i] - ref.x, t.vertsXyz[3 * i + 1] - ref.y, t.vertsXyz[3 * i + 2] - ref.z};
