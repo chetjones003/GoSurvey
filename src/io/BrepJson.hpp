@@ -380,8 +380,14 @@ using nlohmann::json;
     if (rk >= static_cast<int>(brep::PrimitiveKind::None) &&
         rk <= static_cast<int>(brep::PrimitiveKind::Polysolid))
       out->recipe.kind = static_cast<brep::PrimitiveKind>(rk);
-    if (rc.contains("frame"))
-      (void)BrepFrameFromJson(rc["frame"], &out->recipe.frame);  // cosmetic; never rebuilds geometry
+    // The frame places the primitive, and the curved slice recognisers DO rebuild geometry from it
+    // (GitHub #515 follow-up, D-2026-09-17-a). A recipe whose frame is missing or unreadable is dropped
+    // rather than kept at the world origin: the topology is the stored truth (ADR-045 (c)), so this
+    // costs a Properties readout, where keeping it would cost a silently misplaced cut.
+    // Read whenever present, whatever the kind: a kind-None recipe still carries a frame that later
+    // transforms have moved, and a resave must write it back byte-identically (REQ-079).
+    const bool frameRead = rc.contains("frame") && BrepFrameFromJson(rc["frame"], &out->recipe.frame);
+    const bool frameUnreadable = out->recipe.kind != brep::PrimitiveKind::None && !frameRead;
     out->recipe.length = rc.value("length", 0.0);
     out->recipe.width = rc.value("width", 0.0);
     out->recipe.height = rc.value("height", 0.0);
@@ -389,10 +395,12 @@ using nlohmann::json;
     out->recipe.radius2 = rc.value("radius2", 0.0);
     out->recipe.sides = rc.value("sides", 0);
     out->recipe.justify = static_cast<brep::Justify>(rc.value("justify", 0));
+    if (frameUnreadable)
+      out->recipe = brep::Recipe{};  // every field read above goes with it
     // REQ-317: the one recipe field whose length is not fixed. Read defensively and DISCARDED on a
     // problem rather than refusing the solid - the topology is the stored truth (ADR-045 (c)), so a
     // damaged recipe costs a Properties readout and nothing else.
-    if (rc.contains("path") && rc["path"].is_object()) {
+    if (!frameUnreadable && rc.contains("path") && rc["path"].is_object()) {
       const json& jp = rc["path"];
       brep::Path p;
       bool ok = jp.contains("start") && jp["start"].is_array() && jp["start"].size() == 2;
