@@ -423,7 +423,7 @@ TEST_CASE("Every failure reason and every primitive has its own name", "[brep][r
       Problem::SliceCurvedFace,
       Problem::SliceResultComplex,
       Problem::SliceCutCrossesCurvedEnd,
-      Problem::SliceCutAlongCurvedAxis,
+      Problem::SliceCutConeOffAxis,
       Problem::SliceCutTooSteepForCone,
       Problem::SliceCutSeveralOutlines,
       Problem::SliceResultInvalid,
@@ -7141,17 +7141,14 @@ TEST_CASE("SECTION and SLICE name the limit a curved cut actually hit", "[brep][
     REQUIRE(std::string(brep::ProblemText(why)).find("ellipse") != std::string::npos);
   }
 
-  SECTION("a cut along the axis: the direction, not 'flat faces only'") {
-    Solid cyl, cone;
-    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -25.0), 30.0, 50.0, &cyl, &why));
+  SECTION("a cut parallel to a cone's axis but off it: the hyperbola, not 'flat faces only'") {
+    // A cut along a cylinder's axis, or through a cone's, is taken since #517 ([issue517]).
+    Solid cone;
     REQUIRE(brep::MakeCone(PlaneAlong(World(), -25.0), 30.0, 15.0, 50.0, &cone, &why));
-    for (const Solid* s : {&cyl, &cone}) {
-      REQUIRE_FALSE(brep::SectionLoop(*s, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
-      REQUIRE(why == Problem::SliceCutAlongCurvedAxis);
-      // A plane parallel to the axis but off it is the same limit.
-      REQUIRE_FALSE(brep::Slice(*s, Vec3{10, 0, 0}, Vec3{1, 0, 0}, brep::SliceKeep::Both, &a, &b, &why));
-      REQUIRE(why == Problem::SliceCutAlongCurvedAxis);
-    }
+    REQUIRE_FALSE(brep::SectionLoop(cone, Vec3{0, 10, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SliceCutConeOffAxis);
+    REQUIRE_FALSE(brep::Slice(cone, Vec3{10, 0, 0}, Vec3{1, 0, 0}, brep::SliceKeep::Both, &a, &b, &why));
+    REQUIRE(why == Problem::SliceCutConeOffAxis);
   }
 
   SECTION("a cut the kernel does take is unchanged: across the axis") {
@@ -7179,5 +7176,193 @@ TEST_CASE("SECTION and SLICE name the limit a curved cut actually hit", "[brep][
     INFO(brep::ProblemText(why));
     REQUIRE(why == Problem::SliceCutSeveralOutlines);
     REQUIRE(std::string(brep::ProblemText(why)).find("disjoint") == std::string::npos);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #517: a cut parallel to a cylinder's or cone's axis is taken — the vertical section
+// through a pipe, culvert or manhole.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// The corners of a closed straight-sided section, in world coordinates.
+std::vector<Vec3> SectionCornersWorld(const ucs::Ucs& plane, const brep::Path& loop) {
+  std::vector<Vec3> out;
+  for (const brep::PathSeg& seg : loop.segs) {
+    REQUIRE(seg.sweep == 0.0);  // every edge of this cut is straight
+    out.push_back(ucs::PlaneToWorld(plane, seg.end));
+  }
+  return out;
+}
+
+/// Signed area of a closed straight-sided path in its own plane (CCW positive).
+double PathArea(const brep::Path& loop) {
+  double a = 0.0;
+  ucs::Point2D prev = loop.start;
+  for (const brep::PathSeg& seg : loop.segs) {
+    a += prev.x * seg.end.y - seg.end.x * prev.y;
+    prev = seg.end;
+  }
+  return 0.5 * a;
+}
+
+/// Every expected corner is matched by a section corner within REQ-101's +/-0.002 ft, and the counts
+/// agree — so the outline is that polygon and no other.
+void RequireCorners(const std::vector<Vec3>& got, const std::vector<Vec3>& want) {
+  REQUIRE(got.size() == want.size());
+  for (const Vec3& w : want) {
+    double best = 1e300;
+    for (const Vec3& g : got)
+      best = std::min(best, ray3d::Length(ray3d::Sub(g, w)));
+    INFO("corner " << w.x << ", " << w.y << ", " << w.z << " nearest " << best);
+    REQUIRE(best <= 0.002);
+  }
+}
+
+/// Volume of a tessellation, about a reference point so survey magnitudes do not cancel.
+double MeshVolume(const Solid& s, const Vec3& ref) {
+  brep::Tessellation t;
+  Problem why = Problem::Ok;
+  REQUIRE(brep::Tessellate(s, 0.01, &t, &why));
+  double v = 0.0;
+  auto P = [&](std::uint32_t i) {
+    return Vec3{t.vertsXyz[3 * i] - ref.x, t.vertsXyz[3 * i + 1] - ref.y, t.vertsXyz[3 * i + 2] - ref.z};
+  };
+  for (std::size_t k = 0; k + 2 < t.indices.size(); k += 3)
+    v += ray3d::Dot(P(t.indices[k]), ray3d::Cross(P(t.indices[k + 1]), P(t.indices[k + 2]))) / 6.0;
+  return v;
+}
+
+} // namespace
+
+TEST_CASE("A cut parallel to a cylinder's or cone's axis sections and slices", "[brep][issue517]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  Solid above, below;
+
+  SECTION("a cylinder cut through its axis: a rectangle 2r by h") {
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -25.0), 30.0, 50.0, &cyl, &why));  // z -25..25
+    REQUIRE(brep::SectionLoop(cyl, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    REQUIRE(loop.closed);
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {{-30, 0, -25}, {30, 0, -25}, {30, 0, 25}, {-30, 0, 25}});
+    REQUIRE(PathArea(loop) == Approx(60.0 * 50.0).epsilon(1e-12));  // CCW about the normal asked for
+
+    // SLICE: two half-cylinders, each on its own side, each half the volume.
+    const double whole = brep::ComputeMassProperties(cyl).volume;
+    REQUIRE(brep::Slice(cyl, Vec3{0, 0, 0}, Vec3{0, 1, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    const brep::MassProperties ma = brep::ComputeMassProperties(above);
+    const brep::MassProperties mb = brep::ComputeMassProperties(below);
+    REQUIRE(ma.valid);
+    REQUIRE(mb.valid);
+    REQUIRE(ma.volume == Approx(0.5 * whole).epsilon(1e-9));
+    REQUIRE(mb.volume == Approx(0.5 * whole).epsilon(1e-9));
+    REQUIRE(ma.centroidValid);
+    REQUIRE(mb.centroidValid);
+    REQUIRE(ma.centroid.y == Approx(4.0 * 30.0 / (3.0 * kPi)).epsilon(1e-9));  // half-disc centroid, +pn side
+    REQUIRE(mb.centroid.y == Approx(-4.0 * 30.0 / (3.0 * kPi)).epsilon(1e-9));
+    REQUIRE(MeshVolume(above, Vec3{}) == Approx(ma.volume).epsilon(1e-3));
+  }
+
+  SECTION("a cylinder cut off its axis: a narrower rectangle, the pieces a segment and the rest") {
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -25.0), 30.0, 50.0, &cyl, &why));
+    const double d = 10.0;
+    const double halfChord = std::sqrt(30.0 * 30.0 - d * d);
+    REQUIRE(brep::SectionLoop(cyl, Vec3{d, 0, 0}, Vec3{1, 0, 0}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop), {{d, -halfChord, -25},
+                                                       {d, halfChord, -25},
+                                                       {d, halfChord, 25},
+                                                       {d, -halfChord, 25}});
+    REQUIRE(PathArea(loop) == Approx(2.0 * halfChord * 50.0).epsilon(1e-12));
+
+    REQUIRE(brep::Slice(cyl, Vec3{d, 0, 0}, Vec3{1, 0, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    const double segment = 30.0 * 30.0 * std::acos(d / 30.0) - d * halfChord;  // the smaller part of the disc
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(segment * 50.0).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(below).volume ==
+            Approx((kPi * 30.0 * 30.0 - segment) * 50.0).epsilon(1e-9));
+    REQUIRE(MeshVolume(below, Vec3{}) == Approx((kPi * 30.0 * 30.0 - segment) * 50.0).epsilon(1e-3));
+
+    // Keep one side only, from the other direction: the normal's sign picks the side.
+    Solid only;
+    REQUIRE(brep::Slice(cyl, Vec3{d, 0, 0}, Vec3{-1, 0, 0}, brep::SliceKeep::Above, &only, nullptr, &why));
+    REQUIRE(brep::ComputeMassProperties(only).volume ==
+            Approx((kPi * 30.0 * 30.0 - segment) * 50.0).epsilon(1e-9));
+  }
+
+  SECTION("a cone cut through its axis: a trapezoid, and a pointed cone a triangle") {
+    Solid frustum, pointed;
+    REQUIRE(brep::MakeCone(PlaneAlong(World(), -25.0), 30.0, 15.0, 50.0, &frustum, &why));
+    REQUIRE(brep::MakeCone(PlaneAlong(World(), -25.0), 30.0, 0.0, 50.0, &pointed, &why));
+
+    REQUIRE(brep::SectionLoop(frustum, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {{-30, 0, -25}, {30, 0, -25}, {15, 0, 25}, {-15, 0, 25}});
+    REQUIRE(PathArea(loop) == Approx(0.5 * (60.0 + 30.0) * 50.0).epsilon(1e-12));
+
+    REQUIRE(brep::SectionLoop(pointed, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop), {{-30, 0, -25}, {30, 0, -25}, {0, 0, 25}});
+    REQUIRE(PathArea(loop) == Approx(0.5 * 60.0 * 50.0).epsilon(1e-12));
+
+    for (const Solid* s : {&frustum, &pointed}) {
+      const double whole = brep::ComputeMassProperties(*s).volume;
+      REQUIRE(brep::Slice(*s, Vec3{0, 0, 0}, Vec3{1, 1, 0}, brep::SliceKeep::Both, &above, &below, &why));
+      REQUIRE(brep::ComputeMassProperties(above).volume == Approx(0.5 * whole).epsilon(1e-9));
+      REQUIRE(brep::ComputeMassProperties(below).volume == Approx(0.5 * whole).epsilon(1e-9));
+      REQUIRE(MeshVolume(above, Vec3{}) == Approx(0.5 * whole).epsilon(1e-3));
+    }
+  }
+
+  SECTION("a cone cut parallel to its axis but off it is a hyperbola: refused by that name") {
+    Solid cone;
+    REQUIRE(brep::MakeCone(PlaneAlong(World(), -25.0), 30.0, 15.0, 50.0, &cone, &why));
+    REQUIRE_FALSE(brep::SectionLoop(cone, Vec3{10, 0, 0}, Vec3{1, 0, 0}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SliceCutConeOffAxis);
+    REQUIRE(std::string(brep::ProblemText(why)).find("hyperbola") != std::string::npos);
+    REQUIRE_FALSE(brep::Slice(cone, Vec3{10, 0, 0}, Vec3{1, 0, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SliceCutConeOffAxis);
+  }
+
+  SECTION("a plane beside the cylinder, or touching it, misses it") {
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 30.0, 50.0, &cyl, &why));
+    REQUIRE_FALSE(brep::SectionLoop(cyl, Vec3{30, 0, 0}, Vec3{1, 0, 0}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+    REQUIRE_FALSE(brep::SectionLoop(cyl, Vec3{0, -45, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+  }
+
+  SECTION("at survey magnitude on a tilted frame: the rectangle and trapezoid within 0.002 ft") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    auto at = [&](double x, double y, double z) { return ucs::UcsToWorld(base, Vec3{x, y, z}); };
+    Solid cyl, cone;
+    REQUIRE(brep::MakeCylinder(base, 30.0, 50.0, &cyl, &why));
+    REQUIRE(brep::MakeCone(base, 30.0, 15.0, 50.0, &cone, &why));
+    const brep::MassProperties before = brep::ComputeMassProperties(cyl);
+
+    const double d = 10.0;
+    const double halfChord = std::sqrt(30.0 * 30.0 - d * d);
+    REQUIRE(brep::SectionLoop(cyl, at(d, 0.0, 25.0), base.xAxis, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop), {at(d, -halfChord, 0.0), at(d, halfChord, 0.0),
+                                                       at(d, halfChord, 50.0), at(d, -halfChord, 50.0)});
+    REQUIRE(PathArea(loop) == Approx(2.0 * halfChord * 50.0).epsilon(1e-9));
+
+    REQUIRE(brep::SectionLoop(cone, at(0.0, 0.0, 25.0), base.yAxis, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {at(-30.0, 0.0, 0.0), at(30.0, 0.0, 0.0), at(15.0, 0.0, 50.0), at(-15.0, 0.0, 50.0)});
+    REQUIRE(PathArea(loop) == Approx(0.5 * (60.0 + 30.0) * 50.0).epsilon(1e-9));
+
+    REQUIRE(brep::Slice(cyl, at(d, 0.0, 25.0), base.xAxis, brep::SliceKeep::Both, &above, &below, &why));
+    const double segment = 30.0 * 30.0 * std::acos(d / 30.0) - d * halfChord;
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(segment * 50.0).epsilon(1e-9));
+    REQUIRE(MeshVolume(above, base.origin) == Approx(segment * 50.0).epsilon(1e-3));
+
+    // The solid sectioned is the solid it was: SectionLoop takes it by const reference, and its
+    // measured shape agrees.
+    REQUIRE(brep::ComputeMassProperties(cyl).volume == before.volume);
+    REQUIRE(cyl.recipe.kind == brep::PrimitiveKind::Cylinder);
   }
 }

@@ -1820,8 +1820,8 @@ const char* ProblemText(Problem p) {
   case Problem::EdgeNonManifold: return "The surface is not manifold: an edge bounds more than two faces.";
   case Problem::SliceCutCrossesCurvedEnd:
     return "A tilted cut that crosses the end of a cylinder or cone is not supported yet.";
-  case Problem::SliceCutAlongCurvedAxis:
-    return "A cut parallel to a cylinder's or cone's axis is not supported yet.";
+  case Problem::SliceCutConeOffAxis:
+    return "A cut parallel to a cone's axis but not through it is a hyperbola, which is not supported yet.";
   case Problem::SliceCutTooSteepForCone:
     return "A cut steeper than a cone's own side is not supported yet.";
   case Problem::SliceCutSeveralOutlines:
@@ -7341,6 +7341,145 @@ struct ConeCutTransition {
   return Succeed(outWhy);
 }
 
+/// Cut a right circular cylinder or cone by a plane **parallel to its axis** — the vertical cut
+/// through a standing pipe, culvert or manhole (GitHub issue #517, REQ-314 / REQ-335). Every edge the
+/// cut makes is straight: two seam lines where the plane meets the side, and a chord across each cap.
+/// So a cylinder cut anywhere across its width leaves a rectangle, and a cone cut through its axis
+/// leaves a trapezoid (a triangle for a cone that comes to a point).
+///
+/// A cone cut parallel to its axis but NOT through it meets the side in a hyperbola, which the
+/// kernel's curves cannot hold; that is refused by name (\ref Problem::SliceCutConeOffAxis).
+///
+/// Each piece is the solid between one arc of the rim and its chord: a planar cap at each end (arc
+/// plus chord), one side face spanning that arc, and the planar cut face. A plane whose normal is
+/// within 1e-6 of perpendicular to the axis is taken as parallel — the oblique recognisers decline
+/// the same planes — which moves a vertex off the true plane by at most 1e-6 of the height.
+[[nodiscard]] bool SliceConicalAlongAxis(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                         SliceKeep keep, Solid* outAbove, Solid* outBelow, bool* handled,
+                                         Problem* outWhy) {
+  *handled = false;
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Cylinder && rc.kind != PrimitiveKind::Cone)
+    return false;
+  const ucs::Ucs& fr = rc.frame;
+  const Vec3 Z = fr.zAxis;
+  if (std::fabs(ray3d::Dot(pn, Z)) >= 1e-6)
+    return false;  // not parallel to the axis — another recogniser's cut
+
+  *handled = true;
+  const bool cone = rc.kind == PrimitiveKind::Cone;
+  const double r0 = rc.radius;
+  const double r1 = cone ? rc.radius2 : rc.radius;
+  const double h = rc.height;
+  const bool apex = !(r1 > 0.0);
+  const double scale = std::max(h, r0);
+  const double eps = 1e-7 * std::max(scale, 1.0);
+
+  // The plane's trace on the base: the points p with n.p = s, n the in-plane unit normal.
+  const Vec3 pl = ucs::WorldToUcs(fr, planePoint);
+  const double nx0 = ray3d::Dot(pn, fr.xAxis);
+  const double ny0 = ray3d::Dot(pn, fr.yAxis);
+  const double nLen = std::sqrt(nx0 * nx0 + ny0 * ny0);
+  const double nx = nx0 / nLen;
+  const double ny = ny0 / nLen;
+  const double s = nx * pl.x + ny * pl.y;  // signed distance of the axis from the plane, along -n
+  if (std::fabs(s) >= r0 - eps)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+  if (cone && std::fabs(s) > eps)
+    return Fail(Problem::SliceCutConeOffAxis, outWhy);  // a hyperbola, not a straight line
+  const double sCut = cone ? 0.0 : s;
+
+  // The rim points the plane passes through sit at angles phi -/+ alpha; the arc between them
+  // through phi is on the +n side ("above").
+  const double phi = std::atan2(ny, nx);
+  const double alpha = std::acos(std::clamp(sCut / r0, -1.0, 1.0));
+  auto wrap = [](double u) {
+    u = std::fmod(u, kTwoPi);
+    return u < 0.0 ? u + kTwoPi : u;
+  };
+
+  auto W = [&](double r, double u, double z) {
+    return ucs::UcsToWorld(fr, Vec3{r * std::cos(u), r * std::sin(u), z});
+  };
+
+  // Build the piece whose side runs CCW from u0 through u0 + span.
+  auto build = [&](double u0, double span, Solid* dst) -> bool {
+    const double u1 = u0 + span;
+    Solid s1;
+    const int b0 = AddVertex(&s1, W(r0, u0, 0.0));
+    const int b1 = AddVertex(&s1, W(r0, u1, 0.0));
+    const int t0 = apex ? AddVertex(&s1, ucs::UcsToWorld(fr, Vec3{0.0, 0.0, h})) : AddVertex(&s1, W(r1, u0, h));
+    const int t1 = apex ? t0 : AddVertex(&s1, W(r1, u1, h));
+
+    const Vec3 baseC = fr.origin;
+    const Vec3 topC = ray3d::Add(fr.origin, ray3d::Scale(Z, h));
+    const int arcB = AddArc(&s1, b0, b1, baseC, Z, span);
+    const int chordB = AddLine(&s1, b0, b1);
+    const int sm0 = AddLine(&s1, b0, t0);
+    const int sm1 = AddLine(&s1, b1, t1);
+    int arcT = -1;
+    int chordT = -1;
+    if (!apex) {
+      arcT = AddArc(&s1, t0, t1, topC, Z, span);
+      chordT = AddLine(&s1, t0, t1);
+    }
+
+    // Caps: the material is between the arc and its chord.
+    s1.faces.push_back(MakePlaneFace(baseC, ray3d::Scale(Z, -1.0), {{chordB, false}, {arcB, true}}));
+    if (!apex)
+      s1.faces.push_back(MakePlaneFace(topC, Z, {{arcT, false}, {chordT, true}}));
+
+    Face side;
+    side.surface.kind = cone ? SurfaceKind::Cone : SurfaceKind::Cylinder;
+    side.surface.frame = fr;
+    side.surface.radius = r0;
+    side.surface.radius2 = r1;
+    side.surface.height = h;
+    side.uStart = u0;
+    side.uEnd = u1;
+    Loop lp;
+    if (apex)
+      lp.uses = {{arcB, false}, {sm1, false}, {sm0, true}};
+    else
+      lp.uses = {{arcB, false}, {sm1, false}, {arcT, true}, {sm0, true}};
+    side.loops.push_back(std::move(lp));
+    s1.faces.push_back(std::move(side));
+
+    // The cut face lies on the caller's plane, so it takes the caller's point and normal exactly;
+    // it faces away from the material, which is on the side of the arc's midpoint.
+    const Vec3 mid{std::cos(u0 + 0.5 * span), std::sin(u0 + 0.5 * span), 0.0};
+    const Vec3 cutN = mid.x * nx + mid.y * ny > 0.0 ? ray3d::Scale(pn, -1.0) : pn;
+    if (apex)
+      s1.faces.push_back(MakePlaneFace(planePoint, cutN, {{sm0, false}, {sm1, true}, {chordB, true}}));
+    else
+      s1.faces.push_back(
+          MakePlaneFace(planePoint, cutN, {{sm0, false}, {chordT, false}, {sm1, true}, {chordB, true}}));
+
+    AddSingleShell(&s1);
+    if (Validate(s1) != Problem::Ok)
+      return Fail(Problem::SliceResultInvalid, outWhy);
+    *dst = std::move(s1);
+    return true;
+  };
+
+  const double aboveU0 = wrap(phi - alpha);
+  const double belowU0 = wrap(phi + alpha);
+  const double aboveSpan = 2.0 * alpha;
+  const double belowSpan = kTwoPi - 2.0 * alpha;
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+
+  // Prove both build before writing either output (REQ-201).
+  Solid probe;
+  if (!build(aboveU0, aboveSpan, &probe) || !build(belowU0, belowSpan, &probe))
+    return false;  // build() already set outWhy
+  if (wantAbove && outAbove && !build(aboveU0, aboveSpan, outAbove))
+    return false;
+  if (wantBelow && outBelow && !build(belowU0, belowSpan, outBelow))
+    return false;
+  return Succeed(outWhy);
+}
+
 } // namespace
 
 bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, SliceKeep keep,
@@ -7358,7 +7497,8 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
         hasCurved = true;
     if (hasCurved) {
       // Curved cuts the kernel can hold: perpendicular to a cylinder / cone axis (a circle, B1),
-      // or oblique through a cylinder (an ellipse, B2b-1).
+      // oblique through a cylinder or cone (an ellipse, B2b-1), or parallel to the axis (straight
+      // seams and chords, #517).
       const Vec3 upn = ray3d::Normalize(planeNormal);
       bool handled = false;
       bool ok = SliceCurvedPrimitive(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
@@ -7373,17 +7513,15 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
       ok = SliceConeObliqueOpenNotch(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
       if (handled)
         return ok;
-      // Nothing took the cut. For a cylinder or cone, say which cut it was rather than "flat faces
-      // only", which reads as though the user picked the wrong object (GitHub #516, REQ-201).
-      // Every tilted cylinder cut is handled above, so a cylinder reaches here only along its axis;
-      // a cone also reaches here when the cut is steeper than its side.
-      if (solid.recipe.kind == PrimitiveKind::Cylinder || solid.recipe.kind == PrimitiveKind::Cone) {
-        const double along = std::fabs(ray3d::Dot(upn, ray3d::Normalize(solid.recipe.frame.zAxis)));
-        if (along <= 1e-6)
-          return Fail(Problem::SliceCutAlongCurvedAxis, outWhy);
-        if (solid.recipe.kind == PrimitiveKind::Cone)
-          return Fail(Problem::SliceCutTooSteepForCone, outWhy);
-      }
+      ok = SliceConicalAlongAxis(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
+      if (handled)
+        return ok;
+      // Nothing took the cut. For a cone, say which cut it was rather than "flat faces only", which
+      // reads as though the user picked the wrong object (GitHub #516, REQ-201). Every cylinder cut
+      // and every cut parallel to a cone's axis is handled above, so a cone reaches here only when
+      // the cut is steeper than its side.
+      if (solid.recipe.kind == PrimitiveKind::Cone)
+        return Fail(Problem::SliceCutTooSteepForCone, outWhy);
       return Fail(Problem::SliceCurvedFace, outWhy);
     }
   }

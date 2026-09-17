@@ -6499,6 +6499,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
   a filleted box). Acceptance added: each refusal names its own limit, and "disjoint pieces" is shown
   only when a cut would produce disjoint pieces.
 
+  2026-09-17 — **a cut parallel to a cylinder's axis, or through a cone's, is taken**
+  (D-2026-09-17-b, TASK-265, GitHub issue #517). Such a cut meets the side in straight lines and each
+  cap in a chord, so its pieces need no new curve: each is bounded by one arc of the rim, its chord,
+  the two straight seams and the flat cut face. A cylinder is cut anywhere across its width (the
+  section is a rectangle); a cone is cut through its axis (a trapezoid, or a triangle for a cone that
+  comes to a point). A cone cut parallel to its axis but off it meets the side in a hyperbola, which
+  the kernel cannot hold, and is refused as `SliceCutConeOffAxis`. That name replaces
+  `SliceCutAlongCurvedAxis` from the revision above, which after this change would describe no cut
+  that is refused. Acceptance added: a plane through the axis of a cylinder cuts pieces whose volumes
+  are the analytic half and segment volumes, and a cone's are halves, including at survey coordinate
+  magnitudes (E 2,196,000).
+
 ### REQ-337 — Composite-operand analytic Booleans (GitHub issue #493, continues REQ-314)
 - Purpose: REQ-314's Boolean increments (B1/B2a/B2b-1/B2b-2, plus the branch-pipe and sphere∩cylinder
   work tracked on #242/#283) already recognise a wide set of *single-primitive-pair* curved
@@ -8569,6 +8581,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
   says so (`SectionHasHole`). The cut refusals `SECTION` inherits from `SLICE` are named the same way
   (REQ-314 revision of this date). Acceptance added: each refusal in the issue's table names its own
   limit.
+
+  2026-09-17 — **a vertical section through a cylinder or cone** (D-2026-09-17-b, TASK-265, GitHub
+  issue #517). The common section for a surveyor, a vertical cut through a pipe, culvert or manhole, is
+  now drawn: a plane parallel to a cylinder's axis gives a closed rectangle, and a plane through a
+  cone's axis gives a trapezoid, or a triangle for a pointed cone. Each is one closed polyline, the
+  solid is unchanged, and the command is one undo step, as before. Acceptance added: those outlines
+  match the analytic corners within REQ-101's ±0.002 ft, including at E 2,196,000.
+
+  **Tilted cuts stay refused, by decision.** The outline of a tilted cut is an ellipse. A polyline
+  cannot hold one exactly, and the document's `ELLIPSE` lies flat in the XY plane (ADR-025), so it
+  cannot hold a tilted one either. Supporting it means giving `ELLIPSE` a plane of its own, with DXF,
+  grips and snaps to match. That is its own piece of work, left to a follow-up issue. Until then a
+  tilted cut between the caps keeps `SectionEllipse` ("This cut is an ellipse, which a section outline
+  cannot hold yet."), which is the "refused by a name that says so" branch of #517's acceptance. A cone
+  cut parallel to its axis but off it is refused as a hyperbola (REQ-314 revision of this date).
 
 ### REQ-336 — Start Screen Billboard (What's New)
 - Purpose: Users launching a new version do not know what changed unless they hunt for release notes.

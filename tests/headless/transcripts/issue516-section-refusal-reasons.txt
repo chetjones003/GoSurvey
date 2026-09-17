@@ -50,27 +50,18 @@ CMD B
 EXPECT LOG "SLICE — 1 solid(s) cut into 2 piece(s)."
 EXPECT SOLIDS 2
 
-# --- a cut along the axis, of a cylinder and of a cone --------------------------------------------
+# --- a cut parallel to a cone's axis but off it ---------------------------------------------------
+# A cut along a cylinder's axis, or through a cone's, is taken since #517
+# (issue517-axis-parallel-sections); off a cone's axis the curve is a hyperbola.
 NEW
-CMD CYLINDER 0,0,-25 30 50
+CMD CONE 0,10,-25 30 15 50
 CMD UCS
 CMD X
 CMD 90
 BOX -300 -300 300 300
 CMD SECTION
 CMD UCS
-EXPECT LOG "SECTION — A cut parallel to a cylinder's or cone's axis is not supported yet."
-ESC
-
-NEW
-CMD CONE 0,0,-25 30 15 50
-CMD UCS
-CMD X
-CMD 90
-BOX -300 -300 300 300
-CMD SECTION
-CMD UCS
-EXPECT LOG "SECTION — A cut parallel to a cylinder's or cone's axis is not supported yet."
+EXPECT LOG "SECTION — A cut parallel to a cone's axis but not through it is a hyperbola, which is not supported yet."
 ESC
 
 # --- and the cut the kernel does take still works ---------------------------------------------
