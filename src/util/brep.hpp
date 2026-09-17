@@ -228,7 +228,10 @@ enum class Justify : std::uint8_t { Left, Center, Right };
 /// and it is why the topology, not the recipe, is the stored truth. The exception is a feature
 /// result that IS a primitive: an extruded circle, a full-turn revolve of a right profile about its
 /// edge, and a two-circle coaxial loft carry the `Cylinder` / `Cone` recipe (GitHub #515, ADR-046
-/// amendment (o)), because `Slice` recognises curved solids by their recipe.
+/// amendment (o)), because `Slice` recognises curved solids by their recipe. `Slice` trusts such a
+/// recipe only when the primitive it describes has the solid's measured shape, and recognises a
+/// recipe-less cylinder or cone from its geometry (ADR-046 amendment (p)); a `.gs` recipe whose frame
+/// cannot be read is dropped on load.
 struct Recipe {
   PrimitiveKind kind = PrimitiveKind::None;
   ucs::Ucs frame;        ///< Placement. Origin is the base centre, except Sphere/Torus (the centre).
@@ -363,7 +366,7 @@ enum class Problem {
   SliceDegeneratePlane,  ///< A slicing plane whose normal is zero or not finite.
   SlicePlaneMissesSolid, ///< The plane does not pass through the solid — nothing to cut.
   SliceCurvedFace,       ///< The solid has a curved face; increment 3a slices planar-faced solids only.
-  SliceResultComplex,    ///< The cut cross-section is not a single loop, or a side splits into pieces.
+  SliceResultComplex,    ///< A kept side splits into separate pieces (see also SliceCutSeveralOutlines, #516).
 
   // --- Booleans (REQ-314 increment 4, B1). ---
   /// A curved operand pair B1 cannot combine: a curved SUBTRACT (the hole wall faces inward, which
@@ -570,6 +573,31 @@ enum class Problem {
   /// An edge bounds three or more faces, so the surface is not a manifold: more than two sheets
   /// meet along it and there is no consistent inside.
   EdgeNonManifold,
+
+  // Curved-cut refusals that name their own limit (GitHub issue #516, REQ-201). Before these, a
+  // tilted cut clipping a cylinder's end reported "disjoint pieces" and an ellipse section reported
+  // "flat faces only" — both true of some other cut, neither of the one the user made.
+
+  /// A tilted cut of a cylinder or cone whose curve would run off the side and across an end cap.
+  SliceCutCrossesCurvedEnd,
+  /// A cut parallel to a cone's axis that misses the axis — its curve is a hyperbola (issue #517).
+  SliceCutConeOffAxis,
+  /// A cone cut steeper than the cone's own side, whose curve is not an ellipse.
+  SliceCutTooSteepForCone,
+  /// The cut surface would have more than one outline — a hole, or separate islands. Distinct from
+  /// \ref SliceResultComplex, which now means only that a side really splits into separate pieces.
+  SliceCutSeveralOutlines,
+  /// A cut whose pieces were built but did not pass validation — nothing is cut.
+  SliceResultInvalid,
+  /// The section is an ellipse, which a section outline (lines and circular arcs) cannot hold.
+  SectionEllipse,
+  /// The section is a general curve (an intersection curve), which a section outline cannot hold.
+  SectionCurve,
+  /// The section has a hole in it, which a single closed section outline cannot hold.
+  SectionHasHole,
+  /// The cut crosses a curved face of a solid that is not a cylinder or cone primitive — a fillet, a
+  /// drilled hole's wall, a sphere. A cut that misses every curved face is taken (GitHub #518).
+  SliceCutCrossesCurvedFace,
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -731,7 +759,8 @@ struct Profile {
 /// profile plane (\ref Problem::ProfilePointOffPlane), a self-crossing profile
 /// (\ref Problem::ProfileSelfIntersects), a reflex profile arc (\ref Problem::ProfileArcReflex), and
 /// a degenerate profile frame (\ref Problem::DegenerateFrame). The result carries no recipe — except
-/// that exactly two coaxial full circles on parallel planes loft to the analytic cylinder or cone
+/// that exactly two coaxial full circles on parallel planes, paired vertex-for-vertex without a
+/// twist, loft to the analytic cylinder or cone
 /// `MakeCylinder` / `MakeCone` build, recipe included (GitHub #515, ADR-048 amendment).
 [[nodiscard]] bool Loft(const std::vector<Profile>& profiles, Solid* out, Problem* outWhy);
 
@@ -838,6 +867,25 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 /// split a kept side into disjoint pieces, is refused rather than producing a sliver
 /// (\ref Problem::SlicePlaneMissesSolid, \ref Problem::SliceResultComplex). Nothing is written unless
 /// every kept piece passes \ref Validate (REQ-201). The results carry no recipe.
+///
+/// A cylinder or cone cut the curved recognisers do not take is refused for that cut, not for
+/// having curved faces (GitHub #516): a tilted cut crossing an end cap
+/// (\ref Problem::SliceCutCrossesCurvedEnd), a cut parallel to a cone's axis that misses the axis
+/// (\ref Problem::SliceCutConeOffAxis), a cone cut steeper than its side
+/// (\ref Problem::SliceCutTooSteepForCone), and pieces that failed validation
+/// (\ref Problem::SliceResultInvalid). A cut parallel to the axis of a cylinder, or through the axis
+/// of a cone, is taken: its pieces are bounded by straight seams and cap chords (GitHub #517).
+///
+/// Any other solid with a curved face (a filleted box, a box with a drilled hole) is cut when the
+/// plane crosses only its flat faces: the curved faces, and the whole arcs of the flat faces, go to
+/// their piece unchanged (GitHub #518). A plane that crosses a curved face is refused as
+/// \ref Problem::SliceCutCrossesCurvedFace.
+///
+/// A curved solid is cut through the cylinder / cone recognisers, which rebuild the pieces from a
+/// recipe. That recipe is the solid's own only when the primitive it describes matches the solid's
+/// volume, area and bounds; otherwise the solid is recognised from its geometry when it is exactly
+/// one right circular cylinder or cone — saved before #515, a Boolean result, a straight sweep — and
+/// refused when it is not (GitHub #515 follow-up, ADR-046 amendment (p)).
 [[nodiscard]] bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                          SliceKeep keep, Solid* outAbove, Solid* outBelow, Problem* outWhy);
 
@@ -859,10 +907,11 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 ///
 /// **The accepted set is \ref Slice's, inherited rather than restated**: sectioning asks the same
 /// geometric question and simply keeps a different answer, so a solid Slice declines is declined
-/// here with Slice's own reason. Additionally refuses \ref Problem::SliceCurvedFace for a section
-/// boundary that is not expressible as lines and arcs — an **oblique cut of a cylinder** meets it
-/// along an `Ellipse` — and \ref Problem::SliceResultComplex for a section with holes or with more
-/// than one face on the plane. Refused by name rather than approximated with a chord or a nearby
+/// here with Slice's own reason. Additionally refuses a section boundary that is not expressible as
+/// lines and arcs — \ref Problem::SectionEllipse for an **oblique cut of a cylinder or cone**, and
+/// \ref Problem::SectionCurve for a marched intersection curve — \ref Problem::SectionHasHole for a
+/// section with a hole, and \ref Problem::SliceCutSeveralOutlines for more than one face on the plane
+/// (GitHub #516). Refused by name rather than approximated with a chord or a nearby
 /// arc: a section is a measured figure, and one that is quietly the wrong shape is exactly the
 /// silent-wrong-answer failure REQ-201 exists to prevent.
 [[nodiscard]] bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,

@@ -2869,7 +2869,9 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   runs only after the operation has built and validated its own result, so every refusal (e) and
   the operation already make is unchanged, and a profile that merely resembles one of these shapes
   keeps `PrimitiveKind::None`. Tolerances are the operations' own (`planeEps`, `axisEps`: 1e-6 of
-  model scale).
+  model scale) — except equal radii, which are judged against the RADIUS (1e-6 of it), because a
+  height-scaled tolerance called a real taper of 0.0009 over 1000 ft a cylinder (code review on #515,
+  corrected 2026-09-16). A profile's arcs must also carry each vertex to the next.
 
   **This refines (e) rather than contradicting it.** (e) said extrude and revolve *may* record a
   recipe; this is the first increment that does, and only where the recipe is a true description.
@@ -2877,6 +2879,45 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   consequence, accepted by the user when the choice was put:** `SOLIDLIST`, the Properties panel and
   `.gs` now call such a solid `Cylinder` / `Cone` rather than `Solid`. `.gs` already persists a
   recipe, so no format version bump.
+
+**(p) A cut trusts a recipe only when it fits, and recognises a cylinder or cone that has none.**
+(2026-09-17, D-2026-09-17-a, REQ-314 amended, TASK-261, GitHub issue #515 follow-up.)
+
+  **Context.** Amendment (o) stamps a recipe where the operation builds a cylinder or cone, and the
+  curved slice recognisers rebuild both pieces from that recipe. The code review on #515 found two
+  gaps that stamping cannot close. (1) **Trust:** a recipe that does not describe its solid — a `.gs`
+  whose recipe frame is missing or damaged loaded at the world origin — would cut the wrong geometry
+  with no error. (2) **Coverage:** a solid that IS a cylinder or cone but carries no recipe was still
+  refused: extrusions, revolves and lofts saved before #515, Boolean results, straight sweeps.
+
+  **Decision.** `Slice` (and so `SectionLoop`) decides which recipe the recognisers see:
+  - the solid's own Cylinder / Cone recipe, when the primitive it describes has the solid's volume,
+    area and bounds (to 1e-6 of the model size);
+  - otherwise a recipe **recognised from the geometry**, when the solid is exactly one right circular
+    cylinder or cone. Every edge is a line or an arc. Every arc is about one axis, with one radius at
+    each end (an end with no arc is an apex), and any ring part-way along lies on the line between
+    them. Every planar face is perpendicular to the axis. Every curved face — cylinder, cone or NURBS
+    — lies on that cone at sample points. The candidate primitive then matches the solid's volume,
+    area and bounds. A stepped shaft, a twisted loft, a barrel and a drilled solid each fail one
+    check;
+  - otherwise no recipe, so a Cylinder / Cone recipe that does not fit is refused rather than cut.
+
+  The stored recipe is never changed; recognition is per cut. In the same change, the `.gs` loader
+  drops a described recipe whose frame is missing or unreadable (ADR-045 (c): the topology is the
+  truth), while a kind-None recipe's frame is still read and written back byte-identically (REQ-079).
+
+  **Relation to D-2026-09-16-c.** That decision chose build-time stamping over cut-time recognition,
+  for its visible label and reuse of the recognisers. This amendment keeps the stamp and adds
+  recognition behind it, at the user's request once the review showed what stamping alone leaves
+  out. The label a solid shows is still set only by (o).
+
+  **Cost.** A curved cut now measures the solid (analytic mass properties, or quadrature for NURBS
+  faces) once or twice before slicing. That is acceptable for a command a user runs; nothing
+  per-frame calls `Slice`.
+
+  **(o) addendum, same change:** a two-circle coaxial loft is recognised **before** its NURBS ribbons
+  are built, so the loft — and the live LOFT preview, which calls it every frame — no longer builds
+  and validates a solid only to discard it.
 
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
@@ -3165,10 +3206,15 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   loft would describe an analytic cone while its stored faces were NURBS, so the loft is instead
   **built** by `MakeCylinder` / `MakeCone` — analytic faces and the primitive's recipe — when it has
   exactly two profiles, both one full circle, on parallel planes, with the second centre on the
-  first's normal. It runs after the ordinary loft has built and validated, so every refusal stands;
-  circles off a shared axis, and every loft of three or more profiles, keep the freeform ribbon and
-  no recipe. Volume, area and topology (4 vertices, 6 edges, 4 faces) are those the ribbon already
-  produced, now in closed form. The sibling case for flat faces — a loft between similar parallel
+  first's normal, **and no twist**: the loft pairs vertex j with vertex j, so every such pair must lie
+  in one plane through the axis on the same side of it. Two circles out of step (a top circle turned
+  90 degrees, or one facing down) loft to a pinched band, not a cylinder, and keep the ribbon. The
+  axis and twist tests are relative to the model's size, because circle normals are stored in float
+  and a fixed 1e-9 refused every pair drawn in a tilted UCS. (The twist and tolerance rules were added
+  after the code review on #515, 2026-09-16.) It runs after the ordinary loft has built and validated,
+  so every refusal stands; circles off a shared axis, out of step with each other, and every loft of
+  three or more profiles keep the freeform ribbon and no recipe. Volume, area and topology (4
+  vertices, 6 edges, 4 faces) are those the ribbon already produced, now in closed form. The sibling case for flat faces — a loft between similar parallel
   polygons, whose sides are planar but stored as NURBS — is GitHub #519, not this amendment.
 
 ### ADR-050 — POLYSOLID: offset-and-mitre in the kernel   (2026-09-03, accepted)

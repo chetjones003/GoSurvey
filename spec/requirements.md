@@ -6484,6 +6484,67 @@ capability that does not exist. They are recorded here rather than quietly dropp
   revolve that builds the same solid. Visible: such a solid now lists as `Cylinder` / `Cone`, not
   `Solid`.
 
+  2026-09-17 — **a refused cut names its own limit, and "disjoint pieces" means disjoint pieces**
+  (TASK-264, GitHub issue #516, REQ-201). `SliceResultComplex` had one message about a solid
+  splitting into disjoint pieces, but was returned for five different situations, and a curved cut
+  nobody took fell through to "flat faces only". Now:
+  - a tilted cut of a cylinder or cone that crosses an end cap → `SliceCutCrossesCurvedEnd`;
+  - a cut parallel to a cylinder's or cone's axis → `SliceCutAlongCurvedAxis`;
+  - a cone cut steeper than its side → `SliceCutTooSteepForCone`;
+  - a cut surface with more than one outline (a hole, or separate islands) → `SliceCutSeveralOutlines`;
+  - pieces that were built but failed validation → `SliceResultInvalid`.
+
+  `SliceResultComplex` is now returned only where a kept side really splits into separate pieces,
+  and `SliceCurvedFace` only for curved solids whose limit is not a cut direction (a sphere, a torus,
+  a filleted box). Acceptance added: each refusal names its own limit, and "disjoint pieces" is shown
+  only when a cut would produce disjoint pieces.
+
+  2026-09-17 — **a cut parallel to a cylinder's axis, or through a cone's, is taken**
+  (D-2026-09-17-b, TASK-265, GitHub issue #517). Such a cut meets the side in straight lines and each
+  cap in a chord, so its pieces need no new curve: each is bounded by one arc of the rim, its chord,
+  the two straight seams and the flat cut face. A cylinder is cut anywhere across its width (the
+  section is a rectangle); a cone is cut through its axis (a trapezoid, or a triangle for a cone that
+  comes to a point). A cone cut parallel to its axis but off it meets the side in a hyperbola, which
+  the kernel cannot hold, and is refused as `SliceCutConeOffAxis`. That name replaces
+  `SliceCutAlongCurvedAxis` from the revision above, which after this change would describe no cut
+  that is refused. Acceptance added: a plane through the axis of a cylinder cuts pieces whose volumes
+  are the analytic half and segment volumes, and a cone's are halves, including at survey coordinate
+  magnitudes (E 2,196,000).
+
+  2026-09-17 — **a plane that misses a solid's curved faces cuts it** (D-2026-09-17-c, TASK-266, GitHub
+  issue #518). A solid with any curved face that is not a cylinder or cone primitive was refused at
+  every plane, "flat faces only". That included a box with one filleted edge, cut nowhere near the
+  fillet. Now each face is classified by the range of signed distance it covers:
+  - a face wholly on one side, touching the plane allowed, goes to its piece **unchanged** (surface,
+    parameter range and every loop);
+  - a flat face the plane crosses is split along it, each whole arc or ellipse of its boundary and
+    each hole loop staying on the side it lies on;
+  - a plane that crosses a curved face or a curved edge is refused as `SliceCutCrossesCurvedFace`.
+
+  The range of a plane, cylinder or cone face is exactly that of its boundary. A sphere, torus or
+  NURBS face also takes its tessellation, widened by the chord tolerance, so a plane that grazes one
+  is refused rather than cut wrongly. The rule applies to every such solid, not only filleted ones:
+  a box with a drilled hole, a curved polysolid wall and a stepped shaft are cut wherever the plane
+  misses their curved faces. All-planar solids keep their own cutter unchanged.
+
+  This supersedes the 2026-09-17 #516 revision above for these solids: a sphere, torus or filleted
+  box cut across its curved face now reports `SliceCutCrossesCurvedFace`, not `SliceCurvedFace`.
+  Acceptance added:
+  - a filleted box (one edge, several edges, or a three-edge corner) is sectioned and sliced exactly
+    at planes that miss the fillets, including a plane that meets a fillet only along its tangent
+    line, and at survey coordinate magnitudes;
+  - a plane that crosses a fillet is refused by that name, and nothing is written.
+
+  2026-09-17 — **a cut recognises a cylinder or cone from its geometry, and trusts a recipe only
+  when it fits** (D-2026-09-17-a, ADR-046 amendment (p), TASK-261, GitHub issue #515 follow-up).
+  `SLICE` and `SECTION` now cut a solid that is exactly a right circular cylinder or cone even when it
+  carries no recipe — one saved before #515, a Boolean result, a straight sweep — and never cut from
+  a Cylinder / Cone recipe whose primitive has a different measured shape. A `.gs` recipe whose frame
+  is missing or unreadable is dropped on load, rather than kept at the world origin. Acceptance added:
+  a recipe-less cylinder or cone cuts exactly as the primitive does, a damaged recipe does not
+  misplace a cut, and look-alikes (stepped shaft, twisted loft, barrel) are still refused by name — as
+  `SliceCutCrossesCurvedFace` since the #518 revision above, for the cuts that cross their curved faces.
+
 ### REQ-337 — Composite-operand analytic Booleans (GitHub issue #493, continues REQ-314)
 - Purpose: REQ-314's Boolean increments (B1/B2a/B2b-1/B2b-2, plus the branch-pipe and sphere∩cylinder
   work tracked on #242/#283) already recognise a wide set of *single-primitive-pair* curved
@@ -7111,6 +7172,30 @@ capability that does not exist. They are recorded here rather than quietly dropp
   `SECTION` cut it exactly as they cut `CYLINDER` / `CONE`. Same volume, area and topology as before.
   Circles off a shared axis and lofts of three or more profiles are unchanged. Visible: the solid
   lists as `Cylinder` / `Cone`, not `Solid`.
+  2026-09-16 (later, code review on #515) — **a twisted pair is not a cylinder.** The loft pairs
+  vertex j of one circle with vertex j of the other; circles out of step (one turned about the axis,
+  or facing down) loft to a pinched band, and before this correction were replaced by a straight
+  cylinder of a different volume. They now keep the freeform result. The shared-axis test is also
+  relative to the model's size, so coaxial circles drawn in a tilted UCS are recognised, and equal
+  radii are judged against the radius, so a long slight taper is a cone. The creation message names
+  the kind (`Cylinder created`), matching `SOLIDLIST`.
+
+  2026-09-17 — **a loft's flat side strips are stored as flat faces** (TASK-267, GitHub issue #519). A
+  straight span between two profile edges that lie in one plane, as between similar parallel polygons,
+  is a flat strip. It was stored as a ruled NURBS patch, which had the right shape but the wrong kind.
+  `SECTION` and `SLICE` refused every cut, and `SECTIONPLANE` refused the side faces, of a square
+  frustum that `PYRAMID` builds and cuts without trouble. Such a strip is now a `Plane` face. A strip
+  that twists (a rotated or non-parallel profile edge) and every arc ribbon remain NURBS. Flat means
+  all four corners lie within 1e-9 of the strip's size of one plane, measured from its first corner.
+  No decision entry: the issue states this behaviour, and the strip is still the straight span the
+  statement above describes, stored as its exact kind.
+
+  Acceptance added:
+  - a loft between similar parallel polygons has planar side faces, with the same volume and area;
+  - `SECTION` of it matches the equivalent `PYRAMID` frustum corner for corner at a horizontal, a
+    vertical and a 45° plane, within REQ-101 and at survey magnitude;
+  - `SECTIONPLANE` accepts its side faces;
+  - a twisted loft keeps freeform sides.
 
 ### REQ-316 — Polylines have arc segments; POLYLINE draws them and JOIN builds them
 
@@ -8545,6 +8630,39 @@ capability that does not exist. They are recorded here rather than quietly dropp
   So the requirement gains an acceptance clause it was missing: **a command that asks for a selection
   must still be running after it asks.** A message that names what to do next, from a command that
   has already ended, is worse than no message.
+
+  2026-09-17 — **a refused section names the limit it actually hit** (TASK-264, GitHub issue #516,
+  REQ-201). An oblique cut of a cylinder or cone that stays between its caps is sliced by the kernel
+  but its outline is an ellipse; `SECTION` said "this release slices solids with flat faces only".
+  It now says "This cut is an ellipse, which a section outline cannot hold yet." (`SectionEllipse`), a
+  marched intersection curve says the same of "a curve" (`SectionCurve`), and a section with a hole
+  says so (`SectionHasHole`). The cut refusals `SECTION` inherits from `SLICE` are named the same way
+  (REQ-314 revision of this date). Acceptance added: each refusal in the issue's table names its own
+  limit.
+
+  2026-09-17 — **a vertical section through a cylinder or cone** (D-2026-09-17-b, TASK-265, GitHub
+  issue #517). The common section for a surveyor, a vertical cut through a pipe, culvert or manhole, is
+  now drawn: a plane parallel to a cylinder's axis gives a closed rectangle, and a plane through a
+  cone's axis gives a trapezoid, or a triangle for a pointed cone. Each is one closed polyline, the
+  solid is unchanged, and the command is one undo step, as before. Acceptance added: those outlines
+  match the analytic corners within REQ-101's ±0.002 ft, including at E 2,196,000.
+
+  **Tilted cuts stay refused, by decision.** The outline of a tilted cut is an ellipse. A polyline
+  cannot hold one exactly, and the document's `ELLIPSE` lies flat in the XY plane (ADR-025), so it
+  cannot hold a tilted one either. Supporting it means giving `ELLIPSE` a plane of its own, with DXF,
+  grips and snaps to match. That is its own piece of work, left to a follow-up issue. Until then a
+  tilted cut between the caps keeps `SectionEllipse` ("This cut is an ellipse, which a section outline
+  cannot hold yet."), which is the "refused by a name that says so" branch of #517's acceptance. A cone
+  cut parallel to its axis but off it is refused as a hyperbola (REQ-314 revision of this date).
+
+  2026-09-17 — **a section past a fillet** (D-2026-09-17-c, TASK-266, GitHub issue #518). `SECTION`
+  inherits `SLICE`'s new rule (REQ-314 revision of this date). A solid with a rounded edge, a drilled
+  hole or another curved face is sectioned by any plane that crosses only its flat faces, and the
+  outline is the straight-sided polygon of that cut. A plane that crosses a curved face is refused with
+  "The cut crosses a curved face of this solid, which is not supported yet." That is also what a
+  sphere now reports, in place of "flat faces only". Acceptance added: a filleted box is sectioned
+  within REQ-101's ±0.002 ft at planes that miss its fillets, the solid is unchanged, and the command is
+  one undo step.
 
 ### REQ-336 — Start Screen Billboard (What's New)
 - Purpose: Users launching a new version do not know what changed unless they hunt for release notes.
