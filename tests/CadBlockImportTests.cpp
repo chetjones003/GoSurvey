@@ -792,6 +792,74 @@ TEST_CASE("A connection point configured only for pipe end ignores a CLOSER but 
   CHECK(world[0].y == Catch::Approx(0.f).margin(0.002));
 }
 
+TEST_CASE("INSERT auto-picks the block's WELD-NECK port (not the FIRST-defined gasket-face port) "
+          "when snapping to a pipe end (issue #486 user bug report)",
+          "[issue486][issue496][block][connector][insert]") {
+  AppCommandState st;
+
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+
+  // A flange with TWO connection points, gasketFace defined FIRST (reproducing the reported bug:
+  // InsertSourceConnection used to always default to connections.front()), each with exactly ONE
+  // mode aimed at a different target — exactly the setup in the user's screenshots.
+  CadBlockDefinition flange;
+  flange.name = "WELD_NECK_FLANGE";
+  CadBlockConnection gasketFace;
+  gasketFace.name = "gasketFace";
+  gasketFace.nz = 1.f;
+  CadBlockConnectionMode gasketMode;
+  gasketMode.name = "Mode 1";
+  gasketMode.target = CadConnectionModeTarget::FlangeFace;
+  gasketMode.isDefault = true;  // matches the reported scenario: the UI's natural single-mode state
+  gasketFace.modes.push_back(gasketMode);
+  flange.connections.push_back(gasketFace);
+
+  CadBlockConnection weldNeckFace;
+  weldNeckFace.name = "weldNeckFace";
+  weldNeckFace.nz = 1.f;
+  CadBlockConnectionMode weldMode;
+  weldMode.name = "Mode 1";
+  weldMode.target = CadConnectionModeTarget::PipeEnd;
+  weldMode.isDefault = true;    // both flagged default is exactly what made the wrong port "match"
+  weldNeckFace.modes.push_back(weldMode);
+  flange.connections.push_back(weldNeckFace);
+  st.blockDefs.push_back(flange);
+
+  std::vector<std::string> log;
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "WELD_NECK_FLANGE");
+  st.insertBlockConnectorName[0] = '\0';  // no explicit choice — auto-detect, the reported scenario
+  st.insertBlockSpecifyConnectorSnap = true;
+  st.insertBlockSpecifyPoint = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+
+  REQUIRE(SubmitInsertBlockConnectorPick(st, 9.99f, 0.f, 0.f, log));
+  REQUIRE(st.cadBlockRefs.size() == 1);
+
+  const bool usedWeldNeck = std::any_of(log.begin(), log.end(), [](const std::string& s) {
+    return s.find("pipe end") != std::string::npos;
+  });
+  CHECK(usedWeldNeck);
+
+  // weldNeckFace was authored at the block's local origin (0,0,0), same as gasketFace — but the
+  // POINT that mattered is which port's world connection actually lands on the pipe end (10,0,0).
+  std::vector<CadBlockWorldConnection> world;
+  CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[0], 0, &world);
+  REQUIRE(world.size() == 2);
+  const auto weldNeckWorld = std::find_if(world.begin(), world.end(),
+                                          [](const CadBlockWorldConnection& c) { return c.name == "weldNeckFace"; });
+  REQUIRE(weldNeckWorld != world.end());
+  CHECK(weldNeckWorld->x == Catch::Approx(10.f).margin(0.002));
+  CHECK(weldNeckWorld->y == Catch::Approx(0.f).margin(0.002));
+}
+
 TEST_CASE("A connection point configured only for a flange face ignores a nearby pipe end",
           "[issue486][issue496][block][connector][insert]") {
   AppCommandState st;

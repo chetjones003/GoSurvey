@@ -253,6 +253,23 @@ struct CadBlockConnection {
   return fallback;
 }
 
+/// Whether `conn` has a mode whose `target` EXACTLY matches \p target — never counting an
+/// `isDefault` fallback (unlike `CadBlockResolveMode`). Used to rank an explicitly-tagged port
+/// above one that merely falls back to a default mode for the same target: when a block has both a
+/// port configured exactly for pipe ends and another whose single mode is flagged default (and so
+/// would otherwise resolve for ANY target, pipe end included), the explicit one must win — the
+/// point of tagging it at all (user request 2026-09-17, reported bug: a flange whose gasket-face
+/// port and weld-neck port both had a single `isDefault`-flagged mode kept using the gasket-face
+/// port for a pipe-end snap, because the default fallback made it look compatible too).
+[[nodiscard]] inline bool CadBlockConnectionHasExactMode(const CadBlockConnection& conn,
+                                                         CadConnectionModeTarget target) {
+  for (const CadBlockConnectionMode& m : conn.modes) {
+    if (m.target == target)
+      return true;
+  }
+  return false;
+}
+
 /// Whether `conn` should even be OFFERED as a candidate when the nearby thing under the cursor
 /// classifies as \p target (user request 2026-09-17: "detect what we are snapping to and use that
 /// block's connection point logic" — a port configured for pipe ends should snap to pipe ends, one
