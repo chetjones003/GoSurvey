@@ -1,3 +1,4 @@
+#include "CadBlocks.hpp"
 #include "CadCommands.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -139,4 +140,29 @@ TEST_CASE("A click while the size is still unset is refused, not silently accept
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitNominalSize);
   CHECK(st.pipeRunDraftVerts.empty());
+}
+
+TEST_CASE("BEDIT hides the main drawing's pipe runs, and restores them on close",
+          "[issue486][piperun][bedit]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+
+  // A pipe run committed in the MAIN drawing before BEDIT ever opens.
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+
+  CadBlocksEnterNamedEditor(st, "TestFlange", log);
+  REQUIRE(st.blockEditActive);
+  // The block being edited has no pipe runs of its own — the main drawing's run must not leak in.
+  CHECK(st.cadPipeRuns.empty());
+  CHECK(st.cadPipeRunAttrs.empty());
+
+  // BCLOSE's own restore path (CadBlocks.cpp) calls exactly this.
+  CadRestoreGeometrySnapshot(st, st.blockEditModelStash);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadPipeRuns[0].nominalSize == "4in");
 }

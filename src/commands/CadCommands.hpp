@@ -1037,6 +1037,12 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
+  /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
+  /// swapped for exactly this reason ("hide everything that is not the block being edited",
+  /// LoadBlockPrimitivesIntoDrawing), and cadPipeRuns simply arrived after that pass was written.
+  std::vector<CadPipeRun>       cadPipeRuns;
+  std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;

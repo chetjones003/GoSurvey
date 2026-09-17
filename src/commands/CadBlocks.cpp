@@ -268,6 +268,12 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadSurfaceAttrs.clear();
   st.cadTables.clear();
   st.cadTableAttrs.clear();
+  // Pipe runs (issue #486 / REQ-345) are model-space entities, never block content, so they hide
+  // the same way cadTables/cadSurfaces above do — a run drawn in the main drawing is not the block
+  // being edited. pipeRunWorldSolidsSig is left stale on purpose: it is a content hash, and this
+  // clear changes the content, so RefreshSolidDisplayGeometry's next pass re-derives it naturally.
+  st.cadPipeRuns.clear();
+  st.cadPipeRunAttrs.clear();
   st.cadBlockRefs.clear();
   st.cadBlockRefAttrs.clear();
   st.surveyPoints.clear();

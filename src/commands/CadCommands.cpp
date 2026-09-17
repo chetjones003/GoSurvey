@@ -1508,6 +1508,8 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadSolidAttrs        = st.cadSolidAttrs;
   snap.cadTables            = st.cadTables;
   snap.cadTableAttrs        = st.cadTableAttrs;
+  snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
+  snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
   snap.blockDefs            = st.blockDefs;
   snap.cadBlockRefs         = st.cadBlockRefs;
   snap.cadBlockRefAttrs     = st.cadBlockRefAttrs;
@@ -1587,6 +1589,9 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadSolidAttrs        = snap.cadSolidAttrs;
   st.cadTables            = snap.cadTables;
   st.cadTableAttrs        = snap.cadTableAttrs;
+  st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
+  st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
+  st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
   st.blockDefs            = snap.blockDefs;
   st.cadBlockRefs         = snap.cadBlockRefs;
   st.cadBlockRefAttrs     = snap.cadBlockRefAttrs;
