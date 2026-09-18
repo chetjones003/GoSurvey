@@ -1,0 +1,37 @@
+GoSurvey Development Commands
+
+GoSurvey is a Windows-native app (MSVC + CMake + Ninja). The dev/ scripts are
+thin wrappers around the existing Windows build, test, and GitHub tooling.
+
+Invoke from PowerShell or cmd (extension optional):
+  ./dev/build          same as dev\build.bat
+
+Build & test
+  ./dev/build [release|debug] [cmake-build args]
+                                  Canonical build (build.bat). Default release ->
+                                  build/ ; debug -> build/debug/
+  ./dev/run   [release|debug]      Launch the built GoSurvey.exe (run.bat; does not build)
+  ./dev/clean [--all]              Delete build tree(s); build.bat re-configures
+  ./dev/test  [ctest args]         Build test targets, then ctest --output-on-failure
+  ./dev/vs-sln [args]              Generate/build the Visual Studio solution (build/vs/)
+
+Repository
+  ./dev/status                     Branch, working tree, last commit, build state
+
+GitHub
+  ./dev/gh <args>                  Pass-through to gh (GitHub CLI)
+  ./dev/issue [list|view N|...]    Wrapper over `gh issue` (default: list)
+  ./dev/pr    [list|view N|...]    Wrapper over `gh pr` (default: list)
+
+Escape hatch
+  ./dev/win <cmd ...>              Run an arbitrary Windows command from the repo root
+  ./dev/win ps <cmd ...>           ... via PowerShell (use ps, not --ps, from PowerShell)
+
+  ./dev/help                       Show this help
+  ./dev/sync-wiki                  Sync GitHub wiki into resources/wiki/
+
+Canonical commands this layer wraps:
+  build (release) : cmake --preset ninja-release (first run) + cmake --build build
+  build debug     : cmake --preset ninja-debug   (first run) + cmake --build build\debug
+  test            : ctest --test-dir build --output-on-failure
+  clean           : remove build/

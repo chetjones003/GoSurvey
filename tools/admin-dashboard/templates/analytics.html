@@ -1,0 +1,68 @@
+<div class="grid-2">
+  <section class="card">
+    <h3>Totals</h3>
+    <pre class="code">SELECT COUNT(*) AS installs FROM pings WHERE event='install';</pre>
+    <div class="kpi-value">{{.Stats.InstallsTotal}}</div>
+    <pre class="code" style="margin-top:12px">SELECT COUNT(DISTINCT install_id) AS active_30d
+FROM pings WHERE event='active' AND day >= date('now','-30 days');</pre>
+    <div class="kpi-value" style="font-size:22px">{{.Stats.Active30d}} <span class="muted" style="font-size:13px; font-weight:400">· 7d: {{.Stats.Active7d}}</span></div>
+  </section>
+  <section class="card">
+    <h3>Retention</h3>
+    <pre class="code">-- cohort: install &lt;= 30d ago, still active in last 30d</pre>
+    <div class="retention" style="margin-top:8px">
+      <div class="ret-val">{{.Stats.Retention.StillActive}} / {{.Stats.Retention.Cohort}} — {{printf "%.1f" .Stats.Retention.Percent}}%</div>
+      <div class="bar-track"><div class="bar-fill" style="width: {{printf "%.1f" .Stats.Retention.Percent}}%"></div></div>
+    </div>
+    <div class="muted small" style="margin-top:10px">Same query as queries.sql retention block using LEFT JOIN + EXISTS. Mock data includes ~12% churn (installed never returned).</div>
+  </section>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <h3>Version distribution (30d)</h3>
+    <pre class="code">SELECT version, COUNT(DISTINCT install_id) AS users
+FROM pings WHERE day >= date('now','-30 days')
+GROUP BY version ORDER BY users DESC;</pre>
+    <div class="bar-list" style="margin-top:12px">
+      {{range .Stats.Versions}}
+      <div class="bar-row"><span class="bar-label">{{.Key}}</span><div class="bar-track"><div class="bar-fill" style="width: {{percent .Count $.Stats.Active30d}}%"></div></div><span class="bar-val">{{.Count}}</span></div>
+      {{end}}
+    </div>
+  </section>
+  <section class="card">
+    <h3>Channel & Country</h3>
+    <pre class="code">SELECT channel, COUNT(DISTINCT install_id) FROM pings
+ WHERE day >= date('now','-30 days') GROUP BY channel;</pre>
+    <div class="bar-list" style="margin-top:12px">
+      {{range .Stats.Channels}}<div class="bar-row"><span class="bar-label">{{.Key}}</span><div class="bar-track"><div class="bar-fill alt" style="width: {{percent .Count $.Stats.Active30d}}%"></div></div><span class="bar-val">{{.Count}}</span></div>{{end}}
+    </div>
+    <table class="mini-table" style="margin-top:16px">
+      <thead><tr><th>Country</th><th>Users</th></tr></thead>
+      <tbody>{{range .Stats.Countries}}<tr><td>{{.Key}}</td><td>{{.Count}}</td></tr>{{end}}</tbody>
+    </table>
+  </section>
+</div>
+
+<section class="card">
+  <h3>Daily active users (30d)</h3>
+  <pre class="code">SELECT day, COUNT(DISTINCT install_id) AS dau FROM pings
+ WHERE event='active' AND day >= date('now','-30 days') GROUP BY day ORDER BY day;</pre>
+  <canvas id="dauAnalytics" height="120" style="margin-top:12px"></canvas>
+</section>
+
+<script>window.__DAU_A__ = {{toJSON .Stats.DAU}};</script>
+<script>
+(function(){
+  var data=window.__DAU_A__; var c=document.getElementById('dauAnalytics'); if(!c||!data) return;
+  var ctx=c.getContext('2d'); var dpr=window.devicePixelRatio||1;
+  var rect=c.getBoundingClientRect(); c.width=rect.width*dpr; c.height=rect.height*dpr; ctx.scale(dpr,dpr);
+  var W=rect.width,H=rect.height,padL=28,padR=12,padT=12,padB=22;
+  var vals=data.map(function(d){return d.count}); var max=Math.max(1, Math.max.apply(null, vals));
+  var stepX=(W-padL-padR)/Math.max(1,data.length-1);
+  ctx.strokeStyle='#e5e7eb'; for(var g=0;g<=4;g++){var y=padT+(H-padT-padB)*g/4; ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke(); ctx.fillStyle='#9ca3af'; ctx.font='11px ui-monospace, monospace'; ctx.fillText(String(Math.round(max*(1-g/4))),2,y+3);}
+  ctx.strokeStyle='#0f766e'; ctx.lineWidth=2; ctx.beginPath();
+  data.forEach(function(d,i){var x=padL+i*stepX,y=padT+(H-padT-padB)*(1-d.count/max); if(i===0)ctx.moveTo(x,y); else ctx.lineTo(x,y);}); ctx.stroke();
+  ctx.fillStyle='#0f766e'; data.forEach(function(d,i){var x=padL+i*stepX,y=padT+(H-padT-padB)*(1-d.count/max); ctx.beginPath(); ctx.arc(x,y,2.2,0,Math.PI*2); ctx.fill();});
+})();
+</script>
