@@ -17,6 +17,9 @@
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
 // util/ray3d beside it, so the coordinate-system rules are testable without a window.
 #include "util/ucs.hpp"
+// ADR-060 .gscloud out-of-core cache: EXTRACTCENTERLINE (REQ-347) keeps one open cache handle
+// across hover frames rather than re-opening it every frame.
+#include "util/pointcloudcache.hpp"
 #include "PdfAttach.hpp"
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
@@ -1650,6 +1653,11 @@ struct AppCommandState {
     /// a path built from a variable number of points needs different state than a fixed-parameter
     /// command, and this one commits into `cadPipeRuns` rather than `cadSolids`.
     PipeRun,
+    /// EXTRACTCENTERLINE (REQ-347, GitHub issue #538): hover over a point cloud to preview a
+    /// least-squares cylinder-axis fit of the nearby points, click to commit it as a LINE. One
+    /// phase — no select-objects step, no typed parameters — closer in shape to `Kind::Pan`'s
+    /// hover-then-act than to any multi-phase draw command.
+    ExtractCenterline,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1727,6 +1735,7 @@ struct AppCommandState {
     case Kind::BConnectEdit:       return "BCONNECTEDIT";
     case Kind::BlockFitting:       return "BLOCKFITTING";
     case Kind::PipeRun:            return "PIPERUN";
+    case Kind::ExtractCenterline:  return "EXTRACTCENTERLINE";
     default:                  return "";
     }
   }
@@ -3345,6 +3354,50 @@ struct AppCommandState {
   float hatchAngleDeg = 0.f;
   float hatchScale = 1.f;
   std::string hatchPatternName;      ///< "" or "SOLID" = solid fill; e.g. "ANSI31" for a line pattern
+
+  // --- EXTRACTCENTERLINE command (REQ-347) ---
+  /// Session-global, ribbon-exposed fit parameters (Point Cloud contextual tab, "Centerline"
+  /// section) — same session-global shape as \ref pointCloudDisplay above, and for the same reason:
+  /// a real scan's pipe size and noise level vary drawing to drawing (field-tested: the shipped
+  /// default of 2.0 ft/0.15 was far too loose on a real 188M-point plant scan, catching 56,238
+  /// points spanning more than one member before it was hand-tuned down to 0.6 ft/0.2 — a value
+  /// that will not fit every scan either).
+  double extractCenterlineSearchRadiusFt = 0.6;
+  double extractCenterlineMaxResidualRatio = 0.2;
+  /// The current hover's cylinder-axis fit, in LOCAL storage coordinates (world = local +
+  /// worldDocumentOrigin, REQ-101) — the two endpoints a click commits as a LINE. \ref
+  /// extractCenterlineHoverValid is false whenever the hover found no acceptable fit (too few
+  /// points nearby, or the residual gate rejected the neighborhood); a click while false is a miss,
+  /// logged and left for another try, exactly like HATCH's own no-boundary-found click above.
+  bool extractCenterlineHoverValid = false;
+  /// Why the last hover found no fit — surfaced on a miss-click (REQ-201: refusals are named, not
+  /// silent). Empty only before the first hover update.
+  std::string extractCenterlineHoverDiag;
+  double extractCenterlineP0X = 0, extractCenterlineP0Y = 0, extractCenterlineP0Z = 0;
+  double extractCenterlineP1X = 0, extractCenterlineP1Y = 0, extractCenterlineP1Z = 0;
+  /// A real scan's bounded REQ-171 preview sample can be far too sparse for hovering to work at
+  /// all — a multi-hundred-million-point plant scan capped to a ~2M preview strides through each
+  /// octree leaf, so BOTH finding a point near the cursor at all AND the fit neighborhood around it
+  /// can come up empty even sitting squarely on a visible pipe (field-tested twice on a real
+  /// 188M-point scan: first the neighborhood alone was too sparse, then — after reading the
+  /// neighborhood from the real cache — locating any point near the cursor in the first place was
+  /// ALSO too sparse against the preview). So both steps read the out-of-core `.gscloud` cache
+  /// (ADR-060) when a cloud has one: one open handle per cloud, opened lazily and kept for the
+  /// command's duration.
+  struct ExtractCenterlineCacheEntry {
+    int cloudIndex = -1;
+    bool ok = false;
+    pointcloudcache::OpenCache cache;
+  };
+  std::vector<ExtractCenterlineCacheEntry> extractCenterlineOpenCaches;
+  /// Neighborhood-query hysteresis: re-reads the cache only when the hover has moved past a
+  /// fraction of the search radius since the last read, reusing \ref extractCenterlineLastNeighborhood
+  /// otherwise — so a nearly-still cursor does not re-hit disk every frame, keeping this nowhere
+  /// near the renderer's own much larger per-frame LOD reselect cost.
+  bool extractCenterlineLastQueryValid = false;
+  int extractCenterlineLastQueryCloudIndex = -1;
+  double extractCenterlineLastQueryX = 0, extractCenterlineLastQueryY = 0, extractCenterlineLastQueryZ = 0;
+  std::vector<double> extractCenterlineLastNeighborhood;
 
   // --- Selection (idle box pick + move/copy/rotate) ---
   std::vector<SelectedEntity> selection;
@@ -6355,6 +6408,19 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
 /// Index of the smallest-area filled region containing (wx,wy), or -1. Lowest pick priority (fills sit under
 /// linework) — the click handler calls this only after geometry/annotation picks miss (REQ-042).
 int PickFilledRegionAt(const AppCommandState& st, double wx, double wy);
+
+/// EXTRACTCENTERLINE (REQ-347): re-evaluates the hover's cylinder-axis fit against every visible
+/// point cloud's bounded preview sample under \p ray, writing the result into
+/// \c st.extractCenterlineHoverValid / P0/P1 (or clearing it when no acceptable fit is found —
+/// too few nearby points, or the residual gate rejects the neighborhood). \p ray must be the same
+/// ray the viewport's own hover/click seam already computed (REQ-058), exactly like every other
+/// hover-driven command in this file.
+void StartExtractCenterlineCommand(AppCommandState& st, std::vector<std::string>& log);
+void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray);
+/// Commits the hover's current fit (if valid) as a LINE entity, one undo step. Logs and leaves the
+/// command running, with no entity created, when the hover has no valid fit — the same "miss, try
+/// again" shape HATCH's own click handler uses.
+void SubmitExtractCenterlineViewportPick(AppCommandState& st, std::vector<std::string>& log);
 /// World pick tolerance for OFFSET entity selection (geometry scale + screen aperture).
 [[nodiscard]] float CadOffsetEntityPickTolWorld(const AppCommandState& st);
 /// Tight world pick tolerance for the idle hover highlight: fixed small pixel aperture so the cursor must

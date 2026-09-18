@@ -15,6 +15,7 @@
 #include "util/meshgeom.hpp"
 #include "util/pointcloudoctree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
 #include "util/pointcloudcache.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
+#include "util/cylinderfit.hpp"       // REQ-347 EXTRACTCENTERLINE's least-squares cylinder-axis fit
 #include "io/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
 #include "util/tinbuild.hpp"
 #include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
@@ -28867,6 +28868,248 @@ bool PointCloudVisible(const AppCommandState& st, size_t index) {
     return false;
   const CadLayerRow* lr = FindDrawingLayerRowCi(st, a.layer);
   return !(lr && (!lr->on || lr->frozen));
+}
+
+void StartExtractCenterlineCommand(AppCommandState& st, std::vector<std::string>& log) {
+  st.active = AppCommandState::Kind::ExtractCenterline;
+  st.lastCommand = AppCommandState::Kind::ExtractCenterline;
+  st.extractCenterlineHoverValid = false;
+  st.extractCenterlineHoverDiag = "not hovering yet";
+  st.extractCenterlineOpenCaches.clear();
+  st.extractCenterlineLastQueryValid = false;
+  st.extractCenterlineLastQueryCloudIndex = -1;
+  log.push_back("EXTRACTCENTERLINE — hover a scanned pipe/pole/column and click to place its "
+                "centerline (Esc to cancel).");
+}
+
+// Returns the open cache for `cloudIdx` from `st.extractCenterlineOpenCaches`, opening and caching
+// it on first use. nullptr when the cloud has no cache or it failed to open.
+static const pointcloudcache::OpenCache* GetOrOpenExtractCenterlineCache(AppCommandState& st,
+                                                                          int cloudIdx) {
+  for (const auto& entry : st.extractCenterlineOpenCaches)
+    if (entry.cloudIndex == cloudIdx)
+      return entry.ok ? &entry.cache : nullptr;
+  AppCommandState::ExtractCenterlineCacheEntry entry;
+  entry.cloudIndex = cloudIdx;
+  const CadPointCloud& pc = *st.cadPointClouds[static_cast<size_t>(cloudIdx)];
+  const pointcloudcache::OpenResult opened = pointcloudcache::Open(pc.cloudCachePath);
+  entry.ok = opened.ok;
+  if (opened.ok)
+    entry.cache = opened.cache;
+  st.extractCenterlineOpenCaches.push_back(std::move(entry));
+  return st.extractCenterlineOpenCaches.back().ok ? &st.extractCenterlineOpenCaches.back().cache
+                                                   : nullptr;
+}
+
+// Reads every point within `radius` of (cx,cy,cz) from `cache`'s leaves near that point (ADR-060) —
+// real scan density, not the bounded REQ-171 preview sample.
+static void ReadExtractCenterlineNeighborhood(const pointcloudcache::OpenCache& cache, double cx,
+                                              double cy, double cz, double radius,
+                                              std::vector<double>& outNeighborhood) {
+  const std::vector<std::int32_t> leaves =
+      pointcloud::QueryLeavesNearPoint(cache.octree, cx, cy, cz, radius);
+  const double r2 = radius * radius;
+  std::vector<double> leafXyz;
+  std::vector<float> leafColors, leafIntensity;
+  for (std::int32_t leafIdx : leaves) {
+    leafXyz.clear();
+    leafColors.clear();
+    leafIntensity.clear();
+    if (!pointcloudcache::ReadLeafPoints(cache, leafIdx, leafXyz, leafColors, leafIntensity))
+      continue;
+    for (size_t i = 0; i + 2 < leafXyz.size(); i += 3) {
+      const double dx = leafXyz[i] - cx, dy = leafXyz[i + 1] - cy, dz = leafXyz[i + 2] - cz;
+      if (dx * dx + dy * dy + dz * dz <= r2) {
+        outNeighborhood.push_back(leafXyz[i]);
+        outNeighborhood.push_back(leafXyz[i + 1]);
+        outNeighborhood.push_back(leafXyz[i + 2]);
+      }
+    }
+  }
+}
+
+void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray) {
+  st.extractCenterlineHoverValid = false;
+  if (!ray.valid()) {
+    st.extractCenterlineHoverDiag = "invalid pick ray";
+    return;
+  }
+
+  // Search radius for BOTH steps below: locating a real point near the cursor at all, and then the
+  // fit neighborhood around it. One radius for both is deliberate — step 1 only has to land
+  // anywhere on the same pipe for step 2's neighborhood (centred on step 1's own answer) to still
+  // cover real cylinder surface. Ribbon-exposed (Point Cloud tab, "Centerline" section) — field-
+  // tested on a real 188M-point plant scan: the shipped default of 2.0 ft found 56,238 real points
+  // in one neighborhood, spanning more than one member (a crossing beam, a bend, a bracket), which
+  // is what made it configurable rather than a hand-picked constant.
+  const double radius = std::max(0.05, st.extractCenterlineSearchRadiusFt);
+  const double r2 = radius * radius;
+  const cylinderfit::FitParams fitParams{12, std::max(0.01, st.extractCenterlineMaxResidualRatio)};
+
+  // 1. Nearest REAL point to the ray, across every visible point cloud. A multi-hundred-million-
+  // point scan's bounded REQ-171 preview sample is field-tested too sparse for this on its own — a
+  // 188M-point scan strided to a 2M preview left the nearest PREVIEW point routinely many feet from
+  // the ray even sitting squarely on a visible pipe, failing the pixel-derived hover tolerance
+  // outright. So a cloud with an out-of-core cache (ADR-060) is searched at real density instead:
+  // `SelectLodLeavesInCylinder` gives the leaves actually near the ray's LINE (not just one probe
+  // point), the same primitive the renderer's own camera-proximity LOD pass uses, at a MUCH smaller
+  // leaf cap here (this is a single-command hover query, not a whole-viewport redraw). Only a
+  // cache-less cloud falls back to the thin preview sample.
+  int bestCloud = -1;
+  double bestD2 = 1e300;
+  double bestX = 0, bestY = 0, bestZ = 0;
+  bool anyCacheOpenFailed = false;
+  constexpr int kMaxProbeLeaves = 24;
+  for (size_t pci = 0; pci < st.cadPointClouds.size(); ++pci) {
+    if (!PointCloudVisible(st, pci))
+      continue;
+    const std::shared_ptr<const CadPointCloud>& pc = st.cadPointClouds[pci];
+    if (!pc)
+      continue;
+    const int cloudIdx = static_cast<int>(pci);
+    bool searchedRealDensity = false;
+    if (pc->hasOutOfCoreCache()) {
+      const pointcloudcache::OpenCache* cache = GetOrOpenExtractCenterlineCache(st, cloudIdx);
+      if (!cache)
+        anyCacheOpenFailed = true;
+      if (cache) {
+        searchedRealDensity = true;
+        const std::vector<pointcloud::CylinderLodLeaf> leaves = pointcloud::SelectLodLeavesInCylinder(
+            cache->octree, ray.origin.x, ray.origin.y, ray.origin.z, ray.dir.x, ray.dir.y, ray.dir.z,
+            radius, kMaxProbeLeaves);
+        std::vector<double> leafXyz;
+        std::vector<float> leafColors, leafIntensity;
+        for (const pointcloud::CylinderLodLeaf& leaf : leaves) {
+          leafXyz.clear();
+          leafColors.clear();
+          leafIntensity.clear();
+          if (!pointcloudcache::ReadLeafPoints(*cache, leaf.leafNodeIndex, leafXyz, leafColors,
+                                               leafIntensity))
+            continue;
+          for (size_t i = 0; i + 2 < leafXyz.size(); i += 3) {
+            const double d = ray3d::RayPointDistance(
+                ray, ray3d::Vec3{leafXyz[i], leafXyz[i + 1], leafXyz[i + 2]});
+            const double d2 = d * d;
+            if (d2 < bestD2) {
+              bestD2 = d2;
+              bestCloud = cloudIdx;
+              bestX = leafXyz[i];
+              bestY = leafXyz[i + 1];
+              bestZ = leafXyz[i + 2];
+            }
+          }
+        }
+      }
+    }
+    if (!searchedRealDensity) {
+      const std::vector<double>& P = pc->pointsXyz;
+      for (size_t i = 0; i + 2 < P.size(); i += 3) {
+        const double d = ray3d::RayPointDistance(ray, ray3d::Vec3{P[i], P[i + 1], P[i + 2]});
+        const double d2 = d * d;
+        if (d2 < bestD2) {
+          bestD2 = d2;
+          bestCloud = cloudIdx;
+          bestX = P[i];
+          bestY = P[i + 1];
+          bestZ = P[i + 2];
+        }
+      }
+    }
+  }
+  if (bestCloud < 0) {
+    st.extractCenterlineHoverDiag =
+        anyCacheOpenFailed ? "no visible point cloud (its out-of-core cache failed to open)"
+                           : "no visible point cloud";
+    return;
+  }
+  const float tol = CadHoverEntityPickTolWorld(st);
+  const double gate = std::max(static_cast<double>(tol), radius);
+  if (bestD2 > gate * gate) {
+    // nothing close enough to the cursor to be "hovering a cloud" at all
+    st.extractCenterlineHoverDiag = "nearest scan point is " + std::to_string(std::sqrt(bestD2)) +
+                                    " ft from the cursor ray (need <= " + std::to_string(gate) + " ft)" +
+                                    (anyCacheOpenFailed ? " [a cloud's out-of-core cache failed to open]"
+                                                        : "");
+    return;
+  }
+
+  const double cx = bestX, cy = bestY, cz = bestZ;
+
+  // 2. The fit neighborhood around that point, at the same real density when the cache is open —
+  // re-read only when the hover has moved past a fraction of the radius since the last read
+  // (reusing the last neighborhood otherwise), so a nearly-still cursor does not re-hit disk every
+  // frame; this stays nowhere near the renderer's own much larger per-frame LOD reselect cost.
+  const pointcloudcache::OpenCache* cache = GetOrOpenExtractCenterlineCache(st, bestCloud);
+  const double moveHysteresis = radius * 0.3;
+  const bool reuseLast =
+      cache && st.extractCenterlineLastQueryValid && st.extractCenterlineLastQueryCloudIndex == bestCloud &&
+      (cx - st.extractCenterlineLastQueryX) * (cx - st.extractCenterlineLastQueryX) +
+              (cy - st.extractCenterlineLastQueryY) * (cy - st.extractCenterlineLastQueryY) +
+              (cz - st.extractCenterlineLastQueryZ) * (cz - st.extractCenterlineLastQueryZ) <=
+          moveHysteresis * moveHysteresis;
+
+  std::vector<double> neighborhood;
+  if (reuseLast) {
+    neighborhood = st.extractCenterlineLastNeighborhood;
+  } else {
+    if (cache)
+      ReadExtractCenterlineNeighborhood(*cache, cx, cy, cz, radius, neighborhood);
+    if (neighborhood.empty()) {
+      // No cache, or no cached leaves fell in range — fall back to the bounded preview sample.
+      const std::vector<double>& P = st.cadPointClouds[static_cast<size_t>(bestCloud)]->pointsXyz;
+      for (size_t i = 0; i + 2 < P.size(); i += 3) {
+        const double dx = P[i] - cx, dy = P[i + 1] - cy, dz = P[i + 2] - cz;
+        if (dx * dx + dy * dy + dz * dz <= r2) {
+          neighborhood.push_back(P[i]);
+          neighborhood.push_back(P[i + 1]);
+          neighborhood.push_back(P[i + 2]);
+        }
+      }
+    }
+    if (cache) {
+      st.extractCenterlineLastQueryValid = true;
+      st.extractCenterlineLastQueryCloudIndex = bestCloud;
+      st.extractCenterlineLastQueryX = cx;
+      st.extractCenterlineLastQueryY = cy;
+      st.extractCenterlineLastQueryZ = cz;
+      st.extractCenterlineLastNeighborhood = neighborhood;
+    }
+  }
+
+  const cylinderfit::FitResult fit = cylinderfit::FitCylinderAxisLeastSquares(neighborhood, fitParams);
+  if (!fit.ok) {
+    const size_t n = neighborhood.size() / 3;
+    st.extractCenterlineHoverDiag =
+        n < 12 ? "only " + std::to_string(n) + " points in the neighborhood (need at least 12)"
+               : std::to_string(n) + " points nearby, but they don't fit a cylinder closely enough";
+    return;  // too few points, or not cylindrical enough (REQ-347: no misleading preview)
+  }
+
+  st.extractCenterlineHoverValid = true;
+  st.extractCenterlineP0X = fit.p0X;
+  st.extractCenterlineP0Y = fit.p0Y;
+  st.extractCenterlineP0Z = fit.p0Z;
+  st.extractCenterlineP1X = fit.p1X;
+  st.extractCenterlineP1Y = fit.p1Y;
+  st.extractCenterlineP1Z = fit.p1Z;
+}
+
+void SubmitExtractCenterlineViewportPick(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.extractCenterlineHoverValid) {
+    log.push_back("EXTRACTCENTERLINE — no cylinder found there (" + st.extractCenterlineHoverDiag +
+                  "); hover a scanned pipe/pole/column and click (Esc to cancel).");
+    return;
+  }
+  PushUndoSnapshot(st, "Extract Centerline");
+  st.userLinesFlat.push_back(st.extractCenterlineP0X);
+  st.userLinesFlat.push_back(st.extractCenterlineP0Y);
+  st.userLinesFlat.push_back(st.extractCenterlineP0Z);
+  st.userLinesFlat.push_back(st.extractCenterlineP1X);
+  st.userLinesFlat.push_back(st.extractCenterlineP1Y);
+  st.userLinesFlat.push_back(st.extractCenterlineP1Z);
+  st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  log.push_back("EXTRACTCENTERLINE — line placed along the fitted cylinder axis.");
 }
 
 static bool BlockRefWorldSolidVisible(const AppCommandState& st, size_t solidIndex) {

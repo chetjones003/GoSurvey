@@ -472,6 +472,19 @@ static void DrawIcon(Canvas& c, const std::string& n) {
     }
     Line(c, 58, 66, 96, 28, T, GRAY);
     Arrow(c, 98, 26, 0.8f, -0.8f, 15, T, GRAY);
+  } else if (n == "c3d_extractcenterline") {
+    // A scanned pipe (BLUE capsule outline: two half-circle end caps + straight top/bottom) with
+    // its extracted axis as a dashed GRAY line through the middle, ticked at both ends like a
+    // dimension — "a line was pulled out of this cylinder" (REQ-347).
+    Ring(c, 40, 64, 24, T, BLUE, 1.5707963f, 4.712389f);   // left end cap (90..270 deg)
+    Ring(c, 88, 64, 24, T, BLUE, -1.5707963f, 1.5707963f); // right end cap (-90..90 deg)
+    Line(c, 40, 40, 88, 40, T, BLUE);
+    Line(c, 40, 88, 88, 88, T, BLUE);
+    // Dashed centerline axis, extending past both caps.
+    for (float x = 16.f; x < 112.f; x += 14.f)
+      Line(c, x, 64, std::min(x + 8.f, 112.f), 64, T * 0.6f, GRAY);
+    Line(c, 16, 56, 16, 72, T * 0.6f, GRAY);
+    Line(c, 112, 56, 112, 72, T * 0.6f, GRAY);
   } else if (n == "c3d_quickprofile") {
     Line(c, 18, 100, 18, 30, T * 0.8f, BLUE);
     Line(c, 18, 100, 110, 100, T * 0.8f, BLUE);
@@ -522,7 +535,7 @@ int main(int argc, char** argv) {
     "c3d_plottermgr", "c3d_exportto", "c3d_landxml", "c3d_exportpoints",
     "c3d_transferpoints", "c3d_publishsurf", "c3d_publishgis", "c3d_dwfx",
     "c3d_addlabels", "c3d_geodetic", "c3d_surfedit", "c3d_mapcheck", "c3d_astro",
-    "c3d_quickprofile",
+    "c3d_quickprofile", "c3d_extractcenterline",
   };
   int ok = 0;
   for (const char* nm : names) {

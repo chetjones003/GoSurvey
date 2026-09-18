@@ -105,6 +105,10 @@ enum class ViewportClickRoute : std::uint8_t {
   InsertBlockAlignFacePick,
   /// BCONNECT face pick while BEDIT is open (issue #475 inc5).
   BconnectFacePick,
+  /// EXTRACTCENTERLINE (REQ-347) owns its own entry point (`SubmitExtractCenterlineViewportPick`):
+  /// the click commits whatever cylinder fit the hover already computed, not a fresh coordinate or
+  /// entity pick — the same "own entry point" shape TRIM and HATCH already have above.
+  ExtractCenterlinePick,
   /// A command is asking for one **face of a solid** — `SECTIONPLANE`'s only step (REQ-342).
   ///
   /// A sub-object pick, not an entity pick, and until now it existed only as `Ctrl`+click in
@@ -181,6 +185,11 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   // refusal, rather than being silently swallowed by `Ignore`.
   case K::PipeRun:
     return R::SnappedPointPick;
+
+  // EXTRACTCENTERLINE (REQ-347): the click commits the hover's already-computed fit, not a fresh
+  // coordinate — its own route, matching TRIM/HATCH above.
+  case K::ExtractCenterline:
+    return R::ExtractCenterlinePick;
 
   // --- Select-then-point modify commands: window-select first, then coordinates. ---
   case K::Move:
@@ -491,6 +500,9 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   case R::IdleSelection:
   case R::SnappedPointPick:
   case R::HatchPick:
+  // EXTRACTCENTERLINE clicks the location the hover already fit, not an object (REQ-347) — same
+  // reasoning as HatchPick just above.
+  case R::ExtractCenterlinePick:
   case R::PdfAttachInsertPoint:
   case R::InsertBlockPick:
   case R::InsertBlockAlignFacePick:
