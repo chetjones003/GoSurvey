@@ -1,0 +1,33 @@
+{{if not .Rows}}
+<tr><td colspan="10" class="muted" style="padding:18px; text-align:center">No pings match the filters.</td></tr>
+{{else}}
+{{range .Rows}}
+<tr>
+  <td class="mono">{{.ID}}</td>
+  <td class="mono muted">{{.TS}}</td>
+  <td class="mono">{{.Day}}</td>
+  <td><span class="badge {{.Event}}">{{.Event}}</span></td>
+  <td class="mono">{{.Version}}</td>
+  <td><span class="badge ch">{{.Channel}}</span></td>
+  <td class="mono">{{.OS}}</td>
+  <td>{{if .Country}}{{.Country}}{{else}}<span class="muted">—</span>{{end}}</td>
+  <td class="mono muted">{{if .Email}}{{.Email}}{{else}}<span class="muted">—</span>{{end}}</td>
+  <td class="mono muted" title="{{.InstallID}}">{{slice .InstallID 0 8}}…</td>
+</tr>
+{{end}}
+{{end}}
+<tr>
+  <td colspan="10" style="padding:10px 12px; border-top:1px solid #e5e7eb">
+    <div class="pager">
+      <span class="muted small">{{.Total}} rows · page {{.Page}} / {{.TotalPages}}</span>
+      <span class="pager-btns">
+        {{if .HasPrev}}
+        <button class="btn btn-ghost small" hx-get="/partials/pings?page={{.PrevPage}}&event={{index .Query "event"}}&channel={{index .Query "channel"}}&version={{index .Query "version"}}&q={{index .Query "q"}}" hx-target="#pings-body">← Prev</button>
+        {{else}}<button class="btn btn-ghost small" disabled>← Prev</button>{{end}}
+        {{if .HasNext}}
+        <button class="btn btn-ghost small" hx-get="/partials/pings?page={{.NextPage}}&event={{index .Query "event"}}&channel={{index .Query "channel"}}&version={{index .Query "version"}}&q={{index .Query "q"}}" hx-target="#pings-body">Next →</button>
+        {{else}}<button class="btn btn-ghost small" disabled>Next →</button>{{end}}
+      </span>
+    </div>
+  </td>
+</tr>
