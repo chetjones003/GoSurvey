@@ -9437,7 +9437,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   // REQ-342. No bracketed options: the answer is a click on a face, not a keyword, and a link that
   // submits text here would have nothing to consume it.
   if (cmd.active == AppCommandState::Kind::SectionPlane)
-    return CadSectionPlanePromptText();
+    return CadSectionPlanePromptText(cmd);
   if (cmd.active == AppCommandState::Kind::Arc) {
     switch (cmd.arcPhase) {
     case AppCommandState::ArcPhase::WaitStart:

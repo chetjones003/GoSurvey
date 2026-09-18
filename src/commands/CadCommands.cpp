@@ -35893,8 +35893,95 @@ ucs::Ucs CadEffectiveSectionClipFrame(const AppCommandState& st) {
   return CadActiveUcsStorage(st);
 }
 
-const char* CadSectionPlanePromptText() {
-  return "SECTIONPLANE — select a flat face to place the section plane on. ESC cancels.";
+const char* CadSectionPlanePromptText(const AppCommandState& st) {
+  if (st.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint)
+    return "SECTIONPLANE — specify the through point of the section line. ESC cancels.";
+  return "SECTIONPLANE — select a flat face, or a point to start a section line. ESC cancels.";
+}
+
+/// Place the clip plane square to the work plane, through the section line \p a to \p b (REQ-342,
+/// 2026-09-18 revision; AutoCAD's "Select face or any point to locate section line").
+///
+/// The plane's normal is across the line, level with the work plane, so the plane STANDS on the line
+/// the way the one AutoCAD draws does. That is what lets a plane be aimed at a solid with no flat
+/// face — a sphere, a torus, a fillet — which the face form cannot do at all.
+///
+/// Refuses two points at the same place, and a line that runs straight up the work plane's own
+/// normal: neither names a plane (REQ-201).
+static bool ApplySectionPlaneFromLine(AppCommandState& st, const ray3d::Vec3& a, const ray3d::Vec3& b,
+                                      std::vector<std::string>& log) {
+  const ucs::Ucs work = CadActiveUcsStorage(st);
+  const ray3d::Vec3 along = ray3d::Sub(b, a);
+  const double len = ray3d::Length(along);
+  const double scale = std::max(1.0, ray3d::Length(a));
+  if (!(len > 1e-9 * scale)) {
+    log.push_back("SECTIONPLANE — the two points are in the same place; a section line needs two.");
+    return false;
+  }
+  const ray3d::Vec3 normal = ray3d::Cross(along, work.zAxis);
+  if (!(ray3d::Length(normal) > 1e-9 * len)) {
+    log.push_back("SECTIONPLANE — that line runs square to the work plane, so it names no section "
+                  "plane. Pick two points across the work plane instead.");
+    return false;
+  }
+  ucs::Ucs frame{};
+  if (!ucs::FromNormal(a, ray3d::Normalize(normal), &frame)) {
+    log.push_back("SECTIONPLANE — those two points do not name a plane.");
+    return false;
+  }
+  st.viewportSectionClipFrame = frame;
+  st.viewportSectionClipFrameValid = true;
+  st.viewportSectionClipOffset = 0.0;
+  st.viewportSectionClipFlip = false;
+  st.viewportSectionClipExtent = SectionPlaneExtent{};
+  st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
+  st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
+  st.viewportSectionClip = true;
+  st.sectionPlaneSelected = true;
+  log.push_back("SECTIONPLANE — plane placed on the section line. Drag the centre handle to slide "
+                "it, the arrow to flip it, the end handles to resize it.");
+  return true;
+}
+
+/// Take \p p as the next point of the section line, and place the plane once there are two.
+static void SubmitSectionPlaneLinePoint(AppCommandState& st, const ray3d::Vec3& p,
+                                        std::vector<std::string>& log) {
+  using PP = AppCommandState::SectionPlanePhase;
+  if (st.sectionPlanePhase == PP::PickFaceOrPoint) {
+    st.sectionPlaneP1 = p;
+    st.sectionPlanePhase = PP::WaitThroughPoint;
+    log.push_back(CadSectionPlanePromptText(st));
+    return;
+  }
+  if (!ApplySectionPlaneFromLine(st, st.sectionPlaneP1, p, log)) {
+    // Still open, still on the same first point: the through point is what was wrong, and making
+    // the user start the line again would throw away a pick that was fine.
+    log.push_back(CadSectionPlanePromptText(st));
+    return;
+  }
+  CancelSectionPlaneCommand(st);
+}
+
+void SubmitSectionPlanePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::SectionPlane)
+    return;
+  const ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
+                      static_cast<double>(CadCommitElevation(st))};
+  SubmitSectionPlaneLinePoint(st, p, log);
+}
+
+bool HandleSectionPlaneTextInput(const std::string& lineIn, AppCommandState& st,
+                                 std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::SectionPlane)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  if (line.empty())
+    return true;  // Enter at a point prompt: nothing to accept, keep waiting
+  ray3d::Vec3 p{};
+  if (!ParseSolidBasePoint(st, line, &p, log, "SECTIONPLANE"))
+    return true;  // it has already said why, once
+  SubmitSectionPlaneLinePoint(st, p, log);
+  return true;
 }
 
 void CancelSectionPlaneCommand(AppCommandState& st) {
@@ -35915,13 +36002,15 @@ void StartSectionPlaneCommand(AppCommandState& st, std::vector<std::string>& log
   st.active = AppCommandState::Kind::SectionPlane;
   st.lastCommand = AppCommandState::Kind::SectionPlane;
   st.selBoxWaitingSecond = false;
+  st.sectionPlanePhase = AppCommandState::SectionPlanePhase::PickFaceOrPoint;
+  st.sectionPlaneP1 = ray3d::Vec3{};
   if (st.cadSolids.empty()) {
     // Said before the user hunts for something to click. The command still opens: a solid can be
     // created and picked without retyping, and refusing outright would be a command that works or
     // not depending on drawing order.
     log.push_back("SECTIONPLANE — there are no solids in the drawing yet.");
   }
-  log.push_back(CadSectionPlanePromptText());
+  log.push_back(CadSectionPlanePromptText(st));
 }
 
 /// The surface kind, for the refusal message. Local rather than added to `brep` because this is
@@ -35999,37 +36088,71 @@ bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
                                 const solidpick::Tolerance& tol, std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::SectionPlane)
     return false;
+  using PP = AppCommandState::SectionPlanePhase;
+
   SelectedSubObject hit{};
   solidpick::Pick pick{};
-  if (!PickSubObjectAcrossSolids(st, ray, tol, &hit, &pick)) {
+  const bool hitSomething = PickSubObjectAcrossSolids(st, ray, tol, &hit, &pick);
+
+  // Where this click lands when it is taken as a POINT rather than a face: on the geometry it hit,
+  // which is what makes "click the middle of the torus" mean the middle of the torus, and otherwise
+  // on the work plane, which is where a click in empty space has always been resolved.
+  const auto pointOfClick = [&](ray3d::Vec3* out) {
+    if (hitSomething) {
+      *out = pick.point;
+      return true;
+    }
+    const ucs::Ucs work = CadActiveUcsStorage(st);
+    ray3d::Plane plane{};
+    plane.point = work.origin;
+    plane.normal = work.zAxis;
+    return ray3d::RayPlaneIntersect(ray, plane, out);
+  };
+
+  if (st.sectionPlanePhase == PP::WaitThroughPoint) {
+    ray3d::Vec3 p{};
+    if (!pointOfClick(&p)) {
+      log.push_back("SECTIONPLANE — that click is not on the work plane; pick a point on it.");
+      log.push_back(CadSectionPlanePromptText(st));
+      return false;
+    }
+    SubmitSectionPlaneLinePoint(st, p, log);
+    return st.active != AppCommandState::Kind::SectionPlane;
+  }
+
+  // A FLAT face answers the whole command in one click, and is still what this offers first.
+  if (hitSomething && hit.kind == solidpick::Kind::Face) {
+    const std::shared_ptr<const brep::Solid> owner = hit.owner.lock();
+    if (!owner) {
+      log.push_back("SECTIONPLANE — that solid is no longer in the drawing.");
+      log.push_back(CadSectionPlanePromptText(st));
+      return false;
+    }
+    if (owner->faces.size() > static_cast<size_t>(std::max(hit.index, 0)) && hit.index >= 0 &&
+        owner->faces[static_cast<size_t>(hit.index)].surface.kind == brep::SurfaceKind::Plane) {
+      if (!ApplySectionPlaneFromFace(st, *owner, hit.index, log)) {
+        log.push_back(CadSectionPlanePromptText(st));
+        return false;  // still open, so the next click can pick a different face
+      }
+      CancelSectionPlaneCommand(st);
+      return true;
+    }
+  }
+
+  // Anything else — a curved face, an edge, a vertex, empty space — is a POINT, and starts a section
+  // line (REQ-342, 2026-09-18 revision). A sphere and a torus have no flat face at all, so before
+  // this they could not be given a section plane by any click.
+  ray3d::Vec3 p{};
+  if (!pointOfClick(&p)) {
     // The command STAYS OPEN. A missed click is a missed click, not a reason to throw the user out
     // of a command they are halfway through — the rule REQ-335's selection step had to learn after
     // it ended itself and left the next click landing on nothing.
-    log.push_back("SECTIONPLANE — no face there.");
-    log.push_back(CadSectionPlanePromptText());
+    log.push_back("SECTIONPLANE — that click is not on the work plane; pick a point on it.");
+    log.push_back(CadSectionPlanePromptText(st));
     return false;
   }
-  if (hit.kind != solidpick::Kind::Face) {
-    // An edge or a vertex was nearer. Say which, so the user knows to aim at the middle of the face
-    // rather than wondering why the click did nothing.
-    log.push_back(hit.kind == solidpick::Kind::Vertex
-                      ? "SECTIONPLANE — that is a vertex; click the middle of a flat face."
-                      : "SECTIONPLANE — that is an edge; click the middle of a flat face.");
-    log.push_back(CadSectionPlanePromptText());
-    return false;
-  }
-  const std::shared_ptr<const brep::Solid> owner = hit.owner.lock();
-  if (!owner) {
-    log.push_back("SECTIONPLANE — that solid is no longer in the drawing.");
-    log.push_back(CadSectionPlanePromptText());
-    return false;
-  }
-  if (!ApplySectionPlaneFromFace(st, *owner, hit.index, log)) {
-    log.push_back(CadSectionPlanePromptText());
-    return false;  // still open, so the next click can pick a different face
-  }
-  CancelSectionPlaneCommand(st);
-  return true;
+  SubmitSectionPlaneLinePoint(st, p, log);
+  return false;  // the command is still running: it has one more point to take
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -40146,6 +40269,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleSectionTextInput(line, st, log))
       return;
     log.push_back(CadSectionPromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::SectionPlane) {
+    if (HandleSectionPlaneTextInput(line, st, log))
+      return;
+    log.push_back(CadSectionPlanePromptText(st));
     return;
   }
 

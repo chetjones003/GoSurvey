@@ -52,18 +52,25 @@ EXPECT SOLIDS 1
 # not a prompt.
 
 CMD SECTIONPLANE
-EXPECT LOG "SECTIONPLANE — select a flat face to place the section plane on. ESC cancels."
+EXPECT LOG "SECTIONPLANE — select a flat face, or a point to start a section line. ESC cancels."
 EXPECT ACTIVE SECTIONPLANE
 
-# --- a click that misses keeps the command open --------------------------------------------------
+# --- a click that hits no face starts a section LINE, and keeps the command open ------------------
 #
-# Well off the box. A missed click is a missed click; ending the command over one would throw the
-# user out of something they are halfway through.
+# Well off the box. Since the 2026-09-18 revision such a click is a POINT (the first of a section
+# line, req342-section-plane-by-points) rather than a miss — but the rule this case was written for
+# still holds: the command stays open, and nothing is placed until it has both points. ESC here
+# leaves the clip exactly as it was.
 
 CLICK 200 200 6
-EXPECT LOG "SECTIONPLANE — no face there."
+EXPECT LOG "SECTIONPLANE — specify the through point of the section line. ESC cancels."
 EXPECT ACTIVE SECTIONPLANE
 EXPECT SECTIONCLIP OFF
+ESC
+EXPECT ACTIVE NONE
+EXPECT SECTIONCLIP OFF
+CMD SECTIONPLANE
+EXPECT ACTIVE SECTIONPLANE
 
 # --- clicking the middle of a face places the plane ----------------------------------------------
 #
