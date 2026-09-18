@@ -177,7 +177,11 @@ public:
                    // profile (e) has not been measured, and implementation-rules.md §5 is explicit
                    // that unmeasured optimisation is not added speculatively.
                    const std::vector<std::shared_ptr<const CadPointCloud>>* pointClouds = nullptr,
-                   const std::vector<EntityAttributes>* pointCloudAttrs = nullptr);
+                   const std::vector<EntityAttributes>* pointCloudAttrs = nullptr,
+                   // REQ-171 (part 14): session-global point size / LOD target / colour scheme.
+                   // Pointer so a caller that can't easily reach it degrades to the old hardcoded
+                   // defaults rather than failing to compile or crashing.
+                   const PointCloudDisplaySettings* pointCloudDisplay = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
@@ -277,6 +281,15 @@ private:
     /// see TASK-270 part 10. 0 = nothing uploaded yet.
     int lodStride = 0;
 
+    /// The colour scheme the CURRENTLY UPLOADED vertex data (both the preview buffer and every
+    /// resident LOD leaf) was baked with. Neither the preview's `anchorStale` gate nor the LOD
+    /// leaves' camera-movement hysteresis (`lodSelectionValid` below) has anything to do with the
+    /// user flipping the ribbon's colour-scheme combo — without this, changing Solid/Elevation/
+    /// Intensity would sit invisible until the camera happened to move far enough to force a
+    /// rebuild anyway (TASK-270 part 14 bugfix).
+    PointCloudColorScheme lastColorScheme = PointCloudColorScheme::Rgb;
+    bool lastColorSchemeValid = false;
+
     /// The camera state the CURRENT `leafGpu` set/stride was selected for (TASK-270 part 11) — NOT
     /// re-evaluated every frame. Re-running the cylinder query and, on a stride/leaf-set change,
     /// re-reading and re-uploading up to `kMaxLodLeafCandidates` leaves from disk is real I/O cost;
@@ -296,6 +309,11 @@ private:
     /// reselects bounds the cost per second regardless of frame rate or how fast the user orbits,
     /// which is what breaks that feedback loop.
     std::chrono::steady_clock::time_point lodLastReselectTime{};
+    /// The LOD point-count target the CURRENT `leafGpu`/`lodStride` selection was computed against
+    /// (TASK-270 part 14 bugfix). `needsReselect` below is purely camera-movement hysteresis, so
+    /// without tracking this separately, dragging the ribbon's LOD Target slider would sit inert
+    /// until the camera happened to move enough to trigger a reselect anyway.
+    std::int64_t lastLodTargetPoints = 0;
   };
   std::vector<PointCloudGpuEntry> pointCloudGpu_;
   void ReleasePointCloudGpu();

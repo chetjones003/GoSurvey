@@ -292,9 +292,9 @@ Two more real issues, not new bugs but gaps in part 5's progress reporting:
 
 ## 11. Still not done
 - REQ-100 profile (e) benchmark instrument (`BENCH POINTCLOUD`) against the real 7.8GB file.
-- Ribbon UI point size/LOD/colour-scheme controls, PTS/PTX/LAS/LAZ readers — separate future
-  increments per `file-format-specs.md` §6.
+- PTS/PTX/LAS/LAZ readers — separate future increments per `file-format-specs.md` §6.
 - `CadBlocks.cpp` / `CadCommands_Bench.cpp` deliberately left unmirrored (no current caller).
+- Ribbon UI point size/LOD/colour-scheme controls: **done, this session — see §13.**
 
 ## 10d. Octree LOD paging in the renderer — implemented (this session, part 7)
 Closes the one item part 4's log left open: the renderer no longer draws only the flat, bounded
@@ -584,6 +584,123 @@ happen sooner, because the clock (not the frame) is what gates it.
   longer drops frames, and that detail still updates promptly once a drag settles (the 200ms floor
   should be short enough to feel immediate once the camera stops moving).
 
+## 13. Selection + ribbon UI (this session, part 14)
+Closes the two items §11 had listed short: point clouds had no candidate-generation in either pick
+path (a real gap against REQ-171's own "selects as one object" acceptance line), and there was no
+ribbon UI for point size / LOD target / colour scheme.
+
+**Part 1 — click-select and box-select.**
+- `PointCloudVisible(const AppCommandState&, size_t)` (`src/commands/CadCommands.cpp`, declared
+  alongside `SolidVisible` in `CadCommands.hpp`) mirrors `SolidVisible` exactly: bounds check,
+  REQ-084 `CadEntityIdHidden`, then `FindDrawingLayerRowCi` on/frozen check.
+- `PickClosestCadEntity` (`CadCommands.cpp`, after the B-rep solids block) walks each visible
+  cloud's **resident preview points only** (`pc->pointsXyz`, the bounded ≤2,000,000-point sample —
+  never the full `.gscloud` cache, which would mean a disk read on every hover frame, exactly what
+  the LOD renderer's reselect hysteresis (§10h/10j) exists to avoid), tracks the best distance
+  across all of a cloud's points via the existing `d2Point` lambda, and calls `consider` once per
+  cloud. A plan-XY AABB pre-reject skips a cloud outright in the non-ray case.
+- `ComputeSelectionFromRect` (box-select, `CadCommands.cpp`, after the B-rep solids block) mirrors
+  the zoom-extents box walk: bbox over the same preview points, `SPBox` screen transform, then the
+  existing window/crossing hit test.
+- Checked every `case T::Solid`/`Type::Solid` switch in `CadUi.cpp`/`CadCommands.cpp` for a missing
+  `PointCloud` arm — §7's mirroring pass had already added one everywhere it matters (erase,
+  `AttrsForKind`, EXPLODE classifier, viewport click routing), so nothing else needed a new case.
+
+**Part 2 — global point-cloud display settings.**
+- `PointCloudColorScheme` (`Rgb`/`Solid`/`Elevation`/`Intensity`) and `PointCloudDisplaySettings`
+  (`pointSizePx`, `lodTargetPoints`, `colorScheme`) added to `CadCommands.hpp`, next to the ribbon
+  tab constants; `AppCommandState::pointCloudDisplay` is the one session-global instance — deliberate,
+  since `CadPointCloud`'s payload is immutable (architecture §11.5) and cannot hold mutable display
+  prefs itself, the same reasoning that keeps `SurfaceStyle` off `CadSurface`.
+- `ViewportRenderer::RenderScene` gained a trailing `const PointCloudDisplaySettings* pointCloudDisplay
+  = nullptr` parameter (pointer so a null caller degrades to the old hardcoded defaults); `main.cpp`'s
+  one call site now passes `&cmd.pointCloudDisplay`.
+- `glPointSize(2.0f)` and the file-local `kTargetLodPoints` constant now read from
+  `pointCloudDisplay` when present, falling back to their old literal values otherwise.
+- Colour scheme: a new shared free function `ResolvePointCloudVertexColor` (anonymous namespace,
+  `ViewportRenderer.cpp`, just above `RenderScene`) is the ONE place the Rgb/Solid/Elevation/
+  Intensity switch is written, called from all three vertex-build sites (the flat preview buffer,
+  the initial LOD-leaf upload, and the anchor-stale LOD-leaf rebuild) — so a leaf/preview boundary
+  cannot show a scheme discontinuity. Elevation uses a three-stop blue→green→red ramp against the
+  cloud's Z range, read from `pc->octree.nodes[0].bounds.minZ/maxZ` (cheap, no disk read) with a
+  resident-preview-scan fallback for a cloud with no out-of-core cache yet. Intensity falls back to
+  RGB-or-fallback behaviour on a cloud with no intensity channel (`pc->hasIntensity()` false).
+
+**Part 3 — contextual "Point Cloud" ribbon tab.**
+- `kRibbonTabPointCloudCtx = 10` (`CadCommands.hpp`, next after `kRibbonTabBlockEditor`);
+  `AppCommandState::pointCloudContextualRibbonArmed` / `ribbonTabBeforePointCloudCtx` added beside
+  the surface/surveyPoint/blockEditor equivalents.
+- `FirstSelectedPointCloudIndex` (`CadUi.cpp`) mirrors `FirstSelectedSurfaceIndex`. The arm/disarm
+  block mirrors the surface block exactly, and the three existing chains (surface/surveyPoint's own
+  disarm fallbacks) were each extended with one more `else if` link to the point-cloud tab, so all
+  four contextual tabs interoperate: surface > surveyPoint > point-cloud is the settled precedence
+  when more than one is selected at once (simplest stable choice — point cloud is newest and least
+  likely to be what a mixed selection means).
+- Tab-strip button added (same 4-colour push/pop pattern as the other three contextual tabs).
+- Tab content: one section ("Point Cloud Display") with a Point Size slider (1–10 px), an LOD
+  Target slider (100k–3M points), and a Color Scheme combo (RGB/Solid/Elevation/Intensity), all
+  bound directly to `cmd.pointCloudDisplay` fields and labelled/tooltipped as session-global (every
+  cloud in the drawing, not just the selected one) since the underlying state is session-global too.
+
+**Verification.** `gosurvey_domain`, `GoSurvey.exe`, `gosurvey_headless.exe`, `GsJsonDwgFixture.exe`,
+`GoSurveyTests.exe`, `GoSurveySnapTests.exe` all build clean. `GoSurveyTests`: 1194 cases /
+8,954,034 assertions green (unchanged from part 13 — no new Catch2 tests this round). `GoSurveySnap
+Tests`: 327 cases / 3,040 assertions green. The full ctest run shows 6 pre-existing headless-
+transcript failures (`issue233-command-name-at-point-prompt`, `issue402-offset-ucs`,
+`regression-58-offset-entity-id`, `req068-surface-selection`, `req313-solid-isolines`, `req313-
+solid-primitives`) — confirmed by stashing this session's changes and re-running the same six on
+unmodified `beta`: identical failures, so these predate this increment and are not a regression
+introduced here.
+
+**Not tested — no natural harness.** `PointCloudVisible`/pick/box-select are exercised by hand-
+tracing against `SolidVisible`'s own (untested-in-isolation) pattern; grepping `tests/` for
+`PickClosestCadEntity`/`ComputeSelectionFromRect` found no existing Catch2 harness that drives
+picking through synthetic geometry for ANY entity kind (Solid included) — pick/box-select are only
+exercised indirectly through the headless transcript suite's click/drag verbs on specific
+scenarios, none of which happen to cover a point cloud yet. Matching the existing precedent rather
+than inventing new test infrastructure for this one entity kind. The ribbon tab and GL colour-scheme
+code are UI/render surface with the same `project_gui_hover_not_automatable` limitation every prior
+rendering part in this task has stated — **not yet visually confirmed**: needs a manual check that
+clicking/box-selecting a cloud in the real app actually selects it, that the Point Cloud tab arms/
+disarms correctly against the other three contextual tabs, and that the Elevation/Intensity/Solid
+colour schemes render as expected (only RGB has been exercised — the E57 fixtures used for
+import/round-trip testing all carry colour).
+
+**Known simplification, documented in code**: the Point Cloud ribbon tab has no per-cloud controls
+(e.g. an isolate/properties button matching the surface tab's General Tools group) — only the three
+requested session-global display settings, per the scope given for this increment.
+
+## 13a. User report: LOD Target slider does nothing, only RGB scheme renders — fixed (this
+session, part 15)
+Real gap found on manual test: the Color Scheme combo and LOD Target slider both write
+`cmd.pointCloudDisplay` correctly, but **nothing was watching for that change** — the preview
+buffer only rebuilds on `anchorStale` (sticky-anchor drift) and the LOD-leaf pass only reselects on
+camera-movement hysteresis (TASK-270 parts 11/13, added specifically to stop rebuilding every
+frame). Neither has anything to do with the user touching a ribbon control, so a scheme/target
+change sat inert until the camera happened to drift/move enough to force a rebuild anyway — which
+is why only RGB (the scheme every existing test fixture already uploads at import) ever appeared to
+work, and why the LOD slider looked like a no-op.
+
+**Fix**: `PointCloudGpuEntry` (`ViewportRenderer.hpp`) gained `lastColorScheme`/
+`lastColorSchemeValid` and `lastLodTargetPoints`, snapshotting what the CURRENTLY uploaded vertex
+data was built against. `ViewportRenderer.cpp`'s point-cloud block now computes
+`colorSchemeStale`/`lodTargetStale` each frame and ORs them into: the preview buffer's rebuild gate
+(`anchorStale || colorSchemeStale`), the LOD reselect trigger (`movedEnough`, bypassing both the
+hysteresis test and its 200ms wall-clock floor — a ribbon change is a deliberate one-shot action,
+not continuous camera motion, so it should apply immediately rather than wait for the next orbit
+step), and the leaf-vertex full-rebuild condition (`anchorStale || strideStale || colorSchemeStale`).
+`lastLodTargetPoints` is written back inside the `needsReselect` block once a reselect actually runs
+with the new target.
+- No test changes: this is the same renderer GL-code boundary as every other rendering part in this
+  task, outside what the Catch2 suites exercise.
+- Full suite verified: `ctest --test-dir build` — 1673/1681 tests passed, the same 8 pre-existing
+  failures (none point-cloud related: `req233`, `req402-offset-ucs`, `regression-58`,
+  `req068-surface-selection`, `req087-feature-line-modify`, `req313-solid-isolines`,
+  `req313-solid-primitives`, one PIPERUN case) reproduced identically by stashing this fix and
+  re-running against unmodified `beta` — confirmed pre-existing, not a regression.
+- **Not yet re-confirmed manually** — needs a check that the Color Scheme combo and LOD Target
+  slider now visibly change the render immediately, not just on the next camera move.
+
 ## 12. Log
 - 2026-09-17 (part 1): Xerces-C + libE57Format vendored and built from source. `CadPointCloud`
   entity, octree builder, and E57 reader implemented with tests.
@@ -628,3 +745,10 @@ happen sooner, because the clock (not the frame) is what gates it.
   forcing a full disk-read-and-reupload of up to 1,500 leaves, on very nearly every frame. Fixed with
   camera-movement hysteresis (same idea as the existing anchor-drift budget): re-select only once
   the focus/radius/direction have moved meaningfully, not every frame. Full suite still green.
+- 2026-09-18 (part 14): selection + ribbon UI (§13) — `PointCloudVisible` + point-cloud candidate
+  loops in `PickClosestCadEntity`/`ComputeSelectionFromRect` (closes the REQ-171 "selects as one
+  object" gap), session-global `PointCloudDisplaySettings` (point size/LOD target/colour scheme)
+  wired into `ViewportRenderer` via a shared `ResolvePointCloudVertexColor` helper, and a contextual
+  "Point Cloud" ribbon tab mirroring the TIN Surface tab. Full Catch2 suite unchanged (1194/8,954,034
+  + 327/3,040); 6 pre-existing headless-transcript failures confirmed unrelated (reproduced on
+  unmodified `beta`).

@@ -1552,7 +1552,8 @@ int main()
                                // entity. Appended at the very end of this positional call — see the
                                // renderer header's own note on why.
                                (paperSpace || cmd.cadPointClouds.empty()) ? nullptr : &cmd.cadPointClouds,
-                               (paperSpace || cmd.cadPointCloudAttrs.empty()) ? nullptr : &cmd.cadPointCloudAttrs);
+                               (paperSpace || cmd.cadPointCloudAttrs.empty()) ? nullptr : &cmd.cadPointCloudAttrs,
+                               &cmd.pointCloudDisplay);
     cmd.perfRenderMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfRenderT0).count();
 

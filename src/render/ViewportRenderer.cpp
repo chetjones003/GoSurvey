@@ -1030,6 +1030,66 @@ void ViewportRenderer::SetSize(int width, int height) {
   EnsureFramebuffer(width, height);
 }
 
+namespace {
+/// REQ-171 (part 14) shared point-cloud vertex colour resolution. One function so the preview
+/// buffer and both LOD-leaf build sites (initial upload + anchor-stale rebuild) cannot disagree at
+/// a leaf/stride boundary — a discontinuity there would read as a visible seam.
+///
+/// `hasSourceRgb`/`srcR,G,B` is the point's own scanned colour (may be absent); `hasIntensity`/
+/// `intensityVal` is its 0..1 intensity sample (may be absent); `fallbackR,G,B` is the resolved
+/// layer/entity colour used whenever a scheme can't produce something better; `z`/`cloudMinZ`/
+/// `cloudMaxZ` drive the Elevation ramp. Writes into `outRgb[3]`.
+void ResolvePointCloudVertexColor(PointCloudColorScheme scheme, bool hasSourceRgb, float srcR,
+                                   float srcG, float srcB, bool hasIntensity, float intensityVal,
+                                   float fallbackR, float fallbackG, float fallbackB, float z,
+                                   float cloudMinZ, float cloudMaxZ, float outRgb[3]) {
+  switch (scheme) {
+    case PointCloudColorScheme::Solid:
+      outRgb[0] = fallbackR;
+      outRgb[1] = fallbackG;
+      outRgb[2] = fallbackB;
+      return;
+    case PointCloudColorScheme::Elevation: {
+      const float span = cloudMaxZ - cloudMinZ;
+      float t = span > 1e-6f ? (z - cloudMinZ) / span : 0.f;
+      t = std::clamp(t, 0.f, 1.f);
+      // Simple three-stop ramp: blue (low) -> green (mid) -> red (high). First-cut, readable.
+      if (t < 0.5f) {
+        const float u = t * 2.f;
+        outRgb[0] = 0.f;
+        outRgb[1] = u;
+        outRgb[2] = 1.f - u;
+      } else {
+        const float u = (t - 0.5f) * 2.f;
+        outRgb[0] = u;
+        outRgb[1] = 1.f - u;
+        outRgb[2] = 0.f;
+      }
+      return;
+    }
+    case PointCloudColorScheme::Intensity:
+      if (hasIntensity) {
+        const float g = std::clamp(intensityVal, 0.f, 1.f);
+        outRgb[0] = outRgb[1] = outRgb[2] = g;
+        return;
+      }
+      [[fallthrough]];  // no intensity channel on this cloud — behave like Rgb below.
+    case PointCloudColorScheme::Rgb:
+    default:
+      if (hasSourceRgb) {
+        outRgb[0] = srcR;
+        outRgb[1] = srcG;
+        outRgb[2] = srcB;
+      } else {
+        outRgb[0] = fallbackR;
+        outRgb[1] = fallbackG;
+        outRgb[2] = fallbackB;
+      }
+      return;
+  }
+}
+}  // namespace
+
 void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<double>& userLines, const std::vector<double>& circlesCxCyZR,
                                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
@@ -1056,7 +1116,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const CadSubObjectOverlay* subObjectOverlay,
                                    const CadGizmoOverlay* gizmoOverlay,
                                    const std::vector<std::shared_ptr<const CadPointCloud>>* pointClouds,
-                                   const std::vector<EntityAttributes>* pointCloudAttrs) {
+                                   const std::vector<EntityAttributes>* pointCloudAttrs,
+                                   const PointCloudDisplaySettings* pointCloudDisplay) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -1707,8 +1768,28 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       float fallbackRgba[4] = {0.7f, 0.7f, 0.7f, 1.f};
       if (attr)
         ResolveEntityRgbaForViewport(*attr, lr, 0.7f, 0.7f, 0.7f, fallbackRgba);
-      if (anchorStale) {
+      const PointCloudColorScheme colorScheme =
+          pointCloudDisplay ? pointCloudDisplay->colorScheme : PointCloudColorScheme::Rgb;
+      // Z range for the Elevation scheme — from the octree root bounds when available (cheap, no
+      // disk read) rather than re-walking the preview a second time.
+      float cloudMinZ = 0.f, cloudMaxZ = 0.f;
+      if (!pc->octree.nodes.empty()) {
+        cloudMinZ = static_cast<float>(pc->octree.nodes[0].bounds.minZ);
+        cloudMaxZ = static_cast<float>(pc->octree.nodes[0].bounds.maxZ);
+      } else if (pc->pointsXyz.size() >= 3) {
+        cloudMinZ = cloudMaxZ = static_cast<float>(pc->pointsXyz[2]);
+        for (size_t v = 0; v + 2 < pc->pointsXyz.size(); v += 3) {
+          cloudMinZ = std::min(cloudMinZ, static_cast<float>(pc->pointsXyz[v + 2]));
+          cloudMaxZ = std::max(cloudMaxZ, static_cast<float>(pc->pointsXyz[v + 2]));
+        }
+      }
+      // A colour-scheme change is not a camera event, so it must force a rebuild on its own —
+      // otherwise flipping the ribbon's combo would sit invisible until the anchor happened to
+      // drift (TASK-270 part 14 bugfix).
+      const bool colorSchemeStale = !entry->lastColorSchemeValid || entry->lastColorScheme != colorScheme;
+      if (anchorStale || colorSchemeStale) {
         const bool haveColor = pc->hasColor() && pc->colorsRgb.size() == pc->pointsXyz.size();
+        const bool haveIntensity = pc->hasIntensity() && pc->intensity.size() == pc->pointsXyz.size() / 3;
         const size_t pcount = pc->pointsXyz.size() / 3;
         cpuPointCloudVerts_.clear();
         cpuPointCloudVerts_.resize(pcount * 7);
@@ -1720,16 +1801,18 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           float* o = &cpuPointCloudVerts_[v * 7];
           o[0] = rx;
           o[1] = ry;
-          o[2] = static_cast<float>(pc->pointsXyz[v * 3 + 2]);  // Z is absolute (ADR-025 D2)
-          if (haveColor) {
-            o[3] = pc->colorsRgb[v * 3];
-            o[4] = pc->colorsRgb[v * 3 + 1];
-            o[5] = pc->colorsRgb[v * 3 + 2];
-          } else {
-            o[3] = fallbackRgba[0];
-            o[4] = fallbackRgba[1];
-            o[5] = fallbackRgba[2];
-          }
+          const float z = pc->pointsXyz[v * 3 + 2];
+          o[2] = z;  // Z is absolute (ADR-025 D2)
+          float rgb[3];
+          ResolvePointCloudVertexColor(colorScheme, haveColor,
+                                        haveColor ? pc->colorsRgb[v * 3] : 0.f,
+                                        haveColor ? pc->colorsRgb[v * 3 + 1] : 0.f,
+                                        haveColor ? pc->colorsRgb[v * 3 + 2] : 0.f, haveIntensity,
+                                        haveIntensity ? pc->intensity[v] : 0.f, fallbackRgba[0],
+                                        fallbackRgba[1], fallbackRgba[2], z, cloudMinZ, cloudMaxZ, rgb);
+          o[3] = rgb[0];
+          o[4] = rgb[1];
+          o[5] = rgb[2];
           o[6] = 1.f;
         }
         glBindBuffer(GL_ARRAY_BUFFER, entry->vbo);
@@ -1738,6 +1821,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         entry->pointCount = static_cast<int>(pcount);
         entry->anchorX = viewAnchorX;
         entry->anchorY = viewAnchorY;
+        entry->lastColorScheme = colorScheme;
+        entry->lastColorSchemeValid = true;
       }
 
       float pcModel[16];
@@ -1749,7 +1834,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       setClipAnchor(clipLocVcLine_, entry->anchorX, entry->anchorY);
 
       glBindVertexArray(entry->vao);
-      glPointSize(2.0f);  // fixed for now; ribbon point-size control is a future increment
+      glPointSize(pointCloudDisplay ? pointCloudDisplay->pointSizePx : 2.0f);  // REQ-171 ribbon control
       glDrawArrays(GL_POINTS, 0, entry->pointCount);
 
       // --- Out-of-core LOD detail (ADR-060) ------------------------------------------------------
@@ -1786,7 +1871,11 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           constexpr int kMaxLodLeafCandidates = 1500;
           // A deliberately SPARSE target — this is meant to look like a point cloud, not fill in
           // solid. Small enough that even a fully-covered candidate set decimates visibly.
-          constexpr std::int64_t kTargetLodPoints = 800'000;
+          constexpr std::int64_t kTargetLodPointsDefault = 800'000;
+          const std::int64_t kTargetLodPoints =
+              pointCloudDisplay && pointCloudDisplay->lodTargetPoints > 0
+                  ? static_cast<std::int64_t>(pointCloudDisplay->lodTargetPoints)
+                  : kTargetLodPointsDefault;
           const double lateralRadius = std::max(halfWd, halfHd) * 1.25;
           const ray3d::Vec3 viewDir = cam.ForwardWorld();
 
@@ -1806,11 +1895,18 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
               entry->lodLateralRadius > 1e-12 ? lateralRadius / entry->lodLateralRadius : 0.0;
           const double dirDot = viewDir.x * entry->lodDirX + viewDir.y * entry->lodDirY +
                                  viewDir.z * entry->lodDirZ;
+          // A colour-scheme or LOD-target change is a deliberate one-shot user action, not camera
+          // motion — the movement hysteresis above has nothing to do with it, so without this the
+          // ribbon's Color Scheme combo and LOD Target slider would both sit inert on the LOD-leaf
+          // pass until the camera happened to move enough to reselect anyway (TASK-270 part 14
+          // bugfix; the preview buffer above has the matching `colorSchemeStale` fix).
+          const bool lodTargetStale = entry->lastLodTargetPoints != kTargetLodPoints;
           const bool movedEnough =
               !entry->lodSelectionValid ||
               focusMoved > 0.15 * std::max(lateralRadius, 1e-9) ||
               radiusRatio < 0.85 || radiusRatio > 1.15 ||
-              dirDot < 0.9986;  // cos(~3 deg)
+              dirDot < 0.9986 ||  // cos(~3 deg)
+              colorSchemeStale || lodTargetStale;
           // Time floor on top of the movement test (part 13): a fast orbit crosses the movement
           // thresholds on nearly every frame, and a reselect costs real time (up to
           // kMaxLodLeafCandidates disk reads) — without this, a slower frame makes the same mouse
@@ -1818,7 +1914,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           // selection (`!lodSelectionValid`) always runs regardless of the clock.
           const auto now = std::chrono::steady_clock::now();
           const bool longEnoughSinceLast =
-              !entry->lodSelectionValid ||
+              !entry->lodSelectionValid || colorSchemeStale || lodTargetStale ||
               now - entry->lodLastReselectTime >= std::chrono::milliseconds(200);
           const bool needsReselect = movedEnough && longEnoughSinceLast;
 
@@ -1836,6 +1932,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             entry->lodLateralRadius = lateralRadius;
             entry->lodSelectionValid = true;
             entry->lodLastReselectTime = now;
+            entry->lastLodTargetPoints = kTargetLodPoints;
 
             std::int64_t totalCandidatePoints = 0;
             for (const pointcloud::CylinderLodLeaf& c : candidates)
@@ -1853,7 +1950,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             // `lodStride`), so a new stride means every leaf's uploaded vertex data is the wrong
             // decimation and must be rebuilt, not just newly-entering leaves.
             const bool strideStale = entry->lodStride != stride;
-            if (anchorStale || strideStale) {
+            if (anchorStale || strideStale || colorSchemeStale) {
               for (PointCloudGpuEntry::LeafGpuEntry& leaf : entry->leafGpu) {
                 if (leaf.vbo) glDeleteBuffers(1, &leaf.vbo);
                 if (leaf.vao) glDeleteVertexArrays(1, &leaf.vao);
@@ -1896,6 +1993,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
               const size_t rawCount = leafXyz.size() / 3;
               if (rawCount == 0) continue;
               const bool leafHasColor = leafColors.size() == leafXyz.size();
+              const bool leafHasIntensity = leafIntensity.size() == rawCount;
               const size_t lcount = (rawCount + static_cast<size_t>(stride) - 1) /
                                      static_cast<size_t>(stride);
               cpuPointCloudVerts_.clear();
@@ -1914,16 +2012,17 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                 float* o = &cpuPointCloudVerts_[outv * 7];
                 o[0] = rx;
                 o[1] = ry;
-                o[2] = static_cast<float>(leafXyz[v * 3 + 2]);
-                if (leafHasColor) {
-                  o[3] = leafColors[v * 3];
-                  o[4] = leafColors[v * 3 + 1];
-                  o[5] = leafColors[v * 3 + 2];
-                } else {
-                  o[3] = fallbackRgba[0];
-                  o[4] = fallbackRgba[1];
-                  o[5] = fallbackRgba[2];
-                }
+                const float z = static_cast<float>(leafXyz[v * 3 + 2]);
+                o[2] = z;
+                float rgb[3];
+                ResolvePointCloudVertexColor(
+                    colorScheme, leafHasColor, leafHasColor ? leafColors[v * 3] : 0.f,
+                    leafHasColor ? leafColors[v * 3 + 1] : 0.f, leafHasColor ? leafColors[v * 3 + 2] : 0.f,
+                    leafHasIntensity, leafHasIntensity ? leafIntensity[v] : 0.f, fallbackRgba[0],
+                    fallbackRgba[1], fallbackRgba[2], z, cloudMinZ, cloudMaxZ, rgb);
+                o[3] = rgb[0];
+                o[4] = rgb[1];
+                o[5] = rgb[2];
                 o[6] = 1.f;
                 ++outv;
               }
@@ -1960,6 +2059,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
               if (rawCount == 0) continue;
               const int stride = std::max(entry->lodStride, 1);
               const bool leafHasColor = leafColors.size() == leafXyz.size();
+              const bool leafHasIntensity = leafIntensity.size() == rawCount;
               const size_t lcount = (rawCount + static_cast<size_t>(stride) - 1) /
                                      static_cast<size_t>(stride);
               cpuPointCloudVerts_.clear();
@@ -1978,16 +2078,17 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                 float* o = &cpuPointCloudVerts_[outv * 7];
                 o[0] = rx;
                 o[1] = ry;
-                o[2] = static_cast<float>(leafXyz[v * 3 + 2]);
-                if (leafHasColor) {
-                  o[3] = leafColors[v * 3];
-                  o[4] = leafColors[v * 3 + 1];
-                  o[5] = leafColors[v * 3 + 2];
-                } else {
-                  o[3] = fallbackRgba[0];
-                  o[4] = fallbackRgba[1];
-                  o[5] = fallbackRgba[2];
-                }
+                const float z = static_cast<float>(leafXyz[v * 3 + 2]);
+                o[2] = z;
+                float rgb[3];
+                ResolvePointCloudVertexColor(
+                    colorScheme, leafHasColor, leafHasColor ? leafColors[v * 3] : 0.f,
+                    leafHasColor ? leafColors[v * 3 + 1] : 0.f, leafHasColor ? leafColors[v * 3 + 2] : 0.f,
+                    leafHasIntensity, leafHasIntensity ? leafIntensity[v] : 0.f, fallbackRgba[0],
+                    fallbackRgba[1], fallbackRgba[2], z, cloudMinZ, cloudMaxZ, rgb);
+                o[3] = rgb[0];
+                o[4] = rgb[1];
+                o[5] = rgb[2];
                 o[6] = 1.f;
                 ++outv;
               }
