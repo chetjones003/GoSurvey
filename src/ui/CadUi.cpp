@@ -20038,6 +20038,10 @@ static const EntityAttributes& SelectedEntityAttr(const AppCommandState& cmd, co
     if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadMeshAttrs.size())
       return cmd.cadMeshAttrs[static_cast<size_t>(e.index)];
     return kDef;
+  case T::PointCloud:
+    if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadPointCloudAttrs.size())
+      return cmd.cadPointCloudAttrs[static_cast<size_t>(e.index)];
+    return kDef;
   case T::Surface:
     if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadSurfaceAttrs.size())
       return cmd.cadSurfaceAttrs[static_cast<size_t>(e.index)];

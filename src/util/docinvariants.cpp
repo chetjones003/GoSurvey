@@ -195,6 +195,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   CheckAttrCount(out, "annotations", st.cadAnnotations.size(), st.cadAnnotationAttrs.size());
   CheckAttrCount(out, "filled regions", st.cadFilledRegions.size(), st.cadFilledRegionAttrs.size());
   CheckAttrCount(out, "meshes", st.cadMeshes.size(), st.cadMeshAttrs.size());
+  CheckAttrCount(out, "point clouds", st.cadPointClouds.size(), st.cadPointCloudAttrs.size());
   CheckAttrCount(out, "surfaces", st.cadSurfaces.size(), st.cadSurfaceAttrs.size());
   CheckAttrCount(out, "solids", st.cadSolids.size(), st.cadSolidAttrs.size());  // REQ-313
   CheckAttrCount(out, "tables", st.cadTables.size(), st.cadTableAttrs.size());
@@ -344,6 +345,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     sweep("cadAnnotationAttrs", st.cadAnnotationAttrs);
     sweep("cadFilledRegionAttrs", st.cadFilledRegionAttrs);
     sweep("cadMeshAttrs", st.cadMeshAttrs);
+    sweep("cadPointCloudAttrs", st.cadPointCloudAttrs);
     sweep("cadSurfaceAttrs", st.cadSurfaceAttrs);
     sweep("cadTableAttrs", st.cadTableAttrs);
     sweep("cadBlockRefAttrs", st.cadBlockRefAttrs);  // GitHub issue #124
@@ -364,6 +366,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       case T::PdfUnderlay:  return st.pdfAttachments.size();
       case T::FilledRegion: return st.cadFilledRegions.size();
       case T::Mesh:         return st.cadMeshes.size();
+      case T::PointCloud:   return st.cadPointClouds.size();
       // REQ-087. Without this case the function returned 0 for a selected feature line, so the
       // check fired on every valid selection of one — the exact inverse of a missed case, and
       // caught by `-Wswitch` rather than by the MSVC build, which does not warn here.
@@ -372,6 +375,12 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       case T::Table:        return st.cadTables.size();
       case T::BlockRef:     return st.cadBlockRefs.size();  // GitHub issue #124
       case T::Solid:        return st.cadSolids.size();      // REQ-313 / ADR-045
+      // Pre-existing gap found while adding PointCloud above: MSVC (the shipping compiler) does
+      // not warn on this switch missing a case, only clang's -Wswitch does, so PipeRun (issue
+      // #486) was silently returning 0 capacity — meaning a selected pipe run always failed this
+      // invariant's range check. Fixed alongside PointCloud rather than filed separately since it
+      // is the same one-line shape as every case above it.
+      case T::PipeRun:      return st.cadPipeRuns.size();
       }
       return 0;
     };
