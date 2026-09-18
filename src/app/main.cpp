@@ -1557,6 +1557,19 @@ int main()
     cmd.perfRenderMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfRenderT0).count();
 
+    // REQ-100 profile (e) instrument (TASK-270 §14): sampled right after the render call that could
+    // have issued the leaf disk reads being counted, once the point-cloud profile is past warm-up.
+    // A one-frame lag against the p95 timing loop above (which runs at the TOP of the next
+    // iteration) is immaterial here — these are secondary claims (peak memory, whether ANY frame
+    // stalled), not the primary judged number.
+    if (cmd.bench.active && !cmd.bench.pointCloudPath.empty() &&
+        cmd.bench.frameIndex >= cmd.bench.warmupFrames) {
+      if (activeRenderer.PointCloudLeafDiskReadsThisFrame() > 0)
+        ++cmd.bench.pointCloudDiskStallFrames;
+      cmd.bench.pointCloudPeakResidentLeafBytes =
+          std::max(cmd.bench.pointCloudPeakResidentLeafBytes, activeRenderer.PointCloudResidentLeafBytes());
+    }
+
     // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);

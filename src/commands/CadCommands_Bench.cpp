@@ -304,6 +304,166 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   return true;
 }
 
+/// REQ-100 profile (e) (TASK-270 §14). Unlike every other profile, there is no synthetic scene to
+/// build here — REQ-100 names the reference scene as "the user's own driving E57." This clears the
+/// other entity stores (so the run measures the cloud alone, same as every other profile), saves
+/// camera state, and starts the real async import; \ref InstallPointCloudBenchScene finishes the
+/// job once `TickPointCloudImport` reaps it.
+bool StartPointCloudBench(AppCommandState& st, const std::string& path, std::vector<std::string>& log) {
+  if (st.bench.active || st.bench.pointCloudImportPending) {
+    log.push_back("BENCH — a run is already in progress.");
+    return false;
+  }
+  if (st.activeSpaceIndex != kModelSpaceIndex) {
+    log.push_back("BENCH — switch to model space first (REQ-100 measures the model viewport).");
+    return false;
+  }
+  if (path.empty()) {
+    log.push_back("BENCH POINTCLOUD — usage: BENCH POINTCLOUD <path to .e57>.");
+    return false;
+  }
+
+  AppCommandState::BenchRun& b = st.bench;
+  b.savedPolyVerts = st.userPolylineVerts;
+  b.savedPolyOffsets = st.userPolylineOffsets;
+  b.savedPolyClosed = st.userPolylineClosed;
+  b.savedPolyAttrs = st.userPolylineAttrs;
+  b.savedSurfaces = st.cadSurfaces;
+  b.savedSurfaceAttrs = st.cadSurfaceAttrs;
+  b.savedMeshes = st.cadMeshes;
+  b.savedMeshAttrs = st.cadMeshAttrs;
+  b.savedSolids = st.cadSolids;
+  b.savedSolidAttrs = st.cadSolidAttrs;
+  b.savedVisualStyle = st.viewportVisualStyle;
+  b.savedAzimuthDeg = st.viewportAzimuthDeg;
+  b.savedElevationDeg = st.viewportElevationDeg;
+  b.savedRollDeg = st.viewportRollDeg;
+  b.savedZoom = st.viewportZoom;
+  b.savedPanX = st.viewportPanX;
+  b.savedPanY = st.viewportPanY;
+  b.savedPanZ = st.viewportPanZ;
+
+  // Cleared so the profile measures the point cloud alone — the point cloud itself is NOT cleared
+  // or restored (TASK-270 §14 ASSUMPTION): it is a real import of a real file the user pointed at
+  // by path, kept in the drawing afterward like any `POINTCLOUDATTACH`, not synthetic geometry that
+  // only exists for the measurement.
+  st.userPolylineVerts.clear();
+  st.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
+  st.userPolylineClosed.clear();
+  st.userPolylineAttrs.clear();
+  st.cadSurfaces.clear();
+  st.cadSurfaceAttrs.clear();
+  st.cadMeshes.clear();
+  st.cadMeshAttrs.clear();
+  st.cadSolids.clear();
+  st.cadSolidAttrs.clear();
+  st.solidDisplayCache.clear();
+  st.solidDisplayGeometry.solids.clear();
+
+  b.surfacePointCount = 0;
+  b.meshTriangleCount = 0;
+  b.solidCount = 0;
+  b.segmentCount = 0;
+  b.pointCloudPath = path;
+  b.pointCloudImportPending = true;
+  b.pointCloudDiskStallFrames = 0;
+  b.pointCloudPeakResidentLeafBytes = 0;
+  b.pointCloudLodTargetPoints = 0;
+
+  log.push_back("BENCH — REQ-100 profile (e): importing the point cloud before starting the timed "
+                "orbit (this can take a while for a multi-GB file)...");
+  if (!StartPointCloudImportAsync(st, path, log)) {
+    // Import refused to start (e.g. an unrelated import already running) — undo the clear so the
+    // user's drawing is not left empty for a run that never happened.
+    st.userPolylineVerts = std::move(b.savedPolyVerts);
+    st.userPolylineOffsets = std::move(b.savedPolyOffsets);
+    st.userPolylineClosed = std::move(b.savedPolyClosed);
+    st.userPolylineAttrs = std::move(b.savedPolyAttrs);
+    st.cadSurfaces = std::move(b.savedSurfaces);
+    st.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
+    st.cadMeshes = std::move(b.savedMeshes);
+    st.cadMeshAttrs = std::move(b.savedMeshAttrs);
+    st.cadSolids = std::move(b.savedSolids);
+    st.cadSolidAttrs = std::move(b.savedSolidAttrs);
+    b.pointCloudImportPending = false;
+    b.pointCloudPath.clear();
+    return false;
+  }
+  return true;
+}
+
+/// Called from `TickPointCloudImport` once the deferred import lands. On success, installs the
+/// scripted orbit exactly as `StartFrameBudgetBench`'s tail does, framed from the cloud's octree
+/// ROOT bounds (in-memory, no disk read — mirrors the solid profile's analytic-bounds framing,
+/// since there is no flat vertex array cheap enough to walk for a multi-hundred-million-point
+/// cloud). On failure, restores the cleared stores so the user's drawing is not left empty.
+void InstallPointCloudBenchScene(AppCommandState& st, std::vector<std::string>& log) {
+  AppCommandState::BenchRun& b = st.bench;
+  if (!b.pointCloudImportPending)
+    return;
+  b.pointCloudImportPending = false;
+
+  if (st.cadPointClouds.empty()) {
+    // The import failed — TickPointCloudImport already logged why. Restore what was cleared.
+    log.push_back("BENCH — point-cloud import failed; run aborted, drawing restored.");
+    st.userPolylineVerts = std::move(b.savedPolyVerts);
+    st.userPolylineOffsets = std::move(b.savedPolyOffsets);
+    st.userPolylineClosed = std::move(b.savedPolyClosed);
+    st.userPolylineAttrs = std::move(b.savedPolyAttrs);
+    st.cadSurfaces = std::move(b.savedSurfaces);
+    st.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
+    st.cadMeshes = std::move(b.savedMeshes);
+    st.cadMeshAttrs = std::move(b.savedMeshAttrs);
+    st.cadSolids = std::move(b.savedSolids);
+    st.cadSolidAttrs = std::move(b.savedSolidAttrs);
+    b.pointCloudPath.clear();
+    BumpCadGpuCache(st);
+    return;
+  }
+
+  const std::shared_ptr<const CadPointCloud>& cloud = st.cadPointClouds.back();
+  const pointcloud::Bounds& bb =
+      cloud->octree.nodes.empty() ? pointcloud::Bounds{} : cloud->octree.nodes[0].bounds;
+  const double cx = 0.5 * (bb.minX + bb.maxX);
+  const double cy = 0.5 * (bb.minY + bb.maxY);
+  const double cz = 0.5 * (bb.minZ + bb.maxZ);
+  const double radius = 0.5 * std::sqrt((bb.maxX - bb.minX) * (bb.maxX - bb.minX) +
+                                        (bb.maxY - bb.minY) * (bb.maxY - bb.minY) +
+                                        (bb.maxZ - bb.minZ) * (bb.maxZ - bb.minZ));
+  st.viewportPanX = cx;
+  st.viewportPanY = cy;
+  st.viewportPanZ = cz;
+  const double halfH = std::max(radius * 1.05, 1.0);
+  st.viewportZoom = static_cast<float>(50.0 / halfH);
+  st.viewportAzimuthDeg = 0.f;
+  st.viewportElevationDeg = 55.f;
+  st.viewportRollDeg = 0.f;
+  // Every visual style draws point clouds (unlike meshes), so the user's own style is left alone.
+
+  b.frameMs.clear();
+  b.frameMs.reserve(900);
+  b.framesTotal = 900;  // REQ-100's own default; BENCH POINTCLOUD <path> has no inline override
+  b.warmupFrames = 60;
+  b.frameIndex = 0;
+  b.regenBaselineTaken = false;
+  b.regenAtStart = 0;
+  b.regenDuringRun = 0;
+  b.orbitDegPerFrame = 0.5;
+  b.pointCloudLodTargetPoints = st.pointCloudDisplay.lodTargetPoints;
+  b.pointCloudDiskStallFrames = 0;
+  b.pointCloudPeakResidentLeafBytes = 0;
+  b.sceneInstalled = true;
+  b.active = true;
+  BumpCadGpuCache(st);
+
+  char msg[256];
+  std::snprintf(msg, sizeof(msg),
+                "BENCH — REQ-100 profile (e): point cloud loaded, %d frames (%d warm-up), continuous "
+                "orbit. Vsync is disabled for the run; the drawing is restored when it finishes.",
+                b.framesTotal, b.warmupFrames);
+  log.push_back(msg);
+}
+
 /// Restore the drawing and camera, and report. Called from the frame loop when the run completes.
 void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) {
   AppCommandState::BenchRun& b = st.bench;
@@ -375,6 +535,11 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
                   b.surfacePointCount, b.surfaceTriangleCount,
                   SurfaceStyles::FormatFt(b.surfaceMinorIntervalFt).c_str(),
                   SurfaceStyles::FormatFt(b.surfaceMajorIntervalFt).c_str(), b.surfaceContourSegs);
+  } else if (!b.pointCloudPath.empty()) {
+    profileName = "point cloud";
+    std::snprintf(scene, sizeof(scene), "%s, LOD target %lld points/frame",
+                  std::filesystem::u8path(b.pointCloudPath).filename().u8string().c_str(),
+                  static_cast<long long>(b.pointCloudLodTargetPoints));
   }
 
   char msg[320];
@@ -404,6 +569,20 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
                   "(expected 0) — %s.",
                   static_cast<unsigned long long>(b.regenDuringRun), s.frames,
                   cacheHeld ? "HELD" : "NOT HELD, solids are being retessellated per frame");
+    log.push_back(msg);
+  } else if (!b.pointCloudPath.empty()) {
+    // REQ-100 (e)'s two obligations beyond p95, each its own claim for the same reason the surface
+    // and solid cache lines are: a fast machine can pass p95 while still doing work the requirement
+    // says it shouldn't.
+    std::snprintf(msg, sizeof(msg),
+                  "BENCH — peak resident LOD node-cache: %.1f MB.",
+                  static_cast<double>(b.pointCloudPeakResidentLeafBytes) / (1024.0 * 1024.0));
+    log.push_back(msg);
+    std::snprintf(msg, sizeof(msg),
+                  "BENCH — disk stalls: %d/%d timed frames blocked on a leaf disk read (expected 0) "
+                  "— %s.",
+                  b.pointCloudDiskStallFrames, s.frames,
+                  b.pointCloudDiskStallFrames == 0 ? "NONE" : "STALLED, a frame paged in a node synchronously");
     log.push_back(msg);
   }
 
@@ -450,8 +629,16 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
         f << "  cache regens      " << b.regenDuringRun << " during the timed frames (expected 0)  => "
           << (cacheHeld ? "HELD" : "NOT HELD") << "\n";
       }
+      if (!b.pointCloudPath.empty()) {
+        f << "  source file       " << b.pointCloudPath << "\n"
+          << "  peak LOD cache    "
+          << (static_cast<double>(b.pointCloudPeakResidentLeafBytes) / (1024.0 * 1024.0)) << " MB\n"
+          << "  disk stalls       " << b.pointCloudDiskStallFrames << "/" << s.frames
+          << " timed frames (expected 0)\n";
+      }
       f << "\n";
     }
   }
   b.frameMs.clear();
+  b.pointCloudPath.clear();
 }

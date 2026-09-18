@@ -28546,6 +28546,8 @@ void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log) {
   if (!job.ok) {
     log.push_back("POINTCLOUDATTACH — " + job.errorMessage);
     st.pointCloudImportAsync.reset();
+    if (st.bench.pointCloudImportPending)
+      InstallPointCloudBenchScene(st, log);  // no cloud landed — restores the bench-cleared stores
     return;
   }
 
@@ -28571,6 +28573,8 @@ void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log) {
                 static_cast<long long>(cloud->pointCount()));
   log.push_back(msg);
   st.pointCloudImportAsync.reset();
+  if (st.bench.pointCloudImportPending)
+    InstallPointCloudBenchScene(st, log);  // BENCH POINTCLOUD was waiting on this import
 }
 
 // =================================================================================================
@@ -36726,6 +36730,19 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
             frames = v;
           st.bench.meshTriangleCount = tris;
           StartFrameBudgetBench(st, 1, frames, log);
+          return;
+        }
+        // `BENCH POINTCLOUD <path>` — REQ-100 profile (e) (TASK-270 §14). Unlike SURFACE/SOLID/MESH,
+        // the reference scene is not synthesized; it is the real file at <path>, named explicitly by
+        // REQ-100 as "the user's own driving E57." The path is read as the rest of the line (not a
+        // single token) because a real file path can contain spaces; there is no inline frame-count
+        // override in this form for the same reason — a trailing number would be ambiguous against
+        // the path, so this form always uses the 900-frame default.
+        if (lower == "pointcloud" || lower == "cloud" || lower == "pc") {
+          std::string path;
+          std::getline(issIdle, path);
+          path = StringUtil::trimCopy(path);
+          StartPointCloudBench(st, path, log);
           return;
         }
         issIdle.clear();

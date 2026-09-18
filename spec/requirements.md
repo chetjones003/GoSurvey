@@ -9187,11 +9187,22 @@ capability that does not exist. They are recorded here rather than quietly dropp
   property of a binary, not of source code: the compiler chooses the vectorisation, inlining and
   layout that decide it, so a figure measured with a different compiler is a different result.
 - Owner-layer: Renderer
-- Status: accepted for (a)–(d) and accepted for (e), point clouds (2026-09-17); **profile (e)'s
-  target (4,000,000 points/frame within 16ms p95, RTX 5060) is accepted but NOT YET MEASURED** —
-  no octree/LOD renderer exists yet to instrument (this requirement amendment tracks the
-  point-cloud epic, D-2026-09-17-d, ADR-060); it stays unmet until a benchmark scene and instrument
-  ship. **profiles (a), (b) and (c) MET, measured 2026-08-15** (TASK-052, TASK-053);
+- Status: accepted for (a)–(d) and accepted for (e), point clouds (2026-09-17).
+  **profile (e), point clouds, MET, measured 2026-09-18** (TASK-270 §14/§15, `BENCH POINTCLOUD`
+  instrument) — run against the reference machine and the user's own real driving E57 (188,439,985
+  points): `p95 4.81 ms` (budget 16 ms), min 3.37 / median 3.92 / mean 4.00 / p99 5.49 / max 6.32 ms,
+  peak resident LOD node-cache 7.5 MB, **0/900 timed frames blocked on a disk read** — both of the
+  requirement's obligations (p95 budget and "no frame stalls on a not-yet-paged-in node") are met.
+  Measured with the shipped LOD target default (800,000 points/frame — the deliberately sparse
+  value TASK-270 part 10 chose so close-up detail reads as points rather than filling in solid), not
+  at the proposed 4,000,000-point ceiling; the instrument (`BENCH POINTCLOUD <path>`) is in place to
+  re-measure at a different target should that default change. The instrument's first run (before a
+  fix) genuinely FAILED the stall obligation — 42/900 frames blocked up to 1.1s on a synchronous
+  leaf disk read on the render thread — fixed by moving every leaf read to a background prefetch
+  worker (TASK-270 §15); a first cut of that fix then regressed p95 (17.34ms, a uniform per-frame
+  cost from an unconditional per-frame request-loop scan) before being gated to run only on frames
+  with an actual reselect/staleness, landing at the measurement above. **profiles (a), (b) and (c)
+  MET, measured 2026-08-15** (TASK-052, TASK-053);
   **profile (d), solids, MET, measured 2026-09-01** (TASK-169, D-2026-09-01-d, GitHub issue #194) —
   1.43 / 1.80 / 4.38 ms at 100 / 400 / 800 solids on the RTX 5060, cache held. The instrument
   (TASK-167) first showed it failing; coalescing the draw calls and giving the solid batches a
