@@ -8007,12 +8007,31 @@ struct DistRange {
 ///
 /// The construction works in a frame whose +Z is the kept side's own outward direction, so one
 /// builder serves both caps: the sphere is symmetric under that flip.
+[[nodiscard]] bool SameMeasuredShape(const Solid& a, const Solid& b);
+
+/// A `Sphere` or `Torus` recipe that describes its solid, the way `ConicalRecipeFitsSolid` vets a
+/// cylinder's (D-2026-09-17-a): these builders rebuild the pieces from the recipe, so a recipe whose
+/// primitive is a different shape — a damaged `.gs` frame, a solid edited since — would cut in the
+/// wrong place. A recipe that does not fit is not used, and the cut falls through to the refusal the
+/// solid's geometry earns.
+[[nodiscard]] bool RoundRecipeFitsSolid(const Solid& solid) {
+  const Recipe& rc = solid.recipe;
+  Solid prim;
+  Problem why = Problem::Ok;
+  const bool built = rc.kind == PrimitiveKind::Sphere
+                         ? MakeSphere(rc.frame, rc.radius, &prim, &why)
+                         : (rc.kind == PrimitiveKind::Torus
+                                ? MakeTorus(rc.frame, rc.radius, rc.radius2, &prim, &why)
+                                : false);
+  return built && SameMeasuredShape(solid, prim);
+}
+
 [[nodiscard]] bool SliceSpherePrimitive(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
                                         SliceKeep keep, Solid* outAbove, Solid* outBelow, bool* handled,
                                         Problem* outWhy) {
   *handled = false;
   const Recipe& rc = solid.recipe;
-  if (rc.kind != PrimitiveKind::Sphere)
+  if (rc.kind != PrimitiveKind::Sphere || !RoundRecipeFitsSolid(solid))
     return false;
 
   *handled = true;
@@ -8101,16 +8120,23 @@ struct DistRange {
   const Recipe& rc = solid.recipe;
   if (rc.kind != PrimitiveKind::Torus)
     return false;
-
-  *handled = true;
   const double R = rc.radius;
   const double r = rc.radius2;
+  // A tube as wide as its ring self-intersects, so it has no mass properties to vet its recipe
+  // against — and no ring-shaped cut either. It is refused by name here, before that check: a
+  // refusal cannot place a cut in the wrong place, which is what vetting the recipe guards against.
+  if (r >= R) {
+    *handled = true;
+    return Fail(Problem::SliceCutTorusCurve, outWhy);
+  }
+  if (!RoundRecipeFitsSolid(solid))
+    return false;
+
+  *handled = true;
   const double eps = 1e-7 * std::max(R + r, 1.0);
   const Vec3 axis = rc.frame.zAxis;
   if (std::fabs(std::fabs(ray3d::Dot(pn, axis)) - 1.0) > 1e-6)
     return Fail(Problem::SliceCutTorusCurve, outWhy);  // any other angle is a quartic curve
-  if (r >= R)
-    return Fail(Problem::SliceCutTorusCurve, outWhy);  // a self-intersecting tube is not two rings
   const double d = ray3d::Dot(ray3d::Sub(planePoint, rc.frame.origin), axis);
   if (std::fabs(d) >= r - eps)
     return Fail(Problem::SlicePlaneMissesSolid, outWhy);
