@@ -1409,7 +1409,21 @@ constexpr int kRibbonTabSurfaceCtx = 7;
 constexpr int kRibbonTabSurveyPointCtx = 8;
 /// Contextual Block Editor tab while BEDIT is open. Not counted in \c kRibbonTabCount / prefs.
 constexpr int kRibbonTabBlockEditor = 9;
+/// REQ-171 (part 14): contextual Point Cloud tab. Not counted in kRibbonTabCount / prefs.
+constexpr int kRibbonTabPointCloudCtx = 10;
 
+/// REQ-171 point-cloud vertex colour source, chosen by the user (session-global — see
+/// `AppCommandState::pointCloudDisplay`).
+enum class PointCloudColorScheme { Rgb = 0, Solid = 1, Elevation = 2, Intensity = 3 };
+
+/// REQ-171 point-cloud display settings (session-global, not per-cloud — `CadPointCloud`'s payload
+/// is immutable, architecture §11.5, so mutable display prefs live here instead, same reasoning as
+/// `SurfaceStyle` living apart from `CadSurface`).
+struct PointCloudDisplaySettings {
+  float pointSizePx = 2.0f;                 // was the hardcoded glPointSize(2.0f) in ViewportRenderer
+  int lodTargetPoints = 800000;             // was the file-local kTargetLodPoints constant
+  PointCloudColorScheme colorScheme = PointCloudColorScheme::Rgb;
+};
 
 /// What the gizmo DOES — chosen by the user, unlike \ref CadGizmoMode which is derived (REQ-060
 /// rotate/scale, TASK-232).
@@ -2774,6 +2788,16 @@ struct AppCommandState {
   /// §11.5), exactly as \ref cadMeshes above.
   std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;
   std::vector<EntityAttributes> cadPointCloudAttrs;
+  /// REQ-171 point-cloud display settings (session-global, not per-cloud — CadPointCloud's payload
+  /// is immutable, architecture §11.5, so mutable display prefs live here instead, same reasoning as
+  /// SurfaceStyle living apart from CadSurface).
+  PointCloudDisplaySettings pointCloudDisplay;
+  /// REQ-171 (part 14): true while a point cloud is selected and its contextual ribbon tab is armed
+  /// (mirrors `surfaceContextualRibbonArmed`).
+  bool pointCloudContextualRibbonArmed = false;
+  /// The ribbon tab that was active before the point-cloud contextual tab armed, restored on
+  /// disarm (mirrors `ribbonTabBeforeSurfaceCtx`).
+  int ribbonTabBeforePointCloudCtx = -1;
 
   /// TIN surfaces (REQ-068). The heavy triangulation hangs off a shared_ptr inside each CadSurface,
   /// so copying this vector — which every undo snapshot does — is strings and refcount bumps.
@@ -4941,6 +4965,10 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st);
 /// \ref SurfaceVisible gives for itself: "invisible" and "unclickable" must not be able to disagree
 /// (REQ-084 (d)).
 [[nodiscard]] bool SolidVisible(const AppCommandState& st, size_t solidIndex);
+
+/// True when point cloud \p index is drawn AND clickable, mirroring \ref SolidVisible exactly
+/// (REQ-171 part 14: point clouds had no candidate-generation in either pick path before this).
+[[nodiscard]] bool PointCloudVisible(const AppCommandState& st, size_t index);
 
 /// Bring \ref AppCommandState::solidDisplayCache and \ref AppCommandState::solidDisplayGeometry up
 /// to date. Called once a frame, beside \ref RefreshSurfaceDisplayGeometry.

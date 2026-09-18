@@ -3353,6 +3353,20 @@ static int FirstSelectedSurfaceIndex(const AppCommandState& cmd) {
   return -1;
 }
 
+static int FirstSelectedPointCloudIndex(const AppCommandState& cmd) {
+  const size_t n = cmd.cadPointClouds.size();
+  assert(n < 10000000u);
+  for (const SelectedEntity& e : cmd.selection) {
+    assert(e.index >= -1);
+    if (e.type != SelectedEntity::Type::PointCloud)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= n)
+      continue;
+    return e.index;
+  }
+  return -1;
+}
+
 static int CountSelectedSurveyPoints(const AppCommandState& cmd) {
   const size_t n = cmd.surveyPoints.size();
   assert(n < 10000000u);
@@ -3604,6 +3618,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const int selSurfIdx = ribbonPaperSpaceEarly ? -1 : FirstSelectedSurfaceIndex(cmd);
   const int nSvyPts = ribbonPaperSpaceEarly ? 0 : CountSelectedSurveyPoints(cmd);
   const bool hasSvyPts = nSvyPts > 0;
+  const int selPcIdx = ribbonPaperSpaceEarly ? -1 : FirstSelectedPointCloudIndex(cmd);
   if (selSurfIdx >= 0) {
     if (!cmd.surfaceContextualRibbonArmed) {
       if (cmd.activeRibbonTab >= 0 && cmd.activeRibbonTab < kRibbonTabCount)
@@ -3618,6 +3633,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         prev = kRibbonTabHome;
       if (hasSvyPts)
         prev = kRibbonTabSurveyPointCtx;
+      else if (selPcIdx >= 0)
+        prev = kRibbonTabPointCloudCtx;
       cmd.activeRibbonTab = prev;
     }
     cmd.surfaceContextualRibbonArmed = false;
@@ -3637,9 +3654,35 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         prev = kRibbonTabHome;
       if (selSurfIdx >= 0)
         prev = kRibbonTabSurfaceCtx;
+      else if (selPcIdx >= 0)
+        prev = kRibbonTabPointCloudCtx;
       cmd.activeRibbonTab = prev;
     }
     cmd.surveyPointContextualRibbonArmed = false;
+  }
+  // REQ-171 (part 14): contextual Point Cloud tab, same arm/disarm shape as surface/surveyPoint
+  // above — lowest precedence of the three (only arms when neither of the others already claimed
+  // the tab this frame), since it is the newest and least likely to be what a mixed selection means.
+  if (selPcIdx >= 0) {
+    if (!cmd.pointCloudContextualRibbonArmed) {
+      if (cmd.activeRibbonTab >= 0 && cmd.activeRibbonTab < kRibbonTabCount)
+        cmd.ribbonTabBeforePointCloudCtx = cmd.activeRibbonTab;
+      if (cmd.activeRibbonTab != kRibbonTabSurfaceCtx && cmd.activeRibbonTab != kRibbonTabSurveyPointCtx)
+        cmd.activeRibbonTab = kRibbonTabPointCloudCtx;
+      cmd.pointCloudContextualRibbonArmed = true;
+    }
+  } else if (cmd.pointCloudContextualRibbonArmed) {
+    if (cmd.activeRibbonTab == kRibbonTabPointCloudCtx) {
+      int prev = cmd.ribbonTabBeforePointCloudCtx;
+      if (prev < 0 || prev >= kRibbonTabCount)
+        prev = kRibbonTabHome;
+      if (selSurfIdx >= 0)
+        prev = kRibbonTabSurfaceCtx;
+      else if (hasSvyPts)
+        prev = kRibbonTabSurveyPointCtx;
+      cmd.activeRibbonTab = prev;
+    }
+    cmd.pointCloudContextualRibbonArmed = false;
   }
 
   const bool inBedit = !cmd.blockEditorName.empty();
@@ -3714,6 +3757,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
       if (ImGui::Button(ptTab, ImVec2(0.f, kRibbonTabStripH)))
         cmd.activeRibbonTab = kRibbonTabSurveyPointCtx;
+      ImGui::PopStyleColor(4);
+      ImGui::SameLine(0, 2);
+    }
+    if (selPcIdx >= 0) {
+      const bool pcOn = cmd.activeRibbonTab == kRibbonTabPointCloudCtx;
+      ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0, 120, 215, pcOn ? 255 : 180));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(30, 144, 255, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0, 90, 180, 255));
+      ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
+      if (ImGui::Button("Point Cloud", ImVec2(0.f, kRibbonTabStripH)))
+        cmd.activeRibbonTab = kRibbonTabPointCloudCtx;
       ImGui::PopStyleColor(4);
       ImGui::SameLine(0, 2);
     }
@@ -5211,6 +5265,56 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }});
     }
   } // kRibbonTabSurveyPointCtx
+
+  // REQ-171 (part 14): contextual Point Cloud tab. Session-global display settings only (point
+  // size / LOD target / colour scheme) — these affect every resident cloud, not just the selected
+  // one, since `CadPointCloud`'s payload is immutable and holds no display prefs of its own (see
+  // `AppCommandState::pointCloudDisplay`'s doc comment). No per-cloud controls exist yet.
+  if (cmd.activeRibbonTab == kRibbonTabPointCloudCtx && !ribbonPaperSpace && selPcIdx >= 0) {
+    const float w = visualStyleComboW + 8.f + visualStyleComboW + 8.f + visualStyleComboW + 8.f;
+    ribbonSpecs.push_back({w, w, [&]() {
+      RibbonSectionBegin("RibbonSecPcDisplay", "Point Cloud Display", w, panelH);
+      ImGui::BeginGroup();
+      ImGui::TextUnformatted("Point Size");
+      ImGui::SetNextItemWidth(visualStyleComboW);
+      float ptSize = cmd.pointCloudDisplay.pointSizePx;
+      if (ImGui::SliderFloat("##PcPointSize", &ptSize, 1.0f, 10.0f, "%.1f px"))
+        cmd.pointCloudDisplay.pointSizePx = std::clamp(ptSize, 1.0f, 10.0f);
+      RibbonItemHelp("On-screen size of each rendered point, in pixels.\n"
+                     "Session-global — applies to every point cloud in the drawing.");
+      ImGui::EndGroup();
+
+      ImGui::SameLine(0, 8);
+      ImGui::BeginGroup();
+      ImGui::TextUnformatted("LOD Target");
+      ImGui::SetNextItemWidth(visualStyleComboW);
+      int lodTarget = cmd.pointCloudDisplay.lodTargetPoints;
+      if (ImGui::SliderInt("##PcLodTarget", &lodTarget, 100000, 3000000, "%d pts"))
+        cmd.pointCloudDisplay.lodTargetPoints = std::clamp(lodTarget, 100000, 3000000);
+      RibbonItemHelp("Target point count for the near-camera detail pass.\n"
+                     "Higher looks denser up close but costs more to page/render — trades\n"
+                     "render density for performance (TASK-270).\n"
+                     "Session-global — applies to every point cloud in the drawing.");
+      ImGui::EndGroup();
+
+      ImGui::SameLine(0, 8);
+      ImGui::BeginGroup();
+      ImGui::TextUnformatted("Color Scheme");
+      ImGui::SetNextItemWidth(visualStyleComboW);
+      int schemeIdx = static_cast<int>(cmd.pointCloudDisplay.colorScheme);
+      const char* kPcSchemeItems[] = {"RGB", "Solid", "Elevation", "Intensity"};
+      if (ImGui::Combo("##PcColorScheme", &schemeIdx, kPcSchemeItems, IM_ARRAYSIZE(kPcSchemeItems)))
+        cmd.pointCloudDisplay.colorScheme = static_cast<PointCloudColorScheme>(schemeIdx);
+      RibbonItemHelp("How each point is coloured.\n"
+                     "RGB — the scan's own colour, falling back to layer colour if absent.\n"
+                     "Solid — always the layer/entity colour, ignoring scanned colour.\n"
+                     "Elevation — a blue-green-red ramp by Z.\n"
+                     "Intensity — grayscale from the scan's intensity channel (RGB fallback if absent).\n"
+                     "Session-global — applies to every point cloud in the drawing.");
+      ImGui::EndGroup();
+      RibbonSectionEnd();
+    }});
+  } // kRibbonTabPointCloudCtx
 
   if (cmd.activeRibbonTab == kRibbonTabBlockEditor && inBedit) {
     auto beditSubmit = [&](const char* line) {

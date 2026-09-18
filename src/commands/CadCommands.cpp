@@ -7798,6 +7798,33 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
     }
   }
 
+  // Point clouds (REQ-171 part 14): bbox over the bounded PREVIEW sample only, mirroring the
+  // zoom-extents box walk (same reasoning — the full out-of-core cache is not resident memory).
+  for (size_t pci = 0; pci < st.cadPointClouds.size(); ++pci) {
+    if (!PointCloudVisible(st, pci))
+      continue;
+    const std::shared_ptr<const CadPointCloud>& pc = st.cadPointClouds[pci];
+    if (!pc || pc->pointsXyz.size() < 3)
+      continue;
+    const std::vector<double>& P = pc->pointsXyz;
+    float pmnX = static_cast<float>(P[0]), pmxX = pmnX, pmnY = static_cast<float>(P[1]), pmxY = pmnY;
+    for (size_t v = 0; v + 2 < P.size(); v += 3) {
+      pmnX = std::min(pmnX, static_cast<float>(P[v]));
+      pmxX = std::max(pmxX, static_cast<float>(P[v]));
+      pmnY = std::min(pmnY, static_cast<float>(P[v + 1]));
+      pmxY = std::max(pmxY, static_cast<float>(P[v + 1]));
+    }
+    SPBox(pmnX, pmnY, pmxX, pmxY, &pmnX, &pmnY, &pmxX, &pmxY);  // screen space when orbited
+    const bool hit = windowMode ? (pmnX >= mnX && pmxX <= mxX && pmnY >= mnY && pmxY <= mxY)
+                                : !(pmxX < mnX || pmnX > mxX || pmxY < mnY || pmnY > mxY);
+    if (hit) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::PointCloud;
+      e.index = static_cast<int>(pci);
+      hits.push_back(e);
+    }
+  }
+
   // Filled regions (REQ-042): hit-test the outer-loop bounding box, matching annotations/arcs/PDF — window
   // requires the bbox fully inside; crossing requires the bbox to intersect the rect.
   for (size_t fi = 0; fi < st.cadFilledRegions.size(); ++fi) {
@@ -25672,6 +25699,40 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     consider(e, bestD2);
   }
 
+  // Point clouds (REQ-171 part 14) — walk the bounded PREVIEW sample only (`pc->pointsXyz`, capped
+  // at `kPointCloudPreviewCap`), never the full out-of-core `.gscloud` cache. Hover runs this every
+  // frame; a disk read per hover frame is exactly what the LOD renderer's reselect hysteresis
+  // (TASK-270 §10h/10j) was built to avoid, so picking must not reintroduce it. Same precedent as
+  // the extents/zoom-extents walks, which also only look at resident points.
+  for (size_t pci = 0; pci < st.cadPointClouds.size(); ++pci) {
+    if (!PointCloudVisible(st, pci))
+      continue;
+    const std::shared_ptr<const CadPointCloud>& pc = st.cadPointClouds[pci];
+    if (!pc)
+      continue;
+    const std::vector<double>& P = pc->pointsXyz;
+    if (P.size() < 3)
+      continue;
+    if (!useRay) {
+      double lo_x = P[0], hi_x = P[0], lo_y = P[1], hi_y = P[1];
+      for (size_t i = 0; i + 2 < P.size(); i += 3) {
+        lo_x = std::min(lo_x, static_cast<double>(P[i]));
+        hi_x = std::max(hi_x, static_cast<double>(P[i]));
+        lo_y = std::min(lo_y, static_cast<double>(P[i + 1]));
+        hi_y = std::max(hi_y, static_cast<double>(P[i + 1]));
+      }
+      if (wx < lo_x - tolWorld || wx > hi_x + tolWorld || wy < lo_y - tolWorld || wy > hi_y + tolWorld)
+        continue;
+    }
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::PointCloud;
+    e.index = static_cast<int>(pci);
+    double bestD2 = 1e300;
+    for (size_t i = 0; i + 2 < P.size(); i += 3)
+      bestD2 = std::min(bestD2, d2Point(P[i], P[i + 1], P[i + 2]));
+    consider(e, bestD2);
+  }
+
   for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
     const CadTable& t = st.cadTables[ti];
     SelectedEntity e{};
@@ -28783,6 +28844,21 @@ bool SolidVisible(const AppCommandState& st, size_t solidIndex) {
     return true;  // attrs are length-locked to cadSolids; a short array means defaults, not hidden
   const EntityAttributes& a = st.cadSolidAttrs[solidIndex];
   // REQ-084 (d): an isolated-out solid is invisible, so it must not be drawn OR answer a click.
+  if (CadEntityIdHidden(&st.hiddenEntityIds, a.id))
+    return false;
+  const CadLayerRow* lr = FindDrawingLayerRowCi(st, a.layer);
+  return !(lr && (!lr->on || lr->frozen));
+}
+
+bool PointCloudVisible(const AppCommandState& st, size_t index) {
+  if (index >= st.cadPointClouds.size())
+    return false;
+  if (!st.cadPointClouds[index])
+    return false;
+  if (index >= st.cadPointCloudAttrs.size())
+    return true;  // attrs are length-locked to cadPointClouds; short array means defaults, not hidden
+  const EntityAttributes& a = st.cadPointCloudAttrs[index];
+  // REQ-084 (d): an isolated-out cloud is invisible, so it must not be drawn OR answer a click.
   if (CadEntityIdHidden(&st.hiddenEntityIds, a.id))
     return false;
   const CadLayerRow* lr = FindDrawingLayerRowCi(st, a.layer);
