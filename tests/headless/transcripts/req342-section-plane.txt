@@ -1,0 +1,202 @@
+# REQ-342 / ADR-059 (D-2026-09-11-b, TASK-258) — SECTIONPLANE, slice 1.
+#
+# GitHub #479 acceptance 1, 2 and 3: pick a flat face, get the section plane on it, drawn so it can
+# be found.
+#
+# What this file can and cannot prove:
+#
+#   CAN  — the command surface, including the two things that shipped broken on the previous
+#          slice and were found by hand in the app: that the command STAYS RUNNING after it asks
+#          for a face, and that the click actually reaches it. The clicks below are CLICK, not
+#          PICK: CLICK asks `ViewportClickRouteFor` the same question the viewport asks, so a
+#          command the UI does not route fails here. PICK would pass either way — that is exactly
+#          how REQ-103's five commands shipped with green transcripts and dead clicks.
+#   CANNOT — that anything is DRAWN. There is no GL context here. The hatch and section-line
+#          geometry is measured in `SectionClipTests` (`[sectionplane]`), which checks it lands on
+#          the plane, stays inside its rectangle, and holds at state-plane coordinates.
+#
+# The plane's IDENTITY is asserted with EXPECT SECTIONCLIPFRAME, not with the offset. There is one
+# clip plane and two ways to aim it (D-2026-09-11-b), so "it is on at offset 0" would be equally
+# true if the face had been ignored and the active UCS used instead.
+
+NEW
+
+# --- with no solids, it says so and still opens --------------------------------------------------
+#
+# It opens rather than refusing, because a solid can be drawn and picked without retyping the
+# command. A command that works or not depending on drawing order is worse than a sentence.
+
+CMD SECTIONPLANE
+EXPECT LOG "SECTIONPLANE — there are no solids in the drawing yet."
+EXPECT ACTIVE SECTIONPLANE
+ESC
+EXPECT ACTIVE NONE
+EXPECT LOG "SECTIONPLANE canceled — no plane was placed."
+EXPECT SECTIONCLIP OFF
+EXPECT SECTIONCLIPFRAME UCS
+
+# --- a box to work on ----------------------------------------------------------------------------
+#
+# 30 x 20 x 12 centred on its base point, so its faces are at x = -15 and 15, y = -10 and 10,
+# z = 0 and 12 — and every one of them is planar, the case acceptance 2 accepts.
+
+CMD BOX 0,0 30 20 12
+EXPECT SOLIDS 1
+
+# --- the command asks, and is STILL RUNNING when it has asked ------------------------------------
+#
+# This pair of lines is the whole of the first bug from 2026-09-10, in two assertions. SECTION
+# printed what read as a prompt and then returned to idle, so the click that answered it landed
+# with no command running and selected the solid instead: "it takes me out of the section and just
+# selects the object by itself." Text that asks a question from a command that has already ended is
+# not a prompt.
+
+CMD SECTIONPLANE
+EXPECT LOG "SECTIONPLANE — select a flat face to place the section plane on. ESC cancels."
+EXPECT ACTIVE SECTIONPLANE
+
+# --- a click that misses keeps the command open --------------------------------------------------
+#
+# Well off the box. A missed click is a missed click; ending the command over one would throw the
+# user out of something they are halfway through.
+
+CLICK 200 200 6
+EXPECT LOG "SECTIONPLANE — no face there."
+EXPECT ACTIVE SECTIONPLANE
+EXPECT SECTIONCLIP OFF
+
+# --- clicking the middle of a face places the plane ----------------------------------------------
+#
+# The middle of the TOP face. EXPECT SECTIONCLIPNORMAL is what makes this an assertion about the
+# face rather than about the command: every face of this box would satisfy FRAME FACE and OFFSET 0,
+# so without the normal a pick that found the wrong face — or found one by accident — would pass.
+#
+# (0, 0, +1) is also the measured claim from probe P1/P2 restated as a test: a planar face's frame
+# Z is its OUTWARD normal, so the top face points up and not down.
+
+CLICK 0 0 12
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+EXPECT SECTIONCLIPNORMAL 0 0 1
+EXPECT SECTIONCLIPOFFSET 0
+EXPECT SECTIONCLIPFLIP OFF
+
+# --- and the command ENDS, because it got its answer ---------------------------------------------
+
+EXPECT ACTIVE NONE
+
+# --- at offset 0 NOTHING is hidden, which is the point -------------------------------------------
+#
+# The face frame's Z is the OUTWARD normal (probe P1/P2, 2026-09-11 — 22 of 22 faces, no
+# counterexample across primitives, Booleans and an oblique slice), so the whole solid sits on the
+# kept side. Creating a section plane shows you a plane; it does not make half the model vanish.
+# Nothing was created, nothing was erased, and nothing was regenerated.
+
+EXPECT SOLIDS 1
+EXPECT LINES 0
+EXPECT CIRCLES 0
+EXPECT POLYLINES 0
+
+# --- it is a VIEW state, so UNDO reaches straight past it ----------------------------------------
+#
+# The clip is not an edit and makes no undo entry. UNDO here must therefore undo the BOX, not the
+# section plane — which also means the plane is left pointing at a face that no longer exists, and
+# that must not crash or resurrect anything.
+
+UNDO
+EXPECT SOLIDS 0
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+
+REDO
+EXPECT SOLIDS 1
+
+# --- SECTIONCLIP still drives the plane SECTIONPLANE placed --------------------------------------
+#
+# One plane, two ways to aim it. The offset, the flip and OFF all keep working on a face-defined
+# plane without a second vocabulary — if they did not, a user would have to know which command
+# created the plane before they could move it.
+
+CMD SECTIONCLIP FLIP
+EXPECT SECTIONCLIPFLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+
+CMD SECTIONCLIP 4
+EXPECT SECTIONCLIPOFFSET 4
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+
+CMD SECTIONCLIP OFF
+EXPECT SECTIONCLIP OFF
+
+# --- picking a second face re-aims the SAME plane ------------------------------------------------
+#
+# Not a second plane. It also resets the offset and the flip: those were measured from the old
+# face, and carrying a 4 ft offset over to a new face silently would put the plane somewhere the
+# user did not ask for.
+#
+# A SIDE face this time, and the view is orbited first — which is the point of the case. In plan
+# view the camera looks straight down, so a ray aimed anywhere on this box meets the top face first
+# no matter what third coordinate is written; a transcript that asked for the bottom face in plan
+# would silently be handed the top one and pass. Orbiting makes a side face genuinely reachable,
+# and the normal below is what proves it was reached.
+#
+# The -X face, not the +X one: at this azimuth the camera sees -X and +Y, and a ray aimed at a face
+# turned away from it meets an EDGE on the way in — which the command says out loud rather than
+# taking whatever it found.
+
+VIEWANGLES 135 20
+CMD SECTIONPLANE
+EXPECT ACTIVE SECTIONPLANE
+CLICK -15 0 6
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+EXPECT SECTIONCLIPNORMAL -1 0 0
+EXPECT SECTIONCLIPOFFSET 0
+EXPECT SECTIONCLIPFLIP OFF
+EXPECT ACTIVE NONE
+
+# --- ESC out of a later run leaves the earlier plane alone ---------------------------------------
+#
+# "No plane was placed" — not "nothing changed". A plane placed by a previous run stays exactly
+# where it was, and the cancel message says only what it means.
+
+CMD SECTIONPLANE
+ESC
+EXPECT ACTIVE NONE
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+
+# --- the short spelling is the same command ------------------------------------------------------
+
+CMD SECTIONCLIP OFF
+CMD SPLANE
+EXPECT ACTIVE SECTIONPLANE
+CLICK 0 0 12
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+EXPECT SECTIONCLIPNORMAL 0 0 1
+EXPECT ACTIVE NONE
+
+# --- acceptance 2's other half is NOT tested here, deliberately ----------------------------------
+#
+# Refusing a CURVED face by name is a rule about which sub-object the pick resolves to, and this
+# driver cannot state a pick tolerance: `CadOffsetEntityPickTolWorld` is screen-derived, and with no
+# window `viewportLastSurveyLayoutOrthoHalfH` is zero, so it collapses to the geometric floor —
+# about 0.002 ft for a scene this size. Whether a click on a cylinder wall resolves to the face or
+# to a rim a few feet away then turns on arithmetic rather than on the rule, which is a test that
+# would pass or fail for the wrong reason either way.
+#
+# So it lives in `SubObjectSelectionTests` (`[sectionplaneface]`), where the tolerance is stated
+# outright — the same reason the SUBOBJECT verb takes explicit tolerances rather than trusting the
+# default.
+
+# --- nothing in any of this was an edit ----------------------------------------------------------
+#
+# Six plane placements, two cancels, a flip, an offset and three OFFs, and the drawing is still one
+# box and no 2D geometry.
+
+EXPECT SOLIDS 1
+EXPECT LINES 0
+EXPECT CIRCLES 0
+EXPECT POLYLINES 0

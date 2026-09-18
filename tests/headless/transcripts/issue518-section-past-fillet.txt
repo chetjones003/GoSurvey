@@ -1,0 +1,119 @@
+# GitHub issue #518 — a solid with a rounded (filleted) edge is sectioned and sliced by any plane
+# that misses the rounded face.
+#
+# Before: rounding one edge of a box made SECTION and SLICE refuse EVERY cut of it ("This release
+# slices solids with flat faces only"), including planes nowhere near the fillet. Now a plane that
+# crosses only flat faces cuts the box, and the rounded face goes whole to its piece. A plane that
+# crosses the rounded face is refused by a name that says so (D-2026-09-17-c).
+#
+# The box sits at survey easting E 2,196,000 (REQ-101): x 2,195,950..2,196,050, y -35..35,
+# z -25..25, with its top edge at y = +35 rounded at radius 10 (z 15..25). Typed coordinates are
+# two-dimensional outside 3DPOLY, so section planes are the UCS turned about X; each UCS plane
+# passes through the world origin. BrepTests [issue518] holds corners to +/-0.002 ft.
+
+NEW
+CMD BOX 2196000,0,-25 100 70 50
+SUBOBJECT 2196000 35 25
+CMD FILLET 10
+EXPECT LOG "FILLET - 1 edge(s) of solid 1 rounded at radius 10.0000; volume now 347853.9816."
+EXPECT SOLIDS 1
+
+# --- horizontal, below the fillet: the full 100 x 70 rectangle ------------------------------------
+CMD SELECT
+ESC
+BOX 2195700 -300 2196300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+EXPECT POLYVERT 0 0 2196050 -35 0
+EXPECT POLYVERT 0 1 2196050 35 0
+EXPECT POLYVERT 0 2 2195950 35 0
+EXPECT POLYVERT 0 3 2195950 -35 0
+CHECK ALL
+
+# One undo step takes the outline away; the rounded box is as it was.
+CMD UNDO
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CMD REDO
+EXPECT POLYLINES 1
+
+# --- vertical, beside the fillet (the world XZ plane, y = 0): 100 x 50 ---------------------------
+CMD SELECT
+ESC
+BOX 2195700 -300 2196300 300
+CMD UCS
+CMD X
+CMD 90
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 2
+CMD UCS
+CMD W
+
+# --- 45 degrees, meeting the fillet only along its edge line (the plane z = y) --------------------
+CMD SELECT
+ESC
+BOX 2195700 -300 2196300 300
+CMD UCS
+CMD X
+CMD 45
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 3
+CMD UCS
+CMD W
+
+# --- a plane through the fillet is refused by that name, and nothing is added ---------------------
+# The UCS turned 31 degrees about X is the plane z = 0.601 y, which meets y = 35 at z = 21: inside the
+# rounded face (z 15..25).
+CMD SELECT
+ESC
+BOX 2195700 -300 2196300 300
+CMD UCS
+CMD X
+CMD 31
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — The cut crosses a curved face of this solid, which is not supported yet."
+ESC
+CMD UCS
+CMD W
+EXPECT POLYLINES 3
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- SLICE at z = 0: the lower piece is a plain half box, the upper keeps the fillet ----------------
+NEW
+CMD BOX 2196000,0,-25 100 70 50
+SUBOBJECT 2196000 35 25
+CMD FILLET 10
+CMD SELECT
+ESC
+BOX 2195700 -300 2196300 300
+CMD SLICE
+CMD 2196000,0,0
+CMD 2196010,0,0
+CMD 2196000,10,0
+CMD B
+EXPECT LOG "SLICE — 1 solid(s) cut into 2 piece(s)."
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 0 172853.981634 22027.8759594 10 15 7
+EXPECT SOLIDPROPS 1 175000 22500 8 12 6
+CHECK ALL
+CMD UNDO
+EXPECT SOLIDS 1
+CMD REDO
+EXPECT SOLIDS 2
+
+# The pieces survive .gs: the carried fillet face keeps its surface.
+SAVEAS %OUT%/issue518.gs
+OPEN %OUT%/issue518.gs
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 0 172853.981634 22027.8759594 10 15 7
+EXPECT SOLIDPROPS 1 175000 22500 8 12 6
+CHECK ALL

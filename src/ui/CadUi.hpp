@@ -204,6 +204,10 @@ void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* 
 /// Point Group manager (REQ-067): create/rename/delete groups and edit their rules, with the
 /// resolved member count shown live so an empty or non-matching rule is visible immediately.
 void DrawPointGroupManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+/// Connection Modes window (issue #496 follow-up): graphical authoring of a BEDIT connection
+/// point's smart connection modes (snap target, role, engagement, compatibility tag, default) — the
+/// GUI counterpart of the BCONNECTMODE text wizard, for the same underlying data.
+void DrawConnectionModesWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 /// Surface Style editor (SURFSTYLE, REQ-070 / ADR-036 (i)): the named table of how a surface is
 /// DRAWN — contours, border, triangles, points. Editing a style changes every surface using it, and
 /// touches no surface definition, so nothing here can re-triangulate anything.
@@ -244,6 +248,7 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log);
 
 /// INSERT configuration dialog + pick-phase hint overlay (GitHub issue #124).
 void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log);
+void DrawBlockCreateDialog(AppCommandState& cmd, std::vector<std::string>& log);
 /// Civil 3D-style Edit Block Definition picker (BEDIT with no name).
 void DrawEditBlockDefinitionDialog(AppCommandState& cmd, std::vector<std::string>& log);
 
@@ -282,5 +287,12 @@ void DrawSignInGateBody(AppCommandState& cmd);
 /// Confirms a DWG export before anything is written, stating LibreDWG R2000 encode limits
 /// (REQ-170). Writes to \c cmd.dwgPendingExportPath only when the user accepts.
 void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log);
+
+/// REQ-171/172, ADR-060 — centered modal shown while a POINTCLOUDATTACH import is in flight
+/// (`cmd.pointCloudImportAsync` non-null). Shows the current phase (streaming vs. spatial-index
+/// build), a progress bar, and an estimated time remaining once enough progress exists to trust
+/// the extrapolation; a Cancel button requests cooperative cancellation. No-op when no import is
+/// running. Call every frame, after `TickPointCloudImport` has had a chance to reap a finished one.
+void DrawPointCloudImportProgress(AppCommandState& cmd);
 
 void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log);

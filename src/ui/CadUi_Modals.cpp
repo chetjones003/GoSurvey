@@ -20,11 +20,100 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
+
+namespace {
+
+/// "~2m 30s remaining" / "~45s remaining" — never a negative or absurd figure: `seconds` is
+/// clamped to a sane cap so an early, noisy fraction estimate (e.g. the first tick of phase 2,
+/// before enough points have finalized to trust the extrapolation) does not print "~11 hours."
+std::string FormatEtaRemaining(double seconds) {
+  if (!(seconds > 0.0)) return "estimating...";
+  seconds = std::min(seconds, 24.0 * 3600.0);
+  const int totalSec = static_cast<int>(seconds);
+  if (totalSec < 60) return "~" + std::to_string(totalSec) + "s remaining";
+  const int mins = totalSec / 60;
+  const int secs = totalSec % 60;
+  return "~" + std::to_string(mins) + "m " + std::to_string(secs) + "s remaining";
+}
+
+}  // namespace
+
+void DrawPointCloudImportProgress(AppCommandState& cmd) {
+  if (!cmd.pointCloudImportAsync) return;
+  // Once the worker is done, TickPointCloudImport (called earlier this frame, main.cpp) reaps and
+  // clears this pointer before this draw call runs — so reaching here means an import is still
+  // genuinely in flight. Never drawn for a job that already finished.
+
+  const char* kTitle = "Importing Point Cloud";
+  if (!ImGui::IsPopupOpen(kTitle))
+    ImGui::OpenPopup(kTitle);
+
+  // Centered every frame, same reasoning as DrawUpdateDialog: this dialog's only exit is its own
+  // Cancel button, so it must never be able to drift somewhere the button is unreachable.
+  ImGui::SetNextWindowSize(ImVec2(420.f, 0.f), ImGuiCond_Always);
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+
+  if (!ImGui::BeginPopupModal(kTitle, nullptr, ImGuiWindowFlags_NoResize))
+    return;
+
+  auto& job = *cmd.pointCloudImportAsync;
+  const std::int64_t total = job.totalPointsEstimate;
+  const std::int64_t streamed = job.pointsStreamed.load(std::memory_order_relaxed);
+  const std::int64_t finalized = job.pointsFinalized.load(std::memory_order_relaxed);
+  const std::int64_t leavesRead = job.previewLeavesRead.load(std::memory_order_relaxed);
+  const std::int64_t totalLeaves = job.previewTotalLeaves.load(std::memory_order_relaxed);
+
+  // Three real phases, in strict sequence (see pointcloudcache::BuildFromE57 and
+  // RunPointCloudImportWorker): streaming completes fully before the recursive octree split
+  // starts, which completes fully before the preview sample is read back. Phase 3 was invisible
+  // before this fix — it re-reads the WHOLE cache off disk to subsample it, a real full pass with
+  // no progress signal at all, which is exactly what read as "stuck at 100%" (TASK-270 log): the
+  // bar itself was reporting phase 1+2 as 100% while the worker kept working on phase 3.
+  const bool phase1Done = total > 0 && streamed >= total;
+  const bool phase2Done = phase1Done && finalized >= total;
+  const char* phaseLabel = "Reading scan...";
+  if (phase2Done) phaseLabel = "Sampling preview...";
+  else if (phase1Done) phaseLabel = "Building spatial index...";
+  ImGui::TextUnformatted(phaseLabel);
+
+  // Weighted by rough relative cost, not by point count: phase 2 re-reads/re-writes the dataset
+  // across several octree levels (the slowest part), phase 3 is one more full read-back.
+  float fraction = -1.f;  // negative = ImGui draws an indeterminate marquee
+  if (total > 0) {
+    const float p1 = std::min(1.f, static_cast<float>(streamed) / static_cast<float>(total));
+    const float p2 = std::min(1.f, static_cast<float>(finalized) / static_cast<float>(total));
+    const float p3 = totalLeaves > 0
+                          ? std::min(1.f, static_cast<float>(leavesRead) / static_cast<float>(totalLeaves))
+                          : 0.f;
+    fraction = 0.35f * p1 + 0.45f * p2 + 0.20f * p3;
+  }
+  ImGui::ProgressBar(fraction, ImVec2(-1.f, 0.f));
+
+  // Recomputed at most once a second — every-frame recomputation made the countdown jitter rather
+  // than tick like a clock, which is what a reader expects from a "time remaining" line.
+  const auto now = std::chrono::steady_clock::now();
+  if (total > 0 &&
+      std::chrono::duration<double>(now - job.lastEtaUpdate).count() >= 1.0) {
+    const double elapsed = std::chrono::duration<double>(now - job.startTime).count();
+    // Only trust the extrapolation once there is real progress to extrapolate FROM — an ETA
+    // computed from the first half-percent of a multi-hour build is noise, not information.
+    job.cachedEtaText =
+        fraction > 0.005f ? FormatEtaRemaining(elapsed * (1.0 - fraction) / fraction) : "estimating...";
+    job.lastEtaUpdate = now;
+  }
+  if (total > 0) ImGui::TextDisabled("%s", job.cachedEtaText.c_str());
+
+  if (ImGui::Button("Cancel", ImVec2(120.f, 0.f)))
+    job.cancelRequested.store(true, std::memory_order_release);
+
+  ImGui::EndPopup();
+}
 
 void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log) {
   if (cmd.dwgLossyExportModal) {

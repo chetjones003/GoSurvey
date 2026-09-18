@@ -49,6 +49,26 @@ TEST_CASE("FindBest picks the line endpoint when it is closer than a large circl
   CHECK(hit.y == Catch::Approx(0.f));
 }
 
+TEST_CASE("FindBest offers a CadPipeRun's own end as an Endpoint candidate (issue #486)", "[CadSnap][piperun]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+
+  // Hovering near the run's END (10,0,0) — before this fix, a pipe run offered NO snap candidate
+  // at all (it is a swept solid, not a bare line), so a connection-port pick near it resolved to a
+  // work-plane guess nowhere near the pipe.
+  const CadSnap::Hit hit = CadSnap::FindBest(9.9, 0.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Endpoint);
+  CHECK(hit.x == Catch::Approx(10.f));
+  CHECK(hit.y == Catch::Approx(0.f));
+  CHECK(hit.z == Catch::Approx(0.f));
+}
+
 TEST_CASE("FindBest picks the circle center when it is closer than a nearby line endpoint", "[CadSnap]") {
   AppCommandState st;
   st.objectSnapEndpoint = true;
@@ -818,6 +838,15 @@ TEST_CASE("3D Object Snap Nearest-to-face still works under the renamed flag", "
   AppCommandState st;
   st.objectSnap3dEnabled = true;
   st.objectSnap3dNearestFace = true;
+  // The two feature snaps are turned OFF so this case tests the one thing its name claims: that the
+  // renamed flag still reaches nearest-to-face. They used to be irrelevant — `Face` sits under the
+  // cursor, so it won on distance no matter what else was enabled. Since `SnapClass`, a named
+  // feature inside the aperture beats a nearest-anywhere point, and this case runs with a 60 ft
+  // tolerance (three times the cylinder's radius) which puts an edge midpoint well inside it. That
+  // precedence has its own case below; leaving it in play here would only test it twice and stop
+  // testing the flag.
+  st.objectSnap3dVertex = false;
+  st.objectSnap3dMidpointEdge = false;
 
   brep::Solid cyl;
   brep::Problem why = brep::Problem::Ok;
@@ -1303,4 +1332,309 @@ TEST_CASE("Quadrant snap obeys its per-type toggle and the snap-once override", 
   REQUIRE(forced.valid);
   CHECK(forced.kind == Kind::Quadrant);
   CHECK(forced.x == Approx(10.f).margin(1e-3));
+}
+
+TEST_CASE("A tilted circle is ray-picked on its own plane, not flat world XY",
+          "[CadCommands][pick][issue486]") {
+  // GUI pass (issue #486 follow-up): a circle drawn under a tilted work plane (e.g. while viewing
+  // Front) is stored with a real plane normal (userCircleNormals), but the orbited-view ray pick
+  // was sampling its circumference as if every circle lay flat in world XY — so a cursor visibly
+  // over the circle in a 3D view never hit it. Circle centred at (10,0,0), radius 2, normal +X (a
+  // vertical plane facing along X, as a circle drawn in a "Front" view would be).
+  AppCommandState st;
+  st.userCirclesCxCyZR = {10.0, 0.0, 0.0, 2.0};
+  st.userCircleNormals = {1.f, 0.f, 0.f};
+
+  // The true rim point at angle 90 deg in the circle's OWN plane is (10, 0, 2) -- not (10, 2, 0),
+  // which is what the flat-XY assumption would have tested against instead.
+  const ray3d::Ray ray{ray3d::Vec3{1000.0, 0.0, 2.0}, ray3d::Vec3{-1.0, 0.0, 0.0}};
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  REQUIRE(PickClosestCadEntity(st, 0.0, 0.0, 0.05f, &hit, &d2, &ray));
+  CHECK(hit.type == SelectedEntity::Type::Circle);
+  CHECK(hit.index == 0);
+}
+
+TEST_CASE("A tilted arc is ray-picked on its own plane, not flat world XY", "[CadCommands][pick][issue486]") {
+  AppCommandState st;
+  CadArc a;
+  a.cx = 10.0;
+  a.cy = 0.0;
+  a.z = 0.0;
+  a.r = 2.0;
+  a.startRad = 0.f;
+  a.sweepRad = static_cast<float>(2.0 * 3.14159265358979323846);  // full turn, so any angle is on it
+  a.nx = 1.f;
+  a.ny = 0.f;
+  a.nz = 0.f;
+  st.userArcs.push_back(a);
+
+  const ray3d::Ray ray{ray3d::Vec3{1000.0, 0.0, 2.0}, ray3d::Vec3{-1.0, 0.0, 0.0}};
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  REQUIRE(PickClosestCadEntity(st, 0.0, 0.0, 0.1f, &hit, &d2, &ray));
+  CHECK(hit.type == SelectedEntity::Type::Arc);
+  CHECK(hit.index == 0);
+}
+
+// --- REQ-335: snapping the SECOND point of a SECTION plane (user report, 2026-09-11) ------------
+//
+// "The 2nd selection point for sections is not wanting to snap to a midpoint right above the first
+// point." Reproduced here rather than reasoned about, because five plausible explanations were
+// each ruled out by reading (solid midpoints exist and are on by default; ConsiderSnap re-ranks in
+// 3D whenever a ray is present, so points stacked in Z are separable; `commandActive` gates only
+// perpendicular; the snap is suppressed only during an object-SELECTION step, which WaitP2 is not;
+// and SECTION commits `CadCommitElevation`, which is the snapped Z). All five were true and none
+// was the answer, which is the point of writing the case instead.
+TEST_CASE("SECTION's second point snaps to the midpoint of the edge above the first",
+          "[CadSnap][req335]") {
+  AppCommandState st;
+  st.objectSnapEnabled = true;
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dVertex = true;
+  st.objectSnap3dMidpointEdge = true;
+
+  // The box the report used, and the state SECTION is in at its second point.
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 14.0, 12.0, &box, &why));
+  InstallSolid(st, std::move(box));
+  st.active = AppCommandState::Kind::Section;
+  st.sectionPhase = AppCommandState::SectionPhase::WaitP2;
+  // The solid is SELECTED — SECTION selected it a moment ago, and a selected object is the one
+  // difference between this and the passing `issue395` midpoint case.
+  SelectedEntity sel{};
+  sel.type = SelectedEntity::Type::Solid;
+  sel.index = 0;
+  st.selection.push_back(sel);
+
+  // A vertical edge of a 20 x 14 x 12 box centred on the origin runs x=-10, y=-7, z 0..12, so its
+  // midpoint is (-10, -7, 6) — directly above the bottom corner, which is where the first point is.
+  st.sectionP1 = ray3d::Vec3{-10.0, -7.0, 0.0};
+  const ray3d::Ray ray = RayAt(-10.0, -7.0, 6.0);
+  const CadSnap::Hit hit =
+      CadSnap::FindBest(-10.0, -7.0, st, /*commandActive=*/true, /*tolWorld=*/2.f, {}, &ray);
+
+  REQUIRE(hit.valid);
+  INFO("kind=" << static_cast<int>(hit.kind) << " at (" << hit.x << ", " << hit.y << ", " << hit.z << ")");
+  CHECK(hit.kind == Kind::Midpoint);
+  CHECK(hit.z == Approx(6.f).margin(1e-6));
+}
+
+TEST_CASE("SECTION's second point snaps to a vertical edge's midpoint from an ORBITED camera",
+          "[CadSnap][req335]") {
+  // The faithful version of the case above. The previous one handed `FindBest` the midpoint's own
+  // XY, which is not what the viewport does: it passes the XY where the cursor ray crosses the WORK
+  // PLANE, and the ray is what disambiguates in 3D. For a point six feet up, those two XYs are
+  // several feet apart in an orbited view — so a plan-distance acceptance test would reject the very
+  // point the user is pointing at, and only the ray-distance override saves it.
+  AppCommandState st;
+  st.objectSnapEnabled = true;
+  st.objectSnap3dEnabled = true;
+  st.objectSnap3dVertex = true;
+  st.objectSnap3dMidpointEdge = true;
+
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 14.0, 12.0, &box, &why));
+  InstallSolid(st, std::move(box));
+  st.active = AppCommandState::Kind::Section;
+  st.sectionPhase = AppCommandState::SectionPhase::WaitP2;
+  SelectedEntity sel{};
+  sel.type = SelectedEntity::Type::Solid;
+  sel.index = 0;
+  st.selection.push_back(sel);
+  st.sectionP1 = ray3d::Vec3{-10.0, -7.0, 0.0};
+
+  constexpr float kW = 1280.f;
+  constexpr float kH = 720.f;
+  Camera cam = Camera::Plan(0.0, 0.0, 30.f);
+  cam.azimuthDeg = 135.f;
+  cam.elevationDeg = 22.f;
+
+  // Point at the midpoint of the vertical edge above the first point: (-10, -7, 6).
+  float px = 0.f, py = 0.f;
+  cam.WorldToScreen(-10.0, -7.0, 6.0, kW, kH, &px, &py);
+  const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+
+  // What the viewport hands FindBest: the ray's crossing of the work plane z = 0, NOT the target's
+  // own XY. This is the line that makes the test faithful.
+  REQUIRE(std::fabs(ray.dir.z) > 1e-9);
+  const double t = (0.0 - ray.origin.z) / ray.dir.z;
+  const double wpX = ray.origin.x + t * ray.dir.x;
+  const double wpY = ray.origin.y + t * ray.dir.y;
+  INFO("work-plane crossing (" << wpX << ", " << wpY << ") vs target XY (-10, -7)");
+
+  const CadSnap::Hit hit =
+      CadSnap::FindBest(wpX, wpY, st, /*commandActive=*/true, /*tolWorld=*/2.f, {}, &ray);
+  REQUIRE(hit.valid);
+  INFO("kind=" << static_cast<int>(hit.kind) << " at (" << hit.x << ", " << hit.y << ", " << hit.z << ")");
+  CHECK(hit.kind == Kind::Midpoint);
+  CHECK(hit.x == Approx(-10.f).margin(1e-4));
+  CHECK(hit.y == Approx(-7.f).margin(1e-4));
+  CHECK(hit.z == Approx(6.f).margin(1e-4));
+}
+
+TEST_CASE("A named feature beats nearest-on-face, which is a fallback and not a rival",
+          "[CadSnap][req313][snapclass]") {
+  // The bug this closes, reported 2026-09-11: "some midpoints just do not want to snap", and
+  // Shift+right-click Midpoint worked — which is the tell, because the override removes every
+  // competing kind.
+  //
+  // `Face` answers with the point on the surface nearest the cursor, so its candidate is ALWAYS
+  // essentially under the cursor and always at ray distance ~0. Ranked by distance first it beat
+  // every discrete feature, and a solid's midpoints and vertices could only be hit by landing on
+  // them to within an epsilon. Measured before the fix, on this exact box and camera: 0.2 ft off
+  // the midpoint returned `Face` at z 6.2, then 6.5 at half a foot and 7.0 at a foot — the cursor's
+  // own height, projected onto the solid, every time.
+  AppCommandState st;  // every 3D snap left at its shipped default, which is how it was reported
+  st.objectSnapEnabled = true;
+  REQUIRE(st.objectSnap3dNearestFace);   // the competitor is on by default...
+  REQUIRE(st.objectSnap3dMidpointEdge);  // ...and so is the feature it was swamping
+
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 14.0, 12.0, &box, &why));
+  InstallSolid(st, std::move(box));
+
+  constexpr float kW = 1280.f;
+  constexpr float kH = 720.f;
+  Camera cam = Camera::Plan(0.0, 0.0, 30.f);
+  cam.azimuthDeg = 135.f;
+  cam.elevationDeg = 22.f;
+
+  // The vertical edge at (-10,-7) runs z 0..12, so its midpoint is (-10,-7,6). Aim AT it and then
+  // progressively off it: the answer must stay the midpoint, not slide with the cursor.
+  for (const double dz : {0.0, 0.2, 0.5, 1.0}) {
+    float px = 0.f, py = 0.f;
+    cam.WorldToScreen(-10.0, -7.0, 6.0 + dz, kW, kH, &px, &py);
+    const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+    REQUIRE(std::fabs(ray.dir.z) > 1e-9);
+    const double t = (0.0 - ray.origin.z) / ray.dir.z;
+    const CadSnap::Hit hit = CadSnap::FindBest(ray.origin.x + t * ray.dir.x,
+                                               ray.origin.y + t * ray.dir.y, st,
+                                               /*commandActive=*/true, /*tolWorld=*/2.f, {}, &ray);
+    INFO("aiming " << dz << " ft above the midpoint");
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Midpoint);
+    CHECK(hit.z == Approx(6.f).margin(1e-4));  // the MIDPOINT's height, never the cursor's
+  }
+
+  SECTION("with no feature in reach, nearest-on-face still answers") {
+    // The fallback has to remain reachable, or this fix would have removed a snap rather than
+    // ordered it. Aimed at the middle of a large face, far from any edge or vertex.
+    float px = 0.f, py = 0.f;
+    cam.WorldToScreen(0.0, -7.0, 6.0, kW, kH, &px, &py);
+    const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+    const double t = (0.0 - ray.origin.z) / ray.dir.z;
+    const CadSnap::Hit hit = CadSnap::FindBest(ray.origin.x + t * ray.dir.x,
+                                               ray.origin.y + t * ray.dir.y, st,
+                                               /*commandActive=*/true, /*tolWorld=*/1.f, {}, &ray);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Face);
+  }
+
+  SECTION("EDGE is demoted too, and must also stay reachable") {
+    // `SnapClass` puts `Edge` in the same nearest-anywhere class as `Face`, which is right — it
+    // answers with the nearest point ALONG an edge, not a named point on it — but it means the
+    // precedence change reaches further than the `Face` bug that prompted it. A named feature now
+    // beats `Edge` whenever one is inside the aperture, so the question worth pinning is that
+    // `Edge` is still returned when none is.
+    //
+    // Aimed a quarter of the way along a top edge: far from both endpoints and from the midpoint at
+    // a realistic aperture, which is exactly where `Edge` is the right answer.
+    //
+    // `objectSnap3dNearestFace` stays ON — it is the flag that produces `Kind::Edge` as well as
+    // `Kind::Face` (CadSnap.cpp:1331), so switching it off to "isolate" Edge removes Edge. The two
+    // then compete at the same class, and `Priority` gives Edge the tie: a real curve beats
+    // anywhere-on-a-face.
+    //
+    // A 3 ft aperture, not the 1 ft the face case uses: at this camera and this target the solid
+    // pick finds nothing at 1 ft. Still comfortably inside the 5 ft to the nearest named feature —
+    // the edge's own midpoint — so the precedence rule is not what is being dodged.
+    float px = 0.f, py = 0.f;
+    cam.WorldToScreen(-5.0, -7.0, 12.0, kW, kH, &px, &py);
+    const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+    const double t = (0.0 - ray.origin.z) / ray.dir.z;
+    const CadSnap::Hit hit = CadSnap::FindBest(ray.origin.x + t * ray.dir.x,
+                                               ray.origin.y + t * ray.dir.y, st,
+                                               /*commandActive=*/true, /*tolWorld=*/3.f, {}, &ray);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Edge);
+  }
+
+  SECTION("a named feature still wins over EDGE when one is in reach") {
+    // The other half: at the midpoint of that same edge, the named point takes it. Together with
+    // the case above this states the whole rule for `Edge` — fallback, not rival — rather than
+    // leaving it to be inferred from the `Face` cases.
+    float px = 0.f, py = 0.f;
+    cam.WorldToScreen(0.0, -7.0, 12.0, kW, kH, &px, &py);
+    const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+    const double t = (0.0 - ray.origin.z) / ray.dir.z;
+    const CadSnap::Hit hit = CadSnap::FindBest(ray.origin.x + t * ray.dir.x,
+                                               ray.origin.y + t * ray.dir.y, st,
+                                               /*commandActive=*/true, /*tolWorld=*/1.f, {}, &ray);
+    REQUIRE(hit.valid);
+    CHECK(CadSnap::SnapClass(hit.kind) == 1);  // a named point, not nearest-anywhere
+  }
+}
+
+TEST_CASE("A centre accepted only because the cursor is over its shape does not outrank a face",
+          "[CadSnap][req313][snapclass]") {
+  // Code review on #478, finding 2. `SnapClass` ranks a named feature ahead of Face/Edge/Surface —
+  // but several named kinds are ACCEPTED on a "cursor is anywhere over the shape" heuristic: a
+  // closed polyline's GeometricCenter anywhere inside it, a circle's Center anywhere inside it,
+  // CenterOfFace anywhere on the face. Given class priority, a centroid 140 ft away beat the Face
+  // point under the cursor. A feature only earns its class when its true point is in the aperture.
+  AppCommandState st;  // shipped defaults: GeometricCenter, Surface and NearestFace are all ON
+  st.objectSnapEnabled = true;
+  REQUIRE(st.objectSnapGeometricCenter);
+  REQUIRE(st.objectSnap3dNearestFace);
+
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 14.0, 12.0, &box, &why));
+  InstallSolid(st, std::move(box));
+
+  // A boundary polyline enclosing the box, as a site boundary around a building pad would. Its
+  // centroid is (100, 100, 0) — about 140 ft from the face being aimed at.
+  st.userPolylineVerts = {-300.f, -300.f, 0.f, 500.f, -300.f, 0.f, 500.f, 500.f, 0.f, -300.f, 500.f, 0.f};
+  st.userPolylineOffsets = {0, 4};
+  st.userPolylineClosed = {1};
+  st.userPolylineAttrs.emplace_back();
+
+  constexpr float kW = 1280.f;
+  constexpr float kH = 720.f;
+  Camera cam = Camera::Plan(0.0, 0.0, 30.f);
+  cam.azimuthDeg = 135.f;
+  cam.elevationDeg = 22.f;
+  const auto snapAt = [&](double x, double y, double z) {
+    float px = 0.f, py = 0.f;
+    cam.WorldToScreen(x, y, z, kW, kH, &px, &py);
+    const ray3d::Ray ray = cam.ScreenRay(px, py, kW, kH);
+    const double t = (0.0 - ray.origin.z) / ray.dir.z;
+    return CadSnap::FindBest(ray.origin.x + t * ray.dir.x, ray.origin.y + t * ray.dir.y, st,
+                             /*commandActive=*/true, /*tolWorld=*/1.f, {}, &ray);
+  };
+
+  SECTION("inside a closed polyline, the face under the cursor wins over its far centroid") {
+    const CadSnap::Hit hit = snapAt(2.0, 2.0, 12.0);  // on the TOP face, the one this camera sees
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Face);
+    CHECK(hit.z == Approx(12.f).margin(1e-3));
+  }
+
+  SECTION("with Center of face on, Face is still reachable away from the centroid") {
+    st.objectSnap3dCenterFace = true;
+    const CadSnap::Hit hit = snapAt(6.0, 3.0, 12.0);  // ~6.7 ft from the top face's centroid (0,0,12)
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Face);
+  }
+
+  SECTION("...and Center of face still wins when the cursor is on the centroid") {
+    st.objectSnap3dCenterFace = true;
+    const CadSnap::Hit hit = snapAt(0.0, 0.0, 12.0);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::CenterOfFace);
+  }
 }

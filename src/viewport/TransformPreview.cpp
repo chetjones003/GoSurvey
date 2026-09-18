@@ -445,7 +445,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   using MirP = AppCommandState::MirrorPhase;
 
   if (cmd.active == K::Offset && cmd.offsetEntityValid &&
-      (cmd.offsetPhase == OP::WaitDistanceOrThrough || cmd.offsetPhase == OP::WaitSidePick)) {
+      (cmd.offsetPhase == OP::WaitThroughPick || cmd.offsetPhase == OP::WaitSidePick)) {
     CadOffsetAppendLivePreview(cmd, curX, curY, prevLines, prevCircles);
     return;
   }
@@ -1459,6 +1459,72 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
         continue;
       hlLines->insert(hlLines->end(), t.edgeVerts.begin(), t.edgeVerts.end());
       break;
+    }
+  } else if (e.type == SelectedEntity::Type::PipeRun) {
+    // Issue #486. Same omission as the Solid branch above, for the same reason: without this a
+    // selected pipe run drew no highlight at all. `e.index` is into `cadPipeRuns`, but the
+    // rendered geometry lives in the DERIVED `pipeRunWorldSolids` array — walk that array for the
+    // (at most one) solid this run actually built, matching `PickClosestSolidEntity`'s own mapping.
+    for (size_t si = 0; si < cmd.pipeRunWorldSolids.size(); ++si) {
+      if (si >= cmd.pipeRunWorldSolidOwnerIndex.size() ||
+          cmd.pipeRunWorldSolidOwnerIndex[si] != e.index || !cmd.pipeRunWorldSolids[si])
+        continue;
+      const CadSolidPtr& sp = cmd.pipeRunWorldSolids[si];
+      for (const CadSolidTessellation& t : cmd.solidDisplayCache) {
+        if (t.key.lock() != sp)
+          continue;
+        hlLines->insert(hlLines->end(), t.edgeVerts.begin(), t.edgeVerts.end());
+        break;
+      }
+      break;
+    }
+  } else if (e.type == SelectedEntity::Type::BlockRef) {
+    // Issue #496 follow-up, same omission as the Solid case above and the one PickClosestCadEntity
+    // itself had: a piping fitting block whose content is a 3D solid (no lines/circles) drew NO
+    // highlight at all, hover or selected — only the gizmo. Trace BOTH the block's 2D content (the
+    // ordinary case) and its solids' own edges (from the tessellation cache, same as the Solid
+    // branch), so every block ref gets a highlight regardless of what its content is made of.
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= cmd.cadBlockRefs.size())
+      return;
+    const CadBlockRef& ref = cmd.cadBlockRefs[k];
+    EntityAttributes dummy{};
+    if (k < cmd.cadBlockRefAttrs.size())
+      dummy = cmd.cadBlockRefAttrs[k];
+    std::vector<CadBlockWorldSeg> segs;
+    CadBlockCollectWorldLines(cmd.blockDefs, ref, dummy, &segs);
+    for (const CadBlockWorldSeg& s : segs) {
+      hlLines->push_back(s.x0);
+      hlLines->push_back(s.y0);
+      hlLines->push_back(s.z0);
+      hlLines->push_back(s.x1);
+      hlLines->push_back(s.y1);
+      hlLines->push_back(s.z1);
+    }
+    // NOT the tessellation-cache lookup the Solid branch above uses: CadBlockCollectWorldSolids
+    // allocates a brand-new transformed brep::Solid (and so a brand-new shared_ptr identity) on
+    // every call, which would never match anything already keyed into cmd.solidDisplayCache by
+    // RebuildBlockRefWorldSolids. Walk the edges directly instead — the same chord-count-24-per-arc
+    // approach PickClosestCadEntity's own BlockRef case already uses for exactly this reason.
+    std::vector<CadBlockWorldSolid> blockSolids;
+    CadBlockCollectWorldSolids(cmd.blockDefs, ref, dummy, &blockSolids);
+    for (const CadBlockWorldSolid& ws : blockSolids) {
+      if (!ws.solid)
+        continue;
+      for (const brep::Edge& ed : ws.solid->edges) {
+        const int steps = ed.kind == brep::CurveKind::Arc ? 24 : 1;
+        ray3d::Vec3 prev = brep::EdgePointAt(*ws.solid, ed, 0.0);
+        for (int i = 1; i <= steps; ++i) {
+          const ray3d::Vec3 next = brep::EdgePointAt(*ws.solid, ed, static_cast<double>(i) / steps);
+          hlLines->push_back(static_cast<float>(prev.x));
+          hlLines->push_back(static_cast<float>(prev.y));
+          hlLines->push_back(static_cast<float>(prev.z));
+          hlLines->push_back(static_cast<float>(next.x));
+          hlLines->push_back(static_cast<float>(next.y));
+          hlLines->push_back(static_cast<float>(next.z));
+          prev = next;
+        }
+      }
     }
   } else if (e.type == SelectedEntity::Type::FilledRegion) {
     const size_t k = static_cast<size_t>(e.index);

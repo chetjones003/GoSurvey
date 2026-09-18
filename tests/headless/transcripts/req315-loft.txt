@@ -33,9 +33,11 @@ BOX -8 -8 8 8
 EXPECT SELECTED 2
 CMD LOFT
 EXPECT SOLIDS 1
-EXPECT SOLIDKIND 0 Solid
+# Issue #515 (D-2026-09-16-c): two coaxial circles loft to exactly the cylinder CYLINDER builds, and
+# say so — built with analytic faces and the primitive's recipe, so SECTION and SLICE cut it alike.
+EXPECT SOLIDKIND 0 Cylinder
 EXPECT SOLIDPROPS 0 628.3185307179587 408.4070449666731 4 6 4
-EXPECT LOG "Solid created"
+EXPECT LOG "Cylinder created"
 # the source circles are left in place
 EXPECT CIRCLES 2
 
@@ -98,8 +100,43 @@ CLICK 303 0
 CLICK 307 0
 CMD
 EXPECT SOLIDS 3
-EXPECT SOLIDKIND 2 Solid
-EXPECT LOG "Solid created"
+# r 3 at z 0 to r 7 at z 10 on one axis: a cone frustum (issue #515).
+EXPECT SOLIDKIND 2 Cone
+EXPECT LOG "Cone created"
+
+# --- Three circles keep the freeform loft: NURBS side faces, no recipe ------------------------
+# Since #515 a TWO-circle coaxial loft is built as an analytic cylinder, so this is the block that
+# keeps an arc-sided NURBS loft covered through the command and its .gs round-trip below. r = 5 at
+# z = 0, 4 and 8: the same cylinder's volume and area, as two NURBS bands (6 v, 10 e, 6 f).
+CMD CIRCLE
+CMD 700,0
+CMD 5
+ESC
+CMD ELEV
+CMD 4
+ESC
+CMD CIRCLE
+CMD 700,0
+CMD 5
+ESC
+CMD ELEV
+CMD 8
+ESC
+CMD CIRCLE
+CMD 700,0
+CMD 5
+ESC
+CMD ELEV
+CMD 0
+ESC
+CMD LOFT
+CLICK 705 0
+CLICK 695 0 4
+CLICK 705 0 8
+CMD
+EXPECT SOLIDS 4
+EXPECT SOLIDKIND 3 Solid
+EXPECT SOLIDPROPS 3 628.3185307179587 408.4070449666731 6 10 6
 
 # --- A single profile is refused, not silently swallowed -------------------------------------
 CMD CIRCLE
@@ -112,14 +149,16 @@ CMD LOFT
 EXPECT LOG "select closed polylines or circles in lofting order"
 CMD
 EXPECT LOG "select at least two"
-EXPECT SOLIDS 3
+EXPECT SOLIDS 4
 ESC
 
 # --- Solids survive a .gs save and reopen with topology intact ------------------------------
 SAVEAS %OUT%/req315-loft.dwg
 OPEN %OUT%/req315-loft.dwg
-EXPECT SOLIDS 3
+EXPECT SOLIDS 4
 EXPECT SOLIDPROPS 0 628.3185307179587 408.4070449666731 4 6 4
 EXPECT SOLIDPROPS 1 224 231.78932768808222 8 12 6
+EXPECT SOLIDKIND 3 Solid
+EXPECT SOLIDPROPS 3 628.3185307179587 408.4070449666731 6 10 6
 
 CHECK ALL

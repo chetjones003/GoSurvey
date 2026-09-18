@@ -15,15 +15,34 @@
 #include <memory>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
 
+// REQ-341 / ADR-058 — the live section clip.
+//
+// Every vertex shader below that draws model geometry carries the same two added lines: a
+// `uClipPlane` uniform and one write to `gl_ClipDistance[0]`. The plane is a UNIFORM and not a
+// matrix, which is what keeps the REQ-058 camera untouched by this feature — `uMVP` and every path
+// that builds it are exactly as they were.
+//
+// `uClipPlane` is in the space `aPos` is in — XY relative to the view anchor, Z absolute — NOT in
+// world coordinates. `SectionClipToShaderVec4` does that conversion and documents what skipping it
+// costs (up to 2,196,000 ft at state-plane coordinates, and a clip that slides when the view pans).
+// A vertex survives when `dot(uClipPlane.xyz, aPos) + uClipPlane.w >= 0`.
+//
+// `gl_ClipDistance[0]` is written UNCONDITIONALLY, and the plane is neutralised (0,0,0,1) rather
+// than the shader branching, for two reasons: a vertex shader that leaves gl_ClipDistance
+// unwritten while GL_CLIP_DISTANCE0 is enabled has undefined contents, and a uniform swap is
+// cheaper than a shader permutation.
 const char* kLineVs = R"(#version 330 core
 layout(location = 0) in vec3 aPos;
 uniform mat4 uMVP;
+uniform vec4 uClipPlane;
 void main() {
   gl_Position = uMVP * vec4(aPos, 1.0);
+  gl_ClipDistance[0] = dot(uClipPlane.xyz, aPos) + uClipPlane.w;
 }
 )";
 
@@ -39,9 +58,11 @@ const char* kLineVcVs = R"(#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec4 aColor;
 uniform mat4 uMVP;
+uniform vec4 uClipPlane;
 out vec4 vColor;
 void main() {
   gl_Position = uMVP * vec4(aPos, 1.0);
+  gl_ClipDistance[0] = dot(uClipPlane.xyz, aPos) + uClipPlane.w;
   vColor = aColor;
 }
 )";
@@ -73,9 +94,11 @@ const char* kShadedVs = R"(#version 330 core
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 uniform mat4 uMVP;
+uniform vec4 uClipPlane;
 out vec3 vNormal;
 void main() {
   gl_Position = uMVP * vec4(aPos, 1.0);
+  gl_ClipDistance[0] = dot(uClipPlane.xyz, aPos) + uClipPlane.w;
   vNormal = aNormal;
 }
 )";
@@ -95,13 +118,17 @@ void main() {
 )";
 
 // Textured quad — used for PDF underlay rendering
+// The PDF underlay's aPos is a vec2 in model XY at Z = 0, so its clip term takes the same
+// vec3(aPos, 0.0) the position does. An underlay is model content and clips with the rest of it.
 const char* kTexVs = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aUV;
 uniform mat4 uMVP;
+uniform vec4 uClipPlane;
 out vec2 vUV;
 void main() {
   gl_Position = uMVP * vec4(aPos, 0.0, 1.0);
+  gl_ClipDistance[0] = dot(uClipPlane.xyz, vec3(aPos, 0.0)) + uClipPlane.w;
   vUV = aUV;
 }
 )";
@@ -706,6 +733,18 @@ void ViewportRenderer::ReleaseMeshGpu() {
   meshGpu_.clear();
 }
 
+void ViewportRenderer::ReleasePointCloudGpu() {
+  for (PointCloudGpuEntry& e : pointCloudGpu_) {
+    if (e.vbo) glDeleteBuffers(1, &e.vbo);
+    if (e.vao) glDeleteVertexArrays(1, &e.vao);
+    for (PointCloudGpuEntry::LeafGpuEntry& leaf : e.leafGpu) {
+      if (leaf.vbo) glDeleteBuffers(1, &leaf.vbo);
+      if (leaf.vao) glDeleteVertexArrays(1, &leaf.vao);
+    }
+  }
+  pointCloudGpu_.clear();
+}
+
 void ViewportRenderer::ReleaseSolidGpu() {
   for (SolidGpuBatch& e : solidGpu_) {
     if (e.faceVbo) glDeleteBuffers(1, &e.faceVbo);
@@ -728,6 +767,7 @@ bool ViewportRenderer::EnsureShader() {
   lineProgram_ = LinkProgram(vs, fs);
   if (!lineProgram_)
     return false;
+  clipLocLine_ = glGetUniformLocation(lineProgram_, "uClipPlane");
 
   gridProgram_ = lineProgram_;
 
@@ -738,6 +778,7 @@ bool ViewportRenderer::EnsureShader() {
   vcLineProgram_ = LinkProgram(vcVs, vcFs);
   if (!vcLineProgram_)
     return false;
+  clipLocVcLine_ = glGetUniformLocation(vcLineProgram_, "uClipPlane");
 
   GLuint shVs = CompileShader(GL_VERTEX_SHADER, kShadedVs);
   GLuint shFs = CompileShader(GL_FRAGMENT_SHADER, kShadedFs);
@@ -746,6 +787,7 @@ bool ViewportRenderer::EnsureShader() {
   shadedProgram_ = LinkProgram(shVs, shFs);
   if (!shadedProgram_)
     return false;
+  clipLocShaded_ = glGetUniformLocation(shadedProgram_, "uClipPlane");
   glGenVertexArrays(1, &vaoShaded_);
   glGenBuffers(1, &vboShaded_);
   glBindVertexArray(vaoShaded_);
@@ -792,6 +834,7 @@ bool ViewportRenderer::EnsureShader() {
   if (texVs && texFs) {
     texProgram_ = LinkProgram(texVs, texFs);
     if (texProgram_) {
+      clipLocTex_ = glGetUniformLocation(texProgram_, "uClipPlane");
       glGenVertexArrays(1, &vaoTex_);
       glGenBuffers(1, &vboTex_);
       glBindVertexArray(vaoTex_);
@@ -847,6 +890,7 @@ void ViewportRenderer::DestroyShader() {
   }
   gridProgram_ = 0;
   ReleaseMeshGpu();
+  ReleasePointCloudGpu();
   ReleaseSolidGpu();
   if (shadedProgram_) {
     glDeleteProgram(shadedProgram_);
@@ -1010,7 +1054,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<float>* removalLines,
                                    const std::vector<float>* removalMarkers, const ucs::Ucs* gridFrame,
                                    const CadSubObjectOverlay* subObjectOverlay,
-                                   const CadGizmoOverlay* gizmoOverlay) {
+                                   const CadGizmoOverlay* gizmoOverlay,
+                                   const std::vector<std::shared_ptr<const CadPointCloud>>* pointClouds,
+                                   const std::vector<EntityAttributes>* pointCloudAttrs) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -1138,6 +1184,56 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   float mvp[16];
   MulMat4(projRot, model, mvp);
 
+  // --- REQ-341 / ADR-058: the live section clip ---------------------------------------------------
+  //
+  // Rebased onto an anchor and set on every program that draws model geometry. The plane must be
+  // packed against the SAME anchor the vertices were uploaded against — and that is not always the
+  // view anchor: the linework cache, the solid batches and the meshes each keep the anchor they were
+  // uploaded at and absorb the drift in their own MVP. Packing those against the view anchor puts
+  // the cut `n.xy * (cachedAnchor - pan)` out, so a tilted cut slides as the view pans and snaps
+  // back when the cache rebuilds (code review on #478, finding 1). So every draw that sets its own
+  // `uMVP` translation also calls `setClipAnchor` with that same anchor, and restores the view
+  // anchor after — the rule is "one anchor per draw, used for both uniforms".
+  //
+  // Repacking per frame is also what makes the clip LIVE in the sense acceptance 6 asks for: the
+  // plane is re-read from `tuning`, so moving it changes the next frame and invalidates NO cached
+  // geometry — `cadGpuRevision`, the mesh cache and the solid batch signature are all untouched by
+  // it. Nothing is re-tessellated and nothing is re-uploaded.
+  const bool sectionClipOn = tuning.sectionClip.active;
+  // Uploads to the CURRENTLY BOUND program; \p loc is that program's cached `uClipPlane`.
+  const auto setClipAnchor = [&](int loc, double anchorX, double anchorY) {
+    if (loc < 0)
+      return;
+    float v[4];
+    if (sectionClipOn)
+      SectionClipToShaderVec4(tuning.sectionClip, anchorX, anchorY, v);
+    else
+      SectionClipDisabledVec4(v);
+    glUniform4fv(loc, 1, v);
+  };
+  {
+    const std::pair<unsigned int, int> clipped[] = {
+        {lineProgram_, clipLocLine_}, {vcLineProgram_, clipLocVcLine_},
+        {shadedProgram_, clipLocShaded_}, {texProgram_, clipLocTex_}};
+    for (const auto& [prog, loc] : clipped) {
+      if (!prog || loc < 0)
+        continue;
+      glUseProgram(prog);
+      setClipAnchor(loc, viewAnchorX, viewAnchorY);
+    }
+  }
+  // Model geometry clips; UI overlays do not. This is the same split `depthForGeometry` /
+  // `depthForOverlay` already draw, for a related reason: a selection highlight or a snap marker
+  // that vanished into the cut would be hiding the very thing the user is pointing at.
+  const auto clipForGeometry = [&]() {
+    if (sectionClipOn)
+      glEnable(GL_CLIP_DISTANCE0);
+    else
+      glDisable(GL_CLIP_DISTANCE0);
+  };
+  const auto clipForOverlay = [&]() { glDisable(GL_CLIP_DISTANCE0); };
+  clipForGeometry();
+
   // issue #383: this is the fallback stroke for entities with no resolvable lineweight AND the
   // width rubber-band previews inherit (they draw right after the highlight passes below, which
   // restore glLineWidth(kLwMain)). Thinned to match AutoCAD's default look.
@@ -1224,7 +1320,14 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
 
   // --- Grid: centered on view, step scales with zoom (stable in world space) ---
+  //
+  // REQ-341: the grid is the one thing in the geometry region that does NOT clip. It is a drafting
+  // aid drawn ON the UCS plane, and the clip plane IS the UCS plane offset along its own normal —
+  // so at offset 0 the two are coincident and clipping the grid by itself gives z-fighting and a
+  // half-vanished aid. An aid that disappears where you are working tells you nothing. Stated as a
+  // scope boundary in REQ-341 rather than left as an accident of pass ordering.
   if (showGrid) {
+    glDisable(GL_CLIP_DISTANCE0);
     auto niceStep = [](float worldSpan) -> float {
       float s = worldSpan / 20.f;
       if (s < 1e-9f)
@@ -1388,6 +1491,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glDrawArrays(GL_LINES, 0, gridVertexCount_);
     glDisable(GL_BLEND);
     glBindVertexArray(0);
+    clipForGeometry();  // REQ-341: back on for the model geometry below
   }
 
   // --- Imported meshes (REQ-063) -----------------------------------------------------------------
@@ -1510,6 +1614,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       float meshMvp[16];
       MulMat4(projRot, meshModel, meshMvp);
       glUniformMatrix4fv(locShMvp, 1, GL_FALSE, meshMvp);
+      setClipAnchor(clipLocShaded_, entry->anchorX, entry->anchorY);
 
       glBindVertexArray(entry->vao);
       for (const CadMeshPart& part : mp->parts) {
@@ -1528,8 +1633,382 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       }
     }
     glBindVertexArray(0);
+    setClipAnchor(clipLocShaded_, viewAnchorX, viewAnchorY);  // back to the shared anchor
     glUseProgram(lineProgram_);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+  }
+
+  // --- Point clouds (REQ-171/172, ADR-042/060) -----------------------------------------------------
+  // Drawn in EVERY visual style (unlike the mesh block above) — a point cloud has no faces to shade
+  // or hide, so restricting it to Shaded would make it invisible in the default 2D Wireframe view,
+  // the same reasoning REQ-068 gives for TIN surfaces. Flat draw of every resident point: no LOD yet
+  // (REQ-100 profile (e) is unmeasured; implementation-rules.md §5 forbids speculative optimisation).
+  if (pointClouds && !pointClouds->empty()) {
+    for (size_t i = 0; i < pointCloudGpu_.size();) {
+      if (pointCloudGpu_[i].cloud.expired()) {
+        if (pointCloudGpu_[i].vbo) glDeleteBuffers(1, &pointCloudGpu_[i].vbo);
+        if (pointCloudGpu_[i].vao) glDeleteVertexArrays(1, &pointCloudGpu_[i].vao);
+        for (PointCloudGpuEntry::LeafGpuEntry& leaf : pointCloudGpu_[i].leafGpu) {
+          if (leaf.vbo) glDeleteBuffers(1, &leaf.vbo);
+          if (leaf.vao) glDeleteVertexArrays(1, &leaf.vao);
+        }
+        pointCloudGpu_.erase(pointCloudGpu_.begin() + static_cast<std::ptrdiff_t>(i));
+      } else {
+        ++i;
+      }
+    }
+
+    glUseProgram(vcLineProgram_);
+    const GLint locPcMvp = glGetUniformLocation(vcLineProgram_, "uMVP");
+    const double pcAnchorDriftBudget = std::max(halfHd * 0.5, 1.e-12);
+
+    for (size_t pci = 0; pci < pointClouds->size(); ++pci) {
+      const std::shared_ptr<const CadPointCloud>& pc = (*pointClouds)[pci];
+      if (!pc || pc->pointsXyz.empty())
+        continue;
+      const EntityAttributes* attr =
+          (pointCloudAttrs && pci < pointCloudAttrs->size()) ? &(*pointCloudAttrs)[pci] : nullptr;
+      const CadLayerRow* lr =
+          attr ? LookupLayerRowCi(drawingLayers, attr->layer.empty() ? std::string("0") : attr->layer) : nullptr;
+      if (lr && (!lr->on || lr->frozen))
+        continue;
+      if (attr && CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, attr->id))
+        continue;
+
+      PointCloudGpuEntry* entry = nullptr;
+      for (PointCloudGpuEntry& e : pointCloudGpu_) {
+        if (e.cloud.lock().get() == pc.get()) {
+          entry = &e;
+          break;
+        }
+      }
+      if (!entry) {
+        pointCloudGpu_.push_back(PointCloudGpuEntry{});
+        entry = &pointCloudGpu_.back();
+        entry->cloud = pc;
+        glGenVertexArrays(1, &entry->vao);
+        glGenBuffers(1, &entry->vbo);
+        glBindVertexArray(entry->vao);
+        glBindBuffer(GL_ARRAY_BUFFER, entry->vbo);
+        const GLsizei pcStride = static_cast<GLsizei>(7 * sizeof(float));  // xyz + rgba
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, pcStride, nullptr);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, pcStride, reinterpret_cast<const void*>(sizeof(float) * 3));
+        glBindVertexArray(0);
+        entry->anchorX = std::numeric_limits<double>::quiet_NaN();  // force the vertex upload below
+      }
+
+      const bool anchorStale = !(std::fabs(viewAnchorX - entry->anchorX) <= pcAnchorDriftBudget &&
+                                 std::fabs(viewAnchorY - entry->anchorY) <= pcAnchorDriftBudget);
+      // A cloud with no source colour bakes the resolved layer/entity colour into every vertex at
+      // upload time, rather than adding a second uncoloured shader path for one attribute. Computed
+      // once per cloud per frame so the LOD leaf pass below can reuse it too.
+      float fallbackRgba[4] = {0.7f, 0.7f, 0.7f, 1.f};
+      if (attr)
+        ResolveEntityRgbaForViewport(*attr, lr, 0.7f, 0.7f, 0.7f, fallbackRgba);
+      if (anchorStale) {
+        const bool haveColor = pc->hasColor() && pc->colorsRgb.size() == pc->pointsXyz.size();
+        const size_t pcount = pc->pointsXyz.size() / 3;
+        cpuPointCloudVerts_.clear();
+        cpuPointCloudVerts_.resize(pcount * 7);
+        for (size_t v = 0; v < pcount; ++v) {
+          float rx = 0.f;
+          float ry = 0.f;
+          WorldToViewRelativeFloat(pc->pointsXyz[v * 3], pc->pointsXyz[v * 3 + 1], viewAnchorX, viewAnchorY,
+                                   &rx, &ry);
+          float* o = &cpuPointCloudVerts_[v * 7];
+          o[0] = rx;
+          o[1] = ry;
+          o[2] = static_cast<float>(pc->pointsXyz[v * 3 + 2]);  // Z is absolute (ADR-025 D2)
+          if (haveColor) {
+            o[3] = pc->colorsRgb[v * 3];
+            o[4] = pc->colorsRgb[v * 3 + 1];
+            o[5] = pc->colorsRgb[v * 3 + 2];
+          } else {
+            o[3] = fallbackRgba[0];
+            o[4] = fallbackRgba[1];
+            o[5] = fallbackRgba[2];
+          }
+          o[6] = 1.f;
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, entry->vbo);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cpuPointCloudVerts_.size() * sizeof(float)),
+                     cpuPointCloudVerts_.data(), GL_STATIC_DRAW);
+        entry->pointCount = static_cast<int>(pcount);
+        entry->anchorX = viewAnchorX;
+        entry->anchorY = viewAnchorY;
+      }
+
+      float pcModel[16];
+      TranslateMat(static_cast<float>(entry->anchorX - panX), static_cast<float>(entry->anchorY - panY), -panZf,
+                   pcModel);
+      float pcMvp[16];
+      MulMat4(projRot, pcModel, pcMvp);
+      glUniformMatrix4fv(locPcMvp, 1, GL_FALSE, pcMvp);
+      setClipAnchor(clipLocVcLine_, entry->anchorX, entry->anchorY);
+
+      glBindVertexArray(entry->vao);
+      glPointSize(2.0f);  // fixed for now; ribbon point-size control is a future increment
+      glDrawArrays(GL_POINTS, 0, entry->pointCount);
+
+      // --- Out-of-core LOD detail (ADR-060) ------------------------------------------------------
+      // Pages leaves from the `.gscloud` cache near the camera, drawn on top of the flat bounded
+      // preview above — this is what lets zooming in close show more of the real point set instead
+      // of the capped preview everywhere (TASK-270 §11's stated next increment).
+      //
+      // The search itself is a CYLINDER along the camera's view axis, not a sphere around the pan
+      // target — an orbited/tilted camera's target is a pivot point, not pinned to whatever surface
+      // is actually facing the viewer, so its depth along the view axis can differ a lot from the
+      // near-facing geometry the user is looking at. `SelectLodLeavesInCylinder` bounds only the
+      // lateral (on-screen) extent by zoom, leaves depth unbounded, and returns leaves nearest-to-
+      // the-eye first (part 9).
+      //
+      // Every candidate leaf is decimated by the SAME stride (part 10) rather than some leaves
+      // drawn at full density and others dropped once a point budget runs out: a per-leaf full/
+      // nothing cutoff reads as a hard-edged, blocky cliff at the coverage boundary (leaves are
+      // cubes) and, worse, a "solid surface" look wherever density is high enough to be at budget —
+      // exactly the complaints raised against that version. One shared stride keeps the covered area
+      // evenly sparse — genuinely a point cloud, not a mesh — and the stride still falls as the user
+      // zooms in (fewer candidate points for the same target budget), so detail still increases with
+      // zoom, just without ever filling in solid.
+      if (pc->hasOutOfCoreCache()) {
+        if (!entry->diskCacheTried) {
+          entry->diskCacheTried = true;
+          pointcloudcache::OpenResult openResult = pointcloudcache::Open(pc->cloudCachePath);
+          if (openResult.ok)
+            entry->diskCache = std::move(openResult.cache);
+        }
+        if (!entry->diskCache.cachePath.empty()) {
+          // Candidate leaf cap bounds both the query's own work and the draw-call count (one VAO
+          // per resident leaf) — the real density control is kTargetLodPoints/stride below, not
+          // this count.
+          constexpr int kMaxLodLeafCandidates = 1500;
+          // A deliberately SPARSE target — this is meant to look like a point cloud, not fill in
+          // solid. Small enough that even a fully-covered candidate set decimates visibly.
+          constexpr std::int64_t kTargetLodPoints = 800'000;
+          const double lateralRadius = std::max(halfWd, halfHd) * 1.25;
+          const ray3d::Vec3 viewDir = cam.ForwardWorld();
+
+          // Re-selecting leaves means up to kMaxLodLeafCandidates disk reads/GPU uploads — real I/O
+          // cost, not just a query. The view direction and pan target both drift a little EVERY
+          // frame during a smooth orbit/zoom, so re-running this every frame turned a bounded,
+          // occasional cost into a per-frame one — measured as "noticeably laggier" (TASK-270 part
+          // 11). Only re-select once the camera has moved far enough from the LAST selection's
+          // snapshot to plausibly want different leaves: lateral radius changed by more than ~15%
+          // (a real zoom step), the focus moved by more than ~15% of the radius (a real pan step),
+          // or the view direction rotated more than ~3 degrees (cos threshold) — an orbit drag.
+          const double focusDx = cam.targetX - entry->lodFocusX;
+          const double focusDy = cam.targetY - entry->lodFocusY;
+          const double focusDz = cam.targetZ - entry->lodFocusZ;
+          const double focusMoved = std::sqrt(focusDx * focusDx + focusDy * focusDy + focusDz * focusDz);
+          const double radiusRatio =
+              entry->lodLateralRadius > 1e-12 ? lateralRadius / entry->lodLateralRadius : 0.0;
+          const double dirDot = viewDir.x * entry->lodDirX + viewDir.y * entry->lodDirY +
+                                 viewDir.z * entry->lodDirZ;
+          const bool movedEnough =
+              !entry->lodSelectionValid ||
+              focusMoved > 0.15 * std::max(lateralRadius, 1e-9) ||
+              radiusRatio < 0.85 || radiusRatio > 1.15 ||
+              dirDot < 0.9986;  // cos(~3 deg)
+          // Time floor on top of the movement test (part 13): a fast orbit crosses the movement
+          // thresholds on nearly every frame, and a reselect costs real time (up to
+          // kMaxLodLeafCandidates disk reads) — without this, a slower frame makes the same mouse
+          // speed cross the threshold sooner, costing more time, compounding into a stall. First
+          // selection (`!lodSelectionValid`) always runs regardless of the clock.
+          const auto now = std::chrono::steady_clock::now();
+          const bool longEnoughSinceLast =
+              !entry->lodSelectionValid ||
+              now - entry->lodLastReselectTime >= std::chrono::milliseconds(200);
+          const bool needsReselect = movedEnough && longEnoughSinceLast;
+
+          if (needsReselect) {
+            const std::vector<pointcloud::CylinderLodLeaf> candidates =
+                pointcloud::SelectLodLeavesInCylinder(entry->diskCache.octree, cam.targetX,
+                                                       cam.targetY, cam.targetZ, viewDir.x, viewDir.y,
+                                                       viewDir.z, lateralRadius, kMaxLodLeafCandidates);
+            entry->lodFocusX = cam.targetX;
+            entry->lodFocusY = cam.targetY;
+            entry->lodFocusZ = cam.targetZ;
+            entry->lodDirX = viewDir.x;
+            entry->lodDirY = viewDir.y;
+            entry->lodDirZ = viewDir.z;
+            entry->lodLateralRadius = lateralRadius;
+            entry->lodSelectionValid = true;
+            entry->lodLastReselectTime = now;
+
+            std::int64_t totalCandidatePoints = 0;
+            for (const pointcloud::CylinderLodLeaf& c : candidates)
+              totalCandidatePoints +=
+                  entry->diskCache.octree.nodes[static_cast<std::size_t>(c.leafNodeIndex)].pointCount;
+            const int stride = candidates.empty()
+                                    ? 1
+                                    : std::max<int>(1, static_cast<int>((totalCandidatePoints +
+                                                                          kTargetLodPoints - 1) /
+                                                                         kTargetLodPoints));
+
+            // Anchor drift invalidates every resident leaf's vertex data (built relative to the old
+            // anchor), same trigger as the preview buffer above. A stride change invalidates it for
+            // a different reason: every resident leaf must share one stride (see the comment on
+            // `lodStride`), so a new stride means every leaf's uploaded vertex data is the wrong
+            // decimation and must be rebuilt, not just newly-entering leaves.
+            const bool strideStale = entry->lodStride != stride;
+            if (anchorStale || strideStale) {
+              for (PointCloudGpuEntry::LeafGpuEntry& leaf : entry->leafGpu) {
+                if (leaf.vbo) glDeleteBuffers(1, &leaf.vbo);
+                if (leaf.vao) glDeleteVertexArrays(1, &leaf.vao);
+              }
+              entry->leafGpu.clear();
+              entry->lodStride = stride;
+            }
+
+            // Evict resident leaves no longer wanted (camera moved away from them).
+            for (size_t li = 0; li < entry->leafGpu.size();) {
+              const bool stillWanted =
+                  std::any_of(candidates.begin(), candidates.end(),
+                              [&](const pointcloud::CylinderLodLeaf& w) {
+                                return w.leafNodeIndex == entry->leafGpu[li].leafNodeIndex;
+                              });
+              if (!stillWanted) {
+                if (entry->leafGpu[li].vbo) glDeleteBuffers(1, &entry->leafGpu[li].vbo);
+                if (entry->leafGpu[li].vao) glDeleteVertexArrays(1, &entry->leafGpu[li].vao);
+                entry->leafGpu.erase(entry->leafGpu.begin() + static_cast<std::ptrdiff_t>(li));
+              } else {
+                ++li;
+              }
+            }
+
+            // Upload any newly wanted leaves not yet resident (one on-demand disk read each),
+            // decimated by the shared stride as they're built.
+            std::vector<double> leafXyz;
+            std::vector<float> leafColors;
+            std::vector<float> leafIntensity;
+            for (const pointcloud::CylinderLodLeaf& w : candidates) {
+              const bool resident =
+                  std::any_of(entry->leafGpu.begin(), entry->leafGpu.end(),
+                              [&](const PointCloudGpuEntry::LeafGpuEntry& e) {
+                                return e.leafNodeIndex == w.leafNodeIndex;
+                              });
+              if (resident) continue;
+              if (!pointcloudcache::ReadLeafPoints(entry->diskCache, w.leafNodeIndex, leafXyz,
+                                                    leafColors, leafIntensity))
+                continue;
+              const size_t rawCount = leafXyz.size() / 3;
+              if (rawCount == 0) continue;
+              const bool leafHasColor = leafColors.size() == leafXyz.size();
+              const size_t lcount = (rawCount + static_cast<size_t>(stride) - 1) /
+                                     static_cast<size_t>(stride);
+              cpuPointCloudVerts_.clear();
+              cpuPointCloudVerts_.resize(lcount * 7);
+              size_t outv = 0;
+              for (size_t v = 0; v < rawCount; v += static_cast<size_t>(stride)) {
+                float rx = 0.f, ry = 0.f;
+                // Relative to entry->anchorX/Y (the preview's STICKY anchor), not the transient
+                // per-frame viewAnchorX/Y — see the comment above `needsReselect` (part 12): a leaf
+                // selection and the preview's own anchor update fire on independent cadences, so
+                // baking leaf vertices against the moving current anchor instead of the one the
+                // shared pcModel transform actually compensates against drifts the two apart over
+                // time, rendering as an offset "double image" of the same structure.
+                WorldToViewRelativeFloat(leafXyz[v * 3], leafXyz[v * 3 + 1], entry->anchorX,
+                                         entry->anchorY, &rx, &ry);
+                float* o = &cpuPointCloudVerts_[outv * 7];
+                o[0] = rx;
+                o[1] = ry;
+                o[2] = static_cast<float>(leafXyz[v * 3 + 2]);
+                if (leafHasColor) {
+                  o[3] = leafColors[v * 3];
+                  o[4] = leafColors[v * 3 + 1];
+                  o[5] = leafColors[v * 3 + 2];
+                } else {
+                  o[3] = fallbackRgba[0];
+                  o[4] = fallbackRgba[1];
+                  o[5] = fallbackRgba[2];
+                }
+                o[6] = 1.f;
+                ++outv;
+              }
+              PointCloudGpuEntry::LeafGpuEntry leafEntry;
+              leafEntry.leafNodeIndex = w.leafNodeIndex;
+              glGenVertexArrays(1, &leafEntry.vao);
+              glGenBuffers(1, &leafEntry.vbo);
+              glBindVertexArray(leafEntry.vao);
+              glBindBuffer(GL_ARRAY_BUFFER, leafEntry.vbo);
+              const GLsizei leafStrideBytes = static_cast<GLsizei>(7 * sizeof(float));
+              glEnableVertexAttribArray(0);
+              glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, leafStrideBytes, nullptr);
+              glEnableVertexAttribArray(1);
+              glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, leafStrideBytes,
+                                     reinterpret_cast<const void*>(sizeof(float) * 3));
+              glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(outv * 7 * sizeof(float)),
+                           cpuPointCloudVerts_.data(), GL_STATIC_DRAW);
+              glBindVertexArray(0);
+              leafEntry.pointCount = static_cast<int>(outv);
+              entry->leafGpu.push_back(leafEntry);
+            }
+          } else if (anchorStale) {
+            // The selection itself is still valid, but the sticky anchor moved — every resident
+            // leaf's vertex data was baked relative to the old one and must be rebuilt at the same
+            // stride, exactly like the preview buffer above.
+            std::vector<double> leafXyz;
+            std::vector<float> leafColors;
+            std::vector<float> leafIntensity;
+            for (PointCloudGpuEntry::LeafGpuEntry& leaf : entry->leafGpu) {
+              if (!pointcloudcache::ReadLeafPoints(entry->diskCache, leaf.leafNodeIndex, leafXyz,
+                                                    leafColors, leafIntensity))
+                continue;
+              const size_t rawCount = leafXyz.size() / 3;
+              if (rawCount == 0) continue;
+              const int stride = std::max(entry->lodStride, 1);
+              const bool leafHasColor = leafColors.size() == leafXyz.size();
+              const size_t lcount = (rawCount + static_cast<size_t>(stride) - 1) /
+                                     static_cast<size_t>(stride);
+              cpuPointCloudVerts_.clear();
+              cpuPointCloudVerts_.resize(lcount * 7);
+              size_t outv = 0;
+              for (size_t v = 0; v < rawCount; v += static_cast<size_t>(stride)) {
+                float rx = 0.f, ry = 0.f;
+                // Relative to entry->anchorX/Y (the preview's STICKY anchor), not the transient
+                // per-frame viewAnchorX/Y — see the comment above `needsReselect` (part 12): a leaf
+                // selection and the preview's own anchor update fire on independent cadences, so
+                // baking leaf vertices against the moving current anchor instead of the one the
+                // shared pcModel transform actually compensates against drifts the two apart over
+                // time, rendering as an offset "double image" of the same structure.
+                WorldToViewRelativeFloat(leafXyz[v * 3], leafXyz[v * 3 + 1], entry->anchorX,
+                                         entry->anchorY, &rx, &ry);
+                float* o = &cpuPointCloudVerts_[outv * 7];
+                o[0] = rx;
+                o[1] = ry;
+                o[2] = static_cast<float>(leafXyz[v * 3 + 2]);
+                if (leafHasColor) {
+                  o[3] = leafColors[v * 3];
+                  o[4] = leafColors[v * 3 + 1];
+                  o[5] = leafColors[v * 3 + 2];
+                } else {
+                  o[3] = fallbackRgba[0];
+                  o[4] = fallbackRgba[1];
+                  o[5] = fallbackRgba[2];
+                }
+                o[6] = 1.f;
+                ++outv;
+              }
+              glBindBuffer(GL_ARRAY_BUFFER, leaf.vbo);
+              glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(outv * 7 * sizeof(float)),
+                           cpuPointCloudVerts_.data(), GL_STATIC_DRAW);
+              leaf.pointCount = static_cast<int>(outv);
+            }
+          }
+
+          // Leaves are relative to the same sticky anchor as the preview buffer above, so the MVP
+          // and clip anchor already bound for it (from entry->anchorX/Y) still apply.
+          for (const PointCloudGpuEntry::LeafGpuEntry& leaf : entry->leafGpu) {
+            glBindVertexArray(leaf.vao);
+            glDrawArrays(GL_POINTS, 0, leaf.pointCount);
+          }
+        }
+      }
+    }
+    glBindVertexArray(0);
+    setClipAnchor(clipLocVcLine_, viewAnchorX, viewAnchorY);  // back to the shared anchor
   }
 
   // --- B-rep solids (REQ-313 / ADR-045) ------------------------------------------------------------
@@ -1666,6 +2145,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         float solidMvp[16];
         MulMat4(projRot, solidModel, solidMvp);
         glUniformMatrix4fv(locSolidMvp, 1, GL_FALSE, solidMvp);
+        setClipAnchor(clipLocShaded_, e.anchorX, e.anchorY);
         glUniform4f(locSolidColor, e.rgba[0], e.rgba[1], e.rgba[2], 1.f);
         glBindVertexArray(e.faceVao);
         glDrawArrays(GL_TRIANGLES, 0, e.faceVertCount);
@@ -1673,11 +2153,14 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
       glDisable(GL_POLYGON_OFFSET_FILL);
       glBindVertexArray(0);
+      setClipAnchor(clipLocShaded_, viewAnchorX, viewAnchorY);
     }
 
-    // The edges, in every style — including 2D Wireframe, where they are the only thing a solid
-    // draws at all.
-    {
+    // The edges, in every style EXCEPT Shaded — 2D Wireframe needs them (they are the only thing a
+    // solid draws at all there) and Hidden keeps them (it occludes without painting, so the edges
+    // ARE the drawing), but Shaded lights the faces and a wireframe/isoline overlay on top of a
+    // shaded surface is exactly the artifact the GUI pass flagged (issue #486 follow-up).
+    if (tuning.visualStyle != VisualStyle::Shaded) {
       glUseProgram(lineProgram_);
       for (const SolidGpuBatch& e : solidGpu_) {
         if (e.edgeVertCount <= 0)
@@ -1688,6 +2171,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         float solidMvp[16];
         MulMat4(projRot, solidModel, solidMvp);
         glUniformMatrix4fv(locMvp, 1, GL_FALSE, solidMvp);
+        setClipAnchor(clipLocLine_, e.anchorX, e.anchorY);
         glUniform4f(locCol, e.rgba[0], e.rgba[1], e.rgba[2], e.rgba[3]);
         glLineWidth(e.lineweightMm >= 0.f ? LineweightMmToDevicePx(e.lineweightMm) : kLwMain);
         glBindVertexArray(e.edgeVao);
@@ -1696,6 +2180,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glLineWidth(kLwMain);
       glBindVertexArray(0);
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);  // restore the shared MVP for later line passes
+      setClipAnchor(clipLocLine_, viewAnchorX, viewAnchorY);
     }
   } else if (!solidGpu_.empty()) {
     // No solids to draw this frame (all erased, all hidden, or the drawing was replaced). Free the
@@ -2104,6 +2589,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     // "Anchor offset composes before the view rotation" test in CameraTests.
     MulMat4(projRot, cachedModel, cachedMvp);
     glUniformMatrix4fv(locVcMvp, 1, GL_FALSE, cachedMvp);
+    setClipAnchor(clipLocVcLine_, cachedViewAnchorX_, cachedViewAnchorY_);
     if (!cpuVcLines_.empty()) {
       glBindVertexArray(vaoVcLines_);
       if (vcLineBatches_.empty())
@@ -2153,6 +2639,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // once meshes land (REQ-063), when there will be real surfaces to hide behind.
   // ============================================================================================
   depthForOverlay();
+  clipForOverlay();  // REQ-341: UI is never clipped away — the TIN surface passes below turn it back on
 
   // --- Hover highlight (subtle blue stroke drawn before selection so selection always wins) ---
   if (hoverLines && !hoverLines->empty() && hoverLines->size() % 6 == 0) {
@@ -2371,6 +2858,13 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
   }
 
+  // REQ-341: a TIN surface is MODEL geometry even though it is drawn down here among the overlays
+  // (draw order puts it under the survey markers). The scope boundary names surfaces as clipped, so
+  // the band fills, the cut/fill map and the surface linework clip; everything after them does not.
+  // All three are uploaded against the view anchor every frame, which is the anchor the shared
+  // `uClipPlane` is packed against. Code review on #478, finding 3.
+  clipForGeometry();
+
   // --- REQ-072 band fills (ADR-036 (g)) ---
   // Drawn FIRST, before any surface linework, so the wireframe/contours/border/arrows below all read
   // on top of the opaque interior. One draw call per band, on the same unlit `lineProgram_` used
@@ -2443,6 +2937,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glLineWidth(kLwMain);  // restore, so the overlay passes below inherit the shared default
   }
 
+  clipForOverlay();  // REQ-341: the surface passes above were the last model geometry
+
   // --- Survey points (X markers, apparent size ~constant on screen) ---
   if (surveyMarkers && !surveyMarkers->empty() && surveyMarkers->size() % 6 == 0) {
     std::vector<float> surveyRel;
@@ -2483,6 +2979,241 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // handle hidden behind the geometry it manipulates is not a handle. Never depth-tested, for the
   // same reason.
   //
+  // --- REQ-341: the section-clip plane indicator -------------------------------------------------
+  //
+  // Drawn in the OVERLAY pass, which means unclipped — and that is not a detail. The rectangle lies
+  // exactly ON the clip plane, so a clipped copy of it would be cut by itself: half the driver
+  // would keep it and half would drop it, and at offset 0 it would z-fight with the geometry it is
+  // there to explain.
+  //
+  // Two parts, because one alone does not read: a translucent fill says "this is a surface you are
+  // looking at edge-on or face-on", and a solid outline says where its edges are when the fill is
+  // nearly invisible at a grazing angle.
+  if (tuning.sectionClipIndicator.valid) {
+    depthForOverlay();
+    clipForOverlay();
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+    const SectionClipIndicator& ind = tuning.sectionClipIndicator;
+    float rel[4][3];
+    for (int i = 0; i < 4; ++i) {
+      rel[i][0] = static_cast<float>(ind.corner[i].x - viewAnchorX);
+      rel[i][1] = static_cast<float>(ind.corner[i].y - viewAnchorY);
+      rel[i][2] = static_cast<float>(ind.corner[i].z);
+    }
+    glBindVertexArray(vaoLines_);
+    glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
+
+    // The fill, as two triangles.
+    {
+      const float tris[18] = {rel[0][0], rel[0][1], rel[0][2], rel[1][0], rel[1][1], rel[1][2],
+                              rel[2][0], rel[2][1], rel[2][2], rel[0][0], rel[0][1], rel[0][2],
+                              rel[2][0], rel[2][1], rel[2][2], rel[3][0], rel[3][1], rel[3][2]};
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glUniform4f(locCol, 0.30f, 0.62f, 1.f, 0.16f);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(tris), tris, GL_STREAM_DRAW);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+      glDisable(GL_BLEND);
+    }
+    // REQ-342: the hatch. Drawn between the fill and the outline so the outline stays the crispest
+    // thing on the plane, and dimmer than it, because the hatch is texture rather than an edge —
+    // hatch as bright as the border reads as a solid panel and hides the model behind it.
+    //
+    // Unclipped like everything else in this block, and for the same reason: these lines lie
+    // exactly ON the clip plane, so a clipped copy would be cut by itself and half of every line
+    // would vanish at the driver's discretion.
+    const SectionPlaneGraphics& gfx = tuning.sectionPlaneGraphics;
+    if (gfx.valid && !gfx.hatch.empty()) {
+      std::vector<float> verts;
+      verts.reserve(gfx.hatch.size() * 3);
+      for (const ray3d::Vec3& p : gfx.hatch) {
+        verts.push_back(static_cast<float>(p.x - viewAnchorX));
+        verts.push_back(static_cast<float>(p.y - viewAnchorY));
+        verts.push_back(static_cast<float>(p.z));
+      }
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glUniform4f(locCol, 0.35f, 0.70f, 1.f, 0.45f);
+      glLineWidth(kLwMain);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
+                   verts.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(gfx.hatch.size()));
+      glDisable(GL_BLEND);
+    }
+    // The outline, as a closed loop of four lines.
+    {
+      float loop[24];
+      for (int i = 0; i < 4; ++i) {
+        const int j = (i + 1) & 3;
+        loop[i * 6 + 0] = rel[i][0]; loop[i * 6 + 1] = rel[i][1]; loop[i * 6 + 2] = rel[i][2];
+        loop[i * 6 + 3] = rel[j][0]; loop[i * 6 + 4] = rel[j][1]; loop[i * 6 + 5] = rel[j][2];
+      }
+      glUniform4f(locCol, 0.35f, 0.70f, 1.f, 1.f);
+      glLineWidth(kLwHiLine);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(loop), loop, GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, 8);
+      glLineWidth(kLwMain);
+    }
+    // REQ-342: the section line — the plane's base edge, heavier and brighter than the rest of the
+    // outline. It is what tells you which way is down on a plane you are looking at edge-on, where
+    // fill and hatch both collapse to nothing.
+    if (gfx.valid) {
+      const float seg[6] = {
+          static_cast<float>(gfx.lineA.x - viewAnchorX), static_cast<float>(gfx.lineA.y - viewAnchorY),
+          static_cast<float>(gfx.lineA.z),
+          static_cast<float>(gfx.lineB.x - viewAnchorX), static_cast<float>(gfx.lineB.y - viewAnchorY),
+          static_cast<float>(gfx.lineB.z)};
+      glUniform4f(locCol, 0.60f, 0.82f, 1.f, 1.f);
+      glLineWidth(kLwHiLine * 2.f);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(seg), seg, GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, 2);
+      glLineWidth(kLwMain);
+    }
+    // REQ-343: the handles, when the plane is selected.
+    //
+    // Each is a small square drawn in the PLANE's own axes rather than screen-aligned, so it lies
+    // flat on the plane it belongs to and cannot be mistaken for a marker floating in front of it.
+    // Sized from the rectangle, for the same reason the hatch density is: a screen-derived size
+    // would change with zoom, and these are built once per frame from world quantities.
+    const SectionPlaneGrips& grips = tuning.sectionPlaneGrips;
+    if (grips.valid) {
+      ray3d::Vec3 gu{}, gv{}, gn{};
+      if (SectionClipPlaneBasis(tuning.sectionClip, &gu, &gv, &gn)) {
+        const ray3d::Vec3 e0 = ray3d::Sub(tuning.sectionClipIndicator.corner[1],
+                                          tuning.sectionClipIndicator.corner[0]);
+        const ray3d::Vec3 e1 = ray3d::Sub(tuning.sectionClipIndicator.corner[3],
+                                          tuning.sectionClipIndicator.corner[0]);
+        const double diag = std::sqrt(ray3d::Dot(e0, e0) + ray3d::Dot(e1, e1));
+        const double r = std::max(diag * 0.014, 1e-6);
+        std::vector<float> quads;
+        std::vector<float> outlines;
+        quads.reserve(static_cast<size_t>(kSectionPlaneGripCount) * 36);
+
+        // REQ-344: each handle is drawn as the SHAPE ITS JOB SUGGESTS, not as a generic square.
+        // Six identical squares made the user read the plane to work out which one flipped it; a
+        // symbol that points the way the handle moves does not have to be learned. The shapes
+        // follow AutoCAD's, which is what the user asked for by name.
+        //
+        //   Move   — a diamond with a double-headed arrow along the NORMAL, drawn poking out of
+        //            both faces of the plane. It is the one handle whose travel leaves the plane,
+        //            and the only symbol here that is not flat.
+        //   Flip   — two solid triangles back to back along the normal, pointing away from each
+        //            other: "this side or that side".
+        //   Length — a solid arrowhead at each end of the section line, pointing outward along it.
+        //   Height — a solid triangle on each u-parallel edge, pointing outward across it.
+        //
+        // All in the plane's own basis (bar Move's stem), so they lie ON the plane and cannot be
+        // mistaken for markers floating in front of it.
+        for (int i = 0; i < kSectionPlaneGripCount; ++i) {
+          const bool lit = (i == tuning.sectionPlaneGripHover) || (i == tuning.sectionPlaneGripDrag);
+          const double base = static_cast<SectionPlaneGrip>(i) == SectionPlaneGrip::Flip
+                                  ? r * kSectionPlaneFlipScale
+                                  : r;
+          const double s = lit ? base * 1.5 : base;  // the handle that lights up is the handle that grabs
+          const ray3d::Vec3& c = grips.at[i];
+          const auto P = [&](double a, double b, double h) {
+            return ray3d::Vec3{c.x + (gu.x * a + gv.x * b + gn.x * h) * s,
+                               c.y + (gu.y * a + gv.y * b + gn.y * h) * s,
+                               c.z + (gu.z * a + gv.z * b + gn.z * h) * s};
+          };
+          const auto emitTri = [&](const ray3d::Vec3& a, const ray3d::Vec3& b,
+                                   const ray3d::Vec3& d) {
+            for (const ray3d::Vec3* p : {&a, &b, &d}) {
+              quads.push_back(static_cast<float>(p->x - viewAnchorX));
+              quads.push_back(static_cast<float>(p->y - viewAnchorY));
+              quads.push_back(static_cast<float>(p->z));
+            }
+          };
+          const auto emitSeg = [&](const ray3d::Vec3& a, const ray3d::Vec3& b) {
+            outlines.push_back(static_cast<float>(a.x - viewAnchorX));
+            outlines.push_back(static_cast<float>(a.y - viewAnchorY));
+            outlines.push_back(static_cast<float>(a.z));
+            outlines.push_back(static_cast<float>(b.x - viewAnchorX));
+            outlines.push_back(static_cast<float>(b.y - viewAnchorY));
+            outlines.push_back(static_cast<float>(b.z));
+          };
+          /// A solid arrowhead: tip at (tu,tv) in the plane, base a half-width across behind it.
+          const auto emitHead = [&](double tu, double tv, double bu, double bv, double halfW) {
+            const double du = tu - bu, dv = tv - bv;
+            const double len = std::sqrt(du * du + dv * dv);
+            if (len < 1e-12)
+              return;
+            const double pu = -dv / len * halfW, pv = du / len * halfW;  // perpendicular, in-plane
+            const ray3d::Vec3 tip = P(tu, tv, 0.0);
+            const ray3d::Vec3 l = P(bu + pu, bv + pv, 0.0);
+            const ray3d::Vec3 rr = P(bu - pu, bv - pv, 0.0);
+            emitTri(tip, l, rr);
+            emitSeg(tip, l);
+            emitSeg(l, rr);
+            emitSeg(rr, tip);
+          };
+
+          switch (static_cast<SectionPlaneGrip>(i)) {
+          case SectionPlaneGrip::Move: {
+            // The diamond body, flat on the plane.
+            const ray3d::Vec3 n0 = P(0, 1, 0), e = P(1, 0, 0), s0 = P(0, -1, 0), w = P(-1, 0, 0);
+            emitTri(n0, e, s0);
+            emitTri(n0, s0, w);
+            emitSeg(n0, e); emitSeg(e, s0); emitSeg(s0, w); emitSeg(w, n0);
+            // ...and the stem THROUGH it, along the normal, with a head at each end. This is the
+            // one handle that travels out of the plane, and the symbol says so.
+            const ray3d::Vec3 up = P(0, 0, 2.1), dn = P(0, 0, -2.1);
+            emitSeg(dn, up);
+            emitTri(up, P(0.55, 0, 1.25), P(-0.55, 0, 1.25));
+            emitTri(dn, P(0.55, 0, -1.25), P(-0.55, 0, -1.25));
+            break;
+          }
+          case SectionPlaneGrip::Flip: {
+            // Two solid triangles back to back along the normal, pointing apart.
+            emitTri(P(0, 0, 1.9), P(0.8, 0, 0.35), P(-0.8, 0, 0.35));
+            emitTri(P(0, 0, -1.9), P(0.8, 0, -0.35), P(-0.8, 0, -0.35));
+            emitSeg(P(-0.9, 0, 0.0), P(0.9, 0, 0.0));  // the plane they flip about
+            break;
+          }
+          case SectionPlaneGrip::LengthNeg:
+            emitHead(-1.9, 0.0, 0.2, 0.0, 0.85);
+            break;
+          case SectionPlaneGrip::LengthPos:
+            emitHead(1.9, 0.0, -0.2, 0.0, 0.85);
+            break;
+          case SectionPlaneGrip::HeightNeg:
+            emitHead(0.0, -1.9, 0.0, 0.2, 0.85);
+            break;
+          case SectionPlaneGrip::HeightPos:
+            emitHead(0.0, 1.9, 0.0, -0.2, 0.85);
+            break;
+          case SectionPlaneGrip::None:
+          case SectionPlaneGrip::Count:
+            break;
+          }
+        }
+        if (!quads.empty()) {
+          // Blending back ON for the fill: the hatch block above turns it off when it finishes, and
+          // the outline and section line in between are opaque so neither noticed. Without it the
+          // 0.85 alpha below is simply discarded and the six symbols paint as solid blocks over the
+          // hatch they sit on — the opposite of the translucent widget the code describes.
+          glEnable(GL_BLEND);
+          glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+          glUniform4f(locCol, 0.20f, 0.70f, 1.f, 0.85f);
+          glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(quads.size() * sizeof(float)),
+                       quads.data(), GL_STREAM_DRAW);
+          glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(quads.size() / 3));
+          glDisable(GL_BLEND);
+          glUniform4f(locCol, 0.85f, 0.95f, 1.f, 1.f);
+          glLineWidth(kLwHiLine);
+          glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(outlines.size() * sizeof(float)),
+                       outlines.data(), GL_STREAM_DRAW);
+          glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(outlines.size() / 3));
+          glLineWidth(kLwMain);
+        }
+      }
+    }
+    glBindVertexArray(0);
+  }
+
+
   // Handle colours match the REQ-154 UCS icon / REQ-310 crosshair axis hues so the gizmo and the
   // on-screen frame indicator never disagree about which axis is which.
   if (gizmoOverlay && !gizmoOverlay->empty()) {
@@ -2533,6 +3264,12 @@ finish_render:
   glBindVertexArray(0);
   glUseProgram(0);
   glDepthMask(GL_TRUE);
+  // REQ-341: the clip must not outlive this call. ImGui draws the whole UI immediately after with
+  // its own shaders, which do not write `gl_ClipDistance` — and a shader that leaves it unwritten
+  // while GL_CLIP_DISTANCE0 is enabled has UNDEFINED clip distances, so leaving this on can delete
+  // arbitrary parts of the interface. Unconditional, and outside the geometry block so the
+  // paper-space `goto` above reaches it too.
+  glDisable(GL_CLIP_DISTANCE0);
 
   if (useMsaa && msFbo_ && fbo_) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo_);

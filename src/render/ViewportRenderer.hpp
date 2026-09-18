@@ -4,7 +4,10 @@
 #include "CadSnap.hpp"
 #include "PdfAttach.hpp"
 #include "gizmooverlay.hpp"
+#include "render/SectionClip.hpp"
+#include "util/pointcloudcache.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -21,6 +24,30 @@ struct RenderTuning {
   /// REQ-064. Defaulting to Wireframe2D is what keeps every existing call site — and the pixel
   /// output it produces — unchanged: that style takes the same depth-off path as before.
   VisualStyle visualStyle = VisualStyle::Wireframe2D;
+  /// REQ-341 / ADR-058 — the live section clip. Stated in WORLD coordinates; the renderer rebases
+  /// it onto the view anchor, because the anchor is the renderer's own float-precision device and
+  /// no caller should have to know it exists. Default-inactive, so every existing call site renders
+  /// exactly what it rendered before.
+  ///
+  /// It lives in `RenderTuning` rather than becoming parameter 31 for the reason this struct was
+  /// created: `RenderScene`'s signature is already 30 long.
+  SectionClipPlane sectionClip{};
+  /// REQ-341 — the rectangle drawn to SHOW where \ref sectionClip cuts. Built by the caller, which
+  /// is the side that knows how big the drawing is; the renderer only draws it. Invalid means draw
+  /// nothing, which is what every existing call site gets by default.
+  SectionClipIndicator sectionClipIndicator{};
+  /// REQ-342 — the hatch and section line that make that rectangle findable at a glance. Built from
+  /// the indicator by `SectionPlaneGraphicsFor`, on the same side and for the same reason. Invalid
+  /// means the plane draws as REQ-341 shipped it, fill and outline only.
+  SectionPlaneGraphics sectionPlaneGraphics{};
+  /// REQ-343 — the handles on a SELECTED section plane. Invalid when it is not selected, which is
+  /// the only "should these be drawn?" test there is.
+  SectionPlaneGrips sectionPlaneGrips{};
+  /// Which handle is under the cursor, and which is being dragged (`SectionPlaneGrip`, -1 for
+  /// none). Both are drawn brighter and larger, so the handle that lights up is the handle that
+  /// grabs — the rule REQ-318's sub-object hover already follows.
+  int sectionPlaneGripHover = -1;
+  int sectionPlaneGripDrag = -1;
 };
 
 class ViewportRenderer {
@@ -139,7 +166,18 @@ public:
                    // Its own channel because it is the only overlay here that is not one colour:
                    // X red, Y green, Z blue is what every 3D application already draws, and a widget
                    // whose three handles shared a colour would have to be read rather than seen.
-                   const CadGizmoOverlay* gizmoOverlay = nullptr);
+                   const CadGizmoOverlay* gizmoOverlay = nullptr,
+                   // Point clouds (REQ-171/172, ADR-042/060). Appended at the very end, unlike
+                   // every other pointer above, because this call is entirely POSITIONAL at its one
+                   // call site (main.cpp) — inserting anywhere but the end would silently reassign
+                   // every argument after it to the wrong parameter. Drawn in EVERY visual style —
+                   // a point cloud has no faces to shade or hide, so "Shaded only" would make it
+                   // invisible in the default 2D Wireframe view, the same reasoning REQ-068 gives
+                   // for TIN surfaces. No LOD yet (flat draw of every resident point): REQ-100
+                   // profile (e) has not been measured, and implementation-rules.md §5 is explicit
+                   // that unmeasured optimisation is not added speculatively.
+                   const std::vector<std::shared_ptr<const CadPointCloud>>* pointClouds = nullptr,
+                   const std::vector<EntityAttributes>* pointCloudAttrs = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
@@ -174,6 +212,11 @@ private:
 
   unsigned int lineProgram_ = 0;
   unsigned int vcLineProgram_ = 0;
+  /// `uClipPlane` in each clipped program (REQ-341), looked up once at link rather than every frame.
+  int clipLocLine_ = -1;
+  int clipLocVcLine_ = -1;
+  int clipLocShaded_ = -1;
+  int clipLocTex_ = -1;
   /// Diffuse-lit triangles for the Shaded style (REQ-064). Its own VAO because its vertex layout is
   /// position + normal, unlike every other program here.
   unsigned int shadedProgram_ = 0;
@@ -196,6 +239,67 @@ private:
   };
   std::vector<MeshGpuEntry> meshGpu_;
   void ReleaseMeshGpu();
+
+  /// One point cloud's GPU residency (REQ-171/172, ADR-060). Immutable payload (architecture
+  /// §11.5), so the same "upload once, re-upload only when the view anchor drifts" rule as
+  /// \ref MeshGpuEntry applies. No index buffer: points have no connectivity, so \ref vbo alone
+  /// is drawn with `glDrawArrays(GL_POINTS, ...)`.
+  ///
+  /// Reuses \ref vcLineProgram_ rather than a new shader — its vertex-colour line program already
+  /// takes the exact layout a point needs (position + RGBA, with REQ-341 clip-plane support built
+  /// in), just fed `GL_POINTS` instead of `GL_LINES`. A cloud with no source colour gets a uniform
+  /// grey written into every vertex at upload time, rather than a second shader variant.
+  struct PointCloudGpuEntry {
+    std::weak_ptr<const CadPointCloud> cloud;  ///< identity AND liveness, same as MeshGpuEntry::mesh.
+    unsigned int vao = 0;
+    unsigned int vbo = 0;
+    double anchorX = 0.0;
+    double anchorY = 0.0;
+    int pointCount = 0;
+
+    /// Out-of-core LOD detail (`.gscloud`, ADR-060): a bounded set of leaves near the camera focus,
+    /// paged in at full density on top of the flat preview above. Opened lazily, once, from
+    /// `CadPointCloud::cloudCachePath`; `diskCacheTried` distinguishes "not attempted yet" from "open
+    /// failed" so a missing/corrupt cache is not retried every frame.
+    bool diskCacheTried = false;
+    pointcloudcache::OpenCache diskCache;
+
+    struct LeafGpuEntry {
+      std::int32_t leafNodeIndex = -1;
+      unsigned int vao = 0;
+      unsigned int vbo = 0;
+      int pointCount = 0;
+    };
+    std::vector<LeafGpuEntry> leafGpu;  ///< currently resident LOD leaves, keyed by leafNodeIndex.
+    /// The uniform decimation stride every resident leaf was uploaded at (1 = every point). All
+    /// resident leaves share one stride so the LOD reads as evenly sparse across its whole covered
+    /// area, never a "these leaves are full density, those are empty" cliff at the coverage edge —
+    /// see TASK-270 part 10. 0 = nothing uploaded yet.
+    int lodStride = 0;
+
+    /// The camera state the CURRENT `leafGpu` set/stride was selected for (TASK-270 part 11) — NOT
+    /// re-evaluated every frame. Re-running the cylinder query and, on a stride/leaf-set change,
+    /// re-reading and re-uploading up to `kMaxLodLeafCandidates` leaves from disk is real I/O cost;
+    /// doing it every frame during a smooth orbit/zoom (the view direction and pan target both
+    /// change a little EVERY frame) turned a bounded, occasional cost into a per-frame one, which is
+    /// what read as "noticeably laggier." The selection is re-run only once the camera has moved far
+    /// enough from this snapshot to plausibly want different leaves.
+    bool lodSelectionValid = false;
+    double lodFocusX = 0.0, lodFocusY = 0.0, lodFocusZ = 0.0;
+    double lodDirX = 0.0, lodDirY = 0.0, lodDirZ = 1.0;
+    double lodLateralRadius = 0.0;
+    /// Wall-clock throttle on top of the movement thresholds above (TASK-270 part 13): a fast orbit
+    /// drag crosses the movement thresholds on nearly every frame, and a reselect itself takes real
+    /// time (up to `kMaxLodLeafCandidates` disk reads) — without a time floor, a slower frame makes
+    /// the SAME mouse speed cross the threshold sooner (more camera delta per frame), which costs
+    /// more time, which makes the next frame slower still. A minimum real-time interval between
+    /// reselects bounds the cost per second regardless of frame rate or how fast the user orbits,
+    /// which is what breaks that feedback loop.
+    std::chrono::steady_clock::time_point lodLastReselectTime{};
+  };
+  std::vector<PointCloudGpuEntry> pointCloudGpu_;
+  void ReleasePointCloudGpu();
+  std::vector<float> cpuPointCloudVerts_;  ///< x,y,z,r,g,b,a per point; scratch, reused across clouds.
 
   /// One coalesced solid batch's GPU residency (REQ-313 / GitHub issue #194). Unlike a mesh, a solid
   /// batch has no stable pointer identity — `RefreshSolidDisplayGeometry` rebuilds the batch list

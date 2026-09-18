@@ -657,6 +657,37 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         SubmitViewportPick(run.st, x, y, run.log);
       }
       break;
+    // REQ-342 — SECTIONPLANE's face pick. Needs its own case here for the reason this whole verb
+    // exists: a route with no case falls out of the switch doing nothing, and MSVC's /W4 does not
+    // include the unhandled-enumerator warning, so the transcript would pass while the command did
+    // nothing at all.
+    //
+    // The third coordinate is not optional in practice. A face is a 3D thing: aiming at a plan
+    // (x, y) sends the ray down through the solid and takes whichever face it meets first, which
+    // for a box viewed from above is always the top. `CLICK x y z` aims at the actual point, so a
+    // transcript can say "the north face" and mean it.
+    case ViewportClickRoute::SubObjectFacePick: {
+      const double aimZ = clickHasZ ? static_cast<double>(clickZ)
+                                    : ucs::WorkPlaneZAt(CadActiveWorkPlane(run.st),
+                                                        static_cast<double>(x), static_cast<double>(y));
+      // A projection needs a viewport size, and a transcript has no window — the same definite one
+      // SUBOBJECT and VIEWANGLES use, so the ray is the CAMERA's own rather than a synthetic
+      // axis-aligned one no viewport would ever cast.
+      if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+        run.st.uiViewportWidthPx = 1200.f;
+        run.st.uiViewportHeightPx = 700.f;
+      }
+      const Camera cam = CadViewCamera(run.st);
+      float sx = 0.f, sy = 0.f;
+      cam.WorldToScreen(static_cast<double>(x), static_cast<double>(y), aimZ,
+                        run.st.uiViewportWidthPx, run.st.uiViewportHeightPx, &sx, &sy);
+      const ray3d::Ray faceRay = cam.ScreenRay(sx, sy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+      solidpick::Tolerance faceTol;
+      faceTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(run.st));
+      faceTol.edge = faceTol.vertex;
+      (void)SubmitSectionPlaneFacePick(run.st, faceRay, faceTol, run.log);
+      break;
+    }
     case ViewportClickRoute::SelectionBox:
     case ViewportClickRoute::IdleSelection:
     case ViewportClickRoute::SelectionAccumulate:
@@ -718,7 +749,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       SubmitPdfAttachInsertPoint(run.st, static_cast<float>(x), static_cast<float>(y), run.log);
       break;
     case ViewportClickRoute::InsertBlockPick:
-      SubmitInsertBlockPick(run.st, x, y, run.log);
+      SubmitInsertBlockPick(run.st, x, y, clickHasZ ? clickZ : 0.f, run.log);
       break;
     case ViewportClickRoute::Ignore:
       // The whole point of this verb: a command the UI does not route is a failure, not a no-op.
@@ -1876,6 +1907,137 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              std::string("EXPECT CROSSHAIR3D: is ") + (run.st.viewportCrosshair3d ? "ON" : "OFF") +
                  ", expected " + (want ? "ON" : "OFF"),
              sourceLine);
+        return false;
+      }
+    } else if (what == "ACTIVE") {
+      // EXPECT ACTIVE <KIND> — which command is currently running, by the same name
+      // `AppCommandState::KindName` reports (NONE when idle). General-purpose: any transcript
+      // driving a command that PROMPTS needs to assert that the prompt actually opened and actually
+      // closed, and neither is visible in the log — a command that never opened its prompt and one
+      // that opened and closed it look identical from the outside.
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      // `KindName` has no case for `Kind::None` and returns an empty string for it. Mapped here
+      // rather than in production: that return value is already formatted into driver messages and
+      // possibly elsewhere, and a test verb is not a reason to change what the app reports.
+      std::string got = AppCommandState::KindName(run.st.active);
+      if (got.empty())
+        got = "NONE";
+      if (got != wantS) {
+        Fail(run, "expect", "EXPECT ACTIVE: is " + got + ", expected " + wantS, sourceLine);
+        return false;
+      }
+    } else if (what == "SECTIONCLIP") {
+      // EXPECT SECTIONCLIP <ON|OFF> — the LIVE section clip (REQ-341). Same reason as EXPECT
+      // CROSSHAIR3D: EXPECT LOG matches the whole accumulated log, so once a toggle has reported
+      // any value it can no longer be used to assert the CURRENT one.
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      bool want = false;
+      if (wantS == "ON" || wantS == "1")
+        want = true;
+      else if (wantS == "OFF" || wantS == "0")
+        want = false;
+      else {
+        Fail(run, "parse", "EXPECT SECTIONCLIP needs ON or OFF", sourceLine);
+        return false;
+      }
+      if (run.st.viewportSectionClip != want) {
+        Fail(run, "expect",
+             std::string("EXPECT SECTIONCLIP: is ") + (run.st.viewportSectionClip ? "ON" : "OFF") +
+                 ", expected " + (want ? "ON" : "OFF"),
+             sourceLine);
+        return false;
+      }
+    } else if (what == "SECTIONCLIPOFFSET") {
+      // EXPECT SECTIONCLIPOFFSET <distance> — where the clip plane sits along the UCS Z (REQ-341).
+      // Compared at REQ-101's +/-0.002 ft, because this offset IS a coordinate the user typed.
+      std::istringstream is(arg);
+      double want = 0.0;
+      if (!(is >> want)) {
+        Fail(run, "parse", "EXPECT SECTIONCLIPOFFSET needs <distance>", sourceLine);
+        return false;
+      }
+      const double got = run.st.viewportSectionClipOffset;
+      if (std::fabs(got - want) > 0.002) {
+        // %.10g, not %.6g: this verb's tolerance is REQ-101's 0.002 ft, and at the magnitudes that
+        // matter here a 6-digit format prints BOTH sides of a real 0.0056 ft miss as "200000",
+        // which reads as a test failing against itself.
+        char buf[192];
+        std::snprintf(buf, sizeof(buf), "EXPECT SECTIONCLIPOFFSET: is %.10g, expected %.10g (differ by %.6g)",
+                      got, want, got - want);
+        Fail(run, "expect", buf, sourceLine);
+        return false;
+      }
+    } else if (what == "SECTIONCLIPFLIP") {
+      // EXPECT SECTIONCLIPFLIP <ON|OFF> — which half survives (REQ-341).
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      const bool want = (wantS == "ON" || wantS == "1");
+      if (wantS != "ON" && wantS != "1" && wantS != "OFF" && wantS != "0") {
+        Fail(run, "parse", "EXPECT SECTIONCLIPFLIP needs ON or OFF", sourceLine);
+        return false;
+      }
+      if (run.st.viewportSectionClipFlip != want) {
+        Fail(run, "expect",
+             std::string("EXPECT SECTIONCLIPFLIP: is ") + (run.st.viewportSectionClipFlip ? "ON" : "OFF") +
+                 ", expected " + (want ? "ON" : "OFF"),
+             sourceLine);
+        return false;
+      }
+    } else if (what == "SECTIONCLIPFRAME") {
+      // EXPECT SECTIONCLIPFRAME <UCS|FACE> — which plane the clip is built on (REQ-342).
+      //
+      // There is ONE clip plane and two ways to aim it (D-2026-09-11-b), so "is it on?" and "where
+      // is it?" no longer answer "which command put it there?". A transcript that ran SECTIONPLANE
+      // and then checked only the offset would pass just as happily if the face had been ignored
+      // and the active UCS used instead.
+      std::string wantS = Trim(arg);
+      for (char& c : wantS)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      bool want = false;
+      if (wantS == "FACE")
+        want = true;
+      else if (wantS == "UCS")
+        want = false;
+      else {
+        Fail(run, "parse", "EXPECT SECTIONCLIPFRAME needs UCS or FACE", sourceLine);
+        return false;
+      }
+      if (run.st.viewportSectionClipFrameValid != want) {
+        Fail(run, "expect",
+             std::string("EXPECT SECTIONCLIPFRAME: is ") +
+                 (run.st.viewportSectionClipFrameValid ? "FACE" : "UCS") + ", expected " + wantS,
+             sourceLine);
+        return false;
+      }
+    } else if (what == "SECTIONCLIPNORMAL") {
+      // EXPECT SECTIONCLIPNORMAL <nx> <ny> <nz> — the clip frame's Z axis (REQ-342).
+      //
+      // WHICH face was picked, which SECTIONCLIPFRAME cannot say: every face of a box answers
+      // "FACE" and offset 0. Without this, a transcript aiming at the bottom of a box and silently
+      // hitting the top — which is what a plan-view ray does — passes while proving nothing.
+      std::istringstream is(arg);
+      double wx = 0.0, wy = 0.0, wz = 0.0;
+      if (!(is >> wx >> wy >> wz)) {
+        Fail(run, "parse", "EXPECT SECTIONCLIPNORMAL needs <nx> <ny> <nz>", sourceLine);
+        return false;
+      }
+      // The EFFECTIVE frame, the single decider ADR-059 (a) names — not the raw stored one, which
+      // is never written in UCS-aimed mode and reads as a default (0,0,1). A transcript asserting
+      // the true normal under a rotated UCS would have failed, and one asserting (0,0,1) would have
+      // passed while proving nothing, which is the failure this verb exists to prevent.
+      const ray3d::Vec3 got = CadEffectiveSectionClipFrame(run.st).zAxis;
+      if (std::fabs(got.x - wx) > 1e-6 || std::fabs(got.y - wy) > 1e-6 ||
+          std::fabs(got.z - wz) > 1e-6) {
+        char buf[224];
+        std::snprintf(buf, sizeof(buf),
+                      "EXPECT SECTIONCLIPNORMAL: is (%.6g, %.6g, %.6g), expected (%.6g, %.6g, %.6g)",
+                      got.x, got.y, got.z, wx, wy, wz);
+        Fail(run, "expect", buf, sourceLine);
         return false;
       }
     } else if (what == "FOV") {

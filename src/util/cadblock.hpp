@@ -5,6 +5,7 @@
 
 #include "CadEntities.hpp"
 #include "cadsolid.hpp"
+#include "ray3d.hpp"
 
 #include <algorithm>
 #include <array>
@@ -105,6 +106,202 @@ struct CadBlockNested {
   std::string visState;
 };
 
+/// Piping role of a connection port (issue #486 increment A2). Drives auto-fitting routing: an
+/// `Inlet`/`Outlet` pair is a straight through-run port, `Branch` is a tee/cross side takeoff.
+enum class CadBlockConnectionRole : std::uint8_t { Inlet = 0, Outlet, Branch };
+
+[[nodiscard]] inline std::string_view CadBlockConnectionRoleTag(CadBlockConnectionRole r) {
+  switch (r) {
+    case CadBlockConnectionRole::Outlet: return "outlet";
+    case CadBlockConnectionRole::Branch: return "branch";
+    case CadBlockConnectionRole::Inlet:
+    default: return "inlet";
+  }
+}
+
+[[nodiscard]] inline CadBlockConnectionRole ParseCadBlockConnectionRole(std::string_view s) {
+  if (s == "outlet") return CadBlockConnectionRole::Outlet;
+  if (s == "branch") return CadBlockConnectionRole::Branch;
+  return CadBlockConnectionRole::Inlet;
+}
+
+/// Piping catalog part type (issue #486 increment A1). `None` = not a piping fitting (ordinary
+/// block). Kept a closed enum, tagged as a string in .gs so the library/lookup keys stay stable.
+enum class CadPipePartType : std::uint8_t {
+  None = 0,
+  Elbow90,
+  Elbow45,
+  Tee,
+  Cross,
+  Reducer,
+  Flange,
+  Valve,
+  Coupling,
+  Cap,
+  Other
+};
+
+[[nodiscard]] inline std::string_view CadPipePartTypeTag(CadPipePartType t) {
+  switch (t) {
+    case CadPipePartType::Elbow90: return "elbow-90";
+    case CadPipePartType::Elbow45: return "elbow-45";
+    case CadPipePartType::Tee: return "tee";
+    case CadPipePartType::Cross: return "cross";
+    case CadPipePartType::Reducer: return "reducer";
+    case CadPipePartType::Flange: return "flange";
+    case CadPipePartType::Valve: return "valve";
+    case CadPipePartType::Coupling: return "coupling";
+    case CadPipePartType::Cap: return "cap";
+    case CadPipePartType::Other: return "other";
+    case CadPipePartType::None:
+    default: return "";
+  }
+}
+
+[[nodiscard]] inline CadPipePartType ParseCadPipePartType(std::string_view s) {
+  if (s == "elbow-90") return CadPipePartType::Elbow90;
+  if (s == "elbow-45") return CadPipePartType::Elbow45;
+  if (s == "tee") return CadPipePartType::Tee;
+  if (s == "cross") return CadPipePartType::Cross;
+  if (s == "reducer") return CadPipePartType::Reducer;
+  if (s == "flange") return CadPipePartType::Flange;
+  if (s == "valve") return CadPipePartType::Valve;
+  if (s == "coupling") return CadPipePartType::Coupling;
+  if (s == "cap") return CadPipePartType::Cap;
+  if (s == "other") return CadPipePartType::Other;
+  return CadPipePartType::None;
+}
+
+/// What kind of thing a fitting's connection point was snapped to (issue #496). Drives which
+/// `CadBlockConnectionMode` on the connection point is selected. Only two kinds of snap target
+/// exist in this codebase: another block's connection port, and a bare line/polyline endpoint
+/// (there is no separate "pipe" entity — pipes are just lines/polylines), so the vocabulary stays
+/// closed and fitting-scoped rather than folding into the general `CadSnap::Kind` system.
+enum class CadConnectionModeTarget : std::uint8_t { PipeEnd = 0, FlangeFace, GenericPort };
+
+[[nodiscard]] inline std::string_view CadConnectionModeTargetTag(CadConnectionModeTarget t) {
+  switch (t) {
+    case CadConnectionModeTarget::FlangeFace: return "flange-face";
+    case CadConnectionModeTarget::GenericPort: return "generic-port";
+    case CadConnectionModeTarget::PipeEnd:
+    default: return "pipe-end";
+  }
+}
+
+[[nodiscard]] inline CadConnectionModeTarget ParseCadConnectionModeTarget(std::string_view s) {
+  if (s == "flange-face") return CadConnectionModeTarget::FlangeFace;
+  if (s == "generic-port") return CadConnectionModeTarget::GenericPort;
+  return CadConnectionModeTarget::PipeEnd;
+}
+
+/// One named connection behavior a connection point offers for a particular kind of snapped
+/// target (issue #496). A connection point with an empty `modes` list keeps the pre-#496,
+/// single-behavior semantics (role/engagementLength/compatibilityTag live directly on
+/// `CadBlockConnection`) — existing fittings are unaffected.
+struct CadBlockConnectionMode {
+  std::string name;
+  CadConnectionModeTarget target = CadConnectionModeTarget::GenericPort;
+  CadBlockConnectionRole role = CadBlockConnectionRole::Inlet;
+  std::string compatibilityTag;
+  /// How far the mating part slides onto this port under this mode (drawing units), applied as an
+  /// extra translation along the port's outward normal on top of the base point-to-point snap.
+  float engagementLength = 0.f;
+  bool isDefault = false;
+};
+
+/// Pipe/fitting connection port on a block definition (issue #475 increment 5, extended by #486
+/// increment A2 and #496). Local point and outward unit direction in block space; nominal size is
+/// a tag only, not parametric. `engagementLength` is how far a mating pipe end slides into this
+/// port (drawing units) — auto-fitting insertion shortens the pipe segment by this amount instead
+/// of overlap-then-boolean trim (D-2026-09-12 decision 2). `role`/`compatibilityTag`/
+/// `engagementLength` are the legacy single-mode behavior, still used verbatim when `modes` is
+/// empty; when `modes` is non-empty they are selected per snapped-target via `CadBlockResolveMode`
+/// instead (issue #496).
+struct CadBlockConnection {
+  std::string name;
+  float x = 0.f;
+  float y = 0.f;
+  float z = 0.f;
+  float nx = 0.f;
+  float ny = 0.f;
+  float nz = 1.f;
+  std::string nominalSize;
+  CadBlockConnectionRole role = CadBlockConnectionRole::Inlet;
+  /// Optional tag restricting which ports this one may mate with (e.g. a flange face class).
+  /// Empty = no restriction beyond nominalSize matching.
+  std::string compatibilityTag;
+  float engagementLength = 0.f;
+  /// Smart multi-mode behaviors (issue #496). Empty = legacy single-mode connection point.
+  std::vector<CadBlockConnectionMode> modes;
+};
+
+/// Selects the `CadBlockConnectionMode` that applies when `conn` is snapped to a target of kind
+/// \p target (issue #496): an exact target match wins; otherwise the mode flagged `isDefault` is
+/// used as fallback. Returns `nullptr` for a legacy connection point (`modes` empty) — callers
+/// fall back to `conn`'s own top-level role/engagementLength/compatibilityTag in that case.
+[[nodiscard]] inline const CadBlockConnectionMode* CadBlockResolveMode(const CadBlockConnection& conn,
+                                                                       CadConnectionModeTarget target) {
+  if (conn.modes.empty())
+    return nullptr;
+  const CadBlockConnectionMode* fallback = nullptr;
+  for (const CadBlockConnectionMode& m : conn.modes) {
+    if (m.target == target)
+      return &m;
+    if (m.isDefault)
+      fallback = &m;
+  }
+  return fallback;
+}
+
+/// Whether `conn` has a mode whose `target` EXACTLY matches \p target — never counting an
+/// `isDefault` fallback (unlike `CadBlockResolveMode`). Used to rank an explicitly-tagged port
+/// above one that merely falls back to a default mode for the same target: when a block has both a
+/// port configured exactly for pipe ends and another whose single mode is flagged default (and so
+/// would otherwise resolve for ANY target, pipe end included), the explicit one must win — the
+/// point of tagging it at all (user request 2026-09-17, reported bug: a flange whose gasket-face
+/// port and weld-neck port both had a single `isDefault`-flagged mode kept using the gasket-face
+/// port for a pipe-end snap, because the default fallback made it look compatible too).
+[[nodiscard]] inline bool CadBlockConnectionHasExactMode(const CadBlockConnection& conn,
+                                                         CadConnectionModeTarget target) {
+  for (const CadBlockConnectionMode& m : conn.modes) {
+    if (m.target == target)
+      return true;
+  }
+  return false;
+}
+
+/// Whether `conn` should even be OFFERED as a candidate when the nearby thing under the cursor
+/// classifies as \p target (user request 2026-09-17: "detect what we are snapping to and use that
+/// block's connection point logic" — a port configured for pipe ends should snap to pipe ends, one
+/// configured for a flange face should snap to a flange face, not whichever happens to be closer).
+/// A LEGACY connection point (`modes` empty) accepts every target, unchanged — it never discriminated
+/// by kind and this does not start requiring it to. A multi-mode connection point accepts a target
+/// only when `CadBlockResolveMode` actually finds something for it (an exact match, or a mode flagged
+/// `isDefault` as a deliberate catch-all) — the same rule that already decides which mode APPLIES,
+/// now also deciding whether the port is a candidate at all.
+[[nodiscard]] inline bool CadBlockConnectionAcceptsTarget(const CadBlockConnection& conn,
+                                                          CadConnectionModeTarget target) {
+  if (conn.modes.empty())
+    return true;
+  return CadBlockResolveMode(conn, target) != nullptr;
+}
+
+/// A definition connection transformed into world/storage coordinates for a placed reference.
+struct CadBlockWorldConnection {
+  float x = 0.f;
+  float y = 0.f;
+  float z = 0.f;
+  float nx = 0.f;
+  float ny = 0.f;
+  float nz = 1.f;
+  std::string name;
+  std::string nominalSize;
+  int blockRefIndex = -1;
+  /// The owning definition's piping part type (issue #496), used to classify this port as
+  /// `FlangeFace` vs `GenericPort` when resolving a connection mode.
+  CadPipePartType ownerPartType = CadPipePartType::None;
+};
+
 struct CadBlockContent {
   std::vector<double> lines;
   std::vector<EntityAttributes> lineAttrs;
@@ -139,6 +336,25 @@ struct CadBlockContent {
   std::vector<EntityAttributes> solidAttrs;
 };
 
+/// Pressure class tag (issue #486, D-2026-09-12 decision 1). Fixed enum, not free text, so
+/// library lookup and UI pickers use exact matches.
+enum class CadPipePressureClass : std::uint8_t { None = 0, CS150, CS300 };
+
+[[nodiscard]] inline std::string_view CadPipePressureClassTag(CadPipePressureClass c) {
+  switch (c) {
+    case CadPipePressureClass::CS150: return "CS150";
+    case CadPipePressureClass::CS300: return "CS300";
+    case CadPipePressureClass::None:
+    default: return "";
+  }
+}
+
+[[nodiscard]] inline CadPipePressureClass ParseCadPipePressureClass(std::string_view s) {
+  if (s == "CS150") return CadPipePressureClass::CS150;
+  if (s == "CS300") return CadPipePressureClass::CS300;
+  return CadPipePressureClass::None;
+}
+
 struct CadBlockDefinition {
   std::uint64_t id = 0;
   std::string name;
@@ -152,7 +368,15 @@ struct CadBlockDefinition {
   std::vector<CadBlockParameter> parameters;
   std::vector<CadBlockAction> actions;
   std::vector<std::string> visibilityStates;
+  std::vector<CadBlockConnection> connections;
   std::string metadata;
+  /// Piping fitting metadata (issue #486 increment A1). `partType == None` means this block is
+  /// not tagged as a piping catalog part; `nominalSize`/`pressureClass`/`partNumber` are then
+  /// ignored by the library lookup.
+  CadPipePartType partType = CadPipePartType::None;
+  std::string nominalSize;
+  CadPipePressureClass pressureClass = CadPipePressureClass::None;
+  std::string partNumber;
 };
 
 struct CadBlockRef {
@@ -171,6 +395,13 @@ struct CadBlockWorldSeg {
 
 struct CadBlockWorldPoint {
   float x = 0.f, y = 0.f, z = 0.f;
+};
+
+/// A B-rep solid from a placed block reference, transformed into world/storage coordinates (issue #475
+/// increment 2). The definition's payload is never mutated — this is a linked, instanced view.
+struct CadBlockWorldSolid {
+  CadSolidPtr solid;
+  EntityAttributes attr;
 };
 
 [[nodiscard]] inline bool CadBlockEqCi(std::string_view a, std::string_view b) {
@@ -224,6 +455,166 @@ inline void CadBlockXformPoint(const CadBlockXform& xf, float lx, float ly, floa
     *wz = z + xf.z;
 }
 
+/// Rotation part of \ref CadBlockXformPoint — scale then rotZ/rotY/rotX, no translation.
+inline void CadBlockXformDirection(const CadBlockXform& xf, float lx, float ly, float lz, float* wx, float* wy,
+                                   float* wz) {
+  assert(wx != nullptr);
+  assert(wy != nullptr);
+  float x = lx * xf.sx;
+  float y = ly * xf.sy;
+  float z = lz * xf.sz;
+  if (xf.rotZ != 0.f) {
+    const float c = std::cos(xf.rotZ);
+    const float s = std::sin(xf.rotZ);
+    const float nx = x * c - y * s;
+    const float ny = x * s + y * c;
+    x = nx;
+    y = ny;
+  }
+  if (xf.rotY != 0.f) {
+    const float c = std::cos(xf.rotY);
+    const float s = std::sin(xf.rotY);
+    const float nx = x * c + z * s;
+    const float nz = -x * s + z * c;
+    x = nx;
+    z = nz;
+  }
+  if (xf.rotX != 0.f) {
+    const float c = std::cos(xf.rotX);
+    const float s = std::sin(xf.rotX);
+    const float ny = y * c - z * s;
+    const float nz = y * s + z * c;
+    y = ny;
+    z = nz;
+  }
+  *wx = x;
+  *wy = y;
+  if (wz)
+    *wz = z;
+}
+
+namespace cadblock_detail {
+
+inline void RotationFromUnitToUnit(float ax, float ay, float az, float bx, float by, float bz, CadBlockXform* xf) {
+  assert(xf != nullptr);
+  using ray3d::Cross;
+  using ray3d::Dot;
+  using ray3d::Length;
+  using ray3d::Normalize;
+  using ray3d::RotateVectorAboutAxis;
+  using ray3d::Vec3;
+  const Vec3 a = Normalize({static_cast<double>(ax), static_cast<double>(ay), static_cast<double>(az)});
+  const Vec3 b = Normalize({static_cast<double>(bx), static_cast<double>(by), static_cast<double>(bz)});
+  if (Length(a) < 0.5 || Length(b) < 0.5)
+    return;
+  Vec3 axis = Cross(a, b);
+  const double cl = Dot(a, b);
+  double angle = 0.0;
+  if (Length(axis) < 1e-12) {
+    if (cl > 0.999999) {
+      xf->rotX = 0.f;
+      xf->rotY = 0.f;
+      xf->rotZ = 0.f;
+      return;
+    }
+    angle = 3.141592653589793;
+    const Vec3 perp = std::fabs(a.x) < 0.9 ? Vec3{1.0, 0.0, 0.0} : Vec3{0.0, 1.0, 0.0};
+    axis = Normalize(Cross(a, perp));
+  } else {
+    axis = Normalize(axis);
+    angle = std::acos(std::clamp(cl, -1.0, 1.0));
+  }
+  const auto rotCol = [&](float vx, float vy, float vz, int col, double m[3][3]) {
+    const Vec3 v = RotateVectorAboutAxis({static_cast<double>(vx), static_cast<double>(vy), static_cast<double>(vz)},
+                                         axis, angle);
+    m[0][col] = v.x;
+    m[1][col] = v.y;
+    m[2][col] = v.z;
+  };
+  double m[3][3]{};
+  rotCol(1.f, 0.f, 0.f, 0, m);
+  rotCol(0.f, 1.f, 0.f, 1, m);
+  rotCol(0.f, 0.f, 1.f, 2, m);
+  const double sy = std::sqrt(m[0][0] * m[0][0] + m[1][0] * m[1][0]);
+  if (sy > 1e-6) {
+    xf->rotZ = static_cast<float>(std::atan2(m[1][0], m[0][0]));
+    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
+    xf->rotX = static_cast<float>(std::atan2(m[2][1], m[2][2]));
+  } else {
+    xf->rotZ = static_cast<float>(std::atan2(-m[0][1], m[1][1]));
+    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
+    xf->rotX = 0.f;
+  }
+}
+
+} // namespace cadblock_detail
+
+/// Orient \p xf so the source connection direction anti-aligns with the target outward normal, then
+/// translate so the source connection point coincides with the target (issue #475 increment 5).
+inline void CadBlockSnapInsertToConnection(const CadBlockConnection& src, float tgtX, float tgtY, float tgtZ,
+                                           float tgtNx, float tgtNy, float tgtNz, CadBlockXform* xf) {
+  assert(xf != nullptr);
+  float snx = src.nx;
+  float sny = src.ny;
+  float snz = src.nz;
+  const float sl = std::sqrt(snx * snx + sny * sny + snz * snz);
+  if (sl > 1.e-8f) {
+    snx /= sl;
+    sny /= sl;
+    snz /= sl;
+  }
+  float antiX = -tgtNx;
+  float antiY = -tgtNy;
+  float antiZ = -tgtNz;
+  const float tl = std::sqrt(antiX * antiX + antiY * antiY + antiZ * antiZ);
+  if (tl > 1.e-8f) {
+    antiX /= tl;
+    antiY /= tl;
+    antiZ /= tl;
+  }
+  cadblock_detail::RotationFromUnitToUnit(snx, sny, snz, antiX, antiY, antiZ, xf);
+  float wx = 0.f;
+  float wy = 0.f;
+  float wz = 0.f;
+  CadBlockXform tmp = *xf;
+  tmp.x = 0.f;
+  tmp.y = 0.f;
+  tmp.z = 0.f;
+  CadBlockXformPoint(tmp, src.x, src.y, src.z, &wx, &wy, &wz);
+  xf->x = tgtX - wx;
+  xf->y = tgtY - wy;
+  xf->z = tgtZ - wz;
+}
+
+/// Classifies a placed connection port as a smart-mode snap target (issue #496): a flange-typed
+/// fitting's port reads as `FlangeFace`, any other fitting/block's port reads as `GenericPort`.
+[[nodiscard]] inline CadConnectionModeTarget CadBlockClassifyPortTarget(CadPipePartType ownerPartType) {
+  return ownerPartType == CadPipePartType::Flange ? CadConnectionModeTarget::FlangeFace
+                                                   : CadConnectionModeTarget::GenericPort;
+}
+
+/// Applies a resolved mode's extra engagement translation on top of an already-computed snap
+/// transform (issue #496): slides the fitting further along its own connection normal, in world
+/// space, by \p mode's engagement length. No-op for a legacy connection (`mode == nullptr`) or a
+/// zero engagement length.
+inline void CadBlockApplyConnectionModeOffset(const CadBlockConnection& src, const CadBlockConnectionMode* mode,
+                                              CadBlockXform* xf) {
+  assert(xf != nullptr);
+  if (!mode || mode->engagementLength == 0.f)
+    return;
+  float wnx = 0.f, wny = 0.f, wnz = 0.f;
+  CadBlockXformDirection(*xf, src.nx, src.ny, src.nz, &wnx, &wny, &wnz);
+  const float l = std::sqrt(wnx * wnx + wny * wny + wnz * wnz);
+  if (l > 1.e-8f) {
+    wnx /= l;
+    wny /= l;
+    wnz /= l;
+  }
+  xf->x += wnx * mode->engagementLength;
+  xf->y += wny * mode->engagementLength;
+  xf->z += wnz * mode->engagementLength;
+}
+
 [[nodiscard]] inline CadBlockXform CadBlockCompose(const CadBlockXform& parent, const CadBlockXform& child) {
   float wx = 0.f, wy = 0.f, wz = 0.f;
   CadBlockXformPoint(parent, child.x, child.y, child.z, &wx, &wy, &wz);
@@ -252,6 +643,39 @@ inline bool CadBlockNameIsMatchline(std::string_view name) {
       return i;
   }
   return -1;
+}
+
+[[nodiscard]] inline int CadBlockFindConnection(const CadBlockDefinition& def, std::string_view name) {
+  for (int i = 0; i < static_cast<int>(def.connections.size()); ++i) {
+    if (CadBlockEqCi(def.connections[static_cast<size_t>(i)].name, name))
+      return i;
+  }
+  return -1;
+}
+
+inline void CadBlockCollectWorldConnections(const std::vector<CadBlockDefinition>& defs, const CadBlockRef& ref,
+                                            int refIndex, std::vector<CadBlockWorldConnection>* out) {
+  assert(out != nullptr);
+  const int di = CadBlockFindDef(defs, ref.defName);
+  if (di < 0)
+    return;
+  const CadBlockDefinition& def = defs[static_cast<size_t>(di)];
+  for (const CadBlockConnection& c : def.connections) {
+    CadBlockWorldConnection wc;
+    wc.name = c.name;
+    wc.nominalSize = c.nominalSize;
+    wc.blockRefIndex = refIndex;
+    wc.ownerPartType = def.partType;
+    CadBlockXformPoint(ref.xf, c.x, c.y, c.z, &wc.x, &wc.y, &wc.z);
+    CadBlockXformDirection(ref.xf, c.nx, c.ny, c.nz, &wc.nx, &wc.ny, &wc.nz);
+    const float dl = std::sqrt(wc.nx * wc.nx + wc.ny * wc.ny + wc.nz * wc.nz);
+    if (dl > 1.e-8f) {
+      wc.nx /= dl;
+      wc.ny /= dl;
+      wc.nz /= dl;
+    }
+    out->push_back(std::move(wc));
+  }
 }
 
 [[nodiscard]] inline float CadBlockParamValue(const CadBlockRef& ref, const CadBlockDefinition& def,
@@ -421,6 +845,23 @@ inline void CadBlockShiftContent(CadBlockContent* c, float dx, float dy, float d
     n.xf.y += dy;
     n.xf.z += dz;
   }
+  const brep::Vec3 dvec{static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)};
+  for (CadSolidPtr& sp : c->solids) {
+    if (!sp)
+      continue;
+    sp = std::make_shared<const brep::Solid>(brep::Translate(*sp, dvec));
+  }
+  for (std::shared_ptr<const CadMesh>& mp : c->meshes) {
+    if (!mp)
+      continue;
+    auto m = std::make_shared<CadMesh>(*mp);
+    for (size_t i = 0; i + 2 < m->vertsXyz.size(); i += 3) {
+      m->vertsXyz[i] += dx;
+      m->vertsXyz[i + 1] += dy;
+      m->vertsXyz[i + 2] += dz;
+    }
+    mp = std::move(m);
+  }
 }
 
 inline void CadBlockBakeBasePoint(CadBlockDefinition* def) {
@@ -430,6 +871,11 @@ inline void CadBlockBakeBasePoint(CadBlockDefinition* def) {
     a.localX -= def->baseX;
     a.localY -= def->baseY;
     a.localZ -= def->baseZ;
+  }
+  for (CadBlockConnection& c : def->connections) {
+    c.x -= def->baseX;
+    c.y -= def->baseY;
+    c.z -= def->baseZ;
   }
   def->baseX = 0.f;
   def->baseY = 0.f;
@@ -716,6 +1162,120 @@ inline void CadBlockCollectWorldAnnotations(const std::vector<CadBlockDefinition
   }
 }
 
+[[nodiscard]] inline bool CadBlockXformScaleIsUniform(const CadBlockXform& xf, float tol = 1.e-5f) {
+  return std::fabs(xf.sx - xf.sy) <= tol && std::fabs(xf.sx - xf.sz) <= tol && std::fabs(xf.sy - xf.sz) <= tol;
+}
+
+/// Set \p xf's rotX/rotY/rotZ (rotZ unchanged) so local +Z aligns with unit \p nx,ny,nz after the
+/// same Z→Y→X order \ref CadBlockXformPoint uses (issue #475 increment 3, align-to-face).
+inline void CadBlockSetLocalZAxis(CadBlockXform* xf, float nx, float ny, float nz) {
+  assert(xf != nullptr);
+  const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+  if (len <= 1.e-8f)
+    return;
+  nx /= len;
+  ny /= len;
+  nz /= len;
+  const float cy = std::sqrt(std::max(0.f, 1.f - nx * nx));
+  if (cy > 1.e-5f) {
+    xf->rotY = std::asin(std::clamp(nx, -1.f, 1.f));
+    xf->rotX = std::atan2(-ny / cy, nz / cy);
+  } else {
+    xf->rotY = nx >= 0.f ? 1.5707963f : -1.5707963f;
+    xf->rotX = 0.f;
+  }
+}
+
+[[nodiscard]] inline float CadBlockRotDegToRad(float deg) { return deg * 0.01745329252f; }
+
+/// Apply a block INSERT transform to a solid. Refuses non-uniform or non-positive scale because
+/// `brep::Scale` is uniform-only (REQ-332 / issue #475 increment 2).
+[[nodiscard]] inline bool CadBlockTransformSolid(const brep::Solid& s, const CadBlockXform& xf, brep::Solid* out) {
+  assert(out != nullptr);
+  if (!CadBlockXformScaleIsUniform(xf))
+    return false;
+  const double sc = static_cast<double>(xf.sx);
+  if (!(sc > 0.0) || !std::isfinite(sc))
+    return false;
+
+  brep::Solid work = s;
+  brep::Problem why = brep::Problem::Ok;
+  if (std::fabs(sc - 1.0) > 1.e-10) {
+    brep::Solid scaled;
+    if (!brep::Scale(work, ray3d::Vec3{0.0, 0.0, 0.0}, sc, &scaled, &why))
+      return false;
+    work = std::move(scaled);
+  }
+
+  const auto rotAbout = [&](const ray3d::Vec3& axis, float angRad) -> bool {
+    if (std::fabs(angRad) <= 1.e-8f)
+      return true;
+    brep::Solid rotated;
+    if (!brep::Rotate(work, ray3d::Vec3{0.0, 0.0, 0.0}, axis, static_cast<double>(angRad), &rotated, &why))
+      return false;
+    work = std::move(rotated);
+    return true;
+  };
+  if (!rotAbout(ray3d::Vec3{0.0, 0.0, 1.0}, xf.rotZ))
+    return false;
+  if (!rotAbout(ray3d::Vec3{0.0, 1.0, 0.0}, xf.rotY))
+    return false;
+  if (!rotAbout(ray3d::Vec3{1.0, 0.0, 0.0}, xf.rotX))
+    return false;
+
+  *out = brep::Translate(work, ray3d::Vec3{static_cast<double>(xf.x), static_cast<double>(xf.y),
+                                             static_cast<double>(xf.z)});
+  return true;
+}
+
+inline void CadBlockCollectWorldSolids(const std::vector<CadBlockDefinition>& defs, const CadBlockRef& rootRef,
+                                       const EntityAttributes& insertAttr, std::vector<CadBlockWorldSolid>* out) {
+  assert(out != nullptr);
+  const int root = CadBlockFindDef(defs, rootRef.defName);
+  if (root < 0)
+    return;
+  std::array<CadBlockWalkFrame, kCadBlockMaxNest> stack{};
+  int n = 0;
+  stack[static_cast<size_t>(n++)] = CadBlockWalkFrame{root, rootRef.xf, rootRef.visState, &rootRef};
+  int steps = 0;
+  while (n > 0 && steps < kCadBlockMaxWalk) {
+    ++steps;
+    const CadBlockWalkFrame fr = stack[static_cast<size_t>(--n)];
+    if (fr.defIndex < 0)
+      continue;
+    const CadBlockDefinition& def = defs[static_cast<size_t>(fr.defIndex)];
+    const CadBlockContent& c = def.content;
+    for (size_t si = 0; si < c.solids.size(); ++si) {
+      const CadSolidPtr& src = c.solids[si];
+      if (!src)
+        continue;
+      brep::Solid world;
+      if (!CadBlockTransformSolid(*src, fr.xf, &world))
+        continue;
+      EntityAttributes pa{};
+      if (si < c.solidAttrs.size())
+        pa = c.solidAttrs[si];
+      CadBlockWorldSolid ws;
+      ws.solid = std::make_shared<const brep::Solid>(std::move(world));
+      ws.attr = CadBlockResolveAttr(pa, insertAttr);
+      out->push_back(std::move(ws));
+    }
+    for (const CadBlockNested& child : c.nested) {
+      if (n >= kCadBlockMaxNest)
+        break;
+      const int ci = CadBlockFindDef(defs, child.defName);
+      if (ci < 0)
+        continue;
+      CadBlockWalkFrame nf;
+      nf.defIndex = ci;
+      nf.xf = CadBlockCompose(fr.xf, child.xf);
+      nf.vis = child.visState.empty() ? fr.vis : child.visState;
+      nf.ref = nullptr;
+      stack[static_cast<size_t>(n++)] = nf;
+    }
+  }
+}
+
 inline void CadBlockCollectSnapPoints(const std::vector<CadBlockDefinition>& defs, const CadBlockRef& rootRef,
                                       std::vector<CadBlockWorldPoint>* out) {
   assert(out != nullptr);
@@ -759,6 +1319,19 @@ inline void CadBlockWorldAabb(const std::vector<CadBlockDefinition>& defs, const
       *mnY = std::min(*mnY, a.boxMinY);
       *mxY = std::max(*mxY, a.boxMaxY);
     }
+  }
+  std::vector<CadBlockWorldSolid> solids;
+  CadBlockCollectWorldSolids(defs, ref, dummy, &solids);
+  for (const CadBlockWorldSolid& ws : solids) {
+    if (!ws.solid)
+      continue;
+    const brep::Bounds bb = brep::ComputeBounds(*ws.solid);
+    if (!bb.valid)
+      continue;
+    *mnX = std::min(*mnX, static_cast<float>(bb.mn.x));
+    *mxX = std::max(*mxX, static_cast<float>(bb.mx.x));
+    *mnY = std::min(*mnY, static_cast<float>(bb.mn.y));
+    *mxY = std::max(*mxY, static_cast<float>(bb.mx.y));
   }
 }
 
@@ -893,6 +1466,10 @@ inline void CadBlockParamSet(CadBlockRef* r, std::string name, float value) {
 }
 
 [[nodiscard]] inline float CadBlockUnitsScale(std::string_view fromUnits, std::string_view toUnits) {
+  // "unitless" means the geometry is already in the drawing's model-unit system (ACIS `.sat`
+  // imports, issue #473/#475) — do not infer inches and apply a feet conversion.
+  if (fromUnits.empty() || CadBlockEqCi(fromUnits, "unitless"))
+    return 1.f;
   auto u = [](std::string_view s) {
     if (CadBlockEqCi(s, "inches") || CadBlockEqCi(s, "in") || CadBlockEqCi(s, "inch"))
       return 1.f;

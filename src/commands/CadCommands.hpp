@@ -13,6 +13,7 @@
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
+#include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
 // util/ray3d beside it, so the coordinate-system rules are testable without a window.
 #include "util/ucs.hpp"
@@ -40,6 +41,10 @@
 #include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
 #include "util/cadsolid.hpp"   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
 #include "util/solidpick.hpp"  // solidpick::Kind, for SelectedSubObject (REQ-318 / ADR-049)
+// SectionPlaneExtent / SectionPlaneGrip, for the section plane's stored size and handles
+// (REQ-342/339). GL-free and header-only, like every other header in this list — the reason
+// `SectionClip.hpp` was written that way (ADR-002).
+#include "render/SectionClip.hpp"
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
 // gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
 // above it.
@@ -47,6 +52,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iterator>
@@ -90,7 +96,17 @@ struct SelectedEntity {
     /// it belongs with #120's Phase 5 direct-modelling requirement. Every transform command refuses
     /// a solid with a stated reason (REQ-201) rather than silently dropping it from the operation —
     /// the rule Surface already established.
-    Solid = 13
+    Solid = 13,
+    /// CadPipeRun (issue #486). Appended after Solid so existing type values stay stable. The SAME
+    /// stated boundary Solid has: display, select, highlight, hover-report and erase, but no
+    /// transform command moves it — a pipe run's geometry is DERIVED from its path via auto-fillet
+    /// sweeping (cadpiperun.hpp), so a direct drag would need the same re-solve REQ-070 declined for
+    /// a TIN surface's own derived geometry.
+    PipeRun = 14,
+    /// Point cloud (REQ-171 / ADR-042). Appended after PipeRun so existing type values stay stable.
+    /// **Display-and-erase only, like Mesh** — selects, highlights, erases and reports; never
+    /// grip-edited or moved by a transform command (REQ-171's stated boundary).
+    PointCloud = 15
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -1024,6 +1040,9 @@ struct DrawingGeometrySnapshot {
   /// amended 2026-08-12 — a snapshot of a 2M-triangle model is a refcount bump, not ~53 MB.
   std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
   std::vector<EntityAttributes> cadMeshAttrs;
+  /// Point clouds (REQ-171). Shared, not copied — see CadPointCloud's note and architecture §11.5.
+  std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;
+  std::vector<EntityAttributes> cadPointCloudAttrs;
   /// TIN surfaces (REQ-068). Shared payload, not copied — see CadTin and architecture §11.5.
   std::vector<CadSurface>       cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
@@ -1032,6 +1051,12 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
+  /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
+  /// swapped for exactly this reason ("hide everything that is not the block being edited",
+  /// LoadBlockPrimitivesIntoDrawing), and cadPipeRuns simply arrived after that pass was written.
+  std::vector<CadPipeRun>       cadPipeRuns;
+  std::vector<EntityAttributes> cadPipeRunAttrs;
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
@@ -1115,6 +1140,12 @@ struct DrawingDocument {
   /// tabs cannot carry one drawing's projection into another's.
   Camera::Projection viewportProjection = Camera::Projection::Orthographic;
   float  viewportFovDeg = kDefaultFovDeg;
+  /// The section clip is per TAB (REQ-341, D-2026-09-16-b): a clip set in one drawing must not hide
+  /// half of another when the user switches to it, and switching back restores it. A fresh document
+  /// starts with it off, which is what keeps NEW and OPEN clean. Still never written to `.gs`.
+  bool   viewportSectionClip = false;
+  double viewportSectionClipOffset = 0.0;
+  bool   viewportSectionClipFlip = false;
   /// The UCS is per drawing, not per session (REQ-154): switching tabs must not carry one drawing's
   /// coordinate frame into another's, which is the "UCS state does not leak between viewports"
   /// condition in as strong a form as a one-model-view-per-tab application can state it.
@@ -1165,6 +1196,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadFilledRegionAttrs;
   std::vector<std::shared_ptr<const CadMesh>> cadMeshes;  ///< REQ-063; shared, see CadMesh's note.
   std::vector<EntityAttributes> cadMeshAttrs;
+  std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;  ///< REQ-171; shared, see CadPointCloud's note.
+  std::vector<EntityAttributes> cadPointCloudAttrs;
   std::vector<CadSurface>       cadSurfaces;       ///< TIN surfaces (REQ-068).
   std::vector<EntityAttributes> cadSurfaceAttrs;
   std::vector<CadSolidPtr>      cadSolids;         ///< B-rep solids (REQ-313); shared, not copied.
@@ -1511,6 +1544,20 @@ struct AppCommandState {
     Rect,
     /// TRIMSTATE: system-variable prompt waiting for a new value (REQ-056).
     TrimState,
+    /// SECTIONCLIP: keyword prompt waiting for ON / OFF / FLIP or an offset (REQ-341).
+    ///
+    /// The prompt exists so the three keywords can be CLICKED rather than typed: a bracketed
+    /// option in `CommandInputHint` becomes a link that submits its own shortcut, and that
+    /// submission is only meaningful while a command is waiting to consume it. Without a waiting
+    /// state, clicking `ON` would submit `on` as a top-level command, which is nothing.
+    SectionClip,
+    /// SECTIONPLANE: waiting for the user to pick a solid FACE to put the section plane on
+    /// (REQ-342 / ADR-059, GitHub issue #479 acceptance 1).
+    ///
+    /// A single phase, so there is no `SectionPlanePhase` enum: being active IS "waiting for a
+    /// face". The phases arrive with the manipulation slice, and an enum with one value now would
+    /// be an abstraction with no second use.
+    SectionPlane,
     Elev,        ///< Set the elevation new geometry is drawn at (REQ-058).
     /// ORBIT: interactive free orbit — left-drag tumbles the model view; Esc/Enter/right-click
     /// exits (REQ-084 (c)). Deliberately shaped like \c Kind::Pan, and reuses the same
@@ -1545,6 +1592,8 @@ struct AppCommandState {
     /// SLICE (REQ-314 / ADR-046, GitHub #147): select solids, define a cutting plane with three
     /// points, then pick which side to keep (or both).
     Slice,
+    /// SECTION: choose solids, then three points defining the plane (REQ-335 increment 2).
+    Section,
     /// LOFT (REQ-315 / ADR-048, GitHub #241): select two or more closed polylines / circles in
     /// lofting order, Enter to skin a solid through them (SurfaceKind::Nurbs side faces). One
     /// select-objects phase and nothing else — no height, no axis.
@@ -1567,6 +1616,26 @@ struct AppCommandState {
     /// distance phase with a live cursor-driven pick, neither of which the old one-shot
     /// `CadPressPull(st, args, log)` free function had.
     PressPull,
+    /// BCONNECTMODE (issue #496): prompted, one-value-at-a-time authoring of a connection point's
+    /// smart connection modes — connection name, then mode name, then (for a new/edited mode)
+    /// target/role/engagement/compatibility/default, each its own phase/prompt rather than one
+    /// comma-separated line.
+    BConnectMode,
+    /// BCONNECT (issue #496): prompted authoring of a new connection point — name, nominal size,
+    /// role, engagement, compatibility tag, then either pick a flat solid face or type coordinates.
+    BConnect,
+    /// BCONNECTEDIT (issue #496): prompted editing (or removal) of an existing connection point's
+    /// nominal size/role/engagement/compatibility tag.
+    BConnectEdit,
+    /// BLOCKFITTING (issue #496): prompted tagging of the block being edited as a piping catalog
+    /// part — part type, nominal size, pressure class, part number.
+    BlockFitting,
+    /// PIPERUN (issue #486 increment B2 / REQ-345): prompted routing of a `CadPipeRun` — nominal
+    /// size (+ optional pressure class) first, then click-to-add straight vertices with a live
+    /// rubber-band pipe preview, Undo/End/ESC. Its own Kind for the same reason POLYSOLID has one:
+    /// a path built from a variable number of points needs different state than a fixed-parameter
+    /// command, and this one commits into `cadPipeRuns` rather than `cadSolids`.
+    PipeRun,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1612,6 +1681,8 @@ struct AppCommandState {
     case Kind::VpThaw:        return "VPTHAW";
     case Kind::Rect:          return "RECT";
     case Kind::TrimState:     return "TRIMSTATE";
+    case Kind::SectionClip:   return "SECTIONCLIP";
+    case Kind::SectionPlane:  return "SECTIONPLANE";
     case Kind::Orbit:         return "ORBIT";
     case Kind::Ucs:           return "UCS";
     case Kind::Plan:          return "PLAN";
@@ -1631,11 +1702,17 @@ struct AppCommandState {
     case Kind::Extrude:           return "EXTRUDE";
     case Kind::Revolve:          return "REVOLVE";
     case Kind::Slice:            return "SLICE";
+    case Kind::Section:          return "SECTION";
     case Kind::Loft:             return "LOFT";
     case Kind::Sweep:            return "SWEEP";
     case Kind::Boolean:          return "BOOLEAN";
     case Kind::Polysolid:          return "POLYSOLID";  // REQ-317
     case Kind::PressPull:          return "PRESSPULL";
+    case Kind::BConnectMode:       return "BCONNECTMODE";
+    case Kind::BConnect:           return "BCONNECT";
+    case Kind::BConnectEdit:       return "BCONNECTEDIT";
+    case Kind::BlockFitting:       return "BLOCKFITTING";
+    case Kind::PipeRun:            return "PIPERUN";
     default:                  return "";
     }
   }
@@ -1745,6 +1822,23 @@ struct AppCommandState {
   /// ELEV is 5 must give you that endpoint, not a point 5 above it (AutoCAD-faithful, REQ-058).
   /// Only meaningful while \ref viewportSnapPickValid.
   double viewportSnapPickLocalZ = 0.0;
+  /// WHICH snap answered, as a `CadSnap::Kind` (REQ-344 amended). Only meaningful while
+  /// \ref viewportSnapPickValid.
+  ///
+  /// Stored as an `int` because `CadSnap::Kind` lives in a Viewport header and Commands may not
+  /// include one (architecture §11.1) — the same reason `objectSnapKindOverrideKind` beside it is
+  /// an `int`. Added because a caller can need to know not just WHERE the snap is but whether it is
+  /// a **named feature** or one of the "anywhere on the object" family: a section-plane drag
+  /// honours the first and must ignore the second, or `Face` — which answers at essentially every
+  /// cursor position on a solid — drags the plane across the model continuously.
+  ///
+  /// **-1 means "no kind was recorded", and is the value every frame starts at.** Three separate
+  /// places set \ref viewportSnapPickValid and only one of them knows a `CadSnap::Kind` — the grip
+  /// magnet sets the flag from a 2D grip position with no kind and no Z at all. `Kind::Endpoint` is
+  /// 0, so a default-initialised field reads as a named feature and would let one of those drive an
+  /// absolute plane placement through a point the user never aimed at. Starting at -1 makes the
+  /// omission fail closed instead: a consumer that needs the kind checks for it.
+  int viewportSnapPickKind = -1;
   /// Command-line log cache for the selectable read-only multiline (rebuilt each frame from \ref log).
   std::vector<char> commandLogCacheBytes;
   size_t commandLogLastSizeForAutoscroll = 0;
@@ -1759,6 +1853,12 @@ struct AppCommandState {
   float cmdBarWidth = 0.f;            ///< user-resized bar width (px); 0 → default. Persisted.
   float cmdConsoleHeight = 0.f;       ///< user-resized F2 console height (px); 0 → default. Persisted.
   bool cmdConsoleOpen = false;        ///< F2 expanded console (not persisted).
+  /// Frames left to force-scroll the F2 console to its newest line. >1 because the console's
+  /// InputTextMultiline is a child window whose ScrollMax reflects last frame's content size —
+  /// on the very frame the log grows (or the console first opens), asking to scroll to FLT_MAX
+  /// clamps against the STALE (too-small) ScrollMax and lands short of the true bottom. Counting
+  /// down over 2 frames covers that one-frame lag once the child's content size has caught up.
+  int cmdConsoleScrollFramesRemaining = 0;
   float cmdBarFadeDelaySec = 4.f;     ///< idle seconds before recent-history lines start fading. Persisted.
   float cmdBarOpacity = 0.92f;        ///< bar / console background opacity. Persisted.
   int cmdBarHistoryLines = 3;         ///< recent log lines floated above the bar. Persisted.
@@ -1826,7 +1926,7 @@ struct AppCommandState {
     int meshTriangleCount = 0;
 
     /// Solids in the B-rep profile (REQ-313 / REQ-100). 0 = not the solid profile; at most one
-    /// of this, ef meshTriangleCount and ef surfacePointCount is non-zero.
+    /// of this, \ref meshTriangleCount and \ref surfacePointCount is non-zero.
     ///
     /// A profile of its OWN rather than an assumption that the mesh number covers it, for the
     /// same reason the surface profile is not implied by the mesh one: a solid's cost is not one
@@ -2341,6 +2441,31 @@ struct AppCommandState {
     WaitKeepSide,   ///< Pick a point on the side to keep, or [B]oth.
   } slicePhase = SlicePhase::SelectSolids;
 
+  // --- The SECTION command (REQ-335 increment 2, GitHub #149) -----------------------------------
+  //
+  // Deliberately the SAME shape as SLICE above, because it is the same gesture: choose solids, then
+  // define a plane by three points. The two commands ask one question and keep different answers —
+  // SLICE keeps the pieces, SECTION keeps the outline — so a user who has learned one has learned
+  // the other, and AutoCAD's own SECTION prompts in exactly this order.
+  //
+  // Increment 1 had no phases at all: it read the current selection and used the active UCS plane,
+  // so typing SECTION with nothing selected printed "select one or more solids first" and ENDED.
+  // That reads as a prompt and behaves as a refusal — the next click lands with the command already
+  // over and merely selects the solid, which is precisely how it was reported.
+  enum class SectionPhase {
+    SelectSolids,  ///< Accumulate a selection of solids; Enter confirms.
+    WaitP1,        ///< First of three points defining the section plane, or [UCS] for the work plane.
+    WaitP2,
+    WaitP3,
+  } sectionPhase = SectionPhase::SelectSolids;
+  std::vector<int> sectionSolidIndices;  ///< resolved at the end of the selection phase
+  /// The solid each index named when it was resolved, so a changed store refuses instead of cutting
+  /// whatever now occupies the slot. Parallel to \ref sectionSolidIndices.
+  std::vector<std::weak_ptr<const brep::Solid>> sectionSolidOwners;
+  ray3d::Vec3 sectionP1{};
+  ray3d::Vec3 sectionP2{};
+  ray3d::Vec3 sectionP3{};
+
   // --- The LOFT command (REQ-315 / ADR-048, GitHub #241) ---------------------------------------
 
   enum class LoftPhase {
@@ -2398,6 +2523,29 @@ struct AppCommandState {
   double polysolidWidth = 0.25;
   double polysolidHeight = 4.0;
   brep::Justify polysolidJustify = brep::Justify::Center;
+
+  // --- PIPERUN: interactive CadPipeRun routing (issue #486 increment B2 / REQ-345) --------------
+
+  enum class PipeRunPhase {
+    WaitNominalSize,  ///< first prompt of a run: nominal size, optional pressure class
+    WaitFirstPoint,   ///< size known; the next click/point is the run's start
+    WaitNextPoint,    ///< a run is under way; each further point commits a straight segment
+  } pipeRunPhase = PipeRunPhase::WaitNominalSize;
+
+  /// The path so far, storage-coordinate xyz triples (REQ-057) — exactly the form `CadPipeRun`
+  /// itself stores, so commit is a plain copy rather than a second representation to keep in step.
+  std::vector<double> pipeRunDraftVerts;
+  /// Remembered across runs the way POLYSOLID remembers width/height/justify (`polysolidWidth`
+  /// etc. above): a pipe run is almost always drawn at the same size as the last one.
+  std::string pipeRunNominalSize;
+  std::string pipeRunPressureClassTag;
+  /// Ortho/polar compass (REQ-346): while \c true, the next-vertex preview and pick snap to
+  /// REQ-108's angle set (\ref polarIncrementDeg / \ref polarExtraAnglesDeg) measured from the run's
+  /// last committed vertex. Its own toggle, independent of \ref polarMode, so PIPERUN keeps snapping
+  /// even with ordinary POLAR tracking off (and vice versa). On by default, matching AutoCAD Plant
+  /// 3D's own compass default. Not saved with the drawing — a per-command UI setting, like
+  /// \ref orthoMode / \ref polarMode.
+  bool pipeRunCompassOn = true;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -2535,6 +2683,9 @@ struct AppCommandState {
   int ribbonTabBeforeBlockEditor = 0;
   bool blockEditorContextualRibbonArmed = false;
   bool blockAuthoringPaletteOpen = false;
+  /// Connection Modes window (issue #496 follow-up): a graphical alternative to the BCONNECTMODE
+  /// text wizard, for the same "which mode applies to which snap target" authoring.
+  bool showConnectionModesWindow = false;
   int blockAuthoringPaletteTab = 0;  ///< 0 Parameters, 1 Actions, 2 Parameter Sets, 3 Constraints
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
@@ -2579,16 +2730,23 @@ struct AppCommandState {
   /// the same way the classic "click the piece to remove" path already does. Left 0 on the plan-view
   /// path, which is byte-for-byte unchanged.
   float trimCutInfP1z = 0.f, trimCutInfP2z = 0.f;
-  /// OFFSET: pick entity, then type distance + pick side, or click a through point (line / circle / arc).
+  /// OFFSET: distance (or T for a through point) first, then select object, then side/through pick;
+  /// on a successful commit it loops back to WaitSelectEntity with the same distance/mode retained,
+  /// until Enter/Esc ends the command (REQ-103's documented TRIM/OFFSET per-target loop pattern).
   enum class OffsetPhase {
-    WaitSelectEntity,
     WaitDistanceOrThrough,
+    WaitSelectEntity,
     WaitSidePick,
-  } offsetPhase = OffsetPhase::WaitSelectEntity;
+    WaitThroughPick,
+  } offsetPhase = OffsetPhase::WaitDistanceOrThrough;
   bool offsetEntityValid = false;
   SelectedEntity offsetEntity{};
-  /// Typed offset distance (always positive); combined with side pick for sign.
+  /// Typed offset distance (always positive); combined with side pick for sign. Persists across the
+  /// select/side loop until OFFSET ends or a new distance is typed.
   float offsetTypedDistance = 0.f;
+  /// True once the user has typed T for through-point mode instead of a fixed distance; persists
+  /// across the loop the same way offsetTypedDistance does.
+  bool offsetThroughMode = false;
   /// While OFFSET waits for the first pick, entity under cursor (for highlight).
   bool offsetHoverHighlightValid = false;
   SelectedEntity offsetHoverEntity{};
@@ -2608,6 +2766,14 @@ struct AppCommandState {
   /// §11.5 as amended). "Editing" a mesh means replacing the pointer; never write through it.
   std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
   std::vector<EntityAttributes> cadMeshAttrs;
+
+  /// Point clouds (REQ-171 / ADR-042). Reference geometry: nothing in the command layer creates or
+  /// edits one — REQ-172's E57/PTS/PTX/LAS/LAZ importers produce them and ERASE removes them.
+  ///
+  /// `shared_ptr<const>` so undo snapshots share the payload rather than copying it (architecture
+  /// §11.5), exactly as \ref cadMeshes above.
+  std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;
+  std::vector<EntityAttributes> cadPointCloudAttrs;
 
   /// TIN surfaces (REQ-068). The heavy triangulation hangs off a shared_ptr inside each CadSurface,
   /// so copying this vector — which every undo snapshot does — is strings and refcount bumps.
@@ -2641,6 +2807,29 @@ struct AppCommandState {
   /// frame; `BENCH SOLID` takes a baseline at the first timed frame and this must not grow during a
   /// scripted orbit.
   std::uint64_t solidDisplayRegenCount = 0;
+  /// Transformed B-rep solids from model-space block references (issue #475 increment 2). Derived
+  /// display data — not snapshotted on undo, like \ref solidDisplayCache.
+  std::vector<CadSolidPtr> blockRefWorldSolids;
+  std::vector<EntityAttributes> blockRefWorldSolidAttrs;
+  std::uint64_t blockRefWorldSolidsSig = 0;
+
+  /// Pipe runs (issue #486 increment B1 / REQ-345). The entity IS the path (topology); the swept
+  /// solids below are derived display data, rebuilt from \ref cadPipeRuns whenever it changes and
+  /// never persisted — the same "piping owns topology, blocks own geometry" split CadPipeRun's own
+  /// doc comment explains, and the same shape \ref blockRefWorldSolids already uses for a derived
+  /// solid array.
+  std::vector<CadPipeRun> cadPipeRuns;
+  std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<CadSolidPtr> pipeRunWorldSolids;
+  std::vector<EntityAttributes> pipeRunWorldSolidAttrs;
+  /// Which `cadPipeRuns` index each `pipeRunWorldSolids` entry came from (issue #486, selection
+  /// follow-up) — NOT the same as the entry's own position, because a run that fails to build
+  /// (unresolvable size, unfillable corner) contributes nothing, so the two arrays can diverge in
+  /// length and offset. Selection/highlight/hover map a picked solid back to its owning run through
+  /// this, the same reason `CadBlockWorldSolid::blockRefIndex`/`CadBlockWorldConnection::blockRefIndex`
+  /// exist for block refs.
+  std::vector<int> pipeRunWorldSolidOwnerIndex;
+  std::uint64_t pipeRunWorldSolidsSig = 0;
 
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
@@ -2658,6 +2847,86 @@ struct AppCommandState {
   /// definition's primitive geometry in local coords and \c blockEditModelStash holds the real
   /// drawing. Session-only — never in \ref DrawingDocument, never in `.gs`.
   bool blockEditActive = false;
+  bool bconnectAwaitingFace = false;
+  char bconnectNameBuf[128]{};
+  char bconnectSizeBuf[64]{};
+  /// Role/engagement queued from a prompt-form BCONNECT, applied once the face pick resolves
+  /// (issue #486 increment A2).
+  CadBlockConnectionRole bconnectRolePending = CadBlockConnectionRole::Inlet;
+  float bconnectEngagementPending = 0.f;
+  /// Compatibility tag queued from the BCONNECT wizard, applied once the point resolves (typed
+  /// coordinates or a face pick) — issue #496.
+  std::string bconnectCompatTagPending;
+
+  // -------------------------------------------------------------------------
+  // BCONNECT wizard (issue #496): one value prompted per step. The final step either picks a flat
+  // solid face (reusing the existing bconnectAwaitingFace pick mechanism) or accepts typed
+  // "x,y,z,nx,ny,nz".
+  // -------------------------------------------------------------------------
+  enum class BConnectPhase {
+    WaitName,
+    WaitNominalSize,
+    WaitRole,
+    WaitEngagement,
+    WaitCompatTag,
+    WaitPoint,
+  } bconnectPhase = BConnectPhase::WaitName;
+
+  // -------------------------------------------------------------------------
+  // BCONNECTEDIT wizard (issue #496): one value prompted per step, each showing the port's
+  // current value with Enter-to-keep, plus a remove option.
+  // -------------------------------------------------------------------------
+  enum class BConnectEditPhase {
+    WaitConnName,
+    WaitRemoveConfirm, ///< Only reached when the typed connection name exists.
+    WaitNominalSize,
+    WaitRole,
+    WaitEngagement,
+    WaitCompatTag,
+  } bconnectEditPhase = BConnectEditPhase::WaitConnName;
+  std::string bconnectEditConnName;
+  std::string bconnectEditNominalSizePending;
+  CadBlockConnectionRole bconnectEditRolePending = CadBlockConnectionRole::Inlet;
+  float bconnectEditEngagementPending = 0.f;
+  std::string bconnectEditCompatTagPending;
+
+  // -------------------------------------------------------------------------
+  // BLOCKFITTING wizard (issue #496): one value prompted per step, each showing the current value
+  // with Enter-to-keep.
+  // -------------------------------------------------------------------------
+  enum class BlockFittingPhase {
+    WaitPartType,
+    WaitNominalSize,
+    WaitPressureClass,
+    WaitPartNumber,
+  } blockFittingPhase = BlockFittingPhase::WaitPartType;
+  CadPipePartType blockFittingPartTypePending = CadPipePartType::None;
+  std::string blockFittingNominalSizePending;
+  CadPipePressureClass blockFittingPressureClassPending = CadPipePressureClass::None;
+  std::string blockFittingPartNumberPending;
+
+  // -------------------------------------------------------------------------
+  // BCONNECTMODE wizard (issue #496): one value prompted per step, instead of a
+  // single comma-separated command line.
+  // -------------------------------------------------------------------------
+  enum class BConnectModePhase {
+    WaitConnName,
+    WaitModeName,
+    WaitRemoveConfirm, ///< Only reached when the typed mode name already exists.
+    WaitTarget,
+    WaitRole,
+    WaitEngagement,
+    WaitCompatTag,
+    WaitIsDefault,
+  } bconnectModePhase = BConnectModePhase::WaitConnName;
+  std::string bconnectModeConnName;
+  std::string bconnectModeModeName;
+  bool bconnectModeEditingExisting = false;
+  CadConnectionModeTarget bconnectModeTargetPending = CadConnectionModeTarget::GenericPort;
+  CadBlockConnectionRole bconnectModeRolePending = CadBlockConnectionRole::Inlet;
+  float bconnectModeEngagementPending = 0.f;
+  std::string bconnectModeCompatTagPending;
+
   DrawingGeometrySnapshot blockEditModelStash;
   /// \c cadGpuRevision at the last clean point of the session (enter / BSAVE). A different value
   /// means unsaved edits — drives the BCLOSE Save/Don't-Save/Cancel prompt.
@@ -2724,6 +2993,65 @@ struct AppCommandState {
     }
   };
   std::vector<std::unique_ptr<SurfaceRebuildAsync>> surfaceRebuildAsync;
+
+  /// One in-flight `.gscloud` out-of-core cache build (REQ-171/172, ADR-060) — architecture §8's
+  /// one-shot-worker contract again, same shape as \ref SurfaceRebuildAsync. At most one exists at
+  /// a time: `POINTCLOUDATTACH` refuses to start a second import while one is already running,
+  /// rather than queuing (the user asked for a progress bar with an ETA, which only makes sense
+  /// for a single tracked job).
+  ///
+  /// The worker thread touches ONLY this struct's own fields (plus read-only source/cache paths) —
+  /// never `AppCommandState` directly. Committing the result into `st.cadPointClouds` (undo
+  /// snapshot, entity id assignment, GPU-cache bump) happens on the main thread, in
+  /// `TickPointCloudImport`, once `done` is observed — the same "worker computes, main thread
+  /// applies" split `SurfaceRebuildAsync`/`TinBuildResult` already uses.
+  struct PointCloudImportAsync {
+    std::string sourcePath;
+    std::string cachePath;
+    std::thread thread;
+    std::atomic<bool> done{false};
+    std::atomic<bool> cancelRequested{false};
+    /// Points written to disk during the streaming pass (phase 1 of the build).
+    std::atomic<std::int64_t> pointsStreamed{0};
+    /// Points that have landed in a completed octree leaf during the recursive split (phase 2) —
+    /// reaches \ref totalPointsEstimate exactly when the build finishes.
+    std::atomic<std::int64_t> pointsFinalized{0};
+    /// Leaves read back while assembling the preview sample (phase 3 — `BuildPreviewFromCache`).
+    /// This phase reads the WHOLE cache back off disk (every leaf, to subsample it), a full pass
+    /// with its own real cost that earlier had no progress reporting at all — the exact cause of
+    /// a bar stuck at 100% while the worker was still genuinely working (TASK-270 log).
+    std::atomic<std::int64_t> previewLeavesRead{0};
+    /// Total leaf count, set once (by the worker) right after the cache is opened for the preview
+    /// pass — 0 until then, which the UI reads as "phase 3 hasn't started yet."
+    std::atomic<std::int64_t> previewTotalLeaves{0};
+    /// From `pointcloud_e57::QuickPointCountEstimate`, read before dispatch (cheap: metadata only).
+    /// 0 means unknown — the progress UI falls back to an indeterminate bar in that case.
+    std::int64_t totalPointsEstimate = 0;
+    std::chrono::steady_clock::time_point startTime;
+    /// UI-thread-only cosmetic state for the progress dialog: the ETA text is recomputed at most
+    /// once a second (TASK-270 — it was ticking every frame, which read as jittery rather than a
+    /// countdown), never touched by the worker thread.
+    std::chrono::steady_clock::time_point lastEtaUpdate{};
+    std::string cachedEtaText = "estimating...";
+
+    // Worker-produced result — read only after `done` is observed true.
+    bool ok = false;
+    std::string errorMessage;
+    std::vector<double> previewXyz;
+    std::vector<float> previewColors;
+    std::vector<float> previewIntensity;
+    pointcloud::Octree octree;
+    std::int64_t totalPointCount = 0;
+
+    /// Same reasoning as `SurfaceRebuildAsync`'s own destructor: without this, destroying a job
+    /// whose thread is still running calls `std::terminate` (closing the app mid-import would
+    /// abort the process instead of exiting).
+    ~PointCloudImportAsync() {
+      cancelRequested.store(true, std::memory_order_release);
+      if (thread.joinable()) thread.join();
+    }
+  };
+  std::unique_ptr<PointCloudImportAsync> pointCloudImportAsync;
 
   /// One in-flight Volume Dashboard recompute (REQ-073's 2026-08-23 amendment, TASK-095 §6 step 3) —
   /// architecture §8's one-shot-worker contract again, in the same shape \ref SurfaceRebuildAsync
@@ -3611,6 +3939,83 @@ struct AppCommandState {
   /// UCS. **Off by default** — on, the cursor changes colour and orientation, and a display change
   /// no one asked for is the one thing REQ-064 was careful to avoid when it added visual styles.
   bool viewportCrosshair3d = false;
+  /// Live section clipping (REQ-341 / ADR-058, GitHub issue #149 acceptance 6): hide everything on
+  /// the far side of a plane so the inside of a model can be looked at, updating as the plane moves.
+  ///
+  /// **The plane is the active UCS plane**, slid along its own Z by \ref viewportSectionClipOffset —
+  /// the same decision `SECTION` made (D-2026-09-09-i) and for the same reason, so the two commands
+  /// cut on the same plane and a user can section exactly what they are looking into.
+  ///
+  /// **Deliberately NOT persisted to `.gs`**, unlike \ref viewportProjection which sits beside a
+  /// named view. This is an inspection mode, not a property of the drawing: opening a file to find
+  /// half of it invisible, with the reason three menus away, is the failure this avoids. REQ-341
+  /// records persistence as a possible increment rather than an oversight.
+  ///
+  /// It IS per tab: `SaveDocumentToSnapshot` / `RestoreDocumentFromSnapshot` carry these three with
+  /// the camera, so another open drawing never inherits the clip (D-2026-09-16-b).
+  bool viewportSectionClip = false;
+  /// Offset of the clip plane from the UCS origin, along the UCS Z, in drawing units.
+  double viewportSectionClipOffset = 0.0;
+  /// Which half survives. False keeps the half the UCS +Z points AWAY from — so the material in
+  /// front of the plane is what disappears, which is the direction that reads as "cut towards me".
+  bool viewportSectionClipFlip = false;
+  /// **One clip plane, two ways to aim it** (REQ-342 / D-2026-09-11-b, GitHub issue #479).
+  ///
+  /// When false the plane is the active UCS plane, exactly as REQ-341 shipped it: derived every
+  /// frame, so it follows the work plane. When true it is \ref viewportSectionClipFrame, which
+  /// `SECTIONPLANE` set from a solid's face and which does NOT follow the UCS.
+  ///
+  /// Two independent planes were the alternative and were rejected: they can disagree, and the
+  /// first thing a user would do is turn one on while the other was already cutting and see a
+  /// result neither command explains. \ref viewportSectionClipOffset and
+  /// \ref viewportSectionClipFlip apply to whichever frame is in force, so `SECTIONCLIP OFF`,
+  /// `FLIP` and a typed offset keep working on a face-defined plane without a second vocabulary.
+  bool viewportSectionClipFrameValid = false;
+  /// The face-derived clip frame. Its Z is the face's **outward** normal (`brep::Surface::frame`,
+  /// measured across every primitive, Boolean and oblique-slice result in probe P1/P2), so at
+  /// offset 0 the whole solid is on the kept side and nothing disappears — the plane simply
+  /// appears on the face it was made from, which is what AutoCAD does and what the user asked for.
+  ucs::Ucs viewportSectionClipFrame{};
+  /// The rectangle's size, once the user has stretched it (REQ-343). Invalid means "derive it from
+  /// the model", which is what a freshly placed plane uses. Reset whenever the plane is re-aimed,
+  /// for the reason the offset is: it was measured against a face that is no longer in force.
+  SectionPlaneExtent viewportSectionClipExtent{};
+  /// True while the section plane is SELECTED and showing its handles (REQ-343).
+  ///
+  /// Not a `SelectedEntity`. The plane is still a view state — it has no layer, no attributes and
+  /// no place in `.gs` — so putting it in `selection` would put a branch for it in every consumer
+  /// of that vector (MOVE, DELETE, DXF export, the property panel, the highlight walk), and the
+  /// first one that forgot would be a view setting silently exported or erased. That is the same
+  /// argument `SelectedSubObject` records for keeping its own store.
+  bool sectionPlaneSelected = false;
+  /// The handle currently being dragged, or `None`. Cast to \ref SectionPlaneGrip.
+  int sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
+  /// The handle under the cursor, for the pre-highlight. `None` when there is none.
+  int sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
+  /// Where the drag started along its own axis, and the plane's state at that moment — so the drag
+  /// is a DELTA from the grab rather than an absolute reading of the cursor, and the handle does
+  /// not jump to the cursor on the first frame.
+  double sectionPlaneGripStartParam = 0.0;
+  double sectionPlaneGripStartOffset = 0.0;
+  SectionPlaneExtent sectionPlaneGripStartExtent{};
+  /// Whether the plane was ALREADY user-sized when the handle was grabbed (REQ-343).
+  ///
+  /// \ref sectionPlaneGripStartExtent is seeded from the drawn rectangle when there was no stored
+  /// extent, because the stretch arithmetic needs a valid one to work from — so it cannot itself
+  /// answer "was this plane user-sized before?". ESC needs that answer: restoring the seeded extent
+  /// after an aborted first stretch would leave the plane pinned at that size and no longer
+  /// tracking the model, which is a state the user never asked for and cannot see.
+  bool sectionPlaneGripStartExtentWasValid = false;
+  /// The drag axis, FROZEN at the moment of the grab (REQ-343).
+  ///
+  /// It has to be frozen, and this is not a refinement. The handle sits on the plane, so dragging
+  /// the plane moves the handle — re-deriving the axis each frame measures every frame's delta from
+  /// where the plane has already got to, which makes the delta collapse to zero on the second
+  /// frame. Held still, the cursor would then snap the plane back to where it was grabbed, and
+  /// moving would oscillate. Found by a test asserting that the click which DROPS a drag changes
+  /// nothing.
+  ray3d::Vec3 sectionPlaneGripAnchor{};
+  ray3d::Vec3 sectionPlaneGripAxis{};
   /// Viewport background (model-space clear color): RGB 0–1. Default #141A24 steel-blue tint.
   float viewportBgR = 0.08f;
   float viewportBgG = 0.10f;
@@ -3869,6 +4274,8 @@ struct AppCommandState {
     WaitInsertPoint,
     WaitScale,
     WaitRotation,
+    WaitAlignFace,       ///< Pick a planar solid face to orient the fitting (issue #475 inc3)
+    WaitConnectorTarget, ///< Pick a target connection port on a placed block (issue #475 inc5)
     WaitAttributes,
   } insertBlockPhase = InsertBlockPhase::WaitDialog;
 
@@ -3883,15 +4290,41 @@ struct AppCommandState {
   float insertBlockSy = 1.f;
   float insertBlockSz = 1.f;
   float insertBlockRotDeg = 0.f;
+  float insertBlockRotXDeg = 0.f;
+  float insertBlockRotYDeg = 0.f;
+  char insertBlockRotXBuf[64]{};
+  char insertBlockRotYBuf[64]{};
   bool insertBlockSpecifyPoint = true;
   bool insertBlockSpecifyScale = false;
   bool insertBlockSpecifyRot = true;
+  bool insertBlockSpecifyAlignFace = false;
+  bool insertBlockSpecifyConnectorSnap = false;
+  char insertBlockConnectorName[64]{};
+  /// INSERT dialog override for block insertion units (issue #475 inc6). Empty uses the definition.
+  char insertBlockUnitsBuf[32]{};
   bool insertBlockUniformScale = true;
   bool insertBlockExplode = false;
   bool insertBlockAttrDialogOpen = false;
+  /// Library pane filters (issue #486 increment A5). `None` = no filter on that axis. Size is a
+  /// free-text substring match against \ref CadBlockLibraryEntry::nominalSize.
+  CadPipePartType insertLibFilterPartType = CadPipePartType::None;
+  CadPipePressureClass insertLibFilterPressureClass = CadPipePressureClass::None;
+  char insertLibFilterSizeBuf[32]{};
   int insertBlockAttrRefIndex = -1;
   bool insertBlockAttrPaper = false;
   char insertBlockAttrBuf[8][128]{};
+
+  // Block Create dialog (ribbon Create button) — mirrors Insert dialog (issue #475 follow-up)
+  enum class BlockCreatePhase { WaitDialog, WaitBasePoint } blockCreatePhase = BlockCreatePhase::WaitDialog;
+  bool blockCreateDialogOpen = false;
+  char blockCreateName[256]{};
+  float blockCreateBaseX = 0.f;
+  float blockCreateBaseY = 0.f;
+  float blockCreateBaseZ = 0.f;
+  bool blockCreateSpecifyBase = true;
+  int blockCreateConvertMode = 1; // 0 retain, 1 convert, 2 delete
+  char blockCreateDescription[256]{};
+  char blockCreateUnits[32]{};
 
   char pdfAttachFilePath[1024]{};
   int  pdfAttachSelectedPage = 0;
@@ -4293,6 +4726,18 @@ inline ucs::Ucs CadActiveUcsStorage(const AppCommandState& st) {
   return u;
 }
 
+/// The live section clip as it stands (REQ-341), in STORAGE coordinates like everything the renderer
+/// and the picks see. Inactive when the clip is off. The one derivation the renderer, the solid pick
+/// and the snap all read, so the three cannot disagree about where the cut is.
+[[nodiscard]] ucs::Ucs CadEffectiveSectionClipFrame(const AppCommandState& st);
+inline SectionClipPlane CadActiveSectionClip(const AppCommandState& st) {
+  if (!st.viewportSectionClip)
+    return SectionClipPlane{};
+  // REQ-342: the face SECTIONPLANE was given, or the active UCS when it was never given one.
+  return SectionClipFromUcs(CadEffectiveSectionClipFrame(st), st.viewportSectionClipOffset,
+                            st.viewportSectionClipFlip);
+}
+
 /// The active work plane (UCS XY) a viewport click resolves against (REQ-058 / ADR-025 (e)).
 /// In storage space, because that is the space the ray is in.
 inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) { return ucs::WorkPlane(CadActiveUcsStorage(st)); }
@@ -4409,7 +4854,10 @@ enum class EntityKind : std::uint8_t {
   /// REQ-313 / ADR-045. Appended after BlockRef, for the reason Surface's note above spells out:
   /// the id sweep walks the attribute arrays in `kEntityKindsInSweepOrder`, so inserting anywhere
   /// but the end would renumber every entity in every existing drawing on its next load.
-  Solid
+  Solid,
+  /// REQ-171 / ADR-042. Appended after Solid, for the same reason: inserting anywhere but the end
+  /// would renumber every entity in every existing drawing on its next load.
+  PointCloud
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -4769,6 +5217,19 @@ void CancelPolysolidCommand(AppCommandState& st);
 /// The frame a polysolid is built in: the active UCS anchored at the first picked point. Exposed so
 /// the viewport can put the cursor into the same plane the builder reads it from - one frame, not two.
 [[nodiscard]] ucs::Ucs CadPolysolidFrameFor(const AppCommandState& st);
+
+// --- PIPERUN (issue #486 increment B2 / REQ-345) -------------------------------------------------
+/// Open the command: prompt for a nominal size (+ optional pressure class).
+void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log);
+/// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
+[[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
+/// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false
+/// if not consumed.
+bool HandlePipeRunTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+/// Handle a viewport click: the run's start point, or a further vertex.
+void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Reset the draft path, keeping the remembered nominal size and pressure class.
+void CancelPipeRunCommand(AppCommandState& st);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.
 ///
 /// ONE builder for the preview, the click that commits a point and the Enter that finishes — a
@@ -4780,10 +5241,6 @@ void CancelPolysolidCommand(AppCommandState& st);
 /// Report a solid's properties into \p log — kind, dimensions, volume, surface area, and its
 /// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log);
-
-/// REQ-335 — SECTION: the cross-section of every selected solid by the active UCS plane, drawn as a
-/// closed polyline. Non-destructive: the solids are left exactly as they were.
-void CadSectionSelection(AppCommandState& st, std::vector<std::string>& log);
 
 /// REQ-313 as amended (D-2026-09-09-j) — SOLIDCHECK: report each solid's validity, and separately
 /// whether its surface passes through itself. Read-only; nothing is repaired.
@@ -4923,6 +5380,16 @@ void CancelSliceCommand(AppCommandState& st);
                                         std::vector<std::string>& log);
 void SubmitSliceViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 
+// SECTION (REQ-335 increment 2) — the same five entry points as SLICE above, because it is the same
+// gesture: choose solids, then define a plane. Increment 1 had none of these; it read the current
+// selection and ended, which is why a click during "select an object" fell through to plain picking.
+void StartSectionCommand(AppCommandState& st, std::vector<std::string>& log);
+void CancelSectionCommand(AppCommandState& st);
+[[nodiscard]] std::string CadSectionPromptText(const AppCommandState& st);
+[[nodiscard]] bool HandleSectionTextInput(const std::string& line, AppCommandState& st,
+                                          std::vector<std::string>& log);
+void SubmitSectionViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need
 /// the identical current/stale/rebuilding classification for a surface, and it has no ImGui
@@ -4999,6 +5466,19 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index);
 /// is what makes a single command that touches N points, or N surfaces, coalesce to at most one
 /// rebuild per surface rather than N.
 void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-171/172, ADR-060 — starts a background `.gscloud` build + preview-sample read for the E57
+/// at \p path. Refuses (logs why, returns false) if an import is already in flight. Call once from
+/// the `POINTCLOUDATTACH` command handler; \ref TickPointCloudImport reaps the result.
+bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
+                                std::vector<std::string>& log);
+
+/// Call once per frame (main.cpp, beside \ref TickSurfaceRebuilds). Reaps a completed point-cloud
+/// import — on success, commits the resulting `CadPointCloud` into `st.cadPointClouds` (undo
+/// snapshot, entity id, GPU-cache bump) exactly as the old synchronous `ImportPointCloudE57` did;
+/// on failure or cancellation, logs the reason and commits nothing. A no-op while no import is in
+/// flight or the in-flight one has not finished yet.
+void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log);
 
 /// Advances the Volume Dashboard's own live recompute (REQ-073 amendment, TASK-095). Call every
 /// frame, after \ref TickSurfaceRebuilds so a surface that finished rebuilding this frame is already
@@ -5328,6 +5808,17 @@ void ApplyOrthoConstrainFromAnchor(const AppCommandState& st, float anchorX, flo
 /// applies here.
 void ApplyPolarConstrainFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
                                    bool polar, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float targetZ = std::numeric_limits<float>::quiet_NaN(),
+                                   float* wz = nullptr);
+
+/// Piping ortho/polar compass (REQ-346): the PIPERUN counterpart of \ref ApplyPolarConstrainFromAnchor,
+/// snapping the next-vertex pick onto the nearest preset angle ray from the run's last committed
+/// vertex. Reuses REQ-108's own angle set (\ref AppCommandState::polarIncrementDeg /
+/// \c polarExtraAnglesDeg) rather than a second, piping-only list — deliberate, per D-2026-09-17-a —
+/// but is gated on its own toggle, \ref AppCommandState::pipeRunCompassOn, so turning it off does not
+/// touch ordinary POLAR tracking in other commands. No-op unless \p compass and \c pipeRunCompassOn.
+void ApplyPipeRunCompassFromAnchor(const AppCommandState& st, float anchorX, float anchorY, float* wx, float* wy,
+                                   bool compass, float anchorZ = std::numeric_limits<float>::quiet_NaN(),
                                    float targetZ = std::numeric_limits<float>::quiet_NaN(),
                                    float* wz = nullptr);
 
@@ -5683,6 +6174,115 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
 /// From a non-empty candidate list, pick the entity nearest the camera (ray mode) or highest Z (plan).
 bool PickCadEntityByDepth(const std::vector<CadPickCandidate>& candidates, SelectedEntity* out,
                           const ray3d::Ray* pickRay);
+/// The nearest whole SOLID under \p ray, as a `SelectedEntity` of `Type::Solid`. False if none.
+///
+/// **`PickClosestCadEntity` above cannot answer this and never could**: it returns only `LineSeg`,
+/// `Arc`, `Circle`, `Ellipse` and `Polyline`. Every consumer of it — the hover pre-highlight and
+/// every click that selects one entity — therefore behaved as though solids were not there, and the
+/// only thing that ever put a solid in a selection was `ComputeSelectionFromRect`. So a solid could
+/// be selected by dragging a rectangle around it and by nothing else, with no highlight beforehand,
+/// in every command and when idle. Reported from the real app twice in one session, as two separate
+/// complaints that turned out to be this one gap.
+///
+/// Built on \ref PickSubObjectAcrossSolids, which already does ray-versus-solid hit testing for the
+/// `Ctrl`+click sub-object pick (REQ-318): the geometry was there, only a whole-solid caller was
+/// missing. **Which hit names the solid follows the visual style, as in AutoCAD** (D-2026-09-16-b):
+/// in 2D Wireframe no face is drawn, so only an edge or a vertex answers — a click inside the
+/// outline starts a selection box, and an edge seen through the solid can be clicked. In Hidden and
+/// Shaded a visible face answers too. Clicking anywhere on a face in plan view had been taking
+/// clicks meant for survey points and selection boxes inside a building pad (code review on #478,
+/// finding 4).
+///
+/// Geometry the live section clip has hidden does not answer (finding 5) — see
+/// \ref PickSubObjectAcrossSolids.
+///
+/// Like the sub-object pick it never tessellates (REQ-318 item 7) — a solid absent from the display
+/// cache is simply not picked.
+[[nodiscard]] bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, float tolWorld,
+                                          SelectedEntity* out, double* outRayT = nullptr);
+
+// --- SECTIONPLANE (REQ-342 / ADR-059, GitHub issue #479) -------------------------------------
+
+/// `SECTIONPLANE` — place the section clip plane on a solid's flat face. Opens the face-select step.
+void StartSectionPlaneCommand(AppCommandState& st, std::vector<std::string>& log);
+/// End the face-select step without placing anything (ESC).
+void CancelSectionPlaneCommand(AppCommandState& st);
+/// The one prompt the command shows, so the hint and the log cannot word it differently.
+[[nodiscard]] const char* CadSectionPlanePromptText();
+/// The viewport click that answers "select a flat face". Returns true when a plane was placed;
+/// on any refusal the command stays open and the reason is in \p log.
+bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
+                                const solidpick::Tolerance& tol, std::vector<std::string>& log);
+/// The frame the clip plane is currently built from: the face `SECTIONPLANE` was given, or the
+/// active UCS when it was never given one (D-2026-09-11-b).
+[[nodiscard]] ucs::Ucs CadEffectiveSectionClipFrame(const AppCommandState& st);
+
+// --- The section plane as a manipulable object (REQ-343, GitHub issue #479 acceptance 4-7) -----
+
+/// The clip plane as the renderer will build it this frame. Inactive when the clip is off.
+[[nodiscard]] SectionClipPlane CadSectionClipPlane(const AppCommandState& st);
+
+/// The rectangle the section plane is DRAWN as, built from the same inputs the renderer uses.
+///
+/// **One function, called by both sides.** The renderer draws this rectangle and the pick tests
+/// against it; if they computed it separately and ever differed, the user would click where the
+/// plane is drawn and grab nothing. It also owns the model-bounds walk that `main.cpp` used to do
+/// inline, which is what made two copies possible in the first place.
+[[nodiscard]] SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st);
+
+/// Handles for the selected section plane. Invalid when the plane is off or not selected.
+[[nodiscard]] SectionPlaneGrips CadSectionPlaneGrips(const AppCommandState& st);
+
+/// Which handle \p ray hits, or `None`. \p tolWorld is the grab aperture in drawing units.
+[[nodiscard]] SectionPlaneGrip PickSectionPlaneGrip(const AppCommandState& st, const ray3d::Ray& ray,
+                                                    double tolWorld);
+
+/// One click on the section plane or its handles, in the command layer where a test can drive it.
+///
+/// Grabs a handle, commits an armed drag, toggles the flip handle, or selects/deselects the plane.
+/// Returns true when the click was the section plane's — the caller must then NOT also treat it as
+/// an ordinary selection click.
+bool SubmitSectionPlaneClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorld,
+                             std::vector<std::string>& log);
+
+/// Refresh the armed drag from the cursor. No-op when nothing is armed.
+///
+/// \p snapPoint, when given, is the object-snap point under the cursor (REQ-344). The handle then
+/// lands where that point projects onto its drag axis, so a section plane can be placed exactly on
+/// a midpoint, an endpoint or a face centre instead of wherever the cursor happened to be — which
+/// is what makes the cut a measured thing rather than an eyeballed one.
+///
+/// **In STORAGE coordinates, like \p ray and like the plane itself** — `local = world - origin`.
+/// Everything in this drag is in that frame: the clip frame comes from a solid's face, solids are
+/// stored local like every other store, and the camera ray is the same one the sub-object pick
+/// casts at them. Passing a world point here puts the snap a whole `worldDocumentOrigin` away from
+/// the anchor it is measured against; it was documented as world and called with world until a user
+/// reported the plane "snapping too far the other direction" (2026-09-11).
+///
+/// Only a NAMED feature should be passed. `Surface`, `Edge` and `Face` answer with the point
+/// nearest the cursor, so under 3D OSNAP one is available almost everywhere on a solid, and an
+/// absolute placement driven by those makes the plane skate across the model — see
+/// `CadSnap::SnapClass`, and the gate in `CadUi.cpp` that applies it.
+void UpdateSectionPlaneGripDrag(AppCommandState& st, const ray3d::Ray& ray,
+                                const ray3d::Vec3* snapPoint = nullptr);
+
+/// Refresh \ref AppCommandState::sectionPlaneGripHover. No-op while a drag is armed.
+void UpdateSectionPlaneGripHover(AppCommandState& st, const ray3d::Ray& ray, double tolWorld);
+
+/// Disarm and leave the plane where the drag has already put it. Every command start does this,
+/// through `ResetAllCadDraftTools` — a drag left armed keeps rewriting the clip offset while the
+/// NEXT command takes its picks.
+void CancelSectionPlaneGripDrag(AppCommandState& st);
+
+/// A TRUE cancel: put the plane back where it was when the handle was grabbed, then disarm.
+///
+/// What ESC means. The drag writes the offset and the extent every frame, so disarming alone would
+/// COMMIT whatever the cursor last did — and REQ-343 records that a slide makes no undo entry, so
+/// there would be no way back.
+void AbortSectionPlaneGripDrag(AppCommandState& st);
+
+/// Reverse which half of the model survives, and say so. Also what the flip handle does.
+void ToggleSectionClipFlip(AppCommandState& st, std::vector<std::string>& log);
 /// True if (x,y) is inside the filled region: inside its outer loop (0) and outside every hole loop (REQ-042).
 bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y);
 /// HATCH command (REQ-043): begin picking an internal point.
@@ -5769,9 +6369,15 @@ void ToggleSubObjectSelection(AppCommandState& st, const SelectedSubObject& pick
 /// renderer is not drawing (the rule REQ-084 (d) already applies to the entity pick). Solids with no
 /// cached tessellation are skipped rather than tessellated: a pick must not cost a tessellation
 /// (REQ-318 item 7).
+///
+/// Honours the live section clip (REQ-341) the same way: a face, edge or vertex on the removed side
+/// is not drawn, so it neither answers nor hides a solid behind it.
+///
+/// \p facesPickable false skips the triangles entirely — no face answers and nothing occludes —
+/// which is what a 2D Wireframe view shows.
 [[nodiscard]] bool PickSubObjectAcrossSolids(const AppCommandState& st, const ray3d::Ray& ray,
                                              const solidpick::Tolerance& tol, SelectedSubObject* out,
-                                             solidpick::Pick* outPick = nullptr);
+                                             solidpick::Pick* outPick = nullptr, bool facesPickable = true);
 
 /// ONE sub-object click, whole: pick along \p ray, apply the mutual-exclusion rule, update the
 /// store, and say what happened. Returns true when something was picked.
@@ -6133,6 +6739,16 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
                                double* outMxY, int* outSkipped, const Viewport* vpFilter = nullptr);
 // The camera side of zoom-extents is `zoomframing::FrameWorldRect` (ZoomFraming.hpp) — pure, shared
 // by every fit path, and tested there (REQ-122).
+
+/// The box the section-clip indicator is sized to cover (REQ-341, D-2026-09-16-b), in storage
+/// coordinates: the drawing's extents as ZOOM EXTENTS measures them — every entity kind the clip can
+/// cut, not only solids — with the Z range of the solids when there are any, and the active UCS
+/// origin's elevation otherwise. False for an empty drawing; the caller then centres on the view.
+///
+/// Sized from the whole model rather than the solids alone because the clip cuts linework, meshes,
+/// surfaces and PDFs too, and because the old fallback — centred on the UCS origin — sat millions of
+/// feet off screen in a state-plane drawing with no solids (code review on #478, finding 8).
+bool ComputeSectionClipIndicatorBounds(const AppCommandState& st, ray3d::Vec3* outMin, ray3d::Vec3* outMax);
 
 bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float cy, float* ox, float* oy,
                          float* r);

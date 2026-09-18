@@ -181,6 +181,32 @@ set_property(TARGET libredwg APPEND PROPERTY
 add_library(LibreDWG::libredwg ALIAS libredwg)
 message(STATUS "LibreDWG 0.13.3 vendored (prebuilt third_party/libredwg/lib/win-x64/libredwg.lib)")
 
+# --- Xerces-C: vendored headers + prebuilt static lib (dependency of libE57Format) ---
+if(NOT EXISTS "${GOSURVEY_TP}/xerces-c/lib/win-x64/xerces-c_3.lib")
+  message(FATAL_ERROR "REQ-172: third_party/xerces-c/lib/win-x64/xerces-c_3.lib is missing. See third_party/xerces-c/VENDORED.md.")
+endif()
+add_library(xerces_c STATIC IMPORTED GLOBAL)
+set_target_properties(xerces_c PROPERTIES
+  IMPORTED_LOCATION "${GOSURVEY_TP}/xerces-c/lib/win-x64/xerces-c_3.lib"
+  INTERFACE_INCLUDE_DIRECTORIES "${GOSURVEY_TP}/xerces-c/include")
+if(WIN32)
+  set_property(TARGET xerces_c APPEND PROPERTY INTERFACE_LINK_LIBRARIES ws2_32)
+endif()
+add_library(XercesC::xerces_c ALIAS xerces_c)
+message(STATUS "Xerces-C 3.3.0 vendored (prebuilt third_party/xerces-c/lib/win-x64/xerces-c_3.lib)")
+
+# --- libE57Format: vendored headers + prebuilt static lib (REQ-172, ADR-042) ---
+if(NOT EXISTS "${GOSURVEY_TP}/libe57format/lib/win-x64/E57Format.lib")
+  message(FATAL_ERROR "REQ-172: third_party/libe57format/lib/win-x64/E57Format.lib is missing. See third_party/libe57format/VENDORED.md.")
+endif()
+add_library(e57format STATIC IMPORTED GLOBAL)
+set_target_properties(e57format PROPERTIES
+  IMPORTED_LOCATION "${GOSURVEY_TP}/libe57format/lib/win-x64/E57Format.lib"
+  INTERFACE_INCLUDE_DIRECTORIES "${GOSURVEY_TP}/libe57format/include")
+set_property(TARGET e57format APPEND PROPERTY INTERFACE_LINK_LIBRARIES XercesC::xerces_c)
+add_library(E57Format::E57Format ALIAS e57format)
+message(STATUS "libE57Format 3.4.0 vendored (prebuilt third_party/libe57format/lib/win-x64/E57Format.lib)")
+
 # --- pdfium: vendored prebuilt (chromium/7857, Windows x64) ---
 add_library(pdfium SHARED IMPORTED)
 set_target_properties(pdfium PROPERTIES
@@ -416,6 +442,18 @@ set(GOSURVEY_DOMAIN_SOURCES
   # pick it cannot justify, are decided without a window.
   src/util/solidpick.cpp
 
+  # Point-cloud out-of-core octree (REQ-171/REQ-172, ADR-060) — pure; builds/queries the spatial
+  # index over an in-memory point set, no file IO and no GL calls.
+  src/util/pointcloudoctree.cpp
+
+  # E57 point-cloud reader (REQ-172, ADR-042 (d)) — adapts vendored libE57Format to GoSurvey's
+  # flat interleaved point layout. Delivered first among REQ-172's formats (D-2026-09-17-d).
+  src/io/CadPointCloudE57.cpp
+
+  # .gscloud out-of-core cache codec (ADR-060) — builds/reads the disk-backed octree so a
+  # multi-GB scan is never fully resident in memory.
+  src/util/pointcloudcache.cpp
+
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
   src/util/docinvariants.cpp
   src/util/SaveTrace.cpp
@@ -442,7 +480,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${NLOHMANN_JSON_INCLUDE}
   ${CMAKE_BINARY_DIR}/generated
 )
-target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg)
+target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32, no glfw — the windowed app adds those itself.
@@ -500,6 +538,7 @@ add_executable(GoSurvey
   src/ui/PdfAttachDialog.cpp
   src/ui/CadUi_InsertBlock.cpp
   src/ui/CadUi_BlockAuthoring.cpp
+  src/ui/CadUi_ConnectionModes.cpp
 
   # I/O (windowed application only)
   src/io/PdfPlot.cpp
@@ -554,6 +593,7 @@ target_link_libraries(GoSurvey PRIVATE
   glew_static
   pdfium
   LibreDWG::libredwg
+  E57Format::E57Format
   md4c
 )
 target_include_directories(GoSurvey PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/devshell)
@@ -783,7 +823,7 @@ if(GOSURVEY_BUILD_HEADLESS)
   # gosurvey_domain brings imgui_core. Adding imgui_backend here would drag in glfw and OpenGL
   # and silently undo the property this target exists to hold. LibreDWG::libredwg is linked
   # explicitly because gosurvey_domain compiles LibreDwgCad.cpp without exposing the lib.
-  target_link_libraries(gosurvey_headless PRIVATE gosurvey_domain LibreDWG::libredwg)
+  target_link_libraries(gosurvey_headless PRIVATE gosurvey_domain LibreDWG::libredwg E57Format::E57Format)
 
   # %DATA% in a transcript resolves to this, so a fixture is named relative to the repository
   # rather than to whoever's checkout the transcript was written in.
@@ -813,7 +853,7 @@ if(GOSURVEY_BUILD_HEADLESS)
     ${NLOHMANN_JSON_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
-  target_link_libraries(GsJsonDwgFixture PRIVATE gosurvey_domain LibreDWG::libredwg)
+  target_link_libraries(GsJsonDwgFixture PRIVATE gosurvey_domain LibreDWG::libredwg E57Format::E57Format)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -857,6 +897,11 @@ if(GOSURVEY_BUILD_TESTS)
     tests/UcsTests.cpp
     tests/Ray3dTests.cpp
     tests/CameraTests.cpp
+    # REQ-341 live section clip (GitHub #149 acceptance 6). Header-only and pure for the same reason
+    # Camera is, and for one more: the plane the shader receives is NOT in world coordinates, and a
+    # version that forgets that is exact at the origin and 2,196,000 ft out at state-plane
+    # coordinates. That cannot be checked by looking at a window.
+    tests/SectionClipTests.cpp
     # REQ-310 3D crosshair (GitHub #144). Header-only and pure for the same reason Camera is: an
     # axis arm drawn along the wrong screen direction still looks like a 3D cursor, so the sign
     # conventions need a test that does not depend on a window.
@@ -920,6 +965,19 @@ if(GOSURVEY_BUILD_TESTS)
     tests/BrepJsonTests.cpp
     tests/SolidPickTests.cpp
     src/util/solidpick.cpp
+    # REQ-171/REQ-172, ADR-060 — the octree is pure Domain code (no file IO, no GL), so it is
+    # pinned directly here, the same way BrepTests pins src/util/brep.cpp with no window.
+    tests/PointCloudOctreeTests.cpp
+    src/util/pointcloudoctree.cpp
+    # REQ-172 — E57 reader round-trip (writes a tiny fixture E57 with libE57Format's own Simple
+    # Writer, then reads it back) and malformed/missing-file refusal. Pinned directly, same as
+    # AcisSatParserTests pins its own reader above.
+    tests/CadPointCloudE57Tests.cpp
+    src/io/CadPointCloudE57.cpp
+    # ADR-060 — .gscloud out-of-core cache build/read/stamp round-trip. Pinned directly, same as
+    # the octree and E57 reader above.
+    tests/PointCloudCacheTests.cpp
+    src/util/pointcloudcache.cpp
     tests/MeshGsRoundTripTests.cpp
     tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp
@@ -948,6 +1006,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/SurfaceVolumeTests.cpp
     tests/CadTableTests.cpp
     tests/CadBlockTests.cpp
+    tests/CadPipeRunTests.cpp
     tests/SurfaceStatsTests.cpp
     tests/WatershedTests.cpp
     tests/TinVolumeTests.cpp
@@ -1120,7 +1179,7 @@ if(GOSURVEY_BUILD_TESTS)
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
-  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg)
+  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
   gosurvey_target_warnings(GoSurveyTests)
   gosurvey_enable_pch(GoSurveyTests)
 
@@ -1140,6 +1199,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
     tests/GsIoDimAngularTests.cpp
+    tests/GsIoPipeRunTests.cpp
     tests/GsIoViewportCameraTests.cpp
     tests/GsMigrateLegacyBreaklineTests.cpp
     # REQ-302/ADR-053 (issue #323) — ribbon layout measure pass. Header-only, but needs a live
@@ -1160,6 +1220,10 @@ if(GOSURVEY_BUILD_TESTS)
     # reference, mutual exclusion and cross-solid depth order. Needs gosurvey_domain for
     # SubmitSubObjectPick / ExpireSubObjectSelection, like ViewportUcsTests above.
     tests/SubObjectSelectionTests.cpp
+    # REQ-341 (code review on #478): the section clip's command-layer half — per-tab state, picks
+    # and snaps that honour it, SECTION's selection guard, and the indicator's sizing. Needs
+    # gosurvey_domain, like SubObjectSelectionTests above.
+    tests/SectionClipStateTests.cpp
     # REQ-060 (issue #148 Phase 5 slice 4b) — the TRANSLATE gizmo: the skew-line solve, the anchor,
     # and the two negatives (a click that misses every handle, an empty selection). Needs
     # gosurvey_domain for SubmitGizmoClick / ApplyTranslationToSelection.
@@ -1174,6 +1238,10 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GizmoSubObjectMoveTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
+    # issue #486 increment B2 (REQ-345) — the PIPERUN command layer: StartPipeRunCommand /
+    # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
+    # with GoSurveySnapTests (gosurvey_domain), not GoSurveyTests, like CadBlockImportTests above.
+    tests/CadPipeRunCommandTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp
@@ -1185,6 +1253,11 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-105 (issue #382) — DIST. Needs gosurvey_domain for ProcessCommandLineSubmit /
     # StartDistCommand, like TrimLinePreviewTests above.
     tests/DistCommandTests.cpp
+    # OFFSET distance-first flow + select/side loop (REQ-103), and double-precision offset math at
+    # state-plane coordinate magnitude. Needs gosurvey_domain for ProcessCommandLineSubmit /
+    # SubmitViewportPick, like DistCommandTests above.
+    tests/OffsetCommandTests.cpp
+    tests/DefaultTemplateOriginTests.cpp
     # GitHub issue #396 — EXTRUDE's typed height must take its sign from the live preview
     # direction. Needs gosurvey_domain for HandleExtrudeTextInput, like DistCommandTests above.
     tests/ExtrudeTypedHeightDirectionTests.cpp
@@ -1213,7 +1286,7 @@ if(GOSURVEY_BUILD_TESTS)
     ${NLOHMANN_JSON_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
-  target_link_libraries(GoSurveySnapTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg)
+  target_link_libraries(GoSurveySnapTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
   target_compile_definitions(GoSurveySnapTests PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
   gosurvey_target_warnings(GoSurveySnapTests)

@@ -1,0 +1,33 @@
+<section class="card">
+  <div class="filters" id="user-filters">
+    <input type="search" name="q" placeholder="Search email or auth0_sub…" class="input"
+      hx-get="/partials/users" hx-target="#users-body" hx-trigger="keyup changed delay:300ms, search"
+      hx-include="#user-filters">
+    <select name="tier" class="input" hx-get="/partials/users" hx-target="#users-body" hx-trigger="change" hx-include="#user-filters">
+      <option value="">All tiers</option>
+      <option value="free">free</option>
+      <option value="pro">pro</option>
+      <option value="enterprise">enterprise</option>
+    </select>
+    <button class="btn" hx-get="/partials/users" hx-target="#users-body" hx-include="#user-filters">Apply</button>
+    <a class="btn btn-ghost" href="/accounts">Reset</a>
+  </div>
+  <div class="muted small" style="margin-top:8px">Auth: Auth0 RS256 via JWKS · domain <span class="mono">dev-hqk2tndprbftps0k.us.auth0.com</span> · audience <span class="mono">https://gosurvey-accounts/</span>. Separate D1 from telemetry — ADR-037(e).</div>
+</section>
+
+<section class="card" style="padding:0; overflow:hidden">
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>auth0_sub</th><th>Email</th><th>Tier</th><th>Created at</th></tr></thead>
+      <tbody id="users-body" hx-get="/partials/users" hx-trigger="load" hx-swap="innerHTML">
+        <tr><td colspan="4" class="muted" style="padding:18px; text-align:center">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card muted small">
+  <strong>Wrangler equivalent</strong>
+  <pre class="code">npx wrangler d1 execute gosurvey-accounts --remote --config tools/accounts-worker/wrangler.toml --command "SELECT * FROM users"</pre>
+  <div>Worker: <span class="mono">GET /v1/license</span> with Bearer JWT → verifies signature, expiry, iss, aud → upserts users row. Tier is not yet enforced by app.</div>
+</section>

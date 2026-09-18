@@ -1,0 +1,44 @@
+<section class="card">
+  <div class="filters" id="ping-filters">
+    <input type="search" name="q" placeholder="Search install_id, email, version, country…" class="input"
+      hx-get="/partials/pings" hx-target="#pings-body" hx-trigger="keyup changed delay:300ms, search"
+      hx-include="#ping-filters">
+    <select name="event" class="input" hx-get="/partials/pings" hx-target="#pings-body" hx-trigger="change" hx-include="#ping-filters">
+      <option value="">All events</option>
+      <option value="install">install</option>
+      <option value="active">active</option>
+    </select>
+    <select name="channel" class="input" hx-get="/partials/pings" hx-target="#pings-body" hx-trigger="change" hx-include="#ping-filters">
+      <option value="">All channels</option>
+      <option value="stable">stable</option>
+      <option value="beta">beta</option>
+    </select>
+    <select name="version" class="input" hx-get="/partials/pings" hx-target="#pings-body" hx-trigger="change" hx-include="#ping-filters">
+      <option value="">All versions</option>
+      {{range .Versions}}<option value="{{.}}">{{.}}</option>{{end}}
+    </select>
+    <button class="btn" hx-get="/partials/pings" hx-target="#pings-body" hx-include="#ping-filters">Apply</button>
+    <a class="btn btn-ghost" href="/telemetry">Reset</a>
+  </div>
+  <div class="muted small" style="margin-top:8px">Indexes: <span class="mono">ux_pings_install_once</span> · <span class="mono">ix_pings_event_day</span> · <span class="mono">ix_pings_version</span> · Dropped <span class="mono">ux_pings_active_daily</span> per D-2026-08-23.</div>
+</section>
+
+<section class="card" style="padding:0; overflow:hidden">
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr>
+        <th>ID</th><th>TS (UTC)</th><th>Day</th><th>Event</th><th>Version</th><th>Channel</th><th>OS</th><th>Country</th><th>Email</th><th>Install ID</th>
+      </tr></thead>
+      <tbody id="pings-body"
+        hx-get="/partials/pings" hx-trigger="load" hx-swap="innerHTML">
+        <tr><td colspan="10" class="muted" style="padding:18px; text-align:center">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card muted small">
+  <strong>Wrangler equivalent</strong>
+  <pre class="code">npx wrangler d1 execute gosurvey-telemetry --remote --config tools/telemetry-worker/wrangler.toml --command "SELECT * FROM pings ORDER BY id DESC LIMIT 20"</pre>
+  <div>Worker verifies fields installId/event/version/channel/os before INSERT OR IGNORE. See <span class="mono">tools/telemetry-worker/src/index.js</span>.</div>
+</section>

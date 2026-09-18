@@ -2849,6 +2849,76 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (m) states the rule both follow — *a recipe that can still describe its solid is kept and updated;
   one that cannot is dropped.* A rotated box is still a box; a box with a corner pulled out is not.
 
+**(o) An extrude or revolve that IS a cylinder or cone says so.**
+(2026-09-16, D-2026-09-16-c, REQ-314 amended, TASK-261, GitHub issue #515.)
+
+  **Context.** `Slice` — and `SectionLoop`, built on it — cuts a curved solid only through the
+  cylinder/cone recognisers, and those read the recipe. Under (e) a feature result carried none, so a
+  circle `EXTRUDE`d into a cylinder, or a rectangle `REVOLVE`d a full turn about one of its edges,
+  was refused by every cut the identical `CYLINDER` primitive accepts. Same geometry, different
+  answer, decided by the command that made it.
+
+  **Decision.** When the result is *exactly* a right circular cylinder or cone, the operation stamps
+  the primitive's recipe — the same `Cylinder` / `Cone` recipe `MakeCylinder` / `MakeCone` write:
+  - `Extrude` of a profile that is one full circle, along its own normal → `Cylinder`;
+  - a full-turn `Revolve` of an all-straight profile of three or four edges with one edge on the axis
+    and the edges leaving its ends perpendicular to it (rectangle → `Cylinder`; right trapezoid →
+    `Cone` frustum; right triangle → `Cone` with an apex).
+
+  The larger circle is the base, as `MakeCone` requires. The **topology is untouched**: the stamp
+  runs only after the operation has built and validated its own result, so every refusal (e) and
+  the operation already make is unchanged, and a profile that merely resembles one of these shapes
+  keeps `PrimitiveKind::None`. Tolerances are the operations' own (`planeEps`, `axisEps`: 1e-6 of
+  model scale) — except equal radii, which are judged against the RADIUS (1e-6 of it), because a
+  height-scaled tolerance called a real taper of 0.0009 over 1000 ft a cylinder (code review on #515,
+  corrected 2026-09-16). A profile's arcs must also carry each vertex to the next.
+
+  **This refines (e) rather than contradicting it.** (e) said extrude and revolve *may* record a
+  recipe; this is the first increment that does, and only where the recipe is a true description.
+  The recipe is still never read by validity, mass properties or tessellation. **Visible
+  consequence, accepted by the user when the choice was put:** `SOLIDLIST`, the Properties panel and
+  `.gs` now call such a solid `Cylinder` / `Cone` rather than `Solid`. `.gs` already persists a
+  recipe, so no format version bump.
+
+**(p) A cut trusts a recipe only when it fits, and recognises a cylinder or cone that has none.**
+(2026-09-17, D-2026-09-17-a, REQ-314 amended, TASK-261, GitHub issue #515 follow-up.)
+
+  **Context.** Amendment (o) stamps a recipe where the operation builds a cylinder or cone, and the
+  curved slice recognisers rebuild both pieces from that recipe. The code review on #515 found two
+  gaps that stamping cannot close. (1) **Trust:** a recipe that does not describe its solid — a `.gs`
+  whose recipe frame is missing or damaged loaded at the world origin — would cut the wrong geometry
+  with no error. (2) **Coverage:** a solid that IS a cylinder or cone but carries no recipe was still
+  refused: extrusions, revolves and lofts saved before #515, Boolean results, straight sweeps.
+
+  **Decision.** `Slice` (and so `SectionLoop`) decides which recipe the recognisers see:
+  - the solid's own Cylinder / Cone recipe, when the primitive it describes has the solid's volume,
+    area and bounds (to 1e-6 of the model size);
+  - otherwise a recipe **recognised from the geometry**, when the solid is exactly one right circular
+    cylinder or cone. Every edge is a line or an arc. Every arc is about one axis, with one radius at
+    each end (an end with no arc is an apex), and any ring part-way along lies on the line between
+    them. Every planar face is perpendicular to the axis. Every curved face — cylinder, cone or NURBS
+    — lies on that cone at sample points. The candidate primitive then matches the solid's volume,
+    area and bounds. A stepped shaft, a twisted loft, a barrel and a drilled solid each fail one
+    check;
+  - otherwise no recipe, so a Cylinder / Cone recipe that does not fit is refused rather than cut.
+
+  The stored recipe is never changed; recognition is per cut. In the same change, the `.gs` loader
+  drops a described recipe whose frame is missing or unreadable (ADR-045 (c): the topology is the
+  truth), while a kind-None recipe's frame is still read and written back byte-identically (REQ-079).
+
+  **Relation to D-2026-09-16-c.** That decision chose build-time stamping over cut-time recognition,
+  for its visible label and reuse of the recognisers. This amendment keeps the stamp and adds
+  recognition behind it, at the user's request once the review showed what stamping alone leaves
+  out. The label a solid shows is still set only by (o).
+
+  **Cost.** A curved cut now measures the solid (analytic mass properties, or quadrature for NURBS
+  faces) once or twice before slicing. That is acceptable for a command a user runs; nothing
+  per-frame calls `Slice`.
+
+  **(o) addendum, same change:** a two-circle coaxial loft is recognised **before** its NURBS ribbons
+  are built, so the loft — and the live LOFT preview, which calls it every frame — no longer builds
+  and validates a solid only to discard it.
+
 ### ADR-047 — Curved polyline segments: a per-vertex bulge array, arc-aware POLYLINE and JOIN   (2026-09-02, accepted)
 
 - **Status:** accepted (2026-09-02, D-2026-09-02-e). Storage is a parallel per-vertex bulge array —
@@ -3128,6 +3198,25 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
      two-or-more equal-edge-count planar profiles.
   2. **Sweep** — a profile along a line / arc / bulge-polyline path with a rotation-minimizing frame
      and optional twist; agreement asserted against extrude and revolve where the path is analytic.
+- **Amendment (2026-09-16, D-2026-09-16-c, REQ-315 amended, TASK-261, GitHub issue #515) — a loft
+  between two coaxial circles is BUILT as the cylinder or cone it is.** (g) stored every loft as
+  topology with NURBS ribbon sides and no recipe, so a loft between two circles on a shared axis —
+  exactly the solid `MakeCylinder` / `MakeCone` build — was refused by every cut the primitive
+  accepts, because `Slice`'s curved recognisers read the recipe. Stamping a `Cone` recipe on that
+  loft would describe an analytic cone while its stored faces were NURBS, so the loft is instead
+  **built** by `MakeCylinder` / `MakeCone` — analytic faces and the primitive's recipe — when it has
+  exactly two profiles, both one full circle, on parallel planes, with the second centre on the
+  first's normal, **and no twist**: the loft pairs vertex j with vertex j, so every such pair must lie
+  in one plane through the axis on the same side of it. Two circles out of step (a top circle turned
+  90 degrees, or one facing down) loft to a pinched band, not a cylinder, and keep the ribbon. The
+  axis and twist tests are relative to the model's size, because circle normals are stored in float
+  and a fixed 1e-9 refused every pair drawn in a tilted UCS. (The twist and tolerance rules were added
+  after the code review on #515, 2026-09-16.) It runs after the ordinary loft has built and validated,
+  so every refusal stands; circles off a shared axis, out of step with each other, and every loft of
+  three or more profiles keep the freeform ribbon and no recipe. Volume, area and topology (4
+  vertices, 6 edges, 4 faces) are those the ribbon already produced, now in closed form. The sibling case for flat faces — a loft between similar parallel
+  polygons, whose sides are planar but stored as NURBS — is GitHub #519, not this amendment.
+
 ### ADR-050 — POLYSOLID: offset-and-mitre in the kernel   (2026-09-03, accepted)
 - Context: REQ-317 asks for a wall swept along a picked path. ADR-045 settled how a *primitive* is
   built — a formula, a frame, a closed shell — and ADR-046 settled the feature operations that cut
@@ -3820,6 +3909,132 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
 - **Out of scope:** fetching notes from GitHub; a second About dialog; rich HTML/CSS; images inside
   the markdown body beyond what a minimal ImGui layer can reasonably show (links open externally).
 
+### ADR-057 — Shared-boundary weld: a bounded first B-rep stitching primitive, flat coaxial faces only   (2026-09-14, accepted, narrowed)
+
+- **Status:** accepted, full scope (2026-09-16, D-2026-09-14-d/e, D-2026-09-16-a). Backs REQ-339.
+  Decision (c) below (the shoulder-crossing cut) was attempted and withdrawn 2026-09-14, then
+  delivered 2026-09-16 via a kernel-integrator extension — see both amendments at the end; decisions
+  (a), (b), (d) stand as implemented, decision (e) reads unchanged.
+- **Context.** REQ-337/338 gave the Boolean engine a way to decompose and fold a *coaxial cylinder
+  stack* using closed-form interval arithmetic along the shared axis — every increment stays valid
+  because a stack's cross-section at any z is always a full disk of one radius. Issue #497 breaks that
+  assumption: a radial cross-hole through one or more segments removes material from the *side* of a
+  segment, which the interval-arithmetic model has no way to represent. The only way to cut it
+  correctly is to isolate the affected segment(s) as their own solid, cut that solid with the
+  existing curved-cylinder recognisers (which already handle a cross-hole through a bare cylinder),
+  and then re-attach the drilled result to whatever untouched segments remain. That last step —
+  joining two independently valid solids back into one manifold solid — has no primitive anywhere in
+  the kernel. `WeldPlanarSolid` (the closest existing thing) only merges flat polygon fragments
+  produced by the planar Boolean clipper; it knows nothing about a general solid's faces, edges, or
+  vertices.
+- **Decision:**
+  (a) **Scope the weld to exactly one shared-face shape.** The two solids being welded are known, by
+      construction (they came from splitting one coaxial stack), to share one face that is flat,
+      perpendicular to the stack's axis, and bit-for-bit congruent between the two sides — a plain
+      disk or annulus at the exact z where the split happened. `WeldAtSharedFace` is written and
+      tested against exactly this shape. It is not a general "find where two arbitrary solids touch"
+      routine — the caller supplies the shared face identity, it does not discover it.
+  (b) **The weld removes the shared face from both solids and merges the remainder.** Because the
+      face is congruent on both sides, its boundary loop (and every vertex/edge on it) is identified
+      pairwise between the two solids; the merged solid's face list is the union of both sides' other
+      faces, re-pointed at the shared vertices/edges instead of each side's own duplicate copies. No
+      new geometry is computed — every remaining face's surface and boundary are copied verbatim from
+      whichever side produced them.
+  (c) **The stack-spanning cutter recogniser drives the weld, not the other way around.** Given a
+      cutter crossing one shoulder, the affected two (or more, though only one shoulder is accepted
+      per REQ-339's scope) segments are rebuilt as their own temporary coaxial-stack solid via the
+      existing `BuildCoaxialStack`, cut with the existing curved recognisers (extended only enough to
+      accept a stepped-radius wall rather than a bare cylinder — no new surface kind), then welded
+      onto the stack's remaining untouched segment(s) at the (now single) shoulder that still needs
+      joining.
+  (d) **Anything that is not this exact shape refuses by name**, the same REQ-201 discipline every
+      prior increment used. A caller asking to weld two solids whose claimed shared face is not flat,
+      not congruent, or not axis-perpendicular is a programming error inside this increment's own
+      code, not a user-facing refusal — it is guarded by an assertion, not a `Problem::`, because no
+      code path in REQ-339's scope can produce that call.
+  (e) **Not a general B-rep stitcher.** REQ-338's 338d (the eventual general classification-based
+      engine) will need real surface-pair intersection curves and arbitrary-shape face trimming to
+      join solids that don't share a pre-known congruent face. `WeldAtSharedFace` does not attempt
+      that and is not a stepping-stone implementation of it beyond "a weld primitive exists in the
+      codebase at all" — 338d, if and when it is scoped, is expected to need its own, more general
+      joining logic.
+- **Consequences:** one new Domain primitive (`brep::WeldAtSharedFace`) and one new stack-spanning
+  cutter recogniser in `src/util/brep.cpp`; no new `Solid` field, no `.gs` format change (the result
+  is topology exactly like any other Boolean result); no Commands-layer change (existing
+  `FoldBoolean`/`CommitBoolean` dispatch is unchanged, the new recogniser is reached through
+  `TryBooleanCurved`'s existing dispatch). Establishes the pattern (isolate affected sub-solid, cut,
+  weld back at a known-congruent boundary) that a future, more general weld would extend rather than
+  replace.
+- **Out of scope:** welding at a non-flat or non-axis-perpendicular boundary; discovering a shared
+  face rather than being told it; a cross-hole spanning more than one shoulder; cone/sphere/torus
+  pieces in the stack; the general classification-based engine (REQ-338 338d).
+- **Amendment (2026-09-14, D-2026-09-14-e) — decision (c) withdrawn; `WeldCoaxialCap` added in its
+  place.** Two problems surfaced during implementation, both found by the kernel's own checks rather
+  than by inspection — exactly the outcome REQ-201 is there to guarantee:
+  - **The shoulder-crossing cut itself.** `BuildCoaxialStepRadialSubtract` (decision (c)'s
+    stack-spanning cutter) produced a combinatorially sound, manifold topology — right vertex/edge/
+    face counts, every edge used exactly twice in opposite directions, Euler characteristic 0
+    (correctly genus-1) — but `Validate`'s own two-reference-point volume-closure probe caught a real
+    defect: the measured volume disagreed depending on which point it was measured about. Root cause:
+    the wall's mouth curve there needs clipping by a THIRD surface (the shoulder plane) in addition to
+    the cutter, but `IntegrateCylinderFaceNumeric`/`IsectStripAt` — the numeric area integrator every
+    Intersection-edge cylinder face already goes through, unchanged since REQ-314 B2b-2 — only ever
+    searches for where ONE other surface (the cutter) crosses the wall. This is a genuine gap in that
+    shared numeric integrator, not a defect specific to this recogniser's topology, and fixing it
+    (letting `IsectStripAt` accept an optional clipping surface) is its own future kernel task.
+    Decision (c) is withdrawn rather than shipped with a measurement the kernel cannot itself verify;
+    `SubtractRadialCrossHoleThroughStack` refuses (returns `false`, not a `Problem`) a cutter that
+    would cross a shoulder, so the caller's ordinary `Problem::BooleanCurvedFace` refusal stands.
+  - **`WeldAtSharedFace` alone could not join the single-segment case's own neighbours.** Decision (a)
+    assumed the two solids being welded share an EXACTLY congruent cap — true only when the
+    neighbouring segment happens to have the same radius as the drilled one, which is the exception,
+    not the rule, for a real stepped stack (a uniform-radius "stack" is just one segment). The fallback
+    (`BuildBranchPipeSubtract`, decision (c)'s single-segment case) also turned up a second, unrelated
+    mismatch: it places its own two cap-rim vertices at local `(0, ±R, z)` while `BuildCoaxialStack`
+    places its at `(±R, 0, z)` — both correct in isolation, simply disagreeing about which axis carries
+    the seam, so position-matching between them never finds a coincidence regardless of which frame
+    axis the caller picks. **`WeldCoaxialCap`** replaces `WeldAtSharedFace` for this join: equal radii
+    (the rare case) fall through to `WeldAtSharedFace` unchanged (with the caller now aligning the
+    seam axis so it actually works); unequal radii (the common case) drop both caps and connect the
+    two solids with one new annular ring face, reusing each side's own two existing rim edges VERBATIM
+    — no new vertex/edge matching, no recomputed geometry. This works because a solid's top-cap and
+    bottom-cap winding conventions (`BuildCoaxialStack`'s own `matBelow` rule) already happen to be
+    exactly the winding the new ring's inner-or-outer role needs, in both of the two cases that can
+    arise — verified by construction/testing, not merely asserted.
+- **Consequences of the amendment:** `WeldCoaxialCap` (with its own equal-radius fallback to
+  `WeldAtSharedFace`) is the primitive actually used by `SubtractRadialCrossHoleThroughStack`;
+  `BuildCoaxialStepRadialSubtract` was written, found to fail the kernel's own volume-closure check,
+  and removed rather than left in the tree half-working. `WeldAtSharedFace` itself is unchanged and
+  still exists as the equal-radius primitive `WeldCoaxialCap` delegates to.
+- **Second amendment (2026-09-16, D-2026-09-16-a) — decision (c) re-delivered, via `IsectStripAt`
+  itself rather than a recogniser-local workaround.** GitHub issue #504 continued from where the
+  first amendment left off: `IsectStrip` (`src/util/brep.cpp`) gained an optional second bound
+  (`other2`/`clipZ`) alongside the existing single `other` — used two ways, both driven by the same
+  underlying data (no new `Solid`/`Edge` field; the second bound is inferred from a loop whose
+  Intersection edges already reference two distinct "other" surfaces, or a loop mixing Intersection
+  and plain edges where the curve meets a rim at exactly one end). A coaxial-stack wall band's own
+  bite clips to the shoulder rather than running past it into the neighbour segment's territory; a
+  cutter-lining face spanning the shoulder picks the nearer wall's own crossing per longitude. Three
+  further defects surfaced and were fixed during implementation (all caught by REQ-201's own
+  volume-closure probe, never shipped): the root-search window, sized from the face's own vertex
+  span, could fall short of a wall band's far root (which can sit as far as the cutter's own radius
+  from the cutter's axis, unrelated to the face's own dimensions) — widened to always reach it; the
+  found interval was being used as material directly rather than as the interval to SUBTRACT from
+  the (mostly full) band, silently keeping too little; and Gauss quadrature converges slowly across
+  the kink where the bite starts or the active wall switches, so the integrator now locates that
+  kink and integrates each smooth side separately rather than adding panels.
+  `BuildCoaxialStepRadialSubtract` is back in the tree, its topology unchanged from the withdrawn
+  attempt (20v/30e/10f, χ=0) — only the integrator it relies on needed the fix.
+  `SubtractRadialCrossHoleThroughStack` dispatches to it for the `hiIdx == loIdx + 1` case.
+- **Consequences of the second amendment:** `IsectStrip`/`IsectStripAt`/`MakeIsectStrip` gain the
+  `other2`/`hasClip` machinery, used by every existing Intersection-edge cylinder face only when
+  its own narrow trigger conditions hold (a single-loop face with two distinct "other" surfaces, or
+  a curve meeting a rim at exactly one end of a single loop) — every pre-existing shape (REQ-314
+  B2b-2's lens/branch-pipe faces, which mix a curve with two seams in one loop but close on
+  themselves at BOTH ends) is unaffected, verified by the full suite passing unchanged. No new
+  `Solid`/`Edge` field, no `.gs` version bump — the extension reads structure the topology already
+  carries.
+
 ### ADR-055 — The centroid is integrated by quadrature over the exact surfaces, in world axes, about a solid-local origin   (2026-09-09, accepted)
 
 - **Status:** accepted (2026-09-09, D-2026-09-09-h, GitHub issue #149 acceptance 4). Backs REQ-334.
@@ -3883,3 +4098,284 @@ an area.** Deliberately different answers from two neighbouring functions. A cen
 volume-**weighted**, so a shell enclosing part of space twice makes it exactly as meaningless as the
 volume it is weighted by; a single face's area is a property of one bounded patch and stays well
 defined. The rule is the quantity's own nature, not consistency for its own sake.
+
+### ADR-058 — The section clip is a shader uniform, rebased onto the view anchor by the renderer   (2026-09-10, accepted)
+
+- **Status:** accepted (2026-09-10, D-2026-09-10-e, GitHub issue #149 acceptance 6). Backs REQ-341.
+- **Context.** `#149` acceptance 6 asks that "section clipping updates live as the plane moves". No
+  clip-plane machinery existed anywhere in `src/render/` — the whole directory is `Camera.hpp`,
+  `ViewportProjection.hpp` and `ViewportRenderer.{hpp,cpp}` — so unlike the four criteria before it,
+  this one had no foundation to extend. Probe P7 established the shape before any code was written.
+- **Decision.**
+
+  **(a) The plane is a `gl_ClipDistance[0]` uniform, not a change to the camera or the geometry.**
+  Every vertex shader that draws model geometry gains one `uniform vec4 uClipPlane` and one line
+  writing `gl_ClipDistance[0]`. `uMVP` and every path that builds it are untouched, which is what
+  keeps REQ-058's plan-view parity guarantee intact — the alternative, folding a clip into the
+  projection, would put this feature inside the one matrix the whole 3D programme rests on. Measured
+  as available: `GL_MAX_CLIP_DISTANCES` is 8 on the reference machine, and all four of the app's
+  vertex shaders compile with the edit applied.
+
+  **(b) The clip is applied per FRAME, never by regenerating geometry.** This is what "live" means
+  in the acceptance criterion, and it is why the plane is a uniform rather than a filter over the
+  display cache: moving the plane changes the next frame and invalidates nothing —
+  `cadGpuRevision`, the mesh cache and the solid batch signature are all untouched. A clip that
+  re-tessellated would be correct and useless, since the thing being asked for is a boundary the
+  user drags.
+
+  **(c) The command layer states the plane in WORLD coordinates; the RENDERER rebases it.** This is
+  the load-bearing decision. `ViewportRenderer` does not upload world coordinates: vertices arrive
+  with XY relative to the view anchor and Z absolute, and the anchor **is the pan point**
+  (`viewAnchorX = panX = cam.targetX`), so it moves whenever the user pans. The rebasing therefore
+  belongs to the renderer, because the anchor is the renderer's own float-precision device and no
+  caller should have to know it exists.
+
+  **What the wrong version looks like, measured rather than argued** (probe P7, 2026-09-10):
+  a plane handed to the shader in world coordinates is **exact at the origin**, sits at
+  `anchor + c` instead of `c` — **2,196,000 ft out at easting 2.196e6**, 2,542,755.99 ft out on an
+  oblique plane there — and **moves one foot for every foot the view pans**. A *horizontal* cut is
+  exact in both versions, because the anchoring covers X and Y only. So the first plane anyone tries
+  (a level cut) and any test written at the origin both pass a badly wrong implementation. Pinned by
+  `SectionClipTests`, which measures where the plane actually lands by bisection rather than
+  asserting that two answers merely differ.
+
+  The rebased constant is computed in **double and narrowed once**: at survey magnitude `c` and the
+  anchor term are both ~2.2e6 and their difference is small, so the float that reaches the GPU
+  carries the offset at full precision. Computed in float, `c` would quantize to about 0.25 ft —
+  125x REQ-101's ±0.002 ft.
+
+  **(d) Model geometry clips; UI overlays do not.** The renderer already draws that distinction for
+  depth (`depthForGeometry` / `depthForOverlay`, "overlays are UI, never occluded"), and the clip
+  follows the same line for a related reason: a selection highlight or a snap marker that vanished
+  into the cut would be hiding the very thing the user is pointing at. The **grid** is excluded as
+  well, being a drafting aid drawn *on* the UCS plane and therefore coincident with the clip plane at
+  offset 0.
+
+  `GL_CLIP_DISTANCE0` is disabled unconditionally at the end of `RenderScene`. ImGui draws the whole
+  interface immediately afterwards with shaders that never write `gl_ClipDistance`, and a shader that
+  leaves it unwritten while the state is enabled has **undefined** clip distances — so a missing
+  disable can delete arbitrary parts of the UI. For the same reason the geometry shaders write
+  `gl_ClipDistance[0]` unconditionally and the plane is *neutralised* to `(0,0,0,1)` when inactive,
+  rather than the shaders branching or being permuted.
+
+  **(e) Increment 1 clips GL geometry only, and REQ-341 says so.** Dimensions, annotation text and
+  line-pattern hatches are drawn by the ImGui overlay through `Camera::WorldToScreen`, not by the
+  renderer, and no GPU clip plane can reach them. Three options were weighed: state the limit;
+  clip those on the CPU at each `WorldToScreen` site; or move them into GL. The first was chosen —
+  the acceptance criterion is met as written, and the other two are a rendering-architecture change
+  disproportionate to one criterion of one phase. **Recorded as a stated limit so it reads as a
+  decision rather than an oversight**, and so the cost of closing it is written down before anyone
+  meets it as a surprise.
+
+  **(f) The cut is not capped, and that is deferred by name.** A clip plane removes fragments; it
+  does not close the hole it leaves. With no face culling anywhere in the renderer, a clipped solid
+  shows its interior surfaces rather than a cut face — measured, not assumed: the centre-pixel depth
+  moves by exactly the box's own depth extent when the near half is cut away. Capping is REQ-341
+  increment 2, and `brep::SectionLoop` (REQ-335, shipped in the previous slice) already returns
+  precisely the cross-section geometry a cap needs.
+- **Consequences.** One uniform on four programs, one GL-free header (`src/render/SectionClip.hpp`)
+  holding all the arithmetic so it is unit-testable without a window — the same reason `Camera.hpp`
+  is header-only (ADR-002) — and no change to the camera, the geometry pipeline, the display caches
+  or any document type. The feature's whole risk sits in one function, `SectionClipToShaderVec4`,
+  which is why that function carries the measured numbers in its comment and has a test per failure
+  mode.
+- **Alternatives rejected.** *Fold the clip into the projection matrix* — puts a view toggle inside
+  the matrix REQ-058's parity guarantee depends on. *Clip on the CPU by filtering the display cache*
+  — correct, and it rebuilds geometry on every drag, which is the one thing (b) exists to avoid.
+  *Discard in the fragment shader* — works, costs a branch on every fragment of every pass, and
+  `gl_ClipDistance` is the hardware path built for exactly this. *Let the caller pass an
+  anchor-relative plane* — spreads knowledge of a renderer-private precision device to every call
+  site, and would have to be recomputed by the caller on every pan.
+- **Amendment (2026-09-16, D-2026-09-16-b, code review on #478).**
+
+  **(g) One anchor per DRAW, not per frame.** (c) rebased the plane onto the view anchor once a
+  frame, and that is right only for geometry uploaded against the view anchor that frame. The
+  linework cache, the solid batches and the meshes are uploaded once and drawn against the anchor
+  *they* were built at until the pan drifts past a budget, with the difference absorbed in their own
+  `uMVP`. Packed against the current pan, a non-horizontal cut on those sat
+  `n.xy · (cachedAnchor − pan)` off, slid as the user panned, and jumped back when the cache rebuilt —
+  (c)'s "moves one foot per foot of pan", reached by a second route. So every draw that sets its own
+  anchored `uMVP` also re-packs `uClipPlane` against that same anchor and restores the view anchor
+  after. `SectionClipTests` could not see this, because it tests the packing on its own; the evidence
+  is the `req341-section-clip-pan` GUI test, where a frame drawn from the cache and a frame freshly
+  uploaded at the same pan differ by 0 pixels. The uniform locations are looked up once at link time.
+
+  **(h) TIN surfaces are model geometry.** They are drawn after the overlay switch, for draw order,
+  and had been left unclipped with the overlays. The surface passes now turn the clip back on.
+
+  **(i) Picks and snaps honour the clip.** `solidpick::PickSubObject` takes an optional kept
+  half-space, and a triangle hit, vertex or edge point on the removed side neither answers nor
+  occludes; `CadSnap::FindBest` drops candidates on the removed side. Both read the plane through
+  `CadActiveSectionClip`, the same derivation the renderer is handed, so the three cannot disagree.
+
+### ADR-059 — One clip plane with two aiming sources, and the plane's appearance is derived, not stored   (2026-09-11, accepted)
+
+- **Status:** accepted (2026-09-11, D-2026-09-11-b, GitHub issue #479 slice 1). Backs REQ-342.
+- **Context.** REQ-341 shipped a clip plane derived from the active UCS every frame. #479 asks for a
+  plane placed on a **face** instead, drawn hatched so it can be found. A face-derived plane is an
+  arbitrary world plane that must not follow the UCS, so the existing "offset along the active UCS Z"
+  representation cannot express it.
+
+- **(a) There is ONE clip plane, and a flag says where its frame came from.**
+  `AppCommandState::viewportSectionClipFrameValid` selects between the active UCS and the stored
+  `viewportSectionClipFrame`; `CadEffectiveSectionClipFrame` is the only function that reads the
+  choice. The offset and flip apply to whichever frame is in force.
+
+  *Two independent planes was the alternative and was rejected.* They can disagree, and the first
+  thing a user would do is turn one on while the other was already cutting and see a result neither
+  command explains. Worse, every consumer — the renderer, the report line, the transcript verbs, the
+  future Properties panel — would need to know the precedence rule, and the first one that disagreed
+  would be a plane drawn in a place nothing was cut. One plane makes "which plane is in force?" a
+  question with one answer rather than a convention.
+
+  The cost is that `SECTIONCLIP`'s report line no longer tells the whole truth on its own — it says
+  "along the UCS Z" for a plane that may be on a face. `EXPECT SECTIONCLIPFRAME` and
+  `EXPECT SECTIONCLIPNORMAL` were added to the headless driver for the same reason, because "it is
+  on at offset 0" is equally true of a plane that ignored the face entirely.
+
+- **(b) A planar face's `ucs::Ucs` frame is used directly, with no conversion.** `brep::Surface::frame`
+  already states a plane: origin on it, Z the outward normal. Probe P1/P2 measured both claims
+  against the shipping kernel rather than trusting the header — 22 of 22 planar faces across the
+  primitives with frame-origin deviation exactly zero, and the outward claim holding for
+  `BooleanSubtract`, `BooleanUnion` and an oblique `Slice` with no counterexample, identically at the
+  origin and at E 2,196,000.
+
+  This is REQ-311/D-2026-08-31-e paying off: because there is exactly one plane type in this
+  codebase, "the face's plane" and "the clip plane" are the same type and cannot be mis-converted.
+
+  **Non-planar faces are refused by name.** They carry a frame too and its Z is the surface's axis,
+  so accepting one is not a crash but a plane at right angles to the click, through the middle of the
+  solid. The refusal is REQ-201-shaped: it names the surface kind.
+
+- **(c) The hatch and section line are DERIVED from the indicator rectangle every frame, not stored.**
+  `SectionPlaneGraphicsFor` takes the four corners and returns `GL_LINES` pairs. Nothing caches them
+  and no command rebuilds them.
+
+  *This is what keeps the plane live.* REQ-341's whole claim is that moving the plane changes the
+  next frame and invalidates no cached geometry; appearance that had to be regenerated by a command
+  would reintroduce exactly the rebuild step that claim denies — and would go stale the moment the
+  plane moved by any route that forgot to invalidate it.
+
+  It also keeps the arithmetic testable without a window (ADR-002), which is where it is tested: on
+  the plane, inside the rectangle, in pairs, bounded, and at survey magnitudes.
+
+- **(d) The hatch is generated in the plane's own basis, in GL — not through `HatchPat`/`HatchGeom`.**
+  Those trace a boundary in 2D XY and draw through the ImGui overlay, which has no depth test and no
+  clip plane. A section plane is an arbitrarily oriented rectangle in space; its hatch is a fixed
+  family of parallel lines with no boundary to trace. Sharing the 2D machinery would mean projecting
+  the plane to XY, tracing a boundary it already knows, and drawing the result without depth.
+
+  Density comes from the rectangle's **diagonal**, not from a world distance. A world spacing makes
+  the pattern a solid block of ink on a large plane and a single line on a small one, and at survey
+  extents the segment count is unbounded. The fixed count is also what makes the invariance testable.
+
+- **(e) The hatch is drawn in the OVERLAY pass, unclipped, like the rectangle it fills.** These lines
+  lie exactly ON the clip plane, so a clipped copy would be cut by itself: half of every line would
+  survive and half would not, at the driver's discretion, and at offset 0 it would z-fight with the
+  geometry it is there to explain.
+
+- **(f) A face pick is a ROUTE, not a modifier.** `ViewportClickRoute::SubObjectFacePick` is answered
+  by `ViewportClickRouteFor` and tested by `ViewportIsFacePickStep`, which both the click dispatcher
+  and the hover gate consult.
+
+  Before this, the sub-object pick existed only as `Ctrl`+click, dispatched **above** the route table
+  and invisible to it, with the hover carrying a **second, separate** `Ctrl` gate. That shape
+  produced two user-reported bugs in one session on the previous slice — a click that fell through to
+  entity selection and pulled the user out of the command, then a face that never pre-highlighted
+  once the click was fixed.
+
+  It nearly produced a third here: the first implementation put the face branch inside the
+  `IdleSelection` case, which is a **different route**, so a command routed to `SubObjectFacePick`
+  would never have reached it. The click would have fallen out of the switch doing nothing, and
+  **`/W4` does not include MSVC's unhandled-enumerator warning (C4061/C4062)**, so the build was
+  clean. Caught by reading the switch, not by the compiler — which is the argument for the route
+  being a named thing a test can assert rather than a condition spelled out at each gate.
+
+- **(g) A handle's drag axis is FROZEN at the grab** (added 2026-09-11 with REQ-343, D-2026-09-11-c).
+  `sectionPlaneGripAnchor` / `sectionPlaneGripAxis` are recorded when the handle is grabbed, and the
+  live drag measures against those rather than against the handle's current position.
+
+  This is not tidiness. The handle sits **on the plane**, so dragging the plane moves the handle.
+  Re-deriving the axis each frame measures that frame's delta from wherever the plane has already
+  got to — so the delta collapses to zero on the second frame, a HELD cursor snaps the plane back to
+  where it was grabbed, and a moving one oscillates. It is invisible to any test that calls the drag
+  once, which is why the assertion is five no-op frames with the cursor still.
+
+  The same shape applies to the stretch handles, and there it hid a second error: moving an edge by
+  the full drag delta *and* shifting the centre by it moves that edge **twice** as far as the
+  cursor. Both were found by the same test pass, and both are reinstated as mutations in TASK-259.
+
+- **(h) A view state is selected by a bool, not by entering `selection`** (added 2026-09-11).
+  `sectionPlaneSelected` is its own flag.
+
+  The plane has no layer, no attributes, no id and no place in `.gs`. Putting it in
+  `AppCommandState::selection` would put a branch for it in every consumer of that vector — MOVE,
+  DELETE, DXF export, the Properties panel, the highlight walk — and the first one that forgot would
+  be a view setting silently transformed, exported or erased. That is the argument `SelectedSubObject`
+  already records for keeping its own store (D-2026-09-04-a), applied to a second case.
+
+  The cost is that "clear the selection" now has two things to clear, so `ClearCadSelection` handles
+  both. That is one function knowing about two stores, against every consumer knowing about one
+  extra kind.
+
+- **Alternatives considered.** *Store the plane's appearance as geometry when the command runs* —
+  breaks (c). *Give SECTIONPLANE its own independent plane* — breaks (a). *Reuse the 2D hatch
+  engine* — breaks (d). *Accept any face and project the frame to the nearest plane* — silently
+  answers a question the user did not ask; refusing by name is REQ-201's whole point. *Keep the
+  `Ctrl` requirement and document it* — a command that asks for a face and then ignores clicks on
+  faces is the bug this slice exists downstream of. *Commit a drag through the undo stack* — a slide
+  changes no geometry, so there would be nothing to undo but a number; the honest consequence, that
+  `UNDO` does not step a slide back, is written into REQ-343 instead. *Make the section plane a
+  `SelectedEntity`* — breaks (h), and would promise Properties and `.gs` support that slice 2 of
+  this issue does not deliver.
+
+### ADR-060 — Point-cloud out-of-core octree: a versioned `.gscloud` sidecar, source-stamped, rebuilt on mismatch   (2026-09-17, accepted)
+
+- **Status:** accepted (2026-09-17). Backs REQ-171/REQ-172 (ADR-042), and the new
+  point-cloud octree/LOD renderer (D-2026-09-17-d, GitHub point-cloud epic).
+- **Context.** ADR-042 committed to a point-cloud entity and named a "point splat or chunked
+  point path" without specifying it. The driving file is 7.8 GB — too large to hold as one
+  in-memory point buffer alongside the rest of a normal editing session, and too many points to
+  submit to the renderer per frame without a level-of-detail scheme. Import must therefore build
+  a spatial index once and reuse it, rather than re-parsing and re-indexing the source file on
+  every open.
+- **Decision.**
+  (a) **The cache is a single sidecar file next to the source scan**: `<source-file>.gscloud`
+      (e.g. `Sample-Data....e57.gscloud`), never embedded in `.gs`/the DWG trailer — an octree
+      over hundreds of millions of points is disk-scale data, not document metadata, and does not
+      belong in REQ-175's JSON trailer.
+  (b) **The cache header stamps**: a format version (starts at 1), the absolute source file path,
+      the source file's size in bytes and last-write timestamp, and a content hash of the first
+      and last N MiB of the source (full-file hashing a 7.8 GB file on every open is itself a
+      multi-second cost this ADR is trying to avoid). On open, if the stamp does not match the
+      source file bit-for-bit on size+timestamp, hash is checked; a mismatch anywhere means the
+      cache is **stale and rebuilt from scratch**, never partially trusted or patched.
+  (c) **The cache stores**: the octree structure (node bounds, child pointers/offsets, point
+      counts per node) and, per leaf node, an on-disk block of interleaved XYZ + optional RGB +
+      optional intensity, in the same units/frame REQ-171's in-memory payload uses (local storage
+      + `worldDocumentOrigin`, REQ-101) so a loaded node's bytes can be handed to the renderer
+      without a coordinate transform. Node blocks are read lazily and evicted under a bounded
+      working-set budget — this is what "out-of-core" means operationally.
+  (d) **A missing, unreadable, or version-mismatched `.gscloud` is a logged rebuild, never a load
+      failure** — same shape as REQ-001/ADR-042(b)'s "missing file is a logged unload, not a
+      crash": the drawing still opens, the cloud is queued to (re)index, and the log names why.
+  (e) **No general-purpose cache-file abstraction.** This is a point-cloud-specific format; it is
+      not the first of a planned family of `.gs*cache` sidecars, and must not be generalised
+      until a second concrete user exists (CLAUDE.md §7).
+- **Alternatives considered.** *Re-index in memory every open, no cache file* — rejected: a
+  7.8 GB scan would re-parse and re-octree from scratch every time the drawing is opened, which
+  is the multi-minute cost this ADR exists to avoid (the FEATURE REQUEST's own "reopening is
+  measurably faster" acceptance criterion depends on a persistent cache). *Embed the octree in
+  the DWG JSON trailer* — rejected: REQ-175's trailer is document metadata sized for drawings,
+  not a disk-scale spatial index; it would make ordinary drawing saves slow and huge for anyone
+  who ever imported a cloud. *Trust the cache unconditionally once written* — rejected: a source
+  file replaced or re-exported with the same name (a corrected scan re-run) must not silently
+  render stale points; REQ-001's "no silently wrong result" extends to a cache as much as to a
+  parser.
+- **Consequences.** A new on-disk file format is introduced (`.gscloud`) with its own version
+  field, separate from `.gs`/DWG-trailer versioning (ADR-020(e)/REQ-079 do not apply — this is not
+  the document format). Workshop must not fold `.gscloud` versioning into REQ-079 without a
+  separate recorded decision. First import of a large cloud takes an indexing pass proportional to
+  file size; this is disclosed to the user (progress/log), not hidden. Deleting or moving the
+  `.gscloud` file has no effect beyond a one-time reindex — it is a cache, not a required
+  companion file for correctness.

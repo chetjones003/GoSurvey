@@ -8,6 +8,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 #include "util/meshgeom.hpp"
+#include "util/pointcloudcache.hpp"
 #include "BrepJson.hpp"
 
 #include <algorithm>
@@ -269,6 +270,18 @@ json CadBlockContentToJson(const CadBlockContent& c) {
   EntityAttrArrayToJson(c.meshAttrs, meshAttrs);
   o["meshAttrs"] = std::move(meshAttrs);
 
+  if (!c.solids.empty()) {
+    json solids = json::array();
+    for (const CadSolidPtr& sp : c.solids) {
+      if (sp)
+        solids.push_back(gsio::SolidToJson(*sp));
+    }
+    o["solids"] = std::move(solids);
+    json solidAttrs;
+    EntityAttrArrayToJson(c.solidAttrs, solidAttrs);
+    o["solidAttrs"] = std::move(solidAttrs);
+  }
+
   json nested = json::array();
   for (const CadBlockNested& n : c.nested) {
     json nj;
@@ -341,6 +354,16 @@ CadBlockContent CadBlockContentFromJson(const json& o) {
     }
   EntityAttrArrayFromJson(o, "meshAttrs", c.meshAttrs);
 
+  if (o.contains("solids") && o["solids"].is_array()) {
+    for (const auto& el : o["solids"]) {
+      brep::Solid s;
+      if (gsio::SolidFromJson(el, &s))
+        c.solids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+    }
+  }
+  EntityAttrArrayFromJson(o, "solidAttrs", c.solidAttrs);
+  c.solidAttrs.resize(c.solids.size());
+
   if (o.contains("nested") && o["nested"].is_array()) {
     for (const auto& nj : o["nested"]) {
       CadBlockNested n;
@@ -369,6 +392,14 @@ json CadBlockDefToJson(const CadBlockDefinition& d) {
   o["baseZ"] = d.baseZ;
   o["units"] = d.units;
   o["metadata"] = d.metadata;
+  if (d.partType != CadPipePartType::None) {
+    o["partType"] = std::string(CadPipePartTypeTag(d.partType));
+    o["nominalSize"] = d.nominalSize;
+    if (d.pressureClass != CadPipePressureClass::None)
+      o["pressureClass"] = std::string(CadPipePressureClassTag(d.pressureClass));
+    if (!d.partNumber.empty())
+      o["partNumber"] = d.partNumber;
+  }
   o["content"] = CadBlockContentToJson(d.content);
   json ads = json::array();
   for (const CadBlockAttrDef& a : d.attrDefs) {
@@ -409,6 +440,41 @@ json CadBlockDefToJson(const CadBlockDefinition& d) {
   }
   o["actions"] = std::move(acts);
   o["visibilityStates"] = d.visibilityStates;
+  if (!d.connections.empty()) {
+    json conns = json::array();
+    for (const CadBlockConnection& c : d.connections) {
+      json cj;
+      cj["name"] = c.name;
+      cj["x"] = c.x;
+      cj["y"] = c.y;
+      cj["z"] = c.z;
+      cj["nx"] = c.nx;
+      cj["ny"] = c.ny;
+      cj["nz"] = c.nz;
+      cj["nominalSize"] = c.nominalSize;
+      cj["role"] = std::string(CadBlockConnectionRoleTag(c.role));
+      if (!c.compatibilityTag.empty())
+        cj["compatibilityTag"] = c.compatibilityTag;
+      cj["engagementLength"] = c.engagementLength;
+      if (!c.modes.empty()) {
+        json modes = json::array();
+        for (const CadBlockConnectionMode& m : c.modes) {
+          json mj;
+          mj["name"] = m.name;
+          mj["target"] = std::string(CadConnectionModeTargetTag(m.target));
+          mj["role"] = std::string(CadBlockConnectionRoleTag(m.role));
+          if (!m.compatibilityTag.empty())
+            mj["compatibilityTag"] = m.compatibilityTag;
+          mj["engagementLength"] = m.engagementLength;
+          mj["isDefault"] = m.isDefault;
+          modes.push_back(std::move(mj));
+        }
+        cj["modes"] = std::move(modes);
+      }
+      conns.push_back(std::move(cj));
+    }
+    o["connections"] = std::move(conns);
+  }
   return o;
 }
 
@@ -422,6 +488,10 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
   d.baseZ = o.value("baseZ", d.baseZ);
   d.units = o.value("units", d.units);
   d.metadata = o.value("metadata", d.metadata);
+  d.partType = ParseCadPipePartType(o.value("partType", std::string()));
+  d.nominalSize = o.value("nominalSize", d.nominalSize);
+  d.pressureClass = ParseCadPipePressureClass(o.value("pressureClass", std::string()));
+  d.partNumber = o.value("partNumber", d.partNumber);
   if (o.contains("content"))
     d.content = CadBlockContentFromJson(o["content"]);
   if (o.contains("attrDefs") && o["attrDefs"].is_array()) {
@@ -464,6 +534,35 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
   }
   if (o.contains("visibilityStates") && o["visibilityStates"].is_array())
     d.visibilityStates = o["visibilityStates"].get<std::vector<std::string>>();
+  if (o.contains("connections") && o["connections"].is_array()) {
+    for (const auto& cj : o["connections"]) {
+      CadBlockConnection c;
+      c.name = cj.value("name", "");
+      c.x = cj.value("x", 0.f);
+      c.y = cj.value("y", 0.f);
+      c.z = cj.value("z", 0.f);
+      c.nx = cj.value("nx", 0.f);
+      c.ny = cj.value("ny", 0.f);
+      c.nz = cj.value("nz", 1.f);
+      c.nominalSize = cj.value("nominalSize", "");
+      c.role = ParseCadBlockConnectionRole(cj.value("role", std::string()));
+      c.compatibilityTag = cj.value("compatibilityTag", "");
+      c.engagementLength = cj.value("engagementLength", 0.f);
+      if (cj.contains("modes") && cj["modes"].is_array()) {
+        for (const auto& mj : cj["modes"]) {
+          CadBlockConnectionMode m;
+          m.name = mj.value("name", "");
+          m.target = ParseCadConnectionModeTarget(mj.value("target", std::string()));
+          m.role = ParseCadBlockConnectionRole(mj.value("role", std::string()));
+          m.compatibilityTag = mj.value("compatibilityTag", "");
+          m.engagementLength = mj.value("engagementLength", 0.f);
+          m.isDefault = mj.value("isDefault", false);
+          c.modes.push_back(std::move(m));
+        }
+      }
+      d.connections.push_back(std::move(c));
+    }
+  }
   return d;
 }
 
@@ -1238,6 +1337,39 @@ json BuildRoot(const AppCommandState& st) {
     doc["meshAttrs"] = std::move(meshAttrs);
   }
 
+  // Point clouds (REQ-171 / ADR-042/ADR-060). Additive section — omitted entirely when there are
+  // none, same ADR-020 (d) tolerant-key precedent as meshes above. Only the bounded PREVIEW sample
+  // (`CadPointCloud::pointsXyz`) is written, not the full cloud — `cloudCache` names the `.gscloud`
+  // sidecar the LOD renderer pages full detail from, so this is not the only copy of the data. A
+  // cloud with no cache (e.g. `cloudCachePath` empty) still round-trips its preview sample alone.
+  if (!st.cadPointClouds.empty()) {
+    json clouds = json::array();
+    for (const auto& pc : st.cadPointClouds) {
+      if (!pc)
+        continue;
+      json c;
+      c["points"] = pc->pointsXyz;
+      if (!pc->colorsRgb.empty())
+        c["colors"] = pc->colorsRgb;
+      if (!pc->intensity.empty())
+        c["intensity"] = pc->intensity;
+      if (!pc->sourcePath.empty())
+        c["source"] = pc->sourcePath;
+      if (!pc->cloudCachePath.empty())
+        c["cloudCache"] = pc->cloudCachePath;
+      c["totalPointCount"] = pc->totalPointCount;
+      clouds.push_back(std::move(c));
+    }
+    doc["pointClouds"] = std::move(clouds);
+    json cloudAttrs = json::array();
+    for (const auto& a : st.cadPointCloudAttrs) {
+      json o;
+      EntityAttributesToJson(a, o);
+      cloudAttrs.push_back(std::move(o));
+    }
+    doc["pointCloudAttrs"] = std::move(cloudAttrs);
+  }
+
   // B-rep solids (REQ-313 / ADR-045). Additive and omitted when there are none, so every drawing
   // written before solids existed still serializes byte-identically — the same ADR-020 (d)
   // precedent the mesh section above follows. See SolidToJson for why the topology is written
@@ -1257,6 +1389,33 @@ json BuildRoot(const AppCommandState& st) {
       solidAttrs.push_back(std::move(o));
     }
     doc["solidAttrs"] = std::move(solidAttrs);
+  }
+
+  // Pipe runs (issue #486 increment B1 / REQ-345). Additive and omitted when there are none. Only
+  // the PATH and its size/class labels are written — never the swept solid, which
+  // `RebuildPipeRunWorldSolids` derives from this on load, the same "topology, not geometry" split
+  // CadPipeRun's own doc comment explains.
+  if (!st.cadPipeRuns.empty()) {
+    json pipeRuns = json::array();
+    for (const CadPipeRun& r : st.cadPipeRuns) {
+      json o;
+      o["vertsXyz"] = r.vertsXyz;
+      if (!r.name.empty())  // issue #486, "pipe runs need to be namable"
+        o["name"] = r.name;
+      if (!r.nominalSize.empty())
+        o["nominalSize"] = r.nominalSize;
+      if (!r.pressureClassTag.empty())
+        o["pressureClassTag"] = r.pressureClassTag;
+      pipeRuns.push_back(std::move(o));
+    }
+    doc["pipeRuns"] = std::move(pipeRuns);
+    json pipeRunAttrs = json::array();
+    for (const auto& a : st.cadPipeRunAttrs) {
+      json o;
+      EntityAttributesToJson(a, o);
+      pipeRunAttrs.push_back(std::move(o));
+    }
+    doc["pipeRunAttrs"] = std::move(pipeRunAttrs);
   }
 
   // TIN surfaces (REQ-068). Additive and omitted when there are none, so a pre-REQ-068 drawing still
@@ -2408,6 +2567,62 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.cadMeshAttrs.push_back(EntityAttributesFromJson(o));
   st.cadMeshAttrs.resize(st.cadMeshes.size());  // keep the parallel arrays length-locked
 
+  // Point clouds (REQ-171 / ADR-042). Guarded with contains(), so a pre-REQ-171 drawing simply has
+  // none — the "legacy .gs loads unchanged" acceptance condition, same as meshes above.
+  //
+  // A cloud whose points array is not a multiple of 3, or whose parallel colour/intensity array
+  // does not match the point count, is refused (REQ-201) rather than loaded with a silently
+  // truncated or misaligned channel.
+  st.cadPointClouds.clear();
+  st.cadPointCloudAttrs.clear();
+  if (doc.contains("pointClouds") && doc["pointClouds"].is_array()) {
+    int cloudIdx = 0;
+    for (const auto& el : doc["pointClouds"]) {
+      ++cloudIdx;
+      if (!el.is_object())
+        continue;
+      auto pc = std::make_shared<CadPointCloud>();
+      if (el.contains("points"))
+        pc->pointsXyz = el["points"].get<std::vector<double>>();
+      if (el.contains("colors"))
+        pc->colorsRgb = el["colors"].get<std::vector<float>>();
+      if (el.contains("intensity"))
+        pc->intensity = el["intensity"].get<std::vector<float>>();
+      if (el.contains("source"))
+        pc->sourcePath = el["source"].get<std::string>();
+      if (el.contains("cloudCache")) {
+        pc->cloudCachePath = el["cloudCache"].get<std::string>();
+        // Reopen the .gscloud cache to repopulate the octree the LOD renderer needs. A missing or
+        // stale cache is a logged degrade to preview-only display, not a load failure (ADR-060 (d))
+        // — the drawing still opens, with this one cloud showing only its bounded preview sample
+        // until it is re-imported.
+        const pointcloudcache::OpenResult reopened = pointcloudcache::Open(pc->cloudCachePath);
+        if (reopened.ok) {
+          pc->octree = reopened.cache.octree;
+        } else {
+          log.push_back("Point cloud " + std::to_string(cloudIdx) + " — .gscloud cache unavailable (" +
+                        reopened.errorMessage + "); showing preview sample only until re-imported.");
+        }
+      }
+      pc->totalPointCount = el.contains("totalPointCount")
+                                 ? el["totalPointCount"].get<std::int64_t>()
+                                 : static_cast<std::int64_t>(pc->pointsXyz.size() / 3);
+      const bool colorsOk = pc->colorsRgb.empty() || pc->colorsRgb.size() == pc->pointsXyz.size();
+      const bool intensityOk =
+          pc->intensity.empty() || pc->intensity.size() == pc->pointsXyz.size() / 3;
+      if (pc->pointsXyz.size() % 3 != 0 || !colorsOk || !intensityOk) {
+        log.push_back("Point cloud " + std::to_string(cloudIdx) +
+                      " skipped — malformed point/colour/intensity array length.");
+        continue;
+      }
+      st.cadPointClouds.push_back(std::move(pc));
+    }
+  }
+  if (doc.contains("pointCloudAttrs") && doc["pointCloudAttrs"].is_array())
+    for (const auto& o : doc["pointCloudAttrs"])
+      st.cadPointCloudAttrs.push_back(EntityAttributesFromJson(o));
+  st.cadPointCloudAttrs.resize(st.cadPointClouds.size());  // keep the parallel arrays length-locked
+
   // B-rep solids (REQ-313 / ADR-045). Guarded, so a drawing written before them simply has none.
   //
   // Every solid is VALIDATED before it is stored, exactly as a mesh is above and for a sharper
@@ -2439,6 +2654,35 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& o : doc["solidAttrs"])
       st.cadSolidAttrs.push_back(EntityAttributesFromJson(o));
   st.cadSolidAttrs.resize(st.cadSolids.size());  // keep the parallel arrays length-locked
+
+  // Pipe runs (issue #486 increment B1 / REQ-345). Guarded, so a drawing written before them
+  // simply has none. `pipeRunWorldSolidsSig` is left at its default (0) so the very next
+  // `RefreshSolidDisplayGeometry` call rebuilds the swept solids from the loaded path rather than
+  // trusting whatever was cached before the load.
+  st.cadPipeRuns.clear();
+  st.cadPipeRunAttrs.clear();
+  st.pipeRunWorldSolids.clear();
+  st.pipeRunWorldSolidAttrs.clear();
+  st.pipeRunWorldSolidOwnerIndex.clear();
+  st.pipeRunWorldSolidsSig = 0;
+  if (doc.contains("pipeRuns") && doc["pipeRuns"].is_array()) {
+    for (const auto& el : doc["pipeRuns"]) {
+      CadPipeRun r;
+      if (el.contains("vertsXyz") && el["vertsXyz"].is_array())
+        r.vertsXyz = el["vertsXyz"].get<std::vector<double>>();
+      if (el.contains("name") && el["name"].is_string())
+        r.name = el["name"].get<std::string>();
+      if (el.contains("nominalSize") && el["nominalSize"].is_string())
+        r.nominalSize = el["nominalSize"].get<std::string>();
+      if (el.contains("pressureClassTag") && el["pressureClassTag"].is_string())
+        r.pressureClassTag = el["pressureClassTag"].get<std::string>();
+      st.cadPipeRuns.push_back(std::move(r));
+    }
+  }
+  if (doc.contains("pipeRunAttrs") && doc["pipeRunAttrs"].is_array())
+    for (const auto& o : doc["pipeRunAttrs"])
+      st.cadPipeRunAttrs.push_back(EntityAttributesFromJson(o));
+  st.cadPipeRunAttrs.resize(st.cadPipeRuns.size());  // keep the parallel arrays length-locked
 
   // TIN surfaces (REQ-068). Guarded, so a drawing written before them simply has none.
   st.cadSurfaces.clear();
@@ -2628,6 +2872,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     }
     log.push_back("Loaded " + std::to_string(st.cadMeshes.size()) + " mesh(es): " + std::to_string(tris) +
                   " triangles, " + std::to_string(parts) + " part(s).");
+  }
+  if (!st.cadPointClouds.empty()) {
+    // REQ-172 requires the count to be REPORTED, same reason as meshes above.
+    long long pts = 0;
+    for (const auto& pc : st.cadPointClouds) pts += pc->pointCount();
+    log.push_back("Loaded " + std::to_string(st.cadPointClouds.size()) + " point cloud(s): " +
+                  std::to_string(pts) + " points.");
   }
 
   // Filled regions (ADR-011) — guarded with contains() so older .gs files load unchanged.

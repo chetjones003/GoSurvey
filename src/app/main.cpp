@@ -357,8 +357,16 @@ int main()
 #endif
   LoadUserStartupPrefs(cmd);
 #ifdef GOSURVEY_DEVELOPER_SHELL
-  if (devshellCli)
+  if (devshellCli) {
     cmd.authGateResolved = true;
+    // REQ-336's What's New opens as a MODAL on the first launch of a version, and a modal blocks
+    // hover and clicks everywhere else — so every GUI test that clicks or hovers failed silently
+    // behind it (the ON/OFF/FLIP links, the chamfer edge hover) once a new version string made it
+    // auto-open again. An automated run is not a user's first look at a release; skipped the same
+    // way the sign-in gate and the update check above and below are. The user's dismissal
+    // preference is not touched.
+    cmd.whatsNewAutoOpenedThisLaunch = true;
+  }
 #endif
   const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
 
@@ -406,7 +414,7 @@ int main()
   // REQ-078 before REQ-336: if the splash check found an update, do not auto-open What's New.
   if (updateState.phase == update::Phase::UpdateReady)
     cmd.whatsNewAutoOpenedThisLaunch = true;
-  else if (cmd.activeDrawingIdx == 0 &&
+  else if (cmd.activeDrawingIdx == 0 && !cmd.whatsNewAutoOpenedThisLaunch &&
            WhatsNewShouldAutoOpen(GOSURVEY_VERSION_FULL, cmd.whatsNewDismissedVersion, false))
     cmd.whatsNewOpeningPending = true;
 
@@ -796,6 +804,21 @@ int main()
         CancelPickDisambiguationPopup(cmd);
         cmdBuf[0] = '\0';
       }
+      else if (cmd.sectionPlaneGripDrag >= 0)
+      {
+        // A TRUE cancel, and here it is load-bearing rather than a courtesy (REQ-343). Unlike the
+        // gizmo below, a section-plane drag writes the live offset on EVERY frame — that is what
+        // makes the cut follow the handle — so by the time ESC is pressed the plane has already
+        // moved, and merely disarming would commit it. REQ-343 also records that a slide makes no
+        // undo entry, so there would be no way back at all. `AbortSectionPlaneGripDrag` restores
+        // the offset and extent recorded at the grab.
+        //
+        // First in the chain because it is the gesture in progress, the rule the gizmo states.
+        AbortSectionPlaneGripDrag(cmd);
+        BumpCadGpuCache(cmd);
+        cmdLog.push_back("Section plane drag cancelled.");
+        cmdBuf[0] = '\0';
+      }
       else if (cmd.gizmoDragActive)
       {
         // A TRUE cancel, not an undo: a live gizmo drag changes nothing in the store until it is
@@ -884,6 +907,10 @@ int main()
     // it does real work only for surfaces that are actually behind, dispatched to a background
     // thread — see TickSurfaceRebuilds' own comment for the full contract.
     TickSurfaceRebuilds(cmd, cmdLog);
+
+    // Point-cloud out-of-core import (REQ-171/172, ADR-060). Same background-worker shape as
+    // TickSurfaceRebuilds above; reaps a finished POINTCLOUDATTACH and commits its result.
+    TickPointCloudImport(cmd, cmdLog);
 
     // Volume Dashboard live recompute (REQ-073 amendment, TASK-095). After TickSurfaceRebuilds, so a
     // dashboard-selected surface that finished rebuilding this frame is already current below.
@@ -1105,6 +1132,7 @@ int main()
     DrawTextStyleManagerWindow(cmd, &cmdLog);
     DrawDimStyleWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);
+    DrawConnectionModesWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
     DrawSurfaceStyleWindow(cmd, &cmdLog);
     DrawVolumeDashboardWindow(cmd, &cmdLog);  // REQ-073 amendment (TASK-095)
@@ -1139,9 +1167,11 @@ int main()
     DrawBatchPlotDialog(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
     DrawInsertBlockDialog(cmd, cmdLog);
+    DrawBlockCreateDialog(cmd, cmdLog);
     DrawEditBlockDefinitionDialog(cmd, cmdLog);
     DrawBlockAuthoringPalettes(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
+    DrawPointCloudImportProgress(cmd);
     DrawCloseConfirmModal(cmd, cmdLog);
     DrawSelectColorPopup(cmd);
     DrawUpdateDialog(cmd, updateState);
@@ -1329,6 +1359,26 @@ int main()
     tuning.bgR = std::clamp(cmd.viewportBgR, 0.f, 1.f);
     tuning.bgG = std::clamp(cmd.viewportBgG, 0.f, 1.f);
     tuning.bgB = std::clamp(cmd.viewportBgB, 0.f, 1.f);
+    // REQ-341/338/339 — the live section clip.
+    //
+    // Every part of it comes from the COMMAND layer now, through `CadSectionClipIndicator`, which
+    // the pick also calls. Two copies of "where is the rectangle?" is how a user ends up clicking
+    // the plane they can see and grabbing nothing; the bounds walk that used to live inline here is
+    // what made two copies possible.
+    if (cmd.viewportSectionClip) {
+      tuning.sectionClip = CadSectionClipPlane(cmd);
+      tuning.sectionClipIndicator = CadSectionClipIndicator(cmd);
+      // REQ-342: the hatch and the centre line that make the plane findable. Derived from the
+      // rectangle rather than stored, for the same reason the rectangle itself is: the plane can
+      // move every frame, and geometry that has to be rebuilt by a command is not live.
+      tuning.sectionPlaneGraphics = SectionPlaneGraphicsFor(tuning.sectionClipIndicator);
+      // REQ-343: the handles, drawn only while the plane is selected. `CadSectionPlaneGrips`
+      // answers invalid when it is not, so there is no separate "should these be drawn?" flag for a
+      // caller to get wrong — the rule REQ-060's gizmo already follows.
+      tuning.sectionPlaneGrips = CadSectionPlaneGrips(cmd);
+      tuning.sectionPlaneGripHover = cmd.sectionPlaneGripHover;
+      tuning.sectionPlaneGripDrag = cmd.sectionPlaneGripDrag;
+    }
     // Build PDF render list: committed attachments + cursor-follow preview when picking insert point.
     std::vector<PdfAttachment> pdfRenderList;
     if (!cmd.pdfAttachments.empty())
@@ -1497,13 +1547,31 @@ int main()
                                (paperSpace || subObjectOverlay.empty()) ? nullptr : &subObjectOverlay,
                                // The gizmo handles. Model space only for the same reason — a paper
                                // sheet is 2D (ADR-025 (g)) and has no third axis to offer.
-                               (paperSpace || gizmoOverlay.empty()) ? nullptr : &gizmoOverlay);
+                               (paperSpace || gizmoOverlay.empty()) ? nullptr : &gizmoOverlay,
+                               // Point clouds (REQ-171/172), model space only like every other GL
+                               // entity. Appended at the very end of this positional call — see the
+                               // renderer header's own note on why.
+                               (paperSpace || cmd.cadPointClouds.empty()) ? nullptr : &cmd.cadPointClouds,
+                               (paperSpace || cmd.cadPointCloudAttrs.empty()) ? nullptr : &cmd.cadPointCloudAttrs);
     cmd.perfRenderMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfRenderT0).count();
 
     // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);
+#ifdef GOSURVEY_DEVELOPER_SHELL
+    // REQ-161 (TASK-249): a devshell test capturing the VIEWPORT, serviced here because this is the
+    // one point in the frame where the renderer has just drawn and its framebuffer still holds the
+    // image.
+    //
+    // Separate from `DevShell_RequestScreenshot`, which reads the WINDOW's GL_FRONT buffer, and the
+    // reason is measured rather than assumed: on a window the compositor is not presenting — which
+    // is the normal case for an automated run — that read returns **pure black**, and six
+    // screenshots of a clip plane moving came back byte-identical. Reading the renderer's own
+    // `fbo_` through `CaptureThumbnailBmp` does not depend on the window being composited at all,
+    // so it captures what was actually drawn.
+    DevShell_ServiceViewportCapture(activeRenderer);
+#endif
     }
 
     // Frame profiler overlay (PERFHUD) — after the render so its render-ms is this frame's, not

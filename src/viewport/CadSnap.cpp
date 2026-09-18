@@ -3,6 +3,7 @@
 #include "SurveyPoints.hpp"
 #include "geom2d.hpp"
 #include "util/cadblock.hpp"
+#include "util/cadpiperun.hpp"
 #include "util/curveintersect.hpp"
 #include "util/solidpick.hpp"
 
@@ -329,6 +330,11 @@ struct SnapPickAccum {
   /// reads small — only because its actual point is genuinely the nearest valid candidate.
   float bestRankDistSq = 0.f;
   int bestPri = -1;
+  /// The EFFECTIVE \ref SnapClass of \c best: 1 only when its true point was inside the aperture.
+  int bestCls = 0;
+  /// The live section clip (REQ-341). A candidate on its removed side is not drawn, so it is not
+  /// offered (code review on #478, finding 5). Inactive in paper space and when the clip is off.
+  SectionClipPlane clip{};
 };
 
 /// \param snapZ elevation of the candidate point. Only consulted when \c acc->ray is set; the
@@ -370,8 +376,17 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
   }
   if (!(pickDistSq <= tol2) || pickDistSq > 1.e28f)
     return;
+  if (acc->clip.active && !acc->clip.KeepsWorldPoint(snapX, snapY, snapZ))
+    return;
   const int pri = Priority(kind);
   const float eps = 1.e-9f * std::max(tol2, 1.f);
+  // A named feature only gets its class once its ACTUAL point is inside the aperture. Several
+  // class-1 kinds are accepted on a "cursor is over the shape" heuristic — a circle's or closed
+  // polyline's centre anywhere inside it, a survey point across its marker, `CenterOfFace` anywhere
+  // on the face — and letting those outrank by class made a centroid hundreds of feet away beat the
+  // Surface or Face point under the cursor (code review on #478, finding 2). Accepted that way, a
+  // feature competes on true distance, exactly as it did before `SnapClass` existed.
+  const int cls = (SnapClass(kind) == 1 && rankDistSq <= tol2) ? 1 : 0;
   if (!acc->best.valid) {
     acc->best.valid = true;
     acc->best.kind = kind;
@@ -381,6 +396,25 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.solid = solid;
     acc->bestRankDistSq = rankDistSq;
     acc->bestPri = pri;
+    acc->bestCls = cls;
+    return;
+  }
+  // Class before distance: a named feature inside the aperture beats a nearest-anywhere point
+  // however far off it is, and a nearest-anywhere point never displaces a feature. Without this
+  // the `Face` candidate — always sitting exactly under the cursor, so always at distance ~0 —
+  // wins every comparison, and a solid's midpoints and vertices can only be reached by landing on
+  // them to within `eps`. See `SnapClass` for the measurements.
+  if (cls != acc->bestCls) {
+    if (cls > acc->bestCls) {
+      acc->best.kind = kind;
+      acc->best.x = snapX;
+      acc->best.y = snapY;
+      acc->best.z = snapZ;
+      acc->best.solid = solid;
+      acc->bestRankDistSq = rankDistSq;
+      acc->bestPri = pri;
+      acc->bestCls = cls;
+    }
     return;
   }
   if (rankDistSq < acc->bestRankDistSq - eps) {
@@ -883,6 +917,8 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   SnapPickAccum acc{};
   // Null (plan view, paper space) leaves every candidate measured exactly as before.
   acc.ray = (pickRay && pickRay->valid()) ? pickRay : nullptr;
+  if (cmd.activeSpaceIndex < 0)
+    acc.clip = CadActiveSectionClip(cmd);  // storage coordinates, like every candidate here
 
   // issue #103: with an override active, a kind is wanted purely because it IS the override — the
   // persistent per-type toggle is irrelevant (that toggle is exactly what the override exists to
@@ -946,6 +982,27 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
         Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, 0.5f * (z0 + z1));
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
+    }
+  }
+
+  // CadPipeRun ends (issue #486, user-specified follow-up): a pipe run is a swept SOLID, not a
+  // bare line, so it never fell into the `userLinesFlat` loop above — meaning it offered no
+  // endpoint snap candidate at all, and a connection-port pick near it resolved to a work-plane
+  // guess nowhere near the actual pipe surface. Offered the same way a bare line's endpoints are
+  // (Kind::Endpoint, gated on the same `wantEndpoint` toggle), reading the run's ACTUAL end-face
+  // centre (`CadPipeRunEndPorts`, cadpiperun.hpp) — the same geometry the rendered pipe and the
+  // BCONNECT/INSERT "pipe end" target (`FindNearestPipeEndpoint`, CadBlocks.cpp) both already read,
+  // so this is the third and last place that geometry needed to be reachable from, not a fourth
+  // independently-derived one.
+  if (wantEndpoint) {
+    for (const CadPipeRun& run : cmd.cadPipeRuns) {
+      CadPipeRunEndPort start, end;
+      if (!CadPipeRunEndPorts(run, &start, &end))
+        continue;
+      Consider(&acc, wx, wy, static_cast<float>(start.point.x), static_cast<float>(start.point.y), Kind::Endpoint,
+               tolWorld, static_cast<float>(start.point.z));
+      Consider(&acc, wx, wy, static_cast<float>(end.point.x), static_cast<float>(end.point.y), Kind::Endpoint,
+               tolWorld, static_cast<float>(end.point.z));
     }
   }
 

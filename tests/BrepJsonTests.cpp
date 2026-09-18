@@ -197,7 +197,9 @@ TEST_CASE("A face with an empty general trim loop serializes without the paramLo
 TEST_CASE("A version-4 file with a malformed NURBS patch is refused, not loaded", "[brepjson][req315]") {
   brep::Solid loft;
   brep::Problem why = brep::Problem::Ok;
-  REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAt(6.0), 5.0)}, &loft, &why));
+  // Three circles: a two-circle coaxial loft is an analytic cylinder since issue #515, with no patch.
+  REQUIRE(brep::Loft({CircleProfile(World(), 5.0), CircleProfile(PlaneAt(6.0), 5.0), CircleProfile(PlaneAt(9.0), 4.0)},
+                     &loft, &why));
   nlohmann::json j = gsio::SolidToJson(loft);
 
   // Corrupt the first NURBS patch: a weight of zero is not a usable rational surface.
@@ -209,4 +211,58 @@ TEST_CASE("A version-4 file with a malformed NURBS patch is refused, not loaded"
   }
   brep::Solid back;
   REQUIRE_FALSE(gsio::SolidFromJson(j, &back));
+}
+
+TEST_CASE("A recipe whose frame cannot be read is dropped on load, and the solid still loads",
+          "[brepjson][issue515]") {
+  // GitHub #515 follow-up (D-2026-09-17-a): the frame places the primitive, and the curved slice
+  // recognisers rebuild geometry from it. Kept at the default world frame, a damaged frame would
+  // put every cut at the origin.
+  brep::Solid cyl;
+  brep::Problem why = brep::Problem::Ok;
+  ucs::Ucs away = World();
+  away.origin = {500.0, -200.0, 10.0};
+  REQUIRE(brep::MakeCylinder(away, 4.0, 9.0, &cyl, &why));
+  const double volume = brep::ComputeMassProperties(cyl).volume;
+
+  SECTION("an intact frame keeps the recipe") {
+    brep::Solid back;
+    REQUIRE(gsio::SolidFromJson(gsio::SolidToJson(cyl), &back));
+    REQUIRE(back.recipe.kind == brep::PrimitiveKind::Cylinder);
+    REQUIRE(back.recipe.frame.origin.x == Approx(500.0));
+  }
+
+  SECTION("a missing frame drops it") {
+    nlohmann::json j = gsio::SolidToJson(cyl);
+    j["recipe"].erase("frame");
+    brep::Solid back;
+    REQUIRE(gsio::SolidFromJson(j, &back));
+    REQUIRE(back.recipe.kind == brep::PrimitiveKind::None);
+    REQUIRE(back.recipe.radius == 0.0);
+    REQUIRE(brep::ComputeMassProperties(back).volume == Approx(volume).epsilon(1e-12));
+  }
+
+  SECTION("a solid with NO recipe keeps the frame it carries, so a resave is byte-identical") {
+    // The first version of this change read the frame only for a described solid, and every
+    // save -> open -> save round-trip transcript failed: a kind-None recipe's frame is moved by
+    // transforms and must come back as it was written (REQ-079).
+    brep::Solid plain = cyl;
+    plain.recipe = brep::Recipe{};
+    plain.recipe.frame.origin = {7.0, 8.0, 9.0};
+    const nlohmann::json j = gsio::SolidToJson(plain);
+    brep::Solid back;
+    REQUIRE(gsio::SolidFromJson(j, &back));
+    REQUIRE(back.recipe.kind == brep::PrimitiveKind::None);
+    REQUIRE(back.recipe.frame.origin.x == 7.0);
+    REQUIRE(gsio::SolidToJson(back).dump() == j.dump());
+  }
+
+  SECTION("a malformed frame drops it") {
+    nlohmann::json j = gsio::SolidToJson(cyl);
+    j["recipe"]["frame"] = "not a frame";
+    brep::Solid back;
+    REQUIRE(gsio::SolidFromJson(j, &back));
+    REQUIRE(back.recipe.kind == brep::PrimitiveKind::None);
+    REQUIRE(brep::ComputeMassProperties(back).volume == Approx(volume).epsilon(1e-12));
+  }
 }

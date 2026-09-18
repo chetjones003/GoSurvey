@@ -42,6 +42,12 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
           cmd.sweepPhase == AppCommandState::SweepPhase::SelectInputs) ||
          (cmd.active == K::Slice &&
           cmd.slicePhase == AppCommandState::SlicePhase::SelectSolids) ||
+         // REQ-335 increment 2: SECTION's selection step, the same accumulate-and-Enter shape as
+         // SLICE's directly above. Missing from this list is the ALIGN accident recorded above,
+         // repeated — a command whose state machine has a selection phase but whose CLICKS were
+         // never routed to it, so the prompt appears and nothing can be picked.
+         (cmd.active == K::Section &&
+          cmd.sectionPhase == AppCommandState::SectionPhase::SelectSolids) ||
          cmd.active == K::Boolean;
 }
 
@@ -95,6 +101,20 @@ enum class ViewportClickRoute : std::uint8_t {
   PdfAttachInsertPoint,
   /// INSERT's on-screen insertion point, scale, or rotation pick.
   InsertBlockPick,
+  /// INSERT align-to-face: ray pick on a planar solid face (issue #475 inc3).
+  InsertBlockAlignFacePick,
+  /// BCONNECT face pick while BEDIT is open (issue #475 inc5).
+  BconnectFacePick,
+  /// A command is asking for one **face of a solid** — `SECTIONPLANE`'s only step (REQ-342).
+  ///
+  /// A sub-object pick, not an entity pick, and until now it existed only as `Ctrl`+click in
+  /// `CadUi.cpp`, dispatched ABOVE this table and invisible to it. That is exactly how REQ-335's
+  /// selection step shipped broken twice: the click fell through to ordinary entity selection and
+  /// pulled the user out of the command, and then the face did not pre-highlight because the hover
+  /// carries its own separate `Ctrl` gate. Naming the step here is what lets a test assert it —
+  /// `HeadlessDriver`'s `PICK` verb calls `SubmitViewportPick` directly and never reaches the
+  /// routing layer at all, so no transcript can cover this, however many steps it has.
+  SubObjectFacePick,
 };
 
 /// \see ViewportClickRoute. Model space (and floating model space) only — pure paper space has its
@@ -103,6 +123,9 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   using K = AppCommandState::Kind;
   using R = ViewportClickRoute;
   using MP = AppCommandState::ModifyPhase;
+
+  if (cmd.blockEditActive && cmd.bconnectAwaitingFace)
+    return R::BconnectFacePick;
 
   switch (cmd.active) {
   case K::None:
@@ -151,6 +174,13 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Polysolid:
     return cmd.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject ? R::RawEntityPick
                                                                              : R::SnappedPointPick;
+
+  // PIPERUN (issue #486 increment B2 / REQ-345): every phase past the size prompt wants an
+  // ordinary snapped coordinate — the start point, then each further vertex. At the
+  // WaitNominalSize phase a click still routes here and `SubmitPipeRunViewportPick` reports the
+  // refusal, rather than being silently swallowed by `Ignore`.
+  case K::PipeRun:
+    return R::SnappedPointPick;
 
   // --- Select-then-point modify commands: window-select first, then coordinates. ---
   case K::Move:
@@ -217,6 +247,26 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     }
     return R::Ignore;
   }
+  // SECTION (REQ-335 increment 2): select solids, then three snapped points for the plane. The same
+  // shape as SLICE above minus the keep-side step, because SECTION keeps neither piece — it keeps
+  // the outline.
+  case K::Section: {
+    using SecP = AppCommandState::SectionPhase;
+    switch (cmd.sectionPhase) {
+    case SecP::SelectSolids:
+      return R::SelectionAccumulate;
+    case SecP::WaitP1:
+    case SecP::WaitP2:
+    case SecP::WaitP3:
+      return R::SnappedPointPick;
+    }
+    return R::Ignore;
+  }
+  // SECTIONPLANE (REQ-342): one step, and it wants a FACE. Unlike SECTION above it never asks which
+  // solids to cut — a clip plane is a property of the view and cuts everything, so there is nothing
+  // to select but the face the plane goes on.
+  case K::SectionPlane:
+    return R::SubObjectFacePick;
   case K::Align:
     return cmd.alignPhase == AppCommandState::AlignPhase::PickSelection ? R::SelectionAccumulate
                                                                        : R::SnappedPointPick;
@@ -345,8 +395,10 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
                : R::Ignore;  // dialog / async build / scale / rotation phases take no viewport click
   case K::InsertBlock: {
     using IPh = AppCommandState::InsertBlockPhase;
+    if (cmd.insertBlockPhase == IPh::WaitAlignFace)
+      return R::InsertBlockAlignFacePick;
     return (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
-            cmd.insertBlockPhase == IPh::WaitRotation)
+            cmd.insertBlockPhase == IPh::WaitRotation || cmd.insertBlockPhase == IPh::WaitConnectorTarget)
                ? R::InsertBlockPick
                : R::Ignore;  // dialog / attribute prompt — clicks go to ImGui
   }
@@ -358,6 +410,12 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::TrimState:
   case K::Elev:
     return R::Ignore;  // system-variable text prompts, answered on the command line
+  case K::SectionClip:
+    // REQ-341. Same shape as the two above: the bare `SECTIONCLIP` prompt is waiting for ON, OFF,
+    // FLIP or a distance, all of which arrive on the command line — a viewport click answers none
+    // of them. Stated rather than left to the tail return, because this switch has no `default:`
+    // precisely so that every Kind carries a decision someone made.
+    return R::Ignore;
   case K::VpFreeze:
   case K::VpThaw:
     return R::Ignore;  // REQ-046: layer freezing is per-viewport, so these pick inside a floating
@@ -423,6 +481,10 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   case R::SelectionAccumulate:
   case R::RawEntityPick:
   case R::TrimPick:
+  // A face of a solid IS an object to point at, so the pickbox cursor and the OSNAP suppression
+  // that go with a selection step are both right here (REQ-342). What it is NOT is an ENTITY
+  // selection — see ViewportIsFacePickStep, which is what the click and hover gates test.
+  case R::SubObjectFacePick:
     return true;
 
   // "Which point?", or nothing at all.
@@ -431,10 +493,31 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   case R::HatchPick:
   case R::PdfAttachInsertPoint:
   case R::InsertBlockPick:
+  case R::InsertBlockAlignFacePick:
+  case R::BconnectFacePick:
   case R::Ignore:
     return false;
   }
   return false;  // unreachable; see ViewportClickRouteFor's tail note
+}
+
+/// True while a command is asking for one **face of a solid** (REQ-342, GitHub issue #479).
+///
+/// Two gates in `CadUi.cpp` decide whether a sub-object is picked and whether one pre-highlights,
+/// and both required `Ctrl` to be held:
+///
+///   - the click, `subObjectClick` — without this predicate the click falls straight through to
+///     ordinary entity selection, which pulls the user out of the command they are in the middle
+///     of. Reported against `SECTION` on 2026-09-10: *"it takes me out of the section and just
+///     selects the object by itself."*
+///   - the hover, `subObjectHovering` — a SEPARATE gate, so fixing only the click gives a command
+///     whose clicks work and whose faces never light up. Reported immediately after the first fix:
+///     *"that click works, it is just not highlighting the object."*
+///
+/// Both bugs were found by hand in the running app, twice, because nothing automated could see
+/// them. This predicate is the thing a test can hold on to.
+[[nodiscard]] inline bool ViewportIsFacePickStep(const AppCommandState& cmd) {
+  return ViewportClickRouteFor(cmd) == ViewportClickRoute::SubObjectFacePick;
 }
 
 /// Paper-space counterpart of \ref ViewportIsObjectSelectionStep (REQ-307, GitHub #106).

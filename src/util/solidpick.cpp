@@ -130,7 +130,7 @@ const char* KindName(Kind k) {
 
 bool PickSubObject(const brep::Solid& solid, const std::vector<float>& triVerts,
                    const std::vector<int>& triFaceIds, const Ray& rayIn, const Tolerance& tol,
-                   Pick* out) {
+                   Pick* out, const KeepHalfSpace* keep) {
   if (!out || !rayIn.valid())
     return false;
   if (solid.vertices.empty() || solid.faces.empty())
@@ -173,6 +173,8 @@ bool PickSubObject(const brep::Solid& solid, const std::vector<float>& triVerts,
     double t = 0.0;
     if (!ray3d::RayTriangleIntersect(ray, a, bb, c, &hit, &t))
       continue;
+    if (keep && !keep->Keeps(hit))
+      continue;  // clipped away: not drawn there, so it neither answers nor hides anything behind
     if (t < frontT)
       frontT = t;
     const int fi = triFaceIds[i];
@@ -196,6 +198,8 @@ bool PickSubObject(const brep::Solid& solid, const std::vector<float>& triVerts,
       double t = 0.0;
       const double d = ray3d::RayPointDistance(ray, solid.vertices[i].p, &t);
       if (d > tol.vertex || d >= bestVertDist)
+        continue;
+      if (keep && !keep->Keeps(solid.vertices[i].p))
         continue;
       if (hasFront && t > frontT + tol.vertex)
         continue;  // behind the front surface by more than its own tolerance: occluded
@@ -223,6 +227,8 @@ bool PickSubObject(const brep::Solid& solid, const std::vector<float>& triVerts,
       Vec3 onEdge;
       const double d = RayEdgeDistance(solid, solid.edges[i], ray, &t, &onEdge);
       if (d > tol.edge || d >= bestEdgeDist)
+        continue;
+      if (keep && !keep->Keeps(onEdge))
         continue;
       if (hasFront && t > frontT + tol.edge)
         continue;  // occluded, as above
