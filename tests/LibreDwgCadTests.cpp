@@ -963,3 +963,120 @@ TEST_CASE("Foreign DWG without payload still imports a LINE (REQ-175)", "[dwg][l
   REQUIRE(in.userLinesFlat.size() == 6);
   REQUIRE(in.userLinesFlat[3] == Catch::Approx(10.f).margin(0.05f));
 }
+
+// REQ-325 / ADR-053 increment 4 (GitHub issue #437) — DWG export splits a
+// tilted curved polyline segment onto its own ARC, the DWG mirror of
+// DxfIo.cpp's split. A flat-only polyline stays one LWPOLYLINE unchanged.
+TEST_CASE("DWG export splits a tilted curved polyline segment onto its own ARC (issue #437)",
+          "[dwg][libredwg][req325][issue437]") {
+  ScratchDir dir("dwg-tilted-poly-split");
+  const auto p = (dir.path / "tilted-poly.dwg").string();
+
+  auto makeTiltedPolyline = []() -> AppCommandState {
+    AppCommandState st;
+    st.worldDocumentOriginX = 0.0;
+    st.worldDocumentOriginY = 0.0;
+    // 3-vertex open polyline: v0(0,0,0) -> v1(10,0,0) -> v2(10,0,10)
+    // Segment v1->v2 is tilted (plane y=0, normal (0,1,0)) and curved.
+    st.userPolylineOffsets = {0, 3};
+    st.userPolylineVerts = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 10.f, 0.f, 10.f};
+    st.userPolylineVertsBulge = {0.f, 0.4f, 0.f};
+    st.userPolylineVertsNormal = {0.f, 0.f, 1.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
+    st.userPolylineClosed = {0};
+    st.userPolylineAttrs = {EntityAttributes{}};
+    return st;
+  };
+  AppCommandState st = makeTiltedPolyline();
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int nLw = 0, nArc = 0;
+  const Dwg_Entity_LWPOLYLINE* lw = nullptr;
+  const Dwg_Entity_ARC* arc = nullptr;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype == DWG_TYPE_LWPOLYLINE && o->tio.entity && o->tio.entity->tio.LWPOLYLINE)
+      { ++nLw; lw = o->tio.entity->tio.LWPOLYLINE; }
+    if (o->fixedtype == DWG_TYPE_ARC && o->tio.entity && o->tio.entity->tio.ARC)
+      { ++nArc; arc = o->tio.entity->tio.ARC; }
+  }
+  CHECK(nLw == 1);
+  CHECK(nArc == 1);
+  if (lw) {
+    CHECK(lw->num_points == 2);
+    // The flat run must not carry the tilted bulge.
+    if (lw->bulges == nullptr)
+      CHECK(lw->num_bulges == 0);
+    else {
+      bool anyTiltedBulge = false;
+      for (BITCODE_BL i = 0; i < lw->num_bulges; ++i)
+        if (lw->bulges[i] != 0.0) anyTiltedBulge = true;
+      CHECK(!anyTiltedBulge);
+    }
+  }
+  if (arc) {
+    CHECK(arc->extrusion.x == Catch::Approx(0.0).margin(1e-9));
+    CHECK(arc->extrusion.y == Catch::Approx(1.0).margin(1e-9));
+    CHECK(arc->extrusion.z == Catch::Approx(0.0).margin(1e-9));
+    // The ARC's centre is stored in OCS, so it differs from world (10,0,10) etc.
+    // Verify it is not the naive world centre taken as flat.
+    CHECK((std::fabs(arc->center.x - 10.0) > 0.5 || std::fabs(arc->center.z - 10.0) > 0.5));
+  }
+  dwg_free(&dwg);
+
+  // Round-trip through GoSurvey's own importer recovers a flat run + tilted arc.
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  CHECK(in.userPolylineOffsets.size() == 2);
+  if (in.userPolylineOffsets.size() == 2) {
+    const int nv = in.userPolylineOffsets[1] - in.userPolylineOffsets[0];
+    CHECK(nv == 2);
+  }
+  CHECK(in.userArcs.size() == 1);
+  if (in.userArcs.size() == 1) {
+    CHECK(in.userArcs[0].nx == Catch::Approx(0.f).margin(1e-6));
+    CHECK(in.userArcs[0].ny == Catch::Approx(1.f).margin(1e-6));
+    CHECK(in.userArcs[0].nz == Catch::Approx(0.f).margin(1e-6));
+  }
+}
+
+TEST_CASE("DWG export keeps a flat-only polyline as one LWPOLYLINE (issue #437)",
+          "[dwg][libredwg][req325][issue437]") {
+  ScratchDir dir("dwg-flat-poly");
+  const auto p = (dir.path / "flat-poly.dwg").string();
+  AppCommandState st;
+  st.worldDocumentOriginX = 0.0;
+  st.worldDocumentOriginY = 0.0;
+  st.userPolylineOffsets = {0, 4};
+  st.userPolylineVerts = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 10.f, 10.f, 0.f, 0.f, 10.f, 0.f};
+  st.userPolylineVertsBulge = {0.f, 0.5f, 0.f, 0.f};
+  st.userPolylineVertsNormal = {0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f};
+  st.userPolylineClosed = {1};
+  st.userPolylineAttrs = {EntityAttributes{}};
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int nLw = 0, nArc = 0;
+  const Dwg_Entity_LWPOLYLINE* lw = nullptr;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype == DWG_TYPE_LWPOLYLINE && o->tio.entity && o->tio.entity->tio.LWPOLYLINE)
+      { ++nLw; lw = o->tio.entity->tio.LWPOLYLINE; }
+    if (o->fixedtype == DWG_TYPE_ARC && o->tio.entity && o->tio.entity->tio.ARC)
+      ++nArc;
+  }
+  CHECK(nLw == 1);
+  CHECK(nArc == 0);
+  if (lw) {
+    CHECK(lw->flag & 512); // closed preserved
+    CHECK(lw->num_points == 4);
+    CHECK(lw->num_bulges == 4);
+  }
+  dwg_free(&dwg);
+}
+

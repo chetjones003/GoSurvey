@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "PolylineTiltedArc.hpp"
 #include "CadDimStroke.hpp"  // one source for dimension geometry, shared with the viewport and the plot
 #include "CadLinetype.hpp"
 #include "DxfColors.hpp"
@@ -3733,13 +3734,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(51, aw.endDeg);
     };
 
-    // Builds the `CadArc` a tilted polyline segment (vertex `ia`'s own leaving bulge/normal) draws —
-    // same construction issue #373's 3D FILLET solve and the render/pick/snap increments (1-3) all
-    // already use: an ad-hoc frame from the leaving vertex gives the true world centre, then the
-    // ARC's own CANONICAL frame (`ucs::FromNormal(centre, normal)`) re-derives the angles, because
-    // that is the frame every consumer of `CadArc::startRad/sweepRad` (including `DxfArcToWrite`
-    // just above) actually reads them in — the exact bug FILLET's own `addArc3D` fix (issue #373)
-    // found and fixed once already.
+    // REQ-325 / ADR-053 (shared helper): the same construction now lives in
+    // PolylineTiltedArc.hpp so DXF and DWG cannot disagree.
     auto buildTiltedSegmentArc = [&](int ia, int ib, float bulge, float nx, float ny, float nz,
                                      CadArc* out) -> bool {
       const ray3d::Vec3 pA{st.userPolylineVerts[static_cast<size_t>(ia) * 3],
@@ -3748,42 +3744,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       const ray3d::Vec3 pB{st.userPolylineVerts[static_cast<size_t>(ib) * 3],
                            st.userPolylineVerts[static_cast<size_t>(ib) * 3 + 1],
                            st.userPolylineVerts[static_cast<size_t>(ib) * 3 + 2]};
-      ucs::Ucs plane{};
-      if (!ucs::FromNormal(pA, ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
-                                           static_cast<double>(nz)},
-                           &plane))
-        return false;
-      const ucs::Point2D p1Local = ucs::WorldToPlane(plane, pB);
-      const BulgeArcSpan arc = BulgeArc(0.0, 0.0, p1Local.x, p1Local.y, static_cast<double>(bulge));
-      if (!arc.valid)
-        return false;
-      const ray3d::Vec3 centerWorld = ucs::PlaneToWorld(plane, ucs::Point2D{arc.cx, arc.cy});
-      ucs::Ucs canon{};
-      if (!ucs::FromNormal(centerWorld, ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
-                                                     static_cast<double>(nz)},
-                           &canon))
-        return false;
-      const ucs::Point2D sLocal = ucs::WorldToPlane(canon, pA);
-      const ucs::Point2D eLocal = ucs::WorldToPlane(canon, pB);
-      const float thetaA = static_cast<float>(std::atan2(sLocal.y, sLocal.x));
-      const float thetaB = static_cast<float>(std::atan2(eLocal.y, eLocal.x));
-      constexpr float kTwoPi = 6.28318530717958647692f;
-      float sweep = thetaB - thetaA;
-      if (bulge >= 0.f) {
-        while (sweep < 0.f) sweep += kTwoPi;
-      } else {
-        while (sweep > 0.f) sweep -= kTwoPi;
-      }
-      out->cx = static_cast<float>(centerWorld.x);
-      out->cy = static_cast<float>(centerWorld.y);
-      out->z = static_cast<float>(centerWorld.z);
-      out->r = static_cast<float>(arc.radius);
-      out->startRad = thetaA;
-      out->sweepRad = sweep;
-      out->nx = nx;
-      out->ny = ny;
-      out->nz = nz;
-      return true;
+      return BuildTiltedPolylineSegmentArc(pA, pB, static_cast<double>(bulge),
+                                           ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny),
+                                                       static_cast<double>(nz)},
+                                           out);
     };
 
     const int polyCount =
