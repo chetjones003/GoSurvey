@@ -131,7 +131,39 @@ struct Xf2 {
     *oxOut = ox + c * xr - s * yr;
     *oyOut = oy + s * xr + c * yr;
   }
+  [[nodiscard]] bool isIdentity() const {
+    return std::fabs(ox) < 1e-9 && std::fabs(oy) < 1e-9 && std::fabs(ang) < 1e-9 &&
+           std::fabs(sx - 1.0) < 1e-9 && std::fabs(sy - 1.0) < 1e-9;
+  }
 };
+
+// REQ-312 / GitHub issue #435: DWG equivalent of DxfOcsToWorld / DxfExtrusionIsFlat.
+[[nodiscard]] inline bool DwgExtrusionIsFlat(double nx, double ny, double nz) {
+  return nx == 0.0 && ny == 0.0 && nz == 1.0;
+}
+
+[[nodiscard]] inline bool DwgOcsToWorld(double x, double y, double z, double nx, double ny, double nz,
+                                        ray3d::Vec3* out) {
+  ucs::Ucs frame;
+  if (!ucs::FromNormal({0.0, 0.0, 0.0}, {nx, ny, nz}, &frame))
+    return false;
+  if (out)
+    *out = ucs::UcsToWorld(frame, {x, y, z});
+  return true;
+}
+
+inline void RotateExtrusionByXf(const Xf2& xf, double* nx, double* ny) {
+  if (nx == nullptr || ny == nullptr)
+    return;
+  if (std::fabs(xf.ang) < 1e-12)
+    return;
+  const double c = std::cos(xf.ang);
+  const double s = std::sin(xf.ang);
+  const double ox = *nx;
+  const double oy = *ny;
+  *nx = c * ox - s * oy;
+  *ny = s * ox + c * oy;
+}
 
 // LibreDWG keeps table/entity strings in the file's *native* encoding. For R2007+ DWGs that is
 // UTF-16LE (BITCODE_TU); casting straight to char* truncates the name at the first NUL byte
@@ -206,13 +238,15 @@ void LocalLine(AppCommandState& st, double x0, double y0, double z0, double x1, 
   st.userLineAttrs.push_back(at);
 }
 
-void LocalCircle(AppCommandState& st, double cx, double cy, double r, double z, const EntityAttributes& at) {
+void LocalCircle(AppCommandState& st, double cx, double cy, double r, double z, const EntityAttributes& at,
+                 double nx = 0.0, double ny = 0.0, double nz = 1.0) {
   st.userCirclesCxCyZR.push_back(cx - st.worldDocumentOriginX);
   st.userCirclesCxCyZR.push_back(cy - st.worldDocumentOriginY);
   st.userCirclesCxCyZR.push_back(z);
   st.userCirclesCxCyZR.push_back(r);
   st.userCircleAttrs.push_back(at);
-  PushCircleNormal(st.userCircleNormals);   // REQ-312: DWG extrusion not yet read
+  PushCircleNormal(st.userCircleNormals, static_cast<float>(nx), static_cast<float>(ny),
+                   static_cast<float>(nz));
 }
 
 template <class T>
@@ -231,7 +265,7 @@ void ArcFromAngles(double a0, double a1, T* startRad, T* sweepRad) {
 }
 
 void LocalArc(AppCommandState& st, double cx, double cy, double r, double a0, double a1, double z,
-              const EntityAttributes& at) {
+              const EntityAttributes& at, double nx = 0.0, double ny = 0.0, double nz = 1.0) {
   if (r <= 1e-12)
     return;
   CadArc arc{};
@@ -240,6 +274,9 @@ void LocalArc(AppCommandState& st, double cx, double cy, double r, double a0, do
   arc.r = r;
   ArcFromAngles(a0, a1, &arc.startRad, &arc.sweepRad);
   arc.z = z;
+  arc.nx = static_cast<float>(nx);
+  arc.ny = static_cast<float>(ny);
+  arc.nz = static_cast<float>(nz);
   st.userArcs.push_back(arc);
   st.userArcAttrs.push_back(at);
 }
@@ -294,7 +331,8 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
 }
 
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
-                  std::unordered_map<std::string, int>* skipHist);
+                  std::unordered_map<std::string, int>* skipHist,
+                  int* degenerateExtrusions = nullptr);
 
 /// REQ-320 / ADR-051 (GitHub issue #299): a `3DSOLID` entity's geometry is an ACIS record stream,
 /// not lines/circles LibreDWG can hand back directly. `acis_data` is LibreDWG's already-decrypted
@@ -357,7 +395,8 @@ void ImportAcisSolid(AppCommandState& st, const Dwg_Data* dwg, const Dwg_Entity_
 }
 
 void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
-                   std::unordered_map<std::string, int>* skipHist) {
+                   std::unordered_map<std::string, int>* skipHist,
+                   int* degenerateExtrusions) {
   if (depth > 8 || ent == nullptr || ent->tio.INSERT == nullptr)
     return;
   const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
@@ -373,11 +412,12 @@ void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, i
   child.sx = ins->scale.x != 0.0 ? ins->scale.x : 1.0;
   child.sy = ins->scale.y != 0.0 ? ins->scale.y : 1.0;
   for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e))
-    ImportObject(st, dwg, e, child, depth + 1, skipHist);
+    ImportObject(st, dwg, e, child, depth + 1, skipHist, degenerateExtrusions);
 }
 
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
-                  std::unordered_map<std::string, int>* skipHist) {
+                  std::unordered_map<std::string, int>* skipHist,
+                  int* degenerateExtrusions) {
   if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr)
     return;
   Dwg_Object_Entity* ent = obj->tio.entity;
@@ -396,18 +436,74 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
   }
   if (ty == DWG_TYPE_CIRCLE && ent->tio.CIRCLE != nullptr) {
     const Dwg_Entity_CIRCLE* e = ent->tio.CIRCLE;
+    // REQ-312 / GitHub issue #435: read extrusion, convert OCS centre to world.
+    const double ox = e->extrusion.x;
+    const double oy = e->extrusion.y;
+    const double oz = e->extrusion.z;
+    double ex = ox, ey = oy, ez = oz;
+    RotateExtrusionByXf(xf, &ex, &ey);
+    if (DwgExtrusionIsFlat(ex, ey, ez)) {
+      double cx = 0, cy = 0;
+      xf.apply(e->center.x, e->center.y, &cx, &cy);
+      const double sc = std::max(std::fabs(xf.sx), std::fabs(xf.sy));
+      LocalCircle(st, cx, cy, e->radius * sc, e->center.z, at, ex, ey, ez);
+      return;
+    }
+    ray3d::Vec3 w{};
+    if (!DwgOcsToWorld(e->center.x, e->center.y, e->center.z, ox, oy, oz, &w)) {
+      NoteSkip(skipHist, "CIRCLE(degenerate extrusion)");
+      if (degenerateExtrusions)
+        ++(*degenerateExtrusions);
+      return;
+    }
+    // Validate rotated extrusion is still non-degenerate (rotation preserves length, but guard).
+    ucs::Ucs tmp;
+    if (!ucs::FromNormal({0, 0, 0}, {ex, ey, ez}, &tmp)) {
+      NoteSkip(skipHist, "CIRCLE(degenerate extrusion)");
+      if (degenerateExtrusions)
+        ++(*degenerateExtrusions);
+      return;
+    }
     double cx = 0, cy = 0;
-    xf.apply(e->center.x, e->center.y, &cx, &cy);
+    xf.apply(w.x, w.y, &cx, &cy);
     const double sc = std::max(std::fabs(xf.sx), std::fabs(xf.sy));
-    LocalCircle(st, cx, cy, e->radius * sc, e->center.z, at);
+    LocalCircle(st, cx, cy, e->radius * sc, w.z, at, ex, ey, ez);
     return;
   }
   if (ty == DWG_TYPE_ARC && ent->tio.ARC != nullptr) {
     const Dwg_Entity_ARC* e = ent->tio.ARC;
+    const double ox = e->extrusion.x;
+    const double oy = e->extrusion.y;
+    const double oz = e->extrusion.z;
+    double ex = ox, ey = oy, ez = oz;
+    RotateExtrusionByXf(xf, &ex, &ey);
+    if (DwgExtrusionIsFlat(ex, ey, ez)) {
+      double cx = 0, cy = 0;
+      xf.apply(e->center.x, e->center.y, &cx, &cy);
+      const double sc = std::max(std::fabs(xf.sx), std::fabs(xf.sy));
+      LocalArc(st, cx, cy, e->radius * sc, e->start_angle + xf.ang, e->end_angle + xf.ang, e->center.z, at,
+               ex, ey, ez);
+      return;
+    }
+    ray3d::Vec3 w{};
+    if (!DwgOcsToWorld(e->center.x, e->center.y, e->center.z, ox, oy, oz, &w)) {
+      NoteSkip(skipHist, "ARC(degenerate extrusion)");
+      if (degenerateExtrusions)
+        ++(*degenerateExtrusions);
+      return;
+    }
+    ucs::Ucs tmp;
+    if (!ucs::FromNormal({0, 0, 0}, {ex, ey, ez}, &tmp)) {
+      NoteSkip(skipHist, "ARC(degenerate extrusion)");
+      if (degenerateExtrusions)
+        ++(*degenerateExtrusions);
+      return;
+    }
     double cx = 0, cy = 0;
-    xf.apply(e->center.x, e->center.y, &cx, &cy);
+    xf.apply(w.x, w.y, &cx, &cy);
     const double sc = std::max(std::fabs(xf.sx), std::fabs(xf.sy));
-    LocalArc(st, cx, cy, e->radius * sc, e->start_angle + xf.ang, e->end_angle + xf.ang, e->center.z, at);
+    // Angles need no adjustment — OCS shares frame axes (issue #435 Expected).
+    LocalArc(st, cx, cy, e->radius * sc, e->start_angle + xf.ang, e->end_angle + xf.ang, w.z, at, ex, ey, ez);
     return;
   }
   if (ty == DWG_TYPE_ELLIPSE && ent->tio.ELLIPSE != nullptr) {
@@ -513,7 +609,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE_INSERT) {
-    ExplodeInsert(st, dwg, ent, depth, skipHist);
+    ExplodeInsert(st, dwg, ent, depth, skipHist, degenerateExtrusions);
     return;
   }
   if (ty == DWG_TYPE__3DSOLID && ent->tio._3DSOLID != nullptr) {
@@ -752,9 +848,30 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   for (size_t i = 0; i < nC; ++i) {
     dwg_point_3d c{};
     world(st.userCirclesCxCyZR[i * 4 + 0], st.userCirclesCxCyZR[i * 4 + 1], st.userCirclesCxCyZR[i * 4 + 2], &c);
+    float nx = kFlatNormalX, ny = kFlatNormalY, nz = kFlatNormalZ;
+    CircleNormalAt(st.userCircleNormals, i, &nx, &ny, &nz);
+    const bool circFlat = IsFlatNormal(nx, ny, nz);
+    dwg_point_3d ext{0.0, 0.0, 1.0};
+    if (!circFlat) {
+      ucs::Ucs frame;
+      if (ucs::FromNormal({0.0, 0.0, 0.0}, {static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)},
+                          &frame)) {
+        const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, {c.x, c.y, c.z});
+        c.x = ocs.x;
+        c.y = ocs.y;
+        c.z = ocs.z;
+        ext.x = static_cast<double>(nx);
+        ext.y = static_cast<double>(ny);
+        ext.z = static_cast<double>(nz);
+      }
+    }
     Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(hdr, &c, static_cast<double>(st.userCirclesCxCyZR[i * 4 + 3]));
-    if (e != nullptr)
+    if (e != nullptr) {
+      e->extrusion.x = ext.x;
+      e->extrusion.y = ext.y;
+      e->extrusion.z = ext.z;
       apply(e->parent, AttrAt(st.userCircleAttrs, i));
+    }
   }
   for (size_t i = 0; i < st.userArcs.size(); ++i) {
     const CadArc& arc = st.userArcs[i];
@@ -1114,11 +1231,12 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   ImportStyles(st, &dwg);
 
   std::unordered_map<std::string, int> skipHist;
+  int degenerateExtrusions = 0;
   const Xf2 id{};
   Dwg_Object* mspace = dwg_model_space_object(&dwg);
   if (mspace != nullptr) {
     for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e))
-      ImportObject(st, &dwg, e, id, 0, &skipHist);
+      ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions);
   }
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
                          st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty();
@@ -1134,7 +1252,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
       if (ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_SEQEND ||
           ty == DWG_TYPE_ENDBLK || ty == DWG_TYPE_BLOCK)
         continue;
-      ImportObject(st, &dwg, o, id, 0, &skipHist);
+      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions);
     }
   }
 
@@ -1155,6 +1273,11 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " + std::to_string(nLines) +
                 " line(s), " + std::to_string(nCirc) + " circle(s), " + std::to_string(nPoly) + " polyline(s), " +
                 std::to_string(st.userArcs.size()) + " arc(s).");
+  if (degenerateExtrusions > 0) {
+    log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) +
+                  " import — refused " + std::to_string(degenerateExtrusions) +
+                  " ARC/CIRCLE record(s) whose extrusion is a zero-length vector.");
+  }
   int printed = 0;
   for (const auto& kv : skipHist) {
     if (printed >= 8)
