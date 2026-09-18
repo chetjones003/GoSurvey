@@ -1951,6 +1951,28 @@ struct AppCommandState {
     /// Total tessellated triangles across the solid scene, filled in when the scene is built.
     int solidTriangleCount = 0;
 
+    /// REQ-100 profile (e) (TASK-270 §14): non-empty selects the point-cloud profile. Unlike every
+    /// other profile, the scene is not synthesized — it is the real file at this path, imported
+    /// through the normal async `POINTCLOUDATTACH` path, exactly as REQ-100 (e) requires ("the
+    /// user's own driving E57"). At most one of this, \ref solidCount, \ref meshTriangleCount and
+    /// \ref surfacePointCount is non-zero/non-empty.
+    std::string pointCloudPath;
+    /// True from the moment `BENCH POINTCLOUD <path>` starts the import until `TickPointCloudImport`
+    /// reaps it — the bench scene/orbit installs only once the import lands, since there is no
+    /// scene to frame or measure before the cloud exists.
+    bool pointCloudImportPending = false;
+    /// `PointCloudDisplaySettings::lodTargetPoints` at the moment the run starts — report-only,
+    /// read back because REQ-100 (e) budgets "points submitted to the GPU in one frame," not points
+    /// in the file, and the LOD target is what actually bounds that submission.
+    std::int64_t pointCloudLodTargetPoints = 0;
+    /// Frames (of the TIMED portion) in which the renderer issued at least one synchronous leaf
+    /// disk read — REQ-100 (e)'s "stall" obligation: reported even when p95 passes, since a stall
+    /// is a separate failure mode from a slow median frame.
+    int pointCloudDiskStallFrames = 0;
+    /// Running max of `ViewportRenderer::PointCloudResidentLeafBytes()`, sampled once per timed
+    /// frame — REQ-100 (e)'s "peak resident node-cache memory."
+    std::size_t pointCloudPeakResidentLeafBytes = 0;
+
     std::vector<double> savedPolyVerts;
     std::vector<int> savedPolyOffsets;
     std::vector<std::uint8_t> savedPolyClosed;
@@ -5955,6 +5977,15 @@ bool ApplyTrimStateValue(AppCommandState& st, int value, std::vector<std::string
 /// the user's drawing and camera and reports the p95 verdict.
 bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::vector<std::string>& log);
 void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-100 profile (e) (TASK-270 §14): `BENCH POINTCLOUD <path>` cannot synthesize its scene the
+/// way every other profile does — the requirement names the reference scene as "the user's own
+/// driving E57," so this starts a real async import (`StartPointCloudImportAsync`) after clearing
+/// the other entity stores, then defers the scripted-orbit install until the import lands.
+/// \ref InstallPointCloudBenchScene is called from `TickPointCloudImport` once the import
+/// completes (success installs the timed orbit; failure restores the cleared stores and reports).
+bool StartPointCloudBench(AppCommandState& st, const std::string& path, std::vector<std::string>& log);
+void InstallPointCloudBenchScene(AppCommandState& st, std::vector<std::string>& log);
 /// ELEV — set the work-plane elevation new geometry is drawn at (REQ-058).
 void StartElevCommand(AppCommandState& st, std::vector<std::string>& log);
 bool ApplyElevValue(AppCommandState& st, double z, std::vector<std::string>& log);
