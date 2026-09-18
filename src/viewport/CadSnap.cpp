@@ -5,6 +5,8 @@
 #include "util/cadblock.hpp"
 #include "util/cadpiperun.hpp"
 #include "util/curveintersect.hpp"
+#include "util/pointcloudcache.hpp"
+#include "util/pointcloudoctree.hpp"
 #include "util/solidpick.hpp"
 
 #include <algorithm>
@@ -912,7 +914,7 @@ bool RayHitSolidFace(const ray3d::Ray& ray, const std::vector<float>& triVerts,
 }
 } // namespace
 
-Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive, float tolWorld,
+Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, float tolWorld,
              SnapExclude exclude, const ray3d::Ray* pickRay, const Kind* onlyKind) {
   SnapPickAccum acc{};
   // Null (plan view, paper space) leaves every candidate measured exactly as before.
@@ -934,6 +936,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   const bool wantSurveyPoint = want(Kind::SurveyCenter, cmd.objectSnapSurveyPoint);
   const bool wantPerpendicular = want(Kind::Perpendicular, cmd.objectSnapPerpendicular);
   const bool wantSurface = want(Kind::Surface, cmd.objectSnapSurface);
+  const bool wantPointCloud = want(Kind::PointCloud, cmd.objectSnapPointCloud);
   const bool wantCenterOfFace = want(Kind::CenterOfFace, cmd.objectSnap3dEnabled && cmd.objectSnap3dCenterFace);
   const bool wantKnot = want(Kind::Knot, cmd.objectSnap3dEnabled && cmd.objectSnap3dKnot);
 
@@ -1515,6 +1518,117 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
                static_cast<float>(wy), Kind::Surface, tolWorld, z);
   }
 
+  if (wantPointCloud) {
+    // The nearest REAL point of any visible point cloud within the aperture — REQ-348. Reuses the
+    // same octree ray-cylinder culling REQ-347's EXTRACTCENTERLINE hover query already uses
+    // (`pointcloud::SelectLodLeavesInCylinder`), just at the snap tolerance instead of the
+    // centerline search radius, and the same cache-once-per-cloud handle
+    // (`GetOrOpenPointCloudCache`) so a hovering cursor does not reopen a `.gscloud` file's
+    // header/octree every frame. Leaf SELECTION reads only `pc->octree`, which is already resident
+    // in memory (`CadPointCloud::octree`) — no disk IO happens at all unless a candidate leaf is
+    // actually found near the cursor.
+    constexpr int kMaxSnapProbeLeaves = 8;
+    for (size_t pci = 0; pci < cmd.cadPointClouds.size(); ++pci) {
+      if (!PointCloudVisible(cmd, pci))
+        continue;
+      const std::shared_ptr<const CadPointCloud>& pc = cmd.cadPointClouds[pci];
+      if (!pc)
+        continue;
+      bool found = false;
+      double bestPx = 0.0, bestPy = 0.0, bestPz = 0.0;
+      bool searchedRealDensity = false;
+      if (pc->hasOutOfCoreCache()) {
+        std::vector<std::int32_t> leaves;
+        if (acc.ray) {
+          const std::vector<pointcloud::CylinderLodLeaf> cl = pointcloud::SelectLodLeavesInCylinder(
+              pc->octree, acc.ray->origin.x, acc.ray->origin.y, acc.ray->origin.z, acc.ray->dir.x,
+              acc.ray->dir.y, acc.ray->dir.z, static_cast<double>(tolWorld), kMaxSnapProbeLeaves);
+          for (const pointcloud::CylinderLodLeaf& l : cl)
+            leaves.push_back(l.leafNodeIndex);
+        } else {
+          // Plan view has no ray (REQ-058 parity) — cull by XY footprint alone, at any Z, which is
+          // the only tolerance a plan cursor can express.
+          for (int ni = 0; ni < static_cast<int>(pc->octree.nodes.size()); ++ni) {
+            const pointcloud::Node& n = pc->octree.nodes[static_cast<size_t>(ni)];
+            if (!n.isLeaf())
+              continue;
+            if (n.bounds.maxX < wx - tolWorld || n.bounds.minX > wx + tolWorld ||
+                n.bounds.maxY < wy - tolWorld || n.bounds.minY > wy + tolWorld)
+              continue;
+            leaves.push_back(ni);
+            if (static_cast<int>(leaves.size()) >= kMaxSnapProbeLeaves)
+              break;
+          }
+        }
+        if (leaves.empty()) {
+          searchedRealDensity = true;  // definitive: no candidate leaf near the cursor at all
+        } else {
+          const pointcloudcache::OpenCache* cache =
+              GetOrOpenPointCloudCache(cmd, static_cast<int>(pci));
+          if (cache) {
+            searchedRealDensity = true;
+            std::vector<double> leafXyz;
+            std::vector<float> leafColors, leafIntensity;
+            double bestD2 = 1.e300;
+            for (std::int32_t leaf : leaves) {
+              leafXyz.clear();
+              leafColors.clear();
+              leafIntensity.clear();
+              if (!pointcloudcache::ReadLeafPoints(*cache, leaf, leafXyz, leafColors, leafIntensity))
+                continue;
+              for (size_t i = 0; i + 2 < leafXyz.size(); i += 3) {
+                double d2;
+                if (acc.ray) {
+                  const double d = ray3d::RayPointDistance(
+                      *acc.ray, ray3d::Vec3{leafXyz[i], leafXyz[i + 1], leafXyz[i + 2]});
+                  d2 = d * d;
+                } else {
+                  const double dx = leafXyz[i] - wx, dy = leafXyz[i + 1] - wy;
+                  d2 = dx * dx + dy * dy;
+                }
+                if (d2 < bestD2) {
+                  bestD2 = d2;
+                  found = true;
+                  bestPx = leafXyz[i];
+                  bestPy = leafXyz[i + 1];
+                  bestPz = leafXyz[i + 2];
+                }
+              }
+            }
+          }
+          // else: cache open failed — searchedRealDensity stays false, fall through to the bounded
+          // preview sample below (rare: a missing/corrupt cache file).
+        }
+      }
+      if (!searchedRealDensity) {
+        // Cache-less (small, in-memory-only) cloud, or a failed cache open: the bounded REQ-171
+        // preview sample already resident.
+        const std::vector<double>& P = pc->pointsXyz;
+        double bestD2 = 1.e300;
+        for (size_t i = 0; i + 2 < P.size(); i += 3) {
+          double d2;
+          if (acc.ray) {
+            const double d = ray3d::RayPointDistance(*acc.ray, ray3d::Vec3{P[i], P[i + 1], P[i + 2]});
+            d2 = d * d;
+          } else {
+            const double dx = P[i] - wx, dy = P[i + 1] - wy;
+            d2 = dx * dx + dy * dy;
+          }
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            found = true;
+            bestPx = P[i];
+            bestPy = P[i + 1];
+            bestPz = P[i + 2];
+          }
+        }
+      }
+      if (found)
+        Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(bestPx),
+                 static_cast<float>(bestPy), Kind::PointCloud, tolWorld, static_cast<float>(bestPz));
+    }
+  }
+
   // --- PDF underlay snap points ---
   if (cmd.objectSnapEnabled) {
     for (const PdfAttachment& att : cmd.pdfAttachments) {
@@ -2069,6 +2183,12 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   // a Kind later is a compile error here rather than a silently missing entry.
   case Kind::Edge:
   case Kind::Face:
+  case Kind::CenterOfFace:
+  case Kind::Knot:
+    break;
+  // Same reasoning as Edge/Face: resolved from the cursor ray against the octree, not enumerable
+  // as an aperture-free "every point in the cloud" list (REQ-348).
+  case Kind::PointCloud:
     break;
   case Kind::Surface: {
     float z = 0.f;

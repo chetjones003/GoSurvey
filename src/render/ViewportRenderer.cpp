@@ -693,6 +693,11 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     break;
   case CadSnap::Kind::Grip:
     break; // grip snap is silent — no glyph drawn
+  case CadSnap::Kind::PointCloud:
+    // A small filled-looking dot (REQ-348) — the snap answers with an actual scanned point, not a
+    // computed feature, so the glyph reads as "a point" rather than borrowing another kind's shape.
+    AppendSnapCircle(out, f, mh * 0.3f, snapCircSegs);
+    break;
   }
 }
 

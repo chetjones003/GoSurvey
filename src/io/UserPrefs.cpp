@@ -260,6 +260,7 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   b  ("objectSnapIntersection", &st.objectSnapIntersection);
   b  ("objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
   b  ("objectSnapSurface",             &st.objectSnapSurface);
+  b  ("objectSnapPointCloud",          &st.objectSnapPointCloud);
   // --- 3D Object Snap (REQ-325/#395, supersedes REQ-301's objectSnapSolid) ---
   b  ("objectSnap3dEnabled",           &st.objectSnap3dEnabled);
   b  ("objectSnap3dVertex",            &st.objectSnap3dVertex);
@@ -488,6 +489,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["objectSnapIntersection"]     = st.objectSnapIntersection;
   s["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   s["objectSnapSurface"]              = st.objectSnapSurface;
+  s["objectSnapPointCloud"]           = st.objectSnapPointCloud;
   s["objectSnap3dEnabled"]            = st.objectSnap3dEnabled;
   s["objectSnap3dVertex"]             = st.objectSnap3dVertex;
   s["objectSnap3dMidpointEdge"]       = st.objectSnap3dMidpointEdge;

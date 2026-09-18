@@ -10353,6 +10353,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
         ImGui::Checkbox("Intersection", &cmd.objectSnapIntersection);
         ImGui::Checkbox("Apparent intersection", &cmd.objectSnapApparentIntersection);
         ImGui::Checkbox("Surface elevation", &cmd.objectSnapSurface);
+        ImGui::Checkbox("Point cloud", &cmd.objectSnapPointCloud);
         ImGui::EndPopup();
       }
       ImGui::SameLine(0, sp);
@@ -12592,6 +12593,8 @@ static const char* SnapKindLabelForUi(CadSnap::Kind k) {
     return "Knot";
   case CadSnap::Kind::Grip:
     return "Grip";
+  case CadSnap::Kind::PointCloud:
+    return "Point cloud";
   }
   return "Snap";
 }
@@ -19912,6 +19915,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       armOverride(CadSnap::Kind::Edge);
     if (ImGui::Selectable("Solid face"))
       armOverride(CadSnap::Kind::Face);
+    if (ImGui::Selectable("Point cloud"))
+      armOverride(CadSnap::Kind::PointCloud);
     ImGui::EndPopup();
   }
 

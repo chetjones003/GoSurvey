@@ -2027,6 +2027,11 @@ struct AppCommandState {
   /// as in AutoCAD: it fires on objects that do not touch, which is surprising unless asked for.
   bool objectSnapApparentIntersection = false;
   bool objectSnapSurface = true;
+  /// Snap to the nearest REAL point of a resident point cloud (REQ-171/172, REQ-348). Default OFF
+  /// (D-2026-09-18) — a dense cloud competing with every other running snap was judged more
+  /// disruptive than useful by default, the same call REQ-330 made for Quadrant; reachable
+  /// immediately via the Shift+right-click "snap once" override.
+  bool objectSnapPointCloud = false;
   /// --- 3D Object Snap (REQ-325/#395, supersedes REQ-301) ---------------------------------------
   /// AutoCAD's "3D Object Snap" tab is a SEPARATE system from the 2D Object Snap above: its own
   /// master toggle (F4, independent of F3's `objectSnapEnabled`) and its own six per-mode toggles.
@@ -3382,14 +3387,21 @@ struct AppCommandState {
   /// 188M-point scan: first the neighborhood alone was too sparse, then — after reading the
   /// neighborhood from the real cache — locating any point near the cursor in the first place was
   /// ALSO too sparse against the preview). So both steps read the out-of-core `.gscloud` cache
-  /// (ADR-060) when a cloud has one: one open handle per cloud, opened lazily and kept for the
-  /// command's duration.
-  struct ExtractCenterlineCacheEntry {
+  /// (ADR-060) when a cloud has one: one open handle per cloud, opened lazily.
+  ///
+  /// Shared with the REQ-348 PointCloud object snap (`CadSnap::FindBest`), the second concrete use
+  /// that widened this from an EXTRACTCENTERLINE-only cache to a general one — same lazy-open-and-
+  /// keep shape, now keyed by \ref PointCloudOpenCacheEntry::cachePath too so a re-imported cloud
+  /// reusing the same index does not silently answer from a stale handle (EXTRACTCENTERLINE's
+  /// command-scoped `.clear()` masked this for its own single-command lifetime; a persistent snap
+  /// query has no such natural clear point).
+  struct PointCloudOpenCacheEntry {
     int cloudIndex = -1;
     bool ok = false;
+    std::string cachePath;
     pointcloudcache::OpenCache cache;
   };
-  std::vector<ExtractCenterlineCacheEntry> extractCenterlineOpenCaches;
+  std::vector<PointCloudOpenCacheEntry> pointCloudOpenCaches;
   /// Neighborhood-query hysteresis: re-reads the cache only when the hover has moved past a
   /// fraction of the search radius since the last read, reusing \ref extractCenterlineLastNeighborhood
   /// otherwise — so a nearly-still cursor does not re-hit disk every frame, keeping this nowhere
@@ -5044,6 +5056,14 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st);
 /// True when point cloud \p index is drawn AND clickable, mirroring \ref SolidVisible exactly
 /// (REQ-171 part 14: point clouds had no candidate-generation in either pick path before this).
 [[nodiscard]] bool PointCloudVisible(const AppCommandState& st, size_t index);
+
+/// Returns the open `.gscloud` cache for cloud \p cloudIdx from
+/// \ref AppCommandState::pointCloudOpenCaches, opening (or re-opening, if \ref
+/// CadPointCloud::cloudCachePath changed since it was last opened) and caching it on first use.
+/// nullptr when the cloud has no cache or it failed to open. Shared by EXTRACTCENTERLINE
+/// (REQ-347) and the PointCloud object snap (REQ-348).
+[[nodiscard]] const pointcloudcache::OpenCache* GetOrOpenPointCloudCache(AppCommandState& st,
+                                                                          int cloudIdx);
 
 /// Bring \ref AppCommandState::solidDisplayCache and \ref AppCommandState::solidDisplayGeometry up
 /// to date. Called once a frame, beside \ref RefreshSurfaceDisplayGeometry.
