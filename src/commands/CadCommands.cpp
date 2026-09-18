@@ -28875,30 +28875,33 @@ void StartExtractCenterlineCommand(AppCommandState& st, std::vector<std::string>
   st.lastCommand = AppCommandState::Kind::ExtractCenterline;
   st.extractCenterlineHoverValid = false;
   st.extractCenterlineHoverDiag = "not hovering yet";
-  st.extractCenterlineOpenCaches.clear();
+  st.pointCloudOpenCaches.clear();
   st.extractCenterlineLastQueryValid = false;
   st.extractCenterlineLastQueryCloudIndex = -1;
   log.push_back("EXTRACTCENTERLINE — hover a scanned pipe/pole/column and click to place its "
                 "centerline (Esc to cancel).");
 }
 
-// Returns the open cache for `cloudIdx` from `st.extractCenterlineOpenCaches`, opening and caching
-// it on first use. nullptr when the cloud has no cache or it failed to open.
-static const pointcloudcache::OpenCache* GetOrOpenExtractCenterlineCache(AppCommandState& st,
-                                                                          int cloudIdx) {
-  for (const auto& entry : st.extractCenterlineOpenCaches)
-    if (entry.cloudIndex == cloudIdx)
-      return entry.ok ? &entry.cache : nullptr;
-  AppCommandState::ExtractCenterlineCacheEntry entry;
-  entry.cloudIndex = cloudIdx;
+const pointcloudcache::OpenCache* GetOrOpenPointCloudCache(AppCommandState& st, int cloudIdx) {
   const CadPointCloud& pc = *st.cadPointClouds[static_cast<size_t>(cloudIdx)];
+  for (const auto& entry : st.pointCloudOpenCaches)
+    if (entry.cloudIndex == cloudIdx && entry.cachePath == pc.cloudCachePath)
+      return entry.ok ? &entry.cache : nullptr;
+  // No entry, or the cloud at this index was re-imported/replaced since the last open (a
+  // different `cloudCachePath`) — drop any stale entry for this index and open fresh.
+  st.pointCloudOpenCaches.erase(
+      std::remove_if(st.pointCloudOpenCaches.begin(), st.pointCloudOpenCaches.end(),
+                     [&](const auto& e) { return e.cloudIndex == cloudIdx; }),
+      st.pointCloudOpenCaches.end());
+  AppCommandState::PointCloudOpenCacheEntry entry;
+  entry.cloudIndex = cloudIdx;
+  entry.cachePath = pc.cloudCachePath;
   const pointcloudcache::OpenResult opened = pointcloudcache::Open(pc.cloudCachePath);
   entry.ok = opened.ok;
   if (opened.ok)
     entry.cache = opened.cache;
-  st.extractCenterlineOpenCaches.push_back(std::move(entry));
-  return st.extractCenterlineOpenCaches.back().ok ? &st.extractCenterlineOpenCaches.back().cache
-                                                   : nullptr;
+  st.pointCloudOpenCaches.push_back(std::move(entry));
+  return st.pointCloudOpenCaches.back().ok ? &st.pointCloudOpenCaches.back().cache : nullptr;
 }
 
 // Reads every point within `radius` of (cx,cy,cz) from `cache`'s leaves near that point (ADR-060) —
@@ -28969,7 +28972,7 @@ void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray) {
     const int cloudIdx = static_cast<int>(pci);
     bool searchedRealDensity = false;
     if (pc->hasOutOfCoreCache()) {
-      const pointcloudcache::OpenCache* cache = GetOrOpenExtractCenterlineCache(st, cloudIdx);
+      const pointcloudcache::OpenCache* cache = GetOrOpenPointCloudCache(st, cloudIdx);
       if (!cache)
         anyCacheOpenFailed = true;
       if (cache) {
@@ -29039,7 +29042,7 @@ void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray) {
   // re-read only when the hover has moved past a fraction of the radius since the last read
   // (reusing the last neighborhood otherwise), so a nearly-still cursor does not re-hit disk every
   // frame; this stays nowhere near the renderer's own much larger per-frame LOD reselect cost.
-  const pointcloudcache::OpenCache* cache = GetOrOpenExtractCenterlineCache(st, bestCloud);
+  const pointcloudcache::OpenCache* cache = GetOrOpenPointCloudCache(st, bestCloud);
   const double moveHysteresis = radius * 0.3;
   const bool reuseLast =
       cache && st.extractCenterlineLastQueryValid && st.extractCenterlineLastQueryCloudIndex == bestCloud &&

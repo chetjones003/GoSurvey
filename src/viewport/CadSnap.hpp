@@ -42,7 +42,14 @@ enum class Kind {
   /// A knot point of a NURBS (freeform) face's parametrization (REQ-325/#395, AutoCAD "Knot"). Only
   /// meaningful for `brep::SurfaceKind::Nurbs` faces — the distinct knot values of the patch's U and
   /// V knot vectors, evaluated on the surface.
-  Knot
+  Knot,
+  /// The nearest REAL point of a resident point cloud (REQ-171/172, REQ-348) to the cursor ray —
+  /// not an interpolated surface, an actual scanned sample. Uses the same out-of-core octree
+  /// ray-cylinder culling as REQ-347's EXTRACTCENTERLINE hover query, so it never linear-scans a
+  /// full cloud. Default OFF (D-2026-09-18, AutoCAD parity — most osnap kinds default on, but a
+  /// dense cloud competing with every other snap by default was judged more disruptive than
+  /// useful, the same reasoning REQ-330 applied to Quadrant).
+  PointCloud
 };
 
 struct Hit {
@@ -86,7 +93,12 @@ struct SnapExclude {
 /// \p onlyKind, when non-null (issue #103's Shift+Right-Click "Snap once" override), restricts
 /// every candidate to that one kind and ignores the persistent per-type OSNAP toggles entirely —
 /// the override's whole purpose is to reach a kind the user does not keep enabled generally.
-[[nodiscard]] Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive,
+///
+/// \p cmd is non-const (widened from `const AppCommandState&` for REQ-348): the PointCloud kind
+/// lazily opens and caches `.gscloud` handles via `GetOrOpenPointCloudCache`, the same
+/// open-once-keep-across-frames cache EXTRACTCENTERLINE already uses, so a hovering cursor does
+/// not reopen and re-read a cache file's header/octree every single frame.
+[[nodiscard]] Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive,
                            float tolWorld, SnapExclude exclude = {}, const ray3d::Ray* pickRay = nullptr,
                            const Kind* onlyKind = nullptr);
 
@@ -124,6 +136,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   case Kind::Surface:
   case Kind::Edge:
   case Kind::Face:
+  case Kind::PointCloud:
     return 0;
   default:
     return 1;  // a named point: an endpoint, a midpoint, a centre, a knot, a face centroid, a grip
@@ -162,6 +175,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 1;  ///< A named parametric feature of the surface — as strong a claim as an edge midpoint.
   case Kind::Grip:
     return 4; ///< Beats all geometry snaps; no glyph is drawn for this kind.
+  case Kind::PointCloud:
+    return 0;  ///< Weakest claim, like Surface/Face — real CAD geometry snaps win when they compete.
   }
   return 0;
 }

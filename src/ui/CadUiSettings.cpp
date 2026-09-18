@@ -505,6 +505,11 @@ static void DrawSettingsDraftingTab(AppCommandState& cmd) {
   ImGui::Checkbox("Surface elevation (interpolated TIN at the cursor)", &cmd.objectSnapSurface);
   ItemHelpTooltip("Snaps to the covering visible surface's triangle plane at the cursor (REQ-127). "
                   "Weaker than endpoints so vertices still win. Off: no surface snap.");
+  ImGui::Checkbox("Point cloud (nearest scanned point)", &cmd.objectSnapPointCloud);
+  ItemHelpTooltip("Snaps to the nearest real point of a resident point cloud (REQ-171/172/348), not "
+                  "an interpolated surface. Off by default — a dense cloud competing with every "
+                  "other running snap was judged more disruptive than useful; reachable any time via "
+                  "Shift+right-click \"snap once\".");
   ImGui::Separator();
   ImGui::TextDisabled("Snapping to B-rep SOLIDS is configured separately, in the \"3D Object Snap\" tab (F4).");
   ImGui::Separator();

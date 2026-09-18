@@ -9217,6 +9217,54 @@ capability that does not exist. They are recorded here rather than quietly dropp
   `AppCommandState`) exposed as Search Radius / Fit Tolerance sliders in a new "Centerline Fit"
   ribbon section. User-confirmed working against the real scan.
 
+### REQ-348 — Point cloud object snap (GitHub issue TBD)
+- Purpose: REQ-171/172's point clouds could be displayed but not snapped to — a user tracing solid
+  geometry (pipe axes, wall faces) from a scan had no way to place a coordinate exactly on a real
+  scanned point, which REQ-347's EXTRACTCENTERLINE alone does not substitute for (it fits a
+  cylinder axis, not an arbitrary vertex).
+- Priority: must
+- Type: functional
+- Statement: A new object-snap kind, `CadSnap::Kind::PointCloud`, snaps to the nearest REAL point
+  (not an interpolated or computed one) of a resident, visible point cloud within the aperture.
+  Culling reuses REQ-347's own octree ray-cylinder query
+  (`pointcloud::SelectLodLeavesInCylinder`/`QueryLeavesNearPoint`, operating on the octree already
+  resident in `CadPointCloud::octree` — no disk IO for leaf selection) and a cache-once-per-cloud
+  `.gscloud` handle (`GetOrOpenPointCloudCache`, shared with EXTRACTCENTERLINE) so a hovering
+  cursor never re-scans a whole cloud or reopens a cache file every frame. A cache-less cloud (or a
+  failed cache open) falls back to the bounded REQ-171 preview sample. Works under an orbited 3D
+  camera and a non-world UCS (ray-based, like every other 3D-aware snap kind) as well as plan view
+  (XY-only culling, since a plan cursor carries no ray). Governed by a running-OSNAP toggle,
+  default **OFF** (D-2026-09-18: a dense cloud competing with every other snap by default was
+  judged more disruptive than useful — the same call REQ-330 made for Quadrant), and reachable at
+  any time via the existing Shift+right-click "snap once" override menu. Respects the same
+  visibility rule as every other point-cloud interaction (`PointCloudVisible`: erased/isolated-out/
+  off-layer/frozen-layer points are not snappable, REQ-084 (d)).
+- Acceptance:
+  - hovering near a resident point cloud's point, with the toggle on and a draw/modify command
+    active, shows a snap glyph and snaps to that point's exact XYZ (not a rounded/approximate
+    value);
+  - the toggle is off by default — no point-cloud candidate competes with other snaps until
+    enabled;
+  - correct under an orbited camera / rotated UCS (ray-based ranking, not plan-XY only) — two
+    points sharing the same plan XY at different elevations are distinguished by the ray;
+  - points hidden by layer/isolate/erase are never offered;
+  - the Shift+right-click override menu offers "Point cloud" and reaches the kind even when its
+    running-OSNAP toggle is off;
+  - no full linear scan of an out-of-core cloud's disk payload happens on a frame where the cursor
+    is not within tolerance of any of its leaves (octree-leaf metadata culling happens first, in
+    memory, before any cache is opened).
+- Owner-layer: Viewport (CadSnap), Commands (shared cache accessor), UI (toggle + override menu +
+  glyph)
+- Status: accepted
+- Revisions: 2026-09-18 — initial, user request ("3d object snap for point cloud points... culling
+  so we do not introduce lag"). Verified against architecture (no new abstraction — widens the
+  existing EXTRACTCENTERLINE open-cache cache from one caller to two, same shape; no new
+  dependency). Delivered same day: `Kind::PointCloud` (`CadSnap.hpp/.cpp`), `objectSnapPointCloud`
+  toggle (default off, `CadCommands.hpp`, persisted in `UserPrefs.cpp` — `.gs` persistence skipped,
+  the format is retired), snap glyph (`ViewportRenderer.cpp`), OSNAP settings + Shift+right-click
+  menu entries (`CadUi.cpp`/`CadUiSettings.cpp`), `GetOrOpenPointCloudCache` generalized from
+  `GetOrOpenExtractCenterlineCache` (`CadCommands.hpp/.cpp`), 6 Catch2 cases (`CadSnapTests.cpp`).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
