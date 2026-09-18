@@ -3,6 +3,7 @@
 #include "AcisSatParser.hpp"
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "PolylineTiltedArc.hpp"
 #include "DxfColors.hpp"
 #include "DwgIo.hpp"
 #include "SurveyPoints.hpp"
@@ -910,65 +911,169 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       apply(e->parent, AttrAt(st.userArcAttrs, i));
     }
   }
+  // REQ-325 / ADR-053 increment 4 — DWG mirror of DxfIo.cpp's split-on-export.
+  // A polyline containing a tilted curved segment is split: flat runs stay
+  // LWPOLYLINE, each tilted curved edge becomes its own ARC carrying the
+  // segment's own plane (IsFlatNormal guard, BulgeArc + BuildTilted...).
+  // Closure is not preserved through a split (ADR-053 (e)), same as DXF.
   for (size_t i = 0; i + 1 < st.userPolylineOffsets.size(); ++i) {
     const int a = st.userPolylineOffsets[i];
     const int b = st.userPolylineOffsets[i + 1];
     const int nv = b - a;
     if (nv < 2)
       continue;
-    std::vector<dwg_point_2d> pts(static_cast<size_t>(nv));
-    for (int v = 0; v < nv; ++v) {
-      const int k = (a + v) * 3;
-      pts[static_cast<size_t>(v)].x = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k)]) +
-                                      st.worldDocumentOriginX;
-      pts[static_cast<size_t>(v)].y = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 1)]) +
-                                      st.worldDocumentOriginY;
-    }
-    Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, nv, pts.data());
-    if (lw != nullptr && i < st.userPolylineClosed.size() && st.userPolylineClosed[i])
-      lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);
-    // REQ-316 / ADR-047 (DWG side, REQ-325 / ADR-053 increment 4): per-vertex bulge (group-42
-    // equivalent). A TILTED segment is written straight (bulge 0) here rather than flattened wrong
-    // — DWG's LWPOLYLINE has the same one-elevation/one-extrusion ceiling DXF's does. The tilted-ARC
-    // write path the split needs now exists above (GitHub issue #391), but wiring the polyline
-    // split onto it — the DWG mirror of DxfIo.cpp's `emitSyntheticArc` loop — is a separate
-    // follow-up; until it lands, writing the segment straight rather than flattened wrong is the
-    // REQ-201 choice.
-    if (lw != nullptr) {
+    const EntityAttributes* atPtr = AttrAt(st.userPolylineAttrs, i);
+    const bool closed = i < st.userPolylineClosed.size() && st.userPolylineClosed[i] != 0;
+
+    auto emitPolylineRun = [&](int vStart, int vEndIncl, bool runClosed) {
+      if (vEndIncl - vStart < 1)
+        return;
+      const int runNv = vEndIncl - vStart + 1;
+      std::vector<dwg_point_2d> pts(static_cast<size_t>(runNv));
+      for (int v = 0; v < runNv; ++v) {
+        const int k = (vStart + v) * 3;
+        pts[static_cast<size_t>(v)].x =
+            static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k)]) + st.worldDocumentOriginX;
+        pts[static_cast<size_t>(v)].y =
+            static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 1)]) + st.worldDocumentOriginY;
+      }
+      Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, runNv, pts.data());
+      if (lw == nullptr)
+        return;
+      if (runClosed)
+        lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);
       bool anyBulge = false;
-      std::vector<double> bulges(static_cast<size_t>(nv), 0.0);
-      for (int v = 0; v < nv; ++v) {
-        const int vi = a + v;
+      std::vector<double> bulges(static_cast<size_t>(runNv), 0.0);
+      for (int v = 0; v < runNv; ++v) {
+        const int vi = vStart + v;
         const float b2 = static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
-                             ? st.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.f;
+                             ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+                             : 0.f;
         if (b2 == 0.f)
           continue;
-        float nx = 0.f, ny = 0.f, nz = 1.f;
-        const size_t nk = static_cast<size_t>(vi) * 3;
-        if (nk + 2 < st.userPolylineVertsNormal.size()) {
-          nx = st.userPolylineVertsNormal[nk];
-          ny = st.userPolylineVertsNormal[nk + 1];
-          nz = st.userPolylineVertsNormal[nk + 2];
-        }
-        if (!IsFlatNormal(nx, ny, nz))
-          continue;  // left straight — see the comment above
         bulges[static_cast<size_t>(v)] = static_cast<double>(b2);
         anyBulge = true;
       }
       if (anyBulge) {
-        lw->num_bulges = static_cast<BITCODE_BL>(nv);
-        lw->bulges = static_cast<BITCODE_BD*>(calloc(static_cast<size_t>(nv), sizeof(BITCODE_BD)));
+        lw->num_bulges = static_cast<BITCODE_BL>(runNv);
+        lw->bulges = static_cast<BITCODE_BD*>(calloc(static_cast<size_t>(runNv), sizeof(BITCODE_BD)));
         if (lw->bulges != nullptr) {
-          for (int v = 0; v < nv; ++v)
+          for (int v = 0; v < runNv; ++v)
             lw->bulges[v] = bulges[static_cast<size_t>(v)];
           lw->flag = static_cast<BITCODE_BS>(lw->flag | 16);
         } else {
           lw->num_bulges = 0;
         }
       }
+      apply(lw->parent, atPtr);
+    };
+
+    auto emitSyntheticArc = [&](const CadArc& arc) {
+      dwg_point_3d c{};
+      world(arc.cx, arc.cy, arc.z, &c);
+      const double a0 = static_cast<double>(arc.startRad);
+      const double a1 = a0 + static_cast<double>(arc.sweepRad);
+      const bool arcFlat = IsFlatNormal(arc.nx, arc.ny, arc.nz);
+      dwg_point_3d ext{0.0, 0.0, 1.0};
+      if (!arcFlat) {
+        ucs::Ucs frame;
+        if (ucs::FromNormal({0.0, 0.0, 0.0},
+                            {static_cast<double>(arc.nx), static_cast<double>(arc.ny),
+                             static_cast<double>(arc.nz)},
+                            &frame)) {
+          const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, {c.x, c.y, c.z});
+          c.x = ocs.x;
+          c.y = ocs.y;
+          c.z = ocs.z;
+          ext.x = static_cast<double>(arc.nx);
+          ext.y = static_cast<double>(arc.ny);
+          ext.z = static_cast<double>(arc.nz);
+        }
+      }
+      Dwg_Entity_ARC* e = dwg_add_ARC(hdr, &c, static_cast<double>(arc.r), a0, a1);
+      if (e != nullptr) {
+        e->extrusion.x = ext.x;
+        e->extrusion.y = ext.y;
+        e->extrusion.z = ext.z;
+        apply(e->parent, atPtr);
+      }
+    };
+
+    auto normalAt = [&](int vi, float* nx, float* ny, float* nz) {
+      const size_t k = static_cast<size_t>(vi) * 3;
+      if (k + 2 < st.userPolylineVertsNormal.size()) {
+        *nx = st.userPolylineVertsNormal[k];
+        *ny = st.userPolylineVertsNormal[k + 1];
+        *nz = st.userPolylineVertsNormal[k + 2];
+      } else {
+        *nx = 0.f;
+        *ny = 0.f;
+        *nz = 1.f;
+      }
+    };
+    auto bulgeAt = [&](int vi) -> float {
+      return static_cast<size_t>(vi) < st.userPolylineVertsBulge.size()
+                 ? st.userPolylineVertsBulge[static_cast<size_t>(vi)]
+                 : 0.f;
+    };
+    auto isTiltedEdge = [&](int vi) {
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      normalAt(vi, &nx, &ny, &nz);
+      return bulgeAt(vi) != 0.f && !IsFlatNormal(nx, ny, nz);
+    };
+
+    bool hasTilted = false;
+    for (int vi = a; vi + 1 < b; ++vi)
+      if (isTiltedEdge(vi)) {
+        hasTilted = true;
+        break;
+      }
+    if (closed && nv >= 2 && isTiltedEdge(b - 1))
+      hasTilted = true;
+
+    if (!hasTilted) {
+      emitPolylineRun(a, b - 1, closed);
+      continue;
     }
-    if (lw != nullptr)
-      apply(lw->parent, AttrAt(st.userPolylineAttrs, i));
+
+    int runStart = a;
+    for (int vi = a; vi + 1 < b; ++vi) {
+      if (!isTiltedEdge(vi))
+        continue;
+      emitPolylineRun(runStart, vi, false);
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      normalAt(vi, &nx, &ny, &nz);
+      const ray3d::Vec3 pA{st.userPolylineVerts[static_cast<size_t>(vi) * 3],
+                           st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1],
+                           st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2]};
+      const ray3d::Vec3 pB{st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3],
+                           st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3 + 1],
+                           st.userPolylineVerts[static_cast<size_t>((vi + 1)) * 3 + 2]};
+      CadArc arc{};
+      if (BuildTiltedPolylineSegmentArc(
+              pA, pB, static_cast<double>(bulgeAt(vi)),
+              ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)}, &arc))
+        emitSyntheticArc(arc);
+      runStart = vi + 1;
+    }
+    if (closed && nv >= 2 && isTiltedEdge(b - 1)) {
+      emitPolylineRun(runStart, b - 1, false);
+      float nx = 0.f, ny = 0.f, nz = 1.f;
+      normalAt(b - 1, &nx, &ny, &nz);
+      const ray3d::Vec3 pA{st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3],
+                           st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3 + 1],
+                           st.userPolylineVerts[static_cast<size_t>((b - 1)) * 3 + 2]};
+      const ray3d::Vec3 pB{st.userPolylineVerts[static_cast<size_t>(a) * 3],
+                           st.userPolylineVerts[static_cast<size_t>(a) * 3 + 1],
+                           st.userPolylineVerts[static_cast<size_t>(a) * 3 + 2]};
+      CadArc arc{};
+      if (BuildTiltedPolylineSegmentArc(
+              pA, pB, static_cast<double>(bulgeAt(b - 1)),
+              ray3d::Vec3{static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)}, &arc))
+        emitSyntheticArc(arc);
+    } else {
+      emitPolylineRun(runStart, b - 1, false);
+    }
   }
   for (size_t i = 0; i < st.cadAnnotations.size(); ++i) {
     const CadAnnotation& an = st.cadAnnotations[i];
