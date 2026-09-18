@@ -8671,6 +8671,34 @@ TEST_CASE("A torus cut square to its axis sections as a ring", "[brep][issue520]
   }
 }
 
+TEST_CASE("A round recipe that does not describe its solid is not used to cut it", "[brep][issue520]") {
+  // The #526 rule, extended to the round primitives these builders rebuild from: a recipe whose
+  // primitive is a different shape must not place the cut. Found by the final review on #541.
+  Problem why = Problem::Ok;
+  Solid a, b;
+
+  Solid sphere;
+  REQUIRE(brep::MakeSphere(World(), 30.0, &sphere, &why));
+  Solid movedSphere = sphere;
+  movedSphere.recipe.frame.origin.x += 100.0;  // what a damaged .gs frame looks like
+  REQUIRE_FALSE(brep::Slice(movedSphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(why == Problem::SliceCutCrossesCurvedFace);  // refused, not cut 100 feet away
+
+  Solid torus;
+  REQUIRE(brep::MakeTorus(World(), 20.0, 5.0, &torus, &why));
+  Solid wrongTorus = torus;
+  wrongTorus.recipe.radius2 = 2.0;  // a tube the solid does not have
+  REQUIRE_FALSE(brep::Slice(wrongTorus, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
+
+  // A torus whose tube is as wide as its ring has no ring-shaped cut at all.
+  Solid fat;
+  REQUIRE(brep::MakeTorus(World(), 6.0, 9.0, &fat, &why));
+  REQUIRE_FALSE(brep::ComputeMassProperties(fat).valid);  // self-intersecting: no measured shape to vet
+  REQUIRE_FALSE(brep::Slice(fat, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(why == Problem::SliceCutTorusCurve);
+}
+
 TEST_CASE("SectionOutlines returns what SectionLoop returns when there is one outline",
           "[brep][issue520]") {
   Problem why = Problem::Ok;

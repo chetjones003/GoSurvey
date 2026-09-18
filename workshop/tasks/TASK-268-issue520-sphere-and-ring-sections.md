@@ -35,6 +35,7 @@ Put to the user, both decided as recommended:
     two pieces. Each carries `Torus` faces over `vCut..pi - vCut` and a flat **ring** face — an outer
     loop plus a hole wound the other way. Any other angle, or a tube as wide as its ring, is
     `SliceCutTorusCurve`.
+  - `RoundRecipeFitsSolid`: a `Sphere` or `Torus` recipe is used only when the primitive it names has the solid's measured shape (the #526 rule, extended to the round primitives). A tube as wide as its ring is refused by name first, having no measured shape to vet.
   - `SectionOutlines` (new, public): every closed outline of the cut, outer wound CCW about the
     section normal and holes CW. `SectionLoop` is now a wrapper on it for the single-outline case,
     naming `SliceCutSeveralOutlines` (separate faces on the plane) or `SectionHasHole`. The loop →
