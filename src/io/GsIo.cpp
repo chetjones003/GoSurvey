@@ -8,6 +8,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 #include "util/meshgeom.hpp"
+#include "util/pointcloudcache.hpp"
 #include "BrepJson.hpp"
 
 #include <algorithm>
@@ -1336,6 +1337,39 @@ json BuildRoot(const AppCommandState& st) {
     doc["meshAttrs"] = std::move(meshAttrs);
   }
 
+  // Point clouds (REQ-171 / ADR-042/ADR-060). Additive section — omitted entirely when there are
+  // none, same ADR-020 (d) tolerant-key precedent as meshes above. Only the bounded PREVIEW sample
+  // (`CadPointCloud::pointsXyz`) is written, not the full cloud — `cloudCache` names the `.gscloud`
+  // sidecar the LOD renderer pages full detail from, so this is not the only copy of the data. A
+  // cloud with no cache (e.g. `cloudCachePath` empty) still round-trips its preview sample alone.
+  if (!st.cadPointClouds.empty()) {
+    json clouds = json::array();
+    for (const auto& pc : st.cadPointClouds) {
+      if (!pc)
+        continue;
+      json c;
+      c["points"] = pc->pointsXyz;
+      if (!pc->colorsRgb.empty())
+        c["colors"] = pc->colorsRgb;
+      if (!pc->intensity.empty())
+        c["intensity"] = pc->intensity;
+      if (!pc->sourcePath.empty())
+        c["source"] = pc->sourcePath;
+      if (!pc->cloudCachePath.empty())
+        c["cloudCache"] = pc->cloudCachePath;
+      c["totalPointCount"] = pc->totalPointCount;
+      clouds.push_back(std::move(c));
+    }
+    doc["pointClouds"] = std::move(clouds);
+    json cloudAttrs = json::array();
+    for (const auto& a : st.cadPointCloudAttrs) {
+      json o;
+      EntityAttributesToJson(a, o);
+      cloudAttrs.push_back(std::move(o));
+    }
+    doc["pointCloudAttrs"] = std::move(cloudAttrs);
+  }
+
   // B-rep solids (REQ-313 / ADR-045). Additive and omitted when there are none, so every drawing
   // written before solids existed still serializes byte-identically — the same ADR-020 (d)
   // precedent the mesh section above follows. See SolidToJson for why the topology is written
@@ -2533,6 +2567,62 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.cadMeshAttrs.push_back(EntityAttributesFromJson(o));
   st.cadMeshAttrs.resize(st.cadMeshes.size());  // keep the parallel arrays length-locked
 
+  // Point clouds (REQ-171 / ADR-042). Guarded with contains(), so a pre-REQ-171 drawing simply has
+  // none — the "legacy .gs loads unchanged" acceptance condition, same as meshes above.
+  //
+  // A cloud whose points array is not a multiple of 3, or whose parallel colour/intensity array
+  // does not match the point count, is refused (REQ-201) rather than loaded with a silently
+  // truncated or misaligned channel.
+  st.cadPointClouds.clear();
+  st.cadPointCloudAttrs.clear();
+  if (doc.contains("pointClouds") && doc["pointClouds"].is_array()) {
+    int cloudIdx = 0;
+    for (const auto& el : doc["pointClouds"]) {
+      ++cloudIdx;
+      if (!el.is_object())
+        continue;
+      auto pc = std::make_shared<CadPointCloud>();
+      if (el.contains("points"))
+        pc->pointsXyz = el["points"].get<std::vector<double>>();
+      if (el.contains("colors"))
+        pc->colorsRgb = el["colors"].get<std::vector<float>>();
+      if (el.contains("intensity"))
+        pc->intensity = el["intensity"].get<std::vector<float>>();
+      if (el.contains("source"))
+        pc->sourcePath = el["source"].get<std::string>();
+      if (el.contains("cloudCache")) {
+        pc->cloudCachePath = el["cloudCache"].get<std::string>();
+        // Reopen the .gscloud cache to repopulate the octree the LOD renderer needs. A missing or
+        // stale cache is a logged degrade to preview-only display, not a load failure (ADR-060 (d))
+        // — the drawing still opens, with this one cloud showing only its bounded preview sample
+        // until it is re-imported.
+        const pointcloudcache::OpenResult reopened = pointcloudcache::Open(pc->cloudCachePath);
+        if (reopened.ok) {
+          pc->octree = reopened.cache.octree;
+        } else {
+          log.push_back("Point cloud " + std::to_string(cloudIdx) + " — .gscloud cache unavailable (" +
+                        reopened.errorMessage + "); showing preview sample only until re-imported.");
+        }
+      }
+      pc->totalPointCount = el.contains("totalPointCount")
+                                 ? el["totalPointCount"].get<std::int64_t>()
+                                 : static_cast<std::int64_t>(pc->pointsXyz.size() / 3);
+      const bool colorsOk = pc->colorsRgb.empty() || pc->colorsRgb.size() == pc->pointsXyz.size();
+      const bool intensityOk =
+          pc->intensity.empty() || pc->intensity.size() == pc->pointsXyz.size() / 3;
+      if (pc->pointsXyz.size() % 3 != 0 || !colorsOk || !intensityOk) {
+        log.push_back("Point cloud " + std::to_string(cloudIdx) +
+                      " skipped — malformed point/colour/intensity array length.");
+        continue;
+      }
+      st.cadPointClouds.push_back(std::move(pc));
+    }
+  }
+  if (doc.contains("pointCloudAttrs") && doc["pointCloudAttrs"].is_array())
+    for (const auto& o : doc["pointCloudAttrs"])
+      st.cadPointCloudAttrs.push_back(EntityAttributesFromJson(o));
+  st.cadPointCloudAttrs.resize(st.cadPointClouds.size());  // keep the parallel arrays length-locked
+
   // B-rep solids (REQ-313 / ADR-045). Guarded, so a drawing written before them simply has none.
   //
   // Every solid is VALIDATED before it is stored, exactly as a mesh is above and for a sharper
@@ -2782,6 +2872,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     }
     log.push_back("Loaded " + std::to_string(st.cadMeshes.size()) + " mesh(es): " + std::to_string(tris) +
                   " triangles, " + std::to_string(parts) + " part(s).");
+  }
+  if (!st.cadPointClouds.empty()) {
+    // REQ-172 requires the count to be REPORTED, same reason as meshes above.
+    long long pts = 0;
+    for (const auto& pc : st.cadPointClouds) pts += pc->pointCount();
+    log.push_back("Loaded " + std::to_string(st.cadPointClouds.size()) + " point cloud(s): " +
+                  std::to_string(pts) + " points.");
   }
 
   // Filled regions (ADR-011) — guarded with contains() so older .gs files load unchanged.

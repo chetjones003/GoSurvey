@@ -52,6 +52,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iterator>
@@ -101,7 +102,11 @@ struct SelectedEntity {
     /// transform command moves it — a pipe run's geometry is DERIVED from its path via auto-fillet
     /// sweeping (cadpiperun.hpp), so a direct drag would need the same re-solve REQ-070 declined for
     /// a TIN surface's own derived geometry.
-    PipeRun = 14
+    PipeRun = 14,
+    /// Point cloud (REQ-171 / ADR-042). Appended after PipeRun so existing type values stay stable.
+    /// **Display-and-erase only, like Mesh** — selects, highlights, erases and reports; never
+    /// grip-edited or moved by a transform command (REQ-171's stated boundary).
+    PointCloud = 15
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -1035,6 +1040,9 @@ struct DrawingGeometrySnapshot {
   /// amended 2026-08-12 — a snapshot of a 2M-triangle model is a refcount bump, not ~53 MB.
   std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
   std::vector<EntityAttributes> cadMeshAttrs;
+  /// Point clouds (REQ-171). Shared, not copied — see CadPointCloud's note and architecture §11.5.
+  std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;
+  std::vector<EntityAttributes> cadPointCloudAttrs;
   /// TIN surfaces (REQ-068). Shared payload, not copied — see CadTin and architecture §11.5.
   std::vector<CadSurface>       cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
@@ -1188,6 +1196,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadFilledRegionAttrs;
   std::vector<std::shared_ptr<const CadMesh>> cadMeshes;  ///< REQ-063; shared, see CadMesh's note.
   std::vector<EntityAttributes> cadMeshAttrs;
+  std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;  ///< REQ-171; shared, see CadPointCloud's note.
+  std::vector<EntityAttributes> cadPointCloudAttrs;
   std::vector<CadSurface>       cadSurfaces;       ///< TIN surfaces (REQ-068).
   std::vector<EntityAttributes> cadSurfaceAttrs;
   std::vector<CadSolidPtr>      cadSolids;         ///< B-rep solids (REQ-313); shared, not copied.
@@ -2757,6 +2767,14 @@ struct AppCommandState {
   std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
   std::vector<EntityAttributes> cadMeshAttrs;
 
+  /// Point clouds (REQ-171 / ADR-042). Reference geometry: nothing in the command layer creates or
+  /// edits one — REQ-172's E57/PTS/PTX/LAS/LAZ importers produce them and ERASE removes them.
+  ///
+  /// `shared_ptr<const>` so undo snapshots share the payload rather than copying it (architecture
+  /// §11.5), exactly as \ref cadMeshes above.
+  std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;
+  std::vector<EntityAttributes> cadPointCloudAttrs;
+
   /// TIN surfaces (REQ-068). The heavy triangulation hangs off a shared_ptr inside each CadSurface,
   /// so copying this vector — which every undo snapshot does — is strings and refcount bumps.
   std::vector<CadSurface> cadSurfaces;
@@ -2975,6 +2993,65 @@ struct AppCommandState {
     }
   };
   std::vector<std::unique_ptr<SurfaceRebuildAsync>> surfaceRebuildAsync;
+
+  /// One in-flight `.gscloud` out-of-core cache build (REQ-171/172, ADR-060) — architecture §8's
+  /// one-shot-worker contract again, same shape as \ref SurfaceRebuildAsync. At most one exists at
+  /// a time: `POINTCLOUDATTACH` refuses to start a second import while one is already running,
+  /// rather than queuing (the user asked for a progress bar with an ETA, which only makes sense
+  /// for a single tracked job).
+  ///
+  /// The worker thread touches ONLY this struct's own fields (plus read-only source/cache paths) —
+  /// never `AppCommandState` directly. Committing the result into `st.cadPointClouds` (undo
+  /// snapshot, entity id assignment, GPU-cache bump) happens on the main thread, in
+  /// `TickPointCloudImport`, once `done` is observed — the same "worker computes, main thread
+  /// applies" split `SurfaceRebuildAsync`/`TinBuildResult` already uses.
+  struct PointCloudImportAsync {
+    std::string sourcePath;
+    std::string cachePath;
+    std::thread thread;
+    std::atomic<bool> done{false};
+    std::atomic<bool> cancelRequested{false};
+    /// Points written to disk during the streaming pass (phase 1 of the build).
+    std::atomic<std::int64_t> pointsStreamed{0};
+    /// Points that have landed in a completed octree leaf during the recursive split (phase 2) —
+    /// reaches \ref totalPointsEstimate exactly when the build finishes.
+    std::atomic<std::int64_t> pointsFinalized{0};
+    /// Leaves read back while assembling the preview sample (phase 3 — `BuildPreviewFromCache`).
+    /// This phase reads the WHOLE cache back off disk (every leaf, to subsample it), a full pass
+    /// with its own real cost that earlier had no progress reporting at all — the exact cause of
+    /// a bar stuck at 100% while the worker was still genuinely working (TASK-270 log).
+    std::atomic<std::int64_t> previewLeavesRead{0};
+    /// Total leaf count, set once (by the worker) right after the cache is opened for the preview
+    /// pass — 0 until then, which the UI reads as "phase 3 hasn't started yet."
+    std::atomic<std::int64_t> previewTotalLeaves{0};
+    /// From `pointcloud_e57::QuickPointCountEstimate`, read before dispatch (cheap: metadata only).
+    /// 0 means unknown — the progress UI falls back to an indeterminate bar in that case.
+    std::int64_t totalPointsEstimate = 0;
+    std::chrono::steady_clock::time_point startTime;
+    /// UI-thread-only cosmetic state for the progress dialog: the ETA text is recomputed at most
+    /// once a second (TASK-270 — it was ticking every frame, which read as jittery rather than a
+    /// countdown), never touched by the worker thread.
+    std::chrono::steady_clock::time_point lastEtaUpdate{};
+    std::string cachedEtaText = "estimating...";
+
+    // Worker-produced result — read only after `done` is observed true.
+    bool ok = false;
+    std::string errorMessage;
+    std::vector<double> previewXyz;
+    std::vector<float> previewColors;
+    std::vector<float> previewIntensity;
+    pointcloud::Octree octree;
+    std::int64_t totalPointCount = 0;
+
+    /// Same reasoning as `SurfaceRebuildAsync`'s own destructor: without this, destroying a job
+    /// whose thread is still running calls `std::terminate` (closing the app mid-import would
+    /// abort the process instead of exiting).
+    ~PointCloudImportAsync() {
+      cancelRequested.store(true, std::memory_order_release);
+      if (thread.joinable()) thread.join();
+    }
+  };
+  std::unique_ptr<PointCloudImportAsync> pointCloudImportAsync;
 
   /// One in-flight Volume Dashboard recompute (REQ-073's 2026-08-23 amendment, TASK-095 §6 step 3) —
   /// architecture §8's one-shot-worker contract again, in the same shape \ref SurfaceRebuildAsync
@@ -4777,7 +4854,10 @@ enum class EntityKind : std::uint8_t {
   /// REQ-313 / ADR-045. Appended after BlockRef, for the reason Surface's note above spells out:
   /// the id sweep walks the attribute arrays in `kEntityKindsInSweepOrder`, so inserting anywhere
   /// but the end would renumber every entity in every existing drawing on its next load.
-  Solid
+  Solid,
+  /// REQ-171 / ADR-042. Appended after Solid, for the same reason: inserting anywhere but the end
+  /// would renumber every entity in every existing drawing on its next load.
+  PointCloud
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -5386,6 +5466,19 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index);
 /// is what makes a single command that touches N points, or N surfaces, coalesce to at most one
 /// rebuild per surface rather than N.
 void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-171/172, ADR-060 — starts a background `.gscloud` build + preview-sample read for the E57
+/// at \p path. Refuses (logs why, returns false) if an import is already in flight. Call once from
+/// the `POINTCLOUDATTACH` command handler; \ref TickPointCloudImport reaps the result.
+bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
+                                std::vector<std::string>& log);
+
+/// Call once per frame (main.cpp, beside \ref TickSurfaceRebuilds). Reaps a completed point-cloud
+/// import — on success, commits the resulting `CadPointCloud` into `st.cadPointClouds` (undo
+/// snapshot, entity id, GPU-cache bump) exactly as the old synchronous `ImportPointCloudE57` did;
+/// on failure or cancellation, logs the reason and commits nothing. A no-op while no import is in
+/// flight or the in-flight one has not finished yet.
+void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log);
 
 /// Advances the Volume Dashboard's own live recompute (REQ-073 amendment, TASK-095). Call every
 /// frame, after \ref TickSurfaceRebuilds so a surface that finished rebuilding this frame is already

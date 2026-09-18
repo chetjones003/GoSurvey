@@ -37,3 +37,7 @@ bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap);
 
 /// Block definition import — `.dxf` or `.dwg` (WBLOCK drawings included).
 bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap);
+
+/// E57 point-cloud scan for import (REQ-172). PTS/PTX/LAS/LAZ are future increments (D-2026-09-17-d
+/// delivers E57 first) — not offered here yet.
+bool BrowseOpenFileE57Utf8(char* utf8Out, size_t utf8Cap);

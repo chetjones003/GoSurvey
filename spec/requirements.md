@@ -3582,6 +3582,10 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-08-29 — D-2026-08-29-g. Delivery order: PTS → PTX → LAS → LAZ → E57
   (`spec/file-format-specs.md` §6).
+  2026-09-17 — D-2026-09-17-d amends the delivery order to **E57 first**, then PTS → PTX → LAS
+  → LAZ, so the new out-of-core octree/LOD engine (still to be recorded: `.gscloud` cache design
+  and the REQ-100 point-cloud frame-budget profile) is proven against the user's real 7.8 GB
+  driving scan file rather than a synthetic small format first.
 
 ### REQ-173 — Raster IMAGE underlays (JPEG, PNG, BMP)
 - Purpose: File Format Specs — photos and scans on the sheet, like PDF attach, not a viewer app
@@ -9149,11 +9153,25 @@ capability that does not exist. They are recorded here rather than quietly dropp
   continuous orbit is the worst case, because orbiting defeats any plan-view
   culling.
 
-  The budget has **four cost profiles**, not one, and the bench carries a case for each:
+  The budget has **five cost profiles**, not one, and the bench carries a case for each:
   (a) **line segments** — 250,000, the original case; (b) **shaded meshes** — the REQ-063 density
   chosen for the bench (ADR-026); (c) **a surface** — **100,000 points / ~200,000 triangles,
-  contoured and orbited**, which is a large but ordinary topo survey; and (d) **B-rep solids** —
-  a few hundred tessellated primitives, orbited and shaded (REQ-313 / ADR-045 addendum (e)). A
+  contoured and orbited**, which is a large but ordinary topo survey; (d) **B-rep solids** —
+  a few hundred tessellated primitives, orbited and shaded (REQ-313 / ADR-045 addendum (e)); and
+  (e) **a point cloud** (REQ-171/REQ-172, ADR-060, proposed 2026-09-17, not yet measured) — the
+  reference scene is the user's own driving E57 (~7.8 GB) loaded through the out-of-core octree,
+  continuously orbited so different octree nodes stream in and out at different levels of detail.
+  Because the whole cloud is never resident or drawn at once, this profile does not budget "points
+  in the file" the way (a)/(c) budget stored primitives; it budgets **points submitted to the GPU
+  in one frame** at the LOD the renderer chooses for the current camera. Proposed target (pending
+  acceptance): p95 frame time stays within the same 16 ms budget with the LOD/streaming system
+  capping the per-frame point submission at **4,000,000 points**, on the reference machine
+  (`project.md` §7). The bench must also report, alongside p95: peak resident node-cache memory
+  during the orbit, and whether any frame during the run blocked waiting on a disk read for a node
+  not yet paged in (a stall is a separate failure mode from a slow frame, and must be reported even
+  if p95 is met). This profile's number is a **proposal**, not yet measured against a shipped
+  renderer — Status below records it as such until an instrument exists (REQ-100 acceptance
+  requires a committed benchmark scene, and profile (e) has none yet). A
   surface is its own profile because contours are regenerated display geometry (REQ-070) rather than
   stored vertices, so its per-frame cost does not follow from either of the first two. Solids are
   their own profile for the mirror-image reason: a solid scene is many small stream-uploaded batches
@@ -9164,12 +9182,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
   a surface rebuild runs off the UI thread (REQ-069) and is measured separately, and a solid's
   tessellation is cached on a staleness key rather than recomputed per frame.
 - Acceptance: a committed benchmark scene profiled on the reference machine stays
-  within budget at the 95th-percentile frame during a scripted orbit, **in each of the four
+  within budget at the 95th-percentile frame during a scripted orbit, **in each of the five
   profiles above**, **built with the toolchain named in `project.md` §7**. A frame budget is a
   property of a binary, not of source code: the compiler chooses the vectorisation, inlining and
   layout that decide it, so a figure measured with a different compiler is a different result.
 - Owner-layer: Renderer
-- Status: accepted — **profiles (a), (b) and (c) MET, measured 2026-08-15** (TASK-052, TASK-053);
+- Status: accepted for (a)–(d) and accepted for (e), point clouds (2026-09-17); **profile (e)'s
+  target (4,000,000 points/frame within 16ms p95, RTX 5060) is accepted but NOT YET MEASURED** —
+  no octree/LOD renderer exists yet to instrument (this requirement amendment tracks the
+  point-cloud epic, D-2026-09-17-d, ADR-060); it stays unmet until a benchmark scene and instrument
+  ship. **profiles (a), (b) and (c) MET, measured 2026-08-15** (TASK-052, TASK-053);
   **profile (d), solids, MET, measured 2026-09-01** (TASK-169, D-2026-09-01-d, GitHub issue #194) —
   1.43 / 1.80 / 4.38 ms at 100 / 400 / 800 solids on the RTX 5060, cache held. The instrument
   (TASK-167) first showed it failing; coalescing the draw calls and giving the solid batches a

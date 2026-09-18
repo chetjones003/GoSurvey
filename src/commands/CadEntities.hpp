@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "util/pointcloudoctree.hpp"
 #include "util/ucs.hpp"
 
 /// How the model viewport draws (REQ-064 / ADR-026 (e)).
@@ -801,6 +802,56 @@ struct CadMesh {
 
   [[nodiscard]] int vertexCount() const { return static_cast<int>(vertsXyz.size() / 3); }
   [[nodiscard]] int triangleCount() const { return static_cast<int>(indices.size() / 3); }
+};
+
+/// A laser-scan point cloud (REQ-171 / ADR-042 (a)) — **reference geometry, never authored here**.
+///
+/// No command creates or grip-edits a cloud, it is not a TIN definition source (REQ-068 D4), and
+/// it is excluded from DXF/DWG export (no native point-cloud object in the R2004/R2000 subset
+/// GoSurvey writes) — the exclusion is logged by name, same as \ref CadMesh's ADR-026 (c)
+/// precedent. It participates in layers, selection, erase and extents like any other entity.
+///
+/// **Held as `shared_ptr<const CadPointCloud>`** by both the live state and every undo snapshot,
+/// for the same reason as \ref CadMesh and \ref CadTin (architecture §11.5): a scan can be
+/// hundreds of millions of points, so sharing an immutable payload is the only way an unrelated
+/// edit does not re-copy it into every undo frame.
+///
+/// Only the points **currently resident from the out-of-core octree** (ADR-060) live here — a
+/// cloud's full extent and point count come from the octree/`.gscloud` cache
+/// (`src/util/pointcloudoctree.hpp`), not from this struct holding every point in memory.
+struct CadPointCloud {
+  /// A bounded **preview** sample — architecture §11.8 interleaved x,y,z, local storage +
+  /// `worldDocumentOrigin` (REQ-101) — used for extents, selection depth, `.gs` persistence, and
+  /// the DXF/DWG exclusion count. **Not** the whole cloud: ADR-060's out-of-core cache
+  /// (`cloudCachePath`/`octree` below) is what the LOD renderer actually pages full-density point
+  /// data from. Kept bounded (see `ImportPointCloudE57`'s preview cap) so this immutable struct
+  /// itself stays cheap to hold, exactly like every other field's shared-payload reasoning below.
+  std::vector<double> pointsXyz;
+  /// Per-point RGB, 0..1, parallel to \ref pointsXyz (stride 3, same point count). Empty when the
+  /// source scan carries no colour — never a placeholder value.
+  std::vector<float> colorsRgb;
+  /// Per-point intensity, parallel to \ref pointsXyz (stride 1, same point count). Empty when the
+  /// source scan carries no intensity channel.
+  std::vector<float> intensity;
+  /// Absolute path to the source scan file (E57/LAS/LAZ/PTS/PTX), for the Properties panel and log.
+  std::string sourcePath;
+  /// Absolute path to the `.gscloud` sidecar cache (ADR-060) this cloud was built from — empty for
+  /// a cloud with no out-of-core cache (a future increment reading a small format directly, or a
+  /// `.gs`-persisted cloud from before this field existed). The renderer's LOD path is a no-op
+  /// without one; the cloud still displays via \ref pointsXyz alone in that case.
+  std::string cloudCachePath;
+  /// The cache's octree structure (small — thousands of nodes, not the point data itself; ADR-060
+  /// "OpenCache field reuse" note applies to leaf `pointIndexBegin` here too). Empty when
+  /// \ref cloudCachePath is empty.
+  pointcloud::Octree octree;
+  /// Total point count in the source scan (from the cache header) — may exceed
+  /// `pointsXyz.size() / 3`, which is only the preview sample's count.
+  std::int64_t totalPointCount = 0;
+
+  [[nodiscard]] int pointCount() const { return static_cast<int>(pointsXyz.size() / 3); }
+  [[nodiscard]] bool hasColor() const { return !colorsRgb.empty(); }
+  [[nodiscard]] bool hasIntensity() const { return !intensity.empty(); }
+  [[nodiscard]] bool hasOutOfCoreCache() const { return !cloudCachePath.empty(); }
 };
 
 /// The triangulation of a TIN surface (REQ-068 / ADR-028 (a)) — the large, **immutable** half.

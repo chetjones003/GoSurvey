@@ -4328,3 +4328,54 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   `UNDO` does not step a slide back, is written into REQ-343 instead. *Make the section plane a
   `SelectedEntity`* — breaks (h), and would promise Properties and `.gs` support that slice 2 of
   this issue does not deliver.
+
+### ADR-060 — Point-cloud out-of-core octree: a versioned `.gscloud` sidecar, source-stamped, rebuilt on mismatch   (2026-09-17, accepted)
+
+- **Status:** accepted (2026-09-17). Backs REQ-171/REQ-172 (ADR-042), and the new
+  point-cloud octree/LOD renderer (D-2026-09-17-d, GitHub point-cloud epic).
+- **Context.** ADR-042 committed to a point-cloud entity and named a "point splat or chunked
+  point path" without specifying it. The driving file is 7.8 GB — too large to hold as one
+  in-memory point buffer alongside the rest of a normal editing session, and too many points to
+  submit to the renderer per frame without a level-of-detail scheme. Import must therefore build
+  a spatial index once and reuse it, rather than re-parsing and re-indexing the source file on
+  every open.
+- **Decision.**
+  (a) **The cache is a single sidecar file next to the source scan**: `<source-file>.gscloud`
+      (e.g. `Sample-Data....e57.gscloud`), never embedded in `.gs`/the DWG trailer — an octree
+      over hundreds of millions of points is disk-scale data, not document metadata, and does not
+      belong in REQ-175's JSON trailer.
+  (b) **The cache header stamps**: a format version (starts at 1), the absolute source file path,
+      the source file's size in bytes and last-write timestamp, and a content hash of the first
+      and last N MiB of the source (full-file hashing a 7.8 GB file on every open is itself a
+      multi-second cost this ADR is trying to avoid). On open, if the stamp does not match the
+      source file bit-for-bit on size+timestamp, hash is checked; a mismatch anywhere means the
+      cache is **stale and rebuilt from scratch**, never partially trusted or patched.
+  (c) **The cache stores**: the octree structure (node bounds, child pointers/offsets, point
+      counts per node) and, per leaf node, an on-disk block of interleaved XYZ + optional RGB +
+      optional intensity, in the same units/frame REQ-171's in-memory payload uses (local storage
+      + `worldDocumentOrigin`, REQ-101) so a loaded node's bytes can be handed to the renderer
+      without a coordinate transform. Node blocks are read lazily and evicted under a bounded
+      working-set budget — this is what "out-of-core" means operationally.
+  (d) **A missing, unreadable, or version-mismatched `.gscloud` is a logged rebuild, never a load
+      failure** — same shape as REQ-001/ADR-042(b)'s "missing file is a logged unload, not a
+      crash": the drawing still opens, the cloud is queued to (re)index, and the log names why.
+  (e) **No general-purpose cache-file abstraction.** This is a point-cloud-specific format; it is
+      not the first of a planned family of `.gs*cache` sidecars, and must not be generalised
+      until a second concrete user exists (CLAUDE.md §7).
+- **Alternatives considered.** *Re-index in memory every open, no cache file* — rejected: a
+  7.8 GB scan would re-parse and re-octree from scratch every time the drawing is opened, which
+  is the multi-minute cost this ADR exists to avoid (the FEATURE REQUEST's own "reopening is
+  measurably faster" acceptance criterion depends on a persistent cache). *Embed the octree in
+  the DWG JSON trailer* — rejected: REQ-175's trailer is document metadata sized for drawings,
+  not a disk-scale spatial index; it would make ordinary drawing saves slow and huge for anyone
+  who ever imported a cloud. *Trust the cache unconditionally once written* — rejected: a source
+  file replaced or re-exported with the same name (a corrected scan re-run) must not silently
+  render stale points; REQ-001's "no silently wrong result" extends to a cache as much as to a
+  parser.
+- **Consequences.** A new on-disk file format is introduced (`.gscloud`) with its own version
+  field, separate from `.gs`/DWG-trailer versioning (ADR-020(e)/REQ-079 do not apply — this is not
+  the document format). Workshop must not fold `.gscloud` versioning into REQ-079 without a
+  separate recorded decision. First import of a large cloud takes an indexing pass proportional to
+  file size; this is disclosed to the user (progress/log), not hidden. Deleting or moving the
+  `.gscloud` file has no effect beyond a one-time reindex — it is a cache, not a required
+  companion file for correctness.

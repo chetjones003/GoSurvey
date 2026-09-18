@@ -201,6 +201,22 @@ bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap) {
   return WideToUtf8(wfile, utf8Out, utf8Cap);
 }
 
+bool BrowseOpenFileE57Utf8(char* utf8Out, size_t utf8Cap) {
+  if (!utf8Out || utf8Cap < 4)
+    return false;
+  wchar_t wfile[MAX_PATH]{};
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof(ofn);
+  ofn.lpstrFile = wfile;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.lpstrFilter = L"E57 point cloud (*.e57)\0*.e57\0All (*.*)\0*.*\0\0";
+  ofn.nFilterIndex = 1;
+  ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+  if (!ShowOpenFileNameW(&ofn))
+    return false;
+  return WideToUtf8(wfile, utf8Out, utf8Cap);
+}
+
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap) {
   if (!utf8Out || utf8Cap < 4)
     return false;
@@ -412,6 +428,13 @@ bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap) {
 }
 
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap) {
+  if (utf8Out && utf8Cap > 0)
+    utf8Out[0] = '\0';
+  (void)utf8Cap;
+  return false;
+}
+
+bool BrowseOpenFileE57Utf8(char* utf8Out, size_t utf8Cap) {
   if (utf8Out && utf8Cap > 0)
     utf8Out[0] = '\0';
   (void)utf8Cap;
