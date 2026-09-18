@@ -29080,9 +29080,12 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
 
   // Section everything BEFORE touching the document, so a failure part-way leaves nothing behind
   // (REQ-201) — the same all-or-nothing shape SLICE already uses.
+  // One cut can be more than one outline: a ring (a torus cut square to its axis, a drilled box) is
+  // an outer outline plus its hole, and each becomes its own closed polyline (REQ-335 increment 2,
+  // D-2026-09-18-a, GitHub #520). They are appended together, under the one undo step below.
   struct Cut {
     ucs::Ucs plane;
-    brep::Path loop;
+    std::vector<brep::Path> loops;
   };
   std::vector<Cut> cuts;
   cuts.reserve(solids.size());
@@ -29095,7 +29098,7 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
       continue;
     Cut c;
     brep::Problem why = brep::Problem::Ok;
-    if (!brep::SectionLoop(*sp, planePoint, planeNormal, &c.plane, &c.loop, &why)) {
+    if (!brep::SectionOutlines(*sp, planePoint, planeNormal, &c.plane, &c.loops, &why)) {
       // The kernel's own reason, verbatim. Nothing is drawn and nothing is cut.
       log.push_back(std::string("SECTION — ") + brep::ProblemText(why));
       return;
@@ -29113,39 +29116,41 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
   int made = 0;
   int failed = 0;
   for (const Cut& c : cuts) {
-    // The Path is 2D in its own plane; the polyline store is world XYZ.
-    std::vector<float> xyz;
-    std::vector<float> bulges;
-    const ray3d::Vec3 p0 = ucs::PlaneToWorld(c.plane, c.loop.start);
-    xyz.push_back(static_cast<float>(p0.x));
-    xyz.push_back(static_cast<float>(p0.y));
-    xyz.push_back(static_cast<float>(p0.z));
-    // A closed path's last segment returns to `start`, so its END is not a new vertex — but its
-    // BULGE belongs to the closing span and has to be carried, or a circular section would come
-    // back as a half-circle and a straight chord.
-    for (std::size_t i = 0; i + 1 < c.loop.segs.size(); ++i) {
-      const ray3d::Vec3 w = ucs::PlaneToWorld(c.plane, c.loop.segs[i].end);
-      xyz.push_back(static_cast<float>(w.x));
-      xyz.push_back(static_cast<float>(w.y));
-      xyz.push_back(static_cast<float>(w.z));
-    }
-    for (const brep::PathSeg& sg : c.loop.segs)
-      bulges.push_back(static_cast<float>(std::tan(sg.sweep * 0.25)));
+    for (const brep::Path& loop : c.loops) {
+      // The Path is 2D in its own plane; the polyline store is world XYZ.
+      std::vector<float> xyz;
+      std::vector<float> bulges;
+      const ray3d::Vec3 p0 = ucs::PlaneToWorld(c.plane, loop.start);
+      xyz.push_back(static_cast<float>(p0.x));
+      xyz.push_back(static_cast<float>(p0.y));
+      xyz.push_back(static_cast<float>(p0.z));
+      // A closed path's last segment returns to `start`, so its END is not a new vertex — but its
+      // BULGE belongs to the closing span and has to be carried, or a circular section would come
+      // back as a half-circle and a straight chord.
+      for (std::size_t i = 0; i + 1 < loop.segs.size(); ++i) {
+        const ray3d::Vec3 w = ucs::PlaneToWorld(c.plane, loop.segs[i].end);
+        xyz.push_back(static_cast<float>(w.x));
+        xyz.push_back(static_cast<float>(w.y));
+        xyz.push_back(static_cast<float>(w.z));
+      }
+      for (const brep::PathSeg& sg : loop.segs)
+        bulges.push_back(static_cast<float>(std::tan(sg.sweep * 0.25)));
 
-    const int before = static_cast<int>(st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back());
-    if (AppendXyzPathAsPolyline(st, xyz, /*closed=*/true) != 1) {
-      // REQ-201: every case is explicitly reported, not silently dropped.
-      log.push_back("SECTION — a solid's section outline failed to append; skipped.");
-      ++failed;
-      continue;
+      const int before = static_cast<int>(st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back());
+      if (AppendXyzPathAsPolyline(st, xyz, /*closed=*/true) != 1) {
+        // REQ-201: every case is explicitly reported, not silently dropped.
+        log.push_back("SECTION — a solid's section outline failed to append; skipped.");
+        ++failed;
+        continue;
+      }
+      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+      for (std::size_t i = 0; i < bulges.size() && before + static_cast<int>(i) <
+                                                       static_cast<int>(st.userPolylineVertsBulge.size());
+           ++i)
+        st.userPolylineVertsBulge[static_cast<std::size_t>(before) + i] = bulges[i];
+      ++made;
     }
-    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
-    for (std::size_t i = 0; i < bulges.size() && before + static_cast<int>(i) <
-                                                     static_cast<int>(st.userPolylineVertsBulge.size());
-         ++i)
-      st.userPolylineVertsBulge[static_cast<std::size_t>(before) + i] = bulges[i];
-    ++made;
   }
 
   if (made == 0) {

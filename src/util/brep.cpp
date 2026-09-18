@@ -1824,6 +1824,8 @@ const char* ProblemText(Problem p) {
     return "A cut parallel to a cone's axis but not through it is a hyperbola, which is not supported yet.";
   case Problem::SliceCutCrossesCurvedFace:
     return "The cut crosses a curved face of this solid, which is not supported yet.";
+  case Problem::SliceCutTorusCurve:
+    return "A cut of a torus that is not square to its axis is a curve this release cannot hold.";
   case Problem::SliceCutTooSteepForCone:
     return "A cut steeper than a cone's own side is not supported yet.";
   case Problem::SliceCutSeveralOutlines:
@@ -7999,6 +8001,206 @@ struct DistRange {
   return Succeed(outWhy);
 }
 
+/// Cut a sphere by any plane through it — the cross-section is a circle, which the kernel holds
+/// (GitHub #520, REQ-314 / REQ-335). Each piece is a spherical cap: the sphere's own surface over the
+/// latitudes the plane leaves, closed by the flat disc of the cut.
+///
+/// The construction works in a frame whose +Z is the kept side's own outward direction, so one
+/// builder serves both caps: the sphere is symmetric under that flip.
+[[nodiscard]] bool SliceSpherePrimitive(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                        SliceKeep keep, Solid* outAbove, Solid* outBelow, bool* handled,
+                                        Problem* outWhy) {
+  *handled = false;
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Sphere)
+    return false;
+
+  *handled = true;
+  const Vec3 centre = rc.frame.origin;
+  const double R = rc.radius;
+  const double eps = 1e-7 * std::max(R, 1.0);
+  const double d = ray3d::Dot(ray3d::Sub(planePoint, centre), pn);  // signed height of the plane
+  if (std::fabs(d) >= R - eps)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+
+  // `up` is the outward direction of the piece being built; `dUp` the plane's height along it.
+  auto build = [&](const Vec3& up, double dUp, Solid* dst) -> bool {
+    ucs::Ucs fr{};
+    if (!ucs::FromNormal(centre, up, &fr))
+      return Fail(Problem::SliceDegeneratePlane, outWhy);
+    const double rCut = std::sqrt(std::max(0.0, R * R - dUp * dUp));
+    const double vCut = std::asin(std::clamp(dUp / R, -1.0, 1.0));  // latitude of the cut circle
+    auto W = [&](const Vec3& local) { return ucs::UcsToWorld(fr, local); };
+
+    Solid s;
+    const Vec3 cutC = W(Vec3{0.0, 0.0, dUp});
+    const int a = AddVertex(&s, W(Vec3{rCut, 0.0, dUp}));   // cut circle at u = 0
+    const int b = AddVertex(&s, W(Vec3{-rCut, 0.0, dUp}));  // cut circle at u = pi
+    const int pole = AddVertex(&s, W(Vec3{0.0, 0.0, R}));
+
+    const Vec3 Z = fr.zAxis;
+    const int cut0 = AddArc(&s, a, b, cutC, Z, kPi);  // the u in [0, pi] half of the cut circle
+    const int cut1 = AddArc(&s, b, a, cutC, Z, kPi);
+    // Meridians from the cut circle to the pole. About -Y the local +X turns toward +Z; about +Y the
+    // local -X does, which is why the two seams carry opposite normals.
+    const double mSweep = kHalfPi - vCut;
+    const int mA = AddArc(&s, a, pole, centre, ray3d::Scale(fr.yAxis, -1.0), mSweep);
+    const int mB = AddArc(&s, b, pole, centre, fr.yAxis, mSweep);
+
+    // The flat disc of the cut, facing away from the material (which is on the +up side).
+    s.faces.push_back(MakePlaneFace(planePoint, ray3d::Scale(Z, -1.0), {{cut1, true}, {cut0, true}}));
+
+    auto capFace = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+      Face f;
+      f.surface.kind = SurfaceKind::Sphere;
+      f.surface.frame = fr;
+      f.surface.radius = R;
+      f.uStart = u0;
+      f.uEnd = u1;
+      f.vStart = vCut;
+      f.vEnd = kHalfPi;
+      Loop lp;
+      lp.uses = std::move(uses);
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    };
+    capFace(0.0, kPi, {{cut0, false}, {mB, false}, {mA, true}});
+    capFace(kPi, kTwoPi, {{cut1, false}, {mA, false}, {mB, true}});
+
+    AddSingleShell(&s);
+    if (Validate(s) != Problem::Ok)
+      return Fail(Problem::SliceResultInvalid, outWhy);
+    *dst = std::move(s);
+    return true;
+  };
+
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+  Solid probe;
+  if (!build(pn, d, &probe) || !build(ray3d::Scale(pn, -1.0), -d, &probe))
+    return false;  // build() already set outWhy
+  if (wantAbove && outAbove && !build(pn, d, outAbove))
+    return false;
+  if (wantBelow && outBelow && !build(ray3d::Scale(pn, -1.0), -d, outBelow))
+    return false;
+  return Succeed(outWhy);
+}
+
+/// Cut a torus by a plane **square to its axis** — the cross-section is a ring, two concentric
+/// circles (GitHub #520, REQ-314 / REQ-335). Each piece is the part of the tube on its side of the
+/// plane, closed by the flat ring.
+///
+/// The tube angle `v` runs from the outer equator (`v = 0`) through the top (`v = pi/2`) to the inner
+/// equator (`v = pi`), so a plane at height `d` cuts the tube at `v = asin(d/r)` and `pi - asin(d/r)`,
+/// and the ring's radii are `R ± sqrt(r^2 - d^2)`. As with a sphere, one builder serves both pieces
+/// because the torus is symmetric about its own centre plane.
+[[nodiscard]] bool SliceTorusSquareToAxis(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                          SliceKeep keep, Solid* outAbove, Solid* outBelow, bool* handled,
+                                          Problem* outWhy) {
+  *handled = false;
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Torus)
+    return false;
+
+  *handled = true;
+  const double R = rc.radius;
+  const double r = rc.radius2;
+  const double eps = 1e-7 * std::max(R + r, 1.0);
+  const Vec3 axis = rc.frame.zAxis;
+  if (std::fabs(std::fabs(ray3d::Dot(pn, axis)) - 1.0) > 1e-6)
+    return Fail(Problem::SliceCutTorusCurve, outWhy);  // any other angle is a quartic curve
+  if (r >= R)
+    return Fail(Problem::SliceCutTorusCurve, outWhy);  // a self-intersecting tube is not two rings
+  const double d = ray3d::Dot(ray3d::Sub(planePoint, rc.frame.origin), axis);
+  if (std::fabs(d) >= r - eps)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+
+  auto build = [&](double sign, Solid* dst) -> bool {
+    // A frame flipped about X keeps the torus (its z -> -z image is itself) and turns the piece
+    // below the plane into the piece above it.
+    ucs::Ucs fr = rc.frame;
+    if (sign < 0.0) {
+      fr.yAxis = ray3d::Scale(fr.yAxis, -1.0);
+      fr.zAxis = ray3d::Scale(fr.zAxis, -1.0);
+    }
+    const double dUp = sign * d;
+    const double rc2 = std::sqrt(std::max(0.0, r * r - dUp * dUp));  // half-width of the ring
+    const double vCut = std::asin(std::clamp(dUp / r, -1.0, 1.0));
+    auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(fr, Vec3{x, y, z}); };
+
+    Solid s;
+    const int out0 = AddVertex(&s, W(R + rc2, 0.0, dUp));
+    const int outP = AddVertex(&s, W(-(R + rc2), 0.0, dUp));
+    const int in0 = AddVertex(&s, W(R - rc2, 0.0, dUp));
+    const int inP = AddVertex(&s, W(-(R - rc2), 0.0, dUp));
+
+    const Vec3 Z = fr.zAxis;
+    const Vec3 cutC = W(0.0, 0.0, dUp);
+    const int eOut0 = AddArc(&s, out0, outP, cutC, Z, kPi);  // outer ring, u in [0, pi]
+    const int eOutP = AddArc(&s, outP, out0, cutC, Z, kPi);
+    const int eIn0 = AddArc(&s, in0, inP, cutC, Z, kPi);  // inner ring
+    const int eInP = AddArc(&s, inP, in0, cutC, Z, kPi);
+    // Tube arcs at u = 0 and u = pi, over the top: from the outer cut point to the inner one.
+    const double tSweep = kPi - 2.0 * vCut;
+    const int tube0 = AddArc(&s, out0, in0, W(R, 0.0, 0.0), ray3d::Scale(fr.yAxis, -1.0), tSweep);
+    const int tubeP = AddArc(&s, outP, inP, W(-R, 0.0, 0.0), fr.yAxis, tSweep);
+
+    // The flat ring of the cut, facing away from the material: the outer loop first, then the hole
+    // wound the other way, which is what makes the face's signed area the ring's own.
+    Face cut;
+    cut.surface = PlaneSurface(planePoint, ray3d::Scale(Z, -1.0));
+    Loop outer;
+    outer.uses = {EdgeUse{eOutP, true}, EdgeUse{eOut0, true}};
+    Loop hole;
+    hole.uses = {EdgeUse{eIn0, false}, EdgeUse{eInP, false}};
+    cut.loops.push_back(std::move(outer));
+    cut.loops.push_back(std::move(hole));
+    s.faces.push_back(std::move(cut));
+
+    auto tubeFace = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+      Face f;
+      f.surface.kind = SurfaceKind::Torus;
+      f.surface.frame = fr;
+      f.surface.radius = R;
+      f.surface.radius2 = r;
+      f.uStart = u0;
+      f.uEnd = u1;
+      f.vStart = vCut;
+      f.vEnd = kPi - vCut;
+      Loop lp;
+      lp.uses = std::move(uses);
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    };
+    tubeFace(0.0, kPi, {{eOut0, false}, {tubeP, false}, {eIn0, true}, {tube0, true}});
+    tubeFace(kPi, kTwoPi, {{eOutP, false}, {tube0, false}, {eInP, true}, {tubeP, true}});
+
+    AddSingleShell(&s);
+    if (Validate(s) != Problem::Ok)
+      return Fail(Problem::SliceResultInvalid, outWhy);
+    *dst = std::move(s);
+    return true;
+  };
+
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+  // "Above" is the +pn side; the builder's +1 piece is the one above the plane along the torus axis.
+  const bool upperIsAbove = ray3d::Dot(pn, axis) > 0.0;
+  Solid* upperDst = upperIsAbove ? outAbove : outBelow;
+  Solid* lowerDst = upperIsAbove ? outBelow : outAbove;
+  const bool wantUpper = upperIsAbove ? wantAbove : wantBelow;
+  const bool wantLower = upperIsAbove ? wantBelow : wantAbove;
+
+  Solid probe;
+  if (!build(1.0, &probe) || !build(-1.0, &probe))
+    return false;
+  if (wantUpper && upperDst && !build(1.0, upperDst))
+    return false;
+  if (wantLower && lowerDst && !build(-1.0, lowerDst))
+    return false;
+  return Succeed(outWhy);
+}
+
 } // namespace
 
 
@@ -8218,6 +8420,13 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
       ok = SliceConicalAlongAxis(*subject, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
       if (handled)
         return ok;
+      // A sphere at any plane (a circle), and a torus cut square to its axis (a ring) — GitHub #520.
+      ok = SliceSpherePrimitive(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
+      if (handled)
+        return ok;
+      ok = SliceTorusSquareToAxis(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
+      if (handled)
+        return ok;
       // Nothing took the cut. For a cone, say which cut it was rather than "flat faces only", which
       // reads as though the user picked the wrong object (GitHub #516, REQ-201). Every cylinder cut
       // and every cut parallel to a cone's axis is handled above, so a cone reaches here only when
@@ -8398,73 +8607,37 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
 // acceptance 5).
 // ---------------------------------------------------------------------------------------------
 
-bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
-                 ucs::Ucs* outPlane, Path* outLoop, Problem* outWhy) {
+namespace {
+
+/// One loop of a cut face, as a \ref Path in the section frame — the shared body of
+/// \ref SectionOutlines and \ref SectionLoop.
+///
+/// \p flip is whether the face's own normal opposes the section normal, in which case the loop is
+/// walked backwards so the outline a caller receives winds counter-clockwise about the normal it
+/// asked for. A hole loop, wound opposite to its face's outer loop, therefore comes back wound
+/// clockwise — which is what tells the two apart without a second flag.
+[[nodiscard]] bool SectionLoopToPath(const Solid& piece, const Face& face, const Loop& loop,
+                                     const ucs::Ucs& frame, bool flip, Path* out, Problem* outWhy) {
   const auto fail = [&](Problem p) {
     if (outWhy)
       *outWhy = p;
     return false;
   };
-  if (!outPlane || !outLoop)
-    return fail(Problem::IndexOutOfRange);
-
-  ucs::Ucs frame{};
-  if (!ucs::FromNormal(planePoint, planeNormal, &frame))
-    return fail(Problem::SliceDegeneratePlane);
-
-  // The cut itself is \ref Slice's, unchanged and un-extended: sectioning is the same geometry
-  // question asked without keeping the answer, so it inherits Slice's accepted set exactly (planar
-  // solids and cylinder/cone walls today; a sphere or torus is refused there and therefore here,
-  // by Slice's own reason rather than a second one invented alongside it).
-  //
-  // Non-destructiveness is not a property this has to implement. `Slice` takes its input by const
-  // reference and writes to out-parameters, so the source solid is untouched by construction, and
-  // the two pieces are simply dropped when this returns.
-  Solid above, below;
-  Problem why = Problem::Ok;
-  if (!Slice(solid, planePoint, planeNormal, SliceKeep::Both, &above, &below, &why))
-    return fail(why);
-
-  // The section is the face of the ABOVE piece that lies ON the cut plane. Taking it from the
-  // result rather than intersecting the faces by hand is the whole reason this is cheap: Slice has
-  // already done the classification, the ordering and the seam handling.
-  const Face* cut = nullptr;
-  for (const Face& f : above.faces) {
-    if (f.surface.kind != SurfaceKind::Plane)
-      continue;
-    if (std::fabs(std::fabs(ray3d::Dot(f.surface.frame.zAxis, frame.zAxis)) - 1.0) > 1e-9)
-      continue;
-    if (std::fabs(ray3d::Dot(ray3d::Sub(f.surface.frame.origin, planePoint), frame.zAxis)) > 1e-9)
-      continue;
-    if (cut)
-      return fail(Problem::SliceCutSeveralOutlines);  // more than one face on the plane
-    cut = &f;
-  }
-  if (!cut)
-    return fail(Problem::SlicePlaneMissesSolid);
-  if (cut->loops.size() != 1)
-    return fail(Problem::SectionHasHole);  // a section with holes is increment 2 (#520)
-
+  const std::vector<EdgeUse>& uses = loop.uses;
+  if (uses.size() < 2)
+    return fail(Problem::SliceResultInvalid);
   // Every edge must be expressible as a straight or circular segment, because that is what a
   // \ref Path is. An `Ellipse` — what an OBLIQUE cut of a cylinder produces — and an `Intersection`
   // curve are refused BY NAME rather than approximated by a chord or a nearby arc: a section is a
   // measured figure, and one that is quietly the wrong shape is the failure REQ-201 exists to stop.
-  const std::vector<EdgeUse>& uses = cut->loops.front().uses;
-  if (uses.size() < 2)
-    return fail(Problem::SliceResultInvalid);
   for (const EdgeUse& u : uses) {
-    const CurveKind k = above.edges[static_cast<std::size_t>(u.edge)].kind;
+    const CurveKind k = piece.edges[static_cast<std::size_t>(u.edge)].kind;
     if (k == CurveKind::Ellipse)
       return fail(Problem::SectionEllipse);  // named for what it is, not "flat faces only" (#516)
     if (k != CurveKind::Line && k != CurveKind::Arc)
       return fail(Problem::SectionCurve);
   }
-
-  // The `above` piece's cut face looks DOWN — its outward normal points away from the material
-  // above it, so it is anti-parallel to the section normal. Its loop therefore winds clockwise
-  // about `frame.zAxis`, and is reversed here so the Path a caller receives always winds CCW about
-  // the plane normal it asked for, whichever side the geometry happened to come from.
-  const bool flip = ray3d::Dot(cut->surface.frame.zAxis, frame.zAxis) < 0.0;
+  (void)face;
 
   const std::size_t n = uses.size();
   std::vector<const EdgeUse*> order;
@@ -8477,11 +8650,11 @@ bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNo
   path.segs.clear();
   for (std::size_t i = 0; i < n; ++i) {
     const EdgeUse& u = *order[i];
-    const Edge& e = above.edges[static_cast<std::size_t>(u.edge)];
+    const Edge& e = piece.edges[static_cast<std::size_t>(u.edge)];
     // Reversing the loop's ORDER also reverses each edge's own direction of travel.
     const bool rev = flip ? !u.reversed : u.reversed;
-    const Vec3 aW = above.vertices[static_cast<std::size_t>(rev ? e.v1 : e.v0)].p;
-    const Vec3 bW = above.vertices[static_cast<std::size_t>(rev ? e.v0 : e.v1)].p;
+    const Vec3 aW = piece.vertices[static_cast<std::size_t>(rev ? e.v1 : e.v0)].p;
+    const Vec3 bW = piece.vertices[static_cast<std::size_t>(rev ? e.v0 : e.v1)].p;
     if (i == 0)
       path.start = ucs::WorldToPlane(frame, aW);
 
@@ -8496,10 +8669,95 @@ bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNo
     }
     path.segs.push_back(seg);
   }
-
-  *outPlane = frame;
-  *outLoop = std::move(path);
+  *out = std::move(path);
   return true;
+}
+
+/// Every closed outline of the section, plus how many separate cut faces they came from.
+[[nodiscard]] bool SectionAllOutlines(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                      ucs::Ucs* outPlane, std::vector<Path>* outLoops, int* outFaces,
+                                      Problem* outWhy) {
+  const auto fail = [&](Problem p) {
+    if (outWhy)
+      *outWhy = p;
+    return false;
+  };
+  ucs::Ucs frame{};
+  if (!ucs::FromNormal(planePoint, planeNormal, &frame))
+    return fail(Problem::SliceDegeneratePlane);
+
+  // The cut itself is \ref Slice's, unchanged and un-extended: sectioning is the same geometry
+  // question asked without keeping the answer, so it inherits Slice's accepted set exactly.
+  //
+  // Non-destructiveness is not a property this has to implement. `Slice` takes its input by const
+  // reference and writes to out-parameters, so the source solid is untouched by construction, and
+  // the two pieces are simply dropped when this returns.
+  Solid above, below;
+  Problem why = Problem::Ok;
+  if (!Slice(solid, planePoint, planeNormal, SliceKeep::Both, &above, &below, &why))
+    return fail(why);
+
+  // The section is carried by the faces of the ABOVE piece that lie ON the cut plane. Taking them
+  // from the result rather than intersecting the faces by hand is the whole reason this is cheap:
+  // Slice has already done the classification, the ordering and the seam handling.
+  std::vector<const Face*> cuts;
+  for (const Face& f : above.faces) {
+    if (f.surface.kind != SurfaceKind::Plane)
+      continue;
+    if (std::fabs(std::fabs(ray3d::Dot(f.surface.frame.zAxis, frame.zAxis)) - 1.0) > 1e-9)
+      continue;
+    if (std::fabs(ray3d::Dot(ray3d::Sub(f.surface.frame.origin, planePoint), frame.zAxis)) > 1e-9)
+      continue;
+    cuts.push_back(&f);
+  }
+  if (cuts.empty())
+    return fail(Problem::SlicePlaneMissesSolid);
+
+  std::vector<Path> loops;
+  for (const Face* f : cuts) {
+    // The `above` piece's cut face looks DOWN — its outward normal points away from the material
+    // above it, so it is anti-parallel to the section normal, and its loops are walked backwards.
+    const bool flip = ray3d::Dot(f->surface.frame.zAxis, frame.zAxis) < 0.0;
+    for (const Loop& lp : f->loops) {
+      Path p;
+      if (!SectionLoopToPath(above, *f, lp, frame, flip, &p, outWhy))
+        return false;
+      loops.push_back(std::move(p));
+    }
+  }
+  *outPlane = frame;
+  *outLoops = std::move(loops);
+  if (outFaces)
+    *outFaces = static_cast<int>(cuts.size());
+  return Succeed(outWhy);
+}
+
+} // namespace
+
+bool SectionOutlines(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                     ucs::Ucs* outPlane, std::vector<Path>* outLoops, Problem* outWhy) {
+  if (!outPlane || !outLoops)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  return SectionAllOutlines(solid, planePoint, planeNormal, outPlane, outLoops, nullptr, outWhy);
+}
+
+bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                 ucs::Ucs* outPlane, Path* outLoop, Problem* outWhy) {
+  if (!outPlane || !outLoop)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  std::vector<Path> loops;
+  int faces = 0;
+  if (!SectionAllOutlines(solid, planePoint, planeNormal, outPlane, &loops, &faces, outWhy))
+    return false;
+  // One outline is what this entry point promises. Which of the two ways it can be several matters
+  // to the caller, so they are named apart: separate pieces of solid on the plane, or one piece with
+  // a hole in it. \ref SectionOutlines returns both without refusing.
+  if (faces > 1)
+    return Fail(Problem::SliceCutSeveralOutlines, outWhy);
+  if (loops.size() != 1)
+    return Fail(Problem::SectionHasHole, outWhy);
+  *outLoop = std::move(loops.front());
+  return Succeed(outWhy);
 }
 
 // ---------------------------------------------------------------------------------------------

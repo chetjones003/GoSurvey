@@ -6545,6 +6545,22 @@ capability that does not exist. They are recorded here rather than quietly dropp
   misplace a cut, and look-alikes (stepped shaft, twisted loft, barrel) are still refused by name — as
   `SliceCutCrossesCurvedFace` since the #518 revision above, for the cuts that cross their curved faces.
 
+  2026-09-18 — **a sphere is cut at any plane, and a torus square to its axis** (D-2026-09-18-a,
+  TASK-268, GitHub issue #520). Both were refused at every plane, though their cuts are shapes the
+  kernel holds:
+  - a **sphere**, any plane through it → two caps, the cut a circle of radius √(R² − d²) centred on
+    the foot of the perpendicular;
+  - a **torus**, a plane square to its axis and through the tube → two pieces, the cut a ring of
+    radii R ± √(r² − d²).
+
+  Each piece is rebuilt from the recipe, as the cylinder and cone recognisers do: the sphere's cap
+  carries a `Sphere` face over the latitudes the plane leaves, the torus piece a `Torus` face over the
+  tube angles it leaves, each closed by the flat face of the cut. Every other torus cut — any angle
+  but square to the axis, and a tube as wide as its ring — is refused as `SliceCutTorusCurve`, whose
+  curve is a quartic, not a circle. Acceptance added: a sphere cut at distance d gives those two
+  pieces and that circle, a torus cut through its centre gives circles of R + r and R − r, and both
+  hold at survey coordinate magnitudes.
+
 ### REQ-337 — Composite-operand analytic Booleans (GitHub issue #493, continues REQ-314)
 - Purpose: REQ-314's Boolean increments (B1/B2a/B2b-1/B2b-2, plus the branch-pipe and sphere∩cylinder
   work tracked on #242/#283) already recognise a wide set of *single-primitive-pair* curved
@@ -8663,6 +8679,24 @@ capability that does not exist. They are recorded here rather than quietly dropp
   sphere now reports, in place of "flat faces only". Acceptance added: a filleted box is sectioned
   within REQ-101's ±0.002 ft at planes that miss its fillets, the solid is unchanged, and the command is
   one undo step.
+
+  2026-09-18 — **increment 2: a section can be more than one outline** (D-2026-09-18-a, TASK-268,
+  GitHub issue #520). A section had to be a single closed outline, so a cut shaped like a ring — a
+  torus cut square to its axis, and in time a drilled box — was refused ("a section with holes is
+  increment 2"). The kernel gains `SectionOutlines`, which returns **every** closed outline of the
+  cut: an outer outline wound counter-clockwise about the section normal, and a hole wound clockwise,
+  so the two are told apart by signed area with no second flag. `SectionLoop` remains, as that
+  function restricted to the single-outline case, and names which of the two ways there were several
+  (`SliceCutSeveralOutlines` for separate pieces on the plane, `SectionHasHole` for a hole).
+
+  **`SECTION` draws one closed polyline per outline** — a ring gives two, the outer and the hole —
+  and they arrive together in **one undo step**, as one section. This is the AutoCAD answer and it
+  keeps each outline a measured figure: each can be selected, listed and its own area taken, which a
+  single polyline bridging the two with a connecting line could not (the bridged outline is a shape the
+  cut never made, and its area would be wrong). A sphere now sections as one circle (REQ-314 revision
+  of this date). Acceptance added: a ring section creates two closed polylines in one undo step, the
+  solid unchanged; the sphere's circle and the torus's two circles hold to REQ-101 at survey
+  magnitudes; and every unsupported cut still names the kind of cut it is.
 
 ### REQ-336 — Start Screen Billboard (What's New)
 - Purpose: Users launching a new version do not know what changed unless they hunt for release notes.

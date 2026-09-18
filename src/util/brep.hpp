@@ -598,6 +598,9 @@ enum class Problem {
   /// The cut crosses a curved face of a solid that is not a cylinder or cone primitive — a fillet, a
   /// drilled hole's wall, a sphere. A cut that misses every curved face is taken (GitHub #518).
   SliceCutCrossesCurvedFace,
+  /// A cut of a torus at any angle but square to its axis: the curve is a quartic, not a circle
+  /// (GitHub #520). Also a torus whose tube is as wide as its ring, whose square cut is not a ring.
+  SliceCutTorusCurve,
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -916,6 +919,18 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 /// silent-wrong-answer failure REQ-201 exists to prevent.
 [[nodiscard]] bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                                ucs::Ucs* outPlane, Path* outLoop, Problem* outWhy);
+
+/// **Every** closed outline of the cross-section, for a cut whose shape is more than one loop
+/// (REQ-335 increment 2, D-2026-09-18-a, GitHub #520) — a ring, where a hole sits inside an outer
+/// outline (a torus cut square to its axis, a drilled box), or separate pieces of solid on the plane.
+///
+/// Same geometry, plane and accepted set as \ref SectionLoop, which is this function restricted to
+/// the single-outline case. The outlines come back in \p outLoops with an **outer** outline wound
+/// counter-clockwise about \p planeNormal and a **hole** wound clockwise, so a caller can tell the
+/// two apart by signed area alone, and each is a closed \ref Path in \p outPlane's 2D coordinates.
+/// A hole follows the outline it sits in.
+[[nodiscard]] bool SectionOutlines(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                   ucs::Ucs* outPlane, std::vector<Path>* outLoops, Problem* outWhy);
 
 /// Boolean combination of two solids (REQ-314 increment 4 / ADR-046 — the B1 subset). The result is
 /// written to \p out as one or more solids: usually one, but a UNION of solids that do not touch is
