@@ -138,8 +138,10 @@ acceptance is met; they are not the user-facing codec after that.
    AutoCAD opens (REQ-170 increment 1).
 2. Map LibreDWG → existing CAD stores for the entity set in §3.1; retire converter from File
    Import/Export when that mapping matches Phase 1 oracle on a golden file (REQ-170).
-3. Point-cloud entity + PTS (smallest parser) (REQ-171, REQ-172).
-4. PTX, then LAS, then LAZ, then E57 (REQ-172).
+3. Point-cloud entity + out-of-core octree/LOD engine, proven against **E57** first
+   (D-2026-09-17-d amends this order: E57 is the user's actual driving scan format and test
+   file, ahead of the originally recorded PTS-first sequencing) (REQ-171, REQ-172).
+4. PTS, then PTX, then LAS, then LAZ (REQ-172) — unchanged formats, now delivered after E57.
 5. IMAGE underlay JPG/PNG/BMP (REQ-173).
 6. IFC → mesh (REQ-174).
 

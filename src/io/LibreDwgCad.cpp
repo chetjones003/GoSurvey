@@ -899,6 +899,10 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
                   " HATCH region(s).");
   if (!st.cadMeshes.empty())
     log.push_back("CAD export — skipped mesh(es); not written to DXF/DWG.");
+  if (!st.cadPointClouds.empty())
+    log.push_back("CAD export — skipped " + std::to_string(st.cadPointClouds.size()) +
+                  " point cloud(s); no native point-cloud object in the R2004/R2000 DWG subset "
+                  "GoSurvey writes (REQ-171, ADR-042 (e)).");
   if (!st.cadSurfaces.empty())
     log.push_back("CAD export — skipped TIN surface(s); not written to DXF/DWG.");
   // B-rep solids (ADR-045 (i)). Named and counted, never dropped in silence (REQ-201). A real solid

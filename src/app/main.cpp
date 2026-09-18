@@ -908,6 +908,10 @@ int main()
     // thread — see TickSurfaceRebuilds' own comment for the full contract.
     TickSurfaceRebuilds(cmd, cmdLog);
 
+    // Point-cloud out-of-core import (REQ-171/172, ADR-060). Same background-worker shape as
+    // TickSurfaceRebuilds above; reaps a finished POINTCLOUDATTACH and commits its result.
+    TickPointCloudImport(cmd, cmdLog);
+
     // Volume Dashboard live recompute (REQ-073 amendment, TASK-095). After TickSurfaceRebuilds, so a
     // dashboard-selected surface that finished rebuilding this frame is already current below.
     TickVolumeDashboard(cmd);
@@ -1167,6 +1171,7 @@ int main()
     DrawEditBlockDefinitionDialog(cmd, cmdLog);
     DrawBlockAuthoringPalettes(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
+    DrawPointCloudImportProgress(cmd);
     DrawCloseConfirmModal(cmd, cmdLog);
     DrawSelectColorPopup(cmd);
     DrawUpdateDialog(cmd, updateState);
@@ -1542,7 +1547,12 @@ int main()
                                (paperSpace || subObjectOverlay.empty()) ? nullptr : &subObjectOverlay,
                                // The gizmo handles. Model space only for the same reason — a paper
                                // sheet is 2D (ADR-025 (g)) and has no third axis to offer.
-                               (paperSpace || gizmoOverlay.empty()) ? nullptr : &gizmoOverlay);
+                               (paperSpace || gizmoOverlay.empty()) ? nullptr : &gizmoOverlay,
+                               // Point clouds (REQ-171/172), model space only like every other GL
+                               // entity. Appended at the very end of this positional call — see the
+                               // renderer header's own note on why.
+                               (paperSpace || cmd.cadPointClouds.empty()) ? nullptr : &cmd.cadPointClouds,
+                               (paperSpace || cmd.cadPointCloudAttrs.empty()) ? nullptr : &cmd.cadPointCloudAttrs);
     cmd.perfRenderMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - perfRenderT0).count();
 

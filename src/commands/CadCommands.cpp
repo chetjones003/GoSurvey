@@ -13,6 +13,9 @@
 #include "util/benchscene.hpp"
 #include "util/cadpiperun.hpp"  // CadPipeRun solid generation (issue #486 increment B1 / REQ-345)
 #include "util/meshgeom.hpp"
+#include "util/pointcloudoctree.hpp"  // REQ-171/172 out-of-core octree (ADR-060)
+#include "util/pointcloudcache.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
+#include "io/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
 #include "util/tinbuild.hpp"
 #include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
 #include "util/surfaceanalysis.hpp"  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
@@ -124,6 +127,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadFilledRegionAttrs   = cmd.cadFilledRegionAttrs;
   doc.cadMeshes              = cmd.cadMeshes;      // pointers, not payloads (REQ-063)
   doc.cadMeshAttrs           = cmd.cadMeshAttrs;
+  doc.cadPointClouds         = cmd.cadPointClouds; // pointers, not payloads (REQ-171)
+  doc.cadPointCloudAttrs     = cmd.cadPointCloudAttrs;
   doc.cadSurfaces            = cmd.cadSurfaces;
   doc.cadSurfaceAttrs        = cmd.cadSurfaceAttrs;
   doc.cadSolids              = cmd.cadSolids;      // pointers, not payloads (REQ-313)
@@ -217,6 +222,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadFilledRegionAttrs       = doc.cadFilledRegionAttrs;
   cmd.cadMeshes                  = doc.cadMeshes;
   cmd.cadMeshAttrs               = doc.cadMeshAttrs;
+  cmd.cadPointClouds             = doc.cadPointClouds;
+  cmd.cadPointCloudAttrs         = doc.cadPointCloudAttrs;
   cmd.cadSurfaces                = doc.cadSurfaces;
   cmd.cadSurfaceAttrs            = doc.cadSurfaceAttrs;
   cmd.cadSolids                  = doc.cadSolids;
@@ -1500,6 +1507,10 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   // O(number of meshes), not O(triangles), which is what makes undo affordable with a model loaded.
   snap.cadMeshes            = st.cadMeshes;
   snap.cadMeshAttrs         = st.cadMeshAttrs;
+  // Point clouds copy as pointers too (REQ-171 / ADR-042/ADR-060) — the octree/point payload is
+  // shared, never cloned.
+  snap.cadPointClouds       = st.cadPointClouds;
+  snap.cadPointCloudAttrs   = st.cadPointCloudAttrs;
   // Surfaces copy as strings + a refcount bump, never as triangles (REQ-068, architecture §11.5).
   snap.cadSurfaces          = st.cadSurfaces;
   snap.cadSurfaceAttrs      = st.cadSurfaceAttrs;
@@ -1583,6 +1594,8 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadFilledRegionAttrs = snap.cadFilledRegionAttrs;
   st.cadMeshes            = snap.cadMeshes;
   st.cadMeshAttrs         = snap.cadMeshAttrs;
+  st.cadPointClouds       = snap.cadPointClouds;
+  st.cadPointCloudAttrs   = snap.cadPointCloudAttrs;
   st.cadSurfaces          = snap.cadSurfaces;
   st.cadSurfaceAttrs      = snap.cadSurfaceAttrs;
   st.cadSolids            = snap.cadSolids;
@@ -1655,7 +1668,8 @@ const EntityKind kEntityKindsInSweepOrder[] = {
     EntityKind::Surface,
     EntityKind::Table,
     EntityKind::BlockRef,
-    EntityKind::Solid};  ///< REQ-313 — last, so kinds above keep their ids.
+    EntityKind::Solid,
+    EntityKind::PointCloud};  ///< REQ-313/REQ-171 — last, so kinds above keep their ids.
 
 /// The attribute array for a kind. One accessor for both the const and mutable walks, so the
 /// two can never disagree about which arrays are covered.
@@ -1675,6 +1689,7 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::Table:        return &st.cadTableAttrs;    // REQ-148
   case EntityKind::BlockRef:     return &st.cadBlockRefAttrs;
   case EntityKind::Solid:        return &st.cadSolidAttrs;     // REQ-313 / ADR-045
+  case EntityKind::PointCloud:   return &st.cadPointCloudAttrs; // REQ-171 / ADR-042
   }
   return &st.userLineAttrs;
 }
@@ -6422,6 +6437,7 @@ const CmdEntry kRegistry[] = {
     {"fov", "lens", "Perspective field of view, in degrees"},
     {"crosshair3d", "cursor3d, xhair3d", "3D crosshair cursor showing the UCS axes: ON / OFF"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
+    {"pointcloudattach", "importe57, e57", "Import an E57 point cloud as reference geometry (REQ-172)"},
     // The seven primitive solids (REQ-313 / ADR-045). Each takes a base point in the active UCS and
     // then its exact dimensions; the UCS supplies the orientation.
     {"box", "", "Create a box solid: BOX <X,Y[,Z]> <length> <width> <height>"},
@@ -14055,9 +14071,11 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
     case T::Mesh:
     case T::Surface:
     case T::PipeRun:
-      // Display-only (REQ-063, REQ-068 / ADR-036 (b); PipeRun issue #486 — the same stated
-      // boundary Solid has, on the enum's own doc comment): every transform refuses them by name,
-      // so a gizmo anchored partly on one would advertise a move that will not happen to it.
+    case T::PointCloud:
+      // Display-only (REQ-063, REQ-068 / ADR-036 (b); PipeRun issue #486; PointCloud REQ-171 —
+      // the same stated boundary Solid has, on the enum's own doc comment): every transform
+      // refuses them by name, so a gizmo anchored partly on one would advertise a move that will
+      // not happen to it.
       break;
     }
   }
@@ -20385,6 +20403,19 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     consider(static_cast<double>(mb.mxX), static_cast<double>(mb.mxY));
   }
 
+  // Point clouds (REQ-171). Only the points currently resident are known here (ADR-060 — the
+  // out-of-core cache may hold more than is loaded), so extents reflect what is actually resident,
+  // same as any other geometry store.
+  for (size_t pci = 0; pci < st.cadPointClouds.size(); ++pci) {
+    if (EntityHiddenInViewport(vpFilter, st.cadPointCloudAttrs, pci))
+      continue;
+    const auto& pc = st.cadPointClouds[pci];
+    if (!pc)
+      continue;
+    for (size_t i = 0; i + 2 < pc->pointsXyz.size(); i += 3)
+      consider(pc->pointsXyz[i], pc->pointsXyz[i + 1]);
+  }
+
   // B-rep solids (REQ-313). Their ANALYTIC bounds, not their tessellation: a sphere has two
   // vertices and a torus four, so a bounds walk over stored points would miss almost the whole
   // solid, and the tessellation may not have been generated yet at all.
@@ -20695,6 +20726,28 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxX = static_cast<double>(mb.mxX);
     b.mnY = static_cast<double>(mb.mnY);
     b.mxY = static_cast<double>(mb.mxY);
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+
+  // Point clouds (REQ-171), one box per cloud — over the resident points (ADR-060: the full cloud
+  // may not be loaded), for the same "one box per entity, not per vertex" reason meshes get above.
+  for (size_t pci = 0; pci < st.cadPointClouds.size(); ++pci) {
+    if (EntityHiddenInViewport(vpFilter, st.cadPointCloudAttrs, pci))
+      continue;
+    const auto& pc = st.cadPointClouds[pci];
+    if (!pc || pc->pointsXyz.size() < 3)
+      continue;
+    EntityBox b{};
+    b.mnX = b.mxX = pc->pointsXyz[0];
+    b.mnY = b.mxY = pc->pointsXyz[1];
+    for (size_t i = 3; i + 2 < pc->pointsXyz.size(); i += 3) {
+      b.mnX = std::min(b.mnX, pc->pointsXyz[i]);
+      b.mxX = std::max(b.mxX, pc->pointsXyz[i]);
+      b.mnY = std::min(b.mnY, pc->pointsXyz[i + 1]);
+      b.mxY = std::max(b.mxY, pc->pointsXyz[i + 1]);
+    }
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -23390,6 +23443,8 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadFilledRegionAttrs.clear();
   st.cadMeshes.clear();
   st.cadMeshAttrs.clear();
+  st.cadPointClouds.clear();
+  st.cadPointCloudAttrs.clear();
   st.cadSolids.clear();
   st.cadSolidAttrs.clear();
   st.solidDisplayCache.clear();
@@ -23542,6 +23597,7 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
       case T::Solid:        otherKinds.insert("solid"); break;
       case T::PdfUnderlay:  otherKinds.insert("PDF underlay"); break;
       case T::PipeRun:      otherKinds.insert("pipe run"); break;
+      case T::PointCloud:   otherKinds.insert("point cloud"); break;
     }
   }
   std::sort(polyIdx.begin(), polyIdx.end());
@@ -24049,6 +24105,22 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     st.cadMeshes.erase(st.cadMeshes.begin() + static_cast<std::ptrdiff_t>(idx));
     if (static_cast<size_t>(idx) < st.cadMeshAttrs.size())
       st.cadMeshAttrs.erase(st.cadMeshAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  // Point clouds (REQ-171: "erase + undo is one step" — same shape as the mesh erase above).
+  std::set<int> pointCloudIx;
+  const size_t nPointCloud = st.cadPointClouds.size();
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::PointCloud && e.index >= 0 &&
+        static_cast<size_t>(e.index) < nPointCloud)
+      pointCloudIx.insert(e.index);
+  }
+  std::vector<int> pcv(pointCloudIx.begin(), pointCloudIx.end());
+  std::sort(pcv.begin(), pcv.end(), std::greater<int>());
+  for (int idx : pcv) {
+    st.cadPointClouds.erase(st.cadPointClouds.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadPointCloudAttrs.size())
+      st.cadPointCloudAttrs.erase(st.cadPointCloudAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
   // B-rep solids (REQ-313) — the caller has already pushed one snapshot for this whole erase, so
@@ -25204,6 +25276,7 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
   case T::PdfUnderlay:
   case T::Mesh:
   case T::PipeRun:
+  case T::PointCloud:
     return static_cast<double>(e.index);
   }
   return 0.0;
@@ -28289,6 +28362,155 @@ bool ImportGltfModel(AppCommandState& st, const std::string& path, double unitSc
   return true;
 }
 
+/// Bounded preview point budget (used by RunPointCloudImportWorker below): `CadPointCloud::pointsXyz` exists for
+/// extents/selection-depth/`.gs` persistence/DXF-exclusion-count, not for rendering full detail —
+/// the LOD renderer pages real detail from the `.gscloud` cache directly. Keeping this bounded is
+/// what keeps the *entity itself* (and every undo snapshot sharing its pointer) cheap regardless of
+/// source scan size.
+constexpr std::int64_t kPointCloudPreviewCap = 2'000'000;
+
+/// Reads a spatially-representative subset of `cache`'s points, at most `previewCap` of them, by
+/// taking every `stride`-th point from EVERY leaf (stride chosen so the total lands near the cap)
+/// — sampling per leaf rather than only the first N leaves is what keeps the preview covering the
+/// whole cloud instead of just whatever octree region happened to be visited first.
+///
+/// This is a full read-back of the cache (every leaf, even though only a fraction of each is
+/// kept) — a real pass with a real cost, so `leavesReadOut`/`totalLeavesOut` (both optional) exist
+/// to report it: earlier this phase had NO progress signal at all, which read as "stuck at 100%"
+/// while the worker was genuinely still working (TASK-270 log).
+void BuildPreviewFromCache(const pointcloudcache::OpenCache& cache, std::int64_t previewCap,
+                           std::vector<double>& outXyz, std::vector<float>& outColors,
+                           std::vector<float>& outIntensity,
+                           std::atomic<std::int64_t>* leavesReadOut = nullptr,
+                           std::atomic<std::int64_t>* totalLeavesOut = nullptr) {
+  const std::int64_t stride =
+      std::max<std::int64_t>(1, cache.totalPointCount / std::max<std::int64_t>(1, previewCap));
+  if (totalLeavesOut) {
+    std::int64_t leafCount = 0;
+    for (const auto& n : cache.octree.nodes)
+      if (n.isLeaf()) ++leafCount;
+    totalLeavesOut->store(leafCount, std::memory_order_relaxed);
+  }
+  for (int i = 0; i < static_cast<int>(cache.octree.nodes.size()); ++i) {
+    if (!cache.octree.nodes[static_cast<size_t>(i)].isLeaf()) continue;
+    std::vector<double> leafXyz;
+    std::vector<float> leafColors, leafIntensity;
+    if (pointcloudcache::ReadLeafPoints(cache, i, leafXyz, leafColors, leafIntensity)) {
+      const std::int64_t n = static_cast<std::int64_t>(leafXyz.size() / 3);
+      for (std::int64_t p = 0; p < n; p += stride) {
+        outXyz.push_back(leafXyz[static_cast<size_t>(p) * 3 + 0]);
+        outXyz.push_back(leafXyz[static_cast<size_t>(p) * 3 + 1]);
+        outXyz.push_back(leafXyz[static_cast<size_t>(p) * 3 + 2]);
+        if (cache.hasColor) {
+          outColors.push_back(leafColors[static_cast<size_t>(p) * 3 + 0]);
+          outColors.push_back(leafColors[static_cast<size_t>(p) * 3 + 1]);
+          outColors.push_back(leafColors[static_cast<size_t>(p) * 3 + 2]);
+        }
+        if (cache.hasIntensity) outIntensity.push_back(leafIntensity[static_cast<size_t>(p)]);
+      }
+    }
+    if (leavesReadOut) leavesReadOut->fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+/// The background half of `StartPointCloudImportAsync` (REQ-172 / ADR-060, D-2026-09-17-d — E57
+/// delivered first). Touches ONLY `*job`'s own fields plus the read-only source/cache paths —
+/// never `AppCommandState` — so it is safe to run on a worker thread while the main thread keeps
+/// using `st` for everything else (architecture §8's one-shot-worker contract).
+void RunPointCloudImportWorker(AppCommandState::PointCloudImportAsync* job) {
+  std::string errorMessage;
+  bool built = true;
+  if (pointcloudcache::MatchesSource(job->cachePath, job->sourcePath)) {
+    built = true;  // reuse (ADR-060 (b)) — nothing to build
+  } else {
+    std::vector<std::string> buildLog;  // human-readable lines; not surfaced yet (numeric progress
+                                        // is what the UI polls) but kept for a future log dump.
+    built = pointcloudcache::BuildFromE57(job->sourcePath, job->cachePath, buildLog, &errorMessage,
+                                          &job->pointsStreamed, &job->pointsFinalized,
+                                          &job->cancelRequested);
+  }
+  if (!built) {
+    job->ok = false;
+    job->errorMessage = errorMessage.empty() ? "point-cloud cache build failed" : errorMessage;
+    job->done.store(true, std::memory_order_release);
+    return;
+  }
+
+  const pointcloudcache::OpenResult opened = pointcloudcache::Open(job->cachePath);
+  if (!opened.ok) {
+    job->ok = false;
+    job->errorMessage = opened.errorMessage;
+    job->done.store(true, std::memory_order_release);
+    return;
+  }
+
+  job->octree = opened.cache.octree;
+  job->totalPointCount = opened.cache.totalPointCount;
+  BuildPreviewFromCache(opened.cache, kPointCloudPreviewCap, job->previewXyz, job->previewColors,
+                        job->previewIntensity, &job->previewLeavesRead, &job->previewTotalLeaves);
+  job->ok = !job->previewXyz.empty();
+  if (!job->ok) job->errorMessage = "internal error: preview sample came back empty";
+  job->done.store(true, std::memory_order_release);
+}
+
+bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
+                                std::vector<std::string>& log) {
+  if (st.pointCloudImportAsync && !st.pointCloudImportAsync->done.load(std::memory_order_acquire)) {
+    log.push_back("POINTCLOUDATTACH — an import is already in progress; wait for it to finish.");
+    return false;
+  }
+  st.pointCloudImportAsync.reset();  // join/discard a finished-but-unreaped job, if any
+
+  auto job = std::make_unique<AppCommandState::PointCloudImportAsync>();
+  job->sourcePath = path;
+  job->cachePath = path + ".gscloud";
+  job->totalPointsEstimate = pointcloud_e57::QuickPointCountEstimate(path);
+  job->startTime = std::chrono::steady_clock::now();
+
+  AppCommandState::PointCloudImportAsync* jobPtr = job.get();
+  job->thread = std::thread(RunPointCloudImportWorker, jobPtr);
+  st.pointCloudImportAsync = std::move(job);
+
+  log.push_back("POINTCLOUDATTACH — importing " +
+                std::filesystem::u8path(path).filename().u8string() + "...");
+  return true;
+}
+
+void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.pointCloudImportAsync) return;
+  AppCommandState::PointCloudImportAsync& job = *st.pointCloudImportAsync;
+  if (!job.done.load(std::memory_order_acquire)) return;
+  job.thread.join();
+
+  if (!job.ok) {
+    log.push_back("POINTCLOUDATTACH — " + job.errorMessage);
+    st.pointCloudImportAsync.reset();
+    return;
+  }
+
+  auto cloud = std::make_shared<CadPointCloud>();
+  cloud->sourcePath = job.sourcePath;
+  cloud->cloudCachePath = job.cachePath;
+  cloud->octree = std::move(job.octree);
+  cloud->totalPointCount = job.totalPointCount;
+  cloud->pointsXyz = std::move(job.previewXyz);
+  cloud->colorsRgb = std::move(job.previewColors);
+  cloud->intensity = std::move(job.previewIntensity);
+
+  PushUndoSnapshot(st, "Import point cloud");
+  st.cadPointClouds.push_back(cloud);
+  st.cadPointCloudAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+
+  char msg[384];
+  std::snprintf(msg, sizeof(msg),
+                "Imported %s — %lld points (out-of-core; %lld in preview sample).",
+                std::filesystem::u8path(job.sourcePath).filename().u8string().c_str(),
+                static_cast<long long>(cloud->totalPointCount),
+                static_cast<long long>(cloud->pointCount()));
+  log.push_back(msg);
+  st.pointCloudImportAsync.reset();
+}
 
 // =================================================================================================
 // B-rep solids (REQ-313 / ADR-045, GitHub issue #146 — Phase 3 of #120)
@@ -34466,6 +34688,7 @@ const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, con
   case T::Annotation:   return at(st.cadAnnotationAttrs);
   case T::FilledRegion: return at(st.cadFilledRegionAttrs);
   case T::Mesh:         return at(st.cadMeshAttrs);
+  case T::PointCloud:   return at(st.cadPointCloudAttrs);  // REQ-171
   case T::FeatureLine:  return at(st.featureLineAttrs);  // REQ-087 — layer, colour, and its stable id
   // REQ-068 / ADR-036 (a). A surface has carried an EntityAttributes since the store was written —
   // it simply had no SelectedEntity::Type to be reached through, and no EntityKind, so its `id` was
@@ -34504,6 +34727,7 @@ void CollectIsolatableIds(const AppCommandState& st, std::vector<std::uint64_t>*
   take(st.cadAnnotationAttrs);
   take(st.cadFilledRegionAttrs);
   take(st.cadMeshAttrs);
+  take(st.cadPointCloudAttrs);
   take(st.cadSurfaceAttrs);
   take(st.cadTableAttrs);
   take(st.cadBlockRefAttrs);
@@ -36112,6 +36336,30 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         return;
       }
       ImportGltfModel(st, path, scale, ix, iy, iz, log);
+      return;
+    }
+    if (plotTok == "pointcloudattach" || plotTok == "importe57" || plotTok == "e57") {
+      std::string path;
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      // A path may contain spaces, so quoted-first: "C:\a b\scan.e57"
+      if (!rest.empty() && rest.front() == '"') {
+        const size_t close = rest.find('"', 1);
+        if (close != std::string::npos)
+          path = rest.substr(1, close - 1);
+      } else if (!rest.empty()) {
+        path = rest;
+      }
+      if (path.empty()) {
+        char buf[1024]{};
+        if (!BrowseOpenFileE57Utf8(buf, sizeof(buf))) {
+          log.push_back("POINTCLOUDATTACH — cancelled.");
+          return;
+        }
+        path = buf;
+      }
+      StartPointCloudImportAsync(st, path, log);
       return;
     }
     // `VS SHADED` in one line; a bare `VISUALSTYLE` reports the current value and lists the options,

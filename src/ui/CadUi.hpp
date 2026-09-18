@@ -288,4 +288,11 @@ void DrawSignInGateBody(AppCommandState& cmd);
 /// (REQ-170). Writes to \c cmd.dwgPendingExportPath only when the user accepts.
 void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log);
 
+/// REQ-171/172, ADR-060 — centered modal shown while a POINTCLOUDATTACH import is in flight
+/// (`cmd.pointCloudImportAsync` non-null). Shows the current phase (streaming vs. spatial-index
+/// build), a progress bar, and an estimated time remaining once enough progress exists to trust
+/// the extrapolation; a Cancel button requests cooperative cancellation. No-op when no import is
+/// running. Call every frame, after `TickPointCloudImport` has had a chance to reap a finished one.
+void DrawPointCloudImportProgress(AppCommandState& cmd);
+
 void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log);
