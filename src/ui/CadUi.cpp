@@ -1856,6 +1856,8 @@ enum class RibbonIconKind : std::uint8_t {
   BeParamVisibility,
   BeParamLookup,
   BeParamBasepoint,
+  // Point Cloud contextual tab (REQ-347).
+  PcExtractCenterline,
   // Generic placeholder for greyed "not implemented yet" ribbon buttons.
   Nyi,
 };
@@ -2931,6 +2933,8 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::SurfProfile:    return "c3d_quickprofile";
   case RibbonIconKind::SurfDataShortcut: return "Attach";
   case RibbonIconKind::SurfGrading:    return "c3d_grading";
+  // Point Cloud contextual tab (REQ-347).
+  case RibbonIconKind::PcExtractCenterline: return "c3d_extractcenterline";
   // D-2026-08-28-k Civil 3D Survey tab / Survey Point contextual tab.
   case RibbonIconKind::SvyTripod:      return "svytripod";
   case RibbonIconKind::SvyQuery:       return "svyquery";
@@ -5314,6 +5318,61 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::EndGroup();
       RibbonSectionEnd();
     }});
+
+    // REQ-347: EXTRACTCENTERLINE — hover a cylindrical cluster in the cloud, click to place a
+    // least-squares-fit LINE along its axis. Its own section beside the display settings above.
+    {
+      ribbonlayout::RibbonGroupSpec g1;
+      g1.buttons = {largeBtnSpecEx("##PcExtractCenterline", (int)RibbonIconKind::PcExtractCenterline,
+                                   nullptr, "Extract\nCenterline", false,
+                                   "Extract Centerline — hover a scanned pipe, pole, or column to preview\n"
+                                   "its least-squares-fit axis, click to place it as a LINE.\n"
+                                   "Command bar: EXTRACTCENTERLINE",
+                                   capW("Extract\nCenterline"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {g1};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecPcExtract", "Centerline", spec, [&](const std::string& id) {
+          if (id == "##PcExtractCenterline") StartExtractCenterlineCommand(cmd, log);
+        });
+      }});
+    }
+
+    // REQ-347 GUI note: a real scan's pipe size and noise level vary drawing to drawing — the
+    // shipped default (0.6 ft / 20%) was itself hand-tuned against one real 188M-point plant scan
+    // and will not fit every scan, so both go on the ribbon rather than staying a hidden constant.
+    {
+      const float w = visualStyleComboW + 8.f + visualStyleComboW + 8.f;
+      ribbonSpecs.push_back({w, w, [&]() {
+        RibbonSectionBegin("RibbonSecPcExtractParams", "Centerline Fit", w, panelH);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Search Radius");
+        ImGui::SetNextItemWidth(visualStyleComboW);
+        float radiusFt = static_cast<float>(cmd.extractCenterlineSearchRadiusFt);
+        if (ImGui::SliderFloat("##PcExtractRadius", &radiusFt, 0.1f, 5.0f, "%.2f ft"))
+          cmd.extractCenterlineSearchRadiusFt = std::clamp(radiusFt, 0.05f, 20.0f);
+        RibbonItemHelp("How far around the hovered point to gather scan points, in feet.\n"
+                       "Too large catches a neighboring pipe, beam, or bracket along with the one\n"
+                       "you're pointing at; too small may not hold enough points to fit.\n"
+                       "Session-global, same as the Point Cloud Display controls.");
+        ImGui::EndGroup();
+
+        ImGui::SameLine(0, 8);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Fit Tolerance");
+        ImGui::SetNextItemWidth(visualStyleComboW);
+        int tolPct = static_cast<int>(std::lround(cmd.extractCenterlineMaxResidualRatio * 100.0));
+        if (ImGui::SliderInt("##PcExtractTol", &tolPct, 1, 50, "%d%%"))
+          cmd.extractCenterlineMaxResidualRatio = std::clamp(tolPct, 1, 90) / 100.0;
+        RibbonItemHelp("How closely the scan points must agree with a common radius to accept the\n"
+                       "fit, as a percentage of that radius. Higher tolerates more scan noise,\n"
+                       "insulation wrap, or weld seams; lower rejects a neighborhood sooner.\n"
+                       "Session-global, same as the Point Cloud Display controls.");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
   } // kRibbonTabPointCloudCtx
 
   if (cmd.activeRibbonTab == kRibbonTabBlockEditor && inBedit) {
@@ -14429,6 +14488,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.sectionPlaneGripHover = -1;
         BumpCadGpuCache(cmd);
       }
+      // EXTRACTCENTERLINE (REQ-347): re-fit against the cursor every hover frame, same shape as the
+      // section-plane handle hover just above — a widget-free hit test, not a walk of the drawing.
+      if (modelSpace && cmd.active == AppCommandState::Kind::ExtractCenterline) {
+        const bool wasValid = cmd.extractCenterlineHoverValid;
+        const ray3d::Ray ecRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+        UpdateExtractCenterlineHover(cmd, ecRay);
+        if (cmd.extractCenterlineHoverValid != wasValid)
+          BumpCadGpuCache(cmd);
+      } else if (cmd.extractCenterlineHoverValid) {
+        cmd.extractCenterlineHoverValid = false;
+        BumpCadGpuCache(cmd);
+      }
       if (blockEntityHover) {
         cmd.viewportHoverEntityValid = false;
         cmd.viewportHoverPickGate.primed = false;
@@ -15137,6 +15208,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       break;
     }
+    case ViewportClickRoute::ExtractCenterlinePick:
+      // EXTRACTCENTERLINE (REQ-347): commit whatever cylinder fit the hover already computed. The
+      // click itself carries no new geometry — a miss (no valid hover fit) logs and leaves the
+      // command running so the user can try another spot, matching HATCH's own miss behavior above.
+      SubmitExtractCenterlineViewportPick(cmd, log);
+      break;
     case ViewportClickRoute::SnappedPointPick:
       // Point-picking commands (draw commands, and every modify command past its selection
       // phase): the click is a coordinate, handed straight to the command state machine at the

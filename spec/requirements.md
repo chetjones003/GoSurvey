@@ -9143,6 +9143,80 @@ capability that does not exist. They are recorded here rather than quietly dropp
   plane's rectangle is sized from the drawing's extents (D-2026-09-16-b) rather than from solids with
   a frame-origin fallback, and a face the clip is hiding can no longer be picked — so re-aiming
   SECTIONPLANE at a face needs that face visible.
+
+### REQ-347 — Extract a 3D centerline from a cylindrical point-cloud cluster (GitHub issue #538)
+- Purpose: turn a laser-scanned cylindrical object (pipe, pole, column) into usable CAD geometry
+  without manual eyeballing, extending REQ-171/172's point cloud support
+- Priority: should
+- Type: functional
+- Statement: A new "Extract Centerline" command, started from a button on the REQ-171 contextual
+  Point Cloud ribbon, lets the user hover over a resident point cloud to preview a least-squares
+  cylinder-axis fit and click to commit it as a real 3D LINE entity.
+
+  While the command is active, each hover works in two steps, BOTH against real scan density for a
+  cloud with an out-of-core `.gscloud` cache (ADR-060), not the bounded REQ-171 preview sample:
+  (1) locate the nearest real point to the pick ray — `pointcloud::SelectLodLeavesInCylinder` finds
+  the cache's leaves actually near the ray's line (the same primitive the renderer's own LOD pass
+  uses, at a much smaller leaf cap), their points are read via `pointcloudcache::ReadLeafPoints`, and
+  the true nearest point is kept; (2) gather the fit neighborhood — every real point within a fixed
+  radius of that point (`pointcloud::QueryLeavesNearPoint` + `ReadLeafPoints` again). Only a cloud
+  with no out-of-core cache falls back to the bounded preview sample for both steps. A cylinder axis
+  is fit to the neighborhood by least squares (eigen-decomposition of its covariance matrix — no new
+  third-party dependency, REQ-300). A live preview LINE is drawn along the fitted axis, spanning the
+  extent of the fit's inlier points projected onto that axis. A neighborhood whose fit residual (RMS
+  distance of inliers to the fitted cylindrical surface) exceeds a fixed threshold, or that has too
+  few points nearby, produces **no preview** rather than a misleading line. Clicking commits the
+  current preview as a real 3D LINE entity in model space, in local storage coordinates
+  (REQ-057/ADR-025). Esc cancels the command with no entity created, matching every other
+  pick-and-preview command's escape behavior.
+
+  **Bounding the cache read's cost** (REQ-100): the out-of-core query only touches the few leaves
+  within a fixed ~2 ft radius of one point — nothing like the renderer's own much larger
+  camera-proximity LOD reselect (up to 1500 candidate leaves) — and an open cache handle is kept
+  across hover frames rather than reopened each time. The query itself is re-run only when the hover
+  has moved past a hysteresis band since the last read, reusing the last neighborhood otherwise, so a
+  nearly-still cursor does not re-hit disk every frame.
+
+  **Field-tested correction (2026-09-18)**: the first cut fit only against the bounded preview sample
+  end to end, reasoning that any hover-driven disk read would reproduce the renderer's own per-frame
+  I/O cost. Tested live against a real 188,439,985-point plant scan (capped to a 2,000,000-point
+  preview, ~1-in-94 stride per octree leaf), this produced a consistent "no cylinder found" even
+  hovering squarely over a visible pipe — the preview was simply too sparse locally for a small
+  real-world neighborhood to reliably hold enough points. The out-of-core read above replaced it,
+  since a single small-radius neighborhood query is a fundamentally smaller, boundable cost than the
+  renderer's camera-proximity reselect, not the same problem at a different scale.
+- Acceptance:
+  - hovering over a synthetic cylindrical point cluster of known axis/radius shows a live preview
+    line whose direction and center match ground truth within REQ-101 tolerance;
+  - clicking commits a LINE entity along that axis, with endpoints at the fitted inlier extent (not
+    an infinite line), undoable as one step like other entity creation;
+  - hovering over a flat/planar or randomly-noisy cluster shows no preview;
+  - hovering where too few resident points fall in the search neighborhood shows no preview, no
+    crash;
+  - Esc cancels mid-command; no entity is created and the drawing is unchanged;
+  - the "Extract Centerline" button appears only on the REQ-171 Point Cloud contextual ribbon tab,
+    with an icon generated in the existing `tools/gen_c3d_icons.cpp` style;
+  - the fit function is callable and testable headlessly (REQ-203), independent of the GUI.
+- Owner-layer: Commands, Domain (cylinder-fit math), UI (ribbon button/icon), Renderer (preview line)
+- Status: verified
+- Revisions: 2026-09-18 — initial, GitHub issue #538. Verified against architecture (no new layer/
+  dependency), APPROVE verdict recorded in workshop/tasks/TASK-271. Delivered same day: `Kind::
+  ExtractCenterline` command (`CadCommands.cpp`), `src/util/cylinderfit.{hpp,cpp}` least-squares fit
+  (`CylinderFitTests.cpp`, 8 cases), ribbon button + `c3d_extractcenterline` icon
+  (`tools/gen_c3d_icons.cpp`).
+  2026-09-18 (same day, GUI test rounds) — field-tested against a real 188,439,985-point plant scan
+  and fixed through three rounds (task log has the full detail): (1) fitting against the REQ-171
+  bounded preview sample alone was too sparse for both locating a point near the cursor and the fit
+  neighborhood — replaced with reads against the real out-of-core `.gscloud` cache (ADR-060) via
+  `pointcloud::SelectLodLeavesInCylinder`/`QueryLeavesNearPoint` + `pointcloudcache::ReadLeafPoints`,
+  a small bounded query (not the renderer's much larger camera-proximity reselect), hysteresis-
+  throttled so a near-still cursor does not re-hit disk every frame; (2) the shipped 2.0 ft/15%
+  defaults pulled in 56,238 points spanning more than one structure on this scan and were correctly
+  refused — tightened to 0.6 ft/20%; (3) user asked to make both configurable rather than guessed
+  constants — `extractCenterlineSearchRadiusFt`/`extractCenterlineMaxResidualRatio` (session-global,
+  `AppCommandState`) exposed as Search Radius / Fit Tolerance sliders in a new "Centerline Fit"
+  ribbon section. User-confirmed working against the real scan.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
