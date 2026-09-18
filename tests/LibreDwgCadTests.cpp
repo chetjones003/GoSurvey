@@ -759,6 +759,197 @@ TEST_CASE("DWG export writes a tilted ARC's extrusion and OCS centre (issue #391
   dwg_free(&dwg);
 }
 
+// GitHub issue #435 / REQ-312 — the DWG importer never read an ARC's or CIRCLE's
+// extrusion, so a tilted curve landed flat and misplaced with no message. Import must
+// convert the OCS centre via ucs::FromNormal + UcsToWorld and store the normal.
+TEST_CASE("DWG import reads a tilted ARC's extrusion and OCS centre (issue #435)",
+          "[dwg][libredwg][req312][issue435]") {
+  ScratchDir dir("tiltedarc-import");
+  const auto p = (dir.path / "arc-import.dwg").string();
+
+  // Build a DWG directly via LibreDWG with a tilted ARC: normal (0,1,0), centre in OCS.
+  ucs::Ucs frame;
+  REQUIRE(ucs::FromNormal({0.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, &frame));
+  const ray3d::Vec3 worldC{10.0, 0.0, 4.0};
+  const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, worldC);
+
+  {
+    Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+    REQUIRE(dwg != nullptr);
+    Dwg_Object_BLOCK_HEADER* hdr = nullptr;
+    {
+      Dwg_Object* m = dwg_model_space_object(dwg);
+      REQUIRE(m != nullptr);
+      hdr = m->tio.object->tio.BLOCK_HEADER;
+      REQUIRE(hdr != nullptr);
+    }
+    dwg_point_3d c{ocs.x, ocs.y, ocs.z};
+    Dwg_Entity_ARC* e = dwg_add_ARC(hdr, &c, 2.0, 0.0, 1.5);
+    REQUIRE(e != nullptr);
+    e->extrusion.x = 0.0;
+    e->extrusion.y = 1.0;
+    e->extrusion.z = 0.0;
+    REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+    dwg_free(dwg);
+    std::free(dwg);
+  }
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userArcs.size() == 1);
+  const CadArc& a = in.userArcs[0];
+  // Centre recovered to world, normal stored, angles untouched.
+  CHECK(a.cx + in.worldDocumentOriginX == Catch::Approx(10.0).margin(1e-4));
+  CHECK(a.cy + in.worldDocumentOriginY == Catch::Approx(0.0).margin(1e-4));
+  CHECK(a.z == Catch::Approx(4.0).margin(1e-4));
+  CHECK(a.nx == Catch::Approx(0.f).margin(1e-6));
+  CHECK(a.ny == Catch::Approx(1.f).margin(1e-6));
+  CHECK(a.nz == Catch::Approx(0.f).margin(1e-6));
+  CHECK(a.startRad == Catch::Approx(0.f).margin(1e-6));
+  CHECK(a.sweepRad == Catch::Approx(1.5f).margin(1e-6));
+  // Log must not contain a degenerate refusal.
+  for (const auto& l : log)
+    CHECK(l.find("zero-length") == std::string::npos);
+}
+
+TEST_CASE("DWG import reads a tilted CIRCLE's extrusion and OCS centre (issue #435)",
+          "[dwg][libredwg][req312][issue435]") {
+  ScratchDir dir("tiltedcircle-import");
+  const auto p = (dir.path / "circle-import.dwg").string();
+
+  ucs::Ucs frame;
+  REQUIRE(ucs::FromNormal({0.0, 0.0, 0.0}, {0.6, 0.0, 0.8}, &frame));
+  const ray3d::Vec3 worldC{7.0, -3.0, 12.0};
+  const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, worldC);
+
+  {
+    Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+    REQUIRE(dwg != nullptr);
+    Dwg_Object* m = dwg_model_space_object(dwg);
+    REQUIRE(m != nullptr);
+    auto* hdr = m->tio.object->tio.BLOCK_HEADER;
+    REQUIRE(hdr != nullptr);
+    dwg_point_3d c{ocs.x, ocs.y, ocs.z};
+    Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(hdr, &c, 5.0);
+    REQUIRE(e != nullptr);
+    e->extrusion.x = 0.6;
+    e->extrusion.y = 0.0;
+    e->extrusion.z = 0.8;
+    REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+    dwg_free(dwg);
+    std::free(dwg);
+  }
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userCirclesCxCyZR.size() == 4);
+  CHECK(in.userCirclesCxCyZR[0] + in.worldDocumentOriginX == Catch::Approx(7.0).margin(1e-4));
+  CHECK(in.userCirclesCxCyZR[1] + in.worldDocumentOriginY == Catch::Approx(-3.0).margin(1e-4));
+  CHECK(in.userCirclesCxCyZR[2] == Catch::Approx(12.0).margin(1e-4));
+  float nx = 0, ny = 0, nz = 0;
+  CircleNormalAt(in.userCircleNormals, 0, &nx, &ny, &nz);
+  CHECK(nx == Catch::Approx(0.6f).margin(1e-6));
+  CHECK(ny == Catch::Approx(0.0f).margin(1e-6));
+  CHECK(nz == Catch::Approx(0.8f).margin(1e-6));
+}
+
+TEST_CASE("DWG import refuses a zero-length extrusion (issue #435, REQ-201)",
+          "[dwg][libredwg][req312][issue435][req201]") {
+  ScratchDir dir("degenerate");
+  const auto p = (dir.path / "deg.dwg").string();
+  {
+    Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+    REQUIRE(dwg != nullptr);
+    Dwg_Object* m = dwg_model_space_object(dwg);
+    REQUIRE(m != nullptr);
+    auto* hdr = m->tio.object->tio.BLOCK_HEADER;
+    REQUIRE(hdr != nullptr);
+    dwg_point_3d c{1.0, 2.0, 3.0};
+    Dwg_Entity_ARC* e = dwg_add_ARC(hdr, &c, 2.0, 0.0, 1.0);
+    REQUIRE(e != nullptr);
+    e->extrusion.x = 0.0;
+    e->extrusion.y = 0.0;
+    e->extrusion.z = 0.0;
+    Dwg_Entity_CIRCLE* ce = dwg_add_CIRCLE(hdr, &c, 1.0);
+    REQUIRE(ce != nullptr);
+    ce->extrusion.x = 0.0;
+    ce->extrusion.y = 0.0;
+    ce->extrusion.z = 0.0;
+    REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+    dwg_free(dwg);
+    std::free(dwg);
+  }
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  CHECK(in.userArcs.empty());
+  CHECK(in.userCirclesCxCyZR.empty());
+  bool found = false;
+  for (const auto& l : log)
+    if (l.find("zero-length") != std::string::npos)
+      found = true;
+  CHECK(found);
+}
+
+TEST_CASE("DWG round-trips a tilted ARC via GoSurvey export/import (issue #435)",
+          "[dwg][libredwg][req312][issue435]") {
+  ScratchDir dir("roundtrip-arc");
+  const auto p = (dir.path / "rt.dwg").string();
+  AppCommandState st;
+  CadArc a{};
+  a.cx = 100.f;
+  a.cy = -50.f;
+  a.z = 25.f;
+  a.r = 10.f;
+  a.startRad = 0.3f;
+  a.sweepRad = 2.1f;
+  a.nx = 0.f;
+  a.ny = 1.f;
+  a.nz = 0.f;
+  st.userArcs.push_back(a);
+  st.userArcAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userArcs.size() == 1);
+  const CadArc& b = in.userArcs[0];
+  CHECK(b.cx + in.worldDocumentOriginX == Catch::Approx(a.cx + st.worldDocumentOriginX).margin(0.01));
+  CHECK(b.cy + in.worldDocumentOriginY == Catch::Approx(a.cy + st.worldDocumentOriginY).margin(0.01));
+  CHECK(b.z == Catch::Approx(a.z).margin(0.01));
+  CHECK(b.nx == Catch::Approx(a.nx).margin(1e-6));
+  CHECK(b.ny == Catch::Approx(a.ny).margin(1e-6));
+  CHECK(b.nz == Catch::Approx(a.nz).margin(1e-6));
+  CHECK(b.startRad == Catch::Approx(a.startRad).margin(1e-4));
+  CHECK(b.sweepRad == Catch::Approx(a.sweepRad).margin(1e-4));
+}
+
+TEST_CASE("DWG round-trips a tilted CIRCLE via GoSurvey export/import (issue #435)",
+          "[dwg][libredwg][req312][issue435]") {
+  ScratchDir dir("roundtrip-circle");
+  const auto p = (dir.path / "rt-circle.dwg").string();
+  AppCommandState st;
+  st.userCirclesCxCyZR = {20.f, 30.f, 15.f, 8.f};
+  st.userCircleAttrs = {EntityAttributes{}};
+  st.userCircleNormals.clear();
+  PushCircleNormal(st.userCircleNormals, 0.6f, 0.f, 0.8f);
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userCirclesCxCyZR.size() == 4);
+  CHECK(in.userCirclesCxCyZR[0] + in.worldDocumentOriginX == Catch::Approx(20.f).margin(0.01));
+  CHECK(in.userCirclesCxCyZR[1] + in.worldDocumentOriginY == Catch::Approx(30.f).margin(0.01));
+  CHECK(in.userCirclesCxCyZR[2] == Catch::Approx(15.f).margin(0.01));
+  float nx = 0, ny = 0, nz = 0;
+  CircleNormalAt(in.userCircleNormals, 0, &nx, &ny, &nz);
+  CHECK(nx == Catch::Approx(0.6f).margin(1e-5));
+  CHECK(ny == Catch::Approx(0.0f).margin(1e-5));
+  CHECK(nz == Catch::Approx(0.8f).margin(1e-5));
+}
+
 TEST_CASE("Foreign DWG without payload still imports a LINE (REQ-175)", "[dwg][libredwg][req175]") {
   ScratchDir dir("foreign");
   const auto p = (dir.path / "cad-only.dwg").string();

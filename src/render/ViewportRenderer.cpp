@@ -693,6 +693,11 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     break;
   case CadSnap::Kind::Grip:
     break; // grip snap is silent — no glyph drawn
+  case CadSnap::Kind::PointCloud:
+    // A small filled-looking dot (REQ-348) — the snap answers with an actual scanned point, not a
+    // computed feature, so the glyph reads as "a point" rather than borrowing another kind's shape.
+    AppendSnapCircle(out, f, mh * 0.3f, snapCircSegs);
+    break;
   }
 }
 
@@ -1030,6 +1035,66 @@ void ViewportRenderer::SetSize(int width, int height) {
   EnsureFramebuffer(width, height);
 }
 
+namespace {
+/// REQ-171 (part 14) shared point-cloud vertex colour resolution. One function so the preview
+/// buffer and both LOD-leaf build sites (initial upload + anchor-stale rebuild) cannot disagree at
+/// a leaf/stride boundary — a discontinuity there would read as a visible seam.
+///
+/// `hasSourceRgb`/`srcR,G,B` is the point's own scanned colour (may be absent); `hasIntensity`/
+/// `intensityVal` is its 0..1 intensity sample (may be absent); `fallbackR,G,B` is the resolved
+/// layer/entity colour used whenever a scheme can't produce something better; `z`/`cloudMinZ`/
+/// `cloudMaxZ` drive the Elevation ramp. Writes into `outRgb[3]`.
+void ResolvePointCloudVertexColor(PointCloudColorScheme scheme, bool hasSourceRgb, float srcR,
+                                   float srcG, float srcB, bool hasIntensity, float intensityVal,
+                                   float fallbackR, float fallbackG, float fallbackB, float z,
+                                   float cloudMinZ, float cloudMaxZ, float outRgb[3]) {
+  switch (scheme) {
+    case PointCloudColorScheme::Solid:
+      outRgb[0] = fallbackR;
+      outRgb[1] = fallbackG;
+      outRgb[2] = fallbackB;
+      return;
+    case PointCloudColorScheme::Elevation: {
+      const float span = cloudMaxZ - cloudMinZ;
+      float t = span > 1e-6f ? (z - cloudMinZ) / span : 0.f;
+      t = std::clamp(t, 0.f, 1.f);
+      // Simple three-stop ramp: blue (low) -> green (mid) -> red (high). First-cut, readable.
+      if (t < 0.5f) {
+        const float u = t * 2.f;
+        outRgb[0] = 0.f;
+        outRgb[1] = u;
+        outRgb[2] = 1.f - u;
+      } else {
+        const float u = (t - 0.5f) * 2.f;
+        outRgb[0] = u;
+        outRgb[1] = 1.f - u;
+        outRgb[2] = 0.f;
+      }
+      return;
+    }
+    case PointCloudColorScheme::Intensity:
+      if (hasIntensity) {
+        const float g = std::clamp(intensityVal, 0.f, 1.f);
+        outRgb[0] = outRgb[1] = outRgb[2] = g;
+        return;
+      }
+      [[fallthrough]];  // no intensity channel on this cloud — behave like Rgb below.
+    case PointCloudColorScheme::Rgb:
+    default:
+      if (hasSourceRgb) {
+        outRgb[0] = srcR;
+        outRgb[1] = srcG;
+        outRgb[2] = srcB;
+      } else {
+        outRgb[0] = fallbackR;
+        outRgb[1] = fallbackG;
+        outRgb[2] = fallbackB;
+      }
+      return;
+  }
+}
+}  // namespace
+
 void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<double>& userLines, const std::vector<double>& circlesCxCyZR,
                                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
@@ -1056,7 +1121,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const CadSubObjectOverlay* subObjectOverlay,
                                    const CadGizmoOverlay* gizmoOverlay,
                                    const std::vector<std::shared_ptr<const CadPointCloud>>* pointClouds,
-                                   const std::vector<EntityAttributes>* pointCloudAttrs) {
+                                   const std::vector<EntityAttributes>* pointCloudAttrs,
+                                   const PointCloudDisplaySettings* pointCloudDisplay) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -1643,6 +1709,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // or hide, so restricting it to Shaded would make it invisible in the default 2D Wireframe view,
   // the same reasoning REQ-068 gives for TIN surfaces. Flat draw of every resident point: no LOD yet
   // (REQ-100 profile (e) is unmeasured; implementation-rules.md §5 forbids speculative optimisation).
+  // REQ-100 profile (e) instrument (TASK-270 §14): reset every frame, regardless of whether any
+  // clouds are present, so a frame with none drawn correctly reports zero rather than stale state.
+  pointCloudLeafDiskReadsThisFrame_ = 0;
   if (pointClouds && !pointClouds->empty()) {
     for (size_t i = 0; i < pointCloudGpu_.size();) {
       if (pointCloudGpu_[i].cloud.expired()) {
@@ -1707,8 +1776,28 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       float fallbackRgba[4] = {0.7f, 0.7f, 0.7f, 1.f};
       if (attr)
         ResolveEntityRgbaForViewport(*attr, lr, 0.7f, 0.7f, 0.7f, fallbackRgba);
-      if (anchorStale) {
+      const PointCloudColorScheme colorScheme =
+          pointCloudDisplay ? pointCloudDisplay->colorScheme : PointCloudColorScheme::Rgb;
+      // Z range for the Elevation scheme — from the octree root bounds when available (cheap, no
+      // disk read) rather than re-walking the preview a second time.
+      float cloudMinZ = 0.f, cloudMaxZ = 0.f;
+      if (!pc->octree.nodes.empty()) {
+        cloudMinZ = static_cast<float>(pc->octree.nodes[0].bounds.minZ);
+        cloudMaxZ = static_cast<float>(pc->octree.nodes[0].bounds.maxZ);
+      } else if (pc->pointsXyz.size() >= 3) {
+        cloudMinZ = cloudMaxZ = static_cast<float>(pc->pointsXyz[2]);
+        for (size_t v = 0; v + 2 < pc->pointsXyz.size(); v += 3) {
+          cloudMinZ = std::min(cloudMinZ, static_cast<float>(pc->pointsXyz[v + 2]));
+          cloudMaxZ = std::max(cloudMaxZ, static_cast<float>(pc->pointsXyz[v + 2]));
+        }
+      }
+      // A colour-scheme change is not a camera event, so it must force a rebuild on its own —
+      // otherwise flipping the ribbon's combo would sit invisible until the anchor happened to
+      // drift (TASK-270 part 14 bugfix).
+      const bool colorSchemeStale = !entry->lastColorSchemeValid || entry->lastColorScheme != colorScheme;
+      if (anchorStale || colorSchemeStale) {
         const bool haveColor = pc->hasColor() && pc->colorsRgb.size() == pc->pointsXyz.size();
+        const bool haveIntensity = pc->hasIntensity() && pc->intensity.size() == pc->pointsXyz.size() / 3;
         const size_t pcount = pc->pointsXyz.size() / 3;
         cpuPointCloudVerts_.clear();
         cpuPointCloudVerts_.resize(pcount * 7);
@@ -1720,16 +1809,18 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           float* o = &cpuPointCloudVerts_[v * 7];
           o[0] = rx;
           o[1] = ry;
-          o[2] = static_cast<float>(pc->pointsXyz[v * 3 + 2]);  // Z is absolute (ADR-025 D2)
-          if (haveColor) {
-            o[3] = pc->colorsRgb[v * 3];
-            o[4] = pc->colorsRgb[v * 3 + 1];
-            o[5] = pc->colorsRgb[v * 3 + 2];
-          } else {
-            o[3] = fallbackRgba[0];
-            o[4] = fallbackRgba[1];
-            o[5] = fallbackRgba[2];
-          }
+          const float z = pc->pointsXyz[v * 3 + 2];
+          o[2] = z;  // Z is absolute (ADR-025 D2)
+          float rgb[3];
+          ResolvePointCloudVertexColor(colorScheme, haveColor,
+                                        haveColor ? pc->colorsRgb[v * 3] : 0.f,
+                                        haveColor ? pc->colorsRgb[v * 3 + 1] : 0.f,
+                                        haveColor ? pc->colorsRgb[v * 3 + 2] : 0.f, haveIntensity,
+                                        haveIntensity ? pc->intensity[v] : 0.f, fallbackRgba[0],
+                                        fallbackRgba[1], fallbackRgba[2], z, cloudMinZ, cloudMaxZ, rgb);
+          o[3] = rgb[0];
+          o[4] = rgb[1];
+          o[5] = rgb[2];
           o[6] = 1.f;
         }
         glBindBuffer(GL_ARRAY_BUFFER, entry->vbo);
@@ -1738,6 +1829,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         entry->pointCount = static_cast<int>(pcount);
         entry->anchorX = viewAnchorX;
         entry->anchorY = viewAnchorY;
+        entry->lastColorScheme = colorScheme;
+        entry->lastColorSchemeValid = true;
       }
 
       float pcModel[16];
@@ -1749,7 +1842,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       setClipAnchor(clipLocVcLine_, entry->anchorX, entry->anchorY);
 
       glBindVertexArray(entry->vao);
-      glPointSize(2.0f);  // fixed for now; ribbon point-size control is a future increment
+      glPointSize(pointCloudDisplay ? pointCloudDisplay->pointSizePx : 2.0f);  // REQ-171 ribbon control
       glDrawArrays(GL_POINTS, 0, entry->pointCount);
 
       // --- Out-of-core LOD detail (ADR-060) ------------------------------------------------------
@@ -1776,17 +1869,28 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         if (!entry->diskCacheTried) {
           entry->diskCacheTried = true;
           pointcloudcache::OpenResult openResult = pointcloudcache::Open(pc->cloudCachePath);
-          if (openResult.ok)
+          if (openResult.ok) {
             entry->diskCache = std::move(openResult.cache);
+            // TASK-270 §14 part 17: every leaf read for THIS cloud goes through one background
+            // worker from here on — the render thread only ever requests and drains, never blocks.
+            entry->prefetch = std::make_unique<PointCloudGpuEntry::LeafPrefetch>();
+            entry->prefetch->cache = entry->diskCache;
+            entry->prefetch->thread =
+                std::thread(&PointCloudGpuEntry::LeafPrefetch::Run, entry->prefetch.get());
+          }
         }
-        if (!entry->diskCache.cachePath.empty()) {
+        if (!entry->diskCache.cachePath.empty() && entry->prefetch) {
           // Candidate leaf cap bounds both the query's own work and the draw-call count (one VAO
           // per resident leaf) — the real density control is kTargetLodPoints/stride below, not
           // this count.
           constexpr int kMaxLodLeafCandidates = 1500;
           // A deliberately SPARSE target — this is meant to look like a point cloud, not fill in
           // solid. Small enough that even a fully-covered candidate set decimates visibly.
-          constexpr std::int64_t kTargetLodPoints = 800'000;
+          constexpr std::int64_t kTargetLodPointsDefault = 800'000;
+          const std::int64_t kTargetLodPoints =
+              pointCloudDisplay && pointCloudDisplay->lodTargetPoints > 0
+                  ? static_cast<std::int64_t>(pointCloudDisplay->lodTargetPoints)
+                  : kTargetLodPointsDefault;
           const double lateralRadius = std::max(halfWd, halfHd) * 1.25;
           const ray3d::Vec3 viewDir = cam.ForwardWorld();
 
@@ -1806,11 +1910,18 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
               entry->lodLateralRadius > 1e-12 ? lateralRadius / entry->lodLateralRadius : 0.0;
           const double dirDot = viewDir.x * entry->lodDirX + viewDir.y * entry->lodDirY +
                                  viewDir.z * entry->lodDirZ;
+          // A colour-scheme or LOD-target change is a deliberate one-shot user action, not camera
+          // motion — the movement hysteresis above has nothing to do with it, so without this the
+          // ribbon's Color Scheme combo and LOD Target slider would both sit inert on the LOD-leaf
+          // pass until the camera happened to move enough to reselect anyway (TASK-270 part 14
+          // bugfix; the preview buffer above has the matching `colorSchemeStale` fix).
+          const bool lodTargetStale = entry->lastLodTargetPoints != kTargetLodPoints;
           const bool movedEnough =
               !entry->lodSelectionValid ||
               focusMoved > 0.15 * std::max(lateralRadius, 1e-9) ||
               radiusRatio < 0.85 || radiusRatio > 1.15 ||
-              dirDot < 0.9986;  // cos(~3 deg)
+              dirDot < 0.9986 ||  // cos(~3 deg)
+              colorSchemeStale || lodTargetStale;
           // Time floor on top of the movement test (part 13): a fast orbit crosses the movement
           // thresholds on nearly every frame, and a reselect costs real time (up to
           // kMaxLodLeafCandidates disk reads) — without this, a slower frame makes the same mouse
@@ -1818,9 +1929,14 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           // selection (`!lodSelectionValid`) always runs regardless of the clock.
           const auto now = std::chrono::steady_clock::now();
           const bool longEnoughSinceLast =
-              !entry->lodSelectionValid ||
+              !entry->lodSelectionValid || colorSchemeStale || lodTargetStale ||
               now - entry->lodLastReselectTime >= std::chrono::milliseconds(200);
           const bool needsReselect = movedEnough && longEnoughSinceLast;
+
+          // Whether every currently-resident leaf's uploaded data is stale and needs a background
+          // re-read at the new anchor/stride/colour-scheme — computed once, used below regardless
+          // of whether this frame is also a reselect.
+          bool refreshAllResident = anchorStale || colorSchemeStale;
 
           if (needsReselect) {
             const std::vector<pointcloud::CylinderLodLeaf> candidates =
@@ -1836,6 +1952,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             entry->lodLateralRadius = lateralRadius;
             entry->lodSelectionValid = true;
             entry->lodLastReselectTime = now;
+            entry->lastLodTargetPoints = kTargetLodPoints;
 
             std::int64_t totalCandidatePoints = 0;
             for (const pointcloud::CylinderLodLeaf& c : candidates)
@@ -1846,30 +1963,20 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                     : std::max<int>(1, static_cast<int>((totalCandidatePoints +
                                                                           kTargetLodPoints - 1) /
                                                                          kTargetLodPoints));
+            // A stride change means every resident leaf's uploaded decimation is now wrong (every
+            // resident leaf must share one stride — see `lodStride`'s own comment) and has to be
+            // re-baked, same obligation as anchor drift or a colour-scheme change.
+            refreshAllResident = refreshAllResident || entry->lodStride != stride;
+            entry->lodStride = stride;
 
-            // Anchor drift invalidates every resident leaf's vertex data (built relative to the old
-            // anchor), same trigger as the preview buffer above. A stride change invalidates it for
-            // a different reason: every resident leaf must share one stride (see the comment on
-            // `lodStride`), so a new stride means every leaf's uploaded vertex data is the wrong
-            // decimation and must be rebuilt, not just newly-entering leaves.
-            const bool strideStale = entry->lodStride != stride;
-            if (anchorStale || strideStale) {
-              for (PointCloudGpuEntry::LeafGpuEntry& leaf : entry->leafGpu) {
-                if (leaf.vbo) glDeleteBuffers(1, &leaf.vbo);
-                if (leaf.vao) glDeleteVertexArrays(1, &leaf.vao);
-              }
-              entry->leafGpu.clear();
-              entry->lodStride = stride;
-            }
+            entry->wantedLeaves.clear();
+            for (const pointcloud::CylinderLodLeaf& c : candidates)
+              entry->wantedLeaves.insert(c.leafNodeIndex);
 
-            // Evict resident leaves no longer wanted (camera moved away from them).
+            // Evict resident leaves no longer wanted (camera moved away from them) — an immediate,
+            // local operation, not a disk read, so this stays synchronous.
             for (size_t li = 0; li < entry->leafGpu.size();) {
-              const bool stillWanted =
-                  std::any_of(candidates.begin(), candidates.end(),
-                              [&](const pointcloud::CylinderLodLeaf& w) {
-                                return w.leafNodeIndex == entry->leafGpu[li].leafNodeIndex;
-                              });
-              if (!stillWanted) {
+              if (!entry->wantedLeaves.count(entry->leafGpu[li].leafNodeIndex)) {
                 if (entry->leafGpu[li].vbo) glDeleteBuffers(1, &entry->leafGpu[li].vbo);
                 if (entry->leafGpu[li].vao) glDeleteVertexArrays(1, &entry->leafGpu[li].vao);
                 entry->leafGpu.erase(entry->leafGpu.begin() + static_cast<std::ptrdiff_t>(li));
@@ -1877,129 +1984,110 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                 ++li;
               }
             }
+          }
 
-            // Upload any newly wanted leaves not yet resident (one on-demand disk read each),
-            // decimated by the shared stride as they're built.
-            std::vector<double> leafXyz;
-            std::vector<float> leafColors;
-            std::vector<float> leafIntensity;
-            for (const pointcloud::CylinderLodLeaf& w : candidates) {
+          // Request every wanted leaf that isn't resident yet, or is resident but stale — off the
+          // render thread (TASK-270 §14 part 17). Gated to run only on the frame something actually
+          // changed (a reselect, or a global anchor/colour-scheme staleness), NOT every frame: the
+          // first cut of this fix ran this loop (an O(wantedLeaves x leafGpu) residency scan plus a
+          // mutex-guarded `Request` call per wanted leaf, up to ~1500) unconditionally every frame,
+          // even in steady state with nothing to request — measured as a new, uniformly elevated
+          // per-frame cost (`BENCH POINTCLOUD`: p95 17.34ms, FAIL, min/median/mean/p95/max all
+          // clustered 14.5-22ms) rather than the sparse I/O-bound spikes it replaced. In steady
+          // state (nothing stale, no reselect) there is nothing to request, so the loop is skipped
+          // entirely. `Request` itself still de-dupes against an in-flight read, so a resident-but-
+          // stale leaf keeps drawing its OLD data (no flicker, no gap) until the fresh read lands
+          // and the drain loop below replaces it — this is what removes the synchronous-read stall
+          // `BENCH POINTCLOUD` first measured (42/900 frames, up to 1.1s) without leaving a hole
+          // where a leaf used to be while its refresh is in flight.
+          if (needsReselect || refreshAllResident) {
+            for (std::int32_t idx : entry->wantedLeaves) {
               const bool resident =
                   std::any_of(entry->leafGpu.begin(), entry->leafGpu.end(),
-                              [&](const PointCloudGpuEntry::LeafGpuEntry& e) {
-                                return e.leafNodeIndex == w.leafNodeIndex;
-                              });
-              if (resident) continue;
-              if (!pointcloudcache::ReadLeafPoints(entry->diskCache, w.leafNodeIndex, leafXyz,
-                                                    leafColors, leafIntensity))
-                continue;
-              const size_t rawCount = leafXyz.size() / 3;
-              if (rawCount == 0) continue;
-              const bool leafHasColor = leafColors.size() == leafXyz.size();
-              const size_t lcount = (rawCount + static_cast<size_t>(stride) - 1) /
-                                     static_cast<size_t>(stride);
-              cpuPointCloudVerts_.clear();
-              cpuPointCloudVerts_.resize(lcount * 7);
-              size_t outv = 0;
-              for (size_t v = 0; v < rawCount; v += static_cast<size_t>(stride)) {
-                float rx = 0.f, ry = 0.f;
-                // Relative to entry->anchorX/Y (the preview's STICKY anchor), not the transient
-                // per-frame viewAnchorX/Y — see the comment above `needsReselect` (part 12): a leaf
-                // selection and the preview's own anchor update fire on independent cadences, so
-                // baking leaf vertices against the moving current anchor instead of the one the
-                // shared pcModel transform actually compensates against drifts the two apart over
-                // time, rendering as an offset "double image" of the same structure.
-                WorldToViewRelativeFloat(leafXyz[v * 3], leafXyz[v * 3 + 1], entry->anchorX,
-                                         entry->anchorY, &rx, &ry);
-                float* o = &cpuPointCloudVerts_[outv * 7];
-                o[0] = rx;
-                o[1] = ry;
-                o[2] = static_cast<float>(leafXyz[v * 3 + 2]);
-                if (leafHasColor) {
-                  o[3] = leafColors[v * 3];
-                  o[4] = leafColors[v * 3 + 1];
-                  o[5] = leafColors[v * 3 + 2];
-                } else {
-                  o[3] = fallbackRgba[0];
-                  o[4] = fallbackRgba[1];
-                  o[5] = fallbackRgba[2];
-                }
-                o[6] = 1.f;
-                ++outv;
+                              [&](const PointCloudGpuEntry::LeafGpuEntry& e) { return e.leafNodeIndex == idx; });
+              if (!resident || refreshAllResident)
+                entry->prefetch->Request(idx);
+            }
+          }
+
+          // Drain whatever the background worker finished since last frame and (re)bake it at the
+          // CURRENT shared stride/anchor/colour scheme — decimation and colour are deferred to
+          // upload time (not request time) precisely so a read already in flight when one of those
+          // changed does not need to be re-issued; the raw points it already fetched are still good.
+          for (PointCloudGpuEntry::LeafReadResult& r : entry->prefetch->Drain()) {
+            if (!r.ok) continue;
+            const size_t rawCount = r.xyz.size() / 3;
+            if (rawCount == 0) continue;
+            if (!entry->wantedLeaves.count(r.leafNodeIndex))
+              continue;  // evicted while the read was in flight — drop, cheap and harmless.
+            const int stride = std::max(entry->lodStride, 1);
+            const bool leafHasColor = r.colors.size() == r.xyz.size();
+            const bool leafHasIntensity = r.intensity.size() == rawCount;
+            const size_t lcount = (rawCount + static_cast<size_t>(stride) - 1) / static_cast<size_t>(stride);
+            cpuPointCloudVerts_.clear();
+            cpuPointCloudVerts_.resize(lcount * 7);
+            size_t outv = 0;
+            for (size_t v = 0; v < rawCount; v += static_cast<size_t>(stride)) {
+              float rx = 0.f, ry = 0.f;
+              // Relative to entry->anchorX/Y (the preview's STICKY anchor), not the transient
+              // per-frame viewAnchorX/Y — see the comment above `needsReselect` (part 12): a leaf
+              // selection and the preview's own anchor update fire on independent cadences, so
+              // baking leaf vertices against the moving current anchor instead of the one the
+              // shared pcModel transform actually compensates against drifts the two apart over
+              // time, rendering as an offset "double image" of the same structure.
+              WorldToViewRelativeFloat(r.xyz[v * 3], r.xyz[v * 3 + 1], entry->anchorX, entry->anchorY,
+                                       &rx, &ry);
+              float* o = &cpuPointCloudVerts_[outv * 7];
+              o[0] = rx;
+              o[1] = ry;
+              const float z = static_cast<float>(r.xyz[v * 3 + 2]);
+              o[2] = z;
+              float rgb[3];
+              ResolvePointCloudVertexColor(
+                  colorScheme, leafHasColor, leafHasColor ? r.colors[v * 3] : 0.f,
+                  leafHasColor ? r.colors[v * 3 + 1] : 0.f, leafHasColor ? r.colors[v * 3 + 2] : 0.f,
+                  leafHasIntensity, leafHasIntensity ? r.intensity[v] : 0.f, fallbackRgba[0],
+                  fallbackRgba[1], fallbackRgba[2], z, cloudMinZ, cloudMaxZ, rgb);
+              o[3] = rgb[0];
+              o[4] = rgb[1];
+              o[5] = rgb[2];
+              o[6] = 1.f;
+              ++outv;
+            }
+
+            PointCloudGpuEntry::LeafGpuEntry* leafEntry = nullptr;
+            for (PointCloudGpuEntry::LeafGpuEntry& e : entry->leafGpu) {
+              if (e.leafNodeIndex == r.leafNodeIndex) {
+                leafEntry = &e;
+                break;
               }
-              PointCloudGpuEntry::LeafGpuEntry leafEntry;
-              leafEntry.leafNodeIndex = w.leafNodeIndex;
-              glGenVertexArrays(1, &leafEntry.vao);
-              glGenBuffers(1, &leafEntry.vbo);
-              glBindVertexArray(leafEntry.vao);
-              glBindBuffer(GL_ARRAY_BUFFER, leafEntry.vbo);
+            }
+            if (!leafEntry) {
+              entry->leafGpu.push_back(PointCloudGpuEntry::LeafGpuEntry{});
+              leafEntry = &entry->leafGpu.back();
+              leafEntry->leafNodeIndex = r.leafNodeIndex;
+              glGenVertexArrays(1, &leafEntry->vao);
+              glGenBuffers(1, &leafEntry->vbo);
+              glBindVertexArray(leafEntry->vao);
+              glBindBuffer(GL_ARRAY_BUFFER, leafEntry->vbo);
               const GLsizei leafStrideBytes = static_cast<GLsizei>(7 * sizeof(float));
               glEnableVertexAttribArray(0);
               glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, leafStrideBytes, nullptr);
               glEnableVertexAttribArray(1);
               glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, leafStrideBytes,
                                      reinterpret_cast<const void*>(sizeof(float) * 3));
-              glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(outv * 7 * sizeof(float)),
-                           cpuPointCloudVerts_.data(), GL_STATIC_DRAW);
               glBindVertexArray(0);
-              leafEntry.pointCount = static_cast<int>(outv);
-              entry->leafGpu.push_back(leafEntry);
             }
-          } else if (anchorStale) {
-            // The selection itself is still valid, but the sticky anchor moved — every resident
-            // leaf's vertex data was baked relative to the old one and must be rebuilt at the same
-            // stride, exactly like the preview buffer above.
-            std::vector<double> leafXyz;
-            std::vector<float> leafColors;
-            std::vector<float> leafIntensity;
-            for (PointCloudGpuEntry::LeafGpuEntry& leaf : entry->leafGpu) {
-              if (!pointcloudcache::ReadLeafPoints(entry->diskCache, leaf.leafNodeIndex, leafXyz,
-                                                    leafColors, leafIntensity))
-                continue;
-              const size_t rawCount = leafXyz.size() / 3;
-              if (rawCount == 0) continue;
-              const int stride = std::max(entry->lodStride, 1);
-              const bool leafHasColor = leafColors.size() == leafXyz.size();
-              const size_t lcount = (rawCount + static_cast<size_t>(stride) - 1) /
-                                     static_cast<size_t>(stride);
-              cpuPointCloudVerts_.clear();
-              cpuPointCloudVerts_.resize(lcount * 7);
-              size_t outv = 0;
-              for (size_t v = 0; v < rawCount; v += static_cast<size_t>(stride)) {
-                float rx = 0.f, ry = 0.f;
-                // Relative to entry->anchorX/Y (the preview's STICKY anchor), not the transient
-                // per-frame viewAnchorX/Y — see the comment above `needsReselect` (part 12): a leaf
-                // selection and the preview's own anchor update fire on independent cadences, so
-                // baking leaf vertices against the moving current anchor instead of the one the
-                // shared pcModel transform actually compensates against drifts the two apart over
-                // time, rendering as an offset "double image" of the same structure.
-                WorldToViewRelativeFloat(leafXyz[v * 3], leafXyz[v * 3 + 1], entry->anchorX,
-                                         entry->anchorY, &rx, &ry);
-                float* o = &cpuPointCloudVerts_[outv * 7];
-                o[0] = rx;
-                o[1] = ry;
-                o[2] = static_cast<float>(leafXyz[v * 3 + 2]);
-                if (leafHasColor) {
-                  o[3] = leafColors[v * 3];
-                  o[4] = leafColors[v * 3 + 1];
-                  o[5] = leafColors[v * 3 + 2];
-                } else {
-                  o[3] = fallbackRgba[0];
-                  o[4] = fallbackRgba[1];
-                  o[5] = fallbackRgba[2];
-                }
-                o[6] = 1.f;
-                ++outv;
-              }
-              glBindBuffer(GL_ARRAY_BUFFER, leaf.vbo);
-              glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(outv * 7 * sizeof(float)),
-                           cpuPointCloudVerts_.data(), GL_STATIC_DRAW);
-              leaf.pointCount = static_cast<int>(outv);
-            }
+            glBindBuffer(GL_ARRAY_BUFFER, leafEntry->vbo);
+            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(outv * 7 * sizeof(float)),
+                         cpuPointCloudVerts_.data(), GL_STATIC_DRAW);
+            leafEntry->pointCount = static_cast<int>(outv);
           }
 
           // Leaves are relative to the same sticky anchor as the preview buffer above, so the MVP
-          // and clip anchor already bound for it (from entry->anchorX/Y) still apply.
+          // and clip anchor already bound for it (from entry->anchorX/Y) still apply. A leaf whose
+          // refresh is still in flight simply draws whatever it last had — stale by at most a frame
+          // or two, never a synchronous wait.
           for (const PointCloudGpuEntry::LeafGpuEntry& leaf : entry->leafGpu) {
             glBindVertexArray(leaf.vao);
             glDrawArrays(GL_POINTS, 0, leaf.pointCount);

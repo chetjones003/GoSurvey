@@ -292,9 +292,9 @@ Two more real issues, not new bugs but gaps in part 5's progress reporting:
 
 ## 11. Still not done
 - REQ-100 profile (e) benchmark instrument (`BENCH POINTCLOUD`) against the real 7.8GB file.
-- Ribbon UI point size/LOD/colour-scheme controls, PTS/PTX/LAS/LAZ readers — separate future
-  increments per `file-format-specs.md` §6.
+- PTS/PTX/LAS/LAZ readers — separate future increments per `file-format-specs.md` §6.
 - `CadBlocks.cpp` / `CadCommands_Bench.cpp` deliberately left unmirrored (no current caller).
+- Ribbon UI point size/LOD/colour-scheme controls: **done, this session — see §13.**
 
 ## 10d. Octree LOD paging in the renderer — implemented (this session, part 7)
 Closes the one item part 4's log left open: the renderer no longer draws only the flat, bounded
@@ -584,6 +584,267 @@ happen sooner, because the clock (not the frame) is what gates it.
   longer drops frames, and that detail still updates promptly once a drag settles (the 200ms floor
   should be short enough to feel immediate once the camera stops moving).
 
+## 13. Selection + ribbon UI (this session, part 14)
+Closes the two items §11 had listed short: point clouds had no candidate-generation in either pick
+path (a real gap against REQ-171's own "selects as one object" acceptance line), and there was no
+ribbon UI for point size / LOD target / colour scheme.
+
+**Part 1 — click-select and box-select.**
+- `PointCloudVisible(const AppCommandState&, size_t)` (`src/commands/CadCommands.cpp`, declared
+  alongside `SolidVisible` in `CadCommands.hpp`) mirrors `SolidVisible` exactly: bounds check,
+  REQ-084 `CadEntityIdHidden`, then `FindDrawingLayerRowCi` on/frozen check.
+- `PickClosestCadEntity` (`CadCommands.cpp`, after the B-rep solids block) walks each visible
+  cloud's **resident preview points only** (`pc->pointsXyz`, the bounded ≤2,000,000-point sample —
+  never the full `.gscloud` cache, which would mean a disk read on every hover frame, exactly what
+  the LOD renderer's reselect hysteresis (§10h/10j) exists to avoid), tracks the best distance
+  across all of a cloud's points via the existing `d2Point` lambda, and calls `consider` once per
+  cloud. A plan-XY AABB pre-reject skips a cloud outright in the non-ray case.
+- `ComputeSelectionFromRect` (box-select, `CadCommands.cpp`, after the B-rep solids block) mirrors
+  the zoom-extents box walk: bbox over the same preview points, `SPBox` screen transform, then the
+  existing window/crossing hit test.
+- Checked every `case T::Solid`/`Type::Solid` switch in `CadUi.cpp`/`CadCommands.cpp` for a missing
+  `PointCloud` arm — §7's mirroring pass had already added one everywhere it matters (erase,
+  `AttrsForKind`, EXPLODE classifier, viewport click routing), so nothing else needed a new case.
+
+**Part 2 — global point-cloud display settings.**
+- `PointCloudColorScheme` (`Rgb`/`Solid`/`Elevation`/`Intensity`) and `PointCloudDisplaySettings`
+  (`pointSizePx`, `lodTargetPoints`, `colorScheme`) added to `CadCommands.hpp`, next to the ribbon
+  tab constants; `AppCommandState::pointCloudDisplay` is the one session-global instance — deliberate,
+  since `CadPointCloud`'s payload is immutable (architecture §11.5) and cannot hold mutable display
+  prefs itself, the same reasoning that keeps `SurfaceStyle` off `CadSurface`.
+- `ViewportRenderer::RenderScene` gained a trailing `const PointCloudDisplaySettings* pointCloudDisplay
+  = nullptr` parameter (pointer so a null caller degrades to the old hardcoded defaults); `main.cpp`'s
+  one call site now passes `&cmd.pointCloudDisplay`.
+- `glPointSize(2.0f)` and the file-local `kTargetLodPoints` constant now read from
+  `pointCloudDisplay` when present, falling back to their old literal values otherwise.
+- Colour scheme: a new shared free function `ResolvePointCloudVertexColor` (anonymous namespace,
+  `ViewportRenderer.cpp`, just above `RenderScene`) is the ONE place the Rgb/Solid/Elevation/
+  Intensity switch is written, called from all three vertex-build sites (the flat preview buffer,
+  the initial LOD-leaf upload, and the anchor-stale LOD-leaf rebuild) — so a leaf/preview boundary
+  cannot show a scheme discontinuity. Elevation uses a three-stop blue→green→red ramp against the
+  cloud's Z range, read from `pc->octree.nodes[0].bounds.minZ/maxZ` (cheap, no disk read) with a
+  resident-preview-scan fallback for a cloud with no out-of-core cache yet. Intensity falls back to
+  RGB-or-fallback behaviour on a cloud with no intensity channel (`pc->hasIntensity()` false).
+
+**Part 3 — contextual "Point Cloud" ribbon tab.**
+- `kRibbonTabPointCloudCtx = 10` (`CadCommands.hpp`, next after `kRibbonTabBlockEditor`);
+  `AppCommandState::pointCloudContextualRibbonArmed` / `ribbonTabBeforePointCloudCtx` added beside
+  the surface/surveyPoint/blockEditor equivalents.
+- `FirstSelectedPointCloudIndex` (`CadUi.cpp`) mirrors `FirstSelectedSurfaceIndex`. The arm/disarm
+  block mirrors the surface block exactly, and the three existing chains (surface/surveyPoint's own
+  disarm fallbacks) were each extended with one more `else if` link to the point-cloud tab, so all
+  four contextual tabs interoperate: surface > surveyPoint > point-cloud is the settled precedence
+  when more than one is selected at once (simplest stable choice — point cloud is newest and least
+  likely to be what a mixed selection means).
+- Tab-strip button added (same 4-colour push/pop pattern as the other three contextual tabs).
+- Tab content: one section ("Point Cloud Display") with a Point Size slider (1–10 px), an LOD
+  Target slider (100k–3M points), and a Color Scheme combo (RGB/Solid/Elevation/Intensity), all
+  bound directly to `cmd.pointCloudDisplay` fields and labelled/tooltipped as session-global (every
+  cloud in the drawing, not just the selected one) since the underlying state is session-global too.
+
+**Verification.** `gosurvey_domain`, `GoSurvey.exe`, `gosurvey_headless.exe`, `GsJsonDwgFixture.exe`,
+`GoSurveyTests.exe`, `GoSurveySnapTests.exe` all build clean. `GoSurveyTests`: 1194 cases /
+8,954,034 assertions green (unchanged from part 13 — no new Catch2 tests this round). `GoSurveySnap
+Tests`: 327 cases / 3,040 assertions green. The full ctest run shows 6 pre-existing headless-
+transcript failures (`issue233-command-name-at-point-prompt`, `issue402-offset-ucs`,
+`regression-58-offset-entity-id`, `req068-surface-selection`, `req313-solid-isolines`, `req313-
+solid-primitives`) — confirmed by stashing this session's changes and re-running the same six on
+unmodified `beta`: identical failures, so these predate this increment and are not a regression
+introduced here.
+
+**Not tested — no natural harness.** `PointCloudVisible`/pick/box-select are exercised by hand-
+tracing against `SolidVisible`'s own (untested-in-isolation) pattern; grepping `tests/` for
+`PickClosestCadEntity`/`ComputeSelectionFromRect` found no existing Catch2 harness that drives
+picking through synthetic geometry for ANY entity kind (Solid included) — pick/box-select are only
+exercised indirectly through the headless transcript suite's click/drag verbs on specific
+scenarios, none of which happen to cover a point cloud yet. Matching the existing precedent rather
+than inventing new test infrastructure for this one entity kind. The ribbon tab and GL colour-scheme
+code are UI/render surface with the same `project_gui_hover_not_automatable` limitation every prior
+rendering part in this task has stated — **not yet visually confirmed**: needs a manual check that
+clicking/box-selecting a cloud in the real app actually selects it, that the Point Cloud tab arms/
+disarms correctly against the other three contextual tabs, and that the Elevation/Intensity/Solid
+colour schemes render as expected (only RGB has been exercised — the E57 fixtures used for
+import/round-trip testing all carry colour).
+
+**Known simplification, documented in code**: the Point Cloud ribbon tab has no per-cloud controls
+(e.g. an isolate/properties button matching the surface tab's General Tools group) — only the three
+requested session-global display settings, per the scope given for this increment.
+
+## 13a. User report: LOD Target slider does nothing, only RGB scheme renders — fixed (this
+session, part 15)
+Real gap found on manual test: the Color Scheme combo and LOD Target slider both write
+`cmd.pointCloudDisplay` correctly, but **nothing was watching for that change** — the preview
+buffer only rebuilds on `anchorStale` (sticky-anchor drift) and the LOD-leaf pass only reselects on
+camera-movement hysteresis (TASK-270 parts 11/13, added specifically to stop rebuilding every
+frame). Neither has anything to do with the user touching a ribbon control, so a scheme/target
+change sat inert until the camera happened to drift/move enough to force a rebuild anyway — which
+is why only RGB (the scheme every existing test fixture already uploads at import) ever appeared to
+work, and why the LOD slider looked like a no-op.
+
+**Fix**: `PointCloudGpuEntry` (`ViewportRenderer.hpp`) gained `lastColorScheme`/
+`lastColorSchemeValid` and `lastLodTargetPoints`, snapshotting what the CURRENTLY uploaded vertex
+data was built against. `ViewportRenderer.cpp`'s point-cloud block now computes
+`colorSchemeStale`/`lodTargetStale` each frame and ORs them into: the preview buffer's rebuild gate
+(`anchorStale || colorSchemeStale`), the LOD reselect trigger (`movedEnough`, bypassing both the
+hysteresis test and its 200ms wall-clock floor — a ribbon change is a deliberate one-shot action,
+not continuous camera motion, so it should apply immediately rather than wait for the next orbit
+step), and the leaf-vertex full-rebuild condition (`anchorStale || strideStale || colorSchemeStale`).
+`lastLodTargetPoints` is written back inside the `needsReselect` block once a reselect actually runs
+with the new target.
+- No test changes: this is the same renderer GL-code boundary as every other rendering part in this
+  task, outside what the Catch2 suites exercise.
+- Full suite verified: `ctest --test-dir build` — 1673/1681 tests passed, the same 8 pre-existing
+  failures (none point-cloud related: `req233`, `req402-offset-ucs`, `regression-58`,
+  `req068-surface-selection`, `req087-feature-line-modify`, `req313-solid-isolines`,
+  `req313-solid-primitives`, one PIPERUN case) reproduced identically by stashing this fix and
+  re-running against unmodified `beta` — confirmed pre-existing, not a regression.
+- **Not yet re-confirmed manually** — needs a check that the Color Scheme combo and LOD Target
+  slider now visibly change the render immediately, not just on the next camera move.
+
+## 14. `BENCH POINTCLOUD` instrument — plan (this session, part 16)
+Closes the one item TASK-270 §11 still lists open besides the deferred format readers: REQ-100
+profile (e), currently "accepted but NOT YET MEASURED — no octree/LOD renderer exists yet to
+instrument." The renderer now exists (parts 7-15); this closes the instrument gap.
+
+- Authority: REQ-100 profile (e) (proposed target, not yet measured), REQ-171/172, ADR-060.
+- Unlike profiles (a)-(d), profile (e)'s reference scene is explicitly **the user's own real E57
+  file**, not a synthetic generator — REQ-100's own text: "the reference scene is the user's own
+  driving E57 (~7.8 GB) loaded through the out-of-core octree." So `BENCH POINTCLOUD` cannot build
+  a scene the way `benchscene::BuildContourScene`/etc. do; it has to import a real file.
+- **Command**: `BENCH POINTCLOUD <path>` (aliases `cloud`, `pc`) — path is the rest of the line
+  (existing `std::getline(issIdle, rest)` rest-of-line pattern, since a real path may contain
+  spaces). No inline frame-count override in this form — a trailing numeric token would be
+  ambiguous against a path, so this form always uses REQ-100's own 900-frame default. Reuses the
+  existing `StartPointCloudImportAsync`/`TickPointCloudImport` machinery unchanged — the bench
+  does not duplicate the import path, it rides it: `BENCH POINTCLOUD <path>` starts the same async
+  import a normal `POINTCLOUDATTACH` would (progress modal and all), and a new
+  `st.bench.pendingPointCloudImport` flag defers scene install + orbit start until
+  `TickPointCloudImport` reaps a successful result.
+- **ASSUMPTION (implementation choice, not a SPEC question)**: the imported cloud is a real,
+  undoable entity that stays in the drawing after the bench run — unlike the synthetic profiles,
+  which build-then-restore because the geometry only exists for the measurement. A multi-GB E57 is
+  the user's own data, explicitly pointed at by path; re-importing/discarding it every run would be
+  wasteful and there is nothing to "restore" the drawing away from (the user asked for it). The
+  usual save/restore still applies to the OTHER stores (lines/surfaces/meshes/solids cleared for
+  the run, restored after) exactly as every other profile does, so the point cloud is measured in
+  isolation.
+- **New metrics profile (e) asks for that no other profile reports**: peak resident LOD node-cache
+  memory during the orbit, and whether any timed frame blocked on a disk read for a node not yet
+  paged in (a stall is its own failure mode, reported even if p95 passes). Plan:
+  - `ViewportRenderer` gains a per-frame-reset counter (`pointCloudLeafDiskReadsThisFrame_`,
+    incremented at every `pointcloudcache::ReadLeafPoints` call) and a public getter
+    `PointCloudLeafDiskReadsThisFrame()` — this is a direct proxy for a stall, since leaf reads are
+    already documented (part 7 log) as synchronous within the frame that requests them.
+  - A public getter `PointCloudResidentLeafBytes()` sums `leafGpu[i].pointCount * bytesPerVertex`
+    across all point-cloud GPU entries — the LOD node cache's current resident size.
+  - `main.cpp`'s existing bench-sampling block (next to the `cmd.bench.active` frame-timing code,
+    ~line 588) reads both after `RenderScene` returns, once past warm-up: accumulates
+    `diskStallFrames` (frames with >0 leaf reads) and tracks `peakResidentLeafBytes` (running max).
+  - `AppCommandState::BenchRun` gains `pointCloudPath`, `pointCloudTargetPoints` (report only —
+    read from `PointCloudDisplaySettings::lodTargetPoints`, since the LOD budget is what's actually
+    submitted, matching REQ-100 (e)'s "points submitted to the GPU in one frame" framing rather than
+    "points in the file"), `diskStallFrames`, `peakResidentLeafBytes`.
+- **Camera framing**: from the imported cloud's octree ROOT bounds (`octree.nodes[0].bounds`,
+  in-memory, no disk read) — same reasoning as the solid profile's analytic-bounds framing, since
+  there is no flat vertex array cheap enough to walk for a multi-hundred-million-point cloud.
+- **Report**: mirrors the existing per-profile pattern (`FinishFrameBudgetBench`) — profile name
+  "point cloud", scene string states the source file name + LOD target, p95/PASS-FAIL against the
+  same 16ms budget, plus two new lines: "peak resident LOD cache: X MB" and "disk stalls: N/{timed
+  frames} frames blocked on a leaf read (expected 0)" — written to both the command-line log and
+  the `bench-req100.txt` file record, same as every other profile's extra claim.
+- Test approach: no existing BENCH profile has Catch2 coverage (all measured via manual runs
+  against the reference machine — REQ-100's own acceptance is empirical, not unit-testable); this
+  profile follows the same precedent. `benchscene`/report-formatting code that IS pure logic (stall
+  counting, peak-byte tracking) gets unit coverage where it lives in a testable free function.
+- Architectural-boundary check: no new abstraction — reuses the existing async import, the existing
+  `BenchRun`/`StartFrameBudgetBench`/`FinishFrameBudgetBench` shape, and the existing
+  `PointCloudGpuEntry`/`OpenCache` LOD machinery. New fields only.
+
+**Implemented** (this session): `ViewportRenderer` gained `pointCloudLeafDiskReadsThisFrame_`
+(reset every `RenderScene` call, incremented at both `pointcloudcache::ReadLeafPoints` call sites —
+new-leaf paging AND the anchor-stale leaf rebuild, both real synchronous disk reads) and public
+getters `PointCloudLeafDiskReadsThisFrame()`/`PointCloudResidentLeafBytes()`. `BenchRun` gained
+`pointCloudPath`/`pointCloudImportPending`/`pointCloudLodTargetPoints`/`pointCloudDiskStallFrames`/
+`pointCloudPeakResidentLeafBytes`. `StartPointCloudBench` (`CadCommands_Bench.cpp`) saves camera +
+clears the other entity stores exactly like every other profile, then starts the real async import
+via the existing `StartPointCloudImportAsync` — no new import path. `InstallPointCloudBenchScene`
+is called from both branches of `TickPointCloudImport` (success and failure) once the import lands:
+on success it frames the camera from the imported cloud's octree ROOT bounds (in-memory, mirrors
+the solid profile's analytic framing) and starts the timed orbit; on failure it restores the
+cleared stores, since nothing to measure landed. `main.cpp`'s existing bench-frame block samples
+both new renderer getters right after the `RenderScene` call, once past warm-up. `FinishFrameBudget
+Bench` reports two new lines for this profile (peak resident LOD cache MB, disk-stall frame count)
+to both the command log and `bench-req100.txt`, mirroring the surface/solid cache-regen precedent.
+Command: `BENCH POINTCLOUD <path>` (aliases `CLOUD`/`PC`) — path is the rest of the line
+(`std::getline`, trimmed) since a real path may contain spaces; no inline frame-count override in
+this form, always REQ-100's 900-frame default.
+- Full suite verified: `ctest --test-dir build` — 1673/1681 passed, the same 8 pre-existing
+  failures as TASK-270 part 15 (`req233`, `req402-offset-ucs`, `regression-58`,
+  `req068-surface-selection`, `req087-feature-line-modify`, `req313-solid-isolines`,
+  `req313-solid-primitives`, one PIPERUN case) — not a regression from this change.
+- **First real measurement, run by the user against their own file** (`Sample-Data-VLX3-
+  ProcessIndustry-SMART-AIS.e57`, 188,439,985 points): `p95 8.57 ms (budget 16 ms) — PASS`, but
+  `min 3.28 median 3.66 mean 26.38 p95 8.57 p99 1022.30 max 1110.37 ms` and `disk stalls: 42/900
+  timed frames — STALLED`. **p95 passes; the stall obligation does not.** This is exactly the
+  failure mode REQ-100 (e) names separately from p95 for a reason: 42 of 900 frames (~4.7%) each
+  blocked on a synchronous leaf read and took up to 1.1 SECONDS, but p95 only has to describe the
+  95th-percentile frame, so a ~5% tail of second-long stalls sits entirely below it and would have
+  been invisible without the stall counter. This is the exact risk part 7's log flagged as
+  unmeasured ("leaf reads are still synchronous within the frame that requests them; if that
+  proves visible on the real file, moving leaf reads to a background prefetch thread would be the
+  follow-up") — now confirmed, not hypothetical. **REQ-100 profile (e) is therefore not fully MET**:
+  p95 passes but the no-stall obligation fails, and that failure is real (a user-visible ~1s hitch
+  during orbit whenever a not-yet-resident leaf is needed), not a measurement artifact. Follow-up:
+  move `pointcloudcache::ReadLeafPoints` off the render thread (a small background prefetch worker
+  feeding already-decoded leaves to the main thread, the same shape as every other async job in this
+  codebase) — not attempted in this session, since it is new work beyond the instrument this part
+  set out to build.
+
+## 15. Background leaf prefetch — fixes the measured stall (this session, part 17)
+User chose to fix the disk stall the new instrument found rather than leave it. `PointCloudGpuEntry`
+gained `LeafPrefetch` — one background worker thread per point cloud (`ViewportRenderer.hpp`),
+started lazily alongside `diskCache`. `Request(leafNodeIndex)` (de-duped against an in-flight read)
+queues a read; the worker calls `pointcloudcache::ReadLeafPoints` and pushes the RAW (undecimated)
+result into a mutex-guarded `completed` list; `Drain()` empties it. The render thread never calls
+`ReadLeafPoints` itself anymore — both former call sites (new-leaf upload, anchor-stale rebuild) are
+gone, replaced by: a `wantedLeaves` set persisted on the entry (updated on reselect), a per-frame
+`Request()` loop for anything not resident or stale (anchor/stride/colour-scheme changed), and a
+per-frame `Drain()`-and-upload loop that bakes decimation/colour at the CURRENT shared values rather
+than at request time — so a read already in flight when the stride or colour scheme changes does not
+need to be re-issued, the raw points it already fetched are still good. A leaf whose refresh is in
+flight keeps drawing its last-uploaded (stale-by-a-frame-or-two) data rather than disappearing or
+blocking — no synchronous wait anywhere on the render thread. `~LeafPrefetch()` requests stop, wakes
+the condition variable, and joins — same shape as `PointCloudImportAsync`'s destructor — so an
+entry's eviction (`ReleasePointCloudGpu`/cloud-expired cleanup) cannot leak or block-terminate on a
+live worker thread.
+- `ViewportRenderer::pointCloudLeafDiskReadsThisFrame_` is kept (comment updated) as a regression
+  signal: it should read 0 in normal operation now that no synchronous read remains on this thread,
+  so `BENCH POINTCLOUD`'s disk-stall metric becomes a live check that this fix holds, not just a
+  historical finding.
+- No test changes: this is the same renderer GL/threading boundary as the rest of this task, outside
+  what the Catch2 suites exercise; a background-thread race is also not something a headless
+  transcript can exercise meaningfully.
+- Full suite verified: `ctest --test-dir build` — 1673/1681 passed, the same 8 pre-existing failures
+  (unchanged list from part 16) — not a regression.
+- **User re-ran against the real file, part 17 confirmed and a new regression found**: `disk stalls:
+  0/900 — NONE` (the fix works), but `p95 17.34 ms — FAIL`, with every timed frame clustered
+  14.5-22ms (min 14.52, median 15.77, mean 15.93, p95 17.34, max 22.23) — a uniformly elevated cost
+  across every frame, not the sparse spikes the stall fix replaced. **Root cause, found and fixed
+  same session (part 17b)**: the leaf-request loop (an O(wantedLeaves x leafGpu) residency scan plus
+  a mutex-guarded `Request` call per wanted leaf, up to ~1500) ran UNCONDITIONALLY every frame — it
+  needed to run on an anchor-drift-only frame (no reselect), but the first cut ran it every frame
+  regardless of whether anything was actually stale, redoing the same O(n^2) scan and up to 1500
+  mutex lock/unlock pairs even in steady state with nothing to request. Fixed by gating the whole
+  loop behind `needsReselect || refreshAllResident` — skipped entirely once the leaf set is settled
+  and nothing is stale, which is the overwhelming majority of frames during a steady (non-reselect,
+  non-drift) orbit. Build verified clean.
+- **Confirmed — REQ-100 profile (e) MET.** Third run on the same real file: `p95 4.81 ms (budget
+  16 ms) — PASS`, `min 3.37 median 3.92 mean 4.00 p95 4.81 p99 5.49 max 6.32 ms` (tight, no tail),
+  `disk stalls: 0/900 — NONE`, peak resident LOD cache 7.5 MB. Both obligations REQ-100 (e) names
+  are met on the reference machine against the reference scene (188,439,985 points, the user's own
+  driving E57): the 95th-percentile frame is well inside the 16ms budget, and no frame blocks on a
+  disk read. `spec/requirements.md` REQ-100 status updated accordingly (part 18).
+
 ## 12. Log
 - 2026-09-17 (part 1): Xerces-C + libE57Format vendored and built from source. `CadPointCloud`
   entity, octree builder, and E57 reader implemented with tests.
@@ -628,3 +889,10 @@ happen sooner, because the clock (not the frame) is what gates it.
   forcing a full disk-read-and-reupload of up to 1,500 leaves, on very nearly every frame. Fixed with
   camera-movement hysteresis (same idea as the existing anchor-drift budget): re-select only once
   the focus/radius/direction have moved meaningfully, not every frame. Full suite still green.
+- 2026-09-18 (part 14): selection + ribbon UI (§13) — `PointCloudVisible` + point-cloud candidate
+  loops in `PickClosestCadEntity`/`ComputeSelectionFromRect` (closes the REQ-171 "selects as one
+  object" gap), session-global `PointCloudDisplaySettings` (point size/LOD target/colour scheme)
+  wired into `ViewportRenderer` via a shared `ResolvePointCloudVertexColor` helper, and a contextual
+  "Point Cloud" ribbon tab mirroring the TIN Surface tab. Full Catch2 suite unchanged (1194/8,954,034
+  + 327/3,040); 6 pre-existing headless-transcript failures confirmed unrelated (reproduced on
+  unmodified `beta`).

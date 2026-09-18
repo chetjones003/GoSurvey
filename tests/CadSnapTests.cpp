@@ -1638,3 +1638,112 @@ TEST_CASE("A centre accepted only because the cursor is over its shape does not 
     CHECK(hit.kind == Kind::CenterOfFace);
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// REQ-348 — PointCloud object snap: the nearest REAL point of a resident point cloud (the bounded
+// REQ-171 preview sample here; the out-of-core `.gscloud` cache path is exercised by
+// EXTRACTCENTERLINE's own tests via the same `GetOrOpenPointCloudCache`/octree machinery).
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+std::shared_ptr<CadPointCloud> MakeTestPointCloud(std::vector<double> xyz) {
+  auto pc = std::make_shared<CadPointCloud>();
+  pc->pointsXyz = std::move(xyz);
+  return pc;
+}
+} // namespace
+
+TEST_CASE("PointCloud snap finds the nearest real point in plan view and returns its exact XYZ",
+          "[CadSnap][req348]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapPointCloud = true;
+
+  st.cadPointClouds.push_back(
+      MakeTestPointCloud({0.0, 0.0, 5.0, 100.02, 100.03, 7.5, 500.0, 500.0, 9.0}));
+  EnsureAttrCounts(st);
+
+  // No ray => plan view. wx/wy land near the second point but not exactly on it, exercising the
+  // "returns the real point, not the cursor position" requirement.
+  const CadSnap::Hit hit = CadSnap::FindBest(100.0, 100.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::PointCloud);
+  CHECK(hit.x == Approx(100.02f));
+  CHECK(hit.y == Approx(100.03f));
+  CHECK(hit.z == Approx(7.5f));
+}
+
+TEST_CASE("PointCloud snap is off by default", "[CadSnap][req348]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  CHECK_FALSE(st.objectSnapPointCloud);
+
+  st.cadPointClouds.push_back(MakeTestPointCloud({100.0, 100.0, 5.0}));
+  EnsureAttrCounts(st);
+
+  const CadSnap::Hit hit = CadSnap::FindBest(100.0, 100.0, st, /*commandActive=*/true, kTol);
+  CHECK_FALSE(hit.valid);
+}
+
+TEST_CASE("PointCloud snap respects the tolerance", "[CadSnap][req348]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapPointCloud = true;
+
+  st.cadPointClouds.push_back(MakeTestPointCloud({100.0, 100.0, 5.0}));
+  EnsureAttrCounts(st);
+
+  const CadSnap::Hit miss = CadSnap::FindBest(1000.0, 1000.0, st, /*commandActive=*/true, kTol);
+  CHECK_FALSE(miss.valid);
+}
+
+TEST_CASE("PointCloud snap ignores points on a hidden/off layer (REQ-084 (d))", "[CadSnap][req348]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapPointCloud = true;
+
+  st.cadPointClouds.push_back(MakeTestPointCloud({100.0, 100.0, 5.0}));
+  EntityAttributes attr{};
+  attr.layer = "HIDDEN-LAYER";
+  st.cadPointCloudAttrs.push_back(attr);
+  CadLayerRow row;
+  row.name = "HIDDEN-LAYER";
+  row.on = false;
+  st.drawingLayerTable.push_back(row);
+
+  const CadSnap::Hit hit = CadSnap::FindBest(100.0, 100.0, st, /*commandActive=*/true, kTol);
+  CHECK_FALSE(hit.valid);
+}
+
+TEST_CASE("PointCloud snap resolves in 3D under an orbited camera, not by plan XY", "[CadSnap][req348]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapPointCloud = true;
+
+  // Two points share the same plan XY (0,0) but sit at different elevations, ~30 ft apart along
+  // the ray direction RayAt aims down +Y — only a true 3D ray test can tell them apart.
+  st.cadPointClouds.push_back(MakeTestPointCloud({0.0, 0.0, 5.0, 0.0, 0.0, 35.0}));
+  EnsureAttrCounts(st);
+
+  const ray3d::Ray ray = RayAt(0.0, 0.0, 5.0);  // aimed at the low point's elevation
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 0.0, st, /*commandActive=*/true, kTol, {}, &ray);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::PointCloud);
+  CHECK(hit.z == Approx(5.f));
+}
+
+TEST_CASE("Shift+right-click PointCloud override reaches the kind even when its toggle is off",
+          "[CadSnap][req348]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+  st.objectSnapPointCloud = false;
+
+  st.cadPointClouds.push_back(MakeTestPointCloud({100.0, 100.0, 5.0}));
+  EnsureAttrCounts(st);
+
+  const Kind only = Kind::PointCloud;
+  const CadSnap::Hit hit =
+      CadSnap::FindBest(100.0, 100.0, st, /*commandActive=*/true, kTol, {}, nullptr, &only);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::PointCloud);
+}

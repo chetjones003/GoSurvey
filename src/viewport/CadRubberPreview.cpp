@@ -734,4 +734,14 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       }
     }
   }
+
+  // EXTRACTCENTERLINE (REQ-347): the preview is exactly the hover's already-computed fit — no
+  // cursor-driven construction, unlike every command above it, so this is the one branch that reads
+  // no local pick state at all.
+  if (cmd.active == AppCommandState::Kind::ExtractCenterline && cmd.extractCenterlineHoverValid) {
+    PushRubberSegViewRel(rubberLines, cmd.extractCenterlineP0X, cmd.extractCenterlineP0Y,
+                         cmd.extractCenterlineP1X, cmd.extractCenterlineP1Y, 0., 0.,
+                         static_cast<float>(cmd.extractCenterlineP0Z),
+                         static_cast<float>(cmd.extractCenterlineP1Z));
+  }
 }

@@ -454,6 +454,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   # multi-GB scan is never fully resident in memory.
   src/util/pointcloudcache.cpp
 
+  # Least-squares cylinder-axis fit (REQ-347) — pure; fits a neighborhood of point-cloud points to
+  # a cylinder axis via PCA + radial least squares, no file IO and no GL calls.
+  src/util/cylinderfit.cpp
+
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
   src/util/docinvariants.cpp
   src/util/SaveTrace.cpp
@@ -978,6 +982,9 @@ if(GOSURVEY_BUILD_TESTS)
     # the octree and E57 reader above.
     tests/PointCloudCacheTests.cpp
     src/util/pointcloudcache.cpp
+    # REQ-347 — least-squares cylinder-axis fit. Pinned directly, same as the octree above.
+    tests/CylinderFitTests.cpp
+    src/util/cylinderfit.cpp
     tests/MeshGsRoundTripTests.cpp
     tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp
@@ -1238,7 +1245,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GizmoSubObjectMoveTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
-    # issue #486 increment B2 (REQ-345) — the PIPERUN command layer: StartPipeRunCommand /
+    # issue #486 increment B2 (REQ-347) — the PIPERUN command layer: StartPipeRunCommand /
     # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
     # with GoSurveySnapTests (gosurvey_domain), not GoSurveyTests, like CadBlockImportTests above.
     tests/CadPipeRunCommandTests.cpp

@@ -1856,6 +1856,8 @@ enum class RibbonIconKind : std::uint8_t {
   BeParamVisibility,
   BeParamLookup,
   BeParamBasepoint,
+  // Point Cloud contextual tab (REQ-347).
+  PcExtractCenterline,
   // Generic placeholder for greyed "not implemented yet" ribbon buttons.
   Nyi,
 };
@@ -2931,6 +2933,8 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::SurfProfile:    return "c3d_quickprofile";
   case RibbonIconKind::SurfDataShortcut: return "Attach";
   case RibbonIconKind::SurfGrading:    return "c3d_grading";
+  // Point Cloud contextual tab (REQ-347).
+  case RibbonIconKind::PcExtractCenterline: return "c3d_extractcenterline";
   // D-2026-08-28-k Civil 3D Survey tab / Survey Point contextual tab.
   case RibbonIconKind::SvyTripod:      return "svytripod";
   case RibbonIconKind::SvyQuery:       return "svyquery";
@@ -3353,6 +3357,20 @@ static int FirstSelectedSurfaceIndex(const AppCommandState& cmd) {
   return -1;
 }
 
+static int FirstSelectedPointCloudIndex(const AppCommandState& cmd) {
+  const size_t n = cmd.cadPointClouds.size();
+  assert(n < 10000000u);
+  for (const SelectedEntity& e : cmd.selection) {
+    assert(e.index >= -1);
+    if (e.type != SelectedEntity::Type::PointCloud)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= n)
+      continue;
+    return e.index;
+  }
+  return -1;
+}
+
 static int CountSelectedSurveyPoints(const AppCommandState& cmd) {
   const size_t n = cmd.surveyPoints.size();
   assert(n < 10000000u);
@@ -3604,6 +3622,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const int selSurfIdx = ribbonPaperSpaceEarly ? -1 : FirstSelectedSurfaceIndex(cmd);
   const int nSvyPts = ribbonPaperSpaceEarly ? 0 : CountSelectedSurveyPoints(cmd);
   const bool hasSvyPts = nSvyPts > 0;
+  const int selPcIdx = ribbonPaperSpaceEarly ? -1 : FirstSelectedPointCloudIndex(cmd);
   if (selSurfIdx >= 0) {
     if (!cmd.surfaceContextualRibbonArmed) {
       if (cmd.activeRibbonTab >= 0 && cmd.activeRibbonTab < kRibbonTabCount)
@@ -3618,6 +3637,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         prev = kRibbonTabHome;
       if (hasSvyPts)
         prev = kRibbonTabSurveyPointCtx;
+      else if (selPcIdx >= 0)
+        prev = kRibbonTabPointCloudCtx;
       cmd.activeRibbonTab = prev;
     }
     cmd.surfaceContextualRibbonArmed = false;
@@ -3637,9 +3658,35 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         prev = kRibbonTabHome;
       if (selSurfIdx >= 0)
         prev = kRibbonTabSurfaceCtx;
+      else if (selPcIdx >= 0)
+        prev = kRibbonTabPointCloudCtx;
       cmd.activeRibbonTab = prev;
     }
     cmd.surveyPointContextualRibbonArmed = false;
+  }
+  // REQ-171 (part 14): contextual Point Cloud tab, same arm/disarm shape as surface/surveyPoint
+  // above — lowest precedence of the three (only arms when neither of the others already claimed
+  // the tab this frame), since it is the newest and least likely to be what a mixed selection means.
+  if (selPcIdx >= 0) {
+    if (!cmd.pointCloudContextualRibbonArmed) {
+      if (cmd.activeRibbonTab >= 0 && cmd.activeRibbonTab < kRibbonTabCount)
+        cmd.ribbonTabBeforePointCloudCtx = cmd.activeRibbonTab;
+      if (cmd.activeRibbonTab != kRibbonTabSurfaceCtx && cmd.activeRibbonTab != kRibbonTabSurveyPointCtx)
+        cmd.activeRibbonTab = kRibbonTabPointCloudCtx;
+      cmd.pointCloudContextualRibbonArmed = true;
+    }
+  } else if (cmd.pointCloudContextualRibbonArmed) {
+    if (cmd.activeRibbonTab == kRibbonTabPointCloudCtx) {
+      int prev = cmd.ribbonTabBeforePointCloudCtx;
+      if (prev < 0 || prev >= kRibbonTabCount)
+        prev = kRibbonTabHome;
+      if (selSurfIdx >= 0)
+        prev = kRibbonTabSurfaceCtx;
+      else if (hasSvyPts)
+        prev = kRibbonTabSurveyPointCtx;
+      cmd.activeRibbonTab = prev;
+    }
+    cmd.pointCloudContextualRibbonArmed = false;
   }
 
   const bool inBedit = !cmd.blockEditorName.empty();
@@ -3714,6 +3761,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
       if (ImGui::Button(ptTab, ImVec2(0.f, kRibbonTabStripH)))
         cmd.activeRibbonTab = kRibbonTabSurveyPointCtx;
+      ImGui::PopStyleColor(4);
+      ImGui::SameLine(0, 2);
+    }
+    if (selPcIdx >= 0) {
+      const bool pcOn = cmd.activeRibbonTab == kRibbonTabPointCloudCtx;
+      ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0, 120, 215, pcOn ? 255 : 180));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(30, 144, 255, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0, 90, 180, 255));
+      ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
+      if (ImGui::Button("Point Cloud", ImVec2(0.f, kRibbonTabStripH)))
+        cmd.activeRibbonTab = kRibbonTabPointCloudCtx;
       ImGui::PopStyleColor(4);
       ImGui::SameLine(0, 2);
     }
@@ -5211,6 +5269,111 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }});
     }
   } // kRibbonTabSurveyPointCtx
+
+  // REQ-171 (part 14): contextual Point Cloud tab. Session-global display settings only (point
+  // size / LOD target / colour scheme) — these affect every resident cloud, not just the selected
+  // one, since `CadPointCloud`'s payload is immutable and holds no display prefs of its own (see
+  // `AppCommandState::pointCloudDisplay`'s doc comment). No per-cloud controls exist yet.
+  if (cmd.activeRibbonTab == kRibbonTabPointCloudCtx && !ribbonPaperSpace && selPcIdx >= 0) {
+    const float w = visualStyleComboW + 8.f + visualStyleComboW + 8.f + visualStyleComboW + 8.f;
+    ribbonSpecs.push_back({w, w, [&]() {
+      RibbonSectionBegin("RibbonSecPcDisplay", "Point Cloud Display", w, panelH);
+      ImGui::BeginGroup();
+      ImGui::TextUnformatted("Point Size");
+      ImGui::SetNextItemWidth(visualStyleComboW);
+      float ptSize = cmd.pointCloudDisplay.pointSizePx;
+      if (ImGui::SliderFloat("##PcPointSize", &ptSize, 1.0f, 10.0f, "%.1f px"))
+        cmd.pointCloudDisplay.pointSizePx = std::clamp(ptSize, 1.0f, 10.0f);
+      RibbonItemHelp("On-screen size of each rendered point, in pixels.\n"
+                     "Session-global — applies to every point cloud in the drawing.");
+      ImGui::EndGroup();
+
+      ImGui::SameLine(0, 8);
+      ImGui::BeginGroup();
+      ImGui::TextUnformatted("LOD Target");
+      ImGui::SetNextItemWidth(visualStyleComboW);
+      int lodTarget = cmd.pointCloudDisplay.lodTargetPoints;
+      if (ImGui::SliderInt("##PcLodTarget", &lodTarget, 100000, 3000000, "%d pts"))
+        cmd.pointCloudDisplay.lodTargetPoints = std::clamp(lodTarget, 100000, 3000000);
+      RibbonItemHelp("Target point count for the near-camera detail pass.\n"
+                     "Higher looks denser up close but costs more to page/render — trades\n"
+                     "render density for performance (TASK-270).\n"
+                     "Session-global — applies to every point cloud in the drawing.");
+      ImGui::EndGroup();
+
+      ImGui::SameLine(0, 8);
+      ImGui::BeginGroup();
+      ImGui::TextUnformatted("Color Scheme");
+      ImGui::SetNextItemWidth(visualStyleComboW);
+      int schemeIdx = static_cast<int>(cmd.pointCloudDisplay.colorScheme);
+      const char* kPcSchemeItems[] = {"RGB", "Solid", "Elevation", "Intensity"};
+      if (ImGui::Combo("##PcColorScheme", &schemeIdx, kPcSchemeItems, IM_ARRAYSIZE(kPcSchemeItems)))
+        cmd.pointCloudDisplay.colorScheme = static_cast<PointCloudColorScheme>(schemeIdx);
+      RibbonItemHelp("How each point is coloured.\n"
+                     "RGB — the scan's own colour, falling back to layer colour if absent.\n"
+                     "Solid — always the layer/entity colour, ignoring scanned colour.\n"
+                     "Elevation — a blue-green-red ramp by Z.\n"
+                     "Intensity — grayscale from the scan's intensity channel (RGB fallback if absent).\n"
+                     "Session-global — applies to every point cloud in the drawing.");
+      ImGui::EndGroup();
+      RibbonSectionEnd();
+    }});
+
+    // REQ-347: EXTRACTCENTERLINE — hover a cylindrical cluster in the cloud, click to place a
+    // least-squares-fit LINE along its axis. Its own section beside the display settings above.
+    {
+      ribbonlayout::RibbonGroupSpec g1;
+      g1.buttons = {largeBtnSpecEx("##PcExtractCenterline", (int)RibbonIconKind::PcExtractCenterline,
+                                   nullptr, "Extract\nCenterline", false,
+                                   "Extract Centerline — hover a scanned pipe, pole, or column to preview\n"
+                                   "its least-squares-fit axis, click to place it as a LINE.\n"
+                                   "Command bar: EXTRACTCENTERLINE",
+                                   capW("Extract\nCenterline"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {g1};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecPcExtract", "Centerline", spec, [&](const std::string& id) {
+          if (id == "##PcExtractCenterline") StartExtractCenterlineCommand(cmd, log);
+        });
+      }});
+    }
+
+    // REQ-347 GUI note: a real scan's pipe size and noise level vary drawing to drawing — the
+    // shipped default (0.6 ft / 20%) was itself hand-tuned against one real 188M-point plant scan
+    // and will not fit every scan, so both go on the ribbon rather than staying a hidden constant.
+    {
+      const float w = visualStyleComboW + 8.f + visualStyleComboW + 8.f;
+      ribbonSpecs.push_back({w, w, [&]() {
+        RibbonSectionBegin("RibbonSecPcExtractParams", "Centerline Fit", w, panelH);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Search Radius");
+        ImGui::SetNextItemWidth(visualStyleComboW);
+        float radiusFt = static_cast<float>(cmd.extractCenterlineSearchRadiusFt);
+        if (ImGui::SliderFloat("##PcExtractRadius", &radiusFt, 0.1f, 5.0f, "%.2f ft"))
+          cmd.extractCenterlineSearchRadiusFt = std::clamp(radiusFt, 0.05f, 20.0f);
+        RibbonItemHelp("How far around the hovered point to gather scan points, in feet.\n"
+                       "Too large catches a neighboring pipe, beam, or bracket along with the one\n"
+                       "you're pointing at; too small may not hold enough points to fit.\n"
+                       "Session-global, same as the Point Cloud Display controls.");
+        ImGui::EndGroup();
+
+        ImGui::SameLine(0, 8);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Fit Tolerance");
+        ImGui::SetNextItemWidth(visualStyleComboW);
+        int tolPct = static_cast<int>(std::lround(cmd.extractCenterlineMaxResidualRatio * 100.0));
+        if (ImGui::SliderInt("##PcExtractTol", &tolPct, 1, 50, "%d%%"))
+          cmd.extractCenterlineMaxResidualRatio = std::clamp(tolPct, 1, 90) / 100.0;
+        RibbonItemHelp("How closely the scan points must agree with a common radius to accept the\n"
+                       "fit, as a percentage of that radius. Higher tolerates more scan noise,\n"
+                       "insulation wrap, or weld seams; lower rejects a neighborhood sooner.\n"
+                       "Session-global, same as the Point Cloud Display controls.");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+  } // kRibbonTabPointCloudCtx
 
   if (cmd.activeRibbonTab == kRibbonTabBlockEditor && inBedit) {
     auto beditSubmit = [&](const char* line) {
@@ -10190,6 +10353,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
         ImGui::Checkbox("Intersection", &cmd.objectSnapIntersection);
         ImGui::Checkbox("Apparent intersection", &cmd.objectSnapApparentIntersection);
         ImGui::Checkbox("Surface elevation", &cmd.objectSnapSurface);
+        ImGui::Checkbox("Point cloud", &cmd.objectSnapPointCloud);
         ImGui::EndPopup();
       }
       ImGui::SameLine(0, sp);
@@ -12429,6 +12593,8 @@ static const char* SnapKindLabelForUi(CadSnap::Kind k) {
     return "Knot";
   case CadSnap::Kind::Grip:
     return "Grip";
+  case CadSnap::Kind::PointCloud:
+    return "Point cloud";
   }
   return "Snap";
 }
@@ -14325,6 +14491,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.sectionPlaneGripHover = -1;
         BumpCadGpuCache(cmd);
       }
+      // EXTRACTCENTERLINE (REQ-347): re-fit against the cursor every hover frame, same shape as the
+      // section-plane handle hover just above — a widget-free hit test, not a walk of the drawing.
+      if (modelSpace && cmd.active == AppCommandState::Kind::ExtractCenterline) {
+        const bool wasValid = cmd.extractCenterlineHoverValid;
+        const ray3d::Ray ecRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+        UpdateExtractCenterlineHover(cmd, ecRay);
+        if (cmd.extractCenterlineHoverValid != wasValid)
+          BumpCadGpuCache(cmd);
+      } else if (cmd.extractCenterlineHoverValid) {
+        cmd.extractCenterlineHoverValid = false;
+        BumpCadGpuCache(cmd);
+      }
       if (blockEntityHover) {
         cmd.viewportHoverEntityValid = false;
         cmd.viewportHoverPickGate.primed = false;
@@ -15033,6 +15211,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       break;
     }
+    case ViewportClickRoute::ExtractCenterlinePick:
+      // EXTRACTCENTERLINE (REQ-347): commit whatever cylinder fit the hover already computed. The
+      // click itself carries no new geometry — a miss (no valid hover fit) logs and leaves the
+      // command running so the user can try another spot, matching HATCH's own miss behavior above.
+      SubmitExtractCenterlineViewportPick(cmd, log);
+      break;
     case ViewportClickRoute::SnappedPointPick:
       // Point-picking commands (draw commands, and every modify command past its selection
       // phase): the click is a coordinate, handed straight to the command state machine at the
@@ -19731,6 +19915,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       armOverride(CadSnap::Kind::Edge);
     if (ImGui::Selectable("Solid face"))
       armOverride(CadSnap::Kind::Face);
+    if (ImGui::Selectable("Point cloud"))
+      armOverride(CadSnap::Kind::PointCloud);
     ImGui::EndPopup();
   }
 

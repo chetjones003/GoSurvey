@@ -9143,6 +9143,128 @@ capability that does not exist. They are recorded here rather than quietly dropp
   plane's rectangle is sized from the drawing's extents (D-2026-09-16-b) rather than from solids with
   a frame-origin fallback, and a face the clip is hiding can no longer be picked — so re-aiming
   SECTIONPLANE at a face needs that face visible.
+
+### REQ-347 — Extract a 3D centerline from a cylindrical point-cloud cluster (GitHub issue #538)
+- Purpose: turn a laser-scanned cylindrical object (pipe, pole, column) into usable CAD geometry
+  without manual eyeballing, extending REQ-171/172's point cloud support
+- Priority: should
+- Type: functional
+- Statement: A new "Extract Centerline" command, started from a button on the REQ-171 contextual
+  Point Cloud ribbon, lets the user hover over a resident point cloud to preview a least-squares
+  cylinder-axis fit and click to commit it as a real 3D LINE entity.
+
+  While the command is active, each hover works in two steps, BOTH against real scan density for a
+  cloud with an out-of-core `.gscloud` cache (ADR-060), not the bounded REQ-171 preview sample:
+  (1) locate the nearest real point to the pick ray — `pointcloud::SelectLodLeavesInCylinder` finds
+  the cache's leaves actually near the ray's line (the same primitive the renderer's own LOD pass
+  uses, at a much smaller leaf cap), their points are read via `pointcloudcache::ReadLeafPoints`, and
+  the true nearest point is kept; (2) gather the fit neighborhood — every real point within a fixed
+  radius of that point (`pointcloud::QueryLeavesNearPoint` + `ReadLeafPoints` again). Only a cloud
+  with no out-of-core cache falls back to the bounded preview sample for both steps. A cylinder axis
+  is fit to the neighborhood by least squares (eigen-decomposition of its covariance matrix — no new
+  third-party dependency, REQ-300). A live preview LINE is drawn along the fitted axis, spanning the
+  extent of the fit's inlier points projected onto that axis. A neighborhood whose fit residual (RMS
+  distance of inliers to the fitted cylindrical surface) exceeds a fixed threshold, or that has too
+  few points nearby, produces **no preview** rather than a misleading line. Clicking commits the
+  current preview as a real 3D LINE entity in model space, in local storage coordinates
+  (REQ-057/ADR-025). Esc cancels the command with no entity created, matching every other
+  pick-and-preview command's escape behavior.
+
+  **Bounding the cache read's cost** (REQ-100): the out-of-core query only touches the few leaves
+  within a fixed ~2 ft radius of one point — nothing like the renderer's own much larger
+  camera-proximity LOD reselect (up to 1500 candidate leaves) — and an open cache handle is kept
+  across hover frames rather than reopened each time. The query itself is re-run only when the hover
+  has moved past a hysteresis band since the last read, reusing the last neighborhood otherwise, so a
+  nearly-still cursor does not re-hit disk every frame.
+
+  **Field-tested correction (2026-09-18)**: the first cut fit only against the bounded preview sample
+  end to end, reasoning that any hover-driven disk read would reproduce the renderer's own per-frame
+  I/O cost. Tested live against a real 188,439,985-point plant scan (capped to a 2,000,000-point
+  preview, ~1-in-94 stride per octree leaf), this produced a consistent "no cylinder found" even
+  hovering squarely over a visible pipe — the preview was simply too sparse locally for a small
+  real-world neighborhood to reliably hold enough points. The out-of-core read above replaced it,
+  since a single small-radius neighborhood query is a fundamentally smaller, boundable cost than the
+  renderer's camera-proximity reselect, not the same problem at a different scale.
+- Acceptance:
+  - hovering over a synthetic cylindrical point cluster of known axis/radius shows a live preview
+    line whose direction and center match ground truth within REQ-101 tolerance;
+  - clicking commits a LINE entity along that axis, with endpoints at the fitted inlier extent (not
+    an infinite line), undoable as one step like other entity creation;
+  - hovering over a flat/planar or randomly-noisy cluster shows no preview;
+  - hovering where too few resident points fall in the search neighborhood shows no preview, no
+    crash;
+  - Esc cancels mid-command; no entity is created and the drawing is unchanged;
+  - the "Extract Centerline" button appears only on the REQ-171 Point Cloud contextual ribbon tab,
+    with an icon generated in the existing `tools/gen_c3d_icons.cpp` style;
+  - the fit function is callable and testable headlessly (REQ-203), independent of the GUI.
+- Owner-layer: Commands, Domain (cylinder-fit math), UI (ribbon button/icon), Renderer (preview line)
+- Status: verified
+- Revisions: 2026-09-18 — initial, GitHub issue #538. Verified against architecture (no new layer/
+  dependency), APPROVE verdict recorded in workshop/tasks/TASK-271. Delivered same day: `Kind::
+  ExtractCenterline` command (`CadCommands.cpp`), `src/util/cylinderfit.{hpp,cpp}` least-squares fit
+  (`CylinderFitTests.cpp`, 8 cases), ribbon button + `c3d_extractcenterline` icon
+  (`tools/gen_c3d_icons.cpp`).
+  2026-09-18 (same day, GUI test rounds) — field-tested against a real 188,439,985-point plant scan
+  and fixed through three rounds (task log has the full detail): (1) fitting against the REQ-171
+  bounded preview sample alone was too sparse for both locating a point near the cursor and the fit
+  neighborhood — replaced with reads against the real out-of-core `.gscloud` cache (ADR-060) via
+  `pointcloud::SelectLodLeavesInCylinder`/`QueryLeavesNearPoint` + `pointcloudcache::ReadLeafPoints`,
+  a small bounded query (not the renderer's much larger camera-proximity reselect), hysteresis-
+  throttled so a near-still cursor does not re-hit disk every frame; (2) the shipped 2.0 ft/15%
+  defaults pulled in 56,238 points spanning more than one structure on this scan and were correctly
+  refused — tightened to 0.6 ft/20%; (3) user asked to make both configurable rather than guessed
+  constants — `extractCenterlineSearchRadiusFt`/`extractCenterlineMaxResidualRatio` (session-global,
+  `AppCommandState`) exposed as Search Radius / Fit Tolerance sliders in a new "Centerline Fit"
+  ribbon section. User-confirmed working against the real scan.
+
+### REQ-348 — Point cloud object snap (GitHub issue TBD)
+- Purpose: REQ-171/172's point clouds could be displayed but not snapped to — a user tracing solid
+  geometry (pipe axes, wall faces) from a scan had no way to place a coordinate exactly on a real
+  scanned point, which REQ-347's EXTRACTCENTERLINE alone does not substitute for (it fits a
+  cylinder axis, not an arbitrary vertex).
+- Priority: must
+- Type: functional
+- Statement: A new object-snap kind, `CadSnap::Kind::PointCloud`, snaps to the nearest REAL point
+  (not an interpolated or computed one) of a resident, visible point cloud within the aperture.
+  Culling reuses REQ-347's own octree ray-cylinder query
+  (`pointcloud::SelectLodLeavesInCylinder`/`QueryLeavesNearPoint`, operating on the octree already
+  resident in `CadPointCloud::octree` — no disk IO for leaf selection) and a cache-once-per-cloud
+  `.gscloud` handle (`GetOrOpenPointCloudCache`, shared with EXTRACTCENTERLINE) so a hovering
+  cursor never re-scans a whole cloud or reopens a cache file every frame. A cache-less cloud (or a
+  failed cache open) falls back to the bounded REQ-171 preview sample. Works under an orbited 3D
+  camera and a non-world UCS (ray-based, like every other 3D-aware snap kind) as well as plan view
+  (XY-only culling, since a plan cursor carries no ray). Governed by a running-OSNAP toggle,
+  default **OFF** (D-2026-09-18: a dense cloud competing with every other snap by default was
+  judged more disruptive than useful — the same call REQ-330 made for Quadrant), and reachable at
+  any time via the existing Shift+right-click "snap once" override menu. Respects the same
+  visibility rule as every other point-cloud interaction (`PointCloudVisible`: erased/isolated-out/
+  off-layer/frozen-layer points are not snappable, REQ-084 (d)).
+- Acceptance:
+  - hovering near a resident point cloud's point, with the toggle on and a draw/modify command
+    active, shows a snap glyph and snaps to that point's exact XYZ (not a rounded/approximate
+    value);
+  - the toggle is off by default — no point-cloud candidate competes with other snaps until
+    enabled;
+  - correct under an orbited camera / rotated UCS (ray-based ranking, not plan-XY only) — two
+    points sharing the same plan XY at different elevations are distinguished by the ray;
+  - points hidden by layer/isolate/erase are never offered;
+  - the Shift+right-click override menu offers "Point cloud" and reaches the kind even when its
+    running-OSNAP toggle is off;
+  - no full linear scan of an out-of-core cloud's disk payload happens on a frame where the cursor
+    is not within tolerance of any of its leaves (octree-leaf metadata culling happens first, in
+    memory, before any cache is opened).
+- Owner-layer: Viewport (CadSnap), Commands (shared cache accessor), UI (toggle + override menu +
+  glyph)
+- Status: accepted
+- Revisions: 2026-09-18 — initial, user request ("3d object snap for point cloud points... culling
+  so we do not introduce lag"). Verified against architecture (no new abstraction — widens the
+  existing EXTRACTCENTERLINE open-cache cache from one caller to two, same shape; no new
+  dependency). Delivered same day: `Kind::PointCloud` (`CadSnap.hpp/.cpp`), `objectSnapPointCloud`
+  toggle (default off, `CadCommands.hpp`, persisted in `UserPrefs.cpp` — `.gs` persistence skipped,
+  the format is retired), snap glyph (`ViewportRenderer.cpp`), OSNAP settings + Shift+right-click
+  menu entries (`CadUi.cpp`/`CadUiSettings.cpp`), `GetOrOpenPointCloudCache` generalized from
+  `GetOrOpenExtractCenterlineCache` (`CadCommands.hpp/.cpp`), 6 Catch2 cases (`CadSnapTests.cpp`).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -9187,11 +9309,22 @@ capability that does not exist. They are recorded here rather than quietly dropp
   property of a binary, not of source code: the compiler chooses the vectorisation, inlining and
   layout that decide it, so a figure measured with a different compiler is a different result.
 - Owner-layer: Renderer
-- Status: accepted for (a)–(d) and accepted for (e), point clouds (2026-09-17); **profile (e)'s
-  target (4,000,000 points/frame within 16ms p95, RTX 5060) is accepted but NOT YET MEASURED** —
-  no octree/LOD renderer exists yet to instrument (this requirement amendment tracks the
-  point-cloud epic, D-2026-09-17-d, ADR-060); it stays unmet until a benchmark scene and instrument
-  ship. **profiles (a), (b) and (c) MET, measured 2026-08-15** (TASK-052, TASK-053);
+- Status: accepted for (a)–(d) and accepted for (e), point clouds (2026-09-17).
+  **profile (e), point clouds, MET, measured 2026-09-18** (TASK-270 §14/§15, `BENCH POINTCLOUD`
+  instrument) — run against the reference machine and the user's own real driving E57 (188,439,985
+  points): `p95 4.81 ms` (budget 16 ms), min 3.37 / median 3.92 / mean 4.00 / p99 5.49 / max 6.32 ms,
+  peak resident LOD node-cache 7.5 MB, **0/900 timed frames blocked on a disk read** — both of the
+  requirement's obligations (p95 budget and "no frame stalls on a not-yet-paged-in node") are met.
+  Measured with the shipped LOD target default (800,000 points/frame — the deliberately sparse
+  value TASK-270 part 10 chose so close-up detail reads as points rather than filling in solid), not
+  at the proposed 4,000,000-point ceiling; the instrument (`BENCH POINTCLOUD <path>`) is in place to
+  re-measure at a different target should that default change. The instrument's first run (before a
+  fix) genuinely FAILED the stall obligation — 42/900 frames blocked up to 1.1s on a synchronous
+  leaf disk read on the render thread — fixed by moving every leaf read to a background prefetch
+  worker (TASK-270 §15); a first cut of that fix then regressed p95 (17.34ms, a uniform per-frame
+  cost from an unconditional per-frame request-loop scan) before being gated to run only on frames
+  with an actual reselect/staleness, landing at the measurement above. **profiles (a), (b) and (c)
+  MET, measured 2026-08-15** (TASK-052, TASK-053);
   **profile (d), solids, MET, measured 2026-09-01** (TASK-169, D-2026-09-01-d, GitHub issue #194) —
   1.43 / 1.80 / 4.38 ms at 100 / 400 / 800 solids on the RTX 5060, cache held. The instrument
   (TASK-167) first showed it failing; coalescing the draw calls and giving the solid batches a

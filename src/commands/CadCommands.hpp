@@ -17,6 +17,9 @@
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
 // util/ray3d beside it, so the coordinate-system rules are testable without a window.
 #include "util/ucs.hpp"
+// ADR-060 .gscloud out-of-core cache: EXTRACTCENTERLINE (REQ-347) keeps one open cache handle
+// across hover frames rather than re-opening it every frame.
+#include "util/pointcloudcache.hpp"
 #include "PdfAttach.hpp"
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
@@ -1409,7 +1412,21 @@ constexpr int kRibbonTabSurfaceCtx = 7;
 constexpr int kRibbonTabSurveyPointCtx = 8;
 /// Contextual Block Editor tab while BEDIT is open. Not counted in \c kRibbonTabCount / prefs.
 constexpr int kRibbonTabBlockEditor = 9;
+/// REQ-171 (part 14): contextual Point Cloud tab. Not counted in kRibbonTabCount / prefs.
+constexpr int kRibbonTabPointCloudCtx = 10;
 
+/// REQ-171 point-cloud vertex colour source, chosen by the user (session-global — see
+/// `AppCommandState::pointCloudDisplay`).
+enum class PointCloudColorScheme { Rgb = 0, Solid = 1, Elevation = 2, Intensity = 3 };
+
+/// REQ-171 point-cloud display settings (session-global, not per-cloud — `CadPointCloud`'s payload
+/// is immutable, architecture §11.5, so mutable display prefs live here instead, same reasoning as
+/// `SurfaceStyle` living apart from `CadSurface`).
+struct PointCloudDisplaySettings {
+  float pointSizePx = 2.0f;                 // was the hardcoded glPointSize(2.0f) in ViewportRenderer
+  int lodTargetPoints = 800000;             // was the file-local kTargetLodPoints constant
+  PointCloudColorScheme colorScheme = PointCloudColorScheme::Rgb;
+};
 
 /// What the gizmo DOES — chosen by the user, unlike \ref CadGizmoMode which is derived (REQ-060
 /// rotate/scale, TASK-232).
@@ -1636,6 +1653,11 @@ struct AppCommandState {
     /// a path built from a variable number of points needs different state than a fixed-parameter
     /// command, and this one commits into `cadPipeRuns` rather than `cadSolids`.
     PipeRun,
+    /// EXTRACTCENTERLINE (REQ-347, GitHub issue #538): hover over a point cloud to preview a
+    /// least-squares cylinder-axis fit of the nearby points, click to commit it as a LINE. One
+    /// phase — no select-objects step, no typed parameters — closer in shape to `Kind::Pan`'s
+    /// hover-then-act than to any multi-phase draw command.
+    ExtractCenterline,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1713,6 +1735,7 @@ struct AppCommandState {
     case Kind::BConnectEdit:       return "BCONNECTEDIT";
     case Kind::BlockFitting:       return "BLOCKFITTING";
     case Kind::PipeRun:            return "PIPERUN";
+    case Kind::ExtractCenterline:  return "EXTRACTCENTERLINE";
     default:                  return "";
     }
   }
@@ -1937,6 +1960,28 @@ struct AppCommandState {
     /// Total tessellated triangles across the solid scene, filled in when the scene is built.
     int solidTriangleCount = 0;
 
+    /// REQ-100 profile (e) (TASK-270 §14): non-empty selects the point-cloud profile. Unlike every
+    /// other profile, the scene is not synthesized — it is the real file at this path, imported
+    /// through the normal async `POINTCLOUDATTACH` path, exactly as REQ-100 (e) requires ("the
+    /// user's own driving E57"). At most one of this, \ref solidCount, \ref meshTriangleCount and
+    /// \ref surfacePointCount is non-zero/non-empty.
+    std::string pointCloudPath;
+    /// True from the moment `BENCH POINTCLOUD <path>` starts the import until `TickPointCloudImport`
+    /// reaps it — the bench scene/orbit installs only once the import lands, since there is no
+    /// scene to frame or measure before the cloud exists.
+    bool pointCloudImportPending = false;
+    /// `PointCloudDisplaySettings::lodTargetPoints` at the moment the run starts — report-only,
+    /// read back because REQ-100 (e) budgets "points submitted to the GPU in one frame," not points
+    /// in the file, and the LOD target is what actually bounds that submission.
+    std::int64_t pointCloudLodTargetPoints = 0;
+    /// Frames (of the TIMED portion) in which the renderer issued at least one synchronous leaf
+    /// disk read — REQ-100 (e)'s "stall" obligation: reported even when p95 passes, since a stall
+    /// is a separate failure mode from a slow median frame.
+    int pointCloudDiskStallFrames = 0;
+    /// Running max of `ViewportRenderer::PointCloudResidentLeafBytes()`, sampled once per timed
+    /// frame — REQ-100 (e)'s "peak resident node-cache memory."
+    std::size_t pointCloudPeakResidentLeafBytes = 0;
+
     std::vector<double> savedPolyVerts;
     std::vector<int> savedPolyOffsets;
     std::vector<std::uint8_t> savedPolyClosed;
@@ -1982,6 +2027,11 @@ struct AppCommandState {
   /// as in AutoCAD: it fires on objects that do not touch, which is surprising unless asked for.
   bool objectSnapApparentIntersection = false;
   bool objectSnapSurface = true;
+  /// Snap to the nearest REAL point of a resident point cloud (REQ-171/172, REQ-348). Default OFF
+  /// (D-2026-09-18) — a dense cloud competing with every other running snap was judged more
+  /// disruptive than useful by default, the same call REQ-330 made for Quadrant; reachable
+  /// immediately via the Shift+right-click "snap once" override.
+  bool objectSnapPointCloud = false;
   /// --- 3D Object Snap (REQ-325/#395, supersedes REQ-301) ---------------------------------------
   /// AutoCAD's "3D Object Snap" tab is a SEPARATE system from the 2D Object Snap above: its own
   /// master toggle (F4, independent of F3's `objectSnapEnabled`) and its own six per-mode toggles.
@@ -2774,6 +2824,16 @@ struct AppCommandState {
   /// §11.5), exactly as \ref cadMeshes above.
   std::vector<std::shared_ptr<const CadPointCloud>> cadPointClouds;
   std::vector<EntityAttributes> cadPointCloudAttrs;
+  /// REQ-171 point-cloud display settings (session-global, not per-cloud — CadPointCloud's payload
+  /// is immutable, architecture §11.5, so mutable display prefs live here instead, same reasoning as
+  /// SurfaceStyle living apart from CadSurface).
+  PointCloudDisplaySettings pointCloudDisplay;
+  /// REQ-171 (part 14): true while a point cloud is selected and its contextual ribbon tab is armed
+  /// (mirrors `surfaceContextualRibbonArmed`).
+  bool pointCloudContextualRibbonArmed = false;
+  /// The ribbon tab that was active before the point-cloud contextual tab armed, restored on
+  /// disarm (mirrors `ribbonTabBeforeSurfaceCtx`).
+  int ribbonTabBeforePointCloudCtx = -1;
 
   /// TIN surfaces (REQ-068). The heavy triangulation hangs off a shared_ptr inside each CadSurface,
   /// so copying this vector — which every undo snapshot does — is strings and refcount bumps.
@@ -3299,6 +3359,57 @@ struct AppCommandState {
   float hatchAngleDeg = 0.f;
   float hatchScale = 1.f;
   std::string hatchPatternName;      ///< "" or "SOLID" = solid fill; e.g. "ANSI31" for a line pattern
+
+  // --- EXTRACTCENTERLINE command (REQ-347) ---
+  /// Session-global, ribbon-exposed fit parameters (Point Cloud contextual tab, "Centerline"
+  /// section) — same session-global shape as \ref pointCloudDisplay above, and for the same reason:
+  /// a real scan's pipe size and noise level vary drawing to drawing (field-tested: the shipped
+  /// default of 2.0 ft/0.15 was far too loose on a real 188M-point plant scan, catching 56,238
+  /// points spanning more than one member before it was hand-tuned down to 0.6 ft/0.2 — a value
+  /// that will not fit every scan either).
+  double extractCenterlineSearchRadiusFt = 0.6;
+  double extractCenterlineMaxResidualRatio = 0.2;
+  /// The current hover's cylinder-axis fit, in LOCAL storage coordinates (world = local +
+  /// worldDocumentOrigin, REQ-101) — the two endpoints a click commits as a LINE. \ref
+  /// extractCenterlineHoverValid is false whenever the hover found no acceptable fit (too few
+  /// points nearby, or the residual gate rejected the neighborhood); a click while false is a miss,
+  /// logged and left for another try, exactly like HATCH's own no-boundary-found click above.
+  bool extractCenterlineHoverValid = false;
+  /// Why the last hover found no fit — surfaced on a miss-click (REQ-201: refusals are named, not
+  /// silent). Empty only before the first hover update.
+  std::string extractCenterlineHoverDiag;
+  double extractCenterlineP0X = 0, extractCenterlineP0Y = 0, extractCenterlineP0Z = 0;
+  double extractCenterlineP1X = 0, extractCenterlineP1Y = 0, extractCenterlineP1Z = 0;
+  /// A real scan's bounded REQ-171 preview sample can be far too sparse for hovering to work at
+  /// all — a multi-hundred-million-point plant scan capped to a ~2M preview strides through each
+  /// octree leaf, so BOTH finding a point near the cursor at all AND the fit neighborhood around it
+  /// can come up empty even sitting squarely on a visible pipe (field-tested twice on a real
+  /// 188M-point scan: first the neighborhood alone was too sparse, then — after reading the
+  /// neighborhood from the real cache — locating any point near the cursor in the first place was
+  /// ALSO too sparse against the preview). So both steps read the out-of-core `.gscloud` cache
+  /// (ADR-060) when a cloud has one: one open handle per cloud, opened lazily.
+  ///
+  /// Shared with the REQ-348 PointCloud object snap (`CadSnap::FindBest`), the second concrete use
+  /// that widened this from an EXTRACTCENTERLINE-only cache to a general one — same lazy-open-and-
+  /// keep shape, now keyed by \ref PointCloudOpenCacheEntry::cachePath too so a re-imported cloud
+  /// reusing the same index does not silently answer from a stale handle (EXTRACTCENTERLINE's
+  /// command-scoped `.clear()` masked this for its own single-command lifetime; a persistent snap
+  /// query has no such natural clear point).
+  struct PointCloudOpenCacheEntry {
+    int cloudIndex = -1;
+    bool ok = false;
+    std::string cachePath;
+    pointcloudcache::OpenCache cache;
+  };
+  std::vector<PointCloudOpenCacheEntry> pointCloudOpenCaches;
+  /// Neighborhood-query hysteresis: re-reads the cache only when the hover has moved past a
+  /// fraction of the search radius since the last read, reusing \ref extractCenterlineLastNeighborhood
+  /// otherwise — so a nearly-still cursor does not re-hit disk every frame, keeping this nowhere
+  /// near the renderer's own much larger per-frame LOD reselect cost.
+  bool extractCenterlineLastQueryValid = false;
+  int extractCenterlineLastQueryCloudIndex = -1;
+  double extractCenterlineLastQueryX = 0, extractCenterlineLastQueryY = 0, extractCenterlineLastQueryZ = 0;
+  std::vector<double> extractCenterlineLastNeighborhood;
 
   // --- Selection (idle box pick + move/copy/rotate) ---
   std::vector<SelectedEntity> selection;
@@ -4942,6 +5053,18 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st);
 /// (REQ-084 (d)).
 [[nodiscard]] bool SolidVisible(const AppCommandState& st, size_t solidIndex);
 
+/// True when point cloud \p index is drawn AND clickable, mirroring \ref SolidVisible exactly
+/// (REQ-171 part 14: point clouds had no candidate-generation in either pick path before this).
+[[nodiscard]] bool PointCloudVisible(const AppCommandState& st, size_t index);
+
+/// Returns the open `.gscloud` cache for cloud \p cloudIdx from
+/// \ref AppCommandState::pointCloudOpenCaches, opening (or re-opening, if \ref
+/// CadPointCloud::cloudCachePath changed since it was last opened) and caching it on first use.
+/// nullptr when the cloud has no cache or it failed to open. Shared by EXTRACTCENTERLINE
+/// (REQ-347) and the PointCloud object snap (REQ-348).
+[[nodiscard]] const pointcloudcache::OpenCache* GetOrOpenPointCloudCache(AppCommandState& st,
+                                                                          int cloudIdx);
+
 /// Bring \ref AppCommandState::solidDisplayCache and \ref AppCommandState::solidDisplayGeometry up
 /// to date. Called once a frame, beside \ref RefreshSurfaceDisplayGeometry.
 ///
@@ -5927,6 +6050,15 @@ bool ApplyTrimStateValue(AppCommandState& st, int value, std::vector<std::string
 /// the user's drawing and camera and reports the p95 verdict.
 bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::vector<std::string>& log);
 void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-100 profile (e) (TASK-270 §14): `BENCH POINTCLOUD <path>` cannot synthesize its scene the
+/// way every other profile does — the requirement names the reference scene as "the user's own
+/// driving E57," so this starts a real async import (`StartPointCloudImportAsync`) after clearing
+/// the other entity stores, then defers the scripted-orbit install until the import lands.
+/// \ref InstallPointCloudBenchScene is called from `TickPointCloudImport` once the import
+/// completes (success installs the timed orbit; failure restores the cleared stores and reports).
+bool StartPointCloudBench(AppCommandState& st, const std::string& path, std::vector<std::string>& log);
+void InstallPointCloudBenchScene(AppCommandState& st, std::vector<std::string>& log);
 /// ELEV — set the work-plane elevation new geometry is drawn at (REQ-058).
 void StartElevCommand(AppCommandState& st, std::vector<std::string>& log);
 bool ApplyElevValue(AppCommandState& st, double z, std::vector<std::string>& log);
@@ -6296,6 +6428,19 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
 /// Index of the smallest-area filled region containing (wx,wy), or -1. Lowest pick priority (fills sit under
 /// linework) — the click handler calls this only after geometry/annotation picks miss (REQ-042).
 int PickFilledRegionAt(const AppCommandState& st, double wx, double wy);
+
+/// EXTRACTCENTERLINE (REQ-347): re-evaluates the hover's cylinder-axis fit against every visible
+/// point cloud's bounded preview sample under \p ray, writing the result into
+/// \c st.extractCenterlineHoverValid / P0/P1 (or clearing it when no acceptable fit is found —
+/// too few nearby points, or the residual gate rejects the neighborhood). \p ray must be the same
+/// ray the viewport's own hover/click seam already computed (REQ-058), exactly like every other
+/// hover-driven command in this file.
+void StartExtractCenterlineCommand(AppCommandState& st, std::vector<std::string>& log);
+void UpdateExtractCenterlineHover(AppCommandState& st, const ray3d::Ray& ray);
+/// Commits the hover's current fit (if valid) as a LINE entity, one undo step. Logs and leaves the
+/// command running, with no entity created, when the hover has no valid fit — the same "miss, try
+/// again" shape HATCH's own click handler uses.
+void SubmitExtractCenterlineViewportPick(AppCommandState& st, std::vector<std::string>& log);
 /// World pick tolerance for OFFSET entity selection (geometry scale + screen aperture).
 [[nodiscard]] float CadOffsetEntityPickTolWorld(const AppCommandState& st);
 /// Tight world pick tolerance for the idle hover highlight: fixed small pixel aperture so the cursor must

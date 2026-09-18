@@ -8,8 +8,14 @@
 #include "util/pointcloudcache.hpp"
 
 #include <chrono>
+#include <condition_variable>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
+#include <mutex>
+#include <thread>
+#include <unordered_set>
 #include <vector>
 
 /// Render-time tuning sourced from Settings → Display / System (AutoCAD Options analog).
@@ -177,7 +183,11 @@ public:
                    // profile (e) has not been measured, and implementation-rules.md §5 is explicit
                    // that unmeasured optimisation is not added speculatively.
                    const std::vector<std::shared_ptr<const CadPointCloud>>* pointClouds = nullptr,
-                   const std::vector<EntityAttributes>* pointCloudAttrs = nullptr);
+                   const std::vector<EntityAttributes>* pointCloudAttrs = nullptr,
+                   // REQ-171 (part 14): session-global point size / LOD target / colour scheme.
+                   // Pointer so a caller that can't easily reach it degrades to the old hardcoded
+                   // defaults rather than failing to compile or crashing.
+                   const PointCloudDisplaySettings* pointCloudDisplay = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
@@ -271,11 +281,106 @@ private:
       int pointCount = 0;
     };
     std::vector<LeafGpuEntry> leafGpu;  ///< currently resident LOD leaves, keyed by leafNodeIndex.
+    /// The leaf indices the CURRENT selection wants (TASK-270 §14 part 17) — kept separately from
+    /// `leafGpu` because a request can be in flight for a leaf that isn't resident yet, and a
+    /// background result can land for a leaf that was evicted while it was in flight (dropped, not
+    /// an error).
+    std::unordered_set<std::int32_t> wantedLeaves;
+
+    /// One leaf disk read as the background worker below produced it — RAW (undecimated) point
+    /// data, since decimation depends on \ref lodStride, which can change again before this result
+    /// is drained; deferring it to drain time means a read that was already in flight never needs
+    /// re-issuing just because the stride changed underneath it.
+    struct LeafReadResult {
+      std::int32_t leafNodeIndex = -1;
+      bool ok = false;
+      std::vector<double> xyz;
+      std::vector<float> colors;
+      std::vector<float> intensity;
+    };
+    /// A leaf's `pointcloudcache::ReadLeafPoints` call, moved off the render thread (TASK-270 §14
+    /// part 17). Before this existed, a leaf not yet resident was read synchronously inside
+    /// `RenderScene` — real, measured disk-stall frames (`BENCH POINTCLOUD`: 42/900 frames, up to
+    /// 1.1s, on the user's real 7.8GB file) that p95 alone did not catch. One worker per point
+    /// cloud, started lazily alongside `diskCache`; requests and results are exchanged through a
+    /// mutex-guarded queue, the same "worker computes, render thread applies" split every other
+    /// background job in this codebase uses (`PointCloudImportAsync`, `SurfaceRebuildAsync`).
+    struct LeafPrefetch {
+      std::thread thread;
+      std::mutex mutex;
+      std::condition_variable cv;
+      std::deque<std::int32_t> wanted;              ///< guarded by mutex; worker consumes FIFO.
+      std::unordered_set<std::int32_t> inFlight;    ///< guarded by mutex; requested-not-yet-drained.
+      std::vector<LeafReadResult> completed;         ///< guarded by mutex; render thread drains.
+      std::atomic<bool> stop{false};
+      /// The worker's own copy of the cache metadata (octree + cachePath) — small, read-only once
+      /// set, so no locking is needed to share it with the worker thread. `ReadLeafPoints` opens its
+      /// own file handle per call, so two threads reading the same `.gscloud` concurrently (a
+      /// request racing an anchor-stale main-thread path, if one still existed) would be safe too,
+      /// though this design never does that — every leaf read now goes through this one worker.
+      pointcloudcache::OpenCache cache;
+
+      void Run() {
+        for (;;) {
+          std::int32_t idx = -1;
+          {
+            std::unique_lock<std::mutex> lock(mutex);
+            cv.wait(lock, [&] { return stop.load(std::memory_order_acquire) || !wanted.empty(); });
+            if (wanted.empty()) {
+              if (stop.load(std::memory_order_acquire)) return;
+              continue;
+            }
+            idx = wanted.front();
+            wanted.pop_front();
+          }
+          LeafReadResult r;
+          r.leafNodeIndex = idx;
+          r.ok = pointcloudcache::ReadLeafPoints(cache, idx, r.xyz, r.colors, r.intensity);
+          {
+            std::lock_guard<std::mutex> lock(mutex);
+            inFlight.erase(idx);
+            completed.push_back(std::move(r));
+          }
+        }
+      }
+      /// No-op if `idx` is already in flight — the render thread calls this every frame a leaf is
+      /// still wanted, not just once, so the de-dupe has to live here rather than at every call site.
+      void Request(std::int32_t idx) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!inFlight.insert(idx).second) return;
+        wanted.push_back(idx);
+        cv.notify_one();
+      }
+      std::vector<LeafReadResult> Drain() {
+        std::vector<LeafReadResult> out;
+        std::lock_guard<std::mutex> lock(mutex);
+        out.swap(completed);
+        return out;
+      }
+      /// Same shape as `PointCloudImportAsync`'s destructor: without this, destroying a job whose
+      /// thread is still running calls `std::terminate` (closing the app, or the cloud's GPU entry
+      /// being evicted, mid-read would abort the process instead of exiting/continuing cleanly).
+      ~LeafPrefetch() {
+        stop.store(true, std::memory_order_release);
+        cv.notify_all();
+        if (thread.joinable()) thread.join();
+      }
+    };
+    std::unique_ptr<LeafPrefetch> prefetch;
     /// The uniform decimation stride every resident leaf was uploaded at (1 = every point). All
     /// resident leaves share one stride so the LOD reads as evenly sparse across its whole covered
     /// area, never a "these leaves are full density, those are empty" cliff at the coverage edge —
     /// see TASK-270 part 10. 0 = nothing uploaded yet.
     int lodStride = 0;
+
+    /// The colour scheme the CURRENTLY UPLOADED vertex data (both the preview buffer and every
+    /// resident LOD leaf) was baked with. Neither the preview's `anchorStale` gate nor the LOD
+    /// leaves' camera-movement hysteresis (`lodSelectionValid` below) has anything to do with the
+    /// user flipping the ribbon's colour-scheme combo — without this, changing Solid/Elevation/
+    /// Intensity would sit invisible until the camera happened to move far enough to force a
+    /// rebuild anyway (TASK-270 part 14 bugfix).
+    PointCloudColorScheme lastColorScheme = PointCloudColorScheme::Rgb;
+    bool lastColorSchemeValid = false;
 
     /// The camera state the CURRENT `leafGpu` set/stride was selected for (TASK-270 part 11) — NOT
     /// re-evaluated every frame. Re-running the cylinder query and, on a stride/leaf-set change,
@@ -296,10 +401,39 @@ private:
     /// reselects bounds the cost per second regardless of frame rate or how fast the user orbits,
     /// which is what breaks that feedback loop.
     std::chrono::steady_clock::time_point lodLastReselectTime{};
+    /// The LOD point-count target the CURRENT `leafGpu`/`lodStride` selection was computed against
+    /// (TASK-270 part 14 bugfix). `needsReselect` below is purely camera-movement hysteresis, so
+    /// without tracking this separately, dragging the ribbon's LOD Target slider would sit inert
+    /// until the camera happened to move enough to trigger a reselect anyway.
+    std::int64_t lastLodTargetPoints = 0;
   };
   std::vector<PointCloudGpuEntry> pointCloudGpu_;
   void ReleasePointCloudGpu();
   std::vector<float> cpuPointCloudVerts_;  ///< x,y,z,r,g,b,a per point; scratch, reused across clouds.
+
+  /// REQ-100 profile (e) instrument (TASK-270 §14). Originally counted synchronous
+  /// `pointcloudcache::ReadLeafPoints` calls made directly on the render thread — a real stall,
+  /// confirmed by `BENCH POINTCLOUD` against the user's own 7.8GB file (42/900 frames, up to 1.1s).
+  /// Every leaf read now goes through `PointCloudGpuEntry::LeafPrefetch` (part 17) instead, so this
+  /// stays 0 in normal operation; kept as the bench's stall signal so a regression that somehow
+  /// reintroduced a synchronous read on this thread would still be caught, not left silently unmet.
+  std::uint64_t pointCloudLeafDiskReadsThisFrame_ = 0;
+
+ public:
+  std::uint64_t PointCloudLeafDiskReadsThisFrame() const { return pointCloudLeafDiskReadsThisFrame_; }
+  /// Current resident bytes across every LOD leaf of every point cloud (the out-of-core node
+  /// cache's footprint) — REQ-100 profile (e)'s "peak resident node-cache memory" is the running
+  /// max of this, sampled by the bench harness once per timed frame.
+  std::size_t PointCloudResidentLeafBytes() const {
+    constexpr std::size_t kBytesPerVertex = 7 * sizeof(float);  // pos(3) + rgba(4), same as upload
+    std::size_t total = 0;
+    for (const PointCloudGpuEntry& e : pointCloudGpu_)
+      for (const PointCloudGpuEntry::LeafGpuEntry& leaf : e.leafGpu)
+        total += static_cast<std::size_t>(leaf.pointCount) * kBytesPerVertex;
+    return total;
+  }
+
+ private:
 
   /// One coalesced solid batch's GPU residency (REQ-313 / GitHub issue #194). Unlike a mesh, a solid
   /// batch has no stable pointer identity — `RefreshSolidDisplayGeometry` rebuilds the batch list
