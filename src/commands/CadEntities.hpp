@@ -493,6 +493,27 @@ struct CadPipeRun {
   std::string pressureClassTag;
 };
 
+/// A named PIPING NETWORK (issue #486 increment B3 / REQ-345): a container that owns a set of
+/// `CadPipeRun`s, so a set of routed runs can be selected, renamed and reported on together as one
+/// system rather than as loose, unrelated entities. "Piping owns topology, blocks own geometry"
+/// (the issue's own architectural note) applies one level up here too: a `CadPipingSystem` owns no
+/// geometry of its own — it is a list of indices into `AppCommandState::cadPipeRuns` plus a name.
+/// D-2026-09-12 decision 3: multiple named networks per drawing, each independent.
+///
+/// A pipe run belongs to AT MOST ONE network at a time (the simplest topology a "system" name can
+/// mean — two networks both claiming the same run would make "this system's total length" and
+/// similar reports ambiguous about double-counting). `PIPESYS ADD` moves a run out of any network
+/// it already belongs to before adding it to the new one, rather than refusing or duplicating.
+struct CadPipingSystem {
+  /// User-facing name. Never empty for a stored network — `PIPESYS NEW` refuses a blank name the
+  /// same way `PIPERUN`'s own nominal-size prompt refuses an empty one.
+  std::string name;
+  /// Indices into `AppCommandState::cadPipeRuns`. Kept sorted ascending and duplicate-free so
+  /// reports (`PIPESYS LIST`) and the reindexing that runs when a pipe run is deleted
+  /// (`ExecuteDeleteSelection`) don't have to special-case either.
+  std::vector<int> pipeRunIndices;
+};
+
 // ---------------------------------------------------------------------------------------------
 // Curve plane normals (REQ-312).
 //

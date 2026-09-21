@@ -275,6 +275,7 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   // clear changes the content, so RefreshSolidDisplayGeometry's next pass re-derives it naturally.
   st.cadPipeRuns.clear();
   st.cadPipeRunAttrs.clear();
+  st.cadPipingSystems.clear();  // issue #486 increment B3 / REQ-345 — same reason as cadPipeRuns above
   st.cadBlockRefs.clear();
   st.cadBlockRefAttrs.clear();
   st.surveyPoints.clear();

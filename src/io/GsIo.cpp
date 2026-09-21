@@ -1446,6 +1446,20 @@ json BuildRoot(const AppCommandState& st) {
     doc["pipeRunAttrs"] = std::move(pipeRunAttrs);
   }
 
+  // Piping networks (issue #486 increment B3 / REQ-345). Additive and omitted when there are none,
+  // same ADR-020 (d) shape as pipeRuns just above — a network is metadata only (a name plus indices
+  // into pipeRuns), never geometry.
+  if (!st.cadPipingSystems.empty()) {
+    json pipingSystems = json::array();
+    for (const CadPipingSystem& sys : st.cadPipingSystems) {
+      json o;
+      o["name"] = sys.name;
+      o["pipeRunIndices"] = sys.pipeRunIndices;
+      pipingSystems.push_back(std::move(o));
+    }
+    doc["pipingSystems"] = std::move(pipingSystems);
+  }
+
   // TIN surfaces (REQ-068). Additive and omitted when there are none, so a pre-REQ-068 drawing still
   // serializes byte-identically — the same ADR-020 (d) precedent the mesh section above follows.
   //
@@ -2750,6 +2764,32 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& o : doc["pipeRunAttrs"])
       st.cadPipeRunAttrs.push_back(EntityAttributesFromJson(o));
   st.cadPipeRunAttrs.resize(st.cadPipeRuns.size());  // keep the parallel arrays length-locked
+
+  // Piping networks (issue #486 increment B3 / REQ-345). Guarded, so a drawing written before them
+  // simply has none. An out-of-range index (a hand-edited or corrupted file) is dropped rather than
+  // trusted — REQ-201: nothing invalid is ever stored, and pipeRuns above is already loaded so its
+  // final size is known here.
+  st.cadPipingSystems.clear();
+  if (doc.contains("pipingSystems") && doc["pipingSystems"].is_array()) {
+    for (const auto& el : doc["pipingSystems"]) {
+      if (!el.is_object())
+        continue;
+      CadPipingSystem sys;
+      sys.name = el.value("name", std::string());
+      if (sys.name.empty())
+        continue;  // an unnamed network cannot be referenced or managed
+      if (el.contains("pipeRunIndices") && el["pipeRunIndices"].is_array()) {
+        for (const auto& iv : el["pipeRunIndices"]) {
+          if (!iv.is_number_integer())
+            continue;
+          const int idx = iv.get<int>();
+          if (idx >= 0 && static_cast<size_t>(idx) < st.cadPipeRuns.size())
+            sys.pipeRunIndices.push_back(idx);
+        }
+      }
+      st.cadPipingSystems.push_back(std::move(sys));
+    }
+  }
 
   // TIN surfaces (REQ-068). Guarded, so a drawing written before them simply has none.
   st.cadSurfaces.clear();
