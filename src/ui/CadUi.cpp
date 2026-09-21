@@ -8837,6 +8837,47 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     return;
   }
 
+  // The section plane (REQ-343 amended, GitHub issue #479 acceptance 4). It is not in
+  // `cmd.selection` — see `SelectedEntity::Type::SectionPlane`'s doc comment for why — so it needs
+  // its own early branch here, the same shape the paper-entity one just above takes for the same
+  // reason (its own store, not `selection`).
+  if (cmd.sectionPlaneSelected) {
+    gPropsSelFingerprint = ~0ull;
+    if (PropSectionHeader("Section Plane")) {
+      if (ImGui::BeginTable("props_sectionplane", 2, kPropTableFlags)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        const ucs::Ucs& frame = cmd.viewportSectionClipFrame;
+        char buf[128];
+        auto row = [&](const char* label, const char* value) {
+          ImGui::TableNextRow();
+          PropValueCellBg();
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(label);
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(value);
+        };
+        std::snprintf(buf, sizeof(buf), "%.3f, %.3f, %.3f", frame.origin.x, frame.origin.y, frame.origin.z);
+        row("Origin", buf);
+        std::snprintf(buf, sizeof(buf), "%.4f, %.4f, %.4f", frame.zAxis.x, frame.zAxis.y, frame.zAxis.z);
+        row("Normal", buf);
+        std::snprintf(buf, sizeof(buf), "%.3f", cmd.viewportSectionClipOffset);
+        row("Offset", buf);
+        row("Flip", cmd.viewportSectionClipFlip ? "On (kept side reversed)" : "Off");
+        if (cmd.viewportSectionClipExtent.valid) {
+          std::snprintf(buf, sizeof(buf), "%.3f x %.3f",
+                        cmd.viewportSectionClipExtent.halfU * 2.0, cmd.viewportSectionClipExtent.halfV * 2.0);
+          row("Extent (L x H)", buf);
+        } else {
+          row("Extent (L x H)", "Auto (model extent)");
+        }
+        row("Face frame", cmd.viewportSectionClipFrameValid ? "Yes (SECTIONPLANE)" : "No (SECTIONCLIP / UCS)");
+        ImGui::EndTable();
+      }
+    }
+    FillPropPanelEmpty();
+    ImGui::End();
+    return;
+  }
+
   auto& svyIx = cmd.selectedSurveyPointIndices;
   svyIx.erase(std::remove_if(svyIx.begin(), svyIx.end(),
                              [&](int ix) { return ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size(); }),
@@ -20245,6 +20286,10 @@ static const EntityAttributes& SelectedEntityAttr(const AppCommandState& cmd, co
       return cmd.cadPipeRunAttrs[static_cast<size_t>(e.index)];
     return kDef;
   case T::PdfUnderlay:
+    return kDef;
+  case T::SectionPlane:
+    // REQ-343 amended / ADR-059 (i), issue #479. A section plane has no color/layer attributes to
+    // report, matching PdfUnderlay above; stated explicitly rather than left to fall through.
     return kDef;
   }
   return kDef;

@@ -109,7 +109,26 @@ struct SelectedEntity {
     /// Point cloud (REQ-171 / ADR-042). Appended after PipeRun so existing type values stay stable.
     /// **Display-and-erase only, like Mesh** — selects, highlights, erases and reports; never
     /// grip-edited or moved by a transform command (REQ-171's stated boundary).
-    PointCloud = 15
+    PointCloud = 15,
+    /// Section plane (REQ-343 amended / ADR-059 (i), GitHub issue #479 acceptance 4/8). Appended
+    /// after PointCloud so existing type values stay stable.
+    ///
+    /// **A type tag, not a member of `AppCommandState::selection`.** The plane stays singular and
+    /// its "is it selected" state stays the dedicated `AppCommandState::sectionPlaneSelected` bool
+    /// ADR-059 (g)/(h) introduced — `selection` is an indexed vector over per-entity stores
+    /// (`e.index` into `cadSolids`, `cadTables`, ...), and there is exactly one section plane, never
+    /// zero-or-many, so giving it an `e.index` slot would be inventing storage this feature does not
+    /// need. What ADR-059 (h) got wrong was concluding from that shape that the plane could not be
+    /// an entity **at all** — it reversed a view-state bool's non-negotiables (no Properties report,
+    /// no `.gs`, no undo), not its selection storage. This tag exists so the Properties panel and the
+    /// transform-refusal doc comments above have a name for what a selected plane IS, the same as
+    /// `Solid`/`PointCloud` do; `DrawPropertiesPanel` still branches on `sectionPlaneSelected`
+    /// directly rather than scanning `selection` for it. **Display-and-erase-and-slide/flip/resize
+    /// only, like Solid/PointCloud/PipeRun**: MOVE/COPY/ROTATE/SCALE/MIRROR/STRETCH/OFFSET/ALIGN
+    /// never see it, because it is never in `selection` for those commands to iterate — the plane's
+    /// own dedicated grip drag (slide/flip/resize) is the only way it moves, which is what REQ-343
+    /// already specifies.
+    SectionPlane = 16
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -1080,6 +1099,17 @@ struct DrawingGeometrySnapshot {
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
   double worldDocumentOriginY = 0.0;
+  /// The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Mirrors
+  /// `AppCommandState::viewportSectionClip`/`Offset`/`Flip`/`FrameValid`/`Frame`/`Extent` — moved
+  /// into the undo-tracked snapshot (and, via `GsIo.cpp`, into `.gs`) so creating, deleting, sliding,
+  /// flipping and resizing the plane are all undoable, and the plane survives a save/reload. Local
+  /// coordinates, exactly like every other entity here (see "Local storage invariant").
+  bool                sectionPlaneActive = false;
+  bool                sectionPlaneFrameValid = false;
+  ucs::Ucs            sectionPlaneFrame{};
+  double              sectionPlaneOffset = 0.0;
+  bool                sectionPlaneFlip = false;
+  SectionPlaneExtent  sectionPlaneExtent{};
   std::string description;
 };
 

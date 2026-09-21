@@ -782,6 +782,34 @@ json BuildRoot(const AppCommandState& st) {
   json doc;
   doc["worldDocumentOriginX"] = st.worldDocumentOriginX;
   doc["worldDocumentOriginY"] = st.worldDocumentOriginY;
+  // The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Additive: a reader that
+  // does not know the key ignores it, and a file saved before this loads with the clip off — the
+  // same "legacy file loads unchanged" rule every other additive section here follows (ADR-020
+  // (d)), so no kGsFormatVersion bump. Local coordinates, like every other frame in this file.
+  //
+  // Gated on `viewportSectionClipFrameValid`, NOT just `viewportSectionClip` — REQ-341's
+  // `SECTIONCLIP` (aimed from the active UCS, no face) stays the view state it always was and is
+  // still NEVER written to `.gs`, exactly like it is never undo-tracked (see
+  // `CaptureGeometrySnapshot`'s comment, ADR-059 (i)). Without this gate a plain `SECTIONCLIP ON`
+  // with no `SECTIONPLANE` ever placed would start round-tripping through save/reopen, which REQ-341
+  // explicitly rules out.
+  if (st.viewportSectionClip && st.viewportSectionClipFrameValid) {
+    json sp;
+    sp["active"] = true;
+    sp["frameValid"] = true;
+    sp["frame"] = UcsFrameToJson(st.viewportSectionClipFrame);
+    sp["offset"] = st.viewportSectionClipOffset;
+    sp["flip"] = st.viewportSectionClipFlip;
+    if (st.viewportSectionClipExtent.valid) {
+      json ext;
+      ext["cu"] = st.viewportSectionClipExtent.cu;
+      ext["cv"] = st.viewportSectionClipExtent.cv;
+      ext["halfU"] = st.viewportSectionClipExtent.halfU;
+      ext["halfV"] = st.viewportSectionClipExtent.halfV;
+      sp["extent"] = std::move(ext);
+    }
+    doc["sectionPlane"] = std::move(sp);
+  }
   // REQ-076: the id counter is saved so ids are not reused across a save/load, which is what makes a
   // stored reference safe over a file's whole life rather than only within one session.
   doc["nextEntityId"] = st.nextEntityId;
@@ -1968,6 +1996,45 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   // raises the counter above any id actually present, so a hand-edited or newer file cannot make it
   // hand out an id that is already in use.
   st.nextEntityId = doc.value("nextEntityId", static_cast<std::uint64_t>(1));
+
+  // The section plane (REQ-343 amended, issue #479 acceptance 8). Absent → off, which is a fresh
+  // document's and a pre-#479 file's state alike.
+  st.viewportSectionClip = false;
+  st.viewportSectionClipFrameValid = false;
+  st.viewportSectionClipFrame = ucs::Ucs{};
+  st.viewportSectionClipOffset = 0.0;
+  st.viewportSectionClipFlip = false;
+  st.viewportSectionClipExtent = SectionPlaneExtent{};
+  st.sectionPlaneSelected = false;
+  if (doc.contains("sectionPlane") && doc["sectionPlane"].is_object()) {
+    const json& sp = doc["sectionPlane"];
+    st.viewportSectionClip = sp.value("active", false);
+    if (sp.contains("frame")) {
+      ucs::Ucs frame;
+      if (UcsFrameFromJson(sp["frame"], &frame)) {
+        st.viewportSectionClipFrame = frame;
+        st.viewportSectionClipFrameValid = sp.value("frameValid", true);
+      }
+    }
+    st.viewportSectionClipOffset = sp.value("offset", 0.0);
+    st.viewportSectionClipFlip = sp.value("flip", false);
+    if (sp.contains("extent") && sp["extent"].is_object()) {
+      const json& ext = sp["extent"];
+      SectionPlaneExtent e;
+      e.cu = ext.value("cu", 0.0);
+      e.cv = ext.value("cv", 0.0);
+      e.halfU = ext.value("halfU", 0.0);
+      e.halfV = ext.value("halfV", 0.0);
+      e.valid = (e.halfU > 1e-9 && e.halfV > 1e-9);
+      st.viewportSectionClipExtent = e;
+    }
+    // A malformed/non-finite offset must not silently clip the whole model or refuse to load it
+    // (REQ-201's "refuse rather than misbehave" applies to a hand-edited file too).
+    if (!std::isfinite(st.viewportSectionClipOffset)) {
+      st.viewportSectionClip = false;
+      st.viewportSectionClipOffset = 0.0;
+    }
+  }
 
   // Point groups (REQ-067). Absent in every file written before them → no groups, which is the
   // "legacy `.gs` loads unchanged" acceptance condition.
