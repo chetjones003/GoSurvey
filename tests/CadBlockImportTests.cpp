@@ -2296,3 +2296,143 @@ TEST_CASE("PickClosestCadEntity finds a block reference made entirely of solid g
   CHECK(hit.type == SelectedEntity::Type::BlockRef);
   CHECK(hit.index == 0);
 }
+
+// --- PIPECATALOG catalog lookup (issue #486 increment B4 / REQ-345) ----------------------------
+
+namespace {
+CadBlockDefinition MakeFittingDef(const std::string& name, CadPipePartType partType,
+                                  const std::string& nominalSize, CadPipePressureClass pressureClass) {
+  CadBlockDefinition def;
+  def.name = name;
+  def.partType = partType;
+  def.nominalSize = nominalSize;
+  def.pressureClass = pressureClass;
+  return def;
+}
+} // namespace
+
+TEST_CASE("CadPipeCatalogFind matches an already-imported fitting by size, class and type",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("ELBOW90-4IN-CS150", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
+
+  std::string name;
+  std::vector<std::string> log;
+  REQUIRE(CadPipeCatalogFind(st, CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150, &name, log));
+  CHECK(name == "ELBOW90-4IN-CS150");
+}
+
+TEST_CASE("CadPipeCatalogFind refuses with a named reason when no part matches",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("ELBOW90-4IN-CS150", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
+
+  std::string name;
+  std::vector<std::string> log;
+  CHECK_FALSE(CadPipeCatalogFind(st, CadPipePartType::Tee, "4in", CadPipePressureClass::CS150, &name, log));
+  CHECK(name.empty());
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back().find("no tee found") != std::string::npos);
+}
+
+TEST_CASE("CadPipeCatalogFind requires a part type and a nominal size", "[issue486][pipecatalog]") {
+  AppCommandState st;
+  std::string name;
+  std::vector<std::string> log;
+  CHECK_FALSE(CadPipeCatalogFind(st, CadPipePartType::None, "4in", CadPipePressureClass::None, &name, log));
+  CHECK_FALSE(CadPipeCatalogFind(st, CadPipePartType::Elbow90, "", CadPipePressureClass::None, &name, log));
+}
+
+TEST_CASE("A requested class falls back to a class-agnostic part when no exact-classed part exists",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("VALVE-2IN", CadPipePartType::Valve, "2in", CadPipePressureClass::None));
+
+  std::string name;
+  std::vector<std::string> log;
+  REQUIRE(CadPipeCatalogFind(st, CadPipePartType::Valve, "2in", CadPipePressureClass::CS300, &name, log));
+  CHECK(name == "VALVE-2IN");
+}
+
+TEST_CASE("An exact-classed part is preferred over a class-agnostic one", "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("VALVE-2IN-ANY", CadPipePartType::Valve, "2in", CadPipePressureClass::None));
+  st.blockDefs.push_back(
+      MakeFittingDef("VALVE-2IN-CS300", CadPipePartType::Valve, "2in", CadPipePressureClass::CS300));
+
+  std::string name;
+  std::vector<std::string> log;
+  REQUIRE(CadPipeCatalogFind(st, CadPipePartType::Valve, "2in", CadPipePressureClass::CS300, &name, log));
+  CHECK(name == "VALVE-2IN-CS300");
+}
+
+TEST_CASE("A requested class with no restriction (None) matches any classed part, refusing only "
+          "on ambiguity",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("FLANGE-6IN-CS150", CadPipePartType::Flange, "6in", CadPipePressureClass::CS150));
+
+  std::string name;
+  std::vector<std::string> log;
+  REQUIRE(CadPipeCatalogFind(st, CadPipePartType::Flange, "6in", CadPipePressureClass::None, &name, log));
+  CHECK(name == "FLANGE-6IN-CS150");
+}
+
+TEST_CASE("CadPipeCatalogFind refuses as ambiguous when two parts tie on size/class/type",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("ELBOW90-4IN-A", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
+  st.blockDefs.push_back(
+      MakeFittingDef("ELBOW90-4IN-B", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
+
+  std::string name;
+  std::vector<std::string> log;
+  CHECK_FALSE(CadPipeCatalogFind(st, CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150, &name, log));
+  CHECK(name.empty());
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back().find("ambiguous") != std::string::npos);
+}
+
+TEST_CASE("A non-fitting block definition (partType None) is never offered as a catalog match",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  CadBlockDefinition ordinary;
+  ordinary.name = "4in";  // adversarial: name collides with the nominal size string itself
+  st.blockDefs.push_back(ordinary);
+
+  std::string name;
+  std::vector<std::string> log;
+  CHECK_FALSE(CadPipeCatalogFind(st, CadPipePartType::Elbow90, "4in", CadPipePressureClass::None, &name, log));
+}
+
+TEST_CASE("PIPECATALOG command parses part type, size and optional class", "[issue486][pipecatalog][command]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("TEE-3IN-CS300", CadPipePartType::Tee, "3in", CadPipePressureClass::CS300));
+
+  std::vector<std::string> log;
+  std::istringstream args("tee 3in CS300");
+  REQUIRE(CadBlocksTryIdleCommand(st, "pipecatalog", args, log));
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back().find("TEE-3IN-CS300") != std::string::npos);
+}
+
+TEST_CASE("PIPECATALOG command refuses an unknown part type or pressure class",
+          "[issue486][pipecatalog][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  std::istringstream badType("bogus 4in");
+  REQUIRE(CadBlocksTryIdleCommand(st, "pipecatalog", badType, log));
+  CHECK(log.back().find("unknown part type") != std::string::npos);
+
+  log.clear();
+  std::istringstream badClass("elbow-90 4in CS999");
+  REQUIRE(CadBlocksTryIdleCommand(st, "pipecatalog", badClass, log));
+  CHECK(log.back().find("unknown pressure class") != std::string::npos);
+}

@@ -83,6 +83,16 @@ struct CadBlockLibraryEntry {
 };
 
 void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBlockLibraryEntry>* out);
+/// Catalog lookup (issue #486 increment B4 / REQ-345): maps (size, class, part type) to a block
+/// definition name in the bundled/user fittings library, importing it into \p st.blockDefs if it
+/// was found but not yet imported. Refuses (returns false, reason pushed to \p log) when nothing
+/// matches, or when the match is ambiguous (more than one candidate) — never guesses among several.
+/// \p pressureClass may be `None` to mean "no restriction"; a specific class prefers an exact-tagged
+/// part and falls back to a class-agnostic one only if no exact match exists, mirroring
+/// `CadBlockResolveMode`'s own exact-then-default precedent.
+bool CadPipeCatalogFind(AppCommandState& st, CadPipePartType partType, const std::string& nominalSize,
+                        CadPipePressureClass pressureClass, std::string* outBlockName,
+                        std::vector<std::string>& log);
 /// `<UserDataDirectory>/blocks/fittings` — where LIBEXPORT writes user-authored fitting parts
 /// (issue #486 increment A3). Empty if the user data directory cannot be determined.
 [[nodiscard]] std::filesystem::path CadFittingLibraryExportDir();
