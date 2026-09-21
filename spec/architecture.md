@@ -4379,3 +4379,113 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   file size; this is disclosed to the user (progress/log), not hidden. Deleting or moving the
   `.gscloud` file has no effect beyond a one-time reindex — it is a cache, not a required
   companion file for correctness.
+
+### ADR-061 — Inertia is integrated by the same quadrature, the same world-axes/solid-local-origin discipline, and an in-tree Jacobi eigensolver with a canonical degenerate basis   (2026-09-18, accepted)
+
+- **Status:** accepted (2026-09-18). Backs REQ-349 (GitHub issue #460).
+- **Context.** ADR-055 settled how the *first* moment (the centroid) is integrated: quadrature over
+  the exact analytic surface, accumulated in world axes, about a solid-local reference point `q`,
+  because per-face-frame accumulation is invisibly wrong on a tilted solid and origin-referencing is
+  wrong by thousands of feet at survey magnitude. Issue #460 asks for the *second* moment — the
+  inertia tensor — plus an eigendecomposition for its principal axes. Every property ADR-055
+  measured about the first moment applies to the second, and worse: the integrand now squares a
+  coordinate, so both the frame-covariance failure and the origin-cancellation failure grow rather
+  than merely persist.
+- **Decision.**
+
+  **(a) Reuse the centroid's instrument, not a new one.** The second-moment integrand
+  (`∫ x'² dV`, `∫ x'y' dV`, … with `r' = p − q`) is integrated by the same 16-point Gauss-Legendre
+  quadrature ADR-055 (b) chose for the centroid: Green's-theorem boundary quadrature for a planar
+  face (extending `PlanarFaceMoment`'s six region scalars — `A, Sa, Sb, Saa, Sab, Sbb` — into the
+  world-frame quadratic expansion `PlanarFaceSecondMoment` needs), and 16×16 Gauss quadrature over
+  the `(u,v)` patch for a curved face (`CurvedFaceSecondMoment`), using the divergence-theorem form
+  `∫ f dV = 1/5 ∫ f(r)(r·n) dA`. No new closed forms per surface kind were derived — the same
+  five-closed-forms-times-two-integrands cost ADR-055 (context) rejected for the first moment
+  applies doubly to the second, which has more distinct terms per surface (six second moments
+  against three first moments).
+
+  **(b) World axes, about the same solid-local `q`, exactly as ADR-055 (a) mandates — restated here
+  because it is the load-bearing decision twice over.** Every face's contribution accumulates as
+  `r = p_world − q` in world coordinates, never in the face's own local frame rotated afterward.
+  Squaring `r` makes ADR-055's two measured failure modes worse, not merely present: a tilted
+  solid's per-face-frame error was 2–3 ft on the *first* moment, and a wrong-frame second moment
+  would be off by the square of a similar quantity; the origin-referenced error on the centroid was
+  46–6,978 ft at easting 2.2e6, and squaring that scale is what makes a test suite written only at
+  the origin structurally unable to catch either bug — the same blind spot ADR-055 names for its
+  own integral.
+
+  **(c) The centroidal tensor, not the tensor about `q`, is the primary stored quantity.** The
+  integrator accumulates second moments about `q` (the same point volume/centroid already use),
+  then transfers them to the centroid by the parallel-axis relation before storing
+  `Ixx, Iyy, Izz, Ixy, Ixz, Iyz`. This matches the issue's own framing — principal axes are defined
+  in the centroidal frame — and keeps `InertiaAboutPoint(mp, p)` a pure, cheap function of the
+  stored tensor rather than a second integration pass.
+
+  **(d) A third validity flag, `inertiaValid`, alongside `valid` and `centroidValid`.** ADR-055 (d)
+  added `centroidValid` as a second flag rather than overload `valid`, "to avoid suppressing two
+  good figures". The same reasoning forces a third: the covered-face-shape set for the
+  second-moment integrand is not guaranteed to be a superset or subset of the first moment's in
+  perpetuity, and a solid whose inertia cannot be computed must not silently withhold a volume,
+  area, or centroid that computed successfully. In practice, in this increment, the two coverage
+  sets are identical (both refuse `Nurbs`, `paramLoops`, multi-loop faces, and `Ellipse`/
+  `Intersection` boundary edges) — but the flag is independent so that never has to stay true by
+  coincidence.
+
+  **(e) Eigendecomposition: an in-tree, cyclic-pivot Jacobi iteration over the real-symmetric
+  centroidal tensor, not an external linear-algebra dependency.** REQ-300 already bars a new
+  dependency for a 3×3 problem the issue itself names Jacobi for. `JacobiEigenSymmetric3x3` runs a
+  bounded number of classic Jacobi sweeps (largest-off-diagonal pivot each iteration, a fixed
+  iteration cap, not sensitive to input scale because the pivot angle formula is scale-invariant),
+  producing eigenvalues sorted descending and eigenvectors as an explicitly re-orthonormalized,
+  sign-canonicalized, right-handed basis (columns of `V`; `det(V)` forced to `+1` by negating the
+  third column if needed; each eigenvector's sign fixed by making its largest-magnitude component
+  positive). The pivot selection is a deterministic function of the input matrix, not of iteration
+  order or memory state, which is what makes a degenerate spectrum (two or three equal eigenvalues
+  — sphere, cylinder, cone, regular pyramid) still return the *same* basis on every call and after a
+  `.gs` save/reload, even though the issue notes such a basis is mathematically arbitrary within its
+  own degenerate subspace. Determinism, not a "geometrically preferred" arbitrary axis, is what the
+  acceptance criterion asks for.
+
+  **(f) The centroidal tensor is cross-checked against volume before being reported**, exactly as
+  ADR-055 (e) cross-checks the centroid: the second-moment integrator re-derives the volume as it
+  accumulates, and it must agree with `ComputeMassProperties`'s own volume to a relative `1e-9` or
+  `inertiaValid` stays false. A tensor computed against a different volume than the one being
+  reported would describe a different solid.
+
+  **(g) Tolerance is relative, and stated as two tiers.** An inertia has units of length⁵ (unit
+  density), so REQ-101's absolute ±0.002 ft has no meaning here. `1e-8` relative per component
+  covers the seven primitives at any coordinate magnitude — three orders tighter than the ~`1e-12`
+  quadrature residual ADR-055 measured for the analogous first-moment case, leaving margin to catch
+  a dropped or mis-signed term without being so tight that ordinary floating-point summation order
+  trips it. `1e-7` (one order looser) covers a Boolean composite or a tilted/survey-magnitude
+  fixture, where composition and cross-solid transfer add their own rounding.
+
+  **(h) Reporting rides both surfaces the centroid already reaches, plus a new dedicated verb.**
+  `SOLIDLIST` gains a centroid/inertia/principal-axis block per solid (the issue calls `SOLIDLIST`
+  "the obvious place"), and a new `MASSPROP` command (aliased `MASSPROPERTIES`/`SOLIDMASSPROP`/
+  `MASSP`, matching the AutoCAD verb a surveyor/drafter already knows) prints the full block for
+  every solid in the drawing, including the tensor about the world origin as a parallel-axis
+  demonstration. `SOLIDCHECK` is left alone — validity/self-intersection reporting is its whole
+  contract, and widening it would blur that line for no benefit.
+
+- **Alternatives considered.** *Derive closed-form second moments per surface kind* — five surface
+  kinds × six tensor components is thirty fresh analytic derivations against ten for the volume
+  alone, each a distinct chance at a plausible wrong number; ADR-055 already rejected the equivalent
+  choice for the centroid on the same grounds and the second moment has more terms per surface.
+  *Fold inertia into the existing `centroidValid` flag* — would either force every uncovered-inertia
+  solid to also lose its (perfectly good) centroid, or force every uncovered-centroid solid to
+  pretend it might still have inertia; a solid case cannot exist under one flag. *An external
+  eigensolver (LAPACK/Eigen)* — barred by REQ-300 for a 3×3 problem with a well-known in-tree
+  algorithm; adds a build dependency to save perhaps 100 lines. *Leave degenerate-spectrum axes
+  unconstrained ("any valid basis")* — the issue explicitly calls out determinism as the interesting
+  requirement; an unconstrained basis would pass a same-process test and fail a save/reload one, the
+  exact split ADR-055's own centroid work exists to prevent for a different quantity.
+- **Consequences.** `MassProperties` gains three flags' worth of surface area
+  (`inertiaValid`, six tensor doubles, three eigenvalues, three `Vec3` eigenvectors) with no change
+  to `.gs`'s persisted schema — the tensor is derived on demand from a `Solid`, exactly as volume,
+  area and centroid already are, so no `kGsFormatVersion` bump is needed. `FaceArea`'s existing
+  asymmetry (it does not refuse a self-intersecting solid; `ComputeMassProperties` does) is
+  unchanged and unaffected by this ADR. Increment 2 — extending second-moment coverage to `Nurbs`,
+  general trim loops, holes, and `Ellipse`/`Intersection` boundary edges — is carried together with
+  REQ-334's own increment 2, since inertia cannot be computed for a face shape the centroid itself
+  cannot yet integrate.

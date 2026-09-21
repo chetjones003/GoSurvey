@@ -5365,6 +5365,9 @@ void CancelPipeRunCommand(AppCommandState& st);
 /// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log);
 
+/// Mass properties including inertia and principal axes (REQ-460, GitHub #460) — the MASSPROP command.
+void CadReportMassProperties(const AppCommandState& st, std::vector<std::string>& log);
+
 /// REQ-313 as amended (D-2026-09-09-j) — SOLIDCHECK: report each solid's validity, and separately
 /// whether its surface passes through itself. Read-only; nothing is repaired.
 void CadCheckSolids(AppCommandState& st, std::vector<std::string>& log);

@@ -1024,6 +1024,28 @@ struct MassProperties {
   /// between suppressing two good figures and reporting a third that was not computed.
   Vec3 centroid{};
   bool centroidValid = false;
+
+  /// Moments and products of inertia about the **centroid** (REQ-460, GitHub #460) — unit density, so
+  /// mass == volume. `Ixx = ∫(y'^2 + z'^2) dV` where `r' = p - centroid`, etc., `Ixy = -∫ x' y' dV`.
+  /// Reported through its own `inertiaValid` flag, separate from `valid` and `centroidValid`, because
+  /// its integrator covers the same face shapes as the centroid in this increment and is withheld
+  /// rather than approximated when a face is outside that set, leaving volume/area/centroid untouched.
+  bool inertiaValid = false;
+  double Ixx = 0.0;
+  double Iyy = 0.0;
+  double Izz = 0.0;
+  double Ixy = 0.0;
+  double Ixz = 0.0;
+  double Iyz = 0.0;
+
+  /// Principal moments (eigenvalues of the centroidal tensor, sorted descending) and their
+  /// orthonormal, right-handed axes in world coordinates. Valid only when `inertiaValid`.
+  double principalI1 = 0.0;
+  double principalI2 = 0.0;
+  double principalI3 = 0.0;
+  Vec3 principalAxis1{};
+  Vec3 principalAxis2{};
+  Vec3 principalAxis3{};
 };
 
 /// Exact volume and surface area of \p s, integrated over its **analytic** faces — not summed from
@@ -1044,7 +1066,31 @@ struct MassProperties {
 /// shapes than the volume does; see that field. It is also cross-checked before being reported: the
 /// volume its own integrator re-derives must agree with the volume above, since a centroid built on
 /// a different figure than the one being reported would describe a different solid.
+///
+/// **Moments of inertia** (REQ-460, GitHub #460) are integrated the same way — about the same `q`,
+/// in world axes, over the exact analytic surfaces — and reported through `inertiaValid`. The
+/// centroidal tensor is `Ixx = ∫(y'^2+z'^2) dV` etc. with `r' = p - centroid`, `Ixy = -∫ x' y' dV`,
+/// unit density so mass == volume. Principal axes are the eigenvectors of that tensor, orthonormal
+/// and right-handed, deterministic across runs and `.gs` save/reload.
 [[nodiscard]] MassProperties ComputeMassProperties(const Solid& s);
+
+/// Inertia tensor about an arbitrary world point `p`, derived from the centroidal one by the
+/// parallel-axis theorem: `I_p = I_c + m * ((d·d)E - d d^T)` where `d = p - centroid`, `m = volume`.
+/// `mp.inertiaValid` must be true or the result is zero.
+struct InertiaTensor {
+  double xx = 0.0;
+  double yy = 0.0;
+  double zz = 0.0;
+  double xy = 0.0;
+  double xz = 0.0;
+  double yz = 0.0;
+};
+[[nodiscard]] InertiaTensor InertiaAboutPoint(const MassProperties& mp, const Vec3& p);
+
+/// Diagonalize a real symmetric 3×3 matrix. Input `A[3][3]` symmetric, output eigenvalues sorted
+/// descending in `eig[3]` and orthonormal right-handed eigenvectors as columns in `vec[3][3]`
+/// (`vec[i][j]` is component `i` of eigenvector `j`). Deterministic for degenerate spectra.
+void JacobiEigenSymmetric3x3(const double A[3][3], double eig[3], double vec[3][3]);
 
 /// Exact area of the **single face** \p faceIndex of \p s, in \p outArea (REQ-313 as amended,
 /// D-2026-09-09-g, GitHub #149 acceptance 2).

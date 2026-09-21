@@ -30142,6 +30142,111 @@ void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log) {
                   static_cast<int>(sp->edges.size()), static_cast<int>(sp->faces.size()),
                   mp.valid ? "." : " — INVALID.");
     log.push_back(buf);
+    if (mp.valid && mp.centroidValid) {
+      char cbuf[220];
+      std::snprintf(cbuf, sizeof(cbuf), "       centroid (%.4f, %.4f, %.4f)", mp.centroid.x,
+                    mp.centroid.y, mp.centroid.z);
+      log.push_back(cbuf);
+    }
+    if (mp.valid && mp.inertiaValid) {
+      char ibuf[420];
+      std::snprintf(ibuf, sizeof(ibuf),
+                    "       inertia about centroid (unit density): Ixx %.4f Iyy %.4f Izz %.4f Ixy %.4f Ixz %.4f Iyz %.4f",
+                    mp.Ixx, mp.Iyy, mp.Izz, mp.Ixy, mp.Ixz, mp.Iyz);
+      log.push_back(ibuf);
+      char pbuf[420];
+      std::snprintf(pbuf, sizeof(pbuf),
+                    "       principal moments %.4f %.4f %.4f", mp.principalI1, mp.principalI2,
+                    mp.principalI3);
+      log.push_back(pbuf);
+      char abuf[420];
+      std::snprintf(abuf, sizeof(abuf),
+                    "       principal axes: (%.4f,%.4f,%.4f) (%.4f,%.4f,%.4f) (%.4f,%.4f,%.4f)",
+                    mp.principalAxis1.x, mp.principalAxis1.y, mp.principalAxis1.z,
+                    mp.principalAxis2.x, mp.principalAxis2.y, mp.principalAxis2.z,
+                    mp.principalAxis3.x, mp.principalAxis3.y, mp.principalAxis3.z);
+      log.push_back(abuf);
+    } else if (mp.valid && !mp.inertiaValid && mp.centroidValid) {
+      log.push_back("       inertia: unavailable for this solid (face shape not covered).");
+    } else if (mp.valid && !mp.inertiaValid) {
+      log.push_back("       inertia: unavailable (centroid unavailable).");
+    }
+    if (!mp.valid) {
+      // For an invalid or self-intersecting solid, explain why no mass properties are reported.
+      if (brep::SelfIntersects(*sp)) {
+        log.push_back("       mass properties unavailable — self-intersecting.");
+      } else if (brep::Validate(*sp) != brep::Problem::Ok) {
+        log.push_back(std::string("       mass properties unavailable — ") +
+                      brep::ProblemText(brep::Validate(*sp)) + ".");
+      }
+    } else if (brep::SelfIntersects(*sp)) {
+      log.push_back("       mass properties unavailable — self-intersecting (inertia and centroid withheld).");
+    }
+  }
+}
+
+void CadReportMassProperties(const AppCommandState& st, std::vector<std::string>& log) {
+  if (st.cadSolids.empty()) {
+    log.push_back("No solids in this drawing.");
+    return;
+  }
+  log.push_back("Mass properties (unit density, so mass = volume):");
+  for (size_t i = 0; i < st.cadSolids.size(); ++i) {
+    const CadSolidPtr& sp = st.cadSolids[i];
+    if (!sp)
+      continue;
+    const brep::MassProperties mp = brep::ComputeMassProperties(*sp);
+    const char* layer = (i < st.cadSolidAttrs.size() && !st.cadSolidAttrs[i].layer.empty())
+                            ? st.cadSolidAttrs[i].layer.c_str()
+                            : "0";
+    char hdr[220];
+    std::snprintf(hdr, sizeof(hdr), "  [%d] %s on layer %s", static_cast<int>(i),
+                  brep::PrimitiveKindName(sp->recipe.kind), layer);
+    log.push_back(hdr);
+    if (!mp.valid) {
+      if (brep::SelfIntersects(*sp))
+        log.push_back("       self-intersecting — volume, area, centroid and inertia are not reported.");
+      else
+        log.push_back(std::string("       invalid — ") + brep::ProblemText(brep::Validate(*sp)) + ".");
+      continue;
+    }
+    if (brep::SelfIntersects(*sp)) {
+      log.push_back("       self-intersecting — volume, area, centroid and inertia are not reported.");
+      continue;
+    }
+    char vbuf[320];
+    std::snprintf(vbuf, sizeof(vbuf), "       volume %.6f  area %.6f  centroid (%.6f, %.6f, %.6f)%s",
+                  mp.volume, mp.surfaceArea, mp.centroid.x, mp.centroid.y, mp.centroid.z,
+                  mp.centroidValid ? "" : " — centroid unavailable");
+    log.push_back(vbuf);
+    if (!mp.inertiaValid) {
+      log.push_back("       inertia about centroid: unavailable (face shape not covered in this increment).");
+      continue;
+    }
+    char ibuf[420];
+    std::snprintf(ibuf, sizeof(ibuf),
+                  "       inertia about centroid: Ixx %.6f Iyy %.6f Izz %.6f Ixy %.6f Ixz %.6f Iyz %.6f",
+                  mp.Ixx, mp.Iyy, mp.Izz, mp.Ixy, mp.Ixz, mp.Iyz);
+    log.push_back(ibuf);
+    // Also show tensor about world origin as a demonstration of parallel-axis.
+    const brep::InertiaTensor Io = brep::InertiaAboutPoint(mp, ray3d::Vec3{0, 0, 0});
+    char obuf[420];
+    std::snprintf(obuf, sizeof(obuf),
+                  "       inertia about world origin: Ixx %.6f Iyy %.6f Izz %.6f Ixy %.6f Ixz %.6f Iyz %.6f",
+                  Io.xx, Io.yy, Io.zz, Io.xy, Io.xz, Io.yz);
+    log.push_back(obuf);
+    char pbuf[420];
+    std::snprintf(pbuf, sizeof(pbuf), "       principal moments %.6f %.6f %.6f", mp.principalI1,
+                  mp.principalI2, mp.principalI3);
+    log.push_back(pbuf);
+    char abuf[420];
+    std::snprintf(abuf, sizeof(abuf),
+                  "       principal axes (world, orthonormal, right-handed):\n"
+                  "         X1 (%.6f, %.6f, %.6f)  X2 (%.6f, %.6f, %.6f)  X3 (%.6f, %.6f, %.6f)",
+                  mp.principalAxis1.x, mp.principalAxis1.y, mp.principalAxis1.z,
+                  mp.principalAxis2.x, mp.principalAxis2.y, mp.principalAxis2.z,
+                  mp.principalAxis3.x, mp.principalAxis3.y, mp.principalAxis3.z);
+    log.push_back(abuf);
   }
 }
 
@@ -36798,6 +36903,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (plotTok == "solidlist" || plotTok == "solids") {
       CadReportSolids(st, log);
+      return;
+    }
+    // MASSPROP (REQ-460, GitHub #460): detailed mass properties including inertia and principal axes.
+    if (plotTok == "massprop" || plotTok == "massproperties" || plotTok == "solidmassprop" ||
+        plotTok == "massp") {
+      CadReportMassProperties(st, log);
       return;
     }
     // SECTION (REQ-335 increment 2): choose solids, then three points defining the plane — the
