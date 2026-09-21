@@ -786,12 +786,18 @@ json BuildRoot(const AppCommandState& st) {
   // does not know the key ignores it, and a file saved before this loads with the clip off — the
   // same "legacy file loads unchanged" rule every other additive section here follows (ADR-020
   // (d)), so no kGsFormatVersion bump. Local coordinates, like every other frame in this file.
-  if (st.viewportSectionClip) {
+  //
+  // Gated on `viewportSectionClipFrameValid`, NOT just `viewportSectionClip` — REQ-341's
+  // `SECTIONCLIP` (aimed from the active UCS, no face) stays the view state it always was and is
+  // still NEVER written to `.gs`, exactly like it is never undo-tracked (see
+  // `CaptureGeometrySnapshot`'s comment, ADR-059 (i)). Without this gate a plain `SECTIONCLIP ON`
+  // with no `SECTIONPLANE` ever placed would start round-tripping through save/reopen, which REQ-341
+  // explicitly rules out.
+  if (st.viewportSectionClip && st.viewportSectionClipFrameValid) {
     json sp;
     sp["active"] = true;
-    sp["frameValid"] = st.viewportSectionClipFrameValid;
-    if (st.viewportSectionClipFrameValid)
-      sp["frame"] = UcsFrameToJson(st.viewportSectionClipFrame);
+    sp["frameValid"] = true;
+    sp["frame"] = UcsFrameToJson(st.viewportSectionClipFrame);
     sp["offset"] = st.viewportSectionClipOffset;
     sp["flip"] = st.viewportSectionClipFlip;
     if (st.viewportSectionClipExtent.valid) {

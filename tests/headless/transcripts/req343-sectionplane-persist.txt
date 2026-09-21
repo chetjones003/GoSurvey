@@ -67,3 +67,21 @@ OPEN %OUT%/sectionplane-legacy.gs
 EXPECT SOLIDS 1
 EXPECT SECTIONCLIP OFF
 EXPECT SECTIONCLIPFRAME UCS
+
+# --- REQ-341's SECTIONCLIP (no face, UCS-aimed) is STILL never persisted, even now ----------------
+#
+# A plain SECTIONCLIP with no SECTIONPLANE ever placed is exactly the view state REQ-341 describes;
+# ADR-059 (i) only promotes the FACE-derived plane. Saving with a bare SECTIONCLIP on must reopen
+# with the clip off, not silently start round-tripping a view state REQ-341 explicitly says never
+# reaches .gs.
+
+NEW
+CMD BOX 0,0 10 10 10
+CMD SECTIONCLIP 3
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME UCS
+SAVEAS %OUT%/sectionclip-only.gs
+NEW
+OPEN %OUT%/sectionclip-only.gs
+EXPECT SOLIDS 1
+EXPECT SECTIONCLIP OFF
