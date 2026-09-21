@@ -4421,15 +4421,20 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   in the centroidal frame — and keeps `InertiaAboutPoint(mp, p)` a pure, cheap function of the
   stored tensor rather than a second integration pass.
 
-  **(d) A third validity flag, `inertiaValid`, alongside `valid` and `centroidValid`.** ADR-055 (d)
-  added `centroidValid` as a second flag rather than overload `valid`, "to avoid suppressing two
-  good figures". The same reasoning forces a third: the covered-face-shape set for the
-  second-moment integrand is not guaranteed to be a superset or subset of the first moment's in
-  perpetuity, and a solid whose inertia cannot be computed must not silently withhold a volume,
-  area, or centroid that computed successfully. In practice, in this increment, the two coverage
-  sets are identical (both refuse `Nurbs`, `paramLoops`, multi-loop faces, and `Ellipse`/
-  `Intersection` boundary edges) — but the flag is independent so that never has to stay true by
-  coincidence.
+  **(d) A third validity flag, `inertiaValid`, alongside `valid` and `centroidValid` — with a
+  stated, coded dependency on `centroidValid`, not a false independence.** ADR-055 (d) added
+  `centroidValid` as a second flag rather than overload `valid`, "to avoid suppressing two good
+  figures". `inertiaValid` is its own field for the same reason applied one level further down:
+  the tensor is reported **about the centroid**, so it cannot exist without one — `inertiaValid`
+  *implies* `centroidValid`, and `ComputeMassProperties` codes that implication directly by gating
+  the whole second-moment pass on `centroidValid` already being true. The converse does not hold —
+  a solid can have a valid centroid and no inertia, if the second-moment integrand refuses a face
+  shape the first-moment one accepts (in this increment the two covered-shape sets happen to be
+  identical — both refuse `Nurbs`, `paramLoops`, multi-loop faces, and `Ellipse`/`Intersection`
+  boundary edges — but nothing enforces that they stay identical). A solid whose inertia cannot be
+  computed must never silently withhold the volume, area, or centroid that computed successfully;
+  that is what the separate flag (not folding into `centroidValid`) guarantees, not that the two
+  flags vary independently of each other.
 
   **(e) Eigendecomposition: an in-tree, cyclic-pivot Jacobi iteration over the real-symmetric
   centroidal tensor, not an external linear-algebra dependency.** REQ-300 already bars a new

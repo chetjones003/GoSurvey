@@ -1025,7 +1025,7 @@ struct MassProperties {
   Vec3 centroid{};
   bool centroidValid = false;
 
-  /// Moments and products of inertia about the **centroid** (REQ-460, GitHub #460) — unit density, so
+  /// Moments and products of inertia about the **centroid** (REQ-349, GitHub #460) — unit density, so
   /// mass == volume. `Ixx = ∫(y'^2 + z'^2) dV` where `r' = p - centroid`, etc., `Ixy = -∫ x' y' dV`.
   /// Reported through its own `inertiaValid` flag, separate from `valid` and `centroidValid`, because
   /// its integrator covers the same face shapes as the centroid in this increment and is withheld
@@ -1067,7 +1067,7 @@ struct MassProperties {
 /// volume its own integrator re-derives must agree with the volume above, since a centroid built on
 /// a different figure than the one being reported would describe a different solid.
 ///
-/// **Moments of inertia** (REQ-460, GitHub #460) are integrated the same way — about the same `q`,
+/// **Moments of inertia** (REQ-349, GitHub #460) are integrated the same way — about the same `q`,
 /// in world axes, over the exact analytic surfaces — and reported through `inertiaValid`. The
 /// centroidal tensor is `Ixx = ∫(y'^2+z'^2) dV` etc. with `r' = p - centroid`, `Ixy = -∫ x' y' dV`,
 /// unit density so mass == volume. Principal axes are the eigenvectors of that tensor, orthonormal

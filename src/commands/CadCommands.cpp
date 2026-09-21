@@ -36905,7 +36905,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       CadReportSolids(st, log);
       return;
     }
-    // MASSPROP (REQ-460, GitHub #460): detailed mass properties including inertia and principal axes.
+    // MASSPROP (REQ-349, GitHub #460): detailed mass properties including inertia and principal axes.
     if (plotTok == "massprop" || plotTok == "massproperties" || plotTok == "solidmassprop" ||
         plotTok == "massp") {
       CadReportMassProperties(st, log);

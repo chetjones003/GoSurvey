@@ -9284,10 +9284,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   edge withholds it), `brep::ComputeMassProperties` additionally reports:
   - the six independent components of the **inertia tensor about the centroid**
     (`Ixx, Iyy, Izz, Ixy, Ixz, Iyz`), unit density so mass equals volume, through its own
-    `MassProperties::inertiaValid` flag — a *third* flag alongside `valid` and `centroidValid`,
-    because the covered-shape set for the second-moment integrand can differ from the first
-    moment's and withholding inertia must never suppress a volume, area or centroid that was
-    computed successfully;
+    `MassProperties::inertiaValid` flag — a *third* flag alongside `valid` and `centroidValid`.
+    **`inertiaValid` implies `centroidValid`**: the tensor is reported about the centroid, so it
+    cannot exist without one, and `ComputeMassProperties` gates the whole second-moment pass on
+    `centroidValid` being true first. The flag is still its own field, not folded into
+    `centroidValid`, because the converse does not hold — the second-moment integrand can in
+    principle refuse a face shape the first-moment one accepts (a distinct covered-shape set), in
+    which case a solid keeps a valid centroid while withholding inertia;
   - `brep::InertiaAboutPoint(mp, p)`, the tensor about an arbitrary point, by the parallel-axis
     theorem `I_p = I_c + m((d·d)E − d dᵀ)` with `d = p − centroid`, `m = volume`;
   - the three **principal moments** (eigenvalues of the centroidal tensor, sorted descending) and

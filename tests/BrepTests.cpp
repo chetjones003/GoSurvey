@@ -17,6 +17,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "io/BrepJson.hpp"
 #include "util/brep.hpp"
 
 #include <algorithm>
@@ -6298,7 +6299,7 @@ TEST_CASE("A solid whose faces this increment does not cover reports no centroid
 }
 
 // ================================================================================================
-// Moments of inertia and principal axes (REQ-460, GitHub #460) — second moments.
+// Moments of inertia and principal axes (REQ-349, GitHub #460) — second moments.
 // ================================================================================================
 
 namespace {
@@ -6483,22 +6484,43 @@ TEST_CASE("Inertia holds at survey coordinate magnitudes", "[brep][req460][req10
 }
 
 TEST_CASE("Parallel-axis transfer matches direct evaluation", "[brep][req460]") {
+  // The box occupies x in [-hx,hx], y in [-hy,hy], z in [0,h] in World() (brep::MakeBox), so its
+  // second moment about an ARBITRARY point p can be integrated in closed form directly — via
+  // elementary calculus on the box's own extents, never touching brep's quadrature or
+  // InertiaAboutPoint's parallel-axis formula — and checked against what the production code
+  // reports. This is deliberately a second, independent derivation of the same physical quantity,
+  // not a re-statement of the formula under test: a sign or transcription bug shared between the
+  // production code and a test that merely re-evaluates the same expression would pass either way.
+  constexpr double L = 10.0, W = 6.0, H = 4.0;
+  const double hx = L * 0.5, hy = W * 0.5;
   Problem why = Problem::Ok;
   Solid s;
-  REQUIRE(brep::MakeBox(World(), 10, 6, 4, &s, &why));
+  REQUIRE(brep::MakeBox(World(), L, W, H, &s, &why));
   const auto mp = brep::ComputeMassProperties(s);
   REQUIRE(mp.inertiaValid);
+
   const Vec3 p{100, -50, 30};
+  // integral of (t-c)^2 dt from a to b = ((b-c)^3 - (a-c)^3) / 3; integral of (t-c) dt = ((b-c)^2 - (a-c)^2) / 2.
+  auto quad = [](double a, double b, double c) {
+    return ((b - c) * (b - c) * (b - c) - (a - c) * (a - c) * (a - c)) / 3.0;
+  };
+  auto lin = [](double a, double b, double c) { return ((b - c) * (b - c) - (a - c) * (a - c)) / 2.0; };
+  const double Ixx = 2 * hx * H * quad(-hy, hy, p.y) + 2 * hx * 2 * hy * quad(0.0, H, p.z);
+  const double Iyy = 2 * hy * H * quad(-hx, hx, p.x) + 2 * hx * 2 * hy * quad(0.0, H, p.z);
+  const double Izz = 2 * hy * H * quad(-hx, hx, p.x) + 2 * hx * H * quad(-hy, hy, p.y);
+  const double Ixy = -H * lin(-hx, hx, p.x) * lin(-hy, hy, p.y);
+  const double Ixz = -2 * hy * lin(-hx, hx, p.x) * lin(0.0, H, p.z);
+  const double Iyz = -2 * hx * lin(-hy, hy, p.y) * lin(0.0, H, p.z);
+
   const auto It = brep::InertiaAboutPoint(mp, p);
-  // Direct: compute second moments about p by re-integrating with q=p? Equivalent to parallel-axis, so check formula.
-  const Vec3 d = ray3d::Sub(p, mp.centroid);
-  const double d2 = d.x * d.x + d.y * d.y + d.z * d.z;
-  const double m = mp.volume;
-  CHECK(It.xx == Approx(mp.Ixx + m * (d2 - d.x * d.x)).epsilon(1e-12));
-  CHECK(It.yy == Approx(mp.Iyy + m * (d2 - d.y * d.y)).epsilon(1e-12));
-  CHECK(It.zz == Approx(mp.Izz + m * (d2 - d.z * d.z)).epsilon(1e-12));
-  CHECK(It.xy == Approx(mp.Ixy - m * d.x * d.y).epsilon(1e-12));
-  // Also check that transferring to centroid itself returns the centroidal tensor
+  CHECK(It.xx == Approx(Ixx).epsilon(1e-9));
+  CHECK(It.yy == Approx(Iyy).epsilon(1e-9));
+  CHECK(It.zz == Approx(Izz).epsilon(1e-9));
+  CHECK(It.xy == Approx(Ixy).epsilon(1e-9));
+  CHECK(It.xz == Approx(Ixz).epsilon(1e-9));
+  CHECK(It.yz == Approx(Iyz).epsilon(1e-9));
+
+  // Transferring to the centroid itself must return exactly the centroidal tensor already reported.
   const auto Ic = brep::InertiaAboutPoint(mp, mp.centroid);
   CHECK(Ic.xx == Approx(mp.Ixx).epsilon(1e-12));
   CHECK(Ic.yy == Approx(mp.Iyy).epsilon(1e-12));
@@ -6523,8 +6545,12 @@ TEST_CASE("Principal axes orthonormal and right-handed, and degenerate cases det
   CHECK(mp.principalAxis1.y == Approx(mp2.principalAxis1.y).epsilon(1e-12));
   CHECK(mp.principalAxis1.z == Approx(mp2.principalAxis1.z).epsilon(1e-12));
 
-  // Cylinder — two equal transverse moments
-  REQUIRE(brep::MakeCylinder(World(), 5, 20, &s, &why));
+  // Cylinder — TILTED, so its centroidal tensor is genuinely non-diagonal in world axes and Jacobi
+  // must actually rotate through the degenerate 2-D transverse eigenspace rather than exit on the
+  // first iteration because the input matrix already arrived diagonal (which an axis-aligned
+  // cylinder would do, and would leave the pivot-order/rounding-sensitivity question unexercised).
+  const ucs::Ucs tiltedCyl = TiltedAt(1500.0, -800.0, 12.0);
+  REQUIRE(brep::MakeCylinder(tiltedCyl, 5, 20, &s, &why));
   mp = brep::ComputeMassProperties(s);
   REQUIRE(mp.inertiaValid);
   CHECK(InertiaPrincipalValid(mp));
@@ -6532,14 +6558,50 @@ TEST_CASE("Principal axes orthonormal and right-handed, and degenerate cases det
   // Sorted descending, so the unique (axial) may be either largest or smallest depending on h/r
   CHECK((std::fabs(mp.principalI2 - mp.principalI3) < 1e-6 || std::fabs(mp.principalI1 - mp.principalI2) < 1e-6));
 
-  // Cone — also axisymmetric
-  REQUIRE(brep::MakeCone(World(), 5, 0, 20, &s, &why));
+  // Determinism across repeated calls on the SAME tilted, degenerate solid.
+  const auto mpRepeat = brep::ComputeMassProperties(s);
+  CHECK(mp.principalAxis1.x == Approx(mpRepeat.principalAxis1.x).epsilon(1e-12));
+  CHECK(mp.principalAxis1.y == Approx(mpRepeat.principalAxis1.y).epsilon(1e-12));
+  CHECK(mp.principalAxis1.z == Approx(mpRepeat.principalAxis1.z).epsilon(1e-12));
+  CHECK(mp.principalAxis2.x == Approx(mpRepeat.principalAxis2.x).epsilon(1e-12));
+  CHECK(mp.principalAxis3.x == Approx(mpRepeat.principalAxis3.x).epsilon(1e-12));
+
+  // Determinism across a `.gs` save/reload (REQ-349 acceptance): the tensor is derived, not
+  // persisted, so reloading rebuilds the solid from its serialized topology and geometry and
+  // recomputes ComputeMassProperties from scratch — the same rebuilt-vertex-order sensitivity a
+  // real save/reopen would exercise.
+  const nlohmann::json j = gsio::SolidToJson(s);
+  Solid reloaded;
+  REQUIRE(gsio::SolidFromJson(j, &reloaded));
+  const auto mpReloaded = brep::ComputeMassProperties(reloaded);
+  REQUIRE(mpReloaded.inertiaValid);
+  CHECK(mp.principalAxis1.x == Approx(mpReloaded.principalAxis1.x).epsilon(1e-9));
+  CHECK(mp.principalAxis1.y == Approx(mpReloaded.principalAxis1.y).epsilon(1e-9));
+  CHECK(mp.principalAxis1.z == Approx(mpReloaded.principalAxis1.z).epsilon(1e-9));
+  CHECK(mp.principalAxis2.x == Approx(mpReloaded.principalAxis2.x).epsilon(1e-9));
+  CHECK(mp.principalAxis2.y == Approx(mpReloaded.principalAxis2.y).epsilon(1e-9));
+  CHECK(mp.principalAxis2.z == Approx(mpReloaded.principalAxis2.z).epsilon(1e-9));
+  CHECK(mp.principalAxis3.x == Approx(mpReloaded.principalAxis3.x).epsilon(1e-9));
+  CHECK(mp.principalAxis3.y == Approx(mpReloaded.principalAxis3.y).epsilon(1e-9));
+  CHECK(mp.principalAxis3.z == Approx(mpReloaded.principalAxis3.z).epsilon(1e-9));
+
+  // Cone — also axisymmetric, likewise tilted.
+  REQUIRE(brep::MakeCone(TiltedAt(-400.0, 900.0, 5.0), 5, 0, 20, &s, &why));
   mp = brep::ComputeMassProperties(s);
   REQUIRE(mp.inertiaValid);
   CHECK(InertiaPrincipalValid(mp));
 }
 
 TEST_CASE("A Boolean result's inertia matches the composite of its parts", "[brep][req460]") {
+  // box (30x20x12, World()) minus cut (6x6x14, At(9,0,-1)) — the cut's z-range [-1,13] fully
+  // contains the box's [0,12], so the result is a rectangular through-slot: box with a 6x6x12
+  // hole removed at (x=9, y=0), the same shape the parent BrepTests fixture already validates by
+  // volume. Rather than trust the production InertiaAboutPoint/parallel-axis path to check itself,
+  // this test hand-derives BOTH parts' centroidal tensors from the textbook box formula
+  // (Ixx = m/12(Ly^2+Lz^2), etc. — all products zero for an axis-aligned box about its own
+  // centroid) and hand-applies the parallel-axis theorem to transfer each to the RESULT's own
+  // centroid, then composes them as box-minus-hole — an independent derivation of the "composite
+  // of its parts" the acceptance criterion asks for, not a call into brep::InertiaAboutPoint.
   Problem why = Problem::Ok;
   Solid box, cut;
   REQUIRE(brep::MakeBox(World(), 30, 20, 12, &box, &why));
@@ -6547,20 +6609,45 @@ TEST_CASE("A Boolean result's inertia matches the composite of its parts", "[bre
   std::vector<Solid> out;
   REQUIRE(brep::BooleanSubtract(box, cut, &out, &why));
   REQUIRE(out.size() == 1);
-  const auto mpBox = brep::ComputeMassProperties(box);
-  const auto mpCut = brep::ComputeMassProperties(cut);
-  // Compute cut volume that actually lies inside the box: only the 12-high segment
-  const double vBox = 30 * 20 * 12;
-  const double vCutInside = 6 * 6 * 12;
   const auto mpRes = brep::ComputeMassProperties(out[0]);
   REQUIRE(mpRes.inertiaValid);
-  // Composite inertia via parallel-axis: transfer each part to the result centroid, then subtract.
-  // For this test we check volume and that inertia is positive and that the result's Izz is close to
-  // box minus cut transferred to the same centroid. Use the cut's centroid in box coordinates.
-  CHECK(mpRes.volume == Approx(vBox - vCutInside).epsilon(1e-9));
-  CHECK(mpRes.Ixx > 0);
-  CHECK(mpRes.Iyy > 0);
-  CHECK(mpRes.Izz > 0);
+
+  const double vBox = 30.0 * 20.0 * 12.0;
+  const double vHole = 6.0 * 6.0 * 12.0;   // only the 12-high segment lies inside the box
+  const Vec3 cBox{0.0, 0.0, 6.0};          // box's own centroid, World()
+  const Vec3 cHole{9.0, 0.0, 6.0};         // hole's own centroid, at the box's z-midpoint
+  CHECK(mpRes.volume == Approx(vBox - vHole).epsilon(1e-9));
+
+  auto boxIc = [](double Lx, double Ly, double Lz, double m) {
+    return Vec3{m / 12.0 * (Ly * Ly + Lz * Lz), m / 12.0 * (Lx * Lx + Lz * Lz),
+                m / 12.0 * (Lx * Lx + Ly * Ly)};
+  };
+  const Vec3 IcBox = boxIc(30.0, 20.0, 12.0, vBox);
+  const Vec3 IcHole = boxIc(6.0, 6.0, 12.0, vHole);
+
+  // Parallel-axis transfer to the result's OWN centroid, hand-applied (not via InertiaAboutPoint).
+  auto transfer = [](const Vec3& Ic, double m, const Vec3& partCentroid, const Vec3& to,
+                      double* xx, double* yy, double* zz, double* xy, double* xz, double* yz) {
+    const double dx = to.x - partCentroid.x, dy = to.y - partCentroid.y, dz = to.z - partCentroid.z;
+    const double d2 = dx * dx + dy * dy + dz * dz;
+    *xx = Ic.x + m * (d2 - dx * dx);
+    *yy = Ic.y + m * (d2 - dy * dy);
+    *zz = Ic.z + m * (d2 - dz * dz);
+    *xy = -m * dx * dy;
+    *xz = -m * dx * dz;
+    *yz = -m * dy * dz;
+  };
+  double bxx, byy, bzz, bxy, bxz, byz;
+  transfer(IcBox, vBox, cBox, mpRes.centroid, &bxx, &byy, &bzz, &bxy, &bxz, &byz);
+  double hxx, hyy, hzz, hxy, hxz, hyz;
+  transfer(IcHole, vHole, cHole, mpRes.centroid, &hxx, &hyy, &hzz, &hxy, &hxz, &hyz);
+
+  CHECK(mpRes.Ixx == Approx(bxx - hxx).epsilon(1e-8));
+  CHECK(mpRes.Iyy == Approx(byy - hyy).epsilon(1e-8));
+  CHECK(mpRes.Izz == Approx(bzz - hzz).epsilon(1e-8));
+  CHECK(mpRes.Ixy == Approx(bxy - hxy).margin(1e-6));
+  CHECK(mpRes.Ixz == Approx(bxz - hxz).margin(1e-6));
+  CHECK(mpRes.Iyz == Approx(byz - hyz).margin(1e-6));
   CHECK(InertiaPrincipalValid(mpRes));
 }
 

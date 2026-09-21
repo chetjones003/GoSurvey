@@ -15924,7 +15924,7 @@ struct PatchPoint {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Second moments of volume — inertia (REQ-460, GitHub #460).
+// Second moments of volume — inertia (REQ-349, GitHub #460).
 // ---------------------------------------------------------------------------------------------
 
 /// Volume second moments about `q`: `Sxx = ∫ x'^2 dV`, `Sxy = ∫ x' y' dV`, etc. where `r' = p - q`.
@@ -16207,7 +16207,7 @@ MassProperties ComputeMassProperties(const Solid& s) {
     }
   }
 
-  // Second moments — inertia about the centroid (REQ-460).
+  // Second moments — inertia about the centroid (REQ-349).
   // Shares the same covered set and the same world-axes, solid-local-origin discipline.
   // Withheld when the centroid is unavailable or a face is outside the set, leaving volume/area/centroid untouched.
   if (mp.centroidValid) {
