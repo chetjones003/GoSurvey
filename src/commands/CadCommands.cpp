@@ -6451,6 +6451,8 @@ const CmdEntry kRegistry[] = {
     {"presspull", "pp",
      "Move a solid FACE, or turn a closed shape into a solid: PRESSPULL, select a target, then a distance"},
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
+    {"massprop", "massproperties, solidmassprop, massp",
+     "Mass properties of every solid: volume, area, centroid, inertia tensor, principal axes (REQ-349)"},
     {"section",     "", "Cross-section of solids by a plane through three points (or the UCS), as a closed polyline"},
     {"solidcheck", "scheck", "Check every solid (or the selection): closed, manifold, oriented, self-intersecting"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
