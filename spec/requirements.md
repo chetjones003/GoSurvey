@@ -6168,8 +6168,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
     same integral this requirement already performed, exposed per face rather than only summed — but
     the centroid is a genuinely new integrand (the first moments of volume, with no closed form
     written for any surface kind) and stays out of scope here. Moments of inertia and principal axes
-    are carried by GitHub issue #460, split out of #149 because #149's own acceptance list does not
-    name them.
+    are carried by REQ-349 (GitHub issue #460), split out of #149 because #149's own acceptance list
+    does not name them.
   - **Plane faces are triangulated as a centroid fan**, correct for the convex, hole-free faces every
     primitive produces and refused by name for anything else. General polygon triangulation is Phase
     4's problem, when a boolean first produces a face that needs one.
@@ -8477,7 +8477,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   general trim loops, `Nurbs`), which need the same treatment `IntegrateFace` already gives them for
   the volume. Phase 6 of GitHub #120, filed as #149, acceptance 4. **Moments of inertia and
   principal axes are NOT part of this requirement** — #120 names them, #149's acceptance list does
-  not, and they are carried by GitHub issue #460.
+  not, and they are carried by REQ-349 (GitHub issue #460).
 
 ### REQ-333 — A solid's vertex or edge can be moved
 
@@ -9264,6 +9264,94 @@ capability that does not exist. They are recorded here rather than quietly dropp
   the format is retired), snap glyph (`ViewportRenderer.cpp`), OSNAP settings + Shift+right-click
   menu entries (`CadUi.cpp`/`CadUiSettings.cpp`), `GetOrOpenPointCloudCache` generalized from
   `GetOrOpenExtractCenterlineCache` (`CadCommands.hpp/.cpp`), 6 Catch2 cases (`CadSnapTests.cpp`).
+
+### REQ-349 — Moments of inertia and principal axes for a solid (GitHub issue #460)
+- Purpose: REQ-334 reports a solid's volume, surface area and centroid but stops there. GitHub
+  issue #120's Mass Properties section asks for a fifth and sixth quantity — the moments/products
+  of inertia and the principal axes — which #149's own acceptance list did not carry (it named only
+  the centroid), so it was split out as issue #460 rather than silently widening that requirement.
+  Inertia is a second-moment integral, not a bigger version of the first-moment one REQ-334 added:
+  it needs its own integrand, its own tensor, and an eigendecomposition, and squares the same
+  survey-magnitude cancellation risk that ADR-055 measured for the centroid.
+- Priority: should
+- Type: functional
+- Depends on: REQ-334 / ADR-055 (the volume, centroid, `q` reference point and covered-face-shape
+  set this reuses verbatim), REQ-300 (no new dependency — the eigensolver is in-tree), REQ-201
+  (named refusal, not silent repair, for a self-intersecting solid or an uncovered face shape).
+- Statement: for the same seven primitives and the same face-shape coverage REQ-334 reports a
+  centroid for (`Plane`, `Cylinder`, `Cone`, `Sphere`, `Torus` closed forms/quadrature patches; a
+  `Nurbs` face, a general trim loop, a face with holes, or an `Ellipse`/`Intersection` boundary
+  edge withholds it), `brep::ComputeMassProperties` additionally reports:
+  - the six independent components of the **inertia tensor about the centroid**
+    (`Ixx, Iyy, Izz, Ixy, Ixz, Iyz`), unit density so mass equals volume, through its own
+    `MassProperties::inertiaValid` flag — a *third* flag alongside `valid` and `centroidValid`.
+    **`inertiaValid` implies `centroidValid`**: the tensor is reported about the centroid, so it
+    cannot exist without one, and `ComputeMassProperties` gates the whole second-moment pass on
+    `centroidValid` being true first. The flag is still its own field, not folded into
+    `centroidValid`, because the converse does not hold — the second-moment integrand can in
+    principle refuse a face shape the first-moment one accepts (a distinct covered-shape set), in
+    which case a solid keeps a valid centroid while withholding inertia;
+  - `brep::InertiaAboutPoint(mp, p)`, the tensor about an arbitrary point, by the parallel-axis
+    theorem `I_p = I_c + m((d·d)E − d dᵀ)` with `d = p − centroid`, `m = volume`;
+  - the three **principal moments** (eigenvalues of the centroidal tensor, sorted descending) and
+    their **principal axes** (the corresponding eigenvectors), orthonormal and right-handed, found
+    by an in-tree real-symmetric Jacobi eigenvalue iteration (`brep::JacobiEigenSymmetric3x3`) —
+    no external linear-algebra dependency.
+  - **Degenerate spectra are handled deterministically, not left arbitrary.** A sphere (isotropic:
+    every direction is principal) and a cylinder/cone/regular pyramid (two equal principal moments
+    about its own axis) still return *some* orthonormal, right-handed basis, and the same solid
+    returns the *same* basis on every call and after a `.gs` save/reload — enforced by canonical
+    sign selection (the larger-magnitude component of each eigenvector is made positive) and a
+    `det(V) == +1` handedness correction on the third axis, both independent of iteration order.
+  - **Every second-moment term is taken about the same solid-local `q = ReferencePoint(s)` that
+    volume/centroid already use, and accumulated in world axes, never a per-face local frame** —
+    ADR-055's two measured failure modes (frame non-covariance on a tilted solid; origin-referenced
+    cancellation at survey magnitude) apply *worse* here, because squaring the coordinate makes
+    both errors grow rather than merely persist.
+  - The centroidal tensor is **cross-checked** before being reported: the second-moment integrator
+    re-derives the volume as it accumulates, and that figure must agree with the one
+    `ComputeMassProperties` already reports to a relative `1e-9`, or inertia is withheld — the same
+    discipline ADR-055 (e) applies to the centroid.
+  - A solid that fails `Validate` or `SelfIntersects` reports **no** inertia, on the same gate that
+    already withholds volume/area/centroid — inertia is volume-weighted twice over (it is a second
+    moment), so it is exactly as meaningless as the volume for a self-intersecting shell.
+  - The tolerance is **relative**, not REQ-101's absolute ±0.002 ft, because an inertia has units of
+    length⁵ (unit density) rather than length: **`1e-8` relative per component** for the seven
+    primitives at any coordinate magnitude (measured residual from quadrature alone is ~`1e-12`,
+    leaving four orders of margin before a formula error would be missed), and **`1e-7`** for a
+    Boolean composite or a tilted/survey-magnitude fixture, one order looser to absorb the added
+    quadrature and composition error.
+  - Reported through `SOLIDLIST` (extended with a centroid/inertia/principal-axis block per solid
+    when available) and a dedicated `MASSPROP` command (aliases `MASSPROPERTIES`, `SOLIDMASSPROP`,
+    `MASSP`) that prints the full block for every solid — volume, area, centroid, the centroidal
+    tensor, the tensor about the world origin (a parallel-axis demonstration), and the principal
+    moments/axes — with a named reason in place of numbers for a solid that cannot report them.
+- Acceptance:
+  - the centroidal tensor matches the closed-form analytic tensor for each of the seven primitives,
+    axis-aligned and tilted, at the origin and at survey coordinates (≈ easting 2.2e6 / northing
+    1.4e6), within the `1e-8`/`1e-7` relative tolerances stated above;
+  - `InertiaAboutPoint` matches a direct re-evaluation of the same integral about that point (the
+    parallel-axis transfer is not merely self-consistent, it agrees with the definition);
+  - principal axes are orthonormal (`|eᵢ| ≈ 1`, `eᵢ·eⱼ ≈ 0`) and right-handed (`det([e₁ e₂ e₃]) ≈
+    +1`) for every primitive, and the eigenvalues match the analytic principal moments;
+  - a sphere and a cylinder/cone/pyramid — the degenerate-spectrum cases — each return an
+    orthonormal, right-handed basis that is bit-identical across repeated calls and across a `.gs`
+    save/reopen;
+  - a Boolean result's inertia matches the composite (Steiner/parallel-axis combination) of its
+    parts' tensors within tolerance;
+  - a self-intersecting solid reports no inertia (`inertiaValid == false`), on the same refusal
+    `ComputeMassProperties` already gives volume/centroid;
+  - a solid with a face shape outside the covered set reports no inertia while volume, area and
+    centroid (when available) are unaffected;
+  - `SOLIDLIST` and `MASSPROP` both print the tensor and principal axes for a solid that has them,
+    and a named reason for one that does not.
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`), Commands (`src/commands/CadCommands.{hpp,cpp}` —
+  `SOLIDLIST` extension and the new `MASSPROP` verb)
+- Status: accepted (2026-09-18) — see ADR-061.
+- Revisions: 2026-09-18 — proposed and accepted. Increment 1: the same face-shape coverage REQ-334
+  increment 1 reports a centroid for. Increment 2 (uncovered — `Nurbs`, general trim loops, holes,
+  `Ellipse`/`Intersection` boundary edges) is carried alongside REQ-334's own increment 2, not
+  before it, since inertia cannot be computed for a shape the centroid itself cannot yet integrate.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

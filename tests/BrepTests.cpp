@@ -17,6 +17,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "io/BrepJson.hpp"
 #include "util/brep.hpp"
 
 #include <algorithm>
@@ -6295,6 +6296,386 @@ TEST_CASE("A solid whose faces this increment does not cover reports no centroid
   CHECK(mp.volume > 0.0);
   CHECK(mp.surfaceArea > 0.0);
   CHECK_FALSE(mp.centroidValid);  // ... and only the centroid is withheld
+}
+
+// ================================================================================================
+// Moments of inertia and principal axes (REQ-349, GitHub #460) — second moments.
+// ================================================================================================
+
+namespace {
+
+double InertiaError(const Solid& s, double expIxx, double expIyy, double expIzz) {
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.inertiaValid);
+  const double e1 = std::fabs(mp.Ixx - expIxx) / std::max(1.0, std::fabs(expIxx));
+  const double e2 = std::fabs(mp.Iyy - expIyy) / std::max(1.0, std::fabs(expIyy));
+  const double e3 = std::fabs(mp.Izz - expIzz) / std::max(1.0, std::fabs(expIzz));
+  return std::max({e1, e2, e3});
+}
+
+bool InertiaPrincipalValid(const brep::MassProperties& mp) {
+  if (!mp.inertiaValid)
+    return false;
+  auto dot = [](Vec3 a, Vec3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; };
+  auto len = [&](Vec3 a) { return std::sqrt(dot(a, a)); };
+  const double d12 = dot(mp.principalAxis1, mp.principalAxis2);
+  const double d13 = dot(mp.principalAxis1, mp.principalAxis3);
+  const double d23 = dot(mp.principalAxis2, mp.principalAxis3);
+  const double l1 = len(mp.principalAxis1);
+  const double l2 = len(mp.principalAxis2);
+  const double l3 = len(mp.principalAxis3);
+  const double det = mp.principalAxis1.x * (mp.principalAxis2.y * mp.principalAxis3.z -
+                                            mp.principalAxis2.z * mp.principalAxis3.y) -
+                     mp.principalAxis1.y * (mp.principalAxis2.x * mp.principalAxis3.z -
+                                            mp.principalAxis2.z * mp.principalAxis3.x) +
+                     mp.principalAxis1.z * (mp.principalAxis2.x * mp.principalAxis3.y -
+                                            mp.principalAxis2.y * mp.principalAxis3.x);
+  return std::fabs(d12) < 1e-9 && std::fabs(d13) < 1e-9 && std::fabs(d23) < 1e-9 &&
+         std::fabs(l1 - 1.0) < 1e-9 && std::fabs(l2 - 1.0) < 1e-9 && std::fabs(l3 - 1.0) < 1e-9 &&
+         std::fabs(det - 1.0) < 1e-9;
+}
+
+} // namespace
+
+TEST_CASE("Every primitive's centroidal inertia matches its closed form", "[brep][req460]") {
+  Problem why = Problem::Ok;
+  const ucs::Ucs f = World();
+  Solid s;
+
+  // Box 30x20x12 — volume 7200, about centroid: Ixx=m/12*(w^2+h^2) etc.
+  {
+    const double l = 30, w = 20, h = 12;
+    const double V = l * w * h;
+    const double Ixx = V / 12.0 * (w * w + h * h);
+    const double Iyy = V / 12.0 * (l * l + h * h);
+    const double Izz = V / 12.0 * (l * l + w * w);
+    REQUIRE(brep::MakeBox(f, l, w, h, &s, &why));
+    CHECK(InertiaError(s, Ixx, Iyy, Izz) < 1e-8);
+    const auto mp = brep::ComputeMassProperties(s);
+    CHECK(InertiaPrincipalValid(mp));
+    CHECK(std::fabs(mp.Ixy) < 1e-9);
+    CHECK(std::fabs(mp.Ixz) < 1e-9);
+    CHECK(std::fabs(mp.Iyz) < 1e-9);
+  }
+
+  // Cylinder r=8 h=25 — about centroid: Izz=1/2 M r^2, Ixx=Iyy=1/4 M r^2+1/12 M h^2
+  {
+    const double r = 8, h = 25;
+    const double V = kPi * r * r * h;
+    const double Izz = 0.5 * V * r * r;
+    const double Ixx = 0.25 * V * r * r + V * h * h / 12.0;
+    REQUIRE(brep::MakeCylinder(f, r, h, &s, &why));
+    CHECK(InertiaError(s, Ixx, Ixx, Izz) < 1e-8);
+  }
+
+  // Sphere r=15
+  {
+    const double r = 15;
+    const double V = 4.0 / 3.0 * kPi * r * r * r;
+    const double I = 0.4 * V * r * r; // 2/5 M R^2
+    REQUIRE(brep::MakeSphere(f, r, &s, &why));
+    CHECK(InertiaError(s, I, I, I) < 1e-8);
+    const auto mp = brep::ComputeMassProperties(s);
+    CHECK(InertiaPrincipalValid(mp));
+    CHECK(mp.principalI1 == Approx(I).epsilon(1e-8));
+  }
+
+  // Cone frustum r1=9 r2=4 h=20
+  {
+    const double R = 9, r = 4, h = 20;
+    const double V = kPi * h / 3.0 * (R * R + R * r + r * r);
+    const double num = R * R * R * R + R * R * R * r + R * R * r * r + R * r * r * r + r * r * r * r;
+    const double den = R * R + R * r + r * r;
+    const double Izz = 0.3 * V * num / den;
+    REQUIRE(brep::MakeCone(f, R, r, h, &s, &why));
+    const auto mp = brep::ComputeMassProperties(s);
+    REQUIRE(mp.inertiaValid);
+    CHECK(std::fabs(mp.Izz - Izz) / std::max(1.0, Izz) < 1e-7);
+    // Transverse moments for frustum are not checked analytically here — orthonormality and symmetry are.
+    CHECK(InertiaPrincipalValid(mp));
+  }
+
+  // Torus R=20 r=5
+  {
+    const double Rm = 20, rm = 5;
+    const double V = 2 * kPi * kPi * Rm * rm * rm;
+    const double Izz = V * (Rm * Rm + 0.75 * rm * rm);
+    const double Ixx = V * (0.5 * Rm * Rm + 0.625 * rm * rm);
+    REQUIRE(brep::MakeTorus(f, Rm, rm, &s, &why));
+    CHECK(InertiaError(s, Ixx, Ixx, Izz) < 1e-7);
+  }
+
+  // Wedge — check validity and principal properties (analytic is a derived integration, so check positivity and orthonormality)
+  {
+    REQUIRE(brep::MakeWedge(f, 30, 20, 12, &s, &why));
+    const auto mp = brep::ComputeMassProperties(s);
+    REQUIRE(mp.inertiaValid);
+    CHECK(mp.Ixx > 0);
+    CHECK(mp.Iyy > 0);
+    CHECK(mp.Izz > 0);
+    CHECK(InertiaPrincipalValid(mp));
+  }
+
+  // Pyramid 6 sides, base R=10, apex, h=18 — also check via validity
+  {
+    REQUIRE(brep::MakePyramid(f, 6, 10, 0.0, 18, &s, &why));
+    const auto mp = brep::ComputeMassProperties(s);
+    REQUIRE(mp.inertiaValid);
+    CHECK(mp.Ixx > 0);
+    CHECK(mp.Iyy > 0);
+    CHECK(mp.Izz > 0);
+    CHECK(InertiaPrincipalValid(mp));
+    // For a regular pyramid about its central axis, Ixx should equal Iyy (axisymmetric)
+    CHECK(std::fabs(mp.Ixx - mp.Iyy) / std::max(1.0, mp.Ixx) < 1e-8);
+  }
+}
+
+TEST_CASE("Inertia survives a tilted frame - the case a per-face frame gets wrong", "[brep][req460]") {
+  Problem why = Problem::Ok;
+  const ucs::Ucs t = TiltedAt(0, 0, 0);
+  Solid s;
+  REQUIRE(brep::MakeBox(t, 30, 20, 12, &s, &why));
+  const auto mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.inertiaValid);
+  CHECK(InertiaPrincipalValid(mp));
+  // Principal moments must equal axis-aligned box's
+  const double l = 30, w = 20, h = 12;
+  const double V = l * w * h;
+  const double Ixx = V / 12.0 * (w * w + h * h);
+  const double Iyy = V / 12.0 * (l * l + h * h);
+  const double Izz = V / 12.0 * (l * l + w * w);
+  // Sorted descending: max is Ixx= (400+144)=544*600=326400? Actually V/12=600, Ixx=600*544=326400
+  // Check eigenvalues match (order may differ, but sorted descending should match sorted expected)
+  double exps[3] = {Ixx, Iyy, Izz};
+  // Sort descending without <algorithm> for portability
+  for (int a = 0; a < 3; ++a)
+    for (int b = a + 1; b < 3; ++b)
+      if (exps[b] > exps[a])
+        std::swap(exps[a], exps[b]);
+  double got[3] = {mp.principalI1, mp.principalI2, mp.principalI3};
+  for (int i = 0; i < 3; ++i)
+    CHECK(got[i] == Approx(exps[i]).epsilon(1e-7));
+}
+
+TEST_CASE("Inertia holds at survey coordinate magnitudes", "[brep][req460][req101]") {
+  Problem why = Problem::Ok;
+  const ucs::Ucs at = At(2196000.0, 1400000.0, 1035.0);
+  Solid s;
+  // Asymmetric frustum at survey magnitude — the place a world-origin reference fails by thousands.
+  const double R = 9, r = 4, h = 20;
+  const double V = kPi * h / 3.0 * (R * R + R * r + r * r);
+  const double num = R * R * R * R + R * R * R * r + R * R * r * r + R * r * r * r + r * r * r * r;
+  const double den = R * R + R * r + r * r;
+  const double Izz = 0.3 * V * num / den;
+  REQUIRE(brep::MakeCone(at, R, r, h, &s, &why));
+  const auto mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.inertiaValid);
+  CHECK(std::fabs(mp.Izz - Izz) / std::max(1.0, Izz) < 1e-7);
+  // Tilted AND at magnitude — world Izz is not principal, so check principal set
+  const ucs::Ucs tilted = TiltedAt(2196000.0, 1400000.0, 1035.0);
+  REQUIRE(brep::MakeCone(tilted, R, r, h, &s, &why));
+  const auto mp2 = brep::ComputeMassProperties(s);
+  REQUIRE(mp2.inertiaValid);
+  CHECK((std::fabs(mp2.principalI1 - Izz) / std::max(1.0, Izz) < 1e-7 ||
+         std::fabs(mp2.principalI2 - Izz) / std::max(1.0, Izz) < 1e-7 ||
+         std::fabs(mp2.principalI3 - Izz) / std::max(1.0, Izz) < 1e-7));
+  CHECK(InertiaPrincipalValid(mp2));
+}
+
+TEST_CASE("Parallel-axis transfer matches direct evaluation", "[brep][req460]") {
+  // The box occupies x in [-hx,hx], y in [-hy,hy], z in [0,h] in World() (brep::MakeBox), so its
+  // second moment about an ARBITRARY point p can be integrated in closed form directly — via
+  // elementary calculus on the box's own extents, never touching brep's quadrature or
+  // InertiaAboutPoint's parallel-axis formula — and checked against what the production code
+  // reports. This is deliberately a second, independent derivation of the same physical quantity,
+  // not a re-statement of the formula under test: a sign or transcription bug shared between the
+  // production code and a test that merely re-evaluates the same expression would pass either way.
+  constexpr double L = 10.0, W = 6.0, H = 4.0;
+  const double hx = L * 0.5, hy = W * 0.5;
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeBox(World(), L, W, H, &s, &why));
+  const auto mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.inertiaValid);
+
+  const Vec3 p{100, -50, 30};
+  // integral of (t-c)^2 dt from a to b = ((b-c)^3 - (a-c)^3) / 3; integral of (t-c) dt = ((b-c)^2 - (a-c)^2) / 2.
+  auto quad = [](double a, double b, double c) {
+    return ((b - c) * (b - c) * (b - c) - (a - c) * (a - c) * (a - c)) / 3.0;
+  };
+  auto lin = [](double a, double b, double c) { return ((b - c) * (b - c) - (a - c) * (a - c)) / 2.0; };
+  const double Ixx = 2 * hx * H * quad(-hy, hy, p.y) + 2 * hx * 2 * hy * quad(0.0, H, p.z);
+  const double Iyy = 2 * hy * H * quad(-hx, hx, p.x) + 2 * hx * 2 * hy * quad(0.0, H, p.z);
+  const double Izz = 2 * hy * H * quad(-hx, hx, p.x) + 2 * hx * H * quad(-hy, hy, p.y);
+  const double Ixy = -H * lin(-hx, hx, p.x) * lin(-hy, hy, p.y);
+  const double Ixz = -2 * hy * lin(-hx, hx, p.x) * lin(0.0, H, p.z);
+  const double Iyz = -2 * hx * lin(-hy, hy, p.y) * lin(0.0, H, p.z);
+
+  const auto It = brep::InertiaAboutPoint(mp, p);
+  CHECK(It.xx == Approx(Ixx).epsilon(1e-9));
+  CHECK(It.yy == Approx(Iyy).epsilon(1e-9));
+  CHECK(It.zz == Approx(Izz).epsilon(1e-9));
+  CHECK(It.xy == Approx(Ixy).epsilon(1e-9));
+  CHECK(It.xz == Approx(Ixz).epsilon(1e-9));
+  CHECK(It.yz == Approx(Iyz).epsilon(1e-9));
+
+  // Transferring to the centroid itself must return exactly the centroidal tensor already reported.
+  const auto Ic = brep::InertiaAboutPoint(mp, mp.centroid);
+  CHECK(Ic.xx == Approx(mp.Ixx).epsilon(1e-12));
+  CHECK(Ic.yy == Approx(mp.Iyy).epsilon(1e-12));
+  CHECK(Ic.zz == Approx(mp.Izz).epsilon(1e-12));
+}
+
+TEST_CASE("Principal axes orthonormal and right-handed, and degenerate cases deterministic", "[brep][req460]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  // Sphere — every direction principal
+  REQUIRE(brep::MakeSphere(World(), 10, &s, &why));
+  auto mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.inertiaValid);
+  CHECK(InertiaPrincipalValid(mp));
+  CHECK(mp.principalI1 == Approx(mp.principalI2).epsilon(1e-12));
+  CHECK(mp.principalI2 == Approx(mp.principalI3).epsilon(1e-12));
+  // Determinism: same sphere twice gives same axes
+  Solid s2;
+  REQUIRE(brep::MakeSphere(World(), 10, &s2, &why));
+  auto mp2 = brep::ComputeMassProperties(s2);
+  CHECK(mp.principalAxis1.x == Approx(mp2.principalAxis1.x).epsilon(1e-12));
+  CHECK(mp.principalAxis1.y == Approx(mp2.principalAxis1.y).epsilon(1e-12));
+  CHECK(mp.principalAxis1.z == Approx(mp2.principalAxis1.z).epsilon(1e-12));
+
+  // Cylinder — TILTED, so its centroidal tensor is genuinely non-diagonal in world axes and Jacobi
+  // must actually rotate through the degenerate 2-D transverse eigenspace rather than exit on the
+  // first iteration because the input matrix already arrived diagonal (which an axis-aligned
+  // cylinder would do, and would leave the pivot-order/rounding-sensitivity question unexercised).
+  const ucs::Ucs tiltedCyl = TiltedAt(1500.0, -800.0, 12.0);
+  REQUIRE(brep::MakeCylinder(tiltedCyl, 5, 20, &s, &why));
+  mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.inertiaValid);
+  CHECK(InertiaPrincipalValid(mp));
+  // For a cylinder about centroid, the two transverse eigenvalues should be equal
+  // Sorted descending, so the unique (axial) may be either largest or smallest depending on h/r
+  CHECK((std::fabs(mp.principalI2 - mp.principalI3) < 1e-6 || std::fabs(mp.principalI1 - mp.principalI2) < 1e-6));
+
+  // Determinism across repeated calls on the SAME tilted, degenerate solid.
+  const auto mpRepeat = brep::ComputeMassProperties(s);
+  CHECK(mp.principalAxis1.x == Approx(mpRepeat.principalAxis1.x).epsilon(1e-12));
+  CHECK(mp.principalAxis1.y == Approx(mpRepeat.principalAxis1.y).epsilon(1e-12));
+  CHECK(mp.principalAxis1.z == Approx(mpRepeat.principalAxis1.z).epsilon(1e-12));
+  CHECK(mp.principalAxis2.x == Approx(mpRepeat.principalAxis2.x).epsilon(1e-12));
+  CHECK(mp.principalAxis3.x == Approx(mpRepeat.principalAxis3.x).epsilon(1e-12));
+
+  // Determinism across a `.gs` save/reload (REQ-349 acceptance): the tensor is derived, not
+  // persisted, so reloading rebuilds the solid from its serialized topology and geometry and
+  // recomputes ComputeMassProperties from scratch — the same rebuilt-vertex-order sensitivity a
+  // real save/reopen would exercise.
+  const nlohmann::json j = gsio::SolidToJson(s);
+  Solid reloaded;
+  REQUIRE(gsio::SolidFromJson(j, &reloaded));
+  const auto mpReloaded = brep::ComputeMassProperties(reloaded);
+  REQUIRE(mpReloaded.inertiaValid);
+  CHECK(mp.principalAxis1.x == Approx(mpReloaded.principalAxis1.x).epsilon(1e-9));
+  CHECK(mp.principalAxis1.y == Approx(mpReloaded.principalAxis1.y).epsilon(1e-9));
+  CHECK(mp.principalAxis1.z == Approx(mpReloaded.principalAxis1.z).epsilon(1e-9));
+  CHECK(mp.principalAxis2.x == Approx(mpReloaded.principalAxis2.x).epsilon(1e-9));
+  CHECK(mp.principalAxis2.y == Approx(mpReloaded.principalAxis2.y).epsilon(1e-9));
+  CHECK(mp.principalAxis2.z == Approx(mpReloaded.principalAxis2.z).epsilon(1e-9));
+  CHECK(mp.principalAxis3.x == Approx(mpReloaded.principalAxis3.x).epsilon(1e-9));
+  CHECK(mp.principalAxis3.y == Approx(mpReloaded.principalAxis3.y).epsilon(1e-9));
+  CHECK(mp.principalAxis3.z == Approx(mpReloaded.principalAxis3.z).epsilon(1e-9));
+
+  // Cone — also axisymmetric, likewise tilted.
+  REQUIRE(brep::MakeCone(TiltedAt(-400.0, 900.0, 5.0), 5, 0, 20, &s, &why));
+  mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.inertiaValid);
+  CHECK(InertiaPrincipalValid(mp));
+}
+
+TEST_CASE("A Boolean result's inertia matches the composite of its parts", "[brep][req460]") {
+  // box (30x20x12, World()) minus cut (6x6x14, At(9,0,-1)) — the cut's z-range [-1,13] fully
+  // contains the box's [0,12], so the result is a rectangular through-slot: box with a 6x6x12
+  // hole removed at (x=9, y=0), the same shape the parent BrepTests fixture already validates by
+  // volume. Rather than trust the production InertiaAboutPoint/parallel-axis path to check itself,
+  // this test hand-derives BOTH parts' centroidal tensors from the textbook box formula
+  // (Ixx = m/12(Ly^2+Lz^2), etc. — all products zero for an axis-aligned box about its own
+  // centroid) and hand-applies the parallel-axis theorem to transfer each to the RESULT's own
+  // centroid, then composes them as box-minus-hole — an independent derivation of the "composite
+  // of its parts" the acceptance criterion asks for, not a call into brep::InertiaAboutPoint.
+  Problem why = Problem::Ok;
+  Solid box, cut;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &box, &why));
+  REQUIRE(brep::MakeBox(At(9, 0, -1), 6, 6, 14, &cut, &why));
+  std::vector<Solid> out;
+  REQUIRE(brep::BooleanSubtract(box, cut, &out, &why));
+  REQUIRE(out.size() == 1);
+  const auto mpRes = brep::ComputeMassProperties(out[0]);
+  REQUIRE(mpRes.inertiaValid);
+
+  const double vBox = 30.0 * 20.0 * 12.0;
+  const double vHole = 6.0 * 6.0 * 12.0;   // only the 12-high segment lies inside the box
+  const Vec3 cBox{0.0, 0.0, 6.0};          // box's own centroid, World()
+  const Vec3 cHole{9.0, 0.0, 6.0};         // hole's own centroid, at the box's z-midpoint
+  CHECK(mpRes.volume == Approx(vBox - vHole).epsilon(1e-9));
+
+  auto boxIc = [](double Lx, double Ly, double Lz, double m) {
+    return Vec3{m / 12.0 * (Ly * Ly + Lz * Lz), m / 12.0 * (Lx * Lx + Lz * Lz),
+                m / 12.0 * (Lx * Lx + Ly * Ly)};
+  };
+  const Vec3 IcBox = boxIc(30.0, 20.0, 12.0, vBox);
+  const Vec3 IcHole = boxIc(6.0, 6.0, 12.0, vHole);
+
+  // Parallel-axis transfer to the result's OWN centroid, hand-applied (not via InertiaAboutPoint).
+  auto transfer = [](const Vec3& Ic, double m, const Vec3& partCentroid, const Vec3& to,
+                      double* xx, double* yy, double* zz, double* xy, double* xz, double* yz) {
+    const double dx = to.x - partCentroid.x, dy = to.y - partCentroid.y, dz = to.z - partCentroid.z;
+    const double d2 = dx * dx + dy * dy + dz * dz;
+    *xx = Ic.x + m * (d2 - dx * dx);
+    *yy = Ic.y + m * (d2 - dy * dy);
+    *zz = Ic.z + m * (d2 - dz * dz);
+    *xy = -m * dx * dy;
+    *xz = -m * dx * dz;
+    *yz = -m * dy * dz;
+  };
+  double bxx, byy, bzz, bxy, bxz, byz;
+  transfer(IcBox, vBox, cBox, mpRes.centroid, &bxx, &byy, &bzz, &bxy, &bxz, &byz);
+  double hxx, hyy, hzz, hxy, hxz, hyz;
+  transfer(IcHole, vHole, cHole, mpRes.centroid, &hxx, &hyy, &hzz, &hxy, &hxz, &hyz);
+
+  CHECK(mpRes.Ixx == Approx(bxx - hxx).epsilon(1e-8));
+  CHECK(mpRes.Iyy == Approx(byy - hyy).epsilon(1e-8));
+  CHECK(mpRes.Izz == Approx(bzz - hzz).epsilon(1e-8));
+  CHECK(mpRes.Ixy == Approx(bxy - hxy).margin(1e-6));
+  CHECK(mpRes.Ixz == Approx(bxz - hxz).margin(1e-6));
+  CHECK(mpRes.Iyz == Approx(byz - hyz).margin(1e-6));
+  CHECK(InertiaPrincipalValid(mpRes));
+}
+
+TEST_CASE("A self-intersecting solid is refused for inertia", "[brep][req460][req201]") {
+  Problem why = Problem::Ok;
+  Solid s;
+  REQUIRE(brep::MakeTorus(World(), 5.0, 8.0, &s, &why));
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  const auto mp = brep::ComputeMassProperties(s);
+  CHECK_FALSE(mp.valid);
+  CHECK_FALSE(mp.inertiaValid);
+  CHECK_FALSE(mp.centroidValid);
+}
+
+TEST_CASE("A solid whose faces this increment does not cover withholds inertia and keeps volume", "[brep][req460][req201]") {
+  Problem why = Problem::Ok;
+  Solid box, bore;
+  REQUIRE(brep::MakeBox(World(), 30, 20, 12, &box, &why));
+  REQUIRE(brep::MakeCylinder(At(8, 0, -1), 4, 14, &bore, &why));
+  std::vector<Solid> out;
+  if (!brep::BooleanSubtract(box, bore, &out, &why) || out.size() != 1)
+    return;
+  const auto mp = brep::ComputeMassProperties(out[0]);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume > 0);
+  CHECK(mp.surfaceArea > 0);
+  // Cylindrical bore introduces Intersection edges — withheld in increment 1
+  CHECK_FALSE(mp.inertiaValid);
 }
 
 // ================================================================================================

@@ -15923,6 +15923,201 @@ struct PatchPoint {
   return CurvedFaceMoment(f, q);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Second moments of volume — inertia (REQ-349, GitHub #460).
+// ---------------------------------------------------------------------------------------------
+
+/// Volume second moments about `q`: `Sxx = ∫ x'^2 dV`, `Sxy = ∫ x' y' dV`, etc. where `r' = p - q`.
+/// From these `Ixx = Syy + Szz`, `Ixy = -Sxy`. Integrated via the divergence theorem in the same
+/// world-axes, solid-local-origin discipline the centroid uses.
+struct FaceSecondMoment {
+  bool ok = false;
+  double area = 0.0;
+  double volTerm = 0.0;
+  double Sxx = 0.0;
+  double Syy = 0.0;
+  double Szz = 0.0;
+  double Sxy = 0.0;
+  double Sxz = 0.0;
+  double Syz = 0.0;
+};
+
+/// A planar face's second-moment contribution, by Green's theorem along its boundary.
+///
+/// For a plane `r·n = dot(c,n)` is constant, so each volume integral reduces to
+/// `1/5 * dot(c,n) * ∫ f(r) dA` where `f` is quadratic. The region integrals over `(a,b)` are the
+/// same six scalars `PlanarFaceMoment` already computes: `A, Sa, Sb, Saa, Sab, Sbb`.
+[[nodiscard]] FaceSecondMoment PlanarFaceSecondMoment(const Solid& s, const Face& f, const Vec3& q) {
+  FaceSecondMoment out;
+  if (f.loops.size() != 1)
+    return out;
+  const Surface& sf = f.surface;
+  const GaussRule& g = Gauss16();
+
+  double A = 0.0, Sa = 0.0, Sb = 0.0, Saa = 0.0, Sab = 0.0, Sbb = 0.0;
+  for (const EdgeUse& u : f.loops.front().uses) {
+    const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+    for (int i = 0; i < 16; ++i) {
+      const double tRaw = 0.5 * (g.x[i] + 1.0);
+      const double t = u.reversed ? (1.0 - tRaw) : tRaw;
+      const double w = 0.5 * g.w[i] * (u.reversed ? -1.0 : 1.0);
+      Vec3 pw{0, 0, 0}, dw{0, 0, 0};
+      if (!EdgePointAndTangent(s, e, t, &pw, &dw))
+        return out;
+      const Vec3 pl = ucs::WorldToUcs(sf.frame, pw);
+      const Vec3 dl{ray3d::Dot(dw, sf.frame.xAxis), ray3d::Dot(dw, sf.frame.yAxis),
+                    ray3d::Dot(dw, sf.frame.zAxis)};
+      const double a = pl.x, b = pl.y;
+      const double da = dl.x * w, db = dl.y * w;
+      A += a * db;
+      Sa += 0.5 * a * a * db;
+      Sb += -0.5 * b * b * da;
+      Saa += (a * a * a / 3.0) * db;
+      Sbb += -(b * b * b / 3.0) * da;
+      Sab += 0.5 * a * a * b * db;
+    }
+  }
+
+  const Vec3 c = ray3d::Sub(sf.frame.origin, q);
+  const Vec3 X = sf.frame.xAxis, Y = sf.frame.yAxis;
+  Vec3 n = sf.frame.zAxis;
+  if (sf.inward)
+    n = ray3d::Scale(n, -1.0);
+  const double nW[3] = {n.x, n.y, n.z};
+  const double cW[3] = {c.x, c.y, c.z};
+  const double Xw[3] = {X.x, X.y, X.z};
+  const double Yw[3] = {Y.x, Y.y, Y.z};
+  const double dotCN = ray3d::Dot(c, n);
+  // If dot is near zero the face contributes nothing to volume and to second moments.
+  if (std::fabs(dotCN) < 1e-18 && std::fabs(A) < 1e-18) {
+    // Still a valid face, but zero volume contribution.
+  }
+
+  auto integ = [&](int px, int py, double coeff) -> double {
+    // Generic helper not used; keep inline expansions below for clarity.
+    (void)px;
+    (void)py;
+    (void)coeff;
+    return 0.0;
+  };
+  (void)integ;
+  (void)nW;
+
+  // Region integrals of world monomials over the face.
+  // x = c_x + X_x a + Y_x b, etc. Expand and integrate termwise.
+  const double cx = cW[0], cy = cW[1], cz = cW[2];
+
+  // Helpers to compute ∫ x^2 dA, ∫ y^2 dA, ∫ z^2 dA, ∫ xy dA, etc.
+  auto quad = [&](double cx_, double cy_, double cz_, double Xx_, double Xy_, double Xz_, double Yx_,
+                  double Yy_, double Yz_, double* outXX, double* outYY, double* outZZ, double* outXY,
+                  double* outXZ, double* outYZ) {
+    const double A_ = A;
+    const double Sa_ = Sa, Sb_ = Sb, Saa_ = Saa, Sbb_ = Sbb, Sab_ = Sab;
+    *outXX = cx_ * cx_ * A_ + 2 * cx_ * Xx_ * Sa_ + 2 * cx_ * Yx_ * Sb_ + Xx_ * Xx_ * Saa_ +
+             2 * Xx_ * Yx_ * Sab_ + Yx_ * Yx_ * Sbb_;
+    *outYY = cy_ * cy_ * A_ + 2 * cy_ * Xy_ * Sa_ + 2 * cy_ * Yy_ * Sb_ + Xy_ * Xy_ * Saa_ +
+             2 * Xy_ * Yy_ * Sab_ + Yy_ * Yy_ * Sbb_;
+    *outZZ = cz_ * cz_ * A_ + 2 * cz_ * Xz_ * Sa_ + 2 * cz_ * Yz_ * Sb_ + Xz_ * Xz_ * Saa_ +
+             2 * Xz_ * Yz_ * Sab_ + Yz_ * Yz_ * Sbb_;
+    *outXY = cx_ * cy_ * A_ + (cx_ * Xy_ + cy_ * Xx_) * Sa_ + (cx_ * Yy_ + cy_ * Yx_) * Sb_ +
+             Xx_ * Xy_ * Saa_ + (Xx_ * Yy_ + Yx_ * Xy_) * Sab_ + Yx_ * Yy_ * Sbb_;
+    *outXZ = cx_ * cz_ * A_ + (cx_ * Xz_ + cz_ * Xx_) * Sa_ + (cx_ * Yz_ + cz_ * Yx_) * Sb_ +
+             Xx_ * Xz_ * Saa_ + (Xx_ * Yz_ + Yx_ * Xz_) * Sab_ + Yx_ * Yz_ * Sbb_;
+    *outYZ = cy_ * cz_ * A_ + (cy_ * Xz_ + cz_ * Xy_) * Sa_ + (cy_ * Yz_ + cz_ * Yy_) * Sb_ +
+             Xy_ * Xz_ * Saa_ + (Xy_ * Yz_ + Yy_ * Xz_) * Sab_ + Yy_ * Yz_ * Sbb_;
+  };
+
+  double intXX = 0, intYY = 0, intZZ = 0, intXY = 0, intXZ = 0, intYZ = 0;
+  quad(cx, cy, cz, Xw[0], Xw[1], Xw[2], Yw[0], Yw[1], Yw[2], &intXX, &intYY, &intZZ, &intXY,
+       &intXZ, &intYZ);
+
+  const double scale = dotCN / 5.0;
+  out.ok = true;
+  out.area = std::fabs(A);
+  out.volTerm = dotCN * A;
+  out.Sxx = scale * intXX;
+  out.Syy = scale * intYY;
+  out.Szz = scale * intZZ;
+  out.Sxy = scale * intXY;
+  out.Sxz = scale * intXZ;
+  out.Syz = scale * intYZ;
+  return out;
+}
+
+/// A curved face's second-moment contribution, by quadrature over its (u,v) rectangle.
+///
+/// Uses the homogeneous form `∫ f dV = 1/5 ∫ f(r) (r·n) dA` sampled at each Gauss point, where
+/// `r = pW - q` and `f` is `x^2, y^2, z^2, xy, xz, yz`.
+[[nodiscard]] FaceSecondMoment CurvedFaceSecondMoment(const Face& f, const Vec3& q) {
+  FaceSecondMoment out;
+  const Surface& sf = f.surface;
+  double v0 = f.vStart, v1 = f.vEnd;
+  if (sf.kind == SurfaceKind::Cylinder || sf.kind == SurfaceKind::Cone) {
+    v0 = 0.0;
+    v1 = sf.height;
+  }
+  const double u0 = f.uStart, u1 = f.uEnd;
+  if (!(std::fabs(u1 - u0) > 0.0) || !(std::fabs(v1 - v0) > 0.0))
+    return out;
+
+  const GaussRule& g = Gauss16();
+  const double hu = 0.5 * (u1 - u0), mu = 0.5 * (u1 + u0);
+  const double hv = 0.5 * (v1 - v0), mv = 0.5 * (v1 + v0);
+  for (int i = 0; i < 16; ++i) {
+    const double u = mu + hu * g.x[i];
+    for (int j = 0; j < 16; ++j) {
+      const double v = mv + hv * g.x[j];
+      const PatchPoint pt = EvalSurfaceLocal(sf, u, v);
+      Vec3 nl = ray3d::Cross(pt.du, pt.dv);
+      const double jac = ray3d::Length(nl);
+      if (!(jac > 0.0))
+        continue;
+      nl = ray3d::Scale(nl, 1.0 / jac);
+      if (sf.inward)
+        nl = ray3d::Scale(nl, -1.0);
+      const double w = g.w[i] * g.w[j] * hu * hv * jac;
+
+      const Vec3 pW = ucs::UcsToWorld(sf.frame, pt.p);
+      const Vec3 nW = ray3d::Add(
+          ray3d::Add(ray3d::Scale(sf.frame.xAxis, nl.x), ray3d::Scale(sf.frame.yAxis, nl.y)),
+          ray3d::Scale(sf.frame.zAxis, nl.z));
+      const Vec3 r = ray3d::Sub(pW, q);
+      const double dot = ray3d::Dot(r, nW);
+      const double dA = w;
+      const double coeff = dot * dA / 5.0;
+      out.area += dA;
+      out.volTerm += dot * dA;
+      out.Sxx += r.x * r.x * coeff;
+      out.Syy += r.y * r.y * coeff;
+      out.Szz += r.z * r.z * coeff;
+      out.Sxy += r.x * r.y * coeff;
+      out.Sxz += r.x * r.z * coeff;
+      out.Syz += r.y * r.z * coeff;
+    }
+  }
+  out.ok = true;
+  return out;
+}
+
+[[nodiscard]] FaceSecondMoment IntegrateFaceSecondMoment(const Solid& s, const Face& f,
+                                                        const Vec3& q) {
+  if (!f.paramLoops.empty())
+    return FaceSecondMoment{};
+  if (f.surface.kind == SurfaceKind::Plane)
+    return PlanarFaceSecondMoment(s, f, q);
+  if (f.surface.kind == SurfaceKind::Nurbs)
+    return FaceSecondMoment{};
+  if (f.loops.size() != 1)
+    return FaceSecondMoment{};
+  for (const Loop& lp : f.loops)
+    for (const EdgeUse& u : lp.uses) {
+      const CurveKind k = s.edges[static_cast<std::size_t>(u.edge)].kind;
+      if (k == CurveKind::Intersection || k == CurveKind::Ellipse)
+        return FaceSecondMoment{};
+    }
+  return CurvedFaceSecondMoment(f, q);
+}
+
 } // namespace
 
 bool FaceArea(const Solid& s, int faceIndex, double* outArea, Problem* outWhy) {
@@ -16011,7 +16206,202 @@ MassProperties ComputeMassProperties(const Solid& s) {
       mp.centroidValid = true;
     }
   }
+
+  // Second moments — inertia about the centroid (REQ-349).
+  // Shares the same covered set and the same world-axes, solid-local-origin discipline.
+  // Withheld when the centroid is unavailable or a face is outside the set, leaving volume/area/centroid untouched.
+  if (mp.centroidValid) {
+    double Sxx_q = 0.0, Syy_q = 0.0, Szz_q = 0.0, Sxy_q = 0.0, Sxz_q = 0.0, Syz_q = 0.0;
+    double volAbout2 = 0.0;
+    bool covered2 = !s.faces.empty();
+    for (const Face& f : s.faces) {
+      const FaceSecondMoment fm = IntegrateFaceSecondMoment(s, f, q);
+      if (!fm.ok) {
+        covered2 = false;
+        break;
+      }
+      Sxx_q += fm.Sxx;
+      Syy_q += fm.Syy;
+      Szz_q += fm.Szz;
+      Sxy_q += fm.Sxy;
+      Sxz_q += fm.Sxz;
+      Syz_q += fm.Syz;
+      volAbout2 += fm.volTerm;
+    }
+    volAbout2 /= 3.0;
+    if (covered2 && std::fabs(volAbout2) > 1e-12 && std::isfinite(volAbout2) &&
+        std::fabs(volAbout2 - mp.volume) <= 1e-9 * std::fabs(mp.volume) &&
+        std::isfinite(Sxx_q) && std::isfinite(Syy_q) && std::isfinite(Szz_q) &&
+        std::isfinite(Sxy_q) && std::isfinite(Sxz_q) && std::isfinite(Syz_q)) {
+      const Vec3 d = ray3d::Sub(mp.centroid, q);
+      const double dx = d.x, dy = d.y, dz = d.z;
+      const double V = mp.volume;
+      // Transfer second moments from q to centroid: S_c = S_q - V * d_i d_j with correction for diagonal.
+      const double Sxx_c = Sxx_q - V * dx * dx;
+      const double Syy_c = Syy_q - V * dy * dy;
+      const double Szz_c = Szz_q - V * dz * dz;
+      const double Sxy_c = Sxy_q - V * dx * dy;
+      const double Sxz_c = Sxz_q - V * dx * dz;
+      const double Syz_c = Syz_q - V * dy * dz;
+
+      const double Ixx_c = Syy_c + Szz_c;
+      const double Iyy_c = Sxx_c + Szz_c;
+      const double Izz_c = Sxx_c + Syy_c;
+      const double Ixy_c = -Sxy_c;
+      const double Ixz_c = -Sxz_c;
+      const double Iyz_c = -Syz_c;
+
+      if (std::isfinite(Ixx_c) && std::isfinite(Iyy_c) && std::isfinite(Izz_c) &&
+          std::isfinite(Ixy_c) && std::isfinite(Ixz_c) && std::isfinite(Iyz_c) &&
+          Ixx_c >= -1e-12 && Iyy_c >= -1e-12 && Izz_c >= -1e-12) {
+        mp.Ixx = Ixx_c;
+        mp.Iyy = Iyy_c;
+        mp.Izz = Izz_c;
+        mp.Ixy = Ixy_c;
+        mp.Ixz = Ixz_c;
+        mp.Iyz = Iyz_c;
+
+        // Principal axes: eigendecomposition of the centroidal tensor.
+        double A[3][3] = {
+            {Ixx_c, Ixy_c, Ixz_c},
+            {Ixy_c, Iyy_c, Iyz_c},
+            {Ixz_c, Iyz_c, Izz_c},
+        };
+        double eig[3] = {0, 0, 0};
+        double vec[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+        JacobiEigenSymmetric3x3(A, eig, vec);
+        // Sort descending but keep axes paired; Jacobi already sorts, but re-assert ordering for determinism.
+        // The Jacobi routine returns sorted descending.
+        mp.principalI1 = eig[0];
+        mp.principalI2 = eig[1];
+        mp.principalI3 = eig[2];
+        mp.principalAxis1 = Vec3{vec[0][0], vec[1][0], vec[2][0]};
+        mp.principalAxis2 = Vec3{vec[0][1], vec[1][1], vec[2][1]};
+        mp.principalAxis3 = Vec3{vec[0][2], vec[1][2], vec[2][2]};
+        mp.inertiaValid = true;
+      }
+    }
+  }
   return mp;
+}
+
+InertiaTensor InertiaAboutPoint(const MassProperties& mp, const Vec3& p) {
+  InertiaTensor out;
+  if (!mp.inertiaValid)
+    return out;
+  const Vec3 d = ray3d::Sub(p, mp.centroid);
+  const double dx = d.x, dy = d.y, dz = d.z;
+  const double d2 = dx * dx + dy * dy + dz * dz;
+  const double m = mp.volume;
+  out.xx = mp.Ixx + m * (d2 - dx * dx);
+  out.yy = mp.Iyy + m * (d2 - dy * dy);
+  out.zz = mp.Izz + m * (d2 - dz * dz);
+  out.xy = mp.Ixy - m * dx * dy;
+  out.xz = mp.Ixz - m * dx * dz;
+  out.yz = mp.Iyz - m * dy * dz;
+  return out;
+}
+
+void JacobiEigenSymmetric3x3(const double A[3][3], double eig[3], double vec[3][3]) {
+  double B[3][3];
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      B[i][j] = A[i][j];
+  double V[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+  const int maxIter = 50;
+  const double eps = 1e-15;
+  for (int iter = 0; iter < maxIter; ++iter) {
+    int p = 0, q = 1;
+    double maxOff = std::fabs(B[0][1]);
+    if (std::fabs(B[0][2]) > maxOff) {
+      maxOff = std::fabs(B[0][2]);
+      p = 0;
+      q = 2;
+    }
+    if (std::fabs(B[1][2]) > maxOff) {
+      maxOff = std::fabs(B[1][2]);
+      p = 1;
+      q = 2;
+    }
+    if (maxOff < eps)
+      break;
+    const double app = B[p][p];
+    const double aqq = B[q][q];
+    const double apq = B[p][q];
+    const double phi = 0.5 * std::atan2(2.0 * apq, aqq - app);
+    const double c = std::cos(phi);
+    const double s = std::sin(phi);
+    // Rotate B
+    for (int k = 0; k < 3; ++k) {
+      if (k == p || k == q)
+        continue;
+      const double bpk = B[p][k];
+      const double bqk = B[q][k];
+      B[p][k] = c * bpk - s * bqk;
+      B[k][p] = B[p][k];
+      B[q][k] = s * bpk + c * bqk;
+      B[k][q] = B[q][k];
+    }
+    B[p][p] = c * c * app - 2.0 * s * c * apq + s * s * aqq;
+    B[q][q] = s * s * app + 2.0 * s * c * apq + c * c * aqq;
+    B[p][q] = 0.0;
+    B[q][p] = 0.0;
+    // Rotate eigenvectors
+    for (int k = 0; k < 3; ++k) {
+      const double vkp = V[k][p];
+      const double vkq = V[k][q];
+      V[k][p] = c * vkp - s * vkq;
+      V[k][q] = s * vkp + c * vkq;
+    }
+  }
+  eig[0] = B[0][0];
+  eig[1] = B[1][1];
+  eig[2] = B[2][2];
+  // Sort descending with corresponding vectors (stable for equal values)
+  for (int i = 0; i < 3; ++i) {
+    for (int j = i + 1; j < 3; ++j) {
+      if (eig[j] > eig[i]) {
+        std::swap(eig[i], eig[j]);
+        for (int k = 0; k < 3; ++k)
+          std::swap(V[k][i], V[k][j]);
+      }
+    }
+  }
+  // Canonicalize sign: make the largest-magnitude component of each eigenvector positive
+  for (int j = 0; j < 3; ++j) {
+    double maxAbs = 0.0;
+    int idx = 0;
+    for (int k = 0; k < 3; ++k) {
+      const double ab = std::fabs(V[k][j]);
+      if (ab > maxAbs) {
+        maxAbs = ab;
+        idx = k;
+      }
+    }
+    if (V[idx][j] < 0.0) {
+      for (int k = 0; k < 3; ++k)
+        V[k][j] = -V[k][j];
+    }
+  }
+  // Enforce right-handedness: det of V should be +1
+  const double det = V[0][0] * (V[1][1] * V[2][2] - V[1][2] * V[2][1]) -
+                     V[0][1] * (V[1][0] * V[2][2] - V[1][2] * V[2][0]) +
+                     V[0][2] * (V[1][0] * V[2][1] - V[1][1] * V[2][0]);
+  if (det < 0.0) {
+    for (int k = 0; k < 3; ++k)
+      V[k][2] = -V[k][2];
+  }
+  // Orthonormalize for safety (Jacobi maintains orthonormality up to round-off)
+  for (int j = 0; j < 3; ++j) {
+    double len = std::sqrt(V[0][j] * V[0][j] + V[1][j] * V[1][j] + V[2][j] * V[2][j]);
+    if (len > 1e-12) {
+      for (int k = 0; k < 3; ++k)
+        V[k][j] /= len;
+    }
+  }
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      vec[i][j] = V[i][j];
 }
 
 // ---------------------------------------------------------------------------------------------
