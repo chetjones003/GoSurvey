@@ -1563,6 +1563,22 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
     att.glTexId = 0;
   snap.worldDocumentOriginX = st.worldDocumentOriginX;
   snap.worldDocumentOriginY = st.worldDocumentOriginY;
+  // Section plane (REQ-343 amended, issue #479 acceptance 8) — undoable and .gs-persisted, but
+  // ONLY the face-derived plane SECTIONPLANE creates (`viewportSectionClipFrameValid`). REQ-341's
+  // `SECTIONCLIP`, aimed from the active UCS, stays the view state it always was: its own offset/
+  // flip/on-off edits still make no undo entry, and this gate is what keeps them from being swept
+  // into an unrelated undo step just because they share the same underlying fields ("one clip
+  // plane, two ways to aim it", D-2026-09-11-b). `sectionPlaneFrameValid` left false here is the
+  // signal `RestoreGeometrySnapshot` reads to mean "this step predates a face-derived plane", not
+  // "no plane" — see its own comment.
+  snap.sectionPlaneFrameValid  = st.viewportSectionClipFrameValid;
+  if (st.viewportSectionClipFrameValid) {
+    snap.sectionPlaneActive = st.viewportSectionClip;
+    snap.sectionPlaneFrame  = st.viewportSectionClipFrame;
+    snap.sectionPlaneOffset = st.viewportSectionClipOffset;
+    snap.sectionPlaneFlip   = st.viewportSectionClipFlip;
+    snap.sectionPlaneExtent = st.viewportSectionClipExtent;
+  }
   snap.description          = description;
   return snap;
 }
@@ -1620,6 +1636,39 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
   st.worldDocumentOriginX = snap.worldDocumentOriginX;
   st.worldDocumentOriginY = snap.worldDocumentOriginY;
+  // Section plane (REQ-343 amended, issue #479 acceptance 8).
+  //
+  // `snap.sectionPlaneFrameValid` gates whether this step even has an opinion about the plane — see
+  // `CaptureGeometrySnapshot`'s comment. Three cases:
+  //  - snapshot HAS a face-derived plane (frameValid true): restore it verbatim. This is undoing/
+  //    redoing an actual section-plane action.
+  //  - snapshot has none, but the LIVE state currently does: this step PREDATES the plane's
+  //    creation, so restoring to it means "as if it never existed" — turn it off.
+  //  - neither: this step has nothing to do with the plane at all (REQ-341's SECTIONCLIP, or no
+  //    plane ever placed). Leave the live SECTIONCLIP view state exactly as it is — REQ-341's "UNDO
+  //    reaches straight past it" still holds for the UCS-aimed clip.
+  if (snap.sectionPlaneFrameValid) {
+    st.viewportSectionClip           = snap.sectionPlaneActive;
+    st.viewportSectionClipFrameValid = true;
+    st.viewportSectionClipFrame      = snap.sectionPlaneFrame;
+    st.viewportSectionClipOffset     = snap.sectionPlaneOffset;
+    st.viewportSectionClipFlip       = snap.sectionPlaneFlip;
+    st.viewportSectionClipExtent     = snap.sectionPlaneExtent;
+  } else if (st.viewportSectionClipFrameValid) {
+    st.viewportSectionClip           = false;
+    st.viewportSectionClipFrameValid = false;
+    st.viewportSectionClipFrame      = ucs::Ucs{};
+    st.viewportSectionClipOffset     = 0.0;
+    st.viewportSectionClipFlip       = false;
+    st.viewportSectionClipExtent     = SectionPlaneExtent{};
+  }
+  // A restored frame invalidates any in-progress grip drag/selection the same way it invalidates
+  // st.selection below (DoUndo/DoRedo clear it) — a drag holds a frozen axis/anchor derived from the
+  // PRE-restore plane (REQ-344), and continuing it after a jump would move the plane along a stale
+  // direction.
+  st.sectionPlaneSelected = false;
+  st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
+  st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
 }
 
 } // namespace
@@ -34539,6 +34588,10 @@ static bool ApplySectionPlaneFromFace(AppCommandState& st, const brep::Solid& so
     return false;
   }
 
+  // REQ-343 amended (issue #479 acceptance 8): creating/re-aiming the plane is undoable, pushed
+  // before the write below — the same "Create ..." moment every other creating command pushes at.
+  PushUndoSnapshot(st, st.viewportSectionClip ? "Re-aim section plane" : "Create section plane");
+
   // The face's frame IS the plane. Its origin lies on the face's plane and its Z is the OUTWARD
   // normal — measured across every primitive, both B1 Booleans and an oblique SLICE in probe P1/P2
   // (2026-09-11), with no counterexample and no difference at survey magnitudes.
@@ -34708,6 +34761,9 @@ SectionPlaneGrip PickSectionPlaneGrip(const AppCommandState& st, const ray3d::Ra
 
 
 void ToggleSectionClipFlip(AppCommandState& st, std::vector<std::string>& log) {
+  // REQ-343 amended (issue #479 acceptance 8): flip is a single click with no drag to arm an undo
+  // entry at, so it is pushed here, before the flip, exactly like every other one-shot command.
+  PushUndoSnapshot(st, "Section plane flip");
   st.viewportSectionClipFlip = !st.viewportSectionClipFlip;
   // The stored extent has to follow the basis, and this is not a detail.
   //
@@ -34914,6 +34970,10 @@ bool SubmitSectionPlaneClick(AppCommandState& st, const ray3d::Ray& rayIn, doubl
                         "a little first.");
           return true;
         }
+        // REQ-343 amended (issue #479 acceptance 8): one undo entry per drag, pushed at the grab —
+        // the same moment "Grip edit" pushes for every other grip drag in the file — not per frame,
+        // since the live frames only keep writing the SAME entry's already-captured pre-drag state.
+        PushUndoSnapshot(st, grip == SectionPlaneGrip::Move ? "Section plane slide" : "Section plane resize");
         st.sectionPlaneGripDrag = static_cast<int>(grip);
         st.sectionPlaneGripAnchor = anchor;
         st.sectionPlaneGripAxis = dir;
@@ -34995,15 +35055,16 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   // that means "erase what is selected".
   //
   // Deleting it turns the clip OFF rather than erasing geometry, because there is no geometry: the
-  // plane IS the clip. And it makes no undo entry, for the same reason the slide does not —
-  // consistent with REQ-341's view-state decision, and stated in REQ-343 rather than left to be
-  // discovered.
+  // plane IS the clip. It DOES now make an undo entry (REQ-343 amended, issue #479 acceptance 8) —
+  // the plane is a real entity with real persistence now, and a DELETE a user cannot UNDO would be
+  // the odd one out among every other DELETE in this file.
   //
   // Before the survey-point branch, and above the selection branch, because the two are mutually
   // exclusive in practice: selecting the plane clears the entity selection and vice versa. If both
   // were somehow live, the plane is the thing the user was last working with and the thing whose
   // handles are on screen.
   if (st.sectionPlaneSelected) {
+    PushUndoSnapshot(st, "Delete section plane");
     st.sectionPlaneSelected = false;
     CancelSectionPlaneGripDrag(st);
     st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);

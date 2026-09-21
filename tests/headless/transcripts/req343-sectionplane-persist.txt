@@ -1,0 +1,69 @@
+# REQ-343 amended (D-2026-09-21, GitHub issue #479 acceptance 8) — the section plane persists.
+#
+# Slice 2 (PR #513) made the plane selectable and grip-editable but explicitly left it out of
+# `.gs` and out of UNDO (ADR-059 (h)): "the plane has no layer, attributes or .gs presence ...
+# selection is a bool, not a SelectedEntity". This is the transcript for what changed: creating,
+# flipping and resizing the plane now all push undo entries, and the plane round-trips through a
+# save/reopen — including at survey magnitude, to REQ-101's +/-0.002 ft.
+#
+# UNDO/REDO of creation is already covered end to end by req342-section-plane.txt; this file adds
+# the two things that file cannot: FLIP/resize undo, and .gs persistence.
+
+NEW
+
+# --- a box at survey magnitude (E 2,196,000 / N 1,400,000) ----------------------------------------
+
+CMD BOX 2196000,1400000 30 20 12
+EXPECT SOLIDS 1
+
+CMD SECTIONPLANE
+CLICK 2196000 1400000 12
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+EXPECT SECTIONCLIPNORMAL 0 0 1
+EXPECT SECTIONCLIPOFFSET 0
+EXPECT SECTIONCLIPFLIP OFF
+
+# --- FLIP is undoable now (REQ-343 amended) --------------------------------------------------------
+
+CMD SECTIONCLIP FLIP
+EXPECT SECTIONCLIPFLIP ON
+
+UNDO
+EXPECT SECTIONCLIPFLIP OFF
+EXPECT SOLIDS 1
+
+REDO
+EXPECT SECTIONCLIPFLIP ON
+
+# back to a known state for the round-trip below
+CMD SECTIONCLIP FLIP
+EXPECT SECTIONCLIPFLIP OFF
+
+CMD SECTIONCLIP 4.5
+EXPECT SECTIONCLIPOFFSET 4.5
+
+# --- it survives a save/reopen, offset included, at REQ-101's tolerance ---------------------------
+
+SAVEAS %OUT%/sectionplane-persist.gs
+NEW
+EXPECT SECTIONCLIP OFF
+
+OPEN %OUT%/sectionplane-persist.gs
+EXPECT SOLIDS 1
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+EXPECT SECTIONCLIPNORMAL 0 0 1
+EXPECT SECTIONCLIPOFFSET 4.5
+EXPECT SECTIONCLIPFLIP OFF
+
+# --- a legacy/plain file with no "sectionPlane" key loads with the clip off (additive, ADR-020 (d))
+
+NEW
+CMD BOX 0,0 10 10 10
+SAVEAS %OUT%/sectionplane-legacy.gs
+NEW
+OPEN %OUT%/sectionplane-legacy.gs
+EXPECT SOLIDS 1
+EXPECT SECTIONCLIP OFF
+EXPECT SECTIONCLIPFRAME UCS

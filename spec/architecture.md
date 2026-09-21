@@ -4318,6 +4318,56 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   both. That is one function knowing about two stores, against every consumer knowing about one
   extra kind.
 
+  > **Superseded in part by (j), 2026-09-21.** (h)'s conclusion — "the plane has no layer, no
+  > attributes, no id and no place in `.gs`" — was stated as a consequence of the selection-storage
+  > argument above it, but it is a SEPARATE decision that argument does not actually force. Issue
+  > #479 acceptance 4 and 8 require exactly what (h) ruled out: a Properties report and `.gs`/UNDO
+  > persistence. (j) restores those two without touching the selection-storage half of (h), which
+  > still holds unchanged — see (j) for the boundary.
+
+- **(j) The plane is an entity for persistence and reporting, but stays out of `selection` for
+  storage** (added 2026-09-21, REQ-343 amended, GitHub issue #479 acceptance 4/8 — partially
+  supersedes (h)).
+
+  (h) conflated two questions and answered both "no" from one argument: *where does "is it
+  selected?" live* (answer: `sectionPlaneSelected`, a bool — (h) is right, and stays) and *can the
+  plane be reported, saved and undone* (answer, now: yes). The second question turned out not to
+  depend on the first at all — a value can be undo-tracked and `.gs`-persisted without ever
+  appearing in `AppCommandState::selection`, the same way `activeDimensionStyle`, `pointGroups` and
+  every other non-indexed field in `DrawingGeometrySnapshot` already is.
+
+  **What actually changed:** `SelectedEntity::Type::SectionPlane` was appended (a type TAG,
+  `selection`-vector-free, used only by the Properties panel and by these doc comments — see its own
+  comment for why it carries no `e.index`); the plane's frame/offset/flip/extent were added to
+  `DrawingGeometrySnapshot` (undo/redo) and to `.gs` (`GsIo.cpp`, additive, no format-version bump —
+  ADR-020 (d)); `DrawPropertiesPanel` grew an early branch on `sectionPlaneSelected`, parallel to the
+  paper-entity branch just above it, reporting origin, normal, offset, flip and extent.
+
+  **REQ-341's `SECTIONCLIP` (UCS-aimed) is deliberately UNCHANGED and stays exactly the view state
+  (h) described.** The two commands share the same underlying fields ("one clip plane, two ways to
+  aim it", (a) above) so undo-tracking could not simply be turned on for the fields — a `SECTIONCLIP
+  4` typed after a `SECTIONPLANE` creation, or on its own with no plane ever placed, still makes no
+  undo entry and is still absent from `.gs`. The gate is
+  `AppCommandState::viewportSectionClipFrameValid`: `CaptureGeometrySnapshot` only copies the fields
+  into a snapshot when it is true (a face-derived plane exists), and `RestoreGeometrySnapshot` reads
+  three cases — the snapshot has a face-derived plane (restore it), the snapshot has none but the
+  LIVE state currently does (this step predates the plane's creation — turn it off, "as if it never
+  existed"), or neither (leave the live `SECTIONCLIP` state untouched, exactly REQ-341's own
+  "UNDO reaches straight past it"). `.gs` follows the same shape: nothing is written unless
+  `viewportSectionClip` is on, and a file with no `sectionPlane` key loads with the clip off.
+
+  **Found while wiring this up:** `req342-section-plane.txt`'s own transcript had asserted the old
+  (h) behaviour outright — "UNDO here must therefore undo the BOX, not the section plane" — and had
+  to be corrected to two UNDOs (plane, then box) once creation started pushing its own entry; a
+  green diff that had not touched that file would have meant the new push was never reached by a
+  real undo, not that it was safe.
+
+  **Selection storage is NOT reopened.** The plane is still singular — never zero-or-many — so an
+  `e.index` into `selection` would be inventing storage this feature does not need, and every
+  MOVE/COPY/ROTATE/SCALE/MIRROR/STRETCH/OFFSET/ALIGN switch in `CadCommands.cpp` still never sees a
+  `SectionPlane` case, because the plane is never in `selection` for them to iterate — precisely (h)'s
+  own reasoning, which this decision leaves standing.
+
 - **Alternatives considered.** *Store the plane's appearance as geometry when the command runs* —
   breaks (c). *Give SECTIONPLANE its own independent plane* — breaks (a). *Reuse the 2D hatch
   engine* — breaks (d). *Accept any face and project the frame to the nearest plane* — silently
@@ -4325,9 +4375,11 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   `Ctrl` requirement and document it* — a command that asks for a face and then ignores clicks on
   faces is the bug this slice exists downstream of. *Commit a drag through the undo stack* — a slide
   changes no geometry, so there would be nothing to undo but a number; the honest consequence, that
-  `UNDO` does not step a slide back, is written into REQ-343 instead. *Make the section plane a
-  `SelectedEntity`* — breaks (h), and would promise Properties and `.gs` support that slice 2 of
-  this issue does not deliver.
+  `UNDO` does not step a slide back, was written into REQ-343 at the time — see (j) and REQ-343's own
+  revision history for why that is no longer true. *Give the plane an `e.index` slot in `selection`*
+  — considered again under (j) and rejected again: it is singular, never zero-or-many, so a
+  `selection` slot would be storage the feature does not need; (j) gets persistence and reporting
+  without it.
 
 ### ADR-060 — Point-cloud out-of-core octree: a versioned `.gscloud` sidecar, source-stamped, rebuilt on mismatch   (2026-09-17, accepted)
 

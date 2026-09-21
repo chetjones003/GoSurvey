@@ -97,19 +97,29 @@ EXPECT LINES 0
 EXPECT CIRCLES 0
 EXPECT POLYLINES 0
 
-# --- it is a VIEW state, so UNDO reaches straight past it ----------------------------------------
+# --- it is now an ENTITY, so placing it makes its own undo entry (REQ-343 amended, issue #479
+#     acceptance 8) ---------------------------------------------------------------------------------
 #
-# The clip is not an edit and makes no undo entry. UNDO here must therefore undo the BOX, not the
-# section plane — which also means the plane is left pointing at a face that no longer exists, and
-# that must not crash or resurrect anything.
+# Before this, the clip was a pure view state and UNDO reached straight past a placed plane to the
+# BOX beneath it. Promoting the plane to an entity (Properties report + `.gs` persistence) means a
+# placement a user cannot undo would be the odd one out among every other creating command in this
+# file, so it now pushes its own step: one UNDO backs out the PLANE only, a second backs out the BOX.
+
+UNDO
+EXPECT SOLIDS 1
+EXPECT SECTIONCLIP OFF
 
 UNDO
 EXPECT SOLIDS 0
-EXPECT SECTIONCLIP ON
-EXPECT SECTIONCLIPFRAME FACE
 
 REDO
 EXPECT SOLIDS 1
+EXPECT SECTIONCLIP OFF
+
+REDO
+EXPECT SOLIDS 1
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
 
 # --- SECTIONCLIP still drives the plane SECTIONPLANE placed --------------------------------------
 #
