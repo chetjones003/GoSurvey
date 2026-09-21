@@ -20287,6 +20287,10 @@ static const EntityAttributes& SelectedEntityAttr(const AppCommandState& cmd, co
     return kDef;
   case T::PdfUnderlay:
     return kDef;
+  case T::SectionPlane:
+    // REQ-343 amended / ADR-059 (i), issue #479. A section plane has no color/layer attributes to
+    // report, matching PdfUnderlay above; stated explicitly rather than left to fall through.
+    return kDef;
   }
   return kDef;
 }

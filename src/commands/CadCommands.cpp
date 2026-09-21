@@ -14156,6 +14156,13 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
       // refuses them by name, so a gizmo anchored partly on one would advertise a move that will
       // not happen to it.
       break;
+    case T::SectionPlane:
+      // REQ-343 amended / ADR-059 (i), issue #479. Unreachable in practice: the plane is a type TAG
+      // only, never an entry in `st.selection` (its own dedicated `sectionPlaneSelected` bool tracks
+      // that instead — see the enumerator's doc comment). Stated explicitly so this isn't a silent
+      // -Wswitch fallthrough; if it ever were reachable, the plane's own grip drag (slide/flip/resize)
+      // is its only way to move, so it should not contribute to this transform gizmo's bounds anyway.
+      break;
     }
   }
   if (!any)
@@ -23677,6 +23684,10 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
       case T::PdfUnderlay:  otherKinds.insert("PDF underlay"); break;
       case T::PipeRun:      otherKinds.insert("pipe run"); break;
       case T::PointCloud:   otherKinds.insert("point cloud"); break;
+      // REQ-343 amended / ADR-059 (i), issue #479. Unreachable here: the section plane is never an
+      // entry in `st.selection` (a type TAG only; its own `sectionPlaneSelected` bool tracks
+      // selection instead). Case added explicitly to keep this switch -Wswitch-clean.
+      case T::SectionPlane: otherKinds.insert("section plane"); break;
     }
   }
   std::sort(polyIdx.begin(), polyIdx.end());
@@ -25357,6 +25368,13 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
   case T::PipeRun:
   case T::PointCloud:
     return static_cast<double>(e.index);
+  case T::SectionPlane:
+    // REQ-343 amended / ADR-059 (i), issue #479. Unreachable: nothing in this file ever builds a
+    // CadPickCandidate with type SectionPlane — the plane is a type TAG only, picked and selected
+    // through its own dedicated path (SubmitSectionPlaneClick / sectionPlaneSelected), never through
+    // the normal PICK -> st.selection route this depth-sort key serves. Stated explicitly to keep
+    // this switch -Wswitch-clean rather than leave it a silent fallthrough.
+    return 0.0;
   }
   return 0.0;
 }
