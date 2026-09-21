@@ -4318,14 +4318,14 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   both. That is one function knowing about two stores, against every consumer knowing about one
   extra kind.
 
-  > **Superseded in part by (j), 2026-09-21.** (h)'s conclusion — "the plane has no layer, no
+  > **Superseded in part by (i), 2026-09-21.** (h)'s conclusion — "the plane has no layer, no
   > attributes, no id and no place in `.gs`" — was stated as a consequence of the selection-storage
   > argument above it, but it is a SEPARATE decision that argument does not actually force. Issue
   > #479 acceptance 4 and 8 require exactly what (h) ruled out: a Properties report and `.gs`/UNDO
-  > persistence. (j) restores those two without touching the selection-storage half of (h), which
-  > still holds unchanged — see (j) for the boundary.
+  > persistence. (i) restores those two without touching the selection-storage half of (h), which
+  > still holds unchanged — see (i) for the boundary.
 
-- **(j) The plane is an entity for persistence and reporting, but stays out of `selection` for
+- **(i) The plane is an entity for persistence and reporting, but stays out of `selection` for
   storage** (added 2026-09-21, REQ-343 amended, GitHub issue #479 acceptance 4/8 — partially
   supersedes (h)).
 
@@ -4375,10 +4375,10 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   `Ctrl` requirement and document it* — a command that asks for a face and then ignores clicks on
   faces is the bug this slice exists downstream of. *Commit a drag through the undo stack* — a slide
   changes no geometry, so there would be nothing to undo but a number; the honest consequence, that
-  `UNDO` does not step a slide back, was written into REQ-343 at the time — see (j) and REQ-343's own
+  `UNDO` does not step a slide back, was written into REQ-343 at the time — see (i) and REQ-343's own
   revision history for why that is no longer true. *Give the plane an `e.index` slot in `selection`*
-  — considered again under (j) and rejected again: it is singular, never zero-or-many, so a
-  `selection` slot would be storage the feature does not need; (j) gets persistence and reporting
+  — considered again under (i) and rejected again: it is singular, never zero-or-many, so a
+  `selection` slot would be storage the feature does not need; (i) gets persistence and reporting
   without it.
 
 ### ADR-060 — Point-cloud out-of-core octree: a versioned `.gscloud` sidecar, source-stamped, rebuilt on mismatch   (2026-09-17, accepted)
