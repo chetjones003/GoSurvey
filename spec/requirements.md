@@ -6550,7 +6550,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   `SliceCutCrossesCurvedFace` since the #518 revision above, for the cuts that cross their curved faces.
 
   2026-09-18 — **a sphere is cut at any plane, and a torus square to its axis** (D-2026-09-18-a,
-  TASK-268, GitHub issue #520). Both were refused at every plane, though their cuts are shapes the
+  TASK-272, GitHub issue #520). Both were refused at every plane, though their cuts are shapes the
   kernel holds:
   - a **sphere**, any plane through it → two caps, the cut a circle of radius √(R² − d²) centred on
     the foot of the perpendicular;
@@ -8701,7 +8701,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   within REQ-101's ±0.002 ft at planes that miss its fillets, the solid is unchanged, and the command is
   one undo step.
 
-  2026-09-18 — **increment 2: a section can be more than one outline** (D-2026-09-18-a, TASK-268,
+  2026-09-18 — **increment 2: a section can be more than one outline** (D-2026-09-18-a, TASK-272,
   GitHub issue #520). A section had to be a single closed outline, so a cut shaped like a ring — a
   torus cut square to its axis, and in time a drilled box — was refused ("a section with holes is
   increment 2"). The kernel gains `SectionOutlines`, which returns **every** closed outline of the

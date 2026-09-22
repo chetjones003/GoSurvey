@@ -1,4 +1,4 @@
-# TASK-268 — issue #520: a sphere sections as a circle, a torus as a ring, and a section may be several outlines
+# TASK-272 — issue #520: a sphere sections as a circle, a torus as a ring, and a section may be several outlines
 
 - Type:    feat
 - Status:  review
