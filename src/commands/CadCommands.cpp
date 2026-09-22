@@ -35978,6 +35978,30 @@ static void SubmitSectionPlaneLinePoint(AppCommandState& st, const ray3d::Vec3& 
   CancelSectionPlaneCommand(st);
 }
 
+/// ORTHO applied to a section line: the through point is pulled onto the work plane's X or Y from the
+/// first point, whichever the cursor is further along — the rule the LINE rubber band already
+/// follows, and the one AutoCAD's own "Ortho: … < 270°" readout in the report's screenshots shows.
+///
+/// The point's height along the work plane's normal is left alone: the plane stands up that normal
+/// either way, so the constraint is about the DIRECTION of the line and nothing else.
+static ray3d::Vec3 SectionPlaneOrthoConstrain(const AppCommandState& st, const ray3d::Vec3& a,
+                                              const ray3d::Vec3& p) {
+  if (!st.orthoMode)
+    return p;
+  const ucs::Ucs work = CadActiveUcsStorage(st);
+  const ray3d::Vec3 d = ray3d::Sub(p, a);
+  double du = ray3d::Dot(d, work.xAxis);
+  double dv = ray3d::Dot(d, work.yAxis);
+  const double dz = ray3d::Dot(d, work.zAxis);
+  if (std::fabs(du) >= std::fabs(dv))
+    dv = 0.0;
+  else
+    du = 0.0;
+  return ray3d::Add(a, ray3d::Add(ray3d::Scale(work.xAxis, du),
+                                  ray3d::Add(ray3d::Scale(work.yAxis, dv),
+                                             ray3d::Scale(work.zAxis, dz))));
+}
+
 /// Where a cursor ray lands when SECTIONPLANE takes it as a POINT: on the geometry it hit, which is
 /// what makes "click the middle of the torus" mean the middle of the torus, and otherwise on the work
 /// plane, which is where a click in empty space has always been resolved. Shared by the click and by
@@ -36008,7 +36032,7 @@ void UpdateSectionPlanePreview(AppCommandState& st, const ray3d::Ray& ray,
   ray3d::Vec3 p{};
   st.sectionPlanePreviewValid = SectionPlanePointFromRay(st, ray, hitSomething ? &pick : nullptr, &p);
   if (st.sectionPlanePreviewValid)
-    st.sectionPlanePreviewPoint = p;
+    st.sectionPlanePreviewPoint = SectionPlaneOrthoConstrain(st, st.sectionPlaneP1, p);
 }
 
 void ClearSectionPlanePreview(AppCommandState& st) { st.sectionPlanePreviewValid = false; }
@@ -36016,8 +36040,10 @@ void ClearSectionPlanePreview(AppCommandState& st) { st.sectionPlanePreviewValid
 void SubmitSectionPlanePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::SectionPlane)
     return;
-  const ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
-                      static_cast<double>(CadCommitElevation(st))};
+  ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
+                static_cast<double>(CadCommitElevation(st))};
+  if (st.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint)
+    p = SectionPlaneOrthoConstrain(st, st.sectionPlaneP1, p);
   SubmitSectionPlaneLinePoint(st, p, log);
 }
 
@@ -36159,7 +36185,9 @@ bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
       log.push_back(CadSectionPlanePromptText(st));
       return false;
     }
-    SubmitSectionPlaneLinePoint(st, p, log);
+    // ORTHO applies to the picked through point, exactly as it did to the preview — so the plane
+    // that lands is the plane that was drawn.
+    SubmitSectionPlaneLinePoint(st, SectionPlaneOrthoConstrain(st, st.sectionPlaneP1, p), log);
     return st.active != AppCommandState::Kind::SectionPlane;
   }
 
@@ -36261,13 +36289,64 @@ bool CadSectionPlanePreviewIndicator(const AppCommandState& st, SectionClipIndic
       st.active != AppCommandState::Kind::SectionPlane ||
       st.sectionPlanePhase != AppCommandState::SectionPlanePhase::WaitThroughPoint)
     return false;
+  const ray3d::Vec3 a = st.sectionPlaneP1;
+  const ray3d::Vec3 b = st.sectionPlanePreviewPoint;
   ucs::Ucs frame{};
-  if (!SectionPlaneFrameFromLine(st, st.sectionPlaneP1, st.sectionPlanePreviewPoint, &frame))
+  if (!SectionPlaneFrameFromLine(st, a, b, &frame))
     return false;  // the cursor is on the first point, or straight above it: no plane to show yet
-  const SectionClipIndicator ind =
-      SectionClipIndicatorSizedToDrawing(st, SectionClipFromUcs(frame, 0.0, false), SectionPlaneExtent{});
-  if (!ind.valid)
+
+  // The preview RECTANGLE IS THE SECTION LINE, stood up: it runs from the first point to the
+  // cursor and grows with the drag, which is what AutoCAD draws and what was asked for — the
+  // drawing-sized rectangle the placed plane uses looked fixed under the cursor, however far the
+  // cursor went (user report 2026-09-22, with screenshots).
+  //
+  // Upright means along the WORK PLANE's normal, the same direction the plane itself stands in, so
+  // the preview is square to the plane on a tilted UCS too.
+  const ucs::Ucs work = CadActiveUcsStorage(st);
+  const ray3d::Vec3 along = ray3d::Sub(b, a);
+  const double lineLen = ray3d::Length(along);
+  if (!(lineLen > 0.0))
     return false;
+  const ray3d::Vec3 up = ray3d::Normalize(work.zAxis);
+
+  // How far up and down to draw. The drawing's own span in that direction, so the preview covers the
+  // model it is about to cut, with a floor tied to the line's length so a flat drawing — or a drag
+  // far outside the model — still shows a plane with some height to it.
+  double vLo = 0.0;
+  double vHi = 0.0;
+  ray3d::Vec3 bbMin{}, bbMax{};
+  if (ComputeSectionClipIndicatorBounds(st, &bbMin, &bbMax)) {
+    double lo = 1e300;
+    double hi = -1e300;
+    for (int i = 0; i < 8; ++i) {
+      const ray3d::Vec3 c{(i & 1) ? bbMax.x : bbMin.x, (i & 2) ? bbMax.y : bbMin.y,
+                          (i & 4) ? bbMax.z : bbMin.z};
+      const double d = ray3d::Dot(ray3d::Sub(c, a), up);
+      lo = std::fmin(lo, d);
+      hi = std::fmax(hi, d);
+    }
+    if (hi >= lo) {
+      const double pad = std::fmax((hi - lo) * 0.15, lineLen * 0.05);
+      vLo = lo - pad;
+      vHi = hi + pad;
+    }
+  }
+  const double minHalf = std::fmax(lineLen * 0.35, 1e-6);
+  if (!(vHi - vLo > 2.0 * minHalf)) {
+    const double mid = 0.5 * (vLo + vHi);
+    vLo = mid - minHalf;
+    vHi = mid + minHalf;
+  }
+
+  SectionClipIndicator ind;
+  const auto at = [&](const ray3d::Vec3& base, double v) {
+    return ray3d::Add(base, ray3d::Scale(up, v));
+  };
+  ind.corner[0] = at(a, vLo);
+  ind.corner[1] = at(b, vLo);
+  ind.corner[2] = at(b, vHi);
+  ind.corner[3] = at(a, vHi);
+  ind.valid = true;
   *out = ind;
   return true;
 }

@@ -1104,6 +1104,49 @@ TEST_CASE("SECTIONPLANE takes a flat face and refuses a curved one",
     CHECK_FALSE(CadSectionPlanePreviewIndicator(st, &ind));
   }
 
+  SECTION("the preview stretches with the cursor instead of sitting at a fixed size") {
+    // Reported from the app (2026-09-22): the drawing-sized rectangle looked the same however far
+    // the cursor went. The preview's own edge IS the section line, so it grows with the drag.
+    StartSectionPlaneCommand(st, log);
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -30, 100}, {0, -30, 0}), Tol(0.5, 0.5), log));
+
+    SectionClipIndicator nearInd{}, farInd{};
+    UpdateSectionPlanePreview(st, RayAt({0, -10, 100}, {0, -10, 0}), Tol(0.5, 0.5));
+    REQUIRE(CadSectionPlanePreviewIndicator(st, &nearInd));
+    UpdateSectionPlanePreview(st, RayAt({0, 60, 100}, {0, 60, 0}), Tol(0.5, 0.5));
+    REQUIRE(CadSectionPlanePreviewIndicator(st, &farInd));
+
+    const auto width = [](const SectionClipIndicator& i) {
+      return ray3d::Length(ray3d::Sub(i.corner[1], i.corner[0]));
+    };
+    // The rectangle's base edge is exactly the line from the first point to the cursor.
+    CHECK(width(nearInd) == Catch::Approx(20.0));
+    CHECK(width(farInd) == Catch::Approx(90.0));
+    // And it stands up the work plane's normal, so the two upright edges are vertical.
+    const ray3d::Vec3 side = ray3d::Sub(farInd.corner[3], farInd.corner[0]);
+    CHECK(std::fabs(ray3d::Normalize(side).z) == Catch::Approx(1.0));
+  }
+
+  SECTION("ORTHO pulls the through point onto an axis from the first point") {
+    // AutoCAD's own readout in the report's screenshots ("Ortho: 3.6955 < 180°"), and the rule the
+    // LINE rubber band already follows. The PREVIEW and the PLACEMENT both take it, so the plane
+    // that lands is the plane that was drawn.
+    st.orthoMode = true;
+    StartSectionPlaneCommand(st, log);
+    // The first point clear of the box, so it is a POINT and not its top face.
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -30, 100}, {0, -30, 0}), Tol(0.5, 0.5), log));
+
+    // Aimed well off the axis: mostly +Y, a little +X.
+    UpdateSectionPlanePreview(st, RayAt({7, 40, 100}, {7, 40, 0}), Tol(0.5, 0.5));
+    CHECK(st.sectionPlanePreviewPoint.x == Catch::Approx(0.0).margin(1e-9));  // pulled onto Y
+    CHECK(st.sectionPlanePreviewPoint.y == Catch::Approx(40.0));
+
+    CHECK(SubmitSectionPlaneFacePick(st, RayAt({7, 40, 100}, {7, 40, 0}), Tol(0.5, 0.5), log));
+    // A line along Y makes a plane facing along X, exactly — not 7/40 off it.
+    CHECK(std::fabs(st.viewportSectionClipFrame.zAxis.x) == Catch::Approx(1.0));
+    CHECK(st.viewportSectionClipFrame.zAxis.y == Catch::Approx(0.0).margin(1e-9));
+  }
+
   SECTION("the same point twice names no plane, and the command stays open") {
     StartSectionPlaneCommand(st, log);
     CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -30, 100}, {0, -30, 0}), Tol(0.5, 0.5), log));

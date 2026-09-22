@@ -52,11 +52,24 @@ form could not aim a plane at one by any click.
   - The viewport tracks the cursor each frame and clears it otherwise; `main.cpp` draws the preview
     rectangle in place of the current plane's, with no handles. The clip itself is untouched, so
     nothing is cut until the click.
+- **The preview stretches, and ORTHO applies** (third ask from the app, 2026-09-22, with screenshots):
+  - The preview rectangle's base edge **is** the section line, from the first point to the cursor, so
+    it grows with the drag. It stands up the work plane's normal, over the drawing's own span in that
+    direction, with a floor tied to the line's length so a flat drawing still shows a plane. The
+    drawing-sized rectangle the placed plane uses looked identical however far the cursor went, which
+    is what was reported.
+  - `SectionPlaneOrthoConstrain` pulls the through point onto the work plane's X or Y from the first
+    point while ORTHO is on — the rule the LINE rubber band follows, and what AutoCAD's own
+    "Ortho: … < 270°" readout shows in the screenshots. Applied to the preview AND to the picked
+    point, so the plane that lands is the plane that was drawn. A typed coordinate is exact and is
+    left alone.
 
 ## Tests
 
 - `SubObjectSelectionTests [sectionplaneface]`: the preview is tracked, draws a rectangle, cuts
-  nothing, and its plane is the one the click then places.
+  nothing, and its plane is the one the click then places. The preview
+  stretches with the cursor (20 ft and 90 ft drags measured on its own base edge) and stands upright;
+  ORTHO pulls both the preview and the placed plane onto the axis.
 - `headless.req342-section-plane-by-points` (new): a torus given a plane from two points in empty
   space (normal across the line, level with the work plane); a torus given one from two points **on
   the torus itself**; a sphere from typed points; the same-point refusal, and ESC leaving the previous
