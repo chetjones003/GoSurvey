@@ -495,6 +495,24 @@ inline void CadBlockXformDirection(const CadBlockXform& xf, float lx, float ly, 
 
 namespace cadblock_detail {
 
+/// Extracts the rotZ/rotY/rotX Euler angles (`CadBlockXformDirection`'s own rotZ-then-rotY-then-rotX
+/// order) from a 3x3 rotation matrix, \p m[row][col]. Shared by `RotationFromUnitToUnit` (built from
+/// a single-axis rotation) and `RotationAligningTwoDirections` (built from two orthonormal frames) —
+/// one decomposition, so the two callers can never disagree about which Euler convention this
+/// codebase uses.
+inline void EulerXYZFromMatrix(const double m[3][3], CadBlockXform* xf) {
+  const double sy = std::sqrt(m[0][0] * m[0][0] + m[1][0] * m[1][0]);
+  if (sy > 1e-6) {
+    xf->rotZ = static_cast<float>(std::atan2(m[1][0], m[0][0]));
+    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
+    xf->rotX = static_cast<float>(std::atan2(m[2][1], m[2][2]));
+  } else {
+    xf->rotZ = static_cast<float>(std::atan2(-m[0][1], m[1][1]));
+    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
+    xf->rotX = 0.f;
+  }
+}
+
 inline void RotationFromUnitToUnit(float ax, float ay, float az, float bx, float by, float bz, CadBlockXform* xf) {
   assert(xf != nullptr);
   using ray3d::Cross;
@@ -535,16 +553,57 @@ inline void RotationFromUnitToUnit(float ax, float ay, float az, float bx, float
   rotCol(1.f, 0.f, 0.f, 0, m);
   rotCol(0.f, 1.f, 0.f, 1, m);
   rotCol(0.f, 0.f, 1.f, 2, m);
-  const double sy = std::sqrt(m[0][0] * m[0][0] + m[1][0] * m[1][0]);
-  if (sy > 1e-6) {
-    xf->rotZ = static_cast<float>(std::atan2(m[1][0], m[0][0]));
-    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
-    xf->rotX = static_cast<float>(std::atan2(m[2][1], m[2][2]));
-  } else {
-    xf->rotZ = static_cast<float>(std::atan2(-m[0][1], m[1][1]));
-    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
-    xf->rotX = 0.f;
+  EulerXYZFromMatrix(m, xf);
+}
+
+/// Rotation aligning TWO local direction pairs simultaneously: \p a1 -> \p b1 AND \p a2 -> \p b2
+/// (issue #486 increment B5). Needed to orient a two-port fitting (an elbow) so BOTH its connection
+/// normals match the two pipe legs at a bend at once — `RotationFromUnitToUnit`'s single-direction
+/// alignment leaves the "roll" about the aligned axis wherever the minimal rotation happens to put
+/// it, which a second constraint cannot then steer.
+///
+/// Built from two orthonormal frames (one from \p a1/\p a2, one from \p b1/\p b2 — the local frame's
+/// own "up" and target frame's own "up" are each derived the SAME way from their pair's cross
+/// product, so the same handedness convention applies on both sides) rather than composing two
+/// single-axis rotations, which is both simpler and exact rather than iterative.
+///
+/// Assumes the angle between \p a1/\p a2 already equals the angle between \p b1/\p b2 (true for a
+/// correctly authored fitting whose PART TYPE tag actually matches the corner's own snapped bend
+/// angle — see `ElbowPartTypeForSnappedAngleDeg`); if the two frames disagree, the TARGET pair (\p
+/// b1/\p b2) wins — \p a2 only supplies which way is "up" for the local frame, never a magnitude.
+/// No-op (identity-ish, whatever \p xf already held) if either pair is degenerate (collinear).
+[[nodiscard]] inline bool RotationAligningTwoDirections(ray3d::Vec3 a1, ray3d::Vec3 a2, ray3d::Vec3 b1,
+                                                         ray3d::Vec3 b2, CadBlockXform* xf) {
+  assert(xf != nullptr);
+  using ray3d::Cross;
+  using ray3d::Length;
+  using ray3d::Normalize;
+  a1 = Normalize(a1);
+  b1 = Normalize(b1);
+  ray3d::Vec3 az = Cross(a1, a2);
+  ray3d::Vec3 bz = Cross(b1, b2);
+  if (Length(az) < 1e-9 || Length(bz) < 1e-9)
+    return false;
+  az = Normalize(az);
+  bz = Normalize(bz);
+  const ray3d::Vec3 ay = Cross(az, a1);
+  const ray3d::Vec3 by = Cross(bz, b1);
+  // Columns of Ua: (a1, ay, az); columns of Ub: (b1, by, bz) — both orthonormal. R = Ub * Ua^T maps
+  // a1->b1, ay->by, az->bz (and therefore a2, which lies in the a1/ay plane, to the matching
+  // combination of b1/by — i.e. to b2 whenever the angle assumption above holds).
+  const double Ua[3][3] = {{a1.x, ay.x, az.x}, {a1.y, ay.y, az.y}, {a1.z, ay.z, az.z}};
+  const double Ub[3][3] = {{b1.x, by.x, bz.x}, {b1.y, by.y, bz.y}, {b1.z, by.z, bz.z}};
+  double R[3][3]{};
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      double s = 0.0;
+      for (int k = 0; k < 3; ++k)
+        s += Ub[i][k] * Ua[j][k];
+      R[i][j] = s;
+    }
   }
+  EulerXYZFromMatrix(R, xf);
+  return true;
 }
 
 } // namespace cadblock_detail
@@ -584,6 +643,20 @@ inline void CadBlockSnapInsertToConnection(const CadBlockConnection& src, float 
   xf->x = tgtX - wx;
   xf->y = tgtY - wy;
   xf->z = tgtZ - wz;
+}
+
+/// Orients \p xf (rotation only — call before setting a translation) so a two-port fitting's own
+/// two connection normals (\p nearLocal, \p farLocal) match two ANTI-aligned world directions at
+/// once: \p nearLocal -> `-incomingDir`, \p farLocal -> `outgoingDir` (issue #486 increment B5). The
+/// two-port counterpart of `CadBlockSnapInsertToConnection`'s single-port alignment, used to
+/// auto-insert an elbow at a pipe bend where BOTH of the elbow's ports must match a leg direction
+/// simultaneously — a single-port alignment leaves the roll about that axis undetermined, which is
+/// exactly the ambiguity a bend cannot tolerate (the elbow would still point the wrong way out).
+[[nodiscard]] inline bool CadBlockOrientTwoPortFitting(const ray3d::Vec3& nearLocal, const ray3d::Vec3& farLocal,
+                                                        const ray3d::Vec3& incomingDir, const ray3d::Vec3& outgoingDir,
+                                                        CadBlockXform* xf) {
+  const ray3d::Vec3 bNear = ray3d::Scale(incomingDir, -1.0);
+  return cadblock_detail::RotationAligningTwoDirections(nearLocal, farLocal, bNear, outgoingDir, xf);
 }
 
 /// Classifies a placed connection port as a smart-mode snap target (issue #496): a flange-typed

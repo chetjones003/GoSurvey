@@ -632,7 +632,7 @@ void ExplodeRef(AppCommandState& st, const CadBlockRef& ref, const EntityAttribu
 }
 
 bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform xf, bool explode,
-                     std::vector<std::string>& log) {
+                     std::vector<std::string>& log, bool pushUndo = true) {
   const int di = CadBlockFindDef(st.blockDefs, name);
   if (di < 0) {
     log.push_back("INSERT — no block named \"" + std::string(name) + "\".");
@@ -641,7 +641,8 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
   CadBlockRef r;
   r.defName = st.blockDefs[static_cast<size_t>(di)].name;
   r.xf = xf;
-  PushUndoSnapshot(st, "Insert");
+  if (pushUndo)
+    PushUndoSnapshot(st, "Insert");
   const float us = CadBlockInsertUnitsScale(st, st.blockDefs[static_cast<size_t>(di)]);
   r.xf.sx *= us;
   r.xf.sy *= us;
@@ -933,6 +934,11 @@ bool CadBlocksImportWithPicker(AppCommandState& dest, std::vector<std::string>& 
 bool CadBlockPlaceInsert(AppCommandState& st, std::string_view name, CadBlockXform xf, bool explode,
                          std::vector<std::string>& log) {
   return PlaceInsertImpl(st, name, xf, explode, log);
+}
+
+bool CadBlockPlaceInsertNoUndo(AppCommandState& st, std::string_view name, CadBlockXform xf,
+                               std::vector<std::string>& log) {
+  return PlaceInsertImpl(st, name, xf, /*explode=*/false, log, /*pushUndo=*/false);
 }
 
 void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log) {

@@ -29,6 +29,11 @@ bool CadBlocksImportWithPicker(AppCommandState& dest, std::vector<std::string>& 
 /// Place one INSERT (or explode it). Applies INSUNITS scale. Returns false on a missing name.
 bool CadBlockPlaceInsert(AppCommandState& st, std::string_view name, CadBlockXform xf, bool explode,
                          std::vector<std::string>& log);
+/// Same as `CadBlockPlaceInsert`, without exploding, and WITHOUT pushing its own undo snapshot —
+/// for a caller (PIPERUN's auto-fitting, issue #486 increment B5) that places several elbows as
+/// part of one larger multi-step operation already covered by its own single `PushUndoSnapshot`.
+bool CadBlockPlaceInsertNoUndo(AppCommandState& st, std::string_view name, CadBlockXform xf,
+                               std::vector<std::string>& log);
 
 void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log);

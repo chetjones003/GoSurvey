@@ -1,6 +1,7 @@
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
@@ -476,6 +477,193 @@ TEST_CASE("Bare PIPESYS lists existing networks without erroring on none", "[iss
   HandlePipingSystemCommand("LIST", st, log);
   REQUIRE(log.size() == 1);
   CHECK(log[0].find("Loop A") != std::string::npos);
+}
+
+// --- Auto-fitting elbow insertion at bends (issue #486 increment B5, REQ-345) -------------------
+
+namespace {
+/// A minimal, geometrically-simplified elbow-90 fitting for testing the auto-fit splitter: both
+/// ports sit at the fitting's local origin (physically unrealistic, but the splitter's own logic
+/// only reads port normals for orientation and port positions for the placement offset, so a
+/// zero-size body is a valid, fully exercising test double). Inlet normal -X, outlet normal +Y —
+/// exactly 90 degrees apart, matching the tag.
+CadBlockDefinition MakeElbow90Def(const std::string& name, float engagementLength = 0.f) {
+  CadBlockDefinition def;
+  def.name = name;
+  def.partType = CadPipePartType::Elbow90;
+  def.nominalSize = "4in";
+  CadBlockConnection in;
+  in.name = "IN";
+  in.nx = -1.f; in.ny = 0.f; in.nz = 0.f;
+  in.role = CadBlockConnectionRole::Inlet;
+  in.engagementLength = engagementLength;
+  CadBlockConnection out;
+  out.name = "OUT";
+  out.nx = 0.f; out.ny = 1.f; out.nz = 0.f;
+  out.role = CadBlockConnectionRole::Outlet;
+  def.connections = {in, out};
+  return def;
+}
+} // namespace
+
+TEST_CASE("PIPERUN auto-inserts a matching elbow-90 fitting at a 90-degree bend",
+          "[issue486][piperun][autofit]") {
+  AppCommandState st;
+  st.blockDefs.push_back(MakeElbow90Def("ELBOW90-4IN"));
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);   // 90-degree corner here
+  SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  REQUIRE(st.cadPipeRuns[0].vertsXyz.size() == 6);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(10.0));
+  CHECK(st.cadPipeRuns[0].vertsXyz[4] == Catch::Approx(0.0));
+  REQUIRE(st.cadPipeRuns[1].vertsXyz.size() == 6);
+  CHECK(st.cadPipeRuns[1].vertsXyz[0] == Catch::Approx(10.0));
+  CHECK(st.cadPipeRuns[1].vertsXyz[1] == Catch::Approx(0.0));
+  CHECK(st.cadPipeRuns[1].vertsXyz[3] == Catch::Approx(10.0));
+  CHECK(st.cadPipeRuns[1].vertsXyz[4] == Catch::Approx(10.0));
+
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].defName == "ELBOW90-4IN");
+  CHECK(st.cadBlockRefs[0].xf.x == Catch::Approx(10.0f));
+  CHECK(st.cadBlockRefs[0].xf.y == Catch::Approx(0.0f));
+}
+
+TEST_CASE("A pipe run with no matching library part falls back to the original single smooth run",
+          "[issue486][piperun][autofit]") {
+  AppCommandState st;  // no blockDefs at all — the pre-B5 behavior every existing test also covers
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 9);
+  CHECK(st.cadBlockRefs.empty());
+}
+
+TEST_CASE("The elbow's engagement length shortens the incoming pipe segment before the bend",
+          "[issue486][piperun][autofit]") {
+  AppCommandState st;
+  st.blockDefs.push_back(MakeElbow90Def("ELBOW90-4IN", /*engagementLength=*/2.f));
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  REQUIRE(st.cadPipeRuns[0].vertsXyz.size() == 6);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(8.0));  // 10 - 2ft engagement cutback
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].xf.x == Catch::Approx(8.0f));
+}
+
+TEST_CASE("An elbow lacking exactly two connection ports falls back to a smooth bend",
+          "[issue486][piperun][autofit]") {
+  AppCommandState st;
+  CadBlockDefinition badDef;
+  badDef.name = "ELBOW90-ONEPORT";
+  badDef.partType = CadPipePartType::Elbow90;
+  badDef.nominalSize = "4in";
+  CadBlockConnection only;
+  only.nx = -1.f;
+  badDef.connections = {only};  // exactly one port — cannot orient a bend
+  st.blockDefs.push_back(badDef);
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 1);  // smooth fallback — not split
+  CHECK(st.cadBlockRefs.empty());
+}
+
+TEST_CASE("An engagement length too large for the leg falls back to a smooth bend",
+          "[issue486][piperun][autofit]") {
+  AppCommandState st;
+  st.blockDefs.push_back(MakeElbow90Def("ELBOW90-4IN", /*engagementLength=*/100.f));  // >> leg length
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadBlockRefs.empty());
+}
+
+TEST_CASE("The whole multi-piece auto-fit commit undoes as one step",
+          "[issue486][piperun][autofit]") {
+  AppCommandState st;
+  st.blockDefs.push_back(MakeElbow90Def("ELBOW90-4IN"));
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  REQUIRE(st.cadBlockRefs.size() == 1);
+
+  REQUIRE(DoUndo(st, log));
+  CHECK(st.cadPipeRuns.empty());
+  CHECK(st.cadBlockRefs.empty());
+}
+
+TEST_CASE("A 45-degree bend matches an elbow-45 catalog part instead of elbow-90",
+          "[issue486][piperun][autofit]") {
+  AppCommandState st;
+  CadBlockDefinition def45;
+  def45.name = "ELBOW45-4IN";
+  def45.partType = CadPipePartType::Elbow45;
+  def45.nominalSize = "4in";
+  CadBlockConnection in;
+  in.nx = -1.f; in.ny = 0.f; in.nz = 0.f;
+  in.role = CadBlockConnectionRole::Inlet;
+  CadBlockConnection out;
+  const float s = 0.70710678f;
+  out.nx = s; out.ny = s; out.nz = 0.f;
+  out.role = CadBlockConnectionRole::Outlet;
+  def45.connections = {in, out};
+  st.blockDefs.push_back(def45);
+  // Also register an elbow-90 to prove the 45-degree bend picks the 45 part, not the 90.
+  st.blockDefs.push_back(MakeElbow90Def("ELBOW90-4IN"));
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  REQUIRE(HandlePipeRunTextInput("compass", st, log));  // off — the default-on compass would snap
+                                                        // the exact 45-degree pick below toward 90
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);       // corner: 45-degree turn from here
+  SubmitPipeRunViewportPick(st, 17.071f, 7.071f, log);  // +X then 45 degrees toward +Y
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].defName == "ELBOW45-4IN");
 }
 
 TEST_CASE("Existing axis-aligned PIPERUN picks are unaffected by the default-on compass",
