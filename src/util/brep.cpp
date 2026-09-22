@@ -1582,6 +1582,32 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
   return SegmentsForArc(r, e.sweep, tol);
 }
 
+/// Curvature-only segment count for a NURBS patch's (u, v) grid (TASK-272 §5) — extracted so the
+/// pre-pass below can fold this into the same shared-edge relaxation as the loop-edge-derived
+/// counts, instead of a Nurbs face silently outrunning whatever count its neighbour settled on.
+[[nodiscard]] int NurbsPatchCurvatureSegs(const nurbs::Patch& patch, double chordTolerance) {
+  double netStep = 0.0;
+  for (std::size_t k = 0; k + 1 < patch.ctrl.size(); ++k)
+    netStep = std::max(netStep, ray3d::Length(ray3d::Sub(patch.ctrl[k + 1], patch.ctrl[k])));
+  bool curved = patch.degU > 1 || patch.degV > 1;
+  if (!curved && patch.ctrl.size() >= 4) {
+    const Vec3 e1 = ray3d::Sub(patch.ctrl[1], patch.ctrl[0]);
+    const Vec3 e2 = ray3d::Sub(patch.ctrl[static_cast<std::size_t>(patch.nu)], patch.ctrl[0]);
+    Vec3 nrm = ray3d::Cross(e1, e2);
+    const double nl = ray3d::Length(nrm);
+    if (nl > 1e-12) {
+      nrm = ray3d::Scale(nrm, 1.0 / nl);
+      for (const Vec3& c : patch.ctrl)
+        if (std::fabs(ray3d::Dot(ray3d::Sub(c, patch.ctrl[0]), nrm)) > chordTolerance) {
+          curved = true;
+          break;
+        }
+    }
+  }
+  return curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance), 8, 128)
+                : 1;
+}
+
 struct MeshBuilder {
   Tessellation* out = nullptr;
   /// Which face the triangles being emitted belong to. Set once per face by the loop below, so no
@@ -17012,6 +17038,72 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     }
   }
 
+  // Shared-edge resolution unification (TASK-272 §5): a NURBS band's two v-boundary edges (its rim
+  // at v=vStart and v=vEnd — see the `case SurfaceKind::Nurbs` block below) are now sampled DIRECTLY
+  // from those loop edges, so that boundary is bit-identical to whatever neighbouring face (a flat
+  // cap, or the next band in a multi-band loft/sweep) also walks the same edge — the same
+  // "derive-the-shared-boundary-from-the-edge" fix that resolved §1's planar-hole crack.
+  //
+  // A uniform (u, v) grid needs ONE resolution for its whole u-direction, but its two v-boundary
+  // edges can independently want different counts (different radii, e.g. a frustum band between two
+  // differently-sized circles) — and a neighbouring face may separately want a HIGHER count still
+  // (its own curvature need, or a further edge it shares elsewhere). Force every v-boundary edge to
+  // the MAX segment count that any face touching it needs, propagated by repeated relaxation until
+  // stable. This is monotonic (only ever raises a count), so it can only add resolution to an
+  // already-correct neighbour, never invalidate it — the same safety argument the (now superseded)
+  // two-pass relaxation in TASK-272 §3 relied on, this time paired with edge-exact sampling rather
+  // than grid-only counts, which is what that earlier attempt was missing (see §5.2's failed retry).
+  std::map<int, int> edgeSegs;
+  std::vector<std::array<int, 2>> nurbsBoundaryEdges(s.faces.size(), std::array<int, 2>{-1, -1});
+  for (std::size_t fi2 = 0; fi2 < s.faces.size(); ++fi2) {
+    const Face& f2 = s.faces[fi2];
+    if (f2.surface.kind != SurfaceKind::Nurbs || !f2.paramLoops.empty() || f2.loops.size() != 1 ||
+        f2.loops[0].uses.size() != 4)
+      continue;
+    const Loop& lp = f2.loops[0];
+    // Convention confirmed against brep::Loft's band construction (TASK-272 §5.3's topology dump):
+    // uses[0] / uses[2] are the band's two v = const rims (curved, running along u) and uses[1] /
+    // uses[3] are its two u = const sides (straight). Only apply the fix when that shape actually
+    // holds — anything else (a future Sweep mitred-corner layout, say) falls back to the
+    // pre-existing curvature-only grid untouched, per §1 item 4's "fall back, never misfire" rule.
+    const Edge& e0 = s.edges[static_cast<std::size_t>(lp.uses[0].edge)];
+    const Edge& e1 = s.edges[static_cast<std::size_t>(lp.uses[1].edge)];
+    const Edge& e2 = s.edges[static_cast<std::size_t>(lp.uses[2].edge)];
+    const Edge& e3 = s.edges[static_cast<std::size_t>(lp.uses[3].edge)];
+    if (e0.kind == CurveKind::Line || e2.kind == CurveKind::Line || e1.kind != CurveKind::Line ||
+        e3.kind != CurveKind::Line)
+      continue;
+    const int curvatureSegs = NurbsPatchCurvatureSegs(f2.surface.patch, chordTolerance);
+    nurbsBoundaryEdges[fi2] = {lp.uses[0].edge, lp.uses[2].edge};
+    for (const int edgeIdx : {lp.uses[0].edge, lp.uses[2].edge}) {
+      const Edge& be = s.edges[static_cast<std::size_t>(edgeIdx)];
+      const int natural = std::max(SegmentsForEdge(be, chordTolerance), curvatureSegs);
+      auto [it, inserted] = edgeSegs.try_emplace(edgeIdx, natural);
+      if (!inserted)
+        it->second = std::max(it->second, natural);
+    }
+  }
+  for (int pass = 0; pass < 8; ++pass) {
+    bool changed = false;
+    for (const std::array<int, 2>& be : nurbsBoundaryEdges) {
+      if (be[0] < 0)
+        continue;
+      const int shared = std::max(edgeSegs[be[0]], edgeSegs[be[1]]);
+      if (edgeSegs[be[0]] != shared) { edgeSegs[be[0]] = shared; changed = true; }
+      if (edgeSegs[be[1]] != shared) { edgeSegs[be[1]] = shared; changed = true; }
+    }
+    if (!changed)
+      break;
+  }
+  // Every other consumer of `SegmentsForEdge` (flat-cap loop sampling, the planar-hole bridging
+  // path, `TessellateGeneralLoopFace`'s fallback) must use the unified count too, or a cap will
+  // still sample its shared rim at its own smaller natural count while the NURBS band next to it
+  // samples the same edge at the relaxed, larger one.
+  auto segsForEdge = [&](int edgeIdx, const Edge& e) {
+    const auto it = edgeSegs.find(edgeIdx);
+    return it != edgeSegs.end() ? it->second : SegmentsForEdge(e, chordTolerance);
+  };
+
   for (std::size_t fi = 0; fi < s.faces.size(); ++fi) {
     const Face& f = s.faces[fi];
     mb.face = static_cast<int>(fi);
@@ -17051,7 +17143,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         std::vector<ucs::Point2D> outer2;
         for (const EdgeUse& u : f.loops[0].uses) {
           const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
-          const int segs = SegmentsForEdge(e, chordTolerance);
+          const int segs = segsForEdge(u.edge, e);
           for (int i = 0; i < segs; ++i) {
             const double t = static_cast<double>(i) / static_cast<double>(segs);
             const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
@@ -17073,7 +17165,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
             std::vector<ucs::Point2D> hole2;
             for (const EdgeUse& u : f.loops[li].uses) {
               const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
-              const int segs = SegmentsForEdge(e, chordTolerance);
+              const int segs = segsForEdge(u.edge, e);
               for (int i = 0; i < segs; ++i) {
                 const double t = static_cast<double>(i) / static_cast<double>(segs);
                 const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
@@ -17143,7 +17235,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
           std::vector<curveisect::Vec2> poly;
           for (const EdgeUse& u : lp.uses) {
             const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
-            int segs = SegmentsForEdge(e, chordTolerance);
+            int segs = segsForEdge(u.edge, e);
             for (int i = 0; i < segs; ++i) {
               double t = double(i) / double(segs);
               Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
@@ -17162,8 +17254,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         std::vector<Vec3> r;
         for (const EdgeUse& u : lp.uses) {
           const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
-          const int segs =
-              SegmentsForEdge(e, chordTolerance);
+          const int segs = segsForEdge(u.edge, e);
           for (int i = 0; i < segs; ++i) {
             const double t = static_cast<double>(i) / static_cast<double>(segs);
             r.push_back(EdgePointAt(s, e, u.reversed ? 1.0 - t : t));
@@ -17422,43 +17513,52 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const double uHi = std::max(f.uStart, f.uEnd);
       const double vLo = std::min(f.vStart, f.vEnd);
       const double vHi = std::max(f.vStart, f.vEnd);
-      double netStep = 0.0;
-      for (std::size_t k = 0; k + 1 < patch.ctrl.size(); ++k)
-        netStep = std::max(netStep, ray3d::Length(ray3d::Sub(patch.ctrl[k + 1], patch.ctrl[k])));
-      // A patch is flat enough for one quad only when it is bilinear AND its control net is planar —
-      // a *twisted* ruled patch (a swept-with-twist side face) is degree 1 in both directions but
-      // genuinely curved.
-      bool curved = patch.degU > 1 || patch.degV > 1;
-      if (!curved && patch.ctrl.size() >= 4) {
-        const Vec3 e1 = ray3d::Sub(patch.ctrl[1], patch.ctrl[0]);
-        const Vec3 e2 = ray3d::Sub(patch.ctrl[static_cast<std::size_t>(patch.nu)], patch.ctrl[0]);
-        Vec3 nrm = ray3d::Cross(e1, e2);
-        const double nl = ray3d::Length(nrm);
-        if (nl > 1e-12) {
-          nrm = ray3d::Scale(nrm, 1.0 / nl);
-          for (const Vec3& c : patch.ctrl)
-            if (std::fabs(ray3d::Dot(ray3d::Sub(c, patch.ctrl[0]), nrm)) > chordTolerance) {
-              curved = true;
-              break;
-            }
-        }
-      }
-      const int n = curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance),
-                                        8, 128)
-                           : 1;
+      // TASK-272 §5: when the pre-pass above identified this face's two v-boundary (rim) edges, use
+      // the unified, shared-edge-relaxed segment count instead of this face's own independent
+      // curvature estimate, so this boundary lands on exactly the same resolution as whatever
+      // neighbouring face (cap or band) also walks those edges.
+      const std::array<int, 2>& boundaryEdges = nurbsBoundaryEdges[fi];
+      const int n = boundaryEdges[0] >= 0
+                        ? edgeSegs.at(boundaryEdges[0])
+                        : NurbsPatchCurvatureSegs(patch, chordTolerance);
       std::vector<std::uint32_t> grid(static_cast<std::size_t>(n + 1) * static_cast<std::size_t>(n + 1));
+      // The two v-boundary rows (j=0 at v=vLo, j=n at v=vHi) are sampled DIRECTLY from their loop
+      // edges rather than `nurbs::EvaluateWithDerivs`, so they are bit-identical to the same edge's
+      // sampling on the neighbouring face (a flat cap's `sampleLoop`, or the next band's own
+      // boundary row) — the phase-matching half of the fix that §5.2's resolution-only floor was
+      // missing. The loop's boundary uses[0]/uses[2] walk a standard CCW rectangle: uses[0] runs
+      // u increasing (v=vLo), uses[2] runs u DEcreasing (v=vHi) — see the pre-pass comment above.
+      const Edge* loEdge = boundaryEdges[0] >= 0 ? &s.edges[static_cast<std::size_t>(boundaryEdges[0])] : nullptr;
+      const Edge* hiEdge = boundaryEdges[1] >= 0 ? &s.edges[static_cast<std::size_t>(boundaryEdges[1])] : nullptr;
+      const bool loRev = loEdge ? f.loops[0].uses[0].reversed : false;
+      const bool hiRev = hiEdge ? f.loops[0].uses[2].reversed : false;
       for (int i = 0; i <= n; ++i)
         for (int j = 0; j <= n; ++j) {
           const double u = uLo + (uHi - uLo) * static_cast<double>(i) / static_cast<double>(n);
           const double v = vLo + (vHi - vLo) * static_cast<double>(j) / static_cast<double>(n);
-          const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
-          Vec3 nrm = sp.normal;
+          Vec3 p;
+          Vec3 nrm;
+          const Edge* boundaryEdge = (j == 0) ? loEdge : (j == n) ? hiEdge : nullptr;
+          if (boundaryEdge) {
+            const bool rev = (j == 0) ? loRev : hiRev;
+            const double loopS = (j == 0) ? static_cast<double>(i) / static_cast<double>(n)
+                                           : 1.0 - static_cast<double>(i) / static_cast<double>(n);
+            const double t = rev ? 1.0 - loopS : loopS;
+            p = EdgePointAt(s, *boundaryEdge, t);
+            // The analytic patch normal at the matching (u, v) still gives correct shading — only the
+            // POSITION needs to come from the edge; a boundary curve has no separate "edge normal".
+            nrm = nurbs::EvaluateWithDerivs(patch, u, v).normal;
+          } else {
+            const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
+            p = sp.p;
+            nrm = sp.normal;
+          }
           if (!(ray3d::Dot(nrm, nrm) > 0.25))
             nrm = Vec3{0.0, 0.0, 1.0};  // a collapsed edge (a pole) — a loft patch has none
           if (sf.inward)
             nrm = ray3d::Scale(nrm, -1.0);
           grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(n + 1) +
-               static_cast<std::size_t>(j)] = mb.Push(sp.p, nrm);
+               static_cast<std::size_t>(j)] = mb.Push(p, nrm);
         }
       const std::size_t stride = static_cast<std::size_t>(n + 1);
       for (int i = 0; i < n; ++i)

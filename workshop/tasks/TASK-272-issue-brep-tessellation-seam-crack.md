@@ -2,9 +2,9 @@
 
 - Type:    bug
 - Status:  **Originally reported bug (torn bolt holes / flange-plate holes): RESOLVED and
-  verified on the user's actual reported file.** Two other, separate cracks were found in the
-  course of this investigation and remain OPEN — a NURBS loft/sweep transition-piece crack (§5,
-  the one now visible in the app) and a plain cone's apex crack (§6, unconfirmed root cause).
+  verified on the user's actual reported file.** A second, separate crack (§5, the NURBS
+  loft/sweep transition-piece boundary) is now **RESOLVED** too (see §5.5). One more, unrelated
+  crack remains OPEN — a plain cone's apex crack (§6, unconfirmed root cause, lower priority).
 - Opened:  2026-09-22
 - Owner:   Claude (chetjones003@gmail.com)
 
@@ -14,12 +14,13 @@
   investigation — §§1–4 below are historical record (including two wrong leads and two reverted
   fix attempts), kept because they document real dead ends worth not repeating, not because the
   bug is still open.
-- The user is currently still seeing a torn/jagged look in the app on the file that prompted this
-  task. **That is a different, separate bug** (§5) — a small NURBS-based transition/fillet solid
-  near the flange's bore, not the flange plate itself. This was confirmed by direct evidence (a
-  temporary file-based diagnostic log, see §5.2) on the user's own loaded file, not inference.
-- Temporary diagnostics are still live in the tree (§7) — clean these up as part of closing §5,
-  not before, since they are what will confirm any fix.
+- The NURBS loft/sweep boundary crack (§5) — a small transition/fillet solid near the flange's
+  bore, distinct from the flange plate itself — is also fixed now; see §5.5 for the fix actually
+  applied (edge-exact boundary sampling + cross-face shared-edge resolution unification).
+- The only thing still open is §6, the plain-cone apex crack — unrelated to both §1 and §5 (no
+  holes, no NURBS faces involved), unconfirmed root cause, lower priority.
+- Temporary diagnostics are still live in the tree (§7) — clean these up once §6 is also closed,
+  since the file-based log is still useful for diagnosing it.
 
 ## 1. The originally reported bug (RESOLVED)
 
@@ -232,6 +233,47 @@ before attempting a fix. Not a kept test; remove or convert to a real assertion 
   than `Loft`'s bands), a fix tuned to `Loft` alone could misfire on `Sweep` output. Consider the
   same "fall back to the old grid-only sampling on any failure" safety net used in §1 item 4,
   rather than assuming one code path covers every NURBS-producing command.
+
+### 5.5 Fix actually applied (RESOLVED)
+
+Two changes to `brep::Tessellate` (`src/util/brep.cpp`), both landed together:
+
+1. **Edge-exact boundary sampling.** In the `case SurfaceKind::Nurbs` grid-building block, the two
+   v-boundary rows of the grid (`j == 0`, at `v = vLo`, and `j == n`, at `v = vHi` — the band's
+   bottom/top rim) are no longer read from `nurbs::EvaluateWithDerivs`. When the face's loop has
+   the standard 4-edge rectangle shape (`uses[0]`/`uses[2]` curved v-boundaries, `uses[1]`/`uses[3]`
+   straight u-sides — confirmed against `brep::Loft`'s own band construction via §5.3's topology
+   dump), those rows are sampled directly from the matching loop edge via `EdgePointAt`, exactly as
+   a flat cap's own `sampleLoop` already does for the same edge. This is what actually fixes PHASE
+   — §5.2's earlier "just floor `n`" attempt still used `EvaluateWithDerivs`, so a matching point
+   COUNT did not imply matching point POSITIONS, and made the crack worse, not better. The analytic
+   patch normal is still evaluated at the matching (u, v) for shading — only position changed.
+2. **Cross-face shared-edge resolution unification.** A pre-pass, right before the per-face
+   tessellation loop, finds every NURBS face's two v-boundary edges this way and unifies their
+   segment counts by repeated relaxation (`edgeSegs`, in `Tessellate`): each face's own two
+   boundary edges are forced to `max` of each other (a uniform (u, v) grid needs ONE resolution for
+   its whole u-direction, but the two edges it touches — different radii top/bottom of a frustum
+   band — can independently want different natural counts), folding in each face's own curvature
+   need (`NurbsPatchCurvatureSegs`, factored out of the old inline computation) and propagating
+   until stable (≤ 8 passes, monotonic — only ever raises a count, so it cannot invalidate an
+   already-correct neighbour, the same safety argument the reverted §3 two-pass relaxation relied
+   on). Every OTHER consumer of `SegmentsForEdge` in `Tessellate` (a flat cap's own loop sampling,
+   the planar-hole bridging path, `TessellateGeneralLoopFace`'s fallback) now goes through a
+   `segsForEdge` lookup that prefers this unified count over the edge's independent natural one, so
+   a cap and its neighbouring NURBS band always agree on how many points to place along their
+   shared rim.
+
+Both changes are additive and defensive: a NURBS face whose loop doesn't match the standard
+4-edge-rectangle shape (a future Sweep mitred corner, say) is left on the pre-existing
+curvature-only grid untouched, per §1 item 4's "fall back, never misfire" rule.
+
+**Verified:** `"Loft through three circles is a stack of cone frustums"` (§5.3) now passes —
+`RequireMeshWatertight`/`RequireWindingMatchesNormals` both green, 0 cracked edges (was 768 of
+50304). Full `[brep]` suite: 188/189 passing (the one failure is §6, unchanged, unrelated to this
+fix — no holes, no NURBS faces). Full suite: 1212/1213 passing, same single failure.
+
+The `TEST_CASE("DEBUG loft topology dump", "[brepdebug]")` scratch test (§5.3) is still in the
+tree — remove it (or convert to a real assertion) as part of the §7 cleanup once §6 closes too.
 
 ## 6. OPEN — cone apex crack (separate, unconfirmed, lower priority)
 
