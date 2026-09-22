@@ -34093,11 +34093,305 @@ void PlanPipeRunAutoFittings(AppCommandState& st, const std::vector<double>& dra
   }
 }
 
+// --- Auto-fitting tee insertion at branch nodes (issue #486 increment B6 / REQ-345) -------------
+
+/// One leg meeting at a shared point: either the NEW draft's own endpoint (`runIndex < 0`) or an
+/// EXISTING `CadPipeRun`'s endpoint (`runIndex` into `st.cadPipeRuns`, `atStart` which end).
+/// `dir` points AWAY from the shared point, into that run's own body — the same "away from the
+/// joint" convention on both sides so the through-pair test below needs no special-casing.
+struct BranchLeg {
+  int runIndex = -1;
+  bool atStart = false;
+  ray3d::Vec3 dir;
+  double availableLen = 0.0;
+};
+
+/// Every EXISTING run (not the draft being committed) whose start or end vertex sits exactly at
+/// \p pt — the only case this increment recognizes as a branch node. A mid-span tie-in (splicing
+/// into the SIDE of an existing straight run) would need to split that run's own path first and is
+/// deliberately deferred; see `CommitPipeRunDraft`'s own doc comment for the recorded scope note.
+void FindExistingRunLegsAt(const AppCommandState& st, const ray3d::Vec3& pt,
+                           std::vector<BranchLeg>* legs) {
+  constexpr double kCoincidentEps = 1e-6;
+  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
+    const CadPipeRun& run = st.cadPipeRuns[ri];
+    const size_t n = run.vertsXyz.size() / 3;
+    if (n < 2)
+      continue;
+    const ray3d::Vec3 first{run.vertsXyz[0], run.vertsXyz[1], run.vertsXyz[2]};
+    const ray3d::Vec3 second{run.vertsXyz[3], run.vertsXyz[4], run.vertsXyz[5]};
+    if (ray3d::Length(ray3d::Sub(first, pt)) < kCoincidentEps) {
+      const ray3d::Vec3 d = ray3d::Sub(second, first);
+      const double len = ray3d::Length(d);
+      if (len > 1e-9)
+        legs->push_back(BranchLeg{static_cast<int>(ri), true, ray3d::Scale(d, 1.0 / len), len});
+    }
+    const ray3d::Vec3 last{run.vertsXyz[(n - 1) * 3 + 0], run.vertsXyz[(n - 1) * 3 + 1],
+                           run.vertsXyz[(n - 1) * 3 + 2]};
+    const ray3d::Vec3 secondLast{run.vertsXyz[(n - 2) * 3 + 0], run.vertsXyz[(n - 2) * 3 + 1],
+                                 run.vertsXyz[(n - 2) * 3 + 2]};
+    if (ray3d::Length(ray3d::Sub(last, pt)) < kCoincidentEps) {
+      const ray3d::Vec3 d = ray3d::Sub(secondLast, last);
+      const double len = ray3d::Length(d);
+      if (len > 1e-9)
+        legs->push_back(BranchLeg{static_cast<int>(ri), false, ray3d::Scale(d, 1.0 / len), len});
+    }
+  }
+}
+
+/// Which of \p def's three connections plays which role in a tee: EXACTLY one each of Inlet,
+/// Outlet, Branch (`CadBlockConnectionRole`) — a part tagged `tee` with any other port makeup or
+/// count cannot be auto-oriented. All three left null otherwise.
+void PickTeePorts(const CadBlockDefinition& def, const CadBlockConnection** inlet,
+                  const CadBlockConnection** outlet, const CadBlockConnection** branch) {
+  *inlet = *outlet = *branch = nullptr;
+  if (def.connections.size() != 3)
+    return;
+  const CadBlockConnection* in = nullptr;
+  const CadBlockConnection* out = nullptr;
+  const CadBlockConnection* br = nullptr;
+  for (const CadBlockConnection& c : def.connections) {
+    if (c.role == CadBlockConnectionRole::Inlet && !in) in = &c;
+    else if (c.role == CadBlockConnectionRole::Outlet && !out) out = &c;
+    else if (c.role == CadBlockConnectionRole::Branch && !br) br = &c;
+  }
+  if (in && out && br) {
+    *inlet = in;
+    *outlet = out;
+    *branch = br;
+  }
+}
+
+/// One planned tee insertion at a node where exactly three legs meet: two roughly opposite
+/// (the through run) plus one branch. `legs`/`cutPoint` share an index — `legs[k]` is the leg
+/// whose pipe now ends at `cutPoint[k]`.
+struct PlannedTee {
+  std::string blockName;
+  CadBlockXform xf;
+  BranchLeg legs[3];
+  ray3d::Vec3 cutPoint[3];
+};
+
+/// Attempts to plan a tee for exactly three legs meeting at \p node: catalog lookup, port/role
+/// resolution, an engagement-length budget check per leg, and orientation via the SAME two-port
+/// rigid-alignment primitive B5's elbow fit uses (`CadBlockOrientTwoPortFitting`) — but unlike an
+/// elbow, a tee's inlet/outlet pair normally points in ANTI-parallel directions (a straight run
+/// through the body): the cross product `RotationAligningTwoDirections` uses to build its local
+/// "up" axis is then zero, an unsolvable degenerate case (no unique roll for two collinear
+/// references).
+/// The inlet/BRANCH pair is used to solve the rotation instead — a real tee's branch sits off-axis
+/// from the through run, so that pair is never collinear — and the outlet's resulting world
+/// position is then READ from the fitting's own solved geometry (not independently pinned), the
+/// same "trust the model after pinning one side" reasoning `PlannedElbow::farPoint` uses (extended
+/// here to a second unpinned port).
+/// Returns false for any reason, with the reason logged; never mutates `st`.
+bool TryPlanBranchTee(AppCommandState& st, const std::vector<BranchLeg>& legs,
+                      const ray3d::Vec3& node, const std::string& nominalSize,
+                      CadPipePressureClass pressureClass, PlannedTee* out,
+                      std::vector<std::string>& log) {
+  if (legs.size() != 3)
+    return false;
+
+  int bestI = -1, bestJ = -1;
+  double bestDot = 1.0;
+  for (int i = 0; i < 3; ++i) {
+    for (int j = i + 1; j < 3; ++j) {
+      const double d = ray3d::Dot(legs[static_cast<size_t>(i)].dir, legs[static_cast<size_t>(j)].dir);
+      if (d < bestDot) {
+        bestDot = d;
+        bestI = i;
+        bestJ = j;
+      }
+    }
+  }
+  if (bestDot > -0.85) {
+    log.push_back("PIPERUN - the three runs meeting here aren't roughly straight-through plus a "
+                  "branch; no tee inserted here.");
+    return false;
+  }
+  const int branchIx = 3 - bestI - bestJ;
+  const BranchLeg& legA = legs[static_cast<size_t>(bestI)];
+  const BranchLeg& legB = legs[static_cast<size_t>(bestJ)];
+  const BranchLeg& legC = legs[static_cast<size_t>(branchIx)];
+
+  std::string blockName;
+  if (!CadPipeCatalogFind(st, CadPipePartType::Tee, nominalSize, pressureClass, &blockName, log))
+    return false;
+  const int di = CadBlockFindDef(st.blockDefs, blockName);
+  if (di < 0)
+    return false;
+  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockConnection* inletC = nullptr;
+  const CadBlockConnection* outletC = nullptr;
+  const CadBlockConnection* branchC = nullptr;
+  PickTeePorts(def, &inletC, &outletC, &branchC);
+  if (!inletC || !outletC || !branchC) {
+    log.push_back("PIPERUN - \"" + blockName + "\" needs inlet+outlet+branch ports to auto-insert "
+                  "a tee; no fitting inserted here.");
+    return false;
+  }
+
+  const ray3d::Vec3 incomingDir = ray3d::Scale(legA.dir, -1.0);
+  const ray3d::Vec3 aIn{inletC->nx, inletC->ny, inletC->nz};
+  const ray3d::Vec3 aBranch{branchC->nx, branchC->ny, branchC->nz};
+  CadBlockXform xf;
+  xf.sx = xf.sy = xf.sz = CadBlockInsertUnitsScale(st, def);
+  if (!CadBlockOrientTwoPortFitting(aIn, aBranch, incomingDir, legC.dir, &xf)) {
+    log.push_back("PIPERUN - \"" + blockName + "\"'s inlet/branch ports are collinear; no tee "
+                  "inserted here.");
+    return false;
+  }
+
+  const auto engagementOf = [](const CadBlockConnection& c) {
+    const CadBlockConnectionMode* m = CadBlockResolveMode(c, CadConnectionModeTarget::PipeEnd);
+    return m ? m->engagementLength : c.engagementLength;
+  };
+  const double cutA = engagementOf(*inletC);
+  const double cutB = engagementOf(*outletC);
+  const double cutC = engagementOf(*branchC);
+  if (cutA < 0.0 || cutA > 0.9 * legA.availableLen || cutB < 0.0 || cutB > 0.9 * legB.availableLen ||
+      cutC < 0.0 || cutC > 0.9 * legC.availableLen) {
+    log.push_back("PIPERUN - \"" + blockName + "\"'s engagement length does not fit one of the "
+                  "three legs; no tee inserted here.");
+    return false;
+  }
+
+  const ray3d::Vec3 nearPointA = ray3d::Add(node, ray3d::Scale(legA.dir, cutA));
+  float wx = 0.f, wy = 0.f, wz = 0.f;
+  CadBlockXformPoint(xf, inletC->x, inletC->y, inletC->z, &wx, &wy, &wz);
+  xf.x = static_cast<float>(nearPointA.x) - wx;
+  xf.y = static_cast<float>(nearPointA.y) - wy;
+  xf.z = static_cast<float>(nearPointA.z) - wz;
+
+  float ox = 0.f, oy = 0.f, oz = 0.f;
+  CadBlockXformPoint(xf, outletC->x, outletC->y, outletC->z, &ox, &oy, &oz);
+  float bx = 0.f, by = 0.f, bz = 0.f;
+  CadBlockXformPoint(xf, branchC->x, branchC->y, branchC->z, &bx, &by, &bz);
+  // farPointB/farPointC are trusted straight from the fitting's own solved geometry — the same
+  // "the model decides, not an idealized guess" reasoning `PlannedElbow::farPoint` already uses for
+  // an elbow's single unpinned port, just applied to TWO unpinned ports here. Whether the result is
+  // actually usable is left to the piece/scratch-run solid validation the caller already performs
+  // (`TryApplyBranchAtEndpoint`, `CommitPipeRunDraft`) — the same thing that would catch it for an
+  // elbow's far side too.
+  const ray3d::Vec3 farPointB{ox, oy, oz};
+  const ray3d::Vec3 farPointC{bx, by, bz};
+
+  out->blockName = blockName;
+  out->xf = xf;
+  out->legs[0] = legA;
+  out->legs[1] = legB;
+  out->legs[2] = legC;
+  out->cutPoint[0] = nearPointA;
+  out->cutPoint[1] = farPointB;
+  out->cutPoint[2] = farPointC;
+  return true;
+}
+
+/// A resolved tee insertion, ready to apply: the new run's own cutback endpoint plus the two
+/// EXISTING runs it ties into and their own new cutback endpoints.
+struct BranchFitPlan {
+  std::string blockName;
+  CadBlockXform xf;
+  int existingRunIdx[2] = {-1, -1};
+  bool existingAtStart[2] = {false, false};
+  ray3d::Vec3 existingCut[2];
+  bool newRunAtStart = false;
+  ray3d::Vec3 newRunCut;
+};
+
+/// Only a plain 3-way joint — this draft's endpoint plus EXACTLY two other existing runs' own
+/// endpoints, already coincident at \p node — is in scope; a node with any other leg count (a
+/// simple 2-run abutment, or 4+ legs which would want a cross) is left as-is and logged, deferred
+/// to a later increment. Never mutates `st` or its entities.
+bool TryPlanBranchAtNode(AppCommandState& st, const ray3d::Vec3& node, bool newRunAtStart,
+                         const ray3d::Vec3& newRunDir, double newRunAvailable,
+                         const std::string& nominalSize, CadPipePressureClass pressureClass,
+                         BranchFitPlan* out, std::vector<std::string>& log) {
+  std::vector<BranchLeg> existing;
+  FindExistingRunLegsAt(st, node, &existing);
+  if (existing.size() != 2)
+    return false;
+  std::vector<BranchLeg> legs = existing;
+  legs.push_back(BranchLeg{-1, newRunAtStart, newRunDir, newRunAvailable});
+
+  PlannedTee planned;
+  if (!TryPlanBranchTee(st, legs, node, nominalSize, pressureClass, &planned, log))
+    return false;
+
+  out->blockName = planned.blockName;
+  out->xf = planned.xf;
+  int nExisting = 0;
+  for (int k = 0; k < 3; ++k) {
+    const BranchLeg& lg = planned.legs[static_cast<size_t>(k)];
+    if (lg.runIndex < 0) {
+      out->newRunAtStart = lg.atStart;
+      out->newRunCut = planned.cutPoint[static_cast<size_t>(k)];
+    } else {
+      out->existingRunIdx[nExisting] = lg.runIndex;
+      out->existingAtStart[nExisting] = lg.atStart;
+      out->existingCut[nExisting] = planned.cutPoint[static_cast<size_t>(k)];
+      ++nExisting;
+    }
+  }
+  return true;
+}
+
+/// Attempts a branch tee at one endpoint of the draft (\p piece's front if \p atStart, else its
+/// back). Validates the TWO EXISTING runs a match would cut back — using scratch copies, so a
+/// refusal here leaves both `st` and \p piece untouched — before applying anything, the same
+/// all-or-nothing reasoning `CommitPipeRunDraft`'s own piece-solid validation already uses. On
+/// success, mutates \p piece's endpoint in place and appends the resolved plan to \p branchFits.
+void TryApplyBranchAtEndpoint(AppCommandState& st, std::vector<ray3d::Vec3>& piece, bool atStart,
+                              const std::string& nominalSize, CadPipePressureClass pressureClass,
+                              std::vector<BranchFitPlan>& branchFits, std::vector<std::string>& log) {
+  if (piece.size() < 2)
+    return;
+  const ray3d::Vec3 node = atStart ? piece.front() : piece.back();
+  const ray3d::Vec3 neighbor = atStart ? piece[1] : piece[piece.size() - 2];
+  const ray3d::Vec3 legVec = ray3d::Sub(neighbor, node);
+  const double avail = ray3d::Length(legVec);
+  if (avail < 1e-9)
+    return;
+  const ray3d::Vec3 dir = ray3d::Scale(legVec, 1.0 / avail);
+
+  BranchFitPlan plan;
+  if (!TryPlanBranchAtNode(st, node, atStart, dir, avail, nominalSize, pressureClass, &plan, log))
+    return;
+
+  for (int k = 0; k < 2; ++k) {
+    CadPipeRun scratch = st.cadPipeRuns[static_cast<size_t>(plan.existingRunIdx[k])];
+    const size_t n = scratch.vertsXyz.size() / 3;
+    const size_t vi = plan.existingAtStart[k] ? 0 : (n - 1);
+    scratch.vertsXyz[vi * 3 + 0] = plan.existingCut[k].x;
+    scratch.vertsXyz[vi * 3 + 1] = plan.existingCut[k].y;
+    scratch.vertsXyz[vi * 3 + 2] = plan.existingCut[k].z;
+    std::vector<CadSolidPtr> preview;
+    if (!CadBuildPipeRunSolids(scratch, &preview)) {
+      log.push_back("PIPERUN - inserting \"" + plan.blockName +
+                    "\" here would leave an existing run without a valid pipe solid; no tee "
+                    "inserted here.");
+      return;
+    }
+  }
+
+  if (atStart)
+    piece.front() = plan.newRunCut;
+  else
+    piece.back() = plan.newRunCut;
+  branchFits.push_back(std::move(plan));
+}
+
 /// Store the run built from the path so far and end the command. Auto-inserts an elbow fitting
 /// (issue #486 increment B5) at every bend where a catalog match exists — see
 /// `PlanPipeRunAutoFittings` — splitting the single path into multiple straight/smooth-filleted
 /// `CadPipeRun` pieces around each inserted elbow; a run with no qualifying bend collapses back to
-/// exactly the pre-B5 single-run behavior.
+/// exactly the pre-B5 single-run behavior. Also auto-inserts a tee (issue #486 increment B6) at
+/// either endpoint of the draft when it lands exactly on two OTHER existing runs' own endpoints —
+/// see `TryApplyBranchAtEndpoint`. Deliberately out of scope, by name: a mid-span tie-in (splicing
+/// into the SIDE of an existing run, which would need to split that run's path first), a cross
+/// (4+ legs at one node), and vertical-riser/offset-transition fittings — those are already
+/// ordinary 90/45 BENDS on one run's own path and were delivered by B5, since its bend detection
+/// is fully 3D and not limited to a horizontal plane.
 void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
   if (st.pipeRunDraftVerts.size() < 6) {  // fewer than 2 vertices
     log.push_back("PIPERUN - a run needs at least two points; Esc cancels.");
@@ -34109,6 +34403,17 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
   std::vector<PlannedElbow> elbows;
   PlanPipeRunAutoFittings(st, st.pipeRunDraftVerts, st.pipeRunNominalSize, pressureClass, &pieces,
                           &elbows, log);
+
+  // Branch tees (issue #486 increment B6): only the draft's own two endpoints can qualify (see
+  // this function's own doc comment for why a mid-span tie-in is out of scope), tried AFTER the
+  // elbow pieces are known so the endpoints checked are the draft's true start/end regardless of
+  // how many interior bends split it. Each attempt mutates the affected piece's endpoint in place
+  // and/or is refused entirely on its own — never partially applied — before anything commits.
+  std::vector<BranchFitPlan> branchFits;
+  TryApplyBranchAtEndpoint(st, pieces.front(), /*atStart=*/true, st.pipeRunNominalSize,
+                           pressureClass, branchFits, log);
+  TryApplyBranchAtEndpoint(st, pieces.back(), /*atStart=*/false, st.pipeRunNominalSize,
+                           pressureClass, branchFits, log);
 
   // Validate EVERY piece can build a valid swept solid before committing anything (all-or-nothing —
   // the same guarantee the pre-B5 single-run commit gave). A planned elbow's catalog import may
@@ -34137,6 +34442,16 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
   }
 
   PushUndoSnapshot(st, "Create Pipe Run");
+  for (const BranchFitPlan& bf : branchFits) {
+    for (int k = 0; k < 2; ++k) {
+      CadPipeRun& run = st.cadPipeRuns[static_cast<size_t>(bf.existingRunIdx[k])];
+      const size_t n = run.vertsXyz.size() / 3;
+      const size_t vi = bf.existingAtStart[k] ? 0 : (n - 1);
+      run.vertsXyz[vi * 3 + 0] = bf.existingCut[k].x;
+      run.vertsXyz[vi * 3 + 1] = bf.existingCut[k].y;
+      run.vertsXyz[vi * 3 + 2] = bf.existingCut[k].z;
+    }
+  }
   size_t elbowIx = 0;
   size_t totalVerts = 0;
   for (size_t p = 0; p < pieceRuns.size(); ++p) {
@@ -34148,12 +34463,19 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
       CadBlockPlaceInsertNoUndo(st, e.blockName, e.xf, log);
     }
   }
+  for (const BranchFitPlan& bf : branchFits)
+    CadBlockPlaceInsertNoUndo(st, bf.blockName, bf.xf, log);
   BumpCadGpuCache(st);
-  if (elbows.empty())
+  if (elbows.empty() && branchFits.empty()) {
     log.push_back("PIPERUN - run created: " + std::to_string(totalVerts) + " point(s).");
-  else
-    log.push_back("PIPERUN - run created: " + std::to_string(pieceRuns.size()) + " segment(s), " +
-                  std::to_string(elbows.size()) + " elbow fitting(s) inserted.");
+  } else {
+    std::string msg = "PIPERUN - run created: " + std::to_string(pieceRuns.size()) + " segment(s)";
+    if (!elbows.empty())
+      msg += ", " + std::to_string(elbows.size()) + " elbow fitting(s)";
+    if (!branchFits.empty())
+      msg += ", " + std::to_string(branchFits.size()) + " tee fitting(s)";
+    log.push_back(msg + " inserted.");
+  }
   CancelPipeRunCommand(st);
   st.active = AppCommandState::Kind::None;
 }
