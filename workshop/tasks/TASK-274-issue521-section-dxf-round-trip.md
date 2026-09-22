@@ -1,4 +1,4 @@
-# TASK-270 — issue #521: a vertical or tilted polyline survives DXF export
+# TASK-274 — issue #521: a vertical or tilted polyline survives DXF export
 
 - Type:    fix
 - Status:  review

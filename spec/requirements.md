@@ -9830,7 +9830,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-09-06 — initial.
 
   2026-09-22 — **a polyline that lies in ONE plane exports as one `LWPOLYLINE` in that plane**
-  (D-2026-09-22-a, ADR-053 amendment (f), TASK-270, GitHub issue #521). Increment 4 above splits a
+  (D-2026-09-22-a, ADR-053 amendment (f), TASK-274, GitHub issue #521). Increment 4 above splits a
   polyline with a tilted curved segment into flat runs plus one ARC each, because `LWPOLYLINE` carries
   one elevation and one extrusion for the whole entity. That ceiling is real, but it only bites when
   the segments disagree about their plane. When the whole polyline — vertices and every curved
