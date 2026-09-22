@@ -16664,6 +16664,26 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
     return mb->Push(ucs::UcsToWorld(sf.frame, p), ucs::UcsVectorToWorld(sf.frame, n));
   };
 
+  // `nCols` for a band used to be chosen from that band's OWN two horizontal rows alone — nothing
+  // tied it to the row a neighbouring band computes for the SAME shared boundary (band i's `v1` row
+  // is band i+1's `v0` row). Each band's count was `max(its own bottom need, its own top need)`, and
+  // those "own" needs are generally different between two bands that only share ONE of their two
+  // rows, so the shared row could legitimately get a different column count on each side of it — a
+  // T-junction crack inside a single face's own triangulation (confirmed on a box-minus-cylinder
+  // bore: the cracked mesh edges all had only one triangle touching them, i.e. the crack was WITHIN
+  // one face, not between two faces as first suspected). Fixed with a small pre-pass: gather every
+  // band's raw per-row needs first, resolve each SHARED boundary to the max of what either side
+  // independently asked for (only where the two sides' interval topology actually matches — same
+  // count of inside/outside crossings — since a topology change at a v-break, e.g. a hole starting,
+  // means the two sides legitimately don't correspond row-for-row), then build geometry using those
+  // resolved counts. This only ever RAISES a band's resolution versus the old per-band-only formula,
+  // never lowers it, so it cannot make an already-fine face coarser.
+  struct BandInfo {
+    double v0 = 0.0, v1 = 0.0;
+    std::vector<double> xs0, xs1;
+  };
+  std::vector<BandInfo> bands;
+  bands.reserve(vBreaks.size());
   for (std::size_t bi = 0; bi + 1 < vBreaks.size(); ++bi) {
     const double v0 = vBreaks[bi];
     const double v1 = vBreaks[bi + 1];
@@ -16673,8 +16693,55 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
     // visibly the outermost band's own outer edge. Sampling a hair inside the band sidesteps that
     // without changing which edges bound this band (guaranteed constant within it by `vBreaks`).
     const double eps = 1e-9 * std::max(1.0, v1 - v0);
-    const std::vector<double> xs0 = GeneralLoopScanline(f.paramLoops, v0 + eps);
-    const std::vector<double> xs1 = GeneralLoopScanline(f.paramLoops, v1 - eps);
+    BandInfo bandInfo;
+    bandInfo.v0 = v0;
+    bandInfo.v1 = v1;
+    bandInfo.xs0 = GeneralLoopScanline(f.paramLoops, v0 + eps);
+    bandInfo.xs1 = GeneralLoopScanline(f.paramLoops, v1 - eps);
+    bands.push_back(std::move(bandInfo));
+  }
+
+  // Per band, per interval k: the column count that band would use on its own (its old, purely
+  // local `max(bottom need, top need)`). `nCols` is ONE number applied to a band's WHOLE grid — both
+  // its rows — so raising just the row-level "need" at a shared boundary is not enough: if band i's
+  // resolution is pinned high by its OWN unrelated bottom row, that higher count applies to band i's
+  // top row too, and band i+1 must match THAT (not just band i's raw top-row need). Two relaxation
+  // sweeps (forward then backward) propagate the max through every run of bands whose interval
+  // topology matches its neighbour, so the whole run converges on one shared count — like a
+  // union-find over a simple chain.
+  std::vector<std::vector<int>> nColsFor(bands.size());
+  for (std::size_t bi = 0; bi < bands.size(); ++bi) {
+    const BandInfo& b = bands[bi];
+    if (b.xs0.size() != b.xs1.size() || b.xs0.size() < 2)
+      continue;
+    nColsFor[bi].assign(b.xs0.size() / 2, 1);
+    for (std::size_t k = 0; k + 1 < b.xs0.size(); k += 2) {
+      if (b.xs0[k + 1] <= b.xs0[k] && b.xs1[k + 1] <= b.xs1[k])
+        continue;
+      const int botNeed = GeneralLoopChordSegments(sf, {b.xs0[k], b.v0}, {b.xs0[k + 1], b.v0}, chordTolerance);
+      const int topNeed = GeneralLoopChordSegments(sf, {b.xs1[k], b.v1}, {b.xs1[k + 1], b.v1}, chordTolerance);
+      nColsFor[bi][k / 2] = std::max(1, std::max(botNeed, topNeed));
+    }
+  }
+  auto topologyMatches = [&](std::size_t bi) {
+    return bi + 1 < bands.size() && nColsFor[bi].size() == nColsFor[bi + 1].size() &&
+           !nColsFor[bi].empty();
+  };
+  for (std::size_t bi = 0; bi + 1 < bands.size(); ++bi)
+    if (topologyMatches(bi))
+      for (std::size_t k = 0; k < nColsFor[bi].size(); ++k)
+        nColsFor[bi + 1][k] = std::max(nColsFor[bi + 1][k], nColsFor[bi][k]);
+  for (std::size_t bi = bands.size(); bi-- > 1;)
+    if (topologyMatches(bi - 1))
+      for (std::size_t k = 0; k < nColsFor[bi].size(); ++k)
+        nColsFor[bi - 1][k] = std::max(nColsFor[bi - 1][k], nColsFor[bi][k]);
+
+  for (std::size_t bi = 0; bi < bands.size(); ++bi) {
+    const BandInfo& band = bands[bi];
+    const double v0 = band.v0;
+    const double v1 = band.v1;
+    const std::vector<double>& xs0 = band.xs0;
+    const std::vector<double>& xs1 = band.xs1;
     if (xs0.size() != xs1.size() || xs0.size() < 2)
       continue;  // a numerically-degenerate band (a break landing exactly on a vertex pair) — skip
     for (std::size_t k = 0; k + 1 < xs0.size(); k += 2) {
@@ -16687,8 +16754,7 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
 
       const int nRows = std::max(1, std::max(GeneralLoopChordSegments(sf, {u0L, v0}, {u1L, v1}, chordTolerance),
                                              GeneralLoopChordSegments(sf, {u0R, v0}, {u1R, v1}, chordTolerance)));
-      const int nCols = std::max(1, std::max(GeneralLoopChordSegments(sf, {u0L, v0}, {u0R, v0}, chordTolerance),
-                                             GeneralLoopChordSegments(sf, {u1L, v1}, {u1R, v1}, chordTolerance)));
+      const int nCols = nColsFor[bi][k / 2];
 
       std::vector<std::vector<std::uint32_t>> grid(
           static_cast<std::size_t>(nRows) + 1,

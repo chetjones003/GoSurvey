@@ -48,50 +48,75 @@ Two independent bugs, both in `brep::Tessellate` (`src/util/brep.cpp`):
    total per-turn budget constant regardless of how many pieces a circle is cut into. This
    roughly halved the crack count on the reproduction case (536 → 280 of ~1328 mesh edges).
 
-**Residual bug (NOT fixed, open):** Even with segment COUNTS matching, the wall's per-vertex
-angle comes from the surface's own `f.uStart..f.uEnd` parametrization, while a neighboring flat
-face's hole-loop boundary comes from walking the shared boundary EDGE's own parametrization
-(`EdgePointAt`). These are two independent phase references. Confirmed via a topology dump
-(`brepdebug`-tagged scratch test, since removed) on `BooleanSubtract(box, throughCylinder)`: the
-wall face's `u = 0` and its own bounding rim edge's `t = 0` sample points ~π apart in angle —
-a genuine phase offset, not just a count mismatch. Two attempts at a direct fix (deriving the
-wall's angle sequence from its own rim edge, with and without an empirical winding-direction
-correction) both caused new regressions elsewhere (wrong tessellated volumes, inverted normals
-on previously-correct cylinder/cone/sweep cases) because correctly restricting the fix to ONLY
-genuinely-unclipped, non-partial, full-rim faces is more subtle than it looks — partial-turn
-walls (a milled notch, a sliced cylinder) share the same code path and were incorrectly caught
-by both attempts. Both were reverted; see git history around this task's commit for the exact
-(reverted) diffs if a future attempt wants a starting point.
+**Wrong lead, corrected:** an earlier version of this task theorized the residual crack was a
+wall-vs-cap phase mismatch (the cylindrical wall's `f.uStart` parametrization disagreeing with
+the flat cap's hole-loop edge parametrization) and reports two reverted fix attempts on that
+theory. **That diagnosis was wrong.** A `triFace`-tagged crack-location dump (temporary scratch
+test, since removed) on the same `BooleanSubtract(box, throughCylinder)` repro showed every
+cracked mesh edge touched only ONE triangle, and that triangle's `triFace` was always the SAME
+flat cap face (e.g. face 0, the bottom plate) — **the crack is entirely INSIDE one face's own
+triangulation**, not between two faces. The wall is not involved.
+
+**Root cause 3 (partially fixed — see below):** the culprit is
+`TessellateGeneralLoopFace`, the general even-odd polygon-with-holes tessellator every
+`loops.size() > 1` planar face now routes through (root cause 1's fix). It decomposes the face
+into horizontal "bands" between consecutive hole/outer-loop vertex v-coordinates
+(`vBreaks`), and grids each band independently with its own column count
+(`nCols = max(that band's own bottom-row need, that band's own top-row need)`, each computed
+from `GeneralLoopChordSegments`). Nothing ties one band's column count to its neighbor's, even
+though two adjacent bands SHARE one horizontal row (band *i*'s top = band *i+1*'s bottom) — so
+that shared row can get a different column count on each side, a T-junction crack inside the
+same face.
+
+*Fix applied (real, but insufficient alone):* a two-pass resolution — gather every band's own
+column-count need first, then two relaxation sweeps (forward, then backward) propagate the max
+column count through every run of bands whose interval topology matches its neighbor (same
+number of inside/outside crossings), so a whole connected run converges on one shared count. This
+can only ever raise resolution, never lower it, and is confirmed safe (full suite still
+1208/1210, only the two known `RequireMeshWatertight` failures, no new regressions). **It does
+not fix the reproduction case's crack count (536 of 2608 edges, unchanged before/after)** — see
+why below.
+
+**Residual bug (NOT fixed, open) — the real one:** the crack in the repro is concentrated at the
+hole's top/bottom **extrema** (e.g. the circle's bottommost point, y = -radius). At exactly that
+v-coordinate the hole interval pinches to a single point: the band just below it has ONE interval
+(no hole yet — `xs.size() == 2`), the band just above has TWO (`xs.size() == 4`, the hole has
+opened up). This is a genuine, unavoidable topology CHANGE between neighboring bands, so the
+fix above correctly (and necessarily) skips propagating resolution across it — sharing a column
+count between two bands that don't structurally correspond would be wrong, not a fix. Whatever
+`TessellateGeneralLoopFace` does at this pinch point itself is where the actual crack lives;
+that code path is unexplored. Likely candidates: the pinched band's own degenerate-interval
+handling (`u0R <= u0L && u1R <= u1L` skip, or a band whose `xs0.size() != xs1.size()` is silently
+dropped entirely via the `continue` a few lines up — dropping a band drops geometry, which would
+show up as a HOLE in the mesh, not a crack, so more likely it's the row directly adjacent to the
+pinch that under- or over-resolves relative to the extremum point itself).
 
 ## 3. Reproduction (regression test, already in tree and RED)
 
 `tests/BrepTests.cpp`: `RequireMeshWatertight(t)` (new helper) checks every triangle edge in a
 tessellation is shared by exactly two triangles. Two call sites currently fail:
 
-- `"Tessellation agrees with the analytic figures and winds outward"` / case "cone": 128 of 384
-  mesh edges cracked (a plain cone, apex fan vs. wall seam — likely the SAME root cause,
-  unexplored).
-- `"Curved B1: ... SUBTRACT drills a round hole through the box (B2a)"`: 280 of 1328 mesh edges
-  cracked (the flange/bolt-hole repro).
+- `"Tessellation agrees with the analytic figures and winds outward"` / case "cone": 256 of 768
+  mesh edges cracked (a plain cone — unexplored; may or may not be the same pinch-point class of
+  bug, since a cone's apex is a comparable "everything meets at one point" case).
+- `"Curved B1: ... SUBTRACT drills a round hole through the box (B2a)"`: 536 of 2608 mesh edges
+  cracked (the flange/bolt-hole repro; all inside the flat cap faces, at the hole's top/bottom
+  extrema — see above).
 
-Run: `.\build\GoSurveyTests.exe "[brep]"` after `./dev/build`.
+Run: `.\build\GoSurveyTests.exe "[brep]"` after `./dev/build`. A `triFace`-based crack-location
+dump (print, for each cracked edge, `t.triFace[i/3]` of its one touching triangle, and its `y`
+coordinate) is the fastest way to re-derive the evidence above; it was a temporary scratch
+`TEST_CASE` removed from the tree, not a kept helper.
 
 ## 4. Next steps for whoever picks this up
 
-- The wall vertex generation (`SurfaceKind::Cylinder`/`Cone` case in `Tessellate`) needs to
-  derive its angle sequence from geometry that is GUARANTEED to match a neighboring loop's own
-  edge sampling, but ONLY for a true full-rim, unclipped wall — the existing `isect`/`coneCut`/
-  `cut` guards were not sufficient (a milled notch/slice is none of those but is still a
-  partial-turn face using the same code path). Needs a positive test — e.g. "this face's loop is
-  exactly bottom-rim-arc + seam + top-rim-arc + seam, and both arcs sweep the full declared
-  `f.uEnd - f.uStart`" — rather than a list of exclusions.
-- Consider instead asking whether the BOOLEAN construction (not the tessellator) should be
-  keeping the wall's `uStart`/rim-edge phase in sync in the first place — a kernel-level fix
-  might be more robust than patching the tessellator around it.
-- The cone-apex crack is a separate, unexplored case; confirm whether it's the same class of bug
-  before assuming the same fix applies.
+- Start in `TessellateGeneralLoopFace`, specifically the band whose `v0` or `v1` lands exactly on
+  (or a hair inside of) a hole's y-extremum. Compare what that band's grid actually looks like
+  (dump its `nRows`/`nCols`/`xs0`/`xs1`) against the band on the other side of the pinch.
+- Do NOT reintroduce the wall-vs-cap phase theory from the earlier version of this task — that
+  was checked directly (via `triFace`) and ruled out. The wall is never involved in this crack.
 - This is a SPEC GAP candidate: REQ-313's Tessellation acceptance criteria don't explicitly
-  require adjacent-face seam agreement (only per-triangle winding/normal agreement and
-  volume/area convergence). Worth a recorded decision to add an explicit watertightness
-  acceptance criterion, with `RequireMeshWatertight` promoted from a debugging aid to a
-  documented requirement check.
+  require adjacent-face seam agreement or intra-face watertightness (only per-triangle
+  winding/normal agreement and volume/area convergence). Worth a recorded decision to add an
+  explicit watertightness acceptance criterion, with `RequireMeshWatertight` promoted from a
+  debugging aid to a documented requirement check.
