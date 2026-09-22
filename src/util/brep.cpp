@@ -43,7 +43,12 @@ constexpr int kMaxArcSegments = 512;
 /// step function keyed on "is this span nearly a full turn" gives EACH half-turn piece the same
 /// absolute floor as the whole circle, doubling the total versus the unsplit case; scaling by span
 /// keeps the per-turn budget constant regardless of how many pieces the circle is cut into.
-constexpr int kMinFullCircleSegments = 128;
+///
+/// 256, not 128: every ordinary EXTRUDE/PRESSPULL/CYLINDER wall is the two-half-turn-face case above,
+/// so issue #486's tuning pass (done before the scaled floor existed) was implicitly tuned against
+/// TWO applications of this constant — 256 segments per turn, not 128 — and a user-visible regression
+/// confirmed 128 alone reads as faceted again at ordinary working zoom on a small (2 in radius) part.
+constexpr int kMinFullCircleSegments = 256;
 
 [[nodiscard]] bool AllFinite(std::initializer_list<double> vs) {
   for (double v : vs) {

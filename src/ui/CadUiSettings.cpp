@@ -15,6 +15,8 @@
 
 #include <imgui_stdlib.h>
 
+#include <GL/glew.h>
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -273,9 +275,22 @@ static void DrawGraphicsPerformanceDialog(AppCommandState& cmd, std::vector<std:
     cmd.showGraphicsPerformanceDialog = open; ImGui::End(); return;
   }
   cmd.showGraphicsPerformanceDialog = open;
-  ImGui::TextDisabled("Video Card:       OpenGL (driver-reported)");
-  ImGui::TextDisabled("Driver Version:   reported by GLFW / driver");
-  ImGui::TextDisabled("Virtual Device:   OpenGL %d.x", 3);
+  // Real GL queries (this used to be hardcoded placeholder text — "driver-reported", "3.x" — which
+  // told a user nothing when they were actually trying to diagnose a rendering problem, e.g. jagged
+  // shaded-solid silhouettes that only multisampling fixes, per the MSAA gate in ViewportRenderer).
+  const GLubyte* vendor = glGetString(GL_VENDOR);
+  const GLubyte* renderer = glGetString(GL_RENDERER);
+  const GLubyte* version = glGetString(GL_VERSION);
+  ImGui::TextDisabled("Video Card:       %s", renderer ? reinterpret_cast<const char*>(renderer) : "(unavailable)");
+  ImGui::TextDisabled("Vendor:           %s", vendor ? reinterpret_cast<const char*>(vendor) : "(unavailable)");
+  ImGui::TextDisabled("Driver Version:   %s", version ? reinterpret_cast<const char*>(version) : "(unavailable)");
+  GLint maxSamples = 0;
+  glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+  ImGui::TextDisabled("Max MSAA samples: %d%s", static_cast<int>(maxSamples),
+                       maxSamples < 2 ? "  (multisampling unavailable on this driver — shaded solid"
+                                        " edges and circle/cylinder silhouettes will look jagged/"
+                                        "stair-stepped no matter what Settings say)"
+                                      : "");
   ImGui::Separator();
   ImGui::TextUnformatted("Hardware Acceleration");
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 60.f);
