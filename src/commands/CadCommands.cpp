@@ -33928,32 +33928,232 @@ std::string CadPipeRunPromptText(const AppCommandState& st) {
 
 namespace {
 
-/// Store the run built from the path so far and end the command.
+// --- Auto-fitting elbow insertion at bends (issue #486 increment B5 / REQ-345) -------------------
+
+/// Only 90/45-degree elbows exist in `CadPipePartType`'s own vocabulary — `kCadPipeFilletStandardAnglesDeg`
+/// also has 60/30/22.5/11.25, which have no elbow PART TYPE to search the catalog for at all. Those
+/// angles keep today's smooth fillet not because no catalog match was found for them, but because
+/// nothing is looked up in the first place.
+CadPipePartType ElbowPartTypeForSnappedAngleDeg(double snappedDeg) {
+  if (std::fabs(snappedDeg - 90.0) < 1e-6)
+    return CadPipePartType::Elbow90;
+  if (std::fabs(snappedDeg - 45.0) < 1e-6)
+    return CadPipePartType::Elbow45;
+  return CadPipePartType::None;
+}
+
+/// Which of \p def's two connections mates with the incoming leg ("near") vs the outgoing leg
+/// ("far"): a role-tagged Inlet/Outlet pair is used when present (the natural authoring convention
+/// for a through-run fitting), otherwise definition order. Both left null unless \p def has EXACTLY
+/// two connections — a part tagged elbow-90/-45 with any other port count cannot be auto-oriented.
+void PickElbowPorts(const CadBlockDefinition& def, const CadBlockConnection** near,
+                    const CadBlockConnection** far) {
+  *near = nullptr;
+  *far = nullptr;
+  if (def.connections.size() != 2)
+    return;
+  const CadBlockConnection* inlet = nullptr;
+  const CadBlockConnection* outlet = nullptr;
+  for (const CadBlockConnection& c : def.connections) {
+    if (c.role == CadBlockConnectionRole::Inlet && !inlet)
+      inlet = &c;
+    else if (c.role == CadBlockConnectionRole::Outlet && !outlet)
+      outlet = &c;
+  }
+  if (inlet && outlet) {
+    *near = inlet;
+    *far = outlet;
+  } else {
+    *near = &def.connections[0];
+    *far = &def.connections[1];
+  }
+}
+
+/// One planned elbow insertion, computed during a PLANNING pass over a PIPERUN draft before
+/// anything is committed — so a validation failure anywhere in the run can still refuse the whole
+/// thing without having partially inserted fittings.
+struct PlannedElbow {
+  std::string blockName;
+  CadBlockXform xf;
+  ray3d::Vec3 nearPoint;  ///< where the incoming pipe segment now ends (cut back from the corner)
+  ray3d::Vec3 farPoint;   ///< where the outgoing pipe segment now starts — read from the PLANNED
+                          ///< fitting's own far-port position, not independently re-derived, so the
+                          ///< elbow's real geometry (not an idealized guess) decides the far-side gap
+};
+
+/// Attempts to plan ONE bend's auto-fit: catalog lookup (\ref CadPipeCatalogFind may import a
+/// not-yet-imported library entry into \p st.blockDefs as a side effect — harmless and idempotent
+/// even if the overall run is later refused), port/engagement resolution, a cutback-fits-the-leg
+/// budget check, and two-port orientation. Returns false — falling back to a smooth bend, with the
+/// reason logged — for any reason; never creates a `CadBlockRef`, only plans one.
+bool TryPlanAutoFitBend(AppCommandState& st, CadPipePartType elbowType, const std::string& nominalSize,
+                        CadPipePressureClass pressureClass, const ray3d::Vec3& corner,
+                        const ray3d::Vec3& incomingDir, const ray3d::Vec3& outgoingDir,
+                        double availableIn, PlannedElbow* out, std::vector<std::string>& log) {
+  std::string blockName;
+  if (!CadPipeCatalogFind(st, elbowType, nominalSize, pressureClass, &blockName, log))
+    return false;  // CadPipeCatalogFind already logged why
+  const int di = CadBlockFindDef(st.blockDefs, blockName);
+  if (di < 0)
+    return false;
+  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockConnection* nearC = nullptr;
+  const CadBlockConnection* farC = nullptr;
+  PickElbowPorts(def, &nearC, &farC);
+  if (!nearC || !farC) {
+    log.push_back("PIPERUN - \"" + blockName +
+                  "\" needs exactly two connection ports to auto-insert; keeping a smooth bend here.");
+    return false;
+  }
+  const CadBlockConnectionMode* nearMode = CadBlockResolveMode(*nearC, CadConnectionModeTarget::PipeEnd);
+  const double cutA = nearMode ? nearMode->engagementLength : nearC->engagementLength;
+  if (cutA < 0.0 || cutA > 0.9 * availableIn) {
+    log.push_back("PIPERUN - \"" + blockName +
+                  "\"'s engagement length does not fit this leg; keeping a smooth bend here.");
+    return false;
+  }
+  const ray3d::Vec3 nearPoint = ray3d::Sub(corner, ray3d::Scale(incomingDir, cutA));
+
+  const ray3d::Vec3 aNear{nearC->nx, nearC->ny, nearC->nz};
+  const ray3d::Vec3 aFar{farC->nx, farC->ny, farC->nz};
+  CadBlockXform xf;
+  xf.sx = xf.sy = xf.sz = CadBlockInsertUnitsScale(st, def);
+  if (!CadBlockOrientTwoPortFitting(aNear, aFar, incomingDir, outgoingDir, &xf)) {
+    log.push_back("PIPERUN - \"" + blockName +
+                  "\"'s two connection ports are collinear; keeping a smooth bend here.");
+    return false;
+  }
+  float wx = 0.f, wy = 0.f, wz = 0.f;
+  CadBlockXformPoint(xf, nearC->x, nearC->y, nearC->z, &wx, &wy, &wz);
+  xf.x = static_cast<float>(nearPoint.x) - wx;
+  xf.y = static_cast<float>(nearPoint.y) - wy;
+  xf.z = static_cast<float>(nearPoint.z) - wz;
+
+  float fx = 0.f, fy = 0.f, fz = 0.f;
+  CadBlockXformPoint(xf, farC->x, farC->y, farC->z, &fx, &fy, &fz);
+
+  out->blockName = blockName;
+  out->xf = xf;
+  out->nearPoint = nearPoint;
+  out->farPoint = ray3d::Vec3{static_cast<double>(fx), static_cast<double>(fy), static_cast<double>(fz)};
+  return true;
+}
+
+/// Splits \p draftVerts into straight/smooth-filleted pieces plus planned elbow insertions at every
+/// qualifying bend. A bend with no catalog match, or that fails any check in `TryPlanAutoFitBend`,
+/// simply stays part of its piece's own path — `CadBuildPipeRunSweepPath` fillets it smoothly
+/// exactly as it always has. If nothing qualifies, `*pieces` ends up holding the ENTIRE original
+/// path as its one and only piece with `*elbows` empty — bit-identical to the pre-B5 single-run
+/// commit, so a drawing with no matching library parts is completely unaffected by this function
+/// existing.
+void PlanPipeRunAutoFittings(AppCommandState& st, const std::vector<double>& draftVerts,
+                             const std::string& nominalSize, CadPipePressureClass pressureClass,
+                             std::vector<std::vector<ray3d::Vec3>>* pieces,
+                             std::vector<PlannedElbow>* elbows, std::vector<std::string>& log) {
+  const size_t nVerts = draftVerts.size() / 3;
+  std::vector<ray3d::Vec3> v(nVerts);
+  for (size_t i = 0; i < nVerts; ++i)
+    v[i] = ray3d::Vec3{draftVerts[i * 3 + 0], draftVerts[i * 3 + 1], draftVerts[i * 3 + 2]};
+
+  pieces->clear();
+  elbows->clear();
+  pieces->push_back({v[0]});
+
+  for (size_t i = 1; i < nVerts; ++i) {
+    bool handled = false;
+    if (i + 1 < nVerts) {
+      std::vector<ray3d::Vec3>& cur = pieces->back();
+      const ray3d::Vec3 prevPt = cur.back();
+      const ray3d::Vec3 legIn = ray3d::Sub(v[i], prevPt);
+      const double availableIn = ray3d::Length(legIn);
+      const ray3d::Vec3 legOutRaw = ray3d::Sub(v[i + 1], v[i]);
+      if (availableIn > 1e-9 && ray3d::Length(legOutRaw) > 1e-9) {
+        const ray3d::Vec3 incomingDir = ray3d::Scale(legIn, 1.0 / availableIn);
+        const ray3d::Vec3 outgoingDir = ray3d::Normalize(legOutRaw);
+        const double cosA = std::clamp(ray3d::Dot(incomingDir, outgoingDir), -1.0, 1.0);
+        const double turnRad = std::acos(cosA);
+        if (turnRad >= cadpiperun_detail::kMinFilletTurnRad) {
+          const double snappedDeg = CadPipeSnapFilletAngleRad(turnRad) / cadpiperun_detail::kDegToRad;
+          const CadPipePartType elbowType = ElbowPartTypeForSnappedAngleDeg(snappedDeg);
+          if (elbowType != CadPipePartType::None) {
+            PlannedElbow planned;
+            if (TryPlanAutoFitBend(st, elbowType, nominalSize, pressureClass, v[i], incomingDir,
+                                   outgoingDir, availableIn, &planned, log)) {
+              cur.push_back(planned.nearPoint);
+              elbows->push_back(planned);
+              pieces->push_back({planned.farPoint});
+              handled = true;
+            }
+          }
+        }
+      }
+    }
+    if (!handled)
+      pieces->back().push_back(v[i]);
+  }
+}
+
+/// Store the run built from the path so far and end the command. Auto-inserts an elbow fitting
+/// (issue #486 increment B5) at every bend where a catalog match exists — see
+/// `PlanPipeRunAutoFittings` — splitting the single path into multiple straight/smooth-filleted
+/// `CadPipeRun` pieces around each inserted elbow; a run with no qualifying bend collapses back to
+/// exactly the pre-B5 single-run behavior.
 void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
   if (st.pipeRunDraftVerts.size() < 6) {  // fewer than 2 vertices
     log.push_back("PIPERUN - a run needs at least two points; Esc cancels.");
     return;
   }
-  CadPipeRun run;
-  run.vertsXyz = st.pipeRunDraftVerts;
-  run.nominalSize = st.pipeRunNominalSize;
-  run.pressureClassTag = st.pipeRunPressureClassTag;
-  // The size itself was already validated when it was set (below), but the swept solid can still
-  // refuse: a corner too tight for a 1.5x-nominal-size long-radius fillet (CadBuildPipeRunSolids's
-  // own doc comment) has no valid geometry to build, so this is a real, reachable failure — not
-  // belt-and-braces — and the run stays open so U/Esc can fix the offending corner.
-  std::vector<CadSolidPtr> preview;
-  if (!CadBuildPipeRunSolids(run, &preview)) {
-    log.push_back("PIPERUN - could not build a pipe solid — a corner may be too tight for this "
-                  "size's fillet radius. U to remove the last point, or Esc to cancel.");
-    return;
+
+  const CadPipePressureClass pressureClass = ParseCadPipePressureClass(st.pipeRunPressureClassTag);
+  std::vector<std::vector<ray3d::Vec3>> pieces;
+  std::vector<PlannedElbow> elbows;
+  PlanPipeRunAutoFittings(st, st.pipeRunDraftVerts, st.pipeRunNominalSize, pressureClass, &pieces,
+                          &elbows, log);
+
+  // Validate EVERY piece can build a valid swept solid before committing anything (all-or-nothing —
+  // the same guarantee the pre-B5 single-run commit gave). A planned elbow's catalog import may
+  // already have happened (harmless/idempotent) but no CadPipeRun or CadBlockRef exists yet.
+  std::vector<CadPipeRun> pieceRuns(pieces.size());
+  for (size_t p = 0; p < pieces.size(); ++p) {
+    CadPipeRun& run = pieceRuns[p];
+    run.vertsXyz.reserve(pieces[p].size() * 3);
+    for (const ray3d::Vec3& pt : pieces[p]) {
+      run.vertsXyz.push_back(pt.x);
+      run.vertsXyz.push_back(pt.y);
+      run.vertsXyz.push_back(pt.z);
+    }
+    run.nominalSize = st.pipeRunNominalSize;
+    run.pressureClassTag = st.pipeRunPressureClassTag;
+    // The size itself was already validated when it was set (below), but the swept solid can still
+    // refuse: a corner too tight for a 1.5x-nominal-size long-radius fillet (CadBuildPipeRunSolids's
+    // own doc comment) has no valid geometry to build, so this is a real, reachable failure — not
+    // belt-and-braces — and the run stays open so U/Esc can fix the offending corner.
+    std::vector<CadSolidPtr> preview;
+    if (!CadBuildPipeRunSolids(run, &preview)) {
+      log.push_back("PIPERUN - could not build a pipe solid — a corner may be too tight for this "
+                    "size's fillet radius. U to remove the last point, or Esc to cancel.");
+      return;
+    }
   }
+
   PushUndoSnapshot(st, "Create Pipe Run");
-  const size_t nVerts = run.vertsXyz.size() / 3;
-  st.cadPipeRuns.push_back(std::move(run));
-  st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+  size_t elbowIx = 0;
+  size_t totalVerts = 0;
+  for (size_t p = 0; p < pieceRuns.size(); ++p) {
+    totalVerts += pieceRuns[p].vertsXyz.size() / 3;
+    st.cadPipeRuns.push_back(std::move(pieceRuns[p]));
+    st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+    if (elbowIx < elbows.size()) {
+      const PlannedElbow& e = elbows[elbowIx++];
+      CadBlockPlaceInsertNoUndo(st, e.blockName, e.xf, log);
+    }
+  }
   BumpCadGpuCache(st);
-  log.push_back("PIPERUN - run created: " + std::to_string(nVerts) + " point(s).");
+  if (elbows.empty())
+    log.push_back("PIPERUN - run created: " + std::to_string(totalVerts) + " point(s).");
+  else
+    log.push_back("PIPERUN - run created: " + std::to_string(pieceRuns.size()) + " segment(s), " +
+                  std::to_string(elbows.size()) + " elbow fitting(s) inserted.");
   CancelPipeRunCommand(st);
   st.active = AppCommandState::Kind::None;
 }
