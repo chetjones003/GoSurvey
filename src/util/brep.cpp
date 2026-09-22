@@ -17108,7 +17108,18 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     const Face& f = s.faces[fi];
     mb.face = static_cast<int>(fi);
     const Surface& sf = f.surface;
-    if (!f.paramLoops.empty()) {
+    // TASK-272 §9: a real imported solid (ACIS/DWG conversion) sets `paramLoops` on EVERY face, not
+    // just the general-trim cases ADR-052 introduced it for — which used to route every such face
+    // through `TessellateGeneralLoopFace` unconditionally, before it ever reached the bridge+EarClip
+    // fix below. That fix works just as well from `paramLoops`' own 2D points (a Plane's param-loop
+    // IS already its own (u, v) = plane-local 2D polygon, and using it AS-IS — not resampling it via
+    // `SegmentsForEdge`/`EdgePointAt` — keeps this face's boundary bit-identical to whatever a
+    // neighbouring face's paramLoops-derived boundary already agrees it should be, since an importer
+    // that populates paramLoops populates it consistently for both sides of a shared edge). So a
+    // Plane face with a hole is exempted from the early exit below and still gets the exact
+    // triangulation; every OTHER paramLoops face (no holes, or curved) is unaffected by this task.
+    const bool planeWithHoles = sf.kind == SurfaceKind::Plane && f.loops.size() > 1;
+    if (!f.paramLoops.empty() && !planeWithHoles) {
       // A general trim loop (ADR-052, issue #306) overrides the rectangle-span grid below for
       // every `SurfaceKind` — issue #308's counterpart to issue #307's numeric-integral branch.
       TessellateGeneralLoopFace(f, chordTolerance, &mb);
@@ -17138,16 +17149,32 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         // polygon `EarClip` refuses), fall back to the always-available `TessellateGeneralLoopFace`
         // band grid below — worse (the pinch crack this fix targets), but never worse than not
         // rendering the face at all, which is the one regression this must never reintroduce.
+        // TASK-272 §9: when this face came from a general-trim-loop import, `paramLoops` already
+        // carries the outer/hole boundaries as plane-local 2D points — for a Plane, that IS the same
+        // 2D space `WorldToPlane`/`PlaneToWorld` use (see `TessellateGeneralLoopFace`'s own
+        // `pushVertex`, which treats a param-loop point's (u, v) as literal plane-local coordinates).
+        // Use those points AS-IS instead of resampling from `s.edges` — an importer that populates
+        // `paramLoops` does so consistently for every face that shares a boundary, so using its exact
+        // points (not re-deriving new ones) is what keeps this face's boundary bit-identical to a
+        // neighbour's, the same "derive-from-the-authoritative-source, don't resample" principle as
+        // the edge-based path below uses when there is no param loop to read.
+        const bool useParamLoops = !f.paramLoops.empty() && f.paramLoops.size() == f.loops.size();
         bool bridgedOk = true;
         const char* failReason = "";
         std::vector<ucs::Point2D> outer2;
-        for (const EdgeUse& u : f.loops[0].uses) {
-          const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
-          const int segs = segsForEdge(u.edge, e);
-          for (int i = 0; i < segs; ++i) {
-            const double t = static_cast<double>(i) / static_cast<double>(segs);
-            const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
-            outer2.push_back(ucs::WorldToPlane(sf.frame, p));
+        if (useParamLoops) {
+          outer2.reserve(f.paramLoops[0].size());
+          for (const curveisect::Vec2& p : f.paramLoops[0])
+            outer2.push_back(ucs::Point2D{p.x, p.y});
+        } else {
+          for (const EdgeUse& u : f.loops[0].uses) {
+            const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+            const int segs = segsForEdge(u.edge, e);
+            for (int i = 0; i < segs; ++i) {
+              const double t = static_cast<double>(i) / static_cast<double>(segs);
+              const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+              outer2.push_back(ucs::WorldToPlane(sf.frame, p));
+            }
           }
         }
         if (outer2.size() < 3) {
@@ -17163,13 +17190,19 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
           }
           for (std::size_t li = 1; bridgedOk && li < f.loops.size(); ++li) {
             std::vector<ucs::Point2D> hole2;
-            for (const EdgeUse& u : f.loops[li].uses) {
-              const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
-              const int segs = segsForEdge(u.edge, e);
-              for (int i = 0; i < segs; ++i) {
-                const double t = static_cast<double>(i) / static_cast<double>(segs);
-                const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
-                hole2.push_back(ucs::WorldToPlane(sf.frame, p));
+            if (useParamLoops) {
+              hole2.reserve(f.paramLoops[li].size());
+              for (const curveisect::Vec2& p : f.paramLoops[li])
+                hole2.push_back(ucs::Point2D{p.x, p.y});
+            } else {
+              for (const EdgeUse& u : f.loops[li].uses) {
+                const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+                const int segs = segsForEdge(u.edge, e);
+                for (int i = 0; i < segs; ++i) {
+                  const double t = static_cast<double>(i) / static_cast<double>(segs);
+                  const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+                  hole2.push_back(ucs::WorldToPlane(sf.frame, p));
+                }
               }
             }
             if (hole2.size() < 3)

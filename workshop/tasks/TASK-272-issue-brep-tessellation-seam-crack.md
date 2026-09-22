@@ -1,10 +1,16 @@
 # TASK-272 — B-rep tessellation seam crack: torn bolt holes / curved-face joins
 
 - Type:    bug
-- Status:  **Originally reported bug (torn bolt holes / flange-plate holes): RESOLVED and
-  verified on the user's actual reported file.** A second, separate crack (§5, the NURBS
-  loft/sweep transition-piece boundary) is now **RESOLVED** too (see §5.5). One more, unrelated
-  crack remains OPEN — a plain cone's apex crack (§6, unconfirmed root cause, lower priority).
+- Status:  **REOPENED 2026-09-22 (same day) — §1 and §5's fixes are real but do not apply to real
+  imported files.** Every face on a real ACIS/DWG-imported solid has `f.paramLoops` set (confirmed
+  on `samples/CJ_4in_WELD_NECK_FLANGE.sat`, the actual real-world file class this bug was reported
+  against), which routes it through `TessellateGeneralLoopFace` — the pre-existing band tessellator
+  — via an early `continue` in `Tessellate()`, BEFORE the `switch(sf.kind)` block that contains both
+  the §1 bridging fix and the §5 NURBS boundary fix. Neither fix's code ever runs on such a file.
+  Direct measurement: the real flange SAT import is **2560 of 5048 edges cracked (>50%)**, across
+  ALL 16 faces, including plain hole-free cylinder walls. See §9 (new) — this is the actual bug the
+  user is still seeing; §1/§5 remain true fixes for the code paths they touch (synthetic
+  `brep::Face` fixtures with empty `paramLoops`), just not for the paramLoops path real imports use.
 - Opened:  2026-09-22
 - Owner:   Claude (chetjones003@gmail.com)
 
@@ -316,6 +322,107 @@ likely be needed again to confirm any NURBS fix on the real file.
 convert the permanent ones into documented, intentional features (the `EarClip` escalation retry
 is worth keeping either way; the file-logging diagnostics are not — they write to a hardcoded
 `C:/temp` path unconditionally and should not ship).
+
+## 9. OPEN, HIGH PRIORITY — the general-trim-loop (`paramLoops`) path is the real bug for imports
+
+**This is almost certainly what the user is actually seeing.** Discovered 2026-09-22, same day as
+§1/§5's (incorrect, as it turns out) "RESOLVED" claims — those claims were only verified against
+hand-built `brep::Face` fixtures with `paramLoops` empty. A real imported file does not take that
+shape.
+
+### 9.1 Evidence
+
+Added a direct `RequireMeshWatertight`-equivalent check to
+`tests/AcisSatParserTests.cpp`'s existing real-file test (`"ACIS SAT import: a real Civil 3D flange
+(.sat, ACISOUT) imports as a valid solid"`, `[acissat][issue473]`, using
+`samples/CJ_4in_WELD_NECK_FLANGE.sat` — a real ACISOUT export of a 4" weld-neck flange, the same
+real-world file class the original bug report came from). Result:
+
+```
+cracked (non-manifold) triangle edges: 2560 of 5048 by face: face0=32 face1=32 face2=32 face3=32
+face4=32 face5=32 face6=32 face7=32 face8=32 face9=128 face10=94 face11=646 face12=128 face13=654
+face14=110 face15=512
+```
+
+Over half the mesh is cracked, on every single face — including plain single-loop Cylinder walls
+with no holes (face0–8, 32 edges each). The file-based diagnostic (§7.2) confirms why: **every
+face** on this import has `paramLoops` populated (`loops=N paramLoops=N` for all 16 faces, ADR-052
+general trim loops), which hits this unconditional early exit in `Tessellate()`
+(`src/util/brep.cpp`, right after the per-face loop begins):
+
+```cpp
+if (!f.paramLoops.empty()) {
+  TessellateGeneralLoopFace(f, chordTolerance, &mb);
+  continue;
+}
+```
+
+This runs for EVERY face on such an import, before the `switch (sf.kind)` block — so neither §1's
+bridge+EarClip fix (which lives inside `case SurfaceKind::Plane` for `f.loops.size() > 1`) nor §5's
+NURBS edge-exact boundary fix (inside `case SurfaceKind::Nurbs`) ever executes. Both fixes are real
+and both regression-test suites for them are green, but they are dead code as far as a real
+imported file is concerned.
+
+### 9.2 What needs to happen
+
+`TessellateGeneralLoopFace` itself needs the same treatment §1 gave the `paramLoops`-empty planar
+case, generalized to work from a face's `paramLoops` 2D polygons directly instead of re-walking
+`s.edges` (a general trim loop's whole point, per ADR-052, is that the 3D boundary curve is already
+reduced to 2D polyline vertices — no `Edge` walk needed, which also sidesteps needing an edge index
+to key a shared-resolution map by, unlike §5's fix). Concretely, for a **Plane** surface with
+`paramLoops`: the outer+hole loops are already 2D polygons in the surface's own plane parametrization
+(`curveisect::Vec2`, index-aligned with `f.loops`) — these can go straight into
+`BridgeHoleIntoOuter` + `EarClip` (§1's kernel) without needing to re-derive them from edges at all,
+which should fix face10/11/13/14 (the Plane, paramLoops-bearing faces) outright. The **cracked
+single-loop Cylinder faces with no holes at all** (face0–8, 32 each) are a DIFFERENT, more basic bug
+inside `TessellateGeneralLoopFace`'s own band decomposition — not a holes/bridging problem, since
+there's no second loop — needs its own root-cause pass (start with the same `triFace`-tagged
+crack-location + `EdgePointAt`-vs-band-sample comparison technique that found §1's real root cause,
+per §2's note on skipping straight to data instead of guessing).
+
+### 9.2b Partial fix applied (holes only — curved-face walls still crack)
+
+Exempted `Plane` faces with `f.loops.size() > 1` (holes) from the unconditional `paramLoops` early
+exit, and fed the bridge+EarClip kernel from `f.paramLoops` directly (as literal plane-local 2D
+points — same space `WorldToPlane`/`PlaneToWorld` use, confirmed via
+`TessellateGeneralLoopFace`'s own `pushVertex`) instead of resampling from `s.edges`. This is a
+real, measured improvement on the real flange file (`[issue473]`, `samples/CJ_4in_WELD_NECK_FLANGE.sat`):
+
+```
+before: cracked=2560 of 5048 edges, by face: face0=32 ... face9=128 face10=94 face11=646
+        face12=128 face13=654 face14=110 face15=512
+after:  cracked=1728 of 3696 edges, by face: face0=32 ... face9=128 face10=32 face11=320
+        face12=128 face13=320 face14=32 face15=512
+```
+
+Every Plane face's hole-driven crack count dropped sharply (face10 94→32, face11 646→320, face13
+654→320, face14 110→32) — the bolt-hole/bore rims specifically, which is almost certainly what was
+most visible in the user's screenshot. **But this is NOT a full fix.** ~1728 edges are still
+cracked, on EVERY face including the ones that dropped, and the residual pattern (a near-uniform
+`32` on most faces, `128`/`512` on the two biggest curved ones) looks like a DIFFERENT, still-open
+bug: a Plane cap's outer rim (now sampled exactly from `paramLoops`) no longer matches its
+neighbouring Cylinder/Cone wall's OWN independent `paramLoops`-driven band resampling — Cylinder/
+Cone faces are untouched by this fix and still route through `TessellateGeneralLoopFace`'s scanline
+bands, which resample the shared boundary at their own internal resolution rather than reading
+`paramLoops` points directly. Full `[brep]`/full suite re-run: no regressions (same single §6
+cone-apex failure as before, 188/189 and 1212/1213 respectively).
+
+**Next step for whoever picks this up:** the same fix needs to reach `TessellateGeneralLoopFace`
+itself for curved (Cylinder/Cone/Sphere/Torus/Nurbs) `paramLoops` faces — likely by having its band
+rows read boundary POSITIONS directly from `paramLoops` (not just use them for inside/outside
+scanline classification, which is all they are used for today per the `Face::paramLoops` docs) at
+least at each band's v0/v1 edge, mirroring this same "authoritative source, not resampled" fix.
+This is materially harder than the Plane case: a curved face's `paramLoops` point does not
+trivially map back to a single point (it needs `LocalSurfaceDerivs`/`SurfacePointAt`, and unlike a
+Plane, u is not simply x), and a band boundary can be shared between TWO curved faces whose own
+`paramLoops` may have been independently resampled by the importer at different point counts.
+
+### 9.3 Do not repeat this mistake
+
+Before marking ANY brep tessellation fix "RESOLVED" in this task again: verify it against
+`[issue473]` (or another real imported-file fixture) with a watertightness assertion, not only
+against hand-built `brep::Face` fixtures. A hand-built fixture with `paramLoops` left empty tests a
+code path a real import does not take.
 
 ## 8. SPEC GAP candidate (applies across §1, §5, §6)
 
