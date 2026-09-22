@@ -13481,6 +13481,11 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     return;
   }
 
+  if (st.active == K::PipeSplit) {
+    SubmitPipeSplitViewportPick(st, static_cast<float>(wx), static_cast<float>(wy), log);
+    return;
+  }
+
   if (st.active == K::Circle) {
     switch (st.circlePhase) {
     case AppCommandState::CirclePhase::WaitCenterOrMode:
@@ -35047,6 +35052,280 @@ bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::v
   return true;
 }
 
+// ---------------------------------------------------------------------------------------------
+// PIPESPLIT / PIPEJOIN / PIPEPROP (issue #486 increment B8 / REQ-345) — the rest of Track B's
+// named edit operations: a plain split (no fitting — PIPEFIT's own splice covers the WITH-a-part
+// case), merging two runs back into one, and changing size/class on already-routed runs.
+//
+// **Deliberately out of scope, by name, recorded here rather than re-litigated at each site**:
+// grip-editing a single vertex in the viewport (the existing "CAD ENTITY GRIPS" system —
+// `AppCommandState::entityGripType` and friends — is 2D-only, local-X/Y storage with no Z field
+// anywhere in its drag state; giving a `CadPipeRun` vertex a live 3D drag, including what happens
+// to any fitting already spliced onto that vertex's segment, is its own substantial increment, not
+// a corner of this one) and "replace fitting" (which existing `CadBlockRef` counts as "the"
+// fitting on a run is not well-defined without picking it explicitly, and DELETE + PIPEFIT +
+// PIPEJOIN already cover the same end result: remove the old block, PIPEJOIN the two pipe pieces
+// it used to sit between back into one run, PIPEFIT the replacement part back in).
+// ---------------------------------------------------------------------------------------------
+
+void StartPipeSplitCommand(AppCommandState& st, std::vector<std::string>& log) {
+  const std::vector<int> picked = SelectedPipeRunIndices(st);
+  if (picked.size() != 1) {
+    log.push_back("PIPESPLIT - select exactly one pipe run first.");
+    return;
+  }
+  st.pipeSplitRunIndex = picked[0];
+  st.active = AppCommandState::Kind::PipeSplit;
+  log.push_back("PIPESPLIT - pick a point on the selected run, or ESC to cancel.");
+}
+
+namespace {
+
+/// Splits `st.cadPipeRuns[runIdx]` at the point of the run nearest \p pick — no fitting, no
+/// engagement cutback, the pieces meet exactly at the projected station. Shares `NearestPointOn
+/// PipeRun` with `TrySplicePipeFit`; unlike that function there is no catalog part, so orientation
+/// and port resolution simply do not apply here.
+bool TrySplitPipeRun(AppCommandState& st, int runIdx, const ray3d::Vec3& pick, std::vector<std::string>& log) {
+  if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.cadPipeRuns.size())
+    return false;
+  const CadPipeRun& run = st.cadPipeRuns[static_cast<size_t>(runIdx)];
+  size_t segIx = 0;
+  ray3d::Vec3 station;
+  if (!NearestPointOnPipeRun(run, pick, &segIx, &station)) {
+    log.push_back("PIPESPLIT - the selected run no longer has a valid path.");
+    return false;
+  }
+
+  CadPipeRun piece1;
+  piece1.nominalSize = run.nominalSize;
+  piece1.pressureClassTag = run.pressureClassTag;
+  for (size_t i = 0; i <= segIx; ++i) {
+    piece1.vertsXyz.push_back(run.vertsXyz[i * 3 + 0]);
+    piece1.vertsXyz.push_back(run.vertsXyz[i * 3 + 1]);
+    piece1.vertsXyz.push_back(run.vertsXyz[i * 3 + 2]);
+  }
+  piece1.vertsXyz.push_back(station.x);
+  piece1.vertsXyz.push_back(station.y);
+  piece1.vertsXyz.push_back(station.z);
+
+  CadPipeRun piece2;
+  piece2.nominalSize = run.nominalSize;
+  piece2.pressureClassTag = run.pressureClassTag;
+  piece2.vertsXyz.push_back(station.x);
+  piece2.vertsXyz.push_back(station.y);
+  piece2.vertsXyz.push_back(station.z);
+  const size_t nVerts = run.vertsXyz.size() / 3;
+  for (size_t i = segIx + 1; i < nVerts; ++i) {
+    piece2.vertsXyz.push_back(run.vertsXyz[i * 3 + 0]);
+    piece2.vertsXyz.push_back(run.vertsXyz[i * 3 + 1]);
+    piece2.vertsXyz.push_back(run.vertsXyz[i * 3 + 2]);
+  }
+
+  std::vector<CadSolidPtr> preview;
+  if (!CadBuildPipeRunSolids(piece1, &preview) || !CadBuildPipeRunSolids(piece2, &preview)) {
+    log.push_back("PIPESPLIT - could not build a pipe solid for one of the resulting pieces here.");
+    return false;
+  }
+
+  PushUndoSnapshot(st, "Split Pipe Run");
+  st.cadPipeRuns[static_cast<size_t>(runIdx)] = std::move(piece1);
+  st.cadPipeRuns.push_back(std::move(piece2));
+  st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+  const int piece2Idx = static_cast<int>(st.cadPipeRuns.size()) - 1;
+  for (CadPipingSystem& sys : st.cadPipingSystems) {
+    if (std::find(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end(), runIdx) !=
+        sys.pipeRunIndices.end()) {
+      sys.pipeRunIndices.push_back(piece2Idx);
+      std::sort(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end());
+    }
+  }
+  BumpCadGpuCache(st);
+  log.push_back("PIPESPLIT - run split into 2 pieces.");
+  return true;
+}
+
+} // namespace
+
+void SubmitPipeSplitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st)};
+  TrySplitPipeRun(st, st.pipeSplitRunIndex, pt, log);
+  st.pipeSplitRunIndex = -1;
+  st.active = AppCommandState::Kind::None;
+}
+
+bool HandlePipeSplitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
+  ray3d::Vec3 pt{};
+  if (!ParseSolidBasePoint(st, line, &pt, log, "PIPESPLIT"))
+    return true;
+  TrySplitPipeRun(st, st.pipeSplitRunIndex, pt, log);
+  st.pipeSplitRunIndex = -1;
+  st.active = AppCommandState::Kind::None;
+  return true;
+}
+
+namespace {
+
+/// Erases `cadPipeRuns[idx]` and reindexes every `CadPipingSystem` reference above it — the exact
+/// same shape `ExecuteDeleteSelection` already uses for a pipe-run erase, pulled out here so
+/// `HandlePipeJoinCommand` does not have to duplicate it for the one run a merge consumes.
+void EraseOnePipeRunReindexed(AppCommandState& st, int idx) {
+  st.cadPipeRuns.erase(st.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
+  if (static_cast<size_t>(idx) < st.cadPipeRunAttrs.size())
+    st.cadPipeRunAttrs.erase(st.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  for (CadPipingSystem& sys : st.cadPipingSystems) {
+    auto& runs = sys.pipeRunIndices;
+    runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
+    for (int& ri : runs) {
+      if (ri > idx)
+        --ri;
+    }
+  }
+}
+
+} // namespace
+
+void HandlePipeJoinCommand(AppCommandState& st, std::vector<std::string>& log) {
+  const std::vector<int> picked = SelectedPipeRunIndices(st);
+  if (picked.size() != 2) {
+    log.push_back("PIPEJOIN - select exactly two pipe runs first.");
+    return;
+  }
+  const CadPipeRun& ra = st.cadPipeRuns[static_cast<size_t>(picked[0])];
+  const CadPipeRun& rb = st.cadPipeRuns[static_cast<size_t>(picked[1])];
+  if (ra.nominalSize != rb.nominalSize || ra.pressureClassTag != rb.pressureClassTag) {
+    log.push_back("PIPEJOIN - the two runs must share the same nominal size and pressure class.");
+    return;
+  }
+  const size_t na = ra.vertsXyz.size() / 3;
+  const size_t nb = rb.vertsXyz.size() / 3;
+  if (na < 2 || nb < 2) {
+    log.push_back("PIPEJOIN - one of the selected runs has no valid path.");
+    return;
+  }
+  const ray3d::Vec3 aStart{ra.vertsXyz[0], ra.vertsXyz[1], ra.vertsXyz[2]};
+  const ray3d::Vec3 aEnd{ra.vertsXyz[(na - 1) * 3 + 0], ra.vertsXyz[(na - 1) * 3 + 1],
+                         ra.vertsXyz[(na - 1) * 3 + 2]};
+  const ray3d::Vec3 bStart{rb.vertsXyz[0], rb.vertsXyz[1], rb.vertsXyz[2]};
+  const ray3d::Vec3 bEnd{rb.vertsXyz[(nb - 1) * 3 + 0], rb.vertsXyz[(nb - 1) * 3 + 1],
+                         rb.vertsXyz[(nb - 1) * 3 + 2]};
+  constexpr double kEps = 1e-6;
+  const bool endStart = ray3d::Length(ray3d::Sub(aEnd, bStart)) < kEps;   // A end -> B start
+  const bool endEnd = ray3d::Length(ray3d::Sub(aEnd, bEnd)) < kEps;       // A end -> B end
+  const bool startStart = ray3d::Length(ray3d::Sub(aStart, bStart)) < kEps;  // A start -> B start
+  const bool startEnd = ray3d::Length(ray3d::Sub(aStart, bEnd)) < kEps;   // A start -> B end
+  const int matchCount = (endStart ? 1 : 0) + (endEnd ? 1 : 0) + (startStart ? 1 : 0) + (startEnd ? 1 : 0);
+  if (matchCount != 1) {
+    log.push_back("PIPEJOIN - the two runs must share EXACTLY one coincident endpoint.");
+    return;
+  }
+
+  std::vector<double> merged;
+  merged.reserve(ra.vertsXyz.size() + rb.vertsXyz.size());
+  const auto appendVerts = [&merged](const std::vector<double>& v, bool reversed, bool skipFirst) {
+    const size_t n = v.size() / 3;
+    for (size_t k = 0; k < n; ++k) {
+      const size_t i = reversed ? (n - 1 - k) : k;
+      if (skipFirst && k == 0)
+        continue;
+      merged.push_back(v[i * 3 + 0]);
+      merged.push_back(v[i * 3 + 1]);
+      merged.push_back(v[i * 3 + 2]);
+    }
+  };
+  if (endStart) {
+    appendVerts(ra.vertsXyz, /*reversed=*/false, /*skipFirst=*/false);
+    appendVerts(rb.vertsXyz, /*reversed=*/false, /*skipFirst=*/true);
+  } else if (endEnd) {
+    appendVerts(ra.vertsXyz, /*reversed=*/false, /*skipFirst=*/false);
+    appendVerts(rb.vertsXyz, /*reversed=*/true, /*skipFirst=*/true);
+  } else if (startStart) {
+    appendVerts(ra.vertsXyz, /*reversed=*/true, /*skipFirst=*/false);
+    appendVerts(rb.vertsXyz, /*reversed=*/false, /*skipFirst=*/true);
+  } else {  // startEnd
+    appendVerts(rb.vertsXyz, /*reversed=*/false, /*skipFirst=*/false);
+    appendVerts(ra.vertsXyz, /*reversed=*/false, /*skipFirst=*/true);
+  }
+
+  CadPipeRun mergedRun;
+  mergedRun.vertsXyz = merged;
+  mergedRun.nominalSize = ra.nominalSize;
+  mergedRun.pressureClassTag = ra.pressureClassTag;
+  std::vector<CadSolidPtr> preview;
+  if (!CadBuildPipeRunSolids(mergedRun, &preview)) {
+    log.push_back("PIPEJOIN - could not build a pipe solid for the merged run — the new joint may "
+                  "be too tight for this size's fillet radius.");
+    return;
+  }
+
+  // The lower index survives (keeps whatever network membership/selection it already had); the
+  // higher index is erased and reindexed — the same "near piece stays put" precedent PIPEFIT and
+  // PIPESPLIT both established for their own surviving index.
+  const int keepIdx = std::min(picked[0], picked[1]);
+  const int dropIdx = std::max(picked[0], picked[1]);
+  PushUndoSnapshot(st, "Join Pipe Runs");
+  st.cadPipeRuns[static_cast<size_t>(keepIdx)] = std::move(mergedRun);
+  EraseOnePipeRunReindexed(st, dropIdx);
+  st.selection.clear();
+  BumpCadGpuCache(st);
+  log.push_back("PIPEJOIN - runs merged into one.");
+}
+
+void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log) {
+  const std::vector<int> picked = SelectedPipeRunIndices(st);
+  if (picked.empty()) {
+    log.push_back("PIPEPROP - select one or more pipe runs first.");
+    return;
+  }
+  std::istringstream iss(args);
+  std::string sizeTok, classTok;
+  iss >> sizeTok >> classTok;
+  double odFeet = 0.0;
+  if (!CadPipeNominalOdFeet(sizeTok, &odFeet)) {
+    log.push_back("PIPEPROP - unknown nominal size \"" + sizeTok +
+                  "\". Known NPS sizes: 0.5in, 0.75in, 1in, 1.25in, 1.5in, 2in, 2.5in, 3in, 4in, "
+                  "6in, 8in, 10in, 12in.");
+    return;
+  }
+  std::string classTag;
+  if (!classTok.empty()) {
+    const CadPipePressureClass pc = ParseCadPipePressureClass(classTok);
+    if (pc == CadPipePressureClass::None) {
+      log.push_back("PIPEPROP - unknown pressure class \"" + classTok + "\". Use CS150 or CS300.");
+      return;
+    }
+    classTag = std::string(CadPipePressureClassTag(pc));
+  }
+
+  // Refit-or-refuse (REQ-201) applies PER RUN, not to the whole selection: these are independent
+  // existing entities, not pieces of one atomic commit the way a single PIPERUN/PIPEFIT/PIPESPLIT
+  // is, so one run whose new size no longer fits an existing tight corner should not block the
+  // others in the same selection from resizing.
+  int changed = 0, refused = 0;
+  PushUndoSnapshot(st, "Change Pipe Properties");
+  for (int idx : picked) {
+    CadPipeRun candidate = st.cadPipeRuns[static_cast<size_t>(idx)];
+    candidate.nominalSize = sizeTok;
+    candidate.pressureClassTag = classTag;
+    std::vector<CadSolidPtr> preview;
+    if (!CadBuildPipeRunSolids(candidate, &preview)) {
+      ++refused;
+      continue;
+    }
+    st.cadPipeRuns[static_cast<size_t>(idx)] = std::move(candidate);
+    ++changed;
+  }
+  BumpCadGpuCache(st);
+  if (changed == 0) {
+    log.push_back("PIPEPROP - no run could be resized to " + sizeTok + (classTag.empty() ? "" : " " + classTag) +
+                  " — the new size does not fit an existing corner's fillet radius.");
+  } else if (refused == 0) {
+    log.push_back("PIPEPROP - " + std::to_string(changed) + " run(s) updated.");
+  } else {
+    log.push_back("PIPEPROP - " + std::to_string(changed) + " run(s) updated, " + std::to_string(refused) +
+                  " refused (new size does not fit an existing corner's fillet radius).");
+  }
+}
+
 namespace {
 
 /// Append the straight run \p from -> \p to, in \p frame's plane, refusing a point off that plane.
@@ -36692,6 +36971,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.pipeFitRunIndex = -1;
     st.pipeFitPartType = CadPipePartType::None;
   }
+  else if (st.active == AppCommandState::Kind::PipeSplit) {
+    log.push_back("PIPESPLIT canceled.");
+    st.pipeSplitRunIndex = -1;
+  }
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
   else if (st.active == AppCommandState::Kind::FeatureLine)
@@ -37914,6 +38197,24 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       std::string partTypeTok;
       issIdle >> partTypeTok;
       StartPipeFitCommand(st, partTypeTok, log);
+      return;
+    }
+    // PIPESPLIT/PIPEJOIN/PIPEPROP (issue #486 increment B8 / REQ-345): the rest of Track B's edit
+    // operations. PIPESPLIT is prompted (one point left to pick, PIPEFIT's own shape minus the
+    // part-type argument); PIPEJOIN and PIPEPROP act immediately on the current selection, the same
+    // "no state machine, selection is already the input" shape PIPESYS established.
+    if (plotTok == "pipesplit" || plotTok == "psplit") {
+      StartPipeSplitCommand(st, log);
+      return;
+    }
+    if (plotTok == "pipejoin" || plotTok == "pjoin") {
+      HandlePipeJoinCommand(st, log);
+      return;
+    }
+    if (plotTok == "pipeprop" || plotTok == "pprop") {
+      std::string restOfLine;
+      std::getline(issIdle, restOfLine);
+      HandlePipePropCommand(restOfLine, st, log);
       return;
     }
     if (plotTok == "isolines") {
@@ -39733,6 +40034,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandlePipeFitTextInput(line, st, log))
       return;
     log.push_back("PIPEFIT - pick a point on the run, or type X,Y,Z. ESC to cancel.");
+    return;
+  }
+
+  // PIPESPLIT (issue #486 increment B8 / REQ-345): a single typed X,Y,Z station point.
+  if (st.active == AppCommandState::Kind::PipeSplit) {
+    if (HandlePipeSplitTextInput(line, st, log))
+      return;
+    log.push_back("PIPESPLIT - pick a point on the run, or type X,Y,Z. ESC to cancel.");
     return;
   }
 

@@ -1693,6 +1693,10 @@ struct AppCommandState {
     /// type and target run are both fixed by the time the command starts (`StartPipeFitCommand`),
     /// so all that remains is a single point pick.
     PipeFit,
+    /// PIPESPLIT (issue #486 increment B8 / REQ-345): split an already-routed run at a station
+    /// point, no fitting inserted — `PIPEFIT`'s own splice, minus the catalog lookup and block
+    /// placement. Its own `Kind` for the same one-pick-left reason `PipeFit` has one.
+    PipeSplit,
     /// EXTRACTCENTERLINE (REQ-347, GitHub issue #538): hover over a point cloud to preview a
     /// least-squares cylinder-axis fit of the nearby points, click to commit it as a LINE. One
     /// phase — no select-objects step, no typed parameters — closer in shape to `Kind::Pan`'s
@@ -1776,6 +1780,7 @@ struct AppCommandState {
     case Kind::BlockFitting:       return "BLOCKFITTING";
     case Kind::PipeRun:            return "PIPERUN";
     case Kind::PipeFit:            return "PIPEFIT";
+    case Kind::PipeSplit:          return "PIPESPLIT";
     case Kind::ExtractCenterline:  return "EXTRACTCENTERLINE";
     default:                  return "";
     }
@@ -2646,6 +2651,12 @@ struct AppCommandState {
   int pipeFitRunIndex = -1;
   /// The catalog part type to splice in (e.g. Valve, Flange, Reducer), fixed at start time too.
   CadPipePartType pipeFitPartType = CadPipePartType::None;
+
+  // --- PIPESPLIT: split an existing run at a station, no fitting inserted (issue #486 inc B8) ----
+
+  /// Same fixed-at-start convention as `pipeFitRunIndex` — set by `StartPipeSplitCommand` from the
+  /// caller's own single-pipe-run selection, never re-resolved from `st.selection` mid-command.
+  int pipeSplitRunIndex = -1;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -5419,6 +5430,23 @@ void StartPipeFitCommand(AppCommandState& st, const std::string& partTypeTok, st
 void SubmitPipeFitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 /// Handle one typed line as a station point (`X,Y,Z`). \return false if not consumed.
 bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+
+// --- PIPESPLIT / PIPEJOIN / PIPEPROP (issue #486 increment B8 / REQ-345) --------------------------
+/// Open PIPESPLIT: requires exactly one `CadPipeRun` selected; refuses immediately otherwise.
+void StartPipeSplitCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Handle a viewport click: the station point to split at. Always ends the command.
+void SubmitPipeSplitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Handle one typed line as a station point (`X,Y,Z`). \return false if not consumed.
+bool HandlePipeSplitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+/// Merge the two selected `CadPipeRun`s into one — they must share the same nominal size and
+/// pressure class and have exactly one coincident endpoint between them. One-shot, no `Kind` state
+/// machine (nothing left to pick once the selection is already made), the same shape `PIPESYS`
+/// itself uses.
+void HandlePipeJoinCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Change nominal size (+ optional pressure class) on every selected `CadPipeRun`, refusing (not
+/// applying anyway) any run whose resulting solid would fail to build — REQ-201's "refuse rather
+/// than guess," applied per run so one bad candidate does not block the rest of the selection.
+void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
 
 // --- PIPESYS (issue #486 increment B3 / REQ-345) --------------------------------------------------
 /// One-shot text dispatch for every PIPESYS subverb (NEW/ADD/REMOVE/RENAME/DELETE/LIST — a bare or

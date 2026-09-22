@@ -1027,6 +1027,195 @@ TEST_CASE("PIPEFIT projects an off-centerline pick onto the nearest point of the
   CHECK(st.cadPipeRuns[0].vertsXyz[4] == Catch::Approx(0.0));
 }
 
+// --- PIPESPLIT / PIPEJOIN / PIPEPROP (issue #486 increment B8, REQ-345) ---------------------------
+
+TEST_CASE("PIPESPLIT refuses without exactly one pipe run selected", "[issue486][pipesplit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  std::vector<std::string> log;
+  StartPipeSplitCommand(st, log);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK(log.back().find("select exactly one") != std::string::npos);
+}
+
+TEST_CASE("PIPESPLIT splits a run at the picked station with no fitting inserted",
+          "[issue486][pipesplit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  SelectPipeRun(st, 0);
+  std::vector<std::string> log;
+  StartPipeSplitCommand(st, log);
+  REQUIRE(st.active == AppCommandState::Kind::PipeSplit);
+  SubmitPipeSplitViewportPick(st, 10.f, 0.f, log);
+  CHECK(st.active == AppCommandState::Kind::None);
+
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  REQUIRE(st.cadPipeRuns[0].vertsXyz.size() == 6);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(10.0));
+  REQUIRE(st.cadPipeRuns[1].vertsXyz.size() == 6);
+  CHECK(st.cadPipeRuns[1].vertsXyz[0] == Catch::Approx(10.0));  // no gap — exact split, no cutback
+  CHECK(st.cadPipeRuns[1].vertsXyz[3] == Catch::Approx(20.0));
+  CHECK(st.cadBlockRefs.empty());
+}
+
+TEST_CASE("PIPESPLIT undoes as one step", "[issue486][pipesplit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  SelectPipeRun(st, 0);
+  std::vector<std::string> log;
+  StartPipeSplitCommand(st, log);
+  SubmitPipeSplitViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 2);
+
+  REQUIRE(DoUndo(st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(20.0));
+}
+
+TEST_CASE("PIPEJOIN refuses without exactly two pipe runs selected", "[issue486][pipejoin]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  SelectPipeRun(st, 0);
+  std::vector<std::string> log;
+  HandlePipeJoinCommand(st, log);
+  CHECK(st.cadPipeRuns.size() == 1);
+  CHECK(log.back().find("select exactly two") != std::string::npos);
+}
+
+TEST_CASE("PIPEJOIN refuses runs with different size or pressure class", "[issue486][pipejoin]") {
+  AppCommandState st;
+  CadPipeRun a; a.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0}; a.nominalSize = "4in";
+  CadPipeRun b; b.vertsXyz = {10.0, 0.0, 0.0, 20.0, 0.0, 0.0}; b.nominalSize = "2in";
+  st.cadPipeRuns = {a, b};
+  st.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
+  SelectedEntity e0{}; e0.type = SelectedEntity::Type::PipeRun; e0.index = 0;
+  SelectedEntity e1{}; e1.type = SelectedEntity::Type::PipeRun; e1.index = 1;
+  st.selection = {e0, e1};
+  std::vector<std::string> log;
+  HandlePipeJoinCommand(st, log);
+  CHECK(st.cadPipeRuns.size() == 2);
+  CHECK(log.back().find("same nominal size") != std::string::npos);
+}
+
+TEST_CASE("PIPEJOIN refuses runs with no coincident endpoint", "[issue486][pipejoin]") {
+  AppCommandState st;
+  CadPipeRun a; a.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0}; a.nominalSize = "4in";
+  CadPipeRun b; b.vertsXyz = {50.0, 0.0, 0.0, 60.0, 0.0, 0.0}; b.nominalSize = "4in";
+  st.cadPipeRuns = {a, b};
+  st.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
+  SelectedEntity e0{}; e0.type = SelectedEntity::Type::PipeRun; e0.index = 0;
+  SelectedEntity e1{}; e1.type = SelectedEntity::Type::PipeRun; e1.index = 1;
+  st.selection = {e0, e1};
+  std::vector<std::string> log;
+  HandlePipeJoinCommand(st, log);
+  CHECK(st.cadPipeRuns.size() == 2);
+  CHECK(log.back().find("coincident endpoint") != std::string::npos);
+}
+
+TEST_CASE("PIPEJOIN merges two runs sharing an endpoint into one, in every end-pairing",
+          "[issue486][pipejoin]") {
+  struct Case { ray3d::Vec3 a0, a1, b0, b1; };
+  const std::vector<Case> cases = {
+      {{0, 0, 0}, {10, 0, 0}, {10, 0, 0}, {20, 0, 0}},  // A end == B start
+      {{0, 0, 0}, {10, 0, 0}, {20, 0, 0}, {10, 0, 0}},  // A end == B end
+      {{10, 0, 0}, {0, 0, 0}, {10, 0, 0}, {20, 0, 0}},  // A start == B start
+      {{10, 0, 0}, {0, 0, 0}, {20, 0, 0}, {10, 0, 0}},  // A start == B end
+  };
+  for (const Case& c : cases) {
+    AppCommandState st;
+    CadPipeRun a; a.vertsXyz = {c.a0.x, c.a0.y, c.a0.z, c.a1.x, c.a1.y, c.a1.z}; a.nominalSize = "4in";
+    CadPipeRun b; b.vertsXyz = {c.b0.x, c.b0.y, c.b0.z, c.b1.x, c.b1.y, c.b1.z}; b.nominalSize = "4in";
+    st.cadPipeRuns = {a, b};
+    st.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
+    SelectedEntity e0{}; e0.type = SelectedEntity::Type::PipeRun; e0.index = 0;
+    SelectedEntity e1{}; e1.type = SelectedEntity::Type::PipeRun; e1.index = 1;
+    st.selection = {e0, e1};
+    std::vector<std::string> log;
+    HandlePipeJoinCommand(st, log);
+    REQUIRE(st.cadPipeRuns.size() == 1);
+    REQUIRE(st.cadPipeRuns[0].vertsXyz.size() == 9);  // 3 distinct vertices, 0..10..20 in some order
+    CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(10.0));
+    CHECK(log.back().find("merged") != std::string::npos);
+  }
+}
+
+TEST_CASE("PIPEJOIN undoes as one step and reindexes the piping-network reference",
+          "[issue486][pipejoin]") {
+  AppCommandState st;
+  CadPipeRun a; a.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0}; a.nominalSize = "4in";
+  CadPipeRun b; b.vertsXyz = {10.0, 0.0, 0.0, 20.0, 0.0, 0.0}; b.nominalSize = "4in";
+  st.cadPipeRuns = {a, b};
+  st.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  SelectedEntity e1{}; e1.type = SelectedEntity::Type::PipeRun; e1.index = 1;
+  st.selection = {e1};
+  HandlePipingSystemCommand("ADD Loop A", st, log);
+  REQUIRE(st.cadPipingSystems[0].pipeRunIndices == std::vector<int>({1}));
+
+  SelectedEntity e0{}; e0.type = SelectedEntity::Type::PipeRun; e0.index = 0;
+  st.selection = {e0, e1};
+  HandlePipeJoinCommand(st, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  // Run 1 was erased (index 0 survived as the merged run) — the network's reference to the erased
+  // index 1 is simply dropped, same as an ordinary delete; nothing left to reindex above it.
+  CHECK(st.cadPipingSystems[0].pipeRunIndices.empty());
+
+  REQUIRE(DoUndo(st, log));
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadPipingSystems[0].pipeRunIndices == std::vector<int>({1}));
+}
+
+TEST_CASE("PIPEPROP refuses without a pipe run selected", "[issue486][pipeprop]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  std::vector<std::string> log;
+  HandlePipePropCommand("6in", st, log);
+  CHECK(log.back().find("select one or more") != std::string::npos);
+}
+
+TEST_CASE("PIPEPROP refuses an unknown nominal size", "[issue486][pipeprop]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  SelectPipeRun(st, 0);
+  std::vector<std::string> log;
+  HandlePipePropCommand("99in", st, log);
+  CHECK(log.back().find("unknown nominal size") != std::string::npos);
+  CHECK(st.cadPipeRuns[0].nominalSize == "4in");  // unchanged
+}
+
+TEST_CASE("PIPEPROP updates nominal size and pressure class on the selected run",
+          "[issue486][pipeprop]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  SelectPipeRun(st, 0);
+  std::vector<std::string> log;
+  HandlePipePropCommand("6in CS300", st, log);
+  REQUIRE(st.cadPipeRuns[0].nominalSize == "6in");
+  CHECK(st.cadPipeRuns[0].pressureClassTag == "CS300");
+  CHECK(log.back().find("1 run(s) updated") != std::string::npos);
+}
+
+TEST_CASE("PIPEPROP updates every selected run independently, batch-style",
+          "[issue486][pipeprop]") {
+  AppCommandState st;
+  CadPipeRun a; a.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0}; a.nominalSize = "4in";
+  CadPipeRun b; b.vertsXyz = {20.0, 0.0, 0.0, 30.0, 0.0, 0.0}; b.nominalSize = "4in";
+  st.cadPipeRuns = {a, b};
+  st.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
+  SelectedEntity e0{}; e0.type = SelectedEntity::Type::PipeRun; e0.index = 0;
+  SelectedEntity e1{}; e1.type = SelectedEntity::Type::PipeRun; e1.index = 1;
+  st.selection = {e0, e1};
+  std::vector<std::string> log;
+  HandlePipePropCommand("2in", st, log);
+  CHECK(st.cadPipeRuns[0].nominalSize == "2in");
+  CHECK(st.cadPipeRuns[1].nominalSize == "2in");
+  CHECK(log.back().find("2 run(s) updated") != std::string::npos);
+}
+
+TEST_CASE("PIPEPROP undoes as one step", "[issue486][pipeprop]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  SelectPipeRun(st, 0);
+  std::vector<std::string> log;
+  HandlePipePropCommand("6in", st, log);
+  REQUIRE(st.cadPipeRuns[0].nominalSize == "6in");
+  REQUIRE(DoUndo(st, log));
+  CHECK(st.cadPipeRuns[0].nominalSize == "4in");
+}
+
 TEST_CASE("Existing axis-aligned PIPERUN picks are unaffected by the default-on compass",
           "[issue486][piperun][compass]") {
   // Pins that REQ-346 does not regress the original increment-B2 tests: picks already exactly on a
