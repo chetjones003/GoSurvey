@@ -6511,6 +6511,8 @@ const CmdEntry kRegistry[] = {
     {"pipesys", "pipenet, pipingsystem",
      "Named piping networks: PIPESYS NEW/ADD/REMOVE/RENAME/DELETE/LIST <name> (ADD/REMOVE use the "
      "current pipe-run selection)"},
+    {"pipecatalog", "pcat",
+     "Look up a fitting in the library by size/class/type: PIPECATALOG <part type> <size> [class]"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
     {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},

@@ -836,6 +836,87 @@ bool CadBlocksImportLibraryEntry(AppCommandState& st, const CadBlockLibraryEntry
   return CadBlockFindDef(st.blockDefs, entry.name) >= 0 || static_cast<int>(st.blockDefs.size()) > nBefore;
 }
 
+bool CadPipeCatalogFind(AppCommandState& st, CadPipePartType partType, const std::string& nominalSize,
+                        CadPipePressureClass pressureClass, std::string* outBlockName,
+                        std::vector<std::string>& log) {
+  if (!outBlockName)
+    return false;
+  outBlockName->clear();
+  if (partType == CadPipePartType::None) {
+    log.push_back("PIPECATALOG - a part type is required.");
+    return false;
+  }
+  if (nominalSize.empty()) {
+    log.push_back("PIPECATALOG - a nominal size is required.");
+    return false;
+  }
+
+  std::vector<CadBlockLibraryEntry> entries;
+  CadBlocksCollectLibraryEntries(st, &entries);
+
+  std::vector<const CadBlockLibraryEntry*> sizeTypeMatches;
+  for (const CadBlockLibraryEntry& e : entries) {
+    if (e.isFitting && e.partType == partType && e.nominalSize == nominalSize)
+      sizeTypeMatches.push_back(&e);
+  }
+
+  const std::string partTag(CadPipePartTypeTag(partType));
+  const std::string classDesc = pressureClass == CadPipePressureClass::None
+                                    ? std::string()
+                                    : (" " + std::string(CadPipePressureClassTag(pressureClass)));
+  const auto refuseNoMatch = [&]() {
+    log.push_back("PIPECATALOG - no " + partTag + " found for " + nominalSize + classDesc +
+                  ". Import or LIBEXPORT a matching fitting first, or PIPECATALOG with a different size/class.");
+    return false;
+  };
+  if (sizeTypeMatches.empty())
+    return refuseNoMatch();
+
+  // A requested class prefers an EXACT match; if none is tagged for that class, fall back to a
+  // class-agnostic part (pressureClass == None on the library entry) rather than refusing outright
+  // — the same exact-then-default precedent `CadBlockResolveMode` already uses for connection modes.
+  // No requested class (None) means no restriction at all: every size/type match qualifies.
+  std::vector<const CadBlockLibraryEntry*> chosen;
+  if (pressureClass != CadPipePressureClass::None) {
+    for (const CadBlockLibraryEntry* e : sizeTypeMatches)
+      if (e->pressureClass == pressureClass)
+        chosen.push_back(e);
+    if (chosen.empty()) {
+      for (const CadBlockLibraryEntry* e : sizeTypeMatches)
+        if (e->pressureClass == CadPipePressureClass::None)
+          chosen.push_back(e);
+    }
+  } else {
+    chosen = sizeTypeMatches;
+  }
+  if (chosen.empty())
+    return refuseNoMatch();
+
+  if (chosen.size() > 1) {
+    std::string names;
+    for (size_t i = 0; i < chosen.size(); ++i) {
+      if (i)
+        names += ", ";
+      names += chosen[i]->name;
+    }
+    // REQ-201: nothing invalid — or ambiguous — is ever guessed. A duplicate-classed catalog is a
+    // library authoring problem for the user to fix, not something this lookup silently resolves.
+    log.push_back("PIPECATALOG - ambiguous: " + std::to_string(chosen.size()) + " parts match " +
+                  partTag + " " + nominalSize + classDesc + " (" + names +
+                  "). Narrow the pressure class, or remove/retag the duplicate in the library.");
+    return false;
+  }
+
+  const CadBlockLibraryEntry entry = *chosen.front();  // copy: CadBlocksImportLibraryEntry mutates st
+  if (!CadBlocksImportLibraryEntry(st, entry, log)) {
+    log.push_back("PIPECATALOG - found \"" + entry.name + "\" but it failed to import.");
+    return false;
+  }
+  *outBlockName = entry.name;
+  log.push_back("PIPECATALOG - " + partTag + " " + nominalSize + classDesc + " -> \"" + entry.name + "\".");
+  return true;
+}
+
 bool CadBlocksImportWithPicker(AppCommandState& dest, std::vector<std::string>& log) {
   char buf[4096]{};
   if (!BrowseOpenFileBlockUtf8(buf, sizeof(buf))) {
@@ -3375,6 +3456,36 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       return true;
     }
     log.push_back("WBLOCK — wrote \"" + f[0] + "\" to " + f[1] + ".");
+    return true;
+  }
+
+  if (tok == "pipecatalog" || tok == "pcat") {
+    // Catalog lookup (issue #486 increment B4 / REQ-345). One-shot report over CadPipeCatalogFind —
+    // no state machine, the same "bare/short verb, immediate answer" shape PIPESYS's own report
+    // verbs use, because this is a query (and a side-effecting import when the match is not yet
+    // imported), not something routed interactively.
+    std::string partTypeTok, sizeTok, classTok;
+    args >> partTypeTok >> sizeTok;
+    if (partTypeTok.empty() || sizeTok.empty()) {
+      log.push_back("PIPECATALOG - usage: PIPECATALOG <part type> <nominal size> [pressure class]. Part "
+                    "types: elbow-90, elbow-45, tee, cross, reducer, flange, valve, coupling, cap, other.");
+      return true;
+    }
+    const CadPipePartType partType = ParseCadPipePartType(StringUtil::toLowerAsciiCopy(partTypeTok));
+    if (partType == CadPipePartType::None) {
+      log.push_back("PIPECATALOG - unknown part type \"" + partTypeTok + "\".");
+      return true;
+    }
+    CadPipePressureClass pressureClass = CadPipePressureClass::None;
+    if (args >> classTok) {
+      pressureClass = ParseCadPipePressureClass(classTok);
+      if (pressureClass == CadPipePressureClass::None) {
+        log.push_back("PIPECATALOG - unknown pressure class \"" + classTok + "\". Use CS150 or CS300.");
+        return true;
+      }
+    }
+    std::string blockName;
+    (void)CadPipeCatalogFind(st, partType, sizeTok, pressureClass, &blockName, log);
     return true;
   }
 
