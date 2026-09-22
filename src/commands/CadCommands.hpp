@@ -1687,6 +1687,12 @@ struct AppCommandState {
     /// a path built from a variable number of points needs different state than a fixed-parameter
     /// command, and this one commits into `cadPipeRuns` rather than `cadSolids`.
     PipeRun,
+    /// PIPEFIT (issue #486 increment B7 / REQ-345): manual fitting placement on an ALREADY-ROUTED
+    /// pipe run — pick a station point on the selected run, splice in a catalog part (valve,
+    /// flange, reducer, coupling, ...), snapped via its own connection ports. One phase: the part
+    /// type and target run are both fixed by the time the command starts (`StartPipeFitCommand`),
+    /// so all that remains is a single point pick.
+    PipeFit,
     /// EXTRACTCENTERLINE (REQ-347, GitHub issue #538): hover over a point cloud to preview a
     /// least-squares cylinder-axis fit of the nearby points, click to commit it as a LINE. One
     /// phase — no select-objects step, no typed parameters — closer in shape to `Kind::Pan`'s
@@ -1769,6 +1775,7 @@ struct AppCommandState {
     case Kind::BConnectEdit:       return "BCONNECTEDIT";
     case Kind::BlockFitting:       return "BLOCKFITTING";
     case Kind::PipeRun:            return "PIPERUN";
+    case Kind::PipeFit:            return "PIPEFIT";
     case Kind::ExtractCenterline:  return "EXTRACTCENTERLINE";
     default:                  return "";
     }
@@ -2630,6 +2637,15 @@ struct AppCommandState {
   /// 3D's own compass default. Not saved with the drawing — a per-command UI setting, like
   /// \ref orthoMode / \ref polarMode.
   bool pipeRunCompassOn = true;
+
+  // --- PIPEFIT: manual fitting placement on an existing run (issue #486 increment B7) -----------
+
+  /// Index into `cadPipeRuns` the command is splicing into, fixed at `StartPipeFitCommand` time
+  /// (from the caller's own single-pipe-run selection) — never re-resolved from `st.selection`
+  /// again, so a selection change mid-command can't silently retarget a different run.
+  int pipeFitRunIndex = -1;
+  /// The catalog part type to splice in (e.g. Valve, Flange, Reducer), fixed at start time too.
+  CadPipePartType pipeFitPartType = CadPipePartType::None;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -5392,6 +5408,17 @@ bool HandlePipeRunTextInput(const std::string& line, AppCommandState& st, std::v
 void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 /// Reset the draft path, keeping the remembered nominal size and pressure class.
 void CancelPipeRunCommand(AppCommandState& st);
+
+// --- PIPEFIT (issue #486 increment B7 / REQ-345) -------------------------------------------------
+/// Open the command: requires exactly one `CadPipeRun` selected and a recognized \p partTypeTok
+/// (`CadPipePartType`'s own tags — valve, flange, reducer, coupling, ...); refuses immediately
+/// (never entering the command) otherwise, mirroring `PIPECATALOG`'s own inline-argument refusals.
+void StartPipeFitCommand(AppCommandState& st, const std::string& partTypeTok, std::vector<std::string>& log);
+/// Handle a viewport click: the station point to splice the fitting in at. Always ends the command,
+/// success or refusal — there is nothing left to pick after one point.
+void SubmitPipeFitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Handle one typed line as a station point (`X,Y,Z`). \return false if not consumed.
+bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 
 // --- PIPESYS (issue #486 increment B3 / REQ-345) --------------------------------------------------
 /// One-shot text dispatch for every PIPESYS subverb (NEW/ADD/REMOVE/RENAME/DELETE/LIST — a bare or
