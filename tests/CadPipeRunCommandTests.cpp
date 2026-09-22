@@ -842,6 +842,191 @@ TEST_CASE("The tee commit (new run + two cutback existing runs + block) undoes a
   CHECK(st.cadBlockRefs.empty());
 }
 
+// --- Manual fitting placement on a run (issue #486 increment B7, REQ-345) -----------------------
+
+namespace {
+/// A minimal, geometrically-simplified inline 2-port fitting (a valve) — same test-double
+/// simplification `MakeElbow90Def`/`MakeTeeDef` use: both ports at the local origin. Inlet -X,
+/// Outlet +X — the fitting sits ACROSS the pipe direction, same convention as a tee's through pair.
+CadBlockDefinition MakeValveDef(const std::string& name, float engagementLength = 0.f) {
+  CadBlockDefinition def;
+  def.name = name;
+  def.partType = CadPipePartType::Valve;
+  def.nominalSize = "4in";
+  CadBlockConnection in;
+  in.name = "IN"; in.nx = -1.f; in.ny = 0.f; in.nz = 0.f;
+  in.role = CadBlockConnectionRole::Inlet;
+  in.engagementLength = engagementLength;
+  CadBlockConnection out;
+  out.name = "OUT"; out.nx = 1.f; out.ny = 0.f; out.nz = 0.f;
+  out.role = CadBlockConnectionRole::Outlet;
+  out.engagementLength = engagementLength;
+  def.connections = {in, out};
+  return def;
+}
+
+AppCommandState MakeStateWithOneStraightRun() {
+  AppCommandState st;
+  CadPipeRun a;
+  a.vertsXyz = {0.0, 0.0, 0.0, 20.0, 0.0, 0.0};
+  a.nominalSize = "4in";
+  st.cadPipeRuns = {a};
+  st.cadPipeRunAttrs = {EntityAttributes{}};
+  return st;
+}
+
+void SelectPipeRun(AppCommandState& st, int index) {
+  SelectedEntity e{};
+  e.type = SelectedEntity::Type::PipeRun;
+  e.index = index;
+  st.selection = {e};
+}
+} // namespace
+
+TEST_CASE("PIPEFIT refuses without exactly one pipe run selected", "[issue486][pipefit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  std::vector<std::string> log;
+  StartPipeFitCommand(st, "valve", log);
+  CHECK(st.active == AppCommandState::Kind::None);
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back().find("select exactly one") != std::string::npos);
+}
+
+TEST_CASE("PIPEFIT refuses an unknown part type", "[issue486][pipefit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  SelectPipeRun(st, 0);
+  std::vector<std::string> log;
+  StartPipeFitCommand(st, "not-a-part-type", log);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK(log.back().find("unknown part type") != std::string::npos);
+}
+
+TEST_CASE("PIPEFIT splices a matching valve at the picked station, splitting the run in two",
+          "[issue486][pipefit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  st.blockDefs.push_back(MakeValveDef("VALVE-4IN"));
+  SelectPipeRun(st, 0);
+
+  std::vector<std::string> log;
+  StartPipeFitCommand(st, "valve", log);
+  REQUIRE(st.active == AppCommandState::Kind::PipeFit);
+  SubmitPipeFitViewportPick(st, 10.f, 0.f, log);
+  CHECK(st.active == AppCommandState::Kind::None);
+
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  REQUIRE(st.cadPipeRuns[0].vertsXyz.size() == 6);
+  CHECK(st.cadPipeRuns[0].vertsXyz[0] == Catch::Approx(0.0));
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(10.0));  // no engagement ⇒ cut at the pick
+  REQUIRE(st.cadPipeRuns[1].vertsXyz.size() == 6);
+  CHECK(st.cadPipeRuns[1].vertsXyz[3] == Catch::Approx(20.0));  // tail of the run preserved
+
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].defName == "VALVE-4IN");
+  CHECK(st.cadBlockRefs[0].xf.x == Catch::Approx(10.0f));
+}
+
+TEST_CASE("The valve's inlet engagement length cuts the near side back from the pick",
+          "[issue486][pipefit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  st.blockDefs.push_back(MakeValveDef("VALVE-4IN", /*engagementLength=*/1.5f));
+  SelectPipeRun(st, 0);
+
+  std::vector<std::string> log;
+  StartPipeFitCommand(st, "valve", log);
+  SubmitPipeFitViewportPick(st, 10.f, 0.f, log);
+
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(8.5));  // 10 - 1.5ft engagement
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].xf.x == Catch::Approx(8.5f));
+}
+
+TEST_CASE("A part with only one connection port refuses rather than splicing in",
+          "[issue486][pipefit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  CadBlockDefinition badDef;
+  badDef.name = "CAP-4IN";
+  badDef.partType = CadPipePartType::Valve;
+  badDef.nominalSize = "4in";
+  CadBlockConnection only;
+  only.nx = -1.f;
+  badDef.connections = {only};
+  st.blockDefs.push_back(badDef);
+  SelectPipeRun(st, 0);
+
+  std::vector<std::string> log;
+  StartPipeFitCommand(st, "valve", log);
+  SubmitPipeFitViewportPick(st, 10.f, 0.f, log);
+
+  REQUIRE(st.cadPipeRuns.size() == 1);  // unchanged — refusal is total, not partial
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 6);
+  CHECK(st.cadBlockRefs.empty());
+}
+
+TEST_CASE("An engagement length too large for either side refuses without splitting the run",
+          "[issue486][pipefit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  st.blockDefs.push_back(MakeValveDef("VALVE-4IN", /*engagementLength=*/100.f));
+  SelectPipeRun(st, 0);
+
+  std::vector<std::string> log;
+  StartPipeFitCommand(st, "valve", log);
+  SubmitPipeFitViewportPick(st, 10.f, 0.f, log);
+
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 6);
+  CHECK(st.cadBlockRefs.empty());
+}
+
+TEST_CASE("The PIPEFIT splice (split run + block) undoes as one step", "[issue486][pipefit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  st.blockDefs.push_back(MakeValveDef("VALVE-4IN"));
+  SelectPipeRun(st, 0);
+
+  std::vector<std::string> log;
+  StartPipeFitCommand(st, "valve", log);
+  SubmitPipeFitViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  REQUIRE(st.cadBlockRefs.size() == 1);
+
+  REQUIRE(DoUndo(st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(20.0));
+  CHECK(st.cadBlockRefs.empty());
+}
+
+TEST_CASE("The new piece from a splice joins the same network the original run belonged to",
+          "[issue486][pipefit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  st.blockDefs.push_back(MakeValveDef("VALVE-4IN"));
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  SelectPipeRun(st, 0);
+  HandlePipingSystemCommand("ADD Loop A", st, log);
+  REQUIRE(st.cadPipingSystems[0].pipeRunIndices == std::vector<int>({0}));
+
+  StartPipeFitCommand(st, "valve", log);
+  SubmitPipeFitViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 2);
+
+  CHECK(st.cadPipingSystems[0].pipeRunIndices == std::vector<int>({0, 1}));
+}
+
+TEST_CASE("PIPEFIT projects an off-centerline pick onto the nearest point of the run",
+          "[issue486][pipefit]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  st.blockDefs.push_back(MakeValveDef("VALVE-4IN"));
+  SelectPipeRun(st, 0);
+
+  std::vector<std::string> log;
+  StartPipeFitCommand(st, "valve", log);
+  SubmitPipeFitViewportPick(st, 10.f, 3.f, log);  // 3ft off the centerline
+
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(10.0));  // projected straight down onto X
+  CHECK(st.cadPipeRuns[0].vertsXyz[4] == Catch::Approx(0.0));
+}
+
 TEST_CASE("Existing axis-aligned PIPERUN picks are unaffected by the default-on compass",
           "[issue486][piperun][compass]") {
   // Pins that REQ-346 does not regress the original increment-B2 tests: picks already exactly on a

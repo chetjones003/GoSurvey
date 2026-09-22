@@ -13476,6 +13476,11 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     return;
   }
 
+  if (st.active == K::PipeFit) {
+    SubmitPipeFitViewportPick(st, static_cast<float>(wx), static_cast<float>(wy), log);
+    return;
+  }
+
   if (st.active == K::Circle) {
     switch (st.circlePhase) {
     case AppCommandState::CirclePhase::WaitCenterOrMode:
@@ -34842,6 +34847,206 @@ void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std
                 "\". Use NEW, ADD, REMOVE, RENAME, DELETE or LIST.");
 }
 
+// ---------------------------------------------------------------------------------------------
+// PIPEFIT (issue #486 increment B7 / REQ-345) — manual fitting placement on an already-routed run.
+// Unlike B5/B6 (automatic, triggered at PIPERUN commit time), this is a user-directed splice into
+// an EXISTING CadPipeRun: pick the run (via ordinary selection, like PIPESYS ADD), name a part
+// type, then pick a station point anywhere along the run's own path.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// Nearest point to \p pick on the polyline \p run, clamped to each segment (never extrapolated
+/// past an endpoint). \return the owning segment index (`verts[i]`..`verts[i+1]`) and the point
+/// itself; false if \p run has fewer than 2 vertices.
+bool NearestPointOnPipeRun(const CadPipeRun& run, const ray3d::Vec3& pick, size_t* segIndex,
+                           ray3d::Vec3* out) {
+  const size_t n = run.vertsXyz.size() / 3;
+  if (n < 2)
+    return false;
+  double bestDist = std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i + 1 < n; ++i) {
+    const ray3d::Vec3 a{run.vertsXyz[i * 3 + 0], run.vertsXyz[i * 3 + 1], run.vertsXyz[i * 3 + 2]};
+    const ray3d::Vec3 b{run.vertsXyz[(i + 1) * 3 + 0], run.vertsXyz[(i + 1) * 3 + 1],
+                        run.vertsXyz[(i + 1) * 3 + 2]};
+    const ray3d::Vec3 ab = ray3d::Sub(b, a);
+    const double abLen2 = ray3d::Dot(ab, ab);
+    double t = abLen2 > 1e-18 ? ray3d::Dot(ray3d::Sub(pick, a), ab) / abLen2 : 0.0;
+    t = std::clamp(t, 0.0, 1.0);
+    const ray3d::Vec3 cand = ray3d::Add(a, ray3d::Scale(ab, t));
+    const double dist = ray3d::Length(ray3d::Sub(pick, cand));
+    if (dist < bestDist) {
+      bestDist = dist;
+      *segIndex = i;
+      *out = cand;
+    }
+  }
+  return true;
+}
+
+/// Splices \p partType into `st.cadPipeRuns[runIdx]` at the point of \p run nearest \p pick.
+/// Reuses B5's own `PickElbowPorts` (an inline 2-port, Inlet/Outlet-tagged fitting is exactly what
+/// a mid-span valve/flange/reducer/coupling needs too) and the single-port `CadBlockSnapInsertTo
+/// Connection` primitive — NOT B5/B6's two-port rigid alignment: a round pipe's cross-section is
+/// rotationally symmetric, so unlike an elbow or a tee, nothing here needs the roll fixed (REQ-346
+/// makes the same observation for why a pipe roll prompt has no fitting to attach to yet). The
+/// outlet's resulting world position is trusted from the fitting's own solved geometry, the same
+/// "the model decides" reasoning B5/B6 both use for their own unpinned far side(s).
+bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
+                      const ray3d::Vec3& pick, std::vector<std::string>& log) {
+  if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.cadPipeRuns.size())
+    return false;
+  const CadPipeRun& run = st.cadPipeRuns[static_cast<size_t>(runIdx)];
+  size_t segIx = 0;
+  ray3d::Vec3 station;
+  if (!NearestPointOnPipeRun(run, pick, &segIx, &station)) {
+    log.push_back("PIPEFIT - the selected run no longer has a valid path.");
+    return false;
+  }
+  const ray3d::Vec3 a{run.vertsXyz[segIx * 3 + 0], run.vertsXyz[segIx * 3 + 1], run.vertsXyz[segIx * 3 + 2]};
+  const ray3d::Vec3 b{run.vertsXyz[(segIx + 1) * 3 + 0], run.vertsXyz[(segIx + 1) * 3 + 1],
+                      run.vertsXyz[(segIx + 1) * 3 + 2]};
+  const double availA = ray3d::Length(ray3d::Sub(station, a));
+  const double availB = ray3d::Length(ray3d::Sub(b, station));
+  const ray3d::Vec3 segDir = ray3d::Normalize(ray3d::Sub(b, a));
+  if (ray3d::Length(ray3d::Sub(b, a)) < 1e-9) {
+    log.push_back("PIPEFIT - that point falls on a degenerate segment of the run.");
+    return false;
+  }
+
+  std::string blockName;
+  if (!CadPipeCatalogFind(st, partType, run.nominalSize, ParseCadPipePressureClass(run.pressureClassTag),
+                          &blockName, log))
+    return false;
+  const int di = CadBlockFindDef(st.blockDefs, blockName);
+  if (di < 0)
+    return false;
+  const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+  const CadBlockConnection* inletC = nullptr;
+  const CadBlockConnection* outletC = nullptr;
+  PickElbowPorts(def, &inletC, &outletC);
+  if (!inletC || !outletC) {
+    log.push_back("PIPEFIT - \"" + blockName + "\" needs exactly two connection ports to splice "
+                  "inline.");
+    return false;
+  }
+
+  const auto engagementOf = [](const CadBlockConnection& c) {
+    const CadBlockConnectionMode* m = CadBlockResolveMode(c, CadConnectionModeTarget::PipeEnd);
+    return m ? m->engagementLength : c.engagementLength;
+  };
+  const double cutA = engagementOf(*inletC);
+  const double cutB = engagementOf(*outletC);
+  if (cutA < 0.0 || cutA > 0.9 * availA || cutB < 0.0 || cutB > 0.9 * availB) {
+    log.push_back("PIPEFIT - \"" + blockName + "\"'s engagement length does not fit here.");
+    return false;
+  }
+
+  const ray3d::Vec3 nearPoint = ray3d::Sub(station, ray3d::Scale(segDir, cutA));
+  CadBlockXform xf;
+  xf.sx = xf.sy = xf.sz = CadBlockInsertUnitsScale(st, def);
+  CadBlockSnapInsertToConnection(*inletC, static_cast<float>(nearPoint.x), static_cast<float>(nearPoint.y),
+                                 static_cast<float>(nearPoint.z), static_cast<float>(segDir.x),
+                                 static_cast<float>(segDir.y), static_cast<float>(segDir.z), &xf);
+  float ox = 0.f, oy = 0.f, oz = 0.f;
+  CadBlockXformPoint(xf, outletC->x, outletC->y, outletC->z, &ox, &oy, &oz);
+  const ray3d::Vec3 farPoint{ox, oy, oz};
+
+  // Build both pieces: the FIRST keeps every vertex up to and including `a`, plus the cutback near
+  // point; the SECOND starts at the far point and keeps every vertex from `b` onward. Either side
+  // can be as short as 2 vertices (segIx at the very start/end of the run).
+  CadPipeRun piece1;
+  piece1.nominalSize = run.nominalSize;
+  piece1.pressureClassTag = run.pressureClassTag;
+  for (size_t i = 0; i <= segIx; ++i) {
+    piece1.vertsXyz.push_back(run.vertsXyz[i * 3 + 0]);
+    piece1.vertsXyz.push_back(run.vertsXyz[i * 3 + 1]);
+    piece1.vertsXyz.push_back(run.vertsXyz[i * 3 + 2]);
+  }
+  piece1.vertsXyz.push_back(nearPoint.x);
+  piece1.vertsXyz.push_back(nearPoint.y);
+  piece1.vertsXyz.push_back(nearPoint.z);
+
+  CadPipeRun piece2;
+  piece2.nominalSize = run.nominalSize;
+  piece2.pressureClassTag = run.pressureClassTag;
+  piece2.vertsXyz.push_back(farPoint.x);
+  piece2.vertsXyz.push_back(farPoint.y);
+  piece2.vertsXyz.push_back(farPoint.z);
+  const size_t nVerts = run.vertsXyz.size() / 3;
+  for (size_t i = segIx + 1; i < nVerts; ++i) {
+    piece2.vertsXyz.push_back(run.vertsXyz[i * 3 + 0]);
+    piece2.vertsXyz.push_back(run.vertsXyz[i * 3 + 1]);
+    piece2.vertsXyz.push_back(run.vertsXyz[i * 3 + 2]);
+  }
+
+  std::vector<CadSolidPtr> preview;
+  if (!CadBuildPipeRunSolids(piece1, &preview) || !CadBuildPipeRunSolids(piece2, &preview)) {
+    log.push_back("PIPEFIT - could not build a pipe solid for one of the resulting pieces here.");
+    return false;
+  }
+
+  PushUndoSnapshot(st, "Insert Pipe Fitting");
+  st.cadPipeRuns[static_cast<size_t>(runIdx)] = std::move(piece1);  // keeps the original's index
+  st.cadPipeRuns.push_back(std::move(piece2));
+  st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+  const int piece2Idx = static_cast<int>(st.cadPipeRuns.size()) - 1;
+  for (CadPipingSystem& sys : st.cadPipingSystems) {
+    if (std::find(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end(), runIdx) !=
+        sys.pipeRunIndices.end()) {
+      sys.pipeRunIndices.push_back(piece2Idx);
+      std::sort(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end());
+    }
+  }
+  CadBlockPlaceInsertNoUndo(st, blockName, xf, log);
+  BumpCadGpuCache(st);
+  log.push_back("PIPEFIT - \"" + blockName + "\" inserted, run split into 2 pieces.");
+  return true;
+}
+
+} // namespace
+
+void StartPipeFitCommand(AppCommandState& st, const std::string& partTypeTok, std::vector<std::string>& log) {
+  const std::vector<int> picked = SelectedPipeRunIndices(st);
+  if (picked.size() != 1) {
+    log.push_back("PIPEFIT - select exactly one pipe run first.");
+    return;
+  }
+  if (partTypeTok.empty()) {
+    log.push_back("PIPEFIT - usage: PIPEFIT <part type>. Part types: elbow-90, elbow-45, tee, "
+                  "cross, reducer, flange, valve, coupling, cap, other.");
+    return;
+  }
+  const CadPipePartType partType = ParseCadPipePartType(StringUtil::toLowerAsciiCopy(partTypeTok));
+  if (partType == CadPipePartType::None) {
+    log.push_back("PIPEFIT - unknown part type \"" + partTypeTok + "\".");
+    return;
+  }
+  st.pipeFitRunIndex = picked[0];
+  st.pipeFitPartType = partType;
+  st.active = AppCommandState::Kind::PipeFit;
+  log.push_back("PIPEFIT - pick a point on the selected run, or ESC to cancel.");
+}
+
+void SubmitPipeFitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st)};
+  TrySplicePipeFit(st, st.pipeFitRunIndex, st.pipeFitPartType, pt, log);
+  st.pipeFitRunIndex = -1;
+  st.pipeFitPartType = CadPipePartType::None;
+  st.active = AppCommandState::Kind::None;
+}
+
+bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
+  ray3d::Vec3 pt{};
+  if (!ParseSolidBasePoint(st, line, &pt, log, "PIPEFIT"))
+    return true;  // the reason has been reported; command state is left as-is
+  TrySplicePipeFit(st, st.pipeFitRunIndex, st.pipeFitPartType, pt, log);
+  st.pipeFitRunIndex = -1;
+  st.pipeFitPartType = CadPipePartType::None;
+  st.active = AppCommandState::Kind::None;
+  return true;
+}
+
 namespace {
 
 /// Append the straight run \p from -> \p to, in \p frame's plane, refusing a point off that plane.
@@ -36482,6 +36687,11 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("PIPERUN canceled.");
     CancelPipeRunCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::PipeFit) {
+    log.push_back("PIPEFIT canceled.");
+    st.pipeFitRunIndex = -1;
+    st.pipeFitPartType = CadPipePartType::None;
+  }
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
   else if (st.active == AppCommandState::Kind::FeatureLine)
@@ -37694,6 +37904,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
       HandlePipingSystemCommand(restOfLine, st, log);
+      return;
+    }
+    // PIPEFIT (issue #486 increment B7 / REQ-345): manual fitting placement on an already-selected
+    // pipe run. The part type is a required inline argument (unlike PIPERUN, there is no multi-turn
+    // prompt phase for it) — the same "args upfront, one thing left to pick" shape as many other
+    // point-picking commands.
+    if (plotTok == "pipefit" || plotTok == "pfit") {
+      std::string partTypeTok;
+      issIdle >> partTypeTok;
+      StartPipeFitCommand(st, partTypeTok, log);
       return;
     }
     if (plotTok == "isolines") {
@@ -39504,6 +39724,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandlePipeRunTextInput(line, st, log))
       return;
     log.push_back(CadPipeRunPromptText(st));
+    return;
+  }
+
+  // PIPEFIT (issue #486 increment B7 / REQ-345): a single typed X,Y,Z station point, same shape
+  // as PIPERUN's own coordinate entry.
+  if (st.active == AppCommandState::Kind::PipeFit) {
+    if (HandlePipeFitTextInput(line, st, log))
+      return;
+    log.push_back("PIPEFIT - pick a point on the run, or type X,Y,Z. ESC to cancel.");
     return;
   }
 
