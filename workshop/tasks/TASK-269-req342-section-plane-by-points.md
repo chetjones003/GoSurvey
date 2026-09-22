@@ -40,6 +40,18 @@ form could not aim a plane at one by any click.
   - `SubmitSectionPlanePointPick` and `HandleSectionPlaneTextInput`: the same two points from a plan
     click or typed, so the command is drivable without a mouse.
 - `src/ui/CadUi.cpp`: the prompt call passes the state.
+- **Live preview** (the second ask from the app, 2026-09-18): while the through point is being picked,
+  the plane is drawn where it would land.
+  - `UpdateSectionPlanePreview` / `ClearSectionPlanePreview` track the cursor, resolving the ray with
+    the same function the click uses (`SectionPlanePointFromRay`), so the preview cannot promise a
+    plane the click would not place.
+  - `SectionPlaneFrameFromLine` is the shared frame maths, so the preview and the placement cannot
+    disagree about either refusal.
+  - `CadSectionPlanePreviewIndicator` returns the rectangle `CadSectionClipIndicator` builds, through
+    a shared `SectionClipIndicatorSizedToDrawing`.
+  - The viewport tracks the cursor each frame and clears it otherwise; `main.cpp` draws the preview
+    rectangle in place of the current plane's, with no handles. The clip itself is untouched, so
+    nothing is cut until the click.
 
 ## Tests
 
