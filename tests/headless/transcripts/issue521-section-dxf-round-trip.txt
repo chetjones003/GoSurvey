@@ -98,6 +98,59 @@ EXPORT DXF %OUT%/issue521-sphere2.dxf
 EXPECT FILECONTAINS %OUT%/issue521-sphere2.dxf "LWPOLYLINE"
 EXPECT FILELACKS %OUT%/issue521-sphere2.dxf "AcDbCircularArc"
 
+# --- and the plane survives the drawing's OWN file, which is where it was lost ---------------------
+# Found reviewing this change: the per-vertex plane (REQ-325) lived only in memory — no .gs key
+# carried it — so a section saved and reopened came back flat and exported flat, with the DXF side
+# fixed. The key is additive and written only when something is tilted.
+NEW
+CMD SPHERE 0,0 30
+BOX -100 -100 100 100
+CMD SECTION
+CMD 0,0,0
+CMD 0,10,0
+CMD 0,0,10
+EXPECT POLYLINES 1
+SAVEAS %OUT%/issue521-sphere.gs
+OPEN %OUT%/issue521-sphere.gs
+EXPECT POLYLINES 1
+EXPECT POLYVERT 0 0 0 30 0
+EXPECT POLYVERT 0 1 0 -30 0
+EXPECT POLYBULGE 0 0 1
+EXPORT DXF %OUT%/issue521-sphere3.dxf
+EXPECT FILECONTAINS %OUT%/issue521-sphere3.dxf "LWPOLYLINE"
+EXPECT FILELACKS %OUT%/issue521-sphere3.dxf "AcDbCircularArc"
+NEW
+IMPORT DXF %OUT%/issue521-sphere3.dxf
+EXPECT POLYLINES 1
+EXPECT POLYVERT 0 0 0 30 0
+EXPECT POLYVERT 0 1 0 -30 0
+CHECK ALL
+
+# --- a polyline that is not planar at all: the 3D POLYLINE / VERTEX pair ---------------------------
+# Four points that lie in NO single plane, so there is no extrusion that can carry them. DXF's only
+# answer is the 3D POLYLINE entity, one Z per vertex. Before, these were flattened like everything
+# else.
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 10,0,5
+CMD 10,10,0
+CMD 0,10,8
+CMD END
+EXPECT POLYLINES 1
+EXPORT DXF %OUT%/issue521-3d.dxf
+EXPECT FILECONTAINS %OUT%/issue521-3d.dxf "AcDb3dPolyline"
+EXPECT FILECONTAINS %OUT%/issue521-3d.dxf "VERTEX"
+EXPECT FILECONTAINS %OUT%/issue521-3d.dxf "SEQEND"
+NEW
+IMPORT DXF %OUT%/issue521-3d.dxf
+EXPECT POLYLINES 1
+EXPECT POLYVERT 0 0 0 0 0
+EXPECT POLYVERT 0 1 10 0 5
+EXPECT POLYVERT 0 2 10 10 0
+EXPECT POLYVERT 0 3 0 10 8
+CHECK ALL
+
 # --- a flat polyline is untouched: the common case must not move ----------------------------------
 NEW
 CMD POLYLINE

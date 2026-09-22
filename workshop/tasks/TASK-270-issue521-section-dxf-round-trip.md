@@ -52,6 +52,15 @@ loss on every section export.
   z = 25, and the sphere's section comes back as two ARCs (0 polylines).
 - Full suite: 1627/1634; the 7 failures are `beta`'s own.
 
+## Found reviewing this change
+
+- **The per-vertex plane was never persisted.** REQ-325 added the store; no `.gs` key carried it, so a
+  section on a vertical or tilted plane came back from its own file flat and exported flat — with the
+  DXF side already fixed. `GsIo` now writes `polylineVertsNormal`, additive and guarded exactly as
+  `polylineVertsBulge` is, so a drawing with nothing tilted re-saves byte-identically.
+- **The 3D `POLYLINE` path had no test.** A genuinely non-planar polyline now round-trips through
+  `AcDb3dPolyline` / `VERTEX` / `SEQEND`, asserted vertex by vertex.
+
 ## Not in scope
 
 - DWG (`LibreDwgCad`) export has the same shape of ceiling and is untouched here.
