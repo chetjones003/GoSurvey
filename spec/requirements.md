@@ -8635,7 +8635,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a boundary that is not lines and arcs, a plane that misses the solid, and a degenerate normal
     are each refused by name and draw nothing;
   - the command creates one closed polyline per solid in **one undo step**, and a refusal leaves the
-    document unchanged;
+    document unchanged — **one per OUTLINE** since the 2026-09-18 increment 2 revision, a ring being
+    two, still in the one undo step;
   - the figures hold at survey coordinate magnitudes;
   - **the command PROMPTS rather than refusing**: after asking for a selection it is still running,
     a click during that step selects without ending it, Enter confirms, and three points then define
@@ -8958,8 +8959,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a click on a flat face places the plane on that face's plane, with the face's outward normal,
     offset 0 and flip off;
   - at offset 0 **every vertex of the picked solid survives the clip**;
-  - a curved face, an edge, a vertex and a miss are each refused **by name**, and the command stays
-    open after every one of them;
+  - a curved face, an edge, a vertex and a miss each leave the command open — **superseded by the
+    2026-09-18 revision**, which makes each of them the first point of a section line instead of a
+    refusal (the command staying open is unchanged);
   - picking a second face re-aims the same plane and **resets the offset and flip**, which were
     measured from the face that is no longer in force;
   - `SECTIONCLIP`'s offset, `FLIP` and `OFF` all act on a face-defined plane;
