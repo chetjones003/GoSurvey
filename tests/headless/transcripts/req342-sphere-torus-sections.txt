@@ -1,0 +1,107 @@
+# REQ-342 / REQ-335 — a sphere and a torus, end to end: a section PLANE placed without a face, and a
+# section OUTLINE taken from the same cut.
+#
+# The claim being tested (user, 2026-09-22): "with the new addition we just added for sections without
+# a face it should make it so that we can do sections for any object that we need … examples would be
+# sphere and torus … i want it to be more than theory and actually work."
+#
+# So this drives both halves of "sectioning" for the two solids that have no flat face:
+#   1. SECTIONPLANE from two points — the live cut in the view (REQ-341/342);
+#   2. SECTION from three points — the drawn outline (REQ-335).
+# Both at the world origin and again at survey easting E 2,196,000 (REQ-101).
+
+NEW
+
+# --- a sphere: the section plane, placed by two points ---------------------------------------------
+CMD SPHERE 0,0 30
+EXPECT SOLIDS 1
+CMD SECTIONPLANE
+CLICK 0 -50 0
+CLICK 0 50 0
+EXPECT LOG "SECTIONPLANE — plane placed on the section line."
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+EXPECT SECTIONCLIPNORMAL 1 0 0
+EXPECT ACTIVE NONE
+# The clip is a VIEW state: the sphere is untouched by it.
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 113097.335529 11309.7335529 2 2 2
+CHECK ALL
+
+# --- a sphere: the section OUTLINE, on a vertical plane through its centre -------------------------
+# Three points: (0,0,0), (0,10,0) and (0,0,10) define the world YZ plane, which is vertical.
+CMD SECTIONCLIP OFF
+BOX -100 -100 100 100
+CMD SECTION
+CMD 0,0,0
+CMD 0,10,0
+CMD 0,0,10
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+CMD UNDO
+EXPECT POLYLINES 0
+
+# --- a torus: the section plane, placed by two points ----------------------------------------------
+NEW
+CMD TORUS 0,0 20 5
+CMD SECTIONPLANE
+CLICK -40 0 0
+CLICK 40 0 0
+EXPECT LOG "SECTIONPLANE — plane placed on the section line."
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPNORMAL 0 -1 0
+EXPECT ACTIVE NONE
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- a torus: the section OUTLINE square to its axis is the ring (#520) ---------------------------
+CMD SECTIONCLIP OFF
+BOX -100 -100 100 100
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 2 section outlines created. The solid is unchanged."
+EXPECT POLYLINES 2
+CHECK ALL
+CMD UNDO
+EXPECT POLYLINES 0
+
+# --- a torus: the OUTLINE of a vertical cut is still refused, by name ------------------------------
+# The plane SECTIONPLANE can now aim at any angle; the OUTLINE of a torus cut that is not square to
+# its axis is a quartic curve the outline cannot hold (#520 increment 3/4). The refusal says so.
+CMD SELECT
+ESC
+BOX -100 -100 100 100
+CMD SECTION
+CMD 0,0,0
+CMD 0,10,0
+CMD 0,0,10
+EXPECT LOG "SECTION — A cut of a torus that is not square to its axis is a curve this release cannot hold."
+ESC
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- both again at survey magnitude: the plane still lands where it was asked for ------------------
+NEW
+CMD SPHERE 2196000,0 30
+CMD SECTIONPLANE
+CLICK 2196000 -50 0
+CLICK 2196000 50 0
+EXPECT LOG "SECTIONPLANE — plane placed on the section line."
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPNORMAL 1 0 0
+EXPECT SECTIONCLIPOFFSET 0
+EXPECT ACTIVE NONE
+CHECK ALL
+
+NEW
+CMD TORUS 2196000,0 20 5
+CMD SECTIONPLANE
+CLICK 2195960 0 0
+CLICK 2196040 0 0
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPNORMAL 0 -1 0
+EXPECT ACTIVE NONE
+CHECK ALL
