@@ -43,6 +43,8 @@ form could not aim a plane at one by any click.
 
 ## Tests
 
+- `SubObjectSelectionTests [sectionplaneface]`: the preview is tracked, draws a rectangle, cuts
+  nothing, and its plane is the one the click then places.
 - `headless.req342-section-plane-by-points` (new): a torus given a plane from two points in empty
   space (normal across the line, level with the work plane); a torus given one from two points **on
   the torus itself**; a sphere from typed points; the same-point refusal, and ESC leaving the previous

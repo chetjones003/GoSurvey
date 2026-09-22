@@ -1074,6 +1074,36 @@ TEST_CASE("SECTIONPLANE takes a flat face and refuses a curved one",
     CHECK(st.active == AppCommandState::Kind::None);
   }
 
+  SECTION("the through point is previewed where the plane would land") {
+    // REQ-342 (2026-09-18): the rectangle drawn under the cursor is the one the click places, so the
+    // preview is built from the same two points by the same code.
+    StartSectionPlaneCommand(st, log);
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -30, 100}, {0, -30, 0}), Tol(0.5, 0.5), log));
+
+    SectionClipIndicator ind{};
+    CHECK_FALSE(CadSectionPlanePreviewIndicator(st, &ind));  // nothing tracked yet
+
+    UpdateSectionPlanePreview(st, RayAt({0, 30, 100}, {0, 30, 0}), Tol(0.5, 0.5));
+    CHECK(st.sectionPlanePreviewValid);
+    REQUIRE(CadSectionPlanePreviewIndicator(st, &ind));
+    CHECK(ind.valid);
+    // Nothing is placed or cut by a preview.
+    CHECK_FALSE(st.viewportSectionClip);
+    CHECK(st.active == AppCommandState::Kind::SectionPlane);
+
+    // The preview's own plane is the plane the click then places.
+    const ray3d::Vec3 previewNormal = ray3d::Normalize(
+        ray3d::Cross(ray3d::Sub(ind.corner[1], ind.corner[0]), ray3d::Sub(ind.corner[3], ind.corner[0])));
+    CHECK(SubmitSectionPlaneFacePick(st, RayAt({0, 30, 100}, {0, 30, 0}), Tol(0.5, 0.5), log));
+    CHECK(st.viewportSectionClip);
+    const ucs::Ucs placed = st.viewportSectionClipFrame;
+    CHECK(std::fabs(ray3d::Dot(previewNormal, placed.zAxis)) == Catch::Approx(1.0).margin(1e-9));
+
+    // And the tracked cursor is dropped once the command is done.
+    ClearSectionPlanePreview(st);
+    CHECK_FALSE(CadSectionPlanePreviewIndicator(st, &ind));
+  }
+
   SECTION("the same point twice names no plane, and the command stays open") {
     StartSectionPlaneCommand(st, log);
     CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -30, 100}, {0, -30, 0}), Tol(0.5, 0.5), log));

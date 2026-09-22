@@ -35899,6 +35899,23 @@ const char* CadSectionPlanePromptText(const AppCommandState& st) {
   return "SECTIONPLANE — select a flat face, or a point to start a section line. ESC cancels.";
 }
 
+/// The frame of the plane standing square to the work plane through the line \p a to \p b, or false
+/// when those two points name no plane — the same two cases \ref ApplySectionPlaneFromLine refuses,
+/// without the message, so the live preview and the placement cannot disagree about either.
+static bool SectionPlaneFrameFromLine(const AppCommandState& st, const ray3d::Vec3& a,
+                                      const ray3d::Vec3& b, ucs::Ucs* out) {
+  const ucs::Ucs work = CadActiveUcsStorage(st);
+  const ray3d::Vec3 along = ray3d::Sub(b, a);
+  const double len = ray3d::Length(along);
+  const double scale = std::max(1.0, ray3d::Length(a));
+  if (!(len > 1e-9 * scale))
+    return false;
+  const ray3d::Vec3 normal = ray3d::Cross(along, work.zAxis);
+  if (!(ray3d::Length(normal) > 1e-9 * len))
+    return false;
+  return ucs::FromNormal(a, ray3d::Normalize(normal), out);
+}
+
 /// Place the clip plane square to the work plane, through the section line \p a to \p b (REQ-342,
 /// 2026-09-18 revision; AutoCAD's "Select face or any point to locate section line").
 ///
@@ -35918,14 +35935,13 @@ static bool ApplySectionPlaneFromLine(AppCommandState& st, const ray3d::Vec3& a,
     log.push_back("SECTIONPLANE — the two points are in the same place; a section line needs two.");
     return false;
   }
-  const ray3d::Vec3 normal = ray3d::Cross(along, work.zAxis);
-  if (!(ray3d::Length(normal) > 1e-9 * len)) {
+  if (!(ray3d::Length(ray3d::Cross(along, work.zAxis)) > 1e-9 * len)) {
     log.push_back("SECTIONPLANE — that line runs square to the work plane, so it names no section "
                   "plane. Pick two points across the work plane instead.");
     return false;
   }
   ucs::Ucs frame{};
-  if (!ucs::FromNormal(a, ray3d::Normalize(normal), &frame)) {
+  if (!SectionPlaneFrameFromLine(st, a, b, &frame)) {
     log.push_back("SECTIONPLANE — those two points do not name a plane.");
     return false;
   }
@@ -35961,6 +35977,41 @@ static void SubmitSectionPlaneLinePoint(AppCommandState& st, const ray3d::Vec3& 
   }
   CancelSectionPlaneCommand(st);
 }
+
+/// Where a cursor ray lands when SECTIONPLANE takes it as a POINT: on the geometry it hit, which is
+/// what makes "click the middle of the torus" mean the middle of the torus, and otherwise on the work
+/// plane, which is where a click in empty space has always been resolved. Shared by the click and by
+/// the live preview, so the preview cannot show a plane through a point the click would not take.
+static bool SectionPlanePointFromRay(const AppCommandState& st, const ray3d::Ray& ray,
+                                     const solidpick::Pick* hit, ray3d::Vec3* out) {
+  if (hit) {
+    *out = hit->point;
+    return true;
+  }
+  const ucs::Ucs work = CadActiveUcsStorage(st);
+  ray3d::Plane plane{};
+  plane.point = work.origin;
+  plane.normal = work.zAxis;
+  return ray3d::RayPlaneIntersect(ray, plane, out);
+}
+
+void UpdateSectionPlanePreview(AppCommandState& st, const ray3d::Ray& ray,
+                               const solidpick::Tolerance& tol) {
+  if (st.active != AppCommandState::Kind::SectionPlane ||
+      st.sectionPlanePhase != AppCommandState::SectionPlanePhase::WaitThroughPoint) {
+    st.sectionPlanePreviewValid = false;
+    return;
+  }
+  SelectedSubObject hit{};
+  solidpick::Pick pick{};
+  const bool hitSomething = PickSubObjectAcrossSolids(st, ray, tol, &hit, &pick);
+  ray3d::Vec3 p{};
+  st.sectionPlanePreviewValid = SectionPlanePointFromRay(st, ray, hitSomething ? &pick : nullptr, &p);
+  if (st.sectionPlanePreviewValid)
+    st.sectionPlanePreviewPoint = p;
+}
+
+void ClearSectionPlanePreview(AppCommandState& st) { st.sectionPlanePreviewValid = false; }
 
 void SubmitSectionPlanePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::SectionPlane)
@@ -36098,15 +36149,7 @@ bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
   // which is what makes "click the middle of the torus" mean the middle of the torus, and otherwise
   // on the work plane, which is where a click in empty space has always been resolved.
   const auto pointOfClick = [&](ray3d::Vec3* out) {
-    if (hitSomething) {
-      *out = pick.point;
-      return true;
-    }
-    const ucs::Ucs work = CadActiveUcsStorage(st);
-    ray3d::Plane plane{};
-    plane.point = work.origin;
-    plane.normal = work.zAxis;
-    return ray3d::RayPlaneIntersect(ray, plane, out);
+    return SectionPlanePointFromRay(st, ray, hitSomething ? &pick : nullptr, out);
   };
 
   if (st.sectionPlanePhase == PP::WaitThroughPoint) {
@@ -36166,8 +36209,12 @@ SectionClipPlane CadSectionClipPlane(const AppCommandState& st) {
                             st.viewportSectionClipFlip);
 }
 
-SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st) {
-  const SectionClipPlane p = CadSectionClipPlane(st);
+/// The indicator rectangle for \p p, sized to the drawing — the body of \ref CadSectionClipIndicator,
+/// shared with the SECTIONPLANE preview (REQ-342, 2026-09-18) so the plane the preview draws is the
+/// same rectangle, in the same place, as the plane the click then places.
+static SectionClipIndicator SectionClipIndicatorSizedToDrawing(const AppCommandState& st,
+                                                               const SectionClipPlane& p,
+                                                               const SectionPlaneExtent& extent) {
   if (!p.active)
     return SectionClipIndicator{};
 
@@ -36202,7 +36249,27 @@ SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st) {
     bbMin = ray3d::Vec3{viewCam.targetX - r, viewCam.targetY - r, viewCam.targetZ};
     bbMax = ray3d::Vec3{viewCam.targetX + r, viewCam.targetY + r, viewCam.targetZ};
   }
-  return SectionClipIndicatorQuad(p, bbMin, bbMax, 0.15, st.viewportSectionClipExtent);
+  return SectionClipIndicatorQuad(p, bbMin, bbMax, 0.15, extent);
+}
+
+SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st) {
+  return SectionClipIndicatorSizedToDrawing(st, CadSectionClipPlane(st), st.viewportSectionClipExtent);
+}
+
+bool CadSectionPlanePreviewIndicator(const AppCommandState& st, SectionClipIndicator* out) {
+  if (!out || !st.sectionPlanePreviewValid ||
+      st.active != AppCommandState::Kind::SectionPlane ||
+      st.sectionPlanePhase != AppCommandState::SectionPlanePhase::WaitThroughPoint)
+    return false;
+  ucs::Ucs frame{};
+  if (!SectionPlaneFrameFromLine(st, st.sectionPlaneP1, st.sectionPlanePreviewPoint, &frame))
+    return false;  // the cursor is on the first point, or straight above it: no plane to show yet
+  const SectionClipIndicator ind =
+      SectionClipIndicatorSizedToDrawing(st, SectionClipFromUcs(frame, 0.0, false), SectionPlaneExtent{});
+  if (!ind.valid)
+    return false;
+  *out = ind;
+  return true;
 }
 
 SectionPlaneGrips CadSectionPlaneGrips(const AppCommandState& st) {

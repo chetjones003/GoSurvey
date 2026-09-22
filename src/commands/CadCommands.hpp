@@ -2582,6 +2582,11 @@ struct AppCommandState {
     WaitThroughPoint,  ///< The second point of the section line.
   } sectionPlanePhase = SectionPlanePhase::PickFaceOrPoint;
   ray3d::Vec3 sectionPlaneP1{};  ///< The first point of the section line, in world coordinates.
+  /// Where the cursor is while the through point is being picked, so the plane can be PREVIEWED
+  /// standing on the line to it (REQ-342, 2026-09-18). Set by the viewport each frame and cleared
+  /// when the command is not asking; nothing is placed from it.
+  ray3d::Vec3 sectionPlanePreviewPoint{};
+  bool sectionPlanePreviewValid = false;
 
   // --- The LOFT command (REQ-315 / ADR-048, GitHub #241) ---------------------------------------
 
@@ -6486,6 +6491,20 @@ bool HandleSectionPlaneTextInput(const std::string& line, AppCommandState& st,
 /// The viewport click that answers SECTIONPLANE's point prompts, in plan-space world coordinates —
 /// the same shape of entry point `SECTION` uses for its own three points.
 void SubmitSectionPlanePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// Track the cursor while SECTIONPLANE is asking for its through point, so the plane can be drawn
+/// where it would land (REQ-342, 2026-09-18). Resolves the ray exactly as the click does — on the
+/// geometry it hits, else on the work plane — so the preview cannot promise a plane the click would
+/// not place. A no-op unless the command is at that prompt.
+void UpdateSectionPlanePreview(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol);
+
+/// Forget the tracked cursor: the command ended, the cursor left the viewport, or the route changed.
+void ClearSectionPlanePreview(AppCommandState& st);
+
+/// The rectangle to draw for that preview, or false when there is nothing to preview (no tracked
+/// cursor, or a cursor that names no plane yet). The same rectangle, in the same place, that the
+/// click will place — it is built by the same code.
+[[nodiscard]] bool CadSectionPlanePreviewIndicator(const AppCommandState& st, SectionClipIndicator* out);
 /// The viewport click that answers "select a flat face". Returns true when a plane was placed;
 /// on any refusal the command stays open and the reason is in \p log.
 bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
