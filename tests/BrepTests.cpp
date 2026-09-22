@@ -8288,3 +8288,38 @@ TEST_CASE("A loft between similar parallel polygons has flat side faces and sect
                     ucs::UcsToWorld(base, Vec3{22.5, 22.5, 25}), ucs::UcsToWorld(base, Vec3{-22.5, 22.5, 25})});
   }
 }
+
+TEST_CASE("A bolt-circle flange (4 holes around a circular plate) tessellates crack-free",
+          "[brep][req313]") {
+  // The actual real-world shape behind issue "torn bolt holes": several holes arranged around a
+  // circular boundary, not just one hole in a rectangle. BridgeHoleIntoOuter's bridging direction
+  // used to be a fixed +X ray for every hole, which works for one hole but makes a hole on the far
+  // side of the circle cast across the whole interior — risking a crossing with another hole or an
+  // earlier bridge, which EarClip then (correctly) refused, and because refusal used to propagate
+  // as an outright face failure, the WHOLE PART stopped rendering. Bridging now radiates outward
+  // from each hole's own position instead (see BridgeHoleIntoOuter's docs), and a real duplicate-
+  // point bug in the bridge splice (found via this exact repro) is fixed alongside it.
+  Problem why = Problem::Ok;
+  Solid disk;
+  REQUIRE(brep::MakeCylinder(World(), 5.0, 1.0, &disk, &why));
+  Solid cur = disk;
+  const double boltR = 3.5;
+  for (int i = 0; i < 4; ++i) {
+    double ang = i * kPiT / 2.0 + 0.3;
+    Solid out;
+    bool ok = brep::SubtractCircleThrough(cur, Vec3{boltR * std::cos(ang), boltR * std::sin(ang), 0},
+                                          Vec3{0, 0, 1}, 0.4, &out, &why);
+    REQUIRE(ok);
+    cur = out;
+  }
+  REQUIRE(brep::Validate(cur) == Problem::Ok);
+  const double wantVolume = kPiT * 25.0 * 1.0 - 4.0 * kPiT * 0.16 * 1.0;  // plate minus 4 bores
+  REQUIRE(brep::ComputeMassProperties(cur).volume == Approx(wantVolume).epsilon(1e-6));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(cur, 0.02, &t, &why));
+  REQUIRE(t.triangleCount() > 0);
+  RequireWindingMatchesNormals(t);
+  RequireMeshWatertight(t);
+  REQUIRE(TessellatedVolume(t) == Approx(wantVolume).epsilon(1e-2));
+}

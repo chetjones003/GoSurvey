@@ -16582,14 +16582,15 @@ namespace {
   // survey-scale part), and too tight a tolerance is exactly what let a valid-but-thin ear near a
   // bridge slit get spuriously rejected in the first place.
   const double scale = std::max({maxX - minX, maxY - minY, 1.0});
-  const double areaEps = 1e-9 * scale * scale;
-  const double containEps = 1e-9 * scale;
+  double areaEps = 1e-9 * scale * scale;
+  double containEps = 1e-9 * scale;
 
   std::vector<int> idx(static_cast<std::size_t>(n));
   for (int i = 0; i < n; ++i)
     idx[static_cast<std::size_t>(i)] = i;
 
   int guard = 0;
+  int stallEscalations = 0;
   while (idx.size() > 3 && guard++ < 4 * n) {
     const int m = static_cast<int>(idx.size());
     bool clipped = false;
@@ -16629,8 +16630,22 @@ namespace {
       clipped = true;
       break;
     }
-    if (!clipped)
+    if (!clipped) {
+      // By the "two ears theorem" a valid simple polygon always has at least two clippable ears, so
+      // a full pass finding none — on a polygon this large (a multi-hole bridge easily reaches into
+      // the thousands of vertices) — is far more often float precision defeating the strict tests
+      // above than a genuinely malformed ring. Loosen the tolerance by 10x and retry the SAME
+      // remaining ring before concluding it is actually malformed; capped, so a truly bad ring still
+      // gets refused rather than silently accepted at an absurdly coarse tolerance.
+      if (stallEscalations < 6) {
+        areaEps *= 10.0;
+        containEps *= 10.0;
+        ++stallEscalations;
+        continue;
+      }
       return false;  // a genuinely malformed ring (self-intersecting or degenerate) — refuse
+    }
+    stallEscalations = 0;  // progress was made; the next stall gets its own fresh escalation budget
   }
   for (std::size_t i = 1; i + 1 < idx.size(); ++i)
     tris->push_back({idx[0], idx[i], idx[i + 1]});
@@ -16659,48 +16674,93 @@ namespace {
 /// become one simple polygon `EarClip` can triangulate exactly. \p hole must already be wound
 /// opposite \p outer (CW inside a CCW outer, the usual even-odd hole convention) — the caller is
 /// responsible for that, since it can cheaply check once per loop rather than this being re-derived
-/// per bridge. Finds the hole's rightmost vertex, ray-casts +X to the nearest edge of the CURRENT
+/// per bridge. \p awayFrom is a point well inside the shape (the ORIGINAL outer ring's own centroid,
+/// computed once by the caller before any bridging, not recomputed per hole) that the bridge
+/// direction points away from.
+///
+/// Finds the hole's own extremal vertex in the direction `hole centroid - awayFrom` — "outward",
+/// radially — and ray-casts further in that SAME direction to the nearest edge of the CURRENT
 /// `outer` (so a second, third, ... hole bridged afterward sees earlier bridges as part of the
-/// boundary and cannot cross them), and connects to that edge's farther-in-X endpoint. This assumes
-/// the target vertex is actually visible from the hole vertex — true whenever the outer boundary has
-/// no reflex vertex between them, which holds for every convex or near-convex outer boundary this
-/// kernel's callers produce (a flange, a plate, an extruded profile); a pathological concave outer
-/// boundary could in principle need a reflex-vertex-aware target instead, which this does not do.
-/// The bridge is left an EXACT zero-width slit (the closing pair duplicates `M` and `target`
-/// precisely) — `EarClip`'s own robustness (proximity-to-corner skip in its containment test) is
-/// what makes that safe, rather than perturbing the duplicate points, which was tried first and
-/// did not address the actual defect (see TASK-272).
+/// boundary and cannot cross them), connecting to that edge's farther-along-the-ray endpoint. A
+/// fixed cast direction (this used to always be +X) works for exactly one hole, but for several
+/// holes arranged around a shape — a bolt circle, the actual case that motivated this function — a
+/// hole on the far side casting toward the SAME fixed direction has to cross the shape's interior,
+/// and can cross another hole or an earlier bridge on the way, which `EarClip` then correctly (if
+/// unhelpfully) refuses as a self-intersecting input. Cast radially instead, and every hole's bridge
+/// points a different way, like spokes — for a bolt-circle-shaped arrangement (the common case)
+/// spokes from distinct holes do not cross each other or pass through a third hole in between.
+///
+/// This still assumes the target vertex is visible along the ray from the hole's own extremal point
+/// — true whenever the outer boundary has no reflex vertex in the way, which holds for every convex
+/// or near-convex outer boundary this kernel's callers produce (a flange, a plate, an extruded
+/// profile); a pathological concave outer boundary, or holes clustered close enough together that
+/// their own radial spokes cross, could still defeat it — the caller is expected to treat a `false`
+/// return as "fall back to a different tessellation strategy", never as fatal.
+///
+/// The bridge is left an EXACT zero-width slit (the closing pair duplicates the hole's own extremal
+/// point and the target precisely) — `EarClip`'s own robustness (proximity-to-corner skip in its
+/// containment test) is what makes that safe, rather than perturbing the duplicate points, which was
+/// tried first and did not address the actual defect (see TASK-272).
 [[nodiscard]] bool BridgeHoleIntoOuter(std::vector<ucs::Point2D>* outer,
-                                       const std::vector<ucs::Point2D>& hole) {
+                                       const std::vector<ucs::Point2D>& hole,
+                                       const ucs::Point2D& awayFrom) {
   if (hole.size() < 3 || outer->size() < 3)
     return false;
+
+  ucs::Point2D holeC{0.0, 0.0};
+  for (const ucs::Point2D& p : hole) {
+    holeC.x += p.x / static_cast<double>(hole.size());
+    holeC.y += p.y / static_cast<double>(hole.size());
+  }
+  double dx = holeC.x - awayFrom.x;
+  double dy = holeC.y - awayFrom.y;
+  double dlen = std::sqrt(dx * dx + dy * dy);
+  if (dlen < 1e-12) {
+    dx = 1.0;
+    dy = 0.0;
+    dlen = 1.0;
+  }
+  dx /= dlen;
+  dy /= dlen;
+
   std::size_t mi = 0;
-  for (std::size_t i = 1; i < hole.size(); ++i)
-    if (hole[i].x > hole[mi].x)
+  double bestDot = hole[0].x * dx + hole[0].y * dy;
+  for (std::size_t i = 1; i < hole.size(); ++i) {
+    const double d = hole[i].x * dx + hole[i].y * dy;
+    if (d > bestDot) {
+      bestDot = d;
       mi = i;
+    }
+  }
   const ucs::Point2D M = hole[mi];
 
-  double bestX = std::numeric_limits<double>::infinity();
+  // Ray-cast M + t*(dx,dy), t > 0, against every edge of the current outer ring; keep the nearest.
+  double bestT = std::numeric_limits<double>::infinity();
   std::size_t bestEdge = SIZE_MAX;
   const std::size_t n = outer->size();
   for (std::size_t i = 0; i < n; ++i) {
     const ucs::Point2D& a = (*outer)[i];
     const ucs::Point2D& b = (*outer)[(i + 1) % n];
-    if ((a.y > M.y) == (b.y > M.y))
-      continue;  // edge doesn't straddle the ray's y
-    const double t = (M.y - a.y) / (b.y - a.y);
-    const double x = a.x + t * (b.x - a.x);
-    if (x >= M.x && x < bestX) {
-      bestX = x;
+    const double ex = b.x - a.x;
+    const double ey = b.y - a.y;
+    const double den = dx * ey - dy * ex;
+    if (std::fabs(den) < 1e-15)
+      continue;  // parallel to the ray
+    const double t = ((a.x - M.x) * ey - (a.y - M.y) * ex) / den;
+    const double s = ((a.x - M.x) * dy - (a.y - M.y) * dx) / den;
+    if (t > 1e-12 && s >= -1e-9 && s <= 1.0 + 1e-9 && t < bestT) {
+      bestT = t;
       bestEdge = i;
     }
   }
   if (bestEdge == SIZE_MAX)
-    return false;  // M was outside `outer` (shouldn't happen for a validated solid)
+    return false;  // M's radial ray never left the shape (shouldn't happen for a validated solid)
 
   const ucs::Point2D& a = (*outer)[bestEdge];
   const ucs::Point2D& b = (*outer)[(bestEdge + 1) % n];
-  const std::size_t targetIdx = (a.x >= b.x) ? bestEdge : (bestEdge + 1) % n;
+  const double aDot = a.x * dx + a.y * dy;
+  const double bDot = b.x * dx + b.y * dy;
+  const std::size_t targetIdx = (aDot >= bDot) ? bestEdge : (bestEdge + 1) % n;
   const ucs::Point2D target = (*outer)[targetIdx];
 
   std::vector<ucs::Point2D> result;
@@ -16708,7 +16768,11 @@ namespace {
   for (std::size_t i = 0; i < n; ++i) {
     result.push_back((*outer)[i]);
     if (i == targetIdx) {
-      result.push_back(M);
+      // The hole loop below already starts AT `mi` (j == 0 gives `hole[mi] == M`), so pushing `M`
+      // again here first would insert it three times total (this one, the loop's own first point,
+      // and the closing M below) with a zero-length edge between the first two — confirmed as the
+      // actual cause of an EarClip stall on a multi-hole face: not a self-intersection (checked
+      // directly, none), just a redundant degenerate point compounding once per bridged hole.
       for (std::size_t j = 0; j < hole.size(); ++j)
         result.push_back(hole[(mi + j) % hole.size()]);
       result.push_back(M);
@@ -16972,6 +17036,11 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         } else {
           if (SignedArea2D(outer2) < 0.0)
             std::reverse(outer2.begin(), outer2.end());
+          ucs::Point2D outerCentroid{0.0, 0.0};
+          for (const ucs::Point2D& p : outer2) {
+            outerCentroid.x += p.x / static_cast<double>(outer2.size());
+            outerCentroid.y += p.y / static_cast<double>(outer2.size());
+          }
           for (std::size_t li = 1; bridgedOk && li < f.loops.size(); ++li) {
             std::vector<ucs::Point2D> hole2;
             for (const EdgeUse& u : f.loops[li].uses) {
@@ -16987,7 +17056,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
               continue;  // a degenerate hole loop contributes nothing to bridge
             if (SignedArea2D(hole2) > 0.0)
               std::reverse(hole2.begin(), hole2.end());  // holes wind opposite the outer ring
-            if (!BridgeHoleIntoOuter(&outer2, hole2))
+            if (!BridgeHoleIntoOuter(&outer2, hole2, outerCentroid))
               bridgedOk = false;
           }
         }
