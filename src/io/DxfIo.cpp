@@ -762,8 +762,12 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
   // lines (issue #64), and so did an ordinary import of any file Civil 3D wrote. Same transform and
   // same `local = world - worldDocumentOrigin` rebase as appendSegXF; Z is carried unrebased, the
   // document origin being X/Y-only (ADR-025 D2).
+  /// \p planeNormal is the plane a curved segment of this polyline turns in (REQ-325 / ADR-053), in
+  /// WORLD axes — group 210 for an LWPOLYLINE that is not level (GitHub #521). World +Z, the
+  /// default, is every flat polyline and stores nothing new.
   auto appendPolylineXF = [&](const std::vector<ImportPolyVert>& pts, bool closed,
-                              const EntityAttributes& at) {
+                              const EntityAttributes& at,
+                              const ray3d::Vec3& planeNormal = ray3d::Vec3{0.0, 0.0, 1.0}) {
     if (pts.size() < 2)
       return;
     const int baseVert = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back();
@@ -785,6 +789,33 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       st.userPolylineVerts.push_back(p.z);
       if (anyBulge || !st.userPolylineVertsBulge.empty())
         st.userPolylineVertsBulge.push_back(static_cast<float>(p.bulge));
+    }
+    // The plane of the curved segments, per vertex. The array is per VERTEX and must stay that way
+    // (`docinvariants`): once anything in the drawing is tilted it is kept full length, with +Z for
+    // every flat vertex. A drawing with nothing tilted keeps it empty, exactly as before.
+    const bool tiltedPlane = !IsFlatNormal(static_cast<float>(planeNormal.x),
+                                           static_cast<float>(planeNormal.y),
+                                           static_cast<float>(planeNormal.z));
+    if (tiltedPlane || !st.userPolylineVertsNormal.empty())
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+    if (tiltedPlane) {
+      double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+      xf.apply(0.0, 0.0, &ax, &ay);
+      xf.apply(planeNormal.x, planeNormal.y, &bx, &by);
+      ray3d::Vec3 n{bx - ax, by - ay, planeNormal.z};
+      if (ray3d::Length(n) > 1e-12)
+        n = ray3d::Normalize(n);
+      else
+        n = ray3d::Vec3{0.0, 0.0, 1.0};
+      const size_t first = static_cast<size_t>(baseVert) * 3;  // the run just appended
+      for (size_t i = 0; i < pts.size(); ++i) {
+        const size_t k = first + i * 3;
+        if (k + 2 >= st.userPolylineVertsNormal.size())
+          break;
+        st.userPolylineVertsNormal[k] = static_cast<float>(n.x);
+        st.userPolylineVertsNormal[k + 1] = static_cast<float>(n.y);
+        st.userPolylineVertsNormal[k + 2] = static_cast<float>(n.z);
+      }
     }
     st.userPolylineOffsets.push_back(baseVert + static_cast<int>(pts.size()));
     st.userPolylineClosed.push_back(closed ? uint8_t{1} : uint8_t{0});
@@ -1304,6 +1335,10 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       PendingLw lw;
       double pendX = NAN;
       double lwElev = 0.0;  // DXF group 38 — the polyline's constant Z (absent → 0)
+      // Group 210: the plane an LWPOLYLINE lies in. Absent means world +Z, which is every flat file.
+      // Reading it is what lets a vertical or tilted polyline — every SECTION outline that is not
+      // level — come back where it was written instead of projected onto XY (GitHub #521).
+      double lwNx = 0.0, lwNy = 0.0, lwNz = 1.0;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
@@ -1319,6 +1354,12 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
           ParseIntFlexible(v, &lw.flags);
         else if (c == 38)
           ParseDouble(v, &lwElev);  // LWPOLYLINE carries ONE elevation for all vertices (REQ-057)
+        else if (c == 210)
+          ParseDouble(v, &lwNx);
+        else if (c == 220)
+          ParseDouble(v, &lwNy);
+        else if (c == 230)
+          ParseDouble(v, &lwNz);
         else if (c == 10) {
           ParseDouble(v, &pendX);
         } else if (c == 20) {
@@ -1344,10 +1385,29 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         // tessellated — the LWPOLYLINE keeps its identity and its arcs (REQ-053 / REQ-204).
         std::vector<ImportPolyVert> pts;
         pts.reserve(lw.vx.size());
-        for (int a = 0; a < nv; ++a)
-          pts.push_back(ImportPolyVert{lw.vx[static_cast<size_t>(a)], lw.vy[static_cast<size_t>(a)], lwElev,
-                                       lw.vb[static_cast<size_t>(a)]});
-        appendPolylineXF(pts, (lw.flags & 1) != 0, at);
+        const bool lwFlat = IsFlatNormal(static_cast<float>(lwNx), static_cast<float>(lwNy),
+                                         static_cast<float>(lwNz));
+        bool ocsOk = true;
+        for (int a = 0; a < nv; ++a) {
+          const double vx = lw.vx[static_cast<size_t>(a)];
+          const double vy = lw.vy[static_cast<size_t>(a)];
+          if (lwFlat) {
+            pts.push_back(ImportPolyVert{vx, vy, lwElev, lw.vb[static_cast<size_t>(a)]});
+            continue;
+          }
+          // The vertices and the elevation are in the polyline's OWN plane (its OCS); the document
+          // holds world coordinates, so they are mapped through the same Arbitrary Axis frame every
+          // tilted ARC and CIRCLE already uses (REQ-312).
+          ray3d::Vec3 w{};
+          if (!DxfOcsToWorld(vx, vy, lwElev, lwNx, lwNy, lwNz, &w)) {
+            ocsOk = false;  // a degenerate 210 is a malformed file: reported, not guessed at
+            break;
+          }
+          pts.push_back(ImportPolyVert{w.x, w.y, w.z, lw.vb[static_cast<size_t>(a)]});
+        }
+        if (ocsOk)
+          appendPolylineXF(pts, (lw.flags & 1) != 0, at,
+                           lwFlat ? ray3d::Vec3{0.0, 0.0, 1.0} : ray3d::Vec3{lwNx, lwNy, lwNz});
       }
       i = j;
       continue;
@@ -3648,9 +3708,214 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     // / ADR-053 increment 4 does not attempt to preserve closure through a tilted-segment split).
     // Bulge is carried for whichever straight/flat-curved vertices fall in this range; a tilted one
     // never does, by construction of the caller that decides the range.
+    // The world vertices of a run, and the plane they lie in — what decides HOW the run is written
+    // (GitHub #521). Three answers: flat (every Z the same), planar on some other plane, or not
+    // planar at all.
+    struct RunPlane {
+      bool flat = false;        ///< every vertex at one Z: the LWPOLYLINE this writer always wrote
+      bool planar = false;      ///< all vertices within tolerance of one plane
+      ray3d::Vec3 normal{0, 0, 1};
+    };
+    auto runWorldVerts = [&](int vStart, int vEndIncl) {
+      std::vector<ray3d::Vec3> w;
+      w.reserve(static_cast<size_t>(vEndIncl - vStart + 1));
+      for (int vi = vStart; vi <= vEndIncl; ++vi)
+        w.push_back(ray3d::Vec3{worldX(st.userPolylineVerts[static_cast<size_t>(vi * 3)]),
+                                worldY(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)]),
+                                static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)])});
+      return w;
+    };
+    /// \p curvedOutOfPlane says a segment of this run turns in a plane that is not level — a circle
+    /// standing on edge has both its VERTICES at one Z while the arc between them rises out of XY,
+    /// so vertex heights alone cannot answer "is this flat?" (GitHub #521).
+    auto classifyRunPlane = [&](const std::vector<ray3d::Vec3>& w, const ray3d::Vec3& preferred,
+                                bool curvedOutOfPlane) {
+      RunPlane rp;
+      if (w.size() < 2)
+        return rp;
+      double zMin = w[0].z, zMax = w[0].z, size = 0.0;
+      for (const ray3d::Vec3& p : w) {
+        zMin = std::min(zMin, p.z);
+        zMax = std::max(zMax, p.z);
+        size = std::max(size, ray3d::Length(ray3d::Sub(p, w[0])));
+      }
+      const double tol = std::max(1e-7 * std::max(size, 1.0), 1e-9);
+      if (zMax - zMin <= tol && !curvedOutOfPlane) {
+        rp.flat = true;
+        rp.planar = true;
+        rp.normal = ray3d::Vec3{0, 0, 1};
+        return rp;
+      }
+      // The polyline's own stored normal is preferred when it has one (a SECTION outline carries its
+      // cut plane, REQ-325), because it is the exact plane rather than one re-derived from rounded
+      // vertices. Newell's normal otherwise, which needs no three points chosen by hand.
+      ray3d::Vec3 n = preferred;
+      if (!(ray3d::Length(n) > 1e-12)) {
+        ray3d::Vec3 acc{};
+        for (size_t i = 0; i < w.size(); ++i) {
+          const ray3d::Vec3& a = w[i];
+          const ray3d::Vec3& b = w[(i + 1) % w.size()];
+          acc.x += (a.y - b.y) * (a.z + b.z);
+          acc.y += (a.z - b.z) * (a.x + b.x);
+          acc.z += (a.x - b.x) * (a.y + b.y);
+        }
+        n = acc;
+      }
+      if (!(ray3d::Length(n) > 1e-12))
+        return rp;  // collinear and not level: no plane to name, so it goes out as a 3D polyline
+      n = ray3d::Normalize(n);
+      for (const ray3d::Vec3& p : w)
+        if (std::fabs(ray3d::Dot(ray3d::Sub(p, w[0]), n)) > tol)
+          return rp;  // genuinely 3D
+      if (std::fabs(std::fabs(n.z) - 1.0) <= 1e-12 && !curvedOutOfPlane) {
+        rp.flat = true;  // a level plane IS the flat case, whichever way the normal was derived
+        rp.planar = true;
+        rp.normal = ray3d::Vec3{0, 0, 1};
+        return rp;
+      }
+      rp.planar = true;
+      rp.normal = n;
+      return rp;
+    };
+
+    /// A run that is planar but NOT level: one LWPOLYLINE in its own OCS, which is how AutoCAD
+    /// writes it and what round-trips exactly (GitHub #521). Before this, group 38 took the first
+    /// vertex's Z, the extrusion stayed (0,0,1) and the vertices were the XY projection — a vertical
+    /// section came back as a zero-area sliver.
+    auto emitPolylineRunOcs = [&](int vStart, int vEndIncl, bool closed, const EntityAttributes& at,
+                                  const std::vector<ray3d::Vec3>& w, const ray3d::Vec3& normal) {
+      const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+      const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+      const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+      char hb[24];
+      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+      DxfLwPolylineRecord rec;
+      rec.handleHex = hb;
+      rec.ownerHandleHex = hBrModel;
+      rec.layer = layer8;
+      rec.linetype = DxfExportEntityLtype6(at);
+      rec.colorAci = std::to_string(DxfNearestAciFromRgbPacked(rgb));
+      rec.lineweight370 = dxfEntityLineweight370Str(at);
+      rec.hasTransparency =
+          dxfTransparency440Str(EffectiveEntityTransparency01(at, lyr), &rec.transparency440);
+      rec.closed = closed;
+      rec.extrusionX = std::to_string(normal.x);
+      rec.extrusionY = std::to_string(normal.y);
+      rec.extrusionZ = std::to_string(normal.z);
+      double elev = 0.0;
+      rec.vertices.reserve(w.size());
+      for (size_t i = 0; i < w.size(); ++i) {
+        ray3d::Vec3 o{};
+        if (!DxfWorldToOcs(w[i].x, w[i].y, w[i].z, normal.x, normal.y, normal.z, &o))
+          return false;
+        if (i == 0)
+          elev = o.z;
+        rec.vertices.emplace_back(std::to_string(o.x), std::to_string(o.y));
+      }
+      rec.elevation38 = std::to_string(elev);
+      bool anyBulge = false;
+      for (int vi = vStart; vi <= vEndIncl && vi < static_cast<int>(st.userPolylineVertsBulge.size()); ++vi)
+        if (st.userPolylineVertsBulge[static_cast<size_t>(vi)] != 0.0f) { anyBulge = true; break; }
+      if (anyBulge) {
+        rec.bulges.reserve(w.size());
+        for (int vi = vStart; vi <= vEndIncl; ++vi) {
+          const float b = vi < static_cast<int>(st.userPolylineVertsBulge.size())
+                              ? st.userPolylineVertsBulge[static_cast<size_t>(vi)] : 0.0f;
+          rec.bulges.push_back(b == 0.0f ? std::string("0") : std::to_string(static_cast<double>(b)));
+        }
+      }
+      emitLwPolylineRecord(rec);
+      ++nPolyOut;
+      return true;
+    };
+
+    /// A run that is not planar at all: the 3D `POLYLINE` / `VERTEX` / `SEQEND` triple, the only DXF
+    /// entity that carries a Z per vertex (GitHub #521). Group 70 bit 8 marks it 3D; a 3D polyline
+    /// has no bulge, so a curved segment cannot arrive here — one that is curved is planar by
+    /// construction and took the OCS path above.
+    auto emitPolyline3d = [&](bool closed, const EntityAttributes& at, const std::vector<ray3d::Vec3>& w) {
+      const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+      const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+      const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+      std::string transparency;
+      const bool hasTransparency =
+          dxfTransparency440Str(EffectiveEntityTransparency01(at, lyr), &transparency);
+      const std::string ltype = DxfExportEntityLtype6(at);
+      const std::string aci = std::to_string(DxfNearestAciFromRgbPacked(rgb));
+      const std::string lw370 = dxfEntityLineweight370Str(at);
+      char hb[24];
+      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+      emitPair(0, "POLYLINE");
+      emitPair(5, hb);
+      emitPair(330, hBrModel);
+      emitPair(100, "AcDbEntity");
+      emitPair(8, layer8);
+      emitPair(6, ltype);
+      emitPair(62, aci);
+      emitPair(370, lw370);
+      if (hasTransparency)
+        emitPair(440, transparency);
+      emitPair(100, "AcDb3dPolyline");
+      emitPair(66, "1");  // vertices follow
+      emitPair(10, "0.0");
+      emitPair(20, "0.0");
+      emitPair(30, "0.0");
+      emitPair(70, closed ? "9" : "8");  // bit 8: 3D polyline; bit 1: closed
+      for (const ray3d::Vec3& p : w) {
+        char vhb[24];
+        std::snprintf(vhb, sizeof(vhb), "%llX", static_cast<unsigned long long>(entHandle++));
+        emitPair(0, "VERTEX");
+        emitPair(5, vhb);
+        emitPair(330, hb);
+        emitPair(100, "AcDbEntity");
+        emitPair(8, layer8);
+        emitPair(100, "AcDbVertex");
+        emitPair(100, "AcDb3dPolylineVertex");
+        emitPair(10, std::to_string(p.x));
+        emitPair(20, std::to_string(p.y));
+        emitPair(30, std::to_string(p.z));
+        emitPair(70, "32");  // bit 32: a 3D polyline vertex
+      }
+      char shb[24];
+      std::snprintf(shb, sizeof(shb), "%llX", static_cast<unsigned long long>(entHandle++));
+      emitPair(0, "SEQEND");
+      emitPair(5, shb);
+      emitPair(330, hb);
+      emitPair(100, "AcDbEntity");
+      emitPair(8, layer8);
+      ++nPolyOut;
+    };
+
     auto emitPolylineRun = [&](int vStart, int vEndIncl, bool closed, const EntityAttributes& at) {
       if (vEndIncl - vStart < 1)
         return;
+      // GitHub #521: a run that is not level is written in its own plane (or as a 3D polyline),
+      // instead of being flattened onto XY at the first vertex's elevation.
+      {
+        const std::vector<ray3d::Vec3> w = runWorldVerts(vStart, vEndIncl);
+        ray3d::Vec3 stored{};
+        bool curved = false;
+        for (int vi = vStart; vi <= vEndIncl; ++vi) {
+          const size_t k = static_cast<size_t>(vi) * 3;
+          if (k + 2 >= st.userPolylineVertsNormal.size())
+            continue;
+          if (IsFlatNormal(st.userPolylineVertsNormal[k], st.userPolylineVertsNormal[k + 1],
+                           st.userPolylineVertsNormal[k + 2]))
+            continue;
+          stored = ray3d::Vec3{st.userPolylineVertsNormal[k], st.userPolylineVertsNormal[k + 1],
+                               st.userPolylineVertsNormal[k + 2]};
+          if (vi < static_cast<int>(st.userPolylineVertsBulge.size()) &&
+              st.userPolylineVertsBulge[static_cast<size_t>(vi)] != 0.0f)
+            curved = true;  // an arc that turns out of the level plane (GitHub #521)
+        }
+        const RunPlane rp = classifyRunPlane(w, stored, curved);
+        if (!rp.flat) {
+          if (rp.planar && emitPolylineRunOcs(vStart, vEndIncl, closed, at, w, rp.normal))
+            return;
+          emitPolyline3d(closed, at, w);
+          return;
+        }
+      }
       const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
       const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
       const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
@@ -3829,6 +4094,35 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
         // Unchanged path — byte-identical to before REQ-325.
         emitPolylineRun(v0, v1 - 1, closed, at);
         continue;
+      }
+
+      // GitHub #521: a polyline whose curved segments all turn in ONE plane, with every vertex on
+      // it, is that plane's own LWPOLYLINE — written in its OCS, bulges and closure intact. A
+      // sphere's vertical section is exactly this: a circle standing on edge. Splitting it into
+      // ARCs (below) keeps the shape but loses the polyline, which is what ADR-053 (e) called out
+      // as the cost of the split; in this case the cost is now avoidable.
+      {
+        bool oneP1ane = true;
+        float n0x = 0.f, n0y = 0.f, n0z = 1.f;
+        normalAt(v0, &n0x, &n0y, &n0z);
+        for (int vi = v0; vi < v1 && oneP1ane; ++vi) {
+          float nx = 0.f, ny = 0.f, nz = 1.f;
+          normalAt(vi, &nx, &ny, &nz);
+          if (bulgeAt(vi) == 0.f)
+            continue;  // a straight segment turns in no plane of its own
+          const ray3d::Vec3 a{n0x, n0y, n0z};
+          const ray3d::Vec3 b{nx, ny, nz};
+          if (ray3d::Length(ray3d::Cross(a, b)) > 1e-6)
+            oneP1ane = false;
+        }
+        if (oneP1ane) {
+          const std::vector<ray3d::Vec3> w = runWorldVerts(v0, v1 - 1);
+          const RunPlane rp = classifyRunPlane(w, ray3d::Vec3{n0x, n0y, n0z}, /*curvedOutOfPlane=*/true);
+          if (rp.planar && !rp.flat) {
+            emitPolylineRun(v0, v1 - 1, closed, at);
+            continue;
+          }
+        }
       }
 
       // REQ-325 / ADR-053 increment 4: split at each tilted edge into flat runs (their own

@@ -3749,6 +3749,19 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   if split, representation exists). Decided with the user 2026-09-07. An all-flat polyline keeps
   exporting as one `LWPOLYLINE`/`POLYLINE`, byte-identical to today.
 
+  **(f) DXF/DWG amendment (2026-09-22, D-2026-09-22-a, GitHub issue #521): the split is for polylines
+  whose segments disagree about their plane, not for every tilted one.** (e) reads the format ceiling
+  correctly — one elevation and one extrusion per entity — but draws the line in the wrong place. A
+  polyline whose vertices AND whose every curved segment lie in one plane needs exactly one
+  extrusion, so it is written whole, in its own OCS. The split stands for a polyline whose segments
+  genuinely lie in different planes, and a level polyline is untouched.
+
+  The same amendment ends the flattening this writer did for every non-level polyline (first vertex's
+  Z as group 38, extrusion left at (0, 0, 1), vertices projected onto XY) — the very failure (e)
+  rejected for a tilted segment, still being done to straight ones. A polyline that is not planar at
+  all is now written as a 3D `POLYLINE`/`VERTEX` pair rather than flattened. On import, group 210 is
+  read and the vertices mapped back through REQ-312's Arbitrary Axis frame.
+
 - **Consequences.**
   - No behavior change for any existing polyline: `userPolylineVertsNormal` is empty (or all-+Z) for
     every polyline that exists today, and every consumer that does not yet know about it (increments

@@ -29963,6 +29963,18 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
                                                        static_cast<int>(st.userPolylineVertsBulge.size());
            ++i)
         st.userPolylineVertsBulge[static_cast<std::size_t>(before) + i] = bulges[i];
+      // REQ-325 / ADR-053: each vertex carries the plane its curved segment turns in. A section on a
+      // vertical or tilted plane has curved segments in THAT plane — a sphere's vertical section is a
+      // circle standing on edge — and the default +Z would draw them lying flat, and export them
+      // flat (GitHub #521).
+      for (std::size_t i = 0; i < bulges.size(); ++i) {
+        const std::size_t k = (static_cast<std::size_t>(before) + i) * 3;
+        if (k + 2 >= st.userPolylineVertsNormal.size())
+          break;
+        st.userPolylineVertsNormal[k] = static_cast<float>(c.plane.zAxis.x);
+        st.userPolylineVertsNormal[k + 1] = static_cast<float>(c.plane.zAxis.y);
+        st.userPolylineVertsNormal[k + 2] = static_cast<float>(c.plane.zAxis.z);
+      }
       ++made;
     }
   }

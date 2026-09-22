@@ -9829,6 +9829,37 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-06)
 - Revisions: 2026-09-06 — initial.
 
+  2026-09-22 — **a polyline that lies in ONE plane exports as one `LWPOLYLINE` in that plane**
+  (D-2026-09-22-a, ADR-053 amendment (f), TASK-270, GitHub issue #521). Increment 4 above splits a
+  polyline with a tilted curved segment into flat runs plus one ARC each, because `LWPOLYLINE` carries
+  one elevation and one extrusion for the whole entity. That ceiling is real, but it only bites when
+  the segments disagree about their plane. When the whole polyline — vertices and every curved
+  segment — lies in a single plane, that one extrusion is all it needs: the entity is written in its
+  own OCS (group 210/220/230 = the plane normal, group 38 and the vertices in that plane), bulges and
+  closure intact, and it round-trips as itself.
+
+  What made this urgent is that the same writer **flattened** every non-level polyline: group 38 took
+  the first vertex's Z, the extrusion stayed (0, 0, 1) and the vertices were the XY projection, so a
+  100 × 50 vertical `SECTION` of a box exported as a zero-area sliver 100 long. `SECTION` did not
+  exist when that was recorded as debt (TASK-034); it now makes non-level outlines routinely.
+
+  So, on export:
+  - level polyline → unchanged, byte-identical;
+  - planar but not level → one `LWPOLYLINE` in its own OCS;
+  - segments in different planes → increment 4's split, unchanged;
+  - not planar at all → a 3D `POLYLINE` / `VERTEX` pair, the only DXF entity with a Z per vertex.
+
+  On import, group 210 on an `LWPOLYLINE` is read and its vertices mapped back through the same
+  Arbitrary Axis frame REQ-312 uses, and the plane is stored per vertex so a curved segment keeps it.
+
+  Acceptance added:
+  - a vertical and a tilted `SECTION` outline of a box survive export and re-import, every vertex in
+    all three axes;
+  - a sphere's vertical section — a circle standing on edge, whose two vertices are level while its
+    arcs are not — exports as one `LWPOLYLINE` with group 210, not as ARCs, and comes back as one
+    closed polyline with its bulges;
+  - a level polyline exports exactly as before.
+
 ### REQ-326 — 3D Object Snap: AutoCAD-parity solid-geometry snapping, independent of 2D Object Snap (issue #395)
 - Purpose: let a user snap the cursor to B-rep solid geometry (vertices, edges, faces, and — for
   freeform NURBS surfaces from LOFT/SWEEP — knot points) the same way AutoCAD's "3D Object Snap" tab

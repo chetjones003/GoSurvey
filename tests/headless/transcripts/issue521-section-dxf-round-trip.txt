@@ -1,0 +1,116 @@
+# GitHub issue #521 — a vertical or tilted polyline survives DXF export.
+#
+# Before: every non-horizontal polyline was written as an LWPOLYLINE with group 38 = the FIRST
+# vertex's Z, extrusion (0,0,1), and the vertices projected onto XY. A 100 x 50 vertical SECTION of a
+# box came back as a zero-area sliver 100 long at elevation 25. Recorded as debt in TASK-034; SECTION
+# now makes non-horizontal outlines routinely, so the debt became data loss on every section export.
+#
+# The test is the ROUND TRIP, which is the claim that matters: export, import, and the outline is the
+# outline that was drawn. `EXPECT POLYVERT` compares world coordinates to 0.01.
+
+NEW
+
+# --- the issue's own repro: a vertical section of a box ------------------------------------------
+CMD BOX 0,0,-25 100 70 50
+CMD UCS
+CMD X
+CMD 90
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+CMD UCS
+CMD W
+ESC
+EXPECT POLYLINES 1
+# The outline stands in the world XZ plane (y = 0): 100 wide in x, 50 tall in z.
+EXPECT POLYVERT 0 0 -50 0 25
+EXPECT POLYVERT 0 1 -50 0 -25
+EXPECT POLYVERT 0 2 50 0 -25
+EXPECT POLYVERT 0 3 50 0 25
+
+EXPORT DXF %OUT%/issue521-vertical.dxf
+NEW
+EXPECT POLYLINES 0
+IMPORT DXF %OUT%/issue521-vertical.dxf
+EXPECT POLYLINES 1
+# Every vertex is where it was drawn, in all three axes — this is what was lost.
+EXPECT POLYVERT 0 0 -50 0 25
+EXPECT POLYVERT 0 1 -50 0 -25
+EXPECT POLYVERT 0 2 50 0 -25
+EXPECT POLYVERT 0 3 50 0 25
+CHECK ALL
+
+# --- a TILTED section: the 45 degree cut of the same box -----------------------------------------
+NEW
+CMD BOX 0,0,-25 100 70 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+CMD UCS
+CMD W
+ESC
+EXPECT POLYLINES 1
+EXPORT DXF %OUT%/issue521-tilted.dxf
+NEW
+IMPORT DXF %OUT%/issue521-tilted.dxf
+EXPECT POLYLINES 1
+# The cut plane is z = y, so every vertex has z equal to its own y — a flattened export cannot.
+EXPECT POLYVERT 0 0 -50 25 25
+EXPECT POLYVERT 0 1 -50 -25 -25
+EXPECT POLYVERT 0 2 50 -25 -25
+EXPECT POLYVERT 0 3 50 25 25
+CHECK ALL
+
+# --- a vertical section of a SPHERE: a circle, so its bulges must survive too ---------------------
+NEW
+CMD SPHERE 0,0 30
+BOX -100 -100 100 100
+CMD SECTION
+CMD 0,0,0
+CMD 0,10,0
+CMD 0,0,10
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPORT DXF %OUT%/issue521-sphere.dxf
+# It stays ONE closed polyline, written in its own plane: extrusion (1, 0, 0), not the default
+# (0, 0, 1). Both vertices are level (a circle on edge turns its arc out of XY between them), so the
+# vertices alone cannot say the plane — group 210 is what carries it.
+EXPECT FILECONTAINS %OUT%/issue521-sphere.dxf "LWPOLYLINE"
+EXPECT FILECONTAINS %OUT%/issue521-sphere.dxf "210"
+EXPECT FILELACKS %OUT%/issue521-sphere.dxf "AcDbCircularArc"
+NEW
+IMPORT DXF %OUT%/issue521-sphere.dxf
+EXPECT POLYLINES 1
+# The circle stands in the world YZ plane (x = 0), radius 30 about the origin.
+EXPECT POLYVERT 0 0 0 30 0
+EXPECT POLYVERT 0 1 0 -30 0
+EXPECT POLYBULGE 0 0 1
+EXPECT POLYBULGE 0 1 1
+CHECK ALL
+
+# Exported again from the re-imported drawing, the plane is still there: the arc's plane survived the
+# round trip, not only its two endpoints.
+EXPORT DXF %OUT%/issue521-sphere2.dxf
+EXPECT FILECONTAINS %OUT%/issue521-sphere2.dxf "LWPOLYLINE"
+EXPECT FILELACKS %OUT%/issue521-sphere2.dxf "AcDbCircularArc"
+
+# --- a flat polyline is untouched: the common case must not move ----------------------------------
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD 40,0
+CMD 40,30
+CMD CLOSE
+ESC
+EXPORT DXF %OUT%/issue521-flat.dxf
+NEW
+IMPORT DXF %OUT%/issue521-flat.dxf
+EXPECT POLYLINES 1
+EXPECT POLYVERT 0 0 0 0 0
+EXPECT POLYVERT 0 1 40 0 0
+EXPECT POLYVERT 0 2 40 30 0
+CHECK ALL
