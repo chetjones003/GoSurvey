@@ -4134,6 +4134,11 @@ TEST_CASE("Loft through three circles is a stack of cone frustums", "[brep][req3
       REQUIRE(rho == Approx(0.5 * (r0 + r1)).epsilon(1e-6));
     }
   }
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.02, &t, &why));
+  RequireWindingMatchesNormals(t);
+  RequireMeshWatertight(t);
 }
 
 TEST_CASE("Loft stays accurate on a tilted frame at survey magnitude", "[brep][req315]") {
@@ -8322,4 +8327,64 @@ TEST_CASE("A bolt-circle flange (4 holes around a circular plate) tessellates cr
   RequireWindingMatchesNormals(t);
   RequireMeshWatertight(t);
   REQUIRE(TessellatedVolume(t) == Approx(wantVolume).epsilon(1e-2));
+}
+
+TEST_CASE("A pipe flange (big central bore + 4 bolt holes) tessellates crack-free",
+          "[brep][req313]") {
+  // The PREVIOUS repro (4 bolt holes only, loops == 5) passed, but a real pipe flange's face has a
+  // big central through-bore for the pipe ALSO cut into it, alongside the bolt holes — six loops
+  // total (outer + centre bore + 4 bolt holes), confirmed via a debug dump of the actual reported
+  // part. That is a materially different shape from four SAME-sized holes: one hole is much bigger
+  // than the others, and — this repro is what actually caught the remaining crack — the outer
+  // ring's own centroid (used as BridgeHoleIntoOuter's "away from" point) sits very close to the
+  // big centre hole, which can leave that hole's own bridge direction close to degenerate.
+  Problem why = Problem::Ok;
+  Solid disk;
+  REQUIRE(brep::MakeCylinder(World(), 5.0, 1.0, &disk, &why));
+  Solid cur;
+  REQUIRE(brep::SubtractCircleThrough(disk, Vec3{0, 0, 0}, Vec3{0, 0, 1}, 1.5, &cur, &why));
+  const double boltR = 3.5;
+  for (int i = 0; i < 4; ++i) {
+    double ang = i * kPiT / 2.0 + 0.3;
+    Solid out;
+    bool ok = brep::SubtractCircleThrough(cur, Vec3{boltR * std::cos(ang), boltR * std::sin(ang), 0},
+                                          Vec3{0, 0, 1}, 0.4, &out, &why);
+    REQUIRE(ok);
+    cur = out;
+  }
+  REQUIRE(brep::Validate(cur) == Problem::Ok);
+  const double wantVolume =
+      kPiT * 25.0 * 1.0 - kPiT * 2.25 * 1.0 - 4.0 * kPiT * 0.16 * 1.0;  // plate - centre - 4 bolts
+  REQUIRE(brep::ComputeMassProperties(cur).volume == Approx(wantVolume).epsilon(1e-6));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(cur, 0.02, &t, &why));
+  REQUIRE(t.triangleCount() > 0);
+  RequireWindingMatchesNormals(t);
+  RequireMeshWatertight(t);
+  REQUIRE(TessellatedVolume(t) == Approx(wantVolume).epsilon(1e-2));
+}
+
+TEST_CASE("DEBUG loft topology dump", "[brepdebug]") {
+  Problem why = Problem::Ok;
+  const double r0 = 5.0, r1 = 8.0, r2 = 3.5;
+  const double z1 = 4.0, z2 = 11.0;
+  Solid s;
+  REQUIRE(brep::Loft({CircleProfile(World(), r0), CircleProfile(PlaneAlong(World(), z1), r1),
+                      CircleProfile(PlaneAlong(World(), z2), r2)},
+                     &s, &why));
+  for (std::size_t fi = 0; fi < s.faces.size(); ++fi) {
+    const auto& f = s.faces[fi];
+    UNSCOPED_INFO("face " << fi << " kind=" << (int)f.surface.kind << " loops=" << f.loops.size()
+                  << " uStart=" << f.uStart << " uEnd=" << f.uEnd
+                  << " vStart=" << f.vStart << " vEnd=" << f.vEnd);
+    for (std::size_t li = 0; li < f.loops.size(); ++li) {
+      for (const auto& u : f.loops[li].uses) {
+        const auto& e = s.edges[static_cast<size_t>(u.edge)];
+        UNSCOPED_INFO("  loop " << li << " edge " << u.edge << " kind=" << (int)e.kind
+                      << " rev=" << u.reversed << " sweep=" << e.sweep << " radius=" << e.radius);
+      }
+    }
+  }
+  CHECK(true);
 }

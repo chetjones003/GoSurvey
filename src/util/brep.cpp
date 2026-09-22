@@ -16986,6 +16986,32 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
   Tessellation mesh;
   MeshBuilder mb{&mesh};
 
+  {
+    // TEMPORARY diagnostic — see the fallback-path log below for context; this one fires
+    // unconditionally, once per Tessellate() call, so it can confirm whether a given solid's faces
+    // are being reached by this function AT ALL versus rendered through a different (e.g.
+    // mesh-import) path this fix never touches.
+    FILE* dbgf = std::fopen("C:/temp/gosurvey_bridge_debug.log", "a");
+    if (dbgf) {
+      std::fprintf(dbgf, "Tessellate call: faces=%zu\n", s.faces.size());
+      for (std::size_t fi2 = 0; fi2 < s.faces.size(); ++fi2) {
+        const Face& f2 = s.faces[fi2];
+        const char* kindName = "?";
+        switch (f2.surface.kind) {
+          case SurfaceKind::Plane: kindName = "Plane"; break;
+          case SurfaceKind::Cylinder: kindName = "Cylinder"; break;
+          case SurfaceKind::Cone: kindName = "Cone"; break;
+          case SurfaceKind::Sphere: kindName = "Sphere"; break;
+          case SurfaceKind::Torus: kindName = "Torus"; break;
+          case SurfaceKind::Nurbs: kindName = "Nurbs"; break;
+        }
+        std::fprintf(dbgf, "  face %zu kind=%s loops=%zu paramLoops=%zu\n", fi2, kindName,
+                     f2.loops.size(), f2.paramLoops.size());
+      }
+      std::fclose(dbgf);
+    }
+  }
+
   for (std::size_t fi = 0; fi < s.faces.size(); ++fi) {
     const Face& f = s.faces[fi];
     mb.face = static_cast<int>(fi);
@@ -17021,6 +17047,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         // band grid below — worse (the pinch crack this fix targets), but never worse than not
         // rendering the face at all, which is the one regression this must never reintroduce.
         bool bridgedOk = true;
+        const char* failReason = "";
         std::vector<ucs::Point2D> outer2;
         for (const EdgeUse& u : f.loops[0].uses) {
           const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
@@ -17033,6 +17060,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         }
         if (outer2.size() < 3) {
           bridgedOk = false;
+          failReason = "outer<3pts";
         } else {
           if (SignedArea2D(outer2) < 0.0)
             std::reverse(outer2.begin(), outer2.end());
@@ -17056,13 +17084,29 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
               continue;  // a degenerate hole loop contributes nothing to bridge
             if (SignedArea2D(hole2) > 0.0)
               std::reverse(hole2.begin(), hole2.end());  // holes wind opposite the outer ring
-            if (!BridgeHoleIntoOuter(&outer2, hole2, outerCentroid))
+            if (!BridgeHoleIntoOuter(&outer2, hole2, outerCentroid)) {
               bridgedOk = false;
+              failReason = "bridge";
+            }
           }
         }
         std::vector<std::array<int, 3>> tris;
-        if (bridgedOk && !EarClip(outer2, &tris))
+        if (bridgedOk && !EarClip(outer2, &tris)) {
           bridgedOk = false;
+          failReason = "earclip";
+        }
+        if (!bridgedOk) {
+          // TEMPORARY diagnostic (issue: real flange still falls back after the synthetic 4-hole
+          // repro was fixed) — appends one line per failing face so the actual failure mode on a
+          // real DWG-imported part can be read back without a debugger attached. Safe to leave: a
+          // fixed, small append-only log, only written on the (already rare) fallback path.
+          FILE* dbgf = std::fopen("C:/temp/gosurvey_bridge_debug.log", "a");
+          if (dbgf) {
+            std::fprintf(dbgf, "face=%d loops=%zu outerPts=%zu reason=%s\n", static_cast<int>(fi),
+                         f.loops.size(), outer2.size(), failReason);
+            std::fclose(dbgf);
+          }
+        }
         if (bridgedOk) {
           const Vec3 planeN = sf.frame.zAxis;
           std::vector<Vec3> world(outer2.size());
@@ -17462,6 +17506,44 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     for(auto &idx: mesh.indices) idx = remap[idx];
     mesh.vertsXyz.swap(newVerts);
     mesh.normalsXyz.swap(newNorms);
+  }
+
+  {
+    // TEMPORARY diagnostic — same story as the two diagnostics above: check the FINISHED mesh's
+    // watertightness directly (every triangle edge must be shared by exactly two triangles) and log
+    // any cracked edges, tagged with which face they're on, so a real reported part's exact crack
+    // location can be read back without reproducing it synthetically first.
+    auto pos = [&](std::uint32_t i) { return Vec3{mesh.vertsXyz[3 * i], mesh.vertsXyz[3 * i + 1], mesh.vertsXyz[3 * i + 2]}; };
+    auto quant = [](double v) { return static_cast<long long>(std::llround(v * 1.0e6)); };
+    using Key = std::array<long long, 3>;
+    auto key = [&](const Vec3& p) { return Key{quant(p.x), quant(p.y), quant(p.z)}; };
+    std::map<std::pair<Key, Key>, std::pair<int, int>> edgeUses;  // -> (count, one face id)
+    for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+      const int face = i / 3 < mesh.triFace.size() ? mesh.triFace[i / 3] : -1;
+      const std::uint32_t tri[3] = {mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2]};
+      for (int e = 0; e < 3; ++e) {
+        const Key a = key(pos(tri[e]));
+        const Key b = key(pos(tri[(e + 1) % 3]));
+        if (a == b) continue;
+        auto& v = edgeUses[a < b ? std::make_pair(a, b) : std::make_pair(b, a)];
+        v.first++;
+        v.second = face;
+      }
+    }
+    int cracked = 0;
+    std::map<int, int> crackedByFace;
+    for (const auto& [k, v] : edgeUses)
+      if (v.first != 2) { cracked++; crackedByFace[v.second]++; }
+    if (cracked > 0) {
+      FILE* dbgf = std::fopen("C:/temp/gosurvey_bridge_debug.log", "a");
+      if (dbgf) {
+        std::fprintf(dbgf, "WATERTIGHT FAIL: cracked=%d of %zu edges, by face:", cracked, edgeUses.size());
+        for (const auto& [face, cnt] : crackedByFace)
+          std::fprintf(dbgf, " face%d=%d", face, cnt);
+        std::fprintf(dbgf, "\n");
+        std::fclose(dbgf);
+      }
+    }
   }
 
   *out = std::move(mesh);

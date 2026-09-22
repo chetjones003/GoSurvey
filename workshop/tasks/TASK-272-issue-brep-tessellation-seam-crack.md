@@ -1,156 +1,286 @@
 # TASK-272 — B-rep tessellation seam crack: torn bolt holes / curved-face joins
 
 - Type:    bug
-- Status:  RESOLVED for the reported bug (bolt holes / flat-face holes). A separate,
-  unrelated crack at a plain cone's apex remains open — see "Remaining open item" below.
+- Status:  **Originally reported bug (torn bolt holes / flange-plate holes): RESOLVED and
+  verified on the user's actual reported file.** Two other, separate cracks were found in the
+  course of this investigation and remain OPEN — a NURBS loft/sweep transition-piece crack (§5,
+  the one now visible in the app) and a plain cone's apex crack (§6, unconfirmed root cause).
 - Opened:  2026-09-22
-- Resolved: 2026-09-22
 - Owner:   Claude (chetjones003@gmail.com)
 
-## 0. Resolution summary
+## 0. Read this first if you are picking this up cold
 
-Root cause was NOT the wall-vs-cap phase mismatch first suspected (disproven — see §2), nor
-purely the cross-band resolution mismatch (real bug, fixed, but insufficient alone) — it was a
-genuine topology pinch in `TessellateGeneralLoopFace`'s scanline/band decomposition at a hole's
-own top/bottom extremum, where the interval count changes between adjacent bands in a way no
-per-band column count can reconcile.
+- The bolt-hole/flange-plate crack that was originally reported is fixed. Do not re-open that
+  investigation — §§1–4 below are historical record (including two wrong leads and two reverted
+  fix attempts), kept because they document real dead ends worth not repeating, not because the
+  bug is still open.
+- The user is currently still seeing a torn/jagged look in the app on the file that prompted this
+  task. **That is a different, separate bug** (§5) — a small NURBS-based transition/fillet solid
+  near the flange's bore, not the flange plate itself. This was confirmed by direct evidence (a
+  temporary file-based diagnostic log, see §5.2) on the user's own loaded file, not inference.
+- Temporary diagnostics are still live in the tree (§7) — clean these up as part of closing §5,
+  not before, since they are what will confirm any fix.
 
-**Fix:** stopped routing planar faces-with-holes through the scanline/band tessellator entirely.
-Replaced it with an exact construction for `SurfaceKind::Plane` (a plane has no curvature, so no
-chord-tolerance banding is needed at all): bridge every hole into the outer loop as a zero-width
-slit (`BridgeHoleIntoOuter`), producing one simple polygon, then ear-clip it (`EarClip`). This has
-no bands and so nothing to pinch.
-
-That surfaced a second, previously-invisible bug in `EarClip` itself: on a degenerate/thin input
-(exactly what a bridge slit produces) its ear-finding could fail to find any clippable ear and
-silently fall back to a one-point fan over the remainder — self-overlapping for a non-star-shaped
-remainder, and invisible to a total-signed-area check (the shoelace identity gives a
-self-overlapping decomposition the same total area as a valid one), so it only ever showed up as a
-wrong integrated volume, much later. Fixed by making `EarClip`'s ear/containment tests
-tolerance-based (scaled to the ring's own extent) instead of exact-zero comparisons, explicitly
-handling a query point that coincides with a triangle corner (a bridge's duplicated point), making
-it refuse outright rather than silently degrade if a pass still finds no ear, and filtering any
-residual zero-area (degenerate) triangles from its output.
-
-**Verified:** the bolt-hole/box-with-hole reproduction goes from 536 cracked mesh edges to 0. Full
-suite 1209/1210 passing (the one failure is the separate cone-apex item below). See commit
-`89b7939` on `fix/brep-tessellation-seam-crack`.
-
-## 1. Authority
-- Goal:         REQ-313 / ADR-045 (B-rep solid kernel) — tessellation must be a faithful,
-  crack-free derived representation of the analytic solid.
-- Requirements: REQ-313 (Tessellation acceptance: "every triangle's winding agrees with its
-  stored analytic normal"; implicitly, adjacent faces sharing a boundary must sample it
-  consistently — no acceptance criterion states this explicitly, which is itself worth closing
-  as a SPEC GAP alongside the fix).
-- Constraints:  smallest correct fix; must not regress `BrepTests.cpp` (1210 cases, currently
-  1208 passing).
-- Owning subsystem: Domain (`src/util/brep.cpp`, `Tessellate`).
-
-## 2. Bug report
+## 1. The originally reported bug (RESOLVED)
 
 **Title:** Curved solid faces render with jagged/torn edges and inconsistent shading where a
 curved wall meets a flat face (bolt holes, bored holes, any hole through a flat plate).
 
-**Observed:** In the GUI, a flange's bolt holes and a plain extruded/press-pulled circle both
-show ragged, torn-looking rims instead of clean circles, with shading artifacts at the seam
-(screenshot: "2in Flange" model, GitHub issue TBD — filed from a user report, no issue number
-assigned yet).
+**Observed:** In the GUI, a flange's bolt holes and the flange plate's own body showed ragged,
+torn-looking rims instead of clean circles, with shading artifacts at the seam (screenshots: a
+"2in Flange" pipe-fitting part, from a user report during the issue #486 pipe/fitting epic — no
+GitHub issue number was assigned before this task started).
 
-**Root cause (confirmed with evidence — see `RequireMeshWatertight` in `tests/BrepTests.cpp`):**
-Two independent bugs, both in `brep::Tessellate` (`src/util/brep.cpp`):
+**Final root cause (see §§2–4 for how this was actually found — the short version below is what
+turned out to be true, not the path taken to find it):**
 
-1. **Fixed.** The `f.loops.size() == 2` annular-face tessellator (a hole in an otherwise-simple
-   flat face) built the hole's rim by ray-casting NEW points at angles merged in from the outer
-   loop, instead of reusing the loop's own sampled edge points. Those interpolated points never
-   matched the neighboring curved wall's own vertices. **Fix:** route `loops.size() > 1` (was
-   `> 2`) through the existing `TessellateGeneralLoopFace` general even-odd tessellator, which
-   already samples every loop by walking its own edges directly
-   (`SegmentsForEdge`/`EdgePointAt`) — no interpolation. This also fixed several *pre-existing*,
-   previously-undetected winding/inverted-normal bugs in the old annular path (see commit).
+`brep::Tessellate`'s planar-face-with-holes path used to route through
+`TessellateGeneralLoopFace`, a scanline/band decomposition tessellator. At a hole's own top/bottom
+extremum, the number of scanline intervals genuinely changes between two adjacent bands (no hole
+yet, then the hole opens) — a real topology pinch that no per-band column-count fix can reconcile,
+because the two bands' boundary rows are structurally different shapes, not just differently
+resolved.
 
-2. **Partially fixed.** `SegmentsForArc`'s segment-count floor (`kMinFullCircleSegments = 128`)
-   was applied per edge/face span via a step function (`span >= ~half-turn → full floor`). A
-   circle that happens to be split into pieces (a primitive's wall is always built as two
-   half-turn faces; a Phase 4 boolean can leave the same circle as one full 2π edge) got the
-   SAME absolute floor per piece, so a split representation got 2x the total vertex budget of an
-   unsplit one for the identical circle — and the two disagreed in COUNT wherever they met.
-   **Fix:** scale the floor by span (`kMinFullCircleSegments * span / kTwoPi`), keeping the
-   total per-turn budget constant regardless of how many pieces a circle is cut into. This
-   roughly halved the crack count on the reproduction case (536 → 280 of ~1328 mesh edges).
+**Fix:** stop routing planar faces-with-holes through the band tessellator. A plane has no
+curvature, so its hole-bearing boundary can be triangulated EXACTLY: bridge every hole into the
+outer loop as a zero-width slit (`BridgeHoleIntoOuter`, in `src/util/brep.cpp`), producing one
+simple polygon, then ear-clip it (`EarClip`). No bands, so nothing to pinch.
 
-**Wrong lead, corrected:** an earlier version of this task theorized the residual crack was a
-wall-vs-cap phase mismatch (the cylindrical wall's `f.uStart` parametrization disagreeing with
-the flat cap's hole-loop edge parametrization) and reports two reverted fix attempts on that
-theory. **That diagnosis was wrong.** A `triFace`-tagged crack-location dump (temporary scratch
-test, since removed) on the same `BooleanSubtract(box, throughCylinder)` repro showed every
-cracked mesh edge touched only ONE triangle, and that triangle's `triFace` was always the SAME
-flat cap face (e.g. face 0, the bottom plate) — **the crack is entirely INSIDE one face's own
-triangulation**, not between two faces. The wall is not involved.
+That single change then needed four follow-on fixes before it was actually correct on real
+multi-hole parts (each found and fixed via a fast synthetic repro added to `BrepTests.cpp`, not
+by iterating against the full GUI app):
 
-**Root cause 3 (partially fixed — see below):** the culprit is
-`TessellateGeneralLoopFace`, the general even-odd polygon-with-holes tessellator every
-`loops.size() > 1` planar face now routes through (root cause 1's fix). It decomposes the face
-into horizontal "bands" between consecutive hole/outer-loop vertex v-coordinates
-(`vBreaks`), and grids each band independently with its own column count
-(`nCols = max(that band's own bottom-row need, that band's own top-row need)`, each computed
-from `GeneralLoopChordSegments`). Nothing ties one band's column count to its neighbor's, even
-though two adjacent bands SHARE one horizontal row (band *i*'s top = band *i+1*'s bottom) — so
-that shared row can get a different column count on each side, a T-junction crack inside the
-same face.
+1. **`EarClip` itself had a latent bug**, exposed by bridging's thin/degenerate input: when a full
+   pass found no clippable ear, it silently fell back to a one-point fan over the remaining
+   vertices — self-overlapping for a non-star-shaped remainder, and invisible to a total-signed-
+   area sanity check (the shoelace identity gives a self-overlapping decomposition the same total
+   area as a valid one), so it only showed up as a wrong integrated VOLUME, much later, not as an
+   obviously-wrong shape. Fixed: tolerance-based ear/containment tests (scaled to the ring's own
+   extent, not exact-zero comparisons), explicit handling of a query point that coincides with a
+   triangle corner (exactly what a bridge's duplicated point produces), refusing outright instead
+   of silently degrading when a pass truly finds no ear, and filtering any residual zero-area
+   triangles from the output.
+2. **The bridging direction was a fixed +X ray** for every hole. Fine for one hole; for several
+   holes around a circular boundary (an actual bolt circle), a hole on the far side has to cast
+   across the shape's interior and can cross another hole or an earlier bridge — `EarClip` then
+   correctly refuses a self-intersecting input, but because that refusal used to propagate as an
+   outright face failure, **the whole part stopped rendering** (a strictly worse regression).
+   Fixed: bridge direction now radiates outward from each hole's own position (away from the outer
+   ring's centroid) instead of a fixed direction — like spokes, which do not cross each other for
+   a bolt-circle-shaped arrangement.
+3. **A real duplicate-point bug in the bridge splice itself**: the closing hole loop already
+   starts AT the hole's own extremal point (`mi`), so pushing that point once explicitly before
+   the loop inserted it a THIRD time total (the explicit push, the loop's own first point, and the
+   closing point), leaving a zero-length edge right at the bridge start. Harmless for one hole;
+   compounding once per hole on a multi-hole face was enough to defeat `EarClip`'s ear-finding
+   entirely, independent of tolerance (confirmed: even escalating the tolerance 10x six times over
+   did not help, which is what pointed at a logic bug rather than float precision). Found via a
+   direct O(n²) self-intersection check on the bridged polygon coming back clean (0 crossings) —
+   proving the polygon was topologically valid and the bug had to be inside `EarClip`/the splice
+   itself, not the bridging geometry.
+4. **Fall back, never refuse.** `BridgeHoleIntoOuter`'s visibility assumption (no reflex vertex in
+   the way) is not provably true for every real hole arrangement. Rather than trust it
+   unconditionally, any failure anywhere in the bridge+ear-clip attempt now falls back to the
+   pre-existing `TessellateGeneralLoopFace` path — worse (the original pinch crack), but never
+   "face doesn't render at all," which is the one regression this must never reintroduce.
 
-*Fix applied (real, but insufficient alone):* a two-pass resolution — gather every band's own
-column-count need first, then two relaxation sweeps (forward, then backward) propagate the max
-column count through every run of bands whose interval topology matches its neighbor (same
-number of inside/outside crossings), so a whole connected run converges on one shared count. This
-can only ever raise resolution, never lower it, and is confirmed safe (full suite still
-1208/1210, only the two known `RequireMeshWatertight` failures, no new regressions). **It does
-not fix the reproduction case's crack count (536 of 2608 edges, unchanged before/after)** — see
-why below.
+**Verified, with real evidence, not just synthetic tests:** a temporary diagnostic
+(`std::fopen("C:/temp/gosurvey_bridge_debug.log", ...)`, see §7) was added directly inside
+`brep::Tessellate` and the user ran the actual reported file through it. The log showed the
+flange's own solid (20 faces, including the two `loops=6` flat faces — outer boundary + one
+central bore + four bolt holes) with **zero watertightness failures**. The visible torn look the
+user kept reporting after this fix was confirmed, via the same log, to be coming from a *different
+solid* in the same scene (§5) — not a residual of this bug.
 
-**Residual bug (NOT fixed, open) — the real one:** the crack in the repro is concentrated at the
-hole's top/bottom **extrema** (e.g. the circle's bottommost point, y = -radius). At exactly that
-v-coordinate the hole interval pinches to a single point: the band just below it has ONE interval
-(no hole yet — `xs.size() == 2`), the band just above has TWO (`xs.size() == 4`, the hole has
-opened up). This is a genuine, unavoidable topology CHANGE between neighboring bands, so the
-fix above correctly (and necessarily) skips propagating resolution across it — sharing a column
-count between two bands that don't structurally correspond would be wrong, not a fix. Whatever
-`TessellateGeneralLoopFace` does at this pinch point itself is where the actual crack lives;
-that code path is unexplored. Likely candidates: the pinched band's own degenerate-interval
-handling (`u0R <= u0L && u1R <= u1L` skip, or a band whose `xs0.size() != xs1.size()` is silently
-dropped entirely via the `continue` a few lines up — dropping a band drops geometry, which would
-show up as a HOLE in the mesh, not a crack, so more likely it's the row directly adjacent to the
-pinch that under- or over-resolves relative to the extremum point itself).
+Permanent regression tests added to `tests/BrepTests.cpp`:
+- `"A bolt-circle flange (4 holes around a circular plate) tessellates crack-free"` — the fixed-
+  direction-bridging repro (item 2 above).
+- `"A pipe flange (big central bore + 4 bolt holes) tessellates crack-free"` — a mixed big-hole +
+  small-holes repro, matching the real part's `loops=6` shape.
 
-(§§2 above, down through here, is the historical trail of diagnosis and two abandoned fix
-attempts, kept because it records real dead ends — see §0 for the fix that actually landed.)
+Both check volume (against the closed-form expectation AND the re-integrated tessellated volume),
+winding, and `RequireMeshWatertight`. Full suite: 1210/1211 passing — the one failure is the
+unrelated cone item, §6.
 
-## 3. Reproduction (regression test, in tree)
+Commits on `fix/brep-tessellation-seam-crack`: `1a65ce1`, `29dbb47`, `985c1b2`, `704d8a9` (and
+predecessors) — see that branch's history for the full sequence, including the two reverted
+attempts recorded in §§3–4 below.
 
-`tests/BrepTests.cpp`: `RequireMeshWatertight(t)` checks every triangle edge in a tessellation is
-shared by exactly two triangles. As of the §0 fix, one call site still fails:
+## 2. Wrong lead #1 (historical, corrected — do not re-open)
 
-- `"Tessellation agrees with the analytic figures and winds outward"` / case "cone": 256 of 768
-  mesh edges cracked. This is a plain `MakeCylinder`/cone primitive with NO holes — it never
-  touches `TessellateGeneralLoopFace`, `EarClip`, or `BridgeHoleIntoOuter` at all, so it is a
-  different bug from the one this task fixed, not a residual of it. Likely candidate: the apex-fan
-  triangulation (`SurfaceKind::Cone` with `r1 == 0`) disagreeing with the wall's own rim sampling
-  at the apex point, a structurally similar "everything meets at one point" situation to the pinch
-  bug this task DID fix, but in a different code path — unconfirmed, not investigated.
-- The bolt-hole/flange repro (`"Curved B1: ... SUBTRACT drills a round hole through the box
-  (B2a)"`) is now CLEAN (0 cracked edges, was 536).
+An early version of this task theorized the crack was a wall-vs-cap phase mismatch (the
+cylindrical wall's `f.uStart` parametrization disagreeing with the flat cap's hole-loop edge
+parametrization). **This was checked directly and disproven.** A `triFace`-tagged crack-location
+dump (temporary scratch test, since removed) on a `BooleanSubtract(box, throughCylinder)` repro
+showed every cracked mesh edge touched only ONE triangle, and that triangle's `triFace` was always
+the SAME flat cap face — the crack was entirely INSIDE one face's own triangulation, never between
+the wall and the cap. Two fix attempts on this wrong theory (deriving the wall's own angle
+sequence from its rim edge, with and without an empirical winding-direction correction) both
+caused real regressions elsewhere (wrong tessellated volumes, inverted normals on previously-
+correct cylinder/cone/sweep cases) and were reverted.
+
+## 3. Wrong lead #2 (historical, corrected — do not re-open)
+
+The actual (at-the-time) root cause was identified as `TessellateGeneralLoopFace`'s per-band
+column-count mismatch: it decomposes a face-with-holes into horizontal bands and grids each one
+independently (`nCols = max(that band's own bottom-row need, that band's own top-row need)`),
+with nothing tying one band's count to its neighbor's, even though adjacent bands share one row. A
+two-pass relaxation fix (propagate the max column count through runs of bands with matching
+interval topology) was implemented and is safe (monotonic, only ever raises resolution), but **did
+not fix the reproduction's crack count** — the crack was concentrated at the hole's own top/bottom
+extrema, a genuine topology pinch between bands (see §1's final root cause), not a resolution
+mismatch between otherwise-corresponding bands. The two-pass relaxation code was later removed
+entirely when §1's fix (bridging + ear-clip) replaced the whole band-tessellator code path for
+planar faces.
+
+## 4. Reproduction for the resolved bug
+
+`tests/BrepTests.cpp`, tag `[brep]`: `RequireMeshWatertight(t)` checks every triangle edge in a
+tessellation is shared by exactly two triangles.
+
+- `"A bolt-circle flange (4 holes around a circular plate) tessellates crack-free"` — PASSES.
+- `"A pipe flange (big central bore + 4 bolt holes) tessellates crack-free"` — PASSES.
+- `"Curved B1: ... SUBTRACT drills a round hole through the box (B2a)"` — PASSES (0 cracked edges,
+  was 536 before this task).
 
 Run: `.\build\GoSurveyTests.exe "[brep]"` after `./dev/build`.
 
-## 4. Next steps for whoever picks up the cone-apex item
+## 5. OPEN — NURBS loft/sweep transition-piece crack (this is what the user is still seeing)
 
-- Confirm it's actually a `SurfaceKind::Cone` apex issue (not a cylinder's own wall/cap seam) by
-  checking `t.triFace` on the cracked edges of a plain `MakeCone`-only repro, the same way this
-  task's earlier (superseded) sections diagnosed the bolt-hole crack — that technique is proven
-  useful, unlike the fixes those sections tried.
-- This is a SPEC GAP candidate: REQ-313's Tessellation acceptance criteria don't explicitly
-  require adjacent-face seam agreement or intra-face watertightness (only per-triangle
-  winding/normal agreement and volume/area convergence). Worth a recorded decision to add an
-  explicit watertightness acceptance criterion, with `RequireMeshWatertight` promoted from a
-  debugging aid to a documented requirement check — it would have caught the bolt-hole crack this
-  task fixed far earlier than a user-reported screenshot did.
+**Observed:** after §1's fix landed and was confirmed correct on the flange plate itself (bolt
+holes visibly clean in a follow-up screenshot), the user still saw a torn/jagged rim — but on a
+small ring-shaped area near the flange's central bore, not on the bolt holes. Visually similar to
+the original complaint, which is why it initially looked like a residual of the same bug.
+
+### 5.1 It is a different solid, not the flange plate
+
+Confirmed via the file-based diagnostic (§7.3) reading the user's actual loaded scene: alongside
+the flange's own 20-face solid (zero watertightness failures — see §1), the SAME scene contains
+one or two small solids with **2 flat (`SurfaceKind::Plane`, `loops=1`) faces + 6 (or 4)
+`SurfaceKind::Nurbs` faces** — the shape of a `Loft`/`Sweep`-built transition or fillet ring, per
+REQ-315/ADR-048. These are what fail watertightness:
+
+```
+Tessellate call: faces=8
+  face 0 kind=Plane loops=1 / face 1 kind=Plane loops=1
+  face 2..7 kind=Nurbs loops=1
+WATERTIGHT FAIL: cracked=768 of 74880 edges, by face: face0=256 face1=256 face2=64 face3=64 face6=64 face7=64
+```
+
+(A second, 6-face variant of the same shape — 2 Plane + 4 Nurbs — showed the identical `cracked=768`
+pattern, confirming this is deterministic and not scene-specific.)
+
+The flat caps (`face0`, `face1`) and half the NURBS side patches crack; the pattern (both a flat
+cap AND its neighboring curved faces failing, in matching-ish counts) is structurally the same
+"neighboring faces disagree about a shared boundary's sampling" class of bug already fixed twice
+this task (§1 items 1–2, and the original cylinder-wall case referenced in §2) — but here it's a
+NURBS patch against its own flat end cap, in the `SurfaceKind::Nurbs` case of `Tessellate`
+(`src/util/brep.cpp`, the block starting `case SurfaceKind::Nurbs: {`), which this task has not
+touched before now.
+
+### 5.2 Root cause, as far as confirmed
+
+The NURBS grid resolution `n` (used uniformly for BOTH the patch's u and v directions) is computed
+from `SegmentsForArc(netStep, kHalfPi, chordTolerance)`, where `netStep` is the patch's own
+control-net edge length — a curvature heuristic with NO relation to how many segments the
+NEIGHBORING flat cap uses for the SAME shared boundary edge (`SegmentsForEdge` on that edge
+directly, the same rule every other fixed case in this task follows).
+
+**A resolution-only fix (raise `n` to at least what the boundary edge needs) was tried and made
+it WORSE**, not better: cracked-edge count went from 768 to 1024 on the synthetic repro (see §5.3)
+when `n` was floored at `max(n, SegmentsForEdge(edge))` for every `CurveKind::Arc` edge in the
+patch's own loop. This is the same signature seen with the wall-vs-cap wrong lead in §2: raising
+resolution without fixing PHASE just gives two mismatched samplings of the same curve more points
+to disagree at, not fewer. **This means the NURBS patch's own `u`/`v` knot-based parametrization
+does not correspond in phase to the boundary edge's own geometric (arc-length) parametrization**,
+and fixing this needs the same kind of "derive the shared boundary's points directly from the
+edge, not from an independent formula" treatment that worked for the planar-face case in §1 — NOT
+a floor/count adjustment, which was already tried and reverted (see the reverted diff in this
+branch's history around the `case SurfaceKind::Nurbs` block, or reapply the idea below to see the
+regression again quickly rather than re-deriving it).
+
+### 5.3 Reproduction (regression test, in tree, currently RED)
+
+`tests/BrepTests.cpp`, test `"Loft through three circles is a stack of cone frustums"`
+(`[brep][req315]`) — a plain, minimal loft with three circular cross-sections, no booleans, no
+holes. `RequireMeshWatertight` and `RequireWindingMatchesNormals` were added to its end; it
+currently fails with **768 of 50304 edges cracked**, matching the real part's pattern exactly (2
+flat caps + curved side patches disagreeing at their shared boundary). This is the fast, isolated
+repro to iterate against — it reproduces in well under a second, versus reproducing via the full
+GUI app and a multi-minute rebuild/relaunch/screenshot cycle each time.
+
+Also in the tree: `TEST_CASE("DEBUG loft topology dump", "[brepdebug]")` at the end of
+`BrepTests.cpp` — dumps every face's kind/loops and every loop edge's kind/sweep/radius for this
+same loft, useful for inspecting the exact loop/edge structure around a NURBS patch's boundary
+before attempting a fix. Not a kept test; remove or convert to a real assertion once §5 is closed.
+
+### 5.4 Next steps
+
+- Do NOT retry the "floor `n` at the boundary edge's `SegmentsForEdge` count" fix without also
+  fixing phase — confirmed to make things worse, not a partial improvement.
+- The likely correct fix mirrors §1: for the NURBS patch's boundary row(s) that correspond to a
+  shared edge with a neighboring flat cap (or the next band in a multi-band loft), sample that
+  row's points DIRECTLY from the edge (`SegmentsForEdge`/`EdgePointAt`, exactly as the cap already
+  does), and only use `nurbs::EvaluateWithDerivs` for the INTERIOR of the patch, not its boundary.
+  This guarantees the shared boundary is bit-identical between the two faces, matching the
+  approach that has worked in every other case in this task, rather than trying to reconcile two
+  independently-computed samplings of the same curve after the fact.
+- Use `"Loft through three circles is a stack of cone frustums"` (§5.3) to iterate — it is a
+  faithful, minimal, fast repro. Confirm the fix there before touching the real flange file again.
+- Watch for the SAME class of regression risk as §1 item 4: if a NURBS patch's boundary loop
+  structure varies (e.g. `Sweep`'s mitred corners, per REQ-315, may have a different edge layout
+  than `Loft`'s bands), a fix tuned to `Loft` alone could misfire on `Sweep` output. Consider the
+  same "fall back to the old grid-only sampling on any failure" safety net used in §1 item 4,
+  rather than assuming one code path covers every NURBS-producing command.
+
+## 6. OPEN — cone apex crack (separate, unconfirmed, lower priority)
+
+`"Tessellation agrees with the analytic figures and winds outward"` / case "cone": 256 of 768 mesh
+edges cracked. A plain `MakeCylinder`/cone primitive with NO holes — never touches
+`TessellateGeneralLoopFace`, `EarClip`, or `BridgeHoleIntoOuter`, and (separately) does not involve
+any `SurfaceKind::Nurbs` face either, so it is unrelated to both §1 and §5. Likely candidate: the
+apex-fan triangulation (`SurfaceKind::Cone` with `r1 == 0`) disagreeing with the wall's own rim
+sampling at the apex point — a structurally similar "everything meets at one point" situation to
+the §1 pinch bug, but in yet another code path. Not investigated. Confirm via a `triFace`-tagged
+crack-location dump on a plain `MakeCone`-only repro (the same technique that correctly diagnosed
+§1, after two wrong leads that skipped this step — do this FIRST, before attempting a fix).
+
+## 7. Temporary diagnostics still in the tree
+
+These were load-bearing for finding §1's real root cause on the user's actual file (inference and
+synthetic repros alone were not enough — two of them pointed at the wrong code entirely) and for
+finding §5. Clean up is part of closing §5, not a prerequisite for starting it, since they will
+likely be needed again to confirm any NURBS fix on the real file.
+
+1. `src/util/brep.cpp`, `EarClip`: a `stallEscalations` tolerance-loosening retry loop (up to 6x
+   10x escalations) on a full pass finding no ear. Safe to keep permanently — it is a genuine
+   robustness improvement — but was NOT what fixed the real bug (§1 item 3), so do not rely on it
+   alone if debugging a future `EarClip` failure; get real data first.
+2. `src/util/brep.cpp`, inside `Tessellate`, right after `MeshBuilder mb{&mesh};`: an unconditional
+   per-call dump of every face's kind/loop-count to
+   `C:/temp/gosurvey_bridge_debug.log` (append mode). This is what revealed the flange scene
+   actually contains a separate NURBS solid (§5).
+3. `src/util/brep.cpp`, inside the `f.loops.size() > 1` planar-hole block: an on-failure-only dump
+   (`face=`, `loops=`, `outerPts=`, `reason=`) to the same log, for diagnosing §1 item 4's fallback
+   path specifically.
+4. `src/util/brep.cpp`, right before `*out = std::move(mesh);` at the end of `Tessellate`: a full
+   watertightness check (same algorithm as the test helper `RequireMeshWatertight`) on the
+   FINISHED mesh, logging `WATERTIGHT FAIL: cracked=N of M edges, by face: ...` when any edge is
+   not shared by exactly two triangles. This is what pinpointed §5 precisely (which faces, how
+   many edges) directly on the user's real file, with no synthetic reproduction needed first.
+5. `tests/BrepTests.cpp`: `TEST_CASE("DEBUG loft topology dump", "[brepdebug]")` — see §5.3.
+
+**Before this task is fully closed** (§5 and §6 both resolved): remove all of the above, or
+convert the permanent ones into documented, intentional features (the `EarClip` escalation retry
+is worth keeping either way; the file-logging diagnostics are not — they write to a hardcoded
+`C:/temp` path unconditionally and should not ship).
+
+## 8. SPEC GAP candidate (applies across §1, §5, §6)
+
+REQ-313's Tessellation acceptance criteria don't explicitly require adjacent-face seam agreement
+or intra-face watertightness — only per-triangle winding/normal agreement and volume/area
+convergence, which is not enough to catch this whole class of bug (as §1's EarClip fallback
+demonstrated: a wrong triangulation can still pass a total-area check). Worth a recorded decision
+to add an explicit watertightness acceptance criterion, with `RequireMeshWatertight` promoted from
+a debugging aid to a documented, permanent requirement check across every REQ-313/314/315 solid
+test, not just the ones this task happened to touch.
