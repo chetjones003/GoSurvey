@@ -16554,8 +16554,37 @@ namespace {
 /// is ample for a profile cap. A profile is the first thing to hand \ref Tessellate a non-convex
 /// plane face — ADR-045 named that "Phase 4's problem, when a boolean first produces a face that
 /// needs one", and an extruded L-shape needs it now.
-void EarClip(const std::vector<ucs::Point2D>& ring, std::vector<std::array<int, 3>>* tris) {
+///
+/// Returns false if a full pass finds no clippable ear before the ring is down to a triangle. A
+/// valid simple polygon always has at least two ears (the standard "two ears theorem"), so that can
+/// only happen from a genuinely malformed ring OR — this used to be the unhandled case — from the
+/// exact-zero convexity/containment comparisons below spuriously rejecting an ear that numerically
+/// exists but is very thin (a nearly-collinear triple, e.g. along a hole-to-outer-boundary bridge
+/// slit). The old code treated "no ear found" as "stop early and fan whatever is left from one
+/// point" — which for a non-star-shaped remainder produces self-overlapping triangles. That defect
+/// was invisible to a total-signed-area check (the shoelace identity gives the same total for a
+/// self-overlapping decomposition as for a valid one) and only showed up as a wrong VOLUME much
+/// later, once the triangles were integrated in 3D — see issue "torn bolt holes" / TASK-272. Failing
+/// loudly here instead turns that into an immediate, attributable refusal.
+[[nodiscard]] bool EarClip(const std::vector<ucs::Point2D>& ring, std::vector<std::array<int, 3>>* tris) {
   const int n = static_cast<int>(ring.size());
+  if (n < 3)
+    return false;
+  double minX = ring[0].x, maxX = ring[0].x, minY = ring[0].y, maxY = ring[0].y;
+  for (const ucs::Point2D& p : ring) {
+    minX = std::min(minX, p.x);
+    maxX = std::max(maxX, p.x);
+    minY = std::min(minY, p.y);
+    maxY = std::max(maxY, p.y);
+  }
+  // A relative tolerance, scaled to the ring's own extent: an absolute epsilon would be meaningless
+  // across the wide range of magnitudes this kernel tessellates at (a bolt-hole flange vs. a
+  // survey-scale part), and too tight a tolerance is exactly what let a valid-but-thin ear near a
+  // bridge slit get spuriously rejected in the first place.
+  const double scale = std::max({maxX - minX, maxY - minY, 1.0});
+  const double areaEps = 1e-9 * scale * scale;
+  const double containEps = 1e-9 * scale;
+
   std::vector<int> idx(static_cast<std::size_t>(n));
   for (int i = 0; i < n; ++i)
     idx[static_cast<std::size_t>(i)] = i;
@@ -16571,14 +16600,27 @@ void EarClip(const std::vector<ucs::Point2D>& ring, std::vector<std::array<int, 
       const ucs::Point2D& a = ring[static_cast<std::size_t>(i0)];
       const ucs::Point2D& b = ring[static_cast<std::size_t>(i1)];
       const ucs::Point2D& c = ring[static_cast<std::size_t>(i2)];
-      if ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) <= 0.0)
-        continue;  // reflex or straight — not an ear tip
+      if ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) <= areaEps)
+        continue;  // reflex or (numerically) straight — not an ear tip
       bool contains = false;
       for (int j = 0; j < m && !contains; ++j) {
         const int ij = idx[static_cast<std::size_t>(j)];
         if (ij == i0 || ij == i1 || ij == i2)
           continue;
-        contains = PointInTriangle2D(ring[static_cast<std::size_t>(ij)], a, b, c);
+        // A point exactly ON the ear's boundary (common right at a bridge slit, where a duplicated
+        // vertex from the other side of the slit can sit precisely on this edge) must NOT count as
+        // "inside" — that is what made a genuinely valid ear look blocked. `PointInTriangle2D`'s
+        // strict signs already treat an exact zero as neither positive nor negative, which is
+        // correct; padding the SIGN test itself in `containEps` would instead misclassify a
+        // truly-inside point near the edge as outside, so only the containment point's PROXIMITY to
+        // each of the triangle's own edges is padded, not the sign test.
+        const ucs::Point2D& q = ring[static_cast<std::size_t>(ij)];
+        const bool onA = ray3d::Length(ray3d::Sub(Vec3{q.x, q.y, 0}, Vec3{a.x, a.y, 0})) < containEps;
+        const bool onB = ray3d::Length(ray3d::Sub(Vec3{q.x, q.y, 0}, Vec3{b.x, b.y, 0})) < containEps;
+        const bool onC = ray3d::Length(ray3d::Sub(Vec3{q.x, q.y, 0}, Vec3{c.x, c.y, 0})) < containEps;
+        if (onA || onB || onC)
+          continue;  // coincides with a triangle corner (a bridge duplicate) — not "inside"
+        contains = PointInTriangle2D(q, a, b, c);
       }
       if (contains)
         continue;
@@ -16588,10 +16630,91 @@ void EarClip(const std::vector<ucs::Point2D>& ring, std::vector<std::array<int, 
       break;
     }
     if (!clipped)
-      break;  // no ear found (degenerate input) — fan whatever is left rather than loop
+      return false;  // a genuinely malformed ring (self-intersecting or degenerate) — refuse
   }
   for (std::size_t i = 1; i + 1 < idx.size(); ++i)
     tris->push_back({idx[0], idx[i], idx[i + 1]});
+  // The final `idx.size() == 3` fan above (and, rarely, a triangle clipped just before it) can be
+  // degenerate when two of the three remaining points are a bridge's exact-duplicate pair (`M` or
+  // `target`, re-emitted to close a hole's slit — see `BridgeHoleIntoOuter`) that never got
+  // consumed as an ear along the way. A zero-area triangle contributes nothing to area or volume,
+  // so dropping it changes nothing about the triangulation except removing a spurious duplicate
+  // triangle edge — this is what left the very last handful of cracked mesh edges after the
+  // robustness fix above (verified via a `triFace`-tagged dump: the crack was one degenerate
+  // triangle, with two coincident vertices, double-booking one real edge).
+  tris->erase(std::remove_if(tris->begin(), tris->end(),
+                             [&](const std::array<int, 3>& t3) {
+                               const ucs::Point2D& a = ring[static_cast<std::size_t>(t3[0])];
+                               const ucs::Point2D& b = ring[static_cast<std::size_t>(t3[1])];
+                               const ucs::Point2D& c = ring[static_cast<std::size_t>(t3[2])];
+                               const double area2 =
+                                   (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                               return std::fabs(area2) <= areaEps;
+                             }),
+              tris->end());
+  return true;
+}
+
+/// Splices \p hole into \p outer as a zero-width slit (Held's bridging technique), so the two rings
+/// become one simple polygon `EarClip` can triangulate exactly. \p hole must already be wound
+/// opposite \p outer (CW inside a CCW outer, the usual even-odd hole convention) — the caller is
+/// responsible for that, since it can cheaply check once per loop rather than this being re-derived
+/// per bridge. Finds the hole's rightmost vertex, ray-casts +X to the nearest edge of the CURRENT
+/// `outer` (so a second, third, ... hole bridged afterward sees earlier bridges as part of the
+/// boundary and cannot cross them), and connects to that edge's farther-in-X endpoint. This assumes
+/// the target vertex is actually visible from the hole vertex — true whenever the outer boundary has
+/// no reflex vertex between them, which holds for every convex or near-convex outer boundary this
+/// kernel's callers produce (a flange, a plate, an extruded profile); a pathological concave outer
+/// boundary could in principle need a reflex-vertex-aware target instead, which this does not do.
+/// The bridge is left an EXACT zero-width slit (the closing pair duplicates `M` and `target`
+/// precisely) — `EarClip`'s own robustness (proximity-to-corner skip in its containment test) is
+/// what makes that safe, rather than perturbing the duplicate points, which was tried first and
+/// did not address the actual defect (see TASK-272).
+void BridgeHoleIntoOuter(std::vector<ucs::Point2D>* outer, const std::vector<ucs::Point2D>& hole) {
+  if (hole.size() < 3 || outer->size() < 3)
+    return;
+  std::size_t mi = 0;
+  for (std::size_t i = 1; i < hole.size(); ++i)
+    if (hole[i].x > hole[mi].x)
+      mi = i;
+  const ucs::Point2D M = hole[mi];
+
+  double bestX = std::numeric_limits<double>::infinity();
+  std::size_t bestEdge = SIZE_MAX;
+  const std::size_t n = outer->size();
+  for (std::size_t i = 0; i < n; ++i) {
+    const ucs::Point2D& a = (*outer)[i];
+    const ucs::Point2D& b = (*outer)[(i + 1) % n];
+    if ((a.y > M.y) == (b.y > M.y))
+      continue;  // edge doesn't straddle the ray's y
+    const double t = (M.y - a.y) / (b.y - a.y);
+    const double x = a.x + t * (b.x - a.x);
+    if (x >= M.x && x < bestX) {
+      bestX = x;
+      bestEdge = i;
+    }
+  }
+  if (bestEdge == SIZE_MAX)
+    return;  // M was outside `outer` (shouldn't happen for a validated solid) — leave unbridged
+
+  const ucs::Point2D& a = (*outer)[bestEdge];
+  const ucs::Point2D& b = (*outer)[(bestEdge + 1) % n];
+  const std::size_t targetIdx = (a.x >= b.x) ? bestEdge : (bestEdge + 1) % n;
+  const ucs::Point2D target = (*outer)[targetIdx];
+
+  std::vector<ucs::Point2D> result;
+  result.reserve(n + hole.size() + 2);
+  for (std::size_t i = 0; i < n; ++i) {
+    result.push_back((*outer)[i]);
+    if (i == targetIdx) {
+      result.push_back(M);
+      for (std::size_t j = 0; j < hole.size(); ++j)
+        result.push_back(hole[(mi + j) % hole.size()]);
+      result.push_back(M);
+      result.push_back(target);
+    }
+  }
+  *outer = std::move(result);
 }
 
 /// World-space position of \p sf at parameter `(u, v)`, via the same `LocalSurfaceDerivs` the
@@ -16811,35 +16934,79 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     case SurfaceKind::Plane: {
       if (f.loops.size() > 1) {
         // A face with at least one hole (a single bolt hole is loops.size() == 2; a flange with
-        // several is more) – convert 3D loops to 2D paramLoops and use the general even-odd
-        // tessellator, which already handles any number of loops and — critically — samples every
-        // loop by walking its own edges directly (`SegmentsForEdge`/`EdgePointAt`, the same rule the
-        // neighbouring curved wall face's own rim uses), never inventing a new point that face didn't
-        // already generate.
-        //
-        // The `loops.size() == 2` case used to have its own ray-cast-based annular tessellator here:
-        // it re-sampled the hole's rim at NEW angles merged in from the outer loop's corners, so the
-        // hole boundary it drew disagreed with the bore wall's own rim — a crack at every hole,
-        // rendering as the torn/jagged bolt holes this fixes. Folding it into the >1 path removes that
-        // second, inconsistent algorithm instead of trying to keep two rim samplers in sync.
-        Face tmp = f;
-        tmp.paramLoops.clear();
-        tmp.paramLoops.reserve(f.loops.size());
-        for (const Loop& lp : f.loops) {
-          std::vector<curveisect::Vec2> poly;
-          for (const EdgeUse& u : lp.uses) {
-            const Edge& e = s.edges[static_cast<size_t>(u.edge)];
-            int segs = SegmentsForEdge(e, chordTolerance);
+        // several is more). Sample every loop by walking its own edges directly
+        // (`SegmentsForEdge`/`EdgePointAt` — the same rule the neighbouring curved wall face's own
+        // rim uses), so no vertex here is ever invented independently of what that other face
+        // already generated. A plane has no curvature, so — unlike the general-loop path below,
+        // which grids each face in chord-tolerance bands for a possibly-curved surface — the 2D
+        // polygon these loops trace can be triangulated EXACTLY: bridge each hole into the outer
+        // ring as a zero-width slit (`BridgeHoleIntoOuter`), which turns the whole face into one
+        // simple polygon, then ear-clip it (`EarClip`, made robust to a bridge's thin/degenerate
+        // geometry — see its own docs and TASK-272). This sidesteps a real bug in the old approach
+        // (routing through `TessellateGeneralLoopFace`'s per-band grid): at a hole's own top/bottom
+        // extremum, the scanline's interval count genuinely changes between adjacent bands (no hole
+        // yet, then the hole opens), which is not a resolution-matching problem — it is two
+        // structurally different rows that no per-band column count can reconcile, and it cracked
+        // every hole at exactly those two points. Ear-clipping one simple polygon has no bands and
+        // so no pinch to crack at.
+        std::vector<ucs::Point2D> outer2;
+        for (const EdgeUse& u : f.loops[0].uses) {
+          const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+          const int segs = SegmentsForEdge(e, chordTolerance);
+          for (int i = 0; i < segs; ++i) {
+            const double t = static_cast<double>(i) / static_cast<double>(segs);
+            const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+            outer2.push_back(ucs::WorldToPlane(sf.frame, p));
+          }
+        }
+        if (outer2.size() < 3)
+          return Fail(Problem::DegenerateFace, outWhy);
+        if (SignedArea2D(outer2) < 0.0)
+          std::reverse(outer2.begin(), outer2.end());
+        for (std::size_t li = 1; li < f.loops.size(); ++li) {
+          std::vector<ucs::Point2D> hole2;
+          for (const EdgeUse& u : f.loops[li].uses) {
+            const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+            const int segs = SegmentsForEdge(e, chordTolerance);
             for (int i = 0; i < segs; ++i) {
-              double t = double(i) / double(segs);
-              Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
-              ucs::Point2D q = ucs::WorldToPlane(sf.frame, p);
-              poly.push_back(curveisect::Vec2{q.x, q.y});
+              const double t = static_cast<double>(i) / static_cast<double>(segs);
+              const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+              hole2.push_back(ucs::WorldToPlane(sf.frame, p));
             }
           }
-          tmp.paramLoops.push_back(std::move(poly));
+          if (hole2.size() < 3)
+            continue;  // a degenerate hole loop contributes nothing to bridge
+          if (SignedArea2D(hole2) > 0.0)
+            std::reverse(hole2.begin(), hole2.end());  // holes wind opposite the outer ring
+          BridgeHoleIntoOuter(&outer2, hole2);
         }
-        TessellateGeneralLoopFace(tmp, chordTolerance, &mb);
+        std::vector<std::array<int, 3>> tris;
+        if (!EarClip(outer2, &tris))
+          return Fail(Problem::DegenerateFace, outWhy);
+        const Vec3 planeN = sf.frame.zAxis;
+        std::vector<Vec3> world(outer2.size());
+        for (std::size_t i = 0; i < outer2.size(); ++i)
+          world[i] = ucs::PlaneToWorld(sf.frame, outer2[i]);
+        // Every triangle on a flat face must wind to match the SAME single normal, `planeN` — unlike
+        // a curved surface (where winding can only sensibly be checked against a neighbour, since the
+        // "expected" direction varies per point), a flat face's correct winding is unambiguous per
+        // triangle, so each is checked and, if needed, flipped individually rather than deciding once.
+        std::vector<std::uint32_t> verts(outer2.size());
+        for (std::size_t i = 0; i < outer2.size(); ++i)
+          verts[i] = mb.Push(world[i], planeN);
+        for (const std::array<int, 3>& t3 : tris) {
+          const Vec3& a3 = world[static_cast<std::size_t>(t3[0])];
+          const Vec3& b3 = world[static_cast<std::size_t>(t3[1])];
+          const Vec3& c3 = world[static_cast<std::size_t>(t3[2])];
+          const Vec3 g = ray3d::Cross(ray3d::Sub(b3, a3), ray3d::Sub(c3, a3));
+          const bool flip = ray3d::Length(g) > 1e-15 && ray3d::Dot(g, planeN) < 0.0;
+          if (!flip)
+            mb.Tri(verts[static_cast<std::size_t>(t3[0])], verts[static_cast<std::size_t>(t3[1])],
+                   verts[static_cast<std::size_t>(t3[2])]);
+          else
+            mb.Tri(verts[static_cast<std::size_t>(t3[0])], verts[static_cast<std::size_t>(t3[2])],
+                   verts[static_cast<std::size_t>(t3[1])]);
+        }
         break;
       }
       // Walk each loop into a polyline. Arc edges are subdivided by the same chord rule the curved
@@ -16892,7 +17059,8 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         for (int o : order)
           ccwRing.push_back(ring2[static_cast<std::size_t>(o)]);
         std::vector<std::array<int, 3>> tris;
-        EarClip(ccwRing, &tris);
+        if (!EarClip(ccwRing, &tris))
+          return Fail(Problem::DegenerateFace, outWhy);
         std::vector<std::uint32_t> idx;
         idx.reserve(ring.size());
         for (const Vec3& p : ring)
