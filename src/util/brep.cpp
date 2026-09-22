@@ -27,23 +27,22 @@ constexpr double kHalfPi = 0.5 * kPi;
 constexpr int kMinArcSegments = 2;
 constexpr int kMaxArcSegments = 512;
 
-/// A (near-)full turn gets a much higher segment floor than a small arc sliver needs, independent
-/// of `tol/radius` (issue #486 GUI pass): the app's chord tolerance is a fixed absolute distance
+/// A full turn gets a much higher segment BUDGET than a small arc sliver needs, independent of
+/// `tol/radius` (issue #486 GUI pass): the app's chord tolerance is a fixed absolute distance
 /// (`kSolidChordToleranceFt`), so `tol/radius` — and with it the segment count — shrinks for any
 /// small-to-moderate-radius circle, not just tiny ones; even an ordinary few-foot cylinder read as
-/// visibly faceted. A short arc (a fillet corner, an intersection sliver) does not carry this
-/// complaint — it is already a small fraction of a turn, so it stays on the ordinary floor above.
-/// This is the ONE place a circle or a near-closed arc's parametrisation is turned into a segment
-/// count (`SegmentsForArc`/`SegmentsForEdge`), so raising the floor here reaches every curved solid
-/// face, every curved B-rep edge, AND the rubber-band edge preview (`TessellateEdges`, which every
-/// EXTRUDE/PRESSPULL/CYLINDER/REVOLVE/LOFT/SWEEP ghost in CadRubberPreview.cpp draws through) in one
-/// place, so none of them can drift back out of sync with each other.
-// A cylinder's curved wall is built as TWO half-turn faces (see BuildConical's `sideFace(0, kPi,
-// ...)` / `sideFace(kPi, kTwoPi, ...)` — the seamed-sphere pattern, needed so a boolean/slice
-// operation always has an edge to cut at), so "the whole circle" shows up here as a `kPi` span
-// twice over, not one `kTwoPi` span. The threshold has to catch that half-turn case too, or this
-// floor never engages for the ordinary EXTRUDE/PRESSPULL cylinder it exists for.
-constexpr double kFullTurnSpanThreshold = kPi * 0.999;
+/// visibly faceted. This is the ONE place a circle or an arc's parametrisation is turned into a
+/// segment count (`SegmentsForArc`/`SegmentsForEdge`), so raising the floor here reaches every
+/// curved solid face, every curved B-rep edge, AND the rubber-band edge preview (`TessellateEdges`,
+/// which every EXTRUDE/PRESSPULL/CYLINDER/REVOLVE/LOFT/SWEEP ghost in CadRubberPreview.cpp draws
+/// through) in one place, so none of them can drift back out of sync with each other. The budget is
+/// PER FULL TURN, scaled by span in `SegmentsForArc` itself — not a step function on span — because
+/// a circle is not always one edge: a cylinder's wall is built as two half-turn faces (see
+/// BuildConical's `sideFace(0, kPi, ...)` / `sideFace(kPi, kTwoPi, ...)`, needed so a boolean/slice
+/// always has an edge to cut at), while elsewhere the same circle can be one full 2*pi rim edge. A
+/// step function keyed on "is this span nearly a full turn" gives EACH half-turn piece the same
+/// absolute floor as the whole circle, doubling the total versus the unsplit case; scaling by span
+/// keeps the per-turn budget constant regardless of how many pieces the circle is cut into.
 constexpr int kMinFullCircleSegments = 128;
 
 [[nodiscard]] bool AllFinite(std::initializer_list<double> vs) {
@@ -1540,7 +1539,18 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
   const double span = std::fabs(spanRad);
   if (!(radius > 0.0) || !(span > 0.0))
     return 1;
-  const int minSegs = span >= kFullTurnSpanThreshold ? kMinFullCircleSegments : kMinArcSegments;
+  // The floor scales with span rather than switching on a near-full-turn threshold (issue: torn
+  // bolt holes). A circle is not always one edge: a primitive's cylindrical wall is built as TWO
+  // half-turn faces (the seamed pattern noted above), while a Phase 4 boolean can just as easily
+  // leave the SAME circle as a single full 2*pi rim edge. Under the old step function both a
+  // half-turn piece and a full-turn piece hit the SAME absolute floor (kMinFullCircleSegments), so
+  // splitting a circle in two doubled its total vertex budget relative to the unsplit case — and
+  // the two disagreed wherever a face tessellated one representation next to a loop that walked the
+  // other (a bore wall next to its own hole's rim, cap vs. wall). Scaling the floor by span keeps
+  // the total segment budget for one full turn constant (kMinFullCircleSegments) no matter how many
+  // pieces it is cut into, so two neighbouring faces sampling the same circle always agree.
+  const int minSegs = std::max(
+      kMinArcSegments, static_cast<int>(std::llround(kMinFullCircleSegments * span / kTwoPi)));
   if (tol >= radius)
     return minSegs;
   const double maxStep = 2.0 * std::acos(1.0 - tol / radius);
@@ -16728,9 +16738,19 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     }
     switch (sf.kind) {
     case SurfaceKind::Plane: {
-      if (f.loops.size() > 2) {
-        // Multi-hole planar face (e.g. flange with 4 bolt holes) – convert 3D loops to 2D paramLoops
-        // and use the general even-odd tessellator which already handles any number of loops.
+      if (f.loops.size() > 1) {
+        // A face with at least one hole (a single bolt hole is loops.size() == 2; a flange with
+        // several is more) – convert 3D loops to 2D paramLoops and use the general even-odd
+        // tessellator, which already handles any number of loops and — critically — samples every
+        // loop by walking its own edges directly (`SegmentsForEdge`/`EdgePointAt`, the same rule the
+        // neighbouring curved wall face's own rim uses), never inventing a new point that face didn't
+        // already generate.
+        //
+        // The `loops.size() == 2` case used to have its own ray-cast-based annular tessellator here:
+        // it re-sampled the hole's rim at NEW angles merged in from the outer loop's corners, so the
+        // hole boundary it drew disagreed with the bore wall's own rim — a crack at every hole,
+        // rendering as the torn/jagged bolt holes this fixes. Folding it into the >1 path removes that
+        // second, inconsistent algorithm instead of trying to keep two rim samplers in sync.
         Face tmp = f;
         tmp.paramLoops.clear();
         tmp.paramLoops.reserve(f.loops.size());
@@ -16767,85 +16787,6 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         return r;
       };
       const Vec3 n = sf.frame.zAxis;
-
-      if (f.loops.size() == 2) {
-        // An annular face (a bored boss face, a stepped-stack ring — REQ-314 B1): strip it between
-        // the outer and inner loop by angle about the hole centre, which is convex-outer, star-shaped
-        // territory — all B1 produces. Both loops are sampled by the shared chord rule.
-        std::vector<Vec3> outer3 = sampleLoop(f.loops[0]);
-        std::vector<Vec3> inner3 = sampleLoop(f.loops[1]);
-        if (outer3.size() < 3 || inner3.size() < 3)
-          return Fail(Problem::DegenerateFace, outWhy);
-        std::vector<ucs::Point2D> outer2;
-        std::vector<ucs::Point2D> inner2;
-        for (const Vec3& p : outer3)
-          outer2.push_back(ucs::WorldToPlane(sf.frame, p));
-        for (const Vec3& p : inner3)
-          inner2.push_back(ucs::WorldToPlane(sf.frame, p));
-        ucs::Point2D hc{0.0, 0.0};
-        for (const ucs::Point2D& p : inner2) {
-          hc.x += p.x / static_cast<double>(inner2.size());
-          hc.y += p.y / static_cast<double>(inner2.size());
-        }
-        // The far intersection of the ray hc + t*dir (t > 0) with a closed 2D polyline.
-        auto rayHit = [&](const std::vector<ucs::Point2D>& poly, double dx, double dy) {
-          double bestT = 0.0;
-          ucs::Point2D hit{hc.x + dx, hc.y + dy};
-          for (std::size_t i = 0; i < poly.size(); ++i) {
-            const ucs::Point2D& a = poly[i];
-            const ucs::Point2D& b = poly[(i + 1) % poly.size()];
-            const double ex = b.x - a.x;
-            const double ey = b.y - a.y;
-            const double den = dx * ey - dy * ex;
-            if (std::fabs(den) < 1e-15)
-              continue;
-            const double t = ((a.x - hc.x) * ey - (a.y - hc.y) * ex) / den;
-            const double s2 = ((a.x - hc.x) * dy - (a.y - hc.y) * dx) / den;
-            if (t > 1e-12 && s2 >= -1e-9 && s2 <= 1.0 + 1e-9 && t > bestT) {
-              bestT = t;
-              hit = ucs::Point2D{hc.x + dx * t, hc.y + dy * t};
-            }
-          }
-          return hit;
-        };
-        std::vector<double> angs;
-        for (const ucs::Point2D& p : outer2)
-          angs.push_back(std::atan2(p.y - hc.y, p.x - hc.x));
-        for (const ucs::Point2D& p : inner2)
-          angs.push_back(std::atan2(p.y - hc.y, p.x - hc.x));
-        std::sort(angs.begin(), angs.end());
-        angs.erase(std::unique(angs.begin(), angs.end(),
-                               [](double u, double v) { return std::fabs(u - v) < 1e-7; }),
-                   angs.end());
-        const std::size_t m = angs.size();
-        auto backToWorld = [&](const ucs::Point2D& q) { return ucs::PlaneToWorld(sf.frame, q); };
-        for (std::size_t k = 0; k < m; ++k) {
-          const double a0 = angs[k];
-          const double a1 = angs[(k + 1) % m];
-          const double d0x = std::cos(a0);
-          const double d0y = std::sin(a0);
-          const double d1x = std::cos(a1);
-          const double d1y = std::sin(a1);
-          const Vec3 oi = backToWorld(rayHit(outer2, d0x, d0y));
-          const Vec3 oj = backToWorld(rayHit(outer2, d1x, d1y));
-          const Vec3 ii = backToWorld(rayHit(inner2, d0x, d0y));
-          const Vec3 ij = backToWorld(rayHit(inner2, d1x, d1y));
-          const std::uint32_t voi = mb.Push(oi, n);
-          const std::uint32_t voj = mb.Push(oj, n);
-          const std::uint32_t vii = mb.Push(ii, n);
-          const std::uint32_t vij = mb.Push(ij, n);
-          // Orient the first quad against n, then keep that winding for the ring.
-          const Vec3 g = ray3d::Cross(ray3d::Sub(oj, oi), ray3d::Sub(ii, oi));
-          if (ray3d::Dot(g, n) >= 0.0) {
-            mb.Tri(voi, voj, vii);
-            mb.Tri(voj, vij, vii);
-          } else {
-            mb.Tri(voi, vii, voj);
-            mb.Tri(voj, vii, vij);
-          }
-        }
-        break;
-      }
 
       std::vector<Vec3> ring = sampleLoop(f.loops[0]);
       if (ring.size() < 3)
