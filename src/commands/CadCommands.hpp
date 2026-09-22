@@ -1079,6 +1079,10 @@ struct DrawingGeometrySnapshot {
   /// LoadBlockPrimitivesIntoDrawing), and cadPipeRuns simply arrived after that pass was written.
   std::vector<CadPipeRun>       cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  /// Named piping networks (issue #486 increment B3 / REQ-345) — swapped alongside `cadPipeRuns`
+  /// for the same BEDIT-isolation reason the comment above states: a network's indices are only
+  /// meaningful against the drawing's OWN `cadPipeRuns`, so it must travel with it, not stay behind.
+  std::vector<CadPipingSystem>  cadPipingSystems;
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
@@ -2920,6 +2924,11 @@ struct AppCommandState {
   /// exist for block refs.
   std::vector<int> pipeRunWorldSolidOwnerIndex;
   std::uint64_t pipeRunWorldSolidsSig = 0;
+
+  /// Named piping networks (issue #486 increment B3 / REQ-345) — see `CadPipingSystem`'s own doc
+  /// comment (CadEntities.hpp) for the ownership model. Metadata only, like `cadPipeRuns` itself;
+  /// persisted in `.gs` (additive array, ADR-020 (d)) and snapshotted on undo alongside it.
+  std::vector<CadPipingSystem> cadPipingSystems;
 
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
@@ -5383,6 +5392,12 @@ bool HandlePipeRunTextInput(const std::string& line, AppCommandState& st, std::v
 void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 /// Reset the draft path, keeping the remembered nominal size and pressure class.
 void CancelPipeRunCommand(AppCommandState& st);
+
+// --- PIPESYS (issue #486 increment B3 / REQ-345) --------------------------------------------------
+/// One-shot text dispatch for every PIPESYS subverb (NEW/ADD/REMOVE/RENAME/DELETE/LIST — a bare or
+/// unrecognized \p args reports the current networks). \p args is everything typed after the
+/// command name itself. ADD/REMOVE act on `AppCommandState::selection`'s pipe runs.
+void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.
 ///
 /// ONE builder for the preview, the click that commits a point and the Enter that finishes — a

@@ -324,6 +324,160 @@ TEST_CASE("PIPERUN compass flattens an off-plane object-snap hit onto the anchor
   CHECK(wz > 9.9);                    // world Z preserved, up the snapped ray
 }
 
+// --- PIPESYS piping networks (issue #486 increment B3, REQ-345) --------------------------------
+
+namespace {
+AppCommandState MakeStateWithTwoPipeRuns() {
+  AppCommandState st;
+  CadPipeRun a; a.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0}; a.nominalSize = "4in";
+  CadPipeRun b; b.vertsXyz = {0.0, 0.0, 0.0, 0.0, 10.0, 0.0}; b.nominalSize = "2in";
+  st.cadPipeRuns.push_back(a);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  st.cadPipeRuns.push_back(b);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  return st;
+}
+} // namespace
+
+TEST_CASE("PIPESYS NEW creates a named, empty network", "[issue486][pipesys]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW Cooling Loop 1", st, log);
+  REQUIRE(st.cadPipingSystems.size() == 1);
+  CHECK(st.cadPipingSystems[0].name == "Cooling Loop 1");
+  CHECK(st.cadPipingSystems[0].pipeRunIndices.empty());
+}
+
+TEST_CASE("PIPESYS NEW refuses a blank name and a duplicate name", "[issue486][pipesys]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW", st, log);
+  CHECK(st.cadPipingSystems.empty());
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  REQUIRE(st.cadPipingSystems.size() == 1);
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  CHECK(st.cadPipingSystems.size() == 1);  // refused, not duplicated
+}
+
+TEST_CASE("PIPESYS ADD moves the selected pipe run into the named network", "[issue486][pipesys]") {
+  AppCommandState st = MakeStateWithTwoPipeRuns();
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  SelectedEntity e{}; e.type = SelectedEntity::Type::PipeRun; e.index = 0;
+  st.selection.push_back(e);
+  HandlePipingSystemCommand("ADD Loop A", st, log);
+  REQUIRE(st.cadPipingSystems[0].pipeRunIndices.size() == 1);
+  CHECK(st.cadPipingSystems[0].pipeRunIndices[0] == 0);
+}
+
+TEST_CASE("PIPESYS ADD refuses with no pipe run selected", "[issue486][pipesys]") {
+  AppCommandState st = MakeStateWithTwoPipeRuns();
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  HandlePipingSystemCommand("ADD Loop A", st, log);
+  CHECK(st.cadPipingSystems[0].pipeRunIndices.empty());
+}
+
+TEST_CASE("PIPESYS ADD refuses an unknown network name", "[issue486][pipesys]") {
+  AppCommandState st = MakeStateWithTwoPipeRuns();
+  std::vector<std::string> log;
+  SelectedEntity e{}; e.type = SelectedEntity::Type::PipeRun; e.index = 0;
+  st.selection.push_back(e);
+  HandlePipingSystemCommand("ADD Nonexistent", st, log);
+  CHECK(st.cadPipingSystems.empty());
+}
+
+TEST_CASE("A run added to a second network is moved out of the first", "[issue486][pipesys]") {
+  AppCommandState st = MakeStateWithTwoPipeRuns();
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  HandlePipingSystemCommand("NEW Loop B", st, log);
+  SelectedEntity e{}; e.type = SelectedEntity::Type::PipeRun; e.index = 0;
+  st.selection.push_back(e);
+  HandlePipingSystemCommand("ADD Loop A", st, log);
+  REQUIRE(st.cadPipingSystems[0].pipeRunIndices.size() == 1);
+  HandlePipingSystemCommand("ADD Loop B", st, log);
+  CHECK(st.cadPipingSystems[0].pipeRunIndices.empty());  // dropped from Loop A
+  REQUIRE(st.cadPipingSystems[1].pipeRunIndices.size() == 1);
+  CHECK(st.cadPipingSystems[1].pipeRunIndices[0] == 0);
+}
+
+TEST_CASE("PIPESYS REMOVE takes the selected run back out of a network", "[issue486][pipesys]") {
+  AppCommandState st = MakeStateWithTwoPipeRuns();
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  SelectedEntity e{}; e.type = SelectedEntity::Type::PipeRun; e.index = 0;
+  st.selection.push_back(e);
+  HandlePipingSystemCommand("ADD Loop A", st, log);
+  REQUIRE(st.cadPipingSystems[0].pipeRunIndices.size() == 1);
+  HandlePipingSystemCommand("REMOVE Loop A", st, log);
+  CHECK(st.cadPipingSystems[0].pipeRunIndices.empty());
+}
+
+TEST_CASE("PIPESYS RENAME changes the network's name without touching its runs", "[issue486][pipesys]") {
+  AppCommandState st = MakeStateWithTwoPipeRuns();
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  SelectedEntity e{}; e.type = SelectedEntity::Type::PipeRun; e.index = 0;
+  st.selection.push_back(e);
+  HandlePipingSystemCommand("ADD Loop A", st, log);
+  HandlePipingSystemCommand("RENAME Loop A Cooling Loop", st, log);
+  REQUIRE(st.cadPipingSystems.size() == 1);
+  CHECK(st.cadPipingSystems[0].name == "Cooling Loop");
+  CHECK(st.cadPipingSystems[0].pipeRunIndices.size() == 1);
+}
+
+TEST_CASE("PIPESYS RENAME refuses colliding with an existing name", "[issue486][pipesys]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  HandlePipingSystemCommand("NEW Loop B", st, log);
+  HandlePipingSystemCommand("RENAME Loop A Loop B", st, log);
+  CHECK(st.cadPipingSystems[0].name == "Loop A");  // unchanged
+}
+
+TEST_CASE("PIPESYS DELETE removes the network but leaves its pipe runs in place", "[issue486][pipesys]") {
+  AppCommandState st = MakeStateWithTwoPipeRuns();
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  SelectedEntity e{}; e.type = SelectedEntity::Type::PipeRun; e.index = 0;
+  st.selection.push_back(e);
+  HandlePipingSystemCommand("ADD Loop A", st, log);
+  HandlePipingSystemCommand("DELETE Loop A", st, log);
+  CHECK(st.cadPipingSystems.empty());
+  CHECK(st.cadPipeRuns.size() == 2);  // both runs still exist
+}
+
+TEST_CASE("Deleting a pipe run drops it from its network and reindexes the rest", "[issue486][pipesys]") {
+  AppCommandState st = MakeStateWithTwoPipeRuns();
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  SelectedEntity e0{}; e0.type = SelectedEntity::Type::PipeRun; e0.index = 0;
+  SelectedEntity e1{}; e1.type = SelectedEntity::Type::PipeRun; e1.index = 1;
+  st.selection = {e0, e1};
+  HandlePipingSystemCommand("ADD Loop A", st, log);
+  REQUIRE(st.cadPipingSystems[0].pipeRunIndices == std::vector<int>({0, 1}));
+
+  // Now select just run 0 and delete it — run 1 should reindex down to 0 in the network.
+  st.selection = {e0};
+  ExecuteDeleteSelection(st, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  REQUIRE(st.cadPipingSystems[0].pipeRunIndices.size() == 1);
+  CHECK(st.cadPipingSystems[0].pipeRunIndices[0] == 0);
+}
+
+TEST_CASE("Bare PIPESYS lists existing networks without erroring on none", "[issue486][pipesys]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  HandlePipingSystemCommand("", st, log);
+  REQUIRE_FALSE(log.empty());
+  HandlePipingSystemCommand("NEW Loop A", st, log);
+  log.clear();
+  HandlePipingSystemCommand("LIST", st, log);
+  REQUIRE(log.size() == 1);
+  CHECK(log[0].find("Loop A") != std::string::npos);
+}
+
 TEST_CASE("Existing axis-aligned PIPERUN picks are unaffected by the default-on compass",
           "[issue486][piperun][compass]") {
   // Pins that REQ-346 does not regress the original increment-B2 tests: picks already exactly on a

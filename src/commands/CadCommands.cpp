@@ -1522,6 +1522,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadTableAttrs        = st.cadTableAttrs;
   snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
   snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
+  snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
   snap.blockDefs            = st.blockDefs;
   snap.cadBlockRefs         = st.cadBlockRefs;
   snap.cadBlockRefAttrs     = st.cadBlockRefAttrs;
@@ -1621,6 +1622,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadTableAttrs        = snap.cadTableAttrs;
   st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
   st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
+  st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
   st.blockDefs            = snap.blockDefs;
   st.cadBlockRefs         = snap.cadBlockRefs;
@@ -6506,6 +6508,9 @@ const CmdEntry kRegistry[] = {
     {"solidcheck", "scheck", "Check every solid (or the selection): closed, manifold, oriented, self-intersecting"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
     {"piperun", "pipe", "Route a pipe run: PIPERUN, nominal size [class], then points (U undo, END/Enter finishes)"},
+    {"pipesys", "pipenet, pipingsystem",
+     "Named piping networks: PIPESYS NEW/ADD/REMOVE/RENAME/DELETE/LIST <name> (ADD/REMOVE use the "
+     "current pipe-run selection)"},
     {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
     {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
@@ -24245,6 +24250,17 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     st.cadPipeRuns.erase(st.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
     if (static_cast<size_t>(idx) < st.cadPipeRunAttrs.size())
       st.cadPipeRunAttrs.erase(st.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    // Piping networks (issue #486 increment B3 / REQ-345) reference cadPipeRuns by index — a
+    // deleted run drops out of whichever network held it, and every index above it shifts down by
+    // one, the same reindexing a std::vector erase itself just did to cadPipeRuns.
+    for (CadPipingSystem& sys : st.cadPipingSystems) {
+      auto& runs = sys.pipeRunIndices;
+      runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
+      for (int& ri : runs) {
+        if (ri > idx)
+          --ri;
+      }
+    }
   }
 
   // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
@@ -34117,6 +34133,191 @@ void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vec
   AddPipeRunPoint(st, pt, log);
 }
 
+// ---------------------------------------------------------------------------------------------
+// PIPESYS (issue #486 increment B3 / REQ-345) — named piping networks. Purely text-driven, no
+// viewport interaction and no `AppCommandState::Kind` of its own: a network is metadata grouping
+// existing `cadPipeRuns` (already routed by PIPERUN), not a thing you route, so every operation
+// takes exactly the same "bare verb reports, verb + args sets" one-shot shape `SOLIDLIST`/`ISOLINES`
+// already use, rather than a multi-turn prompt state machine.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// Finds a network by name (case-sensitive — names are user-chosen labels, not identifiers with a
+/// canonical case). Returns -1 if none matches.
+int FindPipingSystemByName(const AppCommandState& st, const std::string& name) {
+  for (size_t i = 0; i < st.cadPipingSystems.size(); ++i) {
+    if (st.cadPipingSystems[i].name == name)
+      return static_cast<int>(i);
+  }
+  return -1;
+}
+
+/// Every selected pipe run's index, sorted ascending and de-duplicated — the order `PIPESYS ADD`/
+/// `REMOVE` report and store in, matching `CadPipingSystem::pipeRunIndices`'s own stated invariant.
+std::vector<int> SelectedPipeRunIndices(const AppCommandState& st) {
+  std::set<int> ix;
+  const size_t n = st.cadPipeRuns.size();
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type == SelectedEntity::Type::PipeRun && e.index >= 0 && static_cast<size_t>(e.index) < n)
+      ix.insert(e.index);
+  }
+  return std::vector<int>(ix.begin(), ix.end());
+}
+
+} // namespace
+
+void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log) {
+  std::istringstream iss(args);
+  std::string verb;
+  iss >> verb;
+  for (char& c : verb) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+  const auto listAll = [&]() {
+    if (st.cadPipingSystems.empty()) {
+      log.push_back("PIPESYS - no piping networks defined. Usage: PIPESYS NEW <name>.");
+      return;
+    }
+    for (const CadPipingSystem& sys : st.cadPipingSystems) {
+      log.push_back("PIPESYS - \"" + sys.name + "\": " + std::to_string(sys.pipeRunIndices.size()) +
+                    " run(s).");
+    }
+  };
+
+  if (verb.empty() || verb == "list") {
+    listAll();
+    return;
+  }
+
+  if (verb == "new") {
+    std::string name;
+    std::getline(iss, name);
+    name = StringUtil::trimCopy(name);
+    if (name.empty()) {
+      log.push_back("PIPESYS NEW - a network needs a name.");
+      return;
+    }
+    if (FindPipingSystemByName(st, name) >= 0) {
+      log.push_back("PIPESYS NEW - a network named \"" + name + "\" already exists.");
+      return;
+    }
+    PushUndoSnapshot(st, "Create Piping Network");
+    CadPipingSystem sys;
+    sys.name = name;
+    st.cadPipingSystems.push_back(std::move(sys));
+    log.push_back("PIPESYS - network \"" + name + "\" created.");
+    return;
+  }
+
+  if (verb == "add" || verb == "remove") {
+    std::string name;
+    std::getline(iss, name);
+    name = StringUtil::trimCopy(name);
+    if (name.empty()) {
+      log.push_back("PIPESYS " + verb + " - name the network to " + verb + " to, e.g. PIPESYS " + verb +
+                    " Cooling Loop 1.");
+      return;
+    }
+    const int sysIx = FindPipingSystemByName(st, name);
+    if (sysIx < 0) {
+      log.push_back("PIPESYS " + verb + " - no network named \"" + name + "\". PIPESYS NEW " + name +
+                    " first, or PIPESYS LIST to see what exists.");
+      return;
+    }
+    const std::vector<int> picked = SelectedPipeRunIndices(st);
+    if (picked.empty()) {
+      log.push_back("PIPESYS " + verb + " - select one or more pipe runs first.");
+      return;
+    }
+    PushUndoSnapshot(st, verb == "add" ? "Add To Piping Network" : "Remove From Piping Network");
+    CadPipingSystem& target = st.cadPipingSystems[static_cast<size_t>(sysIx)];
+    if (verb == "add") {
+      // A run belongs to at most one network (CadPipingSystem's own doc comment) — drop it from
+      // whichever network already holds it before it joins this one, rather than refusing or
+      // silently duplicating the reference.
+      for (CadPipingSystem& other : st.cadPipingSystems) {
+        for (int idx : picked) {
+          auto& runs = other.pipeRunIndices;
+          runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
+        }
+      }
+      for (int idx : picked)
+        target.pipeRunIndices.push_back(idx);
+      std::sort(target.pipeRunIndices.begin(), target.pipeRunIndices.end());
+      target.pipeRunIndices.erase(std::unique(target.pipeRunIndices.begin(), target.pipeRunIndices.end()),
+                                  target.pipeRunIndices.end());
+    } else {
+      for (int idx : picked) {
+        auto& runs = target.pipeRunIndices;
+        runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
+      }
+    }
+    log.push_back("PIPESYS - " + std::to_string(picked.size()) + " run(s) " +
+                  (verb == "add" ? "added to " : "removed from ") + "\"" + name + "\".");
+    return;
+  }
+
+  if (verb == "rename") {
+    // Names may contain spaces on both sides of the split, so a single-token old-name read
+    // (`iss >> oldName`) would truncate "Loop A" to just "Loop". Instead, match the REST of the
+    // line against every existing network's name as a prefix, and take the LONGEST match — the
+    // same greedy-longest-prefix trick avoids ambiguity between "Loop A" and "Loop A Extra" both
+    // being valid prefixes of the typed line.
+    std::string rest;
+    std::getline(iss, rest);
+    rest = StringUtil::trimCopy(rest);
+    int sysIx = -1;
+    size_t oldNameLen = 0;
+    for (size_t i = 0; i < st.cadPipingSystems.size(); ++i) {
+      const std::string& candidate = st.cadPipingSystems[i].name;
+      if (rest.size() > candidate.size() && rest.compare(0, candidate.size(), candidate) == 0 &&
+          rest[candidate.size()] == ' ' && candidate.size() > oldNameLen) {
+        sysIx = static_cast<int>(i);
+        oldNameLen = candidate.size();
+      }
+    }
+    if (sysIx < 0) {
+      log.push_back("PIPESYS RENAME - usage: PIPESYS RENAME <old name> <new name>; "
+                    "<old name> must exactly match an existing network.");
+      return;
+    }
+    const std::string oldName = st.cadPipingSystems[static_cast<size_t>(sysIx)].name;
+    std::string newName = StringUtil::trimCopy(rest.substr(oldNameLen));
+    if (newName.empty()) {
+      log.push_back("PIPESYS RENAME - a new name is required.");
+      return;
+    }
+    if (FindPipingSystemByName(st, newName) >= 0) {
+      log.push_back("PIPESYS RENAME - a network named \"" + newName + "\" already exists.");
+      return;
+    }
+    PushUndoSnapshot(st, "Rename Piping Network");
+    st.cadPipingSystems[static_cast<size_t>(sysIx)].name = newName;
+    log.push_back("PIPESYS - \"" + oldName + "\" renamed to \"" + newName + "\".");
+    return;
+  }
+
+  if (verb == "delete") {
+    std::string name;
+    std::getline(iss, name);
+    name = StringUtil::trimCopy(name);
+    const int sysIx = FindPipingSystemByName(st, name);
+    if (sysIx < 0) {
+      log.push_back("PIPESYS DELETE - no network named \"" + name + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Delete Piping Network");
+    // Deleting a NETWORK never deletes its pipe runs — they simply become unassigned, the same
+    // "container owns no geometry" split CadPipingSystem's own doc comment states.
+    st.cadPipingSystems.erase(st.cadPipingSystems.begin() + sysIx);
+    log.push_back("PIPESYS - network \"" + name + "\" deleted (its pipe runs are unaffected).");
+    return;
+  }
+
+  log.push_back("PIPESYS - unknown option \"" + verb +
+                "\". Use NEW, ADD, REMOVE, RENAME, DELETE or LIST.");
+}
+
 namespace {
 
 /// Append the straight run \p from -> \p to, in \p frame's plane, refusing a point off that plane.
@@ -36961,6 +37162,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // routed path has no fixed argument count.
     if (plotTok == "piperun" || plotTok == "pipe") {
       StartPipeRunCommand(st, log);
+      return;
+    }
+    // PIPESYS (issue #486 increment B3 / REQ-345): named piping networks. One-shot, text-only —
+    // see HandlePipingSystemCommand's own doc comment for why it needs no Kind state machine.
+    if (plotTok == "pipesys" || plotTok == "pipenet" || plotTok == "pipingsystem") {
+      std::string restOfLine;
+      std::getline(issIdle, restOfLine);
+      HandlePipingSystemCommand(restOfLine, st, log);
       return;
     }
     if (plotTok == "isolines") {
