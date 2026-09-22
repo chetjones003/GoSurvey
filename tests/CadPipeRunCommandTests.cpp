@@ -666,6 +666,182 @@ TEST_CASE("A 45-degree bend matches an elbow-45 catalog part instead of elbow-90
   CHECK(st.cadBlockRefs[0].defName == "ELBOW45-4IN");
 }
 
+// --- Auto-fitting tee insertion at branch nodes (issue #486 increment B6, REQ-345) --------------
+
+namespace {
+/// A minimal, geometrically-simplified tee for testing the branch-fit planner: all three ports sit
+/// at the fitting's local origin (same test-double simplification `MakeElbow90Def` uses — only
+/// port normals/roles and engagement length matter to the planner; the outlet/branch world
+/// positions are trusted straight from the model, never independently checked, so a zero-size body
+/// is a valid, fully exercising test double here too). Inlet -X, Outlet +X (the straight run
+/// through the body), Branch +Y.
+CadBlockDefinition MakeTeeDef(const std::string& name, float engagementLength = 0.f) {
+  CadBlockDefinition def;
+  def.name = name;
+  def.partType = CadPipePartType::Tee;
+  def.nominalSize = "4in";
+  CadBlockConnection in;
+  in.name = "IN"; in.nx = -1.f; in.ny = 0.f; in.nz = 0.f;
+  in.role = CadBlockConnectionRole::Inlet;
+  in.engagementLength = engagementLength;
+  CadBlockConnection out;
+  out.name = "OUT"; out.nx = 1.f; out.ny = 0.f; out.nz = 0.f;
+  out.role = CadBlockConnectionRole::Outlet;
+  out.engagementLength = engagementLength;
+  CadBlockConnection branch;
+  branch.name = "BRANCH"; branch.nx = 0.f; branch.ny = 1.f; branch.nz = 0.f;
+  branch.role = CadBlockConnectionRole::Branch;
+  branch.engagementLength = engagementLength;
+  def.connections = {in, out, branch};
+  return def;
+}
+
+/// Two existing straight pipe runs forming a through line along X, both ending exactly at the
+/// origin — the two "other" legs a third run's endpoint can branch-tee into.
+AppCommandState MakeStateWithThroughRunsAtOrigin() {
+  AppCommandState st;
+  CadPipeRun a;  // -X leg: runs from (-10,0,0) to (0,0,0), ending AT the origin
+  a.vertsXyz = {-10.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  a.nominalSize = "4in";
+  CadPipeRun b;  // +X leg: runs from (0,0,0) to (10,0,0), starting AT the origin
+  b.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  b.nominalSize = "4in";
+  st.cadPipeRuns = {a, b};
+  st.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
+  return st;
+}
+} // namespace
+
+TEST_CASE("PIPERUN auto-inserts a tee where a new run's endpoint meets two existing runs' ends",
+          "[issue486][piperun][branch]") {
+  AppCommandState st = MakeStateWithThroughRunsAtOrigin();
+  st.blockDefs.push_back(MakeTeeDef("TEE-4IN"));
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);   // start exactly at the existing runs' shared end
+  SubmitPipeRunViewportPick(st, 0.f, 10.f, log);  // branch leg: +Y
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 3);
+  // The two pre-existing runs are unaffected here (zero engagement length ⇒ no cutback), still
+  // ending exactly at the origin.
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(0.0));
+  CHECK(st.cadPipeRuns[1].vertsXyz[0] == Catch::Approx(0.0));
+  REQUIRE(st.cadPipeRuns[2].vertsXyz.size() == 6);
+  CHECK(st.cadPipeRuns[2].vertsXyz[0] == Catch::Approx(0.0));
+  CHECK(st.cadPipeRuns[2].vertsXyz[1] == Catch::Approx(0.0));
+
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].defName == "TEE-4IN");
+  CHECK(st.cadBlockRefs[0].xf.x == Catch::Approx(0.0f));
+  CHECK(st.cadBlockRefs[0].xf.y == Catch::Approx(0.0f));
+}
+
+TEST_CASE("The tee's engagement length shortens the pinned (inlet) leg at the branch node",
+          "[issue486][piperun][branch]") {
+  // Only the INLET side is independently pinned by cutA — the SAME "trust the model" reasoning
+  // `MakeElbow90Def`'s own engagement-length test relies on for an elbow's far side applies here to
+  // BOTH the outlet and branch: with every port at the fitting's local origin (this test double's
+  // own simplification), their solved world positions come out identical to the pinned inlet point
+  // rather than independently offset — a real, non-degenerate block would place them correctly.
+  AppCommandState st = MakeStateWithThroughRunsAtOrigin();
+  st.blockDefs.push_back(MakeTeeDef("TEE-4IN", /*engagementLength=*/2.f));
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 0.f, 10.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 3);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(-2.0));  // -X leg (inlet) cut back 2ft
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].defName == "TEE-4IN");
+}
+
+TEST_CASE("A branch that lands on only one existing run's endpoint is not enough legs for a tee",
+          "[issue486][piperun][branch]") {
+  AppCommandState st;
+  CadPipeRun a; a.vertsXyz = {-10.0, 0.0, 0.0, 0.0, 0.0, 0.0}; a.nominalSize = "4in";
+  st.cadPipeRuns = {a};
+  st.cadPipeRunAttrs = {EntityAttributes{}};
+  st.blockDefs.push_back(MakeTeeDef("TEE-4IN"));
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 0.f, 10.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 2);  // no tee — only one other leg present
+  CHECK(st.cadBlockRefs.empty());
+}
+
+TEST_CASE("Three runs meeting without a roughly-straight through pair get no tee",
+          "[issue486][piperun][branch]") {
+  AppCommandState st;
+  // Both existing legs point the SAME way (+X) — no pair is anywhere near opposite.
+  CadPipeRun a; a.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0}; a.nominalSize = "4in";
+  CadPipeRun b; b.vertsXyz = {0.0, 0.0, 0.0, 8.0, 2.0, 0.0}; b.nominalSize = "4in";
+  st.cadPipeRuns = {a, b};
+  st.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
+  st.blockDefs.push_back(MakeTeeDef("TEE-4IN"));
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 0.f, -10.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 3);  // all three still committed, just no tee/cutback
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(10.0));
+  CHECK(st.cadPipeRuns[1].vertsXyz[3] == Catch::Approx(8.0));
+  CHECK(st.cadBlockRefs.empty());
+}
+
+TEST_CASE("An engagement length too large for one of the three legs falls back to no tee",
+          "[issue486][piperun][branch]") {
+  AppCommandState st = MakeStateWithThroughRunsAtOrigin();
+  st.blockDefs.push_back(MakeTeeDef("TEE-4IN", /*engagementLength=*/100.f));  // >> any leg length
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 0.f, 10.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 3);
+  CHECK(st.cadBlockRefs.empty());
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(0.0));  // untouched — refusal is local
+}
+
+TEST_CASE("The tee commit (new run + two cutback existing runs + block) undoes as one step",
+          "[issue486][piperun][branch]") {
+  AppCommandState st = MakeStateWithThroughRunsAtOrigin();
+  st.blockDefs.push_back(MakeTeeDef("TEE-4IN", /*engagementLength=*/2.f));
+
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 0.f, 10.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 3);
+  REQUIRE(st.cadBlockRefs.size() == 1);
+
+  REQUIRE(DoUndo(st, log));
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(0.0));  // existing runs' cutback undone too
+  CHECK(st.cadPipeRuns[1].vertsXyz[0] == Catch::Approx(0.0));
+  CHECK(st.cadBlockRefs.empty());
+}
+
 TEST_CASE("Existing axis-aligned PIPERUN picks are unaffected by the default-on compass",
           "[issue486][piperun][compass]") {
   // Pins that REQ-346 does not regress the original increment-B2 tests: picks already exactly on a
