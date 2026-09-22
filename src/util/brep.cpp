@@ -16670,9 +16670,10 @@ namespace {
 /// precisely) — `EarClip`'s own robustness (proximity-to-corner skip in its containment test) is
 /// what makes that safe, rather than perturbing the duplicate points, which was tried first and
 /// did not address the actual defect (see TASK-272).
-void BridgeHoleIntoOuter(std::vector<ucs::Point2D>* outer, const std::vector<ucs::Point2D>& hole) {
+[[nodiscard]] bool BridgeHoleIntoOuter(std::vector<ucs::Point2D>* outer,
+                                       const std::vector<ucs::Point2D>& hole) {
   if (hole.size() < 3 || outer->size() < 3)
-    return;
+    return false;
   std::size_t mi = 0;
   for (std::size_t i = 1; i < hole.size(); ++i)
     if (hole[i].x > hole[mi].x)
@@ -16695,7 +16696,7 @@ void BridgeHoleIntoOuter(std::vector<ucs::Point2D>* outer, const std::vector<ucs
     }
   }
   if (bestEdge == SIZE_MAX)
-    return;  // M was outside `outer` (shouldn't happen for a validated solid) — leave unbridged
+    return false;  // M was outside `outer` (shouldn't happen for a validated solid)
 
   const ucs::Point2D& a = (*outer)[bestEdge];
   const ucs::Point2D& b = (*outer)[(bestEdge + 1) % n];
@@ -16715,6 +16716,7 @@ void BridgeHoleIntoOuter(std::vector<ucs::Point2D>* outer, const std::vector<ucs
     }
   }
   *outer = std::move(result);
+  return true;
 }
 
 /// World-space position of \p sf at parameter `(u, v)`, via the same `LocalSurfaceDerivs` the
@@ -16934,21 +16936,27 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     case SurfaceKind::Plane: {
       if (f.loops.size() > 1) {
         // A face with at least one hole (a single bolt hole is loops.size() == 2; a flange with
-        // several is more). Sample every loop by walking its own edges directly
-        // (`SegmentsForEdge`/`EdgePointAt` — the same rule the neighbouring curved wall face's own
-        // rim uses), so no vertex here is ever invented independently of what that other face
-        // already generated. A plane has no curvature, so — unlike the general-loop path below,
+        // several is more). A plane has no curvature, so — unlike the general-loop path below,
         // which grids each face in chord-tolerance bands for a possibly-curved surface — the 2D
         // polygon these loops trace can be triangulated EXACTLY: bridge each hole into the outer
         // ring as a zero-width slit (`BridgeHoleIntoOuter`), which turns the whole face into one
         // simple polygon, then ear-clip it (`EarClip`, made robust to a bridge's thin/degenerate
         // geometry — see its own docs and TASK-272). This sidesteps a real bug in the old approach
         // (routing through `TessellateGeneralLoopFace`'s per-band grid): at a hole's own top/bottom
-        // extremum, the scanline's interval count genuinely changes between adjacent bands (no hole
-        // yet, then the hole opens), which is not a resolution-matching problem — it is two
-        // structurally different rows that no per-band column count can reconcile, and it cracked
-        // every hole at exactly those two points. Ear-clipping one simple polygon has no bands and
-        // so no pinch to crack at.
+        // extremum, the scanline's interval count genuinely changes between adjacent bands, which
+        // is not a resolution-matching problem no per-band column count can reconcile, and cracked
+        // every hole at exactly those two points.
+        //
+        // `BridgeHoleIntoOuter`'s bridging assumes visibility with no reflex-vertex check (see its
+        // own docs), which is not guaranteed for every real hole ARRANGEMENT (several holes around
+        // a circular outer boundary, not just one hole in a rectangle) — confirmed on an actual
+        // multi-hole flange, where it left a face untessellated entirely (the part vanished from
+        // the render) instead of merely cracked. Rather than trust it unconditionally, this whole
+        // attempt is speculative: on ANY failure (a hole this kernel could not bridge, or a bridged
+        // polygon `EarClip` refuses), fall back to the always-available `TessellateGeneralLoopFace`
+        // band grid below — worse (the pinch crack this fix targets), but never worse than not
+        // rendering the face at all, which is the one regression this must never reintroduce.
+        bool bridgedOk = true;
         std::vector<ucs::Point2D> outer2;
         for (const EdgeUse& u : f.loops[0].uses) {
           const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
@@ -16959,54 +16967,80 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
             outer2.push_back(ucs::WorldToPlane(sf.frame, p));
           }
         }
-        if (outer2.size() < 3)
-          return Fail(Problem::DegenerateFace, outWhy);
-        if (SignedArea2D(outer2) < 0.0)
-          std::reverse(outer2.begin(), outer2.end());
-        for (std::size_t li = 1; li < f.loops.size(); ++li) {
-          std::vector<ucs::Point2D> hole2;
-          for (const EdgeUse& u : f.loops[li].uses) {
-            const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
-            const int segs = SegmentsForEdge(e, chordTolerance);
-            for (int i = 0; i < segs; ++i) {
-              const double t = static_cast<double>(i) / static_cast<double>(segs);
-              const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
-              hole2.push_back(ucs::WorldToPlane(sf.frame, p));
+        if (outer2.size() < 3) {
+          bridgedOk = false;
+        } else {
+          if (SignedArea2D(outer2) < 0.0)
+            std::reverse(outer2.begin(), outer2.end());
+          for (std::size_t li = 1; bridgedOk && li < f.loops.size(); ++li) {
+            std::vector<ucs::Point2D> hole2;
+            for (const EdgeUse& u : f.loops[li].uses) {
+              const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+              const int segs = SegmentsForEdge(e, chordTolerance);
+              for (int i = 0; i < segs; ++i) {
+                const double t = static_cast<double>(i) / static_cast<double>(segs);
+                const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+                hole2.push_back(ucs::WorldToPlane(sf.frame, p));
+              }
             }
+            if (hole2.size() < 3)
+              continue;  // a degenerate hole loop contributes nothing to bridge
+            if (SignedArea2D(hole2) > 0.0)
+              std::reverse(hole2.begin(), hole2.end());  // holes wind opposite the outer ring
+            if (!BridgeHoleIntoOuter(&outer2, hole2))
+              bridgedOk = false;
           }
-          if (hole2.size() < 3)
-            continue;  // a degenerate hole loop contributes nothing to bridge
-          if (SignedArea2D(hole2) > 0.0)
-            std::reverse(hole2.begin(), hole2.end());  // holes wind opposite the outer ring
-          BridgeHoleIntoOuter(&outer2, hole2);
         }
         std::vector<std::array<int, 3>> tris;
-        if (!EarClip(outer2, &tris))
-          return Fail(Problem::DegenerateFace, outWhy);
-        const Vec3 planeN = sf.frame.zAxis;
-        std::vector<Vec3> world(outer2.size());
-        for (std::size_t i = 0; i < outer2.size(); ++i)
-          world[i] = ucs::PlaneToWorld(sf.frame, outer2[i]);
-        // Every triangle on a flat face must wind to match the SAME single normal, `planeN` — unlike
-        // a curved surface (where winding can only sensibly be checked against a neighbour, since the
-        // "expected" direction varies per point), a flat face's correct winding is unambiguous per
-        // triangle, so each is checked and, if needed, flipped individually rather than deciding once.
-        std::vector<std::uint32_t> verts(outer2.size());
-        for (std::size_t i = 0; i < outer2.size(); ++i)
-          verts[i] = mb.Push(world[i], planeN);
-        for (const std::array<int, 3>& t3 : tris) {
-          const Vec3& a3 = world[static_cast<std::size_t>(t3[0])];
-          const Vec3& b3 = world[static_cast<std::size_t>(t3[1])];
-          const Vec3& c3 = world[static_cast<std::size_t>(t3[2])];
-          const Vec3 g = ray3d::Cross(ray3d::Sub(b3, a3), ray3d::Sub(c3, a3));
-          const bool flip = ray3d::Length(g) > 1e-15 && ray3d::Dot(g, planeN) < 0.0;
-          if (!flip)
-            mb.Tri(verts[static_cast<std::size_t>(t3[0])], verts[static_cast<std::size_t>(t3[1])],
-                   verts[static_cast<std::size_t>(t3[2])]);
-          else
-            mb.Tri(verts[static_cast<std::size_t>(t3[0])], verts[static_cast<std::size_t>(t3[2])],
-                   verts[static_cast<std::size_t>(t3[1])]);
+        if (bridgedOk && !EarClip(outer2, &tris))
+          bridgedOk = false;
+        if (bridgedOk) {
+          const Vec3 planeN = sf.frame.zAxis;
+          std::vector<Vec3> world(outer2.size());
+          for (std::size_t i = 0; i < outer2.size(); ++i)
+            world[i] = ucs::PlaneToWorld(sf.frame, outer2[i]);
+          // Every triangle on a flat face must wind to match the SAME single normal, `planeN` —
+          // unlike a curved surface (where winding can only sensibly be checked against a
+          // neighbour, since the "expected" direction varies per point), a flat face's correct
+          // winding is unambiguous per triangle, so each is checked and, if needed, flipped
+          // individually rather than deciding once.
+          std::vector<std::uint32_t> verts(outer2.size());
+          for (std::size_t i = 0; i < outer2.size(); ++i)
+            verts[i] = mb.Push(world[i], planeN);
+          for (const std::array<int, 3>& t3 : tris) {
+            const Vec3& a3 = world[static_cast<std::size_t>(t3[0])];
+            const Vec3& b3 = world[static_cast<std::size_t>(t3[1])];
+            const Vec3& c3 = world[static_cast<std::size_t>(t3[2])];
+            const Vec3 g = ray3d::Cross(ray3d::Sub(b3, a3), ray3d::Sub(c3, a3));
+            const bool flip = ray3d::Length(g) > 1e-15 && ray3d::Dot(g, planeN) < 0.0;
+            if (!flip)
+              mb.Tri(verts[static_cast<std::size_t>(t3[0])], verts[static_cast<std::size_t>(t3[1])],
+                     verts[static_cast<std::size_t>(t3[2])]);
+            else
+              mb.Tri(verts[static_cast<std::size_t>(t3[0])], verts[static_cast<std::size_t>(t3[2])],
+                     verts[static_cast<std::size_t>(t3[1])]);
+          }
+          break;
         }
+        // Fallback: the pre-existing band-grid tessellator, unchanged.
+        Face tmp = f;
+        tmp.paramLoops.clear();
+        tmp.paramLoops.reserve(f.loops.size());
+        for (const Loop& lp : f.loops) {
+          std::vector<curveisect::Vec2> poly;
+          for (const EdgeUse& u : lp.uses) {
+            const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+            int segs = SegmentsForEdge(e, chordTolerance);
+            for (int i = 0; i < segs; ++i) {
+              double t = double(i) / double(segs);
+              Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+              ucs::Point2D q = ucs::WorldToPlane(sf.frame, p);
+              poly.push_back(curveisect::Vec2{q.x, q.y});
+            }
+          }
+          tmp.paramLoops.push_back(std::move(poly));
+        }
+        TessellateGeneralLoopFace(tmp, chordTolerance, &mb);
         break;
       }
       // Walk each loop into a polyline. Arc edges are subdivided by the same chord rule the curved
