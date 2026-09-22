@@ -1,4 +1,4 @@
-# TASK-269 — REQ-342: SECTIONPLANE places a plane on a section line, not only on a face
+# TASK-273 — REQ-342: SECTIONPLANE places a plane on a section line, not only on a face
 
 - Type:    feat
 - Status:  in progress (user testing in the app before it is sent)

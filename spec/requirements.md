@@ -8984,7 +8984,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   to the plane's CENTRE, and gave the plane selection and handles. (1) and (3) still stand.
 
   2026-09-18 — **a section plane can be placed on a section LINE, not only on a face**
-  (D-2026-09-18-b, TASK-269). Reported from the real app against AutoCAD: *"i have not selected a face
+  (D-2026-09-18-b, TASK-273). Reported from the real app against AutoCAD: *"i have not selected a face
   but have instead selected a different part, for this instance it is the mid point of this torus …
   ours currently can only do sectionplanes off of a face of an object."* AutoCAD's own prompt asks for
   both in one breath — "Select face or any point to locate section line", then "Specify through
