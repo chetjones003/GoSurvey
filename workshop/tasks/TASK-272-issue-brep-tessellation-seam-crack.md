@@ -1,9 +1,40 @@
 # TASK-272 — B-rep tessellation seam crack: torn bolt holes / curved-face joins
 
-- Type:    bug (follow-up, partially fixed)
-- Status:  open
+- Type:    bug
+- Status:  RESOLVED for the reported bug (bolt holes / flat-face holes). A separate,
+  unrelated crack at a plain cone's apex remains open — see "Remaining open item" below.
 - Opened:  2026-09-22
+- Resolved: 2026-09-22
 - Owner:   Claude (chetjones003@gmail.com)
+
+## 0. Resolution summary
+
+Root cause was NOT the wall-vs-cap phase mismatch first suspected (disproven — see §2), nor
+purely the cross-band resolution mismatch (real bug, fixed, but insufficient alone) — it was a
+genuine topology pinch in `TessellateGeneralLoopFace`'s scanline/band decomposition at a hole's
+own top/bottom extremum, where the interval count changes between adjacent bands in a way no
+per-band column count can reconcile.
+
+**Fix:** stopped routing planar faces-with-holes through the scanline/band tessellator entirely.
+Replaced it with an exact construction for `SurfaceKind::Plane` (a plane has no curvature, so no
+chord-tolerance banding is needed at all): bridge every hole into the outer loop as a zero-width
+slit (`BridgeHoleIntoOuter`), producing one simple polygon, then ear-clip it (`EarClip`). This has
+no bands and so nothing to pinch.
+
+That surfaced a second, previously-invisible bug in `EarClip` itself: on a degenerate/thin input
+(exactly what a bridge slit produces) its ear-finding could fail to find any clippable ear and
+silently fall back to a one-point fan over the remainder — self-overlapping for a non-star-shaped
+remainder, and invisible to a total-signed-area check (the shoelace identity gives a
+self-overlapping decomposition the same total area as a valid one), so it only ever showed up as a
+wrong integrated volume, much later. Fixed by making `EarClip`'s ear/containment tests
+tolerance-based (scaled to the ring's own extent) instead of exact-zero comparisons, explicitly
+handling a query point that coincides with a triangle corner (a bridge's duplicated point), making
+it refuse outright rather than silently degrade if a pass still finds no ear, and filtering any
+residual zero-area (degenerate) triangles from its output.
+
+**Verified:** the bolt-hole/box-with-hole reproduction goes from 536 cracked mesh edges to 0. Full
+suite 1209/1210 passing (the one failure is the separate cone-apex item below). See commit
+`89b7939` on `fix/brep-tessellation-seam-crack`.
 
 ## 1. Authority
 - Goal:         REQ-313 / ADR-045 (B-rep solid kernel) — tessellation must be a faithful,
@@ -91,32 +122,35 @@ dropped entirely via the `continue` a few lines up — dropping a band drops geo
 show up as a HOLE in the mesh, not a crack, so more likely it's the row directly adjacent to the
 pinch that under- or over-resolves relative to the extremum point itself).
 
-## 3. Reproduction (regression test, already in tree and RED)
+(§§2 above, down through here, is the historical trail of diagnosis and two abandoned fix
+attempts, kept because it records real dead ends — see §0 for the fix that actually landed.)
 
-`tests/BrepTests.cpp`: `RequireMeshWatertight(t)` (new helper) checks every triangle edge in a
-tessellation is shared by exactly two triangles. Two call sites currently fail:
+## 3. Reproduction (regression test, in tree)
+
+`tests/BrepTests.cpp`: `RequireMeshWatertight(t)` checks every triangle edge in a tessellation is
+shared by exactly two triangles. As of the §0 fix, one call site still fails:
 
 - `"Tessellation agrees with the analytic figures and winds outward"` / case "cone": 256 of 768
-  mesh edges cracked (a plain cone — unexplored; may or may not be the same pinch-point class of
-  bug, since a cone's apex is a comparable "everything meets at one point" case).
-- `"Curved B1: ... SUBTRACT drills a round hole through the box (B2a)"`: 536 of 2608 mesh edges
-  cracked (the flange/bolt-hole repro; all inside the flat cap faces, at the hole's top/bottom
-  extrema — see above).
+  mesh edges cracked. This is a plain `MakeCylinder`/cone primitive with NO holes — it never
+  touches `TessellateGeneralLoopFace`, `EarClip`, or `BridgeHoleIntoOuter` at all, so it is a
+  different bug from the one this task fixed, not a residual of it. Likely candidate: the apex-fan
+  triangulation (`SurfaceKind::Cone` with `r1 == 0`) disagreeing with the wall's own rim sampling
+  at the apex point, a structurally similar "everything meets at one point" situation to the pinch
+  bug this task DID fix, but in a different code path — unconfirmed, not investigated.
+- The bolt-hole/flange repro (`"Curved B1: ... SUBTRACT drills a round hole through the box
+  (B2a)"`) is now CLEAN (0 cracked edges, was 536).
 
-Run: `.\build\GoSurveyTests.exe "[brep]"` after `./dev/build`. A `triFace`-based crack-location
-dump (print, for each cracked edge, `t.triFace[i/3]` of its one touching triangle, and its `y`
-coordinate) is the fastest way to re-derive the evidence above; it was a temporary scratch
-`TEST_CASE` removed from the tree, not a kept helper.
+Run: `.\build\GoSurveyTests.exe "[brep]"` after `./dev/build`.
 
-## 4. Next steps for whoever picks this up
+## 4. Next steps for whoever picks up the cone-apex item
 
-- Start in `TessellateGeneralLoopFace`, specifically the band whose `v0` or `v1` lands exactly on
-  (or a hair inside of) a hole's y-extremum. Compare what that band's grid actually looks like
-  (dump its `nRows`/`nCols`/`xs0`/`xs1`) against the band on the other side of the pinch.
-- Do NOT reintroduce the wall-vs-cap phase theory from the earlier version of this task — that
-  was checked directly (via `triFace`) and ruled out. The wall is never involved in this crack.
+- Confirm it's actually a `SurfaceKind::Cone` apex issue (not a cylinder's own wall/cap seam) by
+  checking `t.triFace` on the cracked edges of a plain `MakeCone`-only repro, the same way this
+  task's earlier (superseded) sections diagnosed the bolt-hole crack — that technique is proven
+  useful, unlike the fixes those sections tried.
 - This is a SPEC GAP candidate: REQ-313's Tessellation acceptance criteria don't explicitly
   require adjacent-face seam agreement or intra-face watertightness (only per-triangle
   winding/normal agreement and volume/area convergence). Worth a recorded decision to add an
   explicit watertightness acceptance criterion, with `RequireMeshWatertight` promoted from a
-  debugging aid to a documented requirement check.
+  debugging aid to a documented requirement check — it would have caught the bolt-hole crack this
+  task fixed far earlier than a user-reported screenshot did.
