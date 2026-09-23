@@ -1840,11 +1840,13 @@ TEST_CASE("A flat ellipse snaps at its centre; a TILTED one is not answered in p
     CHECK(hit.y == Approx(5.f));
   }
 
-  SECTION("tilted: skipped, not answered at the place its flattened shadow would be") {
-    // What a 45-degree cut of a pipe draws (#531): the same centre, standing in the cut plane.
+  SECTION("tilted: the centre is a real point and is offered") {
+    // A tilted ellipse's CENTRE is a point in space whatever plane the curve turns in, so it snaps
+    // like any other centre — and its height is the ellipse's own (GitHub #531).
     CadEllipse el{};
     el.cx = 10.0;
     el.cy = 5.0;
+    el.z = 7.0;
     el.majVx = 20.f;
     el.majVy = 0.f;
     el.ratio = 0.7071f;
@@ -1854,6 +1856,37 @@ TEST_CASE("A flat ellipse snaps at its centre; a TILTED one is not answered in p
     st.userEllipses.push_back(el);
     st.userEllAttrs.push_back(EntityAttributes{});
     const CadSnap::Hit hit = CadSnap::FindBest(10.4, 5.3, st, /*commandActive=*/true, kTol);
-    CHECK_FALSE(hit.valid);  // the follow-up REQ-312 item 3 describes, not a wrong answer
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Center);
+    CHECK(hit.x == Approx(10.f));
+    CHECK(hit.y == Approx(5.f));
+    CHECK(hit.z == Approx(7.f));
   }
+
+  SECTION("tilted: a midpoint candidate lies ON the curve, at its own height") {
+    // The curve of a 45-degree section rises as it goes: a candidate taken from the XY projection
+    // would sit at one elevation the curve never has.
+    AppCommandState mid;
+    mid.objectSnapMidpoint = true;
+    CadEllipse el{};
+    el.cx = 0.0;
+    el.cy = 0.0;
+    el.z = 0.0;
+    el.majVx = 0.f;
+    el.majVy = 42.4264f;  // the major axis runs down the slope of a 45-degree cut
+    el.ratio = 0.70710678f;
+    el.nx = 0.f;
+    el.ny = -0.70710678f;
+    el.nz = 0.70710678f;
+    mid.userEllipses.push_back(el);
+    mid.userEllAttrs.push_back(EntityAttributes{});
+    // Near the far end of the major axis: on a 45-degree cut that point is 30 out and 30 up.
+    const CadSnap::Hit hit = CadSnap::FindBest(0.0, 29.0, mid, /*commandActive=*/true, kTol);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Midpoint);
+    CHECK(hit.y == Approx(30.f).margin(1.5f));
+    // The whole point: it carries the height the curve has there, not zero.
+    CHECK(hit.z == Approx(30.f).margin(1.5f));
+  }
+
 }

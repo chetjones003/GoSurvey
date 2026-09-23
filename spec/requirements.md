@@ -6059,12 +6059,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   an end cap is an elliptical arc plus a chord — two shapes, not one — and keeps its own refusal
   (`SliceCutCrossesCurvedEnd`).
 
-  **What a tilted ellipse does NOT yet do**, stated rather than left to be discovered: the plan-space
-  paths — object snap, entity pick and the three grips — **skip** it, exactly as REQ-312's own
+  **Object snap reaches a tilted ellipse**: its centre, and points on the curve itself, taken through
+  the ellipse's own plane and carrying the height the curve has there — the rule REQ-312 item 3 set
+  for a tilted arc. What a tilted ellipse does NOT yet do: the plan-space ENTITY PICK and the three
+  GRIPS **skip** it, exactly as REQ-312's own
   increments skipped a tilted arc before its snap and pick work landed. They compute in plan, and a
   tilted ellipse's curve is not the one they would draw there, so acting on it would put a snap or a
-  handle somewhere the curve never goes (REQ-201). A flat ellipse keeps all three. That slice is the
-  follow-up, and it is the same shape of work REQ-312 item 3 already describes for arcs.
+  handle somewhere the curve never goes (REQ-201). A flat ellipse keeps both. That slice is the
+  follow-up.
 
   Acceptance added:
   - a flat ellipse, drawn or loaded, is unchanged, and the existing ellipse transcripts and the
