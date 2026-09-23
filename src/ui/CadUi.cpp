@@ -15752,10 +15752,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           case SelectedEntity::Type::Ellipse: {
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
               const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+              // A tilted ellipse (GitHub #531) has no flat grips: its own are the next slice, and drawing
+              // them where a flat one would be is a handle that grabs the wrong point.
+              if (EllipseIsFlat(el)) {
               const float perpX = -el.majVy, perpY = el.majVx;
               tryGrip(sel, el.cx,                    el.cy,                    el.z, 0);
               tryGrip(sel, el.cx + el.majVx,         el.cy + el.majVy,         el.z, 1);
               tryGrip(sel, el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z, 2);
+              }
             }
             break;
           }
@@ -16765,10 +16769,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           case SelectedEntity::Type::Ellipse: {
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
               const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+              // A tilted ellipse (GitHub #531) has no flat grips: its own are the next slice, and drawing
+              // them where a flat one would be is a handle that grabs the wrong point.
+              if (EllipseIsFlat(el)) {
               const float perpX = -el.majVy, perpY = el.majVx;
               drawGrip(el.cx, el.cy, hot(0));
               drawGrip(el.cx + el.majVx, el.cy + el.majVy, hot(1));
               drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, hot(2));
+              }
             }
             break;
           }
@@ -18587,11 +18595,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else if (sel.type == SelectedEntity::Type::Ellipse) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
           const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+          if (EllipseIsFlat(el)) {
           drawGrip(el.cx, el.cy, el.z);
           drawGrip(el.cx + el.majVx, el.cy + el.majVy, el.z);
           const float perpX = -el.majVy;
           const float perpY = el.majVx;
           drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z);
+          }
         }
       } else if (sel.type == SelectedEntity::Type::BlockRef) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadBlockRefs.size()) {

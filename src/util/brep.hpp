@@ -946,6 +946,30 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 [[nodiscard]] bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                                ucs::Ucs* outPlane, Path* outLoop, Problem* outWhy);
 
+/// The ellipse a tilted cut of a cylinder or cone exposes (GitHub #531, D-2026-09-23-a).
+///
+/// A section-only result rather than a new \ref PathSeg kind: `Path` is this kernel's chain of lines
+/// and arcs, and every feature that consumes one — a wall swept along a path, a loft, a sweep — would
+/// otherwise have to learn an ellipse segment only to refuse it. Sectioning is the one caller that
+/// wants this shape, so it is the one that names it.
+struct SectionEllipse {
+  bool valid = false;
+  Vec3 centre{};    ///< world
+  Vec3 normal{};    ///< world — the caller's own plane normal
+  Vec3 majorDir{};  ///< world, unit
+  double majorSemi = 0.0;
+  double minorSemi = 0.0;
+};
+
+/// The cross-section of \p solid when it is exactly one closed ellipse (GitHub #531).
+///
+/// Same cut, same plane and same accepted set as \ref SectionOutlines — this asks the narrower
+/// question those refuse with \ref Problem::SectionEllipse. A cut that also crosses an end cap is an
+/// elliptical arc plus a chord, not one ellipse, and keeps its own refusal
+/// (\ref Problem::SliceCutCrossesCurvedEnd).
+[[nodiscard]] bool SectionEllipseOutline(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                         ucs::Ucs* outPlane, SectionEllipse* outEllipse, Problem* outWhy);
+
 /// **Every** closed outline of the cross-section, for a cut whose shape is more than one loop
 /// (REQ-335 increment 2, D-2026-09-18-a, GitHub #520) — a ring, where a hole sits inside an outer
 /// outline (a torus cut square to its axis, a drilled box), or separate pieces of solid on the plane.

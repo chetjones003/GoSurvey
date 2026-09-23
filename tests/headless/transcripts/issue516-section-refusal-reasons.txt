@@ -25,7 +25,10 @@ ESC
 EXPECT POLYLINES 0
 EXPECT SOLIDS 1
 
-# --- a tilted cut between the caps: SLICE cuts it, SECTION names the ellipse ------------------
+# --- a tilted cut between the caps: SLICE cuts it, and SECTION now draws the ellipse -----------
+# Until #531 this said "this cut is an ellipse, which a section outline cannot hold yet". The
+# ellipse entity can stand in the cut plane now, so the cut draws instead of refusing; the refusal
+# that remains is the one for a cut that also crosses an end cap, above.
 NEW
 CMD CYLINDER 0,0,-100 30 200
 CMD UCS
@@ -34,11 +37,13 @@ CMD 45
 BOX -300 -300 300 300
 CMD SECTION
 CMD UCS
-EXPECT LOG "SECTION — This cut is an ellipse, which a section outline cannot hold yet."
-ESC
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT ELLIPSES 1
 EXPECT POLYLINES 0
 CMD UCS
 CMD W
+CMD SELECT
+ESC
 CMD SELECT
 ESC
 BOX -300 -300 300 300

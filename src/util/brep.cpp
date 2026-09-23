@@ -8988,6 +8988,75 @@ void DropCollinearPathVertices(Path* p) {
 
 } // namespace
 
+bool SectionEllipseOutline(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                           ucs::Ucs* outPlane, SectionEllipse* outEllipse, Problem* outWhy) {
+  if (!outPlane || !outEllipse)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+
+  ucs::Ucs frame{};
+  if (!ucs::FromNormal(planePoint, planeNormal, &frame))
+    return Fail(Problem::SliceDegeneratePlane, outWhy);
+
+  Solid above, below;
+  Problem why = Problem::Ok;
+  if (!Slice(solid, planePoint, planeNormal, SliceKeep::Both, &above, &below, &why))
+    return Fail(why, outWhy);
+
+  // The same cut face \ref SectionOutlines takes, asked a narrower question: is this one closed
+  // ellipse? A tilted cut of a cylinder or cone is built as two half-sweeps of one ellipse
+  // (`AddEllipse`), so the face's loop is exactly two `Ellipse` edges sharing a frame. Anything
+  // else — a cut that also crosses an end cap, a marched curve — is not this, and says so.
+  const Face* cut = nullptr;
+  for (const Face& f : above.faces) {
+    if (f.surface.kind != SurfaceKind::Plane)
+      continue;
+    if (std::fabs(std::fabs(ray3d::Dot(f.surface.frame.zAxis, frame.zAxis)) - 1.0) > 1e-9)
+      continue;
+    if (std::fabs(ray3d::Dot(ray3d::Sub(f.surface.frame.origin, planePoint), frame.zAxis)) > 1e-9)
+      continue;
+    if (cut)
+      return Fail(Problem::SliceCutSeveralOutlines, outWhy);
+    cut = &f;
+  }
+  if (!cut)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+  if (cut->loops.size() != 1)
+    return Fail(Problem::SectionHasHole, outWhy);
+
+  const std::vector<EdgeUse>& uses = cut->loops.front().uses;
+  double sweep = 0.0;
+  const Edge* first = nullptr;
+  for (const EdgeUse& u : uses) {
+    const Edge& e = above.edges[static_cast<std::size_t>(u.edge)];
+    if (e.kind != CurveKind::Ellipse)
+      return Fail(Problem::SectionCurve, outWhy);
+    if (!first)
+      first = &e;
+    else if (ray3d::Length(ray3d::Sub(e.frame.origin, first->frame.origin)) > 1e-9 * std::max(1.0, e.radius) ||
+             std::fabs(e.radius - first->radius) > 1e-9 * std::max(1.0, e.radius) ||
+             std::fabs(e.radius2 - first->radius2) > 1e-9 * std::max(1.0, e.radius))
+      return Fail(Problem::SliceCutSeveralOutlines, outWhy);  // two different ellipses, not one
+    sweep += std::fabs(e.sweep);
+  }
+  if (!first)
+    return Fail(Problem::SliceResultInvalid, outWhy);
+  // A closed ellipse, not an arc of one: the sweeps must add to a full turn. A cut that clips an end
+  // cap has a chord as well, and is refused by name where it always was (#516).
+  if (std::fabs(sweep - kTwoPi) > 1e-9)
+    return Fail(Problem::SliceCutCrossesCurvedEnd, outWhy);
+
+  SectionEllipse out;
+  out.valid = true;
+  out.centre = first->frame.origin;
+  out.normal = frame.zAxis;  // the caller's own plane, as \ref SectionOutlines promises
+  out.majorDir = first->frame.xAxis;
+  out.majorSemi = first->radius;
+  out.minorSemi = first->radius2;
+  *outPlane = frame;
+  *outEllipse = out;
+  return Succeed(outWhy);
+}
+
 bool SectionOutlines(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                      ucs::Ucs* outPlane, std::vector<Path>* outLoops, Problem* outWhy) {
   if (!outPlane || !outLoops)
