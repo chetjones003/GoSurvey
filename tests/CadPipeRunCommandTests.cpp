@@ -1365,6 +1365,7 @@ TEST_CASE("A pipe run belongs to its own drawing tab", "[issue486][piperun][comm
 
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));
@@ -1402,6 +1403,7 @@ TEST_CASE("Clearing a drawing's CAD geometry clears its pipe runs", "[issue486][
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));
