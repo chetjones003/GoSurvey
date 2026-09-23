@@ -1241,6 +1241,16 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  /// Pipe runs and the networks that group them (issue #486 / REQ-345). Per DRAWING, like every
+  /// other entity store here: without them, routing a run in one drawing left it rendering — and
+  /// selectable, and snappable — in every other tab, because a tab switch swaps the whole document
+  /// and whatever it does not name simply stays behind. The same defect the section clip had
+  /// (REQ-341, D-2026-09-16-b finding 6) and for the same reason: pipe runs arrived after this
+  /// snapshot pass was written. The derived `pipeRunWorldSolids` are NOT here — they are display
+  /// data rebuilt from these by signature, exactly like `blockRefWorldSolids`.
+  std::vector<CadPipeRun>       cadPipeRuns;
+  std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<CadPipingSystem>  cadPipingSystems;
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;

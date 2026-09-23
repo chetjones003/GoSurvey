@@ -10,6 +10,7 @@
 #include <initializer_list>
 #include <limits>
 #include <map>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -27,24 +28,28 @@ constexpr double kHalfPi = 0.5 * kPi;
 constexpr int kMinArcSegments = 2;
 constexpr int kMaxArcSegments = 512;
 
-/// A (near-)full turn gets a much higher segment floor than a small arc sliver needs, independent
-/// of `tol/radius` (issue #486 GUI pass): the app's chord tolerance is a fixed absolute distance
+/// A full turn gets a much higher segment BUDGET than a small arc sliver needs, independent of
+/// `tol/radius` (issue #486 GUI pass): the app's chord tolerance is a fixed absolute distance
 /// (`kSolidChordToleranceFt`), so `tol/radius` — and with it the segment count — shrinks for any
 /// small-to-moderate-radius circle, not just tiny ones; even an ordinary few-foot cylinder read as
-/// visibly faceted. A short arc (a fillet corner, an intersection sliver) does not carry this
-/// complaint — it is already a small fraction of a turn, so it stays on the ordinary floor above.
-/// This is the ONE place a circle or a near-closed arc's parametrisation is turned into a segment
-/// count (`SegmentsForArc`/`SegmentsForEdge`), so raising the floor here reaches every curved solid
-/// face, every curved B-rep edge, AND the rubber-band edge preview (`TessellateEdges`, which every
-/// EXTRUDE/PRESSPULL/CYLINDER/REVOLVE/LOFT/SWEEP ghost in CadRubberPreview.cpp draws through) in one
-/// place, so none of them can drift back out of sync with each other.
-// A cylinder's curved wall is built as TWO half-turn faces (see BuildConical's `sideFace(0, kPi,
-// ...)` / `sideFace(kPi, kTwoPi, ...)` — the seamed-sphere pattern, needed so a boolean/slice
-// operation always has an edge to cut at), so "the whole circle" shows up here as a `kPi` span
-// twice over, not one `kTwoPi` span. The threshold has to catch that half-turn case too, or this
-// floor never engages for the ordinary EXTRUDE/PRESSPULL cylinder it exists for.
-constexpr double kFullTurnSpanThreshold = kPi * 0.999;
-constexpr int kMinFullCircleSegments = 128;
+/// visibly faceted. This is the ONE place a circle or an arc's parametrisation is turned into a
+/// segment count (`SegmentsForArc`/`SegmentsForEdge`), so raising the floor here reaches every
+/// curved solid face, every curved B-rep edge, AND the rubber-band edge preview (`TessellateEdges`,
+/// which every EXTRUDE/PRESSPULL/CYLINDER/REVOLVE/LOFT/SWEEP ghost in CadRubberPreview.cpp draws
+/// through) in one place, so none of them can drift back out of sync with each other. The budget is
+/// PER FULL TURN, scaled by span in `SegmentsForArc` itself — not a step function on span — because
+/// a circle is not always one edge: a cylinder's wall is built as two half-turn faces (see
+/// BuildConical's `sideFace(0, kPi, ...)` / `sideFace(kPi, kTwoPi, ...)`, needed so a boolean/slice
+/// always has an edge to cut at), while elsewhere the same circle can be one full 2*pi rim edge. A
+/// step function keyed on "is this span nearly a full turn" gives EACH half-turn piece the same
+/// absolute floor as the whole circle, doubling the total versus the unsplit case; scaling by span
+/// keeps the per-turn budget constant regardless of how many pieces the circle is cut into.
+///
+/// 256, not 128: every ordinary EXTRUDE/PRESSPULL/CYLINDER wall is the two-half-turn-face case above,
+/// so issue #486's tuning pass (done before the scaled floor existed) was implicitly tuned against
+/// TWO applications of this constant — 256 segments per turn, not 128 — and a user-visible regression
+/// confirmed 128 alone reads as faceted again at ordinary working zoom on a small (2 in radius) part.
+constexpr int kMinFullCircleSegments = 256;
 
 [[nodiscard]] bool AllFinite(std::initializer_list<double> vs) {
   for (double v : vs) {
@@ -1540,7 +1545,18 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
   const double span = std::fabs(spanRad);
   if (!(radius > 0.0) || !(span > 0.0))
     return 1;
-  const int minSegs = span >= kFullTurnSpanThreshold ? kMinFullCircleSegments : kMinArcSegments;
+  // The floor scales with span rather than switching on a near-full-turn threshold (issue: torn
+  // bolt holes). A circle is not always one edge: a primitive's cylindrical wall is built as TWO
+  // half-turn faces (the seamed pattern noted above), while a Phase 4 boolean can just as easily
+  // leave the SAME circle as a single full 2*pi rim edge. Under the old step function both a
+  // half-turn piece and a full-turn piece hit the SAME absolute floor (kMinFullCircleSegments), so
+  // splitting a circle in two doubled its total vertex budget relative to the unsplit case — and
+  // the two disagreed wherever a face tessellated one representation next to a loop that walked the
+  // other (a bore wall next to its own hole's rim, cap vs. wall). Scaling the floor by span keeps
+  // the total segment budget for one full turn constant (kMinFullCircleSegments) no matter how many
+  // pieces it is cut into, so two neighbouring faces sampling the same circle always agree.
+  const int minSegs = std::max(
+      kMinArcSegments, static_cast<int>(std::llround(kMinFullCircleSegments * span / kTwoPi)));
   if (tol >= radius)
     return minSegs;
   const double maxStep = 2.0 * std::acos(1.0 - tol / radius);
@@ -1565,6 +1581,32 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
   }
   const double r = e.kind == CurveKind::Ellipse ? std::max(e.radius, e.radius2) : e.radius;
   return SegmentsForArc(r, e.sweep, tol);
+}
+
+/// Curvature-only segment count for a NURBS patch's (u, v) grid (TASK-272 §5) — extracted so the
+/// pre-pass below can fold this into the same shared-edge relaxation as the loop-edge-derived
+/// counts, instead of a Nurbs face silently outrunning whatever count its neighbour settled on.
+[[nodiscard]] int NurbsPatchCurvatureSegs(const nurbs::Patch& patch, double chordTolerance) {
+  double netStep = 0.0;
+  for (std::size_t k = 0; k + 1 < patch.ctrl.size(); ++k)
+    netStep = std::max(netStep, ray3d::Length(ray3d::Sub(patch.ctrl[k + 1], patch.ctrl[k])));
+  bool curved = patch.degU > 1 || patch.degV > 1;
+  if (!curved && patch.ctrl.size() >= 4) {
+    const Vec3 e1 = ray3d::Sub(patch.ctrl[1], patch.ctrl[0]);
+    const Vec3 e2 = ray3d::Sub(patch.ctrl[static_cast<std::size_t>(patch.nu)], patch.ctrl[0]);
+    Vec3 nrm = ray3d::Cross(e1, e2);
+    const double nl = ray3d::Length(nrm);
+    if (nl > 1e-12) {
+      nrm = ray3d::Scale(nrm, 1.0 / nl);
+      for (const Vec3& c : patch.ctrl)
+        if (std::fabs(ray3d::Dot(ray3d::Sub(c, patch.ctrl[0]), nrm)) > chordTolerance) {
+          curved = true;
+          break;
+        }
+    }
+  }
+  return curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance), 8, 128)
+                : 1;
 }
 
 struct MeshBuilder {
@@ -16640,44 +16682,450 @@ namespace {
 /// is ample for a profile cap. A profile is the first thing to hand \ref Tessellate a non-convex
 /// plane face — ADR-045 named that "Phase 4's problem, when a boolean first produces a face that
 /// needs one", and an extruded L-shape needs it now.
-void EarClip(const std::vector<ucs::Point2D>& ring, std::vector<std::array<int, 3>>* tris) {
+///
+/// Returns false if a full pass finds no clippable ear before the ring is down to a triangle. A
+/// valid simple polygon always has at least two ears (the standard "two ears theorem"), so that can
+/// only happen from a genuinely malformed ring OR — this used to be the unhandled case — from the
+/// exact-zero convexity/containment comparisons below spuriously rejecting an ear that numerically
+/// exists but is very thin (a nearly-collinear triple, e.g. along a hole-to-outer-boundary bridge
+/// slit). The old code treated "no ear found" as "stop early and fan whatever is left from one
+/// point" — which for a non-star-shaped remainder produces self-overlapping triangles. That defect
+/// was invisible to a total-signed-area check (the shoelace identity gives the same total for a
+/// self-overlapping decomposition as for a valid one) and only showed up as a wrong VOLUME much
+/// later, once the triangles were integrated in 3D — see issue "torn bolt holes" / TASK-272. Failing
+/// loudly here instead turns that into an immediate, attributable refusal.
+[[nodiscard]] bool EarClip(const std::vector<ucs::Point2D>& ring, std::vector<std::array<int, 3>>* tris) {
   const int n = static_cast<int>(ring.size());
+  if (n < 3)
+    return false;
+  double minX = ring[0].x, maxX = ring[0].x, minY = ring[0].y, maxY = ring[0].y;
+  for (const ucs::Point2D& p : ring) {
+    minX = std::min(minX, p.x);
+    maxX = std::max(maxX, p.x);
+    minY = std::min(minY, p.y);
+    maxY = std::max(maxY, p.y);
+  }
+  // A relative tolerance, scaled to the ring's own extent: an absolute epsilon would be meaningless
+  // across the wide range of magnitudes this kernel tessellates at (a bolt-hole flange vs. a
+  // survey-scale part), and too tight a tolerance is exactly what let a valid-but-thin ear near a
+  // bridge slit get spuriously rejected in the first place.
+  const double scale = std::max({maxX - minX, maxY - minY, 1.0});
+  double areaEps = 1e-9 * scale * scale;
+  double containEps = 1e-9 * scale;
+
   std::vector<int> idx(static_cast<std::size_t>(n));
   for (int i = 0; i < n; ++i)
     idx[static_cast<std::size_t>(i)] = i;
 
   int guard = 0;
+  int stallEscalations = 0;
+  // TASK-272 §9h: which ear gets clipped each pass used to always scan starting at index 0 — on a
+  // large, mostly-convex boundary (a bridged multi-hole ring easily has 1000+ points), index 0 (or
+  // whatever is now next to it) is very often IMMEDIATELY valid, so the scan kept re-clipping from
+  // the same end every single pass instead of walking around the ring. That is a VALID triangulation
+  // (every "two ears theorem" guarantee still holds — this was never a correctness bug, which is why
+  // it passed watertightness, per-point radius, and self-intersection checks) but a geometrically
+  // terrible one: it peels into a fan of thousands of long, thin sliver triangles converging on one
+  // or two points, rather than a well-shaped mesh hugging the boundary. Confirmed directly by
+  // rendering the actual dumped mesh for a real multi-hole flange face offline (see TASK-272 §9g) —
+  // exactly this fan pattern, not a crack. Thin slivers are exactly what a GPU rasterizer can drop
+  // sub-pixel coverage on at a grazing/foreshortened view angle, which is what read as "torn" edges
+  // in Shaded view. Fix: resume scanning from where the LAST clip happened instead of restarting at
+  // 0 every pass — the standard "walk the boundary" ear-clip technique — so clips distribute evenly
+  // around the ring instead of always favouring whichever region sits near index 0.
+  int scan = 0;
   while (idx.size() > 3 && guard++ < 4 * n) {
     const int m = static_cast<int>(idx.size());
     bool clipped = false;
-    for (int i = 0; i < m; ++i) {
+    // TASK-272 §9m: taking the FIRST valid ear found (§9h's walk-the-ring fix) still lets a genuinely
+    // thin ear win whenever it happens to be first in the scan window — confirmed directly on the
+    // real flange: 6007 individual triangles with aspect ratio > 50, one at 4.4 MILLION, even with
+    // §9h's fix already active, all still well-formed (watertight, correctly wound — never a
+    // correctness bug) but thin enough that a GPU rasterizer can drop sub-pixel coverage on them,
+    // leaving a visible gap at exactly the hole/outer rim a bridge slit runs along — the actual,
+    // finally-confirmed cause of "torn" Shaded-view edges this whole task has been chasing. Fix:
+    // look at up to `kQualityWindow` candidate ears from the current scan position (bounded, so the
+    // overall algorithm stays close to its prior cost) and clip the BEST-shaped one (by min interior
+    // angle, a standard sliver-quality proxy) instead of the first, falling back to first-found if
+    // none of the window's candidates are notably better than "any valid ear" — this can only ever
+    // improve triangle shape, never change which polygon gets triangulated or reject a valid ring.
+    constexpr int kQualityWindow = 24;
+    int bestI = -1, bestI0 = -1, bestI1 = -1, bestI2 = -1;
+    double bestQuality = -1.0;
+    for (int k = 0, tried = 0; k < m && tried < kQualityWindow; ++k) {
+      const int i = (scan + k) % m;
       const int i0 = idx[static_cast<std::size_t>((i + m - 1) % m)];
       const int i1 = idx[static_cast<std::size_t>(i)];
       const int i2 = idx[static_cast<std::size_t>((i + 1) % m)];
       const ucs::Point2D& a = ring[static_cast<std::size_t>(i0)];
       const ucs::Point2D& b = ring[static_cast<std::size_t>(i1)];
       const ucs::Point2D& c = ring[static_cast<std::size_t>(i2)];
-      if ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) <= 0.0)
-        continue;  // reflex or straight — not an ear tip
+      const double area2 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+      if (area2 <= areaEps)
+        continue;  // reflex or (numerically) straight — not an ear tip
       bool contains = false;
       for (int j = 0; j < m && !contains; ++j) {
         const int ij = idx[static_cast<std::size_t>(j)];
         if (ij == i0 || ij == i1 || ij == i2)
           continue;
-        contains = PointInTriangle2D(ring[static_cast<std::size_t>(ij)], a, b, c);
+        // A point exactly ON the ear's boundary (common right at a bridge slit, where a duplicated
+        // vertex from the other side of the slit can sit precisely on this edge) must NOT count as
+        // "inside" — that is what made a genuinely valid ear look blocked. `PointInTriangle2D`'s
+        // strict signs already treat an exact zero as neither positive nor negative, which is
+        // correct; padding the SIGN test itself in `containEps` would instead misclassify a
+        // truly-inside point near the edge as outside, so only the containment point's PROXIMITY to
+        // each of the triangle's own edges is padded, not the sign test.
+        const ucs::Point2D& q = ring[static_cast<std::size_t>(ij)];
+        const bool onA = ray3d::Length(ray3d::Sub(Vec3{q.x, q.y, 0}, Vec3{a.x, a.y, 0})) < containEps;
+        const bool onB = ray3d::Length(ray3d::Sub(Vec3{q.x, q.y, 0}, Vec3{b.x, b.y, 0})) < containEps;
+        const bool onC = ray3d::Length(ray3d::Sub(Vec3{q.x, q.y, 0}, Vec3{c.x, c.y, 0})) < containEps;
+        if (onA || onB || onC)
+          continue;  // coincides with a triangle corner (a bridge duplicate) — not "inside"
+        contains = PointInTriangle2D(q, a, b, c);
       }
       if (contains)
         continue;
-      tris->push_back({i0, i1, i2});
-      idx.erase(idx.begin() + i);
-      clipped = true;
-      break;
+      ++tried;
+      // Quality proxy: area / (perimeter^2), scale-free and maximized by an equilateral triangle,
+      // near zero for a sliver — cheap (no acos/atan2) and monotonic with "thinness" for this purpose.
+      const double ab = ray3d::Length(ray3d::Sub(Vec3{b.x, b.y, 0}, Vec3{a.x, a.y, 0}));
+      const double bc = ray3d::Length(ray3d::Sub(Vec3{c.x, c.y, 0}, Vec3{b.x, b.y, 0}));
+      const double ca = ray3d::Length(ray3d::Sub(Vec3{a.x, a.y, 0}, Vec3{c.x, c.y, 0}));
+      const double perim = ab + bc + ca;
+      const double quality = perim > 1e-300 ? area2 / (perim * perim) : 0.0;
+      if (bestI < 0 || quality > bestQuality) {
+        bestQuality = quality;
+        bestI = i;
+        bestI0 = i0;
+        bestI1 = i1;
+        bestI2 = i2;
+      }
     }
-    if (!clipped)
-      break;  // no ear found (degenerate input) — fan whatever is left rather than loop
+    if (bestI >= 0) {
+      tris->push_back({bestI0, bestI1, bestI2});
+      idx.erase(idx.begin() + bestI);
+      // Resume next pass's scan right where this clip happened (mod the now-one-shorter ring),
+      // instead of jumping back to index 0 — this is what keeps clips walking around the boundary.
+      scan = (m > 1) ? bestI % (m - 1) : 0;
+      clipped = true;
+    }
+    if (!clipped) {
+      // By the "two ears theorem" a valid simple polygon always has at least two clippable ears, so
+      // a full pass finding none — on a polygon this large (a multi-hole bridge easily reaches into
+      // the thousands of vertices) — is far more often float precision defeating the strict tests
+      // above than a genuinely malformed ring. Loosen the tolerance by 10x and retry the SAME
+      // remaining ring before concluding it is actually malformed; capped, so a truly bad ring still
+      // gets refused rather than silently accepted at an absurdly coarse tolerance.
+      if (stallEscalations < 6) {
+        areaEps *= 10.0;
+        containEps *= 10.0;
+        ++stallEscalations;
+        continue;
+      }
+      return false;  // a genuinely malformed ring (self-intersecting or degenerate) — refuse
+    }
+    stallEscalations = 0;  // progress was made; the next stall gets its own fresh escalation budget
   }
   for (std::size_t i = 1; i + 1 < idx.size(); ++i)
     tris->push_back({idx[0], idx[i], idx[i + 1]});
+  // The final `idx.size() == 3` fan above (and, rarely, a triangle clipped just before it) can be
+  // degenerate when two of the three remaining points are a bridge's exact-duplicate pair (`M` or
+  // `target`, re-emitted to close a hole's slit — see `BridgeHoleIntoOuter`) that never got
+  // consumed as an ear along the way. A zero-area triangle contributes nothing to area or volume,
+  // so dropping it changes nothing about the triangulation except removing a spurious duplicate
+  // triangle edge — this is what left the very last handful of cracked mesh edges after the
+  // robustness fix above (verified via a `triFace`-tagged dump: the crack was one degenerate
+  // triangle, with two coincident vertices, double-booking one real edge).
+  tris->erase(std::remove_if(tris->begin(), tris->end(),
+                             [&](const std::array<int, 3>& t3) {
+                               const ucs::Point2D& a = ring[static_cast<std::size_t>(t3[0])];
+                               const ucs::Point2D& b = ring[static_cast<std::size_t>(t3[1])];
+                               const ucs::Point2D& c = ring[static_cast<std::size_t>(t3[2])];
+                               const double area2 =
+                                   (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                               return std::fabs(area2) <= areaEps;
+                             }),
+              tris->end());
+  return true;
+}
+
+/// TASK-272 §9p: local Delaunay-style edge-flip pass over an `EarClip` triangulation.
+///
+/// Ear-clipping a SIMPLE POLYGON necessarily removes 3 CONSECUTIVE boundary vertices at a time — for
+/// a finely-sampled near-circular boundary (any real bolt hole or bore rim at a tight chord
+/// tolerance), that is structurally a thin sliver almost every time (three consecutive points on a
+/// fine circle are close to collinear by construction), independent of which valid ear the clipper
+/// happens to pick. Confirmed directly on the real reported flange: even scanning the ENTIRE
+/// remaining ring each pass for the best-quality available ear (the `kQualityWindow` widening tried
+/// first) left the worst offender completely unchanged — proof the problem is not "which ear got
+/// picked" but the one-consecutive-triple-at-a-time nature of ear-clipping itself. These slivers are
+/// never a CORRECTNESS bug (watertight, correctly wound — confirmed independently), but a triangle
+/// thin enough interpolates its vertex normals across a huge, near-degenerate footprint, which is
+/// what actually read as "torn" Shaded-view edges right at hole/bore rims specifically (confirmed:
+/// raising the Shaded shader's ambient floor smoothed the plain OUTER rim — ordinary curvature
+/// shading — but left the bolt holes and bore exactly as torn, since those are the only boundaries
+/// this bridge+EarClip path ever triangulates).
+///
+/// The standard fix for "valid mesh, bad triangle shapes" is a LOCAL edge flip: for every interior
+/// edge shared by two triangles (forming a quadrilateral), replace it with the OTHER diagonal when
+/// that diagonal gives a better-shaped pair — this changes triangle SHAPE only, never the boundary,
+/// the vertex set, the winding, or the covered area, so it cannot affect watertightness, volume, or
+/// which triangle belongs to which face. Bounded to a fixed number of sweeps (a full Delaunay
+/// convergence is not needed — only removing the SEVERE outliers is), and gated by convexity (a flip
+/// across a reflex quad would leave the polygon self-intersecting) and a real quality improvement
+/// (never flips a good pair into a worse one).
+void ImproveTriangulationQuality(const std::vector<ucs::Point2D>& ring,
+                                  std::vector<std::array<int, 3>>* tris) {
+  auto triQuality = [&](int a, int b, int c) {
+    const ucs::Point2D& pa = ring[static_cast<std::size_t>(a)];
+    const ucs::Point2D& pb = ring[static_cast<std::size_t>(b)];
+    const ucs::Point2D& pc = ring[static_cast<std::size_t>(c)];
+    const double area2 = (pb.x - pa.x) * (pc.y - pa.y) - (pb.y - pa.y) * (pc.x - pa.x);
+    const double ab = std::hypot(pb.x - pa.x, pb.y - pa.y);
+    const double bc = std::hypot(pc.x - pb.x, pc.y - pb.y);
+    const double ca = std::hypot(pa.x - pc.x, pa.y - pc.y);
+    const double perim = ab + bc + ca;
+    return perim > 1e-300 ? area2 / (perim * perim) : 0.0;  // area2 keeps the CCW-positive sign
+  };
+  // Map an undirected edge (lo, hi) to the up-to-two triangle indices that use it, and which corner
+  // (opposite vertex) each one contributes — enough to reconstruct both candidate diagonals.
+  std::map<std::pair<int, int>, std::array<int, 2>> edgeTris;  // {-1,-1} default = unseen
+  auto edgeKey = [](int u, int v) { return u < v ? std::make_pair(u, v) : std::make_pair(v, u); };
+  for (std::size_t ti = 0; ti < tris->size(); ++ti) {
+    const std::array<int, 3>& t3 = (*tris)[ti];
+    for (int e = 0; e < 3; ++e) {
+      const int u = t3[static_cast<std::size_t>(e)];
+      const int v = t3[static_cast<std::size_t>((e + 1) % 3)];
+      std::array<int, 2>& slot = edgeTris[edgeKey(u, v)];
+      if (slot[0] < 0)
+        slot[0] = static_cast<int>(ti);
+      else
+        slot[1] = static_cast<int>(ti);
+    }
+  }
+  for (int pass = 0; pass < 6; ++pass) {
+    bool changedAny = false;
+    for (auto& [key, slot] : edgeTris) {
+      if (slot[0] < 0 || slot[1] < 0)
+        continue;  // a boundary edge (or a bridge slit edge) — only one triangle uses it, never flip
+      std::array<int, 3>& t0 = (*tris)[static_cast<std::size_t>(slot[0])];
+      std::array<int, 3>& t1 = (*tris)[static_cast<std::size_t>(slot[1])];
+      // Find the two "opposite" corners (the quad's other diagonal) and confirm the shared edge is
+      // really (key.first, key.second) oriented oppositely in each triangle, as a consistent
+      // 2-manifold triangulation guarantees.
+      auto oppositeOf = [&](const std::array<int, 3>& t, int lo, int hi) {
+        for (int e = 0; e < 3; ++e) {
+          const int u = t[static_cast<std::size_t>(e)];
+          const int v = t[static_cast<std::size_t>((e + 1) % 3)];
+          if ((u == lo && v == hi) || (u == hi && v == lo))
+            return t[static_cast<std::size_t>((e + 2) % 3)];
+        }
+        return -1;
+      };
+      const int p = oppositeOf(t0, key.first, key.second);
+      const int q = oppositeOf(t1, key.first, key.second);
+      if (p < 0 || q < 0 || p == q)
+        continue;
+      // Only ever flip a CONVEX quad — a reflex one flipped would self-intersect. Convexity here
+      // means p and q lie on opposite sides of edge (key.first,key.second) (guaranteed by the two
+      // triangles sharing it with opposite winding) AND key.first/key.second lie on opposite sides
+      // of the candidate new diagonal (p, q).
+      const ucs::Point2D& P = ring[static_cast<std::size_t>(p)];
+      const ucs::Point2D& Q = ring[static_cast<std::size_t>(q)];
+      const ucs::Point2D& Lo = ring[static_cast<std::size_t>(key.first)];
+      const ucs::Point2D& Hi = ring[static_cast<std::size_t>(key.second)];
+      const double sideLo = (Q.x - P.x) * (Lo.y - P.y) - (Q.y - P.y) * (Lo.x - P.x);
+      const double sideHi = (Q.x - P.x) * (Hi.y - P.y) - (Q.y - P.y) * (Hi.x - P.x);
+      if (sideLo * sideHi >= 0.0)
+        continue;  // not a convex quad — flipping would self-intersect
+      // Current pairing's worst quality vs. the flipped pairing's worst quality; flip only on a
+      // real improvement, never sideways or for a worse split (this can only ever raise quality).
+      const double q0a = std::fabs(triQuality(key.first, p, key.second));
+      const double q0b = std::fabs(triQuality(key.second, q, key.first));
+      const double q1a = std::fabs(triQuality(p, q, key.second));
+      const double q1b = std::fabs(triQuality(q, p, key.first));
+      const double before = std::min(q0a, q0b);
+      const double after = std::min(q1a, q1b);
+      if (after <= before * 1.05)
+        continue;  // require a clear win (5% margin), not just noise-level — never flip sideways
+      // Rebuild both triangles around the new diagonal (p, q). Don't assume which of the two
+      // orderings is CCW (that depends on which side of the original edge p fell on, which this
+      // function does not track) — derive it from the signed area directly, the same quantity
+      // `triQuality` already computes, so a flip can never silently introduce an inverted normal.
+      std::array<int, 3> newT0 = {p, key.second, q};
+      std::array<int, 3> newT1 = {q, key.first, p};
+      if (triQuality(newT0[0], newT0[1], newT0[2]) < 0.0)
+        std::swap(newT0[1], newT0[2]);
+      if (triQuality(newT1[0], newT1[1], newT1[2]) < 0.0)
+        std::swap(newT1[1], newT1[2]);
+      t0 = newT0;
+      t1 = newT1;
+      changedAny = true;
+    }
+    if (!changedAny)
+      break;
+  }
+}
+
+/// Splices \p hole into \p outer as a zero-width slit (Held's bridging technique), so the two rings
+/// become one simple polygon `EarClip` can triangulate exactly. \p hole must already be wound
+/// opposite \p outer (CW inside a CCW outer, the usual even-odd hole convention) — the caller is
+/// responsible for that, since it can cheaply check once per loop rather than this being re-derived
+/// per bridge. \p awayFrom is a point well inside the shape (the ORIGINAL outer ring's own centroid,
+/// computed once by the caller before any bridging, not recomputed per hole) that the bridge
+/// direction points away from.
+///
+/// Finds the hole's own extremal vertex in the direction `hole centroid - awayFrom` — "outward",
+/// radially — and ray-casts further in that SAME direction to the nearest edge of the CURRENT
+/// `outer` (so a second, third, ... hole bridged afterward sees earlier bridges as part of the
+/// boundary and cannot cross them), connecting to that edge's farther-along-the-ray endpoint. A
+/// fixed cast direction (this used to always be +X) works for exactly one hole, but for several
+/// holes arranged around a shape — a bolt circle, the actual case that motivated this function — a
+/// hole on the far side casting toward the SAME fixed direction has to cross the shape's interior,
+/// and can cross another hole or an earlier bridge on the way, which `EarClip` then correctly (if
+/// unhelpfully) refuses as a self-intersecting input. Cast radially instead, and every hole's bridge
+/// points a different way, like spokes — for a bolt-circle-shaped arrangement (the common case)
+/// spokes from distinct holes do not cross each other or pass through a third hole in between.
+///
+/// This still assumes the target vertex is visible along the ray from the hole's own extremal point
+/// — true whenever the outer boundary has no reflex vertex in the way, which holds for every convex
+/// or near-convex outer boundary this kernel's callers produce (a flange, a plate, an extruded
+/// profile); a pathological concave outer boundary, or holes clustered close enough together that
+/// their own radial spokes cross, could still defeat it — the caller is expected to treat a `false`
+/// return as "fall back to a different tessellation strategy", never as fatal.
+///
+/// The bridge is left an EXACT zero-width slit (the closing pair duplicates the hole's own extremal
+/// point and the target precisely) — `EarClip`'s own robustness (proximity-to-corner skip in its
+/// containment test) is what makes that safe, rather than perturbing the duplicate points, which was
+/// tried first and did not address the actual defect (see TASK-272).
+[[nodiscard]] bool BridgeHoleIntoOuter(std::vector<ucs::Point2D>* outer,
+                                       const std::vector<ucs::Point2D>& hole,
+                                       const ucs::Point2D& awayFrom) {
+  if (hole.size() < 3 || outer->size() < 3)
+    return false;
+
+  ucs::Point2D holeC{0.0, 0.0};
+  double holeExtent = 0.0;
+  for (const ucs::Point2D& p : hole) {
+    holeC.x += p.x / static_cast<double>(hole.size());
+    holeC.y += p.y / static_cast<double>(hole.size());
+  }
+  for (const ucs::Point2D& p : hole)
+    holeExtent = std::max(holeExtent, std::hypot(p.x - holeC.x, p.y - holeC.y));
+  double dx = holeC.x - awayFrom.x;
+  double dy = holeC.y - awayFrom.y;
+  double dlen = std::sqrt(dx * dx + dy * dy);
+  // TASK-272 §9i: a CONCENTRIC hole (a flange's own central bore, sharing the outer ring's axis) has
+  // `holeC` and `awayFrom` both landing on — or, after only floating-point summation noise, a hair's
+  // breadth from — the same true centre point. The old check only caught an EXACT (or near-exact,
+  // 1e-12 absolute) zero; a "concentric but not bit-identical" case (near-guaranteed: `holeC` and
+  // `awayFrom` are each an independent average over a DIFFERENT sample count/spacing of two
+  // DIFFERENT circles, so they only agree to summation-noise precision, not exactly) left `dlen` a
+  // tiny but nonzero number — and normalizing (dx, dy) by a near-zero `dlen` amplifies THAT noise
+  // into an effectively arbitrary, numerically unstable ray direction, rather than the safe, fixed
+  // fallback direction the exact-zero case already had. Confirmed as the actual cause of a torn bore
+  // rim on a real flange (RenderDoc frame capture of the live GPU output — see TASK-272 §9g/§9h/§9i
+  // — the 4 well-separated bolt holes rendered perfectly clean, only the CONCENTRIC bore tore, which
+  // is exactly what a direction-instability bug predicts and a general triangulation-quality bug
+  // does not). Compare against the hole's own SIZE, not an absolute constant, so this catches
+  // "concentric to within noise" robustly regardless of the part's overall scale.
+  if (dlen < 1e-6 * std::max(holeExtent, 1e-9)) {
+    dx = 1.0;
+    dy = 0.0;
+    dlen = 1.0;
+  }
+  dx /= dlen;
+  dy /= dlen;
+
+  std::size_t mi = 0;
+  double bestDot = hole[0].x * dx + hole[0].y * dy;
+  for (std::size_t i = 1; i < hole.size(); ++i) {
+    const double d = hole[i].x * dx + hole[i].y * dy;
+    if (d > bestDot) {
+      bestDot = d;
+      mi = i;
+    }
+  }
+  const ucs::Point2D M = hole[mi];
+
+  // Ray-cast M + t*(dx,dy), t > 0, against every edge of the current outer ring; keep the nearest.
+  double bestT = std::numeric_limits<double>::infinity();
+  std::size_t bestEdge = SIZE_MAX;
+  const std::size_t n = outer->size();
+  for (std::size_t i = 0; i < n; ++i) {
+    const ucs::Point2D& a = (*outer)[i];
+    const ucs::Point2D& b = (*outer)[(i + 1) % n];
+    const double ex = b.x - a.x;
+    const double ey = b.y - a.y;
+    const double den = dx * ey - dy * ex;
+    if (std::fabs(den) < 1e-15)
+      continue;  // parallel to the ray
+    const double t = ((a.x - M.x) * ey - (a.y - M.y) * ex) / den;
+    const double s = ((a.x - M.x) * dy - (a.y - M.y) * dx) / den;
+    if (t > 1e-12 && s >= -1e-9 && s <= 1.0 + 1e-9 && t < bestT) {
+      bestT = t;
+      bestEdge = i;
+    }
+  }
+  if (bestEdge == SIZE_MAX)
+    return false;  // M's radial ray never left the shape (shouldn't happen for a validated solid)
+
+  const ucs::Point2D& a = (*outer)[bestEdge];
+  const ucs::Point2D& b = (*outer)[(bestEdge + 1) % n];
+  const double aDot = a.x * dx + a.y * dy;
+  const double bDot = b.x * dx + b.y * dy;
+  const std::size_t targetIdx = (aDot >= bDot) ? bestEdge : (bestEdge + 1) % n;
+  const ucs::Point2D target = (*outer)[targetIdx];
+
+  // TASK-272 §9q: a RenderDoc capture of the real reported file confirmed the "torn" Shaded pixels
+  // are genuine sub-pixel rasterization dropout — a real, gap-free, but extremely thin (aspect ratio
+  // in the millions) triangle at a bridge slit that a GPU's fixed MSAA sample positions can miss
+  // entirely, letting the black background bleed through. A fix was attempted here (thickening the
+  // slit into a tiny real-width corridor) but it changed which side of the bridge is "inside" the
+  // polygon for at least one real hole arrangement, measurably CRACKING the real flange import (120
+  // of 18540 edges, was 0) — worse than the rasterization artifact it targeted. Reverted rather than
+  // ship a regression; see TASK-272 §9.6/§9q for the root cause and what a correct fix needs to
+  // preserve (the polygon's covered AREA, not just its vertex count).
+  //
+  // TASK-272 §9r (2026-09-23): a second attempt — keep `M`/`target` exactly in place and instead bow
+  // the corridor's two RAILS apart only in the middle (tapering to zero width at both ends, so the
+  // shared boundary points stay bit-exact) — was tried and is ALSO wrong, for a reason that's
+  // structural, not a tuning mistake: confirmed by testing two corridor widths 100x apart and getting
+  // the identical cracked-edge count (8720 of 30456) and identical worst aspect ratio (97784.1) both
+  // times, which only makes sense if the width value never mattered. It doesn't, because of how this
+  // whole scheme's watertightness actually works: the ORIGINAL zero-width slit passes watertightness
+  // only because the outbound edge (target -> M) and the return edge (M -> target) are POSITIONALLY
+  // IDENTICAL, so the test's quantize-by-position edge-count happens to see "2 uses of the same
+  // edge" even though it's really one degenerate fold-back, not a real second triangle. The instant
+  // the two rails stop being positionally identical (any nonzero bow, in any direction, any width),
+  // every one of those newly-distinct edges becomes a real boundary edge used only ONCE — nothing
+  // else in the mesh was ever built to be its twin, since a bridge is internal to one face's own
+  // EarClip ring and no neighbouring face's geometry has any reason to sample this corridor at all.
+  // A single simple-polygon ring literally cannot represent a real-width, still-watertight corridor
+  // this way: doing so needs FOUR distinct rail points forming a true quadrilateral loop with an
+  // internal diagonal of its own, not two rails that only work by coinciding. Reverted; do not retry
+  // this shape of fix again without addressing that structural point first. The likely correct place
+  // for this fix is downstream of `Tessellate`'s topology entirely: a render-only vertex nudge (or a
+  // screen-space "minimum triangle coverage" technique) applied to the GPU vertex buffer, which does
+  // not need to preserve the shared-edge-count-of-2 invariant the CSG/volume-facing mesh does.
+  std::vector<ucs::Point2D> result;
+  result.reserve(n + hole.size() + 2);
+  for (std::size_t i = 0; i < n; ++i) {
+    result.push_back((*outer)[i]);
+    if (i == targetIdx) {
+      // The hole loop below already starts AT `mi` (j == 0 gives `hole[mi] == M`), so pushing `M`
+      // again here first would insert it three times total (this one, the loop's own first point,
+      // and the closing M below) with a zero-length edge between the first two — confirmed as the
+      // actual cause of an EarClip stall on a multi-hole face: not a self-intersection (checked
+      // directly, none), just a redundant degenerate point compounding once per bridged hole.
+      for (std::size_t j = 0; j < hole.size(); ++j)
+        result.push_back(hole[(mi + j) % hole.size()]);
+      result.push_back(M);
+      result.push_back(target);
+    }
+  }
+  *outer = std::move(result);
+  return true;
 }
 
 /// World-space position of \p sf at parameter `(u, v)`, via the same `LocalSurfaceDerivs` the
@@ -16724,10 +17172,53 @@ int GeneralLoopChordDepth(const Surface& sf, curveisect::Vec2 pa, curveisect::Ve
 /// excluded automatically by the even-odd rule. Each trapezoid is then filled with a
 /// chord-tolerance grid exactly like the rectangle path's, so a curved surface still tessellates
 /// finely inside the loop, not just accurately along its edge.
-void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder* mb) {
+void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder* mb, const Solid* s = nullptr,
+                                const std::map<int, int>* edgeSegs = nullptr) {
   const Surface& sf = f.surface;
   if (f.paramLoops.empty())
     return;
+
+  // TASK-272 §9l: an extremal band row (v == the face's own overall v0/v1, i.e. a real rim, not an
+  // interior hole pinch) that corresponds to one whole rim edge is raised to that edge's UNIFIED
+  // `segsForEdge` count — the same count `Tessellate`'s `reconstructParamLoop2D` now uses (§9.4,
+  // §9l) for the neighbouring Plane cap's own hole/outer boundary on the SAME shared edge. Confirmed
+  // by direct measurement that doing only one side or the other makes cracking WORSE, not better
+  // (§9.4's reverted attempt, and this section's own first try): the two sides must land on the same
+  // final count, not just a higher one. Only ever raises (never lowers) `nCols` — the same monotonic
+  // safety rule as every other resolution fix in this task.
+  auto localV = [&](const Vec3& w) {
+    const Vec3 l = ucs::WorldToUcs(sf.frame, w);
+    return sf.kind == SurfaceKind::Plane ? l.y : l.z;
+  };
+  auto segsForEdgeLocal = [&](int edgeIdx, const Edge& e) {
+    if (edgeSegs) {
+      const auto it = edgeSegs->find(edgeIdx);
+      if (it != edgeSegs->end())
+        return it->second;
+    }
+    return SegmentsForEdge(e, chordTolerance);
+  };
+  std::vector<std::pair<double, int>> rimEdges;
+  if (s && edgeSegs && !f.loops.empty()) {
+    const double vTol = 1e-6 * std::max(1.0, std::fabs(f.vStart) + std::fabs(f.vEnd));
+    for (const EdgeUse& u : f.loops[0].uses) {
+      const Edge& e = s->edges[static_cast<std::size_t>(u.edge)];
+      if (e.kind == CurveKind::Line)
+        continue;
+      const double v0v = localV(EdgePointAt(*s, e, 0.0));
+      const double v1v = localV(EdgePointAt(*s, e, 1.0));
+      const double vMid = localV(EdgePointAt(*s, e, 0.5));
+      if (std::fabs(v0v - v1v) < vTol && std::fabs(v0v - vMid) < vTol)
+        rimEdges.emplace_back(v0v, u.edge);
+    }
+  }
+  auto findRimEdgeAt = [&](double v) -> int {
+    const double vTol = 1e-6 * std::max(1.0, std::fabs(f.vStart) + std::fabs(f.vEnd));
+    for (const auto& [rv, edgeIdx] : rimEdges)
+      if (std::fabs(rv - v) < vTol)
+        return edgeIdx;
+    return -1;
+  };
 
   std::vector<double> vBreaks;
   for (const std::vector<curveisect::Vec2>& poly : f.paramLoops)
@@ -16750,6 +17241,26 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
     return mb->Push(ucs::UcsToWorld(sf.frame, p), ucs::UcsVectorToWorld(sf.frame, n));
   };
 
+  // `nCols` for a band used to be chosen from that band's OWN two horizontal rows alone — nothing
+  // tied it to the row a neighbouring band computes for the SAME shared boundary (band i's `v1` row
+  // is band i+1's `v0` row). Each band's count was `max(its own bottom need, its own top need)`, and
+  // those "own" needs are generally different between two bands that only share ONE of their two
+  // rows, so the shared row could legitimately get a different column count on each side of it — a
+  // T-junction crack inside a single face's own triangulation (confirmed on a box-minus-cylinder
+  // bore: the cracked mesh edges all had only one triangle touching them, i.e. the crack was WITHIN
+  // one face, not between two faces as first suspected). Fixed with a small pre-pass: gather every
+  // band's raw per-row needs first, resolve each SHARED boundary to the max of what either side
+  // independently asked for (only where the two sides' interval topology actually matches — same
+  // count of inside/outside crossings — since a topology change at a v-break, e.g. a hole starting,
+  // means the two sides legitimately don't correspond row-for-row), then build geometry using those
+  // resolved counts. This only ever RAISES a band's resolution versus the old per-band-only formula,
+  // never lowers it, so it cannot make an already-fine face coarser.
+  struct BandInfo {
+    double v0 = 0.0, v1 = 0.0;
+    std::vector<double> xs0, xs1;
+  };
+  std::vector<BandInfo> bands;
+  bands.reserve(vBreaks.size());
   for (std::size_t bi = 0; bi + 1 < vBreaks.size(); ++bi) {
     const double v0 = vBreaks[bi];
     const double v1 = vBreaks[bi + 1];
@@ -16759,8 +17270,55 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
     // visibly the outermost band's own outer edge. Sampling a hair inside the band sidesteps that
     // without changing which edges bound this band (guaranteed constant within it by `vBreaks`).
     const double eps = 1e-9 * std::max(1.0, v1 - v0);
-    const std::vector<double> xs0 = GeneralLoopScanline(f.paramLoops, v0 + eps);
-    const std::vector<double> xs1 = GeneralLoopScanline(f.paramLoops, v1 - eps);
+    BandInfo bandInfo;
+    bandInfo.v0 = v0;
+    bandInfo.v1 = v1;
+    bandInfo.xs0 = GeneralLoopScanline(f.paramLoops, v0 + eps);
+    bandInfo.xs1 = GeneralLoopScanline(f.paramLoops, v1 - eps);
+    bands.push_back(std::move(bandInfo));
+  }
+
+  // Per band, per interval k: the column count that band would use on its own (its old, purely
+  // local `max(bottom need, top need)`). `nCols` is ONE number applied to a band's WHOLE grid — both
+  // its rows — so raising just the row-level "need" at a shared boundary is not enough: if band i's
+  // resolution is pinned high by its OWN unrelated bottom row, that higher count applies to band i's
+  // top row too, and band i+1 must match THAT (not just band i's raw top-row need). Two relaxation
+  // sweeps (forward then backward) propagate the max through every run of bands whose interval
+  // topology matches its neighbour, so the whole run converges on one shared count — like a
+  // union-find over a simple chain.
+  std::vector<std::vector<int>> nColsFor(bands.size());
+  for (std::size_t bi = 0; bi < bands.size(); ++bi) {
+    const BandInfo& b = bands[bi];
+    if (b.xs0.size() != b.xs1.size() || b.xs0.size() < 2)
+      continue;
+    nColsFor[bi].assign(b.xs0.size() / 2, 1);
+    for (std::size_t k = 0; k + 1 < b.xs0.size(); k += 2) {
+      if (b.xs0[k + 1] <= b.xs0[k] && b.xs1[k + 1] <= b.xs1[k])
+        continue;
+      const int botNeed = GeneralLoopChordSegments(sf, {b.xs0[k], b.v0}, {b.xs0[k + 1], b.v0}, chordTolerance);
+      const int topNeed = GeneralLoopChordSegments(sf, {b.xs1[k], b.v1}, {b.xs1[k + 1], b.v1}, chordTolerance);
+      nColsFor[bi][k / 2] = std::max(1, std::max(botNeed, topNeed));
+    }
+  }
+  auto topologyMatches = [&](std::size_t bi) {
+    return bi + 1 < bands.size() && nColsFor[bi].size() == nColsFor[bi + 1].size() &&
+           !nColsFor[bi].empty();
+  };
+  for (std::size_t bi = 0; bi + 1 < bands.size(); ++bi)
+    if (topologyMatches(bi))
+      for (std::size_t k = 0; k < nColsFor[bi].size(); ++k)
+        nColsFor[bi + 1][k] = std::max(nColsFor[bi + 1][k], nColsFor[bi][k]);
+  for (std::size_t bi = bands.size(); bi-- > 1;)
+    if (topologyMatches(bi - 1))
+      for (std::size_t k = 0; k < nColsFor[bi].size(); ++k)
+        nColsFor[bi - 1][k] = std::max(nColsFor[bi - 1][k], nColsFor[bi][k]);
+
+  for (std::size_t bi = 0; bi < bands.size(); ++bi) {
+    const BandInfo& band = bands[bi];
+    const double v0 = band.v0;
+    const double v1 = band.v1;
+    const std::vector<double>& xs0 = band.xs0;
+    const std::vector<double>& xs1 = band.xs1;
     if (xs0.size() != xs1.size() || xs0.size() < 2)
       continue;  // a numerically-degenerate band (a break landing exactly on a vertex pair) — skip
     for (std::size_t k = 0; k + 1 < xs0.size(); k += 2) {
@@ -16773,8 +17331,19 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
 
       const int nRows = std::max(1, std::max(GeneralLoopChordSegments(sf, {u0L, v0}, {u1L, v1}, chordTolerance),
                                              GeneralLoopChordSegments(sf, {u0R, v0}, {u1R, v1}, chordTolerance)));
-      const int nCols = std::max(1, std::max(GeneralLoopChordSegments(sf, {u0L, v0}, {u0R, v0}, chordTolerance),
-                                             GeneralLoopChordSegments(sf, {u1L, v1}, {u1R, v1}, chordTolerance)));
+      int nCols = nColsFor[bi][k / 2];
+      if (xs0.size() == 2) {
+        if (bi == 0) {
+          const int edgeIdx = findRimEdgeAt(v0);
+          if (edgeIdx >= 0)
+            nCols = std::max(nCols, segsForEdgeLocal(edgeIdx, s->edges[static_cast<std::size_t>(edgeIdx)]));
+        }
+        if (bi + 1 == bands.size()) {
+          const int edgeIdx = findRimEdgeAt(v1);
+          if (edgeIdx >= 0)
+            nCols = std::max(nCols, segsForEdgeLocal(edgeIdx, s->edges[static_cast<std::size_t>(edgeIdx)]));
+        }
+      }
 
       std::vector<std::vector<std::uint32_t>> grid(
           static_cast<std::size_t>(nRows) + 1,
@@ -16817,29 +17386,373 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
   Tessellation mesh;
   MeshBuilder mb{&mesh};
 
+  // Shared-edge resolution unification (TASK-272 §5): a NURBS band's two v-boundary edges (its rim
+  // at v=vStart and v=vEnd — see the `case SurfaceKind::Nurbs` block below) are now sampled DIRECTLY
+  // from those loop edges, so that boundary is bit-identical to whatever neighbouring face (a flat
+  // cap, or the next band in a multi-band loft/sweep) also walks the same edge — the same
+  // "derive-the-shared-boundary-from-the-edge" fix that resolved §1's planar-hole crack.
+  //
+  // A uniform (u, v) grid needs ONE resolution for its whole u-direction, but its two v-boundary
+  // edges can independently want different counts (different radii, e.g. a frustum band between two
+  // differently-sized circles) — and a neighbouring face may separately want a HIGHER count still
+  // (its own curvature need, or a further edge it shares elsewhere). Force every v-boundary edge to
+  // the MAX segment count that any face touching it needs, propagated by repeated relaxation until
+  // stable. This is monotonic (only ever raises a count), so it can only add resolution to an
+  // already-correct neighbour, never invalidate it — the same safety argument the (now superseded)
+  // two-pass relaxation in TASK-272 §3 relied on, this time paired with edge-exact sampling rather
+  // than grid-only counts, which is what that earlier attempt was missing (see §5.2's failed retry).
+  // Which loop edge is the v=vLo / v=vHi rim is found GEOMETRICALLY (by matching each edge-use's
+  // world endpoints against the patch's own (u,v) corner points), not by assuming a fixed ordinal
+  // position (`uses[0]`/`uses[2]`) or a fixed edge-kind pattern (Arc/Line/Arc/Line) — a real
+  // imported/generated NURBS band does not reliably take that shape (confirmed: on a real pipe-
+  // fitting transition piece, some bands' "side" edges are themselves arcs, and the ordinal
+  // convention that held for a synthetic `brep::Loft` repro did not hold for the real geometry,
+  // so the fix silently no-op'd despite "engaging"). `flip` records whether the edge's own natural
+  // t=0 lands at the uHi corner instead of uLo, so the grid loop below knows which way to walk it.
+  struct NurbsBoundaryEdge { int edge = -1; bool flip = false; };
+  std::vector<std::array<NurbsBoundaryEdge, 2>> nurbsBoundaryEdges(s.faces.size());
+  std::map<int, int> edgeSegs;
+  for (std::size_t fi2 = 0; fi2 < s.faces.size(); ++fi2) {
+    const Face& f2 = s.faces[fi2];
+    if (f2.surface.kind != SurfaceKind::Nurbs)
+      continue;
+    if (!f2.paramLoops.empty() || f2.loops.size() != 1 || f2.loops[0].uses.size() != 4)
+      continue;
+    const Loop& lp = f2.loops[0];
+    const nurbs::Patch& patch = f2.surface.patch;
+    const double uLo = std::min(f2.uStart, f2.uEnd), uHi = std::max(f2.uStart, f2.uEnd);
+    const double vLo = std::min(f2.vStart, f2.vEnd), vHi = std::max(f2.vStart, f2.vEnd);
+    const Vec3 c00 = nurbs::Evaluate(patch, uLo, vLo);
+    const Vec3 c10 = nurbs::Evaluate(patch, uHi, vLo);
+    const Vec3 c01 = nurbs::Evaluate(patch, uLo, vHi);
+    const Vec3 c11 = nurbs::Evaluate(patch, uHi, vHi);
+    const double diag = std::max({ray3d::Length(ray3d::Sub(c11, c00)), ray3d::Length(ray3d::Sub(c10, c00)),
+                                   ray3d::Length(ray3d::Sub(c01, c00)), 1e-6});
+    const double tol = diag * 1e-4;
+    auto near = [&](const Vec3& a, const Vec3& b) { return ray3d::Length(ray3d::Sub(a, b)) < tol; };
+    int loEdge = -1, hiEdge = -1;
+    bool loFlip = false, hiFlip = false;
+    for (const EdgeUse& u : lp.uses) {
+      const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+      const Vec3 p0 = EdgePointAt(s, e, 0.0);
+      const Vec3 p1 = EdgePointAt(s, e, 1.0);
+      if ((near(p0, c00) && near(p1, c10)) || (near(p0, c10) && near(p1, c00))) {
+        loEdge = u.edge;
+        loFlip = near(p0, c10);
+      } else if ((near(p0, c01) && near(p1, c11)) || (near(p0, c11) && near(p1, c01))) {
+        hiEdge = u.edge;
+        hiFlip = near(p0, c11);
+      }
+    }
+    // No corner match means this face's loop is not the standard 4-edge rectangle this fix knows
+    // how to read (a future Sweep mitred corner, say) — leave it on the curvature-only grid.
+    if (loEdge < 0 || hiEdge < 0)
+      continue;
+    const int curvatureSegs = NurbsPatchCurvatureSegs(patch, chordTolerance);
+    nurbsBoundaryEdges[fi2] = {NurbsBoundaryEdge{loEdge, loFlip}, NurbsBoundaryEdge{hiEdge, hiFlip}};
+    for (const int edgeIdx : {loEdge, hiEdge}) {
+      const Edge& be = s.edges[static_cast<std::size_t>(edgeIdx)];
+      const int natural = std::max(SegmentsForEdge(be, chordTolerance), curvatureSegs);
+      auto [it, inserted] = edgeSegs.try_emplace(edgeIdx, natural);
+      if (!inserted)
+        it->second = std::max(it->second, natural);
+    }
+  }
+  for (int pass = 0; pass < 8; ++pass) {
+    bool changed = false;
+    for (const std::array<NurbsBoundaryEdge, 2>& be : nurbsBoundaryEdges) {
+      if (be[0].edge < 0)
+        continue;
+      const int shared = std::max(edgeSegs[be[0].edge], edgeSegs[be[1].edge]);
+      if (edgeSegs[be[0].edge] != shared) { edgeSegs[be[0].edge] = shared; changed = true; }
+      if (edgeSegs[be[1].edge] != shared) { edgeSegs[be[1].edge] = shared; changed = true; }
+    }
+    if (!changed)
+      break;
+  }
+  // Every other consumer of `SegmentsForEdge` (flat-cap loop sampling, the planar-hole bridging
+  // path, `TessellateGeneralLoopFace`'s fallback) must use the unified count too, or a cap will
+  // still sample its shared rim at its own smaller natural count while the NURBS band next to it
+  // samples the same edge at the relaxed, larger one.
+  //
+  // TASK-272 §9j: this same unification is what a paramLoops-bearing Plane/Cylinder/Cone face's
+  // boundary needs too, and here the unification is trivial — `Loop::uses` already names the real
+  // shared `Edge` by INDEX (no geometric corner-matching needed, unlike the NURBS case above, which
+  // had no such back-reference), so every face that walks a given edge just needs to register its
+  // own natural need against that one shared key.
+  for (const Face& f2 : s.faces) {
+    if (f2.paramLoops.empty())
+      continue;
+    for (const Loop& lp : f2.loops) {
+      for (const EdgeUse& u : lp.uses) {
+        const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+        if (e.kind == CurveKind::Line)
+          continue;
+        const int natural = SegmentsForEdge(e, chordTolerance);
+        auto [it, inserted] = edgeSegs.try_emplace(u.edge, natural);
+        if (!inserted)
+          it->second = std::max(it->second, natural);
+      }
+    }
+  }
+  auto segsForEdge = [&](int edgeIdx, const Edge& e) {
+    const auto it = edgeSegs.find(edgeIdx);
+    return it != edgeSegs.end() ? it->second : SegmentsForEdge(e, chordTolerance);
+  };
+
+  // TASK-272 §9j: a paramLoops-bearing face's boundary as the IMPORTER sampled it (a fixed low
+  // count — `kArcSamples` in `AcisSatParser.cpp`, 32 for a Plane, 8 for a Cylinder/Cone — chosen
+  // only well enough to classify inside/outside, per `Face::paramLoops`' own docs) is not what a
+  // NEIGHBOURING face's boundary is sampled at, even when both walk the same real `Edge`: a Plane
+  // cap used its own points as-is (§9.2b) while `TessellateGeneralLoopFace` re-derived an
+  // independent, chord-tolerance-driven count for a Cylinder/Cone wall — two different points for
+  // the one physical rim, which is exactly what the real flange import's 1728-cracked-edge count
+  // (evenly divisible into per-loop chunks matching each loop's own fixed sample count) turned out
+  // to be. Fix: reconstruct a loop's 2D boundary directly from its real edges at the UNIFIED
+  // `segsForEdge` count instead of trusting the raw `paramLoops` points, but only when that
+  // reconstruction is confirmed (by enclosed-area agreement) to be the SAME loop the raw points
+  // describe — hand-built test fixtures (`BrepTests.cpp`) set `paramLoops` on a face whose `loops`
+  // still holds a differently-shaped primitive loop (ADR-052 (c) explicitly does not require them to
+  // match), and reconstructing from THOSE edges would silently substitute the wrong boundary. A real
+  // importer's `paramLoops` and `loops` always describe the same edges by construction, so the areas
+  // agree closely there and the substitution safely engages.
+  auto reconstructParamLoop2D = [&](const Surface& sf2, const Loop& lp,
+                                     const std::vector<curveisect::Vec2>& raw)
+      -> std::optional<std::vector<curveisect::Vec2>> {
+    if (lp.uses.empty() || raw.size() < 3)
+      return std::nullopt;
+    std::vector<curveisect::Vec2> rebuilt;
+    double contU = 0.0, prevRaw = 0.0;
+    bool haveRaw = false;
+    for (const EdgeUse& u : lp.uses) {
+      const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+      const int segs = (e.kind == CurveKind::Line) ? 1 : segsForEdge(u.edge, e);
+      for (int i = 0; i < segs; ++i) {
+        const double t = static_cast<double>(i) / static_cast<double>(segs);
+        const Vec3 w = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+        if (sf2.kind == SurfaceKind::Plane) {
+          const ucs::Point2D p2 = ucs::WorldToPlane(sf2.frame, w);
+          rebuilt.push_back({p2.x, p2.y});
+        } else {
+          // Cylinder/Cone general-trim convention (`BuildConeGeneralTrim`, AcisSatParser.cpp):
+          // u = atan2(y, x) in the face frame, continuously unwrapped; v = frame-local z.
+          const Vec3 local = ucs::WorldToUcs(sf2.frame, w);
+          const double rawU = std::atan2(local.y, local.x);
+          if (!haveRaw) {
+            contU = rawU;
+            haveRaw = true;
+          } else {
+            double delta = rawU - prevRaw;
+            while (delta > kPi)
+              delta -= kTwoPi;
+            while (delta <= -kPi)
+              delta += kTwoPi;
+            contU += delta;
+          }
+          prevRaw = rawU;
+          rebuilt.push_back({contU, local.z});
+        }
+      }
+    }
+    if (rebuilt.size() < 3)
+      return std::nullopt;
+    auto signedArea = [](const std::vector<curveisect::Vec2>& p) {
+      double a = 0.0;
+      for (std::size_t i = 0, n = p.size(); i < n; ++i)
+        a += p[i].x * p[(i + 1) % n].y - p[(i + 1) % n].x * p[i].y;
+      return 0.5 * a;
+    };
+    const double aRaw = std::fabs(signedArea(raw));
+    const double aRebuilt = std::fabs(signedArea(rebuilt));
+    // TASK-272 §9l: raw's area and the rebuild's area are each an INSCRIBED-polygon approximation of
+    // the same true curve, at two different point counts (`raw` at the importer's fixed
+    // `kArcSamples`, `rebuilt` at the unified, usually much higher, `segsForEdge` count) — so they
+    // legitimately differ by the polygon-discretization error itself, not just by whether they are
+    // "the same loop". Measured directly on the real flange import: a genuinely-matching loop (same
+    // edges, 32 vs 256 points) differs by 0.64%, comfortably past the original, too-tight 0.1% gate
+    // (confirmed via a temporary print: EVERY real loop in the flange was being rejected by it, which
+    // is why §9.4's `reconstructParamLoop2D` measured as a no-op — it was silently declining to
+    // engage on every real loop, not succeeding and failing to help). 2% comfortably covers a 32-gon's
+    // worst-case discretization error against a much finer reconstruction while still rejecting a
+    // hand-built test fixture's genuinely different shape (an unrelated box edge loop differs by
+    // orders of magnitude, not a couple of percent).
+    if (aRaw < 1e-12 || std::fabs(aRaw - aRebuilt) > 0.02 * aRaw)
+      return std::nullopt;  // not confirmed to be the same loop — keep the raw points, don't misfire
+    return rebuilt;
+  };
+
   for (std::size_t fi = 0; fi < s.faces.size(); ++fi) {
     const Face& f = s.faces[fi];
     mb.face = static_cast<int>(fi);
     const Surface& sf = f.surface;
-    if (!f.paramLoops.empty()) {
+    // TASK-272 §9: a real imported solid (ACIS/DWG conversion) sets `paramLoops` on EVERY face, not
+    // just the general-trim cases ADR-052 introduced it for — which used to route every such face
+    // through `TessellateGeneralLoopFace` unconditionally, before it ever reached the bridge+EarClip
+    // fix below. That fix works just as well from `paramLoops`' own 2D points (a Plane's param-loop
+    // IS already its own (u, v) = plane-local 2D polygon, and using it AS-IS — not resampling it via
+    // `SegmentsForEdge`/`EdgePointAt` — keeps this face's boundary bit-identical to whatever a
+    // neighbouring face's paramLoops-derived boundary already agrees it should be, since an importer
+    // that populates paramLoops populates it consistently for both sides of a shared edge). So a
+    // Plane face with a hole is exempted from the early exit below and still gets the exact
+    // triangulation; every OTHER paramLoops face (no holes, or curved) is unaffected by this task.
+    const bool planeWithHoles = sf.kind == SurfaceKind::Plane && f.loops.size() > 1;
+    if (!f.paramLoops.empty() && !planeWithHoles) {
       // A general trim loop (ADR-052, issue #306) overrides the rectangle-span grid below for
       // every `SurfaceKind` — issue #308's counterpart to issue #307's numeric-integral branch.
-      TessellateGeneralLoopFace(f, chordTolerance, &mb);
+      // TASK-272 §9j: reconstruct each loop's boundary from its real edges at the unified
+      // `segsForEdge` count (see `reconstructParamLoop2D` above) wherever that is confirmed safe,
+      // so a Cylinder/Cone wall's rim is bit-identical to whatever a neighbouring cap or NURBS band
+      // samples the same shared edge at, instead of this face re-deriving its own independent count.
+      Face fFixed = f;
+      for (std::size_t li = 0; li < f.paramLoops.size() && li < f.loops.size(); ++li) {
+        std::optional<std::vector<curveisect::Vec2>> rebuilt =
+            reconstructParamLoop2D(sf, f.loops[li], f.paramLoops[li]);
+        if (rebuilt)
+          fFixed.paramLoops[li] = std::move(*rebuilt);
+      }
+      TessellateGeneralLoopFace(fFixed, chordTolerance, &mb, &s, &edgeSegs);
       continue;
     }
     switch (sf.kind) {
     case SurfaceKind::Plane: {
-      if (f.loops.size() > 2) {
-        // Multi-hole planar face (e.g. flange with 4 bolt holes) – convert 3D loops to 2D paramLoops
-        // and use the general even-odd tessellator which already handles any number of loops.
+      if (f.loops.size() > 1) {
+        // A face with at least one hole (a single bolt hole is loops.size() == 2; a flange with
+        // several is more). A plane has no curvature, so — unlike the general-loop path below,
+        // which grids each face in chord-tolerance bands for a possibly-curved surface — the 2D
+        // polygon these loops trace can be triangulated EXACTLY: bridge each hole into the outer
+        // ring as a zero-width slit (`BridgeHoleIntoOuter`), which turns the whole face into one
+        // simple polygon, then ear-clip it (`EarClip`, made robust to a bridge's thin/degenerate
+        // geometry — see its own docs and TASK-272). This sidesteps a real bug in the old approach
+        // (routing through `TessellateGeneralLoopFace`'s per-band grid): at a hole's own top/bottom
+        // extremum, the scanline's interval count genuinely changes between adjacent bands, which
+        // is not a resolution-matching problem no per-band column count can reconcile, and cracked
+        // every hole at exactly those two points.
+        //
+        // `BridgeHoleIntoOuter`'s bridging assumes visibility with no reflex-vertex check (see its
+        // own docs), which is not guaranteed for every real hole ARRANGEMENT (several holes around
+        // a circular outer boundary, not just one hole in a rectangle) — confirmed on an actual
+        // multi-hole flange, where it left a face untessellated entirely (the part vanished from
+        // the render) instead of merely cracked. Rather than trust it unconditionally, this whole
+        // attempt is speculative: on ANY failure (a hole this kernel could not bridge, or a bridged
+        // polygon `EarClip` refuses), fall back to the always-available `TessellateGeneralLoopFace`
+        // band grid below — worse (the pinch crack this fix targets), but never worse than not
+        // rendering the face at all, which is the one regression this must never reintroduce.
+        // TASK-272 §9: when this face came from a general-trim-loop import, `paramLoops` already
+        // carries the outer/hole boundaries as plane-local 2D points — for a Plane, that IS the same
+        // 2D space `WorldToPlane`/`PlaneToWorld` use (see `TessellateGeneralLoopFace`'s own
+        // `pushVertex`, which treats a param-loop point's (u, v) as literal plane-local coordinates).
+        // Use those points AS-IS instead of resampling from `s.edges` — an importer that populates
+        // `paramLoops` does so consistently for every face that shares a boundary, so using its exact
+        // points (not re-deriving new ones) is what keeps this face's boundary bit-identical to a
+        // neighbour's, the same "derive-from-the-authoritative-source, don't resample" principle as
+        // the edge-based path below uses when there is no param loop to read.
+        const bool useParamLoops = !f.paramLoops.empty() && f.paramLoops.size() == f.loops.size();
+        bool bridgedOk = true;
+        std::vector<ucs::Point2D> outer2;
+        if (useParamLoops) {
+          // TASK-272 §9j: prefer a real-edge reconstruction at the unified segment count over the
+          // raw (fixed, importer-chosen) paramLoops points, when confirmed to be the same loop —
+          // see `reconstructParamLoop2D` above; this is what keeps this outer rim bit-identical to
+          // a neighbouring Cylinder/Cone wall's own edge-derived boundary.
+          std::optional<std::vector<curveisect::Vec2>> rebuilt =
+              reconstructParamLoop2D(sf, f.loops[0], f.paramLoops[0]);
+          const std::vector<curveisect::Vec2>& src = rebuilt ? *rebuilt : f.paramLoops[0];
+          outer2.reserve(src.size());
+          for (const curveisect::Vec2& p : src)
+            outer2.push_back(ucs::Point2D{p.x, p.y});
+        } else {
+          for (const EdgeUse& u : f.loops[0].uses) {
+            const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+            const int segs = segsForEdge(u.edge, e);
+            for (int i = 0; i < segs; ++i) {
+              const double t = static_cast<double>(i) / static_cast<double>(segs);
+              const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+              outer2.push_back(ucs::WorldToPlane(sf.frame, p));
+            }
+          }
+        }
+        if (outer2.size() < 3) {
+          bridgedOk = false;
+        } else {
+          if (SignedArea2D(outer2) < 0.0)
+            std::reverse(outer2.begin(), outer2.end());
+          ucs::Point2D outerCentroid{0.0, 0.0};
+          for (const ucs::Point2D& p : outer2) {
+            outerCentroid.x += p.x / static_cast<double>(outer2.size());
+            outerCentroid.y += p.y / static_cast<double>(outer2.size());
+          }
+          for (std::size_t li = 1; bridgedOk && li < f.loops.size(); ++li) {
+            std::vector<ucs::Point2D> hole2;
+            if (useParamLoops) {
+              std::optional<std::vector<curveisect::Vec2>> rebuilt =
+                  reconstructParamLoop2D(sf, f.loops[li], f.paramLoops[li]);
+              const std::vector<curveisect::Vec2>& src = rebuilt ? *rebuilt : f.paramLoops[li];
+              hole2.reserve(src.size());
+              for (const curveisect::Vec2& p : src)
+                hole2.push_back(ucs::Point2D{p.x, p.y});
+            } else {
+              for (const EdgeUse& u : f.loops[li].uses) {
+                const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+                const int segs = segsForEdge(u.edge, e);
+                for (int i = 0; i < segs; ++i) {
+                  const double t = static_cast<double>(i) / static_cast<double>(segs);
+                  const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+                  hole2.push_back(ucs::WorldToPlane(sf.frame, p));
+                }
+              }
+            }
+            if (hole2.size() < 3)
+              continue;  // a degenerate hole loop contributes nothing to bridge
+            if (SignedArea2D(hole2) > 0.0)
+              std::reverse(hole2.begin(), hole2.end());  // holes wind opposite the outer ring
+            if (!BridgeHoleIntoOuter(&outer2, hole2, outerCentroid)) {
+              bridgedOk = false;
+            }
+          }
+        }
+        std::vector<std::array<int, 3>> tris;
+        if (bridgedOk && !EarClip(outer2, &tris)) {
+          bridgedOk = false;
+        }
+        if (bridgedOk)
+          ImproveTriangulationQuality(outer2, &tris);
+        if (bridgedOk) {
+          const Vec3 planeN = sf.frame.zAxis;
+          std::vector<Vec3> world(outer2.size());
+          for (std::size_t i = 0; i < outer2.size(); ++i)
+            world[i] = ucs::PlaneToWorld(sf.frame, outer2[i]);
+          // Every triangle on a flat face must wind to match the SAME single normal, `planeN` —
+          // unlike a curved surface (where winding can only sensibly be checked against a
+          // neighbour, since the "expected" direction varies per point), a flat face's correct
+          // winding is unambiguous per triangle, so each is checked and, if needed, flipped
+          // individually rather than deciding once.
+          std::vector<std::uint32_t> verts(outer2.size());
+          for (std::size_t i = 0; i < outer2.size(); ++i)
+            verts[i] = mb.Push(world[i], planeN);
+          for (const std::array<int, 3>& t3 : tris) {
+            const Vec3& a3 = world[static_cast<std::size_t>(t3[0])];
+            const Vec3& b3 = world[static_cast<std::size_t>(t3[1])];
+            const Vec3& c3 = world[static_cast<std::size_t>(t3[2])];
+            const Vec3 g = ray3d::Cross(ray3d::Sub(b3, a3), ray3d::Sub(c3, a3));
+            const bool flip = ray3d::Length(g) > 1e-15 && ray3d::Dot(g, planeN) < 0.0;
+            if (!flip)
+              mb.Tri(verts[static_cast<std::size_t>(t3[0])], verts[static_cast<std::size_t>(t3[1])],
+                     verts[static_cast<std::size_t>(t3[2])]);
+            else
+              mb.Tri(verts[static_cast<std::size_t>(t3[0])], verts[static_cast<std::size_t>(t3[2])],
+                     verts[static_cast<std::size_t>(t3[1])]);
+          }
+          break;
+        }
+        // Fallback: the pre-existing band-grid tessellator, unchanged.
         Face tmp = f;
         tmp.paramLoops.clear();
         tmp.paramLoops.reserve(f.loops.size());
         for (const Loop& lp : f.loops) {
           std::vector<curveisect::Vec2> poly;
           for (const EdgeUse& u : lp.uses) {
-            const Edge& e = s.edges[static_cast<size_t>(u.edge)];
-            int segs = SegmentsForEdge(e, chordTolerance);
+            const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+            int segs = segsForEdge(u.edge, e);
             for (int i = 0; i < segs; ++i) {
               double t = double(i) / double(segs);
               Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
@@ -16849,7 +17762,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
           }
           tmp.paramLoops.push_back(std::move(poly));
         }
-        TessellateGeneralLoopFace(tmp, chordTolerance, &mb);
+        TessellateGeneralLoopFace(tmp, chordTolerance, &mb, &s, &edgeSegs);
         break;
       }
       // Walk each loop into a polyline. Arc edges are subdivided by the same chord rule the curved
@@ -16858,8 +17771,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         std::vector<Vec3> r;
         for (const EdgeUse& u : lp.uses) {
           const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
-          const int segs =
-              SegmentsForEdge(e, chordTolerance);
+          const int segs = segsForEdge(u.edge, e);
           for (int i = 0; i < segs; ++i) {
             const double t = static_cast<double>(i) / static_cast<double>(segs);
             r.push_back(EdgePointAt(s, e, u.reversed ? 1.0 - t : t));
@@ -16868,85 +17780,6 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         return r;
       };
       const Vec3 n = sf.frame.zAxis;
-
-      if (f.loops.size() == 2) {
-        // An annular face (a bored boss face, a stepped-stack ring — REQ-314 B1): strip it between
-        // the outer and inner loop by angle about the hole centre, which is convex-outer, star-shaped
-        // territory — all B1 produces. Both loops are sampled by the shared chord rule.
-        std::vector<Vec3> outer3 = sampleLoop(f.loops[0]);
-        std::vector<Vec3> inner3 = sampleLoop(f.loops[1]);
-        if (outer3.size() < 3 || inner3.size() < 3)
-          return Fail(Problem::DegenerateFace, outWhy);
-        std::vector<ucs::Point2D> outer2;
-        std::vector<ucs::Point2D> inner2;
-        for (const Vec3& p : outer3)
-          outer2.push_back(ucs::WorldToPlane(sf.frame, p));
-        for (const Vec3& p : inner3)
-          inner2.push_back(ucs::WorldToPlane(sf.frame, p));
-        ucs::Point2D hc{0.0, 0.0};
-        for (const ucs::Point2D& p : inner2) {
-          hc.x += p.x / static_cast<double>(inner2.size());
-          hc.y += p.y / static_cast<double>(inner2.size());
-        }
-        // The far intersection of the ray hc + t*dir (t > 0) with a closed 2D polyline.
-        auto rayHit = [&](const std::vector<ucs::Point2D>& poly, double dx, double dy) {
-          double bestT = 0.0;
-          ucs::Point2D hit{hc.x + dx, hc.y + dy};
-          for (std::size_t i = 0; i < poly.size(); ++i) {
-            const ucs::Point2D& a = poly[i];
-            const ucs::Point2D& b = poly[(i + 1) % poly.size()];
-            const double ex = b.x - a.x;
-            const double ey = b.y - a.y;
-            const double den = dx * ey - dy * ex;
-            if (std::fabs(den) < 1e-15)
-              continue;
-            const double t = ((a.x - hc.x) * ey - (a.y - hc.y) * ex) / den;
-            const double s2 = ((a.x - hc.x) * dy - (a.y - hc.y) * dx) / den;
-            if (t > 1e-12 && s2 >= -1e-9 && s2 <= 1.0 + 1e-9 && t > bestT) {
-              bestT = t;
-              hit = ucs::Point2D{hc.x + dx * t, hc.y + dy * t};
-            }
-          }
-          return hit;
-        };
-        std::vector<double> angs;
-        for (const ucs::Point2D& p : outer2)
-          angs.push_back(std::atan2(p.y - hc.y, p.x - hc.x));
-        for (const ucs::Point2D& p : inner2)
-          angs.push_back(std::atan2(p.y - hc.y, p.x - hc.x));
-        std::sort(angs.begin(), angs.end());
-        angs.erase(std::unique(angs.begin(), angs.end(),
-                               [](double u, double v) { return std::fabs(u - v) < 1e-7; }),
-                   angs.end());
-        const std::size_t m = angs.size();
-        auto backToWorld = [&](const ucs::Point2D& q) { return ucs::PlaneToWorld(sf.frame, q); };
-        for (std::size_t k = 0; k < m; ++k) {
-          const double a0 = angs[k];
-          const double a1 = angs[(k + 1) % m];
-          const double d0x = std::cos(a0);
-          const double d0y = std::sin(a0);
-          const double d1x = std::cos(a1);
-          const double d1y = std::sin(a1);
-          const Vec3 oi = backToWorld(rayHit(outer2, d0x, d0y));
-          const Vec3 oj = backToWorld(rayHit(outer2, d1x, d1y));
-          const Vec3 ii = backToWorld(rayHit(inner2, d0x, d0y));
-          const Vec3 ij = backToWorld(rayHit(inner2, d1x, d1y));
-          const std::uint32_t voi = mb.Push(oi, n);
-          const std::uint32_t voj = mb.Push(oj, n);
-          const std::uint32_t vii = mb.Push(ii, n);
-          const std::uint32_t vij = mb.Push(ij, n);
-          // Orient the first quad against n, then keep that winding for the ring.
-          const Vec3 g = ray3d::Cross(ray3d::Sub(oj, oi), ray3d::Sub(ii, oi));
-          if (ray3d::Dot(g, n) >= 0.0) {
-            mb.Tri(voi, voj, vii);
-            mb.Tri(voj, vij, vii);
-          } else {
-            mb.Tri(voi, vii, voj);
-            mb.Tri(voj, vii, vij);
-          }
-        }
-        break;
-      }
 
       std::vector<Vec3> ring = sampleLoop(f.loops[0]);
       if (ring.size() < 3)
@@ -16981,7 +17814,9 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         for (int o : order)
           ccwRing.push_back(ring2[static_cast<std::size_t>(o)]);
         std::vector<std::array<int, 3>> tris;
-        EarClip(ccwRing, &tris);
+        if (!EarClip(ccwRing, &tris))
+          return Fail(Problem::DegenerateFace, outWhy);
+        ImproveTriangulationQuality(ccwRing, &tris);
         std::vector<std::uint32_t> idx;
         idx.reserve(ring.size());
         for (const Vec3& p : ring)
@@ -17196,43 +18031,50 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const double uHi = std::max(f.uStart, f.uEnd);
       const double vLo = std::min(f.vStart, f.vEnd);
       const double vHi = std::max(f.vStart, f.vEnd);
-      double netStep = 0.0;
-      for (std::size_t k = 0; k + 1 < patch.ctrl.size(); ++k)
-        netStep = std::max(netStep, ray3d::Length(ray3d::Sub(patch.ctrl[k + 1], patch.ctrl[k])));
-      // A patch is flat enough for one quad only when it is bilinear AND its control net is planar —
-      // a *twisted* ruled patch (a swept-with-twist side face) is degree 1 in both directions but
-      // genuinely curved.
-      bool curved = patch.degU > 1 || patch.degV > 1;
-      if (!curved && patch.ctrl.size() >= 4) {
-        const Vec3 e1 = ray3d::Sub(patch.ctrl[1], patch.ctrl[0]);
-        const Vec3 e2 = ray3d::Sub(patch.ctrl[static_cast<std::size_t>(patch.nu)], patch.ctrl[0]);
-        Vec3 nrm = ray3d::Cross(e1, e2);
-        const double nl = ray3d::Length(nrm);
-        if (nl > 1e-12) {
-          nrm = ray3d::Scale(nrm, 1.0 / nl);
-          for (const Vec3& c : patch.ctrl)
-            if (std::fabs(ray3d::Dot(ray3d::Sub(c, patch.ctrl[0]), nrm)) > chordTolerance) {
-              curved = true;
-              break;
-            }
-        }
-      }
-      const int n = curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance),
-                                        8, 128)
-                           : 1;
+      // TASK-272 §5: when the pre-pass above identified this face's two v-boundary (rim) edges, use
+      // the unified, shared-edge-relaxed segment count instead of this face's own independent
+      // curvature estimate, so this boundary lands on exactly the same resolution as whatever
+      // neighbouring face (cap or band) also walks those edges.
+      const std::array<NurbsBoundaryEdge, 2>& boundaryEdges = nurbsBoundaryEdges[fi];
+      const int n = boundaryEdges[0].edge >= 0
+                        ? edgeSegs.at(boundaryEdges[0].edge)
+                        : NurbsPatchCurvatureSegs(patch, chordTolerance);
       std::vector<std::uint32_t> grid(static_cast<std::size_t>(n + 1) * static_cast<std::size_t>(n + 1));
+      // The two v-boundary rows (j=0 at v=vLo, j=n at v=vHi) are sampled DIRECTLY from their loop
+      // edges rather than `nurbs::EvaluateWithDerivs`, so they are bit-identical to the same edge's
+      // sampling on the neighbouring face (a flat cap's `sampleLoop`, or the next band's own
+      // boundary row) — the phase-matching half of the fix that §5.2's resolution-only floor was
+      // missing. `flip` (found geometrically by the pre-pass above, by matching this edge's own
+      // endpoints against the patch's own (u, v) corners) says whether the edge's own t=0 lands at
+      // the uHi end instead of uLo, so u-index i maps to edge-native t = flip ? 1-i/n : i/n.
+      const Edge* loEdge = boundaryEdges[0].edge >= 0 ? &s.edges[static_cast<std::size_t>(boundaryEdges[0].edge)] : nullptr;
+      const Edge* hiEdge = boundaryEdges[1].edge >= 0 ? &s.edges[static_cast<std::size_t>(boundaryEdges[1].edge)] : nullptr;
       for (int i = 0; i <= n; ++i)
         for (int j = 0; j <= n; ++j) {
           const double u = uLo + (uHi - uLo) * static_cast<double>(i) / static_cast<double>(n);
           const double v = vLo + (vHi - vLo) * static_cast<double>(j) / static_cast<double>(n);
-          const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
-          Vec3 nrm = sp.normal;
+          Vec3 p;
+          Vec3 nrm;
+          const Edge* boundaryEdge = (j == 0) ? loEdge : (j == n) ? hiEdge : nullptr;
+          if (boundaryEdge) {
+            const bool flip = (j == 0) ? boundaryEdges[0].flip : boundaryEdges[1].flip;
+            const double s_ = static_cast<double>(i) / static_cast<double>(n);
+            const double t = flip ? 1.0 - s_ : s_;
+            p = EdgePointAt(s, *boundaryEdge, t);
+            // The analytic patch normal at the matching (u, v) still gives correct shading — only the
+            // POSITION needs to come from the edge; a boundary curve has no separate "edge normal".
+            nrm = nurbs::EvaluateWithDerivs(patch, u, v).normal;
+          } else {
+            const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
+            p = sp.p;
+            nrm = sp.normal;
+          }
           if (!(ray3d::Dot(nrm, nrm) > 0.25))
             nrm = Vec3{0.0, 0.0, 1.0};  // a collapsed edge (a pole) — a loft patch has none
           if (sf.inward)
             nrm = ray3d::Scale(nrm, -1.0);
           grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(n + 1) +
-               static_cast<std::size_t>(j)] = mb.Push(sp.p, nrm);
+               static_cast<std::size_t>(j)] = mb.Push(p, nrm);
         }
       const std::size_t stride = static_cast<std::size_t>(n + 1);
       for (int i = 0; i < n; ++i)

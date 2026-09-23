@@ -136,6 +136,9 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadSolidAttrs          = cmd.cadSolidAttrs;
   doc.cadTables              = cmd.cadTables;
   doc.cadTableAttrs          = cmd.cadTableAttrs;
+  doc.cadPipeRuns            = cmd.cadPipeRuns;      // pipe runs are per-drawing (issue #486 / REQ-345)
+  doc.cadPipeRunAttrs        = cmd.cadPipeRunAttrs;
+  doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
   doc.blockDefs              = cmd.blockDefs;
   doc.cadBlockRefs           = cmd.cadBlockRefs;
   doc.cadBlockRefAttrs       = cmd.cadBlockRefAttrs;
@@ -231,6 +234,16 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadSolidAttrs              = doc.cadSolidAttrs;
   cmd.cadTables                  = doc.cadTables;
   cmd.cadTableAttrs              = doc.cadTableAttrs;
+  cmd.cadPipeRuns                = doc.cadPipeRuns;      // issue #486 / REQ-345
+  cmd.cadPipeRunAttrs            = doc.cadPipeRunAttrs;
+  cmd.cadPipingSystems           = doc.cadPipingSystems;
+  // The derived swept solids belong to the drawing we are leaving. Their rebuild is gated on a
+  // signature over the runs alone, and the incoming drawing can legitimately hash the same (two
+  // empty drawings always do), so clear the arrays here rather than trusting the gate to notice.
+  cmd.pipeRunWorldSolids.clear();
+  cmd.pipeRunWorldSolidAttrs.clear();
+  cmd.pipeRunWorldSolidOwnerIndex.clear();
+  cmd.pipeRunWorldSolidsSig = 0;  // 0 is never a real signature — forces the next refresh to derive
   cmd.blockDefs                  = doc.blockDefs;
   cmd.cadBlockRefs               = doc.cadBlockRefs;
   cmd.cadBlockRefAttrs           = doc.cadBlockRefAttrs;
@@ -23559,6 +23572,17 @@ void ClearCadGeometry(AppCommandState& st) {
   st.blockRefWorldSolidsSig = 0;
   st.cadTables.clear();
   st.cadTableAttrs.clear();
+  // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing
+  // that already had runs would keep them alongside the imported content — the same "written before
+  // pipe runs existed" miss the document snapshot had. The derived solids go with them, the way
+  // blockRefWorldSolids does just above.
+  st.cadPipeRuns.clear();
+  st.cadPipeRunAttrs.clear();
+  st.cadPipingSystems.clear();
+  st.pipeRunWorldSolids.clear();
+  st.pipeRunWorldSolidAttrs.clear();
+  st.pipeRunWorldSolidOwnerIndex.clear();
+  st.pipeRunWorldSolidsSig = 0;
   st.blockDefs.clear();
   st.cadBlockRefs.clear();
   st.cadBlockRefAttrs.clear();

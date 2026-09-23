@@ -21,9 +21,11 @@
 #include "util/brep.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -123,6 +125,37 @@ void RequireWindingMatchesNormals(const brep::Tessellation& t) {
     ++checked;
   }
   REQUIRE(checked > 0);
+}
+
+/// A closed, non-self-intersecting solid's triangulation must be watertight: every undirected
+/// triangle edge is shared by exactly two triangles. A face that tessellates its own boundary loop
+/// at a different segment count than the neighbouring face it shares that boundary with leaves some
+/// edges used once instead of twice — a crack — which is exactly what SHADED rendering shows as
+/// ragged, torn-looking geometry where a curved face meets a planar one (e.g. a bolt hole's rim).
+void RequireMeshWatertight(const brep::Tessellation& t) {
+  auto pos = [&](std::uint32_t i) {
+    return Vec3{t.vertsXyz[3 * i], t.vertsXyz[3 * i + 1], t.vertsXyz[3 * i + 2]};
+  };
+  auto quant = [](double v) { return static_cast<long long>(std::llround(v * 1.0e6)); };
+  using Key = std::array<long long, 3>;
+  auto key = [&](const Vec3& p) { return Key{quant(p.x), quant(p.y), quant(p.z)}; };
+  std::map<std::pair<Key, Key>, int> edgeUses;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    const std::uint32_t tri[3] = {t.indices[i], t.indices[i + 1], t.indices[i + 2]};
+    for (int e = 0; e < 3; ++e) {
+      const Key a = key(pos(tri[e]));
+      const Key b = key(pos(tri[(e + 1) % 3]));
+      if (a == b)
+        continue;  // a degenerate/collapsed edge, not a seam
+      ++edgeUses[a < b ? std::make_pair(a, b) : std::make_pair(b, a)];
+    }
+  }
+  int cracked = 0;
+  for (const auto& [k, count] : edgeUses)
+    if (count != 2)
+      ++cracked;
+  INFO("cracked (non-manifold) triangle edges: " << cracked << " of " << edgeUses.size());
+  REQUIRE(cracked == 0);
 }
 
 /// The whole tessellation must sit inside the reported bounds. `ComputeBounds` is allowed to be
@@ -672,6 +705,7 @@ TEST_CASE("Tessellation agrees with the analytic figures and winds outward", "[b
     REQUIRE(t.vertsXyz.size() == t.normalsXyz.size());
 
     RequireWindingMatchesNormals(t);
+    RequireMeshWatertight(t);
     RequireBoundsContain(brep::ComputeBounds(c.s), t);
 
     // An inscribed triangulation always understates a convex curved surface, so the tolerance is
@@ -2164,6 +2198,10 @@ TEST_CASE("Curved B1: a cylinder axis-aligned through a box - plug, boss, and th
     REQUIRE(brep::Tessellate(r[0], 0.02, &t, &why));
     RequireWindingMatchesNormals(t);  // the bore wall shades as a concave surface
     REQUIRE(TessellatedVolume(t) == Approx(1000.0 - kPiT * 4.0 * 10.0).epsilon(3e-3));
+    // A bolt hole rendered "torn" (issue reported via screenshot): the bore wall and the flat
+    // face's hole loop must tessellate to the SAME vertices at their shared rim, or the mesh has a
+    // crack there.
+    RequireMeshWatertight(t);
   }
 
   SECTION("SUBTRACT of a cylinder that stops inside is a blind round pocket") {
@@ -4096,6 +4134,11 @@ TEST_CASE("Loft through three circles is a stack of cone frustums", "[brep][req3
       REQUIRE(rho == Approx(0.5 * (r0 + r1)).epsilon(1e-6));
     }
   }
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.02, &t, &why));
+  RequireWindingMatchesNormals(t);
+  RequireMeshWatertight(t);
 }
 
 TEST_CASE("Loft stays accurate on a tilted frame at survey magnitude", "[brep][req315]") {
@@ -8363,4 +8406,75 @@ TEST_CASE("A loft between similar parallel polygons has flat side faces and sect
                    {ucs::UcsToWorld(base, Vec3{-22.5, -22.5, 25}), ucs::UcsToWorld(base, Vec3{22.5, -22.5, 25}),
                     ucs::UcsToWorld(base, Vec3{22.5, 22.5, 25}), ucs::UcsToWorld(base, Vec3{-22.5, 22.5, 25})});
   }
+}
+
+TEST_CASE("A bolt-circle flange (4 holes around a circular plate) tessellates crack-free",
+          "[brep][req313]") {
+  // The actual real-world shape behind issue "torn bolt holes": several holes arranged around a
+  // circular boundary, not just one hole in a rectangle. BridgeHoleIntoOuter's bridging direction
+  // used to be a fixed +X ray for every hole, which works for one hole but makes a hole on the far
+  // side of the circle cast across the whole interior — risking a crossing with another hole or an
+  // earlier bridge, which EarClip then (correctly) refused, and because refusal used to propagate
+  // as an outright face failure, the WHOLE PART stopped rendering. Bridging now radiates outward
+  // from each hole's own position instead (see BridgeHoleIntoOuter's docs), and a real duplicate-
+  // point bug in the bridge splice (found via this exact repro) is fixed alongside it.
+  Problem why = Problem::Ok;
+  Solid disk;
+  REQUIRE(brep::MakeCylinder(World(), 5.0, 1.0, &disk, &why));
+  Solid cur = disk;
+  const double boltR = 3.5;
+  for (int i = 0; i < 4; ++i) {
+    double ang = i * kPiT / 2.0 + 0.3;
+    Solid out;
+    bool ok = brep::SubtractCircleThrough(cur, Vec3{boltR * std::cos(ang), boltR * std::sin(ang), 0},
+                                          Vec3{0, 0, 1}, 0.4, &out, &why);
+    REQUIRE(ok);
+    cur = out;
+  }
+  REQUIRE(brep::Validate(cur) == Problem::Ok);
+  const double wantVolume = kPiT * 25.0 * 1.0 - 4.0 * kPiT * 0.16 * 1.0;  // plate minus 4 bores
+  REQUIRE(brep::ComputeMassProperties(cur).volume == Approx(wantVolume).epsilon(1e-6));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(cur, 0.02, &t, &why));
+  REQUIRE(t.triangleCount() > 0);
+  RequireWindingMatchesNormals(t);
+  RequireMeshWatertight(t);
+  REQUIRE(TessellatedVolume(t) == Approx(wantVolume).epsilon(1e-2));
+}
+
+TEST_CASE("A pipe flange (big central bore + 4 bolt holes) tessellates crack-free",
+          "[brep][req313]") {
+  // The PREVIOUS repro (4 bolt holes only, loops == 5) passed, but a real pipe flange's face has a
+  // big central through-bore for the pipe ALSO cut into it, alongside the bolt holes — six loops
+  // total (outer + centre bore + 4 bolt holes), confirmed via a debug dump of the actual reported
+  // part. That is a materially different shape from four SAME-sized holes: one hole is much bigger
+  // than the others, and — this repro is what actually caught the remaining crack — the outer
+  // ring's own centroid (used as BridgeHoleIntoOuter's "away from" point) sits very close to the
+  // big centre hole, which can leave that hole's own bridge direction close to degenerate.
+  Problem why = Problem::Ok;
+  Solid disk;
+  REQUIRE(brep::MakeCylinder(World(), 5.0, 1.0, &disk, &why));
+  Solid cur;
+  REQUIRE(brep::SubtractCircleThrough(disk, Vec3{0, 0, 0}, Vec3{0, 0, 1}, 1.5, &cur, &why));
+  const double boltR = 3.5;
+  for (int i = 0; i < 4; ++i) {
+    double ang = i * kPiT / 2.0 + 0.3;
+    Solid out;
+    bool ok = brep::SubtractCircleThrough(cur, Vec3{boltR * std::cos(ang), boltR * std::sin(ang), 0},
+                                          Vec3{0, 0, 1}, 0.4, &out, &why);
+    REQUIRE(ok);
+    cur = out;
+  }
+  REQUIRE(brep::Validate(cur) == Problem::Ok);
+  const double wantVolume =
+      kPiT * 25.0 * 1.0 - kPiT * 2.25 * 1.0 - 4.0 * kPiT * 0.16 * 1.0;  // plate - centre - 4 bolts
+  REQUIRE(brep::ComputeMassProperties(cur).volume == Approx(wantVolume).epsilon(1e-6));
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(cur, 0.02, &t, &why));
+  REQUIRE(t.triangleCount() > 0);
+  RequireWindingMatchesNormals(t);
+  RequireMeshWatertight(t);
+  REQUIRE(TessellatedVolume(t) == Approx(wantVolume).epsilon(1e-2));
 }
