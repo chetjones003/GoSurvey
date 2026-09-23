@@ -1209,22 +1209,36 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   const double viewAnchorX = panX;
   const double viewAnchorY = panY;
   float proj[16];
-  // Near/far come from the camera, not the pre-3D literal +/-1000. That literal was harmless while
-  // nothing had a Z; with real elevations it clips every entity above 1000 out of the view, even in
-  // plan view where Z cannot affect what is on screen — and a surveyed site sits a few thousand feet
-  // up, so that is the entire drawing. Depth testing is off (draw order decides), so a wide range
-  // costs nothing.
+  // The ortho depth range is tied to the VIEW's own scale, and nothing is clipped by it: it exists
+  // to spend the depth buffer's precision where the user is actually looking (TASK-272).
   //
-  // cam.nearZ/farZ's fixed +/-100000 stops being "a wide range" once the view is orbited/tilted and
-  // zoomed far out: an oblique plane's camera-space DEPTH grows with how far its points sit from the
-  // view centre in world space, same as its on-screen extent does. At extreme zoom-out the tilted
-  // grid (and any real geometry) can need a depth range of MILLIONS of units even though every point
-  // is legitimately on screen — measured directly at halfH ~600k, worst-case grid depth ran to +/-4.3M
-  // against a fixed +/-100000 clip, so all but a thin sliver near zero depth was silently clipped
-  // (issue #381: "grid messes up" after zooming out far under an orbited/tilted UCS). Scaling the pad
-  // with halfH keeps it generous at every zoom level instead of only the levels the fixed constant
-  // happened to cover; depth testing being off means the wider range still costs nothing.
-  const float depthPad = std::max({cam.farZ, -cam.nearZ, halfH * 20.f});
+  // History, because the two earlier rules here were each right for their moment and wrong after it:
+  //
+  //   1. The pre-3D literal +/-1000 clipped every entity above z = 1000 once elevations became real,
+  //      and a surveyed site sits a few thousand feet up — that is the whole drawing.
+  //   2. So the range widened to the camera's fixed +/-100000, floored at `halfH * 20` for the
+  //      orbited, zoomed-far-out case where an oblique grid legitimately needs MILLIONS of units of
+  //      depth (issue #381). Both rules were justified with the same sentence: "depth testing is off
+  //      (draw order decides), so a wide range costs nothing."
+  //
+  // That sentence stopped being true when B-rep solids and meshes arrived — they DO depth-test
+  // (REQ-313 / ADR-045). An orthographic projection's depth is LINEAR, so a +/-100000 range across a
+  // 24-bit depth buffer resolves 200000 / 2^24 = 0.0119 units — about an eighth of an INCH in a
+  // foot-unit drawing. Every surface of a 2" pipe flange then lands within a handful of depth steps
+  // of its neighbours, so the flat face, the bore wall and the far cap z-fight: the reported
+  // "torn / jagged rims" (TASK-272 §1-§9.8) were that fight, not the tessellation the whole task
+  // spent its time on. The mesh is watertight; the depth buffer could not tell its surfaces apart.
+  //
+  // `GL_DEPTH_CLAMP` (core since GL 3.2; this context is 3.3 core) is what lets the range be tight
+  // without reintroducing bug 1 or 2: geometry outside the near/far planes is no longer CLIPPED, its
+  // depth is clamped to the ends of the range instead. So anything nearer than the near plane still
+  // draws and still wins the depth test, anything beyond the far plane still draws and still loses,
+  // and the range is free to be chosen purely for precision.
+  //
+  // The multiplier and the arithmetic behind it live on `Camera::kOrthoDepthPadHalfHeights`, where
+  // CameraTests can pin the property down without a GL context.
+  const float depthPad = cam.OrthoDepthPad();
+  glEnable(GL_DEPTH_CLAMP);
   Ortho(-halfW, halfW, -halfH, halfH, -depthPad, depthPad, proj);
 
   // The camera rotation (REQ-058). Identity in plan view, so the composed matrices below are

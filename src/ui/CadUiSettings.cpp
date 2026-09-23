@@ -271,7 +271,7 @@ static void DrawGraphicsPerformanceDialog(AppCommandState& cmd, std::vector<std:
   if (!cmd.showGraphicsPerformanceDialog) return;
   ImGui::SetNextWindowSize(ImVec2(560, 640), ImGuiCond_FirstUseEver);
   bool open = cmd.showGraphicsPerformanceDialog;
-  if (!ImGui::Begin("Graphics Performance", &open, ImGuiWindowFlags_NoCollapse)) {
+  if (!ImGui::Begin("Graphics Performance", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) {
     cmd.showGraphicsPerformanceDialog = open; ImGui::End(); return;
   }
   cmd.showGraphicsPerformanceDialog = open;
@@ -865,7 +865,7 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::SetNextWindowSize(ImVec2(960, 720), ImGuiCond_FirstUseEver);
   bool open = cmd.showSettingsWindow;
   PushProductDialogAccent();
-  if (!ImGui::Begin("Options", &open, ImGuiWindowFlags_NoCollapse)) {
+  if (!ImGui::Begin("Options", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) {
     cmd.showSettingsWindow = open;
     ImGui::End();
     PopProductDialogAccent();

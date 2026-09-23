@@ -8364,27 +8364,3 @@ TEST_CASE("A pipe flange (big central bore + 4 bolt holes) tessellates crack-fre
   RequireMeshWatertight(t);
   REQUIRE(TessellatedVolume(t) == Approx(wantVolume).epsilon(1e-2));
 }
-
-TEST_CASE("DEBUG loft topology dump", "[brepdebug]") {
-  Problem why = Problem::Ok;
-  const double r0 = 5.0, r1 = 8.0, r2 = 3.5;
-  const double z1 = 4.0, z2 = 11.0;
-  Solid s;
-  REQUIRE(brep::Loft({CircleProfile(World(), r0), CircleProfile(PlaneAlong(World(), z1), r1),
-                      CircleProfile(PlaneAlong(World(), z2), r2)},
-                     &s, &why));
-  for (std::size_t fi = 0; fi < s.faces.size(); ++fi) {
-    const auto& f = s.faces[fi];
-    UNSCOPED_INFO("face " << fi << " kind=" << (int)f.surface.kind << " loops=" << f.loops.size()
-                  << " uStart=" << f.uStart << " uEnd=" << f.uEnd
-                  << " vStart=" << f.vStart << " vEnd=" << f.vEnd);
-    for (std::size_t li = 0; li < f.loops.size(); ++li) {
-      for (const auto& u : f.loops[li].uses) {
-        const auto& e = s.edges[static_cast<size_t>(u.edge)];
-        UNSCOPED_INFO("  loop " << li << " edge " << u.edge << " kind=" << (int)e.kind
-                      << " rev=" << u.reversed << " sweep=" << e.sweep << " radius=" << e.radius);
-      }
-    }
-  }
-  CHECK(true);
-}
