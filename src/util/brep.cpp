@@ -8778,6 +8778,90 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
 
 namespace {
 
+/// Drop the vertices that sit on a straight run, in place (GitHub #522).
+///
+/// A `UNION` leaves its operands' faces split into fragments along each other's planes, and coplanar
+/// fragments are not merged back, so a cut crosses those internal boundaries and keeps a vertex at
+/// each — a section of two unioned boxes came out with 12 vertices where the shape has 8. The shape
+/// was right; the outline carried vertices nobody drew and had to be cleaned up by hand.
+///
+/// A vertex goes only when **both** of its segments are straight and it lies on the line between its
+/// neighbours to within 1e-9 of the outline's own size — far inside REQ-101's 0.002 ft, so a real
+/// corner, however slight, is kept. An arc's endpoint is never dropped: it carries the sweep.
+void DropCollinearPathVertices(Path* p) {
+  if (!p || !p->closed || p->segs.size() < 3)
+    return;
+  // The ring of points: `start`, then each segment's end. Segment i runs from point i to point i+1,
+  // and the last closes back onto `start`.
+  const std::size_t n = p->segs.size();
+  std::vector<ucs::Point2D> pt;
+  pt.reserve(n);
+  pt.push_back(p->start);
+  for (std::size_t i = 0; i + 1 < n; ++i)
+    pt.push_back(p->segs[i].end);
+
+  double size = 0.0;
+  for (std::size_t i = 0; i < n; ++i)
+    size = std::max(size, std::hypot(pt[i].x - pt[0].x, pt[i].y - pt[0].y));
+  const double tol = std::max(1e-9 * std::max(size, 1.0), 1e-12);
+
+  std::vector<bool> keep(n, true);
+  for (std::size_t i = 0; i < n; ++i) {
+    // Point i is the junction between segment i-1 (arriving) and segment i (leaving).
+    const std::size_t prevSeg = (i + n - 1) % n;
+    if (p->segs[prevSeg].sweep != 0.0 || p->segs[i].sweep != 0.0)
+      continue;  // an arc's endpoint carries its sweep
+    // Its neighbours on the ring, skipping any already dropped, so a run of several goes in one pass.
+    std::size_t a = (i + n - 1) % n;
+    while (a != i && !keep[a])
+      a = (a + n - 1) % n;
+    std::size_t b = (i + 1) % n;
+    while (b != i && !keep[b])
+      b = (b + 1) % n;
+    if (a == i || b == i || a == b)
+      continue;
+    const double ax = pt[b].x - pt[a].x, ay = pt[b].y - pt[a].y;
+    const double len = std::hypot(ax, ay);
+    if (!(len > tol))
+      continue;
+    const double cross = std::fabs((pt[i].x - pt[a].x) * ay - (pt[i].y - pt[a].y) * ax) / len;
+    if (cross > tol)
+      continue;  // a real corner
+    // And it must lie BETWEEN them, not beyond an end: a spike back along the same line is a corner.
+    const double t = ((pt[i].x - pt[a].x) * ax + (pt[i].y - pt[a].y) * ay) / (len * len);
+    if (!(t > 0.0 && t < 1.0))
+      continue;
+    keep[i] = false;
+  }
+
+  std::size_t kept = 0;
+  for (bool k : keep)
+    kept += k ? 1u : 0u;
+  if (kept == n || kept < 3)
+    return;  // nothing to drop, or dropping would leave no outline
+
+  Path out;
+  out.closed = true;
+  std::size_t first = 0;
+  while (first < n && !keep[first])
+    ++first;
+  out.start = pt[first];
+  for (std::size_t k = 1; k <= n; ++k) {
+    const std::size_t i = (first + k) % n;
+    if (!keep[i] && k != n)
+      continue;  // this point is gone; the straight run simply continues
+    PathSeg seg;
+    seg.end = pt[i];
+    // The segment arriving at a kept point is the one that left the previous kept point. Every
+    // segment in a dropped run is straight by the test above, so the merged span is straight too.
+    seg.sweep = p->segs[(i + n - 1) % n].sweep;
+    out.segs.push_back(seg);
+    if (k == n)
+      break;
+  }
+  *p = std::move(out);
+}
+
 /// One loop of a cut face, as a \ref Path in the section frame — the shared body of
 /// \ref SectionOutlines and \ref SectionLoop.
 ///
@@ -8838,6 +8922,7 @@ namespace {
     }
     path.segs.push_back(seg);
   }
+  DropCollinearPathVertices(&path);
   *out = std::move(path);
   return true;
 }

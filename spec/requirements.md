@@ -8720,6 +8720,23 @@ capability that does not exist. They are recorded here rather than quietly dropp
   solid unchanged; the sphere's circle and the torus's two circles hold to REQ-101 at survey
   magnitudes; and every unsupported cut still names the kind of cut it is.
 
+  2026-09-23 — **a section outline keeps only the corners the shape has** (TASK-275, GitHub issue
+  #522). A `UNION` leaves its operands' faces split into fragments along each other's planes, and
+  coplanar fragments are not merged back. A cut crossed each of those internal boundaries and kept a
+  vertex there, so two unioned boxes sectioned to **12** vertices where the outline has **8** — the
+  shape right, the vertices not ones anyone drew, and a clean-up job for the user.
+
+  A vertex is now dropped when **both** of its segments are straight and it lies on the line between
+  its neighbours to within 1e-9 of the outline's own size — far inside REQ-101's ±0.002 ft, so a real
+  corner, however slight, is kept. An arc's endpoint is never dropped: it carries the sweep.
+
+  The issue offered two places to fix this: merge coplanar faces after a Boolean, or tidy the outline.
+  The outline is where it is done. No decision entry: merging faces would change every Boolean
+  result's own vertex, edge and face counts — a larger change, to geometry this issue does not claim
+  is wrong — and is recorded as the follow-up it is. Acceptance added: the union above sections to
+  exactly eight vertices with its area unchanged, a single box still sections to four, and an outline
+  whose corners are all real keeps every one.
+
 ### REQ-336 — Start Screen Billboard (What's New)
 - Purpose: Users launching a new version do not know what changed unless they hunt for release notes.
   Surface Key Features and Release Notes for the **installed** version on the Start screen, with a
