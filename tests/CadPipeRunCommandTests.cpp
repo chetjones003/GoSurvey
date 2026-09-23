@@ -1236,3 +1236,67 @@ TEST_CASE("Existing axis-aligned PIPERUN picks are unaffected by the default-on 
   CHECK(v[6] == 10.0);
   CHECK(v[7] == 10.0);
 }
+
+TEST_CASE("A pipe run belongs to its own drawing tab", "[issue486][piperun][command]") {
+  // Regression: cadPipeRuns/cadPipeRunAttrs/cadPipingSystems were absent from DrawingDocument, so a
+  // tab switch (and File > New, which restores an empty document into the live state) left the
+  // previous drawing's runs rendering, selectable and snappable in the drawing the user switched
+  // to. Same defect the section clip had, same fix.
+  AppCommandState st;
+  st.documents.resize(3);  // [0] backs the Start sentinel tab; 1 and 2 are drawings
+  std::vector<std::string> log;
+
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CadPipingSystem sys;
+  sys.name = "CW";
+  sys.pipeRunIndices.push_back(0);
+  st.cadPipingSystems.push_back(sys);
+  RefreshSolidDisplayGeometry(st);
+  REQUIRE_FALSE(st.pipeRunWorldSolids.empty());
+  SaveDocumentToSnapshot(st, 1);
+
+  RestoreDocumentFromSnapshot(st, 2);  // a drawing that never had a pipe run
+  CHECK(st.cadPipeRuns.empty());
+  CHECK(st.cadPipeRunAttrs.empty());
+  CHECK(st.cadPipingSystems.empty());
+  CHECK(st.pipeRunWorldSolids.empty());
+  RefreshSolidDisplayGeometry(st);  // and the derived solids do not come back on the next frame
+  CHECK(st.pipeRunWorldSolids.empty());
+
+  RestoreDocumentFromSnapshot(st, 1);  // back to the drawing that owns the run
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadPipeRuns[0].nominalSize == "4in");
+  CHECK(st.cadPipeRunAttrs.size() == 1);
+  REQUIRE(st.cadPipingSystems.size() == 1);
+  CHECK(st.cadPipingSystems[0].name == "CW");
+  RefreshSolidDisplayGeometry(st);
+  CHECK_FALSE(st.pipeRunWorldSolids.empty());
+}
+
+TEST_CASE("Clearing a drawing's CAD geometry clears its pipe runs", "[issue486][piperun][command]") {
+  // ClearCadGeometry is what a DXF/DWG import calls to replace the drawing's CAD content; pipe runs
+  // were not in it, so an import into a drawing that had runs kept them beside the imported model.
+  AppCommandState st;
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  RefreshSolidDisplayGeometry(st);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  REQUIRE_FALSE(st.pipeRunWorldSolids.empty());
+
+  ClearCadGeometry(st);
+  CHECK(st.cadPipeRuns.empty());
+  CHECK(st.cadPipeRunAttrs.empty());
+  CHECK(st.cadPipingSystems.empty());
+  CHECK(st.pipeRunWorldSolids.empty());
+  RefreshSolidDisplayGeometry(st);
+  CHECK(st.pipeRunWorldSolids.empty());
+}
