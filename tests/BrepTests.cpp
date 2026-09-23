@@ -8639,13 +8639,19 @@ TEST_CASE("A torus cut square to its axis sections as a ring", "[brep][issue520]
   }
 
   SECTION("every other torus cut says what kind of cut it is") {
-    for (const Vec3& n : {ray3d::Normalize(Vec3{1, 0, 1}), Vec3{1, 0, 0}, ray3d::Normalize(Vec3{0, 1, 4})}) {
+    // Not `Vec3{1, 0, 0}` any more: that plane contains the axis, and its section is two circles
+    // ([torusaxis]). What is left here is the genuinely quartic set — tilted, and parallel to the
+    // axis but beside it.
+    for (const Vec3& n : {ray3d::Normalize(Vec3{1, 0, 1}), ray3d::Normalize(Vec3{0, 1, 4})}) {
       REQUIRE_FALSE(brep::Slice(torus, Vec3{0, 0, 0}, n, brep::SliceKeep::Both, &above, &below, &why));
       INFO(brep::ProblemText(why));
       REQUIRE(why == Problem::SliceCutTorusCurve);
       REQUIRE_FALSE(brep::SectionOutlines(torus, Vec3{0, 0, 0}, n, &plane, &loops, &why));
       REQUIRE(why == Problem::SliceCutTorusCurve);
     }
+    // Parallel to the axis but beside it: the section is a quartic, not two circles.
+    REQUIRE_FALSE(brep::Slice(torus, Vec3{6, 0, 0}, Vec3{1, 0, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SliceCutTorusCurve);
     REQUIRE(std::string(brep::ProblemText(Problem::SliceCutTorusCurve)).find("torus") != std::string::npos);
   }
 
@@ -9020,5 +9026,91 @@ TEST_CASE("A tilted cut of a cone sections as an ellipse too", "[brep][issue531]
   SECTION("a cut steeper than the cone's own side is not an ellipse at all") {
     REQUIRE_FALSE(brep::SectionEllipseOutline(cone, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &el, &why));
     REQUIRE(why != Problem::Ok);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #520, increment 3's second half: a torus cut THROUGH its axis is two circles.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A torus cut through its axis gives two circles and two half-doughnuts",
+          "[brep][issue520][torusaxis]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  std::vector<brep::Path> loops;
+  Solid above, below;
+  const double R = 20.0, r = 5.0;
+  Solid torus;
+  REQUIRE(brep::MakeTorus(World(), R, r, &torus, &why));
+  const double whole = brep::ComputeMassProperties(torus).volume;
+
+  SECTION("the section is two circles of the tube's own radius, one each side of the ring") {
+    REQUIRE(brep::SectionOutlines(torus, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    // Each is a full circle, drawn as two half-turn arcs like every other circular section.
+    for (const brep::Path& p : loops) {
+      INFO("outline with " << p.segs.size() << " segments");
+      REQUIRE(p.segs.size() == 2);
+      REQUIRE(std::fabs(std::fabs(p.segs[0].sweep) - kPi) < 1e-9);
+      REQUIRE(std::fabs(std::fabs(p.segs[1].sweep) - kPi) < 1e-9);
+    }
+    // Their centres sit at +/- R along the cut plane, and each has the tube's radius.
+    std::vector<Vec3> centres;
+    for (const brep::Path& p : loops) {
+      const Vec3 a = ucs::PlaneToWorld(plane, p.start);
+      const Vec3 b = ucs::PlaneToWorld(plane, p.segs[0].end);
+      REQUIRE(ray3d::Length(ray3d::Sub(a, b)) == Approx(2.0 * r).epsilon(1e-9));
+      centres.push_back(ray3d::Scale(ray3d::Add(a, b), 0.5));
+    }
+    REQUIRE(ray3d::Length(ray3d::Sub(centres[0], centres[1])) == Approx(2.0 * R).epsilon(1e-9));
+    for (const Vec3& c : centres)
+      REQUIRE(std::fabs(ray3d::Length(ray3d::Sub(c, Vec3{0, 0, 0})) - R) < 1e-9);
+  }
+
+  SECTION("SLICE gives two half-doughnuts, each half the volume") {
+    REQUIRE(brep::Slice(torus, Vec3{0, 0, 0}, Vec3{0, 1, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    const brep::MassProperties ma = brep::ComputeMassProperties(above);
+    const brep::MassProperties mb = brep::ComputeMassProperties(below);
+    REQUIRE(ma.valid);
+    REQUIRE(mb.valid);
+    REQUIRE(ma.volume == Approx(0.5 * whole).epsilon(1e-9));
+    REQUIRE(mb.volume == Approx(0.5 * whole).epsilon(1e-9));
+    // Each piece keeps half the tube's surface plus its two flat ends.
+    REQUIRE(ma.surfaceArea ==
+            Approx(0.5 * (4.0 * kPi * kPi * R * r) + 2.0 * kPi * r * r).epsilon(1e-9));
+    REQUIRE(MeshVolume(above, Vec3{}) == Approx(0.5 * whole).epsilon(1e-2));
+    // And the halves are on the sides the normal names.
+    REQUIRE(ma.centroidValid);
+    REQUIRE(ma.centroid.y > 0.0);
+    REQUIRE(mb.centroid.y < 0.0);
+  }
+
+  SECTION("the single-outline entry point says there are two of them") {
+    brep::Path one;
+    REQUIRE_FALSE(brep::SectionLoop(torus, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &one, &why));
+    REQUIRE(why == Problem::SliceCutSeveralOutlines);
+  }
+
+  SECTION("beside the axis, not through it, is still a quartic and still refused") {
+    REQUIRE_FALSE(brep::Slice(torus, Vec3{0, 6, 0}, Vec3{0, 1, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SliceCutTorusCurve);
+    REQUIRE_FALSE(brep::SectionOutlines(torus, Vec3{0, 6, 0}, Vec3{0, 1, 0}, &plane, &loops, &why));
+    REQUIRE(why == Problem::SliceCutTorusCurve);
+  }
+
+  SECTION("at survey magnitude on a tilted frame") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid far;
+    REQUIRE(brep::MakeTorus(base, R, r, &far, &why));
+    REQUIRE(brep::SectionOutlines(far, base.origin, base.yAxis, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    for (const brep::Path& p : loops) {
+      const Vec3 a = ucs::PlaneToWorld(plane, p.start);
+      const Vec3 b = ucs::PlaneToWorld(plane, p.segs[0].end);
+      REQUIRE(ray3d::Length(ray3d::Sub(a, b)) == Approx(2.0 * r).margin(0.002));
+    }
+    REQUIRE(brep::Slice(far, base.origin, base.yAxis, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(above).volume ==
+            Approx(0.5 * 2.0 * kPi * kPi * R * r * r).epsilon(1e-9));
   }
 }

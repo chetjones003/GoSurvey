@@ -6605,6 +6605,25 @@ capability that does not exist. They are recorded here rather than quietly dropp
   pieces and that circle, a torus cut through its centre gives circles of R + r and R − r, and both
   hold at survey coordinate magnitudes.
 
+  2026-09-23 — **a torus cut through its axis is two circles** (TASK-278, GitHub issue #520
+  increment 3, the half the 2026-09-18 pass left refused). A plane containing the axis meets the ring
+  on both sides, so the section is two separate circles of the tube's own radius, centred where the
+  plane crosses the ring — and each piece is half the doughnut: the tube over half a turn, closed by a
+  flat disc at each end, both facing away from the material.
+
+  The two halves are the same construction in two frames, the second turned half a turn about the
+  axis, which a torus is symmetric under. This recogniser is asked **before** the square-to-axis one,
+  which otherwise answers for every other torus plane — including with the quartic refusal — and would
+  swallow this cut.
+
+  A plane parallel to the axis but **beside** it still cuts a quartic (two ovals, or one waisted
+  curve) and keeps `SliceCutTorusCurve`, as does every tilted plane. No decision entry: increment 3
+  already named this cut and its shape; this delivers it.
+
+  Acceptance added: a torus cut through its axis sections to two circles of radius r whose centres are
+  2R apart, slices into two pieces of half the volume each with the analytic surface area, and holds at
+  survey coordinate magnitudes; beside the axis is still refused by name.
+
 ### REQ-337 — Composite-operand analytic Booleans (GitHub issue #493, continues REQ-314)
 - Purpose: REQ-314's Boolean increments (B1/B2a/B2b-1/B2b-2, plus the branch-pipe and sphere∩cylinder
   work tracked on #242/#283) already recognise a wide set of *single-primitive-pair* curved

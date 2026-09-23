@@ -8252,6 +8252,121 @@ struct DistRange {
 /// circles (GitHub #520, REQ-314 / REQ-335). Each piece is the part of the tube on its side of the
 /// plane, closed by the flat ring.
 ///
+
+/// Cut a torus by a plane **through its axis** — the section is two separate circles, one through
+/// each side of the ring (GitHub #520 increment 3, the half this release's first pass left refused).
+///
+/// Each piece is half the doughnut: the tube over half a turn, closed by a flat disc of the tube's
+/// own radius at each end. Both discs face the same way — away from the material, which is all on one
+/// side of the plane — which is what makes a half-doughnut, rather than a wedge.
+///
+/// The two halves are the same construction in two frames: the second is the first turned half a turn
+/// about the axis, which a torus is symmetric under. A plane parallel to the axis but NOT through it
+/// cuts a quartic (two ovals, or one waisted curve) and keeps its own refusal.
+[[nodiscard]] bool SliceTorusThroughAxis(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                         SliceKeep keep, Solid* outAbove, Solid* outBelow, bool* handled,
+                                         Problem* outWhy) {
+  *handled = false;
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Torus)
+    return false;
+  const Vec3 axis = ray3d::Normalize(rc.frame.zAxis);
+  if (std::fabs(ray3d::Dot(pn, axis)) > 1e-6)
+    return false;  // not parallel to the axis — SliceTorusSquareToAxis' remit, or a quartic
+
+  const double R = rc.radius;
+  const double r = rc.radius2;
+  *handled = true;
+  if (r >= R)
+    return Fail(Problem::SliceCutTorusCurve, outWhy);  // a self-intersecting tube is not two circles
+  const double eps = 1e-7 * std::max(R + r, 1.0);
+  // Through the axis, or beside it? Beside it the section is a quartic, not two circles.
+  const double d = ray3d::Dot(ray3d::Sub(planePoint, rc.frame.origin), pn);
+  if (std::fabs(d) > eps)
+    return Fail(Problem::SliceCutTorusCurve, outWhy);
+  if (!RoundRecipeFitsSolid(solid))
+    return false;  // a recipe that does not describe its solid never places a cut (D-2026-09-17-a)
+
+  // The frame this half is built in: +Y is the side the material is on, +Z the torus axis, so the
+  // cut plane is its own XZ plane.
+  auto halfFrame = [&](bool second) {
+    ucs::Ucs f{};
+    f.origin = rc.frame.origin;
+    f.zAxis = axis;
+    f.yAxis = ray3d::Normalize(second ? ray3d::Scale(pn, -1.0) : pn);
+    f.xAxis = ray3d::Normalize(ray3d::Cross(f.yAxis, f.zAxis));
+    return f;
+  };
+
+  auto build = [&](bool second, Solid* dst) -> bool {
+    const ucs::Ucs fr = halfFrame(second);
+    auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(fr, Vec3{x, y, z}); };
+    Solid s;
+    // The four corners of the (u, v) pattern, exactly as MakeTorus names them: u in {0, pi} is the
+    // two cut ends, v in {0, pi} the outer and inner equators.
+    const int v00 = AddVertex(&s, W(R + r, 0.0, 0.0));
+    const int v0p = AddVertex(&s, W(R - r, 0.0, 0.0));
+    const int vp0 = AddVertex(&s, W(-(R + r), 0.0, 0.0));
+    const int vpp = AddVertex(&s, W(-(R - r), 0.0, 0.0));
+
+    const Vec3 Z = fr.zAxis;
+    const Vec3 Y = fr.yAxis;
+    const Vec3 origin = fr.origin;
+    // Ring arcs over this half turn: the outer equator (v = 0) and the inner one (v = pi).
+    const int eOuter = AddArc(&s, v00, vp0, origin, Z, kPi);
+    const int eInner = AddArc(&s, v0p, vpp, origin, Z, kPi);
+    // The tube's own circle at each cut end, in two half sweeps — the ends ARE the section.
+    const Vec3 tube0 = W(R, 0.0, 0.0);
+    const Vec3 tubeP = W(-R, 0.0, 0.0);
+    const int t0a = AddArc(&s, v00, v0p, tube0, ray3d::Scale(Y, -1.0), kPi);
+    const int t0b = AddArc(&s, v0p, v00, tube0, ray3d::Scale(Y, -1.0), kPi);
+    const int tPa = AddArc(&s, vp0, vpp, tubeP, Y, kPi);
+    const int tPb = AddArc(&s, vpp, vp0, tubeP, Y, kPi);
+
+    // The two flat discs, both facing -Y: the material of this half is the +Y side of the plane, so
+    // each end looks away from it. Their loops wind counter-clockwise about -Y, which is the
+    // direction the tube arcs were built to sweep in.
+    s.faces.push_back(MakePlaneFace(tube0, ray3d::Scale(Y, -1.0), {{t0a, false}, {t0b, false}}));
+    s.faces.push_back(MakePlaneFace(tubeP, ray3d::Scale(Y, -1.0), {{tPb, true}, {tPa, true}}));
+
+    auto tubeFace = [&](double v0, double v1, std::vector<EdgeUse> uses) {
+      Face f;
+      f.surface.kind = SurfaceKind::Torus;
+      f.surface.frame = fr;
+      f.surface.radius = R;
+      f.surface.radius2 = r;
+      f.uStart = 0.0;
+      f.uEnd = kPi;
+      f.vStart = v0;
+      f.vEnd = v1;
+      Loop lp;
+      lp.uses = std::move(uses);
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    };
+    // MakeTorus' own two patches over this half turn, unchanged in winding.
+    tubeFace(0.0, kPi, {{eOuter, false}, {tPa, false}, {eInner, true}, {t0a, true}});
+    tubeFace(kPi, kTwoPi, {{eInner, false}, {tPb, false}, {eOuter, true}, {t0b, true}});
+
+    AddSingleShell(&s);
+    if (Validate(s) != Problem::Ok)
+      return Fail(Problem::SliceResultInvalid, outWhy);
+    *dst = std::move(s);
+    return true;
+  };
+
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+  Solid probe;
+  if (!build(false, &probe) || !build(true, &probe))
+    return false;  // build() already set outWhy
+  if (wantAbove && outAbove && !build(false, outAbove))
+    return false;
+  if (wantBelow && outBelow && !build(true, outBelow))
+    return false;
+  return Succeed(outWhy);
+}
+
 /// The tube angle `v` runs from the outer equator (`v = 0`) through the top (`v = pi/2`) to the inner
 /// equator (`v = pi`), so a plane at height `d` cuts the tube at `v = asin(d/r)` and `pi - asin(d/r)`,
 /// and the ring's radii are `R ± sqrt(r^2 - d^2)`. As with a sphere, one builder serves both pieces
@@ -8591,6 +8706,12 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
         return ok;
       // A sphere at any plane (a circle), and a torus cut square to its axis (a ring) — GitHub #520.
       ok = SliceSpherePrimitive(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
+      if (handled)
+        return ok;
+      // A torus cut THROUGH its axis is two separate circles (#520 increment 3). Asked first because
+      // the square-to-axis recogniser below answers for every OTHER torus plane, including with the
+      // quartic refusal — so it would swallow this one.
+      ok = SliceTorusThroughAxis(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
       if (handled)
         return ok;
       ok = SliceTorusSquareToAxis(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);

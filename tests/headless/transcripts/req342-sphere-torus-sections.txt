@@ -67,9 +67,10 @@ CHECK ALL
 CMD UNDO
 EXPECT POLYLINES 0
 
-# --- a torus: the OUTLINE of a vertical cut is still refused, by name ------------------------------
-# The plane SECTIONPLANE can now aim at any angle; the OUTLINE of a torus cut that is not square to
-# its axis is a quartic curve the outline cannot hold (#520 increment 3/4). The refusal says so.
+# --- a torus: the OUTLINE of a cut through its axis is two circles ---------------------------------
+# The plane SECTIONPLANE can aim at any angle, and the OUTLINE now follows for the cut through the
+# axis too: two separate circles, one through each side of the ring (#520 increment 3). A cut BESIDE
+# the axis, or at any other angle, is a quartic and keeps its refusal.
 CMD SELECT
 ESC
 BOX -100 -100 100 100
@@ -77,10 +78,24 @@ CMD SECTION
 CMD 0,0,0
 CMD 0,10,0
 CMD 0,0,10
+EXPECT LOG "SECTION — 2 section outlines created. The solid is unchanged."
+EXPECT POLYLINES 2
+EXPECT SOLIDS 1
+CHECK ALL
+CMD UNDO
+EXPECT POLYLINES 0
+
+# Beside the axis: still a quartic, still refused by name.
+CMD SELECT
+ESC
+BOX -100 -100 100 100
+CMD SECTION
+CMD 6,0,0
+CMD 6,10,0
+CMD 6,0,10
 EXPECT LOG "SECTION — A cut of a torus that is not square to its axis is a curve this release cannot hold."
 ESC
 EXPECT POLYLINES 0
-EXPECT SOLIDS 1
 CHECK ALL
 
 # --- both again at survey magnitude: the plane still lands where it was asked for ------------------
