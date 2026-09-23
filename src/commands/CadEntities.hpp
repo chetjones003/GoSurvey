@@ -805,6 +805,15 @@ struct CadEllipse {
   float nx = 0.f;
   float ny = 0.f;
   float nz = 1.f;
+  /// The span actually drawn, measured in the ellipse's own parametrisation from its major axis
+  /// (GitHub #520 follow-up: a tilted cut that runs off the end of a pipe is an elliptical ARC plus
+  /// a chord). A full turn — `startRad = 0`, `sweepRad = 2*pi` — is every ellipse that existed
+  /// before this field, so nothing closed moves, and `EllipseIsFullTurn` is the one test for it.
+  ///
+  /// Angles stay `float` for the reason \ref CadArc's do, and are the same pair DXF states in groups
+  /// 41 and 42.
+  float startRad = 0.f;
+  float sweepRad = 6.28318530717958647692f;
 };
 
 /// The plane an ellipse lies in (GitHub #531) — the same frame, at its centre.
@@ -835,6 +844,18 @@ struct CadEllipse {
 /// Whether \p e lies flat in world XY — the case every ellipse was before GitHub #531, and the one
 /// the paper space, DXF-elevation and plan-view paths are allowed to assume.
 [[nodiscard]] inline bool EllipseIsFlat(const CadEllipse& e) { return IsFlatNormal(e.nx, e.ny, e.nz); }
+
+/// Whether \p e is a closed ellipse — every ellipse before the arc span existed, and the case the
+/// area, the closed-outline draw and the `.gs`/DXF byte-stability all key off.
+[[nodiscard]] inline bool EllipseIsFullTurn(const CadEllipse& e) {
+  return std::fabs(std::fabs(static_cast<double>(e.sweepRad)) - 6.283185307179586) < 1e-6;
+}
+
+/// The angle at \p t in [0, 1] along \p e's drawn span — a full ellipse walks the whole turn, an
+/// elliptical arc only the part it was cut to.
+[[nodiscard]] inline double EllipseSpanAngleAt(const CadEllipse& e, double t) {
+  return static_cast<double>(e.startRad) + static_cast<double>(e.sweepRad) * t;
+}
 
 /// One named sub-range of a mesh — a single object from the imported model (REQ-063).
 ///

@@ -9114,3 +9114,101 @@ TEST_CASE("A torus cut through its axis gives two circles and two half-doughnuts
             Approx(0.5 * 2.0 * kPi * kPi * R * r * r).epsilon(1e-9));
   }
 }
+
+namespace {
+
+/// A point at \p t in [0, 1] along a section's elliptical arc, in world.
+Vec3 EllipseArcPointAt(const brep::SectionEllipseArc& a, double t) {
+  const Vec3 minorDir = ray3d::Cross(a.normal, a.majorDir);
+  const double u = a.startParam + a.sweep * t;
+  return ray3d::Add(a.centre, ray3d::Add(ray3d::Scale(a.majorDir, a.majorSemi * std::cos(u)),
+                                         ray3d::Scale(minorDir, a.minorSemi * std::sin(u))));
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// GitHub #520 follow-up: a tilted cut that runs off the end of a pipe is an elliptical ARC plus the
+// chord across the cap (D-2026-09-23-b).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A tilted cut that runs off one end sections as an arc plus a chord",
+          "[brep][sectionarc]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::SectionEllipseArc arc;
+  const double r = 30.0;
+  // Short enough that a 45-degree cut through the middle runs off the top.
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -25.0), r, 50.0, &cyl, &why));
+
+  SECTION("the arc is part of the full ellipse, and its ends are on the cap") {
+    const Vec3 n = ray3d::Normalize(Vec3{0, -1, 1});
+    REQUIRE(brep::SectionEllipseArcOutline(cyl, Vec3{0, 0, 15}, n, &plane, &arc, &why));
+    REQUIRE(arc.valid);
+    // The ellipse it is cut from is the 45-degree one: semi-minor r, semi-major r root 2.
+    REQUIRE(arc.minorSemi == Approx(r).epsilon(1e-9));
+    REQUIRE(arc.majorSemi == Approx(r * std::sqrt(2.0)).epsilon(1e-9));
+    // Less than a whole turn, and more than nothing.
+    REQUIRE(std::fabs(arc.sweep) > 1e-6);
+    REQUIRE(std::fabs(arc.sweep) < kTwoPiTest - 1e-6);
+    // Both ends of the chord sit ON the cap the cut ran off (z = 25), and on the cylinder's wall.
+    for (const Vec3& p : {arc.chordA, arc.chordB}) {
+      REQUIRE(p.z == Approx(25.0).margin(1e-6));
+      REQUIRE(std::hypot(p.x, p.y) == Approx(r).epsilon(1e-9));
+    }
+    // And the chord's ends are the arc's own ends.
+    REQUIRE(ray3d::Length(ray3d::Sub(EllipseArcPointAt(arc, 0.0), arc.chordA)) <= 1e-6);
+    REQUIRE(ray3d::Length(ray3d::Sub(EllipseArcPointAt(arc, 1.0), arc.chordB)) <= 1e-6);
+  }
+
+  SECTION("every point of the arc is inside the pipe, not out past the cap") {
+    const Vec3 n = ray3d::Normalize(Vec3{0, -1, 1});
+    REQUIRE(brep::SectionEllipseArcOutline(cyl, Vec3{0, 0, 15}, n, &plane, &arc, &why));
+    for (int i = 0; i <= 20; ++i) {
+      const Vec3 p = EllipseArcPointAt(arc, static_cast<double>(i) / 20.0);
+      INFO("t = " << i / 20.0 << " at z " << p.z);
+      REQUIRE(p.z <= 25.0 + 1e-6);   // not above the cap it ran off
+      REQUIRE(p.z >= -25.0 - 1e-6);  // nor below the other one
+      REQUIRE(std::hypot(p.x, p.y) == Approx(r).epsilon(1e-6));  // on the wall
+    }
+  }
+
+  SECTION("a cut that stays between the caps is a whole ellipse, and says so") {
+    Solid tall;
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -100.0), r, 200.0, &tall, &why));
+    REQUIRE_FALSE(brep::SectionEllipseArcOutline(tall, Vec3{0, 0, 0}, ray3d::Normalize(Vec3{0, -1, 1}),
+                                                 &plane, &arc, &why));
+    REQUIRE(why == Problem::SectionEllipse);
+  }
+
+  SECTION("a cut that runs off BOTH ends is two arcs and two chords: still refused") {
+    // Through the middle, a 45-degree cut spans z -30 to 30 — past both ends at +/- 25.
+    REQUIRE_FALSE(brep::SectionEllipseArcOutline(cyl, Vec3{0, 0, 0}, ray3d::Normalize(Vec3{0, -1, 1}),
+                                                 &plane, &arc, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedEnd);
+  }
+
+  SECTION("a cone's tilted cut off its end, and survey magnitude") {
+    Solid cone;
+    REQUIRE(brep::MakeCone(PlaneAlong(World(), -25.0), 30.0, 15.0, 50.0, &cone, &why));
+    REQUIRE(brep::SectionEllipseArcOutline(cone, Vec3{0, 0, 15}, ray3d::Normalize(Vec3{0, -1, 1}), &plane,
+                                           &arc, &why));
+    REQUIRE(arc.valid);
+    REQUIRE(std::fabs(arc.sweep) < kTwoPiTest - 1e-6);
+
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid far;
+    REQUIRE(brep::MakeCylinder(base, r, 50.0, &far, &why));
+    const Vec3 n = ray3d::Normalize(ray3d::Add(base.zAxis, ray3d::Scale(base.yAxis, -1.0)));
+    const Vec3 at = ucs::UcsToWorld(base, Vec3{0, 0, 40.0});
+    REQUIRE(brep::SectionEllipseArcOutline(far, at, n, &plane, &arc, &why));
+    REQUIRE(arc.minorSemi == Approx(r).margin(0.002));
+    REQUIRE(arc.majorSemi == Approx(r * std::sqrt(2.0)).margin(0.002));
+    // The chord's ends are on the far cap, in the tilted frame.
+    for (const Vec3& p : {arc.chordA, arc.chordB}) {
+      const Vec3 local = ucs::WorldToUcs(base, p);
+      REQUIRE(local.z == Approx(50.0).margin(0.002));
+    }
+  }
+}

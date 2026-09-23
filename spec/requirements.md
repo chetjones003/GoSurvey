@@ -8796,6 +8796,30 @@ capability that does not exist. They are recorded here rather than quietly dropp
   exactly eight vertices with its area unchanged, a single box still sections to four, and an outline
   whose corners are all real keeps every one.
 
+  2026-09-23 — **a tilted cut that runs off the end of a pipe is drawn too** (D-2026-09-23-b,
+  TASK-279, GitHub issue #520 follow-up). The cut BETWEEN the caps became an ellipse with #531; this
+  is the other half. Where the cut leaves through an end, the outline is an **elliptical arc plus the
+  chord** across that cap — two shapes, so `SECTION` draws **two objects for one cut**, in one undo
+  step: an `ELLIPSE` carrying the span it was cut to, and a `LINE` closing it.
+
+  `CadEllipse` gains that span (`startRad` / `sweepRad`, the pair DXF states in groups 41 and 42). A
+  full turn is every ellipse that existed before, so nothing closed moves, and the span is written to
+  `.gs` and DXF only when it is not one. It also pays off TASK-114's DEBT-1: a trimmed ELLIPSE read
+  from DXF was tessellated because there was nowhere to put its range, and is now kept as itself.
+
+  **This one outline does not come from a cut.** `Slice` does not build the pieces for it — it still
+  refuses with `SliceCutCrossesCurvedEnd` — so the outline is computed from the primitive's own
+  geometry. That is the single place sectioning does not inherit Slice's accepted set, decided with
+  the user against the alternative of teaching the cutter the same cut first; the cutter is the
+  follow-up, after which this reads back from the pieces like every other section.
+
+  A cut that runs off **both** ends is two arcs and two chords and keeps its refusal.
+
+  Acceptance added: such a cut draws an arc of the ellipse the cut would have made, with both ends on
+  the cap and on the wall, every point of the arc inside the solid, plus the chord joining those ends;
+  both objects arrive in one undo step and survive `.gs` and a DXF round trip with the span intact;
+  and the figures hold at survey coordinate magnitudes.
+
 ### REQ-336 — Start Screen Billboard (What's New)
 - Purpose: Users launching a new version do not know what changed unless they hunt for release notes.
   Surface Key Features and Release Notes for the **installed** version on the Start screen, with a

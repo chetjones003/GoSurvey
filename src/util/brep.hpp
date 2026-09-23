@@ -961,6 +961,32 @@ struct SectionEllipse {
   double minorSemi = 0.0;
 };
 
+/// The elliptical ARC and chord a tilted cut exposes when it runs off the end of a cylinder or cone
+/// (GitHub #520 follow-up, D-2026-09-23-b) — the shape \ref Problem::SliceCutCrossesCurvedEnd names.
+///
+/// **This one does not come from a cut.** `Slice` does not build the pieces for it yet, so there is no
+/// cut face to read back, and the outline is computed from the primitive's own geometry instead. It
+/// is the single place sectioning does not inherit Slice's accepted set; teaching the cutter the same
+/// cut is the follow-up, after which this reads back like every other section.
+struct SectionEllipseArc {
+  bool valid = false;
+  Vec3 centre{};    ///< world, the full ellipse's centre
+  Vec3 normal{};    ///< world — the caller's own plane normal
+  Vec3 majorDir{};  ///< world, unit
+  double majorSemi = 0.0;
+  double minorSemi = 0.0;
+  double startParam = 0.0;  ///< measured from \ref majorDir, about \ref normal
+  double sweep = 0.0;       ///< signed about \ref normal
+  Vec3 chordA{};            ///< world; the arc runs from here...
+  Vec3 chordB{};            ///< ...to here, and the chord closes it across the cap
+};
+
+/// See \ref SectionEllipseArc. Refuses a cut that runs off BOTH ends (two arcs and two chords), one
+/// that stays on the side (\ref Problem::SectionEllipse — a whole ellipse, \ref SectionEllipseOutline's
+/// job), and anything that is not a tilted cut of a cylinder or cone.
+[[nodiscard]] bool SectionEllipseArcOutline(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                            ucs::Ucs* outPlane, SectionEllipseArc* outArc, Problem* outWhy);
+
 /// The cross-section of \p solid when it is exactly one closed ellipse (GitHub #531).
 ///
 /// Same cut, same plane and same accepted set as \ref SectionOutlines — this asks the narrower

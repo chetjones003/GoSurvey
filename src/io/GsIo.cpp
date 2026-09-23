@@ -693,6 +693,12 @@ void CadEllipseToJson(const CadEllipse& e, json& o) {
     o["ny"] = e.ny;
     o["nz"] = e.nz;
   }
+  // The drawn span, additive and omitted for a closed ellipse — which is every ellipse that existed
+  // before an elliptical ARC could (GitHub #520 follow-up), so nothing closed re-saves differently.
+  if (!EllipseIsFullTurn(e)) {
+    o["startRad"] = e.startRad;
+    o["sweepRad"] = e.sweepRad;
+  }
 }
 
 CadEllipse CadEllipseFromJson(const json& o) {
@@ -706,6 +712,8 @@ CadEllipse CadEllipseFromJson(const json& o) {
   e.nx    = o.value("nx",    e.nx);  // absent → world +Z: legacy ellipses load flat (GitHub #531)
   e.ny    = o.value("ny",    e.ny);
   e.nz    = o.value("nz",    e.nz);
+  e.startRad = o.value("startRad", e.startRad);  // absent → a full turn (GitHub #520 follow-up)
+  e.sweepRad = o.value("sweepRad", e.sweepRad);
   return e;
 }
 

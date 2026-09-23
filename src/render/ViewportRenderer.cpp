@@ -463,25 +463,28 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
   // A tilted ellipse (GitHub #531) leaves the XY plane, so no single elevation describes it: each
   // sample carries its own Z, exactly as the tilted-arc branch above does, and is taken through
   // `EllipseWorldPointAt` so the drawn curve is the curve the snap picks and the DXF writer emits.
+  // An elliptical ARC walks only the span it was cut to, and is not closed; a full ellipse walks the
+  // whole turn and is (GitHub #520 follow-up).
+  const bool closedTurn = EllipseIsFullTurn(el);
   if (!EllipseIsFlat(el)) {
     std::vector<float> zs(static_cast<size_t>(n) + 1u);
     for (int i = 0; i <= n; ++i) {
-      const ray3d::Vec3 p = EllipseWorldPointAt(el, kTwoPi * static_cast<double>(i) / static_cast<double>(n));
+      const ray3d::Vec3 p = EllipseWorldPointAt(el, EllipseSpanAngleAt(el, static_cast<double>(i) / n));
       xy[static_cast<size_t>(i * 2)] = static_cast<float>(p.x - viewAnchorX);
       xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(p.y - viewAnchorY);
       zs[static_cast<size_t>(i)] = static_cast<float>(p.z);
     }
-    CadTessellateLinetypeChainVc(xy.data(), n + 1, z, true, lt, dashPatScale, rgba, &out, zs.data());
+    CadTessellateLinetypeChainVc(xy.data(), n + 1, z, closedTurn, lt, dashPatScale, rgba, &out, zs.data());
     return;
   }
   for (int i = 0; i <= n; ++i) {
-    const double u = kTwoPi * static_cast<double>(i) / static_cast<double>(n);
+    const double u = EllipseSpanAngleAt(el, static_cast<double>(i) / n);
     const double c0 = std::cos(u);
     const double s0 = std::sin(u);
     xy[static_cast<size_t>(i * 2)] = static_cast<float>(rcx + ux * (dma * c0) + px * (dmb * s0));
     xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(rcy + uy * (dma * c0) + py * (dmb * s0));
   }
-  CadTessellateLinetypeChainVc(xy.data(), n + 1, z, true, lt, dashPatScale, rgba, &out);
+  CadTessellateLinetypeChainVc(xy.data(), n + 1, z, closedTurn, lt, dashPatScale, rgba, &out);
 }
 
 void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
