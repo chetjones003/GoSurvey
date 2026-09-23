@@ -6310,6 +6310,107 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
   return Succeed(outWhy);
 }
 
+namespace {
+
+/// Re-aim one loop: walk its edges the other way round. Reversing the order AND flipping each use's
+/// own direction is what keeps the chain connected — the last edge's far end becomes the first's
+/// start — so a loop that was traversed CCW about its face normal is now traversed CW, which is
+/// exactly what turns a sweep's own cap loop into the HOLE loop of an annulus, or an inner band's
+/// outward-facing boundary into an inward-facing one.
+void ReverseLoopInPlace(Loop* lp, int edgeOffset) {
+  std::reverse(lp->uses.begin(), lp->uses.end());
+  for (EdgeUse& u : lp->uses) {
+    u.edge += edgeOffset;
+    u.reversed = !u.reversed;
+  }
+}
+
+} // namespace
+
+bool SweepTube(const Profile& outerProfile, const Profile& innerProfile, const SweepPath& path,
+               const SweepOptions& options, Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;
+  // Matching cross-sections, or the two sweeps produce rings that do not correspond and the caps
+  // cannot close into one annulus. Checked before either sweep runs, so the reason reported is this
+  // one rather than whichever sweep happened to fail first for an unrelated cause.
+  if (outerProfile.vertices.size() != innerProfile.vertices.size() ||
+      outerProfile.edges.size() != innerProfile.edges.size() ||
+      outerProfile.vertices.size() != outerProfile.edges.size())
+    return Fail(Problem::ProfileMalformed, outWhy);
+
+  Solid o;
+  if (!Sweep(outerProfile, path, options, &o, outWhy))
+    return false;
+  Solid i;
+  if (!Sweep(innerProfile, path, options, &i, outWhy))
+    return false;
+
+  // Sweep builds an open path's two planar caps FIRST and every side face after (and a closed path
+  // no caps at all). Rather than trust that order, find them: exactly two planar faces, at indices
+  // 0 and 1, is the shape this merge needs — a closed path (no caps) lands here as "not two", which
+  // is the documented refusal.
+  auto capsAreFirstTwo = [](const Solid& s) {
+    if (s.faces.size() < 3)
+      return false;
+    if (s.faces[0].surface.kind != SurfaceKind::Plane || s.faces[1].surface.kind != SurfaceKind::Plane)
+      return false;
+    for (std::size_t k = 2; k < s.faces.size(); ++k)
+      if (s.faces[k].surface.kind == SurfaceKind::Plane)
+        return false;
+    return true;
+  };
+  if (!capsAreFirstTwo(o) || !capsAreFirstTwo(i) || o.faces.size() != i.faces.size())
+    return Fail(Problem::SweepUnsupportedOption, outWhy);
+
+  Solid s;
+  s.vertices = o.vertices;
+  const int vOff = static_cast<int>(s.vertices.size());
+  s.vertices.insert(s.vertices.end(), i.vertices.begin(), i.vertices.end());
+  s.edges = o.edges;
+  const int eOff = static_cast<int>(s.edges.size());
+  for (Edge e : i.edges) {
+    e.v0 += vOff;
+    e.v1 += vOff;
+    s.edges.push_back(std::move(e));
+  }
+
+  // The outer wall, exactly as swept.
+  for (std::size_t fi = 2; fi < o.faces.size(); ++fi)
+    s.faces.push_back(o.faces[fi]);
+
+  // The inner wall, turned inside out: every loop re-aimed (so each inner edge is still used twice,
+  // once each way, now that its cap use has gone) and the surface marked `inward`, which is what
+  // makes its normal point into the bore and its volume term subtract the void it bounds.
+  for (std::size_t fi = 2; fi < i.faces.size(); ++fi) {
+    Face f = i.faces[fi];
+    f.surface.inward = true;
+    for (Loop& lp : f.loops)
+      ReverseLoopInPlace(&lp, eOff);
+    s.faces.push_back(std::move(f));
+  }
+
+  // Each end cap becomes an annulus: the outer sweep's cap face (already on the right plane, with
+  // the right outward normal and the right outer loop) with the inner sweep's cap loop, re-aimed,
+  // added as the hole.
+  for (std::size_t capIdx = 0; capIdx < 2; ++capIdx) {
+    if (o.faces[capIdx].loops.empty() || i.faces[capIdx].loops.empty())
+      return Fail(Problem::SweepUnsupportedOption, outWhy);
+    Face cap = o.faces[capIdx];
+    Loop hole = i.faces[capIdx].loops.front();
+    ReverseLoopInPlace(&hole, eOff);
+    cap.loops.push_back(std::move(hole));
+    s.faces.push_back(std::move(cap));
+  }
+
+  AddSingleShell(&s);
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return Fail(why, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Feature operations — Revolve (REQ-314 / ADR-046 increment 2, GitHub issue #147).
 // ---------------------------------------------------------------------------------------------

@@ -33,7 +33,7 @@ TEST_CASE("PIPERUN refuses an unknown pressure class and stays at the prompt", "
   CHECK(st.pipeRunPressureClassTag.empty());
 }
 
-TEST_CASE("PIPERUN accepts a known size and class, then advances to the first-point prompt",
+TEST_CASE("PIPERUN accepts a known size and class, then asks for the wall",
           "[issue486][piperun][command]") {
   AppCommandState st;
   std::vector<std::string> log;
@@ -41,7 +41,61 @@ TEST_CASE("PIPERUN accepts a known size and class, then advances to the first-po
   REQUIRE(HandlePipeRunTextInput("4in CS150", st, log));
   CHECK(st.pipeRunNominalSize == "4in");
   CHECK(st.pipeRunPressureClassTag == "CS150");
+  // The wall is asked AFTER the size (D-2026-09-23-a), because the default offered — and the
+  // maximum accepted — both depend on which size was just chosen.
+  CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitWallThickness);
+  REQUIRE(HandlePipeRunTextInput("", st, log));
+  CHECK(st.pipeRunWallThicknessIn == Catch::Approx(0.237));  // schedule 40 for 4in
   CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitFirstPoint);
+}
+
+TEST_CASE("PIPERUN takes a typed wall, and refuses one that leaves no bore",
+          "[issue486][piperun][command][wall]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));  // OD 4.5in
+
+  REQUIRE(HandlePipeRunTextInput("bogus", st, log));
+  CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitWallThickness);  // prompt stands
+  REQUIRE(HandlePipeRunTextInput("-0.2", st, log));
+  CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitWallThickness);
+  REQUIRE(HandlePipeRunTextInput("2.25", st, log));  // exactly half the OD: no bore left
+  CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitWallThickness);
+  CHECK(st.pipeRunWallThicknessIn == 0.0);
+
+  // A click cannot skip the prompt either.
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitWallThickness);
+  CHECK(st.pipeRunDraftVerts.empty());
+
+  REQUIRE(HandlePipeRunTextInput("0.5", st, log));
+  CHECK(st.pipeRunWallThicknessIn == Catch::Approx(0.5));
+  CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitFirstPoint);
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadPipeRuns[0].wallThicknessIn == Catch::Approx(0.5));  // the run carries what was typed
+}
+
+TEST_CASE("The offered wall follows the size, rather than the last run's",
+          "[issue486][piperun][command][wall]") {
+  // A one-off heavy wall on a 4in run must not silently become the default on the next run, which
+  // may well be a different size — the prompt offers that size's own standard wall each time.
+  AppCommandState st;
+  std::vector<std::string> log;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("0.75", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("8in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));
+  CHECK(st.pipeRunWallThicknessIn == Catch::Approx(0.322));  // schedule 40 for 8in, not 0.75
 }
 
 TEST_CASE("A click-to-add PIPERUN commits a CadPipeRun on END", "[issue486][piperun][command]") {
@@ -49,6 +103,7 @@ TEST_CASE("A click-to-add PIPERUN commits a CadPipeRun on END", "[issue486][pipe
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitNextPoint);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
@@ -66,6 +121,7 @@ TEST_CASE("Blank Enter finishes an open PIPERUN the same way END does", "[issue4
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("2in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 5.f, 0.f, log);
   REQUIRE(HandlePipeRunTextInput("", st, log));
@@ -73,12 +129,16 @@ TEST_CASE("Blank Enter finishes an open PIPERUN the same way END does", "[issue4
   REQUIRE(st.cadPipeRuns.size() == 1);
 }
 
-TEST_CASE("PIPERUN END with only a start point refuses — a run needs two vertices",
+// ASCII name deliberately: a non-ASCII character in a TEST_CASE name breaks ctest's own discovery
+// on Windows, so the case passes when the exe is run directly and fails under `ctest` with "no test
+// cases matched". Pre-existing here; fixed while this file was open.
+TEST_CASE("PIPERUN END with only a start point refuses - a run needs two vertices",
           "[issue486][piperun][command]") {
   AppCommandState st;
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));
   CHECK(st.active == AppCommandState::Kind::PipeRun);  // still open — nothing committed
@@ -90,6 +150,7 @@ TEST_CASE("PIPERUN U undoes the last vertex but not the start point", "[issue486
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
@@ -109,6 +170,7 @@ TEST_CASE("Esc-equivalent cancel clears the draft but remembers the nominal size
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in CS300", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   CancelPipeRunCommand(st);
@@ -123,6 +185,7 @@ TEST_CASE("A second PIPERUN reuses the remembered size with a blank Enter", "[is
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("6in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 1.f, 0.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));
@@ -130,6 +193,8 @@ TEST_CASE("A second PIPERUN reuses the remembered size with a blank Enter", "[is
   StartPipeRunCommand(st, log);
   CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitNominalSize);
   REQUIRE(HandlePipeRunTextInput("", st, log));  // keep the remembered size
+  CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitWallThickness);
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitFirstPoint);
   CHECK(st.pipeRunNominalSize == "6in");
 }
@@ -152,6 +217,7 @@ TEST_CASE("BEDIT hides the main drawing's pipe runs, and restores them on close"
   // A pipe run committed in the MAIN drawing before BEDIT ever opens.
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));
@@ -216,6 +282,7 @@ TEST_CASE("PIPERUN compass is on by default and only engages from a start point"
   StartPipeRunCommand(st, log);
   CHECK(st.pipeRunCompassOn);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   // Off-angle first point: nothing to measure the angle from yet, so it is placed as picked.
   SubmitPipeRunViewportPick(st, 3.f, 7.f, log);
   REQUIRE(st.pipeRunDraftVerts.size() == 3);
@@ -229,6 +296,7 @@ TEST_CASE("PIPERUN compass snaps an off-angle pick to the nearest preset ray fro
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);  // start point
   REQUIRE(st.polarIncrementDeg == 90.0);          // default REQ-108 increment
   // (1, 9) is close to but not exactly the +Y ray (90 degrees) from the start point.
@@ -244,6 +312,7 @@ TEST_CASE("PIPERUN COMPASS toggles off and the raw off-angle pick is then placed
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);  // start point
   REQUIRE(HandlePipeRunTextInput("compass", st, log));
   CHECK_FALSE(st.pipeRunCompassOn);
@@ -266,6 +335,7 @@ TEST_CASE("PIPERUN typed distance commits an exact-length segment along the comp
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);  // start point
   // Cursor hovering near the +Y ray (90 degrees) — as if the compass preview is showing that ray.
   st.uiCursorWorldX = 0.5f;
@@ -289,6 +359,7 @@ TEST_CASE("PIPERUN typed distance commits correctly under a Front UCS, where the
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);  // start point, world (0,0,0)
   // Cursor hovering near straight up the UCS +Y axis, which is world +Z here.
   st.uiCursorWorldX = 0.1f;
@@ -514,6 +585,7 @@ TEST_CASE("PIPERUN auto-inserts a matching elbow-90 fitting at a 90-degree bend"
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);   // 90-degree corner here
   SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
@@ -541,6 +613,7 @@ TEST_CASE("A pipe run with no matching library part falls back to the original s
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
@@ -559,6 +632,7 @@ TEST_CASE("The elbow's engagement length shortens the incoming pipe segment befo
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
@@ -586,6 +660,7 @@ TEST_CASE("An elbow lacking exactly two connection ports falls back to a smooth 
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
@@ -603,6 +678,7 @@ TEST_CASE("An engagement length too large for the leg falls back to a smooth ben
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
@@ -620,6 +696,7 @@ TEST_CASE("The whole multi-piece auto-fit commit undoes as one step",
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
@@ -654,6 +731,7 @@ TEST_CASE("A 45-degree bend matches an elbow-45 catalog part instead of elbow-90
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   REQUIRE(HandlePipeRunTextInput("compass", st, log));  // off — the default-on compass would snap
                                                         // the exact 45-degree pick below toward 90
@@ -720,6 +798,7 @@ TEST_CASE("PIPERUN auto-inserts a tee where a new run's endpoint meets two exist
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);   // start exactly at the existing runs' shared end
   SubmitPipeRunViewportPick(st, 0.f, 10.f, log);  // branch leg: +Y
   REQUIRE(HandlePipeRunTextInput("end", st, log));
@@ -752,6 +831,7 @@ TEST_CASE("The tee's engagement length shortens the pinned (inlet) leg at the br
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 0.f, 10.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));
@@ -773,6 +853,7 @@ TEST_CASE("A branch that lands on only one existing run's endpoint is not enough
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 0.f, 10.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));
@@ -794,6 +875,7 @@ TEST_CASE("Three runs meeting without a roughly-straight through pair get no tee
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 0.f, -10.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));
@@ -812,6 +894,7 @@ TEST_CASE("An engagement length too large for one of the three legs falls back t
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 0.f, 10.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));
@@ -829,6 +912,7 @@ TEST_CASE("The tee commit (new run + two cutback existing runs + block) undoes a
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 0.f, 10.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));
@@ -1189,6 +1273,38 @@ TEST_CASE("PIPEPROP updates nominal size and pressure class on the selected run"
   CHECK(log.back().find("1 run(s) updated") != std::string::npos);
 }
 
+TEST_CASE("PIPEPROP takes a wall thickness, and says so when a wall no longer fits",
+          "[issue486][pipeprop][wall]") {
+  // D-2026-09-23-a. A bare number after the size is the wall, so `PIPEPROP 4in CS150` keeps working
+  // and `PIPEPROP 4in 0.5` reaches the wall.
+  AppCommandState st = MakeStateWithOneStraightRun();
+  SelectPipeRun(st, 0);
+  std::vector<std::string> log;
+  HandlePipePropCommand("4in CS150 0.5", st, log);
+  CHECK(st.cadPipeRuns[0].pressureClassTag == "CS150");
+  CHECK(st.cadPipeRuns[0].wallThicknessIn == Catch::Approx(0.5));
+  CHECK(log.back().find("1 run(s) updated") != std::string::npos);
+
+  // That 0.5in wall does not fit 0.5in pipe (OD 0.840in): refused, and told in terms of the WALL
+  // rather than blamed on a fillet radius it has nothing to do with.
+  log.clear();
+  HandlePipePropCommand("0.5in", st, log);
+  CHECK(st.cadPipeRuns[0].nominalSize == "4in");  // unchanged
+  CHECK(log.back().find("no bore") != std::string::npos);
+
+  // Stating a thinner wall in the same breath is what makes it fit.
+  log.clear();
+  HandlePipePropCommand("0.5in 0.109", st, log);
+  CHECK(st.cadPipeRuns[0].nominalSize == "0.5in");
+  CHECK(st.cadPipeRuns[0].wallThicknessIn == Catch::Approx(0.109));
+
+  // A wall that is not a wall is refused before any run is touched.
+  log.clear();
+  HandlePipePropCommand("4in 3.0", st, log);
+  CHECK(st.cadPipeRuns[0].nominalSize == "0.5in");
+  CHECK(log.back().find("no bore") != std::string::npos);
+}
+
 TEST_CASE("PIPEPROP updates every selected run independently, batch-style",
           "[issue486][pipeprop]") {
   AppCommandState st;
@@ -1224,6 +1340,7 @@ TEST_CASE("Existing axis-aligned PIPERUN picks are unaffected by the default-on 
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
@@ -1248,6 +1365,7 @@ TEST_CASE("A pipe run belongs to its own drawing tab", "[issue486][piperun][comm
 
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));
@@ -1285,6 +1403,7 @@ TEST_CASE("Clearing a drawing's CAD geometry clears its pipe runs", "[issue486][
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // wall: take the schedule-40 default
   SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
   SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
   REQUIRE(HandlePipeRunTextInput("end", st, log));

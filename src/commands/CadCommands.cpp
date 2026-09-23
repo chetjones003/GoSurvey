@@ -6520,7 +6520,9 @@ const CmdEntry kRegistry[] = {
     {"section",     "", "Cross-section of solids by a plane through three points (or the UCS), as a closed polyline"},
     {"solidcheck", "scheck", "Check every solid (or the selection): closed, manifold, oriented, self-intersecting"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
-    {"piperun", "pipe", "Route a pipe run: PIPERUN, nominal size [class], then points (U undo, END/Enter finishes)"},
+    {"piperun", "pipe",
+     "Route a pipe run: PIPERUN, nominal size [class], wall thickness (Enter = schedule 40), then "
+     "points (U undo, END/Enter finishes)"},
     {"pipesys", "pipenet, pipingsystem",
      "Named piping networks: PIPESYS NEW/ADD/REMOVE/RENAME/DELETE/LIST <name> (ADD/REMOVE use the "
      "current pipe-run selection)"},
@@ -33950,13 +33952,27 @@ std::string CadPipeRunPromptText(const AppCommandState& st) {
                   st.pipeRunNominalSize.c_str(), classSuffix.c_str());
     return buf;
   }
-  if (st.pipeRunPhase == PRP::WaitFirstPoint) {
-    std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s] - start point, or ESC to cancel:",
-                  st.pipeRunNominalSize.c_str(), classSuffix.c_str());
+  if (st.pipeRunPhase == PRP::WaitWallThickness) {
+    // The offered default is the schedule-40 wall for the size just chosen (D-2026-09-23-a), so the
+    // prompt states the number Enter will take rather than making the user know it.
+    double sch40 = 0.0;
+    if (CadPipeStandardWallThicknessInches(st.pipeRunNominalSize, &sch40))
+      std::snprintf(buf, sizeof(buf),
+                    "PIPERUN [%s%s] - wall thickness in inches <%.3f, schedule 40>, Enter to accept:",
+                    st.pipeRunNominalSize.c_str(), classSuffix.c_str(), sch40);
+    else
+      std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s] - wall thickness in inches:",
+                    st.pipeRunNominalSize.c_str(), classSuffix.c_str());
     return buf;
   }
-  std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s] - next point (compass %s), or Undo/End/Compass, Enter to finish:",
-                st.pipeRunNominalSize.c_str(), classSuffix.c_str(), st.pipeRunCompassOn ? "on" : "off");
+  if (st.pipeRunPhase == PRP::WaitFirstPoint) {
+    std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s wall %.3fin] - start point, or ESC to cancel:",
+                  st.pipeRunNominalSize.c_str(), classSuffix.c_str(), st.pipeRunWallThicknessIn);
+    return buf;
+  }
+  std::snprintf(buf, sizeof(buf), "PIPERUN [%s%s wall %.3fin] - next point (compass %s), or Undo/End/Compass, Enter to finish:",
+                st.pipeRunNominalSize.c_str(), classSuffix.c_str(), st.pipeRunWallThicknessIn,
+                st.pipeRunCompassOn ? "on" : "off");
   return buf;
 }
 
@@ -34462,6 +34478,7 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
       run.vertsXyz.push_back(pt.z);
     }
     run.nominalSize = st.pipeRunNominalSize;
+    run.wallThicknessIn = st.pipeRunWallThicknessIn;  // D-2026-09-23-a
     run.pressureClassTag = st.pipeRunPressureClassTag;
     // The size itself was already validated when it was set (below), but the swept solid can still
     // refuse: a corner too tight for a 1.5x-nominal-size long-radius fillet (CadBuildPipeRunSolids's
@@ -34558,7 +34575,7 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
         log.push_back("PIPERUN - a nominal size is required, e.g. 4in.");
         return true;
       }
-      st.pipeRunPhase = PRP::WaitFirstPoint;
+      st.pipeRunPhase = PRP::WaitWallThickness;
       log.push_back(CadPipeRunPromptText(st));
       return true;
     }
@@ -34584,6 +34601,49 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
     }
     st.pipeRunNominalSize = sizeTok;
     st.pipeRunPressureClassTag = classTag;
+    st.pipeRunPhase = PRP::WaitWallThickness;
+    log.push_back(CadPipeRunPromptText(st));
+    return true;
+  }
+
+  // The wall the pipe is hollow to (D-2026-09-23-a). Prompted right after the size, because the
+  // answer is only meaningful against a size: blank Enter takes the schedule-40 wall for THIS size,
+  // and anything typed is validated against this size's own OD.
+  if (st.pipeRunPhase == PRP::WaitWallThickness) {
+    double odFeet = 0.0;
+    if (!CadPipeNominalOdFeet(st.pipeRunNominalSize, &odFeet)) {
+      // Unreachable through the size prompt, which refuses an unknown size; kept because the phase
+      // is reachable from state the command does not own (a restored draft, a future caller).
+      st.pipeRunPhase = PRP::WaitNominalSize;
+      log.push_back("PIPERUN - nominal size is not set; type one first, e.g. 4in.");
+      return true;
+    }
+    const double odIn = odFeet * 12.0;
+    double wallIn = 0.0;
+    if (line.empty()) {
+      if (!CadPipeStandardWallThicknessInches(st.pipeRunNominalSize, &wallIn)) {
+        log.push_back("PIPERUN - no standard wall is known for " + st.pipeRunNominalSize +
+                      "; type a wall thickness in inches.");
+        return true;
+      }
+    } else {
+      char* end = nullptr;
+      wallIn = std::strtod(line.c_str(), &end);
+      if (!end || *end != '\0' || !std::isfinite(wallIn) || !(wallIn > 0.0)) {
+        log.push_back("PIPERUN - wall thickness must be a positive number of inches, e.g. 0.237.");
+        return true;
+      }
+    }
+    if (!(wallIn < odIn * 0.5)) {
+      char msg[192];
+      std::snprintf(msg, sizeof(msg),
+                    "PIPERUN - a %.3fin wall leaves no bore in %s pipe (OD %.3fin); it must be under "
+                    "%.3fin.",
+                    wallIn, st.pipeRunNominalSize.c_str(), odIn, odIn * 0.5);
+      log.push_back(msg);
+      return true;
+    }
+    st.pipeRunWallThicknessIn = wallIn;
     st.pipeRunPhase = PRP::WaitFirstPoint;
     log.push_back(CadPipeRunPromptText(st));
     return true;
@@ -34676,6 +34736,11 @@ void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vec
   if (st.pipeRunPhase == PRP::WaitNominalSize) {
     log.push_back("PIPERUN - type a nominal size first (e.g. 4in), optionally followed by a "
                   "pressure class.");
+    return;
+  }
+  if (st.pipeRunPhase == PRP::WaitWallThickness) {
+    log.push_back("PIPERUN - answer the wall thickness first (Enter takes the standard schedule-40 "
+                  "wall for this size).");
     return;
   }
   // Compass (REQ-346): only meaningful once a start point exists to measure the angle from.
@@ -34986,6 +35051,7 @@ bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
   // can be as short as 2 vertices (segIx at the very start/end of the run).
   CadPipeRun piece1;
   piece1.nominalSize = run.nominalSize;
+  piece1.wallThicknessIn = run.wallThicknessIn;  // a piece of a pipe has the pipe's wall
   piece1.pressureClassTag = run.pressureClassTag;
   for (size_t i = 0; i <= segIx; ++i) {
     piece1.vertsXyz.push_back(run.vertsXyz[i * 3 + 0]);
@@ -34998,6 +35064,7 @@ bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
 
   CadPipeRun piece2;
   piece2.nominalSize = run.nominalSize;
+  piece2.wallThicknessIn = run.wallThicknessIn;
   piece2.pressureClassTag = run.pressureClassTag;
   piece2.vertsXyz.push_back(farPoint.x);
   piece2.vertsXyz.push_back(farPoint.y);
@@ -35122,6 +35189,7 @@ bool TrySplitPipeRun(AppCommandState& st, int runIdx, const ray3d::Vec3& pick, s
 
   CadPipeRun piece1;
   piece1.nominalSize = run.nominalSize;
+  piece1.wallThicknessIn = run.wallThicknessIn;  // a piece of a pipe has the pipe's wall
   piece1.pressureClassTag = run.pressureClassTag;
   for (size_t i = 0; i <= segIx; ++i) {
     piece1.vertsXyz.push_back(run.vertsXyz[i * 3 + 0]);
@@ -35134,6 +35202,7 @@ bool TrySplitPipeRun(AppCommandState& st, int runIdx, const ray3d::Vec3& pick, s
 
   CadPipeRun piece2;
   piece2.nominalSize = run.nominalSize;
+  piece2.wallThicknessIn = run.wallThicknessIn;
   piece2.pressureClassTag = run.pressureClassTag;
   piece2.vertsXyz.push_back(station.x);
   piece2.vertsXyz.push_back(station.y);
@@ -35273,6 +35342,7 @@ void HandlePipeJoinCommand(AppCommandState& st, std::vector<std::string>& log) {
   CadPipeRun mergedRun;
   mergedRun.vertsXyz = merged;
   mergedRun.nominalSize = ra.nominalSize;
+  mergedRun.wallThicknessIn = ra.wallThicknessIn;
   mergedRun.pressureClassTag = ra.pressureClassTag;
   std::vector<CadSolidPtr> preview;
   if (!CadBuildPipeRunSolids(mergedRun, &preview)) {
@@ -35302,12 +35372,36 @@ void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::ve
   }
   std::istringstream iss(args);
   std::string sizeTok, classTok;
-  iss >> sizeTok >> classTok;
+  iss >> sizeTok;
+  // After the size, a bare number is a WALL THICKNESS in inches (D-2026-09-23-a) and anything else
+  // is a pressure class — the two cannot be confused, and this keeps `PIPEPROP 4in CS150` working
+  // exactly as it did while `PIPEPROP 4in 0.5` and `PIPEPROP 4in CS150 0.5` both reach the wall.
+  bool wallGiven = false;
+  double wallIn = 0.0;
+  for (std::string tok; iss >> tok;) {
+    char* end = nullptr;
+    const double asNumber = std::strtod(tok.c_str(), &end);
+    if (end && *end == '\0' && !tok.empty()) {
+      wallGiven = true;
+      wallIn = asNumber;
+    } else {
+      classTok = tok;
+    }
+  }
   double odFeet = 0.0;
   if (!CadPipeNominalOdFeet(sizeTok, &odFeet)) {
     log.push_back("PIPEPROP - unknown nominal size \"" + sizeTok +
                   "\". Known NPS sizes: 0.5in, 0.75in, 1in, 1.25in, 1.5in, 2in, 2.5in, 3in, 4in, "
                   "6in, 8in, 10in, 12in.");
+    return;
+  }
+  if (wallGiven && (!std::isfinite(wallIn) || !(wallIn > 0.0) || !(wallIn < odFeet * 6.0))) {
+    char msg[192];
+    std::snprintf(msg, sizeof(msg),
+                  "PIPEPROP - a %.3fin wall leaves no bore in %s pipe (OD %.3fin); it must be over 0 "
+                  "and under %.3fin.",
+                  wallIn, sizeTok.c_str(), odFeet * 12.0, odFeet * 6.0);
+    log.push_back(msg);
     return;
   }
   std::string classTag;
@@ -35324,12 +35418,23 @@ void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::ve
   // existing entities, not pieces of one atomic commit the way a single PIPERUN/PIPEFIT/PIPESPLIT
   // is, so one run whose new size no longer fits an existing tight corner should not block the
   // others in the same selection from resizing.
-  int changed = 0, refused = 0;
+  int changed = 0, refused = 0, refusedWall = 0;
   PushUndoSnapshot(st, "Change Pipe Properties");
   for (int idx : picked) {
     CadPipeRun candidate = st.cadPipeRuns[static_cast<size_t>(idx)];
     candidate.nominalSize = sizeTok;
     candidate.pressureClassTag = classTag;
+    if (wallGiven)
+      candidate.wallThicknessIn = wallIn;
+    // A run keeping its OWN wall through a size change can end up with a wall too thick for the new,
+    // smaller pipe. That is a different refusal from a corner that no longer fits, and saying so is
+    // the difference between an answer the user can act on (state a thinner wall) and a misleading
+    // one about fillet radii.
+    double wallFeet = 0.0;
+    if (!CadPipeRunWallThicknessFeet(candidate, &wallFeet)) {
+      ++refusedWall;
+      continue;
+    }
     std::vector<CadSolidPtr> preview;
     if (!CadBuildPipeRunSolids(candidate, &preview)) {
       ++refused;
@@ -35339,14 +35444,24 @@ void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::ve
     ++changed;
   }
   BumpCadGpuCache(st);
-  if (changed == 0) {
+  const std::string wallNote =
+      refusedWall > 0 ? (", " + std::to_string(refusedWall) +
+                         " refused (their wall leaves no bore at this size — give a thinner wall)")
+                      : std::string();
+  if (changed == 0 && refused == 0 && refusedWall > 0) {
+    log.push_back("PIPEPROP - no run could be resized to " + sizeTok +
+                  ": their wall leaves no bore at this size. Give a thinner wall, e.g. PIPEPROP " +
+                  sizeTok + " 0.1.");
+  } else if (changed == 0) {
     log.push_back("PIPEPROP - no run could be resized to " + sizeTok + (classTag.empty() ? "" : " " + classTag) +
                   " — the new size does not fit an existing corner's fillet radius.");
-  } else if (refused == 0) {
+  } else if (refused == 0 && refusedWall == 0) {
     log.push_back("PIPEPROP - " + std::to_string(changed) + " run(s) updated.");
+  } else if (refused == 0) {
+    log.push_back("PIPEPROP - " + std::to_string(changed) + " run(s) updated" + wallNote + ".");
   } else {
     log.push_back("PIPEPROP - " + std::to_string(changed) + " run(s) updated, " + std::to_string(refused) +
-                  " refused (new size does not fit an existing corner's fillet radius).");
+                  " refused (new size does not fit an existing corner's fillet radius)" + wallNote + ".");
   }
 }
 

@@ -852,6 +852,32 @@ struct SweepOptions {
 [[nodiscard]] bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& options,
                          Solid* out, Problem* outWhy);
 
+/// Sweep a **hollow** cross-section — \p outerProfile with \p innerProfile removed from it — along
+/// \p path (REQ-315 as amended 2026-09-23, GitHub issue #486): a tube, not a rod. The wall is the
+/// material between the two profiles, and each open end closes with an **annular** cap, so a cut
+/// pipe shows its wall thickness the way a real one does.
+///
+/// Built as \ref Sweep run twice over the same path and frames, merged into one shell: the outer
+/// sweep's side faces unchanged, the inner sweep's side faces reversed and marked
+/// \ref Surface::inward (so they bound the void — the same treatment a bored hole's wall gets from a
+/// Boolean SUBTRACT), and the two planar caps rebuilt with the inner rim as a hole loop. Everything
+/// \ref Sweep decides — path validity, the rotation-minimizing frame, corner handling, twist, the
+/// arc-axis clearance test — is decided by \ref Sweep itself, once per profile, so a tube is refused
+/// in exactly the cases a rod of either radius would be and **for the same reason, by name**.
+///
+/// The two profiles must have the same vertex/edge counts and must be built on the same plane, so
+/// their rings correspond and the caps close (\ref Problem::ProfileMalformed otherwise); the inner
+/// one must lie strictly inside the outer, which is the caller's business — a zero or negative wall
+/// is a bad parameter, and an inner profile that crosses the outer builds a shell whose volume is
+/// not positive and is refused by \ref Validate rather than silently stored (REQ-201).
+///
+/// A **closed** path is refused (\ref Problem::SweepUnsupportedOption): with no ends there are no
+/// caps to turn into annuli, so the result would be two disjoint shells rather than one tube, and no
+/// caller needs that yet.
+[[nodiscard]] bool SweepTube(const Profile& outerProfile, const Profile& innerProfile,
+                             const SweepPath& path, const SweepOptions& options, Solid* out,
+                             Problem* outWhy);
+
 /// Which side (or sides) of the cut \ref Slice keeps. "Above" is the `+planeNormal` side.
 enum class SliceKeep : std::uint8_t { Above, Below, Both };
 

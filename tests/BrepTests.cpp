@@ -4546,6 +4546,120 @@ TEST_CASE("Sweep mitres every corner of a closed rectangular path", "[brep][req3
   REQUIRE(brep::ComputeMassProperties(s).volume == Approx(1.0 * (6.0 + 4.0 + 6.0 + 4.0)).epsilon(1e-9));
 }
 
+// ---------------------------------------------------------------------------
+// SweepTube (REQ-315 as amended 2026-09-23, GitHub issue #486) — the hollow sweep a real pipe
+// needs: the wall between two profiles, with an annular cap at each end.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("SweepTube along a straight path is a pipe of the annular volume", "[brep][req315][tube]") {
+  Problem why = Problem::Ok;
+  const double ro = 2.0, ri = 1.5, h = 10.0;
+  Solid s;
+  const bool ok = brep::SweepTube(CircleProfile(World(), ro), CircleProfile(World(), ri),
+                                  LinePath(Vec3{0, 0, 0}, Vec3{0, 0, h}), brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  // A capped tube really is a solid torus (genus 1), but `EulerCharacteristic` is the plain
+  // V - E + F over whole faces, and an annular cap is ONE face that is not a disk — so the count
+  // cannot see the genus and reports 2, exactly as a bored solid from BuildCoaxialStack does.
+  // Hollowness is asserted below where it is actually visible: the volume, and the hole loops.
+  REQUIRE(brep::EulerCharacteristic(s) == 2);
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(kPi * (ro * ro - ri * ri) * h).epsilon(1e-6));
+  // Outer wall + inner wall + two annular ends, and the ends are annuli (two loops each).
+  int planar = 0;
+  int holed = 0;
+  for (const brep::Face& f : s.faces) {
+    if (f.surface.kind != brep::SurfaceKind::Plane)
+      continue;
+    ++planar;
+    if (f.loops.size() == 2)
+      ++holed;
+  }
+  REQUIRE(planar == 2);
+  REQUIRE(holed == 2);
+  // The bore's wall carries the material on its -radial side, the same way a Boolean SUBTRACT's
+  // bore does — without this the volume above would come out as the sum, not the difference.
+  int inward = 0;
+  for (const brep::Face& f : s.faces)
+    if (f.surface.inward)
+      ++inward;
+  REQUIRE(inward == 2);  // two half-turn NURBS bands on the inner wall
+
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.002, &t, &why));
+  REQUIRE(TessellatedVolume(t) == Approx(mp.volume).epsilon(0.01));
+}
+
+TEST_CASE("SweepTube follows a bent path and sums the segment volumes", "[brep][req315][tube]") {
+  // The pipe-run shape: a straight leg, a quarter-turn elbow, another straight leg. Volume is the
+  // annulus area times the true centreline length (Pappus for the elbow).
+  Problem why = Problem::Ok;
+  const double ro = 1.0, ri = 0.8, bend = 4.0;
+  const double leg0 = 6.0, leg1 = 5.0;
+  brep::SweepPath path;
+  const Vec3 p0{0, 0, 0}, p1{leg0, 0, 0};
+  const Vec3 centre{leg0, bend, 0};
+  const Vec3 p2{leg0 + bend, bend, 0};
+  brep::SweepSegment arcSeg;
+  arcSeg.arc = true;
+  arcSeg.centre = centre;
+  arcSeg.normal = Vec3{0, 0, 1};
+  arcSeg.sweep = kPi / 2.0;  // +X turns to +Y: a left turn, CCW about +Z
+  path.points = {p0, p1, p2, Vec3{leg0 + bend, bend + leg1, 0}};
+  path.segments = {brep::SweepSegment{}, arcSeg, brep::SweepSegment{}};
+  ucs::Ucs startPlane;
+  REQUIRE(ucs::FromNormal(p0, Vec3{1, 0, 0}, &startPlane));
+  // Sanity on the path itself before asking about the tube.
+  Solid rod;
+  REQUIRE(brep::Sweep(CircleProfile(startPlane, ro), path, brep::SweepOptions{}, &rod, &why));
+
+  Solid s;
+  const bool ok = brep::SweepTube(CircleProfile(startPlane, ro), CircleProfile(startPlane, ri), path,
+                                  brep::SweepOptions{}, &s, &why);
+  INFO("why=" << brep::ProblemText(why));
+  REQUIRE(ok);
+  REQUIRE(brep::Validate(s) == Problem::Ok);
+  REQUIRE(brep::EulerCharacteristic(s) == 2);  // whole-face count; see the straight case's note
+  const double centreline = leg0 + bend * (kPi / 2.0) + leg1;
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  REQUIRE(mp.volume == Approx(kPi * (ro * ro - ri * ri) * centreline).epsilon(1e-4));
+  REQUIRE(mp.volume == Approx(brep::ComputeMassProperties(rod).volume * (1.0 - (ri * ri) / (ro * ro)))
+                           .epsilon(1e-4));
+}
+
+TEST_CASE("SweepTube refuses a wall that is not a wall, and stores nothing", "[brep][req315][tube]") {
+  Problem why = Problem::Ok;
+  const brep::SweepPath line = LinePath(Vec3{0, 0, 0}, Vec3{0, 0, 5});
+
+  Solid s;
+  // Inner outside outer: the shell encloses a negative volume, which Validate refuses rather than
+  // storing a pipe that is inside out.
+  REQUIRE_FALSE(brep::SweepTube(CircleProfile(World(), 1.0), CircleProfile(World(), 2.0), line,
+                                brep::SweepOptions{}, &s, &why));
+  REQUIRE(s.faces.empty());
+
+  // Mismatched cross-sections cannot correspond ring for ring.
+  why = Problem::Ok;
+  REQUIRE_FALSE(brep::SweepTube(PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}),
+                                CircleProfile(World(), 0.5), line, brep::SweepOptions{}, &s, &why));
+  REQUIRE(why == Problem::ProfileMalformed);
+  REQUIRE(s.faces.empty());
+
+  // A closed path has no ends to cap into annuli.
+  why = Problem::Ok;
+  brep::SweepPath closed;
+  closed.points = {Vec3{0, 0, 0}, Vec3{6, 0, 0}, Vec3{6, 4, 0}, Vec3{0, 4, 0}, Vec3{0, 0, 0}};
+  closed.segments = {brep::SweepSegment{}, brep::SweepSegment{}, brep::SweepSegment{},
+                     brep::SweepSegment{}};
+  REQUIRE_FALSE(brep::SweepTube(CircleProfile(World(), 1.0), CircleProfile(World(), 0.5), closed,
+                                brep::SweepOptions{}, &s, &why));
+  REQUIRE(s.faces.empty());
+}
+
 TEST_CASE("Sweep still refuses a sharp corner touching an arc segment, by name", "[brep][req315]") {
   Problem why = Problem::Ok;
   const brep::Profile sq = PolyProfile(World(), {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});

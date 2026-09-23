@@ -2633,9 +2633,10 @@ struct AppCommandState {
   // --- PIPERUN: interactive CadPipeRun routing (issue #486 increment B2 / REQ-345) --------------
 
   enum class PipeRunPhase {
-    WaitNominalSize,  ///< first prompt of a run: nominal size, optional pressure class
-    WaitFirstPoint,   ///< size known; the next click/point is the run's start
-    WaitNextPoint,    ///< a run is under way; each further point commits a straight segment
+    WaitNominalSize,     ///< first prompt of a run: nominal size, optional pressure class
+    WaitWallThickness,   ///< size known; the wall the pipe is hollow to (D-2026-09-23-a)
+    WaitFirstPoint,      ///< size and wall known; the next click/point is the run's start
+    WaitNextPoint,       ///< a run is under way; each further point commits a straight segment
   } pipeRunPhase = PipeRunPhase::WaitNominalSize;
 
   /// The path so far, storage-coordinate xyz triples (REQ-057) — exactly the form `CadPipeRun`
@@ -2645,6 +2646,11 @@ struct AppCommandState {
   /// etc. above): a pipe run is almost always drawn at the same size as the last one.
   std::string pipeRunNominalSize;
   std::string pipeRunPressureClassTag;
+  /// Wall thickness in INCHES for the run being drafted (D-2026-09-23-a). Unlike the size and class
+  /// beside it this is NOT remembered across runs: blank Enter at its prompt takes the schedule-40
+  /// wall for whatever size was just chosen, so the offered default follows the size rather than
+  /// quietly carrying a one-off thickness onto a different pipe. 0 while no run is in progress.
+  double pipeRunWallThicknessIn = 0.0;
   /// Ortho/polar compass (REQ-346): while \c true, the next-vertex preview and pick snap to
   /// REQ-108's angle set (\ref polarIncrementDeg / \ref polarExtraAnglesDeg) measured from the run's
   /// last committed vertex. Its own toggle, independent of \ref polarMode, so PIPERUN keeps snapping
