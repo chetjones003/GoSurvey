@@ -5,7 +5,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 
@@ -484,6 +486,60 @@ TEST_CASE("ACIS SAT import: a real Civil 3D flange (.sat, ACISOUT) imports as a 
   REQUIRE(brep::Tessellate(r.solid, 0.001, &tess, &tessWhy));
   CHECK(tess.indices.size() % 3 == 0);
   CHECK(tess.indices.size() > 60);   // 16 faces, several with holes
+  {
+    // TASK-272: this is the exact real-world file class (ACISOUT flange, bolt-circle + bore) the
+    // originally-reported torn-hole crack came from — assert watertightness directly on it rather
+    // than trusting only the synthetic repros.
+    auto pos = [&](std::uint32_t i) {
+      return brep::Vec3{tess.vertsXyz[3 * i], tess.vertsXyz[3 * i + 1], tess.vertsXyz[3 * i + 2]};
+    };
+    auto quant = [](double v) { return static_cast<long long>(std::llround(v * 1.0e6)); };
+    using Key = std::array<long long, 3>;
+    auto key = [&](const brep::Vec3& p) { return Key{quant(p.x), quant(p.y), quant(p.z)}; };
+    std::map<std::pair<Key, Key>, std::pair<int, int>> edgeUses;
+    for (std::size_t i = 0; i + 2 < tess.indices.size(); i += 3) {
+      const int face = i / 3 < tess.triFace.size() ? tess.triFace[i / 3] : -1;
+      const std::uint32_t tri[3] = {tess.indices[i], tess.indices[i + 1], tess.indices[i + 2]};
+      for (int e = 0; e < 3; ++e) {
+        const Key a = key(pos(tri[e]));
+        const Key b = key(pos(tri[(e + 1) % 3]));
+        if (a == b) continue;
+        auto& v = edgeUses[a < b ? std::make_pair(a, b) : std::make_pair(b, a)];
+        v.first++;
+        v.second = face;
+      }
+    }
+    int cracked = 0;
+    std::map<int, int> crackedByFace;
+    for (const auto& [k, v] : edgeUses)
+      if (v.first != 2) { ++cracked; crackedByFace[v.second]++; }
+    std::ostringstream byFace;
+    for (const auto& [face, cnt] : crackedByFace) byFace << " face" << face << "=" << cnt;
+    INFO("cracked (non-manifold) triangle edges: " << cracked << " of " << edgeUses.size()
+         << " by face:" << byFace.str());
+    CHECK(cracked == 0);
+
+    // A loose ceiling on triangulation QUALITY, not just on gaps: ear-clipping a bridged hole can
+    // hand the renderer arbitrarily thin triangles, and while that turned out NOT to be the cause
+    // of TASK-272's torn rims (that was depth-buffer precision — see Camera::OrthoDepthPad), a
+    // tessellator that starts emitting million-to-one slivers on a real import has regressed at
+    // something. 10000 is a guard rail with room to spare, not a target.
+    double worstAspect = 0.0;
+    for (std::size_t i = 0; i + 2 < tess.indices.size(); i += 3) {
+      const brep::Vec3 a = pos(tess.indices[i]);
+      const brep::Vec3 b = pos(tess.indices[i + 1]);
+      const brep::Vec3 c = pos(tess.indices[i + 2]);
+      const double ab = std::hypot(std::hypot(a.x - b.x, a.y - b.y), a.z - b.z);
+      const double bc = std::hypot(std::hypot(b.x - c.x, b.y - c.y), b.z - c.z);
+      const double ca = std::hypot(std::hypot(c.x - a.x, c.y - a.y), c.z - a.z);
+      const double longest = std::max({ab, bc, ca});
+      const double shortest = std::min({ab, bc, ca});
+      if (shortest > 1e-12)
+        worstAspect = std::max(worstAspect, longest / shortest);
+    }
+    INFO("worst triangle aspect ratio: " << worstAspect);
+    CHECK(worstAspect < 10000.0);
+  }
 
   // The body transform places the part near (4998.96, 4998.90) — its bounds must be there, not at
   // the origin where the raw ACIS geometry lives.

@@ -999,6 +999,86 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     SubmitCad(ctx, "BCLOSE");
     ctx->Yield(2);
   };
+
+  // Open a DWG and capture the 3D viewport, shaded, from several orientations — the loop that
+  // TASK-272 needed and did not have: three separate attempts at that bug each ended up asking a
+  // human to eyeball the live app after every rebuild, and the one that finally found the cause
+  // (a depth-buffer precision fight, not the tessellation) did it by looking at these captures.
+  //
+  //   set GOSURVEY_T272_DWG=C:\path\to\part.dwg
+  //   build\devshell\GoSurvey.exe --devshell-run dwg-shaded-shots
+  //
+  // BMPs land next to the executable. Aimed at the part named by GOSURVEY_T272_CENTER (world
+  // "x,y,z"), or at the drawing extents when that is unset.
+  ImGuiTest* t272 = IM_REGISTER_TEST(engine, "gosurvey", "dwg-shaded-shots");
+  t272->TestFunc = [](ImGuiTestContext* ctx) {
+    const char* dwg = std::getenv("GOSURVEY_T272_DWG");
+    if (!dwg || !*dwg) {
+      DevShell_Logf("dwg-shots", "set GOSURVEY_T272_DWG to the .dwg to capture; nothing to do");
+      return;
+    }
+    IM_CHECK(CancelToIdle(ctx));
+    s_cmd->showToolspaceWindow = false;
+    ctx->WindowCollapse("//Developer Shell", true);
+    DevShell_SetWindowSize(1800, 1300);
+    ctx->Yield(6);
+
+    std::vector<std::string>* log = DevShell_CommandLog();
+    IM_CHECK(log != nullptr);
+    OpenDrawingInNewTab(*s_cmd, *log, dwg);
+    ctx->Yield(30);
+    IM_CHECK(s_cmd->activeDrawingIdx != 0);
+
+    SubmitCad(ctx, "ZOOMEXTENTS");
+    ctx->Yield(10);
+
+    // Aim at one part rather than the whole drawing when asked: a z-fighting artifact only shows on
+    // a part filling a good share of the frame, and ZOOM EXTENTS on a pipe RUN leaves its flange a
+    // hundred pixels wide.
+    float cx = s_cmd->viewportPanX, cy = s_cmd->viewportPanY, cz = s_cmd->viewportPanZ;
+    float halfH = 50.f / std::max(s_cmd->viewportZoom, 1.e-9f);
+    if (const char* c = std::getenv("GOSURVEY_T272_CENTER")) {
+      float px = 0.f, py = 0.f, pz = 0.f, ph = 0.f;
+      const int n = std::sscanf(c, "%f,%f,%f,%f", &px, &py, &pz, &ph);
+      if (n >= 3) {
+        cx = px; cy = py; cz = pz;
+        if (n >= 4 && ph > 0.f)
+          halfH = ph;
+      }
+    }
+    DevShell_Logf("dwg-shots", "framing (%.4f,%.4f,%.4f) halfH=%.4f  solids=%d blockrefs=%d", (double)cx,
+                  (double)cy, (double)cz, (double)halfH, (int)s_cmd->cadSolids.size(),
+                  (int)s_cmd->cadBlockRefs.size());
+
+    struct Shot { const char* name; const char* style; float az; float el; float halfHMul; };
+    const Shot shots[] = {
+        {"1-az0", "SHADED", 0.f, 0.f, 1.f},
+        {"2-az90", "SHADED", 90.f, 0.f, 1.f},
+        {"3-az180", "SHADED", 180.f, 0.f, 1.f},
+        {"4-az270", "SHADED", 270.f, 0.f, 1.f},
+        {"5-az270-tilt", "SHADED", 270.f, 20.f, 1.f},
+        {"6-az90-tilt", "SHADED", 90.f, 20.f, 1.f},
+        {"7-az270-close", "SHADED", 270.f, 10.f, 0.4f},
+        {"8-az90-close", "SHADED", 90.f, 10.f, 0.4f},
+    };
+    for (const Shot& s : shots) {
+      char cmd[64];
+      std::snprintf(cmd, sizeof(cmd), "VISUALSTYLE %s", s.style);
+      SubmitCad(ctx, cmd);
+      s_cmd->viewportAzimuthDeg = s.az;
+      s_cmd->viewportElevationDeg = s.el;
+      s_cmd->viewportPanX = cx;
+      s_cmd->viewportPanY = cy;
+      s_cmd->viewportPanZ = cz;
+      s_cmd->viewportZoom = 50.f / (halfH * s.halfHMul);
+      ctx->Yield(10);
+      char path[96];
+      std::snprintf(path, sizeof(path), "dwgshot-%s.bmp", s.name);
+      DevShell_RequestViewportCapture(path, 1600);
+      ctx->Yield(4);
+    }
+    ctx->WindowCollapse("//Developer Shell", false);
+  };
 }
 
 #endif

@@ -96,6 +96,33 @@ TEST_CASE("Camera ortho projection matches the pre-3D renderer matrix", "[camera
     REQUIRE(mine[i] == Approx(legacy[i]).margin(1e-6));
 }
 
+// TASK-272 — the ortho depth range has to SCALE with the view.
+//
+// An orthographic projection's depth is linear, so a range of R world units spread over a 24-bit
+// depth buffer resolves R / 2^24 no matter what is on screen. The renderer used to clip at a fixed
+// +/-100000, which resolves 0.0119 units — an eighth of an inch in a foot-unit drawing, coarser
+// than the whole feature set of a 2" pipe flange. Its front face, bore wall and far cap therefore
+// landed on the same depth value and z-fought, which is what the reported "torn / jagged rims" on
+// shaded solids actually were. Tying the range to the view's own half-height is the fix; this test
+// is here so a future "widen the depth range, it costs nothing" change has to argue with it.
+TEST_CASE("Ortho depth range resolves finer than a pixel at every zoom", "[camera]") {
+  constexpr double kDepthBufferSteps = 16777216.0;  // GL_DEPTH24_STENCIL8, what the renderer asks for
+  constexpr double kViewportPixelsTall = 1000.0;
+
+  for (const float halfH : {0.01f, 0.3f, 50.f, 600000.f}) {
+    Camera cam = Camera::Plan(0.0, 0.0, halfH);
+    const double pad = static_cast<double>(cam.OrthoDepthPad());
+    REQUIRE(pad > 0.0);
+
+    const double depthStep = 2.0 * pad / kDepthBufferSteps;   // world units per depth-buffer step
+    const double pixel = 2.0 * halfH / kViewportPixelsTall;   // world units per screen pixel
+    REQUIRE(depthStep < pixel / 10.0);
+
+    // ...and still deep enough that ordinary geometry near the view is nowhere near the clamp.
+    REQUIRE(pad > 100.0 * static_cast<double>(halfH));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // FINDING-3 — anchor translation happens in WORLD space, before the rotation.
 // ---------------------------------------------------------------------------

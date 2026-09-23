@@ -65,8 +65,30 @@ struct Camera {
 
   /// Depth range. Generous because survey drawings span large coordinates and the view volume is
   /// centred on the target rather than fitted to the geometry.
+  ///
+  /// **Not what the model viewport clips with** — see \ref OrthoDepthPad, which supersedes these for
+  /// the orthographic model view (TASK-272). Still the range \ref OrthoProjection builds from, and
+  /// `farZ` is still the eye pull-back distance for a perspective ray.
   float nearZ = -100000.f;
   float farZ = 100000.f;
+
+  /// How many ortho HALF-HEIGHTS of depth the model view's near/far planes sit from the target.
+  ///
+  /// Tied to the view's own scale rather than fixed, because an orthographic projection's depth is
+  /// LINEAR: a range of R units across a 24-bit depth buffer resolves R / 2^24, so a FIXED range is
+  /// a fixed world-unit depth resolution no matter how far in the user zooms. The old fixed
+  /// +/-100000 resolved 0.0119 units — an eighth of an inch in a foot-unit drawing — which is
+  /// coarser than the entire thickness of a 2" pipe flange's features, so its faces z-fought and
+  /// rendered as torn rims (TASK-272).
+  ///
+  /// 1000 puts the depth step at about a seventeenth of a pixel on a 1000-pixel-tall viewport, at
+  /// every zoom level, while still spanning 1000 screen heights of depth. Geometry outside that
+  /// range is NOT clipped — the renderer enables `GL_DEPTH_CLAMP`, so it still draws, with its depth
+  /// clamped to the near or far end (still in front of / behind everything inside the range).
+  static constexpr float kOrthoDepthPadHalfHeights = 1000.f;
+
+  /// Half-depth of the orthographic view volume, in world units. \see kOrthoDepthPadHalfHeights
+  [[nodiscard]] float OrthoDepthPad() const { return orthoHalfH * kOrthoDepthPadHalfHeights; }
 
   [[nodiscard]] bool isPlanView() const {
     return std::fabs(elevationDeg - 90.f) < 1e-4f && std::fabs(azimuthDeg) < 1e-4f;
