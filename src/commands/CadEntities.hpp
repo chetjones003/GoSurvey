@@ -487,6 +487,15 @@ struct CadPipeRun {
   /// NPS label used for BOTH display and catalog lookup (D-2026-09-12 decision 4), e.g. "4in".
   /// Not parametric — `CadPipeNominalOdFeet` (cadpiperun.hpp) is the one place it becomes a size.
   std::string nominalSize;
+  /// Wall thickness in INCHES (D-2026-09-23-a, user-requested) — a pipe is a tube, not a rod, and
+  /// this is what makes it one: the bore is the OD less twice this. Inches, like `nominalSize`, not
+  /// drawing feet, because that is the unit a pipe wall is specified in everywhere else.
+  ///
+  /// **0 means "not stated", not "solid"**: the run is then built at the schedule-40 wall for its
+  /// size (`CadPipeStandardWallThicknessInches`, cadpiperun.hpp). That is what makes a drawing
+  /// saved before pipes were hollow — every run in it carrying 0 — open as real pipe rather than as
+  /// rod, with no migration step and no `.gs` version bump.
+  double wallThicknessIn = 0.0;
   /// "CS150" / "CS300" (D-2026-09-12 decision 1) or empty for an unclassified run. Kept a string,
   /// not `CadPipePressureClass`, so this header stays free of cadblock.hpp's heavier includes;
   /// `ParseCadPipePressureClass` / `CadPipePressureClassTag` convert at the few sites that need it.

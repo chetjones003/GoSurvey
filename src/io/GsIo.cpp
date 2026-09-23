@@ -1432,6 +1432,11 @@ json BuildRoot(const AppCommandState& st) {
         o["name"] = r.name;
       if (!r.nominalSize.empty())
         o["nominalSize"] = r.nominalSize;
+      // Wall thickness (D-2026-09-23-a). Omitted when unstated, so a run left at the schedule-40
+      // default re-saves byte-identically to how it loaded and a reader without this key is
+      // unaffected (ADR-020 (d), additive).
+      if (r.wallThicknessIn > 0.0)
+        o["wallThicknessIn"] = r.wallThicknessIn;
       if (!r.pressureClassTag.empty())
         o["pressureClassTag"] = r.pressureClassTag;
       pipeRuns.push_back(std::move(o));
@@ -2755,6 +2760,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         r.name = el["name"].get<std::string>();
       if (el.contains("nominalSize") && el["nominalSize"].is_string())
         r.nominalSize = el["nominalSize"].get<std::string>();
+      // Absent (every drawing written before pipes were hollow) leaves 0, which builds at the
+      // schedule-40 wall for the run's size rather than as a rod — D-2026-09-23-a, the user's call.
+      if (el.contains("wallThicknessIn") && el["wallThicknessIn"].is_number())
+        r.wallThicknessIn = el["wallThicknessIn"].get<double>();
       if (el.contains("pressureClassTag") && el["pressureClassTag"].is_string())
         r.pressureClassTag = el["pressureClassTag"].get<std::string>();
       st.cadPipeRuns.push_back(std::move(r));

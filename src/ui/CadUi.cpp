@@ -882,6 +882,22 @@ static void DrawSurveyPointRolloverReadout(const AppCommandState& cmd, int ix) {
   ImGui::EndTooltip();
 }
 
+/// A pipe run's effective wall thickness, for a readout: its own when it states one, otherwise the
+/// schedule-40 wall its geometry is actually built at, marked as such so the two are never confused
+/// (D-2026-09-23-a). Reads `CadPipeRunWallThicknessFeet` — the same resolution the swept solid
+/// itself uses — so a panel cannot report a wall the pipe was not built with. \p none is what to
+/// show for a run whose wall cannot be resolved at all (an unknown size), spelled by the caller
+/// because the hover and the Properties table use different dashes.
+static std::string PipeRunWallText(const CadPipeRun& run, const char* none) {
+  double wallFeet = 0.0;
+  if (!CadPipeRunWallThicknessFeet(run, &wallFeet))
+    return std::string(none);
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%.3fin%s", wallFeet * 12.0,
+                run.wallThicknessIn > 0.0 ? "" : " (sch 40)");
+  return buf;
+}
+
 /// Same shape as \ref DrawSurveyPointRolloverReadout, one row set lower in precedence (issue #486,
 /// user-specified 2026-09-17: "the same as the survey point hover and surface hover"). Nothing
 /// latched here either — `cmd.viewportHoverEntity` already re-picks every frame for the ordinary
@@ -907,6 +923,7 @@ static void DrawPipeRunRolloverReadout(const AppCommandState& cmd, int ix) {
   field("Name", run.name.empty() ? std::string("(unnamed)") : run.name);
   field("Nominal Size", run.nominalSize.empty() ? std::string("-") : run.nominalSize);
   field("Pressure Class", run.pressureClassTag.empty() ? std::string("-") : run.pressureClassTag);
+  field("Wall", PipeRunWallText(run, "-"));
   double length = 0.0;
   field("Length", CadPipeRunLength(run, &length) ? FormatLinear(length, cmd.displayLinearPrecision)
                                                  : std::string("-"));
@@ -9099,6 +9116,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
         };
         row("Nominal Size", r.nominalSize.empty() ? std::string("\xe2\x80\x94") : r.nominalSize);
         row("Pressure Class", r.pressureClassTag.empty() ? std::string("\xe2\x80\x94") : r.pressureClassTag);
+        row("Wall", PipeRunWallText(r, "\xe2\x80\x94"));
         double length = 0.0;
         row("Length", CadPipeRunLength(r, &length) ? FormatLinear(length, cmd.displayLinearPrecision)
                                                     : std::string("\xe2\x80\x94"));

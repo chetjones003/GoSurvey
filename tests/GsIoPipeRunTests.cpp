@@ -56,6 +56,48 @@ TEST_CASE("A named CadPipeRun survives SaveGoSurveyTemplateFile then LoadGoSurve
   std::filesystem::remove(path);
 }
 
+TEST_CASE("A pipe run's wall thickness survives save/load, and an older drawing has none",
+          "[gs][piperun][issue486][wall]") {
+  // D-2026-09-23-a: `wallThicknessIn` is an additive key, written only when the run states one, so a
+  // run left at the schedule-40 default writes no key at all — and a drawing saved before pipes were
+  // hollow (which has no key either) loads to the same 0, meaning "build it at the standard wall".
+  AppCommandState st;
+  CadPipeRun stated;
+  stated.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  stated.nominalSize = "4in";
+  stated.wallThicknessIn = 0.5;
+  CadPipeRun defaulted;
+  defaulted.vertsXyz = {20.0, 0.0, 0.0, 30.0, 0.0, 0.0};
+  defaulted.nominalSize = "4in";
+  st.cadPipeRuns = {stated, defaulted};
+  st.cadPipeRunAttrs = {EntityAttributes{}, EntityAttributes{}};
+
+  const std::filesystem::path path = UniqueGsPath("piperun-wall");
+  std::vector<std::string> log;
+  REQUIRE(SaveGoSurveyTemplateFile(st, path.u8string().c_str(), log));
+
+  // The key is written for the stated run only.
+  {
+    std::ifstream in(path);
+    REQUIRE(in.good());
+    nlohmann::json root;
+    in >> root;
+    const nlohmann::json& runs = root["document"]["pipeRuns"];
+    REQUIRE(runs.is_array());
+    REQUIRE(runs.size() == 2);
+    CHECK(runs[0].contains("wallThicknessIn"));
+    CHECK_FALSE(runs[1].contains("wallThicknessIn"));
+  }
+
+  AppCommandState loaded;
+  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.u8string().c_str(), log));
+  REQUIRE(loaded.cadPipeRuns.size() == 2);
+  CHECK(loaded.cadPipeRuns[0].wallThicknessIn == Catch::Approx(0.5));
+  CHECK(loaded.cadPipeRuns[1].wallThicknessIn == 0.0);
+
+  std::filesystem::remove(path);
+}
+
 TEST_CASE("A drawing with no pipe runs omits the pipeRuns key and still loads cleanly",
           "[gs][piperun][issue486]") {
   AppCommandState st;  // no pipe runs — ADR-020 (d) additive/omitted-when-empty

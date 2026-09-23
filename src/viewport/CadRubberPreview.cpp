@@ -719,6 +719,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     ghostRun.vertsXyz.push_back(gy);
     ghostRun.vertsXyz.push_back(gz);
     ghostRun.nominalSize = cmd.pipeRunNominalSize;
+    ghostRun.wallThicknessIn = cmd.pipeRunWallThicknessIn;  // the ghost is the run being drafted
     std::vector<CadSolidPtr> ghostSolids;
     if (CadBuildPipeRunSolids(ghostRun, &ghostSolids)) {
       brep::Problem why = brep::Problem::Ok;
