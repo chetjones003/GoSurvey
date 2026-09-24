@@ -8723,3 +8723,107 @@ TEST_CASE("SectionOutlines returns what SectionLoop returns when there is one ou
   REQUIRE_FALSE(brep::SectionLoop(sph, Vec3{0, 0, 8}, Vec3{0, 0, 1}, &planeA, &one, &why));
   REQUIRE(why == Problem::SlicePlaneMissesSolid);
 }
+
+// ---------------------------------------------------------------------------
+// Section coverage for the primitives that had no section test of their own — the WEDGE, the
+// PYRAMID and the POLYSOLID (2026-09-22 sweep of every 3D object, at the user's request).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A wedge sections to the rectangle and the triangle its own shape gives",
+          "[brep][req335][sectioncoverage]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  // Full height at x = -50, falling to zero at x = +50; 70 deep; 50 tall from z = 0.
+  Solid wedge;
+  REQUIRE(brep::MakeWedge(World(), 100.0, 70.0, 50.0, &wedge, &why));
+
+  SECTION("cut level at mid-height: a rectangle half as long, because the top slopes") {
+    REQUIRE(brep::SectionLoop(wedge, Vec3{0, 0, 25}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {{-50, -35, 25}, {0, -35, 25}, {0, 35, 25}, {-50, 35, 25}});
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(50.0 * 70.0).epsilon(1e-12));
+  }
+
+  SECTION("cut down its length: the right triangle that IS a wedge") {
+    REQUIRE(brep::SectionLoop(wedge, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop), {{-50, 0, 0}, {50, 0, 0}, {-50, 0, 50}});
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(0.5 * 100.0 * 50.0).epsilon(1e-12));
+  }
+
+  SECTION("cut across it: the full rectangle") {
+    REQUIRE(brep::SectionLoop(wedge, Vec3{-25, 0, 0}, Vec3{1, 0, 0}, &plane, &loop, &why));
+    // At x = -25 the sloping top is three quarters of the way up: 37.5.
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(70.0 * 37.5).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("A pyramid frustum sections to the square at that height", "[brep][req335][sectioncoverage]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  // Four sides, circumradius 30 at the base, 15 at the top, 50 tall. PYRAMID's corners sit on its
+  // frame's axes, so the square at any height is a diamond in world XY.
+  Solid pyr;
+  REQUIRE(brep::MakePyramid(World(), 4, 30.0, 15.0, 50.0, &pyr, &why));
+
+  SECTION("level at mid-height: circumradius 22.5, so the area is 2 R^2") {
+    REQUIRE(brep::SectionLoop(pyr, Vec3{0, 0, 25}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {{22.5, 0, 25}, {0, 22.5, 25}, {-22.5, 0, 25}, {0, -22.5, 25}});
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(2.0 * 22.5 * 22.5).epsilon(1e-12));
+  }
+
+  SECTION("level near the base and near the top: the sizes the taper gives") {
+    REQUIRE(brep::SectionLoop(pyr, Vec3{0, 0, 10}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    const double r10 = 30.0 + (15.0 - 30.0) * (10.0 / 50.0);  // 27
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(2.0 * r10 * r10).epsilon(1e-12));
+    REQUIRE(brep::SectionLoop(pyr, Vec3{0, 0, 40}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    const double r40 = 30.0 + (15.0 - 30.0) * (40.0 / 50.0);  // 18
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(2.0 * r40 * r40).epsilon(1e-12));
+  }
+
+  SECTION("cut down through two opposite corners: the trapezoid of its own profile") {
+    // The plane y = 0 passes through the corners at +X and -X, so the section is base 60, top 30,
+    // height 50 — the same trapezoid a CONE of those radii gives.
+    REQUIRE(brep::SectionLoop(pyr, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {{-30, 0, 0}, {30, 0, 0}, {15, 0, 50}, {-15, 0, 50}});
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(0.5 * (60.0 + 30.0) * 50.0).epsilon(1e-12));
+  }
+
+  SECTION("a pointed pyramid: the triangle") {
+    Solid tip;
+    REQUIRE(brep::MakePyramid(World(), 4, 30.0, 0.0, 50.0, &tip, &why));
+    REQUIRE(brep::SectionLoop(tip, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop), {{-30, 0, 0}, {30, 0, 0}, {0, 0, 50}});
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(0.5 * 60.0 * 50.0).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("A polysolid wall sections across and along its run", "[brep][req335][sectioncoverage]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  // A straight wall: 10 long, 2 wide (centred on the path), 5 tall.
+  brep::Path run;
+  run.start = ucs::Point2D{0.0, 0.0};
+  run.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, 0.0});
+  Solid wall;
+  REQUIRE(brep::MakePolysolid(World(), run, 2.0, 5.0, brep::Justify::Center, &wall, &why));
+
+  SECTION("across the wall: its 2 x 5 cross-section") {
+    REQUIRE(brep::SectionLoop(wall, Vec3{5, 0, 0}, Vec3{1, 0, 0}, &plane, &loop, &why));
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(2.0 * 5.0).epsilon(1e-12));
+  }
+
+  SECTION("level, half way up: the wall's plan footprint") {
+    REQUIRE(brep::SectionLoop(wall, Vec3{0, 0, 2.5}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(10.0 * 2.0).epsilon(1e-12));
+  }
+
+  SECTION("along the wall, down its middle: the elevation of the run") {
+    REQUIRE(brep::SectionLoop(wall, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(10.0 * 5.0).epsilon(1e-12));
+  }
+}

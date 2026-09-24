@@ -1,0 +1,363 @@
+# Section coverage across every 3D primitive (2026-09-22, asked for from the app: "test all of the
+# other 3d objects to see if they get sectioned correctly").
+#
+# One block per primitive per cut — level, vertical and 45 degrees, each through the middle of the
+# solid. It pins the whole matrix in one place: what sections, what is refused, and in which words,
+# so a change to any recogniser has to come and say so here.
+#
+# The SHAPES are held to their analytic sizes in BrepTests: [sectioncoverage] covers the wedge,
+# pyramid and polysolid; [issue517] and [issue520] the cylinder, cone, sphere and torus. This is
+# about the COMMAND answering, for each solid, at each angle.
+#
+# The 45-degree cut of a cylinder or cone is refused here because these solids are short: the cut
+# runs off the end. A cylinder tall enough for the cut to stay between its caps says "this cut is an
+# ellipse" instead (issue516-section-refusal-reasons).
+
+# --- a box, cut level --------------------------------------------------------
+NEW
+CMD BOX 0,0,-25 100 70 50
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- a box, cut vertical -----------------------------------------------------
+NEW
+CMD BOX 0,0,-25 100 70 50
+CMD UCS
+CMD X
+CMD 90
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a box, cut 45 degrees ---------------------------------------------------
+NEW
+CMD BOX 0,0,-25 100 70 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a wedge, cut level ------------------------------------------------------
+NEW
+CMD WEDGE 0,0,-25 100 70 50
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- a wedge, cut vertical ---------------------------------------------------
+NEW
+CMD WEDGE 0,0,-25 100 70 50
+CMD UCS
+CMD X
+CMD 90
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a wedge, cut 45 degrees -------------------------------------------------
+NEW
+CMD WEDGE 0,0,-25 100 70 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a 4-sided pyramid, cut level --------------------------------------------
+NEW
+CMD PYRAMID 0,0,-25 4 30 15 50
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- a 4-sided pyramid, cut vertical -----------------------------------------
+NEW
+CMD PYRAMID 0,0,-25 4 30 15 50
+CMD UCS
+CMD X
+CMD 90
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a 4-sided pyramid, cut 45 degrees ---------------------------------------
+NEW
+CMD PYRAMID 0,0,-25 4 30 15 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a cylinder, cut level ---------------------------------------------------
+NEW
+CMD CYLINDER 0,0,-25 30 50
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- a cylinder, cut vertical ------------------------------------------------
+NEW
+CMD CYLINDER 0,0,-25 30 50
+CMD UCS
+CMD X
+CMD 90
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a cylinder, cut 45 degrees ----------------------------------------------
+NEW
+CMD CYLINDER 0,0,-25 30 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A tilted cut that crosses the end of a cylinder or cone is not supported yet."
+ESC
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a cone frustum, cut level -----------------------------------------------
+NEW
+CMD CONE 0,0,-25 30 15 50
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- a cone frustum, cut vertical --------------------------------------------
+NEW
+CMD CONE 0,0,-25 30 15 50
+CMD UCS
+CMD X
+CMD 90
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a cone frustum, cut 45 degrees ------------------------------------------
+NEW
+CMD CONE 0,0,-25 30 15 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A tilted cut that crosses the end of a cylinder or cone is not supported yet."
+ESC
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a pointed cone, cut level -----------------------------------------------
+NEW
+CMD CONE 0,0,-25 30 0 50
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- a pointed cone, cut vertical --------------------------------------------
+NEW
+CMD CONE 0,0,-25 30 0 50
+CMD UCS
+CMD X
+CMD 90
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a pointed cone, cut 45 degrees ------------------------------------------
+NEW
+CMD CONE 0,0,-25 30 0 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A tilted cut that crosses the end of a cylinder or cone is not supported yet."
+ESC
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a sphere, cut level -----------------------------------------------------
+NEW
+CMD SPHERE 0,0 30
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- a sphere, cut vertical --------------------------------------------------
+NEW
+CMD SPHERE 0,0 30
+CMD UCS
+CMD X
+CMD 90
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a sphere, cut 45 degrees ------------------------------------------------
+NEW
+CMD SPHERE 0,0 30
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a torus, cut level ------------------------------------------------------
+NEW
+CMD TORUS 0,0 20 5
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 2 section outlines created. The solid is unchanged."
+EXPECT POLYLINES 2
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- a torus, cut vertical ---------------------------------------------------
+NEW
+CMD TORUS 0,0 20 5
+CMD UCS
+CMD X
+CMD 90
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A cut of a torus that is not square to its axis is a curve this release cannot hold."
+ESC
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a torus, cut 45 degrees -------------------------------------------------
+NEW
+CMD TORUS 0,0 20 5
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A cut of a torus that is not square to its axis is a curve this release cannot hold."
+ESC
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL

@@ -1195,6 +1195,19 @@ json BuildRoot(const AppCommandState& st) {
     if (anyBulge)
       doc["polylineVertsBulge"] = st.userPolylineVertsBulge;
   }
+  // REQ-325 / ADR-053: the plane each curved segment turns in. Additive and guarded exactly as the
+  // bulge array above is — written only when something is actually tilted, so a drawing with nothing
+  // tilted re-saves byte-identically. Without it a section on a vertical or tilted plane came back
+  // from its own file lying flat, and exported flat (GitHub #521): the store existed but no file
+  // carried it.
+  {
+    bool anyTilted = false;
+    for (std::size_t i = 0; i + 2 < st.userPolylineVertsNormal.size(); i += 3)
+      if (!IsFlatNormal(st.userPolylineVertsNormal[i], st.userPolylineVertsNormal[i + 1],
+                        st.userPolylineVertsNormal[i + 2])) { anyTilted = true; break; }
+    if (anyTilted)
+      doc["polylineVertsNormal"] = st.userPolylineVertsNormal;
+  }
   json polyClosed = json::array();
   for (uint8_t c : st.userPolylineClosed)
     polyClosed.push_back(static_cast<int>(c));
@@ -2504,6 +2517,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.userPolylineVertsBulge.push_back(v.get<float>());
   if (!st.userPolylineVertsBulge.empty())
     SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+  // REQ-325 / ADR-053, same guarded shape: a file without the key loads with the array EMPTY, which
+  // every reader treats as "every segment flat" (GitHub #521).
+  st.userPolylineVertsNormal.clear();
+  if (doc.contains("polylineVertsNormal"))
+    for (const auto& v : doc["polylineVertsNormal"])
+      st.userPolylineVertsNormal.push_back(v.get<float>());
+  if (!st.userPolylineVertsNormal.empty())
+    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
   st.userPolylineClosed.clear();
   for (const auto& v : doc["polylineClosed"])
     st.userPolylineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
