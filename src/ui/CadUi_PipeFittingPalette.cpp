@@ -60,6 +60,18 @@ CadPipePaletteCategory ActiveCategory(const AppCommandState& cmd) {
 } // namespace
 
 void ServicePipeFittingThumbnails(AppCommandState& cmd, ViewportRenderer& renderer) {
+  // Parts edited in BEDIT since the last pass: drop their cached pictures so the next request draws
+  // the part as it is now (ADR-062 (c) / TASK-275 ASSUMPTION-1). Cleared even when nothing was cached,
+  // since the point is that the name has been dealt with.
+  for (const std::string& stale : cmd.pipeFittingThumbStale) {
+    renderer.InvalidatePartThumbnail(stale);
+    const auto it = std::find(cmd.pipeFittingThumbUnavailable.begin(),
+                              cmd.pipeFittingThumbUnavailable.end(), stale);
+    if (it != cmd.pipeFittingThumbUnavailable.end())
+      cmd.pipeFittingThumbUnavailable.erase(it);  // it may have geometry now
+  }
+  cmd.pipeFittingThumbStale.clear();
+
   if (cmd.pipeFittingThumbRequests.empty())
     return;
 
@@ -176,6 +188,7 @@ void DrawPipeFittingPalette(AppCommandState& cmd, std::vector<std::string>& log,
     cmd.pipeFittingPaletteShownSize = size;
     cmd.pipeFittingThumbRequests.clear();
     cmd.pipeFittingThumbUnavailable.clear();
+    cmd.pipeFittingLibraryCacheValid = false;
   }
 
   if (size.empty())
@@ -184,14 +197,25 @@ void DrawPipeFittingPalette(AppCommandState& cmd, std::vector<std::string>& log,
     ImGui::Text("Pipe run: %s", size.c_str());
   else
     ImGui::Text("Pipe run: %s  %s", size.c_str(), std::string(CadPipePressureClassTag(runClass)).c_str());
+  ImGui::SameLine(ImGui::GetContentRegionAvail().x - 58.f);
+  if (ImGui::SmallButton("Refresh")) {
+    // Re-read the library folders: the one thing the palette cannot notice on its own is a file
+    // copied in from outside the application.
+    cmd.pipeFittingLibraryCacheValid = false;
+    cmd.pipeFittingThumbUnavailable.clear();
+  }
   ImGui::Separator();
 
   const CadPipePaletteCategory category = ActiveCategory(cmd);
 
-  std::vector<CadBlockLibraryEntry> entries;
-  CadBlocksCollectLibraryEntries(cmd, &entries);
+  // Reading the library is file I/O, so it happens on the events that can change it — not every
+  // frame (§11.7). Filtering the cached rows below is pure and costs nothing worth caching.
+  if (!cmd.pipeFittingLibraryCacheValid) {
+    CadBlocksCollectLibraryEntries(cmd, &cmd.pipeFittingLibraryCache);
+    cmd.pipeFittingLibraryCacheValid = true;
+  }
   std::vector<CadBlockLibraryEntry> rows;
-  CadPipePaletteCollectRows(entries, size, runClass, category, &rows);
+  CadPipePaletteCollectRows(cmd.pipeFittingLibraryCache, size, runClass, category, &rows);
 
   ImGui::BeginChild("##pfpbody", ImVec2(-46.f, 0.f), true);
   if (rows.empty()) {
@@ -231,8 +255,12 @@ void DrawPipeFittingPalette(AppCommandState& cmd, std::vector<std::string>& log,
       dl->AddText(ImVec2(textX, p.y + thumb * 0.5f + 2.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
                   sub.c_str());
 
-      if (clicked)
+      if (clicked) {
         (void)CadPipePaletteArmPart(cmd, e, log);  // refusals are logged there (REQ-201)
+        // Arming imports the part when it was not in the drawing yet, which changes what the library
+        // reading says about it (and gives it geometry to draw a thumbnail from).
+        cmd.pipeFittingLibraryCacheValid = false;
+      }
       ImGui::PopID();
     }
   }

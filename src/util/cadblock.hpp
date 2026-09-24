@@ -386,6 +386,26 @@ struct CadBlockDefinition {
   std::string partNumber;
 };
 
+/// One row of the block library: the drawing's own definitions, plus the bundled/user files not yet
+/// imported. `partType`/`nominalSize`/`pressureClass` (issue #486 increment A5) come from the
+/// definition itself when it is already imported, or from a LIBEXPORT `.json` sidecar beside an
+/// unimported file — read WITHOUT importing, so a pane or palette can filter before the user picks
+/// anything.
+///
+/// Lives here beside CadBlockDefinition rather than in `CadBlocks.hpp` (its original home)
+/// because `AppCommandState` caches a listing of these (REQ-350), and `CadBlocks.hpp` sits ABOVE
+/// `AppCommandState` — a plain description of a library file belongs at the level of the data it
+/// describes, not at the level of the code that scans for it.
+struct CadBlockLibraryEntry {
+  std::string name;
+  std::string path;
+  bool imported = false;
+  bool isFitting = false;
+  CadPipePartType partType = CadPipePartType::None;
+  std::string nominalSize;
+  CadPipePressureClass pressureClass = CadPipePressureClass::None;
+};
+
 struct CadBlockRef {
   std::string defName;
   CadBlockXform xf;

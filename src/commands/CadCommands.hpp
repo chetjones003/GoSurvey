@@ -2832,6 +2832,21 @@ struct AppCommandState {
   /// not imported into this drawing yet. Remembered so such a row is asked about ONCE rather than
   /// re-attempted every frame; cleared whenever the routed size changes.
   std::vector<std::string> pipeFittingThumbUnavailable;
+  /// The fittings library as the palette last read it, and whether that reading still stands.
+  ///
+  /// Cached because reading it means walking three directories and parsing a JSON sidecar per part —
+  /// real file I/O, which architecture invariant §11.7 does not allow on a per-frame path without a
+  /// profile to justify it. The INSERT dialog rescans every frame, but it is a modal the user closes
+  /// in seconds; this palette stays open for a whole routing session. Invalidated when the palette
+  /// opens, when the routed size changes, when a part is imported, and by the Refresh button — which
+  /// is also the answer for a file copied into the library folder from outside the application.
+  std::vector<CadBlockLibraryEntry> pipeFittingLibraryCache;
+  bool pipeFittingLibraryCacheValid = false;
+  /// Parts whose cached thumbnail is STALE and must be re-rendered — a definition edited in BEDIT is
+  /// the one way a part's geometry changes within a session (ADR-062 (c)). The command layer appends a
+  /// name here rather than calling the renderer, which it must not do: Commands sits BELOW Renderer,
+  /// and the frame's service pass drains this list on the UI side.
+  std::vector<std::string> pipeFittingThumbStale;
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.

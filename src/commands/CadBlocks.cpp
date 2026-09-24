@@ -3104,6 +3104,12 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     st.blockEditorDirty = false;
     BumpCadGpuCache(st);
     st.blockEditCleanRevision = st.cadGpuRevision;
+    // REQ-350 / ADR-062 — this definition's geometry just changed, so any cached Pipe Fittings
+    // thumbnail of it now shows the part as it WAS. Marked for re-render; the UI's service pass is what
+    // actually drops it, because the renderer is not this layer's to call.
+    if (std::find(st.pipeFittingThumbStale.begin(), st.pipeFittingThumbStale.end(), st.blockEditorName) ==
+        st.pipeFittingThumbStale.end())
+      st.pipeFittingThumbStale.push_back(st.blockEditorName);
     log.push_back("BSAVE — saved \"" + st.blockEditorName + "\". All references update.");
     return true;
   }

@@ -1,7 +1,7 @@
 # TASK-275 — Pipe fitting tool palette: size-matched library parts while routing
 
 - Type:    feature
-- Status:  plan
+- Status:  self-verify (implementation complete; one by-eye check outstanding)
 - Opened:  2026-09-24
 - Owner:   Claude (Workshop), on the user's request
 
@@ -282,3 +282,151 @@ pure logic lands first with its tests, so the UI is assembled on top of somethin
 No SPEC GAP remains: every architecturally significant choice is recorded (§3), and the two
 behaviour rules a reasonable person could have wanted the other way (exact size, stay-open) are
 stated in REQ-350 rather than left to implementation.
+
+---
+
+## 9. Completion report (Step 4)
+
+- **Status:** implement → self-verify **complete**; awaiting the user's by-eye check of the palette
+  and thumbnails, which is the one acceptance condition no automated test in this repo may cover
+  (`project.md` anti-requirements rule out framebuffer goldens; GUI hover is not automatable here).
+
+### 9.1 Requirements satisfied
+
+REQ-350 (a)–(h). Per acceptance condition:
+
+| Acceptance condition | Status | Evidence |
+|---|---|---|
+| PIPERUN opens the palette by itself, movable, non-blocking | met | `StartPipeRunCommand` → `CadPipePaletteSetOpen`; test *"PIPERUN opens the fittings palette…"*. Movable/non-blocking is an ordinary `ImGui::Begin` window — by eye |
+| 2in run lists both 2in flanges, not the 4in | met | test *"A 2in run lists the 2in flanges and not the 4in one"*, using the bundled library's real names |
+| Live re-filter when the routed size changes | met | same test's 4in half + `pipeFittingPaletteShownSize` invalidation |
+| Row = shaded preview + ports + name | built | `ViewportRenderer::EnsurePartThumbnail` + the palette row; **by eye** |
+| Click a part, click ON the run → splice, one undo | met | test *"A palette part armed and clicked ON a run splices into it"* (2 runs, 1 block ref, one `PushUndoSnapshot`) |
+| Click a part, click OFF a run → plain INSERT | met | test *"…clicked OFF every run is placed as a plain INSERT"* |
+| Palette survives the run; X closes; command reopens | met | the same PIPERUN test asserts it stays open; `PIPEPALETTE` toggles; X is `ImGui::Begin`'s own `p_open` |
+| Empty category states the size | met | test *"An empty tab states the size it filtered on"* |
+| Nozzle round-trips, old drawings unaffected | met | test *"The new nozzle part type round-trips through its tag"*; the value is APPENDED, and `.gs`/sidecars persist the tag string, not the number |
+| REQ-100 holds — rendered once, not per frame | met by construction, **not yet measured** | `EnsurePartThumbnail` early-returns on a cache hit; see §9.6 |
+
+### 9.2 What changed, and why
+
+| File | Change | Why |
+|---|---|---|
+| `src/util/cadblock.hpp` | `CadPipePartType::Nozzle` + tag/parse; `CadBlockLibraryEntry` moved here from `CadBlocks.hpp` | D-2026-09-24-a (1). The struct moved down because `AppCommandState` now caches a listing of them and `CadBlocks.hpp` sits above it — see §9.5 finding 2 |
+| `resources/blocks/fittings/*.json` (3 new) + `README.md` | metadata sidecars, class-agnostic; README documents the sidecar format | REQ-350 (h). Without them the bundled parts have no type or size and list under no tab |
+| `src/commands/CadBlocks.hpp/.cpp` | category enum + `CadPipePaletteCollectRows` / `…EmptyReason` / `…CategoryOf`; `CadPipePaletteSetOpen`, `CadPipePaletteArmPart`; `PIPEPALETTE`; splice branch in `SubmitInsertBlockPick`; arming cleared in `FinishInsertCommand`; BSAVE marks a thumbnail stale | REQ-350 (b)(c)(d)(f)(g)(a). Filtering lives beside the library scan it filters, where it is testable without a window |
+| `src/commands/CadCommands.hpp/.cpp` | `TrySplicePipeFit` split into `TrySplicePipeFitNamed` + part-type wrapper; `CadPipeRunUnderPick`; `ExpandTessellation` exposed; PIPERUN opens the palette; arming cleared on cancel; palette state fields | REQ-350 (f). The split is the finding in §8 item 1 |
+| `src/render/ViewportRenderer.hpp/.cpp` | `PartThumbnailInput`, `EnsurePartThumbnail`, `PartThumbnailTexture`, `InvalidatePartThumbnail`, per-part FBO/texture cache, released in `Shutdown` | ADR-062. Every `gl*` for this feature is here and nowhere else |
+| `src/ui/CadUiPaletteTabs.hpp` (new) | `CadUiVerticalText` / `CadUiPaletteTabButton`, promoted from `CadUi_BlockAuthoring.cpp`'s file statics | Two present-day call sites (§11.4), and it is what makes the two palettes read as one family |
+| `src/ui/CadUi_PipeFittingPalette.cpp` (new) | the palette window + `ServicePipeFittingThumbnails` | REQ-350 (a)(b)(e)(g) |
+| `src/app/main.cpp` | draw the palette beside the BEDIT one; service thumbnails beside `ServicePendingThumbnail` | ADR-062 — after `RenderScene` is the only safe point to bind another framebuffer |
+
+### 9.3 Tests
+
+- **`tests/CadPipePaletteTests.cpp` (new, 9 cases)** — category grouping incl. `Nozzle`; the bundled
+  library at 2in and 4in; numeric size equality (`2in` / `2 in` / `2.0in`) and the refusal of a nearby
+  size; unusable run sizes yielding nothing rather than everything; non-fitting and untagged entries
+  never listing; all four class-precedence branches including the per-part-type scope; empty-tab prose.
+- **`tests/CadPipeRunCommandTests.cpp` (+6 cases)** — arm-then-click on a run splices; off a run
+  inserts; cancel disarms *and* a following ordinary INSERT does not splice; `CadPipeRunUnderPick`
+  on/off/past-the-end/nearest-wins; arming an absent or nameless part is refused; PIPERUN opens the
+  palette and finishing the run leaves it open.
+- **`tests/CadBlockImportTests.cpp` (+1 case)** — BSAVE marks the edited definition's thumbnail stale,
+  and does not queue the same name twice.
+- **Results (release, MSVC, this machine):** `GoSurveySnapTests` **420/420**, `GoSurveyTests`
+  **1218/1219**, `ctest` **1792/1800**.
+- **The 8 ctest failures are pre-existing and were verified as such**, not assumed: the working tree
+  was committed, `beta` was checked out and rebuilt, and the same 7 headless transcripts failed
+  identically there (`issue233-command-name-at-point-prompt`, `issue402-offset-ucs`,
+  `regression-58-offset-entity-id`, `req068-surface-selection`, `req087-feature-line-modify`,
+  `req313-solid-isolines`, `req313-solid-primitives`). The 8th, `Tessellation agrees with the analytic
+  figures and winds outward`, is TASK-272 §10.6's recorded cone-apex crack — "256 of 768 edges cracked
+  on a plain `MakeCone` … still the suite's one failing test", and the count observed here is exactly
+  256 of 768.
+
+### 9.4 Assumptions (resolved)
+
+- **ASSUMPTION-1** (a cached thumbnail only goes stale through BEDIT) — **closed as designed**: BSAVE
+  appends the definition's name to `pipeFittingThumbStale`, and the UI service pass calls
+  `InvalidatePartThumbnail`. The command layer never touches the renderer, because Commands sits below
+  it. Pinned by the `CadBlockImportTests` case.
+- **ASSUMPTION-2** (what counts as "on a run") — **stated and pinned**: within the pipe's own outer
+  radius × 1.5 of its centreline, nearest centreline winning. The factor is named
+  (`kCadPipeRunPickRadiusSlack`) with its reasoning, and all four behaviours are asserted.
+- **ASSUMPTION-3** (a part with no B-rep lists without a picture) — **partly obsolete, better than
+  assumed**: 2D linework is fed to the thumbnail as edges, so a 2D-only block gets a wireframe
+  picture rather than none. A part with neither solids nor lines lists by name with a placeholder box.
+- **ASSUMPTION-4 (new, raised while implementing)** — *the palette may import a library part into the
+  drawing's block table as a side effect of arming it.* **Because:** a thumbnail and a placement both
+  need geometry, which needs the file imported. **Risk if wrong:** a block definition appears in the
+  drawing (and in BEDIT's picker, and in a save) that the user did not explicitly INSERT. **Validated
+  by:** this is pre-existing behaviour, not new — `LoadBundledBlockLibrary` already imports
+  `resources/blocks/*.dxf|.dwg` and `fittings/*.sat` into every drawing at startup, and picking a
+  library row in the INSERT dialog already imports that row. The palette imports **only the part the
+  user actually clicks**, not every listed part.
+
+### 9.5 Findings from self-verification (both fixed)
+
+1. **A per-frame directory scan.** The palette first called `CadBlocksCollectLibraryEntries` every
+   frame — three `directory_iterator` walks plus a JSON parse per part. The INSERT dialog does the
+   same, but it is a modal open for seconds; this palette stays open for a whole routing session, so
+   it is file I/O on a per-frame path, which invariant **§11.7** does not allow without a profile.
+   Fixed with `pipeFittingLibraryCache` + `…CacheValid`, invalidated when the palette's size changes,
+   when a part is imported, and by an explicit **Refresh** button — the button being the honest answer
+   for a file copied into the library folder from outside the application, rather than a hidden timer.
+2. **Layer inversion caught by the compiler.** Caching those rows on `AppCommandState` did not
+   compile, because `CadBlockLibraryEntry` was declared in `CadBlocks.hpp`, which sits *above*
+   `AppCommandState`. Rather than reaching upward, the plain-data struct moved **down** to
+   `util/cadblock.hpp` beside `CadBlockDefinition`; the functions that scan for it stayed put.
+3. *(Process, not code)* A stray carriage return introduced by an editing script left
+   `cadblock.hpp` with mixed line endings and one broken comment line, which git rendered as a
+   1,818-line rewrite. Normalised to CRLF and repaired; the file's real diff is 20 added lines.
+
+### 9.6 Architectural decisions made by Workshop
+
+**None.** The three that this feature needed were recorded before implementation began — the `Nozzle`
+enum value and the sidecar obligation (D-2026-09-24-a (1) and (2)) and the thumbnail render path
+(ADR-062). Finding 2 above moved a struct between headers to obey §2; that is the layering rule being
+applied, not a new decision.
+
+### 9.7 Dependencies
+
+**None added** (REQ-300). The thumbnail reuses the existing shaded/line/vertex-colour programs and the
+existing `brep` tessellation; filtering is in-tree; the sidecars use the `nlohmann/json` already
+vendored and already used by this exact code path.
+
+### 9.8 Technical debt / deliberately not done
+
+- **REQ-100 is met by construction, not by measurement.** The cache makes each part's preview a
+  one-off, and the per-frame cost of an open palette is now a filter over a cached vector. A `BENCH`
+  figure on the reference machine would still be the honest evidence, and REQ-350's acceptance asks
+  for it; it is not claimed here.
+- **Thumbnails are cached per `ViewportRenderer`**, i.e. per drawing tab, so switching tabs re-renders
+  them. Correct, bounded, and not worth a shared cache until someone notices.
+- **No ribbon button** for the palette (PIPERUN and `PIPEPALETTE` reach it) — the same exclusion
+  REQ-345 B2 recorded for `PIPERUN` itself, and for the same reason.
+- **Exact size matching only** — reducers and branch sizes are REQ-350 (c)'s named deferral.
+- The **INSERT dialog's own library pane** still rescans per frame and still draws the top-down
+  wireframe preview. Untouched on purpose (out of scope), but it is now the odd one out, and finding 1
+  applies to it in a milder form.
+
+### 9.9 Build status
+
+`./dev/build release` — clean, 0 errors. New warnings introduced: none (the `C4834` warnings in
+`CadBlockImportTests.cpp` are pre-existing and in lines this task did not touch).
+
+### 9.10 Documentation
+
+- `spec/requirements.md` — REQ-350 + traceability row.
+- `spec/project.md` — D-2026-09-24-a.
+- `spec/architecture.md` — ADR-062.
+- `resources/blocks/fittings/README.md` — rewritten: the library takes `.sat`/`.dwg`/`.dxf`, and the
+  sidecar format is documented with the "omit the class when you do not know it" rule.
+- This task log.
+
+### 9.11 Left for the user
+
+The one thing no test here can judge: **open a drawing, run `PIPERUN`, answer `2in`, and look at the
+palette.** Specifically worth judging by eye — whether the isometric view reads as the part, whether
+64 px is the right thumbnail size, whether the port dots are visible against the body, and whether the
+five tabs are the right grouping once real parts are in them.

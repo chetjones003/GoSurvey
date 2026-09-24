@@ -2561,3 +2561,38 @@ TEST_CASE("The WBLOCK dialog writes the chosen block, and stays open when it can
   REQUIRE(ImportCadBlocksFromPath(dest, dwg.u8string().c_str(), importLog));
   CHECK(CadBlockFindDef(dest.blockDefs, "HYDRANT") >= 0);
 }
+
+TEST_CASE("Saving a block in BEDIT marks its palette thumbnail stale",
+          "[issue486][req350][palette][command]") {
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 1.0, 1.0, 2.0, &box, &why));
+
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "PALFIT";
+  def.partType = CadPipePartType::Flange;
+  def.nominalSize = "4in";
+  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  def.content.solidAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream beditArgs("PALFIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  CHECK(st.pipeFittingThumbStale.empty());  // opening the editor changes no geometry
+
+  std::istringstream bsaveArgs("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bsave", bsaveArgs, log));
+  // ADR-062 (c) — a saved definition is the one way a part's geometry changes in a session, so its
+  // cached picture must be dropped. The command layer only NAMES it; the UI service pass drops it,
+  // because Commands sits below Renderer and must not call it.
+  REQUIRE(st.pipeFittingThumbStale.size() == 1);
+  CHECK(st.pipeFittingThumbStale[0] == "PALFIT");
+
+  // Saving twice does not queue the same name twice.
+  std::istringstream bsaveAgain("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bsave", bsaveAgain, log));
+  CHECK(st.pipeFittingThumbStale.size() == 1);
+}
