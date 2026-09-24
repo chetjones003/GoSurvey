@@ -980,6 +980,11 @@ bool CadPipePaletteArmPart(AppCommandState& st, const CadBlockLibraryEntry& entr
     return false;
   }
 
+  // Picking a part takes the command away from whatever holds it. If that is an open PIPERUN,
+  // FINISH the route first (D-2026-09-24-d) — before the route was a real entity this threw away the
+  // pipe the user had just drawn, which is precisely the reported "the pipe run disappears".
+  (void)CadPipeRunFinishForHandoff(st, log);
+
   std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", entry.name.c_str());
   // One click places it: no scale, rotation or face-align prompt, so `InsertAdvanceAfterPoint` goes
   // straight to placing. A fitting's size comes from the catalog, not from a dragged scale, and its

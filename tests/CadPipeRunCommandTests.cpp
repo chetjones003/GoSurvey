@@ -1717,3 +1717,121 @@ TEST_CASE("A clicked pipe segment commits exactly where the compass preview put 
   CHECK(v[4] == Catch::Approx(static_cast<double>(gy)).margin(1e-6));
   CHECK(v[5] == Catch::Approx(static_cast<double>(gz)).margin(1e-6));
 }
+
+// --- D-2026-09-24-d: the route is real geometry while it is being drawn -------------------------
+
+namespace {
+
+/// PIPERUN taken to the point where clicks place vertices.
+void StartRoutingFourInch(AppCommandState& st, std::vector<std::string>& log) {
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // schedule-40 wall
+}
+
+} // namespace
+
+TEST_CASE("The pipe exists from the second click and keeps up with the route",
+          "[issue486][req345][piperun][live][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  StartRoutingFourInch(st, log);
+
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  // One point is not a pipe — nothing is drawn yet, and nothing is half-stored (REQ-201).
+  CHECK(st.cadPipeRuns.empty());
+  CHECK(st.pipeRunLiveIndex == -1);
+
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  REQUIRE(st.pipeRunLiveIndex == 0);
+  CHECK(st.cadPipeRunAttrs.size() == 1);
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 6);          // two vertices
+  CHECK(st.cadPipeRuns[0].nominalSize == "4in");
+  CHECK(st.cadPipeRuns[0].wallThicknessIn > 0.0);         // the wall answered at the prompt
+  CHECK(st.active == AppCommandState::Kind::PipeRun);     // and the command is still routing
+
+  // A third point EXTENDS the same entity rather than adding a second one.
+  SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.pipeRunLiveIndex == 0);
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 9);
+
+  // U shortens the drawn pipe with the route.
+  REQUIRE(HandlePipeRunTextInput("u", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 6);
+}
+
+TEST_CASE("Cancelling a route takes its drawn pipe with it",
+          "[issue486][req345][piperun][live][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  StartRoutingFourInch(st, log);
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+
+  CancelActiveCommand(st, log);
+  CHECK(st.cadPipeRuns.empty());        // Esc means cancel, not "keep the half-routed pipe"
+  CHECK(st.cadPipeRunAttrs.empty());
+  CHECK(st.pipeRunLiveIndex == -1);
+  CHECK(st.active == AppCommandState::Kind::None);
+}
+
+TEST_CASE("Finishing a route leaves exactly one run, not the provisional one as well",
+          "[issue486][req345][piperun][live][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  StartRoutingFourInch(st, log);
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);   // the provisional one
+
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  // The provisional entity is retired and the finished route committed in its place — the drawing
+  // must not end up with both.
+  CHECK(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadPipeRunAttrs.size() == 1);
+  CHECK(st.pipeRunLiveIndex == -1);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 6);
+}
+
+TEST_CASE("Picking a fitting mid-route finishes the run instead of discarding it",
+          "[issue486][req350][piperun][live][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddInlineFitting(st, "FLANGE4");
+  StartRoutingFourInch(st, log);
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+
+  // The reported defect: this used to leave PIPERUN's route unbuilt, so the pipe vanished the
+  // instant the palette took the command.
+  REQUIRE(CadPipePaletteArmPart(st, EntryFor("FLANGE4"), log));
+  CHECK(st.cadPipeRuns.size() == 1);                        // the pipe is still there...
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 6);
+  CHECK(st.pipeRunLiveIndex == -1);                         // ...and it is a finished run now
+  CHECK(st.active == AppCommandState::Kind::InsertBlock);   // with the part armed for placement
+
+  // And it can be spliced into straight away, which is the point of the whole exercise.
+  SubmitInsertBlockPick(st, 5.f, 0.f, 0.f, log);
+  CHECK(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadBlockRefs.size() == 1);
+}
+
+TEST_CASE("A one-point route armed from the palette is dropped, not left half-open",
+          "[issue486][req350][piperun][live][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddInlineFitting(st, "FLANGE4");
+  StartRoutingFourInch(st, log);
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);  // a single point is not a run
+
+  REQUIRE(CadPipePaletteArmPart(st, EntryFor("FLANGE4"), log));
+  CHECK(st.cadPipeRuns.empty());
+  CHECK(st.pipeRunLiveIndex == -1);
+  CHECK(st.active == AppCommandState::Kind::InsertBlock);
+}

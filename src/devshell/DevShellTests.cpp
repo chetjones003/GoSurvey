@@ -297,10 +297,15 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     SubmitCad(ctx, "0,0");
     SubmitCad(ctx, "10,0");
     ctx->Yield(2);
-    const std::size_t before = s_cmd->cadPipeRuns.size();
+    // The route is already REAL geometry while it is drawn (D-2026-09-24-d), so the run exists
+    // before Enter; what Enter must do is FINISH it — retiring the provisional entity and committing
+    // the finished route in its place, leaving one run and no active command.
+    IM_CHECK_EQ(s_cmd->cadPipeRuns.size(), static_cast<std::size_t>(1));
+    IM_CHECK(s_cmd->pipeRunLiveIndex >= 0);
     ctx->KeyPress(ImGuiKey_Enter);
     ctx->Yield(3);
-    IM_CHECK_EQ(s_cmd->cadPipeRuns.size(), before + 1);
+    IM_CHECK_EQ(s_cmd->cadPipeRuns.size(), static_cast<std::size_t>(1));
+    IM_CHECK_EQ(s_cmd->pipeRunLiveIndex, -1);
     IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::None);
 
     IM_CHECK(CancelToIdle(ctx));

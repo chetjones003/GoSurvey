@@ -2646,6 +2646,15 @@ struct AppCommandState {
   /// etc. above): a pipe run is almost always drawn at the same size as the last one.
   std::string pipeRunNominalSize;
   std::string pipeRunPressureClassTag;
+  /// Index into `cadPipeRuns` of the PROVISIONAL run PIPERUN materialises while routing, or -1
+  /// (D-2026-09-24-d). The route exists in the drawing from the second click so it can be seen,
+  /// snapped to and spliced into while the command is still open; END retires it and rebuilds the
+  /// finished route (with auto-elbows and branch tees), and Esc removes it.
+  ///
+  /// Always the LAST element of `cadPipeRuns` while it is set — nothing else appends a run while
+  /// PIPERUN holds the command — which is what lets it be withdrawn without renumbering anything
+  /// (architecture invariant §11.9: an index is not a name).
+  int pipeRunLiveIndex = -1;
   /// Wall thickness in INCHES for the run being drafted (D-2026-09-23-a). Unlike the size and class
   /// beside it this is NOT remembered across runs: blank Enter at its prompt takes the schedule-40
   /// wall for whatever size was just chosen, so the offered default follows the size rather than
@@ -5471,6 +5480,14 @@ void CancelPolysolidCommand(AppCommandState& st);
 // --- PIPERUN (issue #486 increment B2 / REQ-345) -------------------------------------------------
 /// Open the command: prompt for a nominal size (+ optional pressure class).
 void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// Finish an open PIPERUN because something else is about to take the command (D-2026-09-24-d).
+///
+/// Commits the route exactly as END does when it has at least two points, and otherwise drops the
+/// draft; returns false when PIPERUN was not the active command, so callers can use it as a test.
+/// Exists for the Pipe Fittings palette: picking a part starts INSERT, and before the route was
+/// materialised that silently discarded the pipe the user had just drawn.
+bool CadPipeRunFinishForHandoff(AppCommandState& st, std::vector<std::string>& log);
 /// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
 [[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
 /// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false

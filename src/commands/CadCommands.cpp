@@ -33940,7 +33940,16 @@ void SubmitPolysolidViewportPick(AppCommandState& st, float wx, float wy,
 // is a plain copy with no second representation to keep in step.
 // ---------------------------------------------------------------------------------------------
 
+namespace {
+// Defined with the rest of PIPERUN's commit path below; declared here because the cancel path sits
+// above it. Inside the anonymous namespace so this is the SAME function, not a second overload.
+void RemoveLivePipeRun(AppCommandState& st);
+}  // namespace
+
 void CancelPipeRunCommand(AppCommandState& st) {
+  // Cancelling removes the provisional geometry too (D-2026-09-24-d) — it was never the user's, and
+  // leaving it would make Esc "keep the half-routed pipe", which is the opposite of cancel.
+  RemoveLivePipeRun(st);
   st.pipeRunDraftVerts.clear();
   st.pipeRunPhase = AppCommandState::PipeRunPhase::WaitNominalSize;
   // Nominal size and pressure class deliberately SURVIVE the cancel — remembered for the next run,
@@ -34449,11 +34458,84 @@ void TryApplyBranchAtEndpoint(AppCommandState& st, std::vector<ray3d::Vec3>& pie
 /// (4+ legs at one node), and vertical-riser/offset-transition fittings — those are already
 /// ordinary 90/45 BENDS on one run's own path and were delivered by B5, since its bend detection
 /// is fully 3D and not limited to a horizontal plane.
+/// Drop the provisional in-progress pipe run, if one is standing (see ef SyncLivePipeRun).
+///
+/// Only ever the LAST element, which is what it always is: it is appended when the second point
+/// lands and nothing else appends a run while PIPERUN owns the command. Erasing from the middle
+/// would renumber every later run, and architecture invariant §11.9 is explicit that an index is not
+/// a name — so this refuses rather than renumbering, leaving a stray provisional run the user can
+/// delete instead of silently corrupting references to other runs.
+void RemoveLivePipeRun(AppCommandState& st) {
+  const int idx = st.pipeRunLiveIndex;
+  st.pipeRunLiveIndex = -1;
+  if (idx < 0 || static_cast<size_t>(idx) >= st.cadPipeRuns.size())
+    return;
+  if (static_cast<size_t>(idx) + 1 != st.cadPipeRuns.size())
+    return;
+  st.cadPipeRuns.pop_back();
+  if (!st.cadPipeRunAttrs.empty())
+    st.cadPipeRunAttrs.pop_back();
+  BumpCadGpuCache(st);
+}
+
+/// The draft, materialised as a REAL `CadPipeRun` in the drawing so it exists between clicks
+/// (D-2026-09-24-d, user request 2026-09-24).
+///
+/// `PIPERUN` used to keep its route entirely in `pipeRunDraftVerts` and build nothing until END, so
+/// anything that ended the command early — notably picking a part from the Pipe Fittings palette,
+/// which starts INSERT — took the whole route with it, and there was no pipe in the drawing to place
+/// a flange against. The requirement is the opposite: the pipe is there from the second click and
+/// keeps up as the route grows, which is what makes "route, then flange the end you just drew" work.
+///
+/// This is a PROVISIONAL entity, not the finished run. END still goes through
+/// \ref CommitPipeRunDraft, which is where auto-elbows split the route into pieces and branch tees
+/// tie into existing runs — work that must see the whole route and cannot be done a click at a time.
+/// So the provisional entity is removed again immediately before that commit, and the drawing ends up
+/// exactly as it always did. It carries no undo entry of its own for the same reason: it is scaffolding
+/// the user never owns, and \ref CommitPipeRunDraft's single "Create Pipe Run" snapshot is still the
+/// one undo step for the finished route.
+///
+/// A route whose solid cannot build yet (a corner too tight for its fillet radius) simply leaves the
+/// last good provisional geometry standing rather than erasing the pipe mid-route: the command says so
+/// at END, where the refusal is actionable, and REQ-201 is about what gets STORED — this stores
+/// nothing invalid, it declines to update.
+void SyncLivePipeRun(AppCommandState& st) {
+  const bool haveSegment = st.pipeRunDraftVerts.size() >= 6;  // two vertices
+  if (!haveSegment) {
+    RemoveLivePipeRun(st);
+    return;
+  }
+  CadPipeRun run;
+  run.vertsXyz = st.pipeRunDraftVerts;
+  run.nominalSize = st.pipeRunNominalSize;
+  run.wallThicknessIn = st.pipeRunWallThicknessIn;
+  run.pressureClassTag = st.pipeRunPressureClassTag;
+
+  std::vector<CadSolidPtr> probe;
+  if (!CadBuildPipeRunSolids(run, &probe))
+    return;  // not buildable yet — keep the last good picture, and let END report why
+
+  if (st.pipeRunLiveIndex >= 0 && static_cast<size_t>(st.pipeRunLiveIndex) < st.cadPipeRuns.size()) {
+    st.cadPipeRuns[static_cast<size_t>(st.pipeRunLiveIndex)] = std::move(run);
+  } else {
+    st.cadPipeRuns.push_back(std::move(run));
+    st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+    st.pipeRunLiveIndex = static_cast<int>(st.cadPipeRuns.size()) - 1;
+  }
+  BumpCadGpuCache(st);
+}
+
 void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
   if (st.pipeRunDraftVerts.size() < 6) {  // fewer than 2 vertices
     log.push_back("PIPERUN - a run needs at least two points; Esc cancels.");
     return;
   }
+
+  // The provisional entity has served its purpose (D-2026-09-24-d): the finished route is built
+  // below from the draft, with the auto-elbow splitting and branch tees that need the WHOLE route.
+  // Retired before the undo snapshot, so the snapshot records the drawing as it was BEFORE routing
+  // began and one Ctrl+Z still removes the entire run.
+  RemoveLivePipeRun(st);
 
   const CadPipePressureClass pressureClass = ParseCadPipePressureClass(st.pipeRunPressureClassTag);
   std::vector<std::vector<ray3d::Vec3>> pieces;
@@ -34561,10 +34643,28 @@ void AddPipeRunPoint(AppCommandState& st, const ray3d::Vec3& pt, std::vector<std
   st.pipeRunDraftVerts.push_back(pt.x);
   st.pipeRunDraftVerts.push_back(pt.y);
   st.pipeRunDraftVerts.push_back(pt.z);
+  SyncLivePipeRun(st);  // D-2026-09-24-d — the pipe exists from the second click, and keeps up
   log.push_back(CadPipeRunPromptText(st));
 }
 
 } // namespace
+
+bool CadPipeRunFinishForHandoff(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::PipeRun)
+    return false;
+  // Enough route to be a run: finish it properly — the same commit END performs, with its
+  // auto-elbows, its branch tees and its single undo entry. Anything less is not a pipe, so the
+  // draft is dropped; either way the command ends cleanly rather than being left half-open behind
+  // whatever is taking over (D-2026-09-24-d).
+  if (st.pipeRunDraftVerts.size() >= 6) {
+    CommitPipeRunDraft(st, log);
+    return true;
+  }
+  CancelPipeRunCommand(st);
+  st.active = AppCommandState::Kind::None;
+  log.push_back("PIPERUN - ended (a run needs at least two points).");
+  return true;
+}
 
 void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log) {
   CancelPipeRunCommand(st);
@@ -34686,6 +34786,7 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
       return true;
     }
     st.pipeRunDraftVerts.resize(st.pipeRunDraftVerts.size() - 3);
+    SyncLivePipeRun(st);  // D-2026-09-24-d — the drawn pipe shortens with the route
     log.push_back(CadPipeRunPromptText(st));
     return true;
   }
