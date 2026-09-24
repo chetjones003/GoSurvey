@@ -16,6 +16,7 @@
 #include "imgui.h"
 
 #include <algorithm>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -81,15 +82,37 @@ void ServicePipeFittingThumbnails(AppCommandState& cmd, ViewportRenderer& render
     cmd.pipeFittingThumbRequests.erase(cmd.pipeFittingThumbRequests.begin());
     ++done;
 
-    const int di = CadBlockFindDef(cmd.blockDefs, name);
+    // The part's geometry, from the drawing when it is already there, and otherwise imported into a
+    // SCRATCH state purely to be pictured.
+    //
+    // Scratch, and not the drawing, because LISTING a part must not add a block definition to the
+    // user's drawing — that is what placing one does. This is also the case that made every row a
+    // blank box: the bundled sweep imports `fittings/*.sat` but not `fittings/*.dwg`, so a .dwg
+    // fitting is never in `blockDefs` until it is placed, and giving up here left the placeholder
+    // showing forever.
+    std::unique_ptr<AppCommandState> scratch;  // owns the preview-only import for this iteration
+    const std::vector<CadBlockDefinition>* defs = &cmd.blockDefs;
+    int di = CadBlockFindDef(cmd.blockDefs, name);
     if (di < 0) {
-      // Not imported (yet). Not an error and not retried: the row lists by name, and picking it
-      // imports the part, after which its thumbnail renders on the next frame the palette draws.
+      const auto row = std::find_if(cmd.pipeFittingLibraryCache.begin(), cmd.pipeFittingLibraryCache.end(),
+                                    [&](const CadBlockLibraryEntry& e) { return e.name == name; });
+      if (row != cmd.pipeFittingLibraryCache.end()) {
+        scratch = std::make_unique<AppCommandState>();
+        std::vector<std::string> quiet;  // an unreadable library file is not the command line's business
+        if (CadBlocksImportLibraryEntry(*scratch, *row, quiet)) {
+          di = CadBlockFindDef(scratch->blockDefs, name);
+          defs = &scratch->blockDefs;
+        }
+      }
+    }
+    if (di < 0) {
+      // No such part, or it could not be read. Remembered so the row is asked about once rather than
+      // re-imported every frame; the row still lists by name (ADR-062's degrade-to-name-only).
       if (!Contains(cmd.pipeFittingThumbUnavailable, name))
         cmd.pipeFittingThumbUnavailable.push_back(name);
       continue;
     }
-    const CadBlockDefinition& def = cmd.blockDefs[static_cast<size_t>(di)];
+    const CadBlockDefinition& def = (*defs)[static_cast<size_t>(di)];
 
     // The part at its own origin, unscaled: a preview is a picture of the DEFINITION, not of a
     // placement, so there is no insertion transform to apply.
@@ -101,7 +124,7 @@ void ServicePipeFittingThumbnails(AppCommandState& cmd, ViewportRenderer& render
     std::vector<float> edgeVerts;
 
     std::vector<CadBlockWorldSolid> solids;
-    CadBlockCollectWorldSolids(cmd.blockDefs, ref, EntityAttributes{}, &solids);
+    CadBlockCollectWorldSolids(*defs, ref, EntityAttributes{}, &solids);
     for (const CadBlockWorldSolid& ws : solids) {
       if (!ws.solid)
         continue;
@@ -125,7 +148,7 @@ void ServicePipeFittingThumbnails(AppCommandState& cmd, ViewportRenderer& render
     // A part may also carry 2D linework — and a 2D-only block carries nothing else, so this is what
     // gives it a picture instead of an empty box (TASK-275 ASSUMPTION-3).
     std::vector<CadBlockWorldSeg> segs;
-    CadBlockCollectWorldLines(cmd.blockDefs, ref, EntityAttributes{}, &segs);
+    CadBlockCollectWorldLines(*defs, ref, EntityAttributes{}, &segs);
     for (const CadBlockWorldSeg& s : segs) {
       edgeVerts.push_back(s.x0);
       edgeVerts.push_back(s.y0);

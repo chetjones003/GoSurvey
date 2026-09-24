@@ -2596,3 +2596,45 @@ TEST_CASE("Saving a block in BEDIT marks its palette thumbnail stale",
   REQUIRE(CadBlocksTryIdleCommand(st, "bsave", bsaveAgain, log));
   CHECK(st.pipeFittingThumbStale.size() == 1);
 }
+
+TEST_CASE("Every bundled fitting yields drawable geometry under its listed name",
+          "[issue486][req350][palette][block]") {
+  // The invariant REQ-350's thumbnails stand on, and the one whose absence made every palette row a
+  // blank box: a library row can be turned into geometry WITHOUT the part already being in the
+  // drawing. The bundled sweep imports `fittings/*.sat` but not `fittings/*.dwg`, so for a .dwg
+  // fitting `CadBlockFindDef` fails until the part is placed — the thumbnail service therefore
+  // imports into a scratch state, and this pins the two things that has to produce: a definition
+  // under the SAME name the row lists, carrying geometry to draw.
+  AppCommandState st;
+  std::vector<CadBlockLibraryEntry> entries;
+  CadBlocksCollectLibraryEntries(st, &entries);
+
+  int fittingsSeen = 0;
+  for (const CadBlockLibraryEntry& e : entries) {
+    if (!e.isFitting || e.imported)
+      continue;
+    ++fittingsSeen;
+    INFO("library part: " << e.name << " (" << e.path << ")");
+
+    AppCommandState scratch;
+    std::vector<std::string> log;
+    REQUIRE(CadBlocksImportLibraryEntry(scratch, e, log));
+
+    // Under the name the row lists — not under some inner name from the file's own block table,
+    // which would leave the palette unable to find what it just imported.
+    const int di = CadBlockFindDef(scratch.blockDefs, e.name);
+    REQUIRE(di >= 0);
+    const CadBlockDefinition& def = scratch.blockDefs[static_cast<size_t>(di)];
+
+    // Something to picture (and to place).
+    CHECK_FALSE(def.content.solids.empty());
+
+    // Importing a library part for a PREVIEW must not drop loose geometry into the drawing — the
+    // scratch state exists precisely so listing a part changes nothing the user owns.
+    CHECK(scratch.cadSolids.empty());
+    CHECK(scratch.userLinesFlat.empty());
+  }
+  // Guards the test itself: if the bundled library ever stops being found, this must fail loudly
+  // rather than pass by iterating nothing.
+  CHECK(fittingsSeen >= 3);
+}
