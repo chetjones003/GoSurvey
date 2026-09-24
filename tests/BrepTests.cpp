@@ -8827,3 +8827,106 @@ TEST_CASE("A polysolid wall sections across and along its run", "[brep][req335][
     REQUIRE(std::fabs(PathArea(loop)) == Approx(10.0 * 5.0).epsilon(1e-12));
   }
 }
+
+// ---------------------------------------------------------------------------
+// GitHub issue #522: a section outline keeps only the corners the shape has.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A section through a UNION drops the vertices its internal face splits left",
+          "[brep][issue522]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+
+  // The issue's own pair: BOX 0,0,-25 100 70 50 union BOX 50,40,-25 50 50 50. MakeBox centres its
+  // frame in X and Y, so those are the boxes below.
+  Solid a, b;
+  REQUIRE(brep::MakeBox(PlaneAlong(World(), -25.0), 100.0, 70.0, 50.0, &a, &why));
+  REQUIRE(brep::MakeBox(At(50.0, 40.0, -25.0), 50.0, 50.0, 50.0, &b, &why));
+  std::vector<Solid> joined;
+  REQUIRE(brep::BooleanUnion(a, b, &joined, &why));
+  REQUIRE(joined.size() == 1);
+
+  SECTION("cut level at z = 0: eight corners, and the area unchanged") {
+    REQUIRE(brep::SectionLoop(joined[0], Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(loop.segs.size() == 8);
+    // 7000 + 2500 - 500 overlap, the issue's own arithmetic.
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(9000.0).epsilon(1e-12));
+    // The issue's own list, corner for corner.
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {{-50, -35, 0}, {50, -35, 0}, {50, 15, 0}, {75, 15, 0},
+                    {75, 65, 0}, {25, 65, 0}, {25, 35, 0}, {-50, 35, 0}});
+  }
+
+  SECTION("no three consecutive corners are in a line") {
+    REQUIRE(brep::SectionLoop(joined[0], Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    const std::vector<Vec3> c = SectionCornersWorld(plane, loop);
+    const std::size_t n = c.size();
+    for (std::size_t i = 0; i < n; ++i) {
+      const Vec3& p0 = c[(i + n - 1) % n];
+      const Vec3& p1 = c[i];
+      const Vec3& p2 = c[(i + 1) % n];
+      const Vec3 u = ray3d::Sub(p1, p0);
+      const Vec3 v = ray3d::Sub(p2, p1);
+      INFO("corner " << i << " at (" << p1.x << ", " << p1.y << ")");
+      REQUIRE(ray3d::Length(ray3d::Cross(u, v)) > 1e-6);
+    }
+  }
+
+  SECTION("a 45 degree cut through the same union: still only its real corners") {
+    const Vec3 n = ray3d::Normalize(Vec3{0, -1, 1});
+    REQUIRE(brep::SectionLoop(joined[0], Vec3{0, 0, 0}, n, &plane, &loop, &why));
+    const std::vector<Vec3> c = SectionCornersWorld(plane, loop);
+    for (std::size_t i = 0; i < c.size(); ++i) {
+      const Vec3 u = ray3d::Sub(c[i], c[(i + c.size() - 1) % c.size()]);
+      const Vec3 v = ray3d::Sub(c[(i + 1) % c.size()], c[i]);
+      INFO("corner " << i);
+      REQUIRE(ray3d::Length(ray3d::Cross(u, v)) > 1e-6);
+    }
+  }
+
+  SECTION("a single box still sections to four") {
+    REQUIRE(brep::SectionLoop(a, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(loop.segs.size() == 4);
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(7000.0).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("An outline whose corners are all real keeps every one", "[brep][issue522]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+
+  SECTION("a 6-sided pyramid section keeps its six corners") {
+    Solid hex;
+    REQUIRE(brep::MakePyramid(World(), 6, 20.0, 10.0, 30.0, &hex, &why));
+    REQUIRE(brep::SectionLoop(hex, Vec3{0, 0, 15}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(loop.segs.size() == 6);
+  }
+
+  SECTION("a cylinder's circle keeps both arcs — an arc endpoint is never dropped") {
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 12.0, 20.0, &cyl, &why));
+    REQUIRE(brep::SectionLoop(cyl, Vec3{0, 0, 10}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(loop.segs.size() == 2);
+    REQUIRE(std::fabs(loop.segs[0].sweep) == Approx(kPi).epsilon(1e-12));
+    REQUIRE(std::fabs(loop.segs[1].sweep) == Approx(kPi).epsilon(1e-12));
+  }
+
+  SECTION("a wedge's triangle keeps its three") {
+    Solid wedge;
+    REQUIRE(brep::MakeWedge(World(), 40.0, 20.0, 30.0, &wedge, &why));
+    REQUIRE(brep::SectionLoop(wedge, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    REQUIRE(loop.segs.size() == 3);
+  }
+
+  SECTION("a ring section keeps both of its outlines whole") {
+    Solid torus;
+    REQUIRE(brep::MakeTorus(World(), 20.0, 5.0, &torus, &why));
+    std::vector<brep::Path> loops;
+    REQUIRE(brep::SectionOutlines(torus, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    REQUIRE(loops[0].segs.size() == 2);
+    REQUIRE(loops[1].segs.size() == 2);
+  }
+}
