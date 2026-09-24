@@ -9109,6 +9109,162 @@ void DropCollinearPathVertices(Path* p) {
 
 } // namespace
 
+
+/// The elliptical ARC plus chord a tilted cut exposes when it runs off the end of a cylinder or cone
+/// (GitHub #520 follow-up, D-2026-09-23-b). The ellipse is the one the cut would make on the endless
+/// side surface; the cap cuts a piece out of it, and the chord closes what is left across the cap.
+///
+/// Section-only, and computed from the primitive's own geometry rather than from a cut: `Slice` does
+/// not build the pieces for this cut yet (it refuses with \ref Problem::SliceCutCrossesCurvedEnd), so
+/// there is no cut face to read back. That is the one place sectioning does not inherit Slice's
+/// accepted set, decided with the user and recorded; the follow-up is to teach the cutter the same
+/// cut, after which this can be read from the pieces like every other section.
+struct SectionEllipseArcX {
+  bool valid = false;
+  Vec3 centre{};    ///< world, the full ellipse's centre
+  Vec3 normal{};    ///< world, the caller's plane normal
+  Vec3 majorDir{};  ///< world, unit
+  double majorSemi = 0.0;
+  double minorSemi = 0.0;
+  double startParam = 0.0;  ///< the arc's own parametrisation, measured from `majorDir`
+  double sweep = 0.0;       ///< signed, CCW about `normal`
+  Vec3 chordA{};            ///< world; the arc runs from here...
+  Vec3 chordB{};            ///< ...to here, and the chord closes it across the cap
+};
+
+/// The two parameters at which the ellipse `centre + a cos t * major + b sin t * minor` reaches the
+/// axial height \p capZ, measured along \p axis from \p axisOrigin. False when it never does, or
+/// only grazes it — neither is an arc plus a chord.
+[[nodiscard]] bool EllipseParamsAtAxialHeight(const Vec3& centre, const Vec3& majorDir, const Vec3& minorDir,
+                                              double a, double b, const Vec3& axis, const Vec3& axisOrigin,
+                                              double capZ, double eps, double* outT0, double* outT1) {
+  // z(t) = zc + A cos t + B sin t = capZ  ->  R cos(t - phi) = capZ - zc.
+  const double zc = ray3d::Dot(ray3d::Sub(centre, axisOrigin), axis);
+  const double A = a * ray3d::Dot(majorDir, axis);
+  const double B = b * ray3d::Dot(minorDir, axis);
+  const double R = std::sqrt(A * A + B * B);
+  if (!(R > eps))
+    return false;  // the ellipse is level with the cap: it never crosses it
+  const double c = (capZ - zc) / R;
+  if (std::fabs(c) >= 1.0 - 1e-12)
+    return false;  // tangent or clear of the cap
+  const double phi = std::atan2(B, A);
+  const double d = std::acos(std::clamp(c, -1.0, 1.0));
+  *outT0 = phi - d;
+  *outT1 = phi + d;
+  return true;
+}
+
+[[nodiscard]] bool SectionEllipseArcOutline(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                            ucs::Ucs* outPlane, SectionEllipseArc* outArc,
+                                            Problem* outWhy) {
+  if (!outPlane || !outArc)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Cylinder && rc.kind != PrimitiveKind::Cone)
+    return Fail(Problem::SliceCurvedFace, outWhy);
+  ucs::Ucs frame{};
+  if (!ucs::FromNormal(planePoint, planeNormal, &frame))
+    return Fail(Problem::SliceDegeneratePlane, outWhy);
+
+  const ucs::Ucs& fr = rc.frame;
+  const Vec3 axis = ray3d::Normalize(fr.zAxis);
+  const Vec3 pn = ray3d::Normalize(planeNormal);
+  const double dotNZ = ray3d::Dot(pn, axis);
+  if (std::fabs(dotNZ) < 1e-6 || std::fabs(dotNZ) > 1.0 - 1e-9)
+    return Fail(Problem::SliceCutCrossesCurvedEnd, outWhy);  // not a tilted cut at all
+  const double h = rc.height;
+  const double scale = std::max(h, std::max(rc.radius, rc.radius2));
+  const double eps = 1e-7 * std::max(scale, 1.0);
+
+  // The full ellipse the plane makes on the side surface, taken from the same geometry the oblique
+  // cutters use: closed form for a cylinder, the quadric solve for a cone.
+  Vec3 centre{}, majorDir{}, minorDir{}, eN{};
+  double ea = 0.0, eb = 0.0;
+  if (rc.kind == PrimitiveKind::Cylinder) {
+    const double r = rc.radius;
+    const Vec3 pl = ucs::WorldToUcs(fr, planePoint);
+    const Vec3 nl{ray3d::Dot(pn, fr.xAxis), ray3d::Dot(pn, fr.yAxis), dotNZ};
+    const double a0 = (nl.x * pl.x + nl.y * pl.y + nl.z * pl.z) / nl.z;
+    centre = ray3d::Add(fr.origin, ray3d::Scale(axis, a0));
+    minorDir = ray3d::Normalize(ray3d::Cross(pn, axis));
+    majorDir = ray3d::Normalize(ray3d::Cross(pn, minorDir));
+    ea = r / std::fabs(dotNZ);
+    eb = r;
+    eN = dotNZ > 0.0 ? pn : ray3d::Scale(pn, -1.0);
+  } else {
+    ConeObliqueEllipse ce{};
+    if (!ComputeConeObliqueEllipse(fr, rc.radius, rc.radius2, h, planePoint, pn, eps, &ce))
+      return Fail(Problem::SliceCutTooSteepForCone, outWhy);
+    centre = ce.centre;
+    majorDir = ce.majorDir;
+    ea = ce.majorSemi;
+    eb = ce.minorSemi;
+    eN = ce.normal;
+    minorDir = ray3d::Cross(eN, majorDir);
+  }
+  if (rc.kind == PrimitiveKind::Cylinder)
+    minorDir = ray3d::Cross(eN, majorDir);  // the frame AddEllipse itself builds
+
+  // Which cap does it run off? Exactly one, or this is not the shape this answers.
+  const double zLoCap = 0.0;
+  const double zHiCap = h;
+  double t0 = 0.0, t1 = 0.0;
+  int crossings = 0;
+  double capZ = 0.0;
+  for (const double cz : {zLoCap, zHiCap}) {
+    double u0 = 0.0, u1 = 0.0;
+    if (EllipseParamsAtAxialHeight(centre, majorDir, minorDir, ea, eb, axis, fr.origin, cz, eps, &u0, &u1)) {
+      ++crossings;
+      t0 = u0;
+      t1 = u1;
+      capZ = cz;
+    }
+  }
+  if (crossings == 0)
+    return Fail(Problem::SectionEllipse, outWhy);  // it stays on the side: a whole ellipse, not this
+  if (crossings > 1)
+    return Fail(Problem::SliceCutCrossesCurvedEnd, outWhy);  // off BOTH ends: two arcs and two chords
+
+  // Of the two spans between the crossings, the section is the one whose points are INSIDE the
+  // solid — on the far side of the cap from the piece the cut removed.
+  const auto pointAt = [&](double t) {
+    return ray3d::Add(centre, ray3d::Add(ray3d::Scale(majorDir, ea * std::cos(t)),
+                                         ray3d::Scale(minorDir, eb * std::sin(t))));
+  };
+  const auto axialOf = [&](const Vec3& p) { return ray3d::Dot(ray3d::Sub(p, fr.origin), axis); };
+  const double mid = axialOf(pointAt(0.5 * (t0 + t1)));
+  const bool keepDirect = capZ == zLoCap ? mid > capZ : mid < capZ;
+  double start = keepDirect ? t0 : t1;
+  double sweep = keepDirect ? (t1 - t0) : (t0 + kTwoPi - t1);
+  while (sweep < 0.0)
+    sweep += kTwoPi;
+  if (!(sweep > eps) || sweep >= kTwoPi - eps)
+    return Fail(Problem::SliceCutCrossesCurvedEnd, outWhy);
+
+  // The caller's plane normal may oppose the ellipse's own, in which case its parametrisation runs
+  // the other way round — so the span is restated in the frame the caller (and the entity) will use.
+  if (ray3d::Dot(frame.zAxis, eN) < 0.0) {
+    start = -start;
+    sweep = -sweep;
+  }
+
+  SectionEllipseArc out;
+  out.valid = true;
+  out.centre = centre;
+  out.normal = frame.zAxis;
+  out.majorDir = majorDir;
+  out.majorSemi = ea;
+  out.minorSemi = eb;
+  out.startParam = start;
+  out.sweep = sweep;
+  out.chordA = pointAt(keepDirect ? t0 : t1);
+  out.chordB = pointAt((keepDirect ? t0 : t1) + (keepDirect ? (t1 - t0) : (t0 + kTwoPi - t1)));
+  *outPlane = frame;
+  *outArc = out;
+  return Succeed(outWhy);
+}
+
 bool SectionEllipseOutline(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                            ucs::Ucs* outPlane, SectionEllipse* outEllipse, Problem* outWhy) {
   if (!outPlane || !outEllipse)

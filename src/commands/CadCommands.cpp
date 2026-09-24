@@ -29903,6 +29903,9 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
     /// A tilted cut of a cylinder or cone is one closed ELLIPSE, which no polyline can hold: it
     /// becomes an `ELLIPSE` entity standing in the cut plane instead (GitHub #531, D-2026-09-23-a).
     brep::SectionEllipse ellipse;
+    /// And when that cut runs off the end, it is an elliptical ARC plus the chord across the cap —
+    /// two objects for one cut, in one undo step (D-2026-09-23-b).
+    brep::SectionEllipseArc ellipseArc;
   };
   std::vector<Cut> cuts;
   cuts.reserve(solids.size());
@@ -29920,8 +29923,14 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
       // of a cylinder or cone (GitHub #531). Asked for by name rather than guessed at, so every
       // other refusal still arrives with the kernel's own reason, verbatim, and draws nothing.
       brep::Problem ellipseWhy = brep::Problem::Ok;
-      if (why != brep::Problem::SectionEllipse ||
-          !brep::SectionEllipseOutline(*sp, planePoint, planeNormal, &c.plane, &c.ellipse, &ellipseWhy)) {
+      const bool wholeEllipse =
+          why == brep::Problem::SectionEllipse &&
+          brep::SectionEllipseOutline(*sp, planePoint, planeNormal, &c.plane, &c.ellipse, &ellipseWhy);
+      // And the cut that runs off the end: an elliptical arc plus the chord across the cap.
+      const bool arcAndChord =
+          !wholeEllipse && why == brep::Problem::SliceCutCrossesCurvedEnd &&
+          brep::SectionEllipseArcOutline(*sp, planePoint, planeNormal, &c.plane, &c.ellipseArc, &ellipseWhy);
+      if (!wholeEllipse && !arcAndChord) {
         log.push_back(std::string("SECTION — ") + brep::ProblemText(why));
         return;
       }
@@ -29939,6 +29948,42 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
   int made = 0;
   int failed = 0;
   for (const Cut& c : cuts) {
+    if (c.ellipseArc.valid) {
+      // Two objects for one cut: the elliptical arc, and the chord that closes it across the cap.
+      // Both land under the one undo snapshot taken above (D-2026-09-23-b).
+      const ucs::Ucs plane = c.plane;
+      const ucs::Point2D centre2d = ucs::WorldToPlane(plane, c.ellipseArc.centre);
+      const ucs::Point2D major2d = ucs::WorldToPlane(
+          plane, ray3d::Add(c.ellipseArc.centre, ray3d::Scale(c.ellipseArc.majorDir, c.ellipseArc.majorSemi)));
+      CadEllipse el{};
+      float lx = 0.f, ly = 0.f;
+      CadCoord::LocalFromWorld(st, c.ellipseArc.centre.x, c.ellipseArc.centre.y, &lx, &ly);
+      el.cx = static_cast<double>(lx);
+      el.cy = static_cast<double>(ly);
+      el.z = c.ellipseArc.centre.z;
+      el.majVx = static_cast<float>(major2d.x - centre2d.x);
+      el.majVy = static_cast<float>(major2d.y - centre2d.y);
+      el.ratio = static_cast<float>(c.ellipseArc.minorSemi / std::max(c.ellipseArc.majorSemi, 1e-12));
+      el.nx = static_cast<float>(c.ellipseArc.normal.x);
+      el.ny = static_cast<float>(c.ellipseArc.normal.y);
+      el.nz = static_cast<float>(c.ellipseArc.normal.z);
+      el.startRad = static_cast<float>(c.ellipseArc.startParam);
+      el.sweepRad = static_cast<float>(c.ellipseArc.sweep);
+      st.userEllipses.push_back(el);
+      st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+      float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+      CadCoord::LocalFromWorld(st, c.ellipseArc.chordA.x, c.ellipseArc.chordA.y, &ax, &ay);
+      CadCoord::LocalFromWorld(st, c.ellipseArc.chordB.x, c.ellipseArc.chordB.y, &bx, &by);
+      st.userLinesFlat.push_back(ax);
+      st.userLinesFlat.push_back(ay);
+      st.userLinesFlat.push_back(static_cast<float>(c.ellipseArc.chordA.z));
+      st.userLinesFlat.push_back(bx);
+      st.userLinesFlat.push_back(by);
+      st.userLinesFlat.push_back(static_cast<float>(c.ellipseArc.chordB.z));
+      st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+      made += 2;
+      continue;
+    }
     if (c.ellipse.valid) {
       // The ellipse stands in the cut plane: its centre is a world point, and its major axis is
       // stated in that plane's own axes, which is how `CadEllipse` carries a tilted ellipse

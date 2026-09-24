@@ -1,0 +1,91 @@
+# A tilted cut that runs off the END of a pipe: an elliptical ARC plus the chord across the cap
+# (GitHub #520 follow-up, D-2026-09-23-b).
+#
+# Before: "A tilted cut that crosses the end of a cylinder or cone is not supported yet." The cut
+# between the caps became an ellipse with #531; this is the other half — the outline is an arc of
+# that ellipse plus a straight chord where the cut leaves through the end, so it is TWO objects for
+# one cut, in one undo step.
+#
+# The pipe spans z -40 to 10, so the UCS turned 45 degrees about X — the plane z = y through the
+# origin — makes an ellipse spanning z -30 to 30, which runs off the top (z = 10) and clears the
+# bottom (z = -40). Running off BOTH ends is two arcs and two chords, and is still refused.
+
+NEW
+
+CMD CYLINDER 0,0,-40 30 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 2 section outlines created. The solid is unchanged."
+EXPECT ELLIPSES 1
+EXPECT LINES 1
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+ESC
+CHECK ALL
+
+# One undo step takes BOTH objects away: one cut, one step.
+CMD UNDO
+EXPECT ELLIPSES 0
+EXPECT LINES 0
+EXPECT SOLIDS 1
+CMD REDO
+EXPECT ELLIPSES 1
+EXPECT LINES 1
+CHECK ALL
+
+# --- both survive the drawing's own file, and DXF --------------------------------------------------
+SAVEAS %OUT%/section-arc.gs
+OPEN %OUT%/section-arc.gs
+EXPECT ELLIPSES 1
+EXPECT LINES 1
+CHECK ALL
+EXPORT DXF %OUT%/section-arc.dxf
+EXPECT FILECONTAINS %OUT%/section-arc.dxf "AcDbEllipse"
+EXPECT FILECONTAINS %OUT%/section-arc.dxf "AcDbLine"
+# Groups 41/42 carry the span actually drawn. Until this was checked against the FILE rather than
+# the entity count, the export wrote a full turn and the arc came back as the whole ellipse.
+EXPECT FILECONTAINS %OUT%/section-arc.dxf "4.372552"
+NEW
+IMPORT DXF %OUT%/section-arc.dxf
+EXPECT ELLIPSES 1
+EXPECT LINES 1
+CHECK ALL
+
+# --- a cut that runs off BOTH ends is still refused, by its own name --------------------------------
+NEW
+CMD CYLINDER 0,0,-25 30 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A tilted cut that crosses the end of a cylinder or cone is not supported yet."
+ESC
+EXPECT ELLIPSES 0
+EXPECT LINES 0
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- and a cut that stays between the caps is still the whole ellipse, one object --------------------
+NEW
+CMD CYLINDER 0,0,-100 30 200
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT ELLIPSES 1
+EXPECT LINES 0
+CMD UCS
+CMD W
+CHECK ALL

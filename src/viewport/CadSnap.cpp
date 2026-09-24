@@ -1246,9 +1246,10 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     }
     if (!ellFlat) {
       // Sampled through the ellipse's own plane; each candidate carries the height it really has.
+      // An elliptical ARC is walked over its own span only, not the whole turn.
       for (int i = 0; i < kEllSnapSeg; ++i) {
-        const double a0 = static_cast<double>(kTwoPi) * static_cast<double>(i) / kEllSnapSeg;
-        const double a1 = static_cast<double>(kTwoPi) * static_cast<double>(i + 1) / kEllSnapSeg;
+        const double a0 = EllipseSpanAngleAt(el, static_cast<double>(i) / kEllSnapSeg);
+        const double a1 = EllipseSpanAngleAt(el, static_cast<double>(i + 1) / kEllSnapSeg);
         const ray3d::Vec3 p0 = EllipseWorldPointAt(el, a0);
         const ray3d::Vec3 p1 = EllipseWorldPointAt(el, a1);
         if (wantMidpoint)

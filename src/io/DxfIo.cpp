@@ -894,14 +894,32 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     // ellipses lost identity on import as well as being dropped on export. A FULL ellipse now takes
     // the real store, on the same identity-vs-tessellate split `appendCircleXF` established.
     //
-    // A TRIMMED ellipse still tessellates, and that is forced rather than chosen: `CadEllipse` has
-    // no start/end parameter, so the range cannot be stored, and adding one is a `.gs` data-format
-    // change — a SPEC GAP, not bug-fix work (TASK-114 DEBT-1). The full-turn test below reads a
-    // zero-length span as "no range given" = a full turn, matching the tessellating path's own rule.
+    // A TRIMMED ellipse used to tessellate, because `CadEllipse` had no start/end parameter to store
+    // the range in (TASK-114 DEBT-1). It has one now (GitHub #520 follow-up — a tilted cut off the end
+    // of a pipe IS a trimmed ellipse), so the range is kept and the entity survives the round trip.
+    // A zero-length span still reads as "no range given" = a full turn, as it always did.
     double spanFull = t1 - t0;
     while (spanFull < 0.0)
       spanFull += 2.0 * kPi;
     const bool isFullTurn = (spanFull < 1e-9) || (std::fabs(spanFull - 2.0 * kPi) < 1e-6);
+    if (!isFullTurn && xf.isIdentity()) {
+      double ocx = 0, ocy = 0;
+      xf.apply(cx, cy, &ocx, &ocy);
+      UpdateCoordMag(coordMagMax, ocx, ocy);
+      UpdateCoordMag(coordMagMax, ocx + a, ocy + a);
+      CadEllipse el{};
+      el.cx = ocx - st.worldDocumentOriginX;
+      el.cy = ocy - st.worldDocumentOriginY;
+      el.majVx = static_cast<float>(majx);
+      el.majVy = static_cast<float>(majy);
+      el.ratio = static_cast<float>(ratio);
+      el.z = static_cast<float>(cz);
+      el.startRad = static_cast<float>(t0);
+      el.sweepRad = static_cast<float>(spanFull);
+      st.userEllipses.push_back(el);
+      st.userEllAttrs.push_back(at);
+      return;
+    }
     if (isFullTurn && xf.isIdentity()) {
       double ocx = 0, ocy = 0;
       xf.apply(cx, cy, &ocx, &ocy);
@@ -3757,8 +3775,17 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(230, std::to_string(static_cast<double>(el.nz)));
     }
     emitPair(40, std::to_string(static_cast<double>(ewEmit.ratio)));
-    emitPair(41, "0.0");
-    emitPair(42, std::to_string(2.0 * kPi));
+    // Groups 41/42 are the start and end parameter of the span actually drawn — a full turn for a
+    // closed ellipse, which is what every ellipse was before an elliptical ARC could exist
+    // (GitHub #520 follow-up). Written from the entity rather than assumed, or the arc of a cut that
+    // runs off a pipe's end would export as the whole ellipse it was cut from.
+    if (EllipseIsFullTurn(el)) {
+      emitPair(41, "0.0");
+      emitPair(42, std::to_string(2.0 * kPi));
+    } else {
+      emitPair(41, std::to_string(static_cast<double>(el.startRad)));
+      emitPair(42, std::to_string(static_cast<double>(el.startRad) + static_cast<double>(el.sweepRad)));
+    }
   }
 
   // Polylines — including every RECT, which is stored as a 4-vertex closed polyline (REQ-053). Before this
