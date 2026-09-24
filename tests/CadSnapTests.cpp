@@ -19,6 +19,7 @@
 
 #include "CadCommands.hpp"
 #include "CadSnap.hpp"
+#include "TransformPreview.hpp"
 
 using Kind = CadSnap::Kind;
 using Catch::Approx;
@@ -1495,6 +1496,88 @@ TEST_CASE("A tilted ellipse offers no grip to grab", "[CadCommands][pick][ellips
   flat.userEllipses.push_back(el);
   flat.selection.push_back(sel);
   CHECK(TryBeginEntityGripAtLocal(flat, 10.f, 0.f, 0.5f));
+}
+
+
+TEST_CASE("An orbited click picks the tilted arc by the ray, on its own plane",
+          "[CadCommands][pick][ellipsesel]") {
+  // The metric the APP actually uses once the view is orbited: PickClosestCadEntity takes a ray and
+  // measures in true 3D. The plan-view cases above cannot see a fault in Z at all — the flat
+  // reading and the real curve share an XY footprint over part of the turn — so this is the one
+  // that says the arc is picked where it STANDS, not at the elevation a flat ellipse would have.
+  AppCommandState st;
+  st.userEllipses.push_back(SectionPartOval());
+  SelectedEntity hit{};
+  float d2 = 0.f;
+
+  // The bottom of the drawn arc is the world point (0, -30, -30). A ray straight down the +X axis
+  // through it hits the curve; the flat reading would put that part of the oval at z = 0.
+  const ray3d::Ray atCurve{ray3d::Vec3{-1000.0, -30.0, -30.0}, ray3d::Vec3{1.0, 0.0, 0.0}};
+  CHECK(PickClosestCadEntity(st, 0.0, -30.0, 1.0f, &hit, &d2, &atCurve));
+  CHECK(hit.type == SelectedEntity::Type::Ellipse);
+
+  // Same XY, but at the elevation the flat reading would have drawn it. Nothing is there: 30 units
+  // of empty air above the curve.
+  const ray3d::Ray atFlatZ{ray3d::Vec3{-1000.0, -30.0, 0.0}, ray3d::Vec3{1.0, 0.0, 0.0}};
+  CHECK_FALSE(PickClosestCadEntity(st, 0.0, -30.0, 1.0f, &hit, &d2, &atFlatZ));
+}
+
+TEST_CASE("A tilted WHOLE ellipse is picked on its own plane too", "[CadCommands][pick][ellipsesel]") {
+  // GitHub #531's own case, independent of the span: a cut that stays between a pipe's caps draws a
+  // complete oval, standing up. The span fix cannot carry this one, and the tilt fix must.
+  AppCommandState st;
+  CadEllipse el = SectionPartOval();
+  el.startRad = 0.f;
+  el.sweepRad = 6.28318530717958647692f;  // the whole turn
+  st.userEllipses.push_back(el);
+  SelectedEntity hit{};
+  float d2 = 0.f;
+
+  // Now every part of the oval is drawn, including the side the cut used to remove.
+  CHECK(PickClosestCadEntity(st, 0.0, 30.0, 1.0f, &hit, &d2));
+  CHECK(hit.type == SelectedEntity::Type::Ellipse);
+  CHECK(PickClosestCadEntity(st, 0.0, -30.0, 1.0f, &hit, &d2));
+  // And it is still not out at 42.4, where a flat reading put it.
+  CHECK_FALSE(PickClosestCadEntity(st, 0.0, -42.426, 1.0f, &hit, &d2));
+
+  // In 3D the two sides of the oval are 60 apart in Z, which only the ray metric can tell apart.
+  const ray3d::Ray high{ray3d::Vec3{-1000.0, 30.0, 30.0}, ray3d::Vec3{1.0, 0.0, 0.0}};
+  CHECK(PickClosestCadEntity(st, 0.0, 30.0, 1.0f, &hit, &d2, &high));
+  const ray3d::Ray wrongZ{ray3d::Vec3{-1000.0, 30.0, -30.0}, ray3d::Vec3{1.0, 0.0, 0.0}};
+  CHECK_FALSE(PickClosestCadEntity(st, 0.0, 30.0, 1.0f, &hit, &d2, &wrongZ));
+}
+
+TEST_CASE("The selection highlight traces the curve that is drawn", "[CadCommands][pick][ellipsesel]") {
+  // Selecting the section is only half of "I selected the section" — the highlight is how that is
+  // confirmed on screen. Drawn flat and whole it contradicted the curve: the arc would select, then
+  // light up as a complete oval lying on the datum.
+  AppCommandState st;
+  st.userEllipses.push_back(SectionPartOval());
+  SelectedEntity sel{};
+  sel.type = SelectedEntity::Type::Ellipse;
+  sel.index = 0;
+  st.selection.push_back(sel);
+
+  std::vector<float> hlLines;
+  std::vector<float> hlCircles;
+  BuildSelectionHighlight(st, &hlLines, &hlCircles);
+  REQUIRE(hlLines.size() >= 12u);
+  REQUIRE(hlLines.size() % 6u == 0u);
+
+  // Every highlight vertex sits ON the arc: in plan, 30 from the axis, and standing in the cut
+  // plane, where z equals y. A flat strip would have z = 0 throughout and reach 42.4 out.
+  double mnZ = 1e300, mxZ = -1e300, mxR = 0.0;
+  for (size_t i = 0; i + 2 < hlLines.size(); i += 3) {
+    const double x = hlLines[i], y = hlLines[i + 1], z = hlLines[i + 2];
+    CHECK(std::hypot(x, y) == Approx(30.0).margin(0.25));
+    CHECK(z == Approx(y).margin(1e-3));
+    mnZ = std::min(mnZ, z);
+    mxZ = std::max(mxZ, z);
+    mxR = std::max(mxR, std::hypot(x, y));
+  }
+  CHECK(mxR < 31.0);           // never out at the flat reading's 42.4
+  CHECK(mnZ < -25.0);          // it really does stand up
+  CHECK(mxZ <= 10.0 + 1e-3);   // and stops at the cap it was cut by, not above it
 }
 
 // --- REQ-335: snapping the SECOND point of a SECTION plane (user report, 2026-09-11) ------------
