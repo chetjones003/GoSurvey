@@ -1730,11 +1730,13 @@ TEST_CASE("Slice refuses what it cannot do, by name", "[brep][req314]") {
                               brep::SliceKeep::Both, &a, &b, &why));
     REQUIRE(why == Problem::SliceCutCrossesCurvedEnd);
   }
-  SECTION("a sphere — every cut crosses its curved face (#518)") {
+  SECTION("a sphere cuts into two caps (#520)") {
     Solid sph;
     REQUIRE(brep::MakeSphere(World(), 5, &sph, &why));
-    REQUIRE_FALSE(brep::Slice(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
-    REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
+    REQUIRE(brep::Slice(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    const double half = 2.0 / 3.0 * kPi * 125.0;
+    REQUIRE(brep::ComputeMassProperties(a).volume == Approx(half).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(b).volume == Approx(half).epsilon(1e-9));
   }
 }
 
@@ -6206,22 +6208,24 @@ TEST_CASE("An oblique cut of a cylinder is refused by name rather than approxima
 
 TEST_CASE("A section inherits Slice's accepted set, with Slice's own reason",
           "[brep][req335][req149][req201]") {
-  // A sphere is refused by Slice today, so it is refused here -- and by the SAME Problem, not a
-  // second reason invented alongside it. If Slice's accepted set grows, this grows with it.
+  // A torus cut at any angle but square to its axis is refused by Slice (a quartic curve, #520), so
+  // it is refused here -- and by the SAME Problem, not a second reason invented alongside it. If
+  // Slice's accepted set grows, this grows with it. (A sphere was this test's example until #520
+  // made every sphere cut a circle.)
   Problem why = Problem::Ok;
-  Solid sphere;
-  REQUIRE(brep::MakeSphere(World(), 15, &sphere, &why));
+  Solid torus;
+  REQUIRE(brep::MakeTorus(World(), 20, 5, &torus, &why));
+  const Vec3 tilted = ray3d::Normalize(Vec3{1, 0, 1});
 
   Solid a, b;
   Problem sliceWhy = Problem::Ok;
-  const bool sliced = brep::Slice(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b,
-                                  &sliceWhy);
+  const bool sliced = brep::Slice(torus, Vec3{0, 0, 0}, tilted, brep::SliceKeep::Both, &a, &b, &sliceWhy);
   REQUIRE_FALSE(sliced);  // the premise of this test
 
   ucs::Ucs plane{};
   brep::Path loop;
   Problem sectionWhy = Problem::Ok;
-  CHECK_FALSE(brep::SectionLoop(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &sectionWhy));
+  CHECK_FALSE(brep::SectionLoop(torus, Vec3{0, 0, 0}, tilted, &plane, &loop, &sectionWhy));
   CHECK(sectionWhy == sliceWhy);
 }
 
@@ -7817,10 +7821,15 @@ TEST_CASE("SECTION and SLICE name the limit a curved cut actually hit", "[brep][
     REQUIRE(brep::SectionLoop(cyl, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
   }
 
-  SECTION("a sphere says the cut crosses a curved face — not a cut direction (#518, #520)") {
-    Solid sph;
-    REQUIRE(brep::MakeSphere(World(), 30.0, &sph, &why));
-    REQUIRE_FALSE(brep::SectionLoop(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+  SECTION("a drilled box says the cut crosses a curved face — not a cut direction (#518)") {
+    // A sphere was this case's example until #520 made every sphere cut a circle.
+    Solid box, bore;
+    REQUIRE(brep::MakeBox(World(), 40.0, 30.0, 20.0, &box, &why));
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -5.0), 5.0, 30.0, &bore, &why));
+    std::vector<Solid> drilled;
+    REQUIRE(brep::BooleanSubtract(box, bore, &drilled, &why));
+    REQUIRE(drilled.size() == 1);
+    REQUIRE_FALSE(brep::SectionLoop(drilled[0], Vec3{0, 0, 10}, Vec3{0, 0, 1}, &plane, &loop, &why));
     REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
   }
 
@@ -8477,4 +8486,240 @@ TEST_CASE("A pipe flange (big central bore + 4 bolt holes) tessellates crack-fre
   RequireWindingMatchesNormals(t);
   RequireMeshWatertight(t);
   REQUIRE(TessellatedVolume(t) == Approx(wantVolume).epsilon(1e-2));
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #520: a sphere sections as a circle, and a torus cut square to its axis as a ring.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct SectionCircle {
+  ucs::Point2D centre{};
+  double radius = 0.0;
+  double signedSweep = 0.0;  // +2pi for a circle wound CCW about the section normal, -2pi for a hole
+};
+
+/// The circle a two-arc closed \ref Path describes, in the section plane's own 2D coordinates.
+SectionCircle CircleOf(const brep::Path& p) {
+  REQUIRE(p.closed);
+  REQUIRE(p.segs.size() == 2);
+  REQUIRE(std::fabs(std::fabs(p.segs[0].sweep) - kPi) < 1e-9);
+  REQUIRE(std::fabs(std::fabs(p.segs[1].sweep) - kPi) < 1e-9);
+  const ucs::Point2D a = p.start;
+  const ucs::Point2D b = p.segs[0].end;
+  SectionCircle c;
+  c.centre = {0.5 * (a.x + b.x), 0.5 * (a.y + b.y)};
+  c.radius = 0.5 * std::hypot(b.x - a.x, b.y - a.y);
+  c.signedSweep = p.segs[0].sweep + p.segs[1].sweep;
+  return c;
+}
+
+} // namespace
+
+TEST_CASE("A sphere sections as a circle and slices into two caps", "[brep][issue520]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  Solid above, below;
+  const double R = 30.0;
+  Solid sphere;
+  REQUIRE(brep::MakeSphere(World(), R, &sphere, &why));
+
+  SECTION("through the centre: a circle of the sphere's own radius, and two hemispheres") {
+    REQUIRE(brep::SectionLoop(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    const SectionCircle c = CircleOf(loop);
+    REQUIRE(c.radius == Approx(R).epsilon(1e-12));
+    REQUIRE(std::hypot(c.centre.x, c.centre.y) == Approx(0.0).margin(1e-9));
+    REQUIRE(c.signedSweep == Approx(kTwoPiTest).epsilon(1e-12));  // an outer outline winds CCW
+
+    REQUIRE(brep::Slice(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    const double hemisphere = 2.0 / 3.0 * kPi * R * R * R;
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(hemisphere).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(hemisphere).epsilon(1e-9));
+    // Curved surface of a hemisphere (2 pi R^2) plus the flat disc (pi R^2).
+    REQUIRE(brep::ComputeMassProperties(above).surfaceArea == Approx(3.0 * kPi * R * R).epsilon(1e-9));
+    REQUIRE(MeshVolume(above, Vec3{}) == Approx(hemisphere).epsilon(1e-3));
+  }
+
+  SECTION("off centre: radius sqrt(R^2 - d^2), and the cap volume formula") {
+    const double d = 18.0;
+    REQUIRE(brep::SectionLoop(sphere, Vec3{0, 0, d}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(CircleOf(loop).radius == Approx(std::sqrt(R * R - d * d)).epsilon(1e-12));  // 24
+
+    REQUIRE(brep::Slice(sphere, Vec3{0, 0, d}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    const double h = R - d;  // cap height
+    const double cap = kPi * h * h * (3.0 * R - h) / 3.0;
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(cap).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(below).volume ==
+            Approx(4.0 / 3.0 * kPi * R * R * R - cap).epsilon(1e-9));
+  }
+
+  SECTION("a tilted plane is the same answer: the section is square to the plane, not to the world") {
+    const Vec3 n = ray3d::Normalize(Vec3{1, -2, 2});
+    const double d = 12.0;
+    REQUIRE(brep::SectionLoop(sphere, ray3d::Scale(n, d), n, &plane, &loop, &why));
+    REQUIRE(CircleOf(loop).radius == Approx(std::sqrt(R * R - d * d)).epsilon(1e-9));
+    REQUIRE(brep::Slice(sphere, ray3d::Scale(n, d), n, brep::SliceKeep::Both, &above, &below, &why));
+    const double h = R - d;
+    REQUIRE(brep::ComputeMassProperties(above).volume ==
+            Approx(kPi * h * h * (3.0 * R - h) / 3.0).epsilon(1e-9));
+  }
+
+  SECTION("a plane that misses the sphere, or touches it, says so") {
+    REQUIRE_FALSE(brep::SectionLoop(sphere, Vec3{0, 0, R}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+    REQUIRE_FALSE(brep::SectionLoop(sphere, Vec3{0, 0, 40}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+  }
+
+  SECTION("at survey magnitude on a tilted frame: the circle within 0.002 ft") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid far;
+    REQUIRE(brep::MakeSphere(base, R, &far, &why));
+    const double d = 10.0;
+    const Vec3 at = ucs::UcsToWorld(base, Vec3{0, 0, d});
+    REQUIRE(brep::SectionLoop(far, at, base.zAxis, &plane, &loop, &why));
+    const SectionCircle c = CircleOf(loop);
+    REQUIRE(c.radius == Approx(std::sqrt(R * R - d * d)).margin(0.002));
+    // The circle is centred on the foot of the perpendicular from the sphere's centre.
+    const Vec3 centreWorld = ucs::PlaneToWorld(plane, c.centre);
+    REQUIRE(ray3d::Length(ray3d::Sub(centreWorld, at)) <= 0.002);
+    REQUIRE(brep::ComputeMassProperties(far).volume == Approx(4.0 / 3.0 * kPi * R * R * R).epsilon(1e-9));
+  }
+}
+
+TEST_CASE("A torus cut square to its axis sections as a ring", "[brep][issue520]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  std::vector<brep::Path> loops;
+  Solid above, below;
+  const double R = 20.0, r = 5.0;
+  Solid torus;
+  REQUIRE(brep::MakeTorus(World(), R, r, &torus, &why));
+  const double whole = brep::ComputeMassProperties(torus).volume;
+  REQUIRE(whole == Approx(2.0 * kPi * kPi * R * r * r).epsilon(1e-9));
+
+  SECTION("through the centre: circles of R + r and R - r, the hole wound the other way") {
+    REQUIRE(brep::SectionOutlines(torus, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    const SectionCircle outer = CircleOf(loops[0]);
+    const SectionCircle hole = CircleOf(loops[1]);
+    REQUIRE(outer.radius == Approx(R + r).epsilon(1e-12));
+    REQUIRE(hole.radius == Approx(R - r).epsilon(1e-12));
+    REQUIRE(outer.signedSweep == Approx(kTwoPiTest).epsilon(1e-12));   // outer: counter-clockwise
+    REQUIRE(hole.signedSweep == Approx(-kTwoPiTest).epsilon(1e-12));   // hole: clockwise
+    REQUIRE(std::hypot(outer.centre.x, outer.centre.y) == Approx(0.0).margin(1e-9));
+    REQUIRE(std::hypot(hole.centre.x, hole.centre.y) == Approx(0.0).margin(1e-9));
+
+    // The single-outline entry point says which of the two ways there is more than one.
+    REQUIRE_FALSE(brep::SectionLoop(torus, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SectionHasHole);
+
+    REQUIRE(brep::Slice(torus, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(0.5 * whole).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(0.5 * whole).epsilon(1e-9));
+    REQUIRE(MeshVolume(above, Vec3{}) == Approx(0.5 * whole).epsilon(1e-2));
+  }
+
+  SECTION("off centre: R +/- sqrt(r^2 - d^2), and the pieces still add up") {
+    const double d = 3.0;
+    const double w = std::sqrt(r * r - d * d);  // 4
+    REQUIRE(brep::SectionOutlines(torus, Vec3{0, 0, d}, Vec3{0, 0, 1}, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    REQUIRE(CircleOf(loops[0]).radius == Approx(R + w).epsilon(1e-12));
+    REQUIRE(CircleOf(loops[1]).radius == Approx(R - w).epsilon(1e-12));
+
+    REQUIRE(brep::Slice(torus, Vec3{0, 0, d}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    const double va = brep::ComputeMassProperties(above).volume;
+    const double vb = brep::ComputeMassProperties(below).volume;
+    REQUIRE(va + vb == Approx(whole).epsilon(1e-9));
+    REQUIRE(va < vb);  // the plane is above the centre, so the upper piece is the smaller one
+  }
+
+  SECTION("every other torus cut says what kind of cut it is") {
+    for (const Vec3& n : {ray3d::Normalize(Vec3{1, 0, 1}), Vec3{1, 0, 0}, ray3d::Normalize(Vec3{0, 1, 4})}) {
+      REQUIRE_FALSE(brep::Slice(torus, Vec3{0, 0, 0}, n, brep::SliceKeep::Both, &above, &below, &why));
+      INFO(brep::ProblemText(why));
+      REQUIRE(why == Problem::SliceCutTorusCurve);
+      REQUIRE_FALSE(brep::SectionOutlines(torus, Vec3{0, 0, 0}, n, &plane, &loops, &why));
+      REQUIRE(why == Problem::SliceCutTorusCurve);
+    }
+    REQUIRE(std::string(brep::ProblemText(Problem::SliceCutTorusCurve)).find("torus") != std::string::npos);
+  }
+
+  SECTION("a plane square to the axis but clear of the tube misses it") {
+    REQUIRE_FALSE(brep::Slice(torus, Vec3{0, 0, r}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+    REQUIRE_FALSE(brep::Slice(torus, Vec3{0, 0, 9}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+  }
+
+  SECTION("at survey magnitude on a tilted frame: both circles within 0.002 ft") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid far;
+    REQUIRE(brep::MakeTorus(base, R, r, &far, &why));
+    REQUIRE(brep::SectionOutlines(far, base.origin, base.zAxis, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    REQUIRE(CircleOf(loops[0]).radius == Approx(R + r).margin(0.002));
+    REQUIRE(CircleOf(loops[1]).radius == Approx(R - r).margin(0.002));
+    for (const brep::Path& p : loops) {
+      const Vec3 centreWorld = ucs::PlaneToWorld(plane, CircleOf(p).centre);
+      REQUIRE(ray3d::Length(ray3d::Sub(centreWorld, base.origin)) <= 0.002);
+    }
+  }
+}
+
+TEST_CASE("A round recipe that does not describe its solid is not used to cut it", "[brep][issue520]") {
+  // The #526 rule, extended to the round primitives these builders rebuild from: a recipe whose
+  // primitive is a different shape must not place the cut. Found by the final review on #541.
+  Problem why = Problem::Ok;
+  Solid a, b;
+
+  Solid sphere;
+  REQUIRE(brep::MakeSphere(World(), 30.0, &sphere, &why));
+  Solid movedSphere = sphere;
+  movedSphere.recipe.frame.origin.x += 100.0;  // what a damaged .gs frame looks like
+  REQUIRE_FALSE(brep::Slice(movedSphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(why == Problem::SliceCutCrossesCurvedFace);  // refused, not cut 100 feet away
+
+  Solid torus;
+  REQUIRE(brep::MakeTorus(World(), 20.0, 5.0, &torus, &why));
+  Solid wrongTorus = torus;
+  wrongTorus.recipe.radius2 = 2.0;  // a tube the solid does not have
+  REQUIRE_FALSE(brep::Slice(wrongTorus, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
+
+  // A torus whose tube is as wide as its ring has no ring-shaped cut at all.
+  Solid fat;
+  REQUIRE(brep::MakeTorus(World(), 6.0, 9.0, &fat, &why));
+  REQUIRE_FALSE(brep::ComputeMassProperties(fat).valid);  // self-intersecting: no measured shape to vet
+  REQUIRE_FALSE(brep::Slice(fat, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(why == Problem::SliceCutTorusCurve);
+}
+
+TEST_CASE("SectionOutlines returns what SectionLoop returns when there is one outline",
+          "[brep][issue520]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs planeA, planeB;
+  brep::Path one;
+  std::vector<brep::Path> many;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 30.0, 20.0, 12.0, &box, &why));
+  REQUIRE(brep::SectionLoop(box, Vec3{0, 0, 6}, Vec3{0, 0, 1}, &planeA, &one, &why));
+  REQUIRE(brep::SectionOutlines(box, Vec3{0, 0, 6}, Vec3{0, 0, 1}, &planeB, &many, &why));
+  REQUIRE(many.size() == 1);
+  REQUIRE(many[0].segs.size() == one.segs.size());
+  REQUIRE(many[0].start.x == Approx(one.start.x));
+  REQUIRE(many[0].start.y == Approx(one.start.y));
+  REQUIRE(PathArea(many[0]) == Approx(PathArea(one)));
+
+  // A refusal is the same refusal through both, and neither writes anything.
+  Solid sph;
+  REQUIRE(brep::MakeSphere(World(), 5.0, &sph, &why));
+  REQUIRE_FALSE(brep::SectionOutlines(sph, Vec3{0, 0, 8}, Vec3{0, 0, 1}, &planeB, &many, &why));
+  REQUIRE(why == Problem::SlicePlaneMissesSolid);
+  REQUIRE_FALSE(brep::SectionLoop(sph, Vec3{0, 0, 8}, Vec3{0, 0, 1}, &planeA, &one, &why));
+  REQUIRE(why == Problem::SlicePlaneMissesSolid);
 }
