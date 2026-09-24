@@ -49,7 +49,8 @@ constexpr int kMaxArcSegments = 512;
 /// so issue #486's tuning pass (done before the scaled floor existed) was implicitly tuned against
 /// TWO applications of this constant — 256 segments per turn, not 128 — and a user-visible regression
 /// confirmed 128 alone reads as faceted again at ordinary working zoom on a small (2 in radius) part.
-constexpr int kMinFullCircleSegments = 256;
+/// The public default, aliased so the two cannot drift apart.
+constexpr int kMinFullCircleSegments = kFullCircleSegments;
 
 [[nodiscard]] bool AllFinite(std::initializer_list<double> vs) {
   for (double v : vs) {
@@ -1541,7 +1542,8 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
 // ---------------------------------------------------------------------------------------------
 
 /// Segments needed so the sagitta of each chord stays within \p tol on a circle of \p radius.
-[[nodiscard]] int SegmentsForArc(double radius, double spanRad, double tol) {
+[[nodiscard]] int SegmentsForArc(double radius, double spanRad, double tol,
+                                 int fullCircleSegments = kMinFullCircleSegments) {
   const double span = std::fabs(spanRad);
   if (!(radius > 0.0) || !(span > 0.0))
     return 1;
@@ -1556,7 +1558,7 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
   // the total segment budget for one full turn constant (kMinFullCircleSegments) no matter how many
   // pieces it is cut into, so two neighbouring faces sampling the same circle always agree.
   const int minSegs = std::max(
-      kMinArcSegments, static_cast<int>(std::llround(kMinFullCircleSegments * span / kTwoPi)));
+      kMinArcSegments, static_cast<int>(std::llround(fullCircleSegments * span / kTwoPi)));
   if (tol >= radius)
     return minSegs;
   const double maxStep = 2.0 * std::acos(1.0 - tol / radius);
@@ -1567,7 +1569,8 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
 }
 
 /// Segment count to walk a curved edge (Arc / Ellipse / Intersection) within \p tol; 1 for a line.
-[[nodiscard]] int SegmentsForEdge(const Edge& e, double tol) {
+[[nodiscard]] int SegmentsForEdge(const Edge& e, double tol,
+                                  int fullCircleSegments = kMinFullCircleSegments) {
   if (e.kind == CurveKind::Line)
     return 1;
   if (e.kind == CurveKind::Intersection) {
@@ -1577,10 +1580,10 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
     for (const Surface& sf : e.isectSurfaces)
       if (sf.radius > 1e-9)
         rr = std::min(rr == 1.0 ? sf.radius : rr, sf.radius);
-    return SegmentsForArc(rr, kHalfPi, tol);
+    return SegmentsForArc(rr, kHalfPi, tol, fullCircleSegments);
   }
   const double r = e.kind == CurveKind::Ellipse ? std::max(e.radius, e.radius2) : e.radius;
-  return SegmentsForArc(r, e.sweep, tol);
+  return SegmentsForArc(r, e.sweep, tol, fullCircleSegments);
 }
 
 /// Curvature-only segment count for a NURBS patch's (u, v) grid (TASK-272 §5) — extracted so the
@@ -1607,7 +1610,8 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
 /// degree 1 in BOTH directions can still be a warped bilinear quad, whose middle bulges away from
 /// the two triangles a single quad would emit. That is tested against the chord tolerance exactly as
 /// before, and when it fails both directions are divided.
-[[nodiscard]] int NurbsPatchDirectionSegs(const nurbs::Patch& patch, double chordTolerance, bool alongU) {
+[[nodiscard]] int NurbsPatchDirectionSegs(const nurbs::Patch& patch, double chordTolerance, bool alongU,
+                                          int fullCircleSegments = kMinFullCircleSegments) {
   const int nu = patch.nu;
   const int nv = patch.nv;
   if (nu < 2 || nv < 2 || patch.ctrl.size() != static_cast<std::size_t>(nu) * static_cast<std::size_t>(nv))
@@ -1645,14 +1649,17 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
         }
     }
   }
-  return curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance), 8, 128)
+  return curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance,
+                                            fullCircleSegments),
+                             std::min(8, fullCircleSegments), 128)
                 : 1;
 }
 
 /// The U-direction division count — the one the face's RIM edges run along, and the count their
 /// shared-edge relaxation (TASK-272 §5) has to agree with.
-[[nodiscard]] int NurbsPatchCurvatureSegs(const nurbs::Patch& patch, double chordTolerance) {
-  return NurbsPatchDirectionSegs(patch, chordTolerance, /*alongU=*/true);
+[[nodiscard]] int NurbsPatchCurvatureSegs(const nurbs::Patch& patch, double chordTolerance,
+                                          int fullCircleSegments = kMinFullCircleSegments) {
+  return NurbsPatchDirectionSegs(patch, chordTolerance, /*alongU=*/true, fullCircleSegments);
 }
 
 struct MeshBuilder {
@@ -17420,7 +17427,8 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
 
 } // namespace
 
-bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy) {
+bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy,
+                int fullCircleSegments) {
   if (!out)
     return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
   if (!std::isfinite(chordTolerance) || !(chordTolerance > 0.0))
@@ -17494,11 +17502,11 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     // how to read (a future Sweep mitred corner, say) — leave it on the curvature-only grid.
     if (loEdge < 0 || hiEdge < 0)
       continue;
-    const int curvatureSegs = NurbsPatchCurvatureSegs(patch, chordTolerance);
+    const int curvatureSegs = NurbsPatchCurvatureSegs(patch, chordTolerance, fullCircleSegments);
     nurbsBoundaryEdges[fi2] = {NurbsBoundaryEdge{loEdge, loFlip}, NurbsBoundaryEdge{hiEdge, hiFlip}};
     for (const int edgeIdx : {loEdge, hiEdge}) {
       const Edge& be = s.edges[static_cast<std::size_t>(edgeIdx)];
-      const int natural = std::max(SegmentsForEdge(be, chordTolerance), curvatureSegs);
+      const int natural = std::max(SegmentsForEdge(be, chordTolerance, fullCircleSegments), curvatureSegs);
       auto [it, inserted] = edgeSegs.try_emplace(edgeIdx, natural);
       if (!inserted)
         it->second = std::max(it->second, natural);
@@ -17534,7 +17542,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
         if (e.kind == CurveKind::Line)
           continue;
-        const int natural = SegmentsForEdge(e, chordTolerance);
+        const int natural = SegmentsForEdge(e, chordTolerance, fullCircleSegments);
         auto [it, inserted] = edgeSegs.try_emplace(u.edge, natural);
         if (!inserted)
           it->second = std::max(it->second, natural);
@@ -17543,7 +17551,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
   }
   auto segsForEdge = [&](int edgeIdx, const Edge& e) {
     const auto it = edgeSegs.find(edgeIdx);
-    return it != edgeSegs.end() ? it->second : SegmentsForEdge(e, chordTolerance);
+    return it != edgeSegs.end() ? it->second : SegmentsForEdge(e, chordTolerance, fullCircleSegments);
   };
 
   // TASK-272 §9j: a paramLoops-bearing face's boundary as the IMPORTER sampled it (a fixed low
@@ -18084,12 +18092,13 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const std::array<NurbsBoundaryEdge, 2>& boundaryEdges = nurbsBoundaryEdges[fi];
       const int n = boundaryEdges[0].edge >= 0
                         ? edgeSegs.at(boundaryEdges[0].edge)
-                        : NurbsPatchCurvatureSegs(patch, chordTolerance);
+                        : NurbsPatchCurvatureSegs(patch, chordTolerance, fullCircleSegments);
       // V is divided on its OWN curvature, which for a ruled sweep direction is one division and
       // exactly right. U keeps the shared, edge-relaxed count above because the rim edges run along
       // it and neighbouring faces must land on the same resolution (TASK-272 §5) — that is why this
       // is two numbers and not one. See NurbsPatchDirectionSegs for what using one cost.
-      const int nvSegs = std::max(1, NurbsPatchDirectionSegs(patch, chordTolerance, /*alongU=*/false));
+      const int nvSegs =
+          std::max(1, NurbsPatchDirectionSegs(patch, chordTolerance, /*alongU=*/false, fullCircleSegments));
       std::vector<std::uint32_t> grid(static_cast<std::size_t>(n + 1) * static_cast<std::size_t>(nvSegs + 1));
       // The two v-boundary rows (j=0 at v=vLo, j=n at v=vHi) are sampled DIRECTLY from their loop
       // edges rather than `nurbs::EvaluateWithDerivs`, so they are bit-identical to the same edge's

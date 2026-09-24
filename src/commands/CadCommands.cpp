@@ -29465,9 +29465,15 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
   const double tol = kSolidChordToleranceFt;
   const int isolines = std::clamp(st.viewportSolidIsolines, 0, kSolidMaxIsolines);
 
-  auto tessellateSolidPtr = [&](const CadSolidPtr& sp) {
+  // Geometry that is still being DRAFTED is tessellated on a coarser circular budget
+  // (D-2026-09-24-e). While PIPERUN is routing, its provisional run is rebuilt and re-tessellated on
+  // every single click and replaced moments later, so paying the finished-quality budget there is
+  // paying it over and over for a picture that is about to be thrown away. Everything else — every
+  // other solid, and this very run the moment the command ends — keeps the full budget.
+  auto tessellateSolidPtr = [&](const CadSolidPtr& sp, bool draft = false) {
     if (!sp)
       return;
+    const int circleSegs = draft ? brep::kDraftFullCircleSegments : brep::kFullCircleSegments;
     auto it = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
                            [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
     // The staleness key is (solid, tolerance) and nothing else. That is #120's "do not regenerate a
@@ -29475,7 +29481,8 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     // a solid is immutable, so an unchanged pointer means unchanged geometry, and the early-out here
     // is before any allocation — a `clear()` above it would still cost the frame it was written to
     // save (the §11 invariant 7 lesson the surface cache already learned).
-    if (it != st.solidDisplayCache.end() && it->chordTolerance == tol && it->isolineCount == isolines)
+    if (it != st.solidDisplayCache.end() && it->chordTolerance == tol && it->isolineCount == isolines &&
+        it->fullCircleSegments == circleSegs)
       return;
 
     if (it == st.solidDisplayCache.end()) {
@@ -29486,6 +29493,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     const auto tessT0 = std::chrono::steady_clock::now();
     it->chordTolerance = tol;
     it->isolineCount = isolines;
+    it->fullCircleSegments = circleSegs;
     it->triVerts.clear();
     it->triNormals.clear();
     it->triFaceIds.clear();
@@ -29494,7 +29502,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     brep::Tessellation tess;
     brep::Problem why = brep::Problem::Ok;
     const auto tFaces0 = std::chrono::steady_clock::now();
-    if (brep::Tessellate(*sp, tol, &tess, &why))
+    if (brep::Tessellate(*sp, tol, &tess, &why, circleSegs))
       ExpandTessellation(tess, &it->triVerts, &it->triNormals, &it->triFaceIds);
     const std::chrono::duration<double, std::milli> facesMs = std::chrono::steady_clock::now() - tFaces0;
     st.pipeRunPerf.tessFaces.Add(facesMs.count());
@@ -29527,8 +29535,14 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     tessellateSolidPtr(sp);
   for (const CadSolidPtr& sp : st.blockRefWorldSolids)
     tessellateSolidPtr(sp);
-  for (const CadSolidPtr& sp : st.pipeRunWorldSolids)
-    tessellateSolidPtr(sp);
+  // Only the run PIPERUN is drawing right now is a draft; every other run is finished geometry.
+  const bool routingNow =
+      st.active == AppCommandState::Kind::PipeRun && st.pipeRunLiveIndex >= 0;
+  for (std::size_t i = 0; i < st.pipeRunWorldSolids.size(); ++i) {
+    const bool draft = routingNow && i < st.pipeRunWorldSolidOwnerIndex.size() &&
+                       st.pipeRunWorldSolidOwnerIndex[i] == st.pipeRunLiveIndex;
+    tessellateSolidPtr(st.pipeRunWorldSolids[i], draft);
+  }
 
   // ----- Assembly: coalesce visible solids into a handful of draw batches (GitHub issue #194) -----
   //

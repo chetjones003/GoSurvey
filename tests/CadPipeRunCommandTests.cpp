@@ -2,6 +2,7 @@
 #include "CadCommands.hpp"
 #include "util/cadpiperun.hpp"
 #include "CadRubberPreview.hpp"
+#include "util/brep.hpp"
 #include <chrono>
 #include "util/ucs.hpp"
 
@@ -1871,4 +1872,89 @@ TEST_CASE("The pipe run preview does not grow with the route",
   const std::size_t longRoute = ghostSizeFor(10);
   CHECK(shortRoute > 0);                 // the pending segment IS previewed
   CHECK(longRoute == shortRoute);        // and only ever that one segment
+}
+
+// --- D-2026-09-24-e: the run being drawn is tessellated coarsely, the finished one is not --------
+//
+// A pipe tube's display tessellation is the single most expensive thing routing does — measured at
+// ~1.6 s for a four-vertex run at the finished circular budget, paid again on EVERY click because
+// each click rebuilds the provisional run. Drafting it at `brep::kDraftFullCircleSegments` brings a
+// click to tens of milliseconds; finishing the command restores the full budget.
+//
+// This pins which budget is used when, not a millisecond count: timings belong on the reference
+// machine with BENCH (project.md §7), but "the draft never gets promoted back" and "the finished run
+// is left coarse" are both silent, permanent quality bugs that a test can catch.
+
+TEST_CASE("The run being routed is tessellated in draft, the finished run at full quality",
+          "[issue486][req345][piperun][live][tess]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  st.pipeRunCompassOn = false;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 20.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  REQUIRE(st.pipeRunLiveIndex == 0);
+
+  const auto budgetOfOnlyPipeSolid = [&]() {
+    RefreshSolidDisplayGeometry(st);
+    REQUIRE(st.pipeRunWorldSolids.size() == 1);
+    const CadSolidPtr& sp = st.pipeRunWorldSolids[0];
+    for (const CadSolidTessellation& e : st.solidDisplayCache)
+      if (e.key.lock() == sp)
+        return e.fullCircleSegments;
+    return -1;
+  };
+
+  // Mid-command: the geometry on screen is a draft and is allowed to be coarse.
+  CHECK(budgetOfOnlyPipeSolid() == brep::kDraftFullCircleSegments);
+
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.pipeRunLiveIndex == -1);
+  CHECK(st.active == AppCommandState::Kind::None);
+
+  // Finished: full quality, and nothing is left showing the draft.
+  CHECK(budgetOfOnlyPipeSolid() == brep::kFullCircleSegments);
+}
+
+TEST_CASE("A pipe run drawn by another command is never drafted",
+          "[issue486][req345][piperun][live][tess]") {
+  // Only the run PIPERUN is currently drawing is provisional. An existing run in the drawing must
+  // keep full quality even while a new one is being routed beside it — otherwise starting PIPERUN
+  // would visibly coarsen everything already drawn.
+  AppCommandState st;
+  std::vector<std::string> log;
+  st.pipeRunCompassOn = false;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 20.f, 0.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+
+  // Now route a SECOND run while the first stands finished.
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // keep 4in
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // schedule-40 wall
+  SubmitPipeRunViewportPick(st, 0.f, 50.f, log);
+  SubmitPipeRunViewportPick(st, 20.f, 50.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  REQUIRE(st.pipeRunLiveIndex == 1);
+
+  RefreshSolidDisplayGeometry(st);
+  REQUIRE(st.pipeRunWorldSolids.size() == 2);
+  REQUIRE(st.pipeRunWorldSolidOwnerIndex.size() == 2);
+  for (std::size_t i = 0; i < st.pipeRunWorldSolids.size(); ++i) {
+    int budget = -1;
+    for (const CadSolidTessellation& e : st.solidDisplayCache)
+      if (e.key.lock() == st.pipeRunWorldSolids[i])
+        budget = e.fullCircleSegments;
+    const bool isTheDraft = st.pipeRunWorldSolidOwnerIndex[i] == st.pipeRunLiveIndex;
+    INFO("solid " << i << " owner " << st.pipeRunWorldSolidOwnerIndex[i]);
+    CHECK(budget == (isTheDraft ? brep::kDraftFullCircleSegments : brep::kFullCircleSegments));
+  }
 }

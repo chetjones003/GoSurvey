@@ -1203,7 +1203,26 @@ struct Tessellation {
 /// outer loop with no holes. Every one of the seven primitives produces only such faces; a general
 /// polygon triangulation is Phase 4's problem, when a boolean first produces a face that needs one,
 /// and until then it would be an abstraction with no call site.
-[[nodiscard]] bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy);
+/// Segments one FULL turn of a circular edge is divided into, before the chord tolerance asks for
+/// more. A floor, not a target: it keeps the budget for a full circle constant however many faces
+/// that circle is split across, so two neighbouring faces sampling the same circle always agree
+/// (the "torn bolt holes" fix). At the default it also decides how round a small circle looks,
+/// because for anything smaller than a few feet it is the floor, not the tolerance, that binds.
+inline constexpr int kFullCircleSegments = 256;
+
+/// A coarser budget for geometry that is being DRAFTED — redrawn on every click while a command is
+/// still running, where the cost of the default is paid over and over and the result is replaced
+/// moments later anyway (REQ-345 live pipe routing, D-2026-09-24-e).
+///
+/// 64 is chosen to be indistinguishable at working zoom rather than merely tolerable: a full circle
+/// in 64 facets turns 5.6 degrees per facet, which on a 2in pipe is a chord error of about a
+/// thousandth of an inch. The finished geometry is tessellated at ef kFullCircleSegments.
+inline constexpr int kDraftFullCircleSegments = 64;
+
+/// \param fullCircleSegments the circular-edge budget described above — ef kFullCircleSegments
+///        for finished geometry, ef kDraftFullCircleSegments for geometry still being drafted.
+[[nodiscard]] bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy,
+                              int fullCircleSegments = kFullCircleSegments);
 
 /// The solid's **edges** as line segments, at the same chord tolerance: six doubles per segment
 /// (both endpoints), the `GL_LINES` layout the rest of the project uses.
