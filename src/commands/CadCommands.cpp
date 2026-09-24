@@ -1249,10 +1249,16 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     case SelectedEntity::Type::Ellipse: {
       if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
         const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-        const float perpX = -el.majVy, perpY = el.majVx;
-        tryGrip(sel, el.cx, el.cy, 0);
-        tryGrip(sel, el.cx + el.majVx, el.cy + el.majVy, 1);
-        tryGrip(sel, el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, 2);
+        // A tilted ellipse (GitHub #531) has no grips DRAWN — src/ui/CadUi.cpp guards that, because
+        // its own are the next slice. Offering them here anyway is worse than not drawing them: the
+        // handle is invisible, sits where a flat ellipse's would be rather than on the curve, and
+        // grabbing it deforms the section. The two sides ask the same question now.
+        if (EllipseIsFlat(el)) {
+          const float perpX = -el.majVy, perpY = el.majVx;
+          tryGrip(sel, el.cx, el.cy, 0);
+          tryGrip(sel, el.cx + el.majVx, el.cy + el.majVy, 1);
+          tryGrip(sel, el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, 2);
+        }
       }
       break;
     }
@@ -7424,11 +7430,19 @@ bool SelectedEntityEqual(const SelectedEntity& a, const SelectedEntity& b) {
   return a.type == b.type && a.index == b.index;
 }
 
-/// \p segments + 1 world points around an ellipse, the first point repeated last (a closed chain).
+/// \p segments + 1 world points along the part of an ellipse that is actually DRAWN.
 ///
-/// The counterpart of \ref SampleCurveWorld for the one authored curve that is not circular. An
-/// ellipse is always parallel to XY (\ref CadEllipse::z), so there is no plane frame to build — the
-/// major-axis vector supplies the frame directly.
+/// The counterpart of \ref SampleCurveWorld for the one authored curve that is not circular. Every
+/// point comes from \ref EllipseWorldPointAt, so this agrees with the renderer and the snapper by
+/// construction rather than by two copies of the same arithmetic staying in step.
+///
+/// A whole ellipse is a closed chain, its first point repeated last. An elliptical arc is NOT: its
+/// two ends are not joined, and a fence that closed it would test a chord nobody drew.
+///
+/// Until this walked the span through the ellipse's own plane, both selection funnels hunted for a
+/// tilted ellipse flat on the ground and a part-drawn one all the way round — a 45-degree section
+/// oval of radius 30 was picked for at 42.4 out while it was drawn at 30, a 12.4-unit miss no
+/// tolerance could close, and the 141 degrees it does not draw selected it from empty space.
 ///
 /// Replaced `ArcRoughBounds` / `EllipseRoughBounds`, which existed only to give the selection fence
 /// a box to test a curve against. Both are gone: a fence tests the CURVE now, and the extents walk
@@ -7438,19 +7452,10 @@ void SampleEllipseWorld(std::vector<ray3d::Vec3>& out, const CadEllipse& e, int 
   const double ma = std::hypot(static_cast<double>(e.majVx), static_cast<double>(e.majVy));
   if (ma < 1e-8 || segments < 1)
     return;
-  const double ux = static_cast<double>(e.majVx) / ma;
-  const double uy = static_cast<double>(e.majVy) / ma;
-  const double mb = ma * static_cast<double>(e.ratio);
-  constexpr double kTwoPi = 6.28318530717958647692;
   out.reserve(static_cast<size_t>(segments) + 1u);
   for (int i = 0; i <= segments; ++i) {
-    const double ang = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
-    const double c = std::cos(ang);
-    const double s = std::sin(ang);
-    // The perpendicular is (-uy, ux) — the minor axis, in the ellipse's own plane.
-    out.push_back(ray3d::Vec3{static_cast<double>(e.cx) + ux * (ma * c) - uy * (mb * s),
-                              static_cast<double>(e.cy) + uy * (ma * c) + ux * (mb * s),
-                              static_cast<double>(e.z)});
+    const double u = static_cast<double>(i) / static_cast<double>(segments);
+    out.push_back(EllipseWorldPointAt(e, EllipseSpanAngleAt(e, u)));
   }
 }
 
@@ -7773,8 +7778,10 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
   for (size_t ei = 0; ei < st.userEllipses.size(); ++ei) {
     // The ellipse it draws, in every view — same story as the arc above. Its bounding box was the
     // worst offender of the three: an ellipse fills pi/4 of its box and nothing of its middle.
-    constexpr double kTwoPi = 6.28318530717958647692;
-    SampleEllipseWorld(curvePts, st.userEllipses[ei], CurveSegmentCount(kTwoPi));
+    // The count follows the DRAWN span, exactly as the arc's does, so a short elliptical arc is not
+    // sampled more coarsely than the whole oval it was cut from.
+    const CadEllipse& el = st.userEllipses[ei];
+    SampleEllipseWorld(curvePts, el, CurveSegmentCount(std::fabs(static_cast<double>(el.sweepRad))));
     if (CurveHitsRect(curvePts)) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Ellipse;
@@ -25615,20 +25622,22 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     double bestD2 = 1e300;
     if (ma >= 1e-8) {
-      const double ux = static_cast<double>(el.majVx) / ma;
-      const double uy = static_cast<double>(el.majVy) / ma;
-      const double px = -uy;
-      const double py = ux;
-      const double mb = ma * static_cast<double>(el.ratio);
+      // Through the ellipse's own plane, over the span it actually draws — the same two facts the
+      // arc branch above honours, and the same ones the renderer and the snapper read. The points
+      // come from `EllipseWorldPointAt` so a fourth copy of the arithmetic cannot drift out of step.
+      //
+      // Measured against the CHORDS between the samples, not the samples themselves. Point sampling
+      // reads a click that lands squarely on the curve but between two samples as up to half a
+      // sample-step away — 0.8 world units on the 30-radius section oval — which at a tight pick
+      // aperture is a miss on the very curve you are pointing at. This is the same segment metric
+      // the polyline branch below uses, and it makes the answer independent of the sample count.
       constexpr int n = 36;
-      constexpr double twopi = 6.28318530717958647692;
-      for (int i = 0; i <= n; ++i) {
-        const double ang = twopi * static_cast<double>(i) / static_cast<double>(n);
-        const double c = std::cos(ang);
-        const double s = std::sin(ang);
-        const double x = static_cast<double>(el.cx) + ux * (ma * c) + px * (mb * s);
-        const double y = static_cast<double>(el.cy) + uy * (ma * c) + py * (mb * s);
-        bestD2 = std::min(bestD2, d2Point(x, y, static_cast<double>(el.z)));
+      ray3d::Vec3 prev = EllipseWorldPointAt(el, EllipseSpanAngleAt(el, 0.0));
+      for (int i = 1; i <= n; ++i) {
+        const double u = static_cast<double>(i) / static_cast<double>(n);
+        const ray3d::Vec3 p = EllipseWorldPointAt(el, EllipseSpanAngleAt(el, u));
+        bestD2 = std::min(bestD2, d2Segment(prev.x, prev.y, prev.z, p.x, p.y, p.z));
+        prev = p;
       }
     }
     consider(e, bestD2);

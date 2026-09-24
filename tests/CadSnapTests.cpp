@@ -1379,6 +1379,124 @@ TEST_CASE("A tilted arc is ray-picked on its own plane, not flat world XY", "[Ca
   CHECK(hit.index == 0);
 }
 
+
+// --- A tilted or part-drawn ellipse is picked where it is DRAWN (user report, 2026-09-24) -------
+//
+// "the only problem seemed to be that i could not accurately select the section." Both selection
+// funnels sampled an ellipse flat in world XY and over a full turn, ignoring the plane normal
+// (GitHub #531) and the drawn span (the #520 follow-up) that render, snap and export all honour.
+//
+// The numbers below are the ones the app itself wrote into the drawing for the part-oval section of
+// a 30-radius pipe cut at 45 degrees, so this is that report, not a constructed likeness. In its own
+// plane the curve is `x = 30 sin t, y = -30 cos t, z = -30 cos t`, which in PLAN is a circle of
+// radius 30 — while the flat reading put it at 42.4. A 12.4-unit miss: no pick tolerance closes that.
+namespace {
+
+/// The ellipse the part-oval section wrote: centre on the axis, standing in the 45-degree plane,
+/// drawn over 219 of its 360 degrees.
+CadEllipse SectionPartOval() {
+  CadEllipse el;
+  el.cx = 0.f;
+  el.cy = 0.f;
+  el.z = 0.f;
+  el.majVx = 0.f;
+  el.majVy = -42.42640686035156f;  // 30 * sqrt(2)
+  el.ratio = 0.7071067690849304f;  // so the minor semi-axis is the pipe's own 30
+  el.nx = 0.f;
+  el.ny = -0.7071067690849304f;
+  el.nz = 0.7071067690849304f;
+  el.startRad = 4.372551918029785f;
+  el.sweepRad = 3.8212664127349854f;  // 219 degrees, not a full turn
+  return el;
+}
+
+}  // namespace
+
+TEST_CASE("A tilted ellipse is picked on its own plane, not on its flattened shadow",
+          "[CadCommands][pick][ellipsesel]") {
+  AppCommandState st;
+  st.userEllipses.push_back(SectionPartOval());
+  SelectedEntity hit{};
+  float d2 = 0.f;
+
+  // ON the curve, in plan: the drawn span passes through (0, -30).
+  CHECK(PickClosestCadEntity(st, 0.0, -30.0, 1.0f, &hit, &d2));
+  CHECK(hit.type == SelectedEntity::Type::Ellipse);
+  CHECK(hit.index == 0);
+
+  // Where the FLAT reading put it — 42.4 out along the major axis, with nothing drawn there. This is
+  // the click that used to select, and the 12.4 units it sits away from the curve is the miss.
+  CHECK_FALSE(PickClosestCadEntity(st, 0.0, -42.426, 1.0f, &hit, &d2));
+}
+
+TEST_CASE("The part of an ellipse that is not drawn does not select it",
+          "[CadCommands][pick][ellipsesel]") {
+  AppCommandState st;
+  st.userEllipses.push_back(SectionPartOval());
+  SelectedEntity hit{};
+  float d2 = 0.f;
+
+  // (0, +30) in plan is the far side of the oval — the 141 degrees the cut removed. Nothing is drawn
+  // there, and the nearest drawn point is 34 units away.
+  CHECK_FALSE(PickClosestCadEntity(st, 0.0, 30.0, 1.0f, &hit, &d2));
+  // Both ends of the drawn span ARE on it: they are where the chord meets the cap.
+  CHECK(PickClosestCadEntity(st, -28.284, 10.0, 1.0f, &hit, &d2));
+  CHECK(hit.type == SelectedEntity::Type::Ellipse);
+  CHECK(PickClosestCadEntity(st, 28.284, 10.0, 1.0f, &hit, &d2));
+  CHECK(hit.type == SelectedEntity::Type::Ellipse);
+}
+
+TEST_CASE("A flat whole ellipse is picked exactly as it always was",
+          "[CadCommands][pick][ellipsesel]") {
+  // The case every ellipse was before #531 and the arc span, asserted so the fix cannot buy the
+  // tilted one at its expense.
+  AppCommandState st;
+  CadEllipse el;
+  el.cx = 5.f;
+  el.cy = 0.f;
+  el.z = 0.f;
+  el.majVx = 10.f;
+  el.majVy = 0.f;
+  el.ratio = 0.5f;
+  st.userEllipses.push_back(el);
+  SelectedEntity hit{};
+  float d2 = 0.f;
+
+  CHECK(PickClosestCadEntity(st, 15.0, 0.0, 0.5f, &hit, &d2));  // major end
+  CHECK(hit.type == SelectedEntity::Type::Ellipse);
+  CHECK(PickClosestCadEntity(st, 5.0, 5.0, 0.5f, &hit, &d2));  // minor end
+  CHECK(hit.type == SelectedEntity::Type::Ellipse);
+  CHECK_FALSE(PickClosestCadEntity(st, 5.0, 0.0, 0.5f, &hit, &d2));  // the empty middle
+}
+
+TEST_CASE("A tilted ellipse offers no grip to grab", "[CadCommands][pick][ellipsesel]") {
+  // src/ui/CadUi.cpp does not DRAW grips for a tilted ellipse — its own are a later slice. The grip
+  // hit test asked a different question, so the handle was invisible, sat where a flat ellipse's
+  // would be rather than on the curve, and deformed the section when it was grabbed.
+  AppCommandState st;
+  st.userEllipses.push_back(SectionPartOval());
+  SelectedEntity sel{};
+  sel.type = SelectedEntity::Type::Ellipse;
+  sel.index = 0;
+  st.selection.push_back(sel);
+
+  CHECK_FALSE(TryBeginEntityGripAtLocal(st, 0.f, 0.f, 2.f));         // the flat centre grip
+  CHECK_FALSE(TryBeginEntityGripAtLocal(st, 0.f, -42.426f, 2.f));    // the flat major-axis grip
+  CHECK_FALSE(TryBeginEntityGripAtLocal(st, 30.f, 0.f, 2.f));        // the flat minor-axis grip
+
+  // A flat one still has all three, so the guard is about the tilt and nothing else.
+  AppCommandState flat;
+  CadEllipse el;
+  el.cx = 0.f;
+  el.cy = 0.f;
+  el.majVx = 10.f;
+  el.majVy = 0.f;
+  el.ratio = 0.5f;
+  flat.userEllipses.push_back(el);
+  flat.selection.push_back(sel);
+  CHECK(TryBeginEntityGripAtLocal(flat, 10.f, 0.f, 0.5f));
+}
+
 // --- REQ-335: snapping the SECOND point of a SECTION plane (user report, 2026-09-11) ------------
 //
 // "The 2nd selection point for sections is not wanting to snap to a midpoint right above the first
