@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 void PushRubberSegViewRel(std::vector<float>& o, double x0, double y0, double x1, double y1, double /*anchorX*/,
@@ -733,6 +734,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     ghostRun.vertsXyz.push_back(gz);
     ghostRun.nominalSize = cmd.pipeRunNominalSize;
     ghostRun.wallThicknessIn = cmd.pipeRunWallThicknessIn;  // the ghost is the run being drafted
+    const auto ghostT0 = std::chrono::steady_clock::now();
     std::vector<CadSolidPtr> ghostSolids;
     if (CadBuildPipeRunSolids(ghostRun, &ghostSolids)) {
       brep::Problem why = brep::Problem::Ok;
@@ -747,6 +749,9 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
         }
       }
     }
+    // Per FRAME, which is what makes this the one that can freeze the application (PIPEPERF).
+    const std::chrono::duration<double, std::milli> ghostMs = std::chrono::steady_clock::now() - ghostT0;
+    cmd.pipeRunPerf.ghost.Add(ghostMs.count());
   }
 
   // EXTRACTCENTERLINE (REQ-347): the preview is exactly the hover's already-computed fit — no

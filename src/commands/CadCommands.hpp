@@ -4357,6 +4357,45 @@ struct AppCommandState {
   /// Frame-time diagnostic HUD (issue #166 investigation). Toggled by the `PERFHUD` command. The
   /// millisecond fields are written each frame by whoever owns that section — `perfRenderMs` in the
   /// app frame loop, the rest in the viewport draw — and read only by the overlay.
+  /// PIPERUN live-routing profiler (user request 2026-09-24), reported by the `PIPEPERF` command.
+  ///
+  /// Routing a pipe builds real geometry on every click (D-2026-09-24-d) and the swept tube is the
+  /// most expensive thing the command does, so these are the four places that time can go. Reset
+  /// automatically when PIPERUN starts, so the report always describes the run just drawn.
+  ///
+  /// `mutable` because the rubber preview takes the state by const reference — it draws, it does not
+  /// edit — and a diagnostic counter is exactly the "does not change observable behaviour" case
+  /// `mutable` is for. Nothing reads these except the report.
+  struct PipeRunPerfStat {
+    double totalMs = 0.0;
+    double maxMs = 0.0;
+    int calls = 0;
+    void Add(double ms) {
+      totalMs += ms;
+      if (ms > maxMs)
+        maxMs = ms;
+      ++calls;
+    }
+    void Reset() { *this = PipeRunPerfStat{}; }
+    [[nodiscard]] double AvgMs() const { return calls > 0 ? totalMs / static_cast<double>(calls) : 0.0; }
+  };
+  struct PipeRunPerf {
+    PipeRunPerfStat sweep;      ///< one run's swept tube (CadBuildPipeRunSolids), inside the rebuild
+    PipeRunPerfStat rebuild;    ///< the whole RebuildPipeRunWorldSolids pass
+    PipeRunPerfStat tessellate; ///< one solid's display tessellation (faces + edges + isolines)
+    PipeRunPerfStat ghost;      ///< the routing rubber preview, per frame
+    PipeRunPerfStat tessFaces;  ///< brep::Tessellate  (the surface triangles)
+    PipeRunPerfStat tessEdges;  ///< brep::TessellateEdges
+    PipeRunPerfStat tessIso;    ///< brep::TessellateIsolines
+    int runsSwept = 0;          ///< runs re-swept by a rebuild (cache miss)
+    int runsReused = 0;         ///< runs served from the per-run solid cache
+    int clicks = 0;             ///< vertices added while routing
+    int lastRunVerts = 0;       ///< vertices in the run at the last rebuild, for reading the curve
+    long long tessTriangles = 0;///< triangles produced by the display tessellation
+    void Reset() { *this = PipeRunPerf{}; }
+  };
+  mutable PipeRunPerf pipeRunPerf;
+
   bool   perfHudVisible = false;
   double perfFrameMs = 0.0;        ///< whole frame, wall-clock frame-to-frame
   double perfRenderMs = 0.0;       ///< the GL RenderScene call

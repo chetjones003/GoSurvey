@@ -311,6 +311,41 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
   };
 
+  // PIPEPERF exercised end to end: route a real run through the app, then read the profile it
+  // reports. Not an assertion about milliseconds — those belong on the reference machine with BENCH
+  // — but a check that the counters are wired to the work, and a way to SEE where routing time goes.
+  //
+  //   build\devshell\GoSurvey.exe --devshell-run pipeperf-routing-profile
+  ImGuiTest* pipePerf = IM_REGISTER_TEST(engine, "gosurvey", "pipeperf-routing-profile");
+  pipePerf->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    SubmitCad(ctx, "PIPERUN");
+    SubmitCad(ctx, "4in");
+    SubmitCad(ctx, "");
+    for (int i = 0; i < 4; ++i) {
+      char pt[64];
+      std::snprintf(pt, sizeof(pt), "%d,%d", 20 * ((i + 1) / 2), 20 * (i / 2));
+      SubmitCad(ctx, pt);
+      ctx->Yield(2);  // let the display rebuild and tessellate, as it would between clicks
+    }
+    SubmitCad(ctx, "END");
+    ctx->Yield(4);
+    IM_CHECK_EQ(s_cmd->cadPipeRuns.size(), static_cast<std::size_t>(1));
+    IM_CHECK(s_cmd->pipeRunPerf.sweep.calls > 0);
+    IM_CHECK(s_cmd->pipeRunPerf.tessellate.calls > 0);
+
+    SubmitCad(ctx, "PIPEPERF");
+    ctx->Yield(2);
+    std::vector<std::string>* dlog = DevShell_CommandLog();
+    if (dlog) {
+      const std::size_t n = dlog->size();
+      for (std::size_t i = (n > 12 ? n - 12 : 0); i < n; ++i)
+        ctx->LogWarning("%s", (*dlog)[i].c_str());
+    }
+    IM_CHECK(CancelToIdle(ctx));
+  };
+
   ImGuiTest* viewTab = IM_REGISTER_TEST(engine, "gosurvey", "ribbon-view-extents");
   viewTab->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));

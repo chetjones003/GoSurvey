@@ -36,6 +36,8 @@
 #include "NumFormat.hpp"
 #include "MtextRichFormat.hpp"
 #include "AppPaths.hpp"
+
+#include <chrono>
 #include "FontRegistry.hpp"
 #include "StringUtil.hpp"
 #include "AppIcon.hpp"
@@ -29354,6 +29356,7 @@ static void RebuildPipeRunWorldSolids(AppCommandState& st) {
   st.pipeRunWorldSolids.clear();
   st.pipeRunWorldSolidAttrs.clear();
   st.pipeRunWorldSolidOwnerIndex.clear();
+  const auto rebuildT0 = std::chrono::steady_clock::now();
   st.pipeRunSolidCacheSigs.resize(st.cadPipeRuns.size(), 0);
   st.pipeRunSolidCache.resize(st.cadPipeRuns.size());
   for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
@@ -29365,7 +29368,14 @@ static void RebuildPipeRunWorldSolids(AppCommandState& st) {
     if (st.pipeRunSolidCacheSigs[ri] != runSig || st.pipeRunSolidCache[ri].empty()) {
       st.pipeRunSolidCacheSigs[ri] = runSig;
       st.pipeRunSolidCache[ri].clear();
+      const auto sweepT0 = std::chrono::steady_clock::now();
       (void)CadBuildPipeRunSolids(st.cadPipeRuns[ri], &st.pipeRunSolidCache[ri]);
+      const std::chrono::duration<double, std::milli> sweepMs = std::chrono::steady_clock::now() - sweepT0;
+      st.pipeRunPerf.sweep.Add(sweepMs.count());
+      ++st.pipeRunPerf.runsSwept;
+      st.pipeRunPerf.lastRunVerts = static_cast<int>(st.cadPipeRuns[ri].vertsXyz.size() / 3);
+    } else {
+      ++st.pipeRunPerf.runsReused;
     }
     for (const CadSolidPtr& sp : st.pipeRunSolidCache[ri]) {
       st.pipeRunWorldSolids.push_back(sp);  // shared immutable payload (invariant §11.5 amendment)
@@ -29373,6 +29383,8 @@ static void RebuildPipeRunWorldSolids(AppCommandState& st) {
       st.pipeRunWorldSolidOwnerIndex.push_back(static_cast<int>(ri));
     }
   }
+  const std::chrono::duration<double, std::milli> rebuildMs = std::chrono::steady_clock::now() - rebuildT0;
+  st.pipeRunPerf.rebuild.Add(rebuildMs.count());
 }
 
 namespace {
@@ -29471,6 +29483,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
       it = st.solidDisplayCache.end() - 1;
       it->key = sp;
     }
+    const auto tessT0 = std::chrono::steady_clock::now();
     it->chordTolerance = tol;
     it->isolineCount = isolines;
     it->triVerts.clear();
@@ -29480,19 +29493,31 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
 
     brep::Tessellation tess;
     brep::Problem why = brep::Problem::Ok;
+    const auto tFaces0 = std::chrono::steady_clock::now();
     if (brep::Tessellate(*sp, tol, &tess, &why))
       ExpandTessellation(tess, &it->triVerts, &it->triNormals, &it->triFaceIds);
+    const std::chrono::duration<double, std::milli> facesMs = std::chrono::steady_clock::now() - tFaces0;
+    st.pipeRunPerf.tessFaces.Add(facesMs.count());
+    st.pipeRunPerf.tessTriangles += static_cast<long long>(it->triVerts.size() / 9);
     std::vector<double> edges;
+    const auto tEdges0 = std::chrono::steady_clock::now();
     if (brep::TessellateEdges(*sp, tol, &edges, &why)) {
       // ISOLINES go into the SAME buffer as the edges, not a batch of their own. They are the same
       // colour and the same weight as the object - AutoCAD draws them as part of it - so a second
       // batch would be a second thing to keep in step for no visible difference.
+      const std::chrono::duration<double, std::milli> edgesMs = std::chrono::steady_clock::now() - tEdges0;
+      st.pipeRunPerf.tessEdges.Add(edgesMs.count());
       std::vector<double> isos;
+      const auto tIso0 = std::chrono::steady_clock::now();
       if (brep::TessellateIsolines(*sp, isolines, tol, &isos, &why))
         edges.insert(edges.end(), isos.begin(), isos.end());
+      const std::chrono::duration<double, std::milli> isoMs = std::chrono::steady_clock::now() - tIso0;
+      st.pipeRunPerf.tessIso.Add(isoMs.count());
       NarrowInto(edges, &it->edgeVerts);
     }
     ++st.solidDisplayRegenCount;  // past the early-out: this frame actually retessellated a solid
+    const std::chrono::duration<double, std::milli> tessMs = std::chrono::steady_clock::now() - tessT0;
+    st.pipeRunPerf.tessellate.Add(tessMs.count());
     // A solid that fails to tessellate leaves EMPTY buffers rather than stale ones. It cannot
     // normally happen — nothing stores a solid that does not validate (REQ-201) — and drawing the
     // previous solid's triangles under this one's identity would be far worse than drawing nothing.
@@ -34672,6 +34697,7 @@ void AddPipeRunPoint(AppCommandState& st, const ray3d::Vec3& pt, std::vector<std
   st.pipeRunDraftVerts.push_back(pt.x);
   st.pipeRunDraftVerts.push_back(pt.y);
   st.pipeRunDraftVerts.push_back(pt.z);
+  ++st.pipeRunPerf.clicks;  // PIPEPERF
   SyncLivePipeRun(st);  // D-2026-09-24-d — the pipe exists from the second click, and keeps up
   log.push_back(CadPipeRunPromptText(st));
 }
@@ -34697,6 +34723,7 @@ bool CadPipeRunFinishForHandoff(AppCommandState& st, std::vector<std::string>& l
 
 void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log) {
   CancelPipeRunCommand(st);
+  st.pipeRunPerf.Reset();  // PIPEPERF always describes the run about to be drawn
   st.active = AppCommandState::Kind::PipeRun;
   // REQ-350 (a) — the palette opens with routing, and deliberately does NOT close with it: the parts
   // a user reaches for (a flange on the end just routed) are wanted immediately after the run is
@@ -38462,6 +38489,68 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // `PERFHUD` toggles the frame-time diagnostic overlay (issue #166 investigation). Unlike BENCH
     // it measures the LIVE drawing and the current command — the actual thing the user is doing —
     // broken into frame / viewport-UI / hover-pick / snap / render.
+    // PIPEPERF — where the time goes while a pipe run is being routed (user request 2026-09-24).
+    //
+    // Live routing builds real geometry on every click (D-2026-09-24-d) and a swept tube is the most
+    // expensive thing the command does, so "it is slow" needs to say WHICH of four things is slow:
+    // the sweep, the display tessellation, the whole rebuild pass, or the per-frame ghost. The
+    // counters reset when PIPERUN starts, so the report always describes the run just drawn.
+    //
+    // Reported to the command line AND written to a file, because the useful thing to do with this
+    // is paste it to someone. Bare `PIPEPERF` reports; `PIPEPERF RESET` zeroes it by hand.
+    if (plotTok == "pipeperf") {
+      const AppCommandState::PipeRunPerf& p = st.pipeRunPerf;
+      char line[256];
+      std::vector<std::string> out;
+      out.push_back("PIPEPERF - live pipe routing profile (ms)");
+      std::snprintf(line, sizeof(line), "  route            : %d vertices at last rebuild, %d click(s)",
+                    p.lastRunVerts, p.clicks);
+      out.push_back(line);
+      const auto row = [&](const char* name, const AppCommandState::PipeRunPerfStat& s, const char* unit) {
+        std::snprintf(line, sizeof(line), "  %-17s: %6d %s  total %9.1f  avg %7.2f  max %7.2f", name,
+                      s.calls, unit, s.totalMs, s.AvgMs(), s.maxMs);
+        out.push_back(line);
+      };
+      row("sweep (tube)", p.sweep, "call(s) ");
+      row("tessellate", p.tessellate, "solid(s)");
+      row("rebuild pass", p.rebuild, "pass(es)");
+      row("  .. faces", p.tessFaces, "solid(s)");
+      row("  .. edges", p.tessEdges, "solid(s)");
+      row("  .. isolines", p.tessIso, "solid(s)");
+      row("ghost preview", p.ghost, "frame(s)");
+      std::snprintf(line, sizeof(line), "  cache            : %d run(s) re-swept, %d reused",
+                    p.runsSwept, p.runsReused);
+      out.push_back(line);
+      std::snprintf(line, sizeof(line), "  triangles        : %lld produced by display tessellation",
+                    p.tessTriangles);
+      out.push_back(line);
+      const double perClick = p.clicks > 0 ? (p.sweep.totalMs + p.tessellate.totalMs) /
+                                                 static_cast<double>(p.clicks)
+                                           : 0.0;
+      std::snprintf(line, sizeof(line), "  per click        : %.1f ms of sweep + tessellation", perClick);
+      out.push_back(line);
+      std::snprintf(line, sizeof(line), "  per ghost frame  : %.2f ms average", p.ghost.AvgMs());
+      out.push_back(line);
+
+      // Beside the user data directory, falling back to the working directory — best effort, and the
+      // command line still carries the whole report either way.
+      namespace fs = std::filesystem;
+      fs::path outPath = UserDataDirectory();
+      if (outPath.empty())
+        outPath = fs::current_path();
+      outPath /= "gosurvey-pipeperf.txt";
+      std::ofstream f(outPath, std::ios::binary | std::ios::trunc);
+      if (f) {
+        for (const std::string& l : out)
+          f << l << "\n";
+        f.close();
+        out.push_back("  written to       : " + outPath.u8string());
+      }
+      for (const std::string& l : out)
+        log.push_back(l);
+      return;
+    }
+
     if (plotTok == "perfhud" || plotTok == "framestats") {
       st.perfHudVisible = !st.perfHudVisible;
       log.push_back(std::string("PERFHUD — frame-time overlay ") + (st.perfHudVisible ? "ON." : "OFF."));
