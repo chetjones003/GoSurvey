@@ -1,5 +1,6 @@
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
+#include "util/ucs.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -1617,4 +1618,102 @@ TEST_CASE("PIPERUN opens the fittings palette and finishing the run leaves it op
   // routed is wanted NOW.
   CHECK(st.pipeFittingPaletteOpen);
   CHECK(st.active == AppCommandState::Kind::None);
+}
+
+// --- REQ-346: the compass locks a CLICKED segment to the UCS axes, elevation included ------------
+//
+// The compass resolves a full 3D point. Under a Front-style UCS its axes are world X and world Z, so
+// a locked segment's whole displacement can live in Z — and `SubmitPipeRunViewportPick` used to drop
+// the compass's resolved `wz` and re-read the raw cursor elevation instead, committing a vertex off
+// the very ray the ghost had just drawn. The rubber preview and the typed-distance path both passed
+// `&wz` already, so the preview looked locked and the click was not: the "preview must use the commit
+// point" failure. These pin all three on the same answer.
+
+TEST_CASE("The compass locks a clicked pipe segment to the UCS axes, elevation included",
+          "[issue486][req346][piperun][compass][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+
+  // Front UCS: its X is world X, its Y is world Z. A segment locked to this frame's Y axis therefore
+  // runs straight up in world Z.
+  const ucs::Ucs front = ucs::OrthographicPresets()[2].frame;
+  REQUIRE_FALSE(ucs::IsWorld(front));
+  st.activeUcs = front;
+
+  REQUIRE(st.pipeRunCompassOn);                 // on by default, as the prompt reports
+  REQUIRE(st.polarIncrementDeg == 90.0);        // and locking to the axes is what 90 means
+
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // schedule-40 wall
+
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+
+  // The second click carries a real ELEVATION, as an object-snap hit on a 3D feature does. That is
+  // what makes this a regression pin rather than a tautology: the compass resolves the segment onto
+  // this frame's X axis (world X, elevation 0), while the raw cursor elevation says 2. Committing the
+  // raw one — the bug — yields a vertex 2 ft off the snapped ray, locked to nothing.
+  st.viewportSnapPickValid = true;
+  st.viewportSnapPickLocalZ = 2.f;
+  REQUIRE(CadCommitElevation(st) == Catch::Approx(2.f));
+  SubmitPipeRunViewportPick(st, 8.f, 0.f, log);
+  st.viewportSnapPickValid = false;
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  const std::vector<double>& v = st.cadPipeRuns[0].vertsXyz;
+  REQUIRE(v.size() == 6);
+
+  const ray3d::Vec3 a{v[0], v[1], v[2]};
+  const ray3d::Vec3 b{v[3], v[4], v[5]};
+  const ray3d::Vec3 d = ray3d::Sub(b, a);
+  REQUIRE(ray3d::Length(d) > 1e-6);
+
+  // The segment must lie along ONE of the UCS's own axes — that is what "locked" means. Measured in
+  // the UCS frame so the assertion says what the user sees, not what the world happens to call it.
+  const double alongX = std::fabs(ray3d::Dot(d, front.xAxis));
+  const double alongY = std::fabs(ray3d::Dot(d, front.yAxis));
+  const double offPlane = std::fabs(ray3d::Dot(d, front.zAxis));
+  const double len = ray3d::Length(d);
+  CHECK(offPlane == Catch::Approx(0.0).margin(1e-6));            // never off the compass's own dial
+  CHECK(std::max(alongX, alongY) == Catch::Approx(len).margin(1e-6));
+  CHECK(std::min(alongX, alongY) == Catch::Approx(0.0).margin(1e-6));
+
+  // And concretely: this one locks to the frame's X axis, which is world X at the anchor's own
+  // elevation. Before the fix the committed vertex kept the raw cursor elevation (2 ft), so it came
+  // out diagonal in world XZ — exactly "the segment will not lock to the UCS axes".
+  CHECK(d.x == Catch::Approx(len).margin(1e-6));
+  CHECK(d.z == Catch::Approx(0.0).margin(1e-6));
+}
+
+TEST_CASE("A clicked pipe segment commits exactly where the compass preview put it",
+          "[issue486][req346][piperun][compass][command]") {
+  // The preview and the commit must agree by construction, so this asks the shared function what the
+  // ghost would show and then checks the click landed there.
+  AppCommandState st;
+  std::vector<std::string> log;
+  st.activeUcs = ucs::OrthographicPresets()[2].frame;  // Front
+
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+
+  st.viewportSnapPickValid = true;
+  st.viewportSnapPickLocalZ = 2.f;
+  const float pickX = 8.f;
+  const float pickY = 0.f;
+  float gx = pickX;
+  float gy = pickY;
+  float gz = static_cast<float>(CadCommitElevation(st));
+  ApplyPipeRunCompassFromAnchor(st, 0.f, 0.f, &gx, &gy, /*compass=*/true, 0.f, gz, &gz);
+
+  SubmitPipeRunViewportPick(st, pickX, pickY, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  const std::vector<double>& v = st.cadPipeRuns[0].vertsXyz;
+  REQUIRE(v.size() == 6);
+  CHECK(v[3] == Catch::Approx(static_cast<double>(gx)).margin(1e-6));
+  CHECK(v[4] == Catch::Approx(static_cast<double>(gy)).margin(1e-6));
+  CHECK(v[5] == Catch::Approx(static_cast<double>(gz)).margin(1e-6));
 }

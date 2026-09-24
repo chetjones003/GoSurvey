@@ -12913,6 +12913,26 @@ static void ClickToggleSolid(AppCommandState& cmd, const SelectedEntity& hit, bo
   EnsureAttrCounts(cmd);
 }
 
+/// Enter pressed in a dynamic-input field with NOTHING typed into it (D-2026-09-24-b).
+///
+/// That Enter belongs to the COMMAND, not to the field: it means "finish", "accept the default",
+/// "keep the last value" — exactly what the prompts already advertise ("Enter to finish", "Enter to
+/// accept"). It does NOT place a point at the cursor; a point is placed by clicking, or by typing a
+/// value and then pressing Enter.
+///
+/// Submitting a blank line is how that reaches the command layer, which already has a per-command
+/// blank-Enter branch — the same line `ProcessCommandLineSubmit` receives when the command bar itself
+/// is empty, so no command needs to learn anything new.
+///
+/// Before this, every dynamic-input Enter was turned into a point built from the LIVE cursor
+/// distance and angle, so a command that promised "Enter to finish" silently added another vertex
+/// instead. The fields' own `…Locked` flags are the test: they are set by `ImGui::IsItemEdited` and
+/// by the type-to-start path, so "neither locked" is precisely "the user typed nothing".
+static void SubmitDynamicInputBlankEnter(AppCommandState& cmd, std::vector<std::string>& log) {
+  char blank[2] = {0, 0};
+  ProcessCommandLineSubmit(blank, static_cast<int>(sizeof(blank)), cmd, log);
+}
+
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
                          char* cmdBuf, int cmdBufSize, double* panX, double* panY, float* zoom, double* outCursorX,
                          double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
@@ -18823,7 +18843,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (ImGui::IsItemEdited()) angLocked = true;
       PopDynFieldGroupStyle();
 
-      if (distEnter || angEnter) {
+      if ((distEnter || angEnter) && !distLocked && !angLocked) {
+        SubmitDynamicInputBlankEnter(cmd, log);
+      } else if (distEnter || angEnter) {
         // An angle ALONE is a complete answer at these prompts, and the commonest one: the X-axis
         // and XY-plane picks define a DIRECTION, so the distance does not affect the resulting frame
         // at all. Tabbing to the angle, clearing it and typing 27 should work without also having to
@@ -18927,7 +18949,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (ImGui::IsItemEdited()) ang2Locked = true;
       PopDynFieldGroupStyle();
 
-      if (distEnter2 || angEnter2) {
+      if ((distEnter2 || angEnter2) && !dist2Locked && !ang2Locked) {
+        SubmitDynamicInputBlankEnter(cmd, log);
+      } else if (distEnter2 || angEnter2) {
         double useDist = 0.0;
         {
           std::istringstream di{std::string(distBuf2)};
@@ -19033,7 +19057,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (ImGui::IsItemEdited()) yLocked = true;
       PopDynFieldGroupStyle();
 
-      if (xEnter || yEnter) {
+      if ((xEnter || yEnter) && !xLocked && !yLocked) {
+        SubmitDynamicInputBlankEnter(cmd, log);
+      } else if (xEnter || yEnter) {
         const std::string xText = StringUtil::trimCopy(std::string(xBuf));
         const bool xIsCompound = xText.find(',') != std::string::npos || xText.find('@') != std::string::npos ||
                                   xText.find('<') != std::string::npos;

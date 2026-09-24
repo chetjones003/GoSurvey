@@ -34756,14 +34756,25 @@ void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vec
   }
   // Compass (REQ-346): only meaningful once a start point exists to measure the angle from.
   const size_t n = st.pipeRunDraftVerts.size();
+  // The compass resolves a FULL 3D point, so its `wz` has to be carried into the commit — it is not
+  // an X/Y-only constraint. Under a Front/Left/Right-style UCS (and under any view where the cursor
+  // moves in elevation) the snapped ray runs along world Z, and that component lives ENTIRELY in
+  // `wz`; dropping it and re-reading the raw cursor elevation put the committed vertex back off the
+  // snapped ray, so segments did not lock to the UCS axes even with the compass on.
+  //
+  // This is the "preview must use the commit point" failure in its purest form: the rubber preview
+  // (CadRubberPreview.cpp) and the typed-distance path (HandlePipeRunTextInput) both already pass
+  // `&wz`, so the ghost showed a locked segment and the click then committed an unlocked one. All
+  // three call sites now agree.
+  float wz = static_cast<float>(CadCommitElevation(st));
   if (st.pipeRunPhase == PRP::WaitNextPoint && n >= 3) {
     const float lastX = static_cast<float>(st.pipeRunDraftVerts[n - 3]);
     const float lastY = static_cast<float>(st.pipeRunDraftVerts[n - 2]);
     const float lastZ = static_cast<float>(st.pipeRunDraftVerts[n - 1]);
-    const float targetZ = static_cast<float>(CadCommitElevation(st));
-    ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ);
+    const float targetZ = wz;
+    ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
   }
-  const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st)};
+  const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), static_cast<double>(wz)};
   AddPipeRunPoint(st, pt, log);
 }
 

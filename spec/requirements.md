@@ -376,6 +376,17 @@ requirements is a planning failure, not a sign of rigor.
   `g_chrome.axisDistance` (amber) / `axisAngle` (violet) colors. Live-updating
   the unlocked field from the cursor position every frame was already true of
   the existing implementation; this revision only adds the color bands.
+  **2026-09-24 (D-2026-09-24-b) — Enter with NOTHING typed belongs to the COMMAND, not to the
+  field.** A dynamic-input Enter was unconditionally turned into a point built from the LIVE cursor
+  distance/angle (or x/y), including when the user had typed nothing at all — so a command whose
+  prompt says "Enter to finish" or "Enter to accept <default>" silently placed another point instead,
+  and the promise in its own prompt could not be kept from the viewport. A field group whose fields
+  are all still unlocked (nothing typed) now submits a **blank line**, which is the same input the
+  command layer already receives from an empty command bar and already has a per-command meaning for.
+  Typing into any field is unchanged in every respect, including the distance-only and angle-only
+  forms and REQ-154's UCS-prompt exception: those lock a field, so they take the unchanged path. A
+  point is placed from the viewport by CLICKING, or by typing a value and pressing Enter — which is
+  AutoCAD's own behaviour and what the prompts have always advertised.
 
 ### REQ-025 — Model and Paper space with layout tabs and a space toggle
 - Purpose: compose a model onto sheets, the way AutoCAD model/paper space works
