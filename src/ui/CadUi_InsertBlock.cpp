@@ -3,6 +3,7 @@
 #include "CadRubberPreview.hpp"
 #include "NumFormat.hpp"
 #include "StringUtil.hpp"
+#include "platform/WinFileDialogs.hpp"
 #include "util/brep.hpp"
 
 #include <imgui.h>
@@ -651,6 +652,95 @@ void DrawBlockCreateDialog(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::SameLine();
   if (ImGui::Button("Cancel", ImVec2(90.f, 0.f)))
     CancelBlockCreateDialog(cmd, log);
+
+  ImGui::End();
+}
+
+/// WBLOCK's save window (user request 2026-09-23). Opened by the bare `WBLOCK` verb.
+///
+/// Deliberately the SMALLEST thing that answers "write which block, where": the definition list the
+/// Edit-block picker already uses, the same preview, and the Windows save dialog the DWG export
+/// already uses (`BrowseSaveFileDwgUtf8`). AutoCAD's WBLOCK also offers Entire drawing / Objects as
+/// sources — not built, because REQ-107 scopes WBLOCK to "write [a block] to its own file" and the
+/// other two sources are a different feature with no requirement behind them.
+void DrawWblockDialog(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (!cmd.wblockDialogOpen)
+    return;
+
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    CancelWblockDialog(cmd, log);
+    return;
+  }
+  ImGui::SetNextWindowSize(ImVec2(460.f, 0.f), ImGuiCond_FirstUseEver);
+  bool open = true;
+  if (!ImGui::Begin("Write Block", &open, ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::End();
+    if (!open)
+      CancelWblockDialog(cmd, log);
+    return;
+  }
+  if (!open) {
+    ImGui::End();
+    CancelWblockDialog(cmd, log);
+    return;
+  }
+
+  ImGui::TextUnformatted("Block");
+  ImGui::BeginChild("##WblockList", ImVec2(0.f, 150.f), true);
+  for (const CadBlockDefinition& d : cmd.blockDefs) {
+    const bool sel = CadBlockEqCi(cmd.wblockName, d.name);
+    if (ImGui::Selectable(d.name.c_str(), sel))
+      std::snprintf(cmd.wblockName, sizeof(cmd.wblockName), "%s", d.name.c_str());
+    if (sel)
+      ImGui::SetItemDefaultFocus();
+  }
+  ImGui::EndChild();
+
+  {
+    const int di = CadBlockFindDef(cmd.blockDefs, cmd.wblockName);
+    if (di >= 0) {
+      const CadBlockDefinition& d = cmd.blockDefs[static_cast<size_t>(di)];
+      if (!d.description.empty())
+        ImGui::TextWrapped("%s", d.description.c_str());
+    }
+  }
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("File:");
+  ImGui::SameLine(60.f);
+  ImGui::SetNextItemWidth(280.f);
+  ImGui::InputText("##WblockPath", cmd.wblockPath, sizeof(cmd.wblockPath));
+  ImGui::SameLine();
+  if (ImGui::Button("Browse...")) {
+    // The block's own name is the suggested file name — a WBLOCK'd file is normally named after
+    // what is in it, and BLOCKIMPORT names a definition after the file stem when reading one back.
+    char chosen[1024]{};
+    const std::string suggest = std::string(cmd.wblockName) + ".dwg";
+    if (BrowseSaveFileDwgUtf8(chosen, sizeof(chosen), suggest.c_str()))
+      std::snprintf(cmd.wblockPath, sizeof(cmd.wblockPath), "%s", chosen);
+  }
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+
+  const bool haveBlock = CadBlockFindDef(cmd.blockDefs, cmd.wblockName) >= 0;
+  const bool havePath = cmd.wblockPath[0] != '\0';
+  const bool canOk = haveBlock && havePath;
+  if (!canOk)
+    ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.f), "%s",
+                       !haveBlock ? "Choose a block to write." : "Choose a destination file.");
+  ImGui::BeginDisabled(!canOk);
+  if (ImGui::Button("OK", ImVec2(90.f, 0.f)))
+    CommitWblockDialog(cmd, log);
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(90.f, 0.f)))
+    CancelWblockDialog(cmd, log);
 
   ImGui::End();
 }

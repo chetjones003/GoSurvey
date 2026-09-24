@@ -4519,6 +4519,12 @@ struct AppCommandState {
   char blockCreateDescription[256]{};
   char blockCreateUnits[32]{};
 
+  /// WBLOCK save dialog (user request 2026-09-23). `WBLOCK <name>, <path.dwg>` still writes the file
+  /// directly; the bare `WBLOCK` verb, which used to answer with a usage line, opens this instead.
+  bool wblockDialogOpen = false;
+  char wblockName[256]{};
+  char wblockPath[1024]{};
+
   char pdfAttachFilePath[1024]{};
   int  pdfAttachSelectedPage = 0;
   float pdfAttachInsertX  = 0.f;

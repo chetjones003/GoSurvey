@@ -37,6 +37,17 @@ bool CadBlockPlaceInsertNoUndo(AppCommandState& st, std::string_view name, CadBl
 
 void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log);
+
+/// Write one block definition out as its own `.dwg` (issue #284). The single write path shared by
+/// the typed `WBLOCK <name>, <path.dwg>` form and the save dialog; it reports its own failures.
+bool CadBlocksWriteBlockToFile(AppCommandState& st, std::string_view name, const char* pathUtf8,
+                               std::vector<std::string>& log);
+/// Open the WBLOCK save dialog (bare `WBLOCK`). A no-op, with a stated reason, when the drawing has
+/// no block definitions.
+void StartWblockDialog(AppCommandState& st, std::vector<std::string>& log);
+/// Write the dialog's chosen block to its chosen path. The dialog stays open if the write fails.
+void CommitWblockDialog(AppCommandState& st, std::vector<std::string>& log);
+void CancelWblockDialog(AppCommandState& st, std::vector<std::string>& log);
 void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log);
 void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 void CommitBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log);

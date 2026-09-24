@@ -2436,3 +2436,128 @@ TEST_CASE("PIPECATALOG command refuses an unknown part type or pressure class",
   REQUIRE(CadBlocksTryIdleCommand(st, "pipecatalog", badClass, log));
   CHECK(log.back().find("unknown pressure class") != std::string::npos);
 }
+
+TEST_CASE("BLOCK Convert removes the source solid instead of duplicating it",
+          "[issue124][block][solid]") {
+  // Reported 2026-09-23 via the Create Block dialog, found by the `block-create-basepoint-pick`
+  // GUI test: `CaptureSelectionInto` has copied solids into the definition since REQ-320, but
+  // `EraseSelectedSources` had no Solid branch — so Convert (and Delete) left the original solid
+  // in the drawing beside a block reference holding a copy of it. Silent geometry duplication.
+  //
+  // Driven through the typed verb because it shares `EraseSelectedSources` with the dialog; the
+  // dialog half is covered in the GUI by `block-create-basepoint-pick`.
+  AppCommandState st;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 10.0, 8.0, &box, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  st.cadSolidAttrs.resize(1);
+  st.selection.push_back({SelectedEntity::Type::Solid, 0});
+
+  std::vector<std::string> log;
+  std::istringstream args("BOXBLOCK, 0, 0, CONVERT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "block", args, log));
+
+  const int di = CadBlockFindDef(st.blockDefs, "BOXBLOCK");
+  REQUIRE(di >= 0);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].content.solids.size() == 1);
+  // The definition holds it, so the drawing must not still hold it too.
+  CHECK(st.cadSolids.empty());
+  CHECK(st.cadSolidAttrs.empty());
+  CHECK(st.cadBlockRefs.size() == 1);
+}
+
+TEST_CASE("BLOCK Retain leaves the source solid in place", "[issue124][block][solid]") {
+  // The other half of the same branch: Retain must NOT erase, or the fix above would have turned a
+  // duplication bug into a deletion bug.
+  AppCommandState st;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 10.0, 8.0, &box, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  st.cadSolidAttrs.resize(1);
+  st.selection.push_back({SelectedEntity::Type::Solid, 0});
+
+  std::vector<std::string> log;
+  std::istringstream args("KEEPBLOCK, 0, 0, RETAIN");
+  REQUIRE(CadBlocksTryIdleCommand(st, "block", args, log));
+
+  REQUIRE(CadBlockFindDef(st.blockDefs, "KEEPBLOCK") >= 0);
+  CHECK(st.cadSolids.size() == 1);
+  CHECK(st.cadSolidAttrs.size() == 1);
+}
+
+TEST_CASE("Bare WBLOCK opens the save dialog instead of printing usage", "[issue284][wblock]") {
+  // User request 2026-09-23: WBLOCK should open a window to save the block. The two-argument form
+  // keeps writing directly (the two tests above this one drive it that way).
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "HYDRANT";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.lineAttrs.resize(1);
+  def.content.lineVis.resize(1);
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream args("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "wblock", args, log));
+  CHECK(st.wblockDialogOpen);
+  CHECK(std::string(st.wblockName) == "HYDRANT");  // the only definition, so it is preselected
+}
+
+TEST_CASE("Bare WBLOCK refuses, with a reason, when the drawing has no blocks", "[issue284][wblock]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  std::istringstream args("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "wblock", args, log));
+  CHECK_FALSE(st.wblockDialogOpen);
+  bool said = false;
+  for (const std::string& line : log) {
+    if (line.find("no block definitions") != std::string::npos)
+      said = true;
+  }
+  CHECK(said);
+}
+
+TEST_CASE("The WBLOCK dialog writes the chosen block, and stays open when it cannot",
+          "[issue284][wblock]") {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / "gosurvey-wblock-dialog";
+  fs::create_directories(dir);
+  const fs::path dwg = dir / "FROM_DIALOG.dwg";
+  std::error_code rmEc;
+  fs::remove(dwg, rmEc);
+
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "HYDRANT";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.lineAttrs.resize(1);
+  def.content.lineVis.resize(1);
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  StartWblockDialog(st, log);
+  REQUIRE(st.wblockDialogOpen);
+
+  // A destination that names no block: the dialog must report and stay open, so the user's typing
+  // survives the correction.
+  std::snprintf(st.wblockName, sizeof(st.wblockName), "%s", "NOT_A_BLOCK");
+  std::snprintf(st.wblockPath, sizeof(st.wblockPath), "%s", dwg.u8string().c_str());
+  CommitWblockDialog(st, log);
+  CHECK(st.wblockDialogOpen);
+  CHECK_FALSE(fs::exists(dwg));
+
+  std::snprintf(st.wblockName, sizeof(st.wblockName), "%s", "HYDRANT");
+  CommitWblockDialog(st, log);
+  CHECK_FALSE(st.wblockDialogOpen);
+  REQUIRE(fs::exists(dwg));
+
+  // And what it wrote is what BLOCKIMPORT reads back — the same round trip the typed form has.
+  AppCommandState dest;
+  std::vector<std::string> importLog;
+  REQUIRE(ImportCadBlocksFromPath(dest, dwg.u8string().c_str(), importLog));
+  CHECK(CadBlockFindDef(dest.blockDefs, "HYDRANT") >= 0);
+}

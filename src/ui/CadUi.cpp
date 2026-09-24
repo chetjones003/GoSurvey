@@ -14675,9 +14675,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // beside it already do. No `Kind` is active during one — the plane is a view state, not a
       // command — so without this the snap would be computed as though the user were idle, and a
       // drag that is placing a plane at a midpoint would get neither the marker nor the pull.
+      // The Create Block dialog's on-screen base point (reported 2026-09-23) belongs here for the
+      // same reason the section-plane drag above does: no `Kind` is active during it — the pick
+      // hangs off `blockCreatePhase` while `cmd.active` stays `None` — so without this the snap is
+      // computed as though the user were idle, and the one pick whose whole purpose is to land on a
+      // corner, endpoint or centre of the geometry being blocked got neither the marker nor the
+      // pull. REQ-107 already requires exactly this for INSERT's insertion-point pick; BLOCK's own
+      // base point has no acceptance criteria of its own yet, so this matches its sibling rather
+      // than inventing a rule. Model space only, matching where `SubmitBlockCreateBasePointPick` is
+      // actually reached — the floating-model-space click block has no branch for it.
       const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
                           cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
-                          cmd.mtextGripMoveActive || cmd.sectionPlaneGripDrag >= 0;
+                          cmd.mtextGripMoveActive || cmd.sectionPlaneGripDrag >= 0 ||
+                          cmd.blockCreatePhase == AppCommandState::BlockCreatePhase::WaitBasePoint;
       // REQ-121 rule (1). During an object-selection step OSNAP has no effect: no marker is drawn
       // and the cursor does not jump, because there is no coordinate being placed. The pick itself
       // was already hit-tested against the raw cursor (`RawEntityPick`'s own comment says why), so
