@@ -15752,10 +15752,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           case SelectedEntity::Type::Ellipse: {
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
               const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+              // A tilted ellipse (GitHub #531) has no flat grips: its own are the next slice, and drawing
+              // them where a flat one would be is a handle that grabs the wrong point.
+              if (EllipseIsFlat(el)) {
               const float perpX = -el.majVy, perpY = el.majVx;
               tryGrip(sel, el.cx,                    el.cy,                    el.z, 0);
               tryGrip(sel, el.cx + el.majVx,         el.cy + el.majVy,         el.z, 1);
               tryGrip(sel, el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z, 2);
+              }
             }
             break;
           }
@@ -16297,16 +16301,46 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImU32 pc;
         float pw;
         entStyle(SelectedEntity::Type::Polyline, static_cast<int>(pi), vpBaseCol(attr.layer, attr.color), pc, pw);
-        ImVec2 prev{};
-        bool have = false;
-        for (int k = start; k < end; ++k) {
-          const ImVec2 s = m2sz(cmd.userPolylineVerts[static_cast<size_t>(k) * 3] + oX,
-                                cmd.userPolylineVerts[static_cast<size_t>(k) * 3 + 1] + oY,
-                                cmd.userPolylineVerts[static_cast<size_t>(k) * 3 + 2]);
-          if (have)
-            sdl->AddLine(prev, s, pc, pw);
-          prev = s;
-          have = true;
+        // A polyline through a viewport carries its BULGES and its CLOSING span, like everywhere
+        // else it is drawn. Until this, a viewport drew the chords only: a level section of a
+        // cylinder — two vertices, each bulged a half turn — came out as a single straight line
+        // between them, and every closed outline was drawn open (asked for from the app, 2026-09-23).
+        const bool polyClosed = pi < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[pi] != 0;
+        const int count = end - start;
+        auto vertAt = [&](int k) {
+          const size_t j = static_cast<size_t>(k) * 3;
+          return std::array<double, 3>{cmd.userPolylineVerts[j] + oX, cmd.userPolylineVerts[j + 1] + oY,
+                                       cmd.userPolylineVerts[j + 2]};
+        };
+        const int spans = polyClosed ? count : count - 1;
+        for (int s = 0; s < spans; ++s) {
+          const int k0 = start + s;
+          const int k1 = start + ((s + 1) % count);
+          const std::array<double, 3> a = vertAt(k0);
+          const std::array<double, 3> b = vertAt(k1);
+          const float bulge = static_cast<size_t>(k0) < cmd.userPolylineVertsBulge.size()
+                                  ? cmd.userPolylineVertsBulge[static_cast<size_t>(k0)]
+                                  : 0.f;
+          const BulgeArcSpan arcSpan =
+              bulge != 0.f ? BulgeArc(a[0], a[1], b[0], b[1], static_cast<double>(bulge))
+                           : BulgeArcSpan{};
+          if (!arcSpan.valid) {
+            sdl->AddLine(m2sz(a[0], a[1], a[2]), m2sz(b[0], b[1], b[2]), pc, pw);
+            continue;
+          }
+          // Sampled in plan, with the height walked from one end to the other: a bulged span of a
+          // SECTION outline can rise (a vertical cut's arc does), and its two ends already carry it.
+          const int segs = std::clamp(static_cast<int>(std::fabs(arcSpan.sweep) / 0.15) + 2, 2, 180);
+          ImVec2 prevPt{};
+          for (int q = 0; q <= segs; ++q) {
+            const double f = static_cast<double>(q) / static_cast<double>(segs);
+            const double ang = arcSpan.startAngle + arcSpan.sweep * f;
+            const ImVec2 s2 = m2sz(arcSpan.cx + arcSpan.radius * std::cos(ang),
+                                   arcSpan.cy + arcSpan.radius * std::sin(ang), a[2] + (b[2] - a[2]) * f);
+            if (q > 0)
+              sdl->AddLine(prevPt, s2, pc, pw);
+            prevPt = s2;
+          }
         }
       }
       // Circles (REQ-028: skip frozen layers).
@@ -16349,10 +16383,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         float aw;
         entStyle(SelectedEntity::Type::Arc, static_cast<int>(arcIdx), vpBaseCol(attr.layer, attr.color), ac, aw);
         ImVec2 prev{};
+        // A tilted arc (REQ-312) is sampled through its own plane here too, for the reason the
+        // ellipse below is: a viewport that drew it flat would put it at one elevation it never has.
+        const bool arcFlat = IsFlatNormal(arc.nx, arc.ny, arc.nz);
+        const ucs::Ucs arcPlane = arcFlat ? ucs::Ucs{} : CurvePlane(arc);
         for (int k = 0; k <= segs; ++k) {
           const float t = arc.startRad + arc.sweepRad * (static_cast<float>(k) / static_cast<float>(segs));
-          const ImVec2 s = m2sz(static_cast<double>(arc.cx + arc.r * std::cos(t)) + oX,
-                                static_cast<double>(arc.cy + arc.r * std::sin(t)) + oY, arc.z);
+          ImVec2 s;
+          if (arcFlat) {
+            s = m2sz(static_cast<double>(arc.cx + arc.r * std::cos(t)) + oX,
+                     static_cast<double>(arc.cy + arc.r * std::sin(t)) + oY, arc.z);
+          } else {
+            const ray3d::Vec3 p = CurvePointAt(arcPlane, static_cast<double>(arc.r), static_cast<double>(t));
+            s = m2sz(p.x + oX, p.y + oY, p.z);
+          }
           if (k > 0)
             sdl->AddLine(prev, s, ac, aw);
           prev = s;
@@ -16376,6 +16420,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImVec2 prev{};
         for (int k = 0; k <= segs; ++k) {
           const double u = kTwoPi * static_cast<double>(k) / static_cast<double>(segs);
+          // A TILTED ellipse (GitHub #531) is sampled through its own plane, so a viewport shows the
+          // section standing where it was cut rather than its flattened shadow at one elevation.
+          if (!EllipseIsFlat(el)) {
+            const ray3d::Vec3 p = EllipseWorldPointAt(el, u);
+            const ImVec2 s = m2sz(p.x + oX, p.y + oY, p.z);
+            if (k > 0) sdl->AddLine(prev, s, ec, ew);
+            prev = s;
+            continue;
+          }
           const double c0 = std::cos(u);
           const double s0 = std::sin(u);
           const double wx = static_cast<double>(el.cx) + static_cast<double>(el.majVx) * c0 + static_cast<double>(px) * s0;
@@ -16765,10 +16818,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           case SelectedEntity::Type::Ellipse: {
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
               const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+              // A tilted ellipse (GitHub #531) has no flat grips: its own are the next slice, and drawing
+              // them where a flat one would be is a handle that grabs the wrong point.
+              if (EllipseIsFlat(el)) {
               const float perpX = -el.majVy, perpY = el.majVx;
               drawGrip(el.cx, el.cy, hot(0));
               drawGrip(el.cx + el.majVx, el.cy + el.majVy, hot(1));
               drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, hot(2));
+              }
             }
             break;
           }
@@ -18587,11 +18644,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else if (sel.type == SelectedEntity::Type::Ellipse) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
           const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+          if (EllipseIsFlat(el)) {
           drawGrip(el.cx, el.cy, el.z);
           drawGrip(el.cx + el.majVx, el.cy + el.majVy, el.z);
           const float perpX = -el.majVy;
           const float perpY = el.majVx;
           drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z);
+          }
         }
       } else if (sel.type == SelectedEntity::Type::BlockRef) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadBlockRefs.size()) {

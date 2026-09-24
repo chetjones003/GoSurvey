@@ -14,6 +14,8 @@
 
 #include <cmath>
 #include <memory>
+#include <array>
+#include <vector>
 
 #include "CadCommands.hpp"
 #include "CadSnap.hpp"
@@ -1746,4 +1748,145 @@ TEST_CASE("Shift+right-click PointCloud override reaches the kind even when its 
       CadSnap::FindBest(100.0, 100.0, st, /*commandActive=*/true, kTol, {}, nullptr, &only);
   REQUIRE(hit.valid);
   CHECK(hit.kind == Kind::PointCloud);
+}
+
+// ---------------------------------------------------------------------------
+// Snapping to what SECTION draws (2026-09-23, asked for from the app: "lets test snapping").
+//
+// A section outline is a polyline the user then measures from, so the snap has to land on the
+// outline's own corners — including on a VERTICAL section, whose corners differ only in Z. And a
+// tilted cut now draws an ELLIPSE (#531), which the plan-space snap deliberately skips: this pins
+// that it is skipped rather than answered in the wrong place (REQ-201).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A closed polyline, the shape SECTION appends: vertices as x,y,z triples.
+void AddPolyline(AppCommandState& st, const std::vector<std::array<float, 3>>& pts, bool closed) {
+  if (st.userPolylineOffsets.empty())
+    st.userPolylineOffsets.push_back(0);
+  for (const std::array<float, 3>& p : pts) {
+    st.userPolylineVerts.push_back(p[0]);
+    st.userPolylineVerts.push_back(p[1]);
+    st.userPolylineVerts.push_back(p[2]);
+  }
+  st.userPolylineOffsets.push_back(static_cast<int>(st.userPolylineVerts.size() / 3));
+  st.userPolylineClosed.push_back(closed ? uint8_t{1} : uint8_t{0});
+  st.userPolylineAttrs.push_back(EntityAttributes{});
+}
+
+} // namespace
+
+TEST_CASE("A level section outline snaps at its own corners", "[CadSnap][section]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+  st.objectSnapMidpoint = true;
+  // The outline a box sections to at z = 0: 100 x 70, level.
+  AddPolyline(st, {{{-50.f, -35.f, 0.f}}, {{50.f, -35.f, 0.f}}, {{50.f, 35.f, 0.f}}, {{-50.f, 35.f, 0.f}}}, true);
+
+  SECTION("a corner") {
+    const CadSnap::Hit hit = CadSnap::FindBest(49.0, 34.0, st, /*commandActive=*/true, kTol);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Endpoint);
+    CHECK(hit.x == Approx(50.f));
+    CHECK(hit.y == Approx(35.f));
+    CHECK(hit.z == Approx(0.f));
+  }
+
+  SECTION("the middle of a side") {
+    const CadSnap::Hit hit = CadSnap::FindBest(0.0, -34.5, st, /*commandActive=*/true, kTol);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Midpoint);
+    CHECK(hit.x == Approx(0.f));
+    CHECK(hit.y == Approx(-35.f));
+  }
+}
+
+TEST_CASE("A VERTICAL section outline snaps at the corner's own height", "[CadSnap][section]") {
+  // The outline a box sections to on the world XZ plane: 100 wide, 50 tall, every vertex at y = 0.
+  // In plan its four corners fall on two points, so a snap that ignored Z would be right by luck in
+  // x and y and wrong in height — which is what a user then measures from.
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+  AddPolyline(st, {{{-50.f, 0.f, 25.f}}, {{-50.f, 0.f, -25.f}}, {{50.f, 0.f, -25.f}}, {{50.f, 0.f, 25.f}}}, true);
+
+  const CadSnap::Hit hit = CadSnap::FindBest(49.5, 0.2, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Endpoint);
+  CHECK(hit.x == Approx(50.f));
+  CHECK(hit.y == Approx(0.f));
+  // Either corner at that plan position is a correct answer; a height of zero would not be.
+  CHECK(std::fabs(hit.z) == Approx(25.f));
+}
+
+TEST_CASE("A flat ellipse snaps at its centre; a TILTED one is not answered in plan",
+          "[CadSnap][issue531]") {
+  AppCommandState st;
+  st.objectSnapCenter = true;
+
+  SECTION("flat: the centre is offered, as it always was") {
+    CadEllipse el{};
+    el.cx = 10.0;
+    el.cy = 5.0;
+    el.majVx = 20.f;
+    el.majVy = 0.f;
+    el.ratio = 0.5f;
+    st.userEllipses.push_back(el);
+    st.userEllAttrs.push_back(EntityAttributes{});
+    const CadSnap::Hit hit = CadSnap::FindBest(10.4, 5.3, st, /*commandActive=*/true, kTol);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Center);
+    CHECK(hit.x == Approx(10.f));
+    CHECK(hit.y == Approx(5.f));
+  }
+
+  SECTION("tilted: the centre is a real point and is offered") {
+    // A tilted ellipse's CENTRE is a point in space whatever plane the curve turns in, so it snaps
+    // like any other centre — and its height is the ellipse's own (GitHub #531).
+    CadEllipse el{};
+    el.cx = 10.0;
+    el.cy = 5.0;
+    el.z = 7.0;
+    el.majVx = 20.f;
+    el.majVy = 0.f;
+    el.ratio = 0.7071f;
+    el.nx = 0.f;
+    el.ny = -0.7071f;
+    el.nz = 0.7071f;
+    st.userEllipses.push_back(el);
+    st.userEllAttrs.push_back(EntityAttributes{});
+    const CadSnap::Hit hit = CadSnap::FindBest(10.4, 5.3, st, /*commandActive=*/true, kTol);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Center);
+    CHECK(hit.x == Approx(10.f));
+    CHECK(hit.y == Approx(5.f));
+    CHECK(hit.z == Approx(7.f));
+  }
+
+  SECTION("tilted: a midpoint candidate lies ON the curve, at its own height") {
+    // The curve of a 45-degree section rises as it goes: a candidate taken from the XY projection
+    // would sit at one elevation the curve never has.
+    AppCommandState mid;
+    mid.objectSnapMidpoint = true;
+    CadEllipse el{};
+    el.cx = 0.0;
+    el.cy = 0.0;
+    el.z = 0.0;
+    el.majVx = 0.f;
+    el.majVy = 42.4264f;  // the major axis runs down the slope of a 45-degree cut
+    el.ratio = 0.70710678f;
+    el.nx = 0.f;
+    el.ny = -0.70710678f;
+    el.nz = 0.70710678f;
+    mid.userEllipses.push_back(el);
+    mid.userEllAttrs.push_back(EntityAttributes{});
+    // Near the far end of the major axis: on a 45-degree cut that point is 30 out and 30 up.
+    const CadSnap::Hit hit = CadSnap::FindBest(0.0, 29.0, mid, /*commandActive=*/true, kTol);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Midpoint);
+    CHECK(hit.y == Approx(30.f).margin(1.5f));
+    // The whole point: it carries the height the curve has there, not zero.
+    CHECK(hit.z == Approx(30.f).margin(1.5f));
+  }
+
 }

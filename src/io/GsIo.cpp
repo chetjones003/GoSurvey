@@ -686,6 +686,13 @@ void CadEllipseToJson(const CadEllipse& e, json& o) {
   o["ratio"] = e.ratio;
   if (e.z != 0.f)  // additive, omitted when flat — see CadArcToJson
     o["z"] = e.z;
+  // Additive and omitted when flat, exactly as a tilted arc's is (REQ-312 / GitHub #531): a drawing
+  // with no tilted ellipse re-saves byte-identically, and a pre-#531 file loads with world +Z.
+  if (!IsFlatNormal(e.nx, e.ny, e.nz)) {
+    o["nx"] = e.nx;
+    o["ny"] = e.ny;
+    o["nz"] = e.nz;
+  }
 }
 
 CadEllipse CadEllipseFromJson(const json& o) {
@@ -696,6 +703,9 @@ CadEllipse CadEllipseFromJson(const json& o) {
   e.majVy = o.value("majVy", e.majVy);
   e.ratio = o.value("ratio", e.ratio);
   e.z     = o.value("z",     e.z);  // absent → 0: legacy ellipses load flat (REQ-057)
+  e.nx    = o.value("nx",    e.nx);  // absent → world +Z: legacy ellipses load flat (GitHub #531)
+  e.ny    = o.value("ny",    e.ny);
+  e.nz    = o.value("nz",    e.nz);
   return e;
 }
 

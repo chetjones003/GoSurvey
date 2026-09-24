@@ -8930,3 +8930,95 @@ TEST_CASE("An outline whose corners are all real keeps every one", "[brep][issue
     REQUIRE(loops[1].segs.size() == 2);
   }
 }
+
+// ---------------------------------------------------------------------------
+// GitHub issue #531: a tilted cut of a cylinder or cone is one closed ellipse.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A tilted cut of a cylinder sections as the ellipse it is", "[brep][issue531]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::SectionEllipse el;
+  const double r = 30.0;
+  // Tall enough that a 45-degree cut through the middle stays between the caps.
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -100.0), r, 200.0, &cyl, &why));
+
+  SECTION("45 degrees: semi-minor r, semi-major r / cos 45, centred on the axis") {
+    const Vec3 n = ray3d::Normalize(Vec3{0, -1, 1});
+    REQUIRE(brep::SectionEllipseOutline(cyl, Vec3{0, 0, 0}, n, &plane, &el, &why));
+    REQUIRE(el.valid);
+    REQUIRE(el.minorSemi == Approx(r).epsilon(1e-9));
+    REQUIRE(el.majorSemi == Approx(r / std::cos(kPi / 4.0)).epsilon(1e-9));
+    REQUIRE(ray3d::Length(ray3d::Sub(el.centre, Vec3{0, 0, 0})) <= 1e-9);
+    // The ellipse lies in the caller's own plane, and its major axis lies in it too.
+    REQUIRE(std::fabs(ray3d::Dot(el.normal, n)) == Approx(1.0).epsilon(1e-9));
+    REQUIRE(std::fabs(ray3d::Dot(el.majorDir, n)) == Approx(0.0).margin(1e-9));
+    REQUIRE(ray3d::Length(el.majorDir) == Approx(1.0).epsilon(1e-9));
+  }
+
+  SECTION("a gentler tilt is a rounder ellipse, and the minor axis never changes") {
+    for (const double deg : {15.0, 30.0, 60.0}) {
+      const double rad = deg * kPi / 180.0;
+      const Vec3 n = ray3d::Normalize(Vec3{0, -std::sin(rad), std::cos(rad)});
+      REQUIRE(brep::SectionEllipseOutline(cyl, Vec3{0, 0, 0}, n, &plane, &el, &why));
+      INFO(deg << " degrees");
+      REQUIRE(el.minorSemi == Approx(r).epsilon(1e-9));
+      REQUIRE(el.majorSemi == Approx(r / std::cos(rad)).epsilon(1e-9));
+    }
+  }
+
+  SECTION("off the axis: the ellipse is the same shape, centred where the plane crosses") {
+    const Vec3 n = ray3d::Normalize(Vec3{0, -1, 1});
+    REQUIRE(brep::SectionEllipseOutline(cyl, Vec3{0, 0, 40.0}, n, &plane, &el, &why));
+    REQUIRE(el.majorSemi == Approx(r * std::sqrt(2.0)).epsilon(1e-9));
+    REQUIRE(el.centre.z == Approx(40.0).epsilon(1e-9));
+  }
+
+  SECTION("a cut that crosses an end cap is an arc plus a chord, not one ellipse") {
+    Solid shortCyl;
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -25.0), r, 50.0, &shortCyl, &why));
+    REQUIRE_FALSE(brep::SectionEllipseOutline(shortCyl, Vec3{0, 0, 0}, ray3d::Normalize(Vec3{0, -1, 1}),
+                                              &plane, &el, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedEnd);
+  }
+
+  SECTION("at survey magnitude on a tilted frame") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid far;
+    REQUIRE(brep::MakeCylinder(base, r, 200.0, &far, &why));
+    // 45 degrees to the cylinder's own axis, in its own frame.
+    const Vec3 n = ray3d::Normalize(ray3d::Add(base.zAxis, ray3d::Scale(base.yAxis, -1.0)));
+    const Vec3 at = ucs::UcsToWorld(base, Vec3{0, 0, 100.0});
+    REQUIRE(brep::SectionEllipseOutline(far, at, n, &plane, &el, &why));
+    REQUIRE(el.minorSemi == Approx(r).margin(0.002));
+    REQUIRE(el.majorSemi == Approx(r * std::sqrt(2.0)).margin(0.002));
+    REQUIRE(ray3d::Length(ray3d::Sub(el.centre, at)) <= 0.002);
+  }
+}
+
+TEST_CASE("A tilted cut of a cone sections as an ellipse too", "[brep][issue531]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::SectionEllipse el;
+  // A shallow taper, tall enough for a gentle cut to stay on the side.
+  Solid cone;
+  REQUIRE(brep::MakeCone(PlaneAlong(World(), -100.0), 40.0, 20.0, 200.0, &cone, &why));
+
+  SECTION("a gentle tilt gives an ellipse whose axes the cone's own geometry sets") {
+    const double rad = 10.0 * kPi / 180.0;
+    const Vec3 n = ray3d::Normalize(Vec3{0, -std::sin(rad), std::cos(rad)});
+    REQUIRE(brep::SectionEllipseOutline(cone, Vec3{0, 0, 0}, n, &plane, &el, &why));
+    REQUIRE(el.valid);
+    // At mid-height the cone's radius is 30; a 10-degree cut is very nearly that circle, a touch
+    // longer along the tilt and centred a touch off the axis.
+    REQUIRE(el.minorSemi == Approx(30.0).epsilon(1e-3));
+    REQUIRE(el.majorSemi > el.minorSemi);
+    REQUIRE(std::fabs(ray3d::Dot(el.normal, n)) == Approx(1.0).epsilon(1e-9));
+  }
+
+  SECTION("a cut steeper than the cone's own side is not an ellipse at all") {
+    REQUIRE_FALSE(brep::SectionEllipseOutline(cone, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &el, &why));
+    REQUIRE(why != Problem::Ok);
+  }
+}

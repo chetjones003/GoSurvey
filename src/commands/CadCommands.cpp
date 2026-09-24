@@ -29900,6 +29900,9 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
   struct Cut {
     ucs::Ucs plane;
     std::vector<brep::Path> loops;
+    /// A tilted cut of a cylinder or cone is one closed ELLIPSE, which no polyline can hold: it
+    /// becomes an `ELLIPSE` entity standing in the cut plane instead (GitHub #531, D-2026-09-23-a).
+    brep::SectionEllipse ellipse;
   };
   std::vector<Cut> cuts;
   cuts.reserve(solids.size());
@@ -29913,9 +29916,15 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
     Cut c;
     brep::Problem why = brep::Problem::Ok;
     if (!brep::SectionOutlines(*sp, planePoint, planeNormal, &c.plane, &c.loops, &why)) {
-      // The kernel's own reason, verbatim. Nothing is drawn and nothing is cut.
-      log.push_back(std::string("SECTION — ") + brep::ProblemText(why));
-      return;
+      // One shape a section can be that an outline cannot hold: a closed ellipse, from a tilted cut
+      // of a cylinder or cone (GitHub #531). Asked for by name rather than guessed at, so every
+      // other refusal still arrives with the kernel's own reason, verbatim, and draws nothing.
+      brep::Problem ellipseWhy = brep::Problem::Ok;
+      if (why != brep::Problem::SectionEllipse ||
+          !brep::SectionEllipseOutline(*sp, planePoint, planeNormal, &c.plane, &c.ellipse, &ellipseWhy)) {
+        log.push_back(std::string("SECTION — ") + brep::ProblemText(why));
+        return;
+      }
     }
     cuts.push_back(std::move(c));
   }
@@ -29930,6 +29939,31 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
   int made = 0;
   int failed = 0;
   for (const Cut& c : cuts) {
+    if (c.ellipse.valid) {
+      // The ellipse stands in the cut plane: its centre is a world point, and its major axis is
+      // stated in that plane's own axes, which is how `CadEllipse` carries a tilted ellipse
+      // (GitHub #531). A flat cut still produces a flat ellipse, byte-identical to before.
+      CadEllipse el{};
+      const ucs::Ucs plane = c.plane;
+      const ucs::Point2D centre2d = ucs::WorldToPlane(plane, c.ellipse.centre);
+      const ucs::Point2D major2d = ucs::WorldToPlane(
+          plane, ray3d::Add(c.ellipse.centre, ray3d::Scale(c.ellipse.majorDir, c.ellipse.majorSemi)));
+      float lx = 0.f, ly = 0.f;
+      CadCoord::LocalFromWorld(st, c.ellipse.centre.x, c.ellipse.centre.y, &lx, &ly);
+      el.cx = static_cast<double>(lx);
+      el.cy = static_cast<double>(ly);
+      el.z = c.ellipse.centre.z;
+      el.majVx = static_cast<float>(major2d.x - centre2d.x);
+      el.majVy = static_cast<float>(major2d.y - centre2d.y);
+      el.ratio = static_cast<float>(c.ellipse.minorSemi / std::max(c.ellipse.majorSemi, 1e-12));
+      el.nx = static_cast<float>(c.ellipse.normal.x);
+      el.ny = static_cast<float>(c.ellipse.normal.y);
+      el.nz = static_cast<float>(c.ellipse.normal.z);
+      st.userEllipses.push_back(el);
+      st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+      ++made;
+      continue;
+    }
     for (const brep::Path& loop : c.loops) {
       // The Path is 2D in its own plane; the polyline store is world XYZ.
       std::vector<float> xyz;

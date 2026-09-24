@@ -849,6 +849,41 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
   // segments is gone — POLYLINE/LWPOLYLINE bulges are now stored on the polyline (group 42 ->
   // per-vertex bulge, see appendPolylineXF), so the arc and the entity both survive the round trip.
 
+  /// A FULL ellipse standing in its own plane (GitHub #531): group 210 names the plane, and groups
+  /// 11/21/31 give the major axis in WORLD axes, which `CadEllipse` stores in that plane's own axes.
+  ///
+  /// Only the untransformed case takes the store, exactly as the flat sink below does: an INSERT
+  /// transform can shear a circle into an ellipse and an ellipse into one this entity cannot state,
+  /// so a transformed one tessellates there rather than being stored wrongly here.
+  auto appendTiltedEllipseXF = [&](double cx, double cy, double cz, double majx, double majy, double majz,
+                                   double nx, double ny, double nz, double ratio,
+                                   const EntityAttributes& at) {
+    const double a = std::sqrt(majx * majx + majy * majy + majz * majz);
+    if (a < 1e-12 || !xf.isIdentity())
+      return;  // a transformed tilted ellipse is out of this sink's remit
+    double ocx = 0, ocy = 0;
+    xf.apply(cx, cy, &ocx, &ocy);
+    UpdateCoordMag(coordMagMax, ocx, ocy);
+    CadEllipse el{};
+    el.cx = ocx - st.worldDocumentOriginX;
+    el.cy = ocy - st.worldDocumentOriginY;
+    el.z = cz;
+    el.nx = static_cast<float>(nx);
+    el.ny = static_cast<float>(ny);
+    el.nz = static_cast<float>(nz);
+    // The major axis, turned from world into the ellipse's own plane — the inverse of what the
+    // writer does, through the same `CurvePlane` frame, so the round trip closes.
+    const ucs::Ucs plane = CurvePlane(el);
+    const ucs::Point2D centre2d = ucs::WorldToPlane(plane, ray3d::Vec3{ocx, ocy, cz});
+    const ucs::Point2D major2d =
+        ucs::WorldToPlane(plane, ray3d::Vec3{ocx + majx, ocy + majy, cz + majz});
+    el.majVx = static_cast<float>(major2d.x - centre2d.x);
+    el.majVy = static_cast<float>(major2d.y - centre2d.y);
+    el.ratio = static_cast<float>(ratio);
+    st.userEllipses.push_back(el);
+    st.userEllAttrs.push_back(at);
+  };
+
   auto appendEllipseXF = [&](double cx, double cy, double majx, double majy, double ratio, double t0, double t1,
                              const EntityAttributes& at, double cz = 0.0) {
     const double a = std::hypot(majx, majy);
@@ -1479,11 +1514,15 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     if (typ == "ELLIPSE") {
       EntityBase base;
       double cx = 0, cy = 0, cz = 0, mx = 1, my = 0, mz = 0, ratio = 0.5, t0 = 0, t1 = 2.0 * kPi;
+      double enx = 0, eny = 0, enz = 1;  // group 210: the ellipse's plane (GitHub #531)
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
         base.parse(c, v);
-        if      (c == 10) ParseDouble(v, &cx);
+        if      (c == 210) ParseDouble(v, &enx);
+        else if (c == 220) ParseDouble(v, &eny);
+        else if (c == 230) ParseDouble(v, &enz);
+        else if (c == 10) ParseDouble(v, &cx);
         else if (c == 20) ParseDouble(v, &cy);
         else if (c == 30) ParseDouble(v, &cz);
         else if (c == 11) ParseDouble(v, &mx);
@@ -1493,9 +1532,15 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 41) ParseDouble(v, &t0);
         else if (c == 42) ParseDouble(v, &t1);
       }
-      (void)mz;
       if (ratio <= 1e-12) ratio = 1e-12;
-      appendEllipseXF(cx, cy, mx, my, ratio, t0, t1, base.makeAttr(layerRgb), cz);  // group 30 (REQ-057)
+      // Group 210 names the ellipse's plane and 31 gives the major axis its own Z (GitHub #531).
+      // Absent or +Z is the flat case every file wrote before, byte-identical through this path.
+      if (IsFlatNormal(static_cast<float>(enx), static_cast<float>(eny), static_cast<float>(enz)) &&
+          std::fabs(mz) <= 1e-12) {
+        appendEllipseXF(cx, cy, mx, my, ratio, t0, t1, base.makeAttr(layerRgb), cz);  // group 30 (REQ-057)
+      } else {
+        appendTiltedEllipseXF(cx, cy, cz, mx, my, mz, enx, eny, enz, ratio, base.makeAttr(layerRgb));
+      }
       i = j;
       continue;
     }
@@ -3688,12 +3733,29 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(10, std::to_string(worldX(el.cx)));
     emitPair(20, std::to_string(worldY(el.cy)));
     emitPair(30, std::to_string(static_cast<double>(el.z)));  // elevation (REQ-057), absolute
-    emitPair(11, std::to_string(static_cast<double>(ewEmit.majVx)));
-    emitPair(21, std::to_string(static_cast<double>(ewEmit.majVy)));
-    emitPair(31, "0.0");
-    emitPair(210, "0.0");
-    emitPair(220, "0.0");
-    emitPair(230, "1.0");
+    if (EllipseIsFlat(el)) {
+      emitPair(11, std::to_string(static_cast<double>(ewEmit.majVx)));
+      emitPair(21, std::to_string(static_cast<double>(ewEmit.majVy)));
+      emitPair(31, "0.0");
+      emitPair(210, "0.0");
+      emitPair(220, "0.0");
+      emitPair(230, "1.0");
+    } else {
+      // A tilted ellipse (GitHub #531). DXF states an ELLIPSE's centre (10/20/30) and its major axis
+      // relative to that centre (11/21/31) in WORLD axes, with 210 naming the plane — unlike an
+      // LWPOLYLINE, which is written in its own OCS. So the stored in-plane major axis is turned
+      // back into world here, through the ellipse's own frame, and the normal is written as it is.
+      const ucs::Ucs plane = CurvePlane(el);
+      const ray3d::Vec3 centreW = ucs::PlaneToWorld(plane, ucs::Point2D{0.0, 0.0});
+      const ray3d::Vec3 majW = ucs::PlaneToWorld(
+          plane, ucs::Point2D{static_cast<double>(ewEmit.majVx), static_cast<double>(ewEmit.majVy)});
+      emitPair(11, std::to_string(majW.x - centreW.x));
+      emitPair(21, std::to_string(majW.y - centreW.y));
+      emitPair(31, std::to_string(majW.z - centreW.z));
+      emitPair(210, std::to_string(static_cast<double>(el.nx)));
+      emitPair(220, std::to_string(static_cast<double>(el.ny)));
+      emitPair(230, std::to_string(static_cast<double>(el.nz)));
+    }
     emitPair(40, std::to_string(static_cast<double>(ewEmit.ratio)));
     emitPair(41, "0.0");
     emitPair(42, std::to_string(2.0 * kPi));

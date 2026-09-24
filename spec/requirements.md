@@ -6036,6 +6036,46 @@ capability that does not exist. They are recorded here rather than quietly dropp
   REQ-101. This closes the stability concern the `req312-dxf-arbitrary-plane-roundtrip` transcript
   had recorded as open.
 
+  2026-09-23 — **an ellipse carries its own plane, and a tilted cut is drawn as one**
+  (D-2026-09-23-a, TASK-276, GitHub issue #531). REQ-312 gave arcs and circles a plane normal and
+  left the ellipse flat, which had three costs: `SECTION` refused every tilted cut of a cylinder or
+  cone ("this cut is an ellipse, which a section outline cannot hold yet"), `ELLIPSE` on a tilted UCS
+  landed flat, and a tilted `ELLIPSE` read from DXF arrived flat and in the wrong place with no
+  message (REQ-201) — group 210 was not read at all.
+
+  `CadEllipse` now carries the same normal, on the same terms: world +Z is every ellipse that existed
+  before, `ucs::FromNormal` maps it onto the world axes exactly, and the major-axis vector is read in
+  the ellipse's own plane — so a flat ellipse is bit-identical through save, reload and DXF. A tilted
+  one lies in `ucs::FromNormal({cx, cy, z}, {nx, ny, nz})`, and is drawn, saved and written through
+  that one frame.
+
+  **Interchange.** `.gs` persists the normal, omitted when +Z (additive, no format bump). DXF states
+  an ELLIPSE's centre and major axis in WORLD axes with group 210 naming the plane — unlike an
+  LWPOLYLINE, which is written in its own OCS — so the writer emits the real 11/21/31 and 210/220/230,
+  and the reader takes both.
+
+  **The section.** A tilted cut of a cylinder or cone that stays between its caps is one closed
+  ellipse, and `SECTION` draws it as an `ELLIPSE` standing in the cut plane. A cut that also crosses
+  an end cap is an elliptical arc plus a chord — two shapes, not one — and keeps its own refusal
+  (`SliceCutCrossesCurvedEnd`).
+
+  **Object snap reaches a tilted ellipse**: its centre, and points on the curve itself, taken through
+  the ellipse's own plane and carrying the height the curve has there — the rule REQ-312 item 3 set
+  for a tilted arc. What a tilted ellipse does NOT yet do: the plan-space ENTITY PICK and the three
+  GRIPS **skip** it, exactly as REQ-312's own
+  increments skipped a tilted arc before its snap and pick work landed. They compute in plan, and a
+  tilted ellipse's curve is not the one they would draw there, so acting on it would put a snap or a
+  handle somewhere the curve never goes (REQ-201). A flat ellipse keeps both. That slice is the
+  follow-up.
+
+  Acceptance added:
+  - a flat ellipse, drawn or loaded, is unchanged, and the existing ellipse transcripts and the
+    DXF round trip are byte-stable;
+  - a 45° cut of a cylinder of radius r sections to an ellipse with semi-minor r and semi-major
+    r / cos 45, centred where the plane crosses the axis, to REQ-101 and at survey magnitudes;
+  - that ellipse survives `.gs` and a DXF round trip, plane included;
+  - a cut that crosses an end cap is still refused by name.
+
 ### REQ-313 — The B-rep solid kernel and the seven primitive solids (GitHub issue #146)
 - Purpose: GoSurvey has no solids. `CadMesh` (REQ-063 / ADR-026 (c)) is import-only reference
   geometry — no faces that mean anything, no edges, no volume — and `CadTin` is a surface, which by

@@ -164,6 +164,8 @@ bool QuadrantDirections(const ucs::Ucs& curvePlane, const ucs::Ucs& activeUcs, r
 }
 
 [[nodiscard]] bool EllipseContainsPoint(float wx, float wy, const CadEllipse& el) {
+  if (!EllipseIsFlat(el))
+    return false;  // a tilted ellipse is not picked in plan (GitHub #531)
   const float ma = std::hypot(el.majVx, el.majVy);
   if (ma < 1.e-8f)
     return false;
@@ -186,6 +188,8 @@ bool QuadrantDirections(const ucs::Ucs& curvePlane, const ucs::Ucs& activeUcs, r
     return 0.f;
   constexpr int kSeg = 48;
   constexpr float kTwoPi = 6.28318530718f;
+  if (!EllipseIsFlat(el))
+    return kHugePickDistSq;  // a tilted ellipse is not picked in plan (GitHub #531)
   const float ma = std::hypot(el.majVx, el.majVy);
   if (ma < 1.e-8f)
     return kHugePickDistSq;
@@ -645,6 +649,8 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
     const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     if (ma < 1.e-8)
       continue;
+    if (!EllipseIsFlat(el))
+      continue;  // tilted: not this plan-space path (GitHub #531)
     if (NearCursor(ray, wx, wy, el.cx, el.cy, el.z, ma, tol))
       conics->push_back(IsectConic{curveisect::MakeEllipse(el.cx, el.cy, el.majVx, el.majVy, el.ratio), el.z});
   }
@@ -1224,12 +1230,37 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     const float ma = std::hypot(el.majVx, el.majVy);
     if (ma < 1e-8f || kEllSnapSeg < 3)
       continue;
+    // A TILTED ellipse (GitHub #531) is walked in the plane it actually lies in, the way a tilted arc
+    // is: a snap has to offer points that are ON the drawn curve, and the XY projection of this one
+    // passes through nothing the user can see (REQ-062, REQ-201). Its centre is a real point either
+    // way; its curve samples carry their own height.
+    const bool ellFlat = EllipseIsFlat(el);
     if (wantCenter) {
       float hx = 0.f;
       float hy = 0.f;
-      const bool heur = CenterHeuristicPoint(acc, wx, wy, el.z, &hx, &hy);
-      const float p2 = EllipseCenterPickDistSq(hx, hy, el, tolWorld);
-      ConsiderSnap(&acc, wx, wy, el.cx, el.cy, Kind::Center, p2, tolWorld, el.z, /*heuristicAccept=*/heur);
+      const bool heur = CenterHeuristicPoint(acc, wx, wy, static_cast<float>(el.z), &hx, &hy);
+      const float p2 = ellFlat ? EllipseCenterPickDistSq(hx, hy, el, tolWorld)
+                               : static_cast<float>((hx - el.cx) * (hx - el.cx) + (hy - el.cy) * (hy - el.cy));
+      ConsiderSnap(&acc, wx, wy, static_cast<float>(el.cx), static_cast<float>(el.cy), Kind::Center, p2,
+                   tolWorld, static_cast<float>(el.z), /*heuristicAccept=*/heur);
+    }
+    if (!ellFlat) {
+      // Sampled through the ellipse's own plane; each candidate carries the height it really has.
+      for (int i = 0; i < kEllSnapSeg; ++i) {
+        const double a0 = static_cast<double>(kTwoPi) * static_cast<double>(i) / kEllSnapSeg;
+        const double a1 = static_cast<double>(kTwoPi) * static_cast<double>(i + 1) / kEllSnapSeg;
+        const ray3d::Vec3 p0 = EllipseWorldPointAt(el, a0);
+        const ray3d::Vec3 p1 = EllipseWorldPointAt(el, a1);
+        if (wantMidpoint)
+          Consider(&acc, wx, wy, static_cast<float>(0.5 * (p0.x + p1.x)),
+                   static_cast<float>(0.5 * (p0.y + p1.y)), Kind::Midpoint, tolWorld,
+                   static_cast<float>(0.5 * (p0.z + p1.z)));
+        if (havePerpRef)
+          AppendPerpendicularFromRef(refPx, refPy, wx, wy, static_cast<float>(p0.x), static_cast<float>(p0.y),
+                                     static_cast<float>(p1.x), static_cast<float>(p1.y), tolWorld, &acc,
+                                     static_cast<float>(p0.z), static_cast<float>(p1.z));
+      }
+      continue;
     }
     const float ux = el.majVx / ma;
     const float uy = el.majVy / ma;
@@ -1975,6 +2006,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
       if (ma < 1e-12 || kEllSnapSeg < 3)
         continue;
+      if (!EllipseIsFlat(el))
+        continue;  // tilted: not this plan-space path (GitHub #531)
       const double ux = static_cast<double>(el.majVx) / ma;
       const double uy = static_cast<double>(el.majVy) / ma;
       const double px = -uy;
@@ -2009,6 +2042,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const float ma = std::hypot(el.majVx, el.majVy);
       if (ma < 1e-8f)
         continue;
+      if (!EllipseIsFlat(el))
+        continue;  // tilted: not this plan-space path (GitHub #531)
       PushSnapPickerEntry(el.cx, el.cy, Kind::Center, sortWorldX, sortWorldY, out, el.z);
     }
     break;
@@ -2109,6 +2144,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       const float ma = std::hypot(el.majVx, el.majVy);
       if (ma < 1e-8f || kEllSnapSeg < 3)
         continue;
+      if (!EllipseIsFlat(el))
+        continue;  // tilted: not this plan-space path (GitHub #531)
       const float ux = el.majVx / ma;
       const float uy = el.majVy / ma;
       const float px = -uy;

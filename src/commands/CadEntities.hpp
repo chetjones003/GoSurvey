@@ -779,19 +779,62 @@ inline void CurveEndpointsWorld(const CadArc& a, ray3d::Vec3* outStart, ray3d::V
     *outEnd = CurvePointAt(plane, r, static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad));
 }
 
-/// Axis-aligned ellipse: center + major-axis vector (semi-major length = |majV|) + minor/major ratio (0,1].
+/// An ellipse: centre + major-axis vector (semi-major length = |majV|) + minor/major ratio (0,1],
+/// in the plane its normal names.
 struct CadEllipse {
   double cx = 0.0;
   double cy = 0.0;
   /// Major-axis vector and ratio stay `float` — a direction and a shape ratio, not coordinates
   /// (see \ref CadArc angle note). Keeps the DXF ellipse round-trip byte-stable (issue #113).
+  ///
+  /// Read in the ellipse's OWN plane (\ref CurvePlane), the way \ref CadArc::startRad is: for the
+  /// flat case that plane's axes ARE world X and Y, so this is the same pair of numbers it has
+  /// always been, and a flat ellipse is bit-identical through save and reload (GitHub #531).
   float majVx = 1.f;
   float majVy = 0.f;
   float ratio = 0.5f;
-  /// Elevation of the ellipse's plane (REQ-057 / ADR-025) — parallel to XY, absolute
-  /// (ADR-025 D2), always 0 in paper space (ADR-025 (g)). Same rationale as \ref CadArc::z.
+  /// Elevation of the ellipse's CENTRE (REQ-057 / ADR-025) — absolute (ADR-025 D2), always 0 in
+  /// paper space (ADR-025 (g)). Same rationale as \ref CadArc::z; on a tilted ellipse it is the
+  /// centre's own height, not one every point shares.
   double z = 0.0;
+  /// Plane normal (REQ-312's rule, extended to the ellipse by GitHub #531). World +Z is the flat
+  /// case — every ellipse that existed before this field — and `ucs::FromNormal` maps a +Z normal
+  /// onto the world X and Y axes exactly, so nothing flat moves. A tilted ellipse lies in
+  /// `ucs::FromNormal({cx, cy, z}, {nx, ny, nz})`: the Arbitrary Axis Algorithm, so a DXF consumer
+  /// rebuilding the frame from group 210 lands on the same points. Paper space stays flat.
+  float nx = 0.f;
+  float ny = 0.f;
+  float nz = 1.f;
 };
+
+/// The plane an ellipse lies in (GitHub #531) — the same frame, at its centre.
+[[nodiscard]] inline ucs::Ucs CurvePlane(const CadEllipse& e) {
+  return CurvePlane(static_cast<double>(e.cx), static_cast<double>(e.cy), static_cast<double>(e.z),
+                    static_cast<double>(e.nx), static_cast<double>(e.ny), static_cast<double>(e.nz));
+}
+
+/// The world point at parameter \p t (radians) on \p e, through the ellipse's own plane.
+///
+/// `centre + majV·cos t + minorV·sin t`, with both axes taken in that plane — so for a flat ellipse
+/// this is the world XY arithmetic it has always been, and for a tilted one it is the same curve
+/// stood up. The one place an ellipse is turned into points, so render, pick and snap cannot
+/// disagree about where it runs.
+[[nodiscard]] inline ray3d::Vec3 EllipseWorldPointAt(const CadEllipse& e, double t) {
+  const ucs::Ucs plane = CurvePlane(e);
+  const double mx = static_cast<double>(e.majVx);
+  const double my = static_cast<double>(e.majVy);
+  const double r = static_cast<double>(e.ratio);
+  const double c = std::cos(t);
+  const double s = std::sin(t);
+  // The minor axis is the major turned a quarter turn IN THE PLANE, scaled by the ratio.
+  const double u = mx * c - my * r * s;
+  const double v = my * c + mx * r * s;
+  return ucs::PlaneToWorld(plane, ucs::Point2D{u, v});
+}
+
+/// Whether \p e lies flat in world XY — the case every ellipse was before GitHub #531, and the one
+/// the paper space, DXF-elevation and plan-view paths are allowed to assume.
+[[nodiscard]] inline bool EllipseIsFlat(const CadEllipse& e) { return IsFlatNormal(e.nx, e.ny, e.nz); }
 
 /// One named sub-range of a mesh — a single object from the imported model (REQ-063).
 ///
