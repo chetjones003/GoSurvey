@@ -249,6 +249,24 @@ const char* g_liveInputRefreshText = nullptr;
 /// which is what made typing into these fields appear to do nothing at all.
 std::string* g_liveInputLastPushed = nullptr;
 
+/// Let go of a command-input field immediately after its text has been submitted
+/// (D-2026-09-24-c).
+///
+/// `ProcessCommandLineSubmit` clears `cmdBuf` when it finishes, but an InputText that is still
+/// ACTIVE keeps its OWN copy of the text and writes that copy back into the buffer every frame — so
+/// clearing the buffer behind its back achieved nothing, and the next bare Enter re-submitted the
+/// command just executed. At a prompt offering a default ("wall thickness <0.154>, Enter to accept")
+/// that re-submitted text is rejected, which is exactly what "pressing Enter does nothing" was.
+///
+/// Deactivating is the fix rather than emptying the widget through its callback: the callback fires
+/// on whatever frame ImGui next runs it, which can land in the middle of the user typing the NEXT
+/// answer and eat those keystrokes (measured — it broke the following command outright). An
+/// inactive InputText rebuilds its state from the buffer when it is next activated, and the
+/// type-to-focus path already re-activates it on the first keystroke.
+inline void ReleaseSubmittedCommandInput() {
+  ImGui::ClearActiveID();
+}
+
 int CommandLineInputCallback(ImGuiInputTextCallbackData* data) {
   if (data->EventFlag == ImGuiInputTextFlags_CallbackCompletion) {
     if (!g_cmdSuggestComplete.empty()) {
@@ -11202,6 +11220,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       s_cmdHighlight.clear();
       DevShell_OnCommand(cmdBuf);
       ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+      ReleaseSubmittedCommandInput();
     }
   } else {
     ImGui::AlignTextToFramePadding();
@@ -19081,8 +19100,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const bool exec =
           ImGui::InputTextWithHint("##vp_cmd_buf", fieldHint, cmdBuf, static_cast<size_t>(cmdBufSize),
                                    itf, CommandLineInputCallback, nullptr);
-      if (exec)
+      if (exec) {
         ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+        ReleaseSubmittedCommandInput();
+      }
     }
     ImGui::End();
     ImGui::PopStyleVar(1);

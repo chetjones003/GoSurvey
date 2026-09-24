@@ -1112,7 +1112,21 @@ int main()
       ImGuiIO &ioEnter = ImGui::GetIO();
       const bool enterDown =
           ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
-      if (enterDown && !ioEnter.WantTextInput && cmd.active != AppCommandState::Kind::None)
+      // The gate is "no widget is actively capturing", NOT `WantTextInput` (D-2026-09-24-c).
+      //
+      // `WantTextInput` is true whenever a text field merely WANTS keys — including a command-line
+      // field that is focused but has not taken this Enter yet — and it is computed from the
+      // previous frame. Measured through the Developer Shell: with the old gate, ONE Enter produced
+      // TWO submits of the same text (this poll, then the command bar's own `exec` on the same
+      // keypress), and the second arrived at the next prompt carrying the text the first had just
+      // consumed — so a prompt offering a default answered itself with the previous command's
+      // argument and reported it as invalid. That is what "pressing Enter does nothing" was.
+      //
+      // `IsAnyItemActive()` is the same discipline the paper-space Enter poll a few thousand lines
+      // into CadUi.cpp already uses ("GetActiveID() == 0 is the guard that keeps the two callers
+      // from double-firing on one keypress"): when a field is active, its own Enter handler runs and
+      // this poll must stay silent; when none is, this poll is the only handler there is.
+      if (enterDown && !ImGui::IsAnyItemActive() && cmd.active != AppCommandState::Kind::None)
         ProcessCommandLineSubmit(cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, cmdLog);
     }
 

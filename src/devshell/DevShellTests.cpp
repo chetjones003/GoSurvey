@@ -259,6 +259,53 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
   };
 
+
+  // D-2026-09-24-b — Enter alone at a prompt that advertises a default must take that default.
+  //
+  // Driven through the REAL ImGui tree because that is where the defect lives: the command layer's
+  // blank-Enter branch is already unit-tested and correct, and the failure is entirely in which
+  // widget swallows the keypress (there are TWO InputTexts bound to `cmdBuf` — the floating command
+  // bar and the viewport dynamic input — plus a raw poll in main.cpp gated on `io.WantTextInput`).
+  // A unit test cannot see any of that.
+  //
+  //   build\devshell\GoSurvey.exe --devshell-run req024-blank-enter-default
+  ImGuiTest* blankEnter = IM_REGISTER_TEST(engine, "gosurvey", "req024-blank-enter-default");
+  blankEnter->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+
+    // Setup is submitted directly — what is under test is the KEYPRESS, not the typing.
+    SubmitCad(ctx, "PIPERUN");
+    ctx->Yield(2);
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::PipeRun);
+    SubmitCad(ctx, "2in");
+    ctx->Yield(2);
+    IM_CHECK_EQ(s_cmd->pipeRunPhase, AppCommandState::PipeRunPhase::WaitWallThickness);
+
+    // THE REPORTED BUG. The prompt reads "wall thickness in inches <0.154, schedule 40>, Enter to
+    // accept:", so a bare Enter must take 0.154 and move on to the start point. It did nothing:
+    // the global blank-line block in ProcessCommandLineSubmit consumes every empty Enter before the
+    // per-command dispatch and had no PIPERUN case, so the command's own (correct, unit-tested)
+    // blank-Enter handling was unreachable from the GUI.
+    ctx->KeyPress(ImGuiKey_Enter);
+    ctx->Yield(3);
+    IM_CHECK_EQ(s_cmd->pipeRunPhase, AppCommandState::PipeRunPhase::WaitFirstPoint);
+    IM_CHECK(s_cmd->pipeRunWallThicknessIn > 0.0);
+
+    // And again at the routing prompt, where Enter is advertised as "finish": with a run of one
+    // segment down, a bare Enter must COMMIT it rather than leave the command hanging.
+    SubmitCad(ctx, "0,0");
+    SubmitCad(ctx, "10,0");
+    ctx->Yield(2);
+    const std::size_t before = s_cmd->cadPipeRuns.size();
+    ctx->KeyPress(ImGuiKey_Enter);
+    ctx->Yield(3);
+    IM_CHECK_EQ(s_cmd->cadPipeRuns.size(), before + 1);
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::None);
+
+    IM_CHECK(CancelToIdle(ctx));
+  };
+
   ImGuiTest* viewTab = IM_REGISTER_TEST(engine, "gosurvey", "ribbon-view-extents");
   viewTab->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));

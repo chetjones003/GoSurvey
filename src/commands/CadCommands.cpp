@@ -37914,6 +37914,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandlePolysolidTextInput(line, st, log);
       return;
     }
+    // PIPERUN (REQ-345 / D-2026-09-24-c): a bare Enter is meaningful at EVERY one of its prompts —
+    // it keeps the remembered size, takes the schedule-40 wall, and finishes the run — and all three
+    // are advertised in the prompt text itself. Handled here for the reason every note above gives:
+    // this block consumes a blank line and the Kind-keyed branch further down never sees one, so
+    // without this case the command's own blank-Enter handling (which is correct, and unit-tested)
+    // was simply unreachable from the GUI. Measured through the Developer Shell before and after.
+    if (st.active == K::PipeRun) {
+      (void)HandlePipeRunTextInput(line, st, log);
+      return;
+    }
     // REQ-341 SECTIONCLIP: a bare Enter accepts the current state and closes the prompt, the way
     // TRIMSTATE's system-variable prompt does. Handled HERE for the reason every note above gives —
     // this block consumes a blank line and the Kind-keyed branch further down never sees one.
