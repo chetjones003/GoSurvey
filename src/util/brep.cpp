@@ -1586,20 +1586,60 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
 /// Curvature-only segment count for a NURBS patch's (u, v) grid (TASK-272 §5) — extracted so the
 /// pre-pass below can fold this into the same shared-edge relaxation as the loop-edge-derived
 /// counts, instead of a Nurbs face silently outrunning whatever count its neighbour settled on.
-[[nodiscard]] int NurbsPatchCurvatureSegs(const nurbs::Patch& patch, double chordTolerance) {
+/// How finely one PARAMETRIC DIRECTION of \p patch has to be divided to stay within
+/// \p chordTolerance — U when \p alongU, otherwise V.
+///
+/// **Per direction, and that is the whole point.** This used to take the largest gap between
+/// consecutive control points over the WHOLE net and apply the resulting count to both directions.
+/// The net is row-major (`ctrl[j * nu + i]`), so walking it linearly also strides across row
+/// boundaries, and that stride is the distance between successive profiles — the length of the
+/// SWEEP. A pipe tube swept along a 20 ft leg therefore measured 20 ft of "curvature", asked for the
+/// 128-segment ceiling, and applied it to the ruled sweep direction as well as to the small circular
+/// cross-section: ~128x128 quads per patch where ~12x1 is exact. Measured on a four-vertex 2in run:
+/// 1,182,720 triangles and 16-34 SECONDS per solid in `Tessellate` (PIPEPERF, 2026-09-24).
+///
+/// A direction of degree 1 is RULED — the surface runs along straight lines in that parameter, even
+/// rationally weighted — so one division is exact and no sampling can improve it. That is what this
+/// function's own call site already claimed ("a ruled straight span is exact at one quad"); it was
+/// simply never able to say so per direction.
+///
+/// The flatness fallback is kept for the one case degree alone does not settle: a patch that is
+/// degree 1 in BOTH directions can still be a warped bilinear quad, whose middle bulges away from
+/// the two triangles a single quad would emit. That is tested against the chord tolerance exactly as
+/// before, and when it fails both directions are divided.
+[[nodiscard]] int NurbsPatchDirectionSegs(const nurbs::Patch& patch, double chordTolerance, bool alongU) {
+  const int nu = patch.nu;
+  const int nv = patch.nv;
+  if (nu < 2 || nv < 2 || patch.ctrl.size() != static_cast<std::size_t>(nu) * static_cast<std::size_t>(nv))
+    return 1;
+  const auto ctrlAt = [&](int i, int j) -> const Vec3& {
+    return patch.ctrl[static_cast<std::size_t>(j) * static_cast<std::size_t>(nu) + static_cast<std::size_t>(i)];
+  };
+  // The largest control-net step IN THIS DIRECTION: along a row for U, down a column for V. Never
+  // across a row boundary, which is the step that belongs to the other direction entirely.
   double netStep = 0.0;
-  for (std::size_t k = 0; k + 1 < patch.ctrl.size(); ++k)
-    netStep = std::max(netStep, ray3d::Length(ray3d::Sub(patch.ctrl[k + 1], patch.ctrl[k])));
-  bool curved = patch.degU > 1 || patch.degV > 1;
-  if (!curved && patch.ctrl.size() >= 4) {
-    const Vec3 e1 = ray3d::Sub(patch.ctrl[1], patch.ctrl[0]);
-    const Vec3 e2 = ray3d::Sub(patch.ctrl[static_cast<std::size_t>(patch.nu)], patch.ctrl[0]);
+  if (alongU) {
+    for (int j = 0; j < nv; ++j)
+      for (int i = 0; i + 1 < nu; ++i)
+        netStep = std::max(netStep, ray3d::Length(ray3d::Sub(ctrlAt(i + 1, j), ctrlAt(i, j))));
+  } else {
+    for (int i = 0; i < nu; ++i)
+      for (int j = 0; j + 1 < nv; ++j)
+        netStep = std::max(netStep, ray3d::Length(ray3d::Sub(ctrlAt(i, j + 1), ctrlAt(i, j))));
+  }
+
+  bool curved = alongU ? patch.degU > 1 : patch.degV > 1;
+  if (!curved && patch.degU == 1 && patch.degV == 1) {
+    // Both directions ruled: the patch is a bilinear quad, exact at one division UNLESS it is
+    // warped out of plane by more than the tolerance.
+    const Vec3 e1 = ray3d::Sub(ctrlAt(1, 0), ctrlAt(0, 0));
+    const Vec3 e2 = ray3d::Sub(ctrlAt(0, 1), ctrlAt(0, 0));
     Vec3 nrm = ray3d::Cross(e1, e2);
     const double nl = ray3d::Length(nrm);
     if (nl > 1e-12) {
       nrm = ray3d::Scale(nrm, 1.0 / nl);
       for (const Vec3& c : patch.ctrl)
-        if (std::fabs(ray3d::Dot(ray3d::Sub(c, patch.ctrl[0]), nrm)) > chordTolerance) {
+        if (std::fabs(ray3d::Dot(ray3d::Sub(c, ctrlAt(0, 0)), nrm)) > chordTolerance) {
           curved = true;
           break;
         }
@@ -1607,6 +1647,12 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
   }
   return curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance), 8, 128)
                 : 1;
+}
+
+/// The U-direction division count — the one the face's RIM edges run along, and the count their
+/// shared-edge relaxation (TASK-272 §5) has to agree with.
+[[nodiscard]] int NurbsPatchCurvatureSegs(const nurbs::Patch& patch, double chordTolerance) {
+  return NurbsPatchDirectionSegs(patch, chordTolerance, /*alongU=*/true);
 }
 
 struct MeshBuilder {
@@ -18039,7 +18085,12 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const int n = boundaryEdges[0].edge >= 0
                         ? edgeSegs.at(boundaryEdges[0].edge)
                         : NurbsPatchCurvatureSegs(patch, chordTolerance);
-      std::vector<std::uint32_t> grid(static_cast<std::size_t>(n + 1) * static_cast<std::size_t>(n + 1));
+      // V is divided on its OWN curvature, which for a ruled sweep direction is one division and
+      // exactly right. U keeps the shared, edge-relaxed count above because the rim edges run along
+      // it and neighbouring faces must land on the same resolution (TASK-272 §5) — that is why this
+      // is two numbers and not one. See NurbsPatchDirectionSegs for what using one cost.
+      const int nvSegs = std::max(1, NurbsPatchDirectionSegs(patch, chordTolerance, /*alongU=*/false));
+      std::vector<std::uint32_t> grid(static_cast<std::size_t>(n + 1) * static_cast<std::size_t>(nvSegs + 1));
       // The two v-boundary rows (j=0 at v=vLo, j=n at v=vHi) are sampled DIRECTLY from their loop
       // edges rather than `nurbs::EvaluateWithDerivs`, so they are bit-identical to the same edge's
       // sampling on the neighbouring face (a flat cap's `sampleLoop`, or the next band's own
@@ -18050,12 +18101,12 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const Edge* loEdge = boundaryEdges[0].edge >= 0 ? &s.edges[static_cast<std::size_t>(boundaryEdges[0].edge)] : nullptr;
       const Edge* hiEdge = boundaryEdges[1].edge >= 0 ? &s.edges[static_cast<std::size_t>(boundaryEdges[1].edge)] : nullptr;
       for (int i = 0; i <= n; ++i)
-        for (int j = 0; j <= n; ++j) {
+        for (int j = 0; j <= nvSegs; ++j) {
           const double u = uLo + (uHi - uLo) * static_cast<double>(i) / static_cast<double>(n);
-          const double v = vLo + (vHi - vLo) * static_cast<double>(j) / static_cast<double>(n);
+          const double v = vLo + (vHi - vLo) * static_cast<double>(j) / static_cast<double>(nvSegs);
           Vec3 p;
           Vec3 nrm;
-          const Edge* boundaryEdge = (j == 0) ? loEdge : (j == n) ? hiEdge : nullptr;
+          const Edge* boundaryEdge = (j == 0) ? loEdge : (j == nvSegs) ? hiEdge : nullptr;
           if (boundaryEdge) {
             const bool flip = (j == 0) ? boundaryEdges[0].flip : boundaryEdges[1].flip;
             const double s_ = static_cast<double>(i) / static_cast<double>(n);
@@ -18073,12 +18124,12 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
             nrm = Vec3{0.0, 0.0, 1.0};  // a collapsed edge (a pole) — a loft patch has none
           if (sf.inward)
             nrm = ray3d::Scale(nrm, -1.0);
-          grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(n + 1) +
+          grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(nvSegs + 1) +
                static_cast<std::size_t>(j)] = mb.Push(p, nrm);
         }
-      const std::size_t stride = static_cast<std::size_t>(n + 1);
+      const std::size_t stride = static_cast<std::size_t>(nvSegs + 1);
       for (int i = 0; i < n; ++i)
-        for (int j = 0; j < n; ++j) {
+        for (int j = 0; j < nvSegs; ++j) {
           const std::size_t a = static_cast<std::size_t>(i) * stride + static_cast<std::size_t>(j);
           const std::size_t b = a + stride;
           if (sf.inward) {
