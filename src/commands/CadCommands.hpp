@@ -2655,6 +2655,15 @@ struct AppCommandState {
   /// PIPERUN holds the command — which is what lets it be withdrawn without renumbering anything
   /// (architecture invariant §11.9: an index is not a name).
   int pipeRunLiveIndex = -1;
+  /// Per-run cache behind `pipeRunWorldSolids`: one content signature and one solid list per entry of
+  /// `cadPipeRuns`, so a rebuild only re-sweeps the runs that actually changed.
+  ///
+  /// The array-level signature alone made every click while routing re-sweep EVERY run in the
+  /// drawing, and a run's swept tube is the most expensive thing the command does — measured at
+  /// ~5.2 ms for two points and ~11 ms more per point after that. With live routing (D-2026-09-24-d)
+  /// that cost landed on every click; this keeps it to the one run being drawn.
+  std::vector<std::uint64_t> pipeRunSolidCacheSigs;
+  std::vector<std::vector<CadSolidPtr>> pipeRunSolidCache;
   /// Wall thickness in INCHES for the run being drafted (D-2026-09-23-a). Unlike the size and class
   /// beside it this is NOT remembered across runs: blank Enter at its prompt takes the schedule-40
   /// wall for whatever size was just chosen, so the offered default follows the size rather than

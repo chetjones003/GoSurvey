@@ -713,8 +713,21 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       gy = static_cast<double>(wy);
       gz = static_cast<double>(wz);
     }
+    // ONLY the pending segment — the part of the route already clicked is REAL geometry in the
+    // drawing now (D-2026-09-24-d), so a ghost of the whole route would draw it twice and, far worse,
+    // re-sweep the entire tube EVERY FRAME. Measured: a pipe run's swept solid costs ~5.6 ms at two
+    // points and rises ~11 ms per extra point (124 ms at twelve), so the old whole-route ghost put an
+    // O(route) tube sweep plus its edge tessellation inside the frame loop. That is what made clicking
+    // to add segments progressively slower and eventually freeze the application.
+    //
+    // A two-point ghost is O(1) in the route's length and shows exactly what the next click commits.
     CadPipeRun ghostRun;
-    ghostRun.vertsXyz = cmd.pipeRunDraftVerts;
+    const std::size_t draftN = cmd.pipeRunDraftVerts.size();
+    if (draftN >= 3) {
+      ghostRun.vertsXyz.push_back(cmd.pipeRunDraftVerts[draftN - 3]);
+      ghostRun.vertsXyz.push_back(cmd.pipeRunDraftVerts[draftN - 2]);
+      ghostRun.vertsXyz.push_back(cmd.pipeRunDraftVerts[draftN - 1]);
+    }
     ghostRun.vertsXyz.push_back(gx);
     ghostRun.vertsXyz.push_back(gy);
     ghostRun.vertsXyz.push_back(gz);

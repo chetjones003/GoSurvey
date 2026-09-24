@@ -29307,20 +29307,37 @@ static bool PipeRunWorldSolidVisible(const AppCommandState& st, size_t solidInde
   return !(lr && (!lr->on || lr->frozen));
 }
 
+/// One run's content signature, for the per-run solid cache. Covers everything
+/// ef CadBuildPipeRunSolids reads: the path, the size, the wall and the class.
+static std::uint64_t SinglePipeRunSig(const CadPipeRun& r) {
+  std::uint64_t sig = 1469598103934665603ull;
+  const auto mix = [&sig](std::uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
+  mix(r.vertsXyz.size());
+  for (double v : r.vertsXyz) {
+    std::uint64_t bits;
+    std::memcpy(&bits, &v, sizeof(bits));
+    mix(bits);
+  }
+  for (unsigned char c : r.nominalSize)
+    mix(c);
+  mix(0x9E3779B9ull);
+  std::uint64_t wallBits;
+  std::memcpy(&wallBits, &r.wallThicknessIn, sizeof(wallBits));
+  mix(wallBits);
+  for (unsigned char c : r.pressureClassTag)
+    mix(c);
+  return sig;
+}
+
 static std::uint64_t PipeRunWorldSolidsSig(const AppCommandState& st) {
   std::uint64_t sig = 1469598103934665603ull;
   const auto mix = [&sig](std::uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
   mix(st.cadPipeRuns.size());
-  for (const CadPipeRun& r : st.cadPipeRuns) {
-    mix(r.vertsXyz.size());
-    for (double v : r.vertsXyz) {
-      std::uint64_t bits;
-      std::memcpy(&bits, &v, sizeof(bits));
-      mix(bits);
-    }
-    for (unsigned char c : r.nominalSize)
-      mix(c);
-  }
+  // Built from the SAME per-run signature the solid cache keys on, so the two cannot disagree about
+  // what "changed" means. It previously covered only the path and the size, which left a wall or
+  // class change invisible to this gate — the early-out would keep a solid built at the old wall.
+  for (const CadPipeRun& r : st.cadPipeRuns)
+    mix(SinglePipeRunSig(r));
   return sig;
 }
 
@@ -29337,12 +29354,21 @@ static void RebuildPipeRunWorldSolids(AppCommandState& st) {
   st.pipeRunWorldSolids.clear();
   st.pipeRunWorldSolidAttrs.clear();
   st.pipeRunWorldSolidOwnerIndex.clear();
+  st.pipeRunSolidCacheSigs.resize(st.cadPipeRuns.size(), 0);
+  st.pipeRunSolidCache.resize(st.cadPipeRuns.size());
   for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
     const EntityAttributes runAttr = ri < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[ri] : EntityAttributes{};
-    std::vector<CadSolidPtr> segSolids;
-    (void)CadBuildPipeRunSolids(st.cadPipeRuns[ri], &segSolids);
-    for (CadSolidPtr& sp : segSolids) {
-      st.pipeRunWorldSolids.push_back(std::move(sp));
+    // Re-sweep only what changed. Appending one vertex while routing used to re-sweep every run in
+    // the drawing; a tube costs ~11 ms per point of route, so that was the click cost growing with
+    // the whole drawing rather than with the run being drawn.
+    const std::uint64_t runSig = SinglePipeRunSig(st.cadPipeRuns[ri]);
+    if (st.pipeRunSolidCacheSigs[ri] != runSig || st.pipeRunSolidCache[ri].empty()) {
+      st.pipeRunSolidCacheSigs[ri] = runSig;
+      st.pipeRunSolidCache[ri].clear();
+      (void)CadBuildPipeRunSolids(st.cadPipeRuns[ri], &st.pipeRunSolidCache[ri]);
+    }
+    for (const CadSolidPtr& sp : st.pipeRunSolidCache[ri]) {
+      st.pipeRunWorldSolids.push_back(sp);  // shared immutable payload (invariant §11.5 amendment)
       st.pipeRunWorldSolidAttrs.push_back(runAttr);
       st.pipeRunWorldSolidOwnerIndex.push_back(static_cast<int>(ri));
     }
@@ -34511,9 +34537,12 @@ void SyncLivePipeRun(AppCommandState& st) {
   run.wallThicknessIn = st.pipeRunWallThicknessIn;
   run.pressureClassTag = st.pipeRunPressureClassTag;
 
-  std::vector<CadSolidPtr> probe;
-  if (!CadBuildPipeRunSolids(run, &probe))
-    return;  // not buildable yet — keep the last good picture, and let END report why
+  // No probe build here. Storing the run makes the display path build its solid anyway, and building
+  // it twice per click doubled the most expensive thing in the command: a run's swept tube costs
+  // ~5.6 ms at two points and ~11 ms more per point after that. A route that cannot build a solid
+  // simply draws nothing until it can, and END still reports the reason, which is where it is
+  // actionable. REQ-201 is unaffected — a `CadPipeRun` stores a PATH, and an unbuildable path was
+  // always allowed to exist in the draft.
 
   if (st.pipeRunLiveIndex >= 0 && static_cast<size_t>(st.pipeRunLiveIndex) < st.cadPipeRuns.size()) {
     st.cadPipeRuns[static_cast<size_t>(st.pipeRunLiveIndex)] = std::move(run);

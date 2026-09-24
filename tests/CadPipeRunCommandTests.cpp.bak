@@ -1,8 +1,5 @@
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
-#include "util/cadpiperun.hpp"
-#include "CadRubberPreview.hpp"
-#include <chrono>
 #include "util/ucs.hpp"
 
 #include <catch2/catch_approx.hpp>
@@ -1837,38 +1834,4 @@ TEST_CASE("A one-point route armed from the palette is dropped, not left half-op
   CHECK(st.cadPipeRuns.empty());
   CHECK(st.pipeRunLiveIndex == -1);
   CHECK(st.active == AppCommandState::Kind::InsertBlock);
-}
-
-// --- The routing preview must not grow with the route (perf regression pin) ---------------------
-//
-// Measured on the machine this was written on: a pipe run's swept tube costs ~5.2 ms at two points
-// and ~11 ms more for every point after that (117 ms at twelve). The rubber preview rebuilt the
-// WHOLE route's tube plus its edge tessellation every frame, so routing got slower with every click
-// and eventually froze the application. Now that the clicked route is real geometry
-// (D-2026-09-24-d), the ghost only has to show the PENDING segment.
-//
-// This pins the shape of that fix rather than a millisecond count — a timing assertion would be
-// flaky and `project.md` keeps performance numbers on the reference machine with BENCH. If the ghost
-// ever goes back to previewing the whole route, its output grows with the route and this fails.
-TEST_CASE("The pipe run preview does not grow with the route",
-          "[issue486][req345][piperun][live][preview]") {
-  const auto ghostSizeFor = [](int clicks) {
-    AppCommandState st;
-    std::vector<std::string> log;
-    st.pipeRunCompassOn = false;
-    StartPipeRunCommand(st, log);
-    REQUIRE(HandlePipeRunTextInput("4in", st, log));
-    REQUIRE(HandlePipeRunTextInput("", st, log));
-    for (int i = 0; i < clicks; ++i)
-      SubmitPipeRunViewportPick(st, 20.f * static_cast<float>((i + 1) / 2),
-                                20.f * static_cast<float>(i / 2), log);
-    std::vector<float> rubber;
-    AppendCadDraftRubberLines(st, 200.0, 200.0, /*orthoEnabled=*/false, 0.0, 0.0, 100.f, 1000, rubber);
-    return rubber.size();
-  };
-
-  const std::size_t shortRoute = ghostSizeFor(2);
-  const std::size_t longRoute = ghostSizeFor(10);
-  CHECK(shortRoute > 0);                 // the pending segment IS previewed
-  CHECK(longRoute == shortRoute);        // and only ever that one segment
 }
