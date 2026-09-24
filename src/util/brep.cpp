@@ -10,6 +10,7 @@
 #include <initializer_list>
 #include <limits>
 #include <map>
+#include <unordered_map>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -18156,30 +18157,90 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
 
   // Weld duplicate vertices that share position AND normal (smooth seams, e.g. cylinder halves).
   // Keep hard edges (cap ↔ wall, 90°) separate by requiring normal match, so wall/cap seams stay hard.
+  //
+  // Through a SPATIAL HASH, not a linear scan. This was a plain double loop — every vertex compared
+  // against every unique vertex kept so far — which is O(n^2) and, on the meshes this actually
+  // produces, catastrophic: a ten-vertex 2in pipe run tessellates to roughly 400,000 vertices, and
+  // welding them took **26 seconds** while the application appeared to hang (measured 2026-09-24,
+  // user-reported freeze on finishing a long run). It is the dominant cost of Tessellate for any
+  // dense mesh and it got worse as the square of the size.
+  //
+  // The rule is unchanged, and so is the result: a candidate within `posEps` of a vertex must lie in
+  // that vertex's own cell or one of the 26 around it, because the cell size IS `posEps`. So the 27
+  // cells are probed, and within them the same position-and-normal comparison decides, in the same
+  // order (ascending kept-index), which means the winning match — and therefore the remap and the
+  // final vertex numbering — is identical to what the linear scan produced.
   {
     const double posEps = 1e-9;
     const double nrmEps = 1e-6;
-    std::vector<uint32_t> remap(mesh.vertsXyz.size()/3, 0xFFFFFFFFu);
+    const std::size_t vertCount = mesh.vertsXyz.size() / 3;
+    std::vector<uint32_t> remap(vertCount, 0xFFFFFFFFu);
     std::vector<double> newVerts, newNorms;
     newVerts.reserve(mesh.vertsXyz.size());
     newNorms.reserve(mesh.normalsXyz.size());
-    for(size_t i=0;i<mesh.vertsXyz.size()/3;++i){
-      double x=mesh.vertsXyz[i*3], y=mesh.vertsXyz[i*3+1], z=mesh.vertsXyz[i*3+2];
-      double nx=mesh.normalsXyz[i*3], ny=mesh.normalsXyz[i*3+1], nz=mesh.normalsXyz[i*3+2];
-      uint32_t found=0xFFFFFFFFu;
-      for(size_t j=0;j<newVerts.size()/3;++j){
-        double dx=newVerts[j*3]-x, dy=newVerts[j*3+1]-y, dz=newVerts[j*3+2]-z;
-        double dnx=newNorms[j*3]-nx, dny=newNorms[j*3+1]-ny, dnz=newNorms[j*3+2]-nz;
-        if(dx*dx+dy*dy+dz*dz < posEps*posEps && dnx*dnx+dny*dny+dnz*dnz < nrmEps*nrmEps){ found=(uint32_t)j; break; }
+
+    // Cell index of a coordinate, at cell size == posEps. Storage coordinates reach ~1e5 ft and the
+    // cell is 1e-9, so the quotient needs the full 64-bit range.
+    const auto cellOf = [&](double v) {
+      return static_cast<std::int64_t>(std::floor(v / posEps));
+    };
+    struct CellKey {
+      std::int64_t x, y, z;
+      bool operator==(const CellKey& o) const { return x == o.x && y == o.y && z == o.z; }
+    };
+    struct CellHash {
+      std::size_t operator()(const CellKey& k) const {
+        std::uint64_t h = 1469598103934665603ull;
+        const auto mix = [&h](std::uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+        mix(static_cast<std::uint64_t>(k.x));
+        mix(static_cast<std::uint64_t>(k.y));
+        mix(static_cast<std::uint64_t>(k.z));
+        return static_cast<std::size_t>(h);
       }
-      if(found==0xFFFFFFFFu){
-        found=(uint32_t)(newVerts.size()/3);
-        newVerts.push_back(x); newVerts.push_back(y); newVerts.push_back(z);
-        newNorms.push_back(nx); newNorms.push_back(ny); newNorms.push_back(nz);
+    };
+    std::unordered_map<CellKey, std::vector<uint32_t>, CellHash> cells;
+    cells.reserve(vertCount * 2);
+
+    for (std::size_t i = 0; i < vertCount; ++i) {
+      const double x = mesh.vertsXyz[i * 3], y = mesh.vertsXyz[i * 3 + 1], z = mesh.vertsXyz[i * 3 + 2];
+      const double nx = mesh.normalsXyz[i * 3], ny = mesh.normalsXyz[i * 3 + 1],
+                   nz = mesh.normalsXyz[i * 3 + 2];
+      const std::int64_t cx = cellOf(x), cy = cellOf(y), cz = cellOf(z);
+      uint32_t found = 0xFFFFFFFFu;
+      for (std::int64_t dx = -1; dx <= 1 && found == 0xFFFFFFFFu; ++dx)
+        for (std::int64_t dy = -1; dy <= 1 && found == 0xFFFFFFFFu; ++dy)
+          for (std::int64_t dz = -1; dz <= 1 && found == 0xFFFFFFFFu; ++dz) {
+            const auto it = cells.find(CellKey{cx + dx, cy + dy, cz + dz});
+            if (it == cells.end())
+              continue;
+            // Ascending kept-index, so the FIRST acceptable match is the same one the linear scan
+            // would have found.
+            for (const uint32_t j : it->second) {
+              const double ddx = newVerts[j * 3] - x, ddy = newVerts[j * 3 + 1] - y,
+                           ddz = newVerts[j * 3 + 2] - z;
+              const double dnx = newNorms[j * 3] - nx, dny = newNorms[j * 3 + 1] - ny,
+                           dnz = newNorms[j * 3 + 2] - nz;
+              if (ddx * ddx + ddy * ddy + ddz * ddz < posEps * posEps &&
+                  dnx * dnx + dny * dny + dnz * dnz < nrmEps * nrmEps) {
+                found = j;
+                break;
+              }
+            }
+          }
+      if (found == 0xFFFFFFFFu) {
+        found = static_cast<uint32_t>(newVerts.size() / 3);
+        newVerts.push_back(x);
+        newVerts.push_back(y);
+        newVerts.push_back(z);
+        newNorms.push_back(nx);
+        newNorms.push_back(ny);
+        newNorms.push_back(nz);
+        cells[CellKey{cx, cy, cz}].push_back(found);
       }
-      remap[i]=found;
+      remap[i] = found;
     }
-    for(auto &idx: mesh.indices) idx = remap[idx];
+    for (auto& idx : mesh.indices)
+      idx = remap[idx];
     mesh.vertsXyz.swap(newVerts);
     mesh.normalsXyz.swap(newNorms);
   }
