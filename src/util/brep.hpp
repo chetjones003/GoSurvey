@@ -1216,11 +1216,11 @@ inline constexpr int kFullCircleSegments = 256;
 ///
 /// 64 is chosen to be indistinguishable at working zoom rather than merely tolerable: a full circle
 /// in 64 facets turns 5.6 degrees per facet, which on a 2in pipe is a chord error of about a
-/// thousandth of an inch. The finished geometry is tessellated at ef kFullCircleSegments.
+/// thousandth of an inch. The finished geometry is tessellated at \ref kFullCircleSegments.
 inline constexpr int kDraftFullCircleSegments = 64;
 
-/// \param fullCircleSegments the circular-edge budget described above — ef kFullCircleSegments
-///        for finished geometry, ef kDraftFullCircleSegments for geometry still being drafted.
+/// \param fullCircleSegments the circular-edge budget described above — \ref kFullCircleSegments
+///        for finished geometry, \ref kDraftFullCircleSegments for geometry still being drafted.
 [[nodiscard]] bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy,
                               int fullCircleSegments = kFullCircleSegments);
 

@@ -29310,7 +29310,7 @@ static bool PipeRunWorldSolidVisible(const AppCommandState& st, size_t solidInde
 }
 
 /// One run's content signature, for the per-run solid cache. Covers everything
-/// ef CadBuildPipeRunSolids reads: the path, the size, the wall and the class.
+/// \ref CadBuildPipeRunSolids reads: the path, the size, the wall and the class.
 static std::uint64_t SinglePipeRunSig(const CadPipeRun& r) {
   std::uint64_t sig = 1469598103934665603ull;
   const auto mix = [&sig](std::uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
@@ -34523,7 +34523,7 @@ void TryApplyBranchAtEndpoint(AppCommandState& st, std::vector<ray3d::Vec3>& pie
 /// (4+ legs at one node), and vertical-riser/offset-transition fittings — those are already
 /// ordinary 90/45 BENDS on one run's own path and were delivered by B5, since its bend detection
 /// is fully 3D and not limited to a horizontal plane.
-/// Drop the provisional in-progress pipe run, if one is standing (see ef SyncLivePipeRun).
+/// Drop the provisional in-progress pipe run, if one is standing (see \ref SyncLivePipeRun).
 ///
 /// Only ever the LAST element, which is what it always is: it is appended when the second point
 /// lands and nothing else appends a run while PIPERUN owns the command. Erasing from the middle
