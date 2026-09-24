@@ -8635,7 +8635,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a boundary that is not lines and arcs, a plane that misses the solid, and a degenerate normal
     are each refused by name and draw nothing;
   - the command creates one closed polyline per solid in **one undo step**, and a refusal leaves the
-    document unchanged;
+    document unchanged — **one per OUTLINE** since the 2026-09-18 increment 2 revision, a ring being
+    two, still in the one undo step;
   - the figures hold at survey coordinate magnitudes;
   - **the command PROMPTS rather than refusing**: after asking for a selection it is still running,
     a click during that step selects without ending it, Enter confirms, and three points then define
@@ -8958,8 +8959,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a click on a flat face places the plane on that face's plane, with the face's outward normal,
     offset 0 and flip off;
   - at offset 0 **every vertex of the picked solid survives the clip**;
-  - a curved face, an edge, a vertex and a miss are each refused **by name**, and the command stays
-    open after every one of them;
+  - a curved face, an edge, a vertex and a miss each leave the command open — **superseded by the
+    2026-09-18 revision**, which makes each of them the first point of a section line instead of a
+    refusal (the command staying open is unchanged);
   - picking a second face re-aims the same plane and **resets the offset and flip**, which were
     measured from the face that is no longer in force;
   - `SECTIONCLIP`'s offset, `FLIP` and `OFF` all act on a face-defined plane;
@@ -8980,6 +8982,33 @@ capability that does not exist. They are recorded here rather than quietly dropp
   arrows**; they belong with the grips that move them.
   2026-09-11 — **(2) delivered by REQ-343**, which also moved the section line from the lowest edge
   to the plane's CENTRE, and gave the plane selection and handles. (1) and (3) still stand.
+
+  2026-09-18 — **a section plane can be placed on a section LINE, not only on a face**
+  (D-2026-09-18-b, TASK-273). Reported from the real app against AutoCAD: *"i have not selected a face
+  but have instead selected a different part, for this instance it is the mid point of this torus …
+  ours currently can only do sectionplanes off of a face of an object."* AutoCAD's own prompt asks for
+  both in one breath — "Select face or any point to locate section line", then "Specify through
+  point" — and a sphere or a torus has **no flat face at all**, so the face form cannot aim a plane at
+  one by any click.
+
+  `SECTIONPLANE` now offers both. A flat face still answers the command in one click and is unchanged.
+  Any other click — a curved face, an edge, a vertex, empty space — is a **point**, taken on the
+  geometry it hit or otherwise on the work plane, and asks for a **through point**. The plane then
+  stands square to the work plane through those two points: its normal is across the line, level with
+  the work plane. Points may also be typed, so the command is drivable without a mouse.
+
+  **The curved-face rule below is unchanged in substance:** a curved face's own frame is still never
+  used to aim the plane — its Z is the surface's axis, which would put the plane through the middle of
+  the solid at right angles to what was clicked. What changes is that clicking one is no longer a
+  refusal: it is a point on that surface. The refusals that remain are the ones that name no plane:
+  two points in the same place, and a line running square to the work plane (REQ-201).
+
+  Acceptance added:
+  - a flat face places the plane exactly as before;
+  - two points place a plane whose normal is across the line and level with the work plane, for a
+    sphere and a torus as well as a box;
+  - a click on a curved face, an edge or a vertex starts the line at that point on the geometry;
+  - the two refusals above leave any plane a previous run placed exactly where it was.
 
 ### REQ-343 — The section plane can be grabbed: slide, flip and resize by handle
 - Purpose: move the cut by dragging it, the way it is thought about — not by typing a distance along

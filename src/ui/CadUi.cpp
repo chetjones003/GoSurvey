@@ -9437,7 +9437,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   // REQ-342. No bracketed options: the answer is a click on a face, not a keyword, and a link that
   // submits text here would have nothing to consume it.
   if (cmd.active == AppCommandState::Kind::SectionPlane)
-    return CadSectionPlanePromptText();
+    return CadSectionPlanePromptText(cmd);
   if (cmd.active == AppCommandState::Kind::Arc) {
     switch (cmd.arcPhase) {
     case AppCommandState::ArcPhase::WaitStart:
@@ -14533,6 +14533,24 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // re-run of SECTIONPLANE, a lit handle was a lie: the click placed a vertex or a face pick
       // instead. Ctrl is part of the gate rather than a skip, so releasing it inside the block
       // clears a stale highlight instead of stranding one.
+      // REQ-342 (2026-09-18) — the live PREVIEW of a section plane being placed from two points.
+      //
+      // Same ray and same tolerance the click uses, resolved by the same command-layer function, so
+      // the rectangle drawn under the cursor is the rectangle the click places. Cleared whenever the
+      // command is not at that prompt, or the cursor is outside the viewport, so a stale plane is
+      // never left hanging in the drawing.
+      if (modelSpace && hovered && cmd.active == AppCommandState::Kind::SectionPlane &&
+          cmd.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint) {
+        const ray3d::Ray previewRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+        solidpick::Tolerance previewTol;
+        previewTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
+        previewTol.edge = previewTol.vertex;
+        UpdateSectionPlanePreview(cmd, previewRay, previewTol);
+        BumpCadGpuCache(cmd);
+      } else if (cmd.sectionPlanePreviewValid) {
+        ClearSectionPlanePreview(cmd);
+        BumpCadGpuCache(cmd);
+      }
       const bool spHoverEligible = modelSpace && cmd.viewportSectionClip &&
                                    cmd.sectionPlaneGripDrag < 0 && !ImGui::GetIO().KeyCtrl &&
                                    ViewportClickRouteFor(cmd) == ViewportClickRoute::IdleSelection;

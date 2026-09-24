@@ -1380,6 +1380,21 @@ int main()
       tuning.sectionPlaneGripHover = cmd.sectionPlaneGripHover;
       tuning.sectionPlaneGripDrag = cmd.sectionPlaneGripDrag;
     }
+    // REQ-342 (2026-09-18) — while SECTIONPLANE is asking for its through point, the rectangle drawn
+    // is the plane that WOULD be placed, standing on the line from the first point to the cursor.
+    // It replaces the current plane's rectangle, because that is the one being aimed; the clip
+    // itself is untouched, so nothing is cut until the click. No handles: there is nothing to grab
+    // on a plane that does not exist yet.
+    {
+      SectionClipIndicator previewInd{};
+      if (CadSectionPlanePreviewIndicator(cmd, &previewInd)) {
+        tuning.sectionClipIndicator = previewInd;
+        tuning.sectionPlaneGraphics = SectionPlaneGraphicsFor(previewInd);
+        tuning.sectionPlaneGrips = SectionPlaneGrips{};
+        tuning.sectionPlaneGripHover = -1;
+        tuning.sectionPlaneGripDrag = -1;
+      }
+    }
     // Build PDF render list: committed attachments + cursor-follow preview when picking insert point.
     std::vector<PdfAttachment> pdfRenderList;
     if (!cmd.pdfAttachments.empty())

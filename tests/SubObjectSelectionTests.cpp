@@ -1048,37 +1048,140 @@ TEST_CASE("SECTIONPLANE takes a flat face and refuses a curved one",
     CHECK_FALSE(st.viewportSectionClipFlip);
   }
 
-  SECTION("a miss keeps the command open") {
+  SECTION("a click on no face starts a section line, and the command stays open") {
+    // Since the 2026-09-18 revision this is a POINT, not a miss: the first of a section line. The
+    // rule the case was written for still holds — the command stays open and nothing is placed
+    // until it has both points.
     StartSectionPlaneCommand(st, log);
-    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({500, 500, 500}, {600, 600, 600}),
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({500, 500, 500}, {500, 500, -100}),
                                            Tol(0.5, 0.5), log));
     CHECK(st.active == AppCommandState::Kind::SectionPlane);
+    CHECK(st.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint);
     CHECK_FALSE(st.viewportSectionClip);
   }
 
-  SECTION("an EDGE is refused by name, and the command stays open") {
-    // A generous edge tolerance so the edge genuinely wins the pick — which is the case worth
-    // pinning, because saying nothing here is how a user ends up clicking repeatedly at what looks
-    // like the right place.
+  SECTION("two points make a plane standing on the line between them") {
     StartSectionPlaneCommand(st, log);
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -30, 100}, {0, -30, 0}), Tol(0.5, 0.5), log));
+    CHECK(st.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint);
+    CHECK(SubmitSectionPlaneFacePick(st, RayAt({0, 30, 100}, {0, 30, 0}), Tol(0.5, 0.5), log));
+    CHECK(st.viewportSectionClip);
+    CHECK(st.viewportSectionClipFrameValid);
+    // The line runs along Y, so the plane faces across it and stands up the work plane's Z.
+    CHECK(std::fabs(st.viewportSectionClipFrame.zAxis.x) == Catch::Approx(1.0));
+    CHECK(st.viewportSectionClipFrame.zAxis.z == Catch::Approx(0.0).margin(1e-12));
+    CHECK(st.viewportSectionClipOffset == Catch::Approx(0.0));
+    CHECK(st.active == AppCommandState::Kind::None);
+  }
+
+  SECTION("the through point is previewed where the plane would land") {
+    // REQ-342 (2026-09-18): the rectangle drawn under the cursor is the one the click places, so the
+    // preview is built from the same two points by the same code.
+    StartSectionPlaneCommand(st, log);
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -30, 100}, {0, -30, 0}), Tol(0.5, 0.5), log));
+
+    SectionClipIndicator ind{};
+    CHECK_FALSE(CadSectionPlanePreviewIndicator(st, &ind));  // nothing tracked yet
+
+    UpdateSectionPlanePreview(st, RayAt({0, 30, 100}, {0, 30, 0}), Tol(0.5, 0.5));
+    CHECK(st.sectionPlanePreviewValid);
+    REQUIRE(CadSectionPlanePreviewIndicator(st, &ind));
+    CHECK(ind.valid);
+    // Nothing is placed or cut by a preview.
+    CHECK_FALSE(st.viewportSectionClip);
+    CHECK(st.active == AppCommandState::Kind::SectionPlane);
+
+    // The preview's own plane is the plane the click then places.
+    const ray3d::Vec3 previewNormal = ray3d::Normalize(
+        ray3d::Cross(ray3d::Sub(ind.corner[1], ind.corner[0]), ray3d::Sub(ind.corner[3], ind.corner[0])));
+    CHECK(SubmitSectionPlaneFacePick(st, RayAt({0, 30, 100}, {0, 30, 0}), Tol(0.5, 0.5), log));
+    CHECK(st.viewportSectionClip);
+    const ucs::Ucs placed = st.viewportSectionClipFrame;
+    CHECK(std::fabs(ray3d::Dot(previewNormal, placed.zAxis)) == Catch::Approx(1.0).margin(1e-9));
+
+    // And the tracked cursor is dropped once the command is done.
+    ClearSectionPlanePreview(st);
+    CHECK_FALSE(CadSectionPlanePreviewIndicator(st, &ind));
+  }
+
+  SECTION("the preview stretches with the cursor instead of sitting at a fixed size") {
+    // Reported from the app (2026-09-22): the drawing-sized rectangle looked the same however far
+    // the cursor went. The preview's own edge IS the section line, so it grows with the drag.
+    StartSectionPlaneCommand(st, log);
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -30, 100}, {0, -30, 0}), Tol(0.5, 0.5), log));
+
+    SectionClipIndicator nearInd{}, farInd{};
+    UpdateSectionPlanePreview(st, RayAt({0, -10, 100}, {0, -10, 0}), Tol(0.5, 0.5));
+    REQUIRE(CadSectionPlanePreviewIndicator(st, &nearInd));
+    UpdateSectionPlanePreview(st, RayAt({0, 60, 100}, {0, 60, 0}), Tol(0.5, 0.5));
+    REQUIRE(CadSectionPlanePreviewIndicator(st, &farInd));
+
+    const auto width = [](const SectionClipIndicator& i) {
+      return ray3d::Length(ray3d::Sub(i.corner[1], i.corner[0]));
+    };
+    // The rectangle's base edge is exactly the line from the first point to the cursor.
+    CHECK(width(nearInd) == Catch::Approx(20.0));
+    CHECK(width(farInd) == Catch::Approx(90.0));
+    // And it stands up the work plane's normal, so the two upright edges are vertical.
+    const ray3d::Vec3 side = ray3d::Sub(farInd.corner[3], farInd.corner[0]);
+    CHECK(std::fabs(ray3d::Normalize(side).z) == Catch::Approx(1.0));
+  }
+
+  SECTION("ORTHO pulls the through point onto an axis from the first point") {
+    // AutoCAD's own readout in the report's screenshots ("Ortho: 3.6955 < 180°"), and the rule the
+    // LINE rubber band already follows. The PREVIEW and the PLACEMENT both take it, so the plane
+    // that lands is the plane that was drawn.
+    st.orthoMode = true;
+    StartSectionPlaneCommand(st, log);
+    // The first point clear of the box, so it is a POINT and not its top face.
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -30, 100}, {0, -30, 0}), Tol(0.5, 0.5), log));
+
+    // Aimed well off the axis: mostly +Y, a little +X.
+    UpdateSectionPlanePreview(st, RayAt({7, 40, 100}, {7, 40, 0}), Tol(0.5, 0.5));
+    CHECK(st.sectionPlanePreviewPoint.x == Catch::Approx(0.0).margin(1e-9));  // pulled onto Y
+    CHECK(st.sectionPlanePreviewPoint.y == Catch::Approx(40.0));
+
+    CHECK(SubmitSectionPlaneFacePick(st, RayAt({7, 40, 100}, {7, 40, 0}), Tol(0.5, 0.5), log));
+    // A line along Y makes a plane facing along X, exactly — not 7/40 off it.
+    CHECK(std::fabs(st.viewportSectionClipFrame.zAxis.x) == Catch::Approx(1.0));
+    CHECK(st.viewportSectionClipFrame.zAxis.y == Catch::Approx(0.0).margin(1e-9));
+  }
+
+  SECTION("the same point twice names no plane, and the command stays open") {
+    StartSectionPlaneCommand(st, log);
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -30, 100}, {0, -30, 0}), Tol(0.5, 0.5), log));
     const size_t before = log.size();
-    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -60, 60}, {0, -5, 8}), Tol(0.0, 3.0), log));
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -30, 100}, {0, -30, 0}), Tol(0.5, 0.5), log));
     CHECK(st.active == AppCommandState::Kind::SectionPlane);
     CHECK_FALSE(st.viewportSectionClip);
     bool said = false;
     for (size_t i = before; i < log.size(); ++i)
-      if (log[i].find("edge") != std::string::npos)
+      if (log[i].find("same place") != std::string::npos)
         said = true;
     CHECK(said);
   }
+
+  SECTION("an EDGE is a point on that edge, and starts a section line") {
+    // A generous edge tolerance so the edge genuinely wins the pick. Before the 2026-09-18 revision
+    // this was refused by name; it is now the first point of a section line, taken ON the edge.
+    StartSectionPlaneCommand(st, log);
+    CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({0, -60, 60}, {0, -5, 8}), Tol(0.0, 3.0), log));
+    CHECK(st.active == AppCommandState::Kind::SectionPlane);
+    CHECK(st.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint);
+    CHECK(st.sectionPlaneP1.y == Catch::Approx(-5.0));  // on the edge it hit, not on the work plane
+    CHECK(st.sectionPlaneP1.z == Catch::Approx(8.0));
+    CHECK_FALSE(st.viewportSectionClip);
+  }
 }
 
-TEST_CASE("SECTIONPLANE refuses a cylinder's wall by name", "[subobject][sectionplaneface][req342]") {
-  // The refusal that matters most, and the one a plausible implementation gets wrong: a curved face
-  // carries a `ucs::Ucs` frame exactly like a flat one, so nothing stops it being used. Its Z is the
-  // surface's AXIS, though — straight up the middle of the cylinder — so the plane would come out at
-  // right angles to the wall that was clicked and pass through the centre of the solid. Plausible,
-  // wrong, and invisible in a screenshot.
+TEST_CASE("SECTIONPLANE takes a point on a cylinder's wall, never the wall's own frame",
+          "[subobject][sectionplaneface][req342]") {
+  // The mistake a plausible implementation makes: a curved face carries a `ucs::Ucs` frame exactly
+  // like a flat one, so nothing stops it being used. Its Z is the surface's AXIS, though — straight
+  // up the middle of the cylinder — so the plane would come out at right angles to the wall that was
+  // clicked and pass through the centre of the solid. Plausible, wrong, and invisible in a
+  // screenshot. Since the 2026-09-18 revision the wall click is a POINT on the wall, which starts a
+  // section line; the wall's frame is still never used.
   AppCommandState st;
   st.viewportLastSurveyLayoutOrthoHalfH = 50.f;
   {
@@ -1093,17 +1196,24 @@ TEST_CASE("SECTIONPLANE refuses a cylinder's wall by name", "[subobject][section
 
   // Straight at the wall, halfway up — far from both rims, and zero tolerances so neither can win.
   StartSectionPlaneCommand(st, log);
-  const size_t before = log.size();
   CHECK_FALSE(SubmitSectionPlaneFacePick(st, RayAt({-60, 0, 5}, {-5, 0, 5}), Tol(0.0, 0.0), log));
   CHECK(st.active == AppCommandState::Kind::SectionPlane);
+  CHECK(st.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint);
   CHECK_FALSE(st.viewportSectionClip);
-  bool named = false;
-  for (size_t i = before; i < log.size(); ++i)
-    if (log[i].find("cylindrical") != std::string::npos)
-      named = true;
-  CHECK(named);  // BY NAME — "that is a cylindrical face", not "cannot use that"
+  // The point is ON the wall it hit: radius 5, halfway up.
+  CHECK(st.sectionPlaneP1.x == Catch::Approx(-5.0));
+  CHECK(st.sectionPlaneP1.z == Catch::Approx(5.0));
 
-  // The flat CAP of the same solid is accepted, from the still-open command.
+  // A second point across the solid places the plane, and its normal is ACROSS the line — never the
+  // wall's own axis, which points up the middle of the cylinder.
+  CHECK(SubmitSectionPlaneFacePick(st, RayAt({60, 0, 5}, {5, 0, 5}), Tol(0.0, 0.0), log));
+  CHECK(st.viewportSectionClip);
+  CHECK(std::fabs(st.viewportSectionClipFrame.zAxis.y) == Catch::Approx(1.0));
+  CHECK(st.viewportSectionClipFrame.zAxis.z == Catch::Approx(0.0).margin(1e-12));
+  CHECK(st.active == AppCommandState::Kind::None);
+
+  // The flat CAP still answers the command in one click, as it always did.
+  StartSectionPlaneCommand(st, log);
   REQUIRE(SubmitSectionPlaneFacePick(st, RayAt({0, 0, 100}, {0, 0, 10}), Tol(0.0, 0.0), log));
   CHECK(st.viewportSectionClip);
   CHECK(st.viewportSectionClipFrame.zAxis.z == Catch::Approx(1.0));
