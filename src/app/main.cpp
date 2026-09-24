@@ -1171,6 +1171,9 @@ int main()
     DrawWblockDialog(cmd, cmdLog);
     DrawEditBlockDefinitionDialog(cmd, cmdLog);
     DrawBlockAuthoringPalettes(cmd, cmdLog);
+    // REQ-350 — the Pipe Fittings palette, beside the other palette window and for the same reason:
+    // both are ordinary floating windows drawn every frame, each gated on its own open flag.
+    DrawPipeFittingPalette(cmd, cmdLog, activeRenderer);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawPointCloudImportProgress(cmd);
     DrawCloseConfirmModal(cmd, cmdLog);
@@ -1574,6 +1577,11 @@ int main()
     // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);
+
+    // REQ-350 / ADR-062 — render the part thumbnails the palette asked for above. Here, not inside the
+    // palette: this is after RenderScene, the one point in the frame where binding another framebuffer
+    // cannot disturb the drawing's own image — exactly why ServicePendingThumbnail sits here too.
+    ServicePipeFittingThumbnails(cmd, activeRenderer);
 #ifdef GOSURVEY_DEVELOPER_SHELL
     // REQ-161 (TASK-249): a devshell test capturing the VIEWPORT, serviced here because this is the
     // one point in the frame where the renderer has just drawn and its framebuffer still holds the

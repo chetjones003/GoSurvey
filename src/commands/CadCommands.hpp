@@ -2814,6 +2814,24 @@ struct AppCommandState {
   /// text wizard, for the same "which mode applies to which snap target" authoring.
   bool showConnectionModesWindow = false;
   int blockAuthoringPaletteTab = 0;  ///< 0 Parameters, 1 Actions, 2 Parameter Sets, 3 Constraints
+  /// REQ-350 — the Pipe Fittings palette. Session state beside `blockAuthoringPaletteOpen` and for
+  /// the same reasons: the window's POSITION persists through `imgui.ini` on its own, and which
+  /// palette happened to be open is not worth a key in the settings file. Opened automatically by
+  /// PIPERUN and by the PIPEPALETTE command; stays open when the run finishes (REQ-350 (a)).
+  bool pipeFittingPaletteOpen = false;
+  int pipeFittingPaletteTab = 0;  ///< a `CadPipePaletteCategory`: 0 Fittings, 1 Flanges, 2 Valves, 3 Nozzles, 4 Other
+  /// The size the palette last filtered on, so it can notice the routed size changing and refresh
+  /// without being reopened (REQ-350's live re-filter acceptance condition).
+  std::string pipeFittingPaletteShownSize;
+  /// REQ-350 (e) / ADR-062 — thumbnail plumbing. The palette RECORDS which parts it wants a picture
+  /// of while it draws; the frame's render pass services them afterwards, which is the one point in a
+  /// frame where binding another framebuffer is safe (the same constraint `ServicePendingThumbnail`
+  /// has, for the same reason).
+  std::vector<std::string> pipeFittingThumbRequests;
+  /// Parts that produced no thumbnail — no solid or 2D geometry to draw, no GL object available, or
+  /// not imported into this drawing yet. Remembered so such a row is asked about ONCE rather than
+  /// re-attempted every frame; cleared whenever the routed size changes.
+  std::vector<std::string> pipeFittingThumbUnavailable;
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.
@@ -4497,6 +4515,12 @@ struct AppCommandState {
   char insertBlockUnitsBuf[32]{};
   bool insertBlockUniformScale = true;
   bool insertBlockExplode = false;
+  /// REQ-350 (f) — set when this INSERT was armed from the Pipe Fittings palette. It changes exactly
+  /// one thing: a pick that lands ON a pipe run splices the part into that run with the engagement
+  /// cutback (the PIPEFIT path) instead of placing a free block reference. A pick anywhere else
+  /// behaves as an ordinary INSERT, which is why this is a flag on INSERT rather than a command of
+  /// its own — the ghost, the snapping, the click routing and ESC are all already correct.
+  bool insertBlockPipeSpliceArmed = false;
   bool insertBlockAttrDialogOpen = false;
   /// Library pane filters (issue #486 increment A5). `None` = no filter on that axis. Size is a
   /// free-text substring match against \ref CadBlockLibraryEntry::nominalSize.
@@ -5447,6 +5471,26 @@ void CancelPipeRunCommand(AppCommandState& st);
 /// (`CadPipePartType`'s own tags — valve, flange, reducer, coupling, ...); refuses immediately
 /// (never entering the command) otherwise, mirroring `PIPECATALOG`'s own inline-argument refusals.
 void StartPipeFitCommand(AppCommandState& st, const std::string& partTypeTok, std::vector<std::string>& log);
+/// Flattens a `brep::Tessellation` into the flat per-vertex GL arrays the renderer uploads (REQ-313 /
+/// ADR-045): triangle vertices, one normal per vertex, and the owning face id per TRIANGLE. Shared by
+/// the viewport's solid display cache and REQ-350's part thumbnails, so the two cannot disagree about
+/// what a solid's mesh is.
+void ExpandTessellation(const brep::Tessellation& t, std::vector<float>* verts, std::vector<float>* normals,
+                        std::vector<int>* faceIds);
+
+/// REQ-350 (f) — the pipe run under \p pick, or none. "Under" means within the pipe's own outer
+/// radius (with a little slack) of its centreline; when two runs overlap the pick, the nearer
+/// centreline wins. This is what decides whether a part armed from the Pipe Fittings palette splices
+/// into a run or is placed as a free INSERT.
+[[nodiscard]] bool CadPipeRunUnderPick(const AppCommandState& st, const ray3d::Vec3& pick, int* outRunIdx);
+
+/// REQ-350 (f) — splice the NAMED library part into `st.cadPipeRuns[runIdx]` at the point nearest
+/// \p pick: exactly what `PIPEFIT <part type>` does after its catalog lookup, including the
+/// engagement cutback, the run splitting into two pieces, and one undo step. Named rather than
+/// looked up by type because the palette has already chosen a specific part, and the catalog lookup
+/// refuses when several parts match a type.
+bool CadPipeFitNamedAtPick(AppCommandState& st, int runIdx, const std::string& blockName,
+                           const ray3d::Vec3& pick, std::vector<std::string>& log);
 /// Handle a viewport click: the station point to splice the fitting in at. Always ends the command,
 /// success or refusal — there is nothing left to pick after one point.
 void SubmitPipeFitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);

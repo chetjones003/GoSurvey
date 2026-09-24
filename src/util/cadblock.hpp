@@ -138,7 +138,12 @@ enum class CadPipePartType : std::uint8_t {
   Valve,
   Coupling,
   Cap,
-  Other
+  Other,
+  /// REQ-350 / D-2026-09-24-a (1). Appended AFTER `Other` rather than inserted in category order so
+  /// no existing enumerator's numeric value moves — the tag string is what .gs and the LIBEXPORT
+  /// sidecars persist, but a stable numeric value costs nothing to keep, and an in-memory value that
+  /// silently changed meaning would be the worst kind of bug to go looking for.
+  Nozzle
 };
 
 [[nodiscard]] inline std::string_view CadPipePartTypeTag(CadPipePartType t) {
@@ -153,6 +158,7 @@ enum class CadPipePartType : std::uint8_t {
     case CadPipePartType::Coupling: return "coupling";
     case CadPipePartType::Cap: return "cap";
     case CadPipePartType::Other: return "other";
+    case CadPipePartType::Nozzle: return "nozzle";
     case CadPipePartType::None:
     default: return "";
   }
@@ -169,6 +175,7 @@ enum class CadPipePartType : std::uint8_t {
   if (s == "coupling") return CadPipePartType::Coupling;
   if (s == "cap") return CadPipePartType::Cap;
   if (s == "other") return CadPipePartType::Other;
+  if (s == "nozzle") return CadPipePartType::Nozzle;
   return CadPipePartType::None;
 }
 

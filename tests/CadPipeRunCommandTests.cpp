@@ -1419,3 +1419,202 @@ TEST_CASE("Clearing a drawing's CAD geometry clears its pipe runs", "[issue486][
   RefreshSolidDisplayGeometry(st);
   CHECK(st.pipeRunWorldSolids.empty());
 }
+
+// --- REQ-350 (f): placing a part armed from the Pipe Fittings palette ---------------------------
+//
+// One gesture, two outcomes, decided by where the second click lands: on a run it splices (the
+// PIPEFIT path, with cutback and a run split in two); off every run it places an ordinary block
+// reference. These pin both, plus the "armed" flag being strictly one-shot.
+
+namespace {
+
+/// A 4in run along +X from the origin, ten feet long.
+void AddFourInchRun(AppCommandState& st) {
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+}
+
+/// An inline two-port fitting (inlet at its origin, outlet a foot along +X), which is the shape
+/// `PickElbowPorts` needs to splice something into a straight run.
+void AddInlineFitting(AppCommandState& st, const char* name) {
+  CadBlockDefinition def;
+  def.name = name;
+  def.partType = CadPipePartType::Flange;
+  def.nominalSize = "4in";
+  CadBlockConnection inlet;
+  inlet.name = "P1";
+  inlet.role = CadBlockConnectionRole::Inlet;
+  inlet.x = 0.f;
+  inlet.y = 0.f;
+  inlet.z = 0.f;
+  inlet.nx = -1.f;
+  inlet.ny = 0.f;
+  inlet.nz = 0.f;
+  CadBlockConnection outlet;
+  outlet.name = "P2";
+  outlet.role = CadBlockConnectionRole::Outlet;
+  outlet.x = 1.f;
+  outlet.y = 0.f;
+  outlet.z = 0.f;
+  outlet.nx = 1.f;
+  outlet.ny = 0.f;
+  outlet.nz = 0.f;
+  def.connections.push_back(inlet);
+  def.connections.push_back(outlet);
+  st.blockDefs.push_back(def);
+}
+
+CadBlockLibraryEntry EntryFor(const char* name) {
+  CadBlockLibraryEntry e;
+  e.name = name;
+  e.imported = true;
+  e.isFitting = true;
+  e.partType = CadPipePartType::Flange;
+  e.nominalSize = "4in";
+  return e;
+}
+
+} // namespace
+
+TEST_CASE("A palette part armed and clicked ON a run splices into it", "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddFourInchRun(st);
+  AddInlineFitting(st, "FLANGE4");
+
+  REQUIRE(CadPipePaletteArmPart(st, EntryFor("FLANGE4"), log));
+  CHECK(st.active == AppCommandState::Kind::InsertBlock);
+  CHECK(st.insertBlockPipeSpliceArmed);
+  CHECK(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitInsertPoint);
+  // Armed for a single click: no scale or rotation prompt stands between the pick and the placement.
+  CHECK_FALSE(st.insertBlockSpecifyScale);
+  CHECK_FALSE(st.insertBlockSpecifyRot);
+  CHECK_FALSE(st.insertBlockSpecifyAlignFace);
+
+  // Mid-span, right on the centreline.
+  SubmitInsertBlockPick(st, 5.f, 0.f, 0.f, log);
+
+  // The run is now two pieces with the fitting between them — PIPEFIT's own result.
+  CHECK(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadPipeRunAttrs.size() == 2);
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].defName == "FLANGE4");
+  // Both pieces keep the parent's size, so the palette keeps matching after the splice.
+  CHECK(st.cadPipeRuns[0].nominalSize == "4in");
+  CHECK(st.cadPipeRuns[1].nominalSize == "4in");
+  // One-shot: the arming does not survive its own placement.
+  CHECK_FALSE(st.insertBlockPipeSpliceArmed);
+  CHECK(st.active == AppCommandState::Kind::None);
+}
+
+TEST_CASE("A palette part armed and clicked OFF every run is placed as a plain INSERT",
+          "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddFourInchRun(st);
+  AddInlineFitting(st, "FLANGE4");
+
+  REQUIRE(CadPipePaletteArmPart(st, EntryFor("FLANGE4"), log));
+  // Well clear of the run, which lies along the X axis at y = 0.
+  SubmitInsertBlockPick(st, 5.f, 40.f, 0.f, log);
+
+  CHECK(st.cadPipeRuns.size() == 1);  // untouched — nothing was spliced
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].defName == "FLANGE4");
+  CHECK(st.cadBlockRefs[0].xf.y == Catch::Approx(40.f));
+  CHECK_FALSE(st.insertBlockPipeSpliceArmed);
+}
+
+TEST_CASE("Cancelling an armed palette placement leaves the drawing alone",
+          "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddFourInchRun(st);
+  AddInlineFitting(st, "FLANGE4");
+
+  REQUIRE(CadPipePaletteArmPart(st, EntryFor("FLANGE4"), log));
+  CancelActiveCommand(st, log);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK_FALSE(st.insertBlockPipeSpliceArmed);
+  CHECK(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadBlockRefs.empty());
+
+  // And the flag being clear is load-bearing: an ordinary INSERT afterwards must NOT splice, even
+  // when its pick lands squarely on a pipe run.
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "FLANGE4");
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyAlignFace = false;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  SubmitInsertBlockPick(st, 5.f, 0.f, 0.f, log);
+  CHECK(st.cadPipeRuns.size() == 1);  // still one run: a plain INSERT never splits anything
+  CHECK(st.cadBlockRefs.size() == 1);
+}
+
+TEST_CASE("A run counts as under the pick only near its own centreline",
+          "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  AddFourInchRun(st);  // 4in OD = 0.375 ft, so a radius of 0.1875 ft
+
+  int idx = -1;
+  CHECK(CadPipeRunUnderPick(st, ray3d::Vec3{5.0, 0.0, 0.0}, &idx));
+  CHECK(idx == 0);
+  // Just inside the slack around the pipe wall...
+  CHECK(CadPipeRunUnderPick(st, ray3d::Vec3{5.0, 0.2, 0.0}, &idx));
+  // ...and well outside it.
+  CHECK_FALSE(CadPipeRunUnderPick(st, ray3d::Vec3{5.0, 3.0, 0.0}, &idx));
+  CHECK(idx == -1);
+  // Past the end of the run is not on the run either (the nearest point clamps to the endpoint).
+  CHECK_FALSE(CadPipeRunUnderPick(st, ray3d::Vec3{40.0, 0.0, 0.0}, &idx));
+
+  // With two runs overlapping the pick, the nearer centreline wins.
+  CadPipeRun second;
+  second.vertsXyz = {0.0, 0.1, 0.0, 10.0, 0.1, 0.0};
+  second.nominalSize = "4in";
+  st.cadPipeRuns.push_back(second);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  CHECK(CadPipeRunUnderPick(st, ray3d::Vec3{5.0, 0.09, 0.0}, &idx));
+  CHECK(idx == 1);
+}
+
+TEST_CASE("Arming a part that is not in the library is refused, not silently armed",
+          "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddFourInchRun(st);
+
+  CHECK_FALSE(CadPipePaletteArmPart(st, EntryFor("NOT_A_REAL_PART"), log));
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK_FALSE(st.insertBlockPipeSpliceArmed);
+  // An empty row name is refused the same way rather than arming an unnamed placement.
+  CadBlockLibraryEntry nameless;
+  nameless.isFitting = true;
+  CHECK_FALSE(CadPipePaletteArmPart(st, nameless, log));
+  CHECK(st.active == AppCommandState::Kind::None);
+}
+
+TEST_CASE("PIPERUN opens the fittings palette and finishing the run leaves it open",
+          "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  CHECK_FALSE(st.pipeFittingPaletteOpen);
+
+  StartPipeRunCommand(st, log);
+  CHECK(st.pipeFittingPaletteOpen);
+
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // schedule-40 wall
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  // REQ-350 (a): the run is finished and the palette is still there, because a flange on the end just
+  // routed is wanted NOW.
+  CHECK(st.pipeFittingPaletteOpen);
+  CHECK(st.active == AppCommandState::Kind::None);
+}

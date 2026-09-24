@@ -9648,6 +9648,93 @@ capability that does not exist. They are recorded here rather than quietly dropp
   because re-centring rounded every stored coordinate through `float` — is dropped, since `double`
   re-centring does not lose precision.
 
+### REQ-350 — Pipe fitting tool palette: size-matched library parts while routing (GitHub issue #486, Track A5/B7 follow-up)
+- Purpose: while `PIPERUN` (REQ-345 increment B2) is routing, nothing on screen tells the user which
+  library parts fit the pipe being drawn. Reaching a 2in flange today means leaving the command,
+  opening the INSERT dialog, and typing the size into its library filter (increment A5). Every
+  underlying piece already exists — parts carry a type/size/class (A1), the library pane already
+  filters on them (A5), and `PIPEFIT` already splices one into a routed run (B7). What is missing is a
+  surface that puts the matching parts *in front of* the user, filtered to the run in progress.
+- Priority: should
+- Type: functional
+- Depends on: REQ-345 (the palette reads the active run's nominal size and pressure class from the
+  `PIPERUN` command state, and places through its own B7 `PIPEFIT` splice), REQ-107 (block INSERT,
+  connection ports, `CadBlockSnapInsertToConnection`), REQ-313 / ADR-045 (the solid tessellation the
+  shaded preview draws), REQ-100 (the preview is rendered geometry, so its cost is measured, not
+  assumed), REQ-300 (no new dependency — the preview reuses the existing GL path), REQ-201 (a part
+  that cannot be resolved, imported or placed is refused by name, never approximated or silently
+  skipped).
+- Statement: a floating, movable **Pipe Fittings palette** lists the library parts whose nominal size
+  matches the pipe run being routed, grouped by category, each with a shaded preview of the part and
+  its name, and places the picked part with one further click.
+  - **(a) Lifecycle.** The palette opens by itself when `PIPERUN` starts, and **stays open** when the
+    run is committed or cancelled — closing it the instant routing ends would hide it exactly when the
+    user reaches for a flange, which is the `PIPEFIT` case this palette exists to serve. Its open
+    state and position persist like every other palette window (the same `AppCommandState` flag +
+    ImGui ini pattern `blockAuthoringPaletteOpen` already uses); the close box closes it and a command
+    reopens it. It is a **palette, not a modal** — it never blocks the command line or the viewport.
+  - **(b) Categories.** Right-hand vertical tabs, built by the same `PaletteTabButton` /
+    `BeditVerticalText` pair the BEDIT Block Authoring Palettes already use, so the two windows read
+    as one family: **Fittings** (`Elbow90`, `Elbow45`, `Tee`, `Cross`, `Reducer`, `Coupling`),
+    **Flanges** (`Flange`), **Valves** (`Valve`), **Nozzles** (`Nozzle`), **Other** (`Cap`, `Other`).
+    `Nozzle` is a **new** `CadPipePartType` value (D-2026-09-24-a (1)) — additive, so no existing
+    sidecar, block definition or drawing changes meaning.
+  - **(c) Size matching is exact.** A run of nominal size `N` lists only parts tagged `N`, compared by
+    the same `CadParsePipeNominalSizeInches` numeric parse the rest of REQ-345 uses (so `2in`,
+    `2 in` and `2.0in` are one size, and a label the NPS table does not carry lists nothing rather
+    than being interpolated). A `1.5in` reducer is **not** offered on a `2in` run: which *other* sizes
+    are relevant at a size change is a real product rule (reducer direction, branch sizes) that
+    belongs to a later increment, not a guess made here (D-2026-09-24-a (3)).
+  - **(d) Pressure class follows the catalog's own precedence.** Class filtering reuses
+    `CadPipeCatalogFind`'s recorded rule verbatim — a run with a class prefers parts tagged with that
+    exact class and falls back to class-agnostic (untagged) parts only when no exact match exists —
+    rather than inventing a second, palette-only rule that could disagree with what auto-fitting picks
+    at a bend.
+  - **(e) Each row is a shaded preview plus a name.** The preview is the part's own B-rep solid,
+    lit and shaded, rendered **offscreen by the renderer** into a per-part cached texture and drawn by
+    the palette as an image (**ADR-062**) — not a wireframe: a flange, a cap and a blind flange are
+    indistinguishable as top-down circles, which is the whole reason the existing A5 preview earns so
+    little. Connection ports are marked on the preview in the role colours the BEDIT gizmo and the A5
+    pane already use (green inlet / blue outlet / orange branch), so how a part mates is visible
+    before it is placed. Beside the preview: the part's name as the library holds it
+    (`2in Weld Neck Flange`), with its size and class beneath.
+  - **(f) Placement is one click, and where you click decides which kind.** Clicking a row arms the
+    part with a cursor ghost. A click **on a pipe run** splices the part into that run with the
+    engagement cutback — the existing `PIPEFIT` path (B7), unchanged, including its refusals and its
+    single undo step. A click **off any run** places the part as an ordinary block INSERT at that
+    point, with connection-port snapping (REQ-107) — which is what makes the palette usable for a
+    nozzle on a vessel or a flange staged beside the line, neither of which is a run splice.
+    `ESC` disarms. Both paths are the commands that already exist; the palette is a way of *reaching*
+    them, and adds no third placement rule of its own.
+  - **(g) An empty category says why.** A tab with no size-matching part shows a plain sentence naming
+    the size it filtered on, not a blank pane — the difference between "your library has no 2in valve"
+    and "this window is broken" is the whole message (REQ-201's spirit at the UI: never present a
+    silent nothing where a stated reason exists).
+  - **(h) The bundled fittings are tagged.** The three parts shipped in `resources/blocks/fittings/`
+    carry no metadata sidecar today, so they have no type or size and would list under no tab at all.
+    A sidecar is authored for each (D-2026-09-24-a (2)); they are written **class-agnostic**, because
+    the real pressure class of those parts is not knowable from the files and a guessed `CS150` would
+    wrongly hide them from a `CS300` run, whereas untagged matches either by (d).
+- Acceptance:
+  - Starting `PIPERUN` opens the palette by itself, as a floating window that can be moved and
+    resized, without blocking the command line.
+  - With a `2in` run active, the **Flanges** tab lists `2IN_BLIND_FLANGE` and `2in_WELD_NECK_FLANGE`
+    and does **not** list `CJ_4in_WELD_NECK_FLANGE`; routing a `4in` run instead lists the `4in` part
+    and not the `2in` ones, re-filtered live without the palette being reopened.
+  - Every listed row shows a shaded preview of that part with its connection ports marked, and the
+    part's name beside it.
+  - Picking a row and then clicking **on** the routed run inserts the part and splits the run exactly
+    as `PIPEFIT` does, as **one** undo step.
+  - Picking a row and then clicking **off** any run places the part as a block INSERT at that point.
+  - The palette is still open after the run is committed or cancelled; its close box closes it; the
+    reopen command shows it again with its position kept.
+  - A category with no size-matching part shows a sentence naming the filtered size, not a blank pane.
+  - A `Nozzle`-tagged part round-trips through a sidecar, a block definition and `.gs` without losing
+    its type, and a drawing written before `Nozzle` existed still loads with every part type intact.
+  - REQ-100 holds: the palette open with every category populated does not push the frame past the
+    16 ms p95 budget on the reference machine, because each part's preview is rendered **once** and
+    cached, not re-rendered per frame.
+
 ---
 
 ## Quality requirements
@@ -10454,6 +10541,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
+| REQ-350 | UI/Commands/Render | `CadPipePaletteTests` (category → part-type grouping incl. the new `Nozzle`; exact size match accepts `2in`/`2 in`/`2.0in` and rejects `1.5in`/`4in`; class-agnostic parts match either class while an exact class wins; a non-fitting library entry never lists; empty-category reason names the filtered size; armed-part placement routes to the splice on a run and to INSERT off one) | accepted |
 | REQ-001 | IO | `<TEST-001>` | accepted |
 | REQ-330 | Viewport/UI/Render/IO | `CadSnapTests` `[CadSnap][issue401]` (TOP+world N/E/S/W within REQ-101; rotated UCS follows the axes; orbited camera + tilted circle all four on the circle; circle plane ⟂ UCS plane falls back to the curve's local axes with four distinct points; arc offers only in-sweep quadrants; F3 master gate + per-type toggle; Shift+right-click "snap once" override reaches it when the toggle is off) | accepted |
 | REQ-100 | Renderer | `BenchSceneTests` (exact segment count; byte-identical regeneration; segment count changes density not extent; iso-elevation contours; nearest-rank percentile) + the `BENCH` / `BENCH SURFACE` / `BENCH MESH` commands on the reference machine (`project.md` §7), MSVC, RTX 5060 — segments 1.38 ms, meshes 1.97 ms, surface 10.28 ms vs 16 ms, 2026-08-15 (TASK-052, TASK-053) | accepted (device pending BUG-013) |

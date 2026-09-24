@@ -258,6 +258,20 @@ void DrawEditBlockDefinitionDialog(AppCommandState& cmd, std::vector<std::string
 /// BEDIT Block Authoring Palettes (Parameters / Actions / Parameter Sets / Constraints).
 void DrawBlockAuthoringPalettes(AppCommandState& cmd, std::vector<std::string>& log);
 
+/// REQ-350 — the Pipe Fittings palette: the library parts matching the pipe run being routed, in
+/// right-hand category tabs, each with a shaded preview and its name. Opened by PIPERUN and by
+/// PIPEPALETTE; stays open when a run finishes.
+///
+/// Takes the renderer only to read back already-rendered thumbnail textures (ADR-062) — the palette
+/// itself makes no GL call.
+void DrawPipeFittingPalette(AppCommandState& cmd, std::vector<std::string>& log, ViewportRenderer& renderer);
+
+/// REQ-350 (e) / ADR-062 — render the thumbnails the palette asked for while it was drawing, a few per
+/// frame. Must be called AFTER the scene's own RenderScene, which is the one point in the frame where
+/// binding another framebuffer cannot disturb the drawing's image (the same rule and reason as
+/// `ServicePendingThumbnail`). No-op when nothing is pending.
+void ServicePipeFittingThumbnails(AppCommandState& cmd, ViewportRenderer& renderer);
+
 /// ALIGN results window: editable pair list, live Helmert solution, Apply button, report generation.
 void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log);
 

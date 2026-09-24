@@ -114,6 +114,62 @@ bool CadPipeCatalogFind(AppCommandState& st, CadPipePartType partType, const std
 [[nodiscard]] std::filesystem::path CadFittingLibraryExportDir();
 /// Import a bundled library file when the user picks an entry that is not yet in \p st.blockDefs.
 bool CadBlocksImportLibraryEntry(AppCommandState& st, const CadBlockLibraryEntry& entry, std::vector<std::string>& log);
+
+/// One right-hand tab of the Pipe Fittings palette (REQ-350 (b), D-2026-09-24-a (1)). A tab is a
+/// CATEGORY, grouping several `CadPipePartType` values, because one tab per part type is ten vertical
+/// tabs in a tall window of which most are empty in any real library.
+enum class CadPipePaletteCategory : std::uint8_t { Fittings = 0, Flanges, Valves, Nozzles, Other };
+inline constexpr int kCadPipePaletteCategoryCount = 5;
+
+/// The tab's label ("Flanges"), and the lower-case plural it reads as in prose ("flanges") for the
+/// empty-tab sentence. Two functions rather than one label plus `toLower` at the call site, because
+/// "Other" pluralises as "other parts", not "others".
+[[nodiscard]] std::string_view CadPipePaletteCategoryLabel(CadPipePaletteCategory c);
+[[nodiscard]] std::string_view CadPipePaletteCategoryPlural(CadPipePaletteCategory c);
+
+/// Which tab \p t files under. Total by construction — `None` and anything the enum gains later
+/// answer `Other`, so a part type added without touching this function lists somewhere visible
+/// instead of vanishing from every tab.
+[[nodiscard]] CadPipePaletteCategory CadPipePaletteCategoryOf(CadPipePartType t);
+
+/// The rows one palette tab shows (REQ-350 (c)/(d)): the library entries that are piping parts, file
+/// under \p category, and match \p runNominalSize EXACTLY — compared through
+/// `CadParsePipeNominalSizeInches` on both sides, so `2in`, `2 in` and `2.0in` are one size and a
+/// string compare cannot make them three.
+///
+/// Pressure class follows `CadPipeCatalogFind`'s own recorded precedence rather than a second rule
+/// invented here: with a class on the run, a part tagged with that exact class wins, a part tagged
+/// class-agnostic is accepted only when no exact-class part of **the same part type** exists, and a
+/// part tagged with a DIFFERENT class never matches. Per part type, not per tab — a Fittings tab
+/// holding a CS150 elbow and an untagged tee must still show the tee, which a per-tab scope would
+/// hide.
+///
+/// An unparsable or empty \p runNominalSize yields NO rows rather than every row: "we don't know the
+/// size" must not read as "here is the whole library" (REQ-201's spirit — never present a guess as an
+/// answer). Clears \p out first.
+void CadPipePaletteCollectRows(const std::vector<CadBlockLibraryEntry>& entries,
+                               std::string_view runNominalSize, CadPipePressureClass runClass,
+                               CadPipePaletteCategory category, std::vector<CadBlockLibraryEntry>* out);
+
+/// The sentence an empty tab shows instead of a blank pane (REQ-350 (g)) — it names the size that was
+/// filtered on and what to do about it, because "your library has no 2in valve" and "this window is
+/// broken" look identical otherwise.
+[[nodiscard]] std::string CadPipePaletteEmptyReason(CadPipePaletteCategory category,
+                                                   std::string_view runNominalSize);
+
+/// REQ-350 (a) — open or close the Pipe Fittings palette (the PIPEPALETTE command, and the same call
+/// PIPERUN makes to open it).
+void CadPipePaletteSetOpen(AppCommandState& st, bool open, std::vector<std::string>& log);
+
+/// REQ-350 (f) — arm \p entry for placement from the palette: import it if the library has not been
+/// read into this drawing yet, then put INSERT into its single-click, no-scale/rotation-prompt state
+/// with the pipe-splice flag set. The next viewport pick places it — spliced into a run if it lands on
+/// one, free-standing if it does not.
+///
+/// Returns false, with the reason logged, when the part cannot be imported (REQ-201: a named refusal,
+/// never a silently armed command that would place the wrong thing or nothing at all).
+bool CadPipePaletteArmPart(AppCommandState& st, const CadBlockLibraryEntry& entry,
+                           std::vector<std::string>& log);
 /// Block-unit scale for INSERT: honours \c insertBlockUnitsBuf when set (issue #475 inc6).
 [[nodiscard]] float CadBlockInsertUnitsScale(const AppCommandState& st, const CadBlockDefinition& def);
 

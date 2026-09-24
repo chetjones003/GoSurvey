@@ -29376,6 +29376,13 @@ void NarrowInto(const std::vector<double>& src, std::vector<float>* dst) {
 /// primitive's tessellation is a few thousand triangles, so a second indexed GPU path here would
 /// cost more in code than it saves in bandwidth. Expanding also lets the solid path share the
 /// stream-upload shape the surface band fills already use.
+} // namespace
+
+/// Flattens a `brep::Tessellation` into the flat, per-vertex GL arrays the renderer uploads:
+/// triangle vertices, one normal per vertex, and the owning face id per TRIANGLE. Exposed (rather
+/// than file-static) because REQ-350's part thumbnails need exactly the same expansion, and a
+/// second copy of it would be free to drift from the one the viewport draws — two present-day call
+/// sites, which is the bar architecture invariant §11.4 sets for sharing anything at all.
 void ExpandTessellation(const brep::Tessellation& t, std::vector<float>* verts, std::vector<float>* normals,
                         std::vector<int>* faceIds) {
   faceIds->clear();
@@ -29405,7 +29412,6 @@ void ExpandTessellation(const brep::Tessellation& t, std::vector<float>* verts, 
   }
 }
 
-} // namespace
 
 void RefreshSolidDisplayGeometry(AppCommandState& st) {
   // Reap first: an entry whose weak key has expired belongs to a solid that has been erased or
@@ -34563,6 +34569,10 @@ void AddPipeRunPoint(AppCommandState& st, const ray3d::Vec3& pt, std::vector<std
 void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log) {
   CancelPipeRunCommand(st);
   st.active = AppCommandState::Kind::PipeRun;
+  // REQ-350 (a) — the palette opens with routing, and deliberately does NOT close with it: the parts
+  // a user reaches for (a flange on the end just routed) are wanted immediately after the run is
+  // committed, not only during it.
+  CadPipePaletteSetOpen(st, true, log);
   log.push_back(CadPipeRunPromptText(st));
 }
 
@@ -34987,8 +34997,8 @@ bool NearestPointOnPipeRun(const CadPipeRun& run, const ray3d::Vec3& pick, size_
 /// makes the same observation for why a pipe roll prompt has no fitting to attach to yet). The
 /// outlet's resulting world position is trusted from the fitting's own solved geometry, the same
 /// "the model decides" reasoning B5/B6 both use for their own unpinned far side(s).
-bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
-                      const ray3d::Vec3& pick, std::vector<std::string>& log) {
+bool TrySplicePipeFitNamed(AppCommandState& st, int runIdx, const std::string& blockName,
+                           const ray3d::Vec3& pick, std::vector<std::string>& log) {
   if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.cadPipeRuns.size())
     return false;
   const CadPipeRun& run = st.cadPipeRuns[static_cast<size_t>(runIdx)];
@@ -35009,10 +35019,6 @@ bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
     return false;
   }
 
-  std::string blockName;
-  if (!CadPipeCatalogFind(st, partType, run.nominalSize, ParseCadPipePressureClass(run.pressureClassTag),
-                          &blockName, log))
-    return false;
   const int di = CadBlockFindDef(st.blockDefs, blockName);
   if (di < 0)
     return false;
@@ -35101,7 +35107,62 @@ bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
   return true;
 }
 
+/// PIPEFIT's original entry point, now a thin wrapper: resolve `(part type, the run's own size and
+/// class)` to ONE library part through the catalog, then splice that part by name.
+///
+/// Split out for REQ-350 (f), which needs the second half on its own: the Pipe Fittings palette has
+/// already picked a SPECIFIC part, and `CadPipeCatalogFind` deliberately refuses when more than one
+/// part matches — which is exactly the case the bundled library presents (two 2in flanges). Behaviour
+/// here is unchanged, including that refusal, so `PIPEFIT <part type>` works precisely as before.
+bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
+                      const ray3d::Vec3& pick, std::vector<std::string>& log) {
+  if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.cadPipeRuns.size())
+    return false;
+  const CadPipeRun& run = st.cadPipeRuns[static_cast<size_t>(runIdx)];
+  std::string blockName;
+  if (!CadPipeCatalogFind(st, partType, run.nominalSize, ParseCadPipePressureClass(run.pressureClassTag),
+                          &blockName, log))
+    return false;
+  return TrySplicePipeFitNamed(st, runIdx, blockName, pick, log);
+}
+
+/// How far off a run's centreline a click still counts as "on the pipe" (REQ-350 (f)), as a multiple
+/// of the pipe's own outer radius. Slightly generous, because the alternative failure — a click aimed
+/// at the pipe that falls through to a free INSERT beside it — is the more annoying of the two, and
+/// both are one undo away.
+constexpr double kCadPipeRunPickRadiusSlack = 1.5;
+
 } // namespace
+
+bool CadPipeRunUnderPick(const AppCommandState& st, const ray3d::Vec3& pick, int* outRunIdx) {
+  if (outRunIdx == nullptr)
+    return false;
+  *outRunIdx = -1;
+  double best = std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i < st.cadPipeRuns.size(); ++i) {
+    const CadPipeRun& run = st.cadPipeRuns[i];
+    size_t seg = 0;
+    ray3d::Vec3 station{};
+    if (!NearestPointOnPipeRun(run, pick, &seg, &station))
+      continue;
+    double odFeet = 0.0;
+    if (!CadPipeNominalOdFeet(run.nominalSize, &odFeet))
+      continue;  // a run whose size does not resolve draws no pipe to click on
+    const double dist = ray3d::Length(ray3d::Sub(pick, station));
+    if (dist > odFeet * 0.5 * kCadPipeRunPickRadiusSlack)
+      continue;
+    if (dist < best) {
+      best = dist;
+      *outRunIdx = static_cast<int>(i);
+    }
+  }
+  return *outRunIdx >= 0;
+}
+
+bool CadPipeFitNamedAtPick(AppCommandState& st, int runIdx, const std::string& blockName,
+                           const ray3d::Vec3& pick, std::vector<std::string>& log) {
+  return TrySplicePipeFitNamed(st, runIdx, blockName, pick, log);
+}
 
 void StartPipeFitCommand(AppCommandState& st, const std::string& partTypeTok, std::vector<std::string>& log) {
   const std::vector<int> picked = SelectedPipeRunIndices(st);
@@ -35111,7 +35172,7 @@ void StartPipeFitCommand(AppCommandState& st, const std::string& partTypeTok, st
   }
   if (partTypeTok.empty()) {
     log.push_back("PIPEFIT - usage: PIPEFIT <part type>. Part types: elbow-90, elbow-45, tee, "
-                  "cross, reducer, flange, valve, coupling, cap, other.");
+                  "cross, reducer, flange, valve, coupling, cap, nozzle, other.");
     return;
   }
   const CadPipePartType partType = ParseCadPipePartType(StringUtil::toLowerAsciiCopy(partTypeTok));
@@ -37191,8 +37252,11 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("VPTHAW — exited.");
   else if (st.active == AppCommandState::Kind::PdfAttach)
     log.push_back("PDFATTACH canceled.");
-  else if (st.active == AppCommandState::Kind::InsertBlock)
+  else if (st.active == AppCommandState::Kind::InsertBlock) {
+    // REQ-350 (f) — drop the palette's one-shot splice arming with the command it belonged to.
+    st.insertBlockPipeSpliceArmed = false;
     log.push_back("INSERT canceled.");
+  }
   else if (st.active == AppCommandState::Kind::Paste)
     log.push_back("PASTE canceled.");
   else if (st.active == AppCommandState::Kind::PaperRectViewport) {
