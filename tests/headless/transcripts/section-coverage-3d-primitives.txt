@@ -329,6 +329,8 @@ EXPECT SOLIDS 1
 CHECK ALL
 
 # --- a torus, cut vertical ---------------------------------------------------
+# Through the axis the section is two separate circles, one through each side of the ring
+# (#520 increment 3). Beside the axis it is a quartic and is still refused — the block after this one.
 NEW
 CMD TORUS 0,0 20 5
 CMD UCS
@@ -337,9 +339,8 @@ CMD 90
 BOX -300 -300 300 300
 CMD SECTION
 CMD UCS
-EXPECT LOG "SECTION — A cut of a torus that is not square to its axis is a curve this release cannot hold."
-ESC
-EXPECT POLYLINES 0
+EXPECT LOG "SECTION — 2 section outlines created. The solid is unchanged."
+EXPECT POLYLINES 2
 EXPECT SOLIDS 1
 CMD UCS
 CMD W
