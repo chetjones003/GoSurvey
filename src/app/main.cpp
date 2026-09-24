@@ -1168,6 +1168,7 @@ int main()
     DrawPdfAttachDialog(cmd, cmdLog);
     DrawInsertBlockDialog(cmd, cmdLog);
     DrawBlockCreateDialog(cmd, cmdLog);
+    DrawWblockDialog(cmd, cmdLog);
     DrawEditBlockDefinitionDialog(cmd, cmdLog);
     DrawBlockAuthoringPalettes(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);

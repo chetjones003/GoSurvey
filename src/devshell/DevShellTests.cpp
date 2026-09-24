@@ -749,6 +749,103 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
   };
 
+  // The ribbon Create Block flow's on-screen base point, reported 2026-09-23: ticking
+  // "Specify On-screen" and pressing OK leaves the "BLOCK — pick base point" prompt on screen, and
+  // clicking in the viewport selects objects instead of committing the point.
+  //
+  // In the GUI on purpose. The base-point pick is NOT a routed command step — `cmd.active` stays
+  // `Kind::None` and the whole interaction hangs off `cmd.blockCreatePhase`, so neither the headless
+  // `CLICK` verb (which asks `ViewportClickRouteFor`) nor any unit test can reach it. A real left
+  // button, through the real `DrawDrawingViewport` click block, is the only thing that can.
+  ImGuiTest* blockBase = IM_REGISTER_TEST(engine, "gosurvey", "block-create-basepoint-pick");
+  blockBase->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    std::vector<std::string>* log = DevShell_CommandLog();
+    IM_CHECK(log != nullptr);
+
+    // The reported scenario: a 3D SOLID selected in an ORBITED view, not a flat line in plan.
+    SubmitCad(ctx, "BOX 0,0 20 10 8");
+    ctx->Yield(4);
+    IM_CHECK_EQ(s_cmd->cadSolids.size(), static_cast<std::size_t>(1));
+    s_cmd->selection.clear();
+    s_cmd->selection.push_back({SelectedEntity::Type::Solid, 0});
+    s_cmd->viewportAzimuthDeg = 135.f;
+    s_cmd->viewportElevationDeg = 20.f;
+    s_cmd->viewportPanX = 0.f;
+    s_cmd->viewportPanY = 0.f;
+    s_cmd->viewportPanZ = 4.f;
+    s_cmd->viewportZoom = 3.2f;
+    ctx->Yield(10);
+    IM_CHECK(!s_cmd->selection.empty());
+    const int defsBefore = static_cast<int>(s_cmd->blockDefs.size());
+
+    // What the ribbon's Create button does (CadUi.cpp, "##RibbonInsCreate").
+    StartBlockCreateDialog(*s_cmd, *log);
+    ctx->Yield(4);
+    std::snprintf(s_cmd->blockCreateName, sizeof(s_cmd->blockCreateName), "%s", "PICKBASE");
+    s_cmd->blockCreateSpecifyBase = true;  // the tick under test; it is also the default
+    ctx->Yield(2);
+    ctx->ItemClick("//Create Block/OK");
+    ctx->Yield(4);
+
+    // The prompt the user is left looking at.
+    IM_CHECK_EQ(s_cmd->blockCreatePhase, AppCommandState::BlockCreatePhase::WaitBasePoint);
+    IM_CHECK(!s_cmd->blockCreateDialogOpen);
+    IM_CHECK(CadLogHas("pick base point"));
+
+    float ox = 0.f, oy = 0.f, sw = 0.f, sh = 0.f;
+    IM_CHECK(DevShell_ViewportRect(&ox, &oy, &sw, &sh));
+    // Aimed at a real feature of the box — its top-back edge, at world (0, 5, 8) — rather than at
+    // bare space, because the assertion below is about SNAPPING, which needs something to snap to.
+    // The same point and camera `req331-chamfer-viewport` uses, for the same reason: it is known to
+    // project inside the viewport and clear of the Developer Shell's own window, which floats over
+    // the middle of the viewport and would make the click measure the harness (the viewport reads
+    // as un-hovered under any overlapping window — see the `AllowWhenOverlappedByWindow` note in
+    // CadUi.cpp).
+    const Camera cam = CadViewCamera(*s_cmd);
+    float px = 0.f;
+    float py = 0.f;
+    cam.WorldToScreen(0.0, 5.0, 8.0, sw, sh, &px, &py);
+    const ImVec2 inViewport(ox + px, oy + py);
+    ctx->MouseMoveToPos(ImVec2(inViewport.x + 30.f, inViewport.y + 30.f));
+    ctx->Yield(2);
+    ctx->MouseMoveToPos(inViewport);
+    ctx->Yield(4);
+
+    // Object snap must be LIVE during this pick. `cmd.active` stays `Kind::None` the whole time —
+    // the phase is all there is — so the snap's mid-command gate had no idea the user was placing a
+    // point, and the one pick whose purpose is to land on a corner of the geometry being blocked
+    // snapped to nothing. `viewportSnapPickValid` is what the commit itself reads, so asserting it
+    // here is asserting the base point can actually be aimed.
+    IM_CHECK(s_cmd->objectSnapEnabled);
+    IM_CHECK(s_cmd->viewportSnapPickValid);
+
+    ctx->MouseClick(ImGuiMouseButton_Left);
+    ctx->Yield(6);
+
+    // The click must leave the base-point phase: either the block is created outright (name and
+    // selection are both valid here, so this is the path taken) or the dialog reopens.
+    DevShell_Logf("test", "after click: phase=%d dialogOpen=%d defs=%d",
+                  static_cast<int>(s_cmd->blockCreatePhase), s_cmd->blockCreateDialogOpen ? 1 : 0,
+                  static_cast<int>(s_cmd->blockDefs.size()));
+    IM_CHECK(s_cmd->blockCreatePhase != AppCommandState::BlockCreatePhase::WaitBasePoint);
+    IM_CHECK_EQ(static_cast<int>(s_cmd->blockDefs.size()), defsBefore + 1);
+    // ASCII needle on purpose: the log line joins a `—` em dash, and how a literal one in this
+    // file encodes is an MSVC source-charset question, not something this assertion is about.
+    IM_CHECK(CadLogHas("created \"PICKBASE\""));
+    IM_CHECK_EQ(s_cmd->blockDefs.back().content.solids.size(), static_cast<std::size_t>(1));
+    // "Convert to block" is the dialog's default (blockCreateConvertMode == 1): the source geometry
+    // is replaced by the reference. Until 2026-09-24 `EraseSelectedSources` had no Solid branch, so
+    // the original solid survived alongside a block reference holding a copy of it.
+    DevShell_Logf("test", "after create: cadSolids=%d blockRefs=%d",
+                  static_cast<int>(s_cmd->cadSolids.size()),
+                  static_cast<int>(s_cmd->cadBlockRefs.size()));
+    IM_CHECK_EQ(s_cmd->cadSolids.size(), static_cast<std::size_t>(0));
+
+    IM_CHECK(CancelToIdle(ctx));
+  };
+
   ImGuiTest* blocks = IM_REGISTER_TEST(engine, "gosurvey", "issue124-blocks");
   blocks->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));

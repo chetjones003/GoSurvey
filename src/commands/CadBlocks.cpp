@@ -517,6 +517,11 @@ void EraseSelectedSources(AppCommandState& st) {
   std::vector<int> arcs;
   std::vector<int> meshes;
   std::vector<int> refs;
+  // Solids were missing here while `CaptureSelectionInto` has copied them into the definition since
+  // REQ-320 — so BLOCK's "Convert to block" and "Delete" left the original solid in the drawing
+  // alongside a block reference holding a copy of it, silently duplicating the geometry (found by
+  // the `block-create-basepoint-pick` GUI test, 2026-09-23).
+  std::vector<int> solids;
   for (const SelectedEntity& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg)
       lines.push_back(e.index);
@@ -530,6 +535,8 @@ void EraseSelectedSources(AppCommandState& st) {
       meshes.push_back(e.index);
     else if (e.type == SelectedEntity::Type::BlockRef)
       refs.push_back(e.index);
+    else if (e.type == SelectedEntity::Type::Solid)
+      solids.push_back(e.index);
   }
   auto dropLines = [&](std::vector<int>& idx) {
     std::sort(idx.begin(), idx.end());
@@ -593,6 +600,14 @@ void EraseSelectedSources(AppCommandState& st) {
       st.cadBlockRefs.erase(st.cadBlockRefs.begin() + k);
     if (k >= 0 && static_cast<size_t>(k) < st.cadBlockRefAttrs.size())
       st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + k);
+  }
+  std::sort(solids.begin(), solids.end());
+  for (int i = static_cast<int>(solids.size()) - 1; i >= 0; --i) {
+    const int k = solids[static_cast<size_t>(i)];
+    if (k >= 0 && static_cast<size_t>(k) < st.cadSolids.size())
+      st.cadSolids.erase(st.cadSolids.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.cadSolidAttrs.size())
+      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + k);
   }
   st.selection.clear();
 }
@@ -1110,6 +1125,68 @@ void CancelBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log)
   (void)log;
   st.blockCreateDialogOpen = false;
   st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
+}
+
+bool CadBlocksWriteBlockToFile(AppCommandState& st, std::string_view name, const char* pathUtf8,
+                               std::vector<std::string>& log) {
+  // issue #284: WBLOCK writes a single block definition out to its own .dwg, using the same ADR-044
+  // JSON trailer mechanism as whole-drawing save. The trailer's blockDefs array holds just this one
+  // definition; BLOCKIMPORT reading it back finds scratch.blockDefs already populated (see
+  // ImportCadBlocksFromPathImpl) and merges it directly — no drawing-capture needed.
+  //
+  // Lifted out of the `wblock` verb so the save dialog writes through exactly this path: two entry
+  // points that each formatted their own messages is how a dialog and a typed command drift apart.
+  if (!pathUtf8 || pathUtf8[0] == '\0') {
+    log.push_back("WBLOCK — no destination file given.");
+    return false;
+  }
+  const int di = CadBlockFindDef(st.blockDefs, name);
+  if (di < 0) {
+    log.push_back("WBLOCK — no block named \"" + std::string(name) + "\".");
+    return false;
+  }
+  AppCommandState tmp;
+  tmp.blockDefs.push_back(st.blockDefs[static_cast<size_t>(di)]);
+  if (!ExportDwgFile(tmp, pathUtf8, log)) {
+    log.push_back("WBLOCK — could not write " + std::string(pathUtf8) + ".");
+    return false;
+  }
+  log.push_back("WBLOCK — wrote \"" + std::string(name) + "\" to " + pathUtf8 + ".");
+  return true;
+}
+
+void StartWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.blockDefs.empty()) {
+    // Refused with a reason rather than opening an empty picker (REQ-201's shape): there is nothing
+    // to write, and a dialog listing nothing cannot say why.
+    log.push_back("WBLOCK — this drawing has no block definitions to write.");
+    return;
+  }
+  st.wblockDialogOpen = true;
+  // Default to the most recently used definition when there is one, else the first — the same
+  // "start where the user last was" rule CadBlocksApplyInsertNameDefaults uses for INSERT.
+  std::string pick = st.blockDefs.front().name;
+  if (!st.blockRecent.empty() && CadBlockFindDef(st.blockDefs, st.blockRecent.front()) >= 0)
+    pick = st.blockRecent.front();
+  std::snprintf(st.wblockName, sizeof(st.wblockName), "%s", pick.c_str());
+  st.wblockPath[0] = '\0';
+  log.push_back("WBLOCK — choose a block and a destination file.");
+}
+
+void CommitWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.wblockDialogOpen)
+    return;
+  if (CadBlocksWriteBlockToFile(st, st.wblockName, st.wblockPath, log)) {
+    st.wblockDialogOpen = false;
+    return;
+  }
+  // Left OPEN on failure, so the message names what to change and the user's chosen path and block
+  // are still there to correct — closing it would make them start over to fix a typo.
+}
+
+void CancelWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
+  (void)log;
+  st.wblockDialogOpen = false;
 }
 
 void CadBlocksApplyInsertNameDefaults(AppCommandState& st) {
@@ -3445,23 +3522,15 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     // ADR-044 JSON trailer mechanism as whole-drawing save. The trailer's blockDefs array holds
     // just this one definition; BLOCKIMPORT reading it back finds scratch.blockDefs already
     // populated (see ImportCadBlocksFromPathImpl) and merges it directly — no drawing-capture needed.
+    // Both arguments given: write straight out, the way scripts and the two `[issue284][wblock]`
+    // tests drive it. Bare `WBLOCK` used to answer with a usage line; at the user's request
+    // (2026-09-23) it now opens the save dialog, which is what AutoCAD's own WBLOCK does.
     const std::vector<std::string> f = SplitCommaRest(args);
     if (f.size() < 2) {
-      log.push_back("WBLOCK — usage: WBLOCK <name>, <path.dwg>.");
+      StartWblockDialog(st, log);
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, f[0]);
-    if (di < 0) {
-      log.push_back("WBLOCK — no block named \"" + f[0] + "\".");
-      return true;
-    }
-    AppCommandState tmp;
-    tmp.blockDefs.push_back(st.blockDefs[static_cast<size_t>(di)]);
-    if (!ExportDwgFile(tmp, f[1].c_str(), log)) {
-      log.push_back("WBLOCK — could not write " + f[1] + ".");
-      return true;
-    }
-    log.push_back("WBLOCK — wrote \"" + f[0] + "\" to " + f[1] + ".");
+    CadBlocksWriteBlockToFile(st, f[0], f[1].c_str(), log);
     return true;
   }
 
