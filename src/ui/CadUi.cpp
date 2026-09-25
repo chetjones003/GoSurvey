@@ -71,13 +71,40 @@
 
 #include "HatchPat.hpp"
 
+/// The ImGui frame on which some UI widget last handed a line to `ProcessCommandLineSubmit`, or -1.
+/// Read through `CadUiCommandLineSubmittedThisFrame` by the raw Enter poll in main.cpp.
+static int s_cmdSubmitFrame = -1;
+
+/// Every UI-side submission goes through here, so the frame stamp cannot be forgotten at a new
+/// call site (D-2026-09-24-f).
+///
+/// The raw Enter poll in main.cpp exists for the prompts whose command line is hidden, and is gated
+/// on "no widget is capturing". An InputText flagged `EnterReturnsTrue` CLEARS its own active ID as
+/// the last thing it does, and `ReleaseSubmittedCommandInput` clears it again — both BEFORE that
+/// poll runs later in the same frame. So the gate read false on exactly the frame a field HAD just
+/// taken the Enter, and one keypress produced two submissions: the typed line, then a bare Enter,
+/// because `ProcessCommandLineSubmit` empties the buffer on its way out.
+///
+/// That second, phantom Enter is what made `ORBIT` exit the instant it started and PIPERUN walk
+/// two prompts per keypress until it reported itself cancelled. Marking the frame is the fix
+/// rather than restoring the old `WantTextInput` gate: that flag is a frame behind and reads false
+/// while type-to-focus has already routed characters into the buffer, which is the separate
+/// double-submit D-2026-09-24-c fixed by moving off it.
+static void UiSubmitCommandLine(char* buf, int bufSize, AppCommandState& cmd,
+                                std::vector<std::string>& log) {
+  s_cmdSubmitFrame = ImGui::GetFrameCount();
+  ProcessCommandLineSubmit(buf, bufSize, cmd, log);
+}
+
+bool CadUiCommandLineSubmittedThisFrame() { return s_cmdSubmitFrame == ImGui::GetFrameCount(); }
+
 static void SubmitRibbonCommand(AppCommandState& cmd, std::vector<std::string>& log, const std::string& line) {
   assert(!line.empty());
   assert(line.size() < 4096);
   DevShell_OnCommand(line.c_str());
   std::vector<char> buf(line.begin(), line.end());
   buf.push_back('\0');
-  ProcessCommandLineSubmit(buf.data(), static_cast<int>(buf.size()), cmd, log);
+  UiSubmitCommandLine(buf.data(), static_cast<int>(buf.size()), cmd, log);
 }
 
 static void UiSubmitViewportPick(AppCommandState& cmd, double x, double y, std::vector<std::string>& log,
@@ -248,6 +275,24 @@ const char* g_liveInputRefreshText = nullptr;
 /// the user's freshly-edited buffer differ from the live text and unconditionally replaced it,
 /// which is what made typing into these fields appear to do nothing at all.
 std::string* g_liveInputLastPushed = nullptr;
+
+/// Let go of a command-input field immediately after its text has been submitted
+/// (D-2026-09-24-c).
+///
+/// `ProcessCommandLineSubmit` clears `cmdBuf` when it finishes, but an InputText that is still
+/// ACTIVE keeps its OWN copy of the text and writes that copy back into the buffer every frame — so
+/// clearing the buffer behind its back achieved nothing, and the next bare Enter re-submitted the
+/// command just executed. At a prompt offering a default ("wall thickness <0.154>, Enter to accept")
+/// that re-submitted text is rejected, which is exactly what "pressing Enter does nothing" was.
+///
+/// Deactivating is the fix rather than emptying the widget through its callback: the callback fires
+/// on whatever frame ImGui next runs it, which can land in the middle of the user typing the NEXT
+/// answer and eat those keystrokes (measured — it broke the following command outright). An
+/// inactive InputText rebuilds its state from the buffer when it is next activated, and the
+/// type-to-focus path already re-activates it on the first keystroke.
+inline void ReleaseSubmittedCommandInput() {
+  ImGui::ClearActiveID();
+}
 
 int CommandLineInputCallback(ImGuiInputTextCallbackData* data) {
   if (data->EventFlag == ImGuiInputTextFlags_CallbackCompletion) {
@@ -3573,7 +3618,7 @@ static void ProcessCommandLineSubmitStr(AppCommandState& cmd, const char* text,
                                         std::vector<std::string>& log) {
   char buf[256];
   std::snprintf(buf, sizeof(buf), "%s", text);
-  ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+  UiSubmitCommandLine(buf, static_cast<int>(sizeof(buf)), cmd, log);
 }
 
 /// What to call the active coordinate frame (REQ-154): "WCS", a saved name when the frame IS one of
@@ -5396,7 +5441,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     auto beditSubmit = [&](const char* line) {
       char buf[192];
       std::snprintf(buf, sizeof(buf), "%s", line);
-      ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+      UiSubmitCommandLine(buf, static_cast<int>(sizeof(buf)), cmd, log);
     };
     {
       ribbonlayout::RibbonSectionSpec spec;
@@ -5534,7 +5579,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
               if (b.id == id) {
                 char line[96];
                 std::snprintf(line, sizeof(line), "BPARAM %s1, %s", b.label.c_str(), b.tooltip.c_str());
-                ProcessCommandLineSubmit(line, static_cast<int>(sizeof(line)), cmd, log);
+                UiSubmitCommandLine(line, static_cast<int>(sizeof(line)), cmd, log);
                 return;
               }
         });
@@ -5556,7 +5601,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
             if (ImGui::Selectable(s.c_str(), s == vis)) {
               char line[192];
               std::snprintf(line, sizeof(line), "BSETVIS %s", s.c_str());
-              ProcessCommandLineSubmit(line, static_cast<int>(sizeof(line)), cmd, log);
+              UiSubmitCommandLine(line, static_cast<int>(sizeof(line)), cmd, log);
             }
           }
         }
@@ -10593,7 +10638,7 @@ static float LayoutCommandHint(const char* hint, AppCommandState& cmd, std::vect
     for (char& c : tok) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     char tmp[32];
     std::snprintf(tmp, sizeof(tmp), "%s", tok.c_str());
-    ProcessCommandLineSubmit(tmp, static_cast<int>(sizeof(tmp)), cmd, log);
+    UiSubmitCommandLine(tmp, static_cast<int>(sizeof(tmp)), cmd, log);
   };
 
   int lines = 1;
@@ -11201,7 +11246,8 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       s_cmdSugVisible = false;
       s_cmdHighlight.clear();
       DevShell_OnCommand(cmdBuf);
-      ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+      UiSubmitCommandLine(cmdBuf, cmdBufSize, cmd, log);
+      ReleaseSubmittedCommandInput();
     }
   } else {
     ImGui::AlignTextToFramePadding();
@@ -11268,7 +11314,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
         ImGui::PushID(static_cast<int>(k));
         if (ImGui::Selectable(h.c_str())) {
           std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s", h.c_str());
-          ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+          UiSubmitCommandLine(cmdBuf, cmdBufSize, cmd, log);
         }
         ImGui::PopID();
       }
@@ -11359,7 +11405,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
           for (char& ch : pick) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
           std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s", pick.c_str());
           s_cmdDismissed = true; s_cmdLastQuery.clear(); s_cmdSugCache.clear();
-          ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+          UiSubmitCommandLine(cmdBuf, cmdBufSize, cmd, log);
         }
         if (ImGui::IsItemHovered()) s_cmdSel = i;
 
@@ -12913,6 +12959,26 @@ static void ClickToggleSolid(AppCommandState& cmd, const SelectedEntity& hit, bo
   EnsureAttrCounts(cmd);
 }
 
+/// Enter pressed in a dynamic-input field with NOTHING typed into it (D-2026-09-24-b).
+///
+/// That Enter belongs to the COMMAND, not to the field: it means "finish", "accept the default",
+/// "keep the last value" — exactly what the prompts already advertise ("Enter to finish", "Enter to
+/// accept"). It does NOT place a point at the cursor; a point is placed by clicking, or by typing a
+/// value and then pressing Enter.
+///
+/// Submitting a blank line is how that reaches the command layer, which already has a per-command
+/// blank-Enter branch — the same line `ProcessCommandLineSubmit` receives when the command bar itself
+/// is empty, so no command needs to learn anything new.
+///
+/// Before this, every dynamic-input Enter was turned into a point built from the LIVE cursor
+/// distance and angle, so a command that promised "Enter to finish" silently added another vertex
+/// instead. The fields' own `…Locked` flags are the test: they are set by `ImGui::IsItemEdited` and
+/// by the type-to-start path, so "neither locked" is precisely "the user typed nothing".
+static void SubmitDynamicInputBlankEnter(AppCommandState& cmd, std::vector<std::string>& log) {
+  char blank[2] = {0, 0};
+  UiSubmitCommandLine(blank, static_cast<int>(sizeof(blank)), cmd, log);
+}
+
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
                          char* cmdBuf, int cmdBufSize, double* panX, double* panY, float* zoom, double* outCursorX,
                          double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
@@ -14156,7 +14222,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       auto openShortcutMenu = [&]() { ImGui::OpenPopup("##drawing1_vp_ctx"); };
       auto rightClickAsEnter = [&]() {
         if (cmd.active != AK::None)
-          ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+          UiSubmitCommandLine(cmdBuf, cmdBufSize, cmd, log);
         else if (cmd.lastCommand != AK::None)
           RepeatLastCommand(cmd, log);
       };
@@ -14164,7 +14230,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (cmd.active != AK::None) {
           switch (cmd.rightClickCommandMode) {
           case CM::Enter:
-            ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+            UiSubmitCommandLine(cmdBuf, cmdBufSize, cmd, log);
             break;
           case CM::ShortcutMenuAlways:
           case CM::ShortcutMenuWhenOptions:
@@ -18900,7 +18966,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (ImGui::IsItemEdited()) angLocked = true;
       PopDynFieldGroupStyle();
 
-      if (distEnter || angEnter) {
+      if ((distEnter || angEnter) && !distLocked && !angLocked) {
+        SubmitDynamicInputBlankEnter(cmd, log);
+      } else if (distEnter || angEnter) {
         // An angle ALONE is a complete answer at these prompts, and the commonest one: the X-axis
         // and XY-plane picks define a DIRECTION, so the distance does not affect the resulting frame
         // at all. Tabbing to the angle, clearing it and typing 27 should work without also having to
@@ -18930,7 +18998,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const std::string pointText = ResolveDynDistanceAngleToPointText(cmd, polarBase, useDist, useMathAngleDeg);
         char polarBuf[160];
         std::snprintf(polarBuf, sizeof(polarBuf), "%s", pointText.c_str());
-        ProcessCommandLineSubmit(polarBuf, static_cast<int>(sizeof(polarBuf)), cmd, log);
+        UiSubmitCommandLine(polarBuf, static_cast<int>(sizeof(polarBuf)), cmd, log);
       }
     } else if (anchoredPrompt) {
       // Distance + angle from the established anchor (REQ-024's 2026-09-15 amendment): LINE's and
@@ -19004,7 +19072,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (ImGui::IsItemEdited()) ang2Locked = true;
       PopDynFieldGroupStyle();
 
-      if (distEnter2 || angEnter2) {
+      if ((distEnter2 || angEnter2) && !dist2Locked && !ang2Locked) {
+        SubmitDynamicInputBlankEnter(cmd, log);
+      } else if (distEnter2 || angEnter2) {
         double useDist = 0.0;
         {
           std::istringstream di{std::string(distBuf2)};
@@ -19024,7 +19094,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const std::string pointText = ResolveDynDistanceAngleToPointText(cmd, anchorBase, useDist, useMathAngleDeg);
         char anchBuf[160];
         std::snprintf(anchBuf, sizeof(anchBuf), "%s", pointText.c_str());
-        ProcessCommandLineSubmit(anchBuf, static_cast<int>(sizeof(anchBuf)), cmd, log);
+        UiSubmitCommandLine(anchBuf, static_cast<int>(sizeof(anchBuf)), cmd, log);
       }
     } else if (pointEntry) {
       // Two-field x,y group (REQ-024, 2026-09-15 amendment): AutoCAD splits an ordinary point
@@ -19110,7 +19180,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (ImGui::IsItemEdited()) yLocked = true;
       PopDynFieldGroupStyle();
 
-      if (xEnter || yEnter) {
+      if ((xEnter || yEnter) && !xLocked && !yLocked) {
+        SubmitDynamicInputBlankEnter(cmd, log);
+      } else if (xEnter || yEnter) {
         const std::string xText = StringUtil::trimCopy(std::string(xBuf));
         const bool xIsCompound = xText.find(',') != std::string::npos || xText.find('@') != std::string::npos ||
                                   xText.find('<') != std::string::npos;
@@ -19119,7 +19191,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           std::snprintf(submitBuf, sizeof(submitBuf), "%s", xText.c_str());
         else
           std::snprintf(submitBuf, sizeof(submitBuf), "%s,%s", xBuf, yBuf);
-        ProcessCommandLineSubmit(submitBuf, static_cast<int>(sizeof(submitBuf)), cmd, log);
+        UiSubmitCommandLine(submitBuf, static_cast<int>(sizeof(submitBuf)), cmd, log);
       }
     } else {
       // Single field for non-point prompts (bearing/angle/distance/option/command).
@@ -19132,8 +19204,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const bool exec =
           ImGui::InputTextWithHint("##vp_cmd_buf", fieldHint, cmdBuf, static_cast<size_t>(cmdBufSize),
                                    itf, CommandLineInputCallback, nullptr);
-      if (exec)
-        ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+      if (exec) {
+        UiSubmitCommandLine(cmdBuf, cmdBufSize, cmd, log);
+        ReleaseSubmittedCommandInput();
+      }
     }
     ImGui::End();
     ImGui::PopStyleVar(1);
@@ -19240,7 +19314,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       s_gripLocked = true;
 
     if (gripEnter) {
-      ProcessCommandLineSubmit(s_gripBuf, static_cast<int>(sizeof(s_gripBuf)), cmd, log);
+      UiSubmitCommandLine(s_gripBuf, static_cast<int>(sizeof(s_gripBuf)), cmd, log);
       s_gripBuf[0] = '\0';
       s_gripPushed[0] = '\0';
       s_gripLocked = false;
@@ -19875,7 +19949,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Command Mode shortcut menu
       if (ImGui::MenuItem("Enter")) {
         char empty[2] = {};
-        ProcessCommandLineSubmit(empty, static_cast<int>(sizeof(empty)), cmd, log);
+        UiSubmitCommandLine(empty, static_cast<int>(sizeof(empty)), cmd, log);
         ImGui::CloseCurrentPopup();
       }
       if (ImGui::MenuItem("Cancel")) {
@@ -19910,7 +19984,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (!chosen.empty()) {
           char buf[256];
           std::snprintf(buf, sizeof(buf), "%s", chosen.c_str());
-          ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+          UiSubmitCommandLine(buf, static_cast<int>(sizeof(buf)), cmd, log);
           ImGui::CloseCurrentPopup();
         }
       }

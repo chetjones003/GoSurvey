@@ -259,6 +259,139 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
   };
 
+
+  // D-2026-09-24-b — Enter alone at a prompt that advertises a default must take that default.
+  //
+  // Driven through the REAL ImGui tree because that is where the defect lives: the command layer's
+  // blank-Enter branch is already unit-tested and correct, and the failure is entirely in which
+  // widget swallows the keypress (there are TWO InputTexts bound to `cmdBuf` — the floating command
+  // bar and the viewport dynamic input — plus a raw poll in main.cpp gated on `io.WantTextInput`).
+  // A unit test cannot see any of that.
+  //
+  //   build\devshell\GoSurvey.exe --devshell-run req024-blank-enter-default
+  ImGuiTest* blankEnter = IM_REGISTER_TEST(engine, "gosurvey", "req024-blank-enter-default");
+  blankEnter->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+
+    // Setup is submitted directly — what is under test is the KEYPRESS, not the typing.
+    SubmitCad(ctx, "PIPERUN");
+    ctx->Yield(2);
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::PipeRun);
+    SubmitCad(ctx, "2in");
+    ctx->Yield(2);
+    IM_CHECK_EQ(s_cmd->pipeRunPhase, AppCommandState::PipeRunPhase::WaitWallThickness);
+
+    // THE REPORTED BUG. The prompt reads "wall thickness in inches <0.154, schedule 40>, Enter to
+    // accept:", so a bare Enter must take 0.154 and move on to the start point. It did nothing:
+    // the global blank-line block in ProcessCommandLineSubmit consumes every empty Enter before the
+    // per-command dispatch and had no PIPERUN case, so the command's own (correct, unit-tested)
+    // blank-Enter handling was unreachable from the GUI.
+    ctx->KeyPress(ImGuiKey_Enter);
+    ctx->Yield(3);
+    IM_CHECK_EQ(s_cmd->pipeRunPhase, AppCommandState::PipeRunPhase::WaitFirstPoint);
+    IM_CHECK(s_cmd->pipeRunWallThicknessIn > 0.0);
+
+    // And again at the routing prompt, where Enter is advertised as "finish": with a run of one
+    // segment down, a bare Enter must COMMIT it rather than leave the command hanging.
+    SubmitCad(ctx, "0,0");
+    SubmitCad(ctx, "10,0");
+    ctx->Yield(2);
+    // The route is already REAL geometry while it is drawn (D-2026-09-24-d), so the run exists
+    // before Enter; what Enter must do is FINISH it — retiring the provisional entity and committing
+    // the finished route in its place, leaving one run and no active command.
+    IM_CHECK_EQ(s_cmd->cadPipeRuns.size(), static_cast<std::size_t>(1));
+    IM_CHECK(s_cmd->pipeRunLiveIndex >= 0);
+    ctx->KeyPress(ImGuiKey_Enter);
+    ctx->Yield(3);
+    IM_CHECK_EQ(s_cmd->cadPipeRuns.size(), static_cast<std::size_t>(1));
+    IM_CHECK_EQ(s_cmd->pipeRunLiveIndex, -1);
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::None);
+
+    IM_CHECK(CancelToIdle(ctx));
+  };
+
+  // D-2026-09-24-f — ONE Enter keypress must produce exactly ONE submission.
+  //
+  // Reported as "Enter has random behavior": typing ORBIT and pressing Enter started the command
+  // and immediately exited it, and PIPERUN walked two prompts per keypress until it announced
+  // itself cancelled. Both are the same defect. An InputText flagged `EnterReturnsTrue` clears its
+  // own active ID as the last thing it does, so main.cpp's raw Enter poll — gated on "no widget is
+  // capturing" — ran later in the SAME frame, found nothing active, and submitted again; by then
+  // `ProcessCommandLineSubmit` had emptied the buffer, so the second submission arrived as a bare
+  // Enter and every command whose first prompt gives a blank Enter a meaning acted on it.
+  //
+  // Only reproducible through the real widget tree: the keypress has to reach an ImGui InputText
+  // for the frame in question to exist at all, which is why `SubmitCad` (a direct call) cannot see
+  // it and why the unit tests shipped green throughout.
+  //
+  //   build\devshell\GoSurvey.exe --devshell-run d-2026-09-24-f-one-enter-one-submit
+  ImGuiTest* oneEnter = IM_REGISTER_TEST(engine, "gosurvey", "d-2026-09-24-f-one-enter-one-submit");
+  oneEnter->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+
+    // ORBIT is the clearest case: a bare Enter is its documented EXIT, so a phantom second submit
+    // ends the command on the very keypress that started it.
+    IM_CHECK(RefCommandBar(ctx));
+    ctx->ItemClick("GoSurveyCmdPanel/##CommandLineInput");
+    ctx->KeyCharsReplaceEnter("ORBIT");
+    ctx->Yield(3);
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::Orbit);
+    IM_CHECK(CancelToIdle(ctx));
+
+    // PIPERUN shows the same defect as a SKIPPED prompt: answering the size must leave the command
+    // at the wall-thickness prompt, not carry on through it on the same keypress.
+    IM_CHECK(RefCommandBar(ctx));
+    ctx->ItemClick("GoSurveyCmdPanel/##CommandLineInput");
+    ctx->KeyCharsReplaceEnter("PIPERUN");
+    ctx->Yield(3);
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::PipeRun);
+    IM_CHECK_EQ(s_cmd->pipeRunPhase, AppCommandState::PipeRunPhase::WaitNominalSize);
+
+    IM_CHECK(RefCommandBar(ctx));
+    ctx->ItemClick("GoSurveyCmdPanel/##CommandLineInput");
+    ctx->KeyCharsReplaceEnter("4in");
+    ctx->Yield(3);
+    IM_CHECK_EQ(s_cmd->pipeRunPhase, AppCommandState::PipeRunPhase::WaitWallThickness);
+
+    IM_CHECK(CancelToIdle(ctx));
+  };
+  // PIPEPERF exercised end to end: route a real run through the app, then read the profile it
+  // reports. Not an assertion about milliseconds — those belong on the reference machine with BENCH
+  // — but a check that the counters are wired to the work, and a way to SEE where routing time goes.
+  //
+  //   build\devshell\GoSurvey.exe --devshell-run pipeperf-routing-profile
+  ImGuiTest* pipePerf = IM_REGISTER_TEST(engine, "gosurvey", "pipeperf-routing-profile");
+  pipePerf->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    SubmitCad(ctx, "PIPERUN");
+    SubmitCad(ctx, "4in");
+    SubmitCad(ctx, "");
+    for (int i = 0; i < 4; ++i) {
+      char pt[64];
+      std::snprintf(pt, sizeof(pt), "%d,%d", 20 * ((i + 1) / 2), 20 * (i / 2));
+      SubmitCad(ctx, pt);
+      ctx->Yield(2);  // let the display rebuild and tessellate, as it would between clicks
+    }
+    SubmitCad(ctx, "END");
+    ctx->Yield(4);
+    IM_CHECK_EQ(s_cmd->cadPipeRuns.size(), static_cast<std::size_t>(1));
+    IM_CHECK(s_cmd->pipeRunPerf.sweep.calls > 0);
+    IM_CHECK(s_cmd->pipeRunPerf.tessellate.calls > 0);
+
+    SubmitCad(ctx, "PIPEPERF");
+    ctx->Yield(2);
+    std::vector<std::string>* dlog = DevShell_CommandLog();
+    if (dlog) {
+      const std::size_t n = dlog->size();
+      for (std::size_t i = (n > 12 ? n - 12 : 0); i < n; ++i)
+        ctx->LogWarning("%s", (*dlog)[i].c_str());
+    }
+    IM_CHECK(CancelToIdle(ctx));
+  };
+
   ImGuiTest* viewTab = IM_REGISTER_TEST(engine, "gosurvey", "ribbon-view-extents");
   viewTab->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));

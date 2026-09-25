@@ -1,6 +1,7 @@
 #include "CadUi.hpp"
 #include "CadBlocks.hpp"
 #include "AppIcon.hpp"
+#include "CadUiPaletteTabs.hpp"
 
 #include "imgui.h"
 
@@ -43,61 +44,10 @@ static bool BeditPaletteRow(const char* label, const char* iconFile) {
   return clicked;
 }
 
-// Draws text rotated 90 degrees CCW (reads bottom-to-top), centred in a column of width `colW`
-// and height `colH` whose top-left is `mn`. Each glyph quad from the font atlas is rotated in place.
-static void BeditVerticalText(const ImVec2& mn, float colW, float colH, const char* s) {
-  ImDrawList* dl = ImGui::GetWindowDrawList();
-  ImFontBaked* baked = ImGui::GetFontBaked();
-  const ImU32 col = ImGui::GetColorU32(ImGuiCol_Text);
-  // Measure the glyph band (perpendicular to the reading direction) so we can centre it in the column.
-  float bandLo = 0.f, bandHi = 0.f, textLen = 0.f;
-  for (const char* c = s; *c; ++c) {
-    const ImFontGlyph* g = baked->FindGlyph(static_cast<ImWchar>(*c));
-    if (!g)
-      continue;
-    bandLo = std::min(bandLo, g->Y0);
-    bandHi = std::max(bandHi, g->Y1);
-    textLen += g->AdvanceX;
-  }
-  ImVec2 p(mn.x + colW * 0.5f - (bandLo + bandHi) * 0.5f - 3.f, mn.y + (colH + textLen) * 0.5f);
-  dl->PushTexture(ImGui::GetIO().Fonts->TexRef);
-  for (const char* c = s; *c; ++c) {
-    const ImFontGlyph* g = baked->FindGlyph(static_cast<ImWchar>(*c));
-    if (!g)
-      continue;
-    if (g->Visible) {
-      dl->PrimReserve(6, 4);
-      const ImVec2 a(p.x + g->Y0, p.y - g->X0);
-      const ImVec2 b(p.x + g->Y0, p.y - g->X1);
-      const ImVec2 cc(p.x + g->Y1, p.y - g->X1);
-      const ImVec2 d(p.x + g->Y1, p.y - g->X0);
-      dl->PrimQuadUV(a, b, cc, d, ImVec2(g->U0, g->V0), ImVec2(g->U1, g->V0), ImVec2(g->U1, g->V1),
-                     ImVec2(g->U0, g->V1), col);
-    }
-    p.y -= g->AdvanceX;
-  }
-  dl->PopTexture();
-}
-
 static void BeditSubmitLine(AppCommandState& cmd, std::vector<std::string>& log, const char* line) {
   char buf[256];
   std::snprintf(buf, sizeof(buf), "%s", line);
   ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
-}
-
-static void PaletteTabButton(const char* label, int idx, int* tab) {
-  const bool on = *tab == idx;
-  const ImVec2 size(30.f, ImGui::CalcTextSize(label).x + 24.f);
-  ImGui::PushID(idx);
-  if (on)
-    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(70, 78, 88, 255));
-  if (ImGui::Button("##tab", size))
-    *tab = idx;
-  if (on)
-    ImGui::PopStyleColor();
-  const ImVec2 mn = ImGui::GetItemRectMin();
-  BeditVerticalText(mn, size.x, size.y, label);
-  ImGui::PopID();
 }
 
 void DrawBlockAuthoringPalettes(AppCommandState& cmd, std::vector<std::string>& log) {
@@ -244,10 +194,10 @@ void DrawBlockAuthoringPalettes(AppCommandState& cmd, std::vector<std::string>& 
 
   ImGui::SameLine();
   ImGui::BeginChild("##baptabs", ImVec2(42.f, 0.f), false);
-  PaletteTabButton("Parameters", 0, &cmd.blockAuthoringPaletteTab);
-  PaletteTabButton("Actions", 1, &cmd.blockAuthoringPaletteTab);
-  PaletteTabButton("Parameter Sets", 2, &cmd.blockAuthoringPaletteTab);
-  PaletteTabButton("Constraints", 3, &cmd.blockAuthoringPaletteTab);
+  CadUiPaletteTabButton("Parameters", 0, &cmd.blockAuthoringPaletteTab);
+  CadUiPaletteTabButton("Actions", 1, &cmd.blockAuthoringPaletteTab);
+  CadUiPaletteTabButton("Parameter Sets", 2, &cmd.blockAuthoringPaletteTab);
+  CadUiPaletteTabButton("Constraints", 3, &cmd.blockAuthoringPaletteTab);
   ImGui::EndChild();
 
   ImGui::End();

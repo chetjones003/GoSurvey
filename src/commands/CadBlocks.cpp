@@ -852,6 +852,170 @@ bool CadBlocksImportLibraryEntry(AppCommandState& st, const CadBlockLibraryEntry
   return CadBlockFindDef(st.blockDefs, entry.name) >= 0 || static_cast<int>(st.blockDefs.size()) > nBefore;
 }
 
+std::string_view CadPipePaletteCategoryLabel(CadPipePaletteCategory c) {
+  switch (c) {
+    case CadPipePaletteCategory::Flanges: return "Flanges";
+    case CadPipePaletteCategory::Valves: return "Valves";
+    case CadPipePaletteCategory::Nozzles: return "Nozzles";
+    case CadPipePaletteCategory::Other: return "Other";
+    case CadPipePaletteCategory::Fittings:
+    default: return "Fittings";
+  }
+}
+
+std::string_view CadPipePaletteCategoryPlural(CadPipePaletteCategory c) {
+  switch (c) {
+    case CadPipePaletteCategory::Flanges: return "flanges";
+    case CadPipePaletteCategory::Valves: return "valves";
+    case CadPipePaletteCategory::Nozzles: return "nozzles";
+    case CadPipePaletteCategory::Other: return "other parts";
+    case CadPipePaletteCategory::Fittings:
+    default: return "fittings";
+  }
+}
+
+CadPipePaletteCategory CadPipePaletteCategoryOf(CadPipePartType t) {
+  switch (t) {
+    case CadPipePartType::Elbow90:
+    case CadPipePartType::Elbow45:
+    case CadPipePartType::Tee:
+    case CadPipePartType::Cross:
+    case CadPipePartType::Reducer:
+    case CadPipePartType::Coupling:
+      return CadPipePaletteCategory::Fittings;
+    case CadPipePartType::Flange:
+      return CadPipePaletteCategory::Flanges;
+    case CadPipePartType::Valve:
+      return CadPipePaletteCategory::Valves;
+    case CadPipePartType::Nozzle:
+      return CadPipePaletteCategory::Nozzles;
+    case CadPipePartType::Cap:
+    case CadPipePartType::Other:
+    case CadPipePartType::None:
+    default:
+      return CadPipePaletteCategory::Other;
+  }
+}
+
+void CadPipePaletteCollectRows(const std::vector<CadBlockLibraryEntry>& entries,
+                               std::string_view runNominalSize, CadPipePressureClass runClass,
+                               CadPipePaletteCategory category, std::vector<CadBlockLibraryEntry>* out) {
+  assert(out != nullptr);
+  out->clear();
+  double runNps = 0.0;
+  if (!CadParsePipeNominalSizeInches(runNominalSize, &runNps))
+    return;  // no usable size — offer nothing rather than the whole library
+
+  for (const CadBlockLibraryEntry& e : entries) {
+    // An ordinary (non-fitting) block is not a catalog part, and an untagged fitting has no category
+    // to file under — neither belongs in a palette that exists to answer "what fits this pipe?".
+    if (!e.isFitting || e.partType == CadPipePartType::None)
+      continue;
+    if (CadPipePaletteCategoryOf(e.partType) != category)
+      continue;
+    double nps = 0.0;
+    if (!CadParsePipeNominalSizeInches(e.nominalSize, &nps))
+      continue;
+    if (std::fabs(nps - runNps) > 1e-9)
+      continue;
+    out->push_back(e);
+  }
+
+  if (runClass == CadPipePressureClass::None)
+    return;  // the run states no class, so every size match stands
+
+  // `CadPipeCatalogFind`'s precedence, scoped per part type (see the header's note on why not per
+  // tab). O(n^2) over the handful of parts one tab shows, which is cheaper to read than a grouping
+  // pass and measurably free at this size.
+  std::vector<CadBlockLibraryEntry> kept;
+  kept.reserve(out->size());
+  for (const CadBlockLibraryEntry& e : *out) {
+    if (e.pressureClass == runClass) {
+      kept.push_back(e);
+      continue;
+    }
+    if (e.pressureClass != CadPipePressureClass::None)
+      continue;  // tagged for a DIFFERENT class — never a match, same as the catalog lookup
+    bool exactExists = false;
+    for (const CadBlockLibraryEntry& o : *out) {
+      if (o.partType == e.partType && o.pressureClass == runClass) {
+        exactExists = true;
+        break;
+      }
+    }
+    if (!exactExists)
+      kept.push_back(e);
+  }
+  *out = std::move(kept);
+}
+
+std::string CadPipePaletteEmptyReason(CadPipePaletteCategory category, std::string_view runNominalSize) {
+  const std::string size = StringUtil::trimCopy(std::string(runNominalSize));
+  if (size.empty())
+    return "No pipe size yet — start PIPERUN and choose a size to see the parts that fit it.";
+  return "No " + size + " " + std::string(CadPipePaletteCategoryPlural(category)) +
+         " in the fittings library. Tag a part with BLOCKFITTING and LIBEXPORT it, or drop a .json "
+         "sidecar beside the file (see resources/blocks/fittings/README.md).";
+}
+
+void CadPipePaletteSetOpen(AppCommandState& st, bool open, std::vector<std::string>& log) {
+  if (st.pipeFittingPaletteOpen == open)
+    return;
+  st.pipeFittingPaletteOpen = open;
+  log.push_back(open ? "Pipe Fittings palette opened (PIPEPALETTE closes it)."
+                     : "Pipe Fittings palette closed (PIPEPALETTE reopens it).");
+}
+
+bool CadPipePaletteArmPart(AppCommandState& st, const CadBlockLibraryEntry& entry,
+                           std::vector<std::string>& log) {
+  if (entry.name.empty()) {
+    log.push_back("Pipe Fittings — that row has no block name.");
+    return false;
+  }
+  // A library row may not be in this drawing's block table yet. Import it now, exactly as picking it
+  // in the INSERT dialog does — and refuse by name if that fails, rather than arming a command that
+  // would have nothing to place (REQ-201).
+  if (CadBlockFindDef(st.blockDefs, entry.name) < 0 && !CadBlocksImportLibraryEntry(st, entry, log)) {
+    log.push_back("Pipe Fittings — could not import \"" + entry.name + "\" from the library.");
+    return false;
+  }
+
+  // Picking a part takes the command away from whatever holds it. If that is an open PIPERUN,
+  // FINISH the route first (D-2026-09-24-d) — before the route was a real entity this threw away the
+  // pipe the user had just drawn, which is precisely the reported "the pipe run disappears".
+  (void)CadPipeRunFinishForHandoff(st, log);
+
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", entry.name.c_str());
+  // One click places it: no scale, rotation or face-align prompt, so `InsertAdvanceAfterPoint` goes
+  // straight to placing. A fitting's size comes from the catalog, not from a dragged scale, and its
+  // orientation comes from the port it snaps to.
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyAlignFace = false;
+  st.insertBlockExplode = false;
+  // Every port on the part is a candidate for the connector snap the click may take
+  // (`SubmitInsertBlockPick`), so whichever one's own configured mode matches what is under the
+  // cursor wins. A name left behind in the INSERT dialog would pin the search to that one port
+  // instead — and on a part it does not even belong to, refuse the snap outright.
+  st.insertBlockConnectorName[0] = '\0';
+  st.insertBlockSpecifyConnectorSnap = false;  // the palette drives the snap itself, per click
+  st.insertBlockRotXDeg = 0.f;
+  st.insertBlockRotYDeg = 0.f;
+  st.insertBlockSx = 1.f;
+  st.insertBlockSy = 1.f;
+  st.insertBlockSz = 1.f;
+  st.insertBlockUniformScale = true;
+  st.insertBlockRotDeg = 0.f;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPipeSpliceArmed = true;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  st.active = AppCommandState::Kind::InsertBlock;
+  log.push_back("Pipe Fittings — \"" + entry.name +
+                "\": click on a pipe run to splice it in, on a connection port or pipe end to snap "
+                "onto it, or anywhere else to place it (ESC cancels).");
+  return true;
+}
+
 bool CadPipeCatalogFind(AppCommandState& st, CadPipePartType partType, const std::string& nominalSize,
                         CadPipePressureClass pressureClass, std::string* outBlockName,
                         std::vector<std::string>& log) {
@@ -1302,6 +1466,9 @@ void InsertAdvanceAfterAlignFace(AppCommandState& st, std::vector<std::string>& 
 }
 
 void FinishInsertCommand(AppCommandState& st) {
+  // REQ-350 (f) — the palette's splice arming lasts exactly one placement. Cleared here (and on
+  // cancel) so an ordinary INSERT typed afterwards can never inherit it and splice a run.
+  st.insertBlockPipeSpliceArmed = false;
   st.insertBlockDialogOpen = false;
   st.insertBlockAttrDialogOpen = false;
   st.insertBlockAttrRefIndex = -1;
@@ -1546,7 +1713,8 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
   return any;
 }
 
-bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log) {
+bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log,
+                                    bool optional) {
   using Ph = AppCommandState::InsertBlockPhase;
   if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitConnectorTarget)
     return false;
@@ -1565,7 +1733,12 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
   const bool foundPipeEndRaw =
       FindNearestPipeEndpoint(st, wx, wy, wz, kSnap, &pipeX, &pipeY, &pipeZ, &pipeNx, &pipeNy, &pipeNz);
   if (!foundPortRaw && !foundPipeEndRaw) {
-    log.push_back("INSERT — no connection port near that point (within 2 ft).");
+    // `optional` is the Pipe Fittings palette asking "snap if there is anything to snap to"
+    // (REQ-350 (f)): a part staged beside the line is a placement, not a failure, so the
+    // caller places it plainly and says so. Every other caller asked for a snap and gets the
+    // refusal by name (REQ-201).
+    if (!optional)
+      log.push_back("INSERT — no connection port near that point (within 2 ft).");
     return false;
   }
   const CadConnectionModeTarget portTarget = CadBlockClassifyPortTarget(tgt.ownerPartType);
@@ -1625,9 +1798,10 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
     }
   }
   if (!src) {
-    log.push_back(insertedDef.connections.size() > 1
-                      ? "INSERT — nothing near that point matches any of this block's connection points."
-                      : "INSERT — nothing near that point matches this connection point's configured mode(s).");
+    if (!optional)
+      log.push_back(insertedDef.connections.size() > 1
+                        ? "INSERT — nothing near that point matches any of this block's connection points."
+                        : "INSERT — nothing near that point matches this connection point's configured mode(s).");
     return false;
   }
 
@@ -2161,7 +2335,8 @@ void BlockFittingStart(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back(
       "BLOCKFITTING — part type [" +
       (def.partType == CadPipePartType::None ? std::string("none") : std::string(CadPipePartTypeTag(def.partType))) +
-      "] (elbow-90|elbow-45|tee|cross|reducer|flange|valve|coupling|cap|other|none, Enter to keep current):");
+      "] (elbow-90|elbow-45|tee|cross|reducer|flange|valve|coupling|cap|nozzle|other|none, "
+      "Enter to keep current):");
 }
 
 void BlockFittingSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
@@ -2577,6 +2752,54 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
     st.insertBlockX = wx;
     st.insertBlockY = wy;
     st.insertBlockZ = wz;
+    // REQ-350 (f) — armed from the Pipe Fittings palette, ONE click places the part and WHERE it
+    // lands decides how. Three outcomes, tried in this order, because each is strictly more
+    // specific than the next:
+    //
+    //   1. on a pipe run -> splice it in (the PIPEFIT path: engagement cutback, run split in two,
+    //      one undo step);
+    //   2. otherwise, near a connection port or pipe end -> snap to it, which is what orients the
+    //      part (REQ-107 / issue #496, the same `SubmitInsertBlockConnectorPick` INSERT already
+    //      uses, asked OPTIONALLY so "nothing nearby" is not a refusal here);
+    //   3. otherwise -> place it free at the point.
+    //
+    // Step 2 was MISSING, and that is the "the blind flange is not aligning correctly" report: a
+    // blind flange bolts onto another flange FACE, never into the middle of a pipe, so its click
+    // never reaches step 1 — and without step 2 it fell straight through to step 3 and was dropped
+    // with the identity rotation it was authored with. REQ-350 (f) has said "with connection-port
+    // snapping (REQ-107)" all along; `CadPipePaletteArmPart` never turned it on.
+    //
+    // A failed SPLICE also falls through rather than ending the click: a part that cannot splice
+    // (a blind flange has ONE port; `PickElbowPorts` needs two) would otherwise consume the click
+    // and place nothing at all, which is not a refusal the user can act on (REQ-201). The splice
+    // has already logged WHY, and the part still lands where it was clicked.
+    if (st.insertBlockPipeSpliceArmed) {
+      const ray3d::Vec3 pick{static_cast<double>(wx), static_cast<double>(wy), static_cast<double>(wz)};
+      const std::string armed = st.insertBlockName;
+      int runIdx = -1;
+      if (CadPipeRunUnderPick(st, pick, &runIdx)) {
+        st.insertBlockPipeSpliceArmed = false;
+        st.insertBlockPhase = Ph::WaitInsertPoint;
+        st.active = AppCommandState::Kind::None;
+        if (CadPipeFitNamedAtPick(st, runIdx, armed, pick, log))
+          return;
+        // Refused, and said why. Re-arm just enough to finish the click as a placement.
+        st.active = AppCommandState::Kind::InsertBlock;
+        st.insertBlockPhase = Ph::WaitInsertPoint;
+      }
+      st.insertBlockPipeSpliceArmed = false;
+      st.insertBlockPhase = Ph::WaitConnectorTarget;
+      if (SubmitInsertBlockConnectorPick(st, wx, wy, wz, log, /*optional=*/true))
+        return;  // snapped and placed
+      st.insertBlockPhase = Ph::WaitInsertPoint;
+      // The REASON, not the outcome: `InsertAdvanceAfterPoint` below is what actually places
+      // it, and "within 2 ft" covers both "nothing there" and "nothing there this part can
+      // mate with" — the snap refuses for either, and the user needs to know only that it
+      // went down with the orientation it was authored with.
+      log.push_back("Pipe Fittings — \"" + armed +
+                    "\": nothing within 2 ft for its connection point to mate with; placing "
+                    "it as authored.");
+    }
     InsertAdvanceAfterPoint(st, log);
     return;
   }
@@ -2934,6 +3157,12 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     st.blockEditorDirty = false;
     BumpCadGpuCache(st);
     st.blockEditCleanRevision = st.cadGpuRevision;
+    // REQ-350 / ADR-062 — this definition's geometry just changed, so any cached Pipe Fittings
+    // thumbnail of it now shows the part as it WAS. Marked for re-render; the UI's service pass is what
+    // actually drops it, because the renderer is not this layer's to call.
+    if (std::find(st.pipeFittingThumbStale.begin(), st.pipeFittingThumbStale.end(), st.blockEditorName) ==
+        st.pipeFittingThumbStale.end())
+      st.pipeFittingThumbStale.push_back(st.blockEditorName);
     log.push_back("BSAVE — saved \"" + st.blockEditorName + "\". All references update.");
     return true;
   }
@@ -3534,6 +3763,13 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     return true;
   }
 
+  if (tok == "pipepalette" || tok == "pipepal") {
+    // REQ-350 (a) — reopen (or close) the Pipe Fittings palette. PIPERUN opens it on its own; this is
+    // how it comes back after the close box, and how it is reached without starting a run at all.
+    CadPipePaletteSetOpen(st, !st.pipeFittingPaletteOpen, log);
+    return true;
+  }
+
   if (tok == "pipecatalog" || tok == "pcat") {
     // Catalog lookup (issue #486 increment B4 / REQ-345). One-shot report over CadPipeCatalogFind —
     // no state machine, the same "bare/short verb, immediate answer" shape PIPESYS's own report
@@ -3543,7 +3779,8 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     args >> partTypeTok >> sizeTok;
     if (partTypeTok.empty() || sizeTok.empty()) {
       log.push_back("PIPECATALOG - usage: PIPECATALOG <part type> <nominal size> [pressure class]. Part "
-                    "types: elbow-90, elbow-45, tee, cross, reducer, flange, valve, coupling, cap, other.");
+                    "types: elbow-90, elbow-45, tee, cross, reducer, flange, valve, coupling, cap, "
+                    "nozzle, other.");
       return true;
     }
     const CadPipePartType partType = ParseCadPipePartType(StringUtil::toLowerAsciiCopy(partTypeTok));

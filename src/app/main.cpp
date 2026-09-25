@@ -1109,10 +1109,35 @@ int main()
     // LINE/POLYLINE AP: after two picks the bottom command InputText is hidden — Enter must still lock bearing.
     // Keyboard-only "A" then bearing: Enter with empty buffer cancels awaiting mode when no text field is focused.
     {
-      ImGuiIO &ioEnter = ImGui::GetIO();
       const bool enterDown =
           ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
-      if (enterDown && !ioEnter.WantTextInput && cmd.active != AppCommandState::Kind::None)
+      // The gate is "no widget is actively capturing", NOT `WantTextInput` (D-2026-09-24-c).
+      //
+      // `WantTextInput` is true whenever a text field merely WANTS keys — including a command-line
+      // field that is focused but has not taken this Enter yet — and it is computed from the
+      // previous frame. Measured through the Developer Shell: with the old gate, ONE Enter produced
+      // TWO submits of the same text (this poll, then the command bar's own `exec` on the same
+      // keypress), and the second arrived at the next prompt carrying the text the first had just
+      // consumed — so a prompt offering a default answered itself with the previous command's
+      // argument and reported it as invalid. That is what "pressing Enter does nothing" was.
+      //
+      // `IsAnyItemActive()` is the same discipline the paper-space Enter poll a few thousand lines
+      // into CadUi.cpp already uses ("GetActiveID() == 0 is the guard that keeps the two callers
+      // from double-firing on one keypress"): when a field is active, its own Enter handler runs and
+      // this poll must stay silent; when none is, this poll is the only handler there is.
+      //
+      // `IsAnyItemActive()` alone is NOT enough, and the gap is what a user reported as "Enter has
+      // random behavior" (D-2026-09-24-f). An InputText flagged `EnterReturnsTrue` clears its own
+      // active ID as the last thing it does, and `ReleaseSubmittedCommandInput` clears it again —
+      // both of them earlier in THIS frame than this poll. So on the one frame that matters, the
+      // frame a field just took the Enter, the gate reads "nothing is active" and this poll submits
+      // a SECOND time; `ProcessCommandLineSubmit` has already emptied the buffer, so the second one
+      // arrives as a bare Enter. That phantom Enter exited ORBIT the instant ORBIT started, and
+      // walked PIPERUN two prompts per keypress until it reported itself cancelled. Asking the UI
+      // whether it already submitted this frame closes it for every command at once, rather than
+      // per command.
+      if (enterDown && !ImGui::IsAnyItemActive() && !CadUiCommandLineSubmittedThisFrame() &&
+          cmd.active != AppCommandState::Kind::None)
         ProcessCommandLineSubmit(cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, cmdLog);
     }
 
@@ -1171,6 +1196,9 @@ int main()
     DrawWblockDialog(cmd, cmdLog);
     DrawEditBlockDefinitionDialog(cmd, cmdLog);
     DrawBlockAuthoringPalettes(cmd, cmdLog);
+    // REQ-350 — the Pipe Fittings palette, beside the other palette window and for the same reason:
+    // both are ordinary floating windows drawn every frame, each gated on its own open flag.
+    DrawPipeFittingPalette(cmd, cmdLog, activeRenderer);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawPointCloudImportProgress(cmd);
     DrawCloseConfirmModal(cmd, cmdLog);
@@ -1589,6 +1617,11 @@ int main()
     // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);
+
+    // REQ-350 / ADR-062 — render the part thumbnails the palette asked for above. Here, not inside the
+    // palette: this is after RenderScene, the one point in the frame where binding another framebuffer
+    // cannot disturb the drawing's own image — exactly why ServicePendingThumbnail sits here too.
+    ServicePipeFittingThumbnails(cmd, activeRenderer);
 #ifdef GOSURVEY_DEVELOPER_SHELL
     // REQ-161 (TASK-249): a devshell test capturing the VIEWPORT, serviced here because this is the
     // one point in the frame where the renderer has just drawn and its framebuffer still holds the

@@ -731,6 +731,9 @@ bool ViewportRenderer::Init() {
 void ViewportRenderer::Shutdown() {
   DestroyFramebuffer();
   DestroyShader();
+  // ADR-062 — the part-thumbnail cache owns real GL objects (one FBO, texture and depth buffer per
+  // cached part), so it is released with the rest of them rather than leaked at tab close.
+  ReleasePartThumbnails();
 }
 
 void ViewportRenderer::Ortho(float left, float right, float bottom, float top, float nearp, float farp,
@@ -3399,6 +3402,312 @@ finish_render:
   }
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// ADR-062 / REQ-350 — library-part thumbnails for the Pipe Fittings palette.
+//
+// Everything GL about the palette lives here, which is what holds architecture invariant §11.6: the
+// palette is UI code, it hands this a name and some float arrays, and it gets back a texture id it
+// treats as opaque — exactly as DrawDrawingViewport already treats ColorTexture().
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// The one view every part thumbnail is drawn from (ADR-062 (e)): SW isometric. The elevation is
+/// atan(1/sqrt(2)) = 35.264 degrees, the angle at which all three axes foreshorten equally, and 45
+/// degrees of azimuth is the app's own "SW Isometric" named view.
+///
+/// Stated as literals here rather than shared with `viewcube::kIsometricElevationDeg`, because that
+/// constant lives in `src/ui/` and the renderer must not depend upward on the UI layer (§2). The
+/// value is a mathematical constant, not a policy the two could drift apart on.
+constexpr float kPartThumbAzimuthDeg = 45.f;
+constexpr float kPartThumbElevationDeg = 35.26438968f;
+
+/// Padding around the fitted part, as a fraction of its own half-extent — so a flange does not touch
+/// the edges of its own picture.
+constexpr float kPartThumbFitPad = 1.12f;
+
+/// Cache ceiling. A size-filtered palette shows a handful of parts, so this sits far above anything a
+/// visible list reaches; it exists so a session that browses many sizes cannot grow the cache without
+/// bound. Eviction is least-recently-requested, and an evicted entry is by definition one that no
+/// visible row asked for this frame.
+constexpr std::size_t kMaxPartThumbnails = 96;
+
+} // namespace
+
+void ViewportRenderer::DestroyPartThumbnailEntry(PartThumbnailEntry& e) {
+  if (e.fbo) {
+    glDeleteFramebuffers(1, &e.fbo);
+    e.fbo = 0;
+  }
+  if (e.tex) {
+    glDeleteTextures(1, &e.tex);
+    e.tex = 0;
+  }
+  if (e.depthRbo) {
+    glDeleteRenderbuffers(1, &e.depthRbo);
+    e.depthRbo = 0;
+  }
+  e.px = 0;
+}
+
+void ViewportRenderer::ReleasePartThumbnails() {
+  for (PartThumbnailEntry& e : partThumbs_)
+    DestroyPartThumbnailEntry(e);
+  partThumbs_.clear();
+  if (partThumbVao_) {
+    glDeleteVertexArrays(1, &partThumbVao_);
+    partThumbVao_ = 0;
+  }
+  if (partThumbVbo_) {
+    glDeleteBuffers(1, &partThumbVbo_);
+    partThumbVbo_ = 0;
+  }
+}
+
+unsigned int ViewportRenderer::PartThumbnailTexture(const std::string& key) const {
+  for (const PartThumbnailEntry& e : partThumbs_) {
+    if (e.key == key)
+      return e.tex;
+  }
+  return 0;
+}
+
+void ViewportRenderer::InvalidatePartThumbnail(const std::string& key) {
+  for (std::size_t i = 0; i < partThumbs_.size(); ++i) {
+    if (partThumbs_[i].key != key)
+      continue;
+    DestroyPartThumbnailEntry(partThumbs_[i]);
+    partThumbs_.erase(partThumbs_.begin() + static_cast<std::ptrdiff_t>(i));
+    return;
+  }
+}
+
+bool ViewportRenderer::EnsurePartThumbnail(const std::string& key, const PartThumbnailInput& in, int px) {
+  if (key.empty() || px < 8 || px > 512)
+    return false;
+  const bool haveTris = in.triVerts != nullptr && in.triVerts->size() >= 9;
+  const bool haveEdges = in.edgeVerts != nullptr && in.edgeVerts->size() >= 6;
+  if (!haveTris && !haveEdges)
+    return false;  // a part with no drawable geometry gets a name-only row, not a blank picture
+  if (!EnsureShader())
+    return false;
+
+  ++partThumbStamp_;
+
+  // Find, or make, this part's slot. An existing entry at the same size is already drawn — that early
+  // return is the whole point of the cache (REQ-350's REQ-100 acceptance condition).
+  PartThumbnailEntry* slot = nullptr;
+  for (PartThumbnailEntry& e : partThumbs_) {
+    if (e.key == key) {
+      slot = &e;
+      break;
+    }
+  }
+  if (slot != nullptr) {
+    if (slot->px == px && slot->tex != 0) {
+      slot->stamp = partThumbStamp_;
+      return true;
+    }
+    DestroyPartThumbnailEntry(*slot);
+  } else {
+    if (partThumbs_.size() >= kMaxPartThumbnails) {
+      std::size_t victim = 0;
+      for (std::size_t i = 1; i < partThumbs_.size(); ++i) {
+        if (partThumbs_[i].stamp < partThumbs_[victim].stamp)
+          victim = i;
+      }
+      DestroyPartThumbnailEntry(partThumbs_[victim]);
+      partThumbs_.erase(partThumbs_.begin() + static_cast<std::ptrdiff_t>(victim));
+    }
+    partThumbs_.push_back(PartThumbnailEntry{});
+    slot = &partThumbs_.back();
+    slot->key = key;
+  }
+  slot->stamp = partThumbStamp_;
+  slot->px = px;
+
+  // Its own framebuffer and colour texture (ADR-062 (c)).
+  glGenTextures(1, &slot->tex);
+  glBindTexture(GL_TEXTURE_2D, slot->tex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, px, px, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glGenRenderbuffers(1, &slot->depthRbo);
+  glBindRenderbuffer(GL_RENDERBUFFER, slot->depthRbo);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, px, px);
+  glBindRenderbuffer(GL_RENDERBUFFER, 0);
+  glGenFramebuffers(1, &slot->fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, slot->fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot->tex, 0);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, slot->depthRbo);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    DestroyPartThumbnailEntry(*slot);
+    return false;
+  }
+
+  // Its own VAO/VBO, NOT the scene's: `vboLines_` holds committed geometry whose re-upload is gated
+  // on `cadGpuRevision`, so streaming a thumbnail through it would blank the drawing until something
+  // unrelated happened to bump that revision. Shared across thumbnails, since each render is
+  // immediate and finishes before the next begins.
+  if (partThumbVao_ == 0)
+    glGenVertexArrays(1, &partThumbVao_);
+  if (partThumbVbo_ == 0)
+    glGenBuffers(1, &partThumbVbo_);
+
+  // Fit the part: centre on its bounds, and size the ortho box from its largest half-extent.
+  float mn[3] = {1.e30f, 1.e30f, 1.e30f};
+  float mx[3] = {-1.e30f, -1.e30f, -1.e30f};
+  const auto sweep = [&](const std::vector<float>* v) {
+    if (v == nullptr)
+      return;
+    for (std::size_t i = 0; i + 2 < v->size(); i += 3) {
+      for (int k = 0; k < 3; ++k) {
+        mn[k] = std::min(mn[k], (*v)[i + static_cast<std::size_t>(k)]);
+        mx[k] = std::max(mx[k], (*v)[i + static_cast<std::size_t>(k)]);
+      }
+    }
+  };
+  sweep(in.triVerts);
+  sweep(in.edgeVerts);
+  if (!(mx[0] >= mn[0])) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    DestroyPartThumbnailEntry(*slot);
+    return false;
+  }
+  const float cx = 0.5f * (mn[0] + mx[0]);
+  const float cy = 0.5f * (mn[1] + mx[1]);
+  const float cz = 0.5f * (mn[2] + mx[2]);
+  float half = 0.f;
+  for (int k = 0; k < 3; ++k)
+    half = std::max(half, 0.5f * (mx[k] - mn[k]));
+  // A degenerate part must not divide by zero; give it an arbitrary but finite box rather than
+  // refusing to picture it at all.
+  if (!(half > 1.e-9f))
+    half = 1.f;
+  // An isometric view's diagonal reaches further than any single axis half-extent, so fit the body
+  // diagonal: sqrt(3) covers the worst-case corner at this rotation.
+  const float fit = half * 1.7320508f * kPartThumbFitPad;
+
+  Camera cam;
+  cam.azimuthDeg = kPartThumbAzimuthDeg;
+  cam.elevationDeg = kPartThumbElevationDeg;
+  cam.rollDeg = 0.f;
+  cam.targetX = static_cast<double>(cx);
+  cam.targetY = static_cast<double>(cy);
+  cam.targetZ = static_cast<double>(cz);
+  float viewRot[16];
+  cam.ViewRotation(viewRot);
+  float proj[16];
+  Ortho(-fit, fit, -fit, fit, -fit * 4.f, fit * 4.f, proj);
+  float model[16];
+  TranslateMat(-cx, -cy, -cz, model);
+  float projRot[16];
+  MulMat4(proj, viewRot, projRot);
+  float mvp[16];
+  MulMat4(projRot, model, mvp);
+
+  glViewport(0, 0, px, px);
+  glDisable(GL_SCISSOR_TEST);
+  glDisable(GL_CLIP_DISTANCE0);
+  glDisable(GL_BLEND);
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_DEPTH_TEST);
+  glDepthFunc(GL_LESS);
+  glDepthMask(GL_TRUE);
+  // Cleared fully TRANSPARENT, so the thumbnail sits on whatever the palette's own background is and
+  // needs no knowledge of the active theme (REQ-081's chrome palette is a UI concern, and this is the
+  // renderer).
+  glClearColor(0.f, 0.f, 0.f, 0.f);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+  glBindVertexArray(partThumbVao_);
+  glBindBuffer(GL_ARRAY_BUFFER, partThumbVbo_);
+
+  if (haveTris && shadedProgram_ != 0) {
+    const std::size_t nv = in.triVerts->size() / 3;
+    const bool haveNormals = in.triNormals != nullptr && in.triNormals->size() == in.triVerts->size();
+    std::vector<float> interleaved(nv * 6);
+    for (std::size_t v = 0; v < nv; ++v) {
+      float* o = &interleaved[v * 6];
+      o[0] = (*in.triVerts)[v * 3 + 0];
+      o[1] = (*in.triVerts)[v * 3 + 1];
+      o[2] = (*in.triVerts)[v * 3 + 2];
+      o[3] = haveNormals ? (*in.triNormals)[v * 3 + 0] : 0.f;
+      o[4] = haveNormals ? (*in.triNormals)[v * 3 + 1] : 0.f;
+      o[5] = haveNormals ? (*in.triNormals)[v * 3 + 2] : 1.f;
+    }
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(interleaved.size() * sizeof(float)),
+                 interleaved.data(), GL_STREAM_DRAW);
+    const GLsizei stride = static_cast<GLsizei>(6 * sizeof(float));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<const void*>(sizeof(float) * 3));
+    glUseProgram(shadedProgram_);
+    glUniformMatrix4fv(glGetUniformLocation(shadedProgram_, "uMVP"), 1, GL_FALSE, mvp);
+    glUniform4f(glGetUniformLocation(shadedProgram_, "uClipPlane"), 0.f, 0.f, 0.f, 1.f);
+    const ray3d::Vec3 fwd = cam.ForwardWorld();
+    glUniform3f(glGetUniformLocation(shadedProgram_, "uViewDir"), static_cast<float>(fwd.x),
+                static_cast<float>(fwd.y), static_cast<float>(fwd.z));
+    glUniform1f(glGetUniformLocation(shadedProgram_, "uAmbient"), kShadedAmbient);
+    glUniform4f(glGetUniformLocation(shadedProgram_, "uColor"), in.rgba[0], in.rgba[1], in.rgba[2], 1.f);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(nv));
+    glDisableVertexAttribArray(1);
+  }
+
+  if (haveEdges && lineProgram_ != 0) {
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(in.edgeVerts->size() * sizeof(float)),
+                 in.edgeVerts->data(), GL_STREAM_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(3 * sizeof(float)), nullptr);
+    glDisableVertexAttribArray(1);
+    glUseProgram(lineProgram_);
+    glUniformMatrix4fv(glGetUniformLocation(lineProgram_, "uMVP"), 1, GL_FALSE, mvp);
+    glUniform4f(glGetUniformLocation(lineProgram_, "uClipPlane"), 0.f, 0.f, 0.f, 1.f);
+    // The part's own colour, darkened — an outline, not a second bright surface. Without the edges a
+    // shaded part reads as a blob at 64 px; with them it reads as a part.
+    glUniform4f(glGetUniformLocation(lineProgram_, "uColor"), in.rgba[0] * 0.35f, in.rgba[1] * 0.35f,
+                in.rgba[2] * 0.35f, 1.f);
+    glLineWidth(1.f);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(in.edgeVerts->size() / 3));
+  }
+
+  // Connection ports last and with DEPTH TESTING OFF: a port marks where the part mates, which is
+  // exactly the information a 64 px picture must not lose to the body of the part in front of it.
+  if (in.portMarkers != nullptr && in.portMarkers->size() >= 7 && vcLineProgram_ != 0) {
+    glDisable(GL_DEPTH_TEST);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(in.portMarkers->size() * sizeof(float)),
+                 in.portMarkers->data(), GL_STREAM_DRAW);
+    const GLsizei vcStride = static_cast<GLsizei>(7 * sizeof(float));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, vcStride, nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, vcStride,
+                          reinterpret_cast<const void*>(sizeof(float) * 3));
+    glUseProgram(vcLineProgram_);
+    glUniformMatrix4fv(glGetUniformLocation(vcLineProgram_, "uMVP"), 1, GL_FALSE, mvp);
+    glUniform4f(glGetUniformLocation(vcLineProgram_, "uClipPlane"), 0.f, 0.f, 0.f, 1.f);
+    glPointSize(std::max(3.f, static_cast<float>(px) / 14.f));
+    glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(in.portMarkers->size() / 7));
+    glDisableVertexAttribArray(1);
+    glEnable(GL_DEPTH_TEST);
+  }
+
+  glBindVertexArray(0);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glUseProgram(0);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  // Leave the viewport as the scene pass left it, so nothing downstream inherits a 64 px viewport.
+  if (fbW_ > 0 && fbH_ > 0)
+    glViewport(0, 0, fbW_, fbH_);
+  return true;
 }
 
 // REQ-308 / D-2026-08-30-c — write the current resolved viewport image as a 24-bit BMP thumbnail,

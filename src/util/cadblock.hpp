@@ -138,7 +138,12 @@ enum class CadPipePartType : std::uint8_t {
   Valve,
   Coupling,
   Cap,
-  Other
+  Other,
+  /// REQ-350 / D-2026-09-24-a (1). Appended AFTER `Other` rather than inserted in category order so
+  /// no existing enumerator's numeric value moves — the tag string is what .gs and the LIBEXPORT
+  /// sidecars persist, but a stable numeric value costs nothing to keep, and an in-memory value that
+  /// silently changed meaning would be the worst kind of bug to go looking for.
+  Nozzle
 };
 
 [[nodiscard]] inline std::string_view CadPipePartTypeTag(CadPipePartType t) {
@@ -153,6 +158,7 @@ enum class CadPipePartType : std::uint8_t {
     case CadPipePartType::Coupling: return "coupling";
     case CadPipePartType::Cap: return "cap";
     case CadPipePartType::Other: return "other";
+    case CadPipePartType::Nozzle: return "nozzle";
     case CadPipePartType::None:
     default: return "";
   }
@@ -169,6 +175,7 @@ enum class CadPipePartType : std::uint8_t {
   if (s == "coupling") return CadPipePartType::Coupling;
   if (s == "cap") return CadPipePartType::Cap;
   if (s == "other") return CadPipePartType::Other;
+  if (s == "nozzle") return CadPipePartType::Nozzle;
   return CadPipePartType::None;
 }
 
@@ -377,6 +384,26 @@ struct CadBlockDefinition {
   std::string nominalSize;
   CadPipePressureClass pressureClass = CadPipePressureClass::None;
   std::string partNumber;
+};
+
+/// One row of the block library: the drawing's own definitions, plus the bundled/user files not yet
+/// imported. `partType`/`nominalSize`/`pressureClass` (issue #486 increment A5) come from the
+/// definition itself when it is already imported, or from a LIBEXPORT `.json` sidecar beside an
+/// unimported file — read WITHOUT importing, so a pane or palette can filter before the user picks
+/// anything.
+///
+/// Lives here beside CadBlockDefinition rather than in `CadBlocks.hpp` (its original home)
+/// because `AppCommandState` caches a listing of these (REQ-350), and `CadBlocks.hpp` sits ABOVE
+/// `AppCommandState` — a plain description of a library file belongs at the level of the data it
+/// describes, not at the level of the code that scans for it.
+struct CadBlockLibraryEntry {
+  std::string name;
+  std::string path;
+  bool imported = false;
+  bool isFitting = false;
+  CadPipePartType partType = CadPipePartType::None;
+  std::string nominalSize;
+  CadPipePressureClass pressureClass = CadPipePressureClass::None;
 };
 
 struct CadBlockRef {

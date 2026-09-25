@@ -36,6 +36,8 @@
 #include "NumFormat.hpp"
 #include "MtextRichFormat.hpp"
 #include "AppPaths.hpp"
+
+#include <chrono>
 #include "FontRegistry.hpp"
 #include "StringUtil.hpp"
 #include "AppIcon.hpp"
@@ -29307,20 +29309,37 @@ static bool PipeRunWorldSolidVisible(const AppCommandState& st, size_t solidInde
   return !(lr && (!lr->on || lr->frozen));
 }
 
+/// One run's content signature, for the per-run solid cache. Covers everything
+/// \ref CadBuildPipeRunSolids reads: the path, the size, the wall and the class.
+static std::uint64_t SinglePipeRunSig(const CadPipeRun& r) {
+  std::uint64_t sig = 1469598103934665603ull;
+  const auto mix = [&sig](std::uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
+  mix(r.vertsXyz.size());
+  for (double v : r.vertsXyz) {
+    std::uint64_t bits;
+    std::memcpy(&bits, &v, sizeof(bits));
+    mix(bits);
+  }
+  for (unsigned char c : r.nominalSize)
+    mix(c);
+  mix(0x9E3779B9ull);
+  std::uint64_t wallBits;
+  std::memcpy(&wallBits, &r.wallThicknessIn, sizeof(wallBits));
+  mix(wallBits);
+  for (unsigned char c : r.pressureClassTag)
+    mix(c);
+  return sig;
+}
+
 static std::uint64_t PipeRunWorldSolidsSig(const AppCommandState& st) {
   std::uint64_t sig = 1469598103934665603ull;
   const auto mix = [&sig](std::uint64_t v) { sig = (sig ^ v) * 1099511628211ull; };
   mix(st.cadPipeRuns.size());
-  for (const CadPipeRun& r : st.cadPipeRuns) {
-    mix(r.vertsXyz.size());
-    for (double v : r.vertsXyz) {
-      std::uint64_t bits;
-      std::memcpy(&bits, &v, sizeof(bits));
-      mix(bits);
-    }
-    for (unsigned char c : r.nominalSize)
-      mix(c);
-  }
+  // Built from the SAME per-run signature the solid cache keys on, so the two cannot disagree about
+  // what "changed" means. It previously covered only the path and the size, which left a wall or
+  // class change invisible to this gate — the early-out would keep a solid built at the old wall.
+  for (const CadPipeRun& r : st.cadPipeRuns)
+    mix(SinglePipeRunSig(r));
   return sig;
 }
 
@@ -29337,16 +29356,35 @@ static void RebuildPipeRunWorldSolids(AppCommandState& st) {
   st.pipeRunWorldSolids.clear();
   st.pipeRunWorldSolidAttrs.clear();
   st.pipeRunWorldSolidOwnerIndex.clear();
+  const auto rebuildT0 = std::chrono::steady_clock::now();
+  st.pipeRunSolidCacheSigs.resize(st.cadPipeRuns.size(), 0);
+  st.pipeRunSolidCache.resize(st.cadPipeRuns.size());
   for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
     const EntityAttributes runAttr = ri < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[ri] : EntityAttributes{};
-    std::vector<CadSolidPtr> segSolids;
-    (void)CadBuildPipeRunSolids(st.cadPipeRuns[ri], &segSolids);
-    for (CadSolidPtr& sp : segSolids) {
-      st.pipeRunWorldSolids.push_back(std::move(sp));
+    // Re-sweep only what changed. Appending one vertex while routing used to re-sweep every run in
+    // the drawing; a tube costs ~11 ms per point of route, so that was the click cost growing with
+    // the whole drawing rather than with the run being drawn.
+    const std::uint64_t runSig = SinglePipeRunSig(st.cadPipeRuns[ri]);
+    if (st.pipeRunSolidCacheSigs[ri] != runSig || st.pipeRunSolidCache[ri].empty()) {
+      st.pipeRunSolidCacheSigs[ri] = runSig;
+      st.pipeRunSolidCache[ri].clear();
+      const auto sweepT0 = std::chrono::steady_clock::now();
+      (void)CadBuildPipeRunSolids(st.cadPipeRuns[ri], &st.pipeRunSolidCache[ri]);
+      const std::chrono::duration<double, std::milli> sweepMs = std::chrono::steady_clock::now() - sweepT0;
+      st.pipeRunPerf.sweep.Add(sweepMs.count());
+      ++st.pipeRunPerf.runsSwept;
+      st.pipeRunPerf.lastRunVerts = static_cast<int>(st.cadPipeRuns[ri].vertsXyz.size() / 3);
+    } else {
+      ++st.pipeRunPerf.runsReused;
+    }
+    for (const CadSolidPtr& sp : st.pipeRunSolidCache[ri]) {
+      st.pipeRunWorldSolids.push_back(sp);  // shared immutable payload (invariant §11.5 amendment)
       st.pipeRunWorldSolidAttrs.push_back(runAttr);
       st.pipeRunWorldSolidOwnerIndex.push_back(static_cast<int>(ri));
     }
   }
+  const std::chrono::duration<double, std::milli> rebuildMs = std::chrono::steady_clock::now() - rebuildT0;
+  st.pipeRunPerf.rebuild.Add(rebuildMs.count());
 }
 
 namespace {
@@ -29376,6 +29414,13 @@ void NarrowInto(const std::vector<double>& src, std::vector<float>* dst) {
 /// primitive's tessellation is a few thousand triangles, so a second indexed GPU path here would
 /// cost more in code than it saves in bandwidth. Expanding also lets the solid path share the
 /// stream-upload shape the surface band fills already use.
+} // namespace
+
+/// Flattens a `brep::Tessellation` into the flat, per-vertex GL arrays the renderer uploads:
+/// triangle vertices, one normal per vertex, and the owning face id per TRIANGLE. Exposed (rather
+/// than file-static) because REQ-350's part thumbnails need exactly the same expansion, and a
+/// second copy of it would be free to drift from the one the viewport draws — two present-day call
+/// sites, which is the bar architecture invariant §11.4 sets for sharing anything at all.
 void ExpandTessellation(const brep::Tessellation& t, std::vector<float>* verts, std::vector<float>* normals,
                         std::vector<int>* faceIds) {
   faceIds->clear();
@@ -29405,7 +29450,6 @@ void ExpandTessellation(const brep::Tessellation& t, std::vector<float>* verts, 
   }
 }
 
-} // namespace
 
 void RefreshSolidDisplayGeometry(AppCommandState& st) {
   // Reap first: an entry whose weak key has expired belongs to a solid that has been erased or
@@ -29421,9 +29465,15 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
   const double tol = kSolidChordToleranceFt;
   const int isolines = std::clamp(st.viewportSolidIsolines, 0, kSolidMaxIsolines);
 
-  auto tessellateSolidPtr = [&](const CadSolidPtr& sp) {
+  // Geometry that is still being DRAFTED is tessellated on a coarser circular budget
+  // (D-2026-09-24-e). While PIPERUN is routing, its provisional run is rebuilt and re-tessellated on
+  // every single click and replaced moments later, so paying the finished-quality budget there is
+  // paying it over and over for a picture that is about to be thrown away. Everything else — every
+  // other solid, and this very run the moment the command ends — keeps the full budget.
+  auto tessellateSolidPtr = [&](const CadSolidPtr& sp, bool draft = false) {
     if (!sp)
       return;
+    const int circleSegs = draft ? brep::kDraftFullCircleSegments : brep::kFullCircleSegments;
     auto it = std::find_if(st.solidDisplayCache.begin(), st.solidDisplayCache.end(),
                            [&](const CadSolidTessellation& e) { return e.key.lock() == sp; });
     // The staleness key is (solid, tolerance) and nothing else. That is #120's "do not regenerate a
@@ -29431,7 +29481,8 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     // a solid is immutable, so an unchanged pointer means unchanged geometry, and the early-out here
     // is before any allocation — a `clear()` above it would still cost the frame it was written to
     // save (the §11 invariant 7 lesson the surface cache already learned).
-    if (it != st.solidDisplayCache.end() && it->chordTolerance == tol && it->isolineCount == isolines)
+    if (it != st.solidDisplayCache.end() && it->chordTolerance == tol && it->isolineCount == isolines &&
+        it->fullCircleSegments == circleSegs)
       return;
 
     if (it == st.solidDisplayCache.end()) {
@@ -29439,8 +29490,10 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
       it = st.solidDisplayCache.end() - 1;
       it->key = sp;
     }
+    const auto tessT0 = std::chrono::steady_clock::now();
     it->chordTolerance = tol;
     it->isolineCount = isolines;
+    it->fullCircleSegments = circleSegs;
     it->triVerts.clear();
     it->triNormals.clear();
     it->triFaceIds.clear();
@@ -29448,19 +29501,31 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
 
     brep::Tessellation tess;
     brep::Problem why = brep::Problem::Ok;
-    if (brep::Tessellate(*sp, tol, &tess, &why))
+    const auto tFaces0 = std::chrono::steady_clock::now();
+    if (brep::Tessellate(*sp, tol, &tess, &why, circleSegs))
       ExpandTessellation(tess, &it->triVerts, &it->triNormals, &it->triFaceIds);
+    const std::chrono::duration<double, std::milli> facesMs = std::chrono::steady_clock::now() - tFaces0;
+    st.pipeRunPerf.tessFaces.Add(facesMs.count());
+    st.pipeRunPerf.tessTriangles += static_cast<long long>(it->triVerts.size() / 9);
     std::vector<double> edges;
+    const auto tEdges0 = std::chrono::steady_clock::now();
     if (brep::TessellateEdges(*sp, tol, &edges, &why)) {
       // ISOLINES go into the SAME buffer as the edges, not a batch of their own. They are the same
       // colour and the same weight as the object - AutoCAD draws them as part of it - so a second
       // batch would be a second thing to keep in step for no visible difference.
+      const std::chrono::duration<double, std::milli> edgesMs = std::chrono::steady_clock::now() - tEdges0;
+      st.pipeRunPerf.tessEdges.Add(edgesMs.count());
       std::vector<double> isos;
+      const auto tIso0 = std::chrono::steady_clock::now();
       if (brep::TessellateIsolines(*sp, isolines, tol, &isos, &why))
         edges.insert(edges.end(), isos.begin(), isos.end());
+      const std::chrono::duration<double, std::milli> isoMs = std::chrono::steady_clock::now() - tIso0;
+      st.pipeRunPerf.tessIso.Add(isoMs.count());
       NarrowInto(edges, &it->edgeVerts);
     }
     ++st.solidDisplayRegenCount;  // past the early-out: this frame actually retessellated a solid
+    const std::chrono::duration<double, std::milli> tessMs = std::chrono::steady_clock::now() - tessT0;
+    st.pipeRunPerf.tessellate.Add(tessMs.count());
     // A solid that fails to tessellate leaves EMPTY buffers rather than stale ones. It cannot
     // normally happen — nothing stores a solid that does not validate (REQ-201) — and drawing the
     // previous solid's triangles under this one's identity would be far worse than drawing nothing.
@@ -29470,8 +29535,14 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     tessellateSolidPtr(sp);
   for (const CadSolidPtr& sp : st.blockRefWorldSolids)
     tessellateSolidPtr(sp);
-  for (const CadSolidPtr& sp : st.pipeRunWorldSolids)
-    tessellateSolidPtr(sp);
+  // Only the run PIPERUN is drawing right now is a draft; every other run is finished geometry.
+  const bool routingNow =
+      st.active == AppCommandState::Kind::PipeRun && st.pipeRunLiveIndex >= 0;
+  for (std::size_t i = 0; i < st.pipeRunWorldSolids.size(); ++i) {
+    const bool draft = routingNow && i < st.pipeRunWorldSolidOwnerIndex.size() &&
+                       st.pipeRunWorldSolidOwnerIndex[i] == st.pipeRunLiveIndex;
+    tessellateSolidPtr(st.pipeRunWorldSolids[i], draft);
+  }
 
   // ----- Assembly: coalesce visible solids into a handful of draw batches (GitHub issue #194) -----
   //
@@ -34030,7 +34101,16 @@ void SubmitPolysolidViewportPick(AppCommandState& st, float wx, float wy,
 // is a plain copy with no second representation to keep in step.
 // ---------------------------------------------------------------------------------------------
 
+namespace {
+// Defined with the rest of PIPERUN's commit path below; declared here because the cancel path sits
+// above it. Inside the anonymous namespace so this is the SAME function, not a second overload.
+void RemoveLivePipeRun(AppCommandState& st);
+}  // namespace
+
 void CancelPipeRunCommand(AppCommandState& st) {
+  // Cancelling removes the provisional geometry too (D-2026-09-24-d) — it was never the user's, and
+  // leaving it would make Esc "keep the half-routed pipe", which is the opposite of cancel.
+  RemoveLivePipeRun(st);
   st.pipeRunDraftVerts.clear();
   st.pipeRunPhase = AppCommandState::PipeRunPhase::WaitNominalSize;
   // Nominal size and pressure class deliberately SURVIVE the cancel — remembered for the next run,
@@ -34089,16 +34169,40 @@ CadPipePartType ElbowPartTypeForSnappedAngleDeg(double snappedDeg) {
   return CadPipePartType::None;
 }
 
-/// Which of \p def's two connections mates with the incoming leg ("near") vs the outgoing leg
-/// ("far"): a role-tagged Inlet/Outlet pair is used when present (the natural authoring convention
-/// for a through-run fitting), otherwise definition order. Both left null unless \p def has EXACTLY
-/// two connections — a part tagged elbow-90/-45 with any other port count cannot be auto-oriented.
+/// Which of \p def's two connections mates with the PIPE ("near") vs the far side ("far"): the
+/// port explicitly configured for a pipe end wins; failing that a role-tagged Inlet/Outlet pair is
+/// used when present (the natural authoring convention for a through-run fitting), and failing that
+/// definition order. Both left null unless \p def has EXACTLY two connections — a part tagged
+/// elbow-90/-45 with any other port count cannot be auto-oriented.
+///
+/// The pipe-end rule is what stops a flange going in backwards (user report 2026-09-24, TASK-276). A
+/// weld-neck flange carries two ports that are NOT interchangeable — a weld neck that is welded to
+/// the pipe, tagged `CadConnectionModeTarget::PipeEnd`, and a gasket face that mates with another
+/// flange, tagged `FlangeFace` — and the bundled 2in part gives BOTH the `Inlet` role, so both
+/// tests above fell through to definition order and picked the gasket face. The caller then welds
+/// whichever port this returns as `near` onto the pipe, so the fitting came out end-for-end.
+///
+/// `CadBlockConnectionHasExactMode` (never the `isDefault` fallback) is the same discrimination
+/// `SubmitInsertBlockConnectorPick` already makes for INSERT's connector snap, for the same reason
+/// and after the same report (TASK-269): a port whose only mode is flagged default looks compatible
+/// with every target, so only an EXACT tag may outrank role and definition order. The rule fires
+/// only when exactly one of the two ports carries it — an elbow or a tee has a pipe end on both
+/// sides, and those keep the Inlet/Outlet resolution they have always had.
 void PickElbowPorts(const CadBlockDefinition& def, const CadBlockConnection** near,
                     const CadBlockConnection** far) {
   *near = nullptr;
   *far = nullptr;
   if (def.connections.size() != 2)
     return;
+  const CadBlockConnection& c0 = def.connections[0];
+  const CadBlockConnection& c1 = def.connections[1];
+  const bool pipeEnd0 = CadBlockConnectionHasExactMode(c0, CadConnectionModeTarget::PipeEnd);
+  const bool pipeEnd1 = CadBlockConnectionHasExactMode(c1, CadConnectionModeTarget::PipeEnd);
+  if (pipeEnd0 != pipeEnd1) {
+    *near = pipeEnd0 ? &c0 : &c1;
+    *far = pipeEnd0 ? &c1 : &c0;
+    return;
+  }
   const CadBlockConnection* inlet = nullptr;
   const CadBlockConnection* outlet = nullptr;
   for (const CadBlockConnection& c : def.connections) {
@@ -34111,8 +34215,8 @@ void PickElbowPorts(const CadBlockDefinition& def, const CadBlockConnection** ne
     *near = inlet;
     *far = outlet;
   } else {
-    *near = &def.connections[0];
-    *far = &def.connections[1];
+    *near = &c0;
+    *far = &c1;
   }
 }
 
@@ -34539,11 +34643,87 @@ void TryApplyBranchAtEndpoint(AppCommandState& st, std::vector<ray3d::Vec3>& pie
 /// (4+ legs at one node), and vertical-riser/offset-transition fittings — those are already
 /// ordinary 90/45 BENDS on one run's own path and were delivered by B5, since its bend detection
 /// is fully 3D and not limited to a horizontal plane.
+/// Drop the provisional in-progress pipe run, if one is standing (see \ref SyncLivePipeRun).
+///
+/// Only ever the LAST element, which is what it always is: it is appended when the second point
+/// lands and nothing else appends a run while PIPERUN owns the command. Erasing from the middle
+/// would renumber every later run, and architecture invariant §11.9 is explicit that an index is not
+/// a name — so this refuses rather than renumbering, leaving a stray provisional run the user can
+/// delete instead of silently corrupting references to other runs.
+void RemoveLivePipeRun(AppCommandState& st) {
+  const int idx = st.pipeRunLiveIndex;
+  st.pipeRunLiveIndex = -1;
+  if (idx < 0 || static_cast<size_t>(idx) >= st.cadPipeRuns.size())
+    return;
+  if (static_cast<size_t>(idx) + 1 != st.cadPipeRuns.size())
+    return;
+  st.cadPipeRuns.pop_back();
+  if (!st.cadPipeRunAttrs.empty())
+    st.cadPipeRunAttrs.pop_back();
+  BumpCadGpuCache(st);
+}
+
+/// The draft, materialised as a REAL `CadPipeRun` in the drawing so it exists between clicks
+/// (D-2026-09-24-d, user request 2026-09-24).
+///
+/// `PIPERUN` used to keep its route entirely in `pipeRunDraftVerts` and build nothing until END, so
+/// anything that ended the command early — notably picking a part from the Pipe Fittings palette,
+/// which starts INSERT — took the whole route with it, and there was no pipe in the drawing to place
+/// a flange against. The requirement is the opposite: the pipe is there from the second click and
+/// keeps up as the route grows, which is what makes "route, then flange the end you just drew" work.
+///
+/// This is a PROVISIONAL entity, not the finished run. END still goes through
+/// \ref CommitPipeRunDraft, which is where auto-elbows split the route into pieces and branch tees
+/// tie into existing runs — work that must see the whole route and cannot be done a click at a time.
+/// So the provisional entity is removed again immediately before that commit, and the drawing ends up
+/// exactly as it always did. It carries no undo entry of its own for the same reason: it is scaffolding
+/// the user never owns, and \ref CommitPipeRunDraft's single "Create Pipe Run" snapshot is still the
+/// one undo step for the finished route.
+///
+/// A route whose solid cannot build yet (a corner too tight for its fillet radius) simply leaves the
+/// last good provisional geometry standing rather than erasing the pipe mid-route: the command says so
+/// at END, where the refusal is actionable, and REQ-201 is about what gets STORED — this stores
+/// nothing invalid, it declines to update.
+void SyncLivePipeRun(AppCommandState& st) {
+  const bool haveSegment = st.pipeRunDraftVerts.size() >= 6;  // two vertices
+  if (!haveSegment) {
+    RemoveLivePipeRun(st);
+    return;
+  }
+  CadPipeRun run;
+  run.vertsXyz = st.pipeRunDraftVerts;
+  run.nominalSize = st.pipeRunNominalSize;
+  run.wallThicknessIn = st.pipeRunWallThicknessIn;
+  run.pressureClassTag = st.pipeRunPressureClassTag;
+
+  // No probe build here. Storing the run makes the display path build its solid anyway, and building
+  // it twice per click doubled the most expensive thing in the command: a run's swept tube costs
+  // ~5.6 ms at two points and ~11 ms more per point after that. A route that cannot build a solid
+  // simply draws nothing until it can, and END still reports the reason, which is where it is
+  // actionable. REQ-201 is unaffected — a `CadPipeRun` stores a PATH, and an unbuildable path was
+  // always allowed to exist in the draft.
+
+  if (st.pipeRunLiveIndex >= 0 && static_cast<size_t>(st.pipeRunLiveIndex) < st.cadPipeRuns.size()) {
+    st.cadPipeRuns[static_cast<size_t>(st.pipeRunLiveIndex)] = std::move(run);
+  } else {
+    st.cadPipeRuns.push_back(std::move(run));
+    st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+    st.pipeRunLiveIndex = static_cast<int>(st.cadPipeRuns.size()) - 1;
+  }
+  BumpCadGpuCache(st);
+}
+
 void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
   if (st.pipeRunDraftVerts.size() < 6) {  // fewer than 2 vertices
     log.push_back("PIPERUN - a run needs at least two points; Esc cancels.");
     return;
   }
+
+  // The provisional entity has served its purpose (D-2026-09-24-d): the finished route is built
+  // below from the draft, with the auto-elbow splitting and branch tees that need the WHOLE route.
+  // Retired before the undo snapshot, so the snapshot records the drawing as it was BEFORE routing
+  // began and one Ctrl+Z still removes the entire run.
+  RemoveLivePipeRun(st);
 
   const CadPipePressureClass pressureClass = ParseCadPipePressureClass(st.pipeRunPressureClassTag);
   std::vector<std::vector<ray3d::Vec3>> pieces;
@@ -34651,14 +34831,38 @@ void AddPipeRunPoint(AppCommandState& st, const ray3d::Vec3& pt, std::vector<std
   st.pipeRunDraftVerts.push_back(pt.x);
   st.pipeRunDraftVerts.push_back(pt.y);
   st.pipeRunDraftVerts.push_back(pt.z);
+  ++st.pipeRunPerf.clicks;  // PIPEPERF
+  SyncLivePipeRun(st);  // D-2026-09-24-d — the pipe exists from the second click, and keeps up
   log.push_back(CadPipeRunPromptText(st));
 }
 
 } // namespace
 
+bool CadPipeRunFinishForHandoff(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::PipeRun)
+    return false;
+  // Enough route to be a run: finish it properly — the same commit END performs, with its
+  // auto-elbows, its branch tees and its single undo entry. Anything less is not a pipe, so the
+  // draft is dropped; either way the command ends cleanly rather than being left half-open behind
+  // whatever is taking over (D-2026-09-24-d).
+  if (st.pipeRunDraftVerts.size() >= 6) {
+    CommitPipeRunDraft(st, log);
+    return true;
+  }
+  CancelPipeRunCommand(st);
+  st.active = AppCommandState::Kind::None;
+  log.push_back("PIPERUN - ended (a run needs at least two points).");
+  return true;
+}
+
 void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log) {
   CancelPipeRunCommand(st);
+  st.pipeRunPerf.Reset();  // PIPEPERF always describes the run about to be drawn
   st.active = AppCommandState::Kind::PipeRun;
+  // REQ-350 (a) — the palette opens with routing, and deliberately does NOT close with it: the parts
+  // a user reaches for (a flange on the end just routed) are wanted immediately after the run is
+  // committed, not only during it.
+  CadPipePaletteSetOpen(st, true, log);
   log.push_back(CadPipeRunPromptText(st));
 }
 
@@ -34772,6 +34976,7 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
       return true;
     }
     st.pipeRunDraftVerts.resize(st.pipeRunDraftVerts.size() - 3);
+    SyncLivePipeRun(st);  // D-2026-09-24-d — the drawn pipe shortens with the route
     log.push_back(CadPipeRunPromptText(st));
     return true;
   }
@@ -34842,14 +35047,25 @@ void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vec
   }
   // Compass (REQ-346): only meaningful once a start point exists to measure the angle from.
   const size_t n = st.pipeRunDraftVerts.size();
+  // The compass resolves a FULL 3D point, so its `wz` has to be carried into the commit — it is not
+  // an X/Y-only constraint. Under a Front/Left/Right-style UCS (and under any view where the cursor
+  // moves in elevation) the snapped ray runs along world Z, and that component lives ENTIRELY in
+  // `wz`; dropping it and re-reading the raw cursor elevation put the committed vertex back off the
+  // snapped ray, so segments did not lock to the UCS axes even with the compass on.
+  //
+  // This is the "preview must use the commit point" failure in its purest form: the rubber preview
+  // (CadRubberPreview.cpp) and the typed-distance path (HandlePipeRunTextInput) both already pass
+  // `&wz`, so the ghost showed a locked segment and the click then committed an unlocked one. All
+  // three call sites now agree.
+  float wz = static_cast<float>(CadCommitElevation(st));
   if (st.pipeRunPhase == PRP::WaitNextPoint && n >= 3) {
     const float lastX = static_cast<float>(st.pipeRunDraftVerts[n - 3]);
     const float lastY = static_cast<float>(st.pipeRunDraftVerts[n - 2]);
     const float lastZ = static_cast<float>(st.pipeRunDraftVerts[n - 1]);
-    const float targetZ = static_cast<float>(CadCommitElevation(st));
-    ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ);
+    const float targetZ = wz;
+    ApplyPipeRunCompassFromAnchor(st, lastX, lastY, &wx, &wy, /*compass=*/true, lastZ, targetZ, &wz);
   }
-  const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st)};
+  const ray3d::Vec3 pt{static_cast<double>(wx), static_cast<double>(wy), static_cast<double>(wz)};
   AddPipeRunPoint(st, pt, log);
 }
 
@@ -35083,8 +35299,8 @@ bool NearestPointOnPipeRun(const CadPipeRun& run, const ray3d::Vec3& pick, size_
 /// makes the same observation for why a pipe roll prompt has no fitting to attach to yet). The
 /// outlet's resulting world position is trusted from the fitting's own solved geometry, the same
 /// "the model decides" reasoning B5/B6 both use for their own unpinned far side(s).
-bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
-                      const ray3d::Vec3& pick, std::vector<std::string>& log) {
+bool TrySplicePipeFitNamed(AppCommandState& st, int runIdx, const std::string& blockName,
+                           const ray3d::Vec3& pick, std::vector<std::string>& log) {
   if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.cadPipeRuns.size())
     return false;
   const CadPipeRun& run = st.cadPipeRuns[static_cast<size_t>(runIdx)];
@@ -35105,10 +35321,6 @@ bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
     return false;
   }
 
-  std::string blockName;
-  if (!CadPipeCatalogFind(st, partType, run.nominalSize, ParseCadPipePressureClass(run.pressureClassTag),
-                          &blockName, log))
-    return false;
   const int di = CadBlockFindDef(st.blockDefs, blockName);
   if (di < 0)
     return false;
@@ -35197,7 +35409,62 @@ bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
   return true;
 }
 
+/// PIPEFIT's original entry point, now a thin wrapper: resolve `(part type, the run's own size and
+/// class)` to ONE library part through the catalog, then splice that part by name.
+///
+/// Split out for REQ-350 (f), which needs the second half on its own: the Pipe Fittings palette has
+/// already picked a SPECIFIC part, and `CadPipeCatalogFind` deliberately refuses when more than one
+/// part matches — which is exactly the case the bundled library presents (two 2in flanges). Behaviour
+/// here is unchanged, including that refusal, so `PIPEFIT <part type>` works precisely as before.
+bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
+                      const ray3d::Vec3& pick, std::vector<std::string>& log) {
+  if (runIdx < 0 || static_cast<size_t>(runIdx) >= st.cadPipeRuns.size())
+    return false;
+  const CadPipeRun& run = st.cadPipeRuns[static_cast<size_t>(runIdx)];
+  std::string blockName;
+  if (!CadPipeCatalogFind(st, partType, run.nominalSize, ParseCadPipePressureClass(run.pressureClassTag),
+                          &blockName, log))
+    return false;
+  return TrySplicePipeFitNamed(st, runIdx, blockName, pick, log);
+}
+
+/// How far off a run's centreline a click still counts as "on the pipe" (REQ-350 (f)), as a multiple
+/// of the pipe's own outer radius. Slightly generous, because the alternative failure — a click aimed
+/// at the pipe that falls through to a free INSERT beside it — is the more annoying of the two, and
+/// both are one undo away.
+constexpr double kCadPipeRunPickRadiusSlack = 1.5;
+
 } // namespace
+
+bool CadPipeRunUnderPick(const AppCommandState& st, const ray3d::Vec3& pick, int* outRunIdx) {
+  if (outRunIdx == nullptr)
+    return false;
+  *outRunIdx = -1;
+  double best = std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i < st.cadPipeRuns.size(); ++i) {
+    const CadPipeRun& run = st.cadPipeRuns[i];
+    size_t seg = 0;
+    ray3d::Vec3 station{};
+    if (!NearestPointOnPipeRun(run, pick, &seg, &station))
+      continue;
+    double odFeet = 0.0;
+    if (!CadPipeNominalOdFeet(run.nominalSize, &odFeet))
+      continue;  // a run whose size does not resolve draws no pipe to click on
+    const double dist = ray3d::Length(ray3d::Sub(pick, station));
+    if (dist > odFeet * 0.5 * kCadPipeRunPickRadiusSlack)
+      continue;
+    if (dist < best) {
+      best = dist;
+      *outRunIdx = static_cast<int>(i);
+    }
+  }
+  return *outRunIdx >= 0;
+}
+
+bool CadPipeFitNamedAtPick(AppCommandState& st, int runIdx, const std::string& blockName,
+                           const ray3d::Vec3& pick, std::vector<std::string>& log) {
+  return TrySplicePipeFitNamed(st, runIdx, blockName, pick, log);
+}
 
 void StartPipeFitCommand(AppCommandState& st, const std::string& partTypeTok, std::vector<std::string>& log) {
   const std::vector<int> picked = SelectedPipeRunIndices(st);
@@ -35207,7 +35474,7 @@ void StartPipeFitCommand(AppCommandState& st, const std::string& partTypeTok, st
   }
   if (partTypeTok.empty()) {
     log.push_back("PIPEFIT - usage: PIPEFIT <part type>. Part types: elbow-90, elbow-45, tee, "
-                  "cross, reducer, flange, valve, coupling, cap, other.");
+                  "cross, reducer, flange, valve, coupling, cap, nozzle, other.");
     return;
   }
   const CadPipePartType partType = ParseCadPipePartType(StringUtil::toLowerAsciiCopy(partTypeTok));
@@ -37556,8 +37823,11 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("VPTHAW — exited.");
   else if (st.active == AppCommandState::Kind::PdfAttach)
     log.push_back("PDFATTACH canceled.");
-  else if (st.active == AppCommandState::Kind::InsertBlock)
+  else if (st.active == AppCommandState::Kind::InsertBlock) {
+    // REQ-350 (f) — drop the palette's one-shot splice arming with the command it belonged to.
+    st.insertBlockPipeSpliceArmed = false;
     log.push_back("INSERT canceled.");
+  }
   else if (st.active == AppCommandState::Kind::Paste)
     log.push_back("PASTE canceled.");
   else if (st.active == AppCommandState::Kind::PaperRectViewport) {
@@ -38204,6 +38474,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandlePolysolidTextInput(line, st, log);
       return;
     }
+    // PIPERUN (REQ-345 / D-2026-09-24-c): a bare Enter is meaningful at EVERY one of its prompts —
+    // it keeps the remembered size, takes the schedule-40 wall, and finishes the run — and all three
+    // are advertised in the prompt text itself. Handled here for the reason every note above gives:
+    // this block consumes a blank line and the Kind-keyed branch further down never sees one, so
+    // without this case the command's own blank-Enter handling (which is correct, and unit-tested)
+    // was simply unreachable from the GUI. Measured through the Developer Shell before and after.
+    if (st.active == K::PipeRun) {
+      (void)HandlePipeRunTextInput(line, st, log);
+      return;
+    }
     // REQ-341 SECTIONCLIP: a bare Enter accepts the current state and closes the prompt, the way
     // TRIMSTATE's system-variable prompt does. Handled HERE for the reason every note above gives —
     // this block consumes a blank line and the Kind-keyed branch further down never sees one.
@@ -38612,6 +38892,68 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // `PERFHUD` toggles the frame-time diagnostic overlay (issue #166 investigation). Unlike BENCH
     // it measures the LIVE drawing and the current command — the actual thing the user is doing —
     // broken into frame / viewport-UI / hover-pick / snap / render.
+    // PIPEPERF — where the time goes while a pipe run is being routed (user request 2026-09-24).
+    //
+    // Live routing builds real geometry on every click (D-2026-09-24-d) and a swept tube is the most
+    // expensive thing the command does, so "it is slow" needs to say WHICH of four things is slow:
+    // the sweep, the display tessellation, the whole rebuild pass, or the per-frame ghost. The
+    // counters reset when PIPERUN starts, so the report always describes the run just drawn.
+    //
+    // Reported to the command line AND written to a file, because the useful thing to do with this
+    // is paste it to someone. Bare `PIPEPERF` reports; `PIPEPERF RESET` zeroes it by hand.
+    if (plotTok == "pipeperf") {
+      const AppCommandState::PipeRunPerf& p = st.pipeRunPerf;
+      char line[256];
+      std::vector<std::string> out;
+      out.push_back("PIPEPERF - live pipe routing profile (ms)");
+      std::snprintf(line, sizeof(line), "  route            : %d vertices at last rebuild, %d click(s)",
+                    p.lastRunVerts, p.clicks);
+      out.push_back(line);
+      const auto row = [&](const char* name, const AppCommandState::PipeRunPerfStat& s, const char* unit) {
+        std::snprintf(line, sizeof(line), "  %-17s: %6d %s  total %9.1f  avg %7.2f  max %7.2f", name,
+                      s.calls, unit, s.totalMs, s.AvgMs(), s.maxMs);
+        out.push_back(line);
+      };
+      row("sweep (tube)", p.sweep, "call(s) ");
+      row("tessellate", p.tessellate, "solid(s)");
+      row("rebuild pass", p.rebuild, "pass(es)");
+      row("  .. faces", p.tessFaces, "solid(s)");
+      row("  .. edges", p.tessEdges, "solid(s)");
+      row("  .. isolines", p.tessIso, "solid(s)");
+      row("ghost preview", p.ghost, "frame(s)");
+      std::snprintf(line, sizeof(line), "  cache            : %d run(s) re-swept, %d reused",
+                    p.runsSwept, p.runsReused);
+      out.push_back(line);
+      std::snprintf(line, sizeof(line), "  triangles        : %lld produced by display tessellation",
+                    p.tessTriangles);
+      out.push_back(line);
+      const double perClick = p.clicks > 0 ? (p.sweep.totalMs + p.tessellate.totalMs) /
+                                                 static_cast<double>(p.clicks)
+                                           : 0.0;
+      std::snprintf(line, sizeof(line), "  per click        : %.1f ms of sweep + tessellation", perClick);
+      out.push_back(line);
+      std::snprintf(line, sizeof(line), "  per ghost frame  : %.2f ms average", p.ghost.AvgMs());
+      out.push_back(line);
+
+      // Beside the user data directory, falling back to the working directory — best effort, and the
+      // command line still carries the whole report either way.
+      namespace fs = std::filesystem;
+      fs::path outPath = UserDataDirectory();
+      if (outPath.empty())
+        outPath = fs::current_path();
+      outPath /= "gosurvey-pipeperf.txt";
+      std::ofstream f(outPath, std::ios::binary | std::ios::trunc);
+      if (f) {
+        for (const std::string& l : out)
+          f << l << "\n";
+        f.close();
+        out.push_back("  written to       : " + outPath.u8string());
+      }
+      for (const std::string& l : out)
+        log.push_back(l);
+      return;
+    }
+
     if (plotTok == "perfhud" || plotTok == "framestats") {
       st.perfHudVisible = !st.perfHudVisible;
       log.push_back(std::string("PERFHUD — frame-time overlay ") + (st.perfHudVisible ? "ON." : "OFF."));

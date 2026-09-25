@@ -10,6 +10,7 @@
 #include <initializer_list>
 #include <limits>
 #include <map>
+#include <unordered_map>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -49,7 +50,8 @@ constexpr int kMaxArcSegments = 512;
 /// so issue #486's tuning pass (done before the scaled floor existed) was implicitly tuned against
 /// TWO applications of this constant — 256 segments per turn, not 128 — and a user-visible regression
 /// confirmed 128 alone reads as faceted again at ordinary working zoom on a small (2 in radius) part.
-constexpr int kMinFullCircleSegments = 256;
+/// The public default, aliased so the two cannot drift apart.
+constexpr int kMinFullCircleSegments = kFullCircleSegments;
 
 [[nodiscard]] bool AllFinite(std::initializer_list<double> vs) {
   for (double v : vs) {
@@ -1541,7 +1543,8 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
 // ---------------------------------------------------------------------------------------------
 
 /// Segments needed so the sagitta of each chord stays within \p tol on a circle of \p radius.
-[[nodiscard]] int SegmentsForArc(double radius, double spanRad, double tol) {
+[[nodiscard]] int SegmentsForArc(double radius, double spanRad, double tol,
+                                 int fullCircleSegments = kMinFullCircleSegments) {
   const double span = std::fabs(spanRad);
   if (!(radius > 0.0) || !(span > 0.0))
     return 1;
@@ -1556,7 +1559,7 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
   // the total segment budget for one full turn constant (kMinFullCircleSegments) no matter how many
   // pieces it is cut into, so two neighbouring faces sampling the same circle always agree.
   const int minSegs = std::max(
-      kMinArcSegments, static_cast<int>(std::llround(kMinFullCircleSegments * span / kTwoPi)));
+      kMinArcSegments, static_cast<int>(std::llround(fullCircleSegments * span / kTwoPi)));
   if (tol >= radius)
     return minSegs;
   const double maxStep = 2.0 * std::acos(1.0 - tol / radius);
@@ -1567,7 +1570,8 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
 }
 
 /// Segment count to walk a curved edge (Arc / Ellipse / Intersection) within \p tol; 1 for a line.
-[[nodiscard]] int SegmentsForEdge(const Edge& e, double tol) {
+[[nodiscard]] int SegmentsForEdge(const Edge& e, double tol,
+                                  int fullCircleSegments = kMinFullCircleSegments) {
   if (e.kind == CurveKind::Line)
     return 1;
   if (e.kind == CurveKind::Intersection) {
@@ -1577,36 +1581,86 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
     for (const Surface& sf : e.isectSurfaces)
       if (sf.radius > 1e-9)
         rr = std::min(rr == 1.0 ? sf.radius : rr, sf.radius);
-    return SegmentsForArc(rr, kHalfPi, tol);
+    return SegmentsForArc(rr, kHalfPi, tol, fullCircleSegments);
   }
   const double r = e.kind == CurveKind::Ellipse ? std::max(e.radius, e.radius2) : e.radius;
-  return SegmentsForArc(r, e.sweep, tol);
+  return SegmentsForArc(r, e.sweep, tol, fullCircleSegments);
 }
 
 /// Curvature-only segment count for a NURBS patch's (u, v) grid (TASK-272 §5) — extracted so the
 /// pre-pass below can fold this into the same shared-edge relaxation as the loop-edge-derived
 /// counts, instead of a Nurbs face silently outrunning whatever count its neighbour settled on.
-[[nodiscard]] int NurbsPatchCurvatureSegs(const nurbs::Patch& patch, double chordTolerance) {
+/// How finely one PARAMETRIC DIRECTION of \p patch has to be divided to stay within
+/// \p chordTolerance — U when \p alongU, otherwise V.
+///
+/// **Per direction, and that is the whole point.** This used to take the largest gap between
+/// consecutive control points over the WHOLE net and apply the resulting count to both directions.
+/// The net is row-major (`ctrl[j * nu + i]`), so walking it linearly also strides across row
+/// boundaries, and that stride is the distance between successive profiles — the length of the
+/// SWEEP. A pipe tube swept along a 20 ft leg therefore measured 20 ft of "curvature", asked for the
+/// 128-segment ceiling, and applied it to the ruled sweep direction as well as to the small circular
+/// cross-section: ~128x128 quads per patch where ~12x1 is exact. Measured on a four-vertex 2in run:
+/// 1,182,720 triangles and 16-34 SECONDS per solid in `Tessellate` (PIPEPERF, 2026-09-24).
+///
+/// A direction of degree 1 is RULED — the surface runs along straight lines in that parameter, even
+/// rationally weighted — so one division is exact and no sampling can improve it. That is what this
+/// function's own call site already claimed ("a ruled straight span is exact at one quad"); it was
+/// simply never able to say so per direction.
+///
+/// The flatness fallback is kept for the one case degree alone does not settle: a patch that is
+/// degree 1 in BOTH directions can still be a warped bilinear quad, whose middle bulges away from
+/// the two triangles a single quad would emit. That is tested against the chord tolerance exactly as
+/// before, and when it fails both directions are divided.
+[[nodiscard]] int NurbsPatchDirectionSegs(const nurbs::Patch& patch, double chordTolerance, bool alongU,
+                                          int fullCircleSegments = kMinFullCircleSegments) {
+  const int nu = patch.nu;
+  const int nv = patch.nv;
+  if (nu < 2 || nv < 2 || patch.ctrl.size() != static_cast<std::size_t>(nu) * static_cast<std::size_t>(nv))
+    return 1;
+  const auto ctrlAt = [&](int i, int j) -> const Vec3& {
+    return patch.ctrl[static_cast<std::size_t>(j) * static_cast<std::size_t>(nu) + static_cast<std::size_t>(i)];
+  };
+  // The largest control-net step IN THIS DIRECTION: along a row for U, down a column for V. Never
+  // across a row boundary, which is the step that belongs to the other direction entirely.
   double netStep = 0.0;
-  for (std::size_t k = 0; k + 1 < patch.ctrl.size(); ++k)
-    netStep = std::max(netStep, ray3d::Length(ray3d::Sub(patch.ctrl[k + 1], patch.ctrl[k])));
-  bool curved = patch.degU > 1 || patch.degV > 1;
-  if (!curved && patch.ctrl.size() >= 4) {
-    const Vec3 e1 = ray3d::Sub(patch.ctrl[1], patch.ctrl[0]);
-    const Vec3 e2 = ray3d::Sub(patch.ctrl[static_cast<std::size_t>(patch.nu)], patch.ctrl[0]);
+  if (alongU) {
+    for (int j = 0; j < nv; ++j)
+      for (int i = 0; i + 1 < nu; ++i)
+        netStep = std::max(netStep, ray3d::Length(ray3d::Sub(ctrlAt(i + 1, j), ctrlAt(i, j))));
+  } else {
+    for (int i = 0; i < nu; ++i)
+      for (int j = 0; j + 1 < nv; ++j)
+        netStep = std::max(netStep, ray3d::Length(ray3d::Sub(ctrlAt(i, j + 1), ctrlAt(i, j))));
+  }
+
+  bool curved = alongU ? patch.degU > 1 : patch.degV > 1;
+  if (!curved && patch.degU == 1 && patch.degV == 1) {
+    // Both directions ruled: the patch is a bilinear quad, exact at one division UNLESS it is
+    // warped out of plane by more than the tolerance.
+    const Vec3 e1 = ray3d::Sub(ctrlAt(1, 0), ctrlAt(0, 0));
+    const Vec3 e2 = ray3d::Sub(ctrlAt(0, 1), ctrlAt(0, 0));
     Vec3 nrm = ray3d::Cross(e1, e2);
     const double nl = ray3d::Length(nrm);
     if (nl > 1e-12) {
       nrm = ray3d::Scale(nrm, 1.0 / nl);
       for (const Vec3& c : patch.ctrl)
-        if (std::fabs(ray3d::Dot(ray3d::Sub(c, patch.ctrl[0]), nrm)) > chordTolerance) {
+        if (std::fabs(ray3d::Dot(ray3d::Sub(c, ctrlAt(0, 0)), nrm)) > chordTolerance) {
           curved = true;
           break;
         }
     }
   }
-  return curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance), 8, 128)
+  return curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance,
+                                            fullCircleSegments),
+                             std::min(8, fullCircleSegments), 128)
                 : 1;
+}
+
+/// The U-direction division count — the one the face's RIM edges run along, and the count their
+/// shared-edge relaxation (TASK-272 §5) has to agree with.
+[[nodiscard]] int NurbsPatchCurvatureSegs(const nurbs::Patch& patch, double chordTolerance,
+                                          int fullCircleSegments = kMinFullCircleSegments) {
+  return NurbsPatchDirectionSegs(patch, chordTolerance, /*alongU=*/true, fullCircleSegments);
 }
 
 struct MeshBuilder {
@@ -18089,7 +18143,8 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
 
 } // namespace
 
-bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy) {
+bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy,
+                int fullCircleSegments) {
   if (!out)
     return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
   if (!std::isfinite(chordTolerance) || !(chordTolerance > 0.0))
@@ -18163,11 +18218,11 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
     // how to read (a future Sweep mitred corner, say) — leave it on the curvature-only grid.
     if (loEdge < 0 || hiEdge < 0)
       continue;
-    const int curvatureSegs = NurbsPatchCurvatureSegs(patch, chordTolerance);
+    const int curvatureSegs = NurbsPatchCurvatureSegs(patch, chordTolerance, fullCircleSegments);
     nurbsBoundaryEdges[fi2] = {NurbsBoundaryEdge{loEdge, loFlip}, NurbsBoundaryEdge{hiEdge, hiFlip}};
     for (const int edgeIdx : {loEdge, hiEdge}) {
       const Edge& be = s.edges[static_cast<std::size_t>(edgeIdx)];
-      const int natural = std::max(SegmentsForEdge(be, chordTolerance), curvatureSegs);
+      const int natural = std::max(SegmentsForEdge(be, chordTolerance, fullCircleSegments), curvatureSegs);
       auto [it, inserted] = edgeSegs.try_emplace(edgeIdx, natural);
       if (!inserted)
         it->second = std::max(it->second, natural);
@@ -18203,7 +18258,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
         if (e.kind == CurveKind::Line)
           continue;
-        const int natural = SegmentsForEdge(e, chordTolerance);
+        const int natural = SegmentsForEdge(e, chordTolerance, fullCircleSegments);
         auto [it, inserted] = edgeSegs.try_emplace(u.edge, natural);
         if (!inserted)
           it->second = std::max(it->second, natural);
@@ -18212,7 +18267,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
   }
   auto segsForEdge = [&](int edgeIdx, const Edge& e) {
     const auto it = edgeSegs.find(edgeIdx);
-    return it != edgeSegs.end() ? it->second : SegmentsForEdge(e, chordTolerance);
+    return it != edgeSegs.end() ? it->second : SegmentsForEdge(e, chordTolerance, fullCircleSegments);
   };
 
   // TASK-272 §9j: a paramLoops-bearing face's boundary as the IMPORTER sampled it (a fixed low
@@ -18753,8 +18808,14 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const std::array<NurbsBoundaryEdge, 2>& boundaryEdges = nurbsBoundaryEdges[fi];
       const int n = boundaryEdges[0].edge >= 0
                         ? edgeSegs.at(boundaryEdges[0].edge)
-                        : NurbsPatchCurvatureSegs(patch, chordTolerance);
-      std::vector<std::uint32_t> grid(static_cast<std::size_t>(n + 1) * static_cast<std::size_t>(n + 1));
+                        : NurbsPatchCurvatureSegs(patch, chordTolerance, fullCircleSegments);
+      // V is divided on its OWN curvature, which for a ruled sweep direction is one division and
+      // exactly right. U keeps the shared, edge-relaxed count above because the rim edges run along
+      // it and neighbouring faces must land on the same resolution (TASK-272 §5) — that is why this
+      // is two numbers and not one. See NurbsPatchDirectionSegs for what using one cost.
+      const int nvSegs =
+          std::max(1, NurbsPatchDirectionSegs(patch, chordTolerance, /*alongU=*/false, fullCircleSegments));
+      std::vector<std::uint32_t> grid(static_cast<std::size_t>(n + 1) * static_cast<std::size_t>(nvSegs + 1));
       // The two v-boundary rows (j=0 at v=vLo, j=n at v=vHi) are sampled DIRECTLY from their loop
       // edges rather than `nurbs::EvaluateWithDerivs`, so they are bit-identical to the same edge's
       // sampling on the neighbouring face (a flat cap's `sampleLoop`, or the next band's own
@@ -18765,12 +18826,12 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const Edge* loEdge = boundaryEdges[0].edge >= 0 ? &s.edges[static_cast<std::size_t>(boundaryEdges[0].edge)] : nullptr;
       const Edge* hiEdge = boundaryEdges[1].edge >= 0 ? &s.edges[static_cast<std::size_t>(boundaryEdges[1].edge)] : nullptr;
       for (int i = 0; i <= n; ++i)
-        for (int j = 0; j <= n; ++j) {
+        for (int j = 0; j <= nvSegs; ++j) {
           const double u = uLo + (uHi - uLo) * static_cast<double>(i) / static_cast<double>(n);
-          const double v = vLo + (vHi - vLo) * static_cast<double>(j) / static_cast<double>(n);
+          const double v = vLo + (vHi - vLo) * static_cast<double>(j) / static_cast<double>(nvSegs);
           Vec3 p;
           Vec3 nrm;
-          const Edge* boundaryEdge = (j == 0) ? loEdge : (j == n) ? hiEdge : nullptr;
+          const Edge* boundaryEdge = (j == 0) ? loEdge : (j == nvSegs) ? hiEdge : nullptr;
           if (boundaryEdge) {
             const bool flip = (j == 0) ? boundaryEdges[0].flip : boundaryEdges[1].flip;
             const double s_ = static_cast<double>(i) / static_cast<double>(n);
@@ -18788,12 +18849,12 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
             nrm = Vec3{0.0, 0.0, 1.0};  // a collapsed edge (a pole) — a loft patch has none
           if (sf.inward)
             nrm = ray3d::Scale(nrm, -1.0);
-          grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(n + 1) +
+          grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(nvSegs + 1) +
                static_cast<std::size_t>(j)] = mb.Push(p, nrm);
         }
-      const std::size_t stride = static_cast<std::size_t>(n + 1);
+      const std::size_t stride = static_cast<std::size_t>(nvSegs + 1);
       for (int i = 0; i < n; ++i)
-        for (int j = 0; j < n; ++j) {
+        for (int j = 0; j < nvSegs; ++j) {
           const std::size_t a = static_cast<std::size_t>(i) * stride + static_cast<std::size_t>(j);
           const std::size_t b = a + stride;
           if (sf.inward) {
@@ -18811,30 +18872,90 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
 
   // Weld duplicate vertices that share position AND normal (smooth seams, e.g. cylinder halves).
   // Keep hard edges (cap ↔ wall, 90°) separate by requiring normal match, so wall/cap seams stay hard.
+  //
+  // Through a SPATIAL HASH, not a linear scan. This was a plain double loop — every vertex compared
+  // against every unique vertex kept so far — which is O(n^2) and, on the meshes this actually
+  // produces, catastrophic: a ten-vertex 2in pipe run tessellates to roughly 400,000 vertices, and
+  // welding them took **26 seconds** while the application appeared to hang (measured 2026-09-24,
+  // user-reported freeze on finishing a long run). It is the dominant cost of Tessellate for any
+  // dense mesh and it got worse as the square of the size.
+  //
+  // The rule is unchanged, and so is the result: a candidate within `posEps` of a vertex must lie in
+  // that vertex's own cell or one of the 26 around it, because the cell size IS `posEps`. So the 27
+  // cells are probed, and within them the same position-and-normal comparison decides, in the same
+  // order (ascending kept-index), which means the winning match — and therefore the remap and the
+  // final vertex numbering — is identical to what the linear scan produced.
   {
     const double posEps = 1e-9;
     const double nrmEps = 1e-6;
-    std::vector<uint32_t> remap(mesh.vertsXyz.size()/3, 0xFFFFFFFFu);
+    const std::size_t vertCount = mesh.vertsXyz.size() / 3;
+    std::vector<uint32_t> remap(vertCount, 0xFFFFFFFFu);
     std::vector<double> newVerts, newNorms;
     newVerts.reserve(mesh.vertsXyz.size());
     newNorms.reserve(mesh.normalsXyz.size());
-    for(size_t i=0;i<mesh.vertsXyz.size()/3;++i){
-      double x=mesh.vertsXyz[i*3], y=mesh.vertsXyz[i*3+1], z=mesh.vertsXyz[i*3+2];
-      double nx=mesh.normalsXyz[i*3], ny=mesh.normalsXyz[i*3+1], nz=mesh.normalsXyz[i*3+2];
-      uint32_t found=0xFFFFFFFFu;
-      for(size_t j=0;j<newVerts.size()/3;++j){
-        double dx=newVerts[j*3]-x, dy=newVerts[j*3+1]-y, dz=newVerts[j*3+2]-z;
-        double dnx=newNorms[j*3]-nx, dny=newNorms[j*3+1]-ny, dnz=newNorms[j*3+2]-nz;
-        if(dx*dx+dy*dy+dz*dz < posEps*posEps && dnx*dnx+dny*dny+dnz*dnz < nrmEps*nrmEps){ found=(uint32_t)j; break; }
+
+    // Cell index of a coordinate, at cell size == posEps. Storage coordinates reach ~1e5 ft and the
+    // cell is 1e-9, so the quotient needs the full 64-bit range.
+    const auto cellOf = [&](double v) {
+      return static_cast<std::int64_t>(std::floor(v / posEps));
+    };
+    struct CellKey {
+      std::int64_t x, y, z;
+      bool operator==(const CellKey& o) const { return x == o.x && y == o.y && z == o.z; }
+    };
+    struct CellHash {
+      std::size_t operator()(const CellKey& k) const {
+        std::uint64_t h = 1469598103934665603ull;
+        const auto mix = [&h](std::uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+        mix(static_cast<std::uint64_t>(k.x));
+        mix(static_cast<std::uint64_t>(k.y));
+        mix(static_cast<std::uint64_t>(k.z));
+        return static_cast<std::size_t>(h);
       }
-      if(found==0xFFFFFFFFu){
-        found=(uint32_t)(newVerts.size()/3);
-        newVerts.push_back(x); newVerts.push_back(y); newVerts.push_back(z);
-        newNorms.push_back(nx); newNorms.push_back(ny); newNorms.push_back(nz);
+    };
+    std::unordered_map<CellKey, std::vector<uint32_t>, CellHash> cells;
+    cells.reserve(vertCount * 2);
+
+    for (std::size_t i = 0; i < vertCount; ++i) {
+      const double x = mesh.vertsXyz[i * 3], y = mesh.vertsXyz[i * 3 + 1], z = mesh.vertsXyz[i * 3 + 2];
+      const double nx = mesh.normalsXyz[i * 3], ny = mesh.normalsXyz[i * 3 + 1],
+                   nz = mesh.normalsXyz[i * 3 + 2];
+      const std::int64_t cx = cellOf(x), cy = cellOf(y), cz = cellOf(z);
+      uint32_t found = 0xFFFFFFFFu;
+      for (std::int64_t dx = -1; dx <= 1 && found == 0xFFFFFFFFu; ++dx)
+        for (std::int64_t dy = -1; dy <= 1 && found == 0xFFFFFFFFu; ++dy)
+          for (std::int64_t dz = -1; dz <= 1 && found == 0xFFFFFFFFu; ++dz) {
+            const auto it = cells.find(CellKey{cx + dx, cy + dy, cz + dz});
+            if (it == cells.end())
+              continue;
+            // Ascending kept-index, so the FIRST acceptable match is the same one the linear scan
+            // would have found.
+            for (const uint32_t j : it->second) {
+              const double ddx = newVerts[j * 3] - x, ddy = newVerts[j * 3 + 1] - y,
+                           ddz = newVerts[j * 3 + 2] - z;
+              const double dnx = newNorms[j * 3] - nx, dny = newNorms[j * 3 + 1] - ny,
+                           dnz = newNorms[j * 3 + 2] - nz;
+              if (ddx * ddx + ddy * ddy + ddz * ddz < posEps * posEps &&
+                  dnx * dnx + dny * dny + dnz * dnz < nrmEps * nrmEps) {
+                found = j;
+                break;
+              }
+            }
+          }
+      if (found == 0xFFFFFFFFu) {
+        found = static_cast<uint32_t>(newVerts.size() / 3);
+        newVerts.push_back(x);
+        newVerts.push_back(y);
+        newVerts.push_back(z);
+        newNorms.push_back(nx);
+        newNorms.push_back(ny);
+        newNorms.push_back(nz);
+        cells[CellKey{cx, cy, cz}].push_back(found);
       }
-      remap[i]=found;
+      remap[i] = found;
     }
-    for(auto &idx: mesh.indices) idx = remap[idx];
+    for (auto& idx : mesh.indices)
+      idx = remap[idx];
     mesh.vertsXyz.swap(newVerts);
     mesh.normalsXyz.swap(newNorms);
   }

@@ -2662,6 +2662,24 @@ struct AppCommandState {
   /// etc. above): a pipe run is almost always drawn at the same size as the last one.
   std::string pipeRunNominalSize;
   std::string pipeRunPressureClassTag;
+  /// Index into `cadPipeRuns` of the PROVISIONAL run PIPERUN materialises while routing, or -1
+  /// (D-2026-09-24-d). The route exists in the drawing from the second click so it can be seen,
+  /// snapped to and spliced into while the command is still open; END retires it and rebuilds the
+  /// finished route (with auto-elbows and branch tees), and Esc removes it.
+  ///
+  /// Always the LAST element of `cadPipeRuns` while it is set — nothing else appends a run while
+  /// PIPERUN holds the command — which is what lets it be withdrawn without renumbering anything
+  /// (architecture invariant §11.9: an index is not a name).
+  int pipeRunLiveIndex = -1;
+  /// Per-run cache behind `pipeRunWorldSolids`: one content signature and one solid list per entry of
+  /// `cadPipeRuns`, so a rebuild only re-sweeps the runs that actually changed.
+  ///
+  /// The array-level signature alone made every click while routing re-sweep EVERY run in the
+  /// drawing, and a run's swept tube is the most expensive thing the command does — measured at
+  /// ~5.2 ms for two points and ~11 ms more per point after that. With live routing (D-2026-09-24-d)
+  /// that cost landed on every click; this keeps it to the one run being drawn.
+  std::vector<std::uint64_t> pipeRunSolidCacheSigs;
+  std::vector<std::vector<CadSolidPtr>> pipeRunSolidCache;
   /// Wall thickness in INCHES for the run being drafted (D-2026-09-23-a). Unlike the size and class
   /// beside it this is NOT remembered across runs: blank Enter at its prompt takes the schedule-40
   /// wall for whatever size was just chosen, so the offered default follows the size rather than
@@ -2830,6 +2848,39 @@ struct AppCommandState {
   /// text wizard, for the same "which mode applies to which snap target" authoring.
   bool showConnectionModesWindow = false;
   int blockAuthoringPaletteTab = 0;  ///< 0 Parameters, 1 Actions, 2 Parameter Sets, 3 Constraints
+  /// REQ-350 — the Pipe Fittings palette. Session state beside `blockAuthoringPaletteOpen` and for
+  /// the same reasons: the window's POSITION persists through `imgui.ini` on its own, and which
+  /// palette happened to be open is not worth a key in the settings file. Opened automatically by
+  /// PIPERUN and by the PIPEPALETTE command; stays open when the run finishes (REQ-350 (a)).
+  bool pipeFittingPaletteOpen = false;
+  int pipeFittingPaletteTab = 0;  ///< a `CadPipePaletteCategory`: 0 Fittings, 1 Flanges, 2 Valves, 3 Nozzles, 4 Other
+  /// The size the palette last filtered on, so it can notice the routed size changing and refresh
+  /// without being reopened (REQ-350's live re-filter acceptance condition).
+  std::string pipeFittingPaletteShownSize;
+  /// REQ-350 (e) / ADR-062 — thumbnail plumbing. The palette RECORDS which parts it wants a picture
+  /// of while it draws; the frame's render pass services them afterwards, which is the one point in a
+  /// frame where binding another framebuffer is safe (the same constraint `ServicePendingThumbnail`
+  /// has, for the same reason).
+  std::vector<std::string> pipeFittingThumbRequests;
+  /// Parts that produced no thumbnail — no solid or 2D geometry to draw, no GL object available, or
+  /// not imported into this drawing yet. Remembered so such a row is asked about ONCE rather than
+  /// re-attempted every frame; cleared whenever the routed size changes.
+  std::vector<std::string> pipeFittingThumbUnavailable;
+  /// The fittings library as the palette last read it, and whether that reading still stands.
+  ///
+  /// Cached because reading it means walking three directories and parsing a JSON sidecar per part —
+  /// real file I/O, which architecture invariant §11.7 does not allow on a per-frame path without a
+  /// profile to justify it. The INSERT dialog rescans every frame, but it is a modal the user closes
+  /// in seconds; this palette stays open for a whole routing session. Invalidated when the palette
+  /// opens, when the routed size changes, when a part is imported, and by the Refresh button — which
+  /// is also the answer for a file copied into the library folder from outside the application.
+  std::vector<CadBlockLibraryEntry> pipeFittingLibraryCache;
+  bool pipeFittingLibraryCacheValid = false;
+  /// Parts whose cached thumbnail is STALE and must be re-rendered — a definition edited in BEDIT is
+  /// the one way a part's geometry changes within a session (ADR-062 (c)). The command layer appends a
+  /// name here rather than calling the renderer, which it must not do: Commands sits BELOW Renderer,
+  /// and the frame's service pass drains this list on the UI side.
+  std::vector<std::string> pipeFittingThumbStale;
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.
@@ -4322,6 +4373,45 @@ struct AppCommandState {
   /// Frame-time diagnostic HUD (issue #166 investigation). Toggled by the `PERFHUD` command. The
   /// millisecond fields are written each frame by whoever owns that section — `perfRenderMs` in the
   /// app frame loop, the rest in the viewport draw — and read only by the overlay.
+  /// PIPERUN live-routing profiler (user request 2026-09-24), reported by the `PIPEPERF` command.
+  ///
+  /// Routing a pipe builds real geometry on every click (D-2026-09-24-d) and the swept tube is the
+  /// most expensive thing the command does, so these are the four places that time can go. Reset
+  /// automatically when PIPERUN starts, so the report always describes the run just drawn.
+  ///
+  /// `mutable` because the rubber preview takes the state by const reference — it draws, it does not
+  /// edit — and a diagnostic counter is exactly the "does not change observable behaviour" case
+  /// `mutable` is for. Nothing reads these except the report.
+  struct PipeRunPerfStat {
+    double totalMs = 0.0;
+    double maxMs = 0.0;
+    int calls = 0;
+    void Add(double ms) {
+      totalMs += ms;
+      if (ms > maxMs)
+        maxMs = ms;
+      ++calls;
+    }
+    void Reset() { *this = PipeRunPerfStat{}; }
+    [[nodiscard]] double AvgMs() const { return calls > 0 ? totalMs / static_cast<double>(calls) : 0.0; }
+  };
+  struct PipeRunPerf {
+    PipeRunPerfStat sweep;      ///< one run's swept tube (CadBuildPipeRunSolids), inside the rebuild
+    PipeRunPerfStat rebuild;    ///< the whole RebuildPipeRunWorldSolids pass
+    PipeRunPerfStat tessellate; ///< one solid's display tessellation (faces + edges + isolines)
+    PipeRunPerfStat ghost;      ///< the routing rubber preview, per frame
+    PipeRunPerfStat tessFaces;  ///< brep::Tessellate  (the surface triangles)
+    PipeRunPerfStat tessEdges;  ///< brep::TessellateEdges
+    PipeRunPerfStat tessIso;    ///< brep::TessellateIsolines
+    int runsSwept = 0;          ///< runs re-swept by a rebuild (cache miss)
+    int runsReused = 0;         ///< runs served from the per-run solid cache
+    int clicks = 0;             ///< vertices added while routing
+    int lastRunVerts = 0;       ///< vertices in the run at the last rebuild, for reading the curve
+    long long tessTriangles = 0;///< triangles produced by the display tessellation
+    void Reset() { *this = PipeRunPerf{}; }
+  };
+  mutable PipeRunPerf pipeRunPerf;
+
   bool   perfHudVisible = false;
   double perfFrameMs = 0.0;        ///< whole frame, wall-clock frame-to-frame
   double perfRenderMs = 0.0;       ///< the GL RenderScene call
@@ -4513,6 +4603,12 @@ struct AppCommandState {
   char insertBlockUnitsBuf[32]{};
   bool insertBlockUniformScale = true;
   bool insertBlockExplode = false;
+  /// REQ-350 (f) — set when this INSERT was armed from the Pipe Fittings palette. It changes exactly
+  /// one thing: a pick that lands ON a pipe run splices the part into that run with the engagement
+  /// cutback (the PIPEFIT path) instead of placing a free block reference. A pick anywhere else
+  /// behaves as an ordinary INSERT, which is why this is a flag on INSERT rather than a command of
+  /// its own — the ghost, the snapping, the click routing and ESC are all already correct.
+  bool insertBlockPipeSpliceArmed = false;
   bool insertBlockAttrDialogOpen = false;
   /// Library pane filters (issue #486 increment A5). `None` = no filter on that axis. Size is a
   /// free-text substring match against \ref CadBlockLibraryEntry::nominalSize.
@@ -5448,6 +5544,14 @@ void CancelPolysolidCommand(AppCommandState& st);
 // --- PIPERUN (issue #486 increment B2 / REQ-345) -------------------------------------------------
 /// Open the command: prompt for a nominal size (+ optional pressure class).
 void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// Finish an open PIPERUN because something else is about to take the command (D-2026-09-24-d).
+///
+/// Commits the route exactly as END does when it has at least two points, and otherwise drops the
+/// draft; returns false when PIPERUN was not the active command, so callers can use it as a test.
+/// Exists for the Pipe Fittings palette: picking a part starts INSERT, and before the route was
+/// materialised that silently discarded the pipe the user had just drawn.
+bool CadPipeRunFinishForHandoff(AppCommandState& st, std::vector<std::string>& log);
 /// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
 [[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
 /// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false
@@ -5463,6 +5567,26 @@ void CancelPipeRunCommand(AppCommandState& st);
 /// (`CadPipePartType`'s own tags — valve, flange, reducer, coupling, ...); refuses immediately
 /// (never entering the command) otherwise, mirroring `PIPECATALOG`'s own inline-argument refusals.
 void StartPipeFitCommand(AppCommandState& st, const std::string& partTypeTok, std::vector<std::string>& log);
+/// Flattens a `brep::Tessellation` into the flat per-vertex GL arrays the renderer uploads (REQ-313 /
+/// ADR-045): triangle vertices, one normal per vertex, and the owning face id per TRIANGLE. Shared by
+/// the viewport's solid display cache and REQ-350's part thumbnails, so the two cannot disagree about
+/// what a solid's mesh is.
+void ExpandTessellation(const brep::Tessellation& t, std::vector<float>* verts, std::vector<float>* normals,
+                        std::vector<int>* faceIds);
+
+/// REQ-350 (f) — the pipe run under \p pick, or none. "Under" means within the pipe's own outer
+/// radius (with a little slack) of its centreline; when two runs overlap the pick, the nearer
+/// centreline wins. This is what decides whether a part armed from the Pipe Fittings palette splices
+/// into a run or is placed as a free INSERT.
+[[nodiscard]] bool CadPipeRunUnderPick(const AppCommandState& st, const ray3d::Vec3& pick, int* outRunIdx);
+
+/// REQ-350 (f) — splice the NAMED library part into `st.cadPipeRuns[runIdx]` at the point nearest
+/// \p pick: exactly what `PIPEFIT <part type>` does after its catalog lookup, including the
+/// engagement cutback, the run splitting into two pieces, and one undo step. Named rather than
+/// looked up by type because the palette has already chosen a specific part, and the catalog lookup
+/// refuses when several parts match a type.
+bool CadPipeFitNamedAtPick(AppCommandState& st, int runIdx, const std::string& blockName,
+                           const ray3d::Vec3& pick, std::vector<std::string>& log);
 /// Handle a viewport click: the station point to splice the fitting in at. Always ends the command,
 /// success or refusal — there is nothing left to pick after one point.
 void SubmitPipeFitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
