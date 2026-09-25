@@ -178,6 +178,10 @@ void DrawWikiWindow(AppCommandState& cmd);
 /// Clears per-frame command-bar help state (call once at frame start; Start tab skips DrawCommandLinePanel).
 void CadUiBeginHelpFrame();
 bool CadUiIsCommandInputActive();
+/// Whether a UI widget has already submitted a command line on THIS ImGui frame. The raw Enter
+/// poll in main.cpp asks before firing, so one keypress can never be submitted twice
+/// (D-2026-09-24-f).
+bool CadUiCommandLineSubmittedThisFrame();
 /// Lowercase primary from the command-bar fuzzy suggestion list, or empty.
 const std::string& QueryCommandBarFuzzyPrimary();
 

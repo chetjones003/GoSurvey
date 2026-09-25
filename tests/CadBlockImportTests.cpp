@@ -2597,6 +2597,162 @@ TEST_CASE("Saving a block in BEDIT marks its palette thumbnail stale",
   CHECK(st.pipeFittingThumbStale.size() == 1);
 }
 
+// --- REQ-350 (f): the armed palette click must SNAP, not just drop (user report 2026-09-25) -------
+
+namespace {
+/// A blind flange as the bundled part actually is: ONE connection point, whose single mode targets
+/// a flange face and is flagged `isDefault` (what the authoring UI produces for an only mode). One
+/// port is the whole point -- it can never splice into a run, so the palette click has nothing but
+/// the connector snap to orient it with.
+CadBlockDefinition MakeBlindFlangeDef(const std::string& name) {
+  CadBlockDefinition def;
+  def.name = name;
+  def.partType = CadPipePartType::Flange;
+  def.nominalSize = "2in";
+  CadBlockConnection gasket;
+  gasket.name = "GASKET_FACE";
+  gasket.x = 0.f; gasket.y = 0.f; gasket.z = 0.f;
+  gasket.nx = 0.f; gasket.ny = -1.f; gasket.nz = 0.f;
+  gasket.role = CadBlockConnectionRole::Inlet;
+  gasket.compatibilityTag = "class150";
+  CadBlockConnectionMode m;
+  m.name = "Mode 1";
+  m.target = CadConnectionModeTarget::FlangeFace;
+  m.role = CadBlockConnectionRole::Inlet;
+  m.compatibilityTag = "class150";
+  m.isDefault = true;
+  gasket.modes = {m};
+  def.connections = {gasket};
+  return def;
+}
+
+/// An already-placed weld-neck flange, reduced to the one thing these tests need of it: a
+/// gasket-face port sitting in the drawing at \p faceY facing +Y, for a blind flange to bolt onto.
+void PlaceTargetFlange(AppCommandState& st, float faceY) {
+  CadBlockDefinition def;
+  def.name = "TARGET_WN_FLANGE";
+  def.partType = CadPipePartType::Flange;
+  def.nominalSize = "2in";
+  CadBlockConnection gasket;
+  gasket.name = "gasketFace";
+  gasket.x = 0.f; gasket.y = 0.f; gasket.z = 0.f;
+  gasket.nx = 0.f; gasket.ny = 1.f; gasket.nz = 0.f;
+  gasket.role = CadBlockConnectionRole::Inlet;
+  CadBlockConnectionMode m;
+  m.name = "Mode 1";
+  m.target = CadConnectionModeTarget::FlangeFace;
+  m.role = CadBlockConnectionRole::Inlet;
+  m.isDefault = true;
+  gasket.modes = {m};
+  def.connections = {gasket};
+  st.blockDefs.push_back(def);
+
+  CadBlockRef ref;
+  ref.defName = "TARGET_WN_FLANGE";
+  ref.xf.y = faceY;
+  st.cadBlockRefs.push_back(ref);
+}
+
+CadBlockLibraryEntry PaletteRowFor(const std::string& name) {
+  CadBlockLibraryEntry e;
+  e.name = name;
+  e.isFitting = true;
+  e.partType = CadPipePartType::Flange;
+  e.nominalSize = "2in";
+  e.imported = true;
+  return e;
+}
+
+/// The world position/normal of connection \p connIndex on the placed reference to \p defName.
+bool PlacedPortOf(const AppCommandState& st, const std::string& defName, size_t connIndex,
+                  CadBlockWorldConnection* out) {
+  for (int i = 0; i < static_cast<int>(st.cadBlockRefs.size()); ++i) {
+    if (st.cadBlockRefs[static_cast<size_t>(i)].defName != defName)
+      continue;
+    std::vector<CadBlockWorldConnection> world;
+    CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[static_cast<size_t>(i)], i, &world);
+    if (connIndex >= world.size())
+      return false;
+    *out = world[connIndex];
+    return true;
+  }
+  return false;
+}
+
+bool PaletteLogHas(const std::vector<std::string>& log, const char* needle) {
+  for (const std::string& line : log)
+    if (line.find(needle) != std::string::npos)
+      return true;
+  return false;
+}
+} // namespace
+
+TEST_CASE("A palette-armed blind flange snaps onto a flange face rather than landing unaligned",
+          "[issue486][req350][palette][connectorsnap]") {
+  AppCommandState st;
+  PlaceTargetFlange(st, /*faceY=*/10.f);
+  st.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
+
+  std::vector<std::string> log;
+  REQUIRE(CadPipePaletteArmPart(st, PaletteRowFor("2IN_BLIND_FLANGE"), log));
+  REQUIRE(st.active == AppCommandState::Kind::InsertBlock);
+
+  // Clicked roughly ON the target flange face -- inside the 2ft connector tolerance, the way a user
+  // clicks the face they want the blind flange bolted to.
+  SubmitInsertBlockPick(st, 0.2f, 9.8f, 0.1f, log);
+
+  CadBlockWorldConnection placed{};
+  REQUIRE(PlacedPortOf(st, "2IN_BLIND_FLANGE", 0, &placed));
+  // Its gasket face sits ON the target face, not at the raw click point...
+  CHECK(placed.x == Catch::Approx(0.0).margin(1e-3));
+  CHECK(placed.y == Catch::Approx(10.0).margin(1e-3));
+  CHECK(placed.z == Catch::Approx(0.0).margin(1e-3));
+  // ...and faces INTO it: two mating faces point at each other (-1 against the target +Y).
+  CHECK(placed.ny == Catch::Approx(-1.0).margin(1e-3));
+  CHECK(PaletteLogHas(log, "snapped to"));
+}
+
+TEST_CASE("With nothing in reach the palette places the part at the point and says why",
+          "[issue486][req350][palette][connectorsnap]") {
+  AppCommandState st;
+  PlaceTargetFlange(st, /*faceY=*/10.f);
+  st.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
+
+  std::vector<std::string> log;
+  REQUIRE(CadPipePaletteArmPart(st, PaletteRowFor("2IN_BLIND_FLANGE"), log));
+  SubmitInsertBlockPick(st, 100.f, 100.f, 0.f, log);  // far from anything
+
+  // Staged beside the line is a placement, not a refusal (REQ-350 (f)) -- but the user is told the
+  // orientation is the one it was authored with, rather than being left to wonder.
+  CadBlockWorldConnection placed{};
+  REQUIRE(PlacedPortOf(st, "2IN_BLIND_FLANGE", 0, &placed));
+  CHECK(placed.x == Catch::Approx(100.0).margin(1e-3));
+  CHECK(placed.y == Catch::Approx(100.0).margin(1e-3));
+  CHECK(PaletteLogHas(log, "nothing within 2 ft for its connection point to mate with"));
+}
+
+TEST_CASE("A part that cannot splice still lands where it was clicked",
+          "[issue486][req350][palette][connectorsnap]") {
+  AppCommandState st;
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 40.0, 0.0, 0.0};
+  run.nominalSize = "2in";
+  st.cadPipeRuns = {run};
+  st.cadPipeRunAttrs = {EntityAttributes{}};
+  st.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
+
+  std::vector<std::string> log;
+  REQUIRE(CadPipePaletteArmPart(st, PaletteRowFor("2IN_BLIND_FLANGE"), log));
+  // Mid-run, well clear of either end: the splice cannot take a one-port part, and there is no port
+  // in reach either. Before this fix the click was consumed and NOTHING was placed.
+  SubmitInsertBlockPick(st, 20.f, 0.f, 0.f, log);
+
+  CHECK(PaletteLogHas(log, "two connection ports"));  // said why it could not splice
+  CadBlockWorldConnection placed{};
+  REQUIRE(PlacedPortOf(st, "2IN_BLIND_FLANGE", 0, &placed));
+  CHECK(placed.x == Catch::Approx(20.0).margin(1e-3));
+  CHECK(st.cadPipeRuns.size() == 1);  // and the run was left alone
+}
 TEST_CASE("Every bundled fitting yields drawable geometry under its listed name",
           "[issue486][req350][palette][block]") {
   // The invariant REQ-350's thumbnails stand on, and the one whose absence made every palette row a

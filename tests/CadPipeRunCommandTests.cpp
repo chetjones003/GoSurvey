@@ -1116,6 +1116,122 @@ TEST_CASE("PIPEFIT projects an off-centerline pick onto the nearest point of the
   CHECK(st.cadPipeRuns[0].vertsXyz[4] == Catch::Approx(0.0));
 }
 
+// --- A flange must weld its PIPE-END port to the pipe (user report 2026-09-24) -------------------
+
+namespace {
+/// The bundled 2in weld-neck flange, reduced to what decides its orientation: TWO ports, BOTH
+/// tagged with the Inlet role, each carrying a single mode flagged `isDefault` (what the authoring
+/// UI produces for an only-mode port), and the gasket face defined FIRST. Neither the role test nor
+/// definition order can tell these apart — only the mode's own target can, which is the whole point
+/// of the regression.
+CadBlockDefinition MakeWeldNeckFlangeDef(const std::string& name, float neckOffset = 0.2f) {
+  CadBlockDefinition def;
+  def.name = name;
+  def.partType = CadPipePartType::Flange;
+  def.nominalSize = "4in";
+
+  CadBlockConnection gasket;
+  gasket.name = "gasketFace";
+  gasket.x = 0.f; gasket.y = 0.f; gasket.z = 0.f;
+  gasket.nx = 0.f; gasket.ny = -1.f; gasket.nz = 0.f;
+  gasket.role = CadBlockConnectionRole::Inlet;
+  CadBlockConnectionMode gasketMode;
+  gasketMode.name = "Mode 1";
+  gasketMode.target = CadConnectionModeTarget::FlangeFace;
+  gasketMode.role = CadBlockConnectionRole::Inlet;
+  gasketMode.isDefault = true;
+  gasket.modes = {gasketMode};
+
+  CadBlockConnection neck;
+  neck.name = "weldNeckFace";
+  neck.x = 0.f; neck.y = neckOffset; neck.z = 0.f;
+  neck.nx = 0.f; neck.ny = 1.f; neck.nz = 0.f;
+  neck.role = CadBlockConnectionRole::Inlet;
+  CadBlockConnectionMode neckMode;
+  neckMode.name = "Mode 1";
+  neckMode.target = CadConnectionModeTarget::PipeEnd;
+  neckMode.role = CadBlockConnectionRole::Inlet;
+  neckMode.isDefault = true;
+  neck.modes = {neckMode};
+
+  def.connections = {gasket, neck};  // gasket FIRST, as the bundled part defines it
+  return def;
+}
+
+/// World position of \p def's connection \p connIndex under the placed reference's transform.
+ray3d::Vec3 PlacedPortWorld(const AppCommandState& st, const CadBlockRef& ref, size_t connIndex) {
+  const int di = CadBlockFindDef(st.blockDefs, ref.defName);
+  REQUIRE(di >= 0);
+  const CadBlockConnection& c = st.blockDefs[static_cast<size_t>(di)].connections[connIndex];
+  float wx = 0.f, wy = 0.f, wz = 0.f;
+  CadBlockXformPoint(ref.xf, c.x, c.y, c.z, &wx, &wy, &wz);
+  return ray3d::Vec3{wx, wy, wz};
+}
+} // namespace
+
+TEST_CASE("A flange welds its pipe-end port to the pipe, not its flange face",
+          "[issue486][pipefit][flangeport]") {
+  AppCommandState st = MakeStateWithOneStraightRun();  // (0,0,0) -> (20,0,0)
+  st.blockDefs.push_back(MakeWeldNeckFlangeDef("FLANGE-4IN"));
+
+  std::vector<std::string> log;
+  const ray3d::Vec3 pick{10.0, 0.0, 0.0};
+  REQUIRE(CadPipeFitNamedAtPick(st, 0, "FLANGE-4IN", pick, log));
+
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  // Port 0 is the gasket face, port 1 the weld neck. The weld neck is what the upstream pipe ends
+  // against; the gasket face is the free end, one flange length downstream. Both ports land at one
+  // of these two points either way — WHICH port lands on the pipe is the entire bug.
+  const ray3d::Vec3 gasket = PlacedPortWorld(st, st.cadBlockRefs[0], 0);
+  const ray3d::Vec3 neck = PlacedPortWorld(st, st.cadBlockRefs[0], 1);
+  CHECK(neck.x == Catch::Approx(10.0).margin(1e-4));
+  CHECK(gasket.x == Catch::Approx(10.2).margin(1e-4));
+}
+
+TEST_CASE("The flange's pipe-end port outranks role and definition order for the cutback too",
+          "[issue486][pipefit][flangeport]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  CadBlockDefinition def = MakeWeldNeckFlangeDef("FLANGE-4IN");
+  // Only the weld neck engages a pipe; the gasket face never slides onto anything. With the ports
+  // swapped this cutback would be read off the gasket face instead and the pipe would stop short.
+  def.connections[1].modes[0].engagementLength = 1.5f;
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  const ray3d::Vec3 pick{10.0, 0.0, 0.0};
+  REQUIRE(CadPipeFitNamedAtPick(st, 0, "FLANGE-4IN", pick, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(8.5));  // 10 - the weld neck's 1.5ft
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(PlacedPortWorld(st, st.cadBlockRefs[0], 1).x == Catch::Approx(8.5).margin(1e-4));
+}
+
+TEST_CASE("A fitting with a pipe end on BOTH sides keeps its Inlet/Outlet resolution",
+          "[issue486][pipefit][flangeport]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  // An inline valve, both ports explicitly tagged for a pipe end — the rule that saves the flange
+  // must not fire here, or a through-run fitting would be resolved by definition order instead of
+  // by the roles it was authored with.
+  CadBlockDefinition def = MakeValveDef("VALVE-4IN");
+  for (CadBlockConnection& c : def.connections) {
+    CadBlockConnectionMode m;
+    m.name = "Mode 1";
+    m.target = CadConnectionModeTarget::PipeEnd;
+    m.role = c.role;
+    m.isDefault = true;
+    m.engagementLength = 0.f;
+    c.modes = {m};
+  }
+  std::swap(def.connections[0], def.connections[1]);  // Outlet defined FIRST
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  const ray3d::Vec3 pick{10.0, 0.0, 0.0};
+  REQUIRE(CadPipeFitNamedAtPick(st, 0, "VALVE-4IN", pick, log));
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(10.0));
+}
 // --- PIPESPLIT / PIPEJOIN / PIPEPROP (issue #486 increment B8, REQ-345) ---------------------------
 
 TEST_CASE("PIPESPLIT refuses without exactly one pipe run selected", "[issue486][pipesplit]") {

@@ -69,7 +69,14 @@ void AppendInsertBlockGhostRubber(const AppCommandState& st, const CadBlockXform
 bool SubmitInsertBlockAlignFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
                                     std::vector<std::string>& log);
 /// Target connection pick during WaitConnectorTarget (issue #475 inc5).
-bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log);
+/// Snap the block being inserted onto a nearby connection port or pipe end (REQ-107 / issue #496).
+///
+/// \p optional = "snap if there is something to snap to": the two not-found paths return false
+/// WITHOUT logging a refusal, so a caller that has a legitimate fallback (the Pipe Fittings
+/// palette placing a part staged beside the line, REQ-350 (f)) can take it and report its own
+/// outcome. Every other caller leaves it false and gets the refusal by name (REQ-201).
+bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz,
+                                    std::vector<std::string>& log, bool optional = false);
 /// Face pick during BCONNECT authoring in BEDIT.
 bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
                             std::vector<std::string>& log);

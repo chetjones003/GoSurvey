@@ -993,6 +993,14 @@ bool CadPipePaletteArmPart(AppCommandState& st, const CadBlockLibraryEntry& entr
   st.insertBlockSpecifyRot = false;
   st.insertBlockSpecifyAlignFace = false;
   st.insertBlockExplode = false;
+  // Every port on the part is a candidate for the connector snap the click may take
+  // (`SubmitInsertBlockPick`), so whichever one's own configured mode matches what is under the
+  // cursor wins. A name left behind in the INSERT dialog would pin the search to that one port
+  // instead — and on a part it does not even belong to, refuse the snap outright.
+  st.insertBlockConnectorName[0] = '\0';
+  st.insertBlockSpecifyConnectorSnap = false;  // the palette drives the snap itself, per click
+  st.insertBlockRotXDeg = 0.f;
+  st.insertBlockRotYDeg = 0.f;
   st.insertBlockSx = 1.f;
   st.insertBlockSy = 1.f;
   st.insertBlockSz = 1.f;
@@ -1003,7 +1011,8 @@ bool CadPipePaletteArmPart(AppCommandState& st, const CadBlockLibraryEntry& entr
   st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
   st.active = AppCommandState::Kind::InsertBlock;
   log.push_back("Pipe Fittings — \"" + entry.name +
-                "\": click on a pipe run to splice it in, or anywhere else to place it (ESC cancels).");
+                "\": click on a pipe run to splice it in, on a connection port or pipe end to snap "
+                "onto it, or anywhere else to place it (ESC cancels).");
   return true;
 }
 
@@ -1704,7 +1713,8 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
   return any;
 }
 
-bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log) {
+bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log,
+                                    bool optional) {
   using Ph = AppCommandState::InsertBlockPhase;
   if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitConnectorTarget)
     return false;
@@ -1723,7 +1733,12 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
   const bool foundPipeEndRaw =
       FindNearestPipeEndpoint(st, wx, wy, wz, kSnap, &pipeX, &pipeY, &pipeZ, &pipeNx, &pipeNy, &pipeNz);
   if (!foundPortRaw && !foundPipeEndRaw) {
-    log.push_back("INSERT — no connection port near that point (within 2 ft).");
+    // `optional` is the Pipe Fittings palette asking "snap if there is anything to snap to"
+    // (REQ-350 (f)): a part staged beside the line is a placement, not a failure, so the
+    // caller places it plainly and says so. Every other caller asked for a snap and gets the
+    // refusal by name (REQ-201).
+    if (!optional)
+      log.push_back("INSERT — no connection port near that point (within 2 ft).");
     return false;
   }
   const CadConnectionModeTarget portTarget = CadBlockClassifyPortTarget(tgt.ownerPartType);
@@ -1783,9 +1798,10 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
     }
   }
   if (!src) {
-    log.push_back(insertedDef.connections.size() > 1
-                      ? "INSERT — nothing near that point matches any of this block's connection points."
-                      : "INSERT — nothing near that point matches this connection point's configured mode(s).");
+    if (!optional)
+      log.push_back(insertedDef.connections.size() > 1
+                        ? "INSERT — nothing near that point matches any of this block's connection points."
+                        : "INSERT — nothing near that point matches this connection point's configured mode(s).");
     return false;
   }
 
@@ -2736,21 +2752,53 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
     st.insertBlockX = wx;
     st.insertBlockY = wy;
     st.insertBlockZ = wz;
-    // REQ-350 (f) — armed from the Pipe Fittings palette, a pick that lands ON a pipe run splices the
-    // part into that run (the PIPEFIT path: engagement cutback, run split in two, one undo step)
-    // instead of dropping a free block reference. A pick anywhere else falls through to the ordinary
-    // INSERT below, which is the whole point of deciding by where the click landed rather than by mode.
+    // REQ-350 (f) — armed from the Pipe Fittings palette, ONE click places the part and WHERE it
+    // lands decides how. Three outcomes, tried in this order, because each is strictly more
+    // specific than the next:
+    //
+    //   1. on a pipe run -> splice it in (the PIPEFIT path: engagement cutback, run split in two,
+    //      one undo step);
+    //   2. otherwise, near a connection port or pipe end -> snap to it, which is what orients the
+    //      part (REQ-107 / issue #496, the same `SubmitInsertBlockConnectorPick` INSERT already
+    //      uses, asked OPTIONALLY so "nothing nearby" is not a refusal here);
+    //   3. otherwise -> place it free at the point.
+    //
+    // Step 2 was MISSING, and that is the "the blind flange is not aligning correctly" report: a
+    // blind flange bolts onto another flange FACE, never into the middle of a pipe, so its click
+    // never reaches step 1 — and without step 2 it fell straight through to step 3 and was dropped
+    // with the identity rotation it was authored with. REQ-350 (f) has said "with connection-port
+    // snapping (REQ-107)" all along; `CadPipePaletteArmPart` never turned it on.
+    //
+    // A failed SPLICE also falls through rather than ending the click: a part that cannot splice
+    // (a blind flange has ONE port; `PickElbowPorts` needs two) would otherwise consume the click
+    // and place nothing at all, which is not a refusal the user can act on (REQ-201). The splice
+    // has already logged WHY, and the part still lands where it was clicked.
     if (st.insertBlockPipeSpliceArmed) {
       const ray3d::Vec3 pick{static_cast<double>(wx), static_cast<double>(wy), static_cast<double>(wz)};
+      const std::string armed = st.insertBlockName;
       int runIdx = -1;
       if (CadPipeRunUnderPick(st, pick, &runIdx)) {
-        const std::string armed = st.insertBlockName;
         st.insertBlockPipeSpliceArmed = false;
         st.insertBlockPhase = Ph::WaitInsertPoint;
         st.active = AppCommandState::Kind::None;
-        (void)CadPipeFitNamedAtPick(st, runIdx, armed, pick, log);  // refusals are logged there
-        return;
+        if (CadPipeFitNamedAtPick(st, runIdx, armed, pick, log))
+          return;
+        // Refused, and said why. Re-arm just enough to finish the click as a placement.
+        st.active = AppCommandState::Kind::InsertBlock;
+        st.insertBlockPhase = Ph::WaitInsertPoint;
       }
+      st.insertBlockPipeSpliceArmed = false;
+      st.insertBlockPhase = Ph::WaitConnectorTarget;
+      if (SubmitInsertBlockConnectorPick(st, wx, wy, wz, log, /*optional=*/true))
+        return;  // snapped and placed
+      st.insertBlockPhase = Ph::WaitInsertPoint;
+      // The REASON, not the outcome: `InsertAdvanceAfterPoint` below is what actually places
+      // it, and "within 2 ft" covers both "nothing there" and "nothing there this part can
+      // mate with" — the snap refuses for either, and the user needs to know only that it
+      // went down with the orientation it was authored with.
+      log.push_back("Pipe Fittings — \"" + armed +
+                    "\": nothing within 2 ft for its connection point to mate with; placing "
+                    "it as authored.");
     }
     InsertAdvanceAfterPoint(st, log);
     return;

@@ -1109,7 +1109,6 @@ int main()
     // LINE/POLYLINE AP: after two picks the bottom command InputText is hidden — Enter must still lock bearing.
     // Keyboard-only "A" then bearing: Enter with empty buffer cancels awaiting mode when no text field is focused.
     {
-      ImGuiIO &ioEnter = ImGui::GetIO();
       const bool enterDown =
           ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
       // The gate is "no widget is actively capturing", NOT `WantTextInput` (D-2026-09-24-c).
@@ -1126,7 +1125,19 @@ int main()
       // into CadUi.cpp already uses ("GetActiveID() == 0 is the guard that keeps the two callers
       // from double-firing on one keypress"): when a field is active, its own Enter handler runs and
       // this poll must stay silent; when none is, this poll is the only handler there is.
-      if (enterDown && !ImGui::IsAnyItemActive() && cmd.active != AppCommandState::Kind::None)
+      //
+      // `IsAnyItemActive()` alone is NOT enough, and the gap is what a user reported as "Enter has
+      // random behavior" (D-2026-09-24-f). An InputText flagged `EnterReturnsTrue` clears its own
+      // active ID as the last thing it does, and `ReleaseSubmittedCommandInput` clears it again —
+      // both of them earlier in THIS frame than this poll. So on the one frame that matters, the
+      // frame a field just took the Enter, the gate reads "nothing is active" and this poll submits
+      // a SECOND time; `ProcessCommandLineSubmit` has already emptied the buffer, so the second one
+      // arrives as a bare Enter. That phantom Enter exited ORBIT the instant ORBIT started, and
+      // walked PIPERUN two prompts per keypress until it reported itself cancelled. Asking the UI
+      // whether it already submitted this frame closes it for every command at once, rather than
+      // per command.
+      if (enterDown && !ImGui::IsAnyItemActive() && !CadUiCommandLineSubmittedThisFrame() &&
+          cmd.active != AppCommandState::Kind::None)
         ProcessCommandLineSubmit(cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, cmdLog);
     }
 

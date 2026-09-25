@@ -311,6 +311,52 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
   };
 
+  // D-2026-09-24-f — ONE Enter keypress must produce exactly ONE submission.
+  //
+  // Reported as "Enter has random behavior": typing ORBIT and pressing Enter started the command
+  // and immediately exited it, and PIPERUN walked two prompts per keypress until it announced
+  // itself cancelled. Both are the same defect. An InputText flagged `EnterReturnsTrue` clears its
+  // own active ID as the last thing it does, so main.cpp's raw Enter poll — gated on "no widget is
+  // capturing" — ran later in the SAME frame, found nothing active, and submitted again; by then
+  // `ProcessCommandLineSubmit` had emptied the buffer, so the second submission arrived as a bare
+  // Enter and every command whose first prompt gives a blank Enter a meaning acted on it.
+  //
+  // Only reproducible through the real widget tree: the keypress has to reach an ImGui InputText
+  // for the frame in question to exist at all, which is why `SubmitCad` (a direct call) cannot see
+  // it and why the unit tests shipped green throughout.
+  //
+  //   build\devshell\GoSurvey.exe --devshell-run d-2026-09-24-f-one-enter-one-submit
+  ImGuiTest* oneEnter = IM_REGISTER_TEST(engine, "gosurvey", "d-2026-09-24-f-one-enter-one-submit");
+  oneEnter->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+
+    // ORBIT is the clearest case: a bare Enter is its documented EXIT, so a phantom second submit
+    // ends the command on the very keypress that started it.
+    IM_CHECK(RefCommandBar(ctx));
+    ctx->ItemClick("GoSurveyCmdPanel/##CommandLineInput");
+    ctx->KeyCharsReplaceEnter("ORBIT");
+    ctx->Yield(3);
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::Orbit);
+    IM_CHECK(CancelToIdle(ctx));
+
+    // PIPERUN shows the same defect as a SKIPPED prompt: answering the size must leave the command
+    // at the wall-thickness prompt, not carry on through it on the same keypress.
+    IM_CHECK(RefCommandBar(ctx));
+    ctx->ItemClick("GoSurveyCmdPanel/##CommandLineInput");
+    ctx->KeyCharsReplaceEnter("PIPERUN");
+    ctx->Yield(3);
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::PipeRun);
+    IM_CHECK_EQ(s_cmd->pipeRunPhase, AppCommandState::PipeRunPhase::WaitNominalSize);
+
+    IM_CHECK(RefCommandBar(ctx));
+    ctx->ItemClick("GoSurveyCmdPanel/##CommandLineInput");
+    ctx->KeyCharsReplaceEnter("4in");
+    ctx->Yield(3);
+    IM_CHECK_EQ(s_cmd->pipeRunPhase, AppCommandState::PipeRunPhase::WaitWallThickness);
+
+    IM_CHECK(CancelToIdle(ctx));
+  };
   // PIPEPERF exercised end to end: route a real run through the app, then read the profile it
   // reports. Not an assertion about milliseconds — those belong on the reference machine with BENCH
   // — but a check that the counters are wired to the work, and a way to SEE where routing time goes.

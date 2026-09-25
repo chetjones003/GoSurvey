@@ -34073,16 +34073,40 @@ CadPipePartType ElbowPartTypeForSnappedAngleDeg(double snappedDeg) {
   return CadPipePartType::None;
 }
 
-/// Which of \p def's two connections mates with the incoming leg ("near") vs the outgoing leg
-/// ("far"): a role-tagged Inlet/Outlet pair is used when present (the natural authoring convention
-/// for a through-run fitting), otherwise definition order. Both left null unless \p def has EXACTLY
-/// two connections — a part tagged elbow-90/-45 with any other port count cannot be auto-oriented.
+/// Which of \p def's two connections mates with the PIPE ("near") vs the far side ("far"): the
+/// port explicitly configured for a pipe end wins; failing that a role-tagged Inlet/Outlet pair is
+/// used when present (the natural authoring convention for a through-run fitting), and failing that
+/// definition order. Both left null unless \p def has EXACTLY two connections — a part tagged
+/// elbow-90/-45 with any other port count cannot be auto-oriented.
+///
+/// The pipe-end rule is what stops a flange going in backwards (user report 2026-09-24, TASK-276). A
+/// weld-neck flange carries two ports that are NOT interchangeable — a weld neck that is welded to
+/// the pipe, tagged `CadConnectionModeTarget::PipeEnd`, and a gasket face that mates with another
+/// flange, tagged `FlangeFace` — and the bundled 2in part gives BOTH the `Inlet` role, so both
+/// tests above fell through to definition order and picked the gasket face. The caller then welds
+/// whichever port this returns as `near` onto the pipe, so the fitting came out end-for-end.
+///
+/// `CadBlockConnectionHasExactMode` (never the `isDefault` fallback) is the same discrimination
+/// `SubmitInsertBlockConnectorPick` already makes for INSERT's connector snap, for the same reason
+/// and after the same report (TASK-269): a port whose only mode is flagged default looks compatible
+/// with every target, so only an EXACT tag may outrank role and definition order. The rule fires
+/// only when exactly one of the two ports carries it — an elbow or a tee has a pipe end on both
+/// sides, and those keep the Inlet/Outlet resolution they have always had.
 void PickElbowPorts(const CadBlockDefinition& def, const CadBlockConnection** near,
                     const CadBlockConnection** far) {
   *near = nullptr;
   *far = nullptr;
   if (def.connections.size() != 2)
     return;
+  const CadBlockConnection& c0 = def.connections[0];
+  const CadBlockConnection& c1 = def.connections[1];
+  const bool pipeEnd0 = CadBlockConnectionHasExactMode(c0, CadConnectionModeTarget::PipeEnd);
+  const bool pipeEnd1 = CadBlockConnectionHasExactMode(c1, CadConnectionModeTarget::PipeEnd);
+  if (pipeEnd0 != pipeEnd1) {
+    *near = pipeEnd0 ? &c0 : &c1;
+    *far = pipeEnd0 ? &c1 : &c0;
+    return;
+  }
   const CadBlockConnection* inlet = nullptr;
   const CadBlockConnection* outlet = nullptr;
   for (const CadBlockConnection& c : def.connections) {
@@ -34095,8 +34119,8 @@ void PickElbowPorts(const CadBlockDefinition& def, const CadBlockConnection** ne
     *near = inlet;
     *far = outlet;
   } else {
-    *near = &def.connections[0];
-    *far = &def.connections[1];
+    *near = &c0;
+    *far = &c1;
   }
 }
 
