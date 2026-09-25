@@ -1249,15 +1249,15 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     case SelectedEntity::Type::Ellipse: {
       if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
         const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-        // A tilted ellipse (GitHub #531) has no grips DRAWN — src/ui/CadUi.cpp guards that, because
-        // its own are the next slice. Offering them here anyway is worse than not drawing them: the
-        // handle is invisible, sits where a flat ellipse's would be rather than on the curve, and
-        // grabbing it deforms the section. The two sides ask the same question now.
-        if (EllipseIsFlat(el)) {
-          const float perpX = -el.majVy, perpY = el.majVx;
-          tryGrip(sel, el.cx, el.cy, 0);
-          tryGrip(sel, el.cx + el.majVx, el.cy + el.majVy, 1);
-          tryGrip(sel, el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, 2);
+        // Centre, major end, minor end — through the shared helper, so this asks the same question
+        // src/ui/CadUi.cpp asks when it DRAWS them (GitHub #531). They disagreed before: a tilted
+        // ellipse drew no grips and still offered them here, which is an invisible handle sitting
+        // where a flat ellipse's would be, deforming the section when grabbed.
+        if (EllipseHasGrips(el)) {
+          ray3d::Vec3 g[3];
+          EllipseGripPoints(el, g);
+          for (int gi = 0; gi < 3; ++gi)
+            tryGrip(sel, static_cast<float>(g[gi].x), static_cast<float>(g[gi].y), gi);
         }
       }
       break;
@@ -6334,6 +6334,7 @@ void ResetEllipseDraft(AppCommandState& st) {
   st.ellPhase = AppCommandState::EllipsePhase::WaitCenter;
   st.ellCx = st.ellCy = 0.f;
   st.ellMajEx = st.ellMajEy = 0.f;
+  st.ellCz = st.ellMajEz = 0.f;
 }
 
 void ResetRectDraft(AppCommandState& st) {
@@ -13105,12 +13106,14 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     case EP::WaitCenter:
       st.ellCx = wx;
       st.ellCy = wy;
+      st.ellCz = CadCommitElevation(st);
       st.ellPhase = EP::WaitMajorEnd;
       log.push_back("ELLIPSE — major axis endpoint:");
       break;
     case EP::WaitMajorEnd:
       st.ellMajEx = wx;
       st.ellMajEy = wy;
+      st.ellMajEz = CadCommitElevation(st);
       st.ellPhase = EP::WaitRatio;
       log.push_back("ELLIPSE — type minor/major ratio (0-1], or Enter for 0.5:");
       break;
@@ -23260,7 +23263,7 @@ bool CadDeleteDrawingLayer(AppCommandState& st, const std::string& nameRaw, std:
   return true;
 }
 
-void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
+void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
   if (!st.entityGripMoveActive)
     return;
   const int idx = st.entityGripEntityIndex;
@@ -23349,17 +23352,46 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
     if (static_cast<size_t>(idx) >= st.userEllipses.size())
       return;
     CadEllipse& el = st.userEllipses[static_cast<size_t>(idx)];
-    if (st.entityGripWhich == 0) {
-      el.cx = x;
-      el.cy = y;
-    } else if (st.entityGripWhich == 1) {
-      el.majVx = x - el.cx;
-      el.majVy = y - el.cy;
-    } else if (st.entityGripWhich == 2) {
-      const float majLen2 = el.majVx * el.majVx + el.majVy * el.majVy;
-      if (majLen2 < 1e-12f)
-        return;
-      el.ratio = std::clamp<double>(((x - el.cx) * -el.majVy + (y - el.cy) * el.majVx) / majLen2, 0.0, 1.0);
+    if (EllipseIsFlat(el)) {
+      if (st.entityGripWhich == 0) {
+        el.cx = x;
+        el.cy = y;
+      } else if (st.entityGripWhich == 1) {
+        el.majVx = x - el.cx;
+        el.majVy = y - el.cy;
+      } else if (st.entityGripWhich == 2) {
+        const float majLen2 = el.majVx * el.majVx + el.majVy * el.majVy;
+        if (majLen2 < 1e-12f)
+          return;
+        el.ratio = std::clamp<double>(((x - el.cx) * -el.majVy + (y - el.cy) * el.majVx) / majLen2, 0.0, 1.0);
+      }
+      return;
+    }
+    // A TILTED ellipse is reshaped IN ITS OWN PLANE (GitHub #531). `majVx`/`majVy` are that plane's
+    // 2D frame, never world XY, so the dragged point is carried into the plane first; the three
+    // branches below are then the same arithmetic as the flat ones, one frame up.
+    {
+      const ucs::Ucs plane = CurvePlane(el);
+      const ray3d::Vec3 w{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)};
+      const ucs::Point2D p = ucs::WorldToPlane(plane, w);  // the plane's origin IS the centre
+      if (st.entityGripWhich == 0) {
+        // The centre carries the plane with it; the normal, and so the ellipse's attitude, is
+        // unchanged — the same thing moving a flat ellipse's centre grip does.
+        el.cx = x;
+        el.cy = y;
+        el.z = z;
+      } else if (st.entityGripWhich == 1) {
+        if (std::hypot(p.x, p.y) < 1e-12)
+          return;
+        el.majVx = static_cast<float>(p.x);
+        el.majVy = static_cast<float>(p.y);
+      } else if (st.entityGripWhich == 2) {
+        const double majLen2 = static_cast<double>(el.majVx) * el.majVx + static_cast<double>(el.majVy) * el.majVy;
+        if (majLen2 < 1e-12)
+          return;
+        el.ratio = static_cast<float>(std::clamp(
+            (p.x * -static_cast<double>(el.majVy) + p.y * static_cast<double>(el.majVx)) / majLen2, 0.0, 1.0));
+      }
     }
     return;
   }
@@ -37670,6 +37702,50 @@ static void FinishEllipseFromRatio(AppCommandState& st, float ratio, std::vector
   ell.majVx = vx0;
   ell.majVy = vy0;
   ell.ratio = ratio;
+
+  // A turned UCS stands the ellipse up in that plane (GitHub #531), the way `CommitCircle` has done
+  // for circles since REQ-312. Resolved BEFORE the undo snapshot below: a refusal here must leave no
+  // undo entry behind, which is the shape every other refusal in this function already has.
+  const bool tilted = !ActivePaperGeometryTarget(st) && !CadWorkPlaneIsWorldXy(st);
+  if (tilted) {
+    float nx = 0.f, ny = 0.f, nz = 1.f;
+    CadActiveDrawPlaneNormal(st, &nx, &ny, &nz);
+    // The same guard `CommitCircle` carries, and for the same reason: a normal that is NaN or
+    // zero-length does not fail loudly — `ucs::FromNormal` refuses and every consumer quietly falls
+    // back to a different plane than the one drawn on (REQ-201, REQ-204).
+    if (!std::isfinite(nx) || !std::isfinite(ny) || !std::isfinite(nz) ||
+        (nx * nx + ny * ny + nz * nz) < 1e-12f) {
+      log.push_back("ELLIPSE rejected — the work plane is not a valid plane.");
+      return;
+    }
+    // The two picks are full 3D points, each carrying the elevation it was made at, so the major
+    // axis is measured IN the plane — the only frame `majVx`/`majVy` is ever read in (see
+    // `EllipseWorldPointAt`), and the same frame `SECTION` writes its tilted ellipse in.
+    const ucs::Ucs plane = CurvePlane(static_cast<double>(st.ellCx), static_cast<double>(st.ellCy),
+                                      static_cast<double>(st.ellCz), static_cast<double>(nx),
+                                      static_cast<double>(ny), static_cast<double>(nz));
+    const ucs::Point2D c2 = ucs::WorldToPlane(
+        plane, ray3d::Vec3{static_cast<double>(st.ellCx), static_cast<double>(st.ellCy),
+                           static_cast<double>(st.ellCz)});
+    const ucs::Point2D m2 = ucs::WorldToPlane(
+        plane, ray3d::Vec3{static_cast<double>(st.ellMajEx), static_cast<double>(st.ellMajEy),
+                           static_cast<double>(st.ellMajEz)});
+    const double mvx = m2.x - c2.x;
+    const double mvy = m2.y - c2.y;
+    if (std::hypot(mvx, mvy) < 1e-8) {
+      // Distinct points in space that fall on the same point of the plane: the second lies along the
+      // normal, straight "through" the drawing. There is no major axis to draw.
+      log.push_back("ELLIPSE — major axis too short in the work plane.");
+      return;
+    }
+    ell.z = st.ellCz;
+    ell.majVx = static_cast<float>(mvx);
+    ell.majVy = static_cast<float>(mvy);
+    ell.nx = nx;
+    ell.ny = ny;
+    ell.nz = nz;
+  }
+
   PushUndoSnapshot(st, "Ellipse");
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     // Paper-space ELLIPSE (REQ-039): centre/axis are paper inches; commit to the layout's paper
@@ -37678,7 +37754,8 @@ static void FinishEllipseFromRatio(AppCommandState& st, float ratio, std::vector
     L->paperEllipses.push_back(ell);
     L->paperEllAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    ell.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
+    if (!tilted)
+      ell.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
     st.userEllipses.push_back(ell);
     st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
   }
@@ -38098,7 +38175,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.entityGripTypedDistanceValid = true;
       // Arming the grip already pushed the pre-drag undo snapshot, so the typed placement just overwrites
       // whatever the live drag had put there — one undo returns the entity to where it started.
-      ApplyEntityGripPoint(st, st.entityGripTypedX, st.entityGripTypedY);
+      ApplyEntityGripPoint(st, st.entityGripTypedX, st.entityGripTypedY, CadCommitElevation(st));
       char gripMsg[128];
       std::snprintf(gripMsg, sizeof(gripMsg), "Grip stretched %.6g %s.",
                     static_cast<double>(std::fabs(gripDist)),

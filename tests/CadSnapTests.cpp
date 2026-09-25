@@ -1580,6 +1580,168 @@ TEST_CASE("The selection highlight traces the curve that is drawn", "[CadCommand
   CHECK(mxZ <= 10.0 + 1e-3);   // and stops at the cap it was cut by, not above it
 }
 
+
+// --- GitHub #531 acceptance 2: ELLIPSE on a turned UCS, and its grips ---------------------------
+//
+// "ELLIPSE on a UCS turned 90 degrees about X makes an ellipse standing in that plane. Its snaps,
+// grips and pick land on the drawn curve." Snaps landed with PR #556 and pick with the selection
+// fix; these cover the other two.
+
+namespace {
+
+/// The UCS the acceptance names: turned 90 degrees about X, so the work plane stands vertical and
+/// its own Y axis runs up world Z.
+ucs::Ucs TurnedAboutX90() {
+  ucs::Ucs u{};
+  u.origin = {0, 0, 0};
+  u.xAxis = {1, 0, 0};
+  u.yAxis = {0, 0, 1};
+  u.zAxis = {0, -1, 0};
+  return u;
+}
+
+}  // namespace
+
+TEST_CASE("ELLIPSE on a UCS turned about X stands in that plane", "[CadCommands][issue531][ellgrip]") {
+  AppCommandState st;
+  st.activeUcs = TurnedAboutX90();
+  std::vector<std::string> log;
+
+  // Centre at the origin, major axis endpoint 40 along the UCS's own X, ratio 0.5.
+  st.active = AppCommandState::Kind::Ellipse;
+  st.ellPhase = AppCommandState::EllipsePhase::WaitCenter;
+  SubmitViewportPick(st, 0.f, 0.f, log, false, false);
+  SubmitViewportPick(st, 40.f, 0.f, log, false, false);
+  char buf[16] = "0.5";
+  ProcessCommandLineSubmit(buf, 16, st, log);
+
+  REQUIRE(st.userEllipses.size() == 1u);
+  const CadEllipse& el = st.userEllipses[0];
+  // It stands up: the stored normal is the UCS's Z axis, not +Z.
+  CHECK_FALSE(EllipseIsFlat(el));
+  CHECK(std::fabs(static_cast<double>(el.nz)) < 1e-6);
+  CHECK(std::fabs(std::fabs(static_cast<double>(el.ny)) - 1.0) < 1e-6);
+  // The major axis is 40 long, measured in the plane.
+  CHECK(std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy)) == Approx(40.0).margin(1e-3));
+  CHECK(el.ratio == Approx(0.5f));
+
+  // And the curve it draws really does stand in that plane: the minor-axis endpoint is 20 ABOVE the
+  // centre in world Z, which a flat ellipse could never be.
+  constexpr double kHalfPi = 1.57079632679489661923;
+  const ray3d::Vec3 minorEnd = EllipseWorldPointAt(el, kHalfPi);
+  CHECK(std::fabs(minorEnd.z - static_cast<double>(el.z)) == Approx(20.0).margin(1e-3));
+}
+
+TEST_CASE("A flat ELLIPSE is committed exactly as before", "[CadCommands][issue531][ellgrip]") {
+  // The world UCS must take the untouched path — same store, same values, no normal.
+  AppCommandState st;
+  std::vector<std::string> log;
+  st.active = AppCommandState::Kind::Ellipse;
+  st.ellPhase = AppCommandState::EllipsePhase::WaitCenter;
+  SubmitViewportPick(st, 5.f, 0.f, log, false, false);
+  SubmitViewportPick(st, 15.f, 0.f, log, false, false);
+  char buf[16] = "0.5";
+  ProcessCommandLineSubmit(buf, 16, st, log);
+
+  REQUIRE(st.userEllipses.size() == 1u);
+  const CadEllipse& el = st.userEllipses[0];
+  CHECK(EllipseIsFlat(el));
+  CHECK(el.cx == Approx(5.f));
+  CHECK(el.majVx == Approx(10.f));
+  CHECK(el.majVy == Approx(0.f));
+}
+
+TEST_CASE("A tilted ellipse's grips sit on the curve it draws", "[CadCommands][issue531][ellgrip]") {
+  AppCommandState st;
+  CadEllipse el;
+  el.cx = 0.f;
+  el.cy = 0.f;
+  el.z = 0.f;
+  el.majVx = 40.f;
+  el.majVy = 0.f;
+  el.ratio = 0.5f;
+  el.nx = 0.f;   // standing in the XZ plane
+  el.ny = -1.f;
+  el.nz = 0.f;
+  st.userEllipses.push_back(el);
+
+  REQUIRE(EllipseHasGrips(el));
+  ray3d::Vec3 g[3];
+  EllipseGripPoints(el, g);
+  // Centre, then the two axis endpoints — and the minor one is up in Z, on the standing curve,
+  // where the flat reading would have put it at z = 0 out along world Y.
+  CHECK(g[0].x == Approx(0.0).margin(1e-9));
+  CHECK(g[0].z == Approx(0.0).margin(1e-9));
+  CHECK(std::hypot(g[1].x - 40.0, g[1].z) == Approx(0.0).margin(1e-3));
+  CHECK(std::fabs(g[2].z) == Approx(20.0).margin(1e-3));
+  CHECK(std::fabs(g[2].y) == Approx(0.0).margin(1e-3));
+
+  // Every grip is a point of the curve (the centre excepted, which is a point of the ellipse's
+  // frame, not its outline).
+  for (int i = 1; i < 3; ++i) {
+    double best = 1e300;
+    for (int k = 0; k <= 720; ++k) {
+      const ray3d::Vec3 p = EllipseWorldPointAt(el, 6.283185307179586 * k / 720.0);
+      best = std::min(best, ray3d::Length(ray3d::Sub(p, g[i])));
+    }
+    INFO("grip " << i);
+    CHECK(best <= 1e-3);
+  }
+
+  // And the grip hit test offers exactly those three, at those positions.
+  SelectedEntity sel{};
+  sel.type = SelectedEntity::Type::Ellipse;
+  sel.index = 0;
+  st.selection.push_back(sel);
+  CHECK(TryBeginEntityGripAtLocal(st, 0.f, 0.f, 1.f));          // centre
+  CHECK(TryBeginEntityGripAtLocal(st, 40.f, 0.f, 1.f));         // major end
+  CHECK_FALSE(TryBeginEntityGripAtLocal(st, 0.f, 20.f, 1.f));   // NOT where a flat reading put it
+}
+
+TEST_CASE("Dragging a tilted ellipse's grips reshapes it in its own plane",
+          "[CadCommands][issue531][ellgrip]") {
+  AppCommandState st;
+  CadEllipse el;
+  el.majVx = 40.f;
+  el.majVy = 0.f;
+  el.ratio = 0.5f;
+  el.nx = 0.f;
+  el.ny = -1.f;
+  el.nz = 0.f;
+  st.userEllipses.push_back(el);
+  SelectedEntity sel{};
+  sel.type = SelectedEntity::Type::Ellipse;
+  sel.index = 0;
+  st.selection.push_back(sel);
+
+  SECTION("the major grip sets the axis measured in the plane") {
+    REQUIRE(TryBeginEntityGripAtLocal(st, 40.f, 0.f, 1.f));
+    ApplyEntityGripPoint(st, 25.f, 0.f, 0.f);
+    CHECK(std::hypot(static_cast<double>(st.userEllipses[0].majVx),
+                     static_cast<double>(st.userEllipses[0].majVy)) == Approx(25.0).margin(1e-3));
+    CHECK_FALSE(EllipseIsFlat(st.userEllipses[0]));  // the plane is not disturbed
+  }
+
+  SECTION("the minor grip sets the ratio from the in-plane offset") {
+    REQUIRE(TryBeginEntityGripAtLocal(st, 40.f, 0.f, 1.f));
+    st.entityGripWhich = 2;
+    // 10 up in world Z is 10 along the plane's own second axis — a quarter of the 40 major.
+    ApplyEntityGripPoint(st, 0.f, 0.f, 10.f);
+    CHECK(st.userEllipses[0].ratio == Approx(0.25f).margin(1e-3));
+  }
+
+  SECTION("the centre grip moves it in space and keeps its attitude") {
+    REQUIRE(TryBeginEntityGripAtLocal(st, 0.f, 0.f, 1.f));
+    st.entityGripWhich = 0;
+    ApplyEntityGripPoint(st, 7.f, 3.f, 9.f);
+    CHECK(st.userEllipses[0].cx == Approx(7.f));
+    CHECK(st.userEllipses[0].cy == Approx(3.f));
+    CHECK(st.userEllipses[0].z == Approx(9.f));
+    CHECK(st.userEllipses[0].ny == Approx(-1.f));
+    CHECK(st.userEllipses[0].majVx == Approx(40.f));  // unchanged shape
+  }
+}
+
 // --- REQ-335: snapping the SECOND point of a SECTION plane (user report, 2026-09-11) ------------
 //
 // "The 2nd selection point for sections is not wanting to snap to a midpoint right above the first
