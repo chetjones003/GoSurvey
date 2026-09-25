@@ -857,6 +857,32 @@ struct CadEllipse {
   return static_cast<double>(e.startRad) + static_cast<double>(e.sweepRad) * t;
 }
 
+/// Whether \p e offers grips at all, and \ref EllipseGripPoints their three world positions: the
+/// centre, the major-axis endpoint and the minor-axis endpoint (GitHub #531).
+///
+/// One helper because four places ask — the grip hit test in `CadCommands.cpp`, the hover hit test
+/// and both grip draws in `CadUi.cpp` — and a handle drawn anywhere but where it is grabbed is worse
+/// than no handle at all. A flat ellipse's three points are the world XY arithmetic they have always
+/// been; a tilted one's stand in its own plane.
+///
+/// A part-drawn ellipse (a section's elliptical arc) offers none: an axis endpoint need not lie on
+/// the drawn span, so an axis grip there is a handle in empty space — the exact fault this pass
+/// removed. Endpoint grips for an elliptical arc are their own slice.
+[[nodiscard]] inline bool EllipseHasGrips(const CadEllipse& e) {
+  return EllipseIsFullTurn(e) && std::hypot(static_cast<double>(e.majVx), static_cast<double>(e.majVy)) > 1e-12;
+}
+
+/// The three grip positions of \p e in world space, in grip-index order (centre, major, minor).
+/// Only meaningful when \ref EllipseHasGrips is true.
+inline void EllipseGripPoints(const CadEllipse& e, ray3d::Vec3 out[3]) {
+  constexpr double kHalfPi = 1.57079632679489661923;
+  out[0] = ray3d::Vec3{static_cast<double>(e.cx), static_cast<double>(e.cy), static_cast<double>(e.z)};
+  // t = 0 is the major-axis endpoint and t = pi/2 the minor one, which for a flat ellipse are
+  // exactly `centre + majV` and `centre + perp(majV) * ratio`.
+  out[1] = EllipseWorldPointAt(e, 0.0);
+  out[2] = EllipseWorldPointAt(e, kHalfPi);
+}
+
 /// One named sub-range of a mesh — a single object from the imported model (REQ-063).
 ///
 /// Parts exist so an imported model keeps its structure: a pipe run stays distinguishable from a

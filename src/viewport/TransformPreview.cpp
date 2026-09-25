@@ -104,6 +104,16 @@ void appendPreviewCircle(std::vector<float>* prevLines, std::vector<float>* prev
                        static_cast<double>(r), 0.0, kTwoPiD, previewCurveSegments(r, 64));
 }
 
+/// One ellipse into the preview line buffer, in the plane it lies in and over the span it draws.
+///
+/// The same story as \ref appendPreviewCircle above, for the other curve that gained a plane. A flat
+/// whole ellipse goes through the 2D helper exactly as before, so every existing preview and
+/// highlight is unchanged. A tilted or part-drawn one is walked through `EllipseWorldPointAt`, the
+/// same points the renderer strokes.
+///
+/// Highlighting is not cosmetic here: the selection highlight is how you confirm you picked the
+/// thing you meant. Drawn flat and whole it contradicted the curve on screen — the section would
+/// select, then light up as a full oval lying on the datum.
 void appendEllipsePolylineStrip(std::vector<float>* out, float z, const CadEllipse& el, int fallbackN) {
   int n = fallbackN;
   if (g_previewOrthoHalfH > 0.f && g_previewFbHeightPx > 0) {
@@ -112,9 +122,24 @@ void appendEllipsePolylineStrip(std::vector<float>* out, float z, const CadEllip
     n = std::max(16, CircleTessellationSegmentCount(majLen, static_cast<double>(g_previewOrthoHalfH),
                                                     g_previewFbHeightPx, g_previewSmoothnessCap));
   }
-  AppendEllipseLineSegments(*out, static_cast<double>(el.cx), static_cast<double>(el.cy),
-                            static_cast<double>(el.majVx), static_cast<double>(el.majVy),
-                            static_cast<double>(el.ratio), n, z);
+  if (EllipseIsFlat(el) && EllipseIsFullTurn(el)) {
+    AppendEllipseLineSegments(*out, static_cast<double>(el.cx), static_cast<double>(el.cy),
+                              static_cast<double>(el.majVx), static_cast<double>(el.majVy),
+                              static_cast<double>(el.ratio), n, z);
+    return;
+  }
+  ray3d::Vec3 prev = EllipseWorldPointAt(el, EllipseSpanAngleAt(el, 0.0));
+  for (int i = 1; i <= n; ++i) {
+    const ray3d::Vec3 p =
+        EllipseWorldPointAt(el, EllipseSpanAngleAt(el, static_cast<double>(i) / static_cast<double>(n)));
+    out->push_back(static_cast<float>(prev.x));
+    out->push_back(static_cast<float>(prev.y));
+    out->push_back(static_cast<float>(prev.z));
+    out->push_back(static_cast<float>(p.x));
+    out->push_back(static_cast<float>(p.y));
+    out->push_back(static_cast<float>(p.z));
+    prev = p;
+  }
 }
 
 // Draws a COMMITTED polyline, so it uses each vertex's own Z rather than a caller-supplied flat

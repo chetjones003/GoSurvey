@@ -2153,6 +2153,7 @@ struct AppCommandState {
 
   float ellCx = 0.f, ellCy = 0.f;
   float ellMajEx = 0.f, ellMajEy = 0.f;
+  float ellCz = 0.f, ellMajEz = 0.f;  ///< work-plane elevation of each pick (REQ-312), as arcAz/arcBz
 
   /// RECT (REQ-053): first corner, then the opposite corner. The second point also accepts `@dx,dy`, which
   /// is how a rectangle of an exact width and height is drawn.
@@ -6723,7 +6724,7 @@ struct SubObjectHoverRow {
 /// Move the armed grip to (x, y) in local storage coordinates — the one place grip geometry is written, so
 /// the mouse drag and command-line distance entry cannot drift apart. No-op when no grip is armed.
 /// Callers own the undo snapshot and \ref BumpCadGpuCache.
-void ApplyEntityGripPoint(AppCommandState& st, float x, float y);
+void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z);
 
 void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::string>* log);
 
