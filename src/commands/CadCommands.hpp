@@ -6242,6 +6242,12 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
 /// (REQ-201). Its link is kept, so it re-drapes on its own once the surface covers it again.
 void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log);
 
+/// The name of the surface p e is draped on and follows, or empty when it follows none
+/// (ADR-062 (d), GitHub #150) - never linked, baked since, or linked to a surface that has been
+/// erased, which are the same thing to the user. The one place the link becomes something a
+/// person reads, so the Properties panel and the `DRAPELINKS` report cannot disagree.
+[[nodiscard]] std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity& e);
+
 /// Create a named surface from \p groupNames and build it. Returns the new surface's index, or -1
 /// when the name is taken or the build produced nothing.
 int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,

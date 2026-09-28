@@ -9616,6 +9616,42 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     }
   }
 
+  // ADR-062 (d), GitHub #150: a drape that FOLLOWS a surface must say so where a user looks at
+  // an object. Without this the link is a hidden attribute - the geometry moves on a rebuild and
+  // nothing on screen ever said it would. The text comes from `DrapedOnSurfaceName`, the same
+  // resolver DRAPELINKS uses, so the panel and the report cannot disagree; it is empty for an
+  // object that follows nothing, including one whose surface has been erased.
+  {
+    std::string followed;
+    int followCount = 0;
+    for (const auto& e : sel) {
+      const std::string n = DrapedOnSurfaceName(cmd, e);
+      if (n.empty())
+        continue;
+      ++followCount;
+      if (followed.empty())
+        followed = n;
+      else if (followed != n)
+        followed = "*varies*";
+    }
+    if (followCount > 0 && PropSectionHeader("Surface")) {
+      if (ImGui::BeginTable("props_drape", 2, kPropTableFlags)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        ImGui::TableNextRow();
+        PropValueCellBg();
+        ImGui::TableNextColumn(); ImGui::TextUnformatted("Draped on");
+        ImGui::TableNextColumn(); ImGui::TextUnformatted(followed.c_str());
+        ImGui::TableNextRow();
+        PropValueCellBg();
+        ImGui::TableNextColumn(); ImGui::TextUnformatted("Follows rebuilds");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(followCount == static_cast<int>(sel.size()) ? "Yes" : "Some");
+        ImGui::EndTable();
+      }
+    }
+  }
+
   if (haveSurveyPick) {
     ImGui::Separator();
     ImGui::TextDisabled("Survey bulk edit: VIEWPOINTS (VWPTS).");

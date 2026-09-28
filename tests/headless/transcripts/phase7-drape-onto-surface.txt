@@ -113,3 +113,49 @@ EXPECT LOG "draped onto "Renamed EG""
 CMD SURFACEREBUILD Renamed EG
 EXPECT NOLOG "linked object(s) re-draped"
 CHECK ALL
+
+# --- the link is VISIBLE, not a hidden attribute (ADR-062 (d)) --------------------------------------
+# The Properties panel answers "does THIS one move?" and is not reachable from a transcript;
+# DRAPELINKS answers "what in here moves when I rebuild?", which is the question actually asked
+# before editing a surface, and is assertable end to end.
+OPEN samples/surface-demo.dwg
+CMD SURFACECREATE Test EG, Existing Ground
+CMD SURFACEREBUILD Test EG
+CMD DRAPELINKS
+EXPECT LOG "nothing in the drawing follows a surface"
+
+CMD POLYLINE
+CMD 43.607,25.308
+CMD 58.607,30.308
+CMD END
+ESC
+BOX -500 -500 500 500
+CMD DRAPE Test EG, LINK
+CMD DRAPELINKS
+EXPECT LOG "follows "Test EG""
+EXPECT LOG "1 object(s) follow a surface"
+CHECK ALL
+
+# Baking it again takes it off the list: what the report says and what a rebuild does agree.
+BOX -500 -500 500 500
+CMD DRAPE Test EG
+CMD DRAPELINKS
+EXPECT LOG "nothing in the drawing follows a surface"
+CHECK ALL
+
+# An object whose surface has been erased is reported apart — it follows nothing and stays put.
+BOX -500 -500 500 500
+CMD DRAPE Test EG, LINK
+# Saved and reopened before the delete, purely to clear the selection: a BOX also picks the
+# SURFACE, and SURFACEDELETE does not clear the selection of the surface it erased, so CHECK ALL
+# would trip on a selection entry pointing at a surface that is gone. ESC does not help - it
+# cancels the active command, not the selection. That is a pre-existing fault in SURFACEDELETE
+# (RunSurfaceDelete -> EraseSurfaceAtIndex never touches st.selection), not something this work
+# introduced, and it is sidestepped here rather than fixed in an increment about the drape mark.
+SAVEAS %OUT%/phase7-mark.dwg
+OPEN %OUT%/phase7-mark.dwg
+CMD SURFACEDELETE Test EG
+CMD DRAPELINKS
+EXPECT LOG "name a surface that is gone"
+EXPECT LOG "stay where they are"
+CHECK ALL

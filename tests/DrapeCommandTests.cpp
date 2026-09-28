@@ -402,3 +402,87 @@ TEST_CASE("A refused drape pushes no undo step", "[drape][issue150][phase7][drap
   DoUndo(st, log);
   CHECK(st.userPolylineVerts[2] == Approx(0.0).margin(1e-9));  // the "Before" step, not a no-op drape
 }
+
+// --- ADR-062 (d): the link is visible, not a hidden attribute -----------------------------------
+
+TEST_CASE("DrapedOnSurfaceName reports what an object follows", "[drape][issue150][phase7][drapemark]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  AddFlatPolylineAcross(st, {10.0, 20.0});   // 0 - linked
+  AddFlatPolylineAcross(st, {30.0, 40.0});   // 1 - baked
+  std::vector<std::string> log;
+
+  st.selection.clear();
+  st.selection.push_back({SelectedEntity::Type::Polyline, 0});
+  Type(st, "DRAPE EG, LINK", log);
+  st.selection.clear();
+  st.selection.push_back({SelectedEntity::Type::Polyline, 1});
+  Type(st, "DRAPE EG", log);
+
+  CHECK(DrapedOnSurfaceName(st, {SelectedEntity::Type::Polyline, 0}) == "EG");
+  CHECK(DrapedOnSurfaceName(st, {SelectedEntity::Type::Polyline, 1}).empty());
+  // A type that cannot be draped, and an index past the end, both answer "follows nothing" rather
+  // than reading off the end of a store.
+  CHECK(DrapedOnSurfaceName(st, {SelectedEntity::Type::Circle, 0}).empty());
+  CHECK(DrapedOnSurfaceName(st, {SelectedEntity::Type::Polyline, 99}).empty());
+}
+
+TEST_CASE("An object whose surface was erased reports following nothing",
+          "[drape][issue150][phase7][drapemark]") {
+  // ADR-062 (e) again, but from the USER's side: the geometry stays put, and the panel must not go
+  // on claiming it follows something. "Never linked", "baked since" and "its surface is gone" are
+  // the same answer to the person looking at it.
+  AppCommandState st;
+  AddGround(st, "EG");
+  AddFlatPolylineAcross(st, {10.0, 20.0});
+  st.selection.push_back({SelectedEntity::Type::Polyline, 0});
+  std::vector<std::string> log;
+  Type(st, "DRAPE EG, LINK", log);
+  REQUIRE(DrapedOnSurfaceName(st, {SelectedEntity::Type::Polyline, 0}) == "EG");
+
+  st.cadSurfaces.clear();
+  st.cadSurfaceAttrs.clear();
+  CHECK(DrapedOnSurfaceName(st, {SelectedEntity::Type::Polyline, 0}).empty());
+  // ...while the id itself is untouched, so undoing the erase brings the link back.
+  CHECK(st.userPolylineAttrs[0].drapedOnSurfaceId != 0u);
+}
+
+TEST_CASE("DRAPELINKS answers what moves when a surface is rebuilt",
+          "[drape][issue150][phase7][drapemark]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+
+  SECTION("a drawing where nothing follows a surface says so") {
+    AddGround(st, "EG");
+    AddFlatPolylineAcross(st, {10.0, 20.0});
+    Type(st, "DRAPELINKS", log);
+    CHECK(LogHas(log, "nothing in the drawing follows a surface"));
+  }
+
+  SECTION("it names each object and its surface") {
+    AddGround(st, "EG");
+    AddFlatPolylineAcross(st, {10.0, 20.0});
+    AddFlatPolylineAcross(st, {30.0, 40.0});
+    st.selection.push_back({SelectedEntity::Type::Polyline, 0});
+    Type(st, "DRAPE EG, LINK", log);
+    log.clear();
+    Type(st, "DRAPELINKS", log);
+    CHECK(LogHas(log, "polyline 0 follows \"EG\""));
+    CHECK(LogHas(log, "1 object(s) follow a surface"));
+    CHECK_FALSE(LogHas(log, "polyline 1 follows"));  // the baked one is not listed
+  }
+
+  SECTION("an object naming a surface that is gone is reported apart, not as following it") {
+    AddGround(st, "EG");
+    AddFlatPolylineAcross(st, {10.0, 20.0});
+    st.selection.push_back({SelectedEntity::Type::Polyline, 0});
+    Type(st, "DRAPE EG, LINK", log);
+    st.cadSurfaces.clear();
+    st.cadSurfaceAttrs.clear();
+    log.clear();
+    Type(st, "DRAPELINKS", log);
+    CHECK(LogHas(log, "name a surface that is gone"));
+    CHECK(LogHas(log, "stay where they are"));
+    CHECK_FALSE(LogHas(log, "follows \""));
+  }
+}

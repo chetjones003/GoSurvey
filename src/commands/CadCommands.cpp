@@ -24439,6 +24439,85 @@ void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::str
                   " linked object(s) left where they are: no longer over \"" + surf.name + "\".");
 }
 
+
+/// The name of the surface this entity is draped on and follows, or empty when it follows none
+/// (ADR-062 (d), GitHub #150).
+///
+/// The one place the link is turned into something a person reads, so the Properties panel and the
+/// `DRAPELINKS` report cannot disagree about what is linked.
+///
+/// Empty covers three cases that are the same to the user — never linked, baked since, or linked to
+/// a surface that has been erased. The last is ADR-062 (e): the id stays on the entity and simply
+/// stops resolving, so the geometry is no longer following anything and must not claim to be.
+std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity& e) {
+  const std::vector<EntityAttributes>* attrs = nullptr;
+  switch (e.type) {
+    case SelectedEntity::Type::LineSeg: attrs = &st.userLineAttrs; break;
+    case SelectedEntity::Type::Polyline: attrs = &st.userPolylineAttrs; break;
+    case SelectedEntity::Type::FeatureLine: attrs = &st.featureLineAttrs; break;
+    default: return std::string();
+  }
+  if (e.index < 0 || static_cast<size_t>(e.index) >= attrs->size())
+    return std::string();
+  const std::uint64_t id = (*attrs)[static_cast<size_t>(e.index)].drapedOnSurfaceId;
+  if (id == 0)
+    return std::string();
+  const int si = FindSurfaceIndexById(st, id);
+  if (si < 0)
+    return std::string();  // erased: it follows nothing now (ADR-062 (e))
+  return st.cadSurfaces[static_cast<size_t>(si)].name;
+}
+
+namespace {
+
+/// `DRAPELINKS` — every object in the drawing that follows a surface, and which one.
+///
+/// The drawing-wide half of ADR-062 (d): the Properties panel answers "does THIS one move?", and this
+/// answers "what in here moves when I rebuild?" — which is the question actually asked before editing
+/// a surface. A link that only existed in a file and in a panel would be a hidden attribute by any
+/// practical measure.
+void ExecuteDrapeLinksCommand(AppCommandState& st, std::vector<std::string>& log) {
+  struct Row {
+    const char* type;
+    int index;
+    std::string surface;
+  };
+  std::vector<Row> rows;
+  int dangling = 0;
+  auto sweep = [&](const std::vector<EntityAttributes>& attrs, SelectedEntity::Type type,
+                   const char* label) {
+    for (size_t i = 0; i < attrs.size(); ++i) {
+      if (attrs[i].drapedOnSurfaceId == 0)
+        continue;
+      SelectedEntity e{type, static_cast<int>(i)};
+      const std::string name = DrapedOnSurfaceName(st, e);
+      if (name.empty()) {
+        // The id is set but no longer resolves: the surface was erased. Counted and reported rather
+        // than listed as though it still followed something (ADR-062 (e)).
+        ++dangling;
+        continue;
+      }
+      rows.push_back({label, static_cast<int>(i), name});
+    }
+  };
+  sweep(st.userLineAttrs, SelectedEntity::Type::LineSeg, "line");
+  sweep(st.userPolylineAttrs, SelectedEntity::Type::Polyline, "polyline");
+  sweep(st.featureLineAttrs, SelectedEntity::Type::FeatureLine, "feature line");
+
+  if (rows.empty() && dangling == 0) {
+    log.push_back("DRAPELINKS - nothing in the drawing follows a surface.");
+    return;
+  }
+  for (const Row& r : rows)
+    log.push_back(std::string("DRAPELINKS - ") + r.type + " " + std::to_string(r.index) +
+                  " follows \"" + r.surface + "\".");
+  log.push_back("DRAPELINKS - " + std::to_string(rows.size()) + " object(s) follow a surface.");
+  if (dangling > 0)
+    log.push_back("DRAPELINKS - " + std::to_string(dangling) +
+                  " object(s) name a surface that is gone; they follow nothing and stay where they are.");
+}
+
+}  // namespace
 namespace {
 
 /// `DRAPE <surface>[, LINK]` — lay the selection on a surface, each vertex taking the elevation of
@@ -42069,8 +42148,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     // REQ-071. `EXTRACT <surface>[, <layer>]` — comma-separated, because a surface name and a layer
     // name both routinely contain spaces.
-    // GitHub #150 (3D Phase 7). `DRAPE <surface>` - lay the selection on the ground. Baked, with
-    // no stored reference (ADR-062 (a)); the opt-in link is a later increment.
+    // ADR-062 (d), GitHub #150: what in this drawing moves when a surface is rebuilt.
+    if (plotTok == "drapelinks") {
+      ExecuteDrapeLinksCommand(st, log);
+      return;
+    }
+    // GitHub #150 (3D Phase 7). `DRAPE <surface>[, LINK]` - lay the selection on the ground.
     if (plotTok == "drape") {
       std::string rest;
       std::getline(issIdle, rest);
