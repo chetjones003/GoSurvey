@@ -26,6 +26,8 @@
 # on — so this is the drawing decision, not a restatement of it.
 
 NEW
+# The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
+CMD GIZMO MOVE
 EXPECT SELECTED 0
 EXPECT GIZMO 0
 CMD LINE
@@ -71,6 +73,8 @@ EXPECT LINEXYZ 0 0 0 0 10 0 0
 # typed form states outright.
 
 NEW
+# The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
+CMD GIZMO MOVE
 CMD LINE
 CMD 0,0
 CMD 10,0
@@ -89,6 +93,8 @@ EXPECT LINEXYZ 0 15 0 0 25 0 0
 # that reads on screen as the selection flying away. So the view is orbited first.
 
 NEW
+# The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
+CMD GIZMO MOVE
 CMD LINE
 CMD 0,0
 CMD 10,0
@@ -131,6 +137,8 @@ EXPECT GIZMO 0
 # which never compares a face's surface against its own boundary.
 
 NEW
+# The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
+CMD GIZMO MOVE
 VIEWANGLES 0 90
 CMD BOX 0,0 20 10 8
 EXPECT SOLIDS 1
@@ -150,6 +158,8 @@ EXPECT SOLIDPROPS 0 1600 880 8 12 6
 # position at the same time.
 SAVEAS %OUT%/gizmo-solid.gs
 NEW
+# The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
+CMD GIZMO MOVE
 EXPECT SOLIDS 0
 OPEN %OUT%/gizmo-solid.gs
 EXPECT SOLIDS 1

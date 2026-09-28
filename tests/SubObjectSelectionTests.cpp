@@ -650,6 +650,7 @@ TEST_CASE("A cylinder wall's grip slides along its own radius (REQ-319)", "[subo
 
 TEST_CASE("The gizmo mode is derived from the selection, never stored", "[subobject][gizmo]") {
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo (D-2026-09-28-a)
   st.uiViewportWidthPx = 1200.f;
   st.uiViewportHeightPx = 700.f;
   AddBox(st, World(), 20.0, 10.0, 8.0);  // x [-10,10], y [-5,5], z [0,8]
@@ -727,6 +728,7 @@ TEST_CASE("A face gizmo drag commits what PRESSPULL would", "[subobject][gizmo]"
   std::vector<std::string> log;
 
   AppCommandState viaGizmo;
+  viaGizmo.gizmoPersistent = true;  // the always-on gizmo (D-2026-09-28-a)
   viaGizmo.uiViewportWidthPx = 1200.f;
   viaGizmo.uiViewportHeightPx = 700.f;
   AddBox(viaGizmo, World(), 20.0, 10.0, 8.0);
@@ -775,6 +777,7 @@ TEST_CASE("A face drag applies to the face GRABBED, not to whatever is selected 
   // The selection can be cleared or re-picked between the two clicks of a click-arm / click-commit
   // drag. The reference is captured at the grab for that reason.
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo (D-2026-09-28-a)
   st.uiViewportWidthPx = 1200.f;
   st.uiViewportHeightPx = 700.f;
   AddBox(st, World(), 20.0, 10.0, 8.0);

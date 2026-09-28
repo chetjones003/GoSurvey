@@ -819,7 +819,9 @@ int main()
         cmdLog.push_back("Section plane drag cancelled.");
         cmdBuf[0] = '\0';
       }
-      else if (cmd.gizmoDragActive)
+      // Not inside 3DMOVE / 3DROTATE / 3DSCALE: there the drag IS the command, and one ESC ends
+      // both and restores the gizmo op (GitHub issue #564 section 3) via CancelActiveCommand below.
+      else if (cmd.gizmoDragActive && !IsGizmoCommandKind(cmd.active))
       {
         // A TRUE cancel, not an undo: a live gizmo drag changes nothing in the store until it is
         // committed, so abandoning one costs an undo step nobody spent. Ahead of the other grips

@@ -487,3 +487,18 @@ TEST_CASE("REQ-342: SECTIONPLANE asks the viewport for a face", "[viewport][pick
   sec.sectionPhase = AppCommandState::SectionPhase::SelectSolids;
   CHECK_FALSE(ViewportIsFacePickStep(sec));
 }
+
+TEST_CASE("Issue #564: 3DMOVE/3DROTATE/3DSCALE select objects, then click handles",
+          "[viewport][pick][gizmo]") {
+  for (K k : {K::Move3d, K::Rotate3d, K::Scale3d}) {
+    AppCommandState st;
+    st.active = k;
+    st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::SelectObjects;
+    CHECK(ViewportClickRouteFor(st) == ViewportClickRoute::SelectionAccumulate);
+    CHECK(ViewportIsObjectSelectionStep(st));
+    st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::Handles;
+    CHECK(ViewportClickRouteFor(st) == ViewportClickRoute::GizmoHandlePick);
+    // A handle is a widget to drag, not an object: no pickbox, no suppressed OSNAP semantics.
+    CHECK_FALSE(ViewportIsObjectSelectionStep(st));
+  }
+}

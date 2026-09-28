@@ -1711,6 +1711,13 @@ struct AppCommandState {
     /// phase — no select-objects step, no typed parameters — closer in shape to `Kind::Pan`'s
     /// hover-then-act than to any multi-phase draw command.
     ExtractCenterline,
+    /// 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3, D-2026-09-28-a): the REQ-060 gizmo,
+    /// summoned by a command instead of appearing on every selection. Three Kinds rather than one
+    /// with a stored op so the command line, right-click repeat and `KindName` each name the verb
+    /// the user typed; the op they drive is still \ref gizmoOp, set for the command's duration.
+    Move3d,
+    Rotate3d,
+    Scale3d,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1791,6 +1798,9 @@ struct AppCommandState {
     case Kind::PipeFit:            return "PIPEFIT";
     case Kind::PipeSplit:          return "PIPESPLIT";
     case Kind::ExtractCenterline:  return "EXTRACTCENTERLINE";
+    case Kind::Move3d:             return "3DMOVE";
+    case Kind::Rotate3d:           return "3DROTATE";
+    case Kind::Scale3d:            return "3DSCALE";
     default:                  return "";
     }
   }
@@ -3592,8 +3602,33 @@ struct AppCommandState {
   double gizmoDragDistance = 0.0;
 
   /// What the gizmo does — a user SETTING, not derived from the selection (\ref CadGizmoOp explains
-  /// why this one is stored where \ref CadGizmoMode is not). Set by the `GIZMO` command.
+  /// why this one is stored where \ref CadGizmoMode is not). Set by the `GIZMO` command, and for
+  /// their own duration by 3DMOVE / 3DROTATE / 3DSCALE, which restore it on exit.
   CadGizmoOp gizmoOp = CadGizmoOp::Translate;
+
+  /// True when the user asked for the gizmo to follow every selection (`GIZMO MOVE | ROTATE |
+  /// SCALE`). False — the default — means a selection shows no gizmo, and only 3DMOVE / 3DROTATE /
+  /// 3DSCALE summon one (GitHub issue #564 section 3, D-2026-09-28-a). `GIZMO OFF` clears it.
+  /// Session state, like \ref gizmoOp.
+  bool gizmoPersistent = false;
+
+  /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, asking for the base point the gizmo
+  /// sits on (D-2026-09-28-c), or showing the handles on it.
+  enum class GizmoCmdPhase { SelectObjects, BasePoint, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
+  /// The base point a 3D gizmo command was given (D-2026-09-28-c): where the gizmo sits, the pivot
+  /// of a rotation and the centre of a scale. Invalid means Enter took the default — the centre of
+  /// the selection's box, where the persistent gizmo always sits. Storage coordinates.
+  bool gizmoBaseValid = false;
+  ray3d::Vec3 gizmoBase{0.0, 0.0, 0.0};
+  /// The live TRANSLATE drag as a displacement: `gizmoDragDistance` along the axis for an axis
+  /// handle, or the in-plane offset for a plane handle (D-2026-09-28-c), where no single distance
+  /// says it. The ghost and the commit read this one field so the two cannot disagree.
+  ray3d::Vec3 gizmoDragVec{0.0, 0.0, 0.0};
+  /// Where a plane-handle grab met the plane — the drag is the hit's offset from here.
+  ray3d::Vec3 gizmoGrabPoint{0.0, 0.0, 0.0};
+  /// \ref gizmoOp as it was when a 3D gizmo command started — put back when the command ends,
+  /// however it ends, so the command's op never leaks into the persistent setting.
+  CadGizmoOp gizmoOpBeforeCmd = CadGizmoOp::Translate;
 
   /// In face mode, WHICH face the armed drag is moving — captured at the grab like the anchor.
   ///
@@ -6762,6 +6797,12 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
 void ApplyRotationAboutUcsZ(AppCommandState& st, float bx, float by, float bz, float rad,
                             std::vector<std::string>& log);
 
+/// Rotate the whole selection in place by \p rad about the line through \p axisPoint along
+/// \p axisUnit — the rotate gizmo's X and Y rings (D-2026-09-28-b). The same in-place 3D turn typed
+/// ROTATE uses under a tilted UCS, with the same refusals. The caller owns the undo snapshot.
+void ApplyRotationAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                            const ray3d::Vec3& axisUnit, float rad, std::vector<std::string>& log);
+
 /// Scale the whole selection uniformly by \p sc about (\p bx, \p by, \p bz) — the complete typed
 /// SCALE transform (REQ-329 increment 3, REQ-332 increment 2). The caller owns the undo snapshot.
 ///
@@ -6822,6 +6863,22 @@ inline constexpr int kGizmoAxisCount = 3;
 inline constexpr float kGizmoHandleLenPx = 70.f;
 /// Grab aperture around a handle, in screen pixels.
 inline constexpr float kGizmoHandleGrabPx = 7.f;
+/// A rotate ring whose normal is within this cosine of perpendicular to the view ray is seen
+/// (nearly) edge-on — a line on screen, round which a drag names no angle — so it is not pickable.
+/// About 5 degrees (D-2026-09-28-b).
+inline constexpr double kGizmoRingEdgeOnCos = 0.09;
+/// The move gizmo's PLANE handles (D-2026-09-28-c) are handle numbers 3, 4, 5 — after the three
+/// axes — for the UCS XY, YZ and ZX planes. Each is a square from the anchor out to this fraction of
+/// the handle length along its two axes.
+inline constexpr int kGizmoPlaneHandleFirst = 3;
+inline constexpr double kGizmoPlaneHandleFrac = 0.35;
+/// The two UCS axes (0 = X, 1 = Y, 2 = Z) spanning plane handle \p plane (0 = XY, 1 = YZ, 2 = ZX).
+inline void CadGizmoPlaneAxes(int plane, int* a, int* b) {
+  *a = plane;
+  *b = (plane + 1) % 3;
+}
+/// How many plane handles the gizmo has: 3 for an entity selection under Translate, else 0.
+[[nodiscard]] int CadGizmoPlaneHandleCountFor(const AppCommandState& st);
 
 /// Where the gizmo hangs, in WCS. False when there is nothing for it to hang off.
 ///
@@ -6859,6 +6916,31 @@ inline constexpr float kGizmoHandleGrabPx = 7.f;
 /// True when a gizmo should be drawn at all: \ref CadGizmoModeFor is not \c None and an anchor
 /// resolves. REQ-060's third acceptance bullet ("no gizmo when the selection is empty") is this.
 [[nodiscard]] bool CadGizmoVisible(const AppCommandState& st);
+
+/// True for \c Kind::Move3d / \c Rotate3d / \c Scale3d (GitHub issue #564 section 3).
+[[nodiscard]] bool IsGizmoCommandKind(AppCommandState::Kind k);
+/// Whether the gizmo has been ASKED for: the persistent `GIZMO` setting is on, or a 3D gizmo
+/// command is at its handles step. A selection alone never summons it (D-2026-09-28-a).
+[[nodiscard]] bool CadGizmoSummoned(const AppCommandState& st);
+/// 3DMOVE / 3DROTATE / 3DSCALE. Honours a pre-selection (straight to the handles), otherwise asks
+/// for objects, Enter when done. Refuses with a stated reason outside model space.
+void StartGizmoCommand(AppCommandState& st, AppCommandState::Kind kind,
+                       std::vector<std::string>& log);
+/// Ends a 3D gizmo command however it ends: abandons any armed drag (nothing has changed yet),
+/// restores \ref AppCommandState::gizmoOp and sets \c active back to \c None.
+void EndGizmoCommand(AppCommandState& st);
+/// Typed input to a running 3D gizmo command. Blank: confirm the selection, commit an armed drag,
+/// or end the command when nothing is armed. A number: the exact value — distance (move), degrees
+/// (rotate) or factor (scale) — along the grabbed handle, or along the only handle when there is
+/// just one. Returns false when no 3D gizmo command is running.
+bool HandleGizmoCommandTextInput(const std::string& line, AppCommandState& st,
+                                 std::vector<std::string>& log);
+/// The base point of a running 3D gizmo command, picked or typed (D-2026-09-28-c): the gizmo moves
+/// there and the command goes on to its handles. Ignored outside that step.
+void SubmitGizmoBasePoint(AppCommandState& st, double x, double y, double z,
+                          std::vector<std::string>& log);
+/// The prompt for the running 3D gizmo command's current step.
+[[nodiscard]] std::string CadGizmoCommandPromptText(const AppCommandState& st);
 
 /// Signed position along the line (\p anchor, \p axisDir) of the point on it nearest \p ray.
 ///

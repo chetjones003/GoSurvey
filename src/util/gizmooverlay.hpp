@@ -30,13 +30,24 @@ struct CadGizmoOverlay {
 
   /// Which operation the single handle in `axis[0]` belongs to when there is only one, so the
   /// renderer can colour it without re-deriving the mode (TASK-232). 0 = translate (the normal
-  /// three-axis case, or the purple face handle), 1 = rotate, 2 = scale.
+  /// three-axis case, or the purple face handle), 1 = rotate (three rings, coloured per axis),
+  /// 2 = scale.
   ///
   /// An int rather than the `CadGizmoOp` enum for the reason this whole struct exists: it is a plain
   /// carrier between two layers that do not include each other's headers.
   int soloOp = 0;
 
+  /// The corner marks between each pair of axes (D-2026-09-28-c), indexed 0 = XY, 1 = YZ, 2 = ZX:
+  /// exactly two segments each — the first parallel to the plane's first axis and drawn in that
+  /// axis's colour, the second parallel to (or nearer) its second axis, in that one's. Under
+  /// Translate they are the plane handles' squares; under Scale, the triangle marks between axes.
+  std::vector<float> plane[3];
+  /// True for the plane handle under the cursor or being dragged, like \ref hot.
+  bool planeHot[3] = {false, false, false};
+  /// A small circle round the anchor, marking the base point the gizmo sits on.
+  std::vector<float> center;
   [[nodiscard]] bool empty() const {
-    return axis[0].empty() && axis[1].empty() && axis[2].empty() && guide.empty();
+    return axis[0].empty() && axis[1].empty() && axis[2].empty() && guide.empty() &&
+           plane[0].empty() && plane[1].empty() && plane[2].empty() && center.empty();
   }
 };

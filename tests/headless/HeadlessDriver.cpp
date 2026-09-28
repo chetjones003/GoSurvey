@@ -751,6 +751,28 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     case ViewportClickRoute::InsertBlockPick:
       SubmitInsertBlockPick(run.st, x, y, clickHasZ ? clickZ : 0.f, run.log);
       break;
+    // 3DMOVE / 3DROTATE / 3DSCALE past their selection step (GitHub issue #564): the click goes to
+    // `SubmitGizmoClick` along the camera's ray at (x, y, z), as the viewport sends it. GIZMO
+    // GRAB/DROP say which gesture they mean; CLICK proves the route reaches the gizmo at all.
+    case ViewportClickRoute::GizmoHandlePick: {
+      if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+        run.st.uiViewportWidthPx = 1200.f;
+        run.st.uiViewportHeightPx = 700.f;
+      }
+      const Camera gCam = CadViewCamera(run.st);
+      float gsx = 0.f, gsy = 0.f;
+      gCam.WorldToScreen(static_cast<double>(x), static_cast<double>(y),
+                         static_cast<double>(clickHasZ ? clickZ : 0.f), run.st.uiViewportWidthPx,
+                         run.st.uiViewportHeightPx, &gsx, &gsy);
+      const ray3d::Ray gRay =
+          gCam.ScreenRay(gsx, gsy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+      const double gTol = static_cast<double>(CadSnap::WorldToleranceFromPixels(
+          run.st.uiViewportHeightPx, (1.f / std::max(run.st.viewportZoom, 1.e-9f)) * 50.f,
+          kGizmoHandleGrabPx));
+      if (!SubmitGizmoClick(run.st, gRay, gTol, run.log))
+        run.log.push_back(CadGizmoCommandPromptText(run.st));
+      break;
+    }
     case ViewportClickRoute::Ignore:
       // The whole point of this verb: a command the UI does not route is a failure, not a no-op.
       Fail(run, "state",

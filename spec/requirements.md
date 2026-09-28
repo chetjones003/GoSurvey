@@ -2093,6 +2093,74 @@ requirements is a planning failure, not a sign of rigor.
   block recorded on 2026-09-04. `CadGizmoAnchorWorld`'s note that its precision "does not affect any
   move" was corrected in the same change: that is true of a translation, where the anchor cancels
   between grab and drop, and false of a rotation or a scale, where it is the pivot and the base.
+  2026-09-28 — **the gizmo is SUMMONED, not shown on every selection** (D-2026-09-28-a, GitHub issue
+  #564 section 3, TASK-280). See the amendment below; it narrows the Statement's "with a selection
+  active" and adds the acceptance bullets that follow it.
+- **Amendment 2026-09-28 (D-2026-09-28-a) — selecting shows no gizmo; 3DMOVE / 3DROTATE / 3DSCALE
+  summon it.** The Statement's *"with a selection active, a gizmo operates on it"* is narrowed to
+  *"with a selection active and the gizmo summoned"*. Everything else above — the handle counts, the
+  anchor, the UCS axes, agreement with the typed command, one undo per drag — is unchanged.
+  1. **A selection alone draws no gizmo.** The gizmo is summoned by a 3D gizmo command for that
+     command's duration, or by the persistent `GIZMO` setting (item 4). `CadGizmoSummoned` is tested
+     first in `CadGizmoModeFor`, so the overlay, the hover, the click and every transcript assertion
+     inherit the rule from one place.
+  2. **`3DMOVE` / `3DROTATE` / `3DSCALE`** set the gizmo op to Translate / Rotate / Scale for their own
+     duration and restore the previous op however they end (commit, `Esc`, or another command
+     started over them). Shape: select objects (a pre-selection is honoured, and 3DMOVE's select step
+     takes `Ctrl`+click on a solid face / edge / vertex) → Enter → the gizmo appears → drag a handle
+     **or type an exact value** — distance (move, along the grabbed handle, or the only handle when
+     there is one), degrees (rotate), factor > 0 (scale) → the commit is the end of the command. A
+     blank Enter commits an armed drag, or ends the command having changed nothing. One undo step per
+     completed operation — the existing gizmo commit, unchanged.
+  3. **`Esc` restores the pre-command state exactly**: one `Esc` abandons an armed drag (which has
+     changed nothing) and ends the command, restoring the op. A selection that cannot carry a gizmo
+     under the command's op (a face under 3DROTATE, several sub-objects, paper space) is refused with
+     the reason stated (REQ-201) rather than leaving a command with nothing on screen to drag.
+  4. **`GIZMO MOVE | ROTATE | SCALE` is the persistent mode** — the old always-on behaviour, doing that
+     op — and **`GIZMO OFF`** returns to the default. Default OFF, session state like the op itself.
+     `GIZMO` is refused while a 3D gizmo command owns the op.
+  - Additional acceptance:
+    - selecting a solid, a line, or a mix draws no gizmo;
+    - 3DMOVE / 3DROTATE / 3DSCALE each raise the correct gizmo and operate on the selection;
+    - a typed exact value works in each (distance, angle, factor);
+    - `Esc` restores the pre-command state exactly; `Ctrl+Z` after a commit undoes the whole operation;
+    - the handles keep their axis colours (X red / Y green / Z blue) and the face-normal handle its
+      purple — the overlay is unchanged.
+- **Amendment 2026-09-28 (D-2026-09-28-b) — the rotate gizmo has three rings.** The "ONE ring, about
+  the active UCS Z" count recorded above for TASK-232 is replaced: ROTATE draws **one ring per active-UCS
+  axis**, X red / Y green / Z blue, each grabbable. The **Z ring** commits through
+  `ApplyRotationAboutUcsZ` — typed ROTATE, so the second acceptance bullet holds for it exactly as
+  before. The **X and Y rings** commit through `ApplyRotationAboutAxis`, the in-place arbitrary-axis
+  turn typed ROTATE already uses under a tilted UCS, with its refusals (REQ-201). With three rings a
+  typed angle needs a ring grabbed first. A ring seen within about 5° of edge-on is not pickable
+  (`kGizmoRingEdgeOnCos`): on screen it is a line, round which a drag names no angle. The drag ghost
+  rotates / scales the preview rather than sliding it.
+  - Additional acceptance:
+    - 3DROTATE (and `GIZMO ROTATE`) shows three rings in the axis colours, following the active UCS;
+    - dragging, or grabbing and typing an angle on, the X / Y / Z ring turns the selection about that
+      UCS axis through the gizmo's anchor; one undo per operation;
+    - the Z ring's result agrees with typed ROTATE (unchanged).
+- **Amendment 2026-09-28 (D-2026-09-28-c) — AutoCAD's 3DMOVE / 3DSCALE widgets, and a base point.**
+  1. **Base point.** After the selection, 3DMOVE / 3DROTATE / 3DSCALE ask for a base point — a
+     snapped pick, or typed X,Y[,Z] read as MOVE reads one; Enter keeps the centre of the selection's
+     box. The gizmo sits on it, and it is the pivot of a rotation and the centre of a scale
+     (`CadGizmoAnchorWorld`). A solid face / edge / vertex selection skips the step; the persistent
+     `GIZMO` always uses the centre. A small circle marks the base point.
+  2. **Move** draws cone arrowheads and three **plane handles** — the UCS XY, YZ and ZX squares out to
+     `kGizmoPlaneHandleFrac` of the handle length, handle numbers 3–5 — each drawn as its two far
+     sides in the colours of the axes they run along. Dragging one slides the selection within that
+     plane (an arrow within the grab aperture wins over a square; a plane seen nearly edge-on is not
+     a target); after grabbing one, typed `dx,dy` is the offset along the plane's two UCS axes. Whole
+     entities only. The commit is `ApplyTranslationToSelection`, as for an arrow.
+  3. **Scale** draws three axis handles with box tips and AutoCAD's triangle marks between them.
+     **Every handle scales uniformly** (REQ-332 item 7); a one-direction stretch is not offered and
+     remains issue #564 Q2. A typed factor needs no handle grabbed.
+  - Additional acceptance:
+    - each command asks for a base point; a typed or picked one moves the gizmo there and is the pivot
+      / centre; Enter keeps the selection centre;
+    - dragging a 3DMOVE plane square, or grabbing it and typing dx,dy, moves the selection within
+      that UCS plane, one undo step;
+    - every 3DSCALE handle gives the same uniform result.
 
 ### REQ-061 — Per-viewport camera in paper space
 - Purpose: put a plan view and an isometric on the same sheet
