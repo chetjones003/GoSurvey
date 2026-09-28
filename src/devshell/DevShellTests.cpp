@@ -1070,7 +1070,7 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
         {"Home", kRibbonTabHome},       {"Insert", kRibbonTabInsert},
         {"Annotate", kRibbonTabAnnotate}, {"View", kRibbonTabView},
         {"Manage", kRibbonTabManage},    {"Output", kRibbonTabOutput},
-        {"Survey", kRibbonTabSurvey},
+        {"Survey", kRibbonTabSurvey},     {"Modeling", kRibbonTabModeling},
     };
     int n = 0;
     for (const Tab& t : tabs) {
@@ -1171,6 +1171,47 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     }
     IM_CHECK(anchored);
     IM_CHECK(CancelToIdle(ctx));
+  // REQ-355 (issue #564 section 8): the Modeling tab's buttons clicked for real — a primitive, a
+  // second button while the first runs (it must cancel and start), the size dropdown, and the
+  // ribbon PIPERUN going straight to its start point. Run with:
+  //   GoSurvey.exe --devshell-run req355-modeling-ribbon
+  ImGuiTest* modeling = IM_REGISTER_TEST(engine, "gosurvey", "req355-modeling-ribbon");
+  modeling->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));  // the ribbon is inert on the Start tab (REQ-308)
+    DevShell_SetWindowSize(2560, 1300);  // wide enough that no section collapses to a flyout
+    ctx->Yield(6);
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip"));
+    ctx->ItemClick("Modeling");
+    ctx->Yield(6);
+    IM_CHECK(s_cmd->activeRibbonTab == kRibbonTabModeling);
+    DevShell_RequestScreenshot("req355-modeling-tab.bmp");
+    ctx->Yield(3);
+
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecModPrimitives"));
+    ctx->ItemClick("##RibbonLayout_##ModBox");  // DrawSection prefixes every id
+    ctx->Yield();
+    IM_CHECK(s_cmd->active == AppCommandState::Kind::Solid);
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecModBooleans"));
+    ctx->ItemClick("##RibbonLayout_##ModUnion");  // BOX is running: the click cancels it and starts UNION
+    ctx->Yield();
+    IM_CHECK(s_cmd->active == AppCommandState::Kind::Boolean);
+    IM_CHECK(CancelToIdle(ctx));
+
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecModPiping"));
+    ctx->ComboClick("##ModPipeSize/6in");
+    ctx->Yield();
+    IM_CHECK(s_cmd->pipeRunNominalSize == "6in");
+    ctx->ItemClick("##RibbonLayout_##ModPipeRun");
+    ctx->Yield(2);
+    IM_CHECK(s_cmd->active == AppCommandState::Kind::PipeRun);
+    IM_CHECK(s_cmd->pipeRunPhase == AppCommandState::PipeRunPhase::WaitFirstPoint);
+    IM_CHECK(std::fabs(s_cmd->pipeRunWallThicknessIn - 0.280) < 1e-9);
+    DevShell_RequestScreenshot("req355-modeling-piperun.bmp");
+    ctx->Yield(3);
+    IM_CHECK(CancelToIdle(ctx));
+    s_cmd->pipeRunNominalSize = "4in";
+    IM_CHECK(ClickHomeTab(ctx));
   };
 
   ImGuiTest* t272 = IM_REGISTER_TEST(engine, "gosurvey", "dwg-shaded-shots");

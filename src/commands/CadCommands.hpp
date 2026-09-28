@@ -1450,15 +1450,18 @@ constexpr int kRibbonTabView     = 3;
 constexpr int kRibbonTabManage   = 4;
 constexpr int kRibbonTabOutput   = 5;
 constexpr int kRibbonTabSurvey   = 6;
-constexpr int kRibbonTabCount    = 7;
+/// REQ-355 (issue #564 section 8): the solid-modelling and piping commands. A saved slot like the
+/// six before it, so it takes the next index and the session-only contextual tabs move up behind it.
+constexpr int kRibbonTabModeling = 7;
+constexpr int kRibbonTabCount    = 8;
 /// REQ-143: contextual TIN Surface tab. Not counted in \c kRibbonTabCount and not written to prefs.
-constexpr int kRibbonTabSurfaceCtx = 7;
+constexpr int kRibbonTabSurfaceCtx = 8;
 /// REQ-153: contextual SURVEY Point(s) tab. Session-only, not a prefs slot.
-constexpr int kRibbonTabSurveyPointCtx = 8;
+constexpr int kRibbonTabSurveyPointCtx = 9;
 /// Contextual Block Editor tab while BEDIT is open. Not counted in \c kRibbonTabCount / prefs.
-constexpr int kRibbonTabBlockEditor = 9;
+constexpr int kRibbonTabBlockEditor = 10;
 /// REQ-171 (part 14): contextual Point Cloud tab. Not counted in kRibbonTabCount / prefs.
-constexpr int kRibbonTabPointCloudCtx = 10;
+constexpr int kRibbonTabPointCloudCtx = 11;
 
 /// REQ-171 point-cloud vertex colour source, chosen by the user (session-global — see
 /// `AppCommandState::pointCloudDisplay`).
@@ -2674,8 +2677,10 @@ struct AppCommandState {
   /// itself stores, so commit is a plain copy rather than a second representation to keep in step.
   std::vector<double> pipeRunDraftVerts;
   /// Remembered across runs the way POLYSOLID remembers width/height/justify (`polysolidWidth`
-  /// etc. above): a pipe run is almost always drawn at the same size as the last one.
-  std::string pipeRunNominalSize;
+  /// etc. above): a pipe run is almost always drawn at the same size as the last one. Starts at 4in
+  /// rather than empty (D-2026-09-28-k) so the Modeling ribbon's size dropdown always shows a size and
+  /// its PIPERUN button never has to stop and ask (REQ-355).
+  std::string pipeRunNominalSize = "4in";
   std::string pipeRunPressureClassTag;
   /// Wall thickness in INCHES for the run being drafted (D-2026-09-23-a). Unlike the size and class
   /// beside it this is NOT remembered across runs: blank Enter at its prompt takes the schedule-40
@@ -2825,7 +2830,7 @@ struct AppCommandState {
   /// \c TRIMSTATE: 0 = smart line trim (default), 1 = pick cutting edges first. Persisted in user prefs.
   int trimState = 0;
   /// REQ-302: which top-level ribbon tab is showing. Persisted in user prefs, same shape as
-  /// \c trimState. Values match \c kRibbonTabHome.. \c kRibbonTabSurvey below; an out-of-range value
+  /// \c trimState. Values match \c kRibbonTabHome.. \c kRibbonTabModeling above; an out-of-range value
   /// loaded from a hand-edited prefs file is clamped back into range rather than left invalid.
   /// REQ-143 / REQ-153 may set this to a contextual tab for the session only.
   int activeRibbonTab = 0;
@@ -5491,6 +5496,13 @@ void CancelPolysolidCommand(AppCommandState& st);
 // --- PIPERUN (issue #486 increment B2 / REQ-345) -------------------------------------------------
 /// Open the command: prompt for a nominal size (+ optional pressure class).
 void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-355 / D-2026-09-28-k: the Modeling ribbon's PIPERUN. Starts at the remembered size (the
+/// ribbon dropdown) with that size's standard wall and goes straight to the start point — neither
+/// question is asked. Falls back to the typed prompts when the size has no standard wall.
+void StartPipeRunAtCurrentSize(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-355: the Modeling ribbon's size dropdown. Choosing a size is typing it alone at PIPERUN's size
+/// prompt — the size is set and the pressure class cleared — so the two are one setting.
+void ChoosePipeRunNominalSize(AppCommandState& st, const std::string& size);
 /// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
 [[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
 /// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false

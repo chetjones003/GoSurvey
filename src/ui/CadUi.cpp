@@ -5,6 +5,7 @@
 #include "DevShellHooks.hpp"
 #include "RibbonLayoutDraw.hpp"
 #include "RibbonLayoutMeasure.hpp"
+#include "ModelingRibbon.hpp"
 // REQ-141 Analyze ribbon + contour label overlay.
 #include "CadCoordinateFrame.hpp"
 #include "CadDynInput.hpp"  // point-entry dynamic input model (REQ-354)
@@ -79,6 +80,15 @@ static void SubmitRibbonCommand(AppCommandState& cmd, std::vector<std::string>& 
   std::vector<char> buf(line.begin(), line.end());
   buf.push_back('\0');
   ProcessCommandLineSubmit(buf.data(), static_cast<int>(buf.size()), cmd, log);
+}
+
+// REQ-355 (D-2026-09-28-k): a ribbon button that runs a command exactly as typed. The command line
+// only starts a new command when none is running (anything typed during one is that command's
+// input), so a running command is cancelled first - a ribbon click starts a new command, as in
+// AutoCAD. Cancelling keeps the selection, so EXTRUDE / UNION / MOVE still see what was picked.
+static void RunRibbonTypedCommand(AppCommandState& cmd, std::vector<std::string>& log, const std::string& line) {
+  CancelActiveCommand(cmd, log);
+  SubmitRibbonCommand(cmd, log, line);
 }
 
 static void UiSubmitViewportPick(AppCommandState& cmd, double x, double y, std::vector<std::string>& log,
@@ -3749,6 +3759,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ribbonTab("Manage",   kRibbonTabManage);
     ribbonTab("Output",   kRibbonTabOutput);
     ribbonTab("Survey",   kRibbonTabSurvey);
+    ribbonTab("Modeling", kRibbonTabModeling);
     if (selSurfIdx >= 0) {
       char surfTab[160];
       const std::string& nm = cmd.cadSurfaces[static_cast<size_t>(selSurfIdx)].name;
@@ -4917,6 +4928,122 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }});
     }
   } // if (activeRibbonTab == kRibbonTabSurvey)
+
+  // REQ-355 (GitHub issue #564 section 8, D-2026-09-28-k): Modeling tab — the solid-modelling and
+  // piping commands, which had no ribbon home. Every button is a row of modelingribbon::kSections
+  // and runs its command exactly as typed (RunRibbonTypedCommand). Model space only, as Survey is.
+  // Closures run after this block exits, so everything block-local they use is captured by value.
+  if (cmd.activeRibbonTab == kRibbonTabModeling && !ribbonPaperSpace) {
+    for (const modelingribbon::Section& sec : modelingribbon::kSections) {
+      if (sec.buttons == modelingribbon::kPiping)
+        continue;  // drawn below, beside its size dropdown
+      // Columns of three icon+label rows, the Survey tab's shape; Medium drops the labels.
+      auto buildSpec = [&, sec](bool compact) {
+        ribbonlayout::RibbonSectionSpec spec;
+        spec.groupGapX = 4.f;
+        for (int i = 0; i < sec.count; i += 3) {
+          std::vector<ribbonlayout::RibbonButtonSpec> col;
+          for (int k = i; k < std::min(sec.count, i + 3); ++k) {
+            const modelingribbon::Button& b = sec.buttons[k];
+            col.push_back(rowBtn(b.id, -1, b.iconName, b.label, false, b.tooltip, compact));
+          }
+          spec.groups.push_back(columnOfButtons(std::move(col)));
+        }
+        return spec;
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(buildSpec(false)).size.x + 8.f;
+      const float mw = ribbonlayout::MeasureRibbonSection(buildSpec(true)).size.x + 8.f;
+      ribbonSpecs.push_back({w, mw, [&, buildSpec, sec]() {
+        const std::string childId = std::string("RibbonSecMod") + sec.title;
+        drawRibbonSectionSpec(childId.c_str(), sec.title, buildSpec(curCompact), [&, sec](const std::string& id) {
+          for (int k = 0; k < sec.count; ++k)
+            if (id == sec.buttons[k].id)
+              RunRibbonTypedCommand(cmd, log, sec.buttons[k].command);
+        });
+      }, sec.title, RibbonIconKind::Nyi, sec.buttons[0].iconName});
+    }
+
+    // ---- Piping: PIPERUN + its nominal-size dropdown + the run-editing tools --------------------
+    // The dropdown is bound to cmd.pipeRunNominalSize, the size PIPERUN itself remembers, so the
+    // dropdown and the typed prompt are one setting and each shows a change made in the other.
+    {
+      ribbonlayout::RibbonSectionSpec runSpec;
+      ribbonlayout::RibbonGroupSpec runGroup;
+      runGroup.buttons = {largeBtnSpecEx("##ModPipeRun", -1, "c3d_pipenet", "Pipe\nRun", false,
+                                         "Pipe Run — route a pipe at the size beside it, standard wall;\n"
+                                         "goes straight to the start point.\n"
+                                         "Command bar: PIPERUN (asks the size and wall)",
+                                         capW("Pipe\nRun"))};
+      runSpec.groups = {runGroup};
+      std::vector<ribbonlayout::RibbonButtonSpec> tools;
+      for (const modelingribbon::Button& b : modelingribbon::kPiping)
+        tools.push_back(rowBtn(b.id, -1, b.iconName, b.label, false, b.tooltip, false));
+      ribbonlayout::RibbonSectionSpec toolsSpec;
+      toolsSpec.groups = {columnOfButtons(std::move(tools))};
+      const float runW = ribbonlayout::MeasureRibbonSection(runSpec).size.x;
+      const float toolsW = ribbonlayout::MeasureRibbonSection(toolsSpec).size.x;
+      const float sizeComboW =
+          ImGui::CalcTextSize("0.75in").x + ImGui::GetFrameHeight() + st.FramePadding.x * 2.f + 8.f;
+      const float w = runW + 8.f + sizeComboW + 8.f + toolsW + 8.f;
+      ribbonSpecs.push_back({w, w, [&, runSpec, toolsSpec, runW, toolsW, sizeComboW, w]() {
+        RibbonSectionBegin("RibbonSecModPiping", "Piping", w, panelH);
+        RibbonLayout::DrawSection(runSpec, runW, [&](const std::string& id) {
+          DevShell_OnUi(id.c_str());
+          if (id == "##ModPipeRun") {
+            CancelActiveCommand(cmd, log);
+            StartPipeRunAtCurrentSize(cmd, log);
+          }
+        });
+        ImGui::SameLine(0, 8);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Size");
+        // Locked while a run is being drawn: its size (and the wall checked against it) is fixed.
+        const bool drafting = cmd.active == AppCommandState::Kind::PipeRun &&
+                              cmd.pipeRunPhase != AppCommandState::PipeRunPhase::WaitNominalSize;
+        double curNps = 0.0;
+        const bool haveCur = CadParsePipeNominalSizeInches(cmd.pipeRunNominalSize, &curNps);
+        ImGui::BeginDisabled(drafting);
+        ImGui::SetNextItemWidth(sizeComboW);
+        if (ImGui::BeginCombo("##ModPipeSize", cmd.pipeRunNominalSize.c_str())) {
+          for (const CadPipeNpsEntry& e : kCadPipeNpsTable) {
+            char label[32];
+            std::snprintf(label, sizeof(label), "%gin", e.nps);
+            const bool selected = haveCur && std::fabs(e.nps - curNps) < 1e-9;
+            if (ImGui::Selectable(label, selected)) {
+              DevShell_OnUi("##ModPipeSize");
+              ChoosePipeRunNominalSize(cmd, label);
+            }
+            if (selected)
+              ImGui::SetItemDefaultFocus();
+          }
+          ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+        RibbonItemHelp(drafting ? "Nominal pipe size — fixed while this run is being drawn."
+                                : "Nominal pipe size for the next PIPERUN (the same setting its prompt offers).",
+                       ImGuiHoveredFlags_AllowWhenDisabled);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 8);
+        RibbonLayout::DrawSection(toolsSpec, toolsW, [&](const std::string& id) {
+          DevShell_OnUi(id.c_str());
+          if (id == "##ModPipeFit") {
+            ImGui::OpenPopup("##ModPipeFitMenu");  // PIPEFIT needs a part type; the menu supplies it
+            return;
+          }
+          for (const modelingribbon::Button& b : modelingribbon::kPiping)
+            if (id == b.id)
+              RunRibbonTypedCommand(cmd, log, b.command);
+        });
+        if (ImGui::BeginPopup("##ModPipeFitMenu")) {
+          for (const char* part : modelingribbon::kPipeFitPartTypes)
+            if (ImGui::MenuItem(part))
+              RunRibbonTypedCommand(cmd, log, std::string("PIPEFIT ") + part);
+          ImGui::EndPopup();
+        }
+        RibbonSectionEnd();
+      }, "Piping", RibbonIconKind::Nyi, "c3d_pipenet"});
+    }
+  } // if (activeRibbonTab == kRibbonTabModeling)
 
   // REQ-143: Civil 3D-shaped contextual TIN Surface tab (selected surface).
   if (cmd.activeRibbonTab == kRibbonTabSurfaceCtx && !ribbonPaperSpace && selSurfIdx >= 0) {
