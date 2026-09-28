@@ -2053,6 +2053,10 @@ const char* ProblemText(Problem p) {
     return "A scale factor must be greater than zero.";
   case Problem::ScaleResultInvalid:
     return "That scale would leave the solid invalid, so it was not applied.";
+  case Problem::MirrorPlaneNotUnit:
+    return "The mirror line has no direction, so there is nothing to reflect the solid across.";
+  case Problem::MirrorResultInvalid:
+    return "That mirror would leave the solid invalid, so it was not applied.";
   case Problem::MoveVertexNotThreePlanes:
     return "That corner is not where exactly three flat faces meet, so it cannot be dragged.";
   case Problem::MoveEdgeFacesParallel:
@@ -2242,6 +2246,137 @@ bool Scale(const Solid& s, const Vec3& basePoint, double factor, Solid* out, Pro
   const Problem why = Validate(r);
   if (why != Problem::Ok)
     return Fail(Problem::ScaleResultInvalid, outWhy);
+  *out = std::move(r);
+  return Succeed(outWhy);
+}
+
+namespace {
+
+/// Reflect \p f and make it right-handed again by negating Y (REQ-351). X and Z are reflected as
+/// directions and kept, so a plane's Z stays its outward normal and a curved surface's axis its axis;
+/// the price is that an angle measured about Z from X toward Y now runs the other way, which every
+/// caller below pays by negating the angles it stores.
+void MirrorFrameInPlace(ucs::Ucs& f, const Vec3& planePoint, const Vec3& planeUnit) {
+  f.origin = ray3d::ReflectPointAcrossPlane(f.origin, planePoint, planeUnit);
+  f.xAxis = ray3d::ReflectVectorAcrossPlane(f.xAxis, planeUnit);
+  f.yAxis = ray3d::Scale(ray3d::ReflectVectorAcrossPlane(f.yAxis, planeUnit), -1.0);
+  f.zAxis = ray3d::ReflectVectorAcrossPlane(f.zAxis, planeUnit);
+}
+
+void MirrorSurfaceInPlace(Surface& sf, const Vec3& planePoint, const Vec3& planeUnit) {
+  MirrorFrameInPlace(sf.frame, planePoint, planeUnit);
+  if (sf.kind == SurfaceKind::Nurbs)
+    sf.patch = nurbs::Mirror(sf.patch, planePoint, planeUnit);
+}
+
+/// The span `[lo, hi]` of an angle that has just been negated: `[-hi, -lo]`, shifted by whole turns
+/// so it starts in `[0, 2pi)` the way every builder writes one. Adding whole turns to both ends
+/// changes no point on the face.
+void NegateAngularSpan(double* lo, double* hi) {
+  double a = -*hi;
+  double b = -*lo;
+  while (a < 0.0) {
+    a += kTwoPi;
+    b += kTwoPi;
+  }
+  *lo = a;
+  *hi = b;
+}
+
+}  // namespace
+
+bool Mirror(const Solid& s, const Vec3& planePoint, const Vec3& planeUnit, Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
+  if (!FinitePoint(planePoint) || !FinitePoint(planeUnit))
+    return Fail(Problem::NonFiniteParameter, outWhy);
+  if (std::fabs(ray3d::Length(planeUnit) - 1.0) > 1e-9)
+    return Fail(Problem::MirrorPlaneNotUnit, outWhy);
+
+  Solid r = s;
+  for (Vertex& v : r.vertices)
+    v.p = ray3d::ReflectPointAcrossPlane(v.p, planePoint, planeUnit);
+  for (Edge& e : r.edges) {
+    if (e.kind != CurveKind::Line) {
+      MirrorFrameInPlace(e.frame, planePoint, planeUnit);
+      // Arc / Ellipse: the frame's Y was negated, so the same points are reached by the opposite
+      // parameter. Intersection: unused (its frame is only a witness point).
+      e.sweep = -e.sweep;
+    }
+    for (Surface& sf : e.isectSurfaces)
+      MirrorSurfaceInPlace(sf, planePoint, planeUnit);
+  }
+  for (Face& f : r.faces) {
+    MirrorSurfaceInPlace(f.surface, planePoint, planeUnit);
+    // Which face parameter the negated Y reverses, and how. A plane has no span; its general trim
+    // loop, if any, is in frame (x, y), so it is v there.
+    bool negateU = false;
+    bool negateV = false;
+    double uShift = 0.0;     // curved: the whole turns NegateAngularSpan added; u -> uShift - u
+    double nurbsUSum = 0.0;  // a + b of the patch's U domain; u -> a + b - u
+    switch (f.surface.kind) {
+    case SurfaceKind::Plane:
+      negateV = true;
+      break;
+    case SurfaceKind::Cylinder:
+    case SurfaceKind::Cone:
+    case SurfaceKind::Sphere:
+    case SurfaceKind::Torus: {
+      negateU = true;
+      const double oldEnd = f.uEnd;
+      NegateAngularSpan(&f.uStart, &f.uEnd);
+      uShift = f.uStart + oldEnd;
+      break;
+    }
+    case SurfaceKind::Nurbs: {
+      const nurbs::Patch& p = f.surface.patch;  // already reversed; its domain is unchanged
+      if (p.knotsU.size() > static_cast<std::size_t>(p.nu) && p.nu > p.degU)
+        nurbsUSum = p.knotsU[static_cast<std::size_t>(p.degU)] + p.knotsU[static_cast<std::size_t>(p.nu)];
+      const double a = nurbsUSum - f.uEnd;
+      const double b = nurbsUSum - f.uStart;
+      f.uStart = a;
+      f.uEnd = b;
+      break;
+    }
+    }
+    for (std::vector<curveisect::Vec2>& poly : f.paramLoops) {
+      for (curveisect::Vec2& q : poly) {
+        if (f.surface.kind == SurfaceKind::Nurbs)
+          q.x = nurbsUSum - q.x;
+        else if (negateU)
+          q.x = uShift - q.x;
+        else if (negateV)
+          q.y = -q.y;
+      }
+      // One parameter negated reverses the polygon's winding; put it back (outer CCW, holes CW).
+      std::reverse(poly.begin(), poly.end());
+    }
+    // A reflection reverses the sense in which every boundary runs round its face.
+    for (Loop& loop : f.loops) {
+      std::reverse(loop.uses.begin(), loop.uses.end());
+      for (EdgeUse& u : loop.uses)
+        u.reversed = !u.reversed;
+    }
+  }
+
+  // The recipe is kept: every primitive is symmetric about its frame's XZ plane (the builders place
+  // box / wedge corners at +-width/2 and the pyramid's first corner on +X), so the reflected frame
+  // describes the reflected primitive. A polysolid's path is in the frame's XY plane, where the
+  // negated Y negates every y, every sweep, and which side of the path is "left".
+  MirrorFrameInPlace(r.recipe.frame, planePoint, planeUnit);
+  r.recipe.path.start.y = -r.recipe.path.start.y;
+  for (PathSeg& seg : r.recipe.path.segs) {
+    seg.end.y = -seg.end.y;
+    seg.sweep = -seg.sweep;
+  }
+  if (r.recipe.justify == Justify::Left)
+    r.recipe.justify = Justify::Right;
+  else if (r.recipe.justify == Justify::Right)
+    r.recipe.justify = Justify::Left;
+
+  const Problem why = Validate(r);
+  if (why != Problem::Ok)
+    return Fail(Problem::MirrorResultInvalid, outWhy);
   *out = std::move(r);
   return Succeed(outWhy);
 }

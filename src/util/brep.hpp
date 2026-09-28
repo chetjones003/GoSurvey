@@ -530,6 +530,11 @@ enum class Problem {
   /// command that caused them (`ucs::IsRightHandedOrthonormal`). A reflection is its own operation.
   ScaleFactorNonPositive,
   ScaleResultInvalid,          ///< The scaled solid did not validate. Should not happen; refused if it does.
+  /// The mirror plane's normal is not a unit vector (REQ-351). Refused rather than normalized for
+  /// \ref Problem::RotateAxisNotUnit's reason: a zero normal reflects nothing and a long one reflects
+  /// too far, and both would still validate.
+  MirrorPlaneNotUnit,
+  MirrorResultInvalid,         ///< The mirrored solid did not validate. Should not happen; refused if it does.
 
   // --- Moving a vertex or an edge (REQ-333, ADR-046 amendment (n)). ---
   /// A vertex where fewer or more than three PLANAR faces meet. Three planes are exactly a point,
@@ -1399,6 +1404,33 @@ struct Tessellation {
 /// Refuses a factor that is zero, negative or non-finite (\ref Problem::ScaleFactorNonPositive).
 [[nodiscard]] bool Scale(const Solid& s, const Vec3& basePoint, double factor, Solid* out,
                          Problem* outWhy);
+
+/// The mirror image of \p s across the plane through \p planePoint with unit normal \p planeUnit
+/// (REQ-351, D-2026-09-28-f).
+///
+/// **A reflection is not "a scale of -1".** It turns a right-hand glove into a left-hand one: applied
+/// naively, every frame becomes left-handed and every loop winds the wrong way round its outward
+/// normal, so the solid reads as inside-out — negative volume, Booleans and fillets that refuse, and
+/// an export that other programs reject. This function reflects every position and direction and
+/// then puts the orientation back:
+///
+/// - **every frame is made right-handed again by negating its Y axis** — X' = R·X, Y' = -R·Y,
+///   Z' = R·Z — so a plane's Z stays its outward normal and a curved surface's axis stays its axis;
+/// - negating Y maps an angle measured about Z to its negative, so a curved face's longitude span
+///   becomes `[-uEnd, -uStart]` (shifted by whole turns back into `[0, 2pi)`), an arc or ellipse edge's
+///   `sweep` negates, and a general trim loop negates the same parameter and is re-wound;
+/// - a NURBS patch has its control net reflected and its **U direction reversed**, which is what
+///   keeps `Su x Sv` pointing outward (\ref nurbs::Mirror);
+/// - **every loop is reversed** — the order of its uses and the direction of each — because a
+///   reflection reverses the sense in which a boundary runs round its face.
+///
+/// Lengths and angles are preserved, so volume and area are too, exactly. The recipe is **kept**:
+/// every primitive is symmetric about its own frame's XZ plane, so the reflected frame describes the
+/// reflected primitive, and a polysolid path negates its y, its sweeps and its justification.
+///
+/// Refuses a normal that is not a unit vector (\ref Problem::MirrorPlaneNotUnit).
+[[nodiscard]] bool Mirror(const Solid& s, const Vec3& planePoint, const Vec3& planeUnit, Solid* out,
+                          Problem* outWhy);
 
 /// Move face \p faceIndex of \p s along its own outward normal by \p distance (REQ-319).
 ///

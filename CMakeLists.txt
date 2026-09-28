@@ -953,6 +953,9 @@ if(GOSURVEY_BUILD_TESTS)
     # subject is the point/direction split: a frame's origin and its axes transform by different
     # rules, and getting that wrong still produces a solid Validate accepts.
     tests/RotateSolidTests.cpp
+    # REQ-351 / D-2026-09-28-f — mirror. Its own file because its subject is ORIENTATION: a naive
+    # reflection leaves left-handed frames and inside-out loops, and these cases pin the repair.
+    tests/MirrorSolidTests.cpp
     # REQ-320 / ADR-051 — the ACIS SAT parser (GitHub issue #299). Pure, so a hand-authored SAT
     # fixture pins the supported plane/cylinder/cone shapes and every refusal without a DWG file.
     tests/AcisSatParserTests.cpp
@@ -1253,6 +1256,8 @@ if(GOSURVEY_BUILD_TESTS)
     # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
     # with GoSurveySnapTests (gosurvey_domain), not GoSurveyTests, like CadBlockImportTests above.
     tests/CadPipeRunCommandTests.cpp
+    # REQ-351 / D-2026-09-28-f — MOVE / ROTATE / SCALE / MIRROR / COPY / ARRAY on a pipe run.
+    tests/ModifyPipeRunTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp

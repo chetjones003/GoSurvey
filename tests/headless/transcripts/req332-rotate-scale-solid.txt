@@ -34,7 +34,7 @@ ESC
 EXPECT LOG "ROTATE complete."
 # The refusal REQ-322 item 6 used to emit is gone — asserted, because no positive check can catch a
 # message being wrongly PRESENT.
-EXPECT NOLOG "transforming a solid is not supported yet"
+EXPECT NOLOG "solid(s) excluded"
 EXPECT SOLIDBOUNDS 0 -5 -10 0 5 10 8
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 CHECK ALL
@@ -98,7 +98,7 @@ CMD SCALE
 CMD 0,0
 CMD 2
 EXPECT LOG "SCALE complete."
-EXPECT NOLOG "transforming a solid is not supported yet"
+EXPECT NOLOG "solid(s) excluded"
 EXPECT SOLIDBOUNDS 0 -20 -10 0 20 10 16
 EXPECT SOLIDPROPS 0 12800 3520 8 12 6
 EXPECT LINEXYZ 0 20 0 5 40 0 5
@@ -133,17 +133,17 @@ EXPECT SOLIDPROPS 0 12800 3520 8 12 6
 CHECK ALL
 
 # --- The refusal was NARROWED, not deleted -------------------------------------------------------
-# MIRROR, Polar ARRAY and STRETCH still refuse a solid by name — REQ-322 item 6 as amended. Asserted
-# here as well as in `req322-move-3d` because the list of which transforms accept a solid is exactly
-# the kind of fact that drifts once one of them changes.
+# STRETCH still refuses a solid by name — REQ-322 item 6 as amended by REQ-332 and REQ-351, which
+# gave MIRROR, Polar ARRAY and ROTATE Copy a solid (`req351-modify-solids`). Asserted here as well as
+# in `req322-move-3d` because the list of which transforms accept a solid is exactly the kind of fact
+# that drifts once one of them changes.
 NEW
 CMD BOX 0,0 20 10 8
-BOX -20 -20 20 20
-EXPECT SELECTED 1
-CMD MIRROR
-CMD 0,-50
-CMD 0,50
-CMD
-EXPECT LOG "transforming a solid is not supported yet"
+CMD STRETCH
+BOX 0 -20 20 20
+CLICK 0 0
+CLICK 5 0
+ESC
+EXPECT LOG "STRETCH — 1 solid(s) excluded"
 EXPECT SOLIDBOUNDS 0 -10 -5 0 10 5 8
 CHECK ALL

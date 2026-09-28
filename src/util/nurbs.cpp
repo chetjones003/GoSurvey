@@ -286,6 +286,29 @@ Patch Scale(const Patch& patch, const Vec3& basePoint, double factor) {
   return out;
 }
 
+Patch Mirror(const Patch& patch, const Vec3& planePoint, const Vec3& planeUnit) {
+  Patch out = patch;
+  const std::size_t nu = static_cast<std::size_t>(patch.nu);
+  const std::size_t nv = static_cast<std::size_t>(patch.nv);
+  if (nu == 0 || patch.ctrl.size() != nu * nv || patch.wts.size() != nu * nv)
+    return out;  // not a valid patch; ValidatePatch will say so, and nothing here can index it
+  for (std::size_t j = 0; j < nv; ++j)
+    for (std::size_t i = 0; i < nu; ++i) {
+      const std::size_t src = j * nu + (nu - 1 - i);
+      out.ctrl[j * nu + i] = ray3d::ReflectPointAcrossPlane(patch.ctrl[src], planePoint, planeUnit);
+      out.wts[j * nu + i] = patch.wts[src];
+    }
+  // Reversed knots: k -> a + b - k, read back to front so the vector stays non-decreasing.
+  const std::size_t nk = patch.knotsU.size();
+  if (nk > static_cast<std::size_t>(patch.degU) && nk > nu) {
+    const double a = patch.knotsU[static_cast<std::size_t>(patch.degU)];
+    const double b = patch.knotsU[nu];
+    for (std::size_t k = 0; k < nk; ++k)
+      out.knotsU[k] = a + b - patch.knotsU[nk - 1 - k];
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Builders.
 // ---------------------------------------------------------------------------------------------
