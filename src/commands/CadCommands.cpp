@@ -21083,7 +21083,21 @@ struct EntityBox {
   double mxX;
   double mnY;
   double mxY;
+  /// The entity's elevation range (GitHub issue #564 §1, D-2026-09-28-d). Read ONLY by the 3D
+  /// extents behind an orbited ZOOM EXTENTS; the plan-view path reads X/Y alone, unchanged.
+  double mnZ = 0.;
+  double mxZ = 0.;
 };
+
+/// Widen \p b's elevation range to include \p z (the box's first Z sets both ends when \p first).
+inline void EntityBoxGrowZ(EntityBox& b, double z, bool first) {
+  if (first) {
+    b.mnZ = b.mxZ = z;
+  } else {
+    b.mnZ = std::min(b.mnZ, z);
+    b.mxZ = std::max(b.mxZ, z);
+  }
+}
 
 [[nodiscard]] double NthPercentile(std::vector<double>& v, double p) {
   if (v.empty())
@@ -21108,6 +21122,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       b.mxX = std::max(static_cast<double>(L[i]), static_cast<double>(L[i + 3]));
       b.mnY = std::min(static_cast<double>(L[i + 1]), static_cast<double>(L[i + 4]));
       b.mxY = std::max(static_cast<double>(L[i + 1]), static_cast<double>(L[i + 4]));
+      EntityBoxGrowZ(b, static_cast<double>(L[i + 2]), true);
+      EntityBoxGrowZ(b, static_cast<double>(L[i + 5]), false);
       b.cx = 0.5 * (b.mnX + b.mxX);
       b.cy = 0.5 * (b.mnY + b.mxY);
       out.push_back(b);
@@ -21130,6 +21146,14 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       b.mxY = cy + r;
       b.cx = cx;
       b.cy = cy;
+      // A tilted circle (REQ-312) rises and falls by up to its radius; a flat one sits at its Z.
+      const size_t ni = (ci / 4) * 3;
+      const bool flat = ni + 2 >= st.userCircleNormals.size() ||
+                        IsFlatNormal(st.userCircleNormals[ni], st.userCircleNormals[ni + 1],
+                                     st.userCircleNormals[ni + 2]);
+      const double cz = static_cast<double>(C[ci + 2]);
+      EntityBoxGrowZ(b, flat ? cz : cz - r, true);
+      EntityBoxGrowZ(b, flat ? cz : cz + r, false);
       out.push_back(b);
     }
   }
@@ -21139,6 +21163,7 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     EntityBox b{};
     b.mnX = b.mxX = b.cx = static_cast<double>(p.easting);
     b.mnY = b.mxY = b.cy = static_cast<double>(p.northing);
+    EntityBoxGrowZ(b, p.elevation, true);
     out.push_back(b);
   }
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
@@ -21155,6 +21180,7 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxX = static_cast<double>(amxX);
     b.mnY = static_cast<double>(amnY);
     b.mxY = static_cast<double>(amxY);
+    EntityBoxGrowZ(b, static_cast<double>(a.insZ), true);
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -21187,6 +21213,9 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxY = static_cast<double>(a.cy) + dr;
     b.cx = static_cast<double>(a.cx);
     b.cy = static_cast<double>(a.cy);
+    const bool arcFlat = IsFlatNormal(a.nx, a.ny, a.nz);
+    EntityBoxGrowZ(b, arcFlat ? a.z : a.z - dr, true);
+    EntityBoxGrowZ(b, arcFlat ? a.z : a.z + dr, false);
     out.push_back(b);
   }
   for (size_t elIx = 0; elIx < st.userEllipses.size(); ++elIx) {
@@ -21205,6 +21234,9 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxY = static_cast<double>(el.cy) + rrx;
     b.cx = static_cast<double>(el.cx);
     b.cy = static_cast<double>(el.cy);
+    const bool elFlat = IsFlatNormal(el.nx, el.ny, el.nz);
+    EntityBoxGrowZ(b, elFlat ? el.z : el.z - rrx, true);
+    EntityBoxGrowZ(b, elFlat ? el.z : el.z + rrx, false);
     out.push_back(b);
   }
   const auto& PV = st.userPolylineVerts;
@@ -21222,6 +21254,7 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       for (int vi = v0; vi < v1; ++vi) {
         const double vx = static_cast<double>(PV[static_cast<size_t>(vi * 3 + 0)]);
         const double vy = static_cast<double>(PV[static_cast<size_t>(vi * 3 + 1)]);
+        EntityBoxGrowZ(b, static_cast<double>(PV[static_cast<size_t>(vi * 3 + 2)]), !any);
         if (!any) {
           b.mnX = b.mxX = vx;
           b.mnY = b.mxY = vy;
@@ -21260,6 +21293,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
           break;
         const double vx = static_cast<double>(FV[static_cast<size_t>(vi * 3 + 0)]);
         const double vy = static_cast<double>(FV[static_cast<size_t>(vi * 3 + 1)]);
+        if (static_cast<size_t>(vi * 3 + 2) < FV.size())
+          EntityBoxGrowZ(b, static_cast<double>(FV[static_cast<size_t>(vi * 3 + 2)]), !any);
         if (!any) {
           b.mnX = b.mxX = vx;
           b.mnY = b.mxY = vy;
@@ -21297,6 +21332,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxX = static_cast<double>(mb.mxX);
     b.mnY = static_cast<double>(mb.mnY);
     b.mxY = static_cast<double>(mb.mxY);
+    b.mnZ = static_cast<double>(mb.mnZ);
+    b.mxZ = static_cast<double>(mb.mxZ);
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -21313,11 +21350,13 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     EntityBox b{};
     b.mnX = b.mxX = pc->pointsXyz[0];
     b.mnY = b.mxY = pc->pointsXyz[1];
+    EntityBoxGrowZ(b, pc->pointsXyz[2], true);
     for (size_t i = 3; i + 2 < pc->pointsXyz.size(); i += 3) {
       b.mnX = std::min(b.mnX, pc->pointsXyz[i]);
       b.mxX = std::max(b.mxX, pc->pointsXyz[i]);
       b.mnY = std::min(b.mnY, pc->pointsXyz[i + 1]);
       b.mxY = std::max(b.mxY, pc->pointsXyz[i + 1]);
+      EntityBoxGrowZ(b, pc->pointsXyz[i + 2], false);
     }
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
@@ -21340,6 +21379,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxX = bb.mx.x;
     b.mnY = bb.mn.y;
     b.mxY = bb.mx.y;
+    b.mnZ = bb.mn.z;
+    b.mxZ = bb.mx.z;
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -21360,6 +21401,89 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxX = sb.mxX;
     b.mnY = sb.mnY;
     b.mxY = sb.mxY;
+    const std::vector<double>& tv = s.tin->vertsXyz;
+    for (size_t i = 2; i < tv.size(); i += 3)
+      EntityBoxGrowZ(b, tv[i], i == 2);
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+}
+
+/// The boxes only a 3D extent needs (GitHub issue #564 §1, D-2026-09-28-d): filled regions, block
+/// references (their 2D content at the insertion's elevation, plus any solids they carry, in full
+/// 3D) and pipe runs (the centreline widened by the pipe's radius). Kept apart from
+/// \ref CollectEntityBoxes so the plan-view extents — which never counted these in their robust
+/// pass — are unchanged by adding them here.
+void CollectEntityBoxes3dExtras(const AppCommandState& st, std::vector<EntityBox>& out) {
+  for (size_t fri = 0; fri < st.cadFilledRegions.size(); ++fri) {
+    if (EntityHiddenInViewport(nullptr, st.cadFilledRegionAttrs, fri))
+      continue;
+    const CadFilledRegion& fr = st.cadFilledRegions[fri];
+    if (fr.vertsXyz.size() < 3)
+      continue;
+    EntityBox b{};
+    for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3) {
+      const double x = fr.vertsXyz[i];
+      const double y = fr.vertsXyz[i + 1];
+      b.mnX = i == 0 ? x : std::min(b.mnX, x);
+      b.mxX = i == 0 ? x : std::max(b.mxX, x);
+      b.mnY = i == 0 ? y : std::min(b.mnY, y);
+      b.mxY = i == 0 ? y : std::max(b.mxY, y);
+      EntityBoxGrowZ(b, fr.vertsXyz[i + 2], i == 0);
+    }
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
+    if (EntityHiddenInViewport(nullptr, st.cadBlockRefAttrs, bi))
+      continue;
+    float bmnX = 0.f, bmnY = 0.f, bmxX = 0.f, bmxY = 0.f;
+    CadBlockWorldAabb(st.blockDefs, st.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
+    EntityBox b{};
+    b.mnX = bmnX;
+    b.mxX = bmxX;
+    b.mnY = bmnY;
+    b.mxY = bmxY;
+    EntityBoxGrowZ(b, st.cadBlockRefs[bi].xf.z, true);
+    std::vector<CadBlockWorldSolid> ws;
+    CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[bi],
+                               bi < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[bi] : EntityAttributes{},
+                               &ws);
+    for (const CadBlockWorldSolid& w : ws) {
+      if (!w.solid)
+        continue;
+      const brep::Bounds sb = brep::ComputeBounds(*w.solid);
+      if (!sb.valid)
+        continue;
+      b.mnX = std::min(b.mnX, sb.mn.x);
+      b.mxX = std::max(b.mxX, sb.mx.x);
+      b.mnY = std::min(b.mnY, sb.mn.y);
+      b.mxY = std::max(b.mxY, sb.mx.y);
+      EntityBoxGrowZ(b, sb.mn.z, false);
+      EntityBoxGrowZ(b, sb.mx.z, false);
+    }
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+  for (const CadPipeRun& r : st.cadPipeRuns) {
+    if (r.vertsXyz.size() < 3)
+      continue;
+    double odFeet = 0.0;
+    const double rad = CadPipeNominalOdFeet(r.nominalSize, &odFeet) ? 0.5 * odFeet : 0.0;
+    EntityBox b{};
+    for (size_t i = 0; i + 2 < r.vertsXyz.size(); i += 3) {
+      const double x = r.vertsXyz[i];
+      const double y = r.vertsXyz[i + 1];
+      b.mnX = i == 0 ? x - rad : std::min(b.mnX, x - rad);
+      b.mxX = i == 0 ? x + rad : std::max(b.mxX, x + rad);
+      b.mnY = i == 0 ? y - rad : std::min(b.mnY, y - rad);
+      b.mxY = i == 0 ? y + rad : std::max(b.mxY, y + rad);
+      EntityBoxGrowZ(b, r.vertsXyz[i + 2] - rad, i == 0);
+      EntityBoxGrowZ(b, r.vertsXyz[i + 2] + rad, false);
+    }
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -21439,6 +21563,75 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
   *outMxX = mxX;
   *outMnY = mnY;
   *outMxY = mxY;
+  if (outSkipped)
+    *outSkipped = skipped;
+  return true;
+}
+
+bool ComputeWorldExtents3d(const AppCommandState& st, ray3d::Vec3* outMin, ray3d::Vec3* outMax,
+                           int* outSkipped) {
+  if (outSkipped)
+    *outSkipped = 0;
+  if (!outMin || !outMax)
+    return false;
+  std::vector<EntityBox> ents;
+  CollectEntityBoxes(st, ents, nullptr);
+  CollectEntityBoxes3dExtras(st, ents);
+  if (ents.empty())
+    return false;
+
+  // The same outlier rule as ComputeRobustWorldExtents, on the same statistic (entity centres in
+  // plan), so a stray entity at (0,0) is dropped from an orbited frame exactly as from a plan one.
+  // Below 16 entities there is no bulk to measure an outlier against, and every box counts.
+  double midX = 0.;
+  double midY = 0.;
+  double radX = std::numeric_limits<double>::infinity();
+  double radY = std::numeric_limits<double>::infinity();
+  if (ents.size() >= 16) {
+    std::vector<double> xs;
+    std::vector<double> ys;
+    xs.reserve(ents.size());
+    ys.reserve(ents.size());
+    for (const EntityBox& b : ents) {
+      xs.push_back(b.cx);
+      ys.push_back(b.cy);
+    }
+    std::vector<double> c = xs;
+    const double xP05 = NthPercentile(c, 0.05);
+    c = xs;
+    const double xP95 = NthPercentile(c, 0.95);
+    c = ys;
+    const double yP05 = NthPercentile(c, 0.05);
+    c = ys;
+    const double yP95 = NthPercentile(c, 0.95);
+    midX = 0.5 * (xP05 + xP95);
+    midY = 0.5 * (yP05 + yP95);
+    radX = std::max(std::max(xP95 - xP05, 0.) * 5.0, 1.0);
+    radY = std::max(std::max(yP95 - yP05, 0.) * 5.0, 1.0);
+  }
+
+  bool any = false;
+  int skipped = 0;
+  ray3d::Vec3 mn{};
+  ray3d::Vec3 mx{};
+  for (const EntityBox& b : ents) {
+    if (std::fabs(b.cx - midX) > radX || std::fabs(b.cy - midY) > radY) {
+      ++skipped;
+      continue;
+    }
+    if (!any) {
+      mn = ray3d::Vec3{b.mnX, b.mnY, b.mnZ};
+      mx = ray3d::Vec3{b.mxX, b.mxY, b.mxZ};
+      any = true;
+      continue;
+    }
+    mn = ray3d::Vec3{std::min(mn.x, b.mnX), std::min(mn.y, b.mnY), std::min(mn.z, b.mnZ)};
+    mx = ray3d::Vec3{std::max(mx.x, b.mxX), std::max(mx.y, b.mxY), std::max(mx.z, b.mxZ)};
+  }
+  if (!any)
+    return false;
+  *outMin = mn;
+  *outMax = mx;
   if (outSkipped)
     *outSkipped = skipped;
   return true;
@@ -37670,10 +37863,67 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
         log.push_back("ZOOM EXTENTS — nothing to frame.");
         return;
       }
-    } else if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped)) {
+    } else if (!CadViewIsPlan(st) || std::fabs(st.viewportRollDeg) > 1e-4f) {
+      // ORBITED (GitHub issue #564 §1, D-2026-09-28-d): frame the model's true 3D box by its
+      // silhouette in THIS camera. Plan view never reaches here, so its framing is exactly the
+      // pre-change path below; a rolled plan (a tilted-UCS PLAN, #153) turns the screen rectangle
+      // and so is framed here too.
       st.pendingZoomExtents = false;
-      log.push_back("ZOOM EXTENTS — nothing to frame.");
+      ray3d::Vec3 bmn{};
+      ray3d::Vec3 bmx{};
+      if (!ComputeWorldExtents3d(st, &bmn, &bmx, &skipped)) {
+        log.push_back("ZOOM EXTENTS — nothing to frame.");
+        return;
+      }
+      float rot[16];
+      CadViewCamera(st).ViewRotation(rot);
+      const double right[3] = {rot[0], rot[4], rot[8]};
+      const double up[3] = {rot[1], rot[5], rot[9]};
+      const double back[3] = {rot[2], rot[6], rot[10]};
+      const double mn3[3] = {bmn.x, bmn.y, bmn.z};
+      const double mx3[3] = {bmx.x, bmx.y, bmx.z};
+      double target[3] = {0., 0., 0.};
+      float newZoom = st.viewportZoom;
+      if (!zoomframing::FrameBoxInView(mn3, mx3, right, up, back, viewportAspect,
+                                       st.viewportProjection == Camera::Projection::Perspective,
+                                       st.viewportFovDeg, target, &newZoom)) {
+        log.push_back("ZOOM EXTENTS — the drawing extents are not a finite box; view unchanged.");
+        return;
+      }
+      st.viewportPanX = target[0];
+      st.viewportPanY = target[1];
+      st.viewportPanZ = target[2];
+      st.viewportZoom = newZoom;
+      BumpCadGpuCache(st);
+      if (panX)
+        *panX = st.viewportPanX;
+      if (panY)
+        *panY = st.viewportPanY;
+      if (zoom)
+        *zoom = st.viewportZoom;
+      char buf3[256];
+      std::snprintf(buf3, sizeof(buf3),
+                    "Zoom extents applied (3D) — box %.6g x %.6g x %.6g, centre (%.6g, %.6g, %.6g) "
+                    "zoom=%.6g skipped=%d.",
+                    bmx.x - bmn.x, bmx.y - bmn.y, bmx.z - bmn.z, target[0], target[1], target[2],
+                    static_cast<double>(st.viewportZoom), skipped);
+      log.push_back(buf3);
       return;
+    } else if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped)) {
+      // Plan view, and nothing in the 2D sweep: a drawing of pipe runs alone (or only what the
+      // 3D sweep adds) still has something to frame — its plan footprint (issue #564 §1). A drawing
+      // the 2D sweep DOES see never reaches here, so its framing is unchanged.
+      ray3d::Vec3 bmn{};
+      ray3d::Vec3 bmx{};
+      if (!ComputeWorldExtents3d(st, &bmn, &bmx, &skipped)) {
+        st.pendingZoomExtents = false;
+        log.push_back("ZOOM EXTENTS — nothing to frame.");
+        return;
+      }
+      mnX = bmn.x;
+      mxX = bmx.x;
+      mnY = bmn.y;
+      mxY = bmx.y;
     }
     // REQ-122: framing REFUSES a rect that is not finite rather than writing a NaN camera, and a
     // refusal states its reason (REQ-201). The current view is left exactly as it was.

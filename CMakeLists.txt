@@ -1235,6 +1235,8 @@ if(GOSURVEY_BUILD_TESTS)
     # and the two negatives (a click that misses every handle, an empty selection). Needs
     # gosurvey_domain for SubmitGizmoClick / ApplyTranslationToSelection.
     tests/GizmoTranslateTests.cpp
+    # GitHub issue #564 s1: orbited ZOOM EXTENTS, driven through ProcessPendingViewportZoom (domain).
+    tests/ZoomExtents3dTests.cpp
     # REQ-060 rotate/scale handles (TASK-232, slice 4c). Its own file because its subject is the
     # AGREEMENT: a gizmo drag and the function the typed command calls, compared coordinate for
     # coordinate — which is the acceptance itself rather than a proxy for it.
