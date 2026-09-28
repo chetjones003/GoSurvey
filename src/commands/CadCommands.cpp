@@ -6419,6 +6419,7 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   // and carrying it into the next would commit that command's geometry at the previous one's Z.
   st.resolvedPointZValid = false;
   st.resolvedPointZ = 0.f;
+  st.resolvedPointZTyped = false;
   st.ucsPhase = AppCommandState::UcsPhase::Idle;
   st.planPhase = AppCommandState::PlanPhase::Idle;
   ResetCircleDraft(st);
@@ -21837,16 +21838,55 @@ bool ParsePointComponents(const std::string& raw, double* a, double* b, bool* is
   return ParseTwoDoubles(s, a, b);
 }
 
+// A typed point's optional third coordinate (REQ-354 / D-2026-09-28-j): `x,y,z` or `@dx,dy,dz` splits
+// into the two-number text the parsers below read, plus the Z. False for a malformed Z or for four or
+// more numbers — which the shared 2D parse would otherwise read as their first two, silently.
+static bool PeelOptionalPointZ(const std::string& raw, std::string* outXy, double* outZ, bool* outHasZ) {
+  const std::string trimmed = StringUtil::trimCopy(raw);
+  *outXy = trimmed;
+  *outHasZ = false;
+  const size_t c1 = trimmed.find(',');
+  const size_t c2 = (c1 == std::string::npos) ? std::string::npos : trimmed.find(',', c1 + 1);
+  if (c2 == std::string::npos)
+    return true;
+  if (trimmed.find(',', c2 + 1) != std::string::npos)
+    return false;
+  const std::string zText = StringUtil::trimCopy(trimmed.substr(c2 + 1));
+  char* zEnd = nullptr;
+  const double zv = std::strtod(zText.c_str(), &zEnd);
+  if (zText.empty() || !zEnd || *zEnd != '\0' || !std::isfinite(zv))
+    return false;
+  *outZ = zv;
+  *outHasZ = true;
+  *outXy = trimmed.substr(0, c2);
+  return true;
+}
+
 // The UCS-aware point parse (REQ-154). Also reports the resolved point's WORLD Z, which a tilted
 // work plane makes vary from point to point — see AppCommandState::resolvedPointZ.
 //
 // Under the WCS this takes the original code path unchanged, deliberately: every existing drawing,
 // transcript and test goes through that branch, so the UCS work cannot perturb them even by a
 // rounding step.
+//
+// A typed Z (REQ-354 / D-2026-09-28-j) is read at every prompt that comes through here: `x,y,z` puts
+// the point at elevation z (a UCS Z under a UCS), and `@dx,dy,dz` lifts it dz from the base — the
+// caller's \p baseWorldZ when it has one (LINE's anchor), the work plane otherwise. The Z reaches
+// the ~29 commit sites the way a tilted plane's already does, through resolvedPointZ, and it beats a
+// leftover mouse snap: the user just typed it.
 bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, float* ly, double* outWorldZ,
-                        bool allowRelative, float baseLocalX, float baseLocalY) {
+                        bool allowRelative, float baseLocalX, float baseLocalY, const float* baseWorldZ) {
   if (!lx || !ly)
     return false;
+  std::string xy;
+  double typedZ = 0.0;
+  bool hasZ = false;
+  if (!PeelOptionalPointZ(raw, &xy, &typedZ, &hasZ))
+    return false;
+  const bool relText = !xy.empty() && xy[0] == '@';
+  const double baseZ =
+      baseWorldZ ? static_cast<double>(*baseWorldZ) : static_cast<double>(CadWorkPlaneElevation(st));
+
   double baseWx = 0.;
   double baseWy = 0.;
   CadCoord::WorldFromLocal(st, baseLocalX, baseLocalY, &baseWx, &baseWy);
@@ -21855,18 +21895,19 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
     double a = 0.;
     double b = 0.;
     bool rel = false;
-    if (!ParsePointComponents(raw, &a, &b, &rel, allowRelative))
+    if (!ParsePointComponents(xy, &a, &b, &rel, allowRelative))
       return false;
     ray3d::Vec3 world;
     if (rel) {
       // `@dx,dy` is a delta along the UCS axes, so it has to be added in UCS space rather than to
       // the world pair. The base keeps its own out-of-plane offset (the UCS Z component), which is
       // what makes a relative move from a snapped point stay where the user put it.
-      const ray3d::Vec3 baseUcs =
-          ucs::WorldToUcs(st.activeUcs, {baseWx, baseWy, static_cast<double>(CadWorkPlaneElevation(st))});
-      world = ucs::UcsToWorld(st.activeUcs, {baseUcs.x + a, baseUcs.y + b, baseUcs.z});
+      const ray3d::Vec3 baseUcs = ucs::WorldToUcs(
+          st.activeUcs,
+          {baseWx, baseWy, hasZ ? baseZ : static_cast<double>(CadWorkPlaneElevation(st))});
+      world = ucs::UcsToWorld(st.activeUcs, {baseUcs.x + a, baseUcs.y + b, baseUcs.z + (hasZ ? typedZ : 0.0)});
     } else {
-      world = ucs::UcsToWorld(st.activeUcs, {a, b, 0.0});
+      world = ucs::UcsToWorld(st.activeUcs, {a, b, hasZ ? typedZ : 0.0});
     }
     if (!std::isfinite(world.x) || !std::isfinite(world.y) || !std::isfinite(world.z))
       return false;
@@ -21881,29 +21922,53 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
     // the pre-UCS path exactly as it was.
     st.resolvedPointZValid = true;
     st.resolvedPointZ = static_cast<float>(world.z);
+    st.resolvedPointZTyped = hasZ;
+    if (hasZ)
+      st.viewportSnapPickValid = false;
     return true;
   }
 
-  if (outWorldZ)
-    *outWorldZ = static_cast<double>(CadWorkPlaneElevation(st));
   // Parsed in double and narrowed by LocalFromWorld only AFTER the origin is subtracted — that
   // ordering is the whole point (REQ-101). The origin itself is established before dispatch, by
   // MaybeEstablishDocumentOriginFromTypedPoint in ProcessCommandLineSubmit, so by the time any
   // command's parse runs the frame can already represent what was typed.
   double wx = 0.;
   double wy = 0.;
-  if (!ParseWorldPointD(raw, &wx, &wy, allowRelative, baseWx, baseWy))
+  if (!ParseWorldPointD(xy, &wx, &wy, allowRelative, baseWx, baseWy))
     return false;
   CadCoord::LocalFromWorld(st, wx, wy, lx, ly);
-  return !std::isfinite(*lx) || !std::isfinite(*ly) ? false : true;
+  if (!std::isfinite(*lx) || !std::isfinite(*ly))
+    return false;
+  if (hasZ) {
+    const double z = relText ? baseZ + typedZ : typedZ;
+    if (!std::isfinite(z) || !std::isfinite(static_cast<float>(z)))
+      return false;
+    st.resolvedPointZValid = true;
+    st.resolvedPointZ = static_cast<float>(z);
+    st.resolvedPointZTyped = true;
+    st.viewportSnapPickValid = false;
+    if (outWorldZ)
+      *outWorldZ = z;
+    return true;
+  }
+  // A Z typed for an earlier point must not ride along into this one (the GUI re-publishes the
+  // cursor's every frame; the headless driver has no frames). Under the WCS the work plane's own
+  // elevation is the untyped answer, exactly as before any Z was typed.
+  if (st.resolvedPointZTyped) {
+    st.resolvedPointZValid = false;
+    st.resolvedPointZTyped = false;
+  }
+  if (outWorldZ)
+    *outWorldZ = static_cast<double>(CadWorkPlaneElevation(st));
+  return true;
 }
 
 // The 38 existing call sites keep this two-coordinate signature: they ask "where is this point?",
 // and the Z of the answer is published through AppCommandState rather than threaded through every
 // one of them (see resolvedPointZ for why that is the seam).
 bool ParseStoragePoint(AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
-                       float baseLocalX, float baseLocalY) {
-  return ParseStoragePointZ(st, raw, lx, ly, nullptr, allowRelative, baseLocalX, baseLocalY);
+                       float baseLocalX, float baseLocalY, const float* baseWorldZ) {
+  return ParseStoragePointZ(st, raw, lx, ly, nullptr, allowRelative, baseLocalX, baseLocalY, baseWorldZ);
 }
 
 // Lift a storage (x,y) onto the active work plane by SOLVING the plane equation for Z. Only valid
@@ -30668,9 +30733,47 @@ const SolidVerbSpec* FindSolidVerb(const std::string& verb) {
 /// optional third component is the point's world ELEVATION — the same rule 3DPOLY and FEATURELINE
 /// already use, peeled off before the shared 2D parser sees it so that REQ-101-critical parser is
 /// not widened to three components for one feature.
+///
+/// \p relativeBase (storage coordinates) additionally accepts `@dx,dy[,dz]` measured from it, along
+/// the active UCS's axes — PIPERUN's next point from its last vertex (REQ-354). Without one, `@` is
+/// refused by name: there is nothing for it to be relative to.
 bool ParseSolidBasePoint(AppCommandState& st, const std::string& raw, ray3d::Vec3* out,
-                         std::vector<std::string>& log, const char* verbUpper) {
+                         std::vector<std::string>& log, const char* verbUpper,
+                         const ray3d::Vec3* relativeBase = nullptr) {
   const std::string trimmed = StringUtil::trimCopy(raw);
+  if (!trimmed.empty() && trimmed[0] == '@') {
+    if (!relativeBase) {
+      log.push_back(std::string(verbUpper) + " — a relative point (@) needs a previous point. Use X,Y or X,Y,Z.");
+      return false;
+    }
+    const std::string body = StringUtil::trimCopy(trimmed.substr(1));
+    const size_t c1 = body.find(',');
+    const size_t c2 = (c1 == std::string::npos) ? std::string::npos : body.find(',', c1 + 1);
+    if (c2 != std::string::npos && body.find(',', c2 + 1) != std::string::npos) {
+      log.push_back(std::string(verbUpper) + " — too many coordinates: @dx,dy or @dx,dy,dz.");
+      return false;
+    }
+    double d[3] = {0.0, 0.0, 0.0};
+    const std::string parts[3] = {
+        body.substr(0, c1),
+        c1 == std::string::npos ? std::string() : body.substr(c1 + 1, c2 == std::string::npos ? std::string::npos
+                                                                                              : c2 - c1 - 1),
+        c2 == std::string::npos ? std::string("0") : body.substr(c2 + 1)};
+    for (int i = 0; i < 3; ++i) {
+      const std::string s = StringUtil::trimCopy(parts[i]);
+      char* end = nullptr;
+      d[i] = std::strtod(s.c_str(), &end);
+      if (s.empty() || !end || *end != '\0' || !std::isfinite(d[i])) {
+        log.push_back(std::string(verbUpper) + " — could not read the relative point. Use @dx,dy or @dx,dy,dz.");
+        return false;
+      }
+    }
+    // Along the UCS axes, as every other `@` in the program is (REQ-154); a vector, so the storage
+    // frame's translation does not enter.
+    const ray3d::Vec3 delta = ucs::UcsVectorToWorld(st.activeUcs, {d[0], d[1], d[2]});
+    *out = ray3d::Add(*relativeBase, delta);
+    return std::isfinite(out->x) && std::isfinite(out->y) && std::isfinite(out->z);
+  }
   std::string xy = trimmed;
   bool haveZ = false;
   double typedZ = 0.0;
@@ -35846,7 +35949,14 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
   }
 
   ray3d::Vec3 pt{};
-  if (!ParseSolidBasePoint(st, line, &pt, log, "PIPERUN"))
+  // `@dx,dy[,dz]` from the last vertex (REQ-354) — the base the dynamic input's ΔX / ΔY measure from.
+  ray3d::Vec3 lastVertex{};
+  const bool haveLast = st.pipeRunPhase == PRP::WaitNextPoint && st.pipeRunDraftVerts.size() >= 3;
+  if (haveLast) {
+    const size_t n = st.pipeRunDraftVerts.size();
+    lastVertex = {st.pipeRunDraftVerts[n - 3], st.pipeRunDraftVerts[n - 2], st.pipeRunDraftVerts[n - 1]};
+  }
+  if (!ParseSolidBasePoint(st, line, &pt, log, "PIPERUN", haveLast ? &lastVertex : nullptr))
     return true;  // the reason has been reported; the prompt stands
   AddPipeRunPoint(st, pt, log);
   return true;
@@ -41446,7 +41556,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
     // `pointText` is `line` with any 3DPOLY elevation already peeled off; identical to `line` for a
     // plain POLYLINE.
-    if (ParseStoragePoint(st, pointText, &px, &py, allowRel, st.anchorX, st.anchorY)) {
+    if (ParseStoragePoint(st, pointText, &px, &py, allowRel, st.anchorX, st.anchorY, &st.anchorZ)) {
       SubmitPolylineVertex(st, px, py, log);
       return;
     }
@@ -41620,7 +41730,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
 
-    if (ParseStoragePoint(st, line, &px, &py, allowRel, st.anchorX, st.anchorY)) {
+    if (ParseStoragePoint(st, line, &px, &py, allowRel, st.anchorX, st.anchorY, &st.anchorZ)) {
       SubmitLineVertex(st, px, py, log);
       return;
     }

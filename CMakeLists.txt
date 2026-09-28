@@ -335,6 +335,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
   src/commands/CadCommands_Ucs.cpp
+  src/commands/CadDynInput.cpp
   src/commands/CadCommands_Bench.cpp
   src/commands/CadBlocks.cpp
   src/commands/CadLinetype.cpp
@@ -1262,6 +1263,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/SolidLayerColorTests.cpp
     # REQ-353 / D-2026-09-28-i — pipe colour by nominal size (issue #564 section 7).
     tests/PipeSizePaletteTests.cpp
+    # REQ-354 / D-2026-09-28-j — the dynamic input shows its mode (issue #564 section 5).
+    tests/DynInputTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp

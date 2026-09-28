@@ -2395,6 +2395,9 @@ struct AppCommandState {
   /// changes nothing there.
   bool  resolvedPointZValid = false;
   float resolvedPointZ = 0.f;
+  /// The published Z was TYPED (`x,y,z`, REQ-354), not read off the work plane — so the next typed
+  /// point without a Z clears it instead of inheriting it.
+  bool  resolvedPointZTyped = false;
   /// Model viewport size in pixels, published by the UI each frame. The command layer needs it to
   /// project geometry to screen for box-selection under an orbited camera (REQ-058); it has no
   /// other way to know the viewport's aspect. Zero means "not yet known" — callers fall back to
@@ -6056,14 +6059,17 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
 /// **Interpreted in the active UCS** (REQ-154): under a rotated UCS `10,0` is 10 units along the UCS
 /// X axis, not the world's. Under the WCS — the default, and every drawing that predates the UCS
 /// command — this is the original world-frame parse, unchanged.
+///
+/// A third number is the point's Z (REQ-354): `x,y,z`, or `@dx,dy,dz` measured from \p baseWorldZ
+/// (the work plane when null). It is published through AppCommandState::resolvedPointZ.
 bool ParseStoragePoint(AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
-                       float baseLocalX, float baseLocalY);
+                       float baseLocalX, float baseLocalY, const float* baseWorldZ = nullptr);
 
 /// \ref ParseStoragePoint, additionally reporting the resolved point's world Z. Callers that are
 /// about to commit geometry want this: on a tilted UCS the work plane's elevation varies across it,
 /// so the point's own Z is the only correct answer (see AppCommandState::resolvedPointZ).
 bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, float* ly, double* outWorldZ,
-                        bool allowRelative, float baseLocalX, float baseLocalY);
+                        bool allowRelative, float baseLocalX, float baseLocalY, const float* baseWorldZ = nullptr);
 
 /// Split a typed point into its two numbers and whether it carried a leading `@`, without deciding
 /// which frame those numbers are in. That separation is what lets one parser serve both frames.
