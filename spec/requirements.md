@@ -9858,6 +9858,59 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-28) — D-2026-09-28-i, TASK-286.
 - Revisions: 2026-09-28 — proposed and accepted.
 
+### REQ-355 — A Modeling ribbon tab, with a pipe-size dropdown beside PIPERUN (GitHub issue #564 §8)
+
+- Purpose: issue #564 §8 — none of the 3D modelling or piping commands had a ribbon home; they were
+  command-line only.
+- Priority: must
+- Type: functional (UI)
+- Depends on: REQ-302 (the ribbon and its layout engine, ADR-053), REQ-313/314/315/317 (the solid
+  commands), REQ-323/331 (solid-edge FILLET / CHAMFER), REQ-060 / D-2026-09-28-a (3DMOVE /
+  3DROTATE / 3DSCALE), REQ-351 (MOVE / COPY / ARRAY on solids), REQ-345 (piping), REQ-353 (the
+  21-size NPS table).
+- Decision: D-2026-09-28-k.
+- Statement:
+  1. **A permanent `Modeling` tab** sits in the ribbon strip after `Survey`. It is a saved-tab slot
+     like the others (the contextual tabs renumber behind it; none of them is ever saved).
+  2. **Its sections**: Primitives (BOX, WEDGE, CONE, CYLINDER, SPHERE, TORUS, PYRAMID, POLYSOLID),
+     Create (EXTRUDE, REVOLVE, SWEEP, LOFT), Booleans (UNION, SUBTRACT, INTERSECT, SLICE), Edit
+     (FILLET, CHAMFER, SECTION, SECTIONPLANE), 3D Modify (3DMOVE, 3DROTATE, 3DSCALE, MOVE, COPY,
+     ARRAY) and Piping (PIPERUN with its size dropdown, PIPEFIT, PIPESPLIT, PIPEJOIN).
+  3. **A button runs its command exactly as typed**: it cancels any running command (a ribbon click
+     starts a new command, as in AutoCAD) and submits the command's name through the command line.
+     One table holds each button's command text, and the button and its test both read it. Every
+     listed command exists, so no button is a not-implemented placeholder.
+  4. **PIPEFIT's button opens a part-type menu** (the command requires a part type), and each item
+     submits `PIPEFIT <part type>`.
+  5. **The pipe-size dropdown lists all 21 NPS sizes** of REQ-353 and is bound to
+     `AppCommandState::pipeRunNominalSize` — the size PIPERUN remembers — so the dropdown and the
+     command-line prompt are one setting and each shows a change made in the other. It is disabled
+     while a run is being drawn (the size is already fixed for that run).
+  6. **The ribbon's PIPERUN asks neither question**: it starts at the dropdown's size with that
+     size's standard wall (schedule 40; STD for 22in) and goes straight to "start point"
+     (D-2026-09-28-k). The pressure class stays the remembered one. **Typed PIPERUN is unchanged**:
+     it still asks the size (offering the current one, Enter to keep) and then the wall.
+  7. **The remembered size starts at 4in** in a new session instead of empty, so the dropdown always
+     shows a size and the button always works in one click; typed PIPERUN therefore offers `[4in]`
+     on its first use (D-2026-09-28-k).
+  8. The tab's content is model-space only, as the Survey tab's is; in paper space it is empty.
+  9. **Out of scope**: PRESSPULL, SECTIONCLIP and the other solid / piping commands the section does
+     not list; new icon artwork (the library icon set already has one for every button).
+- Acceptance:
+  - the strip shows `Modeling` with the six sections;
+  - every button's command text is a command the command line accepts, and running it from the
+    ribbon enters the same command state as typing it (a running command is cancelled first);
+  - the dropdown offers all 21 sizes; choosing one changes the size the next PIPERUN builds;
+  - the ribbon's PIPERUN goes straight to the start-point prompt at the dropdown's size and its
+    standard wall; typed PIPERUN still shows the current size and accepts a new one;
+  - a size typed at the command line shows in the dropdown, and vice versa;
+  - the ribbon is exercised in a Debug build (REQ-302 gotchas: deferred section closures capture by
+    value; `RibbonNyiButton` asserts a label).
+- Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/ModelingRibbon.hpp`), Commands
+  (`src/commands/CadCommands.{hpp,cpp}`)
+- Status: accepted (2026-09-28) — D-2026-09-28-k, TASK-288.
+- Revisions: 2026-09-28 — proposed and accepted.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

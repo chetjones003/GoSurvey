@@ -35687,6 +35687,20 @@ void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back(CadPipeRunPromptText(st));
 }
 
+void StartPipeRunAtCurrentSize(AppCommandState& st, std::vector<std::string>& log) {
+  CancelPipeRunCommand(st);
+  st.active = AppCommandState::Kind::PipeRun;
+  // The two answers the typed prompts would take on a blank Enter — keep the size, standard wall —
+  // given without asking (D-2026-09-28-k). A size the table cannot find, or one with no standard
+  // wall, has nothing to give, so the typed prompts ask instead of the run starting on a guess.
+  double wallIn = 0.0;
+  if (CadPipeStandardWallThicknessInches(st.pipeRunNominalSize, &wallIn)) {
+    st.pipeRunWallThicknessIn = wallIn;
+    st.pipeRunPhase = AppCommandState::PipeRunPhase::WaitFirstPoint;
+  }
+  log.push_back(CadPipeRunPromptText(st));
+}
+
 bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
   using PRP = AppCommandState::PipeRunPhase;
   const std::string line = StringUtil::trimCopy(lineIn);

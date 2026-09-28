@@ -1262,6 +1262,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/SolidLayerColorTests.cpp
     # REQ-353 / D-2026-09-28-i — pipe colour by nominal size (issue #564 section 7).
     tests/PipeSizePaletteTests.cpp
+    tests/ModelingRibbonTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp

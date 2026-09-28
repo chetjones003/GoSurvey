@@ -123,7 +123,7 @@ TEST_CASE("PIPERUN accepts a new size and lists every size when refusing one (RE
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("7in", st, log));
-  CHECK(st.pipeRunNominalSize.empty());
+  CHECK(st.pipeRunNominalSize == "4in");  // refused: the remembered size stands
   REQUIRE_FALSE(log.empty());
   CHECK(log.back().find("3.5in") != std::string::npos);
   CHECK(log.back().find("24in") != std::string::npos);
