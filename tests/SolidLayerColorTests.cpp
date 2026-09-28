@@ -179,6 +179,19 @@ TEST_CASE("A mixed selection of a solid, a pipe run and a line takes one layer i
   CHECK(st.userLineAttrs[0].layer == "0");
 }
 
+TEST_CASE("A new layer name typed for a solid alone becomes a layer the user can turn off (REQ-352)",
+          "[req352][solid]") {
+  AppCommandState st = WithSolidAndRun();
+  st.selection = {Sel(SelectedEntity::Type::Solid, 0)};
+  REQUIRE(CadApplyLayerToSelection(st, "SOLIDS-ONLY") == 1);
+  bool inTable = false;
+  for (const CadLayerRow& r : st.drawingLayerTable)
+    inTable = inTable || r.name == "SOLIDS-ONLY";
+  REQUIRE(inTable);
+  Layer(st, "SOLIDS-ONLY").on = false;
+  CHECK_FALSE(SolidVisible(st, 0));
+}
+
 TEST_CASE("An edit that changes nothing pushes no undo step (REQ-352)", "[req352][solid]") {
   AppCommandState st = WithSolidAndRun();
   st.selection = {Sel(SelectedEntity::Type::Solid, 0)};

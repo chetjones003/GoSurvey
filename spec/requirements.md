@@ -9773,7 +9773,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. **The Properties panel shows and edits `Layer` and `Color` for a solid and a pipe run**,
      alone or in a mixed selection with other entities, through one command-layer edit
      (`CadApplyLayerToSelection` / `CadApplyColorToSelection`) covering every entity type that
-     carries attributes. A typed new layer name joins the layer table.
+     carries attributes. A typed new layer name joins the layer table, whichever entity type
+     carries it.
   2. **Every layer or colour edit is one undo step**, pushed only when something actually changes.
   3. **The ribbon Layers combo follows AutoCAD's rule**: with objects selected it shows their
      layer ("(varies)" when they differ) and a pick moves them to the chosen layer, leaving the
@@ -9793,6 +9794,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a solid and a pipe run on a layer turned Off or Frozen are not drawn, and reappear on thaw;
   - a pipe run's colour edit reaches its already-built pipe solids;
   - a solid, a pipe run and a line take one layer in one action and one undo step;
+  - a new layer name given to a solid alone joins the layer table and can be turned off;
   - an edit that changes nothing pushes no undo step;
   - the ribbon combo moves a selection without changing the current layer, reports how many
     objects moved, and sets the current layer when nothing is selected;

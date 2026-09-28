@@ -23608,6 +23608,13 @@ static void CollectLayersUsedInDrawing(const AppCommandState& st, std::set<std::
     add(a.layer);
   for (const auto& a : st.cadBlockRefAttrs)
     add(a.layer);
+  // REQ-352: every store a layer edit can write to, so a name typed for a solid alone still
+  // becomes a row the Layer Manager can turn off.
+  for (const std::vector<EntityAttributes>* v :
+       {&st.cadSolidAttrs, &st.cadPipeRunAttrs, &st.cadFilledRegionAttrs, &st.cadMeshAttrs,
+        &st.featureLineAttrs, &st.cadSurfaceAttrs, &st.cadPointCloudAttrs})
+    for (const auto& a : *v)
+      add(a.layer);
   for (const auto& p : st.surveyPoints)
     add(p.layer);
   add(st.currentLayer);

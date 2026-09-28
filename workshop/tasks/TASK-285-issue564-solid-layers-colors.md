@@ -63,6 +63,7 @@ display colour (`solidDisplayGeometry`), not only on the attribute:
 - pipe run colour edit reaches already-built pipe solids (**fails with the rebuild fix removed** —
   checked);
 - solid + pipe run + line → one layer, one undo step; a new layer name joins the table;
+- a new layer name typed for a solid ALONE joins the layer table and can be turned off;
 - an edit that changes nothing pushes no undo;
 - ribbon: moves a selection and logs it, keeps the current layer; `(varies)`; no selection → sets
   the current layer;
@@ -70,9 +71,16 @@ display colour (`solidDisplayGeometry`), not only on the attribute:
 
 ## Results
 
-- `[req352]`: 8 cases, 65 assertions, all pass.
-- Full suite: 1859/1866. The 7 failures (issue233, issue402-offset-ucs, regression-58, req068,
+- `[req352]`: 9 cases, 69 assertions, all pass.
+- Full suite: 1860/1867. The 7 failures (issue233, issue402-offset-ucs, regression-58, req068,
   req087, req313-solid-isolines, req313-solid-primitives) fail identically on unmodified `beta`.
+
+## Found in the final review
+
+- `CollectLayersUsedInDrawing` (what `SyncDrawingLayerTableWithGeometry` adds rows from) scanned
+  only the 2D stores, so a new layer name given to a solid alone never became a layer row — the
+  solid sat on a layer the Layer Manager could not show or turn off. It now scans every store the
+  edit can write. The first mixed-selection test hid this (its line put the name in the table).
 
 ## Not in scope / technical debt
 
