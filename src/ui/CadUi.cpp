@@ -14085,6 +14085,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // never survive into a mouse-driven one.
     cmd.resolvedPointZValid = true;
     cmd.resolvedPointZ = static_cast<float>(rawZ);
+    cmd.resolvedPointZTyped = false;  // a typed Z (REQ-354) described the point it was typed for
 
     // The cursor's world ray, built once and handed to every pick in this block. Null in plan
     // view and paper space so those keep the exact pre-3D XY test (REQ-058 parity).
@@ -18774,9 +18775,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (ctx && data->EventFlag == ImGuiInputTextFlags_CallbackAlways) {
           const std::string now(data->Buf, static_cast<size_t>(data->BufTextLen));
           const char* replaceWith = ctx->forceText;
-          if (!replaceWith && now.find_first_of("@<,") != std::string::npos) {
+          const std::string& modelText = ctx->g->f[static_cast<size_t>(ctx->slot)].text;
+          // Only text the model has not seen yet: a character it deliberately leaves in the box (a
+          // comma in Z, an `@` after a digit) would otherwise be re-processed, and the caret pinned
+          // to the end, on every frame the box is active.
+          if (!replaceWith && now != modelText && now.find_first_of("@<,") != std::string::npos) {
             dyninput::EditText(*ctx->g, ctx->slot, now);
-            replaceWith = ctx->g->f[static_cast<size_t>(ctx->slot)].text.c_str();
+            ctx->handled = true;
+            if (ctx->g->f[static_cast<size_t>(ctx->slot)].text != now)
+              replaceWith = ctx->g->f[static_cast<size_t>(ctx->slot)].text.c_str();
           }
           if (replaceWith) {
             ctx->handled = true;

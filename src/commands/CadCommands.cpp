@@ -21878,6 +21878,13 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
                         bool allowRelative, float baseLocalX, float baseLocalY, const float* baseWorldZ) {
   if (!lx || !ly)
     return false;
+  // A Z typed for an EARLIER point describes that point, not this one — including as the base of
+  // an `@dx,dy,dz` below. The GUI clears it when it re-publishes the cursor each frame; the headless
+  // driver has no frames, so it is dropped here, and the work plane answers as it would have.
+  if (st.resolvedPointZTyped) {
+    st.resolvedPointZValid = false;
+    st.resolvedPointZTyped = false;
+  }
   std::string xy;
   double typedZ = 0.0;
   bool hasZ = false;
@@ -21950,13 +21957,6 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
     if (outWorldZ)
       *outWorldZ = z;
     return true;
-  }
-  // A Z typed for an earlier point must not ride along into this one (the GUI re-publishes the
-  // cursor's every frame; the headless driver has no frames). Under the WCS the work plane's own
-  // elevation is the untyped answer, exactly as before any Z was typed.
-  if (st.resolvedPointZTyped) {
-    st.resolvedPointZValid = false;
-    st.resolvedPointZTyped = false;
   }
   if (outWorldZ)
     *outWorldZ = static_cast<double>(CadWorkPlaneElevation(st));
@@ -30737,10 +30737,25 @@ const SolidVerbSpec* FindSolidVerb(const std::string& verb) {
 /// \p relativeBase (storage coordinates) additionally accepts `@dx,dy[,dz]` measured from it, along
 /// the active UCS's axes — PIPERUN's next point from its last vertex (REQ-354). Without one, `@` is
 /// refused by name: there is nothing for it to be relative to.
+///
+/// \p zInUcs reads an absolute `x,y,z` wholly in the active UCS — the typed Z a UCS Z, like X and Y
+/// — for a prompt whose dynamic input shows a UCS Z box (PIPERUN, REQ-354). Without it the Z stays
+/// the world elevation the solid commands have always taken. The two agree under the WCS.
 bool ParseSolidBasePoint(AppCommandState& st, const std::string& raw, ray3d::Vec3* out,
                          std::vector<std::string>& log, const char* verbUpper,
-                         const ray3d::Vec3* relativeBase = nullptr) {
+                         const ray3d::Vec3* relativeBase = nullptr, bool zInUcs = false) {
   const std::string trimmed = StringUtil::trimCopy(raw);
+  if (zInUcs && !ucs::IsWorld(st.activeUcs) && (trimmed.empty() || trimmed[0] != '@')) {
+    float lx = 0.f;
+    float ly = 0.f;
+    double worldZ = 0.0;
+    if (!ParseStoragePointZ(st, trimmed, &lx, &ly, &worldZ, /*allowRelative=*/false, 0.f, 0.f)) {
+      log.push_back(std::string(verbUpper) + " — could not read the point. Use X,Y or X,Y,Z.");
+      return false;
+    }
+    *out = ray3d::Vec3{static_cast<double>(lx), static_cast<double>(ly), worldZ};
+    return std::isfinite(out->x) && std::isfinite(out->y) && std::isfinite(out->z);
+  }
   if (!trimmed.empty() && trimmed[0] == '@') {
     if (!relativeBase) {
       log.push_back(std::string(verbUpper) + " — a relative point (@) needs a previous point. Use X,Y or X,Y,Z.");
@@ -35956,7 +35971,7 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
     const size_t n = st.pipeRunDraftVerts.size();
     lastVertex = {st.pipeRunDraftVerts[n - 3], st.pipeRunDraftVerts[n - 2], st.pipeRunDraftVerts[n - 1]};
   }
-  if (!ParseSolidBasePoint(st, line, &pt, log, "PIPERUN", haveLast ? &lastVertex : nullptr))
+  if (!ParseSolidBasePoint(st, line, &pt, log, "PIPERUN", haveLast ? &lastVertex : nullptr, /*zInUcs=*/true))
     return true;  // the reason has been reported; the prompt stands
   AddPipeRunPoint(st, pt, log);
   return true;

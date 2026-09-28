@@ -318,3 +318,33 @@ TEST_CASE("dyninput: under a rotated UCS an untouched box commits the number it 
   CHECK(lx == Approx(110.0).margin(1e-3));
   CHECK(ly == Approx(60.0).margin(1e-3));
 }
+
+TEST_CASE("typed Z: an earlier typed Z is not the base of a later @dx,dy,dz", "[req354][parser]") {
+  // Code review on #578: with no caller base Z, `@` measures dz from the work plane — not from a Z
+  // typed for the previous point, which the headless driver (no frames) would otherwise keep.
+  AppCommandState st;
+  float lx = 0.f, ly = 0.f;
+  double wz = 0.0;
+  REQUIRE(ParseStoragePointZ(st, "0,0,10", &lx, &ly, &wz, false, 0.f, 0.f));
+  CHECK(wz == Approx(10.0));
+  REQUIRE(ParseStoragePointZ(st, "@5,0,2", &lx, &ly, &wz, true, 0.f, 0.f));
+  CHECK(wz == Approx(2.0));
+  CHECK(CadWorkPlaneElevation(st) == Approx(2.f));
+}
+
+TEST_CASE("PIPERUN reads a typed x,y,z wholly in the active UCS", "[req354][piperun][ucs]") {
+  // Code review on #578: the Z box shows a UCS Z, so the Z typed into it is one. Under a Front-style
+  // UCS (UCS Y = world Z) the old world-elevation reading dropped the typed Y.
+  AppCommandState st;
+  std::vector<std::string> log;
+  st.activeUcs = ucs::RotatedAboutX(ucs::Ucs{}, 90.0);
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));
+  REQUIRE(HandlePipeRunTextInput("1,2,3", st, log));
+  REQUIRE(st.pipeRunDraftVerts.size() == 3);
+  const ray3d::Vec3 want = ucs::UcsToWorld(st.activeUcs, {1.0, 2.0, 3.0});
+  CHECK(st.pipeRunDraftVerts[0] == Approx(want.x).margin(1e-4));
+  CHECK(st.pipeRunDraftVerts[1] == Approx(want.y).margin(1e-4));
+  CHECK(st.pipeRunDraftVerts[2] == Approx(want.z).margin(1e-4));
+}

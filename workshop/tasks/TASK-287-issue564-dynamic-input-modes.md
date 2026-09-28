@@ -67,13 +67,25 @@ MOVE, COPY and PIPERUN, and a typed Z at LINE.
 
 ## Results
 
-- `[req354]` (GoSurveySnapTests): 10 cases, 108 assertions, all pass.
+- `[req354]` (GoSurveySnapTests): 12 cases, 120 assertions, all pass.
 - Transcripts `issue564-dyninput-modes`, `issue564-dyninput-modify-z`: pass.
 - GUI (Developer Shell, `build/devshell`): `req354-dyninput-modes` passes — real keystrokes into the
   boxes (`,`, `@`, `<` with a bearing, Backspace undoing `<`) land the asserted points.
 - Full suite: 1884/1891. The 7 failures (issue233, issue402-offset-ucs, regression-58, req068,
   req087, req313-solid-isolines, req313-solid-primitives) are the same set that fails on unmodified
   `beta`; none types a three-number point.
+
+## Found in the final review (code review on #578)
+
+1. PIPERUN read `x,y` in the UCS but the typed Z as a WORLD elevation (`ParseSolidBasePoint`'s rule
+   for the solid commands), while its new Z box shows a UCS Z — under a Front UCS the typed Y was
+   lost. PIPERUN now reads `x,y,z` wholly in the UCS (`zInUcs`); the solid commands are unchanged.
+2. The field callback re-processed a mode character the model deliberately leaves in a box (a comma
+   in Z, `5@`) every frame, pinning the caret. It now processes only text the model has not seen.
+3. A typed Z lingered as the base of a later `@dx,dy,dz` in the headless driver. Every parse now
+   drops a Z typed for an earlier point, and the GUI clears the flag when it re-publishes the cursor.
+
+Each of 1 and 3 has a regression test; 2 is covered by the GUI test still passing.
 
 ## Verification
 
