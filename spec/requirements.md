@@ -9888,7 +9888,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      while a run is being drawn (the size is already fixed for that run).
   6. **The ribbon's PIPERUN asks neither question**: it starts at the dropdown's size with that
      size's standard wall (schedule 40; STD for 22in) and goes straight to "start point"
-     (D-2026-09-28-k). The pressure class stays the remembered one. **Typed PIPERUN is unchanged**:
+     (D-2026-09-28-k). Choosing a size in the dropdown is typing that size alone at the prompt: it
+     clears the pressure class, as a bare typed size does. **Typed PIPERUN is unchanged**:
      it still asks the size (offering the current one, Enter to keep) and then the wall.
   7. **The remembered size starts at 4in** in a new session instead of empty, so the dropdown always
      shows a size and the button always works in one click; typed PIPERUN therefore offers `[4in]`
@@ -9909,7 +9910,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/ModelingRibbon.hpp`), Commands
   (`src/commands/CadCommands.{hpp,cpp}`)
 - Status: accepted (2026-09-28) — D-2026-09-28-k, TASK-288.
-- Revisions: 2026-09-28 — proposed and accepted.
+- Revisions: 2026-09-28 — proposed and accepted. Same day, from code review on PR #579: the
+  dropdown clears the pressure class (it had kept it, so a 6in pick after a 2in CS300 run built
+  6in CS300 — a class never chosen at that size, and not what typing 6in does).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

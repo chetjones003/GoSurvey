@@ -118,6 +118,29 @@ TEST_CASE("The ribbon's PIPERUN asks neither question and starts at the dropdown
   CHECK(st.pipeRunWallThicknessIn == Catch::Approx(0.375));  // STD: 22in has no schedule 40
 }
 
+TEST_CASE("Choosing a dropdown size is typing it alone: the pressure class is cleared (REQ-355)",
+          "[req355][piperun]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  Submit(st, "PIPERUN", log);
+  REQUIRE(HandlePipeRunTextInput("2in CS300", st, log));
+  REQUIRE(st.pipeRunPressureClassTag == "CS300");
+  CancelActiveCommand(st, log);
+
+  ChoosePipeRunNominalSize(st, "6in");
+  CHECK(st.pipeRunNominalSize == "6in");
+  CHECK(st.pipeRunPressureClassTag.empty());  // as typing "6in" alone would leave it
+
+  AppCommandState typed;
+  Submit(typed, "PIPERUN", log);
+  REQUIRE(HandlePipeRunTextInput("2in CS300", typed, log));
+  CancelActiveCommand(typed, log);
+  Submit(typed, "PIPERUN", log);
+  REQUIRE(HandlePipeRunTextInput("6in", typed, log));
+  CHECK(typed.pipeRunNominalSize == st.pipeRunNominalSize);
+  CHECK(typed.pipeRunPressureClassTag == st.pipeRunPressureClassTag);
+}
+
 TEST_CASE("The ribbon's PIPERUN falls back to the prompts for a size with no standard wall (REQ-355)",
           "[req355][piperun]") {
   AppCommandState st;

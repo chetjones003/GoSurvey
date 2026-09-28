@@ -5010,7 +5010,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
             const bool selected = haveCur && std::fabs(e.nps - curNps) < 1e-9;
             if (ImGui::Selectable(label, selected)) {
               DevShell_OnUi("##ModPipeSize");
-              cmd.pipeRunNominalSize = label;
+              ChoosePipeRunNominalSize(cmd, label);
             }
             if (selected)
               ImGui::SetItemDefaultFocus();

@@ -35687,6 +35687,14 @@ void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back(CadPipeRunPromptText(st));
 }
 
+void ChoosePipeRunNominalSize(AppCommandState& st, const std::string& size) {
+  // A size typed alone at the prompt clears the class (HandlePipeRunTextInput), and a class belongs
+  // to a size's catalog parts — so keeping the old one would look fittings up for a class the user
+  // never chose at this size.
+  st.pipeRunNominalSize = size;
+  st.pipeRunPressureClassTag.clear();
+}
+
 void StartPipeRunAtCurrentSize(AppCommandState& st, std::vector<std::string>& log) {
   CancelPipeRunCommand(st);
   st.active = AppCommandState::Kind::PipeRun;

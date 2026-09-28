@@ -5497,6 +5497,9 @@ void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log);
 /// ribbon dropdown) with that size's standard wall and goes straight to the start point — neither
 /// question is asked. Falls back to the typed prompts when the size has no standard wall.
 void StartPipeRunAtCurrentSize(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-355: the Modeling ribbon's size dropdown. Choosing a size is typing it alone at PIPERUN's size
+/// prompt — the size is set and the pressure class cleared — so the two are one setting.
+void ChoosePipeRunNominalSize(AppCommandState& st, const std::string& size);
 /// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
 [[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
 /// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false
