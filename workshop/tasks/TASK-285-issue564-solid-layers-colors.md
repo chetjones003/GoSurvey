@@ -71,8 +71,8 @@ display colour (`solidDisplayGeometry`), not only on the attribute:
 
 ## Results
 
-- `[req352]`: 9 cases, 69 assertions, all pass.
-- Full suite: 1860/1867. The 7 failures (issue233, issue402-offset-ucs, regression-58, req068,
+- `[req352]`: 11 cases, 79 assertions, all pass.
+- Full suite: 1864/1871. The 7 failures (issue233, issue402-offset-ucs, regression-58, req068,
   req087, req313-solid-isolines, req313-solid-primitives) fail identically on unmodified `beta`.
 
 ## Found in the final review
@@ -81,6 +81,16 @@ display colour (`solidDisplayGeometry`), not only on the attribute:
   only the 2D stores, so a new layer name given to a solid alone never became a layer row — the
   solid sat on a layer the Layer Manager could not show or turn off. It now scans every store the
   edit can write. The first mixed-selection test hid this (its line put the name in the table).
+
+## Found in the user's GUI test (D-2026-09-28-h)
+
+- Recolouring a 2in weld-neck flange (block reference) to colour 3 left it grey: its library solid
+  is layer 0 / ByLayer, and `CadBlockResolveAttr` only let ByBlock content take the insert's
+  colour. Layer-0 content also kept layer "0", so the insert's layer Off did not hide its solid.
+  The user chose "follow the block fully": layer-0 content takes the insert's layer, and ByLayer
+  colour / linetype on it take the insert's. One function, so 2D block linework, solids, plots
+  and EXPLODE all follow the same rule. Tests: `CadBlockTests` (2 rule cases) and 2 `[req352]`
+  block cases (recolour -> drawn green, undo; layer colour + Off) — both fail on the old rule.
 
 ## Not in scope / technical debt
 

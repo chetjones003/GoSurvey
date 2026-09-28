@@ -15,6 +15,8 @@
 
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
+#include "util/brep.hpp"
+#include "util/cadblock.hpp"
 
 namespace {
 
@@ -244,4 +246,50 @@ TEST_CASE("A solid's and a pipe run's layer and colour survive save and reload (
   CHECK(back.cadSolidAttrs[0].color == "#123456");
   CHECK(back.cadPipeRunAttrs[0].layer == "PIPE-STEEL");
   CHECK(back.cadPipeRunAttrs[0].color == "#123456");
+}
+
+namespace {
+
+/// A drawing with one block reference (a pipe fitting stand-in) whose definition holds one box
+/// solid drawn on layer 0 with colour ByLayer — how a library part is normally authored.
+AppCommandState WithLayer0BlockRef() {
+  AppCommandState st;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 2.0, 2.0, 2.0, &box, &why));
+  CadBlockDefinition def;
+  def.name = "FLANGE";
+  def.content.solids.push_back(std::make_shared<const brep::Solid>(box));
+  def.content.solidAttrs.push_back(EntityAttributes{});  // layer "0", ByLayer
+  st.blockDefs.push_back(def);
+  CadBlockRef ref;
+  ref.defName = "FLANGE";
+  st.cadBlockRefs.push_back(ref);
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  EnsureAttrCounts(st);
+  st.selection = {Sel(SelectedEntity::Type::BlockRef, 0)};
+  return st;
+}
+
+}  // namespace
+
+TEST_CASE("Recolouring a block recolours its layer-0 ByLayer solid (D-2026-09-28-h)", "[req352][block]") {
+  AppCommandState st = WithLayer0BlockRef();
+  std::vector<std::string> log;
+  REQUIRE_FALSE(DisplayedColours(st).empty());
+  CHECK(CadApplyColorToSelection(st, "#00FF00") == 1);
+  CHECK(Displays(st, 0.f, 1.f, 0.f));
+  REQUIRE(DoUndo(st, log));
+  CHECK_FALSE(Displays(st, 0.f, 1.f, 0.f));
+}
+
+TEST_CASE("A block's layer-0 solid takes the block's layer: its colour and its Off (D-2026-09-28-h)",
+          "[req352][block]") {
+  AppCommandState st = WithLayer0BlockRef();
+  AddLayer(st, "FITTINGS", "#0000FF");
+  REQUIRE(CadApplyLayerToSelection(st, "FITTINGS") == 1);
+  CHECK(Displays(st, 0.f, 0.f, 1.f));  // ByLayer on layer 0 -> the block's ByLayer -> FITTINGS' colour
+
+  Layer(st, "FITTINGS").on = false;
+  CHECK(DisplayedColours(st).empty());
 }
