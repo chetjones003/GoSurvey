@@ -144,4 +144,79 @@ inline bool FrameWorldRectInViewport(double mnX, double mxX, double mnY, double 
   return true;
 }
 
+/// Frame a WORLD BOX (\p mn .. \p mx) in an ORBITED view (GitHub issue #564 §1, D-2026-09-28-d).
+///
+/// \p right / \p up / \p back are the camera's unit axes in world space — the rows of
+/// `Camera::ViewRotation`. The box is framed by the projection of its eight corners, not by its plan
+/// footprint, so a tall model frames by its height and an orbited one by its silhouette.
+///
+/// **Target.** The camera looks at the box's centre. A box is centrally symmetric, and so is its
+/// orthographic projection about the projected centre — so centring the target on it centres the
+/// silhouette on screen exactly, whatever the orientation.
+///
+/// **Orthographic** — the corners' screen half-extents are handed to \ref FrameWorldRect, so the
+/// margin, the aspect rule, the one-unit floor and the finite-rect refusal are REQ-122's own and not a
+/// second copy of them.
+///
+/// **Perspective** — with `t = tan(fov/2)` the eye sits `halfH / t` behind the target, and a corner at
+/// camera offset (u, v, w) lands at `|u| / (halfH − w·t)` of the half-width (and likewise for v). So
+/// the half-height that puts every corner inside the margin is, exactly,
+/// `max(|u| / ((1−m)·aspect), |v| / (1−m)) + w·t`, maximised over the corners — a closed form, so
+/// the answer does not depend on the current view and repeating ZOOM EXTENTS cannot creep.
+///
+/// Writes \p target (3 doubles) and \p zoom only on success; returns false and writes nothing for a
+/// box or basis that is not finite.
+inline bool FrameBoxInView(const double mn[3], const double mx[3], const double right[3], const double up[3],
+                           const double back[3], float viewportAspect, bool perspective, float fovDeg,
+                           double target[3], float* zoom) {
+  if (!mn || !mx || !right || !up || !back || !target || !zoom)
+    return false;
+  for (int i = 0; i < 3; ++i) {
+    if (!std::isfinite(mn[i]) || !std::isfinite(mx[i]) || !std::isfinite(right[i]) ||
+        !std::isfinite(up[i]) || !std::isfinite(back[i]))
+      return false;
+    if (!std::isfinite(mx[i] - mn[i]))
+      return false;
+  }
+  if (!std::isfinite(viewportAspect) || viewportAspect <= 0.f)
+    return false;
+  const double c[3] = {0.5 * (mn[0] + mx[0]), 0.5 * (mn[1] + mx[1]), 0.5 * (mn[2] + mx[2])};
+  const double aspect = static_cast<double>(std::max(viewportAspect, 1e-6f));
+  const double keep = 1.0 - static_cast<double>(kMarginFraction);
+  const double tanHalf =
+      perspective ? std::tan(0.5 * std::clamp(static_cast<double>(fovDeg), 1.0, 170.0) * 3.14159265358979323846 / 180.0)
+                  : 0.0;
+  double uMax = 0.0;
+  double vMax = 0.0;
+  double needPersp = 0.0;
+  for (int k = 0; k < 8; ++k) {
+    const double d[3] = {((k & 1) ? mx[0] : mn[0]) - c[0], ((k & 2) ? mx[1] : mn[1]) - c[1],
+                         ((k & 4) ? mx[2] : mn[2]) - c[2]};
+    const double u = std::fabs(d[0] * right[0] + d[1] * right[1] + d[2] * right[2]);
+    const double v = std::fabs(d[0] * up[0] + d[1] * up[1] + d[2] * up[2]);
+    const double w = d[0] * back[0] + d[1] * back[1] + d[2] * back[2];
+    uMax = std::max(uMax, u);
+    vMax = std::max(vMax, v);
+    needPersp = std::max(needPersp, std::max(u / (keep * aspect), v / keep) + w * tanHalf);
+  }
+  double panU = 0.0;
+  double panV = 0.0;
+  float z = 0.f;
+  if (!FrameWorldRect(-uMax, uMax, -vMax, vMax, viewportAspect, &panU, &panV, &z))
+    return false;
+  if (perspective) {
+    // The same one-unit floor FrameWorldRect applies, so a degenerate model frames alike in both.
+    const double floorHalfH = kMinFrameSpan / (2.0 * keep);
+    const double halfH = std::max(needPersp, floorHalfH);
+    if (!std::isfinite(halfH) || halfH <= 0.0)
+      return false;
+    z = std::clamp(static_cast<float>(static_cast<double>(kOrthoHalfHRef) / halfH), 1.e-9f, 1.e9f);
+  }
+  target[0] = c[0];
+  target[1] = c[1];
+  target[2] = c[2];
+  *zoom = z;
+  return true;
+}
+
 }  // namespace zoomframing

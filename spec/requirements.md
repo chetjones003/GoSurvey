@@ -5168,6 +5168,36 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-26); closes the remainder of GitHub issue #88 alongside REQ-120
 - Revisions: 2026-08-26 — accepted (D-2026-08-26-c); raised by chetjones003 on issue #88 after PR #93
   merged, asking for #88's ZOOMEXTENTS acceptance list to be verified rather than assumed.
+  2026-09-28 — **ZOOM EXTENTS frames an ORBITED view in the camera's own frame** (D-2026-09-28-d,
+  GitHub issue #564 §1, TASK-282). See the amendment below.
+- **Amendment 2026-09-28 (D-2026-09-28-d) — orbited ZOOM EXTENTS.** The Statement's "a world
+  rectangle" is the PLAN case. When the view is not plan (azimuth or elevation off plan, or a rolled
+  tilted-UCS PLAN), ZOOM EXTENTS instead:
+  1. sweeps the drawing's **true 3D extents** (`ComputeWorldExtents3d`) — every store the 2D sweep
+     covers, each with its elevation range (a tilted circle / arc / ellipse by its radius), plus
+     filled regions, block references (2D content at the insertion elevation and their solids in
+     full 3D) and pipe runs (centreline widened by the pipe's radius); far outliers dropped by the
+     same plan-centre rule `ComputeRobustWorldExtents` uses;
+  2. frames that box by the **projection of its eight corners** through the current camera
+     (`zoomframing::FrameBoxInView`): the target is the box centre (which centres the silhouette —
+     a box's projection is symmetric about the projected centre), and the zoom comes from
+     `FrameWorldRect` on the corners' screen half-extents, so guarantees (1)–(3) above — margin,
+     aspect, one-unit floor, finite-only — are this requirement's own, not a copy. Under
+     **perspective** the half-height is the exact closed form `max(|u|/((1−m)·aspect), |v|/(1−m)) + w·tan(fov/2)`
+     over the corners. Neither depends on the current view, so repeating ZOOM EXTENTS is stable.
+  3. The camera target's elevation (`viewportPanZ`) is set to the box centre's.
+  **Plan view is unchanged**: the pre-change path runs exactly as before. The one addition there: when
+  the 2D sweep finds nothing, the 3D sweep's plan footprint is framed rather than "nothing to frame",
+  so a drawing of pipe runs alone frames in plan too. Paper space and the floating-viewport path
+  (REQ-123) are untouched.
+  - Additional acceptance:
+    - orbited to any azimuth / elevation (and under perspective), the whole model's 3D box is on
+      screen inside the margin, centred, and tight on the binding axis;
+    - a tall model (large Z, small footprint) frames by its height;
+    - repeating ZOOM EXTENTS in an orbited view does not creep;
+    - plan-view framing of an existing drawing is byte-identical to before;
+    - a drawing of solids or pipe runs alone frames, in plan and orbited;
+    - a non-finite extent is refused with a reason and the view unchanged; paper space frames the sheet.
 
 ### REQ-123 — ZOOM EXTENTS through an activated viewport frames the model into that viewport (GitHub issue #100)
 - Purpose: a floating viewport is the model-space window the user is actually working in, and

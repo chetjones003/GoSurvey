@@ -7132,6 +7132,13 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
 // The camera side of zoom-extents is `zoomframing::FrameWorldRect` (ZoomFraming.hpp) — pure, shared
 // by every fit path, and tested there (REQ-122).
 
+/// The drawing's TRUE 3D extents, in storage coordinates, for framing an orbited view (GitHub issue
+/// #564 §1, D-2026-09-28-d): every store ZOOM EXTENTS already sweeps, each with its elevation range,
+/// plus filled regions, block references and pipe runs. Far outliers are dropped by the same
+/// plan-centre rule \ref ComputeRobustWorldExtents uses. False when there is nothing to frame.
+bool ComputeWorldExtents3d(const AppCommandState& st, ray3d::Vec3* outMin, ray3d::Vec3* outMax,
+                           int* outSkipped);
+
 /// The box the section-clip indicator is sized to cover (REQ-341, D-2026-09-16-b), in storage
 /// coordinates: the drawing's extents as ZOOM EXTENTS measures them — every entity kind the clip can
 /// cut, not only solids — with the Z range of the solids when there are any, and the active UCS
