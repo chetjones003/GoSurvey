@@ -3364,15 +3364,29 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         // handle's red: it is not X, and a widget that said it was would be lying about the one
         // thing it exists to communicate (issue #148 acceptance 4).
         drawGizmo(gizmoOverlay->axis[a], kSubFaceHoverR, kSubFaceHoverG, kSubFaceHoverB, kLwGizmo);
-      // Rotate rings take their axis's own colour below, like the move arrows: ring `a` turns about
-      // UCS axis `a` (D-2026-09-28-b).
-      else if (gizmoOverlay->soloOp == 2)
-        // The uniform-scale handle belongs to NO axis — its direction is only somewhere to drag —
-        // so it takes an off-axis amber rather than borrowing a colour that would name one.
-        drawGizmo(gizmoOverlay->axis[a], 0.95f, 0.7f, 0.25f, kLwGizmo);
+      // Rotate rings and the three scale handles take their axis's own colour, like the move arrows
+      // (D-2026-09-28-b / -c): ring or handle `a` lies on UCS axis `a`.
       else
         drawGizmo(gizmoOverlay->axis[a], kAxisRgb[a][0], kAxisRgb[a][1], kAxisRgb[a][2], kLwGizmo);
     }
+    // The corner marks between axes (D-2026-09-28-c): two segments each, the first in its plane's
+    // first axis colour and the second in its second's — XY is red/green, YZ green/blue, ZX blue/red.
+    std::vector<float> half;
+    for (int pl = 0; pl < 3; ++pl) {
+      const std::vector<float>& segs = gizmoOverlay->plane[pl];
+      if (segs.size() != 12)
+        continue;
+      for (int s = 0; s < 2; ++s) {
+        const int ax = (pl + s) % 3;
+        half.assign(segs.begin() + s * 6, segs.begin() + s * 6 + 6);
+        if (gizmoOverlay->planeHot[pl])
+          drawGizmo(half, 1.f, 0.92f, 0.15f, kLwGizmo + 1.f);
+        else
+          drawGizmo(half, kAxisRgb[ax][0], kAxisRgb[ax][1], kAxisRgb[ax][2], kLwGizmo);
+      }
+    }
+    // The base-point circle, in a quiet light grey so it reads as a marker, not a handle.
+    drawGizmo(gizmoOverlay->center, 0.85f, 0.85f, 0.88f, kLwMain);
     glLineWidth(kLwMain);
   }
   }  // end model-space geometry scope (see the note at its opening brace)

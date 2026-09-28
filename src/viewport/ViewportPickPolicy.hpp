@@ -212,9 +212,16 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Move3d:
   case K::Rotate3d:
   case K::Scale3d:
-    return cmd.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects
-               ? R::SelectionAccumulate
-               : R::GizmoHandlePick;
+    // The base point (D-2026-09-28-c) is an ordinary snapped coordinate, like MOVE's.
+    switch (cmd.gizmoCmdPhase) {
+    case AppCommandState::GizmoCmdPhase::SelectObjects:
+      return R::SelectionAccumulate;
+    case AppCommandState::GizmoCmdPhase::BasePoint:
+      return R::SnappedPointPick;
+    case AppCommandState::GizmoCmdPhase::Handles:
+      return R::GizmoHandlePick;
+    }
+    return R::Ignore;
   // EXTRUDE (REQ-314): select closed polylines / circles (the accumulate-and-Enter shape its
   // siblings use), then a height that is either typed or picked off the cursor ray — a snapped
   // point pick, resolved to a height by SubmitExtrudeViewportPick.

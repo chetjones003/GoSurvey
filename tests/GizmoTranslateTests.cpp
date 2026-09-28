@@ -292,8 +292,13 @@ TEST_CASE("Gizmo: a selection alone draws no gizmo; it is summoned (issue #564)"
   std::vector<std::string> log;
   StartGizmoCommand(st, AppCommandState::Kind::Move3d, log);
   REQUIRE(st.active == AppCommandState::Kind::Move3d);
-  CHECK(st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::Handles);  // the pre-selection
+  // The pre-selection goes to the base point (D-2026-09-28-c): still no gizmo until it is given.
+  CHECK(st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::BasePoint);
+  CHECK_FALSE(CadGizmoVisible(st));
+  REQUIRE(HandleGizmoCommandTextInput("", st, log));  // Enter = the centre of the selection
+  CHECK(st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::Handles);
   CHECK(CadGizmoVisible(st));
+  CHECK_FALSE(st.gizmoBaseValid);
   CHECK(CadGizmoAxisCountFor(st) == kGizmoAxisCount);
   st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::SelectObjects;
   CHECK_FALSE(CadGizmoVisible(st));
@@ -311,10 +316,34 @@ TEST_CASE("Gizmo: 3DROTATE borrows the op and gives it back (issue #564)", "[giz
   st.gizmoOp = CadGizmoOp::Scale;
   std::vector<std::string> log;
   StartGizmoCommand(st, AppCommandState::Kind::Rotate3d, log);
+  REQUIRE(HandleGizmoCommandTextInput("", st, log));  // Enter at the base point: the centre
   CHECK(st.gizmoOp == CadGizmoOp::Rotate);
   CHECK(CadGizmoAxisCountFor(st) == 3);  // three rings (D-2026-09-28-b)
   // A different command started over it (a ribbon button) still hands the op back.
   StartMoveCommand(st, log);
   CHECK(st.active == AppCommandState::Kind::Move);
   CHECK(st.gizmoOp == CadGizmoOp::Scale);
+}
+
+TEST_CASE("Gizmo: a picked base point is where 3DMOVE's gizmo sits (D-2026-09-28-c)",
+          "[gizmo][issue564]") {
+  AppCommandState st = WithSelectedLine(0.f, 0.f, 0.f, 10.f, 0.f, 0.f);
+  st.gizmoPersistent = false;
+  std::vector<std::string> log;
+  StartGizmoCommand(st, AppCommandState::Kind::Move3d, log);
+  REQUIRE(st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::BasePoint);
+  SubmitGizmoBasePoint(st, 2.0, -3.0, 4.0, log);
+  CHECK(st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::Handles);
+  ray3d::Vec3 a{};
+  REQUIRE(CadGizmoAnchorWorld(st, &a));
+  CHECK(a.x == Approx(2.0));
+  CHECK(a.y == Approx(-3.0));
+  CHECK(a.z == Approx(4.0));
+  CHECK(CadGizmoPlaneHandleCountFor(st) == 3);
+  // The persistent gizmo never uses a command's base point: once the command ends, the centre.
+  EndGizmoCommand(st);
+  st.gizmoPersistent = true;
+  REQUIRE(CadGizmoAnchorWorld(st, &a));
+  CHECK(a.x == Approx(5.0));
+  CHECK(a.y == Approx(0.0));
 }

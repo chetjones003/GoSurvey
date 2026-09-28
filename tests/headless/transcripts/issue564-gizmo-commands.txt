@@ -56,6 +56,10 @@ CMD 20,0
 ESC
 BOX 5 -5 25 5
 CMD 3DMOVE
+# The base point comes first (D-2026-09-28-c); no gizmo until it is given. Enter = the centre.
+EXPECT LOG "specify base point"
+EXPECT GIZMO 0
+CMD
 EXPECT ACTIVE 3DMOVE
 EXPECT GIZMO 1
 EXPECT GIZMOAXES 3
@@ -91,6 +95,7 @@ EXPECT ACTIVE 3DMOVE
 BOX 5 -5 25 5
 EXPECT SELECTED 1
 CMD
+CMD
 EXPECT GIZMO 1
 # A click through the viewport route reaches the gizmo (the X handle's midpoint)...
 CLICK 20 0 0
@@ -111,6 +116,7 @@ CMD 20,0
 ESC
 BOX 5 -5 25 5
 CMD 3DMOVE
+CMD
 CMD 5
 EXPECT LOG "click the axis handle to move along first"
 EXPECT LINEXYZ 0 10 0 0 20 0 0
@@ -130,6 +136,7 @@ CMD 20,0
 ESC
 BOX 5 -5 25 5
 CMD 3DROTATE
+CMD
 EXPECT ACTIVE 3DROTATE
 EXPECT GIZMOOP 1
 EXPECT GIZMOAXES 3
@@ -157,6 +164,7 @@ CMD 20,0
 ESC
 BOX 5 -5 25 5
 CMD 3DROTATE
+CMD
 GIZMO GRAB 15 -10 0
 EXPECT GIZMOAXIS 2
 GIZMO DROP 25 0 0
@@ -177,6 +185,7 @@ ESC
 BOX 5 -5 15 15
 EXPECT SELECTED 1
 CMD 3DROTATE
+CMD
 GIZMO GRAB 10 12.0710678 7.0710678
 EXPECT GIZMOAXIS 0
 CMD 90
@@ -196,9 +205,10 @@ CMD 20,0
 ESC
 BOX 5 -5 25 5
 CMD 3DSCALE
+CMD
 EXPECT ACTIVE 3DSCALE
 EXPECT GIZMOOP 2
-EXPECT GIZMOAXES 1
+EXPECT GIZMOAXES 3
 CMD 0
 EXPECT LOG "must be greater than zero"
 CMD -2
@@ -220,6 +230,7 @@ BOX -20 -20 20 20
 EXPECT SELECTED 1
 EXPECT SOLIDBOUNDS 0 -10 -5 0 10 5 8
 CMD 3DROTATE
+CMD
 # The Z ring round the box's centre (0,0,4).
 GIZMO GRAB 0 -10 4
 CMD 90
@@ -227,6 +238,7 @@ EXPECT SOLIDBOUNDS 0 -5 -10 0 5 10 8
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 BOX -20 -20 20 20
 CMD 3DSCALE
+CMD
 CMD 2
 EXPECT SOLIDPROPS 0 12800 3520 8 12 6
 UNDO
@@ -245,6 +257,7 @@ BOX 5 -5 25 5
 CMD GIZMO ROTATE
 EXPECT GIZMOOP 1
 CMD 3DMOVE
+CMD
 EXPECT GIZMOOP 0
 EXPECT GIZMOAXES 3
 GIZMO GRAB 20 0 0
@@ -268,6 +281,7 @@ CMD 20,0
 ESC
 BOX 5 -5 25 5
 CMD 3DMOVE
+CMD
 CMD
 EXPECT LOG "3DMOVE — nothing changed."
 EXPECT ACTIVE NONE
@@ -318,4 +332,114 @@ LAYOUT NEW
 CMD 3DMOVE
 EXPECT LOG "works in model space only"
 EXPECT ACTIVE NONE
+CHECK ALL
+
+# --- The base point (D-2026-09-28-c): typed, it is the PIVOT of 3DROTATE ---------------------------
+# Base (10,0), not the centre: the Z ring now hangs round (10,0), so (10,-10,0) is on it. A quarter
+# turn about (10,0) takes (20,0) to (10,10) and leaves (10,0) where it is.
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+CMD 3DROTATE
+EXPECT GIZMO 0
+CMD 10,0
+EXPECT GIZMO 1
+GIZMO GRAB 10 -10 0
+EXPECT GIZMOAXIS 2
+CMD 90
+EXPECT LINEXYZ 0 10 0 0 10 10 0
+EXPECT ACTIVE NONE
+CHECK ALL
+
+# --- ...clicked, it is the CENTRE of 3DSCALE -----------------------------------------------------
+# A click at (10,0) is the base; doubling about it takes (20,0) to (30,0).
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+CMD 3DSCALE
+CLICK 10 0
+EXPECT GIZMO 1
+CMD 2
+EXPECT LINEXYZ 0 10 0 0 30 0 0
+CHECK ALL
+
+# --- 3DSCALE: three handles, and EVERY one scales evenly (D-2026-09-28-c) -------------------------
+# The Y handle runs (15,0)-(15,10). GRAB at its tip and DROP twice as far out: a factor of 2, applied
+# uniformly about (15,0) — the line along X doubles in length, it is not stretched along Y.
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+CMD 3DSCALE
+CMD
+EXPECT GIZMOAXES 3
+GIZMO GRAB 15 9.5 0
+EXPECT GIZMOAXIS 1
+GIZMO DROP 15 19 0
+EXPECT LINEXYZ 0 5 0 0 25 0 0
+EXPECT ACTIVE NONE
+CHECK ALL
+
+# --- 3DMOVE's plane handles (D-2026-09-28-c): slide in the UCS XY plane --------------------------
+# The XY square runs from the anchor (15,0) out 3.5 units along X and Y. (16.5,1.5) is inside it and
+# more than the 1-unit aperture from both arrows, so the square is what grabs: handle 3. Dropping
+# at (19.5,5.5) is an in-plane offset of (3,4).
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+CMD 3DMOVE
+CMD
+GIZMO GRAB 16.5 1.5 0
+EXPECT GIZMOAXIS 3
+GIZMO DROP 19.5 5.5 0
+EXPECT LOG "in the UCS XY plane"
+EXPECT LINEXYZ 0 13 4 0 23 4 0
+EXPECT ACTIVE NONE
+UNDO
+EXPECT LINEXYZ 0 10 0 0 20 0 0
+CHECK ALL
+
+# --- ...and a typed dx,dy after grabbing the square ----------------------------------------------
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+CMD 3DMOVE
+CMD
+GIZMO GRAB 16.5 1.5 0
+EXPECT GIZMOAXIS 3
+CMD 5
+EXPECT LOG "type the offset in the plane as dx,dy"
+CMD 2,-3
+EXPECT LINEXYZ 0 12 -3 0 22 -3 0
+EXPECT ACTIVE NONE
+CHECK ALL
+
+# --- A click beside the handles takes nothing, and the command keeps waiting -------------------
+# (13.5,1.5) is 1.5 from the Y arrow (beyond the 1-unit aperture) and outside the XY
+# square (x must be > 15), so nothing is grabbed and the click only repeats the prompt.
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+CMD 3DMOVE
+CMD
+CLICK 13.5 1.5 0
+EXPECT GIZMOAXIS -1
+EXPECT ACTIVE 3DMOVE
 CHECK ALL

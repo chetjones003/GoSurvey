@@ -55,7 +55,7 @@ CMD GIZMO ROTATE
 EXPECT GIZMOAXES 3
 EXPECT GIZMO 1
 CMD GIZMO SCALE
-EXPECT GIZMOAXES 1
+EXPECT GIZMOAXES 3
 CHECK ALL
 
 # REQ-060 bullet 3 holds under every operation, not only the one it was written against: an empty

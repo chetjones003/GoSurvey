@@ -92,6 +92,25 @@ following the active UCS.
   view with typed 90°; ring-index / count assertions updated (Z ring is now handle 2).
 - Full suite: 1805/1813 — the same 8 pre-existing failures.
 
+## Follow-up in the same PR: AutoCAD 3DMOVE / 3DSCALE widgets + base point (D-2026-09-28-c)
+
+User screenshots of Civil 3D's 3DMOVE and 3DSCALE; three questions put and decided as recommended
+(uniform scale from every handle; working plane handles; a base-point step).
+- `GizmoCmdPhase::BasePoint` between the selection and the handles: `SubmitGizmoBasePoint` (click, via
+  `SubmitViewportPickImpl`, routed `SnappedPointPick`) or typed through `ResolveTypedModifyPoint`;
+  Enter = centre. `gizmoBase` / `gizmoBaseValid` feed `CadGizmoAnchorWorld`. Sub-objects skip it.
+- Plane handles 3–5 (`kGizmoPlaneHandleFirst`, `CadGizmoPlaneAxes`, `CadGizmoPlaneHandleCountFor`):
+  picked after the arrows in `PickGizmoAxis`, grabbed in `SubmitGizmoClick` (ray∩plane), dragged in
+  `UpdateGizmoDrag`, committed from the new `gizmoDragVec` (which the axis drag and typed values now
+  also fill, and which the drag ghost reads). Typed `dx,dy` via `ParseTwoDoubles`.
+- Scale: three handles (`CadGizmoAxisWorld` no longer forces X), each uniform; typed factor needs no grab.
+- Overlay: cone heads (12 spokes + rim), box tips for scale, `plane[3]` corner marks drawn two-colour
+  by the renderer, `center` circle; the amber single-scale-handle colour is gone.
+- Tests: transcript sections for typed base (rotate pivot), clicked base (scale centre), Y-handle
+  uniform scale, plane drag, plane typed dx,dy, a click beside the handles; unit tests for the
+  base-point step and anchor; counts updated.
+- Full suite: 1806/1814 — the same 8 pre-existing failures.
+
 ## Not in scope (later #564 increments)
 
 §1 extents, §2 depth-ordered picking, §4 MIRROR / ARRAY on solids, §5 dynamic input, §6–7 layers and

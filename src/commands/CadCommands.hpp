@@ -3611,8 +3611,20 @@ struct AppCommandState {
   /// Session state, like \ref gizmoOp.
   bool gizmoPersistent = false;
 
-  /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, or showing the handles on it.
-  enum class GizmoCmdPhase { SelectObjects, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
+  /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, asking for the base point the gizmo
+  /// sits on (D-2026-09-28-c), or showing the handles on it.
+  enum class GizmoCmdPhase { SelectObjects, BasePoint, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
+  /// The base point a 3D gizmo command was given (D-2026-09-28-c): where the gizmo sits, the pivot
+  /// of a rotation and the centre of a scale. Invalid means Enter took the default — the centre of
+  /// the selection's box, where the persistent gizmo always sits. Storage coordinates.
+  bool gizmoBaseValid = false;
+  ray3d::Vec3 gizmoBase{0.0, 0.0, 0.0};
+  /// The live TRANSLATE drag as a displacement: `gizmoDragDistance` along the axis for an axis
+  /// handle, or the in-plane offset for a plane handle (D-2026-09-28-c), where no single distance
+  /// says it. The ghost and the commit read this one field so the two cannot disagree.
+  ray3d::Vec3 gizmoDragVec{0.0, 0.0, 0.0};
+  /// Where a plane-handle grab met the plane — the drag is the hit's offset from here.
+  ray3d::Vec3 gizmoGrabPoint{0.0, 0.0, 0.0};
   /// \ref gizmoOp as it was when a 3D gizmo command started — put back when the command ends,
   /// however it ends, so the command's op never leaks into the persistent setting.
   CadGizmoOp gizmoOpBeforeCmd = CadGizmoOp::Translate;
@@ -6854,6 +6866,18 @@ inline constexpr float kGizmoHandleGrabPx = 7.f;
 /// (nearly) edge-on — a line on screen, round which a drag names no angle — so it is not pickable.
 /// About 5 degrees (D-2026-09-28-b).
 inline constexpr double kGizmoRingEdgeOnCos = 0.09;
+/// The move gizmo's PLANE handles (D-2026-09-28-c) are handle numbers 3, 4, 5 — after the three
+/// axes — for the UCS XY, YZ and ZX planes. Each is a square from the anchor out to this fraction of
+/// the handle length along its two axes.
+inline constexpr int kGizmoPlaneHandleFirst = 3;
+inline constexpr double kGizmoPlaneHandleFrac = 0.35;
+/// The two UCS axes (0 = X, 1 = Y, 2 = Z) spanning plane handle \p plane (0 = XY, 1 = YZ, 2 = ZX).
+inline void CadGizmoPlaneAxes(int plane, int* a, int* b) {
+  *a = plane;
+  *b = (plane + 1) % 3;
+}
+/// How many plane handles the gizmo has: 3 for an entity selection under Translate, else 0.
+[[nodiscard]] int CadGizmoPlaneHandleCountFor(const AppCommandState& st);
 
 /// Where the gizmo hangs, in WCS. False when there is nothing for it to hang off.
 ///
@@ -6910,6 +6934,10 @@ void EndGizmoCommand(AppCommandState& st);
 /// just one. Returns false when no 3D gizmo command is running.
 bool HandleGizmoCommandTextInput(const std::string& line, AppCommandState& st,
                                  std::vector<std::string>& log);
+/// The base point of a running 3D gizmo command, picked or typed (D-2026-09-28-c): the gizmo moves
+/// there and the command goes on to its handles. Ignored outside that step.
+void SubmitGizmoBasePoint(AppCommandState& st, double x, double y, double z,
+                          std::vector<std::string>& log);
 /// The prompt for the running 3D gizmo command's current step.
 [[nodiscard]] std::string CadGizmoCommandPromptText(const AppCommandState& st);
 

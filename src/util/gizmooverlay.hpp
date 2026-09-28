@@ -37,7 +37,17 @@ struct CadGizmoOverlay {
   /// carrier between two layers that do not include each other's headers.
   int soloOp = 0;
 
+  /// The corner marks between each pair of axes (D-2026-09-28-c), indexed 0 = XY, 1 = YZ, 2 = ZX:
+  /// exactly two segments each — the first parallel to the plane's first axis and drawn in that
+  /// axis's colour, the second parallel to (or nearer) its second axis, in that one's. Under
+  /// Translate they are the plane handles' squares; under Scale, the triangle marks between axes.
+  std::vector<float> plane[3];
+  /// True for the plane handle under the cursor or being dragged, like \ref hot.
+  bool planeHot[3] = {false, false, false};
+  /// A small circle round the anchor, marking the base point the gizmo sits on.
+  std::vector<float> center;
   [[nodiscard]] bool empty() const {
-    return axis[0].empty() && axis[1].empty() && axis[2].empty() && guide.empty();
+    return axis[0].empty() && axis[1].empty() && axis[2].empty() && guide.empty() &&
+           plane[0].empty() && plane[1].empty() && plane[2].empty() && center.empty();
   }
 };

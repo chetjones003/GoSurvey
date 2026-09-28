@@ -113,7 +113,7 @@ TEST_CASE("Gizmo: how many handles each operation has, and why", "[gizmo][req060
   st.gizmoOp = CadGizmoOp::Rotate;
   CHECK(CadGizmoAxisCountFor(st) == 3);  // one ring per UCS axis (D-2026-09-28-b)
   st.gizmoOp = CadGizmoOp::Scale;
-  CHECK(CadGizmoAxisCountFor(st) == 1);  // a uniform scale has no per-axis meaning
+  CHECK(CadGizmoAxisCountFor(st) == 3);  // three handles, every one uniform (D-2026-09-28-c)
 
   // REQ-060's third acceptance bullet, under every operation: an empty selection has no gizmo.
   st.selection.clear();

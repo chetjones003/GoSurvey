@@ -1860,8 +1860,11 @@ void BuildGizmoOverlay(const AppCommandState& cmd, CadGizmoOverlay* out) {
   for (int i = 0; i < 3; ++i) {
     out->axis[i].clear();
     out->hot[i] = false;
+    out->plane[i].clear();
+    out->planeHot[i] = false;
   }
   out->guide.clear();
+  out->center.clear();
   out->faceMode = false;
   // REQ-060 acceptance 3, and the whole of it: an empty selection has no anchor, so nothing is
   // emitted and nothing is drawn. Stated by the anchor's own return rather than by a separate
@@ -1879,6 +1882,28 @@ void BuildGizmoOverlay(const AppCommandState& cmd, CadGizmoOverlay* out) {
   const int axisCount = CadGizmoAxisCountFor(cmd);
   out->faceMode = CadGizmoModeFor(cmd) == CadGizmoMode::SubObjectFace;
   out->soloOp = cmd.gizmoOp == CadGizmoOp::Rotate ? 1 : cmd.gizmoOp == CadGizmoOp::Scale ? 2 : 0;
+
+  // The base point: a small circle round the anchor in the active UCS's XY plane, as AutoCAD marks
+  // it (D-2026-09-28-c). Whole entities only — a sub-object's handle sits where its edit acts.
+  if (CadGizmoModeFor(cmd) == CadGizmoMode::Entity) {
+    const ray3d::Vec3 n = ray3d::Normalize(cmd.activeUcs.zAxis);
+    ray3d::Vec3 seed{0.0, 0.0, 1.0};
+    if (std::fabs(ray3d::Dot(n, seed)) > 0.9)
+      seed = ray3d::Vec3{1.0, 0.0, 0.0};
+    const ray3d::Vec3 e0 = ray3d::Normalize(ray3d::Cross(seed, n));
+    const ray3d::Vec3 e1 = ray3d::Cross(n, e0);
+    const double r = len * 0.1;
+    constexpr int kSegs = 24;
+    ray3d::Vec3 prev{};
+    for (int i = 0; i <= kSegs; ++i) {
+      const double th = 6.28318530717958647692 * static_cast<double>(i) / static_cast<double>(kSegs);
+      const ray3d::Vec3 pt =
+          ray3d::Add(anchor, ray3d::Add(ray3d::Scale(e0, std::cos(th) * r), ray3d::Scale(e1, std::sin(th) * r)));
+      if (i > 0)
+        GizmoSeg(&out->center, prev, pt);
+      prev = pt;
+    }
+  }
 
   // ROTATE: a RING in the plane the rotation happens in, rather than an arrow. An arrow says "drag
   // along me" and this gesture is "drag around me" — the widget has to state which, because the two
@@ -1921,28 +1946,78 @@ void BuildGizmoOverlay(const AppCommandState& cmd, CadGizmoOverlay* out) {
                                                                          : CadGizmoAxisWorld(cmd, a);
     const ray3d::Vec3 tip = ray3d::Add(anchor, ray3d::Scale(u, len));
     out->hot[a] = (a == lit);
-    GizmoSeg(&out->axis[a], anchor, tip);
-    // Four barbs back from the tip, on a small ring around the axis. Built in the AXIS's own frame
-    // rather than the camera's, so the arrowhead is part of the widget's geometry and does not swim
-    // when the view orbits — the opposite choice from a survey point's marker cross, which is a
-    // screen-space annotation and should billboard.
+    // The head is built in the AXIS's own frame rather than the camera's, so it is part of the
+    // widget's geometry and does not swim when the view orbits — the opposite choice from a survey
+    // point's marker cross, which is a screen-space annotation and should billboard.
     ray3d::Vec3 seed{0.0, 0.0, 1.0};
     if (std::fabs(ray3d::Dot(u, seed)) > 0.9)
       seed = ray3d::Vec3{1.0, 0.0, 0.0};
     const ray3d::Vec3 p = ray3d::Normalize(ray3d::Cross(u, seed));
     const ray3d::Vec3 q = ray3d::Cross(u, p);
-    const double back = len * 0.82;
+    if (cmd.gizmoOp == CadGizmoOp::Scale) {
+      // SCALE: a small BOX on the tip, the AutoCAD 3DSCALE look (D-2026-09-28-c) — a box says
+      // "resize", an arrowhead says "slide".
+      const double h = len * 0.06;
+      const ray3d::Vec3 c = ray3d::Sub(tip, ray3d::Scale(u, h));
+      GizmoSeg(&out->axis[a], anchor, ray3d::Sub(c, ray3d::Scale(u, h)));
+      ray3d::Vec3 corner[8];
+      for (int k = 0; k < 8; ++k)
+        corner[k] = ray3d::Add(
+            c, ray3d::Add(ray3d::Scale(u, (k & 1) ? h : -h),
+                          ray3d::Add(ray3d::Scale(p, (k & 2) ? h : -h), ray3d::Scale(q, (k & 4) ? h : -h))));
+      for (int k = 0; k < 8; ++k)
+        for (int bit = 1; bit < 8; bit <<= 1)
+          if (!(k & bit))
+            GizmoSeg(&out->axis[a], corner[k], corner[k | bit]);
+      continue;
+    }
+    // MOVE (and a sub-object's handles): a shaft and a CONE — twelve spokes and a base ring, the
+    // closest a line-only overlay gets to AutoCAD's solid 3DMOVE arrowhead (D-2026-09-28-c).
+    const double back = len * 0.78;
     const double flare = len * 0.07;
     const ray3d::Vec3 base = ray3d::Add(anchor, ray3d::Scale(u, back));
-    for (int i = 0; i < 4; ++i) {
-      const ray3d::Vec3 side = i == 0   ? ray3d::Scale(p, flare)
-                               : i == 1 ? ray3d::Scale(p, -flare)
-                               : i == 2 ? ray3d::Scale(q, flare)
-                                        : ray3d::Scale(q, -flare);
-      GizmoSeg(&out->axis[a], tip, ray3d::Add(base, side));
+    GizmoSeg(&out->axis[a], anchor, base);
+    constexpr int kConeSpokes = 12;
+    constexpr double kTwoPiCone = 6.28318530717958647692;
+    ray3d::Vec3 prevRim{};
+    for (int i = 0; i <= kConeSpokes; ++i) {
+      const double th = kTwoPiCone * static_cast<double>(i) / static_cast<double>(kConeSpokes);
+      const ray3d::Vec3 rim = ray3d::Add(
+          base, ray3d::Add(ray3d::Scale(p, std::cos(th) * flare), ray3d::Scale(q, std::sin(th) * flare)));
+      if (i < kConeSpokes)
+        GizmoSeg(&out->axis[a], tip, rim);
+      if (i > 0)
+        GizmoSeg(&out->axis[a], prevRim, rim);
+      prevRim = rim;
     }
   }
-  if (cmd.gizmoDragActive) {
+  // The corner marks between each pair of axes (D-2026-09-28-c). Under TRANSLATE they are the plane
+  // handles — the square `PickGizmoAxis` tests, drawn as the two far sides of it, each in the colour
+  // of the axis it runs along. Under SCALE they are AutoCAD's triangle between two axes: a line from
+  // half-way up one to half-way up the other, split at its middle into the two axes' colours.
+  if (CadGizmoModeFor(cmd) == CadGizmoMode::Entity && cmd.gizmoOp != CadGizmoOp::Rotate) {
+    for (int pl = 0; pl < 3; ++pl) {
+      int ia = 0;
+      int ib = 0;
+      CadGizmoPlaneAxes(pl, &ia, &ib);
+      const ray3d::Vec3 ua = CadGizmoAxisWorld(cmd, ia);
+      const ray3d::Vec3 ub = CadGizmoAxisWorld(cmd, ib);
+      if (cmd.gizmoOp == CadGizmoOp::Translate) {
+        const double s = len * kGizmoPlaneHandleFrac;
+        const ray3d::Vec3 corner = ray3d::Add(anchor, ray3d::Add(ray3d::Scale(ua, s), ray3d::Scale(ub, s)));
+        GizmoSeg(&out->plane[pl], ray3d::Add(anchor, ray3d::Scale(ub, s)), corner);  // along A
+        GizmoSeg(&out->plane[pl], ray3d::Add(anchor, ray3d::Scale(ua, s)), corner);  // along B
+        out->planeHot[pl] = (lit == kGizmoPlaneHandleFirst + pl);
+      } else {
+        const ray3d::Vec3 pa = ray3d::Add(anchor, ray3d::Scale(ua, len * 0.5));
+        const ray3d::Vec3 pb = ray3d::Add(anchor, ray3d::Scale(ub, len * 0.5));
+        const ray3d::Vec3 mid = ray3d::Scale(ray3d::Add(pa, pb), 0.5);
+        GizmoSeg(&out->plane[pl], pa, mid);
+        GizmoSeg(&out->plane[pl], pb, mid);
+      }
+    }
+  }
+  if (cmd.gizmoDragActive && cmd.gizmoDragAxis < kGizmoPlaneHandleFirst) {
     // The track, extended well past the handle in both directions: the drag is not limited to the
     // handle's length, and a guide that stopped at the tip would say it was.
     const ray3d::Vec3 u = cmd.gizmoAxisDir;
@@ -2012,9 +2087,11 @@ void BuildGizmoDragGhost(const AppCommandState& cmd, std::vector<float>* outLine
     *outCircles = std::move(keep);
     return;
   }
-  const float dx = static_cast<float>(d * u.x);
-  const float dy = static_cast<float>(d * u.y);
-  const float dz = static_cast<float>(d * u.z);
+  // The displacement the commit will apply — an axis distance or a plane offset (D-2026-09-28-c).
+  const ray3d::Vec3 mv = cmd.gizmoDragVec;
+  const float dx = static_cast<float>(mv.x);
+  const float dy = static_cast<float>(mv.y);
+  const float dz = static_cast<float>(mv.z);
   for (size_t i = 0; i + 2 < outLines->size(); i += 3) {
     (*outLines)[i] += dx;
     (*outLines)[i + 1] += dy;
