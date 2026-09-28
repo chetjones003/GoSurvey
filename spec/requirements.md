@@ -9758,6 +9758,57 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-28) — D-2026-09-28-f, TASK-284.
 - Revisions: 2026-09-28 — proposed and accepted.
 
+### REQ-352 — Solids and pipe runs take layer and colour edits (GitHub issue #564 §6)
+
+- Purpose: issue #564 §6 — a solid is an entity like any other for layer and colour. Creation,
+  ByLayer resolution, layer Off / Freeze and persistence already worked, but the Properties panel's
+  layer and colour edits skipped solids and pipe runs without a word (REQ-201), a pipe run's
+  already-built pipe kept drawing in its old colour, and no layer or colour edit could be undone
+  for any entity type.
+- Priority: must
+- Type: functional
+- Depends on: REQ-313 / ADR-045 (solids), REQ-345 (pipe runs), REQ-201.
+- Decision: D-2026-09-28-g, D-2026-09-28-h.
+- Statement:
+  1. **The Properties panel shows and edits `Layer` and `Color` for a solid and a pipe run**,
+     alone or in a mixed selection with other entities, through one command-layer edit
+     (`CadApplyLayerToSelection` / `CadApplyColorToSelection`) covering every entity type that
+     carries attributes. A typed new layer name joins the layer table, whichever entity type
+     carries it.
+  2. **Every layer or colour edit is one undo step**, pushed only when something actually changes.
+  3. **The ribbon Layers combo follows AutoCAD's rule**: with objects selected it shows their
+     layer ("(varies)" when they differ) and a pick moves them to the chosen layer, leaving the
+     current layer alone; with nothing selected it sets the current layer, as before.
+  4. **The display follows the edit**: a pipe run's pipe solids take the run's new attributes, and
+     a block reference's (a pipe fitting's) world solids are re-derived when its layer or colour
+     changes.
+  5. **A block's layer-0 content follows its insert** (D-2026-09-28-h): it takes the insert's
+     layer (so the insert's layer Off / Freeze hides it) and a ByLayer colour / linetype on it
+     takes the insert's own — recolouring a pipe fitting recolours its body. ByBlock content
+     takes the insert's value as before; content on its own layer keeps its layer and ByLayer.
+  6. **Out of scope** (D-2026-09-28-g): `CHPROP`, `MATCHPROP`, `LAYMCUR` and a ribbon colour
+     dropdown do not exist for any entity type and are GitHub issue #575; layer **Lock** is
+     enforced for no entity type and stays REQ-102's (a solid behaves as a 2D entity does);
+     linetype / lineweight on a shaded body and materials, per the issue. DWG / DXF cannot carry a
+     GoSurvey solid at all (an ACIS body — export skips it with a stated count), so there is no
+     exported solid to write a layer on; the drawing's own save (ADR-044 trailer) keeps both.
+- Acceptance:
+  - a solid's colour edit changes the colour the viewport is handed, and undo / redo restore it;
+  - a ByLayer solid moved onto a layer draws in that layer's colour and follows a change to it;
+  - a solid and a pipe run on a layer turned Off or Frozen are not drawn, and reappear on thaw;
+  - a pipe run's colour edit reaches its already-built pipe solids;
+  - a solid, a pipe run and a line take one layer in one action and one undo step;
+  - recolouring a block whose solid is layer-0 / ByLayer changes the drawn colour; moving it to a
+    layer shows that layer's colour and its Off hides the solid;
+  - a new layer name given to a solid alone joins the layer table and can be turned off;
+  - an edit that changes nothing pushes no undo step;
+  - the ribbon combo moves a selection without changing the current layer, reports how many
+    objects moved, and sets the current layer when nothing is selected;
+  - a solid's and a pipe run's layer and colour survive a save and reload.
+- Owner-layer: Commands (`src/commands/CadCommands.{hpp,cpp}`), UI (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-09-28) — D-2026-09-28-g, D-2026-09-28-h, TASK-285.
+- Revisions: 2026-09-28 — proposed and accepted. 2026-09-28 — item 5 added after the user's GUI test (D-2026-09-28-h).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

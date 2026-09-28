@@ -6445,6 +6445,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     CollectAllDrawingLayers(cmd, &layerList);
     if (std::find(layerList.begin(), layerList.end(), cmd.currentLayer) == layerList.end())
       layerList.insert(layerList.begin(), cmd.currentLayer);
+    const std::string selLayer = CadSelectionLayer(cmd);
 
     if (largeBtn("##RibbonLAY", RibbonIconKind::Layers, "Layers")) {
       SyncDrawingLayerTableWithGeometry(cmd);
@@ -6461,26 +6462,28 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       const ImVec4 dis = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(txt.x * 0.55f + dis.x * 0.45f, txt.y * 0.55f + dis.y * 0.45f,
                                                   txt.z * 0.55f + dis.z * 0.45f, 1.f));
-      ImGui::TextUnformatted("Current layer");
+      // REQ-352: with objects selected the combo shows — and changes — THEIR layer (AutoCAD's rule).
+      ImGui::TextUnformatted(selLayer.empty() ? "Current layer" : "Layer of selection");
       ImGui::PopStyleColor();
     }
     ImGui::SetNextItemWidth(std::max(120.f, kLayerPanelW - largeW - 40.f));
-    const char* preview = cmd.currentLayer.empty() ? "0" : cmd.currentLayer.c_str();
+    const char* preview = !selLayer.empty()        ? (selLayer == kCadSelectionLayerVaries ? "(varies)" : selLayer.c_str())
+                          : cmd.currentLayer.empty() ? "0"
+                                                     : cmd.currentLayer.c_str();
     ImGui::PushID("RibbonLayerCombo");
     if (ImGui::BeginCombo("##ribbonlayerpick", preview, ImGuiComboFlags_HeightLargest)) {
       for (const auto& L : layerList) {
-        const bool sel = L == cmd.currentLayer;
-        if (ImGui::Selectable(L.c_str(), sel)) {
-          cmd.currentLayer = L;
-          SyncDrawingLayerTableWithGeometry(cmd);
-        }
+        const bool sel = selLayer.empty() ? L == cmd.currentLayer : L == selLayer;
+        if (ImGui::Selectable(L.c_str(), sel))
+          CadRibbonPickLayer(cmd, L, log);
         if (sel)
           ImGui::SetItemDefaultFocus();
       }
       ImGui::EndCombo();
     }
     ImGui::PopID();
-    RibbonItemHelp("Current layer for new geometry (LINE, CIRCLE, TEXT, …).");
+    RibbonItemHelp("Current layer for new geometry (LINE, CIRCLE, TEXT, …).\n"
+                   "With objects selected: moves them to the picked layer instead.");
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
@@ -6731,6 +6734,18 @@ void CollectGeneralAttrs(const AppCommandState& cmd, const std::vector<SelectedE
       ltypes->push_back(a.linetype);
       lws->push_back(a.lineweightMm);
       trans->push_back(a.transparency);
+    } else if (e.type == SelectedEntity::Type::Solid || e.type == SelectedEntity::Type::PipeRun ||
+               e.type == SelectedEntity::Type::BlockRef) {
+      // REQ-352: a solid, a pipe run and a block reference (a pipe fitting) report their layer and
+      // colour here so the fields they are edited through show what they hold.
+      const EntityAttributes* a = CadEditableAttrsForSelected(cmd, e);
+      if (!a)
+        continue;
+      layers->push_back(a->layer);
+      colors->push_back(a->color);
+      ltypes->push_back(a->linetype);
+      lws->push_back(a->lineweightMm);
+      trans->push_back(a->transparency);
     }
   }
 }
@@ -7008,110 +7023,17 @@ void RefreshPropsBuffersFromModel(AppCommandState& cmd, const std::vector<Select
   }
 }
 
+// REQ-352: the edit itself — every attribute-carrying type, solids and pipe runs included, as one
+// undo step — lives in the command layer, shared with the ribbon's layer dropdown.
 void ApplyLayerToSelection(AppCommandState& cmd, const std::string& v) {
-  if (v.empty())
-    return;
-  EnsureAttrCounts(cmd);
-  for (const auto& e : cmd.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= cmd.userLinesFlat.size() || static_cast<size_t>(e.index) >= cmd.userLineAttrs.size())
-        continue;
-      cmd.userLineAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
-        continue;
-      cmd.userCircleAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadAnnotations.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
-        continue;
-      cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Table) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
-        continue;
-      cmd.cadTableAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::BlockRef) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadBlockRefs.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadBlockRefAttrs.size())
-        continue;
-      cmd.cadBlockRefAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
-          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
-        continue;
-      cmd.userArcAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
-          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
-        continue;
-      cmd.userEllAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int np =
-          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
-      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
-        continue;
-      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].layer = v;
-    }
-  }
-  SyncDrawingLayerTableWithGeometry(cmd);
-  BumpCadGpuCache(cmd);
+  (void)CadApplyLayerToSelection(cmd, v);
   RefreshMixedHintFlags(cmd);
 }
 
 } // namespace — ApplyColorToSelection is shared with CadUi_ColorPicker.cpp
 
 void ApplyColorToSelection(AppCommandState& cmd, const std::string& v) {
-  if (v.empty())
-    return;
-  EnsureAttrCounts(cmd);
-  for (const auto& e : cmd.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= cmd.userLinesFlat.size() || static_cast<size_t>(e.index) >= cmd.userLineAttrs.size())
-        continue;
-      cmd.userLineAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
-        continue;
-      cmd.userCircleAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadAnnotations.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
-        continue;
-      cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Table) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
-        continue;
-      cmd.cadTableAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::BlockRef) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadBlockRefs.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadBlockRefAttrs.size())
-        continue;
-      cmd.cadBlockRefAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
-          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
-        continue;
-      cmd.userArcAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
-          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
-        continue;
-      cmd.userEllAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int np =
-          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
-      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
-        continue;
-      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].color = v;
-    }
-  }
-  BumpCadGpuCache(cmd);
+  (void)CadApplyColorToSelection(cmd, v);  // REQ-352 — see ApplyLayerToSelection
   RefreshMixedHintFlags(cmd);
 }
 
@@ -8976,6 +8898,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int firstSurfIx = -1;
   int nPipeRun = 0;
   int firstPipeRunIx = -1;
+  int nSolid = 0;
   for (const auto& e : sel) {
     if      (e.type == SelectedEntity::Type::LineSeg)    ++nLine;
     else if (e.type == SelectedEntity::Type::Circle)     ++nCirc;
@@ -8991,15 +8914,17 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       ++nPipeRun;
       if (firstPipeRunIx < 0)
         firstPipeRunIx = e.index;
+    } else if (e.type == SelectedEntity::Type::Solid) {
+      ++nSolid;
     }
   }
 
   ImGui::Text("Selected: %d object(s)", static_cast<int>(sel.size()));
   const int typeKinds = (nLine > 0 ? 1 : 0) + (nCirc > 0 ? 1 : 0) + (nAnn > 0 ? 1 : 0) + (nTable > 0 ? 1 : 0) +
-                        (nPdf > 0 ? 1 : 0);
+                        (nPdf > 0 ? 1 : 0) + (nSolid > 0 ? 1 : 0) + (nPipeRun > 0 ? 1 : 0);
   if (typeKinds > 1)
-    ImGui::TextDisabled("(Mixed: Line %d, Circle %d, Ann %d, Table %d, PDF %d)", nLine, nCirc, nAnn, nTable,
-                        nPdf);
+    ImGui::TextDisabled("(Mixed: Line %d, Circle %d, Ann %d, Table %d, PDF %d, Solid %d, Pipe run %d)", nLine,
+                        nCirc, nAnn, nTable, nPdf, nSolid, nPipeRun);
   else if (nLine > 1)
     ImGui::TextDisabled("%d lines", nLine);
   else if (nCirc > 1)
@@ -9024,6 +8949,10 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     ImGui::TextDisabled("%d pipe runs", nPipeRun);
   else if (nPipeRun == 1)
     ImGui::TextDisabled("Pipe Run");
+  else if (nSolid > 1)
+    ImGui::TextDisabled("%d solids", nSolid);
+  else if (nSolid == 1)
+    ImGui::TextDisabled("3D Solid");
   else if (nAnn == 1) {
     int ix = -1;
     for (const auto& e : sel) {

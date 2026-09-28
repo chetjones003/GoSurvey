@@ -74,6 +74,27 @@ TEST_CASE("ByBlock color resolves from the insert", "[issue124][block]") {
   CHECK(r.color == "1");
 }
 
+TEST_CASE("Layer-0 ByLayer content follows the insert's layer and colour", "[issue564][block]") {
+  EntityAttributes prim;  // layer "0", ByLayer — how a library part is drawn
+  EntityAttributes insert;
+  insert.layer = "FITTINGS";
+  insert.color = "3";
+  const EntityAttributes r = CadBlockResolveAttr(prim, insert);
+  CHECK(r.layer == "FITTINGS");
+  CHECK(r.color == "3");
+}
+
+TEST_CASE("Content on its own layer keeps its layer and ByLayer colour", "[issue564][block]") {
+  EntityAttributes prim;
+  prim.layer = "BOLTS";
+  EntityAttributes insert;
+  insert.layer = "FITTINGS";
+  insert.color = "3";
+  const EntityAttributes r = CadBlockResolveAttr(prim, insert);
+  CHECK(r.layer == "BOLTS");
+  CHECK(r.color == "ByLayer");
+}
+
 TEST_CASE("Mirror of a reference flips insertion across the axis", "[issue124][block]") {
   CadBlockRef r;
   r.xf.x = 4.f;
