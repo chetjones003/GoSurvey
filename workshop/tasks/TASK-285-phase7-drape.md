@@ -76,10 +76,44 @@ refuse and the transcript fail for a reason that had nothing to do with the code
 / storage-is-local offset (13.607, 0.308) is the same note `req069-surface-definition-commands.txt`
 carries.
 
+## Increment 2 - the opt-in link
+
+`DRAPE <surface>, LINK` stores the surface's **stable entity id** on the entity
+(`EntityAttributes::drapedOnSurfaceId`, 0 = not linked), and the geometry re-drapes whenever that
+surface is rebuilt. Draping **without** `LINK` clears a link a previous drape left - "bake this
+where it is now" is the natural way to ask for that, and a stale link would move the geometry
+again at the next rebuild.
+
+- **Persistence is additive and omitted at 0**, so a drawing with no link is byte-identical to one
+  written before the field existed (ADR-020 (d)). `.dwg` carries it too: `SaveDrawingDocument`
+  appends the same GoSurvey JSON payload, so both formats go through `EntityAttributesToJson`.
+- **Re-drape is hooked at all three places a TIN is replaced** - `SURFACEREBUILD` for one surface,
+  `SURFACEREBUILD` for all, and the async reap - so a link means the same thing whichever way the
+  rebuild was driven. Resolve and apply are split, so the command and the re-drape share one
+  definition of "on the ground".
+- **An erased surface needs no cleanup pass.** `FindSurfaceIndexById` already answers -1 for an id
+  that no longer resolves (and for 0), so the link simply stops resolving and the geometry stays
+  exactly where it is (ADR-062 (e)). Nothing is cleared eagerly, which also means undoing the
+  erase restores the link for free.
+- **A linked entity that leaves the ground is left where it is and reported**, keeping its link, so
+  it re-drapes on its own once the surface covers it again.
+- A refused drape **pushes no undo step**: elevations are resolved before anything is written, so
+  an undo after a drape that moved nothing takes back whatever the user did before it.
+
+Tests: `[drapelink]` adds 6 cases - baked stores nothing / LINK stores the id / re-draping bakes it
+again, linked follows a rebuilt surface while baked does not, `SURFACEREBUILD` drives it, an erased
+surface resolves to nothing with the geometry untouched, leaving the ground is reported and keeps
+the link, and the no-undo-step-on-refusal rule. The transcript proves the link **survives a save
+and reopen** by rebuilding after reopening and watching it re-drape - a stored field nobody reads
+back would pass a weaker test - and that a **rename** does not break it.
+
 ## Not in scope
 
-- **The opt-in link** (ADR-062 (b)–(e)) — the next increment: a stored surface id, the visible mark,
-  re-evaluation on rebuild, and the degrade-to-plain path when the surface is erased.
+- **ADR-062 (d), the visible mark, is NOT built yet.** A link is stored, honoured, persisted and
+  re-evaluated — but nothing on screen yet says "this one follows a surface". It is the single clause
+  of the ADR this task does not satisfy, and it is called out rather than quietly skipped. The
+  Properties panel is its natural home, and a panel row is not reachable from a headless transcript,
+  so it wants its own slice with whatever test shape the UI layer allows.
 - Projecting along a direction other than straight down.
 - A solid generated from a surface + boundary + depth, and a general `SWEEP` command — later Phase 7
   increments.

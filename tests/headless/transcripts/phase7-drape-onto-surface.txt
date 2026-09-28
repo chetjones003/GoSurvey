@@ -73,3 +73,43 @@ CMD DRAPE Test EG
 EXPECT LOG "not draped"
 EXPECT LOG "vertices are off "Test EG""
 CHECK ALL
+
+# --- LINK: the drape follows the surface, and the link survives the file ---------------------------
+# ADR-062 (b)/(c): LINK stores the surface's STABLE ID, so the tie survives a save, a reopen and a
+# rename. Proving it survived is done the honest way — reopen the file and rebuild the surface, and
+# see the linked object re-drape. A stored field nobody reads back would pass a weaker test.
+OPEN samples/surface-demo.dwg
+CMD SURFACECREATE Test EG, Existing Ground
+CMD SURFACEREBUILD Test EG
+CMD POLYLINE
+CMD 43.607,25.308
+CMD 58.607,30.308
+CMD END
+ESC
+BOX -500 -500 500 500
+CMD DRAPE Test EG, LINK
+EXPECT LOG "linked"
+CHECK ALL
+
+SAVEAS %OUT%/phase7-linked.dwg
+OPEN %OUT%/phase7-linked.dwg
+EXPECT POLYLINES 1
+EXPECT SURFACES 1
+# The link came back with the drawing: rebuilding the surface re-drapes it.
+CMD SURFACEREBUILD Test EG
+EXPECT LOG "linked object(s) re-draped"
+CHECK ALL
+
+# A rename does not break it — the link is by id, not by name (ADR-062 (c)).
+CMD SURFACERENAME Test EG, Renamed EG
+CMD SURFACEREBUILD Renamed EG
+EXPECT LOG "linked object(s) re-draped"
+CHECK ALL
+
+# --- baking clears the link ------------------------------------------------------------------------
+BOX -500 -500 500 500
+CMD DRAPE Renamed EG
+EXPECT LOG "draped onto "Renamed EG""
+CMD SURFACEREBUILD Renamed EG
+EXPECT NOLOG "linked object(s) re-draped"
+CHECK ALL

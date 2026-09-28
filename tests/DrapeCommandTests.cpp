@@ -230,3 +230,175 @@ TEST_CASE("DRAPE holds REQ-101 at survey coordinate magnitudes", "[drape][issue1
     CHECK(st.userPolylineVerts[i * 3 + 2] == Approx(want).margin(0.002));
   }
 }
+
+// --- The opt-in link (ADR-062 (b)-(e)) ----------------------------------------------------------
+
+namespace {
+
+/// The same ground, raised by `lift` — what a surface edit looks like to a linked drape.
+std::shared_ptr<CadTin> SlopingGroundRaised(double lift) {
+  auto tin = SlopingGround();
+  for (size_t i = 2; i < tin->vertsXyz.size(); i += 3)
+    tin->vertsXyz[i] += lift;
+  return tin;
+}
+
+std::uint64_t SurfaceIdOf(AppCommandState& st, size_t si) {
+  EnsureEntityIds(st);
+  return st.cadSurfaceAttrs[si].id;
+}
+
+}  // namespace
+
+TEST_CASE("A baked drape stores no link; LINK stores the surface's stable id",
+          "[drape][issue150][phase7][drapelink]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  AddFlatPolylineAcross(st, {10.0, 20.0});
+  st.selection.push_back({SelectedEntity::Type::Polyline, 0});
+  std::vector<std::string> log;
+
+  SECTION("baked leaves nothing behind") {
+    Type(st, "DRAPE EG", log);
+    CHECK(st.userPolylineAttrs[0].drapedOnSurfaceId == 0u);
+  }
+  SECTION("LINK stores the id, not the index and not the name") {
+    Type(st, "DRAPE EG, LINK", log);
+    const std::uint64_t id = SurfaceIdOf(st, 0);
+    CHECK(id != 0u);
+    CHECK(st.userPolylineAttrs[0].drapedOnSurfaceId == id);
+    CHECK(LogHas(log, "linked"));
+  }
+  SECTION("re-draping without LINK clears the link") {
+    Type(st, "DRAPE EG, LINK", log);
+    REQUIRE(st.userPolylineAttrs[0].drapedOnSurfaceId != 0u);
+    Type(st, "DRAPE EG", log);
+    CHECK(st.userPolylineAttrs[0].drapedOnSurfaceId == 0u);
+  }
+  SECTION("an unknown option is refused rather than ignored") {
+    Type(st, "DRAPE EG, WOBBLE", log);
+    CHECK(LogHas(log, "Unknown option"));
+    CHECK(st.userPolylineVerts[2] == Approx(0.0).margin(1e-9));  // and nothing moved
+  }
+}
+
+TEST_CASE("Linked geometry follows a rebuilt surface; baked geometry does not",
+          "[drape][issue150][phase7][drapelink]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  AddFlatPolylineAcross(st, {10.0, 20.0});   // polyline 0 - will be LINKED
+  AddFlatPolylineAcross(st, {30.0, 40.0});   // polyline 1 - will be BAKED
+  std::vector<std::string> log;
+
+  st.selection.clear();
+  st.selection.push_back({SelectedEntity::Type::Polyline, 0});
+  Type(st, "DRAPE EG, LINK", log);
+  st.selection.clear();
+  st.selection.push_back({SelectedEntity::Type::Polyline, 1});
+  Type(st, "DRAPE EG", log);
+
+  REQUIRE(st.userPolylineVerts[2] == Approx(GroundZ(10.0)).margin(0.002));
+  REQUIRE(st.userPolylineVerts[8] == Approx(GroundZ(30.0)).margin(0.002));
+
+  // The ground rises by 5 and the surface is rebuilt.
+  st.cadSurfaces[0].tin = SlopingGroundRaised(5.0);
+  log.clear();
+  ReDrapeLinkedToSurface(st, 0, log);
+
+  // The linked one followed...
+  CHECK(st.userPolylineVerts[2] == Approx(GroundZ(10.0) + 5.0).margin(0.002));
+  CHECK(st.userPolylineVerts[5] == Approx(GroundZ(20.0) + 5.0).margin(0.002));
+  // ...and the baked one did not move at all. This is the whole point of the default.
+  CHECK(st.userPolylineVerts[8] == Approx(GroundZ(30.0)).margin(0.002));
+  CHECK(st.userPolylineVerts[11] == Approx(GroundZ(40.0)).margin(0.002));
+  CHECK(LogHas(log, "1 linked object(s) re-draped"));
+}
+
+TEST_CASE("SURFACEREBUILD re-drapes what is linked to it", "[drape][issue150][phase7][drapelink]") {
+  // The hook, through the command a user actually types, rather than the helper directly.
+  AppCommandState st;
+  AddGround(st, "EG");
+  AddFlatPolylineAcross(st, {10.0, 20.0});
+  st.selection.push_back({SelectedEntity::Type::Polyline, 0});
+  std::vector<std::string> log;
+  Type(st, "DRAPE EG, LINK", log);
+  REQUIRE(st.userPolylineVerts[2] == Approx(GroundZ(10.0)).margin(0.002));
+
+  st.cadSurfaces[0].tin = SlopingGroundRaised(3.0);
+  log.clear();
+  Type(st, "SURFACEREBUILD EG", log);
+  // The rebuild has no sources to build from, so the TIN it finds is the one just set; what is
+  // asserted here is that the re-drape ran at all off the command.
+  CHECK(LogHas(log, "re-draped"));
+}
+
+TEST_CASE("A link to an erased surface resolves to nothing and the geometry stays put",
+          "[drape][issue150][phase7][drapelink]") {
+  // ADR-062 (e). The reference resolving to nothing is REQ-076's own rule; what the GEOMETRY does is
+  // the decision - it is not deleted and not moved. Destroying drawn geometry because a surface was
+  // erased would be far worse than a stale shape, and the stale shape is what a bake gives anyway.
+  AppCommandState st;
+  AddGround(st, "EG");
+  AddFlatPolylineAcross(st, {10.0, 20.0});
+  st.selection.push_back({SelectedEntity::Type::Polyline, 0});
+  std::vector<std::string> log;
+  Type(st, "DRAPE EG, LINK", log);
+  const std::uint64_t id = SurfaceIdOf(st, 0);
+  const double zBefore = st.userPolylineVerts[2];
+  REQUIRE(zBefore == Approx(GroundZ(10.0)).margin(0.002));
+
+  st.cadSurfaces.clear();
+  st.cadSurfaceAttrs.clear();
+
+  // The id is still on the entity, and resolves to nothing rather than to whatever takes the slot.
+  CHECK(st.userPolylineAttrs[0].drapedOnSurfaceId == id);
+  CHECK(FindSurfaceIndexById(st, id) == -1);
+  // And the shape is exactly where it was.
+  CHECK(st.userPolylineVerts[2] == Approx(zBefore).margin(1e-12));
+}
+
+TEST_CASE("A linked entity that leaves the ground is left where it is, and said so",
+          "[drape][issue150][phase7][drapelink]") {
+  AppCommandState st;
+  AddGround(st, "EG");
+  AddFlatPolylineAcross(st, {10.0, 20.0});
+  st.selection.push_back({SelectedEntity::Type::Polyline, 0});
+  std::vector<std::string> log;
+  Type(st, "DRAPE EG, LINK", log);
+  const double z0 = st.userPolylineVerts[2];
+  const double z1 = st.userPolylineVerts[5];
+
+  // The surface shrinks to a corner that no longer covers the polyline.
+  auto small = std::make_shared<CadTin>();
+  small->vertsXyz = {60.0, 60.0, 9.0, 70.0, 60.0, 9.0, 70.0, 70.0, 9.0};
+  small->indices = {0, 1, 2};
+  st.cadSurfaces[0].tin = small;
+
+  log.clear();
+  ReDrapeLinkedToSurface(st, 0, log);
+
+  CHECK(LogHas(log, "left where they are"));
+  CHECK(st.userPolylineVerts[2] == Approx(z0).margin(1e-12));
+  CHECK(st.userPolylineVerts[5] == Approx(z1).margin(1e-12));
+  // The link is KEPT, so it re-drapes on its own once the ground covers it again.
+  CHECK(st.userPolylineAttrs[0].drapedOnSurfaceId != 0u);
+}
+
+TEST_CASE("A refused drape pushes no undo step", "[drape][issue150][phase7][drapelink]") {
+  // An undo after a drape that moved nothing must take back whatever the user did BEFORE it.
+  AppCommandState st;
+  AddGround(st, "EG");
+  AddFlatPolylineAcross(st, {10.0, 5000.0});  // the second vertex is off the ground
+  st.selection.push_back({SelectedEntity::Type::Polyline, 0});
+  std::vector<std::string> log;
+
+  // Something undoable first, so there is a step to come back to.
+  PushUndoSnapshot(st, "Before");
+  st.userPolylineVerts[2] = 42.0;
+
+  Type(st, "DRAPE EG", log);
+  REQUIRE(LogHas(log, "not draped"));
+
+  DoUndo(st, log);
+  CHECK(st.userPolylineVerts[2] == Approx(0.0).margin(1e-9));  // the "Before" step, not a no-op drape
+}
