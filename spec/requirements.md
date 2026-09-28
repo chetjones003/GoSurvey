@@ -9912,7 +9912,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      leftover mouse snap, and refuses four or more numbers. A typed Z does not carry into the next
      point.
   6. **PIPERUN** has the point field group at its start and next points, takes `@dx,dy[,dz]` from its
-     last vertex, and a distance typed with the angle left live goes to its compass direct-distance
+     last vertex, reads an absolute `x,y,z` wholly in the active UCS (the frame its Z box shows; the
+     solid commands keep their world-elevation Z), and a distance typed with the angle left live goes to its compass direct-distance
      entry (REQ-346), which owns the direction.
   7. **Unchanged**: REQ-154's UCS directional prompts keep their own distance / angle pair; live
      tracking, type-to-start, lock-on-edit, Tab between boxes, Enter / click commit (REQ-024).
