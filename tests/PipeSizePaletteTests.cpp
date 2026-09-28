@@ -233,3 +233,46 @@ TEST_CASE("Overriding a run's colour wins over the palette and survives save and
   CHECK(back.cadPipeRunAttrs[0].color == "#FF00FF");
   CHECK(back.cadPipeRunAttrs[1].color == kGreen2in);  // the palette colour is saved as the run's own
 }
+
+TEST_CASE("A flange snapped onto a run's end takes the run's layer and colour (REQ-353)",
+          "[req353][insert][connector]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  st.currentLayer = "PIPE-STEEL";
+  RouteRun(st, "2in", 0.f, log);  // ends at (20,0,0)
+  st.currentLayer = "0";
+
+  CadBlockDefinition flange;
+  flange.name = "FLANGE";
+  CadBlockConnection fc;
+  fc.name = "P1";
+  fc.nx = 0.f; fc.ny = 0.f; fc.nz = 1.f;
+  flange.connections.push_back(fc);
+  st.blockDefs.push_back(flange);
+
+  auto snapFlangeAt = [&](float x, float y) {
+    StartInsertBlockCommand(st, log);
+    std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "FLANGE");
+    st.insertBlockSpecifyConnectorSnap = true;
+    st.insertBlockSpecifyPoint = false;
+    st.insertBlockSpecifyRot = false;
+    st.insertBlockSpecifyScale = false;
+    st.insertBlockDialogOpen = false;
+    st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitConnectorTarget;
+    REQUIRE(SubmitInsertBlockConnectorPick(st, x, y, 0.f, log));
+  };
+
+  snapFlangeAt(19.99f, 0.f);
+  REQUIRE(st.cadBlockRefAttrs.size() == 1);
+  CHECK(st.cadBlockRefAttrs[0].color == kGreen2in);
+  CHECK(st.cadBlockRefAttrs[0].layer == "PIPE-STEEL");
+  CHECK(st.insertBlockSnappedPipeRun == -1);  // consumed by the placement
+
+  // A bare line's end is not a run: the part is an ordinary insert on the current layer.
+  st.userLinesFlat.insert(st.userLinesFlat.end(), {0.0, 50.0, 0.0, 10.0, 50.0, 0.0});
+  st.userLineAttrs.push_back(EntityAttributes{});
+  snapFlangeAt(9.99f, 50.f);
+  REQUIRE(st.cadBlockRefAttrs.size() == 2);
+  CHECK(st.cadBlockRefAttrs[1].color == "ByLayer");
+  CHECK(st.cadBlockRefAttrs[1].layer == "0");
+}

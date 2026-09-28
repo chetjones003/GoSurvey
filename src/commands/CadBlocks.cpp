@@ -953,7 +953,14 @@ bool CadBlocksImportWithPicker(AppCommandState& dest, std::vector<std::string>& 
 
 bool CadBlockPlaceInsert(AppCommandState& st, std::string_view name, CadBlockXform xf, bool explode,
                          std::vector<std::string>& log) {
-  return PlaceInsertImpl(st, name, xf, explode, log);
+  // A part the connector snap fitted onto a pipe run's end joins that line (REQ-353).
+  const int runIdx = st.insertBlockSnappedPipeRun;
+  st.insertBlockSnappedPipeRun = -1;
+  const EntityAttributes* lineAttrs =
+      runIdx >= 0 && static_cast<size_t>(runIdx) < st.cadPipeRunAttrs.size()
+          ? &st.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
+          : nullptr;
+  return PlaceInsertImpl(st, name, xf, explode, log, /*pushUndo=*/true, lineAttrs);
 }
 
 bool CadBlockPlaceInsertNoUndo(AppCommandState& st, std::string_view name, CadBlockXform xf,
@@ -987,6 +994,7 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
   st.insertBlockRotYBuf[0] = '\0';
   st.insertBlockSpecifyAlignFace = false;
   st.insertBlockSpecifyConnectorSnap = false;
+  st.insertBlockSnappedPipeRun = -1;
   st.insertBlockConnectorName[0] = '\0';
   st.insertBlockUnitsBuf[0] = '\0';
   st.insertBlockPath[0] = '\0';
@@ -1503,11 +1511,14 @@ bool FindNearestDrawingConnector(const AppCommandState& st, float px, float py, 
 /// vertices, because auto-filleting can move an end slightly off its clicked position; using
 /// anything else here would offer a connection point at a spot the rendered pipe does not actually
 /// end at.
+///
+/// `*outRunIndex` receives the index of the `CadPipeRun` whose end won, or -1 for a bare line's.
 static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float py, float pz, float maxDist,
                                     float* outX, float* outY, float* outZ, float* outNx, float* outNy,
-                                    float* outNz) {
+                                    float* outNz, int* outRunIndex) {
   bool any = false;
   float bestD = maxDist * maxDist;
+  int candidateRun = -1;
   auto consider = [&](float ex, float ey, float ez, float dirx, float diry, float dirz) {
     const float dx = ex - px;
     const float dy = ey - py;
@@ -1520,6 +1531,7 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
       return;
     bestD = d2;
     any = true;
+    *outRunIndex = candidateRun;
     *outX = ex;
     *outY = ey;
     *outZ = ez;
@@ -1537,10 +1549,12 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
     consider(x0, y0, z0, x0 - x1, y0 - y1, z0 - z1);
     consider(x1, y1, z1, x1 - x0, y1 - y0, z1 - z0);
   }
-  for (const CadPipeRun& run : st.cadPipeRuns) {
+  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
+    const CadPipeRun& run = st.cadPipeRuns[ri];
     CadPipeRunEndPort start, end;
     if (!CadPipeRunEndPorts(run, &start, &end))
       continue;  // an unfillable/unresolvable run offers no connection point (REQ-201)
+    candidateRun = static_cast<int>(ri);
     consider(static_cast<float>(start.point.x), static_cast<float>(start.point.y),
              static_cast<float>(start.point.z), static_cast<float>(start.outwardNormal.x),
              static_cast<float>(start.outwardNormal.y), static_cast<float>(start.outwardNormal.z));
@@ -1567,8 +1581,9 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
   CadBlockWorldConnection tgt;
   const bool foundPortRaw = FindNearestDrawingConnector(st, wx, wy, wz, kSnap, &tgt);
   float pipeX = 0.f, pipeY = 0.f, pipeZ = 0.f, pipeNx = 0.f, pipeNy = 0.f, pipeNz = 0.f;
-  const bool foundPipeEndRaw =
-      FindNearestPipeEndpoint(st, wx, wy, wz, kSnap, &pipeX, &pipeY, &pipeZ, &pipeNx, &pipeNy, &pipeNz);
+  int pipeRun = -1;
+  const bool foundPipeEndRaw = FindNearestPipeEndpoint(st, wx, wy, wz, kSnap, &pipeX, &pipeY, &pipeZ, &pipeNx,
+                                                       &pipeNy, &pipeNz, &pipeRun);
   if (!foundPortRaw && !foundPipeEndRaw) {
     log.push_back("INSERT — no connection port near that point (within 2 ft).");
     return false;
@@ -1653,6 +1668,7 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
   CadBlockSnapInsertToConnection(*src, tX, tY, tZ, tNx, tNy, tNz, &xf);
   CadBlockApplyConnectionModeOffset(*src, mode, &xf);
   ApplyInsertXformToDialog(xf, st);
+  st.insertBlockSnappedPipeRun = usePipeEnd ? pipeRun : -1;
   const std::string targetName = usePipeEnd ? std::string("pipe end") : tgt.name;
   std::string msg = "INSERT — snapped to " + targetName + " (" + std::string(CadConnectionModeTargetTag(target)) + ")";
   if (mode)

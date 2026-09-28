@@ -4546,6 +4546,9 @@ struct AppCommandState {
   bool insertBlockSpecifyAlignFace = false;
   bool insertBlockSpecifyConnectorSnap = false;
   char insertBlockConnectorName[64]{};
+  /// The pipe run whose END the connector snap fitted the part onto, or -1 (REQ-353): the placed
+  /// part — an end flange, a cap — takes that run's layer and colour. Consumed by the placement.
+  int insertBlockSnappedPipeRun = -1;
   /// INSERT dialog override for block insertion units (issue #475 inc6). Empty uses the definition.
   char insertBlockUnitsBuf[32]{};
   bool insertBlockUniformScale = true;

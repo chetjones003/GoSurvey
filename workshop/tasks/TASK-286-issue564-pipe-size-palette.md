@@ -41,6 +41,9 @@ far piece keeps the run's attributes.
   `lineAttrs` value is handed to every elbow / tee of the commit. PIPEFIT and PIPESPLIT copy the
   split run's attrs (`DuplicatedEntityAttrs`) to the far piece and to the fitting.
   `CadBlockPlaceInsertNoUndo` takes an optional `lineAttrs` whose layer and colour the insert takes.
+- INSERT's connector snap: `FindNearestPipeEndpoint` reports which run's end won;
+  `SubmitInsertBlockConnectorPick` records it in `insertBlockSnappedPipeRun`, and
+  `CadBlockPlaceInsert` consumes it (reset on start and cancel) — an end flange joins its line.
 - No new dependency, no persistence change (a colour is an ordinary entity colour string), no UI
   change.
 
@@ -55,18 +58,28 @@ far piece keeps the run's attributes.
 - auto elbow takes the run's colour and layer;
 - PIPEFIT valve and reducer take the run's layer and override colour, as does the far piece;
 - PIPESPLIT keeps an override on both pieces;
+- a flange connector-snapped onto a run's end takes its layer and colour; onto a bare line's end,
+  it stays an ordinary insert;
 - override wins on the display, and survives save → reload.
 
 `tests/CadPipeRunTests.cpp`: the two "unknown size" examples moved from 5in (now a real size) to 7in.
 
 ## Results
 
-- `[req353]`: 7 cases, 200 assertions, all pass. `[piperun]` in GoSurveyTests: 19 cases pass.
+- `[req353]`: 8 cases, 212 assertions, all pass. `[piperun]` in GoSurveyTests: 19 cases pass.
 - Full suite: 1870/1878 on the first run; the one new failure was the 5in example above (fixed).
   The remaining 7 (issue233, issue402-offset-ucs, regression-58, req068, req087,
   req313-solid-isolines, req313-solid-primitives) fail identically on unmodified `beta`.
 
+## Found in the final review
+
+- The first push coloured only SPLICED fittings. A flange at a run's open end is placed with INSERT's
+  connector snap, not PIPEFIT (which refuses one-port parts), so it still took the current layer
+  and `ByLayer` — short of §7's "flanges take the run's colour". Fixed in the same PR (see Plan).
+
 ## Not in scope / technical debt
+
+- A part connector-snapped onto another FITTING's port (not a run's end) is an ordinary insert.
 
 - The Pipe Fittings palette (REQ-350) is on the unmerged `feat/pipe-fitting-palette` branch, not
   `beta`. Its name-taking splice core must pass the run's attributes to

@@ -9828,9 +9828,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
      size and its colour are one row and cannot drift apart.
   3. **A new pipe run is stamped with its size's colour**, on the current layer. It is an ordinary
      entity colour from then on: a Properties edit, including `ByLayer`, wins and is saved.
-  4. **A fitting spliced into a run takes that run's layer and colour** — PIPERUN's auto elbows and
-     tees, and PIPEFIT — so a line reads as one colour end to end and its layer hides its fittings
-     with it (D-2026-09-28-i). A reducer therefore reads as the run it was spliced into (Q4). A part placed off any run is an ordinary block INSERT.
+  4. **A fitting on a run takes that run's layer and colour** — PIPERUN's auto elbows and tees,
+     PIPEFIT's splice, and a part INSERT's connector snap fits onto a run's END (an end flange, a
+     cap) — so a line reads as one colour end to end and its layer hides its fittings with it
+     (D-2026-09-28-i). A reducer therefore reads as the run it was spliced into (Q4). A part placed
+     off any run, or snapped to a bare line's end, is an ordinary block INSERT.
   5. **A split keeps the line**: the far piece of a PIPEFIT or PIPESPLIT keeps the run's layer and
      colour, an override included.
   6. **Out of scope**: the Pipe Fittings palette (REQ-350, not yet on `beta` — branch
@@ -9847,6 +9849,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - an auto-inserted elbow takes its run's colour and layer;
   - a spliced valve and a spliced reducer take the run's layer and override colour, and so does
     the far piece;
+  - a flange connector-snapped onto a run's end takes the run's layer and colour; one snapped onto a
+    bare line's end does not;
   - PIPESPLIT keeps an override on both pieces;
   - a colour override wins over the palette and survives a save and reload.
 - Owner-layer: Domain (`src/util/cadpiperun.hpp`), Commands (`src/commands/CadCommands.cpp`,

@@ -6453,6 +6453,7 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
   st.wblockDialogOpen = false;  // same reason as the two block dialogs above it
   st.insertBlockAttrRefIndex = -1;
+  st.insertBlockSnappedPipeRun = -1;
   // The solid-edge fillet's radius prompt (REQ-323). Here rather than only in `StartFilletCommand`
   // so ESC clears it: without this, cancelling would leave the flag set, and the NEXT typed line -
   // whatever it was - would be read as a fillet radius.
