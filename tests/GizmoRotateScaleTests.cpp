@@ -34,6 +34,7 @@ constexpr double kPi = 3.14159265358979323846;
 
 AppCommandState WithSelectedLine(float x0, float y0, float z0, float x1, float y1, float z1) {
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo these tests exercise (D-2026-09-28-a)
   st.userLinesFlat = {x0, y0, z0, x1, y1, z1};
   st.userLineAttrs.push_back(EntityAttributes{});
   SelectedEntity e;
@@ -129,6 +130,7 @@ TEST_CASE("Gizmo: a solid FACE gets a push handle and nothing else", "[gizmo][re
   // Rotate or Scale the face selection gets NO gizmo, the same answer an edge or a vertex gets,
   // rather than a handle that would refuse on drop.
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo these tests exercise (D-2026-09-28-a)
   st.uiViewportWidthPx = 1200.f;
   st.uiViewportHeightPx = 700.f;
   brep::Solid box;

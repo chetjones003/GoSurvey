@@ -1711,6 +1711,13 @@ struct AppCommandState {
     /// phase — no select-objects step, no typed parameters — closer in shape to `Kind::Pan`'s
     /// hover-then-act than to any multi-phase draw command.
     ExtractCenterline,
+    /// 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3, D-2026-09-28-a): the REQ-060 gizmo,
+    /// summoned by a command instead of appearing on every selection. Three Kinds rather than one
+    /// with a stored op so the command line, right-click repeat and `KindName` each name the verb
+    /// the user typed; the op they drive is still \ref gizmoOp, set for the command's duration.
+    Move3d,
+    Rotate3d,
+    Scale3d,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1791,6 +1798,9 @@ struct AppCommandState {
     case Kind::PipeFit:            return "PIPEFIT";
     case Kind::PipeSplit:          return "PIPESPLIT";
     case Kind::ExtractCenterline:  return "EXTRACTCENTERLINE";
+    case Kind::Move3d:             return "3DMOVE";
+    case Kind::Rotate3d:           return "3DROTATE";
+    case Kind::Scale3d:            return "3DSCALE";
     default:                  return "";
     }
   }
@@ -3591,8 +3601,21 @@ struct AppCommandState {
   double gizmoDragDistance = 0.0;
 
   /// What the gizmo does — a user SETTING, not derived from the selection (\ref CadGizmoOp explains
-  /// why this one is stored where \ref CadGizmoMode is not). Set by the `GIZMO` command.
+  /// why this one is stored where \ref CadGizmoMode is not). Set by the `GIZMO` command, and for
+  /// their own duration by 3DMOVE / 3DROTATE / 3DSCALE, which restore it on exit.
   CadGizmoOp gizmoOp = CadGizmoOp::Translate;
+
+  /// True when the user asked for the gizmo to follow every selection (`GIZMO MOVE | ROTATE |
+  /// SCALE`). False — the default — means a selection shows no gizmo, and only 3DMOVE / 3DROTATE /
+  /// 3DSCALE summon one (GitHub issue #564 section 3, D-2026-09-28-a). `GIZMO OFF` clears it.
+  /// Session state, like \ref gizmoOp.
+  bool gizmoPersistent = false;
+
+  /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, or showing the handles on it.
+  enum class GizmoCmdPhase { SelectObjects, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
+  /// \ref gizmoOp as it was when a 3D gizmo command started — put back when the command ends,
+  /// however it ends, so the command's op never leaks into the persistent setting.
+  CadGizmoOp gizmoOpBeforeCmd = CadGizmoOp::Translate;
 
   /// In face mode, WHICH face the armed drag is moving — captured at the grab like the anchor.
   ///
@@ -6858,6 +6881,27 @@ inline constexpr float kGizmoHandleGrabPx = 7.f;
 /// True when a gizmo should be drawn at all: \ref CadGizmoModeFor is not \c None and an anchor
 /// resolves. REQ-060's third acceptance bullet ("no gizmo when the selection is empty") is this.
 [[nodiscard]] bool CadGizmoVisible(const AppCommandState& st);
+
+/// True for \c Kind::Move3d / \c Rotate3d / \c Scale3d (GitHub issue #564 section 3).
+[[nodiscard]] bool IsGizmoCommandKind(AppCommandState::Kind k);
+/// Whether the gizmo has been ASKED for: the persistent `GIZMO` setting is on, or a 3D gizmo
+/// command is at its handles step. A selection alone never summons it (D-2026-09-28-a).
+[[nodiscard]] bool CadGizmoSummoned(const AppCommandState& st);
+/// 3DMOVE / 3DROTATE / 3DSCALE. Honours a pre-selection (straight to the handles), otherwise asks
+/// for objects, Enter when done. Refuses with a stated reason outside model space.
+void StartGizmoCommand(AppCommandState& st, AppCommandState::Kind kind,
+                       std::vector<std::string>& log);
+/// Ends a 3D gizmo command however it ends: abandons any armed drag (nothing has changed yet),
+/// restores \ref AppCommandState::gizmoOp and sets \c active back to \c None.
+void EndGizmoCommand(AppCommandState& st);
+/// Typed input to a running 3D gizmo command. Blank: confirm the selection, commit an armed drag,
+/// or end the command when nothing is armed. A number: the exact value — distance (move), degrees
+/// (rotate) or factor (scale) — along the grabbed handle, or along the only handle when there is
+/// just one. Returns false when no 3D gizmo command is running.
+bool HandleGizmoCommandTextInput(const std::string& line, AppCommandState& st,
+                                 std::vector<std::string>& log);
+/// The prompt for the running 3D gizmo command's current step.
+[[nodiscard]] std::string CadGizmoCommandPromptText(const AppCommandState& st);
 
 /// Signed position along the line (\p anchor, \p axisDir) of the point on it nearest \p ray.
 ///

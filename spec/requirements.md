@@ -2093,6 +2093,39 @@ requirements is a planning failure, not a sign of rigor.
   block recorded on 2026-09-04. `CadGizmoAnchorWorld`'s note that its precision "does not affect any
   move" was corrected in the same change: that is true of a translation, where the anchor cancels
   between grab and drop, and false of a rotation or a scale, where it is the pivot and the base.
+  2026-09-28 — **the gizmo is SUMMONED, not shown on every selection** (D-2026-09-28-a, GitHub issue
+  #564 section 3, TASK-280). See the amendment below; it narrows the Statement's "with a selection
+  active" and adds the acceptance bullets that follow it.
+- **Amendment 2026-09-28 (D-2026-09-28-a) — selecting shows no gizmo; 3DMOVE / 3DROTATE / 3DSCALE
+  summon it.** The Statement's *"with a selection active, a gizmo operates on it"* is narrowed to
+  *"with a selection active and the gizmo summoned"*. Everything else above — the handle counts, the
+  anchor, the UCS axes, agreement with the typed command, one undo per drag — is unchanged.
+  1. **A selection alone draws no gizmo.** The gizmo is summoned by a 3D gizmo command for that
+     command's duration, or by the persistent `GIZMO` setting (item 4). `CadGizmoSummoned` is tested
+     first in `CadGizmoModeFor`, so the overlay, the hover, the click and every transcript assertion
+     inherit the rule from one place.
+  2. **`3DMOVE` / `3DROTATE` / `3DSCALE`** set the gizmo op to Translate / Rotate / Scale for their own
+     duration and restore the previous op however they end (commit, `Esc`, or another command
+     started over them). Shape: select objects (a pre-selection is honoured, and 3DMOVE's select step
+     takes `Ctrl`+click on a solid face / edge / vertex) → Enter → the gizmo appears → drag a handle
+     **or type an exact value** — distance (move, along the grabbed handle, or the only handle when
+     there is one), degrees (rotate), factor > 0 (scale) → the commit is the end of the command. A
+     blank Enter commits an armed drag, or ends the command having changed nothing. One undo step per
+     completed operation — the existing gizmo commit, unchanged.
+  3. **`Esc` restores the pre-command state exactly**: one `Esc` abandons an armed drag (which has
+     changed nothing) and ends the command, restoring the op. A selection that cannot carry a gizmo
+     under the command's op (a face under 3DROTATE, several sub-objects, paper space) is refused with
+     the reason stated (REQ-201) rather than leaving a command with nothing on screen to drag.
+  4. **`GIZMO MOVE | ROTATE | SCALE` is the persistent mode** — the old always-on behaviour, doing that
+     op — and **`GIZMO OFF`** returns to the default. Default OFF, session state like the op itself.
+     `GIZMO` is refused while a 3D gizmo command owns the op.
+  - Additional acceptance:
+    - selecting a solid, a line, or a mix draws no gizmo;
+    - 3DMOVE / 3DROTATE / 3DSCALE each raise the correct gizmo and operate on the selection;
+    - a typed exact value works in each (distance, angle, factor);
+    - `Esc` restores the pre-command state exactly; `Ctrl+Z` after a commit undoes the whole operation;
+    - the handles keep their axis colours (X red / Y green / Z blue) and the face-normal handle its
+      purple — the overlay is unchanged.
 
 ### REQ-061 — Per-viewport camera in paper space
 - Purpose: put a plan view and an isometric on the same sheet

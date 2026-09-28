@@ -9545,6 +9545,11 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     revolveHint = CadRevolvePromptText(cmd);
     return revolveHint.c_str();
   }
+  if (IsGizmoCommandKind(cmd.active)) {
+    static std::string gizmoCmdHint;
+    gizmoCmdHint = CadGizmoCommandPromptText(cmd);
+    return gizmoCmdHint.c_str();
+  }
   if (cmd.active == AppCommandState::Kind::Loft) {
     static std::string loftHint;
     loftHint = CadLoftPromptText(cmd);
@@ -15341,9 +15346,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // IdleSelection's sub-object pick names one. Without this, PRESSPULL's own on-screen prompt
       // ("Ctrl+click a solid face... Enter when done") describes a gesture this route swallows as
       // an ordinary whole-entity click, and a face can never be named once the command has started.
-      if (cmd.active == K::PressPull &&
-          cmd.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget && modelSpace &&
-          ImGui::GetIO().KeyCtrl) {
+      // 3DMOVE's select step takes the same Ctrl+click: its move handle is the one gizmo that works
+      // on a solid's face, edge or vertex (GitHub issue #564 section 3), and its prompt says so.
+      const bool gizmoMoveSubObjectStep =
+          cmd.active == K::Move3d &&
+          cmd.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects;
+      if (((cmd.active == K::PressPull &&
+            cmd.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) ||
+           gizmoMoveSubObjectStep) &&
+          modelSpace && ImGui::GetIO().KeyCtrl) {
         AbortMtextGripInteraction(cmd);
         ClearDimGripInteraction(cmd);
         const ray3d::Ray subRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
@@ -15488,6 +15499,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       faceTol.edge = faceTol.vertex;
       (void)SubmitSectionPlaneFacePick(cmd, faceRay, faceTol, log);
       BumpCadGpuCache(cmd);
+      break;
+    }
+    case ViewportClickRoute::GizmoHandlePick: {
+      // 3DMOVE / 3DROTATE / 3DSCALE past their selection step (GitHub issue #564 section 3). The
+      // same `SubmitGizmoClick` the persistent gizmo uses from IdleSelection, with the same
+      // aperture — so the handle that lights up on hover is the handle that grabs. A click off
+      // every handle only repeats the prompt: the command is holding its selection.
+      const ray3d::Ray gizCmdRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+      if (SubmitGizmoClick(cmd, gizCmdRay,
+                           static_cast<double>(CadSnap::WorldToleranceFromPixels(
+                               avail.y, halfH, kGizmoHandleGrabPx)),
+                           log))
+        BumpCadGpuCache(cmd);
+      else
+        log.push_back(CadGizmoCommandPromptText(cmd));
       break;
     }
     case ViewportClickRoute::Ignore:

@@ -119,6 +119,10 @@ enum class ViewportClickRoute : std::uint8_t {
   /// `HeadlessDriver`'s `PICK` verb calls `SubmitViewportPick` directly and never reaches the
   /// routing layer at all, so no transcript can cover this, however many steps it has.
   SubObjectFacePick,
+  /// 3DMOVE / 3DROTATE / 3DSCALE past their selection step (GitHub issue #564 section 3): the click
+  /// grabs or drops a gizmo handle through `SubmitGizmoClick`, and a click off every handle is not
+  /// a selection change — the command is holding that selection for its handles.
+  GizmoHandlePick,
 };
 
 /// \see ViewportClickRoute. Model space (and floating model space) only — pure paper space has its
@@ -204,6 +208,13 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Rotate:
     return cmd.rotatePhase == AppCommandState::RotatePhase::PickSelection ? R::SelectionAccumulate
                                                                           : R::SnappedPointPick;
+  // 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3): select objects, then the handles.
+  case K::Move3d:
+  case K::Rotate3d:
+  case K::Scale3d:
+    return cmd.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects
+               ? R::SelectionAccumulate
+               : R::GizmoHandlePick;
   // EXTRUDE (REQ-314): select closed polylines / circles (the accumulate-and-Enter shape its
   // siblings use), then a height that is either typed or picked off the cursor ray — a snapped
   // point pick, resolved to a height by SubmitExtrudeViewportPick.
@@ -507,6 +518,8 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   case R::InsertBlockPick:
   case R::InsertBlockAlignFacePick:
   case R::BconnectFacePick:
+  // A gizmo handle is a widget to drag, not an object to select (GitHub issue #564).
+  case R::GizmoHandlePick:
   case R::Ignore:
     return false;
   }

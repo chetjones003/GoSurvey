@@ -24,6 +24,7 @@ namespace {
 /// A drawing holding one line, selected, at a known place.
 AppCommandState WithSelectedLine(float x0, float y0, float z0, float x1, float y1, float z1) {
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo these tests exercise (D-2026-09-28-a)
   st.userLinesFlat = {x0, y0, z0, x1, y1, z1};
   st.userLineAttrs.push_back(EntityAttributes{});
   SelectedEntity e;
@@ -112,6 +113,7 @@ TEST_CASE("Gizmo: an empty selection has no anchor and draws nothing", "[gizmo][
   // REQ-060's third acceptance bullet, and the whole of it: there is no separate "should the gizmo
   // be drawn" flag that a caller could get wrong, only the absence of an anchor.
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo these tests exercise (D-2026-09-28-a)
   st.uiViewportWidthPx = 1200.f;
   st.uiViewportHeightPx = 700.f;
   ray3d::Vec3 a{};
@@ -212,6 +214,7 @@ TEST_CASE("Gizmo/MOVE: a block reference's insertion carries its elevation", "[g
   // translate must carry — this is the acceptance bullet the block-ref call site once missed by
   // hardcoding dz to 0.
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo these tests exercise (D-2026-09-28-a)
   CadBlockRef br;
   br.defName = "TESTBLOCK";
   br.xf.x = 1.f;
@@ -236,6 +239,7 @@ TEST_CASE("Gizmo/MOVE: a selected table is translated exactly once", "[gizmo][re
   // the same duplicate-loop shape issue #503 fixed for BlockRef — so a table's dx/dy was applied
   // twice.
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo these tests exercise (D-2026-09-28-a)
   CadTable tbl;
   tbl.insX = 1.f;
   tbl.insY = 2.f;
@@ -255,6 +259,7 @@ TEST_CASE("Gizmo/MOVE: a filled region's vertices carry their elevation", "[gizm
   // REQ-322 item 1 names "a filled region's vertices" explicitly — `hatchgeom::Translate` used to
   // take no dz at all, so a filled region moved with the rest of a selection stayed at its old Z.
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo these tests exercise (D-2026-09-28-a)
   CadFilledRegion fr;
   fr.vertsXyz = {0.f, 0.f, 5.f, 10.f, 0.f, 5.f, 10.f, 10.f, 5.f, 0.f, 10.f, 5.f};
   fr.loopStart = {0};
@@ -268,4 +273,48 @@ TEST_CASE("Gizmo/MOVE: a filled region's vertices carry their elevation", "[gizm
   ApplyTranslationToSelection(st, 100.f, -50.f, 25.f, log);
   CHECK(st.cadFilledRegions[0].vertsXyz[2] == Approx(30.0));
   CHECK(st.cadFilledRegions[0].vertsXyz[5] == Approx(30.0));
+}
+
+TEST_CASE("Gizmo: a selection alone draws no gizmo; it is summoned (issue #564)", "[gizmo][issue564]") {
+  AppCommandState st = WithSelectedLine(0.f, 0.f, 0.f, 10.f, 0.f, 0.f);
+  st.gizmoPersistent = false;  // the default since D-2026-09-28-a
+  CHECK(CadGizmoModeFor(st) == CadGizmoMode::None);
+  CHECK_FALSE(CadGizmoVisible(st));
+  CHECK(CadGizmoAxisCountFor(st) == 0);
+
+  // The persistent GIZMO setting brings back the old always-on widget...
+  st.gizmoPersistent = true;
+  CHECK(CadGizmoModeFor(st) == CadGizmoMode::Entity);
+  CHECK(CadGizmoVisible(st));
+  st.gizmoPersistent = false;
+
+  // ...and a 3D gizmo command shows it only at its handles step.
+  std::vector<std::string> log;
+  StartGizmoCommand(st, AppCommandState::Kind::Move3d, log);
+  REQUIRE(st.active == AppCommandState::Kind::Move3d);
+  CHECK(st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::Handles);  // the pre-selection
+  CHECK(CadGizmoVisible(st));
+  CHECK(CadGizmoAxisCountFor(st) == kGizmoAxisCount);
+  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::SelectObjects;
+  CHECK_FALSE(CadGizmoVisible(st));
+  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::Handles;
+
+  // Ending the command, however it ends, takes the gizmo away and restores the op.
+  EndGizmoCommand(st);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK_FALSE(CadGizmoVisible(st));
+}
+
+TEST_CASE("Gizmo: 3DROTATE borrows the op and gives it back (issue #564)", "[gizmo][issue564]") {
+  AppCommandState st = WithSelectedLine(10.f, 0.f, 0.f, 20.f, 0.f, 0.f);
+  st.gizmoPersistent = false;
+  st.gizmoOp = CadGizmoOp::Scale;
+  std::vector<std::string> log;
+  StartGizmoCommand(st, AppCommandState::Kind::Rotate3d, log);
+  CHECK(st.gizmoOp == CadGizmoOp::Rotate);
+  CHECK(CadGizmoAxisCountFor(st) == 1);
+  // A different command started over it (a ribbon button) still hands the op back.
+  StartMoveCommand(st, log);
+  CHECK(st.active == AppCommandState::Kind::Move);
+  CHECK(st.gizmoOp == CadGizmoOp::Scale);
 }

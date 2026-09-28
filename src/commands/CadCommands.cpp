@@ -6384,6 +6384,10 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   // true cancel lives.
   st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
   st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
+  // A 3D gizmo command replaced by another command mid-run (a ribbon button, say) still owes the
+  // user their gizmo op back — the command set it only for its own duration (GitHub issue #564).
+  if (IsGizmoCommandKind(st.active))
+    EndGizmoCommand(st);
   // UCS / PLAN prompt state (REQ-154). Reset here with every other draft so a cancelled UCS cannot
   // leave a half-collected origin behind for the next command to pick up.
   //
@@ -6584,7 +6588,10 @@ const CmdEntry kRegistry[] = {
     {"flelev", "", "Feature line elevations: FLELEV <n> [SET|GRADEAHEAD|GRADEBACK|RAISE|INSERT|DELETE …]"},
     {"flelevedit", "", "Open the feature line elevation editor: FLELEVEDIT [<n>]"},
     {"plotscale", "pscale", "Set the plot scale"},
-    {"gizmo", "", "What the 3D gizmo does: GIZMO MOVE | ROTATE | SCALE"},
+    {"gizmo", "", "Show the 3D gizmo on every selection: GIZMO MOVE | ROTATE | SCALE | OFF"},
+    {"3dmove", "", "Move objects with the 3D gizmo (axis handles or a typed distance)"},
+    {"3drotate", "", "Rotate objects with the 3D gizmo (ring or a typed angle)"},
+    {"3dscale", "", "Scale objects uniformly with the 3D gizmo (handle or a typed factor)"},
     {"move", "m", "Move objects"},
     {"copy", "cp", "Copy objects"},
     {"rotate", "ro", "Rotate objects"},
@@ -7136,6 +7143,19 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "scale") {
     StartScaleCommand(st, log);
+    return true;
+  }
+  // GitHub issue #564 section 3: the gizmo, summoned by a command.
+  if (primary == "3dmove") {
+    StartGizmoCommand(st, AppCommandState::Kind::Move3d, log);
+    return true;
+  }
+  if (primary == "3drotate") {
+    StartGizmoCommand(st, AppCommandState::Kind::Rotate3d, log);
+    return true;
+  }
+  if (primary == "3dscale") {
+    StartGizmoCommand(st, AppCommandState::Kind::Scale3d, log);
     return true;
   }
   if (primary == "mirror") {
@@ -13453,6 +13473,15 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     return;
   }
 
+  // 3DMOVE / 3DROTATE / 3DSCALE's select step (GitHub issue #564): LOFT's accumulate-and-Enter
+  // shape — a finished fence merges into the selection, and Enter moves on to the handles. Past it
+  // the viewport routes clicks to the gizmo (`GizmoHandlePick`), never here.
+  if (IsGizmoCommandKind(st.active)) {
+    if (st.selBoxWaitingSecond)
+      finishBox();
+    return;
+  }
+
   if (st.active == K::Slice) {
     if (st.slicePhase == AppCommandState::SlicePhase::SelectSolids) {
       if (st.selBoxWaitingSecond)
@@ -13969,7 +13998,24 @@ void GizmoGrowBounds(double x, double y, double z, ray3d::Vec3* mn, ray3d::Vec3*
 
 }  // namespace
 
+bool IsGizmoCommandKind(AppCommandState::Kind k) {
+  return k == AppCommandState::Kind::Move3d || k == AppCommandState::Kind::Rotate3d ||
+         k == AppCommandState::Kind::Scale3d;
+}
+
+bool CadGizmoSummoned(const AppCommandState& st) {
+  if (IsGizmoCommandKind(st.active))
+    return st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::Handles;
+  return st.gizmoPersistent;
+}
+
 CadGizmoMode CadGizmoModeFor(const AppCommandState& st) {
+  // A selection alone never draws the gizmo (GitHub issue #564 section 3, D-2026-09-28-a): the
+  // handles covered the model the user had only meant to pick. It is summoned — by 3DMOVE /
+  // 3DROTATE / 3DSCALE for their duration, or by the persistent `GIZMO` setting. Tested first, so
+  // the hover, the click, the overlay and every transcript assertion inherit it from this one place.
+  if (!CadGizmoSummoned(st))
+    return CadGizmoMode::None;
   if (st.activeSpaceIndex != kModelSpaceIndex)
     return CadGizmoMode::None;  // a paper sheet is 2D (ADR-025 (g)); there is no third handle to draw
   // The sub-object selection is tested FIRST, but the order is a belt rather than the only brace:
@@ -14435,7 +14481,20 @@ void CancelGizmoDrag(AppCommandState& st) {
   st.gizmoDragIsSubObject = false;
 }
 
+static bool CommitGizmoDragImpl(AppCommandState& st, std::vector<std::string>& log);
+
 bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log) {
+  const bool committed = CommitGizmoDragImpl(st, log);
+  // 3DMOVE / 3DROTATE / 3DSCALE are ONE operation each (GitHub issue #564 section 3): the commit
+  // that just pushed its undo step is also the end of the command. Here rather than at each caller
+  // so the click, the headless DROP and the typed value all end it the same way. A drag that
+  // changed nothing, or one the kernel refused, leaves the command running to try again.
+  if (committed && IsGizmoCommandKind(st.active))
+    EndGizmoCommand(st);
+  return committed;
+}
+
+static bool CommitGizmoDragImpl(AppCommandState& st, std::vector<std::string>& log) {
   if (!st.gizmoDragActive)
     return false;
   const double dist = st.gizmoDragDistance;
@@ -14530,6 +14589,37 @@ bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log) {
   return true;
 }
 
+/// Arms a drag on handle \p axis — the state a grab click leaves, and what a typed exact value in a
+/// 3D gizmo command starts from. False when a sub-object gizmo has lost its one sub-object.
+static bool ArmGizmoDrag(AppCommandState& st, int axis, const ray3d::Vec3& anchor,
+                         const ray3d::Vec3& u, double grabParam) {
+  // WHICH face, captured now rather than read at the commit: the selection can be cleared or
+  // re-picked between the two clicks, and the drag belongs to the face the user actually grabbed.
+  // A sub-object drag of ANY kind — face, edge or vertex — captures its target now rather than
+  // reading it at the commit, for the reason the face case already gave: the selection can be
+  // cleared or re-picked between the two clicks, and the drag belongs to what the user grabbed.
+  const CadGizmoMode grabMode = CadGizmoModeFor(st);
+  const bool onFace = grabMode == CadGizmoMode::SubObjectFace ||
+                      grabMode == CadGizmoMode::SubObjectEdge ||
+                      grabMode == CadGizmoMode::SubObjectVertex;
+  SelectedSubObject face;
+  if (onFace) {
+    if (st.subObjectSelection.size() != 1)
+      return false;
+    face = st.subObjectSelection.front();
+  }
+  st.gizmoDragActive = true;
+  st.gizmoDragAxis = axis;
+  st.gizmoAnchor = anchor;
+  st.gizmoAxisDir = u;
+  st.gizmoGrabParam = grabParam;
+  st.gizmoDragDistance = st.gizmoOp == CadGizmoOp::Scale ? 1.0 : 0.0;  // the operation's neutral
+  st.gizmoHoverAxis = axis;
+  st.gizmoDragIsSubObject = onFace;
+  st.gizmoDragSubObject = face;
+  return true;
+}
+
 bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorld,
                       std::vector<std::string>& log) {
   if (st.gizmoDragActive) {
@@ -14555,36 +14645,180 @@ bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorl
   } else if (st.gizmoOp == CadGizmoOp::Scale && std::fabs(s) < 1.e-9) {
     return false;  // grabbed at the anchor: a scale is a RATIO, and there is no baseline here
   }
-  // WHICH face, captured now rather than read at the commit: the selection can be cleared or
-  // re-picked between the two clicks, and the drag belongs to the face the user actually grabbed.
-  // A sub-object drag of ANY kind — face, edge or vertex — captures its target now rather than
-  // reading it at the commit, for the reason the face case already gave: the selection can be
-  // cleared or re-picked between the two clicks, and the drag belongs to what the user grabbed.
-  const CadGizmoMode grabMode = CadGizmoModeFor(st);
-  const bool onFace = grabMode == CadGizmoMode::SubObjectFace ||
-                      grabMode == CadGizmoMode::SubObjectEdge ||
-                      grabMode == CadGizmoMode::SubObjectVertex;
-  SelectedSubObject face;
-  if (onFace) {
-    if (st.subObjectSelection.size() != 1)
-      return false;
-    face = st.subObjectSelection.front();
-  }
-  st.gizmoDragActive = true;
-  st.gizmoDragAxis = axis;
-  st.gizmoAnchor = anchor;
-  st.gizmoAxisDir = u;
-  st.gizmoGrabParam = s;
-  st.gizmoDragDistance = st.gizmoOp == CadGizmoOp::Scale ? 1.0 : 0.0;  // the operation's neutral
-  st.gizmoHoverAxis = axis;
-  st.gizmoDragIsSubObject = onFace;
-  st.gizmoDragSubObject = face;
-  if (onFace) {
+  if (!ArmGizmoDrag(st, axis, anchor, u, s))
+    return false;
+  if (st.gizmoDragIsSubObject) {
     log.push_back("Gizmo: pushing the face along its normal — click to place, ESC to cancel.");
   } else {
     log.push_back(std::string("Gizmo: dragging along ") + (axis == 0 ? "X" : axis == 1 ? "Y" : "Z") +
                   " — click to place, ESC to cancel.");
   }
+  return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3, D-2026-09-28-a).
+//
+// The REQ-060 gizmo as a command's UI rather than a side effect of selecting. The commands add no
+// transform of their own: they set `gizmoOp` for their duration, show the existing widget, and let
+// `CommitGizmoDrag` — the one function every gizmo commit already goes through — do the work and
+// the one undo step. That function also ends the command, so a click, a typed value and a headless
+// DROP all finish it the same way.
+// ---------------------------------------------------------------------------------------------
+
+static CadGizmoOp GizmoOpForCommandKind(AppCommandState::Kind k) {
+  if (k == AppCommandState::Kind::Rotate3d)
+    return CadGizmoOp::Rotate;
+  if (k == AppCommandState::Kind::Scale3d)
+    return CadGizmoOp::Scale;
+  return CadGizmoOp::Translate;
+}
+
+void EndGizmoCommand(AppCommandState& st) {
+  CancelGizmoDrag(st);  // with the command's op still set: the cancel's neutral value is per-op
+  st.gizmoOp = st.gizmoOpBeforeCmd;
+  st.gizmoHoverAxis = -1;
+  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::SelectObjects;
+  st.active = AppCommandState::Kind::None;
+}
+
+std::string CadGizmoCommandPromptText(const AppCommandState& st) {
+  const std::string verb = AppCommandState::KindName(st.active);
+  if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects) {
+    std::string s = verb + " — select objects";
+    if (st.active == AppCommandState::Kind::Move3d)
+      s += " (Ctrl+click a solid face, edge or vertex)";
+    const size_t have = st.selection.size() + st.subObjectSelection.size();
+    if (have > 0)
+      s += " (" + std::to_string(have) + " selected)";
+    return s + ", Enter when done. ESC cancels.";
+  }
+  const char* what = st.gizmoOp == CadGizmoOp::Rotate  ? "an angle in degrees"
+                     : st.gizmoOp == CadGizmoOp::Scale ? "a scale factor"
+                                                       : "a distance";
+  if (st.gizmoDragActive)
+    return verb + " — click to place, or type " + what + " and Enter. ESC cancels.";
+  if (CadGizmoAxisCountFor(st) == 1)
+    return verb + " — drag the handle, or type " + what + " and Enter. ESC cancels.";
+  return verb + " — click an axis handle to drag it, then click to place or type " + what +
+         ". ESC cancels.";
+}
+
+/// Move from "select objects" to the handles — or say why there are none and end the command
+/// (REQ-201): a gizmo command with nothing on screen to drag would look hung.
+static void EnterGizmoHandlesPhase(AppCommandState& st, std::vector<std::string>& log) {
+  const std::string verb = AppCommandState::KindName(st.active);
+  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::Handles;
+  if (CadGizmoVisible(st)) {
+    log.push_back(CadGizmoCommandPromptText(st));
+    return;
+  }
+  const std::string opVerb = st.gizmoOp == CadGizmoOp::Rotate  ? "rotated"
+                             : st.gizmoOp == CadGizmoOp::Scale ? "scaled"
+                                                               : "moved";
+  std::string why = "nothing selected can be " + opVerb + ".";
+  if (st.subObjectSelection.size() > 1)
+    why = "several faces, edges or vertices have no single handle; select one.";
+  else if (st.subObjectSelection.size() == 1 && st.gizmoOp != CadGizmoOp::Translate)
+    why = "a solid's face, edge or vertex can only be moved, not " + opVerb + ".";
+  else if (st.subObjectSelection.size() == 1)
+    why = "the kernel cannot move that face, edge or vertex (a curved face, a cylinder's rim or a "
+          "pyramid's apex, for example).";
+  log.push_back(verb + " — " + why + " Nothing changed.");
+  EndGizmoCommand(st);
+}
+
+void StartGizmoCommand(AppCommandState& st, AppCommandState::Kind kind,
+                       std::vector<std::string>& log) {
+  const std::string verb = AppCommandState::KindName(kind);
+  if (IsGizmoCommandKind(st.active))
+    EndGizmoCommand(st);  // restarting: put the previous command's op back before saving it again
+  if (st.activeSpaceIndex != kModelSpaceIndex) {
+    // Paper space is a 2D sheet (ADR-025 (g)); the gizmo has no third handle to draw there.
+    log.push_back(verb + " — works in model space only.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.active = kind;
+  st.lastCommand = kind;
+  st.gizmoOpBeforeCmd = st.gizmoOp;
+  CancelGizmoDrag(st);  // a persistent-gizmo drag armed under the old op cannot carry over
+  st.gizmoOp = GizmoOpForCommandKind(kind);
+  st.gizmoHoverAxis = -1;
+  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::SelectObjects;
+  if (!st.selection.empty() || !st.subObjectSelection.empty()) {
+    EnterGizmoHandlesPhase(st, log);  // a pre-selection goes straight to the handles
+    return;
+  }
+  log.push_back(CadGizmoCommandPromptText(st));
+}
+
+bool HandleGizmoCommandTextInput(const std::string& lineIn, AppCommandState& st,
+                                 std::vector<std::string>& log) {
+  if (!IsGizmoCommandKind(st.active))
+    return false;
+  const std::string verb = AppCommandState::KindName(st.active);
+  const std::string line = StringUtil::trimCopy(lineIn);
+  if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects) {
+    if (!line.empty()) {
+      log.push_back(CadGizmoCommandPromptText(st));
+      return true;
+    }
+    if (st.selection.empty() && st.subObjectSelection.empty()) {
+      log.push_back(verb + " — select at least one object, then Enter. ESC cancels.");
+      return true;
+    }
+    EnterGizmoHandlesPhase(st, log);
+    return true;
+  }
+
+  // HANDLES. A blank Enter commits what an armed drag shows — or, with nothing armed, ends the
+  // command having changed nothing.
+  if (line.empty()) {
+    if (st.gizmoDragActive) {
+      if (!CommitGizmoDrag(st, log))
+        log.push_back(CadGizmoCommandPromptText(st));  // a zero drag, or refused and reported
+      return true;
+    }
+    log.push_back(verb + " — nothing changed.");
+    EndGizmoCommand(st);
+    return true;
+  }
+
+  // An exact value, in the operation's own units.
+  const char* begin = line.c_str();
+  char* end = nullptr;
+  const double v = std::strtod(begin, &end);
+  if (end == begin || *end != '\0' || !std::isfinite(v)) {
+    log.push_back(verb + " — '" + line + "' is not a number. " + CadGizmoCommandPromptText(st));
+    return true;
+  }
+  if (st.gizmoOp == CadGizmoOp::Scale && !(v > 0.0)) {
+    // Zero collapses the selection and a negative factor is a mirror — its own operation
+    // (REQ-332 item 7), not a scale.
+    log.push_back(verb + " — the scale factor must be greater than zero.");
+    return true;
+  }
+  if (!st.gizmoDragActive) {
+    // With several handles, a bare number does not say which way; with one, it does.
+    if (CadGizmoAxisCountFor(st) != 1) {
+      log.push_back(verb + " — click the axis handle to move along first, then type the distance.");
+      return true;
+    }
+    ray3d::Vec3 anchor{};
+    if (!CadGizmoAnchorWorld(st, &anchor) ||
+        !ArmGizmoDrag(st, 0, anchor, CadGizmoAxisWorld(st, 0), 0.0)) {
+      log.push_back(verb + " — the selection no longer has a gizmo. Nothing changed.");
+      EndGizmoCommand(st);
+      return true;
+    }
+  }
+  st.gizmoDragDistance =
+      st.gizmoOp == CadGizmoOp::Rotate ? v * 3.14159265358979323846 / 180.0 : v;
+  if (!CommitGizmoDrag(st, log))
+    log.push_back(CadGizmoCommandPromptText(st));  // zero, or refused by the kernel and reported
   return true;
 }
 
@@ -37453,6 +37687,12 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("LOFT canceled.");
     CancelLoftCommand(st);
   }
+  else if (IsGizmoCommandKind(st.active)) {
+    // A live drag has changed nothing in the store, so ending the command IS the restore; the
+    // gizmo op goes back to what it was before the command (GitHub issue #564 section 3).
+    log.push_back(std::string(AppCommandState::KindName(st.active)) + " canceled.");
+    EndGizmoCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Sweep) {
     log.push_back("SWEEP canceled.");
     CancelSweepCommand(st);
@@ -38018,22 +38258,40 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.cmdEnteredHistory.erase(st.cmdEnteredHistory.begin());
   }
 
-  // GIZMO MOVE | ROTATE | SCALE — what the REQ-060 gizmo does (TASK-232). Consumed here, ahead of
-  // the main dispatch, because it is a one-line SETTING with no phases: it takes its argument
-  // inline, prompts for nothing and starts no command. Bare `GIZMO` reports the current setting
-  // rather than changing it, so the command is safe to type when you have forgotten where it is.
+  // GIZMO MOVE | ROTATE | SCALE | OFF — the PERSISTENT REQ-060 gizmo (TASK-232; OFF and the
+  // persistence itself from GitHub issue #564 section 3, D-2026-09-28-a). A selection shows no
+  // gizmo by default; naming an op here turns on the old behaviour — the gizmo follows every
+  // selection, doing that op — and OFF returns to the default. 3DMOVE / 3DROTATE / 3DSCALE are the
+  // everyday way to summon it. Consumed here, ahead of the main dispatch, because it is a one-line
+  // SETTING with no phases. Bare `GIZMO` reports the current setting rather than changing it, so
+  // the command is safe to type when you have forgotten where it is.
   {
     std::istringstream gz(StringUtil::toLowerAsciiCopy(line));
     std::string gzCmd;
     if ((gz >> gzCmd) && gzCmd == "gizmo") {
+      if (IsGizmoCommandKind(st.active)) {
+        // The running command owns the op until it ends; a change now would be undone on exit.
+        log.push_back(std::string("GIZMO — finish or cancel ") + AppCommandState::KindName(st.active) +
+                      " first.");
+        return;
+      }
       std::string mode;
       const bool haveMode = static_cast<bool>(gz >> mode);
       const auto opName = [](CadGizmoOp o) {
         return o == CadGizmoOp::Translate ? "MOVE" : o == CadGizmoOp::Rotate ? "ROTATE" : "SCALE";
       };
       if (!haveMode) {
-        log.push_back(std::string("GIZMO — currently ") + opName(st.gizmoOp) +
-                      ". Use GIZMO MOVE, GIZMO ROTATE or GIZMO SCALE.");
+        log.push_back(std::string("GIZMO — currently ") +
+                      (st.gizmoPersistent ? opName(st.gizmoOp) : "OFF") +
+                      ". Use GIZMO MOVE, GIZMO ROTATE or GIZMO SCALE to show it on every "
+                      "selection, GIZMO OFF to hide it, or 3DMOVE / 3DROTATE / 3DSCALE.");
+        return;
+      }
+      if (mode == "off" || mode == "0" || mode == "no") {
+        CancelGizmoDrag(st);
+        st.gizmoPersistent = false;
+        st.gizmoHoverAxis = -1;
+        log.push_back("GIZMO — OFF. Selecting shows no gizmo; use 3DMOVE, 3DROTATE or 3DSCALE.");
         return;
       }
       CadGizmoOp want = st.gizmoOp;
@@ -38044,7 +38302,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       else if (mode == "scale" || mode == "sc" || mode == "s")
         want = CadGizmoOp::Scale;
       else {
-        log.push_back("GIZMO — unknown mode '" + mode + "'. Use MOVE, ROTATE or SCALE.");
+        log.push_back("GIZMO — unknown mode '" + mode + "'. Use MOVE, ROTATE, SCALE or OFF.");
         return;
       }
       // An armed drag was measured in the OLD operation's units, so it cannot survive the switch.
@@ -38052,6 +38310,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // ending (see `gizmoDragDistance`).
       CancelGizmoDrag(st);
       st.gizmoOp = want;
+      st.gizmoPersistent = true;
       st.gizmoHoverAxis = -1;
       log.push_back(std::string("GIZMO — ") + opName(want) + ".");
       return;
@@ -38210,6 +38469,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (st.active == K::SectionClip) {
       log.push_back(SectionClipReport(st));
       st.active = K::None;
+      return;
+    }
+    // 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3): Enter confirms the selection,
+    // commits an armed drag, or ends the command — handled here for the reason every note above
+    // gives: this block consumes a blank line and the Kind-keyed branch further down never sees one.
+    if (IsGizmoCommandKind(st.active)) {
+      (void)HandleGizmoCommandTextInput(line, st, log);
       return;
     }
     if (st.active == K::Pan) {
@@ -40481,6 +40747,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (IsGizmoCommandKind(st.active)) {
+    (void)HandleGizmoCommandTextInput(line, st, log);
+    return;
+  }
+
   if (st.active == AppCommandState::Kind::Sweep) {
     if (HandleSweepTextInput(line, st, log))
       return;
@@ -41565,6 +41836,9 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Trim:       StartTrimCommand(st, log);       break;
     case K::Offset:     StartOffsetCommand(st, log);     break;
     case K::Hatch:      StartHatchCommand(st, log);      break;
+    case K::Move3d:
+    case K::Rotate3d:
+    case K::Scale3d:    StartGizmoCommand(st, st.lastCommand, log); break;
     default: break;
   }
 }
