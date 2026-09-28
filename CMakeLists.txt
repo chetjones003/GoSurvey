@@ -1258,6 +1258,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CadPipeRunCommandTests.cpp
     # REQ-351 / D-2026-09-28-f — MOVE / ROTATE / SCALE / MIRROR / COPY / ARRAY on a pipe run.
     tests/ModifyPipeRunTests.cpp
+    # REQ-352 / D-2026-09-28-g — layer and colour edits on solids and pipe runs.
+    tests/SolidLayerColorTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp

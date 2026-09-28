@@ -6721,6 +6721,26 @@ void StartOrbitCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The attributes of a selected entity, or nullptr for a type that carries none (survey points,
 /// PDF underlays) or an index that no longer resolves.
 const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, const SelectedEntity& e);
+/// The attributes a layer / colour edit reads and writes (REQ-352): every type that carries them,
+/// solids and pipe runs included — unlike \ref CadEntityAttrsForSelected, which isolation keeps
+/// narrower. nullptr for a type with none or an index that no longer resolves.
+const EntityAttributes* CadEditableAttrsForSelected(const AppCommandState& st, const SelectedEntity& e);
+/// Properties / ribbon layer edit (REQ-352): moves every selected entity that carries attributes —
+/// solids and pipe runs included — to \p layer, as one undo step. A new name joins the layer
+/// table. Returns how many entities changed; nothing changed pushes no undo.
+int CadApplyLayerToSelection(AppCommandState& st, const std::string& layer);
+/// Properties colour edit (REQ-352): the same, for the colour storage string ("ByLayer", an ACI
+/// name, `#RRGGBB`).
+int CadApplyColorToSelection(AppCommandState& st, const std::string& color);
+/// What \ref CadSelectionLayer returns when the selected objects sit on more than one layer.
+inline constexpr const char* kCadSelectionLayerVaries = "*VARIES*";
+/// The layer the selected objects share, \ref kCadSelectionLayerVaries when they differ, or "" when
+/// nothing selected carries a layer — the ribbon Layers combo's preview (REQ-352).
+[[nodiscard]] std::string CadSelectionLayer(const AppCommandState& st);
+/// The ribbon Layers combo's pick (REQ-352, AutoCAD's rule): with objects selected that carry a
+/// layer, moves them to \p layer (one undo step) and leaves the current layer alone; with none,
+/// sets the current layer for new geometry, as it always has.
+void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vector<std::string>& log);
 /// True when \p e is currently isolated out. Entity types with no attributes are never hidden.
 bool CadSelectedEntityHidden(const AppCommandState& st, const SelectedEntity& e);
 /// ISOLATEOBJECTS — hide everything EXCEPT the current selection.

@@ -62,6 +62,7 @@
 #include <limits>
 #include <sstream>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <numeric>
@@ -30252,6 +30253,15 @@ static std::uint64_t BlockRefWorldSolidsSig(const AppCommandState& st) {
     }
     for (unsigned char c : r.defName)
       mix(c);
+    // The insert's layer / colour resolve every ByBlock solid inside it, so an edit to them
+    // (REQ-352 — a pipe fitting is a block reference) must re-derive the world solids too.
+    if (bi < st.cadBlockRefAttrs.size()) {
+      for (unsigned char c : st.cadBlockRefAttrs[bi].layer)
+        mix(c);
+      mix(0);
+      for (unsigned char c : st.cadBlockRefAttrs[bi].color)
+        mix(c);
+    }
   }
   for (const CadBlockDefinition& d : st.blockDefs)
     mix(d.content.solids.size());
@@ -30317,8 +30327,16 @@ static std::uint64_t PipeRunWorldSolidsSig(const AppCommandState& st) {
 /// replicated across however many solids it actually produced.
 static void RebuildPipeRunWorldSolids(AppCommandState& st) {
   const std::uint64_t sig = PipeRunWorldSolidsSig(st);
-  if (sig == st.pipeRunWorldSolidsSig)
+  if (sig == st.pipeRunWorldSolidsSig) {
+    // The signature covers geometry only, so a layer / colour edit (REQ-352) lands here: re-copy
+    // each run's attributes onto its solids rather than leave them drawing in the old ones.
+    for (size_t i = 0; i < st.pipeRunWorldSolidAttrs.size() && i < st.pipeRunWorldSolidOwnerIndex.size(); ++i) {
+      const size_t ri = static_cast<size_t>(st.pipeRunWorldSolidOwnerIndex[i]);
+      if (ri < st.cadPipeRunAttrs.size())
+        st.pipeRunWorldSolidAttrs[i] = st.cadPipeRunAttrs[ri];
+    }
     return;
+  }
   st.pipeRunWorldSolidsSig = sig;
   st.pipeRunWorldSolids.clear();
   st.pipeRunWorldSolidAttrs.clear();
@@ -37883,14 +37901,19 @@ void StartOrbitCommand(AppCommandState& st, std::vector<std::string>& log) {
 // Object isolation (REQ-084 (d) / ADR-034)
 // ---------------------------------------------------------------------------
 
-const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, const SelectedEntity& e) {
+namespace {
+
+/// The attributes of a selected entity, for every type that carries them — solids and pipe runs
+/// included. One accessor for both the const and mutable walks, so a read and an edit can never
+/// disagree about which stores are covered (the same shape as \ref AttrsForKind).
+template <typename StateT>
+auto* AttrsOfSelected(StateT& st, const SelectedEntity& e) {
   using T = SelectedEntity::Type;
+  using Attr = std::remove_reference_t<decltype(st.userLineAttrs[0])>;
   if (e.index < 0)
-    return nullptr;
+    return static_cast<Attr*>(nullptr);
   const size_t i = static_cast<size_t>(e.index);
-  auto at = [i](const std::vector<EntityAttributes>& v) -> const EntityAttributes* {
-    return i < v.size() ? &v[i] : nullptr;
-  };
+  auto at = [i](auto& v) -> Attr* { return i < v.size() ? &v[i] : nullptr; };
   switch (e.type) {
   case T::LineSeg:      return at(st.userLineAttrs);
   case T::Circle:       return at(st.userCircleAttrs);
@@ -37909,9 +37932,95 @@ const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, con
   case T::Surface:      return at(st.cadSurfaceAttrs);
   case T::Table:        return at(st.cadTableAttrs);
   case T::BlockRef:     return at(st.cadBlockRefAttrs);
-  // Survey points and PDF underlays carry no EntityAttributes and are out of REQ-084's scope.
-  default:              return nullptr;
+  case T::Solid:        return at(st.cadSolidAttrs);    // REQ-352
+  case T::PipeRun:      return at(st.cadPipeRunAttrs);  // REQ-352
+  // Survey points, PDF underlays and the section plane carry no EntityAttributes.
+  default:              return static_cast<Attr*>(nullptr);
   }
+}
+
+} // namespace
+
+const EntityAttributes* CadEditableAttrsForSelected(const AppCommandState& st, const SelectedEntity& e) {
+  return AttrsOfSelected(st, e);
+}
+
+const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, const SelectedEntity& e) {
+  // Isolation (REQ-084) does not cover solids or pipe runs — CollectIsolatableIds never lists them,
+  // and a pipe run has no id — so they stay out of this accessor rather than half-join isolation.
+  if (e.type == SelectedEntity::Type::Solid || e.type == SelectedEntity::Type::PipeRun)
+    return nullptr;
+  return AttrsOfSelected(st, e);
+}
+
+namespace {
+
+/// Writes one attribute field on every selected entity that carries attributes, as ONE undo step
+/// taken only when something actually changes (REQ-352). Returns how many entities changed.
+template <typename FieldFn>
+int ApplyAttrFieldToSelection(AppCommandState& st, const std::string& value, const char* undoLabel,
+                              FieldFn field) {
+  if (value.empty())
+    return 0;
+  EnsureAttrCounts(st);
+  bool pushed = false;
+  int changed = 0;
+  for (const SelectedEntity& e : st.selection) {
+    EntityAttributes* a = AttrsOfSelected(st, e);
+    if (!a || field(*a) == value)
+      continue;
+    if (!pushed) {
+      PushUndoSnapshot(st, undoLabel);
+      pushed = true;
+    }
+    field(*a) = value;
+    ++changed;
+  }
+  if (changed > 0)
+    BumpCadGpuCache(st);
+  return changed;
+}
+
+} // namespace
+
+int CadApplyLayerToSelection(AppCommandState& st, const std::string& layer) {
+  const int n = ApplyAttrFieldToSelection(st, layer, "Change layer",
+                                          [](EntityAttributes& a) -> std::string& { return a.layer; });
+  if (n > 0)
+    SyncDrawingLayerTableWithGeometry(st);  // a typed new name becomes a layer row
+  return n;
+}
+
+int CadApplyColorToSelection(AppCommandState& st, const std::string& color) {
+  return ApplyAttrFieldToSelection(st, color, "Change color",
+                                   [](EntityAttributes& a) -> std::string& { return a.color; });
+}
+
+std::string CadSelectionLayer(const AppCommandState& st) {
+  std::string shared;
+  for (const SelectedEntity& e : st.selection) {
+    const EntityAttributes* a = AttrsOfSelected(st, e);
+    if (!a)
+      continue;
+    const std::string layer = a->layer.empty() ? std::string("0") : a->layer;
+    if (shared.empty())
+      shared = layer;
+    else if (shared != layer)
+      return kCadSelectionLayerVaries;
+  }
+  return shared;
+}
+
+void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vector<std::string>& log) {
+  if (layer.empty())
+    return;
+  if (CadSelectionLayer(st).empty()) {
+    st.currentLayer = layer;
+    SyncDrawingLayerTableWithGeometry(st);
+    return;
+  }
+  const int n = CadApplyLayerToSelection(st, layer);
+  log.push_back("LAYER — " + std::to_string(n) + " object(s) moved to layer \"" + layer + "\".");
 }
 
 bool CadSelectedEntityHidden(const AppCommandState& st, const SelectedEntity& e) {
