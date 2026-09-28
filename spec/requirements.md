@@ -8162,6 +8162,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
      neither of which any kernel operation does. **ROTATE with Copy also still refuses**, because
      duplicating a solid is entity-creation bookkeeping rather than a transform — the work
      Rectangular ARRAY had to write separately.
+
+     **6c. AMENDED 2026-09-28 (D-2026-09-28-f, REQ-351, TASK-284): MIRROR, Polar ARRAY and ROTATE
+     with Copy take a solid too** — `brep::Mirror` is the reflection 6b named as its own operation,
+     and duplicating a solid is now shared bookkeeping (`TransformSelectedSolids`' duplicate mode).
+     **STRETCH alone still refuses**, for its own reason: it moves part of an object.
 - Acceptance:
   - a typed MOVE with a Z component moves a line, a circle, an arc, an ellipse, a polyline, a
     feature line, an annotation and a block reference by that Z, and their reported elevations change
@@ -8578,7 +8583,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      the whole solid.
   6. **A scale factor that is zero, negative or non-finite is refused by name.** Zero collapses the
      solid; negative **mirrors** it, leaving left-handed frames that would be rejected far away from
-     the command that caused them. A reflection is its own operation and is not this one.
+     the command that caused them. A reflection is its own operation and is not this one — it is
+     REQ-351's `brep::Mirror` (D-2026-09-28-f).
   7. **Non-uniform scale is out of scope, and not by omission**: `SurfaceKind` has no ellipsoid and
      no elliptical cylinder, so an unevenly scaled sphere has nowhere to be stored. The signature
      offers a single factor, so there is no non-uniform request to refuse.
@@ -9701,6 +9707,56 @@ capability that does not exist. They are recorded here rather than quietly dropp
   increment 1 reports a centroid for. Increment 2 (uncovered — `Nurbs`, general trim loops, holes,
   `Ellipse`/`Intersection` boundary edges) is carried alongside REQ-334's own increment 2, not
   before it, since inertia cannot be computed for a shape the centroid itself cannot yet integrate.
+
+### REQ-351 — The whole-object Modify commands apply to solids and pipe runs (GitHub issue #564 §4)
+
+- Purpose: issue #564 §4 — "solids are the last thing in the drawing you cannot move". REQ-322 and
+  REQ-332 gave MOVE, in-place ROTATE and SCALE, and D-2026-09-07-c gave Rectangular ARRAY a solid;
+  COPY, MIRROR, Polar ARRAY and ROTATE Copy still refused a solid or skipped it, and **every** Modify
+  command left a pipe run behind without saying so (a REQ-201 violation).
+- Priority: must
+- Type: functional
+- Depends on: REQ-313 / ADR-045 (the kernel), REQ-322, REQ-332, REQ-329 (3D / UCS modify), REQ-345
+  (pipe runs), REQ-201.
+- Decision: D-2026-09-28-f.
+- Statement:
+  1. **`brep::Mirror`** reflects a solid across a plane and returns a correctly oriented solid: every
+     frame is reflected and made right-handed again, every loop is reversed, a NURBS patch's control
+     net is reflected and its U direction reversed, and the recipe is kept (every primitive is
+     symmetric about its own frame's XZ plane; a polysolid path negates y, sweep and justification).
+     A normal that is not a unit vector is refused by name.
+  2. **COPY, MIRROR, ROTATE Copy and both ARRAY forms copy a selected solid**, through the kernel
+     (`Translate` / `Rotate` / `Mirror`), and the copy carries the source's attributes
+     (`DuplicatedEntityAttrs`). MIRROR's erase-source removes the solid it mirrored.
+  3. **Every whole-object Modify command applies to a pipe run** — MOVE, COPY, ROTATE (plan and
+     tilted, in place and Copy), SCALE, MIRROR, both ARRAY forms, and the 3DMOVE / 3DROTATE /
+     3DSCALE gizmos, which call the same functions. A transform maps the run's path vertices; the
+     swept pipe is re-derived from the path. SCALE scales the route in 3D about the base point and
+     **never the nominal size or the wall** (D-2026-09-28-f). A copied run carries its attributes
+     and joins no piping network.
+  4. **Scale stays uniform.** Every SCALE takes one factor, so non-uniform scale cannot be asked for;
+     it is out of scope and would be its own requirement (REQ-332 item 7's reason still holds).
+  5. **STRETCH still refuses a solid, and now refuses a pipe run, by name**: STRETCH moves part of an
+     object, and no kernel operation moves part of a solid.
+  6. One undo step per operation, a mixed selection included.
+- Acceptance:
+  - a mirrored box, wedge, pyramid, cylinder, cone, sphere, torus, bored box (an inward face) and
+    NURBS loft each keep their volume and area to a relative 1e-9, every frame is right-handed and
+    orthonormal, every vertex is the reflected point, and mirroring twice restores the original;
+  - a mirrored solid validates and takes part in a Boolean UNION with the expected volume;
+  - a mirrored wedge, pyramid and polysolid rebuilt from their kept recipe reproduce the mirrored
+    corners;
+  - COPY, MIRROR (with and without erase-source), ROTATE Copy and Polar ARRAY each produce solids of
+    the source's volume and topology at the expected bounds, with no "excluded" line, and a mixed
+    selection is one undo;
+  - a pipe run is moved (in 3D), rotated, scaled (route doubled, size and wall unchanged), mirrored
+    (copy carries the layer, joins no network), copied with a solid in one undo, polar-arrayed, and
+    mirrored with erase-source; STRETCH refuses it by name and leaves it untouched;
+  - every refusal has a sentence a user can read (REQ-201).
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`, `src/util/nurbs.{hpp,cpp}`), Commands
+  (`src/commands/CadCommands.{hpp,cpp}`)
+- Status: accepted (2026-09-28) — D-2026-09-28-f, TASK-284.
+- Revisions: 2026-09-28 — proposed and accepted.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

@@ -92,19 +92,17 @@ struct SelectedEntity {
     BlockRef = 12,
     /// B-rep solid (REQ-313 / ADR-045). Appended after BlockRef so existing type values stay stable.
     ///
-    /// **Display-and-erase only in this increment, like Mesh** — it selects, highlights, erases and
-    /// reports its volume, and no transform command moves it. That is a stated boundary rather than
-    /// an oversight: moving a solid means transforming every surface frame and every arc-edge frame
-    /// in its topology, which is the same class of work REQ-312 found for a single tilted arc, and
-    /// it belongs with #120's Phase 5 direct-modelling requirement. Every transform command refuses
-    /// a solid with a stated reason (REQ-201) rather than silently dropping it from the operation —
-    /// the rule Surface already established.
+    /// Every whole-object transform applies to it — MOVE (REQ-322), ROTATE and SCALE (REQ-332),
+    /// COPY, MIRROR and both ARRAY forms (REQ-351) — through the kernel (`brep::Translate` /
+    /// `Rotate` / `Scale` / `Mirror`), which transforms every vertex, surface frame and edge frame,
+    /// never the tessellation alone. STRETCH, which moves part of an object, refuses it by name
+    /// (REQ-201): no kernel operation moves part of a solid.
     Solid = 13,
-    /// CadPipeRun (issue #486). Appended after Solid so existing type values stay stable. The SAME
-    /// stated boundary Solid has: display, select, highlight, hover-report and erase, but no
-    /// transform command moves it — a pipe run's geometry is DERIVED from its path via auto-fillet
-    /// sweeping (cadpiperun.hpp), so a direct drag would need the same re-solve REQ-070 declined for
-    /// a TIN surface's own derived geometry.
+    /// CadPipeRun (issue #486). Appended after Solid so existing type values stay stable. Its
+    /// geometry is DERIVED from its path via auto-fillet sweeping (cadpiperun.hpp), so a transform
+    /// maps the path's vertices and the pipe is re-derived (REQ-351): the same commands as Solid,
+    /// with SCALE scaling the route but never the pipe's nominal size (D-2026-09-28-f). STRETCH
+    /// refuses it by name, as it does a solid.
     PipeRun = 14,
     /// Point cloud (REQ-171 / ADR-042). Appended after PipeRun so existing type values stay stable.
     /// **Display-and-erase only, like Mesh** — selects, highlights, erases and reports; never

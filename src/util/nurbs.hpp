@@ -119,6 +119,17 @@ struct SurfacePoint {
 /// anything else before it reaches here.
 [[nodiscard]] Patch Scale(const Patch& patch, const Vec3& basePoint, double factor);
 
+/// \p patch reflected across the plane through \p planePoint with unit normal \p planeUnit, with
+/// its **U direction reversed** (REQ-351).
+///
+/// The reflection alone is exact for \ref Rotate's affine-combination reason, but it flips the
+/// patch's orientation: `R·Su x R·Sv = -R·(Su x Sv)`, so a normal that pointed out of the solid would
+/// point in. Reversing U negates `Su` and puts it back. Control point `(i, j)` becomes
+/// `(nu - 1 - i, j)` and a U knot `k` becomes `a + b - k` for the domain `[a, b]`, so the reversed
+/// patch passes through the same points: `S'(a + b - u, v) = R·S(u, v)`. A caller holding a U span
+/// on this patch maps it through the same `a + b - u`. \p planeUnit is trusted to be a unit vector.
+[[nodiscard]] Patch Mirror(const Patch& patch, const Vec3& planePoint, const Vec3& planeUnit);
+
 // ---------------------------------------------------------------------------------------------
 // Builders — the two shapes a loft between line-and-arc profiles produces (ADR-048 (f)).
 // A sweep (increment 2) will add path-frame builders here.

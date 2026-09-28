@@ -8319,10 +8319,176 @@ static void AppendFeatureLineCopy(AppCommandState& st, int fi, int v0, int v1, X
           : MakeNewEntityAttrs(st)));
 }
 
+/// Apply \p op to every selected solid, replacing each rather than editing it, and report anything
+/// the kernel refuses by name (REQ-201, REQ-332 / TASK-231).
+///
+/// The de-duplication is `TranslateSelectedSolids`' and is load-bearing for the same reason: a
+/// selection should not hold one solid twice, and transforming it twice would turn or scale it twice
+/// — a defect that only shows up on the drawing where it happened.
+///
+/// A refusal leaves that solid EXACTLY as it was and does not abandon the rest of the selection. The
+/// kernel computes into a fresh solid and validates before returning (ADR-046 (d)), so there is no
+/// half-transformed state to roll back — the old `shared_ptr` is simply not replaced.
+///
+/// \p duplicate appends the result as a NEW solid carrying the source's attributes (COPY, ROTATE
+/// Copy, MIRROR, polar ARRAY — REQ-351) instead of replacing the source; a refusal then adds nothing.
+template <typename Op>
+static void TransformSelectedSolids(AppCommandState& st, const char* commandName, Op op,
+                                    std::vector<std::string>& log, bool duplicate = false) {
+  std::set<int> seen;
+  size_t refused = 0;
+  brep::Problem lastWhy = brep::Problem::Ok;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
+        static_cast<size_t>(e.index) >= st.cadSolids.size())
+      continue;
+    if (!seen.insert(e.index).second)
+      continue;
+    const size_t ix = static_cast<size_t>(e.index);
+    const CadSolidPtr sp = st.cadSolids[ix];  // a copy: a duplicate's push_back may reallocate
+    if (!sp)
+      continue;
+    brep::Solid out;
+    brep::Problem why = brep::Problem::Ok;
+    if (!op(*sp, &out, &why)) {
+      ++refused;
+      lastWhy = why;
+      continue;
+    }
+    if (duplicate) {
+      st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(out)));
+      st.cadSolidAttrs.push_back(
+          DuplicatedEntityAttrs(ix < st.cadSolidAttrs.size() ? st.cadSolidAttrs[ix] : EntityAttributes{}));
+    } else {
+      st.cadSolids[ix] = std::make_shared<const brep::Solid>(std::move(out));
+    }
+  }
+  // One line naming the LAST reason, not one line per solid. With several solids refused for
+  // different reasons that is lossy, and it is accepted here because the case is close to
+  // unreachable: the axis is normalized by both callers and the factor is clamped positive, so a
+  // refusal means `RotateResultInvalid` / `ScaleResultInvalid` — an isometry or a positive scale
+  // failing to validate, which cannot happen on a solid that was valid going in. This is a safety
+  // net that says something true if it ever fires, not a routine path.
+  if (refused != 0)
+    log.push_back(std::string(commandName) + " — " + std::to_string(refused) +
+                  " solid(s) unchanged: " + brep::ProblemText(lastWhy));
+}
+
+/// Turn every selected solid about the line through \p axisPoint with unit direction \p axisUnit
+/// (REQ-332 / TASK-231). Replaces REQ-322 item 6's blanket refusal for ROTATE. \p duplicate adds the
+/// turned solid as a copy instead (ROTATE Copy, polar ARRAY — REQ-351).
+static void RotateSelectedSolids(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                                 const ray3d::Vec3& axisUnit, float angleRad,
+                                 std::vector<std::string>& log, bool duplicate = false,
+                                 const char* commandName = "ROTATE") {
+  if (angleRad == 0.f && !duplicate)
+    return;
+  const double rad = static_cast<double>(angleRad);
+  TransformSelectedSolids(
+      st, commandName,
+      [&](const brep::Solid& s, brep::Solid* out, brep::Problem* why) {
+        return brep::Rotate(s, axisPoint, axisUnit, rad, out, why);
+      },
+      log, duplicate);
+}
+
+/// Add the mirror image of every selected solid across the plane through \p planePoint with unit
+/// normal \p planeUnit (REQ-351). Always a duplicate: MIRROR copies first and erases the source
+/// afterwards only if asked (`FinishMirrorCommand`).
+static void MirrorSelectedSolids(AppCommandState& st, const ray3d::Vec3& planePoint,
+                                 const ray3d::Vec3& planeUnit, std::vector<std::string>& log) {
+  TransformSelectedSolids(
+      st, "MIRROR",
+      [&](const brep::Solid& s, brep::Solid* out, brep::Problem* why) {
+        return brep::Mirror(s, planePoint, planeUnit, out, why);
+      },
+      log, /*duplicate=*/true);
+}
+
+/// Add a copy of every selected solid moved by (dx, dy, dz) — COPY and both ARRAY forms (REQ-351,
+/// widening GitHub issue #400 increment 3's rectangular-ARRAY-only helper). `brep::Translate` cannot
+/// refuse, so there is nothing to report.
+static void DuplicateSelectedSolidsTranslated(AppCommandState& st, float dx, float dy, float dz) {
+  std::vector<std::string> unused;
+  TransformSelectedSolids(
+      st, "COPY",
+      [&](const brep::Solid& s, brep::Solid* out, brep::Problem*) {
+        *out = brep::Translate(s, ray3d::Vec3{static_cast<double>(dx), static_cast<double>(dy),
+                                              static_cast<double>(dz)});
+        return true;
+      },
+      unused, /*duplicate=*/true);
+}
+
+/// Map every path vertex of every selected pipe run through \p pt, in place or — \p duplicate — as a
+/// new run carrying the source's attributes (REQ-351, D-2026-09-28-f).
+///
+/// A pipe run owns only its path; the swept pipe is re-derived from it whenever the path changes
+/// (`RebuildPipeRunWorldSolids` keys on a hash of the vertices), so moving the vertices IS moving
+/// the pipe. Its size and wall are untouched by every transform — a scaled run is a longer run of the
+/// same pipe, because a 4in pipe is a catalog part (D-2026-09-28-f). A copy joins no piping network:
+/// a network is a named set the user built, and the copy is a new run.
+template <typename PointFn>
+static void TransformSelectedPipeRuns(AppCommandState& st, PointFn pt, bool duplicate) {
+  std::set<int> seen;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::PipeRun || e.index < 0 ||
+        static_cast<size_t>(e.index) >= st.cadPipeRuns.size())
+      continue;
+    if (!seen.insert(e.index).second)
+      continue;
+    const size_t ix = static_cast<size_t>(e.index);
+    CadPipeRun run = st.cadPipeRuns[ix];
+    for (size_t k = 0; k + 2 < run.vertsXyz.size(); k += 3) {
+      const ray3d::Vec3 p = pt(ray3d::Vec3{run.vertsXyz[k], run.vertsXyz[k + 1], run.vertsXyz[k + 2]});
+      run.vertsXyz[k] = p.x;
+      run.vertsXyz[k + 1] = p.y;
+      run.vertsXyz[k + 2] = p.z;
+    }
+    if (duplicate) {
+      st.cadPipeRuns.push_back(std::move(run));
+      st.cadPipeRunAttrs.push_back(DuplicatedEntityAttrs(
+          ix < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[ix] : EntityAttributes{}));
+    } else {
+      st.cadPipeRuns[ix] = std::move(run);
+    }
+  }
+}
+
+static void TranslateSelectedPipeRuns(AppCommandState& st, float dx, float dy, float dz, bool duplicate) {
+  const ray3d::Vec3 d{static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)};
+  TransformSelectedPipeRuns(st, [&](const ray3d::Vec3& p) { return ray3d::Add(p, d); }, duplicate);
+}
+
+static void RotateSelectedPipeRuns(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                                   const ray3d::Vec3& axisUnit, float angleRad, bool duplicate) {
+  const double rad = static_cast<double>(angleRad);
+  TransformSelectedPipeRuns(
+      st, [&](const ray3d::Vec3& p) { return ray3d::RotatePointAboutAxis(p, axisPoint, axisUnit, rad); },
+      duplicate);
+}
+
+/// MIRROR's solids and pipe runs, across the plane through \p planePoint with unit normal
+/// \p planeUnit (REQ-351): each gets a mirrored copy. A pipe is symmetric about its own path, so
+/// reflecting the path is the whole of mirroring a run.
+static void MirrorSelectedSolidsAndPipeRuns(AppCommandState& st, const ray3d::Vec3& planePoint,
+                                            const ray3d::Vec3& planeUnit, std::vector<std::string>& log) {
+  MirrorSelectedSolids(st, planePoint, planeUnit, log);  // refuses a degenerate plane by name
+  if (std::fabs(ray3d::Length(planeUnit) - 1.0) > 1e-9)
+    return;
+  TransformSelectedPipeRuns(
+      st, [&](const ray3d::Vec3& p) { return ray3d::ReflectPointAcrossPlane(p, planePoint, planeUnit); },
+      /*duplicate=*/true);
+}
+
 // dz defaults to 0 so every existing 2D caller (COPY, ARRAY rectangular under the World UCS) is
 // byte-identical to before this parameter existed. GitHub issue #400 increment 1 is ARRAY's own
 // UCS-plane rectangular case, the only caller that ever passes a non-zero dz.
 static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float dy, float dz = 0.f) {
+  // Solids and pipe runs are copied too (REQ-351): COPY, both ARRAY forms and every other caller
+  // used to leave them behind without a word.
+  DuplicateSelectedSolidsTranslated(st, dx, dy, dz);
+  TranslateSelectedPipeRuns(st, dx, dy, dz, /*duplicate=*/true);
   const size_t polyVertsBefore = st.userPolylineVerts.size();
   const size_t featureVertsBefore = st.featureLineVerts.size();
   std::vector<float> newLines;
@@ -8787,7 +8953,12 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
   }
 }
 
-static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by, float rad) {
+static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by, float rad,
+                                         std::vector<std::string>& log) {
+  // Solids and pipe runs are copied too (REQ-351), turned about the same vertical axis.
+  const ray3d::Vec3 axisPoint{static_cast<double>(bx), static_cast<double>(by), 0.0};
+  RotateSelectedSolids(st, axisPoint, {0.0, 0.0, 1.0}, rad, log, /*duplicate=*/true);
+  RotateSelectedPipeRuns(st, axisPoint, {0.0, 0.0, 1.0}, rad, /*duplicate=*/true);
   const size_t polyVertsBefore = st.userPolylineVerts.size();
   const size_t featureVertsBefore = st.featureLineVerts.size();
   std::vector<float> newLines;
@@ -9048,6 +9219,10 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
   const auto rotDir = [&](float x, float y, float z) -> ray3d::Vec3 {
     return ray3d::RotateVectorAboutAxis({x, y, z}, axisUnit, rad);
   };
+  // Solids and pipe runs are copied too (REQ-351) — about any axis, since `brep::Rotate` turns
+  // every frame a solid stores and a pipe run is only its path.
+  RotateSelectedSolids(st, axisPoint, axisUnit, angleRad, log, /*duplicate=*/true, commandLabel);
+  RotateSelectedPipeRuns(st, axisPoint, axisUnit, angleRad, /*duplicate=*/true);
 
   const size_t polyVertsBefore = st.userPolylineVerts.size();
   const size_t featureVertsBefore = st.featureLineVerts.size();
@@ -9350,32 +9525,31 @@ void DropSurfacesFromSelectionForTransform(AppCommandState& st, const char* comm
                 " Edit its definition in the Surfaces panel instead.");
 }
 
-/// REQ-313 / ADR-045: drop B-rep solids from a transform selection, and SAY SO (REQ-201).
+/// Drop B-rep solids and pipe runs from a selection a command can only apply to PART of an object,
+/// and SAY SO (REQ-201). Since REQ-351 the one caller is STRETCH: every whole-object transform —
+/// MOVE, COPY, ROTATE, SCALE, MIRROR, ARRAY — now takes both. STRETCH moves the vertices inside its
+/// window and leaves the rest, and no kernel operation moves part of a solid; a pipe run could be
+/// stretched by its path vertices, but that is a new behaviour no requirement asks for yet.
 ///
-/// Called at every site \ref DropSurfacesFromSelectionForTransform is, immediately after it. A
-/// separate function rather than a second `remove_if` inside that one, because the two exclusions
-/// have different reasons and a user who moved a surface and a solid together deserves to be told
-/// which of the two was which — a single merged message could only give one reason for both.
-///
-/// The exclusion itself is a stated boundary, not an oversight: transforming a solid means
-/// transforming every surface frame and every arc-edge frame in its topology, which is the same
-/// class of work REQ-312 needed for a single tilted arc, and it belongs with #120's Phase 5
-/// direct-modelling requirement. Refusing loudly is what keeps the alternative — a solid silently
-/// left behind while everything selected with it moves — off the table.
+/// A separate function from \ref DropSurfacesFromSelectionForTransform because the reasons differ,
+/// and a user who stretched a surface and a solid together deserves to be told which was which.
 void DropSolidsFromSelectionForTransform(AppCommandState& st, const char* commandName,
                                          std::vector<std::string>& log) {
-  const size_t before = st.selection.size();
+  size_t solids = 0, pipeRuns = 0;
   st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
-                                    [](const SelectedEntity& e) {
-                                      return e.type == SelectedEntity::Type::Solid;
+                                    [&](const SelectedEntity& e) {
+                                      if (e.type == SelectedEntity::Type::Solid) { ++solids; return true; }
+                                      if (e.type == SelectedEntity::Type::PipeRun) { ++pipeRuns; return true; }
+                                      return false;
                                     }),
                      st.selection.end());
-  const size_t dropped = before - st.selection.size();
-  if (dropped == 0)
-    return;
-  log.push_back(std::string(commandName) + " — " + std::to_string(dropped) +
-                " solid(s) excluded: transforming a solid is not supported yet. Erase and re-create it"
-                " at the position you want.");
+  if (solids != 0)
+    log.push_back(std::string(commandName) + " — " + std::to_string(solids) +
+                  " solid(s) excluded: a solid can only be moved whole. Use MOVE, or edit its faces"
+                  " and edges directly.");
+  if (pipeRuns != 0)
+    log.push_back(std::string(commandName) + " — " + std::to_string(pipeRuns) +
+                  " pipe run(s) excluded: a pipe run can only be moved whole. Use MOVE.");
 }
 
 /// REQ-103 MIRROR. Drops the three entity kinds a mirror cannot represent, and says why (REQ-201)
@@ -9416,10 +9590,8 @@ static void DropMirrorUnsupportedFromSelection(AppCommandState& st, std::vector<
 /// survey points are excluded rather than silently mis-duplicated or given a policy they were never
 /// built for.
 ///
-/// \c Solid is deliberately NOT dropped here (GitHub issue #400 increment 3 / D-2026-09-07-c):
-/// which array TYPE is chosen (Rectangular allows a solid, Polar still refuses one) is not known
-/// until AFTER selection, so the Polar-side exclusion happens later, at the 'p'/'polar' keystroke
-/// (\c HandleArrayText), not here.
+/// \c Solid and \c PipeRun are NOT dropped: both ARRAY forms copy them (D-2026-09-07-c for
+/// Rectangular, REQ-351 for Polar).
 static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ARRAY", log);
   size_t mesh = 0, pdf = 0;
@@ -9452,8 +9624,14 @@ static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<s
 static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float y0, float x1, float y1,
                                            std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
-  DropSolidsFromSelectionForTransform(st, "MIRROR", log);
   DropMirrorUnsupportedFromSelection(st, log);
+  // REQ-351: solids and pipe runs are mirrored across the vertical plane that contains the line.
+  {
+    const ray3d::Vec3 dir{static_cast<double>(x1) - x0, static_cast<double>(y1) - y0, 0.0};
+    const double len = ray3d::Length(dir);
+    const ray3d::Vec3 normal = len > 0.0 ? ray3d::Vec3{-dir.y / len, dir.x / len, 0.0} : ray3d::Vec3{};
+    MirrorSelectedSolidsAndPipeRuns(st, {static_cast<double>(x0), static_cast<double>(y0), 0.0}, normal, log);
+  }
 
   const size_t polyVertsBefore = st.userPolylineVerts.size();
   const size_t featureVertsBefore = st.featureLineVerts.size();
@@ -9712,67 +9890,6 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
     BumpCadGpuCache(st);
 }
 
-/// Apply \p op to every selected solid, replacing each rather than editing it, and report anything
-/// the kernel refuses by name (REQ-201, REQ-332 / TASK-231).
-///
-/// The de-duplication is `TranslateSelectedSolids`' and is load-bearing for the same reason: a
-/// selection should not hold one solid twice, and transforming it twice would turn or scale it twice
-/// — a defect that only shows up on the drawing where it happened.
-///
-/// A refusal leaves that solid EXACTLY as it was and does not abandon the rest of the selection. The
-/// kernel computes into a fresh solid and validates before returning (ADR-046 (d)), so there is no
-/// half-transformed state to roll back — the old `shared_ptr` is simply not replaced.
-template <typename Op>
-static void TransformSelectedSolids(AppCommandState& st, const char* commandName, Op op,
-                                    std::vector<std::string>& log) {
-  std::set<int> seen;
-  size_t refused = 0;
-  brep::Problem lastWhy = brep::Problem::Ok;
-  for (const SelectedEntity& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
-        static_cast<size_t>(e.index) >= st.cadSolids.size())
-      continue;
-    if (!seen.insert(e.index).second)
-      continue;
-    const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
-    if (!sp)
-      continue;
-    brep::Solid out;
-    brep::Problem why = brep::Problem::Ok;
-    if (!op(*sp, &out, &why)) {
-      ++refused;
-      lastWhy = why;
-      continue;
-    }
-    st.cadSolids[static_cast<size_t>(e.index)] = std::make_shared<const brep::Solid>(std::move(out));
-  }
-  // One line naming the LAST reason, not one line per solid. With several solids refused for
-  // different reasons that is lossy, and it is accepted here because the case is close to
-  // unreachable: the axis is normalized by both callers and the factor is clamped positive, so a
-  // refusal means `RotateResultInvalid` / `ScaleResultInvalid` — an isometry or a positive scale
-  // failing to validate, which cannot happen on a solid that was valid going in. This is a safety
-  // net that says something true if it ever fires, not a routine path.
-  if (refused != 0)
-    log.push_back(std::string(commandName) + " — " + std::to_string(refused) +
-                  " solid(s) unchanged: " + brep::ProblemText(lastWhy));
-}
-
-/// Turn every selected solid about the line through \p axisPoint with unit direction \p axisUnit
-/// (REQ-332 / TASK-231). Replaces REQ-322 item 6's blanket refusal for ROTATE.
-static void RotateSelectedSolids(AppCommandState& st, const ray3d::Vec3& axisPoint,
-                                 const ray3d::Vec3& axisUnit, float angleRad,
-                                 std::vector<std::string>& log) {
-  if (angleRad == 0.f)
-    return;
-  const double rad = static_cast<double>(angleRad);
-  TransformSelectedSolids(
-      st, "ROTATE",
-      [&](const brep::Solid& s, brep::Solid* out, brep::Problem* why) {
-        return brep::Rotate(s, axisPoint, axisUnit, rad, out, why);
-      },
-      log);
-}
-
 /// Scale every selected solid uniformly about \p basePoint (REQ-332 / TASK-231).
 ///
 /// **Uniform on every axis, including in plan view, where a 2D entity's elevation is left alone.**
@@ -9804,6 +9921,8 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
   // axis point's own Z is irrelevant to a rotation about a vertical line.
   RotateSelectedSolids(st, {static_cast<double>(bx), static_cast<double>(by), 0.0}, {0.0, 0.0, 1.0},
                        rad, log);
+  RotateSelectedPipeRuns(st, {static_cast<double>(bx), static_cast<double>(by), 0.0}, {0.0, 0.0, 1.0},
+                         rad, /*duplicate=*/false);  // REQ-351
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -9967,8 +10086,9 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
 /// rotate their stored plane normal, and an Arc re-anchors its start). Ellipse / Annotation / Table
 /// / BlockRef / PDF underlay / feature line / survey point are REFUSED by name — none stores a plane
 /// normal (the survey point has no 3D-rotate path yet), so tipping one out of world/UCS XY has no
-/// representable result today. Solids and surfaces are dropped by the shared helpers first, exactly
-/// as \c ApplyRotationToSelection does.
+/// representable result today. Surfaces are dropped by the shared helper first; solids turn through
+/// `brep::Rotate` (REQ-332) and pipe runs by their path (REQ-351), exactly as in
+/// \c ApplyRotationToSelection.
 static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
                                             const ray3d::Vec3& axisUnit, float angleRad,
                                             std::vector<std::string>& log) {
@@ -9976,6 +10096,7 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
   // The tilted-UCS twin of the branch in `ApplyRotationToSelection`: same kernel call, but about the
   // UCS Z axis this function was already given rather than world Z (REQ-332, amending REQ-322 item 6).
   RotateSelectedSolids(st, axisPoint, axisUnit, angleRad, log);
+  RotateSelectedPipeRuns(st, axisPoint, axisUnit, angleRad, /*duplicate=*/false);  // REQ-351
   const double rad = static_cast<double>(angleRad);
   const auto rotPt = [&](float x, float y, float z) -> ray3d::Vec3 {
     return ray3d::RotatePointAboutAxis({x, y, z}, axisPoint, axisUnit, rad);
@@ -10135,10 +10256,10 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
                                 std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MOVE", log);
   // Solids are NOT dropped any more (REQ-322): `brep::Translate` moves one completely, and doing so
-  // is the whole reason this function gained a Z. Every OTHER transform still drops them by name -
-  // rotating a solid means turning every surface frame and every arc-edge frame in its topology,
-  // which is a separate requirement rather than a footnote to this one.
+  // is the whole reason this function gained a Z. Pipe runs move with them (REQ-351).
   TranslateSelectedSolids(st, dx, dy, dz);
+  if (dx != 0.f || dy != 0.f || dz != 0.f)
+    TranslateSelectedPipeRuns(st, dx, dy, dz, /*duplicate=*/false);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 &&
@@ -10585,6 +10706,15 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
   // old behaviour, because SCALE refused solids outright until now. See ScaleSelectedSolids.
   ScaleSelectedSolids(st, {static_cast<double>(bx), static_cast<double>(by), static_cast<double>(bz)},
                       sc, log);
+  // A pipe run's ROUTE scales in 3D, like a solid; its size does not — a 4in pipe scaled is a longer
+  // 4in pipe, because the size is a catalog part (REQ-351, D-2026-09-28-f).
+  if (sc != 1.f) {
+    const ray3d::Vec3 base{static_cast<double>(bx), static_cast<double>(by), static_cast<double>(bz)};
+    const double k = static_cast<double>(sc);
+    TransformSelectedPipeRuns(
+        st, [&](const ray3d::Vec3& p) { return ray3d::Add(base, ray3d::Scale(ray3d::Sub(p, base), k)); },
+        /*duplicate=*/false);
+  }
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -11275,7 +11405,6 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
   if (st.rotateCopyMode) {
     if (tilted) {
       DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
-      DropSolidsFromSelectionForTransform(st, "ROTATE", log);
       const ucs::Ucs u = CadActiveUcsStorage(st);
       const ray3d::Vec3 axisUnit =
           ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
@@ -11287,7 +11416,7 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
                       " survey point(s) not duplicated: rotation about a tilted axis is not"
                       " supported yet (REQ-328).");
     } else {
-      DuplicateCadSelectionRotated(st, bx, by, rad);
+      DuplicateCadSelectionRotated(st, bx, by, rad, log);
     }
     st.rotateCopyMode = false;
     st.active = K::None;
@@ -11520,30 +11649,6 @@ static void ArrayCellWorldDelta(const AppCommandState& st, float colOffset, floa
   *dz = static_cast<float>(world.z);
 }
 
-/// GitHub issue #400 increment 3 / D-2026-09-07-c: duplicate every selected \c Solid at
-/// (dx,dy,dz) via `brep::Translate`, exactly the operation REQ-322's `TranslateSelectedSolids`
-/// already uses for MOVE — the difference is APPENDING a fresh `CadSolidPtr` (a new instance)
-/// instead of replacing the selected one in place (a move). A dedicated helper, not folded into
-/// the shared `DuplicateCadSelectionTranslated` (also used by COPY): COPY was never part of this
-/// decision, and giving it solid support as an unannounced side effect would be exactly the
-/// silent scope creep CLAUDE.md warns against — REQ-322 item 6 names ARRAY specifically.
-static void DuplicateSelectedSolidsTranslated(AppCommandState& st, float dx, float dy, float dz) {
-  for (const SelectedEntity& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
-        static_cast<size_t>(e.index) >= st.cadSolids.size())
-      continue;
-    const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
-    if (!sp)
-      continue;
-    st.cadSolids.push_back(std::make_shared<const brep::Solid>(
-        brep::Translate(*sp, ray3d::Vec3{static_cast<double>(dx), static_cast<double>(dy),
-                                         static_cast<double>(dz)})));
-    st.cadSolidAttrs.push_back(DuplicatedEntityAttrs(
-        static_cast<size_t>(e.index) < st.cadSolidAttrs.size() ? st.cadSolidAttrs[static_cast<size_t>(e.index)]
-                                                               : EntityAttributes{}));
-  }
-}
-
 /// Rectangular commit: the original selection occupies cell (0,0); every other cell is produced by
 /// looping the EXISTING \c DuplicateCadSelectionTranslated (already used by COPY) — no new
 /// per-type duplication code. One \c PushUndoSnapshot for the whole grid (REQ-305 acceptance 8).
@@ -11561,8 +11666,7 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
         ArrayCellWorldDelta(st, static_cast<float>(c) * st.arrayColSpacing,
                            static_cast<float>(r) * st.arrayRowSpacing, &dx, &dy, &dz,
                            static_cast<float>(lv) * st.arrayLevelSpacing);
-        DuplicateCadSelectionTranslated(st, dx, dy, dz);
-        DuplicateSelectedSolidsTranslated(st, dx, dy, dz);  // GitHub issue #400 increment 3
+        DuplicateCadSelectionTranslated(st, dx, dy, dz);  // solids and pipe runs too (REQ-351)
       }
     }
   }
@@ -11635,11 +11739,8 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
       // whether that refusal even applies depends on Rotate-items (Yes rotates orientation and
       // needs it; No only translates and has no such gap), which is not chosen until later.
       //
-      // GitHub issue #400 increment 3 / D-2026-09-07-c: Polar still refuses a solid — it would need
-      // to TURN it, and no capability to rotate a brep::Solid about any axis exists yet. Dropped
-      // here rather than at PickSelection (`DropArrayUnsupportedFromSelection`) because Rectangular
-      // does not need this exclusion at all, and the array type is not known until now.
-      DropSolidsFromSelectionForTransform(st, "ARRAY Polar", log);
+      // Solids and pipe runs are arrayed too (REQ-351, lifting D-2026-09-07-c's Polar refusal):
+      // `RotateSelectionAboutAxis` and `DuplicateCadSelectionTranslated` copy both.
       st.arrayType = AT::Polar;
       st.arrayPhase = AP::Polar_WaitCenter;
       log.push_back("ARRAY Polar — specify center point:");
@@ -24772,6 +24873,56 @@ void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool 
   }
 }
 
+/// Remove every selected solid and pipe run (and a deleted run's place in its piping network).
+/// Shared by ERASE and MIRROR's erase-source (REQ-351), which each push their own one undo
+/// snapshot before calling it.
+static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
+  // B-rep solids (REQ-313) — the caller has already pushed one snapshot for this whole erase, so
+  // removing the pointer here is that one undo step, exactly as it is for a mesh in ERASE. The
+  // tessellation cache is NOT touched: its entries key on a weak_ptr, so the erased solid's entry
+  // simply expires and is reaped by the next refresh.
+  std::set<int> solidIx;
+  const size_t nSolid = st.cadSolids.size();
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && static_cast<size_t>(e.index) < nSolid)
+      solidIx.insert(e.index);
+  }
+  std::vector<int> sov(solidIx.begin(), solidIx.end());
+  std::sort(sov.begin(), sov.end(), std::greater<int>());
+  for (int idx : sov) {
+    st.cadSolids.erase(st.cadSolids.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadSolidAttrs.size())
+      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  // Pipe runs (issue #486) — same shape as the B-rep solids just above: display-and-erase only,
+  // the caller's one undo snapshot already covers this removal.
+  std::set<int> pipeRunIx;
+  const size_t nPipeRun = st.cadPipeRuns.size();
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::PipeRun && e.index >= 0 && static_cast<size_t>(e.index) < nPipeRun)
+      pipeRunIx.insert(e.index);
+  }
+  std::vector<int> prv(pipeRunIx.begin(), pipeRunIx.end());
+  std::sort(prv.begin(), prv.end(), std::greater<int>());
+  for (int idx : prv) {
+    st.cadPipeRuns.erase(st.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadPipeRunAttrs.size())
+      st.cadPipeRunAttrs.erase(st.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    // Piping networks (issue #486 increment B3 / REQ-345) reference cadPipeRuns by index — a
+    // deleted run drops out of whichever network held it, and every index above it shifts down by
+    // one, the same reindexing a std::vector erase itself just did to cadPipeRuns.
+    for (CadPipingSystem& sys : st.cadPipingSystems) {
+      auto& runs = sys.pipeRunIndices;
+      runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
+      for (int& ri : runs) {
+        if (ri > idx)
+          --ri;
+      }
+    }
+  }
+}
+
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) {
   if (st.selection.empty())
     return;
@@ -24947,50 +25098,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
       st.cadPointCloudAttrs.erase(st.cadPointCloudAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
-  // B-rep solids (REQ-313) — the caller has already pushed one snapshot for this whole erase, so
-  // removing the pointer here is that one undo step, exactly as it is for a mesh above. The
-  // tessellation cache is NOT touched: its entries key on a weak_ptr, so the erased solid's entry
-  // simply expires and is reaped by the next refresh.
-  std::set<int> solidIx;
-  const size_t nSolid = st.cadSolids.size();
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && static_cast<size_t>(e.index) < nSolid)
-      solidIx.insert(e.index);
-  }
-  std::vector<int> sov(solidIx.begin(), solidIx.end());
-  std::sort(sov.begin(), sov.end(), std::greater<int>());
-  for (int idx : sov) {
-    st.cadSolids.erase(st.cadSolids.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.cadSolidAttrs.size())
-      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  // Pipe runs (issue #486) — same shape as the B-rep solids just above: display-and-erase only,
-  // the caller's one undo snapshot already covers this removal.
-  std::set<int> pipeRunIx;
-  const size_t nPipeRun = st.cadPipeRuns.size();
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::PipeRun && e.index >= 0 && static_cast<size_t>(e.index) < nPipeRun)
-      pipeRunIx.insert(e.index);
-  }
-  std::vector<int> prv(pipeRunIx.begin(), pipeRunIx.end());
-  std::sort(prv.begin(), prv.end(), std::greater<int>());
-  for (int idx : prv) {
-    st.cadPipeRuns.erase(st.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.cadPipeRunAttrs.size())
-      st.cadPipeRunAttrs.erase(st.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-    // Piping networks (issue #486 increment B3 / REQ-345) reference cadPipeRuns by index — a
-    // deleted run drops out of whichever network held it, and every index above it shifts down by
-    // one, the same reindexing a std::vector erase itself just did to cadPipeRuns.
-    for (CadPipingSystem& sys : st.cadPipingSystems) {
-      auto& runs = sys.pipeRunIndices;
-      runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
-      for (int& ri : runs) {
-        if (ri > idx)
-          --ri;
-      }
-    }
-  }
+  EraseSelectedSolidsAndPipeRuns(st);  // REQ-313 / issue #486; shared with MIRROR's erase-source
 
   // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
   // pushed one snapshot for this whole erase, so removing it here is that one step).
@@ -25046,7 +25154,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
 /// \c st.selection is what survived \c DuplicateCadSelectionReflected's exclusion filtering (those
 /// four kinds already stripped, with a logged reason).
 static void EraseMirroredSourceNoUndo(AppCommandState& st) {
-  std::set<int> lineIx, circIx, annIx, arcIx, ellIx, polyIx, flIx;
+  std::set<int> lineIx, circIx, annIx, arcIx, ellIx, polyIx, flIx, tableIx, blockIx;
   const size_t nLines = st.userLinesFlat.size() / 6;
   const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
   const size_t nAnn = st.cadAnnotations.size();
@@ -25069,6 +25177,14 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
       polyIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 && static_cast<size_t>(e.index) < nFl)
       flIx.insert(e.index);
+    // Tables and block references (a pipe fitting is one) are mirrored by the flat path, so
+    // erase-source must remove their originals too (REQ-351).
+    else if (e.type == SelectedEntity::Type::Table && e.index >= 0 &&
+             static_cast<size_t>(e.index) < st.cadTables.size())
+      tableIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::BlockRef && e.index >= 0 &&
+             static_cast<size_t>(e.index) < st.cadBlockRefs.size())
+      blockIx.insert(e.index);
   }
 
   std::vector<int> pv(polyIx.begin(), polyIx.end());
@@ -25080,6 +25196,22 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
   std::sort(flv.begin(), flv.end(), std::greater<int>());
   for (int idx : flv)
     EraseFeatureLineByIndex(st, idx);
+
+  // REQ-351: MIRROR now mirrors solids and pipe runs, so erase-source must remove their originals.
+  EraseSelectedSolidsAndPipeRuns(st);
+
+  std::vector<int> tv(tableIx.begin(), tableIx.end());
+  std::sort(tv.begin(), tv.end(), std::greater<int>());
+  for (int idx : tv)
+    EraseCadTableAtIndex(st, static_cast<size_t>(idx));
+
+  std::vector<int> bv(blockIx.begin(), blockIx.end());
+  std::sort(bv.begin(), bv.end(), std::greater<int>());
+  for (int idx : bv) {
+    st.cadBlockRefs.erase(st.cadBlockRefs.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadBlockRefAttrs.size())
+      st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
 
   std::vector<int> lv(lineIx.begin(), lineIx.end());
   std::sort(lv.begin(), lv.end(), std::greater<int>());
@@ -25162,14 +25294,15 @@ static void EraseSelectedSurveyPointsNoUndo(AppCommandState& st) {
 /// handedness — its own geometry problem), Ellipse / Annotation / Table / BlockRef / feature line
 /// (no stored plane normal, or a 2D-only duplication helper — the exact boundary REQ-328 item 2
 /// drew) and survey points (the 2D duplicate-ID modal) are REFUSED by name under a tilted mirror
-/// plane. Under the World UCS (and any plan-rotated UCS) `FinishMirrorCommand` never calls this —
-/// the flat `DuplicateCadSelectionReflected` runs unchanged.
+/// plane. Solids (`brep::Mirror`) and pipe runs (their path) are mirrored across any plane (REQ-351).
+/// Under the World UCS (and any plan-rotated UCS) `FinishMirrorCommand` never calls this — the flat
+/// `DuplicateCadSelectionReflected` runs unchanged.
 static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const ray3d::Vec3& planePt,
                                                       const ray3d::Vec3& planeUnit,
                                                       std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
-  DropSolidsFromSelectionForTransform(st, "MIRROR", log);
   DropMirrorUnsupportedFromSelection(st, log);  // FilledRegion / Mesh / PdfUnderlay
+  MirrorSelectedSolidsAndPipeRuns(st, planePt, planeUnit, log);  // REQ-351
   const auto rp = [&](float x, float y, float z) {
     return ray3d::ReflectPointAcrossPlane({x, y, z}, planePt, planeUnit);
   };
