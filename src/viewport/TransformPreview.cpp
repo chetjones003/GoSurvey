@@ -1883,26 +1883,32 @@ void BuildGizmoOverlay(const AppCommandState& cmd, CadGizmoOverlay* out) {
   // ROTATE: a RING in the plane the rotation happens in, rather than an arrow. An arrow says "drag
   // along me" and this gesture is "drag around me" — the widget has to state which, because the two
   // read identically once the view is orbited.
-  if (cmd.gizmoOp == CadGizmoOp::Rotate && axisCount == 1) {
-    const ray3d::Vec3 n = cmd.gizmoDragActive ? cmd.gizmoAxisDir : CadGizmoAxisWorld(cmd, 0);
-    // The ring's own frame, built from the AXIS and not the camera, so it does not swim when the
-    // view orbits — the same choice the arrowheads below make.
-    ray3d::Vec3 seed{0.0, 0.0, 1.0};
-    if (std::fabs(ray3d::Dot(n, seed)) > 0.9)
-      seed = ray3d::Vec3{1.0, 0.0, 0.0};
-    const ray3d::Vec3 e0 = ray3d::Normalize(ray3d::Cross(seed, n));
-    const ray3d::Vec3 e1 = ray3d::Cross(n, e0);
+  //
+  // THREE rings, one per active-UCS axis, each in the plane perpendicular to it and in that axis's
+  // colour (D-2026-09-28-b, the AutoCAD 3DROTATE widget the user asked for).
+  if (cmd.gizmoOp == CadGizmoOp::Rotate) {
     constexpr int kRingSegs = 64;
     constexpr double kTwoPi = 6.28318530717958647692;
-    out->hot[0] = (cmd.gizmoDragActive || cmd.gizmoHoverAxis == 0);
-    ray3d::Vec3 prev{};
-    for (int i = 0; i <= kRingSegs; ++i) {
-      const double th = kTwoPi * static_cast<double>(i) / static_cast<double>(kRingSegs);
-      const ray3d::Vec3 p = ray3d::Add(
-          anchor, ray3d::Add(ray3d::Scale(e0, std::cos(th) * len), ray3d::Scale(e1, std::sin(th) * len)));
-      if (i > 0)
-        GizmoSeg(&out->axis[0], prev, p);
-      prev = p;
+    for (int a = 0; a < axisCount; ++a) {
+      const ray3d::Vec3 n = (cmd.gizmoDragActive && a == cmd.gizmoDragAxis) ? cmd.gizmoAxisDir
+                                                                           : CadGizmoAxisWorld(cmd, a);
+      // The ring's own frame, built from the AXIS and not the camera, so it does not swim when the
+      // view orbits — the same choice the arrowheads below make.
+      ray3d::Vec3 seed{0.0, 0.0, 1.0};
+      if (std::fabs(ray3d::Dot(n, seed)) > 0.9)
+        seed = ray3d::Vec3{1.0, 0.0, 0.0};
+      const ray3d::Vec3 e0 = ray3d::Normalize(ray3d::Cross(seed, n));
+      const ray3d::Vec3 e1 = ray3d::Cross(n, e0);
+      out->hot[a] = (a == lit);
+      ray3d::Vec3 prev{};
+      for (int i = 0; i <= kRingSegs; ++i) {
+        const double th = kTwoPi * static_cast<double>(i) / static_cast<double>(kRingSegs);
+        const ray3d::Vec3 p = ray3d::Add(
+            anchor, ray3d::Add(ray3d::Scale(e0, std::cos(th) * len), ray3d::Scale(e1, std::sin(th) * len)));
+        if (i > 0)
+          GizmoSeg(&out->axis[a], prev, p);
+        prev = p;
+      }
     }
     return;  // no arrow shafts, no drag guide: a rotation has no track to slide along
   }
@@ -1961,6 +1967,51 @@ void BuildGizmoDragGhost(const AppCommandState& cmd, std::vector<float>* outLine
     AppendEntityHighlight(cmd, e, outLines, outCircles);
   const double d = cmd.gizmoDragDistance;
   const ray3d::Vec3 u = cmd.gizmoAxisDir;
+  // ROTATE and SCALE move every point about the anchor rather than along the axis. This ghost used
+  // to translate for them too — by an angle, or by a factor, read as a distance — which a single
+  // UCS-Z ring in plan view hid (the slide was along the view direction) and the X/Y rings of
+  // D-2026-09-28-b would have shown as the selection sliding sideways while the user turned it.
+  if (cmd.gizmoOp != CadGizmoOp::Translate) {
+    const ray3d::Vec3 c = cmd.gizmoAnchor;
+    const bool rot = cmd.gizmoOp == CadGizmoOp::Rotate;
+    const auto xf = [&](const ray3d::Vec3& p) {
+      return rot ? ray3d::RotatePointAboutAxis(p, c, u, d)
+                 : ray3d::Add(c, ray3d::Scale(ray3d::Sub(p, c), d));
+    };
+    for (size_t i = 0; i + 2 < outLines->size(); i += 3) {
+      const ray3d::Vec3 p = xf({(*outLines)[i], (*outLines)[i + 1], (*outLines)[i + 2]});
+      (*outLines)[i] = static_cast<float>(p.x);
+      (*outLines)[i + 1] = static_cast<float>(p.y);
+      (*outLines)[i + 2] = static_cast<float>(p.z);
+    }
+    // A circle is carried flat, as (cx, cy, z, r). A scale or a turn about a vertical axis keeps it
+    // flat; a turn about a tilted axis does not, so that one is drawn as chords, turned.
+    std::vector<float> keep;
+    const bool staysFlat = !rot || std::fabs(u.z) > 0.9999;
+    constexpr int kChords = 48;
+    constexpr double kTwoPi = 6.28318530717958647692;
+    for (size_t i = 0; i + 3 < outCircles->size(); i += 4) {
+      const ray3d::Vec3 ctr{(*outCircles)[i], (*outCircles)[i + 1], (*outCircles)[i + 2]};
+      const double r = (*outCircles)[i + 3];
+      if (staysFlat) {
+        const ray3d::Vec3 nc = xf(ctr);
+        keep.insert(keep.end(), {static_cast<float>(nc.x), static_cast<float>(nc.y),
+                                 static_cast<float>(nc.z), static_cast<float>(rot ? r : r * d)});
+        continue;
+      }
+      ray3d::Vec3 prev = xf({ctr.x + r, ctr.y, ctr.z});
+      for (int k = 1; k <= kChords; ++k) {
+        const double th = kTwoPi * static_cast<double>(k) / static_cast<double>(kChords);
+        const ray3d::Vec3 p = xf({ctr.x + r * std::cos(th), ctr.y + r * std::sin(th), ctr.z});
+        outLines->insert(outLines->end(),
+                         {static_cast<float>(prev.x), static_cast<float>(prev.y), static_cast<float>(prev.z),
+                          static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)});
+        prev = p;
+      }
+    }
+    *outCircles = std::move(keep);
+    return;
+  }
   const float dx = static_cast<float>(d * u.x);
   const float dy = static_cast<float>(d * u.y);
   const float dz = static_cast<float>(d * u.z);

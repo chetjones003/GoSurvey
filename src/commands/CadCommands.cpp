@@ -11082,6 +11082,13 @@ void ApplyRotationAboutUcsZ(AppCommandState& st, float bx, float by, float bz, f
   ApplyRotationToSelection(st, bx, by, rad, log);
 }
 
+void ApplyRotationAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                            const ray3d::Vec3& axisUnit, float rad, std::vector<std::string>& log) {
+  // The in-place arbitrary-axis turn typed ROTATE already uses under a tilted UCS — so every type it
+  // turns, it turns here, and every type it refuses by name (REQ-201) is refused here too.
+  RotateSelectionInPlaceAboutAxis(st, axisPoint, ray3d::Normalize(axisUnit), rad, log);
+}
+
 void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float bz, float sc,
                                 std::vector<std::string>& log) {
   ApplyScaleToSelection(st, bx, by, bz, sc, log);
@@ -14063,11 +14070,12 @@ CadGizmoMode CadGizmoModeFor(const AppCommandState& st) {
 int CadGizmoAxisCountFor(const AppCommandState& st) {
   switch (CadGizmoModeFor(st)) {
   case CadGizmoMode::Entity:
-    // THREE only for translate. Rotate gets ONE ring because typed ROTATE is UCS-Z-only (REQ-329:
-    // "a full ROTATE3D is a separate future issue"), and scale gets ONE handle because typed SCALE
-    // and `brep::Scale` are uniform. In both cases a second handle would advertise an edit with no
-    // equivalent typed command, which is exactly what REQ-060's second acceptance bullet forbids.
-    return st.gizmoOp == CadGizmoOp::Translate ? kGizmoAxisCount : 1;
+    // THREE to move and THREE to turn — one ring per active-UCS axis (D-2026-09-28-b, the user's
+    // AutoCAD-3DROTATE reference; it replaces TASK-232's single UCS-Z ring). The Z ring commits
+    // through typed ROTATE's own function, so REQ-060's agreement holds there unchanged; the X and Y
+    // rings are 3DROTATE's arbitrary-axis turn (issue #564 §4), typed as "grab a ring, type an angle".
+    // Scale keeps ONE handle because typed SCALE and `brep::Scale` are uniform.
+    return st.gizmoOp == CadGizmoOp::Scale ? 1 : kGizmoAxisCount;
   case CadGizmoMode::SubObjectFace:
     // ONE, because `brep::PushPullFace` takes a distance along the face normal and nothing else. A
     // second handle would name a direction the kernel cannot move the face in.
@@ -14278,14 +14286,12 @@ ray3d::Vec3 CadGizmoAxisWorld(const AppCommandState& st, int axis) {
   // would be the only thing in the viewport pointing somewhere else. In the World UCS — the default,
   // and what every existing drawing has — the two are identical.
   const ucs::Ucs& u = st.activeUcs;
-  // ROTATE: the single handle is the UCS Z axis — the ring's own normal, and the only axis typed
-  // ROTATE can turn about. SCALE: the single handle is the UCS X axis, and it is a DIRECTION TO
-  // DRAG ALONG rather than an axis of the transform, because a uniform scale has no axis. Which one
-  // it is does not affect the result; it only has to be somewhere pickable and deterministic.
+  // ROTATE: ring `axis` turns about UCS axis `axis` — the ring's own normal (D-2026-09-28-b).
+  // SCALE: the single handle is the UCS X axis, and it is a DIRECTION TO DRAG ALONG rather than an
+  // axis of the transform, because a uniform scale has no axis. Which one it is does not affect the
+  // result; it only has to be somewhere pickable and deterministic.
   int pick = axis;
-  if (st.gizmoOp == CadGizmoOp::Rotate)
-    pick = 2;
-  else if (st.gizmoOp == CadGizmoOp::Scale)
+  if (st.gizmoOp == CadGizmoOp::Scale)
     pick = 0;
   const ray3d::Vec3 v = pick == 0 ? u.xAxis : pick == 1 ? u.yAxis : u.zAxis;
   const double len = ray3d::Length(v);
@@ -14395,15 +14401,38 @@ int PickGizmoAxis(const AppCommandState& st, const ray3d::Ray& ray, double tolWo
   // and ask how far the hit is from the ring's radius. Running the segment test below on it would
   // grab along the UCS Z AXIS — the one line the ring never occupies — so the widget would be
   // ungrabbable everywhere it is drawn and grabbable where it is not.
-  if (st.gizmoOp == CadGizmoOp::Rotate && axisCount == 1) {
-    const ray3d::Vec3 n = CadGizmoAxisWorld(st, 0);
-    const double denom = ray3d::Dot(n, d);
-    if (std::fabs(denom) < 1.e-6)
-      return -1;  // looking along the ring's plane: it projects to a line and cannot be aimed at
-    const double t = ray3d::Dot(n, ray3d::Sub(anchor, ray.origin)) / denom;
-    const ray3d::Vec3 hit = ray3d::Add(ray.origin, ray3d::Scale(d, t));
-    const double r = ray3d::Length(ray3d::Sub(hit, anchor));
-    return std::fabs(r - len) <= tolWorld ? 0 : -1;
+  //
+  // With three rings (D-2026-09-28-b) the test is the distance from the RAY to each ring, measured
+  // at sample points round it, so an obliquely-seen ring is judged by how close it looks rather than
+  // by where the ray happens to pierce its plane. The nearest ring within the aperture wins.
+  if (st.gizmoOp == CadGizmoOp::Rotate) {
+    constexpr int kRingSamples = 96;
+    constexpr double kTwoPi = 6.28318530717958647692;
+    for (int axis = 0; axis < axisCount; ++axis) {
+      const ray3d::Vec3 n = CadGizmoAxisWorld(st, axis);
+      // Seen (nearly) edge-on, a ring is a line on screen and a drag round it names no angle —
+      // `CadAxisDragAngle` would refuse or jitter — so it is not offered as a target at all.
+      if (std::fabs(ray3d::Dot(n, d)) < kGizmoRingEdgeOnCos)
+        continue;
+      ray3d::Vec3 seed{0.0, 0.0, 1.0};
+      if (std::fabs(ray3d::Dot(n, seed)) > 0.9)
+        seed = ray3d::Vec3{1.0, 0.0, 0.0};
+      const ray3d::Vec3 e0 = ray3d::Normalize(ray3d::Cross(seed, n));
+      const ray3d::Vec3 e1 = ray3d::Cross(n, e0);
+      for (int i = 0; i < kRingSamples; ++i) {
+        const double th = kTwoPi * static_cast<double>(i) / static_cast<double>(kRingSamples);
+        const ray3d::Vec3 p = ray3d::Add(
+            anchor, ray3d::Add(ray3d::Scale(e0, std::cos(th) * len), ray3d::Scale(e1, std::sin(th) * len)));
+        const ray3d::Vec3 rel = ray3d::Sub(p, ray.origin);
+        const double along = ray3d::Dot(rel, d);
+        const double dist = ray3d::Length(ray3d::Sub(rel, ray3d::Scale(d, along)));
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = axis;
+        }
+      }
+    }
+    return best;
   }
 
   for (int axis = 0; axis < axisCount; ++axis) {
@@ -14518,11 +14547,16 @@ static bool CommitGizmoDragImpl(AppCommandState& st, std::vector<std::string>& l
     // ONE undo snapshot for the whole drag, and then the SAME function typed ROTATE calls — dispatch
     // included, so the agreement holds under a tilted UCS as well as in plan (REQ-060 acceptance 2).
     PushUndoSnapshot(st, "Rotate");
-    ApplyRotationAboutUcsZ(st, static_cast<float>(anchor.x), static_cast<float>(anchor.y),
-                           static_cast<float>(anchor.z), static_cast<float>(dist), log);
+    // The Z ring is typed ROTATE exactly (REQ-060's agreement, byte-identical in plan); the X and Y
+    // rings turn about their own UCS axis through the same anchor (D-2026-09-28-b).
+    if (axis == 2)
+      ApplyRotationAboutUcsZ(st, static_cast<float>(anchor.x), static_cast<float>(anchor.y),
+                             static_cast<float>(anchor.z), static_cast<float>(dist), log);
+    else
+      ApplyRotationAboutAxis(st, anchor, u, static_cast<float>(dist), log);
     char rbuf[128];
-    std::snprintf(rbuf, sizeof(rbuf), "Gizmo rotate: %.4f degrees about the UCS Z axis.",
-                  dist * 180.0 / 3.14159265358979323846);
+    std::snprintf(rbuf, sizeof(rbuf), "Gizmo rotate: %.4f degrees about the UCS %s axis.",
+                  dist * 180.0 / 3.14159265358979323846, axis == 0 ? "X" : axis == 1 ? "Y" : "Z");
     log.push_back(rbuf);
     return true;
   }
@@ -14700,6 +14734,9 @@ std::string CadGizmoCommandPromptText(const AppCommandState& st) {
     return verb + " — click to place, or type " + what + " and Enter. ESC cancels.";
   if (CadGizmoAxisCountFor(st) == 1)
     return verb + " — drag the handle, or type " + what + " and Enter. ESC cancels.";
+  if (st.gizmoOp == CadGizmoOp::Rotate)
+    return verb + " — click a ring (X red, Y green, Z blue) to turn about that UCS axis, then "
+                  "click to place or type " + what + ". ESC cancels.";
   return verb + " — click an axis handle to drag it, then click to place or type " + what +
          ". ESC cancels.";
 }
@@ -14804,7 +14841,11 @@ bool HandleGizmoCommandTextInput(const std::string& lineIn, AppCommandState& st,
   if (!st.gizmoDragActive) {
     // With several handles, a bare number does not say which way; with one, it does.
     if (CadGizmoAxisCountFor(st) != 1) {
-      log.push_back(verb + " — click the axis handle to move along first, then type the distance.");
+      log.push_back(st.gizmoOp == CadGizmoOp::Rotate
+                        ? verb + " — click the ring to turn about first (X red, Y green, Z blue), "
+                                 "then type the angle."
+                        : verb + " — click the axis handle to move along first, then type the "
+                                 "distance.");
       return true;
     }
     ray3d::Vec3 anchor{};

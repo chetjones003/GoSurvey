@@ -6784,6 +6784,12 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
 void ApplyRotationAboutUcsZ(AppCommandState& st, float bx, float by, float bz, float rad,
                             std::vector<std::string>& log);
 
+/// Rotate the whole selection in place by \p rad about the line through \p axisPoint along
+/// \p axisUnit — the rotate gizmo's X and Y rings (D-2026-09-28-b). The same in-place 3D turn typed
+/// ROTATE uses under a tilted UCS, with the same refusals. The caller owns the undo snapshot.
+void ApplyRotationAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                            const ray3d::Vec3& axisUnit, float rad, std::vector<std::string>& log);
+
 /// Scale the whole selection uniformly by \p sc about (\p bx, \p by, \p bz) — the complete typed
 /// SCALE transform (REQ-329 increment 3, REQ-332 increment 2). The caller owns the undo snapshot.
 ///
@@ -6844,6 +6850,10 @@ inline constexpr int kGizmoAxisCount = 3;
 inline constexpr float kGizmoHandleLenPx = 70.f;
 /// Grab aperture around a handle, in screen pixels.
 inline constexpr float kGizmoHandleGrabPx = 7.f;
+/// A rotate ring whose normal is within this cosine of perpendicular to the view ray is seen
+/// (nearly) edge-on — a line on screen, round which a drag names no angle — so it is not pickable.
+/// About 5 degrees (D-2026-09-28-b).
+inline constexpr double kGizmoRingEdgeOnCos = 0.09;
 
 /// Where the gizmo hangs, in WCS. False when there is nothing for it to hang off.
 ///

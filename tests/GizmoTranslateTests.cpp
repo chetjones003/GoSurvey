@@ -312,7 +312,7 @@ TEST_CASE("Gizmo: 3DROTATE borrows the op and gives it back (issue #564)", "[giz
   std::vector<std::string> log;
   StartGizmoCommand(st, AppCommandState::Kind::Rotate3d, log);
   CHECK(st.gizmoOp == CadGizmoOp::Rotate);
-  CHECK(CadGizmoAxisCountFor(st) == 1);
+  CHECK(CadGizmoAxisCountFor(st) == 3);  // three rings (D-2026-09-28-b)
   // A different command started over it (a ribbon button) still hands the op back.
   StartMoveCommand(st, log);
   CHECK(st.active == AppCommandState::Kind::Move);

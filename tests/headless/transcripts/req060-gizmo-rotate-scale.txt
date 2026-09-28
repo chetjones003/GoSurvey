@@ -36,10 +36,12 @@ EXPECT LOG "unknown mode"
 EXPECT GIZMOOP 0
 CHECK ALL
 
-# --- Handle counts: three to move, ONE to turn, ONE to resize -------------------------------------
-# Not an implementation detail. A ring on UCS X or Y would have no typed command to agree with
-# (typed ROTATE is UCS-Z-only, REQ-329), and a per-axis scale handle would advertise a non-uniform
-# scale the representation cannot hold (REQ-332 item 7). The counts ARE that decision.
+# --- Handle counts: three to move, THREE to turn, ONE to resize -------------------------------------
+# Not an implementation detail. ROTATE has one ring per UCS axis (D-2026-09-28-b, replacing the
+# single UCS-Z ring): the Z ring is typed ROTATE exactly, and the X and Y rings are 3DROTATE's turn
+# about those axes. A per-axis scale handle would advertise a non-uniform scale the representation
+# cannot hold (REQ-332 item 7). The counts ARE those decisions. The rings are numbered by axis, so
+# the Z ring — the only one seen face-on in plan — is handle 2.
 NEW
 CMD LINE
 CMD 10,0
@@ -50,7 +52,7 @@ EXPECT SELECTED 1
 CMD GIZMO MOVE
 EXPECT GIZMOAXES 3
 CMD GIZMO ROTATE
-EXPECT GIZMOAXES 1
+EXPECT GIZMOAXES 3
 EXPECT GIZMO 1
 CMD GIZMO SCALE
 EXPECT GIZMOAXES 1
@@ -81,7 +83,7 @@ BOX 5 -5 25 5
 EXPECT SELECTED 1
 CMD GIZMO ROTATE
 GIZMO GRAB 15 -10 0
-EXPECT GIZMOAXIS 0
+EXPECT GIZMOAXIS 2
 GIZMO DROP 25 0 0
 EXPECT LINEXYZ 0 15 -5 0 15 5 0
 UNDO

@@ -2126,6 +2126,20 @@ requirements is a planning failure, not a sign of rigor.
     - `Esc` restores the pre-command state exactly; `Ctrl+Z` after a commit undoes the whole operation;
     - the handles keep their axis colours (X red / Y green / Z blue) and the face-normal handle its
       purple — the overlay is unchanged.
+- **Amendment 2026-09-28 (D-2026-09-28-b) — the rotate gizmo has three rings.** The "ONE ring, about
+  the active UCS Z" count recorded above for TASK-232 is replaced: ROTATE draws **one ring per active-UCS
+  axis**, X red / Y green / Z blue, each grabbable. The **Z ring** commits through
+  `ApplyRotationAboutUcsZ` — typed ROTATE, so the second acceptance bullet holds for it exactly as
+  before. The **X and Y rings** commit through `ApplyRotationAboutAxis`, the in-place arbitrary-axis
+  turn typed ROTATE already uses under a tilted UCS, with its refusals (REQ-201). With three rings a
+  typed angle needs a ring grabbed first. A ring seen within about 5° of edge-on is not pickable
+  (`kGizmoRingEdgeOnCos`): on screen it is a line, round which a drag names no angle. The drag ghost
+  rotates / scales the preview rather than sliding it.
+  - Additional acceptance:
+    - 3DROTATE (and `GIZMO ROTATE`) shows three rings in the axis colours, following the active UCS;
+    - dragging, or grabbing and typing an angle on, the X / Y / Z ring turns the selection about that
+      UCS axis through the gizmo's anchor; one undo per operation;
+    - the Z ring's result agrees with typed ROTATE (unchanged).
 
 ### REQ-061 — Per-viewport camera in paper space
 - Purpose: put a plan view and an isometric on the same sheet

@@ -76,6 +76,22 @@ The first build of the select step accepted clicks but a window selection select
 `SubmitViewportPickImpl` has a per-command branch that closes the fence, and the new Kinds had none.
 The GUI goes through the same function, so it would have shipped broken.
 
+## Follow-up in the same PR: three rotate rings (D-2026-09-28-b)
+
+The user asked for AutoCAD's 3DROTATE widget (screenshot): three rings, X red / Y green / Z blue,
+following the active UCS.
+- `CadGizmoAxisCountFor` → 3 for Rotate; `CadGizmoAxisWorld` ring `a` = UCS axis `a`.
+- `PickGizmoAxis` measures the ray's distance to each ring at 96 samples; rings within
+  `kGizmoRingEdgeOnCos` of edge-on are skipped.
+- Commit: ring 2 (Z) → `ApplyRotationAboutUcsZ` (typed ROTATE); rings 0/1 → new public
+  `ApplyRotationAboutAxis` (the in-place arbitrary-axis turn, same refusals).
+- Overlay draws three rings, coloured by axis in the renderer.
+- `BuildGizmoDragGhost` rotates / scales the preview instead of translating it by an angle or factor
+  (latent bug the single plan-view ring hid).
+- Tests: X-ring drag in unit tests; edge-on ring is not a target; transcript X-ring turn in an orbited
+  view with typed 90°; ring-index / count assertions updated (Z ring is now handle 2).
+- Full suite: 1805/1813 — the same 8 pre-existing failures.
+
 ## Not in scope (later #564 increments)
 
 §1 extents, §2 depth-ordered picking, §4 MIRROR / ARRAY on solids, §5 dynamic input, §6–7 layers and
@@ -83,5 +99,5 @@ pipe colours, §8 the Modeling ribbon tab (which will carry buttons for these th
 
 ## Technical debt / assumptions
 
-- None new. 3DROTATE still turns about the active UCS Z only — the ring count REQ-060 already
-  justifies; an arbitrary-axis 3DROTATE is §4's.
+- None new. Rotating about UCS X/Y refuses the types typed ROTATE already refuses under a tilted UCS
+  (ellipse, text, table, block, PDF, feature line, survey point) — stated, not skipped.

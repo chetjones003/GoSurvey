@@ -119,8 +119,10 @@ CMD abc
 EXPECT LOG "is not a number"
 CHECK ALL
 
-# --- 3DROTATE: one ring, a typed angle in degrees -------------------------------------------------
-# A quarter turn CCW about (15,0) takes (10,0) to (15,-5) and (20,0) to (15,5).
+# --- 3DROTATE: three rings (D-2026-09-28-b), grab one, type the angle in degrees ------------------
+# Rings are numbered by UCS axis: 0 = X red, 1 = Y green, 2 = Z blue. In plan only the Z ring is
+# face-on; (15,-10,0) is on it. A quarter turn CCW about (15,0) takes (10,0) to (15,-5) and (20,0)
+# to (15,5).
 NEW
 CMD LINE
 CMD 10,0
@@ -130,7 +132,13 @@ BOX 5 -5 25 5
 CMD 3DROTATE
 EXPECT ACTIVE 3DROTATE
 EXPECT GIZMOOP 1
-EXPECT GIZMOAXES 1
+EXPECT GIZMOAXES 3
+# Three rings and none grabbed: a bare angle does not say which axis.
+CMD 90
+EXPECT LOG "click the ring to turn about first"
+EXPECT LINEXYZ 0 10 0 0 20 0 0
+GIZMO GRAB 15 -10 0
+EXPECT GIZMOAXIS 2
 CMD 90
 EXPECT LINEXYZ 0 15 -5 0 15 5 0
 EXPECT ACTIVE NONE
@@ -150,10 +158,33 @@ ESC
 BOX 5 -5 25 5
 CMD 3DROTATE
 GIZMO GRAB 15 -10 0
-EXPECT GIZMOAXIS 0
+EXPECT GIZMOAXIS 2
 GIZMO DROP 25 0 0
 EXPECT LINEXYZ 0 15 -5 0 15 5 0
 EXPECT ACTIVE NONE
+CHECK ALL
+
+# --- 3DROTATE about the UCS X axis: the red ring, in an orbited view ------------------------------
+# A line along Y, (10,0,0)-(10,10,0), anchor (10,5,0). Orbited so all three rings are ellipses. The
+# grab point is on the X ring (the plane x = 10) half-way up, where no other ring passes. A quarter
+# turn about +X through the anchor stands the line up: (10,5,-5)-(10,5,5).
+NEW
+VIEWANGLES 135 20
+CMD LINE
+CMD 10,0
+CMD 10,10
+ESC
+BOX 5 -5 15 15
+EXPECT SELECTED 1
+CMD 3DROTATE
+GIZMO GRAB 10 12.0710678 7.0710678
+EXPECT GIZMOAXIS 0
+CMD 90
+EXPECT LOG "about the UCS X axis"
+EXPECT LINEXYZ 0 10 5 -5 10 5 5
+EXPECT ACTIVE NONE
+UNDO
+EXPECT LINEXYZ 0 10 0 0 10 10 0
 CHECK ALL
 
 # --- 3DSCALE: a typed factor, and the factor's own refusals --------------------------------------
@@ -189,6 +220,8 @@ BOX -20 -20 20 20
 EXPECT SELECTED 1
 EXPECT SOLIDBOUNDS 0 -10 -5 0 10 5 8
 CMD 3DROTATE
+# The Z ring round the box's centre (0,0,4).
+GIZMO GRAB 0 -10 4
 CMD 90
 EXPECT SOLIDBOUNDS 0 -5 -10 0 5 10 8
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
@@ -224,7 +257,7 @@ EXPECT LINEXYZ 0 10 0 0 20 0 0
 EXPECT GIZMOOP 1
 # The persistent gizmo is back, doing what it did before.
 EXPECT GIZMO 1
-EXPECT GIZMOAXES 1
+EXPECT GIZMOAXES 3
 CHECK ALL
 
 # --- Blank Enter with a drag armed commits it; with nothing armed it ends the command --------------
