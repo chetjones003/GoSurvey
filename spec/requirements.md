@@ -376,6 +376,12 @@ requirements is a planning failure, not a sign of rigor.
   `g_chrome.axisDistance` (amber) / `axisAngle` (violet) colors. Live-updating
   the unlocked field from the cursor position every frame was already true of
   the existing implementation; this revision only adds the color bands.
+  2026-09-28 (D-2026-09-28-j, REQ-354) — the field group re-lays itself as the
+  user types (`@` → ΔX/ΔY, `<` → Distance < Angle, `,` → next box), gains a Z
+  box when the view is not plan to the UCS, and PIPERUN joins it; the absolute
+  boxes read the active UCS's coordinates under a UCS (the frame a typed point is
+  read in). A relative or bearing value no longer "locks both fields" in X — it
+  re-lays the boxes instead. See REQ-354.
 
 ### REQ-025 — Model and Paper space with layout tabs and a space toggle
 - Purpose: compose a model onto sheets, the way AutoCAD model/paper space works
@@ -9856,6 +9862,73 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain (`src/util/cadpiperun.hpp`), Commands (`src/commands/CadCommands.cpp`,
   `src/commands/CadBlocks.{hpp,cpp}`)
 - Status: accepted (2026-09-28) — D-2026-09-28-i, TASK-286.
+- Revisions: 2026-09-28 — proposed and accepted.
+
+### REQ-354 — The dynamic input shows which mode it is in (GitHub issue #564 §5)
+
+- Purpose: issue #564 §5 — typing `@` or `<` into the point prompt's X box changed what was being
+  collected but not what the boxes said: a relative offset went into a box still labelled X, the
+  second box was silently ignored, `<` could not be parsed at all, and there was no Z box in a 3D
+  modelling space.
+- Priority: must
+- Type: functional
+- Depends on: REQ-024 (the dynamic-input field group), REQ-154 (typed points are read in the active
+  UCS), REQ-346 (PIPERUN's compass direct-distance entry).
+- Decision: D-2026-09-28-j; issue #564 Q3 (a Z box whenever the view is not plan to the current UCS).
+- Statement:
+  1. **The field group re-lays itself as the user types**, on the keystroke, for every point prompt
+     (one model, `dyninput::Group` in `src/commands/CadDynInput.*`, which the viewport draws and
+     the headless driver types into):
+
+     | Typed | Boxes |
+     |---|---|
+     | (nothing) | `X` `Y` (`Z`) — absolute |
+     | `@` | `@` `ΔX` `ΔY` (`ΔZ`) — relative to the prompt's base point |
+     | `<` after a distance | `Distance` `<` `Angle` — polar, from the frame origin |
+     | `@…<` | `@` `Distance` `<` `Angle` — polar, relative |
+
+     The mode character is consumed into the labels (an `@` badge, the `<` between the pair) and
+     never left inside a number. A `,` moves on to the next box. A prompt that follows an anchor
+     (LINE / POLYLINE's second point and on, PIPERUN's next point) opens in the relative polar form,
+     as REQ-024 already required; there `@` switches to `ΔX` `ΔY`, and a comma after a number in the
+     Distance box switches to absolute `X` `Y` — the command line's own reading of `5,5`
+     (D-2026-09-28-j).
+  2. **Backspace in the box a mode character left the user in**, with nothing typed there, reverts to
+     the previous layout and keeps what was typed before the character.
+  3. **The submitted text is what the labels say**: `x,y[,z]`, `@dx,dy[,dz]`, or a polar pair
+     resolved to one of those (the command line has no polar grammar; the angle box is a bearing,
+     as REQ-024's pair already was). An untouched box commits the cursor's reading **in the frame a
+     typed point is read in** — the active UCS under a UCS (REQ-154), so the absolute boxes now read
+     UCS coordinates there. Nothing typed submits a blank line (D-2026-09-24-b). A keyword typed into
+     the first box (`C`, `U`, `END`, `2P`) is submitted as typed. An unreadable box is submitted as
+     typed so the command refuses it by name (REQ-201). At a prompt with no base point `@` still
+     re-lays the boxes and the command refuses the relative point by name, as it always has.
+  4. **A Z box** appears whenever the view is not plan to the current UCS (issue #564 Q3), in model
+     space. Typing a second comma in `Y` shows it for the rest of the prompt rather than dropping
+     the value. An untouched Z is not sent (the command's work plane is the cursor's reading).
+  5. **Every point prompt reads a typed Z** (D-2026-09-28-j): the shared parser
+     (`ParseStoragePointZ`) accepts `x,y,z` and `@dx,dy,dz` — dz from the caller's base Z (LINE /
+     POLYLINE's anchor) or the work plane — publishes it through `resolvedPointZ`, lets it beat a
+     leftover mouse snap, and refuses four or more numbers. A typed Z does not carry into the next
+     point.
+  6. **PIPERUN** has the point field group at its start and next points, takes `@dx,dy[,dz]` from its
+     last vertex, reads an absolute `x,y,z` wholly in the active UCS (the frame its Z box shows; the
+     solid commands keep their world-elevation Z), and a distance typed with the angle left live goes to its compass direct-distance
+     entry (REQ-346), which owns the direction.
+  7. **Unchanged**: REQ-154's UCS directional prompts keep their own distance / angle pair; live
+     tracking, type-to-start, lock-on-edit, Tab between boxes, Enter / click commit (REQ-024).
+- Acceptance:
+  - in LINE, MOVE, COPY and PIPERUN, typing `@` shows `ΔX` `ΔY` before the next character, and `<`
+    shows `Distance < Angle`;
+  - the committed point matches the labels in all four modes (headless transcripts
+    `issue564-dyninput-modes`, `issue564-dyninput-modify-z`; GUI test `req354-dyninput-modes`);
+  - every box on screen is read: `5,5` in LINE's Distance box is the point 5,5, and a Z box appears
+    in an orbited view and is honoured at LINE;
+  - Backspace on `@` or `<` reverts and keeps the typed value;
+  - a keyword in the first box still answers the prompt; `x,y,z,w` is refused.
+- Owner-layer: Commands (`src/commands/CadDynInput.{hpp,cpp}`, `src/commands/CadCommands.cpp`),
+  UI (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-09-28) — D-2026-09-28-j, TASK-287.
 - Revisions: 2026-09-28 — proposed and accepted.
 
 ### REQ-100 — Frame budget
