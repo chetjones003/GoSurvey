@@ -8,6 +8,7 @@
 #include "ModelingRibbon.hpp"
 // REQ-141 Analyze ribbon + contour label overlay.
 #include "CadCoordinateFrame.hpp"
+#include "CadDynInput.hpp"  // point-entry dynamic input model (REQ-354)
 #include "ViewCube.hpp"
 #include "UcsIcon.hpp"  // in-tree orientation widget (REQ-059)
 #include "viewport/Crosshair3d.hpp"  // 3D crosshair axis projection (REQ-310)
@@ -9855,126 +9856,6 @@ static float DynamicCursorFieldWidth(const char* text, const char* alsoFits, flo
   return std::clamp(w + chrome, minPx, maxPx);
 }
 
-// True when the active prompt expects a coordinate POINT, so the cursor dynamic
-// input shows AutoCAD-style live X/Y fields (REQ-024). Mirrors the point phases
-// of CommandInputHint; non-point prompts (bearing/angle/distance/factor/option/
-// selection) return false and keep a single input field.
-static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
-  using K = AppCommandState::Kind;
-  switch (cmd.active) {
-  case K::Line: {
-    using LP = AppCommandState::LinePhase;
-    using SAP = AppCommandState::SegmentAnglePickPhase;
-    if (cmd.linePhase == LP::NeedFirstPoint) return true;
-    if (cmd.linePhase == LP::NeedNextPoint)
-      return !(cmd.segmentAngleKeyboardAwaitBearing || cmd.segmentAngleLockActive ||
-               cmd.segmentAnglePickPhase != SAP::Idle);
-    return false;
-  }
-  case K::Polyline: {
-    using PP = AppCommandState::PolylinePhase;
-    using SAP = AppCommandState::SegmentAnglePickPhase;
-    if (cmd.polylinePhase == PP::NeedFirstPoint) return true;
-    if (cmd.polylinePhase == PP::NeedNextPoint)
-      return !(cmd.segmentAngleKeyboardAwaitBearing || cmd.segmentAngleLockActive ||
-               cmd.segmentAnglePickPhase != SAP::Idle);
-    return false;
-  }
-  case K::Arc: return true;
-  case K::Rect: return true;  // both corners are point prompts (REQ-024/REQ-053)
-  case K::Ellipse: {
-    using EP = AppCommandState::EllipsePhase;
-    return cmd.ellPhase == EP::WaitCenter || cmd.ellPhase == EP::WaitMajorEnd;
-  }
-  case K::Text:
-    return cmd.textPhase == AppCommandState::TextCmdPhase::WaitInsertion;
-  case K::Mtext: {
-    using MP = AppCommandState::MtextPhase;
-    return cmd.mtextPhase == MP::WaitCorner1 || cmd.mtextPhase == MP::WaitCorner2;
-  }
-  case K::DimAligned:
-  case K::DimLinear: return true;
-  case K::DimAngular: {
-    using DAP = AppCommandState::DimAngularPhase;
-    return cmd.dimAngularPhase == DAP::WaitVertex || cmd.dimAngularPhase == DAP::WaitRay1 ||
-           cmd.dimAngularPhase == DAP::WaitRay2;
-  }
-  case K::IdPoint: return true;
-  case K::SurveyInverse: return true;
-  case K::Dist: return true;
-  // REQ-074. Missing here as well as from the viewport click dispatch, so SURFELEV got neither
-  // typed-point entry nor a usable pick — the same pre-existing TASK-055 gap, in the second of the
-  // two lists a point-picking command has to appear in.
-  case K::SurfaceElevGrade: return true;
-  case K::WaterDrop: return true;
-  case K::Catchment: return true;
-  case K::SwapTinEdge: return true;
-  case K::AddTinPoint: return true;
-  case K::DelTinPoint: return true;
-  case K::MoveTinPoint: return true;
-  case K::DelTinLine: return true;
-  case K::QuickProfile: return true;
-  // REQ-154. The second of the two lists a point-picking command has to appear in — UCS was missing
-  // from both, so it had neither dynamic input nor a working click. Same phases that
-  // ViewportClickRouteFor routes: everything that takes a coordinate, and nothing that wants a
-  // keyword or a number.
-  case K::Ucs: {
-    using UPh = AppCommandState::UcsPhase;
-    return cmd.ucsPhase == UPh::WaitOriginOrOption || cmd.ucsPhase == UPh::WaitXAxisPoint ||
-           cmd.ucsPhase == UPh::WaitXyPoint || cmd.ucsPhase == UPh::WaitRotationAngleP1 ||
-           cmd.ucsPhase == UPh::WaitRotationAngleP2 || cmd.ucsPhase == UPh::WaitZAxisOrigin ||
-           cmd.ucsPhase == UPh::WaitZAxisPoint;
-  }
-  case K::Circle: {
-    using CP = AppCommandState::CirclePhase;
-    return cmd.circlePhase == CP::WaitCenterOrMode || cmd.circlePhase == CP::ThreeP_WaitP1 ||
-           cmd.circlePhase == CP::ThreeP_WaitP2 || cmd.circlePhase == CP::ThreeP_WaitP3;
-  }
-  case K::Move:
-  case K::Copy: {
-    using MP = AppCommandState::ModifyPhase;
-    return cmd.modifyPhase == MP::NeedBase || cmd.modifyPhase == MP::NeedDestination;
-  }
-  case K::Scale: {
-    using MP = AppCommandState::ModifyPhase;
-    using SP = AppCommandState::ScalePhase;
-    if (cmd.modifyPhase == MP::NeedBase) return true;
-    if (cmd.modifyPhase == MP::NeedDestination)
-      return cmd.scalePhase == SP::Ref_WaitP1 || cmd.scalePhase == SP::Ref_WaitP2 ||
-             cmd.scalePhase == SP::NewLength_WaitP2;
-    return false;
-  }
-  case K::Rotate: {
-    using RP = AppCommandState::RotatePhase;
-    return cmd.rotatePhase == RP::NeedBase || cmd.rotatePhase == RP::Ref_WaitP1 ||
-           cmd.rotatePhase == RP::Ref_WaitP2 || cmd.rotatePhase == RP::AnglePoints_WaitP1 ||
-           cmd.rotatePhase == RP::AnglePoints_WaitP2;
-  }
-  case K::Trim: {
-    using TP = AppCommandState::TrimPhase;
-    return cmd.trimPhase == TP::CuttingLine_WaitP1 || cmd.trimPhase == TP::CuttingLine_WaitP2;
-  }
-  case K::Mirror: {
-    using MirP = AppCommandState::MirrorPhase;
-    return cmd.mirrorPhase == MirP::NeedP1 || cmd.mirrorPhase == MirP::NeedP2;
-    // NeedEraseAnswer is a Yes/No text prompt, not a point (HandleMirrorText).
-  }
-  case K::Stretch: {
-    // REQ-103 step 5. Base and destination are both real points (typed or picked), so STRETCH
-    // gets the same dynamic-input prompt MOVE/COPY do — it was omitted here, the second of the
-    // two lists a point-picking command has to appear in (TASK-099 F2).
-    using MP = AppCommandState::ModifyPhase;
-    return cmd.modifyPhase == MP::NeedBase || cmd.modifyPhase == MP::NeedDestination;
-  }
-  case K::InsertBlock: {
-    using IPh = AppCommandState::InsertBlockPhase;
-    return cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale;
-  }
-  default:
-    return false;
-  }
-}
-
 // Ordinal word for the point being specified ("first", "second", … then "11th").
 static std::string OrdinalWord(int n) {
   static const char* kWords[] = {"zeroth", "first", "second", "third",   "fourth", "fifth",
@@ -9992,56 +9873,6 @@ static std::string OrdinalWord(int n) {
     }
   }
   return std::to_string(n) + suf;
-}
-
-// REQ-154 / REQ-024. The two UCS axis prompts show a POLAR pair — distance and angle — rather than
-// REQ-024's single x,y field, because what those prompts ask for is a DIRECTION. An x,y readout
-// answers "where is my cursor"; the question on screen is "what angle is my axis", and the user
-// should not have to do the subtraction in their head.
-//
-// This is a stated exception, not a reversal: every other point prompt keeps the single field
-// REQ-024's 2026-06-19 revision settled on, and the polar pair assembles `@distance<angle` — real
-// syntax the command line accepts — so the two forms describe the same thing.
-//
-// Returns false, and leaves the outputs alone, for every prompt that is not one of those two.
-static bool CadUcsPolarPromptBase(const AppCommandState& cmd, ray3d::Vec3* baseWorld) {
-  if (cmd.active != AppCommandState::Kind::Ucs || !baseWorld)
-    return false;
-  using UPh = AppCommandState::UcsPhase;
-  switch (cmd.ucsPhase) {
-  case UPh::WaitXAxisPoint:
-  case UPh::WaitXyPoint:
-    // Both measure from the ORIGIN, not from each other — one reference for both boxes, so the
-    // second prompt does not silently re-base the angle the first one showed.
-    *baseWorld = cmd.ucsPendingOrigin;
-    return true;
-  case UPh::WaitRotationAngleP2:
-    *baseWorld = cmd.ucsAngleBasePoint;
-    return true;
-  default:
-    return false;
-  }
-}
-
-// REQ-024 (2026-09-15 amendment). LINE's and POLYLINE's second point onward follow an established
-// anchor (the previous vertex), so — like the UCS directional prompts above — a distance/angle pair
-// answers what the prompt is actually asking ("how far, which way from here") better than an x,y
-// readout does. Kept as its own predicate rather than folded into CadUcsPolarPromptBase: that one is
-// REQ-154's own narrow, stated exception, and this is a separate generalization of the same idea to
-// ordinary drawing prompts. Returns false, and leaves the output alone, for every other point prompt
-// — including LINE/POLYLINE's OWN first point, which has no anchor yet.
-static bool CadAnchoredDistanceAnglePrompt(const AppCommandState& cmd, ray3d::Vec3* baseWorld) {
-  if (!baseWorld) return false;
-  using K = AppCommandState::Kind;
-  using LP = AppCommandState::LinePhase;
-  using PP = AppCommandState::PolylinePhase;
-  const bool lineNext = cmd.active == K::Line && cmd.linePhase == LP::NeedNextPoint;
-  const bool polyNext = cmd.active == K::Polyline && cmd.polylinePhase == PP::NeedNextPoint;
-  if (!lineNext && !polyNext) return false;
-  double bx = 0.0, by = 0.0;
-  CadCoord::WorldFromLocal(cmd, cmd.anchorX, cmd.anchorY, &bx, &by);
-  *baseWorld = ray3d::Vec3{bx, by, cmd.anchorZ};
-  return true;
 }
 
 // Formats a DIRECTIONAL angle for the dynamic-input box using the UNITS dialog's angle display
@@ -10196,6 +10027,9 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
   case K::Stretch:
     return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:"
                                                                      : "Specify second point:";
+  case K::PipeRun:
+    return cmd.pipeRunPhase == AppCommandState::PipeRunPhase::WaitFirstPoint ? std::string("Specify start point:")
+                                                                             : std::string("Specify next point:");
   case K::InsertBlock: {
     using IPh = AppCommandState::InsertBlockPhase;
     if (cmd.insertBlockPhase == IPh::WaitInsertPoint)
@@ -14378,6 +14212,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // never survive into a mouse-driven one.
     cmd.resolvedPointZValid = true;
     cmd.resolvedPointZ = static_cast<float>(rawZ);
+    cmd.resolvedPointZTyped = false;  // a typed Z (REQ-354) described the point it was typed for
 
     // The cursor's world ray, built once and handed to every pick in this block. Null in plan
     // view and paper space so those keep the exact pre-3D XY test (REQ-058 parity).
@@ -18797,7 +18632,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGuiIO& io = ImGui::GetIO();
     const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
 
-    const bool pointEntry = CommandExpectsPointEntry(cmd);
+    const bool pointEntry = CadCommandExpectsPointEntry(cmd);
 
     // Prompt label (AutoCAD "Specify ... :"). Reset the two-field locks whenever
     // the prompt changes (new point, including after a commit or viewport click)
@@ -18865,8 +18700,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     ray3d::Vec3 polarBase{};
     const bool polarPrompt = pointEntry && CadUcsPolarPromptBase(cmd, &polarBase);
-    ray3d::Vec3 anchorBase{};
-    const bool anchoredPrompt = pointEntry && !polarPrompt && CadAnchoredDistanceAnglePrompt(cmd, &anchorBase);
     if (polarPrompt) {
       // Distance + angle, AutoCAD's UCS form (REQ-154; the stated exception to REQ-024's single
       // field). Both track the cursor until typed; either one's Enter commits the pair, assembled
@@ -18987,193 +18820,174 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         std::snprintf(polarBuf, sizeof(polarBuf), "%s", pointText.c_str());
         ProcessCommandLineSubmit(polarBuf, static_cast<int>(sizeof(polarBuf)), cmd, log);
       }
-    } else if (anchoredPrompt) {
-      // Distance + angle from the established anchor (REQ-024's 2026-09-15 amendment): LINE's and
-      // POLYLINE's second point and later. Same construction as the UCS polar pair above — kept as
-      // its own block rather than shared, since that one is REQ-154's own narrow, stated exception
-      // and this is a separate generalization to ordinary drawing prompts.
-      static char distBuf2[48] = {0};
-      static char angBuf2[48] = {0};
-      static bool dist2Locked = false, ang2Locked = false;
-      if (promptChanged) { dist2Locked = false; ang2Locked = false; }
-
-      double liveWx = 0.0, liveWy = 0.0;
-      if (outCursorX && outCursorY)
-        CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
-                                 &liveWy);
-      const ray3d::Vec3 cursorWorld{liveWx, liveWy, anchorBase.z};
-      const ray3d::Vec3 dir = ray3d::Sub(cursorWorld, anchorBase);
-      const int prec = cmd.displayLinearPrecision;
-      // See the UCS polar pair above: angBuf2 shows the UNITS-configured display format, so an
-      // unlocked (never-typed) commit uses this raw number instead of re-parsing that text.
-      double angDeg = 0.0;
-      const bool haveAngDeg = ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &angDeg);
-      if (haveAngDeg)
-        while (angDeg < 0.0) angDeg += 360.0;
-      if (!dist2Locked)
-        std::snprintf(distBuf2, sizeof(distBuf2), "%s", FormatLinear(ray3d::Length(dir), prec).c_str());
-      if (!ang2Locked)
-        std::snprintf(angBuf2, sizeof(angBuf2), "%s",
-                      FormatDynInputAngle(haveAngDeg ? angDeg : 0.0, CadAngleDisplaySettings(cmd)).c_str());
-
-      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-      const float boxW = 74.f * io.FontGlobalScale;
-      const ImGuiID idDist2 = ImGui::GetID("##anchDist");
-      const ImGuiID idAng2 = ImGui::GetID("##anchAng");
-      const ImGuiID activeIdA = ImGui::GetActiveID();
-
-      if (promptChanged) {
-        g_keepSelectAllOnActivate = true;
-        ImGui::SetKeyboardFocusHere();
-      } else if (activeIdA != idDist2 && activeIdA != idAng2 && !io.WantTextInput) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
-          ImGui::SetKeyboardFocusHere();
-        } else if (io.InputQueueCharacters.Size > 0) {
-          distBuf2[0] = '\0';
-          dist2Locked = true;
-          RouteQueuedCharsToCmdBuf(distBuf2, static_cast<int>(sizeof(distBuf2)), io);
-          ImGui::SetKeyboardFocusHere();
-        }
-      }
-
-      static std::string dist2LastPushed, ang2LastPushed;
-      PushDynFieldGroupStyle(g_chrome.axisDistance);
-      ImGui::SetNextItemWidth(boxW);
-      g_liveInputRefreshText = dist2Locked ? nullptr : distBuf2;
-      g_liveInputLastPushed = dist2Locked ? nullptr : &dist2LastPushed;
-      const bool distEnter2 = ImGui::InputText("##anchDist", distBuf2, sizeof(distBuf2), pf, CommandLineInputCallback);
-      g_liveInputRefreshText = nullptr;
-      g_liveInputLastPushed = nullptr;
-      if (ImGui::IsItemEdited()) dist2Locked = true;
-      PopDynFieldGroupStyle();
-      ImGui::SameLine(0.f, 8.f);
-      ImGui::TextUnformatted("<");
-      ImGui::SameLine(0.f, 8.f);
-      PushDynFieldGroupStyle(g_chrome.axisAngle);
-      ImGui::SetNextItemWidth(boxW);
-      g_liveInputRefreshText = ang2Locked ? nullptr : angBuf2;
-      g_liveInputLastPushed = ang2Locked ? nullptr : &ang2LastPushed;
-      const bool angEnter2 = ImGui::InputText("##anchAng", angBuf2, sizeof(angBuf2), pf, CommandLineInputCallback);
-      g_liveInputRefreshText = nullptr;
-      g_liveInputLastPushed = nullptr;
-      if (ImGui::IsItemEdited()) ang2Locked = true;
-      PopDynFieldGroupStyle();
-
-      if (distEnter2 || angEnter2) {
-        double useDist = 0.0;
-        {
-          std::istringstream di{std::string(distBuf2)};
-          if (!(di >> useDist) || !std::isfinite(useDist) || useDist == 0.0)
-            useDist = ray3d::Length(dir);
-          if (!std::isfinite(useDist) || useDist == 0.0)
-            useDist = 1.0;
-        }
-        double useMathAngleDeg = haveAngDeg ? angDeg : 0.0;
-        if (ang2Locked) {
-          std::string angText = StringUtil::trimCopy(std::string(angBuf2));
-          double typedBearingDeg = 0.0;
-          std::istringstream ai{angText};
-          if (!angText.empty() && (ai >> typedBearingDeg))
-            useMathAngleDeg = anglefmt_detail::Normalize360(90.0 - typedBearingDeg);
-        }
-        const std::string pointText = ResolveDynDistanceAngleToPointText(cmd, anchorBase, useDist, useMathAngleDeg);
-        char anchBuf[160];
-        std::snprintf(anchBuf, sizeof(anchBuf), "%s", pointText.c_str());
-        ProcessCommandLineSubmit(anchBuf, static_cast<int>(sizeof(anchBuf)), cmd, log);
-      }
     } else if (pointEntry) {
-      // Two-field x,y group (REQ-024, 2026-09-15 amendment): AutoCAD splits an ordinary point
-      // prompt into separate X and Y boxes, Tab moving between them (native ImGui next-item
-      // behavior) without committing. A value that carries its own syntax — relative "@dx,dy", a
-      // bearing/distance, or a bare "x,y" — typed into the X field does not split into two
-      // independent numbers, so it is submitted whole from that field and locks both boxes; this is
-      // exactly how the pre-amendment single field accepted the same input, just landing in the
-      // first box of the pair instead of the only one.
-      static char xBuf[80] = {0};
-      static char yBuf[80] = {0};
-      // Locked independently (REQ-024: "each independently lockable/tabbable") — typing a plain
-      // number into X must not freeze Y or strip its Tab-in select-all. The one exception is a
-      // compound value (relative/bearing/`x,y`) typed into X, which locks both by spec; that's
-      // applied below, right after X's own edit is detected, once its text is known.
-      static bool xLocked = false, yLocked = false;
-      if (promptChanged) { xLocked = false; yLocked = false; }
+      // REQ-024 / REQ-354 (GitHub issue #564 section 5): ONE field group for every point prompt, drawn
+      // from the command layer's dyninput model — the same model the headless driver types into, so
+      // the labels on screen and the text the command parses cannot drift apart. It re-lays itself
+      // as the user types: `@` → ΔX / ΔY (ΔZ), `<` → Distance < Angle, `,` → the next box (in the
+      // Distance box, X / Y). The mode character is consumed into the labels, never left in a number.
+      // The prompt opens as X / Y (Z) — or Distance < Angle after an anchor, LINE's second point and
+      // on (REQ-024's 2026-09-15 amendment) — with a Z box whenever the view is not plan to the UCS
+      // (issue #564 Q3).
+      static dyninput::Group s_dyn;
+      static std::string s_dynPromptLabel;
+      static char s_dynBuf[3][80] = {};
+      static std::string s_dynLastPushed[3];
+      static const char* const kDynIds[3] = {"##dyn0", "##dyn1", "##dyn2"};
+      const CadDynInputPrompt dp = CadDynInputPromptFor(cmd);
+      if (promptChanged || promptLabel != s_dynPromptLabel || dp.initialMode != s_dyn.initial) {
+        dyninput::Reset(s_dyn, dp.initialMode, dp.showZ);
+        s_dyn.requestFocus = 0;
+        g_keepSelectAllOnActivate = true;  // AutoCAD lands in the first box, pre-selected
+      }
+      s_dynPromptLabel = promptLabel;
+      s_dyn.showZ = dp.showZ;
 
       double liveWx = 0.0, liveWy = 0.0;
       if (outCursorX && outCursorY)
         CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
                                  &liveWy);
+      const double liveWz = static_cast<double>(cmd.uiCursorWorldZ);
       const int prec = cmd.displayLinearPrecision;
-      if (!xLocked)
-        std::snprintf(xBuf, sizeof(xBuf), "%s", FormatLinear(liveWx, prec).c_str());
-      if (!yLocked)
-        std::snprintf(yBuf, sizeof(yBuf), "%s", FormatLinear(liveWy, prec).c_str());
+      // What an untouched box shows in the CURRENT mode — recomputed per box, because a keystroke in
+      // an earlier box this frame can have changed the mode.
+      const auto liveText = [&](int slot) -> std::string {
+        if (dyninput::IsRelative(s_dyn.mode) && !dp.haveBase)
+          return std::string();  // no base to measure from; the command will refuse `@` by name
+        const dyninput::Live live = CadDynInputLive(cmd, dp, s_dyn.mode, liveWx, liveWy, liveWz);
+        if (dyninput::IsPolar(s_dyn.mode) && slot == 1)
+          return FormatDynInputAngle(live.v[1], CadAngleDisplaySettings(cmd));
+        return FormatLinear(live.v[slot], prec);
+      };
 
-      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-      const float boxW = std::max(56.f * io.FontGlobalScale,
-                                  DynamicCursorFieldWidth(xBuf, nullptr, 56.f * io.FontGlobalScale, maxFieldPx * 0.5f));
-      const ImGuiID idX = ImGui::GetID("##dynX");
-      const ImGuiID idY = ImGui::GetID("##dynY");
-      const ImGuiID activeIdXY = ImGui::GetActiveID();
+      // Which box has the keyboard, and Backspace in it with nothing typed: undo the mode character
+      // that landed the user there, keeping what was typed before it. Done before any box is drawn
+      // so the whole group re-lays in the same frame.
+      const ImGuiID activeIdDyn = ImGui::GetActiveID();
+      int activeSlot = -1;
+      for (int i = 0; i < 3; ++i)
+        if (activeIdDyn == ImGui::GetID(kDynIds[i]))
+          activeSlot = i;
+      if (activeSlot >= 0)
+        s_dyn.focus = activeSlot;
+      int forcedSlot = -1;
+      if (activeSlot >= 0 && ImGui::IsKeyPressed(ImGuiKey_Backspace, false) &&
+          !s_dyn.f[static_cast<size_t>(activeSlot)].locked && dyninput::BackspaceAtEmpty(s_dyn, activeSlot))
+        forcedSlot = activeSlot;
 
-      // The X box is focused-and-selected the moment this prompt appears — AutoCAD's own dynamic
-      // input always lands there first, so Tab goes straight to Y on the very first press instead
-      // of a first Tab merely focusing X and a second one being needed to actually move on.
-      if (promptChanged) {
-        g_keepSelectAllOnActivate = true;
-        ImGui::SetKeyboardFocusHere();
-      }
-      // Type-to-start / cold-Tab fallback: if the user clicked away and back with neither box
-      // focused, the first keystroke seeds the X box (a typed relative/bearing/distance expression
-      // fills both fields at once and lands there) and a cold Tab still focuses it.
-      else if (activeIdXY != idX && activeIdXY != idY && !io.WantTextInput) {
+      // Type-to-start: with no box focused the first keystrokes are typed into the model exactly
+      // as if the first box had had them, so `@5,3` typed cold lands as ΔX 5, ΔY 3.
+      if (activeSlot < 0 && !io.WantTextInput) {
         if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
-          ImGui::SetKeyboardFocusHere();
+          s_dyn.requestFocus = s_dyn.focus;
         } else if (io.InputQueueCharacters.Size > 0) {
-          xBuf[0] = '\0';
-          xLocked = true;
-          RouteQueuedCharsToCmdBuf(xBuf, static_cast<int>(sizeof(xBuf)), io);
-          ImGui::SetKeyboardFocusHere();
+          char typed[96] = {0};
+          RouteQueuedCharsToCmdBuf(typed, static_cast<int>(sizeof(typed)), io);
+          s_dyn.focus = 0;
+          dyninput::TypeText(s_dyn, typed);
+          s_dyn.requestFocus = s_dyn.focus;
         }
       }
 
-      static std::string xLastPushed, yLastPushed;
-      PushDynFieldGroupStyle(g_chrome.axisX);
-      ImGui::SetNextItemWidth(boxW);
-      g_liveInputRefreshText = xLocked ? nullptr : xBuf;
-      g_liveInputLastPushed = xLocked ? nullptr : &xLastPushed;
-      const bool xEnter = ImGui::InputText("##dynX", xBuf, sizeof(xBuf), pf, CommandLineInputCallback);
-      g_liveInputRefreshText = nullptr;
-      g_liveInputLastPushed = nullptr;
-      if (ImGui::IsItemEdited()) {
-        xLocked = true;
-        // A relative/bearing/`x,y` value typed into X carries its own syntax and is submitted
-        // whole from X (see xIsCompound below), so it locks Y too instead of leaving it live.
-        const std::string xNow = StringUtil::trimCopy(std::string(xBuf));
-        if (xNow.find(',') != std::string::npos || xNow.find('@') != std::string::npos ||
-            xNow.find('<') != std::string::npos)
-          yLocked = true;
-      }
-      PopDynFieldGroupStyle();
-      ImGui::SameLine(0.f, 12.f);
-      PushDynFieldGroupStyle(g_chrome.axisY);
-      ImGui::SetNextItemWidth(boxW);
-      g_liveInputRefreshText = yLocked ? nullptr : yBuf;
-      g_liveInputLastPushed = yLocked ? nullptr : &yLastPushed;
-      const bool yEnter = ImGui::InputText("##dynY", yBuf, sizeof(yBuf), pf, CommandLineInputCallback);
-      g_liveInputRefreshText = nullptr;
-      g_liveInputLastPushed = nullptr;
-      if (ImGui::IsItemEdited()) yLocked = true;
-      PopDynFieldGroupStyle();
+      struct DynFieldCtx {
+        dyninput::Group* g;
+        int slot;
+        const char* forceText;
+        bool handled;
+      };
+      // Hands a mode character to the model the moment it is typed and shows what the model left
+      // in the box; otherwise the shared live-tracking callback runs.
+      const ImGuiInputTextCallback dynCallback = [](ImGuiInputTextCallbackData* data) -> int {
+        auto* ctx = static_cast<DynFieldCtx*>(data->UserData);
+        if (ctx && data->EventFlag == ImGuiInputTextFlags_CallbackAlways) {
+          const std::string now(data->Buf, static_cast<size_t>(data->BufTextLen));
+          const char* replaceWith = ctx->forceText;
+          const std::string& modelText = ctx->g->f[static_cast<size_t>(ctx->slot)].text;
+          // Only text the model has not seen yet: a character it deliberately leaves in the box (a
+          // comma in Z, an `@` after a digit) would otherwise be re-processed, and the caret pinned
+          // to the end, on every frame the box is active.
+          if (!replaceWith && now != modelText && now.find_first_of("@<,") != std::string::npos) {
+            dyninput::EditText(*ctx->g, ctx->slot, now);
+            ctx->handled = true;
+            if (ctx->g->f[static_cast<size_t>(ctx->slot)].text != now)
+              replaceWith = ctx->g->f[static_cast<size_t>(ctx->slot)].text.c_str();
+          }
+          if (replaceWith) {
+            ctx->handled = true;
+            data->DeleteChars(0, data->BufTextLen);
+            data->InsertChars(0, replaceWith);
+            const bool live = !ctx->g->f[static_cast<size_t>(ctx->slot)].locked;
+            data->SelectionStart = live ? 0 : data->BufTextLen;
+            data->SelectionEnd = data->BufTextLen;
+            data->CursorPos = data->BufTextLen;
+            if (g_liveInputLastPushed)
+              g_liveInputLastPushed->assign(data->Buf, static_cast<size_t>(data->BufTextLen));
+            return 0;
+          }
+        }
+        return CommandLineInputCallback(data);
+      };
 
-      if (xEnter || yEnter) {
-        const std::string xText = StringUtil::trimCopy(std::string(xBuf));
-        const bool xIsCompound = xText.find(',') != std::string::npos || xText.find('@') != std::string::npos ||
-                                  xText.find('<') != std::string::npos;
-        char submitBuf[176];
-        if (xIsCompound)
-          std::snprintf(submitBuf, sizeof(submitBuf), "%s", xText.c_str());
+      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
+      bool enter = false;
+      for (int slot = 0; slot < dyninput::FieldCount(s_dyn); ++slot) {
+        const size_t si = static_cast<size_t>(slot);
+        dyninput::Field& fld = s_dyn.f[si];
+        const std::string shown = fld.locked ? fld.text : liveText(slot);
+        std::snprintf(s_dynBuf[si], sizeof(s_dynBuf[si]), "%s", shown.c_str());
+
+        if (slot == 0) {
+          if (dyninput::IsRelative(s_dyn.mode)) {
+            // The `@` the user typed, shown as the group's mode rather than inside a number.
+            ImGui::TextUnformatted("@");
+            ImGui::SameLine(0.f, 6.f);
+          }
+        } else {
+          ImGui::SameLine(0.f, 10.f);
+          if (dyninput::IsPolar(s_dyn.mode)) {
+            ImGui::TextUnformatted("<");
+            ImGui::SameLine(0.f, 8.f);
+          }
+        }
+        const std::string label = dyninput::Label(s_dyn, slot);
+        ImGui::TextUnformatted(label.c_str());
+        ImGui::SameLine(0.f, 4.f);
+
+        ImU32 band = g_chrome.axisX;
+        if (dyninput::IsPolar(s_dyn.mode))
+          band = slot == 0 ? g_chrome.axisDistance : g_chrome.axisAngle;
         else
-          std::snprintf(submitBuf, sizeof(submitBuf), "%s,%s", xBuf, yBuf);
+          band = slot == 0 ? g_chrome.axisX : (slot == 1 ? g_chrome.axisY : g_chrome.axisZ);
+        PushDynFieldGroupStyle(band);
+        if (s_dyn.requestFocus == slot) {
+          ImGui::SetKeyboardFocusHere();
+          s_dyn.requestFocus = -1;
+          s_dyn.focus = slot;
+        }
+        const float boxW = std::max(56.f * io.FontGlobalScale,
+                                    DynamicCursorFieldWidth(s_dynBuf[si], nullptr, 56.f * io.FontGlobalScale,
+                                                            maxFieldPx * 0.33f));
+        ImGui::SetNextItemWidth(boxW);
+        DynFieldCtx ctx{&s_dyn, slot, slot == forcedSlot ? s_dynBuf[si] : nullptr, false};
+        g_liveInputRefreshText = fld.locked ? nullptr : s_dynBuf[si];
+        g_liveInputLastPushed = fld.locked ? nullptr : &s_dynLastPushed[si];
+        const bool e = ImGui::InputText(kDynIds[slot], s_dynBuf[si], sizeof(s_dynBuf[si]), pf, dynCallback, &ctx);
+        g_liveInputRefreshText = nullptr;
+        g_liveInputLastPushed = nullptr;
+        if (ImGui::IsItemEdited() && !ctx.handled)
+          dyninput::EditText(s_dyn, slot, s_dynBuf[si]);
+        PopDynFieldGroupStyle();
+        enter = enter || e;
+      }
+
+      if (enter) {
+        const dyninput::Live live = CadDynInputLive(cmd, dp, s_dyn.mode, liveWx, liveWy, liveWz);
+        const std::string text = dyninput::Compose(s_dyn, live, dp.directDistance);
+        char submitBuf[256];
+        std::snprintf(submitBuf, sizeof(submitBuf), "%s", text.c_str());
+        // Fresh boxes for whatever the command asks next, even when its prompt text is unchanged.
+        dyninput::Reset(s_dyn, dp.initialMode, dp.showZ);
+        s_dynPromptLabel.clear();
         ProcessCommandLineSubmit(submitBuf, static_cast<int>(sizeof(submitBuf)), cmd, log);
       }
     } else {

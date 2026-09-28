@@ -1107,6 +1107,70 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   //
   // BMPs land next to the executable. Aimed at the part named by GOSURVEY_T272_CENTER (world
   // "x,y,z"), or at the drawing extents when that is unset.
+  // REQ-354 / D-2026-09-28-j (GitHub issue #564 section 5): the dynamic input re-lays itself as the
+  // user types. The headless transcripts drive the MODEL; this drives the real boxes — keystrokes into
+  // the focused ImGui field, the callback that consumes `@` / `<` / `,`, the focus hand-off to the next
+  // box, Backspace undoing a mode character — and checks the geometry that lands.
+  ImGuiTest* dynModes = IM_REGISTER_TEST(engine, "gosurvey", "req354-dyninput-modes");
+  dynModes->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    float ox = 0.f, oy = 0.f, sw = 0.f, sh = 0.f;
+    IM_CHECK(DevShell_ViewportRect(&ox, &oy, &sw, &sh));
+    // Low and to the left: clear of the Developer Shell, which floats over the middle of the viewport.
+    ctx->MouseMoveToPos(ImVec2(ox + sw * 0.12f, oy + sh * 0.85f));
+    ctx->Yield(2);
+    SubmitCad(ctx, "LINE");
+    ctx->Yield(6);
+    const auto type = [ctx](const char* chars) {
+      ctx->KeyChars(chars);
+      ctx->Yield(3);
+    };
+    const auto enter = [ctx]() {
+      ctx->KeyPress(ImGuiKey_Enter);
+      ctx->Yield(6);
+    };
+    const auto lineEnd = [](std::size_t seg, double x, double y) {
+      const std::vector<double>& f = s_cmd->userLinesFlat;
+      const bool ok = f.size() >= (seg + 1) * 6 && std::abs(f[seg * 6 + 3] - x) < 1e-3 &&
+                      std::abs(f[seg * 6 + 4] - y) < 1e-3;
+      if (!ok && f.size() >= (seg + 1) * 6)
+        DevShell_Logf("test", "segment %d ends at %.4f,%.4f", static_cast<int>(seg), f[seg * 6 + 3], f[seg * 6 + 4]);
+      return ok;
+    };
+
+    type("1,2");  // X, then the comma moves on to Y
+    enter();
+    IM_CHECK(s_cmd->linePhase == AppCommandState::LinePhase::NeedNextPoint);
+    type("@3,4");  // `@` switches LINE's Distance < Angle to dX / dY
+    enter();
+    IM_CHECK(lineEnd(0, 4.0, 6.0));
+    type("5<180");  // distance 5, bearing 180 (south)
+    enter();
+    IM_CHECK(lineEnd(1, 4.0, 1.0));
+    IM_CHECK(CancelToIdle(ctx));
+
+    // Backspace takes a mode character back. At a FIRST point (X / Y), `7<` turns the boxes into
+    // Distance < Angle; Backspace in the empty Angle box returns to X / Y with the 7 kept, and `,8`
+    // then finishes an absolute point.
+    SubmitCad(ctx, "LINE");
+    ctx->Yield(6);
+    type("7<");
+    ctx->KeyPress(ImGuiKey_Backspace);
+    ctx->Yield(4);
+    type(",8");
+    enter();
+    const bool anchored = s_cmd->linePhase == AppCommandState::LinePhase::NeedNextPoint &&
+                          std::abs(s_cmd->anchorX - 7.f) < 1e-3f && std::abs(s_cmd->anchorY - 8.f) < 1e-3f;
+    if (!anchored) {
+      const std::vector<std::string>* log = DevShell_CommandLog();
+      for (std::size_t i = log && log->size() > 4 ? log->size() - 4 : 0; log && i < log->size(); ++i)
+        DevShell_Logf("test", "log: %s", (*log)[i].c_str());
+      DevShell_Logf("test", "anchor %.4f,%.4f phase %d", s_cmd->anchorX, s_cmd->anchorY,
+                    static_cast<int>(s_cmd->linePhase));
+    }
+    IM_CHECK(anchored);
+    IM_CHECK(CancelToIdle(ctx));
   // REQ-355 (issue #564 section 8): the Modeling tab's buttons clicked for real — a primitive, a
   // second button while the first runs (it must cancel and start), the size dropdown, and the
   // ribbon PIPERUN going straight to its start point. Run with:
