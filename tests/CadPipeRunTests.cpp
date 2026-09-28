@@ -24,7 +24,7 @@ TEST_CASE("Known NPS sizes resolve to a feet outer diameter, unknown sizes refus
   CHECK(odFeet == Catch::Approx(4.5 / 12.0));
   REQUIRE(CadPipeNominalOdFeet("0.5in", &odFeet));
   CHECK(odFeet == Catch::Approx(0.840 / 12.0));
-  CHECK_FALSE(CadPipeNominalOdFeet("5in", &odFeet));   // not in the table
+  CHECK_FALSE(CadPipeNominalOdFeet("7in", &odFeet));   // not in the table
   CHECK_FALSE(CadPipeNominalOdFeet("bogus", &odFeet));
   CHECK_FALSE(CadPipeNominalOdFeet("", &odFeet));
 }
@@ -81,7 +81,7 @@ TEST_CASE("Schedule-40 walls resolve per size, and refuse an unknown one",
   CHECK(wallIn == Catch::Approx(0.109));
   REQUIRE(CadPipeStandardWallThicknessInches("12in", &wallIn));
   CHECK(wallIn == Catch::Approx(0.406));
-  CHECK_FALSE(CadPipeStandardWallThicknessInches("5in", &wallIn));
+  CHECK_FALSE(CadPipeStandardWallThicknessInches("7in", &wallIn));
   CHECK_FALSE(CadPipeStandardWallThicknessInches("bogus", &wallIn));
 
   // The resolved wall a run is actually built at: its own, else the standard one.

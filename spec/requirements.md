@@ -9809,6 +9809,55 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-28) — D-2026-09-28-g, D-2026-09-28-h, TASK-285.
 - Revisions: 2026-09-28 — proposed and accepted. 2026-09-28 — item 5 added after the user's GUI test (D-2026-09-28-h).
 
+### REQ-353 — Pipe colour by nominal size, with a built-in palette (GitHub issue #564 §7)
+
+- Purpose: issue #564 §7 — a piping drawing is read by size, but every pipe run was the same colour,
+  and the NPS table carried only 13 of the sizes the issue asks for.
+- Priority: must
+- Type: functional
+- Depends on: REQ-345 (pipe runs), REQ-352 (solid / pipe layer and colour; D-2026-09-28-h: a
+  block's layer-0 content follows its insert).
+- Decision: D-2026-09-28-i; issue #564 Q4 (reducer = the run's own size) and Q5 (palette built in,
+  one table).
+- Statement:
+  1. **`kCadPipeNpsTable` carries 21 sizes** — the 13 it had plus 3-1/2, 5, 14, 16, 18, 20, 22 and 24
+     — each with its OD and schedule-40 wall (ASME B36.10M). The issue says "20 sizes"; its own two
+     lists name 21, and the lists govern. **22in has no schedule 40** in B36.10M, so its row carries
+     the standard-weight (STD) wall, 0.375in (D-2026-09-28-i).
+  2. **The same table carries each size's default colour** (the issue's palette, `#RRGGBB`), so a
+     size and its colour are one row and cannot drift apart.
+  3. **A new pipe run is stamped with its size's colour**, on the current layer. It is an ordinary
+     entity colour from then on: a Properties edit, including `ByLayer`, wins and is saved.
+  4. **A fitting on a run takes that run's layer and colour** — PIPERUN's auto elbows and tees,
+     PIPEFIT's splice, and a part INSERT's connector snap fits onto a run's END (an end flange, a
+     cap) — so a line reads as one colour end to end and its layer hides its fittings with it
+     (D-2026-09-28-i). A reducer therefore reads as the run it was spliced into (Q4). A part placed
+     off any run, or snapped to a bare line's end, is an ordinary block INSERT.
+  5. **A split keeps the line**: the far piece of a PIPEFIT or PIPESPLIT keeps the run's layer and
+     colour, an override included.
+  6. **Out of scope**: the Pipe Fittings palette (REQ-350, not yet on `beta` — branch
+     `feat/pipe-fitting-palette`), whose on-run splice must hand the run's attributes to
+     `CadBlockPlaceInsertNoUndo` the same way when it lands; runs already in a drawing are
+     not recoloured on open (the palette applies at creation); a user-editable palette (Q5);
+     library parts for the new sizes (PIPERUN draws smooth bends when the catalog has no part, as
+     for any size).
+- Acceptance:
+  - the table carries all 21 sizes with the stated OD and wall, and 21 distinct colours;
+  - PIPERUN accepts a new size (22in offers the 0.375in wall) and its refusal lists every size;
+  - a 4in run is stamped and displayed `#2D6CDF` and a 2in run beside it `#2ECC40`, with no user
+    action;
+  - an auto-inserted elbow takes its run's colour and layer;
+  - a spliced valve and a spliced reducer take the run's layer and override colour, and so does
+    the far piece;
+  - a flange connector-snapped onto a run's end takes the run's layer and colour; one snapped onto a
+    bare line's end does not;
+  - PIPESPLIT keeps an override on both pieces;
+  - a colour override wins over the palette and survives a save and reload.
+- Owner-layer: Domain (`src/util/cadpiperun.hpp`), Commands (`src/commands/CadCommands.cpp`,
+  `src/commands/CadBlocks.{hpp,cpp}`)
+- Status: accepted (2026-09-28) — D-2026-09-28-i, TASK-286.
+- Revisions: 2026-09-28 — proposed and accepted.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
