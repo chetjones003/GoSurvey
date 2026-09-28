@@ -929,8 +929,11 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
                               float* outMxX, float* outMxY);
 
 /// Top-most annotation under point; -1 if none. Uses pixel tolerance from viewport half-height.
+/// \param ray When non-null (an orbited view), each annotation is tested where the camera ray meets
+///        ITS OWN plane (z = insZ) rather than at \p wx, \p wy on the work plane (GitHub issue #564
+///        §2). Null keeps the plan-view test exactly.
 int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
-                        float viewportHeightPx);
+                        float viewportHeightPx, const ray3d::Ray* ray = nullptr);
 int PickCadTableAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
                    float viewportHeightPx);
 void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
@@ -6627,7 +6630,64 @@ bool CadHatchTraceAt(const AppCommandState& st, double wx, double wy, std::vecto
 bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std::vector<std::string>& log);
 /// Index of the smallest-area filled region containing (wx,wy), or -1. Lowest pick priority (fills sit under
 /// linework) — the click handler calls this only after geometry/annotation picks miss (REQ-042).
-int PickFilledRegionAt(const AppCommandState& st, double wx, double wy);
+/// \param ray As \ref PickCadAnnotationAt: when non-null, each region is tested where the ray meets
+///        its own plane (the elevation of its first vertex) — issue #564 §2.
+int PickFilledRegionAt(const AppCommandState& st, double wx, double wy, const ray3d::Ray* ray = nullptr);
+
+/// Which kind of thing \ref ResolveViewportPick found under the cursor (GitHub issue #564 §2).
+enum class ViewportPickFamily { None, Table, Annotation, Linework, Solid, FilledRegion };
+
+/// The inputs a viewport hover or click already has, gathered so both ask the SAME question.
+struct ViewportPickRequest {
+  /// The cursor on the work plane — the plan-view pick point, exactly as before.
+  double rawX = 0.0;
+  double rawY = 0.0;
+  /// The orbited-view ray the linework, text and fill picks measure against (REQ-058); null in plan
+  /// view, which keeps every pre-3D XY test byte-identical.
+  const ray3d::Ray* orbitRay = nullptr;
+  /// The camera ray through the pixel, in every view — what the solid pick and every DEPTH
+  /// comparison use.
+  ray3d::Ray eyeRay{};
+  bool eyeRayValid = false;
+  /// Linework tolerance: the hover's tight one or the click's wider one.
+  float lineTol = 0.f;
+  /// For the text / table tolerance (pixel aperture → world).
+  float orthoHalfH = 50.f;
+  float viewportHeightPx = 700.f;
+  bool modelSpace = true;
+  /// A survey point is under the cursor: solids yield to it, as they always have.
+  bool surveyPointUnderCursor = false;
+};
+
+struct ViewportPickResult {
+  ViewportPickFamily family = ViewportPickFamily::None;
+  SelectedEntity entity{};
+  /// For \c Linework: the candidates within tolerance that are VISIBLE (not behind an opaque
+  /// solid), for the disambiguation popup. Empty otherwise.
+  std::vector<CadPickCandidate> candidates;
+};
+
+/// What visible thing is under this pixel (GitHub issue #564 §2, D-2026-09-28-e). The ONE resolution
+/// the viewport hover and both click paths use, so what pre-highlights is what a click takes.
+///
+/// Families keep their long-standing precedence — table, text, linework, solid, fill — with one rule
+/// added: **nothing behind an opaque solid answers.** In Hidden and Shaded a solid's surface is found
+/// along the camera ray and any candidate farther than it (beyond the pick tolerance) is dropped; and
+/// where a solid is nearer the eye than the linework under the cursor, the solid wins. In 2D
+/// Wireframe a solid is see-through (D-2026-09-16-b, Q1 answered 2026-09-28): only its EDGES answer,
+/// by the same nearer-wins rule, and it hides nothing. With no solids in the drawing, every step is
+/// the pre-change call with the pre-change arguments.
+ViewportPickResult ResolveViewportPick(const AppCommandState& st, const ViewportPickRequest& rq);
+
+/// The CLICK's answer (issue #564 §2): the hover's own question first — \p rq with the hover's
+/// \p hoverLineTol — and only when that finds nothing, \p rq as given (the click's wider linework
+/// tolerance). So whatever pre-highlighted is exactly what the click takes, while a click that lands
+/// just outside the aperture keeps the forgiving radius it always had. With only linework under the
+/// cursor this is the pre-change answer: the nearest entity inside the tight radius is also the
+/// nearest inside the wide one. A linework answer carries the WIDE query's visible candidates, as
+/// the disambiguation popup always has.
+ViewportPickResult ResolveViewportClickPick(const AppCommandState& st, const ViewportPickRequest& rq,
+                                            float hoverLineTol);
 
 /// EXTRACTCENTERLINE (REQ-347): re-evaluates the hover's cylinder-axis fit against every visible
 /// point cloud's bounded preview sample under \p ray, writing the result into

@@ -1237,6 +1237,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GizmoTranslateTests.cpp
     # GitHub issue #564 s1: orbited ZOOM EXTENTS, driven through ProcessPendingViewportZoom (domain).
     tests/ZoomExtents3dTests.cpp
+    # GitHub issue #564 s2: depth-ordered hover/click resolution (ResolveViewportPick, domain).
+    tests/ViewportPickDepthTests.cpp
     # REQ-060 rotate/scale handles (TASK-232, slice 4c). Its own file because its subject is the
     # AGREEMENT: a gizmo drag and the function the typed command calls, compared coordinate for
     # coordinate — which is the acceptance itself rather than a proxy for it.

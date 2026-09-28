@@ -12885,25 +12885,9 @@ void DrawPerfHud(const AppCommandState& cmd) {
   ImGui::End();
 }
 
-/// The whole SOLID a viewport hover or click names (REQ-313 / REQ-341), in the one place all three
-/// of those paths ask — so what highlights is what selects, down to the tolerance (code review on
-/// #478, findings 4, 10 and 15). Solids sit below linework and survey points and above filled
-/// regions: a line or a point lying over a solid is the more specific thing to mean, and a fill is a
-/// decoration on the plane beneath it. \p surveyPointUnderCursor is the caller's own
-/// `PickSurveyPointAtCursor` answer, computed with its view metrics.
-///
-/// Which part of a solid answers follows the visual style, and the section clip, inside
-/// `PickClosestSolidEntity` — see there.
-static bool PickSolidUnderCursor(const AppCommandState& cmd, bool modelSpace, const ray3d::Ray& ray,
-                                 bool surveyPointUnderCursor, SelectedEntity* out) {
-  if (!modelSpace || (cmd.cadSolids.empty() && cmd.pipeRunWorldSolids.empty()) || surveyPointUnderCursor)
-    return false;
-  return PickClosestSolidEntity(cmd, ray, CadOffsetEntityPickTolWorld(cmd), out);
-}
-
 /// A plain click adds \p hit to the selection, Shift+click removes it — the rule every other
 /// entity click in `DrawDrawingViewport` follows. Works for both `Type::Solid` and `Type::PipeRun`
-/// (issue #486) — `PickSolidUnderCursor`/`PickClosestSolidEntity` answer with either, whichever the
+/// (issue #486) — `ResolveViewportPick`/`PickClosestSolidEntity` answer with either, whichever the
 /// ray actually hit, so the toggle has to match on the SAME type as the hit, not a fixed one.
 static void ClickToggleSolid(AppCommandState& cmd, const SelectedEntity& hit, bool keyShift) {
   auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
@@ -14593,86 +14577,49 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else if (subObjectHovering) {
         // Handled above; the entity hover stays off while Ctrl is held.
       } else if (runHoverPick && !cmd.pickDisambiguationPopupOpen) {
-        // Text annotations are picked by bounding box and take priority over geometry, mirroring
-        // click-to-select (the annotation pick runs before the entity pick on a click). Hovering text
-        // pre-highlights it in model space, matching the paper-space hover (REQ-039). Dims keep their
-        // existing no-hover behavior — only TEXT/MTEXT pre-highlight.
-        int tblHover = modelSpace ? PickCadTableAt(static_cast<float>(rawX), static_cast<float>(rawY), cmd, halfH,
-                                                   avail.y)
-                                  : -1;
-        int annHover = modelSpace ? PickCadAnnotationAt(static_cast<float>(rawX), static_cast<float>(rawY),
-                                                        cmd, halfH, avail.y)
-                                  : -1;
-        if (annHover >= 0) {
-          const CadAnnotation::Kind hk = cmd.cadAnnotations[static_cast<size_t>(annHover)].kind;
+        // ONE resolution for hover and click (GitHub issue #564 §2, D-2026-09-28-e):
+        // `ResolveViewportPick` decides what visible thing is under this pixel — tables and text,
+        // then linework, then a solid, then a fill, with anything behind an opaque solid dropped and
+        // the nearer of linework and solid winning. The click paths below ask it the same question
+        // with the same ray, so what pre-highlights is what a click takes.
+        //
+        // The eye ray is built whenever a solid could answer — including in plan view, where a solid
+        // never had a pick before; `cursorRayPtr` stays null in plan so every entity that ALREADY had
+        // a plan-view pick keeps its byte-identical pre-3D test (REQ-058).
+        const bool solidPickable = modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty());
+        ViewportPickRequest rq;
+        rq.rawX = rawX;
+        rq.rawY = rawY;
+        rq.orbitRay = cursorRayPtr;
+        rq.eyeRayValid = solidPickable;
+        if (solidPickable)
+          rq.eyeRay = cursorRayPtr ? *cursorRayPtr : CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+        rq.lineTol = CadHoverEntityPickTolWorld(cmd);
+        rq.orthoHalfH = halfH;
+        rq.viewportHeightPx = avail.y;
+        rq.modelSpace = modelSpace;
+        rq.surveyPointUnderCursor =
+            solidPickable && !cmd.surveyPoints.empty() &&
+            PickSurveyPointAtCursor(cmd, rawX, rawY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
+        ViewportPickResult hover = ResolveViewportPick(cmd, rq);
+        // Dims keep their existing no-hover behaviour — only TEXT/MTEXT (and tables) pre-highlight.
+        // A dim under the cursor still ANSWERS (it is what a click takes), it just is not lit.
+        if (hover.family == ViewportPickFamily::Annotation) {
+          const CadAnnotation::Kind hk = cmd.cadAnnotations[static_cast<size_t>(hover.entity.index)].kind;
           if (hk != CadAnnotation::Kind::Text && hk != CadAnnotation::Kind::Mtext &&
               hk != CadAnnotation::Kind::Table)
-            annHover = -1;
+            hover.family = ViewportPickFamily::None;
         }
-        if (tblHover >= 0) {
-          cmd.viewportHoverEntityValid = true;
-          cmd.viewportHoverEntity.type = SelectedEntity::Type::Table;
-          cmd.viewportHoverEntity.index = tblHover;
-        } else if (annHover >= 0) {
-          cmd.viewportHoverEntityValid = true;
-          cmd.viewportHoverEntity.type = SelectedEntity::Type::Annotation;
-          cmd.viewportHoverEntity.index = annHover;
+        cmd.viewportHoverEntityValid = hover.family != ViewportPickFamily::None;
+        if (cmd.viewportHoverEntityValid)
+          cmd.viewportHoverEntity = hover.entity;
+        // The disambiguation list belongs to a linework answer only (beta's #22ba365 invariant).
+        if (hover.family == ViewportPickFamily::Linework && cmd.active == AppCommandState::Kind::None) {
+          cmd.viewportPickCandidates = std::move(hover.candidates);
+          cmd.viewportPickAmbiguous = cmd.viewportPickCandidates.size() > 1;
         } else {
-          SelectedEntity hoverHit{};
-          float hoverD2 = 0.f;
-          const float hoverTol = CadHoverEntityPickTolWorld(cmd);
-          // The SAME ray the click below uses (REQ-058) — what highlights has to be what selects.
-          // Without it the hover measured a plan-view XY distance from the work-plane cursor point
-          // while the click measured the true distance from the ray, and off plan view those two
-          // disagree: the XY distance over-measures along the foreshortened screen direction, so
-          // geometry the click would take highlighted on one side of the cursor and not the other.
-          SelectedEntity solidHover{};
-          // A solid is a VOLUME, so its pick is a ray-versus-triangle test and there is nothing
-          // sensible to do with a bare plan XY. `cursorRayPtr` is deliberately null in plan view to
-          // keep REQ-058's byte-identical pre-3D path — but that guarantee is about entities that
-          // ALREADY had a plan-view pick, and a solid never did: `PickClosestCadEntity` has never
-          // returned one. So building a ray here for the solid pick alone cannot change any
-          // existing answer, and without it the highlight would work only when orbited, which is
-          // not the view most drawings sit in.
-          const bool solidPickable = modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty());
-          const ray3d::Ray solidRay =
-              solidPickable ? CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y) : ray3d::Ray{};
-          const bool surveyUnderHover =
-              solidPickable && !cmd.surveyPoints.empty() &&
-              PickSurveyPointAtCursor(cmd, rawX, rawY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
-          std::vector<CadPickCandidate> hoverCandidates;
-          if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2, cursorRayPtr,
-                                   &hoverCandidates)) {
-            cmd.viewportHoverEntityValid = true;
-            cmd.viewportHoverEntity = hoverHit;
-            if (cmd.active == AppCommandState::Kind::None) {
-              cmd.viewportPickCandidates = std::move(hoverCandidates);
-              cmd.viewportPickAmbiguous = cmd.viewportPickCandidates.size() > 1;
-            } else {
-              cmd.viewportPickCandidates.clear();
-              cmd.viewportPickAmbiguous = false;
-            }
-          } else if (solidPickable &&
-                     PickSolidUnderCursor(cmd, modelSpace, solidRay, surveyUnderHover, &solidHover)) {
-            cmd.viewportHoverEntityValid = true;
-            cmd.viewportHoverEntity = solidHover;
-            // The disambiguation list belongs to the linework pick that produced it; a solid
-            // answered instead, so there is no ambiguity to offer (beta's #22ba365 invariant).
-            cmd.viewportPickCandidates.clear();
-            cmd.viewportPickAmbiguous = false;
-          } else {
-            cmd.viewportPickCandidates.clear();
-            cmd.viewportPickAmbiguous = false;
-            // Filled-region hover (REQ-042): lowest priority, only when no linework is under the cursor.
-            const int frHover = PickFilledRegionAt(cmd, rawX, rawY);
-            if (frHover >= 0) {
-              cmd.viewportHoverEntityValid = true;
-              cmd.viewportHoverEntity.type = SelectedEntity::Type::FilledRegion;
-              cmd.viewportHoverEntity.index = frHover;
-            } else {
-              cmd.viewportHoverEntityValid = false;
-            }
-          }
+          cmd.viewportPickCandidates.clear();
+          cmd.viewportPickAmbiguous = false;
         }
       }
       // else: the gate says skip this frame — keep last frame's cmd.viewportHoverEntity{,Valid},
@@ -14901,7 +14848,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const bool onPoint = cmd.viewportHoverSurveyPointIndex >= 0;
       // Pipe run (issue #486): same precedence slot a solid's own hover would occupy (both come
       // from the SAME `viewportHoverEntity` pick), one step below a survey point — "solids sit
-      // below linework and survey points" is `PickSolidUnderCursor`'s own stated ordering.
+      // below survey points" is `ResolveViewportPick`'s own stated ordering (issue #564 §2).
       const bool onPipeRun =
           cmd.viewportHoverEntityValid && cmd.viewportHoverEntity.type == SelectedEntity::Type::PipeRun;
       if (onPoint && tick.settled)
@@ -15369,7 +15316,29 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         break;
       }
 
-      const int tblIx = PickCadTableAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+      // The same resolver the hover and the idle click use (GitHub issue #564 §2), so a solid in
+      // front of a line takes this click too, and exactly one family answers.
+      ViewportPickResult accPick;
+      {
+        const bool solidClickable = modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty());
+        ViewportPickRequest rq;
+        rq.rawX = rawPickX;
+        rq.rawY = rawPickY;
+        rq.orbitRay = pickRayPtr;
+        rq.eyeRayValid = solidClickable;
+        if (solidClickable)
+          rq.eyeRay = pickRayPtr ? *pickRayPtr : pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        rq.lineTol = CadOffsetEntityPickTolWorld(cmd);
+        rq.orthoHalfH = halfH;
+        rq.viewportHeightPx = avail.y;
+        rq.modelSpace = modelSpace;
+        rq.surveyPointUnderCursor =
+            solidClickable && !cmd.surveyPoints.empty() &&
+            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
+        accPick = ResolveViewportClickPick(cmd, rq, CadHoverEntityPickTolWorld(cmd));
+      }
+
+      const int tblIx = accPick.family == ViewportPickFamily::Table ? accPick.entity.index : -1;
       if (tblIx >= 0) {
         SelectedEntity se{};
         se.type = SelectedEntity::Type::Table;
@@ -15387,7 +15356,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         handled = true;
       }
 
-      const int annIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+      const int annIx = accPick.family == ViewportPickFamily::Annotation ? accPick.entity.index : -1;
       if (annIx >= 0) {
         SelectedEntity se{};
         se.type = SelectedEntity::Type::Annotation;
@@ -15405,42 +15374,30 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         handled = true;
       }
 
-      if (!handled) {
-        SelectedEntity clickHit{};
-        float clickD2 = 0.f;
-        const float clickTol = CadOffsetEntityPickTolWorld(cmd);
-        if (PickClosestCadEntity(cmd, rawPickX, rawPickY, clickTol, &clickHit, &clickD2, pickRayPtr)) {
-          auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
-            return x.type == clickHit.type && x.index == clickHit.index;
-          });
-          if (keyShift) {
-            if (it != cmd.selection.end())
-              cmd.selection.erase(it);
-          } else if (it == cmd.selection.end()) {
-            cmd.selection.push_back(clickHit);
-          }
-          EnsureAttrCounts(cmd);
-          handled = true;
+      if (!handled && accPick.family == ViewportPickFamily::Linework) {
+        const SelectedEntity clickHit = accPick.entity;
+        auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+          return x.type == clickHit.type && x.index == clickHit.index;
+        });
+        if (keyShift) {
+          if (it != cmd.selection.end())
+            cmd.selection.erase(it);
+        } else if (it == cmd.selection.end()) {
+          cmd.selection.push_back(clickHit);
         }
+        EnsureAttrCounts(cmd);
+        handled = true;
       }
 
-      // A whole SOLID — see `PickSolidUnderCursor`. Before this, `ComputeSelectionFromRect` was the
-      // only thing that ever put a solid in a selection, so a solid could be chosen by dragging a
-      // rectangle around it and by no other gesture, in this step or any other.
-      if (!handled && modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty())) {
-        SelectedEntity solidHit{};
-        const bool surveyUnder =
-            !cmd.surveyPoints.empty() &&
-            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
-        if (PickSolidUnderCursor(cmd, modelSpace, pickCam.ScreenRay(mx, my, avail.x, avail.y), surveyUnder,
-                                 &solidHit)) {
-          ClickToggleSolid(cmd, solidHit, keyShift);
-          handled = true;
-        }
+      // A whole SOLID — see `ResolveViewportPick`. Before the solid click, `ComputeSelectionFromRect`
+      // was the only thing that ever put a solid in a selection.
+      if (!handled && accPick.family == ViewportPickFamily::Solid) {
+        ClickToggleSolid(cmd, accPick.entity, keyShift);
+        handled = true;
       }
 
       if (!handled) {
-        const int frIx = PickFilledRegionAt(cmd, rawPickX, rawPickY);
+        const int frIx = accPick.family == ViewportPickFamily::FilledRegion ? accPick.entity.index : -1;
         if (frIx >= 0) {
           SelectedEntity fe{};
           fe.type = SelectedEntity::Type::FilledRegion;
@@ -15959,8 +15916,31 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
 
+      // What is under the click — asked ONCE, of the same resolver the hover uses, with the same ray
+      // (GitHub issue #564 §2). Each block below acts only when the answer is its family, so a solid
+      // in front of a line takes the click exactly as it took the highlight.
+      ViewportPickResult clickPick;
       if (!handled) {
-        const int tblClick = PickCadTableAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+        const bool solidClickable = modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty());
+        ViewportPickRequest rq;
+        rq.rawX = rawPickX;
+        rq.rawY = rawPickY;
+        rq.orbitRay = pickRayPtr;
+        rq.eyeRayValid = solidClickable;
+        if (solidClickable)
+          rq.eyeRay = pickRayPtr ? *pickRayPtr : pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        rq.lineTol = CadOffsetEntityPickTolWorld(cmd);
+        rq.orthoHalfH = halfH;
+        rq.viewportHeightPx = avail.y;
+        rq.modelSpace = modelSpace;
+        rq.surveyPointUnderCursor =
+            solidClickable && !cmd.surveyPoints.empty() &&
+            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
+        clickPick = ResolveViewportClickPick(cmd, rq, CadHoverEntityPickTolWorld(cmd));
+      }
+
+      if (!handled) {
+        const int tblClick = clickPick.family == ViewportPickFamily::Table ? clickPick.entity.index : -1;
         if (tblClick >= 0) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
@@ -15988,7 +15968,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
 
       if (!handled) {
-        const int annIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+        const int annIx = clickPick.family == ViewportPickFamily::Annotation ? clickPick.entity.index : -1;
         if (annIx >= 0) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
@@ -16029,13 +16009,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
       // Click-to-select: pick the closest CAD entity under the cursor (line, circle, arc, ellipse, polyline).
       if (!handled) {
-        SelectedEntity clickHit{};
-        float clickD2 = 0.f;
-        const float clickTol = CadOffsetEntityPickTolWorld(cmd);
-        std::vector<CadPickCandidate> clickCandidates;
-        // Same ray the hover used, so what highlights is what selects (REQ-058).
-        if (PickClosestCadEntity(cmd, rawPickX, rawPickY, clickTol, &clickHit, &clickD2, pickRayPtr,
-                                 &clickCandidates)) {
+        // The resolver's linework answer — the same entity and the same VISIBLE candidates the hover
+        // was given (issue #564 §2).
+        SelectedEntity clickHit = clickPick.entity;
+        std::vector<CadPickCandidate> clickCandidates = std::move(clickPick.candidates);
+        if (clickPick.family == ViewportPickFamily::Linework) {
           if (clickCandidates.size() > 1 && cmd.multiSelectionEnabled) {
             cmd.pickDisambiguationCandidates = std::move(clickCandidates);
             if (s_lastCrosshairScreen.x >= 0.f) {
@@ -16052,8 +16030,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             cmd.selBoxWaitingSecond = false;
             handled = true;
           } else {
-            if (clickCandidates.size() > 1 && !cmd.multiSelectionEnabled)
-              PickCadEntityByDepth(clickCandidates, &clickHit, pickRayPtr);
+            // No re-pick by depth here any more: `ResolveViewportPick` already chose the nearest
+            // visible candidate, by the same rule the hover used (issue #564 §2).
             AbortMtextGripInteraction(cmd);
             ClearDimGripInteraction(cmd);
             if (keyShift) {
@@ -16077,28 +16055,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
 
-      // A whole SOLID — see `PickSolidUnderCursor`. Idle click-to-select never reached a solid before
+      // A whole SOLID — see `ResolveViewportPick`. Idle click-to-select never reached a solid before
       // this, which is half of why "the section command will not let me select the object" was
       // reported — the gesture did not exist anywhere, not only inside SECTION.
-      if (!handled && modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty())) {
-        SelectedEntity solidHit{};
-        const bool surveyUnder =
-            !cmd.surveyPoints.empty() &&
-            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
-        if (PickSolidUnderCursor(cmd, modelSpace, pickCam.ScreenRay(mx, my, avail.x, avail.y), surveyUnder,
-                                 &solidHit)) {
-          AbortMtextGripInteraction(cmd);
-          ClearDimGripInteraction(cmd);
-          ClickToggleSolid(cmd, solidHit, keyShift);
-          cmd.selBoxWaitingSecond = false;
-          handled = true;
-        }
+      if (!handled && clickPick.family == ViewportPickFamily::Solid) {
+        AbortMtextGripInteraction(cmd);
+        ClearDimGripInteraction(cmd);
+        ClickToggleSolid(cmd, clickPick.entity, keyShift);
+        cmd.selBoxWaitingSecond = false;
+        handled = true;
       }
 
       // Filled-region (hatch) pick — lowest priority, only after annotation + geometry picks miss, so a fill
       // never steals a click from linework on top of it (REQ-042). Clicking anywhere inside the fill selects it.
       if (!handled) {
-        const int frIx = PickFilledRegionAt(cmd, rawPickX, rawPickY);
+        const int frIx = clickPick.family == ViewportPickFamily::FilledRegion ? clickPick.entity.index : -1;
         if (frIx >= 0) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);

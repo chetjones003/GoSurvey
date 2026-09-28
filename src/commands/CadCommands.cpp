@@ -6046,8 +6046,18 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
   CadTextAnnotationBounds(a, h, outMnX, outMnY, outMxX, outMxY);
 }
 
-int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
-                        float viewportHeightPx) {
+/// Where \p ray meets the horizontal plane z = \p z, as XY. False when the ray runs along the plane.
+static bool RayAtElevation(const ray3d::Ray& ray, double z, float* x, float* y) {
+  if (std::fabs(ray.dir.z) < 1e-12)
+    return false;
+  const double t = (z - ray.origin.z) / ray.dir.z;
+  *x = static_cast<float>(ray.origin.x + t * ray.dir.x);
+  *y = static_cast<float>(ray.origin.y + t * ray.dir.y);
+  return true;
+}
+
+int PickCadAnnotationAt(float wxIn, float wyIn, const AppCommandState& cmd, float orthoHalfHeightWorld,
+                        float viewportHeightPx, const ray3d::Ray* ray) {
   const float tol =
       CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, cmd.objectSnapAperturePx);
   const float tol2 = tol * tol;
@@ -6073,6 +6083,12 @@ int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float or
         CadEntityIdHidden(&cmd.hiddenEntityIds, cmd.cadAnnotationAttrs[static_cast<size_t>(i)].id))
       continue;
     const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(i)];
+    // Orbited (issue #564 §2): test the annotation where the camera ray meets ITS plane, not where
+    // it meets the work plane — the two differ as soon as the text is not at the work plane's Z.
+    float wx = wxIn;
+    float wy = wyIn;
+    if (ray && !RayAtElevation(*ray, static_cast<double>(a.insZ), &wx, &wy))
+      continue;  // seen exactly edge-on: the text is a line on screen and names no point
     if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
       if (!CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
@@ -26609,7 +26625,7 @@ bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y)
   return hatchgeom::ContainsPoint(fr, x, y);
 }
 
-int PickFilledRegionAt(const AppCommandState& st, double wx, double wy) {
+int PickFilledRegionAt(const AppCommandState& st, double wxIn, double wyIn, const ray3d::Ray* ray) {
   int best = -1;
   double bestArea = 0.0;
   for (size_t i = 0; i < st.cadFilledRegions.size(); ++i) {
@@ -26617,6 +26633,17 @@ int PickFilledRegionAt(const AppCommandState& st, double wx, double wy) {
     if (!st.hiddenEntityIds.empty() && i < st.cadFilledRegionAttrs.size() &&
         CadEntityIdHidden(&st.hiddenEntityIds, st.cadFilledRegionAttrs[i].id))
       continue;
+    double wx = wxIn;
+    double wy = wyIn;
+    if (ray) {
+      // Orbited (issue #564 §2): where the ray meets this region's own plane.
+      const auto& v = st.cadFilledRegions[i].vertsXyz;
+      float fx = 0.f, fy = 0.f;
+      if (v.size() < 3 || !RayAtElevation(*ray, static_cast<double>(v[2]), &fx, &fy))
+        continue;
+      wx = fx;
+      wy = fy;
+    }
     if (!hatchgeom::ContainsPoint(st.cadFilledRegions[i], wx, wy))
       continue;
     const double area = hatchgeom::OuterAreaAbs(st.cadFilledRegions[i]);
@@ -29578,6 +29605,156 @@ bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, fl
     return true;
   }
   return false;
+}
+
+ViewportPickResult ResolveViewportPick(const AppCommandState& st, const ViewportPickRequest& rq) {
+  ViewportPickResult r;
+  const ray3d::Vec3 eo = rq.eyeRay.origin;
+  const ray3d::Vec3 ed = rq.eyeRay.dir;
+  const double edLen2 = ray3d::Dot(ed, ed);
+  const double edLen = std::sqrt(edLen2);
+
+  // 1. The solid under the eye ray, and how far along it (issue #564 §2). Solids yield to a survey
+  //    point, as they always have.
+  bool haveSolid = false;
+  SelectedEntity solidE{};
+  double tSolid = 0.0;
+  float solidTol = 0.f;  // computed once: it sweeps the drawing's extents
+  if (rq.modelSpace && rq.eyeRayValid && edLen > 1e-12 && !rq.surveyPointUnderCursor &&
+      (!st.cadSolids.empty() || !st.pipeRunWorldSolids.empty())) {
+    solidTol = CadOffsetEntityPickTolWorld(st);
+    haveSolid = PickClosestSolidEntity(st, rq.eyeRay, solidTol, &solidE, &tSolid);
+  }
+  // Only a DRAWN surface hides what is behind it: in 2D Wireframe a solid is see-through (Q1).
+  const bool opaque = haveSolid && st.viewportVisualStyle != VisualStyle::Wireframe2D;
+  // "On the surface" counts as in front: a line drawn on a face, or the face's own edge, must still
+  // win over the face. The pick tolerance is that allowance, converted to ray-parameter units.
+  const double depthTolT = haveSolid ? static_cast<double>(std::max(rq.lineTol, solidTol)) / edLen : 0.0;
+  const auto tAtZ = [&](double z, double* t) {
+    if (std::fabs(ed.z) < 1e-12)
+      return false;
+    *t = (z - eo.z) / ed.z;
+    return true;
+  };
+  const auto hiddenAtT = [&](double t) { return opaque && t > tSolid + depthTolT; };
+  const auto hiddenAtZ = [&](double z) {
+    double t = 0.0;
+    return opaque && tAtZ(z, &t) && hiddenAtT(t);
+  };
+  // A linework candidate's depth on the eye ray. Orbited, its depthKey IS the parameter on this same
+  // ray (the caller passes one ray as both); in plan it is the entity's Z at the closest point.
+  const auto candT = [&](const CadPickCandidate& c, double* t) {
+    if (rq.orbitRay) {
+      *t = c.depthKey;
+      return true;
+    }
+    return tAtZ(c.depthKey, t);
+  };
+
+  // 2. Tables, then text — their long-standing precedence over linework, unless an opaque solid is
+  //    in front of them. Tables carry no elevation of their own and are drawn at Z = 0.
+  if (rq.modelSpace) {
+    const int tbl = PickCadTableAt(static_cast<float>(rq.rawX), static_cast<float>(rq.rawY), st, rq.orthoHalfH,
+                                   rq.viewportHeightPx);
+    if (tbl >= 0 && !hiddenAtZ(0.0)) {
+      r.family = ViewportPickFamily::Table;
+      r.entity.type = SelectedEntity::Type::Table;
+      r.entity.index = tbl;
+      return r;
+    }
+    const int ann = PickCadAnnotationAt(static_cast<float>(rq.rawX), static_cast<float>(rq.rawY), st,
+                                        rq.orthoHalfH, rq.viewportHeightPx, rq.orbitRay);
+    if (ann >= 0 && !hiddenAtZ(static_cast<double>(st.cadAnnotations[static_cast<size_t>(ann)].insZ))) {
+      r.family = ViewportPickFamily::Annotation;
+      r.entity.type = SelectedEntity::Type::Annotation;
+      r.entity.index = ann;
+      return r;
+    }
+  }
+
+  // 3. Linework. With no solid under the cursor this is the pre-change call, answer and candidate
+  //    list untouched.
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  std::vector<CadPickCandidate> cands;
+  if (PickClosestCadEntity(st, rq.rawX, rq.rawY, rq.lineTol, &hit, &d2, rq.orbitRay, &cands)) {
+    // Drop what an opaque solid's surface hides (none without a solid, or in 2D Wireframe).
+    std::vector<CadPickCandidate> visible;
+    for (const CadPickCandidate& c : cands) {
+      double t = 0.0;
+      if (!candT(c, &t) || !hiddenAtT(t))
+        visible.push_back(c);
+    }
+    // The winner among what is visible: NEAREST THE EYE (the ray parameter orbited, the highest Z in
+    // plan — `CadPickCandidate::depthKey`), and on a tie the nearest to the cursor. The tolerance
+    // decides what is a candidate, not which one wins (issue #564 §2; the tie rule decided with the
+    // user 2026-09-28, D-2026-09-28-e). Before this, the hover took the nearest-to-cursor and the
+    // default click the highest, first-DRAWN on a tie — so in a flat drawing the two disagreed.
+    bool lineOk = cands.empty();  // no candidate list to judge by: keep PickClosestCadEntity's answer
+    double tLine = -std::numeric_limits<double>::infinity();
+    if (!visible.empty()) {
+      const auto nearer = [&](const CadPickCandidate& a, const CadPickCandidate& b) {
+        const double da = rq.orbitRay ? a.depthKey : -a.depthKey;  // smaller = nearer the eye
+        const double db = rq.orbitRay ? b.depthKey : -b.depthKey;
+        if (da < db - 1e-9)
+          return true;
+        if (db < da - 1e-9)
+          return false;
+        return a.distSq < b.distSq;
+      };
+      auto it = visible.begin();
+      for (auto k = visible.begin(); k != visible.end(); ++k)
+        if (nearer(*k, *it))
+          it = k;
+      hit = it->entity;
+      lineOk = true;
+      double t = 0.0;
+      if (candT(*it, &t))
+        tLine = t;
+    }
+    if (!haveSolid && lineOk) {
+      r.family = ViewportPickFamily::Linework;
+      r.entity = hit;
+      r.candidates = std::move(visible);
+      return r;
+    }
+    // Nearer the eye wins; a line ON the surface (within tolerance) counts as in front of it.
+    if (lineOk && tLine <= tSolid + depthTolT) {
+      r.family = ViewportPickFamily::Linework;
+      r.entity = hit;
+      r.candidates = std::move(visible);
+      return r;
+    }
+  }
+
+  // 4. The solid.
+  if (haveSolid) {
+    r.family = ViewportPickFamily::Solid;
+    r.entity = solidE;
+    return r;
+  }
+
+  // 5. Filled regions, lowest (REQ-042).
+  const int fr = PickFilledRegionAt(st, rq.rawX, rq.rawY, rq.orbitRay);
+  if (fr >= 0) {
+    r.family = ViewportPickFamily::FilledRegion;
+    r.entity.type = SelectedEntity::Type::FilledRegion;
+    r.entity.index = fr;
+  }
+  return r;
+}
+
+ViewportPickResult ResolveViewportClickPick(const AppCommandState& st, const ViewportPickRequest& rq,
+                                            float hoverLineTol) {
+  ViewportPickRequest tight = rq;
+  tight.lineTol = hoverLineTol;
+  ViewportPickResult near = ResolveViewportPick(st, tight);
+  ViewportPickResult wide = ResolveViewportPick(st, rq);
+  if (near.family == ViewportPickFamily::None)
+    return wide;
+  if (near.family == ViewportPickFamily::Linework && wide.family == ViewportPickFamily::Linework)
+    near.candidates = std::move(wide.candidates);
+  return near;
 }
 
 bool BuildSubObjectHoverRow(const AppCommandState& st, const SelectedSubObject& s,

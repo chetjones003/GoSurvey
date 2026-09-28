@@ -1948,6 +1948,36 @@ requirements is a planning failure, not a sign of rigor.
   built as flat world geometry is unreadable in a near-horizontal view.
   2026-08-12 — signed off. The prior status ("only LINE is carried through; CIRCLE is known broken")
   had been stale since TASK-036 and is superseded.
+- **Amendment 2026-09-28 (D-2026-09-28-e) — hover and click pick what is VISIBLE, through one
+  resolution (GitHub issue #564 §2, TASK-283).**
+  1. **One resolution.** `ResolveViewportPick` answers "what visible thing is under this pixel" for the
+     viewport hover and both click paths (idle, and a command's select-objects step). Families keep
+     their precedence — table, text, linework, solid, fill — and every family is judged on the camera
+     ray: orbited, text and fills are hit where the ray meets their own plane (`PickCadAnnotationAt` /
+     `PickFilledRegionAt` take the ray).
+  2. **Occlusion.** In **Hidden** and **Shaded** a solid is opaque: its surface is found along the ray,
+     anything farther (beyond the pick tolerance — a line drawn ON a face counts as in front) does not
+     answer and does not pre-highlight, and where a solid is nearer the eye than the linework under the
+     cursor the solid wins. In **2D Wireframe** a solid is see-through (issue #564 Q1, answered
+     "pick what's drawn", extending D-2026-09-16-b): only its edges answer, by the same nearer-wins
+     rule, and it hides nothing.
+  3. **Winner among linework.** Among the visible candidates within tolerance, the one **nearest the
+     eye** wins (ray parameter orbited, highest Z in plan); on a tie, the one **nearest the cursor**.
+     The tolerance decides what is a candidate, not which wins. (Before, the hover took the nearest to
+     the cursor and the default click the highest, *first-drawn* on a tie, so in a flat drawing the two
+     disagreed; the user chose this rule knowing it changes that tie case.)
+  4. **Hover = click.** The click asks the hover's question first (the hover's aperture tolerance,
+     D-2026-09-02-g) and only when that finds nothing widens to its own radius
+     (`ResolveViewportClickPick`). So whatever pre-highlights is what the click takes; a click just
+     outside the aperture keeps its forgiving radius; the disambiguation popup keeps the wide list.
+  5. Plan view with no solids: the same calls with the same inputs; only the tie in item 3 differs.
+     The resolution runs inside the existing `HoverPickGate` budget (issue #166), not beside it.
+  - Additional acceptance:
+    - hovering anywhere on a solid's visible surface highlights it, including where linework passes
+      behind it; linework in front of it still wins, linework behind it does not;
+    - the entity that pre-highlights on hover is the entity a click at that pixel selects;
+    - Wireframe / Hidden / Shaded each pick what they display;
+    - plan-view picking on a 2D drawing is unchanged apart from the item-3 tie.
 
 ### REQ-059 — ViewCube (view navigation widget)
 - Purpose: direct, discoverable view control and continuous orientation feedback
