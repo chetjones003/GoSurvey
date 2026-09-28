@@ -35539,6 +35539,17 @@ void TryApplyBranchAtEndpoint(AppCommandState& st, std::vector<ray3d::Vec3>& pie
   branchFits.push_back(std::move(plan));
 }
 
+/// A new pipe run's attributes: the ordinary new-entity ones (current layer), coloured by its size
+/// from the size palette (REQ-353, `kCadPipeNpsTable`). A size the table does not carry keeps
+/// `ByLayer` — unreachable through PIPERUN's size prompt, which refuses such a size.
+EntityAttributes MakeNewPipeRunAttrs(const AppCommandState& st, std::string_view nominalSize) {
+  EntityAttributes a = MakeNewEntityAttrs(st);
+  std::string hex;
+  if (CadPipeNominalSizeColor(nominalSize, &hex))
+    a.color = hex;
+  return a;
+}
+
 /// Store the run built from the path so far and end the command. Auto-inserts an elbow fitting
 /// (issue #486 increment B5) at every bend where a catalog match exists — see
 /// `PlanPipeRunAutoFittings` — splitting the single path into multiple straight/smooth-filleted
@@ -35611,19 +35622,21 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
       run.vertsXyz[vi * 3 + 2] = bf.existingCut[k].z;
     }
   }
+  // Every piece, elbow and tee of this run is one line: one size colour, one layer (REQ-353).
+  const EntityAttributes lineAttrs = MakeNewPipeRunAttrs(st, st.pipeRunNominalSize);
   size_t elbowIx = 0;
   size_t totalVerts = 0;
   for (size_t p = 0; p < pieceRuns.size(); ++p) {
     totalVerts += pieceRuns[p].vertsXyz.size() / 3;
     st.cadPipeRuns.push_back(std::move(pieceRuns[p]));
-    st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+    st.cadPipeRunAttrs.push_back(lineAttrs);
     if (elbowIx < elbows.size()) {
       const PlannedElbow& e = elbows[elbowIx++];
-      CadBlockPlaceInsertNoUndo(st, e.blockName, e.xf, log);
+      CadBlockPlaceInsertNoUndo(st, e.blockName, e.xf, log, &lineAttrs);
     }
   }
   for (const BranchFitPlan& bf : branchFits)
-    CadBlockPlaceInsertNoUndo(st, bf.blockName, bf.xf, log);
+    CadBlockPlaceInsertNoUndo(st, bf.blockName, bf.xf, log, &lineAttrs);
   BumpCadGpuCache(st);
   if (elbows.empty() && branchFits.empty()) {
     log.push_back("PIPERUN - run created: " + std::to_string(totalVerts) + " point(s).");
@@ -35694,8 +35707,7 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
     double odFeet = 0.0;
     if (!CadPipeNominalOdFeet(sizeTok, &odFeet)) {
       log.push_back("PIPERUN - unknown nominal size \"" + sizeTok +
-                    "\". Known NPS sizes: 0.5in, 0.75in, 1in, 1.25in, 1.5in, 2in, 2.5in, 3in, 4in, "
-                    "6in, 8in, 10in, 12in.");
+                    "\". Known NPS sizes: " + CadPipeKnownNominalSizesText() + ".");
       return true;
     }
     std::string classTag;
@@ -36190,10 +36202,16 @@ bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
     return false;
   }
 
+  // The fitting and the far piece are the same line as the run they split: they take its layer and
+  // colour — an override included — not the current ones (REQ-353). A reducer therefore reads as
+  // the run it was spliced into (issue #564 Q4).
+  const EntityAttributes lineAttrs = DuplicatedEntityAttrs(
+      static_cast<size_t>(runIdx) < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
+                                                               : MakeNewPipeRunAttrs(st, run.nominalSize));
   PushUndoSnapshot(st, "Insert Pipe Fitting");
   st.cadPipeRuns[static_cast<size_t>(runIdx)] = std::move(piece1);  // keeps the original's index
   st.cadPipeRuns.push_back(std::move(piece2));
-  st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+  st.cadPipeRunAttrs.push_back(lineAttrs);
   const int piece2Idx = static_cast<int>(st.cadPipeRuns.size()) - 1;
   for (CadPipingSystem& sys : st.cadPipingSystems) {
     if (std::find(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end(), runIdx) !=
@@ -36202,7 +36220,7 @@ bool TrySplicePipeFit(AppCommandState& st, int runIdx, CadPipePartType partType,
       std::sort(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end());
     }
   }
-  CadBlockPlaceInsertNoUndo(st, blockName, xf, log);
+  CadBlockPlaceInsertNoUndo(st, blockName, xf, log, &lineAttrs);
   BumpCadGpuCache(st);
   log.push_back("PIPEFIT - \"" + blockName + "\" inserted, run split into 2 pieces.");
   return true;
@@ -36328,10 +36346,14 @@ bool TrySplitPipeRun(AppCommandState& st, int runIdx, const ray3d::Vec3& pick, s
     return false;
   }
 
+  // The far piece is the same line: it keeps the run's layer and colour, an override included (REQ-353).
+  const EntityAttributes lineAttrs = DuplicatedEntityAttrs(
+      static_cast<size_t>(runIdx) < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
+                                                               : MakeNewPipeRunAttrs(st, run.nominalSize));
   PushUndoSnapshot(st, "Split Pipe Run");
   st.cadPipeRuns[static_cast<size_t>(runIdx)] = std::move(piece1);
   st.cadPipeRuns.push_back(std::move(piece2));
-  st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+  st.cadPipeRunAttrs.push_back(lineAttrs);
   const int piece2Idx = static_cast<int>(st.cadPipeRuns.size()) - 1;
   for (CadPipingSystem& sys : st.cadPipingSystems) {
     if (std::find(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end(), runIdx) !=

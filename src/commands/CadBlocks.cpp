@@ -647,7 +647,8 @@ void ExplodeRef(AppCommandState& st, const CadBlockRef& ref, const EntityAttribu
 }
 
 bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform xf, bool explode,
-                     std::vector<std::string>& log, bool pushUndo = true) {
+                     std::vector<std::string>& log, bool pushUndo = true,
+                     const EntityAttributes* lineAttrs = nullptr) {
   const int di = CadBlockFindDef(st.blockDefs, name);
   if (di < 0) {
     log.push_back("INSERT — no block named \"" + std::string(name) + "\".");
@@ -665,7 +666,11 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
   const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
   for (const CadBlockAttrDef& ad : def.attrDefs)
     CadBlockAttrSet(&r, ad.tag, ad.defaultValue);
-  const EntityAttributes attr = NewBlockAttr(st);
+  EntityAttributes attr = NewBlockAttr(st);
+  if (lineAttrs) {  // a pipe fitting takes its run's layer and colour (REQ-353)
+    attr.layer = lineAttrs->layer;
+    attr.color = lineAttrs->color;
+  }
   const bool paper = ActivePaperGeometryTarget(st) != nullptr;
   if (paper && explode) {
     log.push_back("INSERT — explode is model space only; placing as a reference.");
@@ -952,8 +957,8 @@ bool CadBlockPlaceInsert(AppCommandState& st, std::string_view name, CadBlockXfo
 }
 
 bool CadBlockPlaceInsertNoUndo(AppCommandState& st, std::string_view name, CadBlockXform xf,
-                               std::vector<std::string>& log) {
-  return PlaceInsertImpl(st, name, xf, /*explode=*/false, log, /*pushUndo=*/false);
+                               std::vector<std::string>& log, const EntityAttributes* lineAttrs) {
+  return PlaceInsertImpl(st, name, xf, /*explode=*/false, log, /*pushUndo=*/false, lineAttrs);
 }
 
 void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log) {

@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <string_view>
@@ -32,18 +33,46 @@
 struct CadPipeNpsEntry {
   double nps;         ///< nominal size in inches, e.g. 4.0 for "4in"
   double odIn;        ///< outer diameter in inches
-  double sch40WallIn; ///< schedule 40 wall thickness in inches (ASME B36.10M)
+  double sch40WallIn; ///< schedule 40 wall thickness in inches (ASME B36.10M) — except 22in, see
+                      ///< the note on \ref kCadPipeNpsTable
+  const char* colorHex; ///< the size's default display colour, `#RRGGBB` (GitHub issue #564 §7)
 };
 
-/// Standard-wall NPS → OD + schedule-40 wall table for the sizes this codebase's fittings library
-/// targets (issue #486). Deliberately small and exact-match only: a size the table does not carry
-/// is a SPEC GAP for the catalog (increment B4), not something to interpolate or guess.
+/// Standard-wall NPS → OD + schedule-40 wall + default colour table for the sizes this codebase
+/// models (issue #486; extended to 21 sizes by GitHub issue #564 §7 / REQ-353). Deliberately
+/// exact-match only: a size the table does not carry is a SPEC GAP for the catalog, not something
+/// to interpolate or guess.
+///
+/// **22in has no schedule 40** in ASME B36.10M (it goes Sch 30 0.500 → Sch 60 0.875), so its row
+/// carries the STANDARD-weight wall, 0.375, instead (D-2026-09-28-i) — the only row where the
+/// `sch40WallIn` column is not literally schedule 40.
+///
+/// The colour column IS the size palette (REQ-353, D-2026-09-28-i, issue #564 Q5 "built-in, one
+/// table"): a new run is stamped with its size's colour, so a size and its colour live on one line
+/// and cannot drift apart. It is a default, not a lock — the run's colour is an ordinary entity
+/// colour afterwards, and an edit (or `ByLayer`) wins.
 inline constexpr CadPipeNpsEntry kCadPipeNpsTable[] = {
-    {0.5, 0.840, 0.109},   {0.75, 1.050, 0.113},  {1.0, 1.315, 0.133},
-    {1.25, 1.660, 0.140},  {1.5, 1.900, 0.145},   {2.0, 2.375, 0.154},
-    {2.5, 2.875, 0.203},   {3.0, 3.500, 0.216},   {4.0, 4.500, 0.237},
-    {6.0, 6.625, 0.280},   {8.0, 8.625, 0.322},   {10.0, 10.750, 0.365},
-    {12.0, 12.750, 0.406},
+    {0.5, 0.840, 0.109, "#FF3B30"},    // red
+    {0.75, 1.050, 0.113, "#FF7A00"},   // orange
+    {1.0, 1.315, 0.133, "#FFC400"},    // amber
+    {1.25, 1.660, 0.140, "#E8E80F"},   // yellow
+    {1.5, 1.900, 0.145, "#A8E00F"},    // yellow-green
+    {2.0, 2.375, 0.154, "#2ECC40"},    // green
+    {2.5, 2.875, 0.203, "#00C49A"},    // teal
+    {3.0, 3.500, 0.216, "#00BCD4"},    // cyan
+    {3.5, 4.000, 0.226, "#00A2FF"},    // azure
+    {4.0, 4.500, 0.237, "#2D6CDF"},    // blue
+    {5.0, 5.563, 0.258, "#5A4FE0"},    // indigo
+    {6.0, 6.625, 0.280, "#8E44E0"},    // violet
+    {8.0, 8.625, 0.322, "#C44FE0"},    // purple
+    {10.0, 10.750, 0.365, "#E84393"},  // magenta
+    {12.0, 12.750, 0.406, "#E0466B"},  // rose
+    {14.0, 14.000, 0.438, "#A0522D"},  // sienna
+    {16.0, 16.000, 0.500, "#C87137"},  // copper
+    {18.0, 18.000, 0.562, "#8D6E63"},  // taupe
+    {20.0, 20.000, 0.594, "#6C8EBF"},  // steel blue
+    {22.0, 22.000, 0.375, "#B0A160"},  // olive — STD wall, B36.10M has no Sch 40 at 22in
+    {24.0, 24.000, 0.688, "#B0B7C3"},  // light slate
 };
 
 /// Parses an NPS label like `"4in"` or `"1.5in"` into inches. Returns false for anything that
@@ -95,6 +124,46 @@ inline constexpr CadPipeNpsEntry kCadPipeNpsTable[] = {
     }
   }
   return false;
+}
+
+/// The table row for \p nominalSize (a label like `"4in"`), or nullptr for an unparsable label or a
+/// size the table does not carry.
+[[nodiscard]] inline const CadPipeNpsEntry* CadPipeNpsFind(std::string_view nominalSize) {
+  double nps = 0.0;
+  if (!CadParsePipeNominalSizeInches(nominalSize, &nps))
+    return nullptr;
+  for (const CadPipeNpsEntry& e : kCadPipeNpsTable) {
+    if (std::fabs(e.nps - nps) < 1e-9)
+      return &e;
+  }
+  return nullptr;
+}
+
+/// \p nominalSize's default display colour from the size palette (REQ-353), as the `#RRGGBB`
+/// entity colour a new run is stamped with. Returns false (leaving `*outHex` untouched) for a size
+/// the table does not carry — the run then keeps the ordinary new-entity colour, `ByLayer`.
+[[nodiscard]] inline bool CadPipeNominalSizeColor(std::string_view nominalSize, std::string* outHex) {
+  if (!outHex)
+    return false;
+  const CadPipeNpsEntry* e = CadPipeNpsFind(nominalSize);
+  if (!e)
+    return false;
+  *outHex = e->colorHex;
+  return true;
+}
+
+/// Every size the table carries, as the labels PIPERUN accepts ("0.5in, 0.75in, ... 24in") — read
+/// from the table so the prompt's list cannot fall behind it.
+[[nodiscard]] inline std::string CadPipeKnownNominalSizesText() {
+  std::string out;
+  for (const CadPipeNpsEntry& e : kCadPipeNpsTable) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%gin", e.nps);
+    if (!out.empty())
+      out += ", ";
+    out += buf;
+  }
+  return out;
 }
 
 /// The **schedule 40** wall thickness in INCHES for \p nominalSize — the wall `PIPERUN` offers when
