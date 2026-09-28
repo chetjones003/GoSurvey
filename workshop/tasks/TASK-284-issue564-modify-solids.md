@@ -97,4 +97,3 @@ Rectangular ARRAY (D-2026-09-07-c), ERASE. Still missing:
   refused there while its pipe run turns.
 - No live drag preview is drawn for a pipe run during MOVE / ROTATE (the commit is correct).
 - STRETCH of a pipe run by its path vertices is not built; it is refused by name.
-
