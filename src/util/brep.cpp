@@ -18613,6 +18613,8 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       };
       std::vector<std::uint32_t> lower(static_cast<std::size_t>(nu) + 1);
       std::vector<std::uint32_t> upper(static_cast<std::size_t>(nu) + 1);
+      std::vector<Vec3> lowerP(static_cast<std::size_t>(nu) + 1);
+      std::vector<Vec3> upperP(static_cast<std::size_t>(nu) + 1);
       for (int i = 0; i <= nu; ++i) {
         const double t = f.uStart + (f.uEnd - f.uStart) * static_cast<double>(i) / static_cast<double>(nu);
         const Vec3 n = ConicalNormal(sf, r0, r1, t);
@@ -18627,18 +18629,41 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         if (coneCut && coneStrip.valid())
           (void)ConeCutStripAt(coneStrip, t, &zA, &zB);  // exact — never pinches (SliceConeOblique's
                                                           // own guard keeps the cut off both caps
-        lower[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r1, t, zA), n);
-        upper[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r1, t, zB), n);
+        lowerP[static_cast<std::size_t>(i)] = ConicalPoint(sf, r0, r1, t, zA);
+        upperP[static_cast<std::size_t>(i)] = ConicalPoint(sf, r0, r1, t, zB);
+        lower[static_cast<std::size_t>(i)] = mb.Push(lowerP[static_cast<std::size_t>(i)], n);
+        upper[static_cast<std::size_t>(i)] = mb.Push(upperP[static_cast<std::size_t>(i)], n);
       }
+      // Where a band's ring collapses to a point — the APEX of a sharp cone, whose whole upper ring
+      // is one vertex — a quad is a triangle, and emitting it as two triangles makes the second one
+      // a zero-area sliver with two coincident corners. Such a sliver draws nothing, so it looked
+      // harmless, but its two "different" edges are the SAME rim-to-apex edge, which counts that
+      // edge twice: every apex edge was used 4 times instead of 2, and the mesh read as non-manifold
+      // (`RequireMeshWatertight`). A sharp cone was HALF degenerate triangles — 128 of 256 per side
+      // half-face. Collapse-aware emission fixes the manifold count and halves the cone's side mesh.
+      const double ringEps = 1e-12 * std::max({std::fabs(r0), std::fabs(r1), std::fabs(sf.height), 1.0});
+      auto samePoint = [&](const Vec3& p, const Vec3& q) {
+        return ray3d::Length(ray3d::Sub(p, q)) <= ringEps;
+      };
       for (int i = 0; i < nu; ++i) {
         const std::size_t a = static_cast<std::size_t>(i);
         const std::size_t b = static_cast<std::size_t>(i + 1);
+        const bool upperPinched = samePoint(upperP[a], upperP[b]);
+        const bool lowerPinched = samePoint(lowerP[a], lowerP[b]);
+        if (upperPinched && lowerPinched)
+          continue;  // the whole segment is a point: nothing to draw
+        // Emission ORDER is unchanged from before the collapse test, so a band with no collapsed
+        // ring — every cylinder, every frustum — produces the identical index buffer it always has.
         if (sf.inward) {  // REQ-314 B2a: a bore wall — reverse winding to match the flipped normal
-          mb.Tri(lower[a], upper[b], lower[b]);
-          mb.Tri(lower[a], upper[a], upper[b]);
+          if (!lowerPinched)
+            mb.Tri(lower[a], upper[b], lower[b]);
+          if (!upperPinched)
+            mb.Tri(lower[a], upper[a], upper[b]);
         } else {
-          mb.Tri(lower[a], lower[b], upper[b]);
-          mb.Tri(lower[a], upper[b], upper[a]);
+          if (!lowerPinched)
+            mb.Tri(lower[a], lower[b], upper[b]);
+          if (!upperPinched)
+            mb.Tri(lower[a], upper[b], upper[a]);
         }
       }
       break;
@@ -18707,6 +18732,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
                          : SegmentsForArc(uRadius, f.uEnd - f.uStart, chordTolerance);
       const int nv = SegmentsForArc(vRadius, f.vEnd - f.vStart, chordTolerance);
       std::vector<std::uint32_t> grid(static_cast<std::size_t>(nu + 1) * static_cast<std::size_t>(nv + 1));
+      std::vector<Vec3> gridP(static_cast<std::size_t>(nu + 1) * static_cast<std::size_t>(nv + 1));
       for (int i = 0; i <= nu; ++i) {
         const double t = f.uStart + (f.uEnd - f.uStart) * static_cast<double>(i) / static_cast<double>(nu);
         double vA = f.vStart;
@@ -18717,21 +18743,44 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
           const double v = vA + (vB - vA) * static_cast<double>(j) / static_cast<double>(nv);
           const Vec3 p = sphere ? SphericalPoint(sf, t, v) : ToroidalPoint(sf, t, v);
           const Vec3 n = sphere ? SphericalNormal(sf, t, v) : ToroidalNormal(sf, t, v);
-          grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(nv + 1) +
-               static_cast<std::size_t>(j)] = mb.Push(p, n);
+          const std::size_t gi = static_cast<std::size_t>(i) * static_cast<std::size_t>(nv + 1) +
+                                 static_cast<std::size_t>(j);
+          gridP[gi] = p;
+          grid[gi] = mb.Push(p, n);
         }
       }
+      // The same collapse the conical band has, at a SPHERE'S POLES: every longitude meets at one
+      // point, so the pole row of the grid is a single position repeated. Emitting each cell as two
+      // triangles makes one of them a zero-area sliver whose two "different" edges are the same
+      // pole-to-ring edge, counting it twice — 512 edges of a sphere read as non-manifold. A torus
+      // has no pole and is unaffected.
+      const double gridEps =
+          1e-12 * std::max({std::fabs(uRadius), std::fabs(vRadius), 1.0});
+      auto sameGridPoint = [&](std::size_t p, std::size_t q) {
+        return ray3d::Length(ray3d::Sub(gridP[p], gridP[q])) <= gridEps;
+      };
       const std::size_t stride = static_cast<std::size_t>(nv + 1);
       for (int i = 0; i < nu; ++i) {
         for (int j = 0; j < nv; ++j) {
           const std::size_t a = static_cast<std::size_t>(i) * stride + static_cast<std::size_t>(j);
           const std::size_t b = a + stride;
+          // Each cell's two v-edges: the pair at this j, and the pair at j+1. Either may be a pole.
+          const bool pinchedLo = sameGridPoint(a, b);
+          const bool pinchedHi = sameGridPoint(a + 1, b + 1);
+          if (pinchedLo && pinchedHi)
+            continue;  // the whole cell is a point
+          // Emission order is unchanged, so a patch with no collapsed row — every torus, every
+          // sphere band away from the poles — produces the index buffer it always has.
           if (sf.inward) {  // REQ-314 B2a: reverse winding to match the flipped normal
-            mb.Tri(grid[a], grid[b + 1], grid[b]);
-            mb.Tri(grid[a], grid[a + 1], grid[b + 1]);
+            if (!pinchedLo)
+              mb.Tri(grid[a], grid[b + 1], grid[b]);
+            if (!pinchedHi)
+              mb.Tri(grid[a], grid[a + 1], grid[b + 1]);
           } else {
-            mb.Tri(grid[a], grid[b], grid[b + 1]);
-            mb.Tri(grid[a], grid[b + 1], grid[a + 1]);
+            if (!pinchedLo)
+              mb.Tri(grid[a], grid[b], grid[b + 1]);
+            if (!pinchedHi)
+              mb.Tri(grid[a], grid[b + 1], grid[a + 1]);
           }
         }
       }

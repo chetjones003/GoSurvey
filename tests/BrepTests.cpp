@@ -9212,3 +9212,92 @@ TEST_CASE("A tilted cut that runs off one end sections as an arc plus a chord",
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// A collapsed ring — a cone's apex, a sphere's pole — is one triangle, not two.
+// ---------------------------------------------------------------------------
+
+/// Triangles with two coincident corners: zero area, invisible, and the reason a sharp cone and a
+/// sphere both read as non-manifold. Counted directly, because "watertight" alone does not say WHY.
+[[nodiscard]] int DegenerateTriangleCount(const brep::Tessellation& t) {
+  auto pos = [&](std::uint32_t i) {
+    return Vec3{t.vertsXyz[3 * i], t.vertsXyz[3 * i + 1], t.vertsXyz[3 * i + 2]};
+  };
+  int n = 0;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    const Vec3 a = pos(t.indices[i]), b = pos(t.indices[i + 1]), c = pos(t.indices[i + 2]);
+    const double ab = ray3d::Length(ray3d::Sub(a, b));
+    const double bc = ray3d::Length(ray3d::Sub(b, c));
+    const double ca = ray3d::Length(ray3d::Sub(c, a));
+    if (ab <= 1e-9 || bc <= 1e-9 || ca <= 1e-9)
+      ++n;
+  }
+  return n;
+}
+
+TEST_CASE("A collapsed ring makes one triangle, not a degenerate pair", "[brep][req313][collapsedring]") {
+  Problem why = Problem::Ok;
+
+  SECTION("a sharp cone's apex") {
+    // Before: the apex ring is one point repeated, so every segment emitted a second, zero-area
+    // triangle whose two 'different' edges were the same rim-to-apex edge. That counted the edge
+    // FOUR times instead of two — 256 of 768 edges non-manifold — and made half the side mesh junk.
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 3.0, 0.0, 11.0, &s, &why));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(s, 0.02, &t, &why));
+    CHECK(DegenerateTriangleCount(t) == 0);
+    RequireMeshWatertight(t);
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("a sphere's two poles") {
+    Solid s;
+    REQUIRE(brep::MakeSphere(World(), 5.0, &s, &why));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(s, 0.02, &t, &why));
+    CHECK(DegenerateTriangleCount(t) == 0);
+    RequireMeshWatertight(t);
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("shapes with no collapsed ring are untouched") {
+    // A frustum, a cylinder and a torus have no apex and no pole, so they must keep every triangle
+    // they had — this is what says the collapse test did not start trimming real geometry.
+    struct Case { const char* name; Solid s; };
+    std::vector<Case> cases;
+    {
+      Solid s;
+      REQUIRE(brep::MakeCone(World(), 7.0, 2.5, 6.0, &s, &why));
+      cases.push_back({"cone frustum", s});
+    }
+    {
+      Solid s;
+      REQUIRE(brep::MakeCylinder(World(), 4.0, 25.0, &s, &why));
+      cases.push_back({"cylinder", s});
+    }
+    {
+      Solid s;
+      REQUIRE(brep::MakeTorus(World(), 10.0, 2.0, &s, &why));
+      cases.push_back({"torus", s});
+    }
+    for (const Case& c : cases) {
+      INFO(c.name);
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(c.s, 0.02, &t, &why));
+      CHECK(DegenerateTriangleCount(t) == 0);
+      RequireMeshWatertight(t);
+    }
+  }
+
+  SECTION("the apex mesh is half the size and still measures the same cone") {
+    // The volume and area are computed from the B-rep, not the mesh, but the TESSELLATED volume is
+    // what a viewer sees: dropping the slivers must not change it, because they enclosed nothing.
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 3.0, 0.0, 11.0, &s, &why));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(s, 0.02, &t, &why));
+    const double want = kPi * 3.0 * 3.0 * 11.0 / 3.0;
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(1e-2));
+  }
+}
