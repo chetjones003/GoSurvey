@@ -15010,7 +15010,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     cmd.entityGripLiveDistance =
         std::hypot(curWx - cmd.entityGripAnchorX, curWy - cmd.entityGripAnchorY);
-    ApplyEntityGripPoint(cmd, curWx, curWy);
+    // The drag point's elevation, sourced exactly as the draw commands source theirs: an object
+    // snap's own Z, else the work plane. Only a tilted ellipse reads it (GitHub #531); every other
+    // entity drags in XY as before.
+    ApplyEntityGripPoint(cmd, curWx, curWy, CadCommitElevation(cmd));
     BumpCadGpuCache(cmd);
   }
 
@@ -15752,13 +15755,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           case SelectedEntity::Type::Ellipse: {
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
               const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-              // A tilted ellipse (GitHub #531) has no flat grips: its own are the next slice, and drawing
-              // them where a flat one would be is a handle that grabs the wrong point.
-              if (EllipseIsFlat(el)) {
-              const float perpX = -el.majVy, perpY = el.majVx;
-              tryGrip(sel, el.cx,                    el.cy,                    el.z, 0);
-              tryGrip(sel, el.cx + el.majVx,         el.cy + el.majVy,         el.z, 1);
-              tryGrip(sel, el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z, 2);
+              // Centre, major end, minor end — in the ellipse's own plane, so a tilted one's
+              // handles sit on the curve (GitHub #531). Shared with the draws and with the grip hit
+              // test in CadCommands.cpp, so what is drawn is what can be grabbed.
+              if (EllipseHasGrips(el)) {
+                ray3d::Vec3 g[3];
+                EllipseGripPoints(el, g);
+                for (int gi = 0; gi < 3; ++gi)
+                  tryGrip(sel, static_cast<float>(g[gi].x), static_cast<float>(g[gi].y),
+                          static_cast<float>(g[gi].z), gi);
               }
             }
             break;
@@ -16818,13 +16823,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           case SelectedEntity::Type::Ellipse: {
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
               const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-              // A tilted ellipse (GitHub #531) has no flat grips: its own are the next slice, and drawing
-              // them where a flat one would be is a handle that grabs the wrong point.
-              if (EllipseIsFlat(el)) {
-              const float perpX = -el.majVy, perpY = el.majVx;
-              drawGrip(el.cx, el.cy, hot(0));
-              drawGrip(el.cx + el.majVx, el.cy + el.majVy, hot(1));
-              drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, hot(2));
+              if (EllipseHasGrips(el)) {
+                ray3d::Vec3 g[3];
+                EllipseGripPoints(el, g);
+                for (int gi = 0; gi < 3; ++gi)
+                  drawGrip(static_cast<float>(g[gi].x), static_cast<float>(g[gi].y), hot(gi));
               }
             }
             break;
@@ -18644,12 +18647,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else if (sel.type == SelectedEntity::Type::Ellipse) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
           const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-          if (EllipseIsFlat(el)) {
-          drawGrip(el.cx, el.cy, el.z);
-          drawGrip(el.cx + el.majVx, el.cy + el.majVy, el.z);
-          const float perpX = -el.majVy;
-          const float perpY = el.majVx;
-          drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z);
+          if (EllipseHasGrips(el)) {
+            ray3d::Vec3 g[3];
+            EllipseGripPoints(el, g);
+            for (int gi = 0; gi < 3; ++gi)
+              drawGrip(static_cast<float>(g[gi].x), static_cast<float>(g[gi].y), static_cast<float>(g[gi].z));
           }
         }
       } else if (sel.type == SelectedEntity::Type::BlockRef) {
