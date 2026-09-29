@@ -4559,3 +4559,64 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   general trim loops, holes, and `Ellipse`/`Intersection` boundary edges — is carried together with
   REQ-334's own increment 2, since inertia cannot be computed for a face shape the centroid itself
   cannot yet integrate.
+
+### ADR-062 — Part thumbnails are rendered by the renderer into per-part cached textures, from the tessellation the viewport already draws   (2026-09-24, accepted)
+
+- **Status:** accepted (2026-09-24, D-2026-09-24-a (4)). Backs REQ-350 (GitHub issue #486, Track
+  A5/B7 follow-up).
+- **Context.** REQ-350's palette must show each library fitting as a *shaded* preview — a flange, a
+  cap and a blind flange are indistinguishable as the top-down wireframe the existing INSERT library
+  pane draws (`DrawInsertLibraryPreview`, increment A5), which is the whole reason that preview earns
+  so little. A shaded preview means lit triangles, which means GL, and the palette is UI code.
+  Architecture invariant §11.6 puts every `gl*` call behind the Renderer/Platform boundary, so the
+  question is not *whether* the renderer draws it but *what shape* that entry point takes — and
+  REQ-100 decides the rest: a per-frame re-render of every visible row is precisely the linear
+  per-object per-frame cost GitHub issue #194 was opened for and #198 fixed for solids.
+- **Decision.**
+
+  **(a) The renderer renders it; the palette draws a texture.** `ViewportRenderer` — already the
+  single owner of the FBO, the shaded program and the solid draw path — gains one narrow entry point
+  that takes a part's tessellated geometry plus its connection ports and returns a GL texture id. The
+  palette passes that id to `ImGui::Image`, exactly as the viewport itself already passes
+  `ColorTexture()` to `DrawDrawingViewport` (`main.cpp:1079`). No `gl*` call appears in `src/ui/`, and
+  UI → Renderer is a downward dependency, which §2 permits.
+
+  **(b) Not `RenderScene`.** The existing scene entry point is a ~40-parameter *positional* call whose
+  own comment records that it is positional at its one call site and that inserting a parameter
+  anywhere but the end silently reassigns every argument after it. A thumbnail is not a scene: it has
+  one solid, a fitted camera, no grid, no snap overlay, no layers, no paper space. It gets its own
+  small function rather than a 41st parameter and a fleet of `nullptr`s.
+
+  **(c) Each cached thumbnail owns its own FBO + texture, keyed by part name.** The cache lives on
+  `ViewportRenderer` (one visible owner, §11.3 — no new global), and a part is rendered **once**: on
+  the frame its row first becomes visible. Rendering into a *shared* small FBO and copying out would
+  be a second GL path and an extra blit per part for nothing, and rendering into one shared texture is
+  simply wrong — `ImGui::Image` records a texture id and samples it after all UI code has run, so
+  every row would display the last part rendered. A library part's geometry does not change during a
+  session (a part is imported from a file and not edited in place), so the cache is keyed by
+  definition name with a bounded entry count and needs no revision counter; a part that *is* edited
+  through BEDIT invalidates by name.
+
+  **(d) The geometry is the tessellation the viewport already uses.** The thumbnail tessellates the
+  part's `brep::Solid` through the same `CadSolidTessellation` path (ADR-045) the viewport draws, at
+  the same chord tolerance, and lights it with the same `shadedProgram_` and the same ambient
+  constant. A preview is only useful if it looks like what placing the part will produce, and a second
+  tessellation or a second shader would be free to drift from the first.
+
+  **(e) The camera is a fixed isometric fitted to the part's bounds.** One canonical view per part
+  rather than a user-orbitable preview: the palette's job is recognition at 64 px, not inspection, and
+  a per-row camera would be per-row state to store, invalidate and cache against.
+- **Alternatives considered.** *(i) Keep the A5 top-down wireframe* — free, and rejected by the user
+  on exactly the grounds above. *(ii) A second `ViewportRenderer` instance used as a thumbnail rig* —
+  reuses everything with no new code, but drags a per-part point-cloud/mesh/solid cache set and a
+  full scene signature apparatus behind a 64 px picture, and still needs (c)'s per-part texture to
+  avoid the last-one-wins bug. *(iii) Render thumbnails on the CPU* — no GL, no cache invalidation,
+  and no lighting worth the name; a software rasteriser for 64 px icons is a second renderer, which
+  is the duplicate architecture CLAUDE.md §7 forbids.
+- **Consequences.** `ViewportRenderer` gains a thumbnail FBO/texture cache and one public entry point;
+  its destructor releases them with the FBOs it already owns. The palette holds no GL state and can be
+  unit-tested for its filtering and category logic without a GL context, since the texture id is
+  opaque to it. A headless build renders no thumbnail (no context) and must therefore degrade to the
+  name-only row rather than crash — the same discipline `CaptureThumbnailBmp` already follows by
+  returning false rather than asserting. First-open cost is one small render per visible part, not per
+  frame; REQ-350's acceptance states the REQ-100 condition in those terms.

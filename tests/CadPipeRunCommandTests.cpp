@@ -1,5 +1,10 @@
 #include "CadBlocks.hpp"
 #include "CadCommands.hpp"
+#include "util/cadpiperun.hpp"
+#include "CadRubberPreview.hpp"
+#include "util/brep.hpp"
+#include <chrono>
+#include "util/ucs.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -1111,6 +1116,122 @@ TEST_CASE("PIPEFIT projects an off-centerline pick onto the nearest point of the
   CHECK(st.cadPipeRuns[0].vertsXyz[4] == Catch::Approx(0.0));
 }
 
+// --- A flange must weld its PIPE-END port to the pipe (user report 2026-09-24) -------------------
+
+namespace {
+/// The bundled 2in weld-neck flange, reduced to what decides its orientation: TWO ports, BOTH
+/// tagged with the Inlet role, each carrying a single mode flagged `isDefault` (what the authoring
+/// UI produces for an only-mode port), and the gasket face defined FIRST. Neither the role test nor
+/// definition order can tell these apart — only the mode's own target can, which is the whole point
+/// of the regression.
+CadBlockDefinition MakeWeldNeckFlangeDef(const std::string& name, float neckOffset = 0.2f) {
+  CadBlockDefinition def;
+  def.name = name;
+  def.partType = CadPipePartType::Flange;
+  def.nominalSize = "4in";
+
+  CadBlockConnection gasket;
+  gasket.name = "gasketFace";
+  gasket.x = 0.f; gasket.y = 0.f; gasket.z = 0.f;
+  gasket.nx = 0.f; gasket.ny = -1.f; gasket.nz = 0.f;
+  gasket.role = CadBlockConnectionRole::Inlet;
+  CadBlockConnectionMode gasketMode;
+  gasketMode.name = "Mode 1";
+  gasketMode.target = CadConnectionModeTarget::FlangeFace;
+  gasketMode.role = CadBlockConnectionRole::Inlet;
+  gasketMode.isDefault = true;
+  gasket.modes = {gasketMode};
+
+  CadBlockConnection neck;
+  neck.name = "weldNeckFace";
+  neck.x = 0.f; neck.y = neckOffset; neck.z = 0.f;
+  neck.nx = 0.f; neck.ny = 1.f; neck.nz = 0.f;
+  neck.role = CadBlockConnectionRole::Inlet;
+  CadBlockConnectionMode neckMode;
+  neckMode.name = "Mode 1";
+  neckMode.target = CadConnectionModeTarget::PipeEnd;
+  neckMode.role = CadBlockConnectionRole::Inlet;
+  neckMode.isDefault = true;
+  neck.modes = {neckMode};
+
+  def.connections = {gasket, neck};  // gasket FIRST, as the bundled part defines it
+  return def;
+}
+
+/// World position of \p def's connection \p connIndex under the placed reference's transform.
+ray3d::Vec3 PlacedPortWorld(const AppCommandState& st, const CadBlockRef& ref, size_t connIndex) {
+  const int di = CadBlockFindDef(st.blockDefs, ref.defName);
+  REQUIRE(di >= 0);
+  const CadBlockConnection& c = st.blockDefs[static_cast<size_t>(di)].connections[connIndex];
+  float wx = 0.f, wy = 0.f, wz = 0.f;
+  CadBlockXformPoint(ref.xf, c.x, c.y, c.z, &wx, &wy, &wz);
+  return ray3d::Vec3{wx, wy, wz};
+}
+} // namespace
+
+TEST_CASE("A flange welds its pipe-end port to the pipe, not its flange face",
+          "[issue486][pipefit][flangeport]") {
+  AppCommandState st = MakeStateWithOneStraightRun();  // (0,0,0) -> (20,0,0)
+  st.blockDefs.push_back(MakeWeldNeckFlangeDef("FLANGE-4IN"));
+
+  std::vector<std::string> log;
+  const ray3d::Vec3 pick{10.0, 0.0, 0.0};
+  REQUIRE(CadPipeFitNamedAtPick(st, 0, "FLANGE-4IN", pick, log));
+
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  // Port 0 is the gasket face, port 1 the weld neck. The weld neck is what the upstream pipe ends
+  // against; the gasket face is the free end, one flange length downstream. Both ports land at one
+  // of these two points either way — WHICH port lands on the pipe is the entire bug.
+  const ray3d::Vec3 gasket = PlacedPortWorld(st, st.cadBlockRefs[0], 0);
+  const ray3d::Vec3 neck = PlacedPortWorld(st, st.cadBlockRefs[0], 1);
+  CHECK(neck.x == Catch::Approx(10.0).margin(1e-4));
+  CHECK(gasket.x == Catch::Approx(10.2).margin(1e-4));
+}
+
+TEST_CASE("The flange's pipe-end port outranks role and definition order for the cutback too",
+          "[issue486][pipefit][flangeport]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  CadBlockDefinition def = MakeWeldNeckFlangeDef("FLANGE-4IN");
+  // Only the weld neck engages a pipe; the gasket face never slides onto anything. With the ports
+  // swapped this cutback would be read off the gasket face instead and the pipe would stop short.
+  def.connections[1].modes[0].engagementLength = 1.5f;
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  const ray3d::Vec3 pick{10.0, 0.0, 0.0};
+  REQUIRE(CadPipeFitNamedAtPick(st, 0, "FLANGE-4IN", pick, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(8.5));  // 10 - the weld neck's 1.5ft
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(PlacedPortWorld(st, st.cadBlockRefs[0], 1).x == Catch::Approx(8.5).margin(1e-4));
+}
+
+TEST_CASE("A fitting with a pipe end on BOTH sides keeps its Inlet/Outlet resolution",
+          "[issue486][pipefit][flangeport]") {
+  AppCommandState st = MakeStateWithOneStraightRun();
+  // An inline valve, both ports explicitly tagged for a pipe end — the rule that saves the flange
+  // must not fire here, or a through-run fitting would be resolved by definition order instead of
+  // by the roles it was authored with.
+  CadBlockDefinition def = MakeValveDef("VALVE-4IN");
+  for (CadBlockConnection& c : def.connections) {
+    CadBlockConnectionMode m;
+    m.name = "Mode 1";
+    m.target = CadConnectionModeTarget::PipeEnd;
+    m.role = c.role;
+    m.isDefault = true;
+    m.engagementLength = 0.f;
+    c.modes = {m};
+  }
+  std::swap(def.connections[0], def.connections[1]);  // Outlet defined FIRST
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  const ray3d::Vec3 pick{10.0, 0.0, 0.0};
+  REQUIRE(CadPipeFitNamedAtPick(st, 0, "VALVE-4IN", pick, log));
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadPipeRuns[0].vertsXyz[3] == Catch::Approx(10.0));
+}
 // --- PIPESPLIT / PIPEJOIN / PIPEPROP (issue #486 increment B8, REQ-345) ---------------------------
 
 TEST_CASE("PIPESPLIT refuses without exactly one pipe run selected", "[issue486][pipesplit]") {
@@ -1418,4 +1539,538 @@ TEST_CASE("Clearing a drawing's CAD geometry clears its pipe runs", "[issue486][
   CHECK(st.pipeRunWorldSolids.empty());
   RefreshSolidDisplayGeometry(st);
   CHECK(st.pipeRunWorldSolids.empty());
+}
+
+// --- REQ-350 (f): placing a part armed from the Pipe Fittings palette ---------------------------
+//
+// One gesture, two outcomes, decided by where the second click lands: on a run it splices (the
+// PIPEFIT path, with cutback and a run split in two); off every run it places an ordinary block
+// reference. These pin both, plus the "armed" flag being strictly one-shot.
+
+namespace {
+
+/// A 4in run along +X from the origin, ten feet long.
+void AddFourInchRun(AppCommandState& st) {
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  run.nominalSize = "4in";
+  st.cadPipeRuns.push_back(run);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+}
+
+/// An inline two-port fitting (inlet at its origin, outlet a foot along +X), which is the shape
+/// `PickElbowPorts` needs to splice something into a straight run.
+void AddInlineFitting(AppCommandState& st, const char* name) {
+  CadBlockDefinition def;
+  def.name = name;
+  def.partType = CadPipePartType::Flange;
+  def.nominalSize = "4in";
+  CadBlockConnection inlet;
+  inlet.name = "P1";
+  inlet.role = CadBlockConnectionRole::Inlet;
+  inlet.x = 0.f;
+  inlet.y = 0.f;
+  inlet.z = 0.f;
+  inlet.nx = -1.f;
+  inlet.ny = 0.f;
+  inlet.nz = 0.f;
+  CadBlockConnection outlet;
+  outlet.name = "P2";
+  outlet.role = CadBlockConnectionRole::Outlet;
+  outlet.x = 1.f;
+  outlet.y = 0.f;
+  outlet.z = 0.f;
+  outlet.nx = 1.f;
+  outlet.ny = 0.f;
+  outlet.nz = 0.f;
+  def.connections.push_back(inlet);
+  def.connections.push_back(outlet);
+  st.blockDefs.push_back(def);
+}
+
+CadBlockLibraryEntry EntryFor(const char* name) {
+  CadBlockLibraryEntry e;
+  e.name = name;
+  e.imported = true;
+  e.isFitting = true;
+  e.partType = CadPipePartType::Flange;
+  e.nominalSize = "4in";
+  return e;
+}
+
+} // namespace
+
+TEST_CASE("A palette part armed and clicked ON a run splices into it", "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddFourInchRun(st);
+  AddInlineFitting(st, "FLANGE4");
+
+  REQUIRE(CadPipePaletteArmPart(st, EntryFor("FLANGE4"), log));
+  CHECK(st.active == AppCommandState::Kind::InsertBlock);
+  CHECK(st.insertBlockPipeSpliceArmed);
+  CHECK(st.insertBlockPhase == AppCommandState::InsertBlockPhase::WaitInsertPoint);
+  // Armed for a single click: no scale or rotation prompt stands between the pick and the placement.
+  CHECK_FALSE(st.insertBlockSpecifyScale);
+  CHECK_FALSE(st.insertBlockSpecifyRot);
+  CHECK_FALSE(st.insertBlockSpecifyAlignFace);
+
+  // Mid-span, right on the centreline.
+  SubmitInsertBlockPick(st, 5.f, 0.f, 0.f, log);
+
+  // The run is now two pieces with the fitting between them — PIPEFIT's own result.
+  CHECK(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadPipeRunAttrs.size() == 2);
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].defName == "FLANGE4");
+  // Both pieces keep the parent's size, so the palette keeps matching after the splice.
+  CHECK(st.cadPipeRuns[0].nominalSize == "4in");
+  CHECK(st.cadPipeRuns[1].nominalSize == "4in");
+  // One-shot: the arming does not survive its own placement.
+  CHECK_FALSE(st.insertBlockPipeSpliceArmed);
+  CHECK(st.active == AppCommandState::Kind::None);
+}
+
+TEST_CASE("A palette part armed and clicked OFF every run is placed as a plain INSERT",
+          "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddFourInchRun(st);
+  AddInlineFitting(st, "FLANGE4");
+
+  REQUIRE(CadPipePaletteArmPart(st, EntryFor("FLANGE4"), log));
+  // Well clear of the run, which lies along the X axis at y = 0.
+  SubmitInsertBlockPick(st, 5.f, 40.f, 0.f, log);
+
+  CHECK(st.cadPipeRuns.size() == 1);  // untouched — nothing was spliced
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].defName == "FLANGE4");
+  CHECK(st.cadBlockRefs[0].xf.y == Catch::Approx(40.f));
+  CHECK_FALSE(st.insertBlockPipeSpliceArmed);
+}
+
+TEST_CASE("Cancelling an armed palette placement leaves the drawing alone",
+          "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddFourInchRun(st);
+  AddInlineFitting(st, "FLANGE4");
+
+  REQUIRE(CadPipePaletteArmPart(st, EntryFor("FLANGE4"), log));
+  CancelActiveCommand(st, log);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK_FALSE(st.insertBlockPipeSpliceArmed);
+  CHECK(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadBlockRefs.empty());
+
+  // And the flag being clear is load-bearing: an ordinary INSERT afterwards must NOT splice, even
+  // when its pick lands squarely on a pipe run.
+  StartInsertBlockCommand(st, log);
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "FLANGE4");
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyAlignFace = false;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  SubmitInsertBlockPick(st, 5.f, 0.f, 0.f, log);
+  CHECK(st.cadPipeRuns.size() == 1);  // still one run: a plain INSERT never splits anything
+  CHECK(st.cadBlockRefs.size() == 1);
+}
+
+TEST_CASE("A run counts as under the pick only near its own centreline",
+          "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  AddFourInchRun(st);  // 4in OD = 0.375 ft, so a radius of 0.1875 ft
+
+  int idx = -1;
+  CHECK(CadPipeRunUnderPick(st, ray3d::Vec3{5.0, 0.0, 0.0}, &idx));
+  CHECK(idx == 0);
+  // Just inside the slack around the pipe wall...
+  CHECK(CadPipeRunUnderPick(st, ray3d::Vec3{5.0, 0.2, 0.0}, &idx));
+  // ...and well outside it.
+  CHECK_FALSE(CadPipeRunUnderPick(st, ray3d::Vec3{5.0, 3.0, 0.0}, &idx));
+  CHECK(idx == -1);
+  // Past the end of the run is not on the run either (the nearest point clamps to the endpoint).
+  CHECK_FALSE(CadPipeRunUnderPick(st, ray3d::Vec3{40.0, 0.0, 0.0}, &idx));
+
+  // With two runs overlapping the pick, the nearer centreline wins.
+  CadPipeRun second;
+  second.vertsXyz = {0.0, 0.1, 0.0, 10.0, 0.1, 0.0};
+  second.nominalSize = "4in";
+  st.cadPipeRuns.push_back(second);
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  CHECK(CadPipeRunUnderPick(st, ray3d::Vec3{5.0, 0.09, 0.0}, &idx));
+  CHECK(idx == 1);
+}
+
+TEST_CASE("Arming a part that is not in the library is refused, not silently armed",
+          "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddFourInchRun(st);
+
+  CHECK_FALSE(CadPipePaletteArmPart(st, EntryFor("NOT_A_REAL_PART"), log));
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK_FALSE(st.insertBlockPipeSpliceArmed);
+  // An empty row name is refused the same way rather than arming an unnamed placement.
+  CadBlockLibraryEntry nameless;
+  nameless.isFitting = true;
+  CHECK_FALSE(CadPipePaletteArmPart(st, nameless, log));
+  CHECK(st.active == AppCommandState::Kind::None);
+}
+
+TEST_CASE("PIPERUN opens the fittings palette and finishing the run leaves it open",
+          "[issue486][req350][palette][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  CHECK_FALSE(st.pipeFittingPaletteOpen);
+
+  StartPipeRunCommand(st, log);
+  CHECK(st.pipeFittingPaletteOpen);
+
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // schedule-40 wall
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  // REQ-350 (a): the run is finished and the palette is still there, because a flange on the end just
+  // routed is wanted NOW.
+  CHECK(st.pipeFittingPaletteOpen);
+  CHECK(st.active == AppCommandState::Kind::None);
+}
+
+// --- REQ-346: the compass locks a CLICKED segment to the UCS axes, elevation included ------------
+//
+// The compass resolves a full 3D point. Under a Front-style UCS its axes are world X and world Z, so
+// a locked segment's whole displacement can live in Z — and `SubmitPipeRunViewportPick` used to drop
+// the compass's resolved `wz` and re-read the raw cursor elevation instead, committing a vertex off
+// the very ray the ghost had just drawn. The rubber preview and the typed-distance path both passed
+// `&wz` already, so the preview looked locked and the click was not: the "preview must use the commit
+// point" failure. These pin all three on the same answer.
+
+TEST_CASE("The compass locks a clicked pipe segment to the UCS axes, elevation included",
+          "[issue486][req346][piperun][compass][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+
+  // Front UCS: its X is world X, its Y is world Z. A segment locked to this frame's Y axis therefore
+  // runs straight up in world Z.
+  const ucs::Ucs front = ucs::OrthographicPresets()[2].frame;
+  REQUIRE_FALSE(ucs::IsWorld(front));
+  st.activeUcs = front;
+
+  REQUIRE(st.pipeRunCompassOn);                 // on by default, as the prompt reports
+  REQUIRE(st.polarIncrementDeg == 90.0);        // and locking to the axes is what 90 means
+
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // schedule-40 wall
+
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+
+  // The second click carries a real ELEVATION, as an object-snap hit on a 3D feature does. That is
+  // what makes this a regression pin rather than a tautology: the compass resolves the segment onto
+  // this frame's X axis (world X, elevation 0), while the raw cursor elevation says 2. Committing the
+  // raw one — the bug — yields a vertex 2 ft off the snapped ray, locked to nothing.
+  st.viewportSnapPickValid = true;
+  st.viewportSnapPickLocalZ = 2.f;
+  REQUIRE(CadCommitElevation(st) == Catch::Approx(2.f));
+  SubmitPipeRunViewportPick(st, 8.f, 0.f, log);
+  st.viewportSnapPickValid = false;
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  const std::vector<double>& v = st.cadPipeRuns[0].vertsXyz;
+  REQUIRE(v.size() == 6);
+
+  const ray3d::Vec3 a{v[0], v[1], v[2]};
+  const ray3d::Vec3 b{v[3], v[4], v[5]};
+  const ray3d::Vec3 d = ray3d::Sub(b, a);
+  REQUIRE(ray3d::Length(d) > 1e-6);
+
+  // The segment must lie along ONE of the UCS's own axes — that is what "locked" means. Measured in
+  // the UCS frame so the assertion says what the user sees, not what the world happens to call it.
+  const double alongX = std::fabs(ray3d::Dot(d, front.xAxis));
+  const double alongY = std::fabs(ray3d::Dot(d, front.yAxis));
+  const double offPlane = std::fabs(ray3d::Dot(d, front.zAxis));
+  const double len = ray3d::Length(d);
+  CHECK(offPlane == Catch::Approx(0.0).margin(1e-6));            // never off the compass's own dial
+  CHECK(std::max(alongX, alongY) == Catch::Approx(len).margin(1e-6));
+  CHECK(std::min(alongX, alongY) == Catch::Approx(0.0).margin(1e-6));
+
+  // And concretely: this one locks to the frame's X axis, which is world X at the anchor's own
+  // elevation. Before the fix the committed vertex kept the raw cursor elevation (2 ft), so it came
+  // out diagonal in world XZ — exactly "the segment will not lock to the UCS axes".
+  CHECK(d.x == Catch::Approx(len).margin(1e-6));
+  CHECK(d.z == Catch::Approx(0.0).margin(1e-6));
+}
+
+TEST_CASE("A clicked pipe segment commits exactly where the compass preview put it",
+          "[issue486][req346][piperun][compass][command]") {
+  // The preview and the commit must agree by construction, so this asks the shared function what the
+  // ghost would show and then checks the click landed there.
+  AppCommandState st;
+  std::vector<std::string> log;
+  st.activeUcs = ucs::OrthographicPresets()[2].frame;  // Front
+
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+
+  st.viewportSnapPickValid = true;
+  st.viewportSnapPickLocalZ = 2.f;
+  const float pickX = 8.f;
+  const float pickY = 0.f;
+  float gx = pickX;
+  float gy = pickY;
+  float gz = static_cast<float>(CadCommitElevation(st));
+  ApplyPipeRunCompassFromAnchor(st, 0.f, 0.f, &gx, &gy, /*compass=*/true, 0.f, gz, &gz);
+
+  SubmitPipeRunViewportPick(st, pickX, pickY, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  const std::vector<double>& v = st.cadPipeRuns[0].vertsXyz;
+  REQUIRE(v.size() == 6);
+  CHECK(v[3] == Catch::Approx(static_cast<double>(gx)).margin(1e-6));
+  CHECK(v[4] == Catch::Approx(static_cast<double>(gy)).margin(1e-6));
+  CHECK(v[5] == Catch::Approx(static_cast<double>(gz)).margin(1e-6));
+}
+
+// --- D-2026-09-24-d: the route is real geometry while it is being drawn -------------------------
+
+namespace {
+
+/// PIPERUN taken to the point where clicks place vertices.
+void StartRoutingFourInch(AppCommandState& st, std::vector<std::string>& log) {
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // schedule-40 wall
+}
+
+} // namespace
+
+TEST_CASE("The pipe exists from the second click and keeps up with the route",
+          "[issue486][req345][piperun][live][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  StartRoutingFourInch(st, log);
+
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  // One point is not a pipe — nothing is drawn yet, and nothing is half-stored (REQ-201).
+  CHECK(st.cadPipeRuns.empty());
+  CHECK(st.pipeRunLiveIndex == -1);
+
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  REQUIRE(st.pipeRunLiveIndex == 0);
+  CHECK(st.cadPipeRunAttrs.size() == 1);
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 6);          // two vertices
+  CHECK(st.cadPipeRuns[0].nominalSize == "4in");
+  CHECK(st.cadPipeRuns[0].wallThicknessIn > 0.0);         // the wall answered at the prompt
+  CHECK(st.active == AppCommandState::Kind::PipeRun);     // and the command is still routing
+
+  // A third point EXTENDS the same entity rather than adding a second one.
+  SubmitPipeRunViewportPick(st, 10.f, 10.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.pipeRunLiveIndex == 0);
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 9);
+
+  // U shortens the drawn pipe with the route.
+  REQUIRE(HandlePipeRunTextInput("u", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 6);
+}
+
+TEST_CASE("Cancelling a route takes its drawn pipe with it",
+          "[issue486][req345][piperun][live][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  StartRoutingFourInch(st, log);
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+
+  CancelActiveCommand(st, log);
+  CHECK(st.cadPipeRuns.empty());        // Esc means cancel, not "keep the half-routed pipe"
+  CHECK(st.cadPipeRunAttrs.empty());
+  CHECK(st.pipeRunLiveIndex == -1);
+  CHECK(st.active == AppCommandState::Kind::None);
+}
+
+TEST_CASE("Finishing a route leaves exactly one run, not the provisional one as well",
+          "[issue486][req345][piperun][live][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  StartRoutingFourInch(st, log);
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);   // the provisional one
+
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  // The provisional entity is retired and the finished route committed in its place — the drawing
+  // must not end up with both.
+  CHECK(st.cadPipeRuns.size() == 1);
+  CHECK(st.cadPipeRunAttrs.size() == 1);
+  CHECK(st.pipeRunLiveIndex == -1);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 6);
+}
+
+TEST_CASE("Picking a fitting mid-route finishes the run instead of discarding it",
+          "[issue486][req350][piperun][live][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddInlineFitting(st, "FLANGE4");
+  StartRoutingFourInch(st, log);
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 10.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+
+  // The reported defect: this used to leave PIPERUN's route unbuilt, so the pipe vanished the
+  // instant the palette took the command.
+  REQUIRE(CadPipePaletteArmPart(st, EntryFor("FLANGE4"), log));
+  CHECK(st.cadPipeRuns.size() == 1);                        // the pipe is still there...
+  CHECK(st.cadPipeRuns[0].vertsXyz.size() == 6);
+  CHECK(st.pipeRunLiveIndex == -1);                         // ...and it is a finished run now
+  CHECK(st.active == AppCommandState::Kind::InsertBlock);   // with the part armed for placement
+
+  // And it can be spliced into straight away, which is the point of the whole exercise.
+  SubmitInsertBlockPick(st, 5.f, 0.f, 0.f, log);
+  CHECK(st.cadPipeRuns.size() == 2);
+  CHECK(st.cadBlockRefs.size() == 1);
+}
+
+TEST_CASE("A one-point route armed from the palette is dropped, not left half-open",
+          "[issue486][req350][piperun][live][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  AddInlineFitting(st, "FLANGE4");
+  StartRoutingFourInch(st, log);
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);  // a single point is not a run
+
+  REQUIRE(CadPipePaletteArmPart(st, EntryFor("FLANGE4"), log));
+  CHECK(st.cadPipeRuns.empty());
+  CHECK(st.pipeRunLiveIndex == -1);
+  CHECK(st.active == AppCommandState::Kind::InsertBlock);
+}
+
+// --- The routing preview must not grow with the route (perf regression pin) ---------------------
+//
+// Measured on the machine this was written on: a pipe run's swept tube costs ~5.2 ms at two points
+// and ~11 ms more for every point after that (117 ms at twelve). The rubber preview rebuilt the
+// WHOLE route's tube plus its edge tessellation every frame, so routing got slower with every click
+// and eventually froze the application. Now that the clicked route is real geometry
+// (D-2026-09-24-d), the ghost only has to show the PENDING segment.
+//
+// This pins the shape of that fix rather than a millisecond count — a timing assertion would be
+// flaky and `project.md` keeps performance numbers on the reference machine with BENCH. If the ghost
+// ever goes back to previewing the whole route, its output grows with the route and this fails.
+TEST_CASE("The pipe run preview does not grow with the route",
+          "[issue486][req345][piperun][live][preview]") {
+  const auto ghostSizeFor = [](int clicks) {
+    AppCommandState st;
+    std::vector<std::string> log;
+    st.pipeRunCompassOn = false;
+    StartPipeRunCommand(st, log);
+    REQUIRE(HandlePipeRunTextInput("4in", st, log));
+    REQUIRE(HandlePipeRunTextInput("", st, log));
+    for (int i = 0; i < clicks; ++i)
+      SubmitPipeRunViewportPick(st, 20.f * static_cast<float>((i + 1) / 2),
+                                20.f * static_cast<float>(i / 2), log);
+    std::vector<float> rubber;
+    AppendCadDraftRubberLines(st, 200.0, 200.0, /*orthoEnabled=*/false, 0.0, 0.0, 100.f, 1000, rubber);
+    return rubber.size();
+  };
+
+  const std::size_t shortRoute = ghostSizeFor(2);
+  const std::size_t longRoute = ghostSizeFor(10);
+  CHECK(shortRoute > 0);                 // the pending segment IS previewed
+  CHECK(longRoute == shortRoute);        // and only ever that one segment
+}
+
+// --- D-2026-09-24-e: the run being drawn is tessellated coarsely, the finished one is not --------
+//
+// A pipe tube's display tessellation is the single most expensive thing routing does — measured at
+// ~1.6 s for a four-vertex run at the finished circular budget, paid again on EVERY click because
+// each click rebuilds the provisional run. Drafting it at `brep::kDraftFullCircleSegments` brings a
+// click to tens of milliseconds; finishing the command restores the full budget.
+//
+// This pins which budget is used when, not a millisecond count: timings belong on the reference
+// machine with BENCH (project.md §7), but "the draft never gets promoted back" and "the finished run
+// is left coarse" are both silent, permanent quality bugs that a test can catch.
+
+TEST_CASE("The run being routed is tessellated in draft, the finished run at full quality",
+          "[issue486][req345][piperun][live][tess]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  st.pipeRunCompassOn = false;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 20.f, 0.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  REQUIRE(st.pipeRunLiveIndex == 0);
+
+  const auto budgetOfOnlyPipeSolid = [&]() {
+    RefreshSolidDisplayGeometry(st);
+    REQUIRE(st.pipeRunWorldSolids.size() == 1);
+    const CadSolidPtr& sp = st.pipeRunWorldSolids[0];
+    for (const CadSolidTessellation& e : st.solidDisplayCache)
+      if (e.key.lock() == sp)
+        return e.fullCircleSegments;
+    return -1;
+  };
+
+  // Mid-command: the geometry on screen is a draft and is allowed to be coarse.
+  CHECK(budgetOfOnlyPipeSolid() == brep::kDraftFullCircleSegments);
+
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+  CHECK(st.pipeRunLiveIndex == -1);
+  CHECK(st.active == AppCommandState::Kind::None);
+
+  // Finished: full quality, and nothing is left showing the draft.
+  CHECK(budgetOfOnlyPipeSolid() == brep::kFullCircleSegments);
+}
+
+TEST_CASE("A pipe run drawn by another command is never drafted",
+          "[issue486][req345][piperun][live][tess]") {
+  // Only the run PIPERUN is currently drawing is provisional. An existing run in the drawing must
+  // keep full quality even while a new one is being routed beside it — otherwise starting PIPERUN
+  // would visibly coarsen everything already drawn.
+  AppCommandState st;
+  std::vector<std::string> log;
+  st.pipeRunCompassOn = false;
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("4in", st, log));
+  REQUIRE(HandlePipeRunTextInput("", st, log));
+  SubmitPipeRunViewportPick(st, 0.f, 0.f, log);
+  SubmitPipeRunViewportPick(st, 20.f, 0.f, log);
+  REQUIRE(HandlePipeRunTextInput("end", st, log));
+  REQUIRE(st.cadPipeRuns.size() == 1);
+
+  // Now route a SECOND run while the first stands finished.
+  StartPipeRunCommand(st, log);
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // keep 4in
+  REQUIRE(HandlePipeRunTextInput("", st, log));  // schedule-40 wall
+  SubmitPipeRunViewportPick(st, 0.f, 50.f, log);
+  SubmitPipeRunViewportPick(st, 20.f, 50.f, log);
+  REQUIRE(st.cadPipeRuns.size() == 2);
+  REQUIRE(st.pipeRunLiveIndex == 1);
+
+  RefreshSolidDisplayGeometry(st);
+  REQUIRE(st.pipeRunWorldSolids.size() == 2);
+  REQUIRE(st.pipeRunWorldSolidOwnerIndex.size() == 2);
+  for (std::size_t i = 0; i < st.pipeRunWorldSolids.size(); ++i) {
+    int budget = -1;
+    for (const CadSolidTessellation& e : st.solidDisplayCache)
+      if (e.key.lock() == st.pipeRunWorldSolids[i])
+        budget = e.fullCircleSegments;
+    const bool isTheDraft = st.pipeRunWorldSolidOwnerIndex[i] == st.pipeRunLiveIndex;
+    INFO("solid " << i << " owner " << st.pipeRunWorldSolidOwnerIndex[i]);
+    CHECK(budget == (isTheDraft ? brep::kDraftFullCircleSegments : brep::kFullCircleSegments));
+  }
 }

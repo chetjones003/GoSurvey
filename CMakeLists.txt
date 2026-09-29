@@ -543,6 +543,7 @@ add_executable(GoSurvey
   src/ui/PdfAttachDialog.cpp
   src/ui/CadUi_InsertBlock.cpp
   src/ui/CadUi_BlockAuthoring.cpp
+  src/ui/CadUi_PipeFittingPalette.cpp
   src/ui/CadUi_ConnectionModes.cpp
 
   # I/O (windowed application only)
@@ -1257,6 +1258,10 @@ if(GOSURVEY_BUILD_TESTS)
     # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
     # with GoSurveySnapTests (gosurvey_domain), not GoSurveyTests, like CadBlockImportTests above.
     tests/CadPipeRunCommandTests.cpp
+    # REQ-350 / TASK-275 — the Pipe Fittings palette's filtering and grouping rules. Pure functions,
+    # but they live in CadBlocks.cpp beside the library scan they filter, so this rides with
+    # GoSurveySnapTests (gosurvey_domain) for the same reason CadPipeRunCommandTests above does.
+    tests/CadPipePaletteTests.cpp
     # REQ-351 / D-2026-09-28-f — MOVE / ROTATE / SCALE / MIRROR / COPY / ARRAY on a pipe run.
     tests/ModifyPipeRunTests.cpp
     # REQ-352 / D-2026-09-28-g — layer and colour edits on solids and pipe runs.

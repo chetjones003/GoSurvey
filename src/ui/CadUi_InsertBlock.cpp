@@ -183,11 +183,12 @@ void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::TextUnformatted("Filter:");
   ImGui::SameLine();
   static const char* kPartTypeFilterChoices[] = {"(any part)",  "elbow-90", "elbow-45", "tee",   "cross",
-                                                  "reducer",     "flange",   "valve",    "coupling", "cap", "other"};
+                                                  "reducer",     "flange",   "valve",    "coupling", "cap", "other",
+                                                  "nozzle"};
   static const CadPipePartType kPartTypeFilterValues[] = {
       CadPipePartType::None,  CadPipePartType::Elbow90, CadPipePartType::Elbow45, CadPipePartType::Tee,
       CadPipePartType::Cross, CadPipePartType::Reducer, CadPipePartType::Flange,  CadPipePartType::Valve,
-      CadPipePartType::Coupling, CadPipePartType::Cap,  CadPipePartType::Other};
+      CadPipePartType::Coupling, CadPipePartType::Cap,  CadPipePartType::Other,   CadPipePartType::Nozzle};
   int partTypeIdx = 0;
   for (int i = 0; i < static_cast<int>(std::size(kPartTypeFilterValues)); ++i) {
     if (kPartTypeFilterValues[i] == cmd.insertLibFilterPartType) {

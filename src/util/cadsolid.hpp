@@ -67,6 +67,10 @@ struct CadSolidTessellation {
   /// the triangle, this says which face that triangle is part of, and the answer is then projected
   /// onto that face's analytic surface (`brep::ClosestPointOnSurface`).
   std::vector<int> triFaceIds;
+  /// The circular-edge budget this tessellation was built at (`brep::kFullCircleSegments`, or
+  /// `brep::kDraftFullCircleSegments` for geometry still being drafted). Part of the staleness key:
+  /// a solid drafted coarsely must be re-tessellated at full quality once its command finishes.
+  int fullCircleSegments = 0;
   /// The solid's real edges: `GL_LINES`, six floats per segment, storage coordinates. A solid has
   /// genuine edges — unlike a mesh, whose "edges" are artefacts of an exporter's resolution — which
   /// is why a solid can be drawn as a wireframe at all and a mesh cannot (ADR-026 (c)).
