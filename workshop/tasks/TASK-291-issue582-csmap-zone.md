@@ -64,7 +64,7 @@ three US files, ~3 MB), so those ship too (recorded in the same decision).
 ## Completion report
 
 - Build: `./dev/build` clean; `dev/build-devshell.bat` clean.
-- Tests: `[req358]` 10 cases / 133 assertions pass; the DWG round trip passes; `ctest` 1959/1966 —
+- Tests: `[req358]` 11 cases pass (incl. HARN → WGS 84 round trip); the DWG round trip passes; `ctest` 1959/1966 —
   the 7 failures are the headless ones already failing on `beta` (offset / isolines / surface
   selection / feature-line modify / command-name prompt), unrelated. Dev Shell `req358-zone-group`
   passes; a desktop screenshot confirmed the Zone group renders (USA, Texas → HARN Texas Central).

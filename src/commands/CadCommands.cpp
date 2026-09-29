@@ -38564,13 +38564,21 @@ geo::GeoResult DrawingPointToGrid(const AppCommandState& st, double localX, doub
     r.error = "The drawing has no coordinate system (No Datum, No Projection).";
     return r;
   }
+  if (!geo::DictionariesLoaded()) {
+    r.error = geo::DictionaryError();
+    return r;
+  }
   const std::optional<geo::CoordinateSystemInfo> zone = geo::FindCoordinateSystem(st.drawingSettings.zoneCode);
   if (!zone) {
     r.error = st.drawingSettings.zoneCode + " is unknown in this coordinate-system dictionary.";
     return r;
   }
-  if (zone->geographic || zone->metersPerUnit <= 0.0) {
+  if (zone->geographic) {
     r.error = zone->code + " is a latitude/longitude system; a drawing point has no grid coordinate in it.";
+    return r;
+  }
+  if (zone->metersPerUnit <= 0.0) {
+    r.error = zone->code + " has a unit (" + zone->unit + ") that is not a length.";
     return r;
   }
   // Drawing unit → meters, under the drawing's own foot (REQ-357); 0 = Unitless = the zone's unit.

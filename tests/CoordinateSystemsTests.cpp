@@ -171,6 +171,21 @@ TEST_CASE("NAD27 converts to NAD83 through the shipped NADCON grid (REQ-358)", "
   CHECK(std::abs(r.y - 30.2862535) * kMetersPerDegreeLat > 20.0);
 }
 
+TEST_CASE("A zone's lat/long converts to WGS 84 along CS-MAP's datum path (REQ-358)", "[req358]") {
+  LoadShippedDictionary();
+  // AG9976 in the Texas HARN datum → WGS 84 (LL84), and back. HARN and WGS 84 differ by about a
+  // meter here; the round trip must close.
+  const geo::GeoResult w = geo::ConvertLatLong("HARN/TX.TX-C", "LL84", kAg9976Lon, kAg9976Lat);
+  INFO(w.error);
+  REQUIRE(w.ok);
+  CHECK(std::abs(w.y - kAg9976Lat) * kMetersPerDegreeLat < 5.0);
+  CHECK(std::abs(w.x - kAg9976Lon) * kMetersPerDegreeLat < 5.0);
+  const geo::GeoResult back = geo::ConvertLatLong("LL84", "HARN/TX.TX-C", w.x, w.y);
+  REQUIRE(back.ok);
+  CHECK(std::abs(back.y - kAg9976Lat) * kMetersPerDegreeLat < 0.001);
+  CHECK(std::abs(back.x - kAg9976Lon) * kMetersPerDegreeLat < 0.001);
+}
+
 TEST_CASE("A drawing point converts to grid and lat/long through the zone (REQ-358)", "[req358]") {
   LoadShippedDictionary();
   AppCommandState st;

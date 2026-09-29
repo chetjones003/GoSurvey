@@ -85,9 +85,8 @@ void SeedFromDrawing(const AppCommandState& cmd, StagedDrawingSettings& s) {
   std::snprintf(s.customScaleText, sizeof(s.customScaleText), "%g",
                 static_cast<double>(s.modelUnitsPerPlottedInch));
   s.settings = cmd.drawingSettings;
-  s.category.clear();
-  s.systemCodes.clear();
-  s.systemLabels.clear();
+  // The category list is kept: after Apply the user stays in the category they were browsing
+  // (SelectZone reloads it only when it does not list the drawing's zone).
   SelectZone(s, s.settings.zoneCode);
 }
 
