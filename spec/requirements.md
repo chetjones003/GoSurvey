@@ -10079,7 +10079,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Type: functional
 - Depends on: REQ-020 / REQ-022 (the drawing unit), REQ-107 (INSERT's unit scale factor),
   REQ-308 (Start tab), REQ-084 (*not implemented yet*), REQ-175 / ADR-044 (DWG trailer).
-- Decision: D-2026-09-29-b.
+- Decision: D-2026-09-29-b, D-2026-09-29-c.
 - Statement:
   1. **Entry points.** A `DRAWINGSETTINGS` command, with the alias `EDITDRAWINGSETTINGS`, and a
      **File ▸ Drawing Settings…** menu item open the window. The menu item is disabled on the Start
@@ -10107,12 +10107,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
        conversion in the drawing uses: INSERT's unit scale factor (`CadBlockInsertUnitsScale`, today a
        fixed international 39.3700787 in/m) and the zone conversions of REQ-358/REQ-360. The factor
        is computed in `double`.
-     - **Scale**: a list filtered by the drawing unit — imperial `1" = 1'`, `5'`, `10'`, `20'`, `30'`,
-       `40'`, `50'`, `60'`, `100'`, `200'`, `500'`, `1000'`; metric `1:1`, `1:10`, `1:20`, `1:50`,
-       `1:100`, `1:200`, `1:250`, `1:500`, `1:1000`, `1:2000`, `1:5000` — plus **Custom**, which
-       enables a **Custom scale** number (> 0; anything else is refused). Default `1" = 40'` / `1:500`.
-       The scale is **stored and reported only** in this increment; annotation scaling that consumes
-       it is future work under its own requirement.
+     - **Scale** **is** the drawing's existing plot scale, `AppCommandState::modelUnitsPerPlottedInch`
+       (model units per plotted inch) — the value the status-bar plot-scale dropdown shows and sets.
+       One value, never a second copy: changing it here does exactly what that dropdown does
+       (survey-point markers, labels and plotted text resize). Both controls offer one shared list,
+       chosen by the drawing unit — imperial `1" = 1'` … `1" = 500'` (the status bar's existing
+       sixteen); metric `1:1`, `1:10`, `1:20`, `1:50`, `1:100`, `1:200`, `1:250`, `1:500`, `1:1000`,
+       `1:2000`, `1:5000` for Meters (`1:N` = `0.0254·N` m per plotted inch) and Millimeters
+       (`25.4·N` mm) — plus **Custom**, which enables a **Custom scale** number of model units per
+       plotted inch (> 0; anything else is refused). The default stays `1" = 50'`.
      - ☐ **Scale objects inserted from other drawings** (default on). Off → INSERT's unit scale factor
        is 1 whatever the block's unit; on → today's behaviour.
      - ☐ **Set drawing variables to match** (default on). On → DWG/DXF save writes `INSUNITS`,
@@ -10130,14 +10133,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
     coordinate (a known line's endpoints are identical within REQ-101);
   - with US Survey Foot a 1 m block inserted into a feet drawing scales by 3.280833333…; with
     International Foot by 3.280839895…; with "Scale objects inserted…" off by 1;
-  - a Custom scale of 0 or text is refused; every setting survives DWG save → close → reopen, and
+  - choosing `1" = 20'` in the window shows `1" = 20'` in the status-bar dropdown and vice versa;
+    a Custom scale of 0 or text is refused; every setting survives DWG save → close → reopen, and
     two open drawings keep different settings when switching tabs;
   - with "Set drawing variables to match" on, a saved DXF carries `$AUNITS` matching Angular units.
 - Owner-layer: Commands (`src/commands/CadCommands.{hpp,cpp}` — settings struct, apply + undo),
   IO (`src/io/GsIo.cpp` trailer JSON, `src/io/DxfIo.cpp` / `LibreDwgCad.cpp` headers), UI
   (`src/ui/` window, File menu, Toolspace button).
 - Status: accepted (2026-09-29) — D-2026-09-29-b.
-- Revisions: 2026-09-29 — proposed and accepted.
+- Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — Scale amended (D-2026-09-29-c): it is
+  the existing plot scale, not a second stored value.
 
 ### REQ-358 — Coordinate-system zone from the CS-MAP catalogue; a drawing becomes geolocated (GitHub issue #582, increment 2)
 
