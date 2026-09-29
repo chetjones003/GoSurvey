@@ -10084,7 +10084,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. **Entry points.** A `DRAWINGSETTINGS` command, with the alias `EDITDRAWINGSETTINGS`, and a
      **File ▸ Drawing Settings…** menu item open the window. The menu item is disabled on the Start
      tab exactly as Save is (REQ-308); the typed command on the Start tab is refused with a message
-     (REQ-201). The Toolspace palette's "Drawing Settings — not implemented yet" button opens it too.
+     (REQ-201). The ribbon Palettes panel's Drawing Settings button (today "not implemented yet") opens it too.
   2. **Window.** A modal window in GoSurvey's own dialog style (`BeginStyledDialog` + the product
      accent frame, as What's New / Account Details), titled `Drawing Settings - <drawing name>`, with
      three tabs — **Units and Zone**, **Transformation**, **Object Layers** — and **OK** (apply and
@@ -10100,7 +10100,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
        dialog (REQ-020) gains Inches and Millimeters so both windows offer the same list. Changing it
        is a relabel and moves no geometry (REQ-022). DXF writes `$INSUNITS` Inches=1, Millimeters=4.
      - **Angular units** ∈ {Degrees, Radians, Grads} — a per-drawing value used by the angle fields
-       of this window (REQ-360) and written as the DWG/DXF `AUNITS` header when item 5 is on. It does
+       of this window (REQ-360) and written as the DWG/DXF `AUNITS` header when *Set drawing variables to match* is on. It does
        **not** change REQ-021's app-wide angle display format, which stays a user preference.
      - **Imperial to Metric conversion** ∈ {US Survey Foot (1 m = 39.37 in exactly), International
        Foot (1 ft = 0.3048 m exactly)}, default US Survey Foot. It is the factor every feet↔meters
@@ -10122,7 +10122,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      same boundary as `cadPipeRuns`, so each tab keeps its own) and in the ADR-044 trailer JSON under
      a `drawingSettings` object. A drawing without that object opens with the defaults above.
 - Acceptance:
-  - `DRAWINGSETTINGS`, `EDITDRAWINGSETTINGS`, File ▸ Drawing Settings… and the Toolspace button all
+  - `DRAWINGSETTINGS`, `EDITDRAWINGSETTINGS`, File ▸ Drawing Settings… and the Palettes-panel button all
     open the window; the menu item is disabled and the command refused on the Start tab;
   - Cancel changes nothing; Apply changes the drawing and keeps the window open; OK applies and
     closes; one UNDO restores the previous settings;
