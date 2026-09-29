@@ -951,7 +951,8 @@ void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::ve
   st.cadAnnotations.push_back(std::move(ann));
   while (st.cadAnnotationAttrs.size() < st.cadAnnotations.size())
     st.cadAnnotationAttrs.emplace_back();
-  st.cadAnnotationAttrs.back().layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPointLabel, {});  // REQ-361
+  // A new label goes on the Object Layers Survey point label layer (REQ-361).
+  st.cadAnnotationAttrs.back().layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPointLabel, {});
   // Allocate eagerly rather than waiting for the sweep: the point records the id in the next line,
   // and a reference to id 0 would be a reference to nothing (REQ-076).
   const std::uint64_t labelId = AllocEntityId(st);

@@ -995,9 +995,12 @@ void ApplyCreatedSurfaceFields(AppCommandState& cmd, const std::string& name, co
   CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(ni)];
   s.description = description;
   s.styleName = styleName;
-  // The surface was created on its Object Layers layer (REQ-361); a layer chosen here replaces it.
+  // The surface was created on its Object Layers layer (REQ-361); a layer picked here (always one of
+  // the drawing's own) replaces it. The unpicked default is left to the creator, which also falls
+  // back to the row's layer when the name cannot be part of a layer name.
   const std::string chosen = StringUtil::trimCopy(layer);
   if (static_cast<size_t>(ni) < cmd.cadSurfaceAttrs.size() && !chosen.empty() &&
+      chosen != ResolveObjectLayer(cmd.drawingSettings, ObjectLayerKind::Surface, name) &&
       !cmd.drawingSettings.ObjectLayer(ObjectLayerKind::Surface).locked)
     cmd.cadSurfaceAttrs[static_cast<size_t>(ni)].layer = EnsureDrawingLayer(cmd, chosen);
 }

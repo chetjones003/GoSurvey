@@ -69,6 +69,9 @@ legacy table migration, BENCH scenes, PIPERUN's provisional live run.
   with the drawing — the second creation dialog with a layer choice (REQ-361 item 4) besides Create
   Surface. Tests that encoded "a new object lands on the current layer" (REQ-352/353/356 suites, the
   REQ-071 transcript's `EXTRACT … C-TOPO`) updated to REQ-361's layers; REQ-353 item 3 revision noted.
+- 2026-09-29: PR #589. Final review fix: Create Surface re-applied its unpicked default layer through
+  the unvalidated EnsureDrawingLayer, so a surface named `A/B` could create layer `C-TOPO-A/B`; the
+  dialog now overrides only with a layer actually picked (always one of the drawing's own).
 
 ## Completion report
 
