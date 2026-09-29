@@ -722,7 +722,7 @@ void CreatePointsOptionsToJson(const CreatePointsOptions& c, json& o) {
   o["sequentialNumbering"] = c.sequentialNumbering;
   o["pointNumberOffset"] = c.pointNumberOffset;
   o["sequenceNumbersFrom"] = c.sequenceNumbersFrom;
-  o["layer"] = c.layer;
+  o["layerOverride"] = c.layer;  // REQ-361: empty = the Object Layers Survey point layer
   o["defaultDescription"] = c.defaultDescription;
   o["defaultElevation"] = c.defaultElevation;
   o["duplicatePolicy"] = static_cast<int>(c.duplicatePolicy);
@@ -734,7 +734,7 @@ CreatePointsOptions CreatePointsOptionsFromJson(const json& o) {
   c.sequentialNumbering = o.value("sequentialNumbering", c.sequentialNumbering);
   c.pointNumberOffset  = o.value("pointNumberOffset",  c.pointNumberOffset);
   c.sequenceNumbersFrom = o.value("sequenceNumbersFrom", c.sequenceNumbersFrom);
-  c.layer              = o.value("layer",              c.layer);
+  c.layer              = o.value("layerOverride",      c.layer);
   c.defaultDescription = o.value("defaultDescription", c.defaultDescription);
   c.defaultElevation   = o.value("defaultElevation",   c.defaultElevation);
   if (o.contains("duplicatePolicy")) {
@@ -887,6 +887,20 @@ json BuildRoot(const AppCommandState& st) {
       x["localAzimuthDeg"] = t.localAzimuthDeg;
       x["gridAzimuthDeg"] = t.gridAzimuthDeg;
       o["transform"] = std::move(x);
+    }
+    {  // REQ-361: the Object Layers rows, in ObjectLayerKind order.
+      json rows = json::array();
+      for (const ObjectLayerRow& r : ds.objectLayers) {
+        json j;
+        j["layer"] = r.layer;
+        j["modifier"] = r.modifier == ObjectLayerRow::Modifier::Prefix   ? "prefix"
+                        : r.modifier == ObjectLayerRow::Modifier::Suffix ? "suffix"
+                                                                         : "none";
+        j["value"] = r.value;
+        j["locked"] = r.locked;
+        rows.push_back(std::move(j));
+      }
+      o["objectLayers"] = std::move(rows);
     }
     doc["drawingSettings"] = std::move(o);
   }
@@ -2225,6 +2239,22 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       t.toNorthDeg = x.value("toNorthDeg", 0.0);
       t.localAzimuthDeg = x.value("localAzimuthDeg", 0.0);
       t.gridAzimuthDeg = x.value("gridAzimuthDeg", 0.0);
+    }
+    // REQ-361 item 6: absent (or a row missing) → the NCS defaults.
+    if (o.contains("objectLayers") && o["objectLayers"].is_array()) {
+      const json& rows = o["objectLayers"];
+      for (size_t i = 0; i < rows.size() && i < st.drawingSettings.objectLayers.size(); ++i) {
+        if (!rows[i].is_object())
+          continue;
+        ObjectLayerRow& r = st.drawingSettings.objectLayers[i];
+        r.layer = rows[i].value("layer", r.layer);
+        const std::string mod = rows[i].value("modifier", std::string("none"));
+        r.modifier = mod == "prefix"   ? ObjectLayerRow::Modifier::Prefix
+                     : mod == "suffix" ? ObjectLayerRow::Modifier::Suffix
+                                       : ObjectLayerRow::Modifier::None;
+        r.value = rows[i].value("value", std::string());
+        r.locked = rows[i].value("locked", false);
+      }
     }
   }
   // Paper space layouts (REQ-031). Missing/garbage → no layouts, model space (no crash).

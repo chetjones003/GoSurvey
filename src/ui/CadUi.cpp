@@ -3307,6 +3307,20 @@ enum class RibbonLabel { None, Right, Below };
 // Flexible ribbon button: icon-only (None), icon + label to the right (Right),
 // or a large icon with the label centered below (Below). Shares the 3D bevel
 // and icon art with every ribbon button so states stay consistent.
+void DrawObjectLayerIcon(ImDrawList* dl, ObjectLayerKind kind, const ImVec2& mn, const ImVec2& mx) {
+  // The icon of the ribbon button that creates each kind of object.
+  switch (kind) {
+    case ObjectLayerKind::SurveyPoint:      DrawRibbonIconArt(dl, RibbonIconKind::SurveyPoint, mn, mx); break;
+    case ObjectLayerKind::SurveyPointLabel: DrawRibbonIconArt(dl, RibbonIconKind::SurfLabel, mn, mx); break;
+    case ObjectLayerKind::Surface:          DrawRibbonIconArt(dl, RibbonIconKind::Nyi, mn, mx, "c3d_surfaces"); break;
+    case ObjectLayerKind::FeatureLine:      DrawRibbonIconArt(dl, RibbonIconKind::Nyi, mn, mx, "c3d_featureline"); break;
+    case ObjectLayerKind::PipeRun:          DrawRibbonIconArt(dl, RibbonIconKind::Nyi, mn, mx, "c3d_pipenet"); break;
+    case ObjectLayerKind::PipeFitting:      DrawRibbonIconArt(dl, RibbonIconKind::Nyi, mn, mx, "Insert_Block"); break;
+    case ObjectLayerKind::Solid:            DrawRibbonIconArt(dl, RibbonIconKind::Nyi, mn, mx, "Box"); break;
+    case ObjectLayerKind::Table:            DrawRibbonIconArt(dl, RibbonIconKind::SurfLegend, mn, mx); break;
+  }
+}
+
 static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* label,
                            const ImVec2& size, RibbonLabel mode, const char* iconNameOverride = nullptr) {
   assert(str_id != nullptr);
@@ -20928,7 +20942,17 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::Separator();
 
   CreatePointsOptions& o = cmd.createPointsOpts;
-  ImGui::InputText("Layer##cp_layer", &o.layer);
+  {  // REQ-361 item 4: shows the Object Layers layer until another is typed; a Locked row is read-only.
+    const bool locked = cmd.drawingSettings.ObjectLayer(ObjectLayerKind::SurveyPoint).locked;
+    const std::string resolved = ResolveObjectLayer(cmd.drawingSettings, ObjectLayerKind::SurveyPoint, {});
+    std::string shown = (locked || o.layer.empty()) ? resolved : o.layer;
+    ImGui::BeginDisabled(locked);
+    if (ImGui::InputText("Layer##cp_layer", &shown))
+      o.layer = StringUtil::trimCopy(shown) == resolved ? std::string() : shown;
+    ImGui::EndDisabled();
+    ItemHelpTooltip(locked ? "Locked in Drawing Settings > Object Layers."
+                           : "New points go on this layer. Default: Drawing Settings > Object Layers.");
+  }
   ImGui::InputTextMultiline("Description##cp_desc", &o.defaultDescription, ImVec2(-FLT_MIN, 60.f));
   ImGui::InputFloat("Elevation##cp_z", &o.defaultElevation);
 

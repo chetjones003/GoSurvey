@@ -672,6 +672,9 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
   if (lineAttrs) {  // a pipe fitting takes its run's layer and colour (REQ-353)
     attr.layer = lineAttrs->layer;
     attr.color = lineAttrs->color;
+  } else if (def.partType != CadPipePartType::None) {
+    // A catalogue part off any run: the Pipe fitting row (REQ-361, D-2026-09-29-f).
+    attr.layer = EnsureObjectLayer(st, ObjectLayerKind::PipeFitting, def.name);
   }
   const bool paper = ActivePaperGeometryTarget(st) != nullptr;
   if (paper && explode) {

@@ -853,6 +853,25 @@ TEST_CASE("The Transformation settings survive a DWG round trip (REQ-360)", "[dw
   CHECK(in.userLinesFlat.size() == 6);
 }
 
+// REQ-361: the Object Layers table survives DWG save → close → reopen (ADR-044 trailer).
+TEST_CASE("The Object Layers table survives a DWG round trip (REQ-361)", "[dwg][libredwg][req361]") {
+  ScratchDir dir("req361");
+  const auto p = (dir.path / "objectlayers.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  ObjectLayerRow& surf = st.drawingSettings.objectLayers[static_cast<size_t>(ObjectLayerKind::Surface)];
+  surf.layer = "C-TOPO-SURF";
+  surf.modifier = ObjectLayerRow::Modifier::Suffix;
+  surf.value = "-*";
+  surf.locked = true;
+  st.drawingSettings.objectLayers[static_cast<size_t>(ObjectLayerKind::Table)].layer = "G-ANNO-TABL";
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  CHECK(in.drawingSettings.objectLayers == st.drawingSettings.objectLayers);
+}
+
 // REQ-359 item 3 / D-2026-09-29-e: a Position Marker reopens ONCE from a GoSurvey DWG (the trailer),
 // while the DWG / DXF body carries a CIRCLE, two LINEs and an MTEXT for other programs.
 TEST_CASE("A Position Marker survives DWG save and is written as circle, lines and MTEXT (REQ-359)",

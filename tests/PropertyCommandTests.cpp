@@ -292,7 +292,7 @@ TEST_CASE("MATCHPROP copies a line's properties per pick, and layer and colour o
   CHECK(st.active == AppCommandState::Kind::None);
 
   REQUIRE(DoUndo(st, log));
-  CHECK(st.cadSolidAttrs[0].layer == "0");
+  CHECK(st.cadSolidAttrs[0].layer == "C-SOLID");  // where BOX created it (REQ-361)
   CHECK(st.userLineAttrs[1].layer == "WALLS");
 }
 

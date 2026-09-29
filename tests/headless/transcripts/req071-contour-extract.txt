@@ -59,7 +59,7 @@ EXPECT LOG "not linked to the surface"
 # --- extracting twice produces two independent sets ------------------------------------------------
 # Asserted as a doubling AND, below, by erasing one set and finding the other intact — "52 polylines"
 # alone would also be satisfied by one set stored twice.
-CMD EXTRACT Test EG, C-TOPO
+CMD EXTRACT Test EG, C-TOPO-CONT
 EXPECT POLYLINES 52
 EXPECT LOG "(created)"
 CHECK ALL

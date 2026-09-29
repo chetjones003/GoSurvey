@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <limits>
 
 #include "CadEntities.hpp"
@@ -1028,6 +1029,42 @@ inline void SyncPolylineNormal(std::vector<float>& normal, std::size_t vertsFloa
 /// is far above any realistic vertex count so the two grip families never collide.
 inline constexpr int kPolyBulgeGripBase = 1 << 20;
 
+/// The Object Layers tab's rows (REQ-361): each kind of object that lands on its own layer when it
+/// is created. Stored by index — append only.
+enum class ObjectLayerKind {
+  SurveyPoint = 0,
+  SurveyPointLabel,
+  Surface,      ///< Every TIN surface store entry (TIN, grid, volume, corridor).
+  FeatureLine,
+  PipeRun,
+  PipeFitting,  ///< A pipe-catalogue part placed off any run (D-2026-09-29-f).
+  Solid,
+  Table,
+};
+inline constexpr int kObjectLayerKindCount = 8;
+
+/// One Object Layers row: the base layer, the name modifier and whether a creation dialog may change it.
+struct ObjectLayerRow {
+  enum class Modifier { None = 0, Prefix = 1, Suffix = 2 };
+  std::string layer;
+  Modifier    modifier = Modifier::None;
+  std::string value;   ///< Each `*` becomes the new object's name.
+  bool        locked = false;
+  bool operator==(const ObjectLayerRow& o) const {
+    return layer == o.layer && modifier == o.modifier && value == o.value && locked == o.locked;
+  }
+};
+
+/// REQ-361 item 1's NCS defaults, in \ref ObjectLayerKind order.
+[[nodiscard]] inline std::array<ObjectLayerRow, kObjectLayerKindCount> DefaultObjectLayers() {
+  std::array<ObjectLayerRow, kObjectLayerKindCount> rows;
+  const char* names[kObjectLayerKindCount] = {"V-NODE", "V-NODE-TEXT", "C-TOPO", "C-TOPO-FEAT",
+                                              "C-PIPE", "C-PIPE-FITT", "C-SOLID", "C-ANNO-TABL"};
+  for (int i = 0; i < kObjectLayerKindCount; ++i)
+    rows[static_cast<size_t>(i)].layer = names[i];
+  return rows;
+}
+
 /// The drawing's own settings that the Drawing Settings window edits (REQ-357). The drawing unit and
 /// the scale are NOT here: they are `AppCommandState::drawingInsUnits` and
 /// `modelUnitsPerPlottedInch`, one value each (REQ-022, D-2026-09-29-c).
@@ -1093,6 +1130,13 @@ struct DrawingSettings {
   };
   Transform transform;
 
+  /// The Object Layers tab (REQ-361): the layer each kind of new object is created on. A drawing
+  /// saved without it opens with the defaults.
+  std::array<ObjectLayerRow, kObjectLayerKindCount> objectLayers = DefaultObjectLayers();
+  [[nodiscard]] const ObjectLayerRow& ObjectLayer(ObjectLayerKind k) const {
+    return objectLayers[static_cast<size_t>(k)];
+  }
+
   /// Geolocated exactly when a zone is set (REQ-358 item 3).
   [[nodiscard]] bool Geolocated() const { return !zoneCode.empty(); }
   /// Back to the default geographic marker (drawing origin, grid north).
@@ -1106,7 +1150,8 @@ struct DrawingSettings {
     return angularUnits == o.angularUnits && footDefinition == o.footDefinition &&
            scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables &&
            zoneCode == o.zoneCode && markerX == o.markerX && markerY == o.markerY &&
-           markerNorthDeg == o.markerNorthDeg && transform == o.transform;
+           markerNorthDeg == o.markerNorthDeg && transform == o.transform &&
+           objectLayers == o.objectLayers;
   }
   bool operator!=(const DrawingSettings& o) const { return !(*this == o); }
 };
@@ -6165,6 +6210,30 @@ void EnsureAttrCounts(AppCommandState& st);
 void SyncDrawingLayerTableWithGeometry(AppCommandState& st);
 
 bool CadAddDrawingLayer(AppCommandState& st, const std::string& name, std::string* err);
+
+// --- Object Layers (REQ-361, GitHub issue #582 increment 5) --------------------------------------
+/// The layer a new object of \p kind named \p objectName goes on: the row's layer, with the Value
+/// (each `*` = the name; dropped when there is no name) before it (Prefix) or after it (Suffix). Pure.
+[[nodiscard]] std::string ResolveObjectLayer(const DrawingSettings& settings, ObjectLayerKind kind,
+                                             std::string_view objectName);
+/// \ref ResolveObjectLayer, made real: a name that cannot be a layer falls back to the row's base
+/// layer (then "0"); a layer the drawing does not have is added with default properties. Call it
+/// AFTER the creating path's PushUndoSnapshot, so one UNDO removes the object and the new layer.
+/// Returns the layer name as the drawing spells it.
+std::string EnsureObjectLayer(AppCommandState& st, ObjectLayerKind kind, std::string_view objectName);
+/// The drawing's layer named \p name (case-insensitive), added with default properties when missing.
+/// Returns the name as the drawing spells it. No undo step of its own.
+std::string EnsureDrawingLayer(AppCommandState& st, const std::string& name);
+/// A sentence naming the first Object Layers row whose base layer is not a usable layer name, or "".
+/// ApplyDrawingSettings refuses such settings.
+[[nodiscard]] std::string ValidateObjectLayers(const DrawingSettings& settings);
+/// The attributes of a newly created object of \p kind: \ref MakeNewEntityAttrs (current colour,
+/// REQ-356) on \ref EnsureObjectLayer's layer. The one stamp every creation path uses (REQ-361 item 3).
+EntityAttributes MakeNewObjectAttrs(AppCommandState& st, ObjectLayerKind kind, std::string_view objectName);
+/// For stores whose creator pushes the object first: grows \p attrs to \p count, the last one (the
+/// new object) from \ref MakeNewObjectAttrs.
+void AppendNewObjectAttrs(AppCommandState& st, std::vector<EntityAttributes>& attrs, size_t count,
+                          ObjectLayerKind kind, std::string_view objectName);
 
 bool CadRenameDrawingLayer(AppCommandState& st, const std::string& oldName, const std::string& newName, std::string* err);
 

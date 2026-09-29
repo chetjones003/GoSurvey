@@ -9873,7 +9873,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain (`src/util/cadpiperun.hpp`), Commands (`src/commands/CadCommands.cpp`,
   `src/commands/CadBlocks.{hpp,cpp}`)
 - Status: accepted (2026-09-28) — D-2026-09-28-i, TASK-286.
-- Revisions: 2026-09-28 — proposed and accepted.
+- Revisions: 2026-09-28 — proposed and accepted. 2026-09-29 — item 3's "on the current layer" is superseded by REQ-361 (D-2026-09-29-b): a new run goes on the Object Layers Pipe run layer; item 4 is unchanged (D-2026-09-29-f).
 
 ### REQ-354 — The dynamic input shows which mode it is in (GitHub issue #564 §5)
 
@@ -10356,7 +10356,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - the table survives DWG save → reopen and differs per drawing tab.
 - Owner-layer: Commands (a single resolve-creation-layer function used by every creation path), UI
   (tab), IO (trailer).
-- Status: accepted (2026-09-29) — D-2026-09-29-b.
+- Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-f, TASK-294.
 - Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — Pipe fitting row narrowed to parts placed off any run (D-2026-09-29-f): REQ-353 item 4 and this row both claimed a fitting on a run.
 
 ### REQ-362 — GEODATA round-trip: read Civil 3D's geolocation, write ours (GitHub issue #582, increment 6)

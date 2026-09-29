@@ -176,7 +176,7 @@ TEST_CASE("A mixed selection of a solid, a pipe run and a line takes one layer i
   CHECK(inTable);  // a typed new name becomes a layer
 
   REQUIRE(DoUndo(st, log));
-  CHECK(st.cadSolidAttrs[0].layer == "0");
+  CHECK(st.cadSolidAttrs[0].layer == "C-SOLID");  // where BOX created it (REQ-361)
   CHECK(st.cadPipeRunAttrs[0].layer != "NEW-LAYER");
   CHECK(st.userLineAttrs[0].layer == "0");
 }
@@ -211,7 +211,7 @@ TEST_CASE("The ribbon Layers combo moves a selection, and sets the current layer
   const std::string current = st.currentLayer;
 
   st.selection = {Sel(SelectedEntity::Type::Solid, 0)};
-  CHECK(CadSelectionLayer(st) == "0");
+  CHECK(CadSelectionLayer(st) == "C-SOLID");  // where BOX created it (REQ-361)
   CadRibbonPickLayer(st, "PIPE-STEEL", log);
   CHECK(st.cadSolidAttrs[0].layer == "PIPE-STEEL");
   CHECK(st.currentLayer == current);  // the current layer is left alone

@@ -3,8 +3,8 @@
 // ApplyDrawingSettings (one undo step). The Zone group (REQ-358) picks the drawing's coordinate
 // system from the CS-MAP catalogue through src/geo/. The Transformation tab (REQ-360) relates local
 // and grid coordinates; its pick buttons hide the window while a DRAWINGSETTINGS pick runs in the
-// drawing and bring it back with the staged values. Object Layers arrives with REQ-361 and is shown
-// greyed until then (REQ-084).
+// drawing and bring it back with the staged values. The Object Layers tab (REQ-361) sets the layer
+// each kind of new object is created on.
 
 #include "CadUi.hpp"
 #include "CadUiHelpers.hpp"
@@ -12,6 +12,7 @@
 #include "util/PlotScales.hpp"
 
 #include <imgui.h>
+#include <imgui_stdlib.h>
 
 #include <algorithm>
 #include <cmath>
@@ -141,6 +142,17 @@ constexpr const char* kCheckSetVariables = "Set drawing variables to match";
 constexpr const char* kCustomScaleError = "The custom scale must be a positive number.";
 constexpr const char* kTransformError = "Check the Transformation tab.";
 
+// Object Layers tab (REQ-361), rows in ObjectLayerKind order.
+constexpr const char* kObjectLayerNames[kObjectLayerKindCount] = {
+    "Survey point", "Survey point label", "TIN surface", "Feature line",
+    "Pipe run",     "Pipe fitting",       "Solid",       "Table"};
+constexpr const char* kModifiers[] = {"None", "Prefix", "Suffix"};
+constexpr const char* kObjectLayersInfo =
+    "Enter a single * (asterisk) in the value field to include the object name as the prefix or suffix "
+    "value in a layer name.";
+constexpr const char* kCheckDisplayComponents = "Immediate and independent layer on/off control of display components";
+constexpr const char* kObjectLayersError = "Check the Object Layers tab.";
+
 // Transformation tab (REQ-360).
 constexpr const char* kTxLabels[] = {"Zone description:", "Elevation:", "Spheroid radius (m):", "Computation:",
                                      "Grid scale factor:", "Combined factor:", "Angle:", "To north:",
@@ -166,6 +178,10 @@ struct DialogLayout {
   float  txFieldW = 0.f;
   float  txColW = 0.f;
   float  pickW = 0.f;   ///< The "Pick" button beside a field.
+  // Object Layers tab: the fixed columns (Layer stretches).
+  float  olObjectW = 0.f;
+  float  olModifierW = 0.f;
+  float  olValueW = 0.f;
   ImVec2 size;          ///< The whole window, title bar included.
 };
 
@@ -199,7 +215,8 @@ DialogLayout MeasureLayout() {
   L.fieldW = option + st.FramePadding.x * 2.f + st.ItemInnerSpacing.x + ImGui::GetFrameHeight();
 
   L.btnW = (std::max)(ImGui::CalcTextSize("Cancel").x + st.FramePadding.x * 4.f, ImGui::GetFontSize() * 5.f);
-  const float footerW = MaxTextWidth({kCustomScaleError, kTransformError}) + st.ItemSpacing.x * 2.f +
+  const float footerW = MaxTextWidth({kCustomScaleError, kTransformError, kObjectLayersError}) +
+                        st.ItemSpacing.x * 2.f +
                         L.btnW * 3.f + st.ItemSpacing.x * 2.f;
   const float checkW = ImGui::GetFrameHeight() + st.ItemInnerSpacing.x +
                        MaxTextWidth({kCheckScaleInserted, kCheckSetVariables});
@@ -217,6 +234,15 @@ DialogLayout MeasureLayout() {
   L.txColW = (std::max)(L.txLabelW + L.txFieldW, radioW);
   const float txW = L.txColW * 2.f + st.ItemSpacing.x * 3.f;
 
+  // Object Layers: icon + the longest object name; the modifier combo; a value like "-*-EXIST".
+  float objectName = 0.f;
+  for (const char* n : kObjectLayerNames)
+    objectName = (std::max)(objectName, ImGui::CalcTextSize(n).x);
+  L.olObjectW = ImGui::GetFrameHeight() + st.ItemSpacing.x + objectName + st.CellPadding.x * 2.f;
+  L.olModifierW = MaxTextWidth({kModifiers[0], kModifiers[1], kModifiers[2]}) + st.FramePadding.x * 2.f +
+                  st.ItemInnerSpacing.x + ImGui::GetFrameHeight();
+  L.olValueW = ImGui::CalcTextSize("-*-EXIST").x + st.FramePadding.x * 2.f;
+
   const float contentW = (std::max)({L.labelW + L.fieldW, checkW, footerW, txW});
 
   // Body rows, top to bottom: tab bar, spacing, five field rows, spacing, two checkboxes, spacing,
@@ -229,7 +255,11 @@ DialogLayout MeasureLayout() {
   // Transformation: tab bar, spacing, zone description, the zone-units line, Apply transform
   // settings, then the taller column (three separators and twelve rows) and the message line.
   const float txBody = row + gap + row + message + row + 3.f * separatorText + 12.f * row + message;
-  const float body = (std::max)(unitsBody, txBody);
+  // Object Layers: tab bar, spacing, header + eight rows, spacing, the info line (two lines at most),
+  // the display-components checkbox and the message line.
+  const float tableRow = row + st.CellPadding.y * 2.f + 1.f;  // plus the row border
+  const float olBody = row + gap + 9.f * tableRow + gap + 2.f * message + row + message;
+  const float body = (std::max)({unitsBody, txBody, olBody});
   const float footer = gap + 1.f + gap + row;  // separator line, then the buttons
   const float titleBar = ImGui::GetFontSize() + st.FramePadding.y * 2.f;
   L.size = ImVec2(contentW + st.WindowPadding.x * 2.f,
@@ -598,6 +628,106 @@ void DrawFactorsAndRotation(StagedDrawingSettings& s, const DrawingTransformFact
   ImGui::PopID();
 }
 
+// --- Object Layers tab (REQ-361) ---------------------------------------------------------------------
+
+/// A padlock button: closed when \p *locked. Toggles on click.
+void PadlockToggle(const char* id, bool* locked) {
+  const float h = ImGui::GetFrameHeight();
+  const bool clicked = ImGui::InvisibleButton(id, ImVec2(h, h));
+  if (clicked)
+    *locked = !*locked;
+  const ImVec2 mn = ImGui::GetItemRectMin();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const ImU32 col = ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered : ImGuiCol_Text);
+  const float u = h / 16.f;
+  const ImVec2 bodyMin(mn.x + 3.f * u, mn.y + 7.5f * u);
+  const ImVec2 bodyMax(mn.x + 13.f * u, mn.y + 14.f * u);
+  dl->AddRectFilled(bodyMin, bodyMax, col, 1.5f * u);
+  // The shackle: over the body when locked, swung open to the right when not.
+  const float cx = *locked ? mn.x + 8.f * u : mn.x + 11.f * u;
+  dl->PathArcTo(ImVec2(cx, mn.y + 6.f * u), 3.2f * u, 3.14159265f, 2.f * 3.14159265f);
+  dl->PathStroke(col, ImDrawFlags_None, 1.6f * u);
+  dl->AddLine(ImVec2(cx - 3.2f * u, mn.y + 6.f * u), ImVec2(cx - 3.2f * u, bodyMin.y), col, 1.6f * u);
+  if (*locked)
+    dl->AddLine(ImVec2(cx + 3.2f * u, mn.y + 6.f * u), ImVec2(cx + 3.2f * u, bodyMin.y), col, 1.6f * u);
+  ItemHelpTooltip(*locked ? "Locked: a creation dialog cannot change this layer."
+                          : "Unlocked: a creation dialog may choose another layer.");
+}
+
+void DrawObjectLayersTab(StagedDrawingSettings& s, const DialogLayout& L, const AppCommandState& cmd) {
+  const float h = ImGui::GetFrameHeight();
+  const ImGuiTableFlags flags = ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_BordersOuter |
+                                ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit;
+  if (ImGui::BeginTable("##ol_rows", 5, flags)) {
+    ImGui::TableSetupColumn("Object", ImGuiTableColumnFlags_WidthFixed, L.olObjectW);
+    ImGui::TableSetupColumn("Layer", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Modifier", ImGuiTableColumnFlags_WidthFixed, L.olModifierW);
+    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, L.olValueW);
+    ImGui::TableSetupColumn("Locked", ImGuiTableColumnFlags_WidthFixed, h);
+    ImGui::TableHeadersRow();
+    for (int i = 0; i < kObjectLayerKindCount; ++i) {
+      ObjectLayerRow& row = s.settings.objectLayers[static_cast<size_t>(i)];
+      ImGui::PushID(i);
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      const ImVec2 at = ImGui::GetCursorScreenPos();
+      DrawObjectLayerIcon(ImGui::GetWindowDrawList(), static_cast<ObjectLayerKind>(i), at,
+                          ImVec2(at.x + h, at.y + h));
+      ImGui::Dummy(ImVec2(h, h));
+      ImGui::SameLine();
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextUnformatted(kObjectLayerNames[i]);
+
+      // Layer: typed, or picked from the drawing's layers with the arrow beside it.
+      ImGui::TableSetColumnIndex(1);
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - h);
+      ImGui::InputText("##layer", &row.layer);
+      ItemHelpTooltip("The layer new objects of this kind are created on. Type a new name, or pick one; "
+                      "a layer the drawing does not have is created with the first such object.");
+      ImGui::SameLine(0.f, 0.f);
+      if (ImGui::BeginCombo("##pick", nullptr, ImGuiComboFlags_NoPreview | ImGuiComboFlags_PopupAlignLeft)) {
+        for (const CadLayerRow& layer : cmd.drawingLayerTable)
+          if (ImGui::Selectable(layer.name.c_str(), layer.name == row.layer))
+            row.layer = layer.name;
+        ImGui::EndCombo();
+      }
+
+      ImGui::TableSetColumnIndex(2);
+      int modifier = static_cast<int>(row.modifier);
+      ImGui::SetNextItemWidth(-1.f);
+      if (ImGui::Combo("##mod", &modifier, kModifiers, IM_ARRAYSIZE(kModifiers)))
+        row.modifier = static_cast<ObjectLayerRow::Modifier>(std::clamp(modifier, 0, 2));
+
+      ImGui::TableSetColumnIndex(3);
+      ImGui::BeginDisabled(row.modifier == ObjectLayerRow::Modifier::None);
+      ImGui::SetNextItemWidth(-1.f);
+      ImGui::InputText("##value", &row.value);
+      ImGui::EndDisabled();
+      ItemHelpTooltip("Added before (Prefix) or after (Suffix) the layer; each * is the object's name.");
+
+      ImGui::TableSetColumnIndex(4);
+      PadlockToggle("##lock", &row.locked);
+      ImGui::PopID();
+    }
+    ImGui::EndTable();
+  }
+
+  ImGui::Spacing();
+  ImGui::TextWrapped("%s", kObjectLayersInfo);
+  ImGui::BeginDisabled();
+  bool displayComponents = false;
+  ImGui::Checkbox(kCheckDisplayComponents, &displayComponents);
+  ImGui::EndDisabled();
+  GreyedWithReason(kNotImplemented);
+
+  // One message line, kept even when empty so the window never changes size.
+  const std::string msg = ValidateObjectLayers(s.settings);
+  if (msg.empty())
+    ImGui::TextUnformatted("");
+  else
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.f), "%s", msg.c_str());
+}
+
 void DrawTransformationTab(StagedDrawingSettings& s, const DialogLayout& L, AppCommandState& cmd,
                            std::vector<std::string>& log, bool* picking) {
   DrawingSettings::Transform& t = s.settings.transform;
@@ -734,11 +864,11 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
         DrawTransformationTab(staged, layout, cmd, log, &picking);
         ImGui::EndTabItem();
       }
-      ImGui::BeginDisabled();
-      if (ImGui::BeginTabItem("Object Layers"))
+      if (ImGui::BeginTabItem("Object Layers")) {  // REQ-361
+        ImGui::Spacing();
+        DrawObjectLayersTab(staged, layout, cmd);
         ImGui::EndTabItem();
-      ImGui::EndDisabled();
-      GreyedWithReason(kNotImplemented);
+      }
       ImGui::EndTabBar();
     }
   }
@@ -747,13 +877,15 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
   float scale = 0.f;
   const bool scaleValid = StagedScale(staged, &scale);
   const bool transformValid = ValidateDrawingTransform(staged.settings).empty();  // REQ-360
-  const bool valid = scaleValid && transformValid;
+  const bool layersValid = ValidateObjectLayers(staged.settings).empty();         // REQ-361
+  const bool valid = scaleValid && transformValid && layersValid;
   const float btnW = layout.btnW;
   const float spacing = ImGui::GetStyle().ItemSpacing.x;
   ImGui::Separator();
   if (!valid) {  // beside the buttons, so the message needs no row of its own
     ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.f), "%s", scaleValid ? kTransformError : kCustomScaleError);
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.f), "%s",
+                       !scaleValid ? kCustomScaleError : !transformValid ? kTransformError : kObjectLayersError);
     ImGui::SameLine();
   }
   ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - (btnW * 3.f + spacing * 2.f));

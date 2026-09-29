@@ -1,6 +1,7 @@
 #include "CadUi.hpp"
 #include "AppIcon.hpp"
 #include "FontRegistry.hpp"
+#include "StringUtil.hpp"
 #include "ToolspaceCatalog.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -994,8 +995,11 @@ void ApplyCreatedSurfaceFields(AppCommandState& cmd, const std::string& name, co
   CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(ni)];
   s.description = description;
   s.styleName = styleName;
-  if (static_cast<size_t>(ni) < cmd.cadSurfaceAttrs.size())
-    cmd.cadSurfaceAttrs[static_cast<size_t>(ni)].layer = layer.empty() ? std::string("0") : layer;
+  // The surface was created on its Object Layers layer (REQ-361); a layer chosen here replaces it.
+  const std::string chosen = StringUtil::trimCopy(layer);
+  if (static_cast<size_t>(ni) < cmd.cadSurfaceAttrs.size() && !chosen.empty() &&
+      !cmd.drawingSettings.ObjectLayer(ObjectLayerKind::Surface).locked)
+    cmd.cadSurfaceAttrs[static_cast<size_t>(ni)].layer = EnsureDrawingLayer(cmd, chosen);
 }
 
 void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
@@ -1003,6 +1007,7 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
   static std::string name;
   static std::string description;
   static std::string layer;
+  static bool layerChosen = false;  // REQ-361: follows the name's Object Layers layer until chosen
   static std::string styleName;
   static std::string error;
   static int kindIdx = 0;
@@ -1015,7 +1020,7 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
     SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
     name = NextSurfaceName(cmd);
     description.clear();
-    layer = cmd.currentLayer.empty() ? std::string("0") : cmd.currentLayer;
+    layerChosen = false;
     styleName = SurfaceStyles::kStandardName;
     error.clear();
     kindIdx = 0;
@@ -1130,19 +1135,30 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
     surfaceCombo("##volcomp", &volComp, kind == CreateSurfaceKind::GridVolume);
   }
 
+  // REQ-361 item 4: the Object Layers layer for this name, until a layer is chosen; a Locked row
+  // keeps it (read-only).
+  const bool layerLocked = cmd.drawingSettings.ObjectLayer(ObjectLayerKind::Surface).locked;
+  if (!layerChosen || layerLocked)
+    layer = ResolveObjectLayer(cmd.drawingSettings, ObjectLayerKind::Surface, name);
   ImGui::TextUnformatted("Surface layer");
   ImGui::SameLine(140.f);
   ImGui::SetNextItemWidth(-40.f);
+  ImGui::BeginDisabled(layerLocked);
   if (ImGui::BeginCombo("##cslayer", layer.c_str())) {
     for (const CadLayerRow& row : cmd.drawingLayerTable) {
       const bool sel = (layer == row.name);
-      if (ImGui::Selectable(row.name.c_str(), sel))
+      if (ImGui::Selectable(row.name.c_str(), sel)) {
         layer = row.name;
+        layerChosen = true;
+      }
       if (sel)
         ImGui::SetItemDefaultFocus();
     }
     ImGui::EndCombo();
   }
+  ImGui::EndDisabled();
+  if (layerLocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("Locked in Drawing Settings > Object Layers.");
   ImGui::SameLine();
   if (ImGui::Button("...##cslaybtn", ImVec2(28.f, 0.f)))
     cmd.showLayerManagerWindow = true;

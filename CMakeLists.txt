@@ -1326,6 +1326,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GeolocationTests.cpp
     # REQ-360: the Drawing Settings Transformation tab (local <-> grid).
     tests/TransformationTests.cpp
+    # REQ-361 / D-2026-09-29-f: the Object Layers tab and every creation path that uses it.
+    tests/ObjectLayersTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp

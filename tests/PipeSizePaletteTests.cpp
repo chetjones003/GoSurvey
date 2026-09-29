@@ -143,9 +143,14 @@ TEST_CASE("A 4in run draws blue and a 2in run beside it draws green, with no use
   REQUIRE(st.cadPipeRuns.size() == 2);
   CHECK(st.cadPipeRunAttrs[0].color == kBlue4in);
   CHECK(st.cadPipeRunAttrs[1].color == kGreen2in);
-  CHECK(st.cadPipeRunAttrs[0].layer == "0");  // the current layer, as for any new entity
+  CHECK(st.cadPipeRunAttrs[0].layer == "C-PIPE");  // the Object Layers Pipe run layer (REQ-361)
   CHECK(DisplaysHex(st, kBlue4in));
   CHECK(DisplaysHex(st, kGreen2in));
+}
+
+/// The layer a new pipe run is created on: the Object Layers Pipe run row (REQ-361).
+std::string& PipeRunLayer(AppCommandState& st) {
+  return st.drawingSettings.objectLayers[static_cast<size_t>(ObjectLayerKind::PipeRun)].layer;
 }
 
 TEST_CASE("An auto-inserted elbow takes its run's colour and layer (REQ-353)", "[req353][piperun][autofit]") {
@@ -154,7 +159,7 @@ TEST_CASE("An auto-inserted elbow takes its run's colour and layer (REQ-353)", "
   elbow.connections[1].nx = 0.f;
   elbow.connections[1].ny = 1.f;  // outlet +Y: 90 degrees from the inlet
   st.blockDefs.push_back(elbow);
-  st.currentLayer = "PIPE-STEEL";
+  PipeRunLayer(st) = "PIPE-STEEL";  // a new run's layer (REQ-361)
 
   std::vector<std::string> log;
   StartPipeRunCommand(st, log);
@@ -181,7 +186,7 @@ TEST_CASE("A spliced fitting and the far piece keep the run's own layer and over
     INFO(static_cast<int>(type));
     AppCommandState st;
     std::vector<std::string> log;
-    st.currentLayer = "PIPE-STEEL";
+    PipeRunLayer(st) = "PIPE-STEEL";  // a new run's layer (REQ-361)
     RouteRun(st, "4in", 0.f, log);
     st.cadPipeRunAttrs[0].color = "#123456";  // the user's override
     st.currentLayer = "0";                    // drawing elsewhere since
@@ -238,7 +243,7 @@ TEST_CASE("A flange snapped onto a run's end takes the run's layer and colour (R
           "[req353][insert][connector]") {
   AppCommandState st;
   std::vector<std::string> log;
-  st.currentLayer = "PIPE-STEEL";
+  PipeRunLayer(st) = "PIPE-STEEL";  // a new run's layer (REQ-361)
   RouteRun(st, "2in", 0.f, log);  // ends at (20,0,0)
   st.currentLayer = "0";
 
