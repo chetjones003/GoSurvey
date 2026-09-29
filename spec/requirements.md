@@ -10303,7 +10303,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - all settings survive DWG save → reopen; every control is disabled until Apply transform settings
     is checked.
 - Owner-layer: `src/geo/` (pure transformation + scale factor), Commands, UI (tab), IO (trailer).
-- Status: accepted (2026-09-29) — D-2026-09-29-b.
+- Status: accepted (2026-09-29) — D-2026-09-29-b, TASK-293.
 - Revisions: 2026-09-29 — proposed and accepted.
 
 ### REQ-361 — Object Layers tab: per-object creation layers with NCS defaults (GitHub issue #582, increment 5)

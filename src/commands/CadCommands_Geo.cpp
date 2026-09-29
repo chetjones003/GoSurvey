@@ -8,11 +8,13 @@
 
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
+#include "geo/LocalGridTransform.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,7 +38,8 @@ std::string FormatDms(double deg, char pos, char neg) {
 
 bool IsGeoCommand(AppCommandState::Kind k) {
   using K = AppCommandState::Kind;
-  return k == K::GeoMarkPoint || k == K::GeoMarkLatLong || k == K::GeoReorientMarker;
+  return k == K::GeoMarkPoint || k == K::GeoMarkLatLong || k == K::GeoReorientMarker ||
+         k == K::DrawingSettingsPick;
 }
 
 /// Local-space box of a marker's circle (radius \p r) and label.
@@ -55,24 +58,205 @@ void MarkerBox(const CadPositionMarker& m, float r, float* mnX, float* mnY, floa
 // Coordinates
 // ---------------------------------------------------------------------------
 
-geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing) {
-  geo::GeoResult r;
-  // DrawingPointToGrid is linear (scale k, then the world origin), so its inverse is exact: take the
-  // scale it applies to a unit offset and undo it. That keeps ONE statement of the unit rules.
-  const geo::GeoResult g0 = DrawingPointToGrid(st, -st.worldDocumentOriginX, -st.worldDocumentOriginY);
-  if (!g0.ok)
-    return g0;
-  const geo::GeoResult g1 = DrawingPointToGrid(st, 1.0 - st.worldDocumentOriginX, -st.worldDocumentOriginY);
-  if (!g1.ok)
-    return g1;
-  const double k = g1.x - g0.x;  // zone units per drawing unit (g0 is the world origin → 0,0)
-  if (!(k > 0.0) || !std::isfinite(k)) {
-    r.error = "The drawing unit has no size in the zone's unit.";
-    return r;
+namespace {
+
+/// Meters in one drawing unit under the drawing's own foot (REQ-357); 0 = Unitless.
+double MetersPerDrawingUnit(const DrawingSettings& s, int drawingInsUnits) {
+  const double inchesPerMeter = DrawingInchesPerMeter(s.footDefinition);
+  switch (drawingInsUnits) {
+    case 1: return 1.0 / inchesPerMeter;
+    case 2: return 12.0 / inchesPerMeter;
+    case 4: return 0.001;
+    case 6: return 1.0;
+    default: return 0.0;
   }
+}
+
+/// The name the Transformation tab gives a CS-MAP length unit ("Zone units are in …").
+std::string ZoneUnitName(const std::string& unit) {
+  if (unit == "METER")
+    return "Meters";
+  if (unit == "FOOT")
+    return "US Survey Feet";
+  if (unit == "IFOOT")
+    return "International Feet";
+  return unit;
+}
+
+geo::GeoResult Fail(std::string why) {
+  geo::GeoResult r;
+  r.error = std::move(why);
+  return r;
+}
+
+/// The pure transform of \p t in zone units, from its resolved factors \p f.
+geo::LocalGridTransform TransformOf(const DrawingSettings::Transform& t, const DrawingTransformFactors& f) {
+  geo::LocalGridTransform g;
+  g.refLocalX = t.refLocalX * f.zoneUnitsPerDrawingUnit;
+  g.refLocalY = t.refLocalY * f.zoneUnitsPerDrawingUnit;
+  g.refGridX = t.refGridE;
+  g.refGridY = t.refGridN;
+  g.scale = f.combined;
+  g.rotationRad = f.rotationRad;
+  return g;
+}
+
+}  // namespace
+
+std::string ValidateDrawingTransform(const DrawingSettings& s) {
+  const DrawingSettings::Transform& t = s.transform;
+  if (!t.apply)
+    return {};
+  for (double v : {t.elevation, t.spheroidRadiusM, t.userScaleFactor, t.refLocalX, t.refLocalY, t.refGridE,
+                   t.refGridN, t.rotLocalX, t.rotLocalY, t.rotGridE, t.rotGridN, t.toNorthDeg, t.localAzimuthDeg,
+                   t.gridAzimuthDeg})
+    if (!std::isfinite(v))
+      return "A transformation value is not a number.";
+  if (t.computation == DrawingSettings::Transform::Computation::UserDefined && !(t.userScaleFactor > 0.0))
+    return "The grid scale factor must be a number greater than 0.";
+  if (t.spheroidRadiusM < 0.0)  // 0 = the zone ellipsoid's
+    return "The spheroid radius must be a number greater than 0.";
+  if (t.rotation == DrawingSettings::Transform::Rotation::RotationPoint) {
+    double theta = 0.0;
+    if (!geo::RotationFromPoints(t.refLocalX, t.refLocalY, t.rotLocalX, t.rotLocalY, t.refGridE, t.refGridN,
+                                 t.rotGridE, t.rotGridN, &theta))
+      return "The rotation point coincides with the reference point; choose a different rotation point.";
+  }
+  return {};
+}
+
+DrawingTransformFactors ResolveDrawingTransform(const DrawingSettings& s, int drawingInsUnits,
+                                                bool withTransform) {
+  DrawingTransformFactors f;
+  if (!s.Geolocated()) {
+    f.error = "The drawing has no coordinate system (No Datum, No Projection).";
+    return f;
+  }
+  if (!geo::DictionariesLoaded()) {
+    f.error = geo::DictionaryError();
+    return f;
+  }
+  const std::optional<geo::CoordinateSystemInfo> zone = geo::FindCoordinateSystem(s.zoneCode);
+  if (!zone) {
+    f.error = s.zoneCode + " is unknown in this coordinate-system dictionary.";
+    return f;
+  }
+  if (zone->geographic) {
+    f.error = zone->code + " is a latitude/longitude system; a drawing point has no grid coordinate in it.";
+    return f;
+  }
+  if (zone->metersPerUnit <= 0.0) {
+    f.error = zone->code + " has a unit (" + zone->unit + ") that is not a length.";
+    return f;
+  }
+  // A Unitless drawing is taken to be in the zone's unit.
+  const double metersPerDrawingUnit = MetersPerDrawingUnit(s, drawingInsUnits);
+  f.zoneUnitsPerDrawingUnit = metersPerDrawingUnit > 0.0 ? metersPerDrawingUnit / zone->metersPerUnit : 1.0;
+  f.zoneUnitName = ZoneUnitName(zone->unit);
+  f.ok = true;
+  if (!withTransform)
+    return f;
+
+  const DrawingSettings::Transform& t = s.transform;
+  DrawingSettings checked = s;
+  checked.transform.apply = true;  // the tab's readouts want the reason even while the transform is off
+  if (const std::string bad = ValidateDrawingTransform(checked); !bad.empty()) {
+    f.transformError = bad;
+    return f;
+  }
+  if (t.computation == DrawingSettings::Transform::Computation::UserDefined) {
+    f.gridFactor = t.userScaleFactor;
+  } else {
+    const geo::GeoResult k = geo::GridScaleFactor(s.zoneCode, t.refGridE, t.refGridN);
+    if (!k.ok) {
+      f.transformError = "Grid scale factor at the reference point: " + k.error;
+      return f;
+    }
+    f.gridFactor = k.x;
+  }
+  f.spheroidRadiusM = t.spheroidRadiusM > 0.0 ? t.spheroidRadiusM
+                                              : geo::EllipsoidSemiMajorMeters(s.zoneCode).value_or(0.0);
+  if (t.applySeaLevel) {
+    // h in meters: the drawing unit, or the zone's unit for a Unitless drawing.
+    const double metersPerElevationUnit = metersPerDrawingUnit > 0.0 ? metersPerDrawingUnit : zone->metersPerUnit;
+    f.seaFactor = geo::SeaLevelScaleFactor(f.spheroidRadiusM, t.elevation * metersPerElevationUnit);
+    if (!(f.spheroidRadiusM > 0.0) || !(f.seaFactor > 0.0)) {
+      f.transformError = "The elevation is below the centre of the spheroid; there is no sea level factor.";
+      return f;
+    }
+  }
+  f.combined = f.gridFactor * f.seaFactor;
+  switch (t.rotation) {
+    case DrawingSettings::Transform::Rotation::RotationPoint:
+      (void)geo::RotationFromPoints(t.refLocalX, t.refLocalY, t.rotLocalX, t.rotLocalY, t.refGridE, t.refGridN,
+                                    t.rotGridE, t.rotGridN, &f.rotationRad);  // validated above
+      break;
+    case DrawingSettings::Transform::Rotation::ToNorth:
+      f.rotationRad = geo::RotationFromToNorthDeg(t.toNorthDeg);
+      break;
+    case DrawingSettings::Transform::Rotation::Azimuth:
+      f.rotationRad = geo::RotationFromAzimuthsDeg(t.localAzimuthDeg, t.gridAzimuthDeg);
+      break;
+  }
+  f.transformOk = true;
+  return f;
+}
+
+geo::GeoResult DrawingWorldToGrid(const DrawingSettings& s, int drawingInsUnits, double worldX, double worldY) {
+  const DrawingTransformFactors f = ResolveDrawingTransform(s, drawingInsUnits, s.transform.apply);
+  if (!f.ok)
+    return Fail(f.error);
+  geo::XY g{worldX * f.zoneUnitsPerDrawingUnit, worldY * f.zoneUnitsPerDrawingUnit};
+  if (s.transform.apply) {
+    if (!f.transformOk)
+      return Fail("Transformation: " + f.transformError);
+    g = geo::LocalToGrid(TransformOf(s.transform, f), g.x, g.y);
+  }
+  geo::GeoResult r;
   r.ok = true;
-  r.x = easting / k - st.worldDocumentOriginX;
-  r.y = northing / k - st.worldDocumentOriginY;
+  r.x = g.x;
+  r.y = g.y;
+  return r;
+}
+
+geo::GeoResult GridToDrawingWorld(const DrawingSettings& s, int drawingInsUnits, double easting, double northing) {
+  const DrawingTransformFactors f = ResolveDrawingTransform(s, drawingInsUnits, s.transform.apply);
+  if (!f.ok)
+    return Fail(f.error);
+  if (!(f.zoneUnitsPerDrawingUnit > 0.0) || !std::isfinite(f.zoneUnitsPerDrawingUnit))
+    return Fail("The drawing unit has no size in the zone's unit.");
+  geo::XY local{easting, northing};
+  if (s.transform.apply) {
+    if (!f.transformOk)
+      return Fail("Transformation: " + f.transformError);
+    local = geo::GridToLocal(TransformOf(s.transform, f), easting, northing);
+  }
+  geo::GeoResult r;
+  r.ok = true;
+  r.x = local.x / f.zoneUnitsPerDrawingUnit;
+  r.y = local.y / f.zoneUnitsPerDrawingUnit;
+  return r;
+}
+
+geo::GeoResult DrawingPointToGrid(const AppCommandState& st, double localX, double localY) {
+  // world = local + origin, in double (REQ-101).
+  return DrawingWorldToGrid(st.drawingSettings, st.drawingInsUnits, localX + st.worldDocumentOriginX,
+                            localY + st.worldDocumentOriginY);
+}
+
+geo::GeoResult DrawingPointToLatLong(const AppCommandState& st, double localX, double localY) {
+  const geo::GeoResult grid = DrawingPointToGrid(st, localX, localY);
+  if (!grid.ok)
+    return grid;
+  return geo::GridToLatLong(st.drawingSettings.zoneCode, grid.x, grid.y);
+}
+
+geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing) {
+  geo::GeoResult r = GridToDrawingWorld(st.drawingSettings, st.drawingInsUnits, easting, northing);
+  if (r.ok) {
+    r.x -= st.worldDocumentOriginX;
+    r.y -= st.worldDocumentOriginY;
+  }
   return r;
 }
 
@@ -167,6 +351,7 @@ bool RemoveGeoLocation(AppCommandState& st, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Remove Location");
   st.drawingSettings.zoneCode.clear();
   st.drawingSettings.ResetGeographicMarker();
+  st.drawingSettings.transform = DrawingSettings::Transform{};  // REQ-360: belongs to the zone
   BumpCadGpuCache(st);  // document property: marks the drawing modified
   log.push_back("Remove Location — the drawing is no longer geolocated (No Datum, No Projection).");
   return true;
@@ -344,13 +529,15 @@ int DropPositionMarkersFromSelection(AppCommandState& st, const char* verb, std:
 // GEOMARKPOINT / GEOMARKLATLONG / GEOREORIENTMARKER
 // ---------------------------------------------------------------------------
 
+/// \p needsZone: the command works on the drawing's zone. The Drawing Settings pick does not — the
+/// window may hold a zone that is not applied yet.
 static bool StartGeoCommand(AppCommandState& st, AppCommandState::Kind k, const char* name,
-                            std::vector<std::string>& log) {
+                            std::vector<std::string>& log, bool needsZone = true) {
   if (st.active != AppCommandState::Kind::None) {
     log.push_back(std::string(name) + " — finish or cancel the active command first.");
     return false;
   }
-  if (!st.drawingSettings.Geolocated()) {
+  if (needsZone && !st.drawingSettings.Geolocated()) {
     log.push_back(std::string(name) + " — the drawing has no location; assign a zone in Drawing Settings first.");
     return false;
   }
@@ -379,9 +566,79 @@ void StartGeoReorientMarkerCommand(AppCommandState& st, std::vector<std::string>
     log.push_back("GEOREORIENTMARKER — specify the design point (click or type X,Y). ESC cancels.");
 }
 
+bool StartDrawingSettingsPick(AppCommandState& st, AppCommandState::DrawingSettingsPickState::Target target,
+                              std::vector<std::string>& log) {
+  using T = AppCommandState::DrawingSettingsPickState::Target;
+  const AppCommandState::Kind repeat = st.lastCommand;  // an internal pick is not a command to repeat
+  if (target == T::None ||
+      !StartGeoCommand(st, AppCommandState::Kind::DrawingSettingsPick, "DRAWINGSETTINGS", log, false))
+    return false;
+  st.lastCommand = repeat;
+  st.drawingSettingsPick = {};
+  st.drawingSettingsPick.target = target;
+  const bool point = target == T::ReferencePoint || target == T::RotationPoint;
+  log.push_back(point ? "DRAWINGSETTINGS — pick a point or a survey point (or type X,Y). ESC returns to the window."
+                      : "DRAWINGSETTINGS — pick the first point of the direction. ESC returns to the window.");
+  return true;
+}
+
+namespace {
+
+/// The survey point at a picked LOCAL point (a Survey point snap lands on it), or 0. A typed point
+/// arrives through float (ParseStoragePoint), so the match allows float rounding at that magnitude.
+int SurveyPointNumberAt(const AppCommandState& st, double localX, double localY) {
+  const double tol = std::max(1e-6, 4.0 * 1.1920929e-7 * std::max(std::fabs(localX), std::fabs(localY)));
+  int best = 0;
+  double bestD = tol;
+  for (const SurveyPoint& p : st.surveyPoints) {
+    const double d = std::hypot(p.easting - localX, p.northing - localY);
+    if (d <= bestD) {
+      bestD = d;
+      best = p.id;
+    }
+  }
+  return best;
+}
+
+bool SubmitDrawingSettingsPick(AppCommandState& st, double localX, double localY, std::vector<std::string>& log) {
+  using T = AppCommandState::DrawingSettingsPickState::Target;
+  using GP = AppCommandState::GeoCmdPhase;
+  AppCommandState::DrawingSettingsPickState& pick = st.drawingSettingsPick;
+  if (pick.target == T::ReferencePoint || pick.target == T::RotationPoint) {
+    pick.worldX = localX + st.worldDocumentOriginX;
+    pick.worldY = localY + st.worldDocumentOriginY;
+    pick.pointNumber = SurveyPointNumberAt(st, localX, localY);
+    pick.done = true;
+    st.active = AppCommandState::Kind::None;
+    return true;
+  }
+  if (st.geoCmdPhase == GP::WaitFirst) {
+    st.geoCmdFirstA = localX;
+    st.geoCmdFirstB = localY;
+    st.geoCmdPhase = GP::WaitSecond;
+    log.push_back("DRAWINGSETTINGS — pick the second point of the direction.");
+    return true;
+  }
+  const double dx = localX - st.geoCmdFirstA;
+  const double dy = localY - st.geoCmdFirstB;
+  if (std::hypot(dx, dy) < 1.e-9) {
+    log.push_back("DRAWINGSETTINGS — the two points must differ; pick again.");
+    return false;
+  }
+  pick.azimuthDeg = geo::AzimuthDeg(dx, dy);
+  pick.done = true;
+  st.geoCmdPhase = GP::WaitFirst;
+  st.active = AppCommandState::Kind::None;
+  return true;
+}
+
+}  // namespace
+
 bool SubmitGeoCommandPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
   using GP = AppCommandState::GeoCmdPhase;
+  if (st.active == K::DrawingSettingsPick)
+    return SubmitDrawingSettingsPick(st, localX, localY, log);
   if (st.active == K::GeoMarkPoint) {
     st.active = K::None;
     return PlacePositionMarkerAtLocal(st, localX, localY, log) >= 0;
@@ -457,6 +714,12 @@ const char* GeoCommandPrompt(const AppCommandState& st) {
     case K::GeoMarkPoint:      return "Specify position:";
     case K::GeoMarkLatLong:    return first ? "Enter latitude:" : "Enter longitude:";
     case K::GeoReorientMarker: return first ? "Specify design point:" : "Specify north direction:";
+    case K::DrawingSettingsPick:
+      if (st.drawingSettingsPick.target == AppCommandState::DrawingSettingsPickState::Target::ReferencePoint)
+        return "Specify reference point:";
+      if (st.drawingSettingsPick.target == AppCommandState::DrawingSettingsPickState::Target::RotationPoint)
+        return "Specify rotation point:";
+      return first ? "Specify first point of the direction:" : "Specify second point of the direction:";
     default:                   return nullptr;
   }
 }

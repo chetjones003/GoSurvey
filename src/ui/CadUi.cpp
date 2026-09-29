@@ -10173,6 +10173,7 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
   case K::GeoMarkPoint:  // REQ-359
   case K::GeoMarkLatLong:
   case K::GeoReorientMarker:
+  case K::DrawingSettingsPick:  // REQ-360
     return GeoCommandPrompt(cmd);
   case K::SurveyInverse:
     return cmd.surveyInversePhase == AppCommandState::SurveyInversePhase::WaitFrom ? "Specify first point:"

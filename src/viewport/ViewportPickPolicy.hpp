@@ -171,6 +171,7 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::QuickProfile:
   case K::GeoMarkPoint:       // REQ-359: Mark Position ▸ Point
   case K::GeoReorientMarker:  // REQ-359: design point, then a point along north
+  case K::DrawingSettingsPick:  // REQ-360: the Transformation tab's reference / rotation point or direction
     return R::SnappedPointPick;
 
   // --- Entity-pick commands: raw cursor, hit-tested by PickClosestCadEntity. ---

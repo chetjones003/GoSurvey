@@ -13474,7 +13474,8 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     return;
   }
 
-  if (st.active == K::GeoMarkPoint || st.active == K::GeoReorientMarker) {  // REQ-359
+  if (st.active == K::GeoMarkPoint || st.active == K::GeoReorientMarker ||
+      st.active == K::DrawingSettingsPick) {  // REQ-359 / REQ-360
     SubmitGeoCommandPoint(st, wx, wy, log);
     return;
   }
@@ -38684,8 +38685,14 @@ bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelU
   }
   // REQ-359 item 4: the geographic marker belongs to the zone; without a zone it is the default.
   DrawingSettings next = settings;
-  if (!next.Geolocated())
+  if (!next.Geolocated()) {
     next.ResetGeographicMarker();
+    next.transform = DrawingSettings::Transform{};  // REQ-360: the transform belongs to the zone too
+  }
+  if (const std::string bad = ValidateDrawingTransform(next); !bad.empty()) {
+    log.push_back("Drawing Settings — " + bad + " Nothing was changed.");
+    return false;
+  }
   const bool unitsChanged = drawingInsUnits != st.drawingInsUnits;
   const bool scaleChanged = modelUnitsPerPlottedInch != st.modelUnitsPerPlottedInch;
   const bool settingsChanged = next != st.drawingSettings;
@@ -38699,53 +38706,6 @@ bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelU
   BumpCadGpuCache(st);  // document property: marks the drawing modified
   log.push_back("Drawing Settings applied.");
   return true;
-}
-
-geo::GeoResult DrawingPointToGrid(const AppCommandState& st, double localX, double localY) {
-  geo::GeoResult r;
-  if (!st.drawingSettings.Geolocated()) {
-    r.error = "The drawing has no coordinate system (No Datum, No Projection).";
-    return r;
-  }
-  if (!geo::DictionariesLoaded()) {
-    r.error = geo::DictionaryError();
-    return r;
-  }
-  const std::optional<geo::CoordinateSystemInfo> zone = geo::FindCoordinateSystem(st.drawingSettings.zoneCode);
-  if (!zone) {
-    r.error = st.drawingSettings.zoneCode + " is unknown in this coordinate-system dictionary.";
-    return r;
-  }
-  if (zone->geographic) {
-    r.error = zone->code + " is a latitude/longitude system; a drawing point has no grid coordinate in it.";
-    return r;
-  }
-  if (zone->metersPerUnit <= 0.0) {
-    r.error = zone->code + " has a unit (" + zone->unit + ") that is not a length.";
-    return r;
-  }
-  // Drawing unit → meters, under the drawing's own foot (REQ-357); 0 = Unitless = the zone's unit.
-  const double inchesPerMeter = DrawingInchesPerMeter(st.drawingSettings.footDefinition);
-  double metersPerDrawingUnit = 0.0;
-  switch (st.drawingInsUnits) {
-    case 1: metersPerDrawingUnit = 1.0 / inchesPerMeter; break;
-    case 2: metersPerDrawingUnit = 12.0 / inchesPerMeter; break;
-    case 4: metersPerDrawingUnit = 0.001; break;
-    case 6: metersPerDrawingUnit = 1.0; break;
-    default: break;
-  }
-  const double k = metersPerDrawingUnit > 0.0 ? metersPerDrawingUnit / zone->metersPerUnit : 1.0;
-  r.ok = true;
-  r.x = (localX + st.worldDocumentOriginX) * k;
-  r.y = (localY + st.worldDocumentOriginY) * k;
-  return r;
-}
-
-geo::GeoResult DrawingPointToLatLong(const AppCommandState& st, double localX, double localY) {
-  const geo::GeoResult grid = DrawingPointToGrid(st, localX, localY);
-  if (!grid.ok)
-    return grid;
-  return geo::GridToLatLong(st.drawingSettings.zoneCode, grid.x, grid.y);
 }
 
 // ---------------------------------------------------------------------------
@@ -39862,7 +39822,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   else if (st.active == AppCommandState::Kind::IdPoint)
     log.push_back("ID canceled.");
   else if (st.active == AppCommandState::Kind::GeoMarkPoint || st.active == AppCommandState::Kind::GeoMarkLatLong ||
-           st.active == AppCommandState::Kind::GeoReorientMarker)  // REQ-359
+           st.active == AppCommandState::Kind::GeoReorientMarker ||
+           st.active == AppCommandState::Kind::DrawingSettingsPick)  // REQ-359 / REQ-360
     log.push_back(std::string(AppCommandState::KindName(st.active)) + " canceled.");
   else if (st.active == AppCommandState::Kind::SurveyInverse)
     log.push_back("INVERSE canceled.");
@@ -43410,6 +43371,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     return st.geoCmdPhase == AppCommandState::GeoCmdPhase::WaitFirst
                ? "GEOMARKLATLONG: Latitude — decimal degrees or D M S N/S (lat,long in one go) | ESC cancel"
                : "GEOMARKLATLONG: Longitude — decimal degrees (west negative) or D M S E/W | ESC cancel";
+  if (st.active == K::DrawingSettingsPick)  // REQ-360
+    return "DRAWINGSETTINGS: Pick for the Transformation tab or type X,Y | ESC back to the window";
   if (st.active == K::GeoReorientMarker)
     return st.geoCmdPhase == AppCommandState::GeoCmdPhase::WaitFirst
                ? "GEOREORIENTMARKER: Pick the design point or type X,Y | ESC cancel"

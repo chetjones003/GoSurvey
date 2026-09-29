@@ -1537,6 +1537,78 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(!s_cmd->showDrawingSettingsWindow);
   };
 
+  // --- REQ-360: the Transformation tab, through the REAL window --------------------------------------
+  // Every control waits for "Apply transform settings"; a Pick button hides the window, the pick
+  // (typed here) comes back into it, and Apply writes the transform to the drawing.
+  //   build\devshell\GoSurvey.exe --devshell-run req360-transformation-tab
+  // GOSURVEY_REQ360_HOLD=<seconds> keeps the window open on the tab, for a desktop screenshot.
+  ImGuiTest* transformation = IM_REGISTER_TEST(engine, "gosurvey", "req360-transformation-tab");
+  transformation->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    SubmitCad(ctx, "DRAWINGSETTINGS");
+    ctx->Yield(4);
+    IM_CHECK(s_cmd->showDrawingSettingsWindow);
+    ImGuiWindow* dialog = ctx->WindowInfo("//$FOCUSED").Window;
+    IM_CHECK(dialog != nullptr);
+    ctx->SetRef(dialog);
+    ctx->ItemClick("**/##ds_code");
+    ctx->KeyCharsReplaceEnter("HARN/TX.TX-CF");
+    ctx->Yield(2);
+
+    ctx->ItemClick("**/Transformation");
+    ctx->Yield(2);
+    const auto disabled = [ctx](const char* ref) {
+      return (ctx->ItemInfo(ref).ItemFlags & ImGuiItemFlags_Disabled) != 0;
+    };
+    IM_CHECK(!disabled("**/Apply transform settings"));
+    for (const char* ref : {"**/Apply sea level scale factor", "**/Rotation point", "**/Pick Reference Point",
+                            "**/##elev"})
+      IM_CHECK(disabled(ref));
+    ctx->ItemClick("**/Apply transform settings");
+    ctx->Yield(2);
+    for (const char* ref : {"**/Apply sea level scale factor", "**/Rotation point", "**/Pick Reference Point"})
+      IM_CHECK(!disabled(ref));
+    IM_CHECK(disabled("**/##elev"));  // until the sea level factor is on
+
+    // Esc during a pick returns to the window; that Esc does not close the window too.
+    ctx->ItemClick("**/Pick Reference Point");
+    ctx->Yield(3);
+    IM_CHECK(s_cmd->active == AppCommandState::Kind::DrawingSettingsPick);
+    ctx->KeyPress(ImGuiKey_Escape);
+    ctx->Yield(4);
+    IM_CHECK(s_cmd->active == AppCommandState::Kind::None);
+    IM_CHECK(s_cmd->showDrawingSettingsWindow);
+    dialog = ctx->WindowInfo("//$FOCUSED").Window;
+    IM_CHECK(dialog != nullptr);
+    ctx->SetRef(dialog);
+
+    // Pick Reference Point: the window hides, a typed point answers, the window comes back.
+    ctx->ItemClick("**/Pick Reference Point");
+    ctx->Yield(3);
+    IM_CHECK(s_cmd->active == AppCommandState::Kind::DrawingSettingsPick);
+    SubmitCad(ctx, "1000,2000");
+    ctx->Yield(4);
+    IM_CHECK(s_cmd->active == AppCommandState::Kind::None);
+    IM_CHECK(s_cmd->showDrawingSettingsWindow);
+    dialog = ctx->WindowInfo("//$FOCUSED").Window;
+    IM_CHECK(dialog != nullptr);
+    ctx->SetRef(dialog);
+    if (const char* hold = std::getenv("GOSURVEY_REQ360_HOLD"))
+      ctx->SleepNoSkip(static_cast<float>(std::atof(hold)), 0.1f);
+    ctx->ItemClick("**/Apply");
+    ctx->Yield(2);
+    const DrawingSettings::Transform& t = s_cmd->drawingSettings.transform;
+    IM_CHECK(t.apply);
+    IM_CHECK(std::fabs(t.refLocalX - 1000.0) < 1e-3);
+    IM_CHECK(std::fabs(t.refLocalY - 2000.0) < 1e-3);
+    IM_CHECK(std::fabs(t.refGridE - 1000.0) < 1e-3);  // seeded: the point in zone units
+
+    ctx->ItemClick("**/Cancel");
+    ctx->Yield(2);
+    IM_CHECK(!s_cmd->showDrawingSettingsWindow);
+  };
+
   // REQ-359 (GitHub issue #582 increment 3): the contextual Geolocation tab in the real ribbon.
   // Appears with a zone without taking focus; Map / Capture Area present but disabled; Edit Location
   // opens Drawing Settings; Mark Position places a Position Marker (screenshot); Remove Location asks,

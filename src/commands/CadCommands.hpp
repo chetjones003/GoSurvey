@@ -1053,6 +1053,46 @@ struct DrawingSettings {
   /// North direction, degrees counter-clockwise from +X; 90 = grid north (+Y).
   double markerNorthDeg = 90.0;
 
+  /// The Transformation tab (REQ-360): local (drawing) ↔ grid,
+  /// `grid = G_ref + k·R(θ)·(L − L_ref)` with k = k_grid · k_sea. Angles are stored in degrees
+  /// whatever the Angular units (the window converts). Belongs to the zone: reset with it.
+  struct Transform {
+    enum class Computation { ReferencePoint = 0, UserDefined = 1 };
+    /// Rotation point: θ from a second point's grid vs local bearing. ToNorth / Azimuth are the two
+    /// kinds of "Specify grid rotation angle".
+    enum class Rotation { RotationPoint = 0, ToNorth = 1, Azimuth = 2 };
+    bool        apply = false;
+    bool        applySeaLevel = false;
+    double      elevation = 0.0;        ///< h, drawing unit
+    double      spheroidRadiusM = 0.0;  ///< R, meters; 0 = the zone ellipsoid's semi-major axis
+    Computation computation = Computation::ReferencePoint;
+    double      userScaleFactor = 1.0;  ///< k_grid when User Defined
+    // Reference point: L_ref (WORLD, drawing unit), G_ref (zone unit), survey point number (0 = none).
+    double      refLocalX = 0.0, refLocalY = 0.0;
+    double      refGridE = 0.0, refGridN = 0.0;
+    int         refPointNumber = 0;
+    Rotation    rotation = Rotation::ToNorth;
+    // Rotation point, the same four values and a point number.
+    double      rotLocalX = 0.0, rotLocalY = 0.0;
+    double      rotGridE = 0.0, rotGridN = 0.0;
+    int         rotPointNumber = 0;
+    double      toNorthDeg = 0.0;       ///< local north → grid north, clockwise
+    double      localAzimuthDeg = 0.0;  ///< Azimuth: this local azimuth (clockwise from north)…
+    double      gridAzimuthDeg = 0.0;   ///< …becomes this grid azimuth
+    bool operator==(const Transform& o) const {
+      return apply == o.apply && applySeaLevel == o.applySeaLevel && elevation == o.elevation &&
+             spheroidRadiusM == o.spheroidRadiusM && computation == o.computation &&
+             userScaleFactor == o.userScaleFactor && refLocalX == o.refLocalX && refLocalY == o.refLocalY &&
+             refGridE == o.refGridE && refGridN == o.refGridN && refPointNumber == o.refPointNumber &&
+             rotation == o.rotation && rotLocalX == o.rotLocalX && rotLocalY == o.rotLocalY &&
+             rotGridE == o.rotGridE && rotGridN == o.rotGridN && rotPointNumber == o.rotPointNumber &&
+             toNorthDeg == o.toNorthDeg && localAzimuthDeg == o.localAzimuthDeg &&
+             gridAzimuthDeg == o.gridAzimuthDeg;
+    }
+    bool operator!=(const Transform& o) const { return !(*this == o); }
+  };
+  Transform transform;
+
   /// Geolocated exactly when a zone is set (REQ-358 item 3).
   [[nodiscard]] bool Geolocated() const { return !zoneCode.empty(); }
   /// Back to the default geographic marker (drawing origin, grid north).
@@ -1066,7 +1106,7 @@ struct DrawingSettings {
     return angularUnits == o.angularUnits && footDefinition == o.footDefinition &&
            scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables &&
            zoneCode == o.zoneCode && markerX == o.markerX && markerY == o.markerY &&
-           markerNorthDeg == o.markerNorthDeg;
+           markerNorthDeg == o.markerNorthDeg && transform == o.transform;
   }
   bool operator!=(const DrawingSettings& o) const { return !(*this == o); }
 };
@@ -1811,6 +1851,10 @@ struct AppCommandState {
     GeoMarkPoint,
     GeoMarkLatLong,
     GeoReorientMarker,
+    /// REQ-360: a point (or a direction) picked for the Drawing Settings Transformation tab while
+    /// its window is hidden. Started only by the tab's pick buttons; \ref drawingSettingsPick says
+    /// what for. The window comes back when it ends (Esc = no change).
+    DrawingSettingsPick,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1900,6 +1944,7 @@ struct AppCommandState {
     case Kind::GeoMarkPoint:       return "GEOMARKPOINT";
     case Kind::GeoMarkLatLong:     return "GEOMARKLATLONG";
     case Kind::GeoReorientMarker:  return "GEOREORIENTMARKER";
+    case Kind::DrawingSettingsPick: return "DRAWINGSETTINGS";
     default:                  return "";
     }
   }
@@ -3783,6 +3828,17 @@ struct AppCommandState {
   enum class GeoCmdPhase { WaitFirst, WaitSecond } geoCmdPhase = GeoCmdPhase::WaitFirst;
   double geoCmdFirstA = 0.0;  ///< GEOMARKLATLONG: the latitude; GEOREORIENTMARKER: design point X (local)
   double geoCmdFirstB = 0.0;  ///< GEOREORIENTMARKER: design point Y (local)
+  /// REQ-360: what a running \ref Kind::DrawingSettingsPick picks, and its result for the Drawing
+  /// Settings window (which reads and clears \c done). Points are one pick; ToNorth / LocalAzimuth
+  /// are two (a direction), with the first in geoCmdFirstA/B.
+  struct DrawingSettingsPickState {
+    enum class Target { None, ReferencePoint, RotationPoint, ToNorth, LocalAzimuth } target = Target::None;
+    bool   done = false;         ///< A result is waiting for the window.
+    double worldX = 0.0;         ///< The picked point (WORLD), for the point targets.
+    double worldY = 0.0;
+    int    pointNumber = 0;      ///< The survey point picked there, 0 = none.
+    double azimuthDeg = 0.0;     ///< The picked direction, clockwise from north, for the angle targets.
+  } drawingSettingsPick;
   /// The Position Marker whose label the MTEXT editor is editing (REQ-359 item 3), or -1. When set,
   /// \ref MtextRichEditorTargetAnnotation returns that marker's own label.
   int mtextRichEditorMarkerIndex = -1;
@@ -7050,9 +7106,39 @@ bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelU
 /// given in LOCAL coordinates: world = local + worldDocumentOrigin in double (REQ-101), then drawing
 /// unit → meters under the drawing's Imperial to Metric conversion (REQ-357) → the zone's unit. A
 /// Unitless drawing is taken to be in the zone's unit. Fails (with the reason) when the drawing is
-/// not geolocated or its zone is unknown to the loaded dictionary. REQ-360's transformation is not
-/// applied yet.
+/// not geolocated or its zone is unknown to the loaded dictionary. When the drawing's transform is
+/// applied (REQ-360) the result goes through it. (CadCommands_Geo.cpp)
 [[nodiscard]] geo::GeoResult DrawingPointToGrid(const AppCommandState& st, double localX, double localY);
+
+/// REQ-360: what a drawing's settings resolve to — the unit factor, and the transformation's factors
+/// and angle (the Transformation tab's readouts). \c ok = the zone is usable; \c transformOk = the
+/// transform's own values are (a Reference Point factor needs CS-MAP at G_ref). Without
+/// \p withTransform only the zone and the unit factor are resolved (transformOk stays false).
+struct DrawingTransformFactors {
+  bool        ok = false;
+  std::string error;               ///< Why !ok.
+  double      zoneUnitsPerDrawingUnit = 1.0;
+  std::string zoneUnitName;        ///< e.g. "US Survey Feet", "Meters".
+  bool        transformOk = false;
+  std::string transformError;      ///< Why !transformOk.
+  double      gridFactor = 1.0;    ///< k_grid
+  double      seaFactor = 1.0;     ///< k_sea (1 when the sea level factor is off)
+  double      combined = 1.0;      ///< k = k_grid · k_sea
+  double      spheroidRadiusM = 0.0;  ///< R actually used (the ellipsoid's when the stored one is 0)
+  double      rotationRad = 0.0;   ///< θ, counter-clockwise
+};
+[[nodiscard]] DrawingTransformFactors ResolveDrawingTransform(const DrawingSettings& s, int drawingInsUnits,
+                                                              bool withTransform = true);
+/// REQ-360: the transform's typed values that can never work, as a sentence, or "" — checked only
+/// while Apply transform settings is on. Pure (no dictionary): a scale factor that is not > 0, a
+/// spheroid radius ≤ 0, R + h ≤ 0, and a rotation point coincident with the reference point.
+[[nodiscard]] std::string ValidateDrawingTransform(const DrawingSettings& s);
+/// REQ-358 item 4 + REQ-360 on a WORLD point in drawing units: grid (zone unit) of it.
+[[nodiscard]] geo::GeoResult DrawingWorldToGrid(const DrawingSettings& s, int drawingInsUnits, double worldX,
+                                                double worldY);
+/// The exact inverse of \ref DrawingWorldToGrid: the WORLD point (drawing units) of a grid coordinate.
+[[nodiscard]] geo::GeoResult GridToDrawingWorld(const DrawingSettings& s, int drawingInsUnits, double easting,
+                                                double northing);
 /// REQ-358 item 4: latitude/longitude (degrees, x = longitude) of a LOCAL drawing point, in the
 /// zone's own datum.
 [[nodiscard]] geo::GeoResult DrawingPointToLatLong(const AppCommandState& st, double localX, double localY);
@@ -7102,6 +7188,10 @@ int DropPositionMarkersFromSelection(AppCommandState& st, const char* verb, std:
 void StartGeoMarkPointCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartGeoMarkLatLongCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartGeoReorientMarkerCommand(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-360: start the Transformation tab's pick for \p target (the window hides until it ends).
+/// False (logged) while another command runs or when \p target is None.
+bool StartDrawingSettingsPick(AppCommandState& st, AppCommandState::DrawingSettingsPickState::Target target,
+                              std::vector<std::string>& log);
 /// A viewport pick or typed point for GEOMARKPOINT / GEOREORIENTMARKER (LOCAL coordinates).
 bool SubmitGeoCommandPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
 /// Typed input while a geolocation command is active; false when none is.

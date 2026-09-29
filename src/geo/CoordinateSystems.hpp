@@ -46,6 +46,10 @@ struct CoordinateSystemInfo {
 /// The details of \p code, or nothing when the dictionary does not know it (or is not loaded).
 [[nodiscard]] std::optional<CoordinateSystemInfo> FindCoordinateSystem(const std::string& code);
 
+/// The semi-major axis (meters) of \p code's ellipsoid — the Transformation tab's default Spheroid
+/// radius (REQ-360 item 3) — or nothing when the code is unknown (or no dictionary is loaded).
+[[nodiscard]] std::optional<double> EllipsoidSemiMajorMeters(const std::string& code);
+
 /// A converted coordinate. Lat/long are degrees, x = longitude (east positive), y = latitude.
 struct GeoResult {
   bool        ok = false;
@@ -58,6 +62,10 @@ struct GeoResult {
 [[nodiscard]] GeoResult GridToLatLong(const std::string& code, double easting, double northing);
 /// Latitude/longitude in the system's datum → grid (easting, northing in the system's unit).
 [[nodiscard]] GeoResult LatLongToGrid(const std::string& code, double longitude, double latitude);
+/// CS-MAP's point (grid) scale factor k of the projection \p code at the grid point (easting,
+/// northing in the system's unit), in x (REQ-360 item 4, Reference Point computation). Fails for a
+/// lat/long system or a point outside the projection's domain.
+[[nodiscard]] GeoResult GridScaleFactor(const std::string& code, double easting, double northing);
 /// Latitude/longitude in \p fromCode's datum → latitude/longitude in \p toCode's datum, along
 /// CS-MAP's datum path (including the shipped grid files, e.g. NADCON). \p fromCode / \p toCode
 /// are coordinate-system codes (e.g. "LL27", "LL83", "LL84").
