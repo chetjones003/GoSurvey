@@ -188,7 +188,10 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
   PaintProductDialogAccentFrame();
   BeginStyledDialog();
 
-  bool close = !open || ImGui::IsKeyPressed(ImGuiKey_Escape);  // [X] and Esc are Cancel
+  // [X] and Esc are Cancel. Esc only while this window has focus: an open combo list is its own
+  // window, and Esc there must close the list, not the whole dialog.
+  bool close = !open || (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+                         ImGui::IsKeyPressed(ImGuiKey_Escape));
 
   const float footerH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
   if (ImGui::BeginChild("##ds_body", ImVec2(0.f, -footerH))) {
