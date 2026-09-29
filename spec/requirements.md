@@ -10225,9 +10225,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
      - **Remove Location** — asks for confirmation, then sets the zone to `No Datum, No Projection`
        and clears the marker, as one undo step; the tab disappears.
   3. **Tools** panel: **Mark Position** — split button: **Lat-Long** (type a latitude and longitude)
-     and **Point** (pick a point). Either places a position marker: a survey-point-style node plus
-     a label reading the latitude and longitude (REQ-358 item 4, in the zone's datum), created as
-     ordinary GoSurvey geometry on the current layer.
+     and **Point** (pick a point). Either places a **Position Marker** (D-2026-09-29-e): a GoSurvey
+     object of its own, on the current layer, drawn as a cross inside a circle at a fixed plotted
+     size, with its **own** multi-line (MTEXT) label. After placement the MTEXT editor opens on the
+     label, pre-filled with the point's latitude and longitude (REQ-358 item 4, in the zone's
+     datum); the text the user commits is the label. Marker and label are **one object**: select,
+     MOVE, COPY, ERASE and UNDO act on both; the node (Survey point) and Center object snaps
+     find the marker's centre; ROTATE,
+     SCALE, MIRROR, STRETCH and grips refuse it by name. It is saved with the drawing (ADR-044
+     trailer, per drawing tab) and is **also written into the DWG / DXF body** as a CIRCLE, two
+     LINEs and an MTEXT so other programs show it (as loose pieces). GoSurvey's own DWG reopen
+     reads the trailer, so the exported pieces are not imported twice.
   4. **The geographic marker** is the drawing's geolocation reference — a design point in the drawing
      and a north direction — drawn as a viewport overlay glyph, not an entity. By default it is the
      drawing origin with grid north. It is stored with the zone (REQ-358 item 5) and is what REQ-362
@@ -10238,13 +10246,19 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - assigning a zone shows the tab; Remove Location (confirmed) hides it, clears the zone, and one
     UNDO brings both back; switching to a non-geolocated drawing tab hides it;
   - Edit Location opens Drawing Settings on Units and Zone;
-  - Mark Position ▸ Lat-Long at the NGS point of REQ-358's test places a marker at that point's grid
-    coordinate within 0.001 ft, labelled with its latitude/longitude;
+  - Mark Position ▸ Lat-Long at the NGS point of REQ-358's test places a Position Marker at that
+    point's grid coordinate within 0.001 ft, and the MTEXT editor opens on its label pre-filled with
+    that latitude/longitude;
+  - a Position Marker selects, moves, copies and erases as one object with its label, undoes in one
+    step, snaps (Survey point / Center) at its centre, survives DWG save → close → reopen once (no duplicate), and
+    the saved DWG / DXF body holds its CIRCLE, LINEs and MTEXT;
   - Map and Capture Area are visible, disabled, and show *not implemented yet*.
 - Owner-layer: UI (`src/ui/` ribbon tab + marker overlay), Commands (Remove Location, Mark Position,
   marker pick).
-- Status: accepted (2026-09-29) — D-2026-09-29-b.
-- Revisions: 2026-09-29 — proposed and accepted.
+- Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-e, TASK-292.
+- Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — item 3 and its
+  acceptance amended (D-2026-09-29-e): Mark Position places a Position Marker object. 2026-09-29 —
+  "OSNAP Node" reworded: GoSurvey has no separate Node snap; its node snap is the Survey point snap.
 
 ### REQ-360 — Transformation tab: local ↔ grid with scale factor, sea-level factor and rotation (GitHub issue #582, increment 4)
 

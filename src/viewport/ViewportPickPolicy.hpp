@@ -169,6 +169,8 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::MoveTinPoint:
   case K::DelTinLine:
   case K::QuickProfile:
+  case K::GeoMarkPoint:       // REQ-359: Mark Position ▸ Point
+  case K::GeoReorientMarker:  // REQ-359: design point, then a point along north
     return R::SnappedPointPick;
 
   // --- Entity-pick commands: raw cursor, hit-tested by PickClosestCadEntity. ---
@@ -445,6 +447,8 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::TrimState:
   case K::Elev:
     return R::Ignore;  // system-variable text prompts, answered on the command line
+  case K::GeoMarkLatLong:
+    return R::Ignore;  // REQ-359: latitude and longitude are typed on the command line
   case K::SectionClip:
     // REQ-341. Same shape as the two above: the bare `SECTIONCLIP` prompt is waiting for ON, OFF,
     // FLIP or a distance, all of which arrive on the command line — a viewport click answers none

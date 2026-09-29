@@ -395,7 +395,11 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
   if (ImGui::BeginChild("##ds_body", ImVec2(0.f, -footerH), ImGuiChildFlags_None,
                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
     if (ImGui::BeginTabBar("##ds_tabs")) {
-      if (ImGui::BeginTabItem("Units and Zone")) {
+      // REQ-359: Edit Location asks for this tab explicitly.
+      const ImGuiTabItemFlags unitsFlags =
+          cmd.drawingSettingsShowUnitsAndZone ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+      cmd.drawingSettingsShowUnitsAndZone = false;
+      if (ImGui::BeginTabItem("Units and Zone", nullptr, unitsFlags)) {
         ImGui::Spacing();
         DrawUnitsAndZoneTab(staged, layout);
         ImGui::EndTabItem();

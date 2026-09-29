@@ -1536,6 +1536,86 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     ctx->Yield(2);
     IM_CHECK(!s_cmd->showDrawingSettingsWindow);
   };
+
+  // REQ-359 (GitHub issue #582 increment 3): the contextual Geolocation tab in the real ribbon.
+  // Appears with a zone without taking focus; Map / Capture Area present but disabled; Edit Location
+  // opens Drawing Settings; Mark Position places a Position Marker (screenshot); Remove Location asks,
+  // then hides the tab; one UNDO brings it back.
+  //   build\devshell\GoSurvey.exe --devshell-run req359-geolocation-tab
+  // GOSURVEY_REQ359_HOLD=<seconds> keeps the window open on the marker, for a desktop screenshot.
+  ImGuiTest* geoTab = IM_REGISTER_TEST(engine, "gosurvey", "req359-geolocation-tab");
+  geoTab->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    IM_CHECK(ClickHomeTab(ctx));
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip"));
+    IM_CHECK(!ctx->ItemExists("Geolocation"));
+
+    std::vector<std::string> log;
+    DrawingSettings s = s_cmd->drawingSettings;
+    s.zoneCode = "HARN/TX.TX-CF";
+    IM_CHECK(ApplyDrawingSettings(*s_cmd, 2, s_cmd->modelUnitsPerPlottedInch, s, log));
+    ctx->Yield(3);
+    IM_CHECK(ctx->ItemExists("Geolocation"));
+    IM_CHECK_EQ(s_cmd->activeRibbonTab, kRibbonTabHome);  // it does not steal focus
+    ctx->ItemClick("Geolocation");
+    ctx->Yield(3);
+    IM_CHECK_EQ(s_cmd->activeRibbonTab, kRibbonTabGeolocationCtx);
+
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecGeoOnlineMap"));
+    const ImGuiTestItemInfo capture = ctx->ItemInfo("##GeoCaptureArea");
+    IM_CHECK(capture.ID != 0);
+    IM_CHECK((capture.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+    // Edit Location's icon half opens Drawing Settings (Units and Zone).
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecGeoLocation"));
+    const ImGuiTestItemInfo edit = ctx->ItemInfo("##GeoEditLocation");
+    IM_CHECK(edit.ID != 0);
+    ctx->MouseMoveToPos(ImVec2(edit.RectFull.GetCenter().x, edit.RectFull.Min.y + 12.f));
+    ctx->MouseClick();
+    ctx->Yield(4);
+    IM_CHECK(s_cmd->showDrawingSettingsWindow);
+    ctx->SetRef("//$FOCUSED");
+    ctx->ItemClick("**/Cancel");
+    ctx->Yield(3);
+    IM_CHECK(!s_cmd->showDrawingSettingsWindow);
+
+    // Mark Position > Lat-Long at NGS AG9976, then the MTEXT editor on its label.
+    SubmitCad(ctx, "GEOMARKLATLONG");
+    SubmitCad(ctx, "30 17 10.51249N");
+    SubmitCad(ctx, "97 44 21.71739W");
+    ctx->Yield(3);
+    IM_CHECK_EQ(static_cast<int>(s_cmd->cadPositionMarkers.size()), 1);
+    IM_CHECK(s_cmd->mtextRichEditorOpen);
+    IM_CHECK_EQ(s_cmd->mtextRichEditorMarkerIndex, 0);
+    ctx->Yield(6);
+    DevShell_RequestViewportCapture("devshell-req359-marker-editing.bmp", 1400);
+    ctx->Yield(4);
+    CommitMtextRichEditor(*s_cmd, log);
+    SubmitCad(ctx, "ZOOMEXTENTS");
+    ctx->Yield(6);
+    DevShell_RequestViewportCapture("devshell-req359-marker.bmp", 1400);
+    ctx->Yield(4);
+    if (const char* hold = std::getenv("GOSURVEY_REQ359_HOLD"))
+      ctx->SleepNoSkip(static_cast<float>(std::atof(hold)), 0.1f);
+
+    // Remove Location asks first; confirming clears the zone and the tab goes away.
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecGeoLocation"));
+    ctx->ItemClick("##GeoRemoveLocation");
+    ctx->Yield(3);
+    IM_CHECK_STR_EQ(s_cmd->drawingSettings.zoneCode.c_str(), "HARN/TX.TX-CF");  // not yet: it asks
+    ctx->SetRef("//$FOCUSED");
+    ctx->ItemClick("**/Remove");
+    ctx->Yield(3);
+    IM_CHECK(s_cmd->drawingSettings.zoneCode.empty());
+    IM_CHECK_EQ(s_cmd->activeRibbonTab, kRibbonTabHome);
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip"));
+    IM_CHECK(!ctx->ItemExists("Geolocation"));
+    SubmitCad(ctx, "UNDO");
+    ctx->Yield(3);
+    IM_CHECK_STR_EQ(s_cmd->drawingSettings.zoneCode.c_str(), "HARN/TX.TX-CF");
+    IM_CHECK(ctx->ItemExists("Geolocation"));
+  };
 }
 
 #endif

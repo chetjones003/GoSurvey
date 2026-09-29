@@ -71,7 +71,6 @@
 #include <utility>
 
 // REQ-044: stamp the active text style onto a new user TEXT/MTEXT (defined below, used at the commit sites).
-static void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a);
 
 
 void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
@@ -139,6 +138,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadSolidAttrs          = cmd.cadSolidAttrs;
   doc.cadTables              = cmd.cadTables;
   doc.cadTableAttrs          = cmd.cadTableAttrs;
+  doc.cadPositionMarkers     = cmd.cadPositionMarkers;  // REQ-359: per drawing
+  doc.cadPositionMarkerAttrs = cmd.cadPositionMarkerAttrs;
   doc.cadPipeRuns            = cmd.cadPipeRuns;      // pipe runs are per-drawing (issue #486 / REQ-345)
   doc.cadPipeRunAttrs        = cmd.cadPipeRunAttrs;
   doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
@@ -241,6 +242,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadSolidAttrs              = doc.cadSolidAttrs;
   cmd.cadTables                  = doc.cadTables;
   cmd.cadTableAttrs              = doc.cadTableAttrs;
+  cmd.cadPositionMarkers         = doc.cadPositionMarkers;  // REQ-359
+  cmd.cadPositionMarkerAttrs     = doc.cadPositionMarkerAttrs;
   cmd.cadPipeRuns                = doc.cadPipeRuns;      // issue #486 / REQ-345
   cmd.cadPipeRunAttrs            = doc.cadPipeRunAttrs;
   cmd.cadPipingSystems           = doc.cadPipingSystems;
@@ -1550,6 +1553,8 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadSolidAttrs        = st.cadSolidAttrs;
   snap.cadTables            = st.cadTables;
   snap.cadTableAttrs        = st.cadTableAttrs;
+  snap.cadPositionMarkers   = st.cadPositionMarkers;  // REQ-359
+  snap.cadPositionMarkerAttrs = st.cadPositionMarkerAttrs;
   snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
   snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
@@ -1653,6 +1658,8 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadSolidAttrs        = snap.cadSolidAttrs;
   st.cadTables            = snap.cadTables;
   st.cadTableAttrs        = snap.cadTableAttrs;
+  st.cadPositionMarkers   = snap.cadPositionMarkers;  // REQ-359
+  st.cadPositionMarkerAttrs = snap.cadPositionMarkerAttrs;
   st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
   st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
@@ -1760,7 +1767,8 @@ const EntityKind kEntityKindsInSweepOrder[] = {
     EntityKind::Table,
     EntityKind::BlockRef,
     EntityKind::Solid,
-    EntityKind::PointCloud};  ///< REQ-313/REQ-171 — last, so kinds above keep their ids.
+    EntityKind::PointCloud,
+    EntityKind::PositionMarker};  ///< REQ-359 — last, so kinds above keep their ids.
 
 /// The attribute array for a kind. One accessor for both the const and mutable walks, so the
 /// two can never disagree about which arrays are covered.
@@ -1781,6 +1789,7 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::BlockRef:     return &st.cadBlockRefAttrs;
   case EntityKind::Solid:        return &st.cadSolidAttrs;     // REQ-313 / ADR-045
   case EntityKind::PointCloud:   return &st.cadPointCloudAttrs; // REQ-171 / ADR-042
+  case EntityKind::PositionMarker: return &st.cadPositionMarkerAttrs; // REQ-359
   }
   return &st.userLineAttrs;
 }
@@ -6679,6 +6688,9 @@ const CmdEntry kRegistry[] = {
     {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"drawingsettings", "editdrawingsettings", "Drawing Settings: units, scale and the drawing's settings"},
+    {"geomarkpoint", "", "Place a Position Marker at a picked point (geolocated drawing)"},
+    {"geomarklatlong", "", "Place a Position Marker at a typed latitude and longitude"},
+    {"georeorientmarker", "", "Set the geographic marker: a design point, then north"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
@@ -7164,6 +7176,19 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   if (primary == "units") {
     st.showUnitsWindow = true;
     log.push_back("UNITS — drawing units dialog opened.");
+    return true;
+  }
+  // REQ-359: the Geolocation tab's Mark Position and Reorient Marker, also typeable.
+  if (primary == "geomarkpoint") {
+    StartGeoMarkPointCommand(st, log);
+    return true;
+  }
+  if (primary == "geomarklatlong") {
+    StartGeoMarkLatLongCommand(st, log);
+    return true;
+  }
+  if (primary == "georeorientmarker") {
+    StartGeoReorientMarkerCommand(st, log);
     return true;
   }
   if (primary == "drawingsettings") {
@@ -7816,6 +7841,22 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Table;
       e.index = static_cast<int>(ti);
+      hits.push_back(e);
+    }
+  }
+  for (size_t mi = 0; mi < st.cadPositionMarkers.size(); ++mi) {  // REQ-359: marker + label
+    float mmnX = 0.f, mmnY = 0.f, mmxX = 0.f, mmxY = 0.f;
+    CadPositionMarkerLocalBox(st, mi, &mmnX, &mmnY, &mmxX, &mmxY);
+    SPBox(mmnX, mmnY, mmxX, mmxY, &mmnX, &mmnY, &mmxX, &mmxY);
+    bool hit = false;
+    if (windowMode)
+      hit = mmnX >= mnX && mmxX <= mxX && mmnY >= mnY && mmxY <= mxY;
+    else
+      hit = !(mmxX < mnX || mmnX > mxX || mmxY < mnY || mmnY > mxY);
+    if (hit) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::PositionMarker;
+      e.index = static_cast<int>(mi);
       hits.push_back(e);
     }
   }
@@ -8539,6 +8580,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   std::vector<EntityAttributes> newAnnAttrs;
   std::vector<CadTable> newTables;
   std::vector<EntityAttributes> newTableAttrs;
+  std::vector<CadPositionMarker> newMarkers;  // REQ-359
+  std::vector<EntityAttributes> newMarkerAttrs;
   std::vector<CadBlockRef> newBlockRefs;
   std::vector<EntityAttributes> newBlockRefAttrs;
   std::vector<CadArc> newArcs;
@@ -8625,6 +8668,17 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
           a = st.cadTableAttrs[tk];
         newTableAttrs.push_back(DuplicatedEntityAttrs(a));
       }
+    } else if (e.type == SelectedEntity::Type::PositionMarker) {  // REQ-359: marker + label
+      const size_t mk = static_cast<size_t>(e.index);
+      if (mk < st.cadPositionMarkers.size()) {
+        CadPositionMarker c = st.cadPositionMarkers[mk];
+        CadPositionMarkerTranslate(&c, dx, dy, dz);
+        newMarkers.push_back(std::move(c));
+        EntityAttributes a{};
+        if (mk < st.cadPositionMarkerAttrs.size())
+          a = st.cadPositionMarkerAttrs[mk];
+        newMarkerAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
     } else if (e.type == SelectedEntity::Type::BlockRef) {
       const size_t bk = static_cast<size_t>(e.index);
       if (bk < st.cadBlockRefs.size()) {
@@ -8704,6 +8758,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
   st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
   st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
+  st.cadPositionMarkers.insert(st.cadPositionMarkers.end(), newMarkers.begin(), newMarkers.end());
+  st.cadPositionMarkerAttrs.insert(st.cadPositionMarkerAttrs.end(), newMarkerAttrs.begin(), newMarkerAttrs.end());
   st.cadBlockRefs.insert(st.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
   st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
   st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
@@ -8724,7 +8780,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   });
 
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newTables.empty() || !newBlockRefs.empty() || !newArcs.empty() || !newEll.empty() ||
-      !newFills.empty() || st.userPolylineVerts.size() != polyVertsBefore ||
+      !newFills.empty() || !newMarkers.empty() || st.userPolylineVerts.size() != polyVertsBefore ||
       st.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
 }
@@ -9633,6 +9689,7 @@ static void DropMirrorUnsupportedFromSelection(AppCommandState& st, std::vector<
 /// Rectangular, REQ-351 for Polar).
 static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ARRAY", log);
+  DropPositionMarkersFromSelection(st, "ARRAY", log);  // REQ-359: move/copy/erase only
   size_t mesh = 0, pdf = 0;
   st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
                                     [&](const SelectedEntity& e) {
@@ -9663,6 +9720,7 @@ static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<s
 static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float y0, float x1, float y1,
                                            std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
+  DropPositionMarkersFromSelection(st, "MIRROR", log);  // REQ-359: move/copy/erase only
   DropMirrorUnsupportedFromSelection(st, log);
   // REQ-351: solids and pipe runs are mirrored across the vertical plane that contains the line.
   {
@@ -9953,6 +10011,7 @@ static void ScaleSelectedSolids(AppCommandState& st, const ray3d::Vec3& basePoin
 
 void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
+  DropPositionMarkersFromSelection(st, "ROTATE", log);  // REQ-359: move/copy/erase only
   // Solids are NOT dropped any more (REQ-332, amending REQ-322 item 6): `brep::Rotate` turns one
   // completely — every vertex, every surface frame's AXES as well as its origin, every arc-edge
   // frame — which is the work item 6 named as "a separate requirement" and REQ-328/REQ-332 supplied.
@@ -10132,6 +10191,7 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
                                             const ray3d::Vec3& axisUnit, float angleRad,
                                             std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
+  DropPositionMarkersFromSelection(st, "ROTATE", log);  // REQ-359: move/copy/erase only
   // The tilted-UCS twin of the branch in `ApplyRotationToSelection`: same kernel call, but about the
   // UCS Z axis this function was already given rather than world Z (REQ-332, amending REQ-322 item 6).
   RotateSelectedSolids(st, axisPoint, axisUnit, angleRad, log);
@@ -10407,6 +10467,13 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
       continue;
     CadTableTranslate(&st.cadTables[static_cast<size_t>(e.index)], dx, dy);
+  }
+  for (const auto& e : st.selection) {  // REQ-359: marker and label move together
+    if (e.type != SelectedEntity::Type::PositionMarker)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadPositionMarkers.size())
+      continue;
+    CadPositionMarkerTranslate(&st.cadPositionMarkers[static_cast<size_t>(e.index)], dx, dy, dz);
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::BlockRef)
@@ -10734,6 +10801,7 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
   if (!(sc > 0.f) || !std::isfinite(sc))
     return;
   DropSurfacesFromSelectionForTransform(st, "SCALE", log);
+  DropPositionMarkersFromSelection(st, "SCALE", log);  // REQ-359: move/copy/erase only
   // Solids are NOT dropped any more (REQ-332, amending REQ-322 item 6), and they take the FULL 3D
   // base point — which is why this function gained `bz`, the same move REQ-322 made when it gave
   // `ApplyTranslationToSelection` a `dz`.
@@ -11444,6 +11512,7 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
   if (st.rotateCopyMode) {
     if (tilted) {
       DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
+      DropPositionMarkersFromSelection(st, "ROTATE", log);  // REQ-359: move/copy/erase only
       const ucs::Ucs u = CadActiveUcsStorage(st);
       const ray3d::Vec3 axisUnit =
           ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
@@ -13402,6 +13471,11 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
 
   if (st.active == K::IdPoint) {
     CommitIdPointAt(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::GeoMarkPoint || st.active == K::GeoReorientMarker) {  // REQ-359
+    SubmitGeoCommandPoint(st, wx, wy, log);
     return;
   }
 
@@ -17888,6 +17962,7 @@ void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, floa
 void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, float mnX, float mxX,
                              float mnY, float mxY, bool rectInUcsPlane, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "STRETCH", log);
+  DropPositionMarkersFromSelection(st, "STRETCH", log);  // REQ-359: move/copy/erase only
   DropSolidsFromSelectionForTransform(st, "STRETCH", log);
   // REQ-329 increment 4: when the crossing box lives in a tilted work plane's local 2D frame, each
   // candidate vertex is projected the same way (WorldToPlane) before the box test; the displacement
@@ -20987,6 +21062,14 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
       continue;
     consider(static_cast<double>(p.easting), static_cast<double>(p.northing));
   }
+  for (size_t mi = 0; mi < st.cadPositionMarkers.size(); ++mi) {  // REQ-359: marker + label
+    if (EntityHiddenInViewport(vpFilter, st.cadPositionMarkerAttrs, mi))
+      continue;
+    float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
+    CadPositionMarkerLocalBox(st, mi, &mnX, &mnY, &mxX, &mxY);
+    consider(mnX, mnY);
+    consider(mxX, mxY);
+  }
 
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
     if (EntityHiddenInViewport(vpFilter, st.cadAnnotationAttrs, ai))
@@ -21330,6 +21413,21 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mnX = b.mxX = b.cx = static_cast<double>(p.easting);
     b.mnY = b.mxY = b.cy = static_cast<double>(p.northing);
     EntityBoxGrowZ(b, p.elevation, true);
+    out.push_back(b);
+  }
+  for (size_t mi = 0; mi < st.cadPositionMarkers.size(); ++mi) {  // REQ-359: marker + label
+    if (EntityHiddenInViewport(vpFilter, st.cadPositionMarkerAttrs, mi))
+      continue;
+    float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
+    CadPositionMarkerLocalBox(st, mi, &mnX, &mnY, &mxX, &mxY);
+    EntityBox b{};
+    b.mnX = mnX;
+    b.mnY = mnY;
+    b.mxX = mxX;
+    b.mxY = mxY;
+    b.cx = st.cadPositionMarkers[mi].x;
+    b.cy = st.cadPositionMarkers[mi].y;
+    EntityBoxGrowZ(b, st.cadPositionMarkers[mi].z, true);
     out.push_back(b);
   }
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
@@ -23093,7 +23191,11 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
   const bool paper = st.mtextRichEditorPaper;
   const bool plain = st.mtextRichEditorPlain;
   if (MtextRichEditorTargetAnnotation(st)) {
-    PushUndoSnapshot(st, paper ? "Paper text edit" : (plain ? "TEXT edit" : "MTEXT edit"));
+    const bool marker = st.mtextRichEditorMarkerIndex >= 0;  // a Position Marker's label (REQ-359)
+    // The label typed right after placing a marker belongs to the placement's undo step.
+    if (!(marker && st.mtextRichEditorMarkerJustPlaced))
+      PushUndoSnapshot(st, marker ? "Position Marker label" : paper ? "Paper text edit"
+                                                                   : (plain ? "TEXT edit" : "MTEXT edit"));
     // Re-resolve after the snapshot (it does not mutate the live stores, but keep the access pattern safe).
     CadAnnotation* ann = MtextRichEditorTargetAnnotation(st);
     if (ann) {
@@ -23112,7 +23214,8 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
           RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(linkedPi));
       }
       BumpCadGpuCache(st);
-      log.push_back(paper ? "Paper text updated." : (plain ? "TEXT updated." : "MTEXT updated."));
+      log.push_back(marker ? "Position Marker label updated."
+                           : paper ? "Paper text updated." : (plain ? "TEXT updated." : "MTEXT updated."));
     }
   }
   CloseMtextRichEditorUi(st);
@@ -23690,6 +23793,10 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.cadTableAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  while (st.cadPositionMarkerAttrs.size() < st.cadPositionMarkers.size()) {  // REQ-359
+    st.cadPositionMarkerAttrs.push_back(MakeNewEntityAttrs(st));
+    grew = true;
+  }
   while (st.cadBlockRefAttrs.size() < st.cadBlockRefs.size()) {
     st.cadBlockRefAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -23717,6 +23824,8 @@ static void CollectLayersUsedInDrawing(const AppCommandState& st, std::set<std::
   for (const auto& a : st.cadAnnotationAttrs)
     add(a.layer);
   for (const auto& a : st.cadTableAttrs)
+    add(a.layer);
+  for (const auto& a : st.cadPositionMarkerAttrs)  // REQ-359
     add(a.layer);
   for (const auto& a : st.cadBlockRefAttrs)
     add(a.layer);
@@ -23784,7 +23893,7 @@ void SetActiveTextStyle(AppCommandState& st, const std::string& name) {
 // bold/italic come from the style; height is left as the caller set it (it already equals the style height
 // via the SetActiveTextStyle → defaultPlottedTextHeightInches sync), and any height typed at the TEXT
 // prompt is preserved. Per-property overrides land in a later phase.
-static void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a) {
+void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a) {
   const TextStyle* s = ActiveTextStyle(st);
   if (!s) return;
   a.styleName = s->name;
@@ -24484,6 +24593,8 @@ void ClearCadGeometry(AppCommandState& st) {
   st.blockRefWorldSolidsSig = 0;
   st.cadTables.clear();
   st.cadTableAttrs.clear();
+  st.cadPositionMarkers.clear();  // REQ-359
+  st.cadPositionMarkerAttrs.clear();
   // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing
   // that already had runs would keep them alongside the imported content — the same "written before
   // pipe runs existed" miss the document snapshot had. The derived solids go with them, the way
@@ -25056,6 +25167,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::set<int> ellIx;
   std::set<int> polyIx;
   std::set<int> flIx;  // REQ-087
+  std::set<int> markerIx;  // REQ-359
   const size_t nLines = st.userLinesFlat.size() / 6;
   const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
   const size_t nAnn = st.cadAnnotations.size();
@@ -25085,6 +25197,9 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     else if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 &&
              static_cast<size_t>(e.index) < nFl)
       flIx.insert(e.index);  // REQ-087
+    else if (e.type == SelectedEntity::Type::PositionMarker && e.index >= 0 &&
+             static_cast<size_t>(e.index) < st.cadPositionMarkers.size())
+      markerIx.insert(e.index);  // REQ-359: the marker and its label are one object
   }
 
   std::vector<int> pv(polyIx.begin(), polyIx.end());
@@ -25256,8 +25371,18 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     st.pdfAttachments.erase(st.pdfAttachments.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
+  // Position Markers (REQ-359), highest index first so an earlier erase never shifts a later one.
+  for (auto it = markerIx.rbegin(); it != markerIx.rend(); ++it) {
+    const auto at = static_cast<std::ptrdiff_t>(*it);
+    st.cadPositionMarkers.erase(st.cadPositionMarkers.begin() + at);
+    if (static_cast<size_t>(*it) < st.cadPositionMarkerAttrs.size())
+      st.cadPositionMarkerAttrs.erase(st.cadPositionMarkerAttrs.begin() + at);
+  }
+  if (!markerIx.empty() && st.mtextRichEditorMarkerIndex >= 0)
+    CloseMtextRichEditorUi(st);  // its target may be gone or renumbered
+
   const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + tableIx.size() + arcIx.size() + ellIx.size() +
-                      polyIx.size() + pdfIx.size() + fillIx.size() + meshIx.size();
+                      polyIx.size() + pdfIx.size() + fillIx.size() + meshIx.size() + markerIx.size();
   st.selection.clear();
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
@@ -25421,6 +25546,7 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
                                                       const ray3d::Vec3& planeUnit,
                                                       std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
+  DropPositionMarkersFromSelection(st, "MIRROR", log);  // REQ-359: move/copy/erase only
   DropMirrorUnsupportedFromSelection(st, log);  // FilledRegion / Mesh / PdfUnderlay
   MirrorSelectedSolidsAndPipeRuns(st, planePt, planeUnit, log);  // REQ-351
   const auto rp = [&](float x, float y, float z) {
@@ -26824,6 +26950,18 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       }
     }
     consider(e, td2);
+  }
+
+  // Position Markers (REQ-359): the circle or the label box picks the one object. Plan-view test,
+  // like the table above (the marker is flat on its elevation).
+  for (size_t mi = 0; mi < st.cadPositionMarkers.size(); ++mi) {
+    double md2 = 0.0;
+    if (!CadPositionMarkerHit(st, mi, wx, wy, tolWorld, &md2))
+      continue;
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::PositionMarker;
+    e.index = static_cast<int>(mi);
+    consider(e, md2);
   }
 
   for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
@@ -38421,6 +38559,7 @@ auto* AttrsOfSelected(StateT& st, const SelectedEntity& e) {
   // layer/colour, both inherited rather than re-implemented.
   case T::Surface:      return at(st.cadSurfaceAttrs);
   case T::Table:        return at(st.cadTableAttrs);
+  case T::PositionMarker: return at(st.cadPositionMarkerAttrs);  // REQ-359
   case T::BlockRef:     return at(st.cadBlockRefAttrs);
   case T::Solid:        return at(st.cadSolidAttrs);    // REQ-352
   case T::PipeRun:      return at(st.cadPipeRunAttrs);  // REQ-352
@@ -38543,14 +38682,18 @@ bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelU
     log.push_back("Drawing Settings — the scale must be a positive number; nothing was changed.");
     return false;
   }
+  // REQ-359 item 4: the geographic marker belongs to the zone; without a zone it is the default.
+  DrawingSettings next = settings;
+  if (!next.Geolocated())
+    next.ResetGeographicMarker();
   const bool unitsChanged = drawingInsUnits != st.drawingInsUnits;
   const bool scaleChanged = modelUnitsPerPlottedInch != st.modelUnitsPerPlottedInch;
-  const bool settingsChanged = settings != st.drawingSettings;
+  const bool settingsChanged = next != st.drawingSettings;
   if (!unitsChanged && !scaleChanged && !settingsChanged)
     return true;
   PushUndoSnapshot(st, "Drawing Settings");
   st.drawingInsUnits = drawingInsUnits;  // a relabel: no coordinate is touched (REQ-022)
-  st.drawingSettings = settings;
+  st.drawingSettings = next;
   if (scaleChanged)
     SetDrawingPlotScale(st, modelUnitsPerPlottedInch);
   BumpCadGpuCache(st);  // document property: marks the drawing modified
@@ -39718,6 +39861,9 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("OFFSET canceled.");
   else if (st.active == AppCommandState::Kind::IdPoint)
     log.push_back("ID canceled.");
+  else if (st.active == AppCommandState::Kind::GeoMarkPoint || st.active == AppCommandState::Kind::GeoMarkLatLong ||
+           st.active == AppCommandState::Kind::GeoReorientMarker)  // REQ-359
+    log.push_back(std::string(AppCommandState::KindName(st.active)) + " canceled.");
   else if (st.active == AppCommandState::Kind::SurveyInverse)
     log.push_back("INVERSE canceled.");
   else if (st.active == AppCommandState::Kind::Dist)
@@ -41853,6 +41999,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (HandleGeoCommandText(st, line, log))  // REQ-359: GEOMARKLATLONG / GEOMARKPOINT / GEOREORIENTMARKER
+    return;
+
   if (st.active == K::IdPoint) {
     float px = 0.f;
     float py = 0.f;
@@ -43255,6 +43404,16 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
 
   if (st.active == K::IdPoint)
     return "ID: Pick point (OSNAP when enabled) or type X,Y — logs UCS World | ESC cancel";
+  if (st.active == K::GeoMarkPoint)  // REQ-359
+    return "GEOMARKPOINT: Pick the position or type X,Y | ESC cancel";
+  if (st.active == K::GeoMarkLatLong)
+    return st.geoCmdPhase == AppCommandState::GeoCmdPhase::WaitFirst
+               ? "GEOMARKLATLONG: Latitude — decimal degrees or D M S N/S (lat,long in one go) | ESC cancel"
+               : "GEOMARKLATLONG: Longitude — decimal degrees (west negative) or D M S E/W | ESC cancel";
+  if (st.active == K::GeoReorientMarker)
+    return st.geoCmdPhase == AppCommandState::GeoCmdPhase::WaitFirst
+               ? "GEOREORIENTMARKER: Pick the design point or type X,Y | ESC cancel"
+               : "GEOREORIENTMARKER: Pick a point to the north of the design point | ESC cancel";
 
   if (st.active == K::SurveyInverse) {
     using SIP = AppCommandState::SurveyInversePhase;

@@ -816,3 +816,61 @@ TEST_CASE("The coordinate-system zone survives a DWG round trip (REQ-358)", "[dw
     CHECK(in.userLinesFlat.size() == 6);
   }
 }
+
+// REQ-359 item 3 / D-2026-09-29-e: a Position Marker reopens ONCE from a GoSurvey DWG (the trailer),
+// while the DWG / DXF body carries a CIRCLE, two LINEs and an MTEXT for other programs.
+TEST_CASE("A Position Marker survives DWG save and is written as circle, lines and MTEXT (REQ-359)",
+          "[dwg][libredwg][req359]") {
+  ScratchDir dir("req359");
+  const auto p = (dir.path / "marker.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  st.worldDocumentOriginX = 3115000.0;
+  st.worldDocumentOriginY = 10077000.0;
+  CadPositionMarker m;
+  m.x = 243.14;
+  m.y = 391.26;
+  m.latitudeDeg = 30.28625;
+  m.longitudeDeg = -97.7394;
+  m.label.kind = CadAnnotation::Kind::Mtext;
+  m.label.text = "UT Tower\nAG9976";
+  m.label.boxMinX = 250.f;
+  m.label.boxMaxX = 300.f;
+  m.label.boxMinY = 395.f;
+  m.label.boxMaxY = 400.f;
+  st.cadPositionMarkers.push_back(m);
+  st.cadPositionMarkerAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.cadPositionMarkers.size() == 1);  // once: not also rebuilt from the loose pieces
+  CHECK(in.cadPositionMarkers[0].x == m.x);
+  CHECK(in.cadPositionMarkers[0].label.text == m.label.text);
+  CHECK(in.userLinesFlat.size() == 6);          // the one real line, no cross arms
+  CHECK(in.userCirclesCxCyZR.empty());
+  CHECK(in.cadAnnotations.empty());
+
+  // The CAD body alone (what another program reads): circle + 2 lines + MTEXT at WORLD coordinates.
+  AppCommandState body;
+  REQUIRE(ImportLibreCadFile(body, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(body.userCirclesCxCyZR.size() == 4);
+  CHECK(body.userCirclesCxCyZR[0] + body.worldDocumentOriginX == Catch::Approx(3115243.14).margin(0.01));
+  CHECK(body.userCirclesCxCyZR[1] + body.worldDocumentOriginY == Catch::Approx(10077391.26).margin(0.01));
+  CHECK(body.userLinesFlat.size() == 3 * 6);
+  bool labelFound = false;
+  for (const CadAnnotation& a : body.cadAnnotations)
+    labelFound = labelFound || a.text.find("AG9976") != std::string::npos;
+  CHECK(labelFound);
+
+  // DXF export writes the same pieces.
+  const auto dxf = (dir.path / "marker.dxf").string();
+  REQUIRE(ExportDxfFile(st, dxf.c_str(), log));
+  std::ifstream f(dxf);
+  const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  CHECK(text.find("AcDbCircle") != std::string::npos);
+  CHECK(text.find("UT Tower\\PAG9976") != std::string::npos);
+  CHECK(text.find("3115243.14") != std::string::npos);
+}

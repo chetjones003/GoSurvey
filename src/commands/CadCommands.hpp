@@ -127,7 +127,11 @@ struct SelectedEntity {
     /// never see it, because it is never in `selection` for those commands to iterate — the plane's
     /// own dedicated grip drag (slide/flip/resize) is the only way it moves, which is what REQ-343
     /// already specifies.
-    SectionPlane = 16
+    SectionPlane = 16,
+    /// Position Marker (REQ-359 item 3, D-2026-09-29-e). Appended so existing type values stay
+    /// stable. MOVE / COPY / ERASE act on marker + label together; ROTATE / SCALE / MIRROR /
+    /// STRETCH refuse it by name (\ref DropPositionMarkersFromSelection).
+    PositionMarker = 17
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -1040,14 +1044,29 @@ struct DrawingSettings {
   /// The drawing's coordinate system (zone), a CS-MAP code such as "HARN/TX.TX-C" (REQ-358).
   /// Empty = No Datum, No Projection. A code the installed dictionary does not know is kept.
   std::string zoneCode;
+  /// The geographic marker (REQ-359 item 4): the drawing's geolocation reference — a design point and
+  /// a north direction, stored with the zone and written as GEODATA's design point / north by
+  /// REQ-362. The point is WORLD (WCS) coordinates, the frame GEODATA uses, so it does not move when
+  /// the local-storage origin does. Default: the drawing origin (WCS 0,0) with grid north.
+  double markerX = 0.0;
+  double markerY = 0.0;
+  /// North direction, degrees counter-clockwise from +X; 90 = grid north (+Y).
+  double markerNorthDeg = 90.0;
 
   /// Geolocated exactly when a zone is set (REQ-358 item 3).
   [[nodiscard]] bool Geolocated() const { return !zoneCode.empty(); }
+  /// Back to the default geographic marker (drawing origin, grid north).
+  void ResetGeographicMarker() {
+    markerX = 0.0;
+    markerY = 0.0;
+    markerNorthDeg = 90.0;
+  }
 
   bool operator==(const DrawingSettings& o) const {
     return angularUnits == o.angularUnits && footDefinition == o.footDefinition &&
            scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables &&
-           zoneCode == o.zoneCode;
+           zoneCode == o.zoneCode && markerX == o.markerX && markerY == o.markerY &&
+           markerNorthDeg == o.markerNorthDeg;
   }
   bool operator!=(const DrawingSettings& o) const { return !(*this == o); }
 };
@@ -1116,6 +1135,8 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
+  std::vector<EntityAttributes> cadPositionMarkerAttrs;
   /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
   /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
   /// swapped for exactly this reason ("hide everything that is not the block being edited",
@@ -1289,6 +1310,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
+  std::vector<EntityAttributes> cadPositionMarkerAttrs;
   /// Pipe runs and the networks that group them (issue #486 / REQ-345). Per DRAWING, like every
   /// other entity store here: without them, routing a run in one drawing left it rendering — and
   /// selectable, and snappable — in every other tab, because a tab switch swaps the whole document
@@ -1514,6 +1537,9 @@ constexpr int kRibbonTabSurveyPointCtx = 9;
 constexpr int kRibbonTabBlockEditor = 10;
 /// REQ-171 (part 14): contextual Point Cloud tab. Not counted in kRibbonTabCount / prefs.
 constexpr int kRibbonTabPointCloudCtx = 11;
+/// REQ-359: contextual Geolocation tab, shown while the drawing is geolocated. Session-only, not a
+/// prefs slot; appended after the other contextual tabs and never auto-selected.
+constexpr int kRibbonTabGeolocationCtx = 12;
 
 /// REQ-171 point-cloud vertex colour source, chosen by the user (session-global — see
 /// `AppCommandState::pointCloudDisplay`).
@@ -1779,6 +1805,12 @@ struct AppCommandState {
     ChProp,
     MatchProp,
     LayMCur,
+    /// Geolocation tab (REQ-359, GitHub issue #582): Mark Position ▸ Point (one pick), Mark
+    /// Position ▸ Lat-Long (latitude, then longitude, typed), and Reorient Marker / Edit Geographic
+    /// Marker (design point, then north direction). \ref geoCmdPhase drives the two-step ones.
+    GeoMarkPoint,
+    GeoMarkLatLong,
+    GeoReorientMarker,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1865,6 +1897,9 @@ struct AppCommandState {
     case Kind::ChProp:             return "CHPROP";
     case Kind::MatchProp:          return "MATCHPROP";
     case Kind::LayMCur:            return "LAYMCUR";
+    case Kind::GeoMarkPoint:       return "GEOMARKPOINT";
+    case Kind::GeoMarkLatLong:     return "GEOMARKLATLONG";
+    case Kind::GeoReorientMarker:  return "GEOREORIENTMARKER";
     default:                  return "";
     }
   }
@@ -3127,6 +3162,8 @@ struct AppCommandState {
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
+  std::vector<EntityAttributes> cadPositionMarkerAttrs;
 
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef> cadBlockRefs;
@@ -3739,6 +3776,21 @@ struct AppCommandState {
   /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, asking for the base point the gizmo
   /// sits on (D-2026-09-28-c), or showing the handles on it.
   enum class GizmoCmdPhase { SelectObjects, BasePoint, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
+
+  // --- Geolocation tab commands (REQ-359) ---
+  /// GEOMARKLATLONG: WaitFirst = latitude, WaitSecond = longitude. GEOREORIENTMARKER: WaitFirst =
+  /// the design point, WaitSecond = a point along north from it.
+  enum class GeoCmdPhase { WaitFirst, WaitSecond } geoCmdPhase = GeoCmdPhase::WaitFirst;
+  double geoCmdFirstA = 0.0;  ///< GEOMARKLATLONG: the latitude; GEOREORIENTMARKER: design point X (local)
+  double geoCmdFirstB = 0.0;  ///< GEOREORIENTMARKER: design point Y (local)
+  /// The Position Marker whose label the MTEXT editor is editing (REQ-359 item 3), or -1. When set,
+  /// \ref MtextRichEditorTargetAnnotation returns that marker's own label.
+  int mtextRichEditorMarkerIndex = -1;
+  /// The editor was opened by placing the marker: committing the label joins the placement's undo
+  /// step rather than pushing a second one (one UNDO removes the marker it placed).
+  bool mtextRichEditorMarkerJustPlaced = false;
+  /// Edit Location asks the Drawing Settings window to show Units and Zone (REQ-359 item 2).
+  bool drawingSettingsShowUnitsAndZone = false;
 
   // --- CHPROP / MATCHPROP / LAYMCUR (REQ-356) ---
   /// SelectObjects is every command's pick step (MATCHPROP's source); CHPROP then asks which
@@ -5298,7 +5350,9 @@ enum class EntityKind : std::uint8_t {
   Solid,
   /// REQ-171 / ADR-042. Appended after Solid, for the same reason: inserting anywhere but the end
   /// would renumber every entity in every existing drawing on its next load.
-  PointCloud
+  PointCloud,
+  /// REQ-359 / D-2026-09-29-e. Appended after PointCloud for the same id-sweep reason.
+  PositionMarker
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -6098,6 +6152,8 @@ inline void CloseMtextRichEditorUi(AppCommandState& st) {
   st.mtextRichEditorPaperLayout = -1;
   st.mtextRichEditorPlain = false;
   st.mtextRichEditorAnnIndex = -1;
+  st.mtextRichEditorMarkerIndex = -1;  // REQ-359
+  st.mtextRichEditorMarkerJustPlaced = false;
   st.mtextRichEditorBuf.clear();
   st.mtextRichEditorFocusRequest = false;
   st.mtextRichEditorCursor = 0;
@@ -6119,6 +6175,10 @@ inline void CloseMtextRichEditorUi(AppCommandState& st) {
 inline CadAnnotation* MtextRichEditorTargetAnnotation(AppCommandState& st) {
   if (!st.mtextRichEditorOpen || st.mtextRichEditorPlacement)
     return nullptr;
+  if (st.mtextRichEditorMarkerIndex >= 0) {  // a Position Marker's own label (REQ-359 item 3)
+    const size_t mi = static_cast<size_t>(st.mtextRichEditorMarkerIndex);
+    return mi < st.cadPositionMarkers.size() ? &st.cadPositionMarkers[mi].label : nullptr;
+  }
   const int ix = st.mtextRichEditorAnnIndex;
   if (ix < 0)
     return nullptr;
@@ -6142,6 +6202,10 @@ inline CadAnnotation* MtextRichEditorTargetAnnotation(AppCommandState& st) {
 inline EntityAttributes* MtextRichEditorTargetAttrs(AppCommandState& st) {
   if (!st.mtextRichEditorOpen || st.mtextRichEditorPlacement)
     return nullptr;
+  if (st.mtextRichEditorMarkerIndex >= 0) {  // REQ-359: the marker's row
+    const size_t mi = static_cast<size_t>(st.mtextRichEditorMarkerIndex);
+    return mi < st.cadPositionMarkerAttrs.size() ? &st.cadPositionMarkerAttrs[mi] : nullptr;
+  }
   const int ix = st.mtextRichEditorAnnIndex;
   if (ix < 0)
     return nullptr;
@@ -6992,6 +7056,58 @@ bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelU
 /// REQ-358 item 4: latitude/longitude (degrees, x = longitude) of a LOCAL drawing point, in the
 /// zone's own datum.
 [[nodiscard]] geo::GeoResult DrawingPointToLatLong(const AppCommandState& st, double localX, double localY);
+
+// --- Geolocation tab (REQ-359, GitHub issue #582 increment 3; CadCommands_Geo.cpp) ------------------
+/// The contextual Geolocation tab is shown exactly while the active drawing is geolocated (item 1).
+[[nodiscard]] inline bool GeolocationRibbonTabVisible(const AppCommandState& st) {
+  return st.drawingSettings.Geolocated();
+}
+/// The inverse of \ref DrawingPointToGrid: the LOCAL drawing point (x, y) of a grid coordinate in the
+/// zone's unit. Fails, with the reason, exactly when DrawingPointToGrid would.
+[[nodiscard]] geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing);
+/// "LAT 30°17'10.51249\"N\nLONG 97°44'21.71739\"W" — a Position Marker's default label.
+[[nodiscard]] std::string FormatLatLongLabel(double latitudeDeg, double longitudeDeg);
+/// Decimal degrees, or "D M S" (spaces or °'\" between) with an optional N/S (\p latitude) or E/W
+/// letter; S / W / a leading minus are negative. False when it does not parse or is out of range.
+[[nodiscard]] bool ParseGeoAngleDegrees(const std::string& raw, bool latitude, double* outDeg);
+/// Remove Location (REQ-359 item 2): zone → No Datum, No Projection and the geographic marker back to
+/// its default, as ONE undo step. False (logged) when the drawing is not geolocated.
+bool RemoveGeoLocation(AppCommandState& st, std::vector<std::string>& log);
+/// Sets the geographic marker (REQ-359 item 4) to the LOCAL point (stored as WORLD) and a north
+/// direction in degrees CCW from +X. One undo step. False (logged) when not geolocated.
+bool SetGeographicMarker(AppCommandState& st, double localX, double localY, double northDeg,
+                         std::vector<std::string>& log);
+/// A Position Marker's circle radius in drawing units: \ref kPositionMarkerPlottedRadiusIn × scale.
+[[nodiscard]] float PositionMarkerRadiusWorld(const AppCommandState& st);
+/// Moves a marker and its label together.
+void CadPositionMarkerTranslate(CadPositionMarker* m, double dx, double dy, double dz);
+/// LOCAL box around marker \p i's circle and label (box select, zoom).
+void CadPositionMarkerLocalBox(const AppCommandState& st, size_t i, float* mnX, float* mnY, float* mxX, float* mxY);
+/// True when (x, y) LOCAL is within \p tolWorld of marker \p i's circle or on its label box.
+[[nodiscard]] bool CadPositionMarkerHit(const AppCommandState& st, size_t i, double x, double y, float tolWorld,
+                                        double* distSq);
+/// Opens the MTEXT editor on marker \p markerIndex's label; \p justPlaced makes the commit join the
+/// placement's undo step.
+void OpenPositionMarkerLabelEditor(AppCommandState& st, int markerIndex, bool justPlaced);
+/// Mark Position (REQ-359 item 3): places a Position Marker at a LOCAL point, labelled with its
+/// latitude/longitude, as one undo step, and opens the MTEXT editor on the label. Returns its index,
+/// or -1 (logged) when the point has no latitude/longitude (not geolocated, unknown zone, …).
+int PlacePositionMarkerAtLocal(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
+/// Mark Position ▸ Lat-Long: the same, at a latitude/longitude in the zone's datum.
+int PlacePositionMarkerAtLatLong(AppCommandState& st, double latitudeDeg, double longitudeDeg,
+                                 std::vector<std::string>& log);
+/// ROTATE / SCALE / MIRROR / STRETCH refuse a Position Marker by name (D-2026-09-29-e): removes every
+/// marker from the selection and logs "<verb> — N Position Marker(s) left unchanged …". Returns N.
+int DropPositionMarkersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log);
+void StartGeoMarkPointCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartGeoMarkLatLongCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartGeoReorientMarkerCommand(AppCommandState& st, std::vector<std::string>& log);
+/// A viewport pick or typed point for GEOMARKPOINT / GEOREORIENTMARKER (LOCAL coordinates).
+bool SubmitGeoCommandPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
+/// Typed input while a geolocation command is active; false when none is.
+bool HandleGeoCommandText(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+/// The dynamic-input / command-line prompt for the active geolocation command, or nullptr.
+[[nodiscard]] const char* GeoCommandPrompt(const AppCommandState& st);
 
 // --- CHPROP / MATCHPROP / LAYMCUR, the current colour (REQ-356) ------------------------------
 /// True for the types a linetype / lineweight edit applies to: line, circle, arc, ellipse,

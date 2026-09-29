@@ -347,6 +347,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Cohesive slices split out of the CadCommands.cpp mega-TU (TASK-150 Phase 2,
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
+  src/commands/CadCommands_Geo.cpp
   src/commands/CadCommands_Ucs.cpp
   src/commands/CadDynInput.cpp
   src/commands/CadCommands_Bench.cpp
@@ -1319,6 +1320,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/DrawingSettingsTests.cpp
     # REQ-358: the CS-MAP wrapper + the zone as drawing data (loads the staged dictionary).
     tests/CoordinateSystemsTests.cpp
+    # REQ-359 / D-2026-09-29-e: the Geolocation tab's commands and the Position Marker.
+    tests/GeolocationTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp
