@@ -4621,9 +4621,9 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   returning false rather than asserting. First-open cost is one small render per visible part, not per
   frame; REQ-350's acceptance states the REQ-100 condition in those terms.
 
-### ADR-063 — Coordinate systems come from CS-MAP, behind one `src/geo/` wrapper; the zone is drawing data   (2026-09-29, proposed)
+### ADR-063 — Coordinate systems come from CS-MAP, behind one `src/geo/` wrapper; the zone is drawing data   (2026-09-29, accepted)
 
-- **Status:** proposed (2026-09-29, D-2026-09-29-b). Backs REQ-358..REQ-362 (GitHub issue #582).
+- **Status:** accepted (2026-09-29, D-2026-09-29-b). Backs REQ-358..REQ-362 (GitHub issue #582).
 - **Context.** Issue #582 needs a drawing to carry a coordinate system chosen from a complete
   catalogue with Civil 3D's codes (`HARN/TX.TX-C`, `TX83-CF`) and categories, to convert grid ↔
   latitude/longitude at survey grade, to shift between datums, and to exchange the zone with Civil 3D

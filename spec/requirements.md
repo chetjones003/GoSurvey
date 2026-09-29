@@ -10136,8 +10136,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Commands (`src/commands/CadCommands.{hpp,cpp}` — settings struct, apply + undo),
   IO (`src/io/GsIo.cpp` trailer JSON, `src/io/DxfIo.cpp` / `LibreDwgCad.cpp` headers), UI
   (`src/ui/` window, File menu, Toolspace button).
-- Status: proposed (2026-09-29) — D-2026-09-29-b.
-- Revisions: 2026-09-29 — proposed.
+- Status: accepted (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed and accepted.
 
 ### REQ-358 — Coordinate-system zone from the CS-MAP catalogue; a drawing becomes geolocated (GitHub issue #582, increment 2)
 
@@ -10195,8 +10195,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
     moves no coordinate.
 - Owner-layer: new `src/geo/` (CS-MAP wrapper, pure, no UI), Commands, IO (trailer), UI (Zone
   group), build (`third_party/csmap/`, `CMakeLists.txt`), installer (`installer/GoSurvey.iss`).
-- Status: proposed (2026-09-29) — D-2026-09-29-b.
-- Revisions: 2026-09-29 — proposed.
+- Status: accepted (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed and accepted.
 
 ### REQ-359 — Geolocation contextual ribbon tab (GitHub issue #582, increment 3)
 
@@ -10235,8 +10235,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Map and Capture Area are visible, disabled, and show *not implemented yet*.
 - Owner-layer: UI (`src/ui/` ribbon tab + marker overlay), Commands (Remove Location, Mark Position,
   marker pick).
-- Status: proposed (2026-09-29) — D-2026-09-29-b.
-- Revisions: 2026-09-29 — proposed.
+- Status: accepted (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed and accepted.
 
 ### REQ-360 — Transformation tab: local ↔ grid with scale factor, sea-level factor and rotation (GitHub issue #582, increment 4)
 
@@ -10281,8 +10281,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - all settings survive DWG save → reopen; every control is disabled until Apply transform settings
     is checked.
 - Owner-layer: `src/geo/` (pure transformation + scale factor), Commands, UI (tab), IO (trailer).
-- Status: proposed (2026-09-29) — D-2026-09-29-b.
-- Revisions: 2026-09-29 — proposed.
+- Status: accepted (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed and accepted.
 
 ### REQ-361 — Object Layers tab: per-object creation layers with NCS defaults (GitHub issue #582, increment 5)
 
@@ -10331,8 +10331,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - the table survives DWG save → reopen and differs per drawing tab.
 - Owner-layer: Commands (a single resolve-creation-layer function used by every creation path), UI
   (tab), IO (trailer).
-- Status: proposed (2026-09-29) — D-2026-09-29-b.
-- Revisions: 2026-09-29 — proposed.
+- Status: accepted (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed and accepted.
 
 ### REQ-362 — GEODATA round-trip: read Civil 3D's geolocation, write ours (GitHub issue #582, increment 6)
 
@@ -10364,8 +10364,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - save → reopen in GoSurvey reproduces zone, marker, scale and rotation from GEODATA alone (trailer
     removed) within REQ-101.
 - Owner-layer: IO (`src/io/LibreDwgCad.cpp`, `src/io/DwgIo`), `src/geo/` (CS definition ↔ code).
-- Status: proposed (2026-09-29) — D-2026-09-29-b.
-- Revisions: 2026-09-29 — proposed.
+- Status: accepted (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed and accepted.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
