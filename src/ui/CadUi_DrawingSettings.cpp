@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -54,19 +55,84 @@ bool StagedScale(const StagedDrawingSettings& s, float* out) {
   return true;
 }
 
+constexpr const char* kLabels[] = {"Drawing units:", "Angular units:", "Imperial to Metric conversion:",
+                                   "Scale:", "Custom scale:", "Categories:"};
+constexpr const char* kAngular[] = {"Degrees", "Radians", "Grads"};
+constexpr const char* kFoot[] = {"US Survey Foot (1 m = 39.37 in)", "International Foot (1 ft = 0.3048 m)"};
+constexpr const char* kNoZone[] = {"No Datum, No Projection"};
+constexpr const char* kCheckScaleInserted = "Scale objects inserted from other drawings";
+constexpr const char* kCheckSetVariables = "Set drawing variables to match";
+constexpr const char* kCustomScaleError = "The custom scale must be a positive number.";
+
+/// Every size in the window, measured from the current font and style — never fixed pixels, so the
+/// window fits its text at any UI font size and does not change size while it is open.
+struct DialogLayout {
+  float  labelW = 0.f;  ///< Label column, the fields start here.
+  float  fieldW = 0.f;  ///< Every combo and the Custom scale field.
+  float  btnW = 0.f;
+  ImVec2 size;          ///< The whole window, title bar included.
+};
+
+float MaxTextWidth(std::initializer_list<const char*> texts) {
+  float w = 0.f;
+  for (const char* s : texts)
+    w = (std::max)(w, ImGui::CalcTextSize(s).x);
+  return w;
+}
+
+DialogLayout MeasureLayout() {
+  const ImGuiStyle& st = ImGui::GetStyle();
+  DialogLayout L;
+
+  float label = 0.f;
+  for (const char* s : kLabels)
+    label = (std::max)(label, ImGui::CalcTextSize(s).x);
+  L.labelW = label + st.ItemSpacing.x * 2.f;
+
+  // The widest thing any field can show: unit names, angular units, foot definitions, every scale in
+  // both lists, "Custom" and the zone placeholder.
+  float option = MaxTextWidth({kFoot[0], kFoot[1], kNoZone[0], "Custom"});
+  for (int i = 0; i < kDrawingUnitCount; ++i)
+    option = (std::max)(option, ImGui::CalcTextSize(kDrawingUnitNames[i]).x);
+  for (const char* s : kAngular)
+    option = (std::max)(option, ImGui::CalcTextSize(s).x);
+  for (int units : {2, 6})
+    for (const PlotScaleChoice& c : PlotScaleChoicesFor(units))
+      option = (std::max)(option, ImGui::CalcTextSize(c.label.c_str()).x);
+  // Text + frame padding on both sides + the arrow button (one frame height square).
+  L.fieldW = option + st.FramePadding.x * 2.f + st.ItemInnerSpacing.x + ImGui::GetFrameHeight();
+
+  L.btnW = (std::max)(ImGui::CalcTextSize("Cancel").x + st.FramePadding.x * 4.f, ImGui::GetFontSize() * 5.f);
+  const float footerW = ImGui::CalcTextSize(kCustomScaleError).x + st.ItemSpacing.x * 2.f +
+                        L.btnW * 3.f + st.ItemSpacing.x * 2.f;
+  const float checkW = ImGui::GetFrameHeight() + st.ItemInnerSpacing.x +
+                       MaxTextWidth({kCheckScaleInserted, kCheckSetVariables});
+  const float contentW = (std::max)({L.labelW + L.fieldW, checkW, footerW});
+
+  // Body rows, top to bottom: tab bar, spacing, five field rows, spacing, two checkboxes, spacing,
+  // the "Zone" separator, the Categories row.
+  const float row = ImGui::GetFrameHeightWithSpacing();
+  const float gap = st.ItemSpacing.y;
+  const float separatorText = ImGui::GetTextLineHeight() + st.SeparatorTextPadding.y * 2.f + gap;
+  const float body = row + gap + 5.f * row + gap + 2.f * row + gap + separatorText + row;
+  const float footer = gap + 1.f + gap + row;  // separator line, then the buttons
+  const float titleBar = ImGui::GetFontSize() + st.FramePadding.y * 2.f;
+  L.size = ImVec2(contentW + st.WindowPadding.x * 2.f,
+                  titleBar + st.WindowPadding.y * 2.f + body + footer + gap);
+  return L;
+}
+
 void GreyedWithReason(const char* reason) {
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     ImGui::SetTooltip("%s", reason);
 }
 
-void DrawUnitsAndZoneTab(StagedDrawingSettings& s) {
-  const float labelW = 230.f;
-  const float fieldW = 260.f;
+void DrawUnitsAndZoneTab(StagedDrawingSettings& s, const DialogLayout& L) {
   auto row = [&](const char* label) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
-    ImGui::SameLine(labelW);
-    ImGui::SetNextItemWidth(fieldW);
+    ImGui::SameLine(L.labelW);
+    ImGui::SetNextItemWidth(L.fieldW);
   };
 
   int unitSel = 0;
@@ -87,14 +153,12 @@ void DrawUnitsAndZoneTab(StagedDrawingSettings& s) {
   ItemHelpTooltip("The drawing's unit (INSUNITS). A relabel only: no coordinate changes. "
                   "The same value the UNITS dialog shows.");
 
-  const char* kAngular[] = {"Degrees", "Radians", "Grads"};
   int ang = static_cast<int>(s.settings.angularUnits);
   row("Angular units:");
   if (ImGui::Combo("##ds_ang", &ang, kAngular, IM_ARRAYSIZE(kAngular)))
     s.settings.angularUnits = static_cast<DrawingSettings::AngularUnits>(std::clamp(ang, 0, 2));
   ItemHelpTooltip("The drawing's angular unit (AUNITS). The app-wide angle display format is set in UNITS.");
 
-  const char* kFoot[] = {"US Survey Foot (1 m = 39.37 in)", "International Foot (1 ft = 0.3048 m)"};
   int foot = static_cast<int>(s.settings.footDefinition);
   row("Imperial to Metric conversion:");
   if (ImGui::Combo("##ds_foot", &foot, kFoot, IM_ARRAYSIZE(kFoot)))
@@ -125,22 +189,18 @@ void DrawUnitsAndZoneTab(StagedDrawingSettings& s) {
   ImGui::InputText("##ds_custom", s.customScaleText, sizeof(s.customScaleText));
   ImGui::EndDisabled();
   ItemHelpTooltip("Drawing units per plotted inch (e.g. 50 for 1\" = 50' in a feet drawing).");
-  float scale = 0.f;
-  if (s.customScale && !StagedScale(s, &scale))
-    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.f), "The custom scale must be a positive number.");
 
   ImGui::Spacing();
-  ImGui::Checkbox("Scale objects inserted from other drawings", &s.settings.scaleInsertedObjects);
+  ImGui::Checkbox(kCheckScaleInserted, &s.settings.scaleInsertedObjects);
   ItemHelpTooltip("On: INSERT converts a block drawn in another unit to this drawing's unit. "
                   "Off: blocks are inserted as drawn.");
-  ImGui::Checkbox("Set drawing variables to match", &s.settings.setDrawingVariables);
+  ImGui::Checkbox(kCheckSetVariables, &s.settings.setDrawingVariables);
   ItemHelpTooltip("On: saving writes LUNITS and AUNITS from these settings beside INSUNITS.");
 
   ImGui::Spacing();
   ImGui::SeparatorText("Zone");
   ImGui::BeginDisabled();
   row("Categories:");
-  const char* kNoZone[] = {"No Datum, No Projection"};
   int zone = 0;
   ImGui::Combo("##ds_zone", &zone, kNoZone, IM_ARRAYSIZE(kNoZone));
   ImGui::EndDisabled();
@@ -175,11 +235,13 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
   if (!ImGui::IsPopupOpen(kPopupId))  // "###" makes the id independent of the drawing name
     ImGui::OpenPopup(title.c_str());
 
-  ImGui::SetNextWindowSize(ImVec2(620.f, 470.f), ImGuiCond_Appearing);
+  const DialogLayout layout = MeasureLayout();
+  ImGui::SetNextWindowSize(layout.size, ImGuiCond_Always);  // fixed: sized to its content
   ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
   PushProductDialogAccent();
   bool open = true;
-  if (!ImGui::BeginPopupModal(title.c_str(), &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+  if (!ImGui::BeginPopupModal(title.c_str(), &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                                                  ImGuiWindowFlags_NoSavedSettings)) {
     PopProductDialogAccent();
     cmd.showDrawingSettingsWindow = false;  // closed by the title-bar [X]: Cancel
     wasOpen = false;
@@ -194,11 +256,12 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
                          ImGui::IsKeyPressed(ImGuiKey_Escape));
 
   const float footerH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
-  if (ImGui::BeginChild("##ds_body", ImVec2(0.f, -footerH))) {
+  if (ImGui::BeginChild("##ds_body", ImVec2(0.f, -footerH), ImGuiChildFlags_None,
+                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
     if (ImGui::BeginTabBar("##ds_tabs")) {
       if (ImGui::BeginTabItem("Units and Zone")) {
         ImGui::Spacing();
-        DrawUnitsAndZoneTab(staged);
+        DrawUnitsAndZoneTab(staged, layout);
         ImGui::EndTabItem();
       }
       for (const char* later : {"Transformation", "Object Layers"}) {
@@ -215,9 +278,14 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
 
   float scale = 0.f;
   const bool valid = StagedScale(staged, &scale);
-  const float btnW = 90.f;
+  const float btnW = layout.btnW;
   const float spacing = ImGui::GetStyle().ItemSpacing.x;
   ImGui::Separator();
+  if (!valid) {  // beside the buttons, so the message needs no row of its own
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.f), "%s", kCustomScaleError);
+    ImGui::SameLine();
+  }
   ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - (btnW * 3.f + spacing * 2.f));
   ImGui::BeginDisabled(!valid);
   const bool ok = ImGui::Button("OK", ImVec2(btnW, 0.f));
