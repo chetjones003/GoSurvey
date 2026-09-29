@@ -849,6 +849,18 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["modelUnitsPerPlottedInch"] = st.modelUnitsPerPlottedInch;
   doc["drawingInsUnits"] = st.drawingInsUnits;
+  {  // Drawing Settings (REQ-357). Additive: a drawing without it opens with the defaults.
+    const DrawingSettings& ds = st.drawingSettings;
+    json o;
+    o["angularUnits"] = ds.angularUnits == DrawingSettings::AngularUnits::Radians ? "radians"
+                        : ds.angularUnits == DrawingSettings::AngularUnits::Grads ? "grads"
+                                                                                   : "degrees";
+    o["footDefinition"] =
+        ds.footDefinition == DrawingSettings::FootDefinition::International ? "international" : "usSurvey";
+    o["scaleInsertedObjects"] = ds.scaleInsertedObjects;
+    o["setDrawingVariables"] = ds.setDrawingVariables;
+    doc["drawingSettings"] = std::move(o);
+  }
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
   doc["currentLayer"] = st.currentLayer;
   doc["currentColor"] = st.currentColor;  // REQ-356; additive, older readers ignore it
@@ -2110,6 +2122,19 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   st.modelUnitsPerPlottedInch = doc.value("modelUnitsPerPlottedInch", 50.f);
   st.drawingInsUnits = doc.value("drawingInsUnits", 2);
+  st.drawingSettings = DrawingSettings{};  // REQ-357: absent or partial → the defaults
+  if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object()) {
+    const json& o = doc["drawingSettings"];
+    const std::string ang = o.value("angularUnits", std::string("degrees"));
+    st.drawingSettings.angularUnits = ang == "radians" ? DrawingSettings::AngularUnits::Radians
+                                      : ang == "grads" ? DrawingSettings::AngularUnits::Grads
+                                                       : DrawingSettings::AngularUnits::Degrees;
+    st.drawingSettings.footDefinition = o.value("footDefinition", std::string("usSurvey")) == "international"
+                                            ? DrawingSettings::FootDefinition::International
+                                            : DrawingSettings::FootDefinition::UsSurvey;
+    st.drawingSettings.scaleInsertedObjects = o.value("scaleInsertedObjects", true);
+    st.drawingSettings.setDrawingVariables = o.value("setDrawingVariables", true);
+  }
   // Paper space layouts (REQ-031). Missing/garbage → no layouts, model space (no crash).
   st.paperLayouts.clear();
   if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array()) {

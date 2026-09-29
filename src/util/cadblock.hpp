@@ -1576,27 +1576,34 @@ inline void CadBlockParamSet(CadBlockRef* r, std::string name, float value) {
   return false;
 }
 
-[[nodiscard]] inline float CadBlockUnitsScale(std::string_view fromUnits, std::string_view toUnits) {
+/// International-foot inches per meter (1 ft = 0.3048 m exactly) — the default when a caller has no
+/// drawing to ask; a drawing's own definition comes from its Drawing Settings (REQ-357).
+inline constexpr double kInchesPerMeterInternational = 1.0 / 0.0254;
+
+/// Scale from \p fromUnits to \p toUnits, computed in double. \p inchesPerMeter is the drawing's
+/// Imperial to Metric conversion (REQ-357): 39.37 for the US survey foot, 1/0.0254 international.
+[[nodiscard]] inline float CadBlockUnitsScale(std::string_view fromUnits, std::string_view toUnits,
+                                              double inchesPerMeter = kInchesPerMeterInternational) {
   // "unitless" means the geometry is already in the drawing's model-unit system (ACIS `.sat`
   // imports, issue #473/#475) — do not infer inches and apply a feet conversion.
   if (fromUnits.empty() || CadBlockEqCi(fromUnits, "unitless"))
     return 1.f;
-  auto u = [](std::string_view s) {
+  auto u = [inchesPerMeter](std::string_view s) {
     if (CadBlockEqCi(s, "inches") || CadBlockEqCi(s, "in") || CadBlockEqCi(s, "inch"))
-      return 1.f;
+      return 1.0;
     if (CadBlockEqCi(s, "feet") || CadBlockEqCi(s, "ft") || CadBlockEqCi(s, "foot"))
-      return 12.f;
+      return 12.0;
     if (CadBlockEqCi(s, "meters") || CadBlockEqCi(s, "m") || CadBlockEqCi(s, "metre"))
-      return 39.3700787f;
+      return inchesPerMeter;
     if (CadBlockEqCi(s, "millimeters") || CadBlockEqCi(s, "mm"))
-      return 0.0393700787f;
-    return 1.f;
+      return inchesPerMeter / 1000.0;
+    return 1.0;
   };
-  const float a = u(fromUnits);
-  const float b = u(toUnits);
-  if (b == 0.f)
+  const double a = u(fromUnits);
+  const double b = u(toUnits);
+  if (b == 0.0)
     return 1.f;
-  return a / b;
+  return static_cast<float>(a / b);
 }
 
 [[nodiscard]] inline std::string CadDrawingInsUnitsName(int code) {
@@ -1604,6 +1611,8 @@ inline void CadBlockParamSet(CadBlockRef* r, std::string name, float value) {
     return "inches";
   if (code == 2)
     return "feet";
+  if (code == 4)
+    return "millimeters";
   if (code == 6)
     return "meters";
   return "unitless";
@@ -1614,10 +1623,25 @@ inline void CadBlockParamSet(CadBlockRef* r, std::string name, float value) {
     return 1;
   if (CadBlockEqCi(s, "feet") || CadBlockEqCi(s, "ft") || CadBlockEqCi(s, "foot"))
     return 2;
+  if (CadBlockEqCi(s, "millimeters") || CadBlockEqCi(s, "mm") || CadBlockEqCi(s, "millimetre"))
+    return 4;
   if (CadBlockEqCi(s, "meters") || CadBlockEqCi(s, "m") || CadBlockEqCi(s, "metre"))
     return 6;
   return 0;
 }
+
+/// True for an INSUNITS code the drawing unit offers (REQ-357): Unitless, Inches, Feet,
+/// Millimeters, Meters. Importers adopt only these and leave the unit unchanged otherwise.
+[[nodiscard]] inline bool CadDrawingInsUnitsOffered(int code) {
+  return code == 0 || code == 1 || code == 2 || code == 4 || code == 6;
+}
+
+/// The drawing units the UNITS dialog and the Drawing Settings window offer, in display order
+/// (REQ-357) — one list, so the two windows cannot drift apart.
+inline constexpr int kDrawingUnitCount = 5;
+inline constexpr const char* kDrawingUnitNames[kDrawingUnitCount] = {"Unitless", "Inches", "Feet", "Meters",
+                                                                     "Millimeters"};
+inline constexpr int kDrawingUnitCodes[kDrawingUnitCount] = {0, 1, 2, 6, 4};
 
 [[nodiscard]] inline bool CadBlockHasMatchlineDyn(const CadBlockDefinition& def) {
   for (const CadBlockParameter& p : def.parameters) {

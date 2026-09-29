@@ -10139,8 +10139,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - with "Set drawing variables to match" on, a saved DXF carries `$AUNITS` matching Angular units.
 - Owner-layer: Commands (`src/commands/CadCommands.{hpp,cpp}` — settings struct, apply + undo),
   IO (`src/io/GsIo.cpp` trailer JSON, `src/io/DxfIo.cpp` / `LibreDwgCad.cpp` headers), UI
-  (`src/ui/` window, File menu, Toolspace button).
-- Status: accepted (2026-09-29) — D-2026-09-29-b.
+  (`src/ui/` window, File menu, ribbon Palettes button).
+- Status: accepted (2026-09-29) — D-2026-09-29-b, TASK-290.
 - Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — Scale amended (D-2026-09-29-c): it is
   the existing plot scale, not a second stored value.
 

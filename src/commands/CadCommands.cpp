@@ -150,6 +150,9 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
   doc.drawingLayerTable      = cmd.drawingLayerTable;
   doc.currentColor           = cmd.currentColor;  // REQ-356
+  doc.drawingInsUnits        = cmd.drawingInsUnits;  // REQ-357: unit, scale and settings are per drawing
+  doc.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
+  doc.drawingSettings        = cmd.drawingSettings;
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
@@ -256,6 +259,9 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
   cmd.drawingLayerTable          = doc.drawingLayerTable;
   cmd.currentColor               = doc.currentColor;
+  cmd.drawingInsUnits            = doc.drawingInsUnits;  // REQ-357
+  cmd.modelUnitsPerPlottedInch   = doc.modelUnitsPerPlottedInch;
+  cmd.drawingSettings            = doc.drawingSettings;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.activeDimensionStyle       = doc.dimensionStyle;
@@ -1604,6 +1610,9 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
     snap.sectionPlaneFlip   = st.viewportSectionClipFlip;
     snap.sectionPlaneExtent = st.viewportSectionClipExtent;
   }
+  snap.drawingInsUnits          = st.drawingInsUnits;  // REQ-357
+  snap.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
+  snap.drawingSettings          = st.drawingSettings;
   snap.description          = description;
   return snap;
 }
@@ -1695,6 +1704,12 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.sectionPlaneSelected = false;
   st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
   st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
+  // REQ-357: the drawing unit, plot scale and Drawing Settings are undoable. A restored plot scale
+  // resizes the survey-point labels exactly as setting it does.
+  st.drawingInsUnits = snap.drawingInsUnits;
+  st.drawingSettings = snap.drawingSettings;
+  if (snap.modelUnitsPerPlottedInch != st.modelUnitsPerPlottedInch)
+    SetDrawingPlotScale(st, snap.modelUnitsPerPlottedInch);
 }
 
 } // namespace
@@ -6663,6 +6678,7 @@ const CmdEntry kRegistry[] = {
     {"volumes", "vol", "Cut/fill/net volume between two surfaces: VOLUMES <base>, <comparison>[, <clip id>]"},
     {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
+    {"drawingsettings", "editdrawingsettings", "Drawing Settings: units, scale and the drawing's settings"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
@@ -7148,6 +7164,12 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   if (primary == "units") {
     st.showUnitsWindow = true;
     log.push_back("UNITS — drawing units dialog opened.");
+    return true;
+  }
+  if (primary == "drawingsettings") {
+    // The window itself refuses the GUI's Start tab (REQ-308); headless runs have no Start tab.
+    st.showDrawingSettingsWindow = true;
+    log.push_back("DRAWINGSETTINGS — Drawing Settings opened.");
     return true;
   }
   if (primary == "style") {
@@ -38503,6 +38525,40 @@ void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vect
 }
 
 // ---------------------------------------------------------------------------
+// Drawing Settings (REQ-357, GitHub issue #582)
+// ---------------------------------------------------------------------------
+
+void SetDrawingPlotScale(AppCommandState& st, float modelUnitsPerPlottedInch) {
+  st.modelUnitsPerPlottedInch = modelUnitsPerPlottedInch;
+  RepositionAllSurveyPointLabels(st);
+  st.surveyLabelLayoutCacheHalfH = st.viewportLastSurveyLayoutOrthoHalfH;
+  st.surveyLabelLayoutCacheVpHeightPx = st.viewportLastSurveyLayoutHeightPx;
+  st.surveyLabelLayoutCacheMup = st.modelUnitsPerPlottedInch;
+  BumpCadGpuCache(st);
+}
+
+bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelUnitsPerPlottedInch,
+                          const DrawingSettings& settings, std::vector<std::string>& log) {
+  if (!std::isfinite(modelUnitsPerPlottedInch) || modelUnitsPerPlottedInch <= 0.f) {
+    log.push_back("Drawing Settings — the scale must be a positive number; nothing was changed.");
+    return false;
+  }
+  const bool unitsChanged = drawingInsUnits != st.drawingInsUnits;
+  const bool scaleChanged = modelUnitsPerPlottedInch != st.modelUnitsPerPlottedInch;
+  const bool settingsChanged = settings != st.drawingSettings;
+  if (!unitsChanged && !scaleChanged && !settingsChanged)
+    return true;
+  PushUndoSnapshot(st, "Drawing Settings");
+  st.drawingInsUnits = drawingInsUnits;  // a relabel: no coordinate is touched (REQ-022)
+  st.drawingSettings = settings;
+  if (scaleChanged)
+    SetDrawingPlotScale(st, modelUnitsPerPlottedInch);
+  BumpCadGpuCache(st);  // document property: marks the drawing modified
+  log.push_back("Drawing Settings applied.");
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // CHPROP / MATCHPROP / LAYMCUR and the current colour (REQ-356, GitHub issue #575)
 // ---------------------------------------------------------------------------
 
@@ -41258,12 +41314,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       if (!(issIdle >> pv) || pv <= 0.f)
         log.push_back("PLOTSCALE — usage: PLOTSCALE <model_units_per_plotted_inch> (example: 50 for 1\"=50').");
       else {
-        st.modelUnitsPerPlottedInch = pv;
-        RepositionAllSurveyPointLabels(st);
-        st.surveyLabelLayoutCacheHalfH = st.viewportLastSurveyLayoutOrthoHalfH;
-        st.surveyLabelLayoutCacheVpHeightPx = st.viewportLastSurveyLayoutHeightPx;
-        st.surveyLabelLayoutCacheMup = st.modelUnitsPerPlottedInch;
-        BumpCadGpuCache(st);
+        if (pv != st.modelUnitsPerPlottedInch) {
+          PushUndoSnapshot(st, "PLOTSCALE");  // the plot scale is undoable (REQ-357)
+          SetDrawingPlotScale(st, pv);
+        }
         log.push_back("Plot scale: 1 plotted inch = " + std::to_string(pv) + " model units.");
       }
       return;

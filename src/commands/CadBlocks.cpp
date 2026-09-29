@@ -748,9 +748,14 @@ std::filesystem::path CadFittingLibraryExportDir() {
 }
 
 float CadBlockInsertUnitsScale(const AppCommandState& st, const CadBlockDefinition& def) {
+  // REQ-357: "Scale objects inserted from other drawings" off → inserted as drawn.
+  if (!st.drawingSettings.scaleInsertedObjects)
+    return 1.f;
+  const double inchesPerMeter = DrawingInchesPerMeter(st.drawingSettings.footDefinition);
+  const std::string drawUnits = CadDrawingInsUnitsName(st.drawingInsUnits);
   if (st.insertBlockUnitsBuf[0] != '\0')
-    return CadBlockUnitsScale(st.insertBlockUnitsBuf, CadDrawingInsUnitsName(st.drawingInsUnits));
-  return CadBlockUnitsScale(def.units, CadDrawingInsUnitsName(st.drawingInsUnits));
+    return CadBlockUnitsScale(st.insertBlockUnitsBuf, drawUnits, inchesPerMeter);
+  return CadBlockUnitsScale(def.units, drawUnits, inchesPerMeter);
 }
 
 void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBlockLibraryEntry>* out) {
@@ -3691,7 +3696,12 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("INSUNITS — " + CadDrawingInsUnitsName(st.drawingInsUnits) + ".");
       return true;
     }
-    st.drawingInsUnits = CadDrawingInsUnitsCode(f[0]);
+    const int code = CadDrawingInsUnitsCode(f[0]);
+    if (code != st.drawingInsUnits) {
+      PushUndoSnapshot(st, "INSUNITS");  // the drawing unit is undoable (REQ-357)
+      st.drawingInsUnits = code;
+      BumpCadGpuCache(st);
+    }
     log.push_back("INSUNITS — drawing units " + CadDrawingInsUnitsName(st.drawingInsUnits) + ".");
     return true;
   }

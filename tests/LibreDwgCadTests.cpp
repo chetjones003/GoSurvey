@@ -772,3 +772,29 @@ TEST_CASE("Foreign DWG without payload still imports a LINE (REQ-175)", "[dwg][l
   REQUIRE(in.userLinesFlat.size() == 6);
   REQUIRE(in.userLinesFlat[3] == Catch::Approx(10.f).margin(0.05f));
 }
+
+// REQ-357: DWG export writes the drawing unit into INSUNITS always, and LUNITS / AUNITS from the
+// Drawing Settings when "Set drawing variables to match" is on; import adopts Millimeters (4).
+TEST_CASE("DWG export writes INSUNITS, LUNITS and AUNITS from the Drawing Settings (REQ-357)",
+          "[dwg][libredwg][req357]") {
+  ScratchDir dir("req357");
+  const auto p = (dir.path / "units.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.drawingInsUnits = 4;
+  st.drawingSettings.angularUnits = DrawingSettings::AngularUnits::Grads;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  {
+    Dwg_Data dwg;
+    std::memset(&dwg, 0, sizeof(dwg));
+    REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+    CHECK(dwg.header_vars.INSUNITS == 4);
+    CHECK(dwg.header_vars.LUNITS == 2);
+    CHECK(dwg.header_vars.AUNITS == 2);
+    dwg_free(&dwg);
+  }
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  CHECK(in.drawingInsUnits == 4);
+}

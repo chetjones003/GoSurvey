@@ -31,6 +31,7 @@
 #include "NumFormat.hpp"
 #include "util/cadpiperun.hpp"
 #include "util/cadtable.hpp"
+#include "util/PlotScales.hpp"  // REQ-357 one plot-scale list, shared with Drawing Settings
 #include "util/SaveTrace.hpp"
 #include "DwgIo.hpp"
 #include "DxfIo.hpp"
@@ -1594,6 +1595,9 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
         AppendSaveTrace("ui: save dialog cancelled");
       }
     }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Drawing Settings..."))  // REQ-357; disabled on the Start tab with Save
+      cmd.showDrawingSettingsWindow = true;
     ImGui::EndDisabled();
     ImGui::Separator();
     if (ImGui::MenuItem("Import DXF...", nullptr)) {
@@ -4070,7 +4074,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           iconBtn2Row("##PalProps", -1, "c3d_properties", true, "Properties — not implemented yet."),
           iconBtn2Row("##PalRefMgr", -1, "c3d_refmgr", true, "Reference Manager — not implemented yet."),
           iconBtn2Row("##PalCompEd", -1, "c3d_comped", true, "Component Editor — not implemented yet."),
-          iconBtn2Row("##PalSettings", -1, "c3d_dwgsettings", true, "Drawing Settings — not implemented yet."),
+          iconBtn2Row("##PalSettings", -1, "c3d_dwgsettings", false,
+                      "Drawing Settings — the drawing's units, scale and settings.\nCommand bar: DRAWINGSETTINGS"),
           iconBtn2Row("##PalWorkFolder", -1, "c3d_workfolder", true, "Set Working Folder — not implemented yet."),
       }, 3, 4.f);
       spec.groups = {toolspace, grid};
@@ -4078,6 +4083,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ribbonSpecs.push_back({w, w, [&, spec]() {
         drawRibbonSectionSpec("RibbonSecPalettes", "Palettes", spec, [&](const std::string& id) {
           if (id == "##RibbonToolspaceHome") cmd.showToolspaceWindow = true;
+          if (id == "##PalSettings") cmd.showDrawingSettingsWindow = true;  // REQ-357
         });
       }, "Palettes", RibbonIconKind::Toolspace});
     }
@@ -9385,17 +9391,9 @@ static void ItemHelpTooltip(const char* text) {
 
 /// \p modelUnitsPerPlottedInch matches common civil notation (e.g. 50 → 1"=50' when model unit is feet).
 static void DrawPlotScaleCombo(AppCommandState& cmd, float width = 158.f) {
-  static constexpr struct {
-    const char* label;
-    float modelUnitsPerPlottedInch;
-  } kScales[] = {
-      {"1\" = 1'", 1.f},       {"1\" = 2'", 2.f},       {"1\" = 5'", 5.f},       {"1\" = 10'", 10.f},
-      {"1\" = 20'", 20.f},     {"1\" = 30'", 30.f},     {"1\" = 40'", 40.f},     {"1\" = 50'", 50.f},
-      {"1\" = 60'", 60.f},     {"1\" = 80'", 80.f},     {"1\" = 100'", 100.f},   {"1\" = 120'", 120.f},
-      {"1\" = 200'", 200.f},   {"1\" = 300'", 300.f},   {"1\" = 400'", 400.f},   {"1\" = 500'", 500.f},
-  };
-
-  constexpr int kN = static_cast<int>(sizeof(kScales) / sizeof(kScales[0]));
+  // One list, shared with the Drawing Settings window and chosen by the drawing unit (REQ-357).
+  const std::vector<PlotScaleChoice> kScales = PlotScaleChoicesFor(cmd.drawingInsUnits);
+  const int kN = static_cast<int>(kScales.size());
 
   // Target: the viewport we're "in" (floating), else a single selected viewport in paper space, else the
   // drawing's model plot scale. The combo then sets that viewport's scale (user request).
@@ -9413,37 +9411,22 @@ static void DrawPlotScaleCombo(AppCommandState& cmd, float width = 158.f) {
   }
   const float curVal = tvp ? tvp->scaleModelPerPaperIn : cmd.modelUnitsPerPlottedInch;
 
-  int selected = -1;
-  for (int i = 0; i < kN; ++i) {
-    if (std::fabs(curVal - kScales[i].modelUnitsPerPlottedInch) < 0.051f) {
-      selected = i;
-      break;
-    }
-  }
-
-  char preview[96];
-  const char* pfx = tvp ? "VP " : "";
-  if (selected >= 0)
-    std::snprintf(preview, sizeof(preview), "%s%s", pfx, kScales[selected].label);
-  else
-    std::snprintf(preview, sizeof(preview), "%s1\" = %.3g' (custom)", pfx, static_cast<double>(curVal));
+  const int selected = PlotScaleChoiceIndex(kScales, curVal);
+  const std::string preview = (tvp ? "VP " : "") + PlotScaleLabel(cmd.drawingInsUnits, curVal);
 
   ImGui::PushID("plotscalecombo");
   ImGui::SetNextItemWidth(width);
-  if (ImGui::BeginCombo("##plotscale", preview, ImGuiComboFlags_HeightLargest)) {
+  if (ImGui::BeginCombo("##plotscale", preview.c_str(), ImGuiComboFlags_HeightLargest)) {
     for (int i = 0; i < kN; ++i) {
       const bool isSel = (selected == i);
-      if (ImGui::Selectable(kScales[i].label, isSel)) {
+      if (ImGui::Selectable(kScales[static_cast<size_t>(i)].label.c_str(), isSel)) {
+        const float mup = kScales[static_cast<size_t>(i)].modelUnitsPerPlottedInch;
         if (tvp) {
-          tvp->scaleModelPerPaperIn = kScales[i].modelUnitsPerPlottedInch;  // set THIS viewport's scale
+          tvp->scaleModelPerPaperIn = mup;  // set THIS viewport's scale
           BumpCadGpuCache(cmd);
-        } else {
-          cmd.modelUnitsPerPlottedInch = kScales[i].modelUnitsPerPlottedInch;
-          RepositionAllSurveyPointLabels(cmd);
-          cmd.surveyLabelLayoutCacheHalfH = cmd.viewportLastSurveyLayoutOrthoHalfH;
-          cmd.surveyLabelLayoutCacheVpHeightPx = cmd.viewportLastSurveyLayoutHeightPx;
-          cmd.surveyLabelLayoutCacheMup = cmd.modelUnitsPerPlottedInch;
-          BumpCadGpuCache(cmd);
+        } else if (mup != cmd.modelUnitsPerPlottedInch) {
+          PushUndoSnapshot(cmd, "Plot scale");  // the plot scale is undoable (REQ-357)
+          SetDrawingPlotScale(cmd, mup);
         }
       }
       if (isSel)

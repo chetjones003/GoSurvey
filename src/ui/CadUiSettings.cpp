@@ -1226,14 +1226,12 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
   BoxBegin("Insertion scale", 95.f);
   {
     ImGui::TextUnformatted("Units to scale inserted content:");
-    const char* kInsNames[] = {"Feet", "Meters", "Unitless"};
-    const int   kInsCodes[] = {2, 6, 0};
     int insSel = 0;
-    for (int i = 0; i < 3; ++i)
-      if (cmd.drawingInsUnits == kInsCodes[i]) insSel = i;
+    for (int i = 0; i < kDrawingUnitCount; ++i)
+      if (cmd.drawingInsUnits == kDrawingUnitCodes[i]) insSel = i;
     ImGui::SetNextItemWidth(220.f);
-    if (ImGui::Combo("##ins_units", &insSel, kInsNames, IM_ARRAYSIZE(kInsNames))) {
-      cmd.drawingInsUnits = kInsCodes[std::clamp(insSel, 0, 2)];
+    if (ImGui::Combo("##ins_units", &insSel, kDrawingUnitNames, kDrawingUnitCount)) {
+      cmd.drawingInsUnits = kDrawingUnitCodes[std::clamp(insSel, 0, kDrawingUnitCount - 1)];
       BumpCadGpuCache(cmd);  // document property: flag the drawing as modified
     }
     ItemHelpTooltip("AutoCAD INSUNITS. A relabel only: it tells the drawing (and the DXF $INSUNITS header) what unit it is in. It never rescales or converts geometry.");
@@ -1257,6 +1255,13 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
 
   ImGui::Separator();
   if (ImGui::Button("OK", ImVec2(90.f, 0.f))) {
+    // REQ-357: the drawing unit is undoable — record the value the dialog opened with.
+    if (cmd.drawingInsUnits != gSnapInsUnits) {
+      const int chosen = cmd.drawingInsUnits;
+      cmd.drawingInsUnits = gSnapInsUnits;
+      PushUndoSnapshot(cmd, "UNITS");
+      cmd.drawingInsUnits = chosen;
+    }
     if (SaveUserStartupPrefs(cmd)) {
       if (log) log->push_back("Drawing units saved (gosurvey-user.json).");
     } else if (log) {

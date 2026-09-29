@@ -532,6 +532,7 @@ add_executable(GoSurvey
   src/ui/CadUi_SignInGate.cpp
   src/ui/CadUi_StartScreen.cpp
   src/ui/CadUi_WhatsNew.cpp
+  src/ui/CadUi_DrawingSettings.cpp
   src/ui/CadUi_Wiki.cpp
   src/ui/CadUi_ColorPicker.cpp
   src/ui/MarkdownImGui.cpp
@@ -1273,6 +1274,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ModelingRibbonTests.cpp
     # REQ-356 / D-2026-09-29-a — CHPROP, MATCHPROP, LAYMCUR, the current colour (issue #575).
     tests/PropertyCommandTests.cpp
+    # REQ-357 / D-2026-09-29-b,c — the Drawing Settings window (issue #582 increment 1).
+    tests/DrawingSettingsTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp
