@@ -387,6 +387,12 @@ requirements is a planning failure, not a sign of rigor.
   forms and REQ-154's UCS-prompt exception: those lock a field, so they take the unchanged path. A
   point is placed from the viewport by CLICKING, or by typing a value and pressing Enter — which is
   AutoCAD's own behaviour and what the prompts have always advertised.
+  2026-09-28 (D-2026-09-28-j, REQ-354) — the field group re-lays itself as the
+  user types (`@` → ΔX/ΔY, `<` → Distance < Angle, `,` → next box), gains a Z
+  box when the view is not plan to the UCS, and PIPERUN joins it; the absolute
+  boxes read the active UCS's coordinates under a UCS (the frame a typed point is
+  read in). A relative or bearing value no longer "locks both fields" in X — it
+  re-lays the boxes instead. See REQ-354.
 
 ### REQ-025 — Model and Paper space with layout tabs and a space toggle
 - Purpose: compose a model onto sheets, the way AutoCAD model/paper space works
@@ -1959,6 +1965,36 @@ requirements is a planning failure, not a sign of rigor.
   built as flat world geometry is unreadable in a near-horizontal view.
   2026-08-12 — signed off. The prior status ("only LINE is carried through; CIRCLE is known broken")
   had been stale since TASK-036 and is superseded.
+- **Amendment 2026-09-28 (D-2026-09-28-e) — hover and click pick what is VISIBLE, through one
+  resolution (GitHub issue #564 §2, TASK-283).**
+  1. **One resolution.** `ResolveViewportPick` answers "what visible thing is under this pixel" for the
+     viewport hover and both click paths (idle, and a command's select-objects step). Families keep
+     their precedence — table, text, linework, solid, fill — and every family is judged on the camera
+     ray: orbited, text and fills are hit where the ray meets their own plane (`PickCadAnnotationAt` /
+     `PickFilledRegionAt` take the ray).
+  2. **Occlusion.** In **Hidden** and **Shaded** a solid is opaque: its surface is found along the ray,
+     anything farther (beyond the pick tolerance — a line drawn ON a face counts as in front) does not
+     answer and does not pre-highlight, and where a solid is nearer the eye than the linework under the
+     cursor the solid wins. In **2D Wireframe** a solid is see-through (issue #564 Q1, answered
+     "pick what's drawn", extending D-2026-09-16-b): only its edges answer, by the same nearer-wins
+     rule, and it hides nothing.
+  3. **Winner among linework.** Among the visible candidates within tolerance, the one **nearest the
+     eye** wins (ray parameter orbited, highest Z in plan); on a tie, the one **nearest the cursor**.
+     The tolerance decides what is a candidate, not which wins. (Before, the hover took the nearest to
+     the cursor and the default click the highest, *first-drawn* on a tie, so in a flat drawing the two
+     disagreed; the user chose this rule knowing it changes that tie case.)
+  4. **Hover = click.** The click asks the hover's question first (the hover's aperture tolerance,
+     D-2026-09-02-g) and only when that finds nothing widens to its own radius
+     (`ResolveViewportClickPick`). So whatever pre-highlights is what the click takes; a click just
+     outside the aperture keeps its forgiving radius; the disambiguation popup keeps the wide list.
+  5. Plan view with no solids: the same calls with the same inputs; only the tie in item 3 differs.
+     The resolution runs inside the existing `HoverPickGate` budget (issue #166), not beside it.
+  - Additional acceptance:
+    - hovering anywhere on a solid's visible surface highlights it, including where linework passes
+      behind it; linework in front of it still wins, linework behind it does not;
+    - the entity that pre-highlights on hover is the entity a click at that pixel selects;
+    - Wireframe / Hidden / Shaded each pick what they display;
+    - plan-view picking on a 2D drawing is unchanged apart from the item-3 tie.
 
 ### REQ-059 — ViewCube (view navigation widget)
 - Purpose: direct, discoverable view control and continuous orientation feedback
@@ -2104,6 +2140,74 @@ requirements is a planning failure, not a sign of rigor.
   block recorded on 2026-09-04. `CadGizmoAnchorWorld`'s note that its precision "does not affect any
   move" was corrected in the same change: that is true of a translation, where the anchor cancels
   between grab and drop, and false of a rotation or a scale, where it is the pivot and the base.
+  2026-09-28 — **the gizmo is SUMMONED, not shown on every selection** (D-2026-09-28-a, GitHub issue
+  #564 section 3, TASK-280). See the amendment below; it narrows the Statement's "with a selection
+  active" and adds the acceptance bullets that follow it.
+- **Amendment 2026-09-28 (D-2026-09-28-a) — selecting shows no gizmo; 3DMOVE / 3DROTATE / 3DSCALE
+  summon it.** The Statement's *"with a selection active, a gizmo operates on it"* is narrowed to
+  *"with a selection active and the gizmo summoned"*. Everything else above — the handle counts, the
+  anchor, the UCS axes, agreement with the typed command, one undo per drag — is unchanged.
+  1. **A selection alone draws no gizmo.** The gizmo is summoned by a 3D gizmo command for that
+     command's duration, or by the persistent `GIZMO` setting (item 4). `CadGizmoSummoned` is tested
+     first in `CadGizmoModeFor`, so the overlay, the hover, the click and every transcript assertion
+     inherit the rule from one place.
+  2. **`3DMOVE` / `3DROTATE` / `3DSCALE`** set the gizmo op to Translate / Rotate / Scale for their own
+     duration and restore the previous op however they end (commit, `Esc`, or another command
+     started over them). Shape: select objects (a pre-selection is honoured, and 3DMOVE's select step
+     takes `Ctrl`+click on a solid face / edge / vertex) → Enter → the gizmo appears → drag a handle
+     **or type an exact value** — distance (move, along the grabbed handle, or the only handle when
+     there is one), degrees (rotate), factor > 0 (scale) → the commit is the end of the command. A
+     blank Enter commits an armed drag, or ends the command having changed nothing. One undo step per
+     completed operation — the existing gizmo commit, unchanged.
+  3. **`Esc` restores the pre-command state exactly**: one `Esc` abandons an armed drag (which has
+     changed nothing) and ends the command, restoring the op. A selection that cannot carry a gizmo
+     under the command's op (a face under 3DROTATE, several sub-objects, paper space) is refused with
+     the reason stated (REQ-201) rather than leaving a command with nothing on screen to drag.
+  4. **`GIZMO MOVE | ROTATE | SCALE` is the persistent mode** — the old always-on behaviour, doing that
+     op — and **`GIZMO OFF`** returns to the default. Default OFF, session state like the op itself.
+     `GIZMO` is refused while a 3D gizmo command owns the op.
+  - Additional acceptance:
+    - selecting a solid, a line, or a mix draws no gizmo;
+    - 3DMOVE / 3DROTATE / 3DSCALE each raise the correct gizmo and operate on the selection;
+    - a typed exact value works in each (distance, angle, factor);
+    - `Esc` restores the pre-command state exactly; `Ctrl+Z` after a commit undoes the whole operation;
+    - the handles keep their axis colours (X red / Y green / Z blue) and the face-normal handle its
+      purple — the overlay is unchanged.
+- **Amendment 2026-09-28 (D-2026-09-28-b) — the rotate gizmo has three rings.** The "ONE ring, about
+  the active UCS Z" count recorded above for TASK-232 is replaced: ROTATE draws **one ring per active-UCS
+  axis**, X red / Y green / Z blue, each grabbable. The **Z ring** commits through
+  `ApplyRotationAboutUcsZ` — typed ROTATE, so the second acceptance bullet holds for it exactly as
+  before. The **X and Y rings** commit through `ApplyRotationAboutAxis`, the in-place arbitrary-axis
+  turn typed ROTATE already uses under a tilted UCS, with its refusals (REQ-201). With three rings a
+  typed angle needs a ring grabbed first. A ring seen within about 5° of edge-on is not pickable
+  (`kGizmoRingEdgeOnCos`): on screen it is a line, round which a drag names no angle. The drag ghost
+  rotates / scales the preview rather than sliding it.
+  - Additional acceptance:
+    - 3DROTATE (and `GIZMO ROTATE`) shows three rings in the axis colours, following the active UCS;
+    - dragging, or grabbing and typing an angle on, the X / Y / Z ring turns the selection about that
+      UCS axis through the gizmo's anchor; one undo per operation;
+    - the Z ring's result agrees with typed ROTATE (unchanged).
+- **Amendment 2026-09-28 (D-2026-09-28-c) — AutoCAD's 3DMOVE / 3DSCALE widgets, and a base point.**
+  1. **Base point.** After the selection, 3DMOVE / 3DROTATE / 3DSCALE ask for a base point — a
+     snapped pick, or typed X,Y[,Z] read as MOVE reads one; Enter keeps the centre of the selection's
+     box. The gizmo sits on it, and it is the pivot of a rotation and the centre of a scale
+     (`CadGizmoAnchorWorld`). A solid face / edge / vertex selection skips the step; the persistent
+     `GIZMO` always uses the centre. A small circle marks the base point.
+  2. **Move** draws cone arrowheads and three **plane handles** — the UCS XY, YZ and ZX squares out to
+     `kGizmoPlaneHandleFrac` of the handle length, handle numbers 3–5 — each drawn as its two far
+     sides in the colours of the axes they run along. Dragging one slides the selection within that
+     plane (an arrow within the grab aperture wins over a square; a plane seen nearly edge-on is not
+     a target); after grabbing one, typed `dx,dy` is the offset along the plane's two UCS axes. Whole
+     entities only. The commit is `ApplyTranslationToSelection`, as for an arrow.
+  3. **Scale** draws three axis handles with box tips and AutoCAD's triangle marks between them.
+     **Every handle scales uniformly** (REQ-332 item 7); a one-direction stretch is not offered and
+     remains issue #564 Q2. A typed factor needs no handle grabbed.
+  - Additional acceptance:
+    - each command asks for a base point; a typed or picked one moves the gizmo there and is the pivot
+      / centre; Enter keeps the selection centre;
+    - dragging a 3DMOVE plane square, or grabbing it and typing dx,dy, moves the selection within
+      that UCS plane, one undo step;
+    - every 3DSCALE handle gives the same uniform result.
 
 ### REQ-061 — Per-viewport camera in paper space
 - Purpose: put a plan view and an isometric on the same sheet
@@ -5111,6 +5215,36 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-26); closes the remainder of GitHub issue #88 alongside REQ-120
 - Revisions: 2026-08-26 — accepted (D-2026-08-26-c); raised by chetjones003 on issue #88 after PR #93
   merged, asking for #88's ZOOMEXTENTS acceptance list to be verified rather than assumed.
+  2026-09-28 — **ZOOM EXTENTS frames an ORBITED view in the camera's own frame** (D-2026-09-28-d,
+  GitHub issue #564 §1, TASK-282). See the amendment below.
+- **Amendment 2026-09-28 (D-2026-09-28-d) — orbited ZOOM EXTENTS.** The Statement's "a world
+  rectangle" is the PLAN case. When the view is not plan (azimuth or elevation off plan, or a rolled
+  tilted-UCS PLAN), ZOOM EXTENTS instead:
+  1. sweeps the drawing's **true 3D extents** (`ComputeWorldExtents3d`) — every store the 2D sweep
+     covers, each with its elevation range (a tilted circle / arc / ellipse by its radius), plus
+     filled regions, block references (2D content at the insertion elevation and their solids in
+     full 3D) and pipe runs (centreline widened by the pipe's radius); far outliers dropped by the
+     same plan-centre rule `ComputeRobustWorldExtents` uses;
+  2. frames that box by the **projection of its eight corners** through the current camera
+     (`zoomframing::FrameBoxInView`): the target is the box centre (which centres the silhouette —
+     a box's projection is symmetric about the projected centre), and the zoom comes from
+     `FrameWorldRect` on the corners' screen half-extents, so guarantees (1)–(3) above — margin,
+     aspect, one-unit floor, finite-only — are this requirement's own, not a copy. Under
+     **perspective** the half-height is the exact closed form `max(|u|/((1−m)·aspect), |v|/(1−m)) + w·tan(fov/2)`
+     over the corners. Neither depends on the current view, so repeating ZOOM EXTENTS is stable.
+  3. The camera target's elevation (`viewportPanZ`) is set to the box centre's.
+  **Plan view is unchanged**: the pre-change path runs exactly as before. The one addition there: when
+  the 2D sweep finds nothing, the 3D sweep's plan footprint is framed rather than "nothing to frame",
+  so a drawing of pipe runs alone frames in plan too. Paper space and the floating-viewport path
+  (REQ-123) are untouched.
+  - Additional acceptance:
+    - orbited to any azimuth / elevation (and under perspective), the whole model's 3D box is on
+      screen inside the margin, centred, and tight on the binding axis;
+    - a tall model (large Z, small footprint) frames by its height;
+    - repeating ZOOM EXTENTS in an orbited view does not creep;
+    - plan-view framing of an existing drawing is byte-identical to before;
+    - a drawing of solids or pipe runs alone frames, in plan and orbited;
+    - a non-finite extent is refused with a reason and the view unchanged; paper space frames the sheet.
 
 ### REQ-123 — ZOOM EXTENTS through an activated viewport frames the model into that viewport (GitHub issue #100)
 - Purpose: a floating viewport is the model-space window the user is actually working in, and
@@ -6047,6 +6181,46 @@ capability that does not exist. They are recorded here rather than quietly dropp
   REQ-101. This closes the stability concern the `req312-dxf-arbitrary-plane-roundtrip` transcript
   had recorded as open.
 
+  2026-09-23 — **an ellipse carries its own plane, and a tilted cut is drawn as one**
+  (D-2026-09-23-a, TASK-276, GitHub issue #531). REQ-312 gave arcs and circles a plane normal and
+  left the ellipse flat, which had three costs: `SECTION` refused every tilted cut of a cylinder or
+  cone ("this cut is an ellipse, which a section outline cannot hold yet"), `ELLIPSE` on a tilted UCS
+  landed flat, and a tilted `ELLIPSE` read from DXF arrived flat and in the wrong place with no
+  message (REQ-201) — group 210 was not read at all.
+
+  `CadEllipse` now carries the same normal, on the same terms: world +Z is every ellipse that existed
+  before, `ucs::FromNormal` maps it onto the world axes exactly, and the major-axis vector is read in
+  the ellipse's own plane — so a flat ellipse is bit-identical through save, reload and DXF. A tilted
+  one lies in `ucs::FromNormal({cx, cy, z}, {nx, ny, nz})`, and is drawn, saved and written through
+  that one frame.
+
+  **Interchange.** `.gs` persists the normal, omitted when +Z (additive, no format bump). DXF states
+  an ELLIPSE's centre and major axis in WORLD axes with group 210 naming the plane — unlike an
+  LWPOLYLINE, which is written in its own OCS — so the writer emits the real 11/21/31 and 210/220/230,
+  and the reader takes both.
+
+  **The section.** A tilted cut of a cylinder or cone that stays between its caps is one closed
+  ellipse, and `SECTION` draws it as an `ELLIPSE` standing in the cut plane. A cut that also crosses
+  an end cap is an elliptical arc plus a chord — two shapes, not one — and keeps its own refusal
+  (`SliceCutCrossesCurvedEnd`).
+
+  **Object snap reaches a tilted ellipse**: its centre, and points on the curve itself, taken through
+  the ellipse's own plane and carrying the height the curve has there — the rule REQ-312 item 3 set
+  for a tilted arc. What a tilted ellipse does NOT yet do: the plan-space ENTITY PICK and the three
+  GRIPS **skip** it, exactly as REQ-312's own
+  increments skipped a tilted arc before its snap and pick work landed. They compute in plan, and a
+  tilted ellipse's curve is not the one they would draw there, so acting on it would put a snap or a
+  handle somewhere the curve never goes (REQ-201). A flat ellipse keeps both. That slice is the
+  follow-up.
+
+  Acceptance added:
+  - a flat ellipse, drawn or loaded, is unchanged, and the existing ellipse transcripts and the
+    DXF round trip are byte-stable;
+  - a 45° cut of a cylinder of radius r sections to an ellipse with semi-minor r and semi-major
+    r / cos 45, centred where the plane crosses the axis, to REQ-101 and at survey magnitudes;
+  - that ellipse survives `.gs` and a DXF round trip, plane included;
+  - a cut that crosses an end cap is still refused by name.
+
 ### REQ-313 — The B-rep solid kernel and the seven primitive solids (GitHub issue #146)
 - Purpose: GoSurvey has no solids. `CadMesh` (REQ-063 / ADR-026 (c)) is import-only reference
   geometry — no faces that mean anything, no edges, no volume — and `CadTin` is a surface, which by
@@ -6559,6 +6733,41 @@ capability that does not exist. They are recorded here rather than quietly dropp
   a recipe-less cylinder or cone cuts exactly as the primitive does, a damaged recipe does not
   misplace a cut, and look-alikes (stepped shaft, twisted loft, barrel) are still refused by name — as
   `SliceCutCrossesCurvedFace` since the #518 revision above, for the cuts that cross their curved faces.
+
+  2026-09-18 — **a sphere is cut at any plane, and a torus square to its axis** (D-2026-09-18-a,
+  TASK-272, GitHub issue #520). Both were refused at every plane, though their cuts are shapes the
+  kernel holds:
+  - a **sphere**, any plane through it → two caps, the cut a circle of radius √(R² − d²) centred on
+    the foot of the perpendicular;
+  - a **torus**, a plane square to its axis and through the tube → two pieces, the cut a ring of
+    radii R ± √(r² − d²).
+
+  Each piece is rebuilt from the recipe, as the cylinder and cone recognisers do: the sphere's cap
+  carries a `Sphere` face over the latitudes the plane leaves, the torus piece a `Torus` face over the
+  tube angles it leaves, each closed by the flat face of the cut. Every other torus cut — any angle
+  but square to the axis, and a tube as wide as its ring — is refused as `SliceCutTorusCurve`, whose
+  curve is a quartic, not a circle. Acceptance added: a sphere cut at distance d gives those two
+  pieces and that circle, a torus cut through its centre gives circles of R + r and R − r, and both
+  hold at survey coordinate magnitudes.
+
+  2026-09-23 — **a torus cut through its axis is two circles** (TASK-278, GitHub issue #520
+  increment 3, the half the 2026-09-18 pass left refused). A plane containing the axis meets the ring
+  on both sides, so the section is two separate circles of the tube's own radius, centred where the
+  plane crosses the ring — and each piece is half the doughnut: the tube over half a turn, closed by a
+  flat disc at each end, both facing away from the material.
+
+  The two halves are the same construction in two frames, the second turned half a turn about the
+  axis, which a torus is symmetric under. This recogniser is asked **before** the square-to-axis one,
+  which otherwise answers for every other torus plane — including with the quartic refusal — and would
+  swallow this cut.
+
+  A plane parallel to the axis but **beside** it still cuts a quartic (two ovals, or one waisted
+  curve) and keeps `SliceCutTorusCurve`, as does every tilted plane. No decision entry: increment 3
+  already named this cut and its shape; this delivers it.
+
+  Acceptance added: a torus cut through its axis sections to two circles of radius r whose centres are
+  2R apart, slices into two pieces of half the volume each with the analytic surface area, and holds at
+  survey coordinate magnitudes; beside the axis is still refused by name.
 
 ### REQ-337 — Composite-operand analytic Booleans (GitHub issue #493, continues REQ-314)
 - Purpose: REQ-314's Boolean increments (B1/B2a/B2b-1/B2b-2, plus the branch-pipe and sphere∩cylinder
@@ -7970,6 +8179,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
      neither of which any kernel operation does. **ROTATE with Copy also still refuses**, because
      duplicating a solid is entity-creation bookkeeping rather than a transform — the work
      Rectangular ARRAY had to write separately.
+
+     **6c. AMENDED 2026-09-28 (D-2026-09-28-f, REQ-351, TASK-284): MIRROR, Polar ARRAY and ROTATE
+     with Copy take a solid too** — `brep::Mirror` is the reflection 6b named as its own operation,
+     and duplicating a solid is now shared bookkeeping (`TransformSelectedSolids`' duplicate mode).
+     **STRETCH alone still refuses**, for its own reason: it moves part of an object.
 - Acceptance:
   - a typed MOVE with a Z component moves a line, a circle, an arc, an ellipse, a polyline, a
     feature line, an annotation and a block reference by that Z, and their reported elevations change
@@ -8386,7 +8600,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      the whole solid.
   6. **A scale factor that is zero, negative or non-finite is refused by name.** Zero collapses the
      solid; negative **mirrors** it, leaving left-handed frames that would be rejected far away from
-     the command that caused them. A reflection is its own operation and is not this one.
+     the command that caused them. A reflection is its own operation and is not this one — it is
+     REQ-351's `brep::Mirror` (D-2026-09-28-f).
   7. **Non-uniform scale is out of scope, and not by omission**: `SurfaceKind` has no ellipsoid and
      no elliptical cylinder, so an unevenly scaled sphere has nowhere to be stored. The signature
      offers a single factor, so there is no non-uniform request to refuse.
@@ -8630,7 +8845,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a boundary that is not lines and arcs, a plane that misses the solid, and a degenerate normal
     are each refused by name and draw nothing;
   - the command creates one closed polyline per solid in **one undo step**, and a refusal leaves the
-    document unchanged;
+    document unchanged — **one per OUTLINE** since the 2026-09-18 increment 2 revision, a ring being
+    two, still in the one undo step;
   - the figures hold at survey coordinate magnitudes;
   - **the command PROMPTS rather than refusing**: after asking for a selection it is still running,
     a click during that step selects without ending it, Enter confirms, and three points then define
@@ -8695,6 +8911,65 @@ capability that does not exist. They are recorded here rather than quietly dropp
   sphere now reports, in place of "flat faces only". Acceptance added: a filleted box is sectioned
   within REQ-101's ±0.002 ft at planes that miss its fillets, the solid is unchanged, and the command is
   one undo step.
+
+  2026-09-18 — **increment 2: a section can be more than one outline** (D-2026-09-18-a, TASK-272,
+  GitHub issue #520). A section had to be a single closed outline, so a cut shaped like a ring — a
+  torus cut square to its axis, and in time a drilled box — was refused ("a section with holes is
+  increment 2"). The kernel gains `SectionOutlines`, which returns **every** closed outline of the
+  cut: an outer outline wound counter-clockwise about the section normal, and a hole wound clockwise,
+  so the two are told apart by signed area with no second flag. `SectionLoop` remains, as that
+  function restricted to the single-outline case, and names which of the two ways there were several
+  (`SliceCutSeveralOutlines` for separate pieces on the plane, `SectionHasHole` for a hole).
+
+  **`SECTION` draws one closed polyline per outline** — a ring gives two, the outer and the hole —
+  and they arrive together in **one undo step**, as one section. This is the AutoCAD answer and it
+  keeps each outline a measured figure: each can be selected, listed and its own area taken, which a
+  single polyline bridging the two with a connecting line could not (the bridged outline is a shape the
+  cut never made, and its area would be wrong). A sphere now sections as one circle (REQ-314 revision
+  of this date). Acceptance added: a ring section creates two closed polylines in one undo step, the
+  solid unchanged; the sphere's circle and the torus's two circles hold to REQ-101 at survey
+  magnitudes; and every unsupported cut still names the kind of cut it is.
+
+  2026-09-23 — **a section outline keeps only the corners the shape has** (TASK-275, GitHub issue
+  #522). A `UNION` leaves its operands' faces split into fragments along each other's planes, and
+  coplanar fragments are not merged back. A cut crossed each of those internal boundaries and kept a
+  vertex there, so two unioned boxes sectioned to **12** vertices where the outline has **8** — the
+  shape right, the vertices not ones anyone drew, and a clean-up job for the user.
+
+  A vertex is now dropped when **both** of its segments are straight and it lies on the line between
+  its neighbours to within 1e-9 of the outline's own size — far inside REQ-101's ±0.002 ft, so a real
+  corner, however slight, is kept. An arc's endpoint is never dropped: it carries the sweep.
+
+  The issue offered two places to fix this: merge coplanar faces after a Boolean, or tidy the outline.
+  The outline is where it is done. No decision entry: merging faces would change every Boolean
+  result's own vertex, edge and face counts — a larger change, to geometry this issue does not claim
+  is wrong — and is recorded as the follow-up it is. Acceptance added: the union above sections to
+  exactly eight vertices with its area unchanged, a single box still sections to four, and an outline
+  whose corners are all real keeps every one.
+
+  2026-09-23 — **a tilted cut that runs off the end of a pipe is drawn too** (D-2026-09-23-b,
+  TASK-279, GitHub issue #520 follow-up). The cut BETWEEN the caps became an ellipse with #531; this
+  is the other half. Where the cut leaves through an end, the outline is an **elliptical arc plus the
+  chord** across that cap — two shapes, so `SECTION` draws **two objects for one cut**, in one undo
+  step: an `ELLIPSE` carrying the span it was cut to, and a `LINE` closing it.
+
+  `CadEllipse` gains that span (`startRad` / `sweepRad`, the pair DXF states in groups 41 and 42). A
+  full turn is every ellipse that existed before, so nothing closed moves, and the span is written to
+  `.gs` and DXF only when it is not one. It also pays off TASK-114's DEBT-1: a trimmed ELLIPSE read
+  from DXF was tessellated because there was nowhere to put its range, and is now kept as itself.
+
+  **This one outline does not come from a cut.** `Slice` does not build the pieces for it — it still
+  refuses with `SliceCutCrossesCurvedEnd` — so the outline is computed from the primitive's own
+  geometry. That is the single place sectioning does not inherit Slice's accepted set, decided with
+  the user against the alternative of teaching the cutter the same cut first; the cutter is the
+  follow-up, after which this reads back from the pieces like every other section.
+
+  A cut that runs off **both** ends is two arcs and two chords and keeps its refusal.
+
+  Acceptance added: such a cut draws an arc of the ellipse the cut would have made, with both ends on
+  the cap and on the wall, every point of the arc inside the solid, plus the chord joining those ends;
+  both objects arrive in one undo step and survive `.gs` and a DXF round trip with the span intact;
+  and the figures hold at survey coordinate magnitudes.
 
 ### REQ-336 — Start Screen Billboard (What's New)
 - Purpose: Users launching a new version do not know what changed unless they hunt for release notes.
@@ -8935,8 +9210,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a click on a flat face places the plane on that face's plane, with the face's outward normal,
     offset 0 and flip off;
   - at offset 0 **every vertex of the picked solid survives the clip**;
-  - a curved face, an edge, a vertex and a miss are each refused **by name**, and the command stays
-    open after every one of them;
+  - a curved face, an edge, a vertex and a miss each leave the command open — **superseded by the
+    2026-09-18 revision**, which makes each of them the first point of a section line instead of a
+    refusal (the command staying open is unchanged);
   - picking a second face re-aims the same plane and **resets the offset and flip**, which were
     measured from the face that is no longer in force;
   - `SECTIONCLIP`'s offset, `FLIP` and `OFF` all act on a face-defined plane;
@@ -8957,6 +9233,33 @@ capability that does not exist. They are recorded here rather than quietly dropp
   arrows**; they belong with the grips that move them.
   2026-09-11 — **(2) delivered by REQ-343**, which also moved the section line from the lowest edge
   to the plane's CENTRE, and gave the plane selection and handles. (1) and (3) still stand.
+
+  2026-09-18 — **a section plane can be placed on a section LINE, not only on a face**
+  (D-2026-09-18-b, TASK-273). Reported from the real app against AutoCAD: *"i have not selected a face
+  but have instead selected a different part, for this instance it is the mid point of this torus …
+  ours currently can only do sectionplanes off of a face of an object."* AutoCAD's own prompt asks for
+  both in one breath — "Select face or any point to locate section line", then "Specify through
+  point" — and a sphere or a torus has **no flat face at all**, so the face form cannot aim a plane at
+  one by any click.
+
+  `SECTIONPLANE` now offers both. A flat face still answers the command in one click and is unchanged.
+  Any other click — a curved face, an edge, a vertex, empty space — is a **point**, taken on the
+  geometry it hit or otherwise on the work plane, and asks for a **through point**. The plane then
+  stands square to the work plane through those two points: its normal is across the line, level with
+  the work plane. Points may also be typed, so the command is drivable without a mouse.
+
+  **The curved-face rule below is unchanged in substance:** a curved face's own frame is still never
+  used to aim the plane — its Z is the surface's axis, which would put the plane through the middle of
+  the solid at right angles to what was clicked. What changes is that clicking one is no longer a
+  refusal: it is a point on that surface. The refusals that remain are the ones that name no plane:
+  two points in the same place, and a line running square to the work plane (REQ-201).
+
+  Acceptance added:
+  - a flat face places the plane exactly as before;
+  - two points place a plane whose normal is across the line and level with the work plane, for a
+    sphere and a torus as well as a box;
+  - a click on a curved face, an edge or a vertex starts the line at that point on the geometry;
+  - the two refusals above leave any plane a previous run placed exactly where it was.
 
 ### REQ-343 — The section plane can be grabbed: slide, flip and resize by handle
 - Purpose: move the cut by dragging it, the way it is thought about — not by typing a distance along
@@ -9422,6 +9725,279 @@ capability that does not exist. They are recorded here rather than quietly dropp
   `Ellipse`/`Intersection` boundary edges) is carried alongside REQ-334's own increment 2, not
   before it, since inertia cannot be computed for a shape the centroid itself cannot yet integrate.
 
+### REQ-351 — The whole-object Modify commands apply to solids and pipe runs (GitHub issue #564 §4)
+
+- Purpose: issue #564 §4 — "solids are the last thing in the drawing you cannot move". REQ-322 and
+  REQ-332 gave MOVE, in-place ROTATE and SCALE, and D-2026-09-07-c gave Rectangular ARRAY a solid;
+  COPY, MIRROR, Polar ARRAY and ROTATE Copy still refused a solid or skipped it, and **every** Modify
+  command left a pipe run behind without saying so (a REQ-201 violation).
+- Priority: must
+- Type: functional
+- Depends on: REQ-313 / ADR-045 (the kernel), REQ-322, REQ-332, REQ-329 (3D / UCS modify), REQ-345
+  (pipe runs), REQ-201.
+- Decision: D-2026-09-28-f.
+- Statement:
+  1. **`brep::Mirror`** reflects a solid across a plane and returns a correctly oriented solid: every
+     frame is reflected and made right-handed again, every loop is reversed, a NURBS patch's control
+     net is reflected and its U direction reversed, and the recipe is kept (every primitive is
+     symmetric about its own frame's XZ plane; a polysolid path negates y, sweep and justification).
+     A normal that is not a unit vector is refused by name.
+  2. **COPY, MIRROR, ROTATE Copy and both ARRAY forms copy a selected solid**, through the kernel
+     (`Translate` / `Rotate` / `Mirror`), and the copy carries the source's attributes
+     (`DuplicatedEntityAttrs`). MIRROR's erase-source removes the solid it mirrored.
+  3. **Every whole-object Modify command applies to a pipe run** — MOVE, COPY, ROTATE (plan and
+     tilted, in place and Copy), SCALE, MIRROR, both ARRAY forms, and the 3DMOVE / 3DROTATE /
+     3DSCALE gizmos, which call the same functions. A transform maps the run's path vertices; the
+     swept pipe is re-derived from the path. SCALE scales the route in 3D about the base point and
+     **never the nominal size or the wall** (D-2026-09-28-f). A copied run carries its attributes
+     and joins no piping network.
+  4. **Scale stays uniform.** Every SCALE takes one factor, so non-uniform scale cannot be asked for;
+     it is out of scope and would be its own requirement (REQ-332 item 7's reason still holds).
+  5. **STRETCH still refuses a solid, and now refuses a pipe run, by name**: STRETCH moves part of an
+     object, and no kernel operation moves part of a solid.
+  6. One undo step per operation, a mixed selection included.
+- Acceptance:
+  - a mirrored box, wedge, pyramid, cylinder, cone, sphere, torus, bored box (an inward face) and
+    NURBS loft each keep their volume and area to a relative 1e-9, every frame is right-handed and
+    orthonormal, every vertex is the reflected point, and mirroring twice restores the original;
+  - a mirrored solid validates and takes part in a Boolean UNION with the expected volume;
+  - a mirrored wedge, pyramid and polysolid rebuilt from their kept recipe reproduce the mirrored
+    corners;
+  - COPY, MIRROR (with and without erase-source), ROTATE Copy and Polar ARRAY each produce solids of
+    the source's volume and topology at the expected bounds, with no "excluded" line, and a mixed
+    selection is one undo;
+  - a pipe run is moved (in 3D), rotated, scaled (route doubled, size and wall unchanged), mirrored
+    (copy carries the layer, joins no network), copied with a solid in one undo, polar-arrayed, and
+    mirrored with erase-source; STRETCH refuses it by name and leaves it untouched;
+  - every refusal has a sentence a user can read (REQ-201).
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`, `src/util/nurbs.{hpp,cpp}`), Commands
+  (`src/commands/CadCommands.{hpp,cpp}`)
+- Status: accepted (2026-09-28) — D-2026-09-28-f, TASK-284.
+- Revisions: 2026-09-28 — proposed and accepted.
+
+### REQ-352 — Solids and pipe runs take layer and colour edits (GitHub issue #564 §6)
+
+- Purpose: issue #564 §6 — a solid is an entity like any other for layer and colour. Creation,
+  ByLayer resolution, layer Off / Freeze and persistence already worked, but the Properties panel's
+  layer and colour edits skipped solids and pipe runs without a word (REQ-201), a pipe run's
+  already-built pipe kept drawing in its old colour, and no layer or colour edit could be undone
+  for any entity type.
+- Priority: must
+- Type: functional
+- Depends on: REQ-313 / ADR-045 (solids), REQ-345 (pipe runs), REQ-201.
+- Decision: D-2026-09-28-g, D-2026-09-28-h.
+- Statement:
+  1. **The Properties panel shows and edits `Layer` and `Color` for a solid and a pipe run**,
+     alone or in a mixed selection with other entities, through one command-layer edit
+     (`CadApplyLayerToSelection` / `CadApplyColorToSelection`) covering every entity type that
+     carries attributes. A typed new layer name joins the layer table, whichever entity type
+     carries it.
+  2. **Every layer or colour edit is one undo step**, pushed only when something actually changes.
+  3. **The ribbon Layers combo follows AutoCAD's rule**: with objects selected it shows their
+     layer ("(varies)" when they differ) and a pick moves them to the chosen layer, leaving the
+     current layer alone; with nothing selected it sets the current layer, as before.
+  4. **The display follows the edit**: a pipe run's pipe solids take the run's new attributes, and
+     a block reference's (a pipe fitting's) world solids are re-derived when its layer or colour
+     changes.
+  5. **A block's layer-0 content follows its insert** (D-2026-09-28-h): it takes the insert's
+     layer (so the insert's layer Off / Freeze hides it) and a ByLayer colour / linetype on it
+     takes the insert's own — recolouring a pipe fitting recolours its body. ByBlock content
+     takes the insert's value as before; content on its own layer keeps its layer and ByLayer.
+  6. **Out of scope** (D-2026-09-28-g): `CHPROP`, `MATCHPROP`, `LAYMCUR` and a ribbon colour
+     dropdown do not exist for any entity type and are GitHub issue #575; layer **Lock** is
+     enforced for no entity type and stays REQ-102's (a solid behaves as a 2D entity does);
+     linetype / lineweight on a shaded body and materials, per the issue. DWG / DXF cannot carry a
+     GoSurvey solid at all (an ACIS body — export skips it with a stated count), so there is no
+     exported solid to write a layer on; the drawing's own save (ADR-044 trailer) keeps both.
+- Acceptance:
+  - a solid's colour edit changes the colour the viewport is handed, and undo / redo restore it;
+  - a ByLayer solid moved onto a layer draws in that layer's colour and follows a change to it;
+  - a solid and a pipe run on a layer turned Off or Frozen are not drawn, and reappear on thaw;
+  - a pipe run's colour edit reaches its already-built pipe solids;
+  - a solid, a pipe run and a line take one layer in one action and one undo step;
+  - recolouring a block whose solid is layer-0 / ByLayer changes the drawn colour; moving it to a
+    layer shows that layer's colour and its Off hides the solid;
+  - a new layer name given to a solid alone joins the layer table and can be turned off;
+  - an edit that changes nothing pushes no undo step;
+  - the ribbon combo moves a selection without changing the current layer, reports how many
+    objects moved, and sets the current layer when nothing is selected;
+  - a solid's and a pipe run's layer and colour survive a save and reload.
+- Owner-layer: Commands (`src/commands/CadCommands.{hpp,cpp}`), UI (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-09-28) — D-2026-09-28-g, D-2026-09-28-h, TASK-285.
+- Revisions: 2026-09-28 — proposed and accepted. 2026-09-28 — item 5 added after the user's GUI test (D-2026-09-28-h).
+
+### REQ-353 — Pipe colour by nominal size, with a built-in palette (GitHub issue #564 §7)
+
+- Purpose: issue #564 §7 — a piping drawing is read by size, but every pipe run was the same colour,
+  and the NPS table carried only 13 of the sizes the issue asks for.
+- Priority: must
+- Type: functional
+- Depends on: REQ-345 (pipe runs), REQ-352 (solid / pipe layer and colour; D-2026-09-28-h: a
+  block's layer-0 content follows its insert).
+- Decision: D-2026-09-28-i; issue #564 Q4 (reducer = the run's own size) and Q5 (palette built in,
+  one table).
+- Statement:
+  1. **`kCadPipeNpsTable` carries 21 sizes** — the 13 it had plus 3-1/2, 5, 14, 16, 18, 20, 22 and 24
+     — each with its OD and schedule-40 wall (ASME B36.10M). The issue says "20 sizes"; its own two
+     lists name 21, and the lists govern. **22in has no schedule 40** in B36.10M, so its row carries
+     the standard-weight (STD) wall, 0.375in (D-2026-09-28-i).
+  2. **The same table carries each size's default colour** (the issue's palette, `#RRGGBB`), so a
+     size and its colour are one row and cannot drift apart.
+  3. **A new pipe run is stamped with its size's colour**, on the current layer. It is an ordinary
+     entity colour from then on: a Properties edit, including `ByLayer`, wins and is saved.
+  4. **A fitting on a run takes that run's layer and colour** — PIPERUN's auto elbows and tees,
+     PIPEFIT's splice, and a part INSERT's connector snap fits onto a run's END (an end flange, a
+     cap) — so a line reads as one colour end to end and its layer hides its fittings with it
+     (D-2026-09-28-i). A reducer therefore reads as the run it was spliced into (Q4). A part placed
+     off any run, or snapped to a bare line's end, is an ordinary block INSERT.
+  5. **A split keeps the line**: the far piece of a PIPEFIT or PIPESPLIT keeps the run's layer and
+     colour, an override included.
+  6. **Out of scope**: the Pipe Fittings palette (REQ-350, not yet on `beta` — branch
+     `feat/pipe-fitting-palette`), whose on-run splice must hand the run's attributes to
+     `CadBlockPlaceInsertNoUndo` the same way when it lands; runs already in a drawing are
+     not recoloured on open (the palette applies at creation); a user-editable palette (Q5);
+     library parts for the new sizes (PIPERUN draws smooth bends when the catalog has no part, as
+     for any size).
+- Acceptance:
+  - the table carries all 21 sizes with the stated OD and wall, and 21 distinct colours;
+  - PIPERUN accepts a new size (22in offers the 0.375in wall) and its refusal lists every size;
+  - a 4in run is stamped and displayed `#2D6CDF` and a 2in run beside it `#2ECC40`, with no user
+    action;
+  - an auto-inserted elbow takes its run's colour and layer;
+  - a spliced valve and a spliced reducer take the run's layer and override colour, and so does
+    the far piece;
+  - a flange connector-snapped onto a run's end takes the run's layer and colour; one snapped onto a
+    bare line's end does not;
+  - PIPESPLIT keeps an override on both pieces;
+  - a colour override wins over the palette and survives a save and reload.
+- Owner-layer: Domain (`src/util/cadpiperun.hpp`), Commands (`src/commands/CadCommands.cpp`,
+  `src/commands/CadBlocks.{hpp,cpp}`)
+- Status: accepted (2026-09-28) — D-2026-09-28-i, TASK-286.
+- Revisions: 2026-09-28 — proposed and accepted.
+
+### REQ-354 — The dynamic input shows which mode it is in (GitHub issue #564 §5)
+
+- Purpose: issue #564 §5 — typing `@` or `<` into the point prompt's X box changed what was being
+  collected but not what the boxes said: a relative offset went into a box still labelled X, the
+  second box was silently ignored, `<` could not be parsed at all, and there was no Z box in a 3D
+  modelling space.
+- Priority: must
+- Type: functional
+- Depends on: REQ-024 (the dynamic-input field group), REQ-154 (typed points are read in the active
+  UCS), REQ-346 (PIPERUN's compass direct-distance entry).
+- Decision: D-2026-09-28-j; issue #564 Q3 (a Z box whenever the view is not plan to the current UCS).
+- Statement:
+  1. **The field group re-lays itself as the user types**, on the keystroke, for every point prompt
+     (one model, `dyninput::Group` in `src/commands/CadDynInput.*`, which the viewport draws and
+     the headless driver types into):
+
+     | Typed | Boxes |
+     |---|---|
+     | (nothing) | `X` `Y` (`Z`) — absolute |
+     | `@` | `@` `ΔX` `ΔY` (`ΔZ`) — relative to the prompt's base point |
+     | `<` after a distance | `Distance` `<` `Angle` — polar, from the frame origin |
+     | `@…<` | `@` `Distance` `<` `Angle` — polar, relative |
+
+     The mode character is consumed into the labels (an `@` badge, the `<` between the pair) and
+     never left inside a number. A `,` moves on to the next box. A prompt that follows an anchor
+     (LINE / POLYLINE's second point and on, PIPERUN's next point) opens in the relative polar form,
+     as REQ-024 already required; there `@` switches to `ΔX` `ΔY`, and a comma after a number in the
+     Distance box switches to absolute `X` `Y` — the command line's own reading of `5,5`
+     (D-2026-09-28-j).
+  2. **Backspace in the box a mode character left the user in**, with nothing typed there, reverts to
+     the previous layout and keeps what was typed before the character.
+  3. **The submitted text is what the labels say**: `x,y[,z]`, `@dx,dy[,dz]`, or a polar pair
+     resolved to one of those (the command line has no polar grammar; the angle box is a bearing,
+     as REQ-024's pair already was). An untouched box commits the cursor's reading **in the frame a
+     typed point is read in** — the active UCS under a UCS (REQ-154), so the absolute boxes now read
+     UCS coordinates there. Nothing typed submits a blank line (D-2026-09-24-b). A keyword typed into
+     the first box (`C`, `U`, `END`, `2P`) is submitted as typed. An unreadable box is submitted as
+     typed so the command refuses it by name (REQ-201). At a prompt with no base point `@` still
+     re-lays the boxes and the command refuses the relative point by name, as it always has.
+  4. **A Z box** appears whenever the view is not plan to the current UCS (issue #564 Q3), in model
+     space. Typing a second comma in `Y` shows it for the rest of the prompt rather than dropping
+     the value. An untouched Z is not sent (the command's work plane is the cursor's reading).
+  5. **Every point prompt reads a typed Z** (D-2026-09-28-j): the shared parser
+     (`ParseStoragePointZ`) accepts `x,y,z` and `@dx,dy,dz` — dz from the caller's base Z (LINE /
+     POLYLINE's anchor) or the work plane — publishes it through `resolvedPointZ`, lets it beat a
+     leftover mouse snap, and refuses four or more numbers. A typed Z does not carry into the next
+     point.
+  6. **PIPERUN** has the point field group at its start and next points, takes `@dx,dy[,dz]` from its
+     last vertex, reads an absolute `x,y,z` wholly in the active UCS (the frame its Z box shows; the
+     solid commands keep their world-elevation Z), and a distance typed with the angle left live goes to its compass direct-distance
+     entry (REQ-346), which owns the direction.
+  7. **Unchanged**: REQ-154's UCS directional prompts keep their own distance / angle pair; live
+     tracking, type-to-start, lock-on-edit, Tab between boxes, Enter / click commit (REQ-024).
+- Acceptance:
+  - in LINE, MOVE, COPY and PIPERUN, typing `@` shows `ΔX` `ΔY` before the next character, and `<`
+    shows `Distance < Angle`;
+  - the committed point matches the labels in all four modes (headless transcripts
+    `issue564-dyninput-modes`, `issue564-dyninput-modify-z`; GUI test `req354-dyninput-modes`);
+  - every box on screen is read: `5,5` in LINE's Distance box is the point 5,5, and a Z box appears
+    in an orbited view and is honoured at LINE;
+  - Backspace on `@` or `<` reverts and keeps the typed value;
+  - a keyword in the first box still answers the prompt; `x,y,z,w` is refused.
+- Owner-layer: Commands (`src/commands/CadDynInput.{hpp,cpp}`, `src/commands/CadCommands.cpp`),
+  UI (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-09-28) — D-2026-09-28-j, TASK-287.
+- Revisions: 2026-09-28 — proposed and accepted.
+
+### REQ-355 — A Modeling ribbon tab, with a pipe-size dropdown beside PIPERUN (GitHub issue #564 §8)
+
+- Purpose: issue #564 §8 — none of the 3D modelling or piping commands had a ribbon home; they were
+  command-line only.
+- Priority: must
+- Type: functional (UI)
+- Depends on: REQ-302 (the ribbon and its layout engine, ADR-053), REQ-313/314/315/317 (the solid
+  commands), REQ-323/331 (solid-edge FILLET / CHAMFER), REQ-060 / D-2026-09-28-a (3DMOVE /
+  3DROTATE / 3DSCALE), REQ-351 (MOVE / COPY / ARRAY on solids), REQ-345 (piping), REQ-353 (the
+  21-size NPS table).
+- Decision: D-2026-09-28-k.
+- Statement:
+  1. **A permanent `Modeling` tab** sits in the ribbon strip after `Survey`. It is a saved-tab slot
+     like the others (the contextual tabs renumber behind it; none of them is ever saved).
+  2. **Its sections**: Primitives (BOX, WEDGE, CONE, CYLINDER, SPHERE, TORUS, PYRAMID, POLYSOLID),
+     Create (EXTRUDE, REVOLVE, SWEEP, LOFT), Booleans (UNION, SUBTRACT, INTERSECT, SLICE), Edit
+     (FILLET, CHAMFER, SECTION, SECTIONPLANE), 3D Modify (3DMOVE, 3DROTATE, 3DSCALE, MOVE, COPY,
+     ARRAY) and Piping (PIPERUN with its size dropdown, PIPEFIT, PIPESPLIT, PIPEJOIN).
+  3. **A button runs its command exactly as typed**: it cancels any running command (a ribbon click
+     starts a new command, as in AutoCAD) and submits the command's name through the command line.
+     One table holds each button's command text, and the button and its test both read it. Every
+     listed command exists, so no button is a not-implemented placeholder.
+  4. **PIPEFIT's button opens a part-type menu** (the command requires a part type), and each item
+     submits `PIPEFIT <part type>`.
+  5. **The pipe-size dropdown lists all 21 NPS sizes** of REQ-353 and is bound to
+     `AppCommandState::pipeRunNominalSize` — the size PIPERUN remembers — so the dropdown and the
+     command-line prompt are one setting and each shows a change made in the other. It is disabled
+     while a run is being drawn (the size is already fixed for that run).
+  6. **The ribbon's PIPERUN asks neither question**: it starts at the dropdown's size with that
+     size's standard wall (schedule 40; STD for 22in) and goes straight to "start point"
+     (D-2026-09-28-k). Choosing a size in the dropdown is typing that size alone at the prompt: it
+     clears the pressure class, as a bare typed size does. **Typed PIPERUN is unchanged**:
+     it still asks the size (offering the current one, Enter to keep) and then the wall.
+  7. **The remembered size starts at 4in** in a new session instead of empty, so the dropdown always
+     shows a size and the button always works in one click; typed PIPERUN therefore offers `[4in]`
+     on its first use (D-2026-09-28-k).
+  8. The tab's content is model-space only, as the Survey tab's is; in paper space it is empty.
+  9. **Out of scope**: PRESSPULL, SECTIONCLIP and the other solid / piping commands the section does
+     not list; new icon artwork (the library icon set already has one for every button).
+- Acceptance:
+  - the strip shows `Modeling` with the six sections;
+  - every button's command text is a command the command line accepts, and running it from the
+    ribbon enters the same command state as typing it (a running command is cancelled first);
+  - the dropdown offers all 21 sizes; choosing one changes the size the next PIPERUN builds;
+  - the ribbon's PIPERUN goes straight to the start-point prompt at the dropdown's size and its
+    standard wall; typed PIPERUN still shows the current size and accepts a new one;
+  - a size typed at the command line shows in the dropdown, and vice versa;
+  - the ribbon is exercised in a Debug build (REQ-302 gotchas: deferred section closures capture by
+    value; `RibbonNyiButton` asserts a label).
+- Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/ModelingRibbon.hpp`), Commands
+  (`src/commands/CadCommands.{hpp,cpp}`)
+- Status: accepted (2026-09-28) — D-2026-09-28-k, TASK-288.
+- Revisions: 2026-09-28 — proposed and accepted. Same day, from code review on PR #579: the
+  dropdown clears the pressure class (it had kept it, so a 6in pick after a 2in CS300 run built
+  6in CS300 — a class never chosen at that size, and not what typing 6in does).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -9863,6 +10439,37 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Build/Platform
 - Status: accepted (2026-09-06)
 - Revisions: 2026-09-06 — initial.
+
+  2026-09-22 — **a polyline that lies in ONE plane exports as one `LWPOLYLINE` in that plane**
+  (D-2026-09-22-a, ADR-053 amendment (f), TASK-274, GitHub issue #521). Increment 4 above splits a
+  polyline with a tilted curved segment into flat runs plus one ARC each, because `LWPOLYLINE` carries
+  one elevation and one extrusion for the whole entity. That ceiling is real, but it only bites when
+  the segments disagree about their plane. When the whole polyline — vertices and every curved
+  segment — lies in a single plane, that one extrusion is all it needs: the entity is written in its
+  own OCS (group 210/220/230 = the plane normal, group 38 and the vertices in that plane), bulges and
+  closure intact, and it round-trips as itself.
+
+  What made this urgent is that the same writer **flattened** every non-level polyline: group 38 took
+  the first vertex's Z, the extrusion stayed (0, 0, 1) and the vertices were the XY projection, so a
+  100 × 50 vertical `SECTION` of a box exported as a zero-area sliver 100 long. `SECTION` did not
+  exist when that was recorded as debt (TASK-034); it now makes non-level outlines routinely.
+
+  So, on export:
+  - level polyline → unchanged, byte-identical;
+  - planar but not level → one `LWPOLYLINE` in its own OCS;
+  - segments in different planes → increment 4's split, unchanged;
+  - not planar at all → a 3D `POLYLINE` / `VERTEX` pair, the only DXF entity with a Z per vertex.
+
+  On import, group 210 on an `LWPOLYLINE` is read and its vertices mapped back through the same
+  Arbitrary Axis frame REQ-312 uses, and the plane is stored per vertex so a curved segment keeps it.
+
+  Acceptance added:
+  - a vertical and a tilted `SECTION` outline of a box survive export and re-import, every vertex in
+    all three axes;
+  - a sphere's vertical section — a circle standing on edge, whose two vertices are level while its
+    arcs are not — exports as one `LWPOLYLINE` with group 210, not as ARCs, and comes back as one
+    closed polyline with its bulges;
+  - a level polyline exports exactly as before.
 
 ### REQ-326 — 3D Object Snap: AutoCAD-parity solid-geometry snapping, independent of 2D Object Snap (issue #395)
 - Purpose: let a user snap the cursor to B-rep solid geometry (vertices, edges, faces, and — for

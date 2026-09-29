@@ -335,6 +335,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
   src/commands/CadCommands_Ucs.cpp
+  src/commands/CadDynInput.cpp
   src/commands/CadCommands_Bench.cpp
   src/commands/CadBlocks.cpp
   src/commands/CadLinetype.cpp
@@ -954,6 +955,9 @@ if(GOSURVEY_BUILD_TESTS)
     # subject is the point/direction split: a frame's origin and its axes transform by different
     # rules, and getting that wrong still produces a solid Validate accepts.
     tests/RotateSolidTests.cpp
+    # REQ-351 / D-2026-09-28-f — mirror. Its own file because its subject is ORIENTATION: a naive
+    # reflection leaves left-handed frames and inside-out loops, and these cases pin the repair.
+    tests/MirrorSolidTests.cpp
     # REQ-320 / ADR-051 — the ACIS SAT parser (GitHub issue #299). Pure, so a hand-authored SAT
     # fixture pins the supported plane/cylinder/cone shapes and every refusal without a DWG file.
     tests/AcisSatParserTests.cpp
@@ -1236,6 +1240,10 @@ if(GOSURVEY_BUILD_TESTS)
     # and the two negatives (a click that misses every handle, an empty selection). Needs
     # gosurvey_domain for SubmitGizmoClick / ApplyTranslationToSelection.
     tests/GizmoTranslateTests.cpp
+    # GitHub issue #564 s1: orbited ZOOM EXTENTS, driven through ProcessPendingViewportZoom (domain).
+    tests/ZoomExtents3dTests.cpp
+    # GitHub issue #564 s2: depth-ordered hover/click resolution (ResolveViewportPick, domain).
+    tests/ViewportPickDepthTests.cpp
     # REQ-060 rotate/scale handles (TASK-232, slice 4c). Its own file because its subject is the
     # AGREEMENT: a gizmo drag and the function the typed command calls, compared coordinate for
     # coordinate — which is the acceptance itself rather than a proxy for it.
@@ -1254,6 +1262,15 @@ if(GOSURVEY_BUILD_TESTS)
     # but they live in CadBlocks.cpp beside the library scan they filter, so this rides with
     # GoSurveySnapTests (gosurvey_domain) for the same reason CadPipeRunCommandTests above does.
     tests/CadPipePaletteTests.cpp
+    # REQ-351 / D-2026-09-28-f — MOVE / ROTATE / SCALE / MIRROR / COPY / ARRAY on a pipe run.
+    tests/ModifyPipeRunTests.cpp
+    # REQ-352 / D-2026-09-28-g — layer and colour edits on solids and pipe runs.
+    tests/SolidLayerColorTests.cpp
+    # REQ-353 / D-2026-09-28-i — pipe colour by nominal size (issue #564 section 7).
+    tests/PipeSizePaletteTests.cpp
+    # REQ-354 / D-2026-09-28-j — the dynamic input shows its mode (issue #564 section 5).
+    tests/DynInputTests.cpp
+    tests/ModelingRibbonTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp

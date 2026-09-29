@@ -460,14 +460,31 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
   const double dmb = dma * static_cast<double>(el.ratio);
   constexpr double kTwoPi = 6.283185307179586;
   std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(n) + 1u) * 2u));
+  // A tilted ellipse (GitHub #531) leaves the XY plane, so no single elevation describes it: each
+  // sample carries its own Z, exactly as the tilted-arc branch above does, and is taken through
+  // `EllipseWorldPointAt` so the drawn curve is the curve the snap picks and the DXF writer emits.
+  // An elliptical ARC walks only the span it was cut to, and is not closed; a full ellipse walks the
+  // whole turn and is (GitHub #520 follow-up).
+  const bool closedTurn = EllipseIsFullTurn(el);
+  if (!EllipseIsFlat(el)) {
+    std::vector<float> zs(static_cast<size_t>(n) + 1u);
+    for (int i = 0; i <= n; ++i) {
+      const ray3d::Vec3 p = EllipseWorldPointAt(el, EllipseSpanAngleAt(el, static_cast<double>(i) / n));
+      xy[static_cast<size_t>(i * 2)] = static_cast<float>(p.x - viewAnchorX);
+      xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(p.y - viewAnchorY);
+      zs[static_cast<size_t>(i)] = static_cast<float>(p.z);
+    }
+    CadTessellateLinetypeChainVc(xy.data(), n + 1, z, closedTurn, lt, dashPatScale, rgba, &out, zs.data());
+    return;
+  }
   for (int i = 0; i <= n; ++i) {
-    const double u = kTwoPi * static_cast<double>(i) / static_cast<double>(n);
+    const double u = EllipseSpanAngleAt(el, static_cast<double>(i) / n);
     const double c0 = std::cos(u);
     const double s0 = std::sin(u);
     xy[static_cast<size_t>(i * 2)] = static_cast<float>(rcx + ux * (dma * c0) + px * (dmb * s0));
     xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(rcy + uy * (dma * c0) + py * (dmb * s0));
   }
-  CadTessellateLinetypeChainVc(xy.data(), n + 1, z, true, lt, dashPatScale, rgba, &out);
+  CadTessellateLinetypeChainVc(xy.data(), n + 1, z, closedTurn, lt, dashPatScale, rgba, &out);
 }
 
 void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
@@ -3350,17 +3367,29 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         // handle's red: it is not X, and a widget that said it was would be lying about the one
         // thing it exists to communicate (issue #148 acceptance 4).
         drawGizmo(gizmoOverlay->axis[a], kSubFaceHoverR, kSubFaceHoverG, kSubFaceHoverB, kLwGizmo);
-      else if (gizmoOverlay->soloOp == 1)
-        // The rotate ring turns about the UCS Z, so it wears Z's blue — the axis colour it actually
-        // belongs to, rather than the red `axis[0]` would otherwise imply (TASK-232).
-        drawGizmo(gizmoOverlay->axis[a], kAxisRgb[2][0], kAxisRgb[2][1], kAxisRgb[2][2], kLwGizmo);
-      else if (gizmoOverlay->soloOp == 2)
-        // The uniform-scale handle belongs to NO axis — its direction is only somewhere to drag —
-        // so it takes an off-axis amber rather than borrowing a colour that would name one.
-        drawGizmo(gizmoOverlay->axis[a], 0.95f, 0.7f, 0.25f, kLwGizmo);
+      // Rotate rings and the three scale handles take their axis's own colour, like the move arrows
+      // (D-2026-09-28-b / -c): ring or handle `a` lies on UCS axis `a`.
       else
         drawGizmo(gizmoOverlay->axis[a], kAxisRgb[a][0], kAxisRgb[a][1], kAxisRgb[a][2], kLwGizmo);
     }
+    // The corner marks between axes (D-2026-09-28-c): two segments each, the first in its plane's
+    // first axis colour and the second in its second's — XY is red/green, YZ green/blue, ZX blue/red.
+    std::vector<float> half;
+    for (int pl = 0; pl < 3; ++pl) {
+      const std::vector<float>& segs = gizmoOverlay->plane[pl];
+      if (segs.size() != 12)
+        continue;
+      for (int s = 0; s < 2; ++s) {
+        const int ax = (pl + s) % 3;
+        half.assign(segs.begin() + s * 6, segs.begin() + s * 6 + 6);
+        if (gizmoOverlay->planeHot[pl])
+          drawGizmo(half, 1.f, 0.92f, 0.15f, kLwGizmo + 1.f);
+        else
+          drawGizmo(half, kAxisRgb[ax][0], kAxisRgb[ax][1], kAxisRgb[ax][2], kLwGizmo);
+      }
+    }
+    // The base-point circle, in a quiet light grey so it reads as a marker, not a handle.
+    drawGizmo(gizmoOverlay->center, 0.85f, 0.85f, 0.88f, kLwMain);
     glLineWidth(kLwMain);
   }
   }  // end model-space geometry scope (see the note at its opening brace)

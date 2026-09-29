@@ -686,6 +686,19 @@ void CadEllipseToJson(const CadEllipse& e, json& o) {
   o["ratio"] = e.ratio;
   if (e.z != 0.f)  // additive, omitted when flat — see CadArcToJson
     o["z"] = e.z;
+  // Additive and omitted when flat, exactly as a tilted arc's is (REQ-312 / GitHub #531): a drawing
+  // with no tilted ellipse re-saves byte-identically, and a pre-#531 file loads with world +Z.
+  if (!IsFlatNormal(e.nx, e.ny, e.nz)) {
+    o["nx"] = e.nx;
+    o["ny"] = e.ny;
+    o["nz"] = e.nz;
+  }
+  // The drawn span, additive and omitted for a closed ellipse — which is every ellipse that existed
+  // before an elliptical ARC could (GitHub #520 follow-up), so nothing closed re-saves differently.
+  if (!EllipseIsFullTurn(e)) {
+    o["startRad"] = e.startRad;
+    o["sweepRad"] = e.sweepRad;
+  }
 }
 
 CadEllipse CadEllipseFromJson(const json& o) {
@@ -696,6 +709,11 @@ CadEllipse CadEllipseFromJson(const json& o) {
   e.majVy = o.value("majVy", e.majVy);
   e.ratio = o.value("ratio", e.ratio);
   e.z     = o.value("z",     e.z);  // absent → 0: legacy ellipses load flat (REQ-057)
+  e.nx    = o.value("nx",    e.nx);  // absent → world +Z: legacy ellipses load flat (GitHub #531)
+  e.ny    = o.value("ny",    e.ny);
+  e.nz    = o.value("nz",    e.nz);
+  e.startRad = o.value("startRad", e.startRad);  // absent → a full turn (GitHub #520 follow-up)
+  e.sweepRad = o.value("sweepRad", e.sweepRad);
   return e;
 }
 
@@ -1194,6 +1212,19 @@ json BuildRoot(const AppCommandState& st) {
       if (b != 0.0f) { anyBulge = true; break; }
     if (anyBulge)
       doc["polylineVertsBulge"] = st.userPolylineVertsBulge;
+  }
+  // REQ-325 / ADR-053: the plane each curved segment turns in. Additive and guarded exactly as the
+  // bulge array above is — written only when something is actually tilted, so a drawing with nothing
+  // tilted re-saves byte-identically. Without it a section on a vertical or tilted plane came back
+  // from its own file lying flat, and exported flat (GitHub #521): the store existed but no file
+  // carried it.
+  {
+    bool anyTilted = false;
+    for (std::size_t i = 0; i + 2 < st.userPolylineVertsNormal.size(); i += 3)
+      if (!IsFlatNormal(st.userPolylineVertsNormal[i], st.userPolylineVertsNormal[i + 1],
+                        st.userPolylineVertsNormal[i + 2])) { anyTilted = true; break; }
+    if (anyTilted)
+      doc["polylineVertsNormal"] = st.userPolylineVertsNormal;
   }
   json polyClosed = json::array();
   for (uint8_t c : st.userPolylineClosed)
@@ -2504,6 +2535,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.userPolylineVertsBulge.push_back(v.get<float>());
   if (!st.userPolylineVertsBulge.empty())
     SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+  // REQ-325 / ADR-053, same guarded shape: a file without the key loads with the array EMPTY, which
+  // every reader treats as "every segment flat" (GitHub #521).
+  st.userPolylineVertsNormal.clear();
+  if (doc.contains("polylineVertsNormal"))
+    for (const auto& v : doc["polylineVertsNormal"])
+      st.userPolylineVertsNormal.push_back(v.get<float>());
+  if (!st.userPolylineVertsNormal.empty())
+    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
   st.userPolylineClosed.clear();
   for (const auto& v : doc["polylineClosed"])
     st.userPolylineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));

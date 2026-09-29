@@ -1730,11 +1730,13 @@ TEST_CASE("Slice refuses what it cannot do, by name", "[brep][req314]") {
                               brep::SliceKeep::Both, &a, &b, &why));
     REQUIRE(why == Problem::SliceCutCrossesCurvedEnd);
   }
-  SECTION("a sphere — every cut crosses its curved face (#518)") {
+  SECTION("a sphere cuts into two caps (#520)") {
     Solid sph;
     REQUIRE(brep::MakeSphere(World(), 5, &sph, &why));
-    REQUIRE_FALSE(brep::Slice(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
-    REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
+    REQUIRE(brep::Slice(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+    const double half = 2.0 / 3.0 * kPi * 125.0;
+    REQUIRE(brep::ComputeMassProperties(a).volume == Approx(half).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(b).volume == Approx(half).epsilon(1e-9));
   }
 }
 
@@ -6206,22 +6208,24 @@ TEST_CASE("An oblique cut of a cylinder is refused by name rather than approxima
 
 TEST_CASE("A section inherits Slice's accepted set, with Slice's own reason",
           "[brep][req335][req149][req201]") {
-  // A sphere is refused by Slice today, so it is refused here -- and by the SAME Problem, not a
-  // second reason invented alongside it. If Slice's accepted set grows, this grows with it.
+  // A torus cut at any angle but square to its axis is refused by Slice (a quartic curve, #520), so
+  // it is refused here -- and by the SAME Problem, not a second reason invented alongside it. If
+  // Slice's accepted set grows, this grows with it. (A sphere was this test's example until #520
+  // made every sphere cut a circle.)
   Problem why = Problem::Ok;
-  Solid sphere;
-  REQUIRE(brep::MakeSphere(World(), 15, &sphere, &why));
+  Solid torus;
+  REQUIRE(brep::MakeTorus(World(), 20, 5, &torus, &why));
+  const Vec3 tilted = ray3d::Normalize(Vec3{1, 0, 1});
 
   Solid a, b;
   Problem sliceWhy = Problem::Ok;
-  const bool sliced = brep::Slice(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b,
-                                  &sliceWhy);
+  const bool sliced = brep::Slice(torus, Vec3{0, 0, 0}, tilted, brep::SliceKeep::Both, &a, &b, &sliceWhy);
   REQUIRE_FALSE(sliced);  // the premise of this test
 
   ucs::Ucs plane{};
   brep::Path loop;
   Problem sectionWhy = Problem::Ok;
-  CHECK_FALSE(brep::SectionLoop(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &sectionWhy));
+  CHECK_FALSE(brep::SectionLoop(torus, Vec3{0, 0, 0}, tilted, &plane, &loop, &sectionWhy));
   CHECK(sectionWhy == sliceWhy);
 }
 
@@ -7817,10 +7821,15 @@ TEST_CASE("SECTION and SLICE name the limit a curved cut actually hit", "[brep][
     REQUIRE(brep::SectionLoop(cyl, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
   }
 
-  SECTION("a sphere says the cut crosses a curved face — not a cut direction (#518, #520)") {
-    Solid sph;
-    REQUIRE(brep::MakeSphere(World(), 30.0, &sph, &why));
-    REQUIRE_FALSE(brep::SectionLoop(sph, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+  SECTION("a drilled box says the cut crosses a curved face — not a cut direction (#518)") {
+    // A sphere was this case's example until #520 made every sphere cut a circle.
+    Solid box, bore;
+    REQUIRE(brep::MakeBox(World(), 40.0, 30.0, 20.0, &box, &why));
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -5.0), 5.0, 30.0, &bore, &why));
+    std::vector<Solid> drilled;
+    REQUIRE(brep::BooleanSubtract(box, bore, &drilled, &why));
+    REQUIRE(drilled.size() == 1);
+    REQUIRE_FALSE(brep::SectionLoop(drilled[0], Vec3{0, 0, 10}, Vec3{0, 0, 1}, &plane, &loop, &why));
     REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
   }
 
@@ -8477,4 +8486,818 @@ TEST_CASE("A pipe flange (big central bore + 4 bolt holes) tessellates crack-fre
   RequireWindingMatchesNormals(t);
   RequireMeshWatertight(t);
   REQUIRE(TessellatedVolume(t) == Approx(wantVolume).epsilon(1e-2));
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #520: a sphere sections as a circle, and a torus cut square to its axis as a ring.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct SectionCircle {
+  ucs::Point2D centre{};
+  double radius = 0.0;
+  double signedSweep = 0.0;  // +2pi for a circle wound CCW about the section normal, -2pi for a hole
+};
+
+/// The circle a two-arc closed \ref Path describes, in the section plane's own 2D coordinates.
+SectionCircle CircleOf(const brep::Path& p) {
+  REQUIRE(p.closed);
+  REQUIRE(p.segs.size() == 2);
+  REQUIRE(std::fabs(std::fabs(p.segs[0].sweep) - kPi) < 1e-9);
+  REQUIRE(std::fabs(std::fabs(p.segs[1].sweep) - kPi) < 1e-9);
+  const ucs::Point2D a = p.start;
+  const ucs::Point2D b = p.segs[0].end;
+  SectionCircle c;
+  c.centre = {0.5 * (a.x + b.x), 0.5 * (a.y + b.y)};
+  c.radius = 0.5 * std::hypot(b.x - a.x, b.y - a.y);
+  c.signedSweep = p.segs[0].sweep + p.segs[1].sweep;
+  return c;
+}
+
+} // namespace
+
+TEST_CASE("A sphere sections as a circle and slices into two caps", "[brep][issue520]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  Solid above, below;
+  const double R = 30.0;
+  Solid sphere;
+  REQUIRE(brep::MakeSphere(World(), R, &sphere, &why));
+
+  SECTION("through the centre: a circle of the sphere's own radius, and two hemispheres") {
+    REQUIRE(brep::SectionLoop(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    const SectionCircle c = CircleOf(loop);
+    REQUIRE(c.radius == Approx(R).epsilon(1e-12));
+    REQUIRE(std::hypot(c.centre.x, c.centre.y) == Approx(0.0).margin(1e-9));
+    REQUIRE(c.signedSweep == Approx(kTwoPiTest).epsilon(1e-12));  // an outer outline winds CCW
+
+    REQUIRE(brep::Slice(sphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    const double hemisphere = 2.0 / 3.0 * kPi * R * R * R;
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(hemisphere).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(hemisphere).epsilon(1e-9));
+    // Curved surface of a hemisphere (2 pi R^2) plus the flat disc (pi R^2).
+    REQUIRE(brep::ComputeMassProperties(above).surfaceArea == Approx(3.0 * kPi * R * R).epsilon(1e-9));
+    REQUIRE(MeshVolume(above, Vec3{}) == Approx(hemisphere).epsilon(1e-3));
+  }
+
+  SECTION("off centre: radius sqrt(R^2 - d^2), and the cap volume formula") {
+    const double d = 18.0;
+    REQUIRE(brep::SectionLoop(sphere, Vec3{0, 0, d}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(CircleOf(loop).radius == Approx(std::sqrt(R * R - d * d)).epsilon(1e-12));  // 24
+
+    REQUIRE(brep::Slice(sphere, Vec3{0, 0, d}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    const double h = R - d;  // cap height
+    const double cap = kPi * h * h * (3.0 * R - h) / 3.0;
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(cap).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(below).volume ==
+            Approx(4.0 / 3.0 * kPi * R * R * R - cap).epsilon(1e-9));
+  }
+
+  SECTION("a tilted plane is the same answer: the section is square to the plane, not to the world") {
+    const Vec3 n = ray3d::Normalize(Vec3{1, -2, 2});
+    const double d = 12.0;
+    REQUIRE(brep::SectionLoop(sphere, ray3d::Scale(n, d), n, &plane, &loop, &why));
+    REQUIRE(CircleOf(loop).radius == Approx(std::sqrt(R * R - d * d)).epsilon(1e-9));
+    REQUIRE(brep::Slice(sphere, ray3d::Scale(n, d), n, brep::SliceKeep::Both, &above, &below, &why));
+    const double h = R - d;
+    REQUIRE(brep::ComputeMassProperties(above).volume ==
+            Approx(kPi * h * h * (3.0 * R - h) / 3.0).epsilon(1e-9));
+  }
+
+  SECTION("a plane that misses the sphere, or touches it, says so") {
+    REQUIRE_FALSE(brep::SectionLoop(sphere, Vec3{0, 0, R}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+    REQUIRE_FALSE(brep::SectionLoop(sphere, Vec3{0, 0, 40}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+  }
+
+  SECTION("at survey magnitude on a tilted frame: the circle within 0.002 ft") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid far;
+    REQUIRE(brep::MakeSphere(base, R, &far, &why));
+    const double d = 10.0;
+    const Vec3 at = ucs::UcsToWorld(base, Vec3{0, 0, d});
+    REQUIRE(brep::SectionLoop(far, at, base.zAxis, &plane, &loop, &why));
+    const SectionCircle c = CircleOf(loop);
+    REQUIRE(c.radius == Approx(std::sqrt(R * R - d * d)).margin(0.002));
+    // The circle is centred on the foot of the perpendicular from the sphere's centre.
+    const Vec3 centreWorld = ucs::PlaneToWorld(plane, c.centre);
+    REQUIRE(ray3d::Length(ray3d::Sub(centreWorld, at)) <= 0.002);
+    REQUIRE(brep::ComputeMassProperties(far).volume == Approx(4.0 / 3.0 * kPi * R * R * R).epsilon(1e-9));
+  }
+}
+
+TEST_CASE("A torus cut square to its axis sections as a ring", "[brep][issue520]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  std::vector<brep::Path> loops;
+  Solid above, below;
+  const double R = 20.0, r = 5.0;
+  Solid torus;
+  REQUIRE(brep::MakeTorus(World(), R, r, &torus, &why));
+  const double whole = brep::ComputeMassProperties(torus).volume;
+  REQUIRE(whole == Approx(2.0 * kPi * kPi * R * r * r).epsilon(1e-9));
+
+  SECTION("through the centre: circles of R + r and R - r, the hole wound the other way") {
+    REQUIRE(brep::SectionOutlines(torus, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    const SectionCircle outer = CircleOf(loops[0]);
+    const SectionCircle hole = CircleOf(loops[1]);
+    REQUIRE(outer.radius == Approx(R + r).epsilon(1e-12));
+    REQUIRE(hole.radius == Approx(R - r).epsilon(1e-12));
+    REQUIRE(outer.signedSweep == Approx(kTwoPiTest).epsilon(1e-12));   // outer: counter-clockwise
+    REQUIRE(hole.signedSweep == Approx(-kTwoPiTest).epsilon(1e-12));   // hole: clockwise
+    REQUIRE(std::hypot(outer.centre.x, outer.centre.y) == Approx(0.0).margin(1e-9));
+    REQUIRE(std::hypot(hole.centre.x, hole.centre.y) == Approx(0.0).margin(1e-9));
+
+    // The single-outline entry point says which of the two ways there is more than one.
+    REQUIRE_FALSE(brep::SectionLoop(torus, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(why == Problem::SectionHasHole);
+
+    REQUIRE(brep::Slice(torus, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(above).volume == Approx(0.5 * whole).epsilon(1e-9));
+    REQUIRE(brep::ComputeMassProperties(below).volume == Approx(0.5 * whole).epsilon(1e-9));
+    REQUIRE(MeshVolume(above, Vec3{}) == Approx(0.5 * whole).epsilon(1e-2));
+  }
+
+  SECTION("off centre: R +/- sqrt(r^2 - d^2), and the pieces still add up") {
+    const double d = 3.0;
+    const double w = std::sqrt(r * r - d * d);  // 4
+    REQUIRE(brep::SectionOutlines(torus, Vec3{0, 0, d}, Vec3{0, 0, 1}, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    REQUIRE(CircleOf(loops[0]).radius == Approx(R + w).epsilon(1e-12));
+    REQUIRE(CircleOf(loops[1]).radius == Approx(R - w).epsilon(1e-12));
+
+    REQUIRE(brep::Slice(torus, Vec3{0, 0, d}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    const double va = brep::ComputeMassProperties(above).volume;
+    const double vb = brep::ComputeMassProperties(below).volume;
+    REQUIRE(va + vb == Approx(whole).epsilon(1e-9));
+    REQUIRE(va < vb);  // the plane is above the centre, so the upper piece is the smaller one
+  }
+
+  SECTION("every other torus cut says what kind of cut it is") {
+    // Not `Vec3{1, 0, 0}` any more: that plane contains the axis, and its section is two circles
+    // ([torusaxis]). What is left here is the genuinely quartic set — tilted, and parallel to the
+    // axis but beside it.
+    for (const Vec3& n : {ray3d::Normalize(Vec3{1, 0, 1}), ray3d::Normalize(Vec3{0, 1, 4})}) {
+      REQUIRE_FALSE(brep::Slice(torus, Vec3{0, 0, 0}, n, brep::SliceKeep::Both, &above, &below, &why));
+      INFO(brep::ProblemText(why));
+      REQUIRE(why == Problem::SliceCutTorusCurve);
+      REQUIRE_FALSE(brep::SectionOutlines(torus, Vec3{0, 0, 0}, n, &plane, &loops, &why));
+      REQUIRE(why == Problem::SliceCutTorusCurve);
+    }
+    // Parallel to the axis but beside it: the section is a quartic, not two circles.
+    REQUIRE_FALSE(brep::Slice(torus, Vec3{6, 0, 0}, Vec3{1, 0, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SliceCutTorusCurve);
+    REQUIRE(std::string(brep::ProblemText(Problem::SliceCutTorusCurve)).find("torus") != std::string::npos);
+  }
+
+  SECTION("a plane square to the axis but clear of the tube misses it") {
+    REQUIRE_FALSE(brep::Slice(torus, Vec3{0, 0, r}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+    REQUIRE_FALSE(brep::Slice(torus, Vec3{0, 0, 9}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SlicePlaneMissesSolid);
+  }
+
+  SECTION("at survey magnitude on a tilted frame: both circles within 0.002 ft") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid far;
+    REQUIRE(brep::MakeTorus(base, R, r, &far, &why));
+    REQUIRE(brep::SectionOutlines(far, base.origin, base.zAxis, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    REQUIRE(CircleOf(loops[0]).radius == Approx(R + r).margin(0.002));
+    REQUIRE(CircleOf(loops[1]).radius == Approx(R - r).margin(0.002));
+    for (const brep::Path& p : loops) {
+      const Vec3 centreWorld = ucs::PlaneToWorld(plane, CircleOf(p).centre);
+      REQUIRE(ray3d::Length(ray3d::Sub(centreWorld, base.origin)) <= 0.002);
+    }
+  }
+}
+
+TEST_CASE("A round recipe that does not describe its solid is not used to cut it", "[brep][issue520]") {
+  // The #526 rule, extended to the round primitives these builders rebuild from: a recipe whose
+  // primitive is a different shape must not place the cut. Found by the final review on #541.
+  Problem why = Problem::Ok;
+  Solid a, b;
+
+  Solid sphere;
+  REQUIRE(brep::MakeSphere(World(), 30.0, &sphere, &why));
+  Solid movedSphere = sphere;
+  movedSphere.recipe.frame.origin.x += 100.0;  // what a damaged .gs frame looks like
+  REQUIRE_FALSE(brep::Slice(movedSphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(why == Problem::SliceCutCrossesCurvedFace);  // refused, not cut 100 feet away
+
+  Solid torus;
+  REQUIRE(brep::MakeTorus(World(), 20.0, 5.0, &torus, &why));
+  Solid wrongTorus = torus;
+  wrongTorus.recipe.radius2 = 2.0;  // a tube the solid does not have
+  REQUIRE_FALSE(brep::Slice(wrongTorus, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(why == Problem::SliceCutCrossesCurvedFace);
+
+  // A torus whose tube is as wide as its ring has no ring-shaped cut at all.
+  Solid fat;
+  REQUIRE(brep::MakeTorus(World(), 6.0, 9.0, &fat, &why));
+  REQUIRE_FALSE(brep::ComputeMassProperties(fat).valid);  // self-intersecting: no measured shape to vet
+  REQUIRE_FALSE(brep::Slice(fat, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
+  REQUIRE(why == Problem::SliceCutTorusCurve);
+}
+
+TEST_CASE("SectionOutlines returns what SectionLoop returns when there is one outline",
+          "[brep][issue520]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs planeA, planeB;
+  brep::Path one;
+  std::vector<brep::Path> many;
+  Solid box;
+  REQUIRE(brep::MakeBox(World(), 30.0, 20.0, 12.0, &box, &why));
+  REQUIRE(brep::SectionLoop(box, Vec3{0, 0, 6}, Vec3{0, 0, 1}, &planeA, &one, &why));
+  REQUIRE(brep::SectionOutlines(box, Vec3{0, 0, 6}, Vec3{0, 0, 1}, &planeB, &many, &why));
+  REQUIRE(many.size() == 1);
+  REQUIRE(many[0].segs.size() == one.segs.size());
+  REQUIRE(many[0].start.x == Approx(one.start.x));
+  REQUIRE(many[0].start.y == Approx(one.start.y));
+  REQUIRE(PathArea(many[0]) == Approx(PathArea(one)));
+
+  // A refusal is the same refusal through both, and neither writes anything.
+  Solid sph;
+  REQUIRE(brep::MakeSphere(World(), 5.0, &sph, &why));
+  REQUIRE_FALSE(brep::SectionOutlines(sph, Vec3{0, 0, 8}, Vec3{0, 0, 1}, &planeB, &many, &why));
+  REQUIRE(why == Problem::SlicePlaneMissesSolid);
+  REQUIRE_FALSE(brep::SectionLoop(sph, Vec3{0, 0, 8}, Vec3{0, 0, 1}, &planeA, &one, &why));
+  REQUIRE(why == Problem::SlicePlaneMissesSolid);
+}
+
+// ---------------------------------------------------------------------------
+// Section coverage for the primitives that had no section test of their own — the WEDGE, the
+// PYRAMID and the POLYSOLID (2026-09-22 sweep of every 3D object, at the user's request).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A wedge sections to the rectangle and the triangle its own shape gives",
+          "[brep][req335][sectioncoverage]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  // Full height at x = -50, falling to zero at x = +50; 70 deep; 50 tall from z = 0.
+  Solid wedge;
+  REQUIRE(brep::MakeWedge(World(), 100.0, 70.0, 50.0, &wedge, &why));
+
+  SECTION("cut level at mid-height: a rectangle half as long, because the top slopes") {
+    REQUIRE(brep::SectionLoop(wedge, Vec3{0, 0, 25}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {{-50, -35, 25}, {0, -35, 25}, {0, 35, 25}, {-50, 35, 25}});
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(50.0 * 70.0).epsilon(1e-12));
+  }
+
+  SECTION("cut down its length: the right triangle that IS a wedge") {
+    REQUIRE(brep::SectionLoop(wedge, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop), {{-50, 0, 0}, {50, 0, 0}, {-50, 0, 50}});
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(0.5 * 100.0 * 50.0).epsilon(1e-12));
+  }
+
+  SECTION("cut across it: the full rectangle") {
+    REQUIRE(brep::SectionLoop(wedge, Vec3{-25, 0, 0}, Vec3{1, 0, 0}, &plane, &loop, &why));
+    // At x = -25 the sloping top is three quarters of the way up: 37.5.
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(70.0 * 37.5).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("A pyramid frustum sections to the square at that height", "[brep][req335][sectioncoverage]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  // Four sides, circumradius 30 at the base, 15 at the top, 50 tall. PYRAMID's corners sit on its
+  // frame's axes, so the square at any height is a diamond in world XY.
+  Solid pyr;
+  REQUIRE(brep::MakePyramid(World(), 4, 30.0, 15.0, 50.0, &pyr, &why));
+
+  SECTION("level at mid-height: circumradius 22.5, so the area is 2 R^2") {
+    REQUIRE(brep::SectionLoop(pyr, Vec3{0, 0, 25}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {{22.5, 0, 25}, {0, 22.5, 25}, {-22.5, 0, 25}, {0, -22.5, 25}});
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(2.0 * 22.5 * 22.5).epsilon(1e-12));
+  }
+
+  SECTION("level near the base and near the top: the sizes the taper gives") {
+    REQUIRE(brep::SectionLoop(pyr, Vec3{0, 0, 10}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    const double r10 = 30.0 + (15.0 - 30.0) * (10.0 / 50.0);  // 27
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(2.0 * r10 * r10).epsilon(1e-12));
+    REQUIRE(brep::SectionLoop(pyr, Vec3{0, 0, 40}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    const double r40 = 30.0 + (15.0 - 30.0) * (40.0 / 50.0);  // 18
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(2.0 * r40 * r40).epsilon(1e-12));
+  }
+
+  SECTION("cut down through two opposite corners: the trapezoid of its own profile") {
+    // The plane y = 0 passes through the corners at +X and -X, so the section is base 60, top 30,
+    // height 50 — the same trapezoid a CONE of those radii gives.
+    REQUIRE(brep::SectionLoop(pyr, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {{-30, 0, 0}, {30, 0, 0}, {15, 0, 50}, {-15, 0, 50}});
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(0.5 * (60.0 + 30.0) * 50.0).epsilon(1e-12));
+  }
+
+  SECTION("a pointed pyramid: the triangle") {
+    Solid tip;
+    REQUIRE(brep::MakePyramid(World(), 4, 30.0, 0.0, 50.0, &tip, &why));
+    REQUIRE(brep::SectionLoop(tip, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    RequireCorners(SectionCornersWorld(plane, loop), {{-30, 0, 0}, {30, 0, 0}, {0, 0, 50}});
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(0.5 * 60.0 * 50.0).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("A polysolid wall sections across and along its run", "[brep][req335][sectioncoverage]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+  // A straight wall: 10 long, 2 wide (centred on the path), 5 tall.
+  brep::Path run;
+  run.start = ucs::Point2D{0.0, 0.0};
+  run.segs.push_back(brep::PathSeg{ucs::Point2D{10.0, 0.0}, 0.0});
+  Solid wall;
+  REQUIRE(brep::MakePolysolid(World(), run, 2.0, 5.0, brep::Justify::Center, &wall, &why));
+
+  SECTION("across the wall: its 2 x 5 cross-section") {
+    REQUIRE(brep::SectionLoop(wall, Vec3{5, 0, 0}, Vec3{1, 0, 0}, &plane, &loop, &why));
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(2.0 * 5.0).epsilon(1e-12));
+  }
+
+  SECTION("level, half way up: the wall's plan footprint") {
+    REQUIRE(brep::SectionLoop(wall, Vec3{0, 0, 2.5}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(10.0 * 2.0).epsilon(1e-12));
+  }
+
+  SECTION("along the wall, down its middle: the elevation of the run") {
+    REQUIRE(brep::SectionLoop(wall, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(10.0 * 5.0).epsilon(1e-12));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #522: a section outline keeps only the corners the shape has.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A section through a UNION drops the vertices its internal face splits left",
+          "[brep][issue522]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+
+  // The issue's own pair: BOX 0,0,-25 100 70 50 union BOX 50,40,-25 50 50 50. MakeBox centres its
+  // frame in X and Y, so those are the boxes below.
+  Solid a, b;
+  REQUIRE(brep::MakeBox(PlaneAlong(World(), -25.0), 100.0, 70.0, 50.0, &a, &why));
+  REQUIRE(brep::MakeBox(At(50.0, 40.0, -25.0), 50.0, 50.0, 50.0, &b, &why));
+  std::vector<Solid> joined;
+  REQUIRE(brep::BooleanUnion(a, b, &joined, &why));
+  REQUIRE(joined.size() == 1);
+
+  SECTION("cut level at z = 0: eight corners, and the area unchanged") {
+    REQUIRE(brep::SectionLoop(joined[0], Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(loop.segs.size() == 8);
+    // 7000 + 2500 - 500 overlap, the issue's own arithmetic.
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(9000.0).epsilon(1e-12));
+    // The issue's own list, corner for corner.
+    RequireCorners(SectionCornersWorld(plane, loop),
+                   {{-50, -35, 0}, {50, -35, 0}, {50, 15, 0}, {75, 15, 0},
+                    {75, 65, 0}, {25, 65, 0}, {25, 35, 0}, {-50, 35, 0}});
+  }
+
+  SECTION("no three consecutive corners are in a line") {
+    REQUIRE(brep::SectionLoop(joined[0], Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    const std::vector<Vec3> c = SectionCornersWorld(plane, loop);
+    const std::size_t n = c.size();
+    for (std::size_t i = 0; i < n; ++i) {
+      const Vec3& p0 = c[(i + n - 1) % n];
+      const Vec3& p1 = c[i];
+      const Vec3& p2 = c[(i + 1) % n];
+      const Vec3 u = ray3d::Sub(p1, p0);
+      const Vec3 v = ray3d::Sub(p2, p1);
+      INFO("corner " << i << " at (" << p1.x << ", " << p1.y << ")");
+      REQUIRE(ray3d::Length(ray3d::Cross(u, v)) > 1e-6);
+    }
+  }
+
+  SECTION("a 45 degree cut through the same union: still only its real corners") {
+    const Vec3 n = ray3d::Normalize(Vec3{0, -1, 1});
+    REQUIRE(brep::SectionLoop(joined[0], Vec3{0, 0, 0}, n, &plane, &loop, &why));
+    const std::vector<Vec3> c = SectionCornersWorld(plane, loop);
+    for (std::size_t i = 0; i < c.size(); ++i) {
+      const Vec3 u = ray3d::Sub(c[i], c[(i + c.size() - 1) % c.size()]);
+      const Vec3 v = ray3d::Sub(c[(i + 1) % c.size()], c[i]);
+      INFO("corner " << i);
+      REQUIRE(ray3d::Length(ray3d::Cross(u, v)) > 1e-6);
+    }
+  }
+
+  SECTION("a single box still sections to four") {
+    REQUIRE(brep::SectionLoop(a, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(loop.segs.size() == 4);
+    REQUIRE(std::fabs(PathArea(loop)) == Approx(7000.0).epsilon(1e-12));
+  }
+}
+
+TEST_CASE("An outline whose corners are all real keeps every one", "[brep][issue522]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::Path loop;
+
+  SECTION("a 6-sided pyramid section keeps its six corners") {
+    Solid hex;
+    REQUIRE(brep::MakePyramid(World(), 6, 20.0, 10.0, 30.0, &hex, &why));
+    REQUIRE(brep::SectionLoop(hex, Vec3{0, 0, 15}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(loop.segs.size() == 6);
+  }
+
+  SECTION("a cylinder's circle keeps both arcs — an arc endpoint is never dropped") {
+    Solid cyl;
+    REQUIRE(brep::MakeCylinder(World(), 12.0, 20.0, &cyl, &why));
+    REQUIRE(brep::SectionLoop(cyl, Vec3{0, 0, 10}, Vec3{0, 0, 1}, &plane, &loop, &why));
+    REQUIRE(loop.segs.size() == 2);
+    REQUIRE(std::fabs(loop.segs[0].sweep) == Approx(kPi).epsilon(1e-12));
+    REQUIRE(std::fabs(loop.segs[1].sweep) == Approx(kPi).epsilon(1e-12));
+  }
+
+  SECTION("a wedge's triangle keeps its three") {
+    Solid wedge;
+    REQUIRE(brep::MakeWedge(World(), 40.0, 20.0, 30.0, &wedge, &why));
+    REQUIRE(brep::SectionLoop(wedge, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loop, &why));
+    REQUIRE(loop.segs.size() == 3);
+  }
+
+  SECTION("a ring section keeps both of its outlines whole") {
+    Solid torus;
+    REQUIRE(brep::MakeTorus(World(), 20.0, 5.0, &torus, &why));
+    std::vector<brep::Path> loops;
+    REQUIRE(brep::SectionOutlines(torus, Vec3{0, 0, 0}, Vec3{0, 0, 1}, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    REQUIRE(loops[0].segs.size() == 2);
+    REQUIRE(loops[1].segs.size() == 2);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #531: a tilted cut of a cylinder or cone is one closed ellipse.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A tilted cut of a cylinder sections as the ellipse it is", "[brep][issue531]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::SectionEllipse el;
+  const double r = 30.0;
+  // Tall enough that a 45-degree cut through the middle stays between the caps.
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -100.0), r, 200.0, &cyl, &why));
+
+  SECTION("45 degrees: semi-minor r, semi-major r / cos 45, centred on the axis") {
+    const Vec3 n = ray3d::Normalize(Vec3{0, -1, 1});
+    REQUIRE(brep::SectionEllipseOutline(cyl, Vec3{0, 0, 0}, n, &plane, &el, &why));
+    REQUIRE(el.valid);
+    REQUIRE(el.minorSemi == Approx(r).epsilon(1e-9));
+    REQUIRE(el.majorSemi == Approx(r / std::cos(kPi / 4.0)).epsilon(1e-9));
+    REQUIRE(ray3d::Length(ray3d::Sub(el.centre, Vec3{0, 0, 0})) <= 1e-9);
+    // The ellipse lies in the caller's own plane, and its major axis lies in it too.
+    REQUIRE(std::fabs(ray3d::Dot(el.normal, n)) == Approx(1.0).epsilon(1e-9));
+    REQUIRE(std::fabs(ray3d::Dot(el.majorDir, n)) == Approx(0.0).margin(1e-9));
+    REQUIRE(ray3d::Length(el.majorDir) == Approx(1.0).epsilon(1e-9));
+  }
+
+  SECTION("a gentler tilt is a rounder ellipse, and the minor axis never changes") {
+    for (const double deg : {15.0, 30.0, 60.0}) {
+      const double rad = deg * kPi / 180.0;
+      const Vec3 n = ray3d::Normalize(Vec3{0, -std::sin(rad), std::cos(rad)});
+      REQUIRE(brep::SectionEllipseOutline(cyl, Vec3{0, 0, 0}, n, &plane, &el, &why));
+      INFO(deg << " degrees");
+      REQUIRE(el.minorSemi == Approx(r).epsilon(1e-9));
+      REQUIRE(el.majorSemi == Approx(r / std::cos(rad)).epsilon(1e-9));
+    }
+  }
+
+  SECTION("off the axis: the ellipse is the same shape, centred where the plane crosses") {
+    const Vec3 n = ray3d::Normalize(Vec3{0, -1, 1});
+    REQUIRE(brep::SectionEllipseOutline(cyl, Vec3{0, 0, 40.0}, n, &plane, &el, &why));
+    REQUIRE(el.majorSemi == Approx(r * std::sqrt(2.0)).epsilon(1e-9));
+    REQUIRE(el.centre.z == Approx(40.0).epsilon(1e-9));
+  }
+
+  SECTION("a cut that crosses an end cap is an arc plus a chord, not one ellipse") {
+    Solid shortCyl;
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -25.0), r, 50.0, &shortCyl, &why));
+    REQUIRE_FALSE(brep::SectionEllipseOutline(shortCyl, Vec3{0, 0, 0}, ray3d::Normalize(Vec3{0, -1, 1}),
+                                              &plane, &el, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedEnd);
+  }
+
+  SECTION("at survey magnitude on a tilted frame") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid far;
+    REQUIRE(brep::MakeCylinder(base, r, 200.0, &far, &why));
+    // 45 degrees to the cylinder's own axis, in its own frame.
+    const Vec3 n = ray3d::Normalize(ray3d::Add(base.zAxis, ray3d::Scale(base.yAxis, -1.0)));
+    const Vec3 at = ucs::UcsToWorld(base, Vec3{0, 0, 100.0});
+    REQUIRE(brep::SectionEllipseOutline(far, at, n, &plane, &el, &why));
+    REQUIRE(el.minorSemi == Approx(r).margin(0.002));
+    REQUIRE(el.majorSemi == Approx(r * std::sqrt(2.0)).margin(0.002));
+    REQUIRE(ray3d::Length(ray3d::Sub(el.centre, at)) <= 0.002);
+  }
+}
+
+TEST_CASE("A tilted cut of a cone sections as an ellipse too", "[brep][issue531]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::SectionEllipse el;
+  // A shallow taper, tall enough for a gentle cut to stay on the side.
+  Solid cone;
+  REQUIRE(brep::MakeCone(PlaneAlong(World(), -100.0), 40.0, 20.0, 200.0, &cone, &why));
+
+  SECTION("a gentle tilt gives an ellipse whose axes the cone's own geometry sets") {
+    const double rad = 10.0 * kPi / 180.0;
+    const Vec3 n = ray3d::Normalize(Vec3{0, -std::sin(rad), std::cos(rad)});
+    REQUIRE(brep::SectionEllipseOutline(cone, Vec3{0, 0, 0}, n, &plane, &el, &why));
+    REQUIRE(el.valid);
+    // At mid-height the cone's radius is 30; a 10-degree cut is very nearly that circle, a touch
+    // longer along the tilt and centred a touch off the axis.
+    REQUIRE(el.minorSemi == Approx(30.0).epsilon(1e-3));
+    REQUIRE(el.majorSemi > el.minorSemi);
+    REQUIRE(std::fabs(ray3d::Dot(el.normal, n)) == Approx(1.0).epsilon(1e-9));
+  }
+
+  SECTION("a cut steeper than the cone's own side is not an ellipse at all") {
+    REQUIRE_FALSE(brep::SectionEllipseOutline(cone, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &el, &why));
+    REQUIRE(why != Problem::Ok);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #520, increment 3's second half: a torus cut THROUGH its axis is two circles.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A torus cut through its axis gives two circles and two half-doughnuts",
+          "[brep][issue520][torusaxis]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  std::vector<brep::Path> loops;
+  Solid above, below;
+  const double R = 20.0, r = 5.0;
+  Solid torus;
+  REQUIRE(brep::MakeTorus(World(), R, r, &torus, &why));
+  const double whole = brep::ComputeMassProperties(torus).volume;
+
+  SECTION("the section is two circles of the tube's own radius, one each side of the ring") {
+    REQUIRE(brep::SectionOutlines(torus, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    // Each is a full circle, drawn as two half-turn arcs like every other circular section.
+    for (const brep::Path& p : loops) {
+      INFO("outline with " << p.segs.size() << " segments");
+      REQUIRE(p.segs.size() == 2);
+      REQUIRE(std::fabs(std::fabs(p.segs[0].sweep) - kPi) < 1e-9);
+      REQUIRE(std::fabs(std::fabs(p.segs[1].sweep) - kPi) < 1e-9);
+    }
+    // Their centres sit at +/- R along the cut plane, and each has the tube's radius.
+    std::vector<Vec3> centres;
+    for (const brep::Path& p : loops) {
+      const Vec3 a = ucs::PlaneToWorld(plane, p.start);
+      const Vec3 b = ucs::PlaneToWorld(plane, p.segs[0].end);
+      REQUIRE(ray3d::Length(ray3d::Sub(a, b)) == Approx(2.0 * r).epsilon(1e-9));
+      centres.push_back(ray3d::Scale(ray3d::Add(a, b), 0.5));
+    }
+    REQUIRE(ray3d::Length(ray3d::Sub(centres[0], centres[1])) == Approx(2.0 * R).epsilon(1e-9));
+    for (const Vec3& c : centres)
+      REQUIRE(std::fabs(ray3d::Length(ray3d::Sub(c, Vec3{0, 0, 0})) - R) < 1e-9);
+  }
+
+  SECTION("SLICE gives two half-doughnuts, each half the volume") {
+    REQUIRE(brep::Slice(torus, Vec3{0, 0, 0}, Vec3{0, 1, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    const brep::MassProperties ma = brep::ComputeMassProperties(above);
+    const brep::MassProperties mb = brep::ComputeMassProperties(below);
+    REQUIRE(ma.valid);
+    REQUIRE(mb.valid);
+    REQUIRE(ma.volume == Approx(0.5 * whole).epsilon(1e-9));
+    REQUIRE(mb.volume == Approx(0.5 * whole).epsilon(1e-9));
+    // Each piece keeps half the tube's surface plus its two flat ends.
+    REQUIRE(ma.surfaceArea ==
+            Approx(0.5 * (4.0 * kPi * kPi * R * r) + 2.0 * kPi * r * r).epsilon(1e-9));
+    REQUIRE(MeshVolume(above, Vec3{}) == Approx(0.5 * whole).epsilon(1e-2));
+    // And the halves are on the sides the normal names.
+    REQUIRE(ma.centroidValid);
+    REQUIRE(ma.centroid.y > 0.0);
+    REQUIRE(mb.centroid.y < 0.0);
+  }
+
+  SECTION("the single-outline entry point says there are two of them") {
+    brep::Path one;
+    REQUIRE_FALSE(brep::SectionLoop(torus, Vec3{0, 0, 0}, Vec3{0, 1, 0}, &plane, &one, &why));
+    REQUIRE(why == Problem::SliceCutSeveralOutlines);
+  }
+
+  SECTION("beside the axis, not through it, is still a quartic and still refused") {
+    REQUIRE_FALSE(brep::Slice(torus, Vec3{0, 6, 0}, Vec3{0, 1, 0}, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(why == Problem::SliceCutTorusCurve);
+    REQUIRE_FALSE(brep::SectionOutlines(torus, Vec3{0, 6, 0}, Vec3{0, 1, 0}, &plane, &loops, &why));
+    REQUIRE(why == Problem::SliceCutTorusCurve);
+  }
+
+  SECTION("at survey magnitude on a tilted frame") {
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid far;
+    REQUIRE(brep::MakeTorus(base, R, r, &far, &why));
+    REQUIRE(brep::SectionOutlines(far, base.origin, base.yAxis, &plane, &loops, &why));
+    REQUIRE(loops.size() == 2);
+    for (const brep::Path& p : loops) {
+      const Vec3 a = ucs::PlaneToWorld(plane, p.start);
+      const Vec3 b = ucs::PlaneToWorld(plane, p.segs[0].end);
+      REQUIRE(ray3d::Length(ray3d::Sub(a, b)) == Approx(2.0 * r).margin(0.002));
+    }
+    REQUIRE(brep::Slice(far, base.origin, base.yAxis, brep::SliceKeep::Both, &above, &below, &why));
+    REQUIRE(brep::ComputeMassProperties(above).volume ==
+            Approx(0.5 * 2.0 * kPi * kPi * R * r * r).epsilon(1e-9));
+  }
+}
+
+namespace {
+
+/// A point at \p t in [0, 1] along a section's elliptical arc, in world.
+Vec3 EllipseArcPointAt(const brep::SectionEllipseArc& a, double t) {
+  const Vec3 minorDir = ray3d::Cross(a.normal, a.majorDir);
+  const double u = a.startParam + a.sweep * t;
+  return ray3d::Add(a.centre, ray3d::Add(ray3d::Scale(a.majorDir, a.majorSemi * std::cos(u)),
+                                         ray3d::Scale(minorDir, a.minorSemi * std::sin(u))));
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// GitHub #520 follow-up: a tilted cut that runs off the end of a pipe is an elliptical ARC plus the
+// chord across the cap (D-2026-09-23-b).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A tilted cut that runs off one end sections as an arc plus a chord",
+          "[brep][sectionarc]") {
+  Problem why = Problem::Ok;
+  ucs::Ucs plane;
+  brep::SectionEllipseArc arc;
+  const double r = 30.0;
+  // Short enough that a 45-degree cut through the middle runs off the top.
+  Solid cyl;
+  REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -25.0), r, 50.0, &cyl, &why));
+
+  SECTION("the arc is part of the full ellipse, and its ends are on the cap") {
+    const Vec3 n = ray3d::Normalize(Vec3{0, -1, 1});
+    REQUIRE(brep::SectionEllipseArcOutline(cyl, Vec3{0, 0, 15}, n, &plane, &arc, &why));
+    REQUIRE(arc.valid);
+    // The ellipse it is cut from is the 45-degree one: semi-minor r, semi-major r root 2.
+    REQUIRE(arc.minorSemi == Approx(r).epsilon(1e-9));
+    REQUIRE(arc.majorSemi == Approx(r * std::sqrt(2.0)).epsilon(1e-9));
+    // Less than a whole turn, and more than nothing.
+    REQUIRE(std::fabs(arc.sweep) > 1e-6);
+    REQUIRE(std::fabs(arc.sweep) < kTwoPiTest - 1e-6);
+    // Both ends of the chord sit ON the cap the cut ran off (z = 25), and on the cylinder's wall.
+    for (const Vec3& p : {arc.chordA, arc.chordB}) {
+      REQUIRE(p.z == Approx(25.0).margin(1e-6));
+      REQUIRE(std::hypot(p.x, p.y) == Approx(r).epsilon(1e-9));
+    }
+    // And the chord's ends are the arc's own ends.
+    REQUIRE(ray3d::Length(ray3d::Sub(EllipseArcPointAt(arc, 0.0), arc.chordA)) <= 1e-6);
+    REQUIRE(ray3d::Length(ray3d::Sub(EllipseArcPointAt(arc, 1.0), arc.chordB)) <= 1e-6);
+  }
+
+  SECTION("every point of the arc is inside the pipe, not out past the cap") {
+    const Vec3 n = ray3d::Normalize(Vec3{0, -1, 1});
+    REQUIRE(brep::SectionEllipseArcOutline(cyl, Vec3{0, 0, 15}, n, &plane, &arc, &why));
+    for (int i = 0; i <= 20; ++i) {
+      const Vec3 p = EllipseArcPointAt(arc, static_cast<double>(i) / 20.0);
+      INFO("t = " << i / 20.0 << " at z " << p.z);
+      REQUIRE(p.z <= 25.0 + 1e-6);   // not above the cap it ran off
+      REQUIRE(p.z >= -25.0 - 1e-6);  // nor below the other one
+      REQUIRE(std::hypot(p.x, p.y) == Approx(r).epsilon(1e-6));  // on the wall
+    }
+  }
+
+  SECTION("a cut that stays between the caps is a whole ellipse, and says so") {
+    Solid tall;
+    REQUIRE(brep::MakeCylinder(PlaneAlong(World(), -100.0), r, 200.0, &tall, &why));
+    REQUIRE_FALSE(brep::SectionEllipseArcOutline(tall, Vec3{0, 0, 0}, ray3d::Normalize(Vec3{0, -1, 1}),
+                                                 &plane, &arc, &why));
+    REQUIRE(why == Problem::SectionEllipse);
+  }
+
+  SECTION("a cut that runs off BOTH ends is two arcs and two chords: still refused") {
+    // Through the middle, a 45-degree cut spans z -30 to 30 — past both ends at +/- 25.
+    REQUIRE_FALSE(brep::SectionEllipseArcOutline(cyl, Vec3{0, 0, 0}, ray3d::Normalize(Vec3{0, -1, 1}),
+                                                 &plane, &arc, &why));
+    REQUIRE(why == Problem::SliceCutCrossesCurvedEnd);
+  }
+
+  SECTION("a cone's tilted cut off its end, and survey magnitude") {
+    Solid cone;
+    REQUIRE(brep::MakeCone(PlaneAlong(World(), -25.0), 30.0, 15.0, 50.0, &cone, &why));
+    REQUIRE(brep::SectionEllipseArcOutline(cone, Vec3{0, 0, 15}, ray3d::Normalize(Vec3{0, -1, 1}), &plane,
+                                           &arc, &why));
+    REQUIRE(arc.valid);
+    REQUIRE(std::fabs(arc.sweep) < kTwoPiTest - 1e-6);
+
+    const ucs::Ucs base = TiltedAt(2.196e6, 1.4e6, 250.0);
+    Solid far;
+    REQUIRE(brep::MakeCylinder(base, r, 50.0, &far, &why));
+    const Vec3 n = ray3d::Normalize(ray3d::Add(base.zAxis, ray3d::Scale(base.yAxis, -1.0)));
+    const Vec3 at = ucs::UcsToWorld(base, Vec3{0, 0, 40.0});
+    REQUIRE(brep::SectionEllipseArcOutline(far, at, n, &plane, &arc, &why));
+    REQUIRE(arc.minorSemi == Approx(r).margin(0.002));
+    REQUIRE(arc.majorSemi == Approx(r * std::sqrt(2.0)).margin(0.002));
+    // The chord's ends are on the far cap, in the tilted frame.
+    for (const Vec3& p : {arc.chordA, arc.chordB}) {
+      const Vec3 local = ucs::WorldToUcs(base, p);
+      REQUIRE(local.z == Approx(50.0).margin(0.002));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// A collapsed ring — a cone's apex, a sphere's pole — is one triangle, not two.
+// ---------------------------------------------------------------------------
+
+/// Triangles with two coincident corners: zero area, invisible, and the reason a sharp cone and a
+/// sphere both read as non-manifold. Counted directly, because "watertight" alone does not say WHY.
+[[nodiscard]] int DegenerateTriangleCount(const brep::Tessellation& t) {
+  auto pos = [&](std::uint32_t i) {
+    return Vec3{t.vertsXyz[3 * i], t.vertsXyz[3 * i + 1], t.vertsXyz[3 * i + 2]};
+  };
+  int n = 0;
+  for (std::size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    const Vec3 a = pos(t.indices[i]), b = pos(t.indices[i + 1]), c = pos(t.indices[i + 2]);
+    const double ab = ray3d::Length(ray3d::Sub(a, b));
+    const double bc = ray3d::Length(ray3d::Sub(b, c));
+    const double ca = ray3d::Length(ray3d::Sub(c, a));
+    if (ab <= 1e-9 || bc <= 1e-9 || ca <= 1e-9)
+      ++n;
+  }
+  return n;
+}
+
+TEST_CASE("A collapsed ring makes one triangle, not a degenerate pair", "[brep][req313][collapsedring]") {
+  Problem why = Problem::Ok;
+
+  SECTION("a sharp cone's apex") {
+    // Before: the apex ring is one point repeated, so every segment emitted a second, zero-area
+    // triangle whose two 'different' edges were the same rim-to-apex edge. That counted the edge
+    // FOUR times instead of two — 256 of 768 edges non-manifold — and made half the side mesh junk.
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 3.0, 0.0, 11.0, &s, &why));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(s, 0.02, &t, &why));
+    CHECK(DegenerateTriangleCount(t) == 0);
+    RequireMeshWatertight(t);
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("a sphere's two poles") {
+    Solid s;
+    REQUIRE(brep::MakeSphere(World(), 5.0, &s, &why));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(s, 0.02, &t, &why));
+    CHECK(DegenerateTriangleCount(t) == 0);
+    RequireMeshWatertight(t);
+    RequireWindingMatchesNormals(t);
+  }
+
+  SECTION("shapes with no collapsed ring are untouched") {
+    // A frustum, a cylinder and a torus have no apex and no pole, so they must keep every triangle
+    // they had — this is what says the collapse test did not start trimming real geometry.
+    struct Case { const char* name; Solid s; };
+    std::vector<Case> cases;
+    {
+      Solid s;
+      REQUIRE(brep::MakeCone(World(), 7.0, 2.5, 6.0, &s, &why));
+      cases.push_back({"cone frustum", s});
+    }
+    {
+      Solid s;
+      REQUIRE(brep::MakeCylinder(World(), 4.0, 25.0, &s, &why));
+      cases.push_back({"cylinder", s});
+    }
+    {
+      Solid s;
+      REQUIRE(brep::MakeTorus(World(), 10.0, 2.0, &s, &why));
+      cases.push_back({"torus", s});
+    }
+    for (const Case& c : cases) {
+      INFO(c.name);
+      brep::Tessellation t;
+      REQUIRE(brep::Tessellate(c.s, 0.02, &t, &why));
+      CHECK(DegenerateTriangleCount(t) == 0);
+      RequireMeshWatertight(t);
+    }
+  }
+
+  SECTION("the apex mesh is half the size and still measures the same cone") {
+    // The volume and area are computed from the B-rep, not the mesh, but the TESSELLATED volume is
+    // what a viewer sees: dropping the slivers must not change it, because they enclosed nothing.
+    Solid s;
+    REQUIRE(brep::MakeCone(World(), 3.0, 0.0, 11.0, &s, &why));
+    brep::Tessellation t;
+    REQUIRE(brep::Tessellate(s, 0.02, &t, &why));
+    const double want = kPi * 3.0 * 3.0 * 11.0 / 3.0;
+    REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(1e-2));
+  }
 }

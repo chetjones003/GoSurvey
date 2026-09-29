@@ -819,7 +819,9 @@ int main()
         cmdLog.push_back("Section plane drag cancelled.");
         cmdBuf[0] = '\0';
       }
-      else if (cmd.gizmoDragActive)
+      // Not inside 3DMOVE / 3DROTATE / 3DSCALE: there the drag IS the command, and one ESC ends
+      // both and restores the gizmo op (GitHub issue #564 section 3) via CancelActiveCommand below.
+      else if (cmd.gizmoDragActive && !IsGizmoCommandKind(cmd.active))
       {
         // A TRUE cancel, not an undo: a live gizmo drag changes nothing in the store until it is
         // committed, so abandoning one costs an undo step nobody spent. Ahead of the other grips
@@ -1407,6 +1409,21 @@ int main()
       tuning.sectionPlaneGrips = CadSectionPlaneGrips(cmd);
       tuning.sectionPlaneGripHover = cmd.sectionPlaneGripHover;
       tuning.sectionPlaneGripDrag = cmd.sectionPlaneGripDrag;
+    }
+    // REQ-342 (2026-09-18) — while SECTIONPLANE is asking for its through point, the rectangle drawn
+    // is the plane that WOULD be placed, standing on the line from the first point to the cursor.
+    // It replaces the current plane's rectangle, because that is the one being aimed; the clip
+    // itself is untouched, so nothing is cut until the click. No handles: there is nothing to grab
+    // on a plane that does not exist yet.
+    {
+      SectionClipIndicator previewInd{};
+      if (CadSectionPlanePreviewIndicator(cmd, &previewInd)) {
+        tuning.sectionClipIndicator = previewInd;
+        tuning.sectionPlaneGraphics = SectionPlaneGraphicsFor(previewInd);
+        tuning.sectionPlaneGrips = SectionPlaneGrips{};
+        tuning.sectionPlaneGripHover = -1;
+        tuning.sectionPlaneGripDrag = -1;
+      }
     }
     // Build PDF render list: committed attachments + cursor-follow preview when picking insert point.
     std::vector<PdfAttachment> pdfRenderList;

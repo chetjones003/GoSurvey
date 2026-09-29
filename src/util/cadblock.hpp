@@ -864,13 +864,24 @@ inline void CadBlockApplyActionsToPoint(const CadBlockDefinition& def, const Cad
   return !CadBlockEqCi(primVis, active);
 }
 
+/// The attributes a block's primitive is drawn with, given the insert that places it.
+///
+/// ByBlock takes the insert's value. A primitive on layer 0 **follows the insert fully**
+/// (D-2026-09-28-h): it moves to the insert's layer — AutoCAD's layer-0 rule, so turning the
+/// insert's layer Off / Frozen hides it — and a ByLayer colour / linetype on it takes the insert's
+/// own, so recolouring a block (a pipe fitting drawn on layer 0) recolours its content. AutoCAD
+/// would leave that last case on the layer's colour; the user chose "the block's colour wins".
 [[nodiscard]] inline EntityAttributes CadBlockResolveAttr(const EntityAttributes& prim, const EntityAttributes& insert) {
   EntityAttributes o = prim;
-  if (CadBlockEqCi(prim.color, "ByBlock") || prim.color.empty())
+  const bool onLayer0 = prim.layer.empty() || prim.layer == "0";
+  const auto follows = [&](const std::string& v) {
+    return v.empty() || CadBlockEqCi(v, "ByBlock") || (onLayer0 && CadBlockEqCi(v, "ByLayer"));
+  };
+  if (follows(prim.color))
     o.color = insert.color.empty() ? std::string("ByLayer") : insert.color;
-  if (CadBlockEqCi(prim.linetype, "ByBlock"))
+  if (!prim.linetype.empty() && follows(prim.linetype))
     o.linetype = insert.linetype.empty() ? std::string("ByLayer") : insert.linetype;
-  if (prim.layer.empty())
+  if (onLayer0)
     o.layer = insert.layer.empty() ? std::string("0") : insert.layer;
   o.id = insert.id;
   return o;

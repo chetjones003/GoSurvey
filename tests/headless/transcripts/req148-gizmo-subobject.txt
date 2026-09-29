@@ -19,6 +19,8 @@
 # --- The mode is derived from the selection, and says so ------------------------------------------
 
 NEW
+# The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
+CMD GIZMO MOVE
 # Orbited FIRST. The box's top face points at the camera in plan view, so its handle would be
 # end-on: every point of it projects to one pixel, no distance is expressible, and the pick refuses
 # it. That is slice 4b's rule and it applies unchanged here.
@@ -70,6 +72,8 @@ EXPECT SOLIDPROPS 0 1600 880 8 12 6
 # Issue #148 acceptance 4, stated outright.
 
 NEW
+# The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
+CMD GIZMO MOVE
 VIEWANGLES 135 20
 CMD BOX 0,0 20 10 8
 SUBOBJECT 0 0 8 0 0
@@ -90,6 +94,8 @@ EXPECT SOLIDPROPS 0 4000 1600 8 12 6
 #   * a vertex has THREE — three planes meet, so every direction is reachable.
 
 NEW
+# The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
+CMD GIZMO MOVE
 VIEWANGLES 135 20
 CMD BOX 0,0 20 10 8
 # The top face's near edge, picked by giving the EDGE a tolerance and the face none.
@@ -104,6 +110,8 @@ EXPECT GIZMOAXES 2
 # the pre-REQ-333 code returned None for ANY selection that was not a single face and so could not
 # tell the two apart. Asserting `SUBOBJECTS 1` is what makes this a vertex case at all.
 NEW
+# The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
+CMD GIZMO MOVE
 VIEWANGLES 135 20
 CMD BOX 0,0 20 10 8
 SUBOBJECT 10 5 8 0.5 0.5
@@ -126,6 +134,8 @@ EXPECT GIZMOAXES 0
 # --- A face drag that goes nowhere is a cancel -----------------------------------------------------
 
 NEW
+# The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
+CMD GIZMO MOVE
 VIEWANGLES 135 20
 CMD BOX 0,0 20 10 8
 SUBOBJECT 0 0 8 0 0

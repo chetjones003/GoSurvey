@@ -32,8 +32,12 @@ bool CadBlockPlaceInsert(AppCommandState& st, std::string_view name, CadBlockXfo
 /// Same as `CadBlockPlaceInsert`, without exploding, and WITHOUT pushing its own undo snapshot —
 /// for a caller (PIPERUN's auto-fitting, issue #486 increment B5) that places several elbows as
 /// part of one larger multi-step operation already covered by its own single `PushUndoSnapshot`.
+/// \p lineAttrs, when given, is the pipe run the part is fitted into: the insert takes that run's
+/// layer and colour instead of the current ones, so a line reads as one colour end to end and its
+/// layer hides its fittings with it (REQ-353, D-2026-09-28-i).
 bool CadBlockPlaceInsertNoUndo(AppCommandState& st, std::string_view name, CadBlockXform xf,
-                               std::vector<std::string>& log);
+                               std::vector<std::string>& log,
+                               const EntityAttributes* lineAttrs = nullptr);
 
 void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log);

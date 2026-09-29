@@ -64,6 +64,7 @@
 #include <limits>
 #include <sstream>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <numeric>
@@ -1251,10 +1252,16 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     case SelectedEntity::Type::Ellipse: {
       if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
         const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-        const float perpX = -el.majVy, perpY = el.majVx;
-        tryGrip(sel, el.cx, el.cy, 0);
-        tryGrip(sel, el.cx + el.majVx, el.cy + el.majVy, 1);
-        tryGrip(sel, el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, 2);
+        // Centre, major end, minor end — through the shared helper, so this asks the same question
+        // src/ui/CadUi.cpp asks when it DRAWS them (GitHub #531). They disagreed before: a tilted
+        // ellipse drew no grips and still offered them here, which is an invisible handle sitting
+        // where a flat ellipse's would be, deforming the section when grabbed.
+        if (EllipseHasGrips(el)) {
+          ray3d::Vec3 g[3];
+          EllipseGripPoints(el, g);
+          for (int gi = 0; gi < 3; ++gi)
+            tryGrip(sel, static_cast<float>(g[gi].x), static_cast<float>(g[gi].y), gi);
+        }
       }
       break;
     }
@@ -6042,8 +6049,18 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
   CadTextAnnotationBounds(a, h, outMnX, outMnY, outMxX, outMxY);
 }
 
-int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
-                        float viewportHeightPx) {
+/// Where \p ray meets the horizontal plane z = \p z, as XY. False when the ray runs along the plane.
+static bool RayAtElevation(const ray3d::Ray& ray, double z, float* x, float* y) {
+  if (std::fabs(ray.dir.z) < 1e-12)
+    return false;
+  const double t = (z - ray.origin.z) / ray.dir.z;
+  *x = static_cast<float>(ray.origin.x + t * ray.dir.x);
+  *y = static_cast<float>(ray.origin.y + t * ray.dir.y);
+  return true;
+}
+
+int PickCadAnnotationAt(float wxIn, float wyIn, const AppCommandState& cmd, float orthoHalfHeightWorld,
+                        float viewportHeightPx, const ray3d::Ray* ray) {
   const float tol =
       CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, cmd.objectSnapAperturePx);
   const float tol2 = tol * tol;
@@ -6069,6 +6086,12 @@ int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float or
         CadEntityIdHidden(&cmd.hiddenEntityIds, cmd.cadAnnotationAttrs[static_cast<size_t>(i)].id))
       continue;
     const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(i)];
+    // Orbited (issue #564 §2): test the annotation where the camera ray meets ITS plane, not where
+    // it meets the work plane — the two differ as soon as the text is not at the work plane's Z.
+    float wx = wxIn;
+    float wy = wyIn;
+    if (ray && !RayAtElevation(*ray, static_cast<double>(a.insZ), &wx, &wy))
+      continue;  // seen exactly edge-on: the text is a line on screen and names no point
     if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
       if (!CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
@@ -6330,6 +6353,7 @@ void ResetEllipseDraft(AppCommandState& st) {
   st.ellPhase = AppCommandState::EllipsePhase::WaitCenter;
   st.ellCx = st.ellCy = 0.f;
   st.ellMajEx = st.ellMajEy = 0.f;
+  st.ellCz = st.ellMajEz = 0.f;
 }
 
 void ResetRectDraft(AppCommandState& st) {
@@ -6386,6 +6410,10 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   // true cancel lives.
   st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
   st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
+  // A 3D gizmo command replaced by another command mid-run (a ribbon button, say) still owes the
+  // user their gizmo op back — the command set it only for its own duration (GitHub issue #564).
+  if (IsGizmoCommandKind(st.active))
+    EndGizmoCommand(st);
   // UCS / PLAN prompt state (REQ-154). Reset here with every other draft so a cancelled UCS cannot
   // leave a half-collected origin behind for the next command to pick up.
   //
@@ -6393,6 +6421,7 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   // and carrying it into the next would commit that command's geometry at the previous one's Z.
   st.resolvedPointZValid = false;
   st.resolvedPointZ = 0.f;
+  st.resolvedPointZTyped = false;
   st.ucsPhase = AppCommandState::UcsPhase::Idle;
   st.planPhase = AppCommandState::PlanPhase::Idle;
   ResetCircleDraft(st);
@@ -6427,6 +6456,7 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
   st.wblockDialogOpen = false;  // same reason as the two block dialogs above it
   st.insertBlockAttrRefIndex = -1;
+  st.insertBlockSnappedPipeRun = -1;
   // The solid-edge fillet's radius prompt (REQ-323). Here rather than only in `StartFilletCommand`
   // so ESC clears it: without this, cancelling would leave the flag set, and the NEXT typed line -
   // whatever it was - would be read as a fillet radius.
@@ -6586,7 +6616,10 @@ const CmdEntry kRegistry[] = {
     {"flelev", "", "Feature line elevations: FLELEV <n> [SET|GRADEAHEAD|GRADEBACK|RAISE|INSERT|DELETE …]"},
     {"flelevedit", "", "Open the feature line elevation editor: FLELEVEDIT [<n>]"},
     {"plotscale", "pscale", "Set the plot scale"},
-    {"gizmo", "", "What the 3D gizmo does: GIZMO MOVE | ROTATE | SCALE"},
+    {"gizmo", "", "Show the 3D gizmo on every selection: GIZMO MOVE | ROTATE | SCALE | OFF"},
+    {"3dmove", "", "Move objects with the 3D gizmo (axis handles or a typed distance)"},
+    {"3drotate", "", "Rotate objects with the 3D gizmo (ring or a typed angle)"},
+    {"3dscale", "", "Scale objects uniformly with the 3D gizmo (handle or a typed factor)"},
     {"move", "m", "Move objects"},
     {"copy", "cp", "Copy objects"},
     {"rotate", "ro", "Rotate objects"},
@@ -7140,6 +7173,19 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     StartScaleCommand(st, log);
     return true;
   }
+  // GitHub issue #564 section 3: the gizmo, summoned by a command.
+  if (primary == "3dmove") {
+    StartGizmoCommand(st, AppCommandState::Kind::Move3d, log);
+    return true;
+  }
+  if (primary == "3drotate") {
+    StartGizmoCommand(st, AppCommandState::Kind::Rotate3d, log);
+    return true;
+  }
+  if (primary == "3dscale") {
+    StartGizmoCommand(st, AppCommandState::Kind::Scale3d, log);
+    return true;
+  }
   if (primary == "mirror") {
     StartMirrorCommand(st, log);
     return true;
@@ -7426,11 +7472,19 @@ bool SelectedEntityEqual(const SelectedEntity& a, const SelectedEntity& b) {
   return a.type == b.type && a.index == b.index;
 }
 
-/// \p segments + 1 world points around an ellipse, the first point repeated last (a closed chain).
+/// \p segments + 1 world points along the part of an ellipse that is actually DRAWN.
 ///
-/// The counterpart of \ref SampleCurveWorld for the one authored curve that is not circular. An
-/// ellipse is always parallel to XY (\ref CadEllipse::z), so there is no plane frame to build — the
-/// major-axis vector supplies the frame directly.
+/// The counterpart of \ref SampleCurveWorld for the one authored curve that is not circular. Every
+/// point comes from \ref EllipseWorldPointAt, so this agrees with the renderer and the snapper by
+/// construction rather than by two copies of the same arithmetic staying in step.
+///
+/// A whole ellipse is a closed chain, its first point repeated last. An elliptical arc is NOT: its
+/// two ends are not joined, and a fence that closed it would test a chord nobody drew.
+///
+/// Until this walked the span through the ellipse's own plane, both selection funnels hunted for a
+/// tilted ellipse flat on the ground and a part-drawn one all the way round — a 45-degree section
+/// oval of radius 30 was picked for at 42.4 out while it was drawn at 30, a 12.4-unit miss no
+/// tolerance could close, and the 141 degrees it does not draw selected it from empty space.
 ///
 /// Replaced `ArcRoughBounds` / `EllipseRoughBounds`, which existed only to give the selection fence
 /// a box to test a curve against. Both are gone: a fence tests the CURVE now, and the extents walk
@@ -7440,19 +7494,10 @@ void SampleEllipseWorld(std::vector<ray3d::Vec3>& out, const CadEllipse& e, int 
   const double ma = std::hypot(static_cast<double>(e.majVx), static_cast<double>(e.majVy));
   if (ma < 1e-8 || segments < 1)
     return;
-  const double ux = static_cast<double>(e.majVx) / ma;
-  const double uy = static_cast<double>(e.majVy) / ma;
-  const double mb = ma * static_cast<double>(e.ratio);
-  constexpr double kTwoPi = 6.28318530717958647692;
   out.reserve(static_cast<size_t>(segments) + 1u);
   for (int i = 0; i <= segments; ++i) {
-    const double ang = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
-    const double c = std::cos(ang);
-    const double s = std::sin(ang);
-    // The perpendicular is (-uy, ux) — the minor axis, in the ellipse's own plane.
-    out.push_back(ray3d::Vec3{static_cast<double>(e.cx) + ux * (ma * c) - uy * (mb * s),
-                              static_cast<double>(e.cy) + uy * (ma * c) + ux * (mb * s),
-                              static_cast<double>(e.z)});
+    const double u = static_cast<double>(i) / static_cast<double>(segments);
+    out.push_back(EllipseWorldPointAt(e, EllipseSpanAngleAt(e, u)));
   }
 }
 
@@ -7775,8 +7820,10 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
   for (size_t ei = 0; ei < st.userEllipses.size(); ++ei) {
     // The ellipse it draws, in every view — same story as the arc above. Its bounding box was the
     // worst offender of the three: an ellipse fills pi/4 of its box and nothing of its middle.
-    constexpr double kTwoPi = 6.28318530717958647692;
-    SampleEllipseWorld(curvePts, st.userEllipses[ei], CurveSegmentCount(kTwoPi));
+    // The count follows the DRAWN span, exactly as the arc's does, so a short elliptical arc is not
+    // sampled more coarsely than the whole oval it was cut from.
+    const CadEllipse& el = st.userEllipses[ei];
+    SampleEllipseWorld(curvePts, el, CurveSegmentCount(std::fabs(static_cast<double>(el.sweepRad))));
     if (CurveHitsRect(curvePts)) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Ellipse;
@@ -8277,10 +8324,176 @@ static void AppendFeatureLineCopy(AppCommandState& st, int fi, int v0, int v1, X
           : MakeNewEntityAttrs(st)));
 }
 
+/// Apply \p op to every selected solid, replacing each rather than editing it, and report anything
+/// the kernel refuses by name (REQ-201, REQ-332 / TASK-231).
+///
+/// The de-duplication is `TranslateSelectedSolids`' and is load-bearing for the same reason: a
+/// selection should not hold one solid twice, and transforming it twice would turn or scale it twice
+/// — a defect that only shows up on the drawing where it happened.
+///
+/// A refusal leaves that solid EXACTLY as it was and does not abandon the rest of the selection. The
+/// kernel computes into a fresh solid and validates before returning (ADR-046 (d)), so there is no
+/// half-transformed state to roll back — the old `shared_ptr` is simply not replaced.
+///
+/// \p duplicate appends the result as a NEW solid carrying the source's attributes (COPY, ROTATE
+/// Copy, MIRROR, polar ARRAY — REQ-351) instead of replacing the source; a refusal then adds nothing.
+template <typename Op>
+static void TransformSelectedSolids(AppCommandState& st, const char* commandName, Op op,
+                                    std::vector<std::string>& log, bool duplicate = false) {
+  std::set<int> seen;
+  size_t refused = 0;
+  brep::Problem lastWhy = brep::Problem::Ok;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
+        static_cast<size_t>(e.index) >= st.cadSolids.size())
+      continue;
+    if (!seen.insert(e.index).second)
+      continue;
+    const size_t ix = static_cast<size_t>(e.index);
+    const CadSolidPtr sp = st.cadSolids[ix];  // a copy: a duplicate's push_back may reallocate
+    if (!sp)
+      continue;
+    brep::Solid out;
+    brep::Problem why = brep::Problem::Ok;
+    if (!op(*sp, &out, &why)) {
+      ++refused;
+      lastWhy = why;
+      continue;
+    }
+    if (duplicate) {
+      st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(out)));
+      st.cadSolidAttrs.push_back(
+          DuplicatedEntityAttrs(ix < st.cadSolidAttrs.size() ? st.cadSolidAttrs[ix] : EntityAttributes{}));
+    } else {
+      st.cadSolids[ix] = std::make_shared<const brep::Solid>(std::move(out));
+    }
+  }
+  // One line naming the LAST reason, not one line per solid. With several solids refused for
+  // different reasons that is lossy, and it is accepted here because the case is close to
+  // unreachable: the axis is normalized by both callers and the factor is clamped positive, so a
+  // refusal means `RotateResultInvalid` / `ScaleResultInvalid` — an isometry or a positive scale
+  // failing to validate, which cannot happen on a solid that was valid going in. This is a safety
+  // net that says something true if it ever fires, not a routine path.
+  if (refused != 0)
+    log.push_back(std::string(commandName) + " — " + std::to_string(refused) +
+                  " solid(s) unchanged: " + brep::ProblemText(lastWhy));
+}
+
+/// Turn every selected solid about the line through \p axisPoint with unit direction \p axisUnit
+/// (REQ-332 / TASK-231). Replaces REQ-322 item 6's blanket refusal for ROTATE. \p duplicate adds the
+/// turned solid as a copy instead (ROTATE Copy, polar ARRAY — REQ-351).
+static void RotateSelectedSolids(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                                 const ray3d::Vec3& axisUnit, float angleRad,
+                                 std::vector<std::string>& log, bool duplicate = false,
+                                 const char* commandName = "ROTATE") {
+  if (angleRad == 0.f && !duplicate)
+    return;
+  const double rad = static_cast<double>(angleRad);
+  TransformSelectedSolids(
+      st, commandName,
+      [&](const brep::Solid& s, brep::Solid* out, brep::Problem* why) {
+        return brep::Rotate(s, axisPoint, axisUnit, rad, out, why);
+      },
+      log, duplicate);
+}
+
+/// Add the mirror image of every selected solid across the plane through \p planePoint with unit
+/// normal \p planeUnit (REQ-351). Always a duplicate: MIRROR copies first and erases the source
+/// afterwards only if asked (`FinishMirrorCommand`).
+static void MirrorSelectedSolids(AppCommandState& st, const ray3d::Vec3& planePoint,
+                                 const ray3d::Vec3& planeUnit, std::vector<std::string>& log) {
+  TransformSelectedSolids(
+      st, "MIRROR",
+      [&](const brep::Solid& s, brep::Solid* out, brep::Problem* why) {
+        return brep::Mirror(s, planePoint, planeUnit, out, why);
+      },
+      log, /*duplicate=*/true);
+}
+
+/// Add a copy of every selected solid moved by (dx, dy, dz) — COPY and both ARRAY forms (REQ-351,
+/// widening GitHub issue #400 increment 3's rectangular-ARRAY-only helper). `brep::Translate` cannot
+/// refuse, so there is nothing to report.
+static void DuplicateSelectedSolidsTranslated(AppCommandState& st, float dx, float dy, float dz) {
+  std::vector<std::string> unused;
+  TransformSelectedSolids(
+      st, "COPY",
+      [&](const brep::Solid& s, brep::Solid* out, brep::Problem*) {
+        *out = brep::Translate(s, ray3d::Vec3{static_cast<double>(dx), static_cast<double>(dy),
+                                              static_cast<double>(dz)});
+        return true;
+      },
+      unused, /*duplicate=*/true);
+}
+
+/// Map every path vertex of every selected pipe run through \p pt, in place or — \p duplicate — as a
+/// new run carrying the source's attributes (REQ-351, D-2026-09-28-f).
+///
+/// A pipe run owns only its path; the swept pipe is re-derived from it whenever the path changes
+/// (`RebuildPipeRunWorldSolids` keys on a hash of the vertices), so moving the vertices IS moving
+/// the pipe. Its size and wall are untouched by every transform — a scaled run is a longer run of the
+/// same pipe, because a 4in pipe is a catalog part (D-2026-09-28-f). A copy joins no piping network:
+/// a network is a named set the user built, and the copy is a new run.
+template <typename PointFn>
+static void TransformSelectedPipeRuns(AppCommandState& st, PointFn pt, bool duplicate) {
+  std::set<int> seen;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::PipeRun || e.index < 0 ||
+        static_cast<size_t>(e.index) >= st.cadPipeRuns.size())
+      continue;
+    if (!seen.insert(e.index).second)
+      continue;
+    const size_t ix = static_cast<size_t>(e.index);
+    CadPipeRun run = st.cadPipeRuns[ix];
+    for (size_t k = 0; k + 2 < run.vertsXyz.size(); k += 3) {
+      const ray3d::Vec3 p = pt(ray3d::Vec3{run.vertsXyz[k], run.vertsXyz[k + 1], run.vertsXyz[k + 2]});
+      run.vertsXyz[k] = p.x;
+      run.vertsXyz[k + 1] = p.y;
+      run.vertsXyz[k + 2] = p.z;
+    }
+    if (duplicate) {
+      st.cadPipeRuns.push_back(std::move(run));
+      st.cadPipeRunAttrs.push_back(DuplicatedEntityAttrs(
+          ix < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[ix] : EntityAttributes{}));
+    } else {
+      st.cadPipeRuns[ix] = std::move(run);
+    }
+  }
+}
+
+static void TranslateSelectedPipeRuns(AppCommandState& st, float dx, float dy, float dz, bool duplicate) {
+  const ray3d::Vec3 d{static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)};
+  TransformSelectedPipeRuns(st, [&](const ray3d::Vec3& p) { return ray3d::Add(p, d); }, duplicate);
+}
+
+static void RotateSelectedPipeRuns(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                                   const ray3d::Vec3& axisUnit, float angleRad, bool duplicate) {
+  const double rad = static_cast<double>(angleRad);
+  TransformSelectedPipeRuns(
+      st, [&](const ray3d::Vec3& p) { return ray3d::RotatePointAboutAxis(p, axisPoint, axisUnit, rad); },
+      duplicate);
+}
+
+/// MIRROR's solids and pipe runs, across the plane through \p planePoint with unit normal
+/// \p planeUnit (REQ-351): each gets a mirrored copy. A pipe is symmetric about its own path, so
+/// reflecting the path is the whole of mirroring a run.
+static void MirrorSelectedSolidsAndPipeRuns(AppCommandState& st, const ray3d::Vec3& planePoint,
+                                            const ray3d::Vec3& planeUnit, std::vector<std::string>& log) {
+  MirrorSelectedSolids(st, planePoint, planeUnit, log);  // refuses a degenerate plane by name
+  if (std::fabs(ray3d::Length(planeUnit) - 1.0) > 1e-9)
+    return;
+  TransformSelectedPipeRuns(
+      st, [&](const ray3d::Vec3& p) { return ray3d::ReflectPointAcrossPlane(p, planePoint, planeUnit); },
+      /*duplicate=*/true);
+}
+
 // dz defaults to 0 so every existing 2D caller (COPY, ARRAY rectangular under the World UCS) is
 // byte-identical to before this parameter existed. GitHub issue #400 increment 1 is ARRAY's own
 // UCS-plane rectangular case, the only caller that ever passes a non-zero dz.
 static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float dy, float dz = 0.f) {
+  // Solids and pipe runs are copied too (REQ-351): COPY, both ARRAY forms and every other caller
+  // used to leave them behind without a word.
+  DuplicateSelectedSolidsTranslated(st, dx, dy, dz);
+  TranslateSelectedPipeRuns(st, dx, dy, dz, /*duplicate=*/true);
   const size_t polyVertsBefore = st.userPolylineVerts.size();
   const size_t featureVertsBefore = st.featureLineVerts.size();
   std::vector<float> newLines;
@@ -8745,7 +8958,12 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
   }
 }
 
-static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by, float rad) {
+static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by, float rad,
+                                         std::vector<std::string>& log) {
+  // Solids and pipe runs are copied too (REQ-351), turned about the same vertical axis.
+  const ray3d::Vec3 axisPoint{static_cast<double>(bx), static_cast<double>(by), 0.0};
+  RotateSelectedSolids(st, axisPoint, {0.0, 0.0, 1.0}, rad, log, /*duplicate=*/true);
+  RotateSelectedPipeRuns(st, axisPoint, {0.0, 0.0, 1.0}, rad, /*duplicate=*/true);
   const size_t polyVertsBefore = st.userPolylineVerts.size();
   const size_t featureVertsBefore = st.featureLineVerts.size();
   std::vector<float> newLines;
@@ -9006,6 +9224,10 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
   const auto rotDir = [&](float x, float y, float z) -> ray3d::Vec3 {
     return ray3d::RotateVectorAboutAxis({x, y, z}, axisUnit, rad);
   };
+  // Solids and pipe runs are copied too (REQ-351) — about any axis, since `brep::Rotate` turns
+  // every frame a solid stores and a pipe run is only its path.
+  RotateSelectedSolids(st, axisPoint, axisUnit, angleRad, log, /*duplicate=*/true, commandLabel);
+  RotateSelectedPipeRuns(st, axisPoint, axisUnit, angleRad, /*duplicate=*/true);
 
   const size_t polyVertsBefore = st.userPolylineVerts.size();
   const size_t featureVertsBefore = st.featureLineVerts.size();
@@ -9308,32 +9530,31 @@ void DropSurfacesFromSelectionForTransform(AppCommandState& st, const char* comm
                 " Edit its definition in the Surfaces panel instead.");
 }
 
-/// REQ-313 / ADR-045: drop B-rep solids from a transform selection, and SAY SO (REQ-201).
+/// Drop B-rep solids and pipe runs from a selection a command can only apply to PART of an object,
+/// and SAY SO (REQ-201). Since REQ-351 the one caller is STRETCH: every whole-object transform —
+/// MOVE, COPY, ROTATE, SCALE, MIRROR, ARRAY — now takes both. STRETCH moves the vertices inside its
+/// window and leaves the rest, and no kernel operation moves part of a solid; a pipe run could be
+/// stretched by its path vertices, but that is a new behaviour no requirement asks for yet.
 ///
-/// Called at every site \ref DropSurfacesFromSelectionForTransform is, immediately after it. A
-/// separate function rather than a second `remove_if` inside that one, because the two exclusions
-/// have different reasons and a user who moved a surface and a solid together deserves to be told
-/// which of the two was which — a single merged message could only give one reason for both.
-///
-/// The exclusion itself is a stated boundary, not an oversight: transforming a solid means
-/// transforming every surface frame and every arc-edge frame in its topology, which is the same
-/// class of work REQ-312 needed for a single tilted arc, and it belongs with #120's Phase 5
-/// direct-modelling requirement. Refusing loudly is what keeps the alternative — a solid silently
-/// left behind while everything selected with it moves — off the table.
+/// A separate function from \ref DropSurfacesFromSelectionForTransform because the reasons differ,
+/// and a user who stretched a surface and a solid together deserves to be told which was which.
 void DropSolidsFromSelectionForTransform(AppCommandState& st, const char* commandName,
                                          std::vector<std::string>& log) {
-  const size_t before = st.selection.size();
+  size_t solids = 0, pipeRuns = 0;
   st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
-                                    [](const SelectedEntity& e) {
-                                      return e.type == SelectedEntity::Type::Solid;
+                                    [&](const SelectedEntity& e) {
+                                      if (e.type == SelectedEntity::Type::Solid) { ++solids; return true; }
+                                      if (e.type == SelectedEntity::Type::PipeRun) { ++pipeRuns; return true; }
+                                      return false;
                                     }),
                      st.selection.end());
-  const size_t dropped = before - st.selection.size();
-  if (dropped == 0)
-    return;
-  log.push_back(std::string(commandName) + " — " + std::to_string(dropped) +
-                " solid(s) excluded: transforming a solid is not supported yet. Erase and re-create it"
-                " at the position you want.");
+  if (solids != 0)
+    log.push_back(std::string(commandName) + " — " + std::to_string(solids) +
+                  " solid(s) excluded: a solid can only be moved whole. Use MOVE, or edit its faces"
+                  " and edges directly.");
+  if (pipeRuns != 0)
+    log.push_back(std::string(commandName) + " — " + std::to_string(pipeRuns) +
+                  " pipe run(s) excluded: a pipe run can only be moved whole. Use MOVE.");
 }
 
 /// REQ-103 MIRROR. Drops the three entity kinds a mirror cannot represent, and says why (REQ-201)
@@ -9374,10 +9595,8 @@ static void DropMirrorUnsupportedFromSelection(AppCommandState& st, std::vector<
 /// survey points are excluded rather than silently mis-duplicated or given a policy they were never
 /// built for.
 ///
-/// \c Solid is deliberately NOT dropped here (GitHub issue #400 increment 3 / D-2026-09-07-c):
-/// which array TYPE is chosen (Rectangular allows a solid, Polar still refuses one) is not known
-/// until AFTER selection, so the Polar-side exclusion happens later, at the 'p'/'polar' keystroke
-/// (\c HandleArrayText), not here.
+/// \c Solid and \c PipeRun are NOT dropped: both ARRAY forms copy them (D-2026-09-07-c for
+/// Rectangular, REQ-351 for Polar).
 static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ARRAY", log);
   size_t mesh = 0, pdf = 0;
@@ -9410,8 +9629,14 @@ static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<s
 static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float y0, float x1, float y1,
                                            std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
-  DropSolidsFromSelectionForTransform(st, "MIRROR", log);
   DropMirrorUnsupportedFromSelection(st, log);
+  // REQ-351: solids and pipe runs are mirrored across the vertical plane that contains the line.
+  {
+    const ray3d::Vec3 dir{static_cast<double>(x1) - x0, static_cast<double>(y1) - y0, 0.0};
+    const double len = ray3d::Length(dir);
+    const ray3d::Vec3 normal = len > 0.0 ? ray3d::Vec3{-dir.y / len, dir.x / len, 0.0} : ray3d::Vec3{};
+    MirrorSelectedSolidsAndPipeRuns(st, {static_cast<double>(x0), static_cast<double>(y0), 0.0}, normal, log);
+  }
 
   const size_t polyVertsBefore = st.userPolylineVerts.size();
   const size_t featureVertsBefore = st.featureLineVerts.size();
@@ -9670,67 +9895,6 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
     BumpCadGpuCache(st);
 }
 
-/// Apply \p op to every selected solid, replacing each rather than editing it, and report anything
-/// the kernel refuses by name (REQ-201, REQ-332 / TASK-231).
-///
-/// The de-duplication is `TranslateSelectedSolids`' and is load-bearing for the same reason: a
-/// selection should not hold one solid twice, and transforming it twice would turn or scale it twice
-/// — a defect that only shows up on the drawing where it happened.
-///
-/// A refusal leaves that solid EXACTLY as it was and does not abandon the rest of the selection. The
-/// kernel computes into a fresh solid and validates before returning (ADR-046 (d)), so there is no
-/// half-transformed state to roll back — the old `shared_ptr` is simply not replaced.
-template <typename Op>
-static void TransformSelectedSolids(AppCommandState& st, const char* commandName, Op op,
-                                    std::vector<std::string>& log) {
-  std::set<int> seen;
-  size_t refused = 0;
-  brep::Problem lastWhy = brep::Problem::Ok;
-  for (const SelectedEntity& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
-        static_cast<size_t>(e.index) >= st.cadSolids.size())
-      continue;
-    if (!seen.insert(e.index).second)
-      continue;
-    const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
-    if (!sp)
-      continue;
-    brep::Solid out;
-    brep::Problem why = brep::Problem::Ok;
-    if (!op(*sp, &out, &why)) {
-      ++refused;
-      lastWhy = why;
-      continue;
-    }
-    st.cadSolids[static_cast<size_t>(e.index)] = std::make_shared<const brep::Solid>(std::move(out));
-  }
-  // One line naming the LAST reason, not one line per solid. With several solids refused for
-  // different reasons that is lossy, and it is accepted here because the case is close to
-  // unreachable: the axis is normalized by both callers and the factor is clamped positive, so a
-  // refusal means `RotateResultInvalid` / `ScaleResultInvalid` — an isometry or a positive scale
-  // failing to validate, which cannot happen on a solid that was valid going in. This is a safety
-  // net that says something true if it ever fires, not a routine path.
-  if (refused != 0)
-    log.push_back(std::string(commandName) + " — " + std::to_string(refused) +
-                  " solid(s) unchanged: " + brep::ProblemText(lastWhy));
-}
-
-/// Turn every selected solid about the line through \p axisPoint with unit direction \p axisUnit
-/// (REQ-332 / TASK-231). Replaces REQ-322 item 6's blanket refusal for ROTATE.
-static void RotateSelectedSolids(AppCommandState& st, const ray3d::Vec3& axisPoint,
-                                 const ray3d::Vec3& axisUnit, float angleRad,
-                                 std::vector<std::string>& log) {
-  if (angleRad == 0.f)
-    return;
-  const double rad = static_cast<double>(angleRad);
-  TransformSelectedSolids(
-      st, "ROTATE",
-      [&](const brep::Solid& s, brep::Solid* out, brep::Problem* why) {
-        return brep::Rotate(s, axisPoint, axisUnit, rad, out, why);
-      },
-      log);
-}
-
 /// Scale every selected solid uniformly about \p basePoint (REQ-332 / TASK-231).
 ///
 /// **Uniform on every axis, including in plan view, where a 2D entity's elevation is left alone.**
@@ -9762,6 +9926,8 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
   // axis point's own Z is irrelevant to a rotation about a vertical line.
   RotateSelectedSolids(st, {static_cast<double>(bx), static_cast<double>(by), 0.0}, {0.0, 0.0, 1.0},
                        rad, log);
+  RotateSelectedPipeRuns(st, {static_cast<double>(bx), static_cast<double>(by), 0.0}, {0.0, 0.0, 1.0},
+                         rad, /*duplicate=*/false);  // REQ-351
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -9925,8 +10091,9 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
 /// rotate their stored plane normal, and an Arc re-anchors its start). Ellipse / Annotation / Table
 /// / BlockRef / PDF underlay / feature line / survey point are REFUSED by name — none stores a plane
 /// normal (the survey point has no 3D-rotate path yet), so tipping one out of world/UCS XY has no
-/// representable result today. Solids and surfaces are dropped by the shared helpers first, exactly
-/// as \c ApplyRotationToSelection does.
+/// representable result today. Surfaces are dropped by the shared helper first; solids turn through
+/// `brep::Rotate` (REQ-332) and pipe runs by their path (REQ-351), exactly as in
+/// \c ApplyRotationToSelection.
 static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
                                             const ray3d::Vec3& axisUnit, float angleRad,
                                             std::vector<std::string>& log) {
@@ -9934,6 +10101,7 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
   // The tilted-UCS twin of the branch in `ApplyRotationToSelection`: same kernel call, but about the
   // UCS Z axis this function was already given rather than world Z (REQ-332, amending REQ-322 item 6).
   RotateSelectedSolids(st, axisPoint, axisUnit, angleRad, log);
+  RotateSelectedPipeRuns(st, axisPoint, axisUnit, angleRad, /*duplicate=*/false);  // REQ-351
   const double rad = static_cast<double>(angleRad);
   const auto rotPt = [&](float x, float y, float z) -> ray3d::Vec3 {
     return ray3d::RotatePointAboutAxis({x, y, z}, axisPoint, axisUnit, rad);
@@ -10093,10 +10261,10 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
                                 std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MOVE", log);
   // Solids are NOT dropped any more (REQ-322): `brep::Translate` moves one completely, and doing so
-  // is the whole reason this function gained a Z. Every OTHER transform still drops them by name -
-  // rotating a solid means turning every surface frame and every arc-edge frame in its topology,
-  // which is a separate requirement rather than a footnote to this one.
+  // is the whole reason this function gained a Z. Pipe runs move with them (REQ-351).
   TranslateSelectedSolids(st, dx, dy, dz);
+  if (dx != 0.f || dy != 0.f || dz != 0.f)
+    TranslateSelectedPipeRuns(st, dx, dy, dz, /*duplicate=*/false);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 &&
@@ -10543,6 +10711,15 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
   // old behaviour, because SCALE refused solids outright until now. See ScaleSelectedSolids.
   ScaleSelectedSolids(st, {static_cast<double>(bx), static_cast<double>(by), static_cast<double>(bz)},
                       sc, log);
+  // A pipe run's ROUTE scales in 3D, like a solid; its size does not — a 4in pipe scaled is a longer
+  // 4in pipe, because the size is a catalog part (REQ-351, D-2026-09-28-f).
+  if (sc != 1.f) {
+    const ray3d::Vec3 base{static_cast<double>(bx), static_cast<double>(by), static_cast<double>(bz)};
+    const double k = static_cast<double>(sc);
+    TransformSelectedPipeRuns(
+        st, [&](const ray3d::Vec3& p) { return ray3d::Add(base, ray3d::Scale(ray3d::Sub(p, base), k)); },
+        /*duplicate=*/false);
+  }
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -11064,6 +11241,13 @@ void ApplyRotationAboutUcsZ(AppCommandState& st, float bx, float by, float bz, f
   ApplyRotationToSelection(st, bx, by, rad, log);
 }
 
+void ApplyRotationAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                            const ray3d::Vec3& axisUnit, float rad, std::vector<std::string>& log) {
+  // The in-place arbitrary-axis turn typed ROTATE already uses under a tilted UCS — so every type it
+  // turns, it turns here, and every type it refuses by name (REQ-201) is refused here too.
+  RotateSelectionInPlaceAboutAxis(st, axisPoint, ray3d::Normalize(axisUnit), rad, log);
+}
+
 void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float bz, float sc,
                                 std::vector<std::string>& log) {
   ApplyScaleToSelection(st, bx, by, bz, sc, log);
@@ -11226,7 +11410,6 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
   if (st.rotateCopyMode) {
     if (tilted) {
       DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
-      DropSolidsFromSelectionForTransform(st, "ROTATE", log);
       const ucs::Ucs u = CadActiveUcsStorage(st);
       const ray3d::Vec3 axisUnit =
           ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
@@ -11238,7 +11421,7 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
                       " survey point(s) not duplicated: rotation about a tilted axis is not"
                       " supported yet (REQ-328).");
     } else {
-      DuplicateCadSelectionRotated(st, bx, by, rad);
+      DuplicateCadSelectionRotated(st, bx, by, rad, log);
     }
     st.rotateCopyMode = false;
     st.active = K::None;
@@ -11471,30 +11654,6 @@ static void ArrayCellWorldDelta(const AppCommandState& st, float colOffset, floa
   *dz = static_cast<float>(world.z);
 }
 
-/// GitHub issue #400 increment 3 / D-2026-09-07-c: duplicate every selected \c Solid at
-/// (dx,dy,dz) via `brep::Translate`, exactly the operation REQ-322's `TranslateSelectedSolids`
-/// already uses for MOVE — the difference is APPENDING a fresh `CadSolidPtr` (a new instance)
-/// instead of replacing the selected one in place (a move). A dedicated helper, not folded into
-/// the shared `DuplicateCadSelectionTranslated` (also used by COPY): COPY was never part of this
-/// decision, and giving it solid support as an unannounced side effect would be exactly the
-/// silent scope creep CLAUDE.md warns against — REQ-322 item 6 names ARRAY specifically.
-static void DuplicateSelectedSolidsTranslated(AppCommandState& st, float dx, float dy, float dz) {
-  for (const SelectedEntity& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Solid || e.index < 0 ||
-        static_cast<size_t>(e.index) >= st.cadSolids.size())
-      continue;
-    const CadSolidPtr& sp = st.cadSolids[static_cast<size_t>(e.index)];
-    if (!sp)
-      continue;
-    st.cadSolids.push_back(std::make_shared<const brep::Solid>(
-        brep::Translate(*sp, ray3d::Vec3{static_cast<double>(dx), static_cast<double>(dy),
-                                         static_cast<double>(dz)})));
-    st.cadSolidAttrs.push_back(DuplicatedEntityAttrs(
-        static_cast<size_t>(e.index) < st.cadSolidAttrs.size() ? st.cadSolidAttrs[static_cast<size_t>(e.index)]
-                                                               : EntityAttributes{}));
-  }
-}
-
 /// Rectangular commit: the original selection occupies cell (0,0); every other cell is produced by
 /// looping the EXISTING \c DuplicateCadSelectionTranslated (already used by COPY) — no new
 /// per-type duplication code. One \c PushUndoSnapshot for the whole grid (REQ-305 acceptance 8).
@@ -11512,8 +11671,7 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
         ArrayCellWorldDelta(st, static_cast<float>(c) * st.arrayColSpacing,
                            static_cast<float>(r) * st.arrayRowSpacing, &dx, &dy, &dz,
                            static_cast<float>(lv) * st.arrayLevelSpacing);
-        DuplicateCadSelectionTranslated(st, dx, dy, dz);
-        DuplicateSelectedSolidsTranslated(st, dx, dy, dz);  // GitHub issue #400 increment 3
+        DuplicateCadSelectionTranslated(st, dx, dy, dz);  // solids and pipe runs too (REQ-351)
       }
     }
   }
@@ -11586,11 +11744,8 @@ bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector
       // whether that refusal even applies depends on Rotate-items (Yes rotates orientation and
       // needs it; No only translates and has no such gap), which is not chosen until later.
       //
-      // GitHub issue #400 increment 3 / D-2026-09-07-c: Polar still refuses a solid — it would need
-      // to TURN it, and no capability to rotate a brep::Solid about any axis exists yet. Dropped
-      // here rather than at PickSelection (`DropArrayUnsupportedFromSelection`) because Rectangular
-      // does not need this exclusion at all, and the array type is not known until now.
-      DropSolidsFromSelectionForTransform(st, "ARRAY Polar", log);
+      // Solids and pipe runs are arrayed too (REQ-351, lifting D-2026-09-07-c's Polar refusal):
+      // `RotateSelectionAboutAxis` and `DuplicateCadSelectionTranslated` copy both.
       st.arrayType = AT::Polar;
       st.arrayPhase = AP::Polar_WaitCenter;
       log.push_back("ARRAY Polar — specify center point:");
@@ -13100,12 +13255,14 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     case EP::WaitCenter:
       st.ellCx = wx;
       st.ellCy = wy;
+      st.ellCz = CadCommitElevation(st);
       st.ellPhase = EP::WaitMajorEnd;
       log.push_back("ELLIPSE — major axis endpoint:");
       break;
     case EP::WaitMajorEnd:
       st.ellMajEx = wx;
       st.ellMajEy = wy;
+      st.ellMajEz = CadCommitElevation(st);
       st.ellPhase = EP::WaitRatio;
       log.push_back("ELLIPSE — type minor/major ratio (0-1], or Enter for 0.5:");
       break;
@@ -13450,6 +13607,21 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   }
 
   if (st.active == K::Sweep) {
+    if (st.selBoxWaitingSecond)
+      finishBox();
+    return;
+  }
+
+  // 3DMOVE / 3DROTATE / 3DSCALE's select step (GitHub issue #564): LOFT's accumulate-and-Enter
+  // shape — a finished fence merges into the selection, and Enter moves on to the handles. Past it
+  // the viewport routes clicks to the gizmo (`GizmoHandlePick`), never here.
+  if (IsGizmoCommandKind(st.active)) {
+    if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::BasePoint) {
+      // The base point is an ordinary snapped pick on the work plane, carrying its elevation the
+      // way MOVE's base point does (REQ-329 increment 1).
+      SubmitGizmoBasePoint(st, wx, wy, CadCommitElevation(st), log);
+      return;
+    }
     if (st.selBoxWaitingSecond)
       finishBox();
     return;
@@ -13971,7 +14143,24 @@ void GizmoGrowBounds(double x, double y, double z, ray3d::Vec3* mn, ray3d::Vec3*
 
 }  // namespace
 
+bool IsGizmoCommandKind(AppCommandState::Kind k) {
+  return k == AppCommandState::Kind::Move3d || k == AppCommandState::Kind::Rotate3d ||
+         k == AppCommandState::Kind::Scale3d;
+}
+
+bool CadGizmoSummoned(const AppCommandState& st) {
+  if (IsGizmoCommandKind(st.active))
+    return st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::Handles;
+  return st.gizmoPersistent;
+}
+
 CadGizmoMode CadGizmoModeFor(const AppCommandState& st) {
+  // A selection alone never draws the gizmo (GitHub issue #564 section 3, D-2026-09-28-a): the
+  // handles covered the model the user had only meant to pick. It is summoned — by 3DMOVE /
+  // 3DROTATE / 3DSCALE for their duration, or by the persistent `GIZMO` setting. Tested first, so
+  // the hover, the click, the overlay and every transcript assertion inherit it from this one place.
+  if (!CadGizmoSummoned(st))
+    return CadGizmoMode::None;
   if (st.activeSpaceIndex != kModelSpaceIndex)
     return CadGizmoMode::None;  // a paper sheet is 2D (ADR-025 (g)); there is no third handle to draw
   // The sub-object selection is tested FIRST, but the order is a belt rather than the only brace:
@@ -14019,11 +14208,14 @@ CadGizmoMode CadGizmoModeFor(const AppCommandState& st) {
 int CadGizmoAxisCountFor(const AppCommandState& st) {
   switch (CadGizmoModeFor(st)) {
   case CadGizmoMode::Entity:
-    // THREE only for translate. Rotate gets ONE ring because typed ROTATE is UCS-Z-only (REQ-329:
-    // "a full ROTATE3D is a separate future issue"), and scale gets ONE handle because typed SCALE
-    // and `brep::Scale` are uniform. In both cases a second handle would advertise an edit with no
-    // equivalent typed command, which is exactly what REQ-060's second acceptance bullet forbids.
-    return st.gizmoOp == CadGizmoOp::Translate ? kGizmoAxisCount : 1;
+    // THREE to move and THREE to turn — one ring per active-UCS axis (D-2026-09-28-b, the user's
+    // AutoCAD-3DROTATE reference; it replaces TASK-232's single UCS-Z ring). The Z ring commits
+    // through typed ROTATE's own function, so REQ-060's agreement holds there unchanged; the X and Y
+    // rings are 3DROTATE's arbitrary-axis turn (issue #564 §4), typed as "grab a ring, type an angle".
+    // Scale has three too (D-2026-09-28-c, AutoCAD's 3DSCALE widget) but EVERY one scales uniformly,
+    // as AutoCAD's does for a solid: typed SCALE and `brep::Scale` are uniform, and a one-direction
+    // stretch is issue #564's own open question Q2.
+    return kGizmoAxisCount;
   case CadGizmoMode::SubObjectFace:
     // ONE, because `brep::PushPullFace` takes a distance along the face normal and nothing else. A
     // second handle would name a direction the kernel cannot move the face in.
@@ -14041,6 +14233,12 @@ int CadGizmoAxisCountFor(const AppCommandState& st) {
     break;
   }
   return 0;
+}
+
+int CadGizmoPlaneHandleCountFor(const AppCommandState& st) {
+  // Whole entities under Translate only (D-2026-09-28-c): a sub-object's handles are the directions
+  // its kernel edit can take, and a plane drag would name ones it cannot.
+  return CadGizmoModeFor(st) == CadGizmoMode::Entity && st.gizmoOp == CadGizmoOp::Translate ? 3 : 0;
 }
 
 bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
@@ -14068,6 +14266,12 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
   }
   if (st.selection.empty())
     return false;
+  // A 3D gizmo command's own base point (D-2026-09-28-c), when one was given: the user said where
+  // the gizmo goes, and for ROTATE / SCALE that is the pivot and the centre.
+  if (IsGizmoCommandKind(st.active) && st.gizmoBaseValid) {
+    *out = st.gizmoBase;
+    return true;
+  }
   ray3d::Vec3 mn{};
   ray3d::Vec3 mx{};
   bool any = false;
@@ -14234,15 +14438,10 @@ ray3d::Vec3 CadGizmoAxisWorld(const AppCommandState& st, int axis) {
   // would be the only thing in the viewport pointing somewhere else. In the World UCS — the default,
   // and what every existing drawing has — the two are identical.
   const ucs::Ucs& u = st.activeUcs;
-  // ROTATE: the single handle is the UCS Z axis — the ring's own normal, and the only axis typed
-  // ROTATE can turn about. SCALE: the single handle is the UCS X axis, and it is a DIRECTION TO
-  // DRAG ALONG rather than an axis of the transform, because a uniform scale has no axis. Which one
-  // it is does not affect the result; it only has to be somewhere pickable and deterministic.
-  int pick = axis;
-  if (st.gizmoOp == CadGizmoOp::Rotate)
-    pick = 2;
-  else if (st.gizmoOp == CadGizmoOp::Scale)
-    pick = 0;
+  // ROTATE: ring `axis` turns about UCS axis `axis` — the ring's own normal (D-2026-09-28-b).
+  // SCALE: handle `axis` lies along UCS axis `axis`, but it is only a DIRECTION TO DRAG ALONG — a
+  // uniform scale has no axis, so all three give the same result (D-2026-09-28-c).
+  const int pick = std::clamp(axis, 0, 2);
   const ray3d::Vec3 v = pick == 0 ? u.xAxis : pick == 1 ? u.yAxis : u.zAxis;
   const double len = ray3d::Length(v);
   if (len > 1.e-12)
@@ -14351,15 +14550,38 @@ int PickGizmoAxis(const AppCommandState& st, const ray3d::Ray& ray, double tolWo
   // and ask how far the hit is from the ring's radius. Running the segment test below on it would
   // grab along the UCS Z AXIS — the one line the ring never occupies — so the widget would be
   // ungrabbable everywhere it is drawn and grabbable where it is not.
-  if (st.gizmoOp == CadGizmoOp::Rotate && axisCount == 1) {
-    const ray3d::Vec3 n = CadGizmoAxisWorld(st, 0);
-    const double denom = ray3d::Dot(n, d);
-    if (std::fabs(denom) < 1.e-6)
-      return -1;  // looking along the ring's plane: it projects to a line and cannot be aimed at
-    const double t = ray3d::Dot(n, ray3d::Sub(anchor, ray.origin)) / denom;
-    const ray3d::Vec3 hit = ray3d::Add(ray.origin, ray3d::Scale(d, t));
-    const double r = ray3d::Length(ray3d::Sub(hit, anchor));
-    return std::fabs(r - len) <= tolWorld ? 0 : -1;
+  //
+  // With three rings (D-2026-09-28-b) the test is the distance from the RAY to each ring, measured
+  // at sample points round it, so an obliquely-seen ring is judged by how close it looks rather than
+  // by where the ray happens to pierce its plane. The nearest ring within the aperture wins.
+  if (st.gizmoOp == CadGizmoOp::Rotate) {
+    constexpr int kRingSamples = 96;
+    constexpr double kTwoPi = 6.28318530717958647692;
+    for (int axis = 0; axis < axisCount; ++axis) {
+      const ray3d::Vec3 n = CadGizmoAxisWorld(st, axis);
+      // Seen (nearly) edge-on, a ring is a line on screen and a drag round it names no angle —
+      // `CadAxisDragAngle` would refuse or jitter — so it is not offered as a target at all.
+      if (std::fabs(ray3d::Dot(n, d)) < kGizmoRingEdgeOnCos)
+        continue;
+      ray3d::Vec3 seed{0.0, 0.0, 1.0};
+      if (std::fabs(ray3d::Dot(n, seed)) > 0.9)
+        seed = ray3d::Vec3{1.0, 0.0, 0.0};
+      const ray3d::Vec3 e0 = ray3d::Normalize(ray3d::Cross(seed, n));
+      const ray3d::Vec3 e1 = ray3d::Cross(n, e0);
+      for (int i = 0; i < kRingSamples; ++i) {
+        const double th = kTwoPi * static_cast<double>(i) / static_cast<double>(kRingSamples);
+        const ray3d::Vec3 p = ray3d::Add(
+            anchor, ray3d::Add(ray3d::Scale(e0, std::cos(th) * len), ray3d::Scale(e1, std::sin(th) * len)));
+        const ray3d::Vec3 rel = ray3d::Sub(p, ray.origin);
+        const double along = ray3d::Dot(rel, d);
+        const double dist = ray3d::Length(ray3d::Sub(rel, ray3d::Scale(d, along)));
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = axis;
+        }
+      }
+    }
+    return best;
   }
 
   for (int axis = 0; axis < axisCount; ++axis) {
@@ -14380,6 +14602,33 @@ int PickGizmoAxis(const AppCommandState& st, const ray3d::Ray& ray, double tolWo
       best = axis;
     }
   }
+  if (best >= 0)
+    return best;
+  // The PLANE handles (D-2026-09-28-c): a square in each UCS plane, from the anchor out to
+  // `kGizmoPlaneHandleFrac` of the handle along both of its axes. An arrow near the cursor wins
+  // (above); failing that, the square the ray passes through, nearest the eye first. A plane seen
+  // (nearly) edge-on is a line on screen and names no in-plane offset, so it is not offered.
+  double bestT = std::numeric_limits<double>::infinity();
+  const double side = len * kGizmoPlaneHandleFrac;
+  for (int p = 0; p < CadGizmoPlaneHandleCountFor(st); ++p) {
+    int ia = 0;
+    int ib = 0;
+    CadGizmoPlaneAxes(p, &ia, &ib);
+    const ray3d::Vec3 ua = CadGizmoAxisWorld(st, ia);
+    const ray3d::Vec3 ub = CadGizmoAxisWorld(st, ib);
+    const ray3d::Vec3 n = ray3d::Normalize(ray3d::Cross(ua, ub));
+    const double denom = ray3d::Dot(n, d);
+    if (std::fabs(denom) < kGizmoRingEdgeOnCos)
+      continue;
+    const double t = ray3d::Dot(n, ray3d::Sub(anchor, ray.origin)) / denom;
+    const ray3d::Vec3 rel = ray3d::Sub(ray3d::Add(ray.origin, ray3d::Scale(d, t)), anchor);
+    const double ca = ray3d::Dot(rel, ua);
+    const double cb = ray3d::Dot(rel, ub);
+    if (ca >= 0.0 && ca <= side && cb >= 0.0 && cb <= side && t < bestT) {
+      bestT = t;
+      best = kGizmoPlaneHandleFirst + p;
+    }
+  }
   return best;
 }
 
@@ -14394,6 +14643,24 @@ void UpdateGizmoDrag(AppCommandState& st, const ray3d::Ray& ray) {
     return;
   // Each operation reads the cursor through its own solve, and each holds the last good value rather
   // than jumping when the gesture stops meaning anything (see both solves' refusal notes).
+  //
+  // A PLANE handle (D-2026-09-28-c): where the ray meets the grabbed plane, less where the grab met
+  // it — an in-plane offset by construction. A ray (nearly) parallel to the plane meets it nowhere
+  // useful, so the last good offset is held.
+  if (st.gizmoDragAxis >= kGizmoPlaneHandleFirst) {
+    const ray3d::Vec3 n = st.gizmoAxisDir;
+    const double dirLen = ray3d::Length(ray.dir);
+    if (dirLen < 1.e-12)
+      return;
+    const ray3d::Vec3 dir = ray3d::Scale(ray.dir, 1.0 / dirLen);
+    const double denom = ray3d::Dot(n, dir);
+    if (std::fabs(denom) < 1.e-6)
+      return;
+    const double t = ray3d::Dot(n, ray3d::Sub(st.gizmoAnchor, ray.origin)) / denom;
+    st.gizmoDragVec = ray3d::Sub(ray3d::Add(ray.origin, ray3d::Scale(dir, t)), st.gizmoGrabPoint);
+    st.gizmoDragDistance = ray3d::Length(st.gizmoDragVec);
+    return;
+  }
   if (st.gizmoOp == CadGizmoOp::Rotate) {
     double a = 0.0;
     if (!CadAxisDragAngle(st.gizmoAnchor, st.gizmoAxisDir, ray, &a))
@@ -14426,23 +14693,39 @@ void UpdateGizmoDrag(AppCommandState& st, const ray3d::Ray& ray) {
     return;
   }
   st.gizmoDragDistance = s - st.gizmoGrabParam;
+  st.gizmoDragVec = ray3d::Scale(st.gizmoAxisDir, st.gizmoDragDistance);
 }
 
 void CancelGizmoDrag(AppCommandState& st) {
   st.gizmoDragActive = false;
   st.gizmoDragAxis = -1;
+  st.gizmoDragVec = ray3d::Vec3{0.0, 0.0, 0.0};
   // The neutral value is the operation's own: a scale of ZERO is a collapse, not "no drag" (see
   // `gizmoDragDistance`'s table).
   st.gizmoDragDistance = st.gizmoOp == CadGizmoOp::Scale ? 1.0 : 0.0;
   st.gizmoDragIsSubObject = false;
 }
 
+static bool CommitGizmoDragImpl(AppCommandState& st, std::vector<std::string>& log);
+
 bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log) {
+  const bool committed = CommitGizmoDragImpl(st, log);
+  // 3DMOVE / 3DROTATE / 3DSCALE are ONE operation each (GitHub issue #564 section 3): the commit
+  // that just pushed its undo step is also the end of the command. Here rather than at each caller
+  // so the click, the headless DROP and the typed value all end it the same way. A drag that
+  // changed nothing, or one the kernel refused, leaves the command running to try again.
+  if (committed && IsGizmoCommandKind(st.active))
+    EndGizmoCommand(st);
+  return committed;
+}
+
+static bool CommitGizmoDragImpl(AppCommandState& st, std::vector<std::string>& log) {
   if (!st.gizmoDragActive)
     return false;
   const double dist = st.gizmoDragDistance;
   const int axis = st.gizmoDragAxis;
   const ray3d::Vec3 u = st.gizmoAxisDir;
+  const ray3d::Vec3 moveVec = st.gizmoDragVec;  // TRANSLATE's displacement, axis or plane handle
   const bool onFace = st.gizmoDragIsSubObject;
   const SelectedSubObject face = st.gizmoDragSubObject;
   const solidpick::Kind subKind = face.kind;
@@ -14461,11 +14744,16 @@ bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log) {
     // ONE undo snapshot for the whole drag, and then the SAME function typed ROTATE calls — dispatch
     // included, so the agreement holds under a tilted UCS as well as in plan (REQ-060 acceptance 2).
     PushUndoSnapshot(st, "Rotate");
-    ApplyRotationAboutUcsZ(st, static_cast<float>(anchor.x), static_cast<float>(anchor.y),
-                           static_cast<float>(anchor.z), static_cast<float>(dist), log);
+    // The Z ring is typed ROTATE exactly (REQ-060's agreement, byte-identical in plan); the X and Y
+    // rings turn about their own UCS axis through the same anchor (D-2026-09-28-b).
+    if (axis == 2)
+      ApplyRotationAboutUcsZ(st, static_cast<float>(anchor.x), static_cast<float>(anchor.y),
+                             static_cast<float>(anchor.z), static_cast<float>(dist), log);
+    else
+      ApplyRotationAboutAxis(st, anchor, u, static_cast<float>(dist), log);
     char rbuf[128];
-    std::snprintf(rbuf, sizeof(rbuf), "Gizmo rotate: %.4f degrees about the UCS Z axis.",
-                  dist * 180.0 / 3.14159265358979323846);
+    std::snprintf(rbuf, sizeof(rbuf), "Gizmo rotate: %.4f degrees about the UCS %s axis.",
+                  dist * 180.0 / 3.14159265358979323846, axis == 0 ? "X" : axis == 1 ? "Y" : "Z");
     log.push_back(rbuf);
     return true;
   }
@@ -14523,40 +14811,25 @@ bool CommitGizmoDrag(AppCommandState& st, std::vector<std::string>& log) {
   // coordinates agreeing within REQ-101" holds because there is one implementation, not because two
   // agree today.
   PushUndoSnapshot(st, "Move");
-  ApplyTranslationToSelection(st, static_cast<float>(dist * u.x), static_cast<float>(dist * u.y),
-                              static_cast<float>(dist * u.z), log);
+  ApplyTranslationToSelection(st, static_cast<float>(moveVec.x), static_cast<float>(moveVec.y),
+                              static_cast<float>(moveVec.z), log);
   char buf[128];
-  std::snprintf(buf, sizeof(buf), "Gizmo move: %.4f along %s.", dist,
-                axis == 0 ? "X" : axis == 1 ? "Y" : "Z");
+  if (axis >= kGizmoPlaneHandleFirst) {
+    const int p = axis - kGizmoPlaneHandleFirst;
+    std::snprintf(buf, sizeof(buf), "Gizmo move: %.4f in the UCS %s plane.", dist,
+                  p == 0 ? "XY" : p == 1 ? "YZ" : "ZX");
+  } else {
+    std::snprintf(buf, sizeof(buf), "Gizmo move: %.4f along %s.", dist,
+                  axis == 0 ? "X" : axis == 1 ? "Y" : "Z");
+  }
   log.push_back(buf);
   return true;
 }
 
-bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorld,
-                      std::vector<std::string>& log) {
-  if (st.gizmoDragActive) {
-    UpdateGizmoDrag(st, ray);
-    CommitGizmoDrag(st, log);
-    return true;  // the click was the gizmo's whether or not the distance came out zero
-  }
-  const int axis = PickGizmoAxis(st, ray, tolWorld);
-  if (axis < 0)
-    return false;
-  ray3d::Vec3 anchor{};
-  if (!CadGizmoAnchorWorld(st, &anchor))
-    return false;
-  const ray3d::Vec3 u = CadGizmoAxisWorld(st, axis);
-  double s = 0.0;
-  // The grab is captured through the SAME solve the drag will use, so the two are measured in one
-  // set of units and the difference (or ratio) between them is meaningful.
-  if (st.gizmoOp == CadGizmoOp::Rotate) {
-    if (!CadAxisDragAngle(anchor, u, ray, &s))
-      return false;  // grabbed while looking along the rotation plane: no angle to measure from
-  } else if (!CadAxisDragParam(anchor, u, ray, &s)) {
-    return false;  // grabbed while sighting down the handle: nothing to measure from
-  } else if (st.gizmoOp == CadGizmoOp::Scale && std::fabs(s) < 1.e-9) {
-    return false;  // grabbed at the anchor: a scale is a RATIO, and there is no baseline here
-  }
+/// Arms a drag on handle \p axis — the state a grab click leaves, and what a typed exact value in a
+/// 3D gizmo command starts from. False when a sub-object gizmo has lost its one sub-object.
+static bool ArmGizmoDrag(AppCommandState& st, int axis, const ray3d::Vec3& anchor,
+                         const ray3d::Vec3& u, double grabParam) {
   // WHICH face, captured now rather than read at the commit: the selection can be cleared or
   // re-picked between the two clicks, and the drag belongs to the face the user actually grabbed.
   // A sub-object drag of ANY kind — face, edge or vertex — captures its target now rather than
@@ -14576,17 +14849,316 @@ bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorl
   st.gizmoDragAxis = axis;
   st.gizmoAnchor = anchor;
   st.gizmoAxisDir = u;
-  st.gizmoGrabParam = s;
+  st.gizmoGrabParam = grabParam;
   st.gizmoDragDistance = st.gizmoOp == CadGizmoOp::Scale ? 1.0 : 0.0;  // the operation's neutral
+  st.gizmoDragVec = ray3d::Vec3{0.0, 0.0, 0.0};
+  st.gizmoGrabPoint = anchor;
   st.gizmoHoverAxis = axis;
   st.gizmoDragIsSubObject = onFace;
   st.gizmoDragSubObject = face;
-  if (onFace) {
+  return true;
+}
+
+bool SubmitGizmoClick(AppCommandState& st, const ray3d::Ray& ray, double tolWorld,
+                      std::vector<std::string>& log) {
+  if (st.gizmoDragActive) {
+    UpdateGizmoDrag(st, ray);
+    CommitGizmoDrag(st, log);
+    return true;  // the click was the gizmo's whether or not the distance came out zero
+  }
+  const int axis = PickGizmoAxis(st, ray, tolWorld);
+  if (axis < 0)
+    return false;
+  ray3d::Vec3 anchor{};
+  if (!CadGizmoAnchorWorld(st, &anchor))
+    return false;
+  // A PLANE handle (D-2026-09-28-c): the grab is where the ray meets the plane, and the drag is
+  // measured from there, so the selection does not jump to the cursor on the first move.
+  if (axis >= kGizmoPlaneHandleFirst) {
+    const int p = axis - kGizmoPlaneHandleFirst;
+    int ia = 0;
+    int ib = 0;
+    CadGizmoPlaneAxes(p, &ia, &ib);
+    const ray3d::Vec3 n =
+        ray3d::Normalize(ray3d::Cross(CadGizmoAxisWorld(st, ia), CadGizmoAxisWorld(st, ib)));
+    const double dirLen = ray3d::Length(ray.dir);
+    const double denom = dirLen > 1.e-12 ? ray3d::Dot(n, ray3d::Scale(ray.dir, 1.0 / dirLen)) : 0.0;
+    if (std::fabs(denom) < 1.e-6)
+      return false;
+    const ray3d::Vec3 dir = ray3d::Scale(ray.dir, 1.0 / dirLen);
+    const double t = ray3d::Dot(n, ray3d::Sub(anchor, ray.origin)) / denom;
+    if (!ArmGizmoDrag(st, axis, anchor, n, 0.0))
+      return false;
+    st.gizmoGrabPoint = ray3d::Add(ray.origin, ray3d::Scale(dir, t));
+    log.push_back(std::string("Gizmo: dragging in the UCS ") + (p == 0 ? "XY" : p == 1 ? "YZ" : "ZX") +
+                  " plane — click to place, or type dx,dy and Enter. ESC cancels.");
+    return true;
+  }
+  const ray3d::Vec3 u = CadGizmoAxisWorld(st, axis);
+  double s = 0.0;
+  // The grab is captured through the SAME solve the drag will use, so the two are measured in one
+  // set of units and the difference (or ratio) between them is meaningful.
+  if (st.gizmoOp == CadGizmoOp::Rotate) {
+    if (!CadAxisDragAngle(anchor, u, ray, &s))
+      return false;  // grabbed while looking along the rotation plane: no angle to measure from
+  } else if (!CadAxisDragParam(anchor, u, ray, &s)) {
+    return false;  // grabbed while sighting down the handle: nothing to measure from
+  } else if (st.gizmoOp == CadGizmoOp::Scale && std::fabs(s) < 1.e-9) {
+    return false;  // grabbed at the anchor: a scale is a RATIO, and there is no baseline here
+  }
+  if (!ArmGizmoDrag(st, axis, anchor, u, s))
+    return false;
+  if (st.gizmoDragIsSubObject) {
     log.push_back("Gizmo: pushing the face along its normal — click to place, ESC to cancel.");
   } else {
     log.push_back(std::string("Gizmo: dragging along ") + (axis == 0 ? "X" : axis == 1 ? "Y" : "Z") +
                   " — click to place, ESC to cancel.");
   }
+  return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3, D-2026-09-28-a).
+//
+// The REQ-060 gizmo as a command's UI rather than a side effect of selecting. The commands add no
+// transform of their own: they set `gizmoOp` for their duration, show the existing widget, and let
+// `CommitGizmoDrag` — the one function every gizmo commit already goes through — do the work and
+// the one undo step. That function also ends the command, so a click, a typed value and a headless
+// DROP all finish it the same way.
+// ---------------------------------------------------------------------------------------------
+
+static CadGizmoOp GizmoOpForCommandKind(AppCommandState::Kind k) {
+  if (k == AppCommandState::Kind::Rotate3d)
+    return CadGizmoOp::Rotate;
+  if (k == AppCommandState::Kind::Scale3d)
+    return CadGizmoOp::Scale;
+  return CadGizmoOp::Translate;
+}
+
+void EndGizmoCommand(AppCommandState& st) {
+  CancelGizmoDrag(st);  // with the command's op still set: the cancel's neutral value is per-op
+  st.gizmoOp = st.gizmoOpBeforeCmd;
+  st.gizmoHoverAxis = -1;
+  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::SelectObjects;
+  st.gizmoBaseValid = false;
+  st.active = AppCommandState::Kind::None;
+}
+
+std::string CadGizmoCommandPromptText(const AppCommandState& st) {
+  const std::string verb = AppCommandState::KindName(st.active);
+  if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects) {
+    std::string s = verb + " — select objects";
+    if (st.active == AppCommandState::Kind::Move3d)
+      s += " (Ctrl+click a solid face, edge or vertex)";
+    const size_t have = st.selection.size() + st.subObjectSelection.size();
+    if (have > 0)
+      s += " (" + std::to_string(have) + " selected)";
+    return s + ", Enter when done. ESC cancels.";
+  }
+  if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::BasePoint)
+    return verb + " — specify base point (click, snap or type X,Y[,Z]) <Enter = centre of the "
+                  "selection>. ESC cancels.";
+  const char* what = st.gizmoOp == CadGizmoOp::Rotate  ? "an angle in degrees"
+                     : st.gizmoOp == CadGizmoOp::Scale ? "a scale factor"
+                                                       : "a distance";
+  if (st.gizmoDragActive)
+    return verb + " — click to place, or type " + what + " and Enter. ESC cancels.";
+  if (CadGizmoAxisCountFor(st) == 1)
+    return verb + " — drag the handle, or type " + what + " and Enter. ESC cancels.";
+  if (st.gizmoOp == CadGizmoOp::Rotate)
+    return verb + " — click a ring (X red, Y green, Z blue) to turn about that UCS axis, then "
+                  "click to place or type " + what + ". ESC cancels.";
+  if (st.gizmoOp == CadGizmoOp::Scale)
+    return verb + " — drag any axis handle (all scale evenly), or type " + what +
+           " and Enter. ESC cancels.";
+  return verb + " — drag an arrow, or a corner square to slide in that plane; then click to place "
+                "or type " + what + " (dx,dy for a plane). ESC cancels.";
+}
+
+void SubmitGizmoBasePoint(AppCommandState& st, double x, double y, double z,
+                          std::vector<std::string>& log) {
+  if (!IsGizmoCommandKind(st.active) ||
+      st.gizmoCmdPhase != AppCommandState::GizmoCmdPhase::BasePoint)
+    return;
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+    log.push_back(std::string(AppCommandState::KindName(st.active)) +
+                  " — that base point is not a finite coordinate.");  // REQ-201
+    return;
+  }
+  st.gizmoBase = ray3d::Vec3{x, y, z};
+  st.gizmoBaseValid = true;
+  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::Handles;
+  log.push_back(CadGizmoCommandPromptText(st));
+}
+
+/// Move from "select objects" to the base point (whole entities) or straight to the handles (a
+/// solid face / edge / vertex, whose handle sits where its kernel edit acts) — or say why there is
+/// no gizmo and end the command (REQ-201): a gizmo command with nothing to drag would look hung.
+static void EnterGizmoHandlesPhase(AppCommandState& st, std::vector<std::string>& log) {
+  const std::string verb = AppCommandState::KindName(st.active);
+  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::Handles;
+  st.gizmoBaseValid = false;
+  if (CadGizmoVisible(st)) {
+    if (st.subObjectSelection.empty())
+      st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::BasePoint;  // D-2026-09-28-c
+    log.push_back(CadGizmoCommandPromptText(st));
+    return;
+  }
+  const std::string opVerb = st.gizmoOp == CadGizmoOp::Rotate  ? "rotated"
+                             : st.gizmoOp == CadGizmoOp::Scale ? "scaled"
+                                                               : "moved";
+  std::string why = "nothing selected can be " + opVerb + ".";
+  if (st.subObjectSelection.size() > 1)
+    why = "several faces, edges or vertices have no single handle; select one.";
+  else if (st.subObjectSelection.size() == 1 && st.gizmoOp != CadGizmoOp::Translate)
+    why = "a solid's face, edge or vertex can only be moved, not " + opVerb + ".";
+  else if (st.subObjectSelection.size() == 1)
+    why = "the kernel cannot move that face, edge or vertex (a curved face, a cylinder's rim or a "
+          "pyramid's apex, for example).";
+  log.push_back(verb + " — " + why + " Nothing changed.");
+  EndGizmoCommand(st);
+}
+
+void StartGizmoCommand(AppCommandState& st, AppCommandState::Kind kind,
+                       std::vector<std::string>& log) {
+  const std::string verb = AppCommandState::KindName(kind);
+  if (IsGizmoCommandKind(st.active))
+    EndGizmoCommand(st);  // restarting: put the previous command's op back before saving it again
+  if (st.activeSpaceIndex != kModelSpaceIndex) {
+    // Paper space is a 2D sheet (ADR-025 (g)); the gizmo has no third handle to draw there.
+    log.push_back(verb + " — works in model space only.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.active = kind;
+  st.lastCommand = kind;
+  st.gizmoOpBeforeCmd = st.gizmoOp;
+  CancelGizmoDrag(st);  // a persistent-gizmo drag armed under the old op cannot carry over
+  st.gizmoOp = GizmoOpForCommandKind(kind);
+  st.gizmoHoverAxis = -1;
+  st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::SelectObjects;
+  if (!st.selection.empty() || !st.subObjectSelection.empty()) {
+    EnterGizmoHandlesPhase(st, log);  // a pre-selection goes straight to the handles
+    return;
+  }
+  log.push_back(CadGizmoCommandPromptText(st));
+}
+
+bool HandleGizmoCommandTextInput(const std::string& lineIn, AppCommandState& st,
+                                 std::vector<std::string>& log) {
+  if (!IsGizmoCommandKind(st.active))
+    return false;
+  const std::string verb = AppCommandState::KindName(st.active);
+  const std::string line = StringUtil::trimCopy(lineIn);
+  if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects) {
+    if (!line.empty()) {
+      log.push_back(CadGizmoCommandPromptText(st));
+      return true;
+    }
+    if (st.selection.empty() && st.subObjectSelection.empty()) {
+      log.push_back(verb + " — select at least one object, then Enter. ESC cancels.");
+      return true;
+    }
+    EnterGizmoHandlesPhase(st, log);
+    return true;
+  }
+
+  // BASE POINT (D-2026-09-28-c). Enter keeps the default — the centre of the selection's box — and
+  // a typed point is read the way MOVE reads its base point.
+  if (st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::BasePoint) {
+    if (line.empty()) {
+      st.gizmoBaseValid = false;
+      st.gizmoCmdPhase = AppCommandState::GizmoCmdPhase::Handles;
+      log.push_back(CadGizmoCommandPromptText(st));
+      return true;
+    }
+    float bx = 0.f;
+    float by = 0.f;
+    float bz = 0.f;
+    bool consumed = false;
+    if (!ResolveTypedModifyPoint(st, line, false, 0.f, 0.f, 0.f, verb.c_str(), &bx, &by, &bz,
+                                 &consumed, log)) {
+      if (!consumed)
+        log.push_back(verb + " — could not read '" + line + "' as a point. " +
+                      CadGizmoCommandPromptText(st));
+      return true;
+    }
+    SubmitGizmoBasePoint(st, bx, by, bz, log);
+    return true;
+  }
+
+  // HANDLES. A blank Enter commits what an armed drag shows — or, with nothing armed, ends the
+  // command having changed nothing.
+  if (line.empty()) {
+    if (st.gizmoDragActive) {
+      if (!CommitGizmoDrag(st, log))
+        log.push_back(CadGizmoCommandPromptText(st));  // a zero drag, or refused and reported
+      return true;
+    }
+    log.push_back(verb + " — nothing changed.");
+    EndGizmoCommand(st);
+    return true;
+  }
+
+  // A PLANE handle grabbed (D-2026-09-28-c): "dx,dy" along the plane's own two UCS axes.
+  if (st.gizmoDragActive && st.gizmoDragAxis >= kGizmoPlaneHandleFirst) {
+    double da = 0.0;
+    double db = 0.0;
+    if (!ParseTwoDoubles(line, &da, &db) || !std::isfinite(da) || !std::isfinite(db)) {
+      log.push_back(verb + " — type the offset in the plane as dx,dy.");
+      return true;
+    }
+    int ia = 0;
+    int ib = 0;
+    CadGizmoPlaneAxes(st.gizmoDragAxis - kGizmoPlaneHandleFirst, &ia, &ib);
+    st.gizmoDragVec = ray3d::Add(ray3d::Scale(CadGizmoAxisWorld(st, ia), da),
+                                 ray3d::Scale(CadGizmoAxisWorld(st, ib), db));
+    st.gizmoDragDistance = ray3d::Length(st.gizmoDragVec);
+    if (!CommitGizmoDrag(st, log))
+      log.push_back(CadGizmoCommandPromptText(st));
+    return true;
+  }
+
+  // An exact value, in the operation's own units.
+  const char* begin = line.c_str();
+  char* end = nullptr;
+  const double v = std::strtod(begin, &end);
+  if (end == begin || *end != '\0' || !std::isfinite(v)) {
+    log.push_back(verb + " — '" + line + "' is not a number. " + CadGizmoCommandPromptText(st));
+    return true;
+  }
+  if (st.gizmoOp == CadGizmoOp::Scale && !(v > 0.0)) {
+    // Zero collapses the selection and a negative factor is a mirror — its own operation
+    // (REQ-332 item 7), not a scale.
+    log.push_back(verb + " — the scale factor must be greater than zero.");
+    return true;
+  }
+  if (!st.gizmoDragActive) {
+    // With several handles, a bare number does not say which way; with one, it does. A SCALE says
+    // nothing about a direction at all — every handle scales evenly (D-2026-09-28-c).
+    if (CadGizmoAxisCountFor(st) != 1 && st.gizmoOp != CadGizmoOp::Scale) {
+      log.push_back(st.gizmoOp == CadGizmoOp::Rotate
+                        ? verb + " — click the ring to turn about first (X red, Y green, Z blue), "
+                                 "then type the angle."
+                        : verb + " — click the axis handle to move along first, then type the "
+                                 "distance.");
+      return true;
+    }
+    ray3d::Vec3 anchor{};
+    if (!CadGizmoAnchorWorld(st, &anchor) ||
+        !ArmGizmoDrag(st, 0, anchor, CadGizmoAxisWorld(st, 0), 0.0)) {
+      log.push_back(verb + " — the selection no longer has a gizmo. Nothing changed.");
+      EndGizmoCommand(st);
+      return true;
+    }
+  }
+  st.gizmoDragDistance =
+      st.gizmoOp == CadGizmoOp::Rotate ? v * 3.14159265358979323846 / 180.0 : v;
+  st.gizmoDragVec = ray3d::Scale(st.gizmoAxisDir, st.gizmoDragDistance);  // read by a TRANSLATE
+  if (!CommitGizmoDrag(st, log))
+    log.push_back(CadGizmoCommandPromptText(st));  // zero, or refused by the kernel and reported
   return true;
 }
 
@@ -20633,7 +21205,21 @@ struct EntityBox {
   double mxX;
   double mnY;
   double mxY;
+  /// The entity's elevation range (GitHub issue #564 §1, D-2026-09-28-d). Read ONLY by the 3D
+  /// extents behind an orbited ZOOM EXTENTS; the plan-view path reads X/Y alone, unchanged.
+  double mnZ = 0.;
+  double mxZ = 0.;
 };
+
+/// Widen \p b's elevation range to include \p z (the box's first Z sets both ends when \p first).
+inline void EntityBoxGrowZ(EntityBox& b, double z, bool first) {
+  if (first) {
+    b.mnZ = b.mxZ = z;
+  } else {
+    b.mnZ = std::min(b.mnZ, z);
+    b.mxZ = std::max(b.mxZ, z);
+  }
+}
 
 [[nodiscard]] double NthPercentile(std::vector<double>& v, double p) {
   if (v.empty())
@@ -20658,6 +21244,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       b.mxX = std::max(static_cast<double>(L[i]), static_cast<double>(L[i + 3]));
       b.mnY = std::min(static_cast<double>(L[i + 1]), static_cast<double>(L[i + 4]));
       b.mxY = std::max(static_cast<double>(L[i + 1]), static_cast<double>(L[i + 4]));
+      EntityBoxGrowZ(b, static_cast<double>(L[i + 2]), true);
+      EntityBoxGrowZ(b, static_cast<double>(L[i + 5]), false);
       b.cx = 0.5 * (b.mnX + b.mxX);
       b.cy = 0.5 * (b.mnY + b.mxY);
       out.push_back(b);
@@ -20680,6 +21268,14 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       b.mxY = cy + r;
       b.cx = cx;
       b.cy = cy;
+      // A tilted circle (REQ-312) rises and falls by up to its radius; a flat one sits at its Z.
+      const size_t ni = (ci / 4) * 3;
+      const bool flat = ni + 2 >= st.userCircleNormals.size() ||
+                        IsFlatNormal(st.userCircleNormals[ni], st.userCircleNormals[ni + 1],
+                                     st.userCircleNormals[ni + 2]);
+      const double cz = static_cast<double>(C[ci + 2]);
+      EntityBoxGrowZ(b, flat ? cz : cz - r, true);
+      EntityBoxGrowZ(b, flat ? cz : cz + r, false);
       out.push_back(b);
     }
   }
@@ -20689,6 +21285,7 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     EntityBox b{};
     b.mnX = b.mxX = b.cx = static_cast<double>(p.easting);
     b.mnY = b.mxY = b.cy = static_cast<double>(p.northing);
+    EntityBoxGrowZ(b, p.elevation, true);
     out.push_back(b);
   }
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
@@ -20705,6 +21302,7 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxX = static_cast<double>(amxX);
     b.mnY = static_cast<double>(amnY);
     b.mxY = static_cast<double>(amxY);
+    EntityBoxGrowZ(b, static_cast<double>(a.insZ), true);
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -20737,6 +21335,9 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxY = static_cast<double>(a.cy) + dr;
     b.cx = static_cast<double>(a.cx);
     b.cy = static_cast<double>(a.cy);
+    const bool arcFlat = IsFlatNormal(a.nx, a.ny, a.nz);
+    EntityBoxGrowZ(b, arcFlat ? a.z : a.z - dr, true);
+    EntityBoxGrowZ(b, arcFlat ? a.z : a.z + dr, false);
     out.push_back(b);
   }
   for (size_t elIx = 0; elIx < st.userEllipses.size(); ++elIx) {
@@ -20755,6 +21356,9 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxY = static_cast<double>(el.cy) + rrx;
     b.cx = static_cast<double>(el.cx);
     b.cy = static_cast<double>(el.cy);
+    const bool elFlat = IsFlatNormal(el.nx, el.ny, el.nz);
+    EntityBoxGrowZ(b, elFlat ? el.z : el.z - rrx, true);
+    EntityBoxGrowZ(b, elFlat ? el.z : el.z + rrx, false);
     out.push_back(b);
   }
   const auto& PV = st.userPolylineVerts;
@@ -20772,6 +21376,7 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       for (int vi = v0; vi < v1; ++vi) {
         const double vx = static_cast<double>(PV[static_cast<size_t>(vi * 3 + 0)]);
         const double vy = static_cast<double>(PV[static_cast<size_t>(vi * 3 + 1)]);
+        EntityBoxGrowZ(b, static_cast<double>(PV[static_cast<size_t>(vi * 3 + 2)]), !any);
         if (!any) {
           b.mnX = b.mxX = vx;
           b.mnY = b.mxY = vy;
@@ -20810,6 +21415,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
           break;
         const double vx = static_cast<double>(FV[static_cast<size_t>(vi * 3 + 0)]);
         const double vy = static_cast<double>(FV[static_cast<size_t>(vi * 3 + 1)]);
+        if (static_cast<size_t>(vi * 3 + 2) < FV.size())
+          EntityBoxGrowZ(b, static_cast<double>(FV[static_cast<size_t>(vi * 3 + 2)]), !any);
         if (!any) {
           b.mnX = b.mxX = vx;
           b.mnY = b.mxY = vy;
@@ -20847,6 +21454,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxX = static_cast<double>(mb.mxX);
     b.mnY = static_cast<double>(mb.mnY);
     b.mxY = static_cast<double>(mb.mxY);
+    b.mnZ = static_cast<double>(mb.mnZ);
+    b.mxZ = static_cast<double>(mb.mxZ);
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -20863,11 +21472,13 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     EntityBox b{};
     b.mnX = b.mxX = pc->pointsXyz[0];
     b.mnY = b.mxY = pc->pointsXyz[1];
+    EntityBoxGrowZ(b, pc->pointsXyz[2], true);
     for (size_t i = 3; i + 2 < pc->pointsXyz.size(); i += 3) {
       b.mnX = std::min(b.mnX, pc->pointsXyz[i]);
       b.mxX = std::max(b.mxX, pc->pointsXyz[i]);
       b.mnY = std::min(b.mnY, pc->pointsXyz[i + 1]);
       b.mxY = std::max(b.mxY, pc->pointsXyz[i + 1]);
+      EntityBoxGrowZ(b, pc->pointsXyz[i + 2], false);
     }
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
@@ -20890,6 +21501,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxX = bb.mx.x;
     b.mnY = bb.mn.y;
     b.mxY = bb.mx.y;
+    b.mnZ = bb.mn.z;
+    b.mxZ = bb.mx.z;
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -20910,6 +21523,89 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxX = sb.mxX;
     b.mnY = sb.mnY;
     b.mxY = sb.mxY;
+    const std::vector<double>& tv = s.tin->vertsXyz;
+    for (size_t i = 2; i < tv.size(); i += 3)
+      EntityBoxGrowZ(b, tv[i], i == 2);
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+}
+
+/// The boxes only a 3D extent needs (GitHub issue #564 §1, D-2026-09-28-d): filled regions, block
+/// references (their 2D content at the insertion's elevation, plus any solids they carry, in full
+/// 3D) and pipe runs (the centreline widened by the pipe's radius). Kept apart from
+/// \ref CollectEntityBoxes so the plan-view extents — which never counted these in their robust
+/// pass — are unchanged by adding them here.
+void CollectEntityBoxes3dExtras(const AppCommandState& st, std::vector<EntityBox>& out) {
+  for (size_t fri = 0; fri < st.cadFilledRegions.size(); ++fri) {
+    if (EntityHiddenInViewport(nullptr, st.cadFilledRegionAttrs, fri))
+      continue;
+    const CadFilledRegion& fr = st.cadFilledRegions[fri];
+    if (fr.vertsXyz.size() < 3)
+      continue;
+    EntityBox b{};
+    for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3) {
+      const double x = fr.vertsXyz[i];
+      const double y = fr.vertsXyz[i + 1];
+      b.mnX = i == 0 ? x : std::min(b.mnX, x);
+      b.mxX = i == 0 ? x : std::max(b.mxX, x);
+      b.mnY = i == 0 ? y : std::min(b.mnY, y);
+      b.mxY = i == 0 ? y : std::max(b.mxY, y);
+      EntityBoxGrowZ(b, fr.vertsXyz[i + 2], i == 0);
+    }
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+  for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
+    if (EntityHiddenInViewport(nullptr, st.cadBlockRefAttrs, bi))
+      continue;
+    float bmnX = 0.f, bmnY = 0.f, bmxX = 0.f, bmxY = 0.f;
+    CadBlockWorldAabb(st.blockDefs, st.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
+    EntityBox b{};
+    b.mnX = bmnX;
+    b.mxX = bmxX;
+    b.mnY = bmnY;
+    b.mxY = bmxY;
+    EntityBoxGrowZ(b, st.cadBlockRefs[bi].xf.z, true);
+    std::vector<CadBlockWorldSolid> ws;
+    CadBlockCollectWorldSolids(st.blockDefs, st.cadBlockRefs[bi],
+                               bi < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[bi] : EntityAttributes{},
+                               &ws);
+    for (const CadBlockWorldSolid& w : ws) {
+      if (!w.solid)
+        continue;
+      const brep::Bounds sb = brep::ComputeBounds(*w.solid);
+      if (!sb.valid)
+        continue;
+      b.mnX = std::min(b.mnX, sb.mn.x);
+      b.mxX = std::max(b.mxX, sb.mx.x);
+      b.mnY = std::min(b.mnY, sb.mn.y);
+      b.mxY = std::max(b.mxY, sb.mx.y);
+      EntityBoxGrowZ(b, sb.mn.z, false);
+      EntityBoxGrowZ(b, sb.mx.z, false);
+    }
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+  for (const CadPipeRun& r : st.cadPipeRuns) {
+    if (r.vertsXyz.size() < 3)
+      continue;
+    double odFeet = 0.0;
+    const double rad = CadPipeNominalOdFeet(r.nominalSize, &odFeet) ? 0.5 * odFeet : 0.0;
+    EntityBox b{};
+    for (size_t i = 0; i + 2 < r.vertsXyz.size(); i += 3) {
+      const double x = r.vertsXyz[i];
+      const double y = r.vertsXyz[i + 1];
+      b.mnX = i == 0 ? x - rad : std::min(b.mnX, x - rad);
+      b.mxX = i == 0 ? x + rad : std::max(b.mxX, x + rad);
+      b.mnY = i == 0 ? y - rad : std::min(b.mnY, y - rad);
+      b.mxY = i == 0 ? y + rad : std::max(b.mxY, y + rad);
+      EntityBoxGrowZ(b, r.vertsXyz[i + 2] - rad, i == 0);
+      EntityBoxGrowZ(b, r.vertsXyz[i + 2] + rad, false);
+    }
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -20989,6 +21685,75 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
   *outMxX = mxX;
   *outMnY = mnY;
   *outMxY = mxY;
+  if (outSkipped)
+    *outSkipped = skipped;
+  return true;
+}
+
+bool ComputeWorldExtents3d(const AppCommandState& st, ray3d::Vec3* outMin, ray3d::Vec3* outMax,
+                           int* outSkipped) {
+  if (outSkipped)
+    *outSkipped = 0;
+  if (!outMin || !outMax)
+    return false;
+  std::vector<EntityBox> ents;
+  CollectEntityBoxes(st, ents, nullptr);
+  CollectEntityBoxes3dExtras(st, ents);
+  if (ents.empty())
+    return false;
+
+  // The same outlier rule as ComputeRobustWorldExtents, on the same statistic (entity centres in
+  // plan), so a stray entity at (0,0) is dropped from an orbited frame exactly as from a plan one.
+  // Below 16 entities there is no bulk to measure an outlier against, and every box counts.
+  double midX = 0.;
+  double midY = 0.;
+  double radX = std::numeric_limits<double>::infinity();
+  double radY = std::numeric_limits<double>::infinity();
+  if (ents.size() >= 16) {
+    std::vector<double> xs;
+    std::vector<double> ys;
+    xs.reserve(ents.size());
+    ys.reserve(ents.size());
+    for (const EntityBox& b : ents) {
+      xs.push_back(b.cx);
+      ys.push_back(b.cy);
+    }
+    std::vector<double> c = xs;
+    const double xP05 = NthPercentile(c, 0.05);
+    c = xs;
+    const double xP95 = NthPercentile(c, 0.95);
+    c = ys;
+    const double yP05 = NthPercentile(c, 0.05);
+    c = ys;
+    const double yP95 = NthPercentile(c, 0.95);
+    midX = 0.5 * (xP05 + xP95);
+    midY = 0.5 * (yP05 + yP95);
+    radX = std::max(std::max(xP95 - xP05, 0.) * 5.0, 1.0);
+    radY = std::max(std::max(yP95 - yP05, 0.) * 5.0, 1.0);
+  }
+
+  bool any = false;
+  int skipped = 0;
+  ray3d::Vec3 mn{};
+  ray3d::Vec3 mx{};
+  for (const EntityBox& b : ents) {
+    if (std::fabs(b.cx - midX) > radX || std::fabs(b.cy - midY) > radY) {
+      ++skipped;
+      continue;
+    }
+    if (!any) {
+      mn = ray3d::Vec3{b.mnX, b.mnY, b.mnZ};
+      mx = ray3d::Vec3{b.mxX, b.mxY, b.mxZ};
+      any = true;
+      continue;
+    }
+    mn = ray3d::Vec3{std::min(mn.x, b.mnX), std::min(mn.y, b.mnY), std::min(mn.z, b.mnZ)};
+    mx = ray3d::Vec3{std::max(mx.x, b.mxX), std::max(mx.y, b.mxY), std::max(mx.z, b.mxZ)};
+  }
+  if (!any)
+    return false;
+  *outMin = mn;
+  *outMax = mx;
   if (outSkipped)
     *outSkipped = skipped;
   return true;
@@ -21075,16 +21840,62 @@ bool ParsePointComponents(const std::string& raw, double* a, double* b, bool* is
   return ParseTwoDoubles(s, a, b);
 }
 
+// A typed point's optional third coordinate (REQ-354 / D-2026-09-28-j): `x,y,z` or `@dx,dy,dz` splits
+// into the two-number text the parsers below read, plus the Z. False for a malformed Z or for four or
+// more numbers — which the shared 2D parse would otherwise read as their first two, silently.
+static bool PeelOptionalPointZ(const std::string& raw, std::string* outXy, double* outZ, bool* outHasZ) {
+  const std::string trimmed = StringUtil::trimCopy(raw);
+  *outXy = trimmed;
+  *outHasZ = false;
+  const size_t c1 = trimmed.find(',');
+  const size_t c2 = (c1 == std::string::npos) ? std::string::npos : trimmed.find(',', c1 + 1);
+  if (c2 == std::string::npos)
+    return true;
+  if (trimmed.find(',', c2 + 1) != std::string::npos)
+    return false;
+  const std::string zText = StringUtil::trimCopy(trimmed.substr(c2 + 1));
+  char* zEnd = nullptr;
+  const double zv = std::strtod(zText.c_str(), &zEnd);
+  if (zText.empty() || !zEnd || *zEnd != '\0' || !std::isfinite(zv))
+    return false;
+  *outZ = zv;
+  *outHasZ = true;
+  *outXy = trimmed.substr(0, c2);
+  return true;
+}
+
 // The UCS-aware point parse (REQ-154). Also reports the resolved point's WORLD Z, which a tilted
 // work plane makes vary from point to point — see AppCommandState::resolvedPointZ.
 //
 // Under the WCS this takes the original code path unchanged, deliberately: every existing drawing,
 // transcript and test goes through that branch, so the UCS work cannot perturb them even by a
 // rounding step.
+//
+// A typed Z (REQ-354 / D-2026-09-28-j) is read at every prompt that comes through here: `x,y,z` puts
+// the point at elevation z (a UCS Z under a UCS), and `@dx,dy,dz` lifts it dz from the base — the
+// caller's \p baseWorldZ when it has one (LINE's anchor), the work plane otherwise. The Z reaches
+// the ~29 commit sites the way a tilted plane's already does, through resolvedPointZ, and it beats a
+// leftover mouse snap: the user just typed it.
 bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, float* ly, double* outWorldZ,
-                        bool allowRelative, float baseLocalX, float baseLocalY) {
+                        bool allowRelative, float baseLocalX, float baseLocalY, const float* baseWorldZ) {
   if (!lx || !ly)
     return false;
+  // A Z typed for an EARLIER point describes that point, not this one — including as the base of
+  // an `@dx,dy,dz` below. The GUI clears it when it re-publishes the cursor each frame; the headless
+  // driver has no frames, so it is dropped here, and the work plane answers as it would have.
+  if (st.resolvedPointZTyped) {
+    st.resolvedPointZValid = false;
+    st.resolvedPointZTyped = false;
+  }
+  std::string xy;
+  double typedZ = 0.0;
+  bool hasZ = false;
+  if (!PeelOptionalPointZ(raw, &xy, &typedZ, &hasZ))
+    return false;
+  const bool relText = !xy.empty() && xy[0] == '@';
+  const double baseZ =
+      baseWorldZ ? static_cast<double>(*baseWorldZ) : static_cast<double>(CadWorkPlaneElevation(st));
+
   double baseWx = 0.;
   double baseWy = 0.;
   CadCoord::WorldFromLocal(st, baseLocalX, baseLocalY, &baseWx, &baseWy);
@@ -21093,18 +21904,19 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
     double a = 0.;
     double b = 0.;
     bool rel = false;
-    if (!ParsePointComponents(raw, &a, &b, &rel, allowRelative))
+    if (!ParsePointComponents(xy, &a, &b, &rel, allowRelative))
       return false;
     ray3d::Vec3 world;
     if (rel) {
       // `@dx,dy` is a delta along the UCS axes, so it has to be added in UCS space rather than to
       // the world pair. The base keeps its own out-of-plane offset (the UCS Z component), which is
       // what makes a relative move from a snapped point stay where the user put it.
-      const ray3d::Vec3 baseUcs =
-          ucs::WorldToUcs(st.activeUcs, {baseWx, baseWy, static_cast<double>(CadWorkPlaneElevation(st))});
-      world = ucs::UcsToWorld(st.activeUcs, {baseUcs.x + a, baseUcs.y + b, baseUcs.z});
+      const ray3d::Vec3 baseUcs = ucs::WorldToUcs(
+          st.activeUcs,
+          {baseWx, baseWy, hasZ ? baseZ : static_cast<double>(CadWorkPlaneElevation(st))});
+      world = ucs::UcsToWorld(st.activeUcs, {baseUcs.x + a, baseUcs.y + b, baseUcs.z + (hasZ ? typedZ : 0.0)});
     } else {
-      world = ucs::UcsToWorld(st.activeUcs, {a, b, 0.0});
+      world = ucs::UcsToWorld(st.activeUcs, {a, b, hasZ ? typedZ : 0.0});
     }
     if (!std::isfinite(world.x) || !std::isfinite(world.y) || !std::isfinite(world.z))
       return false;
@@ -21119,29 +21931,46 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
     // the pre-UCS path exactly as it was.
     st.resolvedPointZValid = true;
     st.resolvedPointZ = static_cast<float>(world.z);
+    st.resolvedPointZTyped = hasZ;
+    if (hasZ)
+      st.viewportSnapPickValid = false;
     return true;
   }
 
-  if (outWorldZ)
-    *outWorldZ = static_cast<double>(CadWorkPlaneElevation(st));
   // Parsed in double and narrowed by LocalFromWorld only AFTER the origin is subtracted — that
   // ordering is the whole point (REQ-101). The origin itself is established before dispatch, by
   // MaybeEstablishDocumentOriginFromTypedPoint in ProcessCommandLineSubmit, so by the time any
   // command's parse runs the frame can already represent what was typed.
   double wx = 0.;
   double wy = 0.;
-  if (!ParseWorldPointD(raw, &wx, &wy, allowRelative, baseWx, baseWy))
+  if (!ParseWorldPointD(xy, &wx, &wy, allowRelative, baseWx, baseWy))
     return false;
   CadCoord::LocalFromWorld(st, wx, wy, lx, ly);
-  return !std::isfinite(*lx) || !std::isfinite(*ly) ? false : true;
+  if (!std::isfinite(*lx) || !std::isfinite(*ly))
+    return false;
+  if (hasZ) {
+    const double z = relText ? baseZ + typedZ : typedZ;
+    if (!std::isfinite(z) || !std::isfinite(static_cast<float>(z)))
+      return false;
+    st.resolvedPointZValid = true;
+    st.resolvedPointZ = static_cast<float>(z);
+    st.resolvedPointZTyped = true;
+    st.viewportSnapPickValid = false;
+    if (outWorldZ)
+      *outWorldZ = z;
+    return true;
+  }
+  if (outWorldZ)
+    *outWorldZ = static_cast<double>(CadWorkPlaneElevation(st));
+  return true;
 }
 
 // The 38 existing call sites keep this two-coordinate signature: they ask "where is this point?",
 // and the Z of the answer is published through AppCommandState rather than threaded through every
 // one of them (see resolvedPointZ for why that is the seam).
 bool ParseStoragePoint(AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
-                       float baseLocalX, float baseLocalY) {
-  return ParseStoragePointZ(st, raw, lx, ly, nullptr, allowRelative, baseLocalX, baseLocalY);
+                       float baseLocalX, float baseLocalY, const float* baseWorldZ) {
+  return ParseStoragePointZ(st, raw, lx, ly, nullptr, allowRelative, baseLocalX, baseLocalY, baseWorldZ);
 }
 
 // Lift a storage (x,y) onto the active work plane by SOLVING the plane equation for Z. Only valid
@@ -22847,6 +23676,13 @@ static void CollectLayersUsedInDrawing(const AppCommandState& st, std::set<std::
     add(a.layer);
   for (const auto& a : st.cadBlockRefAttrs)
     add(a.layer);
+  // REQ-352: every store a layer edit can write to, so a name typed for a solid alone still
+  // becomes a row the Layer Manager can turn off.
+  for (const std::vector<EntityAttributes>* v :
+       {&st.cadSolidAttrs, &st.cadPipeRunAttrs, &st.cadFilledRegionAttrs, &st.cadMeshAttrs,
+        &st.featureLineAttrs, &st.cadSurfaceAttrs, &st.cadPointCloudAttrs})
+    for (const auto& a : *v)
+      add(a.layer);
   for (const auto& p : st.surveyPoints)
     add(p.layer);
   add(st.currentLayer);
@@ -23255,7 +24091,7 @@ bool CadDeleteDrawingLayer(AppCommandState& st, const std::string& nameRaw, std:
   return true;
 }
 
-void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
+void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
   if (!st.entityGripMoveActive)
     return;
   const int idx = st.entityGripEntityIndex;
@@ -23344,17 +24180,46 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
     if (static_cast<size_t>(idx) >= st.userEllipses.size())
       return;
     CadEllipse& el = st.userEllipses[static_cast<size_t>(idx)];
-    if (st.entityGripWhich == 0) {
-      el.cx = x;
-      el.cy = y;
-    } else if (st.entityGripWhich == 1) {
-      el.majVx = x - el.cx;
-      el.majVy = y - el.cy;
-    } else if (st.entityGripWhich == 2) {
-      const float majLen2 = el.majVx * el.majVx + el.majVy * el.majVy;
-      if (majLen2 < 1e-12f)
-        return;
-      el.ratio = std::clamp<double>(((x - el.cx) * -el.majVy + (y - el.cy) * el.majVx) / majLen2, 0.0, 1.0);
+    if (EllipseIsFlat(el)) {
+      if (st.entityGripWhich == 0) {
+        el.cx = x;
+        el.cy = y;
+      } else if (st.entityGripWhich == 1) {
+        el.majVx = x - el.cx;
+        el.majVy = y - el.cy;
+      } else if (st.entityGripWhich == 2) {
+        const float majLen2 = el.majVx * el.majVx + el.majVy * el.majVy;
+        if (majLen2 < 1e-12f)
+          return;
+        el.ratio = std::clamp<double>(((x - el.cx) * -el.majVy + (y - el.cy) * el.majVx) / majLen2, 0.0, 1.0);
+      }
+      return;
+    }
+    // A TILTED ellipse is reshaped IN ITS OWN PLANE (GitHub #531). `majVx`/`majVy` are that plane's
+    // 2D frame, never world XY, so the dragged point is carried into the plane first; the three
+    // branches below are then the same arithmetic as the flat ones, one frame up.
+    {
+      const ucs::Ucs plane = CurvePlane(el);
+      const ray3d::Vec3 w{static_cast<double>(x), static_cast<double>(y), static_cast<double>(z)};
+      const ucs::Point2D p = ucs::WorldToPlane(plane, w);  // the plane's origin IS the centre
+      if (st.entityGripWhich == 0) {
+        // The centre carries the plane with it; the normal, and so the ellipse's attitude, is
+        // unchanged — the same thing moving a flat ellipse's centre grip does.
+        el.cx = x;
+        el.cy = y;
+        el.z = z;
+      } else if (st.entityGripWhich == 1) {
+        if (std::hypot(p.x, p.y) < 1e-12)
+          return;
+        el.majVx = static_cast<float>(p.x);
+        el.majVy = static_cast<float>(p.y);
+      } else if (st.entityGripWhich == 2) {
+        const double majLen2 = static_cast<double>(el.majVx) * el.majVx + static_cast<double>(el.majVy) * el.majVy;
+        if (majLen2 < 1e-12)
+          return;
+        el.ratio = static_cast<float>(std::clamp(
+            (p.x * -static_cast<double>(el.majVy) + p.y * static_cast<double>(el.majVx)) / majLen2, 0.0, 1.0));
+      }
     }
     return;
   }
@@ -24084,6 +24949,56 @@ void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool 
   }
 }
 
+/// Remove every selected solid and pipe run (and a deleted run's place in its piping network).
+/// Shared by ERASE and MIRROR's erase-source (REQ-351), which each push their own one undo
+/// snapshot before calling it.
+static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
+  // B-rep solids (REQ-313) — the caller has already pushed one snapshot for this whole erase, so
+  // removing the pointer here is that one undo step, exactly as it is for a mesh in ERASE. The
+  // tessellation cache is NOT touched: its entries key on a weak_ptr, so the erased solid's entry
+  // simply expires and is reaped by the next refresh.
+  std::set<int> solidIx;
+  const size_t nSolid = st.cadSolids.size();
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && static_cast<size_t>(e.index) < nSolid)
+      solidIx.insert(e.index);
+  }
+  std::vector<int> sov(solidIx.begin(), solidIx.end());
+  std::sort(sov.begin(), sov.end(), std::greater<int>());
+  for (int idx : sov) {
+    st.cadSolids.erase(st.cadSolids.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadSolidAttrs.size())
+      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  // Pipe runs (issue #486) — same shape as the B-rep solids just above: display-and-erase only,
+  // the caller's one undo snapshot already covers this removal.
+  std::set<int> pipeRunIx;
+  const size_t nPipeRun = st.cadPipeRuns.size();
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::PipeRun && e.index >= 0 && static_cast<size_t>(e.index) < nPipeRun)
+      pipeRunIx.insert(e.index);
+  }
+  std::vector<int> prv(pipeRunIx.begin(), pipeRunIx.end());
+  std::sort(prv.begin(), prv.end(), std::greater<int>());
+  for (int idx : prv) {
+    st.cadPipeRuns.erase(st.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadPipeRunAttrs.size())
+      st.cadPipeRunAttrs.erase(st.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+    // Piping networks (issue #486 increment B3 / REQ-345) reference cadPipeRuns by index — a
+    // deleted run drops out of whichever network held it, and every index above it shifts down by
+    // one, the same reindexing a std::vector erase itself just did to cadPipeRuns.
+    for (CadPipingSystem& sys : st.cadPipingSystems) {
+      auto& runs = sys.pipeRunIndices;
+      runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
+      for (int& ri : runs) {
+        if (ri > idx)
+          --ri;
+      }
+    }
+  }
+}
+
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) {
   if (st.selection.empty())
     return;
@@ -24259,50 +25174,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
       st.cadPointCloudAttrs.erase(st.cadPointCloudAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
-  // B-rep solids (REQ-313) — the caller has already pushed one snapshot for this whole erase, so
-  // removing the pointer here is that one undo step, exactly as it is for a mesh above. The
-  // tessellation cache is NOT touched: its entries key on a weak_ptr, so the erased solid's entry
-  // simply expires and is reaped by the next refresh.
-  std::set<int> solidIx;
-  const size_t nSolid = st.cadSolids.size();
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::Solid && e.index >= 0 && static_cast<size_t>(e.index) < nSolid)
-      solidIx.insert(e.index);
-  }
-  std::vector<int> sov(solidIx.begin(), solidIx.end());
-  std::sort(sov.begin(), sov.end(), std::greater<int>());
-  for (int idx : sov) {
-    st.cadSolids.erase(st.cadSolids.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.cadSolidAttrs.size())
-      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
-
-  // Pipe runs (issue #486) — same shape as the B-rep solids just above: display-and-erase only,
-  // the caller's one undo snapshot already covers this removal.
-  std::set<int> pipeRunIx;
-  const size_t nPipeRun = st.cadPipeRuns.size();
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::PipeRun && e.index >= 0 && static_cast<size_t>(e.index) < nPipeRun)
-      pipeRunIx.insert(e.index);
-  }
-  std::vector<int> prv(pipeRunIx.begin(), pipeRunIx.end());
-  std::sort(prv.begin(), prv.end(), std::greater<int>());
-  for (int idx : prv) {
-    st.cadPipeRuns.erase(st.cadPipeRuns.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (static_cast<size_t>(idx) < st.cadPipeRunAttrs.size())
-      st.cadPipeRunAttrs.erase(st.cadPipeRunAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-    // Piping networks (issue #486 increment B3 / REQ-345) reference cadPipeRuns by index — a
-    // deleted run drops out of whichever network held it, and every index above it shifts down by
-    // one, the same reindexing a std::vector erase itself just did to cadPipeRuns.
-    for (CadPipingSystem& sys : st.cadPipingSystems) {
-      auto& runs = sys.pipeRunIndices;
-      runs.erase(std::remove(runs.begin(), runs.end(), idx), runs.end());
-      for (int& ri : runs) {
-        if (ri > idx)
-          --ri;
-      }
-    }
-  }
+  EraseSelectedSolidsAndPipeRuns(st);  // REQ-313 / issue #486; shared with MIRROR's erase-source
 
   // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
   // pushed one snapshot for this whole erase, so removing it here is that one step).
@@ -24358,7 +25230,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
 /// \c st.selection is what survived \c DuplicateCadSelectionReflected's exclusion filtering (those
 /// four kinds already stripped, with a logged reason).
 static void EraseMirroredSourceNoUndo(AppCommandState& st) {
-  std::set<int> lineIx, circIx, annIx, arcIx, ellIx, polyIx, flIx;
+  std::set<int> lineIx, circIx, annIx, arcIx, ellIx, polyIx, flIx, tableIx, blockIx;
   const size_t nLines = st.userLinesFlat.size() / 6;
   const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
   const size_t nAnn = st.cadAnnotations.size();
@@ -24381,6 +25253,14 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
       polyIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 && static_cast<size_t>(e.index) < nFl)
       flIx.insert(e.index);
+    // Tables and block references (a pipe fitting is one) are mirrored by the flat path, so
+    // erase-source must remove their originals too (REQ-351).
+    else if (e.type == SelectedEntity::Type::Table && e.index >= 0 &&
+             static_cast<size_t>(e.index) < st.cadTables.size())
+      tableIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::BlockRef && e.index >= 0 &&
+             static_cast<size_t>(e.index) < st.cadBlockRefs.size())
+      blockIx.insert(e.index);
   }
 
   std::vector<int> pv(polyIx.begin(), polyIx.end());
@@ -24392,6 +25272,22 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
   std::sort(flv.begin(), flv.end(), std::greater<int>());
   for (int idx : flv)
     EraseFeatureLineByIndex(st, idx);
+
+  // REQ-351: MIRROR now mirrors solids and pipe runs, so erase-source must remove their originals.
+  EraseSelectedSolidsAndPipeRuns(st);
+
+  std::vector<int> tv(tableIx.begin(), tableIx.end());
+  std::sort(tv.begin(), tv.end(), std::greater<int>());
+  for (int idx : tv)
+    EraseCadTableAtIndex(st, static_cast<size_t>(idx));
+
+  std::vector<int> bv(blockIx.begin(), blockIx.end());
+  std::sort(bv.begin(), bv.end(), std::greater<int>());
+  for (int idx : bv) {
+    st.cadBlockRefs.erase(st.cadBlockRefs.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadBlockRefAttrs.size())
+      st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
 
   std::vector<int> lv(lineIx.begin(), lineIx.end());
   std::sort(lv.begin(), lv.end(), std::greater<int>());
@@ -24474,14 +25370,15 @@ static void EraseSelectedSurveyPointsNoUndo(AppCommandState& st) {
 /// handedness — its own geometry problem), Ellipse / Annotation / Table / BlockRef / feature line
 /// (no stored plane normal, or a 2D-only duplication helper — the exact boundary REQ-328 item 2
 /// drew) and survey points (the 2D duplicate-ID modal) are REFUSED by name under a tilted mirror
-/// plane. Under the World UCS (and any plan-rotated UCS) `FinishMirrorCommand` never calls this —
-/// the flat `DuplicateCadSelectionReflected` runs unchanged.
+/// plane. Solids (`brep::Mirror`) and pipe runs (their path) are mirrored across any plane (REQ-351).
+/// Under the World UCS (and any plan-rotated UCS) `FinishMirrorCommand` never calls this — the flat
+/// `DuplicateCadSelectionReflected` runs unchanged.
 static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const ray3d::Vec3& planePt,
                                                       const ray3d::Vec3& planeUnit,
                                                       std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
-  DropSolidsFromSelectionForTransform(st, "MIRROR", log);
   DropMirrorUnsupportedFromSelection(st, log);  // FilledRegion / Mesh / PdfUnderlay
+  MirrorSelectedSolidsAndPipeRuns(st, planePt, planeUnit, log);  // REQ-351
   const auto rp = [&](float x, float y, float z) {
     return ray3d::ReflectPointAcrossPlane({x, y, z}, planePt, planeUnit);
   };
@@ -25617,20 +26514,22 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     double bestD2 = 1e300;
     if (ma >= 1e-8) {
-      const double ux = static_cast<double>(el.majVx) / ma;
-      const double uy = static_cast<double>(el.majVy) / ma;
-      const double px = -uy;
-      const double py = ux;
-      const double mb = ma * static_cast<double>(el.ratio);
+      // Through the ellipse's own plane, over the span it actually draws — the same two facts the
+      // arc branch above honours, and the same ones the renderer and the snapper read. The points
+      // come from `EllipseWorldPointAt` so a fourth copy of the arithmetic cannot drift out of step.
+      //
+      // Measured against the CHORDS between the samples, not the samples themselves. Point sampling
+      // reads a click that lands squarely on the curve but between two samples as up to half a
+      // sample-step away — 0.8 world units on the 30-radius section oval — which at a tight pick
+      // aperture is a miss on the very curve you are pointing at. This is the same segment metric
+      // the polyline branch below uses, and it makes the answer independent of the sample count.
       constexpr int n = 36;
-      constexpr double twopi = 6.28318530717958647692;
-      for (int i = 0; i <= n; ++i) {
-        const double ang = twopi * static_cast<double>(i) / static_cast<double>(n);
-        const double c = std::cos(ang);
-        const double s = std::sin(ang);
-        const double x = static_cast<double>(el.cx) + ux * (ma * c) + px * (mb * s);
-        const double y = static_cast<double>(el.cy) + uy * (ma * c) + py * (mb * s);
-        bestD2 = std::min(bestD2, d2Point(x, y, static_cast<double>(el.z)));
+      ray3d::Vec3 prev = EllipseWorldPointAt(el, EllipseSpanAngleAt(el, 0.0));
+      for (int i = 1; i <= n; ++i) {
+        const double u = static_cast<double>(i) / static_cast<double>(n);
+        const ray3d::Vec3 p = EllipseWorldPointAt(el, EllipseSpanAngleAt(el, u));
+        bestD2 = std::min(bestD2, d2Segment(prev.x, prev.y, prev.z, p.x, p.y, p.z));
+        prev = p;
       }
     }
     consider(e, bestD2);
@@ -25935,7 +26834,7 @@ bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y)
   return hatchgeom::ContainsPoint(fr, x, y);
 }
 
-int PickFilledRegionAt(const AppCommandState& st, double wx, double wy) {
+int PickFilledRegionAt(const AppCommandState& st, double wxIn, double wyIn, const ray3d::Ray* ray) {
   int best = -1;
   double bestArea = 0.0;
   for (size_t i = 0; i < st.cadFilledRegions.size(); ++i) {
@@ -25943,6 +26842,17 @@ int PickFilledRegionAt(const AppCommandState& st, double wx, double wy) {
     if (!st.hiddenEntityIds.empty() && i < st.cadFilledRegionAttrs.size() &&
         CadEntityIdHidden(&st.hiddenEntityIds, st.cadFilledRegionAttrs[i].id))
       continue;
+    double wx = wxIn;
+    double wy = wyIn;
+    if (ray) {
+      // Orbited (issue #564 §2): where the ray meets this region's own plane.
+      const auto& v = st.cadFilledRegions[i].vertsXyz;
+      float fx = 0.f, fy = 0.f;
+      if (v.size() < 3 || !RayAtElevation(*ray, static_cast<double>(v[2]), &fx, &fy))
+        continue;
+      wx = fx;
+      wy = fy;
+    }
     if (!hatchgeom::ContainsPoint(st.cadFilledRegions[i], wx, wy))
       continue;
     const double area = hatchgeom::OuterAreaAbs(st.cadFilledRegions[i]);
@@ -28906,6 +29816,156 @@ bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, fl
   return false;
 }
 
+ViewportPickResult ResolveViewportPick(const AppCommandState& st, const ViewportPickRequest& rq) {
+  ViewportPickResult r;
+  const ray3d::Vec3 eo = rq.eyeRay.origin;
+  const ray3d::Vec3 ed = rq.eyeRay.dir;
+  const double edLen2 = ray3d::Dot(ed, ed);
+  const double edLen = std::sqrt(edLen2);
+
+  // 1. The solid under the eye ray, and how far along it (issue #564 §2). Solids yield to a survey
+  //    point, as they always have.
+  bool haveSolid = false;
+  SelectedEntity solidE{};
+  double tSolid = 0.0;
+  float solidTol = 0.f;  // computed once: it sweeps the drawing's extents
+  if (rq.modelSpace && rq.eyeRayValid && edLen > 1e-12 && !rq.surveyPointUnderCursor &&
+      (!st.cadSolids.empty() || !st.pipeRunWorldSolids.empty())) {
+    solidTol = CadOffsetEntityPickTolWorld(st);
+    haveSolid = PickClosestSolidEntity(st, rq.eyeRay, solidTol, &solidE, &tSolid);
+  }
+  // Only a DRAWN surface hides what is behind it: in 2D Wireframe a solid is see-through (Q1).
+  const bool opaque = haveSolid && st.viewportVisualStyle != VisualStyle::Wireframe2D;
+  // "On the surface" counts as in front: a line drawn on a face, or the face's own edge, must still
+  // win over the face. The pick tolerance is that allowance, converted to ray-parameter units.
+  const double depthTolT = haveSolid ? static_cast<double>(std::max(rq.lineTol, solidTol)) / edLen : 0.0;
+  const auto tAtZ = [&](double z, double* t) {
+    if (std::fabs(ed.z) < 1e-12)
+      return false;
+    *t = (z - eo.z) / ed.z;
+    return true;
+  };
+  const auto hiddenAtT = [&](double t) { return opaque && t > tSolid + depthTolT; };
+  const auto hiddenAtZ = [&](double z) {
+    double t = 0.0;
+    return opaque && tAtZ(z, &t) && hiddenAtT(t);
+  };
+  // A linework candidate's depth on the eye ray. Orbited, its depthKey IS the parameter on this same
+  // ray (the caller passes one ray as both); in plan it is the entity's Z at the closest point.
+  const auto candT = [&](const CadPickCandidate& c, double* t) {
+    if (rq.orbitRay) {
+      *t = c.depthKey;
+      return true;
+    }
+    return tAtZ(c.depthKey, t);
+  };
+
+  // 2. Tables, then text — their long-standing precedence over linework, unless an opaque solid is
+  //    in front of them. Tables carry no elevation of their own and are drawn at Z = 0.
+  if (rq.modelSpace) {
+    const int tbl = PickCadTableAt(static_cast<float>(rq.rawX), static_cast<float>(rq.rawY), st, rq.orthoHalfH,
+                                   rq.viewportHeightPx);
+    if (tbl >= 0 && !hiddenAtZ(0.0)) {
+      r.family = ViewportPickFamily::Table;
+      r.entity.type = SelectedEntity::Type::Table;
+      r.entity.index = tbl;
+      return r;
+    }
+    const int ann = PickCadAnnotationAt(static_cast<float>(rq.rawX), static_cast<float>(rq.rawY), st,
+                                        rq.orthoHalfH, rq.viewportHeightPx, rq.orbitRay);
+    if (ann >= 0 && !hiddenAtZ(static_cast<double>(st.cadAnnotations[static_cast<size_t>(ann)].insZ))) {
+      r.family = ViewportPickFamily::Annotation;
+      r.entity.type = SelectedEntity::Type::Annotation;
+      r.entity.index = ann;
+      return r;
+    }
+  }
+
+  // 3. Linework. With no solid under the cursor this is the pre-change call, answer and candidate
+  //    list untouched.
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  std::vector<CadPickCandidate> cands;
+  if (PickClosestCadEntity(st, rq.rawX, rq.rawY, rq.lineTol, &hit, &d2, rq.orbitRay, &cands)) {
+    // Drop what an opaque solid's surface hides (none without a solid, or in 2D Wireframe).
+    std::vector<CadPickCandidate> visible;
+    for (const CadPickCandidate& c : cands) {
+      double t = 0.0;
+      if (!candT(c, &t) || !hiddenAtT(t))
+        visible.push_back(c);
+    }
+    // The winner among what is visible: NEAREST THE EYE (the ray parameter orbited, the highest Z in
+    // plan — `CadPickCandidate::depthKey`), and on a tie the nearest to the cursor. The tolerance
+    // decides what is a candidate, not which one wins (issue #564 §2; the tie rule decided with the
+    // user 2026-09-28, D-2026-09-28-e). Before this, the hover took the nearest-to-cursor and the
+    // default click the highest, first-DRAWN on a tie — so in a flat drawing the two disagreed.
+    bool lineOk = cands.empty();  // no candidate list to judge by: keep PickClosestCadEntity's answer
+    double tLine = -std::numeric_limits<double>::infinity();
+    if (!visible.empty()) {
+      const auto nearer = [&](const CadPickCandidate& a, const CadPickCandidate& b) {
+        const double da = rq.orbitRay ? a.depthKey : -a.depthKey;  // smaller = nearer the eye
+        const double db = rq.orbitRay ? b.depthKey : -b.depthKey;
+        if (da < db - 1e-9)
+          return true;
+        if (db < da - 1e-9)
+          return false;
+        return a.distSq < b.distSq;
+      };
+      auto it = visible.begin();
+      for (auto k = visible.begin(); k != visible.end(); ++k)
+        if (nearer(*k, *it))
+          it = k;
+      hit = it->entity;
+      lineOk = true;
+      double t = 0.0;
+      if (candT(*it, &t))
+        tLine = t;
+    }
+    if (!haveSolid && lineOk) {
+      r.family = ViewportPickFamily::Linework;
+      r.entity = hit;
+      r.candidates = std::move(visible);
+      return r;
+    }
+    // Nearer the eye wins; a line ON the surface (within tolerance) counts as in front of it.
+    if (lineOk && tLine <= tSolid + depthTolT) {
+      r.family = ViewportPickFamily::Linework;
+      r.entity = hit;
+      r.candidates = std::move(visible);
+      return r;
+    }
+  }
+
+  // 4. The solid.
+  if (haveSolid) {
+    r.family = ViewportPickFamily::Solid;
+    r.entity = solidE;
+    return r;
+  }
+
+  // 5. Filled regions, lowest (REQ-042).
+  const int fr = PickFilledRegionAt(st, rq.rawX, rq.rawY, rq.orbitRay);
+  if (fr >= 0) {
+    r.family = ViewportPickFamily::FilledRegion;
+    r.entity.type = SelectedEntity::Type::FilledRegion;
+    r.entity.index = fr;
+  }
+  return r;
+}
+
+ViewportPickResult ResolveViewportClickPick(const AppCommandState& st, const ViewportPickRequest& rq,
+                                            float hoverLineTol) {
+  ViewportPickRequest tight = rq;
+  tight.lineTol = hoverLineTol;
+  ViewportPickResult near = ResolveViewportPick(st, tight);
+  ViewportPickResult wide = ResolveViewportPick(st, rq);
+  if (near.family == ViewportPickFamily::None)
+    return wide;
+  if (near.family == ViewportPickFamily::Linework && wide.family == ViewportPickFamily::Linework)
+    near.candidates = std::move(wide.candidates);
+  return near;
+}
+
 bool BuildSubObjectHoverRow(const AppCommandState& st, const SelectedSubObject& s,
                             SubObjectHoverRow* out) {
   if (!out || s.kind == solidpick::Kind::None || s.index < 0)
@@ -29268,6 +30328,15 @@ static std::uint64_t BlockRefWorldSolidsSig(const AppCommandState& st) {
     }
     for (unsigned char c : r.defName)
       mix(c);
+    // The insert's layer / colour resolve every ByBlock solid inside it, so an edit to them
+    // (REQ-352 — a pipe fitting is a block reference) must re-derive the world solids too.
+    if (bi < st.cadBlockRefAttrs.size()) {
+      for (unsigned char c : st.cadBlockRefAttrs[bi].layer)
+        mix(c);
+      mix(0);
+      for (unsigned char c : st.cadBlockRefAttrs[bi].color)
+        mix(c);
+    }
   }
   for (const CadBlockDefinition& d : st.blockDefs)
     mix(d.content.solids.size());
@@ -29350,8 +30419,16 @@ static std::uint64_t PipeRunWorldSolidsSig(const AppCommandState& st) {
 /// replicated across however many solids it actually produced.
 static void RebuildPipeRunWorldSolids(AppCommandState& st) {
   const std::uint64_t sig = PipeRunWorldSolidsSig(st);
-  if (sig == st.pipeRunWorldSolidsSig)
+  if (sig == st.pipeRunWorldSolidsSig) {
+    // The signature covers geometry only, so a layer / colour edit (REQ-352) lands here: re-copy
+    // each run's attributes onto its solids rather than leave them drawing in the old ones.
+    for (size_t i = 0; i < st.pipeRunWorldSolidAttrs.size() && i < st.pipeRunWorldSolidOwnerIndex.size(); ++i) {
+      const size_t ri = static_cast<size_t>(st.pipeRunWorldSolidOwnerIndex[i]);
+      if (ri < st.cadPipeRunAttrs.size())
+        st.pipeRunWorldSolidAttrs[i] = st.cadPipeRunAttrs[ri];
+    }
     return;
+  }
   st.pipeRunWorldSolidsSig = sig;
   st.pipeRunWorldSolids.clear();
   st.pipeRunWorldSolidAttrs.clear();
@@ -29727,9 +30804,62 @@ const SolidVerbSpec* FindSolidVerb(const std::string& verb) {
 /// optional third component is the point's world ELEVATION — the same rule 3DPOLY and FEATURELINE
 /// already use, peeled off before the shared 2D parser sees it so that REQ-101-critical parser is
 /// not widened to three components for one feature.
+///
+/// \p relativeBase (storage coordinates) additionally accepts `@dx,dy[,dz]` measured from it, along
+/// the active UCS's axes — PIPERUN's next point from its last vertex (REQ-354). Without one, `@` is
+/// refused by name: there is nothing for it to be relative to.
+///
+/// \p zInUcs reads an absolute `x,y,z` wholly in the active UCS — the typed Z a UCS Z, like X and Y
+/// — for a prompt whose dynamic input shows a UCS Z box (PIPERUN, REQ-354). Without it the Z stays
+/// the world elevation the solid commands have always taken. The two agree under the WCS.
 bool ParseSolidBasePoint(AppCommandState& st, const std::string& raw, ray3d::Vec3* out,
-                         std::vector<std::string>& log, const char* verbUpper) {
+                         std::vector<std::string>& log, const char* verbUpper,
+                         const ray3d::Vec3* relativeBase = nullptr, bool zInUcs = false) {
   const std::string trimmed = StringUtil::trimCopy(raw);
+  if (zInUcs && !ucs::IsWorld(st.activeUcs) && (trimmed.empty() || trimmed[0] != '@')) {
+    float lx = 0.f;
+    float ly = 0.f;
+    double worldZ = 0.0;
+    if (!ParseStoragePointZ(st, trimmed, &lx, &ly, &worldZ, /*allowRelative=*/false, 0.f, 0.f)) {
+      log.push_back(std::string(verbUpper) + " — could not read the point. Use X,Y or X,Y,Z.");
+      return false;
+    }
+    *out = ray3d::Vec3{static_cast<double>(lx), static_cast<double>(ly), worldZ};
+    return std::isfinite(out->x) && std::isfinite(out->y) && std::isfinite(out->z);
+  }
+  if (!trimmed.empty() && trimmed[0] == '@') {
+    if (!relativeBase) {
+      log.push_back(std::string(verbUpper) + " — a relative point (@) needs a previous point. Use X,Y or X,Y,Z.");
+      return false;
+    }
+    const std::string body = StringUtil::trimCopy(trimmed.substr(1));
+    const size_t c1 = body.find(',');
+    const size_t c2 = (c1 == std::string::npos) ? std::string::npos : body.find(',', c1 + 1);
+    if (c2 != std::string::npos && body.find(',', c2 + 1) != std::string::npos) {
+      log.push_back(std::string(verbUpper) + " — too many coordinates: @dx,dy or @dx,dy,dz.");
+      return false;
+    }
+    double d[3] = {0.0, 0.0, 0.0};
+    const std::string parts[3] = {
+        body.substr(0, c1),
+        c1 == std::string::npos ? std::string() : body.substr(c1 + 1, c2 == std::string::npos ? std::string::npos
+                                                                                              : c2 - c1 - 1),
+        c2 == std::string::npos ? std::string("0") : body.substr(c2 + 1)};
+    for (int i = 0; i < 3; ++i) {
+      const std::string s = StringUtil::trimCopy(parts[i]);
+      char* end = nullptr;
+      d[i] = std::strtod(s.c_str(), &end);
+      if (s.empty() || !end || *end != '\0' || !std::isfinite(d[i])) {
+        log.push_back(std::string(verbUpper) + " — could not read the relative point. Use @dx,dy or @dx,dy,dz.");
+        return false;
+      }
+    }
+    // Along the UCS axes, as every other `@` in the program is (REQ-154); a vector, so the storage
+    // frame's translation does not enter.
+    const ray3d::Vec3 delta = ucs::UcsVectorToWorld(st.activeUcs, {d[0], d[1], d[2]});
+    *out = ray3d::Add(*relativeBase, delta);
+    return std::isfinite(out->x) && std::isfinite(out->y) && std::isfinite(out->z);
+  }
   std::string xy = trimmed;
   bool haveZ = false;
   double typedZ = 0.0;
@@ -29965,9 +31095,18 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
 
   // Section everything BEFORE touching the document, so a failure part-way leaves nothing behind
   // (REQ-201) — the same all-or-nothing shape SLICE already uses.
+  // One cut can be more than one outline: a ring (a torus cut square to its axis, a drilled box) is
+  // an outer outline plus its hole, and each becomes its own closed polyline (REQ-335 increment 2,
+  // D-2026-09-18-a, GitHub #520). They are appended together, under the one undo step below.
   struct Cut {
     ucs::Ucs plane;
-    brep::Path loop;
+    std::vector<brep::Path> loops;
+    /// A tilted cut of a cylinder or cone is one closed ELLIPSE, which no polyline can hold: it
+    /// becomes an `ELLIPSE` entity standing in the cut plane instead (GitHub #531, D-2026-09-23-a).
+    brep::SectionEllipse ellipse;
+    /// And when that cut runs off the end, it is an elliptical ARC plus the chord across the cap —
+    /// two objects for one cut, in one undo step (D-2026-09-23-b).
+    brep::SectionEllipseArc ellipseArc;
   };
   std::vector<Cut> cuts;
   cuts.reserve(solids.size());
@@ -29980,10 +31119,22 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
       continue;
     Cut c;
     brep::Problem why = brep::Problem::Ok;
-    if (!brep::SectionLoop(*sp, planePoint, planeNormal, &c.plane, &c.loop, &why)) {
-      // The kernel's own reason, verbatim. Nothing is drawn and nothing is cut.
-      log.push_back(std::string("SECTION — ") + brep::ProblemText(why));
-      return;
+    if (!brep::SectionOutlines(*sp, planePoint, planeNormal, &c.plane, &c.loops, &why)) {
+      // One shape a section can be that an outline cannot hold: a closed ellipse, from a tilted cut
+      // of a cylinder or cone (GitHub #531). Asked for by name rather than guessed at, so every
+      // other refusal still arrives with the kernel's own reason, verbatim, and draws nothing.
+      brep::Problem ellipseWhy = brep::Problem::Ok;
+      const bool wholeEllipse =
+          why == brep::Problem::SectionEllipse &&
+          brep::SectionEllipseOutline(*sp, planePoint, planeNormal, &c.plane, &c.ellipse, &ellipseWhy);
+      // And the cut that runs off the end: an elliptical arc plus the chord across the cap.
+      const bool arcAndChord =
+          !wholeEllipse && why == brep::Problem::SliceCutCrossesCurvedEnd &&
+          brep::SectionEllipseArcOutline(*sp, planePoint, planeNormal, &c.plane, &c.ellipseArc, &ellipseWhy);
+      if (!wholeEllipse && !arcAndChord) {
+        log.push_back(std::string("SECTION — ") + brep::ProblemText(why));
+        return;
+      }
     }
     cuts.push_back(std::move(c));
   }
@@ -29998,39 +31149,114 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
   int made = 0;
   int failed = 0;
   for (const Cut& c : cuts) {
-    // The Path is 2D in its own plane; the polyline store is world XYZ.
-    std::vector<float> xyz;
-    std::vector<float> bulges;
-    const ray3d::Vec3 p0 = ucs::PlaneToWorld(c.plane, c.loop.start);
-    xyz.push_back(static_cast<float>(p0.x));
-    xyz.push_back(static_cast<float>(p0.y));
-    xyz.push_back(static_cast<float>(p0.z));
-    // A closed path's last segment returns to `start`, so its END is not a new vertex — but its
-    // BULGE belongs to the closing span and has to be carried, or a circular section would come
-    // back as a half-circle and a straight chord.
-    for (std::size_t i = 0; i + 1 < c.loop.segs.size(); ++i) {
-      const ray3d::Vec3 w = ucs::PlaneToWorld(c.plane, c.loop.segs[i].end);
-      xyz.push_back(static_cast<float>(w.x));
-      xyz.push_back(static_cast<float>(w.y));
-      xyz.push_back(static_cast<float>(w.z));
-    }
-    for (const brep::PathSeg& sg : c.loop.segs)
-      bulges.push_back(static_cast<float>(std::tan(sg.sweep * 0.25)));
-
-    const int before = static_cast<int>(st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back());
-    if (AppendXyzPathAsPolyline(st, xyz, /*closed=*/true) != 1) {
-      // REQ-201: every case is explicitly reported, not silently dropped.
-      log.push_back("SECTION — a solid's section outline failed to append; skipped.");
-      ++failed;
+    if (c.ellipseArc.valid) {
+      // Two objects for one cut: the elliptical arc, and the chord that closes it across the cap.
+      // Both land under the one undo snapshot taken above (D-2026-09-23-b).
+      const ucs::Ucs plane = c.plane;
+      const ucs::Point2D centre2d = ucs::WorldToPlane(plane, c.ellipseArc.centre);
+      const ucs::Point2D major2d = ucs::WorldToPlane(
+          plane, ray3d::Add(c.ellipseArc.centre, ray3d::Scale(c.ellipseArc.majorDir, c.ellipseArc.majorSemi)));
+      CadEllipse el{};
+      float lx = 0.f, ly = 0.f;
+      CadCoord::LocalFromWorld(st, c.ellipseArc.centre.x, c.ellipseArc.centre.y, &lx, &ly);
+      el.cx = static_cast<double>(lx);
+      el.cy = static_cast<double>(ly);
+      el.z = c.ellipseArc.centre.z;
+      el.majVx = static_cast<float>(major2d.x - centre2d.x);
+      el.majVy = static_cast<float>(major2d.y - centre2d.y);
+      el.ratio = static_cast<float>(c.ellipseArc.minorSemi / std::max(c.ellipseArc.majorSemi, 1e-12));
+      el.nx = static_cast<float>(c.ellipseArc.normal.x);
+      el.ny = static_cast<float>(c.ellipseArc.normal.y);
+      el.nz = static_cast<float>(c.ellipseArc.normal.z);
+      el.startRad = static_cast<float>(c.ellipseArc.startParam);
+      el.sweepRad = static_cast<float>(c.ellipseArc.sweep);
+      st.userEllipses.push_back(el);
+      st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+      float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+      CadCoord::LocalFromWorld(st, c.ellipseArc.chordA.x, c.ellipseArc.chordA.y, &ax, &ay);
+      CadCoord::LocalFromWorld(st, c.ellipseArc.chordB.x, c.ellipseArc.chordB.y, &bx, &by);
+      st.userLinesFlat.push_back(ax);
+      st.userLinesFlat.push_back(ay);
+      st.userLinesFlat.push_back(static_cast<float>(c.ellipseArc.chordA.z));
+      st.userLinesFlat.push_back(bx);
+      st.userLinesFlat.push_back(by);
+      st.userLinesFlat.push_back(static_cast<float>(c.ellipseArc.chordB.z));
+      st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+      made += 2;
       continue;
     }
-    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
-    for (std::size_t i = 0; i < bulges.size() && before + static_cast<int>(i) <
-                                                     static_cast<int>(st.userPolylineVertsBulge.size());
-         ++i)
-      st.userPolylineVertsBulge[static_cast<std::size_t>(before) + i] = bulges[i];
-    ++made;
+    if (c.ellipse.valid) {
+      // The ellipse stands in the cut plane: its centre is a world point, and its major axis is
+      // stated in that plane's own axes, which is how `CadEllipse` carries a tilted ellipse
+      // (GitHub #531). A flat cut still produces a flat ellipse, byte-identical to before.
+      CadEllipse el{};
+      const ucs::Ucs plane = c.plane;
+      const ucs::Point2D centre2d = ucs::WorldToPlane(plane, c.ellipse.centre);
+      const ucs::Point2D major2d = ucs::WorldToPlane(
+          plane, ray3d::Add(c.ellipse.centre, ray3d::Scale(c.ellipse.majorDir, c.ellipse.majorSemi)));
+      float lx = 0.f, ly = 0.f;
+      CadCoord::LocalFromWorld(st, c.ellipse.centre.x, c.ellipse.centre.y, &lx, &ly);
+      el.cx = static_cast<double>(lx);
+      el.cy = static_cast<double>(ly);
+      el.z = c.ellipse.centre.z;
+      el.majVx = static_cast<float>(major2d.x - centre2d.x);
+      el.majVy = static_cast<float>(major2d.y - centre2d.y);
+      el.ratio = static_cast<float>(c.ellipse.minorSemi / std::max(c.ellipse.majorSemi, 1e-12));
+      el.nx = static_cast<float>(c.ellipse.normal.x);
+      el.ny = static_cast<float>(c.ellipse.normal.y);
+      el.nz = static_cast<float>(c.ellipse.normal.z);
+      st.userEllipses.push_back(el);
+      st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+      ++made;
+      continue;
+    }
+    for (const brep::Path& loop : c.loops) {
+      // The Path is 2D in its own plane; the polyline store is world XYZ.
+      std::vector<float> xyz;
+      std::vector<float> bulges;
+      const ray3d::Vec3 p0 = ucs::PlaneToWorld(c.plane, loop.start);
+      xyz.push_back(static_cast<float>(p0.x));
+      xyz.push_back(static_cast<float>(p0.y));
+      xyz.push_back(static_cast<float>(p0.z));
+      // A closed path's last segment returns to `start`, so its END is not a new vertex — but its
+      // BULGE belongs to the closing span and has to be carried, or a circular section would come
+      // back as a half-circle and a straight chord.
+      for (std::size_t i = 0; i + 1 < loop.segs.size(); ++i) {
+        const ray3d::Vec3 w = ucs::PlaneToWorld(c.plane, loop.segs[i].end);
+        xyz.push_back(static_cast<float>(w.x));
+        xyz.push_back(static_cast<float>(w.y));
+        xyz.push_back(static_cast<float>(w.z));
+      }
+      for (const brep::PathSeg& sg : loop.segs)
+        bulges.push_back(static_cast<float>(std::tan(sg.sweep * 0.25)));
+
+      const int before = static_cast<int>(st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back());
+      if (AppendXyzPathAsPolyline(st, xyz, /*closed=*/true) != 1) {
+        // REQ-201: every case is explicitly reported, not silently dropped.
+        log.push_back("SECTION — a solid's section outline failed to append; skipped.");
+        ++failed;
+        continue;
+      }
+      SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+      SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+      for (std::size_t i = 0; i < bulges.size() && before + static_cast<int>(i) <
+                                                       static_cast<int>(st.userPolylineVertsBulge.size());
+           ++i)
+        st.userPolylineVertsBulge[static_cast<std::size_t>(before) + i] = bulges[i];
+      // REQ-325 / ADR-053: each vertex carries the plane its curved segment turns in. A section on a
+      // vertical or tilted plane has curved segments in THAT plane — a sphere's vertical section is a
+      // circle standing on edge — and the default +Z would draw them lying flat, and export them
+      // flat (GitHub #521).
+      for (std::size_t i = 0; i < bulges.size(); ++i) {
+        const std::size_t k = (static_cast<std::size_t>(before) + i) * 3;
+        if (k + 2 >= st.userPolylineVertsNormal.size())
+          break;
+        st.userPolylineVertsNormal[k] = static_cast<float>(c.plane.zAxis.x);
+        st.userPolylineVertsNormal[k + 1] = static_cast<float>(c.plane.zAxis.y);
+        st.userPolylineVertsNormal[k + 2] = static_cast<float>(c.plane.zAxis.z);
+      }
+      ++made;
+    }
   }
 
   if (made == 0) {
@@ -34536,6 +35762,17 @@ void TryApplyBranchAtEndpoint(AppCommandState& st, std::vector<ray3d::Vec3>& pie
   branchFits.push_back(std::move(plan));
 }
 
+/// A new pipe run's attributes: the ordinary new-entity ones (current layer), coloured by its size
+/// from the size palette (REQ-353, `kCadPipeNpsTable`). A size the table does not carry keeps
+/// `ByLayer` — unreachable through PIPERUN's size prompt, which refuses such a size.
+EntityAttributes MakeNewPipeRunAttrs(const AppCommandState& st, std::string_view nominalSize) {
+  EntityAttributes a = MakeNewEntityAttrs(st);
+  std::string hex;
+  if (CadPipeNominalSizeColor(nominalSize, &hex))
+    a.color = hex;
+  return a;
+}
+
 /// Store the run built from the path so far and end the command. Auto-inserts an elbow fitting
 /// (issue #486 increment B5) at every bend where a catalog match exists — see
 /// `PlanPipeRunAutoFittings` — splitting the single path into multiple straight/smooth-filleted
@@ -34684,19 +35921,21 @@ void CommitPipeRunDraft(AppCommandState& st, std::vector<std::string>& log) {
       run.vertsXyz[vi * 3 + 2] = bf.existingCut[k].z;
     }
   }
+  // Every piece, elbow and tee of this run is one line: one size colour, one layer (REQ-353).
+  const EntityAttributes lineAttrs = MakeNewPipeRunAttrs(st, st.pipeRunNominalSize);
   size_t elbowIx = 0;
   size_t totalVerts = 0;
   for (size_t p = 0; p < pieceRuns.size(); ++p) {
     totalVerts += pieceRuns[p].vertsXyz.size() / 3;
     st.cadPipeRuns.push_back(std::move(pieceRuns[p]));
-    st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+    st.cadPipeRunAttrs.push_back(lineAttrs);
     if (elbowIx < elbows.size()) {
       const PlannedElbow& e = elbows[elbowIx++];
-      CadBlockPlaceInsertNoUndo(st, e.blockName, e.xf, log);
+      CadBlockPlaceInsertNoUndo(st, e.blockName, e.xf, log, &lineAttrs);
     }
   }
   for (const BranchFitPlan& bf : branchFits)
-    CadBlockPlaceInsertNoUndo(st, bf.blockName, bf.xf, log);
+    CadBlockPlaceInsertNoUndo(st, bf.blockName, bf.xf, log, &lineAttrs);
   BumpCadGpuCache(st);
   if (elbows.empty() && branchFits.empty()) {
     log.push_back("PIPERUN - run created: " + std::to_string(totalVerts) + " point(s).");
@@ -34770,6 +36009,30 @@ void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back(CadPipeRunPromptText(st));
 }
 
+void ChoosePipeRunNominalSize(AppCommandState& st, const std::string& size) {
+  // A size typed alone at the prompt clears the class (HandlePipeRunTextInput), and a class belongs
+  // to a size's catalog parts — so keeping the old one would look fittings up for a class the user
+  // never chose at this size.
+  st.pipeRunNominalSize = size;
+  st.pipeRunPressureClassTag.clear();
+}
+
+void StartPipeRunAtCurrentSize(AppCommandState& st, std::vector<std::string>& log) {
+  CancelPipeRunCommand(st);
+  st.pipeRunPerf.Reset();
+  st.active = AppCommandState::Kind::PipeRun;
+  CadPipePaletteSetOpen(st, true, log);  // REQ-350 (a), as typed PIPERUN does
+  // The two answers the typed prompts would take on a blank Enter — keep the size, standard wall —
+  // given without asking (D-2026-09-28-k). A size the table cannot find, or one with no standard
+  // wall, has nothing to give, so the typed prompts ask instead of the run starting on a guess.
+  double wallIn = 0.0;
+  if (CadPipeStandardWallThicknessInches(st.pipeRunNominalSize, &wallIn)) {
+    st.pipeRunWallThicknessIn = wallIn;
+    st.pipeRunPhase = AppCommandState::PipeRunPhase::WaitFirstPoint;
+  }
+  log.push_back(CadPipeRunPromptText(st));
+}
+
 bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
   using PRP = AppCommandState::PipeRunPhase;
   const std::string line = StringUtil::trimCopy(lineIn);
@@ -34791,8 +36054,7 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
     double odFeet = 0.0;
     if (!CadPipeNominalOdFeet(sizeTok, &odFeet)) {
       log.push_back("PIPERUN - unknown nominal size \"" + sizeTok +
-                    "\". Known NPS sizes: 0.5in, 0.75in, 1in, 1.25in, 1.5in, 2in, 2.5in, 3in, 4in, "
-                    "6in, 8in, 10in, 12in.");
+                    "\". Known NPS sizes: " + CadPipeKnownNominalSizesText() + ".");
       return true;
     }
     std::string classTag;
@@ -34931,7 +36193,14 @@ bool HandlePipeRunTextInput(const std::string& lineIn, AppCommandState& st, std:
   }
 
   ray3d::Vec3 pt{};
-  if (!ParseSolidBasePoint(st, line, &pt, log, "PIPERUN"))
+  // `@dx,dy[,dz]` from the last vertex (REQ-354) — the base the dynamic input's ΔX / ΔY measure from.
+  ray3d::Vec3 lastVertex{};
+  const bool haveLast = st.pipeRunPhase == PRP::WaitNextPoint && st.pipeRunDraftVerts.size() >= 3;
+  if (haveLast) {
+    const size_t n = st.pipeRunDraftVerts.size();
+    lastVertex = {st.pipeRunDraftVerts[n - 3], st.pipeRunDraftVerts[n - 2], st.pipeRunDraftVerts[n - 1]};
+  }
+  if (!ParseSolidBasePoint(st, line, &pt, log, "PIPERUN", haveLast ? &lastVertex : nullptr, /*zInUcs=*/true))
     return true;  // the reason has been reported; the prompt stands
   AddPipeRunPoint(st, pt, log);
   return true;
@@ -35295,10 +36564,16 @@ bool TrySplicePipeFitNamed(AppCommandState& st, int runIdx, const std::string& b
     return false;
   }
 
+  // The fitting and the far piece are the same line as the run they split: they take its layer and
+  // colour — an override included — not the current ones (REQ-353). A reducer therefore reads as
+  // the run it was spliced into (issue #564 Q4).
+  const EntityAttributes lineAttrs = DuplicatedEntityAttrs(
+      static_cast<size_t>(runIdx) < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
+                                                               : MakeNewPipeRunAttrs(st, run.nominalSize));
   PushUndoSnapshot(st, "Insert Pipe Fitting");
   st.cadPipeRuns[static_cast<size_t>(runIdx)] = std::move(piece1);  // keeps the original's index
   st.cadPipeRuns.push_back(std::move(piece2));
-  st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+  st.cadPipeRunAttrs.push_back(lineAttrs);
   const int piece2Idx = static_cast<int>(st.cadPipeRuns.size()) - 1;
   for (CadPipingSystem& sys : st.cadPipingSystems) {
     if (std::find(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end(), runIdx) !=
@@ -35307,7 +36582,7 @@ bool TrySplicePipeFitNamed(AppCommandState& st, int runIdx, const std::string& b
       std::sort(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end());
     }
   }
-  CadBlockPlaceInsertNoUndo(st, blockName, xf, log);
+  CadBlockPlaceInsertNoUndo(st, blockName, xf, log, &lineAttrs);
   BumpCadGpuCache(st);
   log.push_back("PIPEFIT - \"" + blockName + "\" inserted, run split into 2 pieces.");
   return true;
@@ -35488,10 +36763,14 @@ bool TrySplitPipeRun(AppCommandState& st, int runIdx, const ray3d::Vec3& pick, s
     return false;
   }
 
+  // The far piece is the same line: it keeps the run's layer and colour, an override included (REQ-353).
+  const EntityAttributes lineAttrs = DuplicatedEntityAttrs(
+      static_cast<size_t>(runIdx) < st.cadPipeRunAttrs.size() ? st.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
+                                                               : MakeNewPipeRunAttrs(st, run.nominalSize));
   PushUndoSnapshot(st, "Split Pipe Run");
   st.cadPipeRuns[static_cast<size_t>(runIdx)] = std::move(piece1);
   st.cadPipeRuns.push_back(std::move(piece2));
-  st.cadPipeRunAttrs.push_back(MakeNewEntityAttrs(st));
+  st.cadPipeRunAttrs.push_back(lineAttrs);
   const int piece2Idx = static_cast<int>(st.cadPipeRuns.size()) - 1;
   for (CadPipingSystem& sys : st.cadPipingSystems) {
     if (std::find(sys.pipeRunIndices.begin(), sys.pipeRunIndices.end(), runIdx) !=
@@ -36155,8 +37434,172 @@ ucs::Ucs CadEffectiveSectionClipFrame(const AppCommandState& st) {
   return CadActiveUcsStorage(st);
 }
 
-const char* CadSectionPlanePromptText() {
-  return "SECTIONPLANE — select a flat face to place the section plane on. ESC cancels.";
+const char* CadSectionPlanePromptText(const AppCommandState& st) {
+  if (st.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint)
+    return "SECTIONPLANE — specify the through point of the section line. ESC cancels.";
+  return "SECTIONPLANE — select a flat face, or a point to start a section line. ESC cancels.";
+}
+
+/// The frame of the plane standing square to the work plane through the line \p a to \p b, or false
+/// when those two points name no plane — the same two cases \ref ApplySectionPlaneFromLine refuses,
+/// without the message, so the live preview and the placement cannot disagree about either.
+static bool SectionPlaneFrameFromLine(const AppCommandState& st, const ray3d::Vec3& a,
+                                      const ray3d::Vec3& b, ucs::Ucs* out) {
+  const ucs::Ucs work = CadActiveUcsStorage(st);
+  const ray3d::Vec3 along = ray3d::Sub(b, a);
+  const double len = ray3d::Length(along);
+  const double scale = std::max(1.0, ray3d::Length(a));
+  if (!(len > 1e-9 * scale))
+    return false;
+  const ray3d::Vec3 normal = ray3d::Cross(along, work.zAxis);
+  if (!(ray3d::Length(normal) > 1e-9 * len))
+    return false;
+  return ucs::FromNormal(a, ray3d::Normalize(normal), out);
+}
+
+/// Place the clip plane square to the work plane, through the section line \p a to \p b (REQ-342,
+/// 2026-09-18 revision; AutoCAD's "Select face or any point to locate section line").
+///
+/// The plane's normal is across the line, level with the work plane, so the plane STANDS on the line
+/// the way the one AutoCAD draws does. That is what lets a plane be aimed at a solid with no flat
+/// face — a sphere, a torus, a fillet — which the face form cannot do at all.
+///
+/// Refuses two points at the same place, and a line that runs straight up the work plane's own
+/// normal: neither names a plane (REQ-201).
+static bool ApplySectionPlaneFromLine(AppCommandState& st, const ray3d::Vec3& a, const ray3d::Vec3& b,
+                                      std::vector<std::string>& log) {
+  const ucs::Ucs work = CadActiveUcsStorage(st);
+  const ray3d::Vec3 along = ray3d::Sub(b, a);
+  const double len = ray3d::Length(along);
+  const double scale = std::max(1.0, ray3d::Length(a));
+  if (!(len > 1e-9 * scale)) {
+    log.push_back("SECTIONPLANE — the two points are in the same place; a section line needs two.");
+    return false;
+  }
+  if (!(ray3d::Length(ray3d::Cross(along, work.zAxis)) > 1e-9 * len)) {
+    log.push_back("SECTIONPLANE — that line runs square to the work plane, so it names no section "
+                  "plane. Pick two points across the work plane instead.");
+    return false;
+  }
+  ucs::Ucs frame{};
+  if (!SectionPlaneFrameFromLine(st, a, b, &frame)) {
+    log.push_back("SECTIONPLANE — those two points do not name a plane.");
+    return false;
+  }
+  st.viewportSectionClipFrame = frame;
+  st.viewportSectionClipFrameValid = true;
+  st.viewportSectionClipOffset = 0.0;
+  st.viewportSectionClipFlip = false;
+  st.viewportSectionClipExtent = SectionPlaneExtent{};
+  st.sectionPlaneGripDrag = static_cast<int>(SectionPlaneGrip::None);
+  st.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::None);
+  st.viewportSectionClip = true;
+  st.sectionPlaneSelected = true;
+  log.push_back("SECTIONPLANE — plane placed on the section line. Drag the centre handle to slide "
+                "it, the arrow to flip it, the end handles to resize it.");
+  return true;
+}
+
+/// Take \p p as the next point of the section line, and place the plane once there are two.
+static void SubmitSectionPlaneLinePoint(AppCommandState& st, const ray3d::Vec3& p,
+                                        std::vector<std::string>& log) {
+  using PP = AppCommandState::SectionPlanePhase;
+  if (st.sectionPlanePhase == PP::PickFaceOrPoint) {
+    st.sectionPlaneP1 = p;
+    st.sectionPlanePhase = PP::WaitThroughPoint;
+    log.push_back(CadSectionPlanePromptText(st));
+    return;
+  }
+  if (!ApplySectionPlaneFromLine(st, st.sectionPlaneP1, p, log)) {
+    // Still open, still on the same first point: the through point is what was wrong, and making
+    // the user start the line again would throw away a pick that was fine.
+    log.push_back(CadSectionPlanePromptText(st));
+    return;
+  }
+  CancelSectionPlaneCommand(st);
+}
+
+/// ORTHO applied to a section line: the through point is pulled onto the work plane's X or Y from the
+/// first point, whichever the cursor is further along — the rule the LINE rubber band already
+/// follows, and the one AutoCAD's own "Ortho: … < 270°" readout in the report's screenshots shows.
+///
+/// The point's height along the work plane's normal is left alone: the plane stands up that normal
+/// either way, so the constraint is about the DIRECTION of the line and nothing else.
+static ray3d::Vec3 SectionPlaneOrthoConstrain(const AppCommandState& st, const ray3d::Vec3& a,
+                                              const ray3d::Vec3& p) {
+  if (!st.orthoMode)
+    return p;
+  const ucs::Ucs work = CadActiveUcsStorage(st);
+  const ray3d::Vec3 d = ray3d::Sub(p, a);
+  double du = ray3d::Dot(d, work.xAxis);
+  double dv = ray3d::Dot(d, work.yAxis);
+  const double dz = ray3d::Dot(d, work.zAxis);
+  if (std::fabs(du) >= std::fabs(dv))
+    dv = 0.0;
+  else
+    du = 0.0;
+  return ray3d::Add(a, ray3d::Add(ray3d::Scale(work.xAxis, du),
+                                  ray3d::Add(ray3d::Scale(work.yAxis, dv),
+                                             ray3d::Scale(work.zAxis, dz))));
+}
+
+/// Where a cursor ray lands when SECTIONPLANE takes it as a POINT: on the geometry it hit, which is
+/// what makes "click the middle of the torus" mean the middle of the torus, and otherwise on the work
+/// plane, which is where a click in empty space has always been resolved. Shared by the click and by
+/// the live preview, so the preview cannot show a plane through a point the click would not take.
+static bool SectionPlanePointFromRay(const AppCommandState& st, const ray3d::Ray& ray,
+                                     const solidpick::Pick* hit, ray3d::Vec3* out) {
+  if (hit) {
+    *out = hit->point;
+    return true;
+  }
+  const ucs::Ucs work = CadActiveUcsStorage(st);
+  ray3d::Plane plane{};
+  plane.point = work.origin;
+  plane.normal = work.zAxis;
+  return ray3d::RayPlaneIntersect(ray, plane, out);
+}
+
+void UpdateSectionPlanePreview(AppCommandState& st, const ray3d::Ray& ray,
+                               const solidpick::Tolerance& tol) {
+  if (st.active != AppCommandState::Kind::SectionPlane ||
+      st.sectionPlanePhase != AppCommandState::SectionPlanePhase::WaitThroughPoint) {
+    st.sectionPlanePreviewValid = false;
+    return;
+  }
+  SelectedSubObject hit{};
+  solidpick::Pick pick{};
+  const bool hitSomething = PickSubObjectAcrossSolids(st, ray, tol, &hit, &pick);
+  ray3d::Vec3 p{};
+  st.sectionPlanePreviewValid = SectionPlanePointFromRay(st, ray, hitSomething ? &pick : nullptr, &p);
+  if (st.sectionPlanePreviewValid)
+    st.sectionPlanePreviewPoint = SectionPlaneOrthoConstrain(st, st.sectionPlaneP1, p);
+}
+
+void ClearSectionPlanePreview(AppCommandState& st) { st.sectionPlanePreviewValid = false; }
+
+void SubmitSectionPlanePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::SectionPlane)
+    return;
+  ray3d::Vec3 p{static_cast<double>(wx), static_cast<double>(wy),
+                static_cast<double>(CadCommitElevation(st))};
+  if (st.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint)
+    p = SectionPlaneOrthoConstrain(st, st.sectionPlaneP1, p);
+  SubmitSectionPlaneLinePoint(st, p, log);
+}
+
+bool HandleSectionPlaneTextInput(const std::string& lineIn, AppCommandState& st,
+                                 std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::SectionPlane)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  if (line.empty())
+    return true;  // Enter at a point prompt: nothing to accept, keep waiting
+  ray3d::Vec3 p{};
+  if (!ParseSolidBasePoint(st, line, &p, log, "SECTIONPLANE"))
+    return true;  // it has already said why, once
+  SubmitSectionPlaneLinePoint(st, p, log);
+  return true;
 }
 
 void CancelSectionPlaneCommand(AppCommandState& st) {
@@ -36177,13 +37620,15 @@ void StartSectionPlaneCommand(AppCommandState& st, std::vector<std::string>& log
   st.active = AppCommandState::Kind::SectionPlane;
   st.lastCommand = AppCommandState::Kind::SectionPlane;
   st.selBoxWaitingSecond = false;
+  st.sectionPlanePhase = AppCommandState::SectionPlanePhase::PickFaceOrPoint;
+  st.sectionPlaneP1 = ray3d::Vec3{};
   if (st.cadSolids.empty()) {
     // Said before the user hunts for something to click. The command still opens: a solid can be
     // created and picked without retyping, and refusing outright would be a command that works or
     // not depending on drawing order.
     log.push_back("SECTIONPLANE — there are no solids in the drawing yet.");
   }
-  log.push_back(CadSectionPlanePromptText());
+  log.push_back(CadSectionPlanePromptText(st));
 }
 
 /// The surface kind, for the refusal message. Local rather than added to `brep` because this is
@@ -36261,37 +37706,65 @@ bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
                                 const solidpick::Tolerance& tol, std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::SectionPlane)
     return false;
+  using PP = AppCommandState::SectionPlanePhase;
+
   SelectedSubObject hit{};
   solidpick::Pick pick{};
-  if (!PickSubObjectAcrossSolids(st, ray, tol, &hit, &pick)) {
+  const bool hitSomething = PickSubObjectAcrossSolids(st, ray, tol, &hit, &pick);
+
+  // Where this click lands when it is taken as a POINT rather than a face: on the geometry it hit,
+  // which is what makes "click the middle of the torus" mean the middle of the torus, and otherwise
+  // on the work plane, which is where a click in empty space has always been resolved.
+  const auto pointOfClick = [&](ray3d::Vec3* out) {
+    return SectionPlanePointFromRay(st, ray, hitSomething ? &pick : nullptr, out);
+  };
+
+  if (st.sectionPlanePhase == PP::WaitThroughPoint) {
+    ray3d::Vec3 p{};
+    if (!pointOfClick(&p)) {
+      log.push_back("SECTIONPLANE — that click is not on the work plane; pick a point on it.");
+      log.push_back(CadSectionPlanePromptText(st));
+      return false;
+    }
+    // ORTHO applies to the picked through point, exactly as it did to the preview — so the plane
+    // that lands is the plane that was drawn.
+    SubmitSectionPlaneLinePoint(st, SectionPlaneOrthoConstrain(st, st.sectionPlaneP1, p), log);
+    return st.active != AppCommandState::Kind::SectionPlane;
+  }
+
+  // A FLAT face answers the whole command in one click, and is still what this offers first.
+  if (hitSomething && hit.kind == solidpick::Kind::Face) {
+    const std::shared_ptr<const brep::Solid> owner = hit.owner.lock();
+    if (!owner) {
+      log.push_back("SECTIONPLANE — that solid is no longer in the drawing.");
+      log.push_back(CadSectionPlanePromptText(st));
+      return false;
+    }
+    if (owner->faces.size() > static_cast<size_t>(std::max(hit.index, 0)) && hit.index >= 0 &&
+        owner->faces[static_cast<size_t>(hit.index)].surface.kind == brep::SurfaceKind::Plane) {
+      if (!ApplySectionPlaneFromFace(st, *owner, hit.index, log)) {
+        log.push_back(CadSectionPlanePromptText(st));
+        return false;  // still open, so the next click can pick a different face
+      }
+      CancelSectionPlaneCommand(st);
+      return true;
+    }
+  }
+
+  // Anything else — a curved face, an edge, a vertex, empty space — is a POINT, and starts a section
+  // line (REQ-342, 2026-09-18 revision). A sphere and a torus have no flat face at all, so before
+  // this they could not be given a section plane by any click.
+  ray3d::Vec3 p{};
+  if (!pointOfClick(&p)) {
     // The command STAYS OPEN. A missed click is a missed click, not a reason to throw the user out
     // of a command they are halfway through — the rule REQ-335's selection step had to learn after
     // it ended itself and left the next click landing on nothing.
-    log.push_back("SECTIONPLANE — no face there.");
-    log.push_back(CadSectionPlanePromptText());
+    log.push_back("SECTIONPLANE — that click is not on the work plane; pick a point on it.");
+    log.push_back(CadSectionPlanePromptText(st));
     return false;
   }
-  if (hit.kind != solidpick::Kind::Face) {
-    // An edge or a vertex was nearer. Say which, so the user knows to aim at the middle of the face
-    // rather than wondering why the click did nothing.
-    log.push_back(hit.kind == solidpick::Kind::Vertex
-                      ? "SECTIONPLANE — that is a vertex; click the middle of a flat face."
-                      : "SECTIONPLANE — that is an edge; click the middle of a flat face.");
-    log.push_back(CadSectionPlanePromptText());
-    return false;
-  }
-  const std::shared_ptr<const brep::Solid> owner = hit.owner.lock();
-  if (!owner) {
-    log.push_back("SECTIONPLANE — that solid is no longer in the drawing.");
-    log.push_back(CadSectionPlanePromptText());
-    return false;
-  }
-  if (!ApplySectionPlaneFromFace(st, *owner, hit.index, log)) {
-    log.push_back(CadSectionPlanePromptText());
-    return false;  // still open, so the next click can pick a different face
-  }
-  CancelSectionPlaneCommand(st);
-  return true;
+  SubmitSectionPlaneLinePoint(st, p, log);
+  return false;  // the command is still running: it has one more point to take
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -36305,8 +37778,12 @@ SectionClipPlane CadSectionClipPlane(const AppCommandState& st) {
                             st.viewportSectionClipFlip);
 }
 
-SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st) {
-  const SectionClipPlane p = CadSectionClipPlane(st);
+/// The indicator rectangle for \p p, sized to the drawing — the body of \ref CadSectionClipIndicator,
+/// shared with the SECTIONPLANE preview (REQ-342, 2026-09-18) so the plane the preview draws is the
+/// same rectangle, in the same place, as the plane the click then places.
+static SectionClipIndicator SectionClipIndicatorSizedToDrawing(const AppCommandState& st,
+                                                               const SectionClipPlane& p,
+                                                               const SectionPlaneExtent& extent) {
   if (!p.active)
     return SectionClipIndicator{};
 
@@ -36341,7 +37818,78 @@ SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st) {
     bbMin = ray3d::Vec3{viewCam.targetX - r, viewCam.targetY - r, viewCam.targetZ};
     bbMax = ray3d::Vec3{viewCam.targetX + r, viewCam.targetY + r, viewCam.targetZ};
   }
-  return SectionClipIndicatorQuad(p, bbMin, bbMax, 0.15, st.viewportSectionClipExtent);
+  return SectionClipIndicatorQuad(p, bbMin, bbMax, 0.15, extent);
+}
+
+SectionClipIndicator CadSectionClipIndicator(const AppCommandState& st) {
+  return SectionClipIndicatorSizedToDrawing(st, CadSectionClipPlane(st), st.viewportSectionClipExtent);
+}
+
+bool CadSectionPlanePreviewIndicator(const AppCommandState& st, SectionClipIndicator* out) {
+  if (!out || !st.sectionPlanePreviewValid ||
+      st.active != AppCommandState::Kind::SectionPlane ||
+      st.sectionPlanePhase != AppCommandState::SectionPlanePhase::WaitThroughPoint)
+    return false;
+  const ray3d::Vec3 a = st.sectionPlaneP1;
+  const ray3d::Vec3 b = st.sectionPlanePreviewPoint;
+  ucs::Ucs frame{};
+  if (!SectionPlaneFrameFromLine(st, a, b, &frame))
+    return false;  // the cursor is on the first point, or straight above it: no plane to show yet
+
+  // The preview RECTANGLE IS THE SECTION LINE, stood up: it runs from the first point to the
+  // cursor and grows with the drag, which is what AutoCAD draws and what was asked for — the
+  // drawing-sized rectangle the placed plane uses looked fixed under the cursor, however far the
+  // cursor went (user report 2026-09-22, with screenshots).
+  //
+  // Upright means along the WORK PLANE's normal, the same direction the plane itself stands in, so
+  // the preview is square to the plane on a tilted UCS too.
+  const ucs::Ucs work = CadActiveUcsStorage(st);
+  const ray3d::Vec3 along = ray3d::Sub(b, a);
+  const double lineLen = ray3d::Length(along);
+  if (!(lineLen > 0.0))
+    return false;
+  const ray3d::Vec3 up = ray3d::Normalize(work.zAxis);
+
+  // How far up and down to draw. The drawing's own span in that direction, so the preview covers the
+  // model it is about to cut, with a floor tied to the line's length so a flat drawing — or a drag
+  // far outside the model — still shows a plane with some height to it.
+  double vLo = 0.0;
+  double vHi = 0.0;
+  ray3d::Vec3 bbMin{}, bbMax{};
+  if (ComputeSectionClipIndicatorBounds(st, &bbMin, &bbMax)) {
+    double lo = 1e300;
+    double hi = -1e300;
+    for (int i = 0; i < 8; ++i) {
+      const ray3d::Vec3 c{(i & 1) ? bbMax.x : bbMin.x, (i & 2) ? bbMax.y : bbMin.y,
+                          (i & 4) ? bbMax.z : bbMin.z};
+      const double d = ray3d::Dot(ray3d::Sub(c, a), up);
+      lo = std::fmin(lo, d);
+      hi = std::fmax(hi, d);
+    }
+    if (hi >= lo) {
+      const double pad = std::fmax((hi - lo) * 0.15, lineLen * 0.05);
+      vLo = lo - pad;
+      vHi = hi + pad;
+    }
+  }
+  const double minHalf = std::fmax(lineLen * 0.35, 1e-6);
+  if (!(vHi - vLo > 2.0 * minHalf)) {
+    const double mid = 0.5 * (vLo + vHi);
+    vLo = mid - minHalf;
+    vHi = mid + minHalf;
+  }
+
+  SectionClipIndicator ind;
+  const auto at = [&](const ray3d::Vec3& base, double v) {
+    return ray3d::Add(base, ray3d::Scale(up, v));
+  };
+  ind.corner[0] = at(a, vLo);
+  ind.corner[1] = at(b, vLo);
+  ind.corner[2] = at(b, vHi);
+  ind.corner[3] = at(a, vHi);
+  ind.valid = true;
+  *out = ind;
+  return true;
 }
 
 SectionPlaneGrips CadSectionPlaneGrips(const AppCommandState& st) {
@@ -36799,14 +38347,19 @@ void StartOrbitCommand(AppCommandState& st, std::vector<std::string>& log) {
 // Object isolation (REQ-084 (d) / ADR-034)
 // ---------------------------------------------------------------------------
 
-const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, const SelectedEntity& e) {
+namespace {
+
+/// The attributes of a selected entity, for every type that carries them — solids and pipe runs
+/// included. One accessor for both the const and mutable walks, so a read and an edit can never
+/// disagree about which stores are covered (the same shape as \ref AttrsForKind).
+template <typename StateT>
+auto* AttrsOfSelected(StateT& st, const SelectedEntity& e) {
   using T = SelectedEntity::Type;
+  using Attr = std::remove_reference_t<decltype(st.userLineAttrs[0])>;
   if (e.index < 0)
-    return nullptr;
+    return static_cast<Attr*>(nullptr);
   const size_t i = static_cast<size_t>(e.index);
-  auto at = [i](const std::vector<EntityAttributes>& v) -> const EntityAttributes* {
-    return i < v.size() ? &v[i] : nullptr;
-  };
+  auto at = [i](auto& v) -> Attr* { return i < v.size() ? &v[i] : nullptr; };
   switch (e.type) {
   case T::LineSeg:      return at(st.userLineAttrs);
   case T::Circle:       return at(st.userCircleAttrs);
@@ -36825,9 +38378,95 @@ const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, con
   case T::Surface:      return at(st.cadSurfaceAttrs);
   case T::Table:        return at(st.cadTableAttrs);
   case T::BlockRef:     return at(st.cadBlockRefAttrs);
-  // Survey points and PDF underlays carry no EntityAttributes and are out of REQ-084's scope.
-  default:              return nullptr;
+  case T::Solid:        return at(st.cadSolidAttrs);    // REQ-352
+  case T::PipeRun:      return at(st.cadPipeRunAttrs);  // REQ-352
+  // Survey points, PDF underlays and the section plane carry no EntityAttributes.
+  default:              return static_cast<Attr*>(nullptr);
   }
+}
+
+} // namespace
+
+const EntityAttributes* CadEditableAttrsForSelected(const AppCommandState& st, const SelectedEntity& e) {
+  return AttrsOfSelected(st, e);
+}
+
+const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, const SelectedEntity& e) {
+  // Isolation (REQ-084) does not cover solids or pipe runs — CollectIsolatableIds never lists them,
+  // and a pipe run has no id — so they stay out of this accessor rather than half-join isolation.
+  if (e.type == SelectedEntity::Type::Solid || e.type == SelectedEntity::Type::PipeRun)
+    return nullptr;
+  return AttrsOfSelected(st, e);
+}
+
+namespace {
+
+/// Writes one attribute field on every selected entity that carries attributes, as ONE undo step
+/// taken only when something actually changes (REQ-352). Returns how many entities changed.
+template <typename FieldFn>
+int ApplyAttrFieldToSelection(AppCommandState& st, const std::string& value, const char* undoLabel,
+                              FieldFn field) {
+  if (value.empty())
+    return 0;
+  EnsureAttrCounts(st);
+  bool pushed = false;
+  int changed = 0;
+  for (const SelectedEntity& e : st.selection) {
+    EntityAttributes* a = AttrsOfSelected(st, e);
+    if (!a || field(*a) == value)
+      continue;
+    if (!pushed) {
+      PushUndoSnapshot(st, undoLabel);
+      pushed = true;
+    }
+    field(*a) = value;
+    ++changed;
+  }
+  if (changed > 0)
+    BumpCadGpuCache(st);
+  return changed;
+}
+
+} // namespace
+
+int CadApplyLayerToSelection(AppCommandState& st, const std::string& layer) {
+  const int n = ApplyAttrFieldToSelection(st, layer, "Change layer",
+                                          [](EntityAttributes& a) -> std::string& { return a.layer; });
+  if (n > 0)
+    SyncDrawingLayerTableWithGeometry(st);  // a typed new name becomes a layer row
+  return n;
+}
+
+int CadApplyColorToSelection(AppCommandState& st, const std::string& color) {
+  return ApplyAttrFieldToSelection(st, color, "Change color",
+                                   [](EntityAttributes& a) -> std::string& { return a.color; });
+}
+
+std::string CadSelectionLayer(const AppCommandState& st) {
+  std::string shared;
+  for (const SelectedEntity& e : st.selection) {
+    const EntityAttributes* a = AttrsOfSelected(st, e);
+    if (!a)
+      continue;
+    const std::string layer = a->layer.empty() ? std::string("0") : a->layer;
+    if (shared.empty())
+      shared = layer;
+    else if (shared != layer)
+      return kCadSelectionLayerVaries;
+  }
+  return shared;
+}
+
+void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vector<std::string>& log) {
+  if (layer.empty())
+    return;
+  if (CadSelectionLayer(st).empty()) {
+    st.currentLayer = layer;
+    SyncDrawingLayerTableWithGeometry(st);
+    return;
+  }
+  const int n = CadApplyLayerToSelection(st, layer);
+  log.push_back("LAYER — " + std::to_string(n) + " object(s) moved to layer \"" + layer + "\".");
 }
 
 bool CadSelectedEntityHidden(const AppCommandState& st, const SelectedEntity& e) {
@@ -37089,10 +38728,67 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
         log.push_back("ZOOM EXTENTS — nothing to frame.");
         return;
       }
-    } else if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped)) {
+    } else if (!CadViewIsPlan(st) || std::fabs(st.viewportRollDeg) > 1e-4f) {
+      // ORBITED (GitHub issue #564 §1, D-2026-09-28-d): frame the model's true 3D box by its
+      // silhouette in THIS camera. Plan view never reaches here, so its framing is exactly the
+      // pre-change path below; a rolled plan (a tilted-UCS PLAN, #153) turns the screen rectangle
+      // and so is framed here too.
       st.pendingZoomExtents = false;
-      log.push_back("ZOOM EXTENTS — nothing to frame.");
+      ray3d::Vec3 bmn{};
+      ray3d::Vec3 bmx{};
+      if (!ComputeWorldExtents3d(st, &bmn, &bmx, &skipped)) {
+        log.push_back("ZOOM EXTENTS — nothing to frame.");
+        return;
+      }
+      float rot[16];
+      CadViewCamera(st).ViewRotation(rot);
+      const double right[3] = {rot[0], rot[4], rot[8]};
+      const double up[3] = {rot[1], rot[5], rot[9]};
+      const double back[3] = {rot[2], rot[6], rot[10]};
+      const double mn3[3] = {bmn.x, bmn.y, bmn.z};
+      const double mx3[3] = {bmx.x, bmx.y, bmx.z};
+      double target[3] = {0., 0., 0.};
+      float newZoom = st.viewportZoom;
+      if (!zoomframing::FrameBoxInView(mn3, mx3, right, up, back, viewportAspect,
+                                       st.viewportProjection == Camera::Projection::Perspective,
+                                       st.viewportFovDeg, target, &newZoom)) {
+        log.push_back("ZOOM EXTENTS — the drawing extents are not a finite box; view unchanged.");
+        return;
+      }
+      st.viewportPanX = target[0];
+      st.viewportPanY = target[1];
+      st.viewportPanZ = target[2];
+      st.viewportZoom = newZoom;
+      BumpCadGpuCache(st);
+      if (panX)
+        *panX = st.viewportPanX;
+      if (panY)
+        *panY = st.viewportPanY;
+      if (zoom)
+        *zoom = st.viewportZoom;
+      char buf3[256];
+      std::snprintf(buf3, sizeof(buf3),
+                    "Zoom extents applied (3D) — box %.6g x %.6g x %.6g, centre (%.6g, %.6g, %.6g) "
+                    "zoom=%.6g skipped=%d.",
+                    bmx.x - bmn.x, bmx.y - bmn.y, bmx.z - bmn.z, target[0], target[1], target[2],
+                    static_cast<double>(st.viewportZoom), skipped);
+      log.push_back(buf3);
       return;
+    } else if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped)) {
+      // Plan view, and nothing in the 2D sweep: a drawing of pipe runs alone (or only what the
+      // 3D sweep adds) still has something to frame — its plan footprint (issue #564 §1). A drawing
+      // the 2D sweep DOES see never reaches here, so its framing is unchanged.
+      ray3d::Vec3 bmn{};
+      ray3d::Vec3 bmx{};
+      if (!ComputeWorldExtents3d(st, &bmn, &bmx, &skipped)) {
+        st.pendingZoomExtents = false;
+        log.push_back("ZOOM EXTENTS — nothing to frame.");
+        return;
+      }
+      mnX = bmn.x;
+      mxX = bmx.x;
+      mnY = bmn.y;
+      mxY = bmx.y;
     }
     // REQ-122: framing REFUSES a rect that is not finite rather than writing a NaN camera, and a
     // refusal states its reason (REQ-201). The current view is left exactly as it was.
@@ -37355,6 +39051,12 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("LOFT canceled.");
     CancelLoftCommand(st);
   }
+  else if (IsGizmoCommandKind(st.active)) {
+    // A live drag has changed nothing in the store, so ending the command IS the restore; the
+    // gizmo op goes back to what it was before the command (GitHub issue #564 section 3).
+    log.push_back(std::string(AppCommandState::KindName(st.active)) + " canceled.");
+    EndGizmoCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::Sweep) {
     log.push_back("SWEEP canceled.");
     CancelSweepCommand(st);
@@ -37566,6 +39268,50 @@ static void FinishEllipseFromRatio(AppCommandState& st, float ratio, std::vector
   ell.majVx = vx0;
   ell.majVy = vy0;
   ell.ratio = ratio;
+
+  // A turned UCS stands the ellipse up in that plane (GitHub #531), the way `CommitCircle` has done
+  // for circles since REQ-312. Resolved BEFORE the undo snapshot below: a refusal here must leave no
+  // undo entry behind, which is the shape every other refusal in this function already has.
+  const bool tilted = !ActivePaperGeometryTarget(st) && !CadWorkPlaneIsWorldXy(st);
+  if (tilted) {
+    float nx = 0.f, ny = 0.f, nz = 1.f;
+    CadActiveDrawPlaneNormal(st, &nx, &ny, &nz);
+    // The same guard `CommitCircle` carries, and for the same reason: a normal that is NaN or
+    // zero-length does not fail loudly — `ucs::FromNormal` refuses and every consumer quietly falls
+    // back to a different plane than the one drawn on (REQ-201, REQ-204).
+    if (!std::isfinite(nx) || !std::isfinite(ny) || !std::isfinite(nz) ||
+        (nx * nx + ny * ny + nz * nz) < 1e-12f) {
+      log.push_back("ELLIPSE rejected — the work plane is not a valid plane.");
+      return;
+    }
+    // The two picks are full 3D points, each carrying the elevation it was made at, so the major
+    // axis is measured IN the plane — the only frame `majVx`/`majVy` is ever read in (see
+    // `EllipseWorldPointAt`), and the same frame `SECTION` writes its tilted ellipse in.
+    const ucs::Ucs plane = CurvePlane(static_cast<double>(st.ellCx), static_cast<double>(st.ellCy),
+                                      static_cast<double>(st.ellCz), static_cast<double>(nx),
+                                      static_cast<double>(ny), static_cast<double>(nz));
+    const ucs::Point2D c2 = ucs::WorldToPlane(
+        plane, ray3d::Vec3{static_cast<double>(st.ellCx), static_cast<double>(st.ellCy),
+                           static_cast<double>(st.ellCz)});
+    const ucs::Point2D m2 = ucs::WorldToPlane(
+        plane, ray3d::Vec3{static_cast<double>(st.ellMajEx), static_cast<double>(st.ellMajEy),
+                           static_cast<double>(st.ellMajEz)});
+    const double mvx = m2.x - c2.x;
+    const double mvy = m2.y - c2.y;
+    if (std::hypot(mvx, mvy) < 1e-8) {
+      // Distinct points in space that fall on the same point of the plane: the second lies along the
+      // normal, straight "through" the drawing. There is no major axis to draw.
+      log.push_back("ELLIPSE — major axis too short in the work plane.");
+      return;
+    }
+    ell.z = st.ellCz;
+    ell.majVx = static_cast<float>(mvx);
+    ell.majVy = static_cast<float>(mvy);
+    ell.nx = nx;
+    ell.ny = ny;
+    ell.nz = nz;
+  }
+
   PushUndoSnapshot(st, "Ellipse");
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     // Paper-space ELLIPSE (REQ-039): centre/axis are paper inches; commit to the layout's paper
@@ -37574,7 +39320,8 @@ static void FinishEllipseFromRatio(AppCommandState& st, float ratio, std::vector
     L->paperEllipses.push_back(ell);
     L->paperEllAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    ell.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
+    if (!tilted)
+      ell.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
     st.userEllipses.push_back(ell);
     st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
   }
@@ -37923,22 +39670,40 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.cmdEnteredHistory.erase(st.cmdEnteredHistory.begin());
   }
 
-  // GIZMO MOVE | ROTATE | SCALE — what the REQ-060 gizmo does (TASK-232). Consumed here, ahead of
-  // the main dispatch, because it is a one-line SETTING with no phases: it takes its argument
-  // inline, prompts for nothing and starts no command. Bare `GIZMO` reports the current setting
-  // rather than changing it, so the command is safe to type when you have forgotten where it is.
+  // GIZMO MOVE | ROTATE | SCALE | OFF — the PERSISTENT REQ-060 gizmo (TASK-232; OFF and the
+  // persistence itself from GitHub issue #564 section 3, D-2026-09-28-a). A selection shows no
+  // gizmo by default; naming an op here turns on the old behaviour — the gizmo follows every
+  // selection, doing that op — and OFF returns to the default. 3DMOVE / 3DROTATE / 3DSCALE are the
+  // everyday way to summon it. Consumed here, ahead of the main dispatch, because it is a one-line
+  // SETTING with no phases. Bare `GIZMO` reports the current setting rather than changing it, so
+  // the command is safe to type when you have forgotten where it is.
   {
     std::istringstream gz(StringUtil::toLowerAsciiCopy(line));
     std::string gzCmd;
     if ((gz >> gzCmd) && gzCmd == "gizmo") {
+      if (IsGizmoCommandKind(st.active)) {
+        // The running command owns the op until it ends; a change now would be undone on exit.
+        log.push_back(std::string("GIZMO — finish or cancel ") + AppCommandState::KindName(st.active) +
+                      " first.");
+        return;
+      }
       std::string mode;
       const bool haveMode = static_cast<bool>(gz >> mode);
       const auto opName = [](CadGizmoOp o) {
         return o == CadGizmoOp::Translate ? "MOVE" : o == CadGizmoOp::Rotate ? "ROTATE" : "SCALE";
       };
       if (!haveMode) {
-        log.push_back(std::string("GIZMO — currently ") + opName(st.gizmoOp) +
-                      ". Use GIZMO MOVE, GIZMO ROTATE or GIZMO SCALE.");
+        log.push_back(std::string("GIZMO — currently ") +
+                      (st.gizmoPersistent ? opName(st.gizmoOp) : "OFF") +
+                      ". Use GIZMO MOVE, GIZMO ROTATE or GIZMO SCALE to show it on every "
+                      "selection, GIZMO OFF to hide it, or 3DMOVE / 3DROTATE / 3DSCALE.");
+        return;
+      }
+      if (mode == "off" || mode == "0" || mode == "no") {
+        CancelGizmoDrag(st);
+        st.gizmoPersistent = false;
+        st.gizmoHoverAxis = -1;
+        log.push_back("GIZMO — OFF. Selecting shows no gizmo; use 3DMOVE, 3DROTATE or 3DSCALE.");
         return;
       }
       CadGizmoOp want = st.gizmoOp;
@@ -37949,7 +39714,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       else if (mode == "scale" || mode == "sc" || mode == "s")
         want = CadGizmoOp::Scale;
       else {
-        log.push_back("GIZMO — unknown mode '" + mode + "'. Use MOVE, ROTATE or SCALE.");
+        log.push_back("GIZMO — unknown mode '" + mode + "'. Use MOVE, ROTATE, SCALE or OFF.");
         return;
       }
       // An armed drag was measured in the OLD operation's units, so it cannot survive the switch.
@@ -37957,6 +39722,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // ending (see `gizmoDragDistance`).
       CancelGizmoDrag(st);
       st.gizmoOp = want;
+      st.gizmoPersistent = true;
       st.gizmoHoverAxis = -1;
       log.push_back(std::string("GIZMO — ") + opName(want) + ".");
       return;
@@ -37994,7 +39760,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.entityGripTypedDistanceValid = true;
       // Arming the grip already pushed the pre-drag undo snapshot, so the typed placement just overwrites
       // whatever the live drag had put there — one undo returns the entity to where it started.
-      ApplyEntityGripPoint(st, st.entityGripTypedX, st.entityGripTypedY);
+      ApplyEntityGripPoint(st, st.entityGripTypedX, st.entityGripTypedY, CadCommitElevation(st));
       char gripMsg[128];
       std::snprintf(gripMsg, sizeof(gripMsg), "Grip stretched %.6g %s.",
                     static_cast<double>(std::fabs(gripDist)),
@@ -38125,6 +39891,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (st.active == K::SectionClip) {
       log.push_back(SectionClipReport(st));
       st.active = K::None;
+      return;
+    }
+    // 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3): Enter confirms the selection,
+    // commits an armed drag, or ends the command — handled here for the reason every note above
+    // gives: this block consumes a blank line and the Kind-keyed branch further down never sees one.
+    if (IsGizmoCommandKind(st.active)) {
+      (void)HandleGizmoCommandTextInput(line, st, log);
       return;
     }
     if (st.active == K::Pan) {
@@ -40164,7 +41937,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
     // `pointText` is `line` with any 3DPOLY elevation already peeled off; identical to `line` for a
     // plain POLYLINE.
-    if (ParseStoragePoint(st, pointText, &px, &py, allowRel, st.anchorX, st.anchorY)) {
+    if (ParseStoragePoint(st, pointText, &px, &py, allowRel, st.anchorX, st.anchorY, &st.anchorZ)) {
       SubmitPolylineVertex(st, px, py, log);
       return;
     }
@@ -40338,7 +42111,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
 
-    if (ParseStoragePoint(st, line, &px, &py, allowRel, st.anchorX, st.anchorY)) {
+    if (ParseStoragePoint(st, line, &px, &py, allowRel, st.anchorX, st.anchorY, &st.anchorZ)) {
       SubmitLineVertex(st, px, py, log);
       return;
     }
@@ -40458,6 +42231,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (IsGizmoCommandKind(st.active)) {
+    (void)HandleGizmoCommandTextInput(line, st, log);
+    return;
+  }
+
   if (st.active == AppCommandState::Kind::Sweep) {
     if (HandleSweepTextInput(line, st, log))
       return;
@@ -40483,6 +42261,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandleSectionTextInput(line, st, log))
       return;
     log.push_back(CadSectionPromptText(st));
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::SectionPlane) {
+    if (HandleSectionPlaneTextInput(line, st, log))
+      return;
+    log.push_back(CadSectionPlanePromptText(st));
     return;
   }
 
@@ -41535,6 +43320,9 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Trim:       StartTrimCommand(st, log);       break;
     case K::Offset:     StartOffsetCommand(st, log);     break;
     case K::Hatch:      StartHatchCommand(st, log);      break;
+    case K::Move3d:
+    case K::Rotate3d:
+    case K::Scale3d:    StartGizmoCommand(st, st.lastCommand, log); break;
     default: break;
   }
 }

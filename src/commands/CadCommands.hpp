@@ -92,19 +92,17 @@ struct SelectedEntity {
     BlockRef = 12,
     /// B-rep solid (REQ-313 / ADR-045). Appended after BlockRef so existing type values stay stable.
     ///
-    /// **Display-and-erase only in this increment, like Mesh** — it selects, highlights, erases and
-    /// reports its volume, and no transform command moves it. That is a stated boundary rather than
-    /// an oversight: moving a solid means transforming every surface frame and every arc-edge frame
-    /// in its topology, which is the same class of work REQ-312 found for a single tilted arc, and
-    /// it belongs with #120's Phase 5 direct-modelling requirement. Every transform command refuses
-    /// a solid with a stated reason (REQ-201) rather than silently dropping it from the operation —
-    /// the rule Surface already established.
+    /// Every whole-object transform applies to it — MOVE (REQ-322), ROTATE and SCALE (REQ-332),
+    /// COPY, MIRROR and both ARRAY forms (REQ-351) — through the kernel (`brep::Translate` /
+    /// `Rotate` / `Scale` / `Mirror`), which transforms every vertex, surface frame and edge frame,
+    /// never the tessellation alone. STRETCH, which moves part of an object, refuses it by name
+    /// (REQ-201): no kernel operation moves part of a solid.
     Solid = 13,
-    /// CadPipeRun (issue #486). Appended after Solid so existing type values stay stable. The SAME
-    /// stated boundary Solid has: display, select, highlight, hover-report and erase, but no
-    /// transform command moves it — a pipe run's geometry is DERIVED from its path via auto-fillet
-    /// sweeping (cadpiperun.hpp), so a direct drag would need the same re-solve REQ-070 declined for
-    /// a TIN surface's own derived geometry.
+    /// CadPipeRun (issue #486). Appended after Solid so existing type values stay stable. Its
+    /// geometry is DERIVED from its path via auto-fillet sweeping (cadpiperun.hpp), so a transform
+    /// maps the path's vertices and the pipe is re-derived (REQ-351): the same commands as Solid,
+    /// with SCALE scaling the route but never the pipe's nominal size (D-2026-09-28-f). STRETCH
+    /// refuses it by name, as it does a solid.
     PipeRun = 14,
     /// Point cloud (REQ-171 / ADR-042). Appended after PipeRun so existing type values stay stable.
     /// **Display-and-erase only, like Mesh** — selects, highlights, erases and reports; never
@@ -929,8 +927,11 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
                               float* outMxX, float* outMxY);
 
 /// Top-most annotation under point; -1 if none. Uses pixel tolerance from viewport half-height.
+/// \param ray When non-null (an orbited view), each annotation is tested where the camera ray meets
+///        ITS OWN plane (z = insZ) rather than at \p wx, \p wy on the work plane (GitHub issue #564
+///        §2). Null keeps the plan-view test exactly.
 int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
-                        float viewportHeightPx);
+                        float viewportHeightPx, const ray3d::Ray* ray = nullptr);
 int PickCadTableAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
                    float viewportHeightPx);
 void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
@@ -1449,15 +1450,18 @@ constexpr int kRibbonTabView     = 3;
 constexpr int kRibbonTabManage   = 4;
 constexpr int kRibbonTabOutput   = 5;
 constexpr int kRibbonTabSurvey   = 6;
-constexpr int kRibbonTabCount    = 7;
+/// REQ-355 (issue #564 section 8): the solid-modelling and piping commands. A saved slot like the
+/// six before it, so it takes the next index and the session-only contextual tabs move up behind it.
+constexpr int kRibbonTabModeling = 7;
+constexpr int kRibbonTabCount    = 8;
 /// REQ-143: contextual TIN Surface tab. Not counted in \c kRibbonTabCount and not written to prefs.
-constexpr int kRibbonTabSurfaceCtx = 7;
+constexpr int kRibbonTabSurfaceCtx = 8;
 /// REQ-153: contextual SURVEY Point(s) tab. Session-only, not a prefs slot.
-constexpr int kRibbonTabSurveyPointCtx = 8;
+constexpr int kRibbonTabSurveyPointCtx = 9;
 /// Contextual Block Editor tab while BEDIT is open. Not counted in \c kRibbonTabCount / prefs.
-constexpr int kRibbonTabBlockEditor = 9;
+constexpr int kRibbonTabBlockEditor = 10;
 /// REQ-171 (part 14): contextual Point Cloud tab. Not counted in kRibbonTabCount / prefs.
-constexpr int kRibbonTabPointCloudCtx = 10;
+constexpr int kRibbonTabPointCloudCtx = 11;
 
 /// REQ-171 point-cloud vertex colour source, chosen by the user (session-global — see
 /// `AppCommandState::pointCloudDisplay`).
@@ -1612,12 +1616,11 @@ struct AppCommandState {
     /// submission is only meaningful while a command is waiting to consume it. Without a waiting
     /// state, clicking `ON` would submit `on` as a top-level command, which is nothing.
     SectionClip,
-    /// SECTIONPLANE: waiting for the user to pick a solid FACE to put the section plane on
-    /// (REQ-342 / ADR-059, GitHub issue #479 acceptance 1).
+    /// SECTIONPLANE: waiting for a solid FACE, or for the two points of a section LINE
+    /// (REQ-342 / ADR-059, GitHub issue #479 acceptance 1; the point form is the 2026-09-18
+    /// revision, which AutoCAD's own prompt asks for in the same breath as the face).
     ///
-    /// A single phase, so there is no `SectionPlanePhase` enum: being active IS "waiting for a
-    /// face". The phases arrive with the manipulation slice, and an enum with one value now would
-    /// be an abstraction with no second use.
+    /// \ref AppCommandState::sectionPlanePhase says which of the two it is waiting for.
     SectionPlane,
     Elev,        ///< Set the elevation new geometry is drawn at (REQ-058).
     /// ORBIT: interactive free orbit — left-drag tumbles the model view; Esc/Enter/right-click
@@ -1712,6 +1715,13 @@ struct AppCommandState {
     /// phase — no select-objects step, no typed parameters — closer in shape to `Kind::Pan`'s
     /// hover-then-act than to any multi-phase draw command.
     ExtractCenterline,
+    /// 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3, D-2026-09-28-a): the REQ-060 gizmo,
+    /// summoned by a command instead of appearing on every selection. Three Kinds rather than one
+    /// with a stored op so the command line, right-click repeat and `KindName` each name the verb
+    /// the user typed; the op they drive is still \ref gizmoOp, set for the command's duration.
+    Move3d,
+    Rotate3d,
+    Scale3d,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1792,6 +1802,9 @@ struct AppCommandState {
     case Kind::PipeFit:            return "PIPEFIT";
     case Kind::PipeSplit:          return "PIPESPLIT";
     case Kind::ExtractCenterline:  return "EXTRACTCENTERLINE";
+    case Kind::Move3d:             return "3DMOVE";
+    case Kind::Rotate3d:           return "3DROTATE";
+    case Kind::Scale3d:            return "3DSCALE";
     default:                  return "";
     }
   }
@@ -2154,6 +2167,7 @@ struct AppCommandState {
 
   float ellCx = 0.f, ellCy = 0.f;
   float ellMajEx = 0.f, ellMajEy = 0.f;
+  float ellCz = 0.f, ellMajEz = 0.f;  ///< work-plane elevation of each pick (REQ-312), as arcAz/arcBz
 
   /// RECT (REQ-053): first corner, then the opposite corner. The second point also accepts `@dx,dy`, which
   /// is how a rectangle of an exact width and height is drawn.
@@ -2384,6 +2398,9 @@ struct AppCommandState {
   /// changes nothing there.
   bool  resolvedPointZValid = false;
   float resolvedPointZ = 0.f;
+  /// The published Z was TYPED (`x,y,z`, REQ-354), not read off the work plane — so the next typed
+  /// point without a Z clears it instead of inheriting it.
+  bool  resolvedPointZTyped = false;
   /// Model viewport size in pixels, published by the UI each frame. The command layer needs it to
   /// project geometry to screen for box-selection under an orbited camera (REQ-058); it has no
   /// other way to know the viewport's aspect. Zero means "not yet known" — callers fall back to
@@ -2572,6 +2589,23 @@ struct AppCommandState {
   ray3d::Vec3 sectionP2{};
   ray3d::Vec3 sectionP3{};
 
+  // --- SECTIONPLANE's own phases (REQ-342, 2026-09-18 revision) --------------------------------
+  //
+  // A face answers the command in one click and is still the first thing it offers. Any other point
+  // starts a section LINE instead: the plane then stands square to the work plane, through that
+  // line — which is the only way to aim a plane at a solid with no flat face at all, such as a
+  // sphere or a torus.
+  enum class SectionPlanePhase {
+    PickFaceOrPoint,   ///< A flat face places the plane outright; any other point starts a line.
+    WaitThroughPoint,  ///< The second point of the section line.
+  } sectionPlanePhase = SectionPlanePhase::PickFaceOrPoint;
+  ray3d::Vec3 sectionPlaneP1{};  ///< The first point of the section line, in world coordinates.
+  /// Where the cursor is while the through point is being picked, so the plane can be PREVIEWED
+  /// standing on the line to it (REQ-342, 2026-09-18). Set by the viewport each frame and cleared
+  /// when the command is not asking; nothing is placed from it.
+  ray3d::Vec3 sectionPlanePreviewPoint{};
+  bool sectionPlanePreviewValid = false;
+
   // --- The LOFT command (REQ-315 / ADR-048, GitHub #241) ---------------------------------------
 
   enum class LoftPhase {
@@ -2643,8 +2677,10 @@ struct AppCommandState {
   /// itself stores, so commit is a plain copy rather than a second representation to keep in step.
   std::vector<double> pipeRunDraftVerts;
   /// Remembered across runs the way POLYSOLID remembers width/height/justify (`polysolidWidth`
-  /// etc. above): a pipe run is almost always drawn at the same size as the last one.
-  std::string pipeRunNominalSize;
+  /// etc. above): a pipe run is almost always drawn at the same size as the last one. Starts at 4in
+  /// rather than empty (D-2026-09-28-k) so the Modeling ribbon's size dropdown always shows a size and
+  /// its PIPERUN button never has to stop and ask (REQ-355).
+  std::string pipeRunNominalSize = "4in";
   std::string pipeRunPressureClassTag;
   /// Index into `cadPipeRuns` of the PROVISIONAL run PIPERUN materialises while routing, or -1
   /// (D-2026-09-24-d). The route exists in the drawing from the second click so it can be seen,
@@ -2812,7 +2848,7 @@ struct AppCommandState {
   /// \c TRIMSTATE: 0 = smart line trim (default), 1 = pick cutting edges first. Persisted in user prefs.
   int trimState = 0;
   /// REQ-302: which top-level ribbon tab is showing. Persisted in user prefs, same shape as
-  /// \c trimState. Values match \c kRibbonTabHome.. \c kRibbonTabSurvey below; an out-of-range value
+  /// \c trimState. Values match \c kRibbonTabHome.. \c kRibbonTabModeling above; an out-of-range value
   /// loaded from a hand-edited prefs file is clamped back into range rather than left invalid.
   /// REQ-143 / REQ-153 may set this to a contextual tab for the session only.
   int activeRibbonTab = 0;
@@ -3626,8 +3662,33 @@ struct AppCommandState {
   double gizmoDragDistance = 0.0;
 
   /// What the gizmo does — a user SETTING, not derived from the selection (\ref CadGizmoOp explains
-  /// why this one is stored where \ref CadGizmoMode is not). Set by the `GIZMO` command.
+  /// why this one is stored where \ref CadGizmoMode is not). Set by the `GIZMO` command, and for
+  /// their own duration by 3DMOVE / 3DROTATE / 3DSCALE, which restore it on exit.
   CadGizmoOp gizmoOp = CadGizmoOp::Translate;
+
+  /// True when the user asked for the gizmo to follow every selection (`GIZMO MOVE | ROTATE |
+  /// SCALE`). False — the default — means a selection shows no gizmo, and only 3DMOVE / 3DROTATE /
+  /// 3DSCALE summon one (GitHub issue #564 section 3, D-2026-09-28-a). `GIZMO OFF` clears it.
+  /// Session state, like \ref gizmoOp.
+  bool gizmoPersistent = false;
+
+  /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, asking for the base point the gizmo
+  /// sits on (D-2026-09-28-c), or showing the handles on it.
+  enum class GizmoCmdPhase { SelectObjects, BasePoint, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
+  /// The base point a 3D gizmo command was given (D-2026-09-28-c): where the gizmo sits, the pivot
+  /// of a rotation and the centre of a scale. Invalid means Enter took the default — the centre of
+  /// the selection's box, where the persistent gizmo always sits. Storage coordinates.
+  bool gizmoBaseValid = false;
+  ray3d::Vec3 gizmoBase{0.0, 0.0, 0.0};
+  /// The live TRANSLATE drag as a displacement: `gizmoDragDistance` along the axis for an axis
+  /// handle, or the in-plane offset for a plane handle (D-2026-09-28-c), where no single distance
+  /// says it. The ghost and the commit read this one field so the two cannot disagree.
+  ray3d::Vec3 gizmoDragVec{0.0, 0.0, 0.0};
+  /// Where a plane-handle grab met the plane — the drag is the hit's offset from here.
+  ray3d::Vec3 gizmoGrabPoint{0.0, 0.0, 0.0};
+  /// \ref gizmoOp as it was when a 3D gizmo command started — put back when the command ends,
+  /// however it ends, so the command's op never leaks into the persistent setting.
+  CadGizmoOp gizmoOpBeforeCmd = CadGizmoOp::Translate;
 
   /// In face mode, WHICH face the armed drag is moving — captured at the grab like the anchor.
   ///
@@ -4583,6 +4644,9 @@ struct AppCommandState {
   bool insertBlockSpecifyAlignFace = false;
   bool insertBlockSpecifyConnectorSnap = false;
   char insertBlockConnectorName[64]{};
+  /// The pipe run whose END the connector snap fitted the part onto, or -1 (REQ-353): the placed
+  /// part — an end flange, a cap — takes that run's layer and colour. Consumed by the placement.
+  int insertBlockSnappedPipeRun = -1;
   /// INSERT dialog override for block insertion units (issue #475 inc6). Empty uses the definition.
   char insertBlockUnitsBuf[32]{};
   bool insertBlockUniformScale = true;
@@ -5536,6 +5600,13 @@ void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Exists for the Pipe Fittings palette: picking a part starts INSERT, and before the route was
 /// materialised that silently discarded the pipe the user had just drawn.
 bool CadPipeRunFinishForHandoff(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-355 / D-2026-09-28-k: the Modeling ribbon's PIPERUN. Starts at the remembered size (the
+/// ribbon dropdown) with that size's standard wall and goes straight to the start point — neither
+/// question is asked. Falls back to the typed prompts when the size has no standard wall.
+void StartPipeRunAtCurrentSize(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-355: the Modeling ribbon's size dropdown. Choosing a size is typing it alone at PIPERUN's size
+/// prompt — the size is set and the pressure class cleared — so the two are one setting.
+void ChoosePipeRunNominalSize(AppCommandState& st, const std::string& size);
 /// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
 [[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
 /// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false
@@ -6124,14 +6195,17 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
 /// **Interpreted in the active UCS** (REQ-154): under a rotated UCS `10,0` is 10 units along the UCS
 /// X axis, not the world's. Under the WCS — the default, and every drawing that predates the UCS
 /// command — this is the original world-frame parse, unchanged.
+///
+/// A third number is the point's Z (REQ-354): `x,y,z`, or `@dx,dy,dz` measured from \p baseWorldZ
+/// (the work plane when null). It is published through AppCommandState::resolvedPointZ.
 bool ParseStoragePoint(AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
-                       float baseLocalX, float baseLocalY);
+                       float baseLocalX, float baseLocalY, const float* baseWorldZ = nullptr);
 
 /// \ref ParseStoragePoint, additionally reporting the resolved point's world Z. Callers that are
 /// about to commit geometry want this: on a tilted UCS the work plane's elevation varies across it,
 /// so the point's own Z is the only correct answer (see AppCommandState::resolvedPointZ).
 bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, float* ly, double* outWorldZ,
-                        bool allowRelative, float baseLocalX, float baseLocalY);
+                        bool allowRelative, float baseLocalX, float baseLocalY, const float* baseWorldZ = nullptr);
 
 /// Split a typed point into its two numbers and whether it carried a leading `@`, without deciding
 /// which frame those numbers are in. That separation is what lets one parser serve both frames.
@@ -6589,7 +6663,30 @@ void StartSectionPlaneCommand(AppCommandState& st, std::vector<std::string>& log
 /// End the face-select step without placing anything (ESC).
 void CancelSectionPlaneCommand(AppCommandState& st);
 /// The one prompt the command shows, so the hint and the log cannot word it differently.
-[[nodiscard]] const char* CadSectionPlanePromptText();
+[[nodiscard]] const char* CadSectionPlanePromptText(const AppCommandState& st);
+
+/// A typed answer to SECTIONPLANE's point prompts (a coordinate, or Enter). False when the command
+/// is not running, so the dispatcher can pass the line on.
+bool HandleSectionPlaneTextInput(const std::string& line, AppCommandState& st,
+                                 std::vector<std::string>& log);
+
+/// The viewport click that answers SECTIONPLANE's point prompts, in plan-space world coordinates —
+/// the same shape of entry point `SECTION` uses for its own three points.
+void SubmitSectionPlanePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// Track the cursor while SECTIONPLANE is asking for its through point, so the plane can be drawn
+/// where it would land (REQ-342, 2026-09-18). Resolves the ray exactly as the click does — on the
+/// geometry it hits, else on the work plane — so the preview cannot promise a plane the click would
+/// not place. A no-op unless the command is at that prompt.
+void UpdateSectionPlanePreview(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol);
+
+/// Forget the tracked cursor: the command ended, the cursor left the viewport, or the route changed.
+void ClearSectionPlanePreview(AppCommandState& st);
+
+/// The rectangle to draw for that preview, or false when there is nothing to preview (no tracked
+/// cursor, or a cursor that names no plane yet). The same rectangle, in the same place, that the
+/// click will place — it is built by the same code.
+[[nodiscard]] bool CadSectionPlanePreviewIndicator(const AppCommandState& st, SectionClipIndicator* out);
 /// The viewport click that answers "select a flat face". Returns true when a plane was placed;
 /// on any refusal the command stays open and the reason is in \p log.
 bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
@@ -6676,7 +6773,64 @@ bool CadHatchTraceAt(const AppCommandState& st, double wx, double wy, std::vecto
 bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std::vector<std::string>& log);
 /// Index of the smallest-area filled region containing (wx,wy), or -1. Lowest pick priority (fills sit under
 /// linework) — the click handler calls this only after geometry/annotation picks miss (REQ-042).
-int PickFilledRegionAt(const AppCommandState& st, double wx, double wy);
+/// \param ray As \ref PickCadAnnotationAt: when non-null, each region is tested where the ray meets
+///        its own plane (the elevation of its first vertex) — issue #564 §2.
+int PickFilledRegionAt(const AppCommandState& st, double wx, double wy, const ray3d::Ray* ray = nullptr);
+
+/// Which kind of thing \ref ResolveViewportPick found under the cursor (GitHub issue #564 §2).
+enum class ViewportPickFamily { None, Table, Annotation, Linework, Solid, FilledRegion };
+
+/// The inputs a viewport hover or click already has, gathered so both ask the SAME question.
+struct ViewportPickRequest {
+  /// The cursor on the work plane — the plan-view pick point, exactly as before.
+  double rawX = 0.0;
+  double rawY = 0.0;
+  /// The orbited-view ray the linework, text and fill picks measure against (REQ-058); null in plan
+  /// view, which keeps every pre-3D XY test byte-identical.
+  const ray3d::Ray* orbitRay = nullptr;
+  /// The camera ray through the pixel, in every view — what the solid pick and every DEPTH
+  /// comparison use.
+  ray3d::Ray eyeRay{};
+  bool eyeRayValid = false;
+  /// Linework tolerance: the hover's tight one or the click's wider one.
+  float lineTol = 0.f;
+  /// For the text / table tolerance (pixel aperture → world).
+  float orthoHalfH = 50.f;
+  float viewportHeightPx = 700.f;
+  bool modelSpace = true;
+  /// A survey point is under the cursor: solids yield to it, as they always have.
+  bool surveyPointUnderCursor = false;
+};
+
+struct ViewportPickResult {
+  ViewportPickFamily family = ViewportPickFamily::None;
+  SelectedEntity entity{};
+  /// For \c Linework: the candidates within tolerance that are VISIBLE (not behind an opaque
+  /// solid), for the disambiguation popup. Empty otherwise.
+  std::vector<CadPickCandidate> candidates;
+};
+
+/// What visible thing is under this pixel (GitHub issue #564 §2, D-2026-09-28-e). The ONE resolution
+/// the viewport hover and both click paths use, so what pre-highlights is what a click takes.
+///
+/// Families keep their long-standing precedence — table, text, linework, solid, fill — with one rule
+/// added: **nothing behind an opaque solid answers.** In Hidden and Shaded a solid's surface is found
+/// along the camera ray and any candidate farther than it (beyond the pick tolerance) is dropped; and
+/// where a solid is nearer the eye than the linework under the cursor, the solid wins. In 2D
+/// Wireframe a solid is see-through (D-2026-09-16-b, Q1 answered 2026-09-28): only its EDGES answer,
+/// by the same nearer-wins rule, and it hides nothing. With no solids in the drawing, every step is
+/// the pre-change call with the pre-change arguments.
+ViewportPickResult ResolveViewportPick(const AppCommandState& st, const ViewportPickRequest& rq);
+
+/// The CLICK's answer (issue #564 §2): the hover's own question first — \p rq with the hover's
+/// \p hoverLineTol — and only when that finds nothing, \p rq as given (the click's wider linework
+/// tolerance). So whatever pre-highlighted is exactly what the click takes, while a click that lands
+/// just outside the aperture keeps the forgiving radius it always had. With only linework under the
+/// cursor this is the pre-change answer: the nearest entity inside the tight radius is also the
+/// nearest inside the wide one. A linework answer carries the WIDE query's visible candidates, as
+/// the disambiguation popup always has.
+ViewportPickResult ResolveViewportClickPick(const AppCommandState& st, const ViewportPickRequest& rq,
+                                            float hoverLineTol);
 
 /// EXTRACTCENTERLINE (REQ-347): re-evaluates the hover's cylinder-axis fit against every visible
 /// point cloud's bounded preview sample under \p ray, writing the result into
@@ -6712,6 +6866,26 @@ void StartOrbitCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The attributes of a selected entity, or nullptr for a type that carries none (survey points,
 /// PDF underlays) or an index that no longer resolves.
 const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, const SelectedEntity& e);
+/// The attributes a layer / colour edit reads and writes (REQ-352): every type that carries them,
+/// solids and pipe runs included — unlike \ref CadEntityAttrsForSelected, which isolation keeps
+/// narrower. nullptr for a type with none or an index that no longer resolves.
+const EntityAttributes* CadEditableAttrsForSelected(const AppCommandState& st, const SelectedEntity& e);
+/// Properties / ribbon layer edit (REQ-352): moves every selected entity that carries attributes —
+/// solids and pipe runs included — to \p layer, as one undo step. A new name joins the layer
+/// table. Returns how many entities changed; nothing changed pushes no undo.
+int CadApplyLayerToSelection(AppCommandState& st, const std::string& layer);
+/// Properties colour edit (REQ-352): the same, for the colour storage string ("ByLayer", an ACI
+/// name, `#RRGGBB`).
+int CadApplyColorToSelection(AppCommandState& st, const std::string& color);
+/// What \ref CadSelectionLayer returns when the selected objects sit on more than one layer.
+inline constexpr const char* kCadSelectionLayerVaries = "*VARIES*";
+/// The layer the selected objects share, \ref kCadSelectionLayerVaries when they differ, or "" when
+/// nothing selected carries a layer — the ribbon Layers combo's preview (REQ-352).
+[[nodiscard]] std::string CadSelectionLayer(const AppCommandState& st);
+/// The ribbon Layers combo's pick (REQ-352, AutoCAD's rule): with objects selected that carry a
+/// layer, moves them to \p layer (one undo step) and leaves the current layer alone; with none,
+/// sets the current layer for new geometry, as it always has.
+void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vector<std::string>& log);
 /// True when \p e is currently isolated out. Entity types with no attributes are never hidden.
 bool CadSelectedEntityHidden(const AppCommandState& st, const SelectedEntity& e);
 /// ISOLATEOBJECTS — hide everything EXCEPT the current selection.
@@ -6808,7 +6982,7 @@ struct SubObjectHoverRow {
 /// Move the armed grip to (x, y) in local storage coordinates — the one place grip geometry is written, so
 /// the mouse drag and command-line distance entry cannot drift apart. No-op when no grip is armed.
 /// Callers own the undo snapshot and \ref BumpCadGpuCache.
-void ApplyEntityGripPoint(AppCommandState& st, float x, float y);
+void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z);
 
 void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::string>* log);
 
@@ -6845,6 +7019,12 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
 /// a tilted UCS, which is the half-agreement a tolerance-based acceptance would never catch.
 void ApplyRotationAboutUcsZ(AppCommandState& st, float bx, float by, float bz, float rad,
                             std::vector<std::string>& log);
+
+/// Rotate the whole selection in place by \p rad about the line through \p axisPoint along
+/// \p axisUnit — the rotate gizmo's X and Y rings (D-2026-09-28-b). The same in-place 3D turn typed
+/// ROTATE uses under a tilted UCS, with the same refusals. The caller owns the undo snapshot.
+void ApplyRotationAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                            const ray3d::Vec3& axisUnit, float rad, std::vector<std::string>& log);
 
 /// Scale the whole selection uniformly by \p sc about (\p bx, \p by, \p bz) — the complete typed
 /// SCALE transform (REQ-329 increment 3, REQ-332 increment 2). The caller owns the undo snapshot.
@@ -6906,6 +7086,22 @@ inline constexpr int kGizmoAxisCount = 3;
 inline constexpr float kGizmoHandleLenPx = 70.f;
 /// Grab aperture around a handle, in screen pixels.
 inline constexpr float kGizmoHandleGrabPx = 7.f;
+/// A rotate ring whose normal is within this cosine of perpendicular to the view ray is seen
+/// (nearly) edge-on — a line on screen, round which a drag names no angle — so it is not pickable.
+/// About 5 degrees (D-2026-09-28-b).
+inline constexpr double kGizmoRingEdgeOnCos = 0.09;
+/// The move gizmo's PLANE handles (D-2026-09-28-c) are handle numbers 3, 4, 5 — after the three
+/// axes — for the UCS XY, YZ and ZX planes. Each is a square from the anchor out to this fraction of
+/// the handle length along its two axes.
+inline constexpr int kGizmoPlaneHandleFirst = 3;
+inline constexpr double kGizmoPlaneHandleFrac = 0.35;
+/// The two UCS axes (0 = X, 1 = Y, 2 = Z) spanning plane handle \p plane (0 = XY, 1 = YZ, 2 = ZX).
+inline void CadGizmoPlaneAxes(int plane, int* a, int* b) {
+  *a = plane;
+  *b = (plane + 1) % 3;
+}
+/// How many plane handles the gizmo has: 3 for an entity selection under Translate, else 0.
+[[nodiscard]] int CadGizmoPlaneHandleCountFor(const AppCommandState& st);
 
 /// Where the gizmo hangs, in WCS. False when there is nothing for it to hang off.
 ///
@@ -6943,6 +7139,31 @@ inline constexpr float kGizmoHandleGrabPx = 7.f;
 /// True when a gizmo should be drawn at all: \ref CadGizmoModeFor is not \c None and an anchor
 /// resolves. REQ-060's third acceptance bullet ("no gizmo when the selection is empty") is this.
 [[nodiscard]] bool CadGizmoVisible(const AppCommandState& st);
+
+/// True for \c Kind::Move3d / \c Rotate3d / \c Scale3d (GitHub issue #564 section 3).
+[[nodiscard]] bool IsGizmoCommandKind(AppCommandState::Kind k);
+/// Whether the gizmo has been ASKED for: the persistent `GIZMO` setting is on, or a 3D gizmo
+/// command is at its handles step. A selection alone never summons it (D-2026-09-28-a).
+[[nodiscard]] bool CadGizmoSummoned(const AppCommandState& st);
+/// 3DMOVE / 3DROTATE / 3DSCALE. Honours a pre-selection (straight to the handles), otherwise asks
+/// for objects, Enter when done. Refuses with a stated reason outside model space.
+void StartGizmoCommand(AppCommandState& st, AppCommandState::Kind kind,
+                       std::vector<std::string>& log);
+/// Ends a 3D gizmo command however it ends: abandons any armed drag (nothing has changed yet),
+/// restores \ref AppCommandState::gizmoOp and sets \c active back to \c None.
+void EndGizmoCommand(AppCommandState& st);
+/// Typed input to a running 3D gizmo command. Blank: confirm the selection, commit an armed drag,
+/// or end the command when nothing is armed. A number: the exact value — distance (move), degrees
+/// (rotate) or factor (scale) — along the grabbed handle, or along the only handle when there is
+/// just one. Returns false when no 3D gizmo command is running.
+bool HandleGizmoCommandTextInput(const std::string& line, AppCommandState& st,
+                                 std::vector<std::string>& log);
+/// The base point of a running 3D gizmo command, picked or typed (D-2026-09-28-c): the gizmo moves
+/// there and the command goes on to its handles. Ignored outside that step.
+void SubmitGizmoBasePoint(AppCommandState& st, double x, double y, double z,
+                          std::vector<std::string>& log);
+/// The prompt for the running 3D gizmo command's current step.
+[[nodiscard]] std::string CadGizmoCommandPromptText(const AppCommandState& st);
 
 /// Signed position along the line (\p anchor, \p axisDir) of the point on it nearest \p ray.
 ///
@@ -7133,6 +7354,13 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
                                double* outMxY, int* outSkipped, const Viewport* vpFilter = nullptr);
 // The camera side of zoom-extents is `zoomframing::FrameWorldRect` (ZoomFraming.hpp) — pure, shared
 // by every fit path, and tested there (REQ-122).
+
+/// The drawing's TRUE 3D extents, in storage coordinates, for framing an orbited view (GitHub issue
+/// #564 §1, D-2026-09-28-d): every store ZOOM EXTENTS already sweeps, each with its elevation range,
+/// plus filled regions, block references and pipe runs. Far outliers are dropped by the same
+/// plan-centre rule \ref ComputeRobustWorldExtents uses. False when there is nothing to frame.
+bool ComputeWorldExtents3d(const AppCommandState& st, ray3d::Vec3* outMin, ray3d::Vec3* outMax,
+                           int* outSkipped);
 
 /// The box the section-clip indicator is sized to cover (REQ-341, D-2026-09-16-b), in storage
 /// coordinates: the drawing's extents as ZOOM EXTENTS measures them — every entity kind the clip can

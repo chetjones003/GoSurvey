@@ -530,6 +530,11 @@ enum class Problem {
   /// command that caused them (`ucs::IsRightHandedOrthonormal`). A reflection is its own operation.
   ScaleFactorNonPositive,
   ScaleResultInvalid,          ///< The scaled solid did not validate. Should not happen; refused if it does.
+  /// The mirror plane's normal is not a unit vector (REQ-351). Refused rather than normalized for
+  /// \ref Problem::RotateAxisNotUnit's reason: a zero normal reflects nothing and a long one reflects
+  /// too far, and both would still validate.
+  MirrorPlaneNotUnit,
+  MirrorResultInvalid,         ///< The mirrored solid did not validate. Should not happen; refused if it does.
 
   // --- Moving a vertex or an edge (REQ-333, ADR-046 amendment (n)). ---
   /// A vertex where fewer or more than three PLANAR faces meet. Three planes are exactly a point,
@@ -598,6 +603,9 @@ enum class Problem {
   /// The cut crosses a curved face of a solid that is not a cylinder or cone primitive — a fillet, a
   /// drilled hole's wall, a sphere. A cut that misses every curved face is taken (GitHub #518).
   SliceCutCrossesCurvedFace,
+  /// A cut of a torus at any angle but square to its axis: the curve is a quartic, not a circle
+  /// (GitHub #520). Also a torus whose tube is as wide as its ring, whose square cut is not a ring.
+  SliceCutTorusCurve,
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -942,6 +950,68 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 /// silent-wrong-answer failure REQ-201 exists to prevent.
 [[nodiscard]] bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                                ucs::Ucs* outPlane, Path* outLoop, Problem* outWhy);
+
+/// The ellipse a tilted cut of a cylinder or cone exposes (GitHub #531, D-2026-09-23-a).
+///
+/// A section-only result rather than a new \ref PathSeg kind: `Path` is this kernel's chain of lines
+/// and arcs, and every feature that consumes one — a wall swept along a path, a loft, a sweep — would
+/// otherwise have to learn an ellipse segment only to refuse it. Sectioning is the one caller that
+/// wants this shape, so it is the one that names it.
+struct SectionEllipse {
+  bool valid = false;
+  Vec3 centre{};    ///< world
+  Vec3 normal{};    ///< world — the caller's own plane normal
+  Vec3 majorDir{};  ///< world, unit
+  double majorSemi = 0.0;
+  double minorSemi = 0.0;
+};
+
+/// The elliptical ARC and chord a tilted cut exposes when it runs off the end of a cylinder or cone
+/// (GitHub #520 follow-up, D-2026-09-23-b) — the shape \ref Problem::SliceCutCrossesCurvedEnd names.
+///
+/// **This one does not come from a cut.** `Slice` does not build the pieces for it yet, so there is no
+/// cut face to read back, and the outline is computed from the primitive's own geometry instead. It
+/// is the single place sectioning does not inherit Slice's accepted set; teaching the cutter the same
+/// cut is the follow-up, after which this reads back like every other section.
+struct SectionEllipseArc {
+  bool valid = false;
+  Vec3 centre{};    ///< world, the full ellipse's centre
+  Vec3 normal{};    ///< world — the caller's own plane normal
+  Vec3 majorDir{};  ///< world, unit
+  double majorSemi = 0.0;
+  double minorSemi = 0.0;
+  double startParam = 0.0;  ///< measured from \ref majorDir, about \ref normal
+  double sweep = 0.0;       ///< signed about \ref normal
+  Vec3 chordA{};            ///< world; the arc runs from here...
+  Vec3 chordB{};            ///< ...to here, and the chord closes it across the cap
+};
+
+/// See \ref SectionEllipseArc. Refuses a cut that runs off BOTH ends (two arcs and two chords), one
+/// that stays on the side (\ref Problem::SectionEllipse — a whole ellipse, \ref SectionEllipseOutline's
+/// job), and anything that is not a tilted cut of a cylinder or cone.
+[[nodiscard]] bool SectionEllipseArcOutline(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                            ucs::Ucs* outPlane, SectionEllipseArc* outArc, Problem* outWhy);
+
+/// The cross-section of \p solid when it is exactly one closed ellipse (GitHub #531).
+///
+/// Same cut, same plane and same accepted set as \ref SectionOutlines — this asks the narrower
+/// question those refuse with \ref Problem::SectionEllipse. A cut that also crosses an end cap is an
+/// elliptical arc plus a chord, not one ellipse, and keeps its own refusal
+/// (\ref Problem::SliceCutCrossesCurvedEnd).
+[[nodiscard]] bool SectionEllipseOutline(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                         ucs::Ucs* outPlane, SectionEllipse* outEllipse, Problem* outWhy);
+
+/// **Every** closed outline of the cross-section, for a cut whose shape is more than one loop
+/// (REQ-335 increment 2, D-2026-09-18-a, GitHub #520) — a ring, where a hole sits inside an outer
+/// outline (a torus cut square to its axis, a drilled box), or separate pieces of solid on the plane.
+///
+/// Same geometry, plane and accepted set as \ref SectionLoop, which is this function restricted to
+/// the single-outline case. The outlines come back in \p outLoops with an **outer** outline wound
+/// counter-clockwise about \p planeNormal and a **hole** wound clockwise, so a caller can tell the
+/// two apart by signed area alone, and each is a closed \ref Path in \p outPlane's 2D coordinates.
+/// A hole follows the outline it sits in.
+[[nodiscard]] bool SectionOutlines(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                   ucs::Ucs* outPlane, std::vector<Path>* outLoops, Problem* outWhy);
 
 /// Boolean combination of two solids (REQ-314 increment 4 / ADR-046 — the B1 subset). The result is
 /// written to \p out as one or more solids: usually one, but a UNION of solids that do not touch is
@@ -1353,6 +1423,33 @@ inline constexpr int kDraftFullCircleSegments = 64;
 /// Refuses a factor that is zero, negative or non-finite (\ref Problem::ScaleFactorNonPositive).
 [[nodiscard]] bool Scale(const Solid& s, const Vec3& basePoint, double factor, Solid* out,
                          Problem* outWhy);
+
+/// The mirror image of \p s across the plane through \p planePoint with unit normal \p planeUnit
+/// (REQ-351, D-2026-09-28-f).
+///
+/// **A reflection is not "a scale of -1".** It turns a right-hand glove into a left-hand one: applied
+/// naively, every frame becomes left-handed and every loop winds the wrong way round its outward
+/// normal, so the solid reads as inside-out — negative volume, Booleans and fillets that refuse, and
+/// an export that other programs reject. This function reflects every position and direction and
+/// then puts the orientation back:
+///
+/// - **every frame is made right-handed again by negating its Y axis** — X' = R·X, Y' = -R·Y,
+///   Z' = R·Z — so a plane's Z stays its outward normal and a curved surface's axis stays its axis;
+/// - negating Y maps an angle measured about Z to its negative, so a curved face's longitude span
+///   becomes `[-uEnd, -uStart]` (shifted by whole turns back into `[0, 2pi)`), an arc or ellipse edge's
+///   `sweep` negates, and a general trim loop negates the same parameter and is re-wound;
+/// - a NURBS patch has its control net reflected and its **U direction reversed**, which is what
+///   keeps `Su x Sv` pointing outward (\ref nurbs::Mirror);
+/// - **every loop is reversed** — the order of its uses and the direction of each — because a
+///   reflection reverses the sense in which a boundary runs round its face.
+///
+/// Lengths and angles are preserved, so volume and area are too, exactly. The recipe is **kept**:
+/// every primitive is symmetric about its own frame's XZ plane, so the reflected frame describes the
+/// reflected primitive, and a polysolid path negates its y, its sweeps and its justification.
+///
+/// Refuses a normal that is not a unit vector (\ref Problem::MirrorPlaneNotUnit).
+[[nodiscard]] bool Mirror(const Solid& s, const Vec3& planePoint, const Vec3& planeUnit, Solid* out,
+                          Problem* outWhy);
 
 /// Move face \p faceIndex of \p s along its own outward normal by \p distance (REQ-319).
 ///

@@ -136,19 +136,20 @@ EXPECT SELECTED 1
 # exactly that requirement, so **ROTATE and SCALE no longer refuse** — their coverage moved to
 # `req332-rotate-scale-solid`, which asserts the transforms rather than the refusals.
 #
-# What is asserted here is what item 6 still says: MIRROR, Polar ARRAY and STRETCH refuse a solid by
-# name. The block is kept rather than deleted because its point is unchanged — "MOVE works now" must
-# not read as "every transform works now", and the list of which do is exactly the thing that drifts.
+# REQ-351 (D-2026-09-28-f) then gave MIRROR, Polar ARRAY and ROTATE Copy a solid too — see
+# `req351-modify-solids`. What still refuses is STRETCH, which moves PART of an object; no kernel
+# operation moves part of a solid. The block is kept rather than deleted because its point is
+# unchanged — "MOVE works now" must not read as "every transform works now", and the list of which
+# do is exactly the thing that drifts.
 
 NEW
 CMD BOX 0,0 20 10 8
-BOX -20 -20 20 20
-EXPECT SELECTED 1
-CMD MIRROR
-CMD 0,-50
-CMD 0,50
-CMD
-EXPECT LOG "transforming a solid is not supported yet"
-EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CMD STRETCH
+BOX 0 -20 20 20
+CLICK 0 0
+CLICK 5 0
+ESC
+EXPECT LOG "STRETCH — 1 solid(s) excluded"
+EXPECT SOLIDBOUNDS 0 -10 -5 0 10 5 8
 
 CHECK ALL

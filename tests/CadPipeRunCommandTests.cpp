@@ -26,7 +26,7 @@ TEST_CASE("PIPERUN refuses an unknown nominal size and stays at the prompt", "[i
   StartPipeRunCommand(st, log);
   REQUIRE(HandlePipeRunTextInput("9in", st, log));
   CHECK(st.pipeRunPhase == AppCommandState::PipeRunPhase::WaitNominalSize);
-  CHECK(st.pipeRunNominalSize.empty());
+  CHECK(st.pipeRunNominalSize == "4in");  // the refused size did not replace the remembered one
 }
 
 TEST_CASE("PIPERUN refuses an unknown pressure class and stays at the prompt", "[issue486][piperun][command]") {

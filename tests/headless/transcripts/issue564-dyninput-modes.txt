@@ -1,0 +1,86 @@
+# REQ-354 / D-2026-09-28-j (GitHub issue #564 section 5) — the dynamic input shows which mode it is in.
+#
+# DYN types into the same model the viewport's boxes draw from, EXPECT DYNLABELS reads the labels that
+# model shows, and DYNKEY ENTER submits the text it composes through the ordinary command line — so a
+# point asserted after it is the point the labels promised. One section per row of the issue's table.
+
+NEW
+
+# --- (nothing typed): X Y, absolute -----------------------------------------------------------------
+CMD LINE
+EXPECT DYNLABELS X Y
+DYN 1,2
+EXPECT DYNLABELS X Y
+DYNKEY ENTER
+
+# LINE's second point follows an anchor: Distance < Angle from it (REQ-024), relative by construction.
+EXPECT DYNLABELS @ Distance < Angle
+
+# --- `@`: ΔX ΔY, relative to the last point --------------------------------------------------------
+DYN @
+EXPECT DYNLABELS @ ΔX ΔY
+DYN 3,4
+DYNKEY ENTER
+EXPECT LINEXYZ 0 1 2 0 4 6 0
+
+# --- a comma in the Distance box: X Y, absolute (D-2026-09-28-j — `5,5` is a coordinate) ----------
+DYN 10,6
+EXPECT DYNLABELS X Y
+DYNKEY ENTER
+EXPECT LINEXYZ 1 4 6 0 10 6 0
+
+# --- `@…<`: Distance < Angle, relative. The angle box is a bearing: 180 is south. -----------------
+DYN 5<180
+EXPECT DYNLABELS @ Distance < Angle
+DYNKEY ENTER
+EXPECT LINEXYZ 2 10 6 0 10 1 0
+
+ESC
+
+# A keyword typed into the first box still answers the prompt (it used to be read as the live
+# distance, silently drawing a segment).
+CMD POLYLINE
+DYN 0,20
+DYNKEY ENTER
+DYN 5,20
+DYNKEY ENTER
+DYN U
+DYNKEY ENTER
+EXPECT LOG "POLYLINE — last vertex removed."
+ESC
+
+# --- `<` at a first point: Distance < Angle from the origin ----------------------------------------
+CMD LINE
+DYN 10<90
+EXPECT DYNLABELS Distance < Angle
+DYNKEY ENTER
+DYN @0,5
+DYNKEY ENTER
+EXPECT LINEXYZ 3 10 0 0 10 5 0
+ESC
+
+# --- Backspace on the mode character reverts, keeping what was typed --------------------------------
+CMD LINE
+DYN 7<
+EXPECT DYNLABELS Distance < Angle
+DYNKEY BACKSPACE
+EXPECT DYNLABELS X Y
+DYN ,8
+DYNKEY ENTER
+DYN @
+EXPECT DYNLABELS @ ΔX ΔY
+DYNKEY BACKSPACE
+EXPECT DYNLABELS @ Distance < Angle
+DYN 2,8
+DYNKEY ENTER
+EXPECT LINEXYZ 4 7 8 0 2 8 0
+ESC
+
+# --- `@` at a prompt with nothing to be relative to: the boxes say so, the command refuses by name ---
+CMD LINE
+DYN @1,1
+EXPECT DYNLABELS @ ΔX ΔY
+DYNKEY ENTER
+EXPECT LOG "Could not parse point"
+EXPECT LINES 5
+ESC

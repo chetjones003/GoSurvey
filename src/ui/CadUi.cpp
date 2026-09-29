@@ -5,8 +5,10 @@
 #include "DevShellHooks.hpp"
 #include "RibbonLayoutDraw.hpp"
 #include "RibbonLayoutMeasure.hpp"
+#include "ModelingRibbon.hpp"
 // REQ-141 Analyze ribbon + contour label overlay.
 #include "CadCoordinateFrame.hpp"
+#include "CadDynInput.hpp"  // point-entry dynamic input model (REQ-354)
 #include "ViewCube.hpp"
 #include "UcsIcon.hpp"  // in-tree orientation widget (REQ-059)
 #include "viewport/Crosshair3d.hpp"  // 3D crosshair axis projection (REQ-310)
@@ -105,6 +107,15 @@ static void SubmitRibbonCommand(AppCommandState& cmd, std::vector<std::string>& 
   std::vector<char> buf(line.begin(), line.end());
   buf.push_back('\0');
   UiSubmitCommandLine(buf.data(), static_cast<int>(buf.size()), cmd, log);
+}
+
+// REQ-355 (D-2026-09-28-k): a ribbon button that runs a command exactly as typed. The command line
+// only starts a new command when none is running (anything typed during one is that command's
+// input), so a running command is cancelled first - a ribbon click starts a new command, as in
+// AutoCAD. Cancelling keeps the selection, so EXTRUDE / UNION / MOVE still see what was picked.
+static void RunRibbonTypedCommand(AppCommandState& cmd, std::vector<std::string>& log, const std::string& line) {
+  CancelActiveCommand(cmd, log);
+  SubmitRibbonCommand(cmd, log, line);
 }
 
 static void UiSubmitViewportPick(AppCommandState& cmd, double x, double y, std::vector<std::string>& log,
@@ -3793,6 +3804,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ribbonTab("Manage",   kRibbonTabManage);
     ribbonTab("Output",   kRibbonTabOutput);
     ribbonTab("Survey",   kRibbonTabSurvey);
+    ribbonTab("Modeling", kRibbonTabModeling);
     if (selSurfIdx >= 0) {
       char surfTab[160];
       const std::string& nm = cmd.cadSurfaces[static_cast<size_t>(selSurfIdx)].name;
@@ -4961,6 +4973,122 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }});
     }
   } // if (activeRibbonTab == kRibbonTabSurvey)
+
+  // REQ-355 (GitHub issue #564 section 8, D-2026-09-28-k): Modeling tab — the solid-modelling and
+  // piping commands, which had no ribbon home. Every button is a row of modelingribbon::kSections
+  // and runs its command exactly as typed (RunRibbonTypedCommand). Model space only, as Survey is.
+  // Closures run after this block exits, so everything block-local they use is captured by value.
+  if (cmd.activeRibbonTab == kRibbonTabModeling && !ribbonPaperSpace) {
+    for (const modelingribbon::Section& sec : modelingribbon::kSections) {
+      if (sec.buttons == modelingribbon::kPiping)
+        continue;  // drawn below, beside its size dropdown
+      // Columns of three icon+label rows, the Survey tab's shape; Medium drops the labels.
+      auto buildSpec = [&, sec](bool compact) {
+        ribbonlayout::RibbonSectionSpec spec;
+        spec.groupGapX = 4.f;
+        for (int i = 0; i < sec.count; i += 3) {
+          std::vector<ribbonlayout::RibbonButtonSpec> col;
+          for (int k = i; k < std::min(sec.count, i + 3); ++k) {
+            const modelingribbon::Button& b = sec.buttons[k];
+            col.push_back(rowBtn(b.id, -1, b.iconName, b.label, false, b.tooltip, compact));
+          }
+          spec.groups.push_back(columnOfButtons(std::move(col)));
+        }
+        return spec;
+      };
+      const float w = ribbonlayout::MeasureRibbonSection(buildSpec(false)).size.x + 8.f;
+      const float mw = ribbonlayout::MeasureRibbonSection(buildSpec(true)).size.x + 8.f;
+      ribbonSpecs.push_back({w, mw, [&, buildSpec, sec]() {
+        const std::string childId = std::string("RibbonSecMod") + sec.title;
+        drawRibbonSectionSpec(childId.c_str(), sec.title, buildSpec(curCompact), [&, sec](const std::string& id) {
+          for (int k = 0; k < sec.count; ++k)
+            if (id == sec.buttons[k].id)
+              RunRibbonTypedCommand(cmd, log, sec.buttons[k].command);
+        });
+      }, sec.title, RibbonIconKind::Nyi, sec.buttons[0].iconName});
+    }
+
+    // ---- Piping: PIPERUN + its nominal-size dropdown + the run-editing tools --------------------
+    // The dropdown is bound to cmd.pipeRunNominalSize, the size PIPERUN itself remembers, so the
+    // dropdown and the typed prompt are one setting and each shows a change made in the other.
+    {
+      ribbonlayout::RibbonSectionSpec runSpec;
+      ribbonlayout::RibbonGroupSpec runGroup;
+      runGroup.buttons = {largeBtnSpecEx("##ModPipeRun", -1, "c3d_pipenet", "Pipe\nRun", false,
+                                         "Pipe Run — route a pipe at the size beside it, standard wall;\n"
+                                         "goes straight to the start point.\n"
+                                         "Command bar: PIPERUN (asks the size and wall)",
+                                         capW("Pipe\nRun"))};
+      runSpec.groups = {runGroup};
+      std::vector<ribbonlayout::RibbonButtonSpec> tools;
+      for (const modelingribbon::Button& b : modelingribbon::kPiping)
+        tools.push_back(rowBtn(b.id, -1, b.iconName, b.label, false, b.tooltip, false));
+      ribbonlayout::RibbonSectionSpec toolsSpec;
+      toolsSpec.groups = {columnOfButtons(std::move(tools))};
+      const float runW = ribbonlayout::MeasureRibbonSection(runSpec).size.x;
+      const float toolsW = ribbonlayout::MeasureRibbonSection(toolsSpec).size.x;
+      const float sizeComboW =
+          ImGui::CalcTextSize("0.75in").x + ImGui::GetFrameHeight() + st.FramePadding.x * 2.f + 8.f;
+      const float w = runW + 8.f + sizeComboW + 8.f + toolsW + 8.f;
+      ribbonSpecs.push_back({w, w, [&, runSpec, toolsSpec, runW, toolsW, sizeComboW, w]() {
+        RibbonSectionBegin("RibbonSecModPiping", "Piping", w, panelH);
+        RibbonLayout::DrawSection(runSpec, runW, [&](const std::string& id) {
+          DevShell_OnUi(id.c_str());
+          if (id == "##ModPipeRun") {
+            CancelActiveCommand(cmd, log);
+            StartPipeRunAtCurrentSize(cmd, log);
+          }
+        });
+        ImGui::SameLine(0, 8);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Size");
+        // Locked while a run is being drawn: its size (and the wall checked against it) is fixed.
+        const bool drafting = cmd.active == AppCommandState::Kind::PipeRun &&
+                              cmd.pipeRunPhase != AppCommandState::PipeRunPhase::WaitNominalSize;
+        double curNps = 0.0;
+        const bool haveCur = CadParsePipeNominalSizeInches(cmd.pipeRunNominalSize, &curNps);
+        ImGui::BeginDisabled(drafting);
+        ImGui::SetNextItemWidth(sizeComboW);
+        if (ImGui::BeginCombo("##ModPipeSize", cmd.pipeRunNominalSize.c_str())) {
+          for (const CadPipeNpsEntry& e : kCadPipeNpsTable) {
+            char label[32];
+            std::snprintf(label, sizeof(label), "%gin", e.nps);
+            const bool selected = haveCur && std::fabs(e.nps - curNps) < 1e-9;
+            if (ImGui::Selectable(label, selected)) {
+              DevShell_OnUi("##ModPipeSize");
+              ChoosePipeRunNominalSize(cmd, label);
+            }
+            if (selected)
+              ImGui::SetItemDefaultFocus();
+          }
+          ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+        RibbonItemHelp(drafting ? "Nominal pipe size — fixed while this run is being drawn."
+                                : "Nominal pipe size for the next PIPERUN (the same setting its prompt offers).",
+                       ImGuiHoveredFlags_AllowWhenDisabled);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 8);
+        RibbonLayout::DrawSection(toolsSpec, toolsW, [&](const std::string& id) {
+          DevShell_OnUi(id.c_str());
+          if (id == "##ModPipeFit") {
+            ImGui::OpenPopup("##ModPipeFitMenu");  // PIPEFIT needs a part type; the menu supplies it
+            return;
+          }
+          for (const modelingribbon::Button& b : modelingribbon::kPiping)
+            if (id == b.id)
+              RunRibbonTypedCommand(cmd, log, b.command);
+        });
+        if (ImGui::BeginPopup("##ModPipeFitMenu")) {
+          for (const char* part : modelingribbon::kPipeFitPartTypes)
+            if (ImGui::MenuItem(part))
+              RunRibbonTypedCommand(cmd, log, std::string("PIPEFIT ") + part);
+          ImGui::EndPopup();
+        }
+        RibbonSectionEnd();
+      }, "Piping", RibbonIconKind::Nyi, "c3d_pipenet"});
+    }
+  } // if (activeRibbonTab == kRibbonTabModeling)
 
   // REQ-143: Civil 3D-shaped contextual TIN Surface tab (selected surface).
   if (cmd.activeRibbonTab == kRibbonTabSurfaceCtx && !ribbonPaperSpace && selSurfIdx >= 0) {
@@ -6490,6 +6618,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     CollectAllDrawingLayers(cmd, &layerList);
     if (std::find(layerList.begin(), layerList.end(), cmd.currentLayer) == layerList.end())
       layerList.insert(layerList.begin(), cmd.currentLayer);
+    const std::string selLayer = CadSelectionLayer(cmd);
 
     if (largeBtn("##RibbonLAY", RibbonIconKind::Layers, "Layers")) {
       SyncDrawingLayerTableWithGeometry(cmd);
@@ -6506,26 +6635,28 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       const ImVec4 dis = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(txt.x * 0.55f + dis.x * 0.45f, txt.y * 0.55f + dis.y * 0.45f,
                                                   txt.z * 0.55f + dis.z * 0.45f, 1.f));
-      ImGui::TextUnformatted("Current layer");
+      // REQ-352: with objects selected the combo shows — and changes — THEIR layer (AutoCAD's rule).
+      ImGui::TextUnformatted(selLayer.empty() ? "Current layer" : "Layer of selection");
       ImGui::PopStyleColor();
     }
     ImGui::SetNextItemWidth(std::max(120.f, kLayerPanelW - largeW - 40.f));
-    const char* preview = cmd.currentLayer.empty() ? "0" : cmd.currentLayer.c_str();
+    const char* preview = !selLayer.empty()        ? (selLayer == kCadSelectionLayerVaries ? "(varies)" : selLayer.c_str())
+                          : cmd.currentLayer.empty() ? "0"
+                                                     : cmd.currentLayer.c_str();
     ImGui::PushID("RibbonLayerCombo");
     if (ImGui::BeginCombo("##ribbonlayerpick", preview, ImGuiComboFlags_HeightLargest)) {
       for (const auto& L : layerList) {
-        const bool sel = L == cmd.currentLayer;
-        if (ImGui::Selectable(L.c_str(), sel)) {
-          cmd.currentLayer = L;
-          SyncDrawingLayerTableWithGeometry(cmd);
-        }
+        const bool sel = selLayer.empty() ? L == cmd.currentLayer : L == selLayer;
+        if (ImGui::Selectable(L.c_str(), sel))
+          CadRibbonPickLayer(cmd, L, log);
         if (sel)
           ImGui::SetItemDefaultFocus();
       }
       ImGui::EndCombo();
     }
     ImGui::PopID();
-    RibbonItemHelp("Current layer for new geometry (LINE, CIRCLE, TEXT, …).");
+    RibbonItemHelp("Current layer for new geometry (LINE, CIRCLE, TEXT, …).\n"
+                   "With objects selected: moves them to the picked layer instead.");
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
@@ -6776,6 +6907,18 @@ void CollectGeneralAttrs(const AppCommandState& cmd, const std::vector<SelectedE
       ltypes->push_back(a.linetype);
       lws->push_back(a.lineweightMm);
       trans->push_back(a.transparency);
+    } else if (e.type == SelectedEntity::Type::Solid || e.type == SelectedEntity::Type::PipeRun ||
+               e.type == SelectedEntity::Type::BlockRef) {
+      // REQ-352: a solid, a pipe run and a block reference (a pipe fitting) report their layer and
+      // colour here so the fields they are edited through show what they hold.
+      const EntityAttributes* a = CadEditableAttrsForSelected(cmd, e);
+      if (!a)
+        continue;
+      layers->push_back(a->layer);
+      colors->push_back(a->color);
+      ltypes->push_back(a->linetype);
+      lws->push_back(a->lineweightMm);
+      trans->push_back(a->transparency);
     }
   }
 }
@@ -7053,110 +7196,17 @@ void RefreshPropsBuffersFromModel(AppCommandState& cmd, const std::vector<Select
   }
 }
 
+// REQ-352: the edit itself — every attribute-carrying type, solids and pipe runs included, as one
+// undo step — lives in the command layer, shared with the ribbon's layer dropdown.
 void ApplyLayerToSelection(AppCommandState& cmd, const std::string& v) {
-  if (v.empty())
-    return;
-  EnsureAttrCounts(cmd);
-  for (const auto& e : cmd.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= cmd.userLinesFlat.size() || static_cast<size_t>(e.index) >= cmd.userLineAttrs.size())
-        continue;
-      cmd.userLineAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
-        continue;
-      cmd.userCircleAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadAnnotations.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
-        continue;
-      cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Table) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
-        continue;
-      cmd.cadTableAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::BlockRef) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadBlockRefs.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadBlockRefAttrs.size())
-        continue;
-      cmd.cadBlockRefAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
-          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
-        continue;
-      cmd.userArcAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
-          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
-        continue;
-      cmd.userEllAttrs[static_cast<size_t>(e.index)].layer = v;
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int np =
-          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
-      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
-        continue;
-      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].layer = v;
-    }
-  }
-  SyncDrawingLayerTableWithGeometry(cmd);
-  BumpCadGpuCache(cmd);
+  (void)CadApplyLayerToSelection(cmd, v);
   RefreshMixedHintFlags(cmd);
 }
 
 } // namespace — ApplyColorToSelection is shared with CadUi_ColorPicker.cpp
 
 void ApplyColorToSelection(AppCommandState& cmd, const std::string& v) {
-  if (v.empty())
-    return;
-  EnsureAttrCounts(cmd);
-  for (const auto& e : cmd.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= cmd.userLinesFlat.size() || static_cast<size_t>(e.index) >= cmd.userLineAttrs.size())
-        continue;
-      cmd.userLineAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
-        continue;
-      cmd.userCircleAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadAnnotations.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
-        continue;
-      cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Table) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
-        continue;
-      cmd.cadTableAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::BlockRef) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadBlockRefs.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadBlockRefAttrs.size())
-        continue;
-      cmd.cadBlockRefAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
-          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
-        continue;
-      cmd.userArcAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
-          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
-        continue;
-      cmd.userEllAttrs[static_cast<size_t>(e.index)].color = v;
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int np =
-          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
-      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
-        continue;
-      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].color = v;
-    }
-  }
-  BumpCadGpuCache(cmd);
+  (void)CadApplyColorToSelection(cmd, v);  // REQ-352 — see ApplyLayerToSelection
   RefreshMixedHintFlags(cmd);
 }
 
@@ -9021,6 +9071,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int firstSurfIx = -1;
   int nPipeRun = 0;
   int firstPipeRunIx = -1;
+  int nSolid = 0;
   for (const auto& e : sel) {
     if      (e.type == SelectedEntity::Type::LineSeg)    ++nLine;
     else if (e.type == SelectedEntity::Type::Circle)     ++nCirc;
@@ -9036,15 +9087,17 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       ++nPipeRun;
       if (firstPipeRunIx < 0)
         firstPipeRunIx = e.index;
+    } else if (e.type == SelectedEntity::Type::Solid) {
+      ++nSolid;
     }
   }
 
   ImGui::Text("Selected: %d object(s)", static_cast<int>(sel.size()));
   const int typeKinds = (nLine > 0 ? 1 : 0) + (nCirc > 0 ? 1 : 0) + (nAnn > 0 ? 1 : 0) + (nTable > 0 ? 1 : 0) +
-                        (nPdf > 0 ? 1 : 0);
+                        (nPdf > 0 ? 1 : 0) + (nSolid > 0 ? 1 : 0) + (nPipeRun > 0 ? 1 : 0);
   if (typeKinds > 1)
-    ImGui::TextDisabled("(Mixed: Line %d, Circle %d, Ann %d, Table %d, PDF %d)", nLine, nCirc, nAnn, nTable,
-                        nPdf);
+    ImGui::TextDisabled("(Mixed: Line %d, Circle %d, Ann %d, Table %d, PDF %d, Solid %d, Pipe run %d)", nLine,
+                        nCirc, nAnn, nTable, nPdf, nSolid, nPipeRun);
   else if (nLine > 1)
     ImGui::TextDisabled("%d lines", nLine);
   else if (nCirc > 1)
@@ -9069,6 +9122,10 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     ImGui::TextDisabled("%d pipe runs", nPipeRun);
   else if (nPipeRun == 1)
     ImGui::TextDisabled("Pipe Run");
+  else if (nSolid > 1)
+    ImGui::TextDisabled("%d solids", nSolid);
+  else if (nSolid == 1)
+    ImGui::TextDisabled("3D Solid");
   else if (nAnn == 1) {
     int ix = -1;
     for (const auto& e : sel) {
@@ -9482,7 +9539,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   // REQ-342. No bracketed options: the answer is a click on a face, not a keyword, and a link that
   // submits text here would have nothing to consume it.
   if (cmd.active == AppCommandState::Kind::SectionPlane)
-    return CadSectionPlanePromptText();
+    return CadSectionPlanePromptText(cmd);
   if (cmd.active == AppCommandState::Kind::Arc) {
     switch (cmd.arcPhase) {
     case AppCommandState::ArcPhase::WaitStart:
@@ -9589,6 +9646,11 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     static std::string revolveHint;
     revolveHint = CadRevolvePromptText(cmd);
     return revolveHint.c_str();
+  }
+  if (IsGizmoCommandKind(cmd.active)) {
+    static std::string gizmoCmdHint;
+    gizmoCmdHint = CadGizmoCommandPromptText(cmd);
+    return gizmoCmdHint.c_str();
   }
   if (cmd.active == AppCommandState::Kind::Loft) {
     static std::string loftHint;
@@ -9839,126 +9901,6 @@ static float DynamicCursorFieldWidth(const char* text, const char* alsoFits, flo
   return std::clamp(w + chrome, minPx, maxPx);
 }
 
-// True when the active prompt expects a coordinate POINT, so the cursor dynamic
-// input shows AutoCAD-style live X/Y fields (REQ-024). Mirrors the point phases
-// of CommandInputHint; non-point prompts (bearing/angle/distance/factor/option/
-// selection) return false and keep a single input field.
-static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
-  using K = AppCommandState::Kind;
-  switch (cmd.active) {
-  case K::Line: {
-    using LP = AppCommandState::LinePhase;
-    using SAP = AppCommandState::SegmentAnglePickPhase;
-    if (cmd.linePhase == LP::NeedFirstPoint) return true;
-    if (cmd.linePhase == LP::NeedNextPoint)
-      return !(cmd.segmentAngleKeyboardAwaitBearing || cmd.segmentAngleLockActive ||
-               cmd.segmentAnglePickPhase != SAP::Idle);
-    return false;
-  }
-  case K::Polyline: {
-    using PP = AppCommandState::PolylinePhase;
-    using SAP = AppCommandState::SegmentAnglePickPhase;
-    if (cmd.polylinePhase == PP::NeedFirstPoint) return true;
-    if (cmd.polylinePhase == PP::NeedNextPoint)
-      return !(cmd.segmentAngleKeyboardAwaitBearing || cmd.segmentAngleLockActive ||
-               cmd.segmentAnglePickPhase != SAP::Idle);
-    return false;
-  }
-  case K::Arc: return true;
-  case K::Rect: return true;  // both corners are point prompts (REQ-024/REQ-053)
-  case K::Ellipse: {
-    using EP = AppCommandState::EllipsePhase;
-    return cmd.ellPhase == EP::WaitCenter || cmd.ellPhase == EP::WaitMajorEnd;
-  }
-  case K::Text:
-    return cmd.textPhase == AppCommandState::TextCmdPhase::WaitInsertion;
-  case K::Mtext: {
-    using MP = AppCommandState::MtextPhase;
-    return cmd.mtextPhase == MP::WaitCorner1 || cmd.mtextPhase == MP::WaitCorner2;
-  }
-  case K::DimAligned:
-  case K::DimLinear: return true;
-  case K::DimAngular: {
-    using DAP = AppCommandState::DimAngularPhase;
-    return cmd.dimAngularPhase == DAP::WaitVertex || cmd.dimAngularPhase == DAP::WaitRay1 ||
-           cmd.dimAngularPhase == DAP::WaitRay2;
-  }
-  case K::IdPoint: return true;
-  case K::SurveyInverse: return true;
-  case K::Dist: return true;
-  // REQ-074. Missing here as well as from the viewport click dispatch, so SURFELEV got neither
-  // typed-point entry nor a usable pick — the same pre-existing TASK-055 gap, in the second of the
-  // two lists a point-picking command has to appear in.
-  case K::SurfaceElevGrade: return true;
-  case K::WaterDrop: return true;
-  case K::Catchment: return true;
-  case K::SwapTinEdge: return true;
-  case K::AddTinPoint: return true;
-  case K::DelTinPoint: return true;
-  case K::MoveTinPoint: return true;
-  case K::DelTinLine: return true;
-  case K::QuickProfile: return true;
-  // REQ-154. The second of the two lists a point-picking command has to appear in — UCS was missing
-  // from both, so it had neither dynamic input nor a working click. Same phases that
-  // ViewportClickRouteFor routes: everything that takes a coordinate, and nothing that wants a
-  // keyword or a number.
-  case K::Ucs: {
-    using UPh = AppCommandState::UcsPhase;
-    return cmd.ucsPhase == UPh::WaitOriginOrOption || cmd.ucsPhase == UPh::WaitXAxisPoint ||
-           cmd.ucsPhase == UPh::WaitXyPoint || cmd.ucsPhase == UPh::WaitRotationAngleP1 ||
-           cmd.ucsPhase == UPh::WaitRotationAngleP2 || cmd.ucsPhase == UPh::WaitZAxisOrigin ||
-           cmd.ucsPhase == UPh::WaitZAxisPoint;
-  }
-  case K::Circle: {
-    using CP = AppCommandState::CirclePhase;
-    return cmd.circlePhase == CP::WaitCenterOrMode || cmd.circlePhase == CP::ThreeP_WaitP1 ||
-           cmd.circlePhase == CP::ThreeP_WaitP2 || cmd.circlePhase == CP::ThreeP_WaitP3;
-  }
-  case K::Move:
-  case K::Copy: {
-    using MP = AppCommandState::ModifyPhase;
-    return cmd.modifyPhase == MP::NeedBase || cmd.modifyPhase == MP::NeedDestination;
-  }
-  case K::Scale: {
-    using MP = AppCommandState::ModifyPhase;
-    using SP = AppCommandState::ScalePhase;
-    if (cmd.modifyPhase == MP::NeedBase) return true;
-    if (cmd.modifyPhase == MP::NeedDestination)
-      return cmd.scalePhase == SP::Ref_WaitP1 || cmd.scalePhase == SP::Ref_WaitP2 ||
-             cmd.scalePhase == SP::NewLength_WaitP2;
-    return false;
-  }
-  case K::Rotate: {
-    using RP = AppCommandState::RotatePhase;
-    return cmd.rotatePhase == RP::NeedBase || cmd.rotatePhase == RP::Ref_WaitP1 ||
-           cmd.rotatePhase == RP::Ref_WaitP2 || cmd.rotatePhase == RP::AnglePoints_WaitP1 ||
-           cmd.rotatePhase == RP::AnglePoints_WaitP2;
-  }
-  case K::Trim: {
-    using TP = AppCommandState::TrimPhase;
-    return cmd.trimPhase == TP::CuttingLine_WaitP1 || cmd.trimPhase == TP::CuttingLine_WaitP2;
-  }
-  case K::Mirror: {
-    using MirP = AppCommandState::MirrorPhase;
-    return cmd.mirrorPhase == MirP::NeedP1 || cmd.mirrorPhase == MirP::NeedP2;
-    // NeedEraseAnswer is a Yes/No text prompt, not a point (HandleMirrorText).
-  }
-  case K::Stretch: {
-    // REQ-103 step 5. Base and destination are both real points (typed or picked), so STRETCH
-    // gets the same dynamic-input prompt MOVE/COPY do — it was omitted here, the second of the
-    // two lists a point-picking command has to appear in (TASK-099 F2).
-    using MP = AppCommandState::ModifyPhase;
-    return cmd.modifyPhase == MP::NeedBase || cmd.modifyPhase == MP::NeedDestination;
-  }
-  case K::InsertBlock: {
-    using IPh = AppCommandState::InsertBlockPhase;
-    return cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale;
-  }
-  default:
-    return false;
-  }
-}
-
 // Ordinal word for the point being specified ("first", "second", … then "11th").
 static std::string OrdinalWord(int n) {
   static const char* kWords[] = {"zeroth", "first", "second", "third",   "fourth", "fifth",
@@ -9976,56 +9918,6 @@ static std::string OrdinalWord(int n) {
     }
   }
   return std::to_string(n) + suf;
-}
-
-// REQ-154 / REQ-024. The two UCS axis prompts show a POLAR pair — distance and angle — rather than
-// REQ-024's single x,y field, because what those prompts ask for is a DIRECTION. An x,y readout
-// answers "where is my cursor"; the question on screen is "what angle is my axis", and the user
-// should not have to do the subtraction in their head.
-//
-// This is a stated exception, not a reversal: every other point prompt keeps the single field
-// REQ-024's 2026-06-19 revision settled on, and the polar pair assembles `@distance<angle` — real
-// syntax the command line accepts — so the two forms describe the same thing.
-//
-// Returns false, and leaves the outputs alone, for every prompt that is not one of those two.
-static bool CadUcsPolarPromptBase(const AppCommandState& cmd, ray3d::Vec3* baseWorld) {
-  if (cmd.active != AppCommandState::Kind::Ucs || !baseWorld)
-    return false;
-  using UPh = AppCommandState::UcsPhase;
-  switch (cmd.ucsPhase) {
-  case UPh::WaitXAxisPoint:
-  case UPh::WaitXyPoint:
-    // Both measure from the ORIGIN, not from each other — one reference for both boxes, so the
-    // second prompt does not silently re-base the angle the first one showed.
-    *baseWorld = cmd.ucsPendingOrigin;
-    return true;
-  case UPh::WaitRotationAngleP2:
-    *baseWorld = cmd.ucsAngleBasePoint;
-    return true;
-  default:
-    return false;
-  }
-}
-
-// REQ-024 (2026-09-15 amendment). LINE's and POLYLINE's second point onward follow an established
-// anchor (the previous vertex), so — like the UCS directional prompts above — a distance/angle pair
-// answers what the prompt is actually asking ("how far, which way from here") better than an x,y
-// readout does. Kept as its own predicate rather than folded into CadUcsPolarPromptBase: that one is
-// REQ-154's own narrow, stated exception, and this is a separate generalization of the same idea to
-// ordinary drawing prompts. Returns false, and leaves the output alone, for every other point prompt
-// — including LINE/POLYLINE's OWN first point, which has no anchor yet.
-static bool CadAnchoredDistanceAnglePrompt(const AppCommandState& cmd, ray3d::Vec3* baseWorld) {
-  if (!baseWorld) return false;
-  using K = AppCommandState::Kind;
-  using LP = AppCommandState::LinePhase;
-  using PP = AppCommandState::PolylinePhase;
-  const bool lineNext = cmd.active == K::Line && cmd.linePhase == LP::NeedNextPoint;
-  const bool polyNext = cmd.active == K::Polyline && cmd.polylinePhase == PP::NeedNextPoint;
-  if (!lineNext && !polyNext) return false;
-  double bx = 0.0, by = 0.0;
-  CadCoord::WorldFromLocal(cmd, cmd.anchorX, cmd.anchorY, &bx, &by);
-  *baseWorld = ray3d::Vec3{bx, by, cmd.anchorZ};
-  return true;
 }
 
 // Formats a DIRECTIONAL angle for the dynamic-input box using the UNITS dialog's angle display
@@ -10180,6 +10072,9 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
   case K::Stretch:
     return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:"
                                                                      : "Specify second point:";
+  case K::PipeRun:
+    return cmd.pipeRunPhase == AppCommandState::PipeRunPhase::WaitFirstPoint ? std::string("Specify start point:")
+                                                                             : std::string("Specify next point:");
   case K::InsertBlock: {
     using IPh = AppCommandState::InsertBlockPhase;
     if (cmd.insertBlockPhase == IPh::WaitInsertPoint)
@@ -12926,25 +12821,9 @@ void DrawPerfHud(const AppCommandState& cmd) {
   ImGui::End();
 }
 
-/// The whole SOLID a viewport hover or click names (REQ-313 / REQ-341), in the one place all three
-/// of those paths ask — so what highlights is what selects, down to the tolerance (code review on
-/// #478, findings 4, 10 and 15). Solids sit below linework and survey points and above filled
-/// regions: a line or a point lying over a solid is the more specific thing to mean, and a fill is a
-/// decoration on the plane beneath it. \p surveyPointUnderCursor is the caller's own
-/// `PickSurveyPointAtCursor` answer, computed with its view metrics.
-///
-/// Which part of a solid answers follows the visual style, and the section clip, inside
-/// `PickClosestSolidEntity` — see there.
-static bool PickSolidUnderCursor(const AppCommandState& cmd, bool modelSpace, const ray3d::Ray& ray,
-                                 bool surveyPointUnderCursor, SelectedEntity* out) {
-  if (!modelSpace || (cmd.cadSolids.empty() && cmd.pipeRunWorldSolids.empty()) || surveyPointUnderCursor)
-    return false;
-  return PickClosestSolidEntity(cmd, ray, CadOffsetEntityPickTolWorld(cmd), out);
-}
-
 /// A plain click adds \p hit to the selection, Shift+click removes it — the rule every other
 /// entity click in `DrawDrawingViewport` follows. Works for both `Type::Solid` and `Type::PipeRun`
-/// (issue #486) — `PickSolidUnderCursor`/`PickClosestSolidEntity` answer with either, whichever the
+/// (issue #486) — `ResolveViewportPick`/`PickClosestSolidEntity` answer with either, whichever the
 /// ray actually hit, so the toggle has to match on the SAME type as the hit, not a fixed one.
 static void ClickToggleSolid(AppCommandState& cmd, const SelectedEntity& hit, bool keyShift) {
   auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
@@ -14399,6 +14278,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // never survive into a mouse-driven one.
     cmd.resolvedPointZValid = true;
     cmd.resolvedPointZ = static_cast<float>(rawZ);
+    cmd.resolvedPointZTyped = false;  // a typed Z (REQ-354) described the point it was typed for
 
     // The cursor's world ray, built once and handed to every pick in this block. Null in plan
     // view and paper space so those keep the exact pre-3D XY test (REQ-058 parity).
@@ -14599,6 +14479,24 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // re-run of SECTIONPLANE, a lit handle was a lie: the click placed a vertex or a face pick
       // instead. Ctrl is part of the gate rather than a skip, so releasing it inside the block
       // clears a stale highlight instead of stranding one.
+      // REQ-342 (2026-09-18) — the live PREVIEW of a section plane being placed from two points.
+      //
+      // Same ray and same tolerance the click uses, resolved by the same command-layer function, so
+      // the rectangle drawn under the cursor is the rectangle the click places. Cleared whenever the
+      // command is not at that prompt, or the cursor is outside the viewport, so a stale plane is
+      // never left hanging in the drawing.
+      if (modelSpace && hovered && cmd.active == AppCommandState::Kind::SectionPlane &&
+          cmd.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint) {
+        const ray3d::Ray previewRay = CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+        solidpick::Tolerance previewTol;
+        previewTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(cmd));
+        previewTol.edge = previewTol.vertex;
+        UpdateSectionPlanePreview(cmd, previewRay, previewTol);
+        BumpCadGpuCache(cmd);
+      } else if (cmd.sectionPlanePreviewValid) {
+        ClearSectionPlanePreview(cmd);
+        BumpCadGpuCache(cmd);
+      }
       const bool spHoverEligible = modelSpace && cmd.viewportSectionClip &&
                                    cmd.sectionPlaneGripDrag < 0 && !ImGui::GetIO().KeyCtrl &&
                                    ViewportClickRouteFor(cmd) == ViewportClickRoute::IdleSelection;
@@ -14636,86 +14534,49 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else if (subObjectHovering) {
         // Handled above; the entity hover stays off while Ctrl is held.
       } else if (runHoverPick && !cmd.pickDisambiguationPopupOpen) {
-        // Text annotations are picked by bounding box and take priority over geometry, mirroring
-        // click-to-select (the annotation pick runs before the entity pick on a click). Hovering text
-        // pre-highlights it in model space, matching the paper-space hover (REQ-039). Dims keep their
-        // existing no-hover behavior — only TEXT/MTEXT pre-highlight.
-        int tblHover = modelSpace ? PickCadTableAt(static_cast<float>(rawX), static_cast<float>(rawY), cmd, halfH,
-                                                   avail.y)
-                                  : -1;
-        int annHover = modelSpace ? PickCadAnnotationAt(static_cast<float>(rawX), static_cast<float>(rawY),
-                                                        cmd, halfH, avail.y)
-                                  : -1;
-        if (annHover >= 0) {
-          const CadAnnotation::Kind hk = cmd.cadAnnotations[static_cast<size_t>(annHover)].kind;
+        // ONE resolution for hover and click (GitHub issue #564 §2, D-2026-09-28-e):
+        // `ResolveViewportPick` decides what visible thing is under this pixel — tables and text,
+        // then linework, then a solid, then a fill, with anything behind an opaque solid dropped and
+        // the nearer of linework and solid winning. The click paths below ask it the same question
+        // with the same ray, so what pre-highlights is what a click takes.
+        //
+        // The eye ray is built whenever a solid could answer — including in plan view, where a solid
+        // never had a pick before; `cursorRayPtr` stays null in plan so every entity that ALREADY had
+        // a plan-view pick keeps its byte-identical pre-3D test (REQ-058).
+        const bool solidPickable = modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty());
+        ViewportPickRequest rq;
+        rq.rawX = rawX;
+        rq.rawY = rawY;
+        rq.orbitRay = cursorRayPtr;
+        rq.eyeRayValid = solidPickable;
+        if (solidPickable)
+          rq.eyeRay = cursorRayPtr ? *cursorRayPtr : CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y);
+        rq.lineTol = CadHoverEntityPickTolWorld(cmd);
+        rq.orthoHalfH = halfH;
+        rq.viewportHeightPx = avail.y;
+        rq.modelSpace = modelSpace;
+        rq.surveyPointUnderCursor =
+            solidPickable && !cmd.surveyPoints.empty() &&
+            PickSurveyPointAtCursor(cmd, rawX, rawY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
+        ViewportPickResult hover = ResolveViewportPick(cmd, rq);
+        // Dims keep their existing no-hover behaviour — only TEXT/MTEXT (and tables) pre-highlight.
+        // A dim under the cursor still ANSWERS (it is what a click takes), it just is not lit.
+        if (hover.family == ViewportPickFamily::Annotation) {
+          const CadAnnotation::Kind hk = cmd.cadAnnotations[static_cast<size_t>(hover.entity.index)].kind;
           if (hk != CadAnnotation::Kind::Text && hk != CadAnnotation::Kind::Mtext &&
               hk != CadAnnotation::Kind::Table)
-            annHover = -1;
+            hover.family = ViewportPickFamily::None;
         }
-        if (tblHover >= 0) {
-          cmd.viewportHoverEntityValid = true;
-          cmd.viewportHoverEntity.type = SelectedEntity::Type::Table;
-          cmd.viewportHoverEntity.index = tblHover;
-        } else if (annHover >= 0) {
-          cmd.viewportHoverEntityValid = true;
-          cmd.viewportHoverEntity.type = SelectedEntity::Type::Annotation;
-          cmd.viewportHoverEntity.index = annHover;
+        cmd.viewportHoverEntityValid = hover.family != ViewportPickFamily::None;
+        if (cmd.viewportHoverEntityValid)
+          cmd.viewportHoverEntity = hover.entity;
+        // The disambiguation list belongs to a linework answer only (beta's #22ba365 invariant).
+        if (hover.family == ViewportPickFamily::Linework && cmd.active == AppCommandState::Kind::None) {
+          cmd.viewportPickCandidates = std::move(hover.candidates);
+          cmd.viewportPickAmbiguous = cmd.viewportPickCandidates.size() > 1;
         } else {
-          SelectedEntity hoverHit{};
-          float hoverD2 = 0.f;
-          const float hoverTol = CadHoverEntityPickTolWorld(cmd);
-          // The SAME ray the click below uses (REQ-058) — what highlights has to be what selects.
-          // Without it the hover measured a plan-view XY distance from the work-plane cursor point
-          // while the click measured the true distance from the ray, and off plan view those two
-          // disagree: the XY distance over-measures along the foreshortened screen direction, so
-          // geometry the click would take highlighted on one side of the cursor and not the other.
-          SelectedEntity solidHover{};
-          // A solid is a VOLUME, so its pick is a ray-versus-triangle test and there is nothing
-          // sensible to do with a bare plan XY. `cursorRayPtr` is deliberately null in plan view to
-          // keep REQ-058's byte-identical pre-3D path — but that guarantee is about entities that
-          // ALREADY had a plan-view pick, and a solid never did: `PickClosestCadEntity` has never
-          // returned one. So building a ray here for the solid pick alone cannot change any
-          // existing answer, and without it the highlight would work only when orbited, which is
-          // not the view most drawings sit in.
-          const bool solidPickable = modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty());
-          const ray3d::Ray solidRay =
-              solidPickable ? CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y) : ray3d::Ray{};
-          const bool surveyUnderHover =
-              solidPickable && !cmd.surveyPoints.empty() &&
-              PickSurveyPointAtCursor(cmd, rawX, rawY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
-          std::vector<CadPickCandidate> hoverCandidates;
-          if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2, cursorRayPtr,
-                                   &hoverCandidates)) {
-            cmd.viewportHoverEntityValid = true;
-            cmd.viewportHoverEntity = hoverHit;
-            if (cmd.active == AppCommandState::Kind::None) {
-              cmd.viewportPickCandidates = std::move(hoverCandidates);
-              cmd.viewportPickAmbiguous = cmd.viewportPickCandidates.size() > 1;
-            } else {
-              cmd.viewportPickCandidates.clear();
-              cmd.viewportPickAmbiguous = false;
-            }
-          } else if (solidPickable &&
-                     PickSolidUnderCursor(cmd, modelSpace, solidRay, surveyUnderHover, &solidHover)) {
-            cmd.viewportHoverEntityValid = true;
-            cmd.viewportHoverEntity = solidHover;
-            // The disambiguation list belongs to the linework pick that produced it; a solid
-            // answered instead, so there is no ambiguity to offer (beta's #22ba365 invariant).
-            cmd.viewportPickCandidates.clear();
-            cmd.viewportPickAmbiguous = false;
-          } else {
-            cmd.viewportPickCandidates.clear();
-            cmd.viewportPickAmbiguous = false;
-            // Filled-region hover (REQ-042): lowest priority, only when no linework is under the cursor.
-            const int frHover = PickFilledRegionAt(cmd, rawX, rawY);
-            if (frHover >= 0) {
-              cmd.viewportHoverEntityValid = true;
-              cmd.viewportHoverEntity.type = SelectedEntity::Type::FilledRegion;
-              cmd.viewportHoverEntity.index = frHover;
-            } else {
-              cmd.viewportHoverEntityValid = false;
-            }
-          }
+          cmd.viewportPickCandidates.clear();
+          cmd.viewportPickAmbiguous = false;
         }
       }
       // else: the gate says skip this frame — keep last frame's cmd.viewportHoverEntity{,Valid},
@@ -14944,7 +14805,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const bool onPoint = cmd.viewportHoverSurveyPointIndex >= 0;
       // Pipe run (issue #486): same precedence slot a solid's own hover would occupy (both come
       // from the SAME `viewportHoverEntity` pick), one step below a survey point — "solids sit
-      // below linework and survey points" is `PickSolidUnderCursor`'s own stated ordering.
+      // below survey points" is `ResolveViewportPick`'s own stated ordering (issue #564 §2).
       const bool onPipeRun =
           cmd.viewportHoverEntityValid && cmd.viewportHoverEntity.type == SelectedEntity::Type::PipeRun;
       if (onPoint && tick.settled)
@@ -15058,7 +14919,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     cmd.entityGripLiveDistance =
         std::hypot(curWx - cmd.entityGripAnchorX, curWy - cmd.entityGripAnchorY);
-    ApplyEntityGripPoint(cmd, curWx, curWy);
+    // The drag point's elevation, sourced exactly as the draw commands source theirs: an object
+    // snap's own Z, else the work plane. Only a tilted ellipse reads it (GitHub #531); every other
+    // entity drags in XY as before.
+    ApplyEntityGripPoint(cmd, curWx, curWy, CadCommitElevation(cmd));
     BumpCadGpuCache(cmd);
   }
 
@@ -15389,9 +15253,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // IdleSelection's sub-object pick names one. Without this, PRESSPULL's own on-screen prompt
       // ("Ctrl+click a solid face... Enter when done") describes a gesture this route swallows as
       // an ordinary whole-entity click, and a face can never be named once the command has started.
-      if (cmd.active == K::PressPull &&
-          cmd.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget && modelSpace &&
-          ImGui::GetIO().KeyCtrl) {
+      // 3DMOVE's select step takes the same Ctrl+click: its move handle is the one gizmo that works
+      // on a solid's face, edge or vertex (GitHub issue #564 section 3), and its prompt says so.
+      const bool gizmoMoveSubObjectStep =
+          cmd.active == K::Move3d &&
+          cmd.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects;
+      if (((cmd.active == K::PressPull &&
+            cmd.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) ||
+           gizmoMoveSubObjectStep) &&
+          modelSpace && ImGui::GetIO().KeyCtrl) {
         AbortMtextGripInteraction(cmd);
         ClearDimGripInteraction(cmd);
         const ray3d::Ray subRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
@@ -15403,7 +15273,29 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         break;
       }
 
-      const int tblIx = PickCadTableAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+      // The same resolver the hover and the idle click use (GitHub issue #564 §2), so a solid in
+      // front of a line takes this click too, and exactly one family answers.
+      ViewportPickResult accPick;
+      {
+        const bool solidClickable = modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty());
+        ViewportPickRequest rq;
+        rq.rawX = rawPickX;
+        rq.rawY = rawPickY;
+        rq.orbitRay = pickRayPtr;
+        rq.eyeRayValid = solidClickable;
+        if (solidClickable)
+          rq.eyeRay = pickRayPtr ? *pickRayPtr : pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        rq.lineTol = CadOffsetEntityPickTolWorld(cmd);
+        rq.orthoHalfH = halfH;
+        rq.viewportHeightPx = avail.y;
+        rq.modelSpace = modelSpace;
+        rq.surveyPointUnderCursor =
+            solidClickable && !cmd.surveyPoints.empty() &&
+            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
+        accPick = ResolveViewportClickPick(cmd, rq, CadHoverEntityPickTolWorld(cmd));
+      }
+
+      const int tblIx = accPick.family == ViewportPickFamily::Table ? accPick.entity.index : -1;
       if (tblIx >= 0) {
         SelectedEntity se{};
         se.type = SelectedEntity::Type::Table;
@@ -15421,7 +15313,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         handled = true;
       }
 
-      const int annIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+      const int annIx = accPick.family == ViewportPickFamily::Annotation ? accPick.entity.index : -1;
       if (annIx >= 0) {
         SelectedEntity se{};
         se.type = SelectedEntity::Type::Annotation;
@@ -15439,42 +15331,30 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         handled = true;
       }
 
-      if (!handled) {
-        SelectedEntity clickHit{};
-        float clickD2 = 0.f;
-        const float clickTol = CadOffsetEntityPickTolWorld(cmd);
-        if (PickClosestCadEntity(cmd, rawPickX, rawPickY, clickTol, &clickHit, &clickD2, pickRayPtr)) {
-          auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
-            return x.type == clickHit.type && x.index == clickHit.index;
-          });
-          if (keyShift) {
-            if (it != cmd.selection.end())
-              cmd.selection.erase(it);
-          } else if (it == cmd.selection.end()) {
-            cmd.selection.push_back(clickHit);
-          }
-          EnsureAttrCounts(cmd);
-          handled = true;
+      if (!handled && accPick.family == ViewportPickFamily::Linework) {
+        const SelectedEntity clickHit = accPick.entity;
+        auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+          return x.type == clickHit.type && x.index == clickHit.index;
+        });
+        if (keyShift) {
+          if (it != cmd.selection.end())
+            cmd.selection.erase(it);
+        } else if (it == cmd.selection.end()) {
+          cmd.selection.push_back(clickHit);
         }
+        EnsureAttrCounts(cmd);
+        handled = true;
       }
 
-      // A whole SOLID — see `PickSolidUnderCursor`. Before this, `ComputeSelectionFromRect` was the
-      // only thing that ever put a solid in a selection, so a solid could be chosen by dragging a
-      // rectangle around it and by no other gesture, in this step or any other.
-      if (!handled && modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty())) {
-        SelectedEntity solidHit{};
-        const bool surveyUnder =
-            !cmd.surveyPoints.empty() &&
-            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
-        if (PickSolidUnderCursor(cmd, modelSpace, pickCam.ScreenRay(mx, my, avail.x, avail.y), surveyUnder,
-                                 &solidHit)) {
-          ClickToggleSolid(cmd, solidHit, keyShift);
-          handled = true;
-        }
+      // A whole SOLID — see `ResolveViewportPick`. Before the solid click, `ComputeSelectionFromRect`
+      // was the only thing that ever put a solid in a selection.
+      if (!handled && accPick.family == ViewportPickFamily::Solid) {
+        ClickToggleSolid(cmd, accPick.entity, keyShift);
+        handled = true;
       }
 
       if (!handled) {
-        const int frIx = PickFilledRegionAt(cmd, rawPickX, rawPickY);
+        const int frIx = accPick.family == ViewportPickFamily::FilledRegion ? accPick.entity.index : -1;
         if (frIx >= 0) {
           SelectedEntity fe{};
           fe.type = SelectedEntity::Type::FilledRegion;
@@ -15536,6 +15416,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       faceTol.edge = faceTol.vertex;
       (void)SubmitSectionPlaneFacePick(cmd, faceRay, faceTol, log);
       BumpCadGpuCache(cmd);
+      break;
+    }
+    case ViewportClickRoute::GizmoHandlePick: {
+      // 3DMOVE / 3DROTATE / 3DSCALE past their selection step (GitHub issue #564 section 3). The
+      // same `SubmitGizmoClick` the persistent gizmo uses from IdleSelection, with the same
+      // aperture — so the handle that lights up on hover is the handle that grabs. A click off
+      // every handle only repeats the prompt: the command is holding its selection.
+      const ray3d::Ray gizCmdRay = pickCam.ScreenRay(mx, my, avail.x, avail.y);
+      if (SubmitGizmoClick(cmd, gizCmdRay,
+                           static_cast<double>(CadSnap::WorldToleranceFromPixels(
+                               avail.y, halfH, kGizmoHandleGrabPx)),
+                           log))
+        BumpCadGpuCache(cmd);
+      else
+        log.push_back(CadGizmoCommandPromptText(cmd));
       break;
     }
     case ViewportClickRoute::Ignore:
@@ -15800,10 +15695,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           case SelectedEntity::Type::Ellipse: {
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
               const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-              const float perpX = -el.majVy, perpY = el.majVx;
-              tryGrip(sel, el.cx,                    el.cy,                    el.z, 0);
-              tryGrip(sel, el.cx + el.majVx,         el.cy + el.majVy,         el.z, 1);
-              tryGrip(sel, el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z, 2);
+              // Centre, major end, minor end — in the ellipse's own plane, so a tilted one's
+              // handles sit on the curve (GitHub #531). Shared with the draws and with the grip hit
+              // test in CadCommands.cpp, so what is drawn is what can be grabbed.
+              if (EllipseHasGrips(el)) {
+                ray3d::Vec3 g[3];
+                EllipseGripPoints(el, g);
+                for (int gi = 0; gi < 3; ++gi)
+                  tryGrip(sel, static_cast<float>(g[gi].x), static_cast<float>(g[gi].y),
+                          static_cast<float>(g[gi].z), gi);
+              }
             }
             break;
           }
@@ -15972,8 +15873,31 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
 
+      // What is under the click — asked ONCE, of the same resolver the hover uses, with the same ray
+      // (GitHub issue #564 §2). Each block below acts only when the answer is its family, so a solid
+      // in front of a line takes the click exactly as it took the highlight.
+      ViewportPickResult clickPick;
       if (!handled) {
-        const int tblClick = PickCadTableAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+        const bool solidClickable = modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty());
+        ViewportPickRequest rq;
+        rq.rawX = rawPickX;
+        rq.rawY = rawPickY;
+        rq.orbitRay = pickRayPtr;
+        rq.eyeRayValid = solidClickable;
+        if (solidClickable)
+          rq.eyeRay = pickRayPtr ? *pickRayPtr : pickCam.ScreenRay(mx, my, avail.x, avail.y);
+        rq.lineTol = CadOffsetEntityPickTolWorld(cmd);
+        rq.orthoHalfH = halfH;
+        rq.viewportHeightPx = avail.y;
+        rq.modelSpace = modelSpace;
+        rq.surveyPointUnderCursor =
+            solidClickable && !cmd.surveyPoints.empty() &&
+            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
+        clickPick = ResolveViewportClickPick(cmd, rq, CadHoverEntityPickTolWorld(cmd));
+      }
+
+      if (!handled) {
+        const int tblClick = clickPick.family == ViewportPickFamily::Table ? clickPick.entity.index : -1;
         if (tblClick >= 0) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
@@ -16001,7 +15925,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
 
       if (!handled) {
-        const int annIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+        const int annIx = clickPick.family == ViewportPickFamily::Annotation ? clickPick.entity.index : -1;
         if (annIx >= 0) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
@@ -16042,13 +15966,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
       // Click-to-select: pick the closest CAD entity under the cursor (line, circle, arc, ellipse, polyline).
       if (!handled) {
-        SelectedEntity clickHit{};
-        float clickD2 = 0.f;
-        const float clickTol = CadOffsetEntityPickTolWorld(cmd);
-        std::vector<CadPickCandidate> clickCandidates;
-        // Same ray the hover used, so what highlights is what selects (REQ-058).
-        if (PickClosestCadEntity(cmd, rawPickX, rawPickY, clickTol, &clickHit, &clickD2, pickRayPtr,
-                                 &clickCandidates)) {
+        // The resolver's linework answer — the same entity and the same VISIBLE candidates the hover
+        // was given (issue #564 §2).
+        SelectedEntity clickHit = clickPick.entity;
+        std::vector<CadPickCandidate> clickCandidates = std::move(clickPick.candidates);
+        if (clickPick.family == ViewportPickFamily::Linework) {
           if (clickCandidates.size() > 1 && cmd.multiSelectionEnabled) {
             cmd.pickDisambiguationCandidates = std::move(clickCandidates);
             if (s_lastCrosshairScreen.x >= 0.f) {
@@ -16065,8 +15987,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             cmd.selBoxWaitingSecond = false;
             handled = true;
           } else {
-            if (clickCandidates.size() > 1 && !cmd.multiSelectionEnabled)
-              PickCadEntityByDepth(clickCandidates, &clickHit, pickRayPtr);
+            // No re-pick by depth here any more: `ResolveViewportPick` already chose the nearest
+            // visible candidate, by the same rule the hover used (issue #564 §2).
             AbortMtextGripInteraction(cmd);
             ClearDimGripInteraction(cmd);
             if (keyShift) {
@@ -16090,28 +16012,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
 
-      // A whole SOLID — see `PickSolidUnderCursor`. Idle click-to-select never reached a solid before
+      // A whole SOLID — see `ResolveViewportPick`. Idle click-to-select never reached a solid before
       // this, which is half of why "the section command will not let me select the object" was
       // reported — the gesture did not exist anywhere, not only inside SECTION.
-      if (!handled && modelSpace && (!cmd.cadSolids.empty() || !cmd.pipeRunWorldSolids.empty())) {
-        SelectedEntity solidHit{};
-        const bool surveyUnder =
-            !cmd.surveyPoints.empty() &&
-            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my) >= 0;
-        if (PickSolidUnderCursor(cmd, modelSpace, pickCam.ScreenRay(mx, my, avail.x, avail.y), surveyUnder,
-                                 &solidHit)) {
-          AbortMtextGripInteraction(cmd);
-          ClearDimGripInteraction(cmd);
-          ClickToggleSolid(cmd, solidHit, keyShift);
-          cmd.selBoxWaitingSecond = false;
-          handled = true;
-        }
+      if (!handled && clickPick.family == ViewportPickFamily::Solid) {
+        AbortMtextGripInteraction(cmd);
+        ClearDimGripInteraction(cmd);
+        ClickToggleSolid(cmd, clickPick.entity, keyShift);
+        cmd.selBoxWaitingSecond = false;
+        handled = true;
       }
 
       // Filled-region (hatch) pick — lowest priority, only after annotation + geometry picks miss, so a fill
       // never steals a click from linework on top of it (REQ-042). Clicking anywhere inside the fill selects it.
       if (!handled) {
-        const int frIx = PickFilledRegionAt(cmd, rawPickX, rawPickY);
+        const int frIx = clickPick.family == ViewportPickFamily::FilledRegion ? clickPick.entity.index : -1;
         if (frIx >= 0) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
@@ -16345,16 +16260,46 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImU32 pc;
         float pw;
         entStyle(SelectedEntity::Type::Polyline, static_cast<int>(pi), vpBaseCol(attr.layer, attr.color), pc, pw);
-        ImVec2 prev{};
-        bool have = false;
-        for (int k = start; k < end; ++k) {
-          const ImVec2 s = m2sz(cmd.userPolylineVerts[static_cast<size_t>(k) * 3] + oX,
-                                cmd.userPolylineVerts[static_cast<size_t>(k) * 3 + 1] + oY,
-                                cmd.userPolylineVerts[static_cast<size_t>(k) * 3 + 2]);
-          if (have)
-            sdl->AddLine(prev, s, pc, pw);
-          prev = s;
-          have = true;
+        // A polyline through a viewport carries its BULGES and its CLOSING span, like everywhere
+        // else it is drawn. Until this, a viewport drew the chords only: a level section of a
+        // cylinder — two vertices, each bulged a half turn — came out as a single straight line
+        // between them, and every closed outline was drawn open (asked for from the app, 2026-09-23).
+        const bool polyClosed = pi < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[pi] != 0;
+        const int count = end - start;
+        auto vertAt = [&](int k) {
+          const size_t j = static_cast<size_t>(k) * 3;
+          return std::array<double, 3>{cmd.userPolylineVerts[j] + oX, cmd.userPolylineVerts[j + 1] + oY,
+                                       cmd.userPolylineVerts[j + 2]};
+        };
+        const int spans = polyClosed ? count : count - 1;
+        for (int s = 0; s < spans; ++s) {
+          const int k0 = start + s;
+          const int k1 = start + ((s + 1) % count);
+          const std::array<double, 3> a = vertAt(k0);
+          const std::array<double, 3> b = vertAt(k1);
+          const float bulge = static_cast<size_t>(k0) < cmd.userPolylineVertsBulge.size()
+                                  ? cmd.userPolylineVertsBulge[static_cast<size_t>(k0)]
+                                  : 0.f;
+          const BulgeArcSpan arcSpan =
+              bulge != 0.f ? BulgeArc(a[0], a[1], b[0], b[1], static_cast<double>(bulge))
+                           : BulgeArcSpan{};
+          if (!arcSpan.valid) {
+            sdl->AddLine(m2sz(a[0], a[1], a[2]), m2sz(b[0], b[1], b[2]), pc, pw);
+            continue;
+          }
+          // Sampled in plan, with the height walked from one end to the other: a bulged span of a
+          // SECTION outline can rise (a vertical cut's arc does), and its two ends already carry it.
+          const int segs = std::clamp(static_cast<int>(std::fabs(arcSpan.sweep) / 0.15) + 2, 2, 180);
+          ImVec2 prevPt{};
+          for (int q = 0; q <= segs; ++q) {
+            const double f = static_cast<double>(q) / static_cast<double>(segs);
+            const double ang = arcSpan.startAngle + arcSpan.sweep * f;
+            const ImVec2 s2 = m2sz(arcSpan.cx + arcSpan.radius * std::cos(ang),
+                                   arcSpan.cy + arcSpan.radius * std::sin(ang), a[2] + (b[2] - a[2]) * f);
+            if (q > 0)
+              sdl->AddLine(prevPt, s2, pc, pw);
+            prevPt = s2;
+          }
         }
       }
       // Circles (REQ-028: skip frozen layers).
@@ -16397,10 +16342,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         float aw;
         entStyle(SelectedEntity::Type::Arc, static_cast<int>(arcIdx), vpBaseCol(attr.layer, attr.color), ac, aw);
         ImVec2 prev{};
+        // A tilted arc (REQ-312) is sampled through its own plane here too, for the reason the
+        // ellipse below is: a viewport that drew it flat would put it at one elevation it never has.
+        const bool arcFlat = IsFlatNormal(arc.nx, arc.ny, arc.nz);
+        const ucs::Ucs arcPlane = arcFlat ? ucs::Ucs{} : CurvePlane(arc);
         for (int k = 0; k <= segs; ++k) {
           const float t = arc.startRad + arc.sweepRad * (static_cast<float>(k) / static_cast<float>(segs));
-          const ImVec2 s = m2sz(static_cast<double>(arc.cx + arc.r * std::cos(t)) + oX,
-                                static_cast<double>(arc.cy + arc.r * std::sin(t)) + oY, arc.z);
+          ImVec2 s;
+          if (arcFlat) {
+            s = m2sz(static_cast<double>(arc.cx + arc.r * std::cos(t)) + oX,
+                     static_cast<double>(arc.cy + arc.r * std::sin(t)) + oY, arc.z);
+          } else {
+            const ray3d::Vec3 p = CurvePointAt(arcPlane, static_cast<double>(arc.r), static_cast<double>(t));
+            s = m2sz(p.x + oX, p.y + oY, p.z);
+          }
           if (k > 0)
             sdl->AddLine(prev, s, ac, aw);
           prev = s;
@@ -16424,6 +16379,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImVec2 prev{};
         for (int k = 0; k <= segs; ++k) {
           const double u = kTwoPi * static_cast<double>(k) / static_cast<double>(segs);
+          // A TILTED ellipse (GitHub #531) is sampled through its own plane, so a viewport shows the
+          // section standing where it was cut rather than its flattened shadow at one elevation.
+          if (!EllipseIsFlat(el)) {
+            const ray3d::Vec3 p = EllipseWorldPointAt(el, u);
+            const ImVec2 s = m2sz(p.x + oX, p.y + oY, p.z);
+            if (k > 0) sdl->AddLine(prev, s, ec, ew);
+            prev = s;
+            continue;
+          }
           const double c0 = std::cos(u);
           const double s0 = std::sin(u);
           const double wx = static_cast<double>(el.cx) + static_cast<double>(el.majVx) * c0 + static_cast<double>(px) * s0;
@@ -16813,10 +16777,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           case SelectedEntity::Type::Ellipse: {
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
               const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-              const float perpX = -el.majVy, perpY = el.majVx;
-              drawGrip(el.cx, el.cy, hot(0));
-              drawGrip(el.cx + el.majVx, el.cy + el.majVy, hot(1));
-              drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, hot(2));
+              if (EllipseHasGrips(el)) {
+                ray3d::Vec3 g[3];
+                EllipseGripPoints(el, g);
+                for (int gi = 0; gi < 3; ++gi)
+                  drawGrip(static_cast<float>(g[gi].x), static_cast<float>(g[gi].y), hot(gi));
+              }
             }
             break;
           }
@@ -18635,11 +18601,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else if (sel.type == SelectedEntity::Type::Ellipse) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
           const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-          drawGrip(el.cx, el.cy, el.z);
-          drawGrip(el.cx + el.majVx, el.cy + el.majVy, el.z);
-          const float perpX = -el.majVy;
-          const float perpY = el.majVx;
-          drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z);
+          if (EllipseHasGrips(el)) {
+            ray3d::Vec3 g[3];
+            EllipseGripPoints(el, g);
+            for (int gi = 0; gi < 3; ++gi)
+              drawGrip(static_cast<float>(g[gi].x), static_cast<float>(g[gi].y), static_cast<float>(g[gi].z));
+          }
         }
       } else if (sel.type == SelectedEntity::Type::BlockRef) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadBlockRefs.size()) {
@@ -18731,7 +18698,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGuiIO& io = ImGui::GetIO();
     const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
 
-    const bool pointEntry = CommandExpectsPointEntry(cmd);
+    const bool pointEntry = CadCommandExpectsPointEntry(cmd);
 
     // Prompt label (AutoCAD "Specify ... :"). Reset the two-field locks whenever
     // the prompt changes (new point, including after a commit or viewport click)
@@ -18799,8 +18766,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     ray3d::Vec3 polarBase{};
     const bool polarPrompt = pointEntry && CadUcsPolarPromptBase(cmd, &polarBase);
-    ray3d::Vec3 anchorBase{};
-    const bool anchoredPrompt = pointEntry && !polarPrompt && CadAnchoredDistanceAnglePrompt(cmd, &anchorBase);
     if (polarPrompt) {
       // Distance + angle, AutoCAD's UCS form (REQ-154; the stated exception to REQ-024's single
       // field). Both track the cursor until typed; either one's Enter commits the pair, assembled
@@ -18923,197 +18888,174 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         std::snprintf(polarBuf, sizeof(polarBuf), "%s", pointText.c_str());
         UiSubmitCommandLine(polarBuf, static_cast<int>(sizeof(polarBuf)), cmd, log);
       }
-    } else if (anchoredPrompt) {
-      // Distance + angle from the established anchor (REQ-024's 2026-09-15 amendment): LINE's and
-      // POLYLINE's second point and later. Same construction as the UCS polar pair above — kept as
-      // its own block rather than shared, since that one is REQ-154's own narrow, stated exception
-      // and this is a separate generalization to ordinary drawing prompts.
-      static char distBuf2[48] = {0};
-      static char angBuf2[48] = {0};
-      static bool dist2Locked = false, ang2Locked = false;
-      if (promptChanged) { dist2Locked = false; ang2Locked = false; }
-
-      double liveWx = 0.0, liveWy = 0.0;
-      if (outCursorX && outCursorY)
-        CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
-                                 &liveWy);
-      const ray3d::Vec3 cursorWorld{liveWx, liveWy, anchorBase.z};
-      const ray3d::Vec3 dir = ray3d::Sub(cursorWorld, anchorBase);
-      const int prec = cmd.displayLinearPrecision;
-      // See the UCS polar pair above: angBuf2 shows the UNITS-configured display format, so an
-      // unlocked (never-typed) commit uses this raw number instead of re-parsing that text.
-      double angDeg = 0.0;
-      const bool haveAngDeg = ucs::AngleInRotationPlaneDeg(cmd.activeUcs, 'Z', dir, &angDeg);
-      if (haveAngDeg)
-        while (angDeg < 0.0) angDeg += 360.0;
-      if (!dist2Locked)
-        std::snprintf(distBuf2, sizeof(distBuf2), "%s", FormatLinear(ray3d::Length(dir), prec).c_str());
-      if (!ang2Locked)
-        std::snprintf(angBuf2, sizeof(angBuf2), "%s",
-                      FormatDynInputAngle(haveAngDeg ? angDeg : 0.0, CadAngleDisplaySettings(cmd)).c_str());
-
-      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-      const float boxW = 74.f * io.FontGlobalScale;
-      const ImGuiID idDist2 = ImGui::GetID("##anchDist");
-      const ImGuiID idAng2 = ImGui::GetID("##anchAng");
-      const ImGuiID activeIdA = ImGui::GetActiveID();
-
-      if (promptChanged) {
-        g_keepSelectAllOnActivate = true;
-        ImGui::SetKeyboardFocusHere();
-      } else if (activeIdA != idDist2 && activeIdA != idAng2 && !io.WantTextInput) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
-          ImGui::SetKeyboardFocusHere();
-        } else if (io.InputQueueCharacters.Size > 0) {
-          distBuf2[0] = '\0';
-          dist2Locked = true;
-          RouteQueuedCharsToCmdBuf(distBuf2, static_cast<int>(sizeof(distBuf2)), io);
-          ImGui::SetKeyboardFocusHere();
-        }
-      }
-
-      static std::string dist2LastPushed, ang2LastPushed;
-      PushDynFieldGroupStyle(g_chrome.axisDistance);
-      ImGui::SetNextItemWidth(boxW);
-      g_liveInputRefreshText = dist2Locked ? nullptr : distBuf2;
-      g_liveInputLastPushed = dist2Locked ? nullptr : &dist2LastPushed;
-      const bool distEnter2 = ImGui::InputText("##anchDist", distBuf2, sizeof(distBuf2), pf, CommandLineInputCallback);
-      g_liveInputRefreshText = nullptr;
-      g_liveInputLastPushed = nullptr;
-      if (ImGui::IsItemEdited()) dist2Locked = true;
-      PopDynFieldGroupStyle();
-      ImGui::SameLine(0.f, 8.f);
-      ImGui::TextUnformatted("<");
-      ImGui::SameLine(0.f, 8.f);
-      PushDynFieldGroupStyle(g_chrome.axisAngle);
-      ImGui::SetNextItemWidth(boxW);
-      g_liveInputRefreshText = ang2Locked ? nullptr : angBuf2;
-      g_liveInputLastPushed = ang2Locked ? nullptr : &ang2LastPushed;
-      const bool angEnter2 = ImGui::InputText("##anchAng", angBuf2, sizeof(angBuf2), pf, CommandLineInputCallback);
-      g_liveInputRefreshText = nullptr;
-      g_liveInputLastPushed = nullptr;
-      if (ImGui::IsItemEdited()) ang2Locked = true;
-      PopDynFieldGroupStyle();
-
-      if ((distEnter2 || angEnter2) && !dist2Locked && !ang2Locked) {
-        SubmitDynamicInputBlankEnter(cmd, log);
-      } else if (distEnter2 || angEnter2) {
-        double useDist = 0.0;
-        {
-          std::istringstream di{std::string(distBuf2)};
-          if (!(di >> useDist) || !std::isfinite(useDist) || useDist == 0.0)
-            useDist = ray3d::Length(dir);
-          if (!std::isfinite(useDist) || useDist == 0.0)
-            useDist = 1.0;
-        }
-        double useMathAngleDeg = haveAngDeg ? angDeg : 0.0;
-        if (ang2Locked) {
-          std::string angText = StringUtil::trimCopy(std::string(angBuf2));
-          double typedBearingDeg = 0.0;
-          std::istringstream ai{angText};
-          if (!angText.empty() && (ai >> typedBearingDeg))
-            useMathAngleDeg = anglefmt_detail::Normalize360(90.0 - typedBearingDeg);
-        }
-        const std::string pointText = ResolveDynDistanceAngleToPointText(cmd, anchorBase, useDist, useMathAngleDeg);
-        char anchBuf[160];
-        std::snprintf(anchBuf, sizeof(anchBuf), "%s", pointText.c_str());
-        UiSubmitCommandLine(anchBuf, static_cast<int>(sizeof(anchBuf)), cmd, log);
-      }
     } else if (pointEntry) {
-      // Two-field x,y group (REQ-024, 2026-09-15 amendment): AutoCAD splits an ordinary point
-      // prompt into separate X and Y boxes, Tab moving between them (native ImGui next-item
-      // behavior) without committing. A value that carries its own syntax — relative "@dx,dy", a
-      // bearing/distance, or a bare "x,y" — typed into the X field does not split into two
-      // independent numbers, so it is submitted whole from that field and locks both boxes; this is
-      // exactly how the pre-amendment single field accepted the same input, just landing in the
-      // first box of the pair instead of the only one.
-      static char xBuf[80] = {0};
-      static char yBuf[80] = {0};
-      // Locked independently (REQ-024: "each independently lockable/tabbable") — typing a plain
-      // number into X must not freeze Y or strip its Tab-in select-all. The one exception is a
-      // compound value (relative/bearing/`x,y`) typed into X, which locks both by spec; that's
-      // applied below, right after X's own edit is detected, once its text is known.
-      static bool xLocked = false, yLocked = false;
-      if (promptChanged) { xLocked = false; yLocked = false; }
+      // REQ-024 / REQ-354 (GitHub issue #564 section 5): ONE field group for every point prompt, drawn
+      // from the command layer's dyninput model — the same model the headless driver types into, so
+      // the labels on screen and the text the command parses cannot drift apart. It re-lays itself
+      // as the user types: `@` → ΔX / ΔY (ΔZ), `<` → Distance < Angle, `,` → the next box (in the
+      // Distance box, X / Y). The mode character is consumed into the labels, never left in a number.
+      // The prompt opens as X / Y (Z) — or Distance < Angle after an anchor, LINE's second point and
+      // on (REQ-024's 2026-09-15 amendment) — with a Z box whenever the view is not plan to the UCS
+      // (issue #564 Q3).
+      static dyninput::Group s_dyn;
+      static std::string s_dynPromptLabel;
+      static char s_dynBuf[3][80] = {};
+      static std::string s_dynLastPushed[3];
+      static const char* const kDynIds[3] = {"##dyn0", "##dyn1", "##dyn2"};
+      const CadDynInputPrompt dp = CadDynInputPromptFor(cmd);
+      if (promptChanged || promptLabel != s_dynPromptLabel || dp.initialMode != s_dyn.initial) {
+        dyninput::Reset(s_dyn, dp.initialMode, dp.showZ);
+        s_dyn.requestFocus = 0;
+        g_keepSelectAllOnActivate = true;  // AutoCAD lands in the first box, pre-selected
+      }
+      s_dynPromptLabel = promptLabel;
+      s_dyn.showZ = dp.showZ;
 
       double liveWx = 0.0, liveWy = 0.0;
       if (outCursorX && outCursorY)
         CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
                                  &liveWy);
+      const double liveWz = static_cast<double>(cmd.uiCursorWorldZ);
       const int prec = cmd.displayLinearPrecision;
-      if (!xLocked)
-        std::snprintf(xBuf, sizeof(xBuf), "%s", FormatLinear(liveWx, prec).c_str());
-      if (!yLocked)
-        std::snprintf(yBuf, sizeof(yBuf), "%s", FormatLinear(liveWy, prec).c_str());
+      // What an untouched box shows in the CURRENT mode — recomputed per box, because a keystroke in
+      // an earlier box this frame can have changed the mode.
+      const auto liveText = [&](int slot) -> std::string {
+        if (dyninput::IsRelative(s_dyn.mode) && !dp.haveBase)
+          return std::string();  // no base to measure from; the command will refuse `@` by name
+        const dyninput::Live live = CadDynInputLive(cmd, dp, s_dyn.mode, liveWx, liveWy, liveWz);
+        if (dyninput::IsPolar(s_dyn.mode) && slot == 1)
+          return FormatDynInputAngle(live.v[1], CadAngleDisplaySettings(cmd));
+        return FormatLinear(live.v[slot], prec);
+      };
 
-      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-      const float boxW = std::max(56.f * io.FontGlobalScale,
-                                  DynamicCursorFieldWidth(xBuf, nullptr, 56.f * io.FontGlobalScale, maxFieldPx * 0.5f));
-      const ImGuiID idX = ImGui::GetID("##dynX");
-      const ImGuiID idY = ImGui::GetID("##dynY");
-      const ImGuiID activeIdXY = ImGui::GetActiveID();
+      // Which box has the keyboard, and Backspace in it with nothing typed: undo the mode character
+      // that landed the user there, keeping what was typed before it. Done before any box is drawn
+      // so the whole group re-lays in the same frame.
+      const ImGuiID activeIdDyn = ImGui::GetActiveID();
+      int activeSlot = -1;
+      for (int i = 0; i < 3; ++i)
+        if (activeIdDyn == ImGui::GetID(kDynIds[i]))
+          activeSlot = i;
+      if (activeSlot >= 0)
+        s_dyn.focus = activeSlot;
+      int forcedSlot = -1;
+      if (activeSlot >= 0 && ImGui::IsKeyPressed(ImGuiKey_Backspace, false) &&
+          !s_dyn.f[static_cast<size_t>(activeSlot)].locked && dyninput::BackspaceAtEmpty(s_dyn, activeSlot))
+        forcedSlot = activeSlot;
 
-      // The X box is focused-and-selected the moment this prompt appears — AutoCAD's own dynamic
-      // input always lands there first, so Tab goes straight to Y on the very first press instead
-      // of a first Tab merely focusing X and a second one being needed to actually move on.
-      if (promptChanged) {
-        g_keepSelectAllOnActivate = true;
-        ImGui::SetKeyboardFocusHere();
-      }
-      // Type-to-start / cold-Tab fallback: if the user clicked away and back with neither box
-      // focused, the first keystroke seeds the X box (a typed relative/bearing/distance expression
-      // fills both fields at once and lands there) and a cold Tab still focuses it.
-      else if (activeIdXY != idX && activeIdXY != idY && !io.WantTextInput) {
+      // Type-to-start: with no box focused the first keystrokes are typed into the model exactly
+      // as if the first box had had them, so `@5,3` typed cold lands as ΔX 5, ΔY 3.
+      if (activeSlot < 0 && !io.WantTextInput) {
         if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
-          ImGui::SetKeyboardFocusHere();
+          s_dyn.requestFocus = s_dyn.focus;
         } else if (io.InputQueueCharacters.Size > 0) {
-          xBuf[0] = '\0';
-          xLocked = true;
-          RouteQueuedCharsToCmdBuf(xBuf, static_cast<int>(sizeof(xBuf)), io);
-          ImGui::SetKeyboardFocusHere();
+          char typed[96] = {0};
+          RouteQueuedCharsToCmdBuf(typed, static_cast<int>(sizeof(typed)), io);
+          s_dyn.focus = 0;
+          dyninput::TypeText(s_dyn, typed);
+          s_dyn.requestFocus = s_dyn.focus;
         }
       }
 
-      static std::string xLastPushed, yLastPushed;
-      PushDynFieldGroupStyle(g_chrome.axisX);
-      ImGui::SetNextItemWidth(boxW);
-      g_liveInputRefreshText = xLocked ? nullptr : xBuf;
-      g_liveInputLastPushed = xLocked ? nullptr : &xLastPushed;
-      const bool xEnter = ImGui::InputText("##dynX", xBuf, sizeof(xBuf), pf, CommandLineInputCallback);
-      g_liveInputRefreshText = nullptr;
-      g_liveInputLastPushed = nullptr;
-      if (ImGui::IsItemEdited()) {
-        xLocked = true;
-        // A relative/bearing/`x,y` value typed into X carries its own syntax and is submitted
-        // whole from X (see xIsCompound below), so it locks Y too instead of leaving it live.
-        const std::string xNow = StringUtil::trimCopy(std::string(xBuf));
-        if (xNow.find(',') != std::string::npos || xNow.find('@') != std::string::npos ||
-            xNow.find('<') != std::string::npos)
-          yLocked = true;
-      }
-      PopDynFieldGroupStyle();
-      ImGui::SameLine(0.f, 12.f);
-      PushDynFieldGroupStyle(g_chrome.axisY);
-      ImGui::SetNextItemWidth(boxW);
-      g_liveInputRefreshText = yLocked ? nullptr : yBuf;
-      g_liveInputLastPushed = yLocked ? nullptr : &yLastPushed;
-      const bool yEnter = ImGui::InputText("##dynY", yBuf, sizeof(yBuf), pf, CommandLineInputCallback);
-      g_liveInputRefreshText = nullptr;
-      g_liveInputLastPushed = nullptr;
-      if (ImGui::IsItemEdited()) yLocked = true;
-      PopDynFieldGroupStyle();
+      struct DynFieldCtx {
+        dyninput::Group* g;
+        int slot;
+        const char* forceText;
+        bool handled;
+      };
+      // Hands a mode character to the model the moment it is typed and shows what the model left
+      // in the box; otherwise the shared live-tracking callback runs.
+      const ImGuiInputTextCallback dynCallback = [](ImGuiInputTextCallbackData* data) -> int {
+        auto* ctx = static_cast<DynFieldCtx*>(data->UserData);
+        if (ctx && data->EventFlag == ImGuiInputTextFlags_CallbackAlways) {
+          const std::string now(data->Buf, static_cast<size_t>(data->BufTextLen));
+          const char* replaceWith = ctx->forceText;
+          const std::string& modelText = ctx->g->f[static_cast<size_t>(ctx->slot)].text;
+          // Only text the model has not seen yet: a character it deliberately leaves in the box (a
+          // comma in Z, an `@` after a digit) would otherwise be re-processed, and the caret pinned
+          // to the end, on every frame the box is active.
+          if (!replaceWith && now != modelText && now.find_first_of("@<,") != std::string::npos) {
+            dyninput::EditText(*ctx->g, ctx->slot, now);
+            ctx->handled = true;
+            if (ctx->g->f[static_cast<size_t>(ctx->slot)].text != now)
+              replaceWith = ctx->g->f[static_cast<size_t>(ctx->slot)].text.c_str();
+          }
+          if (replaceWith) {
+            ctx->handled = true;
+            data->DeleteChars(0, data->BufTextLen);
+            data->InsertChars(0, replaceWith);
+            const bool live = !ctx->g->f[static_cast<size_t>(ctx->slot)].locked;
+            data->SelectionStart = live ? 0 : data->BufTextLen;
+            data->SelectionEnd = data->BufTextLen;
+            data->CursorPos = data->BufTextLen;
+            if (g_liveInputLastPushed)
+              g_liveInputLastPushed->assign(data->Buf, static_cast<size_t>(data->BufTextLen));
+            return 0;
+          }
+        }
+        return CommandLineInputCallback(data);
+      };
 
-      if ((xEnter || yEnter) && !xLocked && !yLocked) {
-        SubmitDynamicInputBlankEnter(cmd, log);
-      } else if (xEnter || yEnter) {
-        const std::string xText = StringUtil::trimCopy(std::string(xBuf));
-        const bool xIsCompound = xText.find(',') != std::string::npos || xText.find('@') != std::string::npos ||
-                                  xText.find('<') != std::string::npos;
-        char submitBuf[176];
-        if (xIsCompound)
-          std::snprintf(submitBuf, sizeof(submitBuf), "%s", xText.c_str());
+      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
+      bool enter = false;
+      for (int slot = 0; slot < dyninput::FieldCount(s_dyn); ++slot) {
+        const size_t si = static_cast<size_t>(slot);
+        dyninput::Field& fld = s_dyn.f[si];
+        const std::string shown = fld.locked ? fld.text : liveText(slot);
+        std::snprintf(s_dynBuf[si], sizeof(s_dynBuf[si]), "%s", shown.c_str());
+
+        if (slot == 0) {
+          if (dyninput::IsRelative(s_dyn.mode)) {
+            // The `@` the user typed, shown as the group's mode rather than inside a number.
+            ImGui::TextUnformatted("@");
+            ImGui::SameLine(0.f, 6.f);
+          }
+        } else {
+          ImGui::SameLine(0.f, 10.f);
+          if (dyninput::IsPolar(s_dyn.mode)) {
+            ImGui::TextUnformatted("<");
+            ImGui::SameLine(0.f, 8.f);
+          }
+        }
+        const std::string label = dyninput::Label(s_dyn, slot);
+        ImGui::TextUnformatted(label.c_str());
+        ImGui::SameLine(0.f, 4.f);
+
+        ImU32 band = g_chrome.axisX;
+        if (dyninput::IsPolar(s_dyn.mode))
+          band = slot == 0 ? g_chrome.axisDistance : g_chrome.axisAngle;
         else
-          std::snprintf(submitBuf, sizeof(submitBuf), "%s,%s", xBuf, yBuf);
+          band = slot == 0 ? g_chrome.axisX : (slot == 1 ? g_chrome.axisY : g_chrome.axisZ);
+        PushDynFieldGroupStyle(band);
+        if (s_dyn.requestFocus == slot) {
+          ImGui::SetKeyboardFocusHere();
+          s_dyn.requestFocus = -1;
+          s_dyn.focus = slot;
+        }
+        const float boxW = std::max(56.f * io.FontGlobalScale,
+                                    DynamicCursorFieldWidth(s_dynBuf[si], nullptr, 56.f * io.FontGlobalScale,
+                                                            maxFieldPx * 0.33f));
+        ImGui::SetNextItemWidth(boxW);
+        DynFieldCtx ctx{&s_dyn, slot, slot == forcedSlot ? s_dynBuf[si] : nullptr, false};
+        g_liveInputRefreshText = fld.locked ? nullptr : s_dynBuf[si];
+        g_liveInputLastPushed = fld.locked ? nullptr : &s_dynLastPushed[si];
+        const bool e = ImGui::InputText(kDynIds[slot], s_dynBuf[si], sizeof(s_dynBuf[si]), pf, dynCallback, &ctx);
+        g_liveInputRefreshText = nullptr;
+        g_liveInputLastPushed = nullptr;
+        if (ImGui::IsItemEdited() && !ctx.handled)
+          dyninput::EditText(s_dyn, slot, s_dynBuf[si]);
+        PopDynFieldGroupStyle();
+        enter = enter || e;
+      }
+
+      if (enter) {
+        const dyninput::Live live = CadDynInputLive(cmd, dp, s_dyn.mode, liveWx, liveWy, liveWz);
+        const std::string text = dyninput::Compose(s_dyn, live, dp.directDistance);
+        char submitBuf[256];
+        std::snprintf(submitBuf, sizeof(submitBuf), "%s", text.c_str());
+        // Fresh boxes for whatever the command asks next, even when its prompt text is unchanged.
+        dyninput::Reset(s_dyn, dp.initialMode, dp.showZ);
+        s_dynPromptLabel.clear();
         UiSubmitCommandLine(submitBuf, static_cast<int>(sizeof(submitBuf)), cmd, log);
       }
     } else {

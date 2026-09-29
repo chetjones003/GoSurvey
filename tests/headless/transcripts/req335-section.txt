@@ -65,33 +65,39 @@ CHECK ALL
 
 # --- a refused section leaves nothing behind -----------------------------------------------------
 #
-# A sphere is one of the two solids `Slice` declines today, and SECTION inherits that accepted set
-# rather than restating it — so this also pins that the refusal arrives with the KERNEL's reason,
-# not a second one invented in the command layer. Drawn well clear of the box so the selection box
-# below catches the sphere alone.
+# A torus is only cut square to its axis (#520), so the work plane turned 45 degrees is a cut `Slice`
+# declines — and SECTION inherits that accepted set rather than restating it, so this also pins that
+# the refusal arrives with the KERNEL's reason, not a second one invented in the command layer. Drawn
+# well clear of the box so the selection box below catches the torus alone. (A sphere was this case's
+# solid until #520 made every sphere cut a circle.)
 #
 # Nothing half-drawn, no empty polyline, and the counts are unchanged (REQ-201).
 
-# Back to the world UCS first: the sphere is placed and box-selected in plan, and the rotated UCS
+# Back to the world UCS first: the torus is placed and box-selected in plan, and the rotated UCS
 # above would put both somewhere else entirely.
 CMD UCS
 CMD W
 
-CMD SPHERE 200,200 10
+CMD TORUS 200,200 10 3
 
 EXPECT SOLIDS 2
 
 BOX 180 180 220 220
 EXPECT SELECTED 1
+CMD UCS
+CMD X
+CMD 45
 CMD SECTION
 # Same as above: ask for the plane, answer UCS.
 CMD UCS
 
-EXPECT LOG "SECTION — The cut crosses a curved face of this solid, which is not supported yet."
+EXPECT LOG "SECTION — A cut of a torus that is not square to its axis is a curve this release cannot hold."
 
 EXPECT POLYLINES 1
 EXPECT SOLIDS 2
 CHECK ALL
+CMD UCS
+CMD W
 
 # --- REQ-335 increment 2: SECTION ASKS, it does not refuse -----------------------------------
 #
