@@ -340,6 +340,18 @@ TEST_CASE("DRAWINGSETTINGS picks a point, a survey point or a direction for the 
   CHECK(st.drawingSettingsPick.worldX == 1025.0);  // WORLD
   CHECK(st.drawingSettingsPick.worldY == 2050.0);
 
+  // A survey point at state-plane size, typed (world X,Y, which rounds through float): still found.
+  SurveyPoint far;
+  far.id = 202;
+  far.easting = 3115243.14 - 1000.0;  // LOCAL
+  far.northing = 10077391.26 - 2000.0;
+  st.surveyPoints.push_back(far);
+  REQUIRE(StartDrawingSettingsPick(st, PickTarget::ReferencePoint, log));
+  char typed[] = "3115243.14,10077391.26";
+  ProcessCommandLineSubmit(typed, sizeof(typed), st, log);
+  CHECK(st.drawingSettingsPick.done);
+  CHECK(st.drawingSettingsPick.pointNumber == 202);
+
   // A plain point: no point number.
   REQUIRE(StartDrawingSettingsPick(st, PickTarget::RotationPoint, log));
   SubmitViewportPick(st, 30.0, 50.0, log);

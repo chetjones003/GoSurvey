@@ -584,12 +584,20 @@ bool StartDrawingSettingsPick(AppCommandState& st, AppCommandState::DrawingSetti
 
 namespace {
 
-/// The survey point exactly at a picked LOCAL point (a Survey point snap lands on it), or 0.
+/// The survey point at a picked LOCAL point (a Survey point snap lands on it), or 0. A typed point
+/// arrives through float (ParseStoragePoint), so the match allows float rounding at that magnitude.
 int SurveyPointNumberAt(const AppCommandState& st, double localX, double localY) {
-  for (const SurveyPoint& p : st.surveyPoints)
-    if (std::fabs(p.easting - localX) < 1e-6 && std::fabs(p.northing - localY) < 1e-6)
-      return p.id;
-  return 0;
+  const double tol = std::max(1e-6, 4.0 * 1.1920929e-7 * std::max(std::fabs(localX), std::fabs(localY)));
+  int best = 0;
+  double bestD = tol;
+  for (const SurveyPoint& p : st.surveyPoints) {
+    const double d = std::hypot(p.easting - localX, p.northing - localY);
+    if (d <= bestD) {
+      bestD = d;
+      best = p.id;
+    }
+  }
+  return best;
 }
 
 bool SubmitDrawingSettingsPick(AppCommandState& st, double localX, double localY, std::vector<std::string>& log) {

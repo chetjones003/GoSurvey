@@ -59,6 +59,9 @@ REQ-201, ADR-063 (CS-MAP only behind `src/geo/`), ADR-044 (trailer).
 - 2026-09-29: implemented. Self-review fixes: the internal pick no longer becomes the Enter-repeat
   command; conversions skip the CS-MAP factor lookups while the transform is off; the Esc that
   cancels a pick no longer also closes the window it brings back.
+- 2026-09-29: PR #588. Final review fix: a survey point picked by TYPED coordinates (which the
+  command line rounds through float, ~0.1 ft at state-plane size) now still reports its point
+  number — the match allows float rounding and takes the nearest point.
 
 ## Completion report
 
