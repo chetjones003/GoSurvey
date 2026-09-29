@@ -628,6 +628,7 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
     // in double precision so points land exactly on existing geometry (e.g. an imported DXF's endpoints).
     pr.pt.easting = pr.worldE - st.worldDocumentOriginX;
     pr.pt.northing = pr.worldN - st.worldDocumentOriginY;
+    pr.pt.layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPoint, {});  // REQ-361
 
     st.surveyPoints.push_back(pr.pt);
     EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);

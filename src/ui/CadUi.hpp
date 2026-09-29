@@ -190,6 +190,8 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log = nullp
 
 /// Drawing Settings window (DRAWINGSETTINGS, File menu, ribbon Palettes). REQ-357.
 void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& log);
+/// The ribbon icon of an Object Layers row (REQ-361 item 1), drawn square inside [mn, mx].
+void DrawObjectLayerIcon(ImDrawList* dl, ObjectLayerKind kind, const ImVec2& mn, const ImVec2& mx);
 
 /// Right-Click Customization dialog (Options → User Preferences). REQ-084 (a). Sole owner of the
 /// three context modes and the time-sensitive preference; Cancel reverts to the values it opened with.

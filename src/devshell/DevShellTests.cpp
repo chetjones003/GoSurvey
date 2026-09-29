@@ -1609,6 +1609,48 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(!s_cmd->showDrawingSettingsWindow);
   };
 
+  // --- REQ-361: the Object Layers tab, and a Locked row in a creation dialog -----------------------------
+  // The tab shows its info line and the disabled display-components checkbox; the Surface row's
+  // padlock, applied, makes Create Surface's layer read-only and set to the row's layer.
+  //   build\devshell\GoSurvey.exe --devshell-run req361-object-layers
+  // GOSURVEY_REQ361_HOLD=<seconds> keeps the window open on the tab, for a desktop screenshot.
+  ImGuiTest* objectLayers = IM_REGISTER_TEST(engine, "gosurvey", "req361-object-layers");
+  objectLayers->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    SubmitCad(ctx, "DRAWINGSETTINGS");
+    ctx->Yield(4);
+    ImGuiWindow* dialog = ctx->WindowInfo("//$FOCUSED").Window;
+    IM_CHECK(dialog != nullptr);
+    ctx->SetRef(dialog);
+    ctx->ItemClick("**/Object Layers");
+    ctx->Yield(2);
+    // "\\/": the test engine reads '/' as a path separator.
+    const ImGuiTestItemInfo display =
+        ctx->ItemInfo("**/Immediate and independent layer on\\/off control of display components");
+    IM_CHECK(display.ID != 0);
+    IM_CHECK((display.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    if (const char* hold = std::getenv("GOSURVEY_REQ361_HOLD"))
+      ctx->SleepNoSkip(static_cast<float>(std::atof(hold)), 0.1f);
+    const int surfaceRow = static_cast<int>(ObjectLayerKind::Surface);
+    IM_CHECK(!s_cmd->drawingSettings.ObjectLayer(ObjectLayerKind::Surface).locked);
+    ctx->ItemClick(("**/$$" + std::to_string(surfaceRow) + "/##lock").c_str());
+    ctx->ItemClick("**/OK");
+    ctx->Yield(2);
+    IM_CHECK(!s_cmd->showDrawingSettingsWindow);
+    IM_CHECK(s_cmd->drawingSettings.ObjectLayer(ObjectLayerKind::Surface).locked);
+
+    s_cmd->showCreateSurfaceWindow = true;
+    ctx->Yield(4);
+    ImGuiWindow* create = ctx->WindowInfo("//Create Surface").Window;
+    IM_CHECK(create != nullptr);
+    const ImGuiTestItemInfo layer = ctx->ItemInfo(ImHashStr("##cslayer", 0, create->ID));
+    IM_CHECK(layer.ID != 0);
+    IM_CHECK((layer.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+    s_cmd->showCreateSurfaceWindow = false;
+    ctx->Yield(2);
+  };
+
   // REQ-359 (GitHub issue #582 increment 3): the contextual Geolocation tab in the real ribbon.
   // Appears with a zone without taking focus; Map / Capture Area present but disabled; Edit Location
   // opens Drawing Settings; Mark Position places a Position Marker (screenshot); Remove Location asks,

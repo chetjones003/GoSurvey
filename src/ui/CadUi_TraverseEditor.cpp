@@ -765,7 +765,7 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         cmd.createPointsOpts.startNumber = td.startStationId;
         cmd.createPointsOpts.sequentialNumbering = false;
         cmd.createPointsOpts.duplicatePolicy = SurveyDuplicatePolicy::Renumber;
-        TryPlaceSurveyPoint(cmd, startE, startN, td.startElevation, log);
+        TryPlaceSurveyPoint(cmd, startE, startN, td.startElevation, log, /*pushUndo=*/false);
 
         // Place foresight points
         for (const auto& leg : td.legs) {
@@ -774,7 +774,7 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
             const double locE = leg.computedEasting  - cmd.worldDocumentOriginX;
             const double locN = leg.computedNorthing - cmd.worldDocumentOriginY;
             cmd.createPointsOpts.startNumber = leg.stationId;
-            TryPlaceSurveyPoint(cmd, locE, locN, leg.computedElevation, log);
+            TryPlaceSurveyPoint(cmd, locE, locN, leg.computedElevation, log, /*pushUndo=*/false);
         }
 
         log.push_back("TRAVERSE — committed points to drawing.");

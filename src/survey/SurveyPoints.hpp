@@ -60,7 +60,9 @@ struct CreatePointsOptions {
   bool sequentialNumbering = true;
   int pointNumberOffset = 1;
   int sequenceNumbersFrom = 1;
-  std::string layer = "0";
+  /// The layer typed in Create Points. Empty = the drawing's Object Layers Survey point layer
+  /// (REQ-361); ignored while that row is Locked.
+  std::string layer;
   std::string defaultDescription;
   float defaultElevation = 0.f;
   SurveyDuplicatePolicy duplicatePolicy = SurveyDuplicatePolicy::Notify;
@@ -121,10 +123,15 @@ void AppendAllSurveyPointMarkers(float crossHalfWorld, const std::vector<SurveyP
 
 void ResetCreatePointsNextIdFromSettings(AppCommandState& st);
 
-/// Places a survey point using create-points options & duplicate policy. Updates next ID when sequential.
+/// The layer Create Points places a point on: its typed layer, or the Object Layers Survey point
+/// layer when none is typed or the row is Locked (REQ-361 item 4). Adds the layer if missing.
+std::string CreatePointsLayer(AppCommandState& st);
 
+/// Places a survey point using create-points options & duplicate policy. Updates next ID when sequential.
+/// The point goes on the Object Layers Survey point layer (REQ-361). \p pushUndo: one undo step per
+/// point; false when the caller already pushed one for a batch (the Traverse commit).
 bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, double elevation,
-                         std::vector<std::string>& log);
+                         std::vector<std::string>& log, bool pushUndo = true);
 
 /// Copies viewport-selected survey rows by (\p dx, \p dy, \p dz), applying \p policy when IDs collide
 /// with other points. \p dz is the elevation delta (REQ-329 increment 1 — a COPY under a rotated or

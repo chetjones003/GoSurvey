@@ -3219,6 +3219,8 @@ int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
     log.push_back("Surface \"" + name + "\" created (empty — add points, breaklines or files, then rebuild).");
 
   st.cadSurfaces.push_back(std::move(s));
+  AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
+                       st.cadSurfaces.back().name);  // REQ-361
   EnsureAttrCounts(st);  // owns attribute-array growth for every entity type, surfaces included
   return static_cast<int>(st.cadSurfaces.size()) - 1;
 }
@@ -3243,6 +3245,8 @@ int CreateSurfaceFromVolumeParents(AppCommandState& st, const std::string& name,
   if (!built && s.lastBuildMessage.empty())
     s.lastBuildMessage = "Not built.";
   st.cadSurfaces.push_back(std::move(s));
+  AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
+                       st.cadSurfaces.back().name);  // REQ-361
   EnsureAttrCounts(st);
   return static_cast<int>(st.cadSurfaces.size()) - 1;
 }
@@ -3704,6 +3708,8 @@ void RunSurfaceCreateGrid(AppCommandState& st, const std::string& args, std::vec
   BumpCadGpuCache(st);
   (void)BuildSurfaceFromSources(st, s, log);
   st.cadSurfaces.push_back(std::move(s));
+  AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
+                       st.cadSurfaces.back().name);  // REQ-361
   EnsureAttrCounts(st);
 }
 
@@ -3724,6 +3730,8 @@ void RunSurfaceCreateCorr(AppCommandState& st, const std::string& args, std::vec
   s.kind = SurfaceKind::Corridor;
   (void)BuildSurfaceFromSources(st, s, log);
   st.cadSurfaces.push_back(std::move(s));
+  AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
+                       st.cadSurfaces.back().name);  // REQ-361
   EnsureAttrCounts(st);
 }
 
@@ -3746,6 +3754,8 @@ void RunSurfaceCreateVolGrid(AppCommandState& st, const std::string& args, std::
   s.volumeComparisonName = f[2];
   (void)BuildSurfaceFromSources(st, s, log);
   st.cadSurfaces.push_back(std::move(s));
+  AppendNewObjectAttrs(st, st.cadSurfaceAttrs, st.cadSurfaces.size(), ObjectLayerKind::Surface,
+                       st.cadSurfaces.back().name);  // REQ-361
   EnsureAttrCounts(st);
 }
 
@@ -4138,6 +4148,7 @@ void RunVolReport(AppCommandState& st, const std::string& args, std::vector<std:
     tbl.insY = tbl.height;
     tbl.insZ = CadCommitElevation(st);
     st.cadTables.push_back(std::move(tbl));
+    AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
     EnsureAttrCounts(st);
     BumpCadGpuCache(st);
     log.push_back("VOLREPORT TABLE — TABLE inserted.");
@@ -5429,6 +5440,8 @@ void RunWaterDropCommand(AppCommandState& st, const std::string& args, std::vect
       CadFeatureLineInfo info;
       info.name = "Water drop";
       st.featureLineInfo.push_back(std::move(info));
+      AppendNewObjectAttrs(st, st.featureLineAttrs, st.featureLineInfo.size(), ObjectLayerKind::FeatureLine,
+                           st.featureLineInfo.back().name);  // REQ-361
       EnsureAttrCounts(st);
       BumpCadGpuCache(st);
       log.push_back("WATERDROP EXTRACT FL — 1 feature line (unlinked).");
@@ -22619,7 +22632,8 @@ void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::s
   CadFeatureLineInfo info;
   info.name = st.featureLineDraftName;
   st.featureLineInfo.push_back(std::move(info));
-  st.featureLineAttrs.push_back(MakeNewEntityAttrs(st));
+  st.featureLineAttrs.push_back(
+      MakeNewObjectAttrs(st, ObjectLayerKind::FeatureLine, st.featureLineInfo.back().name));  // REQ-361
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
   st.featureLineDraftVerts.clear();
@@ -23945,6 +23959,69 @@ bool CadAddDrawingLayer(AppCommandState& st, const std::string& raw, std::string
   row.name = name;
   st.drawingLayerTable.push_back(row);
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Object Layers (REQ-361, GitHub issue #582 increment 5)
+// ---------------------------------------------------------------------------
+
+std::string ResolveObjectLayer(const DrawingSettings& settings, ObjectLayerKind kind, std::string_view objectName) {
+  const ObjectLayerRow& row = settings.ObjectLayer(kind);
+  if (row.modifier == ObjectLayerRow::Modifier::None)
+    return row.layer;
+  std::string value;  // each '*' is the object's name; an object with no name drops it
+  for (char c : row.value) {
+    if (c == '*')
+      value.append(objectName);
+    else
+      value.push_back(c);
+  }
+  return row.modifier == ObjectLayerRow::Modifier::Prefix ? value + row.layer : row.layer + value;
+}
+
+std::string EnsureObjectLayer(AppCommandState& st, ObjectLayerKind kind, std::string_view objectName) {
+  std::string name = StringUtil::trimCopy(ResolveObjectLayer(st.drawingSettings, kind, objectName));
+  // A name that cannot be a layer (an object name holding '/', say) falls back to the row's own layer.
+  if (!ValidNewLayerNameChars(name))
+    name = StringUtil::trimCopy(st.drawingSettings.ObjectLayer(kind).layer);
+  if (!ValidNewLayerNameChars(name))
+    name = "0";
+  return EnsureDrawingLayer(st, name);
+}
+
+std::string EnsureDrawingLayer(AppCommandState& st, const std::string& name) {
+  const std::string lower = StringUtil::toLowerAsciiCopy(name);
+  for (const CadLayerRow& r : st.drawingLayerTable)
+    if (StringUtil::toLowerAsciiCopy(r.name) == lower)
+      return r.name;  // the table's own spelling
+  CadLayerRow row;  // created with default properties, inside the caller's undo step
+  row.name = name;
+  st.drawingLayerTable.push_back(row);
+  return name;
+}
+
+std::string ValidateObjectLayers(const DrawingSettings& settings) {
+  for (const ObjectLayerRow& row : settings.objectLayers) {
+    const std::string name = StringUtil::trimCopy(row.layer);
+    if (!ValidNewLayerNameChars(name))
+      return "Object Layers: \"" + name +
+             "\" is not a layer name (empty, too long, or a character such as / * : ? \" < > |).";
+  }
+  return {};
+}
+
+EntityAttributes MakeNewObjectAttrs(AppCommandState& st, ObjectLayerKind kind, std::string_view objectName) {
+  EntityAttributes a = MakeNewEntityAttrs(st);  // the current colour still applies (REQ-356)
+  a.layer = EnsureObjectLayer(st, kind, objectName);
+  return a;
+}
+
+void AppendNewObjectAttrs(AppCommandState& st, std::vector<EntityAttributes>& attrs, size_t count,
+                          ObjectLayerKind kind, std::string_view objectName) {
+  while (attrs.size() + 1 < count)  // anything older that lacks attributes gets the ordinary ones
+    attrs.push_back(MakeNewEntityAttrs(st));
+  if (attrs.size() < count)
+    attrs.push_back(MakeNewObjectAttrs(st, kind, objectName));
 }
 
 namespace {
@@ -31229,7 +31306,7 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
 
   PushUndoSnapshot(st, std::string("Create ") + brep::PrimitiveKindName(spec->kind));
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   BumpCadGpuCache(st);
 
   log.push_back(SolidCreatedMessage(spec->kind, mp));
@@ -32002,7 +32079,7 @@ void CadExtrudeSelection(AppCommandState& st, const std::string& rest, std::vect
   for (brep::Solid& s : built) {
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
     st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
-    st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+    st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
     log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   }
   BumpCadGpuCache(st);
@@ -32150,7 +32227,7 @@ static void CommitExtrude(AppCommandState& st, double height, std::vector<std::s
   for (brep::Solid& s : built) {
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
     st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
-    st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+    st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
     log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   }
   BumpCadGpuCache(st);
@@ -32260,7 +32337,7 @@ static void CommitLoft(AppCommandState& st, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Loft");
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   if (skipped > 0)
     log.push_back("LOFT — " + std::to_string(skipped) +
@@ -32574,7 +32651,7 @@ static void CommitSweep(AppCommandState& st, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Sweep");
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   BumpCadGpuCache(st);
   st.selection.clear();
@@ -32789,7 +32866,7 @@ static void CommitRevolve(AppCommandState& st, double angleDeg, std::vector<std:
   for (brep::Solid& s : built) {
     const brep::MassProperties mp = brep::ComputeMassProperties(s);
     st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
-    st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+    st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
     log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   }
   BumpCadGpuCache(st);
@@ -33546,7 +33623,7 @@ bool CadCommitPressPullTarget(AppCommandState& st, const PressPullTarget& t, dou
   PushUndoSnapshot(st, "PressPull");
   const brep::MassProperties mp = brep::ComputeMassProperties(built);
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(built)));
-  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   log.push_back(SolidCreatedMessage(st.cadSolids.back()->recipe.kind, mp));  // a feature result may be a Cylinder / Cone (#515)
   BumpCadGpuCache(st);
   return true;
@@ -34820,7 +34897,7 @@ void CommitPromptedSolid(AppCommandState& st, std::vector<std::string>& log) {
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   PushUndoSnapshot(st, std::string("Create ") + brep::PrimitiveKindName(st.solidKind));
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   BumpCadGpuCache(st);
 
   log.push_back(SolidCreatedMessage(st.solidKind, mp));
@@ -35187,7 +35264,7 @@ void CommitPolysolid(AppCommandState& st, std::vector<std::string>& log) {
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   PushUndoSnapshot(st, "Create Polysolid");
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   BumpCadGpuCache(st);
   log.push_back(SolidCreatedMessage(brep::PrimitiveKind::Polysolid, mp));
   CancelPolysolidCommand(st);
@@ -35948,8 +36025,8 @@ void TryApplyBranchAtEndpoint(AppCommandState& st, std::vector<ray3d::Vec3>& pie
 /// A new pipe run's attributes: the ordinary new-entity ones (current layer), coloured by its size
 /// from the size palette (REQ-353, `kCadPipeNpsTable`). A size the table does not carry keeps
 /// `ByLayer` — unreachable through PIPERUN's size prompt, which refuses such a size.
-EntityAttributes MakeNewPipeRunAttrs(const AppCommandState& st, std::string_view nominalSize) {
-  EntityAttributes a = MakeNewEntityAttrs(st);
+EntityAttributes MakeNewPipeRunAttrs(AppCommandState& st, std::string_view nominalSize) {
+  EntityAttributes a = MakeNewObjectAttrs(st, ObjectLayerKind::PipeRun, {});  // REQ-361
   std::string hex;
   if (CadPipeNominalSizeColor(nominalSize, &hex))
     a.color = hex;
@@ -37373,7 +37450,7 @@ void CadPolysolidConvertObjectAt(AppCommandState& st, float wx, float wy,
   const brep::MassProperties mp = brep::ComputeMassProperties(solid);
   PushUndoSnapshot(st, "Create Polysolid");
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
-  st.cadSolidAttrs.push_back(MakeNewEntityAttrs(st));
+  st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
   BumpCadGpuCache(st);
   log.push_back(SolidCreatedMessage(brep::PrimitiveKind::Polysolid, mp));
   CancelPolysolidCommand(st);
@@ -38688,6 +38765,10 @@ bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelU
   if (!next.Geolocated()) {
     next.ResetGeographicMarker();
     next.transform = DrawingSettings::Transform{};  // REQ-360: the transform belongs to the zone too
+  }
+  if (const std::string bad = ValidateObjectLayers(next); !bad.empty()) {  // REQ-361
+    log.push_back("Drawing Settings — " + bad + " Nothing was changed.");
+    return false;
   }
   if (const std::string bad = ValidateDrawingTransform(next); !bad.empty()) {
     log.push_back("Drawing Settings — " + bad + " Nothing was changed.");
