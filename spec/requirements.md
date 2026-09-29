@@ -10230,7 +10230,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      size, with its **own** multi-line (MTEXT) label. After placement the MTEXT editor opens on the
      label, pre-filled with the point's latitude and longitude (REQ-358 item 4, in the zone's
      datum); the text the user commits is the label. Marker and label are **one object**: select,
-     MOVE, COPY, ERASE and UNDO act on both; OSNAP Node snaps to the marker's centre; ROTATE,
+     MOVE, COPY, ERASE and UNDO act on both; the node (Survey point) and Center object snaps
+     find the marker's centre; ROTATE,
      SCALE, MIRROR, STRETCH and grips refuse it by name. It is saved with the drawing (ADR-044
      trailer, per drawing tab) and is **also written into the DWG / DXF body** as a CIRCLE, two
      LINEs and an MTEXT so other programs show it (as loose pieces). GoSurvey's own DWG reopen
@@ -10249,14 +10250,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
     point's grid coordinate within 0.001 ft, and the MTEXT editor opens on its label pre-filled with
     that latitude/longitude;
   - a Position Marker selects, moves, copies and erases as one object with its label, undoes in one
-    step, snaps (Node) at its centre, survives DWG save → close → reopen once (no duplicate), and
+    step, snaps (Survey point / Center) at its centre, survives DWG save → close → reopen once (no duplicate), and
     the saved DWG / DXF body holds its CIRCLE, LINEs and MTEXT;
   - Map and Capture Area are visible, disabled, and show *not implemented yet*.
 - Owner-layer: UI (`src/ui/` ribbon tab + marker overlay), Commands (Remove Location, Mark Position,
   marker pick).
 - Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-e, TASK-292.
 - Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — item 3 and its
-  acceptance amended (D-2026-09-29-e): Mark Position places a Position Marker object.
+  acceptance amended (D-2026-09-29-e): Mark Position places a Position Marker object. 2026-09-29 —
+  "OSNAP Node" reworded: GoSurvey has no separate Node snap; its node snap is the Survey point snap.
 
 ### REQ-360 — Transformation tab: local ↔ grid with scale factor, sea-level factor and rotation (GitHub issue #582, increment 4)
 

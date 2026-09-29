@@ -1331,6 +1331,16 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     }
   }
 
+  // --- Position Markers (REQ-359 item 3): the centre is the marker's node. It answers the survey-point
+  // (node) snap, and the Center snap as the centre of its circle.
+  if (wantSurveyPoint || wantCenter) {
+    for (const CadPositionMarker& m : cmd.cadPositionMarkers) {
+      const float mx = static_cast<float>(m.x);
+      const float my = static_cast<float>(m.y);
+      Consider(&acc, wx, wy, mx, my, wantSurveyPoint ? Kind::SurveyCenter : Kind::Center, tolWorld, m.z);
+    }
+  }
+
   // --- Placed block instances (REQ-107, D-2026-08-29-i) ---
   // Expand each INSERT to world geometry and offer Endpoint on its segment ends and its insertion
   // point, Midpoint on its segment midpoints, and Center on its circles/arcs/ellipses — same

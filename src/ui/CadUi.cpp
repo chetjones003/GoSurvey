@@ -3784,6 +3784,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     cmd.blockEditorContextualRibbonArmed = false;
   }
 
+  // REQ-359 item 1: the Geolocation tab exists while the drawing is geolocated. It never takes focus
+  // on its own; if it disappears while it is the active tab (Remove Location, a tab switch), the
+  // ribbon falls back to Home.
+  const bool geoTab = GeolocationRibbonTabVisible(cmd);
+  if (!geoTab && cmd.activeRibbonTab == kRibbonTabGeolocationCtx)
+    cmd.activeRibbonTab = kRibbonTabHome;
+
   // REQ-302 tab strip: Home/Insert/Annotate/View/Manage/Output/Survey. Reuses the Model/Layout
   // tab toggle styling (PushModeToggleButtonColors, ~CadUi.cpp:6308, REQ-025/026 precedent) so the
   // active tab reads the same way the active space tab already does, rather than a second style.
@@ -3861,6 +3868,19 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
       if (ImGui::Button("Block Editor", ImVec2(0.f, kRibbonTabStripH)))
         cmd.activeRibbonTab = kRibbonTabBlockEditor;
+      ImGui::PopStyleColor(4);
+      ImGui::SameLine(0, 2);
+    }
+    if (geoTab) {  // REQ-359: last in the strip
+      const bool geoOn = cmd.activeRibbonTab == kRibbonTabGeolocationCtx;
+      ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0, 120, 215, geoOn ? 255 : 180));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(30, 144, 255, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0, 90, 180, 255));
+      ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
+      if (ImGui::Button("Geolocation", ImVec2(0.f, kRibbonTabStripH))) {
+        cmd.activeRibbonTab = kRibbonTabGeolocationCtx;
+        DevShell_OnUi("##RibbonTabGeolocation");
+      }
       ImGui::PopStyleColor(4);
       ImGui::SameLine(0, 2);
     }
@@ -5573,6 +5593,131 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }});
     }
   } // kRibbonTabPointCloudCtx
+
+  // REQ-359: contextual Geolocation tab (Civil 3D's content, GoSurvey's chrome).
+  if (cmd.activeRibbonTab == kRibbonTabGeolocationCtx && geoTab) {
+    // ---- Location: Edit Location (split), Reorient Marker, Remove Location ------------------------
+    {
+      const float wEdit = belowW("Edit Location");
+      const float wReorient = belowW("Reorient Marker");
+      const float wRemove = belowW("Remove Location");
+      const float w = wEdit + wReorient + wRemove + 2.f * ImGui::GetStyle().ItemSpacing.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, wEdit, wReorient, wRemove, w]() {
+        RibbonSectionBegin("RibbonSecGeoLocation", "Location", w, panelH);
+        // Split button: the icon opens Drawing Settings on Units and Zone; the label half (with the
+        // chevron) opens the menu holding Edit Geographic Marker.
+        const bool editHit = RibbonButtonEx("##GeoEditLocation", RibbonIconKind::Nyi, "Edit Location",
+                                            ImVec2(wEdit, colH), RibbonLabel::Below, "Set_Location");
+        const ImVec2 eMin = ImGui::GetItemRectMin();
+        const ImVec2 eMax = ImGui::GetItemRectMax();
+        const float splitY = eMin.y + (eMax.y - eMin.y) * 0.58f;
+        RibbonItemHelp("Edit Location — the drawing's coordinate system (Drawing Settings \xE2\x96\xB8 Units and Zone).\n"
+                       "Click the label for Edit Geographic Marker.");
+        DrawDropdownChevron(ImGui::GetWindowDrawList(), ImVec2(eMin.x, eMax.y - 14.f), ImVec2(eMax.x + 4.f, eMax.y - 2.f),
+                            ImGui::GetColorU32(ImGuiCol_Text));
+        if (editHit) {
+          if (ImGui::GetIO().MouseClickedPos[0].y >= splitY) {
+            DevShell_OnUi("##GeoEditLocationMenu");
+            ImGui::OpenPopup("##GeoEditLocMenu");
+          } else {
+            DevShell_OnUi("##GeoEditLocation");
+            cmd.drawingSettingsShowUnitsAndZone = true;
+            cmd.showDrawingSettingsWindow = true;
+          }
+        }
+        if (ImGui::BeginPopup("##GeoEditLocMenu")) {
+          if (ImGui::MenuItem("Edit Location")) {
+            cmd.drawingSettingsShowUnitsAndZone = true;
+            cmd.showDrawingSettingsWindow = true;
+          }
+          if (ImGui::MenuItem("Edit Geographic Marker"))
+            StartGeoReorientMarkerCommand(cmd, log);
+          ImGui::EndPopup();
+        }
+        ImGui::SameLine();
+        if (RibbonButtonEx("##GeoReorientMarker", RibbonIconKind::Nyi, "Reorient Marker", ImVec2(wReorient, colH),
+                           RibbonLabel::Below, "Block_Authoring_Parameters_Rotation")) {
+          DevShell_OnUi("##GeoReorientMarker");
+          StartGeoReorientMarkerCommand(cmd, log);
+        }
+        RibbonItemHelp("Reorient Marker — pick the design point, then a point to the north.\n"
+                       "Command bar: GEOREORIENTMARKER");
+        ImGui::SameLine();
+        if (RibbonButtonEx("##GeoRemoveLocation", RibbonIconKind::Nyi, "Remove Location", ImVec2(wRemove, colH),
+                           RibbonLabel::Below, "Remove_XClip")) {
+          DevShell_OnUi("##GeoRemoveLocation");
+          ImGui::OpenPopup("Remove Location###GeoRemoveConfirm");
+        }
+        RibbonItemHelp("Remove Location — back to No Datum, No Projection (asks first; UNDO restores it).");
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (ImGui::BeginPopupModal("Remove Location###GeoRemoveConfirm", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+          ImGui::TextUnformatted("Remove the geographic location from this drawing?");
+          ImGui::TextDisabled("The zone becomes No Datum, No Projection and the geographic marker is cleared.\n"
+                              "Nothing in the drawing moves. UNDO brings it back.");
+          ImGui::Spacing();
+          if (ImGui::Button("Remove", ImVec2(96.f, 0.f))) {
+            DevShell_OnUi("##GeoRemoveConfirmYes");
+            RemoveGeoLocation(cmd, log);
+            ImGui::CloseCurrentPopup();
+          }
+          ImGui::SameLine();
+          if (ImGui::Button("Cancel", ImVec2(96.f, 0.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            ImGui::CloseCurrentPopup();
+          ImGui::EndPopup();
+        }
+        RibbonSectionEnd();
+      }});
+    }
+
+    // ---- Tools: Mark Position (split: Lat-Long / Point) --------------------------------------------
+    {
+      ribbonlayout::RibbonGroupSpec g;
+      g.buttons = {largeBtnSpecEx("##GeoMarkPosition", -1, "c3d_geodetic", "Mark Position", false,
+                                  "Mark Position — place a Position Marker at a latitude/longitude or a point.\n"
+                                  "Command bar: GEOMARKLATLONG, GEOMARKPOINT",
+                                  belowW("Mark Position"))};
+      ribbonlayout::RibbonSectionSpec spec;
+      spec.groups = {g};
+      const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
+      ribbonSpecs.push_back({w, w, [&, spec]() {
+        drawRibbonSectionSpec("RibbonSecGeoTools", "Tools", spec, [&](const std::string& id) {
+          if (id == "##GeoMarkPosition") ImGui::OpenPopup("##GeoMarkPosMenu");
+        });
+        if (ImGui::BeginPopup("##GeoMarkPosMenu")) {
+          if (ImGui::MenuItem("Lat-Long")) {
+            DevShell_OnUi("##GeoMarkLatLong");
+            StartGeoMarkLatLongCommand(cmd, log);
+          }
+          if (ImGui::MenuItem("Point")) {
+            DevShell_OnUi("##GeoMarkPoint");
+            StartGeoMarkPointCommand(cmd, log);
+          }
+          ImGui::EndPopup();
+        }
+      }});
+    }
+
+    // ---- Online Map: present but not implemented yet (REQ-084); delivered by issue #583 -------------
+    {
+      const float wCapture = belowW("Capture Area");
+      const float w = annStyleW + ImGui::GetStyle().ItemSpacing.x + wCapture + 8.f;
+      ribbonSpecs.push_back({w, w, [&, wCapture, w]() {
+        RibbonSectionBegin("RibbonSecGeoOnlineMap", "Online Map", w, panelH);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Map");
+        annNyiCombo("##GeoMap", "Map Off");
+        ImGui::EndGroup();
+        ImGui::SameLine();
+        ImGui::BeginDisabled();
+        RibbonButtonEx("##GeoCaptureArea", RibbonIconKind::Nyi, "Capture Area", ImVec2(wCapture, colH),
+                       RibbonLabel::Below, "c3d_mapcheck");
+        ImGui::EndDisabled();
+        RibbonItemHelp("Capture Area \xE2\x80\x94 not implemented yet.", ImGuiHoveredFlags_AllowWhenDisabled);
+        RibbonSectionEnd();
+      }});
+    }
+  } // kRibbonTabGeolocationCtx
 
   if (cmd.activeRibbonTab == kRibbonTabBlockEditor && inBedit) {
     auto beditSubmit = [&](const char* line) {
@@ -9572,6 +9717,8 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   }
   if (cmd.active == AppCommandState::Kind::IdPoint)
     return "ID — point (X,Y or click):";
+  if (const char* geoPrompt = GeoCommandPrompt(cmd))  // REQ-359
+    return geoPrompt;
   if (cmd.active == AppCommandState::Kind::SurveyInverse) {
     using SIP = AppCommandState::SurveyInversePhase;
     if (cmd.surveyInversePhase == SIP::WaitFrom)
@@ -10023,6 +10170,10 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
     }
   case K::IdPoint:
     return "Specify point:";
+  case K::GeoMarkPoint:  // REQ-359
+  case K::GeoMarkLatLong:
+  case K::GeoReorientMarker:
+    return GeoCommandPrompt(cmd);
   case K::SurveyInverse:
     return cmd.surveyInversePhase == AppCommandState::SurveyInversePhase::WaitFrom ? "Specify first point:"
                                                                                   : "Specify second point:";
@@ -18130,6 +18281,91 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     for (const CadTable& tp : transformTablePreviews)
       drawCadTableVisual(tp, nullptr, kAnnTfPrevCol);
 
+    // Position Markers (REQ-359 item 3): a cross in a circle at a fixed plotted size, plus the
+    // marker's own label. Drawn here, beside the annotations, because the label is an MTEXT.
+    {
+      const float markerR = PositionMarkerRadiusWorld(cmd);
+      auto markerShape = [&](const CadPositionMarker& m, ImU32 col, float thick) {
+        constexpr int kSegs = 48;
+        ImVec2 ring[kSegs];
+        const float cx = static_cast<float>(m.x);
+        const float cy = static_cast<float>(m.y);
+        for (int i = 0; i < kSegs; ++i) {
+          const float t = 6.2831853f * static_cast<float>(i) / static_cast<float>(kSegs);
+          worldToScreen(cx + markerR * std::cos(t), cy + markerR * std::sin(t), &ring[i], m.z);
+        }
+        dl->AddPolyline(ring, kSegs, col, ImDrawFlags_Closed, thick);
+        ImVec2 a{}, b{};
+        worldToScreen(cx - markerR, cy, &a, m.z);
+        worldToScreen(cx + markerR, cy, &b, m.z);
+        dl->AddLine(a, b, col, thick);
+        worldToScreen(cx, cy - markerR, &a, m.z);
+        worldToScreen(cx, cy + markerR, &b, m.z);
+        dl->AddLine(a, b, col, thick);
+      };
+      auto isMarkerSelected = [&](size_t ix) {
+        for (const auto& e : cmd.selection)
+          if (e.type == SelectedEntity::Type::PositionMarker && static_cast<size_t>(e.index) == ix)
+            return true;
+        return false;
+      };
+      for (size_t mi = 0; mi < cmd.cadPositionMarkers.size(); ++mi) {
+        const CadPositionMarker& m = cmd.cadPositionMarkers[mi];
+        const EntityAttributes* mp = mi < cmd.cadPositionMarkerAttrs.size() ? &cmd.cadPositionMarkerAttrs[mi] : nullptr;
+        if (mp && CadEntityIdHidden(&cmd.hiddenEntityIds, mp->id))
+          continue;
+        ImU32 col = kAnnCol;
+        if (mp) {
+          float rgba[4];
+          ResolveEntityColorForViewport(*mp, 230 / 255.f, 232 / 255.f, 238 / 255.f, rgba);
+          col = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                         static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
+        }
+        const bool sel = isMarkerSelected(mi);
+        const bool hov = !sel && cmd.viewportHoverEntityValid &&
+                         cmd.viewportHoverEntity.type == SelectedEntity::Type::PositionMarker &&
+                         cmd.viewportHoverEntity.index == static_cast<int>(mi);
+        markerShape(m, sel ? kAnnSelCol : hov ? IM_COL32(130, 180, 240, 255) : col, sel || hov ? 2.f : 1.5f);
+        // The label being edited is drawn by the editor itself.
+        if (!(cmd.mtextRichEditorOpen && cmd.mtextRichEditorMarkerIndex == static_cast<int>(mi)))
+          drawAnnotationVisual(m.label, mp, kAnnCol);
+        if (sel || hov) {
+          ImVec2 sa{}, sb{};
+          worldToScreen(m.label.boxMinX, m.label.boxMinY, &sa, m.label.insZ);
+          worldToScreen(m.label.boxMaxX, m.label.boxMaxY, &sb, m.label.insZ);
+          dl->AddRect(ImVec2(std::min(sa.x, sb.x), std::min(sa.y, sb.y)), ImVec2(std::max(sa.x, sb.x), std::max(sa.y, sb.y)),
+                      sel ? kAnnSelCol : IM_COL32(130, 180, 240, 200), 0.f, 0, sel ? 2.f : 1.4f);
+        }
+      }
+    }
+
+    // The geographic marker (REQ-359 item 4): a screen-size glyph at the design point with an arrow
+    // toward the stored north. Drawn only on a geolocated drawing; it is not an entity.
+    if (cmd.drawingSettings.Geolocated()) {
+      const float gx = static_cast<float>(cmd.drawingSettings.markerX - cmd.worldDocumentOriginX);
+      const float gy = static_cast<float>(cmd.drawingSettings.markerY - cmd.worldDocumentOriginY);
+      const double northRad = cmd.drawingSettings.markerNorthDeg * 3.14159265358979323846 / 180.0;
+      ImVec2 c{}, n{};
+      worldToScreen(gx, gy, &c, 0.f);
+      worldToScreen(gx + static_cast<float>(std::cos(northRad)), gy + static_cast<float>(std::sin(northRad)), &n, 0.f);
+      float ux = n.x - c.x, uy = n.y - c.y;
+      const float len = std::sqrt(ux * ux + uy * uy);
+      if (len > 1.e-6f) {
+        ux /= len;
+        uy /= len;
+        constexpr ImU32 kGeoCol = IM_COL32(236, 120, 40, 255);
+        constexpr float kR = 9.f;
+        constexpr float kArrow = 26.f;
+        dl->AddCircle(c, kR, kGeoCol, 24, 2.f);
+        dl->AddCircleFilled(c, 2.5f, kGeoCol);
+        const ImVec2 tip(c.x + ux * kArrow, c.y + uy * kArrow);
+        dl->AddLine(ImVec2(c.x + ux * kR, c.y + uy * kR), tip, kGeoCol, 2.f);
+        dl->AddTriangleFilled(tip, ImVec2(tip.x - ux * 8.f - uy * 4.f, tip.y - uy * 8.f + ux * 4.f),
+                              ImVec2(tip.x - ux * 8.f + uy * 4.f, tip.y - uy * 8.f - ux * 4.f), kGeoCol);
+        dl->AddText(ImVec2(tip.x + ux * 6.f - 4.f, tip.y + uy * 6.f - 7.f), kGeoCol, "N");
+      }
+    }
+
     if (showMtextCmdDraft) {
       CadAnnotation d{};
       d.kind = CadAnnotation::Kind::Mtext;
@@ -20300,6 +20536,10 @@ static const EntityAttributes& SelectedEntityAttr(const AppCommandState& cmd, co
   case T::PipeRun:
     if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadPipeRunAttrs.size())
       return cmd.cadPipeRunAttrs[static_cast<size_t>(e.index)];
+    return kDef;
+  case T::PositionMarker:  // REQ-359
+    if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadPositionMarkerAttrs.size())
+      return cmd.cadPositionMarkerAttrs[static_cast<size_t>(e.index)];
     return kDef;
   case T::PdfUnderlay:
     return kDef;

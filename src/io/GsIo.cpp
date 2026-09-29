@@ -860,6 +860,10 @@ json BuildRoot(const AppCommandState& st) {
     o["scaleInsertedObjects"] = ds.scaleInsertedObjects;
     o["setDrawingVariables"] = ds.setDrawingVariables;
     o["zone"] = ds.zoneCode;  // REQ-358: CS-MAP code, "" = No Datum, No Projection
+    // REQ-359 item 4: the geographic marker (WORLD design point + north, degrees CCW from +X).
+    o["markerX"] = ds.markerX;
+    o["markerY"] = ds.markerY;
+    o["markerNorthDeg"] = ds.markerNorthDeg;
     doc["drawingSettings"] = std::move(o);
   }
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
@@ -1312,6 +1316,31 @@ json BuildRoot(const AppCommandState& st) {
   }
   if (!tableAttrs.empty())
     doc["tableAttrs"] = std::move(tableAttrs);
+
+  // Position Markers (REQ-359 item 3): additive arrays, absent when empty (ADR-020 (d)).
+  json markers = json::array();
+  for (const CadPositionMarker& m : st.cadPositionMarkers) {
+    json o;
+    o["x"] = m.x;
+    o["y"] = m.y;
+    o["z"] = m.z;
+    o["lat"] = m.latitudeDeg;
+    o["lon"] = m.longitudeDeg;
+    json label;
+    CadAnnotationToJson(m.label, label);
+    o["label"] = std::move(label);
+    markers.push_back(std::move(o));
+  }
+  if (!markers.empty())
+    doc["positionMarkers"] = std::move(markers);
+  json markerAttrs = json::array();
+  for (const auto& a : st.cadPositionMarkerAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    markerAttrs.push_back(std::move(o));
+  }
+  if (!markerAttrs.empty())
+    doc["positionMarkerAttrs"] = std::move(markerAttrs);
 
   doc["drawingInsUnits"] = st.drawingInsUnits;
   json blockDefs = json::array();
@@ -2138,6 +2167,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     // REQ-358: kept verbatim, even when this dictionary does not know it (nothing silently dropped).
     if (o.contains("zone") && o["zone"].is_string())
       st.drawingSettings.zoneCode = o["zone"].get<std::string>();
+    st.drawingSettings.markerX = o.value("markerX", 0.0);
+    st.drawingSettings.markerY = o.value("markerY", 0.0);
+    st.drawingSettings.markerNorthDeg = o.value("markerNorthDeg", 90.0);
   }
   // Paper space layouts (REQ-031). Missing/garbage → no layouts, model space (no crash).
   st.paperLayouts.clear();
@@ -2639,6 +2671,31 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   st.cadTableAttrs.resize(st.cadTables.size());
   MigrateLegacyAnnotationTables(st);
+
+  // Position Markers (REQ-359 item 3). Missing / garbage entries are skipped, never a crash.
+  st.cadPositionMarkers.clear();
+  st.cadPositionMarkerAttrs.clear();
+  if (doc.contains("positionMarkers") && doc["positionMarkers"].is_array()) {
+    for (const auto& o : doc["positionMarkers"]) {
+      if (!o.is_object())
+        continue;
+      CadPositionMarker m;
+      m.x = o.value("x", 0.0);
+      m.y = o.value("y", 0.0);
+      m.z = o.value("z", 0.f);
+      m.latitudeDeg = o.value("lat", 0.0);
+      m.longitudeDeg = o.value("lon", 0.0);
+      if (o.contains("label") && o["label"].is_object())
+        m.label = CadAnnotationFromJson(o["label"]);
+      m.label.kind = CadAnnotation::Kind::Mtext;
+      st.cadPositionMarkers.push_back(std::move(m));
+    }
+  }
+  if (doc.contains("positionMarkerAttrs") && doc["positionMarkerAttrs"].is_array()) {
+    for (const auto& o : doc["positionMarkerAttrs"])
+      st.cadPositionMarkerAttrs.push_back(EntityAttributesFromJson(o));
+  }
+  st.cadPositionMarkerAttrs.resize(st.cadPositionMarkers.size());
 
   st.drawingInsUnits = doc.value("drawingInsUnits", st.drawingInsUnits);
   st.blockDefs.clear();

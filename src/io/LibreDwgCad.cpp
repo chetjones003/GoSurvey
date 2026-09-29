@@ -4,6 +4,7 @@
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "DxfColors.hpp"
+#include "MtextRichFormat.hpp"
 #include "DwgIo.hpp"
 #include "SurveyPoints.hpp"
 #include "TextStyle.hpp"
@@ -870,6 +871,43 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       Dwg_Entity_TEXT* e = dwg_add_TEXT(hdr, an.text.c_str(), &p, h);
       if (e != nullptr)
         apply(e->parent, at);
+    }
+  }
+  // Position Markers (REQ-359 item 3, D-2026-09-29-e): other programs see a CIRCLE, a cross of two
+  // LINEs and the label MTEXT. GoSurvey reopens its own DWG from the trailer, so these never come
+  // back as duplicates.
+  for (size_t i = 0; i < st.cadPositionMarkers.size(); ++i) {
+    const CadPositionMarker& m = st.cadPositionMarkers[i];
+    const EntityAttributes* at = AttrAt(st.cadPositionMarkerAttrs, i);
+    const double r = static_cast<double>(PositionMarkerRadiusWorld(st));
+    dwg_point_3d c{};
+    c.x = m.x + st.worldDocumentOriginX;  // double all the way (REQ-101)
+    c.y = m.y + st.worldDocumentOriginY;
+    c.z = static_cast<double>(m.z);
+    if (Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(hdr, &c, r))
+      apply(e->parent, at);
+    for (int arm = 0; arm < 2; ++arm) {
+      dwg_point_3d a = c, b = c;
+      (arm == 0 ? a.x : a.y) -= r;
+      (arm == 0 ? b.x : b.y) += r;
+      if (Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &a, &b))
+        apply(e->parent, at);
+    }
+    const CadAnnotation& an = m.label;
+    dwg_point_3d p{};
+    world(std::min(an.boxMinX, an.boxMaxX), std::max(an.boxMinY, an.boxMaxY), an.insZ, &p);  // top-left
+    std::string wire;
+    for (char ch : MtextRichFlattenToPlain(an.text)) {
+      if (ch == '\n')
+        wire += "\\P";
+      else if (ch != '\r')
+        wire += ch;
+    }
+    const double width = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
+    if (Dwg_Entity_MTEXT* e = dwg_add_MTEXT(hdr, &p, width, wire.c_str())) {
+      e->text_height = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
+      e->attachment = 1;
+      apply(e->parent, at);
     }
   }
   for (size_t i = 0; i < st.userEllipses.size(); ++i) {

@@ -328,6 +328,8 @@ bool CadCommandExpectsPointEntry(const AppCommandState& cmd) {
   case K::MoveTinPoint: return true;
   case K::DelTinLine: return true;
   case K::QuickProfile: return true;
+  case K::GeoMarkPoint: return true;       // REQ-359
+  case K::GeoReorientMarker: return true;  // REQ-359
   // REQ-154. The second of the two lists a point-picking command has to appear in — UCS was missing
   // from both, so it had neither dynamic input nor a working click. Same phases that
   // ViewportClickRouteFor routes: everything that takes a coordinate, and nothing that wants a

@@ -367,6 +367,27 @@ struct CadAnnotation {
   std::vector<std::string> tableCells;
 };
 
+/// A Position Marker (REQ-359 item 3, D-2026-09-29-e): a cross inside a circle at a point, drawn at a
+/// fixed plotted size, plus its OWN multi-line label. One object — MOVE / COPY / ERASE / UNDO act on
+/// the marker and its label together — so the label lives here, not in `cadAnnotations`.
+struct CadPositionMarker {
+  /// LOCAL coordinates (world = local + worldDocumentOrigin), in double: the marker is a surveyed
+  /// position and REQ-359 checks it to 0.001 ft, which a float cannot hold at state-plane offsets.
+  double x = 0.0;
+  double y = 0.0;
+  /// Elevation, absolute (the local rebase is X/Y-only, as CadAnnotation::insZ).
+  float z = 0.f;
+  /// Latitude / longitude (degrees, the zone's datum) when it was placed. Informational: the label
+  /// is what the user wrote, and a later zone change does not rewrite either.
+  double latitudeDeg = 0.0;
+  double longitudeDeg = 0.0;
+  /// Kind::Mtext, in the same LOCAL coordinates as every model annotation.
+  CadAnnotation label;
+};
+
+/// Radius of a Position Marker's circle in plotted inches; the model size is this × drawing scale.
+inline constexpr float kPositionMarkerPlottedRadiusIn = 0.1f;
+
 [[nodiscard]] inline bool CadAnnotationHasTextBox(CadAnnotation::Kind k) {
   return k == CadAnnotation::Kind::Mtext || k == CadAnnotation::Kind::Table;
 }

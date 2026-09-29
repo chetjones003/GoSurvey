@@ -4477,6 +4477,66 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     }
   }
 
+  // Position Markers (REQ-359 item 3, D-2026-09-29-e): other programs see a CIRCLE, a cross of two
+  // LINEs and the label MTEXT. GoSurvey itself keeps the one object in its own document data.
+  for (size_t mi = 0; mi < st.cadPositionMarkers.size(); ++mi) {
+    const CadPositionMarker& m = st.cadPositionMarkers[mi];
+    EntityAttributes at{};
+    if (mi < st.cadPositionMarkerAttrs.size())
+      at = st.cadPositionMarkerAttrs[mi];
+    const int entAci = DxfNearestAciFromRgbPacked(AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu);
+    const std::string layer = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* mLyr = FindLayerRowDxfExport(st, layer);
+    const double r = static_cast<double>(PositionMarkerRadiusWorld(st));
+    const double cx = worldX(m.x);
+    const double cy = worldY(m.y);
+    const double cz = static_cast<double>(m.z);
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    emitPair(0, "CIRCLE");
+    emitEntityHeader(hb, layer, at, entAci, mLyr);
+    emitPair(100, "AcDbCircle");
+    emitPair(10, std::to_string(cx));
+    emitPair(20, std::to_string(cy));
+    emitPair(30, std::to_string(cz));
+    emitPair(40, std::to_string(r));
+    for (int arm = 0; arm < 2; ++arm) {
+      const double ax = arm == 0 ? r : 0.0;
+      const double ay = arm == 0 ? 0.0 : r;
+      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+      emitPair(0, "LINE");
+      emitEntityHeader(hb, layer, at, entAci, mLyr);
+      emitPair(100, "AcDbLine");
+      emitPair(10, std::to_string(cx - ax));
+      emitPair(20, std::to_string(cy - ay));
+      emitPair(30, std::to_string(cz));
+      emitPair(11, std::to_string(cx + ax));
+      emitPair(21, std::to_string(cy + ay));
+      emitPair(31, std::to_string(cz));
+    }
+    const CadAnnotation& an = m.label;
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    emitPair(0, "MTEXT");
+    emitEntityHeader(hb, layer, at, entAci, mLyr);
+    emitPair(100, "AcDbMText");
+    emitPair(10, std::to_string(worldX(std::min(an.boxMinX, an.boxMaxX))));  // attachment 1: top-left
+    emitPair(20, std::to_string(worldY(std::max(an.boxMinY, an.boxMaxY))));
+    emitPair(30, std::to_string(static_cast<double>(an.insZ)));
+    emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
+    emitPair(41, std::to_string(static_cast<double>(std::max(1.f, std::fabs(an.boxMaxX - an.boxMinX)))));
+    emitPair(71, "1");
+    emitPair(72, "1");
+    // Hard line breaks become MTEXT paragraph codes (\P); the rich wire's styling tags are dropped.
+    std::string wire;
+    for (char c : MtextRichFlattenToPlain(an.text)) {
+      if (c == '\n')
+        wire += "\\P";
+      else if (c != '\r')
+        wire += c;
+    }
+    emitPair(1, wire);
+  }
+
   for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
     const CadTable& t = st.cadTables[ti];
     if (t.cols <= 0)
