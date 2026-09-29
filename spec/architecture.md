@@ -4620,3 +4620,35 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   name-only row rather than crash — the same discipline `CaptureThumbnailBmp` already follows by
   returning false rather than asserting. First-open cost is one small render per visible part, not per
   frame; REQ-350's acceptance states the REQ-100 condition in those terms.
+
+### ADR-063 — Coordinate systems come from CS-MAP, behind one `src/geo/` wrapper; the zone is drawing data   (2026-09-29, accepted)
+
+- **Status:** accepted (2026-09-29, D-2026-09-29-b). Backs REQ-358..REQ-362 (GitHub issue #582).
+- **Context.** Issue #582 needs a drawing to carry a coordinate system chosen from a complete
+  catalogue with Civil 3D's codes (`HARN/TX.TX-C`, `TX83-CF`) and categories, to convert grid ↔
+  latitude/longitude at survey grade, to shift between datums, and to exchange the zone with Civil 3D
+  through `GEODATA`. None of this exists in the tree; the only unit conversion is INSERT's fixed
+  international-foot factor.
+- **Decision.**
+  (a) **CS-MAP is the catalogue and the projection engine**, chosen over PROJ/EPSG because it is the
+      dictionary Civil 3D uses, so codes and categories match without a mapping table.
+  (b) **Vendored like LibreDWG** (D-2026-08-31-b): `third_party/csmap/` holds headers, a prebuilt
+      win-x64 Release `/MD` `.lib`, `VENDORED.md` (upstream URL, tag, rebuild recipe, dictionary
+      compile recipe) and `LICENSE`. The compiled dictionaries and the redistributable datum-shift grid
+      files are **installer payload**, not build inputs, installed beside the executable; tests find
+      them through the build tree.
+  (c) **One wrapper, `src/geo/`**, a pure layer with no UI or GL: category/system enumeration, code
+      lookup, forward/inverse projection, point scale factor, datum shift, and REQ-360's local ↔ grid
+      transformation. It is the only code that includes a CS-MAP header, so replacing or updating
+      CS-MAP touches one directory. It returns results with a status, never throws across the C
+      boundary, and reports a failed dictionary load instead of crashing (REQ-201).
+  (d) **The zone is drawing data.** It lives in `drawingSettings` (REQ-357) on `DrawingDocument` and
+      in the ADR-044 trailer; GEODATA (REQ-362) is an interchange copy written from it and read into
+      it, not a second source of truth. Choosing a zone never moves geometry.
+- **Alternatives.** (1) PROJ + EPSG — declined by the user: different codes from Civil 3D, so a
+  mapping table would be needed for GEODATA exchange. (2) An in-tree projection library for state
+  plane only — fails the "complete catalogue" requirement and datum shifts. (3) Source build of
+  CS-MAP — reintroduces the clean-build cost D-2026-08-31-b removed.
+- **Consequences.** A new dependency and a much larger installer (grid files). `src/geo/` is
+  unit-testable against NGS datasheet values without a GL context. The dictionary format is CS-MAP's;
+  an updated CS-MAP means recompiling the dictionaries with it, recorded in `VENDORED.md`.
