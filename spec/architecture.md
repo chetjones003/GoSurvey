@@ -4644,8 +4644,8 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
       CS-MAP touches one directory. It returns results with a status, never throws across the C
       boundary, and reports a failed dictionary load instead of crashing (REQ-201).
   (d) **The zone is drawing data.** It lives in `drawingSettings` (REQ-357) on `DrawingDocument` and
-      in the ADR-044 trailer; GEODATA (REQ-362) is an interchange copy written from it and read into
-      it, not a second source of truth. Choosing a zone never moves geometry.
+      in the ADR-044 trailer; GEODATA (REQ-362) is an interchange copy read into it (writing it is
+      deferred to issue #590, D-2026-09-29-g), not a second source of truth. Choosing a zone never moves geometry.
 - **Alternatives.** (1) PROJ + EPSG — declined by the user: different codes from Civil 3D, so a
   mapping table would be needed for GEODATA exchange. (2) An in-tree projection library for state
   plane only — fails the "complete catalogue" requirement and datum shifts. (3) Source build of
