@@ -10069,6 +10069,304 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-29) — D-2026-09-29-a, TASK-289.
 - Revisions: 2026-09-29 — proposed and accepted.
 
+### REQ-357 — Drawing Settings window: entry points, Units and Zone top section, per-drawing settings (GitHub issue #582, increment 1)
+
+- Purpose: issue #582 — a Civil 3D–style *Edit Drawing Settings* window where a drawing gets its
+  units, scale and (later increments) its coordinate system, transformation and object layers. This
+  increment builds the window, its entry points, the **Units and Zone** tab's top section, and the
+  per-drawing storage the later increments (REQ-358..REQ-362) add to.
+- Priority: should
+- Type: functional
+- Depends on: REQ-020 / REQ-022 (the drawing unit), REQ-107 (INSERT's unit scale factor),
+  REQ-308 (Start tab), REQ-084 (*not implemented yet*), REQ-175 / ADR-044 (DWG trailer).
+- Decision: D-2026-09-29-b.
+- Statement:
+  1. **Entry points.** A `DRAWINGSETTINGS` command, with the alias `EDITDRAWINGSETTINGS`, and a
+     **File ▸ Drawing Settings…** menu item open the window. The menu item is disabled on the Start
+     tab exactly as Save is (REQ-308); the typed command on the Start tab is refused with a message
+     (REQ-201). The Toolspace palette's "Drawing Settings — not implemented yet" button opens it too.
+  2. **Window.** A modal window in GoSurvey's own dialog style (`BeginStyledDialog` + the product
+     accent frame, as What's New / Account Details), titled `Drawing Settings - <drawing name>`, with
+     three tabs — **Units and Zone**, **Transformation**, **Object Layers** — and **OK** (apply and
+     close), **Cancel** / Esc (discard, nothing changes) and **Apply** (apply, stay open). No Help
+     button. A tab whose requirement is not yet delivered shows its title greyed with a *not
+     implemented yet* tooltip (REQ-084). Civil 3D's Abbreviations and Ambient Settings tabs are out.
+  3. **Edits are staged.** The window edits a copy of the drawing's settings; only OK and Apply write
+     them to the drawing. A write that changes anything marks the drawing dirty and is **one undo
+     step**.
+  4. **Units and Zone — top section:**
+     - **Drawing units** ∈ {Unitless, Inches, Feet, Meters, Millimeters}. This **is**
+       `AppCommandState::drawingInsUnits` (REQ-022) — one value, never a second copy. The UNITS
+       dialog (REQ-020) gains Inches and Millimeters so both windows offer the same list. Changing it
+       is a relabel and moves no geometry (REQ-022). DXF writes `$INSUNITS` Inches=1, Millimeters=4.
+     - **Angular units** ∈ {Degrees, Radians, Grads} — a per-drawing value used by the angle fields
+       of this window (REQ-360) and written as the DWG/DXF `AUNITS` header when item 5 is on. It does
+       **not** change REQ-021's app-wide angle display format, which stays a user preference.
+     - **Imperial to Metric conversion** ∈ {US Survey Foot (1 m = 39.37 in exactly), International
+       Foot (1 ft = 0.3048 m exactly)}, default US Survey Foot. It is the factor every feet↔meters
+       conversion in the drawing uses: INSERT's unit scale factor (`CadBlockInsertUnitsScale`, today a
+       fixed international 39.3700787 in/m) and the zone conversions of REQ-358/REQ-360. The factor
+       is computed in `double`.
+     - **Scale**: a list filtered by the drawing unit — imperial `1" = 1'`, `5'`, `10'`, `20'`, `30'`,
+       `40'`, `50'`, `60'`, `100'`, `200'`, `500'`, `1000'`; metric `1:1`, `1:10`, `1:20`, `1:50`,
+       `1:100`, `1:200`, `1:250`, `1:500`, `1:1000`, `1:2000`, `1:5000` — plus **Custom**, which
+       enables a **Custom scale** number (> 0; anything else is refused). Default `1" = 40'` / `1:500`.
+       The scale is **stored and reported only** in this increment; annotation scaling that consumes
+       it is future work under its own requirement.
+     - ☐ **Scale objects inserted from other drawings** (default on). Off → INSERT's unit scale factor
+       is 1 whatever the block's unit; on → today's behaviour.
+     - ☐ **Set drawing variables to match** (default on). On → DWG/DXF save writes `INSUNITS`,
+       `LUNITS` (2, decimal) and `AUNITS` (0 degrees, 3 radians, 2 grads) from these settings; off →
+       only `INSUNITS` is written, as today.
+  5. **Per drawing.** The settings live on the drawing: in `DrawingDocument` for tab isolation (the
+     same boundary as `cadPipeRuns`, so each tab keeps its own) and in the ADR-044 trailer JSON under
+     a `drawingSettings` object. A drawing without that object opens with the defaults above.
+- Acceptance:
+  - `DRAWINGSETTINGS`, `EDITDRAWINGSETTINGS`, File ▸ Drawing Settings… and the Toolspace button all
+    open the window; the menu item is disabled and the command refused on the Start tab;
+  - Cancel changes nothing; Apply changes the drawing and keeps the window open; OK applies and
+    closes; one UNDO restores the previous settings;
+  - changing Drawing units in this window shows the same value in UNITS and vice versa, and moves no
+    coordinate (a known line's endpoints are identical within REQ-101);
+  - with US Survey Foot a 1 m block inserted into a feet drawing scales by 3.280833333…; with
+    International Foot by 3.280839895…; with "Scale objects inserted…" off by 1;
+  - a Custom scale of 0 or text is refused; every setting survives DWG save → close → reopen, and
+    two open drawings keep different settings when switching tabs;
+  - with "Set drawing variables to match" on, a saved DXF carries `$AUNITS` matching Angular units.
+- Owner-layer: Commands (`src/commands/CadCommands.{hpp,cpp}` — settings struct, apply + undo),
+  IO (`src/io/GsIo.cpp` trailer JSON, `src/io/DxfIo.cpp` / `LibreDwgCad.cpp` headers), UI
+  (`src/ui/` window, File menu, Toolspace button).
+- Status: proposed (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed.
+
+### REQ-358 — Coordinate-system zone from the CS-MAP catalogue; a drawing becomes geolocated (GitHub issue #582, increment 2)
+
+- Purpose: issue #582 — let a drawing carry a coordinate system (zone) chosen from the **complete**
+  CS-MAP catalogue, with the same codes and categories Civil 3D uses, so drawings exchanged with
+  Civil 3D keep their zone.
+- Priority: should
+- Type: functional
+- Depends on: REQ-357, REQ-300 (dependency), REQ-101, ADR-063.
+- Decision: D-2026-09-29-b.
+- Statement:
+  1. **CS-MAP is vendored** per ADR-063: `third_party/csmap/` holds its headers and a prebuilt
+     win-x64 `.lib` with `VENDORED.md` and the upstream `LICENSE`; the installer ships the compiled
+     CS-MAP dictionaries **and the datum-shift grid files** whose licence permits redistribution
+     (NADCON, HARN/HPGN and the other grids CS-MAP's default configuration references), and the
+     installer's licence page carries CS-MAP's notice. All CS-MAP calls go through one GoSurvey
+     wrapper (`src/geo/`); no other file includes a CS-MAP header.
+  2. **Zone group** on the Units and Zone tab:
+     - **Categories**: `No Datum, No Projection`, then `Lat Longs`, then **every** category in the
+       shipped dictionary, in the dictionary's order (Afghanistan … Zimbabwe, sub-categories such as
+       `USA, Texas` included). The list is read from the dictionary, never hard-coded.
+     - **Available coordinate systems**: every system in the selected category.
+     - Read-only details: **Selected coordinate system code** (e.g. `HARN/TX.TX-C`), **Description**,
+       **Projection** (CS-MAP projection key, e.g. `LM`), **Datum**. The code field is also typeable:
+       Enter or leaving the field with a known code selects its category and system; an unknown code
+       is refused with a message and the selection is unchanged.
+     - With `No Datum, No Projection` the details read `.`, `No Datum, No Projection`, `Unknown
+       projection`, `Unknown Datum`.
+  3. **Geolocated.** A drawing is *geolocated* exactly when its zone code is not empty (not `No
+     Datum, No Projection`). Choosing or changing a zone is a relabel: it moves no geometry.
+  4. **Grid and geographic coordinates.** A drawing point's **grid** coordinate is its world
+     coordinate (`local + worldDocumentOrigin`, in `double`, REQ-101), converted from the drawing unit
+     to the zone's unit with REQ-357's Imperial to Metric factor, then passed through REQ-360's
+     transformation when that is applied. Its **latitude/longitude** is CS-MAP's inverse projection
+     of the grid coordinate in the zone's own datum. Conversion to and from WGS 84 (`LL84`) uses
+     CS-MAP's datum path, including the shipped grid files.
+  5. **Stored** as the zone's CS-MAP code in the `drawingSettings` trailer object (REQ-357) and in
+     `DrawingDocument`. A code the installed dictionary does not know is kept, shown as
+     `<code> (unknown in this dictionary)`, and the drawing is still geolocated — nothing is silently
+     dropped (REQ-201).
+  6. **Missing dictionary.** If the dictionaries cannot be loaded, the Zone group is disabled with the
+     reason shown, and nothing else in the window is affected.
+- Acceptance:
+  - the Categories list equals the shipped dictionary's category list, with `No Datum, No
+    Projection` and `Lat Longs` first;
+  - `USA, Texas` lists every Texas system in the dictionary, including the NAD27, NAD83,
+    NAD83(HARN), NSRS 2007 and NSRS 2011 state-plane zones in Meter and US Foot;
+  - selecting `HARN/TX.TX-C` shows its description, `LM` and `HARN/TX`; typing `TX83-CF` selects its
+    category and system; typing `NOSUCH` is refused;
+  - a published NGS control point in Texas Central NAD83 (the test records the PID and datasheet
+    values) converts grid → lat/long and back within 0.001 ft and 0.00001″ of the datasheet;
+  - a NAD27 point converts to NAD83 through the shipped NADCON grid within NADCON's stated accuracy of
+    NGS's own NADCON output for the same point (recorded in the test);
+  - the zone survives DWG save → close → reopen; two tabs keep different zones; choosing a zone
+    moves no coordinate.
+- Owner-layer: new `src/geo/` (CS-MAP wrapper, pure, no UI), Commands, IO (trailer), UI (Zone
+  group), build (`third_party/csmap/`, `CMakeLists.txt`), installer (`installer/GoSurvey.iss`).
+- Status: proposed (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed.
+
+### REQ-359 — Geolocation contextual ribbon tab (GitHub issue #582, increment 3)
+
+- Purpose: issue #582 — Civil 3D shows a **Geolocation** tab on a geolocated drawing; GoSurvey
+  should too, with the online-map controls present but deferred to issue #583.
+- Priority: should
+- Type: functional
+- Depends on: REQ-358, REQ-143 (contextual tab pattern), REQ-084.
+- Decision: D-2026-09-29-b.
+- Statement:
+  1. While the active drawing is geolocated (REQ-358 item 3), the ribbon gains a contextual
+     **Geolocation** tab. It is not a persisted prefs slot (as REQ-143). It does not steal focus from
+     a tab the user is on; it appears at the end of the strip.
+  2. **Location** panel:
+     - **Edit Location** — split button: the main action opens Drawing Settings on Units and Zone;
+       the second item, **Edit Geographic Marker**, re-picks the marker (item 4).
+     - **Reorient Marker** — picks a point then a north direction for the marker.
+     - **Remove Location** — asks for confirmation, then sets the zone to `No Datum, No Projection`
+       and clears the marker, as one undo step; the tab disappears.
+  3. **Tools** panel: **Mark Position** — split button: **Lat-Long** (type a latitude and longitude)
+     and **Point** (pick a point). Either places a position marker: a survey-point-style node plus
+     a label reading the latitude and longitude (REQ-358 item 4, in the zone's datum), created as
+     ordinary GoSurvey geometry on the current layer.
+  4. **The geographic marker** is the drawing's geolocation reference — a design point in the drawing
+     and a north direction — drawn as a viewport overlay glyph, not an entity. By default it is the
+     drawing origin with grid north. It is stored with the zone (REQ-358 item 5) and is what REQ-362
+     writes as GEODATA's design point and north direction.
+  5. **Online Map** panel: a **Map** dropdown showing **Map Off** and a **Capture Area** button, both
+     disabled with a *not implemented yet* tooltip (REQ-084). They are delivered by issue #583.
+- Acceptance:
+  - assigning a zone shows the tab; Remove Location (confirmed) hides it, clears the zone, and one
+    UNDO brings both back; switching to a non-geolocated drawing tab hides it;
+  - Edit Location opens Drawing Settings on Units and Zone;
+  - Mark Position ▸ Lat-Long at the NGS point of REQ-358's test places a marker at that point's grid
+    coordinate within 0.001 ft, labelled with its latitude/longitude;
+  - Map and Capture Area are visible, disabled, and show *not implemented yet*.
+- Owner-layer: UI (`src/ui/` ribbon tab + marker overlay), Commands (Remove Location, Mark Position,
+  marker pick).
+- Status: proposed (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed.
+
+### REQ-360 — Transformation tab: local ↔ grid with scale factor, sea-level factor and rotation (GitHub issue #582, increment 4)
+
+- Purpose: issue #582 — relate a drawing's local (ground) coordinates to the zone's grid coordinates,
+  as Civil 3D's Transformation tab does.
+- Priority: should
+- Type: functional
+- Depends on: REQ-358, REQ-101, REQ-021 (angle entry convention).
+- Decision: D-2026-09-29-b.
+- Statement:
+  1. The tab shows the **Zone description** (read-only) and ☐ **Apply transform settings**; every
+     control below it is disabled until that is checked. With no zone, the line *Zone units are in
+     Unknown.* is shown and the checkbox is disabled.
+  2. **The transformation** (all in `double`, drawing unit converted to the zone unit by REQ-357's
+     factor):
+     `grid = G_ref + k · R(θ) · (L − L_ref)` and its exact inverse, where `L` is a world coordinate,
+     `L_ref`/`G_ref` the reference point's local and grid coordinates, `R(θ)` a rotation by θ, and
+     `k = k_grid · k_sea`.
+  3. ☐ **Apply sea level scale factor**: `k_sea = R / (R + h)` with **Elevation** `h` (drawing unit)
+     and **Spheroid radius** `R` (meters, default the zone datum ellipsoid's semi-major axis). Off →
+     `k_sea = 1`.
+  4. **Grid Scale Factor**: **Computation** ∈ {Reference Point, User Defined}. Reference Point →
+     `k_grid` is CS-MAP's point scale factor at `G_ref`; User Defined → typed (> 0).
+  5. **Reference point**: a pick button (a point, or a survey point, in the drawing) sets `L_ref`;
+     the readout shows *Point number* (survey point only), *Local Northing / Easting* and *Grid
+     Northing / Easting*, and the grid pair is typeable.
+  6. **Rotation**, one of:
+     - ◯ **Rotation point**: a second picked point with typed grid coordinates; θ is the difference
+       between its grid and local bearings from the reference point. Coincident points are refused;
+     - ◉ **Specify grid rotation angle**: **To north** (the angle from local north to grid north) or
+       **Azimuth** (a local azimuth and the grid azimuth it should become), each with a pick button;
+       angles are entered and shown in the drawing's Angular units (REQ-357).
+  7. When applied, every grid/lat-long computation (REQ-358 item 4, REQ-359 markers) uses it. It is
+     stored in `drawingSettings` and moves no geometry.
+- Acceptance:
+  - with the transform off, grid = world converted to zone units;
+  - a hand-computed case (reference point, k = 0.9999, θ = 1°) maps a local point to the expected
+    grid within 0.0001 ft and back to itself within 1e-9 relative;
+  - Reference Point computation returns CS-MAP's scale factor at the NGS test point within 1e-8 of
+    the datasheet's; `R = 20,906,000 ft`, `h = 1000 ft` gives `k_sea = 0.999952…`;
+  - a rotation point coincident with the reference point is refused;
+  - all settings survive DWG save → reopen; every control is disabled until Apply transform settings
+    is checked.
+- Owner-layer: `src/geo/` (pure transformation + scale factor), Commands, UI (tab), IO (trailer).
+- Status: proposed (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed.
+
+### REQ-361 — Object Layers tab: per-object creation layers with NCS defaults (GitHub issue #582, increment 5)
+
+- Purpose: issue #582 — Civil 3D puts each new object on a layer set per drawing; today GoSurvey
+  puts every new object on the current layer (survey points imported from CSV on `0`).
+- Priority: should
+- Type: functional
+- Depends on: REQ-357, REQ-356 (current layer/colour stamping).
+- Decision: D-2026-09-29-b (user chose NCS-style defaults, a deliberate behaviour change).
+- Statement:
+  1. A grid with the columns **Object | Layer | Modifier | Value | Locked**, one row per GoSurvey
+     object type below, each row showing the ribbon icon of that type:
+
+     | Object | Default layer |
+     |---|---|
+     | Survey point | `V-NODE` |
+     | Survey point label | `V-NODE-TEXT` |
+     | TIN surface | `C-TOPO` |
+     | Feature line | `C-TOPO-FEAT` |
+     | Pipe run | `C-PIPE` |
+     | Pipe fitting | `C-PIPE-FITT` |
+     | Solid | `C-SOLID` |
+     | Table | `C-ANNO-TABL` |
+
+     A breakline is not a row: it designates an existing line or polyline and creates no object.
+  2. **Layer**: a combo of the drawing's layers, or a typed new name. **Modifier** ∈ {None, Prefix,
+     Suffix}; **Value** is text, where each `*` is replaced by the new object's name (e.g. surface
+     `EG`, Suffix `-*` → `C-TOPO-EG`). An object with no name drops the `*`. **Locked** is a padlock
+     toggle.
+  3. **Every path that creates one of these objects** — command, dialog, palette, CSV/point import —
+     places it on the resolved layer, creating the layer (default properties) if it does not exist.
+     The new layer creation and the object are one undo step. REQ-356's current colour still applies.
+  4. A creation dialog that offers a layer choice defaults to the resolved layer; with **Locked** on,
+     that choice is read-only.
+  5. The info line *"Enter a single \* (asterisk) in the value field to include the object name as
+     the prefix or suffix value in a layer name."* is shown. ☐ **Immediate and independent layer
+     on/off control of display components** is shown disabled with *not implemented yet* (REQ-084).
+  6. The table is stored in `drawingSettings`. A drawing without it opens with the defaults above —
+     including existing drawings, whose new objects therefore start landing on these layers.
+- Acceptance:
+  - in a new drawing, a new survey point lands on `V-NODE`, a new TIN surface `EG` with Suffix `-*`
+    on `C-TOPO-EG`, a new pipe run on `C-PIPE` — each layer created if missing, one UNDO removing
+    object and layer;
+  - CSV-imported survey points land on the Survey point row's layer;
+  - a Locked row makes the creation dialog's layer choice read-only;
+  - the table survives DWG save → reopen and differs per drawing tab.
+- Owner-layer: Commands (a single resolve-creation-layer function used by every creation path), UI
+  (tab), IO (trailer).
+- Status: proposed (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed.
+
+### REQ-362 — GEODATA round-trip: read Civil 3D's geolocation, write ours (GitHub issue #582, increment 6)
+
+- Purpose: issue #582 open question 1, decided "full two-way": a Civil 3D drawing opened in GoSurvey
+  keeps its zone, and a GoSurvey drawing opened in Civil 3D / AutoCAD shows its location.
+- Priority: should
+- Type: interop
+- Depends on: REQ-358, REQ-359 item 4, REQ-360, REQ-170 / REQ-175 / ADR-041 / ADR-044.
+- Decision: D-2026-09-29-b.
+- Statement:
+  1. **Read.** Opening a DWG (with or without a GoSurvey trailer) that contains an AutoCAD `GEODATA`
+     object sets the zone from its coordinate-system definition, the geographic marker from its
+     design point and north direction, and — when present — REQ-360's scale and rotation. A trailer
+     zone wins over GEODATA when both exist and disagree, and the disagreement is reported (REQ-201).
+     A GEODATA whose coordinate system is not in the dictionary follows REQ-358 item 5.
+  2. **Write.** Saving a geolocated drawing writes a `GEODATA` object (with its class and the
+     named-object-dictionary entry AutoCAD expects) carrying the zone, marker, scale and rotation.
+     Saving a non-geolocated drawing writes none.
+  3. **Feasibility gate.** LibreDWG has no API to create a GEODATA object (`HAVE_NO_DWG_ADD_GEODATA`)
+     and GoSurvey writes R2000/R2004 DWG (D-2026-08-29-g), while AutoCAD introduced GEODATA in the
+     2009 releases. The first task of this increment is a spike proving that a GEODATA written into
+     GoSurvey's DWG is read by AutoCAD / Civil 3D. If it is not, work stops and a SPEC GAP is raised
+     (options then include a newer write version or a trailer-only write) — it is not worked around
+     silently.
+- Acceptance:
+  - `samples/` gains a Civil 3D DWG with a known GEODATA zone; opening it shows that zone and marker;
+  - a GoSurvey drawing in `TX83-CF` saved and opened in Civil 3D shows Texas Central NAD83 US Foot
+    with the marker at the same design point (manual check, recorded in the task);
+  - save → reopen in GoSurvey reproduces zone, marker, scale and rotation from GEODATA alone (trailer
+    removed) within REQ-101.
+- Owner-layer: IO (`src/io/LibreDwgCad.cpp`, `src/io/DwgIo`), `src/geo/` (CS definition ↔ code).
+- Status: proposed (2026-09-29) — D-2026-09-29-b.
+- Revisions: 2026-09-29 — proposed.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
