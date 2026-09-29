@@ -10156,10 +10156,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Statement:
   1. **CS-MAP is vendored** per ADR-063: `third_party/csmap/` holds its headers and a prebuilt
      win-x64 `.lib` with `VENDORED.md` and the upstream `LICENSE`; the installer ships the compiled
-     CS-MAP dictionaries **and the datum-shift grid files** whose licence permits redistribution
-     (NADCON, HARN/HPGN and the other grids CS-MAP's default configuration references), and the
-     installer's licence page carries CS-MAP's notice. All CS-MAP calls go through one GoSurvey
-     wrapper (`src/geo/`); no other file includes a CS-MAP header.
+     CS-MAP dictionaries **and the United States horizontal datum-shift grid files** (NADCON,
+     HARN/HPGN, NSRS 2007, NSRS 2011, plus the VERTCON files CS-MAP's NADCON setup requires — public
+     domain), all committed under `third_party/csmap/` (D-2026-09-29-d), and the installer's licence
+     page carries CS-MAP's notice. Other countries' grids are not shipped: a datum shift that needs
+     one fails with a message (REQ-201). All CS-MAP calls go through one GoSurvey wrapper
+     (`src/geo/`); no other file includes a CS-MAP header.
   2. **Zone group** on the Units and Zone tab:
      - **Categories**: `No Datum, No Projection`, then `Lat Longs`, then **every** category in the
        shipped dictionary, in the dictionary's order (Afghanistan … Zimbabwe, sub-categories such as
@@ -10200,8 +10202,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
     moves no coordinate.
 - Owner-layer: new `src/geo/` (CS-MAP wrapper, pure, no UI), Commands, IO (trailer), UI (Zone
   group), build (`third_party/csmap/`, `CMakeLists.txt`), installer (`installer/GoSurvey.iss`).
-- Status: accepted (2026-09-29) — D-2026-09-29-b.
-- Revisions: 2026-09-29 — proposed and accepted.
+- Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-d, TASK-291.
+- Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — item 1 narrowed (D-2026-09-29-d): the
+  data files are committed to the repository and only the US horizontal grids ship.
 
 ### REQ-359 — Geolocation contextual ribbon tab (GitHub issue #582, increment 3)
 
