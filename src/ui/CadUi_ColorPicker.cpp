@@ -117,6 +117,11 @@ void ApplyPickerResult(AppCommandState& cmd, const std::string& storage) {
   case T::QuickSelectValue:
     std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", storage.c_str());
     break;
+  case T::RibbonColor: {  // REQ-356: a selection is recoloured; with none, the current colour is set
+    std::vector<std::string> ignoredLog;
+    CadRibbonPickColor(cmd, storage, ignoredLog);
+    break;
+  }
   default:
     break;
   }

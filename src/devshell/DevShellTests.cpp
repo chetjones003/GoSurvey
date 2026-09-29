@@ -4,6 +4,7 @@
 
 #include "CadBlocks.hpp"
 #include "CadUi.hpp"
+#include "CadColor.hpp"
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "util/cadblock.hpp"
@@ -1304,6 +1305,8 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     }
     IM_CHECK(anchored);
     IM_CHECK(CancelToIdle(ctx));
+  };
+
   // REQ-355 (issue #564 section 8): the Modeling tab's buttons clicked for real — a primitive, a
   // second button while the first runs (it must cancel and start), the size dropdown, and the
   // ribbon PIPERUN going straight to its start point. Run with:
@@ -1345,6 +1348,64 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(CancelToIdle(ctx));
     s_cmd->pipeRunNominalSize = "4in";
     IM_CHECK(ClickHomeTab(ctx));
+  };
+
+  // REQ-356 (GitHub issue #575) — the ribbon colour combo and Match Properties, through the real
+  // ribbon. Unit tests call CadRibbonPickColor directly; only this reaches the combo's ids and shows
+  // whether a second row fits in the Layers strip.
+  //   GoSurvey.exe --devshell-run req356-ribbon-color
+  ImGuiTest* ribbonColor = IM_REGISTER_TEST(engine, "gosurvey", "req356-ribbon-color");
+  ribbonColor->TestFunc = [](ImGuiTestContext* ctx) {
+    // Opens the combo and clicks one colour. Not ComboClick: the combo's id carries its PushID scope
+    // ("RibbonColorCombo/..."), and ComboClick splits the path at the FIRST '/'. Each item is under
+    // its own PushID (the colour's storage string), as ComboClick's `**` would otherwise find.
+    const auto pickColor = [ctx](const char* storage, const char* label) {
+      IM_CHECK_NO_RET(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonLayerStrip"));
+      ctx->ItemClick("RibbonColorCombo/##ribboncolorpick");
+      ImGuiWindow* popup = ctx->GetWindowByRef("//$FOCUSED");
+      IM_CHECK_NO_RET(popup != nullptr);
+      if (popup)
+        ctx->ItemClick((std::string("//") + popup->Name + "/" + storage + "/" + label).c_str());
+      ctx->Yield(2);
+    };
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    IM_CHECK(ClickHomeTab(ctx));
+    ctx->Yield(6);
+    ClearCadSelection(*s_cmd);
+
+    // Nothing selected: the pick sets the current colour, and a new line is drawn in it.
+    pickColor("ACI:1", "Red");
+    IM_CHECK(s_cmd->currentColor == CadColorStorageFromAci(1));
+    SubmitCad(ctx, "LINE");
+    SubmitCad(ctx, "0,0");
+    SubmitCad(ctx, "100,50");
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(!s_cmd->userLineAttrs.empty());
+    IM_CHECK(s_cmd->userLineAttrs.back().color == CadColorStorageFromAci(1));
+    DevShell_RequestScreenshot("req356-ribbon-current-red.bmp");
+    ctx->Yield(3);
+
+    // With the line selected the combo recolours it and leaves the current colour alone.
+    SelectedEntity e;
+    e.type = SelectedEntity::Type::LineSeg;
+    e.index = static_cast<int>(s_cmd->userLineAttrs.size()) - 1;
+    s_cmd->selection = {e};
+    ctx->Yield(2);
+    pickColor("ACI:5", "Blue");
+    IM_CHECK(s_cmd->userLineAttrs.back().color == CadColorStorageFromAci(5));
+    IM_CHECK(s_cmd->currentColor == CadColorStorageFromAci(1));
+    DevShell_RequestScreenshot("req356-ribbon-selection-blue.bmp");
+    ctx->Yield(3);
+
+    // Match Properties is a real button now.
+    ClearCadSelection(*s_cmd);
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecClipboard"));
+    ctx->ItemClick("##RibbonLayout_##ClipMatchProps");
+    ctx->Yield(2);
+    IM_CHECK(s_cmd->active == AppCommandState::Kind::MatchProp);
+    IM_CHECK(CancelToIdle(ctx));
+    s_cmd->currentColor = "ByLayer";
   };
 
   ImGuiTest* t272 = IM_REGISTER_TEST(engine, "gosurvey", "dwg-shaded-shots");

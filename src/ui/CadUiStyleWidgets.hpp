@@ -10,6 +10,8 @@
 // Nothing here knows about a document: these are lists of what the product offers, and every
 // consumer maps them onto its own storage field.
 
+#include "CadEntities.hpp"
+
 #include <cmath>
 #include <cstdio>
 #include <cstddef>
@@ -35,8 +37,7 @@ inline constexpr int kNamedColorCount =
 
 inline constexpr const char* kEntityLinetypeLabels[] = {"By Layer", "By Block", "Continuous", "Dashed", "Hidden", "Center",
                                             "Phantom", "Divide", "Border"};
-inline constexpr const char* kEntityLinetypeStorage[] = {"ByLayer", "ByBlock", "Continuous", "DASHED", "HIDDEN", "CENTER",
-                                               "PHANTOM", "DIVIDE", "BORDER"};
+// kEntityLinetypeStorage lives in commands/CadEntities.hpp: CHPROP validates against it (REQ-356).
 inline constexpr int kEntityLinetypeCount =
     static_cast<int>(sizeof(kEntityLinetypeLabels) / sizeof(kEntityLinetypeLabels[0]));
 
@@ -46,9 +47,8 @@ inline constexpr const char* kLayerLinetypeStorage[] = {"Continuous", "DASHED", 
 inline constexpr int kLayerLinetypeCount =
     static_cast<int>(sizeof(kLayerLinetypeLabels) / sizeof(kLayerLinetypeLabels[0]));
 
-inline constexpr float kUiLineweightMmPresets[] = {
-    -1.f,  0.f,   0.05f, 0.09f, 0.13f, 0.15f, 0.18f, 0.20f, 0.25f, 0.30f, 0.35f, 0.40f,
-    0.50f, 0.53f, 0.60f, 0.70f, 0.80f, 0.90f, 1.00f, 1.06f, 1.20f, 1.40f, 1.58f, 2.00f, 2.11f};
+// The ladder itself is commands/CadEntities.hpp's, which CHPROP validates against (REQ-356).
+inline constexpr const auto& kUiLineweightMmPresets = kEntityLineweightMmPresets;
 inline constexpr int kUiLineweightPresetCount =
     static_cast<int>(sizeof(kUiLineweightMmPresets) / sizeof(kUiLineweightMmPresets[0]));
 
