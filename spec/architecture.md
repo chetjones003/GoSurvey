@@ -4636,7 +4636,8 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
       win-x64 Release `/MD` `.lib`, `VENDORED.md` (upstream URL, tag, rebuild recipe, dictionary
       compile recipe) and `LICENSE`. The compiled dictionaries and the redistributable datum-shift grid
       files are **installer payload**, not build inputs, installed beside the executable; tests find
-      them through the build tree.
+      them through the build tree. They are committed under `third_party/csmap/dictionaries/`, and
+      only the US horizontal grids are included (D-2026-09-29-d).
   (c) **One wrapper, `src/geo/`**, a pure layer with no UI or GL: category/system enumeration, code
       lookup, forward/inverse projection, point scale factor, datum shift, and REQ-360's local ↔ grid
       transformation. It is the only code that includes a CS-MAP header, so replacing or updating

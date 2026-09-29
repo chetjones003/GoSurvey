@@ -181,6 +181,19 @@ set_property(TARGET libredwg APPEND PROPERTY
 add_library(LibreDWG::libredwg ALIAS libredwg)
 message(STATUS "LibreDWG 0.13.3 vendored (prebuilt third_party/libredwg/lib/win-x64/libredwg.lib)")
 
+# --- CS-MAP: vendored headers + prebuilt static lib + dictionaries (REQ-358 / ADR-063) ---
+# OSGeo MetaCRS CS-MAP, the coordinate-system catalogue and projection engine. Prebuilt MSVC x64
+# Release /MD static lib, like LibreDWG. Its headers are NOT an interface include directory: only
+# src/geo/CoordinateSystems.cpp may include them (ADR-063 (c)), so they are added to that one source
+# below. The compiled dictionaries and the US grid files (D-2026-09-29-d) are staged beside the
+# executable as resources/csmap/ — installer payload and what the tests load.
+set(GOSURVEY_CSMAP_DIR "${GOSURVEY_TP}/csmap")
+add_library(csmap STATIC IMPORTED GLOBAL)
+set_target_properties(csmap PROPERTIES
+  IMPORTED_LOCATION "${GOSURVEY_CSMAP_DIR}/lib/win-x64/csmap.lib")
+add_library(CsMap::csmap ALIAS csmap)
+message(STATUS "CS-MAP r3078 vendored (prebuilt third_party/csmap/lib/win-x64/csmap.lib)")
+
 # --- Xerces-C: vendored headers + prebuilt static lib (dependency of libE57Format) ---
 if(NOT EXISTS "${GOSURVEY_TP}/xerces-c/lib/win-x64/xerces-c_3.lib")
   message(FATAL_ERROR "REQ-172: third_party/xerces-c/lib/win-x64/xerces-c_3.lib is missing. See third_party/xerces-c/VENDORED.md.")
@@ -380,6 +393,8 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # I/O
   src/io/GsIo.cpp
+  # Coordinate systems — the one CS-MAP wrapper (REQ-358 / ADR-063)
+  src/geo/CoordinateSystems.cpp
   # User preferences. In the domain set for UserDataDirectory(), which the BENCH command writes its
   # results through — pure <filesystem>, no window.
   src/io/UserPrefs.cpp
@@ -485,7 +500,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${NLOHMANN_JSON_INCLUDE}
   ${CMAKE_BINARY_DIR}/generated
 )
-target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format)
+target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format CsMap::csmap)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32, no glfw — the windowed app adds those itself.
@@ -601,6 +616,7 @@ target_link_libraries(GoSurvey PRIVATE
   pdfium
   LibreDWG::libredwg
   E57Format::E57Format
+  CsMap::csmap
   md4c
 )
 target_include_directories(GoSurvey PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/devshell)
@@ -617,6 +633,15 @@ if(GOSURVEY_DEVELOPER_SHELL)
 else()
   target_link_libraries(GoSurvey PRIVATE gosurvey_domain)
 endif()
+
+# ADR-063 (c): the only source that sees CS-MAP's headers. No PCH: cs_map.h is a C header with its
+# own platform macros, kept out of the shared precompiled header.
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+  APPEND PROPERTY INCLUDE_DIRECTORIES "${GOSURVEY_CSMAP_DIR}/include")
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+  PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+  APPEND PROPERTY COMPILE_DEFINITIONS WIN32 _WINDOWS)
 
 if(TARGET libredwg)
   set_property(SOURCE
@@ -777,6 +802,22 @@ add_custom_command(
   COMMENT "Stage bundled resources beside GoSurvey executable")
 add_custom_target(gosurvey_stage_resources DEPENDS "${_GOSURVEY_RESOURCE_STAMP}")
 add_dependencies(GoSurvey gosurvey_stage_resources)
+
+# CS-MAP dictionaries + US grid files (REQ-358, D-2026-09-29-d) → resources/csmap/. Their own stamp:
+# ~230 MB is copied only when one of them changes, not on every resource edit.
+file(GLOB_RECURSE GOSURVEY_CSMAP_DICTIONARY_FILES CONFIGURE_DEPENDS "${GOSURVEY_CSMAP_DIR}/dictionaries/*")
+set(_GOSURVEY_CSMAP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_csmap.stamp")
+add_custom_command(
+  OUTPUT "${_GOSURVEY_CSMAP_STAMP}"
+  DEPENDS ${GOSURVEY_CSMAP_DICTIONARY_FILES}
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_CURRENT_BINARY_DIR}/resources/csmap"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${GOSURVEY_CSMAP_DIR}/dictionaries"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/csmap"
+  COMMAND ${CMAKE_COMMAND} -E touch "${_GOSURVEY_CSMAP_STAMP}"
+  COMMENT "Stage CS-MAP dictionaries beside GoSurvey executable")
+add_custom_target(gosurvey_stage_csmap DEPENDS "${_GOSURVEY_CSMAP_STAMP}")
+add_dependencies(GoSurvey gosurvey_stage_csmap)
 
 # Copy pdfium.dll next to the executable so it can be found at runtime.
 if(WIN32)
@@ -1276,6 +1317,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PropertyCommandTests.cpp
     # REQ-357 / D-2026-09-29-b,c — the Drawing Settings window (issue #582 increment 1).
     tests/DrawingSettingsTests.cpp
+    # REQ-358: the CS-MAP wrapper + the zone as drawing data (loads the staged dictionary).
+    tests/CoordinateSystemsTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp
@@ -1322,7 +1365,9 @@ if(GOSURVEY_BUILD_TESTS)
   )
   target_link_libraries(GoSurveySnapTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
   target_compile_definitions(GoSurveySnapTests PRIVATE
-    GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
+    GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
+    GOSURVEY_CSMAP_DICTIONARY_DIR="${CMAKE_CURRENT_BINARY_DIR}/resources/csmap")
+  add_dependencies(GoSurveySnapTests gosurvey_stage_csmap)  # REQ-358 tests load the staged copy
   gosurvey_target_warnings(GoSurveySnapTests)
   gosurvey_enable_pch(GoSurveySnapTests)
   catch_discover_tests(GoSurveySnapTests)

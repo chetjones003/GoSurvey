@@ -1,10 +1,12 @@
 // Drawing Settings window (REQ-357, GitHub issue #582 increment 1): the drawing's units, scale and
 // settings. The window edits a staged copy; only OK and Apply write it to the drawing, through
-// ApplyDrawingSettings (one undo step). The Transformation and Object Layers tabs, and the Zone
-// group, arrive with REQ-358..REQ-361 and are shown greyed until then (REQ-084).
+// ApplyDrawingSettings (one undo step). The Zone group (REQ-358) picks the drawing's coordinate
+// system from the CS-MAP catalogue through src/geo/. The Transformation and Object Layers tabs
+// arrive with REQ-360 / REQ-361 and are shown greyed until then (REQ-084).
 
 #include "CadUi.hpp"
 #include "CadUiHelpers.hpp"
+#include "geo/CoordinateSystems.hpp"
 #include "util/PlotScales.hpp"
 
 #include <imgui.h>
@@ -13,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <initializer_list>
 #include <string>
 #include <vector>
@@ -22,13 +25,58 @@ namespace {
 constexpr const char* kPopupId = "###GoSurveyDrawingSettings";
 constexpr const char* kNotImplemented = "Not implemented yet.";
 
+/// The read-only details of the staged zone (REQ-358 item 2).
+struct ZoneDetails {
+  std::string description, projection, datum;
+};
+
+ZoneDetails DetailsOf(const std::string& code) {
+  if (code.empty())
+    return {geo::kNoZoneCategory, "Unknown projection", "Unknown Datum"};
+  if (const auto info = geo::FindCoordinateSystem(code))
+    return {info->description, info->projection, info->datum};
+  // Kept, never dropped (REQ-358 item 5): the drawing is still geolocated.
+  return {code + " (unknown in this dictionary)", "Unknown projection", "Unknown Datum"};
+}
+
 struct StagedDrawingSettings {
   int             insUnits = 2;
   float           modelUnitsPerPlottedInch = 50.f;
   bool            customScale = false;
   char            customScaleText[32] = {};
   DrawingSettings settings;
+  // Zone group (REQ-358): the category shown, the systems it lists (code + description, loaded once
+  // per category change, not per frame), the code field and its last refusal.
+  std::string              category;  ///< Empty = No Datum, No Projection (or an unknown code).
+  std::vector<std::string> systemCodes;
+  std::vector<std::string> systemLabels;
+  char                     codeText[64] = {};
+  std::string              codeError;
+  ZoneDetails              details;  ///< Looked up once per selection, not every frame.
 };
+
+void LoadCategory(StagedDrawingSettings& s, const std::string& category) {
+  s.category = category;
+  s.systemCodes = category.empty() ? std::vector<std::string>{} : geo::CoordinateSystemsIn(category);
+  s.systemLabels.clear();
+  for (const std::string& code : s.systemCodes) {
+    const auto info = geo::FindCoordinateSystem(code);
+    s.systemLabels.push_back(info && !info->description.empty() ? info->description : code);
+  }
+}
+
+/// Show \p code (empty = no zone) in the Zone group: its category, its list and the code field.
+void SelectZone(StagedDrawingSettings& s, const std::string& code) {
+  s.settings.zoneCode = code;
+  s.details = DetailsOf(code);
+  s.codeError.clear();
+  std::snprintf(s.codeText, sizeof(s.codeText), "%s", code.empty() ? "." : code.c_str());
+  // Keep the category being browsed when it lists the code (a code can be in several categories).
+  for (const std::string& c : s.systemCodes)
+    if (!code.empty() && c == code)
+      return;
+  LoadCategory(s, code.empty() ? std::string() : geo::CategoryOf(code));
+}
 
 void SeedFromDrawing(const AppCommandState& cmd, StagedDrawingSettings& s) {
   s.insUnits = cmd.drawingInsUnits;
@@ -37,6 +85,9 @@ void SeedFromDrawing(const AppCommandState& cmd, StagedDrawingSettings& s) {
   std::snprintf(s.customScaleText, sizeof(s.customScaleText), "%g",
                 static_cast<double>(s.modelUnitsPerPlottedInch));
   s.settings = cmd.drawingSettings;
+  // The category list is kept: after Apply the user stays in the category they were browsing
+  // (SelectZone reloads it only when it does not list the drawing's zone).
+  SelectZone(s, s.settings.zoneCode);
 }
 
 /// The staged scale, or false when Custom holds something that is not a positive number.
@@ -56,10 +107,13 @@ bool StagedScale(const StagedDrawingSettings& s, float* out) {
 }
 
 constexpr const char* kLabels[] = {"Drawing units:", "Angular units:", "Imperial to Metric conversion:",
-                                   "Scale:", "Custom scale:", "Categories:"};
+                                   "Scale:", "Custom scale:", "Categories:",
+                                   "Available coordinate systems:", "Selected coordinate system code:",
+                                   "Description:", "Projection:", "Datum:"};
 constexpr const char* kAngular[] = {"Degrees", "Radians", "Grads"};
 constexpr const char* kFoot[] = {"US Survey Foot (1 m = 39.37 in)", "International Foot (1 ft = 0.3048 m)"};
-constexpr const char* kNoZone[] = {"No Datum, No Projection"};
+// The widest description the Zone fields are sized for; a longer one is clipped in its field.
+constexpr const char* kZoneWidthSample = "HARN (HPGN datum) Texas State Planes, Central Zone, Meter";
 constexpr const char* kCheckScaleInserted = "Scale objects inserted from other drawings";
 constexpr const char* kCheckSetVariables = "Set drawing variables to match";
 constexpr const char* kCustomScaleError = "The custom scale must be a positive number.";
@@ -91,7 +145,7 @@ DialogLayout MeasureLayout() {
 
   // The widest thing any field can show: unit names, angular units, foot definitions, every scale in
   // both lists, "Custom" and the zone placeholder.
-  float option = MaxTextWidth({kFoot[0], kFoot[1], kNoZone[0], "Custom"});
+  float option = MaxTextWidth({kFoot[0], kFoot[1], geo::kNoZoneCategory, "Custom", kZoneWidthSample});
   for (int i = 0; i < kDrawingUnitCount; ++i)
     option = (std::max)(option, ImGui::CalcTextSize(kDrawingUnitNames[i]).x);
   for (const char* s : kAngular)
@@ -110,11 +164,12 @@ DialogLayout MeasureLayout() {
   const float contentW = (std::max)({L.labelW + L.fieldW, checkW, footerW});
 
   // Body rows, top to bottom: tab bar, spacing, five field rows, spacing, two checkboxes, spacing,
-  // the "Zone" separator, the Categories row.
+  // the "Zone" separator, six Zone rows and the Zone message line.
   const float row = ImGui::GetFrameHeightWithSpacing();
   const float gap = st.ItemSpacing.y;
   const float separatorText = ImGui::GetTextLineHeight() + st.SeparatorTextPadding.y * 2.f + gap;
-  const float body = row + gap + 5.f * row + gap + 2.f * row + gap + separatorText + row;
+  const float message = ImGui::GetTextLineHeightWithSpacing();
+  const float body = row + gap + 5.f * row + gap + 2.f * row + gap + separatorText + 6.f * row + message;
   const float footer = gap + 1.f + gap + row;  // separator line, then the buttons
   const float titleBar = ImGui::GetFontSize() + st.FramePadding.y * 2.f;
   L.size = ImVec2(contentW + st.WindowPadding.x * 2.f,
@@ -127,8 +182,94 @@ void GreyedWithReason(const char* reason) {
     ImGui::SetTooltip("%s", reason);
 }
 
+/// The typed code, on Enter or leaving the field: a known code selects its category and system;
+/// "." or nothing is No Datum, No Projection; anything else is refused and the selection kept.
+void CommitTypedCode(StagedDrawingSettings& s) {
+  std::string code = s.codeText;
+  const size_t first = code.find_first_not_of(' ');
+  code = first == std::string::npos ? std::string() : code.substr(first, code.find_last_not_of(' ') - first + 1);
+  if (code.empty() || code == ".") {
+    SelectZone(s, {});
+    return;
+  }
+  if (const auto info = geo::FindCoordinateSystem(code)) {
+    SelectZone(s, info->code);
+    return;
+  }
+  SelectZone(s, s.settings.zoneCode);  // the field shows the unchanged selection again
+  s.codeError = "\"" + code + "\" is not a coordinate system in this dictionary.";
+}
+
+void DrawZoneGroup(StagedDrawingSettings& s, const std::function<void(const char*)>& row) {
+  const bool loaded = geo::DictionariesLoaded();
+  ImGui::BeginDisabled(!loaded);
+
+  // Categories: No Datum, No Projection, then the dictionary's own list (Lat Longs first).
+  const std::string catPreview = s.settings.zoneCode.empty() ? std::string(geo::kNoZoneCategory) : s.category;
+  row("Categories:");
+  if (ImGui::BeginCombo("##ds_category", catPreview.c_str(), ImGuiComboFlags_HeightLarge)) {
+    if (ImGui::Selectable(geo::kNoZoneCategory, s.settings.zoneCode.empty()))
+      SelectZone(s, {});
+    for (const std::string& c : geo::Categories()) {
+      if (ImGui::Selectable(c.c_str(), !s.settings.zoneCode.empty() && c == s.category)) {
+        LoadCategory(s, c);  // a category is browsed by selecting its first system
+        SelectZone(s, s.systemCodes.empty() ? std::string() : s.systemCodes.front());
+      }
+    }
+    ImGui::EndCombo();
+  }
+  ItemHelpTooltip("The coordinate-system categories of the CS-MAP dictionary.");
+
+  int sysIx = -1;
+  for (size_t i = 0; i < s.systemCodes.size(); ++i)
+    if (s.systemCodes[i] == s.settings.zoneCode)
+      sysIx = static_cast<int>(i);
+  const std::string sysPreview = sysIx >= 0 ? s.systemLabels[static_cast<size_t>(sysIx)] : std::string();
+  ImGui::BeginDisabled(s.systemCodes.empty());
+  row("Available coordinate systems:");
+  if (ImGui::BeginCombo("##ds_system", sysPreview.c_str(), ImGuiComboFlags_HeightLarge)) {
+    for (size_t i = 0; i < s.systemCodes.size(); ++i) {
+      ImGui::PushID(static_cast<int>(i));
+      if (ImGui::Selectable(s.systemLabels[i].c_str(), static_cast<int>(i) == sysIx))
+        SelectZone(s, s.systemCodes[i]);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", s.systemCodes[i].c_str());
+      ImGui::PopID();
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::EndDisabled();
+  ItemHelpTooltip("Every coordinate system in the selected category.");
+
+  row("Selected coordinate system code:");
+  bool commit = ImGui::InputText("##ds_code", s.codeText, sizeof(s.codeText), ImGuiInputTextFlags_EnterReturnsTrue);
+  commit = ImGui::IsItemDeactivatedAfterEdit() || commit;
+  if (commit)
+    CommitTypedCode(s);
+  ItemHelpTooltip("The CS-MAP code, e.g. HARN/TX.TX-CF. Type a code and press Enter to select it.");
+
+  const ZoneDetails& d = s.details;
+  const auto readOnly = [&](const char* label, const char* id, const std::string& text) {
+    row(label);
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "%s", text.c_str());
+    ImGui::InputText(id, buf, sizeof(buf), ImGuiInputTextFlags_ReadOnly);
+  };
+  readOnly("Description:", "##ds_desc", d.description);
+  readOnly("Projection:", "##ds_proj", d.projection);
+  readOnly("Datum:", "##ds_datum", d.datum);
+  ImGui::EndDisabled();
+
+  // One message line, kept even when empty so the window never changes size.
+  const std::string& msg = loaded ? s.codeError : geo::DictionaryError();
+  if (msg.empty())
+    ImGui::TextUnformatted("");
+  else
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.f), "%s", msg.c_str());
+}
+
 void DrawUnitsAndZoneTab(StagedDrawingSettings& s, const DialogLayout& L) {
-  auto row = [&](const char* label) {
+  const std::function<void(const char*)> row = [&](const char* label) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
     ImGui::SameLine(L.labelW);
@@ -199,12 +340,7 @@ void DrawUnitsAndZoneTab(StagedDrawingSettings& s, const DialogLayout& L) {
 
   ImGui::Spacing();
   ImGui::SeparatorText("Zone");
-  ImGui::BeginDisabled();
-  row("Categories:");
-  int zone = 0;
-  ImGui::Combo("##ds_zone", &zone, kNoZone, IM_ARRAYSIZE(kNoZone));
-  ImGui::EndDisabled();
-  GreyedWithReason("Coordinate-system zones: not implemented yet (issue #582).");
+  DrawZoneGroup(s, row);
 }
 
 }  // namespace

@@ -356,6 +356,18 @@ int main()
     DevShell_RegisterTests(devEngine, &cmd);
 #endif
   LoadUserStartupPrefs(cmd);
+  // REQ-358: the coordinate-system dictionary installed beside the exe. A failure is not fatal: the
+  // Drawing Settings Zone group shows the reason and nothing else is affected. CS-MAP opens files
+  // through narrow (ANSI) paths, so a folder name the code page cannot hold is a load failure too.
+  {
+    std::string csmapDir;
+    try {
+      csmapDir = ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string();
+    } catch (const std::exception&) {
+    }
+    if (!geo::LoadDictionaries(csmapDir))
+      std::fprintf(stderr, "GoSurvey: %s\n", geo::DictionaryError().c_str());
+  }
 #ifdef GOSURVEY_DEVELOPER_SHELL
   if (devshellCli) {
     cmd.authGateResolved = true;

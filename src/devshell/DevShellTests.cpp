@@ -1477,6 +1477,65 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     }
     ctx->WindowCollapse("//Developer Shell", false);
   };
+
+  // --- REQ-358: the Drawing Settings Zone group, driven through the REAL window ------------------
+  // The Zone group's selection logic lives in the UI (a unit test cannot reach it): typing a known
+  // code selects it, an unknown one is refused and changes nothing, picking a category selects its
+  // first system, No Datum clears the zone. Apply writes it to the drawing.
+  //   build\devshell\GoSurvey.exe --devshell-run req358-zone-group
+  // GOSURVEY_REQ358_HOLD=<seconds> keeps the window open at the end, for a desktop screenshot.
+  ImGuiTest* zone = IM_REGISTER_TEST(engine, "gosurvey", "req358-zone-group");
+  zone->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    IM_CHECK(s_cmd->drawingSettings.zoneCode.empty());
+    SubmitCad(ctx, "DRAWINGSETTINGS");
+    ctx->Yield(4);
+    IM_CHECK(s_cmd->showDrawingSettingsWindow);
+    ImGuiWindow* const dialog = ctx->WindowInfo("//$FOCUSED").Window;  // the modal, pinned
+    IM_CHECK(dialog != nullptr);
+    ctx->SetRef(dialog);
+
+    const auto typeCode = [ctx](const char* code) {
+      ctx->ItemClick("**/##ds_code");
+      ctx->KeyCharsReplaceEnter(code);
+      ctx->Yield(2);
+      ctx->ItemClick("**/Apply");
+      ctx->Yield(2);
+    };
+    typeCode("TX83-CF");
+    IM_CHECK_STR_EQ(s_cmd->drawingSettings.zoneCode.c_str(), "TX83-CF");
+    typeCode("NOSUCH");  // refused: the zone stays
+    IM_CHECK_STR_EQ(s_cmd->drawingSettings.zoneCode.c_str(), "TX83-CF");
+    typeCode("HARN/TX.TX-C");
+    IM_CHECK_STR_EQ(s_cmd->drawingSettings.zoneCode.c_str(), "HARN/TX.TX-C");
+
+    // A category selects its first system. BeginCombo does not report its label to the test engine,
+    // so the combo is reached by ID, from the parent the code field (an InputText, which does) shares.
+    const ImGuiTestItemInfo codeInfo = ctx->ItemInfo("**/##ds_code");
+    IM_CHECK(codeInfo.ID != 0);
+    ctx->ItemClick(ImHashStr("##ds_category", 0, codeInfo.ParentID));
+    ctx->Yield(2);
+    ctx->SetRef("//$FOCUSED");
+    ctx->ItemClick("**/Lat Longs");
+    ctx->Yield(2);
+    ctx->SetRef(dialog);
+    ctx->ItemClick("**/Apply");
+    ctx->Yield(2);
+    IM_CHECK(!s_cmd->drawingSettings.zoneCode.empty());
+    IM_CHECK(s_cmd->drawingSettings.zoneCode != "HARN/TX.TX-C");
+
+    typeCode("HARN/TX.TX-CF");  // left open on a Texas zone for the screenshot
+    IM_CHECK_STR_EQ(s_cmd->drawingSettings.zoneCode.c_str(), "HARN/TX.TX-CF");
+    if (const char* hold = std::getenv("GOSURVEY_REQ358_HOLD"))
+      ctx->SleepNoSkip(static_cast<float>(std::atof(hold)), 0.1f);
+
+    typeCode(".");  // No Datum, No Projection
+    IM_CHECK(s_cmd->drawingSettings.zoneCode.empty());
+    ctx->ItemClick("**/Cancel");
+    ctx->Yield(2);
+    IM_CHECK(!s_cmd->showDrawingSettingsWindow);
+  };
 }
 
 #endif
