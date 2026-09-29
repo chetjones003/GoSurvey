@@ -188,6 +188,9 @@ const std::string& QueryCommandBarFuzzyPrimary();
 /// Drawing Units dialog (UNITS command). REQ-020. Owns displayLinearPrecision.
 void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
+/// Drawing Settings window (DRAWINGSETTINGS, File menu, ribbon Palettes). REQ-357.
+void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& log);
+
 /// Right-Click Customization dialog (Options → User Preferences). REQ-084 (a). Sole owner of the
 /// three context modes and the time-sensitive preference; Cancel reverts to the values it opened with.
 void DrawRightClickCustomizationDialog(AppCommandState& cmd, std::vector<std::string>* log = nullptr);

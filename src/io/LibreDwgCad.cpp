@@ -1098,7 +1098,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
       p.labelMtextAnnId = 0;
   }
 
-  if (dwg.header_vars.INSUNITS == 0 || dwg.header_vars.INSUNITS == 2 || dwg.header_vars.INSUNITS == 6)
+  if (CadDrawingInsUnitsOffered(static_cast<int>(dwg.header_vars.INSUNITS)))
     st.drawingInsUnits = static_cast<int>(dwg.header_vars.INSUNITS);
 
   const double minX = dwg.header_vars.EXTMIN.x;
@@ -1184,6 +1184,12 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     std::free(dwg);
     log.push_back("CAD export — missing model space.");
     return false;
+  }
+  // Drawing unit (REQ-022) and, with "Set drawing variables to match" (REQ-357), LUNITS / AUNITS.
+  dwg->header_vars.INSUNITS = static_cast<BITCODE_BS>(st.drawingInsUnits);
+  if (st.drawingSettings.setDrawingVariables) {
+    dwg->header_vars.LUNITS = 2;
+    dwg->header_vars.AUNITS = static_cast<BITCODE_BS>(DrawingAunitsCode(st.drawingSettings.angularUnits));
   }
   AppendSaveTrace("export: fill from state");
   FillFromState(st, dwg, hdr, log);

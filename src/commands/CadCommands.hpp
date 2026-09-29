@@ -1023,6 +1023,40 @@ inline void SyncPolylineNormal(std::vector<float>& normal, std::size_t vertsFloa
 /// is far above any realistic vertex count so the two grip families never collide.
 inline constexpr int kPolyBulgeGripBase = 1 << 20;
 
+/// The drawing's own settings that the Drawing Settings window edits (REQ-357). The drawing unit and
+/// the scale are NOT here: they are `AppCommandState::drawingInsUnits` and
+/// `modelUnitsPerPlottedInch`, one value each (REQ-022, D-2026-09-29-c).
+struct DrawingSettings {
+  enum class AngularUnits { Degrees = 0, Radians = 1, Grads = 2 };
+  enum class FootDefinition { UsSurvey = 0, International = 1 };
+  AngularUnits   angularUnits = AngularUnits::Degrees;
+  /// Imperial to Metric conversion: every feet↔meters conversion in the drawing uses this.
+  FootDefinition footDefinition = FootDefinition::UsSurvey;
+  /// Off → INSERT's unit scale factor is 1 whatever the block's unit.
+  bool scaleInsertedObjects = true;
+  /// On → DWG/DXF save writes LUNITS and AUNITS from these settings, beside INSUNITS.
+  bool setDrawingVariables = true;
+
+  bool operator==(const DrawingSettings& o) const {
+    return angularUnits == o.angularUnits && footDefinition == o.footDefinition &&
+           scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables;
+  }
+  bool operator!=(const DrawingSettings& o) const { return !(*this == o); }
+};
+
+/// Inches per meter under \p f: exactly 39.37 (US survey foot) or 1/0.0254 (international foot).
+[[nodiscard]] inline double DrawingInchesPerMeter(DrawingSettings::FootDefinition f) {
+  return f == DrawingSettings::FootDefinition::UsSurvey ? 39.37 : 1.0 / 0.0254;
+}
+
+/// AutoCAD's AUNITS code for \p a (0 degrees, 2 grads, 3 radians).
+[[nodiscard]] inline int DrawingAunitsCode(DrawingSettings::AngularUnits a) {
+  switch (a) {
+    case DrawingSettings::AngularUnits::Radians: return 3;
+    case DrawingSettings::AngularUnits::Grads:   return 2;
+    default:                                      return 0;
+  }
+}
 
 /// Geometry-only snapshot for undo/redo.  PDF glTexId is zeroed to avoid stale GPU references.
 struct DrawingGeometrySnapshot {
@@ -1115,6 +1149,11 @@ struct DrawingGeometrySnapshot {
   double              sectionPlaneOffset = 0.0;
   bool                sectionPlaneFlip = false;
   SectionPlaneExtent  sectionPlaneExtent{};
+  /// Drawing unit, plot scale and Drawing Settings (REQ-357): undoable, so a Drawing Settings
+  /// change is one undo step.
+  int                 drawingInsUnits = 2;
+  float               modelUnitsPerPlottedInch = 50.f;
+  DrawingSettings     drawingSettings;
   std::string description;
 };
 
@@ -1260,6 +1299,10 @@ struct DrawingDocument {
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
   std::string                   currentColor = "ByLayer";  ///< Per tab (REQ-356): a new tab starts ByLayer.
+  /// Per tab (REQ-357): drawing unit, plot scale and Drawing Settings travel with their drawing.
+  int                           drawingInsUnits = 2;
+  float                         modelUnitsPerPlottedInch = 50.f;
+  DrawingSettings               drawingSettings;
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
@@ -1856,9 +1899,13 @@ struct AppCommandState {
   float defaultPlottedTextHeightInches = 0.125f;
 
   /// Drawing unit, AutoCAD $INSUNITS code (REQ-022). A relabel only — never scales
-  /// geometry. Document property: persisted in .gs and the DXF header. Only the
-  /// survey-relevant codes are offered: 0=Unitless, 2=Feet, 6=Meters.
+  /// geometry. Document property: persisted in the drawing and the DXF header. Offered codes:
+  /// 0=Unitless, 1=Inches, 2=Feet, 4=Millimeters, 6=Meters (REQ-357). Per tab and undoable.
   int drawingInsUnits = 2;
+  /// The drawing's Drawing Settings (REQ-357): per tab, undoable, saved in the trailer JSON.
+  DrawingSettings drawingSettings;
+  /// Drawing Settings window open (REQ-357). Session-only.
+  bool showDrawingSettingsWindow = false;
   /// Survey point X marker: horizontal span on paper (inches) → world half-extent = 0.5 × span × MUP (not zoom).
   float surveyPointCrossSpanPlottedInches = 0.14f;
   bool surveyPointShowIdInViewport = false;
@@ -6913,6 +6960,19 @@ inline constexpr const char* kCadSelectionLayerVaries = "*VARIES*";
 /// layer, moves them to \p layer (one undo step) and leaves the current layer alone; with none,
 /// sets the current layer for new geometry, as it always has.
 void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vector<std::string>& log);
+
+// --- Drawing Settings (REQ-357, GitHub issue #582) --------------------------------------------
+
+/// Set the drawing's plot scale (model units per plotted inch) and resize what depends on it — the
+/// survey-point labels and their layout cache. No undo step: callers that edit push their own.
+void SetDrawingPlotScale(AppCommandState& st, float modelUnitsPerPlottedInch);
+
+/// Write the Drawing Settings window's values to the drawing as ONE undo step, pushed only when
+/// something changes. A unit change is a relabel and moves no geometry (REQ-022). Refuses (false,
+/// with a message) a plot scale that is not a positive finite number. Returns true when applied or
+/// when nothing changed.
+bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelUnitsPerPlottedInch,
+                          const DrawingSettings& settings, std::vector<std::string>& log);
 
 // --- CHPROP / MATCHPROP / LAYMCUR, the current colour (REQ-356) ------------------------------
 /// True for the types a linetype / lineweight edit applies to: line, circle, arc, ellipse,

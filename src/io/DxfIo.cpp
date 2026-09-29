@@ -2269,7 +2269,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
         for (size_t kk = k + 1; kk < he && pairs[kk].code != 9; ++kk) {
           if (pairs[kk].code == 70) {
             int u = 0;
-            if (ParseIntFlexible(pairs[kk].value, &u) && (u == 0 || u == 2 || u == 6))
+            if (ParseIntFlexible(pairs[kk].value, &u) && CadDrawingInsUnitsOffered(u))
               st.drawingInsUnits = u;
             break;
           }
@@ -2962,6 +2962,13 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // above/below are written unscaled, so this never changes geometry.
   emitPair(9, "$INSUNITS");
   emitPair(70, std::to_string(st.drawingInsUnits));
+  // REQ-357 "Set drawing variables to match": linear units decimal, angular units from the drawing.
+  if (st.drawingSettings.setDrawingVariables) {
+    emitPair(9, "$LUNITS");
+    emitPair(70, "2");
+    emitPair(9, "$AUNITS");
+    emitPair(70, std::to_string(DrawingAunitsCode(st.drawingSettings.angularUnits)));
+  }
   emitPair(9, "$EXTMIN");
   emitPair(10, std::to_string(extMnX));
   emitPair(20, std::to_string(extMnY));

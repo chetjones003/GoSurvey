@@ -1152,6 +1152,7 @@ int main()
     DrawWhatsNewWindow(cmd);  // REQ-336
     DrawWikiWindow(cmd);
     DrawUnitsDialog(cmd, &cmdLog);
+    DrawDrawingSettingsWindow(cmd, cmdLog);  // REQ-357
     DrawRightClickCustomizationDialog(cmd, &cmdLog);  // REQ-084 (a)
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
