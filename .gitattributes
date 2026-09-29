@@ -42,3 +42,7 @@ third_party/** -text
 third_party/**/*.lib binary
 third_party/**/*.dll binary
 third_party/**/*.a   binary
+
+# --- CS-MAP compiled dictionaries and datum-shift grids (REQ-358): binary, never normalised ---
+third_party/csmap/dictionaries/** binary
+third_party/csmap/lib/** binary
