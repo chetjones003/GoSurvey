@@ -9998,6 +9998,77 @@ capability that does not exist. They are recorded here rather than quietly dropp
   dropdown clears the pressure class (it had kept it, so a 6in pick after a 2in CS300 run built
   6in CS300 — a class never chosen at that size, and not what typing 6in does).
 
+### REQ-356 — CHPROP, MATCHPROP, LAYMCUR, a current colour and a ribbon colour dropdown (GitHub issue #575)
+
+- Purpose: issue #575 (split from #564 §6, D-2026-09-28-g) — the property commands a CAD user
+  reaches for (`CHPROP`, `MATCHPROP`, `LAYMCUR`) did not exist for any entity type, the ribbon's
+  "Match Properties" button said "not implemented yet", there was no ribbon colour control, and
+  there was no current colour: every new object was created `ByLayer`.
+- Priority: must
+- Type: functional
+- Depends on: REQ-352 (the layer / colour edit over every attribute-carrying type, one undo step,
+  and the ribbon Layers combo's selection rule), REQ-353 (pipe runs are stamped with their size's
+  colour), REQ-121 (the "Select objects, ENTER to continue" step), REQ-201.
+- Decision: D-2026-09-29-a.
+- Statement:
+  1. **`CHPROP`** acts on the selection held when it starts; with none it asks for objects (click or
+     window, Enter to continue). It then asks `Property to change [Color/LAyer/LType/LWeight]`
+     (the full word or the capitalised abbreviation), then the new value, applies it, and asks again;
+     Enter at that prompt ends it. Each applied value is **one undo step**, pushed only when something
+     changes, and the command reports how many objects changed and how many were skipped because the
+     property does not apply to them. Accepted values:
+     - Color: `ByLayer`, `ByBlock`, an index `1`..`255`, a colour name, or `#RRGGBB`;
+     - LAyer: a layer that exists in the drawing — an unknown name is refused (AutoCAD's rule; a
+       typo does not create a layer);
+     - LType: the linetypes the Properties panel offers (`ByLayer`, `ByBlock`, `Continuous`,
+       `DASHED`, `HIDDEN`, `CENTER`, `PHANTOM`, `DIVIDE`, `BORDER`);
+     - LWeight: `ByLayer` or a millimetre value from the Properties panel's lineweight list.
+  2. **`MATCHPROP`** asks for one source object — a held selection of exactly one object is the
+     source — and then for destination objects. **Each destination click or window applies at
+     once** (AutoCAD's behaviour), as one undo step: the source's layer and colour, and its linetype
+     and lineweight where both source and destination carry them (item 5). Enter or Esc ends it. The
+     ribbon's Match Properties button starts it.
+  3. **`LAYMCUR`** makes the layer of one picked object current — a held selection is used at once.
+     A selection whose objects sit on more than one layer is refused with a message and nothing
+     changes.
+  4. **A current colour** (`AppCommandState::currentColor`, default `ByLayer`) is stamped on every new
+     object that is stamped with the current layer, and is saved and reopened with the drawing exactly
+     as the current layer is. Objects that already take a colour of their own keep it: a new pipe run
+     takes its size's colour (REQ-353), a fitting on a run takes the run's (REQ-353 item 4), and the
+     WATERDROP path stays yellow.
+  5. **Which types take which property**: layer and colour apply to every type REQ-352 edits, solids
+     and pipe runs included. Linetype and lineweight apply to the types the Properties panel already
+     edits them on — line, circle, arc, ellipse, polyline, annotation (text / MTEXT / dimension) and
+     table — and every other type is skipped and counted (#564 §6: none on a solid body). The
+     Properties panel's linetype and lineweight edits go through the same command-layer edit and so
+     become one undo step each.
+  6. **A ribbon colour dropdown** sits under the Layers combo in the persistent Layers strip, with a
+     swatch, and follows REQ-352's rule: with objects selected it shows their colour ("(varies)"
+     when they differ) and a pick recolours them (one undo step), leaving the current colour alone;
+     with nothing selected it shows and sets the current colour. It offers `ByLayer`, `ByBlock`, the
+     seven standard colours and "More colors…" (the existing colour picker).
+  7. **Out of scope**: transparency, linetype scale and thickness; MATCHPROP's Settings dialog and
+     its special properties (text, dimension and hatch styles); paper-space objects (REQ-352's edit
+     covers model-space selections only); a current linetype / lineweight.
+- Acceptance:
+  - CHPROP changes the colour, layer, linetype and lineweight of a held selection, each as one undo
+    step, and reports the count; with nothing held it collects a window selection first;
+  - CHPROP colours a solid and a pipe run, and skips (and counts) them for linetype / lineweight;
+  - CHPROP refuses an unknown layer, an out-of-range index, an unknown linetype and a lineweight
+    not in the list, changing nothing;
+  - MATCHPROP copies layer, colour, linetype and lineweight from a line to another line, and layer
+    and colour onto a solid, one undo step per destination pick;
+  - LAYMCUR makes a picked solid's layer current, and refuses a selection on two layers;
+  - with the current colour set to red, a new line and a new solid are red; a new pipe run still
+    takes its size's colour; the current colour survives a save and reload;
+  - the ribbon colour pick recolours a selection without changing the current colour, and sets the
+    current colour when nothing is selected;
+  - the Properties panel's linetype edit is undone by one UNDO.
+- Owner-layer: Commands (`src/commands/CadCommands.{hpp,cpp}`), IO (`src/io/GsIo.cpp`), UI
+  (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-09-29) — D-2026-09-29-a, TASK-289.
+- Revisions: 2026-09-29 — proposed and accepted.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

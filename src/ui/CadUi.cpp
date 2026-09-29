@@ -4334,7 +4334,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           iconBtn2Row("##RibbonCopyClipHome", (int)RibbonIconKind::ClipboardCopy, nullptr, !hasSel,
                   "Copy (Ctrl+C) — copy selected objects to clipboard."),
           iconBtn2Row("##ClipCut", -1, "c3d_cut", true, "Cut — not implemented yet."),
-          iconBtn2Row("##ClipMatchProps", -1, "c3d_matchprops", true, "Match Properties — not implemented yet."),
+          iconBtn2Row("##ClipMatchProps", -1, "c3d_matchprops", false,
+                      "Match Properties — copy one object's layer, color, linetype and lineweight onto "
+                      "others.\nCommand bar: MATCHPROP or MA"),
           iconBtn2Row("##ClipPasteSpecial", -1, "c3d_pastespecial", true, "Paste Special — not implemented yet."),
       }, 2, 4.f);
       spec.groups = {pasteGroup, grid};
@@ -4343,6 +4345,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         drawRibbonSectionSpec("RibbonSecClipboard", "Clipboard", spec, [&](const std::string& id) {
           if (id == "##RibbonPasteHome" && hasClip) StartPasteCommand(cmd, log);
           else if (id == "##RibbonCopyClipHome" && hasSel) CopySelectionToClipboard(cmd, log);
+          else if (id == "##ClipMatchProps") RunRibbonTypedCommand(cmd, log, "MATCHPROP");  // REQ-356
         });
       }, "Clipboard", RibbonIconKind::ClipboardPaste});
       ribbonSpecs.back().wideW = ribbonSpecs.back().mediumW = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
@@ -6657,6 +6660,66 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ImGui::PopID();
     RibbonItemHelp("Current layer for new geometry (LINE, CIRCLE, TEXT, …).\n"
                    "With objects selected: moves them to the picked layer instead.");
+
+    // REQ-356: the colour combo, on REQ-352's rule — a selection's colour, or the current colour.
+    {
+      const std::string selColor = CadSelectionColor(cmd);
+      const std::string shown = !selColor.empty() ? selColor : cmd.currentColor;
+      const CadLayerRow* curRow = FindDrawingLayerRowCi(cmd, cmd.currentLayer);
+      const std::string byLayerRgb = curRow ? curRow->color : std::string("White");
+      auto swatchRgb = [&](const std::string& storage, float out[3]) {
+        const std::string eff = (storage == "ByLayer" || storage == "ByBlock") ? byLayerRgb : storage;
+        CadColorResolveRgb(eff, 1.f, 1.f, 1.f, out);
+      };
+      auto label = [](const std::string& storage) -> std::string {
+        static const char* kStd[] = {"Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"};
+        int aci = 0;
+        if (CadColorTryGetAci(storage, &aci) && aci >= 1 && aci <= 7 &&
+            CadColorStorageMatches(storage, CadColorStorageFromAci(aci)))
+          return kStd[aci - 1];
+        return CadColorDisplayLabel(storage);
+      };
+      const float side = ImGui::GetFrameHeight() - 4.f;
+      float rgb[3] = {1.f, 1.f, 1.f};
+      if (selColor != kCadSelectionColorVaries)
+        swatchRgb(shown, rgb);
+      ImGui::ColorButton("##ribboncolorsw", ImVec4(rgb[0], rgb[1], rgb[2], 1.f),
+                         ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, ImVec2(side, side));
+      ImGui::SameLine(0, 4);
+      ImGui::SetNextItemWidth(std::max(120.f, kLayerPanelW - largeW - 40.f) - side - 4.f);
+      const std::string preview = selColor == kCadSelectionColorVaries ? std::string("(varies)") : label(shown);
+      ImGui::PushID("RibbonColorCombo");
+      if (ImGui::BeginCombo("##ribboncolorpick", preview.c_str(), ImGuiComboFlags_HeightLargest)) {
+        std::vector<std::string> opts = {"ByLayer", "ByBlock"};
+        for (int aci = 1; aci <= 7; ++aci)
+          opts.push_back(CadColorStorageFromAci(aci));
+        for (const std::string& o : opts) {
+          ImGui::PushID(o.c_str());
+          float orgb[3];
+          swatchRgb(o, orgb);
+          ImGui::ColorButton("##sw", ImVec4(orgb[0], orgb[1], orgb[2], 1.f),
+                             ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop,
+                             ImVec2(side, side));
+          ImGui::SameLine(0, 6);
+          const bool sel = selColor != kCadSelectionColorVaries && CadColorStorageMatches(o, shown);
+          if (ImGui::Selectable(label(o).c_str(), sel))
+            CadRibbonPickColor(cmd, o, log);
+          if (sel)
+            ImGui::SetItemDefaultFocus();
+          ImGui::PopID();
+        }
+        ImGui::Separator();
+        if (ImGui::Selectable("More colors…"))
+          RequestSelectColor(cmd, selColor == kCadSelectionColorVaries ? std::string("ByLayer") : shown,
+                             AppCommandState::SelectColorTarget::RibbonColor, true, true, 0, "");
+        ImGui::EndCombo();
+      }
+      ImGui::PopID();
+      RibbonItemHelp(selColor.empty() ? "Current color for new geometry (ByLayer = the layer's color).\n"
+                                        "With objects selected: recolors them instead."
+                                      : "Color of the selected objects — a pick recolors them.\n"
+                                        "With nothing selected: sets the current color for new geometry.");
+    }
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
@@ -7212,96 +7275,15 @@ void ApplyColorToSelection(AppCommandState& cmd, const std::string& v) {
 
 namespace {
 
+// REQ-356: linetype and lineweight go through the command layer, as layer and colour do
+// (REQ-352) — the same seven types as before, now one undo step each, shared with CHPROP.
 void ApplyLinetypeToSelection(AppCommandState& cmd, const std::string& v) {
-  if (v.empty())
-    return;
-  EnsureAttrCounts(cmd);
-  for (const auto& e : cmd.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= cmd.userLinesFlat.size() || static_cast<size_t>(e.index) >= cmd.userLineAttrs.size())
-        continue;
-      cmd.userLineAttrs[static_cast<size_t>(e.index)].linetype = v;
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
-        continue;
-      cmd.userCircleAttrs[static_cast<size_t>(e.index)].linetype = v;
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadAnnotations.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
-        continue;
-      cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].linetype = v;
-    } else if (e.type == SelectedEntity::Type::Table) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
-        continue;
-      cmd.cadTableAttrs[static_cast<size_t>(e.index)].linetype = v;
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
-          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
-        continue;
-      cmd.userArcAttrs[static_cast<size_t>(e.index)].linetype = v;
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
-          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
-        continue;
-      cmd.userEllAttrs[static_cast<size_t>(e.index)].linetype = v;
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int np =
-          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
-      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
-        continue;
-      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].linetype = v;
-    }
-  }
-  BumpCadGpuCache(cmd);
+  (void)CadApplyLinetypeToSelection(cmd, v);
   RefreshMixedHintFlags(cmd);
 }
 
 void ApplyLineweightToSelection(AppCommandState& cmd, float mm) {
-  const float stored = (mm < 0.f) ? -1.f : std::max(0.f, mm);
-  EnsureAttrCounts(cmd);
-  for (const auto& e : cmd.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= cmd.userLinesFlat.size() || static_cast<size_t>(e.index) >= cmd.userLineAttrs.size())
-        continue;
-      cmd.userLineAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
-        continue;
-      cmd.userCircleAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadAnnotations.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
-        continue;
-      cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
-    } else if (e.type == SelectedEntity::Type::Table) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
-        continue;
-      cmd.cadTableAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
-          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
-        continue;
-      cmd.userArcAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
-          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
-        continue;
-      cmd.userEllAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int np =
-          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
-      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
-        continue;
-      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
-    }
-  }
-  BumpCadGpuCache(cmd);
+  (void)CadApplyLineweightToSelection(cmd, (mm < 0.f) ? -1.f : std::max(0.f, mm));
   RefreshMixedHintFlags(cmd);
 }
 
@@ -9651,6 +9633,11 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     static std::string gizmoCmdHint;
     gizmoCmdHint = CadGizmoCommandPromptText(cmd);
     return gizmoCmdHint.c_str();
+  }
+  if (IsPropCommandKind(cmd.active)) {  // REQ-356
+    static std::string propCmdHint;
+    propCmdHint = CadPropCommandPromptText(cmd);
+    return propCmdHint.c_str();
   }
   if (cmd.active == AppCommandState::Kind::Loft) {
     static std::string loftHint;
@@ -15386,6 +15373,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
       if (!handled)
         BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
+      else if (!keyShift)
+        CadPropCommandSelectionChanged(cmd, log);  // REQ-356: LAYMCUR / MATCHPROP act on the pick
       break;
     }
     case ViewportClickRoute::TrimPick: {

@@ -1259,6 +1259,7 @@ struct DrawingDocument {
   std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
+  std::string                   currentColor = "ByLayer";  ///< Per tab (REQ-356): a new tab starts ByLayer.
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
@@ -1722,6 +1723,11 @@ struct AppCommandState {
     Move3d,
     Rotate3d,
     Scale3d,
+    /// CHPROP / MATCHPROP / LAYMCUR (REQ-356, GitHub issue #575): the property commands. One
+    /// phase field, \ref propCmdPhase, drives all three.
+    ChProp,
+    MatchProp,
+    LayMCur,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1805,6 +1811,9 @@ struct AppCommandState {
     case Kind::Move3d:             return "3DMOVE";
     case Kind::Rotate3d:           return "3DROTATE";
     case Kind::Scale3d:            return "3DSCALE";
+    case Kind::ChProp:             return "CHPROP";
+    case Kind::MatchProp:          return "MATCHPROP";
+    case Kind::LayMCur:            return "LAYMCUR";
     default:                  return "";
     }
   }
@@ -3675,6 +3684,19 @@ struct AppCommandState {
   /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, asking for the base point the gizmo
   /// sits on (D-2026-09-28-c), or showing the handles on it.
   enum class GizmoCmdPhase { SelectObjects, BasePoint, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
+
+  // --- CHPROP / MATCHPROP / LAYMCUR (REQ-356) ---
+  /// SelectObjects is every command's pick step (MATCHPROP's source); CHPROP then asks which
+  /// property (WaitProperty) and its value (WaitValue); MATCHPROP's destinations are SelectTargets.
+  enum class PropCmdPhase { SelectObjects, WaitProperty, WaitValue, SelectTargets };
+  PropCmdPhase propCmdPhase = PropCmdPhase::SelectObjects;
+  /// The property CHPROP is asking a value for.
+  enum class ChPropProperty { Color, Layer, Linetype, Lineweight } chPropProperty = ChPropProperty::Color;
+  /// MATCHPROP's source attributes, copied when the source is picked (an index would not survive an
+  /// undo in between — architecture §11.9).
+  EntityAttributes matchPropSource;
+  /// The source carries a linetype / lineweight (\ref CadLineStyleApplies), so they are copied too.
+  bool matchPropSourceHasLineStyle = false;
   /// The base point a 3D gizmo command was given (D-2026-09-28-c): where the gizmo sits, the pivot
   /// of a rotation and the centre of a scale. Invalid means Enter took the default — the centre of
   /// the selection's box, where the persistent gizmo always sits. Storage coordinates.
@@ -4147,6 +4169,7 @@ struct AppCommandState {
     VpLayerColor,
     EntitySelection,
     QuickSelectValue,
+    RibbonColor,  ///< REQ-356: the ribbon colour combo's "More colors..." (CadRibbonPickColor)
   };
   bool showSelectColorPopup = false;
   std::string selectColorInitial;
@@ -4206,6 +4229,10 @@ struct AppCommandState {
   int featureLineElevIndex = 0;
   /// Current layer for new geometry (ribbon combo + command defaults).
   std::string currentLayer = "0";
+  /// Current colour for new geometry (REQ-356, AutoCAD's CECOLOR): colour storage ("ByLayer", an
+  /// ACI, `#RRGGBB`) stamped beside \ref currentLayer on every new object that takes the current
+  /// layer. Saved and reopened with the drawing exactly as \ref currentLayer is.
+  std::string currentColor = "ByLayer";
   /// Layer table. Layer "0" always exists, **including before anything has been loaded** (issue
   /// #57): the loader used to synthesize it while a newly created drawing had an empty table, so a
   /// new drawing was briefly in a state the rest of the code is entitled to assume cannot happen —
@@ -6886,6 +6913,45 @@ inline constexpr const char* kCadSelectionLayerVaries = "*VARIES*";
 /// layer, moves them to \p layer (one undo step) and leaves the current layer alone; with none,
 /// sets the current layer for new geometry, as it always has.
 void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vector<std::string>& log);
+
+// --- CHPROP / MATCHPROP / LAYMCUR, the current colour (REQ-356) ------------------------------
+/// True for the types a linetype / lineweight edit applies to: line, circle, arc, ellipse,
+/// polyline, annotation and table — the set the Properties panel has always edited them on. Every
+/// other type (a solid body, a pipe run, a mesh, ...) takes layer and colour only (REQ-356 item 5).
+[[nodiscard]] bool CadLineStyleApplies(SelectedEntity::Type t);
+/// Linetype edit on the selection (REQ-356): the \ref CadApplyLayerToSelection shape — one undo
+/// step, pushed only when something changes — over the types \ref CadLineStyleApplies names.
+/// Returns how many changed; \p skipped (optional) receives how many selected objects the
+/// property does not apply to.
+int CadApplyLinetypeToSelection(AppCommandState& st, const std::string& linetype, int* skipped = nullptr);
+/// The same, for the lineweight in millimetres (\c -1 = ByLayer).
+int CadApplyLineweightToSelection(AppCommandState& st, float mm, int* skipped = nullptr);
+/// What \ref CadSelectionColor returns when the selected objects carry more than one colour.
+inline constexpr const char* kCadSelectionColorVaries = "*VARIES*";
+/// The colour storage the selected objects share, \ref kCadSelectionColorVaries when they differ,
+/// or "" when nothing selected carries one — the ribbon colour combo's preview (REQ-356).
+[[nodiscard]] std::string CadSelectionColor(const AppCommandState& st);
+/// The ribbon colour combo's pick (REQ-356, REQ-352's rule): recolours a selection (one undo
+/// step), leaving the current colour alone; with nothing selected, sets \ref
+/// AppCommandState::currentColor.
+void CadRibbonPickColor(AppCommandState& st, const std::string& color, std::vector<std::string>& log);
+/// True for \c Kind::ChProp / \c MatchProp / \c LayMCur.
+[[nodiscard]] bool IsPropCommandKind(AppCommandState::Kind k);
+void StartChPropCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartMatchPropCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartLayMCurCommand(AppCommandState& st, std::vector<std::string>& log);
+/// A property command's typed line — Enter included (an empty \p line). Returns false only when no
+/// property command is running.
+bool HandlePropCommandTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+/// The selection changed during a property command's pick step (a click or a closed window). The
+/// single-pick steps act at once — LAYMCUR, MATCHPROP's source and each MATCHPROP destination —
+/// the way AutoCAD's do; CHPROP's step waits for Enter. Called by the viewport after an
+/// accumulate click and by \ref SubmitViewportPick after a window.
+void CadPropCommandSelectionChanged(AppCommandState& st, std::vector<std::string>& log);
+/// The prompt for the property command's current step.
+[[nodiscard]] std::string CadPropCommandPromptText(const AppCommandState& st);
+/// Ends a property command (Esc, or its own finish) and clears its pick selection.
+void EndPropCommand(AppCommandState& st);
 /// True when \p e is currently isolated out. Entity types with no attributes are never hidden.
 bool CadSelectedEntityHidden(const AppCommandState& st, const SelectedEntity& e);
 /// ISOLATEOBJECTS — hide everything EXCEPT the current selection.

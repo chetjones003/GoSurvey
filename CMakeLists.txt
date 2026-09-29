@@ -1271,6 +1271,8 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-354 / D-2026-09-28-j — the dynamic input shows its mode (issue #564 section 5).
     tests/DynInputTests.cpp
     tests/ModelingRibbonTests.cpp
+    # REQ-356 / D-2026-09-29-a — CHPROP, MATCHPROP, LAYMCUR, the current colour (issue #575).
+    tests/PropertyCommandTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp

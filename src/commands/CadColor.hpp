@@ -19,6 +19,11 @@
 [[nodiscard]] std::string CadColorStorageFromAci(int aci);
 [[nodiscard]] std::string CadColorStorageFromRgbPacked(uint32_t rgbPacked);
 
+/// A colour as a user types it at a prompt (CHPROP, REQ-356): `ByLayer` / `ByBlock` (any case), an
+/// index `1`..`255`, a colour name (`red`, `Blue`, ...) or `#RRGGBB`. Writes the storage string and
+/// returns true; false (and \p out untouched) for anything else, an index out of range included.
+[[nodiscard]] bool CadColorStorageFromTyped(std::string_view typed, std::string* out);
+
 /// User-facing label: `"Color 7"`, `"By Layer"`, `"By Block"`.
 [[nodiscard]] std::string CadColorDisplayLabel(const std::string& storage);
 

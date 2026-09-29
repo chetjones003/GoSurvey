@@ -222,6 +222,14 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
       return R::GizmoHandlePick;
     }
     return R::Ignore;
+  // CHPROP / MATCHPROP / LAYMCUR (REQ-356): every pick step is a "select objects" step; CHPROP's
+  // typed property and value steps take no click.
+  case K::ChProp:
+    return cmd.propCmdPhase == AppCommandState::PropCmdPhase::SelectObjects ? R::SelectionAccumulate
+                                                                           : R::Ignore;
+  case K::MatchProp:
+  case K::LayMCur:
+    return R::SelectionAccumulate;
   // EXTRUDE (REQ-314): select closed polylines / circles (the accumulate-and-Enter shape its
   // siblings use), then a height that is either typed or picked off the cursor ray — a snapped
   // point pick, resolved to a height by SubmitExtrudeViewportPick.

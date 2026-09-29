@@ -851,6 +851,7 @@ json BuildRoot(const AppCommandState& st) {
   doc["drawingInsUnits"] = st.drawingInsUnits;
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
   doc["currentLayer"] = st.currentLayer;
+  doc["currentColor"] = st.currentColor;  // REQ-356; additive, older readers ignore it
   // Named text styles (REQ-044). Additive — older readers ignore it; no kGsFormatVersion bump.
   doc["activeTextStyleName"] = st.activeTextStyleName;
   {
@@ -2332,6 +2333,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.currentLayer = doc["currentLayer"].get<std::string>();
   else
     st.currentLayer = "0";
+  // REQ-356: a drawing saved before the current colour existed opens ByLayer, as it was drawn.
+  if (doc.contains("currentColor") && doc["currentColor"].is_string() &&
+      !doc["currentColor"].get<std::string>().empty())
+    st.currentColor = doc["currentColor"].get<std::string>();
+  else
+    st.currentColor = "ByLayer";
 
   // Named text styles (REQ-044). Read tolerantly: a missing table (older .gs) synthesizes "Standard",
   // so existing text — which carries no styleName — renders from its own fields, unchanged.

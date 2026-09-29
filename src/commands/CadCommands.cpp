@@ -149,6 +149,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.pointGroups            = cmd.pointGroups;
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
   doc.drawingLayerTable      = cmd.drawingLayerTable;
+  doc.currentColor           = cmd.currentColor;  // REQ-356
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
@@ -254,6 +255,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.pointGroups                = doc.pointGroups;
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
   cmd.drawingLayerTable          = doc.drawingLayerTable;
+  cmd.currentColor               = doc.currentColor;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.activeDimensionStyle       = doc.dimensionStyle;
@@ -5285,13 +5287,7 @@ int AppendXyzPathAsPolyline(AppCommandState& st, const std::vector<float>& xyz, 
   }
   st.userPolylineOffsets.push_back(baseVert + n);
   st.userPolylineClosed.push_back(closed ? 1u : 0u);
-  EntityAttributes a;
-  a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
-  a.color = "ByLayer";
-  a.linetype = "ByLayer";
-  a.lineweightMm = -1.f;
-  a.transparency = -1.f;
-  st.userPolylineAttrs.push_back(a);
+  st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));  // current layer and colour (REQ-356)
   return 1;
 }
 
@@ -6468,7 +6464,7 @@ void ResetAllCadDraftTools(AppCommandState& st) {
 EntityAttributes MakeNewEntityAttrs(const AppCommandState& st) {
   EntityAttributes a;
   a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
-  a.color = "ByLayer";
+  a.color = st.currentColor.empty() ? std::string("ByLayer") : st.currentColor;  // REQ-356
   a.linetype = "ByLayer";
   a.lineweightMm = -1.f;
   a.transparency = -1.f;
@@ -6633,6 +6629,9 @@ const CmdEntry kRegistry[] = {
     {"fillet", "f", "Round a corner between two curves with a tangent arc (Radius/Trim)"},
     {"chamfer", "cha", "Connect two curves with a straight bevel (Distance/Angle/Trim)"},
     {"delete", "del", "Erase objects"},
+    {"chprop", "", "Change the color, layer, linetype or lineweight of selected objects"},
+    {"matchprop", "ma, painter", "Copy one object's layer, color, linetype and lineweight onto others"},
+    {"laymcur", "", "Make the layer of a picked object current"},
     {"join", "j", "Join collinear objects"},
     {"trim", "tr", "Trim objects to an edge"},
     {"offset", "o", "Offset at a distance"},
@@ -7220,6 +7219,19 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "delete") {
     StartDeleteCommand(st, log);
+    return true;
+  }
+  // REQ-356 (GitHub issue #575): the property commands (MA / PAINTER alias MATCHPROP above).
+  if (primary == "chprop") {
+    StartChPropCommand(st, log);
+    return true;
+  }
+  if (primary == "matchprop") {
+    StartMatchPropCommand(st, log);
+    return true;
+  }
+  if (primary == "laymcur") {
+    StartLayMCurCommand(st, log);
     return true;
   }
   if (primary == "join") {
@@ -13624,6 +13636,16 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     }
     if (st.selBoxWaitingSecond)
       finishBox();
+    return;
+  }
+
+  // CHPROP / MATCHPROP / LAYMCUR (REQ-356): every pick step is the accumulate shape; a closed
+  // window merges, and the single-pick steps then act on it at once.
+  if (IsPropCommandKind(st.active)) {
+    if (st.selBoxWaitingSecond) {
+      finishBox();
+      CadPropCommandSelectionChanged(st, log);
+    }
     return;
   }
 
@@ -38402,17 +38424,24 @@ const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, con
 namespace {
 
 /// Writes one attribute field on every selected entity that carries attributes, as ONE undo step
-/// taken only when something actually changes (REQ-352). Returns how many entities changed.
-template <typename FieldFn>
-int ApplyAttrFieldToSelection(AppCommandState& st, const std::string& value, const char* undoLabel,
-                              FieldFn field) {
-  if (value.empty())
-    return 0;
+/// taken only when something actually changes (REQ-352). Returns how many entities changed. With
+/// \p lineStyleOnly, only the types \ref CadLineStyleApplies names are written and the rest are
+/// counted into \p skipped (REQ-356).
+template <typename V, typename FieldFn>
+int ApplyAttrFieldToSelection(AppCommandState& st, const V& value, const char* undoLabel, FieldFn field,
+                              bool lineStyleOnly = false, int* skipped = nullptr) {
+  if (skipped)
+    *skipped = 0;
   EnsureAttrCounts(st);
   bool pushed = false;
   int changed = 0;
   for (const SelectedEntity& e : st.selection) {
     EntityAttributes* a = AttrsOfSelected(st, e);
+    if (lineStyleOnly && (!a || !CadLineStyleApplies(e.type))) {
+      if (skipped)
+        ++*skipped;
+      continue;
+    }
     if (!a || field(*a) == value)
       continue;
     if (!pushed) {
@@ -38430,6 +38459,8 @@ int ApplyAttrFieldToSelection(AppCommandState& st, const std::string& value, con
 } // namespace
 
 int CadApplyLayerToSelection(AppCommandState& st, const std::string& layer) {
+  if (layer.empty())
+    return 0;
   const int n = ApplyAttrFieldToSelection(st, layer, "Change layer",
                                           [](EntityAttributes& a) -> std::string& { return a.layer; });
   if (n > 0)
@@ -38438,6 +38469,8 @@ int CadApplyLayerToSelection(AppCommandState& st, const std::string& layer) {
 }
 
 int CadApplyColorToSelection(AppCommandState& st, const std::string& color) {
+  if (color.empty())
+    return 0;
   return ApplyAttrFieldToSelection(st, color, "Change color",
                                    [](EntityAttributes& a) -> std::string& { return a.color; });
 }
@@ -38467,6 +38500,439 @@ void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vect
   }
   const int n = CadApplyLayerToSelection(st, layer);
   log.push_back("LAYER — " + std::to_string(n) + " object(s) moved to layer \"" + layer + "\".");
+}
+
+// ---------------------------------------------------------------------------
+// CHPROP / MATCHPROP / LAYMCUR and the current colour (REQ-356, GitHub issue #575)
+// ---------------------------------------------------------------------------
+
+bool CadLineStyleApplies(SelectedEntity::Type t) {
+  using T = SelectedEntity::Type;
+  switch (t) {
+  case T::LineSeg:
+  case T::Circle:
+  case T::Arc:
+  case T::Ellipse:
+  case T::Polyline:
+  case T::Annotation:
+  case T::Table:
+    return true;
+  default:
+    return false;
+  }
+}
+
+int CadApplyLinetypeToSelection(AppCommandState& st, const std::string& linetype, int* skipped) {
+  if (linetype.empty()) {
+    if (skipped)
+      *skipped = 0;
+    return 0;
+  }
+  return ApplyAttrFieldToSelection(
+      st, linetype, "Change linetype", [](EntityAttributes& a) -> std::string& { return a.linetype; },
+      true, skipped);
+}
+
+int CadApplyLineweightToSelection(AppCommandState& st, float mm, int* skipped) {
+  const float stored = (mm < 0.f) ? -1.f : mm;
+  return ApplyAttrFieldToSelection(
+      st, stored, "Change lineweight", [](EntityAttributes& a) -> float& { return a.lineweightMm; }, true,
+      skipped);
+}
+
+std::string CadSelectionColor(const AppCommandState& st) {
+  std::string shared;
+  for (const SelectedEntity& e : st.selection) {
+    const EntityAttributes* a = AttrsOfSelected(st, e);
+    if (!a)
+      continue;
+    const std::string color = a->color.empty() ? std::string("ByLayer") : a->color;
+    if (shared.empty())
+      shared = color;
+    else if (!CadColorStorageMatches(shared, color))
+      return kCadSelectionColorVaries;
+  }
+  return shared;
+}
+
+void CadRibbonPickColor(AppCommandState& st, const std::string& color, std::vector<std::string>& log) {
+  if (color.empty())
+    return;
+  if (CadSelectionColor(st).empty()) {
+    st.currentColor = color;
+    return;
+  }
+  const int n = CadApplyColorToSelection(st, color);
+  log.push_back("COLOR — " + std::to_string(n) + " object(s) set to " + CadColorDisplayLabel(color) + ".");
+}
+
+bool IsPropCommandKind(AppCommandState::Kind k) {
+  using K = AppCommandState::Kind;
+  return k == K::ChProp || k == K::MatchProp || k == K::LayMCur;
+}
+
+void EndPropCommand(AppCommandState& st) {
+  st.active = AppCommandState::Kind::None;
+  st.propCmdPhase = AppCommandState::PropCmdPhase::SelectObjects;
+  st.selBoxWaitingSecond = false;
+  st.selection.clear();
+  BumpCadGpuCache(st);  // the pick highlight goes with the selection
+}
+
+std::string CadPropCommandPromptText(const AppCommandState& st) {
+  using P = AppCommandState::PropCmdPhase;
+  using K = AppCommandState::Kind;
+  if (st.active == K::LayMCur)
+    return "LAYMCUR — select an object whose layer will become current. ESC cancels.";
+  if (st.active == K::MatchProp) {
+    if (st.propCmdPhase == P::SelectTargets)
+      return "MATCHPROP — select destination object(s), Enter when done. ESC cancels.";
+    return "MATCHPROP — select source object. ESC cancels.";
+  }
+  if (st.active != K::ChProp)
+    return "";
+  switch (st.propCmdPhase) {
+  case P::WaitProperty:
+    return "CHPROP — property to change [Color/LAyer/LType/LWeight] (Enter ends):";
+  case P::WaitValue:
+    switch (st.chPropProperty) {
+    case AppCommandState::ChPropProperty::Color:
+      return "CHPROP — new color [ByLayer/ByBlock/1-255/name/#RRGGBB]:";
+    case AppCommandState::ChPropProperty::Layer:
+      return "CHPROP — new layer name:";
+    case AppCommandState::ChPropProperty::Linetype:
+      return "CHPROP — new linetype [ByLayer/ByBlock/Continuous/DASHED/HIDDEN/CENTER/PHANTOM/DIVIDE/BORDER]:";
+    case AppCommandState::ChPropProperty::Lineweight:
+      return "CHPROP — new lineweight in mm, or ByLayer:";
+    }
+    return "";
+  default: {
+    std::string s = "CHPROP — select objects";
+    if (!st.selection.empty())
+      s += " (" + std::to_string(st.selection.size()) + " selected)";
+    return s + ", Enter when done. ESC cancels.";
+  }
+  }
+}
+
+namespace {
+
+/// Refuses a property command outside model space: REQ-352's edit reaches model-space selections
+/// only, and a paper-space object is out of REQ-356's scope (item 7).
+bool PropCommandModelSpaceOnly(AppCommandState& st, AppCommandState::Kind k, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex == kModelSpaceIndex)
+    return true;
+  log.push_back(std::string(AppCommandState::KindName(k)) + " — works in model space only.");
+  return false;
+}
+
+void BeginPropCommand(AppCommandState& st, AppCommandState::Kind k) {
+  if (IsPropCommandKind(st.active))
+    st.active = AppCommandState::Kind::None;  // restarting keeps the held selection
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.active = k;
+  st.lastCommand = k;
+  st.propCmdPhase = AppCommandState::PropCmdPhase::SelectObjects;
+}
+
+/// LAYMCUR's whole action on the selection it has. Refuses (and clears the pick) a selection on
+/// more than one layer; nothing carrying a layer is not an answer yet, so it keeps asking.
+void LayMCurFromSelection(AppCommandState& st, std::vector<std::string>& log) {
+  const std::string layer = CadSelectionLayer(st);
+  if (layer.empty()) {
+    st.selection.clear();
+    BumpCadGpuCache(st);
+    log.push_back("LAYMCUR — that object has no layer. " + CadPropCommandPromptText(st));
+    return;
+  }
+  if (layer == kCadSelectionLayerVaries) {
+    st.selection.clear();
+    BumpCadGpuCache(st);
+    log.push_back("LAYMCUR — the selected objects are on more than one layer; the current layer is "
+                  "unchanged. Select one object.");
+    return;
+  }
+  st.currentLayer = layer;
+  SyncDrawingLayerTableWithGeometry(st);
+  log.push_back("LAYMCUR — \"" + layer + "\" is now the current layer.");
+  EndPropCommand(st);
+}
+
+/// MATCHPROP's source step on the selection it has: exactly one object carrying attributes.
+void MatchPropTakeSource(AppCommandState& st, std::vector<std::string>& log) {
+  const EntityAttributes* a = st.selection.size() == 1 ? AttrsOfSelected(st, st.selection.front()) : nullptr;
+  if (a == nullptr) {
+    log.push_back(st.selection.size() > 1 ? "MATCHPROP — select ONE source object."
+                                          : "MATCHPROP — that object has no properties to match.");
+    st.selection.clear();
+    BumpCadGpuCache(st);
+    return;
+  }
+  st.matchPropSource = *a;
+  st.matchPropSourceHasLineStyle = CadLineStyleApplies(st.selection.front().type);
+  st.selection.clear();
+  BumpCadGpuCache(st);
+  st.propCmdPhase = AppCommandState::PropCmdPhase::SelectTargets;
+  log.push_back(std::string("MATCHPROP — matching Layer, Color") +
+                (st.matchPropSourceHasLineStyle ? ", Linetype, Lineweight" : "") + ".");
+  log.push_back(CadPropCommandPromptText(st));
+}
+
+/// MATCHPROP's destination step: the source's layer and colour onto every picked object, and its
+/// linetype / lineweight where both carry one — one undo step per pick (REQ-356 item 2).
+void MatchPropApplyToSelection(AppCommandState& st, std::vector<std::string>& log) {
+  EnsureAttrCounts(st);
+  const EntityAttributes& src = st.matchPropSource;
+  bool pushed = false;
+  int changed = 0;
+  for (const SelectedEntity& e : st.selection) {
+    EntityAttributes* a = AttrsOfSelected(st, e);
+    if (!a)
+      continue;
+    EntityAttributes next = *a;
+    next.layer = src.layer;
+    next.color = src.color;
+    if (st.matchPropSourceHasLineStyle && CadLineStyleApplies(e.type)) {
+      next.linetype = src.linetype;
+      next.lineweightMm = src.lineweightMm;
+    }
+    if (next.layer == a->layer && next.color == a->color && next.linetype == a->linetype &&
+        next.lineweightMm == a->lineweightMm)
+      continue;
+    if (!pushed) {
+      PushUndoSnapshot(st, "Match properties");
+      pushed = true;
+    }
+    *a = next;
+    ++changed;
+  }
+  st.selection.clear();
+  if (changed > 0)
+    SyncDrawingLayerTableWithGeometry(st);
+  BumpCadGpuCache(st);
+  log.push_back("MATCHPROP — " + std::to_string(changed) + " object(s) changed.");
+}
+
+/// CHPROP's value step: parse, apply (one undo step), report. False when the value is refused.
+bool ChPropApplyValue(AppCommandState& st, const std::string& value, std::vector<std::string>& log) {
+  using PP = AppCommandState::ChPropProperty;
+  int changed = 0;
+  int skipped = 0;
+  std::string what;
+  switch (st.chPropProperty) {
+  case PP::Color: {
+    std::string storage;
+    if (!CadColorStorageFromTyped(value, &storage)) {
+      log.push_back("CHPROP — \"" + value + "\" is not a color (ByLayer, ByBlock, 1-255, a color name or #RRGGBB).");
+      return false;
+    }
+    changed = CadApplyColorToSelection(st, storage);
+    what = "color " + CadColorDisplayLabel(storage);
+    break;
+  }
+  case PP::Layer: {
+    const CadLayerRow* row = FindDrawingLayerRowCi(st, value);
+    if (row == nullptr) {
+      log.push_back("CHPROP — layer \"" + value + "\" does not exist; nothing changed.");
+      return false;
+    }
+    const std::string name = row->name;  // copied: the edit may resync the table
+    changed = CadApplyLayerToSelection(st, name);
+    what = "layer \"" + name + "\"";
+    break;
+  }
+  case PP::Linetype: {
+    const char* match = nullptr;
+    for (const char* lt : kEntityLinetypeStorage)
+      if (CadLinetypeNameEqCi(value, lt))
+        match = lt;
+    if (match == nullptr) {
+      log.push_back("CHPROP — linetype \"" + value + "\" is not one GoSurvey offers; nothing changed.");
+      return false;
+    }
+    changed = CadApplyLinetypeToSelection(st, match, &skipped);
+    what = std::string("linetype ") + match;
+    break;
+  }
+  case PP::Lineweight: {
+    float mm = 0.f;
+    bool ok = false;
+    if (StringUtil::toLowerAsciiCopy(value) == "bylayer") {
+      mm = -1.f;
+      ok = true;
+    } else {
+      char* end = nullptr;
+      const float v = std::strtof(value.c_str(), &end);
+      if (end != value.c_str() && *end == '\0' && v >= 0.f) {
+        for (float preset : kEntityLineweightMmPresets)
+          if (preset >= 0.f && std::fabs(preset - v) < 1e-4f) {
+            mm = preset;
+            ok = true;
+          }
+      }
+    }
+    if (!ok) {
+      log.push_back("CHPROP — \"" + value + "\" is not a lineweight (ByLayer, or 0 to 2.11 mm from the standard list).");
+      return false;
+    }
+    changed = CadApplyLineweightToSelection(st, mm, &skipped);
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), mm < 0.f ? "ByLayer" : "%.2f mm", mm);
+    what = std::string("lineweight ") + buf;
+    break;
+  }
+  }
+  std::string msg = "CHPROP — " + what + " set on " + std::to_string(changed) + " object(s)";
+  if (skipped > 0)
+    msg += "; " + std::to_string(skipped) + " skipped (linetype and lineweight do not apply to them)";
+  log.push_back(msg + ".");
+  return true;
+}
+
+/// The CHPROP property keyword: the full word or AutoCAD's capitalised abbreviation.
+bool ChPropParseProperty(const std::string& word, AppCommandState::ChPropProperty* out) {
+  using PP = AppCommandState::ChPropProperty;
+  const std::string w = StringUtil::toLowerAsciiCopy(word);
+  if (w == "c" || w == "color" || w == "colour")
+    *out = PP::Color;
+  else if (w == "la" || w == "layer")
+    *out = PP::Layer;
+  else if (w == "lt" || w == "ltype" || w == "linetype")
+    *out = PP::Linetype;
+  else if (w == "lw" || w == "lweight" || w == "lineweight")
+    *out = PP::Lineweight;
+  else
+    return false;
+  return true;
+}
+
+} // namespace
+
+void StartChPropCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (!PropCommandModelSpaceOnly(st, AppCommandState::Kind::ChProp, log))
+    return;
+  BeginPropCommand(st, AppCommandState::Kind::ChProp);
+  if (!st.selection.empty())
+    st.propCmdPhase = AppCommandState::PropCmdPhase::WaitProperty;  // a held selection is the pick
+  log.push_back(CadPropCommandPromptText(st));
+}
+
+void StartMatchPropCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (!PropCommandModelSpaceOnly(st, AppCommandState::Kind::MatchProp, log))
+    return;
+  BeginPropCommand(st, AppCommandState::Kind::MatchProp);
+  if (st.selection.size() == 1 && AttrsOfSelected(st, st.selection.front()) != nullptr) {
+    MatchPropTakeSource(st, log);  // a held single object is the source
+    return;
+  }
+  st.selection.clear();  // several held objects cannot be one source
+  BumpCadGpuCache(st);
+  log.push_back(CadPropCommandPromptText(st));
+}
+
+void StartLayMCurCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (!PropCommandModelSpaceOnly(st, AppCommandState::Kind::LayMCur, log))
+    return;
+  BeginPropCommand(st, AppCommandState::Kind::LayMCur);
+  if (!st.selection.empty()) {
+    LayMCurFromSelection(st, log);  // a held selection is used at once
+    return;
+  }
+  log.push_back(CadPropCommandPromptText(st));
+}
+
+void CadPropCommandSelectionChanged(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using P = AppCommandState::PropCmdPhase;
+  if (st.selection.empty() || !IsPropCommandKind(st.active))
+    return;
+  if (st.active == K::LayMCur)
+    LayMCurFromSelection(st, log);
+  else if (st.active == K::MatchProp && st.propCmdPhase == P::SelectObjects)
+    MatchPropTakeSource(st, log);
+  else if (st.active == K::MatchProp && st.propCmdPhase == P::SelectTargets)
+    MatchPropApplyToSelection(st, log);
+  // CHPROP accumulates until Enter, as MOVE / COPY do (REQ-121).
+}
+
+bool HandlePropCommandTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using P = AppCommandState::PropCmdPhase;
+  if (!IsPropCommandKind(st.active))
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  const std::string verb = AppCommandState::KindName(st.active);
+
+  if (st.active == K::LayMCur || (st.active == K::MatchProp && st.propCmdPhase == P::SelectObjects)) {
+    if (line.empty()) {
+      log.push_back(verb + " — nothing picked; ended.");
+      EndPropCommand(st);
+    } else {
+      log.push_back(CadPropCommandPromptText(st));
+    }
+    return true;
+  }
+  if (st.active == K::MatchProp) {  // SelectTargets
+    if (line.empty()) {
+      log.push_back("MATCHPROP — done.");
+      EndPropCommand(st);
+    } else {
+      log.push_back(CadPropCommandPromptText(st));
+    }
+    return true;
+  }
+
+  // CHPROP
+  switch (st.propCmdPhase) {
+  case P::SelectObjects:
+    if (!line.empty()) {
+      log.push_back(CadPropCommandPromptText(st));
+    } else if (st.selection.empty()) {
+      log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+    } else {
+      st.propCmdPhase = P::WaitProperty;
+      log.push_back(CadPropCommandPromptText(st));
+    }
+    return true;
+  case P::WaitProperty: {
+    if (line.empty()) {
+      log.push_back("CHPROP — done.");
+      EndPropCommand(st);
+      return true;
+    }
+    std::istringstream is(line);
+    std::string word;
+    is >> word;
+    if (!ChPropParseProperty(word, &st.chPropProperty)) {
+      log.push_back("CHPROP — \"" + word + "\" is not a property. " + CadPropCommandPromptText(st));
+      return true;
+    }
+    std::string value;
+    std::getline(is, value);
+    value = StringUtil::trimCopy(value);
+    if (value.empty()) {
+      st.propCmdPhase = P::WaitValue;
+      log.push_back(CadPropCommandPromptText(st));
+      return true;
+    }
+    (void)ChPropApplyValue(st, value, log);  // `COLOR red` on one line
+    log.push_back(CadPropCommandPromptText(st));
+    return true;
+  }
+  case P::WaitValue:
+    if (!line.empty() && !ChPropApplyValue(st, line, log)) {
+      log.push_back(CadPropCommandPromptText(st));  // refused: ask again for the same property
+      return true;
+    }
+    st.propCmdPhase = P::WaitProperty;  // applied, or Enter = keep and ask for another property
+    log.push_back(CadPropCommandPromptText(st));
+    return true;
+  case P::SelectTargets:
+    break;
+  }
+  return true;
 }
 
 bool CadSelectedEntityHidden(const AppCommandState& st, const SelectedEntity& e) {
@@ -39056,6 +39522,11 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     // gizmo op goes back to what it was before the command (GitHub issue #564 section 3).
     log.push_back(std::string(AppCommandState::KindName(st.active)) + " canceled.");
     EndGizmoCommand(st);
+  }
+  else if (IsPropCommandKind(st.active)) {
+    // REQ-356: every applied change was its own undo step, so Esc only ends the command.
+    log.push_back(std::string(AppCommandState::KindName(st.active)) + " canceled.");
+    EndPropCommand(st);
   }
   else if (st.active == AppCommandState::Kind::Sweep) {
     log.push_back("SWEEP canceled.");
@@ -39898,6 +40369,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // gives: this block consumes a blank line and the Kind-keyed branch further down never sees one.
     if (IsGizmoCommandKind(st.active)) {
       (void)HandleGizmoCommandTextInput(line, st, log);
+      return;
+    }
+    // CHPROP / MATCHPROP / LAYMCUR (REQ-356): Enter confirms CHPROP's selection, ends a value
+    // prompt or ends the command — here for the same reason as the gizmo commands above.
+    if (IsPropCommandKind(st.active)) {
+      (void)HandlePropCommandTextInput(line, st, log);
       return;
     }
     if (st.active == K::Pan) {
@@ -42236,6 +42713,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (IsPropCommandKind(st.active)) {  // REQ-356
+    (void)HandlePropCommandTextInput(line, st, log);
+    return;
+  }
+
   if (st.active == AppCommandState::Kind::Sweep) {
     if (HandleSweepTextInput(line, st, log))
       return;
@@ -43323,6 +43805,9 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Move3d:
     case K::Rotate3d:
     case K::Scale3d:    StartGizmoCommand(st, st.lastCommand, log); break;
+    case K::ChProp:     StartChPropCommand(st, log);     break;
+    case K::MatchProp:  StartMatchPropCommand(st, log);  break;
+    case K::LayMCur:    StartLayMCurCommand(st, log);    break;
     default: break;
   }
 }

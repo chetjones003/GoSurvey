@@ -65,7 +65,7 @@ float InsertLiveRotDeg(const AppCommandState& st, float wx, float wy) {
 EntityAttributes NewBlockAttr(const AppCommandState& st) {
   EntityAttributes a;
   a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
-  a.color = "ByLayer";
+  a.color = st.currentColor.empty() ? std::string("ByLayer") : st.currentColor;  // REQ-356
   a.linetype = "ByLayer";
   a.lineweightMm = -1.f;
   a.transparency = -1.f;
