@@ -117,6 +117,36 @@ std::optional<CoordinateSystemInfo> FindCoordinateSystem(const std::string& code
   return info;
 }
 
+std::optional<double> EllipsoidSemiMajorMeters(const std::string& code) {
+  if (!g_loaded || code.empty())
+    return std::nullopt;
+  std::unique_ptr<cs_Csprm_, CsFree> cs(CS_csloc(code.c_str()));
+  if (!cs || !(cs->datum.e_rad > 0.0))
+    return std::nullopt;
+  return cs->datum.e_rad;
+}
+
+GeoResult GridScaleFactor(const std::string& code, double easting, double northing) {
+  if (!g_loaded)
+    return NotLoaded();
+  std::unique_ptr<cs_Csprm_, CsFree> cs(CS_csloc(code.c_str()));
+  if (!cs)
+    return Failure(LastCsMapError());
+  if (Field(cs->csdef.prj_knm, sizeof(cs->csdef.prj_knm)) == "LL")
+    return Failure(code + " is a latitude/longitude system; it has no grid scale factor.");
+  const double xy[3] = {easting, northing, 0.0};
+  double ll[3] = {};
+  if (CS_cs2ll(cs.get(), ll, xy) & cs_CNVRT_DOMN)
+    return Failure("The point is outside the mathematical domain of " + code + ".");
+  const double k = CS_cssck(cs.get(), ll);
+  if (!(k > 0.0))  // CS-MAP returns -1 when it cannot compute one
+    return Failure("CS-MAP could not compute the scale factor of " + code + " at this point.");
+  GeoResult r;
+  r.ok = true;
+  r.x = k;
+  return r;
+}
+
 GeoResult GridToLatLong(const std::string& code, double easting, double northing) {
   if (!g_loaded)
     return NotLoaded();

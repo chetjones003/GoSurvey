@@ -817,6 +817,42 @@ TEST_CASE("The coordinate-system zone survives a DWG round trip (REQ-358)", "[dw
   }
 }
 
+// REQ-360: every Transformation setting survives DWG save → close → reopen (ADR-044 trailer).
+TEST_CASE("The Transformation settings survive a DWG round trip (REQ-360)", "[dwg][libredwg][req360]") {
+  ScratchDir dir("req360");
+  const auto p = (dir.path / "transform.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  DrawingSettings::Transform& t = st.drawingSettings.transform;
+  t.apply = true;
+  t.applySeaLevel = true;
+  t.elevation = 594.0;
+  t.spheroidRadiusM = 6372000.0;
+  t.computation = DrawingSettings::Transform::Computation::UserDefined;
+  t.userScaleFactor = 0.99995905;
+  t.refLocalX = 3115243.14;
+  t.refLocalY = 10077391.26;
+  t.refGridE = 3115243.14;
+  t.refGridN = 10077391.26;
+  t.refPointNumber = 7;
+  t.rotation = DrawingSettings::Transform::Rotation::RotationPoint;
+  t.rotLocalX = 3116243.14;
+  t.rotLocalY = 10077391.26;
+  t.rotGridE = 3116243.0;
+  t.rotGridN = 10077408.71;
+  t.rotPointNumber = 8;
+  t.toNorthDeg = 1.336;
+  t.localAzimuthDeg = 91.0;
+  t.gridAzimuthDeg = 90.0;
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  CHECK(in.drawingSettings.transform == t);
+  CHECK(in.userLinesFlat.size() == 6);
+}
+
 // REQ-359 item 3 / D-2026-09-29-e: a Position Marker reopens ONCE from a GoSurvey DWG (the trailer),
 // while the DWG / DXF body carries a CIRCLE, two LINEs and an MTEXT for other programs.
 TEST_CASE("A Position Marker survives DWG save and is written as circle, lines and MTEXT (REQ-359)",

@@ -396,6 +396,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/GsIo.cpp
   # Coordinate systems — the one CS-MAP wrapper (REQ-358 / ADR-063)
   src/geo/CoordinateSystems.cpp
+  # REQ-360: the pure local <-> grid transformation (no CS-MAP)
+  src/geo/LocalGridTransform.cpp
   # User preferences. In the domain set for UserDataDirectory(), which the BENCH command writes its
   # results through — pure <filesystem>, no window.
   src/io/UserPrefs.cpp
@@ -1322,6 +1324,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CoordinateSystemsTests.cpp
     # REQ-359 / D-2026-09-29-e: the Geolocation tab's commands and the Position Marker.
     tests/GeolocationTests.cpp
+    # REQ-360: the Drawing Settings Transformation tab (local <-> grid).
+    tests/TransformationTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp

@@ -864,6 +864,30 @@ json BuildRoot(const AppCommandState& st) {
     o["markerX"] = ds.markerX;
     o["markerY"] = ds.markerY;
     o["markerNorthDeg"] = ds.markerNorthDeg;
+    {  // REQ-360: the Transformation tab. Angles in degrees, L_ref / rotation point WORLD.
+      const DrawingSettings::Transform& t = ds.transform;
+      json x;
+      x["apply"] = t.apply;
+      x["applySeaLevel"] = t.applySeaLevel;
+      x["elevation"] = t.elevation;
+      x["spheroidRadiusM"] = t.spheroidRadiusM;
+      x["computation"] =
+          t.computation == DrawingSettings::Transform::Computation::UserDefined ? "userDefined" : "referencePoint";
+      x["userScaleFactor"] = t.userScaleFactor;
+      x["refLocal"] = json::array({t.refLocalX, t.refLocalY});
+      x["refGrid"] = json::array({t.refGridE, t.refGridN});
+      x["refPointNumber"] = t.refPointNumber;
+      x["rotation"] = t.rotation == DrawingSettings::Transform::Rotation::RotationPoint ? "rotationPoint"
+                      : t.rotation == DrawingSettings::Transform::Rotation::Azimuth    ? "azimuth"
+                                                                                       : "toNorth";
+      x["rotLocal"] = json::array({t.rotLocalX, t.rotLocalY});
+      x["rotGrid"] = json::array({t.rotGridE, t.rotGridN});
+      x["rotPointNumber"] = t.rotPointNumber;
+      x["toNorthDeg"] = t.toNorthDeg;
+      x["localAzimuthDeg"] = t.localAzimuthDeg;
+      x["gridAzimuthDeg"] = t.gridAzimuthDeg;
+      o["transform"] = std::move(x);
+    }
     doc["drawingSettings"] = std::move(o);
   }
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
@@ -2170,6 +2194,38 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.drawingSettings.markerX = o.value("markerX", 0.0);
     st.drawingSettings.markerY = o.value("markerY", 0.0);
     st.drawingSettings.markerNorthDeg = o.value("markerNorthDeg", 90.0);
+    if (o.contains("transform") && o["transform"].is_object()) {  // REQ-360; absent → the defaults
+      const json& x = o["transform"];
+      DrawingSettings::Transform& t = st.drawingSettings.transform;
+      const auto pair = [&](const char* key, double* a, double* b) {
+        if (x.contains(key) && x[key].is_array() && x[key].size() == 2 && x[key][0].is_number() &&
+            x[key][1].is_number()) {
+          *a = x[key][0].get<double>();
+          *b = x[key][1].get<double>();
+        }
+      };
+      t.apply = x.value("apply", false);
+      t.applySeaLevel = x.value("applySeaLevel", false);
+      t.elevation = x.value("elevation", 0.0);
+      t.spheroidRadiusM = x.value("spheroidRadiusM", 0.0);
+      t.computation = x.value("computation", std::string("referencePoint")) == "userDefined"
+                          ? DrawingSettings::Transform::Computation::UserDefined
+                          : DrawingSettings::Transform::Computation::ReferencePoint;
+      t.userScaleFactor = x.value("userScaleFactor", 1.0);
+      pair("refLocal", &t.refLocalX, &t.refLocalY);
+      pair("refGrid", &t.refGridE, &t.refGridN);
+      t.refPointNumber = x.value("refPointNumber", 0);
+      const std::string rot = x.value("rotation", std::string("toNorth"));
+      t.rotation = rot == "rotationPoint" ? DrawingSettings::Transform::Rotation::RotationPoint
+                   : rot == "azimuth"     ? DrawingSettings::Transform::Rotation::Azimuth
+                                          : DrawingSettings::Transform::Rotation::ToNorth;
+      pair("rotLocal", &t.rotLocalX, &t.rotLocalY);
+      pair("rotGrid", &t.rotGridE, &t.rotGridN);
+      t.rotPointNumber = x.value("rotPointNumber", 0);
+      t.toNorthDeg = x.value("toNorthDeg", 0.0);
+      t.localAzimuthDeg = x.value("localAzimuthDeg", 0.0);
+      t.gridAzimuthDeg = x.value("gridAzimuthDeg", 0.0);
+    }
   }
   // Paper space layouts (REQ-031). Missing/garbage → no layouts, model space (no crash).
   st.paperLayouts.clear();
