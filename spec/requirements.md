@@ -10313,7 +10313,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: should
 - Type: functional
 - Depends on: REQ-357, REQ-356 (current layer/colour stamping).
-- Decision: D-2026-09-29-b (user chose NCS-style defaults, a deliberate behaviour change).
+- Decision: D-2026-09-29-b (user chose NCS-style defaults, a deliberate behaviour change);
+  D-2026-09-29-f (a fitting on a run keeps its run's layer).
 - Statement:
   1. A grid with the columns **Object | Layer | Modifier | Value | Locked**, one row per GoSurvey
      object type below, each row showing the ribbon icon of that type:
@@ -10330,6 +10331,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      | Table | `C-ANNO-TABL` |
 
      A breakline is not a row: it designates an existing line or polyline and creates no object.
+     **Pipe fitting** means a pipe-catalogue part placed off any run; a fitting on a run keeps its
+     run's layer (REQ-353 item 4, D-2026-09-29-f).
   2. **Layer**: a combo of the drawing's layers, or a typed new name. **Modifier** ∈ {None, Prefix,
      Suffix}; **Value** is text, where each `*` is replaced by the new object's name (e.g. surface
      `EG`, Suffix `-*` → `C-TOPO-EG`). An object with no name drops the `*`. **Locked** is a padlock
@@ -10354,7 +10357,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Commands (a single resolve-creation-layer function used by every creation path), UI
   (tab), IO (trailer).
 - Status: accepted (2026-09-29) — D-2026-09-29-b.
-- Revisions: 2026-09-29 — proposed and accepted.
+- Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — Pipe fitting row narrowed to parts placed off any run (D-2026-09-29-f): REQ-353 item 4 and this row both claimed a fitting on a run.
 
 ### REQ-362 — GEODATA round-trip: read Civil 3D's geolocation, write ours (GitHub issue #582, increment 6)
 
