@@ -17,6 +17,7 @@
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
 // util/ray3d beside it, so the coordinate-system rules are testable without a window.
 #include "util/ucs.hpp"
+#include "geo/CoordinateSystems.hpp"
 // ADR-060 .gscloud out-of-core cache: EXTRACTCENTERLINE (REQ-347) keeps one open cache handle
 // across hover frames rather than re-opening it every frame.
 #include "util/pointcloudcache.hpp"
@@ -1036,10 +1037,17 @@ struct DrawingSettings {
   bool scaleInsertedObjects = true;
   /// On → DWG/DXF save writes LUNITS and AUNITS from these settings, beside INSUNITS.
   bool setDrawingVariables = true;
+  /// The drawing's coordinate system (zone), a CS-MAP code such as "HARN/TX.TX-C" (REQ-358).
+  /// Empty = No Datum, No Projection. A code the installed dictionary does not know is kept.
+  std::string zoneCode;
+
+  /// Geolocated exactly when a zone is set (REQ-358 item 3).
+  [[nodiscard]] bool Geolocated() const { return !zoneCode.empty(); }
 
   bool operator==(const DrawingSettings& o) const {
     return angularUnits == o.angularUnits && footDefinition == o.footDefinition &&
-           scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables;
+           scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables &&
+           zoneCode == o.zoneCode;
   }
   bool operator!=(const DrawingSettings& o) const { return !(*this == o); }
 };
@@ -6973,6 +6981,17 @@ void SetDrawingPlotScale(AppCommandState& st, float modelUnitsPerPlottedInch);
 /// when nothing changed.
 bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelUnitsPerPlottedInch,
                           const DrawingSettings& settings, std::vector<std::string>& log);
+
+/// REQ-358 item 4: the grid coordinate (easting, northing in the zone's own unit) of a drawing point
+/// given in LOCAL coordinates: world = local + worldDocumentOrigin in double (REQ-101), then drawing
+/// unit → meters under the drawing's Imperial to Metric conversion (REQ-357) → the zone's unit. A
+/// Unitless drawing is taken to be in the zone's unit. Fails (with the reason) when the drawing is
+/// not geolocated or its zone is unknown to the loaded dictionary. REQ-360's transformation is not
+/// applied yet.
+[[nodiscard]] geo::GeoResult DrawingPointToGrid(const AppCommandState& st, double localX, double localY);
+/// REQ-358 item 4: latitude/longitude (degrees, x = longitude) of a LOCAL drawing point, in the
+/// zone's own datum.
+[[nodiscard]] geo::GeoResult DrawingPointToLatLong(const AppCommandState& st, double localX, double localY);
 
 // --- CHPROP / MATCHPROP / LAYMCUR, the current colour (REQ-356) ------------------------------
 /// True for the types a linetype / lineweight edit applies to: line, circle, arc, ellipse,

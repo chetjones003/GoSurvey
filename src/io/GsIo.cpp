@@ -859,6 +859,7 @@ json BuildRoot(const AppCommandState& st) {
         ds.footDefinition == DrawingSettings::FootDefinition::International ? "international" : "usSurvey";
     o["scaleInsertedObjects"] = ds.scaleInsertedObjects;
     o["setDrawingVariables"] = ds.setDrawingVariables;
+    o["zone"] = ds.zoneCode;  // REQ-358: CS-MAP code, "" = No Datum, No Projection
     doc["drawingSettings"] = std::move(o);
   }
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
@@ -2134,6 +2135,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
                                             : DrawingSettings::FootDefinition::UsSurvey;
     st.drawingSettings.scaleInsertedObjects = o.value("scaleInsertedObjects", true);
     st.drawingSettings.setDrawingVariables = o.value("setDrawingVariables", true);
+    // REQ-358: kept verbatim, even when this dictionary does not know it (nothing silently dropped).
+    if (o.contains("zone") && o["zone"].is_string())
+      st.drawingSettings.zoneCode = o["zone"].get<std::string>();
   }
   // Paper space layouts (REQ-031). Missing/garbage → no layouts, model space (no crash).
   st.paperLayouts.clear();

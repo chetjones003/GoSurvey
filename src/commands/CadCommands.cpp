@@ -38558,6 +38558,45 @@ bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelU
   return true;
 }
 
+geo::GeoResult DrawingPointToGrid(const AppCommandState& st, double localX, double localY) {
+  geo::GeoResult r;
+  if (!st.drawingSettings.Geolocated()) {
+    r.error = "The drawing has no coordinate system (No Datum, No Projection).";
+    return r;
+  }
+  const std::optional<geo::CoordinateSystemInfo> zone = geo::FindCoordinateSystem(st.drawingSettings.zoneCode);
+  if (!zone) {
+    r.error = st.drawingSettings.zoneCode + " is unknown in this coordinate-system dictionary.";
+    return r;
+  }
+  if (zone->geographic || zone->metersPerUnit <= 0.0) {
+    r.error = zone->code + " is a latitude/longitude system; a drawing point has no grid coordinate in it.";
+    return r;
+  }
+  // Drawing unit → meters, under the drawing's own foot (REQ-357); 0 = Unitless = the zone's unit.
+  const double inchesPerMeter = DrawingInchesPerMeter(st.drawingSettings.footDefinition);
+  double metersPerDrawingUnit = 0.0;
+  switch (st.drawingInsUnits) {
+    case 1: metersPerDrawingUnit = 1.0 / inchesPerMeter; break;
+    case 2: metersPerDrawingUnit = 12.0 / inchesPerMeter; break;
+    case 4: metersPerDrawingUnit = 0.001; break;
+    case 6: metersPerDrawingUnit = 1.0; break;
+    default: break;
+  }
+  const double k = metersPerDrawingUnit > 0.0 ? metersPerDrawingUnit / zone->metersPerUnit : 1.0;
+  r.ok = true;
+  r.x = (localX + st.worldDocumentOriginX) * k;
+  r.y = (localY + st.worldDocumentOriginY) * k;
+  return r;
+}
+
+geo::GeoResult DrawingPointToLatLong(const AppCommandState& st, double localX, double localY) {
+  const geo::GeoResult grid = DrawingPointToGrid(st, localX, localY);
+  if (!grid.ok)
+    return grid;
+  return geo::GridToLatLong(st.drawingSettings.zoneCode, grid.x, grid.y);
+}
+
 // ---------------------------------------------------------------------------
 // CHPROP / MATCHPROP / LAYMCUR and the current colour (REQ-356, GitHub issue #575)
 // ---------------------------------------------------------------------------

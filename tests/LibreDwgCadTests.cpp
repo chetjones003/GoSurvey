@@ -798,3 +798,21 @@ TEST_CASE("DWG export writes INSUNITS, LUNITS and AUNITS from the Drawing Settin
   REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
   CHECK(in.drawingInsUnits == 4);
 }
+
+// REQ-358: the drawing's zone (CS-MAP code) survives DWG save → close → reopen, through the
+// ADR-044 trailer — including a code the installed dictionary does not know.
+TEST_CASE("The coordinate-system zone survives a DWG round trip (REQ-358)", "[dwg][libredwg][req358]") {
+  ScratchDir dir("req358");
+  for (const char* code : {"HARN/TX.TX-CF", "SOME.FUTURE-ZONE"}) {
+    const auto p = (dir.path / "zone.dwg").string();
+    AppCommandState st;
+    OneLine(st);
+    st.drawingSettings.zoneCode = code;
+    std::vector<std::string> log;
+    REQUIRE(ExportDwgFile(st, p.c_str(), log));
+    AppCommandState in;
+    REQUIRE(ImportDwgFile(in, p.c_str(), log));
+    CHECK(in.drawingSettings.zoneCode == code);
+    CHECK(in.userLinesFlat.size() == 6);
+  }
+}
