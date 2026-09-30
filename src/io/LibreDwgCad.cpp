@@ -1152,6 +1152,111 @@ static bool ReadDwgGeoData(Dwg_Data* dwg, DwgGeoData* out) {
   return true;
 }
 
+// LibreDWG has no dwg_add_GEODATA (HAVE_NO_DWG_ADD_GEODATA). Its own NEW_OBJECT / API_ADD_OBJECT
+// macros (src/dwg_api.c) do what WriteDwgGeoData does, with these two library functions that dwg.h
+// does not declare (src/dwg.c, src/decode.c; both non-static).
+extern "C" void dwg_set_next_objhandle(Dwg_Object* obj);
+extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
+
+/// REQ-362 item 2: \p g as a GEODATA on model space's extension dictionary (`ACAD_GEOGRAPHICDATA`),
+/// laid out as AutoCAD writes it in an R2000 file (REQ-362 item 3): the reference point stored as
+/// (latitude, longitude), north as an angle in radians from +Y in all three angle fields, and
+/// coordinate type 0. The encoder writes the class-version-1 layout at R2000 by itself.
+static bool WriteDwgGeoData(Dwg_Data* dwg, const DwgGeoData& g) {
+  // A new document's *Model_Space has no extension dictionary; never replace one that exists.
+  const Dwg_Object* msBefore = dwg_model_space_object(dwg);
+  if (msBefore == nullptr || (msBefore->tio.object->xdicobjhandle != nullptr &&
+                              msBefore->tio.object->xdicobjhandle->absolute_ref != 0))
+    return false;
+  // Returns the new class's number (500 and up), or -1.
+  const int classNumber = dwg_add_class(dwg, "GEODATA", "AcDbGeoData", "ObjectDBX Classes", false);
+  if (classNumber < 0)
+    return false;
+  const BITCODE_BL geoIndex = dwg->num_objects;
+  // 0, or -1 when dwg->object[] moved (then re-resolve, as NEW_OBJECT does), or DWG_ERR_OUTOFMEM.
+  const int added = dwg_add_object(dwg);
+  if (added > 0)
+    return false;
+  if (added < 0)
+    dwg_resolve_objectrefs_silent(dwg);
+  Dwg_Object* obj = &dwg->object[geoIndex];
+  obj->supertype = DWG_SUPERTYPE_OBJECT;
+  obj->type = static_cast<BITCODE_BS>(classNumber);
+  obj->fixedtype = DWG_TYPE_GEODATA;
+  // A new document has DWG_OPTS_IN set, so dwg_free frees both names (as for dwg_add_* objects).
+  obj->name = _strdup("GEODATA");
+  obj->dxfname = _strdup("GEODATA");
+  obj->tio.object = static_cast<Dwg_Object_Object*>(std::calloc(1, sizeof(Dwg_Object_Object)));
+  if (obj->tio.object == nullptr)
+    return false;
+  obj->tio.object->objid = obj->index;
+  obj->tio.object->dwg = dwg;
+  auto* geo = static_cast<Dwg_Object_GEODATA*>(std::calloc(1, sizeof(Dwg_Object_GEODATA)));
+  if (geo == nullptr)
+    return false;
+  obj->tio.object->tio.GEODATA = geo;
+  geo->parent = obj->tio.object;
+  dwg_set_next_objhandle(obj);
+  const BITCODE_HV geoHandle = obj->handle.value;
+
+  // The extension dictionary holding it: owned by *Model_Space, as AutoCAD does it.
+  Dwg_Object_DICTIONARY* dict = dwg_add_DICTIONARY(dwg, nullptr, "ACAD_GEOGRAPHICDATA", geoHandle);
+  int err = 0;
+  Dwg_Object* dictObj = dict != nullptr ? dwg_obj_generic_to_object(dict, &err) : nullptr;
+  Dwg_Object* ms = dwg_model_space_object(dwg);
+  if (dictObj == nullptr || err != 0 || ms == nullptr)
+    return false;
+  const BITCODE_HV dictHandle = dictObj->handle.value;
+  const BITCODE_HV msHandle = ms->handle.value;
+  // Owner plus one reactor pointing at it — the links AutoCAD writes on both objects.
+  auto ownBy = [dwg](Dwg_Object_Object* o, BITCODE_HV owner) {
+    o->ownerhandle = dwg_add_handleref(dwg, 4, owner, nullptr);
+    o->num_reactors = 1;
+    o->reactors = static_cast<BITCODE_H*>(std::calloc(1, sizeof(BITCODE_H)));
+    if (o->reactors != nullptr)
+      o->reactors[0] = dwg_add_handleref(dwg, 4, owner, nullptr);
+    else
+      o->num_reactors = 0;
+  };
+  ownBy(dictObj->tio.object, msHandle);
+  ms->tio.object->xdicobjhandle = dwg_add_handleref(dwg, 3, dictHandle, nullptr);
+
+  obj = &dwg->object[geoIndex];  // dwg->object[] may have moved while the dictionary was added
+  ownBy(obj->tio.object, dictHandle);
+  obj->tio.object->xdicobjhandle = dwg_add_handleref(dwg, 3, 0, nullptr);
+
+  geo = obj->tio.object->tio.GEODATA;
+  const double northRad = std::atan2(g.northX, g.northY);  // from +Y towards +X
+  geo->host_block = dwg_add_handleref(dwg, 4, msHandle, nullptr);
+  geo->coord_type = 0;
+  geo->design_pt = {g.designX, g.designY, 0.0};
+  geo->ref_pt = {g.refY, g.refX, 0.0};  // (latitude, longitude)
+  geo->obs_pt = {0.0, 0.0, 0.0};
+  geo->up_dir = {0.0, 0.0, 1.0};
+  geo->north_dir = {g.northX, g.northY};
+  geo->north_dir_angle_deg = northRad;  // radians, whatever LibreDWG's field name says
+  geo->north_dir_angle_rad = northRad;
+  geo->scale_vec = {1.0, 1.0, 1.0};
+  geo->units_value_horiz = static_cast<BITCODE_BL>(g.horizontalUnits);
+  geo->unit_scale_horiz = g.horizontalUnitScale;
+  geo->units_value_vert = static_cast<BITCODE_BL>(g.horizontalUnits);
+  geo->unit_scale_vert = g.horizontalUnitScale;
+  geo->scale_est = static_cast<BITCODE_BL>(g.scaleEstimation);
+  geo->user_scale_factor = g.userScaleFactor;
+  geo->do_sea_level_corr = g.seaLevelCorrection ? 1 : 0;
+  geo->sea_level_elev = g.seaLevelElevation;
+  geo->coord_proj_radius = g.projectionRadius;
+  geo->coord_system_def = dwg_add_u8_input(dwg, g.coordinateSystemDefinition.c_str());
+  geo->geo_rss_tag = dwg_add_u8_input(dwg, "");
+  geo->coord_system_datum = dwg_add_u8_input(dwg, "");
+  geo->coord_system_wkt = dwg_add_u8_input(dwg, "");
+  geo->observation_from_tag = dwg_add_u8_input(dwg, "");
+  geo->observation_to_tag = dwg_add_u8_input(dwg, "");
+  geo->observation_coverage_tag = dwg_add_u8_input(dwg, "");
+  geo->has_civil_data = 1;
+  return true;
+}
+
 bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log, bool asDxf) {
   if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
     log.push_back(asDxf ? "DXF import — no path." : "DWG import — no path.");
@@ -1285,6 +1390,20 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
   }
   AppendSaveTrace("export: fill from state");
   FillFromState(st, dwg, hdr, log);
+  if (!asDxf) {  // REQ-362 item 2: the map pin other programs read (DWG only)
+    DwgGeoData geo;
+    std::string why;
+    if (!BuildDwgGeoData(st, &geo, &why))
+      log.push_back("DWG export — no GEODATA written: " + why + ".");
+    else if (!WriteDwgGeoData(dwg, geo))
+      log.push_back("DWG export — LibreDWG could not add the GEODATA; the location is kept in GoSurvey's data only.");
+    else {
+      char buf[160];
+      std::snprintf(buf, sizeof(buf), "DWG export — GEODATA written: zone %s, marker at %.3f, %.3f.",
+                    geo.coordinateSystemDefinition.c_str(), geo.designX, geo.designY);
+      log.push_back(buf);
+    }
+  }
   LibreDwgLinkBlockEntities(dwg);  // issue #590: AutoCAD refuses LibreDWG's implicit last link
   AppendSaveTrace("export: encode to disk");
 

@@ -500,6 +500,46 @@ void ApplyDwgGeoData(AppCommandState& st, const DwgGeoData& g, std::vector<std::
     log.push_back("GEODATA — zone " + zone->code + " (" + zone->description + ").");
 }
 
+bool BuildDwgGeoData(const AppCommandState& st, DwgGeoData* out, std::string* why) {
+  const DrawingSettings& ds = st.drawingSettings;
+  if (!ds.Geolocated()) {
+    *why = "the drawing has no zone";
+    return false;
+  }
+  const double metersPerUnit = MetersPerDrawingUnit(ds, st.drawingInsUnits);
+  if (metersPerUnit <= 0.0) {
+    *why = "the drawing is Unitless, so the location has no unit";
+    return false;
+  }
+  // The marker is WORLD (REQ-359 item 4); the lat/long helper takes a LOCAL point.
+  const geo::GeoResult ll =
+      DrawingPointToLatLong(st, ds.markerX - st.worldDocumentOriginX, ds.markerY - st.worldDocumentOriginY);
+  if (!ll.ok) {
+    *why = "the marker's latitude / longitude in zone " + ds.zoneCode + " cannot be computed (" + ll.error + ")";
+    return false;
+  }
+  DwgGeoData g;
+  g.designX = ds.markerX;
+  g.designY = ds.markerY;
+  g.reference = DwgGeoData::Reference::Geographic;
+  g.refX = ll.x;
+  g.refY = ll.y;
+  const double northRad = ds.markerNorthDeg * kPi / 180.0;
+  g.northX = std::cos(northRad);
+  g.northY = std::sin(northRad);
+  const DrawingSettings::Transform& t = ds.transform;
+  g.scaleEstimation = t.computation == DrawingSettings::Transform::Computation::UserDefined ? 2 : 3;
+  g.userScaleFactor = t.userScaleFactor;
+  g.seaLevelCorrection = t.applySeaLevel;
+  g.seaLevelElevation = t.elevation;
+  g.projectionRadius = t.spheroidRadiusM;
+  g.coordinateSystemDefinition = ds.zoneCode;
+  g.horizontalUnits = st.drawingInsUnits;
+  g.horizontalUnitScale = metersPerUnit;
+  *out = g;
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Remove Location / the geographic marker
 // ---------------------------------------------------------------------------

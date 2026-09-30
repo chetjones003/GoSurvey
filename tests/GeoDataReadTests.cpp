@@ -1,13 +1,15 @@
 // REQ-362 (GitHub issue #582 increment 6, D-2026-09-29-g / D-2026-09-30-a): reading an AutoCAD /
 // Civil 3D drawing's GEODATA — the geographic marker, north, the zone when the definition names one,
-// and REQ-360's scale settings stored with the transform left off. GoSurvey writes no GEODATA
-// (deferred to issue #590), so a GoSurvey DWG with a trailer opens from the trailer unchanged.
+// and REQ-360's scale settings stored with the transform left off — and (item 2, D-2026-09-30-d)
+// writing one on DWG save; a GoSurvey DWG with a trailer still opens from the trailer.
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -216,14 +218,13 @@ TEST_CASE("A GEODATA naming a zone sets it and the reference grid point (REQ-362
   }
 }
 
-TEST_CASE("A GoSurvey DWG with a trailer opens from the trailer; no GEODATA opens as before (REQ-362)",
-          "[req362][dwg]") {
+TEST_CASE("A GoSurvey DWG with a trailer opens from the trailer (REQ-362)", "[req362][dwg]") {
   LoadShippedDictionary();
   AppCommandState st;
   st.drawingInsUnits = 2;
   st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
-  st.drawingSettings.markerX = 12.5;
-  st.drawingSettings.markerY = -7.25;
+  st.drawingSettings.markerX = kEFt;
+  st.drawingSettings.markerY = kNFt;
   st.drawingSettings.markerNorthDeg = 33.0;
   st.drawingSettings.transform.apply = true;
   st.drawingSettings.transform.userScaleFactor = 1.0001;
@@ -232,32 +233,19 @@ TEST_CASE("A GoSurvey DWG with a trailer opens from the trailer; no GEODATA open
   st.userLineAttrs.resize(1);
   std::vector<std::string> log;
 
-  // With the trailer: every geolocation setting comes back exactly, and no GEODATA line is logged.
+  // The file carries a GEODATA too (item 2), but GoSurvey reads its own trailer: every setting comes
+  // back exactly, including the ones GEODATA does not carry, and no GEODATA line is logged.
   const std::string withTrailer = TempDwg("gosurvey-req362-trailer.dwg");
   REQUIRE(ExportDwgFile(st, withTrailer.c_str(), log));
+  CHECK(LogHas(log, "GEODATA written"));
   AppCommandState back;
   std::vector<std::string> openLog;
   REQUIRE(ImportDwgFile(back, withTrailer.c_str(), openLog));
   CHECK(back.drawingSettings == st.drawingSettings);
   CHECK_FALSE(LogHas(openLog, "GEODATA"));
 
-  // Without the trailer (the DWG body alone, as another program's file would be): no GEODATA,
-  // so the location stays at the defaults — the file opens as before REQ-362.
-  const std::string bodyOnly = TempDwg("gosurvey-req362-body.dwg");
-  REQUIRE(ExportLibreCadFile(st, bodyOnly.c_str(), log, /*asDxf=*/false));
-  AppCommandState plain;
-  std::vector<std::string> plainLog;
-  REQUIRE(ImportDwgFile(plain, bodyOnly.c_str(), plainLog));
-  CHECK(plain.drawingSettings.zoneCode.empty());
-  CHECK(plain.drawingSettings.markerX == 0.0);
-  CHECK(plain.drawingSettings.markerY == 0.0);
-  CHECK(plain.drawingSettings.markerNorthDeg == 90.0);
-  CHECK(plain.drawingSettings.transform == DrawingSettings::Transform{});
-  CHECK_FALSE(LogHas(plainLog, "GEODATA"));
-
   std::error_code ec;
   std::filesystem::remove(withTrailer, ec);
-  std::filesystem::remove(bodyOnly, ec);
 }
 
 TEST_CASE("BLOCKIMPORT from a GEODATA drawing leaves this drawing's location alone (REQ-362)",
@@ -272,4 +260,153 @@ TEST_CASE("BLOCKIMPORT from a GEODATA drawing leaves this drawing's location alo
   ImportCadBlocksFromPath(st, p.c_str(), log);
   CHECK(st.drawingSettings == before);
   CHECK_FALSE(LogHas(log, "GEODATA"));  // the source file's location is not reported as ours
+}
+
+// --- REQ-362 item 2: writing GEODATA (D-2026-09-30-d) ------------------------------------------------
+
+namespace {
+// A geolocated drawing with the marker at NGS AG9976's Texas Central grid (US survey feet): its
+// latitude / longitude are the datasheet's. The local-storage origin is not zero, to show the marker
+// is WORLD.
+AppCommandState GeolocatedAtAg9976() {
+  AppCommandState st;
+  st.drawingInsUnits = 2;  // feet (US survey, the default foot)
+  st.worldDocumentOriginX = 3115000.0;
+  st.worldDocumentOriginY = 10077000.0;
+  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  st.drawingSettings.markerX = kEFt;
+  st.drawingSettings.markerY = kNFt;
+  st.drawingSettings.markerNorthDeg = 33.0;
+  DrawingSettings::Transform& t = st.drawingSettings.transform;
+  t.applySeaLevel = true;
+  t.elevation = 500.0;
+  t.spheroidRadiusM = 6378137.0;
+  st.userLinesFlat = {0, 0, 0, 10, 0, 0};
+  st.userLineAttrs.resize(1);
+  return st;
+}
+}  // namespace
+
+TEST_CASE("The GEODATA a save writes: marker, lat/long, north, unit, zone, scale settings (REQ-362)",
+          "[req362]") {
+  LoadShippedDictionary();
+  AppCommandState st = GeolocatedAtAg9976();
+  DwgGeoData g;
+  std::string why;
+  REQUIRE(BuildDwgGeoData(st, &g, &why));
+  CHECK(g.designX == kEFt);
+  CHECK(g.designY == kNFt);
+  CHECK(g.reference == DwgGeoData::Reference::Geographic);
+  CHECK(std::abs(g.refX - kLon) <= 1e-7);
+  CHECK(std::abs(g.refY - kLat) <= 1e-7);
+  CHECK(g.northX == Catch::Approx(std::cos(33.0 * 3.14159265358979323846 / 180.0)));
+  CHECK(g.northY == Catch::Approx(std::sin(33.0 * 3.14159265358979323846 / 180.0)));
+  CHECK(g.horizontalUnits == 2);
+  CHECK(g.horizontalUnitScale == Catch::Approx(1200.0 / 3937.0));
+  CHECK(g.coordinateSystemDefinition == "HARN/TX.TX-CF");
+  CHECK(g.scaleEstimation == 3);  // Reference Point
+  CHECK(g.seaLevelCorrection);
+  CHECK(g.seaLevelElevation == 500.0);
+  CHECK(g.projectionRadius == 6378137.0);
+
+  SECTION("User Defined scale") {
+    st.drawingSettings.transform.computation = DrawingSettings::Transform::Computation::UserDefined;
+    st.drawingSettings.transform.userScaleFactor = 0.99995;
+    REQUIRE(BuildDwgGeoData(st, &g, &why));
+    CHECK(g.scaleEstimation == 2);
+    CHECK(g.userScaleFactor == 0.99995);
+  }
+}
+
+TEST_CASE("No GEODATA without a usable zone, and the reason says why (REQ-362)", "[req362]") {
+  LoadShippedDictionary();
+  AppCommandState st = GeolocatedAtAg9976();
+  DwgGeoData g;
+  std::string why;
+  SECTION("no zone") {
+    st.drawingSettings.zoneCode.clear();
+    CHECK_FALSE(BuildDwgGeoData(st, &g, &why));
+    CHECK(why.find("no zone") != std::string::npos);
+  }
+  SECTION("a zone the dictionary does not know") {
+    st.drawingSettings.zoneCode = "NOT-A-ZONE-362";
+    CHECK_FALSE(BuildDwgGeoData(st, &g, &why));
+    CHECK(why.find("cannot be computed") != std::string::npos);
+  }
+  SECTION("a Unitless drawing") {
+    st.drawingInsUnits = 0;
+    CHECK_FALSE(BuildDwgGeoData(st, &g, &why));
+    CHECK(why.find("Unitless") != std::string::npos);
+  }
+}
+
+TEST_CASE("A saved DWG's GEODATA alone reopens the location (REQ-362)", "[req362][dwg]") {
+  LoadShippedDictionary();
+  AppCommandState st = GeolocatedAtAg9976();
+  st.drawingSettings.transform.computation = DrawingSettings::Transform::Computation::UserDefined;
+  st.drawingSettings.transform.userScaleFactor = 1.0001;
+
+  // The DWG body alone, without GoSurvey's trailer — what AutoCAD leaves after it re-saves the file.
+  const std::string body = TempDwg("gosurvey-req362-write-body.dwg");
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, body.c_str(), log, /*asDxf=*/false));
+  for (const std::string& l : log)
+    UNSCOPED_INFO(l);
+  CHECK(LogHas(log, "GEODATA written: zone HARN/TX.TX-CF"));
+
+  AppCommandState back;
+  std::vector<std::string> openLog;
+  REQUIRE(ImportDwgFile(back, body.c_str(), openLog));
+  for (const std::string& l : openLog)
+    UNSCOPED_INFO(l);
+  const DrawingSettings& ds = back.drawingSettings;
+  CHECK(ds.zoneCode == "HARN/TX.TX-CF");
+  CHECK(std::abs(ds.markerX - kEFt) <= 0.001);
+  CHECK(std::abs(ds.markerY - kNFt) <= 0.001);
+  CHECK(ds.markerNorthDeg == Catch::Approx(33.0).margin(0.001));
+  const DrawingSettings::Transform& t = ds.transform;
+  CHECK_FALSE(t.apply);  // stored for review, as for any GEODATA (item 1)
+  CHECK(t.computation == DrawingSettings::Transform::Computation::UserDefined);
+  CHECK(t.userScaleFactor == 1.0001);
+  CHECK(t.applySeaLevel);
+  CHECK(t.elevation == 500.0);
+  CHECK(t.spheroidRadiusM == 6378137.0);
+  // The reference point's grid, from the written latitude / longitude: AG9976 again.
+  CHECK(std::abs(t.refGridE - kEFt) <= 0.01);
+  CHECK(std::abs(t.refGridN - kNFt) <= 0.01);
+  CHECK(LogHas(openLog, "GEODATA — zone HARN/TX.TX-CF"));
+
+  std::error_code ec;
+  std::filesystem::remove(body, ec);
+}
+
+TEST_CASE("A DWG save without a zone, and any DXF export, write no GEODATA (REQ-362)", "[req362][dwg][dxf]") {
+  LoadShippedDictionary();
+  std::error_code ec;
+  SECTION("DWG without a zone: nothing written, and the log says why") {
+    AppCommandState st = GeolocatedAtAg9976();
+    st.drawingSettings.zoneCode.clear();
+    const std::string body = TempDwg("gosurvey-req362-nozone.dwg");
+    std::vector<std::string> log;
+    REQUIRE(ExportLibreCadFile(st, body.c_str(), log, /*asDxf=*/false));
+    CHECK(LogHas(log, "no GEODATA written: the drawing has no zone"));
+    AppCommandState back;
+    std::vector<std::string> openLog;
+    REQUIRE(ImportDwgFile(back, body.c_str(), openLog));
+    CHECK(back.drawingSettings.zoneCode.empty());
+    CHECK_FALSE(LogHas(openLog, "GEODATA"));
+    std::filesystem::remove(body, ec);
+  }
+  SECTION("DXF: REQ-362 writes GEODATA into the DWG only") {
+    AppCommandState st = GeolocatedAtAg9976();
+    const std::string dxf = TempDwg("gosurvey-req362.dxf");
+    std::vector<std::string> log;
+    REQUIRE(ExportLibreCadFile(st, dxf.c_str(), log, /*asDxf=*/true));
+    CHECK_FALSE(LogHas(log, "GEODATA"));
+    std::ifstream f(dxf, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    CHECK(text.find("GEODATA") == std::string::npos);
+    f.close();
+    std::filesystem::remove(dxf, ec);
+  }
 }
