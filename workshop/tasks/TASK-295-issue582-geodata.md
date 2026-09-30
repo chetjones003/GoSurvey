@@ -1,7 +1,7 @@
-# TASK-295 — GEODATA round-trip (REQ-362): feasibility spike
+# TASK-295 — GEODATA read (REQ-362): feasibility spike, then the read side
 
-- Type:    spike
-- Status:  blocked — SPEC GAP (REQ-362 item 3)
+- Type:    spike + feature
+- Status:  done — read side delivered (D-2026-09-29-g); write deferred to #590
 - Opened:  2026-09-29
 - Owner:   Workshop
 - GitHub:  #582 (increment 6 of 6)
@@ -43,3 +43,35 @@ Standalone C programs against the vendored LibreDWG 0.13.4 (scratch, not committ
 
 - 2026-09-29: spike run; SPEC GAP raised to the user (write path unproven; Civil 3D GEODATA carries
   no zone).
+- 2026-09-30: user accepted the trailer-clause wording fix (D-2026-09-30-a); read side implemented and tested.
+
+## Plan (after D-2026-09-29-g, D-2026-09-30-a)
+
+- Requirement authority: REQ-362 items 1-3 (accepted, narrowed to READ); REQ-358 item 5 (unknown
+  code kept); REQ-359 item 4 (marker is WORLD); REQ-360 (Transform); REQ-201 (log what happened).
+- IO (`src/io/LibreDwgCad.cpp`): `ReadDwgGeoData` copies the model-space GEODATA (else the first)
+  into a plain `DwgGeoData`; called from the DWG body importer only, so a GoSurvey DWG with a
+  trailer (ADR-044) never reaches it and DXF is untouched.
+- Commands (`src/commands/CadCommands_Geo.cpp`): `ApplyDwgGeoData` sets the marker, north, zone
+  (`GeoDataCoordinateSystemCode`: bare code or the XML `...CoordinateSystem id`), and the Transform
+  with `apply` off; logs the result. No undo step: it is part of opening the file.
+- BLOCKIMPORT (`src/commands/CadBlocks.cpp`) reads a DWG into a scratch drawing; the GEODATA log
+  lines describe the scratch, so they are dropped there.
+- Architecture check: IO copies raw values, the command layer interprets them; no new dependency,
+  no new abstraction, CS-MAP only through `src/geo/`.
+
+## Completion report
+
+- Tests (`tests/GeoDataReadTests.cpp`, GoSurveySnapTests, `[req362]`, 5 cases / 58 assertions, pass):
+  definition parsing; the Civil 3D sample (marker 1846238.730, 13629548.130; north 89.8122 deg;
+  Reference Point; no zone; "names no coordinate system" logged); XML-id and bare-code zones with
+  AG9976's grid reference within 0.01 ft; unknown code kept verbatim; north wrap and fallbacks;
+  trailer DWG reopens with identical settings and no GEODATA log; a body-only DWG opens at the
+  defaults; BLOCKIMPORT leaves the drawing's location alone.
+- Build: `./dev/build` clean. `./dev/test`: 1991/1998 pass; the 7 failures are the headless
+  transcripts already failing on beta (offset / isolines / surface-selection / feature-line /
+  solid-primitives / issue233), none touch DWG or geolocation.
+- Assumptions: GEODATA `coord_proj_radius` is meters and `sea_level_elev` is drawing units, as the
+  Transform stores them (AutoCAD's documented units).
+- Technical debt: none new. The write side waits for #590.
+- Manual check: none needed for read; the write-side AutoCAD check moves to #590.

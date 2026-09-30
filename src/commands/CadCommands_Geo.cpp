@@ -340,6 +340,117 @@ bool ParseGeoAngleDegrees(const std::string& raw, bool latitude, double* outDeg)
 }
 
 // ---------------------------------------------------------------------------
+// GEODATA read (REQ-362, D-2026-09-29-g)
+// ---------------------------------------------------------------------------
+
+std::string GeoDataCoordinateSystemCode(const std::string& definition) {
+  size_t b = 0;
+  while (b < definition.size() && std::isspace(static_cast<unsigned char>(definition[b])))
+    ++b;
+  size_t e = definition.size();
+  while (e > b && std::isspace(static_cast<unsigned char>(definition[e - 1])))
+    --e;
+  const std::string trimmed = definition.substr(b, e - b);
+  if (trimmed.empty())
+    return {};
+  if (trimmed.find('<') == std::string::npos) {  // a bare code: one token, nothing else
+    for (char c : trimmed)
+      if (std::isspace(static_cast<unsigned char>(c)))
+        return {};
+    return trimmed;
+  }
+  // An XML definition: the id of the first element whose name ends in "CoordinateSystem"
+  // (ProjectedCoordinateSystem, GeographicCoordinateSystem, …).
+  static const std::string kSuffix = "CoordinateSystem";
+  for (size_t lt = trimmed.find('<'); lt != std::string::npos; lt = trimmed.find('<', lt + 1)) {
+    size_t n = lt + 1;
+    while (n < trimmed.size() && (std::isalnum(static_cast<unsigned char>(trimmed[n])) || trimmed[n] == ':' ||
+                                  trimmed[n] == '_'))
+      ++n;
+    const std::string name = trimmed.substr(lt + 1, n - lt - 1);
+    if (name.size() < kSuffix.size() || name.compare(name.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0)
+      continue;
+    const size_t gt = trimmed.find('>', n);
+    const std::string tag = trimmed.substr(n, gt == std::string::npos ? std::string::npos : gt - n);
+    for (size_t at = tag.find("id"); at != std::string::npos; at = tag.find("id", at + 2)) {
+      if (at > 0 && !std::isspace(static_cast<unsigned char>(tag[at - 1])))
+        continue;  // part of another attribute's name
+      size_t q = at + 2;
+      while (q < tag.size() && std::isspace(static_cast<unsigned char>(tag[q])))
+        ++q;
+      if (q >= tag.size() || tag[q] != '=')
+        continue;
+      ++q;
+      while (q < tag.size() && std::isspace(static_cast<unsigned char>(tag[q])))
+        ++q;
+      if (q >= tag.size() || (tag[q] != '"' && tag[q] != '\''))
+        continue;
+      const size_t close = tag.find(tag[q], q + 1);
+      if (close == std::string::npos)
+        return {};
+      return tag.substr(q + 1, close - q - 1);
+    }
+    return {};
+  }
+  return {};
+}
+
+void ApplyDwgGeoData(AppCommandState& st, const DwgGeoData& g, std::vector<std::string>& log) {
+  DrawingSettings& ds = st.drawingSettings;
+  ds.markerX = g.designX;  // GEODATA's design point is WCS, as the marker is (REQ-359 item 4)
+  ds.markerY = g.designY;
+  double north = 90.0;  // grid north when the file gives no direction
+  if (std::hypot(g.northX, g.northY) > 1e-12) {
+    north = std::atan2(g.northY, g.northX) * 180.0 / kPi;
+    if (north < 0.0)
+      north += 360.0;
+  }
+  ds.markerNorthDeg = north;
+
+  const std::string code = GeoDataCoordinateSystemCode(g.coordinateSystemDefinition);
+  std::optional<geo::CoordinateSystemInfo> zone;
+  if (!code.empty())
+    zone = geo::FindCoordinateSystem(code);
+  // Unknown: kept verbatim (REQ-358 item 5). No definition: no zone — an Import DWG into a
+  // geolocated drawing replaces its location, as it replaces its geometry.
+  ds.zoneCode = zone ? zone->code : code;
+
+  // REQ-360's scale settings, left for the user to review: the transform stays off.
+  DrawingSettings::Transform t;
+  if (g.scaleEstimation == 2 && std::isfinite(g.userScaleFactor) && g.userScaleFactor > 0.0) {
+    t.computation = DrawingSettings::Transform::Computation::UserDefined;
+    t.userScaleFactor = g.userScaleFactor;
+  }
+  t.applySeaLevel = g.seaLevelCorrection;
+  if (std::isfinite(g.seaLevelElevation))
+    t.elevation = g.seaLevelElevation;
+  if (std::isfinite(g.projectionRadius) && g.projectionRadius > 0.0)
+    t.spheroidRadiusM = g.projectionRadius;
+  t.refLocalX = g.designX;
+  t.refLocalY = g.designY;
+  if (zone && g.hasReference && !zone->geographic) {
+    const geo::GeoResult grid = geo::LatLongToGrid(zone->code, g.refLongitude, g.refLatitude);
+    if (grid.ok) {
+      t.refGridE = grid.x;
+      t.refGridN = grid.y;
+    }
+  }
+  ds.transform = t;
+
+  char buf[200];
+  std::snprintf(buf, sizeof(buf), "GEODATA — geographic marker at %.3f, %.3f, north %.4f\xC2\xB0 from the X axis.",
+                g.designX, g.designY, north);
+  log.push_back(buf);
+  if (code.empty())
+    log.push_back("GEODATA — the file names no coordinate system (Civil 3D keeps its zone elsewhere); "
+                  "set the zone in Drawing Settings.");
+  else if (!zone)
+    log.push_back("GEODATA — coordinate system " + code + " is unknown in this dictionary; kept as the zone.");
+  else
+    log.push_back("GEODATA — zone " + zone->code + " (" + zone->description + ").");
+}
+
+// ---------------------------------------------------------------------------
 // Remove Location / the geographic marker
 // ---------------------------------------------------------------------------
 

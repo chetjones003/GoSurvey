@@ -10368,7 +10368,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: should
 - Type: interop
 - Depends on: REQ-358, REQ-359 item 4, REQ-360, REQ-170 / REQ-175 / ADR-041 / ADR-044.
-- Decision: D-2026-09-29-b; D-2026-09-29-g (read now, write later).
+- Decision: D-2026-09-29-b; D-2026-09-29-g (read now, write later); D-2026-09-30-a (trailer clause).
 - Statement:
   1. **Read.** Opening a DWG that contains an AutoCAD `GEODATA` object (model space's extension
      dictionary, `ACAD_GEOGRAPHICDATA`) and **no GoSurvey trailer** sets:
@@ -10383,8 +10383,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
        review: scale estimation "user specified" → User Defined with its factor, "grid scale at
        reference point" → Reference Point; sea level correction, elevation and spheroid radius; the
        reference point = the design point, with its grid coordinate when the zone is known.
-     A GoSurvey DWG (with its trailer) keeps the trailer's settings; a GEODATA in it that disagrees
-     with the trailer's zone is reported, not applied (REQ-201).
+     A GoSurvey DWG (with its trailer) opens from the trailer as before (ADR-044): GoSurvey writes no
+     GEODATA, and AutoCAD drops the trailer when it re-saves a file, so the two never meet.
   2. **Write — deferred.** GoSurvey writes no GEODATA; the zone, marker and transform live in the
      GoSurvey trailer (ADR-044) until issue #590 (AutoCAD rejects the checksums of GoSurvey's DWG
      files) is fixed and the write spike is re-run.
@@ -10398,12 +10398,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
     GEODATA names no coordinate system;
   - a GEODATA naming a dictionary code (bare, or as the `id` of an XML definition) sets that zone and
     the reference point's grid coordinate; an unknown code is kept verbatim;
-  - a GoSurvey DWG with a trailer keeps the trailer's settings; a disagreeing GEODATA zone is logged;
+  - a GoSurvey DWG with a trailer opens from the trailer, unchanged;
   - a DWG without GEODATA opens as before.
 - Owner-layer: IO (`src/io/LibreDwgCad.cpp`), Commands (applying the read values), `src/geo/`.
-- Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-g, TASK-295.
+- Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-g, D-2026-09-30-a, TASK-295.
 - Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — narrowed to READ (D-2026-09-29-g): the
   feasibility spike did not prove AutoCAD reads a GEODATA GoSurvey writes; write deferred to #590.
+  2026-09-30 — the trailer-vs-GEODATA clause replaced (D-2026-09-30-a): the two cannot meet in one file.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

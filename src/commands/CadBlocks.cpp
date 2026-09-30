@@ -413,9 +413,14 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   bool ok = false;
   if (ext == ".dxf")
     ok = ImportDxfFile(scratch, pathUtf8, log);
-  else if (ext == ".dwg")
+  else if (ext == ".dwg") {
+    const size_t logStart = log.size();
     ok = ImportDwgFile(scratch, pathUtf8, log);
-  else if (ext == ".sat")
+    // The source file's GEODATA (REQ-362) set the scratch drawing's location, not this one's.
+    log.erase(std::remove_if(log.begin() + static_cast<std::ptrdiff_t>(logStart), log.end(),
+                             [](const std::string& l) { return l.rfind("GEODATA", 0) == 0; }),
+              log.end());
+  } else if (ext == ".sat")
     ok = ImportSatFileToScratch(scratch, pathUtf8, log);
   else {
     // .gs block-library import was removed by issue #264 (D-2026-09-03-h); re-adding a
