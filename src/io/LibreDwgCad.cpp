@@ -6,6 +6,7 @@
 #include "DxfColors.hpp"
 #include "MtextRichFormat.hpp"
 #include "DwgIo.hpp"
+#include "LibreDwg.hpp"
 #include "SurveyPoints.hpp"
 #include "TextStyle.hpp"
 #include "util/SaveTrace.hpp"
@@ -1275,6 +1276,7 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
   }
   AppendSaveTrace("export: fill from state");
   FillFromState(st, dwg, hdr, log);
+  LibreDwgLinkBlockEntities(dwg);  // issue #590: AutoCAD refuses LibreDWG's implicit last link
   AppendSaveTrace("export: encode to disk");
 
   bool ok = false;

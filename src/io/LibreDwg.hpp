@@ -8,6 +8,14 @@
 /// Package version string compiled into LibreDWG (e.g. "0.13.3"), never empty on a successful link.
 const char* LibreDwgPackageVersion();
 
+struct _dwg_struct;
+
+/// Issue #590: gives every entity of every block explicit prev/next links (R13-R2000 `nolinks` = 0).
+/// LibreDWG's add API leaves `nolinks` = 1 ("my neighbours are handle - 1 and handle + 1") on the
+/// last entity it added to a block, which claims a next entity that does not exist; AutoCAD then
+/// refuses the file with eDwgCRCDoesNotMatch. Call after the last dwg_add_* and before encoding.
+void LibreDwgLinkBlockEntities(_dwg_struct* dwg);
+
 /// Writes a R2000 DWG (AC1015) containing one model-space LINE from (0,0,0) to (10,0,0).
 /// LibreDWG 0.13.3's encoder documents R2000 as the supported write target; R2004 encode
 /// is still planned upstream (`dwgwrite --help`).

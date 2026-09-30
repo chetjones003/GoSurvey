@@ -1,6 +1,7 @@
 #include "DxfIo.hpp"
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
+#include "LibreDwg.hpp"
 #include "LibreDwgCad.hpp"
 
 #include "CadCommands.hpp"
@@ -964,4 +965,99 @@ TEST_CASE("A Position Marker survives DWG save and is written as circle, lines a
   CHECK(text.find("AcDbCircle") != std::string::npos);
   CHECK(text.find("UT Tower\\PAG9976") != std::string::npos);
   CHECK(text.find("3115243.14") != std::string::npos);
+}
+
+// Issue #590: AutoCAD refused every GoSurvey DWG (eDwgCRCDoesNotMatch) because LibreDWG left
+// `nolinks` = 1 on the last entity of model space — "my next entity is handle + 1", which does not
+// exist. Every entity must carry explicit links: first prev null, last next null.
+namespace {
+struct EntityLink {
+  BITCODE_HV handle = 0;
+  BITCODE_HV prev = 0;
+  BITCODE_HV next = 0;
+  int nolinks = -1;
+};
+
+std::vector<EntityLink> ModelSpaceLinks(const std::string& path) {
+  std::vector<EntityLink> links;
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  if (dwg_read_file(path.c_str(), &dwg) >= DWG_ERR_CRITICAL) {
+    dwg_free(&dwg);
+    return links;
+  }
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object& obj = dwg.object[i];
+    // R2000 stores no owner handle for model-space entities: entmode 2 says "model space".
+    // The block's own BLOCK / ENDBLK markers are not in its entity chain.
+    if (obj.supertype != DWG_SUPERTYPE_ENTITY || obj.tio.entity->entmode != 2 ||
+        obj.fixedtype == DWG_TYPE_BLOCK || obj.fixedtype == DWG_TYPE_ENDBLK)
+      continue;
+    const Dwg_Object_Entity* ent = obj.tio.entity;
+    EntityLink link;
+    link.handle = obj.handle.value;
+    link.prev = ent->prev_entity != nullptr ? ent->prev_entity->absolute_ref : 0;
+    link.next = ent->next_entity != nullptr ? ent->next_entity->absolute_ref : 0;
+    link.nolinks = ent->nolinks;
+    links.push_back(link);
+  }
+  dwg_free(&dwg);
+  return links;
+}
+
+void CheckExplicitChain(const std::vector<EntityLink>& links) {
+  for (size_t i = 0; i < links.size(); ++i) {
+    INFO("entity " << i << " handle " << links[i].handle);
+    CHECK(links[i].nolinks == 0);
+    CHECK(links[i].prev == (i > 0 ? links[i - 1].handle : 0));
+    CHECK(links[i].next == (i + 1 < links.size() ? links[i + 1].handle : 0));
+  }
+}
+}  // namespace
+
+TEST_CASE("The minimal LibreDWG R2000 file links its only entity explicitly (issue #590)",
+          "[dwg][libredwg][issue590]") {
+  ScratchDir dir("links-minimal");
+  const auto p = (dir.path / "line.dwg").string();
+  REQUIRE(LibreDwgWriteMinimalR2000(p.c_str()));
+
+  const std::vector<EntityLink> links = ModelSpaceLinks(p);
+  REQUIRE(links.size() == 1);
+  CheckExplicitChain(links);
+}
+
+TEST_CASE("DWG export links every model-space entity explicitly (issue #590)", "[dwg][libredwg][issue590]") {
+  ScratchDir dir("links-export");
+  const auto p = (dir.path / "mixed.dwg").string();
+
+  AppCommandState st;
+  st.userLinesFlat = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 10.f, 0.f, 0.f, 10.f, 10.f, 0.f};
+  st.userLineAttrs = {EntityAttributes{}, EntityAttributes{}};
+  st.userCirclesCxCyZR = {5.f, 5.f, 0.f, 2.f};
+  st.userCircleAttrs = {EntityAttributes{}};
+  CadArc arc{};
+  arc.cx = 20.f; arc.cy = 0.f; arc.r = 3.f;
+  arc.startRad = 0.f; arc.sweepRad = 1.5f;
+  arc.nz = 1.f;
+  st.userArcs = {arc};
+  st.userArcAttrs = {EntityAttributes{}};
+  st.userPolylineVerts = {0.f, 20.f, 0.f, 10.f, 20.f, 0.f, 10.f, 30.f, 0.f};
+  st.userPolylineOffsets = {0, 3};
+  st.userPolylineClosed = {0};
+  st.userPolylineAttrs = {EntityAttributes{}};
+
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  const std::vector<EntityLink> links = ModelSpaceLinks(p);
+  REQUIRE(links.size() == 5);
+  CheckExplicitChain(links);
+
+  // The explicit links still read back as the same drawing.
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  CHECK(in.userLinesFlat.size() == 12);
+  CHECK(in.userCirclesCxCyZR.size() == 4);
+  CHECK(in.userArcs.size() == 1);
+  CHECK(in.userPolylineOffsets.size() == 2);
 }
