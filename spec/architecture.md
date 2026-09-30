@@ -4653,3 +4653,48 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
 - **Consequences.** A new dependency and a much larger installer (grid files). `src/geo/` is
   unit-testable against NGS datasheet values without a GL context. The dictionary format is CS-MAP's;
   an updated CS-MAP means recompiling the dictionaries with it, recorded in `VENDORED.md`.
+
+### ADR-064 — The online map is Web Mercator tiles, fetched off the UI thread, placed per tile through `src/geo/`, drawn in the underlay pass; a capture keeps the tiles   (2026-09-30, accepted)
+
+- **Status:** accepted (2026-09-30, D-2026-09-30-b). Backs REQ-363 and REQ-364 (GitHub issue #583).
+- **Context.** A geolocated drawing (REQ-358) should show a map under its geometry that lines up with
+  its local coordinates, never costs a frame (REQ-100), and survives going offline. The map is USGS
+  The National Map (D-2026-09-30-b), which serves 256-pixel Web Mercator tiles; the drawing is in a
+  CS-MAP zone, possibly with a REQ-360 local ↔ grid transformation.
+- **Decision.**
+  (a) **Tiles, not one server-rendered image.** Tiles are cached per tile on disk and reused across
+      pans and zooms and across drawings, and the same tile key names what a capture keeps.
+  (b) **Placement per tile, through `src/geo/`.** Each tile is a small grid of vertices (at least
+      4 × 4 cells) whose WGS 84 positions go through the same chain as every other geolocation
+      conversion: CS-MAP datum path → zone grid → `GridToDrawingWorld` (REQ-360) → local. It is
+      computed once per tile on the UI thread (CS-MAP is single-threaded, ADR-063 (c)), with the
+      zone's conversion set up once per zone rather than per point, and a per-frame budget. It is
+      never computed per frame. Bending the image across the vertex grid absorbs the projection's
+      curvature and any grid rotation, so no whole-image reprojection or resampling is needed. The
+      Web Mercator tile maths (level choice, tile range, tile bounds) is pure and in `src/geo/`.
+  (c) **Background work in `src/platform/`** owns the network and the disk, as §8 one-shot workers:
+      one per tile, a bounded number alive at once, with no pool and no queue shared with a thread.
+      Each looks in the disk cache first, then fetches through WinHTTP (`HttpFetch`), decodes with the
+      vendored `stb_image`, and release-stores its result for the UI thread to collect. The UI thread
+      only uploads textures, a bounded number per frame. The fetch
+      function is injectable, so failure handling is unit-tested with no network. No new dependency
+      (REQ-300): WinHTTP ships with Windows and `stb_image` is already vendored.
+  (d) **Drawn in the renderer's existing underlay pass**, the textured-quad program PDF underlays
+      use (vec2 position on Z = 0 + UV). Tiles go first, then captured areas, then PDF underlays, then
+      geometry. Tile textures are a bounded least-recently-used set, released when a drawing tab
+      closes or the map is turned off.
+  (e) **A capture stores the tiles' original bytes** (z/x/y + map + the JPEG/PNG as downloaded) in
+      `drawingSettings`, saved in the ADR-044 trailer. It is drawn through the same placement as live
+      tiles, so it lines up identically and needs no image encoder. The byte blobs are immutable and
+      shared, so the undo snapshots that copy `drawingSettings` copy pointers, not megabytes.
+- **Alternatives.** (1) Ask USGS's `export` endpoint for one image already in the zone's projection:
+      that needs an EPSG code for every CS-MAP zone (the mapping ADR-063 declined), cannot express a
+      REQ-360 transformation, and refetches on every pan. (2) Reproject the pixels on the CPU: costly
+      per tile, and it loses sharpness, where the vertex grid is exact at the vertices and sub-pixel
+      between them. (3) Save a capture as an external image referenced by an AutoCAD IMAGE entity:
+      declined by the user (D-2026-09-30-b); a drawing copied without its image would lose the map.
+- **Consequences.** A network-backed feature exists outside the startup checks. Its failures are
+  the REQ-201 single-message kind. Captured areas make drawings larger (≈ 20-40 KB per tile, capped
+  at 256 tiles per capture). AutoCAD does not see captured areas. Adding another provider later
+  (e.g. Esri, which needs a key) is a new entry in the map table plus a key decision, with no change
+  to the pipeline.
