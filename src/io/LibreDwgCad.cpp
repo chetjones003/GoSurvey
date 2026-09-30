@@ -1134,6 +1134,15 @@ static bool ReadDwgGeoData(Dwg_Data* dwg, DwgGeoData* out) {
   out->refY = g.ref_pt.y;
   out->northX = g.north_dir.x;
   out->northY = g.north_dir.y;
+  if (g.class_version <= 1) {
+    // The 2009 layout (R2000-R2007 files; REQ-362 item 3): the reference point is (latitude,
+    // longitude) and north is an angle in radians from +Y, with no north vector.
+    out->reference = DwgGeoData::Reference::Geographic;
+    out->refX = g.ref_pt.y;
+    out->refY = g.ref_pt.x;
+    out->northX = std::sin(g.north_dir_angle_deg);
+    out->northY = std::cos(g.north_dir_angle_deg);
+  }
   out->scaleEstimation = static_cast<int>(g.scale_est);
   out->userScaleFactor = g.user_scale_factor;
   out->seaLevelCorrection = g.do_sea_level_corr != 0;

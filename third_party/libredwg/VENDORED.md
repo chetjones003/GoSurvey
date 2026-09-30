@@ -23,7 +23,7 @@ Each change is its own commit. Keep this list current.
 
 | # | Files | What and why | Offered upstream |
 |---|-------|--------------|------------------|
-| — | — | none yet | — |
+| 1 | `src/dwg.spec` (GEODATA) | The R2000–R2007 (class version 1) GEODATA layout read a second `unknown_b` bit after `zero2` that AutoCAD does not write, so LibreDWG misread AutoCAD's GEODATA and AutoCAD refused one LibreDWG wrote (`eDwgCRCDoesNotMatch`). Found by decoding an AutoCAD-saved R2000 GEODATA bit by bit (REQ-362 item 3, TASK-299). | not yet |
 
 ## Moving to a newer upstream release
 A recorded decision (ADR-041 (h)). Replace `src/` and `include/` with the new tag's tracked files,

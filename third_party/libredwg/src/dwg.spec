@@ -6559,8 +6559,9 @@ DWG_OBJECT (GEODATA)
       FIELD_B (unknown_b, 293); // 0
       FIELD_2RD (zero1, 16);   // always origin (0,0)
       FIELD_2RD (zero2, 17);
-      FIELD_B (unknown_b, 0); // 0
-      FIELD_BD (north_dir_angle_deg, 54);
+      // GoSurvey change 1 (VENDORED.md): upstream read a second FIELD_B (unknown_b) here. AutoCAD
+      // writes no such bit, so every field below was off by one and AutoCAD rejected ours.
+      FIELD_BD (north_dir_angle_deg, 54); // the north angle in radians (from +Y), despite the name
       FIELD_BD (north_dir_angle_rad, 140);
       FIELD_BL (scale_est, 95);
       FIELD_BD (user_scale_factor, 141);
