@@ -872,6 +872,20 @@ TEST_CASE("The Object Layers table survives a DWG round trip (REQ-361)", "[dwg][
   CHECK(in.drawingSettings.objectLayers == st.drawingSettings.objectLayers);
 }
 
+TEST_CASE("The online map choice survives a DWG round trip (REQ-363)", "[dwg][libredwg][req363]") {
+  ScratchDir dir("req363");
+  const auto p = (dir.path / "onlinemap.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  st.drawingSettings.onlineMap = DrawingSettings::OnlineMap::UsgsImageryTopo;
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  CHECK(in.drawingSettings.onlineMap == DrawingSettings::OnlineMap::UsgsImageryTopo);
+}
+
 // REQ-359 item 3 / D-2026-09-29-e: a Position Marker reopens ONCE from a GoSurvey DWG (the trailer),
 // while the DWG / DXF body carries a CIRCLE, two LINEs and an MTEXT for other programs.
 TEST_CASE("A Position Marker survives DWG save and is written as circle, lines and MTEXT (REQ-359)",

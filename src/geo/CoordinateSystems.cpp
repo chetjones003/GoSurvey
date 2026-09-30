@@ -205,4 +205,81 @@ GeoResult ConvertLatLong(const std::string& fromCode, const std::string& toCode,
   return r;
 }
 
+struct Wgs84GridConverter::Impl {
+  std::string                        code;
+  std::unique_ptr<cs_Csprm_, CsFree> zone;
+  std::unique_ptr<cs_Csprm_, CsFree> wgs84;
+  std::unique_ptr<cs_Dtcprm_, DtcClose> toZoneDatum;   // WGS 84 → the zone's datum
+  std::unique_ptr<cs_Dtcprm_, DtcClose> toWgs84Datum;  // the zone's datum → WGS 84
+};
+
+Wgs84GridConverter::Wgs84GridConverter() = default;
+
+Wgs84GridConverter::~Wgs84GridConverter() = default;
+
+void Wgs84GridConverter::Close() { impl_.reset(); }
+
+bool Wgs84GridConverter::Open(const std::string& zoneCode, std::string* error) {
+  Close();
+  auto fail = [&](std::string why) {
+    if (error)
+      *error = std::move(why);
+    return false;
+  };
+  if (!g_loaded)
+    return fail(g_error);
+  auto impl = std::make_unique<Impl>();
+  impl->code = zoneCode;
+  impl->zone.reset(CS_csloc(zoneCode.c_str()));
+  if (!impl->zone)
+    return fail(LastCsMapError());
+  if (Field(impl->zone->csdef.prj_knm, sizeof(impl->zone->csdef.prj_knm)) == "LL")
+    return fail(zoneCode + " is a latitude/longitude system; it has no grid.");
+  impl->wgs84.reset(CS_csloc("LL84"));
+  if (!impl->wgs84)
+    return fail(LastCsMapError());
+  impl->toZoneDatum.reset(CS_dtcsu(impl->wgs84.get(), impl->zone.get(), cs_DTCFLG_DAT_F, cs_DTCFLG_BLK_F));
+  impl->toWgs84Datum.reset(CS_dtcsu(impl->zone.get(), impl->wgs84.get(), cs_DTCFLG_DAT_F, cs_DTCFLG_BLK_F));
+  if (!impl->toZoneDatum || !impl->toWgs84Datum)
+    return fail(LastCsMapError());
+  impl_ = std::move(impl);
+  return true;
+}
+
+bool Wgs84GridConverter::IsOpen() const { return impl_ != nullptr; }
+
+GeoResult Wgs84GridConverter::ToGrid(double longitude, double latitude) const {
+  if (!impl_)
+    return Failure("No zone is open.");
+  const double in[2] = {longitude, latitude};
+  double ll[3] = {};
+  if (CS_dtcvt(impl_->toZoneDatum.get(), in, ll) != 0)
+    return Failure(LastCsMapError());
+  double xy[3] = {};
+  if (CS_ll2cs(impl_->zone.get(), xy, ll) & cs_CNVRT_DOMN)
+    return Failure("The point is outside the mathematical domain of " + impl_->code + ".");
+  GeoResult r;
+  r.ok = true;
+  r.x = xy[0];
+  r.y = xy[1];
+  return r;
+}
+
+GeoResult Wgs84GridConverter::ToWgs84(double easting, double northing) const {
+  if (!impl_)
+    return Failure("No zone is open.");
+  const double xy[3] = {easting, northing, 0.0};
+  double ll[3] = {};
+  if (CS_cs2ll(impl_->zone.get(), ll, xy) & cs_CNVRT_DOMN)
+    return Failure("The point is outside the mathematical domain of " + impl_->code + ".");
+  double out[2] = {};
+  if (CS_dtcvt(impl_->toWgs84Datum.get(), ll, out) != 0)
+    return Failure(LastCsMapError());
+  GeoResult r;
+  r.ok = true;
+  r.x = out[0];
+  r.y = out[1];
+  return r;
+}
+
 }  // namespace geo

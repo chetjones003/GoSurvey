@@ -22,6 +22,7 @@
 #include "util/framewatch.hpp"
 #include "PdfAttachDialog.hpp"
 #include "ViewportRenderer.hpp"
+#include "CadOnlineMap.hpp"  // REQ-363 online map controller + tile service
 #include "CadSnap.hpp"
 #include "PdfAttach.hpp"
 #include "SurveyPoints.hpp"
@@ -210,6 +211,30 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 #endif
 
+// REQ-363 / ADR-064 — the online map's platform hooks: where tiles are cached and how one is fetched
+// (WinHTTP, on the tile service's worker threads). Texture upload is the renderer's.
+//
+// The cache is under LOCAL app data, not the roaming UserDataDirectory(): up to 500 MB of tiles
+// must not travel with a roaming profile.
+static std::filesystem::path MapTileCacheDirectory()
+{
+#ifdef _WIN32
+  wchar_t local[MAX_PATH];
+  if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH) > 0)
+    return std::filesystem::path(local) / "GoSurvey" / "MapTiles";
+#endif
+  const std::filesystem::path dir = UserDataDirectory();
+  return dir.empty() ? dir : dir / "MapTiles";
+}
+
+static MapTileStatus FetchMapTileOverWinHttp(const std::string &url, std::string &body, std::string &error)
+{
+  int status = 0;
+  if (HttpGetString(url, 10000, body, error, std::string(), &status))  // also bounds the exit wait
+    return MapTileStatus::Ok;
+  return status == 404 ? MapTileStatus::NotFound : MapTileStatus::Failed;
+}
+
 // GitHub issue #168 — append one diagnostic line per stall episode to
 // `%APPDATA%\GoSurvey\frame-watch.log`. Written to a file, not the command line, for the same reason
 // BENCH is (CadCommands_Bench.cpp): a stall that forces a kill of the app takes the scrollback with
@@ -311,6 +336,14 @@ int main()
     glfwTerminate();
     return 1;
   }
+
+  // REQ-363 / ADR-064: one online map for the application. Tiles and textures are shared by every
+  // drawing tab; each drawing's own map choice and location decide what is drawn.
+  auto onlineMap = std::make_unique<OnlineMapController>(
+      // Six fetches at a time, as a browser opens per host: each one is its own TLS connection.
+      // Each is a §8 one-shot worker (see MapTileService.hpp); six is the most alive at once.
+      std::make_unique<MapTileService>(MapTileCacheDirectory(), FetchMapTileOverWinHttp, 6),
+      OnlineMapTextureHooks{ViewportRenderer::CreateMapTileTexture, ViewportRenderer::DeleteMapTileTexture});
 
   AppLogoGpu appLogo{};
   {
@@ -1547,6 +1580,13 @@ int main()
     // start screen is drawn by DrawDrawingViewport as ImGui. Skip the scene pass entirely.
     const bool startTab = (cmd.activeDrawingIdx == 0);
 
+    // REQ-363: the online map. Updated every frame, even with Map Off, so turning it off stops the
+    // requests at once; only model space draws it (item 4).
+    onlineMap->Update(cmd, !paperSpace && !startTab, CadViewCamera(cmd), fbW, fbH, cmdLog);
+    cmd.onlineMapDrawing = onlineMap->Drawing();
+    if (onlineMap->Drawing())
+      tuning.mapTiles = &onlineMap->DrawList();
+
     static const std::vector<float> kEmptyVerts;
     static const std::vector<double> kEmptyVertsD;
     const std::vector<double> &sceneLines = paperSpace ? kEmptyVertsD : cmd.userLinesFlat;
@@ -1725,6 +1765,7 @@ int main()
     cmd.pdfDraftCache = nullptr;
   }
 
+  onlineMap.reset();  // joins the tile workers and releases the map textures while GL is alive
   for (auto &r : viewportRenderers)
     r->Shutdown();
   PdfAttach_Shutdown();

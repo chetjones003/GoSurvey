@@ -16,7 +16,9 @@
 #include <imgui_te_context.h>
 #include <imgui_te_engine.h>
 
+#include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1729,6 +1731,102 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     ctx->Yield(3);
     IM_CHECK_STR_EQ(s_cmd->drawingSettings.zoneCode.c_str(), "HARN/TX.TX-CF");
     IM_CHECK(ctx->ItemExists("Geolocation"));
+  };
+
+  // REQ-363 (GitHub issue #583 increment 1): the Map dropdown in the real ribbon, with the REAL USGS
+  // service. A 40 ft circle is drawn round NGS AG9976 (the University of Texas Tower); USGS Imagery is
+  // picked from the menu; the viewport is captured once the tiles have landed, so the tower can be
+  // seen inside the circle. Needs the internet.
+  //   build\devshell\GoSurvey.exe --devshell-run req363-online-map
+  ImGuiTest* onlineMap = IM_REGISTER_TEST(engine, "gosurvey", "req363-online-map");
+  onlineMap->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    ctx->WindowCollapse("//Developer Shell", true);
+    DevShell_SetWindowSize(1800, 1200);
+    ctx->Yield(4);
+
+    // A feet drawing in Texas Central, stored about a state-plane origin (REQ-101).
+    constexpr double kE = 3115243.14, kN = 10077391.26, kOx = 3115000.0, kOy = 10077000.0;
+    std::vector<std::string> log;
+    s_cmd->worldDocumentOriginX = kOx;
+    s_cmd->worldDocumentOriginY = kOy;
+    DrawingSettings s = s_cmd->drawingSettings;
+    s.zoneCode = "HARN/TX.TX-CF";
+    IM_CHECK(ApplyDrawingSettings(*s_cmd, 2, s_cmd->modelUnitsPerPlottedInch, s, log));
+    SubmitCad(ctx, "CIRCLE");
+    SubmitCad(ctx, "3115243.14,10077391.26");  // typed X,Y are WORLD coordinates
+    SubmitCad(ctx, "40");
+    ctx->Yield(3);
+    IM_CHECK_EQ(static_cast<int>(s_cmd->userCirclesCxCyZR.size()), 4);
+    s_cmd->viewportPanX = static_cast<float>(kE - kOx);
+    s_cmd->viewportPanY = static_cast<float>(kN - kOy);
+    s_cmd->viewportZoom = 50.f / 250.f;  // 500 ft tall
+    ctx->Yield(3);
+
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip"));
+    ctx->ItemClick("Geolocation");
+    ctx->Yield(3);
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecGeoOnlineMap"));
+    IM_CHECK(!s_cmd->onlineMapDrawing);
+    ctx->ItemClick("##GeoMap");
+    ctx->Yield(3);
+    ctx->SetRef("//$FOCUSED");
+    ctx->ItemClick("usgsImagery/##row");
+    ctx->Yield(3);
+    IM_CHECK(s_cmd->drawingSettings.onlineMap == DrawingSettings::OnlineMap::UsgsImagery);
+
+    // Let the tiles arrive (background fetch), then capture. Waited on the WALL clock: the Test
+    // Engine's own sleeps run in its fast-forwarded time, far shorter than a download.
+    const auto waitReal = [ctx](double seconds) {
+      const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+      while (std::chrono::steady_clock::now() < until)
+        ctx->Yield();
+    };
+    waitReal(4.0);
+    IM_CHECK(s_cmd->onlineMapDrawing);
+    DevShell_RequestViewportCapture("devshell-req363-usgs-imagery.bmp", 1600);
+    ctx->Yield(4);
+    s_cmd->viewportZoom = 50.f / 3000.f;  // zoomed out: many more tiles
+    waitReal(4.0);
+    DevShell_RequestViewportCapture("devshell-req363-usgs-imagery-wide.bmp", 1600);
+    ctx->Yield(4);
+
+    // REQ-363 item 5 / REQ-100: pan and orbit over new ground for 600 frames, so tiles keep streaming
+    // in, and record the wall-clock frame time. p95 must hold 60 FPS.
+    {
+      std::vector<double> frameMs;
+      const float x0 = s_cmd->viewportPanX, y0 = s_cmd->viewportPanY;
+      for (int i = 0; i < 600; ++i) {
+        s_cmd->viewportPanX = x0 + 40.f * static_cast<float>(i);  // 24,000 ft east over the run
+        s_cmd->viewportPanY = y0 + 15.f * static_cast<float>(i);
+        s_cmd->viewportAzimuthDeg = 0.3f * static_cast<float>(i);
+        s_cmd->viewportElevationDeg = 90.f - 0.05f * static_cast<float>(i);
+        ctx->Yield();
+        if (i >= 30)  // past the first frames of the new view
+          frameMs.push_back(s_cmd->perfFrameMs);
+      }
+      std::sort(frameMs.begin(), frameMs.end());
+      const double p95 = frameMs[frameMs.size() * 95 / 100];
+      DevShell_Logf("req363", "pan+orbit with the map streaming: p50 %.2f ms, p95 %.2f ms, max %.2f ms (%d frames)",
+                    frameMs[frameMs.size() / 2], p95, frameMs.back(), static_cast<int>(frameMs.size()));
+      IM_CHECK(p95 <= 1000.0 / 60.0 + 0.5);  // 60 FPS, with the vsync interval's own jitter
+      s_cmd->viewportAzimuthDeg = 0.f;
+      s_cmd->viewportElevationDeg = 90.f;
+      s_cmd->viewportPanX = x0;
+      s_cmd->viewportPanY = y0;
+    }
+
+    // Map Off from the same menu: nothing drawn.
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecGeoOnlineMap"));
+    ctx->ItemClick("##GeoMap");
+    ctx->Yield(3);
+    ctx->SetRef("//$FOCUSED");
+    ctx->ItemClick("off/##row");
+    ctx->Yield(4);
+    IM_CHECK(s_cmd->drawingSettings.onlineMap == DrawingSettings::OnlineMap::Off);
+    IM_CHECK(!s_cmd->onlineMapDrawing);
+    ctx->WindowCollapse("//Developer Shell", false);
   };
 }
 

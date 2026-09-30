@@ -19,6 +19,7 @@
 // util/ray3d beside it, so the coordinate-system rules are testable without a window.
 #include "util/ucs.hpp"
 #include "geo/CoordinateSystems.hpp"
+#include "geo/LocalGridTransform.hpp"
 // ADR-060 .gscloud out-of-core cache: EXTRACTCENTERLINE (REQ-347) keeps one open cache handle
 // across hover frames rather than re-opening it every frame.
 #include "util/pointcloudcache.hpp"
@@ -1137,6 +1138,11 @@ struct DrawingSettings {
     return objectLayers[static_cast<size_t>(k)];
   }
 
+  /// The Geolocation tab's online map (REQ-363, D-2026-09-30-b). Map Off draws nothing and fetches
+  /// nothing. Stored values are the trailer's; append, never renumber.
+  enum class OnlineMap { Off = 0, UsgsImagery = 1, UsgsImageryTopo = 2, UsgsTopo = 3 };
+  OnlineMap onlineMap = OnlineMap::Off;
+
   /// Geolocated exactly when a zone is set (REQ-358 item 3).
   [[nodiscard]] bool Geolocated() const { return !zoneCode.empty(); }
   /// Back to the default geographic marker (drawing origin, grid north).
@@ -1151,10 +1157,42 @@ struct DrawingSettings {
            scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables &&
            zoneCode == o.zoneCode && markerX == o.markerX && markerY == o.markerY &&
            markerNorthDeg == o.markerNorthDeg && transform == o.transform &&
-           objectLayers == o.objectLayers;
+           objectLayers == o.objectLayers && onlineMap == o.onlineMap;
   }
   bool operator!=(const DrawingSettings& o) const { return !(*this == o); }
 };
+
+/// One entry of the Map dropdown (REQ-363 item 1), in dropdown order with Map Off last.
+struct OnlineMapInfo {
+  DrawingSettings::OnlineMap map;
+  const char* label;        ///< Dropdown / button text.
+  const char* storageName;  ///< The trailer's value.
+  const char* service;      ///< USGS The National Map service name; nullptr for Map Off.
+  const char* icon;         ///< Ribbon icon (resources/icons/<icon>.png): the item's thumbnail.
+};
+inline constexpr std::array<OnlineMapInfo, 4> kOnlineMaps = {{
+    {DrawingSettings::OnlineMap::UsgsImagery, "USGS Imagery", "usgsImagery", "USGSImageryOnly", "map_usgs_imagery"},
+    {DrawingSettings::OnlineMap::UsgsImageryTopo, "USGS Imagery Topo", "usgsImageryTopo", "USGSImageryTopo",
+     "map_usgs_imagery_topo"},
+    {DrawingSettings::OnlineMap::UsgsTopo, "USGS Topo", "usgsTopo", "USGSTopo", "map_usgs_topo"},
+    {DrawingSettings::OnlineMap::Off, "Map Off", "off", nullptr, "map_off"},
+}};
+[[nodiscard]] inline const OnlineMapInfo& OnlineMapInfoOf(DrawingSettings::OnlineMap m) {
+  for (const OnlineMapInfo& i : kOnlineMaps)
+    if (i.map == m)
+      return i;
+  return kOnlineMaps.back();
+}
+[[nodiscard]] inline const char* OnlineMapStorageName(DrawingSettings::OnlineMap m) {
+  return OnlineMapInfoOf(m).storageName;
+}
+/// Unknown or empty → Map Off.
+[[nodiscard]] inline DrawingSettings::OnlineMap OnlineMapFromStorageName(const std::string& name) {
+  for (const OnlineMapInfo& i : kOnlineMaps)
+    if (name == i.storageName)
+      return i.map;
+  return DrawingSettings::OnlineMap::Off;
+}
 
 /// Inches per meter under \p f: exactly 39.37 (US survey foot) or 1/0.0254 (international foot).
 [[nodiscard]] inline double DrawingInchesPerMeter(DrawingSettings::FootDefinition f) {
@@ -4695,6 +4733,9 @@ struct AppCommandState {
   bool   perfHudVisible = false;
   double perfFrameMs = 0.0;        ///< whole frame, wall-clock frame-to-frame
   double perfRenderMs = 0.0;       ///< the GL RenderScene call
+  /// REQ-363 item 9: online map tiles were drawn last frame, so the viewport shows the attribution.
+  /// Runtime only (set by the app's map controller each frame), never saved.
+  bool onlineMapDrawing = false;
   double perfHoverPickMs = 0.0;    ///< the viewport entity hover-pick block (issue #166)
   bool   perfHoverPickRan = false; ///< did the hover pick actually run this frame, or reuse cache
   double perfSnapMs = 0.0;         ///< the object-snap FindBest block
@@ -7220,6 +7261,30 @@ struct DrawingTransformFactors {
 /// The inverse of \ref DrawingPointToGrid: the LOCAL drawing point (x, y) of a grid coordinate in the
 /// zone's unit. Fails, with the reason, exactly when DrawingPointToGrid would.
 [[nodiscard]] geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing);
+
+/// WGS 84 latitude/longitude ↔ a LOCAL drawing point (REQ-363 item 3, ADR-064 (b)): the same chain as
+/// \ref DrawingPointToGrid / \ref GridToDrawingPoint plus the datum path to WGS 84, with the zone, the
+/// datum paths and the REQ-360 transformation resolved ONCE by \ref Open, so an online map can place
+/// thousands of tile points. Captures the drawing's settings, unit and origin at Open; reopen when any
+/// of them changes. UI thread only (CS-MAP, ADR-063 (c)).
+class DrawingWgs84Frame {
+ public:
+  /// False, with the reason, when the drawing's zone or transformation cannot be resolved.
+  bool Open(const AppCommandState& st, std::string* error);
+  [[nodiscard]] bool IsOpen() const { return converter_.IsOpen(); }
+  /// x = longitude, y = latitude (WGS 84) → local drawing point.
+  [[nodiscard]] geo::GeoResult LocalFromWgs84(double longitude, double latitude) const;
+  /// Local drawing point → WGS 84 (x = longitude).
+  [[nodiscard]] geo::GeoResult Wgs84FromLocal(double localX, double localY) const;
+
+ private:
+  geo::Wgs84GridConverter converter_;
+  bool                    applyTransform_ = false;
+  geo::LocalGridTransform transform_{};
+  double                  zoneUnitsPerDrawingUnit_ = 1.0;
+  double                  originX_ = 0.0;
+  double                  originY_ = 0.0;
+};
 /// "LAT 30°17'10.51249\"N\nLONG 97°44'21.71739\"W" — a Position Marker's default label.
 [[nodiscard]] std::string FormatLatLongLabel(double latitudeDeg, double longitudeDeg);
 /// Decimal degrees, or "D M S" (spaces or °'\" between) with an optional N/S (\p latitude) or E/W
@@ -7228,6 +7293,9 @@ struct DrawingTransformFactors {
 /// Remove Location (REQ-359 item 2): zone → No Datum, No Projection and the geographic marker back to
 /// its default, as ONE undo step. False (logged) when the drawing is not geolocated.
 bool RemoveGeoLocation(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-363 item 8: choose the drawing's online map, as one undo step. False (logged) when the drawing
+/// is not geolocated and \p map is not Map Off; choosing the current map again changes nothing.
+bool SetOnlineMap(AppCommandState& st, DrawingSettings::OnlineMap map, std::vector<std::string>& log);
 /// Sets the geographic marker (REQ-359 item 4) to the LOCAL point (stored as WORLD) and a north
 /// direction in degrees CCW from +X. One undo step. False (logged) when not geolocated.
 bool SetGeographicMarker(AppCommandState& st, double localX, double localY, double northDeg,

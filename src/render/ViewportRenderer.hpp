@@ -3,6 +3,7 @@
 #include "CadCommands.hpp"
 #include "CadSnap.hpp"
 #include "PdfAttach.hpp"
+#include "CadOnlineMap.hpp"
 #include "gizmooverlay.hpp"
 #include "render/SectionClip.hpp"
 #include "util/pointcloudcache.hpp"
@@ -55,6 +56,8 @@ struct RenderTuning {
   /// grabs — the rule REQ-318's sub-object hover already follows.
   int sectionPlaneGripHover = -1;
   int sectionPlaneGripDrag = -1;
+  /// REQ-363 / ADR-064 (d) — the online map tiles, drawn first, under everything. Null = no map.
+  const std::vector<MapTileDraw>* mapTiles = nullptr;
 };
 
 class ViewportRenderer {
@@ -192,6 +195,12 @@ public:
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
+  /// REQ-363 / ADR-064 (d): an online map tile's texture from top-row-first RGBA — linear filtered,
+  /// clamped at the edges so neighbouring tiles meet without a seam. 0 on failure. Static: tiles are
+  /// shared by every drawing tab's renderer (one GL context), and owned by the map controller.
+  static unsigned int CreateMapTileTexture(const std::vector<unsigned char>& rgba, int width, int height);
+  static void DeleteMapTileTexture(unsigned int texture);
+
   /// REQ-308 — write the last-rendered viewport image as a 24-bit BMP, downscaled so its longer
   /// side is at most \p maxDim. Best-effort: returns false and writes nothing on any failure.
   /// Call right after RenderScene for the drawing being pictured.
@@ -292,6 +301,7 @@ private:
   unsigned int shadedProgram_ = 0;
   unsigned int vaoShaded_ = 0;
   unsigned int vboShaded_ = 0;
+  std::vector<float> mapTileScratch_;  ///< One map tile's float vertices (REQ-363), reused per tile.
   std::vector<float> cpuShadedTris_;  ///< x,y,z,nx,ny,nz per vertex; scratch for the filled-region quad.
 
   /// One mesh's GPU residency (REQ-063). Meshes are **immutable** (ADR-026 (c)), so the buffers

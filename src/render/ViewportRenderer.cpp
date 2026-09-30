@@ -720,6 +720,29 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
 
 } // namespace
 
+unsigned int ViewportRenderer::CreateMapTileTexture(const std::vector<unsigned char>& rgba, int width, int height) {
+  if (width <= 0 || height <= 0 || rgba.size() < static_cast<size_t>(width) * static_cast<size_t>(height) * 4u)
+    return 0;
+  GLuint tex = 0;
+  glGenTextures(1, &tex);
+  if (!tex)
+    return 0;
+  glBindTexture(GL_TEXTURE_2D, tex);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+  glBindTexture(GL_TEXTURE_2D, 0);
+  return tex;
+}
+
+void ViewportRenderer::DeleteMapTileTexture(unsigned int texture) {
+  const GLuint tex = texture;
+  glDeleteTextures(1, &tex);
+}
+
 bool ViewportRenderer::Init() {
   if (glewInit() != GLEW_OK)
     return false;
@@ -1354,6 +1377,46 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
 
   GLint locMvp = glGetUniformLocation(lineProgram_, "uMVP");
   GLint locCol = glGetUniformLocation(lineProgram_, "uColor");
+
+  // --- Online map tiles (REQ-363 / ADR-064 (d)): under the PDF underlays and all geometry ---
+  // Depth is off and unwritten, so the map is never in front of anything: it is a backdrop on Z = 0,
+  // not geometry that hides what is below the plane in an orbited view.
+  if (tuning.mapTiles && !tuning.mapTiles->empty() && texProgram_ && vaoTex_ && vboTex_) {
+    const GLboolean depthWasOn = glIsEnabled(GL_DEPTH_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glUseProgram(texProgram_);
+    glUniformMatrix4fv(glGetUniformLocation(texProgram_, "uMVP"), 1, GL_FALSE, mvp);
+    glUniform1i(glGetUniformLocation(texProgram_, "uTex"), 0);
+    glUniform1f(glGetUniformLocation(texProgram_, "uAlpha"), 1.f);
+    glUniform1f(glGetUniformLocation(texProgram_, "uTransparentBg"), 0.f);
+    glUniform1f(glGetUniformLocation(texProgram_, "uDarkBg"), 0.f);
+    glActiveTexture(GL_TEXTURE0);
+    glBindVertexArray(vaoTex_);
+    glBindBuffer(GL_ARRAY_BUFFER, vboTex_);
+    std::vector<float>& verts = mapTileScratch_;
+    for (const MapTileDraw& d : *tuning.mapTiles) {
+      if (!d.texture || !d.xyuv || d.xyuv->empty())
+        continue;
+      const std::vector<double>& src = *d.xyuv;
+      verts.resize(src.size());
+      for (size_t i = 0; i + 3 < src.size(); i += 4) {
+        // Local → view-relative in double before narrowing, as every other pass does (REQ-101).
+        verts[i] = static_cast<float>(src[i] - viewAnchorX);
+        verts[i + 1] = static_cast<float>(src[i + 1] - viewAnchorY);
+        verts[i + 2] = static_cast<float>(src[i + 2]);
+        verts[i + 3] = static_cast<float>(src[i + 3]);
+      }
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(float)), verts.data(),
+                   GL_STREAM_DRAW);
+      glBindTexture(GL_TEXTURE_2D, d.texture);
+      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(verts.size() / 4));
+    }
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    if (depthWasOn)
+      glEnable(GL_DEPTH_TEST);
+  }
 
   // --- PDF underlays (rendered first, behind all CAD geometry) ---
   if (pdfAttachments && !pdfAttachments->empty() && texProgram_ && vaoTex_ && vboTex_) {
