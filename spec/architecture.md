@@ -4672,9 +4672,11 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
       never computed per frame. Bending the image across the vertex grid absorbs the projection's
       curvature and any grid rotation, so no whole-image reprojection or resampling is needed. The
       Web Mercator tile maths (level choice, tile range, tile bounds) is pure and in `src/geo/`.
-  (c) **A background worker in `src/platform/`** owns the network and the disk: the disk cache first,
-      then WinHTTP (`HttpFetch`); it decodes with the vendored `stb_image` and hands RGBA pixels back
-      through a queue. The UI thread only uploads textures, a bounded number per frame. The fetch
+  (c) **Background work in `src/platform/`** owns the network and the disk, as §8 one-shot workers:
+      one per tile, a bounded number alive at once, with no pool and no queue shared with a thread.
+      Each looks in the disk cache first, then fetches through WinHTTP (`HttpFetch`), decodes with the
+      vendored `stb_image`, and release-stores its result for the UI thread to collect. The UI thread
+      only uploads textures, a bounded number per frame. The fetch
       function is injectable, so failure handling is unit-tested with no network. No new dependency
       (REQ-300): WinHTTP ships with Windows and `stb_image` is already vendored.
   (d) **Drawn in the renderer's existing underlay pass**, the textured-quad program PDF underlays
