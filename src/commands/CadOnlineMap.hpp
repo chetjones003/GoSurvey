@@ -7,6 +7,7 @@
 
 #include "CadCommands.hpp"
 #include "MapTileService.hpp"
+#include "geo/WebMercator.hpp"
 
 #include <chrono>
 #include <functional>
@@ -67,6 +68,7 @@ class OnlineMapController {
   static constexpr int    kCellsPerSide = 4;    ///< Placement grid per tile (ADR-064 (b)).
   static constexpr int    kWorkPerFrame = 4;    ///< Uploads, and separately placements, per frame.
   static constexpr size_t kMaxTextures = 256;   ///< Least-recently-used texture budget (~64 MB).
+  static constexpr int    kMaxCaptureTiles = 256;  ///< Most tiles one Capture Area keeps (REQ-364 item 2).
 
   OnlineMapController(std::unique_ptr<MapTileService> service, OnlineMapTextureHooks hooks,
                       std::chrono::milliseconds retryAfterFailure = std::chrono::seconds(30));
@@ -75,8 +77,10 @@ class OnlineMapController {
   OnlineMapController& operator=(const OnlineMapController&) = delete;
 
   /// Once per frame. \p modelView is false for paper space and the Start tab (item 4): nothing is
-  /// drawn or requested then, as with Map Off or a drawing that is not geolocated (item 8).
-  void Update(const AppCommandState& st, bool modelView, const Camera& cam, int fbWidth, int fbHeight,
+  /// drawn or requested then, as with a drawing that is not geolocated (item 8). With Map Off only
+  /// the drawing's captured areas (REQ-364) are drawn. A running Capture Area is gathered here and
+  /// ended through CommitMapCapture / FailMapCapture — the one write to \p st.
+  void Update(AppCommandState& st, bool modelView, const Camera& cam, int fbWidth, int fbHeight,
               std::vector<std::string>& log);
 
   /// What to draw this frame, coarsest first. Pointers stay valid until the next Update.
@@ -93,11 +97,25 @@ class OnlineMapController {
     std::vector<double> xyuv;  ///< Empty until placed for the current location.
     bool                placeFailed = false;
     std::uint64_t       lastUsedFrame = 0;
+    std::shared_ptr<const std::string> image;  ///< As served — what a capture keeps (REQ-364).
+  };
+  /// A running Capture Area: the tiles to keep and what has been gathered so far.
+  struct CaptureJob {
+    bool                    active = false;
+    int                     map = 0;
+    int                     level = 0;
+    std::vector<MapTileKey> keys;
+    std::map<MapTileKey, std::shared_ptr<const std::string>> images;  ///< Gathered; null = no tile there.
   };
   using Clock = std::chrono::steady_clock;
 
   void Clear(bool releaseTextures);
+  /// Releases every texture except those of \p keep (the drawing's captured tiles).
+  void ReleaseTexturesExcept(const std::map<MapTileKey, std::shared_ptr<const std::string>>& keep);
   bool EnsurePlaced(const MapTileKey& key, Tile& t, int& placeBudget, std::vector<std::string>& log);
+  /// The mercator box of a LOCAL rectangle, from its corners, edge midpoints and centre (a rotated
+  /// drawing still gets a box that covers it). False when its centre cannot be converted.
+  bool LocalRectToMercator(double minX, double minY, double maxX, double maxY, geo::MercatorBox* box) const;
 
   std::unique_ptr<MapTileService> service_;
   OnlineMapTextureHooks           hooks_;
@@ -111,6 +129,7 @@ class OnlineMapController {
   std::vector<MapTileKey>                wanted_;
   std::vector<MapTileKey>                sent_;  ///< What the service was last asked for.
   OnlineMapMessageLatch                  latch_;
+  CaptureJob                             job_;
   std::uint64_t                          frame_ = 0;
   int                                    level_ = -1;
 
@@ -118,7 +137,9 @@ class OnlineMapController {
   DrawingWgs84Frame geo_;
   bool              geoOk_ = false;
   bool              haveLocation_ = false;
-  DrawingSettings   locSettings_;
+  std::string       locZone_;
+  DrawingSettings::Transform locTransform_;
+  DrawingSettings::FootDefinition locFoot_ = DrawingSettings::FootDefinition::UsSurvey;
   int               locInsUnits_ = 0;
   double            locOriginX_ = 0.0, locOriginY_ = 0.0;
   int               map_ = 0;

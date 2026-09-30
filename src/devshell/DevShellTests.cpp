@@ -1828,6 +1828,93 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(!s_cmd->onlineMapDrawing);
     ctx->WindowCollapse("//Developer Shell", false);
   };
+
+  // REQ-364 (GitHub issue #583 increment 2): Capture Area through the real split button, with the
+  // live USGS service. The icon half keeps the visible map; with Map Off the captured area still
+  // draws (screenshot); Pick Area from the menu with typed corners; Remove Captured Areas.
+  //   build\devshell\GoSurvey.exe --devshell-run req364-capture-area
+  ImGuiTest* capture = IM_REGISTER_TEST(engine, "gosurvey", "req364-capture-area");
+  capture->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    ctx->WindowCollapse("//Developer Shell", true);
+    DevShell_SetWindowSize(1800, 1200);
+    ctx->Yield(4);
+    const auto waitReal = [ctx](double seconds) {
+      const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+      while (std::chrono::steady_clock::now() < until)
+        ctx->Yield();
+    };
+    constexpr double kE = 3115243.14, kN = 10077391.26, kOx = 3115000.0, kOy = 10077000.0;
+    std::vector<std::string> log;
+    s_cmd->worldDocumentOriginX = kOx;
+    s_cmd->worldDocumentOriginY = kOy;
+    DrawingSettings s = s_cmd->drawingSettings;
+    s.zoneCode = "HARN/TX.TX-CF";
+    IM_CHECK(ApplyDrawingSettings(*s_cmd, 2, s_cmd->modelUnitsPerPlottedInch, s, log));
+    s_cmd->viewportPanX = static_cast<float>(kE - kOx);
+    s_cmd->viewportPanY = static_cast<float>(kN - kOy);
+    s_cmd->viewportZoom = 50.f / 800.f;
+    IM_CHECK(SetOnlineMap(*s_cmd, DrawingSettings::OnlineMap::UsgsImagery, log));
+    waitReal(4.0);
+
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip"));
+    ctx->ItemClick("Geolocation");
+    ctx->Yield(3);
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecGeoOnlineMap"));
+    ctx->ItemClick("##GeoCaptureArea");  // the icon half: the visible area
+    ctx->Yield(2);
+    for (int i = 0; i < 400 && s_cmd->active == AppCommandState::Kind::GeoCaptureArea; ++i)
+      waitReal(0.025);
+    IM_CHECK(s_cmd->active == AppCommandState::Kind::None);
+    IM_CHECK_EQ(static_cast<int>(s_cmd->drawingSettings.capturedAreas.size()), 1);
+    DevShell_Logf("req364", "captured %d tile(s) at level %d",
+                  static_cast<int>(s_cmd->drawingSettings.capturedAreas[0].tiles.size()),
+                  s_cmd->drawingSettings.capturedAreas[0].level);
+
+    // Map Off: the captured area is still drawn (and credited).
+    IM_CHECK(SetOnlineMap(*s_cmd, DrawingSettings::OnlineMap::Off, log));
+    s_cmd->viewportZoom = 50.f / 1600.f;  // wider than the capture, so its edge shows
+    waitReal(2.0);
+    IM_CHECK(s_cmd->onlineMapDrawing);
+    DevShell_RequestViewportCapture("devshell-req364-captured-map-off.bmp", 1600);
+    ctx->Yield(4);
+
+    // Pick Area from the menu (the label half), typed corners; then Remove Captured Areas.
+    IM_CHECK(SetOnlineMap(*s_cmd, DrawingSettings::OnlineMap::UsgsTopo, log));
+    s_cmd->viewportZoom = 50.f / 800.f;
+    waitReal(2.0);
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecGeoOnlineMap"));
+    const ImGuiTestItemInfo cap = ctx->ItemInfo("##GeoCaptureArea");
+    IM_CHECK(cap.ID != 0);
+    ctx->MouseMoveToPos(ImVec2(cap.RectFull.GetCenter().x, cap.RectFull.Max.y - 6.f));
+    ctx->MouseClick();
+    ctx->Yield(3);
+    ctx->SetRef("//$FOCUSED");
+    ctx->ItemClick("Pick Area");
+    ctx->Yield(3);
+    IM_CHECK(s_cmd->active == AppCommandState::Kind::GeoCaptureArea);
+    SubmitCad(ctx, "3115200,10077350");
+    SubmitCad(ctx, "3115300,10077450");
+    for (int i = 0; i < 400 && s_cmd->active == AppCommandState::Kind::GeoCaptureArea; ++i)
+      waitReal(0.025);
+    IM_CHECK_EQ(static_cast<int>(s_cmd->drawingSettings.capturedAreas.size()), 2);
+    IM_CHECK(s_cmd->drawingSettings.capturedAreas[1].map == DrawingSettings::OnlineMap::UsgsTopo);
+
+    IM_CHECK(RefWindow(ctx, "//GoSurveyHost/RibbonStrip/RibbonToolsLeft/RibbonSecGeoOnlineMap"));
+    ctx->MouseMoveToPos(ImVec2(cap.RectFull.GetCenter().x, cap.RectFull.Max.y - 6.f));
+    ctx->MouseClick();
+    ctx->Yield(3);
+    ctx->SetRef("//$FOCUSED");
+    ctx->ItemClick("Remove Captured Areas");
+    ctx->Yield(3);
+    IM_CHECK(s_cmd->drawingSettings.capturedAreas.empty());
+    SubmitCad(ctx, "UNDO");
+    ctx->Yield(3);
+    IM_CHECK_EQ(static_cast<int>(s_cmd->drawingSettings.capturedAreas.size()), 2);
+    IM_CHECK(SetOnlineMap(*s_cmd, DrawingSettings::OnlineMap::Off, log));
+    ctx->WindowCollapse("//Developer Shell", false);
+  };
 }
 
 #endif

@@ -5758,11 +5758,43 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           ImGui::EndPopup();
         }
         ImGui::SameLine();
-        ImGui::BeginDisabled();
-        RibbonButtonEx("##GeoCaptureArea", RibbonIconKind::Nyi, "Capture Area", ImVec2(wCapture, colH),
-                       RibbonLabel::Below, "c3d_mapcheck");
+        // REQ-364 item 1: a split button. The icon half captures the visible area; the label half
+        // (with the chevron) opens Capture Area / Pick Area / Remove Captured Areas. With Map Off the
+        // whole button opens the menu, where only Remove Captured Areas can be enabled.
+        const bool mapOn = cmd.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off;
+        const bool haveCaptures = !cmd.drawingSettings.capturedAreas.empty();
+        ImGui::BeginDisabled(!mapOn && !haveCaptures);
+        const bool capHit = RibbonButtonEx("##GeoCaptureArea", RibbonIconKind::Nyi, "Capture Area",
+                                           ImVec2(wCapture, colH), RibbonLabel::Below, "c3d_mapcheck");
+        const ImVec2 cMin = ImGui::GetItemRectMin();
+        const ImVec2 cMax = ImGui::GetItemRectMax();
+        DrawDropdownChevron(ImGui::GetWindowDrawList(), ImVec2(cMin.x, cMax.y - 14.f), ImVec2(cMax.x + 4.f, cMax.y - 2.f),
+                            ImGui::GetColorU32(ImGuiCol_Text));
         ImGui::EndDisabled();
-        RibbonItemHelp("Capture Area \xE2\x80\x94 not implemented yet.", ImGuiHoveredFlags_AllowWhenDisabled);
+        RibbonItemHelp(mapOn ? "Capture Area \xE2\x80\x94 keep the visible map inside the drawing, so it shows offline.\n"
+                               "Click the label for Pick Area and Remove Captured Areas."
+                             : "Capture Area \xE2\x80\x94 choose a map first.",
+                       ImGuiHoveredFlags_AllowWhenDisabled);
+        if (capHit) {
+          const float splitY = cMin.y + (cMax.y - cMin.y) * 0.58f;
+          if (!mapOn || ImGui::GetIO().MouseClickedPos[0].y >= splitY) {
+            DevShell_OnUi("##GeoCaptureAreaMenu");
+            ImGui::OpenPopup("##GeoCaptureMenu");
+          } else {
+            DevShell_OnUi("##GeoCaptureArea");
+            StartCaptureMapArea(cmd, false, log);
+          }
+        }
+        if (ImGui::BeginPopup("##GeoCaptureMenu")) {
+          if (ImGui::MenuItem("Capture Area", nullptr, false, mapOn))
+            StartCaptureMapArea(cmd, false, log);
+          if (ImGui::MenuItem("Pick Area", nullptr, false, mapOn))
+            StartCaptureMapArea(cmd, true, log);
+          ImGui::Separator();
+          if (ImGui::MenuItem("Remove Captured Areas", nullptr, false, haveCaptures))
+            RemoveCapturedMapAreas(cmd, log);
+          ImGui::EndPopup();
+        }
         RibbonSectionEnd();
       }});
     }
@@ -10223,6 +10255,7 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
   case K::GeoMarkLatLong:
   case K::GeoReorientMarker:
   case K::DrawingSettingsPick:  // REQ-360
+  case K::GeoCaptureArea:       // REQ-364
     return GeoCommandPrompt(cmd);
   case K::SurveyInverse:
     return cmd.surveyInversePhase == AppCommandState::SurveyInversePhase::WaitFrom ? "Specify first point:"

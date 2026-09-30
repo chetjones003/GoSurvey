@@ -13488,7 +13488,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   }
 
   if (st.active == K::GeoMarkPoint || st.active == K::GeoReorientMarker ||
-      st.active == K::DrawingSettingsPick) {  // REQ-359 / REQ-360
+      st.active == K::DrawingSettingsPick || st.active == K::GeoCaptureArea) {  // REQ-359 / 360 / 364
     SubmitGeoCommandPoint(st, wx, wy, log);
     return;
   }
@@ -39904,7 +39904,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ID canceled.");
   else if (st.active == AppCommandState::Kind::GeoMarkPoint || st.active == AppCommandState::Kind::GeoMarkLatLong ||
            st.active == AppCommandState::Kind::GeoReorientMarker ||
-           st.active == AppCommandState::Kind::DrawingSettingsPick)  // REQ-359 / REQ-360
+           st.active == AppCommandState::Kind::DrawingSettingsPick ||
+           st.active == AppCommandState::Kind::GeoCaptureArea)  // REQ-359 / REQ-360 / REQ-364
     log.push_back(std::string(AppCommandState::KindName(st.active)) + " canceled.");
   else if (st.active == AppCommandState::Kind::SurveyInverse)
     log.push_back("INVERSE canceled.");
@@ -43458,6 +43459,12 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     return st.geoCmdPhase == AppCommandState::GeoCmdPhase::WaitFirst
                ? "GEOREORIENTMARKER: Pick the design point or type X,Y | ESC cancel"
                : "GEOREORIENTMARKER: Pick a point to the north of the design point | ESC cancel";
+  if (st.active == K::GeoCaptureArea)  // REQ-364
+    return st.geoCmdPhase == AppCommandState::GeoCmdPhase::Capturing
+               ? "Capture Area: gathering the map tiles | ESC cancel (nothing is kept)"
+               : st.geoCmdPhase == AppCommandState::GeoCmdPhase::WaitFirst
+                     ? "Capture Area: Pick the first corner or type X,Y | ESC cancel"
+                     : "Capture Area: Pick the opposite corner or type X,Y | ESC cancel";
 
   if (st.active == K::SurveyInverse) {
     using SIP = AppCommandState::SurveyInversePhase;

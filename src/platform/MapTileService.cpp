@@ -47,6 +47,15 @@ void WriteFileAtomically(const fs::path& p, const std::string& bytes) {
 MapTileResult FetchTile(const MapTileRequest& req, const fs::path& cacheDir, const MapTileFetch& fetch) {
   MapTileResult r;
   r.key = req.key;
+  if (req.image) {  // captured into the drawing: decode only
+    if (MapTileService::DecodeImage(*req.image, r.rgba, r.width, r.height)) {
+      r.status = MapTileStatus::Ok;
+      r.bytes = req.image;
+    } else {
+      r.error = "the captured tile is not an image";
+    }
+    return r;
+  }
   const fs::path cached = cacheDir.empty() ? fs::path() : cacheDir / fs::u8path(req.cachePath);
   std::string bytes;
   if (!cached.empty() && ReadFile(cached, bytes) && MapTileService::DecodeImage(bytes, r.rgba, r.width, r.height)) {
