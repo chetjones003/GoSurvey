@@ -10242,7 +10242,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      reads from GEODATA's design point and north direction (writing it waits for issue #590,
      D-2026-09-29-g).
   5. **Online Map** panel: a **Map** dropdown showing **Map Off** and a **Capture Area** button, both
-     disabled with a *not implemented yet* tooltip (REQ-084). They are delivered by issue #583.
+     disabled with a *not implemented yet* tooltip (REQ-084). They are delivered by issue #583:
+     REQ-363 (Map) and REQ-364 (Capture Area) replace this item as each is delivered.
 - Acceptance:
   - assigning a zone shows the tab; Remove Location (confirmed) hides it, clears the zone, and one
     UNDO brings both back; switching to a non-geolocated drawing tab hides it;
@@ -10253,13 +10254,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a Position Marker selects, moves, copies and erases as one object with its label, undoes in one
     step, snaps (Survey point / Center) at its centre, survives DWG save → close → reopen once (no duplicate), and
     the saved DWG / DXF body holds its CIRCLE, LINEs and MTEXT;
-  - Map and Capture Area are visible, disabled, and show *not implemented yet*.
+  - Map and Capture Area are visible, disabled, and show *not implemented yet* — until REQ-363 /
+    REQ-364 deliver them.
 - Owner-layer: UI (`src/ui/` ribbon tab + marker overlay), Commands (Remove Location, Mark Position,
   marker pick).
 - Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-e, TASK-292.
 - Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — item 3 and its
   acceptance amended (D-2026-09-29-e): Mark Position places a Position Marker object. 2026-09-29 —
   "OSNAP Node" reworded: GoSurvey has no separate Node snap; its node snap is the Survey point snap.
+  2026-09-30 — item 5: the Map and Capture Area are delivered by REQ-363 / REQ-364 (D-2026-09-30-b).
 
 ### REQ-360 — Transformation tab: local ↔ grid with scale factor, sea-level factor and rotation (GitHub issue #582, increment 4)
 
@@ -10405,6 +10408,110 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — narrowed to READ (D-2026-09-29-g): the
   feasibility spike did not prove AutoCAD reads a GEODATA GoSurvey writes; write deferred to #590.
   2026-09-30 — the trailer-vs-GEODATA clause replaced (D-2026-09-30-a): the two cannot meet in one file.
+
+### REQ-363 — Online base map: USGS maps under model space (GitHub issue #583, increment 1)
+
+- Purpose: issue #583 — a geolocated drawing can show an aerial or topographic map under its
+  geometry, lined up with the drawing's own coordinates, as Civil 3D's Geolocation ▸ Map does.
+- Priority: should
+- Type: functional
+- Depends on: REQ-358 (zone), REQ-359 (Geolocation tab), REQ-360 (transformation), REQ-100, REQ-101,
+  REQ-201, REQ-300.
+- Decision: D-2026-09-30-b (USGS only; Esri and Bing not offered; split into REQ-363 / REQ-364).
+- Statement:
+  1. **Map dropdown** (Geolocation tab ▸ Online Map, replacing REQ-359 item 5's disabled one). Items,
+     each with a small thumbnail: **USGS Imagery**, **USGS Imagery Topo**, **USGS Topo**, a separator,
+     **Map Off**. The button shows the current choice; the default is **Map Off**. The thumbnails are
+     images shipped with GoSurvey, not downloaded. Esri and Bing are not offered (D-2026-09-30-b).
+  2. **Source.** USGS The National Map tile services (`basemap.nationalmap.gov`, services
+     `USGSImageryOnly`, `USGSImageryTopo`, `USGSTopo`): public domain, no key, no account. They serve
+     256-pixel Web Mercator tiles at levels 0-16 (about 2 m per pixel at level 16) and only cover the
+     United States. The level is the one whose pixel is nearest the screen pixel, capped at 16;
+     zoomed in further, level-16 tiles are shown stretched. At most 64 tiles are drawn for a view; a
+     view that would need more uses a coarser level.
+  3. **Placement.** Each tile is placed by converting points across it (at least a 4 × 4 grid of
+     cells) from WGS 84 latitude/longitude into the drawing: to the zone's datum (CS-MAP datum path,
+     REQ-358), to the zone's grid, through the REQ-360 transformation when it is applied, to local
+     drawing coordinates (REQ-101 local-storage invariant). The tile is drawn on the world XY plane
+     (Z = 0), opaque, **under** PDF underlays and all model-space geometry. It is not an object: it
+     cannot be selected or snapped to, and it is on no layer.
+  4. **Views.** Model space only. In an orbited view the map still lies on Z = 0, and the tiles
+     loaded are those a plan view at the same centre and zoom would show. Paper-space viewports,
+     plotting and PDF / image export do not show it (out of scope for this increment).
+  5. **Never blocks a frame (REQ-100).** Tiles are fetched on a background thread through the
+     existing WinHTTP `HttpFetch` and decoded there with the vendored `stb_image`. The UI thread
+     uploads at most a few tiles to the GPU per frame. A tile's placement is computed once when it
+     arrives and then kept.
+  6. **Disk cache.** Tiles are cached under the user's data folder, per map and tile. A cached tile is
+     shown without any network request. The cache is kept under 500 MB by deleting the least recently
+     used tiles when GoSurvey starts.
+  7. **Failure (REQ-201).** With no internet, a timeout or a server error, the map shows only cached
+     tiles, and the command line prints **one** message naming the reason (*Online map: USGS could
+     not be reached — …; showing cached tiles only.*). It does not repeat until a fetch has succeeded
+     again. A place USGS has no tiles for prints once *Online map: USGS has no map at this location.*
+     A zone CS-MAP cannot convert prints once and draws no map. Never a stall or a crash.
+  8. **Per drawing.** The choice is stored in `drawingSettings` (ADR-044 trailer). Each drawing tab
+     has its own, and changing it is one undo step. **Map Off draws nothing and makes no request.**
+     Remove Location (REQ-359 item 2) also turns the map off, in the same undo step.
+  9. **Attribution.** While map tiles are drawn, the viewport's lower-right corner shows
+     *Map: USGS The National Map*.
+- Acceptance:
+  - the dropdown lists the four items with thumbnails, and the button shows the choice; the choice
+    survives DWG save → reopen, differs per drawing tab, and UNDO restores the previous one;
+  - with Map Off, or with the drawing not geolocated, no tile request is made;
+  - on a drawing whose zone holds the NGS point of REQ-358's test, the tile pixel containing that
+    point's WGS 84 latitude/longitude is placed within one level-16 pixel (≈ 2 m) of the point's
+    local coordinate, both with the transformation off and with an applied REQ-360 transformation
+    (k ≠ 1, θ ≠ 0);
+  - with the fetcher failing, no stall or crash occurs, cached tiles still draw, and exactly one
+    message is printed until a fetch succeeds;
+  - a tile already in the disk cache draws with the network unavailable;
+  - panning and orbiting a full-screen view with USGS Imagery on, while tiles stream in, keeps p95
+    frame time within REQ-100's 16 ms on the reference machine (PERFHUD);
+  - the attribution line is shown exactly while tiles are drawn.
+- Owner-layer: `src/geo/` (Web Mercator tile maths and tile-point placement, pure), `src/platform/`
+  (tile fetch + disk cache worker), `src/render/` (tile pass), Commands (map choice, undo), UI
+  (dropdown, attribution), IO (trailer).
+- Status: accepted (2026-09-30) — D-2026-09-30-b, ADR-064.
+- Revisions: 2026-09-30 — proposed and accepted.
+
+### REQ-364 — Capture Area: keep a piece of the online map inside the drawing (GitHub issue #583, increment 2)
+
+- Purpose: issue #583 — keep the map of a job site with the drawing so it still shows offline.
+- Priority: should
+- Type: functional
+- Depends on: REQ-363, ADR-044.
+- Decision: D-2026-09-30-b (the captured map is stored inside the drawing, not as an external file).
+- Statement:
+  1. **Capture Area** (Online Map panel) is a split button: **Capture Area** (the main action, the
+     visible area), **Pick Area** (two corners), and **Remove Captured Areas**. Capture Area and Pick
+     Area are disabled with Map Off; Remove Captured Areas is disabled when there is nothing to remove.
+  2. **Capturing** copies the current map's tiles covering the area, at the level being displayed,
+     into the drawing. The tiles' original image bytes are kept as downloaded, with no re-encoding.
+     Tiles not yet downloaded are fetched first, in the background (REQ-363 item 5), and the prompt
+     shows *Capturing map… n of m tiles*. Esc cancels. A failed fetch cancels the capture, stores
+     nothing and prints why (REQ-201). A capture needing more than 256 tiles is refused: *Zoom in or
+     pick a smaller area.*
+  3. **Stored inside the drawing** (ADR-044 trailer), never as a separate file. AutoCAD / Civil 3D
+     does not show it.
+  4. **Drawn** exactly as REQ-363 items 3 and 4 place tiles, above the live map and under PDF
+     underlays and geometry. It draws with Map Off and with no network. The REQ-363 item 9
+     attribution is shown while a captured area is drawn.
+  5. Each capture, and Remove Captured Areas, is one undo step. Captured areas are not objects: they
+     cannot be selected, and only Remove Captured Areas deletes them. They survive DWG save → reopen
+     and belong to their own drawing tab.
+- Acceptance:
+  - Capture Area stores the tiles of the visible area; after DWG save → close → reopen with the
+    network unavailable and Map Off, the captured area draws in the same place;
+  - Pick Area stores only the tiles covering the picked rectangle;
+  - a capture needing more than 256 tiles is refused, and a failed fetch stores nothing, each with a
+    message;
+  - UNDO removes a capture, and Remove Captured Areas removes all of them in one undo step;
+  - Capture Area and Pick Area are disabled with Map Off.
+- Owner-layer: Commands (capture job, remove, undo), UI (split button, prompt), IO (trailer),
+  `src/render/` (the REQ-363 tile pass).
+- Status: accepted (2026-09-30) — D-2026-09-30-b, ADR-064.
+- Revisions: 2026-09-30 — proposed and accepted.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
