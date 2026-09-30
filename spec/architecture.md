@@ -1855,7 +1855,7 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (g) **MSVC:** LibreDWG is built with the pinned `cl` + Ninja presets (project.md §7). If
       upstream CMake is untested on MSVC, that is integration work in IO/Build, not a second
       compiler.
-  (h) *(proposed 2026-09-30, D-2026-09-30-d; not yet accepted)* **GoSurvey maintains its own
+  (h) (2026-09-30, D-2026-09-30-d) **GoSurvey maintains its own
       LibreDWG, as full source in this repository.** `third_party/libredwg/` holds the complete
       upstream source of tag 0.13.4 (licence and copyright files included) plus GoSurvey's
       changes. It is compiled as a static library by the GoSurvey build, with the same MSVC
