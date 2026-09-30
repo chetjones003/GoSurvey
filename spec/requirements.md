@@ -3629,7 +3629,7 @@ requirements is a planning failure, not a sign of rigor.
   reason (REQ-001). Entities and tables LibreDWG decoded are mapped into the GoSurvey domain;
   every skipped class, exploded INSERT (until REQ-107), extra layout, and proxy is **named in the
   log** (REQ-201). State-plane coordinates obey REQ-101 (origin subtract in double before float).
-  **Save DWG:** only **R2000** or **R2004**; default **R2004**. R2007+ is refused. The file AutoCAD
+  **Save DWG:** only **R2000** or **R2004**; default **R2000** (D-2026-09-30-c). R2007+ is refused. The file AutoCAD
   opens must do so **without a Recover prompt** for the entity set we emit. Before overwrite, the
   UI lists what this down-convert / domain mapping will drop. Failed write leaves the destination
   untouched.
@@ -3643,7 +3643,7 @@ requirements is a planning failure, not a sign of rigor.
     environment, and model-space LINE/CIRCLE/LWPOLYLINE/TEXT/MTEXT/HATCH that LibreDWG decoded
     appear in the drawing;
   - a non-DWG renamed to `.dwg` is refused and the document is unchanged;
-  - File ▸ Export DWG (default) writes R2004; AutoCAD or ODA File Converter (oracle) opens it
+  - File ▸ Export DWG (default) writes R2000; AutoCAD or ODA File Converter (oracle) opens it
     **without Recover** and the emitted entity counts match the log;
   - exporting R2018 is refused by name; the destination file is not created;
   - a failed encode does not truncate an existing destination;
@@ -3652,6 +3652,9 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-08-29 — File Format Specs (D-2026-08-29-g, ADR-041). Does not replace REQ-052
   Phase 1 until this requirement is verified.
+  2026-09-30 — default save R2004 → **R2000** (D-2026-09-30-c): the product has always written
+  R2000, and LibreDWG 0.13.4 crashes building an R2004 document from scratch (TASK-298). Issue #590
+  (PR #595) made those R2000 files open in AutoCAD 2027 without Recover.
 
 ### REQ-171 — Point cloud entity
 - Purpose: File Format Specs — hold laser-scan points without pretending they are a TIN (REQ-068)
@@ -11828,7 +11831,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-154 | Commands/Renderer/UI/IO | done (TASK-140) — `UcsTests` (33 cases); `req154-ucs-plan` transcript; `UCS` / `PLAN` / `UCSFOLLOW` (GitHub issue #126). 2026-09-10 (TASK-243, D-2026-09-10-a, GitHub #156): `Object` now aligns to a planar face of a B-rep solid — deferred item 4 partially lifted, thin consumer of the REQ-318 sub-object pick; `headless.issue156-ucs-object-solid-face` | accepted |
 | REQ-155 | Commands/Renderer/UI/IO | done (TASK-157) — `ViewportUcsTests` T1–T6: point typed while floating resolves in the viewport frame; `UCSFOLLOW=1` re-plans only the active viewport (sibling + model-view camera unchanged); viewport-UCS field independence; `.gs` round-trip + legacy load all-World; readout resolves in the viewport frame; save-while-floating records the drawing frame. Manual GUI spot-check (float a viewport, `UCS`, grid/crosshair rotate in that viewport only) pending — headless cannot render. (GitHub issue #155, D-2026-08-31-c) | accepted |
 | REQ-161 | Application/UI/Build | planned — Debug Developer Shell + Test Engine; Release `dumpbin` ctest; `--devshell-run` script | accepted |
-| REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2004 default write; no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
+| REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2000 default write (D-2026-09-30-c); no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
 | REQ-171 | Domain/Renderer/IO | planned — point cloud entity; shared immutable payload; logged DXF/DWG exclusion | accepted |
 | REQ-172 | IO/Domain/UI | planned — PTS→PTX→LAS→LAZ→E57 read+write; malformed refuse | accepted |
 | REQ-173 | Domain/IO/Renderer/UI | planned — JPEG/PNG/BMP IMAGE underlay; missing file unloads image only | accepted |
