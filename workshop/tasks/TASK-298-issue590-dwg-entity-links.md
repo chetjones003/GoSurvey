@@ -94,6 +94,11 @@
   transcripts wrote in this test run open with no error (before the fix: ErrorStatus 53, e.g.
   `req071-contour-extract/extracted-a.dwg`). They cover lines, arcs, circles, polylines, text,
   blocks, survey points and the ADR-044 trailer.
+- Final review (PR #595): the 214-file oracle ran on the build before the collect-then-link
+  refactor, so the DWG-writing transcripts req071-contour-extract, block-content-dwg-roundtrip and
+  fillet-lines-basic were re-run on the final build and their 10 DWGs (incl. the issue's own
+  `extracted-a.dwg`) opened in AutoCAD with no error. Holding `Dwg_Object*` across
+  `dwg_add_handleref` is safe: it grows `object_ref`, never `object[]` (cf. issue #167).
 - Assumptions: none that affect the spec.
 - Technical debt / follow-ups (not in this task): REQ-170 names R2004 as the default but GoSurvey
   writes R2000, and LibreDWG 0.13.4 crashes building an R2004 document from scratch (finding 6);
