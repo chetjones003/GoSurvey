@@ -1385,19 +1385,12 @@ TEST_CASE("DWG export loss summary is empty for a drawing of only lines and circ
   CHECK(losses.empty());
 }
 
-TEST_CASE("DWG export loss summary lists exactly 5 survey points and 1 table (issue #614)",
+TEST_CASE("DWG export loss summary lists exactly 5 pipe runs and 1 table (issue #614)",
           "[dwg][libredwg][req170][req201][issue614]") {
   AppCommandState st;
   OneLine(st);
-  for (int i = 0; i < 5; ++i) {
-    SurveyPoint sp;
-    sp.id = 100 + i;
-    sp.easting = 1000.0 + i;
-    sp.northing = 2000.0 + i;
-    sp.elevation = 50.0;
-    sp.labelStyle = SurveyPointLabelStyle::None;
-    st.surveyPoints.push_back(sp);
-  }
+  for (int i = 0; i < 5; ++i)
+    st.cadPipeRuns.push_back(CadPipeRun{});
   CadTable t;
   t.cols = 2;
   t.cells = {"A", "B"};
@@ -1405,12 +1398,12 @@ TEST_CASE("DWG export loss summary lists exactly 5 survey points and 1 table (is
 
   const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(st);
   REQUIRE(losses.size() == 2);
-  bool sawPoints = false, sawTable = false;
+  bool sawPipeRuns = false, sawTable = false;
   for (const DwgExportLoss& l : losses) {
-    if (l.label.find("survey point") != std::string::npos) { sawPoints = true; CHECK(l.count == 5); }
+    if (l.label.find("pipe run") != std::string::npos) { sawPipeRuns = true; CHECK(l.count == 5); }
     if (l.label.find("table") != std::string::npos) { sawTable = true; CHECK(l.count == 1); }
   }
-  CHECK(sawPoints);
+  CHECK(sawPipeRuns);
   CHECK(sawTable);
 }
 
@@ -1420,18 +1413,103 @@ TEST_CASE("DWG export logs every loss the summary names (issue #614)",
   const auto p = (dir.path / "loss.dwg").string();
   AppCommandState st;
   OneLine(st);
-  SurveyPoint sp;
-  sp.id = 1;
-  sp.easting = 100.0;
-  sp.northing = 200.0;
-  sp.elevation = 10.0;
-  sp.labelStyle = SurveyPointLabelStyle::None;
-  st.surveyPoints.push_back(sp);
+  CadTable t;
+  t.cols = 2;
+  t.cells = {"A", "B"};
+  st.cadTables.push_back(t);
 
   std::vector<std::string> log;
   REQUIRE(ExportDwgFile(st, p.c_str(), log));
   bool found = false;
   for (const auto& l : log)
-    if (l.find("survey point") != std::string::npos) found = true;
+    if (l.find("table") != std::string::npos) found = true;
   CHECK(found);
 }
+
+// REQ-365 / D-2026-09-30-f / issue #605: survey points ARE written — a GOSURVEY_POINT block
+// INSERT per point with visible NUMBER/DESCRIPTION attributes, so AutoCAD and Civil 3D show them
+// (the user's choice: a Civil 3D/Carlson-style point block with attributes, over a plain POINT +
+// XDATA + MTEXT label). Elevation is not a third attribute — see LibreDwgCad.cpp's
+// EnsureSurveyPointBlockDef for why — but is not lost: it is the INSERT's own Z coordinate.
+TEST_CASE("DWG export writes each survey point as a GOSURVEY_POINT block insert (issue #605)",
+          "[dwg][libredwg][req365][issue605]") {
+  ScratchDir dir("dwg-survey-points");
+  const auto p = (dir.path / "points.dwg").string();
+  AppCommandState st;
+  st.worldDocumentOriginX = 0.0;
+  st.worldDocumentOriginY = 0.0;
+
+  SurveyPoint sp1;
+  sp1.id = 501;
+  sp1.easting = 1000.25;
+  sp1.northing = 2000.75;
+  sp1.elevation = 456.125;
+  sp1.description = "IPF";
+  sp1.rawDescription = "IPF";
+  sp1.labelStyle = SurveyPointLabelStyle::None;
+  st.surveyPoints.push_back(sp1);
+
+  SurveyPoint sp2;
+  sp2.id = 502;
+  sp2.easting = 1010.0;
+  sp2.northing = 2010.0;
+  sp2.elevation = 460.0;
+  sp2.description = "PK NAIL";
+  sp2.rawDescription = "PK NAIL";
+  sp2.labelStyle = SurveyPointLabelStyle::None;
+  st.surveyPoints.push_back(sp2);
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+
+  // No loss line for survey points, since they are now written.
+  for (const auto& l : log)
+    CHECK(l.find("survey point") == std::string::npos);
+
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+
+  int nInsert = 0;
+  std::vector<std::pair<double, double>> insertXy;
+  std::vector<std::string> attrNumbers, attrDescs;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype != DWG_TYPE_INSERT || o->tio.entity == nullptr || o->tio.entity->tio.INSERT == nullptr)
+      continue;
+    const Dwg_Entity_INSERT* ins = o->tio.entity->tio.INSERT;
+    if (ins->block_header == nullptr)
+      continue;
+    Dwg_Object* blk = dwg_resolve_handle_silent(&dwg, ins->block_header->absolute_ref);
+    if (blk == nullptr || blk->tio.object == nullptr)
+      continue;
+    const Dwg_Object_BLOCK_HEADER* hdr2 = blk->tio.object->tio.BLOCK_HEADER;
+    if (hdr2 == nullptr ||
+        libredwgcad_detail::DecodeDwgString(hdr2->name, false) != "GOSURVEY_POINT")
+      continue;
+    ++nInsert;
+    insertXy.emplace_back(ins->ins_pt.x, ins->ins_pt.y);
+  }
+  // Walk every ATTRIB directly rather than through INSERT::attribs[] (round-trip fidelity of that
+  // array is not the point of this test).
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype != DWG_TYPE_ATTRIB || o->tio.entity == nullptr || o->tio.entity->tio.ATTRIB == nullptr)
+      continue;
+    const Dwg_Entity_ATTRIB* att = o->tio.entity->tio.ATTRIB;
+    const std::string tag = libredwgcad_detail::DecodeDwgString(att->tag, false);
+    const std::string val = libredwgcad_detail::DecodeDwgString(att->text_value, false);
+    if (tag == "NUMBER") attrNumbers.push_back(val);
+    if (tag == "DESCRIPTION") attrDescs.push_back(val);
+  }
+  CHECK(nInsert == 2);
+  REQUIRE(insertXy.size() == 2);
+  CHECK(insertXy[0].first == Catch::Approx(1000.25).margin(1e-6));
+  CHECK(insertXy[0].second == Catch::Approx(2000.75).margin(1e-6));
+  REQUIRE(attrNumbers.size() == 2);
+  CHECK((attrNumbers[0] == "501" || attrNumbers[1] == "501"));
+  REQUIRE(attrDescs.size() == 2);
+  CHECK((attrDescs[0] == "IPF" || attrDescs[1] == "IPF"));
+  dwg_free(&dwg);
+}
+
