@@ -91,6 +91,34 @@ TEST_CASE("A Civil 3D DWG's GEODATA sets the marker, north and scale method, no 
   CHECK(LogHas(log, "geographic marker at 1846238.730, 13629548.130"));
 }
 
+// REQ-362 item 3: an R2000 GEODATA (the 2009, class-version-1 layout) that AutoCAD 2027 itself saved.
+// AutoCAD reports for it: design point (1846238.73, 13629548.13), reference (-99.383333, 29.225),
+// north (0.00327772, 0.999995), scale estimation 3, no sea-level correction, `TX83-CF`. LibreDWG
+// 0.13.4 read one extra bit there and got north, the scale method and sea level wrong (TASK-299).
+TEST_CASE("An AutoCAD-saved R2000 GEODATA reads with AutoCAD's values (REQ-362)", "[req362][dwg]") {
+  LoadShippedDictionary();
+  const std::string p = std::string(GOSURVEY_SAMPLES_DIR) + "/geodata-r2000-autocad.dwg";
+  REQUIRE(std::filesystem::exists(p));
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, p.c_str(), log));
+  for (const std::string& l : log)
+    UNSCOPED_INFO(l);
+
+  const DrawingSettings& ds = st.drawingSettings;
+  CHECK(std::abs(ds.markerX - 1846238.73) <= 0.001);
+  CHECK(std::abs(ds.markerY - 13629548.13) <= 0.001);
+  CHECK(ds.markerNorthDeg == Catch::Approx(89.8122).margin(0.0001));
+  CHECK(ds.zoneCode == "TX83-CF");
+  CHECK_FALSE(ds.transform.apply);
+  CHECK(ds.transform.computation == DrawingSettings::Transform::Computation::ReferencePoint);
+  CHECK_FALSE(ds.transform.applySeaLevel);
+  CHECK(ds.transform.elevation == 0.0);
+  CHECK(ds.transform.refLocalX == ds.markerX);
+  CHECK(ds.transform.refLocalY == ds.markerY);
+}
+
 TEST_CASE("A GEODATA naming a zone sets it and the reference grid point (REQ-362)", "[req362]") {
   LoadShippedDictionary();
   DwgGeoData g;

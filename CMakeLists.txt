@@ -162,24 +162,37 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${GOSURVEY_TP}/glfw" "${CMAKE_BINARY_DIR}/glfw-build" EXCLUDE_FROM_ALL)
 
-# --- LibreDWG: vendored headers + prebuilt static lib (REQ-170 / ADR-041) ---
-# The 0.13.3 tag's headers (public + the src/*.h that LibreDwgCad.cpp includes:
-# bits.h, out_dxf.h, …) and the generated config.h, plus a prebuilt MSVC x64
-# Release /MD static lib. Building LibreDWG from source cost ~30 try_compile
-# probes + ~400 s of C compile on every clean build (issue #142 §5).
+# --- LibreDWG: GoSurvey's own copy, built from source (REQ-170 / ADR-041 (h), D-2026-09-30-d) ---
+# The library source of upstream tag 0.13.4 plus GoSurvey's changes (third_party/libredwg/VENDORED.md).
+# Only the library is built: upstream's own CMakeLists (its ~30 try_compile probes, programs and
+# tests) is not used. src/config.h is the one upstream's CMake generates for MSVC x64, committed,
+# so there is nothing to configure. Sources and flags mirror upstream's LIBREDWG_LIBONLY build
+# with JSON disabled and write enabled.
 set(libredwg_SOURCE_DIR "${GOSURVEY_TP}/libredwg")
 set(libredwg_BINARY_DIR "${GOSURVEY_TP}/libredwg")   # config.h lives beside src/*.h
-add_library(libredwg STATIC IMPORTED GLOBAL)
-set_target_properties(libredwg PROPERTIES
-  IMPORTED_LOCATION "${GOSURVEY_TP}/libredwg/lib/win-x64/libredwg.lib"
-  INTERFACE_INCLUDE_DIRECTORIES "${GOSURVEY_TP}/libredwg/include")
-if(WIN32)
-  set_property(TARGET libredwg APPEND PROPERTY INTERFACE_LINK_LIBRARIES ws2_32)
+set(_lrd "${libredwg_SOURCE_DIR}/src")
+add_library(libredwg STATIC
+  ${_lrd}/bits.c ${_lrd}/codepages.c ${_lrd}/common.c ${_lrd}/classes.c ${_lrd}/objects.c
+  ${_lrd}/decode.c ${_lrd}/decode_r11.c ${_lrd}/decode_r2007.c ${_lrd}/dwg.c ${_lrd}/hash.c
+  ${_lrd}/dwg_api.c ${_lrd}/dynapi.c ${_lrd}/dxfclasses.c ${_lrd}/free.c ${_lrd}/geom.c
+  ${_lrd}/out_dxf.c ${_lrd}/out_dxfb.c ${_lrd}/encode.c ${_lrd}/in_dxf.c ${_lrd}/reedsolomon.c
+  ${_lrd}/print.c)
+set_property(TARGET libredwg PROPERTY C_STANDARD 99)
+target_include_directories(libredwg PRIVATE "${_lrd}")
+target_include_directories(libredwg PUBLIC "${libredwg_SOURCE_DIR}/include")
+# Vendored: silence its warnings so ours stay visible (as for glew below).
+if(MSVC)
+  target_compile_options(libredwg PRIVATE /w /utf-8)
+  target_compile_definitions(libredwg PRIVATE _CRT_NONSTDC_NO_WARNINGS _CRT_SECURE_NO_WARNINGS)
+else()
+  target_compile_options(libredwg PRIVATE -w)
 endif()
-set_property(TARGET libredwg APPEND PROPERTY
-  INTERFACE_COMPILE_DEFINITIONS "GOSURVEY_LIBREDWG_VERSION=\"0.13.3\"")
+if(WIN32)
+  target_link_libraries(libredwg PUBLIC ws2_32)
+endif()
+target_compile_definitions(libredwg INTERFACE "GOSURVEY_LIBREDWG_VERSION=\"0.13.4\"")
 add_library(LibreDWG::libredwg ALIAS libredwg)
-message(STATUS "LibreDWG 0.13.3 vendored (prebuilt third_party/libredwg/lib/win-x64/libredwg.lib)")
+unset(_lrd)
 
 # --- CS-MAP: vendored headers + prebuilt static lib + dictionaries (REQ-358 / ADR-063) ---
 # OSGeo MetaCRS CS-MAP, the coordinate-system catalogue and projection engine. Prebuilt MSVC x64

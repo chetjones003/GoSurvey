@@ -7,7 +7,7 @@
 struct AppCommandState;
 
 // DWG interchange via GNU LibreDWG (REQ-170 / ADR-041). File Import/Export does not use ODA
-// File Converter or AutoCAD. Save is R2000 (AC1015) — LibreDWG 0.13.3's working encode target.
+// File Converter or AutoCAD. Save is R2000 (AC1015) — LibreDWG 0.13.4's working encode target.
 // FindDwgConverter remains for 3D solid tessellation only (not File DWG).
 
 enum class DwgConverterKind {
