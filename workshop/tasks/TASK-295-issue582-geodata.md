@@ -75,3 +75,8 @@ Standalone C programs against the vendored LibreDWG 0.13.4 (scratch, not committ
   Transform stores them (AutoCAD's documented units).
 - Technical debt: none new. The write side waits for #590.
 - Manual check: none needed for read; the write-side AutoCAD check moves to #590.
+- Final review (PR #591): GEODATA coordinate type 2 (projected grid) was read as longitude /
+  latitude and projected a second time. Its reference point is already easting / northing in the
+  zone's unit, so it is now stored as the grid reference directly. Type 3 (geographic) is still
+  projected, and types 0 / 1 give no grid reference. There are two new `[req362]` sections, and
+  `./dev/test` still shows the same 7 failures that are already on beta.

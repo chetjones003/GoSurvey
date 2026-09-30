@@ -1126,9 +1126,11 @@ static bool ReadDwgGeoData(Dwg_Data* dwg, DwgGeoData* out) {
   const Dwg_Object_GEODATA& g = *found;
   out->designX = g.design_pt.x;
   out->designY = g.design_pt.y;
-  out->hasReference = g.coord_type == 2 || g.coord_type == 3;  // projected / geographic: lon, lat
-  out->refLongitude = g.ref_pt.x;
-  out->refLatitude = g.ref_pt.y;
+  out->reference = g.coord_type == 3   ? DwgGeoData::Reference::Geographic
+                   : g.coord_type == 2 ? DwgGeoData::Reference::ProjectedGrid
+                                       : DwgGeoData::Reference::None;
+  out->refX = g.ref_pt.x;
+  out->refY = g.ref_pt.y;
   out->northX = g.north_dir.x;
   out->northY = g.north_dir.y;
   out->scaleEstimation = static_cast<int>(g.scale_est);

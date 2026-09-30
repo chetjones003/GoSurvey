@@ -96,9 +96,9 @@ TEST_CASE("A GEODATA naming a zone sets it and the reference grid point (REQ-362
   DwgGeoData g;
   g.designX = 1000.0;
   g.designY = 2000.0;
-  g.hasReference = true;
-  g.refLongitude = kLon;
-  g.refLatitude = kLat;
+  g.reference = DwgGeoData::Reference::Geographic;
+  g.refX = kLon;
+  g.refY = kLat;
   g.northX = 0.0;
   g.northY = 1.0;
   g.scaleEstimation = 2;  // user specified
@@ -137,6 +137,26 @@ TEST_CASE("A GEODATA naming a zone sets it and the reference grid point (REQ-362
     std::vector<std::string> log;
     ApplyDwgGeoData(st, g, log);
     CHECK(st.drawingSettings.zoneCode == "HARN/TX.TX-CF");
+  }
+  SECTION("a projected-grid reference point is already the grid coordinate") {
+    g.coordinateSystemDefinition = "HARN/TX.TX-CF";
+    g.reference = DwgGeoData::Reference::ProjectedGrid;
+    g.refX = kEFt;
+    g.refY = kNFt;
+    AppCommandState st;
+    std::vector<std::string> log;
+    ApplyDwgGeoData(st, g, log);
+    CHECK(st.drawingSettings.transform.refGridE == kEFt);
+    CHECK(st.drawingSettings.transform.refGridN == kNFt);
+  }
+  SECTION("a local-grid reference point gives no grid reference") {
+    g.coordinateSystemDefinition = "HARN/TX.TX-CF";
+    g.reference = DwgGeoData::Reference::None;
+    AppCommandState st;
+    std::vector<std::string> log;
+    ApplyDwgGeoData(st, g, log);
+    CHECK(st.drawingSettings.transform.refGridE == 0.0);
+    CHECK(st.drawingSettings.transform.refGridN == 0.0);
   }
   SECTION("an unknown code is kept verbatim, with no grid reference") {
     g.coordinateSystemDefinition = "NOT-A-ZONE-362";

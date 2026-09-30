@@ -7266,9 +7266,13 @@ bool StartDrawingSettingsPick(AppCommandState& st, AppCommandState::DrawingSetti
 struct DwgGeoData {
   double      designX = 0.0;  ///< Design point, WCS drawing units.
   double      designY = 0.0;
-  bool        hasReference = false;  ///< Projected / geographic GEODATA: the design point's lat/long.
-  double      refLongitude = 0.0;
-  double      refLatitude = 0.0;
+  /// What GEODATA's reference point (the design point in the coordinate system) is, by its
+  /// coordinate type: 3 geographic = longitude / latitude (degrees), 2 projected grid = easting /
+  /// northing in the zone's unit; anything else (unknown, local grid) gives no grid reference.
+  enum class Reference { None, Geographic, ProjectedGrid };
+  Reference   reference = Reference::None;
+  double      refX = 0.0;  ///< Longitude or easting.
+  double      refY = 0.0;  ///< Latitude or northing.
   double      northX = 0.0;  ///< North direction in the drawing; (0, 0) when the file has none.
   double      northY = 0.0;
   int         scaleEstimation = 1;  ///< 1 none, 2 user specified, 3 grid scale at reference point, 4 prismoidal

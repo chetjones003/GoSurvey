@@ -428,11 +428,17 @@ void ApplyDwgGeoData(AppCommandState& st, const DwgGeoData& g, std::vector<std::
     t.spheroidRadiusM = g.projectionRadius;
   t.refLocalX = g.designX;
   t.refLocalY = g.designY;
-  if (zone && g.hasReference && !zone->geographic) {
-    const geo::GeoResult grid = geo::LatLongToGrid(zone->code, g.refLongitude, g.refLatitude);
-    if (grid.ok) {
-      t.refGridE = grid.x;
-      t.refGridN = grid.y;
+  if (zone && !zone->geographic) {
+    if (g.reference == DwgGeoData::Reference::Geographic) {
+      const geo::GeoResult grid = geo::LatLongToGrid(zone->code, g.refX, g.refY);
+      if (grid.ok) {
+        t.refGridE = grid.x;
+        t.refGridN = grid.y;
+      }
+    } else if (g.reference == DwgGeoData::Reference::ProjectedGrid && std::isfinite(g.refX) &&
+               std::isfinite(g.refY)) {
+      t.refGridE = g.refX;  // already the zone's grid: projecting it again would be garbage
+      t.refGridN = g.refY;
     }
   }
   ds.transform = t;
