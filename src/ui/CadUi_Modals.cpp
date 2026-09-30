@@ -128,18 +128,26 @@ void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log
   const std::filesystem::path dst(cmd.dwgPendingExportPath);
   const bool overwriting = std::filesystem::exists(dst);
 
-  ImGui::TextUnformatted("GoSurvey writes DWG with LibreDWG as AutoCAD 2000 (AC1015). This export drops:");
-  ImGui::Spacing();
-  ImGui::BulletText("hatches, ellipses, meshes, TIN surfaces, and dimensions");
-  ImGui::BulletText("block definitions (inserts are exploded on import; not rebuilt on save)");
-  ImGui::BulletText("paper-space layouts beyond model space");
-  ImGui::BulletText("Civil 3D objects, proxies and anything else GoSurvey does not model");
-  ImGui::Spacing();
+  // REQ-170 / REQ-201, issue #614: the warning is built from what THIS drawing actually contains
+  // — not a fixed list — so it never claims a loss the writer no longer has, and never stays
+  // silent about one it does.
+  const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(cmd);
+  if (!losses.empty()) {
+    ImGui::TextUnformatted("GoSurvey writes DWG with LibreDWG as AutoCAD 2000 (AC1015). This export drops:");
+    ImGui::Spacing();
+    for (const DwgExportLoss& loss : losses)
+      ImGui::BulletText("%d %s", loss.count, loss.label.c_str());
+    ImGui::Spacing();
+  }
 
   if (overwriting) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.90f, 0.45f, 0.20f, 1.0f));
-    ImGui::TextWrapped("%s already exists. Overwriting it will permanently discard the data listed above.",
-                       dst.filename().string().c_str());
+    if (losses.empty())
+      ImGui::TextWrapped("%s already exists. Overwriting it will permanently discard its current contents.",
+                         dst.filename().string().c_str());
+    else
+      ImGui::TextWrapped("%s already exists. Overwriting it will permanently discard the data listed above.",
+                         dst.filename().string().c_str());
     ImGui::PopStyleColor();
     ImGui::Spacing();
   }

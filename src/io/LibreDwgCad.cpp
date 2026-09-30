@@ -814,6 +814,94 @@ const EntityAttributes* AttrAt(const std::vector<EntityAttributes>& v, size_t i)
   return i < v.size() ? &v[i] : nullptr;
 }
 
+// REQ-170 / REQ-201, issue #614: what DWG save actually drops or degrades, computed from the
+// drawing instead of a fixed list — so the "Export DWG" warning and the save log cannot disagree
+// with each other or with what FillFromState above actually writes, and a line disappears here the
+// moment the entity class it names gets a real writer.
+std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st) {
+  std::vector<DwgExportLoss> out;
+  auto add = [&](const char* label, size_t n) {
+    if (n > 0)
+      out.push_back(DwgExportLoss{label, static_cast<int>(n)});
+  };
+
+  // Entity classes with no DWG writer at all (silent today — nothing in FillFromState touches
+  // these vectors).
+  add("survey point(s)", st.surveyPoints.size());
+  add("table(s)", st.cadTables.size());
+  add("pipe run(s)", st.cadPipeRuns.size());
+  add("block reference(s)", st.cadBlockRefs.size());
+  size_t nFeatureLines = 0;
+  for (size_t i = 0; i + 1 < st.featureLineOffsets.size(); ++i)
+    if (st.featureLineOffsets[i + 1] - st.featureLineOffsets[i] >= 2)
+      ++nFeatureLines;
+  add("feature line(s)", nFeatureLines);
+  size_t nDims = 0;
+  for (const CadAnnotation& a : st.cadAnnotations)
+    if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear ||
+        a.kind == CadAnnotation::Kind::DimAngular)
+      ++nDims;
+  add("dimension(s)", nDims);
+
+  // Entity classes GoSurvey already refuses on principle (ADR-042/045/026) — counted and logged,
+  // now also surfaced in the pre-export warning so the user sees them before committing to it.
+  add("HATCH region(s)", st.cadFilledRegions.size());
+  add("mesh(es)", st.cadMeshes.size());
+  add("point cloud(s)", st.cadPointClouds.size());
+  add("TIN surface(s)", st.cadSurfaces.size());
+  add("solid(s)", st.cadSolids.size());
+
+  // Degradations: the entity IS written, but a property on it is not.
+  const std::vector<EntityAttributes>* attrSets[] = {&st.userLineAttrs, &st.userCircleAttrs,
+                                                      &st.userArcAttrs,  &st.userPolylineAttrs,
+                                                      &st.cadAnnotationAttrs, &st.userEllAttrs};
+  size_t nColorRounded = 0, nLineweight = 0, nTransparency = 0;
+  for (const std::vector<EntityAttributes>* v : attrSets) {
+    for (const EntityAttributes& a : *v) {
+      uint32_t rgb = 0;
+      if (DxfColorStringToRgbPacked(a.color, &rgb)) {
+        const int aci = DxfNearestAciFromRgbPacked(rgb);
+        if ((DxfRgbPackedFromAci(aci) & 0xFFFFFFu) != (rgb & 0xFFFFFFu))
+          ++nColorRounded;
+      }
+      if (a.lineweightMm >= 0.f)
+        ++nLineweight;
+      if (a.transparency >= 0.f)
+        ++nTransparency;
+    }
+  }
+  add("colour(s) (rounded to the nearest AutoCAD index colour)", nColorRounded);
+  add("object(s) with a lineweight (not written; falls back to ByLayer)", nLineweight);
+  add("object(s) with transparency (not written)", nTransparency);
+
+  size_t nRotatedText = 0;
+  for (const CadAnnotation& a : st.cadAnnotations)
+    if ((a.kind == CadAnnotation::Kind::Text || a.kind == CadAnnotation::Kind::Mtext) &&
+        std::fabs(a.rotationRad) > 1e-6f)
+      ++nRotatedText;
+  add("rotated text/mtext label(s) (rotation not written)", nRotatedText);
+
+  // A LWPOLYLINE carries one elevation for the whole run (TASK-034 debt), so a run whose vertices
+  // are not all at the same Z gets flattened to the first vertex's.
+  size_t nFlattenedPolylines = 0;
+  for (size_t i = 0; i + 1 < st.userPolylineOffsets.size(); ++i) {
+    const int a = st.userPolylineOffsets[i];
+    const int b = st.userPolylineOffsets[i + 1];
+    if (b - a < 2)
+      continue;
+    const float z0 = st.userPolylineVerts[static_cast<size_t>(a) * 3 + 2];
+    for (int vi = a + 1; vi < b; ++vi) {
+      if (std::fabs(st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2] - z0) > 1e-4f) {
+        ++nFlattenedPolylines;
+        break;
+      }
+    }
+  }
+  add("3D polyline(s) (flattened to one elevation)", nFlattenedPolylines);
+
+  return out;
+}
+
 void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr,
                    std::vector<std::string>& log) {
   auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
@@ -1168,25 +1256,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     e->start_angle = 0.0;
     e->end_angle = 2.0 * kPi;
   }
-  if (!st.cadFilledRegions.empty())
-    log.push_back("CAD export — skipped " + std::to_string(st.cadFilledRegions.size()) +
-                  " HATCH region(s).");
-  if (!st.cadMeshes.empty())
-    log.push_back("CAD export — skipped mesh(es); not written to DXF/DWG.");
-  if (!st.cadPointClouds.empty())
-    log.push_back("CAD export — skipped " + std::to_string(st.cadPointClouds.size()) +
-                  " point cloud(s); no native point-cloud object in the R2004/R2000 DWG subset "
-                  "GoSurvey writes (REQ-171, ADR-042 (e)).");
-  if (!st.cadSurfaces.empty())
-    log.push_back("CAD export — skipped TIN surface(s); not written to DXF/DWG.");
-  // B-rep solids (ADR-045 (i)). Named and counted, never dropped in silence (REQ-201). A real solid
-  // in DXF/DWG is an ACIS 3DSOLID — a proprietary binary B-rep GoSurvey cannot write without a
-  // third-party kernel REQ-300 does not permit — and writing a tessellated approximation instead
-  // would hand the user a picture of their solid that round-trips back as an uneditable bag of
-  // triangles with an approximate volume. The same boundary ADR-026 (c) drew for meshes.
-  if (!st.cadSolids.empty())
-    log.push_back("CAD export — skipped " + std::to_string(st.cadSolids.size()) +
-                  " solid(s); DXF/DWG has no lossless representation for them (ADR-045).");
+  // REQ-170 / REQ-201, issue #614: every drop and degradation, named and counted, from the ONE
+  // scan the pre-export warning dialog also reads — so the log and the dialog cannot disagree, and
+  // nothing is silently dropped.
+  for (const DwgExportLoss& loss : ComputeDwgExportLossesImpl(st))
+    log.push_back("CAD export — drops " + std::to_string(loss.count) + " " + loss.label + ".");
   (void)dwg;
 }
 
@@ -1602,6 +1676,10 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
   BumpCadGpuCache(st);
   return true;
+}
+
+std::vector<DwgExportLoss> ComputeDwgExportLosses(const AppCommandState& st) {
+  return ComputeDwgExportLossesImpl(st);
 }
 
 bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log,

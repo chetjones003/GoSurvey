@@ -42,3 +42,18 @@ bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::v
 
 /// Trailer JSON for SAMEFILE (ADR-044 (e)). Empty if this is not a GoSurvey DWG.
 bool TryGoSurveyDwgPayloadFromBytes(std::string_view fileBytes, std::string& jsonOut);
+
+/// One entity class (or degradation) that DWG save will drop or alter, with how many objects it
+/// affects (REQ-170 / REQ-201, issue #614). \c label reads naturally after "drops" / "will alter",
+/// e.g. "12 survey points" or "40 colours (rounded to the nearest AutoCAD index colour)".
+struct DwgExportLoss {
+  std::string label;
+  int count = 0;
+};
+
+/// Scans the drawing and reports exactly what \ref ExportLibreCadFile (DWG only — `asDxf=false`)
+/// will drop or degrade, computed from what the drawing actually contains rather than a fixed
+/// list. Empty when nothing is lost. The "Export DWG" warning dialog and the save log both render
+/// from this one list, so they cannot disagree, and a loss disappears from both the moment the
+/// gap it names is fixed.
+std::vector<DwgExportLoss> ComputeDwgExportLosses(const AppCommandState& st);

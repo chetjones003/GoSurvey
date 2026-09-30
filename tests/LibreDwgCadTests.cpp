@@ -1372,3 +1372,66 @@ TEST_CASE("DWG export keeps a flat-only polyline as one LWPOLYLINE (issue #437)"
   }
   dwg_free(&dwg);
 }
+
+// REQ-170 / REQ-201, issue #614: the "Export DWG" warning and save log are built from what the
+// drawing actually contains, not a fixed list.
+TEST_CASE("DWG export loss summary is empty for a drawing of only lines and circles (issue #614)",
+          "[dwg][libredwg][req170][req201][issue614]") {
+  AppCommandState st;
+  OneLine(st);
+  st.userCirclesCxCyZR = {5.f, 5.f, 0.f, 2.f};
+  st.userCircleAttrs = {EntityAttributes{}};
+  const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(st);
+  CHECK(losses.empty());
+}
+
+TEST_CASE("DWG export loss summary lists exactly 5 survey points and 1 table (issue #614)",
+          "[dwg][libredwg][req170][req201][issue614]") {
+  AppCommandState st;
+  OneLine(st);
+  for (int i = 0; i < 5; ++i) {
+    SurveyPoint sp;
+    sp.id = 100 + i;
+    sp.easting = 1000.0 + i;
+    sp.northing = 2000.0 + i;
+    sp.elevation = 50.0;
+    sp.labelStyle = SurveyPointLabelStyle::None;
+    st.surveyPoints.push_back(sp);
+  }
+  CadTable t;
+  t.cols = 2;
+  t.cells = {"A", "B"};
+  st.cadTables.push_back(t);
+
+  const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(st);
+  REQUIRE(losses.size() == 2);
+  bool sawPoints = false, sawTable = false;
+  for (const DwgExportLoss& l : losses) {
+    if (l.label.find("survey point") != std::string::npos) { sawPoints = true; CHECK(l.count == 5); }
+    if (l.label.find("table") != std::string::npos) { sawTable = true; CHECK(l.count == 1); }
+  }
+  CHECK(sawPoints);
+  CHECK(sawTable);
+}
+
+TEST_CASE("DWG export logs every loss the summary names (issue #614)",
+          "[dwg][libredwg][req170][req201][issue614]") {
+  ScratchDir dir("dwg-loss-log");
+  const auto p = (dir.path / "loss.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  SurveyPoint sp;
+  sp.id = 1;
+  sp.easting = 100.0;
+  sp.northing = 200.0;
+  sp.elevation = 10.0;
+  sp.labelStyle = SurveyPointLabelStyle::None;
+  st.surveyPoints.push_back(sp);
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  bool found = false;
+  for (const auto& l : log)
+    if (l.find("survey point") != std::string::npos) found = true;
+  CHECK(found);
+}
