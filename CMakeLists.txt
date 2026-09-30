@@ -1328,6 +1328,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/TransformationTests.cpp
     # REQ-361 / D-2026-09-29-f: the Object Layers tab and every creation path that uses it.
     tests/ObjectLayersTests.cpp
+    # REQ-362 / D-2026-09-29-g: reading an AutoCAD / Civil 3D GEODATA (write deferred to #590).
+    tests/GeoDataReadTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp

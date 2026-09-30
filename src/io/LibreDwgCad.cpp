@@ -1103,6 +1103,45 @@ bool WriteDwgFile(const char* pathUtf8, Dwg_Data* dwg, std::vector<std::string>&
 
 }  // namespace
 
+/// REQ-362: the drawing's GEODATA (the one hosted by model space, else the first), copied out for
+/// ApplyDwgGeoData. False when the file has none.
+static bool ReadDwgGeoData(Dwg_Data* dwg, DwgGeoData* out) {
+  const Dwg_Object* ms = dwg_model_space_object(dwg);
+  const BITCODE_RLL msHandle = ms != nullptr ? ms->handle.value : 0;
+  const Dwg_Object_GEODATA* found = nullptr;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_GEODATA || o->tio.object == nullptr || o->tio.object->tio.GEODATA == nullptr)
+      continue;
+    const Dwg_Object_GEODATA* g = o->tio.object->tio.GEODATA;
+    if (found == nullptr)
+      found = g;
+    if (g->host_block != nullptr && g->host_block->absolute_ref == msHandle) {
+      found = g;
+      break;
+    }
+  }
+  if (found == nullptr)
+    return false;
+  const Dwg_Object_GEODATA& g = *found;
+  out->designX = g.design_pt.x;
+  out->designY = g.design_pt.y;
+  out->reference = g.coord_type == 3   ? DwgGeoData::Reference::Geographic
+                   : g.coord_type == 2 ? DwgGeoData::Reference::ProjectedGrid
+                                       : DwgGeoData::Reference::None;
+  out->refX = g.ref_pt.x;
+  out->refY = g.ref_pt.y;
+  out->northX = g.north_dir.x;
+  out->northY = g.north_dir.y;
+  out->scaleEstimation = static_cast<int>(g.scale_est);
+  out->userScaleFactor = g.user_scale_factor;
+  out->seaLevelCorrection = g.do_sea_level_corr != 0;
+  out->seaLevelElevation = g.sea_level_elev;
+  out->projectionRadius = g.coord_proj_radius;
+  out->coordinateSystemDefinition = FromT(dwg, g.coord_system_def);
+  return true;
+}
+
 bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log, bool asDxf) {
   if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
     log.push_back(asDxf ? "DXF import — no path." : "DWG import — no path.");
@@ -1150,6 +1189,11 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   ImportLayers(st, &dwg, log);
   ImportStyles(st, &dwg);
+  if (!asDxf) {  // REQ-362: an AutoCAD / Civil 3D drawing's geolocation (read only, D-2026-09-29-g)
+    DwgGeoData geo;
+    if (ReadDwgGeoData(&dwg, &geo))
+      ApplyDwgGeoData(st, geo, log);
+  }
 
   std::unordered_map<std::string, int> skipHist;
   const Xf2 id{};

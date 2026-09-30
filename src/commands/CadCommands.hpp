@@ -1082,7 +1082,7 @@ struct DrawingSettings {
   /// Empty = No Datum, No Projection. A code the installed dictionary does not know is kept.
   std::string zoneCode;
   /// The geographic marker (REQ-359 item 4): the drawing's geolocation reference — a design point and
-  /// a north direction, stored with the zone and written as GEODATA's design point / north by
+  /// a north direction, stored with the zone and read from GEODATA's design point / north by
   /// REQ-362. The point is WORLD (WCS) coordinates, the frame GEODATA uses, so it does not move when
   /// the local-storage origin does. Default: the drawing origin (WCS 0,0) with grid north.
   double markerX = 0.0;
@@ -7261,6 +7261,35 @@ void StartGeoReorientMarkerCommand(AppCommandState& st, std::vector<std::string>
 /// False (logged) while another command runs or when \p target is None.
 bool StartDrawingSettingsPick(AppCommandState& st, AppCommandState::DrawingSettingsPickState::Target target,
                               std::vector<std::string>& log);
+/// REQ-362 (D-2026-09-29-g: read only): what an AutoCAD / Civil 3D `GEODATA` object says, copied out
+/// by the DWG importer (IO) and applied by \ref ApplyDwgGeoData.
+struct DwgGeoData {
+  double      designX = 0.0;  ///< Design point, WCS drawing units.
+  double      designY = 0.0;
+  /// What GEODATA's reference point (the design point in the coordinate system) is, by its
+  /// coordinate type: 3 geographic = longitude / latitude (degrees), 2 projected grid = easting /
+  /// northing in the zone's unit; anything else (unknown, local grid) gives no grid reference.
+  enum class Reference { None, Geographic, ProjectedGrid };
+  Reference   reference = Reference::None;
+  double      refX = 0.0;  ///< Longitude or easting.
+  double      refY = 0.0;  ///< Latitude or northing.
+  double      northX = 0.0;  ///< North direction in the drawing; (0, 0) when the file has none.
+  double      northY = 0.0;
+  int         scaleEstimation = 1;  ///< 1 none, 2 user specified, 3 grid scale at reference point, 4 prismoidal
+  double      userScaleFactor = 1.0;
+  bool        seaLevelCorrection = false;
+  double      seaLevelElevation = 0.0;
+  double      projectionRadius = 0.0;
+  std::string coordinateSystemDefinition;  ///< A code, an XML definition, or empty (Civil 3D).
+};
+/// The coordinate-system code a GEODATA definition names: the definition itself when it is a bare
+/// code, else the `id` of its first `…CoordinateSystem` element; "" when it names none.
+[[nodiscard]] std::string GeoDataCoordinateSystemCode(const std::string& definition);
+/// REQ-362 item 1: sets the geographic marker (design point, north), the zone when the definition
+/// names one (a code the dictionary does not know is kept, REQ-358 item 5), and REQ-360's scale
+/// settings with the transform left off. No undo step (it is part of opening the file); logs what
+/// it set and, when there is no coordinate system, says so.
+void ApplyDwgGeoData(AppCommandState& st, const DwgGeoData& g, std::vector<std::string>& log);
 /// A viewport pick or typed point for GEOMARKPOINT / GEOREORIENTMARKER (LOCAL coordinates).
 bool SubmitGeoCommandPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
 /// Typed input while a geolocation command is active; false when none is.
