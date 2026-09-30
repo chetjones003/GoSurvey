@@ -11650,7 +11650,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
   | Measure | Budget |
   |---|---|
-  | Clean `ninja-release` local build | ≤ ~2 min |
+  | Clean `ninja-release` local build | ≤ ~2.5 min (D-2026-09-30-e; was ~2 min) |
   | CI `build` job (warm dep cache) | ≤ ~6 min; ≤ ~10 min on a cold cache |
   | Incremental rebuild after touching one `src/ui/*.cpp` or `src/commands/*.cpp` | ≤ ~20 s |
 
@@ -11680,6 +11680,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-08-31) — GitHub issue #142; see D-2026-08-31-a and the decision log.
 - Revisions: 2026-08-31 — initial. Accepted the same day (D-2026-08-31-a) after Phase 1 (PCH,
   CI gating) and the first Phase 2 slices landed green.
+  2026-09-30 — clean local budget ~2 min → **~2.5 min** (D-2026-09-30-e): LibreDWG is now built
+  from source (ADR-041 (h)) and kept optimized; measured 146 s clean against 94 s with the old
+  prebuilt library (TASK-299).
 
 ---
 

@@ -1868,8 +1868,9 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
       - The first change removes the extra bit in the R2000 GEODATA layout (REQ-362 item 3).
       - Cost: compiling the library alone from clean takes about 60 s on the reference machine
         (measured 2026-09-30, 22 compile steps, configure included). REQ-205's clean-build budget
-        must still hold, and the implementing task measures it. If it does not hold, that goes
-        back to the user.
+        must still hold. Measured by TASK-299: a clean build went from 94 s to 146 s. The user kept
+        the library optimized and raised the budget to ~2.5 min (D-2026-09-30-e), rather than
+        building it unoptimized (98 s clean, DWG read 0.06 → 0.10 s on a 3.4 MB drawing).
       - This supersedes D-2026-08-31-b for LibreDWG only; every other dependency stays vendored
         as before. The GPL-3.0 obligation (e) is met by the source being in this repository.
 - Alternatives: **(1) Route A in-tree codec** — rejected; months of bit packing for a writer we
