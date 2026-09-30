@@ -1855,6 +1855,22 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (g) **MSVC:** LibreDWG is built with the pinned `cl` + Ninja presets (project.md §7). If
       upstream CMake is untested on MSVC, that is integration work in IO/Build, not a second
       compiler.
+  (h) *(proposed 2026-09-30, D-2026-09-30-d; not yet accepted)* **GoSurvey maintains its own
+      LibreDWG, as full source in this repository.** `third_party/libredwg/` holds the complete
+      upstream source of tag 0.13.4 (licence and copyright files included) plus GoSurvey's
+      changes. It is compiled as a static library by the GoSurvey build, with the same MSVC
+      configuration the prebuilt `.lib` used, and the prebuilt `.lib` is removed.
+      - Every change to LibreDWG is its own commit, listed in `third_party/libredwg/VENDORED.md`
+        with what it fixes, why, and whether it has been offered upstream.
+      - Moving to a newer upstream release is a recorded decision, and our changes are re-applied
+        on top of it.
+      - The first change removes the extra bit in the R2000 GEODATA layout (REQ-362 item 3).
+      - Cost: compiling the library alone from clean takes about 60 s on the reference machine
+        (measured 2026-09-30, 22 compile steps, configure included). REQ-205's clean-build budget
+        must still hold, and the implementing task measures it. If it does not hold, that goes
+        back to the user.
+      - This supersedes D-2026-08-31-b for LibreDWG only; every other dependency stays vendored
+        as before. The GPL-3.0 obligation (e) is met by the source being in this repository.
 - Alternatives: **(1) Route A in-tree codec** — rejected; months of bit packing for a writer we
   are capping at R2004 anyway. **(2) ODA Drawings SDK** — rejected by the user (cost + proprietary
   SDK). **(3) Keep converter forever** — rejected (ADR-024 (d)). **(4) Write R2018 anyway** —

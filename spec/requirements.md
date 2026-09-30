@@ -10370,7 +10370,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 - Purpose: issue #582 open question 1, decided "full two-way" (D-2026-09-29-b), narrowed to READ by
   D-2026-09-29-g after the feasibility spike failed: a Civil 3D / AutoCAD drawing opened in GoSurvey
-  keeps its location. Writing GEODATA waits for issue #590.
+  keeps its location. Writing GEODATA is re-proposed in item 2 (D-2026-09-30-d).
 - Priority: should
 - Type: interop
 - Depends on: REQ-358, REQ-359 item 4, REQ-360, REQ-170 / REQ-175 / ADR-041 / ADR-044.
@@ -10389,14 +10389,36 @@ capability that does not exist. They are recorded here rather than quietly dropp
        review: scale estimation "user specified" → User Defined with its factor, "grid scale at
        reference point" → Reference Point; sea level correction, elevation and spheroid radius; the
        reference point = the design point, with its grid coordinate when the zone is known.
-     A GoSurvey DWG (with its trailer) opens from the trailer as before (ADR-044): GoSurvey writes no
-     GEODATA, and AutoCAD drops the trailer when it re-saves a file, so the two never meet.
-  2. **Write — deferred.** GoSurvey writes no GEODATA; the zone, marker and transform live in the
-     GoSurvey trailer (ADR-044) until issue #590 (AutoCAD rejects the checksums of GoSurvey's DWG
-     files) is fixed and the write spike is re-run.
-  3. **Feasibility result (TASK-295).** LibreDWG reads GEODATA; it can build one by hand but at R2000
-     encodes the 2009 layout (no north direction, no vertical unit); AutoCAD refuses GoSurvey's DWG
-     files with `eDwgCRCDoesNotMatch` and opens them only through RECOVER.
+     A GoSurvey DWG (with its trailer) opens from the trailer as before (ADR-044). GoSurvey writes
+     the trailer and the GEODATA (item 2) from the same drawing state, so the trailer is the one read;
+     AutoCAD drops the trailer when it re-saves a file, and GoSurvey then reads that file's GEODATA.
+  2. **Write** *(proposed 2026-09-30, D-2026-09-30-d; not yet accepted)*. Saving a drawing that has
+     **both** a geographic marker (REQ-359 item 4) **and** a zone (REQ-358) writes one `GEODATA`
+     object (class `AcDbGeoData`) on model space's extension dictionary under
+     `ACAD_GEOGRAPHICDATA`, in the R2000 file (D-2026-09-30-c), carrying:
+     - the **design point** = the marker (WCS, drawing units);
+     - the **reference point** = the marker's latitude / longitude, computed from the zone through
+       `src/geo/` (CS-MAP);
+     - the **north direction** = the marker's north, and the horizontal **unit** = the drawing unit;
+     - the **coordinate-system definition** = the zone code (e.g. `TX83-CF`);
+     - REQ-360's **scale settings** (scale estimation, user factor, sea-level correction and
+       elevation, spheroid radius).
+     A drawing with no marker, or with a marker but no zone, writes no GEODATA; the save log says
+     which and why (REQ-201). GoSurvey writes no geo mesh.
+  3. **Feasibility result.** TASK-295 (2026-09-29) failed on issue #590. Re-run 2026-09-30 (TASK-298
+     follow-up), after #590 was fixed:
+     - LibreDWG 0.13.4's R2000 (class version 1) GEODATA layout has **one extra bit** in its Civil 3D
+       block (a second `unknown_b` after `zero2`). It therefore misreads AutoCAD's R2000 GEODATA, and
+       AutoCAD refuses a file holding one LibreDWG wrote (`eDwgCRCDoesNotMatch`).
+     - With that bit removed, AutoCAD 2027 opens the file and reads back the design point, reference
+       point, north, units, scale estimation and coordinate-system definition, and adopts the zone as
+       `CGEOCS`.
+     - R2000 stores the north direction as an angle in radians (from +Y), three times. It stores no
+       vertical unit; AutoCAD derives one.
+     - AutoCAD reports coordinate type 1 (local grid) for such a GEODATA, where its own R2000 copy of
+       the Civil 3D sample reports 2 (projected grid) from identical GEODATA fields. The source of
+       AutoCAD's value is still to be found; the implementing task investigates it and reports back
+       if it cannot be matched.
 - Acceptance:
   - `samples/duke-main-clean-r2018.dwg` (Civil 3D, GEODATA with no coordinate-system definition):
     opening it sets the marker to design point (1846238.730, 13629548.130) within REQ-101 and north
@@ -10405,12 +10427,29 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a GEODATA naming a dictionary code (bare, or as the `id` of an XML definition) sets that zone and
     the reference point's grid coordinate; an unknown code is kept verbatim;
   - a GoSurvey DWG with a trailer opens from the trailer, unchanged;
-  - a DWG without GEODATA opens as before.
-- Owner-layer: IO (`src/io/LibreDwgCad.cpp`), Commands (applying the read values), `src/geo/`.
-- Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-g, D-2026-09-30-a, TASK-295.
+  - a DWG without GEODATA opens as before;
+  - *(write, proposed)* a drawing in `TX83-CF` with a marker, saved as DWG, opens in AutoCAD 2027
+    with no error. Its GEODATA reads back: the design point = the marker within REQ-101; the
+    reference point within 1e-7° of CS-MAP's latitude / longitude for the marker; north within
+    0.001°; the definition `TX83-CF`; and `CGEOCS` = `TX83-CF`. This is an `accoreconsole` check,
+    recorded in the task;
+  - *(write, proposed)* the same file with its trailer removed reopens in GoSurvey with the zone,
+    marker, north and scale settings from GEODATA alone, within REQ-101 (automated);
+  - *(write, proposed)* a drawing with no marker, or with a marker but no zone, writes no GEODATA,
+    and the log says why;
+  - *(write, proposed)* a small R2000 fixture that AutoCAD saved with a GEODATA reads with the values
+    AutoCAD reports (guards the corrected LibreDWG layout);
+  - *(write, proposed)* opening the file in Civil 3D shows Texas Central NAD83 US Foot with the marker
+    at the same point. Manual, by the user: Civil 3D is not on the build machine.
+- Owner-layer: IO (`src/io/LibreDwgCad.cpp`), Commands (applying the read values), `src/geo/`;
+  the in-tree LibreDWG (ADR-041 (h)) for the layout fix.
+- Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-g, D-2026-09-30-a, TASK-295. Item 2
+  (write) and its acceptance lines are **proposed** (D-2026-09-30-d), pending the user.
 - Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — narrowed to READ (D-2026-09-29-g): the
   feasibility spike did not prove AutoCAD reads a GEODATA GoSurvey writes; write deferred to #590.
   2026-09-30 — the trailer-vs-GEODATA clause replaced (D-2026-09-30-a): the two cannot meet in one file.
+  2026-09-30 — write re-proposed (D-2026-09-30-d) after the re-run spike succeeded with a patched
+  LibreDWG; the trailer clause of item 1 updated, since GoSurvey now writes both.
 
 ### REQ-363 — Online base map: USGS maps under model space (GitHub issue #583, increment 1)
 
