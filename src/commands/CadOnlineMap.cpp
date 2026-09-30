@@ -114,9 +114,15 @@ void OnlineMapController::Update(const AppCommandState& st, bool modelView, cons
   draws_.clear();
   const DrawingSettings& s = st.drawingSettings;
   const OnlineMapInfo& info = OnlineMapInfoOf(s.onlineMap);
-  if (!modelView || info.service == nullptr || !s.Geolocated() || fbWidth <= 0 || fbHeight <= 0) {
-    // Map Off draws nothing and requests nothing (item 8). Tiles already in flight still land and
-    // are kept for when the map comes back.
+  const bool mapOff = info.service == nullptr || !s.Geolocated();
+  if (mapOff) {
+    // Map Off releases the map's textures (ADR-064 (d)); the disk cache brings them back quickly.
+    // Paper space does not: switching to a layout and back should not reload the view.
+    Clear(true);
+    pendingUpload_.clear();
+  }
+  if (!modelView || mapOff || fbWidth <= 0 || fbHeight <= 0) {
+    // Map Off draws nothing and requests nothing (item 8). Tiles already in flight still land.
     if (!sent_.empty()) {
       service_->SetWanted({});
       sent_.clear();

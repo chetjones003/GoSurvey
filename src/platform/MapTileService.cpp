@@ -136,13 +136,18 @@ void MapTileService::Pump() {
   size_t next = 0;
   while (static_cast<int>(inFlight_.size()) < maxInFlight_ && next < waiting_.size()) {
     auto task = std::make_unique<Task>();
-    task->request = std::move(waiting_[next++]);
+    task->request = waiting_[next];
     Task* t = task.get();
     // Inputs copied into the worker (§8 rule 1); the Task outlives it (joined before it is freed).
-    t->thread = std::thread([t, dir = cacheDir_, fetch = fetch_] {
-      t->result = FetchTile(t->request, dir, fetch);
-      t->done.store(true, std::memory_order_release);
-    });
+    try {
+      t->thread = std::thread([t, dir = cacheDir_, fetch = fetch_] {
+        t->result = FetchTile(t->request, dir, fetch);
+        t->done.store(true, std::memory_order_release);
+      });
+    } catch (const std::system_error&) {
+      break;  // no thread to be had now (REQ-201: not a crash); the request waits for the next Pump
+    }
+    ++next;
     inFlight_.push_back(std::move(task));
   }
   waiting_.erase(waiting_.begin(), waiting_.begin() + static_cast<std::ptrdiff_t>(next));

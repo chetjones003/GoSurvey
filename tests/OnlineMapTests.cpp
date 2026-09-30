@@ -408,12 +408,21 @@ TEST_CASE("The map fetches, places and draws the view's tiles (REQ-363)", "[req3
     // A wide view is held to 64 tiles by going coarser.
     Settle(map, st, ViewOn(kEFt - kOriginX, kNFt - kOriginY, 200000.f), log);
     CHECK(map.Level() < 16);
-    CHECK(map.DrawList().size() <= static_cast<size_t>(OnlineMapController::kMaxTiles) + 64u);
+    // Each wanted tile draws itself or one coarser stand-in, so the cap holds while tiles stream in.
+    CHECK(map.DrawList().size() <= static_cast<size_t>(OnlineMapController::kMaxTiles));
 
-    // Turning the map off stops drawing at once.
+    // Paper space draws nothing but keeps the textures (a layout and back does not reload the view).
+    REQUIRE(live > 0);
+    const int held = live;
+    map.Update(st, false, cam, 800, 600, log);
+    CHECK_FALSE(map.Drawing());
+    CHECK(live == held);
+
+    // Turning the map off stops drawing at once and releases every texture (ADR-064 (d)).
     st.drawingSettings.onlineMap = DrawingSettings::OnlineMap::Off;
     map.Update(st, true, cam, 800, 600, log);
     CHECK_FALSE(map.Drawing());
+    CHECK(live == 0);
   }
   CHECK(live == 0);  // every texture released with the controller
 }

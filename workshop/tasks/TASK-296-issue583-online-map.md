@@ -68,11 +68,15 @@ is stored inside the drawing. Split into REQ-363 (this task) and REQ-364.
   mutex queue, which §8 reserves for an architectural decision; rewritten as §8 one-shot workers, and
   ADR-064 (c)'s wording ("through a queue") corrected on the spec PR. (3) A Dev Shell capture showed
   holes that were the Test Engine's fast-forwarded sleep, not the app: its waits now use the wall clock.
+- 2026-09-30: PR #593. Final review fixes: (1) ADR-064 (d) says map textures are released when the
+  map is turned off — they were kept in the LRU; Map Off / no location now releases them (paper space
+  keeps them). (2) A failed `std::thread` creation would have thrown out of the frame (REQ-201); the
+  request now waits for the next Pump. (3) The 64-tile test allowed 128; tightened to 64.
 
 ## Completion report
 
 - Build: `./dev/build` clean; `dev/build-devshell.bat` clean.
-- Tests: `[req363]` 12 cases pass, 8 repeated runs clean. `ctest` 2003/2010 — the 7 failures are
+- Tests: `[req363]` 12 cases pass, repeated runs clean (8 + 5). `ctest` 2003/2010 — the 7 failures are
   the headless ones already failing on `beta` (re-checked two: OFFSET line count, solid edge count).
   Dev Shell `req363-online-map` passes with the live USGS service; `req359-geolocation-tab` still
   passes.
@@ -83,7 +87,8 @@ is stored inside the drawing. Split into REQ-363 (this task) and REQ-364.
   - failing fetcher: no stall (every Update < 250 ms while failing), cached tiles still draw, one
     message until a success ✔
   - a cached tile draws with the network unavailable ✔ (service test)
-  - pan + orbit with tiles streaming: p95 6.72 ms, max 7.45 ms (570 frames, reference machine) ✔
+  - pan + orbit with tiles streaming: p95 6.68-6.72 ms over three runs (570 frames each, reference
+    machine) ✔; one run had a single 18.3 ms frame (max), the others 7.5 ms — p95 is the budget.
   - attribution exactly while tiles draw ✔ (`onlineMapDrawing` true with USGS Imagery, false after
     Map Off; drawn only in model space)
   - Visual: the 40 ft circle at AG9976's surveyed coordinate sits on the UT Tower in the imagery.
