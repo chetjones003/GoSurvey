@@ -1857,8 +1857,9 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
       compiler.
   (h) (2026-09-30, D-2026-09-30-d) **GoSurvey maintains its own
       LibreDWG, as full source in this repository.** `third_party/libredwg/` holds the complete
-      upstream source of tag 0.13.4 (licence and copyright files included) plus GoSurvey's
-      changes. It is compiled as a static library by the GoSurvey build, with the same MSVC
+      upstream **library** source of tag 0.13.4 (`src/`, `include/`, the one header the library
+      includes from `programs/`, and the licence and copyright files) plus GoSurvey's changes.
+      Upstream's tests, examples, docs, command-line programs and bindings are not copied. It is compiled as a static library by the GoSurvey build, with the same MSVC
       configuration the prebuilt `.lib` used, and the prebuilt `.lib` is removed.
       - Every change to LibreDWG is its own commit, listed in `third_party/libredwg/VENDORED.md`
         with what it fixes, why, and whether it has been offered upstream.

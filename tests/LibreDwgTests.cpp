@@ -31,10 +31,10 @@ struct ScratchDir {
 
 }  // namespace
 
-TEST_CASE("LibreDwgPackageVersion is the pinned 0.13.3 release", "[dwg][libredwg]") {
+TEST_CASE("LibreDwgPackageVersion is the pinned 0.13.4 release", "[dwg][libredwg]") {
   const std::string v = LibreDwgPackageVersion();
   REQUIRE_FALSE(v.empty());
-  REQUIRE(v.find("0.13.3") != std::string::npos);
+  REQUIRE(v.find("0.13.4") != std::string::npos);
 }
 
 TEST_CASE("LibreDwgWriteMinimalR2000 refuses an empty path", "[dwg][libredwg]") {

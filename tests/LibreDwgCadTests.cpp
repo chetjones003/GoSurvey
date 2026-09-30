@@ -419,7 +419,7 @@ TEST_CASE("Civil3D parts-catalog class signature is detected from the class tabl
 
 // issue #140 / DEBT-151-a — end-to-end against a real LibreDWG-decoded file: a multi-layer table
 // must import names, colours (incl. off-layer negative ACI), assigned linetypes and freeze/lock
-// flags intact. Fixture is R2000 because LibreDWG 0.13.3's own encoder does not round-trip
+// flags intact. Fixture is R2000 because LibreDWG 0.13.4's own encoder does not round-trip
 // R2004+ (a real R2018 fixture is the remaining half of DEBT-151-a); the UTF-16LE name path is
 // covered by the DecodeDwgString case above.
 TEST_CASE("LibreDWG imports a multi-layer table end to end", "[dwg][libredwg][issue140]") {
@@ -595,7 +595,7 @@ TEST_CASE("DWG export keeps layer handles valid after many entities (issue #167)
 
 // issue #160 / DEBT-151-a — end-to-end against a genuine AutoCAD 2018 (AC1032, from_version
 // R_2018) file, committed as samples/duke-main-clean-r2018.dwg (a real survey/topo drawing:
-// 154 named layers, ~2300 lines, ~1500 polylines). LibreDWG 0.13.3's own encoder cannot produce
+// 154 named layers, ~2300 lines, ~1500 polylines). LibreDWG 0.13.4's own encoder cannot produce
 // an R2004+ file its decoder can re-read, so a real committed fixture is the only way to run the
 // UTF-16LE (BITCODE_TU) name-decode path (IS_FROM_TU_DWG, from_version >= R_2007) end to end
 // rather than via the hand-built uint16_t buffer in the DecodeDwgString unit case above.

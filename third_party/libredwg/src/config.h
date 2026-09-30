@@ -316,7 +316,7 @@
 #define PACKAGE_VERSION "0.13.4-0-ge3774bd"
 
 /* Defined in configure.ac to the libtool version-info of the shared lib. */
-#define LIBREDWG_SO_VERSION ""
+#define LIBREDWG_SO_VERSION "0:13:0"
 
 /* The size of `size_t', as computed by sizeof. */
 #define SIZEOF_SIZE_T 8
