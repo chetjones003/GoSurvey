@@ -886,6 +886,28 @@ TEST_CASE("The online map choice survives a DWG round trip (REQ-363)", "[dwg][li
   CHECK(in.drawingSettings.onlineMap == DrawingSettings::OnlineMap::UsgsImageryTopo);
 }
 
+TEST_CASE("A captured map area survives a DWG round trip, bytes intact (REQ-364)", "[dwg][libredwg][req364]") {
+  ScratchDir dir("req364");
+  const auto p = (dir.path / "captured.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  DrawingSettings::CapturedArea a;
+  a.map = DrawingSettings::OnlineMap::UsgsImagery;
+  a.level = 16;
+  std::string bytes;
+  for (int i = 0; i < 1000; ++i)
+    bytes.push_back(static_cast<char>(i * 37));  // every byte value, including NUL
+  a.tiles.push_back({14977, 26984, std::make_shared<const std::string>(bytes)});
+  a.tiles.push_back({14978, 26984, std::make_shared<const std::string>(bytes.substr(1))});
+  st.drawingSettings.capturedAreas.push_back(a);
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  CHECK(in.drawingSettings.capturedAreas == st.drawingSettings.capturedAreas);
+}
+
 // REQ-359 item 3 / D-2026-09-29-e: a Position Marker reopens ONCE from a GoSurvey DWG (the trailer),
 // while the DWG / DXF body carries a CIRCLE, two LINEs and an MTEXT for other programs.
 TEST_CASE("A Position Marker survives DWG save and is written as circle, lines and MTEXT (REQ-359)",

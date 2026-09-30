@@ -160,7 +160,7 @@ Camera ViewOn(double localX, double localY, float halfH) {
 }
 
 /// Frames the controller until the service is idle and a draw list exists (or a timeout).
-void Settle(OnlineMapController& map, const AppCommandState& st, const Camera& cam, std::vector<std::string>& log) {
+void Settle(OnlineMapController& map, AppCommandState& st, const Camera& cam, std::vector<std::string>& log) {
   const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   for (int i = 0; i < 4 || std::chrono::steady_clock::now() < until; ++i) {
     map.Update(st, true, cam, 800, 600, log);
@@ -272,7 +272,7 @@ TEST_CASE("A level-16 tile lands on AG9976 within one tile pixel (REQ-363)", "[r
 
 TEST_CASE("The tile service caches on disk, reports 404 and failures, and prunes (REQ-363)", "[req363]") {
   ScratchDir dir("service");
-  const MapTileRequest req{{1, 16, 14977, 26984}, "https://example.invalid/16/26984/14977", "S/16/14977/26984"};
+  const MapTileRequest req{{1, 16, 14977, 26984}, "https://example.invalid/16/26984/14977", "S/16/14977/26984", nullptr};
   {
     FakeNetwork net;
     MapTileService s(dir.path, net.Fetch(), 1);
@@ -535,4 +535,228 @@ TEST_CASE("The map choice is one undo step, per drawing, saved, and cleared by R
   CHECK(OnlineMapFromStorageName("bingAerial") == DrawingSettings::OnlineMap::Off);
   for (const OnlineMapInfo& m : kOnlineMaps)
     CHECK(OnlineMapFromStorageName(m.storageName) == m.map);
+}
+
+// ===================================================================================================
+// REQ-364 (GitHub issue #583 increment 2): Capture Area keeps a piece of the map inside the drawing.
+// ===================================================================================================
+
+namespace {
+
+/// Frames the controller until the running Capture Area ends (or a timeout).
+void RunCapture(OnlineMapController& map, AppCommandState& st, const Camera& cam, std::vector<std::string>& log) {
+  const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (st.active == AppCommandState::Kind::GeoCaptureArea && std::chrono::steady_clock::now() < until) {
+    map.Update(st, true, cam, 800, 600, log);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
+std::unique_ptr<OnlineMapController> Controller(FakeNetwork& net, int* live) {
+  return std::make_unique<OnlineMapController>(std::make_unique<MapTileService>(std::filesystem::path(), net.Fetch(), 2),
+                                               FakeTextures(live), std::chrono::milliseconds(0));
+}
+
+size_t CapturedTileCount(const AppCommandState& st) {
+  size_t n = 0;
+  for (const DrawingSettings::CapturedArea& a : st.drawingSettings.capturedAreas)
+    n += a.tiles.size();
+  return n;
+}
+
+}  // namespace
+
+TEST_CASE("Capture Area keeps the visible tiles, and they draw offline with Map Off after a reopen (REQ-364)",
+          "[req364]") {
+  AppCommandState st = TexasDrawing();
+  st.drawingSettings.onlineMap = DrawingSettings::OnlineMap::UsgsImagery;
+  FakeNetwork net;
+  int live = 0;
+  std::vector<std::string> log;
+  const Camera cam = ViewOn(kEFt - kOriginX, kNFt - kOriginY, 500.f);
+  auto map = Controller(net, &live);
+  Settle(*map, st, cam, log);
+  const size_t shown = map->DrawList().size();
+  REQUIRE(shown > 0);
+
+  REQUIRE(StartCaptureMapArea(st, false, log));
+  CHECK(st.geoCmdPhase == AppCommandState::GeoCmdPhase::Capturing);
+  RunCapture(*map, st, cam, log);
+  CHECK(st.active == AppCommandState::Kind::None);
+  REQUIRE(st.drawingSettings.capturedAreas.size() == 1);
+  const DrawingSettings::CapturedArea& area = st.drawingSettings.capturedAreas[0];
+  CHECK(area.map == DrawingSettings::OnlineMap::UsgsImagery);
+  CHECK(area.level == map->Level());
+  CHECK(area.tiles.size() == shown);  // the visible area is the view's tiles
+  for (const DrawingSettings::CapturedTile& t : area.tiles) {
+    REQUIRE(t.image);
+    CHECK(*t.image == TinyPng());  // kept as served
+  }
+  CHECK(log.back().find("kept in the drawing") != std::string::npos);
+
+  // Save (the trailer's JSON) → reopen, Map Off, and no network: the captured area still draws, in
+  // the place the live tiles had.
+  AppCommandState back = TexasDrawing();
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(st), log));
+  REQUIRE(back.drawingSettings.capturedAreas == st.drawingSettings.capturedAreas);
+  back.drawingSettings.onlineMap = DrawingSettings::OnlineMap::Off;
+  FakeNetwork offline;
+  offline.mode = 2;
+  int live2 = 0;
+  auto map2 = Controller(offline, &live2);
+  Settle(*map2, back, cam, log);
+  CHECK(map2->Service().FetchCount() == 0);  // decoded from the drawing, never fetched
+  REQUIRE(map2->DrawList().size() == area.tiles.size());
+  DrawingWgs84Frame frame;
+  std::string why;
+  REQUIRE(frame.Open(back, &why));
+  std::vector<double> expect;
+  const DrawingSettings::CapturedTile& t0 = area.tiles[0];
+  REQUIRE(PlaceMapTile(frame, area.level, t0.x, t0.y, OnlineMapController::kCellsPerSide, expect, &why));
+  bool found = false;
+  for (const MapTileDraw& d : map2->DrawList())
+    found = found || (d.xyuv && *d.xyuv == expect);
+  CHECK(found);
+  CHECK(map2->Drawing());  // so the attribution shows (REQ-363 item 9)
+}
+
+TEST_CASE("Pick Area keeps only the tiles under the picked rectangle (REQ-364)", "[req364]") {
+  AppCommandState st = TexasDrawing();
+  st.drawingSettings.onlineMap = DrawingSettings::OnlineMap::UsgsTopo;
+  FakeNetwork net;
+  int live = 0;
+  std::vector<std::string> log;
+  const Camera cam = ViewOn(kEFt - kOriginX, kNFt - kOriginY, 2000.f);
+  auto map = Controller(net, &live);
+  Settle(*map, st, cam, log);
+  REQUIRE(map->Level() == 16);
+
+  REQUIRE(StartCaptureMapArea(st, true, log));
+  const double cx = kEFt - kOriginX, cy = kNFt - kOriginY;
+  REQUIRE(SubmitGeoCommandPoint(st, cx - 20.0, cy - 20.0, log));
+  CHECK_FALSE(SubmitGeoCommandPoint(st, cx - 20.0, cy + 50.0, log));  // not a rectangle: pick again
+  REQUIRE(SubmitGeoCommandPoint(st, cx + 20.0, cy + 20.0, log));
+  RunCapture(*map, st, cam, log);
+  REQUIRE(st.drawingSettings.capturedAreas.size() == 1);
+  // A 40 ft square lies in one level-16 tile, or at most four where it straddles tile edges.
+  const DrawingSettings::CapturedArea& area = st.drawingSettings.capturedAreas[0];
+  CHECK(area.level == 16);
+  CHECK(area.tiles.size() >= 1);
+  CHECK(area.tiles.size() <= 4);
+  CHECK(area.tiles.size() < map->DrawList().size());  // fewer than the visible view
+}
+
+TEST_CASE("Capture Area refuses more than 256 tiles, and a failed fetch keeps nothing (REQ-364)", "[req364]") {
+  AppCommandState st = TexasDrawing();
+  st.drawingSettings.onlineMap = DrawingSettings::OnlineMap::UsgsImagery;
+  FakeNetwork net;
+  int live = 0;
+  std::vector<std::string> log;
+  const Camera cam = ViewOn(kEFt - kOriginX, kNFt - kOriginY, 500.f);
+  auto map = Controller(net, &live);
+  Settle(*map, st, cam, log);
+  REQUIRE(map->Level() == 16);
+
+  // 20 km square at level 16 (~530 m tiles): over a thousand tiles.
+  REQUIRE(StartCaptureMapArea(st, true, log));
+  const double cx = kEFt - kOriginX, cy = kNFt - kOriginY;
+  REQUIRE(SubmitGeoCommandPoint(st, cx - 33000.0, cy - 33000.0, log));
+  REQUIRE(SubmitGeoCommandPoint(st, cx + 33000.0, cy + 33000.0, log));
+  RunCapture(*map, st, cam, log);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK(st.drawingSettings.capturedAreas.empty());
+  CHECK(log.back().find("Zoom in or pick a smaller area.") != std::string::npos);
+
+  // A cold controller with the network down: the capture's first failed tile ends it, keeping nothing.
+  FakeNetwork down;
+  down.mode = 2;
+  int live2 = 0;
+  auto cold = Controller(down, &live2);
+  cold->Update(st, true, cam, 800, 600, log);
+  REQUIRE(StartCaptureMapArea(st, false, log));
+  RunCapture(*cold, st, cam, log);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK(st.drawingSettings.capturedAreas.empty());
+  // The capture says why it kept nothing (the live map also says, once, that USGS is unreachable).
+  bool said = false;
+  for (const std::string& l : log)
+    said = said || (l.find("nothing was kept") != std::string::npos && l.find("no route to host") != std::string::npos);
+  CHECK(said);
+
+  // Esc while capturing keeps nothing.
+  FakeNetwork slow;
+  slow.mode = 2;
+  int live3 = 0;
+  auto map3 = Controller(slow, &live3);
+  REQUIRE(StartCaptureMapArea(st, false, log));
+  CancelActiveCommand(st, log);
+  map3->Update(st, true, cam, 800, 600, log);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK(st.drawingSettings.capturedAreas.empty());
+}
+
+TEST_CASE("Captures undo one at a time; Remove Captured Areas is one undo step; Map Off refuses (REQ-364)",
+          "[req364]") {
+  AppCommandState st = TexasDrawing();
+  std::vector<std::string> log;
+  CHECK_FALSE(StartCaptureMapArea(st, false, log));  // Map Off: nothing to capture
+  CHECK(log.back().find("choose a map first") != std::string::npos);
+  CHECK(st.active == AppCommandState::Kind::None);
+  CHECK_FALSE(RemoveCapturedMapAreas(st, log));  // nothing to remove: refused, not a silent no-op
+
+  st.drawingSettings.onlineMap = DrawingSettings::OnlineMap::UsgsImagery;
+  FakeNetwork net;
+  int live = 0;
+  auto map = Controller(net, &live);
+  const Camera cam = ViewOn(kEFt - kOriginX, kNFt - kOriginY, 500.f);
+  Settle(*map, st, cam, log);
+  for (int i = 0; i < 2; ++i) {
+    REQUIRE(StartCaptureMapArea(st, false, log));
+    RunCapture(*map, st, cam, log);
+  }
+  REQUIRE(st.drawingSettings.capturedAreas.size() == 2);
+  REQUIRE(DoUndo(st, log));
+  CHECK(st.drawingSettings.capturedAreas.size() == 1);
+
+  REQUIRE(RemoveCapturedMapAreas(st, log));
+  CHECK(st.drawingSettings.capturedAreas.empty());
+  REQUIRE(DoUndo(st, log));
+  CHECK(st.drawingSettings.capturedAreas.size() == 1);
+
+  // Per drawing tab.
+  st.documents.resize(3);
+  SaveDocumentToSnapshot(st, 1);
+  st.drawingSettings.capturedAreas.clear();
+  SaveDocumentToSnapshot(st, 2);
+  RestoreDocumentFromSnapshot(st, 1);
+  CHECK(st.drawingSettings.capturedAreas.size() == 1);
+  RestoreDocumentFromSnapshot(st, 2);
+  CHECK(st.drawingSettings.capturedAreas.empty());
+  CHECK(CapturedTileCount(st) == 0);
+}
+
+TEST_CASE("A damaged captured tile is dropped on open and said (REQ-364)", "[req364]") {
+  AppCommandState st = TexasDrawing();
+  DrawingSettings::CapturedArea a;
+  a.map = DrawingSettings::OnlineMap::UsgsImagery;
+  a.level = 16;
+  a.tiles.push_back({1, 2, std::make_shared<const std::string>(TinyPng())});
+  a.tiles.push_back({3, 4, std::make_shared<const std::string>(std::string("\x00\xff\x10", 3))});
+  st.drawingSettings.capturedAreas.push_back(a);
+  std::string text = SerializeGoSurveyJson(st);
+  // Damage the second tile's base64 (an out-of-alphabet character).
+  const size_t second = text.rfind("\"image\"");
+  REQUIRE(second != std::string::npos);
+  const size_t q = text.find('"', text.find(':', second) + 1);
+  text[q + 1] = '*';
+  AppCommandState back;
+  std::vector<std::string> log;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, text, log));
+  REQUIRE(back.drawingSettings.capturedAreas.size() == 1);
+  CHECK(back.drawingSettings.capturedAreas[0].tiles.size() == 1);
+  CHECK(*back.drawingSettings.capturedAreas[0].tiles[0].image == TinyPng());  // base64 round trip, binary-safe
+  bool said = false;
+  for (const std::string& l : log)
+    said = said || l.find("damaged captured map tile") != std::string::npos;
+  CHECK(said);
 }

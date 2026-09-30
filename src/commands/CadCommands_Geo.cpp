@@ -39,7 +39,7 @@ std::string FormatDms(double deg, char pos, char neg) {
 bool IsGeoCommand(AppCommandState::Kind k) {
   using K = AppCommandState::Kind;
   return k == K::GeoMarkPoint || k == K::GeoMarkLatLong || k == K::GeoReorientMarker ||
-         k == K::DrawingSettingsPick;
+         k == K::DrawingSettingsPick || k == K::GeoCaptureArea;
 }
 
 /// Local-space box of a marker's circle (radius \p r) and label.
@@ -533,6 +533,62 @@ bool SetOnlineMap(AppCommandState& st, DrawingSettings::OnlineMap map, std::vect
   return true;
 }
 
+/// \p needsZone: the command works on the drawing's zone (defined below with the other geo commands).
+static bool StartGeoCommand(AppCommandState& st, AppCommandState::Kind k, const char* name,
+                            std::vector<std::string>& log, bool needsZone = true);
+
+bool StartCaptureMapArea(AppCommandState& st, bool pick, std::vector<std::string>& log) {
+  if (st.drawingSettings.Geolocated() && st.drawingSettings.onlineMap == DrawingSettings::OnlineMap::Off) {
+    log.push_back("Capture Area — choose a map first (Map Off shows nothing to capture).");
+    return false;
+  }
+  if (!StartGeoCommand(st, AppCommandState::Kind::GeoCaptureArea, "Capture Area", log))
+    return false;
+  st.mapCapture = AppCommandState::MapCaptureState{};
+  st.mapCapture.visibleArea = !pick;
+  if (pick) {
+    log.push_back("Capture Area — specify the first corner of the area (click or type X,Y). ESC cancels.");
+  } else {
+    st.geoCmdPhase = AppCommandState::GeoCmdPhase::Capturing;
+    log.push_back("Capture Area — capturing the visible map. ESC cancels.");
+  }
+  return true;
+}
+
+void CommitMapCapture(AppCommandState& st, DrawingSettings::CapturedArea area, std::vector<std::string>& log) {
+  const size_t n = area.tiles.size();
+  if (n > 0) {
+    PushUndoSnapshot(st, "Capture Area");
+    st.drawingSettings.capturedAreas.push_back(std::move(area));
+    BumpCadGpuCache(st);  // document content: marks the drawing modified
+  }
+  st.active = AppCommandState::Kind::None;
+  st.geoCmdPhase = AppCommandState::GeoCmdPhase::WaitFirst;
+  st.mapCapture = AppCommandState::MapCaptureState{};
+  log.push_back(n > 0 ? "Capture Area — " + std::to_string(n) + " map tile(s) kept in the drawing."
+                      : std::string("Capture Area — the map has no tiles in that area; nothing was kept."));
+}
+
+void FailMapCapture(AppCommandState& st, const std::string& why, std::vector<std::string>& log) {
+  st.active = AppCommandState::Kind::None;
+  st.geoCmdPhase = AppCommandState::GeoCmdPhase::WaitFirst;
+  st.mapCapture = AppCommandState::MapCaptureState{};
+  log.push_back("Capture Area — nothing was kept: " + why);
+}
+
+bool RemoveCapturedMapAreas(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.drawingSettings.capturedAreas.empty()) {
+    log.push_back("Remove Captured Areas — the drawing has no captured map areas.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Remove Captured Areas");
+  const size_t n = st.drawingSettings.capturedAreas.size();
+  st.drawingSettings.capturedAreas.clear();
+  BumpCadGpuCache(st);
+  log.push_back("Remove Captured Areas — " + std::to_string(n) + " captured area(s) removed.");
+  return true;
+}
+
 bool SetGeographicMarker(AppCommandState& st, double localX, double localY, double northDeg,
                          std::vector<std::string>& log) {
   if (!st.drawingSettings.Geolocated()) {
@@ -708,7 +764,7 @@ int DropPositionMarkersFromSelection(AppCommandState& st, const char* verb, std:
 /// \p needsZone: the command works on the drawing's zone. The Drawing Settings pick does not — the
 /// window may hold a zone that is not applied yet.
 static bool StartGeoCommand(AppCommandState& st, AppCommandState::Kind k, const char* name,
-                            std::vector<std::string>& log, bool needsZone = true) {
+                            std::vector<std::string>& log, bool needsZone) {
   if (st.active != AppCommandState::Kind::None) {
     log.push_back(std::string(name) + " — finish or cancel the active command first.");
     return false;
@@ -819,6 +875,28 @@ bool SubmitGeoCommandPoint(AppCommandState& st, double localX, double localY, st
     st.active = K::None;
     return PlacePositionMarkerAtLocal(st, localX, localY, log) >= 0;
   }
+  if (st.active == K::GeoCaptureArea) {  // REQ-364 Pick Area: two corners, then the capture runs
+    if (st.geoCmdPhase == GP::Capturing)
+      return false;
+    if (st.geoCmdPhase == GP::WaitFirst) {
+      st.geoCmdFirstA = localX;
+      st.geoCmdFirstB = localY;
+      st.geoCmdPhase = GP::WaitSecond;
+      log.push_back("Capture Area — specify the opposite corner.");
+      return true;
+    }
+    if (std::fabs(localX - st.geoCmdFirstA) < 1.e-9 || std::fabs(localY - st.geoCmdFirstB) < 1.e-9) {
+      log.push_back("Capture Area — the corners must make a rectangle; pick the opposite corner again.");
+      return false;
+    }
+    st.mapCapture.minX = std::min(st.geoCmdFirstA, localX);
+    st.mapCapture.maxX = std::max(st.geoCmdFirstA, localX);
+    st.mapCapture.minY = std::min(st.geoCmdFirstB, localY);
+    st.mapCapture.maxY = std::max(st.geoCmdFirstB, localY);
+    st.geoCmdPhase = GP::Capturing;
+    log.push_back("Capture Area — capturing the picked area. ESC cancels.");
+    return true;
+  }
   if (st.active != K::GeoReorientMarker)
     return false;
   if (st.geoCmdPhase == GP::WaitFirst) {
@@ -874,6 +952,10 @@ bool HandleGeoCommandText(AppCommandState& st, const std::string& line, std::vec
     PlacePositionMarkerAtLatLong(st, st.geoCmdFirstA, lon, log);
     return true;
   }
+  if (st.active == K::GeoCaptureArea && st.geoCmdPhase == GP::Capturing) {
+    log.push_back("Capture Area — still gathering the map tiles; ESC cancels.");
+    return true;
+  }
   float px = 0.f, py = 0.f;
   if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
     log.push_back(std::string(AppCommandState::KindName(st.active)) + " — pick in the viewport or type X,Y.");
@@ -890,6 +972,10 @@ const char* GeoCommandPrompt(const AppCommandState& st) {
     case K::GeoMarkPoint:      return "Specify position:";
     case K::GeoMarkLatLong:    return first ? "Enter latitude:" : "Enter longitude:";
     case K::GeoReorientMarker: return first ? "Specify design point:" : "Specify north direction:";
+    case K::GeoCaptureArea:
+      if (st.geoCmdPhase == AppCommandState::GeoCmdPhase::Capturing)
+        return st.mapCapture.prompt.empty() ? "Capturing map\xE2\x80\xA6" : st.mapCapture.prompt.c_str();
+      return first ? "Specify first corner:" : "Specify opposite corner:";
     case K::DrawingSettingsPick:
       if (st.drawingSettingsPick.target == AppCommandState::DrawingSettingsPickState::Target::ReferencePoint)
         return "Specify reference point:";

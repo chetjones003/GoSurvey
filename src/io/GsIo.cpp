@@ -25,6 +25,66 @@ namespace {
 
 using nlohmann::json;
 
+// REQ-364: a captured map tile's image travels in the trailer JSON as standard base64 (RFC 4648,
+// padded). Private here: this file is its only reader and writer.
+constexpr char kBase64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string Base64Encode(const std::string& in) {
+  std::string out;
+  out.reserve((in.size() + 2) / 3 * 4);
+  size_t i = 0;
+  for (; i + 2 < in.size(); i += 3) {
+    const unsigned v = (static_cast<unsigned char>(in[i]) << 16) | (static_cast<unsigned char>(in[i + 1]) << 8) |
+                       static_cast<unsigned char>(in[i + 2]);
+    out += kBase64[(v >> 18) & 63];
+    out += kBase64[(v >> 12) & 63];
+    out += kBase64[(v >> 6) & 63];
+    out += kBase64[v & 63];
+  }
+  if (i < in.size()) {
+    unsigned v = static_cast<unsigned char>(in[i]) << 16;
+    if (i + 1 < in.size())
+      v |= static_cast<unsigned char>(in[i + 1]) << 8;
+    out += kBase64[(v >> 18) & 63];
+    out += kBase64[(v >> 12) & 63];
+    out += i + 1 < in.size() ? kBase64[(v >> 6) & 63] : '=';
+    out += '=';
+  }
+  return out;
+}
+
+/// False on any character outside the alphabet or a bad length: a damaged tile is dropped, not
+/// half-decoded.
+bool Base64Decode(const std::string& in, std::string* out) {
+  if (in.size() % 4 != 0)
+    return false;
+  out->clear();
+  out->reserve(in.size() / 4 * 3);
+  auto value = [](char c) -> int {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+  };
+  for (size_t i = 0; i < in.size(); i += 4) {
+    const bool last = i + 4 == in.size();
+    const int pad = last ? (in[i + 3] == '=') + (in[i + 2] == '=') : 0;
+    int v[4] = {};
+    for (int k = 0; k < 4 - pad; ++k)
+      if ((v[k] = value(in[i + k])) < 0)
+        return false;
+    const unsigned n = (v[0] << 18) | (v[1] << 12) | (v[2] << 6) | v[3];
+    out->push_back(static_cast<char>((n >> 16) & 0xFF));
+    if (pad < 2)
+      out->push_back(static_cast<char>((n >> 8) & 0xFF));
+    if (pad < 1)
+      out->push_back(static_cast<char>(n & 0xFF));
+  }
+  return true;
+}
+
 void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["id"] = e.id;  // REQ-076 stable identity; additive, no format-version bump (ADR-020 (d))
   o["layer"] = e.layer;
@@ -904,6 +964,28 @@ json BuildRoot(const AppCommandState& st) {
     }
     // REQ-363: the online map, by name so a reordered enum cannot change a saved choice.
     o["onlineMap"] = OnlineMapStorageName(ds.onlineMap);
+    // REQ-364: captured map areas — each tile's image exactly as it was served, base64.
+    if (!ds.capturedAreas.empty()) {
+      json areas = json::array();
+      for (const DrawingSettings::CapturedArea& a : ds.capturedAreas) {
+        json ja;
+        ja["map"] = OnlineMapStorageName(a.map);
+        ja["level"] = a.level;
+        json tiles = json::array();
+        for (const DrawingSettings::CapturedTile& t : a.tiles) {
+          if (!t.image)
+            continue;
+          json jt;
+          jt["x"] = t.x;
+          jt["y"] = t.y;
+          jt["image"] = Base64Encode(*t.image);
+          tiles.push_back(std::move(jt));
+        }
+        ja["tiles"] = std::move(tiles);
+        areas.push_back(std::move(ja));
+      }
+      o["capturedAreas"] = std::move(areas);
+    }
     doc["drawingSettings"] = std::move(o);
   }
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
@@ -2212,6 +2294,38 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.drawingSettings.markerNorthDeg = o.value("markerNorthDeg", 90.0);
     // REQ-363: absent or unknown → Map Off.
     st.drawingSettings.onlineMap = OnlineMapFromStorageName(o.value("onlineMap", std::string()));
+    // REQ-364: captured map areas. A damaged tile (or an area of an unknown map) is dropped and said.
+    if (o.contains("capturedAreas") && o["capturedAreas"].is_array()) {
+      int dropped = 0;
+      for (const json& ja : o["capturedAreas"]) {
+        if (!ja.is_object() || !ja.contains("tiles") || !ja["tiles"].is_array()) {
+          ++dropped;
+          continue;
+        }
+        DrawingSettings::CapturedArea a;
+        a.map = OnlineMapFromStorageName(ja.contains("map") && ja["map"].is_string() ? ja["map"].get<std::string>()
+                                                                                     : std::string());
+        a.level = ja.contains("level") && ja["level"].is_number_integer() ? ja["level"].get<int>() : -1;
+        if (a.map == DrawingSettings::OnlineMap::Off || a.level < 0 || a.level > 30) {
+          dropped += static_cast<int>(ja["tiles"].size());
+          continue;
+        }
+        for (const json& jt : ja["tiles"]) {
+          std::string image;
+          if (!jt.is_object() || !jt.contains("x") || !jt["x"].is_number_integer() || !jt.contains("y") ||
+              !jt["y"].is_number_integer() || !jt.contains("image") || !jt["image"].is_string() ||
+              !Base64Decode(jt["image"].get<std::string>(), &image) || image.empty()) {
+            ++dropped;
+            continue;
+          }
+          a.tiles.push_back({jt["x"].get<int>(), jt["y"].get<int>(), std::make_shared<const std::string>(std::move(image))});
+        }
+        if (!a.tiles.empty())
+          st.drawingSettings.capturedAreas.push_back(std::move(a));
+      }
+      if (dropped > 0)
+        log.push_back("Open: " + std::to_string(dropped) + " damaged captured map tile(s) were dropped (REQ-364).");
+    }
     if (o.contains("transform") && o["transform"].is_object()) {  // REQ-360; absent → the defaults
       const json& x = o["transform"];
       DrawingSettings::Transform& t = st.drawingSettings.transform;

@@ -1143,6 +1143,25 @@ struct DrawingSettings {
   enum class OnlineMap { Off = 0, UsgsImagery = 1, UsgsImageryTopo = 2, UsgsTopo = 3 };
   OnlineMap onlineMap = OnlineMap::Off;
 
+  /// REQ-364: a piece of the online map kept inside the drawing (ADR-064 (e)): its tiles as they were
+  /// served, at one level. Drawn through the same placement as live tiles, with the map on or off.
+  struct CapturedTile {
+    int x = 0;
+    int y = 0;
+    /// The JPEG / PNG exactly as served. Immutable and shared, so undo snapshots copy a pointer.
+    std::shared_ptr<const std::string> image;
+    bool operator==(const CapturedTile& o) const {
+      return x == o.x && y == o.y && (image == o.image || (image && o.image && *image == *o.image));
+    }
+  };
+  struct CapturedArea {
+    OnlineMap                 map = OnlineMap::Off;
+    int                       level = 0;
+    std::vector<CapturedTile> tiles;
+    bool operator==(const CapturedArea& o) const { return map == o.map && level == o.level && tiles == o.tiles; }
+  };
+  std::vector<CapturedArea> capturedAreas;
+
   /// Geolocated exactly when a zone is set (REQ-358 item 3).
   [[nodiscard]] bool Geolocated() const { return !zoneCode.empty(); }
   /// Back to the default geographic marker (drawing origin, grid north).
@@ -1157,7 +1176,7 @@ struct DrawingSettings {
            scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables &&
            zoneCode == o.zoneCode && markerX == o.markerX && markerY == o.markerY &&
            markerNorthDeg == o.markerNorthDeg && transform == o.transform &&
-           objectLayers == o.objectLayers && onlineMap == o.onlineMap;
+           objectLayers == o.objectLayers && onlineMap == o.onlineMap && capturedAreas == o.capturedAreas;
   }
   bool operator!=(const DrawingSettings& o) const { return !(*this == o); }
 };
@@ -1938,6 +1957,9 @@ struct AppCommandState {
     /// its window is hidden. Started only by the tab's pick buttons; \ref drawingSettingsPick says
     /// what for. The window comes back when it ends (Esc = no change).
     DrawingSettingsPick,
+    /// REQ-364: Capture Area — the two corners of Pick Area (geoCmdPhase WaitFirst / WaitSecond),
+    /// then Capturing while the tiles are gathered (\ref mapCapture). Esc cancels, storing nothing.
+    GeoCaptureArea,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -2028,6 +2050,7 @@ struct AppCommandState {
     case Kind::GeoMarkLatLong:     return "GEOMARKLATLONG";
     case Kind::GeoReorientMarker:  return "GEOREORIENTMARKER";
     case Kind::DrawingSettingsPick: return "DRAWINGSETTINGS";
+    case Kind::GeoCaptureArea:     return "GEOCAPTUREAREA";
     default:                  return "";
     }
   }
@@ -3908,7 +3931,8 @@ struct AppCommandState {
   // --- Geolocation tab commands (REQ-359) ---
   /// GEOMARKLATLONG: WaitFirst = latitude, WaitSecond = longitude. GEOREORIENTMARKER: WaitFirst =
   /// the design point, WaitSecond = a point along north from it.
-  enum class GeoCmdPhase { WaitFirst, WaitSecond } geoCmdPhase = GeoCmdPhase::WaitFirst;
+  /// GEOCAPTUREAREA: the two corners, then Capturing while the map controller gathers the tiles.
+  enum class GeoCmdPhase { WaitFirst, WaitSecond, Capturing } geoCmdPhase = GeoCmdPhase::WaitFirst;
   double geoCmdFirstA = 0.0;  ///< GEOMARKLATLONG: the latitude; GEOREORIENTMARKER: design point X (local)
   double geoCmdFirstB = 0.0;  ///< GEOREORIENTMARKER: design point Y (local)
   /// REQ-360: what a running \ref Kind::DrawingSettingsPick picks, and its result for the Drawing
@@ -3930,6 +3954,16 @@ struct AppCommandState {
   bool mtextRichEditorMarkerJustPlaced = false;
   /// Edit Location asks the Drawing Settings window to show Units and Zone (REQ-359 item 2).
   bool drawingSettingsShowUnitsAndZone = false;
+  /// REQ-364: a running Capture Area. The command layer sets the area; the online map controller
+  /// (which knows the displayed level and has the tiles) gathers them, updates the progress, and
+  /// ends the command through CommitMapCapture / FailMapCapture.
+  struct MapCaptureState {
+    bool   visibleArea = true;  ///< Capture what the view shows; else the picked LOCAL rectangle below.
+    double minX = 0.0, minY = 0.0, maxX = 0.0, maxY = 0.0;
+    int    total = 0;           ///< Tiles to gather (0 until the controller has planned them).
+    int    gathered = 0;
+    std::string prompt;         ///< "Capturing map… n of m tiles", kept here so the prompt can point at it.
+  } mapCapture;
 
   // --- CHPROP / MATCHPROP / LAYMCUR (REQ-356) ---
   /// SelectObjects is every command's pick step (MATCHPROP's source); CHPROP then asks which
@@ -7296,6 +7330,15 @@ bool RemoveGeoLocation(AppCommandState& st, std::vector<std::string>& log);
 /// REQ-363 item 8: choose the drawing's online map, as one undo step. False (logged) when the drawing
 /// is not geolocated and \p map is not Map Off; choosing the current map again changes nothing.
 bool SetOnlineMap(AppCommandState& st, DrawingSettings::OnlineMap map, std::vector<std::string>& log);
+/// REQ-364 item 1: Capture Area (\p pick false: the visible area) or Pick Area (\p pick true: two
+/// corners). Refused (logged) with Map Off, no location, or another command running.
+bool StartCaptureMapArea(AppCommandState& st, bool pick, std::vector<std::string>& log);
+/// REQ-364 item 5: stores \p area as one undo step and ends the command. Called by the map controller.
+void CommitMapCapture(AppCommandState& st, DrawingSettings::CapturedArea area, std::vector<std::string>& log);
+/// REQ-364 item 2: ends the command storing nothing, saying why. Called by the map controller.
+void FailMapCapture(AppCommandState& st, const std::string& why, std::vector<std::string>& log);
+/// REQ-364 item 5: removes every captured area, as one undo step. False (logged) when there is none.
+bool RemoveCapturedMapAreas(AppCommandState& st, std::vector<std::string>& log);
 /// Sets the geographic marker (REQ-359 item 4) to the LOCAL point (stored as WORLD) and a north
 /// direction in degrees CCW from +X. One undo step. False (logged) when not geolocated.
 bool SetGeographicMarker(AppCommandState& st, double localX, double localY, double northDeg,

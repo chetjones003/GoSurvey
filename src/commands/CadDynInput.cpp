@@ -331,6 +331,8 @@ bool CadCommandExpectsPointEntry(const AppCommandState& cmd) {
   case K::GeoMarkPoint: return true;       // REQ-359
   case K::GeoReorientMarker: return true;  // REQ-359
   case K::DrawingSettingsPick: return true;  // REQ-360
+  case K::GeoCaptureArea:  // REQ-364: Pick Area's corners; nothing to type while it captures
+    return cmd.geoCmdPhase != AppCommandState::GeoCmdPhase::Capturing;
   // REQ-154. The second of the two lists a point-picking command has to appear in — UCS was missing
   // from both, so it had neither dynamic input nor a working click. Same phases that
   // ViewportClickRouteFor routes: everything that takes a coordinate, and nothing that wants a

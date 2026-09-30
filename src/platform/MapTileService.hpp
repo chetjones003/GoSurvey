@@ -51,6 +51,9 @@ struct MapTileRequest {
   std::string url;
   /// Relative path of the tile in the disk cache, e.g. "USGSImageryOnly/16/15000/26000".
   std::string cachePath;
+  /// When set, the image is already in hand (a tile captured into the drawing, REQ-364): the worker
+  /// only decodes it — no disk cache, no network.
+  std::shared_ptr<const std::string> image;
 };
 
 struct MapTileResult {

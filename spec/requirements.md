@@ -10510,7 +10510,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Capture Area and Pick Area are disabled with Map Off.
 - Owner-layer: Commands (capture job, remove, undo), UI (split button, prompt), IO (trailer),
   `src/render/` (the REQ-363 tile pass).
-- Status: accepted (2026-09-30) — D-2026-09-30-b, ADR-064.
+- Status: accepted (2026-09-30) — D-2026-09-30-b, ADR-064, TASK-297.
 - Revisions: 2026-09-30 — proposed and accepted.
 
 ### REQ-100 — Frame budget

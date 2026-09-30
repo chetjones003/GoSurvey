@@ -75,6 +75,7 @@ std::string OnlineMapMessageLatch::OnPlacementFailed(const std::string& reason) 
   return "Online map: the map cannot be placed in this drawing \xE2\x80\x94 " + reason;
 }
 
+
 OnlineMapController::OnlineMapController(std::unique_ptr<MapTileService> service, OnlineMapTextureHooks hooks,
                                          std::chrono::milliseconds retryAfterFailure)
     : service_(std::move(service)), hooks_(std::move(hooks)), retryAfterFailure_(retryAfterFailure) {}
@@ -89,6 +90,22 @@ void OnlineMapController::Clear(bool releaseTextures) {
     tiles_.clear();
   }
   draws_.clear();
+}
+
+void OnlineMapController::ReleaseTexturesExcept(
+    const std::map<MapTileKey, std::shared_ptr<const std::string>>& keep) {
+  for (auto it = tiles_.begin(); it != tiles_.end();) {
+    if (keep.count(it->first)) {
+      ++it;
+      continue;
+    }
+    if (it->second.texture && hooks_.release)
+      hooks_.release(it->second.texture);
+    it = tiles_.erase(it);
+  }
+  pendingUpload_.erase(std::remove_if(pendingUpload_.begin(), pendingUpload_.end(),
+                                      [&](const MapTileResult& r) { return keep.count(r.key) == 0; }),
+                       pendingUpload_.end());
 }
 
 bool OnlineMapController::EnsurePlaced(const MapTileKey& key, Tile& t, int& placeBudget,
@@ -108,21 +125,62 @@ bool OnlineMapController::EnsurePlaced(const MapTileKey& key, Tile& t, int& plac
   return true;
 }
 
-void OnlineMapController::Update(const AppCommandState& st, bool modelView, const Camera& cam, int fbWidth,
+bool OnlineMapController::LocalRectToMercator(double minX, double minY, double maxX, double maxY,
+                                              geo::MercatorBox* box) const {
+  *box = {1e300, 1e300, -1e300, -1e300};
+  bool haveCentre = false;
+  for (int j = 0; j <= 2; ++j) {
+    for (int i = 0; i <= 2; ++i) {
+      const geo::GeoResult ll = geo_.Wgs84FromLocal(minX + (maxX - minX) * i / 2.0, minY + (maxY - minY) * j / 2.0);
+      if (!ll.ok)
+        continue;
+      const double mx = geo::MercatorXFromLongitude(ll.x);
+      const double my = geo::MercatorYFromLatitude(ll.y);
+      box->minX = std::min(box->minX, mx);
+      box->maxX = std::max(box->maxX, mx);
+      box->minY = std::min(box->minY, my);
+      box->maxY = std::max(box->maxY, my);
+      if (i == 1 && j == 1)
+        haveCentre = true;
+    }
+  }
+  return haveCentre;
+}
+
+void OnlineMapController::Update(AppCommandState& st, bool modelView, const Camera& cam, int fbWidth,
                                  int fbHeight, std::vector<std::string>& log) {
+  using GP = AppCommandState::GeoCmdPhase;
   ++frame_;
   draws_.clear();
   const DrawingSettings& s = st.drawingSettings;
   const OnlineMapInfo& info = OnlineMapInfoOf(s.onlineMap);
-  const bool mapOff = info.service == nullptr || !s.Geolocated();
-  if (mapOff) {
-    // Map Off releases the map's textures (ADR-064 (d)); the disk cache brings them back quickly.
-    // Paper space does not: switching to a layout and back should not reload the view.
-    Clear(true);
-    pendingUpload_.clear();
+  bool capturing = st.active == AppCommandState::Kind::GeoCaptureArea && st.geoCmdPhase == GP::Capturing;
+  if (!capturing)
+    job_ = {};  // ended or cancelled (Esc): nothing is kept
+  const auto failCapture = [&](const std::string& why) {
+    FailMapCapture(st, why, log);
+    job_ = {};
+    capturing = false;
+  };
+
+  // The drawing's captured tiles (REQ-364): drawn with the map on or off, never fetched.
+  std::map<MapTileKey, std::shared_ptr<const std::string>> captured;
+  for (const DrawingSettings::CapturedArea& a : s.capturedAreas)
+    for (const DrawingSettings::CapturedTile& t : a.tiles)
+      if (t.image)
+        captured[{static_cast<int>(a.map), a.level, t.x, t.y}] = t.image;
+
+  const bool mapOn = info.service != nullptr && s.Geolocated();
+  if (!mapOn) {
+    // Map Off releases the live map's textures (ADR-064 (d)); the disk cache brings them back
+    // quickly. Paper space does not: switching to a layout and back should not reload the view.
+    ReleaseTexturesExcept(captured);
+    if (capturing)
+      failCapture("the map was turned off.");
   }
-  if (!modelView || mapOff || fbWidth <= 0 || fbHeight <= 0) {
-    // Map Off draws nothing and requests nothing (item 8). Tiles already in flight still land.
+  if (!s.Geolocated() || !modelView || fbWidth <= 0 || fbHeight <= 0) {
+    // Not geolocated: nothing can be placed. Paper space / the Start tab: nothing is drawn
+    // (item 4); a capture in progress waits for model space. Tiles in flight still land.
     if (!sent_.empty()) {
       service_->SetWanted({});
       sent_.clear();
@@ -133,11 +191,9 @@ void OnlineMapController::Update(const AppCommandState& st, bool modelView, cons
 
   // ---- The drawing's location: any change re-places every tile (the textures stay) -----------------
   const int map = static_cast<int>(s.onlineMap);
-  const bool locationChanged = !haveLocation_ || s.zoneCode != locSettings_.zoneCode ||
-                               s.transform != locSettings_.transform ||
-                               s.footDefinition != locSettings_.footDefinition ||
-                               st.drawingInsUnits != locInsUnits_ || st.worldDocumentOriginX != locOriginX_ ||
-                               st.worldDocumentOriginY != locOriginY_;
+  const bool locationChanged = !haveLocation_ || s.zoneCode != locZone_ || s.transform != locTransform_ ||
+                               s.footDefinition != locFoot_ || st.drawingInsUnits != locInsUnits_ ||
+                               st.worldDocumentOriginX != locOriginX_ || st.worldDocumentOriginY != locOriginY_;
   if (locationChanged || map != map_) {
     latch_.OnLocationChanged();
     havePlan_ = false;
@@ -145,7 +201,9 @@ void OnlineMapController::Update(const AppCommandState& st, bool modelView, cons
   map_ = map;
   if (locationChanged) {
     haveLocation_ = true;
-    locSettings_ = s;
+    locZone_ = s.zoneCode;
+    locTransform_ = s.transform;
+    locFoot_ = s.footDefinition;
     locInsUnits_ = st.drawingInsUnits;
     locOriginX_ = st.worldDocumentOriginX;
     locOriginY_ = st.worldDocumentOriginY;
@@ -160,6 +218,8 @@ void OnlineMapController::Update(const AppCommandState& st, bool modelView, cons
         log.push_back(std::move(m));
   }
   if (!geoOk_) {
+    if (capturing)
+      failCapture("the map cannot be placed in this drawing.");
     if (!sent_.empty()) {
       service_->SetWanted({});
       sent_.clear();
@@ -170,8 +230,13 @@ void OnlineMapController::Update(const AppCommandState& st, bool modelView, cons
 
   // ---- Plan the view's tiles (only when the view changed) -----------------------------------------
   const double halfH = static_cast<double>(cam.orthoHalfH);
-  if (!havePlan_ || cam.targetX != viewX_ || cam.targetY != viewY_ || halfH != viewHalfH_ ||
-      fbWidth != viewW_ || fbHeight != viewH_) {
+  const double halfW = halfH * fbWidth / fbHeight;
+  if (!mapOn) {
+    wanted_.clear();
+    level_ = -1;
+    havePlan_ = false;
+  } else if (!havePlan_ || cam.targetX != viewX_ || cam.targetY != viewY_ || halfH != viewHalfH_ ||
+             fbWidth != viewW_ || fbHeight != viewH_) {
     havePlan_ = true;
     viewX_ = cam.targetX;
     viewY_ = cam.targetY;
@@ -180,38 +245,23 @@ void OnlineMapController::Update(const AppCommandState& st, bool modelView, cons
     viewH_ = fbHeight;
     wanted_.clear();
     level_ = -1;
-    // The plan window a plan view at this centre and zoom shows (item 4), sampled at its corners,
-    // edge midpoints and centre so a rotated drawing still gets a box that covers it.
-    const double halfW = halfH * fbWidth / fbHeight;
-    geo::MercatorBox box{1e300, 1e300, -1e300, -1e300};
-    double cx = 0.0, cy = 0.0, rx = 0.0, ry = 0.0;
-    bool haveCentre = false, haveRight = false;
-    for (int j = -1; j <= 1; ++j) {
-      for (int i = -1; i <= 1; ++i) {
-        const geo::GeoResult ll = geo_.Wgs84FromLocal(viewX_ + i * halfW, viewY_ + j * halfH);
-        if (!ll.ok)
-          continue;
-        const double mx = geo::MercatorXFromLongitude(ll.x);
-        const double my = geo::MercatorYFromLatitude(ll.y);
-        box.minX = std::min(box.minX, mx);
-        box.maxX = std::max(box.maxX, mx);
-        box.minY = std::min(box.minY, my);
-        box.maxY = std::max(box.maxY, my);
-        if (i == 0 && j == 0)
-          cx = mx, cy = my, haveCentre = true;
-        if (i == 1 && j == 0)
-          rx = mx, ry = my, haveRight = true;
-      }
-    }
-    if (haveCentre && haveRight) {
-      const double metersPerPixel = std::hypot(rx - cx, ry - cy) / (fbWidth * 0.5);
-      const geo::TileRange r =
+    // The plan window a plan view at this centre and zoom shows (item 4).
+    geo::MercatorBox box;
+    const geo::GeoResult c = geo_.Wgs84FromLocal(viewX_, viewY_);
+    const geo::GeoResult r = geo_.Wgs84FromLocal(viewX_ + halfW, viewY_);
+    if (LocalRectToMercator(viewX_ - halfW, viewY_ - halfH, viewX_ + halfW, viewY_ + halfH, &box) && c.ok && r.ok) {
+      // Screen pixel size in mercator meters, from the centre to the right edge's midpoint.
+      const double metersPerPixel =
+          std::hypot(geo::MercatorXFromLongitude(r.x) - geo::MercatorXFromLongitude(c.x),
+                     geo::MercatorYFromLatitude(r.y) - geo::MercatorYFromLatitude(c.y)) /
+          (fbWidth * 0.5);
+      const geo::TileRange tr =
           geo::TilesCoveringAtMost(box, geo::ChooseTileLevel(metersPerPixel, kMaxLevel), kMaxTiles);
-      level_ = r.z;
-      const double midX = (r.minX + r.maxX) * 0.5, midY = (r.minY + r.maxY) * 0.5;
-      for (int ty = r.minY; ty <= r.maxY; ++ty)
-        for (int tx = r.minX; tx <= r.maxX; ++tx)
-          wanted_.push_back({map, r.z, tx, ty});
+      level_ = tr.z;
+      const double midX = (tr.minX + tr.maxX) * 0.5, midY = (tr.minY + tr.maxY) * 0.5;
+      for (int ty = tr.minY; ty <= tr.maxY; ++ty)
+        for (int tx = tr.minX; tx <= tr.maxX; ++tx)
+          wanted_.push_back({map, tr.z, tx, ty});
       // Centre first: the tiles the user is looking at arrive first.
       std::stable_sort(wanted_.begin(), wanted_.end(), [&](const MapTileKey& a, const MapTileKey& b) {
         return std::hypot(a.x - midX, a.y - midY) < std::hypot(b.x - midX, b.y - midY);
@@ -220,6 +270,35 @@ void OnlineMapController::Update(const AppCommandState& st, bool modelView, cons
       log.push_back(std::move(m));
     }
   }
+
+  // ---- Plan a Capture Area (REQ-364 item 2): the displayed level's tiles over the area ----------------
+  if (capturing && !job_.active) {
+    const AppCommandState::MapCaptureState& c = st.mapCapture;
+    geo::MercatorBox box;
+    const bool ok = c.visibleArea
+                        ? LocalRectToMercator(viewX_ - halfW, viewY_ - halfH, viewX_ + halfW, viewY_ + halfH, &box)
+                        : LocalRectToMercator(c.minX, c.minY, c.maxX, c.maxY, &box);
+    if (level_ < 0 || !ok) {
+      failCapture("the area is outside the map's reach from this drawing.");
+    } else {
+      const geo::TileRange tr = geo::TilesCovering(box, level_);
+      if (tr.Count() > kMaxCaptureTiles) {
+        failCapture("the area needs " + std::to_string(tr.Count()) + " map tiles at this zoom (the most is " +
+                    std::to_string(kMaxCaptureTiles) + "). Zoom in or pick a smaller area.");
+      } else {
+        job_.active = true;
+        job_.map = map;
+        job_.level = level_;
+        for (int ty = tr.minY; ty <= tr.maxY; ++ty)
+          for (int tx = tr.minX; tx <= tr.maxX; ++tx)
+            job_.keys.push_back({map, level_, tx, ty});
+        st.mapCapture.total = static_cast<int>(job_.keys.size());
+      }
+    }
+  }
+  const auto inJob = [&](const MapTileKey& k) {
+    return job_.active && std::find(job_.keys.begin(), job_.keys.end(), k) != job_.keys.end();
+  };
 
   // ---- Collect finished tiles -------------------------------------------------------------------------
   const Clock::time_point now = Clock::now();
@@ -231,21 +310,57 @@ void OnlineMapController::Update(const AppCommandState& st, bool modelView, cons
         if (r.fromNetwork)
           latch_.OnFetched();
         retryAt_.erase(r.key);
+        if (inJob(r.key))
+          job_.images[r.key] = r.bytes;
         pendingUpload_.push_back(std::move(r));
         break;
       case MapTileStatus::NotFound:
         notFound_.insert(r.key);
-        if (r.key.map == map_)
+        if (inJob(r.key))
+          job_.images[r.key] = nullptr;  // no tile there: nothing to keep
+        if (r.key.map == map_ && mapOn)
           if (std::string m = latch_.OnNotFound(); !m.empty())
             log.push_back(std::move(m));
         break;
       case MapTileStatus::Failed:
         retryAt_[r.key] = now + retryAfterFailure_;
-        if (std::string m = latch_.OnFailed(r.error); !m.empty())
+        if (inJob(r.key))
+          failCapture("a map tile could not be downloaded \xE2\x80\x94 " + r.error + ".");
+        else if (std::string m = latch_.OnFailed(r.error); !m.empty())
           log.push_back(std::move(m));
         break;
     }
   }
+
+  // ---- A capture gathers what is already here, and ends when it has everything ------------------------
+  if (job_.active) {
+    for (const MapTileKey& k : job_.keys) {
+      if (job_.images.count(k))
+        continue;
+      if (auto it = tiles_.find(k); it != tiles_.end() && it->second.image)
+        job_.images[k] = it->second.image;
+      else if (auto ci = captured.find(k); ci != captured.end())
+        job_.images[k] = ci->second;
+      else if (notFound_.count(k))
+        job_.images[k] = nullptr;
+    }
+    st.mapCapture.gathered = static_cast<int>(job_.images.size());
+    st.mapCapture.prompt = "Capturing map\xE2\x80\xA6 " + std::to_string(st.mapCapture.gathered) + " of " +
+                           std::to_string(st.mapCapture.total) + " tiles";
+    if (job_.images.size() == job_.keys.size()) {
+      DrawingSettings::CapturedArea area;
+      area.map = static_cast<DrawingSettings::OnlineMap>(job_.map);
+      area.level = job_.level;
+      for (const MapTileKey& k : job_.keys)
+        if (const std::shared_ptr<const std::string>& img = job_.images[k])
+          area.tiles.push_back({k.x, k.y, img});
+      CommitMapCapture(st, std::move(area), log);
+      job_ = {};
+      capturing = false;
+    }
+  }
+
+  // ---- Upload a few ------------------------------------------------------------------------------------
   int uploads = kWorkPerFrame;
   while (uploads > 0 && !pendingUpload_.empty()) {
     MapTileResult r = std::move(pendingUpload_.front());
@@ -255,41 +370,66 @@ void OnlineMapController::Update(const AppCommandState& st, bool modelView, cons
       continue;
     --uploads;
     t.texture = hooks_.upload ? hooks_.upload(r.rgba, r.width, r.height) : 0;
+    t.image = r.bytes;
     t.lastUsedFrame = frame_;
     if (!t.texture)
       tiles_.erase(r.key);
   }
 
-  // ---- Ask for what is missing ------------------------------------------------------------------------
+  // ---- Ask for what is missing: the capture first, then the view, then the captured areas -------------
   auto pendingHas = [&](const MapTileKey& k) {
     return std::any_of(pendingUpload_.begin(), pendingUpload_.end(),
                        [&](const MapTileResult& r) { return r.key == k; });
   };
+  auto loaded = [&](const MapTileKey& k) {
+    auto it = tiles_.find(k);
+    return it != tiles_.end() && it->second.texture;
+  };
   std::vector<MapTileKey> ask;
+  const auto add = [&](const MapTileKey& k) {
+    if (std::find(ask.begin(), ask.end(), k) == ask.end())
+      ask.push_back(k);
+  };
+  if (job_.active)
+    for (const MapTileKey& k : job_.keys)
+      if (!job_.images.count(k) && !pendingHas(k))
+        add(k);  // a capture does not wait out a retry delay: it asks, and a failure ends it
   for (const MapTileKey& k : wanted_) {
-    if (auto it = tiles_.find(k); it != tiles_.end() && it->second.texture)
+    if (loaded(k) || notFound_.count(k) || pendingHas(k))
       continue;
-    if (notFound_.count(k) || pendingHas(k))
+    if (auto it = retryAt_.find(k); it != retryAt_.end() && now < it->second && !captured.count(k))
       continue;
-    if (auto it = retryAt_.find(k); it != retryAt_.end() && now < it->second)
-      continue;
-    ask.push_back(k);
+    add(k);
   }
+  for (const auto& [k, img] : captured)
+    if (!loaded(k) && !pendingHas(k))
+      add(k);
   if (ask != sent_) {
     std::vector<MapTileRequest> requests;
     requests.reserve(ask.size());
     for (const MapTileKey& k : ask) {
-      char path[96];
-      std::snprintf(path, sizeof(path), "%s/%d/%d/%d", info.service, k.z, k.x, k.y);
-      requests.push_back({k, UsgsTileUrl(info.service, k.z, k.x, k.y), path});
+      MapTileRequest req;
+      req.key = k;
+      if (auto ci = captured.find(k); ci != captured.end()) {
+        req.image = ci->second;  // in the drawing already: decode only, never the network
+      } else {
+        const char* service = OnlineMapInfoOf(static_cast<DrawingSettings::OnlineMap>(k.map)).service;
+        if (!service)
+          continue;
+        char path[96];
+        std::snprintf(path, sizeof(path), "%s/%d/%d/%d", service, k.z, k.x, k.y);
+        req.url = UsgsTileUrl(service, k.z, k.x, k.y);
+        req.cachePath = path;
+      }
+      requests.push_back(std::move(req));
     }
     service_->SetWanted(std::move(requests));
     sent_ = std::move(ask);
   }
 
-  // ---- Draw list: a loaded ancestor stands in for a tile still on its way -----------------------------
+  // ---- Draw list: live map (a loaded ancestor stands in for a tile on its way), then captured areas ---
   int placeBudget = kWorkPerFrame;
-  std::set<MapTileKey> stand_ins;
+  std::set<MapTileKey> standIns;
   std::vector<MapTileKey> exact;
   for (const MapTileKey& k : wanted_) {
     auto it = tiles_.find(k);
@@ -301,13 +441,18 @@ void OnlineMapController::Update(const AppCommandState& st, bool modelView, cons
       const MapTileKey a{k.map, k.z - up, k.x >> up, k.y >> up};
       auto ai = tiles_.find(a);
       if (ai != tiles_.end() && ai->second.texture && EnsurePlaced(a, ai->second, placeBudget, log)) {
-        stand_ins.insert(a);
+        standIns.insert(a);
         break;
       }
     }
   }
-  std::vector<MapTileKey> order(stand_ins.begin(), stand_ins.end());  // std::set: coarsest level first
+  std::vector<MapTileKey> order(standIns.begin(), standIns.end());  // std::set: coarsest level first
   order.insert(order.end(), exact.begin(), exact.end());
+  for (const auto& [k, img] : captured) {  // REQ-364 item 4: above the live map
+    auto it = tiles_.find(k);
+    if (it != tiles_.end() && it->second.texture && EnsurePlaced(k, it->second, placeBudget, log))
+      order.push_back(k);
+  }
   for (const MapTileKey& k : order) {
     Tile& t = tiles_[k];
     t.lastUsedFrame = frame_;
