@@ -10472,7 +10472,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: `src/geo/` (Web Mercator tile maths and tile-point placement, pure), `src/platform/`
   (tile fetch + disk cache worker), `src/render/` (tile pass), Commands (map choice, undo), UI
   (dropdown, attribution), IO (trailer).
-- Status: accepted (2026-09-30) — D-2026-09-30-b, ADR-064.
+- Status: accepted (2026-09-30) — D-2026-09-30-b, ADR-064, TASK-296.
 - Revisions: 2026-09-30 — proposed and accepted.
 
 ### REQ-364 — Capture Area: keep a piece of the online map inside the drawing (GitHub issue #583, increment 2)

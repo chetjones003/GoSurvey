@@ -8,6 +8,7 @@
 // CS-MAP keeps global state (the dictionary directory, its caches), so these functions are for one
 // thread: the UI thread, or a test.
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -71,5 +72,31 @@ struct GeoResult {
 /// are coordinate-system codes (e.g. "LL27", "LL83", "LL84").
 [[nodiscard]] GeoResult ConvertLatLong(const std::string& fromCode, const std::string& toCode,
                                        double longitude, double latitude);
+
+/// WGS 84 latitude/longitude ↔ a projected zone's grid (REQ-363, ADR-064 (b)), with the zone, WGS 84
+/// and both datum paths looked up ONCE: the online map places thousands of tile points, and the
+/// one-shot functions above search the dictionary on every call. Same datum path and failure rules as
+/// \ref ConvertLatLong.
+class Wgs84GridConverter {
+ public:
+  Wgs84GridConverter();
+  ~Wgs84GridConverter();
+  Wgs84GridConverter(const Wgs84GridConverter&) = delete;
+  Wgs84GridConverter& operator=(const Wgs84GridConverter&) = delete;
+
+  /// Opens \p zoneCode (closing any previous zone). False, with the reason in \p error, when the
+  /// dictionary is not loaded, the code is unknown or geographic, or no datum path exists.
+  bool Open(const std::string& zoneCode, std::string* error);
+  void Close();
+  [[nodiscard]] bool IsOpen() const;
+  /// WGS 84 (x = longitude) → zone grid (easting, northing in the zone's unit).
+  [[nodiscard]] GeoResult ToGrid(double longitude, double latitude) const;
+  /// Zone grid → WGS 84 (x = longitude).
+  [[nodiscard]] GeoResult ToWgs84(double easting, double northing) const;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
 
 }  // namespace geo

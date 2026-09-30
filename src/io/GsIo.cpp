@@ -902,6 +902,8 @@ json BuildRoot(const AppCommandState& st) {
       }
       o["objectLayers"] = std::move(rows);
     }
+    // REQ-363: the online map, by name so a reordered enum cannot change a saved choice.
+    o["onlineMap"] = OnlineMapStorageName(ds.onlineMap);
     doc["drawingSettings"] = std::move(o);
   }
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
@@ -2208,6 +2210,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.drawingSettings.markerX = o.value("markerX", 0.0);
     st.drawingSettings.markerY = o.value("markerY", 0.0);
     st.drawingSettings.markerNorthDeg = o.value("markerNorthDeg", 90.0);
+    // REQ-363: absent or unknown → Map Off.
+    st.drawingSettings.onlineMap = OnlineMapFromStorageName(o.value("onlineMap", std::string()));
     if (o.contains("transform") && o["transform"].is_object()) {  // REQ-360; absent → the defaults
       const json& x = o["transform"];
       DrawingSettings::Transform& t = st.drawingSettings.transform;

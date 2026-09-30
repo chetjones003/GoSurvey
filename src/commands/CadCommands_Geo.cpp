@@ -260,6 +260,50 @@ geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, dou
   return r;
 }
 
+bool DrawingWgs84Frame::Open(const AppCommandState& st, std::string* error) {
+  const DrawingSettings& s = st.drawingSettings;
+  const DrawingTransformFactors f = ResolveDrawingTransform(s, st.drawingInsUnits, s.transform.apply);
+  auto fail = [&](std::string why) {
+    if (error)
+      *error = std::move(why);
+    converter_.Close();  // a failed Open leaves no stale zone behind
+    return false;
+  };
+  if (!f.ok)
+    return fail(f.error);
+  if (s.transform.apply && !f.transformOk)
+    return fail("Transformation: " + f.transformError);
+  if (!(f.zoneUnitsPerDrawingUnit > 0.0) || !std::isfinite(f.zoneUnitsPerDrawingUnit))
+    return fail("The drawing unit has no size in the zone's unit.");
+  std::string why;
+  if (!converter_.Open(s.zoneCode, &why))
+    return fail(why);
+  applyTransform_ = s.transform.apply;
+  transform_ = applyTransform_ ? TransformOf(s.transform, f) : geo::LocalGridTransform{};
+  zoneUnitsPerDrawingUnit_ = f.zoneUnitsPerDrawingUnit;
+  originX_ = st.worldDocumentOriginX;
+  originY_ = st.worldDocumentOriginY;
+  return true;
+}
+
+geo::GeoResult DrawingWgs84Frame::LocalFromWgs84(double longitude, double latitude) const {
+  geo::GeoResult g = converter_.ToGrid(longitude, latitude);
+  if (!g.ok)
+    return g;
+  // The inverse of DrawingWorldToGrid, then world → local (REQ-101: all double).
+  const geo::XY l = applyTransform_ ? geo::GridToLocal(transform_, g.x, g.y) : geo::XY{g.x, g.y};
+  g.x = l.x / zoneUnitsPerDrawingUnit_ - originX_;
+  g.y = l.y / zoneUnitsPerDrawingUnit_ - originY_;
+  return g;
+}
+
+geo::GeoResult DrawingWgs84Frame::Wgs84FromLocal(double localX, double localY) const {
+  geo::XY g{(localX + originX_) * zoneUnitsPerDrawingUnit_, (localY + originY_) * zoneUnitsPerDrawingUnit_};
+  if (applyTransform_)
+    g = geo::LocalToGrid(transform_, g.x, g.y);
+  return converter_.ToWgs84(g.x, g.y);
+}
+
 std::string FormatLatLongLabel(double latitudeDeg, double longitudeDeg) {
   return "LAT " + FormatDms(latitudeDeg, 'N', 'S') + "\nLONG " + FormatDms(longitudeDeg, 'E', 'W');
 }
@@ -469,8 +513,23 @@ bool RemoveGeoLocation(AppCommandState& st, std::vector<std::string>& log) {
   st.drawingSettings.zoneCode.clear();
   st.drawingSettings.ResetGeographicMarker();
   st.drawingSettings.transform = DrawingSettings::Transform{};  // REQ-360: belongs to the zone
+  st.drawingSettings.onlineMap = DrawingSettings::OnlineMap::Off;  // REQ-363 item 8
   BumpCadGpuCache(st);  // document property: marks the drawing modified
   log.push_back("Remove Location — the drawing is no longer geolocated (No Datum, No Projection).");
+  return true;
+}
+
+bool SetOnlineMap(AppCommandState& st, DrawingSettings::OnlineMap map, std::vector<std::string>& log) {
+  if (map == st.drawingSettings.onlineMap)
+    return true;
+  if (map != DrawingSettings::OnlineMap::Off && !st.drawingSettings.Geolocated()) {
+    log.push_back("Online map — the drawing has no location; assign a zone in Drawing Settings first.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Online Map");
+  st.drawingSettings.onlineMap = map;
+  BumpCadGpuCache(st);  // document property: marks the drawing modified
+  log.push_back(std::string("Online map — ") + OnlineMapInfoOf(map).label + ".");
   return true;
 }
 

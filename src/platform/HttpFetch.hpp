@@ -13,7 +13,8 @@
 /// thin shell over OS calls, and the logic worth pinning — version ordering and manifest
 /// parsing — lives in `update/UpdateCheck.*` where it can be tested with no network.
 ///
-/// All functions are blocking and are called from a worker thread, never the UI thread.
+/// All functions are blocking and are called from a worker thread, never the UI thread. The online
+/// map's tile worker (REQ-363, MapTileService) is one of them.
 
 /// True when Windows reports an actual route to the internet (IPv4 or IPv6).
 ///
@@ -34,11 +35,15 @@ bool HasInternetConnectivity();
 /// \p bearerToken, when non-empty, is sent as an `Authorization: Bearer <token>` header — used by
 /// REQ-092's license lookup (`AuthService::FetchLicenseTier`), which is the only caller that
 /// needs a header at all.
+///
+/// \p httpStatusOut, when non-null, receives the HTTP status (0 when no response arrived) — used by
+/// the online map (REQ-363) to tell "no tile here" (404) from "could not reach the server".
 bool HttpGetString(const std::string& url,
                    int               timeoutMs,
                    std::string&      out,
                    std::string&      errorOut,
-                   const std::string& bearerToken = std::string());
+                   const std::string& bearerToken = std::string(),
+                   int*              httpStatusOut = nullptr);
 
 /// Downloads \p url to \p destPathUtf8, overwriting it.
 ///

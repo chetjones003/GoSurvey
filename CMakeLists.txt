@@ -398,6 +398,13 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/geo/CoordinateSystems.cpp
   # REQ-360: the pure local <-> grid transformation (no CS-MAP)
   src/geo/LocalGridTransform.cpp
+  # REQ-363 / ADR-064: Web Mercator tile maths (pure)
+  src/geo/WebMercator.cpp
+  # REQ-363 / ADR-064 (c): online map tile fetch + disk cache (fetch injected; no WinHTTP here)
+  src/platform/MapTileService.cpp
+  src/platform/StbImage.cpp
+  # REQ-363: the online map controller (GL-free; the app injects texture upload)
+  src/commands/CadOnlineMap.cpp
   # User preferences. In the domain set for UserDataDirectory(), which the BENCH command writes its
   # results through — pure <filesystem>, no window.
   src/io/UserPrefs.cpp
@@ -1330,6 +1337,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ObjectLayersTests.cpp
     # REQ-362 / D-2026-09-29-g: reading an AutoCAD / Civil 3D GEODATA (write deferred to #590).
     tests/GeoDataReadTests.cpp
+    # REQ-363 / D-2026-09-30-b / ADR-064: the online base map (issue #583 increment 1).
+    tests/OnlineMapTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp

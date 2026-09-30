@@ -5712,16 +5712,51 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       }});
     }
 
-    // ---- Online Map: present but not implemented yet (REQ-084); delivered by issue #583 -------------
+    // ---- Online Map: the Map dropdown (REQ-363); Capture Area waits for REQ-364 --------------------
     {
+      const float wMap = belowW("USGS Imagery");
       const float wCapture = belowW("Capture Area");
-      const float w = annStyleW + ImGui::GetStyle().ItemSpacing.x + wCapture + 8.f;
-      ribbonSpecs.push_back({w, w, [&, wCapture, w]() {
+      const float w = wMap + ImGui::GetStyle().ItemSpacing.x + wCapture + 8.f;
+      ribbonSpecs.push_back({w, w, [&, wMap, wCapture, w]() {
         RibbonSectionBegin("RibbonSecGeoOnlineMap", "Online Map", w, panelH);
-        ImGui::BeginGroup();
-        ImGui::TextUnformatted("Map");
-        annNyiCombo("##GeoMap", "Map Off");
-        ImGui::EndGroup();
+        // Civil 3D's shape: a large button showing the current map's thumbnail and name; the menu
+        // lists every map with its thumbnail, Map Off last behind a separator (item 1).
+        const OnlineMapInfo& current = OnlineMapInfoOf(cmd.drawingSettings.onlineMap);
+        if (RibbonButtonEx("##GeoMap", RibbonIconKind::Nyi, current.label, ImVec2(wMap, colH), RibbonLabel::Below,
+                           current.icon)) {
+          DevShell_OnUi("##GeoMap");
+          ImGui::OpenPopup("##GeoMapMenu");
+        }
+        {
+          const ImVec2 mMin = ImGui::GetItemRectMin();
+          const ImVec2 mMax = ImGui::GetItemRectMax();
+          DrawDropdownChevron(ImGui::GetWindowDrawList(), ImVec2(mMin.x, mMax.y - 14.f),
+                              ImVec2(mMax.x + 4.f, mMax.y - 2.f), ImGui::GetColorU32(ImGuiCol_Text));
+        }
+        RibbonItemHelp("Map — show a USGS The National Map base map under the drawing (US only).\n"
+                       "The drawing's own choice; Map Off fetches nothing.");
+        if (ImGui::BeginPopup("##GeoMapMenu")) {
+          const float thumb = ImGui::GetFontSize() * 2.6f;
+          for (const OnlineMapInfo& m : kOnlineMaps) {
+            if (m.map == DrawingSettings::OnlineMap::Off)
+              ImGui::Separator();
+            ImGui::PushID(m.storageName);
+            const ImVec2 rowPos = ImGui::GetCursorScreenPos();
+            const bool picked = ImGui::Selectable("##row", m.map == cmd.drawingSettings.onlineMap, 0,
+                                                  ImVec2(thumb + 12.f + ImGui::CalcTextSize("USGS Imagery Topo").x, thumb));
+            if (ImTextureID tex = RibbonNamedIconTex(m.icon))
+              ImGui::GetWindowDrawList()->AddImage(tex, rowPos, ImVec2(rowPos.x + thumb, rowPos.y + thumb));
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2(rowPos.x + thumb + 8.f, rowPos.y + (thumb - ImGui::GetFontSize()) * 0.5f),
+                ImGui::GetColorU32(ImGuiCol_Text), m.label);
+            if (picked) {
+              DevShell_OnUi(m.storageName);
+              SetOnlineMap(cmd, m.map, log);
+            }
+            ImGui::PopID();
+          }
+          ImGui::EndPopup();
+        }
         ImGui::SameLine();
         ImGui::BeginDisabled();
         RibbonButtonEx("##GeoCaptureArea", RibbonIconKind::Nyi, "Capture Area", ImVec2(wCapture, colH),
@@ -13129,6 +13164,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   ImGui::Image(static_cast<ImTextureID>(static_cast<std::intptr_t>(viewportTextureId)), avail, ImVec2(0, 1),
                ImVec2(1, 0));
+
+  // REQ-363 item 9: the map's credit, in the lower-right corner, exactly while map tiles are drawn.
+  if (cmd.onlineMapDrawing && cmd.activeSpaceIndex == kModelSpaceIndex) {
+    const char* credit = "Map: USGS The National Map";
+    const ImVec2 ts = ImGui::CalcTextSize(credit);
+    const ImVec2 p(imgPos.x + avail.x - ts.x - 10.f, imgPos.y + avail.y - ts.y - 8.f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(ImVec2(p.x - 4.f, p.y - 2.f), ImVec2(p.x + ts.x + 4.f, p.y + ts.y + 2.f),
+                      IM_COL32(0, 0, 0, 150), 3.f);
+    dl->AddText(p, IM_COL32(235, 235, 235, 255), credit);
+  }
 
   // REQ-161: hand the viewport's screen rect to the Developer Shell, so a Test Engine test can turn
   // a WORLD point into a cursor position. `Camera::WorldToScreen` gives the offset inside this image;
