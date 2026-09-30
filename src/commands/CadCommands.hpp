@@ -7372,8 +7372,9 @@ void StartGeoReorientMarkerCommand(AppCommandState& st, std::vector<std::string>
 /// False (logged) while another command runs or when \p target is None.
 bool StartDrawingSettingsPick(AppCommandState& st, AppCommandState::DrawingSettingsPickState::Target target,
                               std::vector<std::string>& log);
-/// REQ-362 (D-2026-09-29-g: read only): what an AutoCAD / Civil 3D `GEODATA` object says, copied out
-/// by the DWG importer (IO) and applied by \ref ApplyDwgGeoData.
+/// REQ-362: what an AutoCAD / Civil 3D `GEODATA` object says. Read: copied out by the DWG importer
+/// (IO) and applied by \ref ApplyDwgGeoData. Write (item 2): built by \ref BuildDwgGeoData and
+/// encoded by the DWG exporter.
 struct DwgGeoData {
   double      designX = 0.0;  ///< Design point, WCS drawing units.
   double      designY = 0.0;
@@ -7392,7 +7393,15 @@ struct DwgGeoData {
   double      seaLevelElevation = 0.0;
   double      projectionRadius = 0.0;
   std::string coordinateSystemDefinition;  ///< A code, an XML definition, or empty (Civil 3D).
+  int         horizontalUnits = 0;         ///< AutoCAD units value (the INSUNITS codes); written only.
+  double      horizontalUnitScale = 1.0;   ///< Meters per drawing unit; written only.
 };
+/// REQ-362 item 2: the GEODATA a DWG save writes for this drawing — design point = the marker (WCS),
+/// reference = its latitude / longitude from the zone, north, the drawing unit, the zone code and
+/// REQ-360's scale settings. False, with \p why set, when there is no zone or the marker's
+/// latitude / longitude cannot be computed (an unknown zone code, a point outside the zone): then
+/// nothing is written, never a partial GEODATA.
+[[nodiscard]] bool BuildDwgGeoData(const AppCommandState& st, DwgGeoData* out, std::string* why);
 /// The coordinate-system code a GEODATA definition names: the definition itself when it is a bare
 /// code, else the `id` of its first `…CoordinateSystem` element; "" when it names none.
 [[nodiscard]] std::string GeoDataCoordinateSystemCode(const std::string& definition);

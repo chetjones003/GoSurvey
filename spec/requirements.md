@@ -10242,8 +10242,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. **The geographic marker** is the drawing's geolocation reference — a design point in the drawing
      and a north direction — drawn as a viewport overlay glyph, not an entity. By default it is the
      drawing origin with grid north. It is stored with the zone (REQ-358 item 5) and is what REQ-362
-     reads from GEODATA's design point and north direction (writing it waits for issue #590,
-     D-2026-09-29-g).
+     reads from GEODATA's design point and north direction, and writes into it on DWG save (REQ-362
+     item 2, D-2026-09-30-d).
   5. **Online Map** panel: a **Map** dropdown showing **Map Off** and a **Capture Area** button, both
      disabled with a *not implemented yet* tooltip (REQ-084). They are delivered by issue #583:
      REQ-363 (Map) and REQ-364 (Capture Area) replace this item as each is delivered.
@@ -10418,7 +10418,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      - AutoCAD reports coordinate type 1 (local grid) for such a GEODATA, where its own R2000 copy of
        the Civil 3D sample reports 2 (projected grid) from identical GEODATA fields. The source of
        AutoCAD's value is still to be found; the implementing task investigates it and reports back
-       if it cannot be matched.
+       if it cannot be matched. *TASK-300 (2026-09-30):* the GEODATA GoSurvey's save writes for a
+       marker inside its zone (`TX83-CF`, NGS AG9976) reads back as coordinate type **2**. The spike's
+       type 1 came from a reference point south of the Texas Central zone.
 - Acceptance:
   - `samples/duke-main-clean-r2018.dwg` (Civil 3D, GEODATA with no coordinate-system definition):
     opening it sets the marker to design point (1846238.730, 13629548.130) within REQ-101 and north
