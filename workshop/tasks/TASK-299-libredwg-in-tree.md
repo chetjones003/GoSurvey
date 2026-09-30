@@ -1,7 +1,7 @@
 # TASK-299 — GoSurvey's own LibreDWG: build it from source in this repository
 
 - Type:    chore (build) + bug (GEODATA layout)
-- Status:  implement
+- Status:  submitted
 - Opened:  2026-09-30
 - Owner:   Workshop
 
@@ -49,6 +49,31 @@
 - 2026-09-30: build clean; `./dev/test` 2011/2018, the same 7 headless transcripts that fail on beta;
   all `[libredwg]`/`[dwg]`/`[dxf]`/`[req362]` cases pass.
 
+- 2026-09-30: REQ-205 measured (clean `ninja-release`, all targets, same machine, separate build
+  dirs, one after the other): beta with the prebuilt lib **94 s**; this tree **146 s**. LibreDWG's
+  `encode.c` / `out_dxfb.c` / `decode.c` / `in_dxf.c` take ~16 s each alone but 70–115 s under the full
+  parallel build, and every link waits for the library. With LibreDWG at `/Od` the clean build is
+  **98 s**; the codec then reads the 3.4 MB Civil 3D sample in 0.10 s instead of 0.06 s and writes
+  50,000 lines in 0.17 s instead of 0.14 s. Asked the user (ADR-041 (h) said "the same MSVC
+  configuration"): keep `/O2` and raise the budget to ~2.5 min — D-2026-09-30-e, REQ-205 updated.
+- 2026-09-30: GoSurvey change 1 (`dwg.spec`): the extra `unknown_b` removed. `ReadDwgGeoData` reads
+  the class-version-1 meaning (reference = (lat, lon), north = radians from +Y). Fixture
+  `samples/geodata-r2000-autocad.dwg`: the `TX83-CF` spike file re-saved as R2000 by AutoCAD 2027
+  (AutoCAD rewrites every object); its GEODATA decodes to exactly its bit size with the corrected
+  layout (independent Python decoder).
+
 ## 6. Completion report
 
-(pending: REQ-205 timing, GEODATA fix commit)
+- Tests: new `[req362][dwg]` case "An AutoCAD-saved R2000 GEODATA reads with AutoCAD's values"
+  (design point, north 89.8122°, `TX83-CF`, Reference Point, no sea-level correction). Mutation checks:
+  with upstream's extra bit back, north reads 32.70° and sea-level correction is on; with the reader
+  change reverted, north reads 90°. Version test now expects 0.13.4.
+- Build: clean; `./dev/test` 2012/2019, the same 7 headless transcripts that fail on beta.
+- Oracle: all 214 DWGs the headless transcripts wrote with the source-built library open in AutoCAD
+  2027 `accoreconsole` with no error.
+- REQ-205: 146 s clean vs the new ~2.5 min budget (D-2026-09-30-e). CI: `release.yml` runs only on
+  manual dispatch and its sccache also wraps the C compiler, so LibreDWG adds CI time on a cold cache
+  only; not measured here.
+- Assumptions: none that affect the spec.
+- Debt: the #590 entity-link workaround stays in GoSurvey (`LibreDwgLinkBlockEntities`) rather than
+  as a LibreDWG change; the upstream report is drafted, not sent.
