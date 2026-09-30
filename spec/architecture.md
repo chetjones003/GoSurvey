@@ -1838,7 +1838,8 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
       DWG/DXF becomes LibreDWG, not `DxfIo` + a child process.
   (b) **Read:** every DWG version LibreDWG decodes (through AC1032 / R2018) and DXF (ASCII and
       binary as the library supports). No converter required for the happy path.
-  (c) **Write DWG:** R2000 (AC1015) and R2004 (AC1018) only. **Default R2004.** R2007+ emit is
+  (c) **Write DWG:** R2000 (AC1015) and R2004 (AC1018) only. **Default R2000** (D-2026-09-30-c:
+      was R2004; LibreDWG 0.13.4 cannot build an R2004 document from scratch). R2007+ emit is
       refused with a message, not a Recover-bait file. DXF write uses LibreDWG’s DXF writer for
       versions it supports; the log still names every GoSurvey type that has no DXF/DWG
       representation (meshes, TIN, clouds, PDF).

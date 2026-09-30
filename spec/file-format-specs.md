@@ -32,7 +32,7 @@ format, `.gst` (same JSON shape, no file association, not opened as a drawing).
 1. **LibreDWG is the DXF/DWG codec.** Not a from-scratch bit codec, not ODA Drawings SDK, not
    the Phase 1 external converter as the long-term path.
 2. **DWG write in this epic is R2000 (AC1015) and R2004 (AC1018) only.** Default save is
-   **R2004**. R2007+ write is out. AutoCAD 2018–2027 still open R2004 files.
+   **R2000** (D-2026-09-30-c; was R2004). R2007+ write is out. AutoCAD 2000–2027 open R2000 files.
 3. **DWG read** is every version LibreDWG decodes (through R2018 / AC1032, including current
    AutoCAD which still writes AC1032). Objects LibreDWG skips are named in the import log
    (REQ-201), not silently absorbed (REQ-001).
@@ -58,7 +58,7 @@ Legend: **R** = read into GoSurvey, **W** = write from GoSurvey, **—** = out o
 
 | Ext | R | W | Codec | Notes |
 |-----|---|---|--------|--------|
-| `.dwg` | yes | R2000 / R2004 | LibreDWG | Open does not require ODA File Converter or AutoCAD. Save default AC1018. Written file must open in AutoCAD **without Recover** for the entity set we emit. |
+| `.dwg` | yes | R2000 / R2004 | LibreDWG | Open does not require ODA File Converter or AutoCAD. Save default AC1015 (D-2026-09-30-c). Written file must open in AutoCAD **without Recover** for the entity set we emit. |
 | `.dxf` | yes | yes | LibreDWG | ASCII and binary DXF as LibreDWG supports them. Replaces `DxfIo` as the **interchange** path once REQ-170 is verified; Phase 1 converter may remain a **test oracle**. |
 | `.gs` | — | — | — | Retired as a document format (D-2026-09-03-h). Its JSON schema survives only as the DWG trailer and as `.gst` (workspace template). |
 
