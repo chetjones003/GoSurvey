@@ -868,14 +868,20 @@ TEST_CASE("DWG import refuses a zero-length extrusion (issue #435, REQ-201)",
     auto* hdr = m->tio.object->tio.BLOCK_HEADER;
     REQUIRE(hdr != nullptr);
     dwg_point_3d c{1.0, 2.0, 3.0};
+    // LibreDWG's own bit_write_BE/bit_read_BE (third_party/libredwg/src/bits.c) normalizes any
+    // extrusion with x==0 && y==0 to a unit +-Z vector on both write and read, so a literal
+    // (0,0,0) never survives a round trip through dwg_write_file/dwg_read_file. A vector whose
+    // x component underflows to 0 only on squaring (1e-300) skips that normalization (x != 0.0
+    // bit-for-bit) yet is still degenerate once ucs::FromNormal normalizes it, so it still
+    // exercises the reader's zero-length guard.
     Dwg_Entity_ARC* e = dwg_add_ARC(hdr, &c, 2.0, 0.0, 1.0);
     REQUIRE(e != nullptr);
-    e->extrusion.x = 0.0;
+    e->extrusion.x = 1e-300;
     e->extrusion.y = 0.0;
     e->extrusion.z = 0.0;
     Dwg_Entity_CIRCLE* ce = dwg_add_CIRCLE(hdr, &c, 1.0);
     REQUIRE(ce != nullptr);
-    ce->extrusion.x = 0.0;
+    ce->extrusion.x = 1e-300;
     ce->extrusion.y = 0.0;
     ce->extrusion.z = 0.0;
     REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
@@ -1316,20 +1322,18 @@ TEST_CASE("DWG export splits a tilted curved polyline segment onto its own ARC (
   }
   dwg_free(&dwg);
 
-  // Round-trip through GoSurvey's own importer recovers a flat run + tilted arc.
+  // ExportDwgFile also embeds the GoSurvey document as an ADR-044 trailer, and ImportDwgFile
+  // prefers that trailer over the LibreDWG entities when it is present (DwgIo.cpp's
+  // TryGoSurveyDwgPayloadFromBytes check) — so GoSurvey reopening its OWN file recovers the
+  // original, unsplit polyline exactly, not the flat-run-plus-ARC a foreign reader sees above.
   AppCommandState in;
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   CHECK(in.userPolylineOffsets.size() == 2);
   if (in.userPolylineOffsets.size() == 2) {
     const int nv = in.userPolylineOffsets[1] - in.userPolylineOffsets[0];
-    CHECK(nv == 2);
+    CHECK(nv == 3);
   }
-  CHECK(in.userArcs.size() == 1);
-  if (in.userArcs.size() == 1) {
-    CHECK(in.userArcs[0].nx == Catch::Approx(0.f).margin(1e-6));
-    CHECK(in.userArcs[0].ny == Catch::Approx(1.f).margin(1e-6));
-    CHECK(in.userArcs[0].nz == Catch::Approx(0.f).margin(1e-6));
-  }
+  CHECK(in.userArcs.empty());
 }
 
 TEST_CASE("DWG export keeps a flat-only polyline as one LWPOLYLINE (issue #437)",

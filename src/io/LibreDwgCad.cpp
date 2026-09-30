@@ -953,6 +953,19 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
                              : 0.f;
         if (b2 == 0.f)
           continue;
+        // A run's LAST vertex may be the split point that fed a tilted edge to
+        // emitSyntheticArc above (its own stored normal is still tilted) — its bulge describes
+        // the segment that got pulled out as that ARC, not a segment left inside this flat run.
+        // Writing it would tell a reader this run curves onward to a point that does not exist.
+        float nx = 0.f, ny = 0.f, nz = 1.f;
+        const size_t nk = static_cast<size_t>(vi) * 3;
+        if (nk + 2 < st.userPolylineVertsNormal.size()) {
+          nx = st.userPolylineVertsNormal[nk];
+          ny = st.userPolylineVertsNormal[nk + 1];
+          nz = st.userPolylineVertsNormal[nk + 2];
+        }
+        if (v == runNv - 1 && !IsFlatNormal(nx, ny, nz))
+          continue;
         bulges[static_cast<size_t>(v)] = static_cast<double>(b2);
         anyBulge = true;
       }
