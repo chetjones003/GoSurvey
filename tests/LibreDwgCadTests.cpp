@@ -2285,3 +2285,38 @@ TEST_CASE("DWG round-trips paper layouts and viewport scales (REQ-170, issue #61
   CHECK(plotA->viewports[0].modelCenterX == Catch::Approx(100.0).margin(0.01));
   CHECK(plotB->paperLines.size() == 6);
 }
+
+// REQ-170, issue #613: SPLINE and trimmed ELLIPSE import as polylines instead of being skipped.
+TEST_CASE("DWG import maps SPLINE and trimmed ELLIPSE to polylines (REQ-170, issue #613)",
+          "[dwg][libredwg][req170][issue613]") {
+  ScratchDir dir("open-spline-ellipse");
+  const auto p = (dir.path / "spline-ellipse.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(hdr != nullptr);
+
+  const dwg_point_3d fitPts[3] = {{0.0, 0.0, 0.0}, {5.0, 5.0, 0.0}, {10.0, 0.0, 0.0}};
+  const dwg_point_3d tan0{1.0, 0.0, 0.0};
+  const dwg_point_3d tan1{1.0, 0.0, 0.0};
+  REQUIRE(dwg_add_SPLINE(hdr, 3, fitPts, &tan0, &tan1) != nullptr);
+
+  const dwg_point_3d center{20.0, 0.0, 0.0};
+  Dwg_Entity_ELLIPSE* ell = dwg_add_ELLIPSE(hdr, &center, 5.0, 0.5);
+  REQUIRE(ell != nullptr);
+  ell->start_angle = 0.0;
+  ell->end_angle = 1.5707963267948966;
+
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, p.c_str(), log));
+  REQUIRE(st.userPolylineOffsets.size() >= 2);
+  CHECK(st.userPolylineVerts.size() >= 12);
+}

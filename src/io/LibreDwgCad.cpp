@@ -348,6 +348,87 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
   st.cadAnnotationAttrs.push_back(at);
 }
 
+// REQ-170, issue #613: no native spline — tessellate into a polyline (fit points or control points).
+static bool ImportSplineAsPolyline(AppCommandState& st, const Dwg_Entity_SPLINE* sp, const Xf2& xf,
+                                   const EntityAttributes& at) {
+  if (sp == nullptr)
+    return false;
+  std::vector<double> xyz;
+  auto pushWorld = [&](double x, double y, double z) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(x, y, &wx, &wy);
+    xyz.push_back(wx);
+    xyz.push_back(wy);
+    xyz.push_back(z);
+  };
+  if (sp->num_fit_pts >= 2 && sp->fit_pts != nullptr) {
+    for (BITCODE_BS i = 0; i < sp->num_fit_pts; ++i)
+      pushWorld(sp->fit_pts[i].x, sp->fit_pts[i].y, sp->fit_pts[i].z);
+  } else if (sp->num_ctrl_pts >= 2 && sp->ctrl_pts != nullptr) {
+    for (BITCODE_BL i = 0; i < sp->num_ctrl_pts; ++i)
+      pushWorld(sp->ctrl_pts[i].x, sp->ctrl_pts[i].y, sp->ctrl_pts[i].z);
+  } else {
+    return false;
+  }
+  if (xyz.size() < 6)
+    return false;
+  const bool closed =
+      sp->closed_b != 0 || (sp->splineflags & SPLINE_SPLINEFLAGS_CLOSED) != 0 || sp->periodic != 0;
+  LocalPolyline(st, xyz, closed, at);
+  return true;
+}
+
+static void EllipseParamPoint(const Dwg_Entity_ELLIPSE* e, double t, double* outX, double* outY,
+                              double* outZ) {
+  const double mx = e->sm_axis.x;
+  const double my = e->sm_axis.y;
+  const double mlen = std::hypot(mx, my);
+  if (mlen < 1.e-12) {
+    *outX = e->center.x;
+    *outY = e->center.y;
+    *outZ = e->center.z;
+    return;
+  }
+  const double minX = -my / mlen * mlen * e->axis_ratio;
+  const double minY = mx / mlen * mlen * e->axis_ratio;
+  *outX = e->center.x + std::cos(t) * mx + std::sin(t) * minX;
+  *outY = e->center.y + std::cos(t) * my + std::sin(t) * minY;
+  *outZ = e->center.z;
+}
+
+// REQ-170, issue #613: partial elliptical arcs become an open polyline approximation.
+static bool ImportTrimmedEllipseAsPolyline(AppCommandState& st, const Dwg_Entity_ELLIPSE* e, const Xf2& xf,
+                                           const EntityAttributes& at) {
+  if (e == nullptr)
+    return false;
+  double a0 = e->start_angle;
+  double a1 = e->end_angle;
+  while (a1 < a0)
+    a1 += 2.0 * kPi;
+  double span = a1 - a0;
+  while (span > 2.0 * kPi)
+    span -= 2.0 * kPi;
+  if (span < 1.e-9)
+    return false;
+  const int nseg = std::max(8, static_cast<int>(std::ceil(span / (kPi / 12.0))));
+  std::vector<double> xyz;
+  xyz.reserve(static_cast<size_t>(nseg + 1) * 3);
+  for (int i = 0; i <= nseg; ++i) {
+    const double t = a0 + span * (static_cast<double>(i) / static_cast<double>(nseg));
+    double px = 0.0, py = 0.0, pz = 0.0;
+    EllipseParamPoint(e, t, &px, &py, &pz);
+    double wx = 0.0, wy = 0.0;
+    xf.apply(px, py, &wx, &wy);
+    xyz.push_back(wx);
+    xyz.push_back(wy);
+    xyz.push_back(pz);
+  }
+  if (xyz.size() < 6)
+    return false;
+  LocalPolyline(st, xyz, false, at);
+  return true;
+}
+
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
                   std::unordered_map<std::string, int>* skipHist,
                   int* degenerateExtrusions = nullptr);
@@ -727,6 +808,8 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       span += 2.0 * kPi;
     const bool full = span < 1e-9 || std::fabs(span - 2.0 * kPi) < 1e-6;
     if (!full) {
+      if (ImportTrimmedEllipseAsPolyline(st, e, xf, at))
+        return;
       NoteSkip(skipHist, "ELLIPSE(trimmed)");
       return;
     }
@@ -809,6 +892,12 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     const double rot = std::atan2(e->x_axis_dir.y, e->x_axis_dir.x);
     LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(dwg, e->text),
               CadAnnotation::Kind::Mtext, at);
+    return;
+  }
+  if (ty == DWG_TYPE_SPLINE && ent->tio.SPLINE != nullptr) {
+    if (ImportSplineAsPolyline(st, ent->tio.SPLINE, xf, at))
+      return;
+    NoteSkip(skipHist, "SPLINE(degenerate or unsupported)");
     return;
   }
   if (ty == DWG_TYPE_POINT && ent->tio.POINT != nullptr) {
