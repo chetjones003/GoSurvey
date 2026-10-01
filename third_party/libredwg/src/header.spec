@@ -19,7 +19,7 @@
 #include "spec.h"
 
   // char version[11] handled separately
-  FIELD_RC (is_maint, 0);
+  FIELD_RC (maint_rel_version, 0);
 
   VERSIONS (R_2_0b, R_13b1) {
     FIELD_RC (zero_one_or_three, 0); // 1,3,5,0xcd,0
@@ -50,13 +50,13 @@
     FIELD_RC (zero_one_or_three, 0);
     FIELD_RL (thumbnail_address, 0); //@0x0d
     FIELD_RC (dwg_version, 0); // of app which stored it. eg. SaveAs
-    FIELD_RC (maint_version, 0);
+    FIELD_RC (maint_version, 0); // the actual dwg version
     ENCODER {
        if (!FIELD_VALUE (codepage))
          FIELD_VALUE (codepage) = dat->codepage;
     }
     FIELD_RS (codepage, 0); //@0x13: 29/30 for ANSI_1252, since r2007 UCS-16
-    LOG_TRACE ("%s\n", dwg_codepage_dxfstr ((Dwg_Codepage)FIELD_VALUE (codepage)))
+    LOG_TRACE ("%s\n", dwg_codepage_dxfstr ((Dwg_Codepage)FIELD_VALUE (codepage)));
     DECODER {
       dat->codepage = FIELD_VALUE (codepage);
     }

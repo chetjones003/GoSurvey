@@ -163,7 +163,7 @@ set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${GOSURVEY_TP}/glfw" "${CMAKE_BINARY_DIR}/glfw-build" EXCLUDE_FROM_ALL)
 
 # --- LibreDWG: GoSurvey's own copy, built from source (REQ-170 / ADR-041 (h), D-2026-09-30-d) ---
-# The library source of upstream tag 0.13.4 plus GoSurvey's changes (third_party/libredwg/VENDORED.md).
+# The library source of upstream tag 0.14 plus GoSurvey's changes (third_party/libredwg/VENDORED.md).
 # Only the library is built: upstream's own CMakeLists (its ~30 try_compile probes, programs and
 # tests) is not used. src/config.h is the one upstream's CMake generates for MSVC x64, committed,
 # so there is nothing to configure. Sources and flags mirror upstream's LIBREDWG_LIBONLY build
@@ -172,11 +172,11 @@ set(libredwg_SOURCE_DIR "${GOSURVEY_TP}/libredwg")
 set(libredwg_BINARY_DIR "${GOSURVEY_TP}/libredwg")   # config.h lives beside src/*.h
 set(_lrd "${libredwg_SOURCE_DIR}/src")
 add_library(libredwg STATIC
-  ${_lrd}/bits.c ${_lrd}/codepages.c ${_lrd}/common.c ${_lrd}/classes.c ${_lrd}/objects.c
-  ${_lrd}/decode.c ${_lrd}/decode_r11.c ${_lrd}/decode_r2007.c ${_lrd}/dwg.c ${_lrd}/hash.c
-  ${_lrd}/dwg_api.c ${_lrd}/dynapi.c ${_lrd}/dxfclasses.c ${_lrd}/free.c ${_lrd}/geom.c
-  ${_lrd}/out_dxf.c ${_lrd}/out_dxfb.c ${_lrd}/encode.c ${_lrd}/in_dxf.c ${_lrd}/reedsolomon.c
-  ${_lrd}/print.c)
+  ${_lrd}/bits.c ${_lrd}/codepages.c ${_lrd}/common.c ${_lrd}/logging.c ${_lrd}/classes.c
+  ${_lrd}/objects.c ${_lrd}/decode.c ${_lrd}/decode2.c ${_lrd}/decode_r11.c ${_lrd}/decode_r2007.c
+  ${_lrd}/dwg.c ${_lrd}/hash.c ${_lrd}/dwg_api.c ${_lrd}/dynapi.c ${_lrd}/dxfclasses.c ${_lrd}/free.c
+  ${_lrd}/geom.c ${_lrd}/out_dxf.c ${_lrd}/out_dxfb.c ${_lrd}/encode.c ${_lrd}/encode2.c
+  ${_lrd}/in_dxf.c ${_lrd}/reedsolomon.c ${_lrd}/print.c)
 set_property(TARGET libredwg PROPERTY C_STANDARD 99)
 target_include_directories(libredwg PRIVATE "${_lrd}")
 target_include_directories(libredwg PUBLIC "${libredwg_SOURCE_DIR}/include")
@@ -190,7 +190,7 @@ endif()
 if(WIN32)
   target_link_libraries(libredwg PUBLIC ws2_32)
 endif()
-target_compile_definitions(libredwg INTERFACE "GOSURVEY_LIBREDWG_VERSION=\"0.13.4\"")
+target_compile_definitions(libredwg INTERFACE "GOSURVEY_LIBREDWG_VERSION=\"0.14\"")
 add_library(LibreDWG::libredwg ALIAS libredwg)
 unset(_lrd)
 

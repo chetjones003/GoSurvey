@@ -31,10 +31,10 @@ struct ScratchDir {
 
 }  // namespace
 
-TEST_CASE("LibreDwgPackageVersion is the pinned 0.13.4 release", "[dwg][libredwg]") {
+TEST_CASE("LibreDwgPackageVersion is the pinned 0.14 release", "[dwg][libredwg]") {
   const std::string v = LibreDwgPackageVersion();
   REQUIRE_FALSE(v.empty());
-  REQUIRE(v.find("0.13.4") != std::string::npos);
+  REQUIRE(v.find("0.14") != std::string::npos);
 }
 
 TEST_CASE("LibreDwgWriteMinimalR2000 refuses an empty path", "[dwg][libredwg]") {
@@ -64,4 +64,22 @@ TEST_CASE("LibreDwg writes R2000 that the in-process reader and DwgProbe both se
   REQUIRE(DwgVersionName(pathUtf8.c_str()) == "AutoCAD 2000");
 
   REQUIRE(LibreDwgReadVersionName(pathUtf8.c_str()) == "r2000");
+}
+
+// Issue #600: LibreDWG 0.14+ must encode a from-scratch R2004 document (one LINE) and read it back.
+TEST_CASE("LibreDwg writes R2004 that the in-process reader sees (issue #600)",
+          "[dwg][libredwg][issue600]") {
+  ScratchDir dir("r2004");
+  const auto dwgPath = dir.path / "line-r2004.dwg";
+  const std::string pathUtf8 = dwgPath.string();
+
+  REQUIRE(LibreDwgWriteMinimalR2004(pathUtf8.c_str()));
+  REQUIRE(std::filesystem::file_size(dwgPath) > 6);
+
+  std::ifstream in(dwgPath, std::ios::binary);
+  char magic[7] = {};
+  in.read(magic, 6);
+  REQUIRE(in.gcount() == 6);
+  REQUIRE(std::string(magic, 6) == "AC1018");
+  REQUIRE(LibreDwgReadVersionName(pathUtf8.c_str()) == "r2004");
 }

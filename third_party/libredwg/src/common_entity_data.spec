@@ -33,10 +33,10 @@
             // stringify the flag bits
 #  define LOG_FLAG_R11(w)                                                     \
     if (R11FLAG (FLAG_R11_##w))                                               \
-      LOG_TRACE (#w "(0x%x) ", FLAG_R11_##w)
+      LOG_TRACE (#w "(0x%x) ", FLAG_R11_##w);
 #  define LOG_FLAG_R11_MAX(v)                                                 \
     if (_obj->flag_r11 > v)                                                   \
-      LOG_WARN ("Unknown flag_r11 (0x%x)", _obj->flag_r11 & ~255)
+      LOG_WARN ("Unknown flag_r11 (0x%x)", _obj->flag_r11 & ~255);
             LOG_FLAG_R11 (HAS_COLOR);
             LOG_FLAG_R11 (HAS_LTYPE);
             LOG_FLAG_R11 (HAS_ELEVATION);
@@ -58,12 +58,12 @@
 #endif
         DECODER_OR_ENCODER {
           LOG_TRACE("size: %d [RS]", obj->size);
-          LOG_POS
+          LOG_POS;
         }
-        if (obj->type != DWG_TYPE_JUMP_r11)
+        if (obj->fixedtype != DWG_TYPE_JUMP)
           FIELD_HANDLE (layer, 2, 8);
       }
-      if (obj->type != DWG_TYPE_JUMP_r11)
+      if (obj->fixedtype != DWG_TYPE_JUMP)
         {
           FIELD_RSx (opts_r11, 0); // i.e. dataflags
 #ifdef IS_DECODER
@@ -73,18 +73,18 @@
               // stringify the flag bits
 #  define LOG_OPTS_R11(e, w)                                                  \
     if (obj->type == DWG_TYPE_##e##_r11 && (R11OPTS (OPTS_R11_##e##_##w)))    \
-      LOG_TRACE (#w "(0x%x) ", OPTS_R11_##e##_##w)
+      LOG_TRACE (#w "(0x%x) ", OPTS_R11_##e##_##w);
 #  define LOG_OPTS_R11_MAX(e, v)                                              \
     if (obj->type == DWG_TYPE_##e##_r11 && _obj->opts_r11 > v)                \
-        LOG_WARN ("Unknown " #e " opts_r11 (0x%x)", _obj->opts_r11 & ~(v))
+        LOG_WARN ("Unknown " #e " opts_r11 (0x%x)", _obj->opts_r11 & ~(v));
 #  define LOG_OPTS_R11_POLYLINE(w)                                            \
     if (obj->type == DWG_TYPE_POLYLINE_r11                                    \
         && (R11OPTS (OPTS_R11_POLYLINE_##w)))                                 \
-    LOG_TRACE (#w "(0x%x) ", OPTS_R11_POLYLINE_##w)
+    LOG_TRACE (#w "(0x%x) ", OPTS_R11_POLYLINE_##w);
 #  define LOG_OPTS_R11_POLYLINE_MAX(v)                                        \
     if (obj->type == DWG_TYPE_POLYLINE_r11                                    \
         && _obj->opts_r11 > v)                                                \
-    LOG_WARN ("Unknown POLYLINE opts_r11 (0x%x)", _obj->opts_r11 & ~(v))
+    LOG_WARN ("Unknown POLYLINE opts_r11 (0x%x)", _obj->opts_r11 & ~(v));
 
               LOG_OPTS_R11 (3DFACE, HAS_Z_FIRST);
               LOG_OPTS_R11 (3DFACE, HAS_Z_SECOND);
@@ -234,7 +234,7 @@
             LOG_TRACE ("           ");
 #define LOG_EXTRA_R11(w)                                                      \
             if ((R11EXTRA (EXTRA_R11_##w)))  \
-              LOG_TRACE (#w "(0x%x) ", EXTRA_R11_##w)
+              LOG_TRACE (#w "(0x%x) ", EXTRA_R11_##w);
 
             LOG_EXTRA_R11 (UNKNOWN_1);
             LOG_EXTRA_R11 (HAS_EED);
@@ -350,7 +350,7 @@
 #endif
 #ifndef IS_FREE
       LOG_TRACE ("bitsize: " FORMAT_BL " @%" PRIuSIZE ".%u\n", obj->bitsize,
-                 dat->byte, dat->bit)
+                 dat->byte, dat->bit);
 #endif
 #ifdef IS_DECODER
     if (obj->bitsize > obj->size * 8)
@@ -408,6 +408,10 @@
 #ifdef IS_JSON
       field_cmc (dat, "color", &_ent->color);
 #else
+#ifdef IS_ENCODER
+      flags = _ent->color.flag;
+      _ent->color.raw = (_ent->color.index & 0x1ff) | (flags << 8);
+#endif
       DXF {
         // 0: byblock
         if (_ent->color.index != 256) // not bylayer
@@ -449,7 +453,9 @@
         }
       if (flags & 0x40)
         {
-          FIELD_HANDLE (color.handle, 0, 430); // DBCOLOR 1E9F74 => 1F05B9
+#ifndef IS_ENCODER
+          FIELD_HANDLE (color.handle, 0, 430); // DBCOLOR 1E9F74 => 1F05B9 lgtm[cpp/use-after-free] codeql[cpp/use-after-free]
+#endif
         }
       else if (flags & 0x80) // and not a reference
         {
@@ -502,7 +508,7 @@
 #ifdef IS_ENCODER
       if (FIELD_VALUE (material_flags) == 3)
         {
-          LOG_WARN ("Disabling MATERIAL handle\n")
+          LOG_WARN ("Disabling MATERIAL handle\n");
             FIELD_VALUE (material_flags) = 0;
         }
 #endif

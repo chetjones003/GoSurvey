@@ -45,7 +45,6 @@ static unsigned int errors = 0;
 #  endif
 #endif
 
-static unsigned int loglevel;
 #define DWG_LOGLEVEL loglevel
 #include "logging.h"
 #include "bits.h"
@@ -77,7 +76,7 @@ bit_advance_position (Bit_Chain *dat, long advance)
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
       LOG_ERROR ("buffer underflow at pos %" PRIuSIZE ".%u, size %" PRIuSIZE
                  ", advance by %ld",
-                 dat->byte, dat->bit, dat->size, advance)
+                 dat->byte, dat->bit, dat->size, advance);
       dat->byte = 0;
       dat->bit = 0;
       return;
@@ -105,7 +104,7 @@ bit_set_position (Bit_Chain *dat, size_t bitpos)
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
       LOG_ERROR ("%s buffer overflow at %" PRIuSIZE ", have %" PRIuSIZE,
-                 __FUNCTION__, dat->byte, dat->size)
+                 __FUNCTION__, dat->byte, dat->size);
     }
 }
 
@@ -142,7 +141,7 @@ bit_reset_chain (Bit_Chain *dat)
       {                                                                       \
         loglevel = dat->opts & DWG_OPTS_LOGLEVEL;                             \
         LOG_ERROR ("%s buffer overflow at %" PRIuSIZE ".%u >= %" PRIuSIZE,    \
-                   func, dat->byte, dat->bit, dat->size)                      \
+                   func, dat->byte, dat->bit, dat->size);                     \
         return retval;                                                        \
       }
 #endif
@@ -154,7 +153,7 @@ bit_reset_chain (Bit_Chain *dat)
     {                                                                         \
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;                               \
       LOG_ERROR ("%s buffer overflow at %" PRIuSIZE ".%u + %ld > %" PRIuSIZE, \
-                 func, dat->byte, dat->bit, (long)(plus), dat->size)          \
+                 func, dat->byte, dat->bit, (long)(plus), dat->size);         \
       return retval;                                                          \
     }
 
@@ -607,7 +606,7 @@ bit_read_BL (Bit_Chain *dat)
   else /* if (two_bit_code == 3) */
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-      LOG_ERROR ("bit_read_BL: unexpected 2-bit code: '11'")
+      LOG_ERROR ("bit_read_BL: unexpected 2-bit code: '11'");
       return 256;
     }
 }
@@ -816,7 +815,7 @@ bit_write_3B (Bit_Chain *dat, unsigned char value)
   if (value > 7)
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-      LOG_ERROR ("Invalid bit_write_3B value %u > 7", value)
+      LOG_ERROR ("Invalid bit_write_3B value %u > 7", value);
       bit_write_B (dat, 0);
       return;
     }
@@ -908,7 +907,7 @@ bit_read_BD (Bit_Chain *dat)
   else /* if (two_bit_code == 3) */
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-      LOG_ERROR ("bit_read_BD: unexpected 2-bit code: '11'")
+      LOG_ERROR ("bit_read_BD: unexpected 2-bit code: '11'");
       return bit_nan ();
     }
 }
@@ -1002,7 +1001,7 @@ err_mc:
       " @%" PRIuSIZE ".@%u: [0x%x 0x%x 0x%x 0x%x 0x%x]",
       i, j, result, dat->byte - 5, dat->bit, dat->chain[dat->byte - 5],
       dat->chain[dat->byte - 4], dat->chain[dat->byte - 3],
-      dat->chain[dat->byte - 2], dat->chain[dat->byte - 1])
+      dat->chain[dat->byte - 2], dat->chain[dat->byte - 1]);
   return 0; /* error... */
 }
 
@@ -1071,12 +1070,12 @@ bit_read_UMC (Bit_Chain *dat)
   loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
   LOG_ERROR (
       "bit_read_UMC: error parsing modular char, i=%d,j=%d,result=" FORMAT_UMC,
-      i, j, result)
+      i, j, result);
   LOG_HANDLE ("  @%" PRIuSIZE ".%u: [0x%x 0x%x 0x%x 0x%x 0x%x 0x%x]\n",
               dat->byte - 6, dat->bit, dat->chain[dat->byte - 6],
               dat->chain[dat->byte - 5], dat->chain[dat->byte - 4],
               dat->chain[dat->byte - 3], dat->chain[dat->byte - 2],
-              dat->chain[dat->byte - 1])
+              dat->chain[dat->byte - 1]);
   return 0; /* error... */
 }
 
@@ -1134,7 +1133,7 @@ bit_read_MS (Bit_Chain *dat)
   loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
   LOG_ERROR (
       "bit_read_MS: error parsing modular short, i=%d,j=%d,result=" FORMAT_MS,
-      i, j, result)
+      i, j, result);
   return 0; /* error... */
 }
 
@@ -1495,7 +1494,7 @@ bit_H_to_dat (Bit_Chain *restrict dat, Dwg_Handle *restrict handle)
   else
     {
       LOG_ERROR ("Invalid handle size %u with " FORMAT_HV, handle->size,
-                 handle->value)
+                 handle->value);
       bit_write_RL_BE (dat, handle->value);
     }
   return;
@@ -1516,7 +1515,7 @@ bit_read_CRC (Bit_Chain *dat)
       dat->bit = 0;
     }
   result = bit_read_RS (dat);
-  LOG_TRACE ("read CRC at %" PRIuSIZE ": %04X\n", dat->byte, result)
+  LOG_TRACE ("read CRC at %" PRIuSIZE ": %04X\n", dat->byte, result);
 
   return result;
 }
@@ -1542,7 +1541,7 @@ bit_check_CRC (Bit_Chain *dat, size_t start_address, uint16_t seed)
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
       LOG_ERROR ("%s buffer overflow at pos %" PRIuSIZE "-%" PRIuSIZE
                  ", size %" PRIuSIZE,
-                 __FUNCTION__, start_address, dat->byte, dat->size)
+                 __FUNCTION__, start_address, dat->byte, dat->size);
       return 0;
     }
   assert (dat->byte >= start_address);
@@ -1553,19 +1552,23 @@ bit_check_CRC (Bit_Chain *dat, size_t start_address, uint16_t seed)
   if (calculated == read)
     {
       if (DWG_LOGLEVEL >= DWG_LOGLEVEL_HANDLE)
-        LOG_HANDLE (" check_CRC %" PRIuSIZE "-%" PRIuSIZE " = %" PRIuSIZE
-                    ": %04X == %04X\n",
-                    start_address, dat->byte - 2, size, calculated, read)
+        {
+          LOG_HANDLE (" check_CRC %" PRIuSIZE "-%" PRIuSIZE " = %" PRIuSIZE
+                      ": %04X == %04X\n",
+                      start_address, dat->byte - 2, size, calculated, read);
+        }
       else
-        LOG_TRACE (" check_CRC %" PRIuSIZE ": %04X == %04X\n", size,
-                   calculated, read)
+        {
+          LOG_TRACE (" check_CRC %" PRIuSIZE ": %04X == %04X\n", size,
+                     calculated, read);
+        }
       return 1;
     }
   else
     {
       LOG_WARN ("check_CRC mismatch %" PRIuSIZE "-%" PRIuSIZE " = %" PRIuSIZE
                 ": %04X <=> %04X\n",
-                start_address, dat->byte - 2, size, calculated, read)
+                start_address, dat->byte - 2, size, calculated, read);
       return 0;
     }
 }
@@ -1589,7 +1592,7 @@ bit_write_CRC (Bit_Chain *dat, size_t start_address, uint16_t seed)
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
       LOG_ERROR ("%s buffer overflow at pos %" PRIuSIZE "-%" PRIuSIZE
                  ", size %" PRIuSIZE,
-                 __FUNCTION__, start_address, dat->byte, dat->size)
+                 __FUNCTION__, start_address, dat->byte, dat->size);
       return 0;
     }
   assert (dat->byte >= start_address);
@@ -1619,7 +1622,7 @@ bit_write_CRC_BE (Bit_Chain *dat, size_t start_address, uint16_t seed)
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
       LOG_ERROR ("%s buffer overflow at pos %" PRIuSIZE "-%" PRIuSIZE
                  ", size %" PRIuSIZE,
-                 __FUNCTION__, start_address, dat->byte, dat->size)
+                 __FUNCTION__, start_address, dat->byte, dat->size);
       return 0;
     }
   assert (dat->byte >= start_address);
@@ -1747,7 +1750,7 @@ void
 bit_write_TF (Bit_Chain *restrict dat, BITCODE_TF restrict chain,
               size_t length)
 {
-  if (!chain)
+  if (!chain || (uintptr_t)chain < 4096)
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
       if (length > 0)
@@ -1854,11 +1857,15 @@ bit_read_TV (Bit_Chain *restrict dat)
       // only observed >=r2004 as writer app
       if (length > 0 && dat->from_version > R_2000
           && chain[length - 1] != '\0')
-        LOG_HANDLE ("TV-not-ZERO %u\n ", length)
+        {
+          LOG_HANDLE ("TV-not-ZERO %u\n ", length);
+        }
       // and preR2000 the final \0 is not included in the length (ie == strlen)
       else if (length > 0 && dat->from_version < R_2000
                && chain[length - 1] == '\0')
-        LOG_HANDLE ("TV-ZERO %u\n", length)
+        {
+          LOG_HANDLE ("TV-ZERO %u\n", length);
+        }
     }
   // normally not needed, as the DWG since r2004 itself contains the ending \0
   // as last char
@@ -2180,21 +2187,44 @@ bit_write_TV (Bit_Chain *restrict dat, BITCODE_TV restrict chain)
     {
       size_t destlen = length * 2;
       char *dest = (char *)malloc (destlen);
-      while (!bit_utf8_to_TV (dest, (unsigned char *)chain, destlen, length, 0,
-                              dat->codepage))
+      if (!dest)
         {
-          destlen *= 2;
-          dest = (char *)realloc (dest, destlen);
+          loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
+          LOG_ERROR ("Out of memory");
+          length = 0;
         }
-      need_free = true;
-      chain = dest;
-      length = strlen (dest);
+      else
+        {
+          while (!bit_utf8_to_TV (dest, (unsigned char *)chain, destlen,
+                                  length, 0, dat->codepage))
+            {
+              char *tmp;
+              destlen *= 2;
+              tmp = (char *)realloc (dest, destlen);
+              if (!tmp)
+                {
+                  loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
+                  LOG_ERROR ("Out of memory");
+                  free (dest);
+                  dest = NULL;
+                  length = 0;
+                  break;
+                }
+              dest = tmp;
+            }
+          if (dest)
+            {
+              need_free = true;
+              chain = dest;
+              length = strlen (dest);
+            }
+        }
     }
   if (dat->from_version < R_13b1)
     bit_write_RS (dat, (BITCODE_RS)length);
   else
     {
-      if (dat->version > R_14 && length)
+      if (dat->version >= R_14 && length)
         length++; // TV-ZERO
       bit_write_BS (dat, (BITCODE_BS)length);
     }
@@ -2209,6 +2239,17 @@ ishex (int c)
 {
   return ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
           || (c >= 'A' && c <= 'F'));
+}
+
+// c must be ishex()
+static unsigned
+hexval (int c)
+{
+  if (c >= '0' && c <= '9')
+    return (unsigned)(c - '0');
+  if (c >= 'a' && c <= 'f')
+    return (unsigned)(c - 'a' + 10);
+  return (unsigned)(c - 'A' + 10);
 }
 
 /** Write ASCII or Unicode text.
@@ -2275,25 +2316,95 @@ bit_write_T (Bit_Chain *restrict dat, BITCODE_T restrict s)
               const char *endp = s + len;
               BITCODE_TU ws = (BITCODE_TU)malloc ((len + 1) * 2);
               const BITCODE_TU orig = ws;
+              // DXF in-memory strings are UTF-8 (in_dxf keeps them as read);
+              // decode multi-byte sequences to UTF-16 so non-ASCII is not
+              // double-encoded by a bare byte copy. Other producers of TV here
+              // (JSON, add API, old-DWG up-convert) already hold codepage
+              // bytes with non-representable chars as \U+xxxx escapes, so they
+              // keep the byte-wise path. Both honour the inline \U+xxxx
+              // escape.
+              const bool is_utf8 = (dat->opts & DWG_OPTS_INDXF) != 0;
               while (s < endp)
                 {
-                  uint16_t c = *s++;
-                  // in this case the resulting len is shorter
-                  if (c == '\\' && s[0] == 'U' && s[1] == '+' && ishex (s[2])
-                      && ishex (s[3]) && ishex (s[4]) && ishex (s[5]))
+                  unsigned char c = (unsigned char)*s;
+                  // \U+xxxx escape: shorter result
+                  if (c == '\\' && s + 6 < endp && s[1] == 'U' && s[2] == '+'
+                      && ishex (s[3]) && ishex (s[4]) && ishex (s[5])
+                      && ishex (s[6]))
                     {
-                      unsigned x;
-                      if (sscanf (&s[2], "%04X", &x) > 0)
+                      *ws++
+                          = (uint16_t)((hexval (s[3]) << 12)
+                                       | (hexval (s[4]) << 8)
+                                       | (hexval (s[5]) << 4) | hexval (s[6]));
+                      s += 7;
+                      continue;
+                    }
+                  if (!is_utf8 || c < 0x80)
+                    {
+                      *ws++ = c;
+                      s++;
+                    }
+                  else if ((c & 0xe0) == 0xc0 && s + 1 < endp
+                           && (s[1] & 0xc0) == 0x80)
+                    {
+                      uint32_t cp = ((uint32_t)(c & 0x1f) << 6)
+                                    | (uint32_t)(s[1] & 0x3f);
+                      if (cp >= 0x80) // reject overlong encoding
                         {
-                          // fprintf (stderr, "* sscanf: 0x%04X\n", x);
-                          *ws++ = x;
-                          s += 6;
+                          *ws++ = (uint16_t)cp;
+                          s += 2;
                         }
                       else
-                        *ws++ = c;
+                        {
+                          *ws++ = c;
+                          s++;
+                        }
                     }
-                  else
-                    *ws++ = c;
+                  else if ((c & 0xf0) == 0xe0 && s + 2 < endp
+                           && (s[1] & 0xc0) == 0x80 && (s[2] & 0xc0) == 0x80)
+                    {
+                      uint32_t cp = ((uint32_t)(c & 0x0f) << 12)
+                                    | ((uint32_t)(s[1] & 0x3f) << 6)
+                                    | (uint32_t)(s[2] & 0x3f);
+                      // reject overlong encodings and UTF-16 surrogates
+                      if (cp >= 0x800 && (cp < 0xD800 || cp > 0xDFFF))
+                        {
+                          *ws++ = (uint16_t)cp;
+                          s += 3;
+                        }
+                      else
+                        {
+                          *ws++ = c;
+                          s++;
+                        }
+                    }
+                  else if ((c & 0xf8) == 0xf0 && s + 3 < endp
+                           && (s[1] & 0xc0) == 0x80 && (s[2] & 0xc0) == 0x80
+                           && (s[3] & 0xc0) == 0x80)
+                    {
+                      // 4-byte UTF-8 -> UTF-16 surrogate pair
+                      uint32_t cp = ((uint32_t)(c & 0x07) << 18)
+                                    | ((uint32_t)(s[1] & 0x3f) << 12)
+                                    | ((uint32_t)(s[2] & 0x3f) << 6)
+                                    | (uint32_t)(s[3] & 0x3f);
+                      if (cp >= 0x10000 && cp <= 0x10FFFF)
+                        {
+                          cp -= 0x10000;
+                          *ws++ = (uint16_t)(0xD800 + (cp >> 10));
+                          *ws++ = (uint16_t)(0xDC00 + (cp & 0x3FF));
+                          s += 4;
+                        }
+                      else
+                        {
+                          *ws++ = c;
+                          s++;
+                        }
+                    }
+                  else // invalid byte: pass through
+                    {
+                      *ws++ = c;
+                      s++;
+                    }
                 }
               *ws = 0;
               // bit_write_TU (dat, orig);
@@ -2327,7 +2438,7 @@ bit_read_TU (Bit_Chain *restrict dat)
   if (!ws)
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-      LOG_ERROR ("Out of memory")
+      LOG_ERROR ("Out of memory");
       return NULL;
     }
   for (i = 0; i < length; i++)
@@ -2350,7 +2461,7 @@ bit_read_TU_size (Bit_Chain *restrict dat, unsigned int len)
   if (!chain)
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-      LOG_ERROR ("Out of memory")
+      LOG_ERROR ("Out of memory");
       return NULL;
     }
   for (i = 0; i < len; i++)
@@ -2377,7 +2488,7 @@ bit_read_TU_len (Bit_Chain *restrict dat, unsigned int *lenp)
   if (!chain)
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-      LOG_ERROR ("Out of memory")
+      LOG_ERROR ("Out of memory");
       return NULL;
     }
   for (i = 0; i < length; i++)
@@ -2405,7 +2516,7 @@ bit_read_T16 (Bit_Chain *restrict dat)
   if (!chain)
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-      LOG_ERROR ("Out of memory")
+      LOG_ERROR ("Out of memory");
       return NULL;
     }
   for (i = 0; i < length; i++)
@@ -2430,7 +2541,7 @@ bit_read_TU16 (Bit_Chain *restrict dat)
   if (!chain)
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-      LOG_ERROR ("Out of memory")
+      LOG_ERROR ("Out of memory");
       return NULL;
     }
   for (i = 0; i < length; i++)
@@ -2458,14 +2569,14 @@ bit_read_T32 (Bit_Chain *restrict dat)
         {
           loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
           LOG_ERROR ("%s buffer overflow at %" PRIuSIZE ", size " FORMAT_BLL,
-                     __FUNCTION__, dat->byte, size)
+                     __FUNCTION__, dat->byte, size);
           return NULL;
         }
       wstr = (BITCODE_TU)malloc (size + 2);
       if (!wstr)
         {
           loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-          LOG_ERROR ("Out of memory")
+          LOG_ERROR ("Out of memory");
           return NULL;
         }
       for (i = 0; i < len; i++)
@@ -2480,14 +2591,14 @@ bit_read_T32 (Bit_Chain *restrict dat)
         {
           loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
           LOG_ERROR ("%s buffer overflow at %" PRIuSIZE ", size " FORMAT_BLL,
-                     __FUNCTION__, dat->byte, size)
+                     __FUNCTION__, dat->byte, size);
           return NULL;
         }
       str = (BITCODE_T32)malloc (size + 1);
       if (!str)
         {
           loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-          LOG_ERROR ("Out of memory")
+          LOG_ERROR ("Out of memory");
           return NULL;
         }
       for (i = 0; i < size; i++)
@@ -2517,14 +2628,14 @@ bit_read_TU32 (Bit_Chain *restrict dat)
         {
           loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
           LOG_ERROR ("%s buffer overflow at %" PRIuSIZE ", size " FORMAT_BLL,
-                     __FUNCTION__, dat->byte, size)
+                     __FUNCTION__, dat->byte, size);
           return NULL;
         }
       wstr = (BITCODE_TU)malloc (size + 2);
       if (!wstr)
         {
           loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-          LOG_ERROR ("Out of memory")
+          LOG_ERROR ("Out of memory");
           return NULL;
         }
       rl1 = bit_read_RL (dat);
@@ -2553,14 +2664,14 @@ bit_read_TU32 (Bit_Chain *restrict dat)
         {
           loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
           LOG_ERROR ("%s buffer overflow at %" PRIuSIZE ", size " FORMAT_BLL,
-                     __FUNCTION__, dat->byte, size)
+                     __FUNCTION__, dat->byte, size);
           return NULL;
         }
       str = (BITCODE_T32)malloc (size + 1);
       if (!str)
         {
           loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-          LOG_ERROR ("Out of memory")
+          LOG_ERROR ("Out of memory");
           return NULL;
         }
       for (i = 0; i < size; i++)
@@ -2648,13 +2759,14 @@ bit_write_T16 (Bit_Chain *restrict dat, BITCODE_T16 restrict chain)
         { // convert to unicode, expand \\U+
           BITCODE_TU wstr = bit_utf8_to_TU (chain, 0);
           bit_write_RS (dat, (BITCODE_RS)length);
-          for (size_t i = 0; i <= length; i++)
+          for (size_t i = 0; i < length; i++)
             bit_write_RS (dat, wstr[i]);
+          free (wstr);
         }
       else
         {
-          bit_write_RS (dat, (BITCODE_RS)length + 1);
-          for (size_t i = 0; i <= length; i++)
+          bit_write_RS (dat, (BITCODE_RS)length);
+          for (size_t i = 0; i < length; i++)
             bit_write_RS (dat, chain[i]);
         }
     }
@@ -2662,7 +2774,7 @@ bit_write_T16 (Bit_Chain *restrict dat, BITCODE_T16 restrict chain)
     {
       if (IS_FROM_TU (dat))
         {
-          // convert from unicode to ascii via utf8
+          // convert from unicode to codepage via utf8
           char dest[1024];
           char *u8 = bit_convert_TU ((BITCODE_TU)chain);
           bit_utf8_to_TV (dest, (unsigned char *)u8, 1024, strlen (u8), 0,
@@ -2699,7 +2811,7 @@ bit_write_T32 (Bit_Chain *restrict dat, BITCODE_T32 restrict chain)
 {
   size_t i, length;
 
-  if (dat->version >= R_2007)
+  if (IS_FROM_TU (dat))
     {
       if (chain)
         length = bit_wcs2len ((BITCODE_TU)chain) + 1;
@@ -2837,7 +2949,7 @@ bit_convert_TU (const BITCODE_TU restrict wstr)
   if (!str)
     {
       loglevel |= 1;
-      LOG_ERROR ("Out of memory")
+      LOG_ERROR ("Out of memory");
       return NULL;
     }
   i = 0;
@@ -2911,6 +3023,109 @@ bit_convert_TU (const BITCODE_TU restrict wstr)
   return str;
 }
 
+/* Bounded variant: returns NULL if not null-terminated within max_wchars. */
+char *
+bit_convert_TU_len (const BITCODE_TU restrict wstr, const size_t max_wchars)
+{
+  BITCODE_TU tmp = wstr;
+  char *str;
+  size_t wlen = 0;
+  int i, len = 0;
+  uint16_t c = 0;
+
+  if (!wstr || !max_wchars)
+    return NULL;
+  wlen = bit_wcs2nlen (wstr, max_wchars);
+  if (wlen == 0 && wstr[0] != 0)
+    return NULL; /* not null-terminated within max_wchars */
+#ifdef HAVE_ALIGNED_ACCESS_REQUIRED
+  if ((uintptr_t)wstr % SIZEOF_SIZE_T)
+    {
+      unsigned char *b = (unsigned char *)wstr;
+      c = TU_to_int (b);
+      while (c && wlen--)
+        {
+          len++;
+          if (c >= 0x80)
+            {
+              len++;
+              if (c >= 0x800)
+                len++;
+            }
+          b += 2;
+          c = TU_to_int (b);
+        }
+    }
+  else
+#endif
+    {
+      while ((c = *tmp++) && wlen--)
+        {
+          len++;
+          if (c >= 0x80)
+            {
+              len++;
+              if (c >= 0x800)
+                len++;
+            }
+        }
+    }
+  str = (char *)malloc (len + 1);
+  if (!str)
+    {
+      loglevel |= 1;
+      LOG_ERROR ("Out of memory");
+      return NULL;
+    }
+  i = 0;
+  tmp = wstr;
+#ifdef HAVE_ALIGNED_ACCESS_REQUIRED
+  if ((uintptr_t)wstr % SIZEOF_SIZE_T)
+    {
+      unsigned char *b = (unsigned char *)wstr;
+      c = TU_to_int (b);
+      while (c && i < len)
+        {
+          if (c < 0x80)
+            str[i++] = c & 0xFF;
+          else if (c < 0x800)
+            {
+              str[i++] = (c >> 6) | 0xC0;
+              str[i++] = (c & 0x3F) | 0x80;
+            }
+          else
+            {
+              str[i++] = (c >> 12) | 0xE0;
+              str[i++] = ((c >> 6) & 0x3F) | 0x80;
+              str[i++] = (c & 0x3F) | 0x80;
+            }
+          b += 2;
+          c = TU_to_int (b);
+        }
+    }
+  else
+#endif
+    while ((c = *tmp++) && i < len)
+      {
+        if (c < 0x80)
+          str[i++] = c & 0xFF;
+        else if (c < 0x800)
+          {
+            str[i++] = (c >> 6) | 0xC0;
+            str[i++] = (c & 0x3F) | 0x80;
+          }
+        else
+          {
+            str[i++] = (c >> 12) | 0xE0;
+            str[i++] = ((c >> 6) & 0x3F) | 0x80;
+            str[i++] = (c & 0x3F) | 0x80;
+          }
+      }
+  if (i <= len + 1)
+    str[i] = '\0';
+  return str;
+}
+
 #define EXTEND_SIZE(str, i, len)                                              \
   if (i > len)                                                                \
     {                                                                         \
@@ -2942,7 +3157,7 @@ bit_TU_to_utf8_len (const BITCODE_TU restrict wstr, const int len)
   if (!str)
     {
       loglevel |= 1;
-      LOG_ERROR ("Out of memory")
+      LOG_ERROR ("Out of memory");
       return NULL;
     }
   i = 0;
@@ -3180,8 +3395,11 @@ static char *
 bit_is_U_expand (const char *p)
 {
   char *s;
-  if (p && strlen (p) >= 7 && (s = strstr (p, "\\U+")) && ishex (s[3])
-      && ishex (s[4]) && ishex (s[5]) && ishex (s[6]))
+  if (!p || strlen (p) < 7)
+    return NULL;
+
+  s = (char *)strstr (p, "\\U+");
+  if (s && ishex (s[3]) && ishex (s[4]) && ishex (s[5]) && ishex (s[6]))
     return s;
   else
     return NULL;
@@ -3191,9 +3409,12 @@ static char *
 bit_is_M_expand (const char *p)
 {
   char *s;
-  if (p && strlen (p) >= 8 && (s = strstr (p, "\\M+")) && s[3] >= '1'
-      && s[3] <= '5' && ishex (s[4]) && ishex (s[5]) && ishex (s[6])
-      && ishex (s[7]))
+  if (!p || strlen (p) < 8)
+    return NULL;
+
+  s = (char *)strstr (p, "\\M+");
+  if (s && s[3] >= '1' && s[3] <= '5' && ishex (s[4]) && ishex (s[5])
+      && ishex (s[6]) && ishex (s[7]))
     return s;
   else
     return NULL;
@@ -3339,7 +3560,8 @@ bit_TV_to_utf8_codepage (const char *restrict src, const BITCODE_RS codepage)
     convert \U+XXXX or \MnXXXX also if representable.
     returns NULL on errors, or the unchanged src string, or a copy.
  */
-EXPORT ATTRIBUTE_MALLOC char *
+/* NOTE: not ATTRIBUTE_MALLOC — see bits.h prototype. */
+EXPORT char *
 bit_TV_to_utf8 (const char *restrict src, const BITCODE_RS codepage)
 {
   if (codepage == CP_UTF8)
@@ -3349,7 +3571,13 @@ bit_TV_to_utf8 (const char *restrict src, const BITCODE_RS codepage)
           // NOTE: src is expanded/shrinked internally.
           const size_t srclen = strlen (src);
           size_t destlen = 1 + trunc (srclen * 2);
-          char *dest = (char *)calloc (destlen, 1);
+          char *dest = (char *)calloc (destlen + 1, 1);
+          if (!dest)
+            {
+              loglevel |= 1;
+              LOG_ERROR ("Out of memory");
+              return NULL;
+            }
           memcpy (dest, src, srclen + 1);
           return (char *)bit_u_expand (dest);
         }
@@ -3375,7 +3603,7 @@ bit_TV_to_utf8 (const char *restrict src, const BITCODE_RS codepage)
     if (!charset || !srclen)
       return (char *)src;
     osrc = (char *)src;
-    odest = dest = (char *)calloc (odestlen, 1);
+    odest = dest = (char *)calloc (odestlen + 1, 1);
     if (!odest || destlen > 0x2FFFE)
       {
         loglevel |= 1;
@@ -3390,7 +3618,8 @@ bit_TV_to_utf8 (const char *restrict src, const BITCODE_RS codepage)
         if (errno != 22)
           LOG_WARN ("iconv_open (\"%s\", \"%s\") failed with errno %d",
                     utf8_cs, charset, errno);
-        free (odest);
+        if (odest)
+          free (odest);
         return bit_TV_to_utf8_codepage (src, codepage);
       }
     while (nconv == (size_t)-1)
@@ -3404,33 +3633,36 @@ bit_TV_to_utf8 (const char *restrict src, const BITCODE_RS codepage)
 #  endif
         if (nconv == (size_t)-1)
           {
-            if (errno != EINVAL) // probably dest buffer too small
+            if (errno == E2BIG) // dest buffer too small
               {
                 char *dest_new;
-                destlen *= 2;
-                if (destlen > 0x2FFFE)
+                size_t offset = (size_t)(dest - odest);
+                odestlen *= 2;
+                if (odestlen > 0x2FFFE)
                   {
                     loglevel |= 1;
                     LOG_ERROR ("bit_TV_to_utf8: overlarge destlen %" PRIuSIZE
                                " for %s",
-                               destlen, src);
+                               odestlen, src);
                     iconv_close (cd);
-                    free (odest);
+                    if (odest)
+                      free (odest);
                     return NULL;
                   }
-                dest_new = (char *)realloc (odest, destlen);
+                dest_new = (char *)realloc (odest, odestlen + 1);
                 if (dest_new)
                   {
-                    odest = dest = dest_new;
-                    odestlen = destlen;
-                    dest_new[destlen - 1] = '\0';
+                    odest = dest_new;
+                    dest = dest_new + offset;
+                    destlen = odestlen - offset;
                   }
                 else
                   {
                     loglevel |= 1;
                     LOG_ERROR ("Out of memory");
                     iconv_close (cd);
-                    // free (odest);
+                    if (odest)
+                      free (odest);
                     return NULL;
                   }
               }
@@ -3439,17 +3671,20 @@ bit_TV_to_utf8 (const char *restrict src, const BITCODE_RS codepage)
                 loglevel |= 1;
                 LOG_ERROR ("iconv \"%s\" failed with errno %d", src, errno);
                 iconv_close (cd);
-                free (odest);
-                return (char *)bit_u_expand (osrc);
+                if (odest)
+                  free (odest);
+                return bit_TV_to_utf8_codepage (osrc, codepage);
               }
           }
       }
     // flush the remains
-    iconv (cd, NULL, NULL, (char **)&dest, (size_t *)&destlen);
-    if (errno == 0 && destlen <= 0x2FFFE && (uintptr_t)dest >= (uintptr_t)odest
+    errno = 0;
+    nconv = iconv (cd, NULL, NULL, (char **)&dest, (size_t *)&destlen);
+    if (nconv != (size_t)-1 && destlen <= 0x2FFFE
+        && (uintptr_t)dest >= (uintptr_t)odest
         && (uintptr_t)dest <= (uintptr_t)odest + odestlen)
       {
-        //*dest = '\0';
+        *dest = '\0';
         iconv_close (cd);
         // always gets shorter, so inplace
         return (char *)bit_u_expand (odest);
@@ -3457,8 +3692,9 @@ bit_TV_to_utf8 (const char *restrict src, const BITCODE_RS codepage)
     else
       {
         iconv_close (cd);
-        free (odest);
-        return bit_TV_to_utf8_codepage (src, codepage);
+        if (odest)
+          free (odest);
+        return bit_TV_to_utf8_codepage (osrc, codepage);
       }
 #else
     return bit_TV_to_utf8_codepage (src, codepage);
@@ -3475,8 +3711,12 @@ bit_utf8_to_TU (char *restrict str, const unsigned cquoted)
 {
   BITCODE_TU wstr;
   size_t i = 0;
-  size_t len = strlen (str);
+  size_t len;
   unsigned char c;
+
+  if (!str)
+    return NULL;
+  len = strlen (str);
 
   if (len > MAX_SIZE_T)
     {
@@ -3487,8 +3727,8 @@ bit_utf8_to_TU (char *restrict str, const unsigned cquoted)
   wstr = (BITCODE_TU)calloc (len + 1, 2);
   if (!wstr)
     {
-      loglevel |= 1;
-      LOG_ERROR ("Out of memory")
+      // loglevel |= 1;
+      LOG_ERROR ("Out of memory");
       return NULL;
     }
   while (len > 0 && (c = *str++))
@@ -3793,9 +4033,18 @@ bit_write_CMC (Bit_Chain *dat, Bit_Chain *str_dat, Dwg_Color *restrict color)
       if (dat->from_version < R_2004)
         bit_upconvert_CMC (dat, color);
       bit_write_BS (dat, 0); // index override
-      bit_write_BL (dat, color->rgb);
       if (!color->method && color->rgb & 0xFF000000)
         color->method = color->rgb >> 0x18;
+      else if (!color->method)
+        {
+          // default uninitialized CMC to ByBlock
+          color->method = 0xc1;
+          color->rgb = 0xc1000000;
+        }
+      else if (color->method >= 0xc0 && color->method <= 0xc8)
+        color->rgb
+            = ((BITCODE_BL)color->method << 24) | (color->rgb & 0x00FFFFFF);
+      bit_write_BL (dat, color->rgb);
       if (color->method == 0xc2) // for entity
         {
           if (color->name && !bit_empty_T (dat, color->name))
@@ -3842,7 +4091,7 @@ bit_read_ENC (Bit_Chain *dat, Bit_Chain *hdl_dat, Bit_Chain *str_dat,
           if (!color->handle)
             {
               loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-              LOG_ERROR ("Out of memory")
+              LOG_ERROR ("Out of memory");
               return;
             }
           bit_read_H (hdl_dat, &(color->handle->handleref)); // => DBCOLOR
@@ -3864,10 +4113,11 @@ void
 bit_write_ENC (Bit_Chain *dat, Bit_Chain *hdl_dat, Bit_Chain *str_dat,
                Dwg_Color *restrict color)
 {
-  bit_write_BS (dat, (color->index & 0x1ff) | (color->flag << 8));
+  uint16_t flag = color->flag;
+
+  bit_write_BS (dat, (color->index & 0x1ff) | (flag << 8));
   if (dat->version >= R_2004)
     {
-      uint16_t flag = color->flag;
       if (flag & 0x20)
         bit_write_BL (dat, color->alpha);
       if (!(flag & 0x40) && (flag & 0x80))
@@ -3916,7 +4166,7 @@ bit_chain_init (Bit_Chain *dat, const size_t size)
   if (size > MAX_MEM_ALLOC)
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-      LOG_ERROR ("Out of memory")
+      LOG_ERROR ("Out of memory");
 #ifdef DWG_ABORT
       abort ();
 #else
@@ -3927,7 +4177,7 @@ bit_chain_init (Bit_Chain *dat, const size_t size)
   if (!dat->chain)
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-      LOG_ERROR ("Out of memory")
+      LOG_ERROR ("Out of memory");
 #ifdef DWG_ABORT
       abort ();
 #else
@@ -3979,7 +4229,7 @@ bit_chain_alloc_size (Bit_Chain *dat, const size_t size)
       else
         {
           loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
-          LOG_ERROR ("Out of memory")
+          LOG_ERROR ("Out of memory");
 #ifdef DWG_ABORT
           abort ();
 #else
@@ -4334,13 +4584,30 @@ size_t
 in_hex2bin (unsigned char *restrict dest, char *restrict src, size_t destlen)
 {
 #if 0
+  // Reference implementation (the #else lookup path below is what's used).
+  // Decodes two hex nibbles per byte by hand, without scanf; assumes src holds
+  // at least 2*destlen hex chars per the caller's contract (a non-hex char,
+  // incl. NUL, stops early and returns the count decoded so far).
   char *pos = (char *)src;
   for (size_t i = 0; i < destlen; i++)
     {
-      if (sscanf (pos, SCANF_2X, &dest[i]))
-        pos += 2;
-      else
-        return i;
+      unsigned char b = 0;
+      for (int n = 0; n < 2; n++)
+        {
+          const char ch = pos[n];
+          int d;
+          if (ch >= '0' && ch <= '9')
+            d = ch - '0';
+          else if (ch >= 'A' && ch <= 'F')
+            d = ch - 'A' + 10;
+          else if (ch >= 'a' && ch <= 'f')
+            d = ch - 'a' + 10;
+          else
+            return i;
+          b = (unsigned char)((b << 4) | d);
+        }
+      dest[i] = b;
+      pos += 2;
     }
   return destlen;
 #else

@@ -1,5 +1,5 @@
 #!/usr/bin/env perl -w
-# Copyright (C) 2019-2025 Free Software Foundation, Inc., GPL3
+# Copyright (C) 2019-2026 Free Software Foundation, Inc., GPL3
 #
 # Generate src/dynapi.c and test/unit-testing/dynapi_test.c
 # C structs/arrays for all dwg objects and its fields for a dynamic API.
@@ -190,6 +190,9 @@ while (<$in>) {
             $n = $1;
             $h{$n}{seqend} = 'H' if $n eq 'COMMON_ENTITY_POLYLINE'; # has no ;
         }
+        elsif (/^#define (DIMENSION_COMMON)/) {
+            $n = $1;
+        }
     }
     elsif (/^\}/) {    # close the struct
         $n = '';
@@ -213,9 +216,13 @@ while (<$in>) {
 #$h{Dwg_Bitcode_2BD} = '2BD';
 #$h{Dwg_Bitcode_3RD} = '3RD';
 #$h{Dwg_Bitcode_2RD} = '2RD';
-$ENT{LAYER}->{flag}           = 'BS';
-$ENT{LAYER}->{name}           = 'T';
-$ENT{DIMSTYLE}->{name}        = 'T';
+$ENT{LAYER}->{flag}    = 'BS';
+$ENT{LAYER}->{name}    = 'T';
+$ENT{DIMSTYLE}->{name} = 'T';
+$ENT{$_}->{user_text}  = 'T'
+    for qw(ARC_DIMENSION DIMENSION_ORDINATE DIMENSION_LINEAR DIMENSION_ALIGNED
+    DIMENSION_ANG3PT DIMENSION_ANG2LN DIMENSION_RADIUS DIMENSION_DIAMETER
+    LARGE_RADIAL_DIMENSION);
 $SUBCLASSES{DIMENSION_common} = [qw(AcDbDimension)];
 $SUBCLASSES{ACTION_3DSOLID}   = [qw(AcDbModelerGeometry AcDb3dSolid)];
 $SUBCLASSES{TABLECONTENTs}
@@ -282,13 +289,14 @@ sub embedded_struct {
     }
 }
 
+my %defined;    #define subclass_fields, shared across dxfin_spec calls
+
 # parse a spec for its objects, subclasses and dxf values
 sub dxf_in {
     $in = shift;
     my $v  = qr /[\w\.\[\]]+/;
     my $vx = qr /[\w\.\[\]>-]+/;
     my $outdef;
-    my %defined;    #define subclass_fields
     while (<$in>) {
         $f = '';
         s/DXF \{ //;
@@ -311,7 +319,7 @@ sub dxf_in {
                 warn "define $n";
             }
             elsif (
-                /^\#define (COMMON_3DSOLID|ACTION_3DSOLID|COMMON_ENTITY_DIMENSION)/
+                /^\#define (COMMON_3DSOLID|ACTION_3DSOLID|COMMON_ENTITY_DIMENSION|DIMENSION_COMMON)/
                 )
             {
                 $n = $1;
@@ -573,6 +581,9 @@ sub dxf_in {
         elsif (/^\s+(COMMON_ENTITY_DIMENSION)/) {
             expand_define( $1, $n, \%defined );
         }
+        elsif (/^\s+(DIMENSION_COMMON)/) {
+            expand_define( $1, $n, \%defined );    # not reached
+        }
         elsif ( /^$/ && $defined{$n} ) {
             warn "undef $n\n";
             @old = ();
@@ -591,7 +602,9 @@ sub dxfin_spec {
     dxf_in($in);
     close $in;
 }
+dxfin_spec "$srcdir/dwg_spec_shared.h";
 dxfin_spec "$srcdir/dwg.spec";
+dxfin_spec "$srcdir/dwg2.spec";
 $DXF{'BLOCK'}->{'name'}                           = 2;     # and 3
 $DXF{'BLOCK'}->{'filename'}                       = 4;
 $DXF{'3DLINE'}->{'thickness'}                     = 39;
@@ -621,8 +634,8 @@ $DXF{'TABLECONTENT'}->{'tablestyle'}       = 340;
 $DXF{'TABLESTYLE'}->{'name'}               = 3;     # not 300
 $DXF{'TABLE_Cell'}->{'cell_flag_override'} = 177;
 $DXF{'ACSH_HistoryNode'}->{'trans'}        = 40;    # but inc by 1 for 16
-$DXF{'MLINESTYLE_line'}->{'lt.index'}      = 6;
-$DXF{'MLINESTYLE_line'}->{'lt.ltype'}      = 6;
+$DXF{'MLINESTYLE_line'}->{'lt_index'}      = 6;
+$DXF{'MLINESTYLE_line'}->{'lt_ltype'}      = 6;
 
 # $DXF{'DIMENSION_ORDINATE'}->{'def_pt'} = 10;
 # $DXF{'DIMENSION_ORDINATE'}->{'feature_location_pt'} = 13;
@@ -901,6 +914,9 @@ sub out_declarator {
     elsif ( !$bc && $ns =~ /_entity_POLYLINE_/ ) {
         $bc = $h{COMMON_ENTITY_POLYLINE}{$name};
     }
+    elsif ( !$bc && $ns =~ /_DIMENSION_common/ ) {
+        $bc = $h{DIMENSION_COMMON}{$name};
+    }
     $type = $bc if $bc;
     if ( $name eq 'encr_sat_data' ) {
         $type = 'char **';
@@ -948,7 +964,7 @@ sub out_declarator {
         $type = 'BL*';
 
         #} elsif ($type eq 'TFv') {
-        #  $type = 'TV';
+        #   $type = 'TV';
     }
     elsif ( $type eq 'Dwg_Object_Ref*' ) {
         $type = 'H';
@@ -1537,7 +1553,7 @@ print $inc <<"EOF";
 /*****************************************************************************/
 /*  LibreDWG - free implementation of the DWG file format                    */
 /*                                                                           */
-/*  Copyright (C) 2019-2025 Free Software Foundation, Inc.                   */
+/*  Copyright (C) 2019-2026 Free Software Foundation, Inc.                   */
 /*                                                                           */
 /*  This library is free software, licensed under the terms of the GNU       */
 /*  General Public License as published by the Free Software Foundation,     */
@@ -2874,11 +2890,11 @@ mv_if_not_same( "$ifile.tmp", $ifile );
 # NOTE: in the 2 #line's below use __LINE__ + 1
 __DATA__
 /* ex: set ro ft=c: -*- mode: c; buffer-read-only: t -*- */
-#line 2546 "gen-dynapi.pl"
+#line 2894 "gen-dynapi.pl"
 /*****************************************************************************/
 /*  LibreDWG - free implementation of the DWG file format                    */
 /*                                                                           */
-/*  Copyright (C) 2018-2025 Free Software Foundation, Inc.                   */
+/*  Copyright (C) 2018-2026 Free Software Foundation, Inc.                   */
 /*                                                                           */
 /*  This library is free software, licensed under the terms of the GNU       */
 /*  General Public License as published by the Free Software Foundation,     */
@@ -2958,7 +2974,7 @@ static const struct _name_subclasses dwg_name_subclasses[] = {
 @@list name_subclasses@@
 };
 
-#line 2630 "gen-dynapi.pl"
+#line 2978 "gen-dynapi.pl"
 struct _name
 {
   const char *const name;
@@ -3165,7 +3181,7 @@ dwg_dynapi_entity_value (void *restrict _obj, const char *restrict name,
     // CHK_SUBCLASS_* e.g. layout->plotsetting via PLOTSETTING
     if (obj && strNE (obj->name, name)) // objid may be 0
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid entity type %s, wanted %s", __FUNCTION__,
                    obj->name, name);
         return false;
@@ -3174,8 +3190,8 @@ dwg_dynapi_entity_value (void *restrict _obj, const char *restrict name,
       const Dwg_DYNAPI_field *f = dwg_dynapi_entity_field (name, fieldname);
       if (!f)
         {
-          int loglevel = (obj && obj->parent) ? obj->parent->opts & DWG_OPTS_LOGLEVEL
-                                              : DWG_LOGLEVEL_ERROR;
+          //int loglevel = (obj && obj->parent) ? obj->parent->opts & DWG_OPTS_LOGLEVEL
+          //                                    : DWG_LOGLEVEL_ERROR;
           LOG_ERROR ("%s: Invalid %s field %s", __FUNCTION__, name, fieldname);
           return false;
         }
@@ -3206,7 +3222,7 @@ dwg_dynapi_entity_utf8text (void *restrict _obj, const char *restrict name,
     // CHK_SUBCLASS_* e.g. layout->plotsetting via PLOTSETTING
     if (obj && strNE (obj->name, name)) // objid may be 0
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid entity type %s, wanted %s", __FUNCTION__,
                    obj->name, name);
         return false;
@@ -3218,7 +3234,7 @@ dwg_dynapi_entity_utf8text (void *restrict _obj, const char *restrict name,
 
       if (!f || !f->is_string)
         {
-          int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : DWG_LOGLEVEL_ERROR;
+          //int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : DWG_LOGLEVEL_ERROR;
           LOG_ERROR ("%s: Invalid %s text field %s", __FUNCTION__, name, fieldname);
           return false;
         }
@@ -3267,7 +3283,7 @@ dwg_dynapi_header_value (const Dwg_Data *restrict dwg,
       }
     else
       {
-        const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid header field %s", __FUNCTION__, fieldname);
         return false;
       }
@@ -3317,7 +3333,7 @@ dwg_dynapi_header_utf8text (const Dwg_Data *restrict dwg,
       }
     else
       {
-        const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid header text field %s", __FUNCTION__, fieldname);
         return false;
       }
@@ -3338,7 +3354,7 @@ dwg_dynapi_common_value(void *restrict _obj, const char *restrict fieldname,
     const Dwg_Object *obj = dwg_obj_generic_to_object (_obj, &error);
     if (!obj || error)
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: dwg_obj_generic_to_object failed", __FUNCTION__);
         return false;
       }
@@ -3355,7 +3371,7 @@ dwg_dynapi_common_value(void *restrict _obj, const char *restrict fieldname,
       }
     else
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL; // DWG_LOGLEVEL_ERROR;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL; // DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: Unhandled %s.supertype ", __FUNCTION__, obj->name);
         return false;
       }
@@ -3373,7 +3389,7 @@ dwg_dynapi_common_value(void *restrict _obj, const char *restrict fieldname,
       }
     else
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid common field %s", __FUNCTION__, fieldname);
         return false;
       }
@@ -3398,7 +3414,7 @@ dwg_dynapi_common_utf8text(void *restrict _obj, const char *restrict fieldname,
 
     if (!obj || error)
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: dwg_obj_generic_to_object failed", __FUNCTION__);
         return false;
       }
@@ -3422,7 +3438,7 @@ dwg_dynapi_common_utf8text(void *restrict _obj, const char *restrict fieldname,
       }
     else
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: Unhandled %s.supertype ", __FUNCTION__, obj->name);
         return false;
       }
@@ -3454,7 +3470,7 @@ dwg_dynapi_common_utf8text(void *restrict _obj, const char *restrict fieldname,
       }
     else
       {
-        const int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : DWG_LOGLEVEL_ERROR;
+        //const int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: Invalid common text field %s", __FUNCTION__, fieldname);
         return false;
       }
@@ -3541,13 +3557,13 @@ dwg_dynapi_entity_set_value (void *restrict _obj, const char *restrict name,
     const Dwg_Object *obj = dwg_obj_generic_to_object (_obj, &error);
     if (error)
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: dwg_obj_generic_to_object failed", __FUNCTION__);
         return false;
       }
     if (obj && strNE (obj->name, name))
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid entity type %s, wanted %s", __FUNCTION__,
                    obj->name, name);
         return false;
@@ -3570,7 +3586,7 @@ dwg_dynapi_entity_set_value (void *restrict _obj, const char *restrict name,
 
       if (!f)
         {
-          const int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : 0;
+          //const int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : 0;
           LOG_ERROR ("%s: Invalid %s field %s", __FUNCTION__, name, fieldname);
           return false;
         }
@@ -3673,7 +3689,7 @@ dwg_dynapi_header_set_value (Dwg_Data *restrict dwg,
       }
     else
       {
-        const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid header field %s", __FUNCTION__, fieldname);
         return false;
       }
@@ -3697,7 +3713,7 @@ dwg_dynapi_common_set_value (void *restrict _obj,
     Dwg_Data *dwg;
     if (!obj || error)
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: dwg_obj_generic_to_object failed", __FUNCTION__);
         return false;
       }
@@ -3720,14 +3736,14 @@ dwg_dynapi_common_set_value (void *restrict _obj,
       }
     else
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: Unhandled %s.supertype ", __FUNCTION__, obj->name);
         return false;
       }
 
     if (!f)
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid %s common field %s", __FUNCTION__, obj->name, fieldname);
         return false;
       }

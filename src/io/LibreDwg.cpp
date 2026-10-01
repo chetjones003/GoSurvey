@@ -62,12 +62,12 @@ void LibreDwgLinkBlockEntities(Dwg_Data* dwg) {
   }
 }
 
-bool LibreDwgWriteMinimalR2000(const char* pathUtf8) {
+bool LibreDwgWriteMinimalLine(Dwg_Version_Type version, const char* pathUtf8) {
   if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
     return false;
   }
 
-  Dwg_Data* dwg = dwg_new_Document(R_2000, /*imperial=*/0, /*loglevel=*/0);
+  Dwg_Data* dwg = dwg_new_Document(version, /*imperial=*/0, /*loglevel=*/0);
   if (dwg == nullptr) {
     return false;
   }
@@ -93,9 +93,15 @@ bool LibreDwgWriteMinimalR2000(const char* pathUtf8) {
   LibreDwgLinkBlockEntities(dwg);
   const int err = dwg_write_file(pathUtf8, dwg);
   FreeDocument(dwg);
-  // Encode warnings below CRITICAL can still write a corpse that AutoCAD will
-  // Recover; increment 1 requires a file we can read back (REQ-170).
   return err == DWG_NOERR;
+}
+
+bool LibreDwgWriteMinimalR2000(const char* pathUtf8) {
+  return LibreDwgWriteMinimalLine(R_2000, pathUtf8);
+}
+
+bool LibreDwgWriteMinimalR2004(const char* pathUtf8) {
+  return LibreDwgWriteMinimalLine(R_2004, pathUtf8);
 }
 
 std::string LibreDwgReadVersionName(const char* pathUtf8) {

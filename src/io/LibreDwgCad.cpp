@@ -2135,7 +2135,7 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
     vp->VIEWCTR.y = gv.modelCenterY + oy;
     const float sc = gv.safeScale();
     vp->VIEWSIZE = static_cast<double>(gv.paperHIn) * static_cast<double>(sc);
-    vp->lens_length = 50.0;
+    vp->LENSLENGTH = 50.0;
     vp->status_flag = 32800;
     vp->UCSVP = 1;
     vp->ucsxdir.x = 1.0;
