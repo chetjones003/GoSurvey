@@ -216,12 +216,25 @@ std::string EntityLinetypeName(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
   return n;
 }
 
+// REQ-170, issue #609: DWG stores lineweight as a table index (see dxf_cvt_lweight in dwg.c);
+// GoSurvey stores millimetres on paper, or -1 for ByLayer / default.
+float LineweightMmFromDwgIndex(BITCODE_RC idx) {
+  return CadDxfLineweightMmFromEnum370(dxf_cvt_lweight(static_cast<BITCODE_BSd>(idx)));
+}
+
+BITCODE_RC LineweightDwgIndexFromMm(float mm, bool layerRow) {
+  if (mm < 0.f)
+    return layerRow ? static_cast<BITCODE_RC>(31) : static_cast<BITCODE_RC>(29);  // -3 default / -1 ByLayer
+  return static_cast<BITCODE_RC>(dxf_revcvt_lweight(CadDxfLineweightEnum370FromMm(mm)));
+}
+
 EntityAttributes AttrFromEnt(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
   EntityAttributes a{};
   a.layer = LayerName(dwg, ent);
   if (ent != nullptr) {
     a.color = ColorStorage(ent->color);
     a.linetype = EntityLinetypeName(dwg, ent);
+    a.lineweightMm = LineweightMmFromDwgIndex(ent->linewt);
   }
   return a;
 }
@@ -918,6 +931,7 @@ void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& 
     row.locked = ly->locked != 0;
     row.color = ColorStorage(ly->color);
     row.linetype = LayerLinetypeName(dwg, ly);
+    row.lineweightMm = LineweightMmFromDwgIndex(ly->linewt);
     st.drawingLayerTable.push_back(row);
     ++imported;
   }
@@ -1028,8 +1042,10 @@ struct TableWriter {
       ly->off = row.on ? 0 : 1;
       ly->frozen = row.frozen ? 1 : 0;
       ly->locked = row.locked ? 1 : 0;
-      ly->flag0 = static_cast<BITCODE_BS>((row.frozen ? 1 : 0) | (row.on ? 2 : 0) |
-                                         (row.locked ? 8 : 0) | 16);
+      ly->linewt = LineweightDwgIndexFromMm(row.lineweightMm, /*layerRow=*/true);
+      ly->flag0 = static_cast<BITCODE_BS>((row.frozen ? 1 : 0) | (row.on ? 0 : 2) |
+                                         (row.locked ? 8 : 0) | 16 |
+                                         static_cast<BITCODE_BS>((ly->linewt & 0x1F) << 5));
       if (Dwg_Object* lt = EnsureLtype(row.linetype))
         ly->ltype = Ref(lt);
       layers[LowerAscii(row.name)] = ly->parent->objid;
@@ -1091,6 +1107,7 @@ struct TableWriter {
       ent->ltype = Ref(lt);
       ent->ltype_flags = 3;  // has explicit handle
     }
+    ent->linewt = LineweightDwgIndexFromMm(a.lineweightMm, /*layerRow=*/false);
   }
 };
 
@@ -1511,7 +1528,7 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
                                                       &st.userArcAttrs,  &st.userPolylineAttrs,
                                                       &st.cadAnnotationAttrs, &st.userEllAttrs,
                                                       &st.cadFilledRegionAttrs};
-  size_t nColorRounded = 0, nLineweight = 0, nTransparency = 0;
+  size_t nColorRounded = 0, nTransparency = 0;
   for (const std::vector<EntityAttributes>* v : attrSets) {
     for (const EntityAttributes& a : *v) {
       uint32_t rgb = 0;
@@ -1520,14 +1537,11 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
         if ((DxfRgbPackedFromAci(aci) & 0xFFFFFFu) != (rgb & 0xFFFFFFu))
           ++nColorRounded;
       }
-      if (a.lineweightMm >= 0.f)
-        ++nLineweight;
       if (a.transparency >= 0.f)
         ++nTransparency;
     }
   }
   add("colour(s) (rounded to the nearest AutoCAD index colour)", nColorRounded);
-  add("object(s) with a lineweight (not written; falls back to ByLayer)", nLineweight);
   add("object(s) with transparency (not written)", nTransparency);
 
   size_t nRotatedText = 0;

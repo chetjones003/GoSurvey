@@ -2183,3 +2183,44 @@ TEST_CASE("DWG round-trips solid and pattern HATCH fills (REQ-170, issue #608)",
   CHECK(nSolid == 1);
   CHECK(nPattern == 1);
 }
+
+// REQ-170, issue #609: explicit entity lineweight and layer-table lineweight survive DWG save/open.
+TEST_CASE("DWG round-trips entity and layer lineweight (REQ-170, issue #609)",
+          "[dwg][libredwg][req170][issue609]") {
+  ScratchDir dir("roundtrip-lw");
+  const auto p = (dir.path / "rt-lw.dwg").string();
+  AppCommandState st;
+  CadLayerRow lyr;
+  lyr.name = "Heavy";
+  lyr.lineweightMm = 0.35f;
+  st.drawingLayerTable.push_back(lyr);
+
+  EntityAttributes explicitLw;
+  explicitLw.lineweightMm = 0.50f;
+  st.userLinesFlat = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 20.f, 0.f, 0.f, 30.f, 0.f, 0.f};
+  st.userLineAttrs.push_back(explicitLw);
+
+  EntityAttributes byLayerLw;
+  byLayerLw.layer = "Heavy";
+  byLayerLw.lineweightMm = -1.f;
+  st.userLineAttrs.push_back(byLayerLw);
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  StripGosurveyDwgTrailer(p);
+
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userLineAttrs.size() == 2);
+  CHECK(in.userLineAttrs[0].lineweightMm == Catch::Approx(0.50f).margin(0.02f));
+  CHECK(in.userLineAttrs[1].lineweightMm < 0.f);
+  CHECK(in.userLineAttrs[1].layer == "Heavy");
+
+  const CadLayerRow* heavy = nullptr;
+  for (const CadLayerRow& row : in.drawingLayerTable) {
+    if (row.name == "Heavy")
+      heavy = &row;
+  }
+  REQUIRE(heavy != nullptr);
+  CHECK(heavy->lineweightMm == Catch::Approx(0.35f).margin(0.02f));
+}
