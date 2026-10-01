@@ -219,6 +219,22 @@ int CountDwgPolylinePface(const char* path) {
   return n;
 }
 
+int CountDwgEntities(Dwg_Object_Type ty, const char* path) {
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  if (dwg_read_file(path, &dwg) >= DWG_ERR_CRITICAL) {
+    dwg_free(&dwg);
+    return -1;
+  }
+  int n = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].fixedtype == ty)
+      ++n;
+  }
+  dwg_free(&dwg);
+  return n;
+}
+
 }  // namespace
 
 TEST_CASE("ExportDwgFile writes a CadMesh as POLYLINE_PFACE (issue #611)", "[dwg][libredwg][issue611]") {
@@ -357,6 +373,84 @@ TEST_CASE("DWG export loss omits colour rounding when saving R2004 (issue #615 /
   const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(st);
   for (const DwgExportLoss& l : losses)
     CHECK(l.label.find("colour") == std::string::npos);
+}
+
+TEST_CASE("R2004 DWG round-trips entity transparency (issue #620)", "[dwg][libredwg][issue620]") {
+  ScratchDir dir("dwg-transparency");
+  const auto p = (dir.path / "tr.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  st.userLineAttrs[0].transparency = 0.6f;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userLineAttrs.size() == 1);
+  CHECK(in.userLineAttrs[0].transparency == Catch::Approx(0.6f).margin(0.02f));
+}
+
+TEST_CASE("DWG export loss lists transparency only for R2000 (issue #620 / #614)",
+          "[dwg][libredwg][issue620][issue614]") {
+  AppCommandState st;
+  OneLine(st);
+  st.userLineAttrs[0].transparency = 0.5f;
+  st.dwgExportVersion = DwgSaveVersion::R2000;
+  bool sawTransparency = false;
+  for (const DwgExportLoss& l : ComputeDwgExportLosses(st)) {
+    if (l.label.find("transparency") != std::string::npos)
+      sawTransparency = true;
+  }
+  CHECK(sawTransparency);
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  for (const DwgExportLoss& l : ComputeDwgExportLosses(st)) {
+    CHECK(l.label.find("transparency") == std::string::npos);
+  }
+}
+
+TEST_CASE("ExportDwgFile writes a CadTable as grid lines and MTEXT (issue #616)",
+          "[dwg][libredwg][issue616]") {
+  ScratchDir dir("dwg-table-export");
+  const auto p = (dir.path / "table.dwg").string();
+  AppCommandState st;
+  CadTable table;
+  table.cols = 2;
+  table.width = 20.f;
+  table.height = 8.f;
+  table.cells = {"A1", "B1", "A2", "B2"};
+  st.cadTables.push_back(table);
+  st.cadTableAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(CountDwgEntities(DWG_TYPE_LINE, p.c_str()) >= 3);
+  REQUIRE(CountDwgEntities(DWG_TYPE_MTEXT, p.c_str()) >= 4);
+}
+
+TEST_CASE("DWG export loss omits exportable tables (issue #616 / #614)", "[dwg][libredwg][issue616][issue614]") {
+  AppCommandState st;
+  CadTable table;
+  table.cols = 2;
+  table.cells = {"x", "y"};
+  st.cadTables.push_back(table);
+  for (const DwgExportLoss& l : ComputeDwgExportLosses(st)) {
+    CHECK(l.label.find("table") == std::string::npos);
+  }
+}
+
+TEST_CASE("ExportDwgFile writes a point-cloud extent box (issue #621)", "[dwg][libredwg][issue621]") {
+  ScratchDir dir("dwg-pc-box");
+  const auto p = (dir.path / "pc.dwg").string();
+  AppCommandState st;
+  auto pc = std::make_shared<CadPointCloud>();
+  pc->sourcePath = "C:/surveys/site.e57";
+  pc->pointsXyz = {0.0, 0.0, 0.0, 10.0, 5.0, 3.0};
+  st.cadPointClouds.push_back(pc);
+  st.cadPointCloudAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  CHECK(CountDwgEntities(DWG_TYPE_LINE, p.c_str()) == 12);
+  for (const DwgExportLoss& l : ComputeDwgExportLosses(st))
+    CHECK(l.label.find("point cloud") == std::string::npos);
 }
 
 // REQ-101 (D-2026-09-08-i) / ADR-054 Phase B (#441): the DWG-trailer document is the same `double`
@@ -1651,7 +1745,7 @@ TEST_CASE("DWG export loss summary omits exportable solids and pipe runs (issue 
   }
 }
 
-TEST_CASE("DWG export loss summary lists exactly 5 pipe runs and 1 table (issue #614)",
+TEST_CASE("DWG export loss summary lists exactly 5 skipped pipe runs (issue #614 / #616)",
           "[dwg][libredwg][req170][req201][issue614]") {
   AppCommandState st;
   OneLine(st);
@@ -1663,14 +1757,11 @@ TEST_CASE("DWG export loss summary lists exactly 5 pipe runs and 1 table (issue 
   st.cadTables.push_back(t);
 
   const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(st);
-  REQUIRE(losses.size() == 2);
-  bool sawPipeRuns = false, sawTable = false;
-  for (const DwgExportLoss& l : losses) {
-    if (l.label.find("pipe run") != std::string::npos) { sawPipeRuns = true; CHECK(l.count == 5); }
-    if (l.label.find("table") != std::string::npos) { sawTable = true; CHECK(l.count == 1); }
-  }
-  CHECK(sawPipeRuns);
-  CHECK(sawTable);
+  REQUIRE(losses.size() == 1);
+  CHECK(losses[0].label.find("pipe run") != std::string::npos);
+  CHECK(losses[0].count == 5);
+  for (const DwgExportLoss& l : losses)
+    CHECK(l.label.find("table") == std::string::npos);
 }
 
 TEST_CASE("DWG export logs every loss the summary names (issue #614)",
