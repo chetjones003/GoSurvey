@@ -753,10 +753,56 @@ static bool ImportPolylinePFace(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* 
   return true;
 }
 
+static void AppendLocalPathPoint(CadMultileader& m, const AppCommandState& st, double wx, double wy,
+                                 double z) {
+  m.pathXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+  m.pathXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+  m.pathXyz.push_back(static_cast<float>(z));
+}
+
 static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_LEADER* ld, const Xf2& xf,
                                const EntityAttributes& at) {
   if (ld == nullptr || ld->num_points < 2 || ld->points == nullptr)
     return false;
+  Dwg_Object* ann = nullptr;
+  if (ld->associated_annotation != nullptr) {
+    ann = ld->associated_annotation->obj;
+    if (ann == nullptr)
+      ann = dwg_resolve_handle_silent(dwg, ld->associated_annotation->absolute_ref);
+  }
+  const Dwg_Entity_MTEXT* mt =
+      (ann != nullptr && ann->fixedtype == DWG_TYPE_MTEXT && ann->tio.entity != nullptr)
+          ? ann->tio.entity->tio.MTEXT
+          : nullptr;
+  if (mt != nullptr) {
+    CadMultileader m{};
+    for (BITCODE_BL i = 0; i < ld->num_points; ++i) {
+      double wx = 0.0, wy = 0.0;
+      xf.apply(ld->points[i].x, ld->points[i].y, &wx, &wy);
+      AppendLocalPathPoint(m, st, wx, wy, ld->points[i].z);
+    }
+    double x = 0.0, y = 0.0;
+    xf.apply(mt->ins_pt.x, mt->ins_pt.y, &x, &y);
+    const double rot = std::atan2(mt->x_axis_dir.y, mt->x_axis_dir.x);
+    CadAnnotation& an = m.label;
+    an.kind = CadAnnotation::Kind::Mtext;
+    an.insX = static_cast<float>(x - st.worldDocumentOriginX);
+    an.insY = static_cast<float>(y - st.worldDocumentOriginY);
+    an.insZ = static_cast<float>(mt->ins_pt.z);
+    an.plottedHeightInches =
+        static_cast<float>(static_cast<double>(mt->text_height) /
+                           std::max(1e-9, static_cast<double>(st.modelUnitsPerPlottedInch)));
+    an.rotationRad = static_cast<float>(rot + xf.ang);
+    an.text = FromT(dwg, mt->text);
+    an.boxMinX = an.insX;
+    an.boxMinY = an.insY - static_cast<float>(mt->text_height);
+    an.boxMaxX = an.insX + static_cast<float>(
+        std::max(static_cast<double>(mt->rect_width), static_cast<double>(mt->text_height) * 4.0));
+    an.boxMaxY = an.insY;
+    st.cadMultileaders.push_back(std::move(m));
+    st.cadMultileaderAttrs.push_back(at);
+    return true;
+  }
   std::vector<double> xyz;
   xyz.reserve(static_cast<size_t>(ld->num_points) * 3);
   for (BITCODE_BL i = 0; i < ld->num_points; ++i) {
@@ -767,20 +813,61 @@ static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Ent
     xyz.push_back(ld->points[i].z);
   }
   LocalPolyline(st, xyz, false, at);
-  if (ld->associated_annotation != nullptr) {
-    Dwg_Object* ann = ld->associated_annotation->obj;
-    if (ann == nullptr)
-      ann = dwg_resolve_handle_silent(dwg, ld->associated_annotation->absolute_ref);
-    if (ann != nullptr && ann->fixedtype == DWG_TYPE_MTEXT && ann->tio.entity != nullptr &&
-        ann->tio.entity->tio.MTEXT != nullptr) {
-      const Dwg_Entity_MTEXT* mt = ann->tio.entity->tio.MTEXT;
-      double x = 0.0, y = 0.0;
-      xf.apply(mt->ins_pt.x, mt->ins_pt.y, &x, &y);
-      const double rot = std::atan2(mt->x_axis_dir.y, mt->x_axis_dir.x);
-      LocalText(st, x, y, mt->ins_pt.z, mt->text_height, rot + xf.ang, FromT(dwg, mt->text),
-                CadAnnotation::Kind::Mtext, at);
-    }
+  return true;
+}
+
+static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_MULTILEADER* ml,
+                                    const Xf2& xf, const EntityAttributes& at) {
+  if (ml == nullptr || dwg == nullptr)
+    return false;
+  if (ml->ctx.has_content_blk && !ml->ctx.has_content_txt)
+    return false;
+  if (!ml->ctx.has_content_txt)
+    return false;
+  if (ml->ctx.num_leaders < 1 || ml->ctx.leaders == nullptr)
+    return false;
+  const Dwg_LEADER_Node& node = ml->ctx.leaders[0];
+  if (node.num_lines < 1 || node.lines == nullptr || node.lines[0].num_points < 2 ||
+      node.lines[0].points == nullptr)
+    return false;
+
+  CadMultileader m{};
+  const Dwg_LEADER_Line& seg = node.lines[0];
+  for (BITCODE_BL pi = 0; pi < seg.num_points; ++pi) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(seg.points[pi].x, seg.points[pi].y, &wx, &wy);
+    AppendLocalPathPoint(m, st, wx, wy, seg.points[pi].z);
   }
+  if (node.has_lastleaderlinepoint != 0) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(node.lastleaderlinepoint.x, node.lastleaderlinepoint.y, &wx, &wy);
+    AppendLocalPathPoint(m, st, wx, wy, node.lastleaderlinepoint.z);
+  }
+
+  const Dwg_MLEADER_Content_MText& txt = ml->ctx.content.txt;
+  double lx = 0.0, ly = 0.0;
+  xf.apply(txt.location.x, txt.location.y, &lx, &ly);
+  CadAnnotation& an = m.label;
+  an.kind = CadAnnotation::Kind::Mtext;
+  an.insX = static_cast<float>(lx - st.worldDocumentOriginX);
+  an.insY = static_cast<float>(ly - st.worldDocumentOriginY);
+  an.insZ = static_cast<float>(txt.location.z);
+  const double th = ml->ctx.text_height > 1e-9 ? ml->ctx.text_height : 0.18;
+  an.plottedHeightInches =
+      static_cast<float>(th / std::max(1e-9, static_cast<double>(st.modelUnitsPerPlottedInch)));
+  an.text = FromT(dwg, txt.default_text);
+  if (an.text.empty())
+    an.text = " ";
+  const double rot = std::atan2(txt.direction.y, txt.direction.x);
+  an.rotationRad = static_cast<float>(rot + xf.ang);
+  an.boxMinX = an.insX;
+  an.boxMinY = an.insY - static_cast<float>(th);
+  an.boxMaxX = an.insX + static_cast<float>(
+      std::max(static_cast<double>(txt.width), th * 4.0));
+  an.boxMaxY = an.insY;
+
+  st.cadMultileaders.push_back(std::move(m));
+  st.cadMultileaderAttrs.push_back(at);
   return true;
 }
 
@@ -1276,8 +1363,10 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     NoteSkip(skipHist, "LEADER(degenerate or unsupported)");
     return;
   }
-  if (ty == DWG_TYPE_MULTILEADER) {
-    NoteSkip(skipHist, "MULTILEADER(use #619 multileader support)");
+  if (ty == DWG_TYPE_MULTILEADER && ent->tio.MULTILEADER != nullptr) {
+    if (ImportMultileaderEntity(st, dwg, ent->tio.MULTILEADER, xf, at))
+      return;
+    NoteSkip(skipHist, "MULTILEADER(block content or unsupported layout, issue #619)");
     return;
   }
   if (ty == DWG_TYPE__3DFACE && ent->tio._3DFACE != nullptr) {
@@ -3371,6 +3460,46 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       e->text_height = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
       e->attachment = 1;
       apply(e->parent, at);
+    }
+  }
+  // REQ-367 / issue #619: multileaders as associated LEADER + MTEXT (AutoCAD-readable callout).
+  for (size_t i = 0; i < st.cadMultileaders.size(); ++i) {
+    const CadMultileader& ml = st.cadMultileaders[i];
+    const EntityAttributes* at = AttrAt(st.cadMultileaderAttrs, i);
+    const CadAnnotation& an = ml.label;
+    dwg_point_3d tp{};
+    world(an.insX, an.insY, an.insZ, &tp);
+    std::string wire;
+    for (char ch : MtextRichFlattenToPlain(an.text)) {
+      if (ch == '\n')
+        wire += "\\P";
+      else if (ch != '\r')
+        wire += ch;
+    }
+    const double width = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
+    Dwg_Entity_MTEXT* mt =
+        dwg_add_MTEXT(hdr, &tp, width, wire.empty() ? " " : wire.c_str());
+    if (mt != nullptr) {
+      mt->text_height = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
+      mt->attachment = 1;
+      apply(mt->parent, at);
+    }
+    const size_t nPt = ml.pathXyz.size() / 3;
+    if (nPt >= 2) {
+      std::vector<dwg_point_3d> pts(nPt);
+      for (size_t j = 0; j < nPt; ++j) {
+        world(ml.pathXyz[j * 3], ml.pathXyz[j * 3 + 1], ml.pathXyz[j * 3 + 2], &pts[j]);
+      }
+      Dwg_Entity_LEADER* ld =
+          dwg_add_LEADER(hdr, static_cast<unsigned>(nPt), pts.data(), mt, 0);
+      if (ld != nullptr) {
+        apply(ld->parent, at);
+      } else {
+        for (size_t j = 0; j + 1 < nPt; ++j) {
+          if (Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &pts[j], &pts[j + 1]))
+            apply(e->parent, at);
+        }
+      }
     }
   }
   // REQ-365 / issue #605: survey points, written as a GOSURVEY_POINT block INSERT with visible

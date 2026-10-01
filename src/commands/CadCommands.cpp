@@ -140,6 +140,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadTableAttrs          = cmd.cadTableAttrs;
   doc.cadPositionMarkers     = cmd.cadPositionMarkers;  // REQ-359: per drawing
   doc.cadPositionMarkerAttrs = cmd.cadPositionMarkerAttrs;
+  doc.cadMultileaders        = cmd.cadMultileaders;  // REQ-367
+  doc.cadMultileaderAttrs    = cmd.cadMultileaderAttrs;
   doc.cadPipeRuns            = cmd.cadPipeRuns;      // pipe runs are per-drawing (issue #486 / REQ-345)
   doc.cadPipeRunAttrs        = cmd.cadPipeRunAttrs;
   doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
@@ -244,6 +246,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadTableAttrs              = doc.cadTableAttrs;
   cmd.cadPositionMarkers         = doc.cadPositionMarkers;  // REQ-359
   cmd.cadPositionMarkerAttrs     = doc.cadPositionMarkerAttrs;
+  cmd.cadMultileaders            = doc.cadMultileaders;  // REQ-367
+  cmd.cadMultileaderAttrs        = doc.cadMultileaderAttrs;
   cmd.cadPipeRuns                = doc.cadPipeRuns;      // issue #486 / REQ-345
   cmd.cadPipeRunAttrs            = doc.cadPipeRunAttrs;
   cmd.cadPipingSystems           = doc.cadPipingSystems;
@@ -1555,6 +1559,8 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadTableAttrs        = st.cadTableAttrs;
   snap.cadPositionMarkers   = st.cadPositionMarkers;  // REQ-359
   snap.cadPositionMarkerAttrs = st.cadPositionMarkerAttrs;
+  snap.cadMultileaders      = st.cadMultileaders;  // REQ-367
+  snap.cadMultileaderAttrs  = st.cadMultileaderAttrs;
   snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
   snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
@@ -1660,6 +1666,8 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadTableAttrs        = snap.cadTableAttrs;
   st.cadPositionMarkers   = snap.cadPositionMarkers;  // REQ-359
   st.cadPositionMarkerAttrs = snap.cadPositionMarkerAttrs;
+  st.cadMultileaders      = snap.cadMultileaders;  // REQ-367
+  st.cadMultileaderAttrs  = snap.cadMultileaderAttrs;
   st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
   st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
@@ -23812,6 +23820,10 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.cadPositionMarkerAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  while (st.cadMultileaderAttrs.size() < st.cadMultileaders.size()) {  // REQ-367
+    st.cadMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
+    grew = true;
+  }
   while (st.cadBlockRefAttrs.size() < st.cadBlockRefs.size()) {
     st.cadBlockRefAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -24673,6 +24685,8 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadTableAttrs.clear();
   st.cadPositionMarkers.clear();  // REQ-359
   st.cadPositionMarkerAttrs.clear();
+  st.cadMultileaders.clear();  // REQ-367
+  st.cadMultileaderAttrs.clear();
   // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing
   // that already had runs would keep them alongside the imported content — the same "written before
   // pipe runs existed" miss the document snapshot had. The derived solids go with them, the way

@@ -1280,6 +1280,8 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadTableAttrs;
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
+  std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
+  std::vector<EntityAttributes> cadMultileaderAttrs;
   /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
   /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
   /// swapped for exactly this reason ("hide everything that is not the block being edited",
@@ -1455,6 +1457,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadTableAttrs;
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
+  std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
+  std::vector<EntityAttributes> cadMultileaderAttrs;
   /// Pipe runs and the networks that group them (issue #486 / REQ-345). Per DRAWING, like every
   /// other entity store here: without them, routing a run in one drawing left it rendering — and
   /// selectable, and snappable — in every other tab, because a tab switch swaps the whole document
@@ -3316,6 +3320,8 @@ struct AppCommandState {
   std::vector<EntityAttributes> cadTableAttrs;
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
+  std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
+  std::vector<EntityAttributes> cadMultileaderAttrs;
 
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef> cadBlockRefs;

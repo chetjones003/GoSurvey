@@ -367,6 +367,13 @@ struct CadAnnotation {
   std::vector<std::string> tableCells;
 };
 
+/// A multileader callout (REQ-367 / issue #619): leader path in LOCAL XYZ (triplets) plus MTEXT at the
+/// landing. v1 is DWG import/export and display; the MLEADER command is a follow-up increment.
+struct CadMultileader {
+  std::vector<float> pathXyz; ///< tip → … → landing, local storage (Z absolute like CadAnnotation::insZ).
+  CadAnnotation label;        ///< Kind::Mtext at the text side of the landing.
+};
+
 /// A Position Marker (REQ-359 item 3, D-2026-09-29-e): a cross inside a circle at a point, drawn at a
 /// fixed plotted size, plus its OWN multi-line label. One object — MOVE / COPY / ERASE / UNDO act on
 /// the marker and its label together — so the label lives here, not in `cadAnnotations`.
