@@ -520,6 +520,33 @@ TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (iss
   CHECK(in.cadMultileaders[0].label.text.find("Monument") != std::string::npos);
 }
 
+TEST_CASE("CadMultileader persists through GsIo JSON round trip (REQ-367, issue #619)",
+          "[issue619][gsio]") {
+  AppCommandState src;
+  CadMultileader ml{};
+  ml.pathXyz = {1.f, 2.f, 0.f, 11.f, 2.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.insX = 11.f;
+  ml.label.insY = 2.f;
+  ml.label.text = "Easement callout";
+  ml.label.boxMinX = 11.f;
+  ml.label.boxMinY = 1.f;
+  ml.label.boxMaxX = 22.f;
+  ml.label.boxMaxY = 2.5f;
+  src.cadMultileaders.push_back(std::move(ml));
+  EntityAttributes at{};
+  at.layer = "C-ANNO-TEXT";
+  src.cadMultileaderAttrs.push_back(at);
+  std::vector<std::string> log;
+  AppCommandState back;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
+  REQUIRE(back.cadMultileaders.size() == 1);
+  REQUIRE(back.cadMultileaderAttrs.size() == 1);
+  CHECK(back.cadMultileaders[0].pathXyz.size() == 6);
+  CHECK(back.cadMultileaders[0].label.text == "Easement callout");
+  CHECK(back.cadMultileaderAttrs[0].layer == "C-ANNO-TEXT");
+}
+
 TEST_CASE("ExportDwgFile writes a CadTable as grid lines and MTEXT (issue #616)",
           "[dwg][libredwg][issue616]") {
   ScratchDir dir("dwg-table-export");

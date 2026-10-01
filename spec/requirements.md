@@ -10698,11 +10698,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. **Open:** a decoded `MULTILEADER` with **mtext** content imports into `CadMultileader`. Block-content
      multileaders are named once in the REQ-201 log, not silently dropped. Legacy `LEADER` import unchanged.
   4. **Save:** when the chosen DWG version is **R2010 or newer**, each multileader writes as a native
-     `MULTILEADER` entity (GoSurvey vendored `dwg_add_MULTILEADER`). Older saves still use associated
-     `LEADER` + `MTEXT` (or segment `LINE`s if `dwg_add_LEADER` fails). A full `MLEADERSTYLE` dictionary
-     entry is deferred (LibreDWG encode gap; style handle may be null).
-  5. **Display (v1):** leader segments and label render in the viewport like other model annotations
-     (follow-up if not yet wired in the first increment).
+     `MULTILEADER` linked to a **Standard** `MLEADERSTYLE` (vendored `dwg_add_MULTILEADER` /
+     `dwg_add_MLEADERSTYLE`). Older saves still use associated `LEADER` + `MTEXT` (or segment `LINE`s
+     if `dwg_add_LEADER` fails). Custom multileader styles in the UI are not editable yet.
+  5. **Display (v1):** leader segments and label render in the viewport like other model annotations.
 - Acceptance:
   - a synthetic multileader with two path points and text survives Export DWG (R2018) → Import via
     `ImportLibreCadFile` with the same path point count and text; the saved R2018 file contains a

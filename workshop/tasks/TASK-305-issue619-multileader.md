@@ -1,7 +1,7 @@
 # TASK-305 — Multileaders + DWG (issue #619)
 
 - Type:    feature (**SPEC GAP** — propose REQ-367, then Verification → Workshop)
-- Status:  in progress (DWG #645–#648, viewport #646, MLEADER #647; MLEADERSTYLE export in flight)
+- Status:  in progress (core v1 shipped #645–#649; open: block-content import, custom MLEADERSTYLE UI, #622)
 - Opened:  2026-10-01
 - GitHub:  #619, tracker #601
 - Depends: R2018 export on beta (**#643**, D-2026-10-01-f) ✓
@@ -17,7 +17,7 @@ GoSurvey has no multileader object or command. DWG open skips `MULTILEADER`; old
 **Minimum scope (v1):**
 
 1. **Domain:** `CadMultileader` (or extend `CadAnnotation`) with arrow tip, knee(s), text anchor, MTEXT payload, layer/colour/transparency, style name ref.
-2. **Command:** `MLEADER` (ribbon slot exists, NYI) — pick arrow tip, pick landing/text location, open MTEXT editor.
+2. **Command:** `MLEADER` — pick arrow tip, pick landing/text location, open MTEXT editor (ribbon Multileader button wired).
 3. **DWG import:** Decode `MULTILEADER` when LibreDWG provides geometry; else log + optional explode-to-lines/text fallback (REQ-201).
 4. **DWG export (R2010+ default path):** Write `MULTILEADER` + `MLEADERSTYLE` (hand-built in vendored LibreDWG — no `dwg_add_MULTILEADER`). R2000/R2004 fallback: `LEADER` + `MTEXT` association where `dwg_add_LEADER` suffices.
 5. **Tests:** Round-trip one synthetic multileader at R2018; import sample from AutoCAD if committed fixture exists.
