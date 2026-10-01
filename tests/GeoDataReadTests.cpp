@@ -348,10 +348,10 @@ TEST_CASE("No GEODATA without a usable zone, and the reason says why (REQ-362)",
   }
 }
 
-TEST_CASE("R2004 DWG GEODATA uses class version 2 (issue #623)", "[req362][dwg][libredwg][issue623]") {
+TEST_CASE("R2018 DWG GEODATA uses class version 2 (issue #623)", "[req362][dwg][libredwg][issue623]") {
   LoadShippedDictionary();
   AppCommandState st = GeolocatedAtAg9976();
-  st.dwgExportVersion = DwgSaveVersion::R2004;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
   const std::string body = TempDwg("gosurvey-geodata-v2.dwg");
   std::vector<std::string> log;
   REQUIRE(ExportLibreCadFile(st, body.c_str(), log, /*asDxf=*/false));
@@ -364,6 +364,7 @@ TEST_CASE("R2004 DWG GEODATA uses class version 2 (issue #623)", "[req362][dwg][
         dwg.object[i].tio.object->tio.GEODATA == nullptr)
       continue;
     const Dwg_Object_GEODATA* g = dwg.object[i].tio.object->tio.GEODATA;
+    CHECK(g->class_version == 2);
     CHECK(g->coord_type == 3);
     CHECK(g->ref_pt.x == Catch::Approx(kLon).margin(1e-6));
     CHECK(g->ref_pt.y == Catch::Approx(kLat).margin(1e-6));

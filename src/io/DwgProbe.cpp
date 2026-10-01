@@ -141,10 +141,18 @@ std::string DwgVersionNameFromTag(const std::string& tag6) {
 const DwgExportFormatRow kDwgExportFormatRows[] = {
     {"AutoCAD 2000", "AC1015", DwgSaveVersion::R2000, true},
     {"AutoCAD 2004", "AC1018", DwgSaveVersion::R2004, true},
-    {"AutoCAD 2010", "AC1024", DwgSaveVersion::R2000, false},
-    {"AutoCAD 2013", "AC1027", DwgSaveVersion::R2000, false},
-    {"AutoCAD 2018", "AC1032", DwgSaveVersion::R2000, false},
+    {"AutoCAD 2010", "AC1024", DwgSaveVersion::R2010, true},
+    {"AutoCAD 2013", "AC1027", DwgSaveVersion::R2013, true},
+    {"AutoCAD 2018", "AC1032", DwgSaveVersion::R2018, true},
 };
+
+bool DwgSaveVersionUsesR2004Features(DwgSaveVersion version) {
+  return version >= DwgSaveVersion::R2004;
+}
+
+bool DwgSaveVersionUsesR2010Geodata(DwgSaveVersion version) {
+  return version >= DwgSaveVersion::R2010;
+}
 
 const DwgExportFormatRow* DwgExportFormatRows(size_t* outCount) {
   if (outCount != nullptr)
@@ -154,6 +162,12 @@ const DwgExportFormatRow* DwgExportFormatRows(size_t* outCount) {
 
 const char* DwgSaveVersionAcTag(DwgSaveVersion version) {
   switch (version) {
+  case DwgSaveVersion::R2018:
+    return "AC1032";
+  case DwgSaveVersion::R2013:
+    return "AC1027";
+  case DwgSaveVersion::R2010:
+    return "AC1024";
   case DwgSaveVersion::R2004:
     return "AC1018";
   case DwgSaveVersion::R2000:
@@ -164,6 +178,12 @@ const char* DwgSaveVersionAcTag(DwgSaveVersion version) {
 
 const char* DwgSaveVersionDisplayName(DwgSaveVersion version) {
   switch (version) {
+  case DwgSaveVersion::R2018:
+    return "AutoCAD 2018";
+  case DwgSaveVersion::R2013:
+    return "AutoCAD 2013";
+  case DwgSaveVersion::R2010:
+    return "AutoCAD 2010";
   case DwgSaveVersion::R2004:
     return "AutoCAD 2004";
   case DwgSaveVersion::R2000:

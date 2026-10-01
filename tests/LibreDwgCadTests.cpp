@@ -314,6 +314,20 @@ TEST_CASE("ExportLibreCadFile writes R2004 when dwgExportVersion is R2004 (issue
   REQUIRE(DwgVersionName(p.c_str()) == "AutoCAD 2004");
 }
 
+TEST_CASE("ExportLibreCadFile writes R2018 when dwgExportVersion is R2018", "[dwg][libredwg][r2018]") {
+  ScratchDir dir("dwg-r2018-export");
+  const auto p = (dir.path / "line.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(DwgVersionName(p.c_str()) == "AutoCAD 2018");
+  AppCommandState loaded;
+  REQUIRE(ImportDwgFile(loaded, p.c_str(), log));
+  REQUIRE(loaded.userLinesFlat.size() == 6);
+}
+
 TEST_CASE("R2004 DWG round-trips 24-bit entity and layer colours (issue #615)",
           "[dwg][libredwg][issue615]") {
   ScratchDir dir("dwg-truecolor-r2004");

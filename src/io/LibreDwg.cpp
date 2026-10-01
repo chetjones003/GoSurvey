@@ -96,6 +96,10 @@ bool LibreDwgWriteMinimalLine(Dwg_Version_Type version, const char* pathUtf8) {
   return err == DWG_NOERR;
 }
 
+bool LibreDwgWriteMinimalAtVersion(int libreDwgVersionType, const char* pathUtf8) {
+  return LibreDwgWriteMinimalLine(static_cast<Dwg_Version_Type>(libreDwgVersionType), pathUtf8);
+}
+
 bool LibreDwgWriteMinimalR2000(const char* pathUtf8) {
   return LibreDwgWriteMinimalLine(R_2000, pathUtf8);
 }

@@ -188,3 +188,20 @@ TEST_CASE("a default-constructed DwgConverter reports itself unavailable", "[dwg
   REQUIRE(c.kind == DwgConverterKind::None);
   REQUIRE_FALSE(c.available());
 }
+
+TEST_CASE("DwgExportFormatRows lists five selectable save versions (issue #600 / R2018)",
+          "[dwg][probe][issue600]") {
+  size_t count = 0;
+  const DwgExportFormatRow* rows = DwgExportFormatRows(&count);
+  REQUIRE(count == 5);
+  REQUIRE(rows[0].selectable);
+  REQUIRE(rows[0].version == DwgSaveVersion::R2000);
+  REQUIRE(std::string(rows[4].acTag) == "AC1032");
+  REQUIRE(rows[4].version == DwgSaveVersion::R2018);
+  REQUIRE(rows[4].selectable);
+  REQUIRE(DwgSaveVersionAcTag(DwgSaveVersion::R2013) == std::string("AC1027"));
+  REQUIRE(DwgSaveVersionUsesR2004Features(DwgSaveVersion::R2004));
+  REQUIRE_FALSE(DwgSaveVersionUsesR2004Features(DwgSaveVersion::R2000));
+  REQUIRE(DwgSaveVersionUsesR2010Geodata(DwgSaveVersion::R2018));
+  REQUIRE_FALSE(DwgSaveVersionUsesR2010Geodata(DwgSaveVersion::R2004));
+}

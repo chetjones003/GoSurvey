@@ -1519,6 +1519,22 @@ Dwg_Object_BLOCK_HEADER* ModelHeader(Dwg_Data* dwg) {
   return m->tio.object->tio.BLOCK_HEADER;
 }
 
+Dwg_Version_Type LibreDwgVersionFromExport(DwgSaveVersion version) {
+  switch (version) {
+  case DwgSaveVersion::R2018:
+    return R_2018;
+  case DwgSaveVersion::R2013:
+    return R_2013;
+  case DwgSaveVersion::R2010:
+    return R_2010;
+  case DwgSaveVersion::R2004:
+    return R_2004;
+  case DwgSaveVersion::R2000:
+  default:
+    return R_2000;
+  }
+}
+
 // REQ-170, issue #615: R2004+ writes 24-bit true colour; R2000 keeps nearest ACI (no rgb field).
 void SetCmcFromStorage(BITCODE_CMC* cmc, const std::string& storage, bool useTrueColor) {
   if (cmc == nullptr)
@@ -2550,7 +2566,7 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
                                                       &st.userArcAttrs,  &st.userPolylineAttrs,
                                                       &st.cadAnnotationAttrs, &st.userEllAttrs,
                                                       &st.cadFilledRegionAttrs};
-  const bool r2004Write = st.dwgExportVersion == DwgSaveVersion::R2004;
+  const bool r2004Write = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
   size_t nColorRounded = 0, nTransparency = 0;
   auto countRoundedRgb = [&](const std::string& colorStr) {
     if (r2004Write)
@@ -2844,7 +2860,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
 
   TableWriter tw;
   tw.dwg = dwg;
-  tw.useTrueColor = (st.dwgExportVersion == DwgSaveVersion::R2004);
+  tw.useTrueColor = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
   tw.layerState = &st;
   tw.BuildLayerTable(st);
   tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
@@ -3921,7 +3937,7 @@ static bool WriteDwgGeoData(Dwg_Data* dwg, const DwgGeoData& g) {
   geo = obj->tio.object->tio.GEODATA;
   const double northRad = std::atan2(g.northX, g.northY);  // from +Y towards +X
   geo->host_block = dwg_add_handleref(dwg, 4, msHandle, nullptr);
-  const bool geodataV2 = dwg->header.version >= R_2004;
+  const bool geodataV2 = dwg->header.version >= R_2010;
   geo->class_version = geodataV2 ? 2 : 1;
   if (geodataV2) {
     geo->coord_type = g.reference == DwgGeoData::Reference::Geographic
@@ -4121,8 +4137,7 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     return false;
   }
 
-  const Dwg_Version_Type libVer =
-      st.dwgExportVersion == DwgSaveVersion::R2004 ? R_2004 : R_2000;
+  const Dwg_Version_Type libVer = LibreDwgVersionFromExport(st.dwgExportVersion);
   Dwg_Data* dwg = dwg_new_Document(libVer, /*imperial=*/0, /*loglevel=*/0);
   if (dwg == nullptr) {
     log.push_back("CAD export — LibreDWG could not create a drawing.");

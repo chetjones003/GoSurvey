@@ -689,7 +689,8 @@ A change is rejected if it breaks any of these:
 
 #### ADR-024 addendum — native codec is LibreDWG   (2026-08-29, accepted)
 Phase 1 (converter) is unchanged as **shipped history**. The native phase in (d) is **ADR-041 /
-REQ-170**, not a from-scratch codec and not ODA. DWG write in that epic is R2000/R2004 only.
+REQ-170**, not a from-scratch codec and not ODA. DWG write in that epic is R2000–R2018 (not R2007;
+D-2026-10-01-f).
 See `spec/file-format-specs.md` and D-2026-08-29-g.
 
 ### ADR-023 — WYSIWYG MTEXT editing: an offset-carrying rich-span API + an in-tree rich text edit widget   (2026-07-30, accepted)
@@ -1825,13 +1826,15 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
 - Consequences: REQ-161; FetchContent `imgui_test_engine`; Debug-only CLI; a Release ctest that
   `dumpbin`s `GoSurvey.exe`. Screenshot golden images remain out of scope.
 
-### ADR-041 — LibreDWG is the DXF/DWG codec; DWG write stops at R2004   (2026-08-29, accepted)
+### ADR-041 — LibreDWG is the DXF/DWG codec; DWG write through R2018   (2026-08-29, accepted;
+amended 2026-10-01 D-2026-10-01-f)
 - Context:    ADR-024 shipped Phase 1 (DWG↔DXF via ODA File Converter or `accoreconsole`) and left
   the native codec as later work. `docs/dwg-plan.txt` PART 4 listed Route A (in-tree), B (LibreDWG),
   C (ODA SDK), D (converter). The user chose **B** for File Format Specs (D-2026-08-29-g): a full
-  DXF/DWG codec in-process, DWG **write up to 2004**, no ODA membership. Linking LibreDWG is GPL-3.0,
-  which the 2026-07-30 open-source decision already allowed. R2018 write still fails CRC upstream;
-  the user accepted down-convert rather than waiting for it.
+  DXF/DWG codec in-process, DWG **write up to 2004** initially, no ODA membership. Linking LibreDWG
+  is GPL-3.0, which the 2026-07-30 open-source decision already allowed. **2026-10-01 (D-2026-10-01-f):**
+  write extended through **R2018** for GoSurvey-synthesized files (vendored LibreDWG 0.14 + in-tree
+  fixes); foreign R2018 databases are still not bit-preserved (DM-08).
 - Decision:
   (a) **GNU LibreDWG is the CAD interchange codec.** IO owns a wrapper (`io/` beside `DwgIo` /
       `DxfIo`) that talks to LibreDWG. Commands/UI keep the existing File Import/Export entries.
@@ -1839,9 +1842,9 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
       DWG/DXF becomes LibreDWG, not `DxfIo` + a child process.
   (b) **Read:** every DWG version LibreDWG decodes (through AC1032 / R2018) and DXF (ASCII and
       binary as the library supports). No converter required for the happy path.
-  (c) **Write DWG:** R2000 (AC1015) and R2004 (AC1018) only. **Default R2000** (D-2026-09-30-c:
-      was R2004; LibreDWG 0.13.4 cannot build an R2004 document from scratch). R2007+ emit is
-      refused with a message, not a Recover-bait file. DXF write uses LibreDWG’s DXF writer for
+  (c) **Write DWG:** R2000 (AC1015), R2004 (AC1018), R2010 (AC1024), R2013 (AC1027), and R2018
+      (AC1032). **Default R2000** (D-2026-09-30-c). **R2007 (AC1021) is not offered.** Amended
+      2026-10-01 (D-2026-10-01-f). DXF write uses LibreDWG’s DXF writer for
       versions it supports; the log still names every GoSurvey type that has no DXF/DWG
       representation (meshes, TIN, clouds, PDF).
   (d) **Write is synthesized from the GoSurvey document**, not a bit-exact rewrite of an unread
