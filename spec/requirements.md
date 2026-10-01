@@ -909,7 +909,13 @@ requirements is a planning failure, not a sign of rigor.
   dialog (create/rename/delete/edit + re-bake referencing text); Phase 3 = Properties per-text
   overrides + oblique rendering. 2026-07-29 — DXF STYLE-table round-trip un-deferred: import now
   registers the STYLE table as live text styles and links imported TEXT/MTEXT to them (imported height
-  is a per-text override); editing an imported style's font ripples to the imported text.
+  is a per-text override); editing an imported style's font ripples to the imported text. 2026-10-01 —
+  DWG export, issue #604: writes a STYLE table entry (font, height, oblique angle — not bold/italic;
+  LibreDWG's STYLE record has no flags for them) for every non-Standard style and points each
+  TEXT/MTEXT at the right one by name, alongside fixing rotation (both entity types), MTEXT
+  attachment/insertion point and height (none were written before), and the degree/plus-minus signs
+  (AutoCAD's codepage-independent `%%d`/`%%p` control codes — see REQ-170's revision for why full
+  Unicode is deferred).
 
 ### REQ-045 — PAN command (interactive view pan via the command line)
 - Purpose: AutoCAD-style typed panning — the user asked for a PAN command because only
@@ -3666,6 +3672,15 @@ requirements is a planning failure, not a sign of rigor.
   2026-09-30 — default save R2004 → **R2000** (D-2026-09-30-c): the product has always written
   R2000, and LibreDWG 0.13.4 crashes building an R2004 document from scratch (TASK-298). Issue #590
   (PR #595) made those R2000 files open in AutoCAD 2027 without Recover.
+  2026-10-01 — issue #604, text character fix scoped down: non-ASCII UTF-8 text written to an
+  R2000 DWG is misread by AutoCAD as garbage (R2000 is pre-R2007, ANSI-codepage strings), and
+  LibreDWG 0.13.4's own fix for this (`bit_utf8_to_TV`, a `\U+XXXX` escaper) is wired into no
+  caller anywhere in the library — completely unexercised code, the same category of risk that
+  produced D-2026-09-30-f's crash. Scoped to the two symbols survey text actually needs (degree,
+  plus/minus — bearings and tolerances), substituted via AutoCAD's own codepage-independent `%%d`
+  /`%%p` control codes, which need no Unicode handling at all. Other non-ASCII characters (accents,
+  non-Latin letters) still write as raw UTF-8 bytes and still misread, unchanged from before; wiring
+  up the general fix, verified under page heap first, is deferred.
 
 ### REQ-171 — Point cloud entity
 - Purpose: File Format Specs — hold laser-scan points without pretending they are a TIN (REQ-068)

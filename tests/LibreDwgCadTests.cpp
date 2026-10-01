@@ -1645,3 +1645,133 @@ TEST_CASE("DWG export writes a feature line as POLYLINE_3D with XDATA identity (
   CHECK(eedStrings[1] == "North run");
   dwg_free(&dwg);
 }
+
+// REQ-170 / REQ-044, issue #604: TEXT keeps its rotation and its named style, and the degree
+// sign (the character issue #604 calls out — "almost every survey bearing") round-trips via
+// AutoCAD's codepage-independent %%d control code rather than a raw UTF-8 byte ANSI misreads.
+TEST_CASE("DWG export writes TEXT rotation, style, and the degree sign (issue #604)",
+          "[dwg][libredwg][req170][req044][issue604]") {
+  ScratchDir dir("dwg-text-rotation");
+  const auto p = (dir.path / "text.dwg").string();
+  AppCommandState st;
+  st.worldDocumentOriginX = 0.0;
+  st.worldDocumentOriginY = 0.0;
+  TextStyle ts;
+  ts.name = "Survey";
+  ts.fontFamily = "Arial";
+  ts.heightInches = 0.1f;
+  st.textStyles.push_back(ts);
+
+  CadAnnotation an;
+  an.kind = CadAnnotation::Kind::Text;
+  an.insX = 5.f;
+  an.insY = 10.f;
+  an.insZ = 0.f;
+  an.plottedHeightInches = 0.1f;
+  an.rotationRad = 0.5f;
+  an.text = "N 45\xC2\xB0 30' E";  // UTF-8 degree sign
+  an.styleName = "Survey";
+  st.cadAnnotations.push_back(an);
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int nText = 0;
+  double rotation = -1.0;
+  std::string text, styleName;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype != DWG_TYPE_TEXT || o->tio.entity == nullptr || o->tio.entity->tio.TEXT == nullptr)
+      continue;
+    ++nText;
+    const Dwg_Entity_TEXT* t = o->tio.entity->tio.TEXT;
+    rotation = t->rotation;
+    text = libredwgcad_detail::DecodeDwgString(t->text_value, false);
+    if (t->style != nullptr) {
+      Dwg_Object* sObj = dwg_resolve_handle_silent(&dwg, t->style->absolute_ref);
+      if (sObj != nullptr && sObj->tio.object != nullptr && sObj->tio.object->tio.STYLE != nullptr)
+        styleName = libredwgcad_detail::DecodeDwgString(sObj->tio.object->tio.STYLE->name, false);
+    }
+  }
+  CHECK(nText == 1);
+  CHECK(rotation == Catch::Approx(0.5).margin(1e-6));
+  CHECK(text.find("%%d") != std::string::npos);
+  CHECK(styleName == "Survey");
+  dwg_free(&dwg);
+}
+
+// REQ-170 / REQ-044, issue #604: MTEXT keeps its rotation, attachment, height and style.
+TEST_CASE("DWG export writes MTEXT rotation, attachment, height, and style (issue #604)",
+          "[dwg][libredwg][req170][req044][issue604]") {
+  ScratchDir dir("dwg-mtext-attach");
+  const auto p = (dir.path / "mtext.dwg").string();
+  AppCommandState st;
+  st.worldDocumentOriginX = 0.0;
+  st.worldDocumentOriginY = 0.0;
+  TextStyle ts;
+  ts.name = "Survey";
+  ts.fontFamily = "Arial";
+  ts.heightInches = 0.1f;
+  st.textStyles.push_back(ts);
+
+  CadAnnotation an;
+  an.kind = CadAnnotation::Kind::Mtext;
+  an.insX = 0.f;
+  an.insY = 0.f;
+  an.insZ = 0.f;
+  an.plottedHeightInches = 0.1f;
+  an.rotationRad = 1.5707963267948966f;  // 90 degrees
+  an.text = "Middle Center";
+  an.boxMinX = 0.f;
+  an.boxMinY = 0.f;
+  an.boxMaxX = 10.f;
+  an.boxMaxY = 4.f;
+  an.mtextAttach = 5;  // middle-center
+  an.styleName = "Survey";
+  st.cadAnnotations.push_back(an);
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int nMtext = 0;
+  double insX = -1.0, insY = -1.0, textHeight = -1.0;
+  int attachment = -1;
+  double axX = 0.0, axY = 0.0;
+  std::string styleName;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype != DWG_TYPE_MTEXT || o->tio.entity == nullptr || o->tio.entity->tio.MTEXT == nullptr)
+      continue;
+    ++nMtext;
+    const Dwg_Entity_MTEXT* m = o->tio.entity->tio.MTEXT;
+    insX = m->ins_pt.x;
+    insY = m->ins_pt.y;
+    textHeight = m->text_height;
+    attachment = m->attachment;
+    axX = m->x_axis_dir.x;
+    axY = m->x_axis_dir.y;
+    if (m->style != nullptr) {
+      Dwg_Object* sObj = dwg_resolve_handle_silent(&dwg, m->style->absolute_ref);
+      if (sObj != nullptr && sObj->tio.object != nullptr && sObj->tio.object->tio.STYLE != nullptr)
+        styleName = libredwgcad_detail::DecodeDwgString(sObj->tio.object->tio.STYLE->name, false);
+    }
+  }
+  CHECK(nMtext == 1);
+  CHECK(attachment == 5);
+  // Middle-center of a 10x4 box: (5, 2).
+  CHECK(insX == Catch::Approx(5.0).margin(1e-6));
+  CHECK(insY == Catch::Approx(2.0).margin(1e-6));
+  CHECK(textHeight > 0.0);
+  CHECK(axX == Catch::Approx(0.0).margin(1e-6));
+  CHECK(axY == Catch::Approx(1.0).margin(1e-6));
+  CHECK(styleName == "Survey");
+  dwg_free(&dwg);
+}

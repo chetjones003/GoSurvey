@@ -725,6 +725,7 @@ struct TableWriter {
   // invalidate raw pointers cached from an earlier BuildLayerTable / EnsureLtype call.
   std::unordered_map<std::string, BITCODE_BL> layers;  // lower(name) -> parent objid
   std::unordered_map<std::string, BITCODE_BL> ltypes;  // lower(name) -> parent objid
+  std::unordered_map<std::string, BITCODE_BL> styles;  // lower(name) -> parent objid
 
   static bool IsPlainLinetype(const std::string& n) {
     const std::string l = LowerAscii(n);
@@ -782,6 +783,36 @@ struct TableWriter {
     }
   }
 
+  // REQ-044 / REQ-170, issue #604: the STYLE table (TEXT/MTEXT's font, height, oblique angle),
+  // same shape as BuildLayerTable above. "Standard" is skipped: dwg_new_Document already creates
+  // it (TEXTSTYLE header var points at it, and dwg_add_TEXT/MTEXT/ATTDEF/ATTRIB default `style`
+  // to it), so adding it again would be a second, conflicting STYLE named "Standard".
+  void BuildStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
+    for (const TextStyle& ts : st.textStyles) {
+      if (ts.name.empty() || LowerAscii(ts.name) == "standard")
+        continue;
+      Dwg_Object_STYLE* sy = dwg_add_STYLE(dwg, ts.name.c_str());
+      if (sy == nullptr || sy->parent == nullptr)
+        continue;
+      sy->text_size = static_cast<double>(ts.heightInches * std::max(modelUnitsPerPlottedInch, 1.e-6f));
+      sy->width_factor = 1.0;
+      sy->oblique_angle = static_cast<double>(ts.obliqueDeg) * (kPi / 180.0);
+      // fontFamily empty = app default (romans.shx), same convention TextStyle.hpp documents.
+      sy->font_file = dwg_add_u8_input(dwg, ts.fontFamily.empty() ? "romans.shx" : ts.fontFamily.c_str());
+      styles[LowerAscii(ts.name)] = sy->parent->objid;
+    }
+  }
+
+  // Returns the STYLE table objid for `name`, or -1 (meaning "leave the entity's default alone" —
+  // dwg_add_TEXT/MTEXT already points it at Standard) when the name is empty, "Standard", or not
+  // in the table (e.g. an annotation referencing a style that was since deleted).
+  BITCODE_BL StyleObjId(const std::string& name) const {
+    if (name.empty() || LowerAscii(name) == "standard")
+      return static_cast<BITCODE_BL>(-1);
+    auto it = styles.find(LowerAscii(name));
+    return it != styles.end() ? it->second : static_cast<BITCODE_BL>(-1);
+  }
+
   void Apply(Dwg_Object_Entity* ent, const EntityAttributes& a) {
     if (ent == nullptr)
       return;
@@ -809,6 +840,40 @@ struct TableWriter {
     }
   }
 };
+
+// REQ-170, issue #604: LibreDWG 0.13.4's pre-R2007 string writer (dwg_add_u8_input) does not
+// encode non-ASCII UTF-8 as the `\U+XXXX` escape AutoCAD expects for an ANSI-codepage DWG (R2000
+// is pre-R2007) — its own TODO for that is `#if 0`'d out and calls an internal function with no
+// other caller anywhere in the library, so wiring it in untested is exactly the kind of risk that
+// produced the D-2026-09-30-f crash. Degree and plus/minus, the two symbols survey text actually
+// uses (bearings, tolerances), have had dedicated, codepage-independent AutoCAD control codes
+// since R12 — `%%d` / `%%p` — that need no Unicode handling at all, so those two are substituted
+// directly. Other non-ASCII characters (accents, non-Latin letters) are passed through as raw
+// UTF-8 bytes and will still show as garbage in AutoCAD, unchanged from before this fix; full
+// Unicode support is the deferred, harder half of issue #604's character fix.
+std::string SanitizeDwgTextSymbols(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size();) {
+    const unsigned char c0 = static_cast<unsigned char>(s[i]);
+    if (c0 == 0xC2 && i + 1 < s.size()) {
+      const unsigned char c1 = static_cast<unsigned char>(s[i + 1]);
+      if (c1 == 0xB0) {  // U+00B0 DEGREE SIGN
+        out += "%%d";
+        i += 2;
+        continue;
+      }
+      if (c1 == 0xB1) {  // U+00B1 PLUS-MINUS SIGN
+        out += "%%p";
+        i += 2;
+        continue;
+      }
+    }
+    out += s[i];
+    ++i;
+  }
+  return out;
+}
 
 const EntityAttributes* AttrAt(const std::vector<EntityAttributes>& v, size_t i) {
   return i < v.size() ? &v[i] : nullptr;
@@ -993,6 +1058,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   TableWriter tw;
   tw.dwg = dwg;
   tw.BuildLayerTable(st);
+  tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
   // Register every linetype the entities reference up front, so no LTYPE table object is created
   // after the entity records have started going into the object array.
   for (const std::vector<EntityAttributes>* v :
@@ -1299,19 +1365,52 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     const CadAnnotation& an = st.cadAnnotations[i];
     if (an.surveyPointLabelForId >= 0)
       continue;
-    dwg_point_3d p{};
-    world(an.insX, an.insY, an.insZ, &p);
-    const double h = static_cast<double>(an.plottedHeightInches) *
-                     std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
+    const double h = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
     const EntityAttributes* at = AttrAt(st.cadAnnotationAttrs, i);
+    const BITCODE_BL styleId = tw.StyleObjId(an.styleName);
     if (an.kind == CadAnnotation::Kind::Mtext) {
-      Dwg_Entity_MTEXT* e = dwg_add_MTEXT(hdr, &p, std::max(h * 10.0, 1.0), an.text.c_str());
-      if (e != nullptr)
+      // REQ-044 / REQ-170, issue #604: insertion point is the box corner/edge the attachment
+      // selects — same convention DxfIo.cpp's MTEXT writer uses (group 71: col = (attach-1)%3,
+      // row = (attach-1)/3), so a GoSurvey DWG and its DXF sibling place the box identically.
+      const int attach = std::clamp(an.mtextAttach, 1, 9);
+      const int acol = (attach - 1) % 3;
+      const int arow = (attach - 1) / 3;
+      const float bMnX = std::min(an.boxMinX, an.boxMaxX), bMxX = std::max(an.boxMinX, an.boxMaxX);
+      const float bMnY = std::min(an.boxMinY, an.boxMaxY), bMxY = std::max(an.boxMinY, an.boxMaxY);
+      const float insXl = acol == 0 ? bMnX : acol == 1 ? 0.5f * (bMnX + bMxX) : bMxX;
+      const float insYl = arow == 0 ? bMxY : arow == 1 ? 0.5f * (bMnY + bMxY) : bMnY;
+      dwg_point_3d p{};
+      world(insXl, insYl, an.insZ, &p);
+      const double bw = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
+      std::string wire;
+      for (char ch : MtextRichFlattenToPlain(SanitizeDwgTextSymbols(an.text))) {
+        if (ch == '\n')
+          wire += "\\P";
+        else if (ch != '\r')
+          wire += ch;
+      }
+      Dwg_Entity_MTEXT* e = dwg_add_MTEXT(hdr, &p, bw, wire.c_str());
+      if (e != nullptr) {
+        e->text_height = h;
+        e->attachment = static_cast<BITCODE_BS>(attach);
+        const double rotRad = static_cast<double>(an.rotationRad);
+        e->x_axis_dir.x = std::cos(rotRad);
+        e->x_axis_dir.y = std::sin(rotRad);
+        e->x_axis_dir.z = 0.0;
+        if (styleId != static_cast<BITCODE_BL>(-1))
+          e->style = tw.RefObjId(styleId);
         apply(e->parent, at);
+      }
     } else if (an.kind == CadAnnotation::Kind::Text) {
-      Dwg_Entity_TEXT* e = dwg_add_TEXT(hdr, an.text.c_str(), &p, h);
-      if (e != nullptr)
+      dwg_point_3d p{};
+      world(an.insX, an.insY, an.insZ, &p);
+      Dwg_Entity_TEXT* e = dwg_add_TEXT(hdr, SanitizeDwgTextSymbols(an.text).c_str(), &p, h);
+      if (e != nullptr) {
+        e->rotation = static_cast<double>(an.rotationRad);
+        if (styleId != static_cast<BITCODE_BL>(-1))
+          e->style = tw.RefObjId(styleId);
         apply(e->parent, at);
+      }
     }
   }
   // Position Markers (REQ-359 item 3, D-2026-09-29-e): other programs see a CIRCLE, a cross of two
