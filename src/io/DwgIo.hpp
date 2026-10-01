@@ -7,8 +7,28 @@
 struct AppCommandState;
 
 // DWG interchange via GNU LibreDWG (REQ-170 / ADR-041). File Import/Export does not use ODA
-// File Converter or AutoCAD. Save is R2000 (AC1015) — LibreDWG 0.13.4's working encode target.
-// FindDwgConverter remains for 3D solid tessellation only (not File DWG).
+// File Converter or AutoCAD for read/write. Save targets R2000/R2004 (user picks at export;
+// D-2026-10-01-a). FindDwgConverter remains for 3D solid tessellation only (not File DWG).
+
+/// DWG save format the user chose in the Export DWG dialog (issue #600).
+enum class DwgSaveVersion {
+  R2000 = 0,
+  R2004 = 1,
+};
+
+/// One row in the Export DWG version list (selectable or "coming later").
+struct DwgExportFormatRow {
+  const char* displayName;  ///< e.g. "AutoCAD 2004"
+  const char* acTag;        ///< six-char magic, e.g. "AC1018"
+  DwgSaveVersion version;   ///< meaningful only when \c selectable
+  bool selectable;
+};
+
+/// Menu order for the export dialog; non-selectable rows are shown disabled.
+const DwgExportFormatRow* DwgExportFormatRows(size_t* outCount);
+
+const char* DwgSaveVersionAcTag(DwgSaveVersion version);
+const char* DwgSaveVersionDisplayName(DwgSaveVersion version);
 
 enum class DwgConverterKind {
   None = 0,

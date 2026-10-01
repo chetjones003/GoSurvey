@@ -131,9 +131,38 @@ void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log
   // REQ-170 / REQ-201, issue #614: the warning is built from what THIS drawing actually contains
   // — not a fixed list — so it never claims a loss the writer no longer has, and never stays
   // silent about one it does.
+  ImGui::TextUnformatted("DWG format:");
+  size_t nFormats = 0;
+  const DwgExportFormatRow* formats = DwgExportFormatRows(&nFormats);
+  char comboPreview[96];
+  std::snprintf(comboPreview, sizeof(comboPreview), "%s (%s)",
+                DwgSaveVersionDisplayName(cmd.dwgExportVersion),
+                DwgSaveVersionAcTag(cmd.dwgExportVersion));
+  if (ImGui::BeginCombo("##dwgformat", comboPreview)) {
+    for (size_t i = 0; i < nFormats; ++i) {
+      const DwgExportFormatRow& row = formats[i];
+      if (!row.selectable) {
+        ImGui::BeginDisabled();
+        char line[96];
+        std::snprintf(line, sizeof(line), "%s (%s) — coming later", row.displayName, row.acTag);
+        ImGui::Selectable(line, false);
+        ImGui::EndDisabled();
+        continue;
+      }
+      const bool selected = cmd.dwgExportVersion == row.version;
+      if (ImGui::Selectable(row.displayName, selected)) {
+        cmd.dwgExportVersion = row.version;
+      }
+      if (selected)
+        ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::Spacing();
+
   const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(cmd);
   if (!losses.empty()) {
-    ImGui::TextUnformatted("GoSurvey writes DWG with LibreDWG as AutoCAD 2000 (AC1015). This export drops:");
+    ImGui::Text("This export drops (as %s):", DwgSaveVersionAcTag(cmd.dwgExportVersion));
     ImGui::Spacing();
     for (const DwgExportLoss& loss : losses)
       ImGui::BulletText("%d %s", loss.count, loss.label.c_str());
