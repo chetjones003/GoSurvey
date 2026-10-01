@@ -472,6 +472,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # and dependency-free like brep.cpp itself — no LibreDWG, no GL — so a malformed or unsupported
   # record is caught against a hand-authored SAT fixture rather than a real vendor block library.
   src/util/AcisSatParser.cpp
+  src/util/AcisSatWriter.cpp
   # REQ-315 / ADR-048: the freeform (NURBS) surface patch — pure math (evaluation, derivatives,
   # validation, the loft builders), no GL and no brep coupling, so its correctness is pinned against
   # closed-form circle / plane expectations rather than a viewport.
@@ -1027,6 +1028,7 @@ if(GOSURVEY_BUILD_TESTS)
     # fixture pins the supported plane/cylinder/cone shapes and every refusal without a DWG file.
     tests/AcisSatParserTests.cpp
     src/util/AcisSatParser.cpp
+  src/util/AcisSatWriter.cpp
     src/util/brep.cpp
     # REQ-315 / ADR-048: the NURBS patch math. Partition-of-unity, a bilinear patch reproducing a
     # plane, a rational arc row that is exactly on its circle, and derivative agreement with finite

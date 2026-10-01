@@ -1,6 +1,7 @@
 #include "util/AcisSatParser.hpp"
 
 #include "util/brep.hpp"
+#include "util/cadpiperun.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -548,4 +549,70 @@ TEST_CASE("ACIS SAT import: a real Civil 3D flange (.sat, ACISOUT) imports as a 
   CHECK(b.mn.x == Catch::Approx(4998.59457).margin(0.01));   // the body transform placed the part
   CHECK(b.mn.y == Catch::Approx(4998.52899).margin(0.01));
   CHECK(b.mx.z == Catch::Approx(0.25).margin(0.01));
+}
+
+TEST_CASE("ExportSatSolid round-trips a primitive box (issue #612)", "[issue612][acissat]") {
+  brep::Solid s;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 2.0, 3.0, 4.0, &s, &why));
+  const acissat::ExportResult ex = acissat::ExportSatSolid(s, "box");
+  REQUIRE(ex.ok);
+  CHECK(Contains(ex.sat, "ASM"));
+  const acissat::ImportResult im = acissat::ImportSatSolid(ex.sat, "box");
+  INFO(im.error);
+  REQUIRE(im.ok);
+  const brep::MassProperties mp = brep::ComputeMassProperties(im.solid);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume == Catch::Approx(2.0 * 3.0 * 4.0).margin(0.05));
+}
+
+TEST_CASE("ExportSatSolid round-trips a primitive cylinder (issue #612)", "[issue612][acissat]") {
+  brep::Solid s;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeCylinder(ucs::Ucs{}, 2.0, 5.0, &s, &why));
+  const acissat::ExportResult ex = acissat::ExportSatSolid(s, "cylinder");
+  INFO(ex.error);
+  REQUIRE(ex.ok);
+  const acissat::ImportResult im = acissat::ImportSatSolid(ex.sat, "cylinder");
+  INFO(im.error);
+  REQUIRE(im.ok);
+  const brep::MassProperties mp = brep::ComputeMassProperties(im.solid);
+  REQUIRE(mp.valid);
+  const double pi = 3.14159265358979323846;
+  CHECK(mp.volume == Catch::Approx(pi * 2.0 * 2.0 * 5.0).margin(0.1));
+}
+
+TEST_CASE("ExportSatSolid round-trips a straight pipe run sweep (issue #612)", "[issue612][acissat]") {
+  CadPipeRun run;
+  run.nominalSize = "4in";
+  run.vertsXyz = {0.f, 0.f, 0.f, 20.f, 0.f, 0.f};
+  std::vector<CadSolidPtr> built;
+  REQUIRE(CadBuildPipeRunSolids(run, &built));
+  REQUIRE(built.size() == 1);
+  const acissat::ExportResult ex = acissat::ExportSatSolid(*built[0], "pipe");
+  INFO(ex.error);
+  REQUIRE(ex.ok);
+  const acissat::ImportResult im = acissat::ImportSatSolid(ex.sat, "pipe");
+  INFO(im.error);
+  REQUIRE(im.ok);
+  const brep::MassProperties before = brep::ComputeMassProperties(*built[0]);
+  const brep::MassProperties after = brep::ComputeMassProperties(im.solid);
+  REQUIRE(before.valid);
+  REQUIRE(after.valid);
+  CHECK(after.volume == Catch::Approx(before.volume).margin(before.volume * 0.05));
+}
+
+TEST_CASE("ExportSatSolid round-trips an L-shaped pipe run sweep (issue #612)", "[issue612][acissat]") {
+  CadPipeRun run;
+  run.nominalSize = "4in";
+  run.vertsXyz = {0.f, 0.f, 0.f, 20.f, 0.f, 0.f, 20.f, 15.f, 0.f};
+  std::vector<CadSolidPtr> built;
+  REQUIRE(CadBuildPipeRunSolids(run, &built));
+  REQUIRE(built.size() == 1);
+  const acissat::ExportResult ex = acissat::ExportSatSolid(*built[0], "pipe");
+  INFO(ex.error);
+  REQUIRE(ex.ok);
+  const acissat::ImportResult im = acissat::ImportSatSolid(ex.sat, "pipe");
+  INFO(im.error);
+  REQUIRE(im.ok);
 }

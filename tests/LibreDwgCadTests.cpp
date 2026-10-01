@@ -10,6 +10,8 @@
 #include "SurveyPoints.hpp"
 #include "io/SurveyCsv.hpp"
 #include "util/ucs.hpp"
+#include "util/brep.hpp"
+#include "util/cadpiperun.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -114,6 +116,82 @@ TEST_CASE("LibreDWG DWG round-trips a model-space LINE", "[dwg][libredwg]") {
 }
 
 // Issue #600: full export path respects dwgExportVersion (LibreDWG body only — no trailer).
+namespace {
+
+int CountDwg3DSolids(const char* pathUtf8) {
+  Dwg_Data dwg{};
+  if (dwg_read_file(pathUtf8, &dwg) != 0) {
+    dwg_free(&dwg);
+    return -1;
+  }
+  int n = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].type == DWG_TYPE__3DSOLID)
+      ++n;
+  }
+  dwg_free(&dwg);
+  return n;
+}
+
+}  // namespace
+
+TEST_CASE("ExportDwgFile writes a CYLINDER recipe cadSolid as 3DSOLID (issue #612)",
+          "[dwg][libredwg][issue612]") {
+  ScratchDir dir("dwg-solid-cylinder");
+  const auto p = (dir.path / "cyl.dwg").string();
+  AppCommandState st;
+  brep::Solid s;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeCylinder(ucs::Ucs{}, 2.0, 8.0, &s, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+  st.cadSolidAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  REQUIRE(CountDwg3DSolids(p.c_str()) == 1);
+}
+
+TEST_CASE("ExportDwgFile writes a BOX cadSolid as 3DSOLID (issue #612)", "[dwg][libredwg][issue612]") {
+  ScratchDir dir("dwg-solid-box");
+  const auto p = (dir.path / "box.dwg").string();
+  AppCommandState st;
+  brep::Solid s;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 4.0, 5.0, 6.0, &s, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+  st.cadSolidAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  REQUIRE(CountDwg3DSolids(p.c_str()) == 1);
+}
+
+TEST_CASE("ExportDwgFile writes a straight pipe run as 3DSOLID (issue #612)", "[dwg][libredwg][issue612]") {
+  ScratchDir dir("dwg-pipe-run");
+  const auto p = (dir.path / "pipe.dwg").string();
+  AppCommandState st;
+  CadPipeRun run;
+  run.nominalSize = "4in";
+  run.vertsXyz = {0.f, 0.f, 0.f, 20.f, 0.f, 0.f};
+  st.cadPipeRuns.push_back(std::move(run));
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  REQUIRE(CountDwg3DSolids(p.c_str()) >= 1);
+}
+
+TEST_CASE("ExportDwgFile writes an L-shaped pipe run as 3DSOLID (issue #612)", "[dwg][libredwg][issue612]") {
+  ScratchDir dir("dwg-pipe-elbow");
+  const auto p = (dir.path / "elbow.dwg").string();
+  AppCommandState st;
+  CadPipeRun run;
+  run.nominalSize = "4in";
+  run.vertsXyz = {0.f, 0.f, 0.f, 20.f, 0.f, 0.f, 20.f, 15.f, 0.f};
+  st.cadPipeRuns.push_back(std::move(run));
+  st.cadPipeRunAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  REQUIRE(CountDwg3DSolids(p.c_str()) >= 1);
+}
+
 TEST_CASE("ExportLibreCadFile writes R2004 when dwgExportVersion is R2004 (issue #600)",
           "[dwg][libredwg][issue600]") {
   ScratchDir dir("dwg-r2004-export");
@@ -1397,6 +1475,25 @@ TEST_CASE("DWG export loss summary is empty for a drawing of only lines and circ
   st.userCircleAttrs = {EntityAttributes{}};
   const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(st);
   CHECK(losses.empty());
+}
+
+TEST_CASE("DWG export loss summary omits exportable solids and pipe runs (issue #612 / #614)",
+          "[dwg][libredwg][issue612][req170][req201][issue614]") {
+  AppCommandState st;
+  OneLine(st);
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 1.0, 1.0, 1.0, &box, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  CadPipeRun run;
+  run.nominalSize = "4in";
+  run.vertsXyz = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+  st.cadPipeRuns.push_back(std::move(run));
+  const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(st);
+  for (const DwgExportLoss& l : losses) {
+    CHECK(l.label.find("solid") == std::string::npos);
+    CHECK(l.label.find("pipe run") == std::string::npos);
+  }
 }
 
 TEST_CASE("DWG export loss summary lists exactly 5 pipe runs and 1 table (issue #614)",

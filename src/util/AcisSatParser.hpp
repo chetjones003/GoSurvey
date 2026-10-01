@@ -3,6 +3,7 @@
 #include "brep.hpp"
 
 #include <string>
+#include <string_view>
 
 /// ACIS SAT ("Standard ACIS Text") record parser (REQ-320 / ADR-051, GitHub issue #299).
 ///
@@ -69,5 +70,17 @@ struct ImportResult {
 /// builds a single `brep::Solid` from its one supported body. \p entityLabel is used only to make the
 /// error message specific (e.g. a DWG entity handle) and may be empty.
 [[nodiscard]] ImportResult ImportSatSolid(const std::string& sat, const std::string& entityLabel);
+
+/// Outcome of serialising one `brep::Solid` to simplified ACIS SAT (ADR-051 schema), for
+/// `dwg_add_3DSOLID` (issue #612 / D-2026-10-01-d).
+struct ExportResult {
+  bool ok = false;
+  std::string sat;
+  std::string error;
+};
+
+/// Builds a SAT v1 text stream for \p solid when its topology stays within ADR-051 export scope.
+/// \p entityLabel names the object in refusal messages only.
+[[nodiscard]] ExportResult ExportSatSolid(const brep::Solid& solid, std::string_view entityLabel);
 
 }  // namespace acissat
