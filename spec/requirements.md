@@ -1927,7 +1927,18 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-11 — initial. 2026-08-11 — **amended**: the statement originally specified
   additive parallel Z arrays per ADR-025 D1. That design rested on an incorrect reading of the
   existing strides (`userLinesFlat` and `userPolylineVerts` already carry Z inline). Corrected to
-  interleaved XYZ throughout; see the ADR-025 correction note and the decision log.
+  interleaved XYZ throughout; see the ADR-025 correction note and the decision log. 2026-10-01 —
+  **amended** (D-2026-10-01-a, issue #603): "Z survives a round-trip through DXF, DWG and `.gs`"
+  had never actually been true for DWG polylines — `src/io/LibreDwgCad.cpp` built every polyline
+  as a flat LWPOLYLINE at Z = 0 regardless of its vertices' real Z, and never set LWPOLYLINE's own
+  `elevation` field even for a flat polyline sitting at a non-zero Z. Fixed: a run whose vertices
+  share one Z writes as LWPOLYLINE with that elevation; a run whose vertices do not writes as
+  POLYLINE_3D (a real Z per vertex) instead, degrading only its bulge (POLYLINE_3D carries none) —
+  not its elevations. Survey feature lines, not covered by this REQ's entity list, now write the
+  same way, with name/description as GOSURVEY-appid XDATA (the user's choice over a plain
+  polyline with no identity data; invisible to AutoCAD/Civil 3D, read only by a future
+  GoSurvey-aware tool — GoSurvey's own reopen already recovers them losslessly from the ADR-044
+  trailer).
 
 ### REQ-058 — Orbitable 3D camera with ray picking and a UCS work plane
 - Purpose: make the third dimension inspectable and drawable-in

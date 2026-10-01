@@ -843,6 +843,56 @@ Dwg_Object_BLOCK_HEADER* EnsureSurveyPointBlockDef(Dwg_Data* dwg, double markerR
   return blkhdr;
 }
 
+// REQ-057 / D-2026-10-01-a, issue #603: attaches GOSURVEY-appid XDATA string entries to an
+// entity — one group-0 EED per string, chained under the one APPID handle registered in the
+// first entry (mirrors encode.c's own internal `add_DUMMY_eed`, the only precedent in this
+// vendored library for hand-building an EED record; see that function for the byte layout this
+// follows byte-for-byte, generalized from one string to N). Invisible in AutoCAD/Civil 3D, which
+// is the point — it survives for a future GoSurvey-aware reader without cluttering the drawing;
+// GoSurvey's own reopen never reads it, since ImportDwgFile prefers the lossless ADR-044 trailer.
+// Returns false (leaving the entity's EED untouched) if the APPID could not be registered.
+bool AppendGosurveyStringEed(Dwg_Data* dwg, Dwg_Object_Entity* ent, const std::vector<std::string>& strs) {
+  if (ent == nullptr || strs.empty())
+    return false;
+  BITCODE_H appid = dwg_find_tablehandle(dwg, "GOSURVEY", "APPID");
+  if (appid == nullptr) {
+    if (dwg_add_APPID(dwg, "GOSURVEY") == nullptr)
+      return false;
+    appid = dwg_find_tablehandle(dwg, "GOSURVEY", "APPID");
+    if (appid == nullptr)
+      return false;
+  }
+  const BITCODE_BL n = static_cast<BITCODE_BL>(strs.size());
+  Dwg_Eed* eed = static_cast<Dwg_Eed*>(calloc(n, sizeof(Dwg_Eed)));
+  if (eed == nullptr)
+    return false;
+  ent->eed = eed;
+  ent->num_eed = n;
+  for (BITCODE_BL i = 0; i < n; ++i) {
+    size_t len = strs[static_cast<size_t>(i)].size();
+    if (len > 255)
+      len = 255;  // RC length field (non-TU eed_0)
+    const BITCODE_BS size = static_cast<BITCODE_BS>(1 + 3 + (len & 0xFF) + 1);
+    Dwg_Eed_Data* data = static_cast<Dwg_Eed_Data*>(calloc(static_cast<size_t>(size) + 3, 1));
+    if (data == nullptr)
+      return i > 0;  // earlier entries are still valid; this one and later are simply absent
+    data->code = 0;
+    data->u.eed_0.is_tu = 0;
+    data->u.eed_0.length = static_cast<unsigned short>(len & 0xFF);
+    data->u.eed_0.codepage = 30;
+    std::memcpy(data->u.eed_0.string, strs[static_cast<size_t>(i)].data(), len);
+    eed[i].data = data;
+    if (i == 0) {
+      eed[i].size = size;
+      dwg_add_handle(&eed[i].handle, 5, appid->absolute_ref, nullptr);
+    } else {
+      eed[i].size = 0;
+      eed[0].size = static_cast<BITCODE_BS>(eed[0].size + size);
+    }
+  }
+  return true;
+}
+
 // REQ-170 / REQ-201, issue #614: what DWG save actually drops or degrades, computed from the
 // drawing instead of a fixed list — so the "Export DWG" warning and the save log cannot disagree
 // with each other or with what FillFromState above actually writes, and a line disappears here the
@@ -855,15 +905,11 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   };
 
   // Entity classes with no DWG writer at all (silent today — nothing in FillFromState touches
-  // these vectors). Survey points are written (REQ-365, issue #605), so they are not here.
+  // these vectors). Survey points (REQ-365, issue #605) and feature lines (REQ-057, issue #603)
+  // are written, so neither is here.
   add("table(s)", st.cadTables.size());
   add("pipe run(s)", st.cadPipeRuns.size());
   add("block reference(s)", st.cadBlockRefs.size());
-  size_t nFeatureLines = 0;
-  for (size_t i = 0; i + 1 < st.featureLineOffsets.size(); ++i)
-    if (st.featureLineOffsets[i + 1] - st.featureLineOffsets[i] >= 2)
-      ++nFeatureLines;
-  add("feature line(s)", nFeatureLines);
   size_t nDims = 0;
   for (const CadAnnotation& a : st.cadAnnotations)
     if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear ||
@@ -909,23 +955,29 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
       ++nRotatedText;
   add("rotated text/mtext label(s) (rotation not written)", nRotatedText);
 
-  // A LWPOLYLINE carries one elevation for the whole run (TASK-034 debt), so a run whose vertices
-  // are not all at the same Z gets flattened to the first vertex's.
-  size_t nFlattenedPolylines = 0;
+  // REQ-057, issue #603: a varying-Z polyline now writes as POLYLINE_3D (real per-vertex Z), but
+  // POLYLINE_3D has no bulge — a run that is BOTH 3D and curved still degrades to straight
+  // segments between its vertices.
+  size_t nFlattenedCurves = 0;
   for (size_t i = 0; i + 1 < st.userPolylineOffsets.size(); ++i) {
     const int a = st.userPolylineOffsets[i];
     const int b = st.userPolylineOffsets[i + 1];
     if (b - a < 2)
       continue;
     const float z0 = st.userPolylineVerts[static_cast<size_t>(a) * 3 + 2];
-    for (int vi = a + 1; vi < b; ++vi) {
-      if (std::fabs(st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2] - z0) > 1e-4f) {
-        ++nFlattenedPolylines;
-        break;
-      }
+    bool is3d = false, anyBulge = false;
+    for (int vi = a; vi < b; ++vi) {
+      if (vi > a && std::fabs(st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2] - z0) > 1e-4f)
+        is3d = true;
+      if (static_cast<size_t>(vi) < st.userPolylineVertsBulge.size() &&
+          st.userPolylineVertsBulge[static_cast<size_t>(vi)] != 0.f)
+        anyBulge = true;
     }
+    if (is3d && anyBulge)
+      ++nFlattenedCurves;
   }
-  add("3D polyline(s) (flattened to one elevation)", nFlattenedPolylines);
+  add("3D polyline curve(s) (straightened between vertices; POLYLINE_3D has no bulge)",
+      nFlattenedCurves);
 
   return out;
 }
@@ -1047,6 +1099,39 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       if (vEndIncl - vStart < 1)
         return;
       const int runNv = vEndIncl - vStart + 1;
+      // REQ-057 / REQ-170, issue #603: a vertex whose Z differs from the run's first vertex makes
+      // this a genuinely 3D polyline — LWPOLYLINE carries only ONE elevation for the whole run, so
+      // writing it there would flatten every other vertex onto the first one's Z (TASK-034 debt).
+      // POLYLINE_3D + VERTEX_3D carries a real Z per vertex instead; it does not carry a bulge, so
+      // a curved 3D run's curve degrades to straight segments — same precedent as DxfIo's own
+      // genuinely-3D-polyline path.
+      const double z0 = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vStart) * 3 + 2]);
+      bool is3d = false;
+      for (int v = 1; v < runNv; ++v) {
+        const int k = (vStart + v) * 3;
+        if (std::fabs(static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k) + 2]) - z0) > 1e-4) {
+          is3d = true;
+          break;
+        }
+      }
+      if (is3d) {
+        std::vector<dwg_point_3d> pts3(static_cast<size_t>(runNv));
+        for (int v = 0; v < runNv; ++v) {
+          const int k = (vStart + v) * 3;
+          pts3[static_cast<size_t>(v)].x =
+              static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k)]) + st.worldDocumentOriginX;
+          pts3[static_cast<size_t>(v)].y =
+              static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 1)]) + st.worldDocumentOriginY;
+          pts3[static_cast<size_t>(v)].z = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(k + 2)]);
+        }
+        Dwg_Entity_POLYLINE_3D* pl = dwg_add_POLYLINE_3D(hdr, runNv, pts3.data());
+        if (pl != nullptr) {
+          if (runClosed)
+            pl->flag = static_cast<BITCODE_RC>(pl->flag | 1);  // FLAG_POLYLINE_CLOSED
+          apply(pl->parent, atPtr);
+        }
+        return;
+      }
       std::vector<dwg_point_2d> pts(static_cast<size_t>(runNv));
       for (int v = 0; v < runNv; ++v) {
         const int k = (vStart + v) * 3;
@@ -1058,6 +1143,10 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, runNv, pts.data());
       if (lw == nullptr)
         return;
+      if (z0 != 0.0) {
+        lw->elevation = z0;
+        lw->flag = static_cast<BITCODE_BS>(lw->flag | 8);  // elevation present (dwg.spec)
+      }
       if (runClosed)
         lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);
       bool anyBulge = false;
@@ -1309,6 +1398,36 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         at.layer = sp.layer;
         apply(ins2()->parent, &at);
       }
+    }
+  }
+  // REQ-057 / D-2026-10-01-a, issue #603: survey feature lines, written as POLYLINE_3D (a real Z
+  // per vertex — these almost always have varying elevation, which is the whole point of a
+  // feature line) with their name/description preserved for a future GoSurvey-aware reader via
+  // GOSURVEY-appid XDATA (the user's choice; plain-polyline-only was the alternative). No bulge
+  // support — a feature line has none today (st.featureLineVerts carries no bulge array).
+  for (size_t i = 0; i + 1 < st.featureLineOffsets.size(); ++i) {
+    const int a = st.featureLineOffsets[i];
+    const int b = st.featureLineOffsets[i + 1];
+    const int nv = b - a;
+    if (nv < 2)
+      continue;
+    std::vector<dwg_point_3d> pts3(static_cast<size_t>(nv));
+    for (int v = 0; v < nv; ++v) {
+      const size_t k = static_cast<size_t>(a + v) * 3;
+      pts3[static_cast<size_t>(v)].x = st.featureLineVerts[k] + st.worldDocumentOriginX;
+      pts3[static_cast<size_t>(v)].y = st.featureLineVerts[k + 1] + st.worldDocumentOriginY;
+      pts3[static_cast<size_t>(v)].z = st.featureLineVerts[k + 2];
+    }
+    Dwg_Entity_POLYLINE_3D* pl = dwg_add_POLYLINE_3D(hdr, nv, pts3.data());
+    if (pl == nullptr)
+      continue;
+    if (i < st.featureLineClosed.size() && st.featureLineClosed[i] != 0)
+      pl->flag = static_cast<BITCODE_RC>(pl->flag | 1);  // FLAG_POLYLINE_CLOSED
+    apply(pl->parent, AttrAt(st.featureLineAttrs, i));
+    if (i < st.featureLineInfo.size()) {
+      const CadFeatureLineInfo& info = st.featureLineInfo[i];
+      if (!info.name.empty() || !info.description.empty())
+        AppendGosurveyStringEed(dwg, pl->parent, {info.name, info.description});
     }
   }
   for (size_t i = 0; i < st.userEllipses.size(); ++i) {
