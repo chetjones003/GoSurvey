@@ -1776,7 +1776,8 @@ const EntityKind kEntityKindsInSweepOrder[] = {
     EntityKind::BlockRef,
     EntityKind::Solid,
     EntityKind::PointCloud,
-    EntityKind::PositionMarker};  ///< REQ-359 — last, so kinds above keep their ids.
+    EntityKind::PositionMarker,  ///< REQ-359 — append-only id sweep
+    EntityKind::Multileader};    ///< REQ-367 — last, so kinds above keep their ids.
 
 /// The attribute array for a kind. One accessor for both the const and mutable walks, so the
 /// two can never disagree about which arrays are covered.
@@ -1798,6 +1799,7 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::Solid:        return &st.cadSolidAttrs;     // REQ-313 / ADR-045
   case EntityKind::PointCloud:   return &st.cadPointCloudAttrs; // REQ-171 / ADR-042
   case EntityKind::PositionMarker: return &st.cadPositionMarkerAttrs; // REQ-359
+  case EntityKind::Multileader:    return &st.cadMultileaderAttrs;   // REQ-367
   }
   return &st.userLineAttrs;
 }
@@ -7881,6 +7883,22 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       hits.push_back(e);
     }
   }
+  for (size_t li = 0; li < st.cadMultileaders.size(); ++li) {  // REQ-367: path + label
+    float lmnX = 0.f, lmnY = 0.f, lmxX = 0.f, lmxY = 0.f;
+    CadMultileaderLocalBox(st.cadMultileaders[li], &lmnX, &lmnY, &lmxX, &lmxY);
+    SPBox(lmnX, lmnY, lmxX, lmxY, &lmnX, &lmnY, &lmxX, &lmxY);
+    bool hit = false;
+    if (windowMode)
+      hit = lmnX >= mnX && lmxX <= mxX && lmnY >= mnY && lmxY <= mxY;
+    else
+      hit = !(lmxX < mnX || lmnX > mxX || lmxY < mnY || lmnY > mxY);
+    if (hit) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::Multileader;
+      e.index = static_cast<int>(li);
+      hits.push_back(e);
+    }
+  }
   for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
     float bmnX = 0.f, bmnY = 0.f, bmxX = 0.f, bmxY = 0.f;
     CadBlockWorldAabb(st.blockDefs, st.cadBlockRefs[bi], &bmnX, &bmnY, &bmxX, &bmxY);
@@ -8603,6 +8621,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   std::vector<EntityAttributes> newTableAttrs;
   std::vector<CadPositionMarker> newMarkers;  // REQ-359
   std::vector<EntityAttributes> newMarkerAttrs;
+  std::vector<CadMultileader> newMultileaders;  // REQ-367
+  std::vector<EntityAttributes> newMultileaderAttrs;
   std::vector<CadBlockRef> newBlockRefs;
   std::vector<EntityAttributes> newBlockRefAttrs;
   std::vector<CadArc> newArcs;
@@ -8700,6 +8720,17 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
           a = st.cadPositionMarkerAttrs[mk];
         newMarkerAttrs.push_back(DuplicatedEntityAttrs(a));
       }
+    } else if (e.type == SelectedEntity::Type::Multileader) {  // REQ-367: path + label
+      const size_t lk = static_cast<size_t>(e.index);
+      if (lk < st.cadMultileaders.size()) {
+        CadMultileader c = st.cadMultileaders[lk];
+        CadMultileaderTranslate(&c, dx, dy, dz);
+        newMultileaders.push_back(std::move(c));
+        EntityAttributes a{};
+        if (lk < st.cadMultileaderAttrs.size())
+          a = st.cadMultileaderAttrs[lk];
+        newMultileaderAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
     } else if (e.type == SelectedEntity::Type::BlockRef) {
       const size_t bk = static_cast<size_t>(e.index);
       if (bk < st.cadBlockRefs.size()) {
@@ -8781,6 +8812,9 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
   st.cadPositionMarkers.insert(st.cadPositionMarkers.end(), newMarkers.begin(), newMarkers.end());
   st.cadPositionMarkerAttrs.insert(st.cadPositionMarkerAttrs.end(), newMarkerAttrs.begin(), newMarkerAttrs.end());
+  st.cadMultileaders.insert(st.cadMultileaders.end(), newMultileaders.begin(), newMultileaders.end());
+  st.cadMultileaderAttrs.insert(st.cadMultileaderAttrs.end(), newMultileaderAttrs.begin(),
+                                newMultileaderAttrs.end());
   st.cadBlockRefs.insert(st.cadBlockRefs.end(), newBlockRefs.begin(), newBlockRefs.end());
   st.cadBlockRefAttrs.insert(st.cadBlockRefAttrs.end(), newBlockRefAttrs.begin(), newBlockRefAttrs.end());
   st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
@@ -8801,7 +8835,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   });
 
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newTables.empty() || !newBlockRefs.empty() || !newArcs.empty() || !newEll.empty() ||
-      !newFills.empty() || !newMarkers.empty() || st.userPolylineVerts.size() != polyVertsBefore ||
+      !newFills.empty() || !newMarkers.empty() || !newMultileaders.empty() ||
+      st.userPolylineVerts.size() != polyVertsBefore ||
       st.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
 }
@@ -9711,6 +9746,7 @@ static void DropMirrorUnsupportedFromSelection(AppCommandState& st, std::vector<
 static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ARRAY", log);
   DropPositionMarkersFromSelection(st, "ARRAY", log);  // REQ-359: move/copy/erase only
+  DropMultileadersFromSelection(st, "ARRAY", log);     // REQ-367
   size_t mesh = 0, pdf = 0;
   st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
                                     [&](const SelectedEntity& e) {
@@ -9742,6 +9778,7 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
                                            std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
   DropPositionMarkersFromSelection(st, "MIRROR", log);  // REQ-359: move/copy/erase only
+  DropMultileadersFromSelection(st, "MIRROR", log);     // REQ-367
   DropMirrorUnsupportedFromSelection(st, log);
   // REQ-351: solids and pipe runs are mirrored across the vertical plane that contains the line.
   {
@@ -10033,6 +10070,7 @@ static void ScaleSelectedSolids(AppCommandState& st, const ray3d::Vec3& basePoin
 void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
   DropPositionMarkersFromSelection(st, "ROTATE", log);  // REQ-359: move/copy/erase only
+  DropMultileadersFromSelection(st, "ROTATE", log);     // REQ-367
   // Solids are NOT dropped any more (REQ-332, amending REQ-322 item 6): `brep::Rotate` turns one
   // completely — every vertex, every surface frame's AXES as well as its origin, every arc-edge
   // frame — which is the work item 6 named as "a separate requirement" and REQ-328/REQ-332 supplied.
@@ -10213,6 +10251,7 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
                                             std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
   DropPositionMarkersFromSelection(st, "ROTATE", log);  // REQ-359: move/copy/erase only
+  DropMultileadersFromSelection(st, "ROTATE", log);     // REQ-367
   // The tilted-UCS twin of the branch in `ApplyRotationToSelection`: same kernel call, but about the
   // UCS Z axis this function was already given rather than world Z (REQ-332, amending REQ-322 item 6).
   RotateSelectedSolids(st, axisPoint, axisUnit, angleRad, log);
@@ -10495,6 +10534,13 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadPositionMarkers.size())
       continue;
     CadPositionMarkerTranslate(&st.cadPositionMarkers[static_cast<size_t>(e.index)], dx, dy, dz);
+  }
+  for (const auto& e : st.selection) {  // REQ-367: leader path and label move together
+    if (e.type != SelectedEntity::Type::Multileader)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadMultileaders.size())
+      continue;
+    CadMultileaderTranslate(&st.cadMultileaders[static_cast<size_t>(e.index)], dx, dy, dz);
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::BlockRef)
@@ -10823,6 +10869,7 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     return;
   DropSurfacesFromSelectionForTransform(st, "SCALE", log);
   DropPositionMarkersFromSelection(st, "SCALE", log);  // REQ-359: move/copy/erase only
+  DropMultileadersFromSelection(st, "SCALE", log);     // REQ-367
   // Solids are NOT dropped any more (REQ-332, amending REQ-322 item 6), and they take the FULL 3D
   // base point — which is why this function gained `bz`, the same move REQ-322 made when it gave
   // `ApplyTranslationToSelection` a `dz`.
@@ -11534,6 +11581,8 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
     if (tilted) {
       DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
       DropPositionMarkersFromSelection(st, "ROTATE", log);  // REQ-359: move/copy/erase only
+      DropMultileadersFromSelection(st, "ROTATE", log);     // REQ-367
+  DropMultileadersFromSelection(st, "ROTATE", log);     // REQ-367
       const ucs::Ucs u = CadActiveUcsStorage(st);
       const ray3d::Vec3 axisUnit =
           ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
@@ -17985,6 +18034,7 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float dz, 
                              float mnY, float mxY, bool rectInUcsPlane, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "STRETCH", log);
   DropPositionMarkersFromSelection(st, "STRETCH", log);  // REQ-359: move/copy/erase only
+  DropMultileadersFromSelection(st, "STRETCH", log);     // REQ-367
   DropSolidsFromSelectionForTransform(st, "STRETCH", log);
   // REQ-329 increment 4: when the crossing box lives in a tilted work plane's local 2D frame, each
   // candidate vertex is projected the same way (WorldToPlane) before the box test; the displacement
@@ -21092,6 +21142,14 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     consider(mnX, mnY);
     consider(mxX, mxY);
   }
+  for (size_t li = 0; li < st.cadMultileaders.size(); ++li) {  // REQ-367: path + label
+    if (EntityHiddenInViewport(vpFilter, st.cadMultileaderAttrs, li))
+      continue;
+    float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
+    CadMultileaderLocalBox(st.cadMultileaders[li], &mnX, &mnY, &mxX, &mxY);
+    consider(mnX, mnY);
+    consider(mxX, mxY);
+  }
 
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
     if (EntityHiddenInViewport(vpFilter, st.cadAnnotationAttrs, ai))
@@ -21450,6 +21508,24 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.cx = st.cadPositionMarkers[mi].x;
     b.cy = st.cadPositionMarkers[mi].y;
     EntityBoxGrowZ(b, st.cadPositionMarkers[mi].z, true);
+    out.push_back(b);
+  }
+  for (size_t li = 0; li < st.cadMultileaders.size(); ++li) {  // REQ-367: path + label
+    if (EntityHiddenInViewport(vpFilter, st.cadMultileaderAttrs, li))
+      continue;
+    const CadMultileader& ml = st.cadMultileaders[li];
+    float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
+    CadMultileaderLocalBox(ml, &mnX, &mnY, &mxX, &mxY);
+    EntityBox b{};
+    b.mnX = mnX;
+    b.mnY = mnY;
+    b.mxX = mxX;
+    b.mxY = mxY;
+    if (ml.pathXyz.size() >= 3) {
+      b.cx = ml.pathXyz[0];
+      b.cy = ml.pathXyz[1];
+      EntityBoxGrowZ(b, ml.pathXyz[2], true);
+    }
     out.push_back(b);
   }
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
@@ -23854,6 +23930,8 @@ static void CollectLayersUsedInDrawing(const AppCommandState& st, std::set<std::
     add(a.layer);
   for (const auto& a : st.cadPositionMarkerAttrs)  // REQ-359
     add(a.layer);
+  for (const auto& a : st.cadMultileaderAttrs)  // REQ-367
+    add(a.layer);
   for (const auto& a : st.cadBlockRefAttrs)
     add(a.layer);
   // REQ-352: every store a layer edit can write to, so a name typed for a solid alone still
@@ -25260,6 +25338,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::set<int> polyIx;
   std::set<int> flIx;  // REQ-087
   std::set<int> markerIx;  // REQ-359
+  std::set<int> multileaderIx;  // REQ-367
   const size_t nLines = st.userLinesFlat.size() / 6;
   const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
   const size_t nAnn = st.cadAnnotations.size();
@@ -25292,6 +25371,9 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     else if (e.type == SelectedEntity::Type::PositionMarker && e.index >= 0 &&
              static_cast<size_t>(e.index) < st.cadPositionMarkers.size())
       markerIx.insert(e.index);  // REQ-359: the marker and its label are one object
+    else if (e.type == SelectedEntity::Type::Multileader && e.index >= 0 &&
+             static_cast<size_t>(e.index) < st.cadMultileaders.size())
+      multileaderIx.insert(e.index);  // REQ-367: path + label are one object
   }
 
   std::vector<int> pv(polyIx.begin(), polyIx.end());
@@ -25473,8 +25555,16 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   if (!markerIx.empty() && st.mtextRichEditorMarkerIndex >= 0)
     CloseMtextRichEditorUi(st);  // its target may be gone or renumbered
 
+  for (auto it = multileaderIx.rbegin(); it != multileaderIx.rend(); ++it) {
+    const auto at = static_cast<std::ptrdiff_t>(*it);
+    st.cadMultileaders.erase(st.cadMultileaders.begin() + at);
+    if (static_cast<size_t>(*it) < st.cadMultileaderAttrs.size())
+      st.cadMultileaderAttrs.erase(st.cadMultileaderAttrs.begin() + at);
+  }
+
   const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + tableIx.size() + arcIx.size() + ellIx.size() +
-                      polyIx.size() + pdfIx.size() + fillIx.size() + meshIx.size() + markerIx.size();
+                      polyIx.size() + pdfIx.size() + fillIx.size() + meshIx.size() + markerIx.size() +
+                      multileaderIx.size();
   st.selection.clear();
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
@@ -25639,6 +25729,7 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
                                                       std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
   DropPositionMarkersFromSelection(st, "MIRROR", log);  // REQ-359: move/copy/erase only
+  DropMultileadersFromSelection(st, "MIRROR", log);     // REQ-367
   DropMirrorUnsupportedFromSelection(st, log);  // FilledRegion / Mesh / PdfUnderlay
   MirrorSelectedSolidsAndPipeRuns(st, planePt, planeUnit, log);  // REQ-351
   const auto rp = [&](float x, float y, float z) {
@@ -27054,6 +27145,16 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     e.type = SelectedEntity::Type::PositionMarker;
     e.index = static_cast<int>(mi);
     consider(e, md2);
+  }
+
+  for (size_t li = 0; li < st.cadMultileaders.size(); ++li) {
+    double ld2 = 0.0;
+    if (!CadMultileaderHit(st.cadMultileaders[li], wx, wy, tolWorld, &ld2))
+      continue;
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::Multileader;
+    e.index = static_cast<int>(li);
+    consider(e, ld2);
   }
 
   for (size_t bi = 0; bi < st.cadBlockRefs.size(); ++bi) {
@@ -38652,6 +38753,7 @@ auto* AttrsOfSelected(StateT& st, const SelectedEntity& e) {
   case T::Surface:      return at(st.cadSurfaceAttrs);
   case T::Table:        return at(st.cadTableAttrs);
   case T::PositionMarker: return at(st.cadPositionMarkerAttrs);  // REQ-359
+  case T::Multileader:    return at(st.cadMultileaderAttrs);     // REQ-367
   case T::BlockRef:     return at(st.cadBlockRefAttrs);
   case T::Solid:        return at(st.cadSolidAttrs);    // REQ-352
   case T::PipeRun:      return at(st.cadPipeRunAttrs);  // REQ-352

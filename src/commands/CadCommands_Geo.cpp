@@ -798,6 +798,109 @@ int DropPositionMarkersFromSelection(AppCommandState& st, const char* verb, std:
 }
 
 // ---------------------------------------------------------------------------
+// Multileaders (REQ-367 / issue #619)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+double DistSqPointSegment2d(double px, double py, double ax, double ay, double bx, double by) {
+  const double vx = bx - ax;
+  const double vy = by - ay;
+  const double len2 = vx * vx + vy * vy;
+  if (len2 < 1e-24) {
+    const double dx = px - ax;
+    const double dy = py - ay;
+    return dx * dx + dy * dy;
+  }
+  const double t = std::clamp(((px - ax) * vx + (py - ay) * vy) / len2, 0.0, 1.0);
+  const double qx = ax + t * vx;
+  const double qy = ay + t * vy;
+  const double dx = px - qx;
+  const double dy = py - qy;
+  return dx * dx + dy * dy;
+}
+
+}  // namespace
+
+void CadMultileaderTranslate(CadMultileader* ml, double dx, double dy, double dz) {
+  const float fx = static_cast<float>(dx);
+  const float fy = static_cast<float>(dy);
+  const float fz = static_cast<float>(dz);
+  for (size_t i = 0; i + 2 < ml->pathXyz.size(); i += 3) {
+    ml->pathXyz[i] += fx;
+    ml->pathXyz[i + 1] += fy;
+    ml->pathXyz[i + 2] += fz;
+  }
+  ml->label.insX += fx;
+  ml->label.insY += fy;
+  ml->label.insZ += fz;
+  ml->label.boxMinX += fx;
+  ml->label.boxMaxX += fx;
+  ml->label.boxMinY += fy;
+  ml->label.boxMaxY += fy;
+}
+
+void CadMultileaderLocalBox(const CadMultileader& ml, float* mnX, float* mnY, float* mxX, float* mxY) {
+  bool any = false;
+  auto grow = [&](float x, float y) {
+    if (!any) {
+      *mnX = *mxX = x;
+      *mnY = *mxY = y;
+      any = true;
+    } else {
+      *mnX = std::min(*mnX, x);
+      *mnY = std::min(*mnY, y);
+      *mxX = std::max(*mxX, x);
+      *mxY = std::max(*mxY, y);
+    }
+  };
+  for (size_t i = 0; i + 2 < ml.pathXyz.size(); i += 3)
+    grow(ml.pathXyz[i], ml.pathXyz[i + 1]);
+  grow(ml.label.boxMinX, ml.label.boxMinY);
+  grow(ml.label.boxMaxX, ml.label.boxMaxY);
+  if (!any) {
+    *mnX = *mnY = *mxX = *mxY = 0.f;
+  }
+}
+
+bool CadMultileaderHit(const CadMultileader& ml, double x, double y, float tolWorld, double* distSq) {
+  const double tol2 = static_cast<double>(tolWorld) * static_cast<double>(tolWorld);
+  double best = 1e300;
+  for (size_t i = 0; i + 5 < ml.pathXyz.size(); i += 3) {
+    const double ax = static_cast<double>(ml.pathXyz[i]);
+    const double ay = static_cast<double>(ml.pathXyz[i + 1]);
+    const double bx = static_cast<double>(ml.pathXyz[i + 3]);
+    const double by = static_cast<double>(ml.pathXyz[i + 4]);
+    best = std::min(best, DistSqPointSegment2d(x, y, ax, ay, bx, by));
+  }
+  const CadAnnotation& a = ml.label;
+  if (x >= a.boxMinX - tolWorld && x <= a.boxMaxX + tolWorld && y >= a.boxMinY - tolWorld &&
+      y <= a.boxMaxY + tolWorld) {
+    *distSq = 0.0;
+    return true;
+  }
+  if (best <= tol2) {
+    *distSq = best;
+    return true;
+  }
+  return false;
+}
+
+int DropMultileadersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log) {
+  const size_t before = st.selection.size();
+  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
+                                    [](const SelectedEntity& e) {
+                                      return e.type == SelectedEntity::Type::Multileader;
+                                    }),
+                     st.selection.end());
+  const int dropped = static_cast<int>(before - st.selection.size());
+  if (dropped > 0)
+    log.push_back(std::string(verb) + " — " + std::to_string(dropped) +
+                  " Multileader(s) left unchanged: a Multileader can only be moved, copied or erased.");
+  return dropped;
+}
+
+// ---------------------------------------------------------------------------
 // GEOMARKPOINT / GEOMARKLATLONG / GEOREORIENTMARKER
 // ---------------------------------------------------------------------------
 

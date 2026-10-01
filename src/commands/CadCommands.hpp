@@ -134,7 +134,10 @@ struct SelectedEntity {
     /// Position Marker (REQ-359 item 3, D-2026-09-29-e). Appended so existing type values stay
     /// stable. MOVE / COPY / ERASE act on marker + label together; ROTATE / SCALE / MIRROR /
     /// STRETCH refuse it by name (\ref DropPositionMarkersFromSelection).
-    PositionMarker = 17
+    PositionMarker = 17,
+    /// Multileader callout (REQ-367 / issue #619). MOVE / COPY / ERASE act on path + label together;
+    /// ROTATE / SCALE / MIRROR / STRETCH refuse it by name (\ref DropMultileadersFromSelection).
+    Multileader = 18
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -5536,7 +5539,9 @@ enum class EntityKind : std::uint8_t {
   /// would renumber every entity in every existing drawing on its next load.
   PointCloud,
   /// REQ-359 / D-2026-09-29-e. Appended after PointCloud for the same id-sweep reason.
-  PositionMarker
+  PositionMarker,
+  /// REQ-367 / issue #619. Appended after PositionMarker for the same id-sweep reason.
+  Multileader
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -7373,6 +7378,12 @@ int PlacePositionMarkerAtLatLong(AppCommandState& st, double latitudeDeg, double
 /// ROTATE / SCALE / MIRROR / STRETCH refuse a Position Marker by name (D-2026-09-29-e): removes every
 /// marker from the selection and logs "<verb> — N Position Marker(s) left unchanged …". Returns N.
 int DropPositionMarkersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log);
+
+void CadMultileaderTranslate(CadMultileader* ml, double dx, double dy, double dz);
+void CadMultileaderLocalBox(const CadMultileader& ml, float* mnX, float* mnY, float* mxX, float* mxY);
+[[nodiscard]] bool CadMultileaderHit(const CadMultileader& ml, double x, double y, float tolWorld,
+                                     double* distSq);
+int DropMultileadersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log);
 void StartGeoMarkPointCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartGeoMarkLatLongCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartGeoReorientMarkerCommand(AppCommandState& st, std::vector<std::string>& log);

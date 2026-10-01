@@ -14235,6 +14235,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                 case T::Table:        return at(cmd.cadTableAttrs, e.index);
                 case T::BlockRef:     return at(cmd.cadBlockRefAttrs, e.index);
                 case T::FilledRegion: return at(cmd.cadFilledRegionAttrs, e.index);
+                case T::Multileader:  return at(cmd.cadMultileaderAttrs, e.index);
                 default:              return std::string();
                 }
               };
@@ -18433,6 +18434,51 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
     }
 
+    // Multileaders (REQ-367 / issue #619): leader path plus embedded MTEXT label.
+    {
+      auto isMultileaderSelected = [&](size_t ix) {
+        for (const auto& e : cmd.selection)
+          if (e.type == SelectedEntity::Type::Multileader && static_cast<size_t>(e.index) == ix)
+            return true;
+        return false;
+      };
+      for (size_t li = 0; li < cmd.cadMultileaders.size(); ++li) {
+        const CadMultileader& ml = cmd.cadMultileaders[li];
+        const EntityAttributes* lp =
+            li < cmd.cadMultileaderAttrs.size() ? &cmd.cadMultileaderAttrs[li] : nullptr;
+        if (lp && CadEntityIdHidden(&cmd.hiddenEntityIds, lp->id))
+          continue;
+        ImU32 col = kAnnCol;
+        if (lp) {
+          float rgba[4];
+          ResolveEntityColorForViewport(*lp, 230 / 255.f, 232 / 255.f, 238 / 255.f, rgba);
+          col = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                         static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
+        }
+        const bool sel = isMultileaderSelected(li);
+        const bool hov = !sel && cmd.viewportHoverEntityValid &&
+                         cmd.viewportHoverEntity.type == SelectedEntity::Type::Multileader &&
+                         cmd.viewportHoverEntity.index == static_cast<int>(li);
+        const ImU32 drawCol = sel ? kAnnSelCol : hov ? IM_COL32(130, 180, 240, 255) : col;
+        const float thick = sel || hov ? 2.f : 1.5f;
+        for (size_t pi = 0; pi + 5 < ml.pathXyz.size(); pi += 3) {
+          ImVec2 a{}, b{};
+          worldToScreen(ml.pathXyz[pi], ml.pathXyz[pi + 1], &a, ml.pathXyz[pi + 2]);
+          worldToScreen(ml.pathXyz[pi + 3], ml.pathXyz[pi + 4], &b, ml.pathXyz[pi + 5]);
+          dl->AddLine(a, b, drawCol, thick);
+        }
+        drawAnnotationVisual(ml.label, lp, kAnnCol);
+        if (sel || hov) {
+          ImVec2 sa{}, sb{};
+          worldToScreen(ml.label.boxMinX, ml.label.boxMinY, &sa, ml.label.insZ);
+          worldToScreen(ml.label.boxMaxX, ml.label.boxMaxY, &sb, ml.label.insZ);
+          dl->AddRect(ImVec2(std::min(sa.x, sb.x), std::min(sa.y, sb.y)),
+                      ImVec2(std::max(sa.x, sb.x), std::max(sa.y, sb.y)),
+                      sel ? kAnnSelCol : IM_COL32(130, 180, 240, 200), 0.f, 0, sel ? 2.f : 1.4f);
+        }
+      }
+    }
+
     // The geographic marker (REQ-359 item 4): a screen-size glyph at the design point with an arrow
     // toward the stored north. Drawn only on a geolocated drawing; it is not an entity.
     if (cmd.drawingSettings.Geolocated()) {
@@ -20634,6 +20680,10 @@ static const EntityAttributes& SelectedEntityAttr(const AppCommandState& cmd, co
   case T::PositionMarker:  // REQ-359
     if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadPositionMarkerAttrs.size())
       return cmd.cadPositionMarkerAttrs[static_cast<size_t>(e.index)];
+    return kDef;
+  case T::Multileader:  // REQ-367
+    if (e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadMultileaderAttrs.size())
+      return cmd.cadMultileaderAttrs[static_cast<size_t>(e.index)];
     return kDef;
   case T::PdfUnderlay:
     return kDef;
