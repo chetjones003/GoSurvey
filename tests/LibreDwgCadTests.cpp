@@ -1,4 +1,5 @@
 #include "DxfIo.hpp"
+#include "DxfColors.hpp"
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
 #include "LibreDwg.hpp"
@@ -295,6 +296,67 @@ TEST_CASE("ExportLibreCadFile writes R2004 when dwgExportVersion is R2004 (issue
   std::vector<std::string> log;
   REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
   REQUIRE(DwgVersionName(p.c_str()) == "AutoCAD 2004");
+}
+
+TEST_CASE("R2004 DWG round-trips 24-bit entity and layer colours (issue #615)",
+          "[dwg][libredwg][issue615]") {
+  ScratchDir dir("dwg-truecolor-r2004");
+  const auto p = (dir.path / "colors.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  st.userLineAttrs[0].color = "#1E90FF";
+  st.userLineAttrs[0].layer = "CustomBrown";
+  CadLayerRow lyr;
+  lyr.name = "CustomBrown";
+  lyr.color = "#8B4513";
+  st.drawingLayerTable.push_back(lyr);
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userLineAttrs.size() == 1);
+  CHECK(in.userLineAttrs[0].color == "#1E90FF");
+  const CadLayerRow* brown = nullptr;
+  for (const CadLayerRow& row : in.drawingLayerTable) {
+    if (row.name == "CustomBrown")
+      brown = &row;
+  }
+  REQUIRE(brown != nullptr);
+  CHECK(brown->color == "#8B4513");
+}
+
+TEST_CASE("R2000 DWG still rounds non-palette colours to ACI (issue #615)",
+          "[dwg][libredwg][issue615]") {
+  ScratchDir dir("dwg-aci-round-r2000");
+  const auto p = (dir.path / "aci.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.dwgExportVersion = DwgSaveVersion::R2000;
+  st.userLineAttrs[0].color = "#1E90FF";
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  uint32_t rgb = 0;
+  REQUIRE(DxfColorStringToRgbPacked("#1E90FF", &rgb));
+  const int aci = DxfNearestAciFromRgbPacked(rgb);
+  char expected[16];
+  DxfRgbPackedToHex(DxfRgbPackedFromAci(aci), expected, sizeof(expected));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.userLineAttrs.size() == 1);
+  CHECK(in.userLineAttrs[0].color == expected);
+  CHECK(in.userLineAttrs[0].color != "#1E90FF");
+}
+
+TEST_CASE("DWG export loss omits colour rounding when saving R2004 (issue #615 / #614)",
+          "[dwg][libredwg][issue615][issue614]") {
+  AppCommandState st;
+  OneLine(st);
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  st.userLineAttrs[0].color = "#1E90FF";
+  const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(st);
+  for (const DwgExportLoss& l : losses)
+    CHECK(l.label.find("colour") == std::string::npos);
 }
 
 // REQ-101 (D-2026-09-08-i) / ADR-054 Phase B (#441): the DWG-trailer document is the same `double`

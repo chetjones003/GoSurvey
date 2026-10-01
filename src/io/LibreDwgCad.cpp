@@ -194,6 +194,15 @@ std::string LayerName(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
 }
 
 std::string ColorStorage(const Dwg_Color& c) {
+  // R2004+ entity ENC: true RGB in the low 24 bits when flag 0x80 is set (common_entity_data.spec).
+  if ((c.flag & 0x80) != 0) {
+    const unsigned rgb24 = static_cast<unsigned>(c.rgb) & 0xFFFFFFu;
+    if (rgb24 != 0 && rgb24 != 0x100u && rgb24 != 0x101u && (rgb24 & 0xFFFF00u) != 0) {
+      char buf[16];
+      std::snprintf(buf, sizeof(buf), "#%06X", rgb24);
+      return std::string(buf);
+    }
+  }
   return libredwgcad_detail::ColorToStorage(static_cast<int>(c.index), c.method,
                                             static_cast<unsigned>(c.rgb));
 }
@@ -1450,11 +1459,104 @@ Dwg_Object_BLOCK_HEADER* ModelHeader(Dwg_Data* dwg) {
   return m->tio.object->tio.BLOCK_HEADER;
 }
 
+// REQ-170, issue #615: R2004+ writes 24-bit true colour; R2000 keeps nearest ACI (no rgb field).
+void SetCmcFromStorage(BITCODE_CMC* cmc, const std::string& storage, bool useTrueColor) {
+  if (cmc == nullptr)
+    return;
+  if (storage == "ByBlock") {
+    cmc->index = 0;
+    cmc->method = DWG_COLOR_METHOD_BYBLOCK;
+    cmc->rgb = 0;
+    return;
+  }
+  if (storage.empty() || storage == "ByLayer") {
+    cmc->index = 256;
+    cmc->method = DWG_COLOR_METHOD_BYLAYER;
+    cmc->rgb = 0;
+    return;
+  }
+  uint32_t rgb = 0;
+  if (!DxfColorStringToRgbPacked(storage, &rgb)) {
+    cmc->index = 7;
+    cmc->method = DWG_COLOR_METHOD_ACI;
+    cmc->rgb = 0;
+    return;
+  }
+  const int aci = DxfNearestAciFromRgbPacked(rgb);
+  const bool exactPalette = (DxfRgbPackedFromAci(aci) & 0xFFFFFFu) == (rgb & 0xFFFFFFu);
+  if (useTrueColor && !exactPalette) {
+    cmc->method = DWG_COLOR_METHOD_TRUECOLOR;
+    cmc->rgb = 0xC3000000u | (rgb & 0xFFFFFFu);
+    cmc->index = static_cast<BITCODE_BSd>(aci);
+  } else {
+    cmc->index = static_cast<BITCODE_BSd>(aci);
+    cmc->method = DWG_COLOR_METHOD_ACI;
+    cmc->rgb = 0;
+  }
+}
+
+// Entity colour on R2004+ uses ENC (flag 0x80 + 24-bit rgb), not table CMC packing.
+void SetEntityColorFromStorage(Dwg_Color* color, const std::string& storage, bool useTrueColor) {
+  if (color == nullptr)
+    return;
+  color->flag = 0;
+  if (storage == "ByBlock") {
+    color->index = 0;
+    color->method = DWG_COLOR_METHOD_BYBLOCK;
+    color->rgb = 0;
+    return;
+  }
+  if (storage.empty() || storage == "ByLayer") {
+    color->index = 256;
+    color->method = DWG_COLOR_METHOD_BYLAYER;
+    color->rgb = 0;
+    return;
+  }
+  uint32_t rgb = 0;
+  if (!DxfColorStringToRgbPacked(storage, &rgb)) {
+    color->index = 7;
+    color->method = DWG_COLOR_METHOD_ACI;
+    color->rgb = 0;
+    return;
+  }
+  const int aci = DxfNearestAciFromRgbPacked(rgb);
+  const bool exactPalette = (DxfRgbPackedFromAci(aci) & 0xFFFFFFu) == (rgb & 0xFFFFFFu);
+  if (useTrueColor && !exactPalette) {
+    color->method = DWG_COLOR_METHOD_TRUECOLOR;
+    color->rgb = static_cast<BITCODE_BL>(rgb & 0xFFFFFFu);
+    color->index = static_cast<BITCODE_BSd>(aci);
+    color->flag = 0x80;
+  } else {
+    color->index = static_cast<BITCODE_BSd>(aci);
+    color->method = DWG_COLOR_METHOD_ACI;
+    color->rgb = 0;
+  }
+}
+
+void ApplyLayerTableColor(Dwg_Object_LAYER* ly, const std::string& colorStr, bool on, bool useTrueColor) {
+  if (ly == nullptr)
+    return;
+  uint32_t rgb = 0;
+  const bool hasRgb = DxfColorStringToRgbPacked(colorStr, &rgb);
+  const int aci = hasRgb ? DxfNearestAciFromRgbPacked(rgb) : 7;
+  const bool exactPalette = hasRgb && ((DxfRgbPackedFromAci(aci) & 0xFFFFFFu) == (rgb & 0xFFFFFFu));
+  if (useTrueColor && hasRgb && !exactPalette) {
+    ly->color.method = DWG_COLOR_METHOD_TRUECOLOR;
+    ly->color.rgb = 0xC3000000u | (rgb & 0xFFFFFFu);
+    ly->color.index = static_cast<BITCODE_BSd>(aci);
+  } else {
+    ly->color.index = static_cast<BITCODE_BSd>(on ? aci : -aci);
+    ly->color.method = DWG_COLOR_METHOD_ACI;
+    ly->color.rgb = 0;
+  }
+}
+
 // Builds the DWG LAYER and LTYPE tables from the GoSurvey layer table and wires each exported
 // entity to its layer / colour / linetype (issue #140 / DEBT-151-b — the DWG writer previously
 // emitted geometry only, so a saved drawing lost every layer).
 struct TableWriter {
   Dwg_Data* dwg = nullptr;
+  bool useTrueColor = false;  // R2004+ (issue #615)
   // Store LibreDWG object indices, not Dwg_Object* — dwg_add_* can reallocate dwg->object and
   // invalidate raw pointers cached from an earlier BuildLayerTable / EnsureLtype call.
   std::unordered_map<std::string, BITCODE_BL> layers;  // lower(name) -> parent objid
@@ -1501,11 +1603,7 @@ struct TableWriter {
       Dwg_Object_LAYER* ly = dwg_add_LAYER(dwg, row.name.c_str());
       if (ly == nullptr || ly->parent == nullptr)
         continue;
-      uint32_t rgb = 0;
-      const int aci = DxfColorStringToRgbPacked(row.color, &rgb) ? DxfNearestAciFromRgbPacked(rgb) : 7;
-      ly->color.index = static_cast<BITCODE_BSd>(row.on ? aci : -aci);
-      ly->color.method = DWG_COLOR_METHOD_ACI;
-      ly->color.rgb = 0;
+      ApplyLayerTableColor(ly, row.color, row.on, useTrueColor);
       ly->off = row.on ? 0 : 1;
       ly->frozen = row.frozen ? 1 : 0;
       ly->locked = row.locked ? 1 : 0;
@@ -1557,19 +1655,7 @@ struct TableWriter {
       if (it != layers.end())
         ent->layer = RefObjId(it->second);
     }
-    if (a.color == "ByBlock") {
-      ent->color.index = 0;
-      ent->color.method = DWG_COLOR_METHOD_BYBLOCK;
-    } else if (a.color.empty() || a.color == "ByLayer") {
-      ent->color.index = 256;
-      ent->color.method = DWG_COLOR_METHOD_BYLAYER;
-    } else {
-      uint32_t rgb = 0;
-      if (DxfColorStringToRgbPacked(a.color, &rgb)) {
-        ent->color.index = static_cast<BITCODE_BSd>(DxfNearestAciFromRgbPacked(rgb));
-        ent->color.method = DWG_COLOR_METHOD_ACI;
-      }
-    }
+    SetEntityColorFromStorage(&ent->color, a.color, useTrueColor);
     if (Dwg_Object* lt = EnsureLtype(a.linetype)) {
       ent->ltype = Ref(lt);
       ent->ltype_flags = 3;  // has explicit handle
@@ -1810,19 +1896,13 @@ Dwg_Object_BLOCK_HEADER* EnsureSurveyPointBlockDef(Dwg_Data* dwg, double markerR
 // Writes a BITCODE_CMC from the same colour storage convention CadColor.hpp uses ("ByLayer" /
 // "ACI:N" / "#RRGGBB" / legacy name). Mirrors TableWriter::Apply's entity-colour branch above —
 // DIMSTYLE has no ByBlock concept, so that case collapses to ByLayer.
-void DimStyleSetCmc(BITCODE_CMC* out, const std::string& storage) {
+void DimStyleSetCmc(BITCODE_CMC* out, const std::string& storage, bool useTrueColor) {
   if (out == nullptr)
     return;
-  if (storage.empty() || storage == "ByLayer" || storage == "ByBlock") {
-    out->index = 256;
-    out->method = DWG_COLOR_METHOD_BYLAYER;
-    return;
-  }
-  uint32_t rgb = 0;
-  if (DxfColorStringToRgbPacked(storage, &rgb)) {
-    out->index = static_cast<BITCODE_BSd>(DxfNearestAciFromRgbPacked(rgb));
-    out->method = DWG_COLOR_METHOD_ACI;
-  }
+  std::string s = storage;
+  if (s == "ByBlock")
+    s = "ByLayer";
+  SetCmcFromStorage(out, s, useTrueColor);
 }
 
 // REQ-366 DIMSTYLE field mapping table: only the arrow block NAME maps (DimArrowType -> AutoCAD's
@@ -2271,19 +2351,27 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
                                                       &st.userArcAttrs,  &st.userPolylineAttrs,
                                                       &st.cadAnnotationAttrs, &st.userEllAttrs,
                                                       &st.cadFilledRegionAttrs};
+  const bool trueColorWrite = st.dwgExportVersion == DwgSaveVersion::R2004;
   size_t nColorRounded = 0, nTransparency = 0;
+  auto countRoundedRgb = [&](const std::string& colorStr) {
+    if (trueColorWrite)
+      return;
+    uint32_t rgb = 0;
+    if (!DxfColorStringToRgbPacked(colorStr, &rgb))
+      return;
+    const int aci = DxfNearestAciFromRgbPacked(rgb);
+    if ((DxfRgbPackedFromAci(aci) & 0xFFFFFFu) != (rgb & 0xFFFFFFu))
+      ++nColorRounded;
+  };
   for (const std::vector<EntityAttributes>* v : attrSets) {
     for (const EntityAttributes& a : *v) {
-      uint32_t rgb = 0;
-      if (DxfColorStringToRgbPacked(a.color, &rgb)) {
-        const int aci = DxfNearestAciFromRgbPacked(rgb);
-        if ((DxfRgbPackedFromAci(aci) & 0xFFFFFFu) != (rgb & 0xFFFFFFu))
-          ++nColorRounded;
-      }
+      countRoundedRgb(a.color);
       if (a.transparency >= 0.f)
         ++nTransparency;
     }
   }
+  for (const CadLayerRow& row : st.drawingLayerTable)
+    countRoundedRgb(row.color);
   add("colour(s) (rounded to the nearest AutoCAD index colour)", nColorRounded);
   add("object(s) with transparency (not written)", nTransparency);
 
@@ -2552,6 +2640,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
 
   TableWriter tw;
   tw.dwg = dwg;
+  tw.useTrueColor = (st.dwgExportVersion == DwgSaveVersion::R2004);
   tw.BuildLayerTable(st);
   tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
   // Register every linetype the entities reference up front, so no LTYPE table object is created
@@ -2879,9 +2968,9 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
           dimStyle->DIMASZ = static_cast<double>(sty.arrowSizeInches) * mup;
           dimStyle->DIMDEC = std::clamp(sty.unitPrecision, 0, 8);
           dimStyle->DIMBLK_T = dwg_add_u8_input(dwg, DimArrowBlockName(sty.arrowType));
-          DimStyleSetCmc(&dimStyle->DIMCLRD, sty.dimLineColor);
-          DimStyleSetCmc(&dimStyle->DIMCLRE, sty.extLineColor);
-          DimStyleSetCmc(&dimStyle->DIMCLRT, sty.textColor);
+          DimStyleSetCmc(&dimStyle->DIMCLRD, sty.dimLineColor, tw.useTrueColor);
+          DimStyleSetCmc(&dimStyle->DIMCLRE, sty.extLineColor, tw.useTrueColor);
+          DimStyleSetCmc(&dimStyle->DIMCLRT, sty.textColor, tw.useTrueColor);
         }
       }
       CadDimStrokeParams sp;
