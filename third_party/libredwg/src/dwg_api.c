@@ -27729,7 +27729,7 @@ dwg_fill_MLEADERSTYLE_defaults (Dwg_Data *restrict dwg,
   sty->has_dogleg = 1;
   sty->landing_gap = 0.09;
   sty->landing_dist = 0.36;
-  sty->description = dwg_add_u8_input (dwg, "");
+  sty->description = dwg_add_u8_input (dwg, "Standard");
   sty->arrow_head_size = 0.18;
   sty->text_default = dwg_add_u8_input (dwg, "MText");
   if (dwg->header_vars.TEXTSTYLE)
@@ -27774,6 +27774,7 @@ dwg_add_MLEADERSTYLE (Dwg_Data *restrict dwg, const char *restrict name)
     }
   if (!dwg_is_valid_name_u8 (dwg, name))
     LOG_WARN ("Invalid name \"%s\"\n", name);
+  REQUIRE_CLASS ("MLEADERSTYLE");
   {
     API_ADD_OBJECT (MLEADERSTYLE);
     dictref = dwg_find_dictionary (dwg, "ACAD_MLEADERSTYLE");
@@ -27804,6 +27805,8 @@ dwg_add_MLEADERSTYLE (Dwg_Data *restrict dwg, const char *restrict name)
           }
       }
     dwg_fill_MLEADERSTYLE_defaults (dwg, _obj);
+    if (name)
+      _obj->description = dwg_add_u8_input (dwg, name);
     return _obj;
   }
 }
@@ -27839,8 +27842,7 @@ dwg_add_MULTILEADER (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       return NULL;
     }
   REQUIRE_CLASS ("MULTILEADER");
-  /* MLEADERSTYLE dictionary encode needs a dynapi "name" field this object lacks;
-     multileaders still round-trip with a null style handle (issue #619). */
+  dwg_require_MLEADERSTYLE_Standard (dwg);
   API_ADD_ENTITY2 (MULTILEADER);
 
   _obj->class_version = 2;
@@ -27941,7 +27943,12 @@ dwg_add_MULTILEADER (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   lline->arrow_size = ctx->arrow_size;
   lnode->attach_dir = 0;
 
-  _obj->mleaderstyle = NULL;
+  {
+    BITCODE_H style = dwg_find_tablehandle (dwg, "Standard", "MLEADERSTYLE");
+    if (style)
+      _obj->mleaderstyle
+          = dwg_add_handleref (dwg, 5, style->absolute_ref, obj);
+  }
   _obj->flags = 0;
   _obj->type = 1;
   _obj->line_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
