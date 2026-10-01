@@ -2,6 +2,7 @@
 
 #include "AcisSatParser.hpp"
 #include "CadCommands.hpp"
+#include "util/cadpiperun.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadDimGeom.hpp"
 #include "CadDimStroke.hpp"
@@ -1961,6 +1962,181 @@ bool AppendGosurveyStringEed(Dwg_Data* dwg, Dwg_Object_Entity* ent, const std::v
   return true;
 }
 
+// Issue #612 / D-2026-10-01-d — write B-rep solids and pipe runs as ACIS 3DSOLID (ADR-045 (i) amended).
+namespace dwg_solid_export {
+
+void WorldPoint(const AppCommandState& st, const ray3d::Vec3& local, dwg_point_3d* out) {
+  out->x = local.x + st.worldDocumentOriginX;
+  out->y = local.y + st.worldDocumentOriginY;
+  out->z = local.z;
+}
+
+dwg_point_3d NormalFromUcs(const ucs::Ucs& fr) {
+  return dwg_point_3d{fr.zAxis.x, fr.zAxis.y, fr.zAxis.z};
+}
+
+ray3d::Vec3 RecipePrimitiveCenterLocal(const brep::Recipe& rc) {
+  if (rc.kind == brep::PrimitiveKind::Sphere || rc.kind == brep::PrimitiveKind::Torus)
+    return rc.frame.origin;
+  return ray3d::Add(rc.frame.origin, ray3d::Scale(rc.frame.zAxis, rc.height * 0.5));
+}
+
+bool ParamsFinitePositive(const brep::Recipe& rc) {
+  if (!std::isfinite(rc.length) || !std::isfinite(rc.width) || !std::isfinite(rc.height) ||
+      !std::isfinite(rc.radius) || !std::isfinite(rc.radius2))
+    return false;
+  switch (rc.kind) {
+  case brep::PrimitiveKind::Box:
+  case brep::PrimitiveKind::Wedge:
+    return rc.length > 0.0 && rc.width > 0.0 && rc.height > 0.0;
+  case brep::PrimitiveKind::Pyramid:
+    return rc.height > 0.0 && rc.radius > 0.0 && rc.sides >= 3;
+  case brep::PrimitiveKind::Cylinder:
+    return rc.radius > 0.0 && rc.height > 0.0;
+  case brep::PrimitiveKind::Cone:
+    return rc.radius >= 0.0 && rc.radius2 >= 0.0 && rc.height > 0.0;
+  case brep::PrimitiveKind::Sphere:
+    return rc.radius > 0.0;
+  case brep::PrimitiveKind::Torus:
+    return rc.radius > 0.0 && rc.radius2 > 0.0;
+  default:
+    return false;
+  }
+}
+
+bool CanWriteSolid(const brep::Solid& solid) {
+  const brep::Recipe& rc = solid.recipe;
+  if (rc.kind != brep::PrimitiveKind::None && rc.kind != brep::PrimitiveKind::Polysolid) {
+    if (ParamsFinitePositive(rc))
+      return true;
+  }
+  const acissat::ExportResult er = acissat::ExportSatSolid(solid, "3DSOLID");
+  return er.ok;
+}
+
+Dwg_Entity__3DSOLID* WriteRecipeSolid(Dwg_Object_BLOCK_HEADER* hdr, const AppCommandState& st,
+                                      const brep::Recipe& rc) {
+  if (!ParamsFinitePositive(rc))
+    return nullptr;
+  dwg_point_3d origin{};
+  WorldPoint(st, RecipePrimitiveCenterLocal(rc), &origin);
+  dwg_point_3d normal = NormalFromUcs(rc.frame);
+  switch (rc.kind) {
+  case brep::PrimitiveKind::Box:
+    return dwg_add_BOX(hdr, &origin, &normal, rc.length, rc.width, rc.height);
+  case brep::PrimitiveKind::Wedge:
+    return dwg_add_WEDGE(hdr, &origin, &normal, rc.length, rc.width, rc.height);
+  case brep::PrimitiveKind::Pyramid:
+    return dwg_add_PYRAMID(hdr, &origin, &normal, rc.height, rc.sides, rc.radius, rc.radius2);
+  case brep::PrimitiveKind::Cylinder:
+    return dwg_add_CYLINDER(hdr, &origin, &normal, rc.height, rc.radius, rc.radius, rc.radius);
+  case brep::PrimitiveKind::Cone:
+    return dwg_add_CONE(hdr, &origin, &normal, rc.height, rc.radius, rc.radius2, rc.radius);
+  case brep::PrimitiveKind::Sphere:
+    return dwg_add_SPHERE(hdr, &origin, &normal, rc.radius);
+  case brep::PrimitiveKind::Torus:
+    return dwg_add_TORUS(hdr, &origin, &normal, rc.radius, rc.radius2);
+  default:
+    return nullptr;
+  }
+}
+
+bool WriteSolidEntity(const AppCommandState& st, const brep::Solid& solid, Dwg_Object_BLOCK_HEADER* hdr,
+                      TableWriter* tw, const EntityAttributes* attr) {
+  if (hdr == nullptr)
+    return false;
+  Dwg_Entity__3DSOLID* ent = WriteRecipeSolid(hdr, st, solid.recipe);
+  if (ent == nullptr) {
+    const acissat::ExportResult er = acissat::ExportSatSolid(solid, "3DSOLID");
+    if (!er.ok)
+      return false;
+    ent = dwg_add_3DSOLID(hdr, er.sat.c_str());
+  }
+  if (ent == nullptr || ent->parent == nullptr)
+    return false;
+  if (tw != nullptr && attr != nullptr)
+    tw->Apply(ent->parent, *attr);
+  return true;
+}
+
+size_t CountSkippedSolids(const AppCommandState& st) {
+  size_t n = 0;
+  for (const CadSolidPtr& sp : st.cadSolids) {
+    if (sp != nullptr && !CanWriteSolid(*sp))
+      ++n;
+  }
+  return n;
+}
+
+bool WriteStraightPipeRunAsCylinder(const AppCommandState& st, const CadPipeRun& run,
+                                    Dwg_Object_BLOCK_HEADER* hdr, TableWriter* tw,
+                                    const EntityAttributes* attr) {
+  if (run.vertsXyz.size() != 6)
+    return false;
+  double odFeet = 0.0;
+  if (!CadPipeNominalOdFeet(run.nominalSize, &odFeet))
+    return false;
+  const double r = odFeet * 0.5;
+  if (!(r > 0.0))
+    return false;
+  ray3d::Vec3 a{run.vertsXyz[0], run.vertsXyz[1], run.vertsXyz[2]};
+  ray3d::Vec3 b{run.vertsXyz[3], run.vertsXyz[4], run.vertsXyz[5]};
+  ray3d::Vec3 d = ray3d::Sub(b, a);
+  const double h = ray3d::Length(d);
+  if (!(h > 1e-9))
+    return false;
+  const ray3d::Vec3 z = ray3d::Scale(d, 1.0 / h);
+  ray3d::Vec3 mid = ray3d::Scale(ray3d::Add(a, b), 0.5);
+  dwg_point_3d origin{};
+  WorldPoint(st, mid, &origin);
+  dwg_point_3d normal{z.x, z.y, z.z};
+  Dwg_Entity__3DSOLID* ent = dwg_add_CYLINDER(hdr, &origin, &normal, h, r, r, r);
+  if (ent == nullptr || ent->parent == nullptr)
+    return false;
+  if (tw != nullptr && attr != nullptr)
+    tw->Apply(ent->parent, *attr);
+  return true;
+}
+
+bool WritePipeRunEntity(const AppCommandState& st, const CadPipeRun& run, Dwg_Object_BLOCK_HEADER* hdr,
+                        TableWriter* tw, const EntityAttributes* attr) {
+  std::vector<CadSolidPtr> built;
+  if (CadBuildPipeRunSolids(run, &built)) {
+    for (const CadSolidPtr& sp : built) {
+      if (sp != nullptr && WriteSolidEntity(st, *sp, hdr, tw, attr))
+        return true;
+    }
+  }
+  return WriteStraightPipeRunAsCylinder(st, run, hdr, tw, attr);
+}
+
+size_t CountSkippedPipeRuns(const AppCommandState& st) {
+  size_t n = 0;
+  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
+    const CadPipeRun& run = st.cadPipeRuns[ri];
+    bool canExport = false;
+    std::vector<CadSolidPtr> built;
+    if (CadBuildPipeRunSolids(run, &built)) {
+      for (const CadSolidPtr& sp : built) {
+        if (sp != nullptr && CanWriteSolid(*sp)) {
+          canExport = true;
+          break;
+        }
+      }
+    }
+    if (!canExport && run.vertsXyz.size() == 6) {
+      double odFeet = 0.0;
+      if (CadPipeNominalOdFeet(run.nominalSize, &odFeet) && odFeet > 0.0)
+        canExport = true;
+    }
+    if (!canExport)
+      ++n;
+  }
+  return n;
+}
+
+}  // namespace dwg_solid_export
+
 // REQ-170 / REQ-201, issue #614: what DWG save actually drops or degrades, computed from the
 // drawing instead of a fixed list — so the "Export DWG" warning and the save log cannot disagree
 // with each other or with what FillFromState above actually writes, and a line disappears here the
@@ -1976,7 +2152,7 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   // these vectors). Survey points (REQ-365, #605), feature lines (REQ-057, #603) and block
   // references (REQ-107, #606) are written, so none of the three is here.
   add("table(s)", st.cadTables.size());
-  add("pipe run(s)", st.cadPipeRuns.size());
+  add("pipe run(s)", dwg_solid_export::CountSkippedPipeRuns(st));
   // REQ-366, issue #607: dimensions now write as real DIMSTYLE/DIMENSION_* objects (see
   // FillFromState) — "dimension(s)" removed from this loss list the same way #631 removed "block
   // reference(s)" once blocks got a real writer.
@@ -1986,7 +2162,7 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   add("mesh(es)", st.cadMeshes.size());
   add("point cloud(s)", st.cadPointClouds.size());
   add("TIN surface(s)", st.cadSurfaces.size());
-  add("solid(s)", st.cadSolids.size());
+  add("solid(s)", dwg_solid_export::CountSkippedSolids(st));
 
   // Degradations: the entity IS written, but a property on it is not.
   const std::vector<EntityAttributes>* attrSets[] = {&st.userLineAttrs, &st.userCircleAttrs,
@@ -3002,6 +3178,27 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   }
   if (nHatchOut > 0)
     log.push_back("CAD export — wrote " + std::to_string(nHatchOut) + " HATCH(es) (REQ-170, issue #608).");
+
+  size_t nSolidOut = 0;
+  for (size_t si = 0; si < st.cadSolids.size(); ++si) {
+    const CadSolidPtr& sp = st.cadSolids[si];
+    if (sp == nullptr)
+      continue;
+    const EntityAttributes* at =
+        si < st.cadSolidAttrs.size() ? &st.cadSolidAttrs[si] : nullptr;
+    if (dwg_solid_export::WriteSolidEntity(st, *sp, hdr, &tw, at))
+      ++nSolidOut;
+  }
+  size_t nPipeSolidOut = 0;
+  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
+    const EntityAttributes* at =
+        ri < st.cadPipeRunAttrs.size() ? &st.cadPipeRunAttrs[ri] : nullptr;
+    if (dwg_solid_export::WritePipeRunEntity(st, st.cadPipeRuns[ri], hdr, &tw, at))
+      ++nPipeSolidOut;
+  }
+  if (nSolidOut + nPipeSolidOut > 0)
+    log.push_back("CAD export — wrote " + std::to_string(nSolidOut + nPipeSolidOut) +
+                  " 3DSOLID(s) (ACIS, issue #612).");
 
   FillPaperLayoutsFromState(st, dwg, tw, log);
 

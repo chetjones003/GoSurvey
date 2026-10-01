@@ -2112,13 +2112,14 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (h) **`ucs::Ucs` is the frame type throughout** — for a surface, for an arc edge, and for
   placement. REQ-311 already settled that there is exactly one plane/frame type in this project, and
   a kernel that introduced a second would reopen the disagreement that decision closed.
-  (i) **Solids are EXCLUDED from DXF/DWG export, with an explicit message naming what was skipped.**
-  A real solid in DXF/DWG is an ACIS `3DSOLID` — a proprietary binary B-rep we cannot write without
-  a large third-party kernel that REQ-300 does not permit. This is the same boundary ADR-026 (c)
-  drew for `CadMesh` and for the same reason, and it is stated out loud rather than dropped
-  silently (REQ-201). Writing a tessellated approximation instead was considered and rejected by the
-  user: it hands back a picture of the solid that round-trips as an uneditable bag of triangles with
-  an approximate volume. If that is wanted it is an explicit opt-in export and its own issue.
+  (i) **Solids and pipe-run geometry in DWG export (amended 2026-10-01, D-2026-10-01-d, issue #612).**
+  **DWG:** every exportable `CadSolid` and every pipe run's swept solid is written as a LibreDWG
+  `3DSOLID` carrying ACIS SAT — primitive recipes via `dwg_add_BOX` / `CYLINDER` / … (ASM-compatible
+  streams), other analytic B-reps via in-tree `acissat::ExportSatSolid` within ADR-051's scope. Solids
+  the writer cannot encode remain **counted and named** in the REQ-201 pre-export loss list (never
+  silent). **DXF** export is unchanged: still excluded with an explicit message until separately
+  decided. Writing a tessellated approximation was considered and rejected: it round-trips as an
+  uneditable mesh with approximate volume (ADR-026 (c) boundary for `CadMesh` unchanged).
 - Alternatives: **(1) Recipe-only parametric primitives** (no topology; faces generated on demand) —
   smallest possible kernel, exact volumes for free, tiny files. Rejected because Phase 4 has nowhere
   to put a boolean result, so the real kernel would have to be built anyway, *and* every solid
@@ -2371,8 +2372,9 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
     the typed / prompted shape the primitive commands already use, each one undo step.
   - No renderer change — feature results tessellate through REQ-313's cached path and REQ-100
     profile (d) is unaffected.
-  - DXF / DWG export is unchanged: ADR-045 (i) already excludes every `CadSolid` with a counted,
-    named message.
+  - **DXF export** is unchanged (solids still excluded with a counted message). **DWG export** writes
+    exportable solids and pipe runs as ACIS `3DSOLID` per ADR-045 (i) as amended by D-2026-10-01-d
+    (issue #612); only solids the SAT writer refuses stay in the loss list.
   - **Still not addressed here** (sweep / loft moved to ADR-048, accepted 2026-09-03): multi-loop profiles; fillet / chamfer
     on a solid edge (#120 Phase 5); sectioning, centroid, moments of inertia (#120 Phase 6);
     interactive placement and 3D grips for a feature result (#120 Phase 5).
