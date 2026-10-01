@@ -1578,6 +1578,227 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   return out;
 }
 
+// REQ-037 / REQ-155 / REQ-170, issue #610: paper-space layouts, sheet geometry, and viewports.
+static const char* kDwgDefaultCanonicalMedia = "ANSI_B(11.00 x 17.00 Inches)";
+
+static void SetDwgLayoutTabName(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* bh, const std::string& tabName) {
+  if (dwg == nullptr || bh == nullptr || bh->layout == nullptr || tabName.empty())
+    return;
+  Dwg_Object* layObj = bh->layout->obj;
+  if (layObj == nullptr)
+    layObj = dwg_resolve_handle_silent(dwg, bh->layout->absolute_ref);
+  if (layObj == nullptr || layObj->tio.object == nullptr || layObj->tio.object->tio.LAYOUT == nullptr)
+    return;
+  layObj->tio.object->tio.LAYOUT->layout_name = dwg_add_u8_input(dwg, tabName.c_str());
+}
+
+static Dwg_Object_BLOCK_HEADER* EnsurePaperSpaceBlockHeader(Dwg_Data* dwg, size_t layoutIndex,
+                                                              const char* layoutTabName) {
+  if (dwg == nullptr || layoutTabName == nullptr || layoutTabName[0] == '\0')
+    return nullptr;
+  if (layoutIndex == 0) {
+    Dwg_Object* ps = dwg_paper_space_object(dwg);
+    if (ps == nullptr || ps->tio.object == nullptr)
+      return nullptr;
+    return ps->tio.object->tio.BLOCK_HEADER;
+  }
+  char blockName[32];
+  const unsigned suffix = static_cast<unsigned>(layoutIndex - 1);
+  std::snprintf(blockName, sizeof(blockName), "*Paper_Space%u", suffix);
+  Dwg_Object_BLOCK_HEADER* bh = dwg_add_BLOCK_HEADER(dwg, blockName);
+  if (bh == nullptr)
+    return nullptr;
+  dwg_add_BLOCK(bh, blockName);
+  dwg_add_ENDBLK(bh);
+  int err = 0;
+  Dwg_Object* bobj = dwg_obj_generic_to_object(bh, &err);
+  if (bobj == nullptr)
+    return bh;
+  Dwg_Object_LAYOUT* lay = dwg_add_LAYOUT(bobj, layoutTabName, kDwgDefaultCanonicalMedia);
+  Dwg_Object* layObj = dwg_obj_generic_to_object(lay, &err);
+  if (layObj != nullptr)
+    bh->layout = dwg_add_handleref(dwg, 5, layObj->handle.value, nullptr);
+  return bh;
+}
+
+static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADER* ps, TableWriter& tw,
+                                    const AppCommandState& st) {
+  if (ps == nullptr)
+    return;
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
+    dwg_point_3d a{};
+    dwg_point_3d b{};
+    a.x = static_cast<double>(L.paperLines[i]);
+    a.y = static_cast<double>(L.paperLines[i + 1]);
+    a.z = static_cast<double>(L.paperLines[i + 2]);
+    b.x = static_cast<double>(L.paperLines[i + 3]);
+    b.y = static_cast<double>(L.paperLines[i + 4]);
+    b.z = static_cast<double>(L.paperLines[i + 5]);
+    Dwg_Entity_LINE* e = dwg_add_LINE(ps, &a, &b);
+    if (e != nullptr) {
+      const size_t seg = i / 6;
+      apply(e->parent, seg < L.paperLineAttrs.size() ? &L.paperLineAttrs[seg] : nullptr);
+    }
+  }
+  int nextVpId = 2;
+  for (const Viewport& gv : L.viewports) {
+    Dwg_Entity_VIEWPORT* vp = dwg_add_VIEWPORT(ps, "");
+    if (vp == nullptr)
+      continue;
+    const float cx = gv.paperXIn + gv.paperWIn * 0.5f;
+    const float cy = gv.paperYIn + gv.paperHIn * 0.5f;
+    vp->center.x = static_cast<double>(cx);
+    vp->center.y = static_cast<double>(cy);
+    vp->center.z = 0.0;
+    vp->width = static_cast<double>(gv.paperWIn);
+    vp->height = static_cast<double>(gv.paperHIn);
+    vp->on_off = 1;
+    vp->id = static_cast<BITCODE_RS>(nextVpId++);
+    const double ox = st.worldDocumentOriginX;
+    const double oy = st.worldDocumentOriginY;
+    vp->view_target.x = gv.modelCenterX + ox;
+    vp->view_target.y = gv.modelCenterY + oy;
+    vp->view_target.z = 0.0;
+    vp->VIEWDIR.x = 0.0;
+    vp->VIEWDIR.y = 0.0;
+    vp->VIEWDIR.z = 1.0;
+    vp->VIEWCTR.x = gv.modelCenterX + ox;
+    vp->VIEWCTR.y = gv.modelCenterY + oy;
+    const float sc = gv.safeScale();
+    vp->VIEWSIZE = static_cast<double>(gv.paperHIn) * static_cast<double>(sc);
+    vp->lens_length = 50.0;
+    vp->status_flag = 32800;
+    vp->UCSVP = 1;
+    vp->ucsxdir.x = 1.0;
+    vp->ucsydir.y = 1.0;
+    if (!gv.layer.empty() && gv.layer != "0") {
+      EntityAttributes layerOnly;
+      layerOnly.layer = gv.layer;
+      apply(vp->parent, &layerOnly);
+    }
+  }
+}
+
+static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, TableWriter& tw,
+                                      std::vector<std::string>& log) {
+  if (st.paperLayouts.empty())
+    return;
+  for (const PaperLayout& L : st.paperLayouts) {
+    for (const EntityAttributes& a : L.paperLineAttrs)
+      tw.EnsureLtype(a.linetype);
+    (void)L;
+  }
+  size_t nWritten = 0;
+  for (size_t li = 0; li < st.paperLayouts.size(); ++li) {
+    const PaperLayout& L = st.paperLayouts[li];
+    Dwg_Object_BLOCK_HEADER* ps =
+        EnsurePaperSpaceBlockHeader(dwg, li, L.name.empty() ? "Layout" : L.name.c_str());
+    if (ps == nullptr)
+      continue;
+    SetDwgLayoutTabName(dwg, ps, L.name.empty() ? "Layout" : L.name);
+    WritePaperLayoutContent(L, ps, tw, st);
+    ++nWritten;
+  }
+  if (nWritten > 0) {
+    log.push_back("CAD export — wrote " + std::to_string(nWritten) +
+                  " paper layout(s) with viewports (REQ-170, issue #610).");
+  }
+}
+
+static Dwg_Object* LayoutPaperBlockObject(Dwg_Data* dwg, const Dwg_Object_LAYOUT* lo) {
+  if (dwg == nullptr || lo == nullptr || lo->block_header == nullptr)
+    return nullptr;
+  Dwg_Object* o = lo->block_header->obj;
+  if (o == nullptr)
+    o = dwg_resolve_handle_silent(dwg, lo->block_header->absolute_ref);
+  return o;
+}
+
+static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj,
+                              std::unordered_map<std::string, int>* skipHist) {
+  if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr)
+    return;
+  Dwg_Object_Entity* ent = obj->tio.entity;
+  const EntityAttributes at = AttrFromEnt(dwg, ent);
+  const Dwg_Object_Type ty = obj->fixedtype;
+  if (ty == DWG_TYPE_VIEWPORT && ent->tio.VIEWPORT != nullptr) {
+    const Dwg_Entity_VIEWPORT* e = ent->tio.VIEWPORT;
+    // AutoCAD's layout chrome viewport spans the sheet; user viewports are smaller rectangles.
+    if (e->width > 50.0 || e->height > 50.0)
+      return;
+    Viewport vp;
+    vp.paperWIn = static_cast<float>(e->width);
+    vp.paperHIn = static_cast<float>(e->height);
+    vp.paperXIn = static_cast<float>(e->center.x - e->width * 0.5);
+    vp.paperYIn = static_cast<float>(e->center.y - e->height * 0.5);
+    if (e->height > 1.e-6)
+      vp.scaleModelPerPaperIn = static_cast<float>(e->VIEWSIZE / e->height);
+    vp.modelCenterX = e->view_target.x - st.worldDocumentOriginX;
+    vp.modelCenterY = e->view_target.y - st.worldDocumentOriginY;
+    if (!at.layer.empty() && at.layer != "0")
+      vp.layer = at.layer;
+    L.viewports.push_back(vp);
+    return;
+  }
+  if (ty == DWG_TYPE_LINE && ent->tio.LINE != nullptr) {
+    const Dwg_Entity_LINE* e = ent->tio.LINE;
+    L.paperLines.push_back(static_cast<float>(e->start.x));
+    L.paperLines.push_back(static_cast<float>(e->start.y));
+    L.paperLines.push_back(static_cast<float>(e->start.z));
+    L.paperLines.push_back(static_cast<float>(e->end.x));
+    L.paperLines.push_back(static_cast<float>(e->end.y));
+    L.paperLines.push_back(static_cast<float>(e->end.z));
+    L.paperLineAttrs.push_back(at);
+    return;
+  }
+  if (ty == DWG_TYPE_BLOCK || ty == DWG_TYPE_ENDBLK)
+    return;
+  NoteSkip(skipHist, "paper-space entity (unsupported type)");
+}
+
+static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
+                                      std::unordered_map<std::string, int>* skipHist) {
+  st.paperLayouts.clear();
+  struct LayoutRow {
+    int tab = 0;
+    Dwg_Object* layObj = nullptr;
+    std::string name;
+  };
+  std::vector<LayoutRow> rows;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_LAYOUT || o->tio.object == nullptr ||
+        o->tio.object->tio.LAYOUT == nullptr)
+      continue;
+    Dwg_Object_LAYOUT* lo = o->tio.object->tio.LAYOUT;
+    const std::string name = FromT(dwg, lo->layout_name);
+    if (name == "Model")
+      continue;
+    rows.push_back({static_cast<int>(lo->tab_order), o, name});
+  }
+  std::sort(rows.begin(), rows.end(), [](const LayoutRow& a, const LayoutRow& b) {
+    if (a.tab != b.tab)
+      return a.tab < b.tab;
+    return a.name < b.name;
+  });
+  for (const LayoutRow& row : rows) {
+    Dwg_Object_LAYOUT* lo = row.layObj->tio.object->tio.LAYOUT;
+    PaperLayout pl;
+    pl.name = row.name.empty() ? "Layout" : row.name;
+    Dwg_Object* blk = LayoutPaperBlockObject(dwg, lo);
+    if (blk != nullptr) {
+      for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr;
+           e = get_next_owned_entity(blk, e))
+        ImportPaperEntity(pl, st, dwg, e, skipHist);
+    }
+    st.paperLayouts.push_back(std::move(pl));
+  }
+}
+
 void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr,
                    std::vector<std::string>& log) {
   auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
@@ -2317,6 +2538,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   if (nHatchOut > 0)
     log.push_back("CAD export — wrote " + std::to_string(nHatchOut) + " HATCH(es) (REQ-170, issue #608).");
 
+  FillPaperLayoutsFromState(st, dwg, tw, log);
+
   // REQ-170 / REQ-201, issue #614: every drop and degradation, named and counted, from the ONE
   // scan the pre-export warning dialog also reads — so the log and the dialog cannot disagree, and
   // nothing is silently dropped.
@@ -2706,6 +2929,8 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
     }
   }
 
+  ImportPaperLayoutsFromDwg(st, &dwg, &skipHist);
+
   dwg_free(&dwg);
 
   CadCoord::MaybeRebaseLargeCoordinates(st, &log);
@@ -2739,6 +2964,14 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   if (!st.cadFilledRegions.empty())
     log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " +
                   std::to_string(st.cadFilledRegions.size()) + " HATCH fill(s) (REQ-170, issue #608).");
+  if (!st.paperLayouts.empty()) {
+    size_t nVp = 0;
+    for (const PaperLayout& pl : st.paperLayouts)
+      nVp += pl.viewports.size();
+    log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " +
+                  std::to_string(st.paperLayouts.size()) + " paper layout(s), " +
+                  std::to_string(nVp) + " viewport(s) (REQ-170, issue #610).");
+  }
   int printed = 0;
   for (const auto& kv : skipHist) {
     if (printed >= 8)
