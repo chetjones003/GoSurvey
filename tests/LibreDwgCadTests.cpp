@@ -2111,3 +2111,75 @@ TEST_CASE("DWG import falls back an unsupported DIMENSION subtype to a skip log,
   for (const CadAnnotation& a : in.cadAnnotations)
     CHECK_FALSE(CadAnnotationIsDimension(a));  // never mapped to a GoSurvey dimension kind
 }
+
+static void StripGosurveyDwgTrailer(const std::string& pathUtf8) {
+  std::ifstream rf(std::filesystem::u8path(pathUtf8), std::ios::binary);
+  REQUIRE(rf.good());
+  std::vector<char> bytes((std::istreambuf_iterator<char>(rf)), std::istreambuf_iterator<char>());
+  rf.close();
+  constexpr size_t kMagicLen = 16, kLenLen = 8;
+  REQUIRE(bytes.size() > kMagicLen + kLenLen);
+  uint64_t jsonLen = 0;
+  for (int i = 0; i < 8; ++i)
+    jsonLen |= static_cast<uint64_t>(static_cast<unsigned char>(bytes[bytes.size() - kMagicLen - kLenLen + i]))
+               << (8 * i);
+  const size_t dwgOnlyLen = bytes.size() - kMagicLen - kLenLen - static_cast<size_t>(jsonLen);
+  REQUIRE(dwgOnlyLen > 0);
+  REQUIRE(dwgOnlyLen < bytes.size());
+  std::filesystem::resize_file(std::filesystem::u8path(pathUtf8), dwgOnlyLen);
+}
+
+static CadFilledRegion SquareHatchRegion(float x0, float y0, float size) {
+  CadFilledRegion fr;
+  fr.loopStart = {0};
+  fr.vertsXyz = {x0, y0, 0.0, x0 + size, y0, 0.0, x0 + size, y0 + size, 0.0, x0, y0 + size, 0.0};
+  return fr;
+}
+
+// REQ-170 / issue #608: solid and pattern hatches round-trip through native DWG entities.
+TEST_CASE("DWG round-trips solid and pattern HATCH fills (REQ-170, issue #608)",
+          "[dwg][libredwg][req170][issue608]") {
+  ScratchDir dir("roundtrip-hatch");
+  const auto p = (dir.path / "rt-hatch.dwg").string();
+  AppCommandState st;
+  st.cadFilledRegions.push_back(SquareHatchRegion(0.f, 0.f, 10.f));
+  st.cadFilledRegionAttrs.push_back(EntityAttributes{});
+
+  CadFilledRegion pat = SquareHatchRegion(20.f, 0.f, 8.f);
+  pat.patternName = "ANSI31";
+  pat.patternAngleDeg = 45.f;
+  pat.patternScale = 2.f;
+  st.cadFilledRegions.push_back(std::move(pat));
+  st.cadFilledRegionAttrs.push_back(EntityAttributes{});
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  bool loggedHatch = false;
+  for (const auto& l : log)
+    if (l.find("HATCH") != std::string::npos && l.find("608") != std::string::npos)
+      loggedHatch = true;
+  CHECK(loggedHatch);
+  CHECK(ComputeDwgExportLosses(st).empty());
+
+  StripGosurveyDwgTrailer(p);
+
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.cadFilledRegions.size() == 2);
+
+  int nSolid = 0;
+  int nPattern = 0;
+  for (const CadFilledRegion& fr : in.cadFilledRegions) {
+    if (fr.isSolid())
+      ++nSolid;
+    else if (fr.patternName == "ANSI31") {
+      ++nPattern;
+      CHECK(fr.patternAngleDeg == Catch::Approx(45.f).margin(0.05f));
+      CHECK(fr.patternScale == Catch::Approx(2.f).margin(0.05f));
+    }
+    REQUIRE(fr.loopStart.size() == 1);
+    CHECK(fr.loopCount(0) == 4);
+  }
+  CHECK(nSolid == 1);
+  CHECK(nPattern == 1);
+}
