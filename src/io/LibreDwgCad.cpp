@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -427,6 +428,207 @@ static bool ImportTrimmedEllipseAsPolyline(AppCommandState& st, const Dwg_Entity
     return false;
   LocalPolyline(st, xyz, false, at);
   return true;
+}
+
+static bool CornersEqual2d(const BITCODE_2RD& a, const BITCODE_2RD& b) {
+  return std::fabs(a.x - b.x) < 1.e-9 && std::fabs(a.y - b.y) < 1.e-9;
+}
+
+// REQ-170, issue #613: 2D SOLID / TRACE → solid filled region (ADR-011).
+static bool Import2DSolidOrTrace(AppCommandState& st, const BITCODE_2RD& c1, const BITCODE_2RD& c2,
+                                 const BITCODE_2RD& c3, const BITCODE_2RD& c4, double elev, const Xf2& xf,
+                                 const EntityAttributes& at) {
+  CadFilledRegion region;
+  region.loopStart.push_back(0);
+  auto pushCorner = [&](const BITCODE_2RD& c) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(c.x, c.y, &wx, &wy);
+    region.vertsXyz.push_back(wx - st.worldDocumentOriginX);
+    region.vertsXyz.push_back(wy - st.worldDocumentOriginY);
+    region.vertsXyz.push_back(elev);
+  };
+  pushCorner(c1);
+  pushCorner(c2);
+  pushCorner(c3);
+  if (!CornersEqual2d(c3, c4))
+    pushCorner(c4);
+  if (region.vertsXyz.size() < 9)
+    return false;
+  region.patternName.clear();
+  st.cadFilledRegions.push_back(std::move(region));
+  st.cadFilledRegionAttrs.push_back(at);
+  return true;
+}
+
+static bool Import3DFaceAsMesh(AppCommandState& st, const Dwg_Entity__3DFACE* f, const Xf2& xf,
+                               const EntityAttributes& at) {
+  if (f == nullptr)
+    return false;
+  auto same3d = [](const BITCODE_3BD& a, const BITCODE_3BD& b) {
+    return std::fabs(a.x - b.x) < 1.e-9 && std::fabs(a.y - b.y) < 1.e-9 && std::fabs(a.z - b.z) < 1.e-9;
+  };
+  const bool triangle = same3d(f->corner3, f->corner4);
+  auto mesh = std::make_shared<CadMesh>();
+  mesh->sourceName = "DWG 3DFACE";
+  auto addVert = [&](const BITCODE_3BD& p) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(p.x, p.y, &wx, &wy);
+    mesh->vertsXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+    mesh->vertsXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+    mesh->vertsXyz.push_back(static_cast<float>(p.z));
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(1.f);
+  };
+  addVert(f->corner1);
+  addVert(f->corner2);
+  addVert(f->corner3);
+  if (!triangle)
+    addVert(f->corner4);
+  if (triangle) {
+    mesh->indices = {0, 1, 2};
+  } else {
+    mesh->indices = {0, 1, 2, 0, 2, 3};
+  }
+  CadMeshPart part;
+  part.name = "3DFACE";
+  part.indexBegin = 0;
+  part.indexCount = static_cast<int>(mesh->indices.size());
+  mesh->parts.push_back(part);
+  st.cadMeshes.push_back(std::move(mesh));
+  st.cadMeshAttrs.push_back(at);
+  return true;
+}
+
+static bool ImportPolylineMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj,
+                               const Dwg_Entity_POLYLINE_MESH* pm, const Xf2& xf,
+                               const EntityAttributes& at) {
+  if (dwg == nullptr || obj == nullptr || pm == nullptr)
+    return false;
+  const int m = static_cast<int>(pm->num_m_verts);
+  const int n = static_cast<int>(pm->num_n_verts);
+  if (m < 2 || n < 2)
+    return false;
+  std::vector<dwg_point_3d> grid;
+  grid.reserve(static_cast<size_t>(m * n));
+  auto appendVertex = [&](Dwg_Object* v) {
+    if (v == nullptr || v->fixedtype != DWG_TYPE_VERTEX_MESH || v->tio.entity == nullptr ||
+        v->tio.entity->tio.VERTEX_MESH == nullptr)
+      return;
+    const Dwg_Entity_VERTEX_3D* p = v->tio.entity->tio.VERTEX_MESH;
+    grid.push_back({p->point.x, p->point.y, p->point.z});
+  };
+  if (pm->num_owned > 0 && pm->vertex != nullptr) {
+    for (BITCODE_BL i = 0; i < pm->num_owned; ++i) {
+      Dwg_Object* v = pm->vertex[i] != nullptr ? pm->vertex[i]->obj : nullptr;
+      if (v == nullptr && pm->vertex[i] != nullptr)
+        v = dwg_resolve_handle_silent(dwg, pm->vertex[i]->absolute_ref);
+      appendVertex(v);
+    }
+  } else {
+    for (Dwg_Object* v = get_first_owned_entity(obj); v != nullptr; v = get_next_owned_entity(obj, v))
+      appendVertex(v);
+  }
+  if (static_cast<int>(grid.size()) < m * n && pm->first_vertex != nullptr) {
+    grid.clear();
+    Dwg_Object* v = pm->first_vertex->obj;
+    if (v == nullptr)
+      v = dwg_resolve_handle_silent(dwg, pm->first_vertex->absolute_ref);
+    for (int guard = 0; v != nullptr && guard < m * n + 8; ++guard) {
+      if (v->fixedtype == DWG_TYPE_SEQEND)
+        break;
+      appendVertex(v);
+      Dwg_Object_Entity* entVtx = v->tio.entity;
+      if (entVtx == nullptr || entVtx->next_entity == nullptr)
+        break;
+      v = entVtx->next_entity->obj;
+      if (v == nullptr)
+        v = dwg_resolve_handle_silent(dwg, entVtx->next_entity->absolute_ref);
+    }
+  }
+  if (static_cast<int>(grid.size()) < m * n)
+    return false;
+  auto mesh = std::make_shared<CadMesh>();
+  mesh->sourceName = "DWG POLYLINE_MESH";
+  for (const dwg_point_3d& p : grid) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(p.x, p.y, &wx, &wy);
+    mesh->vertsXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+    mesh->vertsXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+    mesh->vertsXyz.push_back(static_cast<float>(p.z));
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(1.f);
+  }
+  auto idx = [&](int mi, int ni) { return static_cast<std::uint32_t>(mi * n + ni); };
+  for (int mi = 0; mi + 1 < m; ++mi) {
+    for (int ni = 0; ni + 1 < n; ++ni) {
+      const std::uint32_t a = idx(mi, ni);
+      const std::uint32_t b = idx(mi + 1, ni);
+      const std::uint32_t c = idx(mi, ni + 1);
+      const std::uint32_t d = idx(mi + 1, ni + 1);
+      mesh->indices.push_back(a);
+      mesh->indices.push_back(b);
+      mesh->indices.push_back(c);
+      mesh->indices.push_back(b);
+      mesh->indices.push_back(d);
+      mesh->indices.push_back(c);
+    }
+  }
+  CadMeshPart part;
+  part.name = "Mesh";
+  part.indexBegin = 0;
+  part.indexCount = static_cast<int>(mesh->indices.size());
+  mesh->parts.push_back(part);
+  st.cadMeshes.push_back(std::move(mesh));
+  st.cadMeshAttrs.push_back(at);
+  return true;
+}
+
+static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_LEADER* ld, const Xf2& xf,
+                               const EntityAttributes& at) {
+  if (ld == nullptr || ld->num_points < 2 || ld->points == nullptr)
+    return false;
+  std::vector<double> xyz;
+  xyz.reserve(static_cast<size_t>(ld->num_points) * 3);
+  for (BITCODE_BL i = 0; i < ld->num_points; ++i) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(ld->points[i].x, ld->points[i].y, &wx, &wy);
+    xyz.push_back(wx);
+    xyz.push_back(wy);
+    xyz.push_back(ld->points[i].z);
+  }
+  LocalPolyline(st, xyz, false, at);
+  if (ld->associated_annotation != nullptr) {
+    Dwg_Object* ann = ld->associated_annotation->obj;
+    if (ann == nullptr)
+      ann = dwg_resolve_handle_silent(dwg, ld->associated_annotation->absolute_ref);
+    if (ann != nullptr && ann->fixedtype == DWG_TYPE_MTEXT && ann->tio.entity != nullptr &&
+        ann->tio.entity->tio.MTEXT != nullptr) {
+      const Dwg_Entity_MTEXT* mt = ann->tio.entity->tio.MTEXT;
+      double x = 0.0, y = 0.0;
+      xf.apply(mt->ins_pt.x, mt->ins_pt.y, &x, &y);
+      const double rot = std::atan2(mt->x_axis_dir.y, mt->x_axis_dir.x);
+      LocalText(st, x, y, mt->ins_pt.z, mt->text_height, rot + xf.ang, FromT(dwg, mt->text),
+                CadAnnotation::Kind::Mtext, at);
+    }
+  }
+  return true;
+}
+
+static void ImportPointAsPositionMarker(AppCommandState& st, double wx, double wy, double z,
+                                        const EntityAttributes& at) {
+  CadPositionMarker m;
+  m.x = wx - st.worldDocumentOriginX;
+  m.y = wy - st.worldDocumentOriginY;
+  m.z = static_cast<float>(z);
+  m.label.kind = CadAnnotation::Kind::Mtext;
+  m.label.insX = static_cast<float>(m.x);
+  m.label.insY = static_cast<float>(m.y);
+  m.label.insZ = m.z;
+  m.label.text.clear();
+  st.cadPositionMarkers.push_back(std::move(m));
+  st.cadPositionMarkerAttrs.push_back(at);
 }
 
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
@@ -900,15 +1102,56 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     NoteSkip(skipHist, "SPLINE(degenerate or unsupported)");
     return;
   }
+  if (ty == DWG_TYPE_LEADER && ent->tio.LEADER != nullptr) {
+    if (ImportLeaderEntity(st, dwg, ent->tio.LEADER, xf, at))
+      return;
+    NoteSkip(skipHist, "LEADER(degenerate or unsupported)");
+    return;
+  }
+  if (ty == DWG_TYPE_MULTILEADER) {
+    NoteSkip(skipHist, "MULTILEADER(use #619 multileader support)");
+    return;
+  }
+  if (ty == DWG_TYPE__3DFACE && ent->tio._3DFACE != nullptr) {
+    if (Import3DFaceAsMesh(st, ent->tio._3DFACE, xf, at))
+      return;
+    NoteSkip(skipHist, "3DFACE(degenerate)");
+    return;
+  }
+  if (ty == DWG_TYPE_SOLID && ent->tio.SOLID != nullptr) {
+    const Dwg_Entity_SOLID* e = ent->tio.SOLID;
+    if (Import2DSolidOrTrace(st, e->corner1, e->corner2, e->corner3, e->corner4, e->elevation, xf, at))
+      return;
+    NoteSkip(skipHist, "SOLID(degenerate)");
+    return;
+  }
+  if (ty == DWG_TYPE_TRACE && ent->tio.TRACE != nullptr) {
+    const Dwg_Entity_TRACE* e = ent->tio.TRACE;
+    if (Import2DSolidOrTrace(st, e->corner1, e->corner2, e->corner3, e->corner4, e->elevation, xf, at))
+      return;
+    NoteSkip(skipHist, "TRACE(degenerate)");
+    return;
+  }
+  if (ty == DWG_TYPE_POLYLINE_MESH && ent->tio.POLYLINE_MESH != nullptr) {
+    if (ImportPolylineMesh(st, dwg, obj, ent->tio.POLYLINE_MESH, xf, at))
+      return;
+    NoteSkip(skipHist, "POLYLINE_MESH(degenerate or unsupported)");
+    return;
+  }
+  if (ty == DWG_TYPE_POLYLINE_PFACE) {
+    NoteSkip(skipHist, "POLYLINE_PFACE(not supported yet)");
+    return;
+  }
+  if (ty == DWG_TYPE_IMAGE || ty == DWG_TYPE_WIPEOUT || ty == DWG_TYPE_PDFUNDERLAY ||
+      ty == DWG_TYPE_DWFUNDERLAY || ty == DWG_TYPE_DGNUNDERLAY) {
+    NoteSkip(skipHist, "IMAGE/underlay(reference not imported)");
+    return;
+  }
   if (ty == DWG_TYPE_POINT && ent->tio.POINT != nullptr) {
     const Dwg_Entity_POINT* e = ent->tio.POINT;
-    double px = 0, py = 0;
+    double px = 0.0, py = 0.0;
     xf.apply(e->x, e->y, &px, &py);
-    const double arm = 0.01;
-    LocalLine(st, px - arm, py, e->z, px, py, e->z, at);
-    LocalLine(st, px, py, e->z, px + arm, py, e->z, at);
-    LocalLine(st, px, py - arm, e->z, px, py, e->z, at);
-    LocalLine(st, px, py, e->z, px, py + arm, e->z, at);
+    ImportPointAsPositionMarker(st, px, py, e->z, at);
     return;
   }
   if (ty == DWG_TYPE_HATCH && ent->tio.HATCH != nullptr) {

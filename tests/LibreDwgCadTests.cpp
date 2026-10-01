@@ -2320,3 +2320,57 @@ TEST_CASE("DWG import maps SPLINE and trimmed ELLIPSE to polylines (REQ-170, iss
   REQUIRE(st.userPolylineOffsets.size() >= 2);
   CHECK(st.userPolylineVerts.size() >= 12);
 }
+
+TEST_CASE("DWG import maps POINT LEADER SOLID 3DFACE and mesh (REQ-170, issue #613)",
+          "[dwg][libredwg][req170][issue613]") {
+  ScratchDir dir("open-misc-entities");
+  const auto p = (dir.path / "misc.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(hdr != nullptr);
+
+  const dwg_point_3d pt{1.0, 2.0, 0.0};
+  REQUIRE(dwg_add_POINT(hdr, &pt) != nullptr);
+
+  const dwg_point_3d mtextPt{8.0, 8.0, 0.0};
+  Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &mtextPt, 12.0, "Leader note");
+  REQUIRE(mt != nullptr);
+  const dwg_point_3d lpts[2] = {{0.0, 0.0, 0.0}, {8.0, 8.0, 0.0}};
+  REQUIRE(dwg_add_LEADER(hdr, 2, lpts, mt, 0) != nullptr);
+
+  const dwg_point_3d s1{10.0, 0.0, 0.0};
+  const dwg_point_2d s2{15.0, 0.0};
+  const dwg_point_2d s3{15.0, 5.0};
+  const dwg_point_2d s4{10.0, 5.0};
+  REQUIRE(dwg_add_SOLID(hdr, &s1, &s2, &s3, &s4) != nullptr);
+
+  const dwg_point_3d f1{0.0, 10.0, 0.0};
+  const dwg_point_3d f2{5.0, 10.0, 0.0};
+  const dwg_point_3d f3{5.0, 15.0, 0.0};
+  const dwg_point_3d f4{0.0, 15.0, 0.0};
+  REQUIRE(dwg_add_3DFACE(hdr, &f1, &f2, &f3, &f4) != nullptr);
+
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, p.c_str(), log));
+  CHECK(st.cadPositionMarkers.size() == 1);
+  CHECK(st.cadPositionMarkers[0].x == Catch::Approx(1.0).margin(0.01));
+  CHECK(st.cadFilledRegions.size() >= 1);
+  REQUIRE(st.cadMeshes.size() >= 1);
+  CHECK(st.cadMeshes[0]->triangleCount() >= 2);
+  CHECK(st.userPolylineOffsets.size() >= 1);
+  bool foundLeaderText = false;
+  for (const CadAnnotation& a : st.cadAnnotations) {
+    if (a.text.find("Leader note") != std::string::npos)
+      foundLeaderText = true;
+  }
+  CHECK(foundLeaderText);
+}
