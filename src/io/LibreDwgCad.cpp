@@ -886,6 +886,166 @@ const EntityAttributes* AttrAt(const std::vector<EntityAttributes>& v, size_t i)
 // AutoCAD/Civil 3D, which is why there is no XDATA identity to preserve here.
 inline constexpr const char* kSurveyPointBlockName = "GOSURVEY_POINT";
 
+// REQ-107, issue #606: a block definition's own geometry, written into its BLOCK_HEADER. Content
+// coordinates are block-LOCAL (no worldDocumentOrigin offset — that only applies to model space),
+// which is the one difference from FillFromState's top-level entity loops below; the field
+// layouts are otherwise identical (CadBlockContent mirrors AppCommandState field-for-field — see
+// HarvestDrawingPrimitivesIntoContent/LoadBlockPrimitivesIntoDrawing in CadBlocks.cpp, the same
+// mapping run in reverse for BEDIT). Deliberately simpler than the model-space writer: no tilted-
+// polyline split (REQ-325), no MTEXT attachment/style resolution (issue #604) — a block
+// definition's own content is written flat, matching what AutoCAD needs to show the block
+// correctly without pulling in every model-space refinement. Nested blocks, meshes and solids
+// inside a block are not written (same degradations FillFromState already discloses for model
+// space, via the #614 loss summary).
+void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
+                                  const CadBlockContent& content, TableWriter& tw) {
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  const size_t nSeg = content.lines.size() / 6;
+  for (size_t i = 0; i < nSeg; ++i) {
+    dwg_point_3d a{content.lines[i * 6 + 0], content.lines[i * 6 + 1], content.lines[i * 6 + 2]};
+    dwg_point_3d b{content.lines[i * 6 + 3], content.lines[i * 6 + 4], content.lines[i * 6 + 5]};
+    if (Dwg_Entity_LINE* e = dwg_add_LINE(blkhdr, &a, &b))
+      apply(e->parent, AttrAt(content.lineAttrs, i));
+  }
+  const size_t nC = content.circles.size() / 4;
+  for (size_t i = 0; i < nC; ++i) {
+    dwg_point_3d c{content.circles[i * 4 + 0], content.circles[i * 4 + 1], content.circles[i * 4 + 2]};
+    float nx = kFlatNormalX, ny = kFlatNormalY, nz = kFlatNormalZ;
+    CircleNormalAt(content.circleNormals, i, &nx, &ny, &nz);
+    dwg_point_3d ext{0.0, 0.0, 1.0};
+    if (!IsFlatNormal(nx, ny, nz)) {
+      ucs::Ucs frame;
+      if (ucs::FromNormal({0.0, 0.0, 0.0}, {static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)},
+                          &frame)) {
+        const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, {c.x, c.y, c.z});
+        c = {ocs.x, ocs.y, ocs.z};
+        ext = {static_cast<double>(nx), static_cast<double>(ny), static_cast<double>(nz)};
+      }
+    }
+    if (Dwg_Entity_CIRCLE* e = dwg_add_CIRCLE(blkhdr, &c, content.circles[i * 4 + 3])) {
+      e->extrusion.x = ext.x;
+      e->extrusion.y = ext.y;
+      e->extrusion.z = ext.z;
+      apply(e->parent, AttrAt(content.circleAttrs, i));
+    }
+  }
+  for (size_t i = 0; i < content.arcs.size(); ++i) {
+    const CadArc& arc = content.arcs[i];
+    dwg_point_3d c{arc.cx, arc.cy, arc.z};
+    const double a0 = static_cast<double>(arc.startRad);
+    const double a1 = a0 + static_cast<double>(arc.sweepRad);
+    dwg_point_3d ext{0.0, 0.0, 1.0};
+    if (!IsFlatNormal(arc.nx, arc.ny, arc.nz)) {
+      ucs::Ucs frame;
+      if (ucs::FromNormal({0.0, 0.0, 0.0},
+                          {static_cast<double>(arc.nx), static_cast<double>(arc.ny), static_cast<double>(arc.nz)},
+                          &frame)) {
+        const ray3d::Vec3 ocs = ucs::WorldToUcs(frame, {c.x, c.y, c.z});
+        c = {ocs.x, ocs.y, ocs.z};
+        ext = {static_cast<double>(arc.nx), static_cast<double>(arc.ny), static_cast<double>(arc.nz)};
+      }
+    }
+    if (Dwg_Entity_ARC* e = dwg_add_ARC(blkhdr, &c, static_cast<double>(arc.r), a0, a1)) {
+      e->extrusion.x = ext.x;
+      e->extrusion.y = ext.y;
+      e->extrusion.z = ext.z;
+      apply(e->parent, AttrAt(content.arcAttrs, i));
+    }
+  }
+  for (size_t i = 0; i < content.ellipses.size(); ++i) {
+    const CadEllipse& el = content.ellipses[i];
+    dwg_point_3d c{el.cx, el.cy, el.z};
+    const double majLen = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    if (majLen < 1e-12)
+      continue;
+    double ratio = static_cast<double>(el.ratio);
+    if (ratio <= 0.0 || ratio > 1.0)
+      ratio = 1.0;
+    if (Dwg_Entity_ELLIPSE* e = dwg_add_ELLIPSE(blkhdr, &c, majLen, ratio)) {
+      apply(e->parent, AttrAt(content.ellAttrs, i));
+      e->sm_axis.x = static_cast<double>(el.majVx);
+      e->sm_axis.y = static_cast<double>(el.majVy);
+      e->sm_axis.z = 0.0;
+      e->axis_ratio = ratio;
+      e->start_angle = 0.0;
+      e->end_angle = 2.0 * kPi;
+    }
+  }
+  for (size_t i = 0; i + 1 < content.polyOffsets.size(); ++i) {
+    const int a = content.polyOffsets[i];
+    const int b = content.polyOffsets[i + 1];
+    const int nv = b - a;
+    if (nv < 2)
+      continue;
+    std::vector<dwg_point_2d> pts(static_cast<size_t>(nv));
+    for (int v = 0; v < nv; ++v) {
+      const size_t k = static_cast<size_t>(a + v) * 3;
+      pts[static_cast<size_t>(v)].x = content.polyVerts[k];
+      pts[static_cast<size_t>(v)].y = content.polyVerts[k + 1];
+    }
+    Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(blkhdr, nv, pts.data());
+    if (lw == nullptr)
+      continue;
+    const double z0 = content.polyVerts[static_cast<size_t>(a) * 3 + 2];
+    if (z0 != 0.0) {
+      lw->elevation = z0;
+      lw->flag = static_cast<BITCODE_BS>(lw->flag | 8);
+    }
+    if (i < content.polyClosed.size() && content.polyClosed[i] != 0)
+      lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);
+    bool anyBulge = false;
+    std::vector<double> bulges(static_cast<size_t>(nv), 0.0);
+    for (int v = 0; v < nv; ++v) {
+      const size_t vi = static_cast<size_t>(a + v);
+      const float bg = vi < content.polyVertsBulge.size() ? content.polyVertsBulge[vi] : 0.f;
+      if (bg == 0.f)
+        continue;
+      bulges[static_cast<size_t>(v)] = static_cast<double>(bg);
+      anyBulge = true;
+    }
+    if (anyBulge) {
+      lw->num_bulges = static_cast<BITCODE_BL>(nv);
+      lw->bulges = static_cast<BITCODE_BD*>(calloc(static_cast<size_t>(nv), sizeof(BITCODE_BD)));
+      if (lw->bulges != nullptr) {
+        for (int v = 0; v < nv; ++v)
+          lw->bulges[v] = bulges[static_cast<size_t>(v)];
+        lw->flag = static_cast<BITCODE_BS>(lw->flag | 16);
+      } else {
+        lw->num_bulges = 0;
+      }
+    }
+    apply(lw->parent, AttrAt(content.polyAttrs, i));
+  }
+  for (size_t i = 0; i < content.texts.size(); ++i) {
+    const CadAnnotation& an = content.texts[i];
+    dwg_point_3d p{an.insX, an.insY, an.insZ};
+    const EntityAttributes* at = AttrAt(content.textAttrs, i);
+    if (an.kind == CadAnnotation::Kind::Mtext) {
+      std::string wire;
+      for (char ch : MtextRichFlattenToPlain(SanitizeDwgTextSymbols(an.text))) {
+        if (ch == '\n')
+          wire += "\\P";
+        else if (ch != '\r')
+          wire += ch;
+      }
+      const double bw = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
+      if (Dwg_Entity_MTEXT* e = dwg_add_MTEXT(blkhdr, &p, bw, wire.c_str())) {
+        e->text_height = std::max(static_cast<double>(an.plottedHeightInches), 1e-3);
+        apply(e->parent, at);
+      }
+    } else if (an.kind == CadAnnotation::Kind::Text) {
+      if (Dwg_Entity_TEXT* e = dwg_add_TEXT(blkhdr, SanitizeDwgTextSymbols(an.text).c_str(), &p,
+                                            std::max(static_cast<double>(an.plottedHeightInches), 1e-3))) {
+        e->rotation = static_cast<double>(an.rotationRad);
+        apply(e->parent, at);
+      }
+    }
+  }
+}
+
 // Creates the GOSURVEY_POINT block definition (marker + attribute tags) once per export. Returns
 // nullptr if the block header could not be created, in which case the caller skips every point
 // rather than writing a broken INSERT.
@@ -970,11 +1130,10 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   };
 
   // Entity classes with no DWG writer at all (silent today — nothing in FillFromState touches
-  // these vectors). Survey points (REQ-365, issue #605) and feature lines (REQ-057, issue #603)
-  // are written, so neither is here.
+  // these vectors). Survey points (REQ-365, #605), feature lines (REQ-057, #603) and block
+  // references (REQ-107, #606) are written, so none of the three is here.
   add("table(s)", st.cadTables.size());
   add("pipe run(s)", st.cadPipeRuns.size());
-  add("block reference(s)", st.cadBlockRefs.size());
   size_t nDims = 0;
   for (const CadAnnotation& a : st.cadAnnotations)
     if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear ||
@@ -1498,6 +1657,70 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         apply(ins2()->parent, &at);
       }
     }
+  }
+  // REQ-107, issue #606: real BLOCK/INSERT/ATTRIB records, so a GoSurvey DWG shows blocks (incl.
+  // pipe-fitting parts) as real, re-insertable blocks in AutoCAD/Civil 3D instead of nothing at
+  // all. Definitions are written FIRST and in full before any INSERT, since dwg_add_INSERT looks
+  // its target block up by name (must already be in the BLOCK table).
+  std::unordered_map<std::string, const CadBlockDefinition*> blockDefByName;
+  for (const CadBlockDefinition& def : st.blockDefs) {
+    if (def.name.empty())
+      continue;
+    Dwg_Object_BLOCK_HEADER* bh = dwg_add_BLOCK_HEADER(dwg, def.name.c_str());
+    if (bh == nullptr)
+      continue;
+    dwg_add_BLOCK(bh, def.name.c_str());
+    WriteBlockDefinitionGeometry(bh, def.content, tw);
+    for (const CadBlockAttrDef& ad : def.attrDefs) {
+      if (ad.tag.empty())
+        continue;
+      dwg_point_3d ap{static_cast<double>(ad.localX), static_cast<double>(ad.localY),
+                      static_cast<double>(ad.localZ)};
+      dwg_add_ATTDEF(bh, std::max(static_cast<double>(ad.height), 1e-3), 0,
+                     ad.prompt.empty() ? ad.tag.c_str() : ad.prompt.c_str(), &ap, ad.tag.c_str(),
+                     ad.defaultValue.c_str());
+    }
+    dwg_add_ENDBLK(bh);
+    blockDefByName[def.name] = &def;
+  }
+  for (size_t i = 0; i < st.cadBlockRefs.size(); ++i) {
+    const CadBlockRef& ref = st.cadBlockRefs[i];
+    auto defIt = blockDefByName.find(ref.defName);
+    if (defIt == blockDefByName.end())
+      continue;  // definition missing or failed to write; REQ-201 covered by the #614 loss summary
+    dwg_point_3d ins{};
+    world(ref.xf.x, ref.xf.y, static_cast<double>(ref.xf.z), &ins);
+    // GoSurvey's block transform is a single Z rotation (CadBlockXform has no X/Y rotation, nor
+    // does dwg_add_INSERT take one); non-uniform XYZ scale carries through directly.
+    Dwg_Entity_INSERT* e0 = dwg_add_INSERT(hdr, &ins, ref.defName.c_str(), static_cast<double>(ref.xf.sx),
+                                           static_cast<double>(ref.xf.sy), static_cast<double>(ref.xf.sz),
+                                           static_cast<double>(ref.xf.rotZ));
+    if (e0 == nullptr)
+      continue;
+    const EntityAttributes* at = AttrAt(st.cadBlockRefAttrs, i);
+    if (ref.attributes.empty()) {
+      apply(e0->parent, at);
+      continue;
+    }
+    const BITCODE_H defRef = dwg_find_tablehandle(dwg, ref.defName.c_str(), "BLOCK");
+    for (const CadBlockAttrValue& av : ref.attributes) {
+      if (av.tag.empty())
+        continue;
+      const CadBlockAttrDef* ad = nullptr;
+      for (const CadBlockAttrDef& d : defIt->second->attrDefs)
+        if (d.tag == av.tag) { ad = &d; break; }
+      dwg_point_3d ap = ins;
+      const double h = ad != nullptr ? std::max(static_cast<double>(ad->height), 1e-3) : 0.125;
+      dwg_add_ATTRIB(e0, h, 0, &ap, av.tag.c_str(), av.value.c_str());
+    }
+    // dwg_add_ATTRIB (LibreDWG 0.13.4) overwrites Dwg_Entity_INSERT::block_header — DXF 2, the
+    // referenced block — with the INSERT's OWNER block handle (dwg_entity_owner) on every call,
+    // instead of leaving it alone (same issue #605/D-2026-09-30-f finding as the survey-point
+    // block below). Restored here or an INSERT with attributes silently ends up "referencing" the
+    // space it lives in rather than its real definition.
+    if (defRef != nullptr)
+      e0->block_header = dwg_add_handleref(dwg, 5, defRef->absolute_ref, nullptr);
+    apply(e0->parent, at);
   }
   // REQ-057 / D-2026-10-01-a, issue #603: survey feature lines, written as POLYLINE_3D (a real Z
   // per vertex — these almost always have varying elevation, which is the whole point of a

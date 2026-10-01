@@ -7147,9 +7147,20 @@ in_postprocess_SEQEND (Dwg_Object *restrict obj, BITCODE_BL num_owned,
       Dwg_Object_Entity *ent;
       Dwg_Object_Ref *hdl;
       // need to turn code 3 into absolute 4.
+      //
+      // GoSurvey fix (issue #606): this used to read owned[i]->handleref.value, which is NOT
+      // the absolute handle once dwg_add_handle's offset-encoding optimization has rewritten a
+      // code-4 ref's handleref.code to 6/8/10/12 (which it does whenever the two objects' handles
+      // are close together — i.e. almost always for entities created back-to-back, exactly the
+      // ATTRIB/INSERT case this function exists for). handleref.value then holds an OFFSET (often
+      // 0, for the common adjacent-handle case), not a handle — so the rebuilt first_attrib/
+      // last_attrib ref pointed at handle 0 (or some other wrong object) instead of the real one,
+      // corrupting the INSERT's attribute chain on every attach after the first. absolute_ref is
+      // the field dwg_add_handleref always keeps correct regardless of that rewriting, and is
+      // exactly what "turn code 3 into absolute 4" above says this code means to do.
       if (owned[0])
         {
-          hdl = dwg_add_handleref (dwg, 4, owned[0]->handleref.value, NULL);
+          hdl = dwg_add_handleref (dwg, 4, owned[0]->absolute_ref, NULL);
           dwg_dynapi_entity_set_value (ow, owner->name, firstfield, &hdl, 0);
           LOG_TRACE ("%s[0].%s = " FORMAT_REF "[H 0]\n", owner->name,
                      firstfield, ARGS_REF (hdl));
@@ -7157,7 +7168,7 @@ in_postprocess_SEQEND (Dwg_Object *restrict obj, BITCODE_BL num_owned,
       if (owned[num_owned - 1])
         {
           hdl = dwg_add_handleref (
-              dwg, 4, owned[num_owned - 1]->handleref.value, NULL);
+              dwg, 4, owned[num_owned - 1]->absolute_ref, NULL);
           dwg_dynapi_entity_set_value (ow, owner->name, lastfield, &hdl, 0);
           LOG_TRACE ("%s[%u].%s = " FORMAT_REF "[H 0]\n", owner->name,
                      num_owned - 1, lastfield, ARGS_REF (hdl));

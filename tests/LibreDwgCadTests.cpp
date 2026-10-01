@@ -1775,3 +1775,156 @@ TEST_CASE("DWG export writes MTEXT rotation, attachment, height, and style (issu
   CHECK(styleName == "Survey");
   dwg_free(&dwg);
 }
+
+// REQ-107, issue #606 (regression for the root cause of D-2026-09-30-f's #605 crash): LibreDWG
+// 0.13.4's in_postprocess_SEQEND (encode.c) rebuilt INSERT::first_attrib/last_attrib from
+// owned[i]->handleref.value — an OFFSET once dwg_add_handle's own offset-encoding optimization has
+// rewritten that ref's handleref.code (which it does whenever two handles are close together,
+// i.e. almost always for entities created back-to-back), not the absolute handle. That silently
+// corrupted the INSERT's attribute chain on every attribute after the first, with only sometimes
+// an immediate crash (page-heap-verified; plain-heap runs could succeed while still corrupted).
+// Fixed (vendored copy) to read ->absolute_ref, which dwg_add_handleref always keeps correct
+// regardless of that rewriting. Five attributes, not three, so this cannot regress back to "two is
+// the safe ceiling" without being caught.
+TEST_CASE("DWG export writes an INSERT with five attributes without corruption (issue #606)",
+          "[dwg][libredwg][req107][issue606]") {
+  ScratchDir dir("dwg-multi-attrib");
+  const auto p = (dir.path / "multiattrib.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  auto* hdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(hdr != nullptr);
+
+  Dwg_Object_BLOCK_HEADER* blk = dwg_add_BLOCK_HEADER(dwg, "MULTIATTRIB");
+  REQUIRE(blk != nullptr);
+  dwg_add_BLOCK(blk, "MULTIATTRIB");
+  dwg_point_3d c{0.0, 0.0, 0.0};
+  dwg_add_CIRCLE(blk, &c, 1.0);
+  dwg_add_ENDBLK(blk);
+
+  dwg_point_3d ins{0.0, 0.0, 0.0};
+  Dwg_Entity_INSERT* e = dwg_add_INSERT(hdr, &ins, "MULTIATTRIB", 1.0, 1.0, 1.0, 0.0);
+  REQUIRE(e != nullptr);
+  const char* tags[5] = {"TAG", "SIZE", "MATERIAL", "SPEC", "NOTE"};
+  const char* vals[5] = {"T1", "2in", "Steel", "ASTM-A53", "field-verify"};
+  for (int i = 0; i < 5; ++i)
+    REQUIRE(dwg_add_ATTRIB(e, 0.5, 0, &ins, tags[i], vals[i]) != nullptr);
+
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  Dwg_Data rd;
+  std::memset(&rd, 0, sizeof(rd));
+  REQUIRE(dwg_read_file(p.c_str(), &rd) < DWG_ERR_CRITICAL);
+  std::vector<std::pair<std::string, std::string>> attrs;
+  for (BITCODE_BL i = 0; i < rd.num_objects; ++i) {
+    const Dwg_Object* o = &rd.object[i];
+    if (o->fixedtype != DWG_TYPE_ATTRIB || o->tio.entity == nullptr || o->tio.entity->tio.ATTRIB == nullptr)
+      continue;
+    const Dwg_Entity_ATTRIB* a = o->tio.entity->tio.ATTRIB;
+    attrs.emplace_back(libredwgcad_detail::DecodeDwgString(a->tag, false),
+                       libredwgcad_detail::DecodeDwgString(a->text_value, false));
+  }
+  REQUIRE(attrs.size() == 5);
+  for (int i = 0; i < 5; ++i) {
+    bool found = false;
+    for (const auto& kv : attrs)
+      if (kv.first == tags[i] && kv.second == vals[i]) found = true;
+    CHECK(found);
+  }
+  dwg_free(&rd);
+}
+
+// REQ-107, issue #606: DWG export writes real BLOCK/INSERT/ATTRIB records — 2 definitions, 5
+// inserts (1 with attributes), matching the issue's proposed acceptance.
+TEST_CASE("DWG export writes real BLOCK definitions, INSERTs, and attributes (issue #606)",
+          "[dwg][libredwg][req107][issue606]") {
+  ScratchDir dir("dwg-blocks");
+  const auto p = (dir.path / "blocks.dwg").string();
+  AppCommandState st;
+  st.worldDocumentOriginX = 0.0;
+  st.worldDocumentOriginY = 0.0;
+
+  CadBlockDefinition defA;
+  defA.name = "MARKER";
+  defA.content.circles = {0.0, 0.0, 0.0, 1.0};
+  defA.content.circleAttrs = {EntityAttributes{}};
+  st.blockDefs.push_back(defA);
+
+  CadBlockDefinition defB;
+  defB.name = "VALVE";
+  defB.content.lines = {-1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+  defB.content.lineAttrs = {EntityAttributes{}};
+  CadBlockAttrDef ad;
+  ad.tag = "TAG";
+  ad.height = 0.1f;
+  defB.attrDefs.push_back(ad);
+  st.blockDefs.push_back(defB);
+
+  for (int i = 0; i < 4; ++i) {
+    CadBlockRef ref;
+    ref.defName = "MARKER";
+    ref.xf.x = static_cast<float>(i) * 10.f;
+    ref.xf.y = 0.f;
+    st.cadBlockRefs.push_back(ref);
+    st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  }
+  CadBlockRef valveRef;
+  valveRef.defName = "VALVE";
+  valveRef.xf.x = 100.f;
+  valveRef.xf.y = 50.f;
+  valveRef.xf.rotZ = 0.5f;
+  CadBlockAttrValue av;
+  av.tag = "TAG";
+  av.value = "V-101";
+  valveRef.attributes.push_back(av);
+  st.cadBlockRefs.push_back(valveRef);
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  for (const auto& l : log)
+    CHECK(l.find("block reference") == std::string::npos);
+
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+
+  int nBlockDefs = 0, nInserts = 0, nAttribs = 0;
+  std::vector<std::string> insertBlockNames;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype == DWG_TYPE_BLOCK_HEADER && o->tio.object != nullptr &&
+        o->tio.object->tio.BLOCK_HEADER != nullptr) {
+      const std::string nm = libredwgcad_detail::DecodeDwgString(o->tio.object->tio.BLOCK_HEADER->name, false);
+      if (nm == "MARKER" || nm == "VALVE")
+        ++nBlockDefs;
+    }
+    if (o->fixedtype == DWG_TYPE_INSERT && o->tio.entity != nullptr && o->tio.entity->tio.INSERT != nullptr) {
+      ++nInserts;
+      const Dwg_Entity_INSERT* ins = o->tio.entity->tio.INSERT;
+      if (ins->block_header != nullptr) {
+        Dwg_Object* blk = dwg_resolve_handle_silent(&dwg, ins->block_header->absolute_ref);
+        if (blk != nullptr && blk->tio.object != nullptr && blk->tio.object->tio.BLOCK_HEADER != nullptr)
+          insertBlockNames.push_back(
+              libredwgcad_detail::DecodeDwgString(blk->tio.object->tio.BLOCK_HEADER->name, false));
+      }
+    }
+    if (o->fixedtype == DWG_TYPE_ATTRIB && o->tio.entity != nullptr && o->tio.entity->tio.ATTRIB != nullptr)
+      ++nAttribs;
+  }
+  CHECK(nBlockDefs == 2);
+  CHECK(nInserts == 5);
+  CHECK(nAttribs == 1);
+  int nMarker = 0, nValve = 0;
+  for (const auto& nm : insertBlockNames) {
+    if (nm == "MARKER") ++nMarker;
+    if (nm == "VALVE") ++nValve;
+  }
+  CHECK(nMarker == 4);
+  CHECK(nValve == 1);
+  dwg_free(&dwg);
+}
