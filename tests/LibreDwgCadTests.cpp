@@ -178,6 +178,99 @@ TEST_CASE("ExportDwgFile writes a straight pipe run as 3DSOLID (issue #612)", "[
   REQUIRE(CountDwg3DSolids(p.c_str()) >= 1);
 }
 
+namespace {
+
+std::shared_ptr<const CadMesh> MakeUnitSquareMesh() {
+  auto m = std::make_shared<CadMesh>();
+  m->sourceName = "test";
+  m->vertsXyz = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 10.f, 10.f, 0.f, 0.f, 10.f, 0.f};
+  m->indices = {0, 1, 2, 0, 2, 3};
+  CadMeshPart part;
+  part.indexBegin = 0;
+  part.indexCount = 6;
+  m->parts.push_back(part);
+  return m;
+}
+
+CadSurface MakeUnitSquareSurface() {
+  CadSurface s;
+  s.name = "T1";
+  auto tin = std::make_shared<CadTin>();
+  tin->vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 0.0, 0.0, 10.0, 0.0};
+  tin->indices = {0, 1, 2, 0, 2, 3};
+  s.tin = std::move(tin);
+  return s;
+}
+
+int CountDwgPolylinePface(const char* path) {
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  if (dwg_read_file(path, &dwg) >= DWG_ERR_CRITICAL) {
+    dwg_free(&dwg);
+    return -1;
+  }
+  int n = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].type == DWG_TYPE_POLYLINE_PFACE)
+      ++n;
+  }
+  dwg_free(&dwg);
+  return n;
+}
+
+}  // namespace
+
+TEST_CASE("ExportDwgFile writes a CadMesh as POLYLINE_PFACE (issue #611)", "[dwg][libredwg][issue611]") {
+  ScratchDir dir("dwg-mesh-export");
+  const auto p = (dir.path / "mesh.dwg").string();
+  AppCommandState st;
+  st.cadMeshes.push_back(MakeUnitSquareMesh());
+  st.cadMeshAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  REQUIRE(CountDwgPolylinePface(p.c_str()) == 1);
+}
+
+TEST_CASE("ExportDwgFile writes a built TIN surface as POLYLINE_PFACE (issue #611)",
+          "[dwg][libredwg][issue611]") {
+  ScratchDir dir("dwg-tin-export");
+  const auto p = (dir.path / "tin.dwg").string();
+  AppCommandState st;
+  st.cadSurfaces.push_back(MakeUnitSquareSurface());
+  st.cadSurfaceAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  REQUIRE(CountDwgPolylinePface(p.c_str()) == 1);
+}
+
+TEST_CASE("DWG export loss summary omits exportable mesh and TIN (issue #611 / #614)",
+          "[dwg][libredwg][issue611][issue614]") {
+  AppCommandState st;
+  OneLine(st);
+  st.cadMeshes.push_back(MakeUnitSquareMesh());
+  st.cadSurfaces.push_back(MakeUnitSquareSurface());
+  const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(st);
+  for (const DwgExportLoss& l : losses) {
+    CHECK(l.label.find("mesh") == std::string::npos);
+    CHECK(l.label.find("TIN surface") == std::string::npos);
+  }
+}
+
+TEST_CASE("ExportDwgFile mesh round-trips through import (issue #611)", "[dwg][libredwg][issue611]") {
+  ScratchDir dir("dwg-mesh-roundtrip");
+  const auto p = (dir.path / "mesh.dwg").string();
+  AppCommandState st;
+  st.cadMeshes.push_back(MakeUnitSquareMesh());
+  st.cadMeshAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState loaded;
+  REQUIRE(ImportDwgFile(loaded, p.c_str(), log));
+  REQUIRE(loaded.cadMeshes.size() >= 1);
+  CHECK(loaded.cadMeshes[0]->triangleCount() == 2);
+  CHECK(loaded.cadMeshes[0]->vertexCount() == 4);
+}
+
 TEST_CASE("ExportDwgFile writes an L-shaped pipe run as 3DSOLID (issue #612)", "[dwg][libredwg][issue612]") {
   ScratchDir dir("dwg-pipe-elbow");
   const auto p = (dir.path / "elbow.dwg").string();

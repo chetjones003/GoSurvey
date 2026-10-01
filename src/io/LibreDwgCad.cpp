@@ -23,6 +23,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -1962,6 +1963,107 @@ bool AppendGosurveyStringEed(Dwg_Data* dwg, Dwg_Object_Entity* ent, const std::v
   return true;
 }
 
+namespace dwg_solid_export {
+void WorldPoint(const AppCommandState& st, const ray3d::Vec3& local, dwg_point_3d* out);
+}
+
+// Issue #611 / D-2026-10-01-e — triangle meshes and built TINs as POLYLINE_PFACE (ADR-026 amended).
+namespace dwg_mesh_export {
+
+namespace {
+constexpr unsigned kMaxPfaceVerts = 5000000u;
+constexpr unsigned kMaxPfaceFaces = 5000000u;
+}  // namespace
+
+bool WriteIndexedTriangles(int vertexCount, const std::function<void(int, dwg_point_3d*)>& fillVertex,
+                           const std::vector<std::uint32_t>& indices, Dwg_Object_BLOCK_HEADER* hdr,
+                           TableWriter* tw, const EntityAttributes* attr) {
+  if (hdr == nullptr || vertexCount < 3)
+    return false;
+  const size_t nTri = indices.size() / 3;
+  if (nTri < 1 || nTri > kMaxPfaceFaces || static_cast<unsigned>(vertexCount) > kMaxPfaceVerts)
+    return false;
+  std::vector<dwg_point_3d> verts(static_cast<size_t>(vertexCount));
+  for (int vi = 0; vi < vertexCount; ++vi)
+    fillVertex(vi, &verts[static_cast<size_t>(vi)]);
+  std::vector<dwg_face> faces(nTri);
+  for (size_t t = 0; t < nTri; ++t) {
+    const std::uint32_t a = indices[t * 3 + 0];
+    const std::uint32_t b = indices[t * 3 + 1];
+    const std::uint32_t c = indices[t * 3 + 2];
+    if (a >= static_cast<std::uint32_t>(vertexCount) || b >= static_cast<std::uint32_t>(vertexCount) ||
+        c >= static_cast<std::uint32_t>(vertexCount))
+      return false;
+    faces[t][0] = static_cast<BITCODE_BSd>(static_cast<int>(a) + 1);
+    faces[t][1] = static_cast<BITCODE_BSd>(static_cast<int>(b) + 1);
+    faces[t][2] = static_cast<BITCODE_BSd>(static_cast<int>(c) + 1);
+    faces[t][3] = 0;
+  }
+  Dwg_Entity_POLYLINE_PFACE* pf =
+      dwg_add_POLYLINE_PFACE(hdr, static_cast<unsigned>(vertexCount), static_cast<unsigned>(nTri),
+                             verts.data(), faces.data());
+  if (pf == nullptr || pf->parent == nullptr)
+    return false;
+  if (tw != nullptr && attr != nullptr)
+    tw->Apply(pf->parent, *attr);
+  return true;
+}
+
+bool WriteCadMesh(const AppCommandState& st, const CadMesh& mesh, Dwg_Object_BLOCK_HEADER* hdr,
+                  TableWriter* tw, const EntityAttributes* attr) {
+  const int nv = mesh.vertexCount();
+  if (nv < 3 || mesh.indices.size() < 3)
+    return false;
+  return WriteIndexedTriangles(
+      nv,
+      [&](int vi, dwg_point_3d* out) {
+        const size_t o = static_cast<size_t>(vi) * 3;
+        dwg_solid_export::WorldPoint(st, ray3d::Vec3{mesh.vertsXyz[o], mesh.vertsXyz[o + 1],
+                                                     mesh.vertsXyz[o + 2]},
+                                     out);
+      },
+      mesh.indices, hdr, tw, attr);
+}
+
+bool WriteCadSurfaceTin(const AppCommandState& st, const CadSurface& surface, Dwg_Object_BLOCK_HEADER* hdr,
+                        TableWriter* tw, const EntityAttributes* attr) {
+  if (surface.tin == nullptr)
+    return false;
+  const CadTin& tin = *surface.tin;
+  const int nv = tin.vertexCount();
+  if (nv < 3 || tin.indices.size() < 3)
+    return false;
+  return WriteIndexedTriangles(
+      nv,
+      [&](int vi, dwg_point_3d* out) {
+        const size_t o = static_cast<size_t>(vi) * 3;
+        dwg_solid_export::WorldPoint(st, ray3d::Vec3{tin.vertsXyz[o], tin.vertsXyz[o + 1],
+                                                     tin.vertsXyz[o + 2]},
+                                     out);
+      },
+      tin.indices, hdr, tw, attr);
+}
+
+size_t CountSkippedMeshes(const AppCommandState& st) {
+  size_t n = 0;
+  for (const std::shared_ptr<const CadMesh>& mp : st.cadMeshes) {
+    if (mp == nullptr || mp->triangleCount() < 1)
+      ++n;
+  }
+  return n;
+}
+
+size_t CountSkippedSurfaces(const AppCommandState& st) {
+  size_t n = 0;
+  for (const CadSurface& s : st.cadSurfaces) {
+    if (s.tin == nullptr || s.triangleCount() < 1)
+      ++n;
+  }
+  return n;
+}
+
+}  // namespace dwg_mesh_export
+
 // Issue #612 / D-2026-10-01-d — write B-rep solids and pipe runs as ACIS 3DSOLID (ADR-045 (i) amended).
 namespace dwg_solid_export {
 
@@ -2159,9 +2261,9 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
 
   // Entity classes GoSurvey already refuses on principle (ADR-042/045/026) — counted and logged,
   // now also surfaced in the pre-export warning so the user sees them before committing to it.
-  add("mesh(es)", st.cadMeshes.size());
+  add("mesh(es)", dwg_mesh_export::CountSkippedMeshes(st));
   add("point cloud(s)", st.cadPointClouds.size());
-  add("TIN surface(s)", st.cadSurfaces.size());
+  add("TIN surface(s)", dwg_mesh_export::CountSkippedSurfaces(st));
   add("solid(s)", dwg_solid_export::CountSkippedSolids(st));
 
   // Degradations: the entity IS written, but a property on it is not.
@@ -3178,6 +3280,25 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   }
   if (nHatchOut > 0)
     log.push_back("CAD export — wrote " + std::to_string(nHatchOut) + " HATCH(es) (REQ-170, issue #608).");
+
+  size_t nMeshOut = 0;
+  for (size_t mi = 0; mi < st.cadMeshes.size(); ++mi) {
+    const std::shared_ptr<const CadMesh>& mp = st.cadMeshes[mi];
+    if (mp == nullptr)
+      continue;
+    const EntityAttributes* at = mi < st.cadMeshAttrs.size() ? &st.cadMeshAttrs[mi] : nullptr;
+    if (dwg_mesh_export::WriteCadMesh(st, *mp, hdr, &tw, at))
+      ++nMeshOut;
+  }
+  size_t nTinOut = 0;
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    const EntityAttributes* at = si < st.cadSurfaceAttrs.size() ? &st.cadSurfaceAttrs[si] : nullptr;
+    if (dwg_mesh_export::WriteCadSurfaceTin(st, st.cadSurfaces[si], hdr, &tw, at))
+      ++nTinOut;
+  }
+  if (nMeshOut + nTinOut > 0)
+    log.push_back("CAD export — wrote " + std::to_string(nMeshOut + nTinOut) +
+                  " POLYLINE_PFACE mesh(es) (issue #611).");
 
   size_t nSolidOut = 0;
   for (size_t si = 0; si < st.cadSolids.size(); ++si) {

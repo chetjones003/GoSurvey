@@ -929,8 +929,8 @@ struct CadMeshPart {
 
 /// An imported triangle mesh (REQ-063 / ADR-026 (c)) — **reference geometry, never authored here**.
 ///
-/// No command creates one, no grip moves a vertex, and it is excluded from DXF/DWG export, which
-/// has no lossless representation for it. It participates in layers, selection, erase and extents.
+/// No command creates one, no grip moves a vertex. DWG export writes triangles as `POLYLINE_PFACE`
+/// (issue #611); DXF export remains excluded. It participates in layers, selection, erase and extents.
 ///
 /// **Held as `shared_ptr<const CadMesh>`** by both the live state and every undo snapshot
 /// (architecture §11.5 as amended 2026-08-12). That is not an optimisation detail — it is what
@@ -1108,9 +1108,8 @@ enum class SurfaceKind : std::uint8_t { Tin, Grid, TinVolume, GridVolume, Corrid
 /// Small and copyable: the heavy triangulation hangs off a shared pointer, so copying a surface —
 /// which every undo snapshot does — is a couple of strings and a refcount bump.
 ///
-/// Surfaces are **not written to DXF or DWG**: there is no representation GoSurvey can write
-/// losslessly, and the exclusion is stated in the export log rather than left to be discovered
-/// (ADR-028 (f), REQ-201) — the same treatment \ref CadMesh gets.
+/// Surfaces are **not written to DXF**; **DWG** writes a built TIN as `POLYLINE_PFACE` (issue #611).
+/// A surface without a triangulation stays in the export loss list (ADR-028 (f), REQ-201).
 struct CadSurface {
   std::string name;  ///< Unique within the drawing.
   SurfaceKind kind = SurfaceKind::Tin;
