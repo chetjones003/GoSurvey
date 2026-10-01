@@ -855,8 +855,9 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   kernel to tessellate, which is a larger project than everything else here combined).
   (c) **A mesh is a new entity type, and it is reference geometry** (REQ-063). It stores interleaved XYZ
   positions (§11.8 applies unchanged), one normal per vertex, `uint32` indices, and a per-part colour.
-  GoSurvey **does not author or edit meshes**: no command creates one, no grip moves a vertex, and they
-  are excluded from DXF/DWG export, which has no lossless representation. They are visible, selectable,
+  GoSurvey **does not author or edit meshes**: no command creates one, no grip moves a vertex. **DWG
+  export (amended 2026-10-01, D-2026-10-01-e, issue #611)** writes each exportable mesh as a
+  `POLYLINE_PFACE` triangle soup via LibreDWG; DXF export remains excluded. They are visible, selectable,
   erasable, layer-controlled, and included in extents. Treating them as draftable would drag mesh
   editing, mesh snapping and mesh export into scope for no requirement that asks for it.
   (d) **A parser is written in-tree; no glTF library is vendored.** glTF is JSON plus a binary buffer,
@@ -1009,9 +1010,9 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   **discarded** if that generation is stale on completion. This is the existing `AsyncBuild` pattern
   (`AppCommandState::pdfAttachAsync`) as its second concrete use — which is what makes writing it
   into §8 legitimate rather than speculative (§11.4).
-  (f) **Surfaces are not written to DXF or DWG, and the exclusion is logged** (REQ-068) — the ADR-026
-  (c) precedent for meshes, for the same reason and with the same REQ-201 obligation. Extracted
-  contours are ordinary polylines and export normally.
+  (f) **Surfaces are not written to DXF; DWG writes a built TIN as `POLYLINE_PFACE` (amended
+  2026-10-01, D-2026-10-01-e, issue #611).** A surface without a built triangulation stays in the
+  REQ-201 loss list. Extracted contours are ordinary polylines and export normally.
   (g) **Point groups are rules, not lists, and are not entities** (REQ-067). No geometry, no layer, no
   selection, not drawn. They resolve against the current point set on demand, which is what makes a
   surface pick up points imported after it was defined. `SurveyPoint` already carries a stable `id`,
