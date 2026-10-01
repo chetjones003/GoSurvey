@@ -10617,6 +10617,66 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-09-30 — initial (resolves issue #605; D-2026-09-30-f).
 
+### REQ-366 — DWG save/open writes and reads native DIMENSION objects (GitHub issue #607)
+
+- Purpose: issue #607 — GoSurvey's three dimension kinds (`CadAnnotation::Kind::DimAligned` /
+  `DimLinear` / `DimAngular`) are dropped both ways on DWG: the save writes nothing for them
+  (`LibreDwgCad.cpp` writes only `Text`/`Mtext`), and the open skips every AutoCAD `DIMENSION`
+  entity. REQ-201's save/open loss summary already mentions dimensions without counting them.
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-01-c (native objects, not an explode-to-lines fallback; explicitly
+  independent of REQ-111/associative dimensions).
+- Statement:
+  1. **Save.** Writes one `DIMSTYLE` per distinct `DimensionStyle` used by a saved dimension
+     (named from `DimensionStyle::name`; a collision is disambiguated by appending `_2`, `_3`, …),
+     plus one `DIMENSION_ALIGNED` for each `Kind::DimAligned`, one `DIMENSION_LINEAR` for each
+     `Kind::DimLinear`, and one `DIMENSION_ANG3PT` for each `Kind::DimAngular`, using
+     `dwg_add_DIMENSION_*` (LibreDWG, in-tree per D-2026-09-30-d). Definition points come from the
+     annotation's existing `dimExt1`/`dimExt2`/`dimAngVertex`/`dimSignedOffset` fields (the same
+     geometry `CadDimStroke` already strokes for the viewport/PDF/DXF paths) — no new geometry
+     model. Each DIMENSION also gets the anonymous `*D` block AutoCAD expects, holding the same
+     drawn lines/arrows/text `CadDimBuildWorldStrokes` produces, so a reader that does not
+     regenerate dimensions on open still shows the correct picture.
+  2. **DIMSTYLE field mapping** — only the fields `DimensionStyle.hpp` actually stores; every other
+     DIMSTYLE field is left at AutoCAD's own stock `Standard` values:
+     | GoSurvey (`DimensionStyle`) | DWG DIMSTYLE field |
+     |---|---|
+     | `textSizeInches` | `DIMTXT` |
+     | `arrowSizeInches` | `DIMASZ` |
+     | `arrowType` (`ClosedFilled`/`ClosedBlank`/`Tick`/`Dot`/`Open`/`None`) | `DIMBLK` (arrow block name; `None` sets `DIMSE1`/`DIMSE2`-style suppression is NOT implied — only the block choice maps) |
+     | `unitPrecision` | `DIMDEC` |
+     | `dimLineColor` | `DIMCLRD` |
+     | `extLineColor` | `DIMCLRE` |
+     | `textColor` | `DIMCLRT` |
+
+     `arrowColor` is not separately representable in DIMSTYLE (AutoCAD ties arrow colour to
+     `DIMCLRD`) and is not mapped — the dimension line colour is used for both. `unitFormat`
+     (`Architectural`/`Engineering`/`Fractional`) and `unitScale` are **not mapped** — GoSurvey's
+     own formatter is decimal-only today (`FormatLinearDim`), so mapping them would assert a
+     fidelity the app does not have; `DIMLUNIT` is left at AutoCAD's default.
+  3. **Open.** An AutoCAD `DIMENSION` whose subtype is Aligned, Linear (rotated or orthogonal), or
+     3-point Angular is read back into the matching `CadAnnotation::Kind`, its definition points and
+     measured value recovered from the DIMENSION's own group codes (not the `*D` block). A
+     DIMENSION of any other subtype (Radius, Diameter, Ordinate, 2-line Angular) is **not** mapped
+     to a GoSurvey dimension kind; its `*D` block's drawn geometry (lines/arcs/text) is kept as
+     plain entities, as any other block insert's content would be, and the subtype is named once in
+     the REQ-201 save/open log rather than silently dropped.
+  4. This requirement changes only the DWG **file representation**. GoSurvey's own dimensioning
+     model, editing commands, and rendering (`CadDimStroke`, `DimensionStyle`) are unchanged and do
+     not depend on REQ-111 (associative dimensions), which remains unaccepted.
+- Acceptance:
+  - one `DimAligned`, one `DimLinear`, and one `DimAngular` dimension survive save → open in
+    AutoCAD (each recognised as its correct DIMENSION subtype, correct definition points, correct
+    measured value shown) → reopen in GoSurvey (same kind, geometry and style);
+  - the DWG save/open log (REQ-201) counts dimensions written/read instead of silently omitting
+    them;
+  - a DWG containing a Radius dimension opens without crashing or dropping data: its `*D` block
+    geometry appears as plain entities and the log names one skipped Radius dimension.
+- Owner-layer: IO (`src/io/LibreDwgCad.cpp`)
+- Status: accepted
+- Revisions: 2026-10-01 — initial (resolves SPEC GAP on issue #607; D-2026-10-01-c).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
