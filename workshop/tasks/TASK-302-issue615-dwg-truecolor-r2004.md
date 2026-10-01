@@ -1,7 +1,7 @@
 # TASK-302 — DWG save: 24-bit true colours on R2004 (issue #615)
 
 - Type:    feature (REQ-170 / issue #601 Group B)
-- Status:  in progress (PR pending)
+- Status:  complete (merged PR #641)
 - Opened:  2026-10-01
 - Owner:   Workshop
 - GitHub:  #615

@@ -13,6 +13,7 @@
 #include "LibreDwg.hpp"
 #include "SurveyPoints.hpp"
 #include "TextStyle.hpp"
+#include "util/cadtable.hpp"
 #include "util/SaveTrace.hpp"
 
 #include <algorithm>
@@ -240,6 +241,28 @@ BITCODE_RC LineweightDwgIndexFromMm(float mm, bool layerRow) {
   return static_cast<BITCODE_RC>(dxf_revcvt_lweight(CadDxfLineweightEnum370FromMm(mm)));
 }
 
+float Transparency01FromEntityColor(const Dwg_Color& c) {
+  if ((c.flag & 0x20) == 0)
+    return -1.f;
+  const BITCODE_RC alpha = c.alpha_type == 3 ? c.alpha : static_cast<BITCODE_RC>(c.alpha_raw & 0xFFu);
+  if (alpha <= 0)
+    return -1.f;
+  return static_cast<float>(alpha) / 255.f;
+}
+
+void ApplyEntityEncTransparency(Dwg_Color* color, float transparency01) {
+  if (color == nullptr || transparency01 <= 1.e-5f)
+    return;
+  const float t = std::clamp(transparency01, 0.f, 1.f);
+  const BITCODE_RC alpha = static_cast<BITCODE_RC>(static_cast<int>(t * 255.f + 0.5f));
+  if (alpha == 0)
+    return;
+  color->flag = static_cast<uint16_t>(color->flag | 0x20);
+  color->alpha_type = 3;
+  color->alpha = alpha;
+  color->alpha_raw = (static_cast<BITCODE_BL>(3) << 24) | static_cast<BITCODE_BL>(alpha);
+}
+
 EntityAttributes AttrFromEnt(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
   EntityAttributes a{};
   a.layer = LayerName(dwg, ent);
@@ -247,6 +270,9 @@ EntityAttributes AttrFromEnt(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
     a.color = ColorStorage(ent->color);
     a.linetype = EntityLinetypeName(dwg, ent);
     a.lineweightMm = LineweightMmFromDwgIndex(ent->linewt);
+    const float tr = Transparency01FromEntityColor(ent->color);
+    if (tr >= 0.f)
+      a.transparency = tr;
   }
   return a;
 }
@@ -1309,6 +1335,40 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     NoteSkip(skipHist, "HATCH(degenerate or unsupported boundary)");
     return;
   }
+  if (ty == DWG_TYPE_TABLE && ent->tio.TABLE != nullptr) {
+    const Dwg_Entity_TABLE* tab = ent->tio.TABLE;
+    if (tab->num_cols >= 1 && tab->num_rows >= 1 && tab->cells != nullptr) {
+      CadTable table;
+      table.cols = static_cast<int>(tab->num_cols);
+      double ix = tab->ins_pt.x, iy = tab->ins_pt.y;
+      xf.apply(ix, iy, &ix, &iy);
+      table.insX = static_cast<float>(ix - st.worldDocumentOriginX);
+      table.insY = static_cast<float>(iy - st.worldDocumentOriginY);
+      table.insZ = static_cast<float>(tab->ins_pt.z);
+      table.rotationRad = static_cast<float>(tab->rotation);
+      if (tab->col_widths != nullptr && tab->num_cols > 0) {
+        double sum = 0.0;
+        for (BITCODE_BL c = 0; c < tab->num_cols; ++c)
+          sum += tab->col_widths[c];
+        table.width = static_cast<float>(std::max(sum, 1.0));
+      }
+      if (tab->row_heights != nullptr && tab->num_rows > 0) {
+        double sum = 0.0;
+        for (BITCODE_BL r = 0; r < tab->num_rows; ++r)
+          sum += tab->row_heights[r];
+        table.height = static_cast<float>(std::max(sum, 1.0));
+      }
+      const unsigned long nCells = tab->num_cells;
+      table.cells.reserve(static_cast<size_t>(nCells));
+      for (unsigned long ci = 0; ci < nCells; ++ci)
+        table.cells.push_back(FromT(dwg, tab->cells[ci].text_value));
+      st.cadTables.push_back(std::move(table));
+      st.cadTableAttrs.push_back(at);
+      return;
+    }
+    NoteSkip(skipHist, "TABLE(degenerate)");
+    return;
+  }
   if (ty == DWG_TYPE_INSERT) {
     ExplodeInsert(st, dwg, ent, depth, skipHist, degenerateExtrusions);
     return;
@@ -1556,7 +1616,8 @@ void ApplyLayerTableColor(Dwg_Object_LAYER* ly, const std::string& colorStr, boo
 // emitted geometry only, so a saved drawing lost every layer).
 struct TableWriter {
   Dwg_Data* dwg = nullptr;
-  bool useTrueColor = false;  // R2004+ (issue #615)
+  bool useTrueColor = false;  // R2004+ entity ENC features (#615, #620)
+  const AppCommandState* layerState = nullptr;
   // Store LibreDWG object indices, not Dwg_Object* — dwg_add_* can reallocate dwg->object and
   // invalidate raw pointers cached from an earlier BuildLayerTable / EnsureLtype call.
   std::unordered_map<std::string, BITCODE_BL> layers;  // lower(name) -> parent objid
@@ -1656,6 +1717,11 @@ struct TableWriter {
         ent->layer = RefObjId(it->second);
     }
     SetEntityColorFromStorage(&ent->color, a.color, useTrueColor);
+    if (useTrueColor && layerState != nullptr) {
+      const std::string layerKey = a.layer.empty() ? std::string("0") : a.layer;
+      const CadLayerRow* lyr = FindDrawingLayerRowCi(*layerState, layerKey);
+      ApplyEntityEncTransparency(&ent->color, EffectiveEntityTransparency01(a, lyr));
+    }
     if (Dwg_Object* lt = EnsureLtype(a.linetype)) {
       ent->ltype = Ref(lt);
       ent->ltype_flags = 3;  // has explicit handle
@@ -2144,6 +2210,139 @@ size_t CountSkippedSurfaces(const AppCommandState& st) {
 
 }  // namespace dwg_mesh_export
 
+// Issue #616: LibreDWG has no dwg_add_TABLE — export grid + cell MTEXT (AutoCAD-visible fallback).
+namespace dwg_table_export {
+
+bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_BLOCK_HEADER* hdr,
+                   TableWriter& tw, const EntityAttributes* attr) {
+  if (hdr == nullptr || table.cols <= 0)
+    return false;
+  const int rows = CadTableRowCount(table);
+  const float w = std::max(table.width, 1.e-3f);
+  const float h = std::max(table.height, 1.e-3f);
+  const double z = static_cast<double>(table.insZ);
+  auto worldLocal = [&](float lx, float ly, dwg_point_3d* p) {
+    float wx = 0.f, wy = 0.f;
+    CadTableLocalToWorld(table, lx, ly, &wx, &wy);
+    p->x = static_cast<double>(wx) + st.worldDocumentOriginX;
+    p->y = static_cast<double>(wy) + st.worldDocumentOriginY;
+    p->z = z;
+  };
+  auto seg = [&](float lx0, float ly0, float lx1, float ly1) {
+    dwg_point_3d a{}, b{};
+    worldLocal(lx0, ly0, &a);
+    worldLocal(lx1, ly1, &b);
+    if (Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &a, &b))
+      if (attr != nullptr)
+        tw.Apply(e->parent, *attr);
+  };
+  for (int r = 0; r <= rows; ++r) {
+    const float ly = h * static_cast<float>(r) / static_cast<float>(rows);
+    seg(0.f, ly, w, ly);
+  }
+  for (int c = 0; c <= table.cols; ++c) {
+    const float lx = w * static_cast<float>(c) / static_cast<float>(table.cols);
+    seg(lx, 0.f, lx, h);
+  }
+  std::vector<CadTableCellRect> cells;
+  CadTableLayoutWorldCells(table, &cells);
+  const double textH =
+      std::max(static_cast<double>(CadTableHeightWorld(table, st.modelUnitsPerPlottedInch)), 1e-3);
+  const double rotRad = static_cast<double>(table.rotationRad);
+  for (size_t ci = 0; ci < cells.size() && ci < table.cells.size(); ++ci) {
+    dwg_point_3d p{};
+    p.x = static_cast<double>(cells[ci].x0) + st.worldDocumentOriginX;
+    p.y = static_cast<double>(cells[ci].y1) - textH + st.worldDocumentOriginY;
+    p.z = z;
+    const std::string wire = SanitizeDwgTextSymbols(table.cells[ci]);
+    if (wire.empty())
+      continue;
+    if (Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &p, std::max(textH * 8.0, 1.0), wire.c_str())) {
+      mt->text_height = textH;
+      mt->attachment = 1;
+      mt->x_axis_dir.x = std::cos(rotRad);
+      mt->x_axis_dir.y = std::sin(rotRad);
+      mt->x_axis_dir.z = 0.0;
+      if (attr != nullptr)
+        tw.Apply(mt->parent, *attr);
+    }
+  }
+  return true;
+}
+
+size_t CountSkippedTables(const AppCommandState& st) {
+  size_t n = 0;
+  for (const CadTable& t : st.cadTables) {
+    if (t.cols <= 0)
+      ++n;
+  }
+  return n;
+}
+
+}  // namespace dwg_table_export
+
+// Issue #621: POINTCLOUDEX is unavailable — write a scan-file link in XDATA plus a 3D extent box.
+namespace dwg_pointcloud_export {
+
+bool CloudBounds(const CadPointCloud& pc, double* mnX, double* mnY, double* mnZ, double* mxX, double* mxY,
+                 double* mxZ) {
+  if (pc.pointsXyz.size() < 6)
+    return false;
+  *mnX = *mxX = pc.pointsXyz[0];
+  *mnY = *mxY = pc.pointsXyz[1];
+  *mnZ = *mxZ = pc.pointsXyz[2];
+  for (size_t i = 3; i + 2 < pc.pointsXyz.size(); i += 3) {
+    *mnX = std::min(*mnX, pc.pointsXyz[i]);
+    *mxX = std::max(*mxX, pc.pointsXyz[i]);
+    *mnY = std::min(*mnY, pc.pointsXyz[i + 1]);
+    *mxY = std::max(*mxY, pc.pointsXyz[i + 1]);
+    *mnZ = std::min(*mnZ, pc.pointsXyz[i + 2]);
+    *mxZ = std::max(*mxZ, pc.pointsXyz[i + 2]);
+  }
+  return *mxX > *mnX && *mxY > *mnY && *mxZ >= *mnZ;
+}
+
+bool WritePointCloudMarker(const AppCommandState& st, const CadPointCloud& pc, Dwg_Object_BLOCK_HEADER* hdr,
+                           TableWriter& tw, const EntityAttributes* attr) {
+  if (hdr == nullptr || pc.sourcePath.empty())
+    return false;
+  double mnX = 0, mnY = 0, mnZ = 0, mxX = 0, mxY = 0, mxZ = 0;
+  if (!CloudBounds(pc, &mnX, &mnY, &mnZ, &mxX, &mxY, &mxZ))
+    return false;
+  const double ox = st.worldDocumentOriginX;
+  const double oy = st.worldDocumentOriginY;
+  const dwg_point_3d corners[8] = {
+      {mnX + ox, mnY + oy, mnZ}, {mxX + ox, mnY + oy, mnZ}, {mxX + ox, mxY + oy, mnZ},
+      {mnX + ox, mxY + oy, mnZ}, {mnX + ox, mnY + oy, mxZ}, {mxX + ox, mnY + oy, mxZ},
+      {mxX + ox, mxY + oy, mxZ}, {mnX + ox, mxY + oy, mxZ},
+  };
+  static constexpr int kEdges[12][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6},
+                                      {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+  Dwg_Object_Entity* tagEnt = nullptr;
+  for (int ei = 0; ei < 12; ++ei) {
+    if (Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &corners[kEdges[ei][0]], &corners[kEdges[ei][1]])) {
+      if (attr != nullptr)
+        tw.Apply(e->parent, *attr);
+      if (tagEnt == nullptr)
+        tagEnt = e->parent;
+    }
+  }
+  if (tagEnt != nullptr)
+    AppendGosurveyStringEed(tw.dwg, tagEnt, {"POINTCLOUD", pc.sourcePath});
+  return tagEnt != nullptr;
+}
+
+size_t CountSkippedPointClouds(const AppCommandState& st) {
+  size_t n = 0;
+  for (const std::shared_ptr<const CadPointCloud>& pc : st.cadPointClouds) {
+    if (pc == nullptr || pc->sourcePath.empty() || pc->pointsXyz.size() < 6)
+      ++n;
+  }
+  return n;
+}
+
+}  // namespace dwg_pointcloud_export
+
 // Issue #612 / D-2026-10-01-d — write B-rep solids and pipe runs as ACIS 3DSOLID (ADR-045 (i) amended).
 namespace dwg_solid_export {
 
@@ -2333,7 +2532,7 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   // Entity classes with no DWG writer at all (silent today — nothing in FillFromState touches
   // these vectors). Survey points (REQ-365, #605), feature lines (REQ-057, #603) and block
   // references (REQ-107, #606) are written, so none of the three is here.
-  add("table(s)", st.cadTables.size());
+  add("table(s)", dwg_table_export::CountSkippedTables(st));
   add("pipe run(s)", dwg_solid_export::CountSkippedPipeRuns(st));
   // REQ-366, issue #607: dimensions now write as real DIMSTYLE/DIMENSION_* objects (see
   // FillFromState) — "dimension(s)" removed from this loss list the same way #631 removed "block
@@ -2342,7 +2541,7 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   // Entity classes GoSurvey already refuses on principle (ADR-042/045/026) — counted and logged,
   // now also surfaced in the pre-export warning so the user sees them before committing to it.
   add("mesh(es)", dwg_mesh_export::CountSkippedMeshes(st));
-  add("point cloud(s)", st.cadPointClouds.size());
+  add("point cloud(s)", dwg_pointcloud_export::CountSkippedPointClouds(st));
   add("TIN surface(s)", dwg_mesh_export::CountSkippedSurfaces(st));
   add("solid(s)", dwg_solid_export::CountSkippedSolids(st));
 
@@ -2351,10 +2550,10 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
                                                       &st.userArcAttrs,  &st.userPolylineAttrs,
                                                       &st.cadAnnotationAttrs, &st.userEllAttrs,
                                                       &st.cadFilledRegionAttrs};
-  const bool trueColorWrite = st.dwgExportVersion == DwgSaveVersion::R2004;
+  const bool r2004Write = st.dwgExportVersion == DwgSaveVersion::R2004;
   size_t nColorRounded = 0, nTransparency = 0;
   auto countRoundedRgb = [&](const std::string& colorStr) {
-    if (trueColorWrite)
+    if (r2004Write)
       return;
     uint32_t rgb = 0;
     if (!DxfColorStringToRgbPacked(colorStr, &rgb))
@@ -2363,11 +2562,16 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
     if ((DxfRgbPackedFromAci(aci) & 0xFFFFFFu) != (rgb & 0xFFFFFFu))
       ++nColorRounded;
   };
+  auto countTransparencyLoss = [&](const EntityAttributes& a, const CadLayerRow* layer) {
+    if (r2004Write)
+      return;
+    if (EffectiveEntityTransparency01(a, layer) > 1.e-5f)
+      ++nTransparency;
+  };
   for (const std::vector<EntityAttributes>* v : attrSets) {
     for (const EntityAttributes& a : *v) {
       countRoundedRgb(a.color);
-      if (a.transparency >= 0.f)
-        ++nTransparency;
+      countTransparencyLoss(a, FindDrawingLayerRowCi(st, a.layer.empty() ? std::string("0") : a.layer));
     }
   }
   for (const CadLayerRow& row : st.drawingLayerTable)
@@ -2641,6 +2845,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   TableWriter tw;
   tw.dwg = dwg;
   tw.useTrueColor = (st.dwgExportVersion == DwgSaveVersion::R2004);
+  tw.layerState = &st;
   tw.BuildLayerTable(st);
   tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
   // Register every linetype the entities reference up front, so no LTYPE table object is created
@@ -3410,6 +3615,29 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     log.push_back("CAD export — wrote " + std::to_string(nSolidOut + nPipeSolidOut) +
                   " 3DSOLID(s) (ACIS, issue #612).");
 
+  size_t nTableOut = 0;
+  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+    const EntityAttributes* at = ti < st.cadTableAttrs.size() ? &st.cadTableAttrs[ti] : nullptr;
+    if (dwg_table_export::WriteCadTable(st, st.cadTables[ti], hdr, tw, at))
+      ++nTableOut;
+  }
+  if (nTableOut > 0)
+    log.push_back("CAD export — wrote " + std::to_string(nTableOut) +
+                  " table(s) as grid geometry (issue #616).");
+
+  size_t nPcOut = 0;
+  for (size_t pi = 0; pi < st.cadPointClouds.size(); ++pi) {
+    const std::shared_ptr<const CadPointCloud>& pc = st.cadPointClouds[pi];
+    if (pc == nullptr)
+      continue;
+    const EntityAttributes* at = pi < st.cadPointCloudAttrs.size() ? &st.cadPointCloudAttrs[pi] : nullptr;
+    if (dwg_pointcloud_export::WritePointCloudMarker(st, *pc, hdr, tw, at))
+      ++nPcOut;
+  }
+  if (nPcOut > 0)
+    log.push_back("CAD export — wrote " + std::to_string(nPcOut) +
+                  " point-cloud extent box(es) with scan path in XDATA (issue #621).");
+
   FillPaperLayoutsFromState(st, dwg, tw, log);
 
   // REQ-170 / REQ-201, issue #614: every drop and degradation, named and counted, from the ONE
@@ -3693,13 +3921,24 @@ static bool WriteDwgGeoData(Dwg_Data* dwg, const DwgGeoData& g) {
   geo = obj->tio.object->tio.GEODATA;
   const double northRad = std::atan2(g.northX, g.northY);  // from +Y towards +X
   geo->host_block = dwg_add_handleref(dwg, 4, msHandle, nullptr);
-  geo->coord_type = 0;
+  const bool geodataV2 = dwg->header.version >= R_2004;
+  geo->class_version = geodataV2 ? 2 : 1;
+  if (geodataV2) {
+    geo->coord_type = g.reference == DwgGeoData::Reference::Geographic
+                          ? static_cast<BITCODE_BS>(3)
+                          : g.reference == DwgGeoData::Reference::ProjectedGrid
+                                ? static_cast<BITCODE_BS>(2)
+                                : static_cast<BITCODE_BS>(1);
+    geo->ref_pt = {g.refX, g.refY, 0.0};
+  } else {
+    geo->coord_type = 0;
+    geo->ref_pt = {g.refY, g.refX, 0.0};  // (latitude, longitude), 2009 layout
+  }
   geo->design_pt = {g.designX, g.designY, 0.0};
-  geo->ref_pt = {g.refY, g.refX, 0.0};  // (latitude, longitude)
   geo->obs_pt = {0.0, 0.0, 0.0};
   geo->up_dir = {0.0, 0.0, 1.0};
   geo->north_dir = {g.northX, g.northY};
-  geo->north_dir_angle_deg = northRad;  // radians, whatever LibreDWG's field name says
+  geo->north_dir_angle_deg = northRad;
   geo->north_dir_angle_rad = northRad;
   geo->scale_vec = {1.0, 1.0, 1.0};
   geo->units_value_horiz = static_cast<BITCODE_BL>(g.horizontalUnits);

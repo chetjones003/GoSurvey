@@ -19,6 +19,14 @@
 #include "LibreDwgCad.hpp"
 #include "geo/CoordinateSystems.hpp"
 
+#if defined(__cplusplus) && !defined(restrict)
+#define restrict
+#endif
+extern "C" {
+#include <dwg.h>
+#include <dwg_api.h>
+}
+
 namespace {
 
 void LoadShippedDictionary() {
@@ -338,6 +346,33 @@ TEST_CASE("No GEODATA without a usable zone, and the reason says why (REQ-362)",
     CHECK_FALSE(BuildDwgGeoData(st, &g, &why));
     CHECK(why.find("Unitless") != std::string::npos);
   }
+}
+
+TEST_CASE("R2004 DWG GEODATA uses class version 2 (issue #623)", "[req362][dwg][libredwg][issue623]") {
+  LoadShippedDictionary();
+  AppCommandState st = GeolocatedAtAg9976();
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  const std::string body = TempDwg("gosurvey-geodata-v2.dwg");
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, body.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(body.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  bool found = false;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].fixedtype != DWG_TYPE_GEODATA || dwg.object[i].tio.object == nullptr ||
+        dwg.object[i].tio.object->tio.GEODATA == nullptr)
+      continue;
+    const Dwg_Object_GEODATA* g = dwg.object[i].tio.object->tio.GEODATA;
+    CHECK(g->coord_type == 3);
+    CHECK(g->ref_pt.x == Catch::Approx(kLon).margin(1e-6));
+    CHECK(g->ref_pt.y == Catch::Approx(kLat).margin(1e-6));
+    found = true;
+  }
+  dwg_free(&dwg);
+  CHECK(found);
+  std::error_code ec;
+  std::filesystem::remove(body, ec);
 }
 
 TEST_CASE("A saved DWG's GEODATA alone reopens the location (REQ-362)", "[req362][dwg]") {
