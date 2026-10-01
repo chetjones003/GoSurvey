@@ -4426,6 +4426,15 @@ requirements is a planning failure, not a sign of rigor.
   editing via a model-store swap, with a Save/Don't-Save/Cancel close gate. Dynamic blocks and a
   block-library browser remain out of scope (roadmap Someday).
   2026-08-29 — D-2026-08-29-i: live INSERT rubber-band preview + object snapping to placed inserts.
+  2026-10-01 — "DWG/DXF export writes real INSERT/BLOCK records" made true for DWG (issue #606):
+  `src/io/LibreDwgCad.cpp` writes a BLOCK_HEADER/BLOCK/ENDBLK per definition (lines, circles, arcs,
+  ellipses, flat polylines, text/MTEXT, plus an ATTDEF per attribute definition), and an INSERT per
+  block reference (position/scale/rotation from the ref's transform) with an ATTRIB per attribute
+  value. Nested blocks, meshes and solids inside a definition are not written yet (same degradation
+  class FillFromState already discloses for model space, via the #614 loss summary). Finding this
+  gap's real scope — an INSERT with more than two attributes — surfaced and fixed the true root
+  cause of D-2026-09-30-f's heap-corruption crash (`in_postprocess_SEQEND` in the vendored
+  LibreDWG, not the workaround that PR shipped); see that decision's entry for detail.
 
 ### REQ-108 — Polar and tracking input aids
 - Purpose: the POLAR status-bar toggle lights up with no behavior behind it, there is no object-snap tracking, and there's no typed polar-coordinate entry
