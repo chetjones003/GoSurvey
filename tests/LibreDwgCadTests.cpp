@@ -2224,3 +2224,64 @@ TEST_CASE("DWG round-trips entity and layer lineweight (REQ-170, issue #609)",
   REQUIRE(heavy != nullptr);
   CHECK(heavy->lineweightMm == Catch::Approx(0.35f).margin(0.02f));
 }
+
+// REQ-037 / REQ-170, issue #610: paper layouts, sheet lines, and viewport scales survive DWG save/open.
+TEST_CASE("DWG round-trips paper layouts and viewport scales (REQ-170, issue #610)",
+          "[dwg][libredwg][req170][issue610]") {
+  ScratchDir dir("roundtrip-paper");
+  const auto p = (dir.path / "rt-paper.dwg").string();
+  AppCommandState st;
+
+  PaperLayout sheetA;
+  sheetA.name = "Plot A";
+  sheetA.paperLines = {0.5f, 0.5f, 0.f, 10.f, 0.5f, 0.f};
+  Viewport vp20;
+  vp20.paperXIn = 0.5f;
+  vp20.paperYIn = 1.f;
+  vp20.paperWIn = 4.f;
+  vp20.paperHIn = 3.f;
+  vp20.scaleModelPerPaperIn = 240.f;
+  vp20.modelCenterX = 100.0;
+  vp20.modelCenterY = 50.0;
+  Viewport vp50;
+  vp50.paperXIn = 5.f;
+  vp50.paperYIn = 1.f;
+  vp50.paperWIn = 4.f;
+  vp50.paperHIn = 3.f;
+  vp50.scaleModelPerPaperIn = 600.f;
+  vp50.modelCenterX = 200.0;
+  vp50.modelCenterY = 75.0;
+  sheetA.viewports.push_back(vp20);
+  sheetA.viewports.push_back(vp50);
+
+  PaperLayout sheetB;
+  sheetB.name = "Plot B";
+  sheetB.paperLines = {1.f, 1.f, 0.f, 1.f, 10.f, 0.f};
+
+  st.paperLayouts.push_back(sheetA);
+  st.paperLayouts.push_back(sheetB);
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  StripGosurveyDwgTrailer(p);
+
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 2);
+  const PaperLayout* plotA = nullptr;
+  const PaperLayout* plotB = nullptr;
+  for (const PaperLayout& L : in.paperLayouts) {
+    if (L.name == "Plot A")
+      plotA = &L;
+    if (L.name == "Plot B")
+      plotB = &L;
+  }
+  REQUIRE(plotA != nullptr);
+  REQUIRE(plotB != nullptr);
+  REQUIRE(plotA->viewports.size() == 2);
+  CHECK(plotA->paperLines.size() == 6);
+  CHECK(plotA->viewports[0].scaleModelPerPaperIn == Catch::Approx(240.f).margin(1.f));
+  CHECK(plotA->viewports[1].scaleModelPerPaperIn == Catch::Approx(600.f).margin(1.f));
+  CHECK(plotA->viewports[0].modelCenterX == Catch::Approx(100.0).margin(0.01));
+  CHECK(plotB->paperLines.size() == 6);
+}
