@@ -1247,7 +1247,8 @@ requirements is a planning failure, not a sign of rigor.
   as the native format. All are itemised in `docs/dwg-plan.txt`.
   2026-08-29 — **Native codec path decided: LibreDWG (REQ-170, ADR-041, D-2026-08-29-g).** Phase 1
   converter remains until REQ-170 is verified, then leaves the user-facing path. **This epic does
-  not close DM-08** (unknown-object preservation / R2018 write). DWG write is R2000/R2004 only.
+  not close DM-08** (unknown-object preservation). DWG write is R2000–R2018 (D-2026-10-01-f); DM-08
+  pass-through of foreign objects is still out.
 
 ### REQ-053 — RECT command, and polylines survive a DXF/DWG save
 - Purpose: rectangles are the most-drawn shape in survey deliverables (parcels, structures, title-block
@@ -3636,7 +3637,7 @@ requirements is a planning failure, not a sign of rigor.
 
 ### REQ-170 — LibreDWG is the DXF and DWG codec
 - Purpose: File Format Specs — open and save DWG/DXF in-process with no ODA/AutoCAD converter on
-  the customer machine; write DWG only as far as LibreDWG is trustworthy (R2004)
+  the customer machine; write DWG through R2018 where LibreDWG encode is verified (D-2026-10-01-f)
 - Priority: must
 - Type: functional
 - Statement: **GNU LibreDWG** is the codec for `.dwg` and `.dxf` (ADR-041). GoSurvey links it and
@@ -3646,10 +3647,10 @@ requirements is a planning failure, not a sign of rigor.
   reason (REQ-001). Entities and tables LibreDWG decoded are mapped into the GoSurvey domain;
   every skipped class, exploded INSERT (until REQ-107), extra layout, and proxy is **named in the
   log** (REQ-201). State-plane coordinates obey REQ-101 (origin subtract in double before float).
-  **Save DWG:** only **R2000** or **R2004**; default **R2000** (D-2026-09-30-c). R2007+ is refused. The file AutoCAD
-  opens must do so **without a Recover prompt** for the entity set we emit. Before overwrite, the
-  UI lists what this down-convert / domain mapping will drop. Failed write leaves the destination
-  untouched.
+  **Save DWG:** **R2000**, **R2004**, **R2010**, **R2013**, or **R2018**; default **R2000**
+  (D-2026-09-30-c). **R2007** is not offered. The file AutoCAD opens must do so **without a Recover
+  prompt** for the entity set we emit. Before overwrite, the UI lists what this down-convert / domain
+  mapping will drop. Failed write leaves the destination untouched.
   **Save DXF:** LibreDWG’s DXF writer; binary DXF is included to the extent the library writes it
   (this **subsumes** proposed REQ-112 when implemented). Types with no representation (TIN, mesh,
   cloud, PDF) are logged exclusions, not silent drops.
@@ -3662,7 +3663,8 @@ requirements is a planning failure, not a sign of rigor.
   - a non-DWG renamed to `.dwg` is refused and the document is unchanged;
   - File ▸ Export DWG (default) writes R2000; AutoCAD or ODA File Converter (oracle) opens it
     **without Recover** and the emitted entity counts match the log;
-  - exporting R2018 is refused by name; the destination file is not created;
+  - choosing R2018 in Export DWG writes AC1032; the in-process reader round-trips the emitted set
+    and reports `r2018` (regression tests; oracle optional);
   - a failed encode does not truncate an existing destination;
   - `GoSurvey` / installer materials state GPL-3.0-or-later.
 - Owner-layer: IO (codec), Domain (mapping), UI (lossy-save list), Build (link LibreDWG, MSVC)
@@ -3681,6 +3683,9 @@ requirements is a planning failure, not a sign of rigor.
   /`%%p` control codes, which need no Unicode handling at all. Other non-ASCII characters (accents,
   non-Latin letters) still write as raw UTF-8 bytes and still misread, unchanged from before; wiring
   up the general fix, verified under page heap first, is deferred.
+  2026-10-01 — **R2010/R2013/R2018 export** (D-2026-10-01-f): `DwgSaveVersion` and Export DWG dialog
+  offer five selectable versions (R2007 omitted). `ExportLibreCadFile` encodes via LibreDWG
+  `R_2010`/`R_2013`/`R_2018`; GEODATA uses class version 2 when `DwgSaveVersionUsesR2010Geodata()`.
 
 ### REQ-171 — Point cloud entity
 - Purpose: File Format Specs — hold laser-scan points without pretending they are a TIN (REQ-068)

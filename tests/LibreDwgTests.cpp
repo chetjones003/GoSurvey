@@ -3,6 +3,13 @@
 #include "DwgIo.hpp"
 #include "LibreDwg.hpp"
 
+#if defined(__cplusplus) && !defined(restrict)
+#define restrict
+#endif
+extern "C" {
+#include <dwg.h>
+}
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -82,4 +89,27 @@ TEST_CASE("LibreDwg writes R2004 that the in-process reader sees (issue #600)",
   REQUIRE(in.gcount() == 6);
   REQUIRE(std::string(magic, 6) == "AC1018");
   REQUIRE(LibreDwgReadVersionName(pathUtf8.c_str()) == "r2004");
+}
+
+TEST_CASE("LibreDwg writes R2010/R2013/R2018 minimal LINE files (R2018 export path)",
+          "[dwg][libredwg][issue600]") {
+  const struct Row {
+    int libVer;
+    const char* acTag;
+    const char* readName;
+  } rows[] = {
+      {R_2010, "AC1024", "r2010"},
+      {R_2013, "AC1027", "r2013"},
+      {R_2018, "AC1032", "r2018"},
+  };
+  for (const Row& row : rows) {
+    ScratchDir dir(row.acTag);
+    const std::string pathUtf8 = (dir.path / "line.dwg").string();
+    REQUIRE(LibreDwgWriteMinimalAtVersion(row.libVer, pathUtf8.c_str()));
+    std::ifstream in(pathUtf8, std::ios::binary);
+    char magic[7] = {};
+    in.read(magic, 6);
+    REQUIRE(std::string(magic, 6) == row.acTag);
+    REQUIRE(LibreDwgReadVersionName(pathUtf8.c_str()) == row.readName);
+  }
 }

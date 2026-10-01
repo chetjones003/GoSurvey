@@ -7,14 +7,24 @@
 struct AppCommandState;
 
 // DWG interchange via GNU LibreDWG (REQ-170 / ADR-041). File Import/Export does not use ODA
-// File Converter or AutoCAD for read/write. Save targets R2000/R2004 (user picks at export;
-// D-2026-10-01-a). FindDwgConverter remains for 3D solid tessellation only (not File DWG).
+// File Converter or AutoCAD for read/write. Save targets R2000 through R2018 (user picks at
+// export; D-2026-10-01-f). R2007 is omitted (separate container; features exist in R2010+).
+// FindDwgConverter remains for 3D solid tessellation only (not File DWG).
 
-/// DWG save format the user chose in the Export DWG dialog (issue #600).
+/// DWG save format the user chose in the Export DWG dialog (issue #600, extended R2018).
 enum class DwgSaveVersion {
   R2000 = 0,
   R2004 = 1,
+  R2010 = 2,
+  R2013 = 3,
+  R2018 = 4,
 };
+
+/// True when save uses R2004+ entity colour/transparency encoding (truecolor ENC, etc.).
+bool DwgSaveVersionUsesR2004Features(DwgSaveVersion version);
+
+/// True when GEODATA should use the R2010+ class layout (version 2 fields).
+bool DwgSaveVersionUsesR2010Geodata(DwgSaveVersion version);
 
 /// One row in the Export DWG version list (selectable or "coming later").
 struct DwgExportFormatRow {

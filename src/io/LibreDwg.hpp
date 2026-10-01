@@ -17,7 +17,8 @@ struct _dwg_struct;
 void LibreDwgLinkBlockEntities(_dwg_struct* dwg);
 
 /// Writes a R2000 DWG (AC1015) containing one model-space LINE from (0,0,0) to (10,0,0).
-/// Writes a minimal one-LINE DWG at the given LibreDWG version (R2000 or R2004 today).
+/// Writes a minimal one-LINE DWG at the given LibreDWG version (R2000 through R2018).
+bool LibreDwgWriteMinimalAtVersion(int libreDwgVersionType, const char* pathUtf8);
 bool LibreDwgWriteMinimalR2000(const char* pathUtf8);
 bool LibreDwgWriteMinimalR2004(const char* pathUtf8);
 
