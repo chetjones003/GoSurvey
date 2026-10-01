@@ -443,6 +443,33 @@ TEST_CASE("DWG export loss lists transparency only for R2000 (issue #620 / #614)
   }
 }
 
+TEST_CASE("CadMultileader round-trips through LEADER+MTEXT DWG export (issue #619)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-mleader");
+  const auto p = (dir.path / "ml.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadMultileader ml{};
+  ml.pathXyz = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 12.f, 2.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.insX = 12.f;
+  ml.label.insY = 2.f;
+  ml.label.text = "Monument A";
+  ml.label.boxMinX = 12.f;
+  ml.label.boxMinY = 1.f;
+  ml.label.boxMaxX = 20.f;
+  ml.label.boxMaxY = 2.f;
+  st.cadMultileaders.push_back(ml);
+  st.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadMultileaders.size() == 1);
+  CHECK(in.cadMultileaders[0].pathXyz.size() == 9);
+  CHECK(in.cadMultileaders[0].label.text.find("Monument") != std::string::npos);
+}
+
 TEST_CASE("ExportDwgFile writes a CadTable as grid lines and MTEXT (issue #616)",
           "[dwg][libredwg][issue616]") {
   ScratchDir dir("dwg-table-export");
@@ -2757,13 +2784,9 @@ TEST_CASE("DWG import maps POINT LEADER SOLID 3DFACE and mesh (REQ-170, issue #6
   CHECK(st.cadFilledRegions.size() >= 1);
   REQUIRE(st.cadMeshes.size() >= 1);
   CHECK(st.cadMeshes[0]->triangleCount() >= 2);
-  CHECK(st.userPolylineOffsets.size() >= 1);
-  bool foundLeaderText = false;
-  for (const CadAnnotation& a : st.cadAnnotations) {
-    if (a.text.find("Leader note") != std::string::npos)
-      foundLeaderText = true;
-  }
-  CHECK(foundLeaderText);
+  REQUIRE(st.cadMultileaders.size() >= 1);
+  CHECK(st.cadMultileaders[0].label.text.find("Leader note") != std::string::npos);
+  CHECK(st.cadMultileaders[0].pathXyz.size() >= 6);
 }
 
 TEST_CASE("DWG import maps POLYLINE_PFACE to CadMesh (REQ-170, issue #613)",

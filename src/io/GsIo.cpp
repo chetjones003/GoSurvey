@@ -1464,6 +1464,26 @@ json BuildRoot(const AppCommandState& st) {
   if (!markerAttrs.empty())
     doc["positionMarkerAttrs"] = std::move(markerAttrs);
 
+  json multileaders = json::array();
+  for (const CadMultileader& ml : st.cadMultileaders) {
+    json o;
+    o["path"] = ml.pathXyz;
+    json label;
+    CadAnnotationToJson(ml.label, label);
+    o["label"] = std::move(label);
+    multileaders.push_back(std::move(o));
+  }
+  if (!multileaders.empty())
+    doc["multileaders"] = std::move(multileaders);
+  json multileaderAttrs = json::array();
+  for (const auto& a : st.cadMultileaderAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    multileaderAttrs.push_back(std::move(o));
+  }
+  if (!multileaderAttrs.empty())
+    doc["multileaderAttrs"] = std::move(multileaderAttrs);
+
   doc["drawingInsUnits"] = st.drawingInsUnits;
   json blockDefs = json::array();
   for (const CadBlockDefinition& d : st.blockDefs)
@@ -2900,6 +2920,31 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.cadPositionMarkerAttrs.push_back(EntityAttributesFromJson(o));
   }
   st.cadPositionMarkerAttrs.resize(st.cadPositionMarkers.size());
+
+  st.cadMultileaders.clear();
+  st.cadMultileaderAttrs.clear();
+  if (doc.contains("multileaders") && doc["multileaders"].is_array()) {
+    for (const auto& o : doc["multileaders"]) {
+      if (!o.is_object())
+        continue;
+      CadMultileader ml;
+      if (o.contains("path") && o["path"].is_array()) {
+        for (const auto& v : o["path"])
+          if (v.is_number())
+            ml.pathXyz.push_back(static_cast<float>(v.get<double>()));
+      }
+      if (o.contains("label") && o["label"].is_object())
+        ml.label = CadAnnotationFromJson(o["label"]);
+      ml.label.kind = CadAnnotation::Kind::Mtext;
+      if (ml.pathXyz.size() >= 6)
+        st.cadMultileaders.push_back(std::move(ml));
+    }
+  }
+  if (doc.contains("multileaderAttrs") && doc["multileaderAttrs"].is_array()) {
+    for (const auto& o : doc["multileaderAttrs"])
+      st.cadMultileaderAttrs.push_back(EntityAttributesFromJson(o));
+  }
+  st.cadMultileaderAttrs.resize(st.cadMultileaders.size());
 
   st.drawingInsUnits = doc.value("drawingInsUnits", st.drawingInsUnits);
   st.blockDefs.clear();

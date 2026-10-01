@@ -10682,6 +10682,35 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-01 — initial (resolves SPEC GAP on issue #607; D-2026-10-01-c).
 
+### REQ-367 — Multileaders: domain storage and DWG round trip (GitHub issue #619)
+
+- Purpose: issue #619 — AutoCAD/Civil 3D drawings use `MULTILEADER` callouts; GoSurvey skipped them.
+  v1 delivers storage, persistence, import, and export so foreign drawings show callouts and GoSurvey
+  can round-trip them; the interactive `MLEADER` command and native `MULTILEADER` write at R2010+ are
+  follow-ups (TASK-305).
+- Priority: should
+- Type: interop (+ domain)
+- Decision: D-2026-10-01-g (v1 export uses associated `LEADER` + `MTEXT`, not native MULTILEADER).
+- Statement:
+  1. **Domain:** `CadMultileader` holds a leader path (local XYZ triplets) and an embedded `CadAnnotation`
+     (`Kind::Mtext`) for the landing text. Parallel `cadMultileaderAttrs` like other entity stores.
+  2. **Persistence:** `.gs` / ADR-044 trailer arrays `multileaders` / `multileaderAttrs` (additive).
+  3. **Open:** a decoded `MULTILEADER` with **mtext** content imports into `CadMultileader`. Block-content
+     multileaders are named once in the REQ-201 log, not silently dropped. Legacy `LEADER` import unchanged.
+  4. **Save:** each multileader writes as `MTEXT` plus an associated `LEADER` (or segment `LINE`s if
+     `dwg_add_LEADER` fails). Native `MULTILEADER` entity write is deferred until MLEADERSTYLE encoding
+     is proven (issue #619 follow-up).
+  5. **Display (v1):** leader segments and label render in the viewport like other model annotations
+     (follow-up if not yet wired in the first increment).
+- Acceptance:
+  - a synthetic multileader with two path points and text survives Export DWG (R2018) → Import via
+    `ImportLibreCadFile` with the same path point count and text;
+  - a DWG containing only block-content multileaders logs the skip reason;
+  - multileaders persist through `.gs` save/load when present.
+- Owner-layer: Domain, IO, UI (command later)
+- Status: accepted
+- Revisions: 2026-10-01 — initial (issue #619; D-2026-10-01-g).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
