@@ -4565,8 +4565,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // ---- Leaders --------------------------------------------------------
     {
       ribbonlayout::RibbonGroupSpec multileaderGroup;
-      multileaderGroup.buttons = {largeBtnSpecEx("##AnnMultileader", -1, "Multileader", "Multi\nleader", true,
-                                                  "Multi leader — not implemented yet.", belowW("Multi\nleader"))};
+      multileaderGroup.buttons = {largeBtnSpecEx("##AnnMultileader", -1, "Multileader", "Multi\nleader", false,
+                                                  "Multileader — arrow tip, landing, then edit the label.\nCommand bar: MLEADER",
+                                                  belowW("Multi\nleader"))};
       ribbonlayout::RibbonSectionSpec spec;
       spec.groupGapX = 4.f;
       spec.groups = {
@@ -4581,7 +4582,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       const float w = buttonsW + 4.f + annStyleW + 8.f;
       ribbonSpecs.push_back({w, w, [&, spec, buttonsW]() {
         RibbonSectionBegin("RibbonSecAnnLeaders", "Leaders", buttonsW + 4.f + annStyleW + 8.f, panelH);
-        RibbonLayout::DrawSection(spec, buttonsW, nullptr);
+        RibbonLayout::DrawSection(spec, buttonsW, [&](const std::string& id) {
+          DevShell_OnUi(id.c_str());
+          if (id == "##AnnMultileader")
+            StartMleaderCommand(cmd, log);
+        });
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
         ImGui::TextUnformatted("Multileader style");
@@ -18467,7 +18472,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           worldToScreen(ml.pathXyz[pi + 3], ml.pathXyz[pi + 4], &b, ml.pathXyz[pi + 5]);
           dl->AddLine(a, b, drawCol, thick);
         }
-        drawAnnotationVisual(ml.label, lp, kAnnCol);
+        if (!(cmd.mtextRichEditorOpen && cmd.mtextRichEditorMultileaderIndex == static_cast<int>(li)))
+          drawAnnotationVisual(ml.label, lp, kAnnCol);
         if (sel || hov) {
           ImVec2 sa{}, sb{};
           worldToScreen(ml.label.boxMinX, ml.label.boxMinY, &sa, ml.label.insZ);

@@ -1742,6 +1742,8 @@ struct AppCommandState {
     Ellipse,
     Text,
     Mtext,
+    /// Multileader (REQ-367 / issue #619): arrow tip, landing, then in-place MTEXT for the label.
+    Mleader,
     DimAligned,
     DimLinear,
     DimAngular,
@@ -1980,6 +1982,7 @@ struct AppCommandState {
     case Kind::Ellipse:       return "ELLIPSE";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
+    case Kind::Mleader:       return "MLEADER";
     case Kind::DimAligned:    return "DIMALIGNED";
     case Kind::DimLinear:     return "DIMLINEAR";
     case Kind::DimAngular:    return "DIMANGULAR";
@@ -2440,6 +2443,11 @@ struct AppCommandState {
   float textRotDraft = 0.f;
 
   enum class MtextPhase { WaitCorner1, WaitCorner2, WaitString } mtextPhase = MtextPhase::WaitCorner1;
+  /// MLEADER (REQ-367): tip, landing, then label editor (\ref MleaderPhase::WaitLabel).
+  enum class MleaderPhase { WaitArrowTip, WaitLanding, WaitLabel } mleaderPhase = MleaderPhase::WaitArrowTip;
+  float mleaderTipX = 0.f;
+  float mleaderTipY = 0.f;
+  float mleaderTipZ = 0.f;
 
   float mtxtX1 = 0.f, mtxtY1 = 0.f;
   float mtxtX2 = 0.f, mtxtY2 = 0.f;
@@ -3962,6 +3970,9 @@ struct AppCommandState {
   /// The editor was opened by placing the marker: committing the label joins the placement's undo
   /// step rather than pushing a second one (one UNDO removes the marker it placed).
   bool mtextRichEditorMarkerJustPlaced = false;
+  /// The multileader whose label the MTEXT editor is editing (REQ-367), or -1.
+  int mtextRichEditorMultileaderIndex = -1;
+  bool mtextRichEditorMultileaderJustPlaced = false;
   /// Edit Location asks the Drawing Settings window to show Units and Zone (REQ-359 item 2).
   bool drawingSettingsShowUnitsAndZone = false;
   /// REQ-364: a running Capture Area. The command layer sets the area; the online map controller
@@ -6367,6 +6378,8 @@ inline void CloseMtextRichEditorUi(AppCommandState& st) {
   st.mtextRichEditorAnnIndex = -1;
   st.mtextRichEditorMarkerIndex = -1;  // REQ-359
   st.mtextRichEditorMarkerJustPlaced = false;
+  st.mtextRichEditorMultileaderIndex = -1;  // REQ-367
+  st.mtextRichEditorMultileaderJustPlaced = false;
   st.mtextRichEditorBuf.clear();
   st.mtextRichEditorFocusRequest = false;
   st.mtextRichEditorCursor = 0;
@@ -6391,6 +6404,10 @@ inline CadAnnotation* MtextRichEditorTargetAnnotation(AppCommandState& st) {
   if (st.mtextRichEditorMarkerIndex >= 0) {  // a Position Marker's own label (REQ-359 item 3)
     const size_t mi = static_cast<size_t>(st.mtextRichEditorMarkerIndex);
     return mi < st.cadPositionMarkers.size() ? &st.cadPositionMarkers[mi].label : nullptr;
+  }
+  if (st.mtextRichEditorMultileaderIndex >= 0) {  // REQ-367
+    const size_t li = static_cast<size_t>(st.mtextRichEditorMultileaderIndex);
+    return li < st.cadMultileaders.size() ? &st.cadMultileaders[li].label : nullptr;
   }
   const int ix = st.mtextRichEditorAnnIndex;
   if (ix < 0)
@@ -6418,6 +6435,10 @@ inline EntityAttributes* MtextRichEditorTargetAttrs(AppCommandState& st) {
   if (st.mtextRichEditorMarkerIndex >= 0) {  // REQ-359: the marker's row
     const size_t mi = static_cast<size_t>(st.mtextRichEditorMarkerIndex);
     return mi < st.cadPositionMarkerAttrs.size() ? &st.cadPositionMarkerAttrs[mi] : nullptr;
+  }
+  if (st.mtextRichEditorMultileaderIndex >= 0) {  // REQ-367
+    const size_t li = static_cast<size_t>(st.mtextRichEditorMultileaderIndex);
+    return li < st.cadMultileaderAttrs.size() ? &st.cadMultileaderAttrs[li] : nullptr;
   }
   const int ix = st.mtextRichEditorAnnIndex;
   if (ix < 0)
@@ -7384,6 +7405,12 @@ void CadMultileaderLocalBox(const CadMultileader& ml, float* mnX, float* mnY, fl
 [[nodiscard]] bool CadMultileaderHit(const CadMultileader& ml, double x, double y, float tolWorld,
                                      double* distSq);
 int DropMultileadersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log);
+
+void StartMleaderCommand(AppCommandState& st, std::vector<std::string>& log);
+void ResetMleaderDraft(AppCommandState& st);
+void CommitMleaderLandingAt(AppCommandState& st, float landX, float landY, std::vector<std::string>& log);
+void FinishMleaderCommand(AppCommandState& st, std::vector<std::string>& log);
+void AbandonJustPlacedMultileader(AppCommandState& st);
 void StartGeoMarkPointCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartGeoMarkLatLongCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartGeoReorientMarkerCommand(AppCommandState& st, std::vector<std::string>& log);

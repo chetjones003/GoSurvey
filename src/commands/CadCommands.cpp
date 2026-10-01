@@ -6475,6 +6475,7 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   ResetRectDraft(st);
   ResetTextCmdDraft(st);
   ResetMtextDraft(st);
+  ResetMleaderDraft(st);  // REQ-367
   ResetDimDraft(st);
   ResetDimAngularDraft(st);
   ResetSurveyInverseDraft(st);
@@ -7126,6 +7127,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "mtext") {
     StartMtextCommand(st, log);
+    return true;
+  }
+  if (primary == "mleader") {
+    StartMleaderCommand(st, log);
     return true;
   }
   if (primary == "dimaligned") {
@@ -11582,7 +11587,6 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
       DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
       DropPositionMarkersFromSelection(st, "ROTATE", log);  // REQ-359: move/copy/erase only
       DropMultileadersFromSelection(st, "ROTATE", log);     // REQ-367
-  DropMultileadersFromSelection(st, "ROTATE", log);     // REQ-367
       const ucs::Ucs u = CadActiveUcsStorage(st);
       const ray3d::Vec3 axisUnit =
           ray3d::Normalize(ray3d::Vec3{u.zAxis.x, u.zAxis.y, u.zAxis.z});
@@ -13455,6 +13459,25 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       log.push_back("TEXT — height (Enter = plot-scale default):");
     } else
       log.push_back("TEXT — continue on command line (height / rotation / text).");
+    return;
+  }
+
+  if (st.active == K::Mleader) {  // REQ-367
+    using MLp = AppCommandState::MleaderPhase;
+    switch (st.mleaderPhase) {
+    case MLp::WaitArrowTip:
+      st.mleaderTipX = wx;
+      st.mleaderTipY = wy;
+      st.mleaderTipZ = CadCommitElevation(st);
+      st.mleaderPhase = MLp::WaitLanding;
+      log.push_back("MLEADER — specify landing location (text side):");
+      break;
+    case MLp::WaitLanding:
+      CommitMleaderLandingAt(st, wx, wy, log);
+      break;
+    case MLp::WaitLabel:
+      break;
+    }
     return;
   }
 
@@ -23291,10 +23314,14 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
   const bool plain = st.mtextRichEditorPlain;
   if (MtextRichEditorTargetAnnotation(st)) {
     const bool marker = st.mtextRichEditorMarkerIndex >= 0;  // a Position Marker's label (REQ-359)
-    // The label typed right after placing a marker belongs to the placement's undo step.
-    if (!(marker && st.mtextRichEditorMarkerJustPlaced))
-      PushUndoSnapshot(st, marker ? "Position Marker label" : paper ? "Paper text edit"
-                                                                   : (plain ? "TEXT edit" : "MTEXT edit"));
+    const bool multileader = st.mtextRichEditorMultileaderIndex >= 0;  // REQ-367
+    // The label typed right after placing belongs to the placement's undo step.
+    if (!(marker && st.mtextRichEditorMarkerJustPlaced) &&
+        !(multileader && st.mtextRichEditorMultileaderJustPlaced))
+      PushUndoSnapshot(st, marker ? "Position Marker label"
+                                  : multileader ? "Multileader label"
+                                                : paper ? "Paper text edit"
+                                                        : (plain ? "TEXT edit" : "MTEXT edit"));
     // Re-resolve after the snapshot (it does not mutate the live stores, but keep the access pattern safe).
     CadAnnotation* ann = MtextRichEditorTargetAnnotation(st);
     if (ann) {
@@ -23313,8 +23340,14 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
           RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(linkedPi));
       }
       BumpCadGpuCache(st);
+      if (multileader && st.mtextRichEditorMultileaderJustPlaced && st.active == K::Mleader) {
+        FinishMleaderCommand(st, log);
+        return;
+      }
       log.push_back(marker ? "Position Marker label updated."
-                           : paper ? "Paper text updated." : (plain ? "TEXT updated." : "MTEXT updated."));
+                           : multileader ? "Multileader label updated."
+                                         : paper ? "Paper text updated."
+                                                 : (plain ? "TEXT updated." : "MTEXT updated."));
     }
   }
   CloseMtextRichEditorUi(st);
@@ -23323,6 +23356,15 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
 void CancelMtextRichEditor(AppCommandState& st, std::vector<std::string>* log) {
   if (!st.mtextRichEditorOpen)
     return;
+  if (st.mtextRichEditorMultileaderIndex >= 0 && st.mtextRichEditorMultileaderJustPlaced) {
+    AbandonJustPlacedMultileader(st);
+    if (log)
+      log->push_back("MLEADER — canceled.");
+    st.active = AppCommandState::Kind::None;
+    ResetMleaderDraft(st);
+    CloseMtextRichEditorUi(st);
+    return;
+  }
   if (st.mtextRichEditorPlacement) {
     if (log)
       log->push_back("MTEXT — canceled.");
@@ -39982,6 +40024,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("TEXT canceled.");
   else if (st.active == AppCommandState::Kind::Mtext)
     log.push_back("MTEXT canceled.");
+  else if (st.active == AppCommandState::Kind::Mleader)
+    log.push_back("MLEADER canceled.");
   else if (st.active == AppCommandState::Kind::DimAligned)
     log.push_back("DIMALIGNED canceled.");
   else if (st.active == AppCommandState::Kind::DimLinear)
@@ -40067,6 +40111,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.selBoxWaitingSecond  = false;
     log.push_back("ALIGN canceled.");
   }
+  if (prev == AppCommandState::Kind::Mleader && st.mtextRichEditorMultileaderJustPlaced)
+    AbandonJustPlacedMultileader(st);
   st.active = AppCommandState::Kind::None;
   if (prev == AppCommandState::Kind::Offset)
     OffsetCmd::ResetOffsetDraft(st);
@@ -43844,6 +43890,17 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return "TEXT: Enter content | ESC cancel";
     }
   }
+  if (st.active == K::Mleader) {
+    using MLp = AppCommandState::MleaderPhase;
+    switch (st.mleaderPhase) {
+    case MLp::WaitArrowTip:
+      return "MLEADER: Arrowhead location | ESC cancel";
+    case MLp::WaitLanding:
+      return "MLEADER: Landing location (text side) | ESC cancel";
+    case MLp::WaitLabel:
+      return "MLEADER: Edit label — Save to place | Esc cancel";
+    }
+  }
   if (st.active == K::Mtext) {
     switch (st.mtextPhase) {
     case MP::WaitCorner1:
@@ -44210,6 +44267,7 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Ellipse:    StartEllipseCommand(st, log);    break;
     case K::Text:       StartTextCommand(st, log);       break;
     case K::Mtext:      StartMtextCommand(st, log);      break;
+    case K::Mleader:    StartMleaderCommand(st, log);    break;
     case K::DimAligned: StartDimAlignedCommand(st, log); break;
     case K::DimLinear:  StartDimLinearCommand(st, log);  break;
     case K::DimAngular: StartDimAngularCommand(st, log); break;

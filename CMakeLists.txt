@@ -361,6 +361,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
   src/commands/CadCommands_Geo.cpp
+  src/commands/CadCommands_Mleader.cpp
   src/commands/CadCommands_Ucs.cpp
   src/commands/CadDynInput.cpp
   src/commands/CadCommands_Bench.cpp
