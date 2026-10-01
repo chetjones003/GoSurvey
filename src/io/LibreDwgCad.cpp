@@ -532,6 +532,90 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
   return true;
 }
 
+// REQ-170 / issue #608: map a decoded HATCH boundary into CadFilledRegion (solid or pattern).
+bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATCH* h, const Xf2& xf,
+                       const EntityAttributes& at) {
+  if (h == nullptr || h->num_paths == 0 || h->paths == nullptr)
+    return false;
+  if (h->is_gradient_fill != 0)
+    return false;
+
+  CadFilledRegion region;
+  const double elev = h->elevation;
+  auto pushWorld = [&](double wx, double wy) {
+    double ox = 0, oy = 0;
+    xf.apply(wx, wy, &ox, &oy);
+    region.vertsXyz.push_back(ox - st.worldDocumentOriginX);
+    region.vertsXyz.push_back(oy - st.worldDocumentOriginY);
+    region.vertsXyz.push_back(elev);
+  };
+  auto beginLoop = [&]() { region.loopStart.push_back(static_cast<int>(region.vertsXyz.size() / 3)); };
+  auto endLoop = [&]() {
+    if (region.loopStart.empty())
+      return;
+    const int start = region.loopStart.back();
+    if (static_cast<int>(region.vertsXyz.size() / 3) - start < 3) {
+      region.vertsXyz.resize(static_cast<size_t>(start) * 3);
+      region.loopStart.pop_back();
+    }
+  };
+
+  for (BITCODE_BL pi = 0; pi < h->num_paths; ++pi) {
+    const Dwg_HATCH_Path& path = h->paths[pi];
+    beginLoop();
+    if ((path.flag & 2) != 0) {
+      if (path.polyline_paths == nullptr || path.num_segs_or_paths < 3) {
+        endLoop();
+        continue;
+      }
+      for (BITCODE_BL vi = 0; vi < path.num_segs_or_paths; ++vi)
+        pushWorld(path.polyline_paths[vi].point.x, path.polyline_paths[vi].point.y);
+    } else if (path.segs != nullptr) {
+      for (BITCODE_BL si = 0; si < path.num_segs_or_paths; ++si) {
+        const Dwg_HATCH_PathSeg& seg = path.segs[si];
+        if (seg.curve_type == 1) {
+          pushWorld(seg.first_endpoint.x, seg.first_endpoint.y);
+        } else if (seg.curve_type == 2 && seg.radius > 1e-9) {
+          double sweep = seg.end_angle - seg.start_angle;
+          if (seg.is_ccw) {
+            while (sweep < 0)
+              sweep += 2.0 * kPi;
+          } else {
+            while (sweep > 0)
+              sweep -= 2.0 * kPi;
+          }
+          if (std::fabs(sweep) < 1e-6)
+            sweep = seg.is_ccw ? 2.0 * kPi : -2.0 * kPi;
+          constexpr int nseg = 24;
+          for (int s = 0; s < nseg; ++s) {
+            const double u =
+                seg.start_angle + sweep * (static_cast<double>(s) / static_cast<double>(nseg));
+            pushWorld(seg.center.x + seg.radius * std::cos(u), seg.center.y + seg.radius * std::sin(u));
+          }
+        }
+      }
+    }
+    endLoop();
+  }
+
+  if (region.loopStart.empty() || region.vertsXyz.size() < 9)
+    return false;
+
+  if (h->is_solid_fill != 0) {
+    region.patternName.clear();
+  } else {
+    region.patternName = FromT(dwg, h->name);
+    if (region.patternName.empty())
+      region.patternName = "ANSI31";
+    region.patternAngleDeg = static_cast<float>(h->angle * (180.0 / kPi));
+    region.patternScale = h->scale_spacing > 0.0 ? static_cast<float>(h->scale_spacing) : 1.f;
+  }
+
+  st.cadFilledRegions.push_back(std::move(region));
+  st.cadFilledRegionAttrs.push_back(at);
+  return true;
+}
+
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
                   std::unordered_map<std::string, int>* skipHist,
                   int* degenerateExtrusions) {
@@ -723,6 +807,17 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     LocalLine(st, px, py, e->z, px + arm, py, e->z, at);
     LocalLine(st, px, py - arm, e->z, px, py, e->z, at);
     LocalLine(st, px, py, e->z, px, py + arm, e->z, at);
+    return;
+  }
+  if (ty == DWG_TYPE_HATCH && ent->tio.HATCH != nullptr) {
+    const Dwg_Entity_HATCH* h = ent->tio.HATCH;
+    if (h->is_gradient_fill != 0) {
+      NoteSkip(skipHist, "HATCH(gradient fill requires R2004+, issue #600)");
+      return;
+    }
+    if (ImportHatchEntity(st, dwg, h, xf, at))
+      return;
+    NoteSkip(skipHist, "HATCH(degenerate or unsupported boundary)");
     return;
   }
   if (ty == DWG_TYPE_INSERT) {
@@ -1406,7 +1501,6 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
 
   // Entity classes GoSurvey already refuses on principle (ADR-042/045/026) — counted and logged,
   // now also surfaced in the pre-export warning so the user sees them before committing to it.
-  add("HATCH region(s)", st.cadFilledRegions.size());
   add("mesh(es)", st.cadMeshes.size());
   add("point cloud(s)", st.cadPointClouds.size());
   add("TIN surface(s)", st.cadSurfaces.size());
@@ -1415,7 +1509,8 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   // Degradations: the entity IS written, but a property on it is not.
   const std::vector<EntityAttributes>* attrSets[] = {&st.userLineAttrs, &st.userCircleAttrs,
                                                       &st.userArcAttrs,  &st.userPolylineAttrs,
-                                                      &st.cadAnnotationAttrs, &st.userEllAttrs};
+                                                      &st.cadAnnotationAttrs, &st.userEllAttrs,
+                                                      &st.cadFilledRegionAttrs};
   size_t nColorRounded = 0, nLineweight = 0, nTransparency = 0;
   for (const std::vector<EntityAttributes>* v : attrSets) {
     for (const EntityAttributes& a : *v) {
@@ -1485,7 +1580,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   // after the entity records have started going into the object array.
   for (const std::vector<EntityAttributes>* v :
        {&st.userLineAttrs, &st.userCircleAttrs, &st.userArcAttrs, &st.userPolylineAttrs,
-        &st.cadAnnotationAttrs, &st.userEllAttrs}) {
+        &st.cadAnnotationAttrs, &st.userEllAttrs, &st.cadFilledRegionAttrs}) {
     for (const EntityAttributes& a : *v)
       tw.EnsureLtype(a.linetype);
   }
@@ -2147,6 +2242,67 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     e->start_angle = 0.0;
     e->end_angle = 2.0 * kPi;
   }
+  // REQ-170 / issue #608: filled regions → HATCH (solid or predefined pattern). Boundary loops are
+  // built from temporary invisible LWPOLYLINE scaffolds that LibreDWG's dwg_add_HATCH copies into
+  // the hatch path (non-associative).
+  size_t nHatchOut = 0;
+  for (size_t fi = 0; fi < st.cadFilledRegions.size(); ++fi) {
+    const CadFilledRegion& fr = st.cadFilledRegions[fi];
+    if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)
+      continue;
+    std::vector<Dwg_Object*> pathObjs;
+    pathObjs.reserve(fr.loopStart.size());
+    bool pathsOk = true;
+    for (size_t li = 0; li < fr.loopStart.size(); ++li) {
+      const int begin = fr.loopStart[li];
+      const int cnt = fr.loopCount(li);
+      if (cnt < 3) {
+        pathsOk = false;
+        break;
+      }
+      std::vector<dwg_point_2d> pts(static_cast<size_t>(cnt));
+      for (int v = 0; v < cnt; ++v) {
+        const size_t k = static_cast<size_t>(begin + v) * 3;
+        dwg_point_3d wp{};
+        world(static_cast<float>(fr.vertsXyz[k]), static_cast<float>(fr.vertsXyz[k + 1]),
+              fr.vertsXyz[k + 2], &wp);
+        pts[static_cast<size_t>(v)].x = wp.x;
+        pts[static_cast<size_t>(v)].y = wp.y;
+      }
+      Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, cnt, pts.data());
+      if (lw == nullptr) {
+        pathsOk = false;
+        break;
+      }
+      lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);  // closed
+      lw->elevation = fr.vertsXyz[static_cast<size_t>(begin) * 3 + 2];
+      lw->parent->invisible = 1;
+      pathObjs.push_back(&dwg->object[lw->parent->objid]);
+    }
+    if (!pathsOk || pathObjs.size() != fr.loopStart.size())
+      continue;
+
+    const bool solid = fr.isSolid();
+    const char* patName = solid ? "SOLID" : fr.patternName.c_str();
+    if (!solid && (patName == nullptr || patName[0] == '\0'))
+      patName = "ANSI31";
+    Dwg_Entity_HATCH* hatch = dwg_add_HATCH(
+        hdr, 1, patName, false, static_cast<unsigned>(pathObjs.size()),
+        const_cast<const Dwg_Object**>(pathObjs.data()));
+    if (hatch == nullptr)
+      continue;
+    hatch->elevation = fr.vertsXyz.size() >= 3 ? fr.vertsXyz[2] : 0.0;
+    if (!solid) {
+      hatch->angle = static_cast<double>(fr.patternAngleDeg) * (kPi / 180.0);
+      hatch->scale_spacing = fr.patternScale > 0.f ? static_cast<double>(fr.patternScale) : 1.0;
+      hatch->is_solid_fill = 0;
+    }
+    apply(hatch->parent, fi < st.cadFilledRegionAttrs.size() ? &st.cadFilledRegionAttrs[fi] : nullptr);
+    ++nHatchOut;
+  }
+  if (nHatchOut > 0)
+    log.push_back("CAD export — wrote " + std::to_string(nHatchOut) + " HATCH(es) (REQ-170, issue #608).");
+
   // REQ-170 / REQ-201, issue #614: every drop and degradation, named and counted, from the ONE
   // scan the pre-export warning dialog also reads — so the log and the dialog cannot disagree, and
   // nothing is silently dropped.
@@ -2566,6 +2722,9 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   if (nDimsImported > 0)
     log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " +
                   std::to_string(nDimsImported) + " dimension(s) (REQ-366).");
+  if (!st.cadFilledRegions.empty())
+    log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " +
+                  std::to_string(st.cadFilledRegions.size()) + " HATCH fill(s) (REQ-170, issue #608).");
   int printed = 0;
   for (const auto& kv : skipHist) {
     if (printed >= 8)
