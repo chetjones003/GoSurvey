@@ -3,6 +3,8 @@
 #include "AcisSatParser.hpp"
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "CadDimGeom.hpp"
+#include "CadDimStroke.hpp"
 #include "PolylineTiltedArc.hpp"
 #include "DxfColors.hpp"
 #include "MtextRichFormat.hpp"
@@ -418,6 +420,118 @@ void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, i
     ImportObject(st, dwg, e, child, depth + 1, skipHist, degenerateExtrusions);
 }
 
+// REQ-366, issue #607: imports a DIMENSION's anonymous "*D" block content as plain entities —
+// same fallback an unsupported DIMENSION subtype (Radius/Diameter/Ordinate/2-line Angular) takes.
+// Unlike ExplodeInsert, there is no INSERT transform to apply: AutoCAD bakes an anonymous
+// dimension block's content at the dimension's actual WCS location (see WriteDimAnonymousBlock's
+// comment on the save side), so the block's own entities are imported with the identity transform.
+void ExplodeDimensionBlock(AppCommandState& st, Dwg_Data* dwg, const Dwg_DIMENSION_common* common, int depth,
+                           std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions) {
+  if (depth > 8 || common == nullptr || common->block == nullptr)
+    return;
+  Dwg_Object* blk = dwg_resolve_handle_silent(dwg, common->block->absolute_ref);
+  if (blk == nullptr)
+    return;
+  const Xf2 identity{};
+  for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e))
+    ImportObject(st, dwg, e, identity, depth + 1, skipHist, degenerateExtrusions);
+}
+
+// REQ-366 statement 3: Aligned / Linear (rotated or orthogonal) / 3-point Angular read back into
+// the matching CadAnnotation::Kind, points and measured value from the DIMENSION's OWN fields (not
+// the *D block). Returns false if the geometry is degenerate (e.g. coincident extension points),
+// in which case the caller falls back to importing the block's drawn geometry like any unsupported
+// subtype, rather than dropping the dimension silently.
+bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf, Dwg_Object_Type ty,
+                              const Dwg_DIMENSION_common* common, const BITCODE_3BD* xline1,
+                              const BITCODE_3BD* xline2, const BITCODE_3BD* centerOrDefPt,
+                              double dimRotation, const EntityAttributes& at) {
+  if (common == nullptr)
+    return false;
+  CadAnnotation a{};
+  a.insZ = common->elevation;
+  a.rotationRad = static_cast<float>(common->text_rotation);
+  double tmx = 0.0, tmy = 0.0;
+  xf.apply(common->text_midpt.x, common->text_midpt.y, &tmx, &tmy);
+  a.insX = static_cast<float>(tmx - st.worldDocumentOriginX);
+  a.insY = static_cast<float>(tmy - st.worldDocumentOriginY);
+  if (ty == DWG_TYPE_DIMENSION_ALIGNED || ty == DWG_TYPE_DIMENSION_LINEAR) {
+    if (xline1 == nullptr || xline2 == nullptr)
+      return false;
+    double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    xf.apply(xline1->x, xline1->y, &x1, &y1);
+    xf.apply(xline2->x, xline2->y, &x2, &y2);
+    a.dimExt1X = static_cast<float>(x1 - st.worldDocumentOriginX);
+    a.dimExt1Y = static_cast<float>(y1 - st.worldDocumentOriginY);
+    a.dimExt2X = static_cast<float>(x2 - st.worldDocumentOriginX);
+    a.dimExt2Y = static_cast<float>(y2 - st.worldDocumentOriginY);
+    if (ty == DWG_TYPE_DIMENSION_ALIGNED) {
+      a.kind = CadAnnotation::Kind::DimAligned;
+      const double vx = a.dimExt2X - a.dimExt1X, vy = a.dimExt2Y - a.dimExt1Y;
+      const double len = std::hypot(vx, vy);
+      if (len < 1e-8)
+        return false;
+      const double n0x = -vy / len, n0y = vx / len;
+      double dpx = 0, dpy = 0;
+      if (centerOrDefPt != nullptr)
+        xf.apply(centerOrDefPt->x, centerOrDefPt->y, &dpx, &dpy);
+      dpx -= st.worldDocumentOriginX;
+      dpy -= st.worldDocumentOriginY;
+      const double cmx = 0.5 * (a.dimExt1X + a.dimExt2X), cmy = 0.5 * (a.dimExt1Y + a.dimExt2Y);
+      a.dimSignedOffset = static_cast<float>((dpx - cmx) * n0x + (dpy - cmy) * n0y);
+    } else {
+      a.kind = CadAnnotation::Kind::DimLinear;
+      // AutoCAD rotated-linear convention: ~pi/2 (mod pi) = vertical dim line (matches the save
+      // side's `an.dimLinearVertical ? kPi*0.5 : 0.0`).
+      const double rotMod = std::fmod(std::fabs(dimRotation), kPi);
+      a.dimLinearVertical = rotMod > (kPi * 0.25) && rotMod < (kPi * 0.75);
+      double dpx = 0, dpy = 0;
+      if (centerOrDefPt != nullptr)
+        xf.apply(centerOrDefPt->x, centerOrDefPt->y, &dpx, &dpy);
+      dpx -= st.worldDocumentOriginX;
+      dpy -= st.worldDocumentOriginY;
+      const double cmx = 0.5 * (a.dimExt1X + a.dimExt2X), cmy = 0.5 * (a.dimExt1Y + a.dimExt2Y);
+      a.dimSignedOffset = static_cast<float>(a.dimLinearVertical ? (dpx - cmx) : (dpy - cmy));
+    }
+  } else if (ty == DWG_TYPE_DIMENSION_ANG3PT) {
+    if (centerOrDefPt == nullptr || xline1 == nullptr || xline2 == nullptr)
+      return false;
+    a.kind = CadAnnotation::Kind::DimAngular;
+    double vx = 0, vy = 0;
+    xf.apply(centerOrDefPt->x, centerOrDefPt->y, &vx, &vy);
+    a.dimAngVertexX = static_cast<float>(vx - st.worldDocumentOriginX);
+    a.dimAngVertexY = static_cast<float>(vy - st.worldDocumentOriginY);
+    double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    xf.apply(xline1->x, xline1->y, &x1, &y1);
+    xf.apply(xline2->x, xline2->y, &x2, &y2);
+    a.dimExt1X = static_cast<float>(x1 - st.worldDocumentOriginX);
+    a.dimExt1Y = static_cast<float>(y1 - st.worldDocumentOriginY);
+    a.dimExt2X = static_cast<float>(x2 - st.worldDocumentOriginX);
+    a.dimExt2Y = static_cast<float>(y2 - st.worldDocumentOriginY);
+    double dpx = 0, dpy = 0;
+    xf.apply(common->def_pt.x, common->def_pt.y, &dpx, &dpy);
+    dpx -= st.worldDocumentOriginX;
+    dpy -= st.worldDocumentOriginY;
+    a.dimSignedOffset = static_cast<float>(std::hypot(dpx - a.dimAngVertexX, dpy - a.dimAngVertexY));
+    if (a.dimSignedOffset < 1e-6f)
+      return false;
+  } else {
+    return false;
+  }
+  const AngleDisplaySettings angle = CadAngleDisplaySettings(st);
+  CadDimRefreshMeasurementText(&a, st.activeDimensionStyle.unitPrecision, angle);
+  // A user-overridden DIMENSION text (DXF 1) takes priority over the geometry-derived label
+  // above, matching what AutoCAD itself shows for the entity.
+  if (common->user_text != nullptr) {
+    const std::string userText = FromT(dwg, common->user_text);
+    if (!userText.empty() && userText != "<>")  // AutoCAD's "use the measured value" placeholder
+      a.text = userText;
+  }
+  st.cadAnnotations.push_back(a);
+  st.cadAnnotationAttrs.push_back(at);
+  return true;
+}
+
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
                   std::unordered_map<std::string, int>* skipHist,
                   int* degenerateExtrusions) {
@@ -613,6 +727,50 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
   }
   if (ty == DWG_TYPE_INSERT) {
     ExplodeInsert(st, dwg, ent, depth, skipHist, degenerateExtrusions);
+    return;
+  }
+  // REQ-366, issue #607: Aligned / Linear / 3-point Angular DIMENSION entities read back into
+  // GoSurvey's own dimension kind (statement 3). Any other subtype falls through to the branch
+  // below, which imports the anonymous *D block's drawn geometry instead.
+  if ((ty == DWG_TYPE_DIMENSION_ALIGNED || ty == DWG_TYPE_DIMENSION_LINEAR ||
+       ty == DWG_TYPE_DIMENSION_ANG3PT) &&
+      ent->tio.DIMENSION_common != nullptr) {
+    const Dwg_DIMENSION_common* common = ent->tio.DIMENSION_common;
+    const BITCODE_3BD* xline1 = nullptr;
+    const BITCODE_3BD* xline2 = nullptr;
+    const BITCODE_3BD* centerOrDef = nullptr;
+    double rot = 0.0;
+    if (ty == DWG_TYPE_DIMENSION_ALIGNED && ent->tio.DIMENSION_ALIGNED != nullptr) {
+      xline1 = &ent->tio.DIMENSION_ALIGNED->xline1_pt;
+      xline2 = &ent->tio.DIMENSION_ALIGNED->xline2_pt;
+      centerOrDef = &common->def_pt;
+    } else if (ty == DWG_TYPE_DIMENSION_LINEAR && ent->tio.DIMENSION_LINEAR != nullptr) {
+      xline1 = &ent->tio.DIMENSION_LINEAR->xline1_pt;
+      xline2 = &ent->tio.DIMENSION_LINEAR->xline2_pt;
+      centerOrDef = &common->def_pt;
+      rot = ent->tio.DIMENSION_LINEAR->dim_rotation;
+    } else if (ty == DWG_TYPE_DIMENSION_ANG3PT && ent->tio.DIMENSION_ANG3PT != nullptr) {
+      xline1 = &ent->tio.DIMENSION_ANG3PT->xline1_pt;
+      xline2 = &ent->tio.DIMENSION_ANG3PT->xline2_pt;
+      centerOrDef = &ent->tio.DIMENSION_ANG3PT->center_pt;
+    }
+    if (!ImportSupportedDimension(st, dwg, xf, ty, common, xline1, xline2, centerOrDef, rot, at))
+      ExplodeDimensionBlock(st, dwg, common, depth, skipHist, degenerateExtrusions);
+    return;
+  }
+  if ((ty == DWG_TYPE_DIMENSION_RADIUS || ty == DWG_TYPE_DIMENSION_DIAMETER ||
+       ty == DWG_TYPE_DIMENSION_ORDINATE || ty == DWG_TYPE_DIMENSION_ANG2LN) &&
+      ent->tio.DIMENSION_common != nullptr) {
+    // REQ-366 statement 3: not mapped to a GoSurvey dimension kind — the *D block's drawn geometry
+    // is kept as plain entities, and the subtype is named ONCE (aggregated via NoteSkip/skipHist,
+    // same mechanism every other "skipped N of kind X" case in this file uses) rather than once per
+    // instance.
+    const char* subtype = ty == DWG_TYPE_DIMENSION_RADIUS     ? "DIMENSION(Radius, unsupported subtype)"
+                          : ty == DWG_TYPE_DIMENSION_DIAMETER  ? "DIMENSION(Diameter, unsupported subtype)"
+                          : ty == DWG_TYPE_DIMENSION_ORDINATE  ? "DIMENSION(Ordinate, unsupported subtype)"
+                                                                : "DIMENSION(2-line Angular, unsupported subtype)";
+    NoteSkip(skipHist, subtype);
+    ExplodeDimensionBlock(st, dwg, ent->tio.DIMENSION_common, depth, skipHist, degenerateExtrusions);
     return;
   }
   if (ty == DWG_TYPE__3DSOLID && ent->tio._3DSOLID != nullptr) {
@@ -1068,6 +1226,114 @@ Dwg_Object_BLOCK_HEADER* EnsureSurveyPointBlockDef(Dwg_Data* dwg, double markerR
   return blkhdr;
 }
 
+// REQ-366, issue #607: native DWG DIMENSION objects (save side).
+//
+// Writes a BITCODE_CMC from the same colour storage convention CadColor.hpp uses ("ByLayer" /
+// "ACI:N" / "#RRGGBB" / legacy name). Mirrors TableWriter::Apply's entity-colour branch above —
+// DIMSTYLE has no ByBlock concept, so that case collapses to ByLayer.
+void DimStyleSetCmc(BITCODE_CMC* out, const std::string& storage) {
+  if (out == nullptr)
+    return;
+  if (storage.empty() || storage == "ByLayer" || storage == "ByBlock") {
+    out->index = 256;
+    out->method = DWG_COLOR_METHOD_BYLAYER;
+    return;
+  }
+  uint32_t rgb = 0;
+  if (DxfColorStringToRgbPacked(storage, &rgb)) {
+    out->index = static_cast<BITCODE_BSd>(DxfNearestAciFromRgbPacked(rgb));
+    out->method = DWG_COLOR_METHOD_ACI;
+  }
+}
+
+// REQ-366 DIMSTYLE field mapping table: only the arrow block NAME maps (DimArrowType -> AutoCAD's
+// stock arrow block). "" (empty) means AutoCAD's own default closed-filled arrow.
+const char* DimArrowBlockName(DimArrowType t) {
+  switch (t) {
+    case DimArrowType::ClosedFilled: return "";
+    case DimArrowType::ClosedBlank:  return "_CLOSEDBLANK";
+    case DimArrowType::Tick:         return "_ARCHTICK";
+    case DimArrowType::Dot:          return "_DOT";
+    case DimArrowType::Open:         return "_OPEN";
+    case DimArrowType::None:         return "_NONE";
+  }
+  return "";
+}
+
+// Finds (or creates) the DWG DIMSTYLE table entry named `wantedName`, disambiguating a name
+// collision with "_2", "_3", ... (REQ-366 statement 1). GoSurvey models one ACTIVE DimensionStyle
+// per drawing today (AppCommandState::activeDimensionStyle; DimensionStyle.hpp), so in practice
+// this writes exactly one entry — the disambiguation loop exists for forward-compat with a future
+// per-dimension style snapshot, which DimensionStyle.hpp's own header comment names as a known
+// follow-up.
+Dwg_Object_DIMSTYLE* EnsureDimStyleNamed(Dwg_Data* dwg, const std::string& wantedName) {
+  std::string base = wantedName.empty() ? "Standard" : wantedName;
+  std::string name = base;
+  for (int n = 2; n < 1000; ++n) {
+    BITCODE_H existing = dwg_find_tablehandle(dwg, name.c_str(), "DIMSTYLE");
+    if (existing == nullptr)
+      break;
+    Dwg_Object* o = dwg_resolve_handle_silent(dwg, existing->absolute_ref);
+    if (o != nullptr && o->fixedtype == DWG_TYPE_DIMSTYLE && o->tio.object != nullptr &&
+        o->tio.object->tio.DIMSTYLE != nullptr)
+      return o->tio.object->tio.DIMSTYLE;  // reuse (e.g. "Standard" already exists)
+    name = base + "_" + std::to_string(n);
+  }
+  Dwg_Object_DIMSTYLE* ds = dwg_add_DIMSTYLE(dwg, name.c_str());
+  if (ds != nullptr && dwg->header_vars.DIMSTYLE == nullptr)
+    dwg->header_vars.DIMSTYLE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(ds), nullptr);
+  return ds;
+}
+
+// Writes the anonymous "*D<n>" block AutoCAD expects every DIMENSION to own (REQ-366 statement 1):
+// the same lines/arrows/text CadDimBuildWorldStrokes already produces for viewport/PDF/DXF, so a
+// reader that shows block content without regenerating dimensions still draws the right picture.
+// Points are in WORLD (local-storage) coordinates, same convention CadDimWorldStrokes already
+// uses — unlike WriteBlockDefinitionGeometry's named blocks, an AutoCAD anonymous dimension block
+// is not re-transformed by an INSERT; its content is baked at the dimension's actual location.
+Dwg_Object_BLOCK_HEADER* WriteDimAnonymousBlock(Dwg_Data* dwg, int* anonCounter,
+                                                const CadDimWorldStrokes& strokes, double z,
+                                                double originX, double originY,
+                                                const std::string& labelText, double labelHeight) {
+  const std::string name = "*D" + std::to_string(++(*anonCounter));
+  Dwg_Object_BLOCK_HEADER* bh = dwg_add_BLOCK_HEADER(dwg, name.c_str());
+  if (bh == nullptr)
+    return nullptr;
+  bh->anonymous = 1;
+  dwg_add_BLOCK(bh, name.c_str());
+  auto w = [&](float lx, float ly, dwg_point_3d* p) {
+    p->x = static_cast<double>(lx) + originX;
+    p->y = static_cast<double>(ly) + originY;
+    p->z = z;
+  };
+  for (const CadDimWorldSeg& s : strokes.segs) {
+    dwg_point_3d a{}, b{};
+    w(s.x0, s.y0, &a);
+    w(s.x1, s.y1, &b);
+    dwg_add_LINE(bh, &a, &b);
+  }
+  // Arrow triangles: three LINEs per triangle (same primitive set WriteBlockDefinitionGeometry
+  // already uses elsewhere — no filled-triangle entity is needed for a correct picture).
+  for (const CadDimWorldTri& t : strokes.arrows) {
+    dwg_point_3d p0{}, p1{}, p2{};
+    w(t.x0, t.y0, &p0);
+    w(t.x1, t.y1, &p1);
+    w(t.x2, t.y2, &p2);
+    dwg_add_LINE(bh, &p0, &p1);
+    dwg_add_LINE(bh, &p1, &p2);
+    dwg_add_LINE(bh, &p2, &p0);
+  }
+  if (strokes.ok && !labelText.empty()) {
+    dwg_point_3d lp{};
+    w(strokes.labelX, strokes.labelY, &lp);
+    if (Dwg_Entity_TEXT* e = dwg_add_TEXT(bh, SanitizeDwgTextSymbols(labelText).c_str(), &lp,
+                                          std::max(labelHeight, 1e-3)))
+      e->rotation = strokes.labelRotRad;
+  }
+  dwg_add_ENDBLK(bh);
+  return bh;
+}
+
 // REQ-057 / D-2026-10-01-a, issue #603: attaches GOSURVEY-appid XDATA string entries to an
 // entity — one group-0 EED per string, chained under the one APPID handle registered in the
 // first entry (mirrors encode.c's own internal `add_DUMMY_eed`, the only precedent in this
@@ -1134,12 +1400,9 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   // references (REQ-107, #606) are written, so none of the three is here.
   add("table(s)", st.cadTables.size());
   add("pipe run(s)", st.cadPipeRuns.size());
-  size_t nDims = 0;
-  for (const CadAnnotation& a : st.cadAnnotations)
-    if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear ||
-        a.kind == CadAnnotation::Kind::DimAngular)
-      ++nDims;
-  add("dimension(s)", nDims);
+  // REQ-366, issue #607: dimensions now write as real DIMSTYLE/DIMENSION_* objects (see
+  // FillFromState) — "dimension(s)" removed from this loss list the same way #631 removed "block
+  // reference(s)" once blocks got a real writer.
 
   // Entity classes GoSurvey already refuses on principle (ADR-042/045/026) — counted and logged,
   // now also surfaced in the pre-export warning so the user sees them before committing to it.
@@ -1520,6 +1783,12 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       emitPolylineRun(runStart, b - 1, false);
     }
   }
+  // REQ-366, issue #607: DIMSTYLE is created lazily on the first dimension written below, named
+  // from the drawing's one active DimensionStyle (DimensionStyle.hpp: a single style today, not a
+  // per-dimension table — see EnsureDimStyleNamed's comment).
+  Dwg_Object_DIMSTYLE* dimStyle = nullptr;
+  int dimAnonCounter = 0;
+  int dimsWritten = 0;
   for (size_t i = 0; i < st.cadAnnotations.size(); ++i) {
     const CadAnnotation& an = st.cadAnnotations[i];
     if (an.surveyPointLabelForId >= 0)
@@ -1527,6 +1796,108 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     const double h = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
     const EntityAttributes* at = AttrAt(st.cadAnnotationAttrs, i);
     const BITCODE_BL styleId = tw.StyleObjId(an.styleName);
+    if (CadAnnotationIsDimension(an)) {
+      if (dimStyle == nullptr) {
+        dimStyle = EnsureDimStyleNamed(dwg, st.activeDimensionStyle.name);
+        if (dimStyle != nullptr) {
+          const DimensionStyle& sty = st.activeDimensionStyle;
+          const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
+          dimStyle->DIMTXT = static_cast<double>(sty.textSizeInches) * mup;
+          dimStyle->DIMASZ = static_cast<double>(sty.arrowSizeInches) * mup;
+          dimStyle->DIMDEC = std::clamp(sty.unitPrecision, 0, 8);
+          dimStyle->DIMBLK_T = dwg_add_u8_input(dwg, DimArrowBlockName(sty.arrowType));
+          DimStyleSetCmc(&dimStyle->DIMCLRD, sty.dimLineColor);
+          DimStyleSetCmc(&dimStyle->DIMCLRE, sty.extLineColor);
+          DimStyleSetCmc(&dimStyle->DIMCLRT, sty.textColor);
+        }
+      }
+      CadDimStrokeParams sp;
+      sp.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
+      sp.arrowSizeInches = st.activeDimensionStyle.arrowSizeInches;
+      sp.arrowType = st.activeDimensionStyle.arrowType;
+      CadDimWorldStrokes strokes;
+      CadDimBuildWorldStrokes(an, sp, &strokes);
+      const double labelH = std::max(static_cast<double>(an.plottedHeightInches) *
+                                         std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6),
+                                     1e-3);
+      Dwg_Object_BLOCK_HEADER* anonBlk = WriteDimAnonymousBlock(
+          dwg, &dimAnonCounter, strokes, static_cast<double>(an.insZ), st.worldDocumentOriginX,
+          st.worldDocumentOriginY, an.text, labelH);
+      dwg_point_3d textMid{};
+      world(an.insX, an.insY, an.insZ, &textMid);
+      Dwg_Entity_DIMENSION_ALIGNED* dimA = nullptr;
+      Dwg_Entity_DIMENSION_LINEAR* dimL = nullptr;
+      Dwg_Entity_DIMENSION_ANG3PT* dimG = nullptr;
+      Dwg_DIMENSION_common* common = nullptr;
+      if (an.kind == CadAnnotation::Kind::DimAligned) {
+        float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
+        if (CadDimAlignedGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
+          dwg_point_3d p1{}, p2{};
+          world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
+          world(an.dimExt2X, an.dimExt2Y, an.insZ, &p2);
+          dimA = dwg_add_DIMENSION_ALIGNED(hdr, &p1, &p2, &textMid);
+          if (dimA != nullptr) {
+            common = reinterpret_cast<Dwg_DIMENSION_common*>(dimA);
+            dwg_point_3d dp{};
+            world(sx1, sy1, an.insZ, &dp);
+            common->def_pt.x = dp.x;  // REQ-366: dim-line point the wrapper omits
+            common->def_pt.y = dp.y;
+            common->def_pt.z = dp.z;
+            common->act_measurement = static_cast<double>(meas);
+          }
+        }
+      } else if (an.kind == CadAnnotation::Kind::DimLinear) {
+        float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
+        if (CadDimLinearGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
+          dwg_point_3d p1{}, p2{}, pd{};
+          world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
+          world(an.dimExt2X, an.dimExt2Y, an.insZ, &p2);
+          world(sx1, sy1, an.insZ, &pd);
+          // AutoCAD's rotated-linear convention: 0 = horizontal dim line, pi/2 = vertical — matches
+          // CadDimLinearGeometry's own dimLinearVertical branch, so OPEN can recover it losslessly.
+          dimL = dwg_add_DIMENSION_LINEAR(hdr, &p1, &p2, &pd, an.dimLinearVertical ? (kPi * 0.5) : 0.0);
+          if (dimL != nullptr) {
+            common = reinterpret_cast<Dwg_DIMENSION_common*>(dimL);
+            common->text_midpt.x = textMid.x;
+            common->text_midpt.y = textMid.y;
+            common->act_measurement = static_cast<double>(meas);
+          }
+        }
+      } else if (an.kind == CadAnnotation::Kind::DimAngular) {
+        float a1 = 0, a2 = 0, sweep = 0, theta = 0, bisx = 0, bisy = 0;
+        if (CadDimAngularComputeFrame(an, &a1, &a2, &sweep, &bisx, &bisy, &theta)) {
+          const double R = std::max(static_cast<double>(an.dimSignedOffset), 1e-6);
+          dwg_point_3d center{}, x1{}, x2{};
+          world(an.dimAngVertexX, an.dimAngVertexY, an.insZ, &center);
+          world(an.dimExt1X, an.dimExt1Y, an.insZ, &x1);
+          world(an.dimExt2X, an.dimExt2Y, an.insZ, &x2);
+          dimG = dwg_add_DIMENSION_ANG3PT(hdr, &center, &x1, &x2, &textMid);
+          if (dimG != nullptr) {
+            common = reinterpret_cast<Dwg_DIMENSION_common*>(dimG);
+            // Arc point (DXF 10): bisector direction from the vertex, at radius R — the wrapper
+            // leaves def_pt unset (see dwg_add_DIMENSION_ANG3PT in dwg_api.c).
+            common->def_pt.x = center.x + static_cast<double>(bisx) * R;
+            common->def_pt.y = center.y + static_cast<double>(bisy) * R;
+            common->def_pt.z = center.z;
+            common->act_measurement = static_cast<double>(theta);
+          }
+        }
+      }
+      if (common != nullptr) {
+        common->user_text = dwg_add_u8_input(dwg, SanitizeDwgTextSymbols(an.text).c_str());
+        common->text_rotation = static_cast<double>(an.rotationRad);
+        common->elevation = static_cast<double>(an.insZ);
+        if (anonBlk != nullptr) {
+          BITCODE_H blkRef = dwg_find_tablehandle(dwg, (anonBlk->name != nullptr ? anonBlk->name : ""),
+                                                  "BLOCK");
+          if (blkRef != nullptr)
+            common->block = dwg_add_handleref(dwg, 5, blkRef->absolute_ref, nullptr);
+        }
+        apply(common->parent, at);
+        ++dimsWritten;
+      }
+      continue;
+    }
     if (an.kind == CadAnnotation::Kind::Mtext) {
       // REQ-044 / REQ-170, issue #604: insertion point is the box corner/edge the attachment
       // selects — same convention DxfIo.cpp's MTEXT writer uses (group 71: col = (attach-1)%3,
@@ -1572,6 +1943,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       }
     }
   }
+  if (dimsWritten > 0)
+    log.push_back("DWG export — " + std::to_string(dimsWritten) + " dimension(s) (REQ-366).");
   // Position Markers (REQ-359 item 3, D-2026-09-29-e): other programs see a CIRCLE, a cross of two
   // LINEs and the label MTEXT. GoSurvey reopens its own DWG from the trailer, so these never come
   // back as duplicates.
@@ -2185,6 +2558,14 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
                   " import — refused " + std::to_string(degenerateExtrusions) +
                   " ARC/CIRCLE record(s) whose extrusion is a zero-length vector.");
   }
+  // REQ-366, issue #607: dimensions are now counted, not silently omitted, on import too.
+  size_t nDimsImported = 0;
+  for (const CadAnnotation& a : st.cadAnnotations)
+    if (CadAnnotationIsDimension(a))
+      ++nDimsImported;
+  if (nDimsImported > 0)
+    log.push_back((asDxf ? std::string("DXF") : std::string("DWG")) + " import — " +
+                  std::to_string(nDimsImported) + " dimension(s) (REQ-366).");
   int printed = 0;
   for (const auto& kv : skipHist) {
     if (printed >= 8)

@@ -6,6 +6,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "CadDimStroke.hpp"
 #include "SurveyPoints.hpp"
 #include "io/SurveyCsv.hpp"
 #include "util/ucs.hpp"
@@ -1927,4 +1928,186 @@ TEST_CASE("DWG export writes real BLOCK definitions, INSERTs, and attributes (is
   CHECK(nMarker == 4);
   CHECK(nValve == 1);
   dwg_free(&dwg);
+}
+
+// REQ-366, issue #607: one DimAligned, one DimLinear, and one DimAngular dimension round-trip
+// through DWG save and GoSurvey's own DWG reopen — kind, definition geometry, and measured value
+// (via the regenerated label text) all survive.
+TEST_CASE("DWG round-trips Aligned, Linear and Angular dimensions (REQ-366, issue #607)",
+          "[dwg][libredwg][req366][issue607]") {
+  ScratchDir dir("roundtrip-dims");
+  const auto p = (dir.path / "rt-dims.dwg").string();
+  AppCommandState st;
+  st.activeDimensionStyle = DimensionStyles::Default();
+  st.activeDimensionStyle.name = "GSDIM";
+  st.activeDimensionStyle.textSizeInches = 0.12f;
+  st.activeDimensionStyle.arrowSizeInches = 0.09f;
+  st.activeDimensionStyle.unitPrecision = 3;
+  st.activeDimensionStyle.arrowType = DimArrowType::ClosedBlank;
+  st.activeDimensionStyle.dimLineColor = "ACI:1";
+  st.activeDimensionStyle.extLineColor = "ACI:2";
+  st.activeDimensionStyle.textColor = "ACI:3";
+
+  CadAnnotation aligned{};
+  aligned.kind = CadAnnotation::Kind::DimAligned;
+  aligned.dimExt1X = 0.f;   aligned.dimExt1Y = 0.f;
+  aligned.dimExt2X = 30.f;  aligned.dimExt2Y = 20.f;
+  aligned.dimSignedOffset = 5.f;
+  aligned.insZ = 1.f;
+  st.cadAnnotations.push_back(aligned);
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  CadAnnotation linear{};
+  linear.kind = CadAnnotation::Kind::DimLinear;
+  linear.dimExt1X = 0.f;   linear.dimExt1Y = 0.f;
+  linear.dimExt2X = 40.f;  linear.dimExt2Y = 7.f;
+  linear.dimSignedOffset = 8.f;
+  linear.dimLinearVertical = false;
+  linear.insZ = 2.f;
+  st.cadAnnotations.push_back(linear);
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  CadAnnotation vlinear{};
+  vlinear.kind = CadAnnotation::Kind::DimLinear;
+  vlinear.dimExt1X = 0.f;   vlinear.dimExt1Y = 0.f;
+  vlinear.dimExt2X = 3.f;   vlinear.dimExt2Y = 25.f;
+  vlinear.dimSignedOffset = 6.f;
+  vlinear.dimLinearVertical = true;
+  vlinear.insZ = 0.f;
+  st.cadAnnotations.push_back(vlinear);
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  CadAnnotation angular{};
+  angular.kind = CadAnnotation::Kind::DimAngular;
+  angular.dimAngVertexX = 10.f; angular.dimAngVertexY = 10.f;
+  angular.dimExt1X = 20.f; angular.dimExt1Y = 10.f;   // 0 rad from vertex
+  angular.dimExt2X = 10.f; angular.dimExt2Y = 20.f;   // pi/2 rad from vertex
+  angular.dimSignedOffset = 12.f;                     // arc radius
+  st.cadAnnotations.push_back(angular);
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  for (CadAnnotation& a : st.cadAnnotations)
+    DimensionStyles::BakeTextOntoDimension(a, st.activeDimensionStyle);
+  {
+    AngleDisplaySettings angleSet{};
+    CadDimRefreshMeasurementText(&st.cadAnnotations[0], st.activeDimensionStyle.unitPrecision, angleSet);
+    CadDimRefreshMeasurementText(&st.cadAnnotations[1], st.activeDimensionStyle.unitPrecision, angleSet);
+    CadDimRefreshMeasurementText(&st.cadAnnotations[2], st.activeDimensionStyle.unitPrecision, angleSet);
+    CadDimRefreshMeasurementText(&st.cadAnnotations[3], st.activeDimensionStyle.unitPrecision, angleSet);
+  }
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  bool loggedDims = false;
+  for (const auto& l : log)
+    if (l.find("REQ-366") != std::string::npos && l.find("export") != std::string::npos)
+      loggedDims = true;
+  CHECK(loggedDims);
+
+  // Strip the GoSurvey JSON trailer (ADR-044) so the import below is FORCED through the real DWG
+  // DIMENSION entities this test exists to verify, not GoSurvey's own lossless trailer shortcut
+  // (ImportDwgFile prefers the trailer when present — see DwgIo.cpp / LibreDwgCad.cpp's comments
+  // on it). Footer layout: [LibreDWG bytes][JSON][8-byte LE length][16-byte magic] at EOF.
+  {
+    std::ifstream rf(std::filesystem::u8path(p), std::ios::binary);
+    REQUIRE(rf.good());
+    std::vector<char> bytes((std::istreambuf_iterator<char>(rf)), std::istreambuf_iterator<char>());
+    rf.close();
+    constexpr size_t kMagicLen = 16, kLenLen = 8;
+    REQUIRE(bytes.size() > kMagicLen + kLenLen);
+    uint64_t jsonLen = 0;
+    for (int i = 0; i < 8; ++i)
+      jsonLen |= static_cast<uint64_t>(static_cast<unsigned char>(bytes[bytes.size() - kMagicLen - kLenLen + i]))
+                 << (8 * i);
+    const size_t dwgOnlyLen = bytes.size() - kMagicLen - kLenLen - static_cast<size_t>(jsonLen);
+    REQUIRE(dwgOnlyLen > 0);
+    REQUIRE(dwgOnlyLen < bytes.size());
+    std::filesystem::resize_file(std::filesystem::u8path(p), dwgOnlyLen);
+  }
+
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+
+  std::vector<const CadAnnotation*> dims;
+  for (const CadAnnotation& a : in.cadAnnotations)
+    if (CadAnnotationIsDimension(a))
+      dims.push_back(&a);
+  REQUIRE(dims.size() == 4);
+
+  auto findKind = [&](CadAnnotation::Kind k, bool vertical) -> const CadAnnotation* {
+    for (const CadAnnotation* a : dims)
+      if (a->kind == k && (k != CadAnnotation::Kind::DimLinear || a->dimLinearVertical == vertical))
+        return a;
+    return nullptr;
+  };
+
+  const CadAnnotation* ba = findKind(CadAnnotation::Kind::DimAligned, false);
+  REQUIRE(ba != nullptr);
+  CHECK(ba->dimExt1X + in.worldDocumentOriginX == Catch::Approx(0.0).margin(0.02));
+  CHECK(ba->dimExt1Y + in.worldDocumentOriginY == Catch::Approx(0.0).margin(0.02));
+  CHECK(ba->dimExt2X + in.worldDocumentOriginX == Catch::Approx(30.0).margin(0.02));
+  CHECK(ba->dimExt2Y + in.worldDocumentOriginY == Catch::Approx(20.0).margin(0.02));
+  CHECK(!ba->text.empty());
+
+  const CadAnnotation* bl = findKind(CadAnnotation::Kind::DimLinear, false);
+  REQUIRE(bl != nullptr);
+  CHECK(bl->dimExt1X + in.worldDocumentOriginX == Catch::Approx(0.0).margin(0.02));
+  CHECK(bl->dimExt2X + in.worldDocumentOriginX == Catch::Approx(40.0).margin(0.02));
+  CHECK_FALSE(bl->dimLinearVertical);
+
+  const CadAnnotation* bv = findKind(CadAnnotation::Kind::DimLinear, true);
+  REQUIRE(bv != nullptr);
+  CHECK(bv->dimLinearVertical);
+  CHECK(bv->dimExt2Y + in.worldDocumentOriginY == Catch::Approx(25.0).margin(0.02));
+
+  const CadAnnotation* bg = findKind(CadAnnotation::Kind::DimAngular, false);
+  REQUIRE(bg != nullptr);
+  CHECK(bg->dimAngVertexX + in.worldDocumentOriginX == Catch::Approx(10.0).margin(0.02));
+  CHECK(bg->dimAngVertexY + in.worldDocumentOriginY == Catch::Approx(10.0).margin(0.02));
+  CHECK(bg->dimExt1X + in.worldDocumentOriginX == Catch::Approx(20.0).margin(0.02));
+  CHECK(bg->dimExt2Y + in.worldDocumentOriginY == Catch::Approx(20.0).margin(0.02));
+  CHECK(bg->dimSignedOffset == Catch::Approx(12.0).margin(0.05));
+  CHECK(!bg->text.empty());
+
+  bool loggedImportDims = false;
+  for (const auto& l : log)
+    if (l.find("REQ-366") != std::string::npos && l.find("import") != std::string::npos)
+      loggedImportDims = true;
+  CHECK(loggedImportDims);
+}
+
+// REQ-366 statement 3: a DIMENSION subtype GoSurvey does not model (Radius here, hand-built
+// directly with LibreDWG's own API so the test does not depend on any GoSurvey writer for it)
+// opens without crashing or dropping data: the test only requires that import succeeds and the
+// skipped subtype is named exactly once in the log, not once per instance.
+TEST_CASE("DWG import falls back an unsupported DIMENSION subtype to a skip log, no crash (REQ-366)",
+          "[dwg][libredwg][req366][issue607]") {
+  ScratchDir dir("dim-radius-fallback");
+  const auto p = (dir.path / "radius.dwg").string();
+
+  Dwg_Data* nd = dwg_new_Document(R_2000, /*imperial=*/0, /*loglevel=*/0);
+  REQUIRE(nd != nullptr);
+  Dwg_Object* mso = dwg_model_space_object(nd);
+  REQUIRE(mso != nullptr);
+  REQUIRE(mso->tio.object != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = mso->tio.object->tio.BLOCK_HEADER;
+  dwg_point_3d center{5.0, 5.0, 0.0};
+  dwg_point_3d chord{10.0, 5.0, 0.0};
+  for (int i = 0; i < 2; ++i)
+    dwg_add_DIMENSION_RADIUS(hdr, &center, &chord, 2.0);  // two instances -> one aggregated log line
+  REQUIRE(dwg_write_file(p.c_str(), nd) == 0);
+  dwg_free(nd);
+  std::free(nd);
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));  // must not crash
+
+  int radiusLines = 0;
+  for (const auto& l : log)
+    if (l.find("Radius") != std::string::npos)
+      ++radiusLines;
+  CHECK(radiusLines == 1);  // aggregated, not one line per instance
+  for (const CadAnnotation& a : in.cadAnnotations)
+    CHECK_FALSE(CadAnnotationIsDimension(a));  // never mapped to a GoSurvey dimension kind
 }
