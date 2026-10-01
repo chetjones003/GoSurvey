@@ -2411,6 +2411,22 @@ dwg_find_dicthandle (Dwg_Data *restrict dwg, BITCODE_H dict,
   return NULL;
 }
 
+/* GoSurvey (issue #619): MLEADERSTYLE has no dynapi "name"; match on description. */
+static bool
+dwg_obj_table_entry_utf8name (Dwg_Object *hobj, char **hdlname, int *isnew)
+{
+  Dwg_Object_APPID *_o;
+  if (!hobj || !hobj->tio.object || !hobj->tio.object->tio.APPID || !hobj->name)
+    return false;
+  _o = hobj->tio.object->tio.APPID;
+  if (dwg_dynapi_entity_utf8text (_o, hobj->name, "name", hdlname, isnew, NULL))
+    return true;
+  if (hobj->fixedtype == DWG_TYPE_MLEADERSTYLE)
+    return dwg_dynapi_entity_utf8text (_o, hobj->name, "description", hdlname,
+                                       isnew, NULL);
+  return false;
+}
+
 // find dict entry and match its name
 EXPORT BITCODE_H
 dwg_find_dicthandle_objname (Dwg_Data *restrict dwg, BITCODE_H dict,
@@ -2442,7 +2458,6 @@ dwg_find_dicthandle_objname (Dwg_Data *restrict dwg, BITCODE_H dict,
       char *hdlname;
       BITCODE_H *hdlv = _obj->itemhandles;
       Dwg_Object *hobj;
-      Dwg_Object_APPID *_o; // just some random type
       int isnew = 0;
       bool ok;
 
@@ -2452,9 +2467,7 @@ dwg_find_dicthandle_objname (Dwg_Data *restrict dwg, BITCODE_H dict,
       if (!hobj || !hobj->tio.object || !hobj->tio.object->tio.APPID
           || !hobj->name)
         continue;
-      _o = hobj->tio.object->tio.APPID;
-      ok = dwg_dynapi_entity_utf8text (_o, hobj->name, "name", &hdlname,
-                                       &isnew, NULL);
+      ok = dwg_obj_table_entry_utf8name (hobj, &hdlname, &isnew);
       LOG_HANDLE (" %s.%s[%d] => %s.name: %s\n", obj->name, "entries", i,
                   hobj->name, hdlname ? hdlname : "NULL");
       if (ok && hdlname
@@ -2768,9 +2781,7 @@ dwg_find_tablehandle (Dwg_Data *restrict dwg, const char *restrict name,
       hobj = dwg_resolve_handle (dwg, hdlv[i]->absolute_ref);
       if (!hobj || !hobj->tio.object || !hobj->tio.object->tio.APPID)
         continue;
-      _o = hobj->tio.object->tio.APPID;
-      ok = dwg_dynapi_entity_utf8text (_o, hobj->name, "name", &hdlname,
-                                       &isnew, NULL);
+      ok = dwg_obj_table_entry_utf8name (hobj, &hdlname, &isnew);
       LOG_HANDLE (" %s.%s[%d] => %s.name: %s\n", obj->name, "entries", i,
                   hobj->name, hdlname ? hdlname : "NULL");
       if (ok && hdlname

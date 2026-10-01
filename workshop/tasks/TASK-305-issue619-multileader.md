@@ -1,7 +1,7 @@
 # TASK-305 — Multileaders + DWG (issue #619)
 
 - Type:    feature (**SPEC GAP** — propose REQ-367, then Verification → Workshop)
-- Status:  in progress (DWG #645, viewport #646; MLEADER command increment in flight)
+- Status:  in progress (DWG #645–#648, viewport #646, MLEADER #647; MLEADERSTYLE export in flight)
 - Opened:  2026-10-01
 - GitHub:  #619, tracker #601
 - Depends: R2018 export on beta (**#643**, D-2026-10-01-f) ✓

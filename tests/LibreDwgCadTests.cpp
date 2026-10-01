@@ -511,6 +511,7 @@ TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (iss
   std::vector<std::string> log;
   REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
   CHECK(CountDwgMultileaders(p.c_str()) == 1);
+  CHECK(CountDwgFixedType(p.c_str(), DWG_TYPE_MLEADERSTYLE) >= 1);
   CHECK(CountDwgFixedType(p.c_str(), DWG_TYPE_LEADER) == 0);
   AppCommandState in;
   REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
