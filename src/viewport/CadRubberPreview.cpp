@@ -371,6 +371,19 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     }
   }
 
+  if (cmd.active == AppCommandState::Kind::Mleader) {
+    using MLp = AppCommandState::MleaderPhase;
+    if (cmd.mleaderPhase == MLp::WaitLanding)
+      PushRubberSegViewRel(rubberLines, cmd.mleaderTipX, cmd.mleaderTipY, curXf, curYf, 0., 0., cmd.mleaderTipZ,
+                           zc);
+    else if (cmd.mleaderPhase == MLp::WaitLabel && cmd.cadMultileaders.size() > 0) {
+      const CadMultileader& ml = cmd.cadMultileaders.back();
+      if (ml.pathXyz.size() >= 6)
+        PushRubberSegViewRel(rubberLines, ml.pathXyz[0], ml.pathXyz[1], ml.pathXyz[3], ml.pathXyz[4], 0., 0.,
+                             ml.pathXyz[2], ml.pathXyz[5]);
+    }
+  }
+
   if (cmd.active == AppCommandState::Kind::Mtext) {
     using MPtxt = AppCommandState::MtextPhase;
     if (cmd.mtextPhase == MPtxt::WaitCorner2) {

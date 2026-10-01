@@ -1,0 +1,109 @@
+// CadCommands_Mleader.cpp — MLEADER command (REQ-367 / issue #619): arrow tip, landing, MTEXT label.
+
+#include "CadCommands.hpp"
+#include "CadCommandsInternal.hpp"
+
+#include <cmath>
+#include <string>
+#include <vector>
+
+namespace {
+
+void AppendPathPoint(CadMultileader* ml, float x, float y, float z) {
+  ml->pathXyz.push_back(x);
+  ml->pathXyz.push_back(y);
+  ml->pathXyz.push_back(z);
+}
+
+void InitMultileaderLabelAtLanding(CadMultileader* ml, float landX, float landY, float landZ,
+                                   AppCommandState& st) {
+  const float mup = std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+  const float h = std::max(st.defaultPlottedTextHeightInches, 0.01f) * mup;
+  CadAnnotation& a = ml->label;
+  a.kind = CadAnnotation::Kind::Mtext;
+  a.plottedHeightInches = st.defaultPlottedTextHeightInches;
+  a.insX = landX;
+  a.insY = landY;
+  a.insZ = landZ;
+  a.boxMinX = landX;
+  a.boxMinY = landY;
+  a.boxMaxX = landX + 22.f * h;
+  a.boxMaxY = landY + 2.6f * h;
+  a.text = "Multileader";
+  StampActiveTextStyleOnNewText(st, a);
+}
+
+}  // namespace
+
+void ResetMleaderDraft(AppCommandState& st) {
+  st.mleaderPhase = AppCommandState::MleaderPhase::WaitArrowTip;
+  st.mleaderTipX = st.mleaderTipY = st.mleaderTipZ = 0.f;
+}
+
+void AbandonJustPlacedMultileader(AppCommandState& st) {
+  const int ix = st.mtextRichEditorMultileaderIndex;
+  if (ix < 0 || static_cast<size_t>(ix) >= st.cadMultileaders.size())
+    return;
+  const auto at = static_cast<std::ptrdiff_t>(ix);
+  st.cadMultileaders.erase(st.cadMultileaders.begin() + at);
+  if (static_cast<size_t>(ix) < st.cadMultileaderAttrs.size())
+    st.cadMultileaderAttrs.erase(st.cadMultileaderAttrs.begin() + at);
+  BumpCadGpuCache(st);
+}
+
+void OpenMultileaderLabelEditor(AppCommandState& st, int multileaderIndex, bool justPlaced) {
+  if (multileaderIndex < 0 || static_cast<size_t>(multileaderIndex) >= st.cadMultileaders.size())
+    return;
+  CloseMtextRichEditorUi(st);
+  st.mtextRichEditorPlacement = false;
+  st.mtextRichEditorPaper = false;
+  st.mtextRichEditorPlain = false;
+  st.mtextRichEditorAnnIndex = -1;
+  st.mtextRichEditorMarkerIndex = -1;
+  st.mtextRichEditorMultileaderIndex = multileaderIndex;
+  st.mtextRichEditorMultileaderJustPlaced = justPlaced;
+  st.mtextRichEditorBuf = st.cadMultileaders[static_cast<size_t>(multileaderIndex)].label.text;
+  st.mtextRichEditorOpen = true;
+  st.mtextRichEditorFocusRequest = true;
+}
+
+void CommitMleaderLandingAt(AppCommandState& st, float landX, float landY, std::vector<std::string>& log) {
+  if (st.mleaderPhase != AppCommandState::MleaderPhase::WaitLanding)
+    return;
+  const float landZ = CadCommitElevation(st);
+  PushUndoSnapshot(st, "MLEADER");
+  CadMultileader ml;
+  AppendPathPoint(&ml, st.mleaderTipX, st.mleaderTipY, st.mleaderTipZ);
+  AppendPathPoint(&ml, landX, landY, landZ);
+  InitMultileaderLabelAtLanding(&ml, landX, landY, landZ, st);
+  st.cadMultileaders.push_back(std::move(ml));
+  st.cadMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  const int ix = static_cast<int>(st.cadMultileaders.size()) - 1;
+  st.mleaderPhase = AppCommandState::MleaderPhase::WaitLabel;
+  log.push_back("MLEADER — edit the label (Save to finish; Esc cancels the whole multileader).");
+  OpenMultileaderLabelEditor(st, ix, /*justPlaced=*/true);
+}
+
+void FinishMleaderCommand(AppCommandState& st, std::vector<std::string>& log) {
+  st.mtextRichEditorMultileaderJustPlaced = false;
+  st.active = AppCommandState::Kind::None;
+  ResetMleaderDraft(st);
+  CloseMtextRichEditorUi(st);
+  log.push_back("MLEADER placed.");
+}
+
+void StartMleaderCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::None) {
+    log.push_back("MLEADER — finish or cancel the active command first.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.active = AppCommandState::Kind::Mleader;
+  st.lastCommand = AppCommandState::Kind::Mleader;
+  ResetMleaderDraft(st);
+  log.push_back("MLEADER — specify arrowhead location (click or type X,Y). ESC cancels.");
+}
