@@ -3475,7 +3475,9 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     return false;
   }
 
-  Dwg_Data* dwg = dwg_new_Document(R_2000, /*imperial=*/0, /*loglevel=*/0);
+  const Dwg_Version_Type libVer =
+      st.dwgExportVersion == DwgSaveVersion::R2004 ? R_2004 : R_2000;
+  Dwg_Data* dwg = dwg_new_Document(libVer, /*imperial=*/0, /*loglevel=*/0);
   if (dwg == nullptr) {
     log.push_back("CAD export — LibreDWG could not create a drawing.");
     return false;
@@ -3519,8 +3521,10 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
       log.push_back("DXF export complete (LibreDWG ASCII).");
   } else {
     ok = WriteDwgFile(pathUtf8, dwg, log);
-    if (ok)
-      log.push_back("DWG export complete: R2000 (AC1015) via LibreDWG.");
+    if (ok) {
+      log.push_back(std::string("DWG export complete: ") + DwgSaveVersionDisplayName(st.dwgExportVersion) +
+                    " (" + DwgSaveVersionAcTag(st.dwgExportVersion) + ") via LibreDWG.");
+    }
   }
   dwg_free(dwg);
   std::free(dwg);

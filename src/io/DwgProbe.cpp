@@ -138,6 +138,40 @@ std::string DwgVersionNameFromTag(const std::string& tag6) {
   return std::string();
 }
 
+const DwgExportFormatRow kDwgExportFormatRows[] = {
+    {"AutoCAD 2000", "AC1015", DwgSaveVersion::R2000, true},
+    {"AutoCAD 2004", "AC1018", DwgSaveVersion::R2004, true},
+    {"AutoCAD 2010", "AC1024", DwgSaveVersion::R2000, false},
+    {"AutoCAD 2013", "AC1027", DwgSaveVersion::R2000, false},
+    {"AutoCAD 2018", "AC1032", DwgSaveVersion::R2000, false},
+};
+
+const DwgExportFormatRow* DwgExportFormatRows(size_t* outCount) {
+  if (outCount != nullptr)
+    *outCount = sizeof(kDwgExportFormatRows) / sizeof(kDwgExportFormatRows[0]);
+  return kDwgExportFormatRows;
+}
+
+const char* DwgSaveVersionAcTag(DwgSaveVersion version) {
+  switch (version) {
+  case DwgSaveVersion::R2004:
+    return "AC1018";
+  case DwgSaveVersion::R2000:
+  default:
+    return "AC1015";
+  }
+}
+
+const char* DwgSaveVersionDisplayName(DwgSaveVersion version) {
+  switch (version) {
+  case DwgSaveVersion::R2004:
+    return "AutoCAD 2004";
+  case DwgSaveVersion::R2000:
+  default:
+    return "AutoCAD 2000";
+  }
+}
+
 std::string DwgVersionName(const char* pathUtf8) {
   if (!pathUtf8 || pathUtf8[0] == '\0')
     return std::string();

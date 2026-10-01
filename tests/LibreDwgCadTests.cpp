@@ -113,6 +113,19 @@ TEST_CASE("LibreDWG DWG round-trips a model-space LINE", "[dwg][libredwg]") {
   REQUIRE(in.userLinesFlat[3] == Catch::Approx(10.f).margin(0.05f));
 }
 
+// Issue #600: full export path respects dwgExportVersion (LibreDWG body only — no trailer).
+TEST_CASE("ExportLibreCadFile writes R2004 when dwgExportVersion is R2004 (issue #600)",
+          "[dwg][libredwg][issue600]") {
+  ScratchDir dir("dwg-r2004-export");
+  const auto p = (dir.path / "line.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(DwgVersionName(p.c_str()) == "AutoCAD 2004");
+}
+
 // REQ-101 (D-2026-09-08-i) / ADR-054 Phase B (#441): the DWG-trailer document is the same `double`
 // GsIo JSON tree as `.gst` (Phase A widened the stores it reads/writes) — a state-plane-magnitude
 // coordinate must survive the trailer round trip within ±0.002 ft, not the pre-migration ±0.01 ft.

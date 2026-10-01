@@ -6472,7 +6472,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
               rowBtn("##RibbonExportDxf", (int)RibbonIconKind::Export, nullptr, "Export DXF", false,
                      "Export the current drawing to DXF.\nSame as File menu → Export DXF...", false),
               rowBtn("##RibbonExportDwg", (int)RibbonIconKind::Export, nullptr, "Export DWG", false,
-                     "Save DWG as R2000 via LibreDWG.\nSame as File menu → Export DWG...", false),
+                     "Save DWG (R2000 or R2004, your choice).\nSame as File menu → Export DWG...", false),
               rowBtn("##RibbonExportPoints", -1, "c3d_exportpoints", "Export Points", false,
                      "Export survey points to a point file (PNEZD / user format).", false),
           }),
