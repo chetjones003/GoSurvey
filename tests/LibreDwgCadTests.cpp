@@ -404,6 +404,27 @@ TEST_CASE("R2004 DWG round-trips entity transparency (issue #620)", "[dwg][libre
   CHECK(in.userLineAttrs[0].transparency == Catch::Approx(0.6f).margin(0.02f));
 }
 
+TEST_CASE("R2018 DWG writes ByLayer transparency from layer table (issue #620)",
+          "[dwg][libredwg][issue620]") {
+  ScratchDir dir("dwg-layer-transparency");
+  const auto p = (dir.path / "layer-tr.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadLayerRow row{};
+  row.name = "C-TOPO";
+  row.transparency = 0.3f;
+  st.drawingLayerTable.push_back(row);
+  st.userLineAttrs[0].layer = "C-TOPO";
+  st.userLineAttrs[0].color = "ByLayer";
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.userLineAttrs.size() == 1);
+  CHECK(in.userLineAttrs[0].transparency == Catch::Approx(0.3f).margin(0.02f));
+}
+
 TEST_CASE("DWG export loss lists transparency only for R2000 (issue #620 / #614)",
           "[dwg][libredwg][issue620][issue614]") {
   AppCommandState st;

@@ -1327,7 +1327,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
   if (ty == DWG_TYPE_HATCH && ent->tio.HATCH != nullptr) {
     const Dwg_Entity_HATCH* h = ent->tio.HATCH;
     if (h->is_gradient_fill != 0) {
-      NoteSkip(skipHist, "HATCH(gradient fill requires R2004+, issue #600)");
+      NoteSkip(skipHist, "HATCH(gradient fill not imported yet, issue #608)");
       return;
     }
     if (ImportHatchEntity(st, dwg, h, xf, at))
@@ -1468,6 +1468,9 @@ void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& 
     row.color = ColorStorage(ly->color);
     row.linetype = LayerLinetypeName(dwg, ly);
     row.lineweightMm = LineweightMmFromDwgIndex(ly->linewt);
+    const float layerTr = Transparency01FromEntityColor(ly->color);
+    if (layerTr >= 0.f)
+      row.transparency = layerTr;
     st.drawingLayerTable.push_back(row);
     ++imported;
   }
@@ -1609,14 +1612,17 @@ void SetEntityColorFromStorage(Dwg_Color* color, const std::string& storage, boo
   }
 }
 
-void ApplyLayerTableColor(Dwg_Object_LAYER* ly, const std::string& colorStr, bool on, bool useTrueColor) {
+void ApplyLayerTableColor(Dwg_Object_LAYER* ly, const std::string& colorStr, bool on, bool useTrueColor,
+                          float layerTransparency01) {
   if (ly == nullptr)
     return;
   uint32_t rgb = 0;
   const bool hasRgb = DxfColorStringToRgbPacked(colorStr, &rgb);
   const int aci = hasRgb ? DxfNearestAciFromRgbPacked(rgb) : 7;
   const bool exactPalette = hasRgb && ((DxfRgbPackedFromAci(aci) & 0xFFFFFFu) == (rgb & 0xFFFFFFu));
-  if (useTrueColor && hasRgb && !exactPalette) {
+  const bool needsTrueColor =
+      useTrueColor && hasRgb && (!exactPalette || layerTransparency01 > 1.e-5f);
+  if (needsTrueColor) {
     ly->color.method = DWG_COLOR_METHOD_TRUECOLOR;
     ly->color.rgb = 0xC3000000u | (rgb & 0xFFFFFFu);
     ly->color.index = static_cast<BITCODE_BSd>(aci);
@@ -1625,6 +1631,8 @@ void ApplyLayerTableColor(Dwg_Object_LAYER* ly, const std::string& colorStr, boo
     ly->color.method = DWG_COLOR_METHOD_ACI;
     ly->color.rgb = 0;
   }
+  if (useTrueColor && layerTransparency01 > 1.e-5f)
+    ApplyEntityEncTransparency(&ly->color, layerTransparency01);
 }
 
 // Builds the DWG LAYER and LTYPE tables from the GoSurvey layer table and wires each exported
@@ -1680,7 +1688,7 @@ struct TableWriter {
       Dwg_Object_LAYER* ly = dwg_add_LAYER(dwg, row.name.c_str());
       if (ly == nullptr || ly->parent == nullptr)
         continue;
-      ApplyLayerTableColor(ly, row.color, row.on, useTrueColor);
+      ApplyLayerTableColor(ly, row.color, row.on, useTrueColor, row.transparency);
       ly->off = row.on ? 0 : 1;
       ly->frozen = row.frozen ? 1 : 0;
       ly->locked = row.locked ? 1 : 0;

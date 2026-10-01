@@ -1,7 +1,7 @@
 # TASK-304 — DWG export through R2018 (AC1032)
 
 - Type:    feature (REQ-170, D-2026-10-01-f, issue #600 extension / #601 enabler)
-- Status:  complete (PR pending)
+- Status:  complete (merged PR #643)
 - Opened:  2026-10-01
 - Branch:  `feat/dwg-export-r2018`
 

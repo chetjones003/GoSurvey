@@ -5,12 +5,12 @@ Tracking issue: **#601**. Evidence is from `beta` at `5c7bbcf1` (2026-09-30).
 
 ## The short version
 
-GoSurvey saves DWG as **R2000** (AutoCAD 2000 format, D-2026-09-30-c) and opens every version from R13 to R2018. When GoSurvey reopens its own DWG it reads its private copy of the drawing (the ADR-044 trailer), so nothing looks lost to a GoSurvey user. **AutoCAD, Civil 3D and every other program only see the ordinary DWG part**, and a lot is missing from it.
+GoSurvey saves DWG as **R2000 by default** and can export **R2004 through R2018** (D-2026-10-01-f); it opens every version from R13 to R2018. When GoSurvey reopens its own DWG it reads its private copy of the drawing (the ADR-044 trailer), so nothing looks lost to a GoSurvey user. **AutoCAD, Civil 3D and every other program only see the ordinary DWG part**, and a lot is missing from it.
 
 The gaps fall into two groups:
 
 - **Group A: fixable now, in the R2000 format.** DWG has had a place for all of these since 2000. We just don't write (or read) them yet. Several are bugs against accepted requirements.
-- **Group B: need a newer DWG format.** R2000 has nowhere to store these. They wait on #600, which makes GoSurvey able to save R2004 or later. #600 is the foundation for all of group B.
+- **Group B: need a newer DWG format.** R2000 has nowhere to store some of these. Export through **R2018** is shipped (#643, D-2026-10-01-f); remaining rows are feature work or import gaps.
 
 Some group B items are also **new GoSurvey features** (fields, dynamic blocks, multileaders, annotative scaling, visual styles/materials/lights). They need a requirement written first (a SPEC GAP), then the DWG support.
 
