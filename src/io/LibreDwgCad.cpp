@@ -1364,9 +1364,14 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE_MULTILEADER && ent->tio.MULTILEADER != nullptr) {
-    if (ImportMultileaderEntity(st, dwg, ent->tio.MULTILEADER, xf, at))
+    const Dwg_Entity_MULTILEADER* ml = ent->tio.MULTILEADER;
+    if (ml->ctx.has_content_blk && !ml->ctx.has_content_txt) {
+      NoteSkip(skipHist, "MULTILEADER(block content, issue #619)");
       return;
-    NoteSkip(skipHist, "MULTILEADER(block content or unsupported layout, issue #619)");
+    }
+    if (ImportMultileaderEntity(st, dwg, ml, xf, at))
+      return;
+    NoteSkip(skipHist, "MULTILEADER(unsupported layout, issue #619)");
     return;
   }
   if (ty == DWG_TYPE__3DFACE && ent->tio._3DFACE != nullptr) {
