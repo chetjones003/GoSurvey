@@ -1513,3 +1513,135 @@ TEST_CASE("DWG export writes each survey point as a GOSURVEY_POINT block insert 
   dwg_free(&dwg);
 }
 
+// REQ-057 / D-2026-10-01-a, issue #603: a flat polyline at a non-zero elevation round-trips that
+// elevation (LWPOLYLINE's own `elevation` field was never set before this fix — always 0).
+TEST_CASE("DWG export writes a flat polyline's elevation (issue #603)",
+          "[dwg][libredwg][req057][issue603]") {
+  ScratchDir dir("dwg-poly-elevation");
+  const auto p = (dir.path / "elev.dwg").string();
+  AppCommandState st;
+  st.worldDocumentOriginX = 0.0;
+  st.worldDocumentOriginY = 0.0;
+  st.userPolylineOffsets = {0, 3};
+  st.userPolylineVerts = {0.f, 0.f, 100.f, 10.f, 0.f, 100.f, 10.f, 10.f, 100.f};
+  st.userPolylineVertsBulge = {0.f, 0.f, 0.f};
+  st.userPolylineVertsNormal = {0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f};
+  st.userPolylineClosed = {0};
+  st.userPolylineAttrs = {EntityAttributes{}};
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int nLw = 0;
+  double elevation = -1.0;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype == DWG_TYPE_LWPOLYLINE && o->tio.entity && o->tio.entity->tio.LWPOLYLINE) {
+      ++nLw;
+      elevation = o->tio.entity->tio.LWPOLYLINE->elevation;
+    }
+  }
+  CHECK(nLw == 1);
+  CHECK(elevation == Catch::Approx(100.0).margin(1e-6));
+  dwg_free(&dwg);
+}
+
+// REQ-057 / D-2026-10-01-a, issue #603: a polyline whose vertices have different Z values writes
+// as POLYLINE_3D (real per-vertex Z) instead of a flattened LWPOLYLINE.
+TEST_CASE("DWG export writes a varying-Z polyline as POLYLINE_3D (issue #603)",
+          "[dwg][libredwg][req057][issue603]") {
+  ScratchDir dir("dwg-poly-3d");
+  const auto p = (dir.path / "p3d.dwg").string();
+  AppCommandState st;
+  st.worldDocumentOriginX = 0.0;
+  st.worldDocumentOriginY = 0.0;
+  st.userPolylineOffsets = {0, 4};
+  st.userPolylineVerts = {0.f, 0.f, 0.f, 10.f, 0.f, 5.f, 10.f, 10.f, 10.f, 0.f, 10.f, 2.f};
+  st.userPolylineVertsBulge = {0.f, 0.f, 0.f, 0.f};
+  st.userPolylineVertsNormal = {0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f};
+  st.userPolylineClosed = {0};
+  st.userPolylineAttrs = {EntityAttributes{}};
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+
+  // No "flattened" loss line for this drawing (no bulge, so nothing degrades).
+  for (const auto& l : log)
+    CHECK(l.find("flattened") == std::string::npos);
+
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int nLw = 0, nPoly3d = 0;
+  std::vector<double> vertZ;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype == DWG_TYPE_LWPOLYLINE)
+      ++nLw;
+    if (o->fixedtype == DWG_TYPE_POLYLINE_3D)
+      ++nPoly3d;
+    if (o->fixedtype == DWG_TYPE_VERTEX_3D && o->tio.entity && o->tio.entity->tio.VERTEX_3D)
+      vertZ.push_back(o->tio.entity->tio.VERTEX_3D->point.z);
+  }
+  CHECK(nLw == 0);
+  CHECK(nPoly3d == 1);
+  REQUIRE(vertZ.size() == 4);
+  CHECK(vertZ[0] == Catch::Approx(0.0).margin(1e-6));
+  CHECK(vertZ[1] == Catch::Approx(5.0).margin(1e-6));
+  CHECK(vertZ[2] == Catch::Approx(10.0).margin(1e-6));
+  CHECK(vertZ[3] == Catch::Approx(2.0).margin(1e-6));
+  dwg_free(&dwg);
+}
+
+// REQ-057 / D-2026-10-01-a, issue #603: a feature line writes as a POLYLINE_3D with its name and
+// description preserved as GOSURVEY-appid XDATA (the user's choice over a plain polyline with no
+// identity data at all).
+TEST_CASE("DWG export writes a feature line as POLYLINE_3D with XDATA identity (issue #603)",
+          "[dwg][libredwg][req057][issue603]") {
+  ScratchDir dir("dwg-featureline");
+  const auto p = (dir.path / "fl.dwg").string();
+  AppCommandState st;
+  st.worldDocumentOriginX = 0.0;
+  st.worldDocumentOriginY = 0.0;
+  st.featureLineOffsets = {0, 3};
+  st.featureLineVerts = {0.0, 0.0, 100.0, 10.0, 0.0, 101.5, 20.0, 0.0, 103.0};
+  st.featureLineClosed = {0};
+  CadFeatureLineInfo info;
+  info.name = "Top of Curb";
+  info.description = "North run";
+  st.featureLineInfo = {info};
+  st.featureLineAttrs = {EntityAttributes{}};
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  for (const auto& l : log)
+    CHECK(l.find("feature line") == std::string::npos);
+
+  Dwg_Data dwg;
+  std::memset(&dwg, 0, sizeof(dwg));
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int nPoly3d = 0;
+  std::vector<double> vertZ;
+  std::vector<std::string> eedStrings;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object* o = &dwg.object[i];
+    if (o->fixedtype == DWG_TYPE_POLYLINE_3D && o->tio.entity) {
+      ++nPoly3d;
+      Dwg_Object_Entity* ent = o->tio.entity;
+      for (BITCODE_BL j = 0; j < ent->num_eed; ++j) {
+        if (ent->eed[j].data != nullptr && ent->eed[j].data->code == 0)
+          eedStrings.emplace_back(ent->eed[j].data->u.eed_0.string, ent->eed[j].data->u.eed_0.length);
+      }
+    }
+    if (o->fixedtype == DWG_TYPE_VERTEX_3D && o->tio.entity && o->tio.entity->tio.VERTEX_3D)
+      vertZ.push_back(o->tio.entity->tio.VERTEX_3D->point.z);
+  }
+  CHECK(nPoly3d == 1);
+  REQUIRE(vertZ.size() == 3);
+  CHECK(vertZ[1] == Catch::Approx(101.5).margin(1e-6));
+  REQUIRE(eedStrings.size() == 2);
+  CHECK(eedStrings[0] == "Top of Curb");
+  CHECK(eedStrings[1] == "North run");
+  dwg_free(&dwg);
+}
