@@ -585,6 +585,137 @@ static bool ImportPolylineMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* o
   return true;
 }
 
+static int PfaceVertexIndex(BITCODE_BSd raw) {
+  if (raw == 0)
+    return -1;
+  const int idx = static_cast<int>(raw);
+  if (idx < 0)
+    return -idx - 1;
+  return idx - 1;
+}
+
+static bool ImportPolylinePFace(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj,
+                                const Dwg_Entity_POLYLINE_PFACE* pf, const Xf2& xf,
+                                const EntityAttributes& at) {
+  if (dwg == nullptr || obj == nullptr || pf == nullptr)
+    return false;
+  int nv = static_cast<int>(pf->numverts);
+  int nf = static_cast<int>(pf->numfaces);
+  std::vector<dwg_point_3d> positions;
+  std::vector<Dwg_Entity_VERTEX_PFACE_FACE*> faces;
+  positions.reserve(static_cast<size_t>(nv));
+  faces.reserve(static_cast<size_t>(nf));
+  auto inspectVertexObject = [&](Dwg_Object* v) {
+    if (v == nullptr || v->tio.entity == nullptr)
+      return;
+    if (v->fixedtype == DWG_TYPE_VERTEX_PFACE && v->tio.entity->tio.VERTEX_PFACE != nullptr) {
+      const Dwg_Entity_VERTEX_3D* p = v->tio.entity->tio.VERTEX_PFACE;
+      positions.push_back({p->point.x, p->point.y, p->point.z});
+    } else if (v->fixedtype == DWG_TYPE_VERTEX_PFACE_FACE &&
+               v->tio.entity->tio.VERTEX_PFACE_FACE != nullptr) {
+      faces.push_back(v->tio.entity->tio.VERTEX_PFACE_FACE);
+    }
+  };
+  if (pf->num_owned > 0 && pf->vertex != nullptr) {
+    for (BITCODE_BL i = 0; i < pf->num_owned; ++i) {
+      Dwg_Object* v = pf->vertex[i] != nullptr ? pf->vertex[i]->obj : nullptr;
+      if (v == nullptr && pf->vertex[i] != nullptr)
+        v = dwg_resolve_handle_silent(dwg, pf->vertex[i]->absolute_ref);
+      inspectVertexObject(v);
+    }
+  } else {
+    for (Dwg_Object* v = get_first_owned_entity(obj); v != nullptr; v = get_next_owned_entity(obj, v))
+      inspectVertexObject(v);
+  }
+  if ((static_cast<int>(positions.size()) < nv || static_cast<int>(faces.size()) < nf) &&
+      pf->first_vertex != nullptr) {
+    positions.clear();
+    faces.clear();
+    Dwg_Object* v = pf->first_vertex->obj;
+    if (v == nullptr)
+      v = dwg_resolve_handle_silent(dwg, pf->first_vertex->absolute_ref);
+    for (int guard = 0; v != nullptr && guard < nv + nf + 8; ++guard) {
+      if (v->fixedtype == DWG_TYPE_SEQEND)
+        break;
+      inspectVertexObject(v);
+      Dwg_Object_Entity* entVtx = v->tio.entity;
+      if (entVtx == nullptr || entVtx->next_entity == nullptr)
+        break;
+      v = entVtx->next_entity->obj;
+      if (v == nullptr)
+        v = dwg_resolve_handle_silent(dwg, entVtx->next_entity->absolute_ref);
+    }
+  }
+  if (static_cast<int>(positions.size()) < 3 || static_cast<int>(faces.size()) < 1) {
+    positions.clear();
+    faces.clear();
+    const BITCODE_RLL owner = obj->handle.value;
+    for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+      Dwg_Object* v = &dwg->object[i];
+      if (v->supertype != DWG_SUPERTYPE_ENTITY || v->tio.entity == nullptr ||
+          v->tio.entity->ownerhandle == nullptr)
+        continue;
+      if (v->tio.entity->ownerhandle->absolute_ref != owner)
+        continue;
+      inspectVertexObject(v);
+    }
+  }
+  if (static_cast<int>(positions.size()) < 3)
+    return false;
+  if (nv <= 0 || nv > static_cast<int>(positions.size()))
+    nv = static_cast<int>(positions.size());
+  else
+    positions.resize(static_cast<size_t>(nv));
+  if (static_cast<int>(faces.size()) < 1)
+    return false;
+  if (nf <= 0 || nf > static_cast<int>(faces.size()))
+    nf = static_cast<int>(faces.size());
+  auto mesh = std::make_shared<CadMesh>();
+  mesh->sourceName = "DWG POLYLINE_PFACE";
+  for (const dwg_point_3d& p : positions) {
+    double wx = 0.0, wy = 0.0;
+    xf.apply(p.x, p.y, &wx, &wy);
+    mesh->vertsXyz.push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+    mesh->vertsXyz.push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+    mesh->vertsXyz.push_back(static_cast<float>(p.z));
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(0.f);
+    mesh->normalsXyz.push_back(1.f);
+  }
+  auto addTri = [&](int i0, int i1, int i2) {
+    if (i0 < 0 || i1 < 0 || i2 < 0 || i0 >= nv || i1 >= nv || i2 >= nv)
+      return;
+    mesh->indices.push_back(static_cast<std::uint32_t>(i0));
+    mesh->indices.push_back(static_cast<std::uint32_t>(i1));
+    mesh->indices.push_back(static_cast<std::uint32_t>(i2));
+  };
+  for (int fi = 0; fi < nf; ++fi) {
+    const Dwg_Entity_VERTEX_PFACE_FACE* f = faces[static_cast<size_t>(fi)];
+    if (f == nullptr)
+      continue;
+    const int i0 = PfaceVertexIndex(f->vertind[0]);
+    const int i1 = PfaceVertexIndex(f->vertind[1]);
+    const int i2 = PfaceVertexIndex(f->vertind[2]);
+    const int i3 = PfaceVertexIndex(f->vertind[3]);
+    if (i3 < 0)
+      addTri(i0, i1, i2);
+    else {
+      addTri(i0, i1, i2);
+      addTri(i0, i2, i3);
+    }
+  }
+  if (mesh->indices.empty())
+    return false;
+  CadMeshPart part;
+  part.name = "PFace";
+  part.indexBegin = 0;
+  part.indexCount = static_cast<int>(mesh->indices.size());
+  mesh->parts.push_back(part);
+  st.cadMeshes.push_back(std::move(mesh));
+  st.cadMeshAttrs.push_back(at);
+  return true;
+}
+
 static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_LEADER* ld, const Xf2& xf,
                                const EntityAttributes& at) {
   if (ld == nullptr || ld->num_points < 2 || ld->points == nullptr)
@@ -1138,8 +1269,10 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     NoteSkip(skipHist, "POLYLINE_MESH(degenerate or unsupported)");
     return;
   }
-  if (ty == DWG_TYPE_POLYLINE_PFACE) {
-    NoteSkip(skipHist, "POLYLINE_PFACE(not supported yet)");
+  if (ty == DWG_TYPE_POLYLINE_PFACE && ent->tio.POLYLINE_PFACE != nullptr) {
+    if (ImportPolylinePFace(st, dwg, obj, ent->tio.POLYLINE_PFACE, xf, at))
+      return;
+    NoteSkip(skipHist, "POLYLINE_PFACE(degenerate or unsupported)");
     return;
   }
   if (ty == DWG_TYPE_IMAGE || ty == DWG_TYPE_WIPEOUT || ty == DWG_TYPE_PDFUNDERLAY ||
@@ -3254,8 +3387,24 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
       if (o->tio.entity->entmode == 1)
         continue;
       const Dwg_Object_Type ty = o->fixedtype;
-      if (ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_SEQEND ||
+      if (ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_VERTEX_MESH ||
+          ty == DWG_TYPE_VERTEX_PFACE || ty == DWG_TYPE_VERTEX_PFACE_FACE || ty == DWG_TYPE_SEQEND ||
           ty == DWG_TYPE_ENDBLK || ty == DWG_TYPE_BLOCK)
+        continue;
+      if (ty == DWG_TYPE_POLYLINE_PFACE || ty == DWG_TYPE_POLYLINE_MESH || ty == DWG_TYPE__3DFACE)
+        continue;
+      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions);
+    }
+  }
+  if (st.cadMeshes.empty()) {
+    for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+      Dwg_Object* o = &dwg.object[i];
+      if (o->supertype != DWG_SUPERTYPE_ENTITY || o->tio.entity == nullptr)
+        continue;
+      if (o->tio.entity->entmode == 1)
+        continue;
+      const Dwg_Object_Type ty = o->fixedtype;
+      if (ty != DWG_TYPE_POLYLINE_PFACE && ty != DWG_TYPE_POLYLINE_MESH && ty != DWG_TYPE__3DFACE)
         continue;
       ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions);
     }

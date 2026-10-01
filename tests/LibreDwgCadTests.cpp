@@ -2374,3 +2374,42 @@ TEST_CASE("DWG import maps POINT LEADER SOLID 3DFACE and mesh (REQ-170, issue #6
   }
   CHECK(foundLeaderText);
 }
+
+TEST_CASE("DWG import maps POLYLINE_PFACE to CadMesh (REQ-170, issue #613)",
+          "[dwg][libredwg][req170][issue613]") {
+  ScratchDir dir("open-pface");
+  const auto p = (dir.path / "pface.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(hdr != nullptr);
+
+  const dwg_point_3d verts[4] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}, {10.0, 10.0, 0.0}, {0.0, 10.0, 0.0}};
+  const dwg_face faces[2] = {{1, 2, 3, 0}, {1, 3, 4, 0}};
+  REQUIRE(dwg_add_POLYLINE_PFACE(hdr, 4, 2, verts, faces) != nullptr);
+
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  Dwg_Data chk;
+  std::memset(&chk, 0, sizeof(chk));
+  REQUIRE(dwg_read_file(p.c_str(), &chk) < DWG_ERR_CRITICAL);
+  int pfaceCount = 0;
+  for (BITCODE_BL i = 0; i < chk.num_objects; ++i) {
+    if (chk.object[i].fixedtype == DWG_TYPE_POLYLINE_PFACE)
+      ++pfaceCount;
+  }
+  dwg_free(&chk);
+  REQUIRE(pfaceCount >= 1);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, p.c_str(), log));
+  REQUIRE(st.cadMeshes.size() == 1);
+  CHECK(st.cadMeshes[0]->triangleCount() == 2);
+  CHECK(st.cadMeshes[0]->vertexCount() == 4);
+}
