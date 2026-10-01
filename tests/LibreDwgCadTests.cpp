@@ -2285,3 +2285,131 @@ TEST_CASE("DWG round-trips paper layouts and viewport scales (REQ-170, issue #61
   CHECK(plotA->viewports[0].modelCenterX == Catch::Approx(100.0).margin(0.01));
   CHECK(plotB->paperLines.size() == 6);
 }
+
+// REQ-170, issue #613: SPLINE and trimmed ELLIPSE import as polylines instead of being skipped.
+TEST_CASE("DWG import maps SPLINE and trimmed ELLIPSE to polylines (REQ-170, issue #613)",
+          "[dwg][libredwg][req170][issue613]") {
+  ScratchDir dir("open-spline-ellipse");
+  const auto p = (dir.path / "spline-ellipse.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(hdr != nullptr);
+
+  const dwg_point_3d fitPts[3] = {{0.0, 0.0, 0.0}, {5.0, 5.0, 0.0}, {10.0, 0.0, 0.0}};
+  const dwg_point_3d tan0{1.0, 0.0, 0.0};
+  const dwg_point_3d tan1{1.0, 0.0, 0.0};
+  REQUIRE(dwg_add_SPLINE(hdr, 3, fitPts, &tan0, &tan1) != nullptr);
+
+  const dwg_point_3d center{20.0, 0.0, 0.0};
+  Dwg_Entity_ELLIPSE* ell = dwg_add_ELLIPSE(hdr, &center, 5.0, 0.5);
+  REQUIRE(ell != nullptr);
+  ell->start_angle = 0.0;
+  ell->end_angle = 1.5707963267948966;
+
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, p.c_str(), log));
+  REQUIRE(st.userPolylineOffsets.size() >= 2);
+  CHECK(st.userPolylineVerts.size() >= 12);
+}
+
+TEST_CASE("DWG import maps POINT LEADER SOLID 3DFACE and mesh (REQ-170, issue #613)",
+          "[dwg][libredwg][req170][issue613]") {
+  ScratchDir dir("open-misc-entities");
+  const auto p = (dir.path / "misc.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(hdr != nullptr);
+
+  const dwg_point_3d pt{1.0, 2.0, 0.0};
+  REQUIRE(dwg_add_POINT(hdr, &pt) != nullptr);
+
+  const dwg_point_3d mtextPt{8.0, 8.0, 0.0};
+  Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &mtextPt, 12.0, "Leader note");
+  REQUIRE(mt != nullptr);
+  const dwg_point_3d lpts[2] = {{0.0, 0.0, 0.0}, {8.0, 8.0, 0.0}};
+  REQUIRE(dwg_add_LEADER(hdr, 2, lpts, mt, 0) != nullptr);
+
+  const dwg_point_3d s1{10.0, 0.0, 0.0};
+  const dwg_point_2d s2{15.0, 0.0};
+  const dwg_point_2d s3{15.0, 5.0};
+  const dwg_point_2d s4{10.0, 5.0};
+  REQUIRE(dwg_add_SOLID(hdr, &s1, &s2, &s3, &s4) != nullptr);
+
+  const dwg_point_3d f1{0.0, 10.0, 0.0};
+  const dwg_point_3d f2{5.0, 10.0, 0.0};
+  const dwg_point_3d f3{5.0, 15.0, 0.0};
+  const dwg_point_3d f4{0.0, 15.0, 0.0};
+  REQUIRE(dwg_add_3DFACE(hdr, &f1, &f2, &f3, &f4) != nullptr);
+
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, p.c_str(), log));
+  CHECK(st.cadPositionMarkers.size() == 1);
+  CHECK(st.cadPositionMarkers[0].x == Catch::Approx(1.0).margin(0.01));
+  CHECK(st.cadFilledRegions.size() >= 1);
+  REQUIRE(st.cadMeshes.size() >= 1);
+  CHECK(st.cadMeshes[0]->triangleCount() >= 2);
+  CHECK(st.userPolylineOffsets.size() >= 1);
+  bool foundLeaderText = false;
+  for (const CadAnnotation& a : st.cadAnnotations) {
+    if (a.text.find("Leader note") != std::string::npos)
+      foundLeaderText = true;
+  }
+  CHECK(foundLeaderText);
+}
+
+TEST_CASE("DWG import maps POLYLINE_PFACE to CadMesh (REQ-170, issue #613)",
+          "[dwg][libredwg][req170][issue613]") {
+  ScratchDir dir("open-pface");
+  const auto p = (dir.path / "pface.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(hdr != nullptr);
+
+  const dwg_point_3d verts[4] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}, {10.0, 10.0, 0.0}, {0.0, 10.0, 0.0}};
+  const dwg_face faces[2] = {{1, 2, 3, 0}, {1, 3, 4, 0}};
+  REQUIRE(dwg_add_POLYLINE_PFACE(hdr, 4, 2, verts, faces) != nullptr);
+
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  Dwg_Data chk;
+  std::memset(&chk, 0, sizeof(chk));
+  REQUIRE(dwg_read_file(p.c_str(), &chk) < DWG_ERR_CRITICAL);
+  int pfaceCount = 0;
+  for (BITCODE_BL i = 0; i < chk.num_objects; ++i) {
+    if (chk.object[i].fixedtype == DWG_TYPE_POLYLINE_PFACE)
+      ++pfaceCount;
+  }
+  dwg_free(&chk);
+  REQUIRE(pfaceCount >= 1);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, p.c_str(), log));
+  REQUIRE(st.cadMeshes.size() == 1);
+  CHECK(st.cadMeshes[0]->triangleCount() == 2);
+  CHECK(st.cadMeshes[0]->vertexCount() == 4);
+}
