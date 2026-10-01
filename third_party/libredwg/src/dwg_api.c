@@ -25915,6 +25915,15 @@ dwg_add_ATTRIB (Dwg_Entity_INSERT *restrict insert, const double height,
   Dwg_Object_BLOCK_HEADER *restrict blkhdr = dwg_entity_owner (insert);
   Dwg_Object *restrict insobj = dwg_obj_generic_to_object (insert, &err);
   API_ADD_ENTITY (ATTRIB);
+  /* GoSurvey fix (issue #605): API_ADD_ENTITY's NEW_ENTITY may grow (and so
+     relocate) dwg->object[], which invalidates `insobj` — a raw pointer INTO
+     that array captured above, before the growth. `insert` itself stays valid
+     (its Dwg_Entity_INSERT is a separate allocation, not stored in the array),
+     so re-deriving `insobj` from it here is safe and cheap. Without this, a
+     THIRD (or later, depending on how many objects already exist) dwg_add_ATTRIB
+     call on the same INSERT can hand add_attrib_links() below a dangling
+     Dwg_Object*, corrupting the heap. */
+  insobj = dwg_obj_generic_to_object (insert, &err);
   ADD_CHECK_3DPOINT (ins_pt);
   ADD_CHECK_DOUBLE (height);
   if (!insobj || err)

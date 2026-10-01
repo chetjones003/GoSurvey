@@ -814,6 +814,35 @@ const EntityAttributes* AttrAt(const std::vector<EntityAttributes>& v, size_t i)
   return i < v.size() ? &v[i] : nullptr;
 }
 
+// REQ-365 / D-2026-09-30-f / issue #605: the block name other programs see for a GoSurvey survey
+// point. One shared definition (a marker circle plus NUMBER/DESCRIPTION attribute
+// tags, the Civil 3D/Carlson PNEZD convention), one INSERT per point. GoSurvey's own reopen does
+// not read this — it prefers the lossless ADR-044 trailer (DwgIo.cpp) — so this exists purely for
+// AutoCAD/Civil 3D, which is why there is no XDATA identity to preserve here.
+inline constexpr const char* kSurveyPointBlockName = "GOSURVEY_POINT";
+
+// Creates the GOSURVEY_POINT block definition (marker + attribute tags) once per export. Returns
+// nullptr if the block header could not be created, in which case the caller skips every point
+// rather than writing a broken INSERT.
+Dwg_Object_BLOCK_HEADER* EnsureSurveyPointBlockDef(Dwg_Data* dwg, double markerRadius) {
+  Dwg_Object_BLOCK_HEADER* blkhdr = dwg_add_BLOCK_HEADER(dwg, kSurveyPointBlockName);
+  if (blkhdr == nullptr)
+    return nullptr;
+  dwg_add_BLOCK(blkhdr, kSurveyPointBlockName);
+  dwg_point_3d c{0.0, 0.0, 0.0};
+  dwg_add_CIRCLE(blkhdr, &c, markerRadius);
+  const double th = markerRadius * 0.8;
+  // Two ATTDEFs only, matching the two ATTRIBs each INSERT below actually fills — see the comment
+  // there on why a third attribute isn't safe with this LibreDWG version. Elevation is still
+  // visible on the point: it's the INSERT's own Z coordinate.
+  dwg_point_3d pNum{markerRadius * 1.5, markerRadius * 0.5, 0.0};
+  dwg_add_ATTDEF(blkhdr, th, 0, "Point Number", &pNum, "NUMBER", "");
+  dwg_point_3d pDesc{markerRadius * 1.5, -markerRadius * 0.5, 0.0};
+  dwg_add_ATTDEF(blkhdr, th, 0, "Description", &pDesc, "DESCRIPTION", "");
+  dwg_add_ENDBLK(blkhdr);
+  return blkhdr;
+}
+
 // REQ-170 / REQ-201, issue #614: what DWG save actually drops or degrades, computed from the
 // drawing instead of a fixed list — so the "Export DWG" warning and the save log cannot disagree
 // with each other or with what FillFromState above actually writes, and a line disappears here the
@@ -826,8 +855,7 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   };
 
   // Entity classes with no DWG writer at all (silent today — nothing in FillFromState touches
-  // these vectors).
-  add("survey point(s)", st.surveyPoints.size());
+  // these vectors). Survey points are written (REQ-365, issue #605), so they are not here.
   add("table(s)", st.cadTables.size());
   add("pipe run(s)", st.cadPipeRuns.size());
   add("block reference(s)", st.cadBlockRefs.size());
@@ -1232,6 +1260,55 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       e->text_height = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
       e->attachment = 1;
       apply(e->parent, at);
+    }
+  }
+  // REQ-365 / issue #605: survey points, written as a GOSURVEY_POINT block INSERT with visible
+  // NUMBER/DESCRIPTION attributes so AutoCAD and Civil 3D show them, not just GoSurvey.
+  if (!st.surveyPoints.empty()) {
+    const double r = static_cast<double>(PositionMarkerRadiusWorld(st));
+    Dwg_Object_BLOCK_HEADER* spBlk = EnsureSurveyPointBlockDef(dwg, r);
+    if (spBlk != nullptr) {
+      // dwg_add_ATTRIB (LibreDWG 0.13.4) overwrites Dwg_Entity_INSERT::block_header — DXF 2, the
+      // referenced block — with the INSERT's OWNER block handle (dwg_entity_owner) each time it is
+      // called, instead of leaving it alone. Captured here and restored after every ATTRIB, or an
+      // INSERT with attributes silently ends up "referencing" the space it lives in.
+      const BITCODE_H spBlkRef = dwg_find_tablehandle(dwg, kSurveyPointBlockName, "BLOCK");
+      for (const SurveyPoint& sp : st.surveyPoints) {
+        dwg_point_3d ins{};
+        ins.x = sp.easting + st.worldDocumentOriginX;  // double all the way (REQ-101)
+        ins.y = sp.northing + st.worldDocumentOriginY;
+        ins.z = sp.elevation;
+        Dwg_Entity_INSERT* e0 = dwg_add_INSERT(hdr, &ins, kSurveyPointBlockName, 1.0, 1.0, 1.0, 0.0);
+        if (e0 == nullptr)
+          continue;
+        // Each dwg_add_* call can grow (and so relocate) dwg->object[], which invalidates any
+        // Dwg_Object*/entity pointer taken before it — the same reason TableWriter::ObjectAt above
+        // resolves by objid rather than caching a pointer. `e0` is only good until the NEXT
+        // dwg_add_* call, so every later step re-resolves the INSERT from its stable objid.
+        const BITCODE_BL insObjId = e0->parent->objid;
+        auto ins2 = [&]() -> Dwg_Entity_INSERT* { return dwg->object[insObjId].tio.entity->tio.INSERT; };
+        // Elevation is NOT written as a third attribute here — LibreDWG 0.13.4's dwg_add_ATTRIB /
+        // add_attrib_links has a reproducible heap overrun on a THIRD call for the same INSERT
+        // (confirmed with a minimal repro independent of GoSurvey's own state: one block, one
+        // INSERT, three bare dwg_add_ATTRIB calls, page-heap-verified crash inside
+        // add_attrib_links). A patch to the vendored copy (dwg_add_ATTRIB's stale `insobj` after
+        // API_ADD_ENTITY can relocate dwg->object[]) is a real bug fix but did not resolve this
+        // specific crash, and root-causing further needs a debugger this environment does not
+        // have. Two attributes is the safe, verified ceiling; elevation is not lost — it is the
+        // INSERT's own Z coordinate (ins.z above), which AutoCAD's Properties palette shows.
+        dwg_add_ATTRIB(ins2(), r * 0.8, 0, &ins, "NUMBER", std::to_string(sp.id).c_str());
+        dwg_add_ATTRIB(ins2(), r * 0.8, 0, &ins, "DESCRIPTION",
+                       sp.description.empty() ? sp.rawDescription.c_str() : sp.description.c_str());
+        // dwg_add_ATTRIB (LibreDWG 0.13.4) also overwrites Dwg_Entity_INSERT::block_header — DXF 2,
+        // the referenced block — with the INSERT's OWNER block handle (dwg_entity_owner) on every
+        // call, instead of leaving it alone. Restored here or an INSERT with attributes silently
+        // ends up "referencing" the space it lives in rather than GOSURVEY_POINT.
+        if (spBlkRef != nullptr)
+          ins2()->block_header = dwg_add_handleref(dwg, 5, spBlkRef->absolute_ref, nullptr);
+        EntityAttributes at{};
+        at.layer = sp.layer;
+        apply(ins2()->parent, &at);
+      }
     }
   }
   for (size_t i = 0; i < st.userEllipses.size(); ++i) {

@@ -10557,6 +10557,31 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-30) — D-2026-09-30-b, ADR-064, TASK-297.
 - Revisions: 2026-09-30 — proposed and accepted.
 
+### REQ-365 — DWG export writes survey points as a visible block insert (GitHub issue #605)
+
+- Purpose: issue #605 — a GoSurvey DWG opened in AutoCAD or Civil 3D showed no survey points at
+  all; `st.surveyPoints` had no DWG writer.
+- Priority: should
+- Type: functional
+- Decision: D-2026-09-30-f (block-with-attributes representation, not POINT + MTEXT; two
+  attributes, not three, per the LibreDWG crash found while implementing this).
+- Statement: DWG export writes one shared block definition, `GOSURVEY_POINT` (a small marker
+  circle plus two attribute tags, `NUMBER` and `DESCRIPTION`, positioned beside the marker — the
+  Civil 3D/Carlson PNEZD convention), and one `INSERT` of it per survey point, placed at the
+  point's world coordinate (REQ-101 double precision) with its own Z as the point's elevation.
+  Each `INSERT` carries two `ATTRIB`s filled with the point's id and description (falling back to
+  `rawDescription` when `description` is empty). This is for **other programs only** — GoSurvey
+  reopening its own DWG prefers the lossless ADR-044 trailer (`DwgIo.cpp`) over these entities, so
+  nothing here needs to round-trip through GoSurvey's own importer, and no GOSURVEY XDATA identity
+  is written on them.
+- Acceptance: a drawing with N survey points writes N `INSERT`s of the `GOSURVEY_POINT` block at
+  the right world coordinates, each with `NUMBER` and `DESCRIPTION` attributes matching the point;
+  the DWG export loss summary (REQ-170 / issue #614) no longer lists survey points as dropped;
+  GoSurvey reopening its own saved file recovers all points unchanged, via the trailer.
+- Owner-layer: IO (`src/io/LibreDwgCad.cpp`)
+- Status: accepted
+- Revisions: 2026-09-30 — initial (resolves issue #605; D-2026-09-30-f).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
