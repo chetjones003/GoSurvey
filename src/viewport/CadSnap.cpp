@@ -1341,6 +1341,14 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     }
   }
 
+  // --- Multileaders (REQ-367): path vertices offer Endpoint snap.
+  if (wantEndpoint) {
+    for (const CadMultileader& ml : cmd.cadMultileaders) {
+      for (size_t i = 0; i + 2 < ml.pathXyz.size(); i += 3)
+        Consider(&acc, wx, wy, ml.pathXyz[i], ml.pathXyz[i + 1], Kind::Endpoint, tolWorld, ml.pathXyz[i + 2]);
+    }
+  }
+
   // --- Placed block instances (REQ-107, D-2026-08-29-i) ---
   // Expand each INSERT to world geometry and offer Endpoint on its segment ends and its insertion
   // point, Midpoint on its segment midpoints, and Center on its circles/arcs/ellipses — same
