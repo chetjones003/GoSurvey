@@ -10016,6 +10016,20 @@ extern "C"
   dwg_add_MLINESTYLE (Dwg_Data *restrict dwg,
                       const char *restrict name) __nonnull_all;
 
+  /* GoSurvey (issue #619): R2010+ multileader export. */
+  EXPORT Dwg_Object_MLEADERSTYLE *
+  dwg_add_MLEADERSTYLE (Dwg_Data *restrict dwg,
+                        const char *restrict name) __nonnull_all;
+  EXPORT Dwg_Entity_MULTILEADER *
+  dwg_add_MULTILEADER (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
+                       const unsigned num_points,
+                       const dwg_point_3d *restrict points,
+                       const char *restrict text,
+                       const dwg_point_3d *restrict text_loc,
+                       const dwg_point_3d *restrict text_dir,
+                       const double text_height, const double text_width)
+      __nonnull ((1, 3, 4, 5));
+
   /* Experimental API's. Will change. */
   EXPORT Dwg_Object_PROXY_OBJECT *
   dwg_add_PROXY_OBJECT (Dwg_Data *restrict dwg, char *name, char *key
@@ -10189,12 +10203,10 @@ extern "C"
 #define HAVE_NO_DWG_ADD_MENTALRAYRENDERSETTINGS
 #define HAVE_NO_DWG_ADD_MESH
 #define HAVE_NO_DWG_ADD_MLEADEROBJECTCONTEXTDATA
-#define HAVE_NO_DWG_ADD_MLEADERSTYLE
 #define HAVE_NO_DWG_ADD_MOTIONPATH
 #define HAVE_NO_DWG_ADD_MPOLYGON
 #define HAVE_NO_DWG_ADD_MTEXTATTRIBUTEOBJECTCONTEXTDATA
 #define HAVE_NO_DWG_ADD_MTEXTOBJECTCONTEXTDATA
-#define HAVE_NO_DWG_ADD_MULTILEADER
 #define HAVE_NO_DWG_ADD_NAVISWORKSMODEL
 #define HAVE_NO_DWG_ADD_NAVISWORKSMODELDEF
 #define HAVE_NO_DWG_ADD_NURBSURFACE

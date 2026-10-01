@@ -134,6 +134,25 @@ int CountDwg3DSolids(const char* pathUtf8) {
   return n;
 }
 
+int CountDwgFixedType(const char* pathUtf8, enum DWG_OBJECT_TYPE ty) {
+  Dwg_Data dwg{};
+  if (dwg_read_file(pathUtf8, &dwg) >= DWG_ERR_CRITICAL) {
+    dwg_free(&dwg);
+    return -1;
+  }
+  int n = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].fixedtype == ty)
+      ++n;
+  }
+  dwg_free(&dwg);
+  return n;
+}
+
+int CountDwgMultileaders(const char* pathUtf8) {
+  return CountDwgFixedType(pathUtf8, DWG_TYPE_MULTILEADER);
+}
+
 }  // namespace
 
 TEST_CASE("ExportDwgFile writes a CYLINDER recipe cadSolid as 3DSOLID (issue #612)",
@@ -443,7 +462,35 @@ TEST_CASE("DWG export loss lists transparency only for R2000 (issue #620 / #614)
   }
 }
 
-TEST_CASE("CadMultileader round-trips through LEADER+MTEXT DWG export (issue #619)",
+TEST_CASE("LibreDWG dwg_add_MULTILEADER encodes and decodes (issue #619)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-api-mleader");
+  const auto p = (dir.path / "api-mleader.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(hdr != nullptr);
+  const dwg_point_3d lpts[3] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}, {12.0, 2.0, 0.0}};
+  const dwg_point_3d textPt{12.0, 2.0, 0.0};
+  const dwg_point_3d textDir{1.0, 0.0, 0.0};
+  REQUIRE(dwg_add_MULTILEADER(hdr, 3, lpts, "Monument A", &textPt, &textDir, 0.18, 8.0) != nullptr);
+  int inDoc = 0;
+  for (unsigned i = 0; i < dwg->num_objects; ++i) {
+    if (dwg->object[i].fixedtype == DWG_TYPE_MULTILEADER)
+      ++inDoc;
+  }
+  CHECK(inDoc == 1);
+  CHECK(hdr->num_owned >= 1);
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+  CHECK(CountDwgMultileaders(p.c_str()) == 1);
+}
+
+TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (issue #619)",
           "[dwg][libredwg][issue619]") {
   ScratchDir dir("dwg-mleader");
   const auto p = (dir.path / "ml.dwg").string();
@@ -463,6 +510,8 @@ TEST_CASE("CadMultileader round-trips through LEADER+MTEXT DWG export (issue #61
   st.cadMultileaderAttrs.push_back(EntityAttributes{});
   std::vector<std::string> log;
   REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  CHECK(CountDwgMultileaders(p.c_str()) == 1);
+  CHECK(CountDwgFixedType(p.c_str(), DWG_TYPE_LEADER) == 0);
   AppCommandState in;
   REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
   REQUIRE(in.cadMultileaders.size() == 1);

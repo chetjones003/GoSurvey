@@ -3462,7 +3462,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       apply(e->parent, at);
     }
   }
-  // REQ-367 / issue #619: multileaders as associated LEADER + MTEXT (AutoCAD-readable callout).
+  // REQ-367 / issue #619: R2010+ native MULTILEADER; older saves use LEADER + MTEXT fallback.
+  const bool nativeMultileaderExport = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2010;
   for (size_t i = 0; i < st.cadMultileaders.size(); ++i) {
     const CadMultileader& ml = st.cadMultileaders[i];
     const EntityAttributes* at = AttrAt(st.cadMultileaderAttrs, i);
@@ -3477,14 +3478,43 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         wire += ch;
     }
     const double width = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
+    const double textH =
+        static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
+    const size_t nPt = ml.pathXyz.size() / 3;
+    if (nativeMultileaderExport && nPt >= 2) {
+      std::vector<dwg_point_3d> pts(nPt);
+      for (size_t j = 0; j < nPt; ++j) {
+        world(ml.pathXyz[j * 3], ml.pathXyz[j * 3 + 1], ml.pathXyz[j * 3 + 2], &pts[j]);
+      }
+      dwg_point_3d dir{};
+      const size_t last = nPt - 1;
+      const size_t prev = nPt >= 2 ? last - 1 : 0;
+      dir.x = pts[last].x - pts[prev].x;
+      dir.y = pts[last].y - pts[prev].y;
+      dir.z = pts[last].z - pts[prev].z;
+      const double len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+      if (len > 1e-9) {
+        dir.x /= len;
+        dir.y /= len;
+        dir.z /= len;
+      } else {
+        dir.x = 1.0;
+        dir.y = dir.z = 0.0;
+      }
+      if (Dwg_Entity_MULTILEADER* mld = dwg_add_MULTILEADER(
+              hdr, static_cast<unsigned>(nPt), pts.data(),
+              wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
+        apply(mld->parent, at);
+        continue;
+      }
+    }
     Dwg_Entity_MTEXT* mt =
         dwg_add_MTEXT(hdr, &tp, width, wire.empty() ? " " : wire.c_str());
     if (mt != nullptr) {
-      mt->text_height = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
+      mt->text_height = textH;
       mt->attachment = 1;
       apply(mt->parent, at);
     }
-    const size_t nPt = ml.pathXyz.size() / 3;
     if (nPt >= 2) {
       std::vector<dwg_point_3d> pts(nPt);
       for (size_t j = 0; j < nPt; ++j) {
@@ -4176,7 +4206,8 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
       ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions);
   }
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
-                         st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty();
+                         st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
+                         st.cadMultileaders.empty();
   // DXF decode often leaves BLOCK_HEADER.first_entity unset or pointing at BLOCK/ENDBLK only.
   if (emptyGeom) {
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {

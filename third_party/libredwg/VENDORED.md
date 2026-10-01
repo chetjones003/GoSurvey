@@ -27,6 +27,7 @@ Each change is its own commit. Keep this list current.
 | 1 | `src/dwg2.spec` (GEODATA) | The R2000–R2007 (class version 1) GEODATA layout read a second `unknown_b` bit after `zero2` that AutoCAD does not write, so LibreDWG misread AutoCAD's GEODATA and AutoCAD refused one LibreDWG wrote (`eDwgCRCDoesNotMatch`). Found by decoding an AutoCAD-saved R2000 GEODATA bit by bit (REQ-362 item 3, TASK-299). | not yet |
 | 2 | `src/encode.c` (`in_postprocess_SEQEND`) | INSERT attribute chains: use `absolute_ref` when rebuilding `first_attrib`/`last_attrib`, not `handleref.value` after offset encoding (issue #606). | not yet |
 | 3 | `src/dwg_api.c` (`dwg_add_ATTRIB`) | Re-resolve INSERT `Dwg_Object*` after `API_ADD_ENTITY` may grow `dwg->object[]` (issue #605 heap corruption on 3+ attribs). | not yet |
+| 4 | `src/dwg_api.c`, `include/dwg_api.h` | `dwg_add_MLEADERSTYLE` + `dwg_add_MULTILEADER` for R2010+ native multileader DWG export (issue #619). | not yet |
 
 ## Moving to a newer upstream release
 A recorded decision (ADR-041 (h)). Replace `src/` and `include/` with the new tag's tracked files,
