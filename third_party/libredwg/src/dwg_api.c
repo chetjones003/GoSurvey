@@ -27709,6 +27709,268 @@ dwg_add_LEADER (
   return _obj;
 }
 
+/* GoSurvey (issue #619): minimal MLEADERSTYLE + MULTILEADER writers for R2010+ export. */
+static void
+dwg_fill_MLEADERSTYLE_defaults (Dwg_Data *restrict dwg,
+                                Dwg_Object_MLEADERSTYLE *restrict sty)
+{
+  if (!dwg || !sty)
+    return;
+  sty->class_version = dwg->header.version >= R_2010 ? 2 : 1;
+  sty->content_type = 2; /* mtext */
+  sty->mleader_order = 1;
+  sty->leader_order = 1;
+  sty->max_points = 2;
+  sty->first_seg_angle = deg2rad (15.0);
+  sty->second_seg_angle = deg2rad (15.0);
+  sty->type = 1;
+  sty->line_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  sty->has_landing = 1;
+  sty->has_dogleg = 1;
+  sty->landing_gap = 0.09;
+  sty->landing_dist = 0.36;
+  sty->description = dwg_add_u8_input (dwg, "");
+  sty->arrow_head_size = 0.18;
+  sty->text_default = dwg_add_u8_input (dwg, "MText");
+  if (dwg->header_vars.TEXTSTYLE)
+    sty->text_style = dwg_add_handleref (
+        dwg, 5, dwg->header_vars.TEXTSTYLE->absolute_ref, NULL);
+  sty->attach_left = 1;
+  sty->attach_right = 1;
+  sty->text_angle_type = 1;
+  sty->text_align_type = 0;
+  sty->text_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  sty->text_height = 0.18;
+  sty->has_text_frame = 0;
+  sty->text_always_left = 0;
+  sty->align_space = 0.36;
+  sty->block_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  sty->block_scale.x = sty->block_scale.y = sty->block_scale.z = 1.0;
+  sty->use_block_scale = 1;
+  sty->block_rotation = 0.0;
+  sty->use_block_rotation = 0;
+  sty->block_connection = 0;
+  sty->scale = 1.0;
+  sty->is_changed = 0;
+  sty->is_annotative = 0;
+  sty->break_size = 0.125;
+  sty->attach_dir = 0;
+  sty->attach_top = 0;
+  sty->attach_bottom = 0;
+  sty->text_extended = 0;
+}
+
+EXPORT Dwg_Object_MLEADERSTYLE *
+dwg_add_MLEADERSTYLE (Dwg_Data *restrict dwg, const char *restrict name)
+{
+  Dwg_Object_DICTIONARY *dict;
+  Dwg_Object_Ref *dictref;
+  if (!dwg || !name)
+    return NULL;
+  if (dwg->header.version < R_2010)
+    {
+      LOG_ERROR ("MLEADERSTYLE requires R_2010+");
+      return NULL;
+    }
+  if (!dwg_is_valid_name_u8 (dwg, name))
+    LOG_WARN ("Invalid name \"%s\"\n", name);
+  {
+    API_ADD_OBJECT (MLEADERSTYLE);
+    dictref = dwg_find_dictionary (dwg, "ACAD_MLEADERSTYLE");
+    if (!dictref)
+      {
+        dict = dwg_add_DICTIONARY (dwg, (const BITCODE_T) "ACAD_MLEADERSTYLE",
+                                   name, obj->handle.value);
+        if (dict)
+          {
+            obj->tio.object->ownerhandle = dwg_add_handleref (
+                dwg, 4, dwg_obj_generic_handlevalue (dict), obj);
+            if (!obj->tio.object->num_reactors)
+              add_obj_reactor (obj->tio.object,
+                               dwg_obj_generic_handlevalue (dict));
+          }
+      }
+    else
+      {
+        Dwg_Object *dictobj = dwg_ref_object (dwg, dictref);
+        if (dictobj)
+          {
+            dwg_add_DICTIONARY_item (dictobj->tio.object->tio.DICTIONARY, name,
+                                     obj->handle.value);
+            obj->tio.object->ownerhandle
+                = dwg_add_handleref (dwg, 4, dictobj->handle.value, obj);
+            if (!obj->tio.object->num_reactors)
+              add_obj_reactor (obj->tio.object, dictobj->handle.value);
+          }
+      }
+    dwg_fill_MLEADERSTYLE_defaults (dwg, _obj);
+    return _obj;
+  }
+}
+
+static void
+dwg_require_MLEADERSTYLE_Standard (Dwg_Data *restrict dwg)
+{
+  if (!dwg || dwg->header.version < R_2010)
+    return;
+  if (dwg_find_tablehandle_silent (dwg, "Standard", "MLEADERSTYLE"))
+    return;
+  dwg_add_MLEADERSTYLE (dwg, "Standard");
+}
+
+EXPORT Dwg_Entity_MULTILEADER *
+dwg_add_MULTILEADER (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
+                     const unsigned num_points,
+                     const dwg_point_3d *restrict points,
+                     const char *restrict text,
+                     const dwg_point_3d *restrict text_loc,
+                     const dwg_point_3d *restrict text_dir,
+                     const double text_height, const double text_width)
+{
+  API_ADD_PREP (MULTILEADER);
+  if (!dwg || dwg->header.version < R_2010)
+    {
+      LOG_ERROR ("MULTILEADER requires R_2010+");
+      return NULL;
+    }
+  if (!num_points || num_points < 2 || !points || !text || !text_loc)
+    {
+      LOG_ERROR ("Invalid MULTILEADER arguments");
+      return NULL;
+    }
+  REQUIRE_CLASS ("MULTILEADER");
+  /* MLEADERSTYLE dictionary encode needs a dynapi "name" field this object lacks;
+     multileaders still round-trip with a null style handle (issue #619). */
+  API_ADD_ENTITY2 (MULTILEADER);
+
+  _obj->class_version = 2;
+  Dwg_MLEADER_AnnotContext *ctx = &_obj->ctx;
+  ctx->scale_factor = 1.0;
+  ctx->content_base.x = text_loc->x;
+  ctx->content_base.y = text_loc->y;
+  ctx->content_base.z = text_loc->z;
+  ctx->text_height = text_height > 1e-9 ? text_height : 0.18;
+  ctx->arrow_size = 0.18;
+  ctx->landing_gap = 0.09;
+  ctx->text_left = 1;
+  ctx->text_right = 1;
+  ctx->text_angletype = 1;
+  ctx->text_alignment = 0;
+  ctx->has_content_txt = 1;
+  ctx->has_content_blk = 0;
+
+  ctx->content.txt.type = 2;
+  ctx->content.txt.normal.x = 0.0;
+  ctx->content.txt.normal.y = 0.0;
+  ctx->content.txt.normal.z = 1.0;
+  ctx->content.txt.location.x = text_loc->x;
+  ctx->content.txt.location.y = text_loc->y;
+  ctx->content.txt.location.z = text_loc->z;
+  if (text_dir)
+    {
+      ctx->content.txt.direction.x = text_dir->x;
+      ctx->content.txt.direction.y = text_dir->y;
+      ctx->content.txt.direction.z = text_dir->z;
+    }
+  else
+    {
+      ctx->content.txt.direction.x = 1.0;
+      ctx->content.txt.direction.y = 0.0;
+      ctx->content.txt.direction.z = 0.0;
+    }
+  ctx->content.txt.rotation
+      = atan2 (ctx->content.txt.direction.y, ctx->content.txt.direction.x);
+  ctx->content.txt.width = text_width > 1e-9 ? text_width : ctx->text_height * 4.0;
+  ctx->content.txt.height = ctx->text_height;
+  ctx->content.txt.line_spacing_factor = 1.0;
+  ctx->content.txt.line_spacing_style = 1;
+  ctx->content.txt.default_text = dwg_add_u8_input (dwg, text);
+  if (dwg->header_vars.TEXTSTYLE)
+    ctx->content.txt.style = dwg_add_handleref (
+        dwg, 5, dwg->header_vars.TEXTSTYLE->absolute_ref, NULL);
+  ctx->content.txt.color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  ctx->content.txt.alignment = 1;
+  ctx->content.txt.flow = 5;
+  ctx->content.txt.bg_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  ctx->content.txt.is_height_auto = 1;
+
+  ctx->base.x = text_loc->x;
+  ctx->base.y = text_loc->y;
+  ctx->base.z = text_loc->z;
+  ctx->base_dir.x = ctx->content.txt.direction.x;
+  ctx->base_dir.y = ctx->content.txt.direction.y;
+  ctx->base_dir.z = ctx->content.txt.direction.z;
+  ctx->base_vert.x = 0.0;
+  ctx->base_vert.y = 0.0;
+  ctx->base_vert.z = 1.0;
+  ctx->is_normal_reversed = 0;
+  ctx->text_top = 0;
+  ctx->text_bottom = 0;
+
+  ctx->num_leaders = 1;
+  ctx->leaders = (Dwg_LEADER_Node *)calloc (1, sizeof (Dwg_LEADER_Node));
+  if (!ctx->leaders)
+    return NULL;
+  Dwg_LEADER_Node *lnode = &ctx->leaders[0];
+  lnode->parent = _obj;
+  lnode->has_lastleaderlinepoint = 0;
+  lnode->has_dogleg = 0;
+  lnode->branch_index = 0;
+  lnode->dogleg_length = 0.36;
+  lnode->num_breaks = 0;
+  lnode->num_lines = 1;
+  lnode->lines = (Dwg_LEADER_Line *)calloc (1, sizeof (Dwg_LEADER_Line));
+  if (!lnode->lines)
+    return NULL;
+  Dwg_LEADER_Line *lline = &lnode->lines[0];
+  lline->parent = lnode;
+  lline->num_points = num_points;
+  lline->points = (BITCODE_3BD *)calloc (num_points, sizeof (BITCODE_3BD));
+  if (!lline->points)
+    return NULL;
+  for (unsigned i = 0; i < num_points; i++)
+    {
+      lline->points[i].x = points[i].x;
+      lline->points[i].y = points[i].y;
+      lline->points[i].z = points[i].z;
+    }
+  lline->num_breaks = 0;
+  lline->line_index = 0;
+  lline->type = 1;
+  lline->color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  lline->arrow_size = ctx->arrow_size;
+  lnode->attach_dir = 0;
+
+  _obj->mleaderstyle = NULL;
+  _obj->flags = 0;
+  _obj->type = 1;
+  _obj->line_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  _obj->has_landing = 1;
+  _obj->has_dogleg = 0;
+  _obj->landing_dist = 0.36;
+  _obj->arrow_size = 0.18;
+  _obj->style_content = 2;
+  if (dwg->header_vars.TEXTSTYLE)
+    _obj->text_style = dwg_add_handleref (
+        dwg, 5, dwg->header_vars.TEXTSTYLE->absolute_ref, NULL);
+  _obj->text_left = 1;
+  _obj->text_right = 1;
+  _obj->text_angletype = 1;
+  _obj->text_alignment = 0;
+  _obj->text_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  _obj->has_text_frame = 0;
+  _obj->block_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  _obj->block_scale.x = _obj->block_scale.y = _obj->block_scale.z = 1.0;
+  _obj->style_attachment = 0;
+  _obj->is_annotative = 0;
+  _obj->attach_dir = 0;
+  _obj->attach_top = 0;
+  _obj->attach_bottom = 0;
+  _obj->is_text_extended = 0;
+
+  return _obj;
+}
+
 EXPORT Dwg_Entity_TOLERANCE *
 dwg_add_TOLERANCE (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
                    const char *restrict text_value,

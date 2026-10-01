@@ -10690,26 +10690,29 @@ capability that does not exist. They are recorded here rather than quietly dropp
   follow-ups (TASK-305).
 - Priority: should
 - Type: interop (+ domain)
-- Decision: D-2026-10-01-g (v1 export uses associated `LEADER` + `MTEXT`, not native MULTILEADER).
+- Decision: D-2026-10-01-g (superseded for R2010+ save by D-2026-10-01-h — native `MULTILEADER` export).
 - Statement:
   1. **Domain:** `CadMultileader` holds a leader path (local XYZ triplets) and an embedded `CadAnnotation`
      (`Kind::Mtext`) for the landing text. Parallel `cadMultileaderAttrs` like other entity stores.
   2. **Persistence:** `.gs` / ADR-044 trailer arrays `multileaders` / `multileaderAttrs` (additive).
   3. **Open:** a decoded `MULTILEADER` with **mtext** content imports into `CadMultileader`. Block-content
      multileaders are named once in the REQ-201 log, not silently dropped. Legacy `LEADER` import unchanged.
-  4. **Save:** each multileader writes as `MTEXT` plus an associated `LEADER` (or segment `LINE`s if
-     `dwg_add_LEADER` fails). Native `MULTILEADER` entity write is deferred until MLEADERSTYLE encoding
-     is proven (issue #619 follow-up).
+  4. **Save:** when the chosen DWG version is **R2010 or newer**, each multileader writes as a native
+     `MULTILEADER` entity (GoSurvey vendored `dwg_add_MULTILEADER`). Older saves still use associated
+     `LEADER` + `MTEXT` (or segment `LINE`s if `dwg_add_LEADER` fails). A full `MLEADERSTYLE` dictionary
+     entry is deferred (LibreDWG encode gap; style handle may be null).
   5. **Display (v1):** leader segments and label render in the viewport like other model annotations
      (follow-up if not yet wired in the first increment).
 - Acceptance:
   - a synthetic multileader with two path points and text survives Export DWG (R2018) → Import via
-    `ImportLibreCadFile` with the same path point count and text;
+    `ImportLibreCadFile` with the same path point count and text; the saved R2018 file contains a
+    `MULTILEADER` object (not only `LEADER` + `MTEXT`);
   - a DWG containing only block-content multileaders logs the skip reason;
   - multileaders persist through `.gs` save/load when present.
 - Owner-layer: Domain, IO, UI (command later)
 - Status: accepted
-- Revisions: 2026-10-01 — initial (issue #619; D-2026-10-01-g).
+- Revisions: 2026-10-01 — initial (issue #619; D-2026-10-01-g). 2026-10-01 — R2010+ native
+  `MULTILEADER` export (D-2026-10-01-h).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
