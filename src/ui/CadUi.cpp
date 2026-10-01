@@ -4590,10 +4590,16 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
         ImGui::TextUnformatted("Multileader style");
-        annNyiCombo("##AnnMleaderStyle", "Standard");
+        ImGui::BeginDisabled();
+        ImGui::Button("Standard  \xE2\x96\xBC##AnnMleaderStyle", ImVec2(annStyleW, 0.f));
+        ImGui::EndDisabled();
+        RibbonItemHelp(
+            "Standard \xe2\x80\x94 DWG export uses the Standard multileader style. "
+            "Custom multileader styles are not editable yet.",
+            ImGuiHoveredFlags_AllowWhenDisabled);
         ImGui::EndGroup();
         RibbonSectionEnd();
-      }, "Leaders", RibbonIconKind::Nyi, "Multileader"});
+      }, "Leaders", RibbonIconKind::Mtext, "Multileader"});
     }
 
     // ---- Tables --------------------------------------------------------
