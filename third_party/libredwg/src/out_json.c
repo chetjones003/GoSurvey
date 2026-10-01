@@ -1,7 +1,7 @@
 /*****************************************************************************/
 /*  LibreDWG - free implementation of the DWG file format                    */
 /*                                                                           */
-/*  Copyright (C) 2018-2025 Free Software Foundation, Inc.                   */
+/*  Copyright (C) 2018-2026 Free Software Foundation, Inc.                   */
 /*                                                                           */
 /*  This library is free software, licensed under the terms of the GNU       */
 /*  General Public License as published by the Free Software Foundation,     */
@@ -42,12 +42,8 @@ static unsigned int cur_ver = 0;
 static BITCODE_BL rcount1, rcount2;
 
 /* see also examples/unknown.c */
-#ifdef HAVE_NATIVE_WCHAR2
-static wchar_t *wcquote (wchar_t *restrict dest, const wchar_t *restrict src);
-#else
 static void print_wcquote (Bit_Chain *restrict dat,
                            dwg_wchar_t *restrict wstr);
-#endif
 void json_write_TFv (Bit_Chain *restrict dat, const BITCODE_TF restrict src,
                      const size_t len);
 // write even past the \0, to keep existing slack
@@ -72,8 +68,8 @@ static char *_path_field (const char *path);
 
 #define PREFIX _prefix (dat);
 #define IS_MINJS (dat->opts & DWG_OPTS_MINIMAL)
-#define JSON_SPC IS_MINJS ? "" : " "
-#define JSON_NL IS_MINJS ? "" : "\n"
+#define JSON_SPC (IS_MINJS ? "" : " ")
+#define JSON_NL (IS_MINJS ? "" : "\n")
 #define JSON_KEY "\"%s\":%s"
 
 #define PRINTFIRST                                                            \
@@ -279,22 +275,13 @@ static char *_path_field (const char *path);
       }                                                                       \
   }
 
-// Converts to UTF-8
-#ifdef HAVE_NATIVE_WCHAR2
-#  define VALUE_TEXT_TU(wstr)                                                           \
-    if (wstr)                                                                           \
-      {                                                                                 \
-        wchar_t *_buf = malloc ((6 * wcslen ((wchar_t *)wstr) + 1) * sizeof(wchar_t));  \
-        fprintf (dat->fh, "\"%ls\"", wcquote (_buf, (wchar_t *)wstr));                  \
-        free (_buf);                                                                    \
-      }                                                                                 \
-    else                                                                                \
-      {                                                                                 \
-        fprintf (dat->fh, "\"%ls\"", wstr ? (wchar_t *)wstr : L"");                     \
-      }
-#else
-#  define VALUE_TEXT_TU(wstr) print_wcquote (dat, (BITCODE_TU)wstr)
-#endif
+// Converts to UTF-8.
+// Note: JSON must always be UTF-8, independent of the platform locale, so we
+// always use the manual UTF-16->UTF-8 emitter, even on native 2-byte wchar_t
+// (Windows). The old "%ls" fprintf path relied on the C locale's narrow
+// conversion (wcrtomb), which silently truncated at the first non-ASCII char
+// and produced blank/garbled text for r2007+ unicode strings. GH #655.
+#define VALUE_TEXT_TU(wstr) print_wcquote (dat, (BITCODE_TU)wstr)
 #define FIELD_TEXT_TU(nam, wstr)                                              \
   {                                                                           \
     KEY (nam);                                                                \
@@ -633,6 +620,16 @@ field_cmc (Bit_Chain *dat, const char *restrict key,
         {
           FIELD_BS (flag, 0);
         }
+      if (_obj->flag & 0x20)
+        {
+          FIELD_BL (alpha_raw, 0);
+          FIELD_BB (alpha_type, 0);
+          FIELD_RC (alpha, 0);
+        }
+      if (_obj->flag & 0x40)
+        {
+          FIELD_HANDLE (handle, 0, 0);
+        }
       if (_obj->flag > 0 && _obj->flag < 8)
         {
           if (_obj->flag & 1)
@@ -949,7 +946,7 @@ field_cmc (Bit_Chain *dat, const char *restrict key,
     Dwg_Entity_##token *ent, *_obj;                                           \
     Dwg_Object_Entity *_ent;                                                  \
     const char *name = #token;                                                \
-    LOG_INFO ("Entity " #token ":\n")                                         \
+    LOG_INFO ("Entity " #token ":\n");                                        \
     _ent = obj->tio.entity;                                                   \
     if (!_ent || !_ent->tio.token)                                            \
       return DWG_ERR_INTERNALERROR;                                           \
@@ -1006,7 +1003,7 @@ field_cmc (Bit_Chain *dat, const char *restrict key,
     Bit_Chain *hdl_dat = dat;                                                 \
     const char *name = #token;                                                \
     Dwg_Object_##token *_obj;                                                 \
-    LOG_INFO ("Object " #token ":\n")                                         \
+    LOG_INFO ("Object " #token ":\n");                                        \
     if (!obj->tio.object || !obj->tio.object->tio.token)                      \
       return DWG_ERR_INTERNALERROR;                                           \
     _obj = obj->tio.object->tio.token;                                        \
@@ -1271,6 +1268,7 @@ json_common_object_handle_data (Bit_Chain *restrict dat,
 }
 
 #include "dwg.spec"
+#include "dwg2.spec"
 
 static int
 ishex (int c)
@@ -1286,8 +1284,6 @@ hex (unsigned char c)
   return c >= 10 ? 'a' + c - 10 : '0' + c;
 }
 
-#ifndef HAVE_NATIVE_WCHAR2
-
 static void
 print_wcquote (Bit_Chain *restrict dat, dwg_wchar_t *restrict wstr)
 {
@@ -1301,7 +1297,7 @@ print_wcquote (Bit_Chain *restrict dat, dwg_wchar_t *restrict wstr)
   fprintf (dat->fh, "\"");
   while (1)
     {
-#  ifdef HAVE_ALIGNED_ACCESS_REQUIRED
+#ifdef HAVE_ALIGNED_ACCESS_REQUIRED
       // for strict alignment CPU's like sparc only. also for UBSAN.
       if ((uintptr_t)wstr % SIZEOF_SIZE_T)
         {
@@ -1310,7 +1306,7 @@ print_wcquote (Bit_Chain *restrict dat, dwg_wchar_t *restrict wstr)
           ws++;
         }
       else
-#  endif
+#endif
         c = *ws++;
       if (!c)
         break;
@@ -1337,7 +1333,7 @@ print_wcquote (Bit_Chain *restrict dat, dwg_wchar_t *restrict wstr)
           fprintf (dat->fh, "\\r");
         }
       // convert to utf-8
-      else if (c < 0x1f || c > 0xff)
+      else if (c < 0x1f || c > 0x7f)
         {
           if (c < 0x80)
             {
@@ -1352,7 +1348,7 @@ print_wcquote (Bit_Chain *restrict dat, dwg_wchar_t *restrict wstr)
               fprintf (dat->fh, "%c%c%c", (c >> 12) | 0xE0,
                        ((c >> 6) & 0x3F) | 0x80, (c & 0x3F) | 0x80);
             }
-#  if 0
+#if 0
           // FIXME: handle surrogate pairs properly
           if (c >= 0xd800 && c < 0xdc00)
             {
@@ -1362,68 +1358,13 @@ print_wcquote (Bit_Chain *restrict dat, dwg_wchar_t *restrict wstr)
             ;
           else
             fprintf (dat->fh, "\\u%04x", c);
-#  endif
+#endif
         }
       else
-        fprintf (dat->fh, "%c", (char)(c & 0xff));
+        fprintf (dat->fh, "%c", (char)c);
     }
   fprintf (dat->fh, "\"");
 }
-
-#else
-
-static wchar_t *
-wcquote (wchar_t *restrict dest, const wchar_t *restrict src)
-{
-  wchar_t c;
-  wchar_t *d = dest;
-  wchar_t *s = (wchar_t *)src;
-  while ((c = *s++))
-    {
-      if (c == L'"')
-        {
-          *dest++ = L'\\';
-          *dest++ = c;
-        }
-      else if (c == L'\\' && s[0] == L'U' && s[1] == L'+' && ishex (s[2])
-               && ishex (s[3]) && ishex (s[4]) && ishex (s[5]))
-        {
-          *dest++ = '\\';
-          *dest++ = 'u';
-          s += 2;
-        }
-      else if (c == L'\\')
-        {
-          *dest++ = L'\\';
-          *dest++ = c;
-        }
-      else if (c == L'\n')
-        {
-          *dest++ = L'\\';
-          *dest++ = L'n';
-        }
-      else if (c == L'\r')
-        {
-          *dest++ = L'\\';
-          *dest++ = L'r';
-        }
-      else if (c < 0x1f)
-        {
-          *dest++ = L'\\';
-          *dest++ = L'u';
-          *dest++ = L'0';
-          *dest++ = L'0';
-          *dest++ = hex (c >> 4);
-          *dest++ = hex (c & 0xf);
-        }
-      else
-        *dest++ = c;
-    }
-  *dest = 0; // add final delim, skipped above
-  return d;
-}
-
-#endif /* HAVE_NATIVE_WCHAR2 */
 
 /* Don't write past the strlen.
    TODO: convert to utf8.
@@ -1592,7 +1533,7 @@ json_cquote (char *restrict dest, const char *restrict src, const size_t len,
           *dest++ = '\\';
           *dest++ = 'r';
         }
-      else if (c < 0x1f && dest + 5 < endp)
+      else if (c <= 0x1f && dest + 5 < endp)
         {
           *dest++ = '\\';
           *dest++ = 'u';
@@ -1636,12 +1577,16 @@ json_3dsolid (Bit_Chain *restrict dat, const Dwg_Object *restrict obj,
         { // split lines by \n
           for (; *p; p++)
             {
-              char buf[256]; // acis lines are not much longer
+              char buf[256 * 6]; // max json_cquote expansion
               // and skip the final ^M
               if ((*p == '\r' || *p == '\n') && p - s < 256)
                 {
-                  FIRSTPREFIX fprintf (dat->fh, "\"%.*s\"", (int)(p - s), s);
-                  // json_cquote (buf, s, p - s, dat->codepage));
+                  const char saved = *p;
+                  *(char *)p = '\0';
+                  FIRSTPREFIX fprintf (
+                      dat->fh, "\"%s\"",
+                      json_cquote (buf, s, sizeof (buf), dat->codepage));
+                  *(char *)p = saved;
                   if (*p == '\r' && *(p + 1) == '\n')
                     p++;
                   s = p + 1;
@@ -2054,9 +1999,15 @@ json_classes_write (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
       FIELD_T (cppname, 2);
       FIELD_T (appname, 3);
       FIELD_BS (proxyflag, 90);
-      FIELD_BL (num_instances, 91);
+      FIRSTPREFIX fprintf (dat->fh, JSON_KEY FORMAT_BL, "num_instances",
+                           JSON_SPC, _obj->num_instances);
       FIELD_B (is_zombie, 280);
       FIELD_BS (item_class_id, 281);
+      SINCE (R_2004a)
+      {
+        FIELD_BL (dwg_version, 0);
+        FIELD_BL (maint_version, 0);
+      }
       ENDHASH
       CLEARFIRST;
     }
@@ -2258,10 +2209,10 @@ json_tables_write (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
               FIELD_3RD (view_target, 12);
               FIELD_3RD (VIEWDIR, 11);
               FIELD_CAST (VIEWMODE, RS, 4BITS, 71);
-              FIELD_RD (lens_length, 42);
-              FIELD_RD (front_clip_z, 43);
-              FIELD_RD (back_clip_z, 44);
-              FIELD_RD (twist_angle, 50);
+              FIELD_RD (LENSLENGTH, 42);
+              FIELD_RD (FRONTZ, 43);
+              FIELD_RD (BACKZ, 44);
+              FIELD_RD (VIEWTWIST, 50);
               ENDRECORD ();
             }
           ENDSEC ();
@@ -2296,7 +2247,7 @@ json_tables_write (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
           ENDSEC ();
           break;
         default:
-          LOG_WARN ("Missing TABLE %u", id)
+          LOG_WARN ("Missing TABLE %u", id);
         }
       CLEARFIRST;
     }
@@ -2468,6 +2419,8 @@ json_section_appinfo (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
   int error = 0;
 
   RECORD (AppInfo); // single hash
+  FIRSTPREFIX fprintf (dat->fh, "\"size\":%s%d", JSON_SPC, _obj->size);
+  FIELD_BINARY (unknown_bits, _obj->size, 0);
 
   // clang-format off
   #include "appinfo.spec"

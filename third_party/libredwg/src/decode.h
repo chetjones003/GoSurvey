@@ -90,10 +90,23 @@ void bfr_read_32 (void *restrict dst, BITCODE_RC *restrict *restrict src,
 void bfr_read_64 (void *restrict dst, BITCODE_RC *restrict *restrict src,
                   size_t size);
 
+/* reused with decode2.c */
+int dwg_decode_entity (Bit_Chain *restrict dat, Bit_Chain *restrict hdl_dat,
+                       Bit_Chain *str_dat, Dwg_Object_Entity *restrict ent);
+int dwg_decode_object (Bit_Chain *dat, Bit_Chain *hdl_dat, Bit_Chain *str_dat,
+                       Dwg_Object_Object *restrict obj);
+
+/* reused with decode2.c */
+Dwg_Resbuf *dwg_decode_xdata (Bit_Chain *restrict dat,
+                              Dwg_Object_XRECORD *restrict obj,
+                              BITCODE_BL xdata_size);
+
 /* reused with free */
 void dwg_free_xdata_resbuf (Dwg_Resbuf *restrict rbuf);
 
 /* reused with encode */
+int decompress_R2004_section (Bit_Chain *restrict src,
+                              Bit_Chain *restrict dec);
 void decrypt_R2004_header (BITCODE_RC *restrict dest,
                            const BITCODE_RC *restrict src, size_t size);
 void dwg_resolve_objectrefs_silent (Dwg_Data *restrict dwg);
@@ -111,6 +124,10 @@ int dwg_validate_INSERT (Dwg_Object *restrict obj);
 int dwg_validate_POLYLINE (Dwg_Object *restrict obj);
 /* reused with many */
 int dwg_fixup_BLOCKS_entities (Dwg_Data *restrict dwg);
+Dwg_Object_Ref *dwg_add_entity_link (Dwg_Data *restrict dwg,
+                                     const Dwg_Object *restrict first,
+                                     const char *restrict field,
+                                     const BITCODE_RLL handle_val);
 void dxf_3dsolid_revisionguid (Dwg_Entity_3DSOLID *_obj);
 
 /* from decode_r2007.c */
@@ -119,6 +136,9 @@ int obj_string_stream (Bit_Chain *dat, Dwg_Object *restrict obj,
 size_t obj_stream_position (Bit_Chain *restrict dat,
                             Bit_Chain *restrict hdl_dat,
                             Bit_Chain *restrict str_dat);
+int decompress_r2007 (BITCODE_RC *restrict dst, unsigned dst_size,
+                      BITCODE_RC *restrict src, unsigned src_size,
+                      const BITCODE_RC *restrict dst_end);
 
 void read_r2007_init (Dwg_Data *restrict dwg);
 int read_r2007_meta_data (Bit_Chain *dat, Bit_Chain *hdl_dat,

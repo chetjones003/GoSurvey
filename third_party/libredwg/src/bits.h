@@ -84,12 +84,12 @@ typedef struct _bit_chain
     NULL, size, 0UL, 0, 0, R_INVALID, R_INVALID, NULL, 0                      \
   }
 
-// only if from r2007+ DWG. not JSON, DXF (FIXME TABLE.name). add API converts
-// to TU
+// only if from r2007+ DWG. not JSON, DXF (FIXME TABLE.name).
+// add API converts to TU
 #define IS_FROM_TU(dat)                                                       \
-  (dat->from_version >= R_2007) && !(dat->opts & DWG_OPTS_IN)
+  ((dat->from_version >= R_2007) && !(dat->opts & DWG_OPTS_IN))
 #define IS_FROM_TU_DWG(dwg)                                                   \
-  (dwg->header.from_version >= R_2007) && !(dwg->opts & DWG_OPTS_IN)
+  ((dwg->header.from_version >= R_2007) && !(dwg->opts & DWG_OPTS_IN))
 #define TU_to_int(b) le16toh (((uint16_t)b[1] << 8) + b[0])
 
 /* Functions for raw data manipulations.
@@ -279,6 +279,8 @@ size_t bit_strnlen (const char *restrict str, const size_t maxlen);
 
 /* Convert UCS-2LE to UTF-8, returning a copy. */
 EXPORT char *bit_convert_TU (const BITCODE_TU restrict wstr) ATTRIBUTE_MALLOC;
+EXPORT char *bit_convert_TU_len (const BITCODE_TU restrict wstr,
+                                 const size_t max_wchars) ATTRIBUTE_MALLOC;
 EXPORT char *bit_TU_to_utf8_len (const BITCODE_TU restrict wstr,
                                  const int len) ATTRIBUTE_MALLOC;
 
@@ -296,8 +298,12 @@ EXPORT char *bit_utf8_to_TV (char *restrict dest,
     returns NULL on errors, or the unchanged src string, or a copy.
  */
 EXPORT
-char *bit_TV_to_utf8 (const char *restrict src,
-                      const BITCODE_RS codepage) ATTRIBUTE_MALLOC;
+/* NOTE: not ATTRIBUTE_MALLOC — function may return the input `src`
+   pointer unchanged (codepage 0, CP_UTF8 without \U+/\M+ markers,
+   iconv EINVAL fallback, empty src). Marking it malloc lets -O2 elide
+   the `u8 != value` aliasing guard in VALUE_TV → free() of caller's
+   stack buffer. */
+char *bit_TV_to_utf8 (const char *restrict src, const BITCODE_RS codepage);
 
 /** Converts UTF-8 to UCS-2. Returns a copy.
     Needed by dwg importers, writers (e.g. dxf2dwg)

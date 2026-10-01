@@ -1,7 +1,7 @@
 /*****************************************************************************/
 /*  LibreDWG - free implementation of the DWG file format                    */
 /*                                                                           */
-/*  Copyright (C) 2018-2021 Free Software Foundation, Inc.                   */
+/*  Copyright (C) 2018-2026 Free Software Foundation, Inc.                   */
 /*                                                                           */
 /*  This library is free software, licensed under the terms of the GNU       */
 /*  General Public License as published by the Free Software Foundation,     */
@@ -12,7 +12,6 @@
 
 /*
  * out_dxfb.c: write as Binary DXF
- * Does not work yet.
  * written by Reini Urban
  */
 
@@ -27,10 +26,9 @@
 #include "bits.h"
 #include "dwg.h"
 #include "decode.h"
-#include "decode_r11.h"
+// #include "decode_r11.h"
 #include "out_dxf.h"
 
-static unsigned int loglevel;
 #define DWG_LOGLEVEL loglevel
 #include "logging.h"
 
@@ -77,12 +75,14 @@ static void dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color,
 #define SUB_FIELD(o, nam, type, dxf) FIELDG (o.nam, type, dxf)
 
 #define HEADER_VALUE(nam, type, dxf, value)                                   \
-  if (dxf)                                                                    \
-    {                                                                         \
-      GROUP (9);                                                              \
-      fprintf (dat->fh, "$%s%c", #nam, 0);                                    \
-      VALUE_##type (value, dxf);                                              \
-    }
+  {                                                                           \
+    if (dxf)                                                                  \
+      {                                                                       \
+        GROUP (9);                                                            \
+        fprintf (dat->fh, "$%s%c", #nam, 0);                                  \
+        VALUE_##type (value, dxf);                                            \
+      }                                                                       \
+  }
 
 #define HEADER_VAR(nam, type, dxf)                                            \
   HEADER_VALUE (nam, type, dxf, dwg->header_vars.nam)
@@ -103,11 +103,13 @@ static void dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color,
     fprintf (dat->fh, "%s%c", value, 0);                                      \
   }
 #define VALUE_TV0(value, dxf)                                                 \
-  if (dxf && value && *value)                                                 \
-    {                                                                         \
-      GROUP (dxf);                                                            \
-      fprintf (dat->fh, "%s%c", value, 0);                                    \
-    }
+  {                                                                           \
+    if (dxf && value && *value)                                               \
+      {                                                                       \
+        GROUP (dxf);                                                          \
+        fprintf (dat->fh, "%s%c", value, 0);                                  \
+      }                                                                       \
+  }
 #define VALUE_TU(wstr, dxf)                                                   \
   {                                                                           \
     if (dxf)                                                                  \
@@ -122,23 +124,24 @@ static void dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color,
       }                                                                       \
   }
 #define VALUE_TFF(str, dxf) VALUE_TV (str, dxf)
-#define VALUE_BINARY(value, size, dxf)                                        \
-  {                                                                           \
-    long _len = (long)(size);                                                 \
-    do                                                                        \
-      {                                                                       \
-        short j;                                                              \
-        long _l = _len > 127 ? 127 : _len;                                    \
-        GROUP (dxf);                                                          \
-        if (value)                                                            \
-          for (j = 0; j < _l; j++)                                            \
-            {                                                                 \
-              fprintf (dat->fh, "%c", value[j]);                              \
-            }                                                                 \
-        fprintf (dat->fh, "%c", '\0');                                        \
-        _len -= 127;                                                          \
-      }                                                                       \
-    while (_len > 127);                                                       \
+#define VALUE_BINARY(value, size, dxf)                                          \
+  {                                                                             \
+    if (dxf && value && size)                                                   \
+    {                                                                           \
+      long _len = (long)(size);                                                 \
+      const BITCODE_RC *_v = (const BITCODE_RC *)(value);                       \
+      do                                                                        \
+        {                                                                       \
+          BITCODE_RC _l = (BITCODE_RC)(_len > 127 ? 127 : _len < 0 ? 0 : _len); \
+          GROUP (dxf);                                                          \
+          fwrite (&_l, 1, 1, dat->fh);                                          \
+          if (_v && _l)                                                         \
+            fwrite (_v, 1, _l, dat->fh);                                        \
+          _v += _l;                                                             \
+          _len -= _l;                                                           \
+        }                                                                       \
+      while (_len > 0);                                                         \
+    }                                                                           \
   }
 #define FIELD_BINARY(name, size, dxf) VALUE_BINARY (_obj->name, size, dxf)
 
@@ -146,34 +149,49 @@ static void dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color,
 #define ANYCODE -1
 // a null-terminated string of the value as %X
 #define VALUE_HANDLE(ref, nam, handle_code, dxf)                              \
-  if (dxf)                                                                    \
-    {                                                                         \
-      char _s[18];                                                            \
-      snprintf (_s, sizeof (_s), FMT_H, ref ? ref->absolute_ref : 0UL);       \
-      _s[sizeof (_s) - 1] = '\0';                                             \
-      VALUE_TV (_s, dxf);                                                     \
-    }
+  {                                                                           \
+    if (dxf)                                                                  \
+      {                                                                       \
+        char _s[18];                                                          \
+        snprintf (_s, sizeof (_s), FMT_H, ref ? ref->absolute_ref : 0UL);     \
+        _s[sizeof (_s) - 1] = '\0';                                           \
+        VALUE_TV (_s, dxf);                                                   \
+      }                                                                       \
+  }
 // TODO: try to resolve the handle. rather write 0 than in invalid handle:
 // if (_obj->nam->obj) ...
 #define FIELD_HANDLE(nam, handle_code, dxf)                                   \
-  VALUE_HANDLE (_obj->nam, nam, handle_code, dxf)
+  {                                                                           \
+    if (dxf == 6)                                                             \
+      FIELD_HANDLE_NAME (nam, dxf, LTYPE)                                     \
+    else if (dxf == 2)                                                        \
+      FIELD_HANDLE_NAME (nam, dxf, BLOCK_HEADER)                              \
+    else if (dxf == 3)                                                        \
+      FIELD_HANDLE_NAME (nam, dxf, DIMSTYLE)                                  \
+    else if (dxf == 7)                                                        \
+      FIELD_HANDLE_NAME (nam, dxf, STYLE)                                     \
+    else if (dxf == 8)                                                        \
+      FIELD_HANDLE_NAME (nam, dxf, LAYER)                                     \
+    else                                                                      \
+      VALUE_HANDLE (_obj->nam, nam, handle_code, dxf);                        \
+  }
 #define FIELD_HANDLE0(nam, handle_code, dxf)                                  \
-  if (dxf && _obj->nam && _obj->nam->absolute_ref)                            \
-    {                                                                         \
+  {                                                                           \
+    if (dxf && _obj->nam && _obj->nam->absolute_ref)                          \
       FIELD_HANDLE (nam, handle_code, dxf);                                   \
-    }
+  }
 #define SUB_FIELD_HANDLE(o, nam, handle_code, dxf)                            \
   VALUE_HANDLE (_obj->o.nam, nam, handle_code, dxf)
 #define SUB_FIELD_HANDLE0(o, nam, handle_code, dxf)                           \
-  if (dxf && _obj->o.nam && _obj->o.nam->absolute_ref)                        \
-    {                                                                         \
+  {                                                                           \
+    if (dxf && _obj->o.nam && _obj->o.nam->absolute_ref)                      \
       VALUE_HANDLE (_obj->o.nam, nam, handle_code, dxf)                       \
-    }
+  }
 
 #define GROUP(code)                                                           \
   if (dat->version < R_14)                                                    \
     {                                                                         \
-      if (code >= 1000)                                                       \
+      if (code >= 255)                                                        \
         {                                                                     \
           uint16_t icode = (uint16_t)(code);                                  \
           fputc (0xff, dat->fh);                                              \
@@ -192,24 +210,16 @@ static void dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color,
     }
 #define FIELD_TV(nam, dxf)                                                    \
   if (_obj->nam != NULL && dxf != 0)                                          \
-    {                                                                         \
-      VALUE_TV (_obj->nam, dxf)                                               \
-    }
+    VALUE_TV (_obj->nam, dxf)
 #define FIELD_TU(nam, dxf)                                                    \
   if (_obj->nam != NULL && dxf != 0)                                          \
-    {                                                                         \
-      VALUE_TU (_obj->nam, dxf)                                               \
-    }
+    VALUE_TU (_obj->nam, dxf)
 #define VALUE_T(value, dxf)                                                   \
   {                                                                           \
     if (IS_FROM_TU (dat))                                                     \
-      {                                                                       \
-        VALUE_TU (value, dxf)                                                 \
-      }                                                                       \
+      VALUE_TU (value, dxf)                                                 \
     else                                                                      \
-      {                                                                       \
-        VALUE_TV ((char *)value, dxf)                                         \
-      }                                                                       \
+      VALUE_TV ((char *)value, dxf)                                         \
   }
 #define VALUE_T0(value, dxf)                                                  \
   if (!bit_empty_T (dat, value))                                              \
@@ -375,9 +385,7 @@ static void dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color,
 #define RECORD(token) VALUE_TV (#token, 0)
 #define SUBCLASS(text)                                                        \
   if (dat->version >= R_13b1)                                                 \
-    {                                                                         \
-      VALUE_TV (#text, 100)                                                   \
-    }
+      VALUE_TV (#text, 100)
 
 /*
 #define VALUE(code, value) \
@@ -416,44 +424,63 @@ static void dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color,
 #define VALUE_BD(value, dxf) VALUE_RD (value, dxf)
 #define VALUE_RC(value, dxf)                                                  \
   {                                                                           \
-    BITCODE_RC _c = (BITCODE_RC)(value);                                      \
-    GROUP (dxf);                                                              \
-    fwrite (&_c, 1, 1, dat->fh);                                              \
+    if (dxf)                                                                  \
+      {                                                                       \
+        if ((dxf) >= 280 && (dxf) <= 289)                                     \
+          {                                                                   \
+            BITCODE_RS _s = (BITCODE_RS)(BITCODE_RC)(value);                  \
+            GROUP (dxf);                                                      \
+            fwrite (&_s, 2, 1, dat->fh);                                      \
+          }                                                                   \
+        else                                                                  \
+          {                                                                   \
+            BITCODE_RC _c = (BITCODE_RC)(value);                              \
+            GROUP (dxf);                                                      \
+            fwrite (&_c, 1, 1, dat->fh);                                      \
+          }                                                                   \
+      }                                                                       \
   }
 #define VALUE_RS(value, dxf)                                                  \
   {                                                                           \
-    BITCODE_RS _s = (BITCODE_RS)(value);                                      \
-    GROUP (dxf);                                                              \
-    fwrite (&_s, 2, 1, dat->fh);                                              \
+    if (dxf)                                                                  \
+      {                                                                       \
+        BITCODE_RS _s = (BITCODE_RS)(value);                                  \
+        GROUP (dxf);                                                          \
+        fwrite (&_s, 2, 1, dat->fh);                                          \
+      }                                                                       \
   }
 #define VALUE_RSd(value, dxf) VALUE_RS (value, dxf)
 #define VALUE_RL(value, dxf)                                                  \
   {                                                                           \
-    BITCODE_RL _s = (BITCODE_RL)value;                                        \
-    GROUP (dxf);                                                              \
-    fwrite (&_s, 4, 1, dat->fh);                                              \
+    if (dxf)                                                                  \
+      {                                                                       \
+        BITCODE_RL _s = (BITCODE_RL)value;                                    \
+        GROUP (dxf);                                                          \
+        fwrite (&_s, 4, 1, dat->fh);                                          \
+      }                                                                       \
   }
 #define VALUE_RLd(value, dxf) VALUE_RL (value, dxf)
 #define VALUE_RLL(value, dxf)                                                 \
   {                                                                           \
-    BITCODE_RLL _s = (BITCODE_RLL)value;                                      \
-    GROUP (dxf);                                                              \
-    fwrite (&_s, 8, 1, dat->fh);                                              \
+    if (dxf)                                                                  \
+      {                                                                       \
+        BITCODE_RLL _s = (BITCODE_RLL)value;                                  \
+        GROUP (dxf);                                                          \
+        fwrite (&_s, 8, 1, dat->fh);                                          \
+      }                                                                       \
   }
 // most DXFB FIELD_RC are written as int16 actually
 // we need to check dwg_resbuf_value_type()
 #define FIELD_RC(nam, dxf) VALUE_INT (_obj->nam, dxf)
 #define VALUE_INT(value, dxf)                                                 \
   {                                                                           \
-    if (dxf == 0)                                                             \
-      VALUE_RS (value, dxf)                                                   \
-    else                                                                      \
+    if (dxf != 0)                                                             \
       switch (dwg_resbuf_value_type (dxf))                                    \
         {                                                                     \
         case DWG_VT_BOOL:                                                     \
-        case DWG_VT_INT8:                                                     \
           VALUE_RC (value, dxf);                                              \
           break;                                                              \
+        case DWG_VT_INT8:                                                     \
         case DWG_VT_INT16:                                                    \
           VALUE_RS (value, dxf);                                              \
           break;                                                              \
@@ -512,9 +539,12 @@ static void dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color,
   }
 #define VALUE_RD(value, dxf)                                                  \
   {                                                                           \
-    double d = (value);                                                       \
-    GROUP (dxf);                                                              \
-    fwrite (&d, 8, 1, dat->fh);                                               \
+    if (dxf)                                                                  \
+    {                                                                         \
+      double d = (value);                                                     \
+      GROUP (dxf);                                                            \
+      fwrite (&d, 8, 1, dat->fh);                                             \
+    }                                                                         \
   }
 #define FIELD_RD(nam, dxf) VALUE_RD (_obj->nam, dxf)
 #define HEADER_RD(nam, dxf)                                                   \
@@ -527,7 +557,7 @@ static void dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color,
 #define HEADER_RL(nam, dxf)                                                   \
   {                                                                           \
     HEADER_9 (nam);                                                           \
-    VALUE_RL (dwg->header_vars.nam, dxf);                                     \
+    VALUE_INT (dwg->header_vars.nam, dxf);                                    \
   }
 
 #define HEADER_B(nam, dxf) HEADER_RC (nam, dxf)
@@ -577,9 +607,7 @@ static void dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color,
       ref->obj = dwg_resolve_handle (obj->parent, ref->absolute_ref);         \
     if (ref && ref->obj && ref->obj->supertype == DWG_SUPERTYPE_OBJECT        \
         && ref->obj->fixedtype == DWG_TYPE_##table)                           \
-      {                                                                       \
-        VALUE_TV (ref->obj->tio.object->tio.table->name, dxf)                 \
-      }                                                                       \
+      VALUE_TV (ref->obj->tio.object->tio.table->name, dxf)                   \
     else                                                                      \
       VALUE_TV ("", dxf)                                                      \
   }
@@ -590,12 +618,24 @@ static void dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color,
 #define HEADER_HANDLE_NAME(nam, dxf, table)                                   \
   HEADER_9 (nam);                                                             \
   VALUE_HANDLE_NAME (dwg->header_vars.nam, dxf, table)
+/* For binary DXF, empty names are acceptable (no "Empty Record name" error) */
+#define HEADER_HANDLE_NAME0(nam, dxf, table)                                  \
+  HEADER_HANDLE_NAME (nam, dxf, table)
 
 #define FIELD_BLL(nam, dxf)                                                   \
   {                                                                           \
-    BITCODE_BLL s = _obj->nam;                                                \
-    GROUP (dxf);                                                              \
-    fwrite (&s, 8, 1, dat->fh);                                               \
+    if (dxf)                                                                  \
+    {                                                                         \
+      BITCODE_BLL s = _obj->nam;                                              \
+      GROUP (dxf);                                                            \
+      if (dwg_resbuf_value_type (dxf) == DWG_VT_INT32)                        \
+        {                                                                     \
+          BITCODE_RL _s = (BITCODE_RL)s;                                      \
+          fwrite (&_s, 4, 1, dat->fh);                                        \
+        }                                                                     \
+      else                                                                    \
+        fwrite (&s, 8, 1, dat->fh);                                           \
+    }                                                                         \
   }
 #define FIELD_RLL(nam, dxf) FIELD_BLL (nam, dxf)
 #define FIELD_HV(nam, dxf) FIELD_BLL (nam, dxf)
@@ -816,7 +856,7 @@ dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color, const int dxf,
     {
       if (dat->from_version < R_2004)
         bit_upconvert_CMC (dat, color);
-      if (dxf >= 90)
+      if (dxf >= 90 && dxf <= 99)
         {
           VALUE_RL (color->rgb, dxf);
           return;
@@ -889,7 +929,14 @@ dxfb_CMC (Bit_Chain *restrict dat, Dwg_Color *restrict color, const int dxf,
   else
     {
       bit_downconvert_CMC (dat, color);
-      VALUE_RSd (color->index, dxf);
+      if (dxf >= 90 && dxf <= 99)
+        {
+          VALUE_RL ((BITCODE_RL)color->index, dxf);
+        }
+      else
+        {
+          VALUE_RSd (color->index, dxf);
+        }
     }
 }
 
@@ -914,6 +961,7 @@ static int dwg_dxfb_TABLECONTENT (Bit_Chain *restrict dat,
                                const Dwg_Object *restrict obj)                \
   {                                                                           \
     int error = 0;                                                            \
+    const Dwg_Data *dwg = obj->parent;                                        \
     Bit_Chain *hdl_dat = dat;                                                 \
     Bit_Chain *str_dat = dat;                                                 \
     if (obj->fixedtype != DWG_TYPE_##token)                                   \
@@ -945,17 +993,12 @@ static int dwg_dxfb_TABLECONTENT (Bit_Chain *restrict dat,
     else if (obj->type >= 498 && obj->dxfname)                                \
       VALUE_TV (obj->dxfname, 0)                                              \
     else                                                                      \
-      RECORD (token)                                                          \
-    LOG_INFO ("Entity " #token ":\n")                                         \
-    SINCE (R_11)                                                              \
+      RECORD (token);                                                         \
+    LOG_INFO ("Entity " #token ":\n");                                        \
+    if (dat->version > R_11 || dwg->header_vars.HANDLING)                     \
     {                                                                         \
-      LOG_TRACE ("Entity handle: " FORMAT_H "\n", ARGS_H (obj->handle))       \
+      LOG_TRACE ("Entity handle: " FORMAT_H "\n", ARGS_H (obj->handle));      \
       VALUE_H (obj->handle.value, 5);                                         \
-    }                                                                         \
-    SINCE (R_13b1)                                                            \
-    {                                                                         \
-      VALUE_HANDLE_NAME (obj->parent->header_vars.BLOCK_RECORD_MSPACE, 330,   \
-                         BLOCK_HEADER);                                       \
     }                                                                         \
     error |= dxfb_common_entity_handle_data (dat, obj);                       \
     error |= dwg_dxfb_##token##_private (dat, hdl_dat, str_dat, obj);         \
@@ -987,7 +1030,7 @@ static int dwg_dxfb_TABLECONTENT (Bit_Chain *restrict dat,
     int error = 0;                                                            \
     Bit_Chain *str_dat = dat;                                                 \
     Bit_Chain *hdl_dat = dat;                                                 \
-    LOG_INFO ("Object " #token ":\n")                                         \
+    LOG_INFO ("Object " #token "\n");                                         \
     if (obj->fixedtype != DWG_TYPE_##token)                                   \
       {                                                                       \
         LOG_ERROR ("Invalid type 0x%x, expected 0x%x %s", obj->fixedtype,     \
@@ -1010,7 +1053,7 @@ static int dwg_dxfb_TABLECONTENT (Bit_Chain *restrict dat,
         else if (obj->fixedtype == DWG_TYPE_PROXY_OBJECT)                     \
           RECORD (ACAD_PROXY_OBJECT)                                          \
         else if (obj->type != DWG_TYPE_BLOCK_HEADER)                          \
-          RECORD (token)                                                      \
+          RECORD (token);                                                     \
         SINCE (R_13b1)                                                        \
         {                                                                     \
           const int dxf = obj->type == DWG_TYPE_DIMSTYLE ? 105 : 5;           \
@@ -1018,9 +1061,13 @@ static int dwg_dxfb_TABLECONTENT (Bit_Chain *restrict dat,
           _XDICOBJHANDLE (3);                                                 \
           _REACTORS (4);                                                      \
         }                                                                     \
-        SINCE (R_14)                                                          \
+        SINCE (R_13b1)                                                        \
         {                                                                     \
           VALUE_HANDLE (obj->tio.object->ownerhandle, ownerhandle, 3, 330);   \
+          LOG_TRACE ("ownerhandle: " FORMAT_HV " [330]\n",                    \
+                     obj->tio.object->ownerhandle                             \
+                        ? obj->tio.object->ownerhandle->absolute_ref          \
+                        : 0UL);                                              \
         }                                                                     \
       }                                                                       \
     if (DWG_LOGLEVEL >= DWG_LOGLEVEL_TRACE)                                   \
@@ -1034,7 +1081,7 @@ static int dwg_dxfb_TABLECONTENT (Bit_Chain *restrict dat,
               free (_name);                                                   \
           }                                                                   \
         else                                                                  \
-          LOG_TRACE ("Object handle: " FORMAT_H "\n", ARGS_H (obj->handle))   \
+          LOG_TRACE ("Object handle: " FORMAT_H "\n", ARGS_H (obj->handle));  \
       }                                                                       \
     error |= dwg_dxfb_##token##_private (dat, hdl_dat, str_dat, obj);         \
     error |= dxfb_write_eed (dat, obj->tio.object);                           \
@@ -1070,7 +1117,7 @@ dxfb_write_eed (Bit_Chain *restrict dat, const Dwg_Object_Object *restrict obj)
           if (appid && appid->fixedtype == DWG_TYPE_APPID)
             VALUE_T (appid->tio.object->tio.APPID->name, 1001)
           else
-            VALUE_TFF ("ACAD", 1001);
+            VALUE_TFF ("ACAD", 1001)
         }
       if (_obj->data)
         {
@@ -1223,13 +1270,13 @@ dxfb_cvt_tablerecord (Bit_Chain *restrict dat, const Dwg_Object *restrict obj,
         }
       else
         { // convert some standard names
-          if (dat->version >= R_13b1 && strEQc (name, "STANDARD"))
+          if (dat->version >= R_2000 && strEQc (name, "STANDARD"))
             VALUE_TV ("Standard", dxf)
-          else if (dat->version >= R_13b1 && strEQc (name, "BYLAYER"))
+          else if (dat->version >= R_2000 && strEQc (name, "BYLAYER"))
             VALUE_TV ("ByLayer", dxf)
-          else if (dat->version >= R_13b1 && strEQc (name, "BYBLOCK"))
+          else if (dat->version >= R_2000 && strEQc (name, "BYBLOCK"))
             VALUE_TV ("ByBlock", dxf)
-          else if (dat->version >= R_13b1 && strEQc (name, "*ACTIVE"))
+          else if (dat->version >= R_2000 && strEQc (name, "*ACTIVE"))
             VALUE_TV ("*Active", dxf)
           else
             VALUE_TV (name, dxf)
@@ -1280,7 +1327,8 @@ dxfb_cvt_blockname (Bit_Chain *restrict dat, char *restrict name,
       else
         VALUE_TV (name, dxf)
     }
-  else if (dat->version >= R_13b1 && dat->from_version < R_13b1) // to newer
+  else if (dat->version
+           >= R_13b1 /*&& dat->from_version < R_13b1*/) // to newer
     {
       if (strlen (name) < 10)
         VALUE_TV (name, dxf)
@@ -1355,24 +1403,22 @@ dxfb_cvt_blockname (Bit_Chain *restrict dat, char *restrict name,
     VALUE_TV ("*", 2)                                                         \
   if (strEQc (#acdbname, "Layer") && dat->version >= R_2000)                  \
     { /* Mask off plotflag and linewt. */                                     \
-      BITCODE_RC _flag = _obj->flag & ~0x3e0;                                 \
+      BITCODE_RS _flag = _obj->flag & ~0x3e0;                                 \
       if (_flag & 0x10 && !dxf_has_xrefdep_vertbar (dat, _obj->name))         \
         _flag &= ~0x10;                                                       \
-      VALUE_RC (_flag, 70);                                                   \
+      VALUE_RS (_flag, 70);                                                   \
     }                                                                         \
   else if (strEQc (#acdbname, "Block") && dat->version >= R_2000)             \
     ; /* skip 70 for AcDbBlockTableRecord done in AcDbBlockBegin */           \
   else                                                                        \
     { /* mask off 64, the loaded bit 6 */                                     \
-      VALUE_RS (_obj->flag & ~64, 70);                                        \
+      SINCE (R_13b1)                                                          \
+        _obj->flag &= ~64;                                                    \
+      VALUE_RS (_obj->flag, 70);                                              \
     }
 // clang-format off
 
 #define LAYER_TABLE_FLAGS(acdbname)                                           \
-  SINCE (R_14)                                                                \
-  {                                                                           \
-    VALUE_HANDLE (obj->tio.object->ownerhandle, ownerhandle, 3, 330);         \
-  }                                                                           \
   SINCE (R_13b1)                                                              \
   {                                                                           \
     VALUE_TV ("AcDbSymbolTableRecord", 100)                                   \
@@ -1382,7 +1428,12 @@ dxfb_cvt_blockname (Bit_Chain *restrict dat, char *restrict name,
     dxfb_cvt_tablerecord (dat, obj, _obj->name, 2);                           \
   FIELD_RS (flag, 70)
 
-#include "dwg.spec"
+#ifndef DISABLE_DXF
+
+#  include "dwg.spec"
+#  include "dwg2.spec"
+
+#endif
 
 static int
 dxfb_3dsolid (Bit_Chain *restrict dat, const Dwg_Object *restrict obj,
@@ -1390,9 +1441,6 @@ dxfb_3dsolid (Bit_Chain *restrict dat, const Dwg_Object *restrict obj,
 {
   BITCODE_BL i;
   int error = 0;
-
-  COMMON_ENTITY_HANDLE_DATA;
-  SUBCLASS (AcDbModelerGeometry);
 
   FIELD_B (acis_empty, 0);
   if (!FIELD_VALUE (acis_empty))
@@ -1405,21 +1453,19 @@ dxfb_3dsolid (Bit_Chain *restrict dat, const Dwg_Object *restrict obj,
             {
               char *s = FIELD_VALUE (encr_sat_data[i]);
               int len = FIELD_VALUE (block_size[i]);
-              // DXF 1 + 3 if >255
               while (len > 0)
                 {
                   char *n = strchr (s, '\n');
-                  int l = len > 255 ? 255 : len & 0xff;
+                  int l = len > 255 ? 255 : len;
                   if (n && ((long)(n - s) < (long)len))
                     {
                       l = n - s;
                     }
                   if (l)
                     {
-                      if (len < 255)
-                        VALUE_BINARY (s, l, 1)
-                      else
-                        VALUE_BINARY (s, l, 3)
+                      GROUP (1);
+                      fwrite (s, 1, l, dat->fh);
+                      fprintf (dat->fh, "%c", '\0');
                       l++;
                       len -= l;
                       s += l;
@@ -1472,7 +1518,7 @@ dwg_dxfb_variable_type (const Dwg_Data *restrict dwg, Bit_Chain *restrict dat,
           && strNEc (klass->dxfname, "LWPOLYLINE")
           && strNEc (klass->dxfname, "HATCH"))
         {
-          LOG_WARN ("Skip %s\n", klass->dxfname)
+          LOG_WARN ("Skip %s\n", klass->dxfname);
           return DWG_ERR_UNHANDLEDCLASS;
         }
       // keep only: DICTIONARYVAR, MATERIAL, RASTERVARIABLES, IMAGEDEF_REACTOR,
@@ -1484,7 +1530,7 @@ dwg_dxfb_variable_type (const Dwg_Data *restrict dwg, Bit_Chain *restrict dat,
                && strNEc (klass->dxfname, "IMAGEDEF_REACTOR")
                && strNEc (klass->dxfname, "XRECORD"))
         {
-          LOG_WARN ("Skip %s\n", klass->dxfname)
+          LOG_WARN ("Skip %s\n", klass->dxfname);
           return DWG_ERR_UNHANDLEDCLASS;
         }
     }
@@ -1626,8 +1672,8 @@ decl_dxfb_process_VERTEX (PFACE)
     // clang-format off
 decl_dxfb_process_INSERT (INSERT)
 decl_dxfb_process_INSERT (MINSERT)
-    // clang-format on
 
+    // clang-format on
     static int dwg_dxfb_object (Bit_Chain *restrict dat,
                                 const Dwg_Object *restrict obj,
                                 int *restrict i)
@@ -1758,13 +1804,7 @@ decl_dxfb_process_INSERT (MINSERT)
     case DWG_TYPE_TOLERANCE:
       return dwg_dxfb_TOLERANCE (dat, obj);
     case DWG_TYPE_MLINE:
-      if (0)
-        {
-          // bypass -Wunused-function
-          dwg_dxfb_JUMP (dat, obj);
-          dwg_dxfb_LOAD (dat, obj);
-        }
-#ifdef DEBUG_CLASSES
+#if 1 || defined DEBUG_CLASSES
       // TODO: looks good, but acad import crashes
       return dwg_dxfb_MLINE (dat, obj);
 #else
@@ -1796,14 +1836,19 @@ decl_dxfb_process_INSERT (MINSERT)
     case DWG_TYPE_VX_CONTROL:
     /* no dxf */
     case DWG_TYPE_VX_TABLE_RECORD:
+      LOG_INSANE ("Skip table %s in OBJECTS\n", obj->name);
+      break;
     /* preR13: no dxfb */
     case DWG_TYPE_REPEAT:
+      return dwg_dxfb_REPEAT (dat, obj);
     case DWG_TYPE_ENDREP:
+      return dwg_dxfb_ENDREP (dat, obj);
     case DWG_TYPE__3DLINE:
+      return dwg_dxfb__3DLINE (dat, obj);
     case DWG_TYPE_LOAD:
+      return dwg_dxfb_LOAD (dat, obj);
     case DWG_TYPE_JUMP:
-      LOG_INFO ("Skip unsupported object %s\n", obj->name);
-      break;
+      return dwg_dxfb_JUMP (dat, obj);
 
     case DWG_TYPE_GROUP:
       return dwg_dxfb_GROUP (dat, obj);
@@ -2245,16 +2290,15 @@ dxfb_tables_write (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
     if (!mspace)
       return DWG_ERR_INVALIDDWG;
     RECORD (BLOCK_RECORD);
-    error |= dwg_dxfb_BLOCK_HEADER (dat, mspace);
-
+    if (mspace->tio.object && mspace->tio.object->tio.BLOCK_HEADER)
+      error |= dwg_dxfb_BLOCK_HEADER (dat, mspace);
     ref = dwg_paper_space_ref (dwg);
     pspace = ref ? dwg_ref_object (dwg, ref) : NULL;
-    if (pspace)
+    if (pspace && pspace->tio.object && pspace->tio.object->tio.BLOCK_HEADER)
       {
         RECORD (BLOCK_RECORD);
         error |= dwg_dxfb_BLOCK_HEADER (dat, pspace);
       }
-
     for (i = 0; i < _ctrl->num_entries; i++)
       {
         if (!_ctrl->entries)
@@ -2262,7 +2306,8 @@ dxfb_tables_write (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
         if (!_ctrl->entries[i])
           continue;
         obj = dwg_ref_object (dwg, _ctrl->entries[i]);
-        if (obj && obj->type == DWG_TYPE_BLOCK_HEADER && obj != mspace
+        if (obj && obj->type == DWG_TYPE_BLOCK_HEADER && obj->tio.object
+            && obj->tio.object->tio.BLOCK_HEADER && obj != mspace
             && obj != pspace)
           {
             RECORD (BLOCK_RECORD);
@@ -2311,12 +2356,24 @@ dxfb_block_write (Bit_Chain *restrict dat, const Dwg_Object *restrict hdr,
   BITCODE_RLL mspace_ref = mspace ? mspace->handle.value : 0;
   BITCODE_RLL pspace_ref = pspace ? pspace->handle.value : 0;
 
-  if (obj)
-    error |= dwg_dxfb_object (dat, obj, i);
+  if (obj && obj->fixedtype == DWG_TYPE_BLOCK)
+    {
+      error |= dwg_dxfb_object (dat, obj, i);
+    }
   else
     {
-      LOG_ERROR ("BLOCK_HEADER.block_entity missing");
-      return DWG_ERR_INVALIDDWG;
+      SINCE (R_2004a)
+      {
+        if (IS_FROM_TU (dat))
+          {
+            char *s = bit_convert_TU ((BITCODE_TU)_hdr->name);
+            LOG_ERROR ("BLOCK_HEADER %s first_owned_entity missing", s);
+            free (s);
+          }
+        else
+          LOG_ERROR ("BLOCK_HEADER %s first_owned_entity missing", _hdr->name);
+        return DWG_ERR_INVALIDDWG;
+      }
     }
   // Skip all *Model_Space and *Paper_Space entities, esp. new ones: UNDERLAY,
   // MULTILEADER, ... They are all under ENTITIES later. Note: the objects may
@@ -2337,15 +2394,15 @@ dxfb_block_write (Bit_Chain *restrict dat, const Dwg_Object *restrict hdr,
                   && obj->tio.entity->ownerhandle->absolute_ref
                          != pspace_ref)))
         error |= dwg_dxfb_object (dat, obj, i);
-      obj = get_next_owned_entity (hdr, obj); // until last_entity
+      obj = get_next_owned_block_entity (hdr, obj); // until last_entity
     }
   endblk = get_last_owned_block (hdr);
   if (endblk)
     error |= dwg_dxfb_ENDBLK (dat, endblk);
   else
     {
-      LOG_WARN ("Empty ENDBLK for \"%s\" " FORMAT_BL, _hdr->name,
-                hdr ? hdr->tio.object->objid : 0);
+      LOG_WARN ("Empty ENDBLK for \"%s\" " FORMAT_HV, _hdr->name,
+                hdr ? hdr->handle.value : 0);
       dxfb_ENDBLK_empty (dat, hdr);
     }
   return error;
@@ -2375,7 +2432,11 @@ dxfb_blocks_write (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
         if (obj->supertype == DWG_SUPERTYPE_OBJECT
             && obj->type == DWG_TYPE_BLOCK_HEADER)
           {
-            error |= dxfb_block_write (dat, obj, mspace, pspace, &i);
+            // skip *MODEL_SPACE before r11
+            if (dat->version < R_11 && obj == mspace)
+              ;
+            else
+              error |= dxfb_block_write (dat, obj, mspace, pspace, &i);
           }
       }
   }

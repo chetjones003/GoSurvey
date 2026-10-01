@@ -186,7 +186,7 @@
   FIELD_RD (DIMRND, 40);
   FIELD_RD (DIMDLE, 40);
   FIELD_TFv (DIMBLK_T, 33, 1);
-  FIELD_RS (circle_zoom_percent, 0);
+  FIELD_RS (circle_zoom, 0);
   FIELD_RS (COORDS, 0);
 #ifdef IS_JSON
   FIELD_CMC (CECOLOR, 62);
@@ -306,8 +306,8 @@
   if (_obj->HANDSEED)
     {
       bit_write_RLL_BE (dat, _obj->HANDSEED->absolute_ref);
-      LOG_TRACE ("HANDSEED: " FORMAT_H " [H 5]\n",
-                 ARGS_H (_obj->HANDSEED->handleref));
+      LOG_TRACE ("HANDSEED: " FORMAT_RLLx " [H 5]\n",
+                 _obj->HANDSEED->absolute_ref);
     }
   else
     {

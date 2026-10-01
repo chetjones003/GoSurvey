@@ -25,7 +25,7 @@ VERSIONS (R_13, R_2000) {
 #endif
   FIELD_BL (address, 0);
   FIELD_TFF (version, 11, 0);
-  FIELD_RC (is_maint, 0);
+  FIELD_RC (maint_rel_version, 0);
   FIELD_RC (zero_one_or_three, 0);
   FIELD_BSx (dwg_versions, 0);
   DECODER {
@@ -78,7 +78,7 @@ VERSIONS (R_13, R_2000) {
                      _obj->handles[rcount1].num_hdl);
           for (int i = 0; i < MIN (_obj->handles[rcount1].num_hdl, 8); i++)
             LOG_TRACE ("%hX", _obj->handles[rcount1].hdl[i]);
-          LOG_TRACE ("\n")
+          LOG_TRACE ("\n");
         }
   END_REPEAT_BLOCK
   END_REPEAT_F (handles)

@@ -1,9 +1,9 @@
 /* ex: set ro ft=c: -*- mode: c; buffer-read-only: t -*- */
-#line 2546 "gen-dynapi.pl"
+#line 2894 "gen-dynapi.pl"
 /*****************************************************************************/
 /*  LibreDWG - free implementation of the DWG file format                    */
 /*                                                                           */
-/*  Copyright (C) 2018-2025 Free Software Foundation, Inc.                   */
+/*  Copyright (C) 2018-2026 Free Software Foundation, Inc.                   */
 /*                                                                           */
 /*  This library is free software, licensed under the terms of the GNU       */
 /*  General Public License as published by the Free Software Foundation,     */
@@ -725,7 +725,7 @@ static const Dwg_DYNAPI_field _dwg_header_variables_fields[] = {
     0,0,0, 0 },
   { "bitsize_hi",	"RL", sizeof (BITCODE_RL),  OFF (struct _dwg_header_variables, bitsize_hi),
     0,0,0, 0 },
-  { "circle_zoom_percent",	"RS", sizeof (BITCODE_RS),  OFF (struct _dwg_header_variables, circle_zoom_percent),
+  { "circle_zoom",	"RS", sizeof (BITCODE_RS),  OFF (struct _dwg_header_variables, circle_zoom),
     0,0,0, 0 },
   { "codepage",	"RS", sizeof (BITCODE_RS),  OFF (struct _dwg_header_variables, codepage),
     0,0,0, 0 },
@@ -1052,7 +1052,7 @@ static const Dwg_DYNAPI_field _dwg_ARC_DIMENSION_fields[] = {
     0,0,0, 53 },
   { "horiz_dir",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_ARC_DIMENSION, horiz_dir),
     0,0,0, 51 },
-  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD),  OFF (struct _dwg_entity_ARC_DIMENSION, ins_scale),
+  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD_1),  OFF (struct _dwg_entity_ARC_DIMENSION, ins_scale),
     1,0,0, 0 },
   { "ins_rotation",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_ARC_DIMENSION, ins_rotation),
     0,0,0, 54 },
@@ -1316,7 +1316,7 @@ static const Dwg_DYNAPI_field _dwg_DIMENSION_ALIGNED_fields[] = {
     0,0,0, 53 },
   { "horiz_dir",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_ALIGNED, horiz_dir),
     0,0,0, 51 },
-  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD),  OFF (struct _dwg_entity_DIMENSION_ALIGNED, ins_scale),
+  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD_1),  OFF (struct _dwg_entity_DIMENSION_ALIGNED, ins_scale),
     1,0,0, 0 },
   { "ins_rotation",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_ALIGNED, ins_rotation),
     0,0,0, 54 },
@@ -1372,7 +1372,7 @@ static const Dwg_DYNAPI_field _dwg_DIMENSION_ANG2LN_fields[] = {
     0,0,0, 53 },
   { "horiz_dir",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_ANG2LN, horiz_dir),
     0,0,0, 51 },
-  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD),  OFF (struct _dwg_entity_DIMENSION_ANG2LN, ins_scale),
+  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD_1),  OFF (struct _dwg_entity_DIMENSION_ANG2LN, ins_scale),
     1,0,0, 0 },
   { "ins_rotation",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_ANG2LN, ins_rotation),
     0,0,0, 54 },
@@ -1430,7 +1430,7 @@ static const Dwg_DYNAPI_field _dwg_DIMENSION_ANG3PT_fields[] = {
     0,0,0, 53 },
   { "horiz_dir",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_ANG3PT, horiz_dir),
     0,0,0, 51 },
-  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD),  OFF (struct _dwg_entity_DIMENSION_ANG3PT, ins_scale),
+  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD_1),  OFF (struct _dwg_entity_DIMENSION_ANG3PT, ins_scale),
     1,0,0, 0 },
   { "ins_rotation",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_ANG3PT, ins_rotation),
     0,0,0, 54 },
@@ -1488,7 +1488,7 @@ static const Dwg_DYNAPI_field _dwg_DIMENSION_DIAMETER_fields[] = {
     0,0,0, 53 },
   { "horiz_dir",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_DIAMETER, horiz_dir),
     0,0,0, 51 },
-  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD),  OFF (struct _dwg_entity_DIMENSION_DIAMETER, ins_scale),
+  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD_1),  OFF (struct _dwg_entity_DIMENSION_DIAMETER, ins_scale),
     1,0,0, 0 },
   { "ins_rotation",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_DIAMETER, ins_rotation),
     0,0,0, 54 },
@@ -1542,7 +1542,7 @@ static const Dwg_DYNAPI_field _dwg_DIMENSION_LINEAR_fields[] = {
     0,0,0, 53 },
   { "horiz_dir",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_LINEAR, horiz_dir),
     0,0,0, 51 },
-  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD),  OFF (struct _dwg_entity_DIMENSION_LINEAR, ins_scale),
+  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD_1),  OFF (struct _dwg_entity_DIMENSION_LINEAR, ins_scale),
     1,0,0, 0 },
   { "ins_rotation",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_LINEAR, ins_rotation),
     0,0,0, 54 },
@@ -1600,7 +1600,7 @@ static const Dwg_DYNAPI_field _dwg_DIMENSION_ORDINATE_fields[] = {
     0,0,0, 53 },
   { "horiz_dir",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_ORDINATE, horiz_dir),
     0,0,0, 51 },
-  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD),  OFF (struct _dwg_entity_DIMENSION_ORDINATE, ins_scale),
+  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD_1),  OFF (struct _dwg_entity_DIMENSION_ORDINATE, ins_scale),
     1,0,0, 0 },
   { "ins_rotation",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_ORDINATE, ins_rotation),
     0,0,0, 54 },
@@ -1656,7 +1656,7 @@ static const Dwg_DYNAPI_field _dwg_DIMENSION_RADIUS_fields[] = {
     0,0,0, 53 },
   { "horiz_dir",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_RADIUS, horiz_dir),
     0,0,0, 51 },
-  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD),  OFF (struct _dwg_entity_DIMENSION_RADIUS, ins_scale),
+  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD_1),  OFF (struct _dwg_entity_DIMENSION_RADIUS, ins_scale),
     1,0,0, 0 },
   { "ins_rotation",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_DIMENSION_RADIUS, ins_rotation),
     0,0,0, 54 },
@@ -2136,7 +2136,7 @@ static const Dwg_DYNAPI_field _dwg_LARGE_RADIAL_DIMENSION_fields[] = {
     0,0,0, 53 },
   { "horiz_dir",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_LARGE_RADIAL_DIMENSION, horiz_dir),
     0,0,0, 51 },
-  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD),  OFF (struct _dwg_entity_LARGE_RADIAL_DIMENSION, ins_scale),
+  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD_1),  OFF (struct _dwg_entity_LARGE_RADIAL_DIMENSION, ins_scale),
     1,0,0, 0 },
   { "ins_rotation",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_LARGE_RADIAL_DIMENSION, ins_rotation),
     0,0,0, 54 },
@@ -3310,7 +3310,7 @@ static const Dwg_DYNAPI_field _dwg_PROXY_ENTITY_fields[] = {
     0,0,0, 90 },
   { "class_id",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_entity_PROXY_ENTITY, class_id),
     0,0,0, 91 },
-  { "dwg_versions",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_entity_PROXY_ENTITY, dwg_versions),
+  { "version",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_entity_PROXY_ENTITY, version),
     0,0,0, 95 },
   { "maint_version",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_entity_PROXY_ENTITY, maint_version),
     0,0,0, 95 },
@@ -4144,15 +4144,15 @@ static const Dwg_DYNAPI_field _dwg_VIEWPORT_fields[] = {
     1,0,0, 17 },
   { "VIEWDIR",	"3BD", sizeof (BITCODE_3BD),  OFF (struct _dwg_entity_VIEWPORT, VIEWDIR),
     1,0,0, 16 },
-  { "twist_angle",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_VIEWPORT, twist_angle),
+  { "VIEWTWIST",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_VIEWPORT, VIEWTWIST),
     0,0,0, 51 },
   { "VIEWSIZE",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_VIEWPORT, VIEWSIZE),
     0,0,0, 45 },
-  { "lens_length",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_VIEWPORT, lens_length),
+  { "LENSLENGTH",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_VIEWPORT, LENSLENGTH),
     0,0,0, 42 },
-  { "front_clip_z",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_VIEWPORT, front_clip_z),
+  { "FRONTZ",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_VIEWPORT, FRONTZ),
     0,0,0, 43 },
-  { "back_clip_z",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_VIEWPORT, back_clip_z),
+  { "BACKZ",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_VIEWPORT, BACKZ),
     0,0,0, 44 },
   { "SNAPANG",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_entity_VIEWPORT, SNAPANG),
     0,0,0, 50 },
@@ -4205,7 +4205,7 @@ static const Dwg_DYNAPI_field _dwg_VIEWPORT_fields[] = {
   { "vport_entity_header",	"H", sizeof (BITCODE_H),  OFF (struct _dwg_entity_VIEWPORT, vport_entity_header),
     1,0,0, 0 },
   { "frozen_layers",	"H*", sizeof (BITCODE_H*),  OFF (struct _dwg_entity_VIEWPORT, frozen_layers),
-    1,1,0, 341 },
+    1,1,0, 331 },
   { "clip_boundary",	"H", sizeof (BITCODE_H),  OFF (struct _dwg_entity_VIEWPORT, clip_boundary),
     1,0,0, 340 },
   { "named_ucs",	"H", sizeof (BITCODE_H),  OFF (struct _dwg_entity_VIEWPORT, named_ucs),
@@ -7785,6 +7785,8 @@ static const Dwg_DYNAPI_field _dwg_DIMASSOC_fields[] = {
     0,0,0, 70 },
   { "rotated_type",	"RC", sizeof (BITCODE_RC),  OFF (struct _dwg_object_DIMASSOC, rotated_type),
     0,0,0, 71 },
+  { "has_lastpt_ref",	"B", sizeof (BITCODE_B),  OFF (struct _dwg_object_DIMASSOC, has_lastpt_ref),
+    0,0,0, 0 },
   { "ref",	"Dwg_DIMASSOC_Ref*", sizeof (Dwg_DIMASSOC_Ref*),  OFF (struct _dwg_object_DIMASSOC, ref),
     1,1,0, 0 },
   {NULL,	NULL,	0,	0,	0,0,0, 0},
@@ -7923,12 +7925,6 @@ static const Dwg_DYNAPI_field _dwg_DIMSTYLE_fields[] = {
     1,1,1, 7 },
   { "DIMALTRND",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_DIMSTYLE, DIMALTRND),
     0,0,0, 148 },
-  { "DIMCLRD_N",	"RS", sizeof (BITCODE_RS),  OFF (struct _dwg_object_DIMSTYLE, DIMCLRD_N),
-    0,0,0, 176 },
-  { "DIMCLRE_N",	"RS", sizeof (BITCODE_RS),  OFF (struct _dwg_object_DIMSTYLE, DIMCLRE_N),
-    0,0,0, 177 },
-  { "DIMCLRT_N",	"RS", sizeof (BITCODE_RS),  OFF (struct _dwg_object_DIMSTYLE, DIMCLRT_N),
-    0,0,0, 178 },
   { "DIMCLRD",	"CMC", sizeof (BITCODE_CMC),  OFF (struct _dwg_object_DIMSTYLE, DIMCLRD),
     0,0,0, 176 },
   { "DIMCLRE",	"CMC", sizeof (BITCODE_CMC),  OFF (struct _dwg_object_DIMSTYLE, DIMCLRE),
@@ -9277,7 +9273,7 @@ static const Dwg_DYNAPI_field _dwg_PROXY_OBJECT_fields[] = {
     0,0,0, 90 },
   { "class_id",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_object_PROXY_OBJECT, class_id),
     0,0,0, 91 },
-  { "dwg_versions",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_object_PROXY_OBJECT, dwg_versions),
+  { "version",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_object_PROXY_OBJECT, version),
     0,0,0, 95 },
   { "maint_version",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_object_PROXY_OBJECT, maint_version),
     0,0,0, 0 },
@@ -10071,13 +10067,13 @@ static const Dwg_DYNAPI_field _dwg_VIEW_fields[] = {
     1,0,0, 12 },
   { "VIEWDIR",	"3BD", sizeof (BITCODE_3BD),  OFF (struct _dwg_object_VIEW, VIEWDIR),
     1,0,0, 11 },
-  { "twist_angle",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VIEW, twist_angle),
+  { "VIEWTWIST",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VIEW, VIEWTWIST),
     0,0,0, 50 },
-  { "lens_length",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VIEW, lens_length),
+  { "LENSLENGTH",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VIEW, LENSLENGTH),
     0,0,0, 42 },
-  { "front_clip_z",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VIEW, front_clip_z),
+  { "FRONTZ",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VIEW, FRONTZ),
     0,0,0, 43 },
-  { "back_clip_z",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VIEW, back_clip_z),
+  { "BACKZ",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VIEW, BACKZ),
     0,0,0, 44 },
   { "VIEWMODE",	"4BITS", sizeof (BITCODE_4BITS),  OFF (struct _dwg_object_VIEW, VIEWMODE),
     0,0,0, 71 },
@@ -10427,13 +10423,13 @@ static const Dwg_DYNAPI_field _dwg_VPORT_fields[] = {
     1,0,0, 17 },
   { "VIEWDIR",	"3BD", sizeof (BITCODE_3BD),  OFF (struct _dwg_object_VPORT, VIEWDIR),
     1,0,0, 16 },
-  { "view_twist",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VPORT, view_twist),
+  { "VIEWTWIST",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VPORT, VIEWTWIST),
     0,0,0, 51 },
-  { "lens_length",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VPORT, lens_length),
+  { "LENSLENGTH",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VPORT, LENSLENGTH),
     0,0,0, 42 },
-  { "front_clip_z",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VPORT, front_clip_z),
+  { "FRONTZ",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VPORT, FRONTZ),
     0,0,0, 43 },
-  { "back_clip_z",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VPORT, back_clip_z),
+  { "BACKZ",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_object_VPORT, BACKZ),
     0,0,0, 44 },
   { "VIEWMODE",	"4BITS", sizeof (BITCODE_4BITS),  OFF (struct _dwg_object_VPORT, VIEWMODE),
     0,0,0, 71 },
@@ -10842,9 +10838,41 @@ static const Dwg_DYNAPI_field _dwg_ASSOCSURFACEACTIONBODY_fields[] = {
 };
 /* from typedef struct _dwg_AcDbMTextObjectEmbedded: (sorted by offset) */
 static const Dwg_DYNAPI_field _dwg_AcDbMTextObjectEmbedded_fields[] = {
-  { "attachment",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_AcDbMTextObjectEmbedded, attachment),
+  { "entmode",	"BB", sizeof (BITCODE_BB),  OFF (struct _dwg_AcDbMTextObjectEmbedded, entmode),
     0,0,0, 0 },
+  { "num_reactors",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_AcDbMTextObjectEmbedded, num_reactors),
+    0,0,0, 0 },
+  { "has_ds_data",	"B", sizeof (BITCODE_B),  OFF (struct _dwg_AcDbMTextObjectEmbedded, has_ds_data),
+    0,0,0, 0 },
+  { "color",	"CMC", sizeof (BITCODE_CMC),  OFF (struct _dwg_AcDbMTextObjectEmbedded, color),
+    0,0,0, 0 },
+  { "is_xdic_missing",	"B", sizeof (BITCODE_B),  OFF (struct _dwg_AcDbMTextObjectEmbedded, is_xdic_missing),
+    0,0,0, 0 },
+  { "ltype_scale",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_AcDbMTextObjectEmbedded, ltype_scale),
+    0,0,0, 0 },
+  { "ltype_flags",	"BB", sizeof (BITCODE_BB),  OFF (struct _dwg_AcDbMTextObjectEmbedded, ltype_flags),
+    0,0,0, 0 },
+  { "plotstyle_flags",	"BB", sizeof (BITCODE_BB),  OFF (struct _dwg_AcDbMTextObjectEmbedded, plotstyle_flags),
+    0,0,0, 0 },
+  { "material_flags",	"BB", sizeof (BITCODE_BB),  OFF (struct _dwg_AcDbMTextObjectEmbedded, material_flags),
+    0,0,0, 0 },
+  { "shadow_flags",	"RC", sizeof (BITCODE_RC),  OFF (struct _dwg_AcDbMTextObjectEmbedded, shadow_flags),
+    0,0,0, 0 },
+  { "has_full_visualstyle",	"B", sizeof (BITCODE_B),  OFF (struct _dwg_AcDbMTextObjectEmbedded, has_full_visualstyle),
+    0,0,0, 0 },
+  { "has_face_visualstyle",	"B", sizeof (BITCODE_B),  OFF (struct _dwg_AcDbMTextObjectEmbedded, has_face_visualstyle),
+    0,0,0, 0 },
+  { "has_edge_visualstyle",	"B", sizeof (BITCODE_B),  OFF (struct _dwg_AcDbMTextObjectEmbedded, has_edge_visualstyle),
+    0,0,0, 0 },
+  { "invisible",	"BS", sizeof (BITCODE_BS),  OFF (struct _dwg_AcDbMTextObjectEmbedded, invisible),
+    0,0,0, 0 },
+  { "linewt",	"RC", sizeof (BITCODE_RC),  OFF (struct _dwg_AcDbMTextObjectEmbedded, linewt),
+    0,0,0, 0 },
+  { "layer",	"H", sizeof (BITCODE_H),  OFF (struct _dwg_AcDbMTextObjectEmbedded, layer),
+    1,0,0, 0 },
   { "ins_pt",	"3BD", sizeof (BITCODE_3BD),  OFF (struct _dwg_AcDbMTextObjectEmbedded, ins_pt),
+    1,0,0, 0 },
+  { "extrusion",	"3BD", sizeof (BITCODE_3BD),  OFF (struct _dwg_AcDbMTextObjectEmbedded, extrusion),
     1,0,0, 0 },
   { "x_axis_dir",	"3BD", sizeof (BITCODE_3BD),  OFF (struct _dwg_AcDbMTextObjectEmbedded, x_axis_dir),
     1,0,0, 0 },
@@ -10852,11 +10880,47 @@ static const Dwg_DYNAPI_field _dwg_AcDbMTextObjectEmbedded_fields[] = {
     0,0,0, 0 },
   { "rect_width",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_AcDbMTextObjectEmbedded, rect_width),
     0,0,0, 0 },
+  { "text_height",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_AcDbMTextObjectEmbedded, text_height),
+    0,0,0, 0 },
+  { "attachment",	"BS", sizeof (BITCODE_BS),  OFF (struct _dwg_AcDbMTextObjectEmbedded, attachment),
+    0,0,0, 0 },
+  { "flow_dir",	"BS", sizeof (BITCODE_BS),  OFF (struct _dwg_AcDbMTextObjectEmbedded, flow_dir),
+    0,0,0, 0 },
   { "extents_width",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_AcDbMTextObjectEmbedded, extents_width),
     0,0,0, 0 },
   { "extents_height",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_AcDbMTextObjectEmbedded, extents_height),
     0,0,0, 0 },
-  { "column_type",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_AcDbMTextObjectEmbedded, column_type),
+  { "text",	"T", sizeof (BITCODE_T),  OFF (struct _dwg_AcDbMTextObjectEmbedded, text),
+    1,1,1, 0 },
+  { "style",	"H", sizeof (BITCODE_H),  OFF (struct _dwg_AcDbMTextObjectEmbedded, style),
+    1,0,0, 0 },
+  { "linespace_style",	"BS", sizeof (BITCODE_BS),  OFF (struct _dwg_AcDbMTextObjectEmbedded, linespace_style),
+    0,0,0, 0 },
+  { "linespace_factor",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_AcDbMTextObjectEmbedded, linespace_factor),
+    0,0,0, 0 },
+  { "unknown_b0",	"B", sizeof (BITCODE_B),  OFF (struct _dwg_AcDbMTextObjectEmbedded, unknown_b0),
+    0,0,0, 0 },
+  { "bg_fill_flag",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_AcDbMTextObjectEmbedded, bg_fill_flag),
+    0,0,0, 0 },
+  { "bg_fill_scale",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_AcDbMTextObjectEmbedded, bg_fill_scale),
+    0,0,0, 0 },
+  { "bg_fill_color",	"CMC", sizeof (BITCODE_CMC),  OFF (struct _dwg_AcDbMTextObjectEmbedded, bg_fill_color),
+    0,0,0, 0 },
+  { "bg_fill_trans",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_AcDbMTextObjectEmbedded, bg_fill_trans),
+    0,0,0, 0 },
+  { "is_not_annotative",	"B", sizeof (BITCODE_B),  OFF (struct _dwg_AcDbMTextObjectEmbedded, is_not_annotative),
+    0,0,0, 0 },
+  { "class_version",	"BS", sizeof (BITCODE_BS),  OFF (struct _dwg_AcDbMTextObjectEmbedded, class_version),
+    0,0,0, 0 },
+  { "default_flag",	"B", sizeof (BITCODE_B),  OFF (struct _dwg_AcDbMTextObjectEmbedded, default_flag),
+    0,0,0, 0 },
+  { "appid",	"H", sizeof (BITCODE_H),  OFF (struct _dwg_AcDbMTextObjectEmbedded, appid),
+    1,0,0, 0 },
+  { "ignore_attachment",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_AcDbMTextObjectEmbedded, ignore_attachment),
+    0,0,0, 0 },
+  { "column_type",	"BS", sizeof (BITCODE_BS),  OFF (struct _dwg_AcDbMTextObjectEmbedded, column_type),
+    0,0,0, 0 },
+  { "numfragments",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_AcDbMTextObjectEmbedded, numfragments),
     0,0,0, 0 },
   { "column_width",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_AcDbMTextObjectEmbedded, column_width),
     0,0,0, 0 },
@@ -11488,10 +11552,16 @@ static const Dwg_DYNAPI_field _dwg_DIMASSOC_Ref_fields[] = {
     0,0,0, 0 },
   { "xrefpaths",	"TV*", sizeof (BITCODE_TV*),  OFF (struct _dwg_DIMASSOC_Ref, xrefpaths),
     1,1,0, 301 },
+  { "num_intersec_xrefpaths",	"BS", sizeof (BITCODE_BS),  OFF (struct _dwg_DIMASSOC_Ref, num_intersec_xrefpaths),
+    0,0,0, 0 },
+  { "intersec_xrefpaths",	"TV*", sizeof (BITCODE_TV*),  OFF (struct _dwg_DIMASSOC_Ref, intersec_xrefpaths),
+    1,1,0, 0 },
   { "has_lastpt_ref",	"B", sizeof (BITCODE_B),  OFF (struct _dwg_DIMASSOC_Ref, has_lastpt_ref),
     0,0,0, 75 },
-  { "lastpt_ref",	"3BD", sizeof (BITCODE_3BD),  OFF (struct _dwg_DIMASSOC_Ref, lastpt_ref),
-    1,0,0, 0 },
+  { "intersec_subent_type",	"BS", sizeof (BITCODE_BS),  OFF (struct _dwg_DIMASSOC_Ref, intersec_subent_type),
+    0,0,0, 74 },
+  { "intersec_gsmarker",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_DIMASSOC_Ref, intersec_gsmarker),
+    0,0,0, 92 },
   { "num_intsectobj",	"BL", sizeof (BITCODE_BL),  OFF (struct _dwg_DIMASSOC_Ref, num_intsectobj),
     0,0,0, 74 },
   { "intsectobj",	"H*", sizeof (BITCODE_H*),  OFF (struct _dwg_DIMASSOC_Ref, intsectobj),
@@ -11516,13 +11586,13 @@ static const Dwg_DYNAPI_field _dwg_DIMENSION_common_fields[] = {
     0,0,0, 70 },
   { "flag1",	"RC", sizeof (BITCODE_RC),  OFF (struct _dwg_DIMENSION_common, flag1),
     0,0,0, 0 },
-  { "user_text",	"TV", sizeof (BITCODE_TV),  OFF (struct _dwg_DIMENSION_common, user_text),
+  { "user_text",	"T", sizeof (BITCODE_T),  OFF (struct _dwg_DIMENSION_common, user_text),
     1,1,1, 1 },
   { "text_rotation",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_DIMENSION_common, text_rotation),
     0,0,0, 53 },
   { "horiz_dir",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_DIMENSION_common, horiz_dir),
     0,0,0, 51 },
-  { "ins_scale",	"3BD", sizeof (BITCODE_3BD),  OFF (struct _dwg_DIMENSION_common, ins_scale),
+  { "ins_scale",	"3BD_1", sizeof (BITCODE_3BD_1),  OFF (struct _dwg_DIMENSION_common, ins_scale),
     1,0,0, 0 },
   { "ins_rotation",	"BD", sizeof (BITCODE_BD),  OFF (struct _dwg_DIMENSION_common, ins_rotation),
     0,0,0, 54 },
@@ -12206,9 +12276,9 @@ static const Dwg_DYNAPI_field _dwg_MLINESTYLE_line_fields[] = {
     0,0,0, 49 },
   { "color",	"CMC", sizeof (BITCODE_CMC),  OFF (struct _dwg_MLINESTYLE_line, color),
     0,0,0, 62 },
-  { "lt.index",	"BSd", sizeof (BITCODE_BSd),  OFF (struct _dwg_MLINESTYLE_line, lt.index),
+  { "lt_index",	"BSd", sizeof (BITCODE_BSd),  OFF (struct _dwg_MLINESTYLE_line, lt_index),
     0,0,0, 6 },
-  { "lt.ltype",	"H", sizeof (BITCODE_H),  OFF (struct _dwg_MLINESTYLE_line, lt.ltype),
+  { "lt_ltype",	"H", sizeof (BITCODE_H),  OFF (struct _dwg_MLINESTYLE_line, lt_ltype),
     1,0,0, 6 },
   {NULL,	NULL,	0,	0,	0,0,0, 0},
 };
@@ -14696,7 +14766,7 @@ static const struct _name_subclasses dwg_name_subclasses[] = {
 
 };
 
-#line 2630 "gen-dynapi.pl"
+#line 2978 "gen-dynapi.pl"
 struct _name
 {
   const char *const name;
@@ -14903,7 +14973,7 @@ dwg_dynapi_entity_value (void *restrict _obj, const char *restrict name,
     // CHK_SUBCLASS_* e.g. layout->plotsetting via PLOTSETTING
     if (obj && strNE (obj->name, name)) // objid may be 0
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid entity type %s, wanted %s", __FUNCTION__,
                    obj->name, name);
         return false;
@@ -14912,8 +14982,8 @@ dwg_dynapi_entity_value (void *restrict _obj, const char *restrict name,
       const Dwg_DYNAPI_field *f = dwg_dynapi_entity_field (name, fieldname);
       if (!f)
         {
-          int loglevel = (obj && obj->parent) ? obj->parent->opts & DWG_OPTS_LOGLEVEL
-                                              : DWG_LOGLEVEL_ERROR;
+          //int loglevel = (obj && obj->parent) ? obj->parent->opts & DWG_OPTS_LOGLEVEL
+          //                                    : DWG_LOGLEVEL_ERROR;
           LOG_ERROR ("%s: Invalid %s field %s", __FUNCTION__, name, fieldname);
           return false;
         }
@@ -14944,7 +15014,7 @@ dwg_dynapi_entity_utf8text (void *restrict _obj, const char *restrict name,
     // CHK_SUBCLASS_* e.g. layout->plotsetting via PLOTSETTING
     if (obj && strNE (obj->name, name)) // objid may be 0
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid entity type %s, wanted %s", __FUNCTION__,
                    obj->name, name);
         return false;
@@ -14956,7 +15026,7 @@ dwg_dynapi_entity_utf8text (void *restrict _obj, const char *restrict name,
 
       if (!f || !f->is_string)
         {
-          int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : DWG_LOGLEVEL_ERROR;
+          //int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : DWG_LOGLEVEL_ERROR;
           LOG_ERROR ("%s: Invalid %s text field %s", __FUNCTION__, name, fieldname);
           return false;
         }
@@ -15005,7 +15075,7 @@ dwg_dynapi_header_value (const Dwg_Data *restrict dwg,
       }
     else
       {
-        const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid header field %s", __FUNCTION__, fieldname);
         return false;
       }
@@ -15055,7 +15125,7 @@ dwg_dynapi_header_utf8text (const Dwg_Data *restrict dwg,
       }
     else
       {
-        const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid header text field %s", __FUNCTION__, fieldname);
         return false;
       }
@@ -15076,7 +15146,7 @@ dwg_dynapi_common_value(void *restrict _obj, const char *restrict fieldname,
     const Dwg_Object *obj = dwg_obj_generic_to_object (_obj, &error);
     if (!obj || error)
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: dwg_obj_generic_to_object failed", __FUNCTION__);
         return false;
       }
@@ -15093,7 +15163,7 @@ dwg_dynapi_common_value(void *restrict _obj, const char *restrict fieldname,
       }
     else
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL; // DWG_LOGLEVEL_ERROR;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL; // DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: Unhandled %s.supertype ", __FUNCTION__, obj->name);
         return false;
       }
@@ -15111,7 +15181,7 @@ dwg_dynapi_common_value(void *restrict _obj, const char *restrict fieldname,
       }
     else
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid common field %s", __FUNCTION__, fieldname);
         return false;
       }
@@ -15136,7 +15206,7 @@ dwg_dynapi_common_utf8text(void *restrict _obj, const char *restrict fieldname,
 
     if (!obj || error)
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: dwg_obj_generic_to_object failed", __FUNCTION__);
         return false;
       }
@@ -15160,7 +15230,7 @@ dwg_dynapi_common_utf8text(void *restrict _obj, const char *restrict fieldname,
       }
     else
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: Unhandled %s.supertype ", __FUNCTION__, obj->name);
         return false;
       }
@@ -15192,7 +15262,7 @@ dwg_dynapi_common_utf8text(void *restrict _obj, const char *restrict fieldname,
       }
     else
       {
-        const int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : DWG_LOGLEVEL_ERROR;
+        //const int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: Invalid common text field %s", __FUNCTION__, fieldname);
         return false;
       }
@@ -15279,13 +15349,13 @@ dwg_dynapi_entity_set_value (void *restrict _obj, const char *restrict name,
     const Dwg_Object *obj = dwg_obj_generic_to_object (_obj, &error);
     if (error)
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: dwg_obj_generic_to_object failed", __FUNCTION__);
         return false;
       }
     if (obj && strNE (obj->name, name))
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid entity type %s, wanted %s", __FUNCTION__,
                    obj->name, name);
         return false;
@@ -15308,7 +15378,7 @@ dwg_dynapi_entity_set_value (void *restrict _obj, const char *restrict name,
 
       if (!f)
         {
-          const int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : 0;
+          //const int loglevel = dwg ? dwg->opts & DWG_OPTS_LOGLEVEL : 0;
           LOG_ERROR ("%s: Invalid %s field %s", __FUNCTION__, name, fieldname);
           return false;
         }
@@ -15411,7 +15481,7 @@ dwg_dynapi_header_set_value (Dwg_Data *restrict dwg,
       }
     else
       {
-        const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = dwg->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid header field %s", __FUNCTION__, fieldname);
         return false;
       }
@@ -15435,7 +15505,7 @@ dwg_dynapi_common_set_value (void *restrict _obj,
     Dwg_Data *dwg;
     if (!obj || error)
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: dwg_obj_generic_to_object failed", __FUNCTION__);
         return false;
       }
@@ -15458,14 +15528,14 @@ dwg_dynapi_common_set_value (void *restrict _obj,
       }
     else
       {
-        const int loglevel = DWG_LOGLEVEL_ERROR;
+        //const int loglevel = DWG_LOGLEVEL_ERROR;
         LOG_ERROR ("%s: Unhandled %s.supertype ", __FUNCTION__, obj->name);
         return false;
       }
 
     if (!f)
       {
-        const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
+        //const int loglevel = obj->parent->opts & DWG_OPTS_LOGLEVEL;
         LOG_ERROR ("%s: Invalid %s common field %s", __FUNCTION__, obj->name, fieldname);
         return false;
       }

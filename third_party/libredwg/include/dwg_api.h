@@ -785,6 +785,7 @@ extern "C"
   typedef struct _dwg_object_BLOCKXYPARAMETER		dwg_obj_blockxyparameter;
   typedef struct _dwg_object_DATALINK		dwg_obj_datalink;
   typedef struct _dwg_object_DBCOLOR		dwg_obj_dbcolor;
+  typedef struct _dwg_object_DIMASSOC		dwg_obj_dimassoc;
   typedef struct _dwg_object_EVALUATION_GRAPH		dwg_obj_evaluation_graph;
   typedef struct _dwg_object_FCFOBJECTCONTEXTDATA		dwg_obj_fcfobjectcontextdata;
   typedef struct _dwg_object_GRADIENT_BACKGROUND		dwg_obj_gradient_background;
@@ -849,7 +850,6 @@ extern "C"
   typedef struct _dwg_object_CSACDOCUMENTOPTIONS		dwg_obj_csacdocumentoptions;
   typedef struct _dwg_object_CURVEPATH		dwg_obj_curvepath;
   typedef struct _dwg_object_DATATABLE		dwg_obj_datatable;
-  typedef struct _dwg_object_DIMASSOC		dwg_obj_dimassoc;
   typedef struct _dwg_object_DMDIMOBJECTCONTEXTDATA		dwg_obj_dmdimobjectcontextdata;
   typedef struct _dwg_object_DYNAMICBLOCKPROXYNODE		dwg_obj_dynamicblockproxynode;
   typedef struct _dwg_object_GEOMAPIMAGE		dwg_obj_geomapimage;
@@ -1911,6 +1911,7 @@ extern "C"
   dwg_get_OBJECT_DECL (obj_blockxyparameter, BLOCKXYPARAMETER);
   dwg_get_OBJECT_DECL (obj_datalink, DATALINK);
   dwg_get_OBJECT_DECL (obj_dbcolor, DBCOLOR);
+  dwg_get_OBJECT_DECL (obj_dimassoc, DIMASSOC);
   dwg_get_OBJECT_DECL (obj_evaluation_graph, EVALUATION_GRAPH);
   dwg_get_OBJECT_DECL (obj_fcfobjectcontextdata, FCFOBJECTCONTEXTDATA);
   dwg_get_OBJECT_DECL (obj_gradient_background, GRADIENT_BACKGROUND);
@@ -1975,7 +1976,6 @@ extern "C"
     dwg_get_OBJECT_DECL (obj_csacdocumentoptions, CSACDOCUMENTOPTIONS);
     dwg_get_OBJECT_DECL (obj_curvepath, CURVEPATH);
     dwg_get_OBJECT_DECL (obj_datatable, DATATABLE);
-    dwg_get_OBJECT_DECL (obj_dimassoc, DIMASSOC);
     dwg_get_OBJECT_DECL (obj_dmdimobjectcontextdata, DMDIMOBJECTCONTEXTDATA);
     dwg_get_OBJECT_DECL (obj_dynamicblockproxynode, DYNAMICBLOCKPROXYNODE);
     dwg_get_OBJECT_DECL (obj_geomapimage, GEOMAPIMAGE);
@@ -3056,6 +3056,7 @@ extern "C"
   DWG_GETALL_OBJECT_DECL (BLOCKXYPARAMETER);
   DWG_GETALL_OBJECT_DECL (DATALINK);
   DWG_GETALL_OBJECT_DECL (DBCOLOR);
+  DWG_GETALL_OBJECT_DECL (DIMASSOC);
   DWG_GETALL_OBJECT_DECL (EVALUATION_GRAPH);
   DWG_GETALL_OBJECT_DECL (FCFOBJECTCONTEXTDATA);
   DWG_GETALL_OBJECT_DECL (GRADIENT_BACKGROUND);
@@ -3120,7 +3121,6 @@ extern "C"
     DWG_GETALL_OBJECT_DECL (CSACDOCUMENTOPTIONS);
     DWG_GETALL_OBJECT_DECL (CURVEPATH);
     DWG_GETALL_OBJECT_DECL (DATATABLE);
-    DWG_GETALL_OBJECT_DECL (DIMASSOC);
     DWG_GETALL_OBJECT_DECL (DMDIMOBJECTCONTEXTDATA);
     DWG_GETALL_OBJECT_DECL (DYNAMICBLOCKPROXYNODE);
     DWG_GETALL_OBJECT_DECL (GEOMAPIMAGE);
@@ -4207,6 +4207,7 @@ extern "C"
   CAST_DWG_OBJECT_TO_OBJECT_DECL (BLOCKXYPARAMETER);
   CAST_DWG_OBJECT_TO_OBJECT_DECL (DATALINK);
   CAST_DWG_OBJECT_TO_OBJECT_DECL (DBCOLOR);
+  CAST_DWG_OBJECT_TO_OBJECT_DECL (DIMASSOC);
   CAST_DWG_OBJECT_TO_OBJECT_DECL (EVALUATION_GRAPH);
   CAST_DWG_OBJECT_TO_OBJECT_DECL (FCFOBJECTCONTEXTDATA);
   CAST_DWG_OBJECT_TO_OBJECT_DECL (GRADIENT_BACKGROUND);
@@ -4271,7 +4272,6 @@ extern "C"
     CAST_DWG_OBJECT_TO_OBJECT_DECL (CSACDOCUMENTOPTIONS);
     CAST_DWG_OBJECT_TO_OBJECT_DECL (CURVEPATH);
     CAST_DWG_OBJECT_TO_OBJECT_DECL (DATATABLE);
-    CAST_DWG_OBJECT_TO_OBJECT_DECL (DIMASSOC);
     CAST_DWG_OBJECT_TO_OBJECT_DECL (DMDIMOBJECTCONTEXTDATA);
     CAST_DWG_OBJECT_TO_OBJECT_DECL (DYNAMICBLOCKPROXYNODE);
     CAST_DWG_OBJECT_TO_OBJECT_DECL (GEOMAPIMAGE);
@@ -7608,28 +7608,28 @@ extern "C"
                                  int *restrict error)
       __nonnull ((2)) _deprecated_dynapi_getter;
 
-  EXPORT void dwg_ent_viewport_set_lens_length (dwg_ent_viewport *restrict vp,
-                                                const double length,
-                                                int *restrict error)
+  EXPORT void dwg_ent_viewport_set_LENSLENGTH (dwg_ent_viewport *restrict vp,
+                                               const double length,
+                                               int *restrict error)
       __nonnull ((3)) _deprecated_dynapi_setter;
 
   EXPORT double
-  dwg_ent_viewport_get_lens_length (const dwg_ent_viewport *restrict vp,
-                                    int *restrict error)
+  dwg_ent_viewport_get_LENSLENGTH (const dwg_ent_viewport *restrict vp,
+                                   int *restrict error)
       __nonnull ((2)) _deprecated_dynapi_getter;
 
-  EXPORT void dwg_ent_viewport_set_front_clip_z (dwg_ent_viewport *restrict vp,
-                                                 const double front_z,
-                                                 int *restrict error)
+  EXPORT void dwg_ent_viewport_set_FRONTZ (dwg_ent_viewport *restrict vp,
+                                           const double front_z,
+                                           int *restrict error)
       __nonnull ((3)) _deprecated_dynapi_setter;
   EXPORT double
-  dwg_ent_viewport_get_front_clip_z (const dwg_ent_viewport *restrict vp,
-                                     int *restrict error)
+  dwg_ent_viewport_get_FRONTZ (const dwg_ent_viewport *restrict vp,
+                               int *restrict error)
       __nonnull ((2)) _deprecated_dynapi_getter;
 
-  EXPORT void dwg_ent_viewport_set_back_clip_z (dwg_ent_viewport *restrict vp,
-                                                const double back_z,
-                                                int *restrict error)
+  EXPORT void dwg_ent_viewport_set_BACKZ (dwg_ent_viewport *restrict vp,
+                                          const double back_z,
+                                          int *restrict error)
       __nonnull ((3)) _deprecated_dynapi_setter;
   EXPORT double
   dwg_ent_viewport_get_back_clip_z (const dwg_ent_viewport *restrict vp,
@@ -9500,7 +9500,9 @@ extern "C"
                                     const char *restrict name) __nonnull_all;
 
   /* utf-8 string without lowercase letters, space or !. maxlen 256 */
+#ifndef DWG_IS_VALID_TAG_DEFINED
   EXPORT bool dwg_is_valid_tag (const char *tag) __nonnull_all;
+#endif
 
   EXPORT Dwg_Entity_TEXT *
   dwg_add_TEXT (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
