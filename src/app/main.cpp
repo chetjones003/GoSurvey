@@ -1427,6 +1427,8 @@ int main()
     ext.blockDefs = &cmd.blockDefs;
     ext.blockRefs = &cmd.cadBlockRefs;
     ext.blockRefAttrs = &cmd.cadBlockRefAttrs;
+    ext.drawingModelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
+    ext.annotativeViewport = CurrentViewport(cmd);
 
     activeRenderer.SetSize(fbW, fbH);
     RenderTuning tuning{};
