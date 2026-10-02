@@ -365,6 +365,8 @@ enum class CadPipePressureClass : std::uint8_t { None = 0, CS150, CS300 };
 struct CadBlockDefinition {
   std::uint64_t id = 0;
   std::string name;
+  /// True when \p name is an AutoCAD dynamic-block anonymous instance block (`*U…`).
+  bool dynamicAnonymous = false;
   std::string description;
   float baseX = 0.f;
   float baseY = 0.f;
@@ -408,6 +410,8 @@ struct CadBlockLibraryEntry {
 
 struct CadBlockRef {
   std::string defName;
+  /// Named dynamic-block definition when \p defName is `*U…` (empty when unknown).
+  std::string dynamicCanonicalName;
   CadBlockXform xf;
   std::vector<CadBlockAttrValue> attributes;
   std::vector<CadBlockParameter> paramState;
@@ -443,6 +447,11 @@ struct CadBlockWorldSolid {
   CadSolidPtr solid;
   EntityAttributes attr;
 };
+
+/// AutoCAD dynamic-block inserts reference an anonymous `*U…` block holding the evaluated geometry.
+[[nodiscard]] inline bool CadBlockNameIsDynamicAnonymous(std::string_view name) {
+  return name.size() >= 2 && name[0] == '*' && (name[1] == 'U' || name[1] == 'u');
+}
 
 [[nodiscard]] inline bool CadBlockEqCi(std::string_view a, std::string_view b) {
   if (a.size() != b.size())
@@ -832,6 +841,9 @@ inline void CadBlockApplyActionsToPoint(const CadBlockDefinition& def, const Cad
                                         std::string_view prim = {}, std::string_view group = {}) {
   assert(x != nullptr);
   assert(y != nullptr);
+  // AutoCAD `*U` instance blocks already carry evaluated geometry (REQ-369 increment 2).
+  if (def.dynamicAnonymous)
+    return;
   for (const CadBlockAction& a : def.actions) {
     if (!CadBlockActionApplies(a, prim, group))
       continue;
@@ -1664,6 +1676,35 @@ inline constexpr int kDrawingUnitCodes[kDrawingUnitCount] = {0, 1, 2, 6, 4};
   return false;
 }
 
+[[nodiscard]] inline const CadBlockAction* CadBlockFindLinearStretchAction(const CadBlockDefinition& def,
+                                                                           std::string_view* paramNameOut) {
+  for (const CadBlockAction& a : def.actions) {
+    if (a.kind != CadBlockActionKind::Stretch || !a.applyTo.empty())
+      continue;
+    for (const CadBlockParameter& p : def.parameters) {
+      if (p.kind == CadBlockParamKind::Linear && CadBlockEqCi(p.name, a.paramName)) {
+        if (paramNameOut != nullptr)
+          *paramNameOut = p.name;
+        return &a;
+      }
+    }
+  }
+  return nullptr;
+}
+
+[[nodiscard]] inline bool CadBlockHasLinearStretchDyn(const CadBlockDefinition& def) {
+  if (def.dynamicAnonymous || CadBlockHasMatchlineDyn(def))
+    return false;
+  return CadBlockFindLinearStretchAction(def, nullptr) != nullptr;
+}
+
+[[nodiscard]] inline std::string CadBlockFirstLinearStretchParamName(const CadBlockDefinition& def) {
+  std::string_view name;
+  if (CadBlockFindLinearStretchAction(def, &name) == nullptr)
+    return {};
+  return std::string(name);
+}
+
 inline void CadBlockAuthorMatchlineDynamics(CadBlockDefinition* def) {
   assert(def != nullptr);
   if (!CadBlockNameIsMatchline(def->name) || CadBlockHasMatchlineDyn(*def))
@@ -1771,6 +1812,20 @@ inline bool CadBlockDynGripWorld(const CadBlockDefinition& def, const CadBlockRe
       *wz = ref.xf.z;
     return true;
   }
+  if (CadBlockHasLinearStretchDyn(def)) {
+    if (which != 1)
+      return false;
+    const CadBlockAction* stretch = CadBlockFindLinearStretchAction(def, nullptr);
+    if (stretch == nullptr)
+      return false;
+    const float v = CadBlockParamValue(ref, def, stretch->paramName);
+    float lx = stretch->originX + stretch->dirX * v;
+    float ly = stretch->originY + stretch->dirY * v;
+    float lz = 0.f;
+    CadBlockApplyActionsToPoint(def, ref, &lx, &ly, "geom", {});
+    CadBlockXformPoint(ref.xf, lx, ly, lz, wx, wy, wz);
+    return true;
+  }
   if (!CadBlockHasMatchlineDyn(def))
     return false;
   float lx = 0.f, ly = 0.f, lz = 0.f;
@@ -1803,7 +1858,11 @@ inline bool CadBlockDynGripWorld(const CadBlockDefinition& def, const CadBlockRe
 }
 
 inline int CadBlockDynGripCount(const CadBlockDefinition& def) {
-  return CadBlockHasMatchlineDyn(def) ? kCadBlockDynGripCount : 1;
+  if (CadBlockHasMatchlineDyn(def))
+    return kCadBlockDynGripCount;
+  if (CadBlockHasLinearStretchDyn(def))
+    return 2;
+  return 1;
 }
 
 enum class CadBlockDynGripShape : std::uint8_t { Square = 0, StretchArrow, OffsetTriangle, FlipArrow };
@@ -1850,6 +1909,26 @@ inline void CadBlockApplyDynGripDrag(CadBlockRef* r, const CadBlockDefinition& d
   if (which == 0) {
     r->xf.x = wx;
     r->xf.y = wy;
+    return;
+  }
+  if (CadBlockHasLinearStretchDyn(def)) {
+    if (which != 1)
+      return;
+    const CadBlockAction* stretch = CadBlockFindLinearStretchAction(def, nullptr);
+    if (stretch == nullptr)
+      return;
+    float lx = 0.f;
+    float ly = 0.f;
+    CadBlockWorldToLocal(r->xf, wx, wy, &lx, &ly);
+    const float along =
+        (lx - stretch->originX) * stretch->dirX + (ly - stretch->originY) * stretch->dirY;
+    for (const CadBlockParameter& p : def.parameters) {
+      if (p.kind == CadBlockParamKind::Linear && CadBlockEqCi(p.name, stretch->paramName)) {
+        const float clamped = std::clamp(along, p.minValue, p.maxValue);
+        CadBlockParamSet(r, p.name, clamped);
+        break;
+      }
+    }
     return;
   }
   if (!CadBlockHasMatchlineDyn(def))

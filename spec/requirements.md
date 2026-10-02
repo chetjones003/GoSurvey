@@ -4389,7 +4389,7 @@ requirements is a planning failure, not a sign of rigor.
 - Purpose: GoSurvey has no block/insert mechanism, which blocks title-block reuse, standard symbols, and any future TABLE/annotation work; DWG export always explodes geometry for exactly this reason
 - Priority: should
 - Type: functional
-- Statement: Add BLOCK (define from selection), INSERT (place with position/scale/rotation), WBLOCK (write to its own file), and ATTDEF/block attributes. Dynamic blocks and a block-library browser are explicitly out of scope — see roadmap Someday.
+- Statement: Add BLOCK (define from selection), INSERT (place with position/scale/rotation), WBLOCK (write to its own file), and ATTDEF/block attributes. **AutoCAD dynamic blocks** are **REQ-369** (issue #618), not this requirement's scope. A **block-library browser** remains out of scope — see roadmap Someday.
 - Acceptance (sketch): a block definition stores its entities once; each INSERT is a lightweight reference, not a geometry copy; editing a definition updates every insert; DWG/DXF export writes real INSERT/BLOCK records; erasing a definition with live inserts is handled per REQ-201, never silently.
 - Acceptance (block editor — BEDIT in-place isolated editing, D-2026-08-29-h / ADR-043):
   - BEDIT with a block name from model space enters an **edit session** for that definition; BEDIT
@@ -4428,8 +4428,8 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i).
   2026-08-29 — accepted for the block-editor slice (D-2026-08-29-h, ADR-043): in-place isolated
-  editing via a model-store swap, with a Save/Don't-Save/Cancel close gate. Dynamic blocks and a
-  block-library browser remain out of scope (roadmap Someday).
+  editing via a model-store swap, with a Save/Don't-Save/Cancel close gate. Dynamic blocks moved to
+  REQ-369 (2026-10-02); a block-library browser remains out of scope (roadmap Someday).
   2026-08-29 — D-2026-08-29-i: live INSERT rubber-band preview + object snapping to placed inserts.
   2026-10-01 — "DWG/DXF export writes real INSERT/BLOCK records" made true for DWG (issue #606):
   `src/io/LibreDwgCad.cpp` writes a BLOCK_HEADER/BLOCK/ENDBLK per definition (lines, circles, arcs,
@@ -10754,6 +10754,65 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain/Commands (`CadField`), UI (MTEXT toolbar), IO (`LibreDwgCad.cpp`)
 - Status: accepted
 - Revisions: 2026-10-02 — initial (closes SPEC GAP on issue #617; D-2026-10-02-a).
+
+### REQ-369 — AutoCAD dynamic blocks: parameters, visibility, grips, and DWG round trip (GitHub issue #618)
+
+- Purpose: issue #618 — **dynamic blocks** (stretch, flip, visibility states, lookup tables) so one
+  block definition covers many sizes/states, AutoCAD dynamic blocks open with their current geometry
+  intact, and edits round-trip through `.gs` and DWG where LibreDWG allows.
+- Priority: should
+- Type: functional + interop
+- Decision: D-2026-10-02-b (moves dynamic blocks off roadmap Someday; amends REQ-107's out-of-scope
+  note; phased delivery — increment 1 lands first in TASK-618).
+- Depends on: REQ-107 (blocks/INSERT), REQ-170 / REQ-175 (DWG document), issue #606 (named BLOCK/INSERT
+  fidelity). R2004+ objects (`ACAD_EVALUATION_GRAPH`, many action classes) follow #600's export path
+  when a slice needs them.
+- Statement:
+  1. **Increment 1 — anonymous instance fidelity (R2000+).** A model-space INSERT that references an
+     AutoCAD dynamic-block anonymous block (`*U…`) imports as a real `CadBlockRef` to that `*U`
+     definition (evaluated geometry), not as exploded loose entities. DWG export writes the `*U`
+     BLOCK/ENDBLK and INSERT with the same transform; reopen in GoSurvey preserves one ref, not
+     model-space lines. Anonymous defs are hidden from the block library browser.
+  2. **Increment 2 — foreign dynamic-block display.** Opening a DWG from AutoCAD/Civil 3D shows each
+     dynamic insert in its **current** visibility/size state (the `*U` geometry), even when GoSurvey
+     does not yet evaluate parameters locally.
+  3. **Increment 3 — GoSurvey-authored dynamics → DWG (R2004+).** Block definitions authored with
+     BEDIT `BPARAM` / `BACTION` / `BVISIBILITY` export native dynamic-block objects
+     (`BLOCKLINEARPARAMETER`, `BLOCKSTRETCHACTION`, `BLOCKVISIBILITYPARAMETER`, …) and an
+     `ACAD_EVALUATION_GRAPH` sufficient for AutoCAD to treat the block as dynamic again.
+  4. **Increment 4 — import evaluation + grips.** Import reads parameter values and visibility state
+     from foreign DWGs where LibreDWG decodes them; placed inserts expose grips (`CadBlockArmDynGrip`)
+     that edit parameters and re-evaluate actions using GoSurvey's existing parameter/action model
+     (`CadBlockParameter`, `CadBlockAction`).
+  5. **Increment 5 — full round trip.** Save → AutoCAD → Save → GoSurvey preserves parameter values,
+     visibility, and geometry for a representative test set (linear stretch, flip, visibility lookup).
+     `#614` loss summary names any dynamic-block class still dropped or degraded.
+  6. **Out of scope:** block-library browser (still roadmap Someday), LISP-driven dynamic block
+     creation in AutoCAD, and parameters LibreDWG marks DEBUGGING when no stable decode exists —
+     those are logged per REQ-201 rather than guessed.
+- Acceptance:
+  - **(Inc 1)** `LibreDwgCadTests` issue #618 cases pass: `*U` INSERT export/import keeps
+    `cadBlockRefs` and empty model-space lines; foreign `*U` DWG imports as one ref.
+  - **(Inc 2)** `LibreDwgCadTests` / `CadBlockTests` tag `issue618`/`inc2`: viewport collection uses
+    baked `*U` geometry (no GoSurvey action re-evaluation); foreign golden DWG shows stretched length
+    from `*U`, not the named definition's default size; INSERTs aimed at a dynamic **definition**
+    block are skipped with a logged reason rather than exploded default geometry.
+  - **(Inc 3)** `LibreDwgCadTests` tag `[issue618][inc3]`: R2004 export of a GoSurvey block with linear
+    parameter + stretch action writes `BLOCKLINEARPARAMETER`, `BLOCKSTRETCHACTION`, and
+    `ACAD_EVALUATION_GRAPH` readable by `dwg_read_file`.
+  - **(Inc 4)** `LibreDwgCadTests` tag `[issue618][inc4]` restores `BPARAM`/`BACTION` from DWG; `CadBlockTests`
+    tag `[issue618][inc4]` verifies linear stretch grip re-evaluation on placed INSERTs.
+  - **(Inc 5)** `LibreDwgCadTests` tag `[issue618][inc5]`: GoSurvey → DWG → GoSurvey preserves a placed
+    INSERT's linear parameter distance when all instances agree; `#614` loss summary at R2004+ names
+    visibility parameters, unsupported parameter kinds, extra linear chains, conflicting INSERT values,
+    and stretch actions without entity handles. Full Save → AutoCAD → Save → GoSurvey remains a manual
+    check for flip/visibility/lookup until encoders exist.
+  - REQ-107 no longer lists dynamic blocks as permanently out of scope.
+- Owner-layer: Domain/Commands (`CadBlocks`, `cadblock.hpp`), IO (`LibreDwgCad.cpp`), UI (BEDIT ribbon)
+- Status: accepted — increments 1–5 delivered (MVP: linear stretch + flip export/import; visibility/lookup
+  logged as export loss); issue #618 may close when manual AutoCAD parity is recorded (TASK-618)
+- Revisions: 2026-10-02 — initial (issue #618; D-2026-10-02-b). 2026-10-02 — increment 2 display
+  fidelity (TASK-618). 2026-10-02 — increment 3 GoSurvey dynamic DWG export (TASK-618).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

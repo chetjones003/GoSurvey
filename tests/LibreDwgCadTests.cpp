@@ -995,6 +995,327 @@ TEST_CASE("SyncCurrentAnnotationScaleIndex picks scale closest to plot scale (is
   REQUIRE(st.currentAnnotationScaleIndex == 1);
 }
 
+TEST_CASE("Dynamic anonymous *U INSERT round-trips as cadBlockRef (issue #618)", "[dwg][libredwg][issue618]") {
+  ScratchDir dir("dwg-dynamic-u-block");
+  const auto p = (dir.path / "dynu.dwg").string();
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "*U42";
+  def.dynamicAnonymous = true;
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "*U42";
+  ref.dynamicCanonicalName = "DOOR";
+  ref.xf.x = 3.f;
+  ref.xf.y = 4.f;
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.blockDefs.size() == 1);
+  CHECK(in.blockDefs[0].name == "*U42");
+  CHECK(in.blockDefs[0].dynamicAnonymous);
+  REQUIRE(in.cadBlockRefs.size() == 1);
+  CHECK(in.cadBlockRefs[0].defName == "*U42");
+  CHECK(in.cadBlockRefs[0].xf.x == Catch::Approx(3.f));
+  CHECK(in.cadBlockRefs[0].xf.y == Catch::Approx(4.f));
+  CHECK(in.userLinesFlat.empty());
+}
+
+TEST_CASE("Foreign DWG with *U INSERT imports as block ref not exploded geometry (issue #618)",
+          "[dwg][libredwg][issue618]") {
+  ScratchDir dir("dwg-foreign-dynamic-u");
+  const auto p = (dir.path / "foreign.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  auto* ms = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(ms != nullptr);
+
+  Dwg_Object_BLOCK_HEADER* ublk = dwg_add_BLOCK_HEADER(dwg, "*U99");
+  REQUIRE(ublk != nullptr);
+  ublk->anonymous = 1;
+  dwg_add_BLOCK(ublk, "*U99");
+  dwg_point_3d a{0.0, 0.0, 0.0};
+  dwg_point_3d b{5.0, 0.0, 0.0};
+  dwg_add_LINE(ublk, &a, &b);
+  dwg_add_ENDBLK(ublk);
+
+  dwg_point_3d ins{10.0, 20.0, 0.0};
+  REQUIRE(dwg_add_INSERT(ms, &ins, "*U99", 1.0, 1.0, 1.0, 0.0) != nullptr);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadBlockRefs.size() == 1);
+  CHECK(in.cadBlockRefs[0].defName == "*U99");
+  CHECK(in.cadBlockRefs[0].xf.x == Catch::Approx(10.f));
+  CHECK(in.cadBlockRefs[0].xf.y == Catch::Approx(20.f));
+  CHECK(in.userLinesFlat.empty());
+  REQUIRE(in.blockDefs.size() == 1);
+  CHECK(in.blockDefs[0].dynamicAnonymous);
+}
+
+TEST_CASE("GoSurvey linear dynamic block exports evaluation graph at R2004 (issue #618 inc3)",
+          "[dwg][libredwg][issue618][inc3]") {
+  ScratchDir dir("dwg-gosurvey-dynamic-export");
+  const auto p = (dir.path / "dynexport.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition def;
+  def.name = "STRETCH_DOOR";
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockParameter len;
+  len.name = "Width";
+  len.kind = CadBlockParamKind::Linear;
+  len.value = 2.f;
+  len.minValue = 0.f;
+  len.maxValue = 10.f;
+  def.parameters.push_back(len);
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  stretch.threshold = 0.f;
+  def.actions.push_back(stretch);
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "STRETCH_DOOR";
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data rd;
+  std::memset(&rd, 0, sizeof(rd));
+  REQUIRE(dwg_read_file(p.c_str(), &rd) < DWG_ERR_CRITICAL);
+  int nGraph = 0;
+  int nLinear = 0;
+  int nStretch = 0;
+  for (BITCODE_BL i = 0; i < rd.num_objects; ++i) {
+    const Dwg_Object* o = &rd.object[i];
+    if (o->fixedtype == DWG_TYPE_EVALUATION_GRAPH)
+      ++nGraph;
+    if (o->fixedtype == DWG_TYPE_BLOCKLINEARPARAMETER)
+      ++nLinear;
+    if (o->fixedtype == DWG_TYPE_BLOCKSTRETCHACTION)
+      ++nStretch;
+  }
+  CHECK(nGraph >= 1);
+  CHECK(nLinear >= 1);
+  CHECK(nStretch >= 1);
+  dwg_free(&rd);
+}
+
+TEST_CASE("GoSurvey dynamic block DWG import restores parameters and actions (issue #618 inc4)",
+          "[dwg][libredwg][issue618][inc4]") {
+  ScratchDir dir("dwg-gosurvey-dynamic-import");
+  const auto p = (dir.path / "dynimport.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition def;
+  def.name = "STRETCH_DOOR";
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockParameter len;
+  len.name = "Width";
+  len.kind = CadBlockParamKind::Linear;
+  len.value = 2.f;
+  len.minValue = 0.f;
+  len.maxValue = 10.f;
+  def.parameters.push_back(len);
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  def.actions.push_back(stretch);
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "STRETCH_DOOR";
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.blockDefs.size() == 1);
+  CHECK(in.blockDefs[0].name == "STRETCH_DOOR");
+  REQUIRE(in.blockDefs[0].parameters.size() >= 1);
+  CHECK(in.blockDefs[0].parameters[0].name == "Width");
+  CHECK(in.blockDefs[0].parameters[0].value == Catch::Approx(2.f).margin(0.01f));
+  REQUIRE(in.blockDefs[0].actions.size() >= 1);
+  CHECK(in.blockDefs[0].actions[0].kind == CadBlockActionKind::Stretch);
+  CHECK(in.blockDefs[0].actions[0].paramName == "Width");
+  REQUIRE(in.cadBlockRefs.size() == 1);
+  REQUIRE(in.cadBlockRefs[0].paramState.size() >= 1);
+  CHECK(in.cadBlockRefs[0].paramState[0].name == "Width");
+}
+
+static int DwgLossCountForLabel(const AppCommandState& st, std::string_view needle) {
+  for (const DwgExportLoss& l : ComputeDwgExportLosses(st)) {
+    if (l.label.find(needle) != std::string::npos)
+      return l.count;
+  }
+  return 0;
+}
+
+static void Issue618StretchDoorDef(CadBlockDefinition& def, float defaultWidth) {
+  def.name = "STRETCH_DOOR";
+  def.content.lines = {0.f, 0.f, 0.f, defaultWidth, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockParameter len;
+  len.name = "Width";
+  len.kind = CadBlockParamKind::Linear;
+  len.value = defaultWidth;
+  len.minValue = 0.f;
+  len.maxValue = 10.f;
+  def.parameters.push_back(len);
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  def.actions.push_back(stretch);
+}
+
+TEST_CASE("GoSurvey dynamic block DWG round trip writes INSERT param distance (issue #618 inc5)",
+          "[dwg][libredwg][issue618][inc5]") {
+  ScratchDir dir("dwg-gosurvey-dynamic-roundtrip");
+  const auto p = (dir.path / "instparam.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition def;
+  Issue618StretchDoorDef(def, 2.f);
+  st.blockDefs.push_back(def);
+  CadBlockRef ref;
+  ref.defName = "STRETCH_DOOR";
+  CadBlockParameter inst = def.parameters[0];
+  inst.value = 4.f;
+  ref.paramState.push_back(inst);
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.blockDefs.size() == 1);
+  REQUIRE(in.blockDefs[0].parameters.size() >= 1);
+  CHECK(in.blockDefs[0].parameters[0].value == Catch::Approx(4.f).margin(0.02f));
+}
+
+TEST_CASE("DWG export loss summary names dynamic-block gaps at R2004 (issue #618 inc5 / #614)",
+          "[dwg][libredwg][issue618][inc5][issue614]") {
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition def;
+  Issue618StretchDoorDef(def, 2.f);
+  st.blockDefs.push_back(def);
+  CadBlockRef ref;
+  ref.defName = "STRETCH_DOOR";
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  CHECK(DwgLossCountForLabel(st, "entity associations") >= 1);
+  CHECK(DwgLossCountForLabel(st, "evaluation graph requires R2004") == 0);
+
+  AppCommandState visSt;
+  visSt.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition visDef;
+  Issue618StretchDoorDef(visDef, 2.f);
+  visDef.visibilityStates = {"Open", "Closed"};
+  visSt.blockDefs.push_back(std::move(visDef));
+  CHECK(DwgLossCountForLabel(visSt, "visibility dynamic parameters") >= 1);
+
+  AppCommandState conflictSt;
+  conflictSt.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition conflictDef;
+  Issue618StretchDoorDef(conflictDef, 2.f);
+  conflictSt.blockDefs.push_back(conflictDef);
+  CadBlockRef r1;
+  r1.defName = "STRETCH_DOOR";
+  CadBlockParameter p1 = conflictDef.parameters[0];
+  p1.value = 3.f;
+  r1.paramState.push_back(p1);
+  CadBlockRef r2;
+  r2.defName = "STRETCH_DOOR";
+  CadBlockParameter p2 = conflictDef.parameters[0];
+  p2.value = 5.f;
+  r2.paramState.push_back(p2);
+  conflictSt.cadBlockRefs.push_back(std::move(r1));
+  conflictSt.cadBlockRefs.push_back(std::move(r2));
+  conflictSt.cadBlockRefAttrs.push_back(EntityAttributes{});
+  conflictSt.cadBlockRefAttrs.push_back(EntityAttributes{});
+  CHECK(DwgLossCountForLabel(conflictSt, "conflicting dynamic parameter") == 2);
+}
+
+TEST_CASE("Foreign dynamic insert draws evaluated *U geometry not default size (issue #618 inc2)",
+          "[dwg][libredwg][issue618][inc2]") {
+  ScratchDir dir("dwg-dynamic-golden-display");
+  const auto p = (dir.path / "golden.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  auto* ms = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(ms != nullptr);
+
+  Dwg_Object_BLOCK_HEADER* door = dwg_add_BLOCK_HEADER(dwg, "DOOR");
+  REQUIRE(door != nullptr);
+  dwg_add_BLOCK(door, "DOOR");
+  dwg_point_3d d0{0.0, 0.0, 0.0};
+  dwg_point_3d d1{1.0, 0.0, 0.0};
+  dwg_add_LINE(door, &d0, &d1);
+  dwg_add_ENDBLK(door);
+
+  Dwg_Object_BLOCK_HEADER* ublk = dwg_add_BLOCK_HEADER(dwg, "*U1");
+  REQUIRE(ublk != nullptr);
+  ublk->anonymous = 1;
+  dwg_add_BLOCK(ublk, "*U1");
+  dwg_point_3d u1{0.0, 0.0, 0.0};
+  dwg_point_3d u2{5.0, 0.0, 0.0};
+  dwg_add_LINE(ublk, &u1, &u2);
+  dwg_add_ENDBLK(ublk);
+
+  dwg_point_3d ins{0.0, 0.0, 0.0};
+  REQUIRE(dwg_add_INSERT(ms, &ins, "*U1", 1.0, 1.0, 1.0, 0.0) != nullptr);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].defName == "*U1");
+  REQUIRE(st.blockDefs.size() == 1);
+  CHECK(st.blockDefs[0].name == "*U1");
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(st.blockDefs, st.cadBlockRefs[0], EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  const float span =
+      std::hypot(segs[0].x1 - segs[0].x0, segs[0].y1 - segs[0].y0);
+  CHECK(span == Catch::Approx(5.f).margin(0.01f));
+  CHECK(st.userLinesFlat.empty());
+}
+
 TEST_CASE("Named block INSERT re-imports as cadBlockRef without trailer (issue #622)", "[dwg][libredwg][issue622]") {
   ScratchDir dir("dwg-block-insert-ref");
   const auto p = (dir.path / "blk.dwg").string();

@@ -500,6 +500,8 @@ json CadBlockDefToJson(const CadBlockDefinition& d) {
   }
   o["actions"] = std::move(acts);
   o["visibilityStates"] = d.visibilityStates;
+  if (d.dynamicAnonymous)
+    o["dynamicAnonymous"] = true;
   if (!d.connections.empty()) {
     json conns = json::array();
     for (const CadBlockConnection& c : d.connections) {
@@ -594,6 +596,7 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
   }
   if (o.contains("visibilityStates") && o["visibilityStates"].is_array())
     d.visibilityStates = o["visibilityStates"].get<std::vector<std::string>>();
+  d.dynamicAnonymous = o.value("dynamicAnonymous", false);
   if (o.contains("connections") && o["connections"].is_array()) {
     for (const auto& cj : o["connections"]) {
       CadBlockConnection c;
@@ -629,6 +632,8 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
 json CadBlockRefToJson(const CadBlockRef& r) {
   json o;
   o["defName"] = r.defName;
+  if (!r.dynamicCanonicalName.empty())
+    o["dynamicCanonicalName"] = r.dynamicCanonicalName;
   json xf;
   CadBlockXformToJson(r.xf, xf);
   o["xf"] = std::move(xf);
@@ -657,6 +662,7 @@ json CadBlockRefToJson(const CadBlockRef& r) {
 CadBlockRef CadBlockRefFromJson(const json& o) {
   CadBlockRef r;
   r.defName = o.value("defName", "");
+  r.dynamicCanonicalName = o.value("dynamicCanonicalName", "");
   if (o.contains("xf"))
     r.xf = CadBlockXformFromJson(o["xf"]);
   r.visState = o.value("visState", "");

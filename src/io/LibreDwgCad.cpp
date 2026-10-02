@@ -4,6 +4,7 @@
 #include "CadCommands.hpp"
 #include "CadField.hpp"
 #include "LibreDwgField.hpp"
+#include "LibreDwgDynamicBlock.hpp"
 #include "util/cadpiperun.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadDimGeom.hpp"
@@ -975,7 +976,11 @@ void ImportAcisSolid(AppCommandState& st, const Dwg_Data* dwg, const Dwg_Entity_
 }
 
 [[nodiscard]] bool DwgBlockDefNameIsImportable(std::string_view name) {
-  if (name.empty() || name[0] == '*')
+  if (name.empty())
+    return false;
+  if (CadBlockNameIsDynamicAnonymous(name))
+    return true;
+  if (name[0] == '*')
     return false;
   return name != "GOSURVEY_POINT";
 }
@@ -1071,6 +1076,7 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
 
   CadBlockDefinition def;
   def.name = name;
+  def.dynamicAnonymous = CadBlockNameIsDynamicAnonymous(name);
   def.baseX = static_cast<float>(hdr->base_pt.x - st.worldDocumentOriginX);
   def.baseY = static_cast<float>(hdr->base_pt.y - st.worldDocumentOriginY);
   def.baseZ = static_cast<float>(hdr->base_pt.z);
@@ -1081,6 +1087,7 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
   }
   CaptureScratchIntoBlockContent(scratch, &def.content);
   CadBlockBakeBasePoint(&def);
+  ImportDynamicBlockDefinitionFromDwg(dwg, blkHeaderObj, def);
   st.blockDefs.push_back(std::move(def));
   return true;
 }
@@ -1155,6 +1162,74 @@ inline constexpr const char* kGosurveyCannoscaleEedTag = "CANNOSCALE";
   return GosurveyEedMarksAnnotative(ent);
 }
 
+[[nodiscard]] static std::uint64_t DwgObjectHandleValue(const Dwg_Object* o) {
+  return o != nullptr ? o->handle.value : 0u;
+}
+
+[[nodiscard]] static bool DwgBlockHeaderHasDynamicPurgePreventer(const Dwg_Data* dwg,
+                                                                 const Dwg_Object* blkHeaderObj) {
+  if (dwg == nullptr || blkHeaderObj == nullptr)
+    return false;
+  const std::uint64_t target = DwgObjectHandleValue(blkHeaderObj);
+  if (target == 0u)
+    return false;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_DYNAMICBLOCKPURGEPREVENTER || o->tio.object == nullptr ||
+        o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER == nullptr)
+      continue;
+    const Dwg_Object_DYNAMICBLOCKPURGEPREVENTER* pp = o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER;
+    if (pp->block == nullptr)
+      continue;
+    Dwg_Object* linked = dwg_resolve_handle_silent(const_cast<Dwg_Data*>(dwg), pp->block->absolute_ref);
+    if (linked != nullptr && DwgObjectHandleValue(linked) == target)
+      return true;
+  }
+  return false;
+}
+
+[[nodiscard]] static bool DwgInsertReferencesForeignDynamicDefinition(const Dwg_Data* dwg, const Dwg_Object* blkHeaderObj) {
+  if (blkHeaderObj == nullptr)
+    return false;
+  const std::string name = BlockHeaderDwgName(dwg, blkHeaderObj);
+  if (name.empty() || CadBlockNameIsDynamicAnonymous(name))
+    return false;
+  return DwgBlockHeaderHasDynamicPurgePreventer(dwg, blkHeaderObj);
+}
+
+[[nodiscard]] static std::string DwgUniqueDynamicCanonicalBlockName(const Dwg_Data* dwg) {
+  if (dwg == nullptr)
+    return {};
+  std::vector<std::string> names;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_DYNAMICBLOCKPURGEPREVENTER || o->tio.object == nullptr ||
+        o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER == nullptr)
+      continue;
+    const Dwg_Object_DYNAMICBLOCKPURGEPREVENTER* pp = o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER;
+    if (pp->block == nullptr)
+      continue;
+    Dwg_Object* linked = dwg_resolve_handle_silent(const_cast<Dwg_Data*>(dwg), pp->block->absolute_ref);
+    if (linked == nullptr)
+      continue;
+    const std::string name = BlockHeaderDwgName(dwg, linked);
+    if (name.empty() || CadBlockNameIsDynamicAnonymous(name))
+      continue;
+    bool dup = false;
+    for (const std::string& have : names) {
+      if (CadBlockEqCi(have, name)) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup)
+      names.push_back(name);
+  }
+  if (names.size() == 1)
+    return names[0];
+  return {};
+}
+
 void CollectInsertAttributes(const Dwg_Data* dwg, const Dwg_Entity_INSERT* ins,
                              std::vector<CadBlockAttrValue>& out) {
   if (ins == nullptr || ins->attribs == nullptr || ins->num_owned == 0)
@@ -1199,6 +1274,8 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
 
   CadBlockRef ref;
   ref.defName = name;
+  if (CadBlockNameIsDynamicAnonymous(name))
+    ref.dynamicCanonicalName = DwgUniqueDynamicCanonicalBlockName(dwg);
   ref.xf.x = static_cast<float>(ins->ins_pt.x - originSubtractX);
   ref.xf.y = static_cast<float>(ins->ins_pt.y - originSubtractY);
   ref.xf.z = static_cast<float>(ins->ins_pt.z);
@@ -1208,6 +1285,14 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
   ref.xf.rotZ = static_cast<float>(ins->rotation);
   ref.annotative = ImportEedMarksAnnotative(dwg, ent);
   CollectInsertAttributes(dwg, ins, ref.attributes);
+  if (!CadBlockNameIsDynamicAnonymous(name)) {
+    const int di = CadBlockFindDef(catalog.blockDefs, name);
+    if (di >= 0) {
+      const CadBlockDefinition& bdef = catalog.blockDefs[static_cast<size_t>(di)];
+      if (!bdef.parameters.empty() && ref.paramState.empty())
+        ref.paramState = bdef.parameters;
+    }
+  }
   outRefs.push_back(std::move(ref));
   outAttrs.push_back(at);
   return true;
@@ -1250,6 +1335,14 @@ static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg
   ref.xf.rotZ = static_cast<float>(ins->rotation + xf.ang);
   ref.annotative = ImportEedMarksAnnotative(dwg, ent);
   CollectInsertAttributes(dwg, ins, ref.attributes);
+  if (!CadBlockNameIsDynamicAnonymous(name)) {
+    const int di = CadBlockFindDef(catalog.blockDefs, name);
+    if (di >= 0) {
+      const CadBlockDefinition& bdef = catalog.blockDefs[static_cast<size_t>(di)];
+      if (!bdef.parameters.empty() && ref.paramState.empty())
+        ref.paramState = bdef.parameters;
+    }
+  }
   st.cadBlockRefs.push_back(std::move(ref));
   st.cadBlockRefAttrs.push_back(EntityAttributes{});
   return true;
@@ -1790,6 +1883,23 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE_INSERT) {
+    if (ent->tio.INSERT != nullptr && ent->tio.INSERT->block_header != nullptr) {
+      Dwg_Object* insBlk = dwg_resolve_handle_silent(dwg, ent->tio.INSERT->block_header->absolute_ref);
+      if (DwgInsertReferencesForeignDynamicDefinition(dwg, insBlk)) {
+        AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
+        bool canEval = false;
+        if (insBlk != nullptr &&
+            EnsureDwgBlockDefinitionImported(catalog, dwg, insBlk, skipHist, degenerateExtrusions)) {
+          const std::string bname = BlockHeaderDwgName(dwg, insBlk);
+          const int di = CadBlockFindDef(catalog.blockDefs, bname);
+          canEval = di >= 0 && !catalog.blockDefs[static_cast<size_t>(di)].parameters.empty();
+        }
+        if (!canEval) {
+          NoteSkip(skipHist, "INSERT(dynamic block definition; expected *U instance)");
+          return;
+        }
+      }
+    }
     if (depth == 0) {
       if (TryImportInsertAsBlockRef(st, dwg, ent, depth, at, skipHist, degenerateExtrusions))
         return;
@@ -3207,6 +3317,24 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
     add("multileader extra branch(es) (R2000/R2004 export keeps primary branch only)", nMlExtraBranches);
   }
 
+  if (!r2004Write) {
+    size_t nDynBlock = 0;
+    for (const CadBlockDefinition& d : st.blockDefs) {
+      if (CadBlockDefinitionNeedsDynamicDwgExport(d))
+        ++nDynBlock;
+    }
+    add("block definition(s) with dynamic parameters (ACAD evaluation graph requires R2004+)", nDynBlock);
+  } else {
+    const CadBlockDynamicExportLossCounts dyn = ComputeCadBlockDynamicExportLossCounts(st);
+    add("block definition(s) with visibility dynamic parameters (not written to DWG yet)", dyn.visibilityBlockDefs);
+    add("dynamic block parameter(s) with no R2004+ DWG encoder yet", dyn.unsupportedParameters);
+    add("extra linear dynamic parameter(s) (only one linear/stretch chain is written per block)", dyn.extraLinearParameters);
+    add("block insert(s) with conflicting dynamic parameter values (block definition default written)",
+        dyn.insertParamConflicts);
+    add("dynamic stretch action(s) without entity associations (AutoCAD may not stretch geometry)",
+        dyn.stretchWithoutEntityLinks);
+  }
+
   // REQ-057, issue #603: a varying-Z polyline now writes as POLYLINE_3D (real per-vertex Z), but
   // POLYLINE_3D has no bulge — a run that is BOTH 3D and curved still degrades to straight
   // segments between its vertices.
@@ -4332,6 +4460,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     Dwg_Object_BLOCK_HEADER* bh = dwg_add_BLOCK_HEADER(dwg, def.name.c_str());
     if (bh == nullptr)
       continue;
+    if (def.dynamicAnonymous)
+      bh->anonymous = 1;
     dwg_add_BLOCK(bh, def.name.c_str());
     WriteBlockDefinitionGeometry(bh, def.content, tw);
     for (const CadBlockAttrDef& ad : def.attrDefs) {
@@ -4357,6 +4487,13 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   }
   for (const auto& kv : blockHdrByName)
     dwg_add_ENDBLK(kv.second);
+  if (DwgSaveVersionUsesR2004Features(st.dwgExportVersion)) {
+    for (const CadBlockDefinition& def : st.blockDefs) {
+      const auto hdrIt = blockHdrByName.find(def.name);
+      if (hdrIt != blockHdrByName.end())
+        WriteGoSurveyDynamicBlockObjects(dwg, hdrIt->second, def, &st.cadBlockRefs, log);
+    }
+  }
   for (size_t i = 0; i < st.cadBlockRefs.size(); ++i) {
     const CadBlockRef& ref = st.cadBlockRefs[i];
     if (blockDefByName.find(ref.defName) == blockDefByName.end())
