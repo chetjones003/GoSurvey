@@ -121,6 +121,37 @@ static void RunRibbonTypedCommand(AppCommandState& cmd, std::vector<std::string>
   SubmitRibbonCommand(cmd, log, line);
 }
 
+// Issue #622: comma-separated SCALE names; empty vector = visible at every scale.
+static void ParseCommaSeparatedScaleNames(const std::string& edited, std::vector<std::string>* out) {
+  assert(out != nullptr);
+  out->clear();
+  size_t i = 0;
+  while (i < edited.size()) {
+    const size_t j = edited.find(',', i);
+    const size_t end = j == std::string::npos ? edited.size() : j;
+    std::string tok = edited.substr(i, end - i);
+    while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t'))
+      tok.erase(tok.begin());
+    while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t'))
+      tok.pop_back();
+    if (!tok.empty())
+      out->push_back(std::move(tok));
+    if (j == std::string::npos)
+      break;
+    i = j + 1;
+  }
+}
+
+static std::string JoinCommaSeparatedScaleNames(const std::vector<std::string>& names) {
+  std::string visJoined;
+  for (size_t vi = 0; vi < names.size(); ++vi) {
+    if (vi > 0)
+      visJoined += ',';
+    visJoined += names[vi];
+  }
+  return visJoined;
+}
+
 static void UiSubmitViewportPick(AppCommandState& cmd, double x, double y, std::vector<std::string>& log,
                                  bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false,
                                  const ray3d::Ray* pickRay = nullptr)
@@ -6758,6 +6789,18 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           BumpCadGpuCache(cmd);
         }
       };
+      auto setVisibleScaleNames = [&](const std::vector<std::string>& names) {
+        if (hatchEditing) {
+          snapEdit();
+          for (int i : hatchSel)
+            cmd.cadFilledRegions[static_cast<size_t>(i)].annotativeVisibleScaleNames = names;
+          BumpCadGpuCache(cmd);
+        }
+      };
+      std::string wVisScales;
+      if (hatchEditing)
+        wVisScales = JoinCommaSeparatedScaleNames(
+            cmd.cadFilledRegions[static_cast<size_t>(hatchSel[0])].annotativeVisibleScaleNames);
 
       static hatchpat::Def s_solidDef = [] { hatchpat::Def d; d.name = "SOLID"; return d; }();
       const ImU32 swInk = IM_COL32(static_cast<int>(wRgb[0] * 255.f), static_cast<int>(wRgb[1] * 255.f),
@@ -6860,6 +6903,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       if (hatchEditing) {
         if (ImGui::Checkbox("Annotative##hatch", &wAnnotative))
           setAnnotative(wAnnotative);
+        if (wAnnotative && !cmd.annotationScales.empty()) {
+          char visBuf[256]{};
+          std::snprintf(visBuf, sizeof(visBuf), "%s", wVisScales.c_str());
+          ImGui::SetNextItemWidth(140.f);
+          if (ImGui::InputTextWithHint("Vis scales##hatch", "1:20,1:50", visBuf, sizeof(visBuf)) &&
+              ImGui::IsItemDeactivatedAfterEdit()) {
+            std::vector<std::string> parsed;
+            ParseCommaSeparatedScaleNames(std::string(visBuf), &parsed);
+            setVisibleScaleNames(parsed);
+          }
+        }
       }
       ImGui::EndGroup();
     }
@@ -7911,6 +7965,34 @@ static char PropRowAxis(const char* label) {
   return (c == 'X' || c == 'Y' || c == 'Z') ? c : 0;
 }
 
+/// Properties-table rows: Annotative + optional Visible scales (requires an open table).
+static void PropAnnotativeAndVisibleScalesRows(AppCommandState& cmd, bool* annotative,
+                                               std::vector<std::string>* visNames, const char* annotId,
+                                               const char* visInputId) {
+  assert(annotative != nullptr);
+  assert(visNames != nullptr);
+  ImGui::TableNextRow();
+  ImGui::TableNextColumn();
+  ImGui::TextUnformatted("Annotative");
+  ImGui::TableNextColumn();
+  if (ImGui::Checkbox(annotId, annotative))
+    BumpCadGpuCache(cmd);
+  if (*annotative && !cmd.annotationScales.empty()) {
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted("Visible scales");
+    ImGui::TableNextColumn();
+    char visBuf[256]{};
+    const std::string visJoined = JoinCommaSeparatedScaleNames(*visNames);
+    std::snprintf(visBuf, sizeof(visBuf), "%s", visJoined.c_str());
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText(visInputId, visBuf, sizeof(visBuf)) && ImGui::IsItemDeactivatedAfterEdit()) {
+      ParseCommaSeparatedScaleNames(std::string(visBuf), visNames);
+      BumpCadGpuCache(cmd);
+    }
+  }
+}
+
 // REQ-101: `v` points at LOCAL storage (world = local + worldDocumentOrigin). `originOffset`
 // lets an X/Y row display and edit the WORLD value a user actually typed/expects, while the
 // pointed-to storage keeps holding the precision-safe local one — pass `cmd.worldDocumentOriginX`
@@ -8266,47 +8348,8 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
 
     if (ann.kind == CadAnnotation::Kind::Text || ann.kind == CadAnnotation::Kind::Mtext ||
         CadAnnotationIsDimension(ann)) {
-      ImGui::TableNextRow();
-      ImGui::TableNextColumn();
-      ImGui::TextUnformatted("Annotative");
-      ImGui::TableNextColumn();
-      if (ImGui::Checkbox("##annAnnotative", &ann.annotative))
-        BumpCadGpuCache(cmd);
-      if (ann.annotative && !cmd.annotationScales.empty()) {
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::TextUnformatted("Visible scales");
-        ImGui::TableNextColumn();
-        std::string visJoined;
-        for (size_t vi = 0; vi < ann.annotativeVisibleScaleNames.size(); ++vi) {
-          if (vi > 0)
-            visJoined += ',';
-          visJoined += ann.annotativeVisibleScaleNames[vi];
-        }
-        char visBuf[256]{};
-        std::snprintf(visBuf, sizeof(visBuf), "%s", visJoined.c_str());
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::InputText("##annVisScales", visBuf, sizeof(visBuf)) && ImGui::IsItemDeactivatedAfterEdit()) {
-          ann.annotativeVisibleScaleNames.clear();
-          const std::string edited(visBuf);
-          size_t i = 0;
-          while (i < edited.size()) {
-            const size_t j = edited.find(',', i);
-            const size_t end = j == std::string::npos ? edited.size() : j;
-            std::string tok = edited.substr(i, end - i);
-            while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t'))
-              tok.erase(tok.begin());
-            while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t'))
-              tok.pop_back();
-            if (!tok.empty())
-              ann.annotativeVisibleScaleNames.push_back(std::move(tok));
-            if (j == std::string::npos)
-              break;
-            i = j + 1;
-          }
-          BumpCadGpuCache(cmd);
-        }
-      }
+      PropAnnotativeAndVisibleScalesRows(cmd, &ann.annotative, &ann.annotativeVisibleScaleNames, "##annAnnotative",
+                                         "##annVisScales");
     }
 
     if (ann.kind == CadAnnotation::Kind::Text) {
@@ -9357,6 +9400,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int nAnn  = 0;
   int nTable = 0;
   int nBlock = 0;
+  int nMultileader = 0;
   int nPdf  = 0;
   int nSurf = 0;
   int firstSurfIx = -1;
@@ -9369,6 +9413,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     else if (e.type == SelectedEntity::Type::Annotation) ++nAnn;
     else if (e.type == SelectedEntity::Type::Table) ++nTable;
     else if (e.type == SelectedEntity::Type::BlockRef) ++nBlock;
+    else if (e.type == SelectedEntity::Type::Multileader) ++nMultileader;
     else if (e.type == SelectedEntity::Type::PdfUnderlay)++nPdf;
     else if (e.type == SelectedEntity::Type::Surface) {
       ++nSurf;
@@ -9563,6 +9608,37 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
           r.xf.rotZ = deg * 0.01745329252f;
         if (ImGui::Checkbox("Annotative##blk", &r.annotative))
           BumpCadGpuCache(cmd);
+        if (r.annotative && !cmd.annotationScales.empty()) {
+          char visBuf[256]{};
+          const std::string visJoined = JoinCommaSeparatedScaleNames(r.annotativeVisibleScaleNames);
+          std::snprintf(visBuf, sizeof(visBuf), "%s", visJoined.c_str());
+          ImGui::TextUnformatted("Visible scales");
+          ImGui::SetNextItemWidth(-1);
+          if (ImGui::InputText("##blkVisScales", visBuf, sizeof(visBuf)) && ImGui::IsItemDeactivatedAfterEdit()) {
+            ParseCommaSeparatedScaleNames(std::string(visBuf), &r.annotativeVisibleScaleNames);
+            BumpCadGpuCache(cmd);
+          }
+        }
+      }
+    }
+  } else if (nLine == 0 && nCirc == 0 && nAnn == 0 && nTable == 0 && nBlock == 0 && nMultileader > 0) {
+    int mlIdx = -1;
+    for (const auto& e : sel) {
+      if (e.type == SelectedEntity::Type::Multileader) {
+        mlIdx = e.index;
+        break;
+      }
+    }
+    if (nMultileader == 1 && mlIdx >= 0 && static_cast<size_t>(mlIdx) < cmd.cadMultileaders.size()) {
+      CadMultileader& ml = cmd.cadMultileaders[static_cast<size_t>(mlIdx)];
+      if (PropSectionHeader("Multileader")) {
+        if (ImGui::BeginTable("props_multileader", 2, kPropTableFlags)) {
+          ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+          ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+          PropAnnotativeAndVisibleScalesRows(cmd, &ml.annotative, &ml.annotativeVisibleScaleNames,
+                                             "##mlAnnotative", "##mlVisScales");
+          ImGui::EndTable();
+        }
       }
     }
   } else if (nCirc == 0 && nAnn == 0 && nLine > 0) {
@@ -18788,6 +18864,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const EntityAttributes* lp =
             li < cmd.cadMultileaderAttrs.size() ? &cmd.cadMultileaderAttrs[li] : nullptr;
         if (lp && CadEntityIdHidden(&cmd.hiddenEntityIds, lp->id))
+          continue;
+        const Viewport* mlVp = CurrentViewport(cmd);
+        if (!CadAnnotativeVisibleAtActiveScale(ml.annotative, ml.annotativeVisibleScaleNames, kAnnoScales,
+                                               cmd.currentAnnotationScaleIndex, mlVp,
+                                               cmd.modelUnitsPerPlottedInch))
           continue;
         ImU32 col = kAnnCol;
         if (lp) {
