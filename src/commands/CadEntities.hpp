@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -1246,6 +1247,18 @@ struct CadAnnotationScale {
   if (s.paperUnits <= 0.f)
     return 0.f;
   return s.drawingUnits / s.paperUnits;
+}
+
+/// Status-bar / combo label for a SCALE dictionary entry (issue #622).
+[[nodiscard]] inline std::string CadAnnotationScaleStatusLabel(const CadAnnotationScale& s) {
+  if (!s.name.empty())
+    return s.name;
+  const float mup = CadAnnotationScaleModelUnitsPerPlottedInch(s);
+  if (mup <= 0.f)
+    return "Scale";
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "1:%.4g", mup);
+  return buf;
 }
 
 /// A solid-filled region (ADR-011), imported from a SOLID-fill HATCH. Holds one or more closed boundary

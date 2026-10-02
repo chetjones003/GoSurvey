@@ -9708,6 +9708,38 @@ static void DrawPlotScaleCombo(AppCommandState& cmd, float width = 158.f) {
   ImGui::PopID();
 }
 
+static void DrawAnnotationScaleCombo(AppCommandState& cmd, float width = 120.f) {
+  if (cmd.annotationScales.empty())
+    return;
+  const int n = static_cast<int>(cmd.annotationScales.size());
+  int cur = cmd.currentAnnotationScaleIndex;
+  if (cur < 0 || cur >= n)
+    cur = 0;
+
+  ImGui::PushID("annoscalecombo");
+  ImGui::SetNextItemWidth(width);
+  const std::string preview =
+      std::string("Anno ") + CadAnnotationScaleStatusLabel(cmd.annotationScales[static_cast<size_t>(cur)]);
+  if (ImGui::BeginCombo("##annoscale", preview.c_str(), ImGuiComboFlags_HeightLargest)) {
+    for (int i = 0; i < n; ++i) {
+      const bool isSel = (cur == i);
+      const std::string lbl = CadAnnotationScaleStatusLabel(cmd.annotationScales[static_cast<size_t>(i)]);
+      if (ImGui::Selectable(lbl.c_str(), isSel)) {
+        if (i != cmd.currentAnnotationScaleIndex) {
+          PushUndoSnapshot(cmd, "Annotation scale");
+          SetCurrentAnnotationScaleIndex(cmd, i);
+        }
+      }
+      if (isSel)
+        ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
+  ItemHelpTooltip("Annotation scale — model-space size for annotative text, dimensions, hatches, and blocks "
+                  "(AutoCAD CANNOSCALE, issue #622).");
+  ImGui::PopID();
+}
+
 } // namespace
 
 static const char* CommandInputHint(const AppCommandState& cmd) {
@@ -10404,11 +10436,16 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   const char* spaceLbl = InFloatingModelSpace(cmd) ? "FLOAT"
                                                    : (cmd.activeSpaceIndex != kModelSpaceIndex ? "PAPER" : "MODEL");
   float plotScaleW = 158.f;
+  float annoScaleW = 120.f;
+  const bool showAnnoScaleCombo =
+      !cmd.annotationScales.empty() &&
+      (cmd.activeSpaceIndex == kModelSpaceIndex || InFloatingModelSpace(cmd));
   float btnSp = 4.f;
   constexpr float kRightLeadGap = 8.f;
   constexpr float kMinPlotScaleW = 72.f;
+  constexpr float kMinAnnoScaleW = 72.f;
   const int rightItemCount =
-      9
+      9 + (showAnnoScaleCombo ? 1 : 0)
 #ifdef GOSURVEY_DEVELOPER_SHELL
       + 1
 #endif
@@ -10420,12 +10457,18 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
               + statusBtnW("DEV")
 #endif
               + plotScaleW + statusBtnW("Multi Selection");
+    if (showAnnoScaleCombo)
+      w += annoScaleW;
     w += btnSp * static_cast<float>(rightItemCount - 1);
     return w;
   };
   float rightW = measureRightW();
   while (leftW + rightW + kRightLeadGap + 48.f > contentW && plotScaleW > kMinPlotScaleW) {
     plotScaleW = std::max(kMinPlotScaleW, plotScaleW - 12.f);
+    rightW = measureRightW();
+  }
+  while (showAnnoScaleCombo && leftW + rightW + kRightLeadGap + 48.f > contentW && annoScaleW > kMinAnnoScaleW) {
+    annoScaleW = std::max(kMinAnnoScaleW, annoScaleW - 12.f);
     rightW = measureRightW();
   }
   while (leftW + rightW + kRightLeadGap + 48.f > contentW && btnSp > 2.f) {
@@ -10703,6 +10746,10 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
 #endif
     DrawPlotScaleCombo(cmd, plotScaleW);
     ImGui::SameLine(0, sp);
+    if (showAnnoScaleCombo) {
+      DrawAnnotationScaleCombo(cmd, annoScaleW);
+      ImGui::SameLine(0, sp);
+    }
     {
       const bool on = cmd.multiSelectionEnabled;
       PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);

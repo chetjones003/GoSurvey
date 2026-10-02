@@ -671,6 +671,12 @@ TEST_CASE("Annotative TEXT uses current annotation scale in model space (issue #
   REQUIRE(AnnotativeModelUnitsPerPlottedInch(t, nullptr, 80.f, &scales, 0) == Catch::Approx(25.f));
 }
 
+TEST_CASE("Annotation scale status label uses DWG name when present (issue #622)", "[paperspace][issue622]") {
+  CadAnnotationScale s;
+  s.name = "1/4\" = 1'-0\"";
+  REQUIRE(CadAnnotationScaleStatusLabel(s) == "1/4\" = 1'-0\"");
+}
+
 TEST_CASE("Annotative hatch pattern scales with model annotation scale (issue #622)", "[paperspace][issue622]") {
   std::vector<CadAnnotationScale> scales(1);
   scales[0].paperUnits = 1.f;
