@@ -837,6 +837,141 @@ TEST_CASE("Paper-space named INSERT round-trips as paperBlockRef (issue #622)", 
   CHECK(in.cadBlockRefs.empty());
 }
 
+TEST_CASE("Nested block INSERT in definition round-trips through DWG (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-nested-block-insert");
+  const auto p = (dir.path / "nested-blk.dwg").string();
+  AppCommandState st;
+  CadBlockDefinition leaf;
+  leaf.name = "NEST_LEAF";
+  leaf.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  leaf.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockDefinition parent;
+  parent.name = "NEST_PARENT";
+  parent.content.lines = {0.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+  parent.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockNested nested;
+  nested.defName = "NEST_LEAF";
+  nested.xf.x = 4.f;
+  nested.xf.y = 2.f;
+  nested.xf.rotZ = 0.5f;
+  parent.content.nested.push_back(std::move(nested));
+  st.blockDefs.push_back(std::move(leaf));
+  st.blockDefs.push_back(std::move(parent));
+  CadBlockRef top;
+  top.defName = "NEST_PARENT";
+  top.xf.x = 10.f;
+  top.xf.y = 20.f;
+  st.cadBlockRefs.push_back(std::move(top));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data exported;
+  std::memset(&exported, 0, sizeof(exported));
+  REQUIRE(dwg_read_file(p.c_str(), &exported) < DWG_ERR_CRITICAL);
+  Dwg_Object* parentBlkObj = nullptr;
+  int nestedLeafInserts = 0;
+  for (BITCODE_BL i = 0; i < exported.num_objects; ++i) {
+    const Dwg_Object* o = &exported.object[i];
+    if (o->fixedtype == DWG_TYPE_BLOCK_HEADER && o->tio.object != nullptr &&
+        o->tio.object->tio.BLOCK_HEADER != nullptr) {
+      const std::string nm =
+          libredwgcad_detail::DecodeDwgString(o->tio.object->tio.BLOCK_HEADER->name, false);
+      if (nm == "NEST_PARENT")
+        parentBlkObj = const_cast<Dwg_Object*>(o);
+    }
+    if (o->fixedtype != DWG_TYPE_INSERT || o->tio.entity == nullptr || o->tio.entity->tio.INSERT == nullptr)
+      continue;
+    const Dwg_Entity_INSERT* ins = o->tio.entity->tio.INSERT;
+    if (ins->block_header == nullptr)
+      continue;
+    Dwg_Object* blk = dwg_resolve_handle_silent(&exported, ins->block_header->absolute_ref);
+    if (blk == nullptr || blk->tio.object == nullptr || blk->tio.object->tio.BLOCK_HEADER == nullptr)
+      continue;
+    const std::string refName =
+        libredwgcad_detail::DecodeDwgString(blk->tio.object->tio.BLOCK_HEADER->name, false);
+    if (refName == "NEST_LEAF")
+      ++nestedLeafInserts;
+  }
+  int ownedNestedInserts = 0;
+  if (parentBlkObj != nullptr) {
+    for (Dwg_Object* e = get_first_owned_entity(parentBlkObj); e != nullptr;
+         e = get_next_owned_entity(parentBlkObj, e)) {
+      if (e->fixedtype == DWG_TYPE_INSERT)
+        ++ownedNestedInserts;
+    }
+  }
+  dwg_free(&exported);
+  REQUIRE(nestedLeafInserts >= 1);
+  REQUIRE(ownedNestedInserts == 1);
+
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.blockDefs.size() == 2);
+  const CadBlockDefinition* parentIn = nullptr;
+  for (const CadBlockDefinition& d : in.blockDefs) {
+    if (d.name == "NEST_PARENT")
+      parentIn = &d;
+  }
+  REQUIRE(parentIn != nullptr);
+  REQUIRE(parentIn->content.nested.size() == 1);
+  CHECK(parentIn->content.nested[0].defName == "NEST_LEAF");
+  CHECK(parentIn->content.nested[0].xf.x == Catch::Approx(4.f));
+  CHECK(parentIn->content.nested[0].xf.y == Catch::Approx(2.f));
+  CHECK(parentIn->content.nested[0].xf.rotZ == Catch::Approx(0.5f).margin(0.001f));
+  REQUIRE(in.cadBlockRefs.size() == 1);
+  CHECK(in.cadBlockRefs[0].defName == "NEST_PARENT");
+}
+
+TEST_CASE("Native DWG nested INSERT in block definition imports as nested (issue #622)",
+          "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-native-nested");
+  const auto p = (dir.path / "native-nested.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  auto* mhdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(mhdr != nullptr);
+
+  Dwg_Object_BLOCK_HEADER* leafHdr = dwg_add_BLOCK_HEADER(dwg, "CHILD_BLK");
+  REQUIRE(leafHdr != nullptr);
+  dwg_add_BLOCK(leafHdr, "CHILD_BLK");
+  dwg_point_3d a{0.0, 0.0, 0.0};
+  dwg_point_3d b{1.0, 0.0, 0.0};
+  dwg_add_LINE(leafHdr, &a, &b);
+  dwg_add_ENDBLK(leafHdr);
+
+  Dwg_Object_BLOCK_HEADER* parentHdr = dwg_add_BLOCK_HEADER(dwg, "PARENT_BLK");
+  REQUIRE(parentHdr != nullptr);
+  dwg_add_BLOCK(parentHdr, "PARENT_BLK");
+  dwg_point_3d insNested{3.0, 4.0, 0.0};
+  REQUIRE(dwg_add_INSERT(parentHdr, &insNested, "CHILD_BLK", 1.0, 1.0, 1.0, 0.0) != nullptr);
+  dwg_add_ENDBLK(parentHdr);
+
+  dwg_point_3d insTop{10.0, 20.0, 0.0};
+  REQUIRE(dwg_add_INSERT(mhdr, &insTop, "PARENT_BLK", 1.0, 1.0, 1.0, 0.0) != nullptr);
+
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  const CadBlockDefinition* parentIn = nullptr;
+  for (const CadBlockDefinition& d : in.blockDefs) {
+    if (d.name == "PARENT_BLK")
+      parentIn = &d;
+  }
+  REQUIRE(parentIn != nullptr);
+  REQUIRE(parentIn->content.nested.size() == 1);
+  CHECK(parentIn->content.nested[0].defName == "CHILD_BLK");
+  CHECK(parentIn->content.nested[0].xf.x == Catch::Approx(3.f));
+  CHECK(parentIn->content.nested[0].xf.y == Catch::Approx(4.f));
+  REQUIRE(in.cadBlockRefs.size() == 1);
+  CHECK(in.cadBlockRefs[0].defName == "PARENT_BLK");
+}
+
 TEST_CASE("GsIo syncs missing currentAnnotationScaleIndex on load (issue #622)", "[issue622][gsio]") {
   AppCommandState src;
   src.modelUnitsPerPlottedInch = 25.f;
