@@ -1429,6 +1429,8 @@ int main()
     ext.blockRefAttrs = &cmd.cadBlockRefAttrs;
     ext.drawingModelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
     ext.annotativeViewport = CurrentViewport(cmd);
+    ext.annotationScales = cmd.annotationScales.empty() ? nullptr : &cmd.annotationScales;
+    ext.currentAnnotationScaleIndex = cmd.currentAnnotationScaleIndex;
 
     activeRenderer.SetSize(fbW, fbH);
     RenderTuning tuning{};

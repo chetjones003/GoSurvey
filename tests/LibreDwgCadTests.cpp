@@ -745,12 +745,14 @@ TEST_CASE("DWG annotation scale list persists through GsIo (issue #622)", "[issu
   s.paperUnits = 1.f;
   s.drawingUnits = 20.f;
   src.annotationScales.push_back(std::move(s));
+  src.currentAnnotationScaleIndex = 0;
   std::vector<std::string> log;
   AppCommandState back;
   REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
   REQUIRE(back.annotationScales.size() == 1);
   CHECK(back.annotationScales[0].name == "1:20");
   CHECK(back.annotationScales[0].drawingUnits == Catch::Approx(20.f));
+  CHECK(back.currentAnnotationScaleIndex == 0);
 }
 
 TEST_CASE("MultileaderStyle persists through GsIo JSON (issue #619)", "[issue619][gsio]") {

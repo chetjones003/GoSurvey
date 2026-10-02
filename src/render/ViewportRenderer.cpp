@@ -2690,9 +2690,11 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             if (CadEntityIdHidden(hiddenIds, ia.id))
               continue;
             CadBlockRef drawRef = (*extended->blockRefs)[bi];
-            if (extended->annotativeViewport != nullptr && extended->drawingModelUnitsPerPlottedInch > 0.f)
-              drawRef = CadBlockRefForViewportDraw(drawRef, *extended->annotativeViewport,
-                                                   extended->drawingModelUnitsPerPlottedInch);
+            if (extended->drawingModelUnitsPerPlottedInch > 0.f)
+              drawRef = CadBlockRefForAnnotativeDisplay(drawRef, extended->annotativeViewport,
+                                                        extended->drawingModelUnitsPerPlottedInch,
+                                                        extended->annotationScales,
+                                                        extended->currentAnnotationScaleIndex);
             std::vector<CadBlockWorldSeg> segs;
             CadBlockCollectWorldLines(*extended->blockDefs, drawRef, ia, &segs);
             for (const CadBlockWorldSeg& s : segs)
