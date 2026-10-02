@@ -23,6 +23,9 @@ CMD 100,80
 CMD 0,80
 UNDO
 CMD OFFSET
+# OFFSET asks for the distance FIRST now (deaccf94), so through-point mode has to be chosen
+# before the entity rather than implied by picking a point instead of typing a number.
+CMD T
 PICK 100 40
 PICK 50 0
 

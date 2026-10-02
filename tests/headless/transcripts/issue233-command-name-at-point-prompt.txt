@@ -8,7 +8,9 @@
 # This is a message fix, not a behaviour change: the verb is still not dispatched, and every command
 # still ends exactly where it did. Two behaviours that PUT the user in this position are deliberate
 # and are not touched — LINE's blank Enter ends the chain and restarts LINE (D-2026-08-25-j), and
-# CIRCLE loops back for the next circle.
+# CIRCLE used to loop back for the next circle and was the second example; it is single-shot
+# since 48930b13, so this file uses it mid-command instead. D-2026-09-03-f still records the old
+# behaviour in its context paragraph - true when written, worth knowing it no longer is.
 #
 # The load-bearing case in this file is the LAST one: a command's own keyword that happens to also be
 # a command name must still reach the command. `ARC` inside POLYLINE is the example, and it is what
@@ -46,11 +48,14 @@ CMD C
 EXPECT LOG "then type CIRCLE."
 ESC
 
-# --- CIRCLE loops after creating one, so it is still running too ----------------------------------
+# --- CIRCLE mid-command is still running too ------------------------------------------------------
+# This case used to finish a circle first, because CIRCLE looped back for the next one. Commit
+# 48930b13 ("CIRCLE command ends after one circle instead of repeating") made it single-shot, so
+# after a completed circle nothing is running and BOX simply starts - the premise expired, not the
+# rule under test. The interception is asserted between the centre and the radius instead, which is
+# a point prompt with a command genuinely still active.
 CMD CIRCLE
 CMD 0,0
-CMD 10
-EXPECT CIRCLES 1
 CMD BOX
 EXPECT LOG "CIRCLE is still running"
 EXPECT LOG "then type BOX."
