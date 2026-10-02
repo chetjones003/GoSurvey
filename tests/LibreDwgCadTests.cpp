@@ -765,6 +765,41 @@ TEST_CASE("Annotation scale list round-trips through DWG (issue #622)", "[dwg][l
   CHECK(in.annotationScales[0].drawingUnits == Catch::Approx(25.f));
 }
 
+TEST_CASE("Two annotation scales round-trip through DWG (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-two-scales");
+  const auto p = (dir.path / "two-scales.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale a;
+  a.name = "1:10";
+  a.paperUnits = 1.f;
+  a.drawingUnits = 10.f;
+  CadAnnotationScale b;
+  b.name = "1:50";
+  b.paperUnits = 1.f;
+  b.drawingUnits = 50.f;
+  st.annotationScales.push_back(a);
+  st.annotationScales.push_back(b);
+  st.currentAnnotationScaleIndex = 1;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data probe{};
+  REQUIRE(dwg_read_file(p.c_str(), &probe) < DWG_ERR_CRITICAL);
+  int scaleObjCount = 0;
+  for (unsigned i = 0; i < probe.num_objects; ++i) {
+    if (probe.object[i].fixedtype == DWG_TYPE_SCALE)
+      ++scaleObjCount;
+  }
+  dwg_free(&probe);
+  REQUIRE(scaleObjCount == 2);
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.annotationScales.size() == 2);
+  CHECK(in.annotationScales[0].name == "1:10");
+  CHECK(in.annotationScales[1].name == "1:50");
+  CHECK(in.currentAnnotationScaleIndex == 1);
+}
+
 TEST_CASE("GOSURVEY CANNOSCALE EED round-trips on model space (issue #622)", "[dwg][libredwg][issue622]") {
   ScratchDir dir("dwg-cannoscale-eed");
   const auto p = (dir.path / "cannoscale.dwg").string();

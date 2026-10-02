@@ -3381,10 +3381,21 @@ extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
 
 // LibreDWG has no dwg_add_SCALE (HAVE_NO_DWG_ADD_SCALE). Hand-build AcDbScale objects the same way
 // WriteDwgGeoData hand-builds GEODATA — enough for ImportAnnotationScales' object scan on reopen.
+static int EnsureDwgScaleClassNumber(Dwg_Data* dwg) {
+  if (dwg == nullptr || dwg->dwg_class == nullptr)
+    return -1;
+  for (BITCODE_BS i = 0; i < dwg->num_classes; ++i) {
+    const char* dxfname = dwg->dwg_class[i].dxfname;
+    if (dxfname != nullptr && std::strcmp(dxfname, "SCALE") == 0)
+      return static_cast<int>(dwg->dwg_class[i].number);
+  }
+  return dwg_add_class(dwg, "SCALE", "AcDbScale", "ObjectDBX Classes", false);
+}
+
 static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationScale& entry) {
   if (dwg == nullptr || entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
     return false;
-  const int classNumber = dwg_add_class(dwg, "SCALE", "AcDbScale", "ObjectDBX Classes", false);
+  const int classNumber = EnsureDwgScaleClassNumber(dwg);
   if (classNumber < 0)
     return false;
   const BITCODE_BL idx = dwg->num_objects;
@@ -3397,13 +3408,8 @@ static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationSca
   obj->supertype = DWG_SUPERTYPE_OBJECT;
   obj->fixedtype = DWG_TYPE_SCALE;
   obj->type = static_cast<BITCODE_BS>(classNumber);
-  if (dwg->opts & DWG_OPTS_IN) {
-    obj->dxfname = _strdup("SCALE");
-    obj->name = _strdup("SCALE");
-  } else {
-    obj->name = const_cast<char*>("SCALE");
-    obj->dxfname = const_cast<char*>("SCALE");
-  }
+  obj->dxfname = (dwg->opts & DWG_OPTS_IN) ? _strdup("SCALE") : const_cast<char*>("SCALE");
+  obj->name = (dwg->opts & DWG_OPTS_IN) ? _strdup("SCALE") : const_cast<char*>("SCALE");
   obj->tio.object = static_cast<Dwg_Object_Object*>(std::calloc(1, sizeof(Dwg_Object_Object)));
   if (obj->tio.object == nullptr)
     return false;
