@@ -8249,7 +8249,8 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
     if (ImGui::IsItemDeactivatedAfterEdit())
       BumpCadGpuCache(cmd);
 
-    if (ann.kind == CadAnnotation::Kind::Text || ann.kind == CadAnnotation::Kind::Mtext) {
+    if (ann.kind == CadAnnotation::Kind::Text || ann.kind == CadAnnotation::Kind::Mtext ||
+        CadAnnotationIsDimension(ann)) {
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
       ImGui::TextUnformatted("Annotative");
@@ -16932,17 +16933,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (IsLayerFrozenInViewport(vp, layer))
             continue;
           const std::string entCol = aa ? aa->color : std::string("ByLayer");
+          CadDimStrokeParams annDsp = dsp;
+          annDsp.modelUnitsPerPlottedInch =
+              AnnotativeModelUnitsPerPlottedInch(ann, &vp, cmd.modelUnitsPerPlottedInch);
           CadDimWorldStrokes strokes;
-          if (!CadDimBuildWorldStrokes(ann, dsp, &strokes))
+          if (!CadDimBuildWorldStrokes(ann, annDsp, &strokes))
             continue;
           const ImU32 lineCol = dimVpCol(cmd.activeDimensionStyle.dimLineColor, layer, entCol, 0.1f, 0.1f, 0.12f);
           const ImU32 extCol = dimVpCol(cmd.activeDimensionStyle.extLineColor, layer, entCol, 0.1f, 0.1f, 0.12f);
           const ImU32 textCol = dimVpCol(cmd.activeDimensionStyle.textColor, layer, entCol, 0.08f, 0.08f, 0.1f);
           const ImU32 arrowCol = dimVpCol(cmd.activeDimensionStyle.arrowColor, layer, entCol, 0.1f, 0.1f, 0.12f);
-          const float hWorld = CadAnnotationHeightWorld(ann, cmd.modelUnitsPerPlottedInch);
+          const float hWorld = CadAnnotationHeightWorld(ann, annDsp.modelUnitsPerPlottedInch);
           const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
           DrawCadDimStrokesOnDrawList(sdl, ann, strokes, dimWts, fontPx, extCol, lineCol, arrowCol, textCol, vpFont,
-                                      dsp.arrowType);
+                                      annDsp.arrowType);
         }
         if (isFloatVp && outCursorX && outCursorY) {
           CadAnnotation draft{};
@@ -17865,11 +17869,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     auto drawAnnotationVisual = [&](const CadAnnotation& a, const EntityAttributes* attrPtr, ImU32 colFallback,
                                     std::optional<bool> multileaderAnnotative = std::nullopt) {
-      float drawMup = cmd.modelUnitsPerPlottedInch;
-      if (a.kind == CadAnnotation::Kind::Text && a.annotative) {
-        if (const Viewport* mvp = CurrentViewport(cmd))
-          drawMup = mvp->safeScale();
-      }
+      const Viewport* annVp = CurrentViewport(cmd);
+      const float drawMup = AnnotativeModelUnitsPerPlottedInch(a, annVp, cmd.modelUnitsPerPlottedInch);
       const float hWorld = CadAnnotationHeightWorld(a, drawMup);
       if (CadAnnotationIsDimension(a) && cmd.activeSpaceIndex >= 0)
         return;
@@ -17946,7 +17947,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ws(sx2 + nx * over, sy2 + ny * over, &B);
         dl->AddLine(A, B, extCol, extPx);
         // Arrow length in world units from DimensionStyle arrowSize (plotted inches) with viewport scale; tiny floor from meas for readability.
-        const float styleArrowWorld = cmd.activeDimensionStyle.arrowSizeInches * cmd.modelUnitsPerPlottedInch;
+        const float styleArrowWorld = cmd.activeDimensionStyle.arrowSizeInches * drawMup;
         const float alenW =
             std::max(styleArrowWorld * cmd.viewportDimArrowScale * 0.10f, cmd.viewportDimArrowScale * 0.012f * meas);
         const float dlen = std::hypot(sx2 - sx1, sy2 - sy1);

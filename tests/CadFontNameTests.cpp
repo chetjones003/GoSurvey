@@ -110,6 +110,18 @@ TEST_CASE("REQ-050: plain MTEXT through a viewport is sized by THAT viewport's s
   REQUIRE(h100 == Catch::Approx(h50 * 2.f));
 }
 
+TEST_CASE("REQ-110 sketch: annotative dimension uses viewport scale when flagged", "[cadfont][issue622]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 30.f;
+  CadAnnotation d;
+  d.kind = CadAnnotation::Kind::DimAligned;
+  d.annotative = true;
+  const float drawingMup = 60.f;
+  REQUIRE(AnnotativeModelUnitsPerPlottedInch(d, &vp, drawingMup) == Catch::Approx(30.f));
+  d.annotative = false;
+  REQUIRE(AnnotativeModelUnitsPerPlottedInch(d, &vp, drawingMup) == Catch::Approx(60.f));
+}
+
 TEST_CASE("REQ-110 sketch: annotative TEXT through a viewport uses that viewport's scale", "[cadfont][issue622]") {
   Viewport vp;
   vp.scaleModelPerPaperIn = 40.f;

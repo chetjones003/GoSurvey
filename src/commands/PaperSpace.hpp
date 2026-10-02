@@ -151,6 +151,15 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   return drawingModelUnitsPerPlottedInch;
 }
 
+/// Issue #622: annotative TEXT/MTEXT/dimensions use the viewport's scale so plotted height stays
+/// constant on the sheet. Non-annotative objects keep the drawing plot scale.
+[[nodiscard]] inline float AnnotativeModelUnitsPerPlottedInch(const CadAnnotation& a, const Viewport* vp,
+                                                              float drawingModelUnitsPerPlottedInch) {
+  if (!a.annotative || vp == nullptr)
+    return drawingModelUnitsPerPlottedInch;
+  return vp->safeScale();
+}
+
 /// Height on the sheet (paper inches) of \p a when it is plotted through \p vp.
 /// Plain MTEXT is \c plottedHeightInches (REQ-050 constant plotted height). TEXT, dimensions, and
 /// survey-label MTEXT convert model height through the viewport scale, matching the on-screen overlay.
