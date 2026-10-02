@@ -909,8 +909,8 @@ static void ImportPointAsPositionMarker(AppCommandState& st, double wx, double w
 }
 
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
-                  std::unordered_map<std::string, int>* skipHist,
-                  int* degenerateExtrusions = nullptr);
+                  std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                  AppCommandState* blockDefCatalog);
 
 /// REQ-320 / ADR-051 (GitHub issue #299): a `3DSOLID` entity's geometry is an ACIS record stream,
 /// not lines/circles LibreDWG can hand back directly. `acis_data` is LibreDWG's already-decrypted
@@ -988,7 +988,7 @@ void ImportAcisSolid(AppCommandState& st, const Dwg_Data* dwg, const Dwg_Entity_
 static bool ScratchHasBlockGeometry(const AppCommandState& s) {
   return !s.userLinesFlat.empty() || !s.userCirclesCxCyZR.empty() || !s.userArcs.empty() ||
          !s.userEllipses.empty() || s.userPolylineOffsets.size() >= 2 || !s.cadAnnotations.empty() ||
-         !s.cadMeshes.empty() || !s.cadSolids.empty();
+         !s.cadMeshes.empty() || !s.cadSolids.empty() || !s.cadBlockRefs.empty();
 }
 
 static void CaptureScratchIntoBlockContent(const AppCommandState& st, CadBlockContent* c) {
@@ -1062,7 +1062,7 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
        e = get_next_owned_entity(blkHeaderObj, e)) {
     if (e->fixedtype == DWG_TYPE_ATTDEF && e->tio.entity != nullptr && e->tio.entity->tio.ATTDEF != nullptr)
       continue;  // collected below
-    ImportObject(scratch, dwg, e, id, 1, skipHist, degenerateExtrusions);
+    ImportObject(scratch, dwg, e, id, 1, skipHist, degenerateExtrusions, &st);
   }
   if (!ScratchHasBlockGeometry(scratch))
     return false;
@@ -1125,8 +1125,8 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
                                         const EntityAttributes& at,
                                         std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
                                         double originSubtractX, double originSubtractY,
-                                        std::vector<CadBlockRef>& outRefs,
-                                        std::vector<EntityAttributes>& outAttrs) {
+                                        std::vector<CadBlockRef>& outRefs, std::vector<EntityAttributes>& outAttrs,
+                                        AppCommandState* blockDefCatalog) {
   if (ent == nullptr || ent->tio.INSERT == nullptr)
     return false;
   const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
@@ -1138,9 +1138,10 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
   const std::string name = BlockHeaderDwgName(dwg, blk);
   if (!DwgBlockDefNameIsImportable(name))
     return false;
-  if (!EnsureDwgBlockDefinitionImported(st, dwg, blk, skipHist, degenerateExtrusions))
+  AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
+  if (!EnsureDwgBlockDefinitionImported(catalog, dwg, blk, skipHist, degenerateExtrusions))
     return false;
-  if (CadBlockFindDef(st.blockDefs, name) < 0)
+  if (CadBlockFindDef(catalog.blockDefs, name) < 0)
     return false;
 
   CadBlockRef ref;
@@ -1159,18 +1160,60 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
   return true;
 }
 
+static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, const Xf2& xf,
+                                         std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                                         AppCommandState* blockDefCatalog) {
+  if (ent == nullptr || ent->tio.INSERT == nullptr)
+    return false;
+  const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
+  if (ins->block_header == nullptr)
+    return false;
+  Dwg_Object* blk = dwg_resolve_handle_silent(dwg, ins->block_header->absolute_ref);
+  if (blk == nullptr)
+    return false;
+  const std::string name = BlockHeaderDwgName(dwg, blk);
+  if (!DwgBlockDefNameIsImportable(name))
+    return false;
+  AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
+  if (!EnsureDwgBlockDefinitionImported(catalog, dwg, blk, skipHist, degenerateExtrusions))
+    return false;
+  if (CadBlockFindDef(catalog.blockDefs, name) < 0)
+    return false;
+
+  double wx = 0.0;
+  double wy = 0.0;
+  xf.apply(ins->ins_pt.x, ins->ins_pt.y, &wx, &wy);
+  const double insSx = ins->scale.x != 0.0 ? ins->scale.x : 1.0;
+  const double insSy = ins->scale.y != 0.0 ? ins->scale.y : 1.0;
+  const double insSz = ins->scale.z != 0.0 ? ins->scale.z : 1.0;
+  CadBlockRef ref;
+  ref.defName = name;
+  ref.xf.x = static_cast<float>(wx - st.worldDocumentOriginX);
+  ref.xf.y = static_cast<float>(wy - st.worldDocumentOriginY);
+  ref.xf.z = static_cast<float>(ins->ins_pt.z);
+  ref.xf.sx = static_cast<float>(insSx * xf.sx);
+  ref.xf.sy = static_cast<float>(insSy * xf.sy);
+  ref.xf.sz = static_cast<float>(insSz);
+  ref.xf.rotZ = static_cast<float>(ins->rotation + xf.ang);
+  ref.annotative = GosurveyEedMarksAnnotativeBlockInsert(ent);
+  CollectInsertAttributes(dwg, ins, ref.attributes);
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  return true;
+}
+
 bool TryImportInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
                                const EntityAttributes& at, std::unordered_map<std::string, int>* skipHist,
                                int* degenerateExtrusions) {
   if (depth != 0)
     return false;
   return ImportNamedInsertAsBlockRef(st, dwg, ent, at, skipHist, degenerateExtrusions, st.worldDocumentOriginX,
-                                     st.worldDocumentOriginY, st.cadBlockRefs, st.cadBlockRefAttrs);
+                                     st.worldDocumentOriginY, st.cadBlockRefs, st.cadBlockRefAttrs, nullptr);
 }
 
 void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
-                   std::unordered_map<std::string, int>* skipHist,
-                   int* degenerateExtrusions) {
+                   std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                   AppCommandState* blockDefCatalog) {
   if (depth > 8 || ent == nullptr || ent->tio.INSERT == nullptr)
     return;
   const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
@@ -1186,7 +1229,7 @@ void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, i
   child.sx = ins->scale.x != 0.0 ? ins->scale.x : 1.0;
   child.sy = ins->scale.y != 0.0 ? ins->scale.y : 1.0;
   for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e))
-    ImportObject(st, dwg, e, child, depth + 1, skipHist, degenerateExtrusions);
+    ImportObject(st, dwg, e, child, depth + 1, skipHist, degenerateExtrusions, blockDefCatalog);
 }
 
 // REQ-366, issue #607: imports a DIMENSION's anonymous "*D" block content as plain entities —
@@ -1203,7 +1246,7 @@ void ExplodeDimensionBlock(AppCommandState& st, Dwg_Data* dwg, const Dwg_DIMENSI
     return;
   const Xf2 identity{};
   for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e))
-    ImportObject(st, dwg, e, identity, depth + 1, skipHist, degenerateExtrusions);
+    ImportObject(st, dwg, e, identity, depth + 1, skipHist, degenerateExtrusions, nullptr);
 }
 
 // REQ-366 statement 3: Aligned / Linear (rotated or orthogonal) / 3-point Angular read back into
@@ -1394,8 +1437,8 @@ bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATC
 }
 
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
-                  std::unordered_map<std::string, int>* skipHist,
-                  int* degenerateExtrusions) {
+                  std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                  AppCommandState* blockDefCatalog) {
   if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr)
     return;
   Dwg_Object_Entity* ent = obj->tio.entity;
@@ -1692,9 +1735,13 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE_INSERT) {
-    if (TryImportInsertAsBlockRef(st, dwg, ent, depth, at, skipHist, degenerateExtrusions))
+    if (depth == 0) {
+      if (TryImportInsertAsBlockRef(st, dwg, ent, depth, at, skipHist, degenerateExtrusions))
+        return;
+    } else if (ImportNestedInsertAsBlockRef(st, dwg, ent, xf, skipHist, degenerateExtrusions, blockDefCatalog)) {
       return;
-    ExplodeInsert(st, dwg, ent, depth, skipHist, degenerateExtrusions);
+    }
+    ExplodeInsert(st, dwg, ent, depth, skipHist, degenerateExtrusions, blockDefCatalog);
     return;
   }
   // REQ-366, issue #607: Aligned / Linear / 3-point Angular DIMENSION entities read back into
@@ -2131,9 +2178,9 @@ inline constexpr const char* kSurveyPointBlockName = "GOSURVEY_POINT";
 // mapping run in reverse for BEDIT). Deliberately simpler than the model-space writer: no tilted-
 // polyline split (REQ-325), no MTEXT attachment/style resolution (issue #604) — a block
 // definition's own content is written flat, matching what AutoCAD needs to show the block
-// correctly without pulling in every model-space refinement. Nested blocks, meshes and solids
-// inside a block are not written (same degradations FillFromState already discloses for model
-// space, via the #614 loss summary).
+// correctly without pulling in every model-space refinement. Meshes and solids inside a block are
+// not written (same degradations FillFromState already discloses for model space, via the #614
+// loss summary). Named nested INSERTs in `content.nested` are written as real INSERT records.
 void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
                                   const CadBlockContent& content, TableWriter& tw) {
   auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
@@ -2280,6 +2327,21 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
         apply(e->parent, at);
       }
     }
+  }
+}
+
+static void WriteBlockDefinitionNestedInserts(Dwg_Object_BLOCK_HEADER* blkhdr, const CadBlockContent& content) {
+  if (blkhdr == nullptr)
+    return;
+  for (const CadBlockNested& n : content.nested) {
+    if (n.defName.empty())
+      continue;
+    dwg_point_3d ins{static_cast<double>(n.xf.x), static_cast<double>(n.xf.y), static_cast<double>(n.xf.z)};
+    if (Dwg_Entity_INSERT* e0 =
+            dwg_add_INSERT(blkhdr, &ins, n.defName.c_str(), static_cast<double>(n.xf.sx),
+                           static_cast<double>(n.xf.sy), static_cast<double>(n.xf.sz),
+                           static_cast<double>(n.xf.rotZ)))
+      (void)e0;
   }
 }
 
@@ -3204,7 +3266,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
   }
   if (ty == DWG_TYPE_INSERT && ent->tio.INSERT != nullptr) {
     if (ImportNamedInsertAsBlockRef(st, dwg, ent, at, skipHist, degenerateExtrusions, 0.0, 0.0, L.paperBlockRefs,
-                                    L.paperBlockRefAttrs))
+                                    L.paperBlockRefAttrs, nullptr))
       return;
   }
   if (ty == DWG_TYPE_BLOCK || ty == DWG_TYPE_ENDBLK)
@@ -3916,6 +3978,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   // all. Definitions are written FIRST and in full before any INSERT, since dwg_add_INSERT looks
   // its target block up by name (must already be in the BLOCK table).
   std::unordered_map<std::string, const CadBlockDefinition*> blockDefByName;
+  std::unordered_map<std::string, Dwg_Object_BLOCK_HEADER*> blockHdrByName;
   for (const CadBlockDefinition& def : st.blockDefs) {
     if (def.name.empty())
       continue;
@@ -3933,9 +3996,20 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
                      ad.prompt.empty() ? ad.tag.c_str() : ad.prompt.c_str(), &ap, ad.tag.c_str(),
                      ad.defaultValue.c_str());
     }
-    dwg_add_ENDBLK(bh);
     blockDefByName[def.name] = &def;
+    blockHdrByName[def.name] = bh;
   }
+  // Nested INSERTs need every BLOCK table entry to exist first (LibreDWG dwg_add_INSERT resolves
+  // by name via dwg_find_tablehandle), and must be created before ENDBLK so import walks owned
+  // entities correctly.
+  for (const CadBlockDefinition& def : st.blockDefs) {
+    const auto hdrIt = blockHdrByName.find(def.name);
+    if (hdrIt == blockHdrByName.end())
+      continue;
+    WriteBlockDefinitionNestedInserts(hdrIt->second, def.content);
+  }
+  for (const auto& kv : blockHdrByName)
+    dwg_add_ENDBLK(kv.second);
   for (size_t i = 0; i < st.cadBlockRefs.size(); ++i) {
     const CadBlockRef& ref = st.cadBlockRefs[i];
     if (blockDefByName.find(ref.defName) == blockDefByName.end())
@@ -4526,7 +4600,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   Dwg_Object* mspace = dwg_model_space_object(&dwg);
   if (mspace != nullptr) {
     for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e))
-      ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions);
+      ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions, nullptr);
   }
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
                          st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
@@ -4546,7 +4620,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
         continue;
       if (ty == DWG_TYPE_POLYLINE_PFACE || ty == DWG_TYPE_POLYLINE_MESH || ty == DWG_TYPE__3DFACE)
         continue;
-      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions);
+      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions, nullptr);
     }
   }
   if (st.cadMeshes.empty()) {
@@ -4559,7 +4633,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
       const Dwg_Object_Type ty = o->fixedtype;
       if (ty != DWG_TYPE_POLYLINE_PFACE && ty != DWG_TYPE_POLYLINE_MESH && ty != DWG_TYPE__3DFACE)
         continue;
-      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions);
+      ImportObject(st, &dwg, o, id, 0, &skipHist, &degenerateExtrusions, nullptr);
     }
   }
 
