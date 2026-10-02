@@ -1,7 +1,7 @@
 # TASK-305 — Multileaders + DWG (issue #619)
 
 - Type:    feature (**SPEC GAP** — propose REQ-367, then Verification → Workshop)
-- Status:  in progress (#655 multi-branch DWG export, #622 annotative multileader v1 on beta; open: SCALE object list / full #622 for all entity types)
+- Status:  **complete** (REQ-367 v1 on `beta`, GitHub **#619 closed** 2026-10-02; PRs #645–#656)
 - Opened:  2026-10-01
 - GitHub:  #619, tracker #601
 - Depends: R2018 export on beta (**#643**, D-2026-10-01-f) ✓
@@ -22,7 +22,7 @@ GoSurvey has no multileader object or command. DWG open skips `MULTILEADER`; old
 4. **DWG export (R2010+ default path):** Write `MULTILEADER` + `MLEADERSTYLE` (hand-built in vendored LibreDWG — no `dwg_add_MULTILEADER`). R2000/R2004 fallback: `LEADER` + `MTEXT` association where `dwg_add_LEADER` suffices.
 5. **Tests:** Round-trip one synthetic multileader at R2018; import sample from AutoCAD if committed fixture exists.
 
-**Out of v1:** block content multileaders, dogleg editing grips, full MLEADERSTYLE editor UI, annotative (#622).
+**Out of v1:** block content multileaders (import log only), dogleg editing grips, custom named MLEADERSTYLE in DWG beyond Standard; full annotative (#622) for TEXT/dim/hatch/SCALE.
 
 ## Architecture check
 

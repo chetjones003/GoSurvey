@@ -40,10 +40,10 @@ Some group B items are also **new GoSurvey features** (fields, dynamic blocks, m
 | #616 | Tables | R2004 | no (GoSurvey has tables) | TABLE debugging-level, no add API |
 | #617 | Fields (live text) | R2004 | **yes**, SPEC GAP | FIELD stable |
 | #618 | Dynamic blocks | R2004 | **yes**, roadmap Someday (REQ-107) | mixed; many parameters unstable |
-| #619 | Multileaders and leaders | R2007 (target R2010+) | **yes**, SPEC GAP | MULTILEADER stable, style unstable |
+| #619 | Multileaders and leaders | R2007 (target R2010+) | **yes** — REQ-367 shipped on `beta` (#619 closed) | MULTILEADER stable; hand-built export |
 | #620 | Transparency | R2010 | no | fields exist; blocked by #600 |
 | #621 | Point clouds saved as a link to the scan file | R2013 | no (GoSurvey has clouds) | unstable; AutoCAD attaches only `.rcp`/`.rcs` |
-| #622 | Annotative scaling | R2007 (target R2010+) | **yes**, SPEC GAP | SCALE stable, context data unstable |
+| #622 | Annotative scaling | R2007 (target R2010+) | **yes**, SPEC GAP — multileader v1 only (#656); issue open | SCALE stable, context data unstable |
 | #623 | Newer GEODATA layout (local grid vs projected) | R2010 | no | stable |
 | #624 | Visual styles, materials, lights | R2007 (target R2010+) | **yes**, SPEC GAP | VISUALSTYLE stable |
 
