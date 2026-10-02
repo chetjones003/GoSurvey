@@ -972,6 +972,170 @@ void ImportAcisSolid(AppCommandState& st, const Dwg_Data* dwg, const Dwg_Entity_
   st.cadSolidAttrs.push_back(at);
 }
 
+[[nodiscard]] bool DwgBlockDefNameIsImportable(std::string_view name) {
+  if (name.empty() || name[0] == '*')
+    return false;
+  return name != "GOSURVEY_POINT";
+}
+
+[[nodiscard]] std::string BlockHeaderDwgName(const Dwg_Data* dwg, const Dwg_Object* blkHeaderObj) {
+  if (blkHeaderObj == nullptr || blkHeaderObj->fixedtype != DWG_TYPE_BLOCK_HEADER ||
+      blkHeaderObj->tio.object == nullptr || blkHeaderObj->tio.object->tio.BLOCK_HEADER == nullptr)
+    return {};
+  return FromT(dwg, blkHeaderObj->tio.object->tio.BLOCK_HEADER->name);
+}
+
+static bool ScratchHasBlockGeometry(const AppCommandState& s) {
+  return !s.userLinesFlat.empty() || !s.userCirclesCxCyZR.empty() || !s.userArcs.empty() ||
+         !s.userEllipses.empty() || s.userPolylineOffsets.size() >= 2 || !s.cadAnnotations.empty() ||
+         !s.cadMeshes.empty() || !s.cadSolids.empty();
+}
+
+static void CaptureScratchIntoBlockContent(const AppCommandState& st, CadBlockContent* c) {
+  assert(c != nullptr);
+  c->lines = st.userLinesFlat;
+  c->lineAttrs = st.userLineAttrs;
+  c->lineVis.assign(st.userLineAttrs.size(), "");
+  c->circles = st.userCirclesCxCyZR;
+  c->circleAttrs = st.userCircleAttrs;
+  c->circleVis.assign(st.userCircleAttrs.size(), "");
+  c->circleNormals = st.userCircleNormals;
+  EnsureCircleNormals(c->circleNormals, st.userCirclesCxCyZR.size() / 4);
+  c->arcs = st.userArcs;
+  c->arcAttrs = st.userArcAttrs;
+  c->ellipses = st.userEllipses;
+  c->ellAttrs = st.userEllAttrs;
+  c->polyOffsets = st.userPolylineOffsets;
+  c->polyVerts = st.userPolylineVerts;
+  c->polyVertsBulge = st.userPolylineVertsBulge;
+  c->polyClosed = st.userPolylineClosed;
+  c->polyAttrs = st.userPolylineAttrs;
+  c->texts = st.cadAnnotations;
+  c->textAttrs = st.cadAnnotationAttrs;
+  c->meshes = st.cadMeshes;
+  c->meshAttrs = st.cadMeshAttrs;
+  c->solids = st.cadSolids;
+  c->solidAttrs = st.cadSolidAttrs;
+  for (const CadBlockRef& r : st.cadBlockRefs) {
+    CadBlockNested n;
+    n.defName = r.defName;
+    n.xf = r.xf;
+    c->nested.push_back(std::move(n));
+  }
+}
+
+void ImportAttdefIntoDefinition(const Dwg_Data* dwg, const Dwg_Entity_ATTDEF* ad, CadBlockDefinition& def) {
+  if (ad == nullptr)
+    return;
+  CadBlockAttrDef d;
+  d.tag = FromT(dwg, ad->tag);
+  if (d.tag.empty())
+    return;
+  d.prompt = FromT(dwg, ad->prompt);
+  d.defaultValue = FromT(dwg, ad->default_value);
+  d.localX = static_cast<float>(ad->ins_pt.x - def.baseX);
+  d.localY = static_cast<float>(ad->ins_pt.y - def.baseY);
+  d.localZ = static_cast<float>(ad->elevation);
+  d.height = static_cast<float>(ad->height > 0.0 ? ad->height : 0.125);
+  d.rotationRad = static_cast<float>(ad->rotation);
+  def.attrDefs.push_back(std::move(d));
+}
+
+bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* blkHeaderObj,
+                                      std::unordered_map<std::string, int>* skipHist,
+                                      int* degenerateExtrusions) {
+  const std::string name = BlockHeaderDwgName(dwg, blkHeaderObj);
+  if (!DwgBlockDefNameIsImportable(name))
+    return false;
+  if (CadBlockFindDef(st.blockDefs, name) >= 0)
+    return true;
+  if (blkHeaderObj->tio.object == nullptr || blkHeaderObj->tio.object->tio.BLOCK_HEADER == nullptr)
+    return false;
+  const Dwg_Object_BLOCK_HEADER* hdr = blkHeaderObj->tio.object->tio.BLOCK_HEADER;
+
+  AppCommandState scratch;
+  scratch.worldDocumentOriginX = st.worldDocumentOriginX;
+  scratch.worldDocumentOriginY = st.worldDocumentOriginY;
+  scratch.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
+  const Xf2 id{};
+  for (Dwg_Object* e = get_first_owned_entity(blkHeaderObj); e != nullptr;
+       e = get_next_owned_entity(blkHeaderObj, e)) {
+    if (e->fixedtype == DWG_TYPE_ATTDEF && e->tio.entity != nullptr && e->tio.entity->tio.ATTDEF != nullptr)
+      continue;  // collected below
+    ImportObject(scratch, dwg, e, id, 1, skipHist, degenerateExtrusions);
+  }
+  if (!ScratchHasBlockGeometry(scratch))
+    return false;
+
+  CadBlockDefinition def;
+  def.name = name;
+  def.baseX = static_cast<float>(hdr->base_pt.x - st.worldDocumentOriginX);
+  def.baseY = static_cast<float>(hdr->base_pt.y - st.worldDocumentOriginY);
+  def.baseZ = static_cast<float>(hdr->base_pt.z);
+  for (Dwg_Object* e = get_first_owned_entity(blkHeaderObj); e != nullptr;
+       e = get_next_owned_entity(blkHeaderObj, e)) {
+    if (e->fixedtype == DWG_TYPE_ATTDEF && e->tio.entity != nullptr && e->tio.entity->tio.ATTDEF != nullptr)
+      ImportAttdefIntoDefinition(dwg, e->tio.entity->tio.ATTDEF, def);
+  }
+  CaptureScratchIntoBlockContent(scratch, &def.content);
+  CadBlockBakeBasePoint(&def);
+  st.blockDefs.push_back(std::move(def));
+  return true;
+}
+
+void CollectInsertAttributes(const Dwg_Data* dwg, const Dwg_Entity_INSERT* ins,
+                             std::vector<CadBlockAttrValue>& out) {
+  if (ins == nullptr || ins->attribs == nullptr || ins->num_owned == 0)
+    return;
+  for (BITCODE_BL i = 0; i < ins->num_owned; ++i) {
+    if (ins->attribs[i] == nullptr)
+      continue;
+    Dwg_Object* ao = dwg_resolve_handle_silent(const_cast<Dwg_Data*>(dwg), ins->attribs[i]->absolute_ref);
+    if (ao == nullptr || ao->fixedtype != DWG_TYPE_ATTRIB || ao->tio.entity == nullptr ||
+        ao->tio.entity->tio.ATTRIB == nullptr)
+      continue;
+    const Dwg_Entity_ATTRIB* at = ao->tio.entity->tio.ATTRIB;
+    const std::string tag = FromT(dwg, at->tag);
+    if (tag.empty())
+      continue;
+    out.push_back(CadBlockAttrValue{tag, FromT(dwg, at->text_value)});
+  }
+}
+
+bool TryImportInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
+                               const EntityAttributes& at, std::unordered_map<std::string, int>* skipHist,
+                               int* degenerateExtrusions) {
+  if (depth != 0 || ent == nullptr || ent->tio.INSERT == nullptr)
+    return false;
+  const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
+  if (ins->block_header == nullptr)
+    return false;
+  Dwg_Object* blk = dwg_resolve_handle_silent(dwg, ins->block_header->absolute_ref);
+  if (blk == nullptr)
+    return false;
+  const std::string name = BlockHeaderDwgName(dwg, blk);
+  if (!DwgBlockDefNameIsImportable(name))
+    return false;
+  if (!EnsureDwgBlockDefinitionImported(st, dwg, blk, skipHist, degenerateExtrusions))
+    return false;
+  if (CadBlockFindDef(st.blockDefs, name) < 0)
+    return false;
+
+  CadBlockRef ref;
+  ref.defName = name;
+  ref.xf.x = static_cast<float>(ins->ins_pt.x - st.worldDocumentOriginX);
+  ref.xf.y = static_cast<float>(ins->ins_pt.y - st.worldDocumentOriginY);
+  ref.xf.z = static_cast<float>(ins->ins_pt.z);
+  ref.xf.sx = ins->scale.x != 0.0 ? static_cast<float>(ins->scale.x) : 1.f;
+  ref.xf.sy = ins->scale.y != 0.0 ? static_cast<float>(ins->scale.y) : 1.f;
+  ref.xf.sz = ins->scale.z != 0.0 ? static_cast<float>(ins->scale.z) : 1.f;
+  ref.xf.rotZ = static_cast<float>(ins->rotation);
+  CollectInsertAttributes(dwg, ins, ref.attributes);
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(at);
+  return true;
+}
+
 void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
                    std::unordered_map<std::string, int>* skipHist,
                    int* degenerateExtrusions) {
@@ -1496,6 +1660,8 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE_INSERT) {
+    if (TryImportInsertAsBlockRef(st, dwg, ent, depth, at, skipHist, degenerateExtrusions))
+      return;
     ExplodeInsert(st, dwg, ent, depth, skipHist, degenerateExtrusions);
     return;
   }
@@ -4303,7 +4469,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
                          st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
-                         st.cadMultileaders.empty();
+                         st.cadMultileaders.empty() && st.cadBlockRefs.empty();
   // DXF decode often leaves BLOCK_HEADER.first_entity unset or pointing at BLOCK/ENDBLK only.
   if (emptyGeom) {
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
