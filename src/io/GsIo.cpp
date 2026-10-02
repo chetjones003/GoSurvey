@@ -3842,6 +3842,11 @@ bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, st
     if (root.contains("settings") && root["settings"].is_object())
       ApplySettingsFromJson(st, root["settings"]);
 
+    if (!st.annotationScales.empty() &&
+        (st.currentAnnotationScaleIndex < 0 ||
+         st.currentAnnotationScaleIndex >= static_cast<int>(st.annotationScales.size())))
+      SyncCurrentAnnotationScaleIndex(st);
+
     EnsureAttrCounts(st);
     SyncDrawingLayerTableWithGeometry(st);
     RepositionAllSurveyPointLabels(st);

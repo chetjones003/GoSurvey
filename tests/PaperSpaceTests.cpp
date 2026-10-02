@@ -677,6 +677,22 @@ TEST_CASE("Annotation scale status label uses DWG name when present (issue #622)
   REQUIRE(CadAnnotationScaleStatusLabel(s) == "1/4\" = 1'-0\"");
 }
 
+TEST_CASE("Annotative block ref uses model annotation scale index (issue #622)", "[paperspace][issue622]") {
+  std::vector<CadAnnotationScale> scales(2);
+  scales[0].paperUnits = 1.f;
+  scales[0].drawingUnits = 10.f;
+  scales[1].paperUnits = 1.f;
+  scales[1].drawingUnits = 20.f;
+  CadBlockRef ref;
+  ref.annotative = true;
+  ref.xf.sx = 2.f;
+  ref.xf.sy = 2.f;
+  const CadBlockRef out =
+      CadBlockRefForAnnotativeDisplay(ref, nullptr, 40.f, &scales, 1);
+  REQUIRE(out.xf.sx == Catch::Approx(1.f));
+  REQUIRE(out.xf.sy == Catch::Approx(1.f));
+}
+
 TEST_CASE("Annotative hatch pattern scales with model annotation scale (issue #622)", "[paperspace][issue622]") {
   std::vector<CadAnnotationScale> scales(1);
   scales[0].paperUnits = 1.f;
