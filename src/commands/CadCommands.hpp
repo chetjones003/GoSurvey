@@ -2111,6 +2111,8 @@ struct AppCommandState {
 
   /// Plot scale: one plotted inch equals this many drawing units (e.g. 50 for 1 inch = 50 feet).
   float modelUnitsPerPlottedInch = 50.f;
+  /// DWG SCALE object list (issue #622). Per-scale visibility/display is not wired yet; stored for fidelity.
+  std::vector<CadAnnotationScale> annotationScales;
   float defaultPlottedTextHeightInches = 0.125f;
 
   /// Drawing unit, AutoCAD $INSUNITS code (REQ-022). A relabel only — never scales

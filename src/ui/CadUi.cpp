@@ -16499,6 +16499,57 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           wid = 1.6f;
         }
       };
+      ImFont* vpFont = ImGui::GetFont();
+      auto drawVpMtext = [&](const CadAnnotation& ann, const ViewportTextOverlayPlan& plan, ImU32 tcol) {
+        const ImVec2 tl = m2s(static_cast<double>(ann.boxMinX) + oX, static_cast<double>(ann.boxMaxY) + oY);
+        const ImVec2 brc = m2s(static_cast<double>(ann.boxMaxX) + oX, static_cast<double>(ann.boxMinY) + oY);
+        const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
+        const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
+        const int acol = (ann.mtextAttach - 1) % 3;
+        const int arow = (ann.mtextAttach - 1) / 3;
+        float pw = 8.f, ph = fontPx * 1.22f;
+        MtextRichNaturalContentPx(vpFont, fontPx, ann.text, &pw, &ph, plan.fontFamily);
+        float drawX = tl.x + 4.f, drawY = tl.y + 4.f;
+        if (acol == 1)
+          drawX = tl.x + 0.5f * ((brc.x - tl.x) - pw);
+        else if (acol == 2)
+          drawX = brc.x - pw - 4.f;
+        if (arow == 1)
+          drawY = tl.y + 0.5f * ((brc.y - tl.y) - ph);
+        else if (arow == 2)
+          drawY = brc.y - ph - 4.f;
+        float wrapPx = std::max(8.f, (brc.x - tl.x) - 8.f);
+        if (acol != 0)
+          wrapPx = std::max(pw, 8.f);
+        Shx::Font* sfm = CadIsShxFontName(plan.fontFamily) ? Shx::Resolve(plan.fontFamily) : nullptr;
+        if (sfm && sfm->valid()) {
+          const std::string plain = MtextRichFlattenToPlain(ann.text);
+          const float lineH = fontPx * 1.4f;
+          const float thick = std::max(1.f, fontPx * 0.05f);
+          std::string ln;
+          float ly = drawY;
+          auto flush = [&](const std::string& line) {
+            const float w = Shx::MeasureWidthPx(*sfm, line, fontPx);
+            float lx = drawX;
+            if (acol == 1)
+              lx = tl.x + 0.5f * ((brc.x - tl.x) - w);
+            else if (acol == 2)
+              lx = std::max(tl.x + 4.f, brc.x - w - 4.f);
+            Shx::DrawText(sdl, *sfm, ImVec2(lx, ly + fontPx), fontPx, 0.f, tcol, line, thick);
+            ly += lineH;
+          };
+          for (char ch : plain) {
+            if (ch == '\n') {
+              flush(ln);
+              ln.clear();
+            } else
+              ln += ch;
+          }
+          flush(ln);
+        } else {
+          MtextRichDrawWrapped(sdl, vpFont, fontPx, ImVec2(drawX, drawY), wrapPx, tcol, ann.text, plan.fontFamily);
+        }
+      };
       // Lines (REQ-028: skip frozen layers).
       for (size_t i = 0; i + 5 < cmd.userLinesFlat.size(); i += 6) {
         const size_t lineIdx = i / 6;
@@ -16798,57 +16849,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       // Model TEXT / MTEXT through this viewport (issue #115): same m2s + clip as linework.
       {
-        ImFont* vpFont = ImGui::GetFont();
-        auto drawVpMtext = [&](const CadAnnotation& ann, const ViewportTextOverlayPlan& plan, ImU32 tcol) {
-          const ImVec2 tl = m2s(static_cast<double>(ann.boxMinX) + oX, static_cast<double>(ann.boxMaxY) + oY);
-          const ImVec2 brc = m2s(static_cast<double>(ann.boxMaxX) + oX, static_cast<double>(ann.boxMinY) + oY);
-          const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
-          const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
-          const int acol = (ann.mtextAttach - 1) % 3;
-          const int arow = (ann.mtextAttach - 1) / 3;
-          float pw = 8.f, ph = fontPx * 1.22f;
-          MtextRichNaturalContentPx(vpFont, fontPx, ann.text, &pw, &ph, plan.fontFamily);
-          float drawX = tl.x + 4.f, drawY = tl.y + 4.f;
-          if (acol == 1)
-            drawX = tl.x + 0.5f * ((brc.x - tl.x) - pw);
-          else if (acol == 2)
-            drawX = brc.x - pw - 4.f;
-          if (arow == 1)
-            drawY = tl.y + 0.5f * ((brc.y - tl.y) - ph);
-          else if (arow == 2)
-            drawY = brc.y - ph - 4.f;
-          float wrapPx = std::max(8.f, (brc.x - tl.x) - 8.f);
-          if (acol != 0)
-            wrapPx = std::max(pw, 8.f);
-          Shx::Font* sfm = CadIsShxFontName(plan.fontFamily) ? Shx::Resolve(plan.fontFamily) : nullptr;
-          if (sfm && sfm->valid()) {
-            const std::string plain = MtextRichFlattenToPlain(ann.text);
-            const float lineH = fontPx * 1.4f;
-            const float thick = std::max(1.f, fontPx * 0.05f);
-            std::string ln;
-            float ly = drawY;
-            auto flush = [&](const std::string& line) {
-              const float w = Shx::MeasureWidthPx(*sfm, line, fontPx);
-              float lx = drawX;
-              if (acol == 1)
-                lx = tl.x + 0.5f * ((brc.x - tl.x) - w);
-              else if (acol == 2)
-                lx = std::max(tl.x + 4.f, brc.x - w - 4.f);
-              Shx::DrawText(sdl, *sfm, ImVec2(lx, ly + fontPx), fontPx, 0.f, tcol, line, thick);
-              ly += lineH;
-            };
-            for (char ch : plain) {
-              if (ch == '\n') {
-                flush(ln);
-                ln.clear();
-              } else
-                ln += ch;
-            }
-            flush(ln);
-          } else {
-            MtextRichDrawWrapped(sdl, vpFont, fontPx, ImVec2(drawX, drawY), wrapPx, tcol, ann.text, plan.fontFamily);
-          }
-        };
         for (size_t bi = 0; bi < cmd.cadBlockRefs.size(); ++bi) {
           const EntityAttributes* bp =
               bi < cmd.cadBlockRefAttrs.size() ? &cmd.cadBlockRefAttrs[bi] : nullptr;
@@ -17071,6 +17071,40 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             DrawCadDimStrokesOnDrawList(sdl, draft, dstrokes, dimWts, fontPx, preview, preview, preview, preview,
                                         vpFont, dsp.arrowType);
           }
+        }
+      }
+      // Multileaders through this viewport (REQ-367 / issue #622).
+      {
+        auto drawVpLeaderPath = [&](const std::vector<float>& path, ImU32 col, float thick) {
+          for (size_t pi = 0; pi + 5 < path.size(); pi += 3) {
+            const ImVec2 a =
+                m2sz(static_cast<double>(path[pi]) + oX, static_cast<double>(path[pi + 1]) + oY, path[pi + 2]);
+            const ImVec2 b = m2sz(static_cast<double>(path[pi + 3]) + oX, static_cast<double>(path[pi + 4]) + oY,
+                                  path[pi + 5]);
+            sdl->AddLine(a, b, col, thick);
+          }
+        };
+        for (size_t li = 0; li < cmd.cadMultileaders.size(); ++li) {
+          const CadMultileader& ml = cmd.cadMultileaders[li];
+          const EntityAttributes* lp =
+              li < cmd.cadMultileaderAttrs.size() ? &cmd.cadMultileaderAttrs[li] : nullptr;
+          if (lp && CadEntityIdHidden(&cmd.hiddenEntityIds, lp->id))
+            continue;
+          const std::string layer = lp ? (lp->layer.empty() ? std::string("0") : lp->layer) : std::string("0");
+          if (IsLayerFrozenInViewport(vp, layer))
+            continue;
+          const ImU32 mcol = vpBaseCol(layer, lp ? lp->color : std::string("ByLayer"));
+          drawVpLeaderPath(ml.pathXyz, mcol, 1.5f);
+          for (const std::vector<float>& branch : ml.extraLeaderPaths)
+            drawVpLeaderPath(branch, mcol, 1.5f);
+          if (cmd.mtextRichEditorOpen && cmd.mtextRichEditorMultileaderIndex == static_cast<int>(li))
+            continue;
+          CadAnnotation label = ml.label;
+          if (ml.annotative)
+            label.annotative = true;
+          const ViewportTextOverlayPlan plan =
+              PlanViewportTextOverlay(label, false, vp, cmd.modelUnitsPerPlottedInch);
+          drawVpMtext(label, plan, mcol);
         }
       }
       // Entity grips (REQ-036): squares at each selected entity's grip points; the grabbed grip is hot.

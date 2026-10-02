@@ -1571,6 +1571,18 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["filledRegions"] = std::move(fills);
 
+  if (!st.annotationScales.empty()) {
+    json scales = json::array();
+    for (const CadAnnotationScale& s : st.annotationScales) {
+      json o;
+      o["name"] = s.name;
+      o["paperUnits"] = s.paperUnits;
+      o["drawingUnits"] = s.drawingUnits;
+      scales.push_back(std::move(o));
+    }
+    doc["annotationScales"] = std::move(scales);
+  }
+
   // Imported meshes (REQ-063). Additive section — omitted entirely when there are none, so every
   // pre-REQ-063 drawing still serializes byte-identically and no kGsFormatVersion bump is needed
   // (the ADR-020 (d) tolerant-key precedent).
@@ -3484,6 +3496,18 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   if (doc.contains("filledRegionAttrs") && doc["filledRegionAttrs"].is_array()) {
     for (const auto& o : doc["filledRegionAttrs"])
       st.cadFilledRegionAttrs.push_back(EntityAttributesFromJson(o));
+  }
+
+  st.annotationScales.clear();
+  if (doc.contains("annotationScales") && doc["annotationScales"].is_array()) {
+    for (const auto& el : doc["annotationScales"]) {
+      CadAnnotationScale s;
+      s.name = el.value("name", std::string{});
+      s.paperUnits = el.value("paperUnits", 1.f);
+      s.drawingUnits = el.value("drawingUnits", 1.f);
+      if (!s.name.empty() && s.paperUnits > 0.f && s.drawingUnits > 0.f)
+        st.annotationScales.push_back(std::move(s));
+    }
   }
 
   st.drawingLayerTable.clear();
