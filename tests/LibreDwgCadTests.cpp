@@ -1064,6 +1064,61 @@ TEST_CASE("Foreign DWG with *U INSERT imports as block ref not exploded geometry
   CHECK(in.blockDefs[0].dynamicAnonymous);
 }
 
+TEST_CASE("GoSurvey linear dynamic block exports evaluation graph at R2004 (issue #618 inc3)",
+          "[dwg][libredwg][issue618][inc3]") {
+  ScratchDir dir("dwg-gosurvey-dynamic-export");
+  const auto p = (dir.path / "dynexport.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition def;
+  def.name = "STRETCH_DOOR";
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockParameter len;
+  len.name = "Width";
+  len.kind = CadBlockParamKind::Linear;
+  len.value = 2.f;
+  len.minValue = 0.f;
+  len.maxValue = 10.f;
+  def.parameters.push_back(len);
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  stretch.threshold = 0.f;
+  def.actions.push_back(stretch);
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "STRETCH_DOOR";
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data rd;
+  std::memset(&rd, 0, sizeof(rd));
+  REQUIRE(dwg_read_file(p.c_str(), &rd) < DWG_ERR_CRITICAL);
+  int nGraph = 0;
+  int nLinear = 0;
+  int nStretch = 0;
+  for (BITCODE_BL i = 0; i < rd.num_objects; ++i) {
+    const Dwg_Object* o = &rd.object[i];
+    if (o->fixedtype == DWG_TYPE_EVALUATION_GRAPH)
+      ++nGraph;
+    if (o->fixedtype == DWG_TYPE_BLOCKLINEARPARAMETER)
+      ++nLinear;
+    if (o->fixedtype == DWG_TYPE_BLOCKSTRETCHACTION)
+      ++nStretch;
+  }
+  CHECK(nGraph >= 1);
+  CHECK(nLinear >= 1);
+  CHECK(nStretch >= 1);
+  dwg_free(&rd);
+}
+
 TEST_CASE("Foreign dynamic insert draws evaluated *U geometry not default size (issue #618 inc2)",
           "[dwg][libredwg][issue618][inc2]") {
   ScratchDir dir("dwg-dynamic-golden-display");

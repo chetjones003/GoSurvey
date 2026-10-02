@@ -4,6 +4,7 @@
 #include "CadCommands.hpp"
 #include "CadField.hpp"
 #include "LibreDwgField.hpp"
+#include "LibreDwgDynamicBlock.hpp"
 #include "util/cadpiperun.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadDimGeom.hpp"
@@ -3289,6 +3290,15 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
     add("multileader extra branch(es) (R2000/R2004 export keeps primary branch only)", nMlExtraBranches);
   }
 
+  if (!r2004Write) {
+    size_t nDynBlock = 0;
+    for (const CadBlockDefinition& d : st.blockDefs) {
+      if (CadBlockDefinitionNeedsDynamicDwgExport(d))
+        ++nDynBlock;
+    }
+    add("block definition(s) with dynamic parameters (ACAD evaluation graph requires R2004+)", nDynBlock);
+  }
+
   // REQ-057, issue #603: a varying-Z polyline now writes as POLYLINE_3D (real per-vertex Z), but
   // POLYLINE_3D has no bulge — a run that is BOTH 3D and curved still degrades to straight
   // segments between its vertices.
@@ -4441,6 +4451,13 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   }
   for (const auto& kv : blockHdrByName)
     dwg_add_ENDBLK(kv.second);
+  if (DwgSaveVersionUsesR2004Features(st.dwgExportVersion)) {
+    for (const CadBlockDefinition& def : st.blockDefs) {
+      const auto hdrIt = blockHdrByName.find(def.name);
+      if (hdrIt != blockHdrByName.end())
+        WriteGoSurveyDynamicBlockObjects(dwg, hdrIt->second, def, log);
+    }
+  }
   for (size_t i = 0; i < st.cadBlockRefs.size(); ++i) {
     const CadBlockRef& ref = st.cadBlockRefs[i];
     if (blockDefByName.find(ref.defName) == blockDefByName.end())
