@@ -1083,6 +1083,25 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
   return true;
 }
 
+inline constexpr const char* kGosurveyAnnotativeBlockEed = "annotative";
+
+[[nodiscard]] bool GosurveyEedMarksAnnotativeBlockInsert(const Dwg_Object_Entity* ent) {
+  if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0)
+    return false;
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    const Dwg_Eed_Data* data = ent->eed[i].data;
+    if (data == nullptr || data->code != 0 || data->u.eed_0.is_tu != 0)
+      continue;
+    const unsigned short len = data->u.eed_0.length;
+    if (len == 0)
+      continue;
+    const std::string s(reinterpret_cast<const char*>(data->u.eed_0.string), len);
+    if (s == kGosurveyAnnotativeBlockEed)
+      return true;
+  }
+  return false;
+}
+
 void CollectInsertAttributes(const Dwg_Data* dwg, const Dwg_Entity_INSERT* ins,
                              std::vector<CadBlockAttrValue>& out) {
   if (ins == nullptr || ins->attribs == nullptr || ins->num_owned == 0)
@@ -1130,6 +1149,7 @@ bool TryImportInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_En
   ref.xf.sy = ins->scale.y != 0.0 ? static_cast<float>(ins->scale.y) : 1.f;
   ref.xf.sz = ins->scale.z != 0.0 ? static_cast<float>(ins->scale.z) : 1.f;
   ref.xf.rotZ = static_cast<float>(ins->rotation);
+  ref.annotative = GosurveyEedMarksAnnotativeBlockInsert(ent);
   CollectInsertAttributes(dwg, ins, ref.attributes);
   st.cadBlockRefs.push_back(std::move(ref));
   st.cadBlockRefAttrs.push_back(at);
@@ -3858,6 +3878,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     if (e0 == nullptr)
       continue;
     const EntityAttributes* at = AttrAt(st.cadBlockRefAttrs, i);
+    if (ref.annotative && e0->parent != nullptr)
+      AppendGosurveyStringEed(dwg, e0->parent, {kGosurveyAnnotativeBlockEed});
     if (ref.attributes.empty()) {
       apply(e0->parent, at);
       continue;
