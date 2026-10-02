@@ -765,6 +765,27 @@ TEST_CASE("Annotation scale list round-trips through DWG (issue #622)", "[dwg][l
   CHECK(in.annotationScales[0].drawingUnits == Catch::Approx(25.f));
 }
 
+TEST_CASE("GOSURVEY CANNOSCALE EED round-trips on model space (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-cannoscale-eed");
+  const auto p = (dir.path / "cannoscale.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale s;
+  s.name = "1:50";
+  s.paperUnits = 1.f;
+  s.drawingUnits = 50.f;
+  st.annotationScales.push_back(std::move(s));
+  st.currentAnnotationScaleIndex = 0;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  in.modelUnitsPerPlottedInch = 10.f;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.annotationScales.size() == 1);
+  CHECK(in.currentAnnotationScaleIndex == 0);
+  CHECK(in.annotationScales[0].name == "1:50");
+}
+
 TEST_CASE("Multileader annotative flag persists through GsIo (issue #622)", "[issue622][gsio]") {
   AppCommandState src;
   CadMultileader ml{};

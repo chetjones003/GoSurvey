@@ -1084,23 +1084,29 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
 }
 
 inline constexpr const char* kGosurveyAnnotativeBlockEed = "annotative";
+inline constexpr const char* kGosurveyCannoscaleEedTag = "CANNOSCALE";
+
+[[nodiscard]] bool GosurveyEedCode0String(const Dwg_Eed_Data* data, std::string* out) {
+  if (out == nullptr || data == nullptr || data->code != 0)
+    return false;
+  if (data->u.eed_0.is_tu != 0) {
+    *out = libredwgcad_detail::DecodeDwgString(data->u.eed_0.string, true);
+    return !out->empty();
+  }
+  const unsigned short len = data->u.eed_0.length;
+  if (len == 0)
+    return false;
+  out->assign(reinterpret_cast<const char*>(data->u.eed_0.string), len);
+  return true;
+}
 
 [[nodiscard]] bool GosurveyEedMarksAnnotative(const Dwg_Object_Entity* ent) {
   if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0)
     return false;
   for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
-    const Dwg_Eed_Data* data = ent->eed[i].data;
-    if (data == nullptr || data->code != 0)
-      continue;
     std::string s;
-    if (data->u.eed_0.is_tu != 0)
-      s = libredwgcad_detail::DecodeDwgString(data->u.eed_0.string, true);
-    else {
-      const unsigned short len = data->u.eed_0.length;
-      if (len == 0)
-        continue;
-      s.assign(reinterpret_cast<const char*>(data->u.eed_0.string), len);
-    }
+    if (!GosurveyEedCode0String(ent->eed[i].data, &s))
+      continue;
     if (s == kGosurveyAnnotativeBlockEed)
       return true;
   }
@@ -2531,6 +2537,49 @@ bool AppendGosurveyStringEed(Dwg_Data* dwg, Dwg_Object_Entity* ent, const std::v
     }
   }
   return true;
+}
+
+// Issue #622: persist the status-bar CANNOSCALE choice on *Model_Space (object EED shares entity
+// layout per LibreDWG encode.c). AutoCAD ignores this; GoSurvey native reopen uses it before plot sync.
+[[nodiscard]] bool ApplyGosurveyCannoscaleFromEed(const Dwg_Object_Entity* ent, AppCommandState& st) {
+  if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0 || st.annotationScales.empty())
+    return false;
+  std::vector<std::string> strings;
+  strings.reserve(static_cast<size_t>(ent->num_eed));
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    std::string s;
+    if (GosurveyEedCode0String(ent->eed[i].data, &s))
+      strings.push_back(std::move(s));
+  }
+  for (size_t i = 0; i + 1 < strings.size(); ++i) {
+    if (strings[i] != kGosurveyCannoscaleEedTag)
+      continue;
+    const std::string& scaleName = strings[i + 1];
+    for (int j = 0; j < static_cast<int>(st.annotationScales.size()); ++j) {
+      if (st.annotationScales[static_cast<size_t>(j)].name == scaleName) {
+        st.currentAnnotationScaleIndex = j;
+        return true;
+      }
+    }
+    return false;
+  }
+  return false;
+}
+
+static void WriteGosurveyCannoscaleOnModelSpace(const AppCommandState& st, Dwg_Data* dwg) {
+  if (dwg == nullptr || st.annotationScales.empty())
+    return;
+  const int ix = st.currentAnnotationScaleIndex;
+  if (ix < 0 || ix >= static_cast<int>(st.annotationScales.size()))
+    return;
+  const std::string& scaleName = st.annotationScales[static_cast<size_t>(ix)].name;
+  if (scaleName.empty())
+    return;
+  Dwg_Object* ms = dwg_model_space_object(dwg);
+  if (ms == nullptr || ms->tio.object == nullptr)
+    return;
+  auto* eedHost = reinterpret_cast<Dwg_Object_Entity*>(ms->tio.object);
+  AppendGosurveyStringEed(dwg, eedHost, {kGosurveyCannoscaleEedTag, scaleName});
 }
 
 namespace dwg_solid_export {
@@ -4720,7 +4769,11 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   ImportPaperLayoutsFromDwg(st, &dwg, &skipHist, &degenerateExtrusions);
   ImportAnnotationScales(st, &dwg);
-  SyncCurrentAnnotationScaleIndex(st);
+  const Dwg_Object* msForCannoscale = dwg_model_space_object(&dwg);
+  if (msForCannoscale == nullptr || msForCannoscale->tio.object == nullptr ||
+      !ApplyGosurveyCannoscaleFromEed(reinterpret_cast<Dwg_Object_Entity*>(msForCannoscale->tio.object),
+                                    st))
+    SyncCurrentAnnotationScaleIndex(st);
 
   dwg_free(&dwg);
 
@@ -4821,6 +4874,7 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     }
   }
   LibreDwgLinkBlockEntities(dwg);  // issue #590: AutoCAD refuses LibreDWG's implicit last link
+  WriteGosurveyCannoscaleOnModelSpace(st, dwg);
   AppendSaveTrace("export: encode to disk");
 
   bool ok = false;
@@ -4839,3 +4893,4 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
   std::free(dwg);
   return ok;
 }
+
