@@ -12,8 +12,10 @@ Extend native DWG **AcadAnnotative** / **AnnotativeData** EED export (and hatch 
 - **MTEXT** — had R2018 `is_not_annotative` only
 - **HATCH** — had path flag `0x200` only
 - **MULTILEADER** — had `is_annotative` only
+- **DIMENSION** (aligned/linear/angular) — no LibreDWG annotative field; EED import/export
+- **MTEXT inside block definitions** — TEXT in blocks already had EED; MTEXT did not
 
-Parity with TEXT / INSERT (#675): `WriteAnnotativeEntityEed` on export; hatch also reads `ImportEedMarksAnnotative`.
+Parity with TEXT / INSERT (#675): `WriteAnnotativeEntityEed` on export; hatch/dimension import also reads `ImportEedMarksAnnotative`.
 
 ## Out of scope (issue stays open)
 

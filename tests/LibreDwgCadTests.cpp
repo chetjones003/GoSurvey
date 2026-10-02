@@ -3817,6 +3817,90 @@ TEST_CASE("Annotative HATCH path flag round-trips on R2018 DWG (issue #622)", "[
   CHECK(in.cadFilledRegions[0].annotative);
 }
 
+TEST_CASE("AcadAnnotative EED imports annotative aligned dimension (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-acad-annotative-dim");
+  const auto exported = (dir.path / "both.dwg").string();
+  const auto acadOnly = (dir.path / "acad-only.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  st.activeDimensionStyle = DimensionStyles::Default();
+  CadAnnotation aligned{};
+  aligned.kind = CadAnnotation::Kind::DimAligned;
+  aligned.annotative = true;
+  aligned.dimExt1X = 0.f;
+  aligned.dimExt1Y = 0.f;
+  aligned.dimExt2X = 20.f;
+  aligned.dimExt2Y = 0.f;
+  aligned.dimSignedOffset = 4.f;
+  aligned.insZ = 0.f;
+  DimensionStyles::BakeTextOntoDimension(aligned, st.activeDimensionStyle);
+  AngleDisplaySettings angleSet{};
+  CadDimRefreshMeasurementText(&aligned, st.activeDimensionStyle.unitPrecision, angleSet);
+  st.cadAnnotations.push_back(std::move(aligned));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, exported.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(exported.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  StripGosurveyAnnotativeEed(dwg);
+  REQUIRE(DwgHasAcadAnnotativeDataEed(dwg));
+  REQUIRE(dwg_write_file(acadOnly.c_str(), &dwg) == 0);
+  dwg_free(&dwg);
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, acadOnly.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadAnnotations.size() == 1);
+  CHECK(in.cadAnnotations[0].kind == CadAnnotation::Kind::DimAligned);
+  CHECK(in.cadAnnotations[0].annotative);
+}
+
+TEST_CASE("Block definition annotative MTEXT writes AcadAnnotative EED (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-block-mtext-anno");
+  const auto p = (dir.path / "blk.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadBlockDefinition def;
+  def.name = "LBL";
+  CadAnnotation m{};
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.annotative = true;
+  m.insX = 0.f;
+  m.insY = 0.f;
+  m.plottedHeightInches = 0.125f;
+  m.text = "In block";
+  m.boxMinX = 0.f;
+  m.boxMinY = -0.2f;
+  m.boxMaxX = 2.f;
+  m.boxMaxY = 0.f;
+  def.content.texts.push_back(std::move(m));
+  def.content.textAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "LBL";
+  ref.xf.x = 5.f;
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  bool sawAnnoEed = false;
+  for (unsigned oi = 0; oi < dwg.num_objects; ++oi) {
+    if (dwg.object[oi].fixedtype != DWG_TYPE_MTEXT || dwg.object[oi].tio.entity == nullptr)
+      continue;
+    const Dwg_Object_Entity* ent = dwg.object[oi].tio.entity;
+    if (ent->eed == nullptr)
+      continue;
+    for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+      if (EedCode0Equals(ent->eed[i].data, "AnnotativeData")) {
+        sawAnnoEed = true;
+        break;
+      }
+    }
+  }
+  dwg_free(&dwg);
+  REQUIRE(sawAnnoEed);
+}
+
 TEST_CASE("AcadAnnotative EED imports annotative HATCH without path flag (issue #622)",
           "[dwg][libredwg][issue622]") {
   ScratchDir dir("dwg-acad-annotative-hatch");
