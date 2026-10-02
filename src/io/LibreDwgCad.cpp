@@ -821,8 +821,11 @@ static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Ent
   return true;
 }
 
+[[nodiscard]] bool ImportEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent);
+
 static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_MULTILEADER* ml,
-                                    const Xf2& xf, const EntityAttributes& at) {
+                                    const Xf2& xf, const EntityAttributes& at,
+                                    const Dwg_Object_Entity* ownerEnt) {
   if (ml == nullptr || dwg == nullptr)
     return false;
   if (ml->ctx.has_content_blk && !ml->ctx.has_content_txt)
@@ -891,6 +894,8 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
   an.boxMaxY = an.insY;
 
   m.annotative = ml->is_annotative != 0;
+  if (!m.annotative && ownerEnt != nullptr)
+    m.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
   st.cadMultileaders.push_back(std::move(m));
   st.cadMultileaderAttrs.push_back(at);
   return true;
@@ -1492,7 +1497,7 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
 
 // REQ-170 / issue #608: map a decoded HATCH boundary into CadFilledRegion (solid or pattern).
 bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATCH* h, const Xf2& xf,
-                       const EntityAttributes& at) {
+                       const EntityAttributes& at, const Dwg_Object_Entity* ownerEnt) {
   if (h == nullptr || h->num_paths == 0 || h->paths == nullptr)
     return false;
   if (h->is_gradient_fill != 0)
@@ -1576,6 +1581,8 @@ bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATC
       }
     }
   }
+  if (!region.annotative && ownerEnt != nullptr)
+    region.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
 
   st.cadFilledRegions.push_back(std::move(region));
   st.cadFilledRegionAttrs.push_back(at);
@@ -1788,7 +1795,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       NoteSkip(skipHist, "MULTILEADER(block content, issue #619)");
       return;
     }
-    if (ImportMultileaderEntity(st, dwg, ml, xf, at))
+    if (ImportMultileaderEntity(st, dwg, ml, xf, at, ent))
       return;
     NoteSkip(skipHist, "MULTILEADER(unsupported layout, issue #619)");
     return;
@@ -1843,7 +1850,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       NoteSkip(skipHist, "HATCH(gradient fill not imported yet, issue #608)");
       return;
     }
-    if (ImportHatchEntity(st, dwg, h, xf, at))
+    if (ImportHatchEntity(st, dwg, h, xf, at, ent))
       return;
     NoteSkip(skipHist, "HATCH(degenerate or unsupported boundary)");
     return;
@@ -4231,6 +4238,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
             e->is_not_annotative = 0;
           else
             e->is_not_annotative = 1;
+          if (an.annotative && e->parent != nullptr)
+            WriteAnnotativeEntityEed(dwg, e->parent);
         }
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
@@ -4370,6 +4379,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
                 hdr, static_cast<unsigned>(branches.size()), branches.data(),
                 wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
           mld->is_annotative = ml.annotative ? 1 : 0;
+          if (r2018Write && ml.annotative && mld->parent != nullptr)
+            WriteAnnotativeEntityEed(dwg, mld->parent);
           apply(mld->parent, at);
           continue;
         }
@@ -4611,6 +4622,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     if (r2018Write && fr.annotative && hatch->paths != nullptr) {
       for (BITCODE_BL pi = 0; pi < hatch->num_paths; ++pi)
         hatch->paths[pi].flag = static_cast<BITCODE_BL>(hatch->paths[pi].flag | 0x200);
+      if (hatch->parent != nullptr)
+        WriteAnnotativeEntityEed(dwg, hatch->parent);
     }
     apply(hatch->parent, fi < st.cadFilledRegionAttrs.size() ? &st.cadFilledRegionAttrs[fi] : nullptr);
     ++nHatchOut;
