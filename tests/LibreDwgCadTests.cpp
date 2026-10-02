@@ -65,6 +65,14 @@ void OneLine(AppCommandState& st) {
   st.userLineAttrs = {EntityAttributes{}};
 }
 
+bool LogContains(const std::vector<std::string>& log, std::string_view needle) {
+  for (const std::string& line : log) {
+    if (line.find(needle) != std::string::npos)
+      return true;
+  }
+  return false;
+}
+
 // Survey-point labels are measured through ImGui::GetFont() while a point is placed/imported
 // (EnsureSurveyPointLabelMtext) — same fixture as GsMigrateLegacyBreaklineTests.cpp (ADR-031 (c')).
 struct HeadlessImGuiScope {
@@ -518,6 +526,86 @@ TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (iss
   REQUIRE(in.cadMultileaders.size() == 1);
   CHECK(in.cadMultileaders[0].pathXyz.size() == 9);
   CHECK(in.cadMultileaders[0].label.text.find("Monument") != std::string::npos);
+}
+
+TEST_CASE("Block-content MULTILEADER import logs skip reason (REQ-367, issue #619)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-mleader-block-skip");
+  const auto p = (dir.path / "block-ml.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(hdr != nullptr);
+
+  Dwg_Object_BLOCK_HEADER* blkHdr = dwg_add_BLOCK_HEADER(dwg, "MLBLK");
+  REQUIRE(blkHdr != nullptr);
+  dwg_add_BLOCK(blkHdr, "MLBLK");
+  const dwg_point_3d circleCenter{0.0, 0.0, 0.0};
+  dwg_add_CIRCLE(blkHdr, &circleCenter, 0.1);
+  dwg_add_ENDBLK(blkHdr);
+
+  const dwg_point_3d lpts[2] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}};
+  const dwg_point_3d textPt{10.0, 0.0, 0.0};
+  const dwg_point_3d textDir{1.0, 0.0, 0.0};
+  Dwg_Entity_MULTILEADER* ml =
+      dwg_add_MULTILEADER(hdr, 2, lpts, "unused", &textPt, &textDir, 0.18, 8.0);
+  REQUIRE(ml != nullptr);
+  Dwg_Object* mlObj = nullptr;
+  for (unsigned i = 0; i < dwg->num_objects; ++i) {
+    if (dwg->object[i].fixedtype == DWG_TYPE_MULTILEADER) {
+      mlObj = &dwg->object[i];
+      break;
+    }
+  }
+  REQUIRE(mlObj != nullptr);
+  BITCODE_H blkRef = dwg_find_tablehandle(dwg, "MLBLK", "BLOCK");
+  REQUIRE(blkRef != nullptr);
+  ml->ctx.has_content_txt = 0;
+  ml->ctx.has_content_blk = 1;
+  ml->ctx.content.blk.location.x = textPt.x;
+  ml->ctx.content.blk.location.y = textPt.y;
+  ml->ctx.content.blk.location.z = textPt.z;
+  ml->ctx.content.blk.normal.x = 0.0;
+  ml->ctx.content.blk.normal.y = 0.0;
+  ml->ctx.content.blk.normal.z = 1.0;
+  ml->ctx.content.blk.scale.x = ml->ctx.content.blk.scale.y = ml->ctx.content.blk.scale.z = 1.0;
+  ml->ctx.content.blk.block_table =
+      dwg_add_handleref(dwg, 4, blkRef->absolute_ref, mlObj);
+  ml->ctx.content.blk.transform = static_cast<BITCODE_BD*>(std::calloc(16, sizeof(BITCODE_BD)));
+  REQUIRE(ml->ctx.content.blk.transform != nullptr);
+  ml->ctx.content.blk.transform[0] = 1.0;
+  ml->ctx.content.blk.transform[5] = 1.0;
+  ml->ctx.content.blk.transform[10] = 1.0;
+  ml->ctx.content.blk.transform[15] = 1.0;
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  Dwg_Data reread{};
+  std::memset(&reread, 0, sizeof(reread));
+  const int err = dwg_read_file(p.c_str(), &reread);
+  REQUIRE(err < DWG_ERR_CRITICAL);
+  bool sawBlockOnly = false;
+  for (unsigned i = 0; i < reread.num_objects; ++i) {
+    if (reread.object[i].fixedtype != DWG_TYPE_MULTILEADER ||
+        reread.object[i].tio.entity == nullptr ||
+        reread.object[i].tio.entity->tio.MULTILEADER == nullptr)
+      continue;
+    const Dwg_Entity_MULTILEADER* got = reread.object[i].tio.entity->tio.MULTILEADER;
+    if (got->ctx.has_content_blk && !got->ctx.has_content_txt)
+      sawBlockOnly = true;
+  }
+  dwg_free(&reread);
+  REQUIRE(sawBlockOnly);
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  CHECK(in.cadMultileaders.empty());
+  CHECK(LogContains(log, "MULTILEADER(block content, issue #619)"));
 }
 
 TEST_CASE("CadMultileader persists through GsIo JSON round trip (REQ-367, issue #619)",
