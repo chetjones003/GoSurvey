@@ -799,6 +799,7 @@ TEST_CASE("Named block INSERT re-imports as cadBlockRef without trailer (issue #
   CHECK(in.cadBlockRefs[0].defName == "ANNO_SYM");
   CHECK(in.cadBlockRefs[0].xf.x == Catch::Approx(5.f));
   CHECK(in.cadBlockRefs[0].xf.y == Catch::Approx(10.f));
+  CHECK(in.cadBlockRefs[0].annotative);
   CHECK(in.userLinesFlat.empty());
 }
 
