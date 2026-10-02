@@ -27822,13 +27822,13 @@ dwg_require_MLEADERSTYLE_Standard (Dwg_Data *restrict dwg)
 }
 
 EXPORT Dwg_Entity_MULTILEADER *
-dwg_add_MULTILEADER (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
-                     const unsigned num_points,
-                     const dwg_point_3d *restrict points,
-                     const char *restrict text,
-                     const dwg_point_3d *restrict text_loc,
-                     const dwg_point_3d *restrict text_dir,
-                     const double text_height, const double text_width)
+dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
+                              const unsigned num_branches,
+                              const dwg_mleader_branch *restrict branches,
+                              const char *restrict text,
+                              const dwg_point_3d *restrict text_loc,
+                              const dwg_point_3d *restrict text_dir,
+                              const double text_height, const double text_width)
 {
   API_ADD_PREP (MULTILEADER);
   if (!dwg || dwg->header.version < R_2010)
@@ -27836,10 +27836,19 @@ dwg_add_MULTILEADER (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       LOG_ERROR ("MULTILEADER requires R_2010+");
       return NULL;
     }
-  if (!num_points || num_points < 2 || !points || !text || !text_loc)
+  if (!num_branches || !branches || !text || !text_loc)
     {
       LOG_ERROR ("Invalid MULTILEADER arguments");
       return NULL;
+    }
+  for (unsigned bi = 0; bi < num_branches; bi++)
+    {
+      if (!branches[bi].num_points || branches[bi].num_points < 2
+          || !branches[bi].points)
+        {
+          LOG_ERROR ("Invalid MULTILEADER branch %u", bi);
+          return NULL;
+        }
     }
   REQUIRE_CLASS ("MULTILEADER");
   dwg_require_MLEADERSTYLE_Standard (dwg);
@@ -27909,39 +27918,44 @@ dwg_add_MULTILEADER (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   ctx->text_top = 0;
   ctx->text_bottom = 0;
 
-  ctx->num_leaders = 1;
-  ctx->leaders = (Dwg_LEADER_Node *)calloc (1, sizeof (Dwg_LEADER_Node));
+  ctx->num_leaders = num_branches;
+  ctx->leaders = (Dwg_LEADER_Node *)calloc (num_branches, sizeof (Dwg_LEADER_Node));
   if (!ctx->leaders)
     return NULL;
-  Dwg_LEADER_Node *lnode = &ctx->leaders[0];
-  lnode->parent = _obj;
-  lnode->has_lastleaderlinepoint = 0;
-  lnode->has_dogleg = 0;
-  lnode->branch_index = 0;
-  lnode->dogleg_length = 0.36;
-  lnode->num_breaks = 0;
-  lnode->num_lines = 1;
-  lnode->lines = (Dwg_LEADER_Line *)calloc (1, sizeof (Dwg_LEADER_Line));
-  if (!lnode->lines)
-    return NULL;
-  Dwg_LEADER_Line *lline = &lnode->lines[0];
-  lline->parent = lnode;
-  lline->num_points = num_points;
-  lline->points = (BITCODE_3BD *)calloc (num_points, sizeof (BITCODE_3BD));
-  if (!lline->points)
-    return NULL;
-  for (unsigned i = 0; i < num_points; i++)
+  for (unsigned bi = 0; bi < num_branches; bi++)
     {
-      lline->points[i].x = points[i].x;
-      lline->points[i].y = points[i].y;
-      lline->points[i].z = points[i].z;
+      const unsigned num_points = branches[bi].num_points;
+      const dwg_point_3d *points = branches[bi].points;
+      Dwg_LEADER_Node *lnode = &ctx->leaders[bi];
+      lnode->parent = _obj;
+      lnode->has_lastleaderlinepoint = 0;
+      lnode->has_dogleg = 0;
+      lnode->branch_index = bi;
+      lnode->dogleg_length = 0.36;
+      lnode->num_breaks = 0;
+      lnode->num_lines = 1;
+      lnode->lines = (Dwg_LEADER_Line *)calloc (1, sizeof (Dwg_LEADER_Line));
+      if (!lnode->lines)
+        return NULL;
+      Dwg_LEADER_Line *lline = &lnode->lines[0];
+      lline->parent = lnode;
+      lline->num_points = num_points;
+      lline->points = (BITCODE_3BD *)calloc (num_points, sizeof (BITCODE_3BD));
+      if (!lline->points)
+        return NULL;
+      for (unsigned i = 0; i < num_points; i++)
+        {
+          lline->points[i].x = points[i].x;
+          lline->points[i].y = points[i].y;
+          lline->points[i].z = points[i].z;
+        }
+      lline->num_breaks = 0;
+      lline->line_index = 0;
+      lline->type = 1;
+      lline->color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+      lline->arrow_size = ctx->arrow_size;
+      lnode->attach_dir = 0;
     }
-  lline->num_breaks = 0;
-  lline->line_index = 0;
-  lline->type = 1;
-  lline->color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
-  lline->arrow_size = ctx->arrow_size;
-  lnode->attach_dir = 0;
 
   {
     BITCODE_H style = dwg_find_tablehandle (dwg, "Standard", "MLEADERSTYLE");
@@ -27976,6 +27990,20 @@ dwg_add_MULTILEADER (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->is_text_extended = 0;
 
   return _obj;
+}
+
+EXPORT Dwg_Entity_MULTILEADER *
+dwg_add_MULTILEADER (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
+                     const unsigned num_points,
+                     const dwg_point_3d *restrict points,
+                     const char *restrict text,
+                     const dwg_point_3d *restrict text_loc,
+                     const dwg_point_3d *restrict text_dir,
+                     const double text_height, const double text_width)
+{
+  dwg_mleader_branch branch = { num_points, points };
+  return dwg_add_MULTILEADER_branches (blkhdr, 1, &branch, text, text_loc, text_dir,
+                                       text_height, text_width);
 }
 
 EXPORT Dwg_Entity_TOLERANCE *
