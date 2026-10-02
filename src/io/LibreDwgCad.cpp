@@ -821,8 +821,11 @@ static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Ent
   return true;
 }
 
+[[nodiscard]] bool ImportEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent);
+
 static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_MULTILEADER* ml,
-                                    const Xf2& xf, const EntityAttributes& at) {
+                                    const Xf2& xf, const EntityAttributes& at,
+                                    const Dwg_Object_Entity* ownerEnt) {
   if (ml == nullptr || dwg == nullptr)
     return false;
   if (ml->ctx.has_content_blk && !ml->ctx.has_content_txt)
@@ -891,6 +894,8 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
   an.boxMaxY = an.insY;
 
   m.annotative = ml->is_annotative != 0;
+  if (!m.annotative && ownerEnt != nullptr)
+    m.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
   st.cadMultileaders.push_back(std::move(m));
   st.cadMultileaderAttrs.push_back(at);
   return true;
@@ -1403,7 +1408,8 @@ void ExplodeDimensionBlock(AppCommandState& st, Dwg_Data* dwg, const Dwg_DIMENSI
 bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf, Dwg_Object_Type ty,
                               const Dwg_DIMENSION_common* common, const BITCODE_3BD* xline1,
                               const BITCODE_3BD* xline2, const BITCODE_3BD* centerOrDefPt,
-                              double dimRotation, const EntityAttributes& at) {
+                              double dimRotation, const EntityAttributes& at,
+                              const Dwg_Object_Entity* ownerEnt) {
   if (common == nullptr)
     return false;
   CadAnnotation a{};
@@ -1485,6 +1491,8 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
     if (!userText.empty() && userText != "<>")  // AutoCAD's "use the measured value" placeholder
       a.text = userText;
   }
+  if (ownerEnt != nullptr)
+    a.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
   st.cadAnnotations.push_back(a);
   st.cadAnnotationAttrs.push_back(at);
   return true;
@@ -1492,7 +1500,7 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
 
 // REQ-170 / issue #608: map a decoded HATCH boundary into CadFilledRegion (solid or pattern).
 bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATCH* h, const Xf2& xf,
-                       const EntityAttributes& at) {
+                       const EntityAttributes& at, const Dwg_Object_Entity* ownerEnt) {
   if (h == nullptr || h->num_paths == 0 || h->paths == nullptr)
     return false;
   if (h->is_gradient_fill != 0)
@@ -1576,6 +1584,8 @@ bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATC
       }
     }
   }
+  if (!region.annotative && ownerEnt != nullptr)
+    region.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
 
   st.cadFilledRegions.push_back(std::move(region));
   st.cadFilledRegionAttrs.push_back(at);
@@ -1788,7 +1798,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       NoteSkip(skipHist, "MULTILEADER(block content, issue #619)");
       return;
     }
-    if (ImportMultileaderEntity(st, dwg, ml, xf, at))
+    if (ImportMultileaderEntity(st, dwg, ml, xf, at, ent))
       return;
     NoteSkip(skipHist, "MULTILEADER(unsupported layout, issue #619)");
     return;
@@ -1843,7 +1853,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       NoteSkip(skipHist, "HATCH(gradient fill not imported yet, issue #608)");
       return;
     }
-    if (ImportHatchEntity(st, dwg, h, xf, at))
+    if (ImportHatchEntity(st, dwg, h, xf, at, ent))
       return;
     NoteSkip(skipHist, "HATCH(degenerate or unsupported boundary)");
     return;
@@ -1934,7 +1944,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       xline2 = &ent->tio.DIMENSION_ANG3PT->xline2_pt;
       centerOrDef = &ent->tio.DIMENSION_ANG3PT->center_pt;
     }
-    if (!ImportSupportedDimension(st, dwg, xf, ty, common, xline1, xline2, centerOrDef, rot, at))
+    if (!ImportSupportedDimension(st, dwg, xf, ty, common, xline1, xline2, centerOrDef, rot, at, ent))
       ExplodeDimensionBlock(st, dwg, common, depth, skipHist, degenerateExtrusions);
     return;
   }
@@ -2485,6 +2495,14 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
       const double bw = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
       if (Dwg_Entity_MTEXT* e = dwg_add_MTEXT(blkhdr, &p, bw, wire.c_str())) {
         e->text_height = std::max(static_cast<double>(an.plottedHeightInches), 1e-3);
+        if (tw.dwg != nullptr && tw.dwg->header.version >= R_2018) {
+          if (an.annotative)
+            e->is_not_annotative = 0;
+          else
+            e->is_not_annotative = 1;
+          if (an.annotative && e->parent != nullptr)
+            WriteAnnotativeEntityEed(tw.dwg, e->parent);
+        }
         apply(e->parent, at);
       }
     } else if (an.kind == CadAnnotation::Kind::Text) {
@@ -4190,6 +4208,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
             common->block = dwg_add_handleref(dwg, 5, blkRef->absolute_ref, nullptr);
         }
         apply(common->parent, at);
+        if (r2018Write && an.annotative && common->parent != nullptr)
+          WriteAnnotativeEntityEed(dwg, common->parent);
         ++dimsWritten;
       }
       continue;
@@ -4231,6 +4251,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
             e->is_not_annotative = 0;
           else
             e->is_not_annotative = 1;
+          if (an.annotative && e->parent != nullptr)
+            WriteAnnotativeEntityEed(dwg, e->parent);
         }
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
@@ -4370,6 +4392,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
                 hdr, static_cast<unsigned>(branches.size()), branches.data(),
                 wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
           mld->is_annotative = ml.annotative ? 1 : 0;
+          if (r2018Write && ml.annotative && mld->parent != nullptr)
+            WriteAnnotativeEntityEed(dwg, mld->parent);
           apply(mld->parent, at);
           continue;
         }
@@ -4611,6 +4635,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     if (r2018Write && fr.annotative && hatch->paths != nullptr) {
       for (BITCODE_BL pi = 0; pi < hatch->num_paths; ++pi)
         hatch->paths[pi].flag = static_cast<BITCODE_BL>(hatch->paths[pi].flag | 0x200);
+      if (hatch->parent != nullptr)
+        WriteAnnotativeEntityEed(dwg, hatch->parent);
     }
     apply(hatch->parent, fi < st.cadFilledRegionAttrs.size() ? &st.cadFilledRegionAttrs[fi] : nullptr);
     ++nHatchOut;
