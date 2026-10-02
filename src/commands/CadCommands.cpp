@@ -3337,6 +3337,9 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
           msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
         log.push_back(msg);
         MarkVolumeSurfacesDirtyForParent(st, surface.name);
+        // A link means the same thing whichever way the rebuild was driven (ADR-065 (b)): the
+        // command path above and this async reap are the only two places a TIN is replaced.
+        ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);
       } else {
         // No partial surface; the previous triangulation (if any) is left alone (REQ-001).
         surface.lastBuildMessage = r.ok() ? "Boundaries left no surface." : r.message;
@@ -4279,8 +4282,10 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
   }
   if (name.empty()) {
     PushUndoSnapshot(st, "Rebuild surfaces");
-    for (CadSurface& s : st.cadSurfaces)
-      BuildSurfaceFromSources(st, s, log);
+    for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
+      BuildSurfaceFromSources(st, st.cadSurfaces[i], log);
+      ReDrapeLinkedToSurface(st, i, log);  // ADR-065 (b)
+    }
     BumpCadGpuCache(st);
     return;
   }
@@ -4291,6 +4296,7 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
   }
   PushUndoSnapshot(st, "Rebuild surface");
   BuildSurfaceFromSources(st, st.cadSurfaces[static_cast<size_t>(si)], log);
+  ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);  // ADR-065 (b)
   BumpCadGpuCache(st);
 }
 
@@ -4428,6 +4434,7 @@ void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vec
 /// EXTRACT (REQ-071) — defined further down, beside the layer helpers it needs, and declared here
 /// because the command dispatch above reaches it first.
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void ExecuteDrapeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 
 // SURFSTYLE (REQ-070) — the command form of the Surface Style editor.
 //
@@ -24214,6 +24221,408 @@ int AppendContoursAsPolylines(AppCommandState& st, const ContourResult& r, const
   return made;
 }
 
+
+/// The attribute store that owns this type's entities, or null for a type that carries none.
+[[nodiscard]] std::vector<EntityAttributes>* DrapeAttrStoreFor(AppCommandState& st, SelectedEntity::Type type) {
+  switch (type) {
+    case SelectedEntity::Type::LineSeg: return &st.userLineAttrs;
+    case SelectedEntity::Type::Polyline: return &st.userPolylineAttrs;
+    case SelectedEntity::Type::FeatureLine: return &st.featureLineAttrs;
+    default: return nullptr;
+  }
+}
+
+const char* DrapeTypeName(SelectedEntity::Type t) {
+  switch (t) {
+    case SelectedEntity::Type::LineSeg: return "line";
+    case SelectedEntity::Type::Polyline: return "polyline";
+    case SelectedEntity::Type::FeatureLine: return "feature line";
+    case SelectedEntity::Type::Circle: return "circle";
+    case SelectedEntity::Type::Arc: return "arc";
+    case SelectedEntity::Type::Ellipse: return "ellipse";
+    case SelectedEntity::Type::Solid: return "solid";
+    default: return "object";
+  }
+}
+
+/// One entity's vertices, as pointers into the store so they can be written in place.
+struct DrapeTarget {
+  SelectedEntity sel;
+  std::vector<double*> z;
+  std::vector<double> x;
+  std::vector<double> y;
+};
+
+void GatherDrapeRun(DrapeTarget& t, const std::vector<int>& offsets, std::vector<double>& verts, int pi) {
+  if (pi < 0 || static_cast<size_t>(pi) + 1 >= offsets.size())
+    return;
+  const int v0 = offsets[static_cast<size_t>(pi)];
+  const int v1 = offsets[static_cast<size_t>(pi) + 1];
+  for (int vi = v0; vi < v1; ++vi) {
+    const size_t k = static_cast<size_t>(vi) * 3;
+    if (k + 2 >= verts.size())
+      break;
+    t.x.push_back(verts[k]);
+    t.y.push_back(verts[k + 1]);
+    t.z.push_back(&verts[k + 2]);
+  }
+}
+
+/// This entity's vertices, or an empty target for a type that has none to drape.
+[[nodiscard]] DrapeTarget GatherDrapeTarget(AppCommandState& st, const SelectedEntity& sel) {
+  DrapeTarget t;
+  t.sel = sel;
+  switch (sel.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(sel.index) * 6;
+    if (sel.index < 0 || k + 5 >= st.userLinesFlat.size())
+      return t;
+    for (size_t e = 0; e < 2; ++e) {
+      t.x.push_back(st.userLinesFlat[k + e * 3]);
+      t.y.push_back(st.userLinesFlat[k + e * 3 + 1]);
+      t.z.push_back(&st.userLinesFlat[k + e * 3 + 2]);
+    }
+    return t;
+  }
+  case SelectedEntity::Type::Polyline:
+    GatherDrapeRun(t, st.userPolylineOffsets, st.userPolylineVerts, sel.index);
+    return t;
+  case SelectedEntity::Type::FeatureLine:
+    GatherDrapeRun(t, st.featureLineOffsets, st.featureLineVerts, sel.index);
+    return t;
+  default:
+    return t;
+  }
+}
+
+/// The surface's cached spatial index, built on first use — the same cache SURFELEV's walk keeps,
+/// keyed by stable id and TIN pointer (REQ-126 / ADR-039 (c)). A drape of a long feature line would
+/// otherwise rescan every triangle once per vertex.
+[[nodiscard]] const TinSpatialIndex* DrapeSurfaceIndex(AppCommandState& st, size_t si) {
+  const CadSurface& surf = st.cadSurfaces[si];
+  const std::uint64_t surfId = si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+  for (AppCommandState::SurfaceQueryCacheEntry& e : st.surfaceQueryCache) {
+    if (e.surfaceId == surfId && e.builtFrom.lock() == surf.tin)
+      return &e.index;
+  }
+  AppCommandState::SurfaceQueryCacheEntry e;
+  e.surfaceId = surfId;
+  e.builtFrom = surf.tin;
+  e.index = BuildTinSpatialIndex(surf.tin->vertsXyz, surf.tin->indices);
+  st.surfaceQueryCache.push_back(std::move(e));
+  return &st.surfaceQueryCache.back().index;
+}
+
+/// One entity's drape, worked out but not yet written.
+struct DrapeResolved {
+  SelectedEntity sel;
+  std::vector<double*> z;
+  std::vector<double> newZ;
+};
+
+/// What laying these entities on surface `si` would do — resolved without writing anything, so a
+/// refusal costs nothing and no undo entry is pushed for a drape that turns out to move nothing.
+///
+/// The one place a drape is worked out, so the `DRAPE` command and the re-drape a rebuild triggers
+/// cannot disagree about what "on the ground" means.
+///
+/// An entity is all-or-nothing: a vertex the surface does not cover leaves the whole entity out
+/// (ADR-065 (f)).
+[[nodiscard]] std::vector<DrapeResolved> ResolveDrapeOnto(AppCommandState& st, size_t si,
+                                                          const std::vector<SelectedEntity>& items,
+                                                          bool reportRefusals, std::vector<std::string>& log,
+                                                          int* outRefusedKind,
+                                                          std::string* outFirstKindRefused) {
+  std::vector<DrapeResolved> ready;
+  const CadSurface& surf = st.cadSurfaces[si];
+  const TinSpatialIndex* index = DrapeSurfaceIndex(st, si);
+  auto groundAt = [&](double x, double y, double* outZ) {
+    return (index && !index->empty())
+               ? TinElevationAtIndexed(surf.tin->vertsXyz, surf.tin->indices, *index, x, y, outZ)
+               : TinElevationAt(surf.tin->vertsXyz, surf.tin->indices, x, y, outZ);
+  };
+
+  for (const SelectedEntity& sel : items) {
+    if (!DrapeAttrStoreFor(st, sel.type)) {
+      // A circle, arc or ellipse cannot be draped and still be itself: its shape is not a list of
+      // vertices, and giving sampled points the ground's height would leave something that is no
+      // longer a circle. Refused by name (REQ-201), never silently skipped.
+      if (outRefusedKind)
+        ++*outRefusedKind;
+      if (outFirstKindRefused && outFirstKindRefused->empty())
+        *outFirstKindRefused = DrapeTypeName(sel.type);
+      continue;
+    }
+    DrapeTarget t = GatherDrapeTarget(st, sel);
+    if (t.z.empty())
+      continue;
+    DrapeResolved r;
+    r.sel = sel;
+    int off = 0;
+    for (size_t i = 0; i < t.z.size(); ++i) {
+      double z = 0.0;
+      if (!groundAt(t.x[i], t.y[i], &z)) {
+        ++off;
+        continue;
+      }
+      r.newZ.push_back(z);
+      r.z.push_back(t.z[i]);
+    }
+    if (off > 0) {
+      if (reportRefusals)
+        log.push_back(std::string("DRAPE - ") + DrapeTypeName(t.sel.type) + " not draped: " +
+                      std::to_string(off) + " of " + std::to_string(t.z.size()) +
+                      " vertices are off \"" + surf.name + "\".");
+      continue;
+    }
+    ready.push_back(std::move(r));
+  }
+  return ready;
+}
+
+/// Write what `ResolveDrapeOnto` worked out, stamping each entity's link — the surface's stable id
+/// to link it, or 0 to bake it (which also clears a link a previous drape left).
+int ApplyResolvedDrape(AppCommandState& st, const std::vector<DrapeResolved>& ready, std::uint64_t linkTo) {
+  int moved = 0;
+  for (const DrapeResolved& r : ready) {
+    for (size_t i = 0; i < r.z.size(); ++i)
+      *r.z[i] = r.newZ[i];
+    if (std::vector<EntityAttributes>* attrs = DrapeAttrStoreFor(st, r.sel.type)) {
+      if (r.sel.index >= 0 && static_cast<size_t>(r.sel.index) < attrs->size())
+        (*attrs)[static_cast<size_t>(r.sel.index)].drapedOnSurfaceId = linkTo;
+    }
+    ++moved;
+  }
+  return moved;
+}
+
+/// Every entity currently linked to this surface, in store order.
+[[nodiscard]] std::vector<SelectedEntity> EntitiesLinkedToSurface(const AppCommandState& st, size_t si) {
+  std::vector<SelectedEntity> out;
+  const std::uint64_t id = si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+  if (id == 0)
+    return out;  // an unswept surface has no id to have been linked by (REQ-076)
+  auto sweep = [&](const std::vector<EntityAttributes>& attrs, SelectedEntity::Type type) {
+    for (size_t i = 0; i < attrs.size(); ++i)
+      if (attrs[i].drapedOnSurfaceId == id)
+        out.push_back({type, static_cast<int>(i)});
+  };
+  sweep(st.userLineAttrs, SelectedEntity::Type::LineSeg);
+  sweep(st.userPolylineAttrs, SelectedEntity::Type::Polyline);
+  sweep(st.featureLineAttrs, SelectedEntity::Type::FeatureLine);
+  return out;
+}
+
+}  // namespace
+
+void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log) {
+  if (si >= st.cadSurfaces.size())
+    return;
+  const CadSurface& surf = st.cadSurfaces[si];
+  if (!surf.tin || surf.tin->indices.empty())
+    return;
+  const std::vector<SelectedEntity> linked = EntitiesLinkedToSurface(st, si);
+  if (linked.empty())
+    return;
+  const std::uint64_t id = st.cadSurfaceAttrs[si].id;
+  const std::vector<DrapeResolved> ready =
+      ResolveDrapeOnto(st, si, linked, /*reportRefusals=*/false, log, nullptr, nullptr);
+  const int moved = ApplyResolvedDrape(st, ready, id);
+  if (moved > 0) {
+    BumpCadGpuCache(st);
+    log.push_back("DRAPE - " + std::to_string(moved) + " linked object(s) re-draped onto \"" + surf.name +
+                  "\".");
+  }
+  const int missed = static_cast<int>(linked.size()) - moved;
+  if (missed > 0)
+    log.push_back("DRAPE - " + std::to_string(missed) +
+                  " linked object(s) left where they are: no longer over \"" + surf.name + "\".");
+}
+
+
+/// The name of the surface this entity is draped on and follows, or empty when it follows none
+/// (ADR-065 (d), GitHub #150).
+///
+/// The one place the link is turned into something a person reads, so the Properties panel and the
+/// `DRAPELINKS` report cannot disagree about what is linked.
+///
+/// Empty covers three cases that are the same to the user — never linked, baked since, or linked to
+/// a surface that has been erased. The last is ADR-065 (e): the id stays on the entity and simply
+/// stops resolving, so the geometry is no longer following anything and must not claim to be.
+std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity& e) {
+  const std::vector<EntityAttributes>* attrs = nullptr;
+  switch (e.type) {
+    case SelectedEntity::Type::LineSeg: attrs = &st.userLineAttrs; break;
+    case SelectedEntity::Type::Polyline: attrs = &st.userPolylineAttrs; break;
+    case SelectedEntity::Type::FeatureLine: attrs = &st.featureLineAttrs; break;
+    default: return std::string();
+  }
+  if (e.index < 0 || static_cast<size_t>(e.index) >= attrs->size())
+    return std::string();
+  const std::uint64_t id = (*attrs)[static_cast<size_t>(e.index)].drapedOnSurfaceId;
+  if (id == 0)
+    return std::string();
+  const int si = FindSurfaceIndexById(st, id);
+  if (si < 0)
+    return std::string();  // erased: it follows nothing now (ADR-065 (e))
+  return st.cadSurfaces[static_cast<size_t>(si)].name;
+}
+
+namespace {
+
+/// `DRAPELINKS` — every object in the drawing that follows a surface, and which one.
+///
+/// The drawing-wide half of ADR-065 (d): the Properties panel answers "does THIS one move?", and this
+/// answers "what in here moves when I rebuild?" — which is the question actually asked before editing
+/// a surface. A link that only existed in a file and in a panel would be a hidden attribute by any
+/// practical measure.
+void ExecuteDrapeLinksCommand(AppCommandState& st, std::vector<std::string>& log) {
+  struct Row {
+    const char* type;
+    int index;
+    std::string surface;
+  };
+  std::vector<Row> rows;
+  int dangling = 0;
+  auto sweep = [&](const std::vector<EntityAttributes>& attrs, SelectedEntity::Type type,
+                   const char* label) {
+    for (size_t i = 0; i < attrs.size(); ++i) {
+      if (attrs[i].drapedOnSurfaceId == 0)
+        continue;
+      SelectedEntity e{type, static_cast<int>(i)};
+      const std::string name = DrapedOnSurfaceName(st, e);
+      if (name.empty()) {
+        // The id is set but no longer resolves: the surface was erased. Counted and reported rather
+        // than listed as though it still followed something (ADR-065 (e)).
+        ++dangling;
+        continue;
+      }
+      rows.push_back({label, static_cast<int>(i), name});
+    }
+  };
+  sweep(st.userLineAttrs, SelectedEntity::Type::LineSeg, "line");
+  sweep(st.userPolylineAttrs, SelectedEntity::Type::Polyline, "polyline");
+  sweep(st.featureLineAttrs, SelectedEntity::Type::FeatureLine, "feature line");
+
+  if (rows.empty() && dangling == 0) {
+    log.push_back("DRAPELINKS - nothing in the drawing follows a surface.");
+    return;
+  }
+  for (const Row& r : rows)
+    log.push_back(std::string("DRAPELINKS - ") + r.type + " " + std::to_string(r.index) +
+                  " follows \"" + r.surface + "\".");
+  log.push_back("DRAPELINKS - " + std::to_string(rows.size()) + " object(s) follow a surface.");
+  if (dangling > 0)
+    log.push_back("DRAPELINKS - " + std::to_string(dangling) +
+                  " object(s) name a surface that is gone; they follow nothing and stay where they are.");
+}
+
+}  // namespace
+namespace {
+
+/// `DRAPE <surface>[, LINK]` — lay the selection on a surface, each vertex taking the elevation of
+/// the ground under it (REQ-074's query; GitHub issue #150, 3D Phase 7).
+///
+/// **Baked unless `LINK` is asked for** (ADR-065 (a)/(b)). A baked drape stamps the elevations once
+/// and stores nothing, so the drawing never changes shape because somebody edited a surface. `LINK`
+/// stores the surface's **stable entity id** (ADR-065 (c) — never its name, which can be changed,
+/// and never its array index, which another surface takes after an erase), and the geometry
+/// re-drapes whenever that surface is rebuilt.
+///
+/// Draping without `LINK` also **clears** a link a previous drape left: "bake this where it is now"
+/// is the natural way to ask for that, and leaving a stale link behind would move the geometry again
+/// at the next rebuild.
+///
+/// A vertex the surface does not cover is not draped, and its whole entity is refused by name with
+/// the count (ADR-065 (f)). `TinElevationAt` never extrapolates (REQ-074), so there is no elevation
+/// to give it; draping the covered vertices and leaving the rest at their old height would make a
+/// shape that is neither the original nor the ground — wrong in a way that looks plausible, which
+/// REQ-201 forbids. Every other entity in the selection still drapes.
+void ExecuteDrapeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(StringUtil::trimCopy(args));
+  std::string surfaceName = f.empty() ? std::string() : StringUtil::trimCopy(f[0]);
+  bool link = false;
+  for (size_t i = 1; i < f.size(); ++i) {
+    const std::string opt = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(f[i]));
+    if (opt == "link") {
+      link = true;
+    } else if (!opt.empty()) {
+      log.push_back("DRAPE - usage: DRAPE <surface>[, LINK]. Unknown option \"" +
+                    StringUtil::trimCopy(f[i]) + "\".");
+      return;
+    }
+  }
+
+  // Same disambiguation as EXTRACT: one surface needs no naming, several are listed rather than
+  // guessed, because picking silently is how the wrong surface gets used.
+  if (surfaceName.empty()) {
+    if (st.cadSurfaces.size() == 1) {
+      surfaceName = st.cadSurfaces[0].name;
+    } else if (st.cadSurfaces.empty()) {
+      log.push_back("DRAPE - the drawing has no surfaces.");
+      return;
+    } else {
+      std::string names;
+      for (const CadSurface& s : st.cadSurfaces)
+        names += (names.empty() ? "" : ", ") + s.name;
+      log.push_back("DRAPE - usage: DRAPE <surface>[, LINK]. Surfaces: " + names + ".");
+      return;
+    }
+  }
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0) {
+    log.push_back("DRAPE - no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!surf.tin || surf.tin->indices.empty()) {
+    log.push_back("DRAPE - \"" + surf.name + "\" has never been built; nothing to drape onto.");
+    return;
+  }
+  if (st.selection.empty()) {
+    log.push_back("DRAPE - select the objects to drape first.");
+    return;
+  }
+
+  std::uint64_t linkTo = 0;
+  if (link) {
+    // `EnsureEntityIds` is what assigns a surface its id; one created in this same batch still has
+    // 0, and a link to 0 would resolve to nothing forever (REQ-076).
+    EnsureEntityIds(st);
+    linkTo = static_cast<size_t>(si) < st.cadSurfaceAttrs.size()
+                 ? st.cadSurfaceAttrs[static_cast<size_t>(si)].id
+                 : 0;
+    if (linkTo == 0) {
+      log.push_back("DRAPE - \"" + surf.name + "\" has no stable id yet; cannot link to it.");
+      return;
+    }
+  }
+
+  int refusedKind = 0;
+  std::string firstKindRefused;
+  const std::vector<DrapeResolved> ready = ResolveDrapeOnto(
+      st, static_cast<size_t>(si), st.selection, /*reportRefusals=*/true, log, &refusedKind, &firstKindRefused);
+  if (ready.empty()) {
+    // Nothing will move, so no undo entry is pushed: an undo after a refused drape must take back
+    // whatever the user did BEFORE it, not a step that changed nothing.
+    if (refusedKind > 0)
+      log.push_back("DRAPE - nothing draped: " + std::to_string(refusedKind) + " selected object(s) (" +
+                    firstKindRefused + ") cannot be draped.");
+    else
+      log.push_back("DRAPE - nothing draped.");
+    return;
+  }
+
+  PushUndoSnapshot(st, "Drape");
+  const int moved = ApplyResolvedDrape(st, ready, linkTo);
+  BumpCadGpuCache(st);
+  std::string msg = "DRAPE - " + std::to_string(moved) + " object(s) draped onto \"" + surf.name + "\"" +
+                    (link ? ", linked." : ".");
+  if (refusedKind > 0)
+    msg += " " + std::to_string(refusedKind) + " could not be draped (" + firstKindRefused + ").";
+  log.push_back(msg);
+}
+
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   SurfaceStyles::EnsureStandard(st.surfaceStyles);
 
@@ -41741,6 +42150,18 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     // REQ-071. `EXTRACT <surface>[, <layer>]` — comma-separated, because a surface name and a layer
     // name both routinely contain spaces.
+    // ADR-065 (d), GitHub #150: what in this drawing moves when a surface is rebuilt.
+    if (plotTok == "drapelinks") {
+      ExecuteDrapeLinksCommand(st, log);
+      return;
+    }
+    // GitHub #150 (3D Phase 7). `DRAPE <surface>[, LINK]` - lay the selection on the ground.
+    if (plotTok == "drape") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteDrapeCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
     if (plotTok == "extract") {
       std::string rest;
       std::getline(issIdle, rest);
