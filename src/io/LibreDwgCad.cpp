@@ -3,6 +3,7 @@
 #include "AcisSatParser.hpp"
 #include "CadCommands.hpp"
 #include "CadField.hpp"
+#include "LibreDwgField.hpp"
 #include "util/cadpiperun.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadDimGeom.hpp"
@@ -2803,7 +2804,8 @@ size_t CountSkippedSurfaces(const AppCommandState& st) {
 namespace dwg_table_export {
 
 bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_BLOCK_HEADER* hdr,
-                   TableWriter& tw, const EntityAttributes* attr) {
+                   TableWriter& tw, const EntityAttributes* attr, DwgExportFieldContext* fldCtx,
+                   std::uint64_t blockOwnerHandle) {
   if (hdr == nullptr || table.cols <= 0)
     return false;
   const int rows = CadTableRowCount(table);
@@ -2843,10 +2845,18 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
     p.x = static_cast<double>(cells[ci].x0) + st.worldDocumentOriginX;
     p.y = static_cast<double>(cells[ci].y1) - textH + st.worldDocumentOriginY;
     p.z = z;
-    const std::string wire = SanitizeDwgTextSymbols(table.cells[ci]);
+    const CadFieldContext fctx = CadFieldContextFromState(st);
+    std::string wire = SanitizeDwgTextSymbols(table.cells[ci]);
     if (wire.empty())
       continue;
-    if (Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &p, std::max(textH * 8.0, 1.0), wire.c_str())) {
+    std::string flat;
+    for (char ch : MtextRichFlattenToPlain(wire)) {
+      if (ch == '\n')
+        flat += "\\P";
+      else if (ch != '\r')
+        flat += ch;
+    }
+    if (Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &p, std::max(textH * 8.0, 1.0), flat.c_str())) {
       mt->text_height = textH;
       mt->attachment = 1;
       mt->x_axis_dir.x = std::cos(rotRad);
@@ -2854,6 +2864,20 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
       mt->x_axis_dir.z = 0.0;
       if (attr != nullptr)
         tw.Apply(mt->parent, *attr);
+      if (fldCtx != nullptr && fldCtx->enabled && mt->parent != nullptr &&
+          CadTextContainsFieldCodes(table.cells[ci])) {
+        const std::string nativeWire = DwgExportPrepareAnnotationFieldText(
+            fldCtx, tw.dwg, st, table.cells[ci], fctx, mt->parent, blockOwnerHandle);
+        std::string nativeFlat;
+        for (char ch : MtextRichFlattenToPlain(nativeWire)) {
+          if (ch == '\n')
+            nativeFlat += "\\P";
+          else if (ch != '\r')
+            nativeFlat += ch;
+        }
+        if (!nativeFlat.empty())
+          mt->text = dwg_add_u8_input(tw.dwg, nativeFlat.c_str());
+      }
     }
   }
   return true;
@@ -3253,11 +3277,20 @@ static Dwg_Object_BLOCK_HEADER* EnsurePaperSpaceBlockHeader(Dwg_Data* dwg, size_
   return bh;
 }
 
+static std::uint64_t BlockHeaderObjectHandle(Dwg_Object_BLOCK_HEADER* hdr) {
+  if (hdr == nullptr)
+    return 0;
+  int err = 0;
+  const Dwg_Object* o = dwg_obj_generic_to_object(hdr, &err);
+  return (o != nullptr && err == 0) ? o->handle.value : 0;
+}
+
 static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWriter& tw, const AppCommandState& st,
                                         const CadBlockRef& ref, const EntityAttributes* at, double insOriginAddX,
-                                        double insOriginAddY) {
+                                        double insOriginAddY, DwgExportFieldContext* fldCtx) {
   if (hdr == nullptr || tw.dwg == nullptr || ref.defName.empty())
     return;
+  const std::uint64_t blockOwnerHandle = BlockHeaderObjectHandle(hdr);
   if (dwg_find_tablehandle(tw.dwg, ref.defName.c_str(), "BLOCK") == nullptr)
     return;
   const int defIdx = CadBlockFindDef(st.blockDefs, ref.defName);
@@ -3298,7 +3331,20 @@ static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWrite
     }
     dwg_point_3d ap = ins;
     const double h = ad != nullptr ? std::max(static_cast<double>(ad->height), 1e-3) : 0.125;
-    dwg_add_ATTRIB(e0, h, 0, &ap, av.tag.c_str(), av.value.c_str());
+    const CadFieldContext fctx = CadFieldContextFromState(st);
+    const std::string attrText =
+        fldCtx != nullptr && fldCtx->enabled
+            ? CadFieldTextForDwgExport(st, av.value, fctx, true)
+            : SanitizeDwgTextSymbols(av.value);
+    Dwg_Entity_ATTRIB* atEnt =
+        dwg_add_ATTRIB(e0, h, 0, &ap, av.tag.c_str(), attrText.c_str());
+    if (atEnt != nullptr && fldCtx != nullptr && fldCtx->enabled && atEnt->parent != nullptr &&
+        CadTextContainsFieldCodes(av.value)) {
+      const std::string nativeText = DwgExportPrepareAnnotationFieldText(
+          fldCtx, tw.dwg, st, av.value, fctx, atEnt->parent, blockOwnerHandle);
+      if (!nativeText.empty())
+        atEnt->text_value = dwg_add_u8_input(tw.dwg, SanitizeDwgTextSymbols(nativeText).c_str());
+    }
   }
   if (defRef != nullptr)
     e0->block_header = dwg_add_handleref(tw.dwg, 5, defRef->absolute_ref, nullptr);
@@ -3306,7 +3352,7 @@ static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWrite
 }
 
 static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADER* ps, TableWriter& tw,
-                                    const AppCommandState& st) {
+                                    const AppCommandState& st, DwgExportFieldContext* fldCtx) {
   if (ps == nullptr)
     return;
   auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
@@ -3366,11 +3412,12 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
     }
   }
   for (size_t i = 0; i < L.paperBlockRefs.size(); ++i)
-    WriteBlockRefInsertToHeader(ps, tw, st, L.paperBlockRefs[i], AttrAt(L.paperBlockRefAttrs, i), 0.0, 0.0);
+    WriteBlockRefInsertToHeader(ps, tw, st, L.paperBlockRefs[i], AttrAt(L.paperBlockRefAttrs, i), 0.0, 0.0,
+                                fldCtx);
 }
 
 static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, TableWriter& tw,
-                                      std::vector<std::string>& log) {
+                                      std::vector<std::string>& log, DwgExportFieldContext* fldCtx) {
   if (st.paperLayouts.empty())
     return;
   for (const PaperLayout& L : st.paperLayouts) {
@@ -3388,7 +3435,7 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
     if (ps == nullptr)
       continue;
     SetDwgLayoutTabName(dwg, ps, L.name.empty() ? "Layout" : L.name);
-    WritePaperLayoutContent(L, ps, tw, st);
+    WritePaperLayoutContent(L, ps, tw, st, fldCtx);
     ++nWritten;
   }
   if (nWritten > 0) {
@@ -3592,14 +3639,31 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       tw.Apply(ent, *a);
   };
 
+  DwgExportFieldContext fldCtx;
+  DwgExportFieldContextInit(&fldCtx, DwgSaveVersionUsesR2004Features(st.dwgExportVersion));
+  std::uint64_t blockOwnerHandle = 0;
+  {
+    int hdrErr = 0;
+    const Dwg_Object* hdrObj = dwg_obj_generic_to_object(hdr, &hdrErr);
+    if (hdrObj != nullptr && hdrErr == 0)
+      blockOwnerHandle = hdrObj->handle.value;
+  }
+  auto regEnt = [&](const void* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      DwgExportRegisterEntityHandle(&fldCtx, a->id, ent);
+  };
+
   const size_t nSeg = st.userLinesFlat.size() / 6;
   for (size_t i = 0; i < nSeg; ++i) {
     dwg_point_3d a{}, b{};
     world(st.userLinesFlat[i * 6 + 0], st.userLinesFlat[i * 6 + 1], st.userLinesFlat[i * 6 + 2], &a);
     world(st.userLinesFlat[i * 6 + 3], st.userLinesFlat[i * 6 + 4], st.userLinesFlat[i * 6 + 5], &b);
     Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &a, &b);
-    if (e != nullptr)
-      apply(e->parent, AttrAt(st.userLineAttrs, i));
+    if (e != nullptr) {
+      const EntityAttributes* la = AttrAt(st.userLineAttrs, i);
+      apply(e->parent, la);
+      regEnt(e, la);
+    }
   }
   const size_t nC = st.userCirclesCxCyZR.size() / 4;
   for (size_t i = 0; i < nC; ++i) {
@@ -3627,7 +3691,9 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       e->extrusion.x = ext.x;
       e->extrusion.y = ext.y;
       e->extrusion.z = ext.z;
-      apply(e->parent, AttrAt(st.userCircleAttrs, i));
+      const EntityAttributes* ca = AttrAt(st.userCircleAttrs, i);
+      apply(e->parent, ca);
+      regEnt(e, ca);
     }
   }
   for (size_t i = 0; i < st.userArcs.size(); ++i) {
@@ -3664,7 +3730,9 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       e->extrusion.x = ext.x;
       e->extrusion.y = ext.y;
       e->extrusion.z = ext.z;
-      apply(e->parent, AttrAt(st.userArcAttrs, i));
+      const EntityAttributes* aa = AttrAt(st.userArcAttrs, i);
+      apply(e->parent, aa);
+      regEnt(e, aa);
     }
   }
   // REQ-325 / ADR-053 increment 4 — DWG mirror of DxfIo.cpp's split-on-export.
@@ -3772,6 +3840,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         }
       }
       apply(lw->parent, atPtr);
+      regEnt(lw, atPtr);
     };
 
     auto emitSyntheticArc = [&](const CadArc& arc) {
@@ -3802,6 +3871,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         e->extrusion.y = ext.y;
         e->extrusion.z = ext.z;
         apply(e->parent, atPtr);
+        regEnt(e, atPtr);
       }
     };
 
@@ -4011,9 +4081,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       world(insXl, insYl, an.insZ, &p);
       const double bw = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
       const CadFieldContext fctx = CadFieldContextFromState(st);
-      const bool r2004Write = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
-      const std::string fieldText =
-          CadFieldTextForDwgExport(st, an.text, fctx, r2004Write);
+      const std::string fieldText = CadFieldTextForDwgExport(
+          st, an.text, fctx, fldCtx.enabled);
       std::string wire;
       for (char ch : MtextRichFlattenToPlain(SanitizeDwgTextSymbols(fieldText))) {
         if (ch == '\n')
@@ -4038,14 +4107,26 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
         apply(e->parent, at);
+        if (fldCtx.enabled && e->parent != nullptr && CadTextContainsFieldCodes(an.text)) {
+          const std::string nativeWire = DwgExportPrepareAnnotationFieldText(
+              &fldCtx, dwg, st, an.text, fctx, e->parent, blockOwnerHandle);
+          std::string nativeFlat;
+          for (char ch : MtextRichFlattenToPlain(SanitizeDwgTextSymbols(nativeWire))) {
+            if (ch == '\n')
+              nativeFlat += "\\P";
+            else if (ch != '\r')
+              nativeFlat += ch;
+          }
+          if (!nativeFlat.empty())
+            e->text = dwg_add_u8_input(dwg, nativeFlat.c_str());
+        }
       }
     } else if (an.kind == CadAnnotation::Kind::Text) {
       dwg_point_3d p{};
       world(an.insX, an.insY, an.insZ, &p);
       const CadFieldContext fctxText = CadFieldContextFromState(st);
-      const bool r2004Text = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
       const std::string textOut =
-          CadFieldTextForDwgExport(st, an.text, fctxText, r2004Text);
+          CadFieldTextForDwgExport(st, an.text, fctxText, fldCtx.enabled);
       Dwg_Entity_TEXT* e = dwg_add_TEXT(hdr, SanitizeDwgTextSymbols(textOut).c_str(), &p, h);
       if (e != nullptr) {
         e->rotation = static_cast<double>(an.rotationRad);
@@ -4054,6 +4135,12 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
         apply(e->parent, at);
+        if (fldCtx.enabled && e->parent != nullptr && CadTextContainsFieldCodes(an.text)) {
+          const std::string nativeText = DwgExportPrepareAnnotationFieldText(
+              &fldCtx, dwg, st, an.text, fctxText, e->parent, blockOwnerHandle);
+          if (!nativeText.empty())
+            e->text_value = dwg_add_u8_input(dwg, SanitizeDwgTextSymbols(nativeText).c_str());
+        }
       }
     }
   }
@@ -4275,7 +4362,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     if (blockDefByName.find(ref.defName) == blockDefByName.end())
       continue;  // definition missing or failed to write; REQ-201 covered by the #614 loss summary
     WriteBlockRefInsertToHeader(hdr, tw, st, ref, AttrAt(st.cadBlockRefAttrs, i), st.worldDocumentOriginX,
-                                st.worldDocumentOriginY);
+                                st.worldDocumentOriginY, &fldCtx);
   }
   // REQ-057 / D-2026-10-01-a, issue #603: survey feature lines, written as POLYLINE_3D (a real Z
   // per vertex — these almost always have varying elevation, which is the whole point of a
@@ -4437,7 +4524,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   size_t nTableOut = 0;
   for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
     const EntityAttributes* at = ti < st.cadTableAttrs.size() ? &st.cadTableAttrs[ti] : nullptr;
-    if (dwg_table_export::WriteCadTable(st, st.cadTables[ti], hdr, tw, at))
+    if (dwg_table_export::WriteCadTable(st, st.cadTables[ti], hdr, tw, at, &fldCtx, blockOwnerHandle))
       ++nTableOut;
   }
   if (nTableOut > 0)
@@ -4457,7 +4544,9 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     log.push_back("CAD export — wrote " + std::to_string(nPcOut) +
                   " point-cloud extent box(es) with scan path in XDATA (issue #621).");
 
-  FillPaperLayoutsFromState(st, dwg, tw, log);
+  FillPaperLayoutsFromState(st, dwg, tw, log, &fldCtx);
+
+  DwgExportFinalizeFieldObjects(&fldCtx, dwg, log);
 
   // REQ-170 / REQ-201, issue #614: every drop and degradation, named and counted, from the ONE
   // scan the pre-export warning dialog also reads — so the log and the dialog cannot disagree, and

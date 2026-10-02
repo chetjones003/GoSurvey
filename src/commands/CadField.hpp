@@ -32,6 +32,22 @@ struct CadFieldContext {
 /// Build an AutoCAD `AcVar` field wire (document variables).
 [[nodiscard]] std::string CadFieldMakeAcVarWire(std::string_view varName, std::string_view format);
 
+/// Parsed `%<\\GoSurvey Ent … Prop …>%` expression body (without `%<` / `>%`).
+struct CadFieldGoSurveyEntBinding {
+  std::uint64_t entityId = 0;
+  std::string prop;
+  std::string format;
+  [[nodiscard]] bool valid() const { return entityId != 0 && !prop.empty(); }
+};
+
+[[nodiscard]] bool CadFieldTryParseGoSurveyEntWire(std::string_view exprBody,
+                                                   CadFieldGoSurveyEntBinding* out);
+
+[[nodiscard]] std::string CadFieldMakeAcObjPropEntWire(std::uint64_t entHandle, std::string_view acdbClass,
+                                                       std::string_view propName, std::string_view format);
+
+[[nodiscard]] std::string CadFieldMakeFldIdxWire(std::uint32_t index);
+
 /// For DWG export at R2004+: keep field wires; at R2000 substitute evaluated text.
 [[nodiscard]] std::string CadFieldTextForDwgExport(const AppCommandState& st, std::string_view wire,
                                                      const CadFieldContext& ctx, bool r2004OrNewer);

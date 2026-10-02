@@ -10721,7 +10721,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: should
 - Type: functional + interop
 - Decision: D-2026-10-02-a (inline `%<…>%` wires in annotation `text`; native `FIELD`/`FIELDLIST`
-  dictionary objects deferred until LibreDWG exposes `dwg_add_FIELD`).
+  on R2004+ DWG export via hand-built AcDbField objects — issue #617 / D-2026-10-02-b).
 - Statement:
   1. **Storage.** Field definitions live in the annotation's existing `text` string as AutoCAD-style
      inline codes. GoSurvey-native bindings use `%<\GoSurvey Ent <id> Prop …>%` or
@@ -10736,18 +10736,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. **UI.** REQ-051's MTEXT toolbar **Insert field** control is enabled: with no selection it inserts
      the drawing filename; with a single polyline or circle selected it inserts that entity's area field.
   5. **DWG.** Import keeps TEXT/MTEXT strings as read (including foreign field codes). Export at
-     **R2004+** preserves wires; export at **R2000** substitutes evaluated plain text (no `FIELD`
-     objects — AutoCAD 2000 format). Separate `FIELD`/`FIELDLIST` reactor objects are a documented
-     follow-up when `HAVE_NO_DWG_ADD_FIELD` is cleared in vendored LibreDWG.
-  6. **Out of scope (v1):** block **ATTRIB** and **TABLE** cell fields, Civil 3D view/sheet fields
-     (`AcVar ViewType`, `_FldIdx`, etc.), and full AutoCAD field editor parity.
+     **R2004+** writes native **`FIELD`** objects (with **`FIELDLIST`** in the NOD, `_FldIdx` MTEXT
+     wires, and reactors on hosts) for GoSurvey entity and **AcVar** bindings; **AcObjProp** codes
+     reference exported geometry handles. Export at **R2000** substitutes evaluated plain text (no
+     `FIELD` objects — AutoCAD 2000 format).
+  6. **Out of scope:** Civil 3D sheet-set / view fields (`AcSm`, `ViewType`), full AutoCAD field
+     editor parity, and nested Civil `AcExpr` trees beyond minimal `childval` checksum entries.
 - Acceptance:
   - a closed polyline with an area field in MTEXT shows the correct area and updates when a vertex
     moves;
   - `.gs` save → load preserves the `%<…>%` wire unchanged;
   - DWG export R2004+ preserves the wire; R2000 export shows evaluated numbers with no `%<` markers;
   - `CadFieldTests` green;
-  - REQ-201 no longer lists "fields" as an untracked #601 gap for TEXT/MTEXT hosts.
+  - REQ-201 no longer lists "fields" as an untracked #601 gap for TEXT/MTEXT hosts;
+  - R2004+ DWG export of a polyline area field in MTEXT creates at least one `FIELD` and a
+    `FIELDLIST` (`LibreDwgCadTests` issue #617 case).
 - Owner-layer: Domain/Commands (`CadField`), UI (MTEXT toolbar), IO (`LibreDwgCad.cpp`)
 - Status: accepted
 - Revisions: 2026-10-02 — initial (closes SPEC GAP on issue #617; D-2026-10-02-a).

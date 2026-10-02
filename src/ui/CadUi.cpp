@@ -16575,6 +16575,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       };
       ImFont* vpFont = ImGui::GetFont();
       auto drawVpMtext = [&](const CadAnnotation& ann, const ViewportTextOverlayPlan& plan, ImU32 tcol) {
+        std::string fieldResolved;
+        const std::string* drawText = &ann.text;
+        if (CadTextContainsFieldCodes(ann.text)) {
+          fieldResolved = CadAnnotationResolvedText(cmd, ann);
+          drawText = &fieldResolved;
+        }
         const ImVec2 tl = m2s(static_cast<double>(ann.boxMinX) + oX, static_cast<double>(ann.boxMaxY) + oY);
         const ImVec2 brc = m2s(static_cast<double>(ann.boxMaxX) + oX, static_cast<double>(ann.boxMinY) + oY);
         const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
@@ -16582,7 +16588,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const int acol = (ann.mtextAttach - 1) % 3;
         const int arow = (ann.mtextAttach - 1) / 3;
         float pw = 8.f, ph = fontPx * 1.22f;
-        MtextRichNaturalContentPx(vpFont, fontPx, ann.text, &pw, &ph, plan.fontFamily);
+        MtextRichNaturalContentPx(vpFont, fontPx, *drawText, &pw, &ph, plan.fontFamily);
         float drawX = tl.x + 4.f, drawY = tl.y + 4.f;
         if (acol == 1)
           drawX = tl.x + 0.5f * ((brc.x - tl.x) - pw);
@@ -16597,7 +16603,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           wrapPx = std::max(pw, 8.f);
         Shx::Font* sfm = CadIsShxFontName(plan.fontFamily) ? Shx::Resolve(plan.fontFamily) : nullptr;
         if (sfm && sfm->valid()) {
-          const std::string plain = MtextRichFlattenToPlain(ann.text);
+          const std::string plain = MtextRichFlattenToPlain(*drawText);
           const float lineH = fontPx * 1.4f;
           const float thick = std::max(1.f, fontPx * 0.05f);
           std::string ln;
@@ -16621,7 +16627,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           }
           flush(ln);
         } else {
-          MtextRichDrawWrapped(sdl, vpFont, fontPx, ImVec2(drawX, drawY), wrapPx, tcol, ann.text, plan.fontFamily);
+          MtextRichDrawWrapped(sdl, vpFont, fontPx, ImVec2(drawX, drawY), wrapPx, tcol, *drawText, plan.fontFamily);
         }
       };
       // Lines (REQ-028: skip frozen layers).

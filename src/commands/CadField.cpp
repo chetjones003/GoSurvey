@@ -6,6 +6,7 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <cinttypes>
 #include <cstdio>
 #include <ctime>
 #include <sstream>
@@ -119,10 +120,10 @@ double PolylinePathLength(const AppCommandState& st, int pi) {
 }
 
 double CircleAreaPlan(const AppCommandState& st, int ci) {
-  if (ci < 0 || static_cast<size_t>(ci) >= st.userCirclesCxCyZR.size() / 3)
+  if (ci < 0 || static_cast<size_t>(ci) >= st.userCirclesCxCyZR.size() / 4)
     return 0.0;
-  const size_t k = static_cast<size_t>(ci) * 3;
-  const double r = st.userCirclesCxCyZR[k + 2];
+  const size_t k = static_cast<size_t>(ci) * 4;
+  const double r = st.userCirclesCxCyZR[k + 3];
   if (!(r > 0.0))
     return 0.0;
   constexpr double kPi = 3.14159265358979323846;
@@ -130,10 +131,10 @@ double CircleAreaPlan(const AppCommandState& st, int ci) {
 }
 
 double CircleCircumferencePlan(const AppCommandState& st, int ci) {
-  if (ci < 0 || static_cast<size_t>(ci) >= st.userCirclesCxCyZR.size() / 3)
+  if (ci < 0 || static_cast<size_t>(ci) >= st.userCirclesCxCyZR.size() / 4)
     return 0.0;
-  const size_t k = static_cast<size_t>(ci) * 3;
-  const double r = st.userCirclesCxCyZR[k + 2];
+  const size_t k = static_cast<size_t>(ci) * 4;
+  const double r = st.userCirclesCxCyZR[k + 3];
   if (!(r > 0.0))
     return 0.0;
   constexpr double kPi = 3.14159265358979323846;
@@ -403,6 +404,57 @@ std::string CadFieldMakeAcVarWire(std::string_view varName, std::string_view for
     format = "tc1";
   std::ostringstream os;
   os << "%<\\AcVar " << varName << " \\f \"" << format << "\">%";
+  return os.str();
+}
+
+bool CadFieldTryParseGoSurveyEntWire(std::string_view exprBody, CadFieldGoSurveyEntBinding* out) {
+  assert(out != nullptr);
+  *out = CadFieldGoSurveyEntBinding{};
+  std::string_view e = exprBody;
+  if (e.size() > 1 && e[0] == '\\')
+    e.remove_prefix(1);
+  if (!SvStartsWith(e, "GoSurvey Ent "))
+    return false;
+  e.remove_prefix(13);
+  std::uint64_t entId = 0;
+  while (!e.empty() && e.front() >= '0' && e.front() <= '9') {
+    entId = entId * 10 + static_cast<std::uint64_t>(e.front() - '0');
+    e.remove_prefix(1);
+  }
+  while (!e.empty() && e.front() == ' ')
+    e.remove_prefix(1);
+  if (!SvStartsWith(e, "Prop "))
+    return false;
+  e.remove_prefix(5);
+  while (!e.empty() && e.front() != ' ')
+    out->prop.push_back(static_cast<char>(e.front())), e.remove_prefix(1);
+  out->format = ".2f";
+  const size_t fpos = e.find("\\f \"");
+  if (fpos != std::string_view::npos) {
+    const size_t q1 = fpos + 4;
+    const size_t q2 = e.find('"', q1);
+    if (q2 != std::string_view::npos)
+      out->format = std::string(e.substr(q1, q2 - q1));
+  }
+  out->entityId = entId;
+  return out->valid();
+}
+
+std::string CadFieldMakeAcObjPropEntWire(std::uint64_t entHandle, std::string_view acdbClass,
+                                         std::string_view propName, std::string_view format) {
+  assert(entHandle != 0);
+  assert(!acdbClass.empty() && !propName.empty());
+  char handleBuf[32];
+  std::snprintf(handleBuf, sizeof(handleBuf), "%" PRIX64, static_cast<unsigned long long>(entHandle));
+  std::ostringstream os;
+  os << "%<\\AcObjProp ObjectId %<EntHandle " << handleBuf << ">% Class " << acdbClass << " Property "
+     << propName << " \\f \"" << format << "\">%";
+  return os.str();
+}
+
+std::string CadFieldMakeFldIdxWire(std::uint32_t index) {
+  std::ostringstream os;
+  os << "%<\\_FldIdx " << index << ">%";
   return os.str();
 }
 

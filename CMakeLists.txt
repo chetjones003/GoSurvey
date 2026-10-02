@@ -437,6 +437,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/DwgProbe.cpp
   src/io/LibreDwg.cpp
   src/io/LibreDwgCad.cpp
+  src/io/LibreDwgField.cpp
   src/io/DxfColors.cpp
   src/io/DwgMeshConvert.cpp
   src/io/GsMigrate.cpp
