@@ -1064,6 +1064,56 @@ TEST_CASE("Foreign DWG with *U INSERT imports as block ref not exploded geometry
   CHECK(in.blockDefs[0].dynamicAnonymous);
 }
 
+TEST_CASE("Foreign dynamic insert draws evaluated *U geometry not default size (issue #618 inc2)",
+          "[dwg][libredwg][issue618][inc2]") {
+  ScratchDir dir("dwg-dynamic-golden-display");
+  const auto p = (dir.path / "golden.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  auto* ms = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(ms != nullptr);
+
+  Dwg_Object_BLOCK_HEADER* door = dwg_add_BLOCK_HEADER(dwg, "DOOR");
+  REQUIRE(door != nullptr);
+  dwg_add_BLOCK(door, "DOOR");
+  dwg_point_3d d0{0.0, 0.0, 0.0};
+  dwg_point_3d d1{1.0, 0.0, 0.0};
+  dwg_add_LINE(door, &d0, &d1);
+  dwg_add_ENDBLK(door);
+
+  Dwg_Object_BLOCK_HEADER* ublk = dwg_add_BLOCK_HEADER(dwg, "*U1");
+  REQUIRE(ublk != nullptr);
+  ublk->anonymous = 1;
+  dwg_add_BLOCK(ublk, "*U1");
+  dwg_point_3d u1{0.0, 0.0, 0.0};
+  dwg_point_3d u2{5.0, 0.0, 0.0};
+  dwg_add_LINE(ublk, &u1, &u2);
+  dwg_add_ENDBLK(ublk);
+
+  dwg_point_3d ins{0.0, 0.0, 0.0};
+  REQUIRE(dwg_add_INSERT(ms, &ins, "*U1", 1.0, 1.0, 1.0, 0.0) != nullptr);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(st.cadBlockRefs.size() == 1);
+  CHECK(st.cadBlockRefs[0].defName == "*U1");
+  REQUIRE(st.blockDefs.size() == 1);
+  CHECK(st.blockDefs[0].name == "*U1");
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(st.blockDefs, st.cadBlockRefs[0], EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  const float span =
+      std::hypot(segs[0].x1 - segs[0].x0, segs[0].y1 - segs[0].y0);
+  CHECK(span == Catch::Approx(5.f).margin(0.01f));
+  CHECK(st.userLinesFlat.empty());
+}
+
 TEST_CASE("Named block INSERT re-imports as cadBlockRef without trailer (issue #622)", "[dwg][libredwg][issue622]") {
   ScratchDir dir("dwg-block-insert-ref");
   const auto p = (dir.path / "blk.dwg").string();

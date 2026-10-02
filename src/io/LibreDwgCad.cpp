@@ -1160,6 +1160,74 @@ inline constexpr const char* kGosurveyCannoscaleEedTag = "CANNOSCALE";
   return GosurveyEedMarksAnnotative(ent);
 }
 
+[[nodiscard]] static std::uint64_t DwgObjectHandleValue(const Dwg_Object* o) {
+  return o != nullptr ? o->handle.value : 0u;
+}
+
+[[nodiscard]] static bool DwgBlockHeaderHasDynamicPurgePreventer(const Dwg_Data* dwg,
+                                                                 const Dwg_Object* blkHeaderObj) {
+  if (dwg == nullptr || blkHeaderObj == nullptr)
+    return false;
+  const std::uint64_t target = DwgObjectHandleValue(blkHeaderObj);
+  if (target == 0u)
+    return false;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_DYNAMICBLOCKPURGEPREVENTER || o->tio.object == nullptr ||
+        o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER == nullptr)
+      continue;
+    const Dwg_Object_DYNAMICBLOCKPURGEPREVENTER* pp = o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER;
+    if (pp->block == nullptr)
+      continue;
+    Dwg_Object* linked = dwg_resolve_handle_silent(const_cast<Dwg_Data*>(dwg), pp->block->absolute_ref);
+    if (linked != nullptr && DwgObjectHandleValue(linked) == target)
+      return true;
+  }
+  return false;
+}
+
+[[nodiscard]] static bool DwgInsertReferencesForeignDynamicDefinition(const Dwg_Data* dwg, const Dwg_Object* blkHeaderObj) {
+  if (blkHeaderObj == nullptr)
+    return false;
+  const std::string name = BlockHeaderDwgName(dwg, blkHeaderObj);
+  if (name.empty() || CadBlockNameIsDynamicAnonymous(name))
+    return false;
+  return DwgBlockHeaderHasDynamicPurgePreventer(dwg, blkHeaderObj);
+}
+
+[[nodiscard]] static std::string DwgUniqueDynamicCanonicalBlockName(const Dwg_Data* dwg) {
+  if (dwg == nullptr)
+    return {};
+  std::vector<std::string> names;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_DYNAMICBLOCKPURGEPREVENTER || o->tio.object == nullptr ||
+        o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER == nullptr)
+      continue;
+    const Dwg_Object_DYNAMICBLOCKPURGEPREVENTER* pp = o->tio.object->tio.DYNAMICBLOCKPURGEPREVENTER;
+    if (pp->block == nullptr)
+      continue;
+    Dwg_Object* linked = dwg_resolve_handle_silent(const_cast<Dwg_Data*>(dwg), pp->block->absolute_ref);
+    if (linked == nullptr)
+      continue;
+    const std::string name = BlockHeaderDwgName(dwg, linked);
+    if (name.empty() || CadBlockNameIsDynamicAnonymous(name))
+      continue;
+    bool dup = false;
+    for (const std::string& have : names) {
+      if (CadBlockEqCi(have, name)) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup)
+      names.push_back(name);
+  }
+  if (names.size() == 1)
+    return names[0];
+  return {};
+}
+
 void CollectInsertAttributes(const Dwg_Data* dwg, const Dwg_Entity_INSERT* ins,
                              std::vector<CadBlockAttrValue>& out) {
   if (ins == nullptr || ins->attribs == nullptr || ins->num_owned == 0)
@@ -1204,6 +1272,8 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
 
   CadBlockRef ref;
   ref.defName = name;
+  if (CadBlockNameIsDynamicAnonymous(name))
+    ref.dynamicCanonicalName = DwgUniqueDynamicCanonicalBlockName(dwg);
   ref.xf.x = static_cast<float>(ins->ins_pt.x - originSubtractX);
   ref.xf.y = static_cast<float>(ins->ins_pt.y - originSubtractY);
   ref.xf.z = static_cast<float>(ins->ins_pt.z);
@@ -1795,6 +1865,13 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE_INSERT) {
+    if (ent->tio.INSERT != nullptr && ent->tio.INSERT->block_header != nullptr) {
+      Dwg_Object* insBlk = dwg_resolve_handle_silent(dwg, ent->tio.INSERT->block_header->absolute_ref);
+      if (DwgInsertReferencesForeignDynamicDefinition(dwg, insBlk)) {
+        NoteSkip(skipHist, "INSERT(dynamic block definition; expected *U instance)");
+        return;
+      }
+    }
     if (depth == 0) {
       if (TryImportInsertAsBlockRef(st, dwg, ent, depth, at, skipHist, degenerateExtrusions))
         return;

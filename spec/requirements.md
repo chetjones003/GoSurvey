@@ -10793,12 +10793,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Acceptance:
   - **(Inc 1)** `LibreDwgCadTests` issue #618 cases pass: `*U` INSERT export/import keeps
     `cadBlockRefs` and empty model-space lines; foreign `*U` DWG imports as one ref.
-  - **(Inc 2–5)** each increment adds tests or headless transcripts named in TASK-618 before issue
+  - **(Inc 2)** `LibreDwgCadTests` / `CadBlockTests` tag `issue618`/`inc2`: viewport collection uses
+    baked `*U` geometry (no GoSurvey action re-evaluation); foreign golden DWG shows stretched length
+    from `*U`, not the named definition's default size; INSERTs aimed at a dynamic **definition**
+    block are skipped with a logged reason rather than exploded default geometry.
+  - **(Inc 3–5)** each increment adds tests or headless transcripts named in TASK-618 before issue
     #618 closes.
   - REQ-107 no longer lists dynamic blocks as permanently out of scope.
 - Owner-layer: Domain/Commands (`CadBlocks`, `cadblock.hpp`), IO (`LibreDwgCad.cpp`), UI (BEDIT ribbon)
-- Status: accepted — increment 1 only until TASK-618 records later increments
-- Revisions: 2026-10-02 — initial (issue #618; D-2026-10-02-b).
+- Status: accepted — increments 1–2 delivered; 3–5 open (TASK-618)
+- Revisions: 2026-10-02 — initial (issue #618; D-2026-10-02-b). 2026-10-02 — increment 2 display
+  fidelity (TASK-618).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

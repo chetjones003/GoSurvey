@@ -841,6 +841,9 @@ inline void CadBlockApplyActionsToPoint(const CadBlockDefinition& def, const Cad
                                         std::string_view prim = {}, std::string_view group = {}) {
   assert(x != nullptr);
   assert(y != nullptr);
+  // AutoCAD `*U` instance blocks already carry evaluated geometry (REQ-369 increment 2).
+  if (def.dynamicAnonymous)
+    return;
   for (const CadBlockAction& a : def.actions) {
     if (!CadBlockActionApplies(a, prim, group))
       continue;

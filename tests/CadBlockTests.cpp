@@ -151,6 +151,39 @@ TEST_CASE("Visibility state hides unmatched primitives", "[issue124][block]") {
   REQUIRE(segs.size() == 1);
 }
 
+TEST_CASE("dynamicAnonymous instance geometry is not re-stretched by GoSurvey actions (issue #618 inc2)",
+          "[issue618][block]") {
+  CadBlockDefinition def;
+  def.name = "*U7";
+  def.dynamicAnonymous = true;
+  def.content.lines = {0.f, 0.f, 0.f, 5.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  stretch.threshold = -1.f;
+  def.actions.push_back(stretch);
+  CadBlockParameter p;
+  p.name = "Width";
+  p.value = 10.f;
+  def.parameters.push_back(p);
+
+  CadBlockRef r;
+  r.defName = def.name;
+  r.paramState.push_back(p);
+  std::vector<CadBlockDefinition> defs;
+  defs.push_back(def);
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  const float span = std::hypot(segs[0].x1 - segs[0].x0, segs[0].y1 - segs[0].y0);
+  CHECK(span == Catch::Approx(5.f).margin(0.001f));
+}
+
 TEST_CASE("Matchline dynamics stretch the negative end and flip labels", "[issue124][block]") {
   CadBlockDefinition def;
   def.name = "_matchline_NORTHING";

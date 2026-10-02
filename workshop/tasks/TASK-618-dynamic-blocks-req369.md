@@ -7,21 +7,20 @@
 
 | Inc | Scope | Status |
 |-----|--------|--------|
-| 1 | `*U` anonymous INSERT import/export; hide anon defs from library | **this PR** |
-| 2 | Foreign AutoCAD DWG golden: current visibility/size via `*U` | open |
+| 1 | `*U` anonymous INSERT import/export; hide anon defs from library | **done** |
+| 2 | Foreign golden display via `*U`; skip def-target INSERT; no action re-eval | **this PR** |
 | 3 | GoSurvey BPARAM/BACTION → R2004+ DWG evaluation graph | open |
 | 4 | Import params + grip re-evaluation | open |
 | 5 | Full round trip + `#614` loss honesty | open |
 
-## Files (increment 1)
+## Files (increment 2)
 
-- `src/util/cadblock.hpp` — `CadBlockNameIsDynamicAnonymous`, flags
-- `src/io/LibreDwgCad.cpp` — importable `*U`, anonymous save bit
-- `src/io/GsIo.cpp` — persist flags
-- `src/commands/CadBlocks.cpp` — library filter
-- `tests/LibreDwgCadTests.cpp` — issue #618 cases
+- `src/util/cadblock.hpp` — skip `CadBlockApplyActionsToPoint` on `dynamicAnonymous`
+- `src/io/LibreDwgCad.cpp` — canonical name via `DYNAMICBLOCKPURGEPREVENTER`; skip INSERT→def
+- `tests/LibreDwgCadTests.cpp` — golden display (`inc2` tag)
+- `tests/CadBlockTests.cpp` — action skip unit test
 
 ## Verification
 
 - `./dev/build`
-- `./dev/test --filter issue618`
+- `GoSurveySnapTests.exe "[issue618][inc2]"` and `GoSurveyTests.exe "[issue618][block]"`
