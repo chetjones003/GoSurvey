@@ -755,6 +755,46 @@ TEST_CASE("DWG annotation scale list persists through GsIo (issue #622)", "[issu
   CHECK(back.currentAnnotationScaleIndex == 0);
 }
 
+TEST_CASE("SyncCurrentAnnotationScaleIndex picks scale closest to plot scale (issue #622)", "[issue622][gsio]") {
+  AppCommandState st;
+  st.modelUnitsPerPlottedInch = 20.f;
+  CadAnnotationScale a;
+  a.name = "1:10";
+  a.paperUnits = 1.f;
+  a.drawingUnits = 10.f;
+  CadAnnotationScale b;
+  b.name = "1:20";
+  b.paperUnits = 1.f;
+  b.drawingUnits = 20.f;
+  st.annotationScales.push_back(a);
+  st.annotationScales.push_back(b);
+  st.currentAnnotationScaleIndex = -1;
+  SyncCurrentAnnotationScaleIndex(st);
+  REQUIRE(st.currentAnnotationScaleIndex == 1);
+}
+
+TEST_CASE("GsIo syncs missing currentAnnotationScaleIndex on load (issue #622)", "[issue622][gsio]") {
+  AppCommandState src;
+  src.modelUnitsPerPlottedInch = 25.f;
+  CadAnnotationScale s;
+  s.name = "1:25";
+  s.paperUnits = 1.f;
+  s.drawingUnits = 25.f;
+  src.annotationScales.push_back(s);
+  src.currentAnnotationScaleIndex = 0;
+  std::vector<std::string> log;
+  std::string json = SerializeGoSurveyJson(src);
+  const auto pos = json.find("\"currentAnnotationScaleIndex\"");
+  if (pos != std::string::npos) {
+    const auto lineEnd = json.find('\n', pos);
+    json.erase(pos, lineEnd == std::string::npos ? std::string::npos : lineEnd - pos + 1);
+  }
+  AppCommandState back;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, log));
+  REQUIRE(back.annotationScales.size() == 1);
+  REQUIRE(back.currentAnnotationScaleIndex == 0);
+}
+
 TEST_CASE("MultileaderStyle persists through GsIo JSON (issue #619)", "[issue619][gsio]") {
   AppCommandState src;
   src.activeMultileaderStyle.textSizeInches = 0.14f;
