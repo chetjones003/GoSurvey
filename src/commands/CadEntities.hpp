@@ -1234,6 +1234,20 @@ struct CadSurface {
   [[nodiscard]] int triangleCount() const { return tin ? tin->triangleCount() : 0; }
 };
 
+/// AutoCAD SCALE dictionary entry (issue #622). Ratio \p drawingUnits / \p paperUnits is model units per
+/// plotted inch for that scale name (same units as the drawing's INSUNITS vs paper inches).
+struct CadAnnotationScale {
+  std::string name;
+  float paperUnits = 1.f;
+  float drawingUnits = 1.f;
+};
+
+[[nodiscard]] inline float CadAnnotationScaleModelUnitsPerPlottedInch(const CadAnnotationScale& s) {
+  if (s.paperUnits <= 0.f)
+    return 0.f;
+  return s.drawingUnits / s.paperUnits;
+}
+
 /// A solid-filled region (ADR-011), imported from a SOLID-fill HATCH. Holds one or more closed boundary
 /// loops in the same local coordinate frame as line geometry: loop 0 is the outer boundary, any further
 /// loops are holes (islands). Rendered filled with even-odd rule in the GL pass and re-exported as a HATCH.

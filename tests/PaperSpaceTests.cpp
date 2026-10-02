@@ -653,3 +653,11 @@ TEST_CASE("Annotative hatch pattern scale tracks viewport scale (issue #622)", "
   fr.annotative = false;
   REQUIRE(FilledRegionForAnnotativeDraw(fr, &vp, 80.f).patternScale == Catch::Approx(2.f));
 }
+
+TEST_CASE("Annotation scale entry converts to model units per plotted inch (issue #622)", "[paperspace][issue622]") {
+  CadAnnotationScale s;
+  s.name = "1:50";
+  s.paperUnits = 1.f;
+  s.drawingUnits = 50.f;
+  REQUIRE(CadAnnotationScaleModelUnitsPerPlottedInch(s) == Catch::Approx(50.f));
+}

@@ -24805,6 +24805,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadAnnotationAttrs.clear();
   st.cadFilledRegions.clear();
   st.cadFilledRegionAttrs.clear();
+  st.annotationScales.clear();
   st.cadMeshes.clear();
   st.cadMeshAttrs.clear();
   st.cadPointClouds.clear();

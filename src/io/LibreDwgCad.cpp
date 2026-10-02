@@ -4219,6 +4219,27 @@ static bool WriteDwgGeoData(Dwg_Data* dwg, const DwgGeoData& g) {
   return true;
 }
 
+void ImportAnnotationScales(AppCommandState& st, Dwg_Data* dwg) {
+  st.annotationScales.clear();
+  if (dwg == nullptr)
+    return;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_SCALE || o->tio.object == nullptr || o->tio.object->tio.SCALE == nullptr)
+      continue;
+    const Dwg_Object_SCALE* sc = o->tio.object->tio.SCALE;
+    if (sc->flag != 0)
+      continue;  // skip temporary scales
+    CadAnnotationScale entry;
+    entry.name = FromT(dwg, sc->name);
+    entry.paperUnits = static_cast<float>(sc->paper_units);
+    entry.drawingUnits = static_cast<float>(sc->drawing_units);
+    if (entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
+      continue;
+    st.annotationScales.push_back(std::move(entry));
+  }
+}
+
 bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log, bool asDxf) {
   if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
     log.push_back(asDxf ? "DXF import — no path." : "DWG import — no path.");
@@ -4316,6 +4337,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
 
   ImportPaperLayoutsFromDwg(st, &dwg, &skipHist);
+  ImportAnnotationScales(st, &dwg);
 
   dwg_free(&dwg);
 
