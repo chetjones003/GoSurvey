@@ -722,6 +722,49 @@ TEST_CASE("Annotative MTEXT round-trips is_not_annotative in DWG (issue #622)", 
   CHECK(in.cadAnnotations[0].annotative);
 }
 
+TEST_CASE("Annotative TEXT round-trips via GOSURVEY XDATA (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-text-annotative");
+  const auto p = (dir.path / "txt-anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotation t{};
+  t.kind = CadAnnotation::Kind::Text;
+  t.annotative = true;
+  t.insX = 2.f;
+  t.insY = 3.f;
+  t.plottedHeightInches = 0.125f;
+  t.text = "Annotative label";
+  st.cadAnnotations.push_back(std::move(t));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadAnnotations.size() == 1);
+  CHECK(in.cadAnnotations[0].annotative);
+  CHECK(in.cadAnnotations[0].text == "Annotative label");
+}
+
+TEST_CASE("Annotation scale list round-trips through DWG (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-scale-list");
+  const auto p = (dir.path / "scales.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale s;
+  s.name = "1:25";
+  s.paperUnits = 1.f;
+  s.drawingUnits = 25.f;
+  st.annotationScales.push_back(std::move(s));
+  st.currentAnnotationScaleIndex = 0;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.annotationScales.size() == 1);
+  CHECK(in.annotationScales[0].name == "1:25");
+  CHECK(in.annotationScales[0].drawingUnits == Catch::Approx(25.f));
+}
+
 TEST_CASE("Multileader annotative flag persists through GsIo (issue #622)", "[issue622][gsio]") {
   AppCommandState src;
   CadMultileader ml{};
