@@ -177,6 +177,9 @@ ESC
 
 # OFFSET picks its entity. The pick lands on the line at its midpoint.
 CMD OFFSET
+# The distance comes first (deaccf94); without it the pick below answered the distance prompt
+# and the refusal being asserted was never reached.
+CMD 5
 PICK 50 0
 EXPECT LOG "OFFSET — 1 feature line ignored"
 ESC
