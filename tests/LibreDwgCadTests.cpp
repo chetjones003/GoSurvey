@@ -73,6 +73,67 @@ bool LogContains(const std::vector<std::string>& log, std::string_view needle) {
   return false;
 }
 
+bool EedCode0Equals(const Dwg_Eed_Data* data, const char* literal) {
+  if (data == nullptr || data->code != 0 || literal == nullptr)
+    return false;
+  std::string s;
+  if (data->u.eed_0.is_tu != 0)
+    s = libredwgcad_detail::DecodeDwgString(data->u.eed_0.string, true);
+  else {
+    const unsigned short len = data->u.eed_0.length;
+    if (len == 0)
+      return false;
+    s.assign(reinterpret_cast<const char*>(data->u.eed_0.string), len);
+  }
+  return s == literal;
+}
+
+void StripGosurveyAnnotativeEed(Dwg_Data& dwg) {
+  const BITCODE_H app = dwg_find_tablehandle(&dwg, "GOSURVEY", "APPID");
+  if (app == nullptr)
+    return;
+  const BITCODE_RLL gosRef = app->absolute_ref;
+  for (unsigned oi = 0; oi < dwg.num_objects; ++oi) {
+    Dwg_Object& obj = dwg.object[oi];
+    if (obj.supertype != DWG_SUPERTYPE_ENTITY || obj.tio.entity == nullptr)
+      continue;
+    Dwg_Object_Entity* ent = obj.tio.entity;
+    if (ent->eed == nullptr || ent->num_eed == 0)
+      continue;
+    if (ent->eed[0].handle.value != gosRef)
+      continue;
+    if (!EedCode0Equals(ent->eed[0].data, "annotative"))
+      continue;
+    free(ent->eed[0].data);
+    ent->eed[0].data = nullptr;
+    if (ent->num_eed == 1) {
+      free(ent->eed);
+      ent->eed = nullptr;
+      ent->num_eed = 0;
+      continue;
+    }
+    for (BITCODE_BL i = 1; i < ent->num_eed; ++i)
+      ent->eed[i - 1] = ent->eed[i];
+    ent->num_eed -= 1;
+  }
+}
+
+bool DwgHasAcadAnnotativeDataEed(const Dwg_Data& dwg) {
+  for (unsigned oi = 0; oi < dwg.num_objects; ++oi) {
+    const Dwg_Object& obj = dwg.object[oi];
+    if (obj.supertype != DWG_SUPERTYPE_ENTITY || obj.tio.entity == nullptr)
+      continue;
+    const Dwg_Object_Entity* ent = obj.tio.entity;
+    if (ent->eed == nullptr)
+      continue;
+    for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+      if (EedCode0Equals(ent->eed[i].data, "AnnotativeData"))
+        return true;
+    }
+  }
+  return false;
+}
+
 // Survey-point labels are measured through ImGui::GetFont() while a point is placed/imported
 // (EnsureSurveyPointLabelMtext) — same fixture as GsMigrateLegacyBreaklineTests.cpp (ADR-031 (c')).
 struct HeadlessImGuiScope {
@@ -743,6 +804,39 @@ TEST_CASE("Annotative TEXT round-trips via GOSURVEY XDATA (issue #622)", "[dwg][
   REQUIRE(in.cadAnnotations.size() == 1);
   CHECK(in.cadAnnotations[0].annotative);
   CHECK(in.cadAnnotations[0].text == "Annotative label");
+}
+
+TEST_CASE("AcadAnnotative EED imports when GOSURVEY marker stripped (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-acad-annotative-eed");
+  const auto exported = (dir.path / "both.dwg").string();
+  const auto acadOnly = (dir.path / "acad-only.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadBlockDefinition def;
+  def.name = "SYM";
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "SYM";
+  ref.annotative = true;
+  ref.xf.x = 1.f;
+  ref.xf.y = 2.f;
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, exported.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(exported.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  REQUIRE(DwgHasAcadAnnotativeDataEed(dwg));
+  StripGosurveyAnnotativeEed(dwg);
+  REQUIRE(DwgHasAcadAnnotativeDataEed(dwg));
+  REQUIRE(dwg_write_file(acadOnly.c_str(), &dwg) == 0);
+  dwg_free(&dwg);
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, acadOnly.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadBlockRefs.size() == 1);
+  CHECK(in.cadBlockRefs[0].annotative);
 }
 
 TEST_CASE("Annotation scale list round-trips through DWG (issue #622)", "[dwg][libredwg][issue622]") {
