@@ -773,6 +773,35 @@ TEST_CASE("SyncCurrentAnnotationScaleIndex picks scale closest to plot scale (is
   REQUIRE(st.currentAnnotationScaleIndex == 1);
 }
 
+TEST_CASE("Named block INSERT re-imports as cadBlockRef without trailer (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-block-insert-ref");
+  const auto p = (dir.path / "blk.dwg").string();
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "ANNO_SYM";
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "ANNO_SYM";
+  ref.annotative = true;
+  ref.xf.x = 5.f;
+  ref.xf.y = 10.f;
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.blockDefs.size() == 1);
+  CHECK(in.blockDefs[0].name == "ANNO_SYM");
+  REQUIRE(in.cadBlockRefs.size() == 1);
+  CHECK(in.cadBlockRefs[0].defName == "ANNO_SYM");
+  CHECK(in.cadBlockRefs[0].xf.x == Catch::Approx(5.f));
+  CHECK(in.cadBlockRefs[0].xf.y == Catch::Approx(10.f));
+  CHECK(in.userLinesFlat.empty());
+}
+
 TEST_CASE("GsIo syncs missing currentAnnotationScaleIndex on load (issue #622)", "[issue622][gsio]") {
   AppCommandState src;
   src.modelUnitsPerPlottedInch = 25.f;
