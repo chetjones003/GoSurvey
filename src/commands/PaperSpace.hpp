@@ -178,6 +178,14 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   return out;
 }
 
+/// Block INSERT drawn through a layout viewport; annotative refs scale about the insertion point.
+[[nodiscard]] inline CadBlockRef CadBlockRefForViewportDraw(const CadBlockRef& ref, const Viewport& vp,
+                                                              float drawingModelUnitsPerPlottedInch) {
+  if (!ref.annotative)
+    return ref;
+  return CadBlockRefForAnnotativeViewport(ref, AnnotativeDisplayScaleFactor(&vp, drawingModelUnitsPerPlottedInch));
+}
+
 /// Height on the sheet (paper inches) of \p a when it is plotted through \p vp.
 /// Plain MTEXT is \c plottedHeightInches (REQ-050 constant plotted height). TEXT, dimensions, and
 /// survey-label MTEXT convert model height through the viewport scale, matching the on-screen overlay.

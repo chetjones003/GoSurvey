@@ -16662,6 +16662,66 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           prev = s;
         }
       }
+      // Model block INSERTs (issue #622): paper space skips GL, so draw block geometry in the viewport overlay.
+      for (size_t bi = 0; bi < cmd.cadBlockRefs.size(); ++bi) {
+        const EntityAttributes& attr =
+            bi < cmd.cadBlockRefAttrs.size() ? cmd.cadBlockRefAttrs[bi] : EntityAttributes{};
+        if (CadEntityIdHidden(&cmd.hiddenEntityIds, attr.id))
+          continue;
+        const std::string layer = attr.layer.empty() ? std::string("0") : attr.layer;
+        if (IsLayerFrozenInViewport(vp, layer))
+          continue;
+        const CadBlockRef drawRef =
+            CadBlockRefForViewportDraw(cmd.cadBlockRefs[bi], vp, cmd.modelUnitsPerPlottedInch);
+        std::vector<CadBlockWorldSeg> segs;
+        CadBlockCollectWorldLines(cmd.blockDefs, drawRef, attr, &segs);
+        ImU32 bc;
+        float bw;
+        entStyle(SelectedEntity::Type::BlockRef, static_cast<int>(bi), vpBaseCol(layer, attr.color), bc, bw);
+        for (const CadBlockWorldSeg& s : segs) {
+          const ImVec2 a = m2sz(static_cast<double>(s.x0) + oX, static_cast<double>(s.y0) + oY, s.z0);
+          const ImVec2 b = m2sz(static_cast<double>(s.x1) + oX, static_cast<double>(s.y1) + oY, s.z1);
+          sdl->AddLine(a, b, bc, bw);
+        }
+      }
+      // Pattern hatches (issue #622): annotative spacing follows this viewport's scale.
+      {
+        std::vector<float> hatchSegs;
+        for (size_t fi = 0; fi < cmd.cadFilledRegions.size(); ++fi) {
+          const CadFilledRegion& fr = cmd.cadFilledRegions[fi];
+          if (fr.isSolid())
+            continue;
+          const EntityAttributes& fa =
+              fi < cmd.cadFilledRegionAttrs.size() ? cmd.cadFilledRegionAttrs[fi] : EntityAttributes{};
+          if (CadEntityIdHidden(&cmd.hiddenEntityIds, fa.id))
+            continue;
+          const std::string layer = fa.layer.empty() ? std::string("0") : fa.layer;
+          if (IsLayerFrozenInViewport(vp, layer))
+            continue;
+          const hatchpat::Def* pdef = hatchpat::Find(HatchLibrary(), fr.patternName);
+          if (!pdef)
+            continue;
+          const CadFilledRegion drawFr = FilledRegionForAnnotativeDraw(fr, &vp, cmd.modelUnitsPerPlottedInch);
+          hatchSegs.clear();
+          if (hatchpattern::BuildSegments(drawFr, *pdef, &hatchSegs) == 0)
+            continue;
+          double frZSum = 0.;
+          size_t frZCount = 0;
+          for (size_t vi = 2; vi < fr.vertsXyz.size(); vi += 3) {
+            frZSum += fr.vertsXyz[vi];
+            ++frZCount;
+          }
+          const double frZ = frZCount ? frZSum / static_cast<double>(frZCount) : 0.;
+          const ImU32 hcol = vpBaseCol(layer, fa.color);
+          for (size_t s = 0; s + 3 < hatchSegs.size(); s += 4) {
+            const ImVec2 a = m2sz(static_cast<double>(hatchSegs[s]) + oX, static_cast<double>(hatchSegs[s + 1]) + oY,
+                                  frZ);
+            const ImVec2 b =
+                m2sz(static_cast<double>(hatchSegs[s + 2]) + oX, static_cast<double>(hatchSegs[s + 3]) + oY, frZ);
+            sdl->AddLine(a, b, hcol, 1.f);
+          }
+        }
+      }
       // Survey-point crosses (REQ-028: skip frozen layers).
       const float crossPx = 4.f;
       for (const SurveyPoint& sp : cmd.surveyPoints) {
@@ -16739,6 +16799,30 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Model TEXT / MTEXT through this viewport (issue #115): same m2s + clip as linework.
       {
         ImFont* vpFont = ImGui::GetFont();
+        for (size_t bi = 0; bi < cmd.cadBlockRefs.size(); ++bi) {
+          const EntityAttributes* bp =
+              bi < cmd.cadBlockRefAttrs.size() ? &cmd.cadBlockRefAttrs[bi] : nullptr;
+          if (bp && CadEntityIdHidden(&cmd.hiddenEntityIds, bp->id))
+            continue;
+          const std::string blayer = bp ? (bp->layer.empty() ? std::string("0") : bp->layer) : std::string("0");
+          if (IsLayerFrozenInViewport(vp, blayer))
+            continue;
+          const CadBlockRef drawRef =
+              CadBlockRefForViewportDraw(cmd.cadBlockRefs[bi], vp, cmd.modelUnitsPerPlottedInch);
+          std::vector<CadAnnotation> blockAnns;
+          CadBlockCollectWorldAnnotations(cmd.blockDefs, drawRef, &blockAnns);
+          const ImU32 btcol = vpBaseCol(blayer, bp ? bp->color : std::string("ByLayer"));
+          for (const CadAnnotation& ban : blockAnns) {
+            if (ban.kind == CadAnnotation::Kind::Text) {
+              const ImVec2 sp = m2s(static_cast<double>(ban.insX) + oX, static_cast<double>(ban.insY) + oY);
+              const float textMup =
+                  AnnotativeModelUnitsPerPlottedInch(ban, &vp, cmd.modelUnitsPerPlottedInch);
+              const float hWorld = CadAnnotationHeightWorld(ban, textMup);
+              const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
+              DrawCadSingleLineText(sdl, ban, vpFont, sp, fontPx, btcol);
+            }
+          }
+        }
         for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
           const CadAnnotation& ann = cmd.cadAnnotations[ai];
           if (CadAnnotationIsDimension(ann))
@@ -16762,7 +16846,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const ImU32 tcol = vpBaseCol(layer, aa ? aa->color : std::string("ByLayer"));
           if (ann.kind == CadAnnotation::Kind::Text) {
             const ImVec2 sp = m2s(static_cast<double>(ann.insX) + oX, static_cast<double>(ann.insY) + oY);
-            const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
+            const float textMup =
+                AnnotativeModelUnitsPerPlottedInch(ann, &vp, cmd.modelUnitsPerPlottedInch);
+            const float hWorld = CadAnnotationHeightWorld(ann, textMup);
             const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
             DrawCadSingleLineText(sdl, ann, vpFont, sp, fontPx, tcol);
           } else if (ann.kind == CadAnnotation::Kind::Table && ann.tableCols > 0) {
@@ -18420,12 +18506,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           bi < cmd.cadBlockRefAttrs.size() ? &cmd.cadBlockRefAttrs[bi] : nullptr;
       if (bp && CadEntityIdHidden(&cmd.hiddenEntityIds, bp->id))
         continue;
-      const CadBlockRef& rawRef = cmd.cadBlockRefs[bi];
-      const float annoFactor =
-          rawRef.annotative
-              ? AnnotativeDisplayScaleFactor(CurrentViewport(cmd), cmd.modelUnitsPerPlottedInch)
-              : 1.f;
-      const CadBlockRef drawRef = CadBlockRefForAnnotativeViewport(rawRef, annoFactor);
+      const Viewport* blkVp = CurrentViewport(cmd);
+      const CadBlockRef drawRef = blkVp != nullptr
+                                      ? CadBlockRefForViewportDraw(cmd.cadBlockRefs[bi], *blkVp,
+                                                                     cmd.modelUnitsPerPlottedInch)
+                                      : cmd.cadBlockRefs[bi];
       std::vector<CadAnnotation> blockAnns;
       CadBlockCollectWorldAnnotations(cmd.blockDefs, drawRef, &blockAnns);
       for (const CadAnnotation& a : blockAnns)
