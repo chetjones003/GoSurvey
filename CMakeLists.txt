@@ -357,6 +357,7 @@ target_link_libraries(imgui_backend PUBLIC glfw)
 set(GOSURVEY_DOMAIN_SOURCES
   # Command system
   src/commands/CadCommands.cpp
+  src/commands/CadField.cpp
   # Cohesive slices split out of the CadCommands.cpp mega-TU (TASK-150 Phase 2,
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
@@ -436,6 +437,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/DwgProbe.cpp
   src/io/LibreDwg.cpp
   src/io/LibreDwgCad.cpp
+  src/io/LibreDwgField.cpp
   src/io/DxfColors.cpp
   src/io/DwgMeshConvert.cpp
   src/io/GsMigrate.cpp
@@ -1277,6 +1279,7 @@ if(GOSURVEY_BUILD_TESTS)
   add_executable(GoSurveySnapTests
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
+    tests/CadFieldTests.cpp
     tests/CadSnapTests.cpp
     tests/GsIoDimAngularTests.cpp
     tests/GsIoPipeRunTests.cpp

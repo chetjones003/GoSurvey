@@ -7,6 +7,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "CadField.hpp"
 #include "CadDimStroke.hpp"
 #include "SurveyPoints.hpp"
 #include "io/SurveyCsv.hpp"
@@ -388,6 +389,34 @@ TEST_CASE("ExportDwgFile writes an L-shaped pipe run as 3DSOLID (issue #612)", "
   std::vector<std::string> log;
   REQUIRE(ExportDwgFile(st, p.c_str(), log));
   REQUIRE(CountDwg3DSolids(p.c_str()) >= 1);
+}
+
+TEST_CASE("R2004 DWG export writes native FIELD and FIELDLIST for GoSurvey area field (issue #617)",
+          "[dwg][libredwg][issue617][req368]") {
+  ScratchDir dir("dwg-field-native");
+  const auto p = (dir.path / "area-field.dwg").string();
+  AppCommandState st;
+  st.userPolylineOffsets = {0, 4};
+  st.userPolylineClosed = {1};
+  st.userPolylineVerts = {0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
+  st.userPolylineAttrs = {EntityAttributes{}};
+  st.userPolylineAttrs[0].id = 99;
+  CadAnnotation ann;
+  ann.kind = CadAnnotation::Kind::Mtext;
+  ann.boxMinX = 0.f;
+  ann.boxMaxX = 5.f;
+  ann.boxMinY = 0.f;
+  ann.boxMaxY = 2.f;
+  ann.mtextAttach = 1;
+  ann.text = CadFieldMakeGoSurveyWire(99, "Area", ".2f");
+  st.cadAnnotations.push_back(ann);
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  CHECK(CountDwgFixedType(p.c_str(), DWG_TYPE_FIELD) >= 2);
+  CHECK(CountDwgFixedType(p.c_str(), DWG_TYPE_FIELDLIST) >= 1);
+  CHECK(LogContains(log, "FIELD object(s)"));
 }
 
 TEST_CASE("ExportLibreCadFile writes R2004 when dwgExportVersion is R2004 (issue #600)",
