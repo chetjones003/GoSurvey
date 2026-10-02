@@ -9401,6 +9401,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int nTable = 0;
   int nBlock = 0;
   int nMultileader = 0;
+  int nFilledRegion = 0;
   int nPdf  = 0;
   int nSurf = 0;
   int firstSurfIx = -1;
@@ -9414,6 +9415,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     else if (e.type == SelectedEntity::Type::Table) ++nTable;
     else if (e.type == SelectedEntity::Type::BlockRef) ++nBlock;
     else if (e.type == SelectedEntity::Type::Multileader) ++nMultileader;
+    else if (e.type == SelectedEntity::Type::FilledRegion) ++nFilledRegion;
     else if (e.type == SelectedEntity::Type::PdfUnderlay)++nPdf;
     else if (e.type == SelectedEntity::Type::Surface) {
       ++nSurf;
@@ -9637,6 +9639,32 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
           ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
           PropAnnotativeAndVisibleScalesRows(cmd, &ml.annotative, &ml.annotativeVisibleScaleNames,
                                              "##mlAnnotative", "##mlVisScales");
+          ImGui::EndTable();
+        }
+      }
+    }
+  } else if (nLine == 0 && nCirc == 0 && nAnn == 0 && nTable == 0 && nBlock == 0 && nMultileader == 0 &&
+             nFilledRegion > 0) {
+    int frIdx = -1;
+    for (const auto& e : sel) {
+      if (e.type == SelectedEntity::Type::FilledRegion) {
+        frIdx = e.index;
+        break;
+      }
+    }
+    if (nFilledRegion == 1 && frIdx >= 0 && static_cast<size_t>(frIdx) < cmd.cadFilledRegions.size()) {
+      CadFilledRegion& fr = cmd.cadFilledRegions[static_cast<size_t>(frIdx)];
+      if (PropSectionHeader("Hatch")) {
+        if (ImGui::BeginTable("props_hatch", 2, kPropTableFlags)) {
+          ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+          ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn();
+          ImGui::TextUnformatted("Pattern");
+          ImGui::TableNextColumn();
+          ImGui::TextUnformatted(fr.patternName.empty() ? "SOLID" : fr.patternName.c_str());
+          PropAnnotativeAndVisibleScalesRows(cmd, &fr.annotative, &fr.annotativeVisibleScaleNames,
+                                             "##frAnnotative", "##frVisScales");
           ImGui::EndTable();
         }
       }
@@ -18772,6 +18800,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (bp && CadEntityIdHidden(&cmd.hiddenEntityIds, bp->id))
         continue;
       const Viewport* blkVp = CurrentViewport(cmd);
+      if (!CadAnnotativeVisibleAtActiveScale(cmd.cadBlockRefs[bi].annotative,
+                                             cmd.cadBlockRefs[bi].annotativeVisibleScaleNames, kAnnoScales,
+                                             cmd.currentAnnotationScaleIndex, blkVp, cmd.modelUnitsPerPlottedInch))
+        continue;
       const CadBlockRef drawRef =
           CadBlockRefForAnnotativeDisplay(cmd.cadBlockRefs[bi], blkVp, cmd.modelUnitsPerPlottedInch, kAnnoScales,
                                           cmd.currentAnnotationScaleIndex);
