@@ -6698,11 +6698,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       std::string wLayer = cmd.hatchLayer.empty() ? cmd.currentLayer : cmd.hatchLayer;
       float wAngle = cmd.hatchAngleDeg;
       float wScale = cmd.hatchScale;
+      bool wAnnotative = false;
       if (hatchEditing) {
         const CadFilledRegion& fr0 = cmd.cadFilledRegions[static_cast<size_t>(hatchSel[0])];
         wPattern = fr0.patternName;
         wAngle = fr0.patternAngleDeg;
         wScale = fr0.patternScale;
+        wAnnotative = fr0.annotative;
         if (static_cast<size_t>(hatchSel[0]) < cmd.cadFilledRegionAttrs.size()) {
           const EntityAttributes& a0 = cmd.cadFilledRegionAttrs[static_cast<size_t>(hatchSel[0])];
           const CadLayerRow* lr = FindDrawingLayerRowCi(cmd, a0.layer);
@@ -6746,6 +6748,14 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         v = std::max(0.01f, v);
         if (hatchEditing) { for (int i : hatchSel) cmd.cadFilledRegions[static_cast<size_t>(i)].patternScale = v; BumpCadGpuCache(cmd); }
         else cmd.hatchScale = v;
+      };
+      auto setAnnotative = [&](bool on) {
+        if (hatchEditing) {
+          snapEdit();
+          for (int i : hatchSel)
+            cmd.cadFilledRegions[static_cast<size_t>(i)].annotative = on;
+          BumpCadGpuCache(cmd);
+        }
       };
 
       static hatchpat::Def s_solidDef = [] { hatchpat::Def d; d.name = "SOLID"; return d; }();
@@ -6846,6 +6856,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       const bool scChanged = ImGui::InputFloat("Scale##hatch", &wScale, 0.f, 0.f, "%.2f");
       if (ImGui::IsItemActivated()) snapEdit();
       if (scChanged) setScale(wScale);
+      if (hatchEditing) {
+        if (ImGui::Checkbox("Annotative##hatch", &wAnnotative))
+          setAnnotative(wAnnotative);
+      }
       ImGui::EndGroup();
     }
     RibbonSectionEnd();
@@ -9511,7 +9525,8 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
         float deg = r.xf.rotZ * 57.2957795f;
         if (ImGui::DragFloat("Rotation##blk", &deg, 0.1f))
           r.xf.rotZ = deg * 0.01745329252f;
-        BumpCadGpuCache(cmd);
+        if (ImGui::Checkbox("Annotative##blk", &r.annotative))
+          BumpCadGpuCache(cmd);
       }
     }
   } else if (nCirc == 0 && nAnn == 0 && nLine > 0) {
@@ -17792,6 +17807,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImDrawList* hdl = ImGui::GetWindowDrawList();
     const Camera hatchCam = CadViewCamera(cmd);
     std::vector<float> segs;
+    const Viewport* hatchVp = CurrentViewport(cmd);
     for (size_t fi = 0; fi < cmd.cadFilledRegions.size(); ++fi) {
       const CadFilledRegion& fr = cmd.cadFilledRegions[fi];
       if (fr.isSolid())
@@ -17799,8 +17815,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const hatchpat::Def* pdef = hatchpat::Find(HatchLibrary(), fr.patternName);
       if (!pdef)
         continue;
+      const CadFilledRegion drawFr =
+          FilledRegionForAnnotativeDraw(fr, hatchVp, cmd.modelUnitsPerPlottedInch);
       segs.clear();
-      if (hatchpattern::BuildSegments(fr, *pdef, &segs) == 0)
+      if (hatchpattern::BuildSegments(drawFr, *pdef, &segs) == 0)
         continue;
       // BuildSegments clips the pattern against the boundary in XY and returns no elevations, so
       // the family is drawn on the region's own plane — its mean vertex Z, which is exact for the
@@ -18402,8 +18420,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           bi < cmd.cadBlockRefAttrs.size() ? &cmd.cadBlockRefAttrs[bi] : nullptr;
       if (bp && CadEntityIdHidden(&cmd.hiddenEntityIds, bp->id))
         continue;
+      const CadBlockRef& rawRef = cmd.cadBlockRefs[bi];
+      const float annoFactor =
+          rawRef.annotative
+              ? AnnotativeDisplayScaleFactor(CurrentViewport(cmd), cmd.modelUnitsPerPlottedInch)
+              : 1.f;
+      const CadBlockRef drawRef = CadBlockRefForAnnotativeViewport(rawRef, annoFactor);
       std::vector<CadAnnotation> blockAnns;
-      CadBlockCollectWorldAnnotations(cmd.blockDefs, cmd.cadBlockRefs[bi], &blockAnns);
+      CadBlockCollectWorldAnnotations(cmd.blockDefs, drawRef, &blockAnns);
       for (const CadAnnotation& a : blockAnns)
         drawAnnotationVisual(a, bp, kAnnCol);
     }

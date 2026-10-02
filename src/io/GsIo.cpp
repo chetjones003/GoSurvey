@@ -633,6 +633,8 @@ json CadBlockRefToJson(const CadBlockRef& r) {
   CadBlockXformToJson(r.xf, xf);
   o["xf"] = std::move(xf);
   o["visState"] = r.visState;
+  if (r.annotative)
+    o["annotative"] = true;
   json av = json::array();
   for (const CadBlockAttrValue& v : r.attributes) {
     json e;
@@ -658,6 +660,7 @@ CadBlockRef CadBlockRefFromJson(const json& o) {
   if (o.contains("xf"))
     r.xf = CadBlockXformFromJson(o["xf"]);
   r.visState = o.value("visState", "");
+  r.annotative = o.value("annotative", false);
   if (o.contains("attributes") && o["attributes"].is_array()) {
     for (const auto& e : o["attributes"])
       r.attributes.push_back(CadBlockAttrValue{e.value("tag", ""), e.value("value", "")});
@@ -1562,6 +1565,8 @@ json BuildRoot(const AppCommandState& st) {
       o["patAngle"] = fr.patternAngleDeg;
       o["patScale"] = fr.patternScale;
     }
+    if (fr.annotative)
+      o["annotative"] = true;
     fills.push_back(std::move(o));
   }
   doc["filledRegions"] = std::move(fills);
@@ -3461,6 +3466,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           fr.patternAngleDeg = el["patAngle"].get<float>();
         if (el.contains("patScale"))
           fr.patternScale = el["patScale"].get<float>();
+        fr.annotative = el.value("annotative", false);
       } else if (el.is_array()) {
         // Legacy pre-multi-loop form: a bare flat XY array = one loop. Expand to XYZ at Z = 0.
         for (size_t i = 0; i + 1 < el.size(); i += 2) {

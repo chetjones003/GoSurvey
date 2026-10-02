@@ -640,3 +640,16 @@ TEST_CASE("Paper box-select follows an MTEXT's real box (TASK-198)", "[paperspac
   SelectPaperEntitiesInBox(L, 9.f, 19.f, 15.f, 24.f, /*windowMode=*/true, out);
   REQUIRE(out.size() == 1);
 }
+
+TEST_CASE("Annotative hatch pattern scale tracks viewport scale (issue #622)", "[paperspace][issue622]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 40.f;
+  CadFilledRegion fr;
+  fr.patternName = "ANSI31";
+  fr.patternScale = 2.f;
+  fr.annotative = true;
+  const CadFilledRegion scaled = FilledRegionForAnnotativeDraw(fr, &vp, 80.f);
+  REQUIRE(scaled.patternScale == Catch::Approx(1.f));
+  fr.annotative = false;
+  REQUIRE(FilledRegionForAnnotativeDraw(fr, &vp, 80.f).patternScale == Catch::Approx(2.f));
+}

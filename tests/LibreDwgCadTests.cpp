@@ -2928,6 +2928,42 @@ TEST_CASE("DWG round-trips solid and pattern HATCH fills (REQ-170, issue #608)",
   CHECK(nPattern == 1);
 }
 
+TEST_CASE("Annotative HATCH path flag round-trips on R2018 DWG (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-hatch-annotative");
+  const auto p = (dir.path / "hatch-anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadFilledRegion pat = SquareHatchRegion(0.f, 0.f, 12.f);
+  pat.patternName = "ANSI31";
+  pat.patternScale = 1.5f;
+  pat.annotative = true;
+  st.cadFilledRegions.push_back(std::move(pat));
+  st.cadFilledRegionAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  bool sawAnnoPath = false;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].fixedtype != DWG_TYPE_HATCH || dwg.object[i].tio.entity == nullptr ||
+        dwg.object[i].tio.entity->tio.HATCH == nullptr)
+      continue;
+    const Dwg_Entity_HATCH* h = dwg.object[i].tio.entity->tio.HATCH;
+    if (h->paths != nullptr) {
+      for (BITCODE_BL pi = 0; pi < h->num_paths; ++pi) {
+        if ((h->paths[pi].flag & 0x200) != 0)
+          sawAnnoPath = true;
+      }
+    }
+  }
+  dwg_free(&dwg);
+  REQUIRE(sawAnnoPath);
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadFilledRegions.size() == 1);
+  CHECK(in.cadFilledRegions[0].annotative);
+}
+
 // REQ-170, issue #609: explicit entity lineweight and layer-table lineweight survive DWG save/open.
 TEST_CASE("DWG round-trips entity and layer lineweight (REQ-170, issue #609)",
           "[dwg][libredwg][req170][issue609]") {
