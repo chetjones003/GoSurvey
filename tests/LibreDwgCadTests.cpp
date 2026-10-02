@@ -1167,6 +1167,105 @@ TEST_CASE("GoSurvey dynamic block DWG import restores parameters and actions (is
   CHECK(in.cadBlockRefs[0].paramState[0].name == "Width");
 }
 
+static int DwgLossCountForLabel(const AppCommandState& st, std::string_view needle) {
+  for (const DwgExportLoss& l : ComputeDwgExportLosses(st)) {
+    if (l.label.find(needle) != std::string::npos)
+      return l.count;
+  }
+  return 0;
+}
+
+static void Issue618StretchDoorDef(CadBlockDefinition& def, float defaultWidth) {
+  def.name = "STRETCH_DOOR";
+  def.content.lines = {0.f, 0.f, 0.f, defaultWidth, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockParameter len;
+  len.name = "Width";
+  len.kind = CadBlockParamKind::Linear;
+  len.value = defaultWidth;
+  len.minValue = 0.f;
+  len.maxValue = 10.f;
+  def.parameters.push_back(len);
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  def.actions.push_back(stretch);
+}
+
+TEST_CASE("GoSurvey dynamic block DWG round trip writes INSERT param distance (issue #618 inc5)",
+          "[dwg][libredwg][issue618][inc5]") {
+  ScratchDir dir("dwg-gosurvey-dynamic-roundtrip");
+  const auto p = (dir.path / "instparam.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition def;
+  Issue618StretchDoorDef(def, 2.f);
+  st.blockDefs.push_back(def);
+  CadBlockRef ref;
+  ref.defName = "STRETCH_DOOR";
+  CadBlockParameter inst = def.parameters[0];
+  inst.value = 4.f;
+  ref.paramState.push_back(inst);
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.blockDefs.size() == 1);
+  REQUIRE(in.blockDefs[0].parameters.size() >= 1);
+  CHECK(in.blockDefs[0].parameters[0].value == Catch::Approx(4.f).margin(0.02f));
+}
+
+TEST_CASE("DWG export loss summary names dynamic-block gaps at R2004 (issue #618 inc5 / #614)",
+          "[dwg][libredwg][issue618][inc5][issue614]") {
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition def;
+  Issue618StretchDoorDef(def, 2.f);
+  st.blockDefs.push_back(def);
+  CadBlockRef ref;
+  ref.defName = "STRETCH_DOOR";
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  CHECK(DwgLossCountForLabel(st, "entity associations") >= 1);
+  CHECK(DwgLossCountForLabel(st, "evaluation graph requires R2004") == 0);
+
+  AppCommandState visSt;
+  visSt.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition visDef;
+  Issue618StretchDoorDef(visDef, 2.f);
+  visDef.visibilityStates = {"Open", "Closed"};
+  visSt.blockDefs.push_back(std::move(visDef));
+  CHECK(DwgLossCountForLabel(visSt, "visibility dynamic parameters") >= 1);
+
+  AppCommandState conflictSt;
+  conflictSt.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition conflictDef;
+  Issue618StretchDoorDef(conflictDef, 2.f);
+  conflictSt.blockDefs.push_back(conflictDef);
+  CadBlockRef r1;
+  r1.defName = "STRETCH_DOOR";
+  CadBlockParameter p1 = conflictDef.parameters[0];
+  p1.value = 3.f;
+  r1.paramState.push_back(p1);
+  CadBlockRef r2;
+  r2.defName = "STRETCH_DOOR";
+  CadBlockParameter p2 = conflictDef.parameters[0];
+  p2.value = 5.f;
+  r2.paramState.push_back(p2);
+  conflictSt.cadBlockRefs.push_back(std::move(r1));
+  conflictSt.cadBlockRefs.push_back(std::move(r2));
+  conflictSt.cadBlockRefAttrs.push_back(EntityAttributes{});
+  conflictSt.cadBlockRefAttrs.push_back(EntityAttributes{});
+  CHECK(DwgLossCountForLabel(conflictSt, "conflicting dynamic parameter") == 2);
+}
+
 TEST_CASE("Foreign dynamic insert draws evaluated *U geometry not default size (issue #618 inc2)",
           "[dwg][libredwg][issue618][inc2]") {
   ScratchDir dir("dwg-dynamic-golden-display");

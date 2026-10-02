@@ -10802,11 +10802,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
     `ACAD_EVALUATION_GRAPH` readable by `dwg_read_file`.
   - **(Inc 4)** `LibreDwgCadTests` tag `[issue618][inc4]` restores `BPARAM`/`BACTION` from DWG; `CadBlockTests`
     tag `[issue618][inc4]` verifies linear stretch grip re-evaluation on placed INSERTs.
-  - **(Inc 5)** full AutoCAD round trip and `#614` loss honesty before issue #618 closes.
+  - **(Inc 5)** `LibreDwgCadTests` tag `[issue618][inc5]`: GoSurvey → DWG → GoSurvey preserves a placed
+    INSERT's linear parameter distance when all instances agree; `#614` loss summary at R2004+ names
+    visibility parameters, unsupported parameter kinds, extra linear chains, conflicting INSERT values,
+    and stretch actions without entity handles. Full Save → AutoCAD → Save → GoSurvey remains a manual
+    check for flip/visibility/lookup until encoders exist.
   - REQ-107 no longer lists dynamic blocks as permanently out of scope.
 - Owner-layer: Domain/Commands (`CadBlocks`, `cadblock.hpp`), IO (`LibreDwgCad.cpp`), UI (BEDIT ribbon)
-- Status: accepted — increments 1–3 delivered (inc 3: linear/stretch + evaluation graph MVP); 4–5 open
-  (TASK-618)
+- Status: accepted — increments 1–5 delivered (MVP: linear stretch + flip export/import; visibility/lookup
+  logged as export loss); issue #618 may close when manual AutoCAD parity is recorded (TASK-618)
 - Revisions: 2026-10-02 — initial (issue #618; D-2026-10-02-b). 2026-10-02 — increment 2 display
   fidelity (TASK-618). 2026-10-02 — increment 3 GoSurvey dynamic DWG export (TASK-618).
 

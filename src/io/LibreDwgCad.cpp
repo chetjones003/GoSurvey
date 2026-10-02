@@ -3324,6 +3324,15 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
         ++nDynBlock;
     }
     add("block definition(s) with dynamic parameters (ACAD evaluation graph requires R2004+)", nDynBlock);
+  } else {
+    const CadBlockDynamicExportLossCounts dyn = ComputeCadBlockDynamicExportLossCounts(st);
+    add("block definition(s) with visibility dynamic parameters (not written to DWG yet)", dyn.visibilityBlockDefs);
+    add("dynamic block parameter(s) with no R2004+ DWG encoder yet", dyn.unsupportedParameters);
+    add("extra linear dynamic parameter(s) (only one linear/stretch chain is written per block)", dyn.extraLinearParameters);
+    add("block insert(s) with conflicting dynamic parameter values (block definition default written)",
+        dyn.insertParamConflicts);
+    add("dynamic stretch action(s) without entity associations (AutoCAD may not stretch geometry)",
+        dyn.stretchWithoutEntityLinks);
   }
 
   // REQ-057, issue #603: a varying-Z polyline now writes as POLYLINE_3D (real per-vertex Z), but
@@ -4482,7 +4491,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     for (const CadBlockDefinition& def : st.blockDefs) {
       const auto hdrIt = blockHdrByName.find(def.name);
       if (hdrIt != blockHdrByName.end())
-        WriteGoSurveyDynamicBlockObjects(dwg, hdrIt->second, def, log);
+        WriteGoSurveyDynamicBlockObjects(dwg, hdrIt->second, def, &st.cadBlockRefs, log);
     }
   }
   for (size_t i = 0; i < st.cadBlockRefs.size(); ++i) {

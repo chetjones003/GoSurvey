@@ -71,10 +71,12 @@ objects (`LibreDwgField.cpp`). Civil sheet-set / view fields remain out of scope
 
 ### #618 — Dynamic blocks
 
-Parameters, actions, visibility states, DWG round trip. **REQ-369** (accepted): increments 1–2 (`*U`
-fidelity + foreign display) and increment 3 (GoSurvey linear/stretch → R2004+ `ACAD_EVALUATION_GRAPH` via
-`LibreDwgDynamicBlock.cpp`) are on `feat/issue618-dynamic-blocks`; import grips + full AutoCAD round trip
-(inc 4–5) remain open.
+Parameters, actions, visibility states, DWG round trip. **REQ-369** (accepted): `*U` fidelity, foreign
+display, GoSurvey linear/stretch (and flip) export/import, grip re-evaluation, GoSurvey↔DWG round trip for
+linear distance, and R2004+ `#614` loss lines for visibility/unsupported/extra-linear/conflicting INSERTs
+and stretch actions without entity handles (`LibreDwgDynamicBlock.cpp`). Still degraded or manual: visibility
+lookup parameters, per-block multi-linear chains, AutoCAD stretch without entity association handles, and
+Save → AutoCAD → Save → GoSurvey for flip/visibility/lookup.
 
 ### #624 — Visual styles, materials, lights
 

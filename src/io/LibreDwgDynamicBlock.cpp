@@ -1,10 +1,12 @@
 #include "LibreDwgDynamicBlock.hpp"
 
+#include "CadCommands.hpp"
 #include "LibreDwgCad.hpp"
 
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -411,7 +413,33 @@ bool ExportFlipChain(Dwg_Data* dwg, std::uint64_t blockHandle, const CadBlockDef
   return AppendPurgePreventer(dwg, blockHandle);
 }
 
-bool ExportLinearStretchChain(Dwg_Data* dwg, std::uint64_t blockHandle, const CadBlockDefinition& def) {
+[[nodiscard]] float LinearExportDistance(const CadBlockDefinition& def, const CadBlockParameter& param,
+                                         const std::vector<CadBlockRef>* refs) {
+  if (refs != nullptr) {
+    std::optional<float> unified;
+    for (const CadBlockRef& r : *refs) {
+      if (!CadBlockEqCi(r.defName, def.name))
+        continue;
+      const float v = CadBlockParamValue(r, def, param.name);
+      if (!unified.has_value())
+        unified = v;
+      else if (*unified != v)
+        return param.value;
+    }
+    if (unified.has_value())
+      return *unified;
+  }
+  return param.value;
+}
+
+CadBlockParameter LinearParamForExport(const CadBlockParameter& param, float distance) {
+  CadBlockParameter out = param;
+  out.value = distance;
+  return out;
+}
+
+bool ExportLinearStretchChain(Dwg_Data* dwg, std::uint64_t blockHandle, const CadBlockDefinition& def,
+                              const std::vector<CadBlockRef>* refs) {
   const CadBlockParameter* param = nullptr;
   for (const CadBlockParameter& p : def.parameters) {
     if (p.kind == CadBlockParamKind::Linear) {
@@ -424,8 +452,10 @@ bool ExportLinearStretchChain(Dwg_Data* dwg, std::uint64_t blockHandle, const Ca
   const CadBlockAction* action = FindFirstAction(def, CadBlockActionKind::Stretch, param->name);
   if (action == nullptr)
     return false;
+  const CadBlockParameter exportParam =
+      LinearParamForExport(*param, LinearExportDistance(def, *param, refs));
   std::vector<Dwg_Object*> nodes;
-  if (Dwg_Object* o = AppendLinearParameter(dwg, blockHandle, *param, *action, 1))
+  if (Dwg_Object* o = AppendLinearParameter(dwg, blockHandle, exportParam, *action, 1))
     nodes.push_back(o);
   if (Dwg_Object* o = AppendStretchAction(dwg, blockHandle, *param, *action, 2))
     nodes.push_back(o);
@@ -449,6 +479,7 @@ bool CadBlockDefinitionNeedsDynamicDwgExport(const CadBlockDefinition& def) {
 }
 
 bool WriteGoSurveyDynamicBlockObjects(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* blockHdr, const CadBlockDefinition& def,
+                                      const std::vector<CadBlockRef>* refsForParamValues,
                                       std::vector<std::string>& log) {
   if (dwg == nullptr || blockHdr == nullptr || !CadBlockDefinitionNeedsDynamicDwgExport(def))
     return false;
@@ -457,7 +488,7 @@ bool WriteGoSurveyDynamicBlockObjects(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* bl
     return false;
 
   bool wrote = false;
-  if (ExportLinearStretchChain(dwg, blockHandle, def)) {
+  if (ExportLinearStretchChain(dwg, blockHandle, def, refsForParamValues)) {
     log.push_back("CAD export — wrote dynamic-block linear/stretch objects for \"" + def.name + "\" (REQ-369).");
     wrote = true;
   } else if (ExportFlipChain(dwg, blockHandle, def)) {
@@ -621,4 +652,120 @@ void ImportDynamicBlockDefinitionFromDwg(const Dwg_Data* dwg, const Dwg_Object* 
     def.parameters = std::move(imported.parameters);
   if (def.actions.empty())
     def.actions = std::move(imported.actions);
+}
+
+namespace {
+
+bool ParamKindHasNoDwgEncoder(CadBlockParamKind kind) {
+  switch (kind) {
+    case CadBlockParamKind::Polar:
+    case CadBlockParamKind::Rotation:
+    case CadBlockParamKind::Move:
+    case CadBlockParamKind::Lookup:
+    case CadBlockParamKind::Visibility:
+      return true;
+    case CadBlockParamKind::Linear:
+    case CadBlockParamKind::Flip:
+      return false;
+  }
+  return true;
+}
+
+const CadBlockParameter* FirstLinearParameter(const CadBlockDefinition& def) {
+  for (const CadBlockParameter& p : def.parameters) {
+    if (p.kind == CadBlockParamKind::Linear)
+      return &p;
+  }
+  return nullptr;
+}
+
+bool BlockWouldExportLinearStretch(const CadBlockDefinition& def) {
+  const CadBlockParameter* param = FirstLinearParameter(def);
+  if (param == nullptr)
+    return false;
+  return FindFirstAction(def, CadBlockActionKind::Stretch, param->name) != nullptr;
+}
+
+bool BlockWouldExportFlip(const CadBlockDefinition& def) {
+  for (const CadBlockParameter& p : def.parameters) {
+    if (p.kind != CadBlockParamKind::Flip)
+      continue;
+    if (FindFirstAction(def, CadBlockActionKind::Flip, p.name) != nullptr)
+      return true;
+  }
+  return false;
+}
+
+bool InsertParamValuesConflict(const CadBlockDefinition& def, std::string_view paramName,
+                               const std::vector<CadBlockRef>& refs) {
+  std::optional<float> unified;
+  for (const CadBlockRef& r : refs) {
+    if (!CadBlockEqCi(r.defName, def.name))
+      continue;
+    const float v = CadBlockParamValue(r, def, paramName);
+    if (!unified.has_value())
+      unified = v;
+    else if (*unified != v)
+      return true;
+  }
+  return false;
+}
+
+size_t CountRefsForDef(const CadBlockDefinition& def, const std::vector<CadBlockRef>& refs) {
+  size_t n = 0;
+  for (const CadBlockRef& r : refs) {
+    if (CadBlockEqCi(r.defName, def.name))
+      ++n;
+  }
+  return n;
+}
+
+}  // namespace
+
+CadBlockDynamicExportLossCounts ComputeCadBlockDynamicExportLossCounts(const AppCommandState& st) {
+  CadBlockDynamicExportLossCounts out;
+  for (const CadBlockDefinition& def : st.blockDefs) {
+    if (!CadBlockDefinitionNeedsDynamicDwgExport(def))
+      continue;
+    bool hasVisibility = !def.visibilityStates.empty();
+    if (!hasVisibility) {
+      for (const CadBlockParameter& p : def.parameters) {
+        if (p.kind == CadBlockParamKind::Visibility) {
+          hasVisibility = true;
+          break;
+        }
+      }
+    }
+    if (!hasVisibility) {
+      for (const CadBlockAction& a : def.actions) {
+        if (a.kind == CadBlockActionKind::Visibility) {
+          hasVisibility = true;
+          break;
+        }
+      }
+    }
+    if (hasVisibility)
+      ++out.visibilityBlockDefs;
+
+    size_t linearCount = 0;
+    for (const CadBlockParameter& p : def.parameters) {
+      if (ParamKindHasNoDwgEncoder(p.kind))
+        ++out.unsupportedParameters;
+      if (p.kind == CadBlockParamKind::Linear)
+        ++linearCount;
+    }
+    if (linearCount > 1)
+      out.extraLinearParameters += linearCount - 1;
+
+    const bool linearStretch = BlockWouldExportLinearStretch(def);
+    const bool flip = BlockWouldExportFlip(def);
+    if (linearStretch && !flip)
+      ++out.stretchWithoutEntityLinks;
+
+    const CadBlockParameter* linear = FirstLinearParameter(def);
+    if (linear != nullptr && linearStretch &&
+        InsertParamValuesConflict(def, linear->name, st.cadBlockRefs))
+      out.insertParamConflicts += CountRefsForDef(def, st.cadBlockRefs);
+  }
+  return out;
 }

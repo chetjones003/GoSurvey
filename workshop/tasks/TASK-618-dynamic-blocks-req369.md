@@ -11,15 +11,13 @@
 | 2 | Foreign golden display via `*U`; skip def-target INSERT; no action re-eval | **done** |
 | 3 | GoSurvey BPARAM/BACTION → R2004+ DWG evaluation graph | **done** (linear/stretch MVP) |
 | 4 | Import params + grip re-evaluation | **done** (linear/stretch MVP) |
-| 5 | Full round trip + `#614` loss honesty | open |
+| 5 | Full round trip + `#614` loss honesty | **done** (GoSurvey↔DWG CI; AutoCAD loop manual) |
 
-## Files (increment 4)
+## Files (increment 5)
 
-- `src/io/LibreDwgDynamicBlock.cpp` — `ImportDynamicBlockDefinitionFromDwg`
-- `src/io/LibreDwgCad.cpp` — seed `paramState`; allow INSERT→evaluable dynamic def
-- `src/util/cadblock.hpp` — linear stretch grips + local re-evaluation
-- `src/commands/CadBlocks.cpp` — arm/restore generic dynamic grips
-- `tests/LibreDwgCadTests.cpp` — `[issue618][inc4]`; `tests/CadBlockTests.cpp` — grip drag
+- `src/io/LibreDwgDynamicBlock.cpp` — `ComputeCadBlockDynamicExportLossCounts`; INSERT-unified linear distance on export
+- `src/io/LibreDwgCad.cpp` — `#614` R2004+ dynamic loss lines
+- `tests/LibreDwgCadTests.cpp` — `[issue618][inc5]` round trip + loss summary
 
 ## Verification
 
