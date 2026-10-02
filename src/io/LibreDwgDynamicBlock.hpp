@@ -7,6 +7,8 @@
 
 struct _dwg_struct;
 typedef struct _dwg_struct Dwg_Data;
+struct _dwg_object;
+typedef struct _dwg_object Dwg_Object;
 struct _dwg_object_BLOCK_HEADER;
 typedef struct _dwg_object_BLOCK_HEADER Dwg_Object_BLOCK_HEADER;
 
@@ -16,3 +18,7 @@ bool WriteGoSurveyDynamicBlockObjects(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* bl
                                       std::vector<std::string>& log);
 
 [[nodiscard]] bool CadBlockDefinitionNeedsDynamicDwgExport(const CadBlockDefinition& def);
+
+/// REQ-369 increment 4 — read decoded BPARAM/BACTION objects owned by a block header into \p def.
+void ImportDynamicBlockDefinitionFromDwg(const Dwg_Data* dwg, const Dwg_Object* blockHeaderObj,
+                                         CadBlockDefinition& def);

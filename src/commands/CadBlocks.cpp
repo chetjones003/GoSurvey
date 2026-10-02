@@ -2695,6 +2695,13 @@ bool CadBlockArmDynGrip(AppCommandState& st, int refIndex, int which) {
     CadBlockToggleMatchlineFlip(&r, def);
     return false;
   }
+  if (CadBlockHasLinearStretchDyn(def)) {
+    const std::string pname = CadBlockFirstLinearStretchParamName(def);
+    st.entityGripOrigX0 = CadBlockParamValue(r, def, pname);
+    st.entityGripOrigCx = r.xf.x;
+    st.entityGripOrigCy = r.xf.y;
+    return true;
+  }
   st.entityGripOrigX0 = CadBlockParamValue(r, def, "DistNeg");
   st.entityGripOrigY0 = CadBlockParamValue(r, def, "DistPos");
   st.entityGripOrigX1 = CadBlockParamValue(r, def, "SheetOff");
@@ -2708,6 +2715,18 @@ bool CadBlockArmDynGrip(AppCommandState& st, int refIndex, int which) {
 void CadBlockRestoreDynGripOrig(AppCommandState& st, CadBlockRef* r) {
   if (!r)
     return;
+  const int di = CadBlockFindDef(st.blockDefs, r->defName);
+  if (di >= 0) {
+    const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    if (CadBlockHasLinearStretchDyn(def)) {
+      const std::string pname = CadBlockFirstLinearStretchParamName(def);
+      if (!pname.empty())
+        CadBlockParamSet(r, pname, st.entityGripOrigX0);
+      r->xf.x = st.entityGripOrigCx;
+      r->xf.y = st.entityGripOrigCy;
+      return;
+    }
+  }
   CadBlockParamSet(r, "DistNeg", st.entityGripOrigX0);
   CadBlockParamSet(r, "DistPos", st.entityGripOrigY0);
   CadBlockParamSet(r, "SheetOff", st.entityGripOrigX1);

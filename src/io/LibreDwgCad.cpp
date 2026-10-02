@@ -1087,6 +1087,7 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
   }
   CaptureScratchIntoBlockContent(scratch, &def.content);
   CadBlockBakeBasePoint(&def);
+  ImportDynamicBlockDefinitionFromDwg(dwg, blkHeaderObj, def);
   st.blockDefs.push_back(std::move(def));
   return true;
 }
@@ -1284,6 +1285,14 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
   ref.xf.rotZ = static_cast<float>(ins->rotation);
   ref.annotative = ImportEedMarksAnnotative(dwg, ent);
   CollectInsertAttributes(dwg, ins, ref.attributes);
+  if (!CadBlockNameIsDynamicAnonymous(name)) {
+    const int di = CadBlockFindDef(catalog.blockDefs, name);
+    if (di >= 0) {
+      const CadBlockDefinition& bdef = catalog.blockDefs[static_cast<size_t>(di)];
+      if (!bdef.parameters.empty() && ref.paramState.empty())
+        ref.paramState = bdef.parameters;
+    }
+  }
   outRefs.push_back(std::move(ref));
   outAttrs.push_back(at);
   return true;
@@ -1326,6 +1335,14 @@ static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg
   ref.xf.rotZ = static_cast<float>(ins->rotation + xf.ang);
   ref.annotative = ImportEedMarksAnnotative(dwg, ent);
   CollectInsertAttributes(dwg, ins, ref.attributes);
+  if (!CadBlockNameIsDynamicAnonymous(name)) {
+    const int di = CadBlockFindDef(catalog.blockDefs, name);
+    if (di >= 0) {
+      const CadBlockDefinition& bdef = catalog.blockDefs[static_cast<size_t>(di)];
+      if (!bdef.parameters.empty() && ref.paramState.empty())
+        ref.paramState = bdef.parameters;
+    }
+  }
   st.cadBlockRefs.push_back(std::move(ref));
   st.cadBlockRefAttrs.push_back(EntityAttributes{});
   return true;
@@ -1869,8 +1886,18 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     if (ent->tio.INSERT != nullptr && ent->tio.INSERT->block_header != nullptr) {
       Dwg_Object* insBlk = dwg_resolve_handle_silent(dwg, ent->tio.INSERT->block_header->absolute_ref);
       if (DwgInsertReferencesForeignDynamicDefinition(dwg, insBlk)) {
-        NoteSkip(skipHist, "INSERT(dynamic block definition; expected *U instance)");
-        return;
+        AppCommandState& catalog = blockDefCatalog != nullptr ? *blockDefCatalog : st;
+        bool canEval = false;
+        if (insBlk != nullptr &&
+            EnsureDwgBlockDefinitionImported(catalog, dwg, insBlk, skipHist, degenerateExtrusions)) {
+          const std::string bname = BlockHeaderDwgName(dwg, insBlk);
+          const int di = CadBlockFindDef(catalog.blockDefs, bname);
+          canEval = di >= 0 && !catalog.blockDefs[static_cast<size_t>(di)].parameters.empty();
+        }
+        if (!canEval) {
+          NoteSkip(skipHist, "INSERT(dynamic block definition; expected *U instance)");
+          return;
+        }
       }
     }
     if (depth == 0) {

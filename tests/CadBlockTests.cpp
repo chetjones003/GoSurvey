@@ -151,6 +151,49 @@ TEST_CASE("Visibility state hides unmatched primitives", "[issue124][block]") {
   REQUIRE(segs.size() == 1);
 }
 
+TEST_CASE("Linear stretch dynamic grip updates block geometry (issue #618 inc4)", "[issue618][inc4][block]") {
+  CadBlockDefinition def;
+  def.name = "PANEL";
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockParameter p;
+  p.name = "Width";
+  p.kind = CadBlockParamKind::Linear;
+  p.value = 2.f;
+  p.minValue = 0.f;
+  p.maxValue = 10.f;
+  def.parameters.push_back(p);
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  def.actions.push_back(stretch);
+  REQUIRE(CadBlockHasLinearStretchDyn(def));
+  CHECK(CadBlockDynGripCount(def) == 2);
+
+  CadBlockRef r;
+  r.defName = def.name;
+  r.paramState = def.parameters;
+  std::vector<CadBlockDefinition> defs;
+  defs.push_back(def);
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  CHECK(segs[0].x1 == Catch::Approx(4.f).margin(0.01f));
+
+  float gx = 0.f;
+  float gy = 0.f;
+  REQUIRE(CadBlockDynGripWorld(def, r, 1, &gx, &gy, nullptr));
+  CadBlockApplyDynGripDrag(&r, def, 1, gx + 2.f, gy);
+  segs.clear();
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  CHECK(segs[0].x1 == Catch::Approx(8.f).margin(0.01f));
+}
+
 TEST_CASE("dynamicAnonymous instance geometry is not re-stretched by GoSurvey actions (issue #618 inc2)",
           "[issue618][block]") {
   CadBlockDefinition def;

@@ -1119,6 +1119,54 @@ TEST_CASE("GoSurvey linear dynamic block exports evaluation graph at R2004 (issu
   dwg_free(&rd);
 }
 
+TEST_CASE("GoSurvey dynamic block DWG import restores parameters and actions (issue #618 inc4)",
+          "[dwg][libredwg][issue618][inc4]") {
+  ScratchDir dir("dwg-gosurvey-dynamic-import");
+  const auto p = (dir.path / "dynimport.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2004;
+  CadBlockDefinition def;
+  def.name = "STRETCH_DOOR";
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockParameter len;
+  len.name = "Width";
+  len.kind = CadBlockParamKind::Linear;
+  len.value = 2.f;
+  len.minValue = 0.f;
+  len.maxValue = 10.f;
+  def.parameters.push_back(len);
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  def.actions.push_back(stretch);
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "STRETCH_DOOR";
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.blockDefs.size() == 1);
+  CHECK(in.blockDefs[0].name == "STRETCH_DOOR");
+  REQUIRE(in.blockDefs[0].parameters.size() >= 1);
+  CHECK(in.blockDefs[0].parameters[0].name == "Width");
+  CHECK(in.blockDefs[0].parameters[0].value == Catch::Approx(2.f).margin(0.01f));
+  REQUIRE(in.blockDefs[0].actions.size() >= 1);
+  CHECK(in.blockDefs[0].actions[0].kind == CadBlockActionKind::Stretch);
+  CHECK(in.blockDefs[0].actions[0].paramName == "Width");
+  REQUIRE(in.cadBlockRefs.size() == 1);
+  REQUIRE(in.cadBlockRefs[0].paramState.size() >= 1);
+  CHECK(in.cadBlockRefs[0].paramState[0].name == "Width");
+}
+
 TEST_CASE("Foreign dynamic insert draws evaluated *U geometry not default size (issue #618 inc2)",
           "[dwg][libredwg][issue618][inc2]") {
   ScratchDir dir("dwg-dynamic-golden-display");

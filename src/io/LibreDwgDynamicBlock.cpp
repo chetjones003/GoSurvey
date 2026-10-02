@@ -471,3 +471,154 @@ bool WriteGoSurveyDynamicBlockObjects(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* bl
     blockHdr->block_scaling = 1;
   return wrote;
 }
+
+namespace {
+
+std::string ImportTvToString(const Dwg_Data* dwg, BITCODE_T t) {
+  (void)dwg;
+  if (t == nullptr)
+    return {};
+  return std::string(t);
+}
+
+bool ObjectOwnedByBlockHandle(const Dwg_Object* obj, std::uint64_t blockHandle) {
+  if (obj == nullptr || blockHandle == 0 || obj->supertype != DWG_SUPERTYPE_OBJECT || obj->tio.object == nullptr)
+    return false;
+  const Dwg_Object_Object* oo = obj->tio.object;
+  if (oo->ownerhandle == nullptr)
+    return false;
+  return oo->ownerhandle->absolute_ref == blockHandle;
+}
+
+void ImportLinearParameter(const Dwg_Data* dwg, const Dwg_Object_BLOCKLINEARPARAMETER* lp, CadBlockDefinition& def) {
+  if (lp == nullptr)
+    return;
+  CadBlockParameter p;
+  p.kind = CadBlockParamKind::Linear;
+  p.name = ImportTvToString(dwg, lp->name);
+  if (p.name.empty())
+    p.name = ImportTvToString(dwg, lp->distance_name);
+  if (p.name.empty())
+    return;
+  p.value = static_cast<float>(lp->distance);
+  p.minValue = static_cast<float>(lp->value_set.minimum);
+  p.maxValue = static_cast<float>(lp->value_set.maximum);
+  if (p.maxValue < p.minValue)
+    p.maxValue = p.minValue + 1.e6f;
+  def.parameters.push_back(std::move(p));
+}
+
+void ImportStretchAction(const Dwg_Data* dwg, const Dwg_Object_BLOCKSTRETCHACTION* act,
+                         const CadBlockDefinition& def, CadBlockDefinition& outDef) {
+  (void)dwg;
+  if (act == nullptr || def.parameters.empty())
+    return;
+  std::string paramName = def.parameters.front().name;
+  for (const CadBlockParameter& p : def.parameters) {
+    if (p.kind == CadBlockParamKind::Linear) {
+      paramName = p.name;
+      break;
+    }
+  }
+  CadBlockAction a;
+  a.kind = CadBlockActionKind::Stretch;
+  a.paramName = paramName;
+  a.originX = static_cast<float>(act->display_location.x);
+  a.originY = static_cast<float>(act->display_location.y);
+  if (act->num_pts >= 2 && act->pts != nullptr) {
+    const double dx = act->pts[1].x - act->pts[0].x;
+    const double dy = act->pts[1].y - act->pts[0].y;
+    const double len = std::hypot(dx, dy);
+    if (len > 1.e-9) {
+      a.dirX = static_cast<float>(dx / len);
+      a.dirY = static_cast<float>(dy / len);
+    }
+  } else {
+    a.dirX = 1.f;
+    a.dirY = 0.f;
+  }
+  a.threshold = 0.f;
+  outDef.actions.push_back(std::move(a));
+}
+
+void ImportFlipParameter(const Dwg_Data* dwg, const Dwg_Object_BLOCKFLIPPARAMETER* pp, CadBlockDefinition& def) {
+  if (pp == nullptr)
+    return;
+  CadBlockParameter p;
+  p.kind = CadBlockParamKind::Flip;
+  p.name = ImportTvToString(dwg, pp->name);
+  if (p.name.empty())
+    p.name = ImportTvToString(dwg, pp->flip_label);
+  if (p.name.empty())
+    return;
+  p.value = pp->evalexpr.value.num40 >= 0.5 ? 1.f : 0.f;
+  def.parameters.push_back(std::move(p));
+}
+
+void ImportFlipAction(const Dwg_Data* dwg, const Dwg_Object_BLOCKFLIPACTION* act, const CadBlockDefinition& def,
+                      CadBlockDefinition& outDef) {
+  (void)dwg;
+  if (act == nullptr)
+    return;
+  std::string paramName;
+  for (const CadBlockParameter& p : def.parameters) {
+    if (p.kind == CadBlockParamKind::Flip) {
+      paramName = p.name;
+      break;
+    }
+  }
+  if (paramName.empty())
+    return;
+  CadBlockAction a;
+  a.kind = CadBlockActionKind::Flip;
+  a.paramName = paramName;
+  a.originX = static_cast<float>(act->display_location.x);
+  a.originY = static_cast<float>(act->display_location.y);
+  a.dirX = 1.f;
+  a.dirY = 0.f;
+  outDef.actions.push_back(std::move(a));
+}
+
+}  // namespace
+
+void ImportDynamicBlockDefinitionFromDwg(const Dwg_Data* dwg, const Dwg_Object* blockHeaderObj,
+                                         CadBlockDefinition& def) {
+  if (dwg == nullptr || blockHeaderObj == nullptr || def.dynamicAnonymous)
+    return;
+  if (!def.parameters.empty() && !def.actions.empty())
+    return;
+  const std::uint64_t blockHandle = ObjectHandleValue(blockHeaderObj);
+  if (blockHandle == 0)
+    return;
+
+  CadBlockDefinition imported;
+  imported.name = def.name;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* o = &dwg->object[i];
+    if (!ObjectOwnedByBlockHandle(o, blockHandle))
+      continue;
+    if (o->fixedtype == DWG_TYPE_BLOCKLINEARPARAMETER && o->tio.object != nullptr &&
+        o->tio.object->tio.BLOCKLINEARPARAMETER != nullptr)
+      ImportLinearParameter(dwg, o->tio.object->tio.BLOCKLINEARPARAMETER, imported);
+    else if (o->fixedtype == DWG_TYPE_BLOCKFLIPPARAMETER && o->tio.object != nullptr &&
+             o->tio.object->tio.BLOCKFLIPPARAMETER != nullptr)
+      ImportFlipParameter(dwg, o->tio.object->tio.BLOCKFLIPPARAMETER, imported);
+  }
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* o = &dwg->object[i];
+    if (!ObjectOwnedByBlockHandle(o, blockHandle))
+      continue;
+    if (o->fixedtype == DWG_TYPE_BLOCKSTRETCHACTION && o->tio.object != nullptr &&
+        o->tio.object->tio.BLOCKSTRETCHACTION != nullptr)
+      ImportStretchAction(dwg, o->tio.object->tio.BLOCKSTRETCHACTION, imported, imported);
+    else if (o->fixedtype == DWG_TYPE_BLOCKFLIPACTION && o->tio.object != nullptr &&
+             o->tio.object->tio.BLOCKFLIPACTION != nullptr)
+      ImportFlipAction(dwg, o->tio.object->tio.BLOCKFLIPACTION, imported, imported);
+  }
+  if (imported.parameters.empty())
+    return;
+  if (def.parameters.empty())
+    def.parameters = std::move(imported.parameters);
+  if (def.actions.empty())
+    def.actions = std::move(imported.actions);
+}

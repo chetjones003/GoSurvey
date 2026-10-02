@@ -10800,8 +10800,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - **(Inc 3)** `LibreDwgCadTests` tag `[issue618][inc3]`: R2004 export of a GoSurvey block with linear
     parameter + stretch action writes `BLOCKLINEARPARAMETER`, `BLOCKSTRETCHACTION`, and
     `ACAD_EVALUATION_GRAPH` readable by `dwg_read_file`.
-  - **(Inc 4–5)** each remaining increment adds tests or headless transcripts named in TASK-618 before
-    issue #618 closes.
+  - **(Inc 4)** `LibreDwgCadTests` tag `[issue618][inc4]` restores `BPARAM`/`BACTION` from DWG; `CadBlockTests`
+    tag `[issue618][inc4]` verifies linear stretch grip re-evaluation on placed INSERTs.
+  - **(Inc 5)** full AutoCAD round trip and `#614` loss honesty before issue #618 closes.
   - REQ-107 no longer lists dynamic blocks as permanently out of scope.
 - Owner-layer: Domain/Commands (`CadBlocks`, `cadblock.hpp`), IO (`LibreDwgCad.cpp`), UI (BEDIT ribbon)
 - Status: accepted — increments 1–3 delivered (inc 3: linear/stretch + evaluation graph MVP); 4–5 open
