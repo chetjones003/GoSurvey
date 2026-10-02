@@ -15,7 +15,7 @@ As of 2026-10-02, the large **Group A** backlog and most **Group B** format work
 | Issue | What is left |
 |---|---|
 | **#622** | Annotative scaling — most slices merged (#657–#675); AutoCAD parity gaps remain (see [#622 comments](https://github.com/chetjones003/GoSurvey/issues/622)). |
-| **#617** | Fields (live text) — **new feature**, SPEC GAP. |
+| **#617** | Fields — **REQ-368** (inline codes + evaluation); native `FIELD`/`FIELDLIST` objects still deferred. |
 | **#618** | Dynamic blocks — **new feature**, roadmap Someday (REQ-107). |
 | **#624** | Visual styles, materials, lights — **new feature**, SPEC GAP. |
 
@@ -65,7 +65,9 @@ GoSurvey now has CANNOSCALE UI, `.gs` SCALE list sync, viewport-scaled annotativ
 
 ### #617 — Fields
 
-Live updating text (area, coordinates, sheet data) and DWG `FIELD` objects. **SPEC GAP** — no accepted REQ yet.
+REQ-368 delivers live TEXT/MTEXT fields (area, length, survey point coords, filename/date/layout) with
+inline `%<…>%` wires and R2004+ export. Separate AutoCAD `FIELD`/`FIELDLIST` reactor objects remain
+when LibreDWG gains a writer.
 
 ### #618 — Dynamic blocks
 

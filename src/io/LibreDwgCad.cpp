@@ -2,6 +2,7 @@
 
 #include "AcisSatParser.hpp"
 #include "CadCommands.hpp"
+#include "CadField.hpp"
 #include "util/cadpiperun.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadDimGeom.hpp"
@@ -4009,8 +4010,12 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       dwg_point_3d p{};
       world(insXl, insYl, an.insZ, &p);
       const double bw = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
+      const CadFieldContext fctx = CadFieldContextFromState(st);
+      const bool r2004Write = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
+      const std::string fieldText =
+          CadFieldTextForDwgExport(st, an.text, fctx, r2004Write);
       std::string wire;
-      for (char ch : MtextRichFlattenToPlain(SanitizeDwgTextSymbols(an.text))) {
+      for (char ch : MtextRichFlattenToPlain(SanitizeDwgTextSymbols(fieldText))) {
         if (ch == '\n')
           wire += "\\P";
         else if (ch != '\r')
@@ -4037,7 +4042,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     } else if (an.kind == CadAnnotation::Kind::Text) {
       dwg_point_3d p{};
       world(an.insX, an.insY, an.insZ, &p);
-      Dwg_Entity_TEXT* e = dwg_add_TEXT(hdr, SanitizeDwgTextSymbols(an.text).c_str(), &p, h);
+      const CadFieldContext fctxText = CadFieldContextFromState(st);
+      const bool r2004Text = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
+      const std::string textOut =
+          CadFieldTextForDwgExport(st, an.text, fctxText, r2004Text);
+      Dwg_Entity_TEXT* e = dwg_add_TEXT(hdr, SanitizeDwgTextSymbols(textOut).c_str(), &p, h);
       if (e != nullptr) {
         e->rotation = static_cast<double>(an.rotationRad);
         if (r2018Write && an.annotative && e->parent != nullptr)

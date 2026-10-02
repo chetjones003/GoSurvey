@@ -10713,6 +10713,45 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-10-01 — initial (issue #619; D-2026-10-01-g). 2026-10-01 — R2010+ native
   `MULTILEADER` export (D-2026-10-01-h).
 
+### REQ-368 — Live fields on TEXT/MTEXT and DWG field codes (GitHub issue #617)
+
+- Purpose: issue #617 — AutoCAD-style **fields**: text that updates from geometry or drawing
+  metadata (polyline area/length, survey point coordinates, filename, date, layout tab name) and
+  round-trips through `.gs` and DWG where the format allows.
+- Priority: should
+- Type: functional + interop
+- Decision: D-2026-10-02-a (inline `%<…>%` wires in annotation `text`; native `FIELD`/`FIELDLIST`
+  dictionary objects deferred until LibreDWG exposes `dwg_add_FIELD`).
+- Statement:
+  1. **Storage.** Field definitions live in the annotation's existing `text` string as AutoCAD-style
+     inline codes. GoSurvey-native bindings use `%<\GoSurvey Ent <id> Prop …>%` or
+     `%<\GoSurvey Point <n> Prop …>%`; document variables use `%<\AcVar …>%`. The wire string is what
+     `.gs` saves and what R2004+ DWG export writes into TEXT/MTEXT.
+  2. **Evaluation.** Before viewport draw and on R2000 DWG export, codes evaluate to their current
+     values. Supported bindings: closed polyline **Area** and path **Length** (bulge-aware);
+     circle **Area** and **Circumference**; survey point **Number**, **Easting**, **Northing**,
+     **Elevation**; document **Filename**, **Date**, **LayoutName**.
+  3. **Update.** When a referenced entity or document path/layout changes, the displayed value
+     updates on the next frame without an edit command.
+  4. **UI.** REQ-051's MTEXT toolbar **Insert field** control is enabled: with no selection it inserts
+     the drawing filename; with a single polyline or circle selected it inserts that entity's area field.
+  5. **DWG.** Import keeps TEXT/MTEXT strings as read (including foreign field codes). Export at
+     **R2004+** preserves wires; export at **R2000** substitutes evaluated plain text (no `FIELD`
+     objects — AutoCAD 2000 format). Separate `FIELD`/`FIELDLIST` reactor objects are a documented
+     follow-up when `HAVE_NO_DWG_ADD_FIELD` is cleared in vendored LibreDWG.
+  6. **Out of scope (v1):** block **ATTRIB** and **TABLE** cell fields, Civil 3D view/sheet fields
+     (`AcVar ViewType`, `_FldIdx`, etc.), and full AutoCAD field editor parity.
+- Acceptance:
+  - a closed polyline with an area field in MTEXT shows the correct area and updates when a vertex
+    moves;
+  - `.gs` save → load preserves the `%<…>%` wire unchanged;
+  - DWG export R2004+ preserves the wire; R2000 export shows evaluated numbers with no `%<` markers;
+  - `CadFieldTests` green;
+  - REQ-201 no longer lists "fields" as an untracked #601 gap for TEXT/MTEXT hosts.
+- Owner-layer: Domain/Commands (`CadField`), UI (MTEXT toolbar), IO (`LibreDwgCad.cpp`)
+- Status: accepted
+- Revisions: 2026-10-02 — initial (closes SPEC GAP on issue #617; D-2026-10-02-a).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
