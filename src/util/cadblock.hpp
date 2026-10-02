@@ -365,6 +365,8 @@ enum class CadPipePressureClass : std::uint8_t { None = 0, CS150, CS300 };
 struct CadBlockDefinition {
   std::uint64_t id = 0;
   std::string name;
+  /// True when \p name is an AutoCAD dynamic-block anonymous instance block (`*U…`).
+  bool dynamicAnonymous = false;
   std::string description;
   float baseX = 0.f;
   float baseY = 0.f;
@@ -408,6 +410,8 @@ struct CadBlockLibraryEntry {
 
 struct CadBlockRef {
   std::string defName;
+  /// Named dynamic-block definition when \p defName is `*U…` (empty when unknown).
+  std::string dynamicCanonicalName;
   CadBlockXform xf;
   std::vector<CadBlockAttrValue> attributes;
   std::vector<CadBlockParameter> paramState;
@@ -443,6 +447,11 @@ struct CadBlockWorldSolid {
   CadSolidPtr solid;
   EntityAttributes attr;
 };
+
+/// AutoCAD dynamic-block inserts reference an anonymous `*U…` block holding the evaluated geometry.
+[[nodiscard]] inline bool CadBlockNameIsDynamicAnonymous(std::string_view name) {
+  return name.size() >= 2 && name[0] == '*' && (name[1] == 'U' || name[1] == 'u');
+}
 
 [[nodiscard]] inline bool CadBlockEqCi(std::string_view a, std::string_view b) {
   if (a.size() != b.size())

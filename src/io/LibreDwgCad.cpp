@@ -975,7 +975,11 @@ void ImportAcisSolid(AppCommandState& st, const Dwg_Data* dwg, const Dwg_Entity_
 }
 
 [[nodiscard]] bool DwgBlockDefNameIsImportable(std::string_view name) {
-  if (name.empty() || name[0] == '*')
+  if (name.empty())
+    return false;
+  if (CadBlockNameIsDynamicAnonymous(name))
+    return true;
+  if (name[0] == '*')
     return false;
   return name != "GOSURVEY_POINT";
 }
@@ -1071,6 +1075,7 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
 
   CadBlockDefinition def;
   def.name = name;
+  def.dynamicAnonymous = CadBlockNameIsDynamicAnonymous(name);
   def.baseX = static_cast<float>(hdr->base_pt.x - st.worldDocumentOriginX);
   def.baseY = static_cast<float>(hdr->base_pt.y - st.worldDocumentOriginY);
   def.baseZ = static_cast<float>(hdr->base_pt.z);
@@ -4332,6 +4337,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     Dwg_Object_BLOCK_HEADER* bh = dwg_add_BLOCK_HEADER(dwg, def.name.c_str());
     if (bh == nullptr)
       continue;
+    if (def.dynamicAnonymous)
+      bh->anonymous = 1;
     dwg_add_BLOCK(bh, def.name.c_str());
     WriteBlockDefinitionGeometry(bh, def.content, tw);
     for (const CadBlockAttrDef& ad : def.attrDefs) {

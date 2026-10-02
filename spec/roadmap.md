@@ -324,9 +324,9 @@ A lightweight board that complements the milestones. Keep each column honest.
 - **Parametric constraints** — geometric/dimensional constraint solving.
   Low priority for a survey-focused CAD tool. From Known Limitations,
   2026-08-23.
-- **Dynamic blocks and a block-library browser** — deliberately excluded from
-  REQ-107 (block support, foundational only). From Known Limitations,
-  2026-08-23.
+- **Block-library browser** — deliberately excluded from REQ-107 (block support,
+  foundational only). From Known Limitations, 2026-08-23. **Dynamic blocks** are
+  **REQ-369** / issue #618 (accepted 2026-10-02), not Someday.
 - **`XREF` / external references** — From Known Limitations, 2026-08-23.
 - **`TABLE` command** — depends on block/annotation work landing first
   (REQ-107). From Known Limitations, 2026-08-23.

@@ -774,7 +774,7 @@ void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBl
   assert(out != nullptr);
   out->clear();
   for (const CadBlockDefinition& d : st.blockDefs) {
-    if (d.name.empty())
+    if (d.name.empty() || d.dynamicAnonymous)
       continue;
     CadBlockLibraryEntry e;
     e.name = d.name;

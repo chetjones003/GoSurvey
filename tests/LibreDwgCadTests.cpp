@@ -995,6 +995,75 @@ TEST_CASE("SyncCurrentAnnotationScaleIndex picks scale closest to plot scale (is
   REQUIRE(st.currentAnnotationScaleIndex == 1);
 }
 
+TEST_CASE("Dynamic anonymous *U INSERT round-trips as cadBlockRef (issue #618)", "[dwg][libredwg][issue618]") {
+  ScratchDir dir("dwg-dynamic-u-block");
+  const auto p = (dir.path / "dynu.dwg").string();
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "*U42";
+  def.dynamicAnonymous = true;
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "*U42";
+  ref.dynamicCanonicalName = "DOOR";
+  ref.xf.x = 3.f;
+  ref.xf.y = 4.f;
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.blockDefs.size() == 1);
+  CHECK(in.blockDefs[0].name == "*U42");
+  CHECK(in.blockDefs[0].dynamicAnonymous);
+  REQUIRE(in.cadBlockRefs.size() == 1);
+  CHECK(in.cadBlockRefs[0].defName == "*U42");
+  CHECK(in.cadBlockRefs[0].xf.x == Catch::Approx(3.f));
+  CHECK(in.cadBlockRefs[0].xf.y == Catch::Approx(4.f));
+  CHECK(in.userLinesFlat.empty());
+}
+
+TEST_CASE("Foreign DWG with *U INSERT imports as block ref not exploded geometry (issue #618)",
+          "[dwg][libredwg][issue618]") {
+  ScratchDir dir("dwg-foreign-dynamic-u");
+  const auto p = (dir.path / "foreign.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2000, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  auto* ms = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(ms != nullptr);
+
+  Dwg_Object_BLOCK_HEADER* ublk = dwg_add_BLOCK_HEADER(dwg, "*U99");
+  REQUIRE(ublk != nullptr);
+  ublk->anonymous = 1;
+  dwg_add_BLOCK(ublk, "*U99");
+  dwg_point_3d a{0.0, 0.0, 0.0};
+  dwg_point_3d b{5.0, 0.0, 0.0};
+  dwg_add_LINE(ublk, &a, &b);
+  dwg_add_ENDBLK(ublk);
+
+  dwg_point_3d ins{10.0, 20.0, 0.0};
+  REQUIRE(dwg_add_INSERT(ms, &ins, "*U99", 1.0, 1.0, 1.0, 0.0) != nullptr);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadBlockRefs.size() == 1);
+  CHECK(in.cadBlockRefs[0].defName == "*U99");
+  CHECK(in.cadBlockRefs[0].xf.x == Catch::Approx(10.f));
+  CHECK(in.cadBlockRefs[0].xf.y == Catch::Approx(20.f));
+  CHECK(in.userLinesFlat.empty());
+  REQUIRE(in.blockDefs.size() == 1);
+  CHECK(in.blockDefs[0].dynamicAnonymous);
+}
+
 TEST_CASE("Named block INSERT re-imports as cadBlockRef without trailer (issue #622)", "[dwg][libredwg][issue622]") {
   ScratchDir dir("dwg-block-insert-ref");
   const auto p = (dir.path / "blk.dwg").string();
