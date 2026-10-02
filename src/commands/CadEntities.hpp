@@ -85,13 +85,13 @@ struct EntityAttributes {
   float lineweightMm = -1.f;
   /// 0 = opaque, 1 = fully transparent; \c -1.f means ByLayer.
   float transparency = -1.f;
-  /// The surface this entity is DRAPED ON and follows, by that surface stable id (ADR-062 (c),
+  /// The surface this entity is DRAPED ON and follows, by that surface stable id (ADR-065 (c),
   /// GitHub #150). **0 means not linked**, the default, and what a baked drape leaves behind.
   ///
   /// An id, never a name (a name can be changed) and never an array index (`cadSurfaces` compacts
   /// on erase, so an index is not a name -- architecture section 11.9). It resolves through
   /// `FindSurfaceIndexById`, which answers -1 for a surface that is gone, so an erased surface
-  /// leaves the geometry exactly where it is rather than moving or deleting it (ADR-062 (e)).
+  /// leaves the geometry exactly where it is rather than moving or deleting it (ADR-065 (e)).
   std::uint64_t drapedOnSurfaceId = 0;
 };
 

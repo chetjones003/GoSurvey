@@ -5,7 +5,7 @@
 # is the other half: the command reaching a surface built the way the app builds one — from a point
 # group in a real drawing — and behaving as a command (undo, refusals, selection).
 #
-# DRAPE is BAKED (ADR-062 (a)): the elevations are stamped once and nothing is stored linking the
+# DRAPE is BAKED (ADR-065 (a)): the elevations are stamped once and nothing is stored linking the
 # geometry to the surface, so a later surface edit does not move it. The opt-in link is a later
 # increment.
 #
@@ -61,7 +61,7 @@ CMD DRAPE Test EG
 EXPECT LOG "select the objects to drape first"
 CHECK ALL
 
-# A vertex off the ground refuses its whole entity, with the count (ADR-062 (f)): TinElevationAt
+# A vertex off the ground refuses its whole entity, with the count (ADR-065 (f)): TinElevationAt
 # never extrapolates (REQ-074), and a half-draped shape is neither the original nor the ground.
 CMD POLYLINE
 CMD 43.607,25.308
@@ -75,7 +75,7 @@ EXPECT LOG "vertices are off "Test EG""
 CHECK ALL
 
 # --- LINK: the drape follows the surface, and the link survives the file ---------------------------
-# ADR-062 (b)/(c): LINK stores the surface's STABLE ID, so the tie survives a save, a reopen and a
+# ADR-065 (b)/(c): LINK stores the surface's STABLE ID, so the tie survives a save, a reopen and a
 # rename. Proving it survived is done the honest way — reopen the file and rebuild the surface, and
 # see the linked object re-drape. A stored field nobody reads back would pass a weaker test.
 OPEN samples/surface-demo.dwg
@@ -100,7 +100,7 @@ CMD SURFACEREBUILD Test EG
 EXPECT LOG "linked object(s) re-draped"
 CHECK ALL
 
-# A rename does not break it — the link is by id, not by name (ADR-062 (c)).
+# A rename does not break it — the link is by id, not by name (ADR-065 (c)).
 CMD SURFACERENAME Test EG, Renamed EG
 CMD SURFACEREBUILD Renamed EG
 EXPECT LOG "linked object(s) re-draped"
@@ -114,7 +114,7 @@ CMD SURFACEREBUILD Renamed EG
 EXPECT NOLOG "linked object(s) re-draped"
 CHECK ALL
 
-# --- the link is VISIBLE, not a hidden attribute (ADR-062 (d)) --------------------------------------
+# --- the link is VISIBLE, not a hidden attribute (ADR-065 (d)) --------------------------------------
 # The Properties panel answers "does THIS one move?" and is not reachable from a transcript;
 # DRAPELINKS answers "what in here moves when I rebuild?", which is the question actually asked
 # before editing a surface, and is assertable end to end.

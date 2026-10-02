@@ -4723,7 +4723,7 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   at 256 tiles per capture). AutoCAD does not see captured areas. Adding another provider later
   (e.g. Esri, which needs a key) is a new entry in the map table plus a key decision, with no change
   to the pipeline.
-### ADR-062 — Surface-referencing geometry is BAKED by default; a link is opt-in, stamped by stable entity id, marked in the drawing, and degrades to plain geometry when its surface goes   (2026-09-28, accepted)
+### ADR-065 — Surface-referencing geometry is BAKED by default; a link is opt-in, stamped by stable entity id, marked in the drawing, and degrades to plain geometry when its surface goes   (2026-09-28, accepted)
 
 - **Status:** accepted (2026-09-28). Backs GitHub issue #150 (3D Phase 7) acceptance 6, and gates
   every other reference item in that phase. Recorded before any of it was implemented.

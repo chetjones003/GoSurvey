@@ -114,7 +114,7 @@ TEST_CASE("DRAPE is one undo step", "[drape][issue150][phase7]") {
 
 TEST_CASE("A vertex off the surface refuses its whole entity, by name and count",
           "[drape][issue150][phase7]") {
-  // ADR-062 (f). TinElevationAt never extrapolates (REQ-074), so there is no elevation for a vertex
+  // ADR-065 (f). TinElevationAt never extrapolates (REQ-074), so there is no elevation for a vertex
   // beyond the ground. Draping the rest would leave a shape that is neither the original nor the
   // ground — the plausible-looking wrong answer REQ-201 forbids.
   AppCommandState st;
@@ -231,7 +231,7 @@ TEST_CASE("DRAPE holds REQ-101 at survey coordinate magnitudes", "[drape][issue1
   }
 }
 
-// --- The opt-in link (ADR-062 (b)-(e)) ----------------------------------------------------------
+// --- The opt-in link (ADR-065 (b)-(e)) ----------------------------------------------------------
 
 namespace {
 
@@ -334,7 +334,7 @@ TEST_CASE("SURFACEREBUILD re-drapes what is linked to it", "[drape][issue150][ph
 
 TEST_CASE("A link to an erased surface resolves to nothing and the geometry stays put",
           "[drape][issue150][phase7][drapelink]") {
-  // ADR-062 (e). The reference resolving to nothing is REQ-076's own rule; what the GEOMETRY does is
+  // ADR-065 (e). The reference resolving to nothing is REQ-076's own rule; what the GEOMETRY does is
   // the decision - it is not deleted and not moved. Destroying drawn geometry because a surface was
   // erased would be far worse than a stale shape, and the stale shape is what a bake gives anyway.
   AppCommandState st;
@@ -403,7 +403,7 @@ TEST_CASE("A refused drape pushes no undo step", "[drape][issue150][phase7][drap
   CHECK(st.userPolylineVerts[2] == Approx(0.0).margin(1e-9));  // the "Before" step, not a no-op drape
 }
 
-// --- ADR-062 (d): the link is visible, not a hidden attribute -----------------------------------
+// --- ADR-065 (d): the link is visible, not a hidden attribute -----------------------------------
 
 TEST_CASE("DrapedOnSurfaceName reports what an object follows", "[drape][issue150][phase7][drapemark]") {
   AppCommandState st;
@@ -429,7 +429,7 @@ TEST_CASE("DrapedOnSurfaceName reports what an object follows", "[drape][issue15
 
 TEST_CASE("An object whose surface was erased reports following nothing",
           "[drape][issue150][phase7][drapemark]") {
-  // ADR-062 (e) again, but from the USER's side: the geometry stays put, and the panel must not go
+  // ADR-065 (e) again, but from the USER's side: the geometry stays put, and the panel must not go
   // on claiming it follows something. "Never linked", "baked since" and "its surface is gone" are
   // the same answer to the person looking at it.
   AppCommandState st;

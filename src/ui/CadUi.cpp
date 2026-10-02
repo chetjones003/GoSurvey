@@ -9616,7 +9616,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     }
   }
 
-  // ADR-062 (d), GitHub #150: a drape that FOLLOWS a surface must say so where a user looks at
+  // ADR-065 (d), GitHub #150: a drape that FOLLOWS a surface must say so where a user looks at
   // an object. Without this the link is a hidden attribute - the geometry moves on a rebuild and
   // nothing on screen ever said it would. The text comes from `DrapedOnSurfaceName`, the same
   // resolver DRAPELINKS uses, so the panel and the report cannot disagree; it is empty for an

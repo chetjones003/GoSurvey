@@ -3337,7 +3337,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
           msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
         log.push_back(msg);
         MarkVolumeSurfacesDirtyForParent(st, surface.name);
-        // A link means the same thing whichever way the rebuild was driven (ADR-062 (b)): the
+        // A link means the same thing whichever way the rebuild was driven (ADR-065 (b)): the
         // command path above and this async reap are the only two places a TIN is replaced.
         ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);
       } else {
@@ -4284,7 +4284,7 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
     PushUndoSnapshot(st, "Rebuild surfaces");
     for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
       BuildSurfaceFromSources(st, st.cadSurfaces[i], log);
-      ReDrapeLinkedToSurface(st, i, log);  // ADR-062 (b)
+      ReDrapeLinkedToSurface(st, i, log);  // ADR-065 (b)
     }
     BumpCadGpuCache(st);
     return;
@@ -4296,7 +4296,7 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
   }
   PushUndoSnapshot(st, "Rebuild surface");
   BuildSurfaceFromSources(st, st.cadSurfaces[static_cast<size_t>(si)], log);
-  ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);  // ADR-062 (b)
+  ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);  // ADR-065 (b)
   BumpCadGpuCache(st);
 }
 
@@ -24327,7 +24327,7 @@ struct DrapeResolved {
 /// cannot disagree about what "on the ground" means.
 ///
 /// An entity is all-or-nothing: a vertex the surface does not cover leaves the whole entity out
-/// (ADR-062 (f)).
+/// (ADR-065 (f)).
 [[nodiscard]] std::vector<DrapeResolved> ResolveDrapeOnto(AppCommandState& st, size_t si,
                                                           const std::vector<SelectedEntity>& items,
                                                           bool reportRefusals, std::vector<std::string>& log,
@@ -24441,13 +24441,13 @@ void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::str
 
 
 /// The name of the surface this entity is draped on and follows, or empty when it follows none
-/// (ADR-062 (d), GitHub #150).
+/// (ADR-065 (d), GitHub #150).
 ///
 /// The one place the link is turned into something a person reads, so the Properties panel and the
 /// `DRAPELINKS` report cannot disagree about what is linked.
 ///
 /// Empty covers three cases that are the same to the user — never linked, baked since, or linked to
-/// a surface that has been erased. The last is ADR-062 (e): the id stays on the entity and simply
+/// a surface that has been erased. The last is ADR-065 (e): the id stays on the entity and simply
 /// stops resolving, so the geometry is no longer following anything and must not claim to be.
 std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity& e) {
   const std::vector<EntityAttributes>* attrs = nullptr;
@@ -24464,7 +24464,7 @@ std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity&
     return std::string();
   const int si = FindSurfaceIndexById(st, id);
   if (si < 0)
-    return std::string();  // erased: it follows nothing now (ADR-062 (e))
+    return std::string();  // erased: it follows nothing now (ADR-065 (e))
   return st.cadSurfaces[static_cast<size_t>(si)].name;
 }
 
@@ -24472,7 +24472,7 @@ namespace {
 
 /// `DRAPELINKS` — every object in the drawing that follows a surface, and which one.
 ///
-/// The drawing-wide half of ADR-062 (d): the Properties panel answers "does THIS one move?", and this
+/// The drawing-wide half of ADR-065 (d): the Properties panel answers "does THIS one move?", and this
 /// answers "what in here moves when I rebuild?" — which is the question actually asked before editing
 /// a surface. A link that only existed in a file and in a panel would be a hidden attribute by any
 /// practical measure.
@@ -24493,7 +24493,7 @@ void ExecuteDrapeLinksCommand(AppCommandState& st, std::vector<std::string>& log
       const std::string name = DrapedOnSurfaceName(st, e);
       if (name.empty()) {
         // The id is set but no longer resolves: the surface was erased. Counted and reported rather
-        // than listed as though it still followed something (ADR-062 (e)).
+        // than listed as though it still followed something (ADR-065 (e)).
         ++dangling;
         continue;
       }
@@ -24523,9 +24523,9 @@ namespace {
 /// `DRAPE <surface>[, LINK]` — lay the selection on a surface, each vertex taking the elevation of
 /// the ground under it (REQ-074's query; GitHub issue #150, 3D Phase 7).
 ///
-/// **Baked unless `LINK` is asked for** (ADR-062 (a)/(b)). A baked drape stamps the elevations once
+/// **Baked unless `LINK` is asked for** (ADR-065 (a)/(b)). A baked drape stamps the elevations once
 /// and stores nothing, so the drawing never changes shape because somebody edited a surface. `LINK`
-/// stores the surface's **stable entity id** (ADR-062 (c) — never its name, which can be changed,
+/// stores the surface's **stable entity id** (ADR-065 (c) — never its name, which can be changed,
 /// and never its array index, which another surface takes after an erase), and the geometry
 /// re-drapes whenever that surface is rebuilt.
 ///
@@ -24534,7 +24534,7 @@ namespace {
 /// at the next rebuild.
 ///
 /// A vertex the surface does not cover is not draped, and its whole entity is refused by name with
-/// the count (ADR-062 (f)). `TinElevationAt` never extrapolates (REQ-074), so there is no elevation
+/// the count (ADR-065 (f)). `TinElevationAt` never extrapolates (REQ-074), so there is no elevation
 /// to give it; draping the covered vertices and leaving the rest at their old height would make a
 /// shape that is neither the original nor the ground — wrong in a way that looks plausible, which
 /// REQ-201 forbids. Every other entity in the selection still drapes.
@@ -42148,7 +42148,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     // REQ-071. `EXTRACT <surface>[, <layer>]` — comma-separated, because a surface name and a layer
     // name both routinely contain spaces.
-    // ADR-062 (d), GitHub #150: what in this drawing moves when a surface is rebuilt.
+    // ADR-065 (d), GitHub #150: what in this drawing moves when a surface is rebuilt.
     if (plotTok == "drapelinks") {
       ExecuteDrapeLinksCommand(st, log);
       return;
