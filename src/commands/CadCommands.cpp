@@ -38926,6 +38926,37 @@ void SetDrawingPlotScale(AppCommandState& st, float modelUnitsPerPlottedInch) {
   st.surveyLabelLayoutCacheHalfH = st.viewportLastSurveyLayoutOrthoHalfH;
   st.surveyLabelLayoutCacheVpHeightPx = st.viewportLastSurveyLayoutHeightPx;
   st.surveyLabelLayoutCacheMup = st.modelUnitsPerPlottedInch;
+  SyncCurrentAnnotationScaleIndex(st);
+  BumpCadGpuCache(st);
+}
+
+void SyncCurrentAnnotationScaleIndex(AppCommandState& st) {
+  st.currentAnnotationScaleIndex = -1;
+  if (st.annotationScales.empty())
+    return;
+  int best = 0;
+  float bestDiff = 1.e30f;
+  for (int i = 0; i < static_cast<int>(st.annotationScales.size()); ++i) {
+    const float m = CadAnnotationScaleModelUnitsPerPlottedInch(st.annotationScales[static_cast<size_t>(i)]);
+    const float d = std::fabs(m - st.modelUnitsPerPlottedInch);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = i;
+    }
+  }
+  st.currentAnnotationScaleIndex = best;
+}
+
+void SetCurrentAnnotationScaleIndex(AppCommandState& st, int index) {
+  if (st.annotationScales.empty()) {
+    st.currentAnnotationScaleIndex = -1;
+    return;
+  }
+  const int n = static_cast<int>(st.annotationScales.size());
+  const int ix = std::clamp(index, 0, n - 1);
+  if (ix == st.currentAnnotationScaleIndex)
+    return;
+  st.currentAnnotationScaleIndex = ix;
   BumpCadGpuCache(st);
 }
 

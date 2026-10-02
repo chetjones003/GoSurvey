@@ -7294,6 +7294,10 @@ void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vect
 /// Set the drawing's plot scale (model units per plotted inch) and resize what depends on it — the
 /// survey-point labels and their layout cache. No undo step: callers that edit push their own.
 void SetDrawingPlotScale(AppCommandState& st, float modelUnitsPerPlottedInch);
+/// Pick the annotation-scale list entry closest to the drawing plot scale (issue #622).
+void SyncCurrentAnnotationScaleIndex(AppCommandState& st);
+/// Set CANNOSCALE index for model-space annotative display; bumps GPU cache when changed.
+void SetCurrentAnnotationScaleIndex(AppCommandState& st, int index);
 
 /// Write the Drawing Settings window's values to the drawing as ONE undo step, pushed only when
 /// something changes. A unit change is a relabel and moves no geometry (REQ-022). Refuses (false,
