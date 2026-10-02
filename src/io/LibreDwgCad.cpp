@@ -1084,6 +1084,7 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
 }
 
 inline constexpr const char* kGosurveyAnnotativeBlockEed = "annotative";
+inline constexpr const char* kAcadAnnotativeDataEed = "AnnotativeData";
 inline constexpr const char* kGosurveyCannoscaleEedTag = "CANNOSCALE";
 
 [[nodiscard]] bool GosurveyEedCode0String(const Dwg_Eed_Data* data, std::string* out) {
@@ -1111,6 +1112,41 @@ inline constexpr const char* kGosurveyCannoscaleEedTag = "CANNOSCALE";
       return true;
   }
   return false;
+}
+
+[[nodiscard]] bool EntityEedHasAppidHandle(const Dwg_Object_Entity* ent, BITCODE_RLL appidAbsRef) {
+  if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0 || appidAbsRef == 0)
+    return false;
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    if (ent->eed[i].handle.value == appidAbsRef)
+      return true;
+  }
+  return false;
+}
+
+[[nodiscard]] bool AcadAnnotativeEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
+  if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0)
+    return false;
+  BITCODE_RLL acadAppRef = 0;
+  if (dwg != nullptr) {
+    const BITCODE_H appid = dwg_find_tablehandle(const_cast<Dwg_Data*>(dwg), "AcadAnnotative", "APPID");
+    if (appid != nullptr)
+      acadAppRef = appid->absolute_ref;
+  }
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    std::string s;
+    if (!GosurveyEedCode0String(ent->eed[i].data, &s))
+      continue;
+    if (s != kAcadAnnotativeDataEed)
+      continue;
+    if (acadAppRef == 0 || ent->eed[i].handle.value == acadAppRef)
+      return true;
+  }
+  return false;
+}
+
+[[nodiscard]] bool ImportEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
+  return GosurveyEedMarksAnnotative(ent) || AcadAnnotativeEedMarksAnnotative(dwg, ent);
 }
 
 [[nodiscard]] bool GosurveyEedMarksAnnotativeBlockInsert(const Dwg_Object_Entity* ent) {
@@ -1168,7 +1204,7 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
   ref.xf.sy = ins->scale.y != 0.0 ? static_cast<float>(ins->scale.y) : 1.f;
   ref.xf.sz = ins->scale.z != 0.0 ? static_cast<float>(ins->scale.z) : 1.f;
   ref.xf.rotZ = static_cast<float>(ins->rotation);
-  ref.annotative = GosurveyEedMarksAnnotativeBlockInsert(ent);
+  ref.annotative = ImportEedMarksAnnotative(dwg, ent);
   CollectInsertAttributes(dwg, ins, ref.attributes);
   outRefs.push_back(std::move(ref));
   outAttrs.push_back(at);
@@ -1210,7 +1246,7 @@ static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg
   ref.xf.sy = static_cast<float>(insSy * xf.sy);
   ref.xf.sz = static_cast<float>(insSz);
   ref.xf.rotZ = static_cast<float>(ins->rotation + xf.ang);
-  ref.annotative = GosurveyEedMarksAnnotativeBlockInsert(ent);
+  ref.annotative = ImportEedMarksAnnotative(dwg, ent);
   CollectInsertAttributes(dwg, ins, ref.attributes);
   st.cadBlockRefs.push_back(std::move(ref));
   st.cadBlockRefAttrs.push_back(EntityAttributes{});
@@ -1622,7 +1658,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     const Dwg_Entity_TEXT* e = ent->tio.TEXT;
     double x = 0, y = 0;
     xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
-    const bool annotative = GosurveyEedMarksAnnotative(ent);
+    const bool annotative = ImportEedMarksAnnotative(dwg, ent);
     LocalText(st, x, y, e->elevation, e->height, e->rotation + xf.ang, FromT(dwg, e->text_value),
               CadAnnotation::Kind::Text, at, annotative);
     return;
@@ -1633,7 +1669,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
     const double rot = std::atan2(e->x_axis_dir.y, e->x_axis_dir.x);
     const bool annotative =
-        GosurveyEedMarksAnnotative(ent) ||
+        ImportEedMarksAnnotative(dwg, ent) ||
         (dwg->header.version >= R_2018 && e->is_not_annotative == 0);
     LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(dwg, e->text),
               CadAnnotation::Kind::Mtext, at, annotative);
@@ -2199,6 +2235,7 @@ inline constexpr const char* kSurveyPointBlockName = "GOSURVEY_POINT";
 // not written (same degradations FillFromState already discloses for model space, via the #614
 // loss summary). Named nested INSERTs in `content.nested` are written as real INSERT records.
 bool AppendGosurveyStringEed(Dwg_Data* dwg, Dwg_Object_Entity* ent, const std::vector<std::string>& strs);
+void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent);
 void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
                                   const CadBlockContent& content, TableWriter& tw) {
   auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
@@ -2343,7 +2380,7 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
                                             std::max(static_cast<double>(an.plottedHeightInches), 1e-3))) {
         e->rotation = static_cast<double>(an.rotationRad);
         if (tw.dwg != nullptr && tw.dwg->header.version >= R_2018 && an.annotative && e->parent != nullptr)
-          AppendGosurveyStringEed(tw.dwg, e->parent, {kGosurveyAnnotativeBlockEed});
+          WriteAnnotativeEntityEed(tw.dwg, e->parent);
         apply(e->parent, at);
       }
     }
@@ -2537,6 +2574,84 @@ bool AppendGosurveyStringEed(Dwg_Data* dwg, Dwg_Object_Entity* ent, const std::v
     }
   }
   return true;
+}
+
+// Issue #622: AutoCAD-native annotative marker (AcadAnnotative APPID + AnnotativeData XDATA).
+// Appends five EED records; mirrors encode.c downconvert_DIMSTYLE AnnotativeData layout.
+bool AppendAcadAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent) {
+  if (dwg == nullptr || ent == nullptr)
+    return false;
+  BITCODE_H appid = dwg_find_tablehandle(dwg, "AcadAnnotative", "APPID");
+  if (appid == nullptr) {
+    if (dwg_add_APPID(dwg, "AcadAnnotative") == nullptr)
+      return false;
+    appid = dwg_find_tablehandle(dwg, "AcadAnnotative", "APPID");
+  }
+  if (appid == nullptr)
+    return false;
+  const BITCODE_RLL eedAppRef = appid->absolute_ref;
+  if (EntityEedHasAppidHandle(ent, eedAppRef))
+    return true;
+
+  const BITCODE_BL idx = ent->num_eed;
+  ent->num_eed += 5;
+  Dwg_Eed* eed = static_cast<Dwg_Eed*>(realloc(ent->eed, (ent->num_eed + 1) * sizeof(Dwg_Eed)));
+  if (eed == nullptr) {
+    ent->num_eed = idx;
+    return false;
+  }
+  ent->eed = eed;
+  for (BITCODE_BL z = idx; z <= ent->num_eed; ++z) {
+    ent->eed[z].size = 0;
+    ent->eed[z].raw = nullptr;
+    ent->eed[z].data = nullptr;
+    ent->eed[z].handle.value = 0;
+  }
+
+  BITCODE_BL i = idx;
+  const size_t annoLen = std::strlen(kAcadAnnotativeDataEed);
+  const BITCODE_BS headSize = static_cast<BITCODE_BS>(1 + 3 + (annoLen & 0xFF) + 1);
+  dwg_add_handle(&ent->eed[i].handle, 5, eedAppRef, nullptr);
+  ent->eed[i].size = headSize;
+  ent->eed[i].data = static_cast<Dwg_Eed_Data*>(calloc(static_cast<size_t>(headSize) + 3, 1));
+  if (ent->eed[i].data == nullptr)
+    return false;
+  ent->eed[i].data->code = 0;
+  ent->eed[i].data->u.eed_0.is_tu = 0;
+  ent->eed[i].data->u.eed_0.length = static_cast<unsigned short>(annoLen & 0xFF);
+  ent->eed[i].data->u.eed_0.codepage = 30;
+  std::memcpy(ent->eed[i].data->u.eed_0.string, kAcadAnnotativeDataEed, annoLen);
+  ++i;
+  ent->eed[i].data = static_cast<Dwg_Eed_Data*>(calloc(8, 1));
+  if (ent->eed[i].data == nullptr)
+    return false;
+  ent->eed[i].data->code = 2;
+  ++i;
+  ent->eed[i].data = static_cast<Dwg_Eed_Data*>(calloc(8, 1));
+  if (ent->eed[i].data == nullptr)
+    return false;
+  ent->eed[i].data->code = 70;
+  ent->eed[i].data->u.eed_70.rs = 1;
+  ++i;
+  ent->eed[i].data = static_cast<Dwg_Eed_Data*>(calloc(8, 1));
+  if (ent->eed[i].data == nullptr)
+    return false;
+  ent->eed[i].data->code = 70;
+  ent->eed[i].data->u.eed_70.rs = 1;
+  ++i;
+  ent->eed[i].data = static_cast<Dwg_Eed_Data*>(calloc(8, 1));
+  if (ent->eed[i].data == nullptr)
+    return false;
+  ent->eed[i].data->code = 2;
+  ent->eed[i].data->u.eed_2.close = 1;
+  return true;
+}
+
+void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent) {
+  if (dwg == nullptr || ent == nullptr)
+    return;
+  AppendGosurveyStringEed(dwg, ent, {kGosurveyAnnotativeBlockEed});
+  AppendAcadAnnotativeEntityEed(dwg, ent);
 }
 
 // Issue #622: persist the status-bar CANNOSCALE choice on *Model_Space (object EED shares entity
@@ -3163,7 +3278,7 @@ static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWrite
       tw.Apply(ent, *a);
   };
   if (ref.annotative && e0->parent != nullptr)
-    AppendGosurveyStringEed(tw.dwg, e0->parent, {kGosurveyAnnotativeBlockEed});
+    WriteAnnotativeEntityEed(tw.dwg, e0->parent);
   if (ref.attributes.empty()) {
     apply(e0->parent, at);
     return;
@@ -3926,7 +4041,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       if (e != nullptr) {
         e->rotation = static_cast<double>(an.rotationRad);
         if (r2018Write && an.annotative && e->parent != nullptr)
-          AppendGosurveyStringEed(dwg, e->parent, {kGosurveyAnnotativeBlockEed});
+          WriteAnnotativeEntityEed(dwg, e->parent);
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
         apply(e->parent, at);
