@@ -92,6 +92,10 @@ void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["linetype"] = e.linetype;
   o["lineweightMm"] = e.lineweightMm;
   o["transparency"] = e.transparency;
+  // Omitted when 0 (not linked), so a drawing with no surface link is byte-identical to one
+  // written before this field existed. Additive, no format-version bump (ADR-020 (d), ADR-062).
+  if (e.drapedOnSurfaceId != 0)
+    o["drapedOnSurfaceId"] = e.drapedOnSurfaceId;
 }
 
 EntityAttributes EntityAttributesFromJson(const json& o) {
@@ -105,6 +109,7 @@ EntityAttributes EntityAttributesFromJson(const json& o) {
   e.linetype     = o.value("linetype",     e.linetype);
   e.lineweightMm = o.value("lineweightMm", e.lineweightMm);
   e.transparency = o.value("transparency", e.transparency);
+  e.drapedOnSurfaceId = o.value("drapedOnSurfaceId", static_cast<std::uint64_t>(0));
   return e;
 }
 
