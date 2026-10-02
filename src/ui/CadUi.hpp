@@ -222,6 +222,7 @@ void DrawConnectionModesWindow(AppCommandState& cmd, std::vector<std::string>* l
 /// touches no surface definition, so nothing here can re-triangulate anything.
 void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 void DrawDimStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+void DrawMleaderStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 /// Surfaces panel (REQ-075): leftover definition explorer. Style/analysis is DrawSurfaceStyleWindow.
 void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 /// Surface Properties (Information / Definition / Analysis / Statistics) for one named surface.

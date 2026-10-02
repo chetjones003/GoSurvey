@@ -13,6 +13,7 @@
 // same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"
+#include "MultileaderStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
@@ -1311,6 +1312,7 @@ struct DrawingGeometrySnapshot {
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
@@ -1487,6 +1489,7 @@ struct DrawingDocument {
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
@@ -4563,6 +4566,9 @@ struct AppCommandState {
   DimensionStyle activeDimensionStyle = DimensionStyles::Default();
   DimensionStyle dimStyleDraft = DimensionStyles::Default();
   bool showDimStyleDialog = false;
+  MultileaderStyle activeMultileaderStyle = MultileaderStyles::Default();
+  MultileaderStyle mleaderStyleDraft = MultileaderStyles::Default();
+  bool showMleaderStyleDialog = false;
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
   float viewportCrosshairR = 1.f;
   float viewportCrosshairG = 0.8392157f;
@@ -6873,6 +6879,7 @@ void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimLinearCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimStyleCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartMleaderStyleCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// REQ-074: pick a point for its interpolated surface elevation; pick a second for the grade

@@ -1095,6 +1095,21 @@ json BuildRoot(const AppCommandState& st) {
       doc["dimensionStyle"] = std::move(o);
     }
   }
+  {
+    const MultileaderStyle& ms = st.activeMultileaderStyle;
+    const MultileaderStyle def = MultileaderStyles::Default();
+    if (ms != def) {
+      json o;
+      if (!ms.name.empty() && ms.name != "Standard")
+        o["name"] = ms.name;
+      o["textSizeInches"] = ms.textSizeInches;
+      if (!ms.textFont.empty())
+        o["textFont"] = ms.textFont;
+      o["arrowSizeInches"] = ms.arrowSizeInches;
+      o["landingGapInches"] = ms.landingGapInches;
+      doc["multileaderStyle"] = std::move(o);
+    }
+  }
   // Paper space layouts (REQ-031). Viewports/frozen layers persist in a later increment.
   {
     // REQ-155: while floating model space is entered, the floating viewport's active UCS is held
@@ -2761,6 +2776,20 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     }
     st.activeDimensionStyle = ds;
     st.dimStyleDraft = ds;
+  }
+
+  {
+    MultileaderStyle ms = MultileaderStyles::Default();
+    if (doc.contains("multileaderStyle") && doc["multileaderStyle"].is_object()) {
+      const auto& o = doc["multileaderStyle"];
+      ms.name = o.value("name", ms.name);
+      ms.textSizeInches = o.value("textSizeInches", ms.textSizeInches);
+      ms.textFont = o.value("textFont", ms.textFont);
+      ms.arrowSizeInches = o.value("arrowSizeInches", ms.arrowSizeInches);
+      ms.landingGapInches = o.value("landingGapInches", ms.landingGapInches);
+    }
+    st.activeMultileaderStyle = ms;
+    st.mleaderStyleDraft = ms;
   }
 
   st.userLinesFlat.clear();

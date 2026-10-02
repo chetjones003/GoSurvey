@@ -1204,6 +1204,7 @@ int main()
     DrawViewManagerWindow(cmd, &cmdLog);
     DrawTextStyleManagerWindow(cmd, &cmdLog);
     DrawDimStyleWindow(cmd, &cmdLog);
+    DrawMleaderStyleWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);
     DrawConnectionModesWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
