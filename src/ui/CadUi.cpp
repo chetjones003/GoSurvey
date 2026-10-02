@@ -65,6 +65,7 @@
 #include <cfloat>
 #include <cstdint>
 #include <string>
+#include <optional>
 #include <vector>
 #include <unordered_map>
 #include <fstream>
@@ -17848,7 +17849,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     constexpr ImU32 kGripBorder = IM_COL32(30, 64, 175, 255);
     ImFont* font = ImGui::GetFont();
 
-    auto drawAnnotationVisual = [&](const CadAnnotation& a, const EntityAttributes* attrPtr, ImU32 colFallback) {
+    auto drawAnnotationVisual = [&](const CadAnnotation& a, const EntityAttributes* attrPtr, ImU32 colFallback,
+                                    std::optional<bool> multileaderAnnotative = std::nullopt) {
       const float hWorld = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
       if (CadAnnotationIsDimension(a) && cmd.activeSpaceIndex >= 0)
         return;
@@ -18138,8 +18140,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         // model space) else the drawing scale — so its plotted height stays constant on the sheet regardless
         // of that viewport's scale. Survey labels keep the global drawing scale (their own layout owns size).
         float mtextMup = cmd.modelUnitsPerPlottedInch;
-        if (const Viewport* mvp = CurrentViewport(cmd))
+        if (multileaderAnnotative.has_value()) {
+          if (*multileaderAnnotative) {
+            if (const Viewport* mvp = CurrentViewport(cmd))
+              mtextMup = MtextScaleThroughViewport(a, *mvp, cmd.modelUnitsPerPlottedInch);
+          }
+        } else if (const Viewport* mvp = CurrentViewport(cmd)) {
           mtextMup = MtextScaleThroughViewport(a, *mvp, cmd.modelUnitsPerPlottedInch);
+        }
         const float hWorldMtext = CadAnnotationHeightWorld(a, mtextMup);
         // The screen-size cap belongs to survey-point labels only: those are sized for legibility, not to
         // scale. Applying it to plain MTEXT made the text stop growing once zoomed past ~128 px while the
@@ -18489,7 +18497,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         for (const std::vector<float>& branch : ml.extraLeaderPaths)
           drawLeaderPath(branch);
         if (!(cmd.mtextRichEditorOpen && cmd.mtextRichEditorMultileaderIndex == static_cast<int>(li)))
-          drawAnnotationVisual(ml.label, lp, kAnnCol);
+          drawAnnotationVisual(ml.label, lp, kAnnCol, ml.annotative);
         if (sel || hov) {
           ImVec2 sa{}, sb{};
           worldToScreen(ml.label.boxMinX, ml.label.boxMinY, &sa, ml.label.insZ);
@@ -21623,6 +21631,8 @@ void DrawMleaderStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
       ImGui::EndCombo();
     }
   }
+  ImGui::Checkbox("Annotative default for new multileaders", &s.annotativeDefault);
+  ImGui::TextDisabled("Annotative labels keep plotted height through layout viewports (issue #622).");
   ImGui::TextDisabled("DWG export still writes the Standard MLEADERSTYLE table entry.");
   ImGui::Separator();
   const float bw = 90.f;

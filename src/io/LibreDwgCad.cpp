@@ -885,6 +885,7 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
       std::max(static_cast<double>(txt.width), th * 4.0));
   an.boxMaxY = an.insY;
 
+  m.annotative = ml->is_annotative != 0;
   st.cadMultileaders.push_back(std::move(m));
   st.cadMultileaderAttrs.push_back(at);
   return true;
@@ -3552,6 +3553,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         if (Dwg_Entity_MULTILEADER* mld = dwg_add_MULTILEADER_branches(
                 hdr, static_cast<unsigned>(branches.size()), branches.data(),
                 wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
+          mld->is_annotative = ml.annotative ? 1 : 0;
           apply(mld->parent, at);
           continue;
         }

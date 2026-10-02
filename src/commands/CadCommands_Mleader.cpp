@@ -95,6 +95,7 @@ void CommitMleaderLandingAt(AppCommandState& st, float landX, float landY, std::
   const float landZ = CadCommitElevation(st);
   PushUndoSnapshot(st, "MLEADER");
   CadMultileader ml;
+  ml.annotative = st.activeMultileaderStyle.annotativeDefault;
   AppendPathPoint(&ml, st.mleaderTipX, st.mleaderTipY, st.mleaderTipZ);
   AppendPathPoint(&ml, landX, landY, landZ);
   InitMultileaderLabelAtLanding(&ml, landX, landY, landZ, st);

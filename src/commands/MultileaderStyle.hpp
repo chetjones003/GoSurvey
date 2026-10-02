@@ -13,10 +13,12 @@ struct MultileaderStyle {
   std::string textFont;  ///< empty = app / active text style default
   float arrowSizeInches = 0.10f;
   float landingGapInches = 0.05f;
+  bool annotativeDefault = false;
 
   bool operator==(const MultileaderStyle& o) const {
     return name == o.name && textSizeInches == o.textSizeInches && textFont == o.textFont &&
-           arrowSizeInches == o.arrowSizeInches && landingGapInches == o.landingGapInches;
+           arrowSizeInches == o.arrowSizeInches && landingGapInches == o.landingGapInches &&
+           annotativeDefault == o.annotativeDefault;
   }
   bool operator!=(const MultileaderStyle& o) const { return !(*this == o); }
 };
