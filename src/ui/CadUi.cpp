@@ -17896,6 +17896,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // space or floating model space). In a paper layout the canvas is the sheet (paper inches), so drawing
   // model text here would paint it at local-coord positions on the sheet — the stray "artifacts" bug (REQ-038).
   const bool modelAnnotationsVisible = modelSpace || InFloatingModelSpace(cmd);
+  const std::vector<CadAnnotationScale>* const kAnnoScales =
+      cmd.annotationScales.empty() ? nullptr : &cmd.annotationScales;
 
   // HATCH preview (REQ-043): translucent fill + bright outline of the candidate region under the cursor.
   if (modelAnnotationsVisible && cmd.active == AK::Hatch && cmd.hatchPreviewValid &&
@@ -17937,8 +17939,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const hatchpat::Def* pdef = hatchpat::Find(HatchLibrary(), fr.patternName);
       if (!pdef)
         continue;
-      const CadFilledRegion drawFr =
-          FilledRegionForAnnotativeDraw(fr, hatchVp, cmd.modelUnitsPerPlottedInch);
+      const CadFilledRegion drawFr = FilledRegionForAnnotativeDraw(fr, hatchVp, cmd.modelUnitsPerPlottedInch,
+                                                                   kAnnoScales, cmd.currentAnnotationScaleIndex);
       segs.clear();
       if (hatchpattern::BuildSegments(drawFr, *pdef, &segs) == 0)
         continue;
@@ -18010,7 +18012,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     auto drawAnnotationVisual = [&](const CadAnnotation& a, const EntityAttributes* attrPtr, ImU32 colFallback,
                                     std::optional<bool> multileaderAnnotative = std::nullopt) {
       const Viewport* annVp = CurrentViewport(cmd);
-      const float drawMup = AnnotativeModelUnitsPerPlottedInch(a, annVp, cmd.modelUnitsPerPlottedInch);
+      const float drawMup = AnnotativeModelUnitsPerPlottedInch(a, annVp, cmd.modelUnitsPerPlottedInch, kAnnoScales,
+                                                                 cmd.currentAnnotationScaleIndex);
       const float hWorld = CadAnnotationHeightWorld(a, drawMup);
       if (CadAnnotationIsDimension(a) && cmd.activeSpaceIndex >= 0)
         return;
@@ -18543,10 +18546,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (bp && CadEntityIdHidden(&cmd.hiddenEntityIds, bp->id))
         continue;
       const Viewport* blkVp = CurrentViewport(cmd);
-      const CadBlockRef drawRef = blkVp != nullptr
-                                      ? CadBlockRefForViewportDraw(cmd.cadBlockRefs[bi], *blkVp,
-                                                                     cmd.modelUnitsPerPlottedInch)
-                                      : cmd.cadBlockRefs[bi];
+      const CadBlockRef drawRef =
+          CadBlockRefForAnnotativeDisplay(cmd.cadBlockRefs[bi], blkVp, cmd.modelUnitsPerPlottedInch, kAnnoScales,
+                                          cmd.currentAnnotationScaleIndex);
       std::vector<CadAnnotation> blockAnns;
       CadBlockCollectWorldAnnotations(cmd.blockDefs, drawRef, &blockAnns);
       for (const CadAnnotation& a : blockAnns)

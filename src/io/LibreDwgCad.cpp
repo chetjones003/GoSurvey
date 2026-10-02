@@ -4240,6 +4240,23 @@ void ImportAnnotationScales(AppCommandState& st, Dwg_Data* dwg) {
   }
 }
 
+void SyncCurrentAnnotationScaleIndex(AppCommandState& st) {
+  st.currentAnnotationScaleIndex = -1;
+  if (st.annotationScales.empty())
+    return;
+  int best = 0;
+  float bestDiff = 1.e30f;
+  for (int i = 0; i < static_cast<int>(st.annotationScales.size()); ++i) {
+    const float m = CadAnnotationScaleModelUnitsPerPlottedInch(st.annotationScales[static_cast<size_t>(i)]);
+    const float d = std::fabs(m - st.modelUnitsPerPlottedInch);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = i;
+    }
+  }
+  st.currentAnnotationScaleIndex = best;
+}
+
 bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log, bool asDxf) {
   if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
     log.push_back(asDxf ? "DXF import — no path." : "DWG import — no path.");
@@ -4338,6 +4355,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   ImportPaperLayoutsFromDwg(st, &dwg, &skipHist);
   ImportAnnotationScales(st, &dwg);
+  SyncCurrentAnnotationScaleIndex(st);
 
   dwg_free(&dwg);
 

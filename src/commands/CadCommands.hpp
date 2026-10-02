@@ -862,6 +862,8 @@ struct CadExtendedGeometryInput {
   /// current (same rule as the paper-space overlay). Null viewport or non-positive MUP = no scaling.
   const Viewport* annotativeViewport = nullptr;
   float drawingModelUnitsPerPlottedInch = 0.f;
+  const std::vector<CadAnnotationScale>* annotationScales = nullptr;
+  int currentAnnotationScaleIndex = -1;
 };
 
 /// True when a CSR chain store (polylines, feature lines) holds at least one entity.
@@ -2113,6 +2115,8 @@ struct AppCommandState {
   float modelUnitsPerPlottedInch = 50.f;
   /// DWG SCALE object list (issue #622). Per-scale visibility/display is not wired yet; stored for fidelity.
   std::vector<CadAnnotationScale> annotationScales;
+  /// Index into \ref annotationScales for model-space annotative display (-1 = drawing plot scale only).
+  int currentAnnotationScaleIndex = -1;
   float defaultPlottedTextHeightInches = 0.125f;
 
   /// Drawing unit, AutoCAD $INSUNITS code (REQ-022). A relabel only — never scales

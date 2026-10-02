@@ -1581,6 +1581,8 @@ json BuildRoot(const AppCommandState& st) {
       scales.push_back(std::move(o));
     }
     doc["annotationScales"] = std::move(scales);
+    if (st.currentAnnotationScaleIndex >= 0)
+      doc["currentAnnotationScaleIndex"] = st.currentAnnotationScaleIndex;
   }
 
   // Imported meshes (REQ-063). Additive section — omitted entirely when there are none, so every
@@ -3508,6 +3510,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (!s.name.empty() && s.paperUnits > 0.f && s.drawingUnits > 0.f)
         st.annotationScales.push_back(std::move(s));
     }
+    st.currentAnnotationScaleIndex = doc.value("currentAnnotationScaleIndex", -1);
+    if (st.currentAnnotationScaleIndex >= static_cast<int>(st.annotationScales.size()))
+      st.currentAnnotationScaleIndex = st.annotationScales.empty() ? -1 : 0;
   }
 
   st.drawingLayerTable.clear();

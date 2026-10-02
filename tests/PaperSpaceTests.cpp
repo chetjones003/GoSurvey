@@ -661,3 +661,24 @@ TEST_CASE("Annotation scale entry converts to model units per plotted inch (issu
   s.drawingUnits = 50.f;
   REQUIRE(CadAnnotationScaleModelUnitsPerPlottedInch(s) == Catch::Approx(50.f));
 }
+
+TEST_CASE("Annotative TEXT uses current annotation scale in model space (issue #622)", "[paperspace][issue622]") {
+  std::vector<CadAnnotationScale> scales(1);
+  scales[0].paperUnits = 1.f;
+  scales[0].drawingUnits = 25.f;
+  CadAnnotation t;
+  t.annotative = true;
+  REQUIRE(AnnotativeModelUnitsPerPlottedInch(t, nullptr, 80.f, &scales, 0) == Catch::Approx(25.f));
+}
+
+TEST_CASE("Annotative hatch pattern scales with model annotation scale (issue #622)", "[paperspace][issue622]") {
+  std::vector<CadAnnotationScale> scales(1);
+  scales[0].paperUnits = 1.f;
+  scales[0].drawingUnits = 40.f;
+  CadFilledRegion fr;
+  fr.patternName = "ANSI31";
+  fr.patternScale = 2.f;
+  fr.annotative = true;
+  const CadFilledRegion scaled = FilledRegionForAnnotativeDraw(fr, nullptr, 80.f, &scales, 0);
+  REQUIRE(scaled.patternScale == Catch::Approx(1.f));
+}
