@@ -608,6 +608,44 @@ TEST_CASE("Block-content MULTILEADER import logs skip reason (REQ-367, issue #61
   CHECK(LogContains(log, "MULTILEADER(block content, issue #619)"));
 }
 
+TEST_CASE("CadMultileader extra branches round-trip native MULTILEADER export (issue #619)",
+          "[dwg][libredwg][issue619]") {
+  ScratchDir dir("dwg-mleader-branches");
+  const auto p = (dir.path / "ml-branches.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadMultileader ml{};
+  ml.pathXyz = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+  ml.extraLeaderPaths.push_back({5.f, 8.f, 0.f, 10.f, 0.f, 0.f});
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.insX = 10.f;
+  ml.label.insY = 0.f;
+  ml.label.text = "Two branches";
+  ml.label.boxMinX = 10.f;
+  ml.label.boxMinY = -1.f;
+  ml.label.boxMaxX = 24.f;
+  ml.label.boxMaxY = 1.f;
+  st.cadMultileaders.push_back(std::move(ml));
+  st.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int leaderNodes = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].fixedtype != DWG_TYPE_MULTILEADER || dwg.object[i].tio.entity == nullptr ||
+        dwg.object[i].tio.entity->tio.MULTILEADER == nullptr)
+      continue;
+    leaderNodes = static_cast<int>(dwg.object[i].tio.entity->tio.MULTILEADER->ctx.num_leaders);
+  }
+  dwg_free(&dwg);
+  REQUIRE(leaderNodes == 2);
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadMultileaders.size() == 1);
+  CHECK(in.cadMultileaders[0].extraLeaderPaths.size() == 1);
+}
+
 TEST_CASE("MultileaderStyle persists through GsIo JSON (issue #619)", "[issue619][gsio]") {
   AppCommandState src;
   src.activeMultileaderStyle.textSizeInches = 0.14f;

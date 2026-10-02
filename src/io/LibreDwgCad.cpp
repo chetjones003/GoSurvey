@@ -2723,10 +2723,13 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
       ++nRotatedText;
   add("rotated text/mtext label(s) (rotation not written)", nRotatedText);
 
-  size_t nMlExtraBranches = 0;
-  for (const CadMultileader& ml : st.cadMultileaders)
-    nMlExtraBranches += ml.extraLeaderPaths.size();
-  add("multileader extra branch(es) (only primary branch written to DWG)", nMlExtraBranches);
+  const bool nativeMl = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2010;
+  if (!nativeMl) {
+    size_t nMlExtraBranches = 0;
+    for (const CadMultileader& ml : st.cadMultileaders)
+      nMlExtraBranches += ml.extraLeaderPaths.size();
+    add("multileader extra branch(es) (R2000/R2004 export keeps primary branch only)", nMlExtraBranches);
+  }
 
   // REQ-057, issue #603: a varying-Z polyline now writes as POLYLINE_3D (real per-vertex Z), but
   // POLYLINE_3D has no bulge — a run that is BOTH 3D and curved still degrades to straight
@@ -3511,30 +3514,47 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
     const size_t nPt = ml.pathXyz.size() / 3;
     if (nativeMultileaderExport && nPt >= 2) {
-      std::vector<dwg_point_3d> pts(nPt);
-      for (size_t j = 0; j < nPt; ++j) {
-        world(ml.pathXyz[j * 3], ml.pathXyz[j * 3 + 1], ml.pathXyz[j * 3 + 2], &pts[j]);
-      }
-      dwg_point_3d dir{};
-      const size_t last = nPt - 1;
-      const size_t prev = nPt >= 2 ? last - 1 : 0;
-      dir.x = pts[last].x - pts[prev].x;
-      dir.y = pts[last].y - pts[prev].y;
-      dir.z = pts[last].z - pts[prev].z;
-      const double len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-      if (len > 1e-9) {
-        dir.x /= len;
-        dir.y /= len;
-        dir.z /= len;
-      } else {
-        dir.x = 1.0;
-        dir.y = dir.z = 0.0;
-      }
-      if (Dwg_Entity_MULTILEADER* mld = dwg_add_MULTILEADER(
-              hdr, static_cast<unsigned>(nPt), pts.data(),
-              wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
-        apply(mld->parent, at);
-        continue;
+      std::vector<std::vector<dwg_point_3d>> branchPtsStorage;
+      std::vector<dwg_mleader_branch> branches;
+      auto appendBranch = [&](const std::vector<float>& path) {
+        const size_t n = path.size() / 3;
+        if (n < 2)
+          return;
+        branchPtsStorage.emplace_back(n);
+        std::vector<dwg_point_3d>& pts = branchPtsStorage.back();
+        for (size_t j = 0; j < n; ++j)
+          world(path[j * 3], path[j * 3 + 1], path[j * 3 + 2], &pts[j]);
+        dwg_mleader_branch b{};
+        b.num_points = static_cast<unsigned>(n);
+        b.points = pts.data();
+        branches.push_back(b);
+      };
+      appendBranch(ml.pathXyz);
+      for (const std::vector<float>& extra : ml.extraLeaderPaths)
+        appendBranch(extra);
+      if (!branches.empty()) {
+        const std::vector<dwg_point_3d>& primary = branchPtsStorage.front();
+        dwg_point_3d dir{};
+        const size_t last = primary.size() - 1;
+        const size_t prev = primary.size() >= 2 ? last - 1 : 0;
+        dir.x = primary[last].x - primary[prev].x;
+        dir.y = primary[last].y - primary[prev].y;
+        dir.z = primary[last].z - primary[prev].z;
+        const double len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+        if (len > 1e-9) {
+          dir.x /= len;
+          dir.y /= len;
+          dir.z /= len;
+        } else {
+          dir.x = 1.0;
+          dir.y = dir.z = 0.0;
+        }
+        if (Dwg_Entity_MULTILEADER* mld = dwg_add_MULTILEADER_branches(
+                hdr, static_cast<unsigned>(branches.size()), branches.data(),
+                wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
+          apply(mld->parent, at);
+          continue;
+        }
       }
     }
     Dwg_Entity_MTEXT* mt =

@@ -10020,6 +10020,22 @@ extern "C"
   EXPORT Dwg_Object_MLEADERSTYLE *
   dwg_add_MLEADERSTYLE (Dwg_Data *restrict dwg,
                         const char *restrict name) __nonnull_all;
+  typedef struct _dwg_mleader_branch
+  {
+    unsigned num_points;
+    const dwg_point_3d *points;
+  } dwg_mleader_branch;
+
+  EXPORT Dwg_Entity_MULTILEADER *
+  dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
+                                const unsigned num_branches,
+                                const dwg_mleader_branch *restrict branches,
+                                const char *restrict text,
+                                const dwg_point_3d *restrict text_loc,
+                                const dwg_point_3d *restrict text_dir,
+                                const double text_height, const double text_width)
+      __nonnull ((1, 3, 4, 5, 6));
+
   EXPORT Dwg_Entity_MULTILEADER *
   dwg_add_MULTILEADER (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
                        const unsigned num_points,
