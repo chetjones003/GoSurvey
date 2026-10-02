@@ -1085,21 +1085,30 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
 
 inline constexpr const char* kGosurveyAnnotativeBlockEed = "annotative";
 
-[[nodiscard]] bool GosurveyEedMarksAnnotativeBlockInsert(const Dwg_Object_Entity* ent) {
+[[nodiscard]] bool GosurveyEedMarksAnnotative(const Dwg_Object_Entity* ent) {
   if (ent == nullptr || ent->eed == nullptr || ent->num_eed == 0)
     return false;
   for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
     const Dwg_Eed_Data* data = ent->eed[i].data;
-    if (data == nullptr || data->code != 0 || data->u.eed_0.is_tu != 0)
+    if (data == nullptr || data->code != 0)
       continue;
-    const unsigned short len = data->u.eed_0.length;
-    if (len == 0)
-      continue;
-    const std::string s(reinterpret_cast<const char*>(data->u.eed_0.string), len);
+    std::string s;
+    if (data->u.eed_0.is_tu != 0)
+      s = libredwgcad_detail::DecodeDwgString(data->u.eed_0.string, true);
+    else {
+      const unsigned short len = data->u.eed_0.length;
+      if (len == 0)
+        continue;
+      s.assign(reinterpret_cast<const char*>(data->u.eed_0.string), len);
+    }
     if (s == kGosurveyAnnotativeBlockEed)
       return true;
   }
   return false;
+}
+
+[[nodiscard]] bool GosurveyEedMarksAnnotativeBlockInsert(const Dwg_Object_Entity* ent) {
+  return GosurveyEedMarksAnnotative(ent);
 }
 
 void CollectInsertAttributes(const Dwg_Data* dwg, const Dwg_Entity_INSERT* ins,
@@ -1607,8 +1616,9 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     const Dwg_Entity_TEXT* e = ent->tio.TEXT;
     double x = 0, y = 0;
     xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
+    const bool annotative = GosurveyEedMarksAnnotative(ent);
     LocalText(st, x, y, e->elevation, e->height, e->rotation + xf.ang, FromT(dwg, e->text_value),
-              CadAnnotation::Kind::Text, at);
+              CadAnnotation::Kind::Text, at, annotative);
     return;
   }
   if (ty == DWG_TYPE_MTEXT && ent->tio.MTEXT != nullptr) {
@@ -1617,7 +1627,8 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
     const double rot = std::atan2(e->x_axis_dir.y, e->x_axis_dir.x);
     const bool annotative =
-        dwg->header.version >= R_2018 && e->is_not_annotative == 0;
+        GosurveyEedMarksAnnotative(ent) ||
+        (dwg->header.version >= R_2018 && e->is_not_annotative == 0);
     LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(dwg, e->text),
               CadAnnotation::Kind::Mtext, at, annotative);
     return;
@@ -2181,6 +2192,7 @@ inline constexpr const char* kSurveyPointBlockName = "GOSURVEY_POINT";
 // correctly without pulling in every model-space refinement. Meshes and solids inside a block are
 // not written (same degradations FillFromState already discloses for model space, via the #614
 // loss summary). Named nested INSERTs in `content.nested` are written as real INSERT records.
+bool AppendGosurveyStringEed(Dwg_Data* dwg, Dwg_Object_Entity* ent, const std::vector<std::string>& strs);
 void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
                                   const CadBlockContent& content, TableWriter& tw) {
   auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
@@ -2324,6 +2336,8 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
       if (Dwg_Entity_TEXT* e = dwg_add_TEXT(blkhdr, SanitizeDwgTextSymbols(an.text).c_str(), &p,
                                             std::max(static_cast<double>(an.plottedHeightInches), 1e-3))) {
         e->rotation = static_cast<double>(an.rotationRad);
+        if (tw.dwg != nullptr && tw.dwg->header.version >= R_2018 && an.annotative && e->parent != nullptr)
+          AppendGosurveyStringEed(tw.dwg, e->parent, {kGosurveyAnnotativeBlockEed});
         apply(e->parent, at);
       }
     }
@@ -3313,6 +3327,70 @@ static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
   }
 }
 
+extern "C" void dwg_set_next_objhandle(Dwg_Object* obj);
+extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
+
+// LibreDWG has no dwg_add_SCALE (HAVE_NO_DWG_ADD_SCALE). Hand-build AcDbScale objects the same way
+// WriteDwgGeoData hand-builds GEODATA — enough for ImportAnnotationScales' object scan on reopen.
+static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationScale& entry) {
+  if (dwg == nullptr || entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
+    return false;
+  const int classNumber = dwg_add_class(dwg, "SCALE", "AcDbScale", "ObjectDBX Classes", false);
+  if (classNumber < 0)
+    return false;
+  const BITCODE_BL idx = dwg->num_objects;
+  const int added = dwg_add_object(dwg);
+  if (added > 0)
+    return false;
+  if (added < 0)
+    dwg_resolve_objectrefs_silent(dwg);
+  Dwg_Object* obj = &dwg->object[idx];
+  obj->supertype = DWG_SUPERTYPE_OBJECT;
+  obj->fixedtype = DWG_TYPE_SCALE;
+  obj->type = static_cast<BITCODE_BS>(classNumber);
+  if (dwg->opts & DWG_OPTS_IN) {
+    obj->dxfname = _strdup("SCALE");
+    obj->name = _strdup("SCALE");
+  } else {
+    obj->name = const_cast<char*>("SCALE");
+    obj->dxfname = const_cast<char*>("SCALE");
+  }
+  obj->tio.object = static_cast<Dwg_Object_Object*>(std::calloc(1, sizeof(Dwg_Object_Object)));
+  if (obj->tio.object == nullptr)
+    return false;
+  obj->tio.object->objid = obj->index;
+  obj->tio.object->dwg = dwg;
+  auto* sc = static_cast<Dwg_Object_SCALE*>(std::calloc(1, sizeof(Dwg_Object_SCALE)));
+  if (sc == nullptr)
+    return false;
+  obj->tio.object->tio.SCALE = sc;
+  sc->parent = obj->tio.object;
+  dwg_set_next_objhandle(obj);
+  sc->flag = 0;
+  sc->name = dwg_add_u8_input(dwg, entry.name.c_str());
+  sc->paper_units = static_cast<double>(entry.paperUnits);
+  sc->drawing_units = static_cast<double>(entry.drawingUnits);
+  sc->is_unit_scale = 0;
+  return sc->name != nullptr;
+}
+
+static void WriteAnnotationScalesFromState(const AppCommandState& st, Dwg_Data* dwg,
+                                           std::vector<std::string>& log) {
+  if (dwg == nullptr || st.annotationScales.empty())
+    return;
+  if (LibreDwgVersionFromExport(st.dwgExportVersion) < R_2007)
+    return;
+  size_t nWritten = 0;
+  for (const CadAnnotationScale& s : st.annotationScales) {
+    if (AppendDwgAnnotationScaleObject(dwg, s))
+      ++nWritten;
+  }
+  if (nWritten > 0) {
+    log.push_back("CAD export — wrote " + std::to_string(nWritten) +
+                  " annotation SCALE object(s) (issue #622).");
+  }
+}
+
 void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr,
                    std::vector<std::string>& log) {
   auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
@@ -3329,6 +3407,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   tw.layerState = &st;
   tw.BuildLayerTable(st);
   tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
+  WriteAnnotationScalesFromState(st, dwg, log);
   // Register every linetype the entities reference up front, so no LTYPE table object is created
   // after the entity records have started going into the object array.
   for (const std::vector<EntityAttributes>* v :
@@ -3791,6 +3870,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       Dwg_Entity_TEXT* e = dwg_add_TEXT(hdr, SanitizeDwgTextSymbols(an.text).c_str(), &p, h);
       if (e != nullptr) {
         e->rotation = static_cast<double>(an.rotationRad);
+        if (r2018Write && an.annotative && e->parent != nullptr)
+          AppendGosurveyStringEed(dwg, e->parent, {kGosurveyAnnotativeBlockEed});
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
         apply(e->parent, at);
