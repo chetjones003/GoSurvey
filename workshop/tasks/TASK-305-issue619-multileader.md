@@ -1,7 +1,7 @@
 # TASK-305 — Multileaders + DWG (issue #619)
 
 - Type:    feature (**SPEC GAP** — propose REQ-367, then Verification → Workshop)
-- Status:  in progress (REQ-367 AC + #652–#654: block skip test, Add/Remove Leader, MSTY style UI; open: multi-branch DWG export, #622 annotative)
+- Status:  in progress (#655 multi-branch DWG export, #622 annotative multileader v1 on beta; open: SCALE object list / full #622 for all entity types)
 - Opened:  2026-10-01
 - GitHub:  #619, tracker #601
 - Depends: R2018 export on beta (**#643**, D-2026-10-01-f) ✓

@@ -646,6 +646,61 @@ TEST_CASE("CadMultileader extra branches round-trip native MULTILEADER export (i
   CHECK(in.cadMultileaders[0].extraLeaderPaths.size() == 1);
 }
 
+TEST_CASE("Annotative multileader round-trips is_annotative in DWG (issue #622)",
+          "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-mleader-annotative");
+  const auto p = (dir.path / "ml-anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadMultileader ml{};
+  ml.annotative = true;
+  ml.pathXyz = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.insX = 10.f;
+  ml.label.insY = 0.f;
+  ml.label.text = "Annotative callout";
+  ml.label.boxMinX = 10.f;
+  ml.label.boxMinY = -1.f;
+  ml.label.boxMaxX = 26.f;
+  ml.label.boxMaxY = 1.f;
+  st.cadMultileaders.push_back(std::move(ml));
+  st.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  bool sawAnno = false;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].fixedtype != DWG_TYPE_MULTILEADER || dwg.object[i].tio.entity == nullptr ||
+        dwg.object[i].tio.entity->tio.MULTILEADER == nullptr)
+      continue;
+    if (dwg.object[i].tio.entity->tio.MULTILEADER->is_annotative != 0)
+      sawAnno = true;
+  }
+  dwg_free(&dwg);
+  REQUIRE(sawAnno);
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadMultileaders.size() == 1);
+  CHECK(in.cadMultileaders[0].annotative);
+}
+
+TEST_CASE("Multileader annotative flag persists through GsIo (issue #622)", "[issue622][gsio]") {
+  AppCommandState src;
+  CadMultileader ml{};
+  ml.annotative = true;
+  ml.pathXyz = {0.f, 0.f, 0.f, 5.f, 0.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.text = "A";
+  src.cadMultileaders.push_back(std::move(ml));
+  src.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  AppCommandState back;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
+  REQUIRE(back.cadMultileaders.size() == 1);
+  CHECK(back.cadMultileaders[0].annotative);
+}
+
 TEST_CASE("MultileaderStyle persists through GsIo JSON (issue #619)", "[issue619][gsio]") {
   AppCommandState src;
   src.activeMultileaderStyle.textSizeInches = 0.14f;

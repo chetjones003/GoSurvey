@@ -1102,6 +1102,8 @@ json BuildRoot(const AppCommandState& st) {
       json o;
       if (!ms.name.empty() && ms.name != "Standard")
         o["name"] = ms.name;
+      if (ms.annotativeDefault)
+        o["annotativeDefault"] = true;
       o["textSizeInches"] = ms.textSizeInches;
       if (!ms.textFont.empty())
         o["textFont"] = ms.textFont;
@@ -1483,6 +1485,8 @@ json BuildRoot(const AppCommandState& st) {
   for (const CadMultileader& ml : st.cadMultileaders) {
     json o;
     o["path"] = ml.pathXyz;
+    if (ml.annotative)
+      o["annotative"] = true;
     if (!ml.extraLeaderPaths.empty()) {
       json extras = json::array();
       for (const std::vector<float>& branch : ml.extraLeaderPaths)
@@ -2787,6 +2791,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       ms.textFont = o.value("textFont", ms.textFont);
       ms.arrowSizeInches = o.value("arrowSizeInches", ms.arrowSizeInches);
       ms.landingGapInches = o.value("landingGapInches", ms.landingGapInches);
+      ms.annotativeDefault = o.value("annotativeDefault", false);
     }
     st.activeMultileaderStyle = ms;
     st.mleaderStyleDraft = ms;
@@ -2968,6 +2973,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           if (v.is_number())
             ml.pathXyz.push_back(static_cast<float>(v.get<double>()));
       }
+      ml.annotative = o.value("annotative", false);
       if (o.contains("extraPaths") && o["extraPaths"].is_array()) {
         for (const auto& branch : o["extraPaths"]) {
           if (!branch.is_array())

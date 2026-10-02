@@ -374,6 +374,8 @@ struct CadMultileader {
   std::vector<float> pathXyz; ///< tip → … → landing, local storage (Z absolute like CadAnnotation::insZ).
   /// Additional arrow branches sharing the same landing / label (Add Leader).
   std::vector<std::vector<float>> extraLeaderPaths;
+  /// When true, label height follows viewport/paper scale (issue #622); otherwise model plot scale only.
+  bool annotative = false;
   CadAnnotation label;        ///< Kind::Mtext at the text side of the landing.
 };
 
