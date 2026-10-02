@@ -1,3 +1,4 @@
+#include "commands/PaperSpace.hpp"
 #include "util/cadblock.hpp"
 #include "util/brep.hpp"
 #include "util/ucs.hpp"
@@ -422,4 +423,16 @@ TEST_CASE("CadBlockApplyConnectionModeOffset slides the fitting along its port n
   CadBlockSnapInsertToConnection(src, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, &noModeXf);
   CadBlockApplyConnectionModeOffset(src, nullptr, &noModeXf);
   CHECK(noModeXf.z == Catch::Approx(0.f).margin(0.001));
+}
+
+TEST_CASE("Annotative block ref scales insert for layout viewport draw (issue #622)", "[block][issue622]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 20.f;
+  CadBlockRef ref;
+  ref.annotative = true;
+  ref.xf.sx = 2.f;
+  ref.xf.sy = 2.f;
+  const CadBlockRef out = CadBlockRefForViewportDraw(ref, vp, 40.f);
+  REQUIRE(out.xf.sx == Catch::Approx(1.f));
+  REQUIRE(out.xf.sy == Catch::Approx(1.f));
 }
