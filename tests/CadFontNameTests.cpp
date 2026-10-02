@@ -110,6 +110,18 @@ TEST_CASE("REQ-050: plain MTEXT through a viewport is sized by THAT viewport's s
   REQUIRE(h100 == Catch::Approx(h50 * 2.f));
 }
 
+TEST_CASE("REQ-110 sketch: annotative TEXT through a viewport uses that viewport's scale", "[cadfont][issue622]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 40.f;
+  CadAnnotation t;
+  t.kind = CadAnnotation::Kind::Text;
+  t.plottedHeightInches = 0.2f;
+  t.annotative = true;
+
+  const float drawingMup = 80.f;
+  REQUIRE(MtextScaleThroughViewport(t, vp, drawingMup) == Catch::Approx(40.f));
+}
+
 TEST_CASE("REQ-050: survey-point label MTEXT keeps the drawing scale through a viewport", "[cadfont]") {
   Viewport vp;
   vp.scaleModelPerPaperIn = 50.f;

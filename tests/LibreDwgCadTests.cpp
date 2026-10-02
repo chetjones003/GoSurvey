@@ -685,6 +685,43 @@ TEST_CASE("Annotative multileader round-trips is_annotative in DWG (issue #622)"
   CHECK(in.cadMultileaders[0].annotative);
 }
 
+TEST_CASE("Annotative MTEXT round-trips is_not_annotative in DWG (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-mtext-annotative");
+  const auto p = (dir.path / "mt-anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotation m{};
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.annotative = true;
+  m.insX = 0.f;
+  m.insY = 0.f;
+  m.text = "Annotative note";
+  m.boxMinX = 0.f;
+  m.boxMinY = -1.f;
+  m.boxMaxX = 20.f;
+  m.boxMaxY = 1.f;
+  st.cadAnnotations.push_back(std::move(m));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  bool sawAnno = false;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].fixedtype != DWG_TYPE_MTEXT || dwg.object[i].tio.entity == nullptr ||
+        dwg.object[i].tio.entity->tio.MTEXT == nullptr)
+      continue;
+    if (dwg.object[i].tio.entity->tio.MTEXT->is_not_annotative == 0)
+      sawAnno = true;
+  }
+  dwg_free(&dwg);
+  REQUIRE(sawAnno);
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadAnnotations.size() == 1);
+  CHECK(in.cadAnnotations[0].annotative);
+}
+
 TEST_CASE("Multileader annotative flag persists through GsIo (issue #622)", "[issue622][gsio]") {
   AppCommandState src;
   CadMultileader ml{};
