@@ -142,9 +142,13 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
                                                      float drawingModelUnitsPerPlottedInch) {
   // REQ-050 keeps single-line TEXT (and every non-MTEXT kind) on the drawing plot scale. Gate here
   // so a later caller cannot size TEXT off the viewport by accident.
-  if (a.kind != CadAnnotation::Kind::Mtext || a.surveyPointLabelForId >= 0)
+  if (a.surveyPointLabelForId >= 0)
     return drawingModelUnitsPerPlottedInch;
-  return vp.safeScale();
+  if (a.kind == CadAnnotation::Kind::Mtext)
+    return vp.safeScale();
+  if (a.kind == CadAnnotation::Kind::Text && a.annotative)
+    return vp.safeScale();
+  return drawingModelUnitsPerPlottedInch;
 }
 
 /// Height on the sheet (paper inches) of \p a when it is plotted through \p vp.

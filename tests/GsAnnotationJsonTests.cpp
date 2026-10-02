@@ -70,3 +70,15 @@ TEST_CASE("unknown annotation kind tag loads as TEXT without crashing (issue #12
   const CadAnnotation a = CadAnnotationFromJson(o);
   REQUIRE(a.kind == CadAnnotation::Kind::Text);
 }
+
+TEST_CASE("annotation annotative flag persists through JSON (issue #622)", "[gs][issue622]") {
+  CadAnnotation a;
+  a.kind = CadAnnotation::Kind::Mtext;
+  a.annotative = true;
+  a.text = "Scale me";
+  json o;
+  CadAnnotationToJson(a, o);
+  REQUIRE(o.at("annotative").get<bool>());
+  const CadAnnotation b = CadAnnotationFromJson(o);
+  REQUIRE(b.annotative);
+}

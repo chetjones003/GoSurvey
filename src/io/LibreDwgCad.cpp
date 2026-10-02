@@ -372,7 +372,8 @@ void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool clo
 }
 
 void LocalText(AppCommandState& st, double x, double y, double z, double height, double rotRad,
-               const std::string& text, CadAnnotation::Kind kind, const EntityAttributes& at) {
+               const std::string& text, CadAnnotation::Kind kind, const EntityAttributes& at,
+               bool annotative = false) {
   CadAnnotation a{};
   a.kind = kind;
   a.insX = x - st.worldDocumentOriginX;
@@ -382,6 +383,7 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
   a.plottedHeightInches = static_cast<float>(height / mup);
   a.rotationRad = static_cast<float>(rotRad);
   a.text = text;
+  a.annotative = annotative;
   st.cadAnnotations.push_back(std::move(a));
   st.cadAnnotationAttrs.push_back(at);
 }
@@ -1367,8 +1369,10 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     double x = 0, y = 0;
     xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
     const double rot = std::atan2(e->x_axis_dir.y, e->x_axis_dir.x);
+    const bool annotative =
+        dwg->header.version >= R_2018 && e->is_not_annotative == 0;
     LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(dwg, e->text),
-              CadAnnotation::Kind::Mtext, at);
+              CadAnnotation::Kind::Mtext, at, annotative);
     return;
   }
   if (ty == DWG_TYPE_SPLINE && ent->tio.SPLINE != nullptr) {
@@ -2988,6 +2992,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     p->z = z;
   };
 
+  const bool r2018Write = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2018;
+
   TableWriter tw;
   tw.dwg = dwg;
   tw.useTrueColor = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
@@ -3440,6 +3446,12 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         e->x_axis_dir.x = std::cos(rotRad);
         e->x_axis_dir.y = std::sin(rotRad);
         e->x_axis_dir.z = 0.0;
+        if (r2018Write) {
+          if (an.annotative)
+            e->is_not_annotative = 0;
+          else
+            e->is_not_annotative = 1;
+        }
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
         apply(e->parent, at);

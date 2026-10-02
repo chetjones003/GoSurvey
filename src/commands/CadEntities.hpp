@@ -342,6 +342,8 @@ struct CadAnnotation {
   /// Per-property override flags: when set, this annotation's own field wins over its style and a style
   /// edit does not re-bake that property (ADR-020).
   bool ovFont = false, ovHeight = false, ovOblique = false, ovBold = false, ovItalic = false;
+  /// When true, plotted height follows the active viewport scale (issue #622 / REQ-110 sketch).
+  bool annotative = false;
   /// \c Kind::DimAligned / \c DimLinear / \c DimAngular — extension or ray points (on measured geometry).
   float dimExt1X = 0.f, dimExt1Y = 0.f, dimExt2X = 0.f, dimExt2Y = 0.f;
   /// \c Kind::DimAngular — vertex (center) of the measured angle.

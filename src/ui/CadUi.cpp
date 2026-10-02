@@ -8249,6 +8249,15 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
     if (ImGui::IsItemDeactivatedAfterEdit())
       BumpCadGpuCache(cmd);
 
+    if (ann.kind == CadAnnotation::Kind::Text || ann.kind == CadAnnotation::Kind::Mtext) {
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted("Annotative");
+      ImGui::TableNextColumn();
+      if (ImGui::Checkbox("##annAnnotative", &ann.annotative))
+        BumpCadGpuCache(cmd);
+    }
+
     if (ann.kind == CadAnnotation::Kind::Text) {
       // Bearing convention (clockwise from north): 0 = north (text runs up), 90 = east (left-to-right).
       float rotDeg = BearingCwNorthDegFromMathAngleRad(ann.rotationRad);
@@ -12369,10 +12378,15 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
     MtextTbTip("Font — applies to the selected text, or to the whole MTEXT when nothing is selected");
     ImGui::SameLine();
 
-    ImGui::BeginDisabled();
-    MtextTbIconButton("##annotative", MtextTbGlyph::Annotative);
-    ImGui::EndDisabled();
-    MtextTbTip("Annotative (not yet supported)");
+    if (target) {
+      if (MtextTbIconButton("##annotative", MtextTbGlyph::Annotative, target->annotative))
+        target->annotative = !target->annotative;
+    } else {
+      ImGui::BeginDisabled();
+      MtextTbIconButton("##annotative", MtextTbGlyph::Annotative);
+      ImGui::EndDisabled();
+    }
+    MtextTbTip("Annotative — label keeps plotted height across viewport scales (#622)");
     ImGui::SameLine();
 
     // Height — whole object, in plotted inches. While placing, this sets the height the new MTEXT gets.
@@ -17851,7 +17865,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     auto drawAnnotationVisual = [&](const CadAnnotation& a, const EntityAttributes* attrPtr, ImU32 colFallback,
                                     std::optional<bool> multileaderAnnotative = std::nullopt) {
-      const float hWorld = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
+      float drawMup = cmd.modelUnitsPerPlottedInch;
+      if (a.kind == CadAnnotation::Kind::Text && a.annotative) {
+        if (const Viewport* mvp = CurrentViewport(cmd))
+          drawMup = mvp->safeScale();
+      }
+      const float hWorld = CadAnnotationHeightWorld(a, drawMup);
       if (CadAnnotationIsDimension(a) && cmd.activeSpaceIndex >= 0)
         return;
       if (a.kind == CadAnnotation::Kind::Text) {
