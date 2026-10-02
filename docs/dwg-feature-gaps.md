@@ -14,7 +14,7 @@ As of 2026-10-02, the large **Group A** backlog and most **Group B** format work
 
 | Issue | What is left |
 |---|---|
-| **#622** | Annotative scaling — most slices merged (#657–#681); AutoCAD parity gaps remain (see [#622 comments](https://github.com/chetjones003/GoSurvey/issues/622)). |
+| **#622** | Annotative scaling — most slices merged (#657–#683); AutoCAD parity gaps remain (see [#622 comments](https://github.com/chetjones003/GoSurvey/issues/622)). |
 | **#617** | Fields — **REQ-368** (inline codes + evaluation + R2004+ native `FIELD`/`FIELDLIST`). |
 | **#618** | Dynamic blocks — **REQ-369** (increment 1: `*U` INSERT fidelity; full round trip open). |
 | **#624** | Visual styles, materials, lights — **new feature**, SPEC GAP. |
