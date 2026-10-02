@@ -15,9 +15,25 @@ on their object layer). **D-2026-10-02-a** records the decisions, taken before a
 
 ## What it does
 
-`PADSOLID <surface>, <pad elevation>` — select the closed polyline that bounds the pad, then run it.
-Produces up to **two** solids: the **cut** (ground above the pad — material to dig out) and the
-**fill** (ground below it — material to bring in), each reported with its volume, under one undo step.
+`PADSOLID` — select the closed polyline that bounds the pad, then run it. Produces up to **two**
+solids: the **cut** (ground above the pad — material to dig out) and the **fill** (ground below it —
+material to bring in), each reported with its volume, under one undo step.
+
+It **asks for what it needs**, like every other command with options. Typed bare it prompts for the
+boundary if nothing is selected, then sits on `specify pad elevation, or [Surface] <name>` until a
+number is given. `S` names the surface and returns to the same prompt; a word that is neither a
+number nor an option re-states the prompt rather than ending the command. The surface is remembered,
+so the common case — one ground surface, several pads at different levels — is one number each time.
+
+The one-line form `PADSOLID <surface>, <pad elevation>` still works, because a script and a
+transcript want it.
+
+The first version took everything on one line and, typed bare, printed a usage line and ended. From
+the app that reads as the command doing nothing at all: you type `PADSOLID`, press Enter, and it is
+over before you can give it an elevation. Reported from the app on 2026-10-02 and fixed here. The
+same report found `PADSOLID` missing from the command **registry**, so autocomplete never offered it
+and Enter did nothing — the command tests called the command directly and so never crossed the
+registry check that the typing box uses.
 
 The depth is the pad's **finished elevation**, which is how a site plan states it. A thickness below
 ground would follow every bump of the hillside and leave no flat floor — a topsoil strip, not a pad.
@@ -67,9 +83,36 @@ Newell's method now.
   `ProcessCommandLineSubmit`. **The acceptance test is the second**: the same ground and the same ring
   measured by two genuinely independent routes — the B-rep's own mass properties and
   `ComputeSurfaceVolume`'s grid integration — and compared.
+- `headless.phase7-padsolid-prompted` — the prompted form end to end, through the registry and the
+  typing box rather than around them: bare `PADSOLID` asks and **stays running**; `S` names the
+  surface and comes back; `banana` keeps the prompt; a number builds the cut and the fill; one UNDO
+  takes both; the one-line form and the `PAD` alias still work; a bad surface name still refuses.
 - Full suite: 2096/2105. The nine failures are `beta`'s: the seven stale transcripts fixed separately
   on `investigate/stale-3d-tests` (PR #662, not on this branch) and the two intermittent surface
   segfaults filed as issue #663. **None is new.**
+
+### One more failure appeared, and it is the harness, not the program
+
+Adding `PADSOLID` to the command registry made `headless.fuzz-smoke` fail on seed 1. The registry is
+where the fuzzer draws its command alphabet, so two new entries shift every later random draw and
+seed 1 now generates a different transcript. Verified pre-existing by reverting both command files to
+`664dcbf2` (beta), rebuilding `gosurvey_headless`, and re-running the generated transcript: the
+identical failure, on identical 215,202-byte files, with none of this work present. The transcript
+contains no `PADSOLID`.
+
+The program is right and says so itself:
+
+> MIRROR is still running, so "TEXT" was read as input to it rather than as a command. Press Esc to
+> end MIRROR, then type TEXT.
+> Nothing to undo.
+
+The undo/redo oracle commits one "anchor" entity, saves, undoes and requires the file to change. Its
+own comment says the anchor's job is to be "a GUARANTEED commit" — but it guarantees only that the
+*coordinates* are plain, never that **no command is still active**. A randomly drawn command left
+running swallows the anchor's input, nothing is committed, and `EXPECT DIFFERENTFILE` becomes
+unsatisfiable. Narrowed to twelve lines: `CMD MIRROR` with no `ESC`, then the anchor. One `ESC` ahead
+of the anchor closes it. Fixed separately, not here — it is the harness, and this branch is a
+command. It will bite the next person who adds any command to the registry.
 
 ### Why the acceptance is a relative tolerance
 

@@ -4429,6 +4429,10 @@ void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vec
 /// because the command dispatch above reaches it first.
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void ExecutePadSolidCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void StartPadSolidCommand(AppCommandState& st, std::vector<std::string>& log);
+void HandlePadSolidPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+void BuildPadSolids(AppCommandState& st, const std::string& surfaceName, std::uint64_t boundaryId,
+                    double padZ, std::vector<std::string>& log);
 
 // SURFSTYLE (REQ-070) — the command form of the Surface Style editor.
 //
@@ -6715,6 +6719,7 @@ const CmdEntry kRegistry[] = {
     {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
     {"surfstyle", "ss", "Surface style editor: contours, triangles, border (REQ-070)"},
     {"extract", "", "Bake a surface's displayed contours into polylines: EXTRACT <surface>[, <layer>]"},
+    {"padsolid", "pad", "Cut/fill solids for a pad: select the boundary, then PADSOLID <surface>, <elevation>"},
     {"volumes", "vol", "Cut/fill/net volume between two surfaces: VOLUMES <base>, <comparison>[, <clip id>]"},
     {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
@@ -7170,6 +7175,12 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "dist") {
     StartDistCommand(st, log);
+    return true;
+  }
+  if (primary == "padsolid") {
+    // Bare PADSOLID: the usage line, so a user who types the name alone is told what it wants
+    // rather than met with silence.
+    ExecutePadSolidCommand(st, std::string(), log);
     return true;
   }
   if (primary == "extract") {
@@ -13434,6 +13445,12 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
                            CadCommitElevation(st), log);
       break;
     }
+    return;
+  }
+
+  if (st.active == K::PadSolid) {
+    if (st.padSolidPhase == AppCommandState::PadSolidPhase::WaitBoundary)
+      HandlePadSolidPick(st, wx, wy, log);
     return;
   }
 
@@ -24230,51 +24247,18 @@ int AppendContoursAsPolylines(AppCommandState& st, const ContourResult& r, const
 /// The boundary is a closed polyline named by its stable entity id, resolved through
 /// `VolumeClipRingLocalXy` — the same resolver `VOLUMES` uses for REQ-131's clip, so a ring that
 /// bounds a volume and a ring that bounds a pad cannot mean different things.
-void ExecutePadSolidCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  const std::vector<std::string> f = SplitCommaFields(StringUtil::trimCopy(args));
-  if (f.size() != 2 || f[0].empty() || f[1].empty()) {
-    log.push_back("PADSOLID - usage: select the boundary polyline, then PADSOLID <surface>, <pad elevation>.");
-    return;
-  }
-  const int si = FindSurfaceIndex(st, f[0]);
+
+void BuildPadSolids(AppCommandState& st, const std::string& surfaceName, std::uint64_t boundaryId,
+                    double padZ, std::vector<std::string>& log) {
+  const int si = FindSurfaceIndex(st, surfaceName);
   if (si < 0) {
-    log.push_back("PADSOLID - no surface named \"" + f[0] + "\".");
+    log.push_back("PADSOLID - no surface named \"" + surfaceName + "\".");
     return;
   }
   const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
   if (!surf.tin || surf.tin->indices.empty()) {
     log.push_back("PADSOLID - \"" + surf.name + "\" has never been built; nothing to cut into.");
     return;
-  }
-
-  // The boundary comes from the SELECTION, not from a typed entity id. An id is what `VOLUMES` takes
-  // for REQ-131's clip, and it is why that clip has never been exercised end to end: nothing puts an
-  // id in a user's hands, or in a transcript's. Selecting the ring you already drew is how every
-  // other command in the program takes geometry.
-  std::uint64_t boundaryId = 0;
-  int closedPolylines = 0;
-  for (const SelectedEntity& e : st.selection) {
-    if (e.type != SelectedEntity::Type::Polyline || e.index < 0)
-      continue;
-    if (static_cast<size_t>(e.index) >= st.userPolylineAttrs.size())
-      continue;
-    ++closedPolylines;
-    boundaryId = st.userPolylineAttrs[static_cast<size_t>(e.index)].id;
-  }
-  if (closedPolylines != 1) {
-    log.push_back(closedPolylines == 0
-                      ? "PADSOLID - select the closed polyline that bounds the pad first."
-                      : "PADSOLID - select ONE closed polyline for the boundary, not " +
-                            std::to_string(closedPolylines) + ".");
-    return;
-  }
-  if (boundaryId == 0)
-    EnsureEntityIds(st);
-  if (boundaryId == 0) {
-    for (const SelectedEntity& e : st.selection)
-      if (e.type == SelectedEntity::Type::Polyline && e.index >= 0 &&
-          static_cast<size_t>(e.index) < st.userPolylineAttrs.size())
-        boundaryId = st.userPolylineAttrs[static_cast<size_t>(e.index)].id;
   }
   std::vector<std::pair<double, double>> ring;
   std::string ringErr;
@@ -24283,16 +24267,10 @@ void ExecutePadSolidCommand(AppCommandState& st, const std::string& args, std::v
                   (ringErr.empty() ? std::string("must be a closed polyline") : ringErr) + ".");
     return;
   }
-  double padZ = 0.0;
-  {
-    char* ez = nullptr;
-    padZ = std::strtod(f[1].c_str(), &ez);
-    if (!ez || ez == f[1].c_str() || *ez != '\0' || !std::isfinite(padZ)) {
-      log.push_back("PADSOLID - pad elevation must be a number, not \"" + f[1] + "\".");
-      return;
-    }
+  if (!std::isfinite(padZ)) {
+    log.push_back("PADSOLID - the pad elevation is not a number.");
+    return;
   }
-
   // The grid the pad is built on. Deliberately coarser than the volume sampler's 250,000 cells: every
   // cell becomes four or more B-rep faces, so that resolution would be a solid with a million faces.
   // ~1,600 cells is a few thousand faces, which measures and draws like any other solid, and the
@@ -24427,6 +24405,183 @@ void ExecutePadSolidCommand(AppCommandState& st, const std::string& args, std::v
     log.push_back("PADSOLID - " + std::to_string(outside) +
                   " cell(s) of the boundary are not over \"" + surf.name + "\" and were left out.");
 }
+
+
+
+/// The surface PADSOLID will use if the user does not name one: the one it used last, else the only
+/// surface in the drawing. Empty when there is a genuine choice to make.
+std::string PadSolidDefaultSurface(const AppCommandState& st) {
+  if (!st.padSolidSurface.empty() && FindSurfaceIndex(st, st.padSolidSurface) >= 0)
+    return st.padSolidSurface;
+  if (st.cadSurfaces.size() == 1)
+    return st.cadSurfaces[0].name;
+  return std::string();
+}
+
+/// The options prompt PADSOLID sits on, naming what it already has — the shape every other command
+/// with keywords uses, so a user can see the current surface rather than having to remember it.
+void PadSolidPrompt(AppCommandState& st, std::vector<std::string>& log) {
+  const std::string surf = PadSolidDefaultSurface(st);
+  st.padSolidPhase = AppCommandState::PadSolidPhase::WaitOptions;
+  log.push_back("PADSOLID - specify pad elevation, or [Surface]" +
+                (surf.empty() ? std::string(" (no surface chosen yet)") : " <" + surf + ">") +
+                ". ESC cancels.");
+}
+
+/// The boundary the command will use: the closed polyline the user has selected, or 0.
+std::uint64_t PadSolidSelectedBoundary(AppCommandState& st, int* outCount) {
+  int n = 0;
+  std::uint64_t id = 0;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Polyline || e.index < 0)
+      continue;
+    if (static_cast<size_t>(e.index) >= st.userPolylineAttrs.size())
+      continue;
+    ++n;
+    id = st.userPolylineAttrs[static_cast<size_t>(e.index)].id;
+  }
+  if (outCount)
+    *outCount = n;
+  return id;
+}
+
+
+void StartPadSolidCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::PadSolid;
+  st.lastCommand = AppCommandState::Kind::PadSolid;
+  st.padSolidBoundaryId = 0;
+  EnsureEntityIds(st);  // so a ring drawn moments ago already has the id the pad will remember it by
+
+  int n = 0;
+  const std::uint64_t id = PadSolidSelectedBoundary(st, &n);
+  if (n == 1) {
+    // A pre-selection is honoured, the way MOVE and ROTATE honour one.
+    st.padSolidBoundaryId = id;
+    PadSolidPrompt(st, log);
+    return;
+  }
+  st.padSolidPhase = AppCommandState::PadSolidPhase::WaitBoundary;
+  log.push_back(n > 1 ? "PADSOLID - select ONE closed polyline for the boundary. ESC cancels."
+                      : "PADSOLID - select the closed polyline that bounds the pad. ESC cancels.");
+}
+
+
+/// One typed line while PADSOLID is running: a pad elevation, or `S` to name the surface.
+void HandlePadSolidText(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
+  using P = AppCommandState::PadSolidPhase;
+  const std::string tr = StringUtil::trimCopy(line);
+  const std::string low = StringUtil::toLowerAsciiCopy(tr);
+
+  if (st.padSolidPhase == P::WaitSurfaceName) {
+    if (tr.empty()) {
+      PadSolidPrompt(st, log);
+      return;
+    }
+    if (FindSurfaceIndex(st, tr) < 0) {
+      std::string names;
+      for (const CadSurface& s : st.cadSurfaces)
+        names += (names.empty() ? "" : ", ") + s.name;
+      log.push_back("PADSOLID - no surface named \"" + tr + "\"." +
+                    (names.empty() ? "" : " Surfaces: " + names + "."));
+      return;  // stay on this prompt rather than throwing the command away
+    }
+    st.padSolidSurface = tr;
+    PadSolidPrompt(st, log);
+    return;
+  }
+
+  if (st.padSolidPhase != P::WaitOptions)
+    return;
+
+  if (low == "s" || low == "surface") {
+    std::string names;
+    for (const CadSurface& s : st.cadSurfaces)
+      names += (names.empty() ? "" : ", ") + s.name;
+    st.padSolidPhase = P::WaitSurfaceName;
+    log.push_back(names.empty() ? "PADSOLID - the drawing has no surfaces."
+                                : "PADSOLID - enter surface name. Surfaces: " + names + ".");
+    return;
+  }
+  if (tr.empty()) {
+    PadSolidPrompt(st, log);  // a bare Enter re-states what it is waiting for
+    return;
+  }
+
+  char* end = nullptr;
+  const double padZ = std::strtod(tr.c_str(), &end);
+  if (!end || end == tr.c_str() || *end != '\0' || !std::isfinite(padZ)) {
+    log.push_back("PADSOLID - enter a pad elevation, or S to choose the surface.");
+    return;
+  }
+  const std::string surf = PadSolidDefaultSurface(st);
+  if (surf.empty()) {
+    log.push_back("PADSOLID - choose a surface first: type S.");
+    return;
+  }
+  st.padSolidSurface = surf;
+  BuildPadSolids(st, surf, st.padSolidBoundaryId, padZ, log);
+  st.active = AppCommandState::Kind::None;
+  st.padSolidPhase = P::WaitBoundary;
+}
+
+/// A viewport pick while PADSOLID is waiting for its boundary.
+void HandlePadSolidPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2) ||
+      hit.type != SelectedEntity::Type::Polyline) {
+    log.push_back("PADSOLID - that is not a closed polyline. Pick the ring that bounds the pad.");
+    return;
+  }
+  if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.userPolylineAttrs.size())
+    return;
+  EnsureEntityIds(st);
+  const std::uint64_t id = st.userPolylineAttrs[static_cast<size_t>(hit.index)].id;
+  std::vector<std::pair<double, double>> ring;
+  std::string err;
+  if (!VolumeClipRingLocalXy(st, id, &ring, &err) || ring.size() < 3) {
+    log.push_back("PADSOLID - that polyline is not closed; the boundary must be a closed ring.");
+    return;
+  }
+  st.padSolidBoundaryId = id;
+  ClearCadSelection(st);
+  st.selection.push_back(hit);
+  PadSolidPrompt(st, log);
+}
+
+/// `PADSOLID` on its own starts the prompted command; `PADSOLID <surface>, <elevation>` does the
+/// whole thing in one line for a script or a transcript. Both end in the same `BuildPadSolids`.
+void ExecutePadSolidCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::string trimmed = StringUtil::trimCopy(args);
+  if (trimmed.empty()) {
+    StartPadSolidCommand(st, log);
+    return;
+  }
+  const std::vector<std::string> f = SplitCommaFields(trimmed);
+  if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+    log.push_back("PADSOLID - usage: PADSOLID <surface>, <pad elevation>, or just PADSOLID to be asked.");
+    return;
+  }
+  int n = 0;
+  const std::uint64_t id = PadSolidSelectedBoundary(st, &n);
+  if (n != 1) {
+    log.push_back(n == 0 ? "PADSOLID - select the closed polyline that bounds the pad first."
+                         : "PADSOLID - select ONE closed polyline for the boundary, not " +
+                               std::to_string(n) + ".");
+    return;
+  }
+  char* end = nullptr;
+  const double padZ = std::strtod(f[1].c_str(), &end);
+  if (!end || end == f[1].c_str() || *end != '\0' || !std::isfinite(padZ)) {
+    log.push_back("PADSOLID - pad elevation must be a number, not \"" + f[1] + "\".");
+    return;
+  }
+  st.padSolidSurface = f[0];
+  BuildPadSolids(st, f[0], id, padZ, log);
+}
+
 
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   SurfaceStyles::EnsureStandard(st.surfaceStyles);
@@ -41955,7 +42110,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // name both routinely contain spaces.
     // GitHub #150 (3D Phase 7). `PADSOLID <surface>, <boundary id>, <pad elevation>` - the cut and
     // fill a building pad represents, as solids you can measure (D-2026-10-02-a).
-    if (plotTok == "padsolid") {
+    if (plotTok == "padsolid" || plotTok == "pad") {
       std::string rest;
       std::getline(issIdle, rest);
       ExecutePadSolidCommand(st, StringUtil::trimCopy(rest), log);
@@ -43152,6 +43307,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
     log.push_back(
         "POLYLINE — X,Y / @dx,dy / A or 2P bearing / ARC / LINE / UNDO / CLOSE / END / ortho distance.");
+    return;
+  }
+
+  if (st.active == K::PadSolid) {
+    HandlePadSolidText(st, line, log);
     return;
   }
 
