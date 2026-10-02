@@ -608,6 +608,26 @@ TEST_CASE("Block-content MULTILEADER import logs skip reason (REQ-367, issue #61
   CHECK(LogContains(log, "MULTILEADER(block content, issue #619)"));
 }
 
+TEST_CASE("CadMultileader extra leader paths persist through GsIo (issue #619)",
+          "[issue619][gsio]") {
+  AppCommandState src;
+  CadMultileader ml{};
+  ml.pathXyz = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+  ml.extraLeaderPaths.push_back({5.f, 8.f, 0.f, 10.f, 0.f, 0.f});
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.insX = 10.f;
+  ml.label.insY = 0.f;
+  ml.label.text = "Callout";
+  src.cadMultileaders.push_back(std::move(ml));
+  src.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  AppCommandState back;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
+  REQUIRE(back.cadMultileaders.size() == 1);
+  REQUIRE(back.cadMultileaders[0].extraLeaderPaths.size() == 1);
+  CHECK(back.cadMultileaders[0].extraLeaderPaths[0].size() == 6);
+}
+
 TEST_CASE("CadMultileader persists through GsIo JSON round trip (REQ-367, issue #619)",
           "[issue619][gsio]") {
   AppCommandState src;

@@ -1344,8 +1344,13 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // --- Multileaders (REQ-367): path vertices offer Endpoint snap.
   if (wantEndpoint) {
     for (const CadMultileader& ml : cmd.cadMultileaders) {
-      for (size_t i = 0; i + 2 < ml.pathXyz.size(); i += 3)
-        Consider(&acc, wx, wy, ml.pathXyz[i], ml.pathXyz[i + 1], Kind::Endpoint, tolWorld, ml.pathXyz[i + 2]);
+      auto snapPath = [&](const std::vector<float>& path) {
+        for (size_t i = 0; i + 2 < path.size(); i += 3)
+          Consider(&acc, wx, wy, path[i], path[i + 1], Kind::Endpoint, tolWorld, path[i + 2]);
+      };
+      snapPath(ml.pathXyz);
+      for (const std::vector<float>& branch : ml.extraLeaderPaths)
+        snapPath(branch);
     }
   }
 

@@ -4573,9 +4573,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       spec.groups = {
           multileaderGroup,
           columnOfButtons({
-              rowBtn("##AnnAddLeader", -1, "Add_Leader", "Add Leader", true, "Add Leader — not implemented yet.", false),
-              rowBtn("##AnnRemoveLeader", -1, "Remove_Leader", "Remove Leader", true,
-                     "Remove Leader — not implemented yet.", false),
+              rowBtn("##AnnAddLeader", -1, "Add_Leader", "Add Leader", false,
+                     "Add Leader — pick a new arrowhead on the selected multileader.", false),
+              rowBtn("##AnnRemoveLeader", -1, "Remove_Leader", "Remove Leader", false,
+                     "Remove Leader — removes the last extra branch on the selected multileader.", false),
           }),
       };
       const float buttonsW = ribbonlayout::MeasureRibbonSection(spec).size.x;
@@ -4586,6 +4587,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           DevShell_OnUi(id.c_str());
           if (id == "##AnnMultileader")
             StartMleaderCommand(cmd, log);
+          else if (id == "##AnnAddLeader")
+            StartMleaderAddLeaderCommand(cmd, log);
+          else if (id == "##AnnRemoveLeader")
+            RemoveLeaderFromSelectedMultileader(cmd, log);
         });
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
@@ -18472,12 +18477,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                          cmd.viewportHoverEntity.index == static_cast<int>(li);
         const ImU32 drawCol = sel ? kAnnSelCol : hov ? IM_COL32(130, 180, 240, 255) : col;
         const float thick = sel || hov ? 2.f : 1.5f;
-        for (size_t pi = 0; pi + 5 < ml.pathXyz.size(); pi += 3) {
-          ImVec2 a{}, b{};
-          worldToScreen(ml.pathXyz[pi], ml.pathXyz[pi + 1], &a, ml.pathXyz[pi + 2]);
-          worldToScreen(ml.pathXyz[pi + 3], ml.pathXyz[pi + 4], &b, ml.pathXyz[pi + 5]);
-          dl->AddLine(a, b, drawCol, thick);
-        }
+        auto drawLeaderPath = [&](const std::vector<float>& path) {
+          for (size_t pi = 0; pi + 5 < path.size(); pi += 3) {
+            ImVec2 a{}, b{};
+            worldToScreen(path[pi], path[pi + 1], &a, path[pi + 2]);
+            worldToScreen(path[pi + 3], path[pi + 4], &b, path[pi + 5]);
+            dl->AddLine(a, b, drawCol, thick);
+          }
+        };
+        drawLeaderPath(ml.pathXyz);
+        for (const std::vector<float>& branch : ml.extraLeaderPaths)
+          drawLeaderPath(branch);
         if (!(cmd.mtextRichEditorOpen && cmd.mtextRichEditorMultileaderIndex == static_cast<int>(li)))
           drawAnnotationVisual(ml.label, lp, kAnnCol);
         if (sel || hov) {

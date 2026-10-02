@@ -4,6 +4,7 @@
 #include "CadCommandsInternal.hpp"
 
 #include <cmath>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,7 +39,26 @@ void InitMultileaderLabelAtLanding(CadMultileader* ml, float landX, float landY,
 void ResetMleaderDraft(AppCommandState& st) {
   st.mleaderPhase = AppCommandState::MleaderPhase::WaitArrowTip;
   st.mleaderTipX = st.mleaderTipY = st.mleaderTipZ = 0.f;
+  st.mleaderEditIndex = -1;
 }
+
+namespace {
+
+std::optional<int> SoleSelectedMultileaderIndex(const AppCommandState& st) {
+  int found = -1;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Multileader)
+      continue;
+    if (found >= 0)
+      return std::nullopt;
+    found = e.index;
+  }
+  if (found < 0 || static_cast<size_t>(found) >= st.cadMultileaders.size())
+    return std::nullopt;
+  return found;
+}
+
+}  // namespace
 
 void AbandonJustPlacedMultileader(AppCommandState& st) {
   const int ix = st.mtextRichEditorMultileaderIndex;
@@ -106,4 +126,67 @@ void StartMleaderCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.lastCommand = AppCommandState::Kind::Mleader;
   ResetMleaderDraft(st);
   log.push_back("MLEADER — specify arrowhead location (click or type X,Y). ESC cancels.");
+}
+
+void StartMleaderAddLeaderCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::None) {
+    log.push_back("Add Leader — finish or cancel the active command first.");
+    return;
+  }
+  const std::optional<int> ix = SoleSelectedMultileaderIndex(st);
+  if (!ix.has_value()) {
+    log.push_back("Add Leader — select exactly one multileader first.");
+    return;
+  }
+  const CadMultileader& ml = st.cadMultileaders[static_cast<size_t>(*ix)];
+  if (ml.pathXyz.size() < 6) {
+    log.push_back("Add Leader — selected multileader has no landing path.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.active = AppCommandState::Kind::MleaderAddLeader;
+  st.mleaderEditIndex = *ix;
+  st.mleaderPhase = AppCommandState::MleaderPhase::WaitArrowTip;
+  log.push_back("Add Leader — specify arrowhead location for the new branch. ESC cancels.");
+}
+
+void RemoveLeaderFromSelectedMultileader(AppCommandState& st, std::vector<std::string>& log) {
+  const std::optional<int> ix = SoleSelectedMultileaderIndex(st);
+  if (!ix.has_value()) {
+    log.push_back("Remove Leader — select exactly one multileader first.");
+    return;
+  }
+  CadMultileader& ml = st.cadMultileaders[static_cast<size_t>(*ix)];
+  if (!ml.extraLeaderPaths.empty()) {
+    PushUndoSnapshot(st, "Remove Leader");
+    ml.extraLeaderPaths.pop_back();
+    BumpCadGpuCache(st);
+    log.push_back("Remove Leader — extra branch removed.");
+    return;
+  }
+  log.push_back("Remove Leader — multileader has only one branch.");
+}
+
+void CommitMleaderAddLeaderAt(AppCommandState& st, float tipX, float tipY, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::MleaderAddLeader || st.mleaderEditIndex < 0)
+    return;
+  const size_t mi = static_cast<size_t>(st.mleaderEditIndex);
+  if (mi >= st.cadMultileaders.size())
+    return;
+  CadMultileader& ml = st.cadMultileaders[mi];
+  if (ml.pathXyz.size() < 3)
+    return;
+  float landX = 0.f;
+  float landY = 0.f;
+  float landZ = 0.f;
+  CadMultileaderLandingLocal(ml, &landX, &landY, &landZ);
+  const float tipZ = CadCommitElevation(st);
+  PushUndoSnapshot(st, "Add Leader");
+  ml.extraLeaderPaths.push_back({tipX, tipY, tipZ, landX, landY, landZ});
+  BumpCadGpuCache(st);
+  st.active = AppCommandState::Kind::None;
+  ResetMleaderDraft(st);
+  log.push_back("Add Leader — branch added.");
 }
