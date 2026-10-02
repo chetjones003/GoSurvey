@@ -4428,6 +4428,7 @@ void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vec
 /// EXTRACT (REQ-071) — defined further down, beside the layer helpers it needs, and declared here
 /// because the command dispatch above reaches it first.
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void ExecutePadSolidCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 
 // SURFSTYLE (REQ-070) — the command form of the Surface Style editor.
 //
@@ -24214,6 +24215,219 @@ int AppendContoursAsPolylines(AppCommandState& st, const ContourResult& r, const
   return made;
 }
 
+
+/// `PADSOLID <surface>, <boundary entity id>, <elevation>` — the earthwork a building pad represents,
+/// as solids you can see and measure (GitHub #150, 3D Phase 7).
+///
+/// Produces up to **two** solids: the CUT (ground above the pad — material to dig out) and the FILL
+/// (ground below it — material to bring in). A real pad cut into a slope is usually both, they are
+/// physically different shapes, and they are billed separately, so they are never merged into one
+/// lump whose volume would be the two partly cancelling each other out (D-2026-10-02-a).
+///
+/// The depth is given as the **finished elevation** of the pad floor, which is how a site plan states
+/// it — not as a thickness below ground, which would follow every bump and have no flat floor.
+///
+/// The boundary is a closed polyline named by its stable entity id, resolved through
+/// `VolumeClipRingLocalXy` — the same resolver `VOLUMES` uses for REQ-131's clip, so a ring that
+/// bounds a volume and a ring that bounds a pad cannot mean different things.
+void ExecutePadSolidCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(StringUtil::trimCopy(args));
+  if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+    log.push_back("PADSOLID - usage: select the boundary polyline, then PADSOLID <surface>, <pad elevation>.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("PADSOLID - no surface named \"" + f[0] + "\".");
+    return;
+  }
+  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!surf.tin || surf.tin->indices.empty()) {
+    log.push_back("PADSOLID - \"" + surf.name + "\" has never been built; nothing to cut into.");
+    return;
+  }
+
+  // The boundary comes from the SELECTION, not from a typed entity id. An id is what `VOLUMES` takes
+  // for REQ-131's clip, and it is why that clip has never been exercised end to end: nothing puts an
+  // id in a user's hands, or in a transcript's. Selecting the ring you already drew is how every
+  // other command in the program takes geometry.
+  std::uint64_t boundaryId = 0;
+  int closedPolylines = 0;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Polyline || e.index < 0)
+      continue;
+    if (static_cast<size_t>(e.index) >= st.userPolylineAttrs.size())
+      continue;
+    ++closedPolylines;
+    boundaryId = st.userPolylineAttrs[static_cast<size_t>(e.index)].id;
+  }
+  if (closedPolylines != 1) {
+    log.push_back(closedPolylines == 0
+                      ? "PADSOLID - select the closed polyline that bounds the pad first."
+                      : "PADSOLID - select ONE closed polyline for the boundary, not " +
+                            std::to_string(closedPolylines) + ".");
+    return;
+  }
+  if (boundaryId == 0)
+    EnsureEntityIds(st);
+  if (boundaryId == 0) {
+    for (const SelectedEntity& e : st.selection)
+      if (e.type == SelectedEntity::Type::Polyline && e.index >= 0 &&
+          static_cast<size_t>(e.index) < st.userPolylineAttrs.size())
+        boundaryId = st.userPolylineAttrs[static_cast<size_t>(e.index)].id;
+  }
+  std::vector<std::pair<double, double>> ring;
+  std::string ringErr;
+  if (!VolumeClipRingLocalXy(st, boundaryId, &ring, &ringErr) || ring.size() < 3) {
+    log.push_back("PADSOLID - the boundary " +
+                  (ringErr.empty() ? std::string("must be a closed polyline") : ringErr) + ".");
+    return;
+  }
+  double padZ = 0.0;
+  {
+    char* ez = nullptr;
+    padZ = std::strtod(f[1].c_str(), &ez);
+    if (!ez || ez == f[1].c_str() || *ez != '\0' || !std::isfinite(padZ)) {
+      log.push_back("PADSOLID - pad elevation must be a number, not \"" + f[1] + "\".");
+      return;
+    }
+  }
+
+  // The grid the pad is built on. Deliberately coarser than the volume sampler's 250,000 cells: every
+  // cell becomes four or more B-rep faces, so that resolution would be a solid with a million faces.
+  // ~1,600 cells is a few thousand faces, which measures and draws like any other solid, and the
+  // staircase it leaves on the boundary is smaller than the ring's own vertex spacing on any real
+  // site.
+  constexpr double kTargetPadCells = 1600.0;
+  double minX = ring[0].first, maxX = minX, minY = ring[0].second, maxY = minY;
+  for (const auto& p : ring) {
+    minX = std::min(minX, p.first);
+    maxX = std::max(maxX, p.first);
+    minY = std::min(minY, p.second);
+    maxY = std::max(maxY, p.second);
+  }
+  const double w = maxX - minX;
+  const double h = maxY - minY;
+  if (!(w > 0.0) || !(h > 0.0)) {
+    log.push_back("PADSOLID - the boundary encloses no area.");
+    return;
+  }
+  const double cell = std::max(std::sqrt((w * h) / kTargetPadCells), 1e-6);
+  const int cols = std::max(1, static_cast<int>(std::ceil(w / cell)));
+  const int rows = std::max(1, static_cast<int>(std::ceil(h / cell)));
+  const double cellW = w / static_cast<double>(cols);
+  const double cellH = h / static_cast<double>(rows);
+
+  const TinSpatialIndex index = BuildTinSpatialIndex(surf.tin->vertsXyz, surf.tin->indices);
+  const auto groundAt = [&](double x, double y, double* z) {
+    return index.empty() ? TinElevationAt(surf.tin->vertsXyz, surf.tin->indices, x, y, z)
+                         : TinElevationAtIndexed(surf.tin->vertsXyz, surf.tin->indices, index, x, y, z);
+  };
+
+  // Node elevations first; a node the surface does not cover makes every cell touching it unbuildable,
+  // which is how the pad stops at the edge of the survey rather than extrapolating (REQ-074).
+  const int nx = cols + 1;
+  const int ny = rows + 1;
+  std::vector<double> nodeZ(static_cast<size_t>(nx) * static_cast<size_t>(ny), 0.0);
+  std::vector<std::uint8_t> nodeOk(nodeZ.size(), 0);
+  for (int j = 0; j < ny; ++j) {
+    for (int i = 0; i < nx; ++i) {
+      const size_t k = static_cast<size_t>(j) * static_cast<size_t>(nx) + static_cast<size_t>(i);
+      double z = 0.0;
+      if (groundAt(minX + cellW * i, minY + cellH * j, &z)) {
+        nodeZ[k] = z;
+        nodeOk[k] = 1;
+      }
+    }
+  }
+
+  // A cell belongs to the cut or the fill by where its CENTRE sits — inside the ring, and which side
+  // of the pad elevation the ground is. Centres are what REQ-131's clip already uses, so a pad and a
+  // bounded volume over the same ring agree about which cells are in.
+  std::vector<std::uint8_t> cutIn(static_cast<size_t>(cols) * static_cast<size_t>(rows), 0);
+  std::vector<std::uint8_t> fillIn(cutIn.size(), 0);
+  int outside = 0;
+  for (int cj = 0; cj < rows; ++cj) {
+    for (int ci = 0; ci < cols; ++ci) {
+      const size_t c = static_cast<size_t>(cj) * static_cast<size_t>(cols) + static_cast<size_t>(ci);
+      bool corners = true;
+      for (int dj = 0; dj <= 1 && corners; ++dj)
+        for (int di = 0; di <= 1 && corners; ++di)
+          if (!nodeOk[static_cast<size_t>(cj + dj) * static_cast<size_t>(nx) + static_cast<size_t>(ci + di)])
+            corners = false;
+      if (!corners) {
+        ++outside;
+        continue;
+      }
+      const double cx = minX + cellW * (static_cast<double>(ci) + 0.5);
+      const double cy = minY + cellH * (static_cast<double>(cj) + 0.5);
+      if (!TinPointInPolygon(cx, cy, ring))
+        continue;
+      double gz = 0.0;
+      if (!groundAt(cx, cy, &gz)) {
+        ++outside;
+        continue;
+      }
+      if (gz > padZ)
+        cutIn[c] = 1;
+      else if (gz < padZ)
+        fillIn[c] = 1;
+    }
+  }
+
+  brep::HeightField hf;
+  hf.originX = minX;
+  hf.originY = minY;
+  hf.cellW = cellW;
+  hf.cellH = cellH;
+  hf.cols = cols;
+  hf.rows = rows;
+  hf.nodeZ = nodeZ;
+  hf.flatZ = padZ;
+
+  struct Made { const char* what; double volume; };
+  std::vector<Made> made;
+  std::vector<brep::Solid> solids;
+  const auto build = [&](std::vector<std::uint8_t>& mask, bool flatIsBottom, const char* what) {
+    if (std::find(mask.begin(), mask.end(), 1) == mask.end())
+      return;
+    hf.cellIn = mask;
+    hf.flatIsBottom = flatIsBottom;
+    brep::Solid s;
+    brep::Problem why = brep::Problem::Ok;
+    if (!brep::MakeHeightFieldSolid(hf, &s, &why)) {
+      log.push_back(std::string("PADSOLID - no ") + what + " solid: " + brep::ProblemText(why) + ".");
+      return;
+    }
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    made.push_back({what, mp.valid ? mp.volume : 0.0});
+    solids.push_back(std::move(s));
+  };
+  build(cutIn, /*flatIsBottom=*/true, "cut");
+  build(fillIn, /*flatIsBottom=*/false, "fill");
+
+  if (solids.empty()) {
+    log.push_back("PADSOLID - the ground already sits at " + FormatLinear(padZ, st.displayLinearPrecision) +
+                  " across the boundary; there is nothing to cut or fill.");
+    return;
+  }
+
+  PushUndoSnapshot(st, "Pad solid");
+  for (brep::Solid& s : solids) {
+    st.cadSolids.push_back(std::make_shared<brep::Solid>(std::move(s)));
+    st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  }
+  EnsureAttrCounts(st);
+  BumpCadGpuCache(st);
+
+  const int p = st.displayLinearPrecision;
+  for (const Made& m : made)
+    log.push_back(std::string("PADSOLID - ") + m.what + " solid created, volume " + FormatVolumeYd3(m.volume, p) + ".");
+  if (outside > 0)
+    log.push_back("PADSOLID - " + std::to_string(outside) +
+                  " cell(s) of the boundary are not over \"" + surf.name + "\" and were left out.");
+}
+
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   SurfaceStyles::EnsureStandard(st.surfaceStyles);
 
@@ -41739,6 +41953,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     // REQ-071. `EXTRACT <surface>[, <layer>]` — comma-separated, because a surface name and a layer
     // name both routinely contain spaces.
+    // GitHub #150 (3D Phase 7). `PADSOLID <surface>, <boundary id>, <pad elevation>` - the cut and
+    // fill a building pad represents, as solids you can measure (D-2026-10-02-a).
+    if (plotTok == "padsolid") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecutePadSolidCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
     if (plotTok == "extract") {
       std::string rest;
       std::getline(issIdle, rest);

@@ -1278,6 +1278,9 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
+    # PADSOLID needs the surface stores, the brep kernel and ProcessCommandLineSubmit, so it rides
+    # with GoSurveySnapTests like the other command tests above.
+    tests/PadSolidCommandTests.cpp
     tests/GsIoDimAngularTests.cpp
     tests/GsIoPipeRunTests.cpp
     tests/GsIoViewportCameraTests.cpp
