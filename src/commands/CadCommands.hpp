@@ -1744,6 +1744,8 @@ struct AppCommandState {
     Mtext,
     /// Multileader (REQ-367 / issue #619): arrow tip, landing, then in-place MTEXT for the label.
     Mleader,
+    /// Add a second (or further) arrow branch to the selected multileader.
+    MleaderAddLeader,
     DimAligned,
     DimLinear,
     DimAngular,
@@ -1982,7 +1984,8 @@ struct AppCommandState {
     case Kind::Ellipse:       return "ELLIPSE";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
-    case Kind::Mleader:       return "MLEADER";
+    case Kind::Mleader:          return "MLEADER";
+    case Kind::MleaderAddLeader: return "MLEADERADD";
     case Kind::DimAligned:    return "DIMALIGNED";
     case Kind::DimLinear:     return "DIMLINEAR";
     case Kind::DimAngular:    return "DIMANGULAR";
@@ -2448,6 +2451,8 @@ struct AppCommandState {
   float mleaderTipX = 0.f;
   float mleaderTipY = 0.f;
   float mleaderTipZ = 0.f;
+  /// Multileader index while \ref Kind::MleaderAddLeader is active (-1 = none).
+  int mleaderEditIndex = -1;
 
   float mtxtX1 = 0.f, mtxtY1 = 0.f;
   float mtxtX2 = 0.f, mtxtY2 = 0.f;
@@ -7407,6 +7412,9 @@ void CadMultileaderLocalBox(const CadMultileader& ml, float* mnX, float* mnY, fl
 int DropMultileadersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log);
 
 void StartMleaderCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartMleaderAddLeaderCommand(AppCommandState& st, std::vector<std::string>& log);
+void RemoveLeaderFromSelectedMultileader(AppCommandState& st, std::vector<std::string>& log);
+void CommitMleaderAddLeaderAt(AppCommandState& st, float tipX, float tipY, std::vector<std::string>& log);
 void ResetMleaderDraft(AppCommandState& st);
 void CommitMleaderLandingAt(AppCommandState& st, float landX, float landY, std::vector<std::string>& log);
 void FinishMleaderCommand(AppCommandState& st, std::vector<std::string>& log);

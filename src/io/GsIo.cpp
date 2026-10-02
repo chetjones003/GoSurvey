@@ -1468,6 +1468,12 @@ json BuildRoot(const AppCommandState& st) {
   for (const CadMultileader& ml : st.cadMultileaders) {
     json o;
     o["path"] = ml.pathXyz;
+    if (!ml.extraLeaderPaths.empty()) {
+      json extras = json::array();
+      for (const std::vector<float>& branch : ml.extraLeaderPaths)
+        extras.push_back(branch);
+      o["extraPaths"] = std::move(extras);
+    }
     json label;
     CadAnnotationToJson(ml.label, label);
     o["label"] = std::move(label);
@@ -2932,6 +2938,18 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         for (const auto& v : o["path"])
           if (v.is_number())
             ml.pathXyz.push_back(static_cast<float>(v.get<double>()));
+      }
+      if (o.contains("extraPaths") && o["extraPaths"].is_array()) {
+        for (const auto& branch : o["extraPaths"]) {
+          if (!branch.is_array())
+            continue;
+          std::vector<float> path;
+          for (const auto& v : branch)
+            if (v.is_number())
+              path.push_back(static_cast<float>(v.get<double>()));
+          if (path.size() >= 6)
+            ml.extraLeaderPaths.push_back(std::move(path));
+        }
       }
       if (o.contains("label") && o["label"].is_object())
         ml.label = CadAnnotationFromJson(o["label"]);

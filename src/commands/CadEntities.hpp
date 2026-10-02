@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -371,8 +372,23 @@ struct CadAnnotation {
 /// landing. v1 is DWG import/export and display; the MLEADER command is a follow-up increment.
 struct CadMultileader {
   std::vector<float> pathXyz; ///< tip → … → landing, local storage (Z absolute like CadAnnotation::insZ).
+  /// Additional arrow branches sharing the same landing / label (Add Leader).
+  std::vector<std::vector<float>> extraLeaderPaths;
   CadAnnotation label;        ///< Kind::Mtext at the text side of the landing.
 };
+
+inline void CadMultileaderLandingLocal(const CadMultileader& ml, float* x, float* y, float* z) {
+  assert(x != nullptr && y != nullptr && z != nullptr);
+  assert(ml.pathXyz.size() >= 3);
+  const size_t n = ml.pathXyz.size();
+  *x = ml.pathXyz[n - 3];
+  *y = ml.pathXyz[n - 2];
+  *z = ml.pathXyz[n - 1];
+}
+
+inline int CadMultileaderBranchCount(const CadMultileader& ml) {
+  return 1 + static_cast<int>(ml.extraLeaderPaths.size());
+}
 
 /// A Position Marker (REQ-359 item 3, D-2026-09-29-e): a cross inside a circle at a point, drawn at a
 /// fixed plotted size, plus its OWN multi-line label. One object — MOVE / COPY / ERASE / UNDO act on

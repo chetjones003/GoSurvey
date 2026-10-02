@@ -831,6 +831,13 @@ void CadMultileaderTranslate(CadMultileader* ml, double dx, double dy, double dz
     ml->pathXyz[i + 1] += fy;
     ml->pathXyz[i + 2] += fz;
   }
+  for (std::vector<float>& branch : ml->extraLeaderPaths) {
+    for (size_t i = 0; i + 2 < branch.size(); i += 3) {
+      branch[i] += fx;
+      branch[i + 1] += fy;
+      branch[i + 2] += fz;
+    }
+  }
   ml->label.insX += fx;
   ml->label.insY += fy;
   ml->label.insZ += fz;
@@ -856,6 +863,10 @@ void CadMultileaderLocalBox(const CadMultileader& ml, float* mnX, float* mnY, fl
   };
   for (size_t i = 0; i + 2 < ml.pathXyz.size(); i += 3)
     grow(ml.pathXyz[i], ml.pathXyz[i + 1]);
+  for (const std::vector<float>& branch : ml.extraLeaderPaths) {
+    for (size_t i = 0; i + 2 < branch.size(); i += 3)
+      grow(branch[i], branch[i + 1]);
+  }
   grow(ml.label.boxMinX, ml.label.boxMinY);
   grow(ml.label.boxMaxX, ml.label.boxMaxY);
   if (!any) {
@@ -866,13 +877,18 @@ void CadMultileaderLocalBox(const CadMultileader& ml, float* mnX, float* mnY, fl
 bool CadMultileaderHit(const CadMultileader& ml, double x, double y, float tolWorld, double* distSq) {
   const double tol2 = static_cast<double>(tolWorld) * static_cast<double>(tolWorld);
   double best = 1e300;
-  for (size_t i = 0; i + 5 < ml.pathXyz.size(); i += 3) {
-    const double ax = static_cast<double>(ml.pathXyz[i]);
-    const double ay = static_cast<double>(ml.pathXyz[i + 1]);
-    const double bx = static_cast<double>(ml.pathXyz[i + 3]);
-    const double by = static_cast<double>(ml.pathXyz[i + 4]);
-    best = std::min(best, DistSqPointSegment2d(x, y, ax, ay, bx, by));
-  }
+  auto walkPath = [&](const std::vector<float>& path) {
+    for (size_t i = 0; i + 5 < path.size(); i += 3) {
+      const double ax = static_cast<double>(path[i]);
+      const double ay = static_cast<double>(path[i + 1]);
+      const double bx = static_cast<double>(path[i + 3]);
+      const double by = static_cast<double>(path[i + 4]);
+      best = std::min(best, DistSqPointSegment2d(x, y, ax, ay, bx, by));
+    }
+  };
+  walkPath(ml.pathXyz);
+  for (const std::vector<float>& branch : ml.extraLeaderPaths)
+    walkPath(branch);
   const CadAnnotation& a = ml.label;
   if (x >= a.boxMinX - tolWorld && x <= a.boxMaxX + tolWorld && y >= a.boxMinY - tolWorld &&
       y <= a.boxMaxY + tolWorld) {

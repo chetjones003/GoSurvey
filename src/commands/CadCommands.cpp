@@ -13481,6 +13481,11 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     return;
   }
 
+  if (st.active == K::MleaderAddLeader) {
+    CommitMleaderAddLeaderAt(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::Mtext) {
     using MPt = AppCommandState::MtextPhase;
     switch (st.mtextPhase) {
@@ -40026,6 +40031,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("MTEXT canceled.");
   else if (st.active == AppCommandState::Kind::Mleader)
     log.push_back("MLEADER canceled.");
+  else if (st.active == AppCommandState::Kind::MleaderAddLeader)
+    log.push_back("Add Leader canceled.");
   else if (st.active == AppCommandState::Kind::DimAligned)
     log.push_back("DIMALIGNED canceled.");
   else if (st.active == AppCommandState::Kind::DimLinear)
@@ -43901,6 +43908,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return "MLEADER: Edit label — Save to place | Esc cancel";
     }
   }
+  if (st.active == K::MleaderAddLeader)
+    return "Add Leader: Arrowhead location | ESC cancel";
   if (st.active == K::Mtext) {
     switch (st.mtextPhase) {
     case MP::WaitCorner1:

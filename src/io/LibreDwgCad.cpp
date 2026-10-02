@@ -831,17 +831,36 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
       node.lines[0].points == nullptr)
     return false;
 
+  auto importLeaderNodePath = [&](const Dwg_LEADER_Node& lnode, std::vector<float>* out) {
+    if (lnode.num_lines < 1 || lnode.lines == nullptr || lnode.lines[0].num_points < 2 ||
+        lnode.lines[0].points == nullptr)
+      return;
+    const Dwg_LEADER_Line& seg = lnode.lines[0];
+    for (BITCODE_BL pi = 0; pi < seg.num_points; ++pi) {
+      double wx = 0.0, wy = 0.0;
+      xf.apply(seg.points[pi].x, seg.points[pi].y, &wx, &wy);
+      out->push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+      out->push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+      out->push_back(static_cast<float>(seg.points[pi].z));
+    }
+    if (lnode.has_lastleaderlinepoint != 0) {
+      double wx = 0.0, wy = 0.0;
+      xf.apply(lnode.lastleaderlinepoint.x, lnode.lastleaderlinepoint.y, &wx, &wy);
+      out->push_back(static_cast<float>(wx - st.worldDocumentOriginX));
+      out->push_back(static_cast<float>(wy - st.worldDocumentOriginY));
+      out->push_back(static_cast<float>(lnode.lastleaderlinepoint.z));
+    }
+  };
+
   CadMultileader m{};
-  const Dwg_LEADER_Line& seg = node.lines[0];
-  for (BITCODE_BL pi = 0; pi < seg.num_points; ++pi) {
-    double wx = 0.0, wy = 0.0;
-    xf.apply(seg.points[pi].x, seg.points[pi].y, &wx, &wy);
-    AppendLocalPathPoint(m, st, wx, wy, seg.points[pi].z);
-  }
-  if (node.has_lastleaderlinepoint != 0) {
-    double wx = 0.0, wy = 0.0;
-    xf.apply(node.lastleaderlinepoint.x, node.lastleaderlinepoint.y, &wx, &wy);
-    AppendLocalPathPoint(m, st, wx, wy, node.lastleaderlinepoint.z);
+  importLeaderNodePath(node, &m.pathXyz);
+  if (m.pathXyz.size() < 6)
+    return false;
+  for (BITCODE_BL li = 1; li < ml->ctx.num_leaders; ++li) {
+    std::vector<float> branch;
+    importLeaderNodePath(ml->ctx.leaders[li], &branch);
+    if (branch.size() >= 6)
+      m.extraLeaderPaths.push_back(std::move(branch));
   }
 
   const Dwg_MLEADER_Content_MText& txt = ml->ctx.content.txt;
@@ -2703,6 +2722,11 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
         std::fabs(a.rotationRad) > 1e-6f)
       ++nRotatedText;
   add("rotated text/mtext label(s) (rotation not written)", nRotatedText);
+
+  size_t nMlExtraBranches = 0;
+  for (const CadMultileader& ml : st.cadMultileaders)
+    nMlExtraBranches += ml.extraLeaderPaths.size();
+  add("multileader extra branch(es) (only primary branch written to DWG)", nMlExtraBranches);
 
   // REQ-057, issue #603: a varying-Z polyline now writes as POLYLINE_3D (real per-vertex Z), but
   // POLYLINE_3D has no bulge — a run that is BOTH 3D and curved still degrades to straight
