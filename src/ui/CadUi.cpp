@@ -8272,6 +8272,41 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
       ImGui::TableNextColumn();
       if (ImGui::Checkbox("##annAnnotative", &ann.annotative))
         BumpCadGpuCache(cmd);
+      if (ann.annotative && !cmd.annotationScales.empty()) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Visible scales");
+        ImGui::TableNextColumn();
+        std::string visJoined;
+        for (size_t vi = 0; vi < ann.annotativeVisibleScaleNames.size(); ++vi) {
+          if (vi > 0)
+            visJoined += ',';
+          visJoined += ann.annotativeVisibleScaleNames[vi];
+        }
+        char visBuf[256]{};
+        std::snprintf(visBuf, sizeof(visBuf), "%s", visJoined.c_str());
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::InputText("##annVisScales", visBuf, sizeof(visBuf)) && ImGui::IsItemDeactivatedAfterEdit()) {
+          ann.annotativeVisibleScaleNames.clear();
+          const std::string edited(visBuf);
+          size_t i = 0;
+          while (i < edited.size()) {
+            const size_t j = edited.find(',', i);
+            const size_t end = j == std::string::npos ? edited.size() : j;
+            std::string tok = edited.substr(i, end - i);
+            while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t'))
+              tok.erase(tok.begin());
+            while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t'))
+              tok.pop_back();
+            if (!tok.empty())
+              ann.annotativeVisibleScaleNames.push_back(std::move(tok));
+            if (j == std::string::npos)
+              break;
+            i = j + 1;
+          }
+          BumpCadGpuCache(cmd);
+        }
+      }
     }
 
     if (ann.kind == CadAnnotation::Kind::Text) {
@@ -16574,6 +16609,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       };
       ImFont* vpFont = ImGui::GetFont();
+      const std::vector<CadAnnotationScale>* vpAnnoScales =
+          cmd.annotationScales.empty() ? nullptr : &cmd.annotationScales;
       auto drawVpMtext = [&](const CadAnnotation& ann, const ViewportTextOverlayPlan& plan, ImU32 tcol) {
         std::string fieldResolved;
         const std::string* drawText = &ann.text;
@@ -16802,6 +16839,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const std::string layer = attr.layer.empty() ? std::string("0") : attr.layer;
         if (IsLayerFrozenInViewport(vp, layer))
           continue;
+        if (!CadAnnotativeVisibleAtActiveScale(cmd.cadBlockRefs[bi].annotative,
+                                               cmd.cadBlockRefs[bi].annotativeVisibleScaleNames, vpAnnoScales,
+                                               cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
+          continue;
         const CadBlockRef drawRef =
             CadBlockRefForViewportDraw(cmd.cadBlockRefs[bi], vp, cmd.modelUnitsPerPlottedInch);
         std::vector<CadBlockWorldSeg> segs;
@@ -16828,6 +16869,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             continue;
           const std::string layer = fa.layer.empty() ? std::string("0") : fa.layer;
           if (IsLayerFrozenInViewport(vp, layer))
+            continue;
+          if (!CadAnnotativeVisibleAtActiveScale(fr.annotative, fr.annotativeVisibleScaleNames, vpAnnoScales,
+                                                 cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
             continue;
           const hatchpat::Def* pdef = hatchpat::Find(HatchLibrary(), fr.patternName);
           if (!pdef)
@@ -16937,12 +16981,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const std::string blayer = bp ? (bp->layer.empty() ? std::string("0") : bp->layer) : std::string("0");
           if (IsLayerFrozenInViewport(vp, blayer))
             continue;
+          if (!CadAnnotativeVisibleAtActiveScale(cmd.cadBlockRefs[bi].annotative,
+                                                 cmd.cadBlockRefs[bi].annotativeVisibleScaleNames, vpAnnoScales,
+                                                 cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
+            continue;
           const CadBlockRef drawRef =
               CadBlockRefForViewportDraw(cmd.cadBlockRefs[bi], vp, cmd.modelUnitsPerPlottedInch);
           std::vector<CadAnnotation> blockAnns;
           CadBlockCollectWorldAnnotations(cmd.blockDefs, drawRef, &blockAnns);
           const ImU32 btcol = vpBaseCol(blayer, bp ? bp->color : std::string("ByLayer"));
           for (const CadAnnotation& ban : blockAnns) {
+            if (!CadAnnotativeVisibleAtActiveScale(ban.annotative, ban.annotativeVisibleScaleNames, vpAnnoScales,
+                                                   cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
+              continue;
             if (ban.kind == CadAnnotation::Kind::Text) {
               const ImVec2 sp = m2s(static_cast<double>(ban.insX) + oX, static_cast<double>(ban.insY) + oY);
               const float textMup =
@@ -16962,6 +17013,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (CadAnnotationIsDimension(ann))
             continue;
           if (ann.kind != CadAnnotation::Kind::Table && ann.text.empty())
+            continue;
+          if (!CadAnnotativeVisibleAtActiveScale(ann.annotative, ann.annotativeVisibleScaleNames, vpAnnoScales,
+                                                 cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
             continue;
           const EntityAttributes* aa =
               (ai < cmd.cadAnnotationAttrs.size()) ? &cmd.cadAnnotationAttrs[ai] : nullptr;
@@ -17172,6 +17226,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             continue;
           const std::string layer = lp ? (lp->layer.empty() ? std::string("0") : lp->layer) : std::string("0");
           if (IsLayerFrozenInViewport(vp, layer))
+            continue;
+          if (!CadAnnotativeVisibleAtActiveScale(ml.annotative, ml.annotativeVisibleScaleNames, vpAnnoScales,
+                                                 cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
             continue;
           const ImU32 mcol = vpBaseCol(layer, lp ? lp->color : std::string("ByLayer"));
           drawVpLeaderPath(ml.pathXyz, mcol, 1.5f);
@@ -18016,6 +18073,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const CadFilledRegion& fr = cmd.cadFilledRegions[fi];
       if (fr.isSolid())
         continue;
+      if (!CadAnnotativeVisibleAtActiveScale(fr.annotative, fr.annotativeVisibleScaleNames, kAnnoScales,
+                                             cmd.currentAnnotationScaleIndex, hatchVp, cmd.modelUnitsPerPlottedInch))
+        continue;
       const hatchpat::Def* pdef = hatchpat::Find(HatchLibrary(), fr.patternName);
       if (!pdef)
         continue;
@@ -18092,6 +18152,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     auto drawAnnotationVisual = [&](const CadAnnotation& a, const EntityAttributes* attrPtr, ImU32 colFallback,
                                     std::optional<bool> multileaderAnnotative = std::nullopt) {
       const Viewport* annVp = CurrentViewport(cmd);
+      if (!CadAnnotativeVisibleAtActiveScale(
+              a.annotative, a.annotativeVisibleScaleNames, kAnnoScales, cmd.currentAnnotationScaleIndex, annVp,
+              cmd.modelUnitsPerPlottedInch))
+        return;
       const float drawMup = AnnotativeModelUnitsPerPlottedInch(a, annVp, cmd.modelUnitsPerPlottedInch, kAnnoScales,
                                                                  cmd.currentAnnotationScaleIndex);
       const float hWorld = CadAnnotationHeightWorld(a, drawMup);

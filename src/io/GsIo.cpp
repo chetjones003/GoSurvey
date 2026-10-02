@@ -640,6 +640,8 @@ json CadBlockRefToJson(const CadBlockRef& r) {
   o["visState"] = r.visState;
   if (r.annotative)
     o["annotative"] = true;
+  if (!r.annotativeVisibleScaleNames.empty())
+    o["annotativeVisibleScaleNames"] = r.annotativeVisibleScaleNames;
   json av = json::array();
   for (const CadBlockAttrValue& v : r.attributes) {
     json e;
@@ -667,6 +669,8 @@ CadBlockRef CadBlockRefFromJson(const json& o) {
     r.xf = CadBlockXformFromJson(o["xf"]);
   r.visState = o.value("visState", "");
   r.annotative = o.value("annotative", false);
+  if (o.contains("annotativeVisibleScaleNames") && o["annotativeVisibleScaleNames"].is_array())
+    r.annotativeVisibleScaleNames = o["annotativeVisibleScaleNames"].get<std::vector<std::string>>();
   if (o.contains("attributes") && o["attributes"].is_array()) {
     for (const auto& e : o["attributes"])
       r.attributes.push_back(CadBlockAttrValue{e.value("tag", ""), e.value("value", "")});
@@ -1496,6 +1500,8 @@ json BuildRoot(const AppCommandState& st) {
     o["path"] = ml.pathXyz;
     if (ml.annotative)
       o["annotative"] = true;
+    if (!ml.annotativeVisibleScaleNames.empty())
+      o["annotativeVisibleScaleNames"] = ml.annotativeVisibleScaleNames;
     if (!ml.extraLeaderPaths.empty()) {
       json extras = json::array();
       for (const std::vector<float>& branch : ml.extraLeaderPaths)
@@ -1573,6 +1579,8 @@ json BuildRoot(const AppCommandState& st) {
     }
     if (fr.annotative)
       o["annotative"] = true;
+    if (!fr.annotativeVisibleScaleNames.empty())
+      o["annotativeVisibleScaleNames"] = fr.annotativeVisibleScaleNames;
     fills.push_back(std::move(o));
   }
   doc["filledRegions"] = std::move(fills);
@@ -2999,6 +3007,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             ml.pathXyz.push_back(static_cast<float>(v.get<double>()));
       }
       ml.annotative = o.value("annotative", false);
+      if (o.contains("annotativeVisibleScaleNames") && o["annotativeVisibleScaleNames"].is_array())
+        ml.annotativeVisibleScaleNames = o["annotativeVisibleScaleNames"].get<std::vector<std::string>>();
       if (o.contains("extraPaths") && o["extraPaths"].is_array()) {
         for (const auto& branch : o["extraPaths"]) {
           if (!branch.is_array())
@@ -3487,6 +3497,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         if (el.contains("patScale"))
           fr.patternScale = el["patScale"].get<float>();
         fr.annotative = el.value("annotative", false);
+        if (el.contains("annotativeVisibleScaleNames") && el["annotativeVisibleScaleNames"].is_array())
+          fr.annotativeVisibleScaleNames = el["annotativeVisibleScaleNames"].get<std::vector<std::string>>();
       } else if (el.is_array()) {
         // Legacy pre-multi-loop form: a bare flat XY array = one loop. Expand to XYZ at Z = 0.
         for (size_t i = 0; i + 1 < el.size(); i += 2) {

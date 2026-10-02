@@ -835,6 +835,40 @@ TEST_CASE("Annotative TEXT round-trips via GOSURVEY XDATA (issue #622)", "[dwg][
   CHECK(in.cadAnnotations[0].text == "Annotative label");
 }
 
+TEST_CASE("GOSURVEY annoVisScales EED round-trips on annotative TEXT (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-anno-vis-scales");
+  const auto p = (dir.path / "vis.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale a;
+  a.name = "1:20";
+  a.paperUnits = 1.f;
+  a.drawingUnits = 20.f;
+  CadAnnotationScale b;
+  b.name = "1:50";
+  b.paperUnits = 1.f;
+  b.drawingUnits = 50.f;
+  st.annotationScales.push_back(std::move(a));
+  st.annotationScales.push_back(std::move(b));
+  CadAnnotation t{};
+  t.kind = CadAnnotation::Kind::Text;
+  t.annotative = true;
+  t.annotativeVisibleScaleNames = {"1:20"};
+  t.insX = 1.f;
+  t.insY = 1.f;
+  t.plottedHeightInches = 0.125f;
+  t.text = "Scale filtered";
+  st.cadAnnotations.push_back(std::move(t));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadAnnotations.size() == 1);
+  REQUIRE(in.cadAnnotations[0].annotativeVisibleScaleNames.size() == 1);
+  CHECK(in.cadAnnotations[0].annotativeVisibleScaleNames[0] == "1:20");
+}
+
 TEST_CASE("AcadAnnotative EED imports when GOSURVEY marker stripped (issue #622)", "[dwg][libredwg][issue622]") {
   ScratchDir dir("dwg-acad-annotative-eed");
   const auto exported = (dir.path / "both.dwg").string();
