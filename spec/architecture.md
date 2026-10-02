@@ -4723,3 +4723,66 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   at 256 tiles per capture). AutoCAD does not see captured areas. Adding another provider later
   (e.g. Esri, which needs a key) is a new entry in the map table plus a key decision, with no change
   to the pipeline.
+### ADR-062 — Surface-referencing geometry is BAKED by default; a link is opt-in, stamped by stable entity id, marked in the drawing, and degrades to plain geometry when its surface goes   (2026-09-28, accepted)
+
+- **Status:** accepted (2026-09-28). Backs GitHub issue #150 (3D Phase 7) acceptance 6, and gates
+  every other reference item in that phase. Recorded before any of it was implemented.
+- **Context.** Phase 7 connects the 3D kernel to the survey data the program already owns: geometry
+  that is draped or projected onto a surface, geometry that references feature lines and survey
+  points, and solids generated from a surface. The issue names one architectural question and
+  refuses to let Workshop guess it: when the referenced surface changes, does the geometry
+  **re-evaluate** (a live link) or **keep the shape it was given** (a bake)?
+
+  Two facts from the existing tree bear on it, both checked rather than assumed:
+
+  1. **There is no persisted reference today.** Every `surfaceId` in the tree — the display cache,
+     the query cache, the watershed cache — is *live-only* and explicitly never written to `.gs`.
+     So this is new document content, not an extension of something already shipped, and whatever
+     is chosen has to carry its own save/reopen and deletion story.
+  2. **Stable ids already exist and their failure modes are documented.** REQ-076 guarantees an id
+     is not reused within a drawing, and the surface caches are already keyed by id rather than
+     array index *because* `cadSurfaces` compacts on erase — an index key starts applying one
+     surface's data to another after a delete. The rename-in-flight and erase-then-recreate hazards
+     are written up at `CadCommands.hpp:3147`. A reference keyed by anything other than the id would
+     re-introduce a bug the codebase has already paid for.
+
+  The `EXTRACT` command is the existing precedent for the bake side: derived surface geometry can be
+  baked to an unlinked object, and that is how the surface work has behaved so far.
+- **Decision.**
+
+  **(a) Baked is the default.** `DRAPE` and the projection commands stamp elevations once and
+  produce ordinary geometry with no stored reference. A drawing that is opened, plotted or handed
+  over does not change shape because somebody else edited a surface.
+
+  **(b) A link is opt-in and explicit**, requested at the command, never inferred. Linked geometry
+  re-evaluates when the surface it names finishes a rebuild.
+
+  **(c) A link is stored as the surface's stable entity id** (REQ-076), never its name and never its
+  array index. A rename does not break a link; an erase-then-recreate under the same name does not
+  silently re-target one.
+
+  **(d) Linked geometry is visibly marked**, so "this may move when the surface moves" is a property
+  of the drawing the user can see, not a hidden attribute. The unmarked case is the safe one.
+
+  **(e) A reference to a surface that is gone resolves to nothing, and the geometry keeps its last
+  shape as plain geometry.** The reference resolving to nothing is REQ-076's own rule and Phase 7's
+  acceptance line; what the *geometry* does is decided here: it is not deleted and not moved.
+  Destroying drawn geometry because a surface was erased would be a far worse failure than a stale
+  shape, and the stale shape is exactly what the baked default would have produced anyway.
+
+  **(f) A vertex that falls outside the surface is not draped, and the entity is refused by name
+  with the count.** `TinElevationAt` never extrapolates (REQ-074), so there is no elevation to give.
+  Draping the vertices that are covered and leaving the rest at their old elevation would produce a
+  shape that is neither the original nor the ground — wrong in a way that looks plausible, which
+  REQ-201 forbids. Other entities in the same selection still drape; the refusal names the entity
+  and how many of its vertices were off the surface.
+- **Consequences.**
+  - The first increment (`DRAPE`, baked) needs **no** new persisted field at all, so it can land and
+    be proven before any link machinery exists. That ordering is deliberate: the risky, new document
+    content arrives second, against a command already known to compute the right elevations.
+  - The link is additive when it comes — a stored id plus a mark — so it follows ADR-020 (d) and
+    needs no `kGsFormatVersion` bump.
+  - Re-evaluation hangs off the existing rebuild/reap path rather than a new watcher.
+  - Choosing baked-by-default means a surface edit does **not** update linked-by-default geometry,
+    so a user who wants a live model must ask for it per object. That is the accepted cost of never
+    rewriting geometry the user has already approved.
