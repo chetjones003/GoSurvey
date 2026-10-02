@@ -1,7 +1,7 @@
 # TASK-305 — Multileaders + DWG (issue #619)
 
 - Type:    feature (**SPEC GAP** — propose REQ-367, then Verification → Workshop)
-- Status:  in progress (core v1 shipped #645–#649; open: block-content import, custom MLEADERSTYLE UI, #622)
+- Status:  in progress (REQ-367 AC covered in tests #648–#651 + block-content skip log test; open: custom MLEADERSTYLE UI, #622, Add/Remove Leader SPEC GAP)
 - Opened:  2026-10-01
 - GitHub:  #619, tracker #601
 - Depends: R2018 export on beta (**#643**, D-2026-10-01-f) ✓
