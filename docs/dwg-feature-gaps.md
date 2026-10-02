@@ -14,7 +14,7 @@ As of 2026-10-02, the large **Group A** backlog and most **Group B** format work
 
 | Issue | What is left |
 |---|---|
-| **#622** | Annotative scaling — most slices merged (#657–#675); AutoCAD parity gaps remain (see [#622 comments](https://github.com/chetjones003/GoSurvey/issues/622)). |
+| **#622** | Annotative scaling — most slices merged (#657–#681); AutoCAD parity gaps remain (see [#622 comments](https://github.com/chetjones003/GoSurvey/issues/622)). |
 | **#617** | Fields — **REQ-368** (inline codes + evaluation + R2004+ native `FIELD`/`FIELDLIST`). |
 | **#618** | Dynamic blocks — **REQ-369** (increment 1: `*U` INSERT fidelity; full round trip open). |
 | **#624** | Visual styles, materials, lights — **new feature**, SPEC GAP. |
@@ -59,9 +59,9 @@ Some export paths still **degrade** rather than drop (for example 3D polylines w
 
 ### #622 — Annotative scaling (in progress)
 
-GoSurvey now has CANNOSCALE UI, `.gs` SCALE list sync, viewport-scaled annotative text/dims/hatches/blocks/multileaders, multi-SCALE DWG export/import, and GOSURVEY / AcadAnnotative EED paths for several entity types (PRs **#657–#675**).
+GoSurvey now has CANNOSCALE UI, `.gs` SCALE list sync, viewport-scaled annotative text/dims/hatches/blocks/multileaders, multi-SCALE DWG export/import, GOSURVEY / AcadAnnotative EED paths for several entity types, and GoSurvey-native **per-scale visibility** (`annoVisScales` / `.gs` `annotativeVisibleScaleNames`) with draw gates in model, layout viewports, and GL solid hatches (PRs **#657–#681**).
 
-**#622 stays open** until remaining AutoCAD-parity items are done or split out — see the checklist in [issue #622](https://github.com/chetjones003/GoSurvey/issues/622) (per-scale visibility, full annotation context blobs, DIMENSION annotative in native DWG where LibreDWG lacks fields, etc.). REQ-110 remains **proposed**; delivery may amend or supersede it.
+**#622 stays open** until remaining AutoCAD-parity items are done or split out — see the checklist in [issue #622](https://github.com/chetjones003/GoSurvey/issues/622) (full annotation context blobs, DIMENSION annotative in native DWG where LibreDWG lacks fields, etc.). REQ-110 remains **proposed**; delivery may amend or supersede it.
 
 ### #617 — Fields
 

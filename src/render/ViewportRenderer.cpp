@@ -2397,6 +2397,13 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       if (filledRegionAttrs && fi < filledRegionAttrs->size() &&
           CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, (*filledRegionAttrs)[fi].id))
         continue;
+      if (!CadAnnotativeVisibleAtActiveScale(
+              fr.annotative, fr.annotativeVisibleScaleNames,
+              extended ? extended->annotationScales : nullptr,
+              extended ? extended->currentAnnotationScaleIndex : -1,
+              extended ? extended->annotativeViewport : nullptr,
+              extended ? extended->drawingModelUnitsPerPlottedInch : 0.f))
+        continue;
       fan.clear();
       double mnx = 1e300, mxx = -1e300, mny = 1e300, mxy = -1e300;
       // The stencil cover quad spans the region's XY bounds and so needs one elevation; a filled
