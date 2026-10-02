@@ -345,6 +345,8 @@ struct CadAnnotation {
   bool ovFont = false, ovHeight = false, ovOblique = false, ovBold = false, ovItalic = false;
   /// When true, plotted height follows the active viewport scale (issue #622 / REQ-110 sketch).
   bool annotative = false;
+  /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
+  std::vector<std::string> annotativeVisibleScaleNames;
   /// \c Kind::DimAligned / \c DimLinear / \c DimAngular — extension or ray points (on measured geometry).
   float dimExt1X = 0.f, dimExt1Y = 0.f, dimExt2X = 0.f, dimExt2Y = 0.f;
   /// \c Kind::DimAngular — vertex (center) of the measured angle.
@@ -379,6 +381,8 @@ struct CadMultileader {
   std::vector<std::vector<float>> extraLeaderPaths;
   /// When true, label height follows viewport/paper scale (issue #622); otherwise model plot scale only.
   bool annotative = false;
+  /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
+  std::vector<std::string> annotativeVisibleScaleNames;
   CadAnnotation label;        ///< Kind::Mtext at the text side of the landing.
 };
 
@@ -1280,6 +1284,8 @@ struct CadFilledRegion {
   float patternScale = 1.f;      ///< Multiplies the line spacing (larger = sparser).
   /// When true, pattern spacing follows viewport scale (issue #622).
   bool annotative = false;
+  /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
+  std::vector<std::string> annotativeVisibleScaleNames;
   /// True when this region is a solid fill (no line pattern).
   bool isSolid() const { return patternName.empty() || patternName == "SOLID"; }
   /// Vertex count of loop \p k.

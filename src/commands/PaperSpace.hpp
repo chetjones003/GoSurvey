@@ -151,6 +151,60 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   return drawingModelUnitsPerPlottedInch;
 }
 
+/// Closest SCALE-list entry to a model-units-per-plotted-inch value (issue #622).
+[[nodiscard]] inline int CadAnnotationScaleIndexClosestToMup(const std::vector<CadAnnotationScale>& scales,
+                                                             float modelUnitsPerPlottedInch) {
+  if (scales.empty() || modelUnitsPerPlottedInch <= 0.f)
+    return -1;
+  int best = 0;
+  float bestDiff = 1.e30f;
+  for (int i = 0; i < static_cast<int>(scales.size()); ++i) {
+    const float m = CadAnnotationScaleModelUnitsPerPlottedInch(scales[static_cast<size_t>(i)]);
+    const float d = std::fabs(m - modelUnitsPerPlottedInch);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/// Active SCALE dictionary name for display: viewport scale on a layout sheet, else CANNOSCALE index.
+[[nodiscard]] inline std::string CadActiveAnnotationScaleName(const std::vector<CadAnnotationScale>* scales,
+                                                              int currentScaleIndex, const Viewport* vp,
+                                                              float drawingModelUnitsPerPlottedInch) {
+  if (scales == nullptr || scales->empty())
+    return {};
+  int ix = currentScaleIndex;
+  if (vp != nullptr)
+    ix = CadAnnotationScaleIndexClosestToMup(*scales, vp->safeScale());
+  else if (ix < 0 || ix >= static_cast<int>(scales->size()))
+    ix = CadAnnotationScaleIndexClosestToMup(*scales, drawingModelUnitsPerPlottedInch);
+  if (ix < 0 || ix >= static_cast<int>(scales->size()))
+    return {};
+  return (*scales)[static_cast<size_t>(ix)].name;
+}
+
+/// Per-scale visibility gate for annotative objects (empty list = visible at all scales).
+[[nodiscard]] inline bool CadAnnotativeVisibleAtActiveScale(
+    bool annotative, const std::vector<std::string>& visibleAtScaleNames,
+    const std::vector<CadAnnotationScale>* scales, int currentScaleIndex, const Viewport* vp,
+    float drawingModelUnitsPerPlottedInch) {
+  if (!annotative || visibleAtScaleNames.empty())
+    return true;
+  if (scales == nullptr || scales->empty())
+    return true;
+  const std::string active =
+      CadActiveAnnotationScaleName(scales, currentScaleIndex, vp, drawingModelUnitsPerPlottedInch);
+  if (active.empty())
+    return true;
+  for (const std::string& n : visibleAtScaleNames) {
+    if (n == active)
+      return true;
+  }
+  return false;
+}
+
 /// Model-space CANNOSCALE stand-in: current annotation scale entry, else drawing plot scale (issue #622).
 [[nodiscard]] inline float ModelSpaceAnnotativeModelUnitsPerPlottedInch(
     float drawingModelUnitsPerPlottedInch, const std::vector<CadAnnotationScale>* scales, int currentScaleIndex) {

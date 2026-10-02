@@ -374,9 +374,11 @@ void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool clo
   }
 }
 
+void ImportAnnotativeVisibilityFromEntityEed(const Dwg_Object_Entity* ent, std::vector<std::string>* out);
+
 void LocalText(AppCommandState& st, double x, double y, double z, double height, double rotRad,
                const std::string& text, CadAnnotation::Kind kind, const EntityAttributes& at,
-               bool annotative = false) {
+               bool annotative = false, const Dwg_Object_Entity* ownerEnt = nullptr) {
   CadAnnotation a{};
   a.kind = kind;
   a.insX = x - st.worldDocumentOriginX;
@@ -387,6 +389,8 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
   a.rotationRad = static_cast<float>(rotRad);
   a.text = text;
   a.annotative = annotative;
+  if (ownerEnt != nullptr)
+    ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &a.annotativeVisibleScaleNames);
   st.cadAnnotations.push_back(std::move(a));
   st.cadAnnotationAttrs.push_back(at);
 }
@@ -896,6 +900,8 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
   m.annotative = ml->is_annotative != 0;
   if (!m.annotative && ownerEnt != nullptr)
     m.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
+  if (ownerEnt != nullptr)
+    ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &m.annotativeVisibleScaleNames);
   st.cadMultileaders.push_back(std::move(m));
   st.cadMultileaderAttrs.push_back(at);
   return true;
@@ -1098,8 +1104,42 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
 }
 
 inline constexpr const char* kGosurveyAnnotativeBlockEed = "annotative";
+inline constexpr const char* kGosurveyAnnoVisScalesEed = "annoVisScales";
 inline constexpr const char* kAcadAnnotativeDataEed = "AnnotativeData";
 inline constexpr const char* kGosurveyCannoscaleEedTag = "CANNOSCALE";
+
+[[nodiscard]] std::string JoinAnnotativeVisibleScaleNames(const std::vector<std::string>& names) {
+  std::string out;
+  for (const std::string& n : names) {
+    if (n.empty())
+      continue;
+    if (!out.empty())
+      out += ',';
+    out += n;
+  }
+  return out;
+}
+
+void SplitAnnotativeVisibleScaleNames(const std::string& csv, std::vector<std::string>* out) {
+  if (out == nullptr)
+    return;
+  out->clear();
+  size_t i = 0;
+  while (i < csv.size()) {
+    const size_t j = csv.find(',', i);
+    const size_t end = j == std::string::npos ? csv.size() : j;
+    std::string tok = csv.substr(i, end - i);
+    while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t'))
+      tok.erase(tok.begin());
+    while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t'))
+      tok.pop_back();
+    if (!tok.empty())
+      out->push_back(std::move(tok));
+    if (j == std::string::npos)
+      break;
+    i = j + 1;
+  }
+}
 
 [[nodiscard]] bool GosurveyEedCode0String(const Dwg_Eed_Data* data, std::string* out) {
   if (out == nullptr || data == nullptr || data->code != 0)
@@ -1113,6 +1153,24 @@ inline constexpr const char* kGosurveyCannoscaleEedTag = "CANNOSCALE";
     return false;
   out->assign(reinterpret_cast<const char*>(data->u.eed_0.string), len);
   return true;
+}
+
+void ImportAnnotativeVisibilityFromEntityEed(const Dwg_Object_Entity* ent, std::vector<std::string>* out) {
+  if (out == nullptr || ent == nullptr || ent->eed == nullptr || ent->num_eed == 0)
+    return;
+  std::vector<std::string> strings;
+  strings.reserve(static_cast<size_t>(ent->num_eed));
+  for (BITCODE_BL i = 0; i < ent->num_eed; ++i) {
+    std::string s;
+    if (GosurveyEedCode0String(ent->eed[i].data, &s))
+      strings.push_back(std::move(s));
+  }
+  for (size_t i = 0; i + 1 < strings.size(); ++i) {
+    if (strings[i] != kGosurveyAnnoVisScalesEed)
+      continue;
+    SplitAnnotativeVisibleScaleNames(strings[i + 1], out);
+    return;
+  }
 }
 
 [[nodiscard]] bool GosurveyEedMarksAnnotative(const Dwg_Object_Entity* ent) {
@@ -1289,6 +1347,7 @@ static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_
   ref.xf.sz = ins->scale.z != 0.0 ? static_cast<float>(ins->scale.z) : 1.f;
   ref.xf.rotZ = static_cast<float>(ins->rotation);
   ref.annotative = ImportEedMarksAnnotative(dwg, ent);
+  ImportAnnotativeVisibilityFromEntityEed(ent, &ref.annotativeVisibleScaleNames);
   CollectInsertAttributes(dwg, ins, ref.attributes);
   if (!CadBlockNameIsDynamicAnonymous(name)) {
     const int di = CadBlockFindDef(catalog.blockDefs, name);
@@ -1339,6 +1398,7 @@ static bool ImportNestedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg
   ref.xf.sz = static_cast<float>(insSz);
   ref.xf.rotZ = static_cast<float>(ins->rotation + xf.ang);
   ref.annotative = ImportEedMarksAnnotative(dwg, ent);
+  ImportAnnotativeVisibilityFromEntityEed(ent, &ref.annotativeVisibleScaleNames);
   CollectInsertAttributes(dwg, ins, ref.attributes);
   if (!CadBlockNameIsDynamicAnonymous(name)) {
     const int di = CadBlockFindDef(catalog.blockDefs, name);
@@ -1491,8 +1551,10 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
     if (!userText.empty() && userText != "<>")  // AutoCAD's "use the measured value" placeholder
       a.text = userText;
   }
-  if (ownerEnt != nullptr)
+  if (ownerEnt != nullptr) {
     a.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
+    ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &a.annotativeVisibleScaleNames);
+  }
   st.cadAnnotations.push_back(a);
   st.cadAnnotationAttrs.push_back(at);
   return true;
@@ -1586,6 +1648,8 @@ bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATC
   }
   if (!region.annotative && ownerEnt != nullptr)
     region.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
+  if (ownerEnt != nullptr)
+    ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &region.annotativeVisibleScaleNames);
 
   st.cadFilledRegions.push_back(std::move(region));
   st.cadFilledRegionAttrs.push_back(at);
@@ -1765,7 +1829,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
     const bool annotative = ImportEedMarksAnnotative(dwg, ent);
     LocalText(st, x, y, e->elevation, e->height, e->rotation + xf.ang, FromT(dwg, e->text_value),
-              CadAnnotation::Kind::Text, at, annotative);
+              CadAnnotation::Kind::Text, at, annotative, ent);
     return;
   }
   if (ty == DWG_TYPE_MTEXT && ent->tio.MTEXT != nullptr) {
@@ -1777,7 +1841,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
         ImportEedMarksAnnotative(dwg, ent) ||
         (dwg->header.version >= R_2018 && e->is_not_annotative == 0);
     LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(dwg, e->text),
-              CadAnnotation::Kind::Mtext, at, annotative);
+              CadAnnotation::Kind::Mtext, at, annotative, ent);
     return;
   }
   if (ty == DWG_TYPE_SPLINE && ent->tio.SPLINE != nullptr) {
@@ -2357,7 +2421,9 @@ inline constexpr const char* kSurveyPointBlockName = "GOSURVEY_POINT";
 // not written (same degradations FillFromState already discloses for model space, via the #614
 // loss summary). Named nested INSERTs in `content.nested` are written as real INSERT records.
 bool AppendGosurveyStringEed(Dwg_Data* dwg, Dwg_Object_Entity* ent, const std::vector<std::string>& strs);
-void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent);
+void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent,
+                              const std::vector<std::string>* visibleScaleNames = nullptr);
+void ImportAnnotativeVisibilityFromEntityEed(const Dwg_Object_Entity* ent, std::vector<std::string>* out);
 void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
                                   const CadBlockContent& content, TableWriter& tw) {
   auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
@@ -2501,7 +2567,7 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
           else
             e->is_not_annotative = 1;
           if (an.annotative && e->parent != nullptr)
-            WriteAnnotativeEntityEed(tw.dwg, e->parent);
+            WriteAnnotativeEntityEed(tw.dwg, e->parent, &an.annotativeVisibleScaleNames);
         }
         apply(e->parent, at);
       }
@@ -2510,7 +2576,7 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
                                             std::max(static_cast<double>(an.plottedHeightInches), 1e-3))) {
         e->rotation = static_cast<double>(an.rotationRad);
         if (tw.dwg != nullptr && tw.dwg->header.version >= R_2018 && an.annotative && e->parent != nullptr)
-          WriteAnnotativeEntityEed(tw.dwg, e->parent);
+          WriteAnnotativeEntityEed(tw.dwg, e->parent, &an.annotativeVisibleScaleNames);
         apply(e->parent, at);
       }
     }
@@ -2777,10 +2843,20 @@ bool AppendAcadAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent) {
   return true;
 }
 
-void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent) {
+void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent,
+                              const std::vector<std::string>* visibleScaleNames) {
   if (dwg == nullptr || ent == nullptr)
     return;
-  AppendGosurveyStringEed(dwg, ent, {kGosurveyAnnotativeBlockEed});
+  std::vector<std::string> gos;
+  gos.push_back(kGosurveyAnnotativeBlockEed);
+  if (visibleScaleNames != nullptr && !visibleScaleNames->empty()) {
+    const std::string csv = JoinAnnotativeVisibleScaleNames(*visibleScaleNames);
+    if (!csv.empty()) {
+      gos.push_back(kGosurveyAnnoVisScalesEed);
+      gos.push_back(csv);
+    }
+  }
+  AppendGosurveyStringEed(dwg, ent, gos);
   AppendAcadAnnotativeEntityEed(dwg, ent);
 }
 
@@ -3458,7 +3534,7 @@ static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWrite
       tw.Apply(ent, *a);
   };
   if (ref.annotative && e0->parent != nullptr)
-    WriteAnnotativeEntityEed(tw.dwg, e0->parent);
+    WriteAnnotativeEntityEed(tw.dwg, e0->parent, &ref.annotativeVisibleScaleNames);
   if (ref.attributes.empty()) {
     apply(e0->parent, at);
     return;
@@ -4209,7 +4285,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         }
         apply(common->parent, at);
         if (r2018Write && an.annotative && common->parent != nullptr)
-          WriteAnnotativeEntityEed(dwg, common->parent);
+          WriteAnnotativeEntityEed(dwg, common->parent, &an.annotativeVisibleScaleNames);
         ++dimsWritten;
       }
       continue;
@@ -4252,7 +4328,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
           else
             e->is_not_annotative = 1;
           if (an.annotative && e->parent != nullptr)
-            WriteAnnotativeEntityEed(dwg, e->parent);
+            WriteAnnotativeEntityEed(dwg, e->parent, &an.annotativeVisibleScaleNames);
         }
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
@@ -4281,7 +4357,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       if (e != nullptr) {
         e->rotation = static_cast<double>(an.rotationRad);
         if (r2018Write && an.annotative && e->parent != nullptr)
-          WriteAnnotativeEntityEed(dwg, e->parent);
+          WriteAnnotativeEntityEed(dwg, e->parent, &an.annotativeVisibleScaleNames);
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
         apply(e->parent, at);
@@ -4393,7 +4469,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
                 wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
           mld->is_annotative = ml.annotative ? 1 : 0;
           if (r2018Write && ml.annotative && mld->parent != nullptr)
-            WriteAnnotativeEntityEed(dwg, mld->parent);
+            WriteAnnotativeEntityEed(dwg, mld->parent, &ml.annotativeVisibleScaleNames);
           apply(mld->parent, at);
           continue;
         }
@@ -4636,7 +4712,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       for (BITCODE_BL pi = 0; pi < hatch->num_paths; ++pi)
         hatch->paths[pi].flag = static_cast<BITCODE_BL>(hatch->paths[pi].flag | 0x200);
       if (hatch->parent != nullptr)
-        WriteAnnotativeEntityEed(dwg, hatch->parent);
+        WriteAnnotativeEntityEed(dwg, hatch->parent, &fr.annotativeVisibleScaleNames);
     }
     apply(hatch->parent, fi < st.cadFilledRegionAttrs.size() ? &st.cadFilledRegionAttrs[fi] : nullptr);
     ++nHatchOut;

@@ -418,6 +418,8 @@ struct CadBlockRef {
   std::string visState;
   /// When true, insert scale follows viewport scale on the sheet (issue #622).
   bool annotative = false;
+  /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
+  std::vector<std::string> annotativeVisibleScaleNames;
 };
 
 /// Scales an insert uniformly about its insertion point for annotative display through \p vp.

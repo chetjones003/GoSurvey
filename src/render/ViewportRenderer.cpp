@@ -2,6 +2,7 @@
 
 #include "CadLinetype.hpp"
 #include "CadSnap.hpp"
+#include "PaperSpace.hpp"
 #include "geom2d.hpp"
 
 #include <GL/glew.h>
@@ -2689,7 +2690,13 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
               ia = (*extended->blockRefAttrs)[bi];
             if (CadEntityIdHidden(hiddenIds, ia.id))
               continue;
-            CadBlockRef drawRef = (*extended->blockRefs)[bi];
+            const CadBlockRef& srcRef = (*extended->blockRefs)[bi];
+            if (!CadAnnotativeVisibleAtActiveScale(
+                    srcRef.annotative, srcRef.annotativeVisibleScaleNames, extended->annotationScales,
+                    extended->currentAnnotationScaleIndex, extended->annotativeViewport,
+                    extended->drawingModelUnitsPerPlottedInch))
+              continue;
+            CadBlockRef drawRef = srcRef;
             if (extended->drawingModelUnitsPerPlottedInch > 0.f)
               drawRef = CadBlockRefForAnnotativeDisplay(drawRef, extended->annotativeViewport,
                                                         extended->drawingModelUnitsPerPlottedInch,

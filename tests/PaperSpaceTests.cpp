@@ -704,3 +704,22 @@ TEST_CASE("Annotative hatch pattern scales with model annotation scale (issue #6
   const CadFilledRegion scaled = FilledRegionForAnnotativeDraw(fr, nullptr, 80.f, &scales, 0);
   REQUIRE(scaled.patternScale == Catch::Approx(1.f));
 }
+
+TEST_CASE("Annotative per-scale visibility gate (issue #622)", "[paperspace][issue622]") {
+  std::vector<CadAnnotationScale> scales(2);
+  scales[0].name = "1:10";
+  scales[0].paperUnits = 1.f;
+  scales[0].drawingUnits = 10.f;
+  scales[1].name = "1:50";
+  scales[1].paperUnits = 1.f;
+  scales[1].drawingUnits = 50.f;
+  std::vector<std::string> vis{"1:10"};
+  REQUIRE(CadAnnotativeVisibleAtActiveScale(true, vis, &scales, 0, nullptr, 40.f));
+  REQUIRE_FALSE(CadAnnotativeVisibleAtActiveScale(true, vis, &scales, 1, nullptr, 40.f));
+  REQUIRE(CadAnnotativeVisibleAtActiveScale(true, {}, &scales, 1, nullptr, 40.f));
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 50.f;
+  REQUIRE_FALSE(CadAnnotativeVisibleAtActiveScale(true, vis, &scales, -1, &vp, 40.f));
+  vp.scaleModelPerPaperIn = 10.f;
+  REQUIRE(CadAnnotativeVisibleAtActiveScale(true, vis, &scales, -1, &vp, 40.f));
+}
