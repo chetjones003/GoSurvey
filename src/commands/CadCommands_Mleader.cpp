@@ -19,10 +19,12 @@ void AppendPathPoint(CadMultileader* ml, float x, float y, float z) {
 void InitMultileaderLabelAtLanding(CadMultileader* ml, float landX, float landY, float landZ,
                                    AppCommandState& st) {
   const float mup = std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
-  const float h = std::max(st.defaultPlottedTextHeightInches, 0.01f) * mup;
+  const float plotH = std::max(st.activeMultileaderStyle.textSizeInches, 0.01f);
+  const float h = plotH * mup;
   CadAnnotation& a = ml->label;
   a.kind = CadAnnotation::Kind::Mtext;
-  a.plottedHeightInches = st.defaultPlottedTextHeightInches;
+  a.plottedHeightInches = plotH;
+  MultileaderStyles::BakeOntoMultileaderLabel(a, st.activeMultileaderStyle);
   a.insX = landX;
   a.insY = landY;
   a.insZ = landZ;
@@ -111,6 +113,12 @@ void FinishMleaderCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetMleaderDraft(st);
   CloseMtextRichEditorUi(st);
   log.push_back("MLEADER placed.");
+}
+
+void StartMleaderStyleCommand(AppCommandState& st, std::vector<std::string>& log) {
+  st.mleaderStyleDraft = st.activeMultileaderStyle;
+  st.showMleaderStyleDialog = true;
+  log.push_back("MSTY — multileader style editor opened.");
 }
 
 void StartMleaderCommand(AppCommandState& st, std::vector<std::string>& log) {

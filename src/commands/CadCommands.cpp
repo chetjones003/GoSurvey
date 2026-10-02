@@ -159,6 +159,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
+  doc.multileaderStyle       = cmd.activeMultileaderStyle;
   doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
@@ -272,6 +273,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.activeDimensionStyle       = doc.dimensionStyle;
+  cmd.activeMultileaderStyle     = doc.multileaderStyle;
+  cmd.mleaderStyleDraft          = doc.multileaderStyle;
   cmd.activeTextStyleName        = doc.activeTextStyleName;
   cmd.pdfAttachments             = doc.pdfAttachments;
   cmd.selection                  = doc.selection;
@@ -1598,6 +1601,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
   snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
+  snap.multileaderStyle     = st.activeMultileaderStyle;
   snap.pdfAttachments       = st.pdfAttachments;
   snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
@@ -1681,6 +1685,8 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.textStyles           = snap.textStyles;
   st.surfaceStyles        = snap.surfaceStyles;
   st.activeDimensionStyle = snap.dimensionStyle;
+  st.activeMultileaderStyle = snap.multileaderStyle;
+  st.mleaderStyleDraft = snap.multileaderStyle;
   st.pdfAttachments       = snap.pdfAttachments;
   st.paperLayouts         = snap.paperLayouts;
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
@@ -7147,6 +7153,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "dimsty" || primary == "dimstyle" || primary == "dsty") {
     StartDimStyleCommand(st, log);
+    return true;
+  }
+  if (primary == "msty" || primary == "mleaderstyle" || primary == "mlsty") {
+    StartMleaderStyleCommand(st, log);
     return true;
   }
   if (primary == "id") {

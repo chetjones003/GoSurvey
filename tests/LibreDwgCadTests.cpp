@@ -608,6 +608,17 @@ TEST_CASE("Block-content MULTILEADER import logs skip reason (REQ-367, issue #61
   CHECK(LogContains(log, "MULTILEADER(block content, issue #619)"));
 }
 
+TEST_CASE("MultileaderStyle persists through GsIo JSON (issue #619)", "[issue619][gsio]") {
+  AppCommandState src;
+  src.activeMultileaderStyle.textSizeInches = 0.14f;
+  src.activeMultileaderStyle.arrowSizeInches = 0.12f;
+  std::vector<std::string> log;
+  AppCommandState back;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
+  CHECK(back.activeMultileaderStyle.textSizeInches == Catch::Approx(0.14f));
+  CHECK(back.activeMultileaderStyle.arrowSizeInches == Catch::Approx(0.12f));
+}
+
 TEST_CASE("CadMultileader extra leader paths persist through GsIo (issue #619)",
           "[issue619][gsio]") {
   AppCommandState src;

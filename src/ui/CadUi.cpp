@@ -3103,7 +3103,9 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"RECT", RibbonIconKind::Rect},
     {"ARC", RibbonIconKind::Arc}, {"ELLIPSE", RibbonIconKind::Ellipse}, {"HATCH", RibbonIconKind::Hatch},
     {"TEXT", RibbonIconKind::Text},
-    {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear}, {"DIMANGULAR", RibbonIconKind::DimAngular}, {"DIMSTY", RibbonIconKind::DimStyle},
+    {"MTEXT", RibbonIconKind::Mtext}, {"MLEADER", RibbonIconKind::Mtext},
+    {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear}, {"DIMANGULAR", RibbonIconKind::DimAngular}, {"DIMSTY", RibbonIconKind::DimStyle},
+    {"MSTY", RibbonIconKind::DimStyle},
     {"ID", RibbonIconKind::Id}, {"INVERSE", RibbonIconKind::SurveyInverse}, {"MOVE", RibbonIconKind::Move},
     {"COPY", RibbonIconKind::Copy}, {"ROTATE", RibbonIconKind::Rotate}, {"SCALE", RibbonIconKind::Scale},
     {"MIRROR", RibbonIconKind::Mirror},
@@ -4595,13 +4597,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
         ImGui::TextUnformatted("Multileader style");
-        ImGui::BeginDisabled();
-        ImGui::Button("Standard  \xE2\x96\xBC##AnnMleaderStyle", ImVec2(annStyleW, 0.f));
-        ImGui::EndDisabled();
+        const std::string mstyLabel = cmd.activeMultileaderStyle.name + "  \xE2\x96\xBC";
+        if (ImGui::Button((mstyLabel + "##AnnMleaderStyle").c_str(), ImVec2(annStyleW, 0.f)))
+          StartMleaderStyleCommand(cmd, log);
         RibbonItemHelp(
-            "Standard \xe2\x80\x94 DWG export uses the Standard multileader style. "
-            "Custom multileader styles are not editable yet.",
-            ImGuiHoveredFlags_AllowWhenDisabled);
+            "Multileader style \xe2\x80\x94 text height and arrow size for new callouts.\nCommand bar: MSTY");
         ImGui::EndGroup();
         RibbonSectionEnd();
       }, "Leaders", RibbonIconKind::Mtext, "Multileader"});
@@ -21581,6 +21581,69 @@ void DrawDimStyleWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   if (ImGui::Button("Cancel", ImVec2(bw, 0))) {
     cmd.showDimStyleDialog = false;
   }
+  ImGui::End();
+}
+
+void DrawMleaderStyleWindow(AppCommandState& cmd, std::vector<std::string>* log) {
+  std::vector<std::string> discard;
+  if (!log)
+    log = &discard;
+  if (!cmd.showMleaderStyleDialog)
+    return;
+  ImGui::SetNextWindowSize(ImVec2(420, 320), ImGuiCond_FirstUseEver);
+  bool open = cmd.showMleaderStyleDialog;
+  if (!ImGui::Begin("Multileader Style", &open)) {
+    cmd.showMleaderStyleDialog = open;
+    ImGui::End();
+    return;
+  }
+  cmd.showMleaderStyleDialog = open;
+  MultileaderStyle& s = cmd.mleaderStyleDraft;
+  ImGui::SeparatorText("Leader");
+  ImGui::DragFloat("Arrow size (in)", &s.arrowSizeInches, 0.005f, 0.02f, 1.0f, "%.3f");
+  if (s.arrowSizeInches < 0.01f)
+    s.arrowSizeInches = 0.01f;
+  ImGui::DragFloat("Landing gap (in)", &s.landingGapInches, 0.005f, 0.0f, 1.0f, "%.3f");
+  if (s.landingGapInches < 0.0f)
+    s.landingGapInches = 0.0f;
+  ImGui::SeparatorText("Text");
+  ImGui::DragFloat("Text size (in)", &s.textSizeInches, 0.005f, 0.02f, 1.0f, "%.3f");
+  if (s.textSizeInches < 0.01f)
+    s.textSizeInches = 0.01f;
+  {
+    const char* fonts[] = {"(default)", "Arial", "Times New Roman", "Courier New", "romans.shx", "simplex.shx"};
+    std::string cur = s.textFont.empty() ? "(default)" : s.textFont;
+    if (ImGui::BeginCombo("Font", cur.c_str())) {
+      for (auto f : fonts) {
+        std::string val = (std::string(f) == "(default)") ? "" : f;
+        const bool sel = (s.textFont == val);
+        if (ImGui::Selectable(f, sel))
+          s.textFont = val;
+      }
+      ImGui::EndCombo();
+    }
+  }
+  ImGui::TextDisabled("DWG export still writes the Standard MLEADERSTYLE table entry.");
+  ImGui::Separator();
+  const float bw = 90.f;
+  auto applyStyle = [&]() {
+    PushUndoSnapshot(cmd, "MSTY");
+    cmd.activeMultileaderStyle = s;
+    for (CadMultileader& ml : cmd.cadMultileaders)
+      MultileaderStyles::BakeOntoMultileaderLabel(ml.label, cmd.activeMultileaderStyle);
+    BumpCadGpuCache(cmd);
+    log->push_back("MSTY — style applied.");
+  };
+  if (ImGui::Button("OK", ImVec2(bw, 0))) {
+    applyStyle();
+    cmd.showMleaderStyleDialog = false;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Apply", ImVec2(bw, 0)))
+    applyStyle();
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(bw, 0)))
+    cmd.showMleaderStyleDialog = false;
   ImGui::End();
 }
 
