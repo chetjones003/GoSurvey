@@ -858,6 +858,10 @@ struct CadExtendedGeometryInput {
   const std::vector<CadBlockDefinition>* blockDefs = nullptr;
   const std::vector<CadBlockRef>* blockRefs = nullptr;
   const std::vector<EntityAttributes>* blockRefAttrs = nullptr;
+  /// Issue #622: model-tab GL block inserts scale about the insertion point when a layout viewport is
+  /// current (same rule as the paper-space overlay). Null viewport or non-positive MUP = no scaling.
+  const Viewport* annotativeViewport = nullptr;
+  float drawingModelUnitsPerPlottedInch = 0.f;
 };
 
 /// True when a CSR chain store (polylines, feature lines) holds at least one entity.

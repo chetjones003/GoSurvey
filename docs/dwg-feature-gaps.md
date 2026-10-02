@@ -43,7 +43,7 @@ Some group B items are also **new GoSurvey features** (fields, dynamic blocks, m
 | #619 | Multileaders and leaders | R2007 (target R2010+) | **yes** — REQ-367 shipped on `beta` (#619 closed) | MULTILEADER stable; hand-built export |
 | #620 | Transparency | R2010 | no | fields exist; blocked by #600 |
 | #621 | Point clouds saved as a link to the scan file | R2013 | no (GoSurvey has clouds) | unstable; AutoCAD attaches only `.rcp`/`.rcs` |
-| #622 | Annotative scaling | R2007 (target R2010+) | **yes**, SPEC GAP — mleader/TEXT/MTEXT/dims + hatch DWG flag + block/hatch domain (#657–#659); SCALE list still open | SCALE stable, context data unstable |
+| #622 | Annotative scaling | R2007 (target R2010+) | **yes**, SPEC GAP — mleader/TEXT/MTEXT/dims + hatch/block + layout VP + model GL blocks (#657–#661); SCALE list still open | SCALE stable, context data unstable |
 | #623 | Newer GEODATA layout (local grid vs projected) | R2010 | no | stable |
 | #624 | Visual styles, materials, lights | R2007 (target R2010+) | **yes**, SPEC GAP | VISUALSTYLE stable |
 
