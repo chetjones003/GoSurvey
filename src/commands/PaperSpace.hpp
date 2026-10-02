@@ -160,6 +160,24 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   return vp->safeScale();
 }
 
+[[nodiscard]] inline float AnnotativeDisplayScaleFactor(const Viewport* vp, float drawingModelUnitsPerPlottedInch) {
+  if (vp == nullptr || drawingModelUnitsPerPlottedInch <= 0.f)
+    return 1.f;
+  return vp->safeScale() / drawingModelUnitsPerPlottedInch;
+}
+
+/// Copy of \p fr with patternScale adjusted for annotative display through \p vp (issue #622).
+[[nodiscard]] inline CadFilledRegion FilledRegionForAnnotativeDraw(const CadFilledRegion& fr, const Viewport* vp,
+                                                                    float drawingModelUnitsPerPlottedInch) {
+  CadFilledRegion out = fr;
+  if (!fr.annotative || vp == nullptr)
+    return out;
+  const float factor = AnnotativeDisplayScaleFactor(vp, drawingModelUnitsPerPlottedInch);
+  if (factor > 0.f)
+    out.patternScale = fr.patternScale * factor;
+  return out;
+}
+
 /// Height on the sheet (paper inches) of \p a when it is plotted through \p vp.
 /// Plain MTEXT is \c plottedHeightInches (REQ-050 constant plotted height). TEXT, dimensions, and
 /// survey-label MTEXT convert model height through the viewport scale, matching the on-screen overlay.

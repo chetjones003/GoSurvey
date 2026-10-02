@@ -1251,6 +1251,8 @@ struct CadFilledRegion {
   std::string patternName;
   float patternAngleDeg = 0.f;   ///< Extra rotation added to the pattern's base direction(s).
   float patternScale = 1.f;      ///< Multiplies the line spacing (larger = sparser).
+  /// When true, pattern spacing follows viewport scale (issue #622).
+  bool annotative = false;
   /// True when this region is a solid fill (no line pattern).
   bool isSolid() const { return patternName.empty() || patternName == "SOLID"; }
   /// Vertex count of loop \p k.

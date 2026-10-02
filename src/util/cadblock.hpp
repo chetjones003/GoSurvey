@@ -412,7 +412,20 @@ struct CadBlockRef {
   std::vector<CadBlockAttrValue> attributes;
   std::vector<CadBlockParameter> paramState;
   std::string visState;
+  /// When true, insert scale follows viewport scale on the sheet (issue #622).
+  bool annotative = false;
 };
+
+/// Scales an insert uniformly about its insertion point for annotative display through \p vp.
+[[nodiscard]] inline CadBlockRef CadBlockRefForAnnotativeViewport(const CadBlockRef& ref, float displayScaleFactor) {
+  if (displayScaleFactor <= 0.f || std::fabs(displayScaleFactor - 1.f) < 1.e-6f)
+    return ref;
+  CadBlockRef out = ref;
+  out.xf.sx *= displayScaleFactor;
+  out.xf.sy *= displayScaleFactor;
+  out.xf.sz *= displayScaleFactor;
+  return out;
+}
 
 struct CadBlockWorldSeg {
   float x0 = 0.f, y0 = 0.f, z0 = 0.f;

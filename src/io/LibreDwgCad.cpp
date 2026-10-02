@@ -1183,6 +1183,14 @@ bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATC
     region.patternAngleDeg = static_cast<float>(h->angle * (180.0 / kPi));
     region.patternScale = h->scale_spacing > 0.0 ? static_cast<float>(h->scale_spacing) : 1.f;
   }
+  if (dwg->header.version >= R_2018 && h->paths != nullptr) {
+    for (BITCODE_BL pi = 0; pi < h->num_paths; ++pi) {
+      if ((h->paths[pi].flag & 0x200) != 0) {
+        region.annotative = true;
+        break;
+      }
+    }
+  }
 
   st.cadFilledRegions.push_back(std::move(region));
   st.cadFilledRegionAttrs.push_back(at);
@@ -3814,6 +3822,10 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       hatch->angle = static_cast<double>(fr.patternAngleDeg) * (kPi / 180.0);
       hatch->scale_spacing = fr.patternScale > 0.f ? static_cast<double>(fr.patternScale) : 1.0;
       hatch->is_solid_fill = 0;
+    }
+    if (r2018Write && fr.annotative && hatch->paths != nullptr) {
+      for (BITCODE_BL pi = 0; pi < hatch->num_paths; ++pi)
+        hatch->paths[pi].flag = static_cast<BITCODE_BL>(hatch->paths[pi].flag | 0x200);
     }
     apply(hatch->parent, fi < st.cadFilledRegionAttrs.size() ? &st.cadFilledRegionAttrs[fi] : nullptr);
     ++nHatchOut;
