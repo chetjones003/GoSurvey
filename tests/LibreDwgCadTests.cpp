@@ -803,6 +803,40 @@ TEST_CASE("Named block INSERT re-imports as cadBlockRef without trailer (issue #
   CHECK(in.userLinesFlat.empty());
 }
 
+TEST_CASE("Paper-space named INSERT round-trips as paperBlockRef (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-paper-block-insert");
+  const auto p = (dir.path / "paper-blk.dwg").string();
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "TITLE_BLK";
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(std::move(def));
+  PaperLayout sheet;
+  sheet.name = "Sheet1";
+  CadBlockRef ref;
+  ref.defName = "TITLE_BLK";
+  ref.annotative = true;
+  ref.xf.x = 1.25f;
+  ref.xf.y = 0.5f;
+  ref.xf.rotZ = 0.25f;
+  sheet.paperBlockRefs.push_back(std::move(ref));
+  sheet.paperBlockRefAttrs.push_back(EntityAttributes{});
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.paperLayouts.size() == 1);
+  REQUIRE(in.paperLayouts[0].paperBlockRefs.size() == 1);
+  CHECK(in.paperLayouts[0].paperBlockRefs[0].defName == "TITLE_BLK");
+  CHECK(in.paperLayouts[0].paperBlockRefs[0].xf.x == Catch::Approx(1.25f));
+  CHECK(in.paperLayouts[0].paperBlockRefs[0].xf.y == Catch::Approx(0.5f));
+  CHECK(in.paperLayouts[0].paperBlockRefs[0].xf.rotZ == Catch::Approx(0.25f).margin(0.001f));
+  CHECK(in.paperLayouts[0].paperBlockRefs[0].annotative);
+  CHECK(in.cadBlockRefs.empty());
+}
+
 TEST_CASE("GsIo syncs missing currentAnnotationScaleIndex on load (issue #622)", "[issue622][gsio]") {
   AppCommandState src;
   src.modelUnitsPerPlottedInch = 25.f;

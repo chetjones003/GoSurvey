@@ -1121,10 +1121,13 @@ void CollectInsertAttributes(const Dwg_Data* dwg, const Dwg_Entity_INSERT* ins,
   }
 }
 
-bool TryImportInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
-                               const EntityAttributes& at, std::unordered_map<std::string, int>* skipHist,
-                               int* degenerateExtrusions) {
-  if (depth != 0 || ent == nullptr || ent->tio.INSERT == nullptr)
+static bool ImportNamedInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent,
+                                        const EntityAttributes& at,
+                                        std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
+                                        double originSubtractX, double originSubtractY,
+                                        std::vector<CadBlockRef>& outRefs,
+                                        std::vector<EntityAttributes>& outAttrs) {
+  if (ent == nullptr || ent->tio.INSERT == nullptr)
     return false;
   const Dwg_Entity_INSERT* ins = ent->tio.INSERT;
   if (ins->block_header == nullptr)
@@ -1142,8 +1145,8 @@ bool TryImportInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_En
 
   CadBlockRef ref;
   ref.defName = name;
-  ref.xf.x = static_cast<float>(ins->ins_pt.x - st.worldDocumentOriginX);
-  ref.xf.y = static_cast<float>(ins->ins_pt.y - st.worldDocumentOriginY);
+  ref.xf.x = static_cast<float>(ins->ins_pt.x - originSubtractX);
+  ref.xf.y = static_cast<float>(ins->ins_pt.y - originSubtractY);
   ref.xf.z = static_cast<float>(ins->ins_pt.z);
   ref.xf.sx = ins->scale.x != 0.0 ? static_cast<float>(ins->scale.x) : 1.f;
   ref.xf.sy = ins->scale.y != 0.0 ? static_cast<float>(ins->scale.y) : 1.f;
@@ -1151,9 +1154,18 @@ bool TryImportInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_En
   ref.xf.rotZ = static_cast<float>(ins->rotation);
   ref.annotative = GosurveyEedMarksAnnotativeBlockInsert(ent);
   CollectInsertAttributes(dwg, ins, ref.attributes);
-  st.cadBlockRefs.push_back(std::move(ref));
-  st.cadBlockRefAttrs.push_back(at);
+  outRefs.push_back(std::move(ref));
+  outAttrs.push_back(at);
   return true;
+}
+
+bool TryImportInsertAsBlockRef(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
+                               const EntityAttributes& at, std::unordered_map<std::string, int>* skipHist,
+                               int* degenerateExtrusions) {
+  if (depth != 0)
+    return false;
+  return ImportNamedInsertAsBlockRef(st, dwg, ent, at, skipHist, degenerateExtrusions, st.worldDocumentOriginX,
+                                     st.worldDocumentOriginY, st.cadBlockRefs, st.cadBlockRefAttrs);
 }
 
 void ExplodeInsert(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* ent, int depth,
@@ -3000,6 +3012,58 @@ static Dwg_Object_BLOCK_HEADER* EnsurePaperSpaceBlockHeader(Dwg_Data* dwg, size_
   return bh;
 }
 
+static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWriter& tw, const AppCommandState& st,
+                                        const CadBlockRef& ref, const EntityAttributes* at, double insOriginAddX,
+                                        double insOriginAddY) {
+  if (hdr == nullptr || tw.dwg == nullptr || ref.defName.empty())
+    return;
+  if (dwg_find_tablehandle(tw.dwg, ref.defName.c_str(), "BLOCK") == nullptr)
+    return;
+  const int defIdx = CadBlockFindDef(st.blockDefs, ref.defName);
+  const CadBlockDefinition* def =
+      defIdx >= 0 ? &st.blockDefs[static_cast<size_t>(defIdx)] : nullptr;
+
+  dwg_point_3d ins{};
+  ins.x = static_cast<double>(ref.xf.x) + insOriginAddX;
+  ins.y = static_cast<double>(ref.xf.y) + insOriginAddY;
+  ins.z = static_cast<double>(ref.xf.z);
+  Dwg_Entity_INSERT* e0 =
+      dwg_add_INSERT(hdr, &ins, ref.defName.c_str(), static_cast<double>(ref.xf.sx),
+                     static_cast<double>(ref.xf.sy), static_cast<double>(ref.xf.sz),
+                     static_cast<double>(ref.xf.rotZ));
+  if (e0 == nullptr)
+    return;
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  if (ref.annotative && e0->parent != nullptr)
+    AppendGosurveyStringEed(tw.dwg, e0->parent, {kGosurveyAnnotativeBlockEed});
+  if (ref.attributes.empty()) {
+    apply(e0->parent, at);
+    return;
+  }
+  const BITCODE_H defRef = dwg_find_tablehandle(tw.dwg, ref.defName.c_str(), "BLOCK");
+  for (const CadBlockAttrValue& av : ref.attributes) {
+    if (av.tag.empty())
+      continue;
+    const CadBlockAttrDef* ad = nullptr;
+    if (def != nullptr) {
+      for (const CadBlockAttrDef& d : def->attrDefs)
+        if (d.tag == av.tag) {
+          ad = &d;
+          break;
+        }
+    }
+    dwg_point_3d ap = ins;
+    const double h = ad != nullptr ? std::max(static_cast<double>(ad->height), 1e-3) : 0.125;
+    dwg_add_ATTRIB(e0, h, 0, &ap, av.tag.c_str(), av.value.c_str());
+  }
+  if (defRef != nullptr)
+    e0->block_header = dwg_add_handleref(tw.dwg, 5, defRef->absolute_ref, nullptr);
+  apply(e0->parent, at);
+}
+
 static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADER* ps, TableWriter& tw,
                                     const AppCommandState& st) {
   if (ps == nullptr)
@@ -3060,6 +3124,8 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
       apply(vp->parent, &layerOnly);
     }
   }
+  for (size_t i = 0; i < L.paperBlockRefs.size(); ++i)
+    WriteBlockRefInsertToHeader(ps, tw, st, L.paperBlockRefs[i], AttrAt(L.paperBlockRefAttrs, i), 0.0, 0.0);
 }
 
 static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, TableWriter& tw,
@@ -3068,6 +3134,8 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
     return;
   for (const PaperLayout& L : st.paperLayouts) {
     for (const EntityAttributes& a : L.paperLineAttrs)
+      tw.EnsureLtype(a.linetype);
+    for (const EntityAttributes& a : L.paperBlockRefAttrs)
       tw.EnsureLtype(a.linetype);
     (void)L;
   }
@@ -3098,7 +3166,7 @@ static Dwg_Object* LayoutPaperBlockObject(Dwg_Data* dwg, const Dwg_Object_LAYOUT
 }
 
 static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj,
-                              std::unordered_map<std::string, int>* skipHist) {
+                              std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions) {
   if (obj == nullptr || obj->supertype != DWG_SUPERTYPE_ENTITY || obj->tio.entity == nullptr)
     return;
   Dwg_Object_Entity* ent = obj->tio.entity;
@@ -3134,13 +3202,18 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     L.paperLineAttrs.push_back(at);
     return;
   }
+  if (ty == DWG_TYPE_INSERT && ent->tio.INSERT != nullptr) {
+    if (ImportNamedInsertAsBlockRef(st, dwg, ent, at, skipHist, degenerateExtrusions, 0.0, 0.0, L.paperBlockRefs,
+                                    L.paperBlockRefAttrs))
+      return;
+  }
   if (ty == DWG_TYPE_BLOCK || ty == DWG_TYPE_ENDBLK)
     return;
   NoteSkip(skipHist, "paper-space entity (unsupported type)");
 }
 
 static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
-                                      std::unordered_map<std::string, int>* skipHist) {
+                                      std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions) {
   st.paperLayouts.clear();
   struct LayoutRow {
     int tab = 0;
@@ -3172,7 +3245,7 @@ static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
     if (blk != nullptr) {
       for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr;
            e = get_next_owned_entity(blk, e))
-        ImportPaperEntity(pl, st, dwg, e, skipHist);
+        ImportPaperEntity(pl, st, dwg, e, skipHist, degenerateExtrusions);
     }
     st.paperLayouts.push_back(std::move(pl));
   }
@@ -3865,44 +3938,10 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   }
   for (size_t i = 0; i < st.cadBlockRefs.size(); ++i) {
     const CadBlockRef& ref = st.cadBlockRefs[i];
-    auto defIt = blockDefByName.find(ref.defName);
-    if (defIt == blockDefByName.end())
+    if (blockDefByName.find(ref.defName) == blockDefByName.end())
       continue;  // definition missing or failed to write; REQ-201 covered by the #614 loss summary
-    dwg_point_3d ins{};
-    world(ref.xf.x, ref.xf.y, static_cast<double>(ref.xf.z), &ins);
-    // GoSurvey's block transform is a single Z rotation (CadBlockXform has no X/Y rotation, nor
-    // does dwg_add_INSERT take one); non-uniform XYZ scale carries through directly.
-    Dwg_Entity_INSERT* e0 = dwg_add_INSERT(hdr, &ins, ref.defName.c_str(), static_cast<double>(ref.xf.sx),
-                                           static_cast<double>(ref.xf.sy), static_cast<double>(ref.xf.sz),
-                                           static_cast<double>(ref.xf.rotZ));
-    if (e0 == nullptr)
-      continue;
-    const EntityAttributes* at = AttrAt(st.cadBlockRefAttrs, i);
-    if (ref.annotative && e0->parent != nullptr)
-      AppendGosurveyStringEed(dwg, e0->parent, {kGosurveyAnnotativeBlockEed});
-    if (ref.attributes.empty()) {
-      apply(e0->parent, at);
-      continue;
-    }
-    const BITCODE_H defRef = dwg_find_tablehandle(dwg, ref.defName.c_str(), "BLOCK");
-    for (const CadBlockAttrValue& av : ref.attributes) {
-      if (av.tag.empty())
-        continue;
-      const CadBlockAttrDef* ad = nullptr;
-      for (const CadBlockAttrDef& d : defIt->second->attrDefs)
-        if (d.tag == av.tag) { ad = &d; break; }
-      dwg_point_3d ap = ins;
-      const double h = ad != nullptr ? std::max(static_cast<double>(ad->height), 1e-3) : 0.125;
-      dwg_add_ATTRIB(e0, h, 0, &ap, av.tag.c_str(), av.value.c_str());
-    }
-    // dwg_add_ATTRIB (LibreDWG 0.13.4) overwrites Dwg_Entity_INSERT::block_header — DXF 2, the
-    // referenced block — with the INSERT's OWNER block handle (dwg_entity_owner) on every call,
-    // instead of leaving it alone (same issue #605/D-2026-09-30-f finding as the survey-point
-    // block below). Restored here or an INSERT with attributes silently ends up "referencing" the
-    // space it lives in rather than its real definition.
-    if (defRef != nullptr)
-      e0->block_header = dwg_add_handleref(dwg, 5, defRef->absolute_ref, nullptr);
-    apply(e0->parent, at);
+    WriteBlockRefInsertToHeader(hdr, tw, st, ref, AttrAt(st.cadBlockRefAttrs, i), st.worldDocumentOriginX,
+                                st.worldDocumentOriginY);
   }
   // REQ-057 / D-2026-10-01-a, issue #603: survey feature lines, written as POLYLINE_3D (a real Z
   // per vertex — these almost always have varying elevation, which is the whole point of a
@@ -4524,7 +4563,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
     }
   }
 
-  ImportPaperLayoutsFromDwg(st, &dwg, &skipHist);
+  ImportPaperLayoutsFromDwg(st, &dwg, &skipHist, &degenerateExtrusions);
   ImportAnnotationScales(st, &dwg);
   SyncCurrentAnnotationScaleIndex(st);
 
