@@ -183,7 +183,8 @@ target_include_directories(libredwg PUBLIC "${libredwg_SOURCE_DIR}/include")
 # Vendored: silence its warnings so ours stay visible (as for glew below).
 if(MSVC)
   target_compile_options(libredwg PRIVATE /w /utf-8)
-  target_compile_definitions(libredwg PRIVATE _CRT_NONSTDC_NO_WARNINGS _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(libredwg PRIVATE _CRT_NONSTDC_NO_WARNINGS _CRT_SECURE_NO_WARNINGS
+    DEBUG_CLASSES)
 else()
   target_compile_options(libredwg PRIVATE -w)
 endif()

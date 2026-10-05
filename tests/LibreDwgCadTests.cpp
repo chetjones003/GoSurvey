@@ -4344,6 +4344,30 @@ TEST_CASE("DWG import applies MATERIAL diffuse to POLYLINE_PFACE host (REQ-372, 
   REQUIRE(st.cadMeshes.size() == 1);
 }
 
+TEST_CASE("R2018 export/import round-trips MATERIAL diffuse on mesh (REQ-372, issue #624)",
+          "[dwg][libredwg][issue624][req372][export]") {
+  ScratchDir dir("mat-export-mesh");
+  const auto p = (dir.path / "mat-mesh.dwg").string();
+  AppCommandState st;
+  st.cadMeshes.push_back(MakeUnitSquareMesh());
+  EntityAttributes meshAt;
+  meshAt.materialDiffuseOverride = true;
+  meshAt.materialDiffuseR = 0.2f;
+  meshAt.materialDiffuseG = 0.4f;
+  meshAt.materialDiffuseB = 0.9f;
+  st.cadMeshAttrs.push_back(meshAt);
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  CHECK(CountDwgFixedType(p.c_str(), DWG_TYPE_MATERIAL) >= 1);
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.cadMeshes.size() == 1);
+  REQUIRE(in.cadMeshAttrs.size() == 1);
+  CHECK(in.cadMeshAttrs[0].materialDiffuseOverride);
+  CHECK(in.cadMeshAttrs[0].materialDiffuseG == Catch::Approx(0.4f).margin(0.03f));
+}
+
 TEST_CASE("R2018 DWG round-trips model-space visual style on VPORT *Active (REQ-371, issue #624)",
           "[dwg][libredwg][issue624][req371][model]") {
   ScratchDir dir("dwg-model-vs");
