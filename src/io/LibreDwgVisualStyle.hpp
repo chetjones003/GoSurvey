@@ -17,3 +17,7 @@ void DwgExportVisualStyleContextInit(DwgExportVisualStyleContext* ctx, bool r200
 /// Attach VISUALSTYLE handle to exported paper VIEWPORT (`Dwg_Entity_VIEWPORT*`).
 void DwgExportSetPaperViewportVisualStyle(_dwg_struct* dwg, DwgExportVisualStyleContext* ctx,
                                           void* viewportEntity, VisualStyle style);
+
+/// Model-space VPORT table `*Active` visual style (R2007+).
+[[nodiscard]] VisualStyle DwgImportModelVisualStyle(_dwg_struct* dwg);
+void DwgExportSetModelVisualStyle(_dwg_struct* dwg, DwgExportVisualStyleContext* ctx, VisualStyle style);

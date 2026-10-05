@@ -229,3 +229,40 @@ void DwgExportSetPaperViewportVisualStyle(_dwg_struct* dwgIn, DwgExportVisualSty
   if (h != nullptr)
     ent->visualstyle = h;
 }
+
+Dwg_Object_VPORT* ActiveModelVportRecord(Dwg_Data* dwg) {
+  assert(dwg != nullptr);
+  BITCODE_H vportRef = dwg_find_tablehandle(dwg, "*Active", "VPORT");
+  if (vportRef == nullptr || vportRef->absolute_ref == 0)
+    return nullptr;
+  Dwg_Object* obj = dwg_resolve_handle_silent(dwg, vportRef->absolute_ref);
+  if (obj == nullptr || obj->fixedtype != DWG_TYPE_VPORT || obj->tio.object == nullptr ||
+      obj->tio.object->tio.VPORT == nullptr)
+    return nullptr;
+  return obj->tio.object->tio.VPORT;
+}
+
+VisualStyle DwgImportModelVisualStyle(_dwg_struct* dwgIn) {
+  assert(dwgIn != nullptr);
+  auto* dwg = reinterpret_cast<Dwg_Data*>(dwgIn);
+  Dwg_Object_VPORT* vport = ActiveModelVportRecord(dwg);
+  if (vport == nullptr)
+    return VisualStyle::Wireframe2D;
+  Dwg_Object* vsObj = VisualStyleObjectFromHandle(dwg, vport->visualstyle);
+  if (vsObj == nullptr)
+    return VisualStyle::Wireframe2D;
+  return StyleFromVisualStyleObject(vsObj->tio.object->tio.VISUALSTYLE);
+}
+
+void DwgExportSetModelVisualStyle(_dwg_struct* dwgIn, DwgExportVisualStyleContext* ctx, VisualStyle style) {
+  assert(dwgIn != nullptr && ctx != nullptr);
+  if (!ctx->enabled)
+    return;
+  auto* dwg = reinterpret_cast<Dwg_Data*>(dwgIn);
+  BITCODE_H h = EnsureVisualStyleHandle(dwg, style);
+  if (h == nullptr)
+    return;
+  if (Dwg_Object_VPORT* vport = ActiveModelVportRecord(dwg))
+    vport->visualstyle = h;
+  dwg->header_vars.DRAGVS = dwg_add_handleref(dwg, 5, h->absolute_ref, nullptr);
+}
