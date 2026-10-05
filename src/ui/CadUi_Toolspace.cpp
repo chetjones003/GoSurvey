@@ -1350,6 +1350,11 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   const char* comboLabel = (cmd.toolspaceTab == AppCommandState::ToolspaceTab::Settings)
                                ? "Active Drawing Settings View"
                                : "Active Drawing View";
+  // REQ-374 clause 8: the Toolspace header names the active drawing's project (nothing when standalone).
+  if (const std::string projName = ProjectNameForTab(cmd, cmd.activeDrawingIdx); !projName.empty()) {
+    ImGui::TextColored(kTsAccent, "Project: %s%s", projName.c_str(),
+                       ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx) ? "  (read-only)" : "");
+  }
   ImGui::SetNextItemWidth(-1.f);
   if (ImGui::BeginCombo("##ts_view", comboLabel)) {
     if (ImGui::Selectable("Active Drawing View",

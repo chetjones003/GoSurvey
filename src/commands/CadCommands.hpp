@@ -26,6 +26,7 @@
 #include "util/pointcloudcache.hpp"
 #include "DwgIo.hpp"
 #include "PdfAttach.hpp"
+#include "Project.hpp"  // gsproj::Project / LockInfo, for AppCommandState::openProjects (REQ-374)
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
 #include "AngleFormat.hpp"
@@ -4895,7 +4896,30 @@ struct AppCommandState {
   struct DrawingTab {
     std::string  name;
     uint32_t     uid = 0;  ///< Stable per-tab ID used in ImGui label suffix to prevent ID collisions.
+    uint32_t     projectUid = 0;  ///< REQ-374: ProjectSession::uid this drawing belongs to; 0 = standalone.
   };
+  /// REQ-374 / REQ-382 (#696 P1): one entry per open project. Each drawing tab belongs to exactly one
+  /// session (or none). A session with no tabs left is closed and its lock released (ServiceProjects).
+  struct ProjectSession {
+    uint32_t         uid = 0;
+    gsproj::Project  project;
+    gsproj::LockInfo me;           ///< who we are in the lock file
+    bool             readOnly = false;  ///< opened read-only: nothing in the project may be written
+  };
+  std::vector<ProjectSession> openProjects;
+  uint32_t                    nextProjectUid = 1u;
+  /// A question the user must answer before a project open can continue (damaged marker, or the lock
+  /// is held). Drawn as a modal by DrawProjectDialogs; the continuation re-enters the open path.
+  struct ProjectPrompt {
+    enum class Kind { None, Damaged, Locked } kind = Kind::None;
+    std::string      gsprojPath;
+    std::string      dwgPath;      ///< the drawing being opened, or empty for Open Project
+    std::string      message;      ///< why the marker is damaged
+    gsproj::LockInfo holder;       ///< Locked: who holds it
+    bool             stale = false;
+    bool             openRequested = false;  ///< ask ImGui to open the modal next frame
+  } projectPrompt;
+  bool showNewProjectDialog = false;  ///< REQ-374 clause 1; File > New Project / Start screen
   /// REQ-308 / D-2026-08-30-a: drawingTabs[0] is the **Start screen** — a non-closable, pinned-first
   /// sentinel that backs no document. documents[0]/viewportRenderers[0] exist for index alignment
   /// but are never meaningful. Real drawings start at FirstDrawingTabIndex().

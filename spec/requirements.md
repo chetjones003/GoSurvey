@@ -11219,8 +11219,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   writes; stale takeover warns; same-process second tab is not a conflict; pack excludes the lock.
 - Owner-layer: IO, Domain, UI
 - Status: accepted
-- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). How "stale" is decided is
-  fixed in P1 and recorded here.
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P1: **stale** =
+  the holder is on this machine and its process no longer exists, or the lock file is unreadable; a
+  lock held from another machine is never judged stale (the user may still take it over after the
+  warning).
 
 ### REQ-383 — Warnings before destructive or cross-project actions on shared data (GitHub issue #696, P9)
 
