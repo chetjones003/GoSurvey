@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -107,6 +108,10 @@ bool IsPackOmittedName(const gsproj::Project& p, const std::string& fileName);
 struct CopyLinksResult {
   size_t                   converted = 0;
   std::vector<std::string> failed;  ///< "<path>: why", REQ-201
+  /// (old absolute path, new absolute path in the project), UTF-8, for every converted link. The caller
+  /// repoints open drawings with it: a drawing still holding the old path would record the link again
+  /// the next time it is saved.
+  std::vector<std::pair<std::string, std::string>> moved;
 };
 
 /// "Copy links into the project": each present "local-link" file is copied into its role's folder and

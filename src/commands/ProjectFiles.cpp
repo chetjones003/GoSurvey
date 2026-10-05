@@ -65,6 +65,63 @@ json PlacementOf(const AppCommandState& st, const PdfAttachment& a) {
   return j;
 }
 
+/// A copy of \p pc that reads from \p file (and its `.gscloud` cache beside it).
+std::shared_ptr<const CadPointCloud> PointCloudAt(const CadPointCloud& pc, const std::string& file,
+                                                  std::vector<std::string>& log) {
+  auto moved = std::make_shared<CadPointCloud>(pc);
+  moved->sourcePath = file;
+  moved->cloudCachePath = file + ".gscloud";
+  moved->octree = {};
+  const pointcloudcache::OpenResult opened = pointcloudcache::Open(moved->cloudCachePath);
+  if (opened.ok)
+    moved->octree = opened.cache.octree;
+  else
+    log.push_back("Point cloud " + fs::u8path(file).filename().u8string() + " - .gscloud cache unavailable (" +
+                  opened.errorMessage + "); showing preview sample only until re-imported.");
+  return moved;
+}
+
+bool SamePath(const std::string& a, const std::string& b) {
+  if (a == b)
+    return true;
+  std::error_code ec;
+  return fs::equivalent(fs::u8path(a), fs::u8path(b), ec);
+}
+
+/// "Copy links into the project" moved files: every open drawing of project \p uid that still holds
+/// the old path takes the copy. Without this the next save of such a drawing records the old path as a
+/// link again and the file never travels (issue #724). The active tab's data lives in \p st, the others'
+/// in their document snapshots. Nothing is marked as changed: the project already records the copy, and a
+/// drawing saved later writes the new path.
+void RepointOpenDrawings(AppCommandState& st, std::uint32_t uid,
+                         const std::vector<std::pair<std::string, std::string>>& moved,
+                         std::vector<std::string>& log) {
+  const auto newPathFor = [&](const std::string& old) -> const std::string* {
+    for (const auto& m : moved)
+      if (SamePath(m.first, old))
+        return &m.second;
+    return nullptr;
+  };
+  const auto repoint = [&](std::vector<PdfAttachment>& pdfs,
+                           std::vector<std::shared_ptr<const CadPointCloud>>& clouds) {
+    for (PdfAttachment& a : pdfs)
+      if (const std::string* np = newPathFor(a.filePath))
+        a.filePath = *np;
+    for (auto& pc : clouds)
+      if (pc && !pc->sourcePath.empty())
+        if (const std::string* np = newPathFor(pc->sourcePath))
+          pc = PointCloudAt(*pc, *np, log);
+  };
+  for (size_t i = 1; i < st.drawingTabs.size(); ++i) {
+    if (st.drawingTabs[i].projectUid != uid)
+      continue;
+    if (static_cast<int>(i) == st.activeDrawingIdx)
+      repoint(st.pdfAttachments, st.cadPointClouds);
+    else if (i < st.documents.size())
+      repoint(st.documents[i].pdfAttachments, st.documents[i].cadPointClouds);
+  }
+}
+
 }  // namespace
 
 bool RequestProjectAttach(AppCommandState& st, Kind kind, const std::string& path, std::vector<std::string>&) {
@@ -167,17 +224,7 @@ void ApplyProjectFilesOnOpen(AppCommandState& st, std::uint32_t projectUid, cons
     }
     if (found == pc->sourcePath)
       continue;
-    auto moved = std::make_shared<CadPointCloud>(*pc);
-    moved->sourcePath = found;
-    moved->cloudCachePath = found + ".gscloud";
-    moved->octree = {};
-    const pointcloudcache::OpenResult opened = pointcloudcache::Open(moved->cloudCachePath);
-    if (opened.ok)
-      moved->octree = opened.cache.octree;
-    else
-      log.push_back("Point cloud " + fs::u8path(found).filename().u8string() + " - .gscloud cache unavailable (" +
-                    opened.errorMessage + "); showing preview sample only until re-imported.");
-    st.cadPointClouds[i] = std::move(moved);
+    st.cadPointClouds[i] = PointCloudAt(*pc, found, log);
   }
 
   // PDFs: put each recorded placement back.
@@ -245,6 +292,7 @@ bool CopyProjectLinksIn(AppCommandState& st, std::uint32_t projectUid, std::vect
     log.push_back("Project Health - the project file could not be saved: " + err);
     return false;
   }
+  RepointOpenDrawings(st, projectUid, r.moved, log);
   log.push_back("Project Health - copied " + std::to_string(r.converted) + " linked file(s) into the project.");
   return true;
 }
