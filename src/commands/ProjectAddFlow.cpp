@@ -199,6 +199,9 @@ bool CommitAddDrawing(AppCommandState& st, AddDrawingPlan& plan, double now, Add
     log.push_back(std::move(l));
   if (!wrote) {
     log.push_back("Add Drawing to Project - the copy could not be written; nothing was added.");
+    // The private copy was already rearranged for writing, so this plan cannot be previewed again:
+    // the dialog closes on an error and the user starts over.
+    plan.error = "Add Drawing to Project - the copy could not be written; nothing was added.";
     return false;
   }
   *s->points = std::move(next);

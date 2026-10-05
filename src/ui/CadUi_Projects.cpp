@@ -628,6 +628,8 @@ void DrawAddDrawingModal(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.addDrawingPlan.reset();
       ImGui::CloseCurrentPopup();
       OpenDrawingInNewTabAs(cmd, log, dest.c_str(), {false, uid});
+    } else if (!plan.error.empty()) {
+      close = true;  // the failed write spoiled the private copy; start over
     }
   }
   ImGui::EndDisabled();
