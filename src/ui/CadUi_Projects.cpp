@@ -123,7 +123,10 @@ std::uint32_t EnsureProjectOpen(AppCommandState& cmd, std::vector<std::string>& 
     pr.kind = AppCommandState::ProjectPrompt::Kind::Locked;
     pr.gsprojPath = AbsUtf8(s.project.file);
     pr.dwgPath = dwgPath;
-    gsproj::TryAcquire(s.project.file, s.me, &pr.holder);  // fills the holder; cannot win again
+    // Re-reads the holder for the prompt. If the lock vanished in the meantime we just won it, so hand
+    // it back and let the user's next click go through the normal path.
+    if (gsproj::TryAcquire(s.project.file, s.me, &pr.holder) == gsproj::LockResult::Acquired)
+      gsproj::Release(s.project.file, s.me);
     pr.stale = gsproj::IsStale(pr.holder, s.me, PidAlive);
     pr.openRequested = true;
     return 0;
