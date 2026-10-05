@@ -2,24 +2,22 @@
 
 What GoSurvey's DWG **save** and **open** still leave out for **AutoCAD, Civil 3D and other programs** (the ordinary DWG stream — not the ADR-044 trailer GoSurvey reads on reopen).
 
-Tracking issue: **#601**. Evidence is from `beta` at **`b7503ca9`** (2026-10-02).
+Tracking issue: **#601**. Evidence is from `beta` at **`dfbcd13a`** (2026-10-05).
 
 ## The short version
 
 GoSurvey saves DWG as **R2000 by default** and can export **R2004 through R2018** (D-2026-10-01-f, #600 closed). It opens R13–R2018. When GoSurvey reopens its own DWG it also reads the private trailer, so a GoSurvey user often sees a full drawing. **Everyone else only sees the DWG file itself.**
 
-As of 2026-10-02, the large **Group A** backlog and most **Group B** format work from the original inventory (#602–#616, #619–#621, #623) are **shipped on `beta`**. The export dialog builds its loss list from the actual drawing (`ComputeDwgExportLosses` in `LibreDwgCad.cpp`, modal in `CadUi_Modals.cpp`, issue #614).
+As of 2026-10-05, the original **Group A** inventory and **Group B** features through annotative scaling, fields, and dynamic blocks (#602–#622, #617, #618) are **shipped on `beta`**. The export dialog builds its loss list from the actual drawing (`ComputeDwgExportLosses` in `LibreDwgCad.cpp`, modal in `CadUi_Modals.cpp`, issue #614).
 
 **Still tracked under #601:**
 
 | Issue | What is left |
 |---|---|
 | **#688** | AutoCAD annotation **context** objects — split from closed [#622](https://github.com/chetjones003/GoSurvey/issues/622); LibreDWG / SPEC GAP (see [#688](https://github.com/chetjones003/GoSurvey/issues/688)). |
-| **#617** | Fields — **REQ-368** (inline codes + evaluation + R2004+ native `FIELD`/`FIELDLIST`). |
-| **#618** | Dynamic blocks — **REQ-369** (increment 1: `*U` INSERT fidelity; full round trip open). |
 | **#624** | Visual styles, materials, lights — **new feature**, SPEC GAP. |
 
-Close **#601** only when those four are resolved or explicitly moved off this tracker.
+Close **#601** only when those two are resolved or explicitly moved off this tracker.
 
 ## Shipped on `beta` (child issues closed)
 
@@ -52,6 +50,8 @@ Close **#601** only when those four are resolved or explicitly moved off this tr
 | #620 | Transparency | R2010+ export |
 | #621 | Point cloud external references | R2013+ |
 | #623 | GEODATA layout (local vs projected) | REQ-362 |
+| #617 | Live fields on TEXT/MTEXT + DWG `FIELD`/`FIELDLIST` | REQ-368 — PR **#677** |
+| #618 | Dynamic blocks MVP (`*U` INSERT, linear/flip) | REQ-369 — PR **#678**; optional follow-ups in REQ-369 |
 | #622 | Annotative scaling (GoSurvey-native + EED) | Closed 2026-10-05 — PRs **#657–#687**; context parity → **#688** |
 
 Some export paths still **degrade** rather than drop (for example 3D polylines with bulge, multileader extra branches on R2000/R2004). Those appear in the dynamic loss list when they apply.
@@ -64,24 +64,24 @@ GoSurvey-native annotative scaling shipped in **#622** (closed): CANNOSCALE UI, 
 
 **#688** tracks remaining AutoCAD parity: per-object **annotation context** blobs (`*_ANNOTATION_CONTEXT_DATA`, `CONTEXTDATAMANAGER`), native DIMENSION annotative fields where LibreDWG lacks them, and export-loss honesty when context cannot be preserved. **REQ-110** remains **proposed**; context work needs an accepted REQ or a recorded SPEC decision.
 
-### #617 — Fields
-
-REQ-368 delivers live TEXT/MTEXT fields (area, length, survey point coords, filename/date/layout) with
-inline `%<…>%` wires, viewport evaluation, and R2004+ DWG export of hand-built `FIELD` / `FIELDLIST`
-objects (`LibreDwgField.cpp`). Civil sheet-set / view fields remain out of scope.
-
-### #618 — Dynamic blocks
-
-Parameters, actions, visibility states, DWG round trip. **REQ-369** (accepted): `*U` fidelity, foreign
-display, GoSurvey linear/stretch (and flip) export/import, grip re-evaluation, GoSurvey↔DWG round trip for
-linear distance, and R2004+ `#614` loss lines for visibility/unsupported/extra-linear/conflicting INSERTs
-and stretch actions without entity handles (`LibreDwgDynamicBlock.cpp`). Still degraded or manual: visibility
-lookup parameters, per-block multi-linear chains, AutoCAD stretch without entity association handles, and
-Save → AutoCAD → Save → GoSurvey for flip/visibility/lookup.
-
 ### #624 — Visual styles, materials, lights
 
 3D presentation data beyond REQ-064's current scope. **SPEC GAP**.
+
+## Shipped detail (#617, #618)
+
+### #617 — Fields (closed, REQ-368)
+
+Live TEXT/MTEXT fields (area, length, survey point coords, filename/date/layout) with inline `%<…>%`
+wires, viewport evaluation, and R2004+ DWG export of hand-built `FIELD` / `FIELDLIST` objects
+(`LibreDwgField.cpp`, PR **#677**). Civil sheet-set / view fields remain out of scope.
+
+### #618 — Dynamic blocks (closed MVP, REQ-369)
+
+`*U` INSERT fidelity, foreign display via baked `*U` geometry, GoSurvey linear/stretch (and flip)
+export/import, grip re-evaluation, GoSurvey↔DWG linear parameter round trip, and R2004+ `#614` export
+loss lines (`LibreDwgDynamicBlock.cpp`, PR **#678**). Optional follow-ups: visibility/lookup encoders,
+stretch entity association handles, and manual Save → AutoCAD → Save → GoSurvey for flip/visibility/lookup.
 
 ## Why exports target R2018
 
@@ -96,4 +96,4 @@ DWG versions cluster on a few containers: R2000; R2004/R2010/R2013/R2018 share o
 
 ## Historical recommended order
 
-The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete except** the four rows in the table at the top of this document. New DWG fidelity work should target **#688**, **#617**, **#618**, and **#624** after their REQs exist.
+The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete except** **#688** and **#624** in the table at the top of this document. New DWG fidelity work should target those issues after their REQs exist (**#688** needs an accepted REQ or SPEC decision; **#624** is still a SPEC GAP).
