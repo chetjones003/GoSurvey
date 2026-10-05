@@ -2,7 +2,7 @@
 
 What GoSurvey's DWG **save** and **open** still leave out for **AutoCAD, Civil 3D and other programs** (the ordinary DWG stream — not the ADR-044 trailer GoSurvey reads on reopen).
 
-Tracking issue: **#601** (closed 2026-10-05). Evidence is from `beta` at **`81211cde`** (2026-10-05).
+Tracking issue: **#601** (closed 2026-10-05). Active follow-up: **#715** (LIGHTLIST). Evidence is from `beta` at **`f452018c`** (2026-10-05).
 
 ## The short version
 
@@ -10,7 +10,7 @@ GoSurvey saves DWG as **R2000 by default** and can export **R2004 through R2018*
 
 As of 2026-10-05, the original **Group A** inventory and **Group B** features through annotative scaling, fields, and dynamic blocks (#602–#622, #617, #618) are **shipped on `beta`**. The export dialog builds its loss list from the actual drawing (`ComputeDwgExportLosses` in `LibreDwgCad.cpp`, modal in `CadUi_Modals.cpp`, issue #614).
 
-**Open tracker issues:** none — **#601** and **#624** closed 2026-10-05 after REQ-385 (PR **#713**). Optional follow-ups (**LIGHTLIST**, sun study, GoSurvey lighting UI) stay listed under **Remaining gaps** below; file a new issue if one is scheduled.
+**Open DWG fidelity issues:** **#715** (**LIGHTLIST** / light registry). **#601** and **#624** closed 2026-10-05 after REQ-385 (PR **#713**). Sun study and GoSurvey lighting UI remain deferrals in **Remaining gaps** until filed.
 
 ## Shipped on `beta` (child issues closed)
 
@@ -70,7 +70,9 @@ and **3DSOLID** entity-material encode limits (`LibreDwgMaterial.cpp`, PRs **#69
 **REQ-385 (shipped):** import capture + R2010+ export for **LIGHT** entities and **SUN**
 (`LibreDwgLights.cpp`); `.gs` fields `dwgImportedLights` / `dwgImportedSun`; `#614` loss below R2010.
 
-**Still deferred under #624:** **LIGHTLIST**, **SUNSTUDY**, photometric/web lights, GoSurvey-native lighting.
+**#715 — LIGHTLIST (open):** AutoCAD light registry / **LIGHTLIST** + **DICTIONARY_LIGHTLIST** — SPEC GAP (propose REQ before implementation). See GitHub **#715**.
+
+**Still deferred (no issue yet):** **SUNSTUDY**, photometric/web lights beyond REQ-385, GoSurvey-native lighting UI.
 
 ## Shipped detail (#617, #618)
 
@@ -100,4 +102,4 @@ DWG versions cluster on a few containers: R2000; R2004/R2010/R2013/R2018 share o
 
 ## Historical recommended order
 
-The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete** for tracked MVP slices; **#624** LIGHTLIST/sun-study deferrals remain optional follow-ups. New DWG fidelity work should target newly filed gaps — **REQ-371**, **REQ-372**, and **REQ-385** shipped on `beta`.
+The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete** for tracked MVP slices. New DWG fidelity work: **#715** (LIGHTLIST) first among open items; **REQ-371**, **REQ-372**, and **REQ-385** shipped on `beta`.
