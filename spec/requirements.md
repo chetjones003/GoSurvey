@@ -10935,6 +10935,319 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-10-05 — initial (issue #624 materials slice; D-2026-10-05-c). 2026-10-05 —
   increment 1 shipped (import diffuse display + REQ-201 log).
 
+### REQ-373 — Project format: a folder with a `<Name>.gsproj` marker, standard subfolders, relative file references (GitHub issue #696, P1)
+
+- Purpose: issue #696 — GoSurvey works on single drawings only. A **project** is one job's folder
+  (DWGs, points, point clouds, PDFs, turnovers, settings) that can be emailed and opened elsewhere
+  with nothing missing. This REQ fixes what a project *is* on disk.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decisions 1, 2, 8, 9 of the issue), ADR-065.
+- Depends on: REQ-175 / ADR-044 (DWG document), REQ-201 (honest failure).
+- Statement:
+  1. **Marker.** A project is a folder containing exactly one `<Name>.gsproj` file (e.g.
+     `MyJob.gsproj`). A folder without one is not a project. More than one `.gsproj` in a folder is a
+     damaged project (REQ-374 clause 5).
+  2. **Standard subfolders.** Creating a project creates `Drawings/`, `Points/`, `PointClouds/`,
+     `PDFs/`, `Turnovers/` and `Settings/`. Subfolders inside them are allowed. The layout is
+     recorded in the `.gsproj` (name → relative folder) so it can become configurable later; this
+     REQ does not make it configurable.
+  3. **`.gsproj` content.** UTF-8 JSON, versioned (`formatVersion`), holding: a **project ID** (GUID,
+     created once, never changed, carried by packs); the project name; the folder layout; the
+     project settings (REQ-375); the **tracked items** list (clause 4). Unknown fields are preserved
+     on save (additive evolution, REQ-002 spirit).
+  4. **Tracked items.** Every non-drawing file the project owns or links (point clouds, PDFs,
+     turnovers, point files) is an entry with: a **project-relative location**, a **kind**, and its
+     **associations** (e.g. the drawing a point cloud or PDF is attached to). Drawings are tracked
+     too, so their attachments can be listed per drawing.
+  5. **Relative paths only.** Every stored location is relative to the project folder
+     (`PointClouds/site.e57`), never absolute. A path that escapes the project folder (`..`, a drive
+     letter, a UNC path) is rejected on load with a REQ-201 message.
+  6. **Reference kind.** Each reference has `kind` = `in-project` or `local-link`. A `local-link`
+     entry stores an absolute path (the only place one is allowed), and is flagged "will not travel
+     with the project" (REQ-379). The field is a string so a future `remote` kind can be added
+     without a format change; a reader meeting an unknown kind keeps the entry, shows it as
+     unavailable, and does not fail the load.
+  7. **Write safety.** The `.gsproj` is written to a temporary file in the same folder and then
+     renamed over the old one, so a crash never leaves a half-written project file.
+- Acceptance:
+  - `[req373]` tests: create-project makes the marker and six folders; a `.gsproj` round-trips
+    (including an unknown field and an unknown reference kind); `..`/absolute/UNC in-project paths
+    are rejected; two `.gsproj` in one folder reports damage; an interrupted write leaves the
+    previous file intact.
+- Owner-layer: IO (project file reader/writer), Domain (project model)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-374 — Create, open and join projects; several projects open at once (GitHub issue #696, P1)
+
+- Purpose: how a user gets into a project and how a drawing knows which project it belongs to.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decisions 6, 7, 12).
+- Depends on: REQ-373, REQ-308 (Start tab), REQ-055 (drawing tabs), REQ-357 (Drawing Settings).
+- Statement:
+  1. **New Project.** A dialog collects name, location (parent folder), **coordinate system** and
+     **linear units** (REQ-375), and creates the REQ-373 layout. An optional "start from an existing
+     drawing" runs the REQ-378 flow. A new drawing created while a project is active starts empty
+     with the project defaults and skips REQ-378.
+  2. **Open Project.** Choosing a `.gsproj` (or its folder) opens the project. Opening a project does
+     not open every drawing; the Project Files list (REQ-379) shows them.
+  3. **Start screen.** The Start tab (REQ-308) shows **New Project** and **Open Project** buttons and a
+     **Recent Projects** list (name, folder path, last-opened date, thumbnail) **above** the existing
+     Recent Drawings. Each Recent Drawings entry carries its project's name as a tag, or
+     "Standalone". A missing project folder is offered for removal from the list (REQ-201).
+  4. **Auto-detect and join.** On opening a DWG, GoSurvey looks in the drawing's folder, then each
+     parent folder up to the drive root, and uses the **first** `.gsproj` found. The DWG joins that
+     project **only if it lies inside the project folder**. If none is found the drawing is
+     **standalone** and behaves exactly as before this feature (its points stay in the DWG).
+  5. **Damaged project.** If the found `.gsproj` is damaged or unreadable, GoSurvey says so and offers
+     **Open standalone** or **Cancel**. It never silently drops project data.
+  6. **Notice.** A short notice confirms a join ("Opened in project MyJob").
+  7. **Several projects.** Several projects may be open at once. **Each drawing tab belongs to exactly
+     one project** (or none). Opening a drawing whose project is already open adds a tab to it.
+  8. **Name is always visible.** Every drawing tab and the Toolspace header show the active project's
+     name; standalone drawings show nothing.
+- Acceptance:
+  - `[req374]` tests: join resolution (first marker walking up; drawing outside the folder does not
+    join; none → standalone; damaged → prompt result, never silent); two projects open with tabs
+    attributed correctly; recent-projects list persistence and missing-folder handling;
+    DevShell/GUI check of the Start tab layout.
+  - A drawing opened outside any project is unaffected by this feature.
+- Owner-layer: UI (Start tab, dialogs, tabs), Domain (project registry, join resolution), IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-375 — Project settings: enforced coordinate system and units, inheritable defaults, per-drawing overrides (GitHub issue #696, P2)
+
+- Purpose: drawings in one job must agree on where they are and in what units; everything else is a
+  sensible default a single drawing may override.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 5).
+- Depends on: REQ-373, REQ-357..REQ-362 (Drawing Settings, zone, transformation), REQ-022 (drawing unit).
+- Statement:
+  1. **Project Settings window** (command `PROJECTSETTINGS` and a Project menu item, in the
+     Drawing Settings dialog style) edits the settings stored in the `.gsproj`.
+  2. **Enforced.** The **coordinate system** (zone) and **linear units** are set by the project and
+     **cannot be overridden** by a project drawing; Drawing Settings shows them read-only with an
+     "enforced by project" indicator.
+  3. **Inherited.** Every other drawing setting the project exposes is a **project default**. A
+     drawing may override it; Drawing Settings marks each setting **inherited** or **overridden**
+     and offers **Reset to project value**. Overrides are saved in the drawing (ADR-044 trailer).
+     A change to a project default reaches every drawing that has not overridden it.
+  4. **Standalone** drawings are unchanged: all settings belong to the drawing (REQ-357).
+  5. **Mismatch.** Adding or importing content whose coordinate system or units differ from the
+     project's is governed by REQ-378 clause 5 and REQ-383 clause 3.
+- Acceptance:
+  - `[req375]` tests: a project drawing cannot change zone/units; an inherited setting follows a
+    project change; an overridden one does not; reset restores inheritance; standalone is unchanged.
+- Owner-layer: Domain (settings resolution), UI (windows), IO (`.gsproj`, trailer)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-376 — Project-wide survey point database shared by every drawing in the project (GitHub issue #696, P3)
+
+- Purpose: EG, FG and other drawings of one job share one set of points; edits in one are seen by all.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 3), ADR-065.
+- Depends on: REQ-373, REQ-023 (survey points), REQ-067 (point groups), REQ-382 (locking).
+- Statement:
+  1. **One database per project.** A project owns one survey point database (storage: ADR-065). A
+     drawing in a project reads and writes points **through** it; the points are not stored in the
+     DWG.
+  2. **Automatic updates.** Add, edit and delete of a point in any project drawing update the
+     database at once. A change made in one open tab is visible **live** in every other open tab of
+     the same project.
+  3. **Source drawing.** Each point records the drawing that created it (the **source drawing**).
+  4. **Number identity.** A point number is unique in the database. Adding a point whose number
+     already exists prompts **overwrite / renumber / cancel** (REQ-383).
+  5. **Standalone fallback.** A drawing with no project keeps its points inside the DWG exactly as
+     today (REQ-023, ADR-044).
+  6. **Read-only.** A read-only opener (REQ-382) can view points but every command that would change
+     the database is refused with a REQ-201 message.
+  7. **Durability.** The database is saved with the project (not only on drawing save) and written
+     atomically; unsaved database changes are listed on close (REQ-383).
+- Acceptance:
+  - `[req376]` tests: two open project drawings stay in sync on add/edit/delete; source drawing is
+    recorded; duplicate-number prompt outcomes; standalone drawing keeps points in the DWG;
+    read-only refuses writes; atomic-write interruption keeps the previous database.
+  - Issue-level: EG and FG share one database and stay in sync.
+- Owner-layer: Domain (point database), IO (database file), UI (prompts)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-377 — Per-drawing point visibility rules and the Survey Database toolspace section (GitHub issue #696, P4)
+
+- Purpose: two drawings share every point yet each shows only the subset that belongs on it.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 4).
+- Depends on: REQ-376, REQ-067 (point groups), REQ-175 / ADR-044.
+- Statement:
+  1. **Rules.** Each project drawing has **visibility rules**, saved in the drawing (ADR-044 trailer).
+     A rule can combine **point number range**, **description** (wildcard, e.g. `EG*`), **elevation**
+     range, **point group**, and **source drawing**. A point is shown when the rules match it.
+  2. **Default for new points.** A point created in a drawing is visible in that drawing by default
+     and is shown in other drawings only if their rules match.
+  3. **Toolspace.** A **Survey Database** dropdown sits alongside Surfaces and Feature Lines. It lists
+     the project's points and edits the current drawing's rules with filters for point number,
+     description, elevation, point group and source drawing.
+  4. **Hide here only.** A point can be hidden in the current drawing without deleting it from the
+     database (REQ-383 clause 4).
+  5. Hidden points are not drawn, snapped to, selected, or used by surfaces built in that drawing.
+- Acceptance:
+  - `[req377]` tests: each filter, combined filters, source-drawing filter, default visibility of a
+    new point, hide-in-this-drawing-only, rules persisted through DWG save/load; a GUI check of the
+    toolspace section.
+  - Issue-level: EG and FG show different subsets of one database.
+- Owner-layer: Domain (rules), UI (toolspace), IO (trailer)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-378 — Add Drawing to Project: preview, per-conflict choices, copy-in (GitHub issue #696, P5)
+
+- Purpose: bring an existing drawing into a project safely.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 13).
+- Depends on: REQ-374, REQ-375, REQ-376, REQ-377.
+- Statement:
+  1. The user picks a drawing. **Before anything changes** GoSurvey shows a summary (e.g. "47 points
+     found. 12 numbers already exist (3 identical, 9 differ).").
+  2. For each conflict the user chooses **skip**, **overwrite** or **renumber**.
+  3. After confirmation GoSurvey **copies the DWG into `Drawings/`** (the original is untouched), adds
+     its points to the database tagged with that drawing as **source drawing**, and sets the drawing's
+     visibility rules to show exactly those points.
+  4. Settings that differ from the project become **overrides** (REQ-375).
+  5. A **coordinate-system or unit mismatch blocks** the add, with a **convert** option or cancel.
+  6. Cancelling at any point leaves the project and the original unchanged.
+- Acceptance:
+  - `[req378]` tests: summary counts (new / identical / differing); each conflict choice; copy-in
+    leaves the original byte-identical; rules equal the added set; overrides captured; mismatch
+    blocks; cancel changes nothing.
+- Owner-layer: Domain, UI, IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-379 — Tracked files, attach (copy or link), Project Files list and Project Health (GitHub issue #696, P6)
+
+- Purpose: a recipient of an emailed project gets every drawing with its attachments and no missing
+  files.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decisions 8, 9, 10).
+- Depends on: REQ-373, REQ-171/172 (point clouds), PDF underlays.
+- Statement:
+  1. **Attach.** Attaching an external file (point cloud, PDF, point file) to a project drawing
+     **copies it into the project** by default, into the matching standard subfolder, after a
+     **size prompt**. **Link** is allowed but is flagged "will not travel with the project".
+  2. **Associations.** Point clouds and PDFs are recorded as associated with the drawing they are
+     attached to, so opening the drawing finds them via the `.gsproj`.
+  3. **Project Files section** in the Toolspace lists tracked items by folder, with a link badge on
+     `local-link` entries.
+  4. **Project Health** reports: linked (non-travelling) files, missing files, unsaved drawings, and
+     offers **copy links into the project**. It runs before **Pack Project** (REQ-380) and before a
+     **turnover** (REQ-381) is created.
+- Acceptance:
+  - `[req379]` tests: copy default; size prompt threshold; link flagged; relative path recorded;
+    Health lists each problem class; "copy links in" converts a link to `in-project`.
+- Owner-layer: Domain, UI, IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-380 — Pack Project (`.gspack`) and Open Packed Project (GitHub issue #696, P7)
+
+- Purpose: send a whole project by email or share.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 10).
+- Depends on: REQ-373, REQ-379, REQ-382.
+- Statement:
+  1. **Pack Project** runs Project Health (REQ-379) first, then writes a single `.gspack` file
+     containing the project folder (marker, subfolders, tracked items) and its **project ID**.
+  2. **Size warning** shows the total size before writing and offers to **exclude point clouds**
+     (recorded in the pack, shown as unavailable on open, not as errors).
+  3. **Open Packed Project** extracts to a folder the user picks and opens it; every drawing opens
+     with its attachments loaded and no missing-file errors.
+  4. A pack with a damaged or unsafe entry (path escaping the folder) is rejected with a REQ-201
+     message and extracts nothing.
+- Acceptance:
+  - `[req380]` tests: pack → open round trip on a sample project including a point cloud and PDF;
+    exclusion; unsafe-path pack rejected; project ID preserved.
+  - Issue-level: packed, emailed, opened elsewhere loads everything with no missing-file errors.
+- Owner-layer: IO, UI
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). The archive container is chosen
+  in P7 under the dependency rule (REQ-300).
+
+### REQ-381 — Turnover packages (GitHub issue #696, P8)
+
+- Purpose: record what was delivered, when, and to whom.
+- Priority: may
+- Type: functional
+- Decision: D-2026-10-05-d (phase P8).
+- Depends on: REQ-379, REQ-380.
+- Statement: Creating a turnover runs Project Health, then writes a **turnover record** in
+  `Turnovers/` with its **contents** (the tracked items included), **date** and **recipient**, built
+  on tracked items. The Project Files section lists turnovers.
+- Acceptance: `[req381]` tests: a turnover record lists exactly the chosen items, date and
+  recipient; creation is refused until Health problems are acknowledged.
+- Owner-layer: Domain, UI, IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). Detail beyond the stated
+  contents/date/recipient will be raised as a SPEC GAP at P8 rather than guessed.
+
+### REQ-382 — One editor at a time: project lock file and read-only mode (GitHub issue #696, P1)
+
+- Purpose: stop two people (or two copies) silently overwriting one point database.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 11).
+- Depends on: REQ-373.
+- Statement:
+  1. The **first opener** of a project gets editing rights, recorded in a small **lock file** in the
+     project folder (who, machine, since when).
+  2. Anyone else is told who holds it and offered **Open read-only** or **Cancel**. Read-only can
+     view and print but cannot change the database or project files.
+  3. A **stale lock** (e.g. after a crash) can be taken over with an explicit warning.
+  4. The lock is released when the project closes; a lock file is never included in a pack.
+  5. The same process opening the project again (another tab) shares the lock; it is not a conflict.
+- Acceptance: `[req382]` tests: first opener locks; second is offered read-only; read-only refuses
+  writes; stale takeover warns; same-process second tab is not a conflict; pack excludes the lock.
+- Owner-layer: IO, Domain, UI
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). How "stale" is decided is
+  fixed in P1 and recorded here.
+
+### REQ-383 — Warnings before destructive or cross-project actions on shared data (GitHub issue #696, P9)
+
+- Purpose: no destructive action on shared data happens without a warning that states its effect on
+  other drawings.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d ("Footgun protection").
+- Depends on: REQ-374, REQ-376, REQ-377.
+- Statement:
+  1. **Cross-project paste.** Copy/paste between drawings in different projects warns that pasted
+     points go into the destination project's database; number collisions are renumbered or prompted.
+  2. **Number conflict.** Adding a point whose number exists prompts overwrite / renumber / cancel.
+  3. **Mismatch.** Import or paste from a different coordinate system or units warns. A
+     **coordinate-system** mismatch is **blocking**, with **convert** or **cancel**; a units
+     mismatch warns.
+  4. **Delete.** Deleting a point from a drawing deletes it from the database, so other drawings lose
+     it. GoSurvey says so first, **with the number of other drawings affected**, and offers **hide in
+     this drawing only**.
+  5. **Live edit.** A point edited in one drawing updates live in other open tabs of the project.
+  6. **Unsaved close.** Closing with unsaved database changes lists the affected projects and drawings.
+  Each warning ships with the feature that creates the risk (P3/P5); P9 makes them one consistent pass.
+- Acceptance: `[req383]` tests: each warning fires with the right counts; "hide only" leaves the
+  database untouched; coordinate-system mismatch blocks; unsaved-close lists projects/drawings.
+- Owner-layer: UI, Domain
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
