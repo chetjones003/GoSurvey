@@ -698,9 +698,13 @@ if(GOSURVEY_DEVELOPER_SHELL)
   target_sources(GoSurvey PRIVATE
     src/devshell/DevShell.cpp
     src/devshell/DevShellTests.cpp
+    src/devshell/DevShellProjectTests.cpp
   )
   target_compile_definitions(GoSurvey PRIVATE GOSURVEY_DEVELOPER_SHELL)
   target_link_libraries(GoSurvey PRIVATE imgui_core_testengine)
+  # The domain sources are compiled into this target, so what gosurvey_domain links PUBLIC (miniz,
+  # for ProjectPack / ProjectTurnover - REQ-380/381) has to be linked here too.
+  target_link_libraries(GoSurvey PRIVATE miniz)
 else()
   target_link_libraries(GoSurvey PRIVATE gosurvey_domain)
 endif()

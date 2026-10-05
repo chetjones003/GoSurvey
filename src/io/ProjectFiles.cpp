@@ -350,6 +350,7 @@ CopyLinksResult CopyLinksIn(gsproj::Project* p) {
       r.failed.push_back(it.path + ": " + err);
       continue;
     }
+    r.moved.emplace_back(it.path, plan.dest.u8string());
     // The copy may already be tracked (an identical earlier copy was reused): fold into that item.
     gsproj::TrackedItem* same = FindByPath(p, plan.destRel);
     if (same != nullptr && same != &it) {

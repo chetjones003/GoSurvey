@@ -344,3 +344,53 @@ TEST_CASE("req379 one file open in two tabs is listed once under unsaved drawing
   st.documents[3].savedRevision = 1;
   CHECK(ProjectHealthFor(st, 7).unsaved == std::vector<std::string>{"FG", "HG"});
 }
+
+TEST_CASE("req379 Copy Links In repoints open drawings so the next save does not record the link again",
+          "[req379][issue724]") {
+  TempDir root("issue724");
+  AppCommandState st;
+  AppCommandState::ProjectSession& s = OpenProjectTab(st, root.path);
+  st.drawingTabs.resize(3);  // tab 2 is a second drawing of the project, held in its document snapshot
+  st.drawingTabs[2].projectUid = 7;
+  st.documents.resize(3);
+  std::vector<std::string> log;
+
+  const fs::path outPdf = root.path / "outside" / "plan.pdf";
+  const fs::path outCloud = root.path / "outside" / "site.e57";
+  WriteText(outPdf, "%PDF-1.4 stand-in");
+  WriteText(outCloud, "scan");
+  PdfAttachment pdf;
+  pdf.filePath = outPdf.u8string();
+  st.pdfAttachments.push_back(pdf);  // active tab
+  st.cadPointClouds.push_back(Cloud(outCloud.u8string()));
+  st.documents[2].pdfAttachments.push_back(pdf);  // the other tab holds the same link
+  st.documents[2].cadPointClouds.push_back(Cloud(outCloud.u8string()));
+
+  const std::string egDwg = (s.project.Folder() / "Drawings" / "EG.dwg").u8string();
+  SyncProjectFilesOnSave(st, 1, egDwg, log);
+  REQUIRE(ProjectHealthFor(st, 7).linked.size() == 2);
+
+  size_t converted = 0;
+  REQUIRE(CopyProjectLinksIn(st, 7, log, &converted));
+  CHECK(converted == 2);
+
+  const std::string pdfCopy = (s.project.Folder() / "PDFs" / "plan.pdf").u8string();
+  const std::string cloudCopy = (s.project.Folder() / "PointClouds" / "site.e57").u8string();
+  REQUIRE(st.pdfAttachments.size() == 1);
+  CHECK(st.pdfAttachments[0].filePath == pdfCopy);  // active tab
+  REQUIRE(st.cadPointClouds.size() == 1);
+  CHECK(st.cadPointClouds[0]->sourcePath == cloudCopy);
+  REQUIRE(st.documents[2].pdfAttachments.size() == 1);
+  CHECK(st.documents[2].pdfAttachments[0].filePath == pdfCopy);  // the tab that is not showing
+  REQUIRE(st.documents[2].cadPointClouds.size() == 1);
+  CHECK(st.documents[2].cadPointClouds[0]->sourcePath == cloudCopy);
+
+  // The point of the fix: saving afterwards must not turn the copies back into links.
+  SyncProjectFilesOnSave(st, 1, egDwg, log);
+  CHECK(ProjectHealthFor(st, 7).linked.empty());
+  gsproj::Project onDisk;
+  std::string err;
+  REQUIRE(gsproj::Load(s.project.file, &onDisk, &err));
+  for (const gsproj::TrackedItem& it : onDisk.items)
+    CHECK(it.kind != gsproj::kKindLocalLink);
+}

@@ -221,6 +221,37 @@ TEST_CASE("req383 a drawing that does not show the point is not counted as losin
   CHECK(st.openProjects[0].points->points.size() == 2);
 }
 
+TEST_CASE("req383 a point re-created here after hiding its number is not hidden again on rebuild",
+          "[req383][issue725]") {
+  TempDir d("unhide");
+  AppCommandState st;
+  Project(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+  ThreePointsSharedActiveFg(st, log, now);
+  projpts::AddId(&st.pointVisibility.hidden, 3);  // FG hides point 3
+  SyncProjectPoints(st, log, now += 0.016);
+  REQUIRE(st.surveyPoints.size() == 2);
+
+  // FG now deliberately creates its own point 3 and chooses Overwrite.
+  st.surveyPoints.push_back(Pt(3, 77, 77, 77, "OVR"));
+  SyncAnswering(st, log, now += 0.016, Answer::Proceed, Answer::Proceed);
+  REQUIRE(st.openProjects[0].points->points.size() == 3);
+  CHECK(st.openProjects[0].points->points[2].point.description == "OVR");
+  CHECK_FALSE(projpts::HasId(st.pointVisibility.hidden, 3));  // the earlier hide no longer applies
+
+  // What reopening does: the view is rebuilt from the database and the saved rules.
+  SwitchTo(st, 1);
+  SyncProjectPoints(st, log, now += 0.016);
+  SwitchTo(st, 2);
+  SyncProjectPoints(st, log, now += 0.016);
+  bool has3 = false;
+  for (const SurveyPoint& p : st.surveyPoints)
+    has3 |= p.id == 3 && p.description == "OVR";
+  CHECK(has3);
+  CHECK(st.surveyPoints.size() == 3);
+}
+
 TEST_CASE("req383 a number that already exists asks overwrite, renumber or cancel", "[req383]") {
   auto setup = [](AppCommandState& st, const fs::path& dir, std::vector<std::string>& log, double& now) {
     Project(st, dir);
