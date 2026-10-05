@@ -432,6 +432,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # REQ-373/374/382 (#696 P1) project file, join detection, lock file. Pure <filesystem>/json.
   src/io/Project.cpp
   src/io/ProjectPointDb.cpp
+  src/io/ProjectPointRules.cpp
   # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
   src/io/WhatsNewContent.cpp
   src/io/WikiContent.cpp
@@ -1143,6 +1144,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ProjectTests.cpp
     src/io/Project.cpp
     src/io/ProjectPointDb.cpp
+    src/io/ProjectPointRules.cpp
+    tests/ProjectPointRulesTests.cpp
     tests/ProjectPointDbTests.cpp
     tests/TelemetryPingTests.cpp
     tests/AuthPingTests.cpp

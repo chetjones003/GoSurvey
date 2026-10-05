@@ -35,3 +35,25 @@ inline bool ProjectOwnsActiveTabPoints(const AppCommandState& st) {
          st.drawingTabs[static_cast<size_t>(i)].projectUid != 0 &&
          st.drawingTabs[static_cast<size_t>(i)].pointsMode == AppCommandState::DrawingTab::PointsMode::Shared;
 }
+
+// ---- REQ-377 (issue #696 P4): per-drawing visibility rules -------------------------------------
+// The rules themselves are `st.pointVisibility` (projpts::Rules); SyncProjectPoints rebuilds the
+// tab's points whenever they change. The helpers below are what the Survey Database toolspace
+// section needs; all of them are no-ops / empty for a standalone drawing.
+
+/// The project database of the ACTIVE tab when that tab's points are shared with it, else null.
+projpts::Db* ActiveProjectDb(AppCommandState& st);
+
+struct ProjectPointCounts {
+  size_t total = 0;   ///< points in the project database
+  size_t shown = 0;   ///< of those, shown in the active drawing
+  size_t hidden = 0;  ///< and not shown here
+};
+ProjectPointCounts CountProjectPoints(AppCommandState& st);
+
+/// Distinct source drawings of the database's points, sorted (the Source drawing filter's choices).
+std::vector<std::string> ProjectPointSources(AppCommandState& st);
+
+/// REQ-377 clause 4: hides the selected points in the active drawing only; the database keeps them
+/// and other drawings are unaffected. Returns how many were hidden.
+int HideSelectedPointsHere(AppCommandState& st);

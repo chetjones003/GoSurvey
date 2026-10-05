@@ -2,6 +2,7 @@
 #include "AppIcon.hpp"
 #include "FontRegistry.hpp"
 #include "StringUtil.hpp"
+#include "ProjectPoints.hpp"
 #include "ToolspaceCatalog.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -425,6 +426,106 @@ void DrawPointGroupsFolderContext(AppCommandState& cmd, std::vector<std::string>
   EndTsContext();
 }
 
+// REQ-377 (#696 P4): the Survey Database section — which points of the project database this drawing
+// shows. Only a project drawing that shares the database has one. Every edit changes the drawing's
+// rules; SyncProjectPoints rebuilds the point view on the next frame.
+void DrawSurveyDatabaseFolder(AppCommandState& cmd, std::vector<std::string>* log) {
+  if (ActiveProjectDb(cmd) == nullptr)
+    return;
+  ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+  const bool open = TsTreeNode("##ts_surveydb", kFolder, "c3d_point", "Survey Database");
+  if (!open)
+    return;
+
+  projpts::Rules& r = cmd.pointVisibility;
+  bool changed = false;
+  const ProjectPointCounts n = CountProjectPoints(cmd);
+  ImGui::TextDisabled("%zu of %zu project points shown here", n.shown, n.total);
+  ImGui::TextDisabled("Filters combine: a point must match every one you fill in.");
+
+  ImGui::SetNextItemWidth(-1.f);
+  changed |= ImGui::InputTextWithHint("##sdb_ids", "Point numbers, e.g. 1-500, 1200", &r.idRanges);
+  std::vector<std::string> bad;
+  if (!r.idRanges.empty()) {
+    [[maybe_unused]] const auto parsed = ParseIdRanges(r.idRanges, &bad);
+    if (!bad.empty())
+      ImGui::TextColored(ImVec4(0.85f, 0.25f, 0.2f, 1.f), "Unreadable number range: %s", bad.front().c_str());
+  }
+  ImGui::SetNextItemWidth(-1.f);
+  changed |= ImGui::InputTextWithHint("##sdb_desc", "Description, e.g. EG*", &r.description);
+
+  changed |= ImGui::Checkbox("Elevation between##sdb_elev", &r.useElevation);
+  if (r.useElevation) {
+    ImGui::SetNextItemWidth(90.f);
+    changed |= ImGui::InputDouble("##sdb_emin", &r.elevMin, 0.0, 0.0, "%.3f");
+    ImGui::SameLine();
+    ImGui::TextUnformatted("and");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90.f);
+    changed |= ImGui::InputDouble("##sdb_emax", &r.elevMax, 0.0, 0.0, "%.3f");
+  }
+
+  ImGui::SetNextItemWidth(-1.f);
+  if (ImGui::BeginCombo("##sdb_group", r.group.empty() ? "Point group: (any)" : ("Point group: " + r.group).c_str())) {
+    if (ImGui::Selectable("(any)", r.group.empty())) {
+      r.group.clear();
+      changed = true;
+    }
+    for (const PointGroup& g : cmd.pointGroups)
+      if (ImGui::Selectable(g.name.c_str(), g.name == r.group)) {
+        r.group = g.name;
+        changed = true;
+      }
+    ImGui::EndCombo();
+  }
+  ImGui::SetNextItemWidth(-1.f);
+  if (ImGui::BeginCombo("##sdb_source",
+                        r.sourceDrawing.empty() ? "Source drawing: (any)" : ("Source drawing: " + r.sourceDrawing).c_str())) {
+    if (ImGui::Selectable("(any)", r.sourceDrawing.empty())) {
+      r.sourceDrawing.clear();
+      changed = true;
+    }
+    for (const std::string& s : ProjectPointSources(cmd))
+      if (ImGui::Selectable(s.c_str(), s == r.sourceDrawing)) {
+        r.sourceDrawing = s;
+        changed = true;
+      }
+    ImGui::EndCombo();
+  }
+
+  if (ImGui::Button("Reset filters")) {
+    r.idRanges.clear();
+    r.description.clear();
+    r.useElevation = false;
+    r.group.clear();
+    r.sourceDrawing.clear();
+    changed = true;
+  }
+  ImGui::SameLine();
+  const bool anySelected = !cmd.selectedSurveyPointIndices.empty();
+  ImGui::BeginDisabled(!anySelected);
+  if (ImGui::Button("Hide selected here") && log != nullptr) {
+    const int hid = HideSelectedPointsHere(cmd);
+    log->push_back("SURVEY DATABASE — hid " + std::to_string(hid) +
+                   " point(s) in this drawing only; they stay in the project database and in other drawings.");
+  }
+  ImGui::EndDisabled();
+  if (!r.hidden.empty()) {
+    ImGui::TextDisabled("%zu point(s) hidden in this drawing only", r.hidden.size());
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Show them again")) {
+      r.hidden.clear();
+      changed = true;
+    }
+  }
+  if (!r.shown.empty() && r.Filtering())
+    ImGui::TextDisabled("Points created in this drawing stay visible whatever the filters say.");
+
+  if (changed)
+    BumpCadGpuCache(cmd);  // the rules are saved with the drawing
+  ImGui::TreePop();
+}
+
 void DrawFeatureLinesFolderContext(AppCommandState& cmd, std::vector<std::string>* log) {
   if (!BeginTsContext("##flfoldctx"))
     return;
@@ -772,8 +873,10 @@ void DrawProspectorTree(AppCommandState& cmd, std::vector<std::string>* log, TsP
     ImGui::TreePop();
   }
 
+  DrawSurveyDatabaseFolder(cmd, log);
+
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  const bool surfFoldOpen = TsTreeNode("##ts_surffold", kFolder, "c3d_surfaces", "Surfaces");
+  const bool surfFoldOpen =TsTreeNode("##ts_surffold", kFolder, "c3d_surfaces", "Surfaces");
   DrawSurfacesFolderContext(cmd, log);
   if (surfFoldOpen) {
     for (size_t i = 0; i < cmd.cadSurfaces.size(); ++i)

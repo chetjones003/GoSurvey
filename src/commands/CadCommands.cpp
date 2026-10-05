@@ -157,6 +157,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.drawingInsUnits        = cmd.drawingInsUnits;  // REQ-357: unit, scale and settings are per drawing
   doc.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
   doc.drawingSettings        = cmd.drawingSettings;
+  doc.pointVisibility        = cmd.pointVisibility;
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
@@ -271,6 +272,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.drawingInsUnits            = doc.drawingInsUnits;  // REQ-357
   cmd.modelUnitsPerPlottedInch   = doc.modelUnitsPerPlottedInch;
   cmd.drawingSettings            = doc.drawingSettings;
+  cmd.pointVisibility            = doc.pointVisibility;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.activeDimensionStyle       = doc.dimensionStyle;

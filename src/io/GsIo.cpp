@@ -2057,6 +2057,20 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["surveyPoints"] = std::move(survey);
   doc["createPointsNextId"] = st.createPointsNextId;
+  if (!st.pointVisibility.IsDefault()) {  // REQ-377: a project drawing's point visibility rules; additive
+    const projpts::Rules& r = st.pointVisibility;
+    json v;
+    v["idRanges"] = r.idRanges;
+    v["description"] = r.description;
+    v["useElevation"] = r.useElevation;
+    v["elevMin"] = r.elevMin;
+    v["elevMax"] = r.elevMax;
+    v["group"] = r.group;
+    v["sourceDrawing"] = r.sourceDrawing;
+    v["shown"] = projpts::IdsToText(r.shown);
+    v["hidden"] = projpts::IdsToText(r.hidden);
+    doc["pointVisibility"] = std::move(v);
+  }
   json cpo;
   CreatePointsOptionsToJson(st.createPointsOpts, cpo);
   doc["createPointsOptions"] = std::move(cpo);
@@ -3609,6 +3623,20 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
 
   st.createPointsNextId = doc.value("createPointsNextId", 1);
+  st.pointVisibility = projpts::Rules{};  // REQ-377: absent -> show every point of the project
+  if (doc.contains("pointVisibility") && doc["pointVisibility"].is_object()) {
+    const json& v = doc["pointVisibility"];
+    projpts::Rules& r = st.pointVisibility;
+    r.idRanges = v.value("idRanges", std::string());
+    r.description = v.value("description", std::string());
+    r.useElevation = v.value("useElevation", false);
+    r.elevMin = v.value("elevMin", 0.0);
+    r.elevMax = v.value("elevMax", 0.0);
+    r.group = v.value("group", std::string());
+    r.sourceDrawing = v.value("sourceDrawing", std::string());
+    r.shown = projpts::IdsFromText(v.value("shown", std::string()));
+    r.hidden = projpts::IdsFromText(v.value("hidden", std::string()));
+  }
   if (doc.contains("createPointsOptions") && doc["createPointsOptions"].is_object())
     st.createPointsOpts = CreatePointsOptionsFromJson(doc["createPointsOptions"]);
   else
