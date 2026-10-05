@@ -1673,6 +1673,12 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.projectPackPrompt = {};  // REQ-380
       cmd.projectPackPrompt.projectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;
     }
+    if (ImGui::MenuItem("Create Turnover...", nullptr, false,
+                        !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty() &&
+                            !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx))) {
+      cmd.projectTurnoverPrompt = {};  // REQ-381
+      cmd.projectTurnoverPrompt.projectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;
+    }
     if (ImGui::MenuItem("Save", "Ctrl+S")) {
       SaveActiveDocument(cmd, log);
     }

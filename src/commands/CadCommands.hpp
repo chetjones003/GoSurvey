@@ -68,6 +68,7 @@
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -5012,6 +5013,14 @@ struct AppCommandState {
     bool             excludePointClouds = false;
     bool             packAnyway = false;  ///< the user accepted the Health problems
   } projectPackPrompt;
+  /// REQ-381 (#696 P8): the Create Turnover window. `projectUid` is the project (0 = closed). Every
+  /// tracked file starts ticked; `unticked` holds the ones the user cleared.
+  struct ProjectTurnoverPrompt {
+    uint32_t              projectUid = 0;
+    std::string           recipient;
+    std::set<std::string> unticked;
+    bool                  acknowledged = false;  ///< the user accepted the Health problems
+  } projectTurnoverPrompt;
   bool openPackRequested = false;    ///< REQ-380: OPENPACK asked for Open Packed Project (the UI browses)
   /// REQ-308 / D-2026-08-30-a: drawingTabs[0] is the **Start screen** — a non-closable, pinned-first
   /// sentinel that backs no document. documents[0]/viewportRenderers[0] exist for index alignment

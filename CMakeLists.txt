@@ -460,6 +460,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/ProjectFiles.cpp
   # REQ-380 (#696 P7): Pack Project / Open Packed Project (.gspack = ZIP via miniz)
   src/io/ProjectPack.cpp
+  # REQ-381 (#696 P8): turnover records. Pure <filesystem>/json + miniz CRC.
+  src/io/ProjectTurnover.cpp
   # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
   src/io/WhatsNewContent.cpp
   src/io/WikiContent.cpp
@@ -1184,6 +1186,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-380 (#696 P7): the pure pack / unpack
     tests/ProjectPackTests.cpp
     src/io/ProjectPack.cpp
+    # REQ-381 (#696 P8): the pure turnover records
+    tests/ProjectTurnoverTests.cpp
+    src/io/ProjectTurnover.cpp
     tests/TelemetryPingTests.cpp
     tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
