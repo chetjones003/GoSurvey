@@ -1048,6 +1048,53 @@ TEST_CASE("Multileader annotative flag persists through GsIo (issue #622)", "[is
   CHECK(back.cadMultileaders[0].annotative);
 }
 
+TEST_CASE("annotativeVisibleScaleNames persist through GsIo for block, hatch, and multileader (issue #622)",
+          "[issue622][gsio]") {
+  AppCommandState src;
+  CadBlockDefinition def;
+  def.name = "SYM";
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  src.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "SYM";
+  ref.annotative = true;
+  ref.annotativeVisibleScaleNames = {"1:20"};
+  src.cadBlockRefs.push_back(std::move(ref));
+  src.cadBlockRefAttrs.push_back(EntityAttributes{});
+
+  CadFilledRegion fr;
+  fr.loopStart = {0};
+  fr.vertsXyz = {0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 4.0, 0.0};
+  fr.annotative = true;
+  fr.annotativeVisibleScaleNames = {"1:10", "1:50"};
+  src.cadFilledRegions.push_back(std::move(fr));
+  src.cadFilledRegionAttrs.push_back(EntityAttributes{});
+
+  CadMultileader ml{};
+  ml.annotative = true;
+  ml.annotativeVisibleScaleNames = {"1:50"};
+  ml.pathXyz = {0.f, 0.f, 0.f, 4.f, 0.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.text = "Note";
+  src.cadMultileaders.push_back(std::move(ml));
+  src.cadMultileaderAttrs.push_back(EntityAttributes{});
+
+  std::vector<std::string> log;
+  AppCommandState back;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
+  REQUIRE(back.cadBlockRefs.size() == 1);
+  REQUIRE(back.cadBlockRefs[0].annotativeVisibleScaleNames.size() == 1);
+  CHECK(back.cadBlockRefs[0].annotativeVisibleScaleNames[0] == "1:20");
+  REQUIRE(back.cadFilledRegions.size() == 1);
+  REQUIRE(back.cadFilledRegions[0].annotativeVisibleScaleNames.size() == 2);
+  CHECK(back.cadFilledRegions[0].annotativeVisibleScaleNames[0] == "1:10");
+  CHECK(back.cadFilledRegions[0].annotativeVisibleScaleNames[1] == "1:50");
+  REQUIRE(back.cadMultileaders.size() == 1);
+  REQUIRE(back.cadMultileaders[0].annotativeVisibleScaleNames.size() == 1);
+  CHECK(back.cadMultileaders[0].annotativeVisibleScaleNames[0] == "1:50");
+}
+
 TEST_CASE("DWG annotation scale list persists through GsIo (issue #622)", "[issue622][gsio]") {
   AppCommandState src;
   CadAnnotationScale s;
@@ -4040,6 +4087,44 @@ TEST_CASE("Block definition annotative MTEXT writes AcadAnnotative EED (issue #6
   }
   dwg_free(&dwg);
   REQUIRE(sawAnnoEed);
+}
+
+TEST_CASE("GOSURVEY annoVisScales EED round-trips on block-definition MTEXT (issue #622)",
+          "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-block-mtext-vis");
+  const auto p = (dir.path / "blk-vis.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadBlockDefinition def;
+  def.name = "LBL";
+  CadAnnotation m{};
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.annotative = true;
+  m.annotativeVisibleScaleNames = {"1:20"};
+  m.insX = 0.f;
+  m.insY = 0.f;
+  m.plottedHeightInches = 0.125f;
+  m.text = "Scaled label";
+  m.boxMinX = 0.f;
+  m.boxMinY = -0.2f;
+  m.boxMaxX = 2.f;
+  m.boxMaxY = 0.f;
+  def.content.texts.push_back(std::move(m));
+  def.content.textAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "LBL";
+  ref.xf.x = 1.f;
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.blockDefs.size() == 1);
+  REQUIRE(in.blockDefs[0].content.texts.size() == 1);
+  REQUIRE(in.blockDefs[0].content.texts[0].annotativeVisibleScaleNames.size() == 1);
+  CHECK(in.blockDefs[0].content.texts[0].annotativeVisibleScaleNames[0] == "1:20");
 }
 
 TEST_CASE("AcadAnnotative EED imports annotative HATCH without path flag (issue #622)",
