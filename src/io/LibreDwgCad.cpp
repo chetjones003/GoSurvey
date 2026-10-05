@@ -7,6 +7,7 @@
 #include "LibreDwgField.hpp"
 #include "LibreDwgDynamicBlock.hpp"
 #include "LibreDwgAnnotContext.hpp"
+#include "LibreDwgLights.hpp"
 #include "LibreDwgMaterial.hpp"
 #include "LibreDwgVisualStyle.hpp"
 #include "util/cadpiperun.hpp"
@@ -3581,6 +3582,11 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
         annotCtxLoss.hatchSimplifiedContext);
   }
 
+  const int lightSunLoss = DwgExportCountLightSunLosses(st);
+  if (lightSunLoss > 0) {
+    add("LIGHT/SUN presentation object(s) (native lights require R2010+ DWG export)", static_cast<size_t>(lightSunLoss));
+  }
+
   return out;
 }
 
@@ -4951,6 +4957,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     log.push_back("CAD export — wrote " + std::to_string(nPcOut) +
                   " point-cloud extent box(es) with scan path in XDATA (issue #621).");
 
+  DwgExportImportedLightsAndSun(st, dwg, static_cast<void*>(hdr), log);
+
   FillPaperLayoutsFromState(st, dwg, tw, log, &fldCtx, &vsCtx);
   DwgExportSetModelVisualStyle(dwg, &vsCtx, st.viewportVisualStyle);
 
@@ -5322,6 +5330,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   dwg_resolve_objectrefs_silent(&dwg);
   DwgMaterialImportBegin();
   DwgAnnotContextImportBegin();
+  DwgLightImportBegin();
 
   const double oldOx = st.worldDocumentOriginX;
   const double oldOy = st.worldDocumentOriginY;
@@ -5409,8 +5418,10 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
                                     st))
     SyncCurrentAnnotationScaleIndex(st);
 
-  if (!asDxf)
+  if (!asDxf) {
+    DwgLightImportCapture(&dwg, st);
     DwgAnnotContextImportScan(&dwg);
+  }
 
   dwg_free(&dwg);
 
@@ -5461,6 +5472,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
     ++printed;
   }
   DwgMaterialImportAppendLog(log);
+  DwgLightImportAppendLog(log);
   DwgAnnotContextImportAppendLog(log);
   BumpCadGpuCache(st);
   return true;

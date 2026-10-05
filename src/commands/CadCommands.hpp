@@ -2150,6 +2150,10 @@ struct AppCommandState {
   std::vector<CadAnnotationScale> annotationScales;
   /// Index into \ref annotationScales for model-space annotative display (-1 = drawing plot scale only).
   int currentAnnotationScaleIndex = -1;
+  /// REQ-385: LIGHT entities and SUN object from DWG import (issue #624 lights slice).
+  std::vector<CadDwgImportedLight> dwgImportedLights;
+  CadDwgImportedSun dwgImportedSun{};
+  bool dwgImportedSunPresent = false;
   float defaultPlottedTextHeightInches = 0.125f;
 
   /// Drawing unit, AutoCAD $INSUNITS code (REQ-022). A relabel only — never scales

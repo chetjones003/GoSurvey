@@ -6,6 +6,7 @@
 #include "LibreDwgCad.hpp"
 #include "LibreDwgAnnotContext.hpp"
 #include "LibreDwgMaterial.hpp"
+#include "LibreDwgLights.hpp"
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -4893,4 +4894,66 @@ TEST_CASE("Annotation context scan and import log (REQ-384 inc 1, issue #688)",
   CHECK(log.back().find("annotation context") != std::string::npos);
   dwg_free(dwg);
   std::free(dwg);
+}
+
+TEST_CASE("DWG LIGHT export from preserved state (REQ-385, issue #624)",
+          "[dwg][libredwg][issue624][req385]") {
+  AppCommandState st;
+  CadDwgImportedLight l;
+  l.name = "KeyLight";
+  l.type = 2;
+  l.on = true;
+  l.posX = 10.0;
+  l.posY = 20.0;
+  l.posZ = 30.0;
+  l.targetX = 10.0;
+  l.targetY = 21.0;
+  l.targetZ = 30.0;
+  st.dwgImportedLights.push_back(l);
+
+  ScratchDir dir("light-export");
+  const auto out = (dir.path / "lights-out.dwg").string();
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, out.c_str(), log, /*asDxf=*/false));
+  bool sawLightLog = false;
+  for (const std::string& line : log) {
+    if (line.find("LIGHT entit") != std::string::npos)
+      sawLightLog = true;
+  }
+  CHECK(sawLightLog);
+
+  Dwg_Data reread{};
+  REQUIRE(dwg_read_file(out.c_str(), &reread) < DWG_ERR_CRITICAL);
+  dwg_free(&reread);
+}
+
+TEST_CASE("Hand-built LIGHT helper encodes in memory (REQ-385, issue #624)",
+          "[dwg][libredwg][issue624][req385]") {
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* mspace = dwg_model_space_object(dwg);
+  REQUIRE(mspace != nullptr);
+  REQUIRE(mspace->tio.object != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = mspace->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(DwgTestAddPointLight(dwg, static_cast<void*>(hdr), "KeyLight", 1.0, 2.0, 3.0));
+  CHECK(DwgLightCountEntities(dwg) >= 1);
+  dwg_free(dwg);
+  std::free(dwg);
+}
+
+TEST_CASE("DWG export loss names LIGHT/SUN below R2010 (REQ-385, issue #624)",
+          "[dwg][libredwg][issue624][req385][issue614]") {
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2000;
+  CadDwgImportedLight l;
+  l.name = "L1";
+  st.dwgImportedLights.push_back(l);
+  st.dwgImportedSunPresent = true;
+  bool sawLoss = false;
+  for (const DwgExportLoss& loss : ComputeDwgExportLosses(st)) {
+    if (loss.label.find("LIGHT/SUN") != std::string::npos)
+      sawLoss = true;
+  }
+  CHECK(sawLoss);
 }

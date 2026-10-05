@@ -1731,6 +1731,38 @@ json BuildRoot(const AppCommandState& st) {
       doc["currentAnnotationScaleIndex"] = st.currentAnnotationScaleIndex;
   }
 
+  if (!st.dwgImportedLights.empty() || st.dwgImportedSunPresent) {
+    json lights = json::array();
+    for (const CadDwgImportedLight& l : st.dwgImportedLights) {
+      json o;
+      if (!l.name.empty())
+        o["name"] = l.name;
+      o["type"] = l.type;
+      o["on"] = l.on;
+      o["colorRgb24"] = l.colorRgb24;
+      o["intensity"] = l.intensity;
+      o["pos"] = json::array({l.posX, l.posY, l.posZ});
+      o["target"] = json::array({l.targetX, l.targetY, l.targetZ});
+      if (l.hotspotAngle != 0.0)
+        o["hotspotAngle"] = l.hotspotAngle;
+      if (l.falloffAngle != 0.0)
+        o["falloffAngle"] = l.falloffAngle;
+      lights.push_back(std::move(o));
+    }
+    doc["dwgImportedLights"] = std::move(lights);
+    if (st.dwgImportedSunPresent) {
+      json sun;
+      sun["on"] = st.dwgImportedSun.on;
+      sun["colorRgb24"] = st.dwgImportedSun.colorRgb24;
+      sun["intensity"] = st.dwgImportedSun.intensity;
+      sun["hasShadow"] = st.dwgImportedSun.hasShadow;
+      sun["julianDay"] = st.dwgImportedSun.julianDay;
+      sun["msecs"] = st.dwgImportedSun.msecs;
+      sun["isDst"] = st.dwgImportedSun.isDst;
+      doc["dwgImportedSun"] = std::move(sun);
+    }
+  }
+
   // Imported meshes (REQ-063). Additive section — omitted entirely when there are none, so every
   // pre-REQ-063 drawing still serializes byte-identically and no kGsFormatVersion bump is needed
   // (the ADR-020 (d) tolerant-key precedent).
@@ -3587,6 +3619,43 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.currentAnnotationScaleIndex = doc.value("currentAnnotationScaleIndex", -1);
     if (st.currentAnnotationScaleIndex >= static_cast<int>(st.annotationScales.size()))
       st.currentAnnotationScaleIndex = st.annotationScales.empty() ? -1 : 0;
+  }
+
+  st.dwgImportedLights.clear();
+  st.dwgImportedSunPresent = false;
+  if (doc.contains("dwgImportedLights") && doc["dwgImportedLights"].is_array()) {
+    for (const auto& el : doc["dwgImportedLights"]) {
+      CadDwgImportedLight l;
+      l.name = el.value("name", std::string{});
+      l.type = el.value("type", 2u);
+      l.on = el.value("on", true);
+      l.colorRgb24 = el.value("colorRgb24", 0xFFFFFFu);
+      l.intensity = el.value("intensity", 1.0);
+      if (el.contains("pos") && el["pos"].is_array() && el["pos"].size() >= 3) {
+        l.posX = el["pos"][0].get<double>();
+        l.posY = el["pos"][1].get<double>();
+        l.posZ = el["pos"][2].get<double>();
+      }
+      if (el.contains("target") && el["target"].is_array() && el["target"].size() >= 3) {
+        l.targetX = el["target"][0].get<double>();
+        l.targetY = el["target"][1].get<double>();
+        l.targetZ = el["target"][2].get<double>();
+      }
+      l.hotspotAngle = el.value("hotspotAngle", 0.0);
+      l.falloffAngle = el.value("falloffAngle", 0.0);
+      st.dwgImportedLights.push_back(std::move(l));
+    }
+  }
+  if (doc.contains("dwgImportedSun") && doc["dwgImportedSun"].is_object()) {
+    const auto& sun = doc["dwgImportedSun"];
+    st.dwgImportedSun.on = sun.value("on", true);
+    st.dwgImportedSun.colorRgb24 = sun.value("colorRgb24", 0xFFFFFFu);
+    st.dwgImportedSun.intensity = sun.value("intensity", 1.0);
+    st.dwgImportedSun.hasShadow = sun.value("hasShadow", true);
+    st.dwgImportedSun.julianDay = sun.value("julianDay", 0u);
+    st.dwgImportedSun.msecs = sun.value("msecs", 0u);
+    st.dwgImportedSun.isDst = sun.value("isDst", false);
+    st.dwgImportedSunPresent = true;
   }
 
   st.drawingLayerTable.clear();

@@ -1254,6 +1254,35 @@ struct CadAnnotationScale {
   float drawingUnits = 1.f;
 };
 
+/// AutoCAD LIGHT entity preserved from DWG import (REQ-385 / issue #624). GoSurvey does not evaluate
+/// lighting in the viewport; these records exist for R2007+ DWG round-trip.
+struct CadDwgImportedLight {
+  std::string name;
+  unsigned type = 2;  ///< 1 distant, 2 point, 3 spot (AutoCAD LIGHT type codes)
+  bool on = true;
+  unsigned colorRgb24 = 0xFFFFFFu;
+  double intensity = 1.0;
+  double posX = 0.0;
+  double posY = 0.0;
+  double posZ = 0.0;
+  double targetX = 0.0;
+  double targetY = 0.0;
+  double targetZ = 0.0;
+  double hotspotAngle = 0.0;
+  double falloffAngle = 0.0;
+};
+
+/// AutoCAD SUN dictionary object preserved from DWG import (REQ-385 / issue #624).
+struct CadDwgImportedSun {
+  bool on = true;
+  unsigned colorRgb24 = 0xFFFFFFu;
+  double intensity = 1.0;
+  bool hasShadow = true;
+  unsigned julianDay = 0;
+  unsigned msecs = 0;
+  bool isDst = false;
+};
+
 [[nodiscard]] inline float CadAnnotationScaleModelUnitsPerPlottedInch(const CadAnnotationScale& s) {
   if (s.paperUnits <= 0.f)
     return 0.f;

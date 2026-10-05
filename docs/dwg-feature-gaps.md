@@ -14,9 +14,9 @@ As of 2026-10-05, the original **Group A** inventory and **Group B** features th
 
 | Issue | What is left |
 |---|---|
-| **#624** | **Lights/sun** (`LIGHT`, `SUN`, `LIGHTLIST`) — **SPEC GAP** until a REQ is accepted. **Visual styles** (REQ-371) and **materials** diffuse slice (REQ-372) shipped on `beta`. |
+| **#624** | **Shipped (REQ-385):** imported **LIGHT** + **SUN** preserved through `.gs` and R2010+ DWG. **Deferred:** **LIGHTLIST**, sun study, GoSurvey lighting UI. REQ-371/372 shipped earlier. |
 
-Close **#601** when **#624** lights/sun is resolved or explicitly moved off this tracker. **#688** annotation context shipped (**REQ-384**); see detail section below.
+Close **#601** when remaining **#624** follow-ups (LIGHTLIST / sun study) are resolved or moved off this tracker, or close **#624** and **#601** together if those deferrals are accepted as non-blocking. **#688** annotation context shipped (**REQ-384**); see detail section below.
 
 ## Shipped on `beta` (child issues closed)
 
@@ -73,7 +73,10 @@ GoSurvey-native annotative scaling shipped in **#622** (closed): CANNOSCALE UI, 
 display, R2007+ DWG export/import, `.gs` persistence, mesh round-trip and `#614` honesty for map-only
 and **3DSOLID** entity-material encode limits (`LibreDwgMaterial.cpp`, PRs **#697–#702**).
 
-**Still open under #624:** `LIGHT`, `SUN`, `LIGHTLIST` — **SPEC GAP** until a REQ is accepted.
+**REQ-385 (shipped):** import capture + R2010+ export for **LIGHT** entities and **SUN**
+(`LibreDwgLights.cpp`); `.gs` fields `dwgImportedLights` / `dwgImportedSun`; `#614` loss below R2010.
+
+**Still deferred under #624:** **LIGHTLIST**, **SUNSTUDY**, photometric/web lights, GoSurvey-native lighting.
 
 ## Shipped detail (#617, #618)
 
@@ -103,4 +106,4 @@ DWG versions cluster on a few containers: R2000; R2004/R2010/R2013/R2018 share o
 
 ## Historical recommended order
 
-The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete except** **#624** lights/sun (SPEC GAP). New DWG fidelity work should target **#624** lights or newly filed gaps — **#688** context parity and **REQ-371** / **REQ-372** shipped on `beta`.
+The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete** for tracked MVP slices; **#624** LIGHTLIST/sun-study deferrals remain optional follow-ups. New DWG fidelity work should target newly filed gaps — **REQ-371**, **REQ-372**, and **REQ-385** shipped on `beta`.
