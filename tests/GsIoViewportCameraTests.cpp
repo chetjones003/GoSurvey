@@ -59,6 +59,32 @@ TEST_CASE("Per-viewport camera round-trips through .gs (REQ-061)", "[gs][req061]
   REQUIRE_FALSE(li.cameraIsPlan());
 }
 
+TEST_CASE("Per-viewport visual style round-trips through .gs (REQ-371)", "[gs][req371][issue624]") {
+  AppCommandState st;
+  PaperLayout L;
+  Viewport wire;
+  Viewport hidden;
+  hidden.visualStyle = VisualStyle::Hidden;
+  Viewport shaded;
+  shaded.visualStyle = VisualStyle::Shaded;
+  L.viewports.push_back(wire);
+  L.viewports.push_back(hidden);
+  L.viewports.push_back(shaded);
+  st.paperLayouts.push_back(L);
+
+  const std::filesystem::path path = UniqueGsPath("vpvis");
+  std::vector<std::string> log;
+  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
+
+  AppCommandState loaded;
+  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
+  REQUIRE(loaded.paperLayouts.size() == 1);
+  REQUIRE(loaded.paperLayouts[0].viewports.size() == 3);
+  CHECK(loaded.paperLayouts[0].viewports[0].visualStyle == VisualStyle::Wireframe2D);
+  CHECK(loaded.paperLayouts[0].viewports[1].visualStyle == VisualStyle::Hidden);
+  CHECK(loaded.paperLayouts[0].viewports[2].visualStyle == VisualStyle::Shaded);
+}
+
 TEST_CASE("A legacy .gs with no camera keys loads every viewport in plan view (REQ-061)", "[gs][req061]") {
   AppCommandState st;
   PaperLayout L;

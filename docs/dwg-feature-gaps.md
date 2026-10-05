@@ -15,7 +15,7 @@ As of 2026-10-05, the original **Group A** inventory and **Group B** features th
 | Issue | What is left |
 |---|---|
 | **#688** | AutoCAD annotation **context** objects — split from closed [#622](https://github.com/chetjones003/GoSurvey/issues/622); LibreDWG / SPEC GAP (see [#688](https://github.com/chetjones003/GoSurvey/issues/688)). |
-| **#624** | Visual styles, materials, lights — **new feature**, SPEC GAP. |
+| **#624** | Materials and lights — **SPEC GAP**; **visual styles (increment 1)** shipped as REQ-371 (paper VIEWPORT `VISUALSTYLE` at R2007+). |
 
 Close **#601** only when those two are resolved or explicitly moved off this tracker.
 
@@ -64,9 +64,14 @@ GoSurvey-native annotative scaling shipped in **#622** (closed): CANNOSCALE UI, 
 
 **#688** tracks remaining AutoCAD parity: per-object **annotation context** blobs (`*_ANNOTATION_CONTEXT_DATA`, `CONTEXTDATAMANAGER`), native DIMENSION annotative fields where LibreDWG lacks them, and export-loss honesty when context cannot be preserved. **REQ-110** remains **proposed**; context work needs an accepted REQ or a recorded SPEC decision.
 
-### #624 — Visual styles, materials, lights
+### #624 — Materials and lights (visual styles increment 1 shipped)
 
-3D presentation data beyond REQ-064's current scope. **SPEC GAP**.
+**REQ-371 (2026-10-05):** paper-space VIEWPORT entities carry GoSurvey `VisualStyle` through `.gs` and
+R2007+ DWG (`LibreDwgVisualStyle.cpp`) — AutoCAD `VISUALSTYLE` dictionary handles on export, import maps
+back to 2D Wireframe / Hidden / Shaded.
+
+**Still open under #624:** `MATERIAL`, `LIGHT`, `SUN`, model-space VPORT styles, and renderer use of
+per-viewport `visualStyle`. **SPEC GAP** until REQs exist for those slices.
 
 ## Shipped detail (#617, #618)
 

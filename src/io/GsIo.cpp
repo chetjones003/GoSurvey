@@ -1169,6 +1169,7 @@ json BuildRoot(const AppCommandState& st) {
         vo["modelCenterX"] = v.modelCenterX;
         vo["modelCenterY"] = v.modelCenterY;
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
+        vo["visualStyle"] = static_cast<int>(v.visualStyle);  // REQ-371 (additive)
         vo["camAzimuthDeg"] = v.camAzimuthDeg;      // REQ-061: per-viewport camera (additive)
         vo["camElevationDeg"] = v.camElevationDeg;
         vo["camRollDeg"] = v.camRollDeg;
@@ -2490,6 +2491,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
           v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
           v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
+          if (vo.contains("visualStyle") && vo["visualStyle"].is_number_integer()) {
+            const int vsRaw = vo["visualStyle"].get<int>();
+            v.visualStyle = (vsRaw >= 0 && vsRaw <= static_cast<int>(VisualStyle::Shaded))
+                                ? static_cast<VisualStyle>(vsRaw)
+                                : VisualStyle::Wireframe2D;
+          }
           // REQ-061: per-viewport camera. Absent in a legacy .gs -> the defaults (plan view) stand,
           // and ModelToPaperInThroughCamera then reproduces the pre-change projection exactly.
           v.camAzimuthDeg = vo.value("camAzimuthDeg", v.camAzimuthDeg);

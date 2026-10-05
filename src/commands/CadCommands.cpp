@@ -37639,8 +37639,14 @@ bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vec
     log.push_back("VISUALSTYLE — enter 2D, HIDDEN or SHADED.");
     return false;
   }
-  st.viewportVisualStyle = s;
-  log.push_back(std::string("Visual style = ") + VisualStyleName(s) + ".");
+  if (Viewport* vp = CurrentViewport(st)) {
+    vp->visualStyle = s;
+    log.push_back(std::string("Viewport visual style = ") + VisualStyleName(s) + ".");
+  } else {
+    st.viewportVisualStyle = s;
+    log.push_back(std::string("Visual style = ") + VisualStyleName(s) + ".");
+  }
+  BumpCadGpuCache(st);
   return true;
 }
 
