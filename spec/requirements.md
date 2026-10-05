@@ -11301,7 +11301,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #688; D-2026-10-05-f). 2026-10-05 — increment 1 shipped
   (import scan + REQ-201 log). 2026-10-05 — increment 2 shipped (R2010+ hand-built
-  `MTEXTOBJECTCONTEXTDATA` + `CONTEXTDATAMANAGER` on annotative MTEXT export).
+  `MTEXTOBJECTCONTEXTDATA` + `CONTEXTDATAMANAGER` on annotative MTEXT export). 2026-10-05 —
+  increment 3 shipped (`TEXTOBJECTCONTEXTDATA`, `BLKREFOBJECTCONTEXTDATA`, `ALDIM` /
+  `ANGDIMOBJECTCONTEXTDATA` on annotative TEXT, INSERT, and DIMENSION export).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

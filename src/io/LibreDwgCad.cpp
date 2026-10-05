@@ -2593,6 +2593,8 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
         e->rotation = static_cast<double>(an.rotationRad);
         if (tw.dwg != nullptr && tw.dwg->header.version >= R_2018 && an.annotative && e->parent != nullptr)
           WriteAnnotativeEntityEed(tw.dwg, e->parent, &an.annotativeVisibleScaleNames);
+        if (an.annotative && e->parent != nullptr && tw.annotContext != nullptr && tw.layerState != nullptr)
+          DwgExportAttachTextAnnotationContext(tw.annotContext, e->parent, e, an, *tw.layerState);
         apply(e->parent, at);
       }
     }
@@ -3587,6 +3589,8 @@ static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWrite
   };
   if (ref.annotative && e0->parent != nullptr)
     WriteAnnotativeEntityEed(tw.dwg, e0->parent, &ref.annotativeVisibleScaleNames);
+  if (ref.annotative && e0->parent != nullptr && tw.annotContext != nullptr)
+    DwgExportAttachBlkrefAnnotationContext(tw.annotContext, e0->parent, e0, ref, st);
   if (ref.attributes.empty()) {
     apply(e0->parent, at);
     return;
@@ -4359,6 +4363,14 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         apply(common->parent, at);
         if (r2018Write && an.annotative && common->parent != nullptr)
           WriteAnnotativeEntityEed(dwg, common->parent, &an.annotativeVisibleScaleNames);
+        if (annotCtx.enabled && an.annotative && common->parent != nullptr) {
+          DwgExportDimContextKind dimCtxKind = DwgExportDimContextKind::Aligned;
+          if (an.kind == CadAnnotation::Kind::DimLinear)
+            dimCtxKind = DwgExportDimContextKind::Linear;
+          else if (an.kind == CadAnnotation::Kind::DimAngular)
+            dimCtxKind = DwgExportDimContextKind::Angular;
+          DwgExportAttachDimensionAnnotationContext(&annotCtx, common->parent, common, dimCtxKind, an, st);
+        }
         ++dimsWritten;
       }
       continue;
@@ -4433,6 +4445,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         e->rotation = static_cast<double>(an.rotationRad);
         if (r2018Write && an.annotative && e->parent != nullptr)
           WriteAnnotativeEntityEed(dwg, e->parent, &an.annotativeVisibleScaleNames);
+        if (annotCtx.enabled && an.annotative && e->parent != nullptr)
+          DwgExportAttachTextAnnotationContext(&annotCtx, e->parent, e, an, st);
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
         apply(e->parent, at);
