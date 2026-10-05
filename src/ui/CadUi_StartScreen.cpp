@@ -12,6 +12,7 @@
 #include "CadUi.hpp"
 
 #include "AppIcon.hpp"          // UserDataDirectory, LoadIconTextureRgba
+#include "Project.hpp"
 #include "RecentDrawings.hpp"
 #include "ThumbnailCache.hpp"
 #include "ViewportRenderer.hpp"
@@ -309,6 +310,13 @@ void DrawLeftColumn(AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::Dummy(ImVec2(0.f, 6.f));
   if (StyledButton("New Drawing", false, ImVec2(-FLT_MIN, 0.f)))
     NewDrawingInTab(cmd, log);
+  // REQ-374 (#696): projects sit beside drawings, above the recent lists.
+  ImGui::Dummy(ImVec2(0.f, 14.f));
+  if (StyledButton("New Project", true, ImVec2(-FLT_MIN, 0.f)))
+    cmd.showNewProjectDialog = true;
+  ImGui::Dummy(ImVec2(0.f, 6.f));
+  if (StyledButton("Open Project", false, ImVec2(-FLT_MIN, 0.f)))
+    OpenProjectFile(cmd, log, nullptr);
 
   ImGui::Dummy(ImVec2(0.f, 22.f));
   SectionHeading("Resources");
@@ -326,7 +334,103 @@ void DrawLeftColumn(AppCommandState& cmd, std::vector<std::string>& log) {
   }
 }
 
+// REQ-374 clause 3: each Recent Drawings entry carries its project's name, or "Standalone". The join
+// detection walks the filesystem, so the answer is cached and re-derived every few seconds rather
+// than per frame.
+std::string ProjectTagFor(const std::string& drawingPath) {
+  static std::unordered_map<std::string, std::string> cache;
+  static double stamp = -1e9;
+  const double now = ImGui::GetTime();
+  if (now - stamp > 4.0) {
+    cache.clear();
+    stamp = now;
+  }
+  const auto it = cache.find(drawingPath);
+  if (it != cache.end())
+    return it->second;
+  std::string tag = "Standalone";
+  const gsproj::FindResult f = gsproj::FindProjectFor(std::filesystem::u8path(drawingPath));
+  if (f.state == gsproj::FindState::Found) {
+    gsproj::Project p;
+    if (gsproj::Load(f.file, &p, nullptr))
+      tag = p.name;
+  } else if (f.state == gsproj::FindState::Damaged) {
+    tag = "Project (damaged)";
+  }
+  return cache.emplace(drawingPath, std::move(tag)).first->second;
+}
+
+void DrawRecentProjects(AppCommandState& cmd, std::vector<std::string>& log) {
+  constexpr size_t kShown = 4;
+  ImGui::Dummy(ImVec2(0.f, 4.f));
+  SectionHeading("Recent Projects");
+  std::vector<recent::Entry> projects = LoadRecentProjects();
+  if (projects.empty()) {
+    ImGui::TextDisabled("No recent projects. Use New Project or Open Project.");
+    ImGui::Dummy(ImVec2(0.f, 10.f));
+    return;
+  }
+  if (projects.size() > kShown)
+    projects.resize(kShown);
+
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  std::string openPath, removePath;
+  const float rowH = 48.f;
+  for (const recent::Entry& e : projects) {
+    ImGui::PushID(e.path.c_str());
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const float rowW = ImGui::GetContentRegionAvail().x;
+    const ImVec2 p1(p0.x + rowW, p0.y + rowH);
+    if (ImGui::InvisibleButton("proj", ImVec2(rowW, rowH)))
+      openPath = e.path;
+    const bool hov = ImGui::IsItemHovered();
+    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(hov ? CardBgHover() : CardBg()), 6.f);
+    dl->AddRect(p0, p1, ImGui::GetColorU32(hov ? Accent() : CardBorder()), 6.f, 0, hov ? 2.f : 1.f);
+
+    // Folder glyph in place of a thumbnail (a project has no single picture to capture yet).
+    const ImVec2 g0(p0.x + 12.f, p0.y + 14.f);
+    const ImU32  gc = ImGui::GetColorU32(Accent());
+    dl->AddRectFilled(g0, ImVec2(g0.x + 12.f, g0.y + 4.f), gc, 1.5f);
+    dl->AddRectFilled(ImVec2(g0.x, g0.y + 3.f), ImVec2(g0.x + 28.f, g0.y + 20.f), gc, 2.5f);
+
+    const float textX = p0.x + 52.f;
+    const float textW = std::max(40.f, p1.x - textX - 12.f);
+    dl->AddText(ImVec2(textX, p0.y + 6.f), ImGui::GetColorU32(ImGuiCol_Text),
+                EllipsizeToWidth(e.name, textW).c_str());
+    const std::string folder = std::filesystem::u8path(e.path).parent_path().u8string();
+    dl->AddText(ImVec2(textX, p0.y + 26.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                EllipsizeToWidth(folder + "  \xC2\xB7  " + RelativeTimeText(e.lastOpenedUnix), textW).c_str());
+    if (hov)
+      ImGui::SetTooltip("%s", e.path.c_str());
+    if (ImGui::BeginPopupContextItem("##projctx")) {
+      if (ImGui::MenuItem("Open"))
+        openPath = e.path;
+      if (ImGui::MenuItem("Remove From List"))
+        removePath = e.path;
+      ImGui::EndPopup();
+    }
+    ImGui::PopID();
+    ImGui::Dummy(ImVec2(0.f, 4.f));
+  }
+  ImGui::Dummy(ImVec2(0.f, 6.f));
+
+  // Deferred, like the drawing list: opening or removing rewrites the store `projects` came from.
+  if (!removePath.empty()) {
+    RemoveRecentProject(removePath);
+    log.push_back("Removed from Recent Projects: " + removePath);
+  }
+  if (!openPath.empty()) {
+    if (std::filesystem::exists(std::filesystem::u8path(openPath))) {
+      OpenProjectFile(cmd, log, openPath.c_str());
+    } else {
+      log.push_back("Project not found: " + openPath);
+      RemoveRecentProject(openPath);
+    }
+  }
+}
+
 void DrawRecentColumn(AppCommandState& cmd, std::vector<std::string>& log) {
+  DrawRecentProjects(cmd, log);
   static bool gridView = true;
   static int  sortMode = 0;  // 0 = last opened, 1 = name
   static char search[128] = {};
@@ -463,7 +567,8 @@ void DrawRecentColumn(AppCommandState& cmd, std::vector<std::string>& log) {
       dl->AddText(ImVec2(p0.x + 12.f, t1.y + 8.f), ImGui::GetColorU32(ImGuiCol_Text),
                   EllipsizeToWidth(e.name, textW).c_str());
       dl->AddText(ImVec2(p0.x + 12.f, t1.y + 27.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                  EllipsizeToWidth(RelativeTimeText(e.lastOpenedUnix), textW).c_str());
+                  EllipsizeToWidth(RelativeTimeText(e.lastOpenedUnix) + "  \xC2\xB7  " + ProjectTagFor(e.path), textW)
+                      .c_str());
 
       dl->AddRect(p0, p1, ImGui::GetColorU32(hov ? Accent() : CardBorder()), 8.f, 0, hov ? 2.f : 1.f);
       if (hov)
@@ -504,7 +609,8 @@ void DrawRecentColumn(AppCommandState& cmd, std::vector<std::string>& log) {
       dl->AddText(ImVec2(th1.x + 12.f, p0.y + 11.f), ImGui::GetColorU32(ImGuiCol_Text),
                   EllipsizeToWidth(e.name, textW).c_str());
       dl->AddText(ImVec2(th1.x + 12.f, p0.y + 31.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                  EllipsizeToWidth(RelativeTimeText(e.lastOpenedUnix), textW).c_str());
+                  EllipsizeToWidth(RelativeTimeText(e.lastOpenedUnix) + "  \xC2\xB7  " + ProjectTagFor(e.path), textW)
+                      .c_str());
       dl->AddLine(ImVec2(p0.x, p1.y), ImVec2(p1.x, p1.y), ImGui::GetColorU32(CardBorder()), 1.f);
       if (hov)
         ImGui::SetTooltip("%s\n%s", e.name.c_str(), e.path.c_str());

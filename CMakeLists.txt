@@ -426,6 +426,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   # REQ-308 recent-drawings MRU store (D-2026-08-30-b). Pure — <filesystem>/<fstream>/json, path
   # and clock passed in by the caller — so GoSurveyTests links it directly too (see that target).
   src/io/RecentDrawings.cpp
+  # REQ-373/374/382 (#696 P1) project file, join detection, lock file. Pure <filesystem>/json.
+  src/io/Project.cpp
   # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
   src/io/WhatsNewContent.cpp
   src/io/WikiContent.cpp
@@ -576,6 +578,7 @@ add_executable(GoSurvey
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/CadUi_SignInGate.cpp
   src/ui/CadUi_StartScreen.cpp
+  src/ui/CadUi_Projects.cpp
   src/ui/CadUi_WhatsNew.cpp
   src/ui/CadUi_DrawingSettings.cpp
   src/ui/CadUi_Wiki.cpp
@@ -1131,6 +1134,9 @@ if(GOSURVEY_BUILD_TESTS)
     src/util/WhatsNewLogic.cpp
     tests/StartScreenTests.cpp
     src/io/RecentDrawings.cpp
+    # REQ-373/374/382 (#696 P1)
+    tests/ProjectTests.cpp
+    src/io/Project.cpp
     tests/TelemetryPingTests.cpp
     tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp

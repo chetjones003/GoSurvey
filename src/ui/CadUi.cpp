@@ -1524,6 +1524,11 @@ static void RestoreDrawingTabAfterFileDialog(AppCommandState& cmd, int tabIdxBef
 }
 
 void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
+  // REQ-382 clause 2: a read-only project cannot be changed, and its drawings are part of it.
+  if (ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx)) {
+    log.push_back("This project is open read-only; the drawing was not saved.");
+    return;
+  }
   char dwgPath[4096]{};
   const std::string& path = cmd.activeDocFilePath;
   if (!path.empty()) {
@@ -1569,16 +1574,30 @@ void NewDrawingInTab(AppCommandState& cmd, std::vector<std::string>& log) {
 // REQ-055 / REQ-308: open \p dwgPathUtf8 (or browse when null) into a new focused tab. Shared by
 // File ▸ Open and the Start screen's Open button / recent-drawing tiles.
 void OpenDrawingInNewTab(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8) {
+  OpenDrawingInNewTabAs(cmd, log, dwgPathUtf8, ProjectJoin{});
+}
+
+void OpenDrawingInNewTabAs(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8,
+                           ProjectJoin join) {
   char browsed[4096]{};
   if (!dwgPathUtf8) {
     if (!BrowseOpenFileDwgUtf8(browsed, sizeof(browsed)))
       return;
     dwgPathUtf8 = browsed;
   }
+  // REQ-374: find the drawing's project (walking up from its folder) before anything is created. A
+  // false return means a prompt was queued or the project could not be read; the prompt's buttons
+  // re-enter here with the join decided. No .gsproj anywhere above = standalone, exactly as before.
+  if (join.detect) {
+    if (!ResolveProjectJoin(cmd, log, dwgPathUtf8, &join.uid))
+      return;
+  }
   SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
   const std::string tabName = std::filesystem::path(dwgPathUtf8).stem().u8string();
   const int newIdx = static_cast<int>(cmd.drawingTabs.size());
-  cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++});
+  cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++, join.uid});
+  if (join.uid != 0)
+    NoteProjectJoin(cmd, log, join.uid);
   cmd.documents.emplace_back();
   RestoreDocumentFromSnapshot(cmd, newIdx);  // clear cmd to empty state
   if (OpenDrawingDocument(cmd, dwgPathUtf8, log)) {
@@ -1620,12 +1639,16 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     if (ImGui::MenuItem("Open", nullptr)) {
       OpenDrawingInNewTab(cmd, log, nullptr);
     }
+    if (ImGui::MenuItem("New Project...", nullptr))
+      cmd.showNewProjectDialog = true;
+    if (ImGui::MenuItem("Open Project...", nullptr))
+      OpenProjectFile(cmd, log, nullptr);
     // REQ-308: the Start tab has no document to save.
     ImGui::BeginDisabled(cmd.activeDrawingIdx == 0);
     if (ImGui::MenuItem("Save", "Ctrl+S")) {
       SaveActiveDocument(cmd, log);
     }
-    if (ImGui::MenuItem("Save As...")) {
+    if (ImGui::MenuItem("Save As...", nullptr, false, !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx))) {
       ClearSaveTrace();
       AppendSaveTrace("ui: save-as menu");
       const int tabBeforeDialog = cmd.activeDrawingIdx;
@@ -13417,7 +13440,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (isStart)
         tflags |= ImGuiTabItemFlags_Leading | ImGuiTabItemFlags_NoReorder;
       // Append "##<uid>" so each tab has a unique ImGui ID even when two tabs share the same display name.
-      const std::string tabLabel = cmd.drawingTabs[i].name + "##dt" + std::to_string(cmd.drawingTabs[i].uid);
+      // REQ-374 clause 8: a project drawing's tab carries its project's name.
+      const std::string projName = ProjectNameForTab(cmd, i);
+      const std::string tabLabel = cmd.drawingTabs[i].name + (projName.empty() ? "" : "  [" + projName + "]") +
+                                   "##dt" + std::to_string(cmd.drawingTabs[i].uid);
       if (ImGui::BeginTabItem(tabLabel.c_str(), isStart ? nullptr : &tabOpen, tflags)) {
         // While a programmatic switch is pending, ignore the selection ImGui reports for any OTHER tab.
         // Tabs are submitted in index order, so the tab that is still selected this frame is reached

@@ -770,6 +770,7 @@ int main()
 
     if (cmd.closeConfirmed)
     {
+      ReleaseAllProjects(cmd);  // REQ-382: a clean exit leaves no stale project lock
       // Work is saved or deliberately discarded by this point, so it is safe to hand over.
       // Inno closes this process via the AppMutex, replaces the files, and restarts us.
       if (updateExitPending)
@@ -1264,6 +1265,7 @@ int main()
     cmd.updatePrefs.enabled        = updateState.prefs.enabled;
     cmd.updatePrefs.useBetaChannel = updateState.prefs.useBetaChannel;
     DrawDwgLossyExportModal(cmd, cmdLog);
+    DrawProjectDialogs(cmd, cmdLog);  // REQ-374 / REQ-382: New Project, lock + damaged-marker prompts
 
     // The point a click would COMMIT at, which is NOT the cursor. When an object snap is acquired,
     // SubmitViewportPick commits at the snap point (CadUi: commitX/commitY), while curX/curY is only
