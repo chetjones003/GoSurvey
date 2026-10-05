@@ -91,6 +91,8 @@ struct EntityAttributes {
   float materialDiffuseR = 0.f;
   float materialDiffuseG = 0.f;
   float materialDiffuseB = 0.f;
+  /// AutoCAD MATERIAL name when known from DWG import (REQ-372 inc 3); empty if synthesized on export.
+  std::string materialName;
 };
 
 /// The linetypes an entity can be given (\ref EntityAttributes::linetype storage) — the Properties

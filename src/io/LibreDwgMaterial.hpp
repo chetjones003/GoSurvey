@@ -14,6 +14,7 @@ struct _dwg_struct;
 struct DwgExportMaterialContext {
   bool enabled = false;
   std::unordered_map<std::uint32_t, std::uint64_t> diffuseRgbToHandle;
+  std::unordered_map<std::string, std::uint64_t> materialNameToHandle;
   int materialsWritten = 0;
 };
 
