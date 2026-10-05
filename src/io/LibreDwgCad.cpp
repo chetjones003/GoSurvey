@@ -4792,6 +4792,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
                   " point-cloud extent box(es) with scan path in XDATA (issue #621).");
 
   FillPaperLayoutsFromState(st, dwg, tw, log, &fldCtx, &vsCtx);
+  DwgExportSetModelVisualStyle(dwg, &vsCtx, st.viewportVisualStyle);
 
   DwgExportFinalizeFieldObjects(&fldCtx, dwg, log);
 
@@ -5234,6 +5235,8 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
 
   ImportPaperLayoutsFromDwg(st, &dwg, &skipHist, &degenerateExtrusions);
+  if (dwg.header.version >= R_2007)
+    st.viewportVisualStyle = DwgImportModelVisualStyle(&dwg);
   ImportAnnotationScales(st, &dwg);
   const Dwg_Object* msForCannoscale = dwg_model_space_object(&dwg);
   if (msForCannoscale == nullptr || msForCannoscale->tio.object == nullptr ||

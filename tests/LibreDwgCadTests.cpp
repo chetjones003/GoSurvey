@@ -4292,6 +4292,21 @@ TEST_CASE("R2018 DWG round-trips paper viewport visual style (REQ-371, issue #62
   CHECK(in.paperLayouts[0].viewports[1].visualStyle == VisualStyle::Shaded);
 }
 
+TEST_CASE("R2018 DWG round-trips model-space visual style on VPORT *Active (REQ-371, issue #624)",
+          "[dwg][libredwg][issue624][req371][model]") {
+  ScratchDir dir("dwg-model-vs");
+  const auto p = (dir.path / "model-vs.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.viewportVisualStyle = VisualStyle::Hidden;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  CHECK(in.viewportVisualStyle == VisualStyle::Hidden);
+}
+
 // REQ-170, issue #613: SPLINE and trimmed ELLIPSE import as polylines instead of being skipped.
 TEST_CASE("DWG import maps SPLINE and trimmed ELLIPSE to polylines (REQ-170, issue #613)",
           "[dwg][libredwg][req170][issue613]") {

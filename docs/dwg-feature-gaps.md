@@ -70,8 +70,8 @@ GoSurvey-native annotative scaling shipped in **#622** (closed): CANNOSCALE UI, 
 R2007+ DWG (`LibreDwgVisualStyle.cpp`) — AutoCAD `VISUALSTYLE` dictionary handles on export, import maps
 back to 2D Wireframe / Hidden / Shaded.
 
-**Still open under #624:** `MATERIAL`, `LIGHT`, `SUN`, model-space VPORT styles, and renderer use of
-per-viewport `visualStyle`. **SPEC GAP** until REQs exist for those slices.
+**Still open under #624:** `MATERIAL`, `LIGHT`, `SUN`. **SPEC GAP** until REQs exist for those slices.
+Model and paper viewport visual styles ship under REQ-371 (R2007+ DWG + `.gs`).
 
 ## Shipped detail (#617, #618)
 
