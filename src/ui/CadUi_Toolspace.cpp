@@ -4,6 +4,7 @@
 #include "StringUtil.hpp"
 #include "ProjectPoints.hpp"
 #include "io/ProjectFiles.hpp"
+#include "io/ProjectTurnover.hpp"
 #include "ToolspaceCatalog.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -474,6 +475,12 @@ void DrawProjectFilesFolder(AppCommandState& cmd) {
         std::string tip = it->path;
         if (it->kind == gsproj::kKindLocalLink)
           tip += "\nA link: this file will not travel with the project.";
+        projturn::Record rec;
+        std::string      why;
+        if (projturn::IsRecordPath(p, it->path) &&
+            projturn::Read(p.Folder() / std::filesystem::u8path(it->path), &rec, &why))
+          tip += "\nTurnover to " + rec.recipient + " on " + rec.date + ": " + std::to_string(rec.items.size()) +
+                 " file(s)";
         if (!it->associations.empty()) {
           tip += "\nAttached to:";
           for (const std::string& a : it->associations)
@@ -485,6 +492,13 @@ void DrawProjectFilesFolder(AppCommandState& cmd) {
   }
   if (ImGui::Button("Project Health..."))
     cmd.projectHealthUid = uid;
+  ImGui::SameLine();
+  ImGui::BeginDisabled(s->readOnly);
+  if (ImGui::Button("Create Turnover...")) {  // REQ-381
+    cmd.projectTurnoverPrompt = {};
+    cmd.projectTurnoverPrompt.projectUid = uid;
+  }
+  ImGui::EndDisabled();
   ImGui::TreePop();
 }
 

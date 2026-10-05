@@ -11251,12 +11251,24 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Statement: Creating a turnover runs Project Health, then writes a **turnover record** in
   `Turnovers/` with its **contents** (the tracked items included), **date** and **recipient**, built
   on tracked items. The Project Files section lists turnovers.
+  1. **A record, not a bundle** (D-2026-10-05-j). No file is copied or packed; Pack Project (REQ-380)
+     is how files are sent.
+  2. The record is `Turnovers/<date>_<recipient>.gsturnover` (JSON; a repeat of the same date and
+     recipient gets `-2`, `-3`...). It holds the project ID and name, the recipient, the date (UTC)
+     and, for each chosen tracked item, its path, kind, size and CRC-32; a file not on disk is
+     recorded as missing. The user ticks which tracked items are included (all start ticked); the
+     recipient is required and at least one item must be chosen. Turnover records are not themselves
+     offered as contents.
+  3. Health problems (REQ-379) must be fixed or explicitly accepted before the record is written; a
+     refused turnover writes nothing. The record is tracked, so Project Files lists it.
+  4. Reachable from File > Create Turnover..., the Project Files section and the `TURNOVER` command.
+     Not available in a read-only project.
 - Acceptance: `[req381]` tests: a turnover record lists exactly the chosen items, date and
   recipient; creation is refused until Health problems are acknowledged.
 - Owner-layer: Domain, UI, IO
 - Status: accepted
-- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). Detail beyond the stated
-  contents/date/recipient will be raised as a SPEC GAP at P8 rather than guessed.
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — clauses 1-4 added
+  (issue #696 P8; D-2026-10-05-j, the user chose "record only").
 
 ### REQ-382 — One editor at a time: project lock file and read-only mode (GitHub issue #696, P1)
 

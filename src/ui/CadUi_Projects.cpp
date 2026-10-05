@@ -11,6 +11,7 @@
 #include "ProjectFiles.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectSettings.hpp"
+#include "io/ProjectTurnover.hpp"
 #include "RecentDrawings.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -757,6 +758,16 @@ void DrawProjectAttachModal(AppCommandState& cmd, std::vector<std::string>& log)
   PopProductDialogAccent();
 }
 
+// One titled bullet list of a Project Health problem class (nothing when the class is empty).
+void HealthList(const char* title, const std::vector<std::string>& items) {
+  if (items.empty())
+    return;
+  ImGui::TextUnformatted(title);
+  for (const std::string& i : items)
+    ImGui::BulletText("%s", i.c_str());
+  ImGui::Spacing();
+}
+
 // REQ-379 clause 4: Project Health.
 void DrawProjectHealthModal(AppCommandState& cmd, std::vector<std::string>& log) {
   if (cmd.projectHealthUid != 0 && !ImGui::IsPopupOpen("Project Health##projhealth"))
@@ -781,14 +792,7 @@ void DrawProjectHealthModal(AppCommandState& cmd, std::vector<std::string>& log)
   const projfiles::Health h = ProjectHealthFor(cmd, cmd.projectHealthUid);
   ImGui::TextWrapped("Project %s", s->project.name.c_str());
   ImGui::Spacing();
-  auto list = [](const char* title, const std::vector<std::string>& items) {
-    if (items.empty())
-      return;
-    ImGui::TextUnformatted(title);
-    for (const std::string& i : items)
-      ImGui::BulletText("%s", i.c_str());
-    ImGui::Spacing();
-  };
+  auto list = HealthList;
   list("Linked files (will NOT travel with the project):", h.linked);
   list("Missing files:", h.missing);
   list("Files this version cannot reach:", h.unavailable);
@@ -849,14 +853,7 @@ void DrawProjectPackModal(AppCommandState& cmd, std::vector<std::string>& log) {
 
   ImGui::TextWrapped("Pack project %s into one .gspack file you can email or share.", s->project.name.c_str());
   ImGui::Spacing();
-  auto list = [](const char* title, const std::vector<std::string>& items) {
-    if (items.empty())
-      return;
-    ImGui::TextUnformatted(title);
-    for (const std::string& i : items)
-      ImGui::BulletText("%s", i.c_str());
-    ImGui::Spacing();
-  };
+  auto list = HealthList;
   list("Linked files (will NOT be in the pack):", h.linked);
   list("Missing files (will NOT be in the pack):", h.missing);
   list("Files this version cannot reach:", h.unavailable);
@@ -924,6 +921,92 @@ void DrawProjectPackModal(AppCommandState& cmd, std::vector<std::string>& log) {
   PopProductDialogAccent();
 }
 
+// REQ-381: Create Turnover — Health first, then what was handed over, to whom. A record only; no file is
+// copied (D-2026-10-05-j).
+void DrawProjectTurnoverModal(AppCommandState& cmd, std::vector<std::string>& log) {
+  auto& tp = cmd.projectTurnoverPrompt;
+  if (tp.projectUid != 0 && !ImGui::IsPopupOpen("Create Turnover##projturnover"))
+    ImGui::OpenPopup("Create Turnover##projturnover");
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  PushProductDialogAccent();
+  if (!ImGui::BeginPopupModal("Create Turnover##projturnover", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopProductDialogAccent();
+    return;
+  }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
+
+  const AppCommandState::ProjectSession* s = SessionByUid(cmd, tp.projectUid);
+  if (s == nullptr) {
+    tp = {};
+    ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+    PopProductDialogAccent();
+    return;
+  }
+  const projfiles::Health h = ProjectHealthFor(cmd, tp.projectUid);
+  ImGui::TextWrapped("Record a turnover of project %s: which files you handed over, to whom, and today's date. "
+                     "Nothing is copied or sent; use Pack Project to make a file to send.",
+                     s->project.name.c_str());
+  ImGui::Spacing();
+  HealthList("Linked files (will NOT travel with the project):", h.linked);
+  HealthList("Missing files (recorded as missing):", h.missing);
+  HealthList("Files this version cannot reach:", h.unavailable);
+  HealthList("Drawings with unsaved changes (the record describes the saved version):", h.unsaved);
+  if (h.Clean())
+    ImGui::TextWrapped("Project Health: no problems found.");
+  else
+    ImGui::Checkbox("Create the turnover anyway, with the problems above", &tp.acknowledged);
+  ImGui::BeginDisabled(h.linked.empty());
+  if (ImGui::Button("Copy links into the project")) {
+    size_t converted = 0;
+    CopyProjectLinksIn(cmd, tp.projectUid, log, &converted);
+  }
+  ImGui::EndDisabled();
+  ImGui::Separator();
+
+  ImGui::SetNextItemWidth(320.f);
+  ImGui::InputTextWithHint("Recipient", "Who receives it, e.g. Acme Design", &tp.recipient);
+  ImGui::TextUnformatted("Files handed over:");
+  const std::vector<std::string> candidates = projturn::Candidates(s->project);
+  if (candidates.empty())
+    ImGui::TextDisabled("No files tracked yet. Save a drawing to record it.");
+  ImGui::BeginChild("##turnoverfiles", ImVec2(420.f, candidates.empty() ? 0.f : 180.f), true);
+  for (const std::string& c : candidates) {
+    bool on = tp.unticked.count(c) == 0;
+    if (ImGui::Checkbox(c.c_str(), &on)) {
+      if (on)
+        tp.unticked.erase(c);
+      else
+        tp.unticked.insert(c);
+    }
+  }
+  ImGui::EndChild();
+  std::vector<std::string> chosen;
+  for (const std::string& c : candidates)
+    if (tp.unticked.count(c) == 0)
+      chosen.push_back(c);
+  ImGui::Text("%zu of %zu files chosen.", chosen.size(), candidates.size());
+  ImGui::Spacing();
+
+  const bool ready = !chosen.empty() && !tp.recipient.empty() && (h.Clean() || tp.acknowledged);
+  ImGui::BeginDisabled(!ready);
+  if (ImGui::Button("Create turnover")) {
+    if (CreateProjectTurnover(cmd, tp.projectUid, tp.recipient, chosen, tp.acknowledged, log)) {
+      tp = {};
+      ImGui::CloseCurrentPopup();
+    }
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel")) {
+    tp = {};
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+  PopProductDialogAccent();
+}
+
 }  // namespace
 
 void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log) {
@@ -936,6 +1019,7 @@ void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log) {
   DrawProjectAttachModal(cmd, log);  // REQ-379
   DrawProjectHealthModal(cmd, log);
   DrawProjectPackModal(cmd, log);  // REQ-380
+  DrawProjectTurnoverModal(cmd, log);  // REQ-381
   if (cmd.openPackRequested) {
     cmd.openPackRequested = false;
     OpenPackedProject(cmd, log, nullptr, nullptr);

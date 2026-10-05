@@ -1,10 +1,12 @@
 #include "ProjectFiles.hpp"
 
+#include "io/ProjectTurnover.hpp"
 #include "pdf/PdfAttach.hpp"
 #include "util/pointcloudcache.hpp"
 
 #include <nlohmann/json.hpp>
 
+#include <ctime>
 #include <filesystem>
 
 namespace fs = std::filesystem;
@@ -244,5 +246,25 @@ bool CopyProjectLinksIn(AppCommandState& st, std::uint32_t projectUid, std::vect
     return false;
   }
   log.push_back("Project Health - copied " + std::to_string(r.converted) + " linked file(s) into the project.");
+  return true;
+}
+
+bool CreateProjectTurnover(AppCommandState& st, std::uint32_t projectUid, const std::string& recipient,
+                           const std::vector<std::string>& chosen, bool acknowledged,
+                           std::vector<std::string>& log) {
+  Session* s = FindSessionMut(st, projectUid);
+  if (s == nullptr || s->readOnly) {
+    log.push_back("Turnover - the project is read-only; nothing was written.");
+    return false;
+  }
+  projturn::Record rec;
+  std::string err;
+  if (!projturn::Create(&s->project, recipient, chosen, static_cast<std::int64_t>(std::time(nullptr)),
+                        ProjectHealthFor(st, projectUid), acknowledged, &rec, &err)) {
+    log.push_back("Turnover - " + err);
+    return false;
+  }
+  log.push_back("Turnover - recorded " + std::to_string(rec.items.size()) + " file(s) for " + rec.recipient + " on " +
+                rec.date + " (" + rec.file + ").");
   return true;
 }

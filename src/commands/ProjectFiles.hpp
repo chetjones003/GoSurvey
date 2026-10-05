@@ -47,3 +47,10 @@ projfiles::Health ProjectHealthFor(const AppCommandState& st, std::uint32_t proj
 /// how many links became in-project; failures are in \p log. False when the project cannot be written.
 bool CopyProjectLinksIn(AppCommandState& st, std::uint32_t projectUid, std::vector<std::string>& log,
                         size_t* converted);
+
+/// REQ-381 (#696 P8). Writes a turnover record for project \p projectUid listing \p chosen (tracked item
+/// paths) for \p recipient, after Project Health (\p acknowledged = the user accepted its problems), and
+/// saves the .gsproj. Reports the outcome in \p log (REQ-201). False when refused or not writable.
+bool CreateProjectTurnover(AppCommandState& st, std::uint32_t projectUid, const std::string& recipient,
+                           const std::vector<std::string>& chosen, bool acknowledged,
+                           std::vector<std::string>& log);
