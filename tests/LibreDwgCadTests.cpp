@@ -3851,6 +3851,113 @@ TEST_CASE("Annotative HATCH path flag round-trips on R2018 DWG (issue #622)", "[
   CHECK(in.cadFilledRegions[0].annotative);
 }
 
+TEST_CASE("GOSURVEY annoVisScales EED round-trips on annotative block INSERT (issue #622)",
+          "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-anno-vis-block");
+  const auto p = (dir.path / "vis-blk.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadBlockDefinition def;
+  def.name = "SYM";
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "SYM";
+  ref.annotative = true;
+  ref.annotativeVisibleScaleNames = {"1:20"};
+  ref.xf.x = 5.f;
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadBlockRefs.size() == 1);
+  REQUIRE(in.cadBlockRefs[0].annotativeVisibleScaleNames.size() == 1);
+  CHECK(in.cadBlockRefs[0].annotativeVisibleScaleNames[0] == "1:20");
+}
+
+TEST_CASE("GOSURVEY annoVisScales EED round-trips on annotative HATCH (issue #622)", "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-anno-vis-hatch");
+  const auto p = (dir.path / "vis-hatch.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadFilledRegion fr = SquareHatchRegion(0.f, 0.f, 8.f);
+  fr.annotative = true;
+  fr.annotativeVisibleScaleNames = {"1:20", "1:50"};
+  st.cadFilledRegions.push_back(std::move(fr));
+  st.cadFilledRegionAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadFilledRegions.size() == 1);
+  REQUIRE(in.cadFilledRegions[0].annotativeVisibleScaleNames.size() == 2);
+  CHECK(in.cadFilledRegions[0].annotativeVisibleScaleNames[0] == "1:20");
+  CHECK(in.cadFilledRegions[0].annotativeVisibleScaleNames[1] == "1:50");
+}
+
+TEST_CASE("GOSURVEY annoVisScales EED round-trips on annotative MULTILEADER (issue #622)",
+          "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-anno-vis-ml");
+  const auto p = (dir.path / "vis-ml.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadMultileader ml{};
+  ml.pathXyz = {0.f, 0.f, 0.f, 8.f, 0.f, 0.f, 10.f, 1.f, 0.f};
+  ml.annotative = true;
+  ml.annotativeVisibleScaleNames = {"1:20"};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.insX = 10.f;
+  ml.label.insY = 1.f;
+  ml.label.text = "Callout";
+  ml.label.boxMinX = 10.f;
+  ml.label.boxMinY = 0.f;
+  ml.label.boxMaxX = 18.f;
+  ml.label.boxMaxY = 2.f;
+  st.cadMultileaders.push_back(std::move(ml));
+  st.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadMultileaders.size() == 1);
+  REQUIRE(in.cadMultileaders[0].annotativeVisibleScaleNames.size() == 1);
+  CHECK(in.cadMultileaders[0].annotativeVisibleScaleNames[0] == "1:20");
+}
+
+TEST_CASE("GOSURVEY annoVisScales EED round-trips on annotative dimension (issue #622)",
+          "[dwg][libredwg][issue622]") {
+  ScratchDir dir("dwg-anno-vis-dim");
+  const auto p = (dir.path / "vis-dim.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  st.activeDimensionStyle = DimensionStyles::Default();
+  CadAnnotation aligned{};
+  aligned.kind = CadAnnotation::Kind::DimAligned;
+  aligned.annotative = true;
+  aligned.annotativeVisibleScaleNames = {"1:20"};
+  aligned.dimExt1X = 0.f;
+  aligned.dimExt1Y = 0.f;
+  aligned.dimExt2X = 15.f;
+  aligned.dimExt2Y = 0.f;
+  aligned.dimSignedOffset = 3.f;
+  aligned.insZ = 0.f;
+  DimensionStyles::BakeTextOntoDimension(aligned, st.activeDimensionStyle);
+  AngleDisplaySettings angleSet{};
+  CadDimRefreshMeasurementText(&aligned, st.activeDimensionStyle.unitPrecision, angleSet);
+  st.cadAnnotations.push_back(std::move(aligned));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.cadAnnotations.size() == 1);
+  REQUIRE(in.cadAnnotations[0].annotativeVisibleScaleNames.size() == 1);
+  CHECK(in.cadAnnotations[0].annotativeVisibleScaleNames[0] == "1:20");
+}
+
 TEST_CASE("AcadAnnotative EED imports annotative aligned dimension (issue #622)", "[dwg][libredwg][issue622]") {
   ScratchDir dir("dwg-acad-annotative-dim");
   const auto exported = (dir.path / "both.dwg").string();
