@@ -2,7 +2,7 @@
 
 What GoSurvey's DWG **save** and **open** still leave out for **AutoCAD, Civil 3D and other programs** (the ordinary DWG stream — not the ADR-044 trailer GoSurvey reads on reopen).
 
-Tracking issue: **#601**. Evidence is from `beta` at **`dfbcd13a`** (2026-10-05).
+Tracking issue: **#601**. Evidence is from `beta` at **`bf92adde`** (2026-10-05).
 
 ## The short version
 
@@ -14,9 +14,9 @@ As of 2026-10-05, the original **Group A** inventory and **Group B** features th
 
 | Issue | What is left |
 |---|---|
-| **#624** | **Lights/sun** — SPEC GAP (future REQ). **Materials** — **REQ-372** (in progress on `beta`). **Visual styles** — REQ-371 shipped. |
+| **#624** | **Lights/sun** (`LIGHT`, `SUN`, `LIGHTLIST`) — **SPEC GAP** until a REQ is accepted. **Visual styles** (REQ-371) and **materials** diffuse slice (REQ-372) shipped on `beta`. |
 
-Close **#601** when **#624** lights/sun (and any remaining #624 material work you treat as blocking) is resolved or moved off this tracker. **#688** annotation context shipped (**REQ-384**); see detail section below.
+Close **#601** when **#624** lights/sun is resolved or explicitly moved off this tracker. **#688** annotation context shipped (**REQ-384**); see detail section below.
 
 ## Shipped on `beta` (child issues closed)
 
@@ -69,8 +69,9 @@ GoSurvey-native annotative scaling shipped in **#622** (closed): CANNOSCALE UI, 
 **REQ-371 (shipped):** model + paper viewport `VISUALSTYLE` through `.gs` and R2007+ DWG
 (`LibreDwgVisualStyle.cpp`).
 
-**REQ-372 (accepted, not yet implemented):** AutoCAD **`MATERIAL`** diffuse colour on 3D mesh/solid
-hosts — import shaded display, R2007+ DWG export/import, phased in four increments (see spec).
+**REQ-372 (shipped):** AutoCAD **`MATERIAL`** diffuse RGB on 3D mesh/solid hosts — import shaded
+display, R2007+ DWG export/import, `.gs` persistence, mesh round-trip and `#614` honesty for map-only
+and **3DSOLID** entity-material encode limits (`LibreDwgMaterial.cpp`, PRs **#697–#702**).
 
 **Still open under #624:** `LIGHT`, `SUN`, `LIGHTLIST` — **SPEC GAP** until a REQ is accepted.
 
@@ -102,4 +103,4 @@ DWG versions cluster on a few containers: R2000; R2004/R2010/R2013/R2018 share o
 
 ## Historical recommended order
 
-The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete except** **#624** (lights/sun SPEC GAP; materials via **REQ-372**). New DWG fidelity work should target **#624** or newly filed gaps — **#688** context parity shipped under **REQ-384**.
+The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete except** **#624** lights/sun (SPEC GAP). New DWG fidelity work should target **#624** lights or newly filed gaps — **#688** context parity and **REQ-371** / **REQ-372** shipped on `beta`.
