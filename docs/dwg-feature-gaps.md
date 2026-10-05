@@ -62,7 +62,7 @@ Some export paths still **degrade** rather than drop (for example 3D polylines w
 
 GoSurvey-native annotative scaling shipped in **#622** (closed): CANNOSCALE UI, `.gs` SCALE list, viewport/model annotative draw, multi-SCALE DWG export/import, GOSURVEY / AcadAnnotative EED, per-scale visibility (`annoVisScales`), UI and `[issue622]` tests (PRs **#657–#687**).
 
-**#688** tracks remaining AutoCAD parity: per-object **annotation context** blobs (`*_OBJECTCONTEXTDATA`, `CONTEXTDATAMANAGER`), native DIMENSION annotative fields where LibreDWG lacks them, and export-loss honesty when context cannot be preserved. **REQ-384** accepted (D-2026-10-05-f); increment 1 import log; increment 2 **MTEXT** context export; **increment 3** **TEXT**, **INSERT**, and **DIMENSION** context on the same R2010+ path. HATCH/MULTILEADER and import merge remain in later increments.
+**#688** tracks remaining AutoCAD parity: per-object **annotation context** blobs (`*_OBJECTCONTEXTDATA`, `CONTEXTDATAMANAGER`), native DIMENSION annotative fields where LibreDWG lacks them, and export-loss honesty when context cannot be preserved. **REQ-384** accepted (D-2026-10-05-f); increments 1–3 import log and **MTEXT** / **TEXT** / **INSERT** / **DIMENSION** export; **increment 4** **MULTILEADER** + **HATCH** scale context export and default-scale **MTEXT**/**TEXT** merge on import. Round-trip and full per-scale import merge remain for increment 5.
 
 ### #624 — Materials, lights, visual styles
 

@@ -388,9 +388,66 @@ void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool clo
 
 void ImportAnnotativeVisibilityFromEntityEed(const Dwg_Object_Entity* ent, std::vector<std::string>* out);
 
+static void MergeDefaultMtextContextIntoAnnotation(const Dwg_Data* dwg, const Dwg_Object_Entity* ent,
+                                                   const Xf2& xf, AppCommandState& st,
+                                                   CadAnnotation* a) {
+  assert(dwg != nullptr && ent != nullptr && a != nullptr);
+  if (!a->annotative)
+    return;
+  const Dwg_Object* ctxObj = DwgImportResolveDefaultContextObject(dwg, ent);
+  if (ctxObj == nullptr || ctxObj->fixedtype != DWG_TYPE_MTEXTOBJECTCONTEXTDATA ||
+      ctxObj->tio.object == nullptr)
+    return;
+  const Dwg_Object_MTEXTOBJECTCONTEXTDATA* ctx = ctxObj->tio.object->tio.MTEXTOBJECTCONTEXTDATA;
+  if (ctx == nullptr)
+    return;
+  double wx = 0.0;
+  double wy = 0.0;
+  xf.apply(ctx->ins_pt.x, ctx->ins_pt.y, &wx, &wy);
+  a->insX = static_cast<float>(wx - st.worldDocumentOriginX);
+  a->insY = static_cast<float>(wy - st.worldDocumentOriginY);
+  a->insZ = static_cast<float>(ctx->ins_pt.z);
+  const double th = ctx->rect_height > 1e-9 ? ctx->rect_height : ctx->extents_height;
+  const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
+  if (th > 1e-9)
+    a->plottedHeightInches = static_cast<float>(th / mup);
+  const double rot = std::atan2(ctx->x_axis_dir.y, ctx->x_axis_dir.x);
+  a->rotationRad = static_cast<float>(rot + xf.ang);
+  const double bw = std::max(ctx->rect_width, ctx->extents_width);
+  if (bw > 1e-6) {
+    a->boxMinX = a->insX;
+    a->boxMaxX = a->insX + static_cast<float>(bw);
+    a->boxMinY = a->insY - static_cast<float>(th > 1e-9 ? th : 0.18);
+    a->boxMaxY = a->insY + static_cast<float>(th > 1e-9 ? th * 0.2 : 0.18);
+  }
+  DwgImportNoteDefaultContextMerged();
+}
+
+static void MergeDefaultTextContextIntoAnnotation(const Dwg_Data* dwg, const Dwg_Object_Entity* ent,
+                                                  const Xf2& xf, AppCommandState& st, CadAnnotation* a) {
+  assert(dwg != nullptr && ent != nullptr && a != nullptr);
+  if (!a->annotative)
+    return;
+  const Dwg_Object* ctxObj = DwgImportResolveDefaultContextObject(dwg, ent);
+  if (ctxObj == nullptr || ctxObj->fixedtype != DWG_TYPE_TEXTOBJECTCONTEXTDATA ||
+      ctxObj->tio.object == nullptr)
+    return;
+  const Dwg_Object_TEXTOBJECTCONTEXTDATA* ctx = ctxObj->tio.object->tio.TEXTOBJECTCONTEXTDATA;
+  if (ctx == nullptr)
+    return;
+  double wx = 0.0;
+  double wy = 0.0;
+  xf.apply(ctx->ins_pt.x, ctx->ins_pt.y, &wx, &wy);
+  a->insX = static_cast<float>(wx - st.worldDocumentOriginX);
+  a->insY = static_cast<float>(wy - st.worldDocumentOriginY);
+  a->rotationRad = static_cast<float>(ctx->rotation + xf.ang);
+  DwgImportNoteDefaultContextMerged();
+}
+
 void LocalText(AppCommandState& st, double x, double y, double z, double height, double rotRad,
                const std::string& text, CadAnnotation::Kind kind, const EntityAttributes& at,
-               bool annotative = false, const Dwg_Object_Entity* ownerEnt = nullptr) {
+               bool annotative = false, const Dwg_Object_Entity* ownerEnt = nullptr,
+               const Dwg_Data* dwg = nullptr, const Xf2* xf = nullptr) {
   CadAnnotation a{};
   a.kind = kind;
   a.insX = x - st.worldDocumentOriginX;
@@ -405,6 +462,13 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
     ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &a.annotativeVisibleScaleNames);
   st.cadAnnotations.push_back(std::move(a));
   st.cadAnnotationAttrs.push_back(at);
+  if (ownerEnt != nullptr && dwg != nullptr && xf != nullptr) {
+    CadAnnotation* back = &st.cadAnnotations.back();
+    if (kind == CadAnnotation::Kind::Mtext)
+      MergeDefaultMtextContextIntoAnnotation(dwg, ownerEnt, *xf, st, back);
+    else if (kind == CadAnnotation::Kind::Text)
+      MergeDefaultTextContextIntoAnnotation(dwg, ownerEnt, *xf, st, back);
+  }
 }
 
 // REQ-170, issue #613: no native spline — tessellate into a polyline (fit points or control points).
@@ -1841,7 +1905,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
     const bool annotative = ImportEedMarksAnnotative(dwg, ent);
     LocalText(st, x, y, e->elevation, e->height, e->rotation + xf.ang, FromT(dwg, e->text_value),
-              CadAnnotation::Kind::Text, at, annotative, ent);
+              CadAnnotation::Kind::Text, at, annotative, ent, dwg, &xf);
     return;
   }
   if (ty == DWG_TYPE_MTEXT && ent->tio.MTEXT != nullptr) {
@@ -1853,7 +1917,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
         ImportEedMarksAnnotative(dwg, ent) ||
         (dwg->header.version >= R_2018 && e->is_not_annotative == 0);
     LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(dwg, e->text),
-              CadAnnotation::Kind::Mtext, at, annotative, ent);
+              CadAnnotation::Kind::Mtext, at, annotative, ent, dwg, &xf);
     return;
   }
   if (ty == DWG_TYPE_SPLINE && ent->tio.SPLINE != nullptr) {
@@ -4559,6 +4623,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
           mld->is_annotative = ml.annotative ? 1 : 0;
           if (r2018Write && ml.annotative && mld->parent != nullptr)
             WriteAnnotativeEntityEed(dwg, mld->parent, &ml.annotativeVisibleScaleNames);
+          if (annotCtx.enabled && ml.annotative && mld->parent != nullptr)
+            DwgExportAttachMleaderAnnotationContext(&annotCtx, mld->parent, mld, ml, st);
           apply(mld->parent, at);
           continue;
         }
@@ -4804,6 +4870,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       if (hatch->parent != nullptr)
         WriteAnnotativeEntityEed(dwg, hatch->parent, &fr.annotativeVisibleScaleNames);
     }
+    if (annotCtx.enabled && fr.annotative && hatch->parent != nullptr)
+      DwgExportAttachHatchAnnotationContext(&annotCtx, hatch->parent, hatch, fr, st);
     apply(hatch->parent, fi < st.cadFilledRegionAttrs.size() ? &st.cadFilledRegionAttrs[fi] : nullptr);
     ++nHatchOut;
   }
@@ -5241,6 +5309,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   Dwg_Data dwg;
   if (!LoadDwgData(pathUtf8, asDxf, &dwg, log))
     return false;
+  dwg_resolve_objectrefs_silent(&dwg);
   DwgMaterialImportBegin();
   DwgAnnotContextImportBegin();
 
@@ -5419,6 +5488,7 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
   }
   AppendSaveTrace("export: fill from state");
   FillFromState(st, dwg, hdr, log);
+  dwg_resolve_objectrefs_silent(dwg);
   if (!asDxf) {  // REQ-362 item 2: the map pin other programs read (DWG only)
     DwgGeoData geo;
     std::string why;
