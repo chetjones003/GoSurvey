@@ -59,6 +59,7 @@ struct Viewport {
   double modelCenterX = 0.0;  // model-space point shown at the viewport's center
   double modelCenterY = 0.0;
   float scaleModelPerPaperIn = 50.f;  // model units per paper inch (AutoCAD viewport scale)
+  VisualStyle visualStyle = VisualStyle::Wireframe2D;  // REQ-371 / #624: per-viewport draw style (DWG VISUALSTYLE)
   std::string layer = "0";            // viewport's layer; if not plottable, its border is omitted from plots
   std::vector<std::string> frozenLayers;  // layer names hidden only in this viewport (REQ-028)
   // Per-viewport layer COLOR override (REQ-046): parallel arrays (layer name -> override color, same

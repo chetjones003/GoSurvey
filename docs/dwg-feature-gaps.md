@@ -15,7 +15,7 @@ As of 2026-10-05, the original **Group A** inventory and **Group B** features th
 | Issue | What is left |
 |---|---|
 | **#688** | AutoCAD annotation **context** objects — split from closed [#622](https://github.com/chetjones003/GoSurvey/issues/622); LibreDWG / SPEC GAP (see [#688](https://github.com/chetjones003/GoSurvey/issues/688)). |
-| **#624** | Visual styles, materials, lights — **new feature**, SPEC GAP. |
+| **#624** | Materials and lights — **SPEC GAP**; **visual styles (increment 1)** shipped as REQ-371 (paper VIEWPORT `VISUALSTYLE` at R2007+). |
 
 Close **#601** only when those two are resolved or explicitly moved off this tracker.
 

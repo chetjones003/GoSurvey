@@ -5,6 +5,7 @@
 #include "CadField.hpp"
 #include "LibreDwgField.hpp"
 #include "LibreDwgDynamicBlock.hpp"
+#include "LibreDwgVisualStyle.hpp"
 #include "util/cadpiperun.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadDimGeom.hpp"
@@ -3574,7 +3575,8 @@ static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWrite
 }
 
 static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADER* ps, TableWriter& tw,
-                                    const AppCommandState& st, DwgExportFieldContext* fldCtx) {
+                                    const AppCommandState& st, DwgExportFieldContext* fldCtx,
+                                    DwgExportVisualStyleContext* vsCtx) {
   if (ps == nullptr)
     return;
   auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
@@ -3632,6 +3634,8 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
       layerOnly.layer = gv.layer;
       apply(vp->parent, &layerOnly);
     }
+    if (vsCtx != nullptr)
+      DwgExportSetPaperViewportVisualStyle(tw.dwg, vsCtx, vp, gv.visualStyle);
   }
   for (size_t i = 0; i < L.paperBlockRefs.size(); ++i)
     WriteBlockRefInsertToHeader(ps, tw, st, L.paperBlockRefs[i], AttrAt(L.paperBlockRefAttrs, i), 0.0, 0.0,
@@ -3639,7 +3643,8 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
 }
 
 static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, TableWriter& tw,
-                                      std::vector<std::string>& log, DwgExportFieldContext* fldCtx) {
+                                      std::vector<std::string>& log, DwgExportFieldContext* fldCtx,
+                                      DwgExportVisualStyleContext* vsCtx) {
   if (st.paperLayouts.empty())
     return;
   for (const PaperLayout& L : st.paperLayouts) {
@@ -3657,7 +3662,7 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
     if (ps == nullptr)
       continue;
     SetDwgLayoutTabName(dwg, ps, L.name.empty() ? "Layout" : L.name);
-    WritePaperLayoutContent(L, ps, tw, st, fldCtx);
+    WritePaperLayoutContent(L, ps, tw, st, fldCtx, vsCtx);
     ++nWritten;
   }
   if (nWritten > 0) {
@@ -3698,6 +3703,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     vp.modelCenterY = e->view_target.y - st.worldDocumentOriginY;
     if (!at.layer.empty() && at.layer != "0")
       vp.layer = at.layer;
+    vp.visualStyle = DwgImportVisualStyleFromViewport(dwg, e);
     L.viewports.push_back(vp);
     return;
   }
@@ -3863,6 +3869,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
 
   DwgExportFieldContext fldCtx;
   DwgExportFieldContextInit(&fldCtx, DwgSaveVersionUsesR2004Features(st.dwgExportVersion));
+  DwgExportVisualStyleContext vsCtx;
+  DwgExportVisualStyleContextInit(&vsCtx, LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2007);
   std::uint64_t blockOwnerHandle = 0;
   {
     int hdrErr = 0;
@@ -4783,7 +4791,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     log.push_back("CAD export — wrote " + std::to_string(nPcOut) +
                   " point-cloud extent box(es) with scan path in XDATA (issue #621).");
 
-  FillPaperLayoutsFromState(st, dwg, tw, log, &fldCtx);
+  FillPaperLayoutsFromState(st, dwg, tw, log, &fldCtx, &vsCtx);
 
   DwgExportFinalizeFieldObjects(&fldCtx, dwg, log);
 

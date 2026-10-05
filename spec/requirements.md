@@ -10849,6 +10849,38 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-05 - initial (D-2026-10-05-a; reference screenshots from Civil 3D 2026).
 
+### REQ-371 — AutoCAD VISUALSTYLE on paper viewports and DWG (GitHub issue #624, increment 1)
+
+- Purpose: issue #624 (visual styles / materials / lights) — **increment 1** maps AutoCAD
+  **VISUALSTYLE** objects to GoSurvey's existing REQ-064 viewport styles on **paper-space
+  VIEWPORT** entities so layout viewports round-trip through `.gs` and R2007+ DWG.
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-b (closes the SPEC GAP on issue #624 for visual styles only; materials
+  and lights remain future increments / spin-offs).
+- Depends on: REQ-064 (GoSurvey visual styles), REQ-170 / issue #610 (paper VIEWPORT export),
+  issue #600 (R2007+ export path).
+- Statement:
+  1. **Storage.** Each `Viewport` carries a `VisualStyle` (default 2D Wireframe), persisted in `.gs`
+     additively on the layout viewport object.
+  2. **Import.** Opening a DWG reads each paper-space VIEWPORT's `visualstyle` handle, resolves the
+     VISUALSTYLE object when LibreDWG decodes it, and maps AutoCAD's style to the nearest
+     GoSurvey `VisualStyle` (2D Wireframe, Hidden, or Shaded).
+  3. **Export.** At **R2007+**, export writes or reuses VISUALSTYLE dictionary entries and sets each
+     exported paper VIEWPORT's `visualstyle` handle from the GoSurvey style. R2000/R2004 export
+     omits native visual styles (handles not written).
+  4. **Out of scope (later #624 slices):** MATERIAL, LIGHT, SUN, model-space VPORT table styles,
+     AutoCAD Realistic/Conceptual/X-Ray fidelity beyond the three GoSurvey styles, and per-viewport
+     renderer wiring (import/export parity first).
+- Acceptance:
+  - `LibreDwgCadTests` tag `[issue624][req371]`: R2018 export of two paper viewports with Hidden and
+    Shaded re-import with the same `VisualStyle` values;
+  - `.gs` save/load preserves `visualStyle` on layout viewports;
+  - REQ-201 / `#614` do not claim visual styles are an untracked #601 gap for paper viewports at R2007+.
+- Owner-layer: IO (`LibreDwgVisualStyle.cpp`, `LibreDwgCad.cpp`), Domain (`PaperSpace.hpp`), IO (`.gs`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #624 increment 1; D-2026-10-05-b).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

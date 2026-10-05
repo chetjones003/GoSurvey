@@ -4256,6 +4256,42 @@ TEST_CASE("DWG round-trips paper layouts and viewport scales (REQ-170, issue #61
   CHECK(plotB->paperLines.size() == 6);
 }
 
+TEST_CASE("R2018 DWG round-trips paper viewport visual style (REQ-371, issue #624)",
+          "[dwg][libredwg][issue624][req371]") {
+  ScratchDir dir("dwg-vp-visualstyle");
+  const auto p = (dir.path / "vp-vs.dwg").string();
+  AppCommandState st;
+  PaperLayout sheet;
+  sheet.name = "Sheet1";
+  Viewport vpHidden;
+  vpHidden.paperXIn = 1.f;
+  vpHidden.paperYIn = 1.f;
+  vpHidden.paperWIn = 4.f;
+  vpHidden.paperHIn = 3.f;
+  vpHidden.scaleModelPerPaperIn = 120.f;
+  vpHidden.visualStyle = VisualStyle::Hidden;
+  Viewport vpShaded;
+  vpShaded.paperXIn = 6.f;
+  vpShaded.paperYIn = 1.f;
+  vpShaded.paperWIn = 4.f;
+  vpShaded.paperHIn = 3.f;
+  vpShaded.scaleModelPerPaperIn = 120.f;
+  vpShaded.visualStyle = VisualStyle::Shaded;
+  sheet.viewports.push_back(vpHidden);
+  sheet.viewports.push_back(vpShaded);
+  st.paperLayouts.push_back(std::move(sheet));
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  CHECK(CountDwgFixedType(p.c_str(), DWG_TYPE_VISUALSTYLE) >= 1);
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  REQUIRE(in.paperLayouts[0].viewports.size() == 2);
+  CHECK(in.paperLayouts[0].viewports[0].visualStyle == VisualStyle::Hidden);
+  CHECK(in.paperLayouts[0].viewports[1].visualStyle == VisualStyle::Shaded);
+}
+
 // REQ-170, issue #613: SPLINE and trimmed ELLIPSE import as polylines instead of being skipped.
 TEST_CASE("DWG import maps SPLINE and trimmed ELLIPSE to polylines (REQ-170, issue #613)",
           "[dwg][libredwg][req170][issue613]") {
