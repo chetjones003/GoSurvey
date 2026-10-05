@@ -70,6 +70,12 @@ bool AppendGoSurveyPayloadToDwgFile(const char* pathUtf8, const AppCommandState&
 bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 
+/// REQ-378 (#696 P5): copies the DWG at \p srcUtf8 to \p dstUtf8 byte for byte, except that its
+/// GoSurvey trailer (if any) is replaced by one built from \p st. The source is only read. Written
+/// beside the target and renamed, so a failure leaves no partial file.
+bool CopyDwgWithGoSurveyPayload(const char* srcUtf8, const char* dstUtf8, const AppCommandState& st,
+                                std::vector<std::string>& log);
+
 /// Trailer JSON for SAMEFILE (ADR-044 (e)). Empty if this is not a GoSurvey DWG.
 bool TryGoSurveyDwgPayloadFromBytes(std::string_view fileBytes, std::string& jsonOut);
 

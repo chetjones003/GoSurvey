@@ -1656,6 +1656,10 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
                         !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty() &&
                             !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx)))
       cmd.projectSettingsUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-375
+    if (ImGui::MenuItem("Add Drawing to Project...", nullptr, false,
+                        !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty() &&
+                            !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx)))
+      cmd.addDrawingToProjectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-378
     if (ImGui::MenuItem("Save", "Ctrl+S")) {
       SaveActiveDocument(cmd, log);
     }

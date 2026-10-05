@@ -1083,6 +1083,7 @@ struct ObjectLayerRow {
 }
 
 struct ProjectSettings;  // ProjectSettings.hpp (REQ-375)
+struct AddDrawingPlan;   // ProjectAddFlow.hpp (REQ-378)
 
 /// REQ-375 / D-2026-10-05-e: the settings a project supplies as defaults that a project drawing may
 /// override. The zone and the drawing unit are enforced instead; the transformation, geographic
@@ -4973,6 +4974,11 @@ struct AppCommandState {
   bool showNewProjectDialog = false;  ///< REQ-374 clause 1; File > New Project / Start screen
   /// REQ-375: the Project Settings window is open for ProjectSession::uid == this (0 = closed).
   uint32_t projectSettingsUid = 0;
+  /// REQ-378 (#696 P5): Add Drawing to Project was asked for in project \c ProjectSession::uid == this
+  /// (0 = no request). DrawProjectDialogs browses for the drawing, builds \ref addDrawingPlan, and shows
+  /// the preview dialog; nothing is written until the user confirms.
+  uint32_t addDrawingToProjectUid = 0;
+  std::shared_ptr<AddDrawingPlan> addDrawingPlan;
   /// REQ-308 / D-2026-08-30-a: drawingTabs[0] is the **Start screen** — a non-closable, pinned-first
   /// sentinel that backs no document. documents[0]/viewportRenderers[0] exist for index alignment
   /// but are never meaningful. Real drawings start at FirstDrawingTabIndex().

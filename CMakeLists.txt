@@ -365,6 +365,9 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/CadCommands_Geo.cpp
   src/commands/ProjectSettings.cpp
   src/commands/ProjectPoints.cpp
+  # REQ-378 (#696 P5): Add Drawing to Project - the flow, and the whole-drawing conversion it offers
+  src/commands/ProjectAddFlow.cpp
+  src/commands/ConvertDrawing.cpp
   src/commands/CadCommands_Mleader.cpp
   src/commands/CadCommands_Ucs.cpp
   src/commands/CadDynInput.cpp
@@ -414,6 +417,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/GsIo.cpp
   # Coordinate systems — the one CS-MAP wrapper (REQ-358 / ADR-063)
   src/geo/CoordinateSystems.cpp
+  # REQ-378 (#696 P5): the pure similarity-transform plan for Convert
+  src/geo/DrawingConversion.cpp
   # REQ-360: the pure local <-> grid transformation (no CS-MAP)
   src/geo/LocalGridTransform.cpp
   # REQ-363 / ADR-064: Web Mercator tile maths (pure)
@@ -433,6 +438,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/Project.cpp
   src/io/ProjectPointDb.cpp
   src/io/ProjectPointRules.cpp
+  src/io/ProjectAddDrawing.cpp
   # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
   src/io/WhatsNewContent.cpp
   src/io/WikiContent.cpp
@@ -1147,6 +1153,9 @@ if(GOSURVEY_BUILD_TESTS)
     src/io/ProjectPointRules.cpp
     tests/ProjectPointRulesTests.cpp
     tests/ProjectPointDbTests.cpp
+    # REQ-378 (#696 P5): the pure database-merge half of Add Drawing to Project
+    tests/ProjectAddDrawingTests.cpp
+    src/io/ProjectAddDrawing.cpp
     tests/TelemetryPingTests.cpp
     tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
@@ -1348,6 +1357,8 @@ if(GOSURVEY_BUILD_TESTS)
     # this rides with gosurvey_domain like CadBlockImportTests.
     tests/ProjectSettingsTests.cpp
     tests/ProjectPointsSyncTests.cpp
+    # REQ-378 (#696 P5): Add Drawing to Project end to end + Convert (needs AppCommandState, CS-MAP, LibreDWG)
+    tests/ProjectAddFlowTests.cpp
     # issue #486 increment B2 (REQ-347) — the PIPERUN command layer: StartPipeRunCommand /
     # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
     # with GoSurveySnapTests (gosurvey_domain), not GoSurveyTests, like CadBlockImportTests above.

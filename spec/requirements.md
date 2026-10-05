@@ -11137,6 +11137,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
      visibility rules to show exactly those points.
   4. Settings that differ from the project become **overrides** (REQ-375).
   5. A **coordinate-system or unit mismatch blocks** the add, with a **convert** option or cancel.
+     **Convert** (D-2026-10-05-g) transforms the copy of the drawing into the project's coordinate
+     system and units as one similarity transform (scale, rotation about the vertical axis, shift)
+     computed with CS-MAP at the drawing's centre and applied to every object, so shapes stay exact.
+     A units mismatch scales X, Y and heights; a coordinate-system mismatch moves X and Y only. The
+     leftover error at the drawing's extents is shown in the preview; above **0.02 m** the convert is
+     refused. A drawing with no coordinate system (or unitless) has nothing to compare, so it is not a
+     mismatch. A drawing holding objects the transform cannot move (surfaces, meshes, point clouds,
+     PDF underlays, position markers, multileaders, paper-space viewports) cannot be converted; it
+     stays blocked and the kinds are named (REQ-201). Saved views, named UCSs, the geographic marker,
+     the transformation and captured map areas refer to the old coordinates and are cleared in the
+     copy (reported). A drawing that was not converted is copied byte for byte with only its GoSurvey
+     trailer replaced; a converted one is saved as a GoSurvey drawing, so its DWG body matches.
+  5a. **Visibility rules.** The drawing shows exactly the points it brought: a point-number filter
+     lists them (a drawing with no points keeps the default rules). A point identical to one already
+     in the database is shared, not duplicated.
   6. Cancelling at any point leaves the project and the original unchanged.
 - Acceptance:
   - `[req378]` tests: summary counts (new / identical / differing); each conflict choice; copy-in
@@ -11144,7 +11159,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
     blocks; cancel changes nothing.
 - Owner-layer: Domain, UI, IO
 - Status: accepted
-- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — clause 5 defines Convert and
+  clause 5a added (D-2026-10-05-g, issue #696 P5).
 
 ### REQ-379 — Tracked files, attach (copy or link), Project Files list and Project Health (GitHub issue #696, P6)
 
