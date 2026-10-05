@@ -4799,6 +4799,86 @@ TEST_CASE("DWG import reports annotation context and keeps annotative MTEXT (REQ
   CHECK(in.cadAnnotations[0].text == "Merged");
 }
 
+TEST_CASE("R2018 export re-read preserves MTEXT and DIMENSION annotation context (REQ-384 inc 5, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  ScratchDir dir("anno-mtext-dim-ctx-rt");
+  const auto p = (dir.path / "roundtrip.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale scale1;
+  scale1.name = "1:1";
+  scale1.paperUnits = 1.f;
+  scale1.drawingUnits = 1.f;
+  CadAnnotationScale scale2;
+  scale2.name = "1:20";
+  scale2.paperUnits = 1.f;
+  scale2.drawingUnits = 20.f;
+  st.annotationScales.push_back(scale1);
+  st.annotationScales.push_back(scale2);
+  st.currentAnnotationScaleIndex = 0;
+
+  CadAnnotation m{};
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.annotative = true;
+  m.text = "Scale note";
+  m.insX = 0.f;
+  m.insY = 0.f;
+  m.boxMinX = 0.f;
+  m.boxMaxX = 12.f;
+  m.boxMinY = -1.f;
+  m.boxMaxY = 1.f;
+  st.cadAnnotations.push_back(std::move(m));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  CadAnnotation dim{};
+  dim.kind = CadAnnotation::Kind::DimAligned;
+  dim.annotative = true;
+  dim.dimExt1X = 0.f;
+  dim.dimExt1Y = 0.f;
+  dim.dimExt2X = 15.f;
+  dim.dimExt2Y = 0.f;
+  dim.dimSignedOffset = 3.f;
+  dim.insX = 7.f;
+  dim.insY = 3.f;
+  DimensionStyles::BakeTextOntoDimension(dim, st.activeDimensionStyle);
+  AngleDisplaySettings angleSet{};
+  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle.unitPrecision, angleSet);
+  st.cadAnnotations.push_back(std::move(dim));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int mtextCtx = 0;
+  int aldimCtx = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].fixedtype == DWG_TYPE_MTEXTOBJECTCONTEXTDATA)
+      ++mtextCtx;
+    if (dwg.object[i].fixedtype == DWG_TYPE_ALDIMOBJECTCONTEXTDATA)
+      ++aldimCtx;
+  }
+  CHECK(mtextCtx >= 2);
+  CHECK(aldimCtx >= 2);
+  CHECK(DwgAnnotContextCountObjects(&dwg) >= 6);
+  dwg_free(&dwg);
+}
+
+TEST_CASE("DWG export loss names annotative hatch context gap (REQ-384 inc 5, issue #688)",
+          "[dwg][libredwg][issue688][req384][issue614]") {
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadFilledRegion fr = SquareHatchRegion(0.f, 0.f, 8.f);
+  fr.annotative = true;
+  st.cadFilledRegions.push_back(std::move(fr));
+  bool sawHatchContextLoss = false;
+  for (const DwgExportLoss& l : ComputeDwgExportLosses(st)) {
+    if (l.label.find("hatch") != std::string::npos && l.label.find("context") != std::string::npos)
+      sawHatchContextLoss = true;
+  }
+  CHECK(sawHatchContextLoss);
+}
+
 TEST_CASE("Annotation context scan and import log (REQ-384 inc 1, issue #688)",
           "[dwg][libredwg][issue688][req384]") {
   Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);

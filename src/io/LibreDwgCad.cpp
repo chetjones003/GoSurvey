@@ -3571,6 +3571,16 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
     }
   }
 
+  const DwgAnnotContextExportLossCounts annotCtxLoss = DwgExportAnnotContextLossCounts(st);
+  if (annotCtxLoss.annotativeWithoutContext > 0) {
+    add("annotative object(s) (per-scale annotation context requires R2010+ DWG export)",
+        annotCtxLoss.annotativeWithoutContext);
+  }
+  if (annotCtxLoss.hatchSimplifiedContext > 0) {
+    add("annotative hatch(es) (scale-only context; hatch view/geometry context not encoded)",
+        annotCtxLoss.hatchSimplifiedContext);
+  }
+
   return out;
 }
 

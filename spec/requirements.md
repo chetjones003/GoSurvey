@@ -11305,7 +11305,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   increment 3 shipped (`TEXTOBJECTCONTEXTDATA`, `BLKREFOBJECTCONTEXTDATA`, `ALDIM` /
   `ANGDIMOBJECTCONTEXTDATA` on annotative TEXT, INSERT, and DIMENSION export). 2026-10-05 —
   increment 4 shipped (`MLEADEROBJECTCONTEXTDATA`, `ACDB_HATCHSCALECONTEXTDATA_CLASS` export;
-  default-scale MTEXT/TEXT context geometry merged on import when present).
+  default-scale MTEXT/TEXT context geometry merged on import when present). 2026-10-05 —
+  increment 5 shipped (R2018 re-read preserves MTEXT/DIMENSION context objects;
+  `#614` export loss for pre-R2010 annotative hosts and simplified hatch context).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
