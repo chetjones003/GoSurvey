@@ -101,6 +101,48 @@ bool AppendGoSurveyPayloadToDwgFile(const char* pathUtf8, const AppCommandState&
   return false;
 }
 
+bool CopyDwgWithGoSurveyPayload(const char* srcUtf8, const char* dstUtf8, const AppCommandState& st,
+                                std::vector<std::string>& log) {
+  std::ifstream in(std::filesystem::u8path(srcUtf8), std::ios::binary);
+  if (!in) {
+    log.push_back(std::string("Copy drawing - could not read ") + srcUtf8);
+    return false;
+  }
+  std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  in.close();
+  std::string oldJson;
+  if (TryGoSurveyDwgPayloadFromBytes(bytes, oldJson))
+    bytes.resize(bytes.size() - kFooter - oldJson.size());  // the body only: the old trailer is replaced
+  const std::string json = SerializeGoSurveyJson(st);
+  bytes += json;
+  std::uint64_t n = static_cast<std::uint64_t>(json.size());
+  for (int i = 0; i < 8; ++i)
+    bytes.push_back(static_cast<char>((n >> (8 * i)) & 0xFFu));
+  bytes.append(kMagic, kMagicLen);
+
+  // Stage beside the target and rename, so a failed write never leaves half a drawing in the project.
+  const std::filesystem::path dst = std::filesystem::u8path(dstUtf8);
+  const std::filesystem::path staged = std::filesystem::path(dst.u8string() + ".gosurvey-copy.tmp");
+  std::error_code ec;
+  std::filesystem::create_directories(dst.parent_path(), ec);
+  {
+    std::ofstream out(staged, std::ios::binary | std::ios::trunc);
+    if (!out || !out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()))) {
+      out.close();
+      std::filesystem::remove(staged, ec);
+      log.push_back(std::string("Copy drawing - could not write ") + dstUtf8);
+      return false;
+    }
+  }
+  std::filesystem::rename(staged, dst, ec);
+  if (ec) {
+    std::filesystem::remove(staged, ec);
+    log.push_back(std::string("Copy drawing - could not create ") + dstUtf8);
+    return false;
+  }
+  return true;
+}
+
 bool TryGoSurveyDwgPayloadFromBytes(std::string_view fileBytes, std::string& jsonOut) {
   jsonOut.clear();
   if (fileBytes.size() < kFooter)

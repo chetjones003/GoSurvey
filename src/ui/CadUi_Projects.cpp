@@ -6,6 +6,7 @@
 #include "CadUi.hpp"
 
 #include "AppIcon.hpp"  // UserDataDirectory
+#include "ProjectAddFlow.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectSettings.hpp"
 #include "RecentDrawings.hpp"
@@ -479,12 +480,178 @@ void DrawNewProjectModal(AppCommandState& cmd, std::vector<std::string>& log) {
   PopProductDialogAccent();
 }
 
+// REQ-378 (#696 P5): Add Drawing to Project. Asks for the drawing, shows the preview, and writes nothing
+// until Add is pressed. Cancel drops the private copy, so the project and the original are unchanged.
+void DrawAddDrawingModal(AppCommandState& cmd, std::vector<std::string>& log) {
+  static bool openNext = false;
+  if (cmd.addDrawingToProjectUid != 0) {
+    const std::uint32_t uid = cmd.addDrawingToProjectUid;
+    cmd.addDrawingToProjectUid = 0;
+    char picked[4096]{};
+    if (BrowseOpenFileDwgUtf8(picked, sizeof(picked))) {
+      auto plan = std::make_shared<AddDrawingPlan>();
+      PrepareAddDrawing(cmd, uid, picked, plan.get(), log);
+      if (!plan->error.empty()) {
+        log.push_back(plan->error);
+      } else {
+        cmd.addDrawingPlan = std::move(plan);
+        openNext = true;
+      }
+    }
+  }
+  if (openNext) {
+    openNext = false;
+    ImGui::OpenPopup("Add Drawing to Project##adddrawing");
+  }
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  PushProductDialogAccent();
+  if (!ImGui::BeginPopupModal("Add Drawing to Project##adddrawing", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopProductDialogAccent();
+    return;
+  }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
+
+  if (!cmd.addDrawingPlan) {
+    ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+    PopProductDialogAccent();
+    return;
+  }
+  const std::shared_ptr<AddDrawingPlan> keep = cmd.addDrawingPlan;  // outlives a reset below
+  AddDrawingPlan& plan = *keep;
+  const projadd::Summary& sm = plan.summary;
+  const ImVec4 warn(1.f, 0.75f, 0.3f, 1.f);
+  const ImVec4 bad(1.f, 0.5f, 0.5f, 1.f);
+  bool close = false;
+
+  ImGui::TextWrapped("Drawing: %s", plan.sourcePath.c_str());
+  ImGui::TextWrapped("Project: %s. The drawing is copied into the project's Drawings folder; the original is not changed.",
+                     plan.projectName.c_str());
+  ImGui::Separator();
+
+  if (plan.conversion.Needed()) {
+    if (plan.converted) {
+      ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.f),
+                         "Converted to the project's coordinate system and units (leftover error up to %.4f m).",
+                         plan.conversion.residualMeters);
+    } else {
+      ImGui::TextColored(bad, "This drawing does not match the project:");
+      if (plan.conversion.unitsDiffer)
+        ImGui::BulletText("Its drawing unit differs from the project's.");
+      if (plan.conversion.zoneDiffers)
+        ImGui::BulletText("Its coordinate system differs from the project's.");
+      ImGui::TextWrapped("It cannot be added as it is. Convert moves and scales everything in the copy into the "
+                         "project's coordinate system and units; the original is not touched.");
+      if (!plan.blockers.empty()) {
+        ImGui::TextColored(bad, "Convert is not possible: this drawing holds objects that cannot be converted:");
+        for (const std::string& b : plan.blockers)
+          ImGui::BulletText("%s", b.c_str());
+      } else if (!plan.conversion.ok) {
+        ImGui::TextColored(bad, "Convert is not possible: %s", plan.conversion.error.c_str());
+      } else if (plan.conversion.zoneDiffers) {
+        ImGui::TextDisabled("Convert would leave an error of up to %.4f m at the edges of the drawing.",
+                            plan.conversion.residualMeters);
+      }
+      ImGui::BeginDisabled(!plan.CanConvert());
+      if (ImGui::Button("Convert drawing to the project"))
+        ChooseAddConvert(cmd, &plan, log);
+      ImGui::EndDisabled();
+    }
+    ImGui::Separator();
+  }
+
+  ImGui::Text("%zu point(s) found.", sm.total);
+  ImGui::BulletText("%zu are new to the project.", sm.fresh);
+  ImGui::BulletText("%zu numbers already exist (%zu identical, %zu differ).", sm.Existing(), sm.identical,
+                    sm.differing);
+  if (sm.duplicates > 0)
+    ImGui::TextColored(warn, "%zu point number(s) appear twice in the drawing; only the first is used.", sm.duplicates);
+  if (sm.identical > 0)
+    ImGui::TextDisabled("Identical points are shared, not duplicated.");
+
+  if (!sm.conflicts.empty()) {
+    ImGui::Spacing();
+    ImGui::TextWrapped("For each point number that exists with different data, choose what happens:");
+    auto setAll = [&](projadd::Choice c) {
+      for (const projadd::Conflict& k : sm.conflicts)
+        plan.choices[k.id] = c;
+    };
+    if (ImGui::SmallButton("All: skip"))
+      setAll(projadd::Choice::Skip);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("All: overwrite"))
+      setAll(projadd::Choice::Overwrite);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("All: renumber"))
+      setAll(projadd::Choice::Renumber);
+    ImGui::BeginChild("##adddrawingconflicts", ImVec2(560.f, 180.f), true);
+    ImGuiListClipper clip;
+    clip.Begin(static_cast<int>(sm.conflicts.size()));
+    while (clip.Step()) {
+      for (int i = clip.DisplayStart; i < clip.DisplayEnd; ++i) {
+        const projadd::Conflict& k = sm.conflicts[static_cast<size_t>(i)];
+        ImGui::PushID(k.id);
+        ImGui::Text("#%d  project: %.3f, %.3f, %.3f %s   drawing: %.3f, %.3f, %.3f %s", k.id, k.existing.easting,
+                    k.existing.northing, k.existing.elevation, k.existing.description.c_str(), k.incoming.easting,
+                    k.incoming.northing, k.incoming.elevation, k.incoming.description.c_str());
+        int sel = static_cast<int>(plan.choices.count(k.id) ? plan.choices[k.id] : projadd::Choice::Skip);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(110.f);
+        if (ImGui::Combo("##choice", &sel, "Skip\0Overwrite\0Renumber\0"))
+          plan.choices[k.id] = static_cast<projadd::Choice>(sel);
+        ImGui::PopID();
+      }
+    }
+    ImGui::EndChild();
+  }
+
+  if (!plan.overrides.empty()) {
+    ImGui::Spacing();
+    std::string list;
+    for (const std::string& o : plan.overrides)
+      list += (list.empty() ? "" : ", ") + o;
+    ImGui::TextWrapped("These settings differ from the project's defaults and become this drawing's own overrides: %s.",
+                       list.c_str());
+  }
+  if (sm.total > 0)
+    ImGui::TextDisabled("The drawing will show exactly the points it brought.");
+  ImGui::Spacing();
+
+  ImGui::BeginDisabled(plan.Blocked());
+  if (ImGui::Button("Add Drawing")) {
+    AddDrawingResult res;
+    if (CommitAddDrawing(cmd, plan, ImGui::GetTime(), &res, log)) {
+      close = true;
+      const std::string dest = res.destPath;
+      const std::uint32_t uid = plan.projectUid;
+      cmd.addDrawingPlan.reset();
+      ImGui::CloseCurrentPopup();
+      OpenDrawingInNewTabAs(cmd, log, dest.c_str(), {false, uid});
+    }
+  }
+  ImGui::EndDisabled();
+  if (plan.Blocked() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("The drawing's coordinate system or units differ from the project's.");
+  ImGui::SameLine();
+  if (!close && ImGui::Button("Cancel"))
+    close = true;
+
+  if (close && cmd.addDrawingPlan) {
+    cmd.addDrawingPlan.reset();
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+  PopProductDialogAccent();
+}
+
 }  // namespace
 
 void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log) {
   ServiceProjects(cmd, log);
   SyncProjectPoints(cmd, log, ImGui::GetTime());  // REQ-376: project drawings <-> the shared point database
   EnforceProjectSettings(cmd, log);  // REQ-375: enforced zone/unit and inherited defaults, every frame
+  DrawAddDrawingModal(cmd, log);
   DrawNewProjectModal(cmd, log);
   DrawProjectPromptModal(cmd, log);
 }

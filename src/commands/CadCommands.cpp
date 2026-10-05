@@ -6722,6 +6722,7 @@ const CmdEntry kRegistry[] = {
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"drawingsettings", "editdrawingsettings", "Drawing Settings: units, scale and the drawing's settings"},
     {"projectsettings", "", "Project Settings: the project's coordinate system, units and defaults (REQ-375)"},
+    {"adddrawing", "", "Add Drawing to Project: bring an existing drawing and its points into this project (REQ-378)"},
     {"geomarkpoint", "", "Place a Position Marker at a picked point (geolocated drawing)"},
     {"geomarklatlong", "", "Place a Position Marker at a typed latitude and longitude"},
     {"georeorientmarker", "", "Set the geographic marker: a design point, then north"},
@@ -7248,6 +7249,18 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     } else {
       st.projectSettingsUid = uid;
       log.push_back("PROJECTSETTINGS — Project Settings opened.");
+    }
+    return true;
+  }
+  if (primary == "adddrawing") {  // REQ-378
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("ADDDRAWING — open a drawing of the project first.");
+    } else {
+      st.addDrawingToProjectUid = uid;
+      log.push_back("ADDDRAWING — choose the drawing to add.");
     }
     return true;
   }
