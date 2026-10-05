@@ -176,6 +176,16 @@ TEST_CASE("req376 a number the database already holds is overwritten and reporte
   CHECK(log.size() == 1);
 }
 
+TEST_CASE("req376 a number held twice by a drawing is stored once", "[req376]") {
+  projpts::Db db;
+  std::vector<SurveyPoint> cur = {Pt(5, 1, 1, 1, "a"), Pt(5, 2, 2, 2, "b")};
+  std::vector<std::string> log;
+  projpts::ApplyChanges(&db, {}, cur, "D", 0.0, &log);
+  REQUIRE(db.points.size() == 1);
+  CHECK(db.points[0].point.description == "a");
+  CHECK(log.size() == 1);
+}
+
 TEST_CASE("req376 a document-origin shift is not read as an edit", "[req376]") {
   std::vector<SurveyPoint> local = {Pt(1, 123.456, 789.012, 5.0), Pt(2, -4.5, 6.25, 7.0)};
   const std::vector<SurveyPoint> baseWorld = projpts::ToWorld(local, 2300000.0, 10400000.0);

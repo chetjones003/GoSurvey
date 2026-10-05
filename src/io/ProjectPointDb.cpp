@@ -202,7 +202,15 @@ Change ApplyChanges(Db* db, const std::vector<SurveyPoint>& baseWorld, const std
   }
   // Added / edited.
   std::vector<Entry> appended;
+  std::unordered_map<int, char> handled;  // a drawing holding one number twice must not write it twice
+  handled.reserve(curWorld.size());
   for (const SurveyPoint& p : curWorld) {
+    if (!handled.emplace(p.id, 1).second) {
+      if (log)
+        log->push_back("Project points - point number " + std::to_string(p.id) +
+                       " appears more than once in the drawing; only the first is kept in the project database.");
+      continue;
+    }
     const auto b = base.find(p.id);
     const auto d = at.find(p.id);
     if (b != base.end() && SamePoint(*b->second, p))
