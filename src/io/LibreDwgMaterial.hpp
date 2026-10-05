@@ -27,6 +27,9 @@ void DwgExportApplyEntityMaterial(_dwg_struct* dwg, DwgExportMaterialContext* ct
 
 void DwgExportMaterialAppendLog(const DwgExportMaterialContext& ctx, std::vector<std::string>& log);
 
+/// REQ-372 / issue #614: 3D hosts whose MATERIAL appearance DWG export will not preserve.
+int DwgExportCountMaterialAppearanceLosses(const AppCommandState& st);
+
 /// Reset per-import counters (call once at the start of DWG/DXF import).
 void DwgMaterialImportBegin();
 
