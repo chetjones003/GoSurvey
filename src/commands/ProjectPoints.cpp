@@ -312,6 +312,18 @@ void SyncProjectPoints(AppCommandState& st, std::vector<std::string>& log, doubl
     // REQ-377 clause 2: a point that appears in this drawing is shown here from now on, whatever the
     // filters say. Points the user removed from view are not touched (they were deleted).
     const bool rulesInSync = tab.pointsRulesApplied == st.pointVisibility;
+    // Issue #725: a number the user hid here and then created again (Overwrite, or a point that was
+    // hidden and re-added) is a deliberate later action. Left in `hidden` it would win over the pin
+    // (REQ-377: hidden beats pinned) and the point would vanish the next time the view is rebuilt,
+    // e.g. when the drawing is reopened.
+    bool unhid = false;
+    for (const int id : freshIds)
+      if (projpts::HasId(st.pointVisibility.hidden, id)) {
+        projpts::RemoveId(&st.pointVisibility.hidden, id);
+        unhid = true;
+      }
+    if (unhid)
+      BumpCadGpuCache(st);  // the rules are part of the drawing: it now has unsaved changes
     for (const int id : freshIds)
       projpts::AddId(&st.pointVisibility.shown, id);
     if (rulesInSync)
