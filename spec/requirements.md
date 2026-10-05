@@ -11386,6 +11386,39 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #624 lights/sun slice; D-2026-10-05-g).
 
+### REQ-386 — AutoCAD LIGHTLIST DWG interop (GitHub issue #715, light registry follow-up)
+
+- Purpose: issue **#715** — after REQ-385 preserves individual **LIGHT** entities and **SUN**, AutoCAD
+  also expects a **LIGHTLIST** registry object wired through **`ACAD_LIGHTLIST`** /
+  **`DICTIONARY_LIGHTLIST`** (R2010+). Without it, some drawings lose the full light registry after a
+  GoSurvey export pass. GoSurvey viewport lighting stays unchanged (REQ-064).
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-h (closes the SPEC GAP on issue #715; hand-built objects because LibreDWG
+  marks **LIGHTLIST** UNSTABLE and exposes `HAVE_NO_DWG_ADD_LIGHTLIST`).
+- Depends on: REQ-385, REQ-170 / issue #600 (R2010+ export), REQ-201 (honest logging).
+- Statement:
+  1. **Import.** Opening an R2010+ DWG that contains **LIGHTLIST** captures registry entries (display
+     name per registered light) and the **ACAD_LIGHTLIST** dictionary key when present. Import logs
+     counts (REQ-201). GoSurvey display is unchanged.
+  2. **Export.** At **R2010+**, when REQ-385 writes one or more **LIGHT** entities, export also writes
+     a **LIGHTLIST** whose handles reference those lights (preserving imported registry order/names
+     when captured; otherwise synthesizing one entry per exported light). Wire **`DICTIONARY_LIGHTLIST`**
+     via **`ACAD_LIGHTLIST`**. R2000/R2004 export omits the registry; `#614` counts it with LIGHT/SUN.
+  3. **`.gs` persistence.** Additive JSON preserves captured registry metadata without a format-version
+     bump when absent (ADR-020 (d)).
+  4. **Out of scope:** GoSurvey-authored lights, light editor UI, **SUNSTUDY**, photometric IES/web
+     lights, and Realistic/Conceptual render parity.
+- Acceptance:
+  - `[issue715][req386]` fixture or test helper: DWG with **LIGHT** + **LIGHTLIST** imports registry
+    into state, exports at R2018, LibreDWG re-read finds at least one **LIGHTLIST** linked to a **LIGHT**.
+  - `[issue715][req386][issue614]` export loss names LIGHT/SUN/**LIGHTLIST** when export is below R2010
+    and state holds imported lights or a captured registry.
+  - REQ-201 / `#601` gap doc no longer lists **LIGHTLIST** as an untracked SPEC GAP.
+- Owner-layer: IO (`LibreDwgLights.cpp`, `LibreDwgCad.cpp`), IO (`.gs`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #715; D-2026-10-05-h).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

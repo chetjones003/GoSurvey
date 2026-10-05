@@ -4925,7 +4925,40 @@ TEST_CASE("DWG LIGHT export from preserved state (REQ-385, issue #624)",
 
   Dwg_Data reread{};
   REQUIRE(dwg_read_file(out.c_str(), &reread) < DWG_ERR_CRITICAL);
+  CHECK(DwgLightListCountObjects(&reread) >= 1);
   dwg_free(&reread);
+}
+
+TEST_CASE("DWG LIGHTLIST import capture and export round-trip (REQ-386, issue #715)",
+          "[dwg][libredwg][issue715][req386]") {
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* mspace = dwg_model_space_object(dwg);
+  REQUIRE(mspace != nullptr);
+  REQUIRE(mspace->tio.object != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = mspace->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(DwgTestAddPointLight(dwg, static_cast<void*>(hdr), "KeyLight", 1.0, 2.0, 3.0));
+  REQUIRE(DwgTestAddLightListForLights(dwg, "Default"));
+  REQUIRE(DwgLightListCountObjects(dwg) >= 1);
+  AppCommandState imported;
+  DwgLightImportScanForTests(dwg, imported);
+  CHECK(imported.dwgImportedLightListPresent);
+  REQUIRE(imported.dwgImportedLights.size() == 1);
+  REQUIRE(imported.dwgImportedLightList.entries.size() == 1);
+
+  ScratchDir dir("lightlist-export");
+  const auto out = (dir.path / "lightlist-out.dwg").string();
+  imported.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(imported, out.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data reread{};
+  REQUIRE(dwg_read_file(out.c_str(), &reread) < DWG_ERR_CRITICAL);
+  CHECK(DwgLightListCountObjects(&reread) >= 1);
+  CHECK(DwgLightListRegistryEntryCount(&reread) >= 1);
+  dwg_free(&reread);
+  dwg_free(dwg);
+  std::free(dwg);
 }
 
 TEST_CASE("Hand-built LIGHT helper encodes in memory (REQ-385, issue #624)",
@@ -4950,10 +4983,19 @@ TEST_CASE("DWG export loss names LIGHT/SUN below R2010 (REQ-385, issue #624)",
   l.name = "L1";
   st.dwgImportedLights.push_back(l);
   st.dwgImportedSunPresent = true;
+  st.dwgImportedLightListPresent = true;
   bool sawLoss = false;
   for (const DwgExportLoss& loss : ComputeDwgExportLosses(st)) {
     if (loss.label.find("LIGHT/SUN") != std::string::npos)
       sawLoss = true;
   }
   CHECK(sawLoss);
+}
+
+TEST_CASE("DWG export loss counts LIGHTLIST below R2010 (REQ-386, issue #715)",
+          "[dwg][libredwg][issue715][req386][issue614]") {
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2000;
+  st.dwgImportedLightListPresent = true;
+  CHECK(DwgExportCountLightSunLosses(st) >= 1);
 }
