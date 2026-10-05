@@ -1013,6 +1013,13 @@ struct CadClipboard {
   /// units; paper: paper inches), so a cross-space paste scales annotation height by modelUnitsPerPlottedInch.
   bool fromPaper = false;
 
+  /// REQ-383 clauses 1 and 3: where the copy came from. A paste into a drawing of another project, or
+  /// of another coordinate system / unit, is checked against these (CheckClipboardPaste).
+  uint32_t    srcProjectUid = 0;        ///< 0 = a standalone drawing
+  std::string srcProjectName;
+  std::string srcZone;                  ///< CS-MAP code of the source drawing; empty = none
+  double      srcMetersPerUnit = 0.0;   ///< the source drawing's unit in meters; 0 = unknown
+
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
            (polyOffsets.size() <= 1) && annotations.empty() && tables.empty() && blockRefs.empty() &&
@@ -1771,6 +1778,12 @@ enum class CadGizmoOp {
   /// uniform because the representation has no ellipsoid to hold an unevenly scaled sphere
   /// (REQ-332 item 7). A per-axis handle would advertise a shape the program cannot store.
   Scale,
+};
+
+/// REQ-383 clause 6: a project whose point database changes could not be written, and the drawings open in it.
+struct UnsavedProject {
+  std::string              name;
+  std::vector<std::string> drawings;
 };
 
 struct AppCommandState {
@@ -5001,6 +5014,45 @@ struct AppCommandState {
     bool        reuse = false;       ///< an identical copy is already in the project
     bool        openRequested = false;
   } projectAttachPrompt;
+  /// REQ-383 (#696 P9): a point edit in a project drawing that needs the user's answer before it reaches
+  /// the shared database. SyncProjectPoints fills it in and waits; DrawProjectDialogs asks; the answer
+  /// is stored here and the next SyncProjectPoints frame carries it out. Cleared once the edit is
+  /// applied, undone, or the user leaves the tab.
+  struct PointEditPrompt {
+    bool        active = false;       ///< an unanswered question is showing (or waiting to show)
+    uint32_t    projectUid = 0;
+    int         tabIdx = 0;
+    std::string projectName;
+    std::vector<int> removed;         ///< numbers the drawing deleted
+    std::vector<int> conflicts;       ///< numbers that already exist in the project, hidden in this drawing
+    int         othersOpenShowing = 0;   ///< other OPEN drawings of the project that show a deleted point
+    int         othersClosedMaybe = 0;   ///< drawings of the project that are not open (rules unread)
+    bool        deletePending = false;   ///< the delete question (not only the number-conflict one) is showing
+    std::vector<std::string> otherNames; ///< names of those open drawings
+    /// The answers. None = not asked yet. Delete: Proceed / HideHere / Cancel. Conflict: Proceed
+    /// (overwrite) / Renumber / Cancel.
+    enum class Answer : uint8_t { None, Proceed, HideHere, Renumber, Cancel };
+    Answer      deleteAnswer = Answer::None;
+    Answer      conflictAnswer = Answer::None;
+  } pointEditPrompt;
+  /// REQ-383 clauses 1 and 3: a paste that crosses a project / coordinate-system / units boundary.
+  /// `block` = coordinate-system mismatch (only Cancel); otherwise Paste anyway / Cancel.
+  struct PastePrompt {
+    bool        active = false;
+    bool        block = false;
+    bool        original = false;    ///< PASTEORIG rather than PASTE
+    std::string text;
+    bool        openRequested = false;
+  } pastePrompt;
+  bool pasteWarningAnswered = false;   ///< "Paste anyway" was chosen: the next paste start skips the check
+  /// REQ-383 clause 6: closing a project's drawing tab while its point database cannot be written.
+  /// `tabIdx` < 0 = no question.
+  struct CloseTabPrompt {
+    int         tabIdx = -1;
+    std::string text;
+    bool        openRequested = false;
+    bool        confirmed = false;   ///< "Close anyway": the tab loop closes it next frame
+  } closeTabPrompt;
   uint32_t projectHealthUid = 0;     ///< REQ-379 clause 4: the Project Health window is open for this project
   /// REQ-380 (#696 P7): the Pack Project window. `projectUid` is the project being packed (0 = closed);
   /// the plan is what a pack would hold, refreshed when the window opens and after "Copy links in".
@@ -5051,6 +5103,8 @@ struct AppCommandState {
 
   // --- Close confirmation ---
   bool confirmCloseModal = false;  ///< Set by the main loop to open the "Unsaved Changes" dialog.
+  /// REQ-383 clause 6: projects whose database could not be written, found when the quit prompt was raised.
+  std::vector<UnsavedProject> closeUnsavedProjects;
   bool closeConfirmed    = false;  ///< Set by the dialog to signal the main loop to exit.
 
   // --- DWG export confirmation (REQ-052) ---

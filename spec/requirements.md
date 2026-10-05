@@ -11315,11 +11315,27 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. **Live edit.** A point edited in one drawing updates live in other open tabs of the project.
   6. **Unsaved close.** Closing with unsaved database changes lists the affected projects and drawings.
   Each warning ships with the feature that creates the risk (P3/P5); P9 makes them one consistent pass.
+  7. **How P9 reads clauses 1, 3, 4 and 6** (D-2026-10-05-k and the P9 plan).
+     - **Paste (1, 3).** Copy remembers the project, coordinate system and units it came from. Pasting
+       into a drawing of a *different project* warns. A paste where either drawing is in a project and
+       the coordinate systems differ is **blocked** (cancel only; convert for pasted content is a
+       follow-up issue); differing units warn. A paste between two standalone drawings is unchanged.
+       Survey points are not carried by Copy/Paste today, so no point number can collide through paste.
+     - **Delete (4).** Asked only when another drawing of the project could lose the point: the message
+       gives how many **open** drawings show it and how many **closed** drawings of the project might
+       (their rules are saved inside their own DWG, which is not read for a warning). A project with no
+       other drawing deletes without asking. One question covers all points removed in one step.
+     - **Number conflict (2).** One answer applies to every conflicting number in the same step.
+     - **Unsaved close (6).** The database saves itself a moment after each change, so "unsaved database
+       changes" means changes that could not be written (a full or locked disk). Closing the program or a
+       drawing tab tries the write first and, if it still fails, lists the project and its open drawings.
+       The quit prompt also groups its unsaved drawings under their project.
 - Acceptance: `[req383]` tests: each warning fires with the right counts; "hide only" leaves the
   database untouched; coordinate-system mismatch blocks; unsaved-close lists projects/drawings.
 - Owner-layer: UI, Domain
 - Status: accepted
-- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P9: clause 7 added
+  (D-2026-10-05-k).
 
 ### REQ-384 — AutoCAD annotation context objects DWG interop (GitHub issue #688)
 

@@ -18,6 +18,7 @@
 #include "util/gizmooverlay.hpp"  // CadGizmoOverlay, constructed here (REQ-060)
 #include "TransformPreview.hpp"
 #include "CadUi.hpp"
+#include "ProjectWarnings.hpp"  // REQ-383: ProjectsWithUnsavedPoints
 #include "WikiHelp.hpp"
 #include "util/framewatch.hpp"
 #include "PdfAttachDialog.hpp"
@@ -753,6 +754,11 @@ int main()
             cmd.documents[i].cadGpuRevision != cmd.documents[i].savedRevision)
           anyDirty = true;
       }
+      // REQ-383 clause 6: a project database that could not be written is "unsaved" too. Found once
+      // here (the write is tried first), not every frame the prompt is open.
+      cmd.closeUnsavedProjects = ProjectsWithUnsavedPoints(cmd, 0, cmdLog);
+      if (!cmd.closeUnsavedProjects.empty())
+        anyDirty = true;
       if (anyDirty)
         cmd.confirmCloseModal = true;
       else

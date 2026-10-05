@@ -77,6 +77,9 @@ bool SaveProjectSettings(AppCommandState& cmd, std::uint32_t projectUid, const P
                          std::vector<std::string>& log);
 /// Closes sessions with no tabs left (releasing their lock). Called every frame by DrawProjectDialogs.
 void ServiceProjects(AppCommandState& cmd, std::vector<std::string>& log);
+/// REQ-383 clause 6: false (and a question raised) when closing drawing tab \p tabIdx would close its
+/// project while the project's point database could not be written. True otherwise.
+bool ProjectTabMayClose(AppCommandState& cmd, int tabIdx, std::vector<std::string>& log);
 /// Releases every held lock; call once on the way out of the app.
 void ReleaseAllProjects(AppCommandState& cmd, std::vector<std::string>& log);
 /// New Project dialog, the lock / damaged-marker prompts, and the per-frame project sweep.

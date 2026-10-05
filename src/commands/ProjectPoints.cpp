@@ -1,5 +1,7 @@
 #include "ProjectPoints.hpp"
 
+#include "ProjectWarnings.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <unordered_map>
@@ -111,6 +113,26 @@ void Pull(AppCommandState& st, Tab& tab, const projpts::Db& db) {
   BumpCadGpuCache(st);
 }
 
+/// REQ-383: shows the question for this edit. Answers already given for the same edit are kept, so a
+/// delete question can follow a number-conflict question.
+void RaisePointEditPrompt(AppCommandState& st, const AppCommandState::ProjectSession& s, int tabIdx,
+                          const PointEditRisks& risks, const OtherDrawings& others) {
+  auto& p = st.pointEditPrompt;
+  if (!p.active) {
+    p = {};
+    p.active = true;
+  }
+  p.projectUid = s.uid;
+  p.tabIdx = tabIdx;
+  p.projectName = s.project.name;
+  p.removed = risks.removed;
+  p.conflicts = risks.conflicts;
+  p.othersOpenShowing = others.open;
+  p.othersClosedMaybe = others.closedMaybe;
+  p.otherNames = others.names;
+  p.deletePending = others.Total() > 0 && !risks.removed.empty();
+}
+
 }  // namespace
 
 void OpenProjectPointDb(AppCommandState::ProjectSession& s, std::vector<std::string>& log) {
@@ -154,6 +176,8 @@ void SyncProjectPoints(AppCommandState& st, std::vector<std::string>& log, doubl
   }
 
   const int idx = st.activeDrawingIdx;
+  if (st.pointEditPrompt.active && st.pointEditPrompt.tabIdx != idx)
+    st.pointEditPrompt = {};  // the user left the drawing; its edit asks again when they return
   if (idx < 1 || idx >= static_cast<int>(st.drawingTabs.size()) || idx != st.prevDrawingIdx || st.blockEditActive)
     return;  // Start tab, a tab switch still pending, or BEDIT holding the model arrays
   Tab& tab = st.drawingTabs[static_cast<size_t>(idx)];
@@ -187,49 +211,116 @@ void SyncProjectPoints(AppCommandState& st, std::vector<std::string>& log, doubl
       return;
     }
     std::vector<SurveyPoint> cur = projpts::ToWorld(st.surveyPoints, ox, oy);
+    auto& ask = st.pointEditPrompt;
+    using Answer = AppCommandState::PointEditPrompt::Answer;
 
-    // REQ-377: the drawing holds only the points its rules show, so a number it "adds" may already
-    // be in the database, hidden here. Writing over it would silently destroy a point another
-    // drawing shows, so the whole edit is refused and the view put back (REQ-201). The prompt
-    // (overwrite / renumber / cancel) is the REQ-383 pass; this is its cancel outcome.
+    // REQ-377 / REQ-383: the drawing holds only the points its rules show, so a number it "adds" may
+    // already be in the database, hidden here, and a point it deletes may be shown by other drawings.
+    // Either would silently damage shared data, so the edit waits for the user's answer (clauses 2
+    // and 4); cancelling puts the view back (REQ-201).
+    const PointEditRisks risks = FindPointEditRisks(tab.pointsBaseWorld, cur, db);
+    // Still waiting for the answer to the same edit: nothing to recompute (the folder scan below is not
+    // something to repeat every frame while a dialog is open).
+    if (ask.active && ask.tabIdx == idx && ask.removed == risks.removed && ask.conflicts == risks.conflicts &&
+        ((!risks.conflicts.empty() && ask.conflictAnswer == Answer::None) ||
+         (ask.deletePending && ask.deleteAnswer == Answer::None)))
+      return;
+    std::vector<SurveyPoint> keptForDb;  // deleted here but kept in the database ("hide in this drawing only")
+    std::vector<int> hideIds;
+
+    if (!risks.conflicts.empty()) {
+      if (ask.conflictAnswer == Answer::None) {
+        RaisePointEditPrompt(st, *s, idx, risks, OtherDrawings{});
+        return;
+      }
+      if (ask.conflictAnswer == Answer::Cancel) {
+        log.push_back("Project " + s->project.name + " - point number " + std::to_string(risks.conflicts.front()) +
+                      " already exists in the project (hidden in this drawing); the change was cancelled.");
+        ask = {};
+        Pull(st, tab, db);
+        return;
+      }
+      if (ask.conflictAnswer == Answer::Renumber) {
+        int next = NextFreePointNumber(db, cur, st.createPointsNextId - 1);
+        for (const int oldId : risks.conflicts) {
+          const int j = SurveyPointIndexForId(st, oldId);
+          if (j < 0)
+            continue;
+          for (CadAnnotation& a : st.cadAnnotations)
+            if (a.surveyPointLabelForId == oldId)
+              a.surveyPointLabelForId = next;
+          st.surveyPoints[static_cast<size_t>(j)].id = next;
+          cur[static_cast<size_t>(j)].id = next;
+          EnsureSurveyPointLabelMtext(st, static_cast<size_t>(j), nullptr);
+          log.push_back("Project " + s->project.name + " - point number " + std::to_string(oldId) +
+                        " already exists in the project; the new point was renumbered " + std::to_string(next) + ".");
+          ++next;
+        }
+        st.surveyPointIdBuffers.clear();
+        st.createPointsNextId = std::max(st.createPointsNextId, next);
+      }
+      // Proceed = overwrite: ApplyChanges replaces the database's point and says so in the log.
+    }
+
+    if (!risks.removed.empty()) {
+      const OtherDrawings others = CountOtherDrawings(st, tab.projectUid, idx, risks.removed);
+      if (others.Total() > 0) {
+        if (ask.deleteAnswer == Answer::None) {
+          RaisePointEditPrompt(st, *s, idx, risks, others);
+          return;
+        }
+        if (ask.deleteAnswer == Answer::Cancel) {
+          log.push_back("Project " + s->project.name + " - the delete was cancelled; " +
+                        std::to_string(risks.removed.size()) + " point(s) stay in the project.");
+          ask = {};
+          Pull(st, tab, db);
+          return;
+        }
+        if (ask.deleteAnswer == Answer::HideHere) {
+          std::unordered_set<int> keep(risks.removed.begin(), risks.removed.end());
+          for (const SurveyPoint& p : tab.pointsBaseWorld)
+            if (keep.count(p.id))
+              keptForDb.push_back(p);
+          hideIds = risks.removed;
+        }
+      }
+    }
+    ask = {};
+
     std::unordered_set<int> baseIds;
     baseIds.reserve(tab.pointsBaseWorld.size());
     for (const SurveyPoint& p : tab.pointsBaseWorld)
       baseIds.insert(p.id);
-    std::vector<const SurveyPoint*> fresh;  // numbers this drawing did not have a frame ago
+    std::vector<int> freshIds;  // numbers this drawing did not have a frame ago
     for (const SurveyPoint& p : cur)
       if (!baseIds.count(p.id))
-        fresh.push_back(&p);
-    std::unordered_map<int, const SurveyPoint*> dbById;
-    if (!fresh.empty()) {
-      dbById.reserve(db.points.size());
-      for (const projpts::Entry& e : db.points)
-        dbById[e.point.id] = &e.point;
-    }
-    for (const SurveyPoint* fp : fresh) {
-      const SurveyPoint& p = *fp;
-      const auto d = dbById.find(p.id);
-      if (d != dbById.end() && !projpts::SamePoint(*d->second, p)) {
-        log.push_back("Project " + s->project.name + " - point number " + std::to_string(p.id) +
-                      " already exists in the project and is hidden in this drawing; the change was undone. "
-                      "Use another number, or show that point first.");
-        Pull(st, tab, db);
-        return;
-      }
-    }
+        freshIds.push_back(p.id);
 
     const bool upToDate = tab.pointsRevision == db.revision;
-    projpts::ApplyChanges(&db, tab.pointsBaseWorld, cur, SourceKey(st, *s, idx), now, &log);
+    if (keptForDb.empty()) {
+      projpts::ApplyChanges(&db, tab.pointsBaseWorld, cur, SourceKey(st, *s, idx), now, &log);
+    } else {  // the database still holds what this drawing only hides
+      std::vector<SurveyPoint> forDb = cur;
+      forDb.insert(forDb.end(), keptForDb.begin(), keptForDb.end());
+      projpts::ApplyChanges(&db, tab.pointsBaseWorld, forDb, SourceKey(st, *s, idx), now, &log);
+      for (const int id : hideIds)
+        projpts::AddId(&st.pointVisibility.hidden, id);
+      BumpCadGpuCache(st);  // the rules are part of the drawing: it now has unsaved changes
+      log.push_back("Project " + s->project.name + " - " + std::to_string(hideIds.size()) +
+                    " point(s) hidden in this drawing only; other drawings still show them.");
+    }
     // REQ-377 clause 2: a point that appears in this drawing is shown here from now on, whatever the
     // filters say. Points the user removed from view are not touched (they were deleted).
     const bool rulesInSync = tab.pointsRulesApplied == st.pointVisibility;
-    for (const SurveyPoint* fp : fresh)
-      projpts::AddId(&st.pointVisibility.shown, fp->id);
+    for (const int id : freshIds)
+      projpts::AddId(&st.pointVisibility.shown, id);
     if (rulesInSync)
       tab.pointsRulesApplied = st.pointVisibility;  // pinning a point changes nothing on screen
     tab.pointsBaseWorld = std::move(cur);
     if (upToDate)
       tab.pointsRevision = db.revision;
+  } else if (st.pointEditPrompt.active) {
+    st.pointEditPrompt = {};  // the edit that raised the question is gone (undone, or the drawing was reloaded)
   }
   if (tab.pointsRevision != db.revision || tab.pointsRulesApplied != st.pointVisibility)
     Pull(st, tab, db);

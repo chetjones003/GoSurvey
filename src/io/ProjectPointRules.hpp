@@ -54,6 +54,9 @@ bool HasId(const std::vector<int>& ids, int id);
 std::vector<const Entry*> Visible(const Rules& rules, const PointGroupRule* groupRule, const Db& db,
                                   std::vector<std::string>* badTokens = nullptr);
 
+/// True when \p rules shows this one entry (REQ-383 clause 4 asks which drawings show a point).
+bool ShowsEntry(const Rules& rules, const PointGroupRule* groupRule, const Entry& entry);
+
 /// How many entries of \p db are NOT visible under \p rules (for the toolspace summary).
 size_t HiddenCount(const Rules& rules, const PointGroupRule* groupRule, const Db& db);
 
