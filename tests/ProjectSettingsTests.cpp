@@ -59,6 +59,11 @@ TEST_CASE("req375 an empty project enforces nothing and supplies no defaults", "
 
   CHECK_FALSE(ParseProjectSettings("[1,2]", &p, &err));
   CHECK_FALSE(err.empty());
+
+  // A hand-edited .gsproj with a nonsense scale must not throw or poison the project.
+  REQUIRE(ParseProjectSettings(R"({"defaults":{},"plotScale":"big","linearUnits":"x"})", &p, &err));
+  CHECK(p.plotScale == 50.f);
+  CHECK(p.insUnits == -1);
 }
 
 TEST_CASE("req375 project settings round trip and keep members they do not own", "[req375]") {

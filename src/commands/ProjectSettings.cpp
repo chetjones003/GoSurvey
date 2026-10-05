@@ -24,7 +24,8 @@ bool ParseProjectSettings(const std::string& settingsJson, ProjectSettings* out,
   if (o.contains("defaults") && o["defaults"].is_object()) {
     out->hasDefaults = DrawingSettingsFromJsonText(o["defaults"].dump(), &out->defaults);
     out->defaults.overridden = 0;
-    const float v = o.value("plotScale", 50.f);
+    // value<> would throw on a hand-edited non-number; a bad scale falls back to the standard 50.
+    const float v = o.contains("plotScale") && o["plotScale"].is_number() ? o["plotScale"].get<float>() : 50.f;
     out->plotScale = std::isfinite(v) && v > 0.f ? v : 50.f;
   }
   return true;
