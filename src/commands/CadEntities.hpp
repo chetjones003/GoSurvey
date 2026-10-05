@@ -86,6 +86,11 @@ struct EntityAttributes {
   float lineweightMm = -1.f;
   /// 0 = opaque, 1 = fully transparent; \c -1.f means ByLayer.
   float transparency = -1.f;
+  /// When true, shaded mesh/solid drawing uses \ref materialDiffuseR/G/B (REQ-372 import).
+  bool materialDiffuseOverride = false;
+  float materialDiffuseR = 0.f;
+  float materialDiffuseG = 0.f;
+  float materialDiffuseB = 0.f;
 };
 
 /// The linetypes an entity can be given (\ref EntityAttributes::linetype storage) — the Properties

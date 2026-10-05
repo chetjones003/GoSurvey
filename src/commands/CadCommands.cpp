@@ -31093,6 +31093,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     VisibleSolid vs;
     vs.tess = &*it;
     ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
+    ApplyMaterialDiffuseForShaded(attr, vs.rgba);
     vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
     visible.push_back(vs);
     mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
@@ -31121,6 +31122,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     VisibleSolid vs;
     vs.tess = &*it;
     ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
+    ApplyMaterialDiffuseForShaded(attr, vs.rgba);
     vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
     visible.push_back(vs);
     mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
@@ -31149,6 +31151,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     VisibleSolid vs;
     vs.tess = &*it;
     ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
+    ApplyMaterialDiffuseForShaded(attr, vs.rgba);
     vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
     visible.push_back(vs);
     mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
@@ -44104,6 +44107,15 @@ void ResolveEntityRgbaForViewport(const EntityAttributes& attr, const CadLayerRo
       col = layer->color;
   }
   ResolveStoredColorForViewport(col, tr, defaultR, defaultG, defaultB, outRgba);
+}
+
+void ApplyMaterialDiffuseForShaded(const EntityAttributes& attr, float rgba[4]) {
+  assert(rgba != nullptr);
+  if (!attr.materialDiffuseOverride)
+    return;
+  rgba[0] = attr.materialDiffuseR;
+  rgba[1] = attr.materialDiffuseG;
+  rgba[2] = attr.materialDiffuseB;
 }
 
 struct DxfLwPair {
