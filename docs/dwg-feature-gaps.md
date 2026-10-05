@@ -14,10 +14,9 @@ As of 2026-10-05, the original **Group A** inventory and **Group B** features th
 
 | Issue | What is left |
 |---|---|
-| **#688** | AutoCAD annotation **context** objects — split from closed [#622](https://github.com/chetjones003/GoSurvey/issues/622); LibreDWG / SPEC GAP (see [#688](https://github.com/chetjones003/GoSurvey/issues/688)). |
-| **#624** | **Lights/sun** — SPEC GAP (future REQ). **Materials** — **REQ-372** accepted (diffuse + DWG). **Visual styles** — REQ-371 shipped. |
+| **#624** | **Lights/sun** — SPEC GAP (future REQ). **Materials** — **REQ-372** (in progress on `beta`). **Visual styles** — REQ-371 shipped. |
 
-Close **#601** only when those two are resolved or explicitly moved off this tracker.
+Close **#601** when **#624** lights/sun (and any remaining #624 material work you treat as blocking) is resolved or moved off this tracker. **#688** annotation context shipped (**REQ-384**); see detail section below.
 
 ## Shipped on `beta` (child issues closed)
 
@@ -52,7 +51,8 @@ Close **#601** only when those two are resolved or explicitly moved off this tra
 | #623 | GEODATA layout (local vs projected) | REQ-362 |
 | #617 | Live fields on TEXT/MTEXT + DWG `FIELD`/`FIELDLIST` | REQ-368 — PR **#677** |
 | #618 | Dynamic blocks MVP (`*U` INSERT, linear/flip) | REQ-369 — PR **#678**; optional follow-ups in REQ-369 |
-| #622 | Annotative scaling (GoSurvey-native + EED) | Closed 2026-10-05 — PRs **#657–#687**; context parity → **#688** |
+| #622 | Annotative scaling (GoSurvey-native + EED) | Closed 2026-10-05 — PRs **#657–#687** |
+| #688 | Annotation context (REQ-384) | Shipped 2026-10-05 — PRs **#704–#710** (increments 1–5) |
 
 Some export paths still **degrade** rather than drop (for example 3D polylines with bulge, multileader extra branches on R2000/R2004). Those appear in the dynamic loss list when they apply.
 
@@ -62,7 +62,7 @@ Some export paths still **degrade** rather than drop (for example 3D polylines w
 
 GoSurvey-native annotative scaling shipped in **#622** (closed): CANNOSCALE UI, `.gs` SCALE list, viewport/model annotative draw, multi-SCALE DWG export/import, GOSURVEY / AcadAnnotative EED, per-scale visibility (`annoVisScales`), UI and `[issue622]` tests (PRs **#657–#687**).
 
-**#688** tracks remaining AutoCAD parity: per-object **annotation context** blobs (`*_OBJECTCONTEXTDATA`, `CONTEXTDATAMANAGER`), native DIMENSION annotative fields where LibreDWG lacks them, and export-loss honesty when context cannot be preserved. **REQ-384** accepted (D-2026-10-05-f); increments 1–3 import log and **MTEXT** / **TEXT** / **INSERT** / **DIMENSION** export; **increment 4** **MULTILEADER** + **HATCH** scale context export and default-scale **MTEXT**/**TEXT** merge on import. Round-trip and full per-scale import merge remain for increment 5.
+**#688** (REQ-384, D-2026-10-05-f) — **shipped on `beta`:** R2010+ hand-built per-scale **annotation context** export for **MTEXT**, **TEXT**, **INSERT**, **DIMENSION**, **MULTILEADER**, and simplified **HATCH** scale context; import scan + default-scale **MTEXT**/**TEXT** merge; R2018 re-read round-trip tests; `#614` names pre-R2010 annotative hosts and hatch view/geometry context gaps. Full AutoCAD parity (every `*_OBJECTCONTEXTDATA` variant, extension-dictionary round-trip through LibreDWG, per-scale import merge for all hosts) is not claimed — track regressions via `[issue688][req384]` and export loss, not as an open #601 checklist item unless new gaps are filed.
 
 ### #624 — Materials, lights, visual styles
 
@@ -102,4 +102,4 @@ DWG versions cluster on a few containers: R2000; R2004/R2010/R2013/R2018 share o
 
 ## Historical recommended order
 
-The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete except** **#688** and **#624** in the table at the top of this document. New DWG fidelity work should target those issues after their REQs exist (**#688** needs an accepted REQ or SPEC decision; **#624** is still a SPEC GAP).
+The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete except** **#624** (lights/sun SPEC GAP; materials via **REQ-372**). New DWG fidelity work should target **#624** or newly filed gaps — **#688** context parity shipped under **REQ-384**.

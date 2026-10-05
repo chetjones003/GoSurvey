@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "CadEntities.hpp"
+#include "DwgIo.hpp"
 
 #include <cstring>
 
@@ -756,6 +757,51 @@ void DwgExportAnnotContextAppendLog(const DwgExportAnnotContext& ctx, std::vecto
     log.push_back("CAD export — wrote " + std::to_string(ctx.hatchContextObjectsWritten) +
                   " HATCH scale context object(s) (REQ-384 inc 4, issue #688).");
   }
+}
+
+namespace {
+
+[[nodiscard]] bool ExportVersionSupportsAnnotContext(DwgSaveVersion version) {
+  switch (version) {
+  case DwgSaveVersion::R2010:
+  case DwgSaveVersion::R2013:
+  case DwgSaveVersion::R2018:
+    return true;
+  default:
+    return false;
+  }
+}
+
+[[nodiscard]] size_t CountAnnotativeHosts(const AppCommandState& st) {
+  size_t n = 0;
+  for (const CadAnnotation& a : st.cadAnnotations)
+    if (a.annotative)
+      ++n;
+  for (const CadBlockRef& r : st.cadBlockRefs)
+    if (r.annotative)
+      ++n;
+  for (const CadMultileader& ml : st.cadMultileaders)
+    if (ml.annotative)
+      ++n;
+  for (const CadFilledRegion& fr : st.cadFilledRegions)
+    if (fr.annotative)
+      ++n;
+  return n;
+}
+
+}  // namespace
+
+DwgAnnotContextExportLossCounts DwgExportAnnotContextLossCounts(const AppCommandState& st) {
+  DwgAnnotContextExportLossCounts out;
+  if (!ExportVersionSupportsAnnotContext(st.dwgExportVersion)) {
+    out.annotativeWithoutContext = CountAnnotativeHosts(st);
+    return out;
+  }
+  for (const CadFilledRegion& fr : st.cadFilledRegions) {
+    if (fr.annotative)
+      ++out.hatchSimplifiedContext;
+  }
+  return out;
 }
 
 void DwgAnnotContextImportBegin() {

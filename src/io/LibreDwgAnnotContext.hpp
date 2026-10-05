@@ -76,4 +76,12 @@ const _dwg_object* DwgImportResolveDefaultContextObject(const _dwg_struct* dwg,
                                                         const _dwg_object_entity* ent);
 int DwgImportDefaultContextMergeCount();
 void DwgImportNoteDefaultContextMerged();
+
+struct DwgAnnotContextExportLossCounts {
+  size_t annotativeWithoutContext = 0;
+  size_t hatchSimplifiedContext = 0;
+};
+
+DwgAnnotContextExportLossCounts DwgExportAnnotContextLossCounts(const AppCommandState& st);
+
 bool DwgTestAddBareMtextContextObject(_dwg_struct* dwg);
