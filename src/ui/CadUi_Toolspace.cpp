@@ -3,6 +3,7 @@
 #include "FontRegistry.hpp"
 #include "StringUtil.hpp"
 #include "ProjectPoints.hpp"
+#include "io/ProjectFiles.hpp"
 #include "ToolspaceCatalog.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -424,6 +425,67 @@ void DrawPointGroupsFolderContext(AppCommandState& cmd, std::vector<std::string>
   if (ImGui::MenuItem("Refresh") && log != nullptr)
     log->push_back("TOOLSPACE — refreshed.");
   EndTsContext();
+}
+
+// REQ-379 clause 3 (#696 P6): the Project Files section - the project's tracked items by folder, with a
+// link badge on files that will not travel and a flag on files that are missing.
+void DrawProjectFilesFolder(AppCommandState& cmd) {
+  const int tab = cmd.activeDrawingIdx;
+  if (tab < 1 || tab >= static_cast<int>(cmd.drawingTabs.size()))
+    return;
+  const std::uint32_t uid = cmd.drawingTabs[static_cast<size_t>(tab)].projectUid;
+  const AppCommandState::ProjectSession* s = nullptr;
+  for (const auto& ps : cmd.openProjects)
+    if (ps.uid == uid)
+      s = &ps;
+  if (s == nullptr)
+    return;
+  ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+  const bool open = TsTreeNode("##ts_projfiles", kFolder, "c3d_point", "Project Files");
+  if (!open)
+    return;
+  const gsproj::Project& p = s->project;
+  if (p.items.empty())
+    ImGui::TextDisabled("No files tracked yet. Save a drawing to record it.");
+  // Group by the folder an item sits in (its first path segment); a link has no project folder.
+  std::map<std::string, std::vector<const gsproj::TrackedItem*>> byFolder;
+  for (const gsproj::TrackedItem& it : p.items) {
+    std::string folder = "Linked (outside the project)";
+    if (it.kind == gsproj::kKindInProject) {
+      const size_t cut = it.path.find('/');
+      folder = cut == std::string::npos ? std::string("(project root)") : it.path.substr(0, cut);
+    } else if (it.kind != gsproj::kKindLocalLink) {
+      folder = "Unavailable";
+    }
+    byFolder[folder].push_back(&it);
+  }
+  std::error_code ec;
+  for (const auto& [folder, items] : byFolder) {
+    ImGui::TextDisabled("%s", folder.c_str());
+    for (const gsproj::TrackedItem* it : items) {
+      const std::string abs = projfiles::ResolveItem(p, *it);
+      const bool missing = !abs.empty() && !std::filesystem::exists(std::filesystem::u8path(abs), ec);
+      const std::string name = std::filesystem::u8path(it->path).filename().u8string();
+      ImGui::PushStyleColor(ImGuiCol_Text, missing ? ImVec4(0.85f, 0.25f, 0.2f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_Text));
+      ImGui::BulletText("%s%s%s", name.c_str(), it->kind == gsproj::kKindLocalLink ? "  [link]" : "",
+                        missing ? "  (missing)" : "");
+      ImGui::PopStyleColor();
+      if (ImGui::IsItemHovered()) {
+        std::string tip = it->path;
+        if (it->kind == gsproj::kKindLocalLink)
+          tip += "\nA link: this file will not travel with the project.";
+        if (!it->associations.empty()) {
+          tip += "\nAttached to:";
+          for (const std::string& a : it->associations)
+            tip += "\n  " + a;
+        }
+        ImGui::SetTooltip("%s", tip.c_str());
+      }
+    }
+  }
+  if (ImGui::Button("Project Health..."))
+    cmd.projectHealthUid = uid;
+  ImGui::TreePop();
 }
 
 // REQ-377 (#696 P4): the Survey Database section — which points of the project database this drawing
@@ -874,6 +936,7 @@ void DrawProspectorTree(AppCommandState& cmd, std::vector<std::string>* log, TsP
   }
 
   DrawSurveyDatabaseFolder(cmd, log);
+  DrawProjectFilesFolder(cmd);
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
   const bool surfFoldOpen =TsTreeNode("##ts_surffold", kFolder, "c3d_surfaces", "Surfaces");

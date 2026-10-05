@@ -367,6 +367,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/ProjectPoints.cpp
   # REQ-378 (#696 P5): Add Drawing to Project - the flow, and the whole-drawing conversion it offers
   src/commands/ProjectAddFlow.cpp
+  # REQ-379 (#696 P6): tracked files at the drawing level (copy/link prompt, save-time record, open-time re-attach)
+  src/commands/ProjectFiles.cpp
   src/commands/ConvertDrawing.cpp
   src/commands/CadCommands_Mleader.cpp
   src/commands/CadCommands_Ucs.cpp
@@ -439,6 +441,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/ProjectPointDb.cpp
   src/io/ProjectPointRules.cpp
   src/io/ProjectAddDrawing.cpp
+  # REQ-379 (#696 P6): tracked files - attach, record, find, health. Pure <filesystem>/json.
+  src/io/ProjectFiles.cpp
   # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
   src/io/WhatsNewContent.cpp
   src/io/WikiContent.cpp
@@ -1157,6 +1161,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-378 (#696 P5): the pure database-merge half of Add Drawing to Project
     tests/ProjectAddDrawingTests.cpp
     src/io/ProjectAddDrawing.cpp
+    # REQ-379 (#696 P6): the pure tracked-file rules
+    tests/ProjectFilesTests.cpp
+    src/io/ProjectFiles.cpp
     tests/TelemetryPingTests.cpp
     tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
@@ -1360,6 +1367,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ProjectPointsSyncTests.cpp
     # REQ-378 (#696 P5): Add Drawing to Project end to end + Convert (needs AppCommandState, CS-MAP, LibreDWG)
     tests/ProjectAddFlowTests.cpp
+    # REQ-379 (#696 P6): attach prompt, save-time record and open-time re-attach against AppCommandState
+    tests/ProjectFilesFlowTests.cpp
     # issue #486 increment B2 (REQ-347) — the PIPERUN command layer: StartPipeRunCommand /
     # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
     # with GoSurveySnapTests (gosurvey_domain), not GoSurveyTests, like CadBlockImportTests above.

@@ -1,5 +1,6 @@
 #include "CadCommands.hpp"
 #include "ProjectSettings.hpp"  // REQ-375: NoteUserPlotScale
+#include "ProjectFiles.hpp"  // REQ-379: RequestProjectAttach
 #include "CadCommandsInternal.hpp"
 #include "CadColor.hpp"
 #include "CadBlocks.hpp"
@@ -6722,6 +6723,7 @@ const CmdEntry kRegistry[] = {
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"drawingsettings", "editdrawingsettings", "Drawing Settings: units, scale and the drawing's settings"},
     {"projectsettings", "", "Project Settings: the project's coordinate system, units and defaults (REQ-375)"},
+    {"projecthealth", "", "Project Health: linked, missing and unsaved files before you pack or hand over (REQ-379)"},
     {"adddrawing", "", "Add Drawing to Project: bring an existing drawing and its points into this project (REQ-378)"},
     {"geomarkpoint", "", "Place a Position Marker at a picked point (geolocated drawing)"},
     {"geomarklatlong", "", "Place a Position Marker at a typed latitude and longitude"},
@@ -7249,6 +7251,18 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     } else {
       st.projectSettingsUid = uid;
       log.push_back("PROJECTSETTINGS — Project Settings opened.");
+    }
+    return true;
+  }
+  if (primary == "projecthealth") {  // REQ-379 clause 4
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("PROJECTHEALTH — this drawing is not in a project.");
+    } else {
+      st.projectHealthUid = uid;
+      log.push_back("PROJECTHEALTH — Project Health opened.");
     }
     return true;
   }
@@ -41339,6 +41353,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         }
         path = buf;
       }
+      // REQ-379 clause 1: in a project drawing a file from outside the project asks copy / link first;
+      // the modal's answer starts the import.
+      if (RequestProjectAttach(st, AppCommandState::ProjectAttachPrompt::Kind::PointCloud, path, log))
+        return;
       StartPointCloudImportAsync(st, path, log);
       return;
     }
