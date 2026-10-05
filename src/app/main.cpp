@@ -770,7 +770,7 @@ int main()
 
     if (cmd.closeConfirmed)
     {
-      ReleaseAllProjects(cmd);  // REQ-382: a clean exit leaves no stale project lock
+      ReleaseAllProjects(cmd, cmdLog);  // REQ-382: a clean exit leaves no stale project lock
       // Work is saved or deliberately discarded by this point, so it is safe to hand over.
       // Inno closes this process via the AppMutex, replaces the files, and restarts us.
       if (updateExitPending)

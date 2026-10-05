@@ -26,6 +26,7 @@
 #include "util/pointcloudcache.hpp"
 #include "DwgIo.hpp"
 #include "PdfAttach.hpp"
+#include "ProjectPointDb.hpp"  // projpts::Db, for AppCommandState::ProjectSession (REQ-376)
 #include "Project.hpp"  // gsproj::Project / LockInfo, for AppCommandState::openProjects (REQ-374)
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
@@ -4923,6 +4924,16 @@ struct AppCommandState {
     std::string  name;
     uint32_t     uid = 0;  ///< Stable per-tab ID used in ImGui label suffix to prevent ID collisions.
     uint32_t     projectUid = 0;  ///< REQ-374: ProjectSession::uid this drawing belongs to; 0 = standalone.
+    /// REQ-376 (#696 P3): how this tab's survey points relate to the project database. Unattached = not
+    /// decided yet (decided on the first frame after the tab is built); Shared = the tab reads and
+    /// writes the project's database; Detached = the drawing arrived carrying points of its own, which
+    /// stay in the DWG untouched until Add Drawing to Project (P5) merges them.
+    enum class PointsMode : uint8_t { Unattached, Shared, Detached };
+    PointsMode   pointsMode = PointsMode::Unattached;
+    /// Shared: the points (WORLD coordinates) this tab last agreed with the database, and the database
+    /// revision that was. The diff against them is what a frame's edits are.
+    std::vector<SurveyPoint> pointsBaseWorld;
+    uint64_t     pointsRevision = 0;
   };
   /// REQ-374 / REQ-382 (#696 P1): one entry per open project. Each drawing tab belongs to exactly one
   /// session (or none). A session with no tabs left is closed and its lock released (ServiceProjects).
@@ -4934,6 +4945,11 @@ struct AppCommandState {
     /// REQ-375: project.settingsJson, parsed once when the project opens and again when Project
     /// Settings changes it. Never null for an open session.
     std::shared_ptr<ProjectSettings> settings;
+    /// REQ-376 / ADR-065: the project's one survey point database, shared by every tab of the project.
+    /// Null when the file could not be read (pointsError says why) — then the project's tabs keep their
+    /// points in the DWG and the damaged file is never written over.
+    std::shared_ptr<projpts::Db> points;
+    std::string                  pointsError;
   };
   std::vector<ProjectSession> openProjects;
   uint32_t                    nextProjectUid = 1u;

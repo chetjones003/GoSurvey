@@ -6,6 +6,7 @@
 #include "CadUi.hpp"
 
 #include "AppIcon.hpp"  // UserDataDirectory
+#include "ProjectPoints.hpp"
 #include "ProjectSettings.hpp"
 #include "RecentDrawings.hpp"
 #include "WinFileDialogs.hpp"
@@ -138,6 +139,7 @@ std::uint32_t EnsureProjectOpen(AppCommandState& cmd, std::vector<std::string>& 
   }
   s.uid = cmd.nextProjectUid++;
   const std::uint32_t uid = s.uid;
+  OpenProjectPointDb(s, log);  // REQ-376: the project's one survey point database
   recent::Note(RecentProjectsJsonPath(), AbsUtf8(s.project.file), "", static_cast<std::int64_t>(std::time(nullptr)));
   cmd.openProjects.push_back(std::move(s));
   return uid;
@@ -275,7 +277,7 @@ std::vector<recent::Entry> LoadRecentProjects() {
   return recent::Load(RecentProjectsJsonPath());
 }
 
-void ServiceProjects(AppCommandState& cmd) {
+void ServiceProjects(AppCommandState& cmd, std::vector<std::string>& log) {
   for (size_t i = 0; i < cmd.openProjects.size();) {
     const std::uint32_t uid = cmd.openProjects[i].uid;
     const bool used = std::any_of(cmd.drawingTabs.begin(), cmd.drawingTabs.end(),
@@ -284,16 +286,19 @@ void ServiceProjects(AppCommandState& cmd) {
       ++i;
       continue;
     }
+    FlushProjectPointDb(cmd.openProjects[i], log);  // REQ-376 clause 7: no edit is lost with the last tab
     if (!cmd.openProjects[i].readOnly)
       gsproj::Release(cmd.openProjects[i].project.file, cmd.openProjects[i].me);
     cmd.openProjects.erase(cmd.openProjects.begin() + static_cast<std::ptrdiff_t>(i));
   }
 }
 
-void ReleaseAllProjects(AppCommandState& cmd) {
-  for (auto& s : cmd.openProjects)
+void ReleaseAllProjects(AppCommandState& cmd, std::vector<std::string>& log) {
+  for (auto& s : cmd.openProjects) {
+    FlushProjectPointDb(s, log);  // REQ-376 clause 7
     if (!s.readOnly)
       gsproj::Release(s.project.file, s.me);
+  }
   cmd.openProjects.clear();
 }
 
@@ -477,7 +482,8 @@ void DrawNewProjectModal(AppCommandState& cmd, std::vector<std::string>& log) {
 }  // namespace
 
 void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log) {
-  ServiceProjects(cmd);
+  ServiceProjects(cmd, log);
+  SyncProjectPoints(cmd, log, ImGui::GetTime());  // REQ-376: project drawings <-> the shared point database
   EnforceProjectSettings(cmd, log);  // REQ-375: enforced zone/unit and inherited defaults, every frame
   DrawNewProjectModal(cmd, log);
   DrawProjectPromptModal(cmd, log);

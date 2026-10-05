@@ -1,4 +1,5 @@
 #include "LibreDwgCad.hpp"
+#include "ProjectPoints.hpp"
 
 #include "AcisSatParser.hpp"
 #include "CadCommands.hpp"
@@ -4556,7 +4557,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   }
   // REQ-365 / issue #605: survey points, written as a GOSURVEY_POINT block INSERT with visible
   // NUMBER/DESCRIPTION attributes so AutoCAD and Civil 3D show them, not just GoSurvey.
-  if (!st.surveyPoints.empty()) {
+  // REQ-376: a project drawing's points live in the project database, not in the DWG.
+  if (!st.surveyPoints.empty() && !ProjectOwnsActiveTabPoints(st)) {
     const double r = static_cast<double>(PositionMarkerRadiusWorld(st));
     Dwg_Object_BLOCK_HEADER* spBlk = EnsureSurveyPointBlockDef(dwg, r);
     if (spBlk != nullptr) {

@@ -3,6 +3,7 @@
 
 #include "CadCommands.hpp"
 #include "GsMigrate.hpp"
+#include "ProjectPoints.hpp"
 #include "TextStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -2039,7 +2040,9 @@ json BuildRoot(const AppCommandState& st) {
   doc["layers"] = std::move(layers);
 
   json survey = json::array();
-  for (const auto& p : st.surveyPoints) {
+  // REQ-376 / ADR-065 (c): a project drawing's trailer carries no points, only its rules and overrides.
+  const std::vector<SurveyPoint> noPoints;
+  for (const auto& p : ProjectOwnsActiveTabPoints(st) ? noPoints : st.surveyPoints) {
     json o;
     o["id"] = p.id;
     o["easting"] = p.easting;

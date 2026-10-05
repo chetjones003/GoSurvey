@@ -4725,9 +4725,9 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   to the pipeline.
 
 
-### ADR-065 — A project's survey points live in one project-owned file, loaded once and shared by every drawing tab of the project   (2026-10-05, proposed)
+### ADR-065 — A project's survey points live in one project-owned file, loaded once and shared by every drawing tab of the project   (2026-10-05, accepted)
 
-- **Status:** proposed (2026-10-05, D-2026-10-05-e) — **needs the user's acceptance before P3 starts.**
+- **Status:** accepted (2026-10-05, D-2026-10-05-e; user approved as written before P3 started).
   Backs REQ-376 and REQ-377 (GitHub issue #696).
 - **Context.** Today a drawing's survey points live inside the drawing (ADR-044 JSON trailer). A project
   needs ONE set of points that several drawings read and write, kept in step live, that travels in a
