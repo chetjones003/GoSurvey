@@ -5,6 +5,7 @@
 #include "CadField.hpp"
 #include "LibreDwgField.hpp"
 #include "LibreDwgDynamicBlock.hpp"
+#include "LibreDwgMaterial.hpp"
 #include "LibreDwgVisualStyle.hpp"
 #include "util/cadpiperun.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -287,6 +288,14 @@ void NoteSkip(std::unordered_map<std::string, int>* hist, const char* name) {
   ++(*hist)[name];
 }
 
+static void PushImportedMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* owner,
+                             std::shared_ptr<CadMesh> mesh, EntityAttributes at) {
+  if (dwg != nullptr && owner != nullptr)
+    DwgImportApplyEntityMaterial(dwg, owner, &at);
+  st.cadMeshes.push_back(std::move(mesh));
+  st.cadMeshAttrs.push_back(at);
+}
+
 void LocalLine(AppCommandState& st, double x0, double y0, double z0, double x1, double y1, double z1,
                const EntityAttributes& at) {
   st.userLinesFlat.push_back(x0 - st.worldDocumentOriginX);
@@ -507,8 +516,8 @@ static bool Import2DSolidOrTrace(AppCommandState& st, const BITCODE_2RD& c1, con
   return true;
 }
 
-static bool Import3DFaceAsMesh(AppCommandState& st, const Dwg_Entity__3DFACE* f, const Xf2& xf,
-                               const EntityAttributes& at) {
+static bool Import3DFaceAsMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* owner,
+                               const Dwg_Entity__3DFACE* f, const Xf2& xf, const EntityAttributes& at) {
   if (f == nullptr)
     return false;
   auto same3d = [](const BITCODE_3BD& a, const BITCODE_3BD& b) {
@@ -542,8 +551,7 @@ static bool Import3DFaceAsMesh(AppCommandState& st, const Dwg_Entity__3DFACE* f,
   part.indexBegin = 0;
   part.indexCount = static_cast<int>(mesh->indices.size());
   mesh->parts.push_back(part);
-  st.cadMeshes.push_back(std::move(mesh));
-  st.cadMeshAttrs.push_back(at);
+  PushImportedMesh(st, dwg, owner, std::move(mesh), at);
   return true;
 }
 
@@ -627,8 +635,7 @@ static bool ImportPolylineMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* o
   part.indexBegin = 0;
   part.indexCount = static_cast<int>(mesh->indices.size());
   mesh->parts.push_back(part);
-  st.cadMeshes.push_back(std::move(mesh));
-  st.cadMeshAttrs.push_back(at);
+  PushImportedMesh(st, dwg, obj != nullptr ? obj->tio.entity : nullptr, std::move(mesh), at);
   return true;
 }
 
@@ -758,8 +765,7 @@ static bool ImportPolylinePFace(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* 
   part.indexBegin = 0;
   part.indexCount = static_cast<int>(mesh->indices.size());
   mesh->parts.push_back(part);
-  st.cadMeshes.push_back(std::move(mesh));
-  st.cadMeshAttrs.push_back(at);
+  PushImportedMesh(st, dwg, obj != nullptr ? obj->tio.entity : nullptr, std::move(mesh), at);
   return true;
 }
 
@@ -932,8 +938,8 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
 /// payload — SAT (v1, text) or SAB (v2+, binary), per `version` (DXF 70). This importer supports SAT
 /// only (issue #301 tracks SAB); a SAB stream, or anything AcisSatParser refuses, is reported through
 /// the same `NoteSkip` mechanism an unrecognized entity type already uses (REQ-201: never silent).
-void ImportAcisSolid(AppCommandState& st, const Dwg_Data* dwg, const Dwg_Entity__3DSOLID* sol,
-                     const Xf2& xf, const EntityAttributes& at,
+void ImportAcisSolid(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object_Entity* ownerEnt,
+                     const Dwg_Entity__3DSOLID* sol, const Xf2& xf, const EntityAttributes& at,
                      std::unordered_map<std::string, int>* skipHist) {
   if (sol->acis_empty || sol->acis_data == nullptr) {
     // GitHub issue #369 / D-2026-09-10-b: name a Civil 3D parts-catalog placeholder for what it
@@ -984,7 +990,10 @@ void ImportAcisSolid(AppCommandState& st, const Dwg_Data* dwg, const Dwg_Entity_
   const brep::Solid localized =
       brep::Translate(r.solid, ray3d::Vec3{-st.worldDocumentOriginX, -st.worldDocumentOriginY, 0.0});
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(localized));
-  st.cadSolidAttrs.push_back(at);
+  EntityAttributes solidAt = at;
+  if (ownerEnt != nullptr && dwg != nullptr)
+    DwgImportApplyEntityMaterial(dwg, ownerEnt, &solidAt);
+  st.cadSolidAttrs.push_back(solidAt);
 }
 
 [[nodiscard]] bool DwgBlockDefNameIsImportable(std::string_view name) {
@@ -1869,7 +1878,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE__3DFACE && ent->tio._3DFACE != nullptr) {
-    if (Import3DFaceAsMesh(st, ent->tio._3DFACE, xf, at))
+    if (Import3DFaceAsMesh(st, dwg, ent, ent->tio._3DFACE, xf, at))
       return;
     NoteSkip(skipHist, "3DFACE(degenerate)");
     return;
@@ -2029,7 +2038,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE__3DSOLID && ent->tio._3DSOLID != nullptr) {
-    ImportAcisSolid(st, dwg, ent->tio._3DSOLID, xf, at, skipHist);
+    ImportAcisSolid(st, dwg, ent, ent->tio._3DSOLID, xf, at, skipHist);
     return;
   }
   if (ty == DWG_TYPE_SEQEND || ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_ENDBLK)
@@ -5157,6 +5166,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   Dwg_Data dwg;
   if (!LoadDwgData(pathUtf8, asDxf, &dwg, log))
     return false;
+  DwgMaterialImportBegin();
 
   const double oldOx = st.worldDocumentOriginX;
   const double oldOy = st.worldDocumentOriginY;
@@ -5292,6 +5302,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
     log.push_back("  skipped \"" + kv.first + "\" × " + std::to_string(kv.second));
     ++printed;
   }
+  DwgMaterialImportAppendLog(log);
   BumpCadGpuCache(st);
   return true;
 }

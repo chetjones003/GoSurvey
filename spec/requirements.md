@@ -10932,7 +10932,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: IO (`LibreDwgMaterial.cpp` planned, `LibreDwgCad.cpp`), Renderer (diffuse override on
   shaded batches), IO (`.gs` additive fields)
 - Status: accepted
-- Revisions: 2026-10-05 — initial (issue #624 materials slice; D-2026-10-05-c).
+- Revisions: 2026-10-05 — initial (issue #624 materials slice; D-2026-10-05-c). 2026-10-05 —
+  increment 1 shipped (import diffuse display + REQ-201 log).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

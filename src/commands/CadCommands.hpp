@@ -276,7 +276,10 @@ float EffectiveEntityLineweightMm(const EntityAttributes& e, const CadLayerRow* 
 std::string EffectiveEntityLinetypeNameForViewport(const EntityAttributes& e, const CadLayerRow* layer);
 
 void ResolveEntityRgbaForViewport(const EntityAttributes& attr, const CadLayerRow* layer, float defaultR,
-                                    float defaultG, float defaultB, float* outRgba);
+                                  float defaultG, float defaultB, float* outRgba);
+
+/// After entity/layer colour resolution, apply MATERIAL diffuse override for shaded display (REQ-372).
+void ApplyMaterialDiffuseForShaded(const EntityAttributes& attr, float rgba[4]);
 
 int CadDxfLineweightEnum370FromMm(float mm);
 

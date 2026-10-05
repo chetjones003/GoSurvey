@@ -4,6 +4,7 @@
 #include "GsIo.hpp"
 #include "LibreDwg.hpp"
 #include "LibreDwgCad.hpp"
+#include "LibreDwgMaterial.hpp"
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -4290,6 +4291,57 @@ TEST_CASE("R2018 DWG round-trips paper viewport visual style (REQ-371, issue #62
   REQUIRE(in.paperLayouts[0].viewports.size() == 2);
   CHECK(in.paperLayouts[0].viewports[0].visualStyle == VisualStyle::Hidden);
   CHECK(in.paperLayouts[0].viewports[1].visualStyle == VisualStyle::Shaded);
+}
+
+TEST_CASE("DWG import applies MATERIAL diffuse to POLYLINE_PFACE host (REQ-372, issue #624)",
+          "[dwg][libredwg][issue624][req372]") {
+  ScratchDir dir("open-mat-pface");
+  const auto p = (dir.path / "mat-pface.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(hdr != nullptr);
+
+  const void* matHandle = DwgTestAddDiffuseMaterial(dwg, "RedMat", 0xFF0000u, 1.0);
+  REQUIRE(matHandle != nullptr);
+
+  const dwg_point_3d verts[4] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}, {10.0, 10.0, 0.0}, {0.0, 10.0, 0.0}};
+  const dwg_face faces[2] = {{1, 2, 3, 0}, {1, 3, 4, 0}};
+  Dwg_Entity_POLYLINE_PFACE* pf = dwg_add_POLYLINE_PFACE(hdr, 4, 2, verts, faces);
+  REQUIRE(pf != nullptr);
+  Dwg_Object_Entity* ent = pf->parent;
+  REQUIRE(ent != nullptr);
+  BITCODE_H matRef = static_cast<BITCODE_H>(const_cast<void*>(matHandle));
+  REQUIRE(matRef != nullptr);
+  Dwg_Object* entObj = &dwg->object[ent->objid];
+  ent->material = dwg_add_handleref(dwg, 5, matRef->absolute_ref, entObj);
+
+  EntityAttributes at;
+  DwgMaterialImportBegin();
+  DwgImportApplyEntityMaterial(dwg, ent, &at);
+  CHECK(at.materialDiffuseOverride);
+  CHECK(at.materialDiffuseR == Catch::Approx(1.f).margin(0.02f));
+  CHECK(at.materialDiffuseG == Catch::Approx(0.f).margin(0.02f));
+  CHECK(at.materialDiffuseB == Catch::Approx(0.f).margin(0.02f));
+  float shadedRgba[4] = {0.2f, 0.2f, 0.2f, 1.f};
+  ApplyMaterialDiffuseForShaded(at, shadedRgba);
+  CHECK(shadedRgba[0] == Catch::Approx(1.f).margin(0.02f));
+  std::vector<std::string> matLog;
+  DwgMaterialImportAppendLog(matLog);
+  REQUIRE(matLog.size() >= 1);
+  CHECK(matLog[0].find("REQ-372") != std::string::npos);
+
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, p.c_str(), log));
+  REQUIRE(st.cadMeshes.size() == 1);
 }
 
 TEST_CASE("R2018 DWG round-trips model-space visual style on VPORT *Active (REQ-371, issue #624)",

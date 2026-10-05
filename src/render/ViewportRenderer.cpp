@@ -1791,6 +1791,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         float rgba[4] = {part.r, part.g, part.b, 1.f};
         if (attr && !(attr->color.empty() || attr->color == "ByLayer"))
           ResolveEntityRgbaForViewport(*attr, lr, part.r, part.g, part.b, rgba);
+        if (attr)
+          ApplyMaterialDiffuseForShaded(*attr, rgba);
         glUniform4f(locShColor, rgba[0], rgba[1], rgba[2], 1.f);
         glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT,
                        reinterpret_cast<const void*>(static_cast<std::uintptr_t>(begin) * sizeof(std::uint32_t)));

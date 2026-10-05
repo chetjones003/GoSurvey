@@ -1,6 +1,6 @@
 # TASK — REQ-372 materials (issue #624)
 
-- Branch: (implementation TBD) `feat/issue624-materials-req372`
+- Branch: `feat/issue624-materials-req372-inc1` (increment 1)
 - Authority: **REQ-372**, D-2026-10-05-c, GitHub #624
 - Spec-only PR: `docs/req372-materials-624`
 
