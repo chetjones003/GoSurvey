@@ -4756,3 +4756,36 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   the drawing leaves the folder, and the user is told (REQ-201). Whole-file rewrite on each save is
   acceptable at survey scale and is the first thing to measure in P3. Loading and saving the file must
   stay off the UI frame budget (§8 one-shot worker) if it exceeds a few milliseconds.
+
+### ADR-066 — A project pack is a standard ZIP, written and read through vendored miniz, extracted only after every entry has been checked   (2026-10-05, accepted)
+
+- **Status:** accepted (2026-10-05, D-2026-10-05-i; the user chose the container before P7 started).
+  Backs REQ-380 (GitHub issue #696).
+- **Context.** A pack must travel by email, hold point clouds that can be hundreds of MB, and never
+  write outside the folder the user picked, however the file was made.
+- **Decision.**
+  (a) **The container is ZIP**, via `third_party/miniz` (MIT, two files, REQ-300 / D-2026-10-05-i). Files
+      are streamed through `FILE*` handles opened from `std::filesystem` paths, never loaded whole, so
+      Unicode paths and large point clouds work (zip64 is switched on by miniz when an entry needs it).
+  (b) **One pure module, `src/io/ProjectPack.{hpp,cpp}`** — `<filesystem>`, nlohmann json and miniz only,
+      no window, no `AppCommandState` — like `Project.cpp` / `ProjectFiles.cpp`. The command and UI
+      layers only call it (Health gate, dialogs, opening the result).
+  (c) **Entries are project-relative with `/`.** `gspack.json` at the root carries the format version,
+      project ID, name, date, the left-out files and every file's exact modified time (a ZIP keeps only
+      2-second local time, and a `.gscloud` cache is stamped with its cloud's exact size and time,
+      ADR-060 (b), so extraction restores the recorded time). The `.gsproj` is a normal entry.
+  (d) **Read = check everything, then extract.** Every entry name passes `gsproj::IsSafeRelativePath`
+      plus a no-backslash, no-duplicate rule, the manifest must match the marker's project ID, and the
+      destination must be empty or new. Extraction streams each file and checks its CRC; any failure
+      removes everything written. Writing goes to a temporary file renamed over the target.
+  (e) **Excluded point clouds are recorded in the opened project's `.gsproj`** (a top-level
+      `packOmitted` list kept in `extraJson`, so older readers keep it verbatim) and are reported as
+      unavailable, not missing, while their file is absent.
+- **Alternatives.** (1) *Own uncompressed container:* no dependency but emails too large and only
+      GoSurvey can open it. (2) *Windows Compression API / `tar.exe`:* ties the format to Windows and a
+      non-standard result. (3) *Zip with no manifest:* the project ID would only be inside the `.gsproj`,
+      so a pack could not be identified without parsing project data.
+- **Consequences.** One new vendored dependency (~400 KB source, build time negligible). The pack is
+  readable by any zip tool; a hand-edited pack that breaks the rules above is refused whole. Packing
+  and extracting a very large project blocks the UI thread while it runs (no progress bar yet — recorded
+  technical debt, like the P6 copy).

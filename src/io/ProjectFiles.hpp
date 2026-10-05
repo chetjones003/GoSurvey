@@ -88,11 +88,21 @@ struct Health {
   std::vector<std::string> linked;       ///< "local-link" files: will not travel with the project
   std::vector<std::string> missing;      ///< tracked files not on disk
   std::vector<std::string> unavailable;  ///< a kind this version cannot reach (a future "remote")
+  std::vector<std::string> omitted;      ///< left out of a pack on purpose (REQ-380); information, not a problem
   std::vector<std::string> unsaved;      ///< open drawings with changes not saved (names, from the caller)
   bool Clean() const { return linked.empty() && missing.empty() && unavailable.empty() && unsaved.empty(); }
 };
 
 Health CheckHealth(const gsproj::Project& p, const std::vector<std::string>& unsavedDrawings);
+
+/// REQ-380 clause 2: the point clouds an opened pack left out, stored in the .gsproj (`packOmitted`,
+/// project-relative). A file that is on disk again is no longer "omitted".
+std::vector<std::string> PackOmitted(const gsproj::Project& p);
+void SetPackOmitted(gsproj::Project* p, const std::vector<std::string>& rels);
+
+/// True when \p fileName (a stored path from any machine is reduced to its name) is a left-out cloud
+/// that is not on disk, so the caller can say "unavailable" instead of "missing".
+bool IsPackOmittedName(const gsproj::Project& p, const std::string& fileName);
 
 struct CopyLinksResult {
   size_t                   converted = 0;

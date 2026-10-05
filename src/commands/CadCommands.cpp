@@ -6724,6 +6724,8 @@ const CmdEntry kRegistry[] = {
     {"drawingsettings", "editdrawingsettings", "Drawing Settings: units, scale and the drawing's settings"},
     {"projectsettings", "", "Project Settings: the project's coordinate system, units and defaults (REQ-375)"},
     {"projecthealth", "", "Project Health: linked, missing and unsaved files before you pack or hand over (REQ-379)"},
+    {"packproject", "", "Pack Project: write the whole project as one .gspack file to send (REQ-380)"},
+    {"openpack", "", "Open Packed Project: unpack a .gspack into a folder and open it (REQ-380)"},
     {"adddrawing", "", "Add Drawing to Project: bring an existing drawing and its points into this project (REQ-378)"},
     {"geomarkpoint", "", "Place a Position Marker at a picked point (geolocated drawing)"},
     {"geomarklatlong", "", "Place a Position Marker at a typed latitude and longitude"},
@@ -7264,6 +7266,24 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
       st.projectHealthUid = uid;
       log.push_back("PROJECTHEALTH — Project Health opened.");
     }
+    return true;
+  }
+  if (primary == "packproject") {  // REQ-380
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("PACKPROJECT — this drawing is not in a project.");
+    } else {
+      st.projectPackPrompt = {};
+      st.projectPackPrompt.projectUid = uid;
+      log.push_back("PACKPROJECT — Pack Project opened.");
+    }
+    return true;
+  }
+  if (primary == "openpack") {  // REQ-380
+    st.openPackRequested = true;
+    log.push_back("OPENPACK — choose the .gspack file to open.");
     return true;
   }
   if (primary == "adddrawing") {  // REQ-378

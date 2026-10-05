@@ -249,6 +249,38 @@ void OpenProjectFile(AppCommandState& cmd, std::vector<std::string>& log, const 
   OpenProjectResolved(cmd, log, file, std::string(), LockMode::Normal);
 }
 
+// REQ-380 clause 3: unpack into an empty folder, then open the project.
+void OpenPackedProject(AppCommandState& cmd, std::vector<std::string>& log, const char* packPathUtf8,
+                       const char* destFolderUtf8) {
+  char packBuf[4096]{};
+  char destBuf[4096]{};
+  if (!packPathUtf8) {
+    if (!BrowseOpenFileGspackUtf8(packBuf, sizeof(packBuf)))
+      return;
+    packPathUtf8 = packBuf;
+  }
+  if (!destFolderUtf8) {
+    log.push_back("Open Packed Project - choose an empty folder to unpack into.");
+    if (!BrowseFolderUtf8(destBuf, sizeof(destBuf))) {
+      log.push_back("Open Packed Project cancelled.");
+      return;
+    }
+    destFolderUtf8 = destBuf;
+  }
+  fs::path gsprojFile;
+  gspack::Manifest manifest;
+  std::string err;
+  if (!gspack::ExtractPack(fs::u8path(packPathUtf8), fs::u8path(destFolderUtf8), &gsprojFile, &manifest, &err)) {
+    log.push_back("Open Packed Project - " + err);
+    return;
+  }
+  log.push_back("Open Packed Project - unpacked '" + manifest.projectName + "' into " + std::string(destFolderUtf8) + ".");
+  if (!manifest.excluded.empty())
+    log.push_back("Open Packed Project - " + std::to_string(manifest.excluded.size()) +
+                  " file(s) were left out of this pack (point clouds); they show as unavailable.");
+  OpenProjectFile(cmd, log, gsprojFile.u8string().c_str());
+}
+
 bool SaveProjectSettings(AppCommandState& cmd, std::uint32_t projectUid, const ProjectSettings& ps,
                          std::vector<std::string>& log) {
   for (auto& s : cmd.openProjects) {
@@ -760,6 +792,7 @@ void DrawProjectHealthModal(AppCommandState& cmd, std::vector<std::string>& log)
   list("Linked files (will NOT travel with the project):", h.linked);
   list("Missing files:", h.missing);
   list("Files this version cannot reach:", h.unavailable);
+  list("Unavailable (left out of the pack this project was opened from):", h.omitted);
   list("Drawings with unsaved changes:", h.unsaved);
   if (h.Clean())
     ImGui::TextWrapped("No problems found: every tracked file is in the project and every drawing is saved.");
@@ -779,6 +812,118 @@ void DrawProjectHealthModal(AppCommandState& cmd, std::vector<std::string>& log)
   PopProductDialogAccent();
 }
 
+// REQ-380 clauses 1-2: Pack Project — Health first, then the size, then the file.
+void DrawProjectPackModal(AppCommandState& cmd, std::vector<std::string>& log) {
+  auto& pp = cmd.projectPackPrompt;
+  if (pp.projectUid != 0 && !ImGui::IsPopupOpen("Pack Project##projpack"))
+    ImGui::OpenPopup("Pack Project##projpack");
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  PushProductDialogAccent();
+  if (!ImGui::BeginPopupModal("Pack Project##projpack", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopProductDialogAccent();
+    return;
+  }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
+
+  AppCommandState::ProjectSession* s = nullptr;
+  for (auto& open : cmd.openProjects)
+    if (open.uid == pp.projectUid)
+      s = &open;
+  if (s == nullptr) {
+    pp = {};
+    ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+    PopProductDialogAccent();
+    return;
+  }
+  if (!pp.planned && !pp.planTried) {
+    pp.planTried = true;
+    FlushProjectPointDb(*s, log);  // the pack must hold the points as the drawings show them
+    pp.planError.clear();
+    pp.planned = gspack::PlanPack(s->project, fs::path(), &pp.plan, &pp.planError);
+    if (!pp.planned && pp.planError.empty())
+      pp.planError = "The project could not be listed.";
+  }
+  const projfiles::Health h = ProjectHealthFor(cmd, pp.projectUid);
+
+  ImGui::TextWrapped("Pack project %s into one .gspack file you can email or share.", s->project.name.c_str());
+  ImGui::Spacing();
+  auto list = [](const char* title, const std::vector<std::string>& items) {
+    if (items.empty())
+      return;
+    ImGui::TextUnformatted(title);
+    for (const std::string& i : items)
+      ImGui::BulletText("%s", i.c_str());
+    ImGui::Spacing();
+  };
+  list("Linked files (will NOT be in the pack):", h.linked);
+  list("Missing files (will NOT be in the pack):", h.missing);
+  list("Files this version cannot reach:", h.unavailable);
+  list("Drawings with unsaved changes (the pack holds the saved version):", h.unsaved);
+  if (h.Clean())
+    ImGui::TextWrapped("Project Health: no problems found.");
+  else
+    ImGui::Checkbox("Pack anyway, with the problems above", &pp.packAnyway);
+
+  ImGui::BeginDisabled(h.linked.empty() || s->readOnly);
+  if (ImGui::Button("Copy links into the project")) {
+    size_t converted = 0;
+    CopyProjectLinksIn(cmd, pp.projectUid, log, &converted);
+    pp.planned = pp.planTried = false;  // re-plan
+  }
+  ImGui::EndDisabled();
+  ImGui::Separator();
+
+  if (!pp.planned) {
+    ImGui::TextColored(ImVec4(0.85f, 0.3f, 0.2f, 1.f), "%s", pp.planError.c_str());
+  } else {
+    const std::uintmax_t shown = pp.excludePointClouds ? pp.plan.totalBytes - pp.plan.pointCloudBytes : pp.plan.totalBytes;
+    ImGui::Text("%zu files, %s before compression.", pp.plan.files.size(), SizeText(shown).c_str());
+    if (pp.plan.pointCloudBytes > 0) {
+      ImGui::Text("Point clouds are %s of that.", SizeText(pp.plan.pointCloudBytes).c_str());
+      ImGui::Checkbox("Leave point clouds out of the pack", &pp.excludePointClouds);
+      if (pp.excludePointClouds)
+        ImGui::TextWrapped("They will show as unavailable (not as errors) when the pack is opened.");
+    }
+    if (shown >= gspack::kEmailWarnBytes)
+      ImGui::TextColored(ImVec4(0.85f, 0.55f, 0.1f, 1.f),
+                         "This is large for an email attachment (25 MB or more). Leaving point clouds out helps.");
+  }
+  ImGui::Spacing();
+
+  ImGui::BeginDisabled(!pp.planned || (!h.Clean() && !pp.packAnyway));
+  if (ImGui::Button("Pack...")) {
+    char out[4096]{};
+    const std::string defName = s->project.name + gspack::kExtension;
+    if (BrowseSaveFileGspackUtf8(out, sizeof(out), defName.c_str())) {
+      gspack::PackPlan plan;
+      std::string err;
+      gspack::PackOptions opt;
+      opt.excludePointClouds = pp.excludePointClouds;
+      opt.nowUnix = static_cast<std::int64_t>(std::time(nullptr));
+      if (!gspack::PlanPack(s->project, fs::u8path(out), &plan, &err) ||
+          !gspack::WritePack(s->project, plan, opt, fs::u8path(out), &err)) {
+        log.push_back("Pack Project - " + err);
+      } else {
+        std::error_code ec;
+        const std::uintmax_t packed = fs::file_size(fs::u8path(out), ec);
+        log.push_back("Pack Project - wrote " + std::string(out) + " (" + SizeText(ec ? 0 : packed) + ").");
+        pp = {};
+        ImGui::CloseCurrentPopup();
+      }
+    }
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel")) {
+    pp = {};
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+  PopProductDialogAccent();
+}
+
 }  // namespace
 
 void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log) {
@@ -790,4 +935,9 @@ void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log) {
   DrawProjectPromptModal(cmd, log);
   DrawProjectAttachModal(cmd, log);  // REQ-379
   DrawProjectHealthModal(cmd, log);
+  DrawProjectPackModal(cmd, log);  // REQ-380
+  if (cmd.openPackRequested) {
+    cmd.openPackRequested = false;
+    OpenPackedProject(cmd, log, nullptr, nullptr);
+  }
 }

@@ -317,6 +317,9 @@ void DrawLeftColumn(AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::Dummy(ImVec2(0.f, 6.f));
   if (StyledButton("Open Project", false, ImVec2(-FLT_MIN, 0.f)))
     OpenProjectFile(cmd, log, nullptr);
+  ImGui::Dummy(ImVec2(0.f, 6.f));
+  if (StyledButton("Open Packed Project", false, ImVec2(-FLT_MIN, 0.f)))  // REQ-380
+    OpenPackedProject(cmd, log, nullptr, nullptr);
 
   ImGui::Dummy(ImVec2(0.f, 22.f));
   SectionHeading("Resources");

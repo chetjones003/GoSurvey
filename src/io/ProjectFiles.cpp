@@ -296,11 +296,45 @@ Health CheckHealth(const gsproj::Project& p, const std::vector<std::string>& uns
     }
     if (it.kind == gsproj::kKindLocalLink)
       h.linked.push_back(it.path);
-    if (!fs::exists(fs::u8path(abs), ec))
-      h.missing.push_back(it.path);
+    if (!fs::exists(fs::u8path(abs), ec)) {
+      if (IsPackOmittedName(p, it.path))
+        h.omitted.push_back(it.path);
+      else
+        h.missing.push_back(it.path);
+    }
   }
   h.unsaved = unsavedDrawings;
   return h;
+}
+
+std::vector<std::string> PackOmitted(const gsproj::Project& p) {
+  std::vector<std::string> out;
+  const json j = json::parse(p.extraJson, nullptr, false);
+  if (j.is_object() && j.contains("packOmitted") && j["packOmitted"].is_array())
+    for (const auto& x : j["packOmitted"])
+      if (x.is_string() && gsproj::IsSafeRelativePath(x.get<std::string>()))
+        out.push_back(x.get<std::string>());
+  return out;
+}
+
+void SetPackOmitted(gsproj::Project* p, const std::vector<std::string>& rels) {
+  json j = json::parse(p->extraJson, nullptr, false);
+  if (!j.is_object())
+    j = json::object();
+  if (rels.empty())
+    j.erase("packOmitted");
+  else
+    j["packOmitted"] = rels;
+  p->extraJson = j.dump();
+}
+
+bool IsPackOmittedName(const gsproj::Project& p, const std::string& fileName) {
+  const std::string want = Lower(FileNameOf(fileName));
+  std::error_code ec;
+  for (const std::string& rel : PackOmitted(p))
+    if (Lower(FileNameOf(rel)) == want && !fs::exists(p.Folder() / fs::u8path(rel), ec))
+      return true;
+  return false;
 }
 
 CopyLinksResult CopyLinksIn(gsproj::Project* p) {

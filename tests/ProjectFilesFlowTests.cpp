@@ -223,6 +223,43 @@ TEST_CASE("req379 a missing tracked PDF or cloud is reported and the drawing sti
   CHECK(h.missing.size() >= 2);
 }
 
+TEST_CASE("req380 a point cloud left out of a pack opens as unavailable, not as a missing-file error",
+          "[req380]") {
+  TempDir root("omitted");
+  std::vector<std::string> log;
+  AppCommandState st;
+  auto& s = OpenProjectTab(st, root.path / "proj");
+  const fs::path cloud = s.project.Folder() / "PointClouds" / "site.e57";
+  const fs::path dwg = s.project.Folder() / "Drawings" / "EG.dwg";
+  WriteText(cloud, "scan");
+  WriteText(dwg, "drawing");
+  st.cadPointClouds.push_back(Cloud(cloud.u8string()));
+  SyncProjectFilesOnSave(st, 1, dwg.u8string(), log);
+
+  // The pack was opened without the cloud: it is recorded as left out and is not on disk.
+  fs::remove(cloud);
+  projfiles::SetPackOmitted(&s.project, {"PointClouds/site.e57"});
+  AppCommandState reopened;
+  reopened.openProjects = {s};
+  reopened.drawingTabs.resize(2);
+  reopened.drawingTabs[1].projectUid = 7;
+  reopened.activeDrawingIdx = 1;
+  reopened.cadPointClouds.push_back(Cloud(cloud.u8string()));
+  log.clear();
+  ApplyProjectFilesOnOpen(reopened, 7, dwg.u8string(), log);
+  REQUIRE(reopened.cadPointClouds.size() == 1);  // the drawing opens either way
+  bool unavailable = false;
+  for (const std::string& l : log) {
+    CHECK(l.find("is missing") == std::string::npos);
+    if (l.find("unavailable") != std::string::npos)
+      unavailable = true;
+  }
+  CHECK(unavailable);
+  const projfiles::Health h = ProjectHealthFor(reopened, 7);
+  CHECK(h.missing.empty());
+  CHECK(h.omitted.size() == 1);
+}
+
 TEST_CASE("req379 a standalone drawing, a read-only project and a drawing outside the folder record nothing",
           "[req379]") {
   TempDir root("noop");
