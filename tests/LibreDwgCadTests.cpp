@@ -4390,6 +4390,52 @@ TEST_CASE("Mesh MATERIAL diffuse and name persist through GsIo (REQ-372 inc 3, i
   CHECK(back.cadMeshAttrs[0].materialDiffuseG == Catch::Approx(0.5f).margin(1e-4f));
 }
 
+TEST_CASE("R2018 mesh MATERIAL round-trip; solid material listed in export loss (REQ-372 inc 4)",
+          "[dwg][libredwg][issue624][req372][export]") {
+  ScratchDir dir("mat-inc4-rt");
+  const auto p = (dir.path / "mat-mesh-solid.dwg").string();
+  AppCommandState st;
+  st.cadMeshes.push_back(MakeUnitSquareMesh());
+  EntityAttributes meshAt;
+  meshAt.materialDiffuseOverride = true;
+  meshAt.materialDiffuseR = 0.25f;
+  meshAt.materialDiffuseG = 0.55f;
+  meshAt.materialDiffuseB = 0.15f;
+  meshAt.materialName = "MeshMat";
+  st.cadMeshAttrs.push_back(meshAt);
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 3.0, 3.0, 3.0, &box, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  EntityAttributes solidAt;
+  solidAt.materialDiffuseOverride = true;
+  solidAt.materialDiffuseR = 0.9f;
+  solidAt.materialDiffuseG = 0.1f;
+  solidAt.materialDiffuseB = 0.1f;
+  solidAt.materialName = "SolidMat";
+  st.cadSolidAttrs.push_back(solidAt);
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  bool sawSolidMatLoss = false;
+  for (const DwgExportLoss& loss : ComputeDwgExportLosses(st)) {
+    if (loss.label.find("3DSOLID") != std::string::npos) {
+      sawSolidMatLoss = true;
+      CHECK(loss.count == 1);
+    }
+  }
+  CHECK(sawSolidMatLoss);
+  AppCommandState meshExport;
+  meshExport.cadMeshes = st.cadMeshes;
+  meshExport.cadMeshAttrs = st.cadMeshAttrs;
+  meshExport.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(meshExport, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.cadMeshes.size() == 1);
+  CHECK(in.cadMeshAttrs[0].materialDiffuseOverride);
+  CHECK(in.cadMeshAttrs[0].materialDiffuseG == Catch::Approx(0.55f).margin(0.04f));
+}
+
 TEST_CASE("R2018 DWG round-trips model-space visual style on VPORT *Active (REQ-371, issue #624)",
           "[dwg][libredwg][issue624][req371][model]") {
   ScratchDir dir("dwg-model-vs");

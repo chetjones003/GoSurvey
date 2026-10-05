@@ -2,6 +2,8 @@
 
 #include "CadCommands.hpp"
 #include "CadEntities.hpp"
+#include "DwgIo.hpp"
+#include "LibreDwgCad.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -167,8 +169,12 @@ void DwgImportApplyEntityMaterial(_dwg_struct* dwgIn, const void* entity, Entity
     at->materialDiffuseR = r;
     at->materialDiffuseG = g;
     at->materialDiffuseB = b;
-    if (mat->name != nullptr && mat->name[0] != '\0')
-      at->materialName = mat->name;
+    const bool utf16Name =
+        dwg->header.from_version >= R_2007 && !(dwg->opts & DWG_OPTS_IN);
+    const std::string decoded =
+        libredwgcad_detail::DecodeDwgString(mat->name, utf16Name);
+    if (!decoded.empty())
+      at->materialName = decoded;
     ++gStats.hostsWithDiffuse;
     return;
   }
@@ -282,4 +288,23 @@ void DwgExportMaterialAppendLog(const DwgExportMaterialContext& ctx, std::vector
     return;
   log.push_back("CAD export — wrote " + std::to_string(ctx.materialsWritten) +
                 " MATERIAL object(s) (REQ-372, issue #624).");
+}
+
+int DwgExportCountMaterialAppearanceLosses(const AppCommandState& st) {
+  const bool r2007MaterialExport = st.dwgExportVersion >= DwgSaveVersion::R2010;
+  int n = 0;
+  auto countOverride = [&](const std::vector<EntityAttributes>& attrs) {
+    for (const EntityAttributes& a : attrs) {
+      if (a.materialDiffuseOverride)
+        ++n;
+    }
+  };
+  if (r2007MaterialExport) {
+    countOverride(st.cadSolidAttrs);
+  } else {
+    countOverride(st.cadMeshAttrs);
+    countOverride(st.cadSolidAttrs);
+    countOverride(st.cadSurfaceAttrs);
+  }
+  return n;
 }

@@ -3486,6 +3486,19 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   add("3D polyline curve(s) (straightened between vertices; POLYLINE_3D has no bulge)",
       nFlattenedCurves);
 
+  const int nMatAppearance = DwgExportCountMaterialAppearanceLosses(st);
+  if (nMatAppearance > 0) {
+    const bool r2007MaterialExport =
+        LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2007;
+    if (r2007MaterialExport) {
+      add("solid(s) with MATERIAL appearance (entity material not written on 3DSOLID yet)",
+          static_cast<size_t>(nMatAppearance));
+    } else {
+      add("object(s) with MATERIAL appearance (native MATERIAL requires R2010+ DWG export)",
+          static_cast<size_t>(nMatAppearance));
+    }
+  }
+
   return out;
 }
 
