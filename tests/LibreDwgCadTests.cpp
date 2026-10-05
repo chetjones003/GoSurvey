@@ -43,6 +43,8 @@
 extern "C" {
 #include <dwg.h>
 #include <dwg_api.h>
+
+extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
 }
 
 namespace {
@@ -4697,6 +4699,104 @@ TEST_CASE("Annotative TEXT, INSERT, and DIMENSION export annotation context (REQ
   CHECK(aldimCtx >= 2);
   CHECK(DwgAnnotContextCountObjects(&dwg) >= 9);
   dwg_free(&dwg);
+}
+
+TEST_CASE("Annotative MULTILEADER and HATCH export annotation context (REQ-384 inc 4, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  ScratchDir dir("anno-ml-hatch-context");
+  const auto p = (dir.path / "anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale scale1;
+  scale1.name = "1:1";
+  scale1.paperUnits = 1.f;
+  scale1.drawingUnits = 1.f;
+  CadAnnotationScale scale2;
+  scale2.name = "1:20";
+  scale2.paperUnits = 1.f;
+  scale2.drawingUnits = 20.f;
+  st.annotationScales.push_back(scale1);
+  st.annotationScales.push_back(scale2);
+  st.currentAnnotationScaleIndex = 0;
+
+  CadMultileader ml{};
+  ml.annotative = true;
+  ml.pathXyz = {0.f, 0.f, 0.f, 12.f, 0.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.insX = 12.f;
+  ml.label.insY = 0.f;
+  ml.label.text = "Callout";
+  ml.label.boxMinX = 12.f;
+  ml.label.boxMinY = -1.f;
+  ml.label.boxMaxX = 24.f;
+  ml.label.boxMaxY = 1.f;
+  st.cadMultileaders.push_back(std::move(ml));
+  st.cadMultileaderAttrs.push_back(EntityAttributes{});
+
+  CadFilledRegion fr = SquareHatchRegion(0.f, 0.f, 10.f);
+  fr.annotative = true;
+  st.cadFilledRegions.push_back(std::move(fr));
+  st.cadFilledRegionAttrs.push_back(EntityAttributes{});
+
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int mleaderCtx = 0;
+  int hatchScaleCtx = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].fixedtype == DWG_TYPE_MLEADEROBJECTCONTEXTDATA)
+      ++mleaderCtx;
+    if (dwg.object[i].fixedtype == DWG_TYPE_ANNOTSCALEOBJECTCONTEXTDATA)
+      ++hatchScaleCtx;
+  }
+  CHECK(mleaderCtx >= 2);
+  CHECK(hatchScaleCtx >= 2);
+  dwg_free(&dwg);
+}
+
+TEST_CASE("DWG import reports annotation context and keeps annotative MTEXT (REQ-384 inc 4, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  ScratchDir dir("anno-mtext-import-merge");
+  const auto p = (dir.path / "anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale scale1;
+  scale1.name = "1:1";
+  scale1.paperUnits = 1.f;
+  scale1.drawingUnits = 1.f;
+  CadAnnotationScale scale2;
+  scale2.name = "1:20";
+  scale2.paperUnits = 1.f;
+  scale2.drawingUnits = 20.f;
+  st.annotationScales.push_back(scale1);
+  st.annotationScales.push_back(scale2);
+  st.currentAnnotationScaleIndex = 0;
+  CadAnnotation m{};
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.annotative = true;
+  m.text = "Merged";
+  m.insX = 3.f;
+  m.insY = 4.f;
+  m.boxMinX = 3.f;
+  m.boxMaxX = 13.f;
+  m.boxMinY = 3.f;
+  m.boxMaxY = 5.f;
+  st.cadAnnotations.push_back(std::move(m));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  bool sawContextLog = false;
+  for (const std::string& line : log) {
+    if (line.find("annotation context") != std::string::npos)
+      sawContextLog = true;
+  }
+  CHECK(sawContextLog);
+  REQUIRE(in.cadAnnotations.size() == 1);
+  CHECK(in.cadAnnotations[0].annotative);
+  CHECK(in.cadAnnotations[0].text == "Merged");
 }
 
 TEST_CASE("Annotation context scan and import log (REQ-384 inc 1, issue #688)",
