@@ -380,6 +380,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/CadCommands_Geo.cpp
   src/commands/ProjectSettings.cpp
   src/commands/ProjectPoints.cpp
+  # REQ-383 (#696 P9): the warnings before destructive / cross-project actions on shared data
+  src/commands/ProjectWarnings.cpp
   # REQ-378 (#696 P5): Add Drawing to Project - the flow, and the whole-drawing conversion it offers
   src/commands/ProjectAddFlow.cpp
   # REQ-379 (#696 P6): tracked files at the drawing level (copy/link prompt, save-time record, open-time re-attach)
@@ -1390,6 +1392,8 @@ if(GOSURVEY_BUILD_TESTS)
     # this rides with gosurvey_domain like CadBlockImportTests.
     tests/ProjectSettingsTests.cpp
     tests/ProjectPointsSyncTests.cpp
+    # REQ-383 (#696 P9): delete / number-conflict / paste / unsaved-close warnings against AppCommandState
+    tests/ProjectWarningsTests.cpp
     # REQ-378 (#696 P5): Add Drawing to Project end to end + Convert (needs AppCommandState, CS-MAP, LibreDWG)
     tests/ProjectAddFlowTests.cpp
     # REQ-379 (#696 P6): attach prompt, save-time record and open-time re-attach against AppCommandState

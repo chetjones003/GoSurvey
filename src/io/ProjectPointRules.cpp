@@ -72,6 +72,10 @@ std::vector<const Entry*> Visible(const Rules& rules, const PointGroupRule* grou
   return out;
 }
 
+bool ShowsEntry(const Rules& rules, const PointGroupRule* groupRule, const Entry& entry) {
+  return Matcher(rules, groupRule, nullptr).Shows(entry);
+}
+
 size_t HiddenCount(const Rules& rules, const PointGroupRule* groupRule, const Db& db) {
   const Matcher m(rules, groupRule, nullptr);
   size_t n = 0;

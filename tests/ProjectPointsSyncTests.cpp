@@ -4,6 +4,7 @@
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "ProjectPoints.hpp"
+#include "ProjectWarnings.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -69,6 +70,20 @@ void SwitchTo(AppCommandState& st, int idx) {
   st.activeDrawingIdx = st.prevDrawingIdx = idx;
 }
 
+/// One frame; if it raised a REQ-383 question, answers it (delete: \p del, number in use: \p conflict)
+/// and runs the frames that carry the answer out. These tests are about the sync, not the dialog.
+void SyncAnswering(AppCommandState& st, std::vector<std::string>& log, double now,
+                   AppCommandState::PointEditPrompt::Answer del = AppCommandState::PointEditPrompt::Answer::Proceed,
+                   AppCommandState::PointEditPrompt::Answer conflict = AppCommandState::PointEditPrompt::Answer::Proceed) {
+  SyncProjectPoints(st, log, now);
+  for (int guard = 0; st.pointEditPrompt.active && guard < 4; ++guard) {
+    const bool conflictTurn = !st.pointEditPrompt.conflicts.empty() &&
+                              st.pointEditPrompt.conflictAnswer == AppCommandState::PointEditPrompt::Answer::None;
+    AnswerPointEdit(st, !conflictTurn, conflictTurn ? conflict : del);
+    SyncProjectPoints(st, log, now);
+  }
+}
+
 }  // namespace
 
 TEST_CASE("req376 two project drawings stay in sync on add, edit and delete", "[req376]") {
@@ -97,7 +112,7 @@ TEST_CASE("req376 two project drawings stay in sync on add, edit and delete", "[
   st.surveyPoints[1].elevation = 2.5;
   st.surveyPoints.erase(st.surveyPoints.begin() + 2);
   st.surveyPoints.push_back(Pt(4, 40, 40, 4, "FG"));
-  SyncProjectPoints(st, log, now += 0.016);
+  SyncAnswering(st, log, now += 0.016);  // the delete asks first (REQ-383); answer: delete from the project
   const auto& db = *st.openProjects[0].points;
   REQUIRE(db.points.size() == 3);
   CHECK(db.points[1].point.elevation == 2.5);
@@ -368,7 +383,7 @@ TEST_CASE("req377 editing or deleting a shown point never touches hidden ones", 
   REQUIRE(st.surveyPoints.size() == 1);
 
   st.surveyPoints.clear();  // the user deletes the one point EG shows
-  SyncProjectPoints(st, log, now += 0.016);
+  SyncAnswering(st, log, now += 0.016);
   const auto& db = *st.openProjects[0].points;
   REQUIRE(db.points.size() == 1);
   CHECK(db.points[0].point.id == 2);  // FG's point is untouched
@@ -396,7 +411,8 @@ TEST_CASE("req377 a number hidden here is not overwritten by a new point", "[req
 
   log.clear();
   st.surveyPoints.push_back(Pt(2, 99, 99, 99, "EG"));  // number 2 is FG's, hidden here
-  SyncProjectPoints(st, log, now += 0.016);
+  SyncAnswering(st, log, now += 0.016, AppCommandState::PointEditPrompt::Answer::Proceed,
+                AppCommandState::PointEditPrompt::Answer::Cancel);  // REQ-383: the user cancels
   const auto& db = *st.openProjects[0].points;
   REQUIRE(db.points.size() == 2);
   CHECK(db.points[1].point.elevation == 2.0);  // not overwritten

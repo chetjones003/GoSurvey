@@ -11,6 +11,7 @@
 #include "ProjectFiles.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectSettings.hpp"
+#include "ProjectWarnings.hpp"
 #include "io/ProjectTurnover.hpp"
 #include "RecentDrawings.hpp"
 #include "WinFileDialogs.hpp"
@@ -329,6 +330,35 @@ void ServiceProjects(AppCommandState& cmd, std::vector<std::string>& log) {
       gsproj::Release(cmd.openProjects[i].project.file, cmd.openProjects[i].me);
     cmd.openProjects.erase(cmd.openProjects.begin() + static_cast<std::ptrdiff_t>(i));
   }
+}
+
+bool ProjectTabMayClose(AppCommandState& cmd, int tabIdx, std::vector<std::string>& log) {
+  auto& ct = cmd.closeTabPrompt;
+  if (ct.confirmed && ct.tabIdx == tabIdx) {  // "Close anyway"
+    ct = {};
+    return true;
+  }
+  if (tabIdx < 0 || tabIdx >= static_cast<int>(cmd.drawingTabs.size()))
+    return true;
+  const std::uint32_t uid = cmd.drawingTabs[static_cast<size_t>(tabIdx)].projectUid;
+  if (uid == 0)
+    return true;
+  const bool others = std::any_of(cmd.drawingTabs.begin() + 1, cmd.drawingTabs.end(), [&](const auto& t) {
+    return &t != &cmd.drawingTabs[static_cast<size_t>(tabIdx)] && t.projectUid == uid;
+  });
+  if (others)
+    return true;  // the project stays open and keeps its database in memory: nothing is lost by this close
+  const std::vector<UnsavedProject> unsaved = ProjectsWithUnsavedPoints(cmd, uid, log);
+  if (unsaved.empty())
+    return true;
+  ct.tabIdx = tabIdx;
+  ct.confirmed = false;
+  ct.openRequested = true;
+  ct.text = "Project " + unsaved.front().name +
+            " has point changes that could not be written to its folder (the disk may be full or locked). "
+            "Closing \"" + cmd.drawingTabs[static_cast<size_t>(tabIdx)].name +
+            "\" closes the project, and those changes would be lost.";
+  return false;
 }
 
 void ReleaseAllProjects(AppCommandState& cmd, std::vector<std::string>& log) {
@@ -696,6 +726,168 @@ std::string SizeText(std::uint64_t bytes) {
 }
 
 // REQ-379 clause 1: the Copy / Link / Cancel question for a point cloud or PDF from outside the project.
+/// REQ-383 clauses 2 and 4: a point edit that would damage the project's shared points waits here.
+/// Number conflict first, then delete; each answer is stored and carried out by the next
+/// SyncProjectPoints frame.
+void DrawPointEditModal(AppCommandState& cmd) {
+  auto& pe = cmd.pointEditPrompt;
+  using Answer = AppCommandState::PointEditPrompt::Answer;
+  if (!pe.active)
+    return;
+  const bool conflictTurn = !pe.conflicts.empty() && pe.conflictAnswer == Answer::None;
+  const char* title = "Shared project points##ptedit";
+  if (!ImGui::IsPopupOpen(title))
+    ImGui::OpenPopup(title);
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  PushProductDialogAccent();
+  if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopProductDialogAccent();
+    return;
+  }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
+
+  const auto numbers = [](const std::vector<int>& ids) {
+    std::string out;
+    for (size_t i = 0; i < ids.size() && i < 8; ++i)
+      out += (i ? ", " : "") + std::to_string(ids[i]);
+    if (ids.size() > 8)
+      out += " and " + std::to_string(ids.size() - 8) + " more";
+    return out;
+  };
+  if (conflictTurn) {
+    ImGui::TextWrapped("Project %s already has point number%s %s, and %s hidden in this drawing.", pe.projectName.c_str(),
+                       pe.conflicts.size() == 1 ? "" : "s", numbers(pe.conflicts).c_str(),
+                       pe.conflicts.size() == 1 ? "it is" : "they are");
+    ImGui::Spacing();
+    ImGui::TextWrapped("Overwrite replaces the existing point(s) in every drawing of the project. Renumber gives the new "
+                       "point(s) the next free number(s) and leaves the existing ones alone.");
+    ImGui::Spacing();
+    if (ImGui::Button("Overwrite"))
+      AnswerPointEdit(cmd, false, Answer::Proceed);
+    ImGui::SameLine();
+    if (ImGui::Button("Renumber"))
+      AnswerPointEdit(cmd, false, Answer::Renumber);
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel"))
+      AnswerPointEdit(cmd, false, Answer::Cancel);
+  } else {
+    ImGui::TextWrapped("You deleted %zu point%s (%s). Points belong to project %s, so deleting them removes them from the "
+                       "project's shared database, not just from this drawing.",
+                       pe.removed.size(), pe.removed.size() == 1 ? "" : "s", numbers(pe.removed).c_str(),
+                       pe.projectName.c_str());
+    ImGui::Spacing();
+    if (pe.othersOpenShowing > 0) {
+      std::string names;
+      for (size_t i = 0; i < pe.otherNames.size(); ++i)
+        names += (i ? ", " : "") + pe.otherNames[i];
+      ImGui::TextWrapped("%d other open drawing%s will lose %s: %s.", pe.othersOpenShowing,
+                         pe.othersOpenShowing == 1 ? "" : "s", pe.removed.size() == 1 ? "it" : "them", names.c_str());
+    }
+    if (pe.othersClosedMaybe > 0)
+      ImGui::TextWrapped("%d drawing%s of the project %s not open, so GoSurvey cannot tell whether %s show%s them.",
+                         pe.othersClosedMaybe, pe.othersClosedMaybe == 1 ? "" : "s",
+                         pe.othersClosedMaybe == 1 ? "is" : "are", pe.othersClosedMaybe == 1 ? "it" : "they",
+                         pe.othersClosedMaybe == 1 ? "s" : "");
+    ImGui::Spacing();
+    ImGui::TextWrapped("Hide in this drawing only keeps the points in the project and in other drawings.");
+    ImGui::Spacing();
+    if (ImGui::Button("Delete from project"))
+      AnswerPointEdit(cmd, true, Answer::Proceed);
+    ImGui::SameLine();
+    if (ImGui::Button("Hide in this drawing only"))
+      AnswerPointEdit(cmd, true, Answer::HideHere);
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel"))
+      AnswerPointEdit(cmd, true, Answer::Cancel);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+    AnswerPointEdit(cmd, !conflictTurn, Answer::Cancel);
+  const bool answered = conflictTurn ? pe.conflictAnswer != Answer::None : pe.deleteAnswer != Answer::None;
+  if (answered)
+    ImGui::CloseCurrentPopup();
+  ImGui::EndPopup();
+  PopProductDialogAccent();
+}
+
+/// REQ-383 clauses 1 and 3: a paste across projects / coordinate systems / units.
+void DrawPasteWarningModal(AppCommandState& cmd, std::vector<std::string>& log) {
+  auto& pp = cmd.pastePrompt;
+  if (pp.openRequested) {
+    ImGui::OpenPopup("Paste check##pastewarn");
+    pp.openRequested = false;
+  }
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  PushProductDialogAccent();
+  if (!ImGui::BeginPopupModal("Paste check##pastewarn", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopProductDialogAccent();
+    return;
+  }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
+  ImGui::PushTextWrapPos(ImGui::GetFontSize() * 34.f);
+  ImGui::TextUnformatted(pp.text.c_str());
+  ImGui::PopTextWrapPos();
+  ImGui::Spacing();
+  bool close = false;
+  if (!pp.block) {
+    if (ImGui::Button("Paste anyway")) {
+      const bool original = pp.original;
+      pp = {};
+      cmd.pasteWarningAnswered = true;
+      ImGui::CloseCurrentPopup();
+      if (original)
+        StartPasteOrigCommand(cmd, log);
+      else
+        StartPasteCommand(cmd, log);
+      ImGui::EndPopup();
+      PopProductDialogAccent();
+      return;
+    }
+    ImGui::SameLine();
+  }
+  if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+    close = true;
+  if (close) {
+    pp = {};
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+  PopProductDialogAccent();
+}
+
+/// REQ-383 clause 6: closing a drawing tab of a project whose point database could not be written.
+void DrawCloseTabWarningModal(AppCommandState& cmd) {
+  auto& ct = cmd.closeTabPrompt;
+  if (ct.openRequested) {
+    ImGui::OpenPopup("Unsaved project points##closetab");
+    ct.openRequested = false;
+  }
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  PushProductDialogAccent();
+  if (!ImGui::BeginPopupModal("Unsaved project points##closetab", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopProductDialogAccent();
+    return;
+  }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
+  ImGui::PushTextWrapPos(ImGui::GetFontSize() * 34.f);
+  ImGui::TextUnformatted(ct.text.c_str());
+  ImGui::PopTextWrapPos();
+  ImGui::Spacing();
+  if (ImGui::Button("Close anyway")) {
+    ct.confirmed = true;  // the tab loop closes it next frame
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    ct = {};
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+  PopProductDialogAccent();
+}
+
 void DrawProjectAttachModal(AppCommandState& cmd, std::vector<std::string>& log) {
   auto& pa = cmd.projectAttachPrompt;
   using Kind = AppCommandState::ProjectAttachPrompt::Kind;
@@ -1017,6 +1209,9 @@ void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log) {
   DrawNewProjectModal(cmd, log);
   DrawProjectPromptModal(cmd, log);
   DrawProjectAttachModal(cmd, log);  // REQ-379
+  DrawPointEditModal(cmd);  // REQ-383 clauses 2 and 4
+  DrawPasteWarningModal(cmd, log);  // REQ-383 clauses 1 and 3
+  DrawCloseTabWarningModal(cmd);  // REQ-383 clause 6
   DrawProjectHealthModal(cmd, log);
   DrawProjectPackModal(cmd, log);  // REQ-380
   DrawProjectTurnoverModal(cmd, log);  // REQ-381

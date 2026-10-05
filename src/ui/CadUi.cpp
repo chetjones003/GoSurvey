@@ -13491,7 +13491,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
         ImGui::EndTabItem();
       }
-      if (!tabOpen && i >= FirstDrawingTabIndex() && cmd.drawingTabs.size() > 2) {
+      if (cmd.closeTabPrompt.confirmed && cmd.closeTabPrompt.tabIdx == i)
+        tabOpen = false;  // REQ-383: "Close anyway" answered last frame
+      if (!tabOpen && i >= FirstDrawingTabIndex() && cmd.drawingTabs.size() > 2 && ProjectTabMayClose(cmd, i, log)) {
         const int closeIdx  = i;
         const int tabCount  = static_cast<int>(cmd.drawingTabs.size());
 

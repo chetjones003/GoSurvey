@@ -8,6 +8,7 @@
 #include "CadUi.hpp"
 #include "CadUiInternal.hpp"
 #include "ProjectFiles.hpp"
+#include "ProjectWarnings.hpp"  // REQ-383
 #include "CadUiChrome.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "NumFormat.hpp"
@@ -226,7 +227,7 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
       dirty.push_back({i, cmd.drawingTabs[i].name});
   }
 
-  if (dirty.empty()) {
+  if (dirty.empty() && cmd.closeUnsavedProjects.empty()) {
     cmd.closeConfirmed = true;
     ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
@@ -234,11 +235,27 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
     return;
   }
 
-  ImGui::TextUnformatted("The following drawings have unsaved changes:");
-  ImGui::Spacing();
-  for (const auto& e : dirty)
-    ImGui::BulletText("%s", e.name.c_str());
-  ImGui::Spacing();
+  if (!dirty.empty()) {
+    ImGui::TextUnformatted("The following drawings have unsaved changes:");
+    ImGui::Spacing();
+    for (const auto& e : dirty) {
+      const std::string proj = ProjectNameForTab(cmd, e.idx);  // REQ-383 clause 6: say which project
+      ImGui::BulletText("%s%s", e.name.c_str(), proj.empty() ? "" : ("  [project " + proj + "]").c_str());
+    }
+    ImGui::Spacing();
+  }
+  if (!cmd.closeUnsavedProjects.empty()) {
+    ImGui::TextWrapped("These projects have point changes that could not be written to their folders "
+                       "(the disk may be full or locked). Closing now loses those changes:");
+    ImGui::Spacing();
+    for (const UnsavedProject& u : cmd.closeUnsavedProjects) {
+      std::string drawings;
+      for (size_t k = 0; k < u.drawings.size(); ++k)
+        drawings += (k ? ", " : "") + u.drawings[k];
+      ImGui::BulletText("%s  (open drawings: %s)", u.name.c_str(), drawings.c_str());
+    }
+    ImGui::Spacing();
+  }
   ImGui::Separator();
   ImGui::Spacing();
 
@@ -272,6 +289,11 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
       }
       if (!isActive)
         RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
+    }
+    if (!cmd.closeUnsavedProjects.empty()) {  // REQ-383: try the project databases again; stay open if they still fail
+      cmd.closeUnsavedProjects = ProjectsWithUnsavedPoints(cmd, 0, log);
+      if (!cmd.closeUnsavedProjects.empty())
+        allOk = false;
     }
     if (allOk) {
       cmd.closeConfirmed = true;
