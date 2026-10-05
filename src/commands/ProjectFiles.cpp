@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <ctime>
 #include <filesystem>
 
@@ -214,14 +215,25 @@ projfiles::Health ProjectHealthFor(const AppCommandState& st, std::uint32_t proj
   if (s == nullptr)
     return {};
   std::vector<std::string> unsaved;
+  std::vector<std::pair<std::string, std::string>> seen;  // (file, tab name) already listed
   for (size_t i = 1; i < st.drawingTabs.size(); ++i) {
     if (st.drawingTabs[i].projectUid != projectUid)
       continue;
     const bool active = static_cast<int>(i) == st.activeDrawingIdx;
     const bool dirty = active ? st.cadGpuRevision != st.activeDocSavedRevision
                               : i < st.documents.size() && st.documents[i].cadGpuRevision != st.documents[i].savedRevision;
-    if (dirty)
-      unsaved.push_back(st.drawingTabs[i].name);
+    if (!dirty)
+      continue;
+    // The same file open in two tabs is one drawing with unsaved changes, not two (issue #726).
+    const std::string& path = active ? st.activeDocFilePath : (i < st.documents.size() ? st.documents[i].filePath : std::string());
+    const std::string& name = st.drawingTabs[i].name;
+    const bool again = std::any_of(seen.begin(), seen.end(), [&](const auto& k) {
+      return k.second == name && !path.empty() && k.first == path;
+    });
+    if (again)
+      continue;
+    seen.emplace_back(path, name);
+    unsaved.push_back(name);
   }
   return projfiles::CheckHealth(s->project, unsaved);
 }

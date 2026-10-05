@@ -321,3 +321,26 @@ TEST_CASE("req379 Project Health counts unsaved project drawings and Copy Links 
   s.readOnly = true;
   CHECK_FALSE(CopyProjectLinksIn(st, 7, log, &converted));  // a read-only project is never written
 }
+
+TEST_CASE("req379 one file open in two tabs is listed once under unsaved drawings", "[req379][issue726]") {
+  TempDir root("issue726");
+  AppCommandState st;
+  OpenProjectTab(st, root.path);
+  st.drawingTabs[1].name = "FG";
+  st.drawingTabs.resize(4);
+  st.drawingTabs[2].name = "FG";  // the same file, open a second time
+  st.drawingTabs[2].projectUid = 7;
+  st.drawingTabs[3].name = "HG";  // a different drawing
+  st.drawingTabs[3].projectUid = 7;
+  st.documents.resize(4);
+  st.activeDocFilePath = (root.path / "Job" / "Drawings" / "FG.dwg").u8string();
+  st.cadGpuRevision = 5;
+  st.activeDocSavedRevision = 4;
+  st.documents[2].filePath = st.activeDocFilePath;
+  st.documents[2].cadGpuRevision = 3;
+  st.documents[2].savedRevision = 1;
+  st.documents[3].filePath = (root.path / "Job" / "Drawings" / "HG.dwg").u8string();
+  st.documents[3].cadGpuRevision = 2;
+  st.documents[3].savedRevision = 1;
+  CHECK(ProjectHealthFor(st, 7).unsaved == std::vector<std::string>{"FG", "HG"});
+}

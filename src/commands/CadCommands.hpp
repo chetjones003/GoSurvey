@@ -1017,7 +1017,8 @@ struct CadClipboard {
   /// of another coordinate system / unit, is checked against these (CheckClipboardPaste).
   uint32_t    srcProjectUid = 0;        ///< 0 = a standalone drawing
   std::string srcProjectName;
-  std::string srcZone;                  ///< CS-MAP code of the source drawing; empty = none
+  std::string srcProjectFolder;         ///< UTF-8; tells apart two open projects that share a name (issue #726)
+  std::string srcZone;                 ///< CS-MAP code of the source drawing; empty = none
   double      srcMetersPerUnit = 0.0;   ///< the source drawing's unit in meters; 0 = unknown
 
   bool empty() const {

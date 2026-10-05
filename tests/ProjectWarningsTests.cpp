@@ -417,6 +417,28 @@ TEST_CASE("req383 pasting into a different project warns", "[req383]") {
   CHECK_FALSE(st.pasteWarningAnswered);  // one use only
 }
 
+TEST_CASE("req383 two open projects with the same name are told apart by folder in the paste warning",
+          "[req383][issue726]") {
+  TempDir d("paste-samename");
+  AppCommandState st;
+  OpenSession(st, d.path / "sent", 7, "TestJob");
+  OpenSession(st, d.path / "received", 8, "TestJob");
+  st.drawingTabs[1].projectUid = 7;
+  st.activeDrawingIdx = st.prevDrawingIdx = 1;
+  TagClipboardOrigin(st);  // copy in the first project's drawing
+  st.drawingTabs[1].projectUid = 8;  // paste into the received copy
+  const PasteCheck pc = CheckClipboardPaste(st);
+  CHECK(pc.verdict == PasteCheck::Verdict::Warn);
+  CHECK(pc.text.find("sent") != std::string::npos);      // both folders are named
+  CHECK(pc.text.find("received") != std::string::npos);
+
+  // Different names keep the short message.
+  AppCommandState st2;
+  PasteSetup(st2, d.path / "x");
+  const PasteCheck pc2 = CheckClipboardPaste(st2);
+  CHECK(pc2.text.find(d.path.string()) == std::string::npos);
+}
+
 TEST_CASE("req383 a coordinate-system mismatch blocks the paste", "[req383]") {
   TempDir d("paste-zone");
   AppCommandState st;
