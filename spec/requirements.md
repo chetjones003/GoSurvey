@@ -11325,6 +11325,39 @@ capability that does not exist. They are recorded here rather than quietly dropp
   increment 5 shipped (R2018 re-read preserves MTEXT/DIMENSION context objects;
   `#614` export loss for pre-R2010 annotative hosts and simplified hatch context).
 
+### REQ-385 — AutoCAD LIGHT and SUN DWG interop (GitHub issue #624, lights/sun slice)
+
+- Purpose: issue **#624** — **lights and sun** — AutoCAD stores **LIGHT** entities and a **SUN**
+  object (R2007+ drawing format; GoSurvey export at **R2010+**). GoSurvey does not evaluate scene
+  lighting in the viewport (REQ-064 shaded mode uses fixed lighting). This REQ preserves imported
+  lights/sun through `.gs` and DWG export so drawings opened in AutoCAD retain presentation data.
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-g (closes the SPEC GAP on issue #624 for lights/sun MVP; **LIGHTLIST** and
+  geographic sun study remain deferred with REQ-201 honesty).
+- Depends on: REQ-170 / issue #600 (R2010+ export path), REQ-201 (honest logging), REQ-371 / REQ-372
+  (orthogonal visual-style and material slices).
+- Statement:
+  1. **Import.** Opening an R2007+ DWG captures each decoded **LIGHT** entity and the first **SUN**
+     object into drawing state (name, type, on/off, colour, intensity, position/target). Import logs
+     counts (REQ-201). GoSurvey display is unchanged.
+  2. **Export.** At **R2010+**, export rewrites captured **LIGHT** entities into model space and the
+     **SUN** object via hand-built LibreDWG records (no public `dwg_add_LIGHT` / `dwg_add_SUN`).
+     R2000/R2004 export omits them; `#614` lists the count.
+  3. **`.gs` persistence.** Additive JSON fields preserve captured lights/sun without a format-version
+     bump when absent (ADR-020 (d)).
+  4. **Out of scope:** GoSurvey-authored lights, light editor UI, **LIGHTLIST** / **SUNSTUDY** /
+     **SKYLIGHT_BACKGROUND**, photometric IES files, and Realistic/Conceptual render parity.
+- Acceptance:
+  - `[issue624][req385]` fixture or test helper: DWG with a point LIGHT imports into state, exports
+    at R2018, LibreDWG re-read finds at least one LIGHT.
+  - `[issue624][req385][issue614]` export loss names LIGHT/SUN when export is below R2010 and state
+    holds imported lights/sun.
+  - REQ-201 / `#601` gap doc no longer lists lights/sun as an untracked SPEC GAP.
+- Owner-layer: IO (`LibreDwgLights.cpp`, `LibreDwgCad.cpp`), IO (`.gs`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #624 lights/sun slice; D-2026-10-05-g).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
