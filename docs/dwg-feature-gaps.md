@@ -14,7 +14,7 @@ As of 2026-10-02, the large **Group A** backlog and most **Group B** format work
 
 | Issue | What is left |
 |---|---|
-| **#622** | Annotative scaling — most slices merged (#657–#683); AutoCAD parity gaps remain (see [#622 comments](https://github.com/chetjones003/GoSurvey/issues/622)). |
+| **#688** | AutoCAD annotation **context** objects — split from closed [#622](https://github.com/chetjones003/GoSurvey/issues/622); LibreDWG / SPEC GAP (see [#688](https://github.com/chetjones003/GoSurvey/issues/688)). |
 | **#617** | Fields — **REQ-368** (inline codes + evaluation + R2004+ native `FIELD`/`FIELDLIST`). |
 | **#618** | Dynamic blocks — **REQ-369** (increment 1: `*U` INSERT fidelity; full round trip open). |
 | **#624** | Visual styles, materials, lights — **new feature**, SPEC GAP. |
@@ -52,16 +52,17 @@ Close **#601** only when those four are resolved or explicitly moved off this tr
 | #620 | Transparency | R2010+ export |
 | #621 | Point cloud external references | R2013+ |
 | #623 | GEODATA layout (local vs projected) | REQ-362 |
+| #622 | Annotative scaling (GoSurvey-native + EED) | Closed 2026-10-05 — PRs **#657–#687**; context parity → **#688** |
 
 Some export paths still **degrade** rather than drop (for example 3D polylines with bulge, multileader extra branches on R2000/R2004). Those appear in the dynamic loss list when they apply.
 
 ## Remaining gaps (detail)
 
-### #622 — Annotative scaling (in progress)
+### #688 — AutoCAD annotation context (split from #622)
 
-GoSurvey now has CANNOSCALE UI, `.gs` SCALE list sync, viewport-scaled annotative text/dims/hatches/blocks/multileaders, multi-SCALE DWG export/import, GOSURVEY / AcadAnnotative EED paths for several entity types, and GoSurvey-native **per-scale visibility** (`annoVisScales` / `.gs` `annotativeVisibleScaleNames`) with draw gates in model, layout viewports, and GL solid hatches (PRs **#657–#681**).
+GoSurvey-native annotative scaling shipped in **#622** (closed): CANNOSCALE UI, `.gs` SCALE list, viewport/model annotative draw, multi-SCALE DWG export/import, GOSURVEY / AcadAnnotative EED, per-scale visibility (`annoVisScales`), UI and `[issue622]` tests (PRs **#657–#687**).
 
-**#622 stays open** until remaining AutoCAD-parity items are done or split out — see the checklist in [issue #622](https://github.com/chetjones003/GoSurvey/issues/622) (full annotation context blobs, DIMENSION annotative in native DWG where LibreDWG lacks fields, etc.). REQ-110 remains **proposed**; delivery may amend or supersede it.
+**#688** tracks remaining AutoCAD parity: per-object **annotation context** blobs (`*_ANNOTATION_CONTEXT_DATA`, `CONTEXTDATAMANAGER`), native DIMENSION annotative fields where LibreDWG lacks them, and export-loss honesty when context cannot be preserved. **REQ-110** remains **proposed**; context work needs an accepted REQ or a recorded SPEC decision.
 
 ### #617 — Fields
 
@@ -95,4 +96,4 @@ DWG versions cluster on a few containers: R2000; R2004/R2010/R2013/R2018 share o
 
 ## Historical recommended order
 
-The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete except** the four rows in the table at the top of this document. New work should target **#622** first for DWG fidelity, then **#617**, **#618**, and **#624** after their REQs exist.
+The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete except** the four rows in the table at the top of this document. New DWG fidelity work should target **#688**, **#617**, **#618**, and **#624** after their REQs exist.
