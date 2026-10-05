@@ -2154,6 +2154,10 @@ struct AppCommandState {
   std::vector<CadDwgImportedLight> dwgImportedLights;
   CadDwgImportedSun dwgImportedSun{};
   bool dwgImportedSunPresent = false;
+  /// REQ-386: LIGHTLIST registry from DWG import (issue #715).
+  CadDwgImportedLightList dwgImportedLightList{};
+  bool dwgImportedLightListPresent = false;
+  std::string dwgImportedLightListDictKey;
   float defaultPlottedTextHeightInches = 0.125f;
 
   /// Drawing unit, AutoCAD $INSUNITS code (REQ-022). A relabel only — never scales

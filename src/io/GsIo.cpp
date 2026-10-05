@@ -1731,7 +1731,7 @@ json BuildRoot(const AppCommandState& st) {
       doc["currentAnnotationScaleIndex"] = st.currentAnnotationScaleIndex;
   }
 
-  if (!st.dwgImportedLights.empty() || st.dwgImportedSunPresent) {
+  if (!st.dwgImportedLights.empty() || st.dwgImportedSunPresent || st.dwgImportedLightListPresent) {
     json lights = json::array();
     for (const CadDwgImportedLight& l : st.dwgImportedLights) {
       json o;
@@ -1760,6 +1760,21 @@ json BuildRoot(const AppCommandState& st) {
       sun["msecs"] = st.dwgImportedSun.msecs;
       sun["isDst"] = st.dwgImportedSun.isDst;
       doc["dwgImportedSun"] = std::move(sun);
+    }
+    if (st.dwgImportedLightListPresent) {
+      json reg;
+      reg["classVersion"] = st.dwgImportedLightList.classVersion;
+      if (!st.dwgImportedLightListDictKey.empty())
+        reg["dictKey"] = st.dwgImportedLightListDictKey;
+      json entries = json::array();
+      for (const CadDwgImportedLightListEntry& e : st.dwgImportedLightList.entries) {
+        json o;
+        if (!e.name.empty())
+          o["name"] = e.name;
+        entries.push_back(std::move(o));
+      }
+      reg["entries"] = std::move(entries);
+      doc["dwgImportedLightList"] = std::move(reg);
     }
   }
 
@@ -3623,6 +3638,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 
   st.dwgImportedLights.clear();
   st.dwgImportedSunPresent = false;
+  st.dwgImportedLightList = {};
+  st.dwgImportedLightListPresent = false;
+  st.dwgImportedLightListDictKey.clear();
   if (doc.contains("dwgImportedLights") && doc["dwgImportedLights"].is_array()) {
     for (const auto& el : doc["dwgImportedLights"]) {
       CadDwgImportedLight l;
@@ -3656,6 +3674,21 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.dwgImportedSun.msecs = sun.value("msecs", 0u);
     st.dwgImportedSun.isDst = sun.value("isDst", false);
     st.dwgImportedSunPresent = true;
+  }
+  if (doc.contains("dwgImportedLightList") && doc["dwgImportedLightList"].is_object()) {
+    const auto& reg = doc["dwgImportedLightList"];
+    st.dwgImportedLightListPresent = true;
+    st.dwgImportedLightList.classVersion = reg.value("classVersion", 1u);
+    st.dwgImportedLightListDictKey = reg.value("dictKey", std::string{});
+    if (reg.contains("entries") && reg["entries"].is_array()) {
+      for (const auto& el : reg["entries"]) {
+        CadDwgImportedLightListEntry e;
+        e.name = el.value("name", std::string{});
+        st.dwgImportedLightList.entries.push_back(std::move(e));
+      }
+    }
+    if (st.dwgImportedLightListDictKey.empty())
+      st.dwgImportedLightListDictKey = "Default";
   }
 
   st.drawingLayerTable.clear();

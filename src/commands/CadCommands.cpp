@@ -24852,6 +24852,9 @@ void ClearCadGeometry(AppCommandState& st) {
   st.currentAnnotationScaleIndex = -1;
   st.dwgImportedLights.clear();
   st.dwgImportedSunPresent = false;
+  st.dwgImportedLightList = {};
+  st.dwgImportedLightListPresent = false;
+  st.dwgImportedLightListDictKey.clear();
   st.cadMeshes.clear();
   st.cadMeshAttrs.clear();
   st.cadPointClouds.clear();

@@ -1272,6 +1272,17 @@ struct CadDwgImportedLight {
   double falloffAngle = 0.0;
 };
 
+/// One entry in AutoCAD's LIGHTLIST registry (REQ-386 / issue #715).
+struct CadDwgImportedLightListEntry {
+  std::string name;
+};
+
+/// Captured LIGHTLIST object from DWG import (REQ-386 / issue #715).
+struct CadDwgImportedLightList {
+  unsigned classVersion = 1;
+  std::vector<CadDwgImportedLightListEntry> entries;
+};
+
 /// AutoCAD SUN dictionary object preserved from DWG import (REQ-385 / issue #624).
 struct CadDwgImportedSun {
   bool on = true;

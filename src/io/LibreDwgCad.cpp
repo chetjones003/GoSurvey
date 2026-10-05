@@ -3584,7 +3584,8 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
 
   const int lightSunLoss = DwgExportCountLightSunLosses(st);
   if (lightSunLoss > 0) {
-    add("LIGHT/SUN presentation object(s) (native lights require R2010+ DWG export)", static_cast<size_t>(lightSunLoss));
+    add("LIGHT/SUN/LIGHTLIST presentation object(s) (native lights require R2010+ DWG export)",
+        static_cast<size_t>(lightSunLoss));
   }
 
   return out;
