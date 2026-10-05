@@ -4613,6 +4613,92 @@ TEST_CASE("Annotative MTEXT export writes annotation context objects (REQ-384 in
   dwg_free(&dwg);
 }
 
+TEST_CASE("Annotative TEXT, INSERT, and DIMENSION export annotation context (REQ-384 inc 3, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  ScratchDir dir("anno-text-blk-dim-context");
+  const auto p = (dir.path / "anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale scale1;
+  scale1.name = "1:1";
+  scale1.paperUnits = 1.f;
+  scale1.drawingUnits = 1.f;
+  CadAnnotationScale scale2;
+  scale2.name = "1:20";
+  scale2.paperUnits = 1.f;
+  scale2.drawingUnits = 20.f;
+  st.annotationScales.push_back(scale1);
+  st.annotationScales.push_back(scale2);
+  st.currentAnnotationScaleIndex = 0;
+
+  CadAnnotation t{};
+  t.kind = CadAnnotation::Kind::Text;
+  t.annotative = true;
+  t.insX = 0.f;
+  t.insY = 0.f;
+  t.plottedHeightInches = 0.125f;
+  t.text = "Label";
+  st.cadAnnotations.push_back(std::move(t));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  CadBlockDefinition def;
+  def.name = "PIN";
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "PIN";
+  ref.annotative = true;
+  ref.xf.x = 5.f;
+  ref.xf.y = 5.f;
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+
+  CadAnnotation dim{};
+  dim.kind = CadAnnotation::Kind::DimAligned;
+  dim.annotative = true;
+  dim.dimExt1X = 0.f;
+  dim.dimExt1Y = 0.f;
+  dim.dimExt2X = 10.f;
+  dim.dimExt2Y = 0.f;
+  dim.dimSignedOffset = 2.f;
+  dim.insX = 5.f;
+  dim.insY = 2.f;
+  DimensionStyles::BakeTextOntoDimension(dim, st.activeDimensionStyle);
+  AngleDisplaySettings angleSet{};
+  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle.unitPrecision, angleSet);
+  st.cadAnnotations.push_back(std::move(dim));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int textCtx = 0;
+  int blkCtx = 0;
+  int aldimCtx = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    switch (dwg.object[i].fixedtype) {
+    case DWG_TYPE_TEXTOBJECTCONTEXTDATA:
+      ++textCtx;
+      break;
+    case DWG_TYPE_BLKREFOBJECTCONTEXTDATA:
+      ++blkCtx;
+      break;
+    case DWG_TYPE_ALDIMOBJECTCONTEXTDATA:
+      ++aldimCtx;
+      break;
+    default:
+      break;
+    }
+  }
+  CHECK(textCtx >= 2);
+  CHECK(blkCtx >= 2);
+  CHECK(aldimCtx >= 2);
+  CHECK(DwgAnnotContextCountObjects(&dwg) >= 9);
+  dwg_free(&dwg);
+}
+
 TEST_CASE("Annotation context scan and import log (REQ-384 inc 1, issue #688)",
           "[dwg][libredwg][issue688][req384]") {
   Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
