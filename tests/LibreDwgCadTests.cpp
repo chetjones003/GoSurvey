@@ -4576,12 +4576,23 @@ TEST_CASE("DWG import maps POLYLINE_PFACE to CadMesh (REQ-170, issue #613)",
   CHECK(st.cadMeshes[0]->vertexCount() == 4);
 }
 
-TEST_CASE("GoSurvey annotative export has no annotation context objects yet (REQ-384 inc 1, issue #688)",
+TEST_CASE("Annotative MTEXT export writes annotation context objects (REQ-384 inc 2, issue #688)",
           "[dwg][libredwg][issue688][req384]") {
-  ScratchDir dir("anno-no-context");
+  ScratchDir dir("anno-mtext-context");
   const auto p = (dir.path / "anno.dwg").string();
   AppCommandState st;
   st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale scale1;
+  scale1.name = "1:1";
+  scale1.paperUnits = 1.f;
+  scale1.drawingUnits = 1.f;
+  CadAnnotationScale scale2;
+  scale2.name = "1:20";
+  scale2.paperUnits = 1.f;
+  scale2.drawingUnits = 20.f;
+  st.annotationScales.push_back(scale1);
+  st.annotationScales.push_back(scale2);
+  st.currentAnnotationScaleIndex = 0;
   CadAnnotation m{};
   m.kind = CadAnnotation::Kind::Mtext;
   m.annotative = true;
@@ -4598,7 +4609,7 @@ TEST_CASE("GoSurvey annotative export has no annotation context objects yet (REQ
   REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
   Dwg_Data dwg{};
   REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
-  CHECK(DwgAnnotContextCountObjects(&dwg) == 0);
+  CHECK(DwgAnnotContextCountObjects(&dwg) >= 3);
   dwg_free(&dwg);
 }
 

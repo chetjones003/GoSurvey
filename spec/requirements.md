@@ -11300,7 +11300,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: IO (`LibreDwgAnnotContext.cpp`, `LibreDwgCad.cpp`)
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #688; D-2026-10-05-f). 2026-10-05 — increment 1 shipped
-  (import scan + REQ-201 log).
+  (import scan + REQ-201 log). 2026-10-05 — increment 2 shipped (R2010+ hand-built
+  `MTEXTOBJECTCONTEXTDATA` + `CONTEXTDATAMANAGER` on annotative MTEXT export).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
