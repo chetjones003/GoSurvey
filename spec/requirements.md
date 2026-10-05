@@ -11253,6 +11253,43 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
 
+### REQ-384 — AutoCAD annotation context objects DWG interop (GitHub issue #688)
+
+- Purpose: issue **#688** — follow-up to closed **#622**. GoSurvey-native annotative scaling (SCALE
+  list, CANNOSCALE, AcadAnnotative / GOSURVEY EED, per-scale visibility) is shipped; AutoCAD also
+  stores **per-scale annotation context** (`*_OBJECTCONTEXTDATA`, `CONTEXTDATAMANAGER`) that
+  LibreDWG decodes but GoSurvey does not yet read or write (`HAVE_NO_DWG_ADD_*` for every context
+  class). Without context, AutoCAD may not show every scale-specific representation when a drawing
+  passes through GoSurvey, even when the annotative flag and EED survive.
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-f (accept REQ-384 for #688; **REQ-110** stays **proposed** — it covers UI
+  rescale of existing text, not DWG context blobs).
+- Depends on: issue #622 (shipped), REQ-170 / issue #600 (R2010+ export path), REQ-201 (honest logging).
+- Statement:
+  1. **Increment 1 — import honesty.** On DWG open (not DXF), count decoded annotation context
+     objects. When the count is non-zero, append a REQ-201 log line that per-scale context is not yet
+     merged into GoSurvey geometry (entity-level import + EED markers unchanged).
+  2. **Increment 2 — export MTEXT context.** At **R2010+**, hand-build `MTEXTOBJECTCONTEXTDATA` and
+     wire `CONTEXTDATAMANAGER` for annotative MTEXT GoSurvey exports (one context per SCALE entry
+     where feasible).
+  3. **Increment 3 — TEXT, INSERT, DIMENSION** context objects for the same export path.
+  4. **Increment 4 — HATCH, MULTILEADER, remaining host types** plus import use of default context
+     geometry when present.
+  5. **Increment 5 — round trip.** GoSurvey → DWG (R2018) → AutoCAD-class fixture or LibreDWG
+     re-read preserves annotative context for at least one MTEXT and one DIMENSION sample; `#614`
+     lists hosts whose context could not be encoded.
+- Acceptance:
+  - **(Inc 1)** `[issue688][req384]` unit test: context object count is zero on GoSurvey annotative
+    export; count increases when a test helper adds `MTEXTOBJECTCONTEXTDATA`; import log mentions
+    context when count > 0.
+  - **(Inc 2–5)** `[issue688][req384]` export/import tests per increment; `#601` gap doc updated when
+    #688 closes.
+- Owner-layer: IO (`LibreDwgAnnotContext.cpp`, `LibreDwgCad.cpp`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #688; D-2026-10-05-f). 2026-10-05 — increment 1 shipped
+  (import scan + REQ-201 log).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

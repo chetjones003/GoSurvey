@@ -5,6 +5,7 @@
 #include "CadField.hpp"
 #include "LibreDwgField.hpp"
 #include "LibreDwgDynamicBlock.hpp"
+#include "LibreDwgAnnotContext.hpp"
 #include "LibreDwgMaterial.hpp"
 #include "LibreDwgVisualStyle.hpp"
 #include "util/cadpiperun.hpp"
@@ -5206,6 +5207,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   if (!LoadDwgData(pathUtf8, asDxf, &dwg, log))
     return false;
   DwgMaterialImportBegin();
+  DwgAnnotContextImportBegin();
 
   const double oldOx = st.worldDocumentOriginX;
   const double oldOy = st.worldDocumentOriginY;
@@ -5293,6 +5295,9 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
                                     st))
     SyncCurrentAnnotationScaleIndex(st);
 
+  if (!asDxf)
+    DwgAnnotContextImportScan(&dwg);
+
   dwg_free(&dwg);
 
   CadCoord::MaybeRebaseLargeCoordinates(st, &log);
@@ -5342,6 +5347,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
     ++printed;
   }
   DwgMaterialImportAppendLog(log);
+  DwgAnnotContextImportAppendLog(log);
   BumpCadGpuCache(st);
   return true;
 }
