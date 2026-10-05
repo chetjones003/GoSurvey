@@ -2263,6 +2263,7 @@ struct TableWriter {
   Dwg_Data* dwg = nullptr;
   bool useTrueColor = false;  // R2004+ entity ENC features (#615, #620)
   const AppCommandState* layerState = nullptr;
+  DwgExportAnnotContext* annotContext = nullptr;
   // Store LibreDWG object indices, not Dwg_Object* — dwg_add_* can reallocate dwg->object and
   // invalidate raw pointers cached from an earlier BuildLayerTable / EnsureLtype call.
   std::unordered_map<std::string, BITCODE_BL> layers;  // lower(name) -> parent objid
@@ -2579,6 +2580,9 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
             e->is_not_annotative = 1;
           if (an.annotative && e->parent != nullptr)
             WriteAnnotativeEntityEed(tw.dwg, e->parent, &an.annotativeVisibleScaleNames);
+          if (an.annotative && e->parent != nullptr && tw.annotContext != nullptr &&
+              tw.layerState != nullptr)
+            DwgExportAttachMtextAnnotationContext(tw.annotContext, e->parent, e, an, *tw.layerState);
         }
         apply(e->parent, at);
       }
@@ -3829,7 +3833,8 @@ static int EnsureDwgScaleClassNumber(Dwg_Data* dwg) {
   return dwg_add_class(dwg, "SCALE", "AcDbScale", "ObjectDBX Classes", false);
 }
 
-static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationScale& entry) {
+static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationScale& entry,
+                                         BITCODE_HV* outHandle = nullptr) {
   if (dwg == nullptr || entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
     return false;
   const int classNumber = EnsureDwgScaleClassNumber(dwg);
@@ -3863,19 +3868,26 @@ static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationSca
   sc->paper_units = static_cast<double>(entry.paperUnits);
   sc->drawing_units = static_cast<double>(entry.drawingUnits);
   sc->is_unit_scale = 0;
+  if (outHandle != nullptr)
+    *outHandle = obj->handle.value;
   return sc->name != nullptr;
 }
 
 static void WriteAnnotationScalesFromState(const AppCommandState& st, Dwg_Data* dwg,
-                                           std::vector<std::string>& log) {
+                                           std::vector<std::string>& log,
+                                           DwgExportAnnotContext* annotCtx) {
   if (dwg == nullptr || st.annotationScales.empty())
     return;
   if (LibreDwgVersionFromExport(st.dwgExportVersion) < R_2007)
     return;
   size_t nWritten = 0;
   for (const CadAnnotationScale& s : st.annotationScales) {
-    if (AppendDwgAnnotationScaleObject(dwg, s))
+    BITCODE_HV scaleHandle = 0;
+    if (AppendDwgAnnotationScaleObject(dwg, s, &scaleHandle)) {
       ++nWritten;
+      if (annotCtx != nullptr && scaleHandle != 0)
+        DwgExportAnnotContextRegisterScale(annotCtx, s.name, scaleHandle);
+    }
   }
   if (nWritten > 0) {
     log.push_back("CAD export — wrote " + std::to_string(nWritten) +
@@ -3893,13 +3905,17 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
 
   const bool r2018Write = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2018;
 
+  DwgExportAnnotContext annotCtx;
+  DwgExportAnnotContextInit(&annotCtx, dwg, LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2010);
+
   TableWriter tw;
   tw.dwg = dwg;
   tw.useTrueColor = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
   tw.layerState = &st;
+  tw.annotContext = &annotCtx;
   tw.BuildLayerTable(st);
   tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
-  WriteAnnotationScalesFromState(st, dwg, log);
+  WriteAnnotationScalesFromState(st, dwg, log, &annotCtx);
   // Register every linetype the entities reference up front, so no LTYPE table object is created
   // after the entity records have started going into the object array.
   for (const std::vector<EntityAttributes>* v :
@@ -4385,6 +4401,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
             e->is_not_annotative = 1;
           if (an.annotative && e->parent != nullptr)
             WriteAnnotativeEntityEed(dwg, e->parent, &an.annotativeVisibleScaleNames);
+          if (an.annotative && e->parent != nullptr)
+            DwgExportAttachMtextAnnotationContext(&annotCtx, e->parent, e, an, st);
         }
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
@@ -4844,6 +4862,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
 
   DwgExportFinalizeFieldObjects(&fldCtx, dwg, log);
   DwgExportMaterialAppendLog(matCtx, log);
+  DwgExportAnnotContextAppendLog(annotCtx, log);
 
   // REQ-170 / REQ-201, issue #614: every drop and degradation, named and counted, from the ONE
   // scan the pre-export warning dialog also reads — so the log and the dialog cannot disagree, and
