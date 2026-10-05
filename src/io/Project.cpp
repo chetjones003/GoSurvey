@@ -195,6 +195,8 @@ bool Load(const fs::path& gsprojFile, Project* out, std::string* err) {
         for (const auto& a : it["associations"])
           if (a.is_string())
             t.associations.push_back(a.get<std::string>());
+      if (it.contains("placements") && it["placements"].is_array())
+        t.placementsJson = it["placements"].dump();
       p.items.push_back(std::move(t));
     }
   static const char* const known[] = {"formatVersion", "id", "name", "layout", "settings", "items"};
@@ -225,6 +227,9 @@ bool Save(const Project& p, std::string* err) {
     it["path"] = t.path;
     it["kind"] = t.kind;
     it["associations"] = t.associations;
+    const json placements = json::parse(t.placementsJson, nullptr, false);
+    if (placements.is_array() && !placements.empty())
+      it["placements"] = placements;
     items.push_back(std::move(it));
   }
   j["items"] = std::move(items);

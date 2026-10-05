@@ -29,6 +29,9 @@ struct TrackedItem {
   std::string              path;  ///< project-relative; for "local-link" an absolute path
   std::string              kind = kKindInProject;
   std::vector<std::string> associations;  ///< project-relative paths of the drawings it is attached to
+  /// REQ-379 clause 2 (P6): a JSON array of per-drawing PDF placements, kept verbatim here (the
+  /// commands layer reads and writes it). "[]" for everything that is not a placed PDF.
+  std::string              placementsJson = "[]";
 };
 
 struct Project {

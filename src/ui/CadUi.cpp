@@ -1,5 +1,6 @@
 #include "CadUi.hpp"
 #include "CadUiInternal.hpp"
+#include "ProjectFiles.hpp"
 #include "CadUiChrome.hpp"
 #include "CadBlocks.hpp"
 #include "DevShellHooks.hpp"
@@ -1534,6 +1535,7 @@ void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
   if (!path.empty()) {
     if (SaveDrawingDocument(cmd, path.c_str(), log)) {
       cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+      SyncProjectFilesOnSave(cmd, cmd.activeDrawingIdx, path, log);  // REQ-379 clause 2
       RecordRecentDrawing(cmd, path);
     }
     return;
@@ -1553,6 +1555,7 @@ void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
   cmd.activeDocFilePath      = std::string(dwgPath);
   if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
     cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::u8path(dwgPath).stem().u8string();
+  SyncProjectFilesOnSave(cmd, cmd.activeDrawingIdx, cmd.activeDocFilePath, log);  // REQ-379 clause 2
   RecordRecentDrawing(cmd, cmd.activeDocFilePath);
 }
 
@@ -1601,6 +1604,8 @@ void OpenDrawingInNewTabAs(AppCommandState& cmd, std::vector<std::string>& log, 
   cmd.documents.emplace_back();
   RestoreDocumentFromSnapshot(cmd, newIdx);  // clear cmd to empty state
   if (OpenDrawingDocument(cmd, dwgPathUtf8, log)) {
+    if (join.uid != 0)
+      ApplyProjectFilesOnOpen(cmd, join.uid, dwgPathUtf8, log);  // REQ-379 clause 2
     cmd.activeDocSavedRevision = cmd.cadGpuRevision;
     cmd.activeDocFilePath      = std::string(dwgPathUtf8);
     RecordRecentDrawing(cmd, cmd.activeDocFilePath);
@@ -1660,6 +1665,8 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
                         !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty() &&
                             !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx)))
       cmd.addDrawingToProjectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-378
+    if (ImGui::MenuItem("Project Health...", nullptr, false, !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty()))
+      cmd.projectHealthUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-379
     if (ImGui::MenuItem("Save", "Ctrl+S")) {
       SaveActiveDocument(cmd, log);
     }
@@ -1683,6 +1690,7 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
           if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
             cmd.drawingTabs[cmd.activeDrawingIdx].name =
                 std::filesystem::u8path(dwgPath).stem().u8string();
+          SyncProjectFilesOnSave(cmd, cmd.activeDrawingIdx, cmd.activeDocFilePath, log);  // REQ-379 clause 2
           AppendSaveTrace("ui: before record recent");
           RecordRecentDrawing(cmd, cmd.activeDocFilePath);
           AppendSaveTrace("ui: save-as complete");

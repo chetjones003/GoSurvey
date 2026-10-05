@@ -6,7 +6,9 @@
 #include "CadUi.hpp"
 
 #include "AppIcon.hpp"  // UserDataDirectory
+#include "PdfAttachDialog.hpp"
 #include "ProjectAddFlow.hpp"
+#include "ProjectFiles.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectSettings.hpp"
 #include "RecentDrawings.hpp"
@@ -16,6 +18,8 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <memory>
 #include <filesystem>
@@ -647,6 +651,134 @@ void DrawAddDrawingModal(AppCommandState& cmd, std::vector<std::string>& log) {
   PopProductDialogAccent();
 }
 
+std::string SizeText(std::uint64_t bytes) {
+  char buf[48];
+  if (bytes >= 1024ull * 1024 * 1024)
+    std::snprintf(buf, sizeof(buf), "%.1f GB", static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0));
+  else if (bytes >= 1024ull * 1024)
+    std::snprintf(buf, sizeof(buf), "%.1f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+  else
+    std::snprintf(buf, sizeof(buf), "%.0f KB", static_cast<double>(bytes) / 1024.0);
+  return buf;
+}
+
+// REQ-379 clause 1: the Copy / Link / Cancel question for a point cloud or PDF from outside the project.
+void DrawProjectAttachModal(AppCommandState& cmd, std::vector<std::string>& log) {
+  auto& pa = cmd.projectAttachPrompt;
+  using Kind = AppCommandState::ProjectAttachPrompt::Kind;
+  if (pa.openRequested) {
+    ImGui::OpenPopup("Attach to project##projattach");
+    pa.openRequested = false;
+  }
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  PushProductDialogAccent();
+  if (!ImGui::BeginPopupModal("Attach to project##projattach", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopProductDialogAccent();
+    return;
+  }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
+
+  const AppCommandState::ProjectSession* s = SessionByUid(cmd, pa.projectUid);
+  const std::string name = fs::u8path(pa.sourcePath).filename().u8string();
+  ImGui::TextWrapped("Attach \"%s\" (%s) to project %s.", name.c_str(), SizeText(pa.sizeBytes).c_str(),
+                     s ? s->project.name.c_str() : "?");
+  ImGui::Spacing();
+  ImGui::TextWrapped("Copy puts the file in the project (%s) so it travels with the project when it is packed or emailed.",
+                     pa.destRel.c_str());
+  if (pa.reuse)
+    ImGui::TextWrapped("An identical copy is already there; it will be used.");
+  if (pa.sizeBytes >= projfiles::kLargeFileBytes)
+    ImGui::TextColored(ImVec4(0.85f, 0.55f, 0.1f, 1.f),
+                       "This is a large file: copying it makes the project folder, and any pack of it, that much bigger.");
+  ImGui::TextWrapped("Link leaves the file where it is. A linked file will NOT travel with the project.");
+  ImGui::Spacing();
+
+  int answer = 0;  // 1 copy, 2 link, 3 cancel
+  if (ImGui::Button("Copy into project"))
+    answer = 1;
+  ImGui::SameLine();
+  if (ImGui::Button("Link"))
+    answer = 2;
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel"))
+    answer = 3;
+  if (answer != 0) {
+    const Kind kind = pa.kind;
+    ImGui::CloseCurrentPopup();
+    std::string finalPath;
+    if (answer == 3) {
+      pa = {};
+      log.push_back("Attach cancelled.");
+    } else if (ResolveProjectAttach(cmd, answer == 1, log, &finalPath)) {
+      if (kind == Kind::PointCloud) {
+        StartPointCloudImportAsync(cmd, finalPath, log);
+      } else if (finalPath.size() < sizeof(cmd.pdfAttachFilePath)) {
+        std::strcpy(cmd.pdfAttachFilePath, finalPath.c_str());
+        StartPdfAttachBuild(cmd, log);
+      } else {
+        log.push_back("PDFATTACH - the file's path is too long; nothing was attached.");
+      }
+    }
+  }
+  ImGui::EndPopup();
+  PopProductDialogAccent();
+}
+
+// REQ-379 clause 4: Project Health.
+void DrawProjectHealthModal(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (cmd.projectHealthUid != 0 && !ImGui::IsPopupOpen("Project Health##projhealth"))
+    ImGui::OpenPopup("Project Health##projhealth");
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  PushProductDialogAccent();
+  if (!ImGui::BeginPopupModal("Project Health##projhealth", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopProductDialogAccent();
+    return;
+  }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
+
+  const AppCommandState::ProjectSession* s = SessionByUid(cmd, cmd.projectHealthUid);
+  if (s == nullptr) {
+    cmd.projectHealthUid = 0;
+    ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+    PopProductDialogAccent();
+    return;
+  }
+  const projfiles::Health h = ProjectHealthFor(cmd, cmd.projectHealthUid);
+  ImGui::TextWrapped("Project %s", s->project.name.c_str());
+  ImGui::Spacing();
+  auto list = [](const char* title, const std::vector<std::string>& items) {
+    if (items.empty())
+      return;
+    ImGui::TextUnformatted(title);
+    for (const std::string& i : items)
+      ImGui::BulletText("%s", i.c_str());
+    ImGui::Spacing();
+  };
+  list("Linked files (will NOT travel with the project):", h.linked);
+  list("Missing files:", h.missing);
+  list("Files this version cannot reach:", h.unavailable);
+  list("Drawings with unsaved changes:", h.unsaved);
+  if (h.Clean())
+    ImGui::TextWrapped("No problems found: every tracked file is in the project and every drawing is saved.");
+
+  ImGui::BeginDisabled(h.linked.empty() || s->readOnly);
+  if (ImGui::Button("Copy links into the project")) {
+    size_t converted = 0;
+    CopyProjectLinksIn(cmd, cmd.projectHealthUid, log, &converted);
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Close")) {
+    cmd.projectHealthUid = 0;
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+  PopProductDialogAccent();
+}
+
 }  // namespace
 
 void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log) {
@@ -656,4 +788,6 @@ void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log) {
   DrawAddDrawingModal(cmd, log);
   DrawNewProjectModal(cmd, log);
   DrawProjectPromptModal(cmd, log);
+  DrawProjectAttachModal(cmd, log);  // REQ-379
+  DrawProjectHealthModal(cmd, log);
 }

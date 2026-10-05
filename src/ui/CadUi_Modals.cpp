@@ -7,6 +7,7 @@
 
 #include "CadUi.hpp"
 #include "CadUiInternal.hpp"
+#include "ProjectFiles.hpp"
 #include "CadUiChrome.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "NumFormat.hpp"
@@ -261,6 +262,7 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
       if (!path.empty() && SaveDrawingDocument(cmd, path.c_str(), log)) {
         cmd.activeDocSavedRevision = cmd.cadGpuRevision;
         cmd.activeDocFilePath      = path;
+        SyncProjectFilesOnSave(cmd, e.idx, path, log);  // REQ-379 clause 2
         if (!isActive) {
           // Commit updated saved-revision back into the snapshot.
           SaveDocumentToSnapshot(cmd, e.idx);

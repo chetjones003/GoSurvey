@@ -4979,6 +4979,19 @@ struct AppCommandState {
   /// the preview dialog; nothing is written until the user confirms.
   uint32_t addDrawingToProjectUid = 0;
   std::shared_ptr<AddDrawingPlan> addDrawingPlan;
+  /// REQ-379 (#696 P6): the Copy / Link / Cancel question asked when a point cloud or PDF from outside
+  /// the project is attached in a project drawing. Drawn as a modal by DrawProjectDialogs; the answer
+  /// goes to ResolveProjectAttach and then on to the attach that asked.
+  struct ProjectAttachPrompt {
+    enum class Kind { None, PointCloud, Pdf } kind = Kind::None;
+    uint32_t    projectUid = 0;
+    std::string sourcePath;          ///< UTF-8
+    std::string destRel;             ///< where a copy would go, project-relative
+    std::uint64_t sizeBytes = 0;
+    bool        reuse = false;       ///< an identical copy is already in the project
+    bool        openRequested = false;
+  } projectAttachPrompt;
+  uint32_t projectHealthUid = 0;     ///< REQ-379 clause 4: the Project Health window is open for this project
   /// REQ-308 / D-2026-08-30-a: drawingTabs[0] is the **Start screen** — a non-closable, pinned-first
   /// sentinel that backs no document. documents[0]/viewportRenderers[0] exist for index alignment
   /// but are never meaningful. Real drawings start at FirstDrawingTabIndex().

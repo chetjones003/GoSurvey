@@ -11175,7 +11175,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
      **copies it into the project** by default, into the matching standard subfolder, after a
      **size prompt**. **Link** is allowed but is flagged "will not travel with the project".
   2. **Associations.** Point clouds and PDFs are recorded as associated with the drawing they are
-     attached to, so opening the drawing finds them via the `.gsproj`.
+     attached to, so opening the drawing finds them via the `.gsproj`. The record is written when the
+     drawing is saved inside the project (an unsaved drawing has no project-relative name yet), and
+     lists exactly what the saved drawing holds. A PDF underlay is not stored in the DWG (REQ-379 /
+     D-2026-10-05-h), so its tracked item also carries a `placements` list — per drawing: page, insertion
+     point (world coordinates), scale, rotation, raster resolution, snap options, layer, fade and
+     background flag — and opening a project drawing re-places each PDF from it. A point cloud found
+     missing at its stored path is resolved to the tracked item of the same file name associated with
+     the drawing. A tracked file that is missing on open is reported (REQ-201) and the drawing still
+     opens. A drawing outside any project is unchanged.
   3. **Project Files section** in the Toolspace lists tracked items by folder, with a link badge on
      `local-link` entries.
   4. **Project Health** reports: linked (non-travelling) files, missing files, unsaved drawings, and
@@ -11186,7 +11194,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
     Health lists each problem class; "copy links in" converts a link to `in-project`.
 - Owner-layer: Domain, UI, IO
 - Status: accepted
-- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — clause 2 gains the
+  PDF `placements` record and the write-on-save rule (issue #696 P6; D-2026-10-05-h). The size prompt
+  appears for every copy/link and warns at 100 MB or more (ASSUMPTION, recorded in TASK-696-p6).
 
 ### REQ-380 — Pack Project (`.gspack`) and Open Packed Project (GitHub issue #696, P7)
 
