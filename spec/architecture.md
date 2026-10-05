@@ -4723,3 +4723,36 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   at 256 tiles per capture). AutoCAD does not see captured areas. Adding another provider later
   (e.g. Esri, which needs a key) is a new entry in the map table plus a key decision, with no change
   to the pipeline.
+
+
+### ADR-065 — A project's survey points live in one project-owned file, loaded once and shared by every drawing tab of the project   (2026-10-05, proposed)
+
+- **Status:** proposed (2026-10-05, D-2026-10-05-e) — **needs the user's acceptance before P3 starts.**
+  Backs REQ-376 and REQ-377 (GitHub issue #696).
+- **Context.** Today a drawing's survey points live inside the drawing (ADR-044 JSON trailer). A project
+  needs ONE set of points that several drawings read and write, kept in step live, that travels in a
+  `.gspack` (REQ-380), and that never leaves two people overwriting each other (REQ-382).
+- **Decision.**
+  (a) **One file in the project, `Points/survey-points.gspdb`.** Same JSON shape the ADR-044 trailer
+      already uses for survey points (no second point schema), plus a `formatVersion`, the project ID
+      and each point's **source drawing**. It is a tracked item (REQ-373) so packs carry it.
+  (b) **One in-memory database per open project**, owned by the project object — a fourth isolation
+      boundary next to the document, the pipe runs (PR #560) and the drawing settings. Every drawing
+      tab of that project holds a *pointer* to it, not a copy, so "live in other tabs" is free:
+      there is only one set of data. Undo records point edits in the tab that made them.
+  (c) **Visibility rules stay in the drawing** (REQ-377), in the ADR-044 trailer. A project drawing's
+      trailer carries **no points**, only its rules and setting overrides.
+  (d) **Writes are atomic and lock-gated.** Only the lock holder (REQ-382) writes; the file is written
+      to a temp file in `Points/` then renamed over the old one. Read-only openers load it and never
+      write.
+  (e) **Standalone drawings are untouched** — points stay in the trailer; none of this code runs.
+- **Alternatives.** (1) *Keep points in every DWG and reconcile on save:* two copies of truth, silent
+      divergence — the exact failure the issue exists to prevent. (2) *A real database engine
+      (SQLite):* a new dependency (REQ-300) for a few thousand to ~100k rows a JSON file handles; revisit
+      only if a measured load/save time breaks REQ-100-style budgets. (3) *Points inside the `.gsproj`:*
+      makes a small marker file huge and rewrites it on every point edit.
+- **Consequences.** A project DWG opened *outside* its project (e.g. copied out alone) shows **no
+  points** — the price of a single source of truth; REQ-374's join rule means this only happens when
+  the drawing leaves the folder, and the user is told (REQ-201). Whole-file rewrite on each save is
+  acceptable at survey scale and is the first thing to measure in P3. Loading and saving the file must
+  stay off the UI frame budget (§8 one-shot worker) if it exceeds a few milliseconds.
