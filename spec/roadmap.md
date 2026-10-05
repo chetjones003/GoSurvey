@@ -275,10 +275,10 @@ A lightweight board that complements the milestones. Keep each column honest.
   length / Properties on arc segments; (3) JOIN of lines + arcs, and arc-segment grips;
   (4) TRIM / OFFSET / FILLET / CHAMFER of bulge polylines. **No code past a slice until its
   Workshop task cites REQ-316 and passes Verification.**
-- **Projects (REQ-373…REQ-383, ADR-065 *proposed*, D-2026-10-05-d/-e, issue #696).** Ten phases, one
+- **Projects (REQ-373…REQ-383, ADR-065 accepted, D-2026-10-05-d/-e, issue #696).** Ten phases, one
   PR each, tracked as checkboxes in the issue: P0 spec → P1 project foundation (`.gsproj`, New/Open,
-  Start screen, join, lock) → P2 project settings → P3 shared point database (**gated on the user
-  accepting ADR-065**) → P4 Survey Database toolspace + visibility rules → P5 Add Drawing to Project →
+  Start screen, join, lock) → P2 project settings → P3 shared point database (ADR-065 accepted 2026-10-05)
+  → P4 Survey Database toolspace + visibility rules → P5 Add Drawing to Project →
   P6 file tracking + Project Health → P7 Pack Project → P8 turnovers → P9 warning pass. **No code past
   P0 until this spec PR is merged and a Workshop task cites the phase's REQ.** Cloud storage, merge of
   diverged copies, configurable layout and simultaneous multi-user editing stay out.

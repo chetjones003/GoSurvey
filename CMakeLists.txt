@@ -364,6 +364,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/CadCommands_Align.cpp
   src/commands/CadCommands_Geo.cpp
   src/commands/ProjectSettings.cpp
+  src/commands/ProjectPoints.cpp
   src/commands/CadCommands_Mleader.cpp
   src/commands/CadCommands_Ucs.cpp
   src/commands/CadDynInput.cpp
@@ -430,6 +431,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/RecentDrawings.cpp
   # REQ-373/374/382 (#696 P1) project file, join detection, lock file. Pure <filesystem>/json.
   src/io/Project.cpp
+  src/io/ProjectPointDb.cpp
   # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
   src/io/WhatsNewContent.cpp
   src/io/WikiContent.cpp
@@ -1140,6 +1142,8 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-373/374/382 (#696 P1)
     tests/ProjectTests.cpp
     src/io/Project.cpp
+    src/io/ProjectPointDb.cpp
+    tests/ProjectPointDbTests.cpp
     tests/TelemetryPingTests.cpp
     tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
@@ -1340,6 +1344,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-375 (#696 P2): project settings resolve against AppCommandState (EnforceProjectSettings), so
     # this rides with gosurvey_domain like CadBlockImportTests.
     tests/ProjectSettingsTests.cpp
+    tests/ProjectPointsSyncTests.cpp
     # issue #486 increment B2 (REQ-347) — the PIPERUN command layer: StartPipeRunCommand /
     # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
     # with GoSurveySnapTests (gosurvey_domain), not GoSurveyTests, like CadBlockImportTests above.

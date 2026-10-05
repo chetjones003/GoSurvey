@@ -71,9 +71,9 @@ std::vector<recent::Entry> LoadRecentProjects();
 bool SaveProjectSettings(AppCommandState& cmd, std::uint32_t projectUid, const ProjectSettings& ps,
                          std::vector<std::string>& log);
 /// Closes sessions with no tabs left (releasing their lock). Called every frame by DrawProjectDialogs.
-void ServiceProjects(AppCommandState& cmd);
+void ServiceProjects(AppCommandState& cmd, std::vector<std::string>& log);
 /// Releases every held lock; call once on the way out of the app.
-void ReleaseAllProjects(AppCommandState& cmd);
+void ReleaseAllProjects(AppCommandState& cmd, std::vector<std::string>& log);
 /// New Project dialog, the lock / damaged-marker prompts, and the per-frame project sweep.
 void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log);
 /// REQ-308 — drop a drawing from the recent-drawings store (used when a recent tile fails to open).
