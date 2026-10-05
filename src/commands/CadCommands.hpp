@@ -4064,6 +4064,12 @@ struct AppCommandState {
   /// window vs crossing mode.
   float selBoxAnchorScreenX = 0.f;
   float selBoxAnchorScreenY = 0.f;
+  /// REQ-370: what releasing the box now would select (live preview). Filled by
+  /// `UpdateSelectionBoxPreview`; `selBoxPreviewKey` is the input set it was computed from, so an
+  /// idle cursor costs one comparison per frame instead of a whole-drawing hit test.
+  std::vector<SelectedEntity> selBoxPreview;
+  std::array<double, 11> selBoxPreviewKey{};
+  bool selBoxPreviewKeyValid = false;
 
   /// MTEXT box corner grips (viewport): two-click edit — fixed diagonal corner while resizing box.
   int mtextGripAnnotationIndex = -1;
@@ -7881,6 +7887,14 @@ void ClearSelection(AppCommandState& st);
 void ApplySurveyPointClickSelection(AppCommandState& st, int surveyPointIndex, bool shiftModifier,
                                     std::vector<std::string>* log);
 void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anchorScreenX, float anchorScreenY);
+
+/// REQ-370 live preview: refreshes `st.selBoxPreview` with what releasing the selection box at
+/// (\p wx, \p wy) would add to the selection, using the very hit test the click uses
+/// (`ComputeSelectionFromRect`), so the lit objects are the selected objects. `st.selection` and the
+/// survey-point selection are left exactly as they were. Recomputed only when an input changed. Pass
+/// \p cam null in plan view, like the click does. Clears the preview when no box is open.
+void UpdateSelectionBoxPreview(AppCommandState& st, float wx, float wy, bool windowMode, const Camera* cam,
+                               float vpW, float vpH);
 
 void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Clears Shift+RMB one-shot snap (call on pick submit, cancel, reset, clear geometry).
