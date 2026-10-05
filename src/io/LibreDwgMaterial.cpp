@@ -1,10 +1,12 @@
 #include "LibreDwgMaterial.hpp"
 
+#include "CadCommands.hpp"
 #include "CadEntities.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #if defined(__cplusplus) && !defined(restrict)
@@ -105,16 +107,30 @@ Dwg_Object* AppendMaterialObject(Dwg_Data* dwg, const char* name, unsigned rgb24
   return obj;
 }
 
-void AddMaterialToDictionary(Dwg_Data* dwg, Dwg_Object* matObj) {
-  assert(dwg != nullptr && matObj != nullptr);
+Dwg_Object* AcadMaterialDictionary(Dwg_Data* dwg) {
+  assert(dwg != nullptr);
   BITCODE_H ctrl = dwg->header_vars.DICTIONARY_MATERIAL;
   if (ctrl == nullptr || ctrl->absolute_ref == 0)
     ctrl = dwg_find_dictionary(dwg, "ACAD_MATERIAL");
+  if (ctrl != nullptr && ctrl->absolute_ref != 0) {
+    Dwg_Object* dictObj = dwg_resolve_handle_silent(dwg, ctrl->absolute_ref);
+    if (dictObj != nullptr && dictObj->fixedtype == DWG_TYPE_DICTIONARY)
+      return dictObj;
+  }
+  if (dwg_add_DICTIONARY(dwg, "ACAD_MATERIAL", nullptr, 0) == nullptr)
+    return nullptr;
+  ctrl = dwg_find_dictionary(dwg, "ACAD_MATERIAL");
   if (ctrl == nullptr || ctrl->absolute_ref == 0)
-    return;
-  Dwg_Object* dictObj = dwg_resolve_handle_silent(dwg, ctrl->absolute_ref);
-  if (dictObj == nullptr || dictObj->fixedtype != DWG_TYPE_DICTIONARY ||
-      dictObj->tio.object == nullptr || dictObj->tio.object->tio.DICTIONARY == nullptr)
+    return nullptr;
+  dwg->header_vars.DICTIONARY_MATERIAL = ctrl;
+  return dwg_resolve_handle_silent(dwg, ctrl->absolute_ref);
+}
+
+void AddMaterialToDictionary(Dwg_Data* dwg, Dwg_Object* matObj) {
+  assert(dwg != nullptr && matObj != nullptr);
+  Dwg_Object* dictObj = AcadMaterialDictionary(dwg);
+  if (dictObj == nullptr || dictObj->tio.object == nullptr ||
+      dictObj->tio.object->tio.DICTIONARY == nullptr)
     return;
   Dwg_Object_MATERIAL* mat = matObj->tio.object->tio.MATERIAL;
   if (mat == nullptr || mat->name == nullptr)
@@ -186,4 +202,63 @@ const void* DwgTestAddDiffuseMaterial(_dwg_struct* dwgIn, const char* name, unsi
   AddMaterialToDictionary(dwg, obj);
   dwg_resolve_objectrefs_silent(dwg);
   return dwg_add_handleref(dwg, 5, obj->handle.value, nullptr);
+}
+
+void DwgExportMaterialContextInit(DwgExportMaterialContext* ctx, bool r2007OrNewer) {
+  assert(ctx != nullptr);
+  ctx->enabled = r2007OrNewer;
+  ctx->diffuseRgbToHandle.clear();
+  ctx->materialsWritten = 0;
+}
+
+static unsigned PackDiffuseRgb24(float r, float g, float b) {
+  const auto q = [](float c) {
+    return static_cast<unsigned>(std::clamp(static_cast<int>(std::lround(c * 255.f)), 0, 255));
+  };
+  return (q(r) << 16u) | (q(g) << 8u) | q(b);
+}
+
+void DwgExportApplyEntityMaterial(_dwg_struct* dwgIn, DwgExportMaterialContext* ctx, const AppCommandState& st,
+                                  void* entity, const EntityAttributes* attr, float defaultR, float defaultG,
+                                  float defaultB) {
+  assert(dwgIn != nullptr && ctx != nullptr && entity != nullptr);
+  if (!ctx->enabled || attr == nullptr)
+    return;
+  auto* dwg = reinterpret_cast<Dwg_Data*>(dwgIn);
+  auto* ent = static_cast<Dwg_Object_Entity*>(entity);
+  float rgba[4] = {defaultR, defaultG, defaultB, 1.f};
+  if (attr->materialDiffuseOverride) {
+    rgba[0] = attr->materialDiffuseR;
+    rgba[1] = attr->materialDiffuseG;
+    rgba[2] = attr->materialDiffuseB;
+  } else {
+    const CadLayerRow* lr = FindDrawingLayerRowCi(st, attr->layer);
+    ResolveEntityRgbaForViewport(*attr, lr, defaultR, defaultG, defaultB, rgba);
+  }
+  const unsigned rgb24 = PackDiffuseRgb24(rgba[0], rgba[1], rgba[2]);
+  std::uint64_t absRef = 0;
+  const auto found = ctx->diffuseRgbToHandle.find(rgb24);
+  if (found == ctx->diffuseRgbToHandle.end()) {
+    char name[32];
+    std::snprintf(name, sizeof(name), "GS_D%06X", rgb24);
+    Dwg_Object* obj = AppendMaterialObject(dwg, name, rgb24, 1.0);
+    if (obj == nullptr)
+      return;
+    AddMaterialToDictionary(dwg, obj);
+    absRef = obj->handle.value;
+    ctx->diffuseRgbToHandle.emplace(rgb24, absRef);
+    ++ctx->materialsWritten;
+  } else {
+    absRef = found->second;
+  }
+  Dwg_Object* entObj = &dwg->object[ent->objid];
+  ent->material_flags = 3;
+  ent->material = dwg_add_handleref(dwg, 5, absRef, entObj);
+}
+
+void DwgExportMaterialAppendLog(const DwgExportMaterialContext& ctx, std::vector<std::string>& log) {
+  if (ctx.materialsWritten <= 0)
+    return;
+  log.push_back("CAD export — wrote " + std::to_string(ctx.materialsWritten) +
+                " MATERIAL object(s) (REQ-372, issue #624).");
 }

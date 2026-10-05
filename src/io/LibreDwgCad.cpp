@@ -2927,7 +2927,9 @@ constexpr unsigned kMaxPfaceFaces = 5000000u;
 
 bool WriteIndexedTriangles(int vertexCount, const std::function<void(int, dwg_point_3d*)>& fillVertex,
                            const std::vector<std::uint32_t>& indices, Dwg_Object_BLOCK_HEADER* hdr,
-                           TableWriter* tw, const EntityAttributes* attr) {
+                           TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                           DwgExportMaterialContext* matCtx, const AppCommandState* st, float defR,
+                           float defG, float defB) {
   if (hdr == nullptr || vertexCount < 3)
     return false;
   const size_t nTri = indices.size() / 3;
@@ -2956,14 +2958,25 @@ bool WriteIndexedTriangles(int vertexCount, const std::function<void(int, dwg_po
     return false;
   if (tw != nullptr && attr != nullptr)
     tw->Apply(pf->parent, *attr);
+  if (dwg != nullptr && matCtx != nullptr && st != nullptr && attr != nullptr)
+    DwgExportApplyEntityMaterial(dwg, matCtx, *st, pf->parent, attr, defR, defG, defB);
   return true;
 }
 
 bool WriteCadMesh(const AppCommandState& st, const CadMesh& mesh, Dwg_Object_BLOCK_HEADER* hdr,
-                  TableWriter* tw, const EntityAttributes* attr) {
+                  TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                  DwgExportMaterialContext* matCtx) {
   const int nv = mesh.vertexCount();
   if (nv < 3 || mesh.indices.size() < 3)
     return false;
+  float defR = 0.78f;
+  float defG = 0.78f;
+  float defB = 0.78f;
+  if (!mesh.parts.empty()) {
+    defR = mesh.parts[0].r;
+    defG = mesh.parts[0].g;
+    defB = mesh.parts[0].b;
+  }
   return WriteIndexedTriangles(
       nv,
       [&](int vi, dwg_point_3d* out) {
@@ -2972,11 +2985,12 @@ bool WriteCadMesh(const AppCommandState& st, const CadMesh& mesh, Dwg_Object_BLO
                                                      mesh.vertsXyz[o + 2]},
                                      out);
       },
-      mesh.indices, hdr, tw, attr);
+      mesh.indices, hdr, tw, attr, dwg, matCtx, &st, defR, defG, defB);
 }
 
 bool WriteCadSurfaceTin(const AppCommandState& st, const CadSurface& surface, Dwg_Object_BLOCK_HEADER* hdr,
-                        TableWriter* tw, const EntityAttributes* attr) {
+                        TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                        DwgExportMaterialContext* matCtx) {
   if (surface.tin == nullptr)
     return false;
   const CadTin& tin = *surface.tin;
@@ -2991,7 +3005,7 @@ bool WriteCadSurfaceTin(const AppCommandState& st, const CadSurface& surface, Dw
                                                      tin.vertsXyz[o + 2]},
                                      out);
       },
-      tin.indices, hdr, tw, attr);
+      tin.indices, hdr, tw, attr, dwg, matCtx, &st, 0.42f, 0.62f, 0.78f);
 }
 
 size_t CountSkippedMeshes(const AppCommandState& st) {
@@ -3250,7 +3264,8 @@ Dwg_Entity__3DSOLID* WriteRecipeSolid(Dwg_Object_BLOCK_HEADER* hdr, const AppCom
 }
 
 bool WriteSolidEntity(const AppCommandState& st, const brep::Solid& solid, Dwg_Object_BLOCK_HEADER* hdr,
-                      TableWriter* tw, const EntityAttributes* attr) {
+                      TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                      DwgExportMaterialContext* matCtx) {
   if (hdr == nullptr)
     return false;
   Dwg_Entity__3DSOLID* ent = WriteRecipeSolid(hdr, st, solid.recipe);
@@ -3264,6 +3279,10 @@ bool WriteSolidEntity(const AppCommandState& st, const brep::Solid& solid, Dwg_O
     return false;
   if (tw != nullptr && attr != nullptr)
     tw->Apply(ent->parent, *attr);
+  // REQ-372: entity-level MATERIAL on 3DSOLID currently corrupts LibreDWG R2018 encode; mesh
+  // hosts (POLYLINE_PFACE) are wired below. Solid subentity materials (DXF 331) are a follow-up.
+  (void)dwg;
+  (void)matCtx;
   return true;
 }
 
@@ -3278,7 +3297,8 @@ size_t CountSkippedSolids(const AppCommandState& st) {
 
 bool WriteStraightPipeRunAsCylinder(const AppCommandState& st, const CadPipeRun& run,
                                     Dwg_Object_BLOCK_HEADER* hdr, TableWriter* tw,
-                                    const EntityAttributes* attr) {
+                                    const EntityAttributes* attr, Dwg_Data* dwg,
+                                    DwgExportMaterialContext* matCtx) {
   if (run.vertsXyz.size() != 6)
     return false;
   double odFeet = 0.0;
@@ -3303,19 +3323,22 @@ bool WriteStraightPipeRunAsCylinder(const AppCommandState& st, const CadPipeRun&
     return false;
   if (tw != nullptr && attr != nullptr)
     tw->Apply(ent->parent, *attr);
+  (void)dwg;
+  (void)matCtx;
   return true;
 }
 
 bool WritePipeRunEntity(const AppCommandState& st, const CadPipeRun& run, Dwg_Object_BLOCK_HEADER* hdr,
-                        TableWriter* tw, const EntityAttributes* attr) {
+                        TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                        DwgExportMaterialContext* matCtx) {
   std::vector<CadSolidPtr> built;
   if (CadBuildPipeRunSolids(run, &built)) {
     for (const CadSolidPtr& sp : built) {
-      if (sp != nullptr && WriteSolidEntity(st, *sp, hdr, tw, attr))
+      if (sp != nullptr && WriteSolidEntity(st, *sp, hdr, tw, attr, dwg, matCtx))
         return true;
     }
   }
-  return WriteStraightPipeRunAsCylinder(st, run, hdr, tw, attr);
+  return WriteStraightPipeRunAsCylinder(st, run, hdr, tw, attr, dwg, matCtx);
 }
 
 size_t CountSkippedPipeRuns(const AppCommandState& st) {
@@ -3880,6 +3903,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   DwgExportFieldContextInit(&fldCtx, DwgSaveVersionUsesR2004Features(st.dwgExportVersion));
   DwgExportVisualStyleContext vsCtx;
   DwgExportVisualStyleContextInit(&vsCtx, LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2007);
+  DwgExportMaterialContext matCtx;
+  DwgExportMaterialContextInit(&matCtx, LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2007);
   std::uint64_t blockOwnerHandle = 0;
   {
     int hdrErr = 0;
@@ -4743,13 +4768,13 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     if (mp == nullptr)
       continue;
     const EntityAttributes* at = mi < st.cadMeshAttrs.size() ? &st.cadMeshAttrs[mi] : nullptr;
-    if (dwg_mesh_export::WriteCadMesh(st, *mp, hdr, &tw, at))
+    if (dwg_mesh_export::WriteCadMesh(st, *mp, hdr, &tw, at, dwg, &matCtx))
       ++nMeshOut;
   }
   size_t nTinOut = 0;
   for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
     const EntityAttributes* at = si < st.cadSurfaceAttrs.size() ? &st.cadSurfaceAttrs[si] : nullptr;
-    if (dwg_mesh_export::WriteCadSurfaceTin(st, st.cadSurfaces[si], hdr, &tw, at))
+    if (dwg_mesh_export::WriteCadSurfaceTin(st, st.cadSurfaces[si], hdr, &tw, at, dwg, &matCtx))
       ++nTinOut;
   }
   if (nMeshOut + nTinOut > 0)
@@ -4763,14 +4788,14 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       continue;
     const EntityAttributes* at =
         si < st.cadSolidAttrs.size() ? &st.cadSolidAttrs[si] : nullptr;
-    if (dwg_solid_export::WriteSolidEntity(st, *sp, hdr, &tw, at))
+    if (dwg_solid_export::WriteSolidEntity(st, *sp, hdr, &tw, at, dwg, &matCtx))
       ++nSolidOut;
   }
   size_t nPipeSolidOut = 0;
   for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
     const EntityAttributes* at =
         ri < st.cadPipeRunAttrs.size() ? &st.cadPipeRunAttrs[ri] : nullptr;
-    if (dwg_solid_export::WritePipeRunEntity(st, st.cadPipeRuns[ri], hdr, &tw, at))
+    if (dwg_solid_export::WritePipeRunEntity(st, st.cadPipeRuns[ri], hdr, &tw, at, dwg, &matCtx))
       ++nPipeSolidOut;
   }
   if (nSolidOut + nPipeSolidOut > 0)
@@ -4804,6 +4829,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   DwgExportSetModelVisualStyle(dwg, &vsCtx, st.viewportVisualStyle);
 
   DwgExportFinalizeFieldObjects(&fldCtx, dwg, log);
+  DwgExportMaterialAppendLog(matCtx, log);
 
   // REQ-170 / REQ-201, issue #614: every drop and degradation, named and counted, from the ONE
   // scan the pre-export warning dialog also reads — so the log and the dialog cannot disagree, and
