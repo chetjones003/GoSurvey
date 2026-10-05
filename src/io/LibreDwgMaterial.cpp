@@ -167,6 +167,8 @@ void DwgImportApplyEntityMaterial(_dwg_struct* dwgIn, const void* entity, Entity
     at->materialDiffuseR = r;
     at->materialDiffuseG = g;
     at->materialDiffuseB = b;
+    if (mat->name != nullptr && mat->name[0] != '\0')
+      at->materialName = mat->name;
     ++gStats.hostsWithDiffuse;
     return;
   }
@@ -208,6 +210,7 @@ void DwgExportMaterialContextInit(DwgExportMaterialContext* ctx, bool r2007OrNew
   assert(ctx != nullptr);
   ctx->enabled = r2007OrNewer;
   ctx->diffuseRgbToHandle.clear();
+  ctx->materialNameToHandle.clear();
   ctx->materialsWritten = 0;
 }
 
@@ -237,19 +240,37 @@ void DwgExportApplyEntityMaterial(_dwg_struct* dwgIn, DwgExportMaterialContext* 
   }
   const unsigned rgb24 = PackDiffuseRgb24(rgba[0], rgba[1], rgba[2]);
   std::uint64_t absRef = 0;
-  const auto found = ctx->diffuseRgbToHandle.find(rgb24);
-  if (found == ctx->diffuseRgbToHandle.end()) {
-    char name[32];
-    std::snprintf(name, sizeof(name), "GS_D%06X", rgb24);
-    Dwg_Object* obj = AppendMaterialObject(dwg, name, rgb24, 1.0);
-    if (obj == nullptr)
-      return;
-    AddMaterialToDictionary(dwg, obj);
-    absRef = obj->handle.value;
-    ctx->diffuseRgbToHandle.emplace(rgb24, absRef);
-    ++ctx->materialsWritten;
+  const bool useNamedMat =
+      attr->materialDiffuseOverride && !attr->materialName.empty();
+  if (useNamedMat) {
+    const auto foundName = ctx->materialNameToHandle.find(attr->materialName);
+    if (foundName == ctx->materialNameToHandle.end()) {
+      Dwg_Object* obj = AppendMaterialObject(dwg, attr->materialName.c_str(), rgb24, 1.0);
+      if (obj == nullptr)
+        return;
+      AddMaterialToDictionary(dwg, obj);
+      absRef = obj->handle.value;
+      ctx->materialNameToHandle.emplace(attr->materialName, absRef);
+      ctx->diffuseRgbToHandle.emplace(rgb24, absRef);
+      ++ctx->materialsWritten;
+    } else {
+      absRef = foundName->second;
+    }
   } else {
-    absRef = found->second;
+    const auto found = ctx->diffuseRgbToHandle.find(rgb24);
+    if (found == ctx->diffuseRgbToHandle.end()) {
+      char name[32];
+      std::snprintf(name, sizeof(name), "GS_D%06X", rgb24);
+      Dwg_Object* obj = AppendMaterialObject(dwg, name, rgb24, 1.0);
+      if (obj == nullptr)
+        return;
+      AddMaterialToDictionary(dwg, obj);
+      absRef = obj->handle.value;
+      ctx->diffuseRgbToHandle.emplace(rgb24, absRef);
+      ++ctx->materialsWritten;
+    } else {
+      absRef = found->second;
+    }
   }
   Dwg_Object* entObj = &dwg->object[ent->objid];
   ent->material_flags = 3;

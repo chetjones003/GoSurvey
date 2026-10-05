@@ -92,6 +92,15 @@ void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["linetype"] = e.linetype;
   o["lineweightMm"] = e.lineweightMm;
   o["transparency"] = e.transparency;
+  // REQ-372 inc 3 — additive; omitted when no material override (ADR-020 (d)).
+  if (e.materialDiffuseOverride) {
+    o["materialDiffuseOverride"] = true;
+    o["materialDiffuseR"] = e.materialDiffuseR;
+    o["materialDiffuseG"] = e.materialDiffuseG;
+    o["materialDiffuseB"] = e.materialDiffuseB;
+    if (!e.materialName.empty())
+      o["materialName"] = e.materialName;
+  }
 }
 
 EntityAttributes EntityAttributesFromJson(const json& o) {
@@ -105,6 +114,11 @@ EntityAttributes EntityAttributesFromJson(const json& o) {
   e.linetype     = o.value("linetype",     e.linetype);
   e.lineweightMm = o.value("lineweightMm", e.lineweightMm);
   e.transparency = o.value("transparency", e.transparency);
+  e.materialDiffuseOverride = o.value("materialDiffuseOverride", false);
+  e.materialDiffuseR = o.value("materialDiffuseR", e.materialDiffuseR);
+  e.materialDiffuseG = o.value("materialDiffuseG", e.materialDiffuseG);
+  e.materialDiffuseB = o.value("materialDiffuseB", e.materialDiffuseB);
+  e.materialName = o.value("materialName", e.materialName);
   return e;
 }
 

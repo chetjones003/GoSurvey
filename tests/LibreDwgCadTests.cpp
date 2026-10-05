@@ -4325,6 +4325,7 @@ TEST_CASE("DWG import applies MATERIAL diffuse to POLYLINE_PFACE host (REQ-372, 
   CHECK(at.materialDiffuseR == Catch::Approx(1.f).margin(0.02f));
   CHECK(at.materialDiffuseG == Catch::Approx(0.f).margin(0.02f));
   CHECK(at.materialDiffuseB == Catch::Approx(0.f).margin(0.02f));
+  CHECK(at.materialName == "RedMat");
   float shadedRgba[4] = {0.2f, 0.2f, 0.2f, 1.f};
   ApplyMaterialDiffuseForShaded(at, shadedRgba);
   CHECK(shadedRgba[0] == Catch::Approx(1.f).margin(0.02f));
@@ -4366,6 +4367,27 @@ TEST_CASE("R2018 export/import round-trips MATERIAL diffuse on mesh (REQ-372, is
   REQUIRE(in.cadMeshAttrs.size() == 1);
   CHECK(in.cadMeshAttrs[0].materialDiffuseOverride);
   CHECK(in.cadMeshAttrs[0].materialDiffuseG == Catch::Approx(0.4f).margin(0.03f));
+}
+
+TEST_CASE("Mesh MATERIAL diffuse and name persist through GsIo (REQ-372 inc 3, issue #624)",
+          "[gs][gsio][issue624][req372]") {
+  AppCommandState src;
+  src.cadMeshes.push_back(MakeUnitSquareMesh());
+  EntityAttributes at;
+  at.materialDiffuseOverride = true;
+  at.materialDiffuseR = 0.1f;
+  at.materialDiffuseG = 0.5f;
+  at.materialDiffuseB = 0.8f;
+  at.materialName = "SiteConcrete";
+  src.cadMeshAttrs.push_back(at);
+  std::vector<std::string> log;
+  AppCommandState back;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
+  REQUIRE(back.cadMeshes.size() == 1);
+  REQUIRE(back.cadMeshAttrs.size() == 1);
+  CHECK(back.cadMeshAttrs[0].materialDiffuseOverride);
+  CHECK(back.cadMeshAttrs[0].materialName == "SiteConcrete");
+  CHECK(back.cadMeshAttrs[0].materialDiffuseG == Catch::Approx(0.5f).margin(1e-4f));
 }
 
 TEST_CASE("R2018 DWG round-trips model-space visual style on VPORT *Active (REQ-371, issue #624)",
