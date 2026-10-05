@@ -26,7 +26,7 @@
 #include "util/pointcloudcache.hpp"
 #include "DwgIo.hpp"
 #include "PdfAttach.hpp"
-#include "ProjectPointDb.hpp"  // projpts::Db, for AppCommandState::ProjectSession (REQ-376)
+#include "ProjectPointRules.hpp"  // projpts::Db + projpts::Rules (REQ-376, REQ-377)
 #include "Project.hpp"  // gsproj::Project / LockInfo, for AppCommandState::openProjects (REQ-374)
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
@@ -1523,6 +1523,7 @@ struct DrawingDocument {
   int                           drawingInsUnits = 2;
   float                         modelUnitsPerPlottedInch = 50.f;
   DrawingSettings               drawingSettings;
+  projpts::Rules                pointVisibility;        ///< REQ-377: per tab, which project points this drawing shows
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
@@ -2156,6 +2157,9 @@ struct AppCommandState {
   int drawingInsUnits = 2;
   /// The drawing's Drawing Settings (REQ-357): per tab, undoable, saved in the trailer JSON.
   DrawingSettings drawingSettings;
+  /// REQ-377 (#696 P4): which points of the project database this drawing shows. Per tab, saved in the
+  /// trailer; unused (and empty) in a standalone drawing.
+  projpts::Rules pointVisibility;
   /// Drawing Settings window open (REQ-357). Session-only.
   bool showDrawingSettingsWindow = false;
   /// Survey point X marker: horizontal span on paper (inches) → world half-extent = 0.5 × span × MUP (not zoom).
@@ -4934,6 +4938,8 @@ struct AppCommandState {
     /// revision that was. The diff against them is what a frame's edits are.
     std::vector<SurveyPoint> pointsBaseWorld;
     uint64_t     pointsRevision = 0;
+    /// The rules (REQ-377) the tab last built its point view with; a different live set means "rebuild".
+    projpts::Rules pointsRulesApplied;
   };
   /// REQ-374 / REQ-382 (#696 P1): one entry per open project. Each drawing tab belongs to exactly one
   /// session (or none). A session with no tabs left is closed and its lock released (ServiceProjects).

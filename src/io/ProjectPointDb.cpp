@@ -218,11 +218,11 @@ Change ApplyChanges(Db* db, const std::vector<SurveyPoint>& baseWorld, const std
     SurveyPoint np = p;
     np.labelMtextAnnId = 0;
     if (d != at.end() && !gone[d->second]) {
+      if (SamePoint(db->points[d->second].point, np))
+        continue;  // the database already agrees
       if (b == base.end() && log)
         log->push_back("Project points - point " + std::to_string(p.id) +
                        " already existed in the project database; it was overwritten.");
-      if (SamePoint(db->points[d->second].point, np))
-        continue;  // the database already agrees
       db->points[d->second].point = np;
       if (b == base.end())
         ++c.added;

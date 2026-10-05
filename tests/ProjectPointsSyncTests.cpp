@@ -2,6 +2,7 @@
 // AppCommandState and temp folders, no window.
 
 #include "CadCommands.hpp"
+#include "GsIo.hpp"
 #include "ProjectPoints.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -258,4 +259,210 @@ TEST_CASE("req376 a damaged database is never written over", "[req376]") {
   std::ifstream f(projpts::DbPath(d.path, "Points"), std::ios::binary);
   const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
   CHECK(text == "{ broken");
+}
+
+// ---- REQ-377 (issue #696 P4): per-drawing visibility rules ---------------------------------------
+
+TEST_CASE("req377 two drawings of one database show different subsets", "[req377]") {
+  TempDir d("rules");
+  AppCommandState st;
+  TwoTabProject(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+
+  SyncProjectPoints(st, log, now);
+  st.surveyPoints = {Pt(1, 10, 10, 1, "EG"), Pt(2, 20, 20, 2, "EG"), Pt(3, 30, 30, 3, "FG")};
+  SyncProjectPoints(st, log, now += 0.016);
+  REQUIRE(st.openProjects[0].points->points.size() == 3);
+
+  // FG shows only FG-coded points.
+  SwitchTo(st, 2);
+  st.pointVisibility.description = "FG";
+  SyncProjectPoints(st, log, now += 0.016);
+  REQUIRE(st.surveyPoints.size() == 1);
+  CHECK(st.surveyPoints[0].id == 3);
+  CHECK(st.openProjects[0].points->points.size() == 3);  // the database still holds all three
+
+  // EG, with no rules, still shows everything.
+  SwitchTo(st, 1);
+  SyncProjectPoints(st, log, now += 0.016);
+  CHECK(st.surveyPoints.size() == 3);
+}
+
+TEST_CASE("req377 a point created in a drawing is visible there whatever its filters say", "[req377]") {
+  TempDir d("pin");
+  AppCommandState st;
+  TwoTabProject(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+
+  SyncProjectPoints(st, log, now);
+  st.surveyPoints = {Pt(1, 10, 10, 1, "EG")};
+  SyncProjectPoints(st, log, now += 0.016);
+
+  SwitchTo(st, 2);  // FG: filter "FG*", then create a point coded "EG"
+  st.pointVisibility.description = "FG*";
+  SyncProjectPoints(st, log, now += 0.016);
+  CHECK(st.surveyPoints.empty());
+  st.surveyPoints.push_back(Pt(2, 20, 20, 2, "EG"));
+  SyncProjectPoints(st, log, now += 0.016);
+  SyncProjectPoints(st, log, now += 0.016);
+  REQUIRE(st.surveyPoints.size() == 1);  // still shown in FG
+  CHECK(st.surveyPoints[0].id == 2);
+  CHECK(projpts::HasId(st.pointVisibility.shown, 2));
+  CHECK(st.openProjects[0].points->points.size() == 2);
+
+  // EG (no rules) shows both.
+  SwitchTo(st, 1);
+  SyncProjectPoints(st, log, now += 0.016);
+  CHECK(st.surveyPoints.size() == 2);
+}
+
+TEST_CASE("req377 hiding a point here keeps it in the database and in other drawings", "[req377]") {
+  TempDir d("hide");
+  AppCommandState st;
+  TwoTabProject(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+
+  SyncProjectPoints(st, log, now);
+  st.surveyPoints = {Pt(1, 10, 10, 1), Pt(2, 20, 20, 2), Pt(3, 30, 30, 3)};
+  SyncProjectPoints(st, log, now += 0.016);
+
+  st.selectedSurveyPointIndices = {1};
+  CHECK(HideSelectedPointsHere(st) == 1);
+  SyncProjectPoints(st, log, now += 0.016);
+  REQUIRE(st.surveyPoints.size() == 2);
+  CHECK(st.surveyPoints[0].id == 1);
+  CHECK(st.surveyPoints[1].id == 3);
+  CHECK(st.openProjects[0].points->points.size() == 3);  // not a delete
+  SyncProjectPoints(st, log, now += 0.016);
+  CHECK(st.openProjects[0].points->points.size() == 3);
+
+  SwitchTo(st, 2);
+  SyncProjectPoints(st, log, now += 0.016);
+  CHECK(st.surveyPoints.size() == 3);  // FG still shows it
+  SwitchTo(st, 1);
+  SyncProjectPoints(st, log, now += 0.016);
+  CHECK(st.surveyPoints.size() == 2);  // and EG still hides it
+}
+
+TEST_CASE("req377 editing or deleting a shown point never touches hidden ones", "[req377]") {
+  TempDir d("hidden-safe");
+  AppCommandState st;
+  TwoTabProject(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+
+  SyncProjectPoints(st, log, now);
+  st.surveyPoints = {Pt(1, 10, 10, 1, "EG")};
+  SyncProjectPoints(st, log, now += 0.016);
+  SwitchTo(st, 2);  // FG creates its own point
+  SyncProjectPoints(st, log, now += 0.016);
+  st.surveyPoints.push_back(Pt(2, 20, 20, 2, "FG"));
+  SyncProjectPoints(st, log, now += 0.016);
+  SwitchTo(st, 1);
+  SyncProjectPoints(st, log, now += 0.016);
+  st.pointVisibility.description = "EG";
+  SyncProjectPoints(st, log, now += 0.016);
+  REQUIRE(st.surveyPoints.size() == 1);
+
+  st.surveyPoints.clear();  // the user deletes the one point EG shows
+  SyncProjectPoints(st, log, now += 0.016);
+  const auto& db = *st.openProjects[0].points;
+  REQUIRE(db.points.size() == 1);
+  CHECK(db.points[0].point.id == 2);  // FG's point is untouched
+}
+
+TEST_CASE("req377 a number hidden here is not overwritten by a new point", "[req377]") {
+  TempDir d("collide");
+  AppCommandState st;
+  TwoTabProject(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+
+  SyncProjectPoints(st, log, now);
+  st.surveyPoints = {Pt(1, 10, 10, 1, "EG")};
+  SyncProjectPoints(st, log, now += 0.016);
+  SwitchTo(st, 2);
+  SyncProjectPoints(st, log, now += 0.016);
+  st.surveyPoints.push_back(Pt(2, 20, 20, 2, "FG"));
+  SyncProjectPoints(st, log, now += 0.016);
+  SwitchTo(st, 1);
+  SyncProjectPoints(st, log, now += 0.016);
+  st.pointVisibility.description = "EG";
+  SyncProjectPoints(st, log, now += 0.016);
+  REQUIRE(st.surveyPoints.size() == 1);
+
+  log.clear();
+  st.surveyPoints.push_back(Pt(2, 99, 99, 99, "EG"));  // number 2 is FG's, hidden here
+  SyncProjectPoints(st, log, now += 0.016);
+  const auto& db = *st.openProjects[0].points;
+  REQUIRE(db.points.size() == 2);
+  CHECK(db.points[1].point.elevation == 2.0);  // not overwritten
+  CHECK(st.surveyPoints.size() == 1);          // the refused point is out of the view again
+  CHECK_FALSE(log.empty());                     // and the user was told
+}
+
+TEST_CASE("req377 new point numbers skip numbers hidden in this drawing", "[req377]") {
+  TempDir d("nextid");
+  AppCommandState st;
+  TwoTabProject(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+
+  SyncProjectPoints(st, log, now);
+  st.surveyPoints = {Pt(1, 1, 1, 1, "EG")};
+  SyncProjectPoints(st, log, now += 0.016);
+  SwitchTo(st, 2);
+  SyncProjectPoints(st, log, now += 0.016);
+  st.surveyPoints.push_back(Pt(50, 2, 2, 2, "FG"));
+  SyncProjectPoints(st, log, now += 0.016);
+  SwitchTo(st, 1);
+  SyncProjectPoints(st, log, now += 0.016);
+  st.pointVisibility.description = "EG";
+  st.createPointsNextId = 1;
+  SyncProjectPoints(st, log, now += 0.016);
+  REQUIRE(st.surveyPoints.size() == 1);  // 50 is hidden here ...
+  CHECK(st.createPointsNextId >= 51);    // ... yet its number is not offered again
+}
+
+TEST_CASE("req377 rules survive a save and load of the drawing", "[req377]") {
+  AppCommandState st;
+  st.pointVisibility.description = "EG*";
+  st.pointVisibility.idRanges = "1-500";
+  st.pointVisibility.useElevation = true;
+  st.pointVisibility.elevMin = 90.5;
+  st.pointVisibility.elevMax = 120.25;
+  st.pointVisibility.group = "Trees";
+  st.pointVisibility.sourceDrawing = "Drawings/EG.dwg";
+  for (int i = 1; i <= 100; ++i)
+    projpts::AddId(&st.pointVisibility.shown, i);
+  projpts::AddId(&st.pointVisibility.hidden, 7);
+  const std::string json = SerializeGoSurveyJson(st);
+  CHECK(json.find("\"1-100\"") != std::string::npos);  // compact, not 100 numbers
+
+  AppCommandState loaded;
+  loaded.pointVisibility.description = "stale";
+  std::vector<std::string> log;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, json, log));
+  CHECK(loaded.pointVisibility == st.pointVisibility);
+
+  // A drawing with default rules writes nothing, and loading it resets the rules.
+  AppCommandState plain;
+  const std::string plainJson = SerializeGoSurveyJson(plain);
+  CHECK(plainJson.find("pointVisibility") == std::string::npos);
+  REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, plainJson, log));
+  CHECK(loaded.pointVisibility.IsDefault());
+}
+
+TEST_CASE("req377 a standalone drawing has no rules and no helpers act", "[req377]") {
+  AppCommandState st;
+  CHECK(ActiveProjectDb(st) == nullptr);
+  CHECK(CountProjectPoints(st).total == 0);
+  CHECK(ProjectPointSources(st).empty());
+  st.surveyPoints = {Pt(1, 1, 1, 1)};
+  st.selectedSurveyPointIndices = {0};
+  CHECK(HideSelectedPointsHere(st) == 0);
+  CHECK(st.pointVisibility.hidden.empty());
 }
