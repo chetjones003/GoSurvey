@@ -3100,7 +3100,10 @@ struct AppCommandState {
     WaitSurfaceName,
     WaitSide,
   } gradingPhase = GradingPhase::WaitBaseline;
-  int gradingBaseline = -1;        ///< index into the feature line store, or -1
+  /// The baseline, held by **stable entity id** and never by array index — REQ-076's own words,
+  /// which say "never an array index, so an edit that compacts the store cannot silently retarget
+  /// the reference". Resolved to an index only at the moment it is used.
+  std::uint64_t gradingBaselineId = 0;
   double gradingCutRun = 2.0;      ///< run of run:rise where the design sits BELOW ground
   double gradingFillRun = 3.0;     ///< ...and ABOVE it. Separate values, per D-2026-10-05-b.
   std::string gradingSurface;      ///< target surface name, remembered between runs

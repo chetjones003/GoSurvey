@@ -41,6 +41,13 @@ CHECK ALL
 # --- bare GRADING with nothing selected ASKS, and stays running ------------------------------------
 CMD GRADING
 EXPECT LOG "select the feature line to grade from"
+
+# Typed text at a prompt that wants a CLICK says so, rather than vanishing. Found in review: three
+# inputs in a row produced no output at all, which is the family of defect PADSOLID shipped with.
+CMD hello
+EXPECT LOG "was typed while GRADING is waiting for you to CLICK a feature line"
+CMD
+EXPECT LOG "still waiting for a baseline"
 ESC
 
 # --- with the baseline selected it goes straight to the options prompt -----------------------------
@@ -160,3 +167,58 @@ CMD
 EXPECT LOG "daylight line "Road Edge Daylight" created"
 CHECK ALL
 
+
+# --- a closed baseline with a gap produces an OPEN line, not a ring across the gap ----------------
+#
+# Found in review. One corner sits 2 ft from the surface edge, so its slope leaves the surface before
+# reaching ground. The survivors used to be joined into a CLOSED ring, drawing a straight run across
+# ground where no daylight was ever computed — and that span is exactly what gets measured for a
+# limit of disturbance. The log said so; the geometry did not, and geometry is what gets dimensioned.
+NEW
+CMD SURFACECREATE Existing Ground
+CMD SURFACEADDPOINT Existing Ground, 0, 0, 100
+CMD SURFACEADDPOINT Existing Ground, 200, 0, 110
+CMD SURFACEADDPOINT Existing Ground, 200, 200, 110
+CMD SURFACEADDPOINT Existing Ground, 0, 200, 100
+CMD SURFACEREBUILD Existing Ground
+
+CMD FEATURELINE Odd Pad
+CMD 40,40,105
+CMD 160,40,105
+CMD 198,100,105
+CMD 160,160,105
+CMD 40,160,105
+CMD CLOSE
+ESC
+
+BOX -500 -500 500 500
+CMD GRADING
+CMD C
+CMD 4:1
+CMD
+EXPECT LOG "4 of 5 stations daylighted"
+EXPECT LOG "skipped 1 past the surface edge"
+EXPECT LOG "the daylight line is left OPEN because of those gaps"
+CHECK ALL
+
+# --- REQ-371: the daylight line survives a round trip as ordinary geometry ------------------------
+#
+# The acceptance condition had no test. The product already satisfied it — verified by hand — but
+# nothing pinned it, so nothing would have caught it regressing.
+SAVEAS %OUT%/grading-rt-a.dwg
+OPEN %OUT%/grading-rt-a.dwg
+CHECK ALL
+SAVEAS %OUT%/grading-rt-b.dwg
+EXPECT SAMEFILE %OUT%/grading-rt-a.dwg %OUT%/grading-rt-b.dwg
+CMD FEATURELINELIST
+EXPECT LOG "Odd Pad Daylight"
+
+# --- and a drawing with no surface says so UP FRONT ----------------------------------------------
+NEW
+CMD FEATURELINE Lonely
+CMD 0,0,10
+CMD 10,0,10
+CMD END
+ESC
+CMD GRADING
+EXPECT LOG "the drawing has no surfaces"

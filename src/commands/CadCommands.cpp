@@ -22859,9 +22859,20 @@ std::string GradingDefaultSurface(const AppCommandState& st) {
   return std::string();
 }
 
+/// Resolve the baseline's stable id to a live index, or -1 if it is gone (REQ-076: a reference to a
+/// deleted entity resolves to NOTHING, never to whatever took its array slot).
+int GradingBaselineIndex(const AppCommandState& st) {
+  if (st.gradingBaselineId == 0)
+    return -1;
+  const int ix = FindEntityIndexById(st.featureLineAttrs, st.gradingBaselineId);
+  if (ix < 0 || static_cast<size_t>(ix) + 1 >= st.featureLineOffsets.size())
+    return -1;
+  return ix;
+}
+
 /// True when the chosen baseline is an open line, which is the only case that needs a side.
 bool GradingBaselineIsOpen(const AppCommandState& st) {
-  const int i = st.gradingBaseline;
+  const int i = GradingBaselineIndex(st);
   if (i < 0 || static_cast<size_t>(i) >= st.featureLineClosed.size())
     return false;
   return st.featureLineClosed[static_cast<size_t>(i)] == 0;
@@ -22884,27 +22895,30 @@ void GradingPrompt(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back(msg);
 }
 
-/// The feature line the command will grade from: the one selected, or -1.
-int GradingSelectedFeatureLine(const AppCommandState& st, int* outCount) {
+/// The feature line the command will grade from: the STABLE ID of the one selected, or 0.
+std::uint64_t GradingSelectedFeatureLine(AppCommandState& st, int* outCount) {
+  EnsureEntityIds(st);  // so a line drawn moments ago already has the id the grading will hold it by
   int n = 0;
-  int idx = -1;
+  std::uint64_t id = 0;
   for (const SelectedEntity& e : st.selection) {
     if (e.type != SelectedEntity::Type::FeatureLine || e.index < 0)
       continue;
-    if (static_cast<size_t>(e.index) >= st.featureLineClosed.size())
+    if (static_cast<size_t>(e.index) >= st.featureLineAttrs.size())
       continue;
     ++n;
-    idx = e.index;
+    id = st.featureLineAttrs[static_cast<size_t>(e.index)].id;
   }
   if (outCount)
     *outCount = n;
-  return idx;
+  return id;
 }
 
 /// Project the baseline's side slopes out to the surface and commit the daylight line.
 void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
-  const int bi = st.gradingBaseline;
-  if (bi < 0 || static_cast<size_t>(bi) + 1 >= st.featureLineOffsets.size()) {
+  const int bi = GradingBaselineIndex(st);
+  if (bi < 0) {
+    // REQ-076: the id resolved to nothing, which is the correct outcome for a deleted baseline —
+    // far better than grading whatever entity inherited its array slot.
     log.push_back("GRADING - the baseline feature line is gone.");
     return;
   }
@@ -23032,6 +23046,14 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
 
+  // A closed baseline whose stations did not ALL daylight does not produce a closed daylight line.
+  // Joining the survivors into a ring would draw a straight run across ground where no daylight was
+  // ever computed, and that span is exactly what someone measures for a limit of disturbance — a
+  // confident wrong number. The log already names the skipped stations, but a log is scrolled away
+  // and geometry is dimensioned, so the geometry has to admit the gap itself.
+  const bool skippedAny = (offSurface + neverMet + degenerate) > 0;
+  const bool emitClosed = closed && !skippedAny;
+
   PushUndoSnapshot(st, "Grading daylight line");
   if (st.featureLineOffsets.empty())
     st.featureLineOffsets.push_back(0);
@@ -23039,7 +23061,7 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   st.featureLineVerts.insert(st.featureLineVerts.end(), out.begin(), out.end());
   st.featureLineElevPt.insert(st.featureLineElevPt.end(), outElev.begin(), outElev.end());
   st.featureLineOffsets.push_back(baseVert + static_cast<int>(got));
-  st.featureLineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
+  st.featureLineClosed.push_back(static_cast<uint8_t>(emitClosed ? 1 : 0));
 
   CadFeatureLineInfo info;
   const std::string baseName = (static_cast<size_t>(bi) < st.featureLineInfo.size() &&
@@ -23059,10 +23081,14 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("GRADING - cut " + FormatSlope(slopes.cutRun) + " at " + std::to_string(cut) +
                 " stations, fill " + FormatSlope(slopes.fillRun) + " at " + std::to_string(fill) +
                 " stations, already on grade at " + std::to_string(onGrade) + ".");
-  if (offSurface > 0 || neverMet > 0 || degenerate > 0) {
+  if (skippedAny) {
     log.push_back("GRADING - skipped " + std::to_string(offSurface) + " past the surface edge, " +
                   std::to_string(neverMet) + " that never meet the ground, " +
                   std::to_string(degenerate) + " with an unusable slope.");
+    if (closed) {
+      log.push_back("GRADING - the daylight line is left OPEN because of those gaps: it would "
+                    "otherwise close across ground where no daylight was computed.");
+    }
   }
   st.active = AppCommandState::Kind::None;
   st.gradingPhase = AppCommandState::GradingPhase::WaitBaseline;
@@ -23075,7 +23101,7 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Grading;
   st.lastCommand = AppCommandState::Kind::Grading;
-  st.gradingBaseline = -1;
+  st.gradingBaselineId = 0;
   st.gradingSideChosen = false;
 
   if (st.featureLineOffsets.size() < 2) {
@@ -23084,11 +23110,20 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.active = AppCommandState::Kind::None;
     return;
   }
+  if (st.cadSurfaces.empty()) {
+    // Said UP FRONT rather than after a round trip through the options prompt. Without this the
+    // conversation is circular: Enter says "choose a surface first: type S", and S says "there are
+    // no surfaces" — two steps to learn the command could never have worked.
+    log.push_back("GRADING - the drawing has no surfaces. The slopes need existing ground to run "
+                  "out to; build one with SURFACECREATE first.");
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
 
   int n = 0;
-  const int idx = GradingSelectedFeatureLine(st, &n);
+  const std::uint64_t id = GradingSelectedFeatureLine(st, &n);
   if (n == 1) {
-    st.gradingBaseline = idx;
+    st.gradingBaselineId = id;
     GradingPrompt(st, log);
     return;
   }
@@ -23208,6 +23243,18 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
                     std::string(GradingBaselineIsOpen(st) ? " or D" : "") + " to change a setting.");
       return;
     }
+    case P::WaitBaseline: {
+      // This prompt wants a PICK, so there is nothing useful to do with typed text — but doing
+      // nothing SILENTLY is the defect that made PADSOLID look hung, and the review checklist's own
+      // words are "no error path is empty or swallows the error". Say why the typing did nothing.
+      if (tr.empty())
+        log.push_back("GRADING - still waiting for a baseline: click a feature line. ESC cancels.");
+      else
+        log.push_back("GRADING - \"" + tr +
+                      "\" was typed while GRADING is waiting for you to CLICK a feature line. Pick "
+                      "one, or press ESC to cancel.");
+      return;
+    }
     default:
       return;
   }
@@ -23224,9 +23271,10 @@ void HandleGradingPick(AppCommandState& st, double wx, double wy, std::vector<st
     log.push_back("GRADING - that is not a feature line. Pick the design edge to grade from.");
     return;
   }
-  if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.featureLineClosed.size())
+  if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.featureLineAttrs.size())
     return;
-  st.gradingBaseline = hit.index;
+  EnsureEntityIds(st);
+  st.gradingBaselineId = st.featureLineAttrs[static_cast<size_t>(hit.index)].id;  // REQ-076
   ClearCadSelection(st);
   st.selection.push_back(hit);
   GradingPrompt(st, log);

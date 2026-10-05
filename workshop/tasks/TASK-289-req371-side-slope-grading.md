@@ -100,6 +100,44 @@ at 4:1 that needs ~200 ft of run and the surface ran out at 40. The refusal was 
 a fixture that only ever exercises the refusal proves nothing about the success path, so the relief
 was reduced until the slopes actually land.
 
+## Review pass, and what it found
+
+Run against `verification/review-checklist.md`'s four domains after the feature was already working
+and already demonstrated in the GUI. **It failed Domain 2 on three findings, all in this change.**
+Each was reproduced before being written down, and each now has a regression test.
+
+**1. The baseline was held by ARRAY INDEX, not stable entity id.** A direct violation of REQ-076,
+whose own words are "never an array index". Worse, PADSOLID got this right three days earlier with
+`padSolidBoundaryId` and the pattern simply was not carried across. Now `gradingBaselineId`, resolved
+through `FindEntityIndexById` at the moment of use, so a deleted baseline resolves to **nothing**
+rather than to whatever inherited its slot. Not reachable today — no command can run while GRADING
+holds the prompt — but it is a written standard and a trap left for the next person.
+
+**2. A closed daylight line silently spanned a gap it never computed.** Reproduced with a 5-corner
+pad whose fifth corner sits 2 ft from the surface edge: 4 of 5 stations daylighted and the survivors
+were joined into a **closed ring**, drawing a straight run across ground where no daylight exists.
+The log named the skipped station, but a log is scrolled away and geometry is dimensioned — and that
+span is exactly what gets measured for a limit of disturbance, the one question this feature exists
+to answer. A closed baseline with any skipped station now emits an **open** line and says why.
+
+**3. Typed text at the baseline prompt was swallowed in silence.** Reproduced: `hello`, then `3:1`,
+then a bare Enter, produced **no output at all**. The checklist's own words are "no error path is
+empty or swallows the error", and this is the family of defect PADSOLID shipped with — a command
+that looks like it is listening and is not. It now says what it is waiting for.
+
+Three advisories, also fixed:
+
+- REQ-371's round-trip acceptance condition had **no test**. The product already satisfied it
+  (verified by hand: identical coordinates after save/reopen) but nothing pinned it. Now covered.
+- A drawing with no surfaces gave a **circular** conversation — Enter said "type S", and S said
+  "there are no surfaces". Now refused up front, like the no-feature-lines case beside it.
+- Cost is O(baseline vertices x search distance / step) elevation queries. Fine for a typed command;
+  recorded so nobody calls it per frame.
+
+**Passed:** architecture (no upward dependency, no new store, no new entity kind, no new global
+state, and REQ-301 satisfied because `ISurfaceQuery` merely gains a third caller), naming, ownership,
+`const`, undo discipline, and the arithmetic itself.
+
 ## Not in scope (REQ-371 says so explicitly)
 
 - the **earthwork volume** between baseline, slopes and ground — without a design surface there is
