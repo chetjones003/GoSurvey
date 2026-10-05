@@ -10877,8 +10877,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      otherwise the model-space style (REQ-064).
   5. **Floating model space.** While editing through a layout viewport, the model GL pass runs with
      that viewport's `visualStyle` (not a blank sheet).
-  6. **Out of scope (later #624 slices):** MATERIAL, LIGHT, SUN, and AutoCAD Realistic/Conceptual/X-Ray
-     fidelity beyond the three GoSurvey styles.
+  6. **Out of scope:** AutoCAD Realistic/Conceptual/X-Ray fidelity beyond the three GoSurvey styles;
+     **materials** → **REQ-372**; **lights/sun** → future REQ (issue #624).
 - Acceptance:
   - `LibreDwgCadTests` tag `[issue624][req371]`: R2018 export of two paper viewports with Hidden and
     Shaded re-import with the same `VisualStyle` values; tag `[model]` round-trips model
@@ -10889,6 +10889,50 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #624 increment 1; D-2026-10-05-b). 2026-10-05 — model VPORT
   `*Active` import/export (increment 2).
+
+### REQ-372 — AutoCAD MATERIAL diffuse display and DWG (GitHub issue #624, materials slice)
+
+- Purpose: issue #624 **materials** — AutoCAD **MATERIAL** objects (R2007+ `ACAD_MATERIAL` dictionary)
+  carry surface appearance for 3D hosts. GoSurvey today shades meshes and tessellated solids from
+  **entity/layer colour only** (REQ-064 / REQ-048). This REQ adds **diffuse RGB** fidelity and DWG
+  round-trip for that slice; textures and full PBR stay deferred with honest logging (REQ-201).
+- Priority: should
+- Type: interop + display
+- Decision: D-2026-10-05-c (closes the SPEC GAP on issue #624 for materials; **lights/sun** remain a
+  separate future REQ; phased delivery like REQ-369 / REQ-368).
+- Depends on: REQ-064 (Shaded draw path), REQ-048 (entity colour), REQ-063/REQ-313 (mesh and solid
+  display hosts), REQ-170 / issue #600 (R2007+ DWG export path), REQ-371 (visual styles — orthogonal).
+- Statement:
+  1. **Increment 1 — import display.** Opening an R2007+ DWG resolves each 3D host's material handle
+     (LibreDWG `MATERIAL` when decoded). When a material exposes a **diffuse colour**, shaded drawing
+     uses that RGB for the mesh or tessellated solid instead of the entity colour alone. Image-based
+     textures, bump/normal maps, and procedural maps are **not** evaluated; import logs how many
+     materials or hosts had only non-diffuse data (REQ-201).
+  2. **Increment 2 — GoSurvey → DWG export.** At **R2007+**, export writes hand-built **`MATERIAL`**
+     objects (LibreDWG has no `dwg_add_MATERIAL`) into `ACAD_MATERIAL`, keyed by a stable name derived
+     from the host's effective diffuse RGB, and attaches material handles to exported **3D hosts**
+     GoSurvey already writes (`POLYLINE_PFACE` meshes/TIN from #611, `3DSOLID` from #612). R2000/R2004
+     export omits native materials (display colour only).
+  3. **Increment 3 — `.gs` persistence.** Optional additive fields on display hosts record the AutoCAD
+     material **name** (when known) and diffuse override so save/load preserves import results without
+     requiring a DWG round-trip.
+  4. **Increment 4 — round trip.** GoSurvey → DWG (R2018) → GoSurvey preserves diffuse material
+     appearance on a representative mesh and `3DSOLID` sample; `#614` loss lines name hosts whose
+     materials could not be encoded (missing writer, unsupported map-only materials).
+  5. **Out of scope:** `LIGHT`, `SUN`, `LIGHTLIST`, geographic sun, material editor UI, assigning
+     materials by layer in GoSurvey, Civil 3D render materials, and full AutoCAD Realistic/Conceptual
+     shader parity. Those remain issue **#624** follow-ups or separate issues.
+- Acceptance:
+  - **(Inc 1)** `[issue624][req372]` import test: a fixture DWG with a diffuse `MATERIAL` on a mesh or
+    solid host draws with that RGB in Shaded (unit/headless where feasible, else fixture + log assertion).
+  - **(Inc 2–4)** `[issue624][req372]` export/import: R2018 round-trip preserves diffuse material on at
+    least one mesh and one `3DSOLID`; export log or `#614` lists map-only materials when present.
+  - **(Inc 3)** `.gs` save/load preserves material name + diffuse override when increment 3 lands.
+  - REQ-201 / `#601` gap doc no longer lists **materials** as an untracked SPEC GAP.
+- Owner-layer: IO (`LibreDwgMaterial.cpp` planned, `LibreDwgCad.cpp`), Renderer (diffuse override on
+  shaded batches), IO (`.gs` additive fields)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #624 materials slice; D-2026-10-05-c).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
