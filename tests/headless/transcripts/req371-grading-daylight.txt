@@ -1,0 +1,162 @@
+# REQ-371 — GRADING: side slopes from a feature line out to a surface, giving the daylight line.
+#
+# Driven through the REGISTRY and the typing box rather than by calling the command, because that is
+# precisely where PADSOLID's reported defect lived: the unit tests called the command directly and so
+# never crossed the registry check the typing box uses, and the command was both missing from the
+# registry and unable to be told to go.
+#
+# The site is chosen so the answers are arithmetic. Ground is an exact ramp, z = 100 + 0.05x over a
+# 200 x 200 footprint. The pad edge is a 120 x 120 square from (40,40) to (160,160) at a DESIGN
+# elevation of 105, so the ground beneath it runs 102 at the west edge to 108 at the east: the west
+# corners need 3 ft of FILL and the east corners 3 ft of CUT. One baseline exercises both, which is
+# what makes "the two slopes are separate values" testable at all.
+#
+# The RELIEF is deliberately gentle. The first version of this transcript used a 20% ramp and a 22 ft
+# cut, and GRADING correctly REFUSED it: at 4:1 that needs about 200 ft of run and the surface ran
+# out at 40. The refusal was right — REQ-074 forbids inventing ground past the edge — but a fixture
+# that only ever exercises the refusal proves nothing about the success path, so the site was made
+# large enough relative to its slopes for the slopes to actually land.
+
+NEW
+
+CMD SURFACECREATE Existing Ground
+CMD SURFACEADDPOINT Existing Ground, 0, 0, 100
+CMD SURFACEADDPOINT Existing Ground, 200, 0, 110
+CMD SURFACEADDPOINT Existing Ground, 200, 200, 110
+CMD SURFACEADDPOINT Existing Ground, 0, 200, 100
+CMD SURFACEREBUILD Existing Ground
+EXPECT SURFACES 1
+CHECK ALL
+
+# --- the design edge: a closed feature line at elevation 105 --------------------------------------
+CMD FEATURELINE Pad Edge
+CMD 40,40,105
+CMD 160,40,105
+CMD 160,160,105
+CMD 40,160,105
+CMD CLOSE
+ESC
+CHECK ALL
+
+# --- bare GRADING with nothing selected ASKS, and stays running ------------------------------------
+CMD GRADING
+EXPECT LOG "select the feature line to grade from"
+ESC
+
+# --- with the baseline selected it goes straight to the options prompt -----------------------------
+BOX -500 -500 500 500
+CMD GRADING
+EXPECT LOG "Enter to grade, or [Cut/Fill/Surface]"
+
+# Both slopes are named in the prompt, in BOTH of REQ-074's conventions, from one source.
+EXPECT LOG "cut 2:1 (50.00%)"
+EXPECT LOG "fill 3:1 (33.33%)"
+
+# C sets the cut slope and comes back to the same prompt rather than ending the command.
+CMD C
+EXPECT LOG "enter cut slope"
+CMD 4:1
+EXPECT LOG "cut 4:1 (25.00%)"
+
+# A percent is accepted as readily as a ratio, because REQ-074 states both.
+CMD F
+EXPECT LOG "enter fill slope"
+CMD 25%
+EXPECT LOG "fill 4:1 (25.00%)"
+
+# A word that is neither a slope nor an option keeps the prompt rather than throwing the command away.
+CMD banana
+EXPECT LOG "press Enter to grade"
+
+# A bare slope typed at the options prompt is taken as the fill slope, the one changed most often.
+CMD 3:1
+EXPECT LOG "fill 3:1 (33.33%)"
+
+# This baseline is CLOSED, so outward is away from its interior and there is no side to choose.
+CMD D
+EXPECT LOG "this baseline is closed"
+
+# --- Enter grades ---------------------------------------------------------------------------------
+CMD
+EXPECT LOG "daylight line "Pad Edge Daylight" created"
+EXPECT LOG "4 of 4 stations daylighted"
+# The west corners sit above ground (fill) and the east corners below it (cut), so BOTH slopes ran.
+EXPECT LOG "cut 4:1 (25.00%) at 2 stations"
+EXPECT LOG "fill 3:1 (33.33%) at 2 stations"
+CHECK ALL
+
+# One undo takes the daylight line away: one command, one step.
+CMD UNDO
+CHECK ALL
+
+# --- the surface is remembered, and a missing one is refused by name ------------------------------
+BOX -500 -500 500 500
+CMD GRADING
+CMD S
+EXPECT LOG "enter surface name"
+CMD Nope
+EXPECT LOG "no surface named "Nope""
+# Still running: a bad name does not end the command.
+CMD Existing Ground
+EXPECT LOG "Enter to grade, or [Cut/Fill/Surface]"
+ESC
+CHECK ALL
+
+# --- an OPEN baseline has no intrinsic outward, so it must be told --------------------------------
+#
+# A FRESH drawing, with the open line as the only feature line.
+#
+# Isolated deliberately. The first attempt added the open line beside the pad and boxed only it, and
+# got "select ONE" — not because the box was wrong (a box clear of the square selects only what is
+# inside it; that was checked separately) but because a box ADDS to the live selection, the way
+# AutoCAD's PICKADD does, and the pad was still selected from earlier in this transcript. Rather than
+# thread a deselect through a case that is about the SIDE prompt, the drawing starts over. "select
+# ONE" is already covered above.
+NEW
+CMD SURFACECREATE Existing Ground
+CMD SURFACEADDPOINT Existing Ground, 0, 0, 100
+CMD SURFACEADDPOINT Existing Ground, 200, 0, 110
+CMD SURFACEADDPOINT Existing Ground, 200, 200, 110
+CMD SURFACEADDPOINT Existing Ground, 0, 200, 100
+CMD SURFACEREBUILD Existing Ground
+EXPECT SURFACES 1
+
+CMD FEATURELINE Road Edge
+CMD 40,100,105
+CMD 160,100,105
+CMD END
+ESC
+CHECK ALL
+
+BOX -500 -500 500 500
+CMD GRADING
+# The prompt grows a Side option, and says plainly that it has not been chosen.
+EXPECT LOG "Enter to grade, or [Cut/Fill/Surface/Side]"
+EXPECT LOG "side NOT chosen"
+
+# Enter REFUSES while the side is unknown rather than picking one. An open line's two sides are
+# different earthwork, so guessing would be worse than asking.
+CMD
+EXPECT LOG "this baseline is open, so it has no outward side"
+
+CMD D
+EXPECT LOG "[L]eft or [R]ight"
+CMD L
+EXPECT LOG "side left"
+
+CMD
+EXPECT LOG "daylight line "Road Edge Daylight" created"
+EXPECT LOG "2 of 2 stations daylighted"
+CHECK ALL
+
+# Grading the other side gives a different line, which is the whole reason the side is asked for.
+CMD UNDO
+BOX -500 -500 500 500
+CMD GRADING
+CMD D
+CMD R
+EXPECT LOG "side right"
+CMD
+EXPECT LOG "daylight line "Road Edge Daylight" created"
+CHECK ALL
+

@@ -26,6 +26,7 @@
 #include "util/tinvolume.hpp"      // REQ-136
 #include "util/gridsurface.hpp"    // REQ-137
 #include "util/surfacequery.hpp"   // REQ-137
+#include "util/daylight.hpp"       // REQ-371 side slope grading — the daylight solver
 #include "util/curveintersect.hpp"  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
@@ -6573,6 +6574,7 @@ const CmdEntry kRegistry[] = {
     {"polyline", "pl", "Draw a connected polyline"},
     {"3dpoly", "3dp, 3dpolyline", "Draw a polyline whose vertices each carry their own elevation"},
     {"featureline", "fl", "Draw a feature line: named 3D linework with per-vertex elevations (REQ-087)"},
+    {"grading", "grd", "Side slopes from a feature line out to a surface, giving the daylight line (REQ-371)"},
     {"featurelinelist", "fllist", "List every feature line and its vertices"},
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
@@ -7105,6 +7107,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "3dpoly") {
     StartPolyline3dCommand(st, log);  // REQ-085
+    return true;
+  }
+  if (primary == "grading") {
+    StartGradingCommand(st, log);  // REQ-371
     return true;
   }
   if (primary == "rect") {
@@ -13263,6 +13269,10 @@ static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, double& wx,
   return false;
 }
 
+/// REQ-371. Defined with the rest of GRADING, far below; declared here because this is the routing
+/// site that must reach it.
+void HandleGradingPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+
 void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vector<std::string>& log,
                              bool windowSelectionSubtract, bool fenceLeftToRightWindowMode,
                              const ray3d::Ray* pickRay) {
@@ -13365,6 +13375,16 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     }
     if (!ApplySegmentAnglePickToViewportPick(st, wx, wy, nextPt, log))
       SubmitPolylineVertex(st, wx, wy, log);
+    return;
+  }
+
+  // REQ-371. GRADING's first phase is a PICK — the baseline feature line — so it belongs in this
+  // list for exactly the reason TASK-082's comment below gives: a click that reaches no branch is
+  // discarded in silence and the command looks hung. A transcript cannot catch that, because a
+  // transcript types and never clicks.
+  if (st.active == K::Grading &&
+      st.gradingPhase == AppCommandState::GradingPhase::WaitBaseline) {
+    HandleGradingPick(st, wx, wy, log);
     return;
   }
 
@@ -22764,6 +22784,455 @@ void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::s
   log.push_back(std::string("FEATURELINE ") + (closed ? "closed" : "complete") + " — " +
                 std::to_string(nvert) + " vertices.");
 }
+
+// -------------------------------------------------------------------------------------------------
+// REQ-371 — GRADING: side slopes from a feature line out to a surface, producing the daylight line.
+//
+// The arithmetic lives in util/daylight.hpp, pure and tested against hand-computed offsets. What is
+// here is the command: pick a baseline, sit on an options prompt, and commit the result.
+// -------------------------------------------------------------------------------------------------
+
+namespace {
+
+/// Parse a slope in either convention REQ-074 names, returning the RUN of run:rise.
+///
+///   "3:1" -> 3      "3" -> 3 (run:1)      "33.33%" -> 100/33.33
+///
+/// Returns false for anything that is not a slope, so the prompt can keep asking rather than grade
+/// at a default the user never chose.
+bool ParseSlopeRun(const std::string& text, double* outRun) {
+  const std::string t = StringUtil::trimCopy(text);
+  if (t.empty())
+    return false;
+
+  // Percent: the rise per hundred of run, so the run is 100/percent.
+  if (t.back() == '%') {
+    const std::string num = StringUtil::trimCopy(t.substr(0, t.size() - 1));
+    char* end = nullptr;
+    const double pct = std::strtod(num.c_str(), &end);
+    if (!end || end == num.c_str() || *end != '\0' || !std::isfinite(pct) || pct <= 0.0)
+      return false;
+    *outRun = 100.0 / pct;
+    return true;
+  }
+
+  // run:rise, the surveyor's form.
+  const size_t colon = t.find(':');
+  if (colon != std::string::npos) {
+    const std::string runs = StringUtil::trimCopy(t.substr(0, colon));
+    const std::string rises = StringUtil::trimCopy(t.substr(colon + 1));
+    char* e1 = nullptr;
+    char* e2 = nullptr;
+    const double run = std::strtod(runs.c_str(), &e1);
+    const double rise = std::strtod(rises.c_str(), &e2);
+    if (!e1 || e1 == runs.c_str() || *e1 != '\0' || !e2 || e2 == rises.c_str() || *e2 != '\0')
+      return false;
+    if (!std::isfinite(run) || !std::isfinite(rise) || run <= 0.0 || rise <= 0.0)
+      return false;
+    *outRun = run / rise;
+    return true;
+  }
+
+  // A bare number is the run against a rise of one, which is how "3:1" is usually spoken.
+  char* end = nullptr;
+  const double run = std::strtod(t.c_str(), &end);
+  if (!end || end == t.c_str() || *end != '\0' || !std::isfinite(run) || run <= 0.0)
+    return false;
+  *outRun = run;
+  return true;
+}
+
+/// Both of REQ-074's conventions from the one run, so a slope can never be described two ways.
+std::string FormatSlope(double run) {
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%.4g:1 (%.2f%%)", run, SlopePercentFromRun(run));
+  return std::string(buf);
+}
+
+/// The surface GRADING will use if the user does not name one: the one it used last, else the only
+/// surface in the drawing. Empty when there is a genuine choice to make.
+std::string GradingDefaultSurface(const AppCommandState& st) {
+  if (!st.gradingSurface.empty() && FindSurfaceIndex(st, st.gradingSurface) >= 0)
+    return st.gradingSurface;
+  if (st.cadSurfaces.size() == 1)
+    return st.cadSurfaces[0].name;
+  return std::string();
+}
+
+/// True when the chosen baseline is an open line, which is the only case that needs a side.
+bool GradingBaselineIsOpen(const AppCommandState& st) {
+  const int i = st.gradingBaseline;
+  if (i < 0 || static_cast<size_t>(i) >= st.featureLineClosed.size())
+    return false;
+  return st.featureLineClosed[static_cast<size_t>(i)] == 0;
+}
+
+/// The options prompt, naming everything it already has — the shape every other command with
+/// keywords uses, so the current slopes and surface are readable rather than remembered.
+void GradingPrompt(AppCommandState& st, std::vector<std::string>& log) {
+  st.gradingPhase = AppCommandState::GradingPhase::WaitOptions;
+  const std::string surf = GradingDefaultSurface(st);
+  std::string msg = "GRADING - Enter to grade, or [Cut/Fill/Surface";
+  if (GradingBaselineIsOpen(st))
+    msg += "/Side";
+  msg += "] <cut " + FormatSlope(st.gradingCutRun) + ", fill " + FormatSlope(st.gradingFillRun) +
+         ", " + (surf.empty() ? std::string("no surface chosen") : surf);
+  if (GradingBaselineIsOpen(st))
+    msg += st.gradingSideChosen ? (st.gradingSideLeft ? ", side left" : ", side right")
+                                : ", side NOT chosen";
+  msg += ">. ESC cancels.";
+  log.push_back(msg);
+}
+
+/// The feature line the command will grade from: the one selected, or -1.
+int GradingSelectedFeatureLine(const AppCommandState& st, int* outCount) {
+  int n = 0;
+  int idx = -1;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::FeatureLine || e.index < 0)
+      continue;
+    if (static_cast<size_t>(e.index) >= st.featureLineClosed.size())
+      continue;
+    ++n;
+    idx = e.index;
+  }
+  if (outCount)
+    *outCount = n;
+  return idx;
+}
+
+/// Project the baseline's side slopes out to the surface and commit the daylight line.
+void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
+  const int bi = st.gradingBaseline;
+  if (bi < 0 || static_cast<size_t>(bi) + 1 >= st.featureLineOffsets.size()) {
+    log.push_back("GRADING - the baseline feature line is gone.");
+    return;
+  }
+  const std::string surfName = GradingDefaultSurface(st);
+  const int si = FindSurfaceIndex(st, surfName);
+  if (si < 0) {
+    log.push_back("GRADING - choose a surface first: type S.");
+    return;
+  }
+  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+  std::unique_ptr<ISurfaceQuery> ground = MakeSurfaceQuery(st, surf);
+  if (!ground) {
+    log.push_back("GRADING - \"" + surf.name + "\" has never been built; there is no ground to meet.");
+    return;
+  }
+
+  const bool closed = st.featureLineClosed[static_cast<size_t>(bi)] != 0;
+  if (!closed && !st.gradingSideChosen) {
+    // REQ-371: an open baseline has no intrinsic outward, so it must be told rather than guessed.
+    log.push_back("GRADING - this baseline is open, so it has no outward side. Type D to choose "
+                  "Left or Right.");
+    return;
+  }
+
+  const int v0 = st.featureLineOffsets[static_cast<size_t>(bi)];
+  const int v1 = st.featureLineOffsets[static_cast<size_t>(bi) + 1];
+  const int nv = v1 - v0;
+  if (nv < 2) {
+    log.push_back("GRADING - the baseline has too few vertices to have a direction.");
+    return;
+  }
+
+  std::vector<double> xy;
+  xy.reserve(static_cast<size_t>(nv) * 2);
+  for (int k = 0; k < nv; ++k) {
+    xy.push_back(st.featureLineVerts[static_cast<size_t>(v0 + k) * 3 + 0]);
+    xy.push_back(st.featureLineVerts[static_cast<size_t>(v0 + k) * 3 + 1]);
+  }
+  std::vector<double> nxy;
+  if (!BaselineOutwardNormals(xy, closed, st.gradingSideLeft, &nxy)) {
+    log.push_back("GRADING - the baseline has no two distinct points, so there is no outward.");
+    return;
+  }
+
+  // The step is scaled to the surface's own triangle spacing rather than fixed, which is what keeps
+  // REQ-371's stated known limit tracking the data instead of a constant.
+  DaylightSearch search;
+  search.stepFt = 1.0;
+  search.maxOffsetFt = 1000.0;
+  if (surf.tin && surf.tin->indices.size() >= 3 && surf.tin->vertsXyz.size() >= 6) {
+    // Representative triangle span = sqrt(plan bbox area / triangle count), halved so the march
+    // cannot stride over a whole triangle. Clamped so a pathological surface cannot make the search
+    // either useless or unbearably slow.
+    double minX = surf.tin->vertsXyz[0], maxX = minX;
+    double minY = surf.tin->vertsXyz[1], maxY = minY;
+    for (size_t k = 0; k + 2 < surf.tin->vertsXyz.size(); k += 3) {
+      minX = std::min(minX, surf.tin->vertsXyz[k]);
+      maxX = std::max(maxX, surf.tin->vertsXyz[k]);
+      minY = std::min(minY, surf.tin->vertsXyz[k + 1]);
+      maxY = std::max(maxY, surf.tin->vertsXyz[k + 1]);
+    }
+    const size_t tris = std::max<size_t>(surf.tin->indices.size() / 3, 1);
+    const double area = std::max(1.0, (maxX - minX) * (maxY - minY));
+    const double triSpan = std::sqrt(area / static_cast<double>(tris));
+    search.stepFt = std::clamp(triSpan * 0.5, 0.05, 10.0);
+    search.maxOffsetFt = std::max(100.0, std::hypot(maxX - minX, maxY - minY));
+  }
+
+  SideSlopes slopes;
+  slopes.cutRun = st.gradingCutRun;
+  slopes.fillRun = st.gradingFillRun;
+
+  std::vector<double> out;        // XYZ of the daylight line
+  std::vector<uint8_t> outElev;   // every daylight point carries a real elevation, so none is a PI-only
+  int cut = 0, fill = 0, onGrade = 0;
+  int offSurface = 0, neverMet = 0, degenerate = 0;
+
+  for (int k = 0; k < nv; ++k) {
+    const double bx = st.featureLineVerts[static_cast<size_t>(v0 + k) * 3 + 0];
+    const double by = st.featureLineVerts[static_cast<size_t>(v0 + k) * 3 + 1];
+    const double bz = st.featureLineVerts[static_cast<size_t>(v0 + k) * 3 + 2];
+    const double dx = nxy[static_cast<size_t>(k) * 2 + 0];
+    const double dy = nxy[static_cast<size_t>(k) * 2 + 1];
+    if (dx == 0.0 && dy == 0.0)
+      continue;
+
+    const DaylightPoint d = SolveDaylightPoint(*ground, bx, by, bz, dx, dy, slopes, search);
+    if (!d.daylighted) {
+      switch (d.why) {
+        case DaylightFailure::BaselineOutsideSurface:
+        case DaylightFailure::SlopeLeftSurface: ++offSurface; break;
+        case DaylightFailure::NeverMeets:       ++neverMet; break;
+        default:                                ++degenerate; break;
+      }
+      continue;
+    }
+    if (d.offset <= 1e-9)
+      ++onGrade;
+    else if (d.inCut)
+      ++cut;
+    else
+      ++fill;
+    out.push_back(d.x);
+    out.push_back(d.y);
+    out.push_back(d.z);
+    outElev.push_back(0);
+  }
+
+  const size_t got = out.size() / 3;
+  const size_t need = closed ? 3u : 2u;
+  if (got < need) {
+    // Every reason is reported rather than collapsed into one message, because "it ran off the
+    // surface" and "it can never meet the ground" call for completely different fixes.
+    std::string why;
+    if (offSurface > 0)
+      why += " " + std::to_string(offSurface) + " ran past the surface edge (REQ-074: no elevation "
+             "is invented out there).";
+    if (neverMet > 0)
+      why += " " + std::to_string(neverMet) +
+             " could never meet the ground - it falls away at least as fast as the slope.";
+    if (degenerate > 0)
+      why += " " + std::to_string(degenerate) + " had an unusable slope.";
+    log.push_back("GRADING - only " + std::to_string(got) + " of " + std::to_string(nv) +
+                  " stations daylighted, too few for a line." + why);
+    return;
+  }
+
+  PushUndoSnapshot(st, "Grading daylight line");
+  if (st.featureLineOffsets.empty())
+    st.featureLineOffsets.push_back(0);
+  const int baseVert = st.featureLineOffsets.back();
+  st.featureLineVerts.insert(st.featureLineVerts.end(), out.begin(), out.end());
+  st.featureLineElevPt.insert(st.featureLineElevPt.end(), outElev.begin(), outElev.end());
+  st.featureLineOffsets.push_back(baseVert + static_cast<int>(got));
+  st.featureLineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
+
+  CadFeatureLineInfo info;
+  const std::string baseName = (static_cast<size_t>(bi) < st.featureLineInfo.size() &&
+                                !st.featureLineInfo[static_cast<size_t>(bi)].name.empty())
+                                   ? st.featureLineInfo[static_cast<size_t>(bi)].name
+                                   : std::string("Baseline");
+  info.name = baseName + " Daylight";
+  info.description = "REQ-371 daylight line: cut " + FormatSlope(slopes.cutRun) + ", fill " +
+                     FormatSlope(slopes.fillRun) + ", to " + surf.name;
+  st.featureLineInfo.push_back(std::move(info));
+  st.featureLineAttrs.push_back(
+      MakeNewObjectAttrs(st, ObjectLayerKind::FeatureLine, st.featureLineInfo.back().name));  // REQ-361
+  BumpCadGpuCache(st);
+
+  log.push_back("GRADING - daylight line \"" + st.featureLineInfo.back().name + "\" created, " +
+                std::to_string(got) + " of " + std::to_string(nv) + " stations daylighted.");
+  log.push_back("GRADING - cut " + FormatSlope(slopes.cutRun) + " at " + std::to_string(cut) +
+                " stations, fill " + FormatSlope(slopes.fillRun) + " at " + std::to_string(fill) +
+                " stations, already on grade at " + std::to_string(onGrade) + ".");
+  if (offSurface > 0 || neverMet > 0 || degenerate > 0) {
+    log.push_back("GRADING - skipped " + std::to_string(offSurface) + " past the surface edge, " +
+                  std::to_string(neverMet) + " that never meet the ground, " +
+                  std::to_string(degenerate) + " with an unusable slope.");
+  }
+  st.active = AppCommandState::Kind::None;
+  st.gradingPhase = AppCommandState::GradingPhase::WaitBaseline;
+}
+
+}  // namespace
+
+void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Grading;
+  st.lastCommand = AppCommandState::Kind::Grading;
+  st.gradingBaseline = -1;
+  st.gradingSideChosen = false;
+
+  if (st.featureLineOffsets.size() < 2) {
+    log.push_back("GRADING - the drawing has no feature lines. Draw one with FEATURELINE first: it "
+                  "is the design edge the slopes come off.");
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
+
+  int n = 0;
+  const int idx = GradingSelectedFeatureLine(st, &n);
+  if (n == 1) {
+    st.gradingBaseline = idx;
+    GradingPrompt(st, log);
+    return;
+  }
+  st.gradingPhase = AppCommandState::GradingPhase::WaitBaseline;
+  log.push_back(n > 1 ? "GRADING - select ONE feature line as the baseline. ESC cancels."
+                      : "GRADING - select the feature line to grade from. ESC cancels.");
+}
+
+/// One typed line while GRADING is running.
+///
+/// Not in the anonymous namespace, unlike its sibling below, because `ProcessCommandLineSubmit`'s
+/// blank-line branch has to reach it: a bare Enter is this command's action, and that branch
+/// consumes blank lines before any Kind-keyed block sees them.
+void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
+                               std::vector<std::string>& log) {
+  using P = AppCommandState::GradingPhase;
+  const std::string tr = StringUtil::trimCopy(line);
+  const std::string low = StringUtil::toLowerAsciiCopy(tr);
+
+  switch (st.gradingPhase) {
+    case P::WaitCutSlope:
+    case P::WaitFillSlope: {
+      const bool isCut = st.gradingPhase == P::WaitCutSlope;
+      if (tr.empty()) {
+        GradingPrompt(st, log);
+        return;
+      }
+      double run = 0.0;
+      if (!ParseSlopeRun(tr, &run)) {
+        log.push_back("GRADING - enter a slope as run:rise (3:1), a bare run (3), or a percent "
+                      "(33%).");
+        return;  // stay on this prompt rather than grading at a slope nobody chose
+      }
+      if (isCut)
+        st.gradingCutRun = run;
+      else
+        st.gradingFillRun = run;
+      GradingPrompt(st, log);
+      return;
+    }
+    case P::WaitSurfaceName: {
+      if (tr.empty()) {
+        GradingPrompt(st, log);
+        return;
+      }
+      if (FindSurfaceIndex(st, tr) < 0) {
+        std::string names;
+        for (const CadSurface& s : st.cadSurfaces)
+          names += (names.empty() ? "" : ", ") + s.name;
+        log.push_back("GRADING - no surface named \"" + tr + "\"." +
+                      (names.empty() ? "" : " Surfaces: " + names + "."));
+        return;
+      }
+      st.gradingSurface = tr;
+      GradingPrompt(st, log);
+      return;
+    }
+    case P::WaitSide: {
+      if (low == "l" || low == "left") {
+        st.gradingSideLeft = true;
+        st.gradingSideChosen = true;
+      } else if (low == "r" || low == "right") {
+        st.gradingSideLeft = false;
+        st.gradingSideChosen = true;
+      } else if (!tr.empty()) {
+        log.push_back("GRADING - type L for Left or R for Right, looking along the baseline.");
+        return;
+      }
+      GradingPrompt(st, log);
+      return;
+    }
+    case P::WaitOptions: {
+      if (tr.empty()) {
+        BuildGradingDaylight(st, log);  // bare Enter is the ACTION here, since all of it has defaults
+        return;
+      }
+      if (low == "c" || low == "cut") {
+        st.gradingPhase = P::WaitCutSlope;
+        log.push_back("GRADING - enter cut slope (run:rise, a bare run, or a percent) <" +
+                      FormatSlope(st.gradingCutRun) + ">. Cut is where the design sits BELOW ground.");
+        return;
+      }
+      if (low == "f" || low == "fill") {
+        st.gradingPhase = P::WaitFillSlope;
+        log.push_back("GRADING - enter fill slope (run:rise, a bare run, or a percent) <" +
+                      FormatSlope(st.gradingFillRun) + ">. Fill is where it sits ABOVE ground.");
+        return;
+      }
+      if (low == "s" || low == "surface") {
+        std::string names;
+        for (const CadSurface& s : st.cadSurfaces)
+          names += (names.empty() ? "" : ", ") + s.name;
+        st.gradingPhase = P::WaitSurfaceName;
+        log.push_back(names.empty() ? "GRADING - the drawing has no surfaces to grade to."
+                                    : "GRADING - enter surface name. Surfaces: " + names + ".");
+        return;
+      }
+      if (low == "d" || low == "side") {
+        if (!GradingBaselineIsOpen(st)) {
+          log.push_back("GRADING - this baseline is closed, so outward is away from its interior "
+                        "and there is no side to choose.");
+          return;
+        }
+        st.gradingPhase = P::WaitSide;
+        log.push_back("GRADING - grade to which side, [L]eft or [R]ight, looking along the baseline?");
+        return;
+      }
+      // A slope typed straight at the options prompt is taken as the FILL slope, which is the one
+      // changed most often; anything else keeps the prompt rather than discarding the command.
+      double run = 0.0;
+      if (ParseSlopeRun(tr, &run)) {
+        st.gradingFillRun = run;
+        GradingPrompt(st, log);
+        return;
+      }
+      log.push_back("GRADING - press Enter to grade, or C, F, S" +
+                    std::string(GradingBaselineIsOpen(st) ? " or D" : "") + " to change a setting.");
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+namespace {
+
+/// A viewport pick while GRADING is waiting for its baseline.
+void HandleGradingPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2) ||
+      hit.type != SelectedEntity::Type::FeatureLine) {
+    log.push_back("GRADING - that is not a feature line. Pick the design edge to grade from.");
+    return;
+  }
+  if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.featureLineClosed.size())
+    return;
+  st.gradingBaseline = hit.index;
+  ClearCadSelection(st);
+  st.selection.push_back(hit);
+  GradingPrompt(st, log);
+}
+
+}  // namespace
 
 // --- REQ-088 — feature line elevation editing ---------------------------------------------------
 //
@@ -40860,6 +41329,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       CommitFeatureLinePendingPoint(st, st.featureLinePendingDefaultZ, log);
       return;
     }
+    // GRADING (REQ-371). A bare Enter is the command's ACTION — "grade now, with what is shown" —
+    // so it has to be handled HERE for the same reason FEATURELINE's pending point is above: a
+    // blank line never reaches the Kind-keyed block further down, this one consumes it first.
+    // Without this the options prompt would sit there ignoring Enter, which is exactly the defect
+    // PADSOLID shipped with (#150): a command that looks like it is waiting but cannot be told to go.
+    if (st.active == K::Grading) {
+      ProcessGradingCommandLine(st, line, log);
+      return;
+    }
     // UCS / PLAN (REQ-154). A bare Enter is *meaningful* at several of their prompts — it takes the
     // <World> default, accepts an origin without an X-axis point, or accepts an X axis without a
     // third point — and it has to be handled HERE for the same reason FEATURELINE's is above: a
@@ -42702,6 +43180,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     ReportUnparsedCommandInput(st, line, "Could not parse LENGTHEN input — see command hints.", log, mark);
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Grading) {
+    ProcessGradingCommandLine(st, line, log);  // REQ-371
     return;
   }
 

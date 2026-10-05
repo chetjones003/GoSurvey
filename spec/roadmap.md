@@ -203,12 +203,19 @@ A lightweight board that complements the milestones. Keep each column honest.
     alternative (5) deferred them as "a separate milestone once surfaces are trustworthy" rather
     than declining them on merits; that milestone is **M-Grading** below. The rest of the list
     stands, including the other breakline types.
+  - **Grading design objects moved out of this list 2026-10-05** (decision D-2026-10-05-b), which
+    is the other half of the same ADR-028 phrase — it read "grading design objects *and feature
+    lines*", and only the feature lines had been reversed. REQ-371 takes the first increment: side
+    slopes projected from a feature line to a surface, producing the **daylight line**. The rest of
+    the list still stands: contour smoothing, the other breakline types, Civil 3D surface import
+    and DEM / point-cloud sources remain out of scope.
 
 ### M-Grading — Surface definition UI, 3D linework, and feature lines (incremental)
 - **Goal:** make a surface's definition editable where a designer expects to find it, and give them
   the 3D linework grading is actually designed with.
 - **Delivers:** REQ-075 (already accepted, never built), REQ-085 (3D polyline), REQ-086 (point file
-  as a surface source), REQ-087 (feature line entity), REQ-088 (feature line elevation editing).
+  as a surface source), REQ-087 (feature line entity), REQ-088 (feature line elevation editing),
+  REQ-371 (side slope grading to a surface — the daylight line).
 - **Sequence** — chosen by the user 2026-08-19; each step is independently shippable:
   1. **REQ-075 — Surface Manager panel.** An explorer tree: `Surfaces ▸ <surface> ▸ Definition ▸
      Point Groups / Breaklines / Boundaries / Point Files`, right-click ▸ Add… / Remove / Refresh,
@@ -223,6 +230,13 @@ A lightweight board that complements the milestones. Keep each column honest.
   3. **REQ-087 + REQ-088 — feature lines and the elevation editor.** The largest step by far: a new
      entity kind with its own store, and a station / elevation / grade table. Needs its own ADR
      before implementation — see the open question below.
+  4. **REQ-371 — side slope grading to a surface.** Added 2026-10-05 (D-2026-10-05-b). Consumes
+     step 3's feature line as the baseline and projects cut and fill slopes out to a surface until
+     they daylight. **Needs no new entity and no ADR**: the daylight line is baked ordinary
+     geometry on the EXTRACT precedent (D-2026-08-12 D2), the solver is pure util over
+     `ISurfaceQuery`, and REQ-074 already settles both the slope wording and the refusal to
+     extrapolate past a surface edge. The volume and the graded design surface are explicitly
+     deferred by REQ-371 itself, the latter as the larger and more valuable follow-on.
 - **Open before step 3 starts:** an ADR for the feature-line entity. ADR-028's consequences
   paragraph is explicit that a new store grows a case in selection, extents, layer state, the undo
   snapshot, `.gs`, DXF export, render, snap, pick, grips and properties; the project's own note on

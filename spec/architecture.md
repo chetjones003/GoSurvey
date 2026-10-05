@@ -1042,6 +1042,15 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   non-destructive breaklines, surface import from Civil 3D, DEM and point-cloud sources, and grading
   design objects.
 
+  **Alternative (5) has now been reversed in full, in two steps.** Feature lines came off it
+  2026-08-19 (D-2026-08-19-a) and were built as REQ-087 / REQ-088. Grading objects came off it
+  2026-10-05 (D-2026-10-05-b), whose first increment is REQ-371 — side slopes projected from a
+  feature line to a surface, producing the daylight line. Neither reversal needed this ADR's design
+  to change: REQ-371 adds **no store and no entity kind**, so none of the consequences above grows
+  a new case. Its solver is pure `util/` over `ISurfaceQuery` — the shape this ADR's first
+  consequence already prescribes — and the daylight line is baked ordinary geometry on the EXTRACT
+  precedent (D-2026-08-12 D2) rather than a live object. The rest of the list above still stands.
+
 ### ADR-029 — Distribution: a CI-built installer, a manifest asset, and an updater with no updater binary   (2026-08-15, accepted)
 - Context: releases are built by hand today — CMake bumped locally, a fresh `<version>.iss` copied
   from the previous one with absolute `C:\Users\chetj\...` paths inside it, ISCC run on the developer

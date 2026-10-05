@@ -181,6 +181,14 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::DesignateBoundary:
     return R::RawEntityPick;
 
+  // REQ-371 GRADING: the only click it takes names the baseline FEATURE LINE, so it is an entity
+  // pick rather than a coordinate. Every later phase is typed at the options prompt, and routing a
+  // click there to `Ignore` would swallow it in silence — the TASK-082 failure, which no transcript
+  // can catch because a transcript types and never clicks.
+  case K::Grading:
+    return cmd.gradingPhase == AppCommandState::GradingPhase::WaitBaseline ? R::RawEntityPick
+                                                                           : R::Ignore;
+
   // REQ-317 POLYSOLID: points, except at the `O`bject prompt, where the click names an existing
   // Line, Arc, Circle or Polyline to sweep along instead of a coordinate.
   case K::Polysolid:

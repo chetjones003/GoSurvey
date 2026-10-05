@@ -467,6 +467,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/tinvolume.cpp
   src/util/surfacequery.cpp
   src/util/gridsurface.cpp
+  src/util/daylight.cpp
   src/util/benchscene.cpp
   # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). Pure by that ADR — no GL, no ImGui, no
   # document — so a wrong volume integral or an unclosed shell is caught against a closed-form
@@ -1087,6 +1088,11 @@ if(GOSURVEY_BUILD_TESTS)
     # example and wrong on exactly the cases a real grading comparison needs (no overlap, self vs
     # self, partial overlap).
     tests/SurfaceVolumeTests.cpp
+    # REQ-371 side slope grading. Every expected offset is hand-computed in the test from the two
+    # equations that cross, because a daylight offset wrong by a slope factor is entirely plausible
+    # on screen — and comparing against another approximation of the same thing would hide a
+    # systematic error in both.
+    tests/DaylightTests.cpp
     tests/CadTableTests.cpp
     tests/CadBlockTests.cpp
     tests/CadPipeRunTests.cpp
@@ -1216,6 +1222,10 @@ if(GOSURVEY_BUILD_TESTS)
     src/util/tinvolume.cpp
     src/util/surfacequery.cpp
     src/util/gridsurface.cpp
+    # REQ-371 side slope grading. Pure over ISurfaceQuery — no GL, no document — so a reversed cut/
+    # fill sign or a daylight offset off by a slope factor is caught against hand arithmetic rather
+    # than by looking at a slope in a viewport, where a plausible wrong answer looks correct.
+    src/util/daylight.cpp
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.

@@ -10849,6 +10849,87 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-05 - initial (D-2026-10-05-a; reference screenshots from Civil 3D 2026).
 
+### REQ-371 — Side slope grading to a surface: the daylight line
+- Purpose:     turn a designed edge into buildable earthwork. A pad or road edge cannot stand on
+               vertical walls of soil, so its sides ramp out at a safe slope until they reach
+               existing ground. Where they reach it is the **daylight line**, and that line — not
+               the pad — is what says how much land the work disturbs, which is what gets stripped,
+               fenced and silt-fenced, and what decides whether the design fits the parcel at all
+- Priority:    should
+- Type:        functional
+- Statement:   A **side slope grading** is computed from a **feature line** (REQ-087) used as its
+               baseline, whose per-vertex elevations are the design, and a target **surface**
+               (REQ-069) standing for existing ground.
+
+               Two slopes are given, **separately**: a **cut slope**, used where the baseline sits
+               *below* existing ground, and a **fill slope**, used where it sits *above*. Real
+               earthwork uses different values for the two — a cut face stands steeper than placed
+               fill — so one slope for both would be a simplification with no engineering meaning.
+               Slopes are stated and reported as **run:rise** *and* **percent**, in the exact
+               wording REQ-074 already uses (`grade <n>%  slope <n>:1`), because REQ-105 was amended
+               on 2026-09-09 specifically so that `SURFELEV` and `DIST` could not describe one slope
+               two ways; grading joins that convention rather than adding a third.
+
+               From each baseline point the slope is projected **outward**, horizontally away from
+               the baseline, descending for fill and climbing for cut, until its elevation equals
+               the surface's. That intersection is a **daylight point**; the ordered chain of them
+               is the **daylight line**, which the command produces as ordinary drawing geometry.
+
+               **Outward** is defined without ambiguity: for a **closed** baseline it is away from
+               the enclosed interior; for an **open** one there is no intrinsic outward, so the
+               command requires the side to be chosen, the way Civil 3D's grading tools do.
+
+               A projection that leaves the surface **never extrapolates** — REQ-074's accepted
+               rule. It reports the station that failed to daylight and contributes no point there,
+               rather than inventing ground beyond the surface's edge. A projection that cannot meet
+               the ground at all, because the ground falls away at least as fast as the fill slope
+               descends, is reported the same way rather than searched indefinitely.
+
+               The daylight line is **baked** geometry, not a live object: it is produced once from
+               the inputs as they stand, following the EXTRACT precedent set for contours by
+               decision D-2026-08-12 (D2), and does not track later edits to the baseline or the
+               surface. Re-running the command is how it is refreshed.
+- Acceptance:
+  - on a surface of known plane, a fill baseline of known height above it daylights at the offset
+    computed by hand, within REQ-101, and the daylight point's elevation equals the surface's there;
+  - the same for a cut baseline below the surface, at the separately stated cut slope;
+  - cut slope and fill slope differing produces different offsets, each matching its own hand value,
+    so the two are demonstrably not one slope used twice;
+  - a baseline point already at the surface's elevation daylights at that point, offset zero;
+  - a projection that runs past the surface's edge reports that station as not daylighted, adds no
+    point for it, and reports no elevation beyond the edge (REQ-074);
+  - a fill slope over ground falling away at least as fast reports that it never meets the surface,
+    and the command terminates;
+  - the reported slope wording matches REQ-074's exactly, in both conventions;
+  - a closed baseline's daylight line encloses the baseline, and an open baseline requires a side;
+  - the daylight line survives a `.gs` round trip as ordinary geometry;
+  - every offset above holds at survey coordinate magnitudes (E 2,196,000 / N 1,400,000) within
+    REQ-101, which ADR-054's `double` stores make reachable.
+- Owner-layer: Domain, Commands, IO
+- Status:      proposed
+- Revisions:   2026-10-05 — initial. Reverses the **grading design objects** exclusion carried by
+               ADR-028 and restated in `roadmap.md`'s M-Surfaces out-of-scope list, by decision
+               **D-2026-10-05-b**. That exclusion has already been reversed once in exactly this
+               shape: feature lines sat on the same list until D-2026-08-19-a moved them off it, and
+               this requirement consumes the entity that reversal produced.
+
+               **Deliberately NOT in this requirement**, each because it is separable and none
+               needed for the daylight line to be useful:
+               - the **earthwork volume** between baseline, slopes and ground. Without a design
+                 surface there is nothing for `ComputeSurfaceVolume` to measure against, so a volume
+                 here would mean new integration code rather than reuse;
+               - a **graded design surface** built from the pad, its slopes and the daylight line —
+                 which is what Civil 3D's grading groups produce, and which would give volumes,
+                 contours and statistics for free from tools already built. The larger and more
+                 valuable follow-on;
+               - **linking** the daylight line to its baseline or surface so it updates when they
+                 change. Baked-only is deliberate for the first increment, per the Statement;
+               - **intermediate slope breaks** (a bench or berm part-way down the slope).
+- Known limit: the outward projection advances in finite steps before bisecting the bracketed
+               crossing, so ground detail finer than one step can hide a second crossing and the
+               nearest one is reported. Stated here rather than discovered later; the step is chosen
+               against the surface's own triangle scale.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
