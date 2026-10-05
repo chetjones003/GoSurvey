@@ -2,7 +2,7 @@
 
 What GoSurvey's DWG **save** and **open** still leave out for **AutoCAD, Civil 3D and other programs** (the ordinary DWG stream — not the ADR-044 trailer GoSurvey reads on reopen).
 
-Tracking issue: **#601**. Evidence is from `beta` at **`bf92adde`** (2026-10-05).
+Tracking issue: **#601** (closed 2026-10-05). Evidence is from `beta` at **`81211cde`** (2026-10-05).
 
 ## The short version
 
@@ -10,13 +10,7 @@ GoSurvey saves DWG as **R2000 by default** and can export **R2004 through R2018*
 
 As of 2026-10-05, the original **Group A** inventory and **Group B** features through annotative scaling, fields, and dynamic blocks (#602–#622, #617, #618) are **shipped on `beta`**. The export dialog builds its loss list from the actual drawing (`ComputeDwgExportLosses` in `LibreDwgCad.cpp`, modal in `CadUi_Modals.cpp`, issue #614).
 
-**Still tracked under #601:**
-
-| Issue | What is left |
-|---|---|
-| **#624** | **Shipped (REQ-385):** imported **LIGHT** + **SUN** preserved through `.gs` and R2010+ DWG. **Deferred:** **LIGHTLIST**, sun study, GoSurvey lighting UI. REQ-371/372 shipped earlier. |
-
-Close **#601** when remaining **#624** follow-ups (LIGHTLIST / sun study) are resolved or moved off this tracker, or close **#624** and **#601** together if those deferrals are accepted as non-blocking. **#688** annotation context shipped (**REQ-384**); see detail section below.
+**Open tracker issues:** none — **#601** and **#624** closed 2026-10-05 after REQ-385 (PR **#713**). Optional follow-ups (**LIGHTLIST**, sun study, GoSurvey lighting UI) stay listed under **Remaining gaps** below; file a new issue if one is scheduled.
 
 ## Shipped on `beta` (child issues closed)
 
