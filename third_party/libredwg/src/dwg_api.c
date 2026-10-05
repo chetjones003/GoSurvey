@@ -26488,9 +26488,16 @@ dwg_add_POLYLINE_PFACE (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
           = dwg_add_handleref (dwg, 3, vtx->handle.value, pl);
       if (j == numfaces - 1)
         {
-          // FIXME
-          vtx->tio.entity->prev_entity
-              = dwg_add_handleref (dwg, 4, vtx->handle.value - 1, vtx);
+          // Link to the previous owned vertex in THIS mesh, not handle-1 (handles are not
+          // consecutive once the block already holds other entities — issue GoSurvey #663).
+          BITCODE_H prev = NULL;
+          if (numfaces > 1)
+            prev = _pl->vertex[numverts + j - 1];
+          else if (numverts > 0)
+            prev = _pl->vertex[numverts - 1];
+          if (prev)
+            vtx->tio.entity->prev_entity
+                = dwg_add_handleref (dwg, 4, prev->handleref.value, vtx);
           _pl->last_vertex
               = dwg_add_handleref (dwg, 4, vtx->handle.value, NULL);
         }

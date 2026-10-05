@@ -354,6 +354,39 @@ TEST_CASE("ExportDwgFile writes a built TIN surface as POLYLINE_PFACE (issue #61
   REQUIRE(CountDwgPolylinePface(p.c_str()) == 1);
 }
 
+TEST_CASE("ExportDwgFile survives repeated save with two TIN surfaces (issue #663)",
+          "[dwg][libredwg][issue663]") {
+  HeadlessImGuiScope imgui;
+  ScratchDir dir("dwg-two-tin-stress");
+  const auto p = (dir.path / "two.dwg").string();
+  const std::filesystem::path demo =
+      std::filesystem::path(GOSURVEY_SAMPLES_DIR) / "surface-demo.dwg";
+  REQUIRE(std::filesystem::exists(demo));
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, demo.u8string().c_str(), log));
+  INFO("imported, creating first surface");
+  REQUIRE(CreateSurfaceFromPointGroups(st, "Test EG", {"Existing Ground"}, log) >= 0);
+  EnsureEntityIds(st);
+  RefreshSurfaceDisplayGeometry(st);
+  REQUIRE(CreateSurfaceFromPointGroups(st, "Second", {"Ground + Curb"}, log) >= 0);
+  EnsureEntityIds(st);
+  REQUIRE(st.cadSurfaces.size() >= 2);
+  REQUIRE(st.cadSurfaceAttrs.size() >= 2);
+  REQUIRE(st.cadSurfaceAttrs[0].id != 0);
+  REQUIRE(st.cadSurfaceAttrs[1].id != 0);
+  REQUIRE(st.cadSurfaceAttrs[0].id != st.cadSurfaceAttrs[1].id);
+  REQUIRE(st.cadSurfaces[0].tin != nullptr);
+  REQUIRE(st.cadSurfaces[1].tin != nullptr);
+  for (int i = 0; i < 100; ++i) {
+    CAPTURE(i);
+    RefreshSurfaceDisplayGeometry(st);
+    REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  }
+  // First surface stays POLYLINE_PFACE; the second uses 3DFACE (LibreDWG issue #663 workaround).
+  REQUIRE(CountDwgPolylinePface(p.c_str()) >= 1);
+}
+
 TEST_CASE("DWG export loss summary omits exportable mesh and TIN (issue #611 / #614)",
           "[dwg][libredwg][issue611][issue614]") {
   AppCommandState st;
