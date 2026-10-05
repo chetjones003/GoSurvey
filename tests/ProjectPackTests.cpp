@@ -365,6 +365,60 @@ TEST_CASE("req380 a damaged pack (failed checksum) leaves nothing behind", "[req
   CHECK(DirIsEmptyOrMissing(dest));
 }
 
+TEST_CASE("req380 review fixes: reserved names, earlier packs, two project files, non-cloud files kept",
+          "[req380]") {
+  std::string err;
+  {  // Windows device names would open a device, not create a file
+    TempDir tmp("reserved");
+    MakeZip(tmp.path / "a.gspack", {{"gspack.json", ManifestFor("id-1")},
+                                    {"Hostile.gsproj", MarkerFor("id-1")},
+                                    {"Drawings/NUL.dwg", "x"}});
+    CHECK_FALSE(gspack::ExtractPack(tmp.path / "a.gspack", tmp.path / "o", nullptr, nullptr, &err));
+    CHECK(err.find("unsafe") != std::string::npos);
+    CHECK(DirIsEmptyOrMissing(tmp.path / "o"));
+  }
+  {  // wrong JSON types in a hostile manifest are a clean rejection, not a throw
+    TempDir tmp("types");
+    MakeZip(tmp.path / "a.gspack", {{"gspack.json", R"({"formatVersion":1,"projectId":5,"projectName":[]})"},
+                                    {"Hostile.gsproj", MarkerFor("id-1")}});
+    CHECK_FALSE(gspack::ExtractPack(tmp.path / "a.gspack", tmp.path / "o", nullptr, nullptr, &err));
+    CHECK(DirIsEmptyOrMissing(tmp.path / "o"));
+  }
+  {  // an earlier pack in the folder is not packed again; a second project file blocks packing
+    TempDir tmp("plan2");
+    gsproj::Project p = MakeProject(tmp.path / "src");
+    WriteText(p.Folder() / "old.gspack", "earlier pack");
+    WriteText(p.Folder() / "PointClouds" / "README.txt", "keep me");
+    gspack::PackPlan plan;
+    REQUIRE(gspack::PlanPack(p, fs::path(), &plan, &err));
+    for (const auto& f : plan.files) {
+      CHECK(f.rel != "old.gspack");
+      if (f.rel == "PointClouds/README.txt")
+        CHECK_FALSE(f.pointCloud);  // not a cloud just because of the folder it is in
+    }
+    WriteText(p.Folder() / "Copy.gsproj", "{}");
+    CHECK_FALSE(gspack::PlanPack(p, fs::path(), &plan, &err));
+    CHECK(err.find("exactly one project file") != std::string::npos);
+  }
+  {  // re-packing an opened pack: the left-out list follows the new pack, and clears when nothing is left out
+    TempDir tmp("reomit");
+    const gsproj::Project p = MakeProject(tmp.path / "src");
+    REQUIRE(PackTo(p, tmp.path / "a.gspack", true, &err));
+    fs::path marker;
+    REQUIRE(gspack::ExtractPack(tmp.path / "a.gspack", tmp.path / "o1", &marker, nullptr, &err));
+    gsproj::Project opened;
+    REQUIRE(gsproj::Load(marker, &opened, &err));
+    CHECK_FALSE(projfiles::PackOmitted(opened).empty());
+    // The cloud comes back, and the project is packed in full.
+    WriteText(opened.Folder() / "PointClouds" / "site.e57", "back");
+    REQUIRE(PackTo(opened, tmp.path / "b.gspack", false, &err));
+    REQUIRE(gspack::ExtractPack(tmp.path / "b.gspack", tmp.path / "o2", &marker, nullptr, &err));
+    gsproj::Project again;
+    REQUIRE(gsproj::Load(marker, &again, &err));
+    CHECK(projfiles::PackOmitted(again).empty());
+  }
+}
+
 TEST_CASE("req380 a pack that cannot be written leaves no half file", "[req380]") {
   TempDir tmp("nowrite");
   const gsproj::Project p = MakeProject(tmp.path / "src");

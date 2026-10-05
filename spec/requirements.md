@@ -11211,7 +11211,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      `.gspack` is a standard ZIP (D-2026-10-05-i, ADR-066) whose entries are project-relative paths,
      plus a `gspack.json` manifest (format version, project ID, project name, date, left-out files, and
      each file's exact modified time, restored on open so a point cloud's `.gscloud` cache still matches
-     its cloud). Left out of every pack: the lock file (REQ-382 clause 4) and temporary files. If Health finds problems (linked, missing
+     its cloud). Left out of every pack: the lock file (REQ-382 clause 4), temporary files and other `.gspack` files. A
+     folder holding more than one project file at its top level cannot be packed. A point cloud is a file
+     whose type is a point cloud (`.e57`, `.gscloud`), wherever it sits. If Health finds problems (linked, missing
      or unsaved files) the user sees them with the **copy links into the project** action and must
      either fix them or choose **Pack anyway**; a linked or missing file is not in the pack.
   2. **Size warning** shows the total size before writing (and, separately, the point clouds' share)

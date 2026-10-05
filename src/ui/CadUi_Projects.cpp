@@ -837,7 +837,8 @@ void DrawProjectPackModal(AppCommandState& cmd, std::vector<std::string>& log) {
     PopProductDialogAccent();
     return;
   }
-  if (!pp.planned) {
+  if (!pp.planned && !pp.planTried) {
+    pp.planTried = true;
     FlushProjectPointDb(*s, log);  // the pack must hold the points as the drawings show them
     pp.planError.clear();
     pp.planned = gspack::PlanPack(s->project, fs::path(), &pp.plan, &pp.planError);
@@ -869,7 +870,7 @@ void DrawProjectPackModal(AppCommandState& cmd, std::vector<std::string>& log) {
   if (ImGui::Button("Copy links into the project")) {
     size_t converted = 0;
     CopyProjectLinksIn(cmd, pp.projectUid, log, &converted);
-    pp.planned = false;
+    pp.planned = pp.planTried = false;  // re-plan
   }
   ImGui::EndDisabled();
   ImGui::Separator();

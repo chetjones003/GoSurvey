@@ -5002,6 +5002,7 @@ struct AppCommandState {
   struct ProjectPackPrompt {
     uint32_t         projectUid = 0;
     bool             planned = false;
+    bool             planTried = false;  ///< a failed plan is not retried every frame
     gspack::PackPlan plan;
     std::string      planError;
     bool             excludePointClouds = false;

@@ -63,17 +63,24 @@ bool EndsWith(const std::string& s, const std::string& suffix) {
 
 /// REQ-380 clause 1: never packed — the lock file (REQ-382) and temporary files.
 bool NeverPacked(const std::string& name) {
-  return EndsWith(name, ".gsproj.lock") || EndsWith(name, ".tmp");
+  return EndsWith(name, ".gsproj.lock") || EndsWith(name, ".tmp") || EndsWith(name, kExtension);
 }
 
 bool IsPointCloudFile(const gsproj::Project& p, const std::string& rel) {
-  if (projfiles::RoleForFile(fs::u8path(rel)) == projfiles::Role::PointCloud)
+  (void)p;  // by what the file is, not by the folder it sits in: a README in PointClouds/ is not a cloud
+  return projfiles::RoleForFile(fs::u8path(rel)) == projfiles::Role::PointCloud;
+}
+
+/// Windows opens a device, not a file, for these names (with or without an extension).
+bool IsReservedDeviceName(std::string seg) {
+  const size_t dot = seg.find('.');
+  if (dot != std::string::npos)
+    seg.resize(dot);
+  seg = Lower(seg);
+  if (seg == "con" || seg == "prn" || seg == "aux" || seg == "nul")
     return true;
-  const auto it = p.layout.find(projfiles::LayoutRole(projfiles::Role::PointCloud));
-  if (it == p.layout.end() || it->second.empty())
-    return false;
-  const std::string dir = Lower(it->second) + "/";
-  return Lower(rel).compare(0, dir.size(), dir) == 0;
+  return seg.size() == 4 && (seg.compare(0, 3, "com") == 0 || seg.compare(0, 3, "lpt") == 0) && seg[3] >= '1' &&
+         seg[3] <= '9';
 }
 
 /// A name that may be extracted: relative, inside the folder, forward slashes, no empty / "." / ".."
@@ -84,7 +91,8 @@ bool SafeEntryName(const std::string& name) {
   std::string seg;
   for (size_t i = 0; i <= name.size(); ++i) {
     if (i == name.size() || name[i] == '/') {
-      if (seg.empty() || seg == "." || seg == ".." || seg.back() == '.' || seg.back() == ' ')
+      if (seg.empty() || seg == "." || seg == ".." || seg.back() == '.' || seg.back() == ' ' ||
+          IsReservedDeviceName(seg))
         return false;
       seg.clear();
     } else {
@@ -134,6 +142,13 @@ bool PlanPack(const gsproj::Project& p, const fs::path& skip, PackPlan* out, std
   }
   if (ec)
     return Fail(err, "The project folder could not be listed: " + ec.message());
+  size_t markers = 0;
+  for (const PackFile& f : plan.files)
+    if (f.rel.find('/') == std::string::npos && EndsWith(f.rel, gsproj::kExtension))
+      ++markers;
+  if (markers != 1)
+    return Fail(err, "The project folder must hold exactly one project file (.gsproj) to be packed; it holds " +
+                         std::to_string(markers) + ".");
   std::sort(plan.files.begin(), plan.files.end(), [](const PackFile& a, const PackFile& b) { return a.rel < b.rel; });
   if (out)
     *out = std::move(plan);
@@ -164,17 +179,18 @@ bool WritePack(const gsproj::Project& p, const PackPlan& plan, const PackOptions
   for (const PackFile* f : keep)
     files.push_back({{"path", f->rel}, {"size", f->sizeBytes}, {"mtimeTicks", f->mtimeTicks}});
   mj["files"] = std::move(files);
-  const std::string manifestText = mj.dump(2);
+  const std::string manifestText = mj.dump(2, ' ', false, json::error_handler_t::replace);
 
   const fs::path tmp = out.parent_path() / fs::u8path(out.filename().u8string() + ".tmp");
   std::error_code ec;
+  FileCloser fc(OpenFile(tmp, L"wb"));
   auto fail = [&](const std::string& msg) {
+    fc.Close();  // Windows will not delete a file that is still open
     std::error_code e2;
     fs::remove(tmp, e2);
     return Fail(err, msg);
   };
 
-  FileCloser fc(OpenFile(tmp, L"wb"));
   if (!fc.f)
     return Fail(err, "The pack file could not be created: " + out.u8string());
   mz_zip_archive zip{};
@@ -240,6 +256,9 @@ struct EntryInfo {
 };
 
 bool ReadText(ZipReader& z, mz_uint index, std::string* text) {
+  mz_zip_archive_file_stat st{};
+  if (!mz_zip_reader_file_stat(&z.zip, index, &st) || st.m_uncomp_size > 16ull * 1024 * 1024)
+    return false;  // the manifest and the project file are small; never load a huge "text" entry
   size_t n = 0;
   void* p = mz_zip_reader_extract_to_heap(&z.zip, index, &n, 0);
   if (!p)
@@ -309,7 +328,10 @@ bool ExtractPack(const fs::path& pack, const fs::path& destDir, fs::path* gsproj
   if (!ReadText(z, entries[static_cast<size_t>(manifestIdx)].index, &text))
     return Fail(err, "'" + packName + "' is damaged (the manifest failed its checksum). Nothing was extracted.");
   const json mj = json::parse(text, nullptr, false);
-  if (!mj.is_object() || !mj.value("projectId", std::string()).size() || !mj.contains("formatVersion") ||
+  auto str = [](const json& j, const char* key) {
+    return j.is_object() && j.contains(key) && j[key].is_string() ? j[key].get<std::string>() : std::string();
+  };
+  if (!mj.is_object() || str(mj, "projectId").empty() || !mj.contains("formatVersion") ||
       !mj["formatVersion"].is_number_integer())
     return Fail(err, "'" + packName + "' has an unreadable manifest. Nothing was extracted.");
   Manifest m;
@@ -317,9 +339,9 @@ bool ExtractPack(const fs::path& pack, const fs::path& destDir, fs::path* gsproj
   if (m.formatVersion > kFormatVersion)
     return Fail(err, "'" + packName + "' was made by a newer GoSurvey (pack format " + std::to_string(m.formatVersion) +
                          "). Update GoSurvey to open it.");
-  m.projectId = mj.value("projectId", std::string());
-  m.projectName = mj.value("projectName", std::string());
-  m.packedUnix = mj.value("packedUnix", std::int64_t{0});
+  m.projectId = str(mj, "projectId");
+  m.projectName = str(mj, "projectName");
+  m.packedUnix = mj.contains("packedUnix") && mj["packedUnix"].is_number_integer() ? mj["packedUnix"].get<std::int64_t>() : 0;
   if (mj.contains("excluded") && mj["excluded"].is_array())
     for (const auto& x : mj["excluded"])
       if (x.is_string() && SafeEntryName(x.get<std::string>()))
@@ -329,7 +351,7 @@ bool ExtractPack(const fs::path& pack, const fs::path& destDir, fs::path* gsproj
   if (!ReadText(z, marker.index, &text))
     return Fail(err, "'" + packName + "' is damaged (the project file failed its checksum). Nothing was extracted.");
   const json pj = json::parse(text, nullptr, false);
-  if (!pj.is_object() || pj.value("id", std::string()) != m.projectId)
+  if (!pj.is_object() || str(pj, "id") != m.projectId)
     return Fail(err, "'" + packName + "' was rejected: its project file does not match its manifest. Nothing was extracted.");
 
   std::map<std::string, std::int64_t> mtimes;
@@ -345,7 +367,10 @@ bool ExtractPack(const fs::path& pack, const fs::path& destDir, fs::path* gsproj
   if (fs::exists(destDir, ec)) {
     if (!fs::is_directory(destDir, ec))
       return Fail(err, "'" + destDir.u8string() + "' is not a folder.");
-    if (fs::directory_iterator(destDir, ec) != fs::directory_iterator())
+    fs::directory_iterator first(destDir, ec);
+    if (ec)
+      return Fail(err, "The folder '" + destDir.u8string() + "' could not be read: " + ec.message());
+    if (first != fs::directory_iterator())
       return Fail(err, "The folder '" + destDir.u8string() + "' already holds files. Pick an empty folder; nothing was extracted.");
   }
   std::uintmax_t need = 0;
@@ -411,7 +436,9 @@ bool ExtractPack(const fs::path& pack, const fs::path& destDir, fs::path* gsproj
   for (const std::string& x : m.excluded)
     if (!EndsWith(x, ".gscloud"))  // the cache is derived; the cloud itself is what the user sees
       omitted.push_back(x);
-  if (!omitted.empty()) {
+  // The manifest is the truth: a list carried in the pack's own .gsproj (re-packed from an opened pack) is
+  // replaced, and cleared when this pack left nothing out.
+  if (!omitted.empty() || !projfiles::PackOmitted(proj).empty()) {
     projfiles::SetPackOmitted(&proj, omitted);
     if (!gsproj::Save(proj, &perr)) {
       CleanDest(destDir, created);
