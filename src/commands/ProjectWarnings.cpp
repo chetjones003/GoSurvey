@@ -175,6 +175,7 @@ void TagClipboardOrigin(AppCommandState& st) {
   cb.srcProjectUid = (i >= 1 && i < static_cast<int>(st.drawingTabs.size())) ? st.drawingTabs[static_cast<size_t>(i)].projectUid : 0u;
   const Session* s = cb.srcProjectUid ? SessionOf(st, cb.srcProjectUid) : nullptr;
   cb.srcProjectName = s ? s->project.name : std::string();
+  cb.srcProjectFolder = s ? s->project.Folder().u8string() : std::string();
   cb.srcZone = st.drawingSettings.zoneCode;
   cb.srcMetersPerUnit = MetersPerUnitOf(st);
 }
@@ -189,8 +190,14 @@ PasteCheck CheckClipboardPaste(const AppCommandState& st) {
     return pc;  // two standalone drawings: exactly as before projects existed
 
   const Session* ds = dest ? SessionOf(st, dest) : nullptr;
-  const std::string destName = ds ? ds->project.name : std::string("(no project)");
-  const std::string srcName = cb.srcProjectName.empty() ? std::string("(no project)") : cb.srcProjectName;
+  std::string destName = ds ? ds->project.name : std::string("(no project)");
+  std::string srcName = cb.srcProjectName.empty() ? std::string("(no project)") : cb.srcProjectName;
+  // Two open projects can share a name (a received copy of a project you also have open): then the name
+  // alone does not say which is which, so each is shown with its folder (issue #726).
+  if (ds != nullptr && cb.srcProjectUid != 0 && cb.srcProjectUid != dest && destName == srcName) {
+    destName += " (" + ds->project.Folder().u8string() + ")";
+    srcName += " (" + cb.srcProjectFolder + ")";
+  }
 
   const bool zoneDiffers = !cb.srcZone.empty() && !st.drawingSettings.zoneCode.empty() &&
                            cb.srcZone != st.drawingSettings.zoneCode;
