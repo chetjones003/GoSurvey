@@ -4,6 +4,7 @@
 #include "GsIo.hpp"
 #include "LibreDwg.hpp"
 #include "LibreDwgCad.hpp"
+#include "LibreDwgAnnotContext.hpp"
 #include "LibreDwgMaterial.hpp"
 
 #include "CadCommands.hpp"
@@ -4573,4 +4574,57 @@ TEST_CASE("DWG import maps POLYLINE_PFACE to CadMesh (REQ-170, issue #613)",
   REQUIRE(st.cadMeshes.size() == 1);
   CHECK(st.cadMeshes[0]->triangleCount() == 2);
   CHECK(st.cadMeshes[0]->vertexCount() == 4);
+}
+
+TEST_CASE("Annotative MTEXT export writes annotation context objects (REQ-384 inc 2, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  ScratchDir dir("anno-mtext-context");
+  const auto p = (dir.path / "anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale scale1;
+  scale1.name = "1:1";
+  scale1.paperUnits = 1.f;
+  scale1.drawingUnits = 1.f;
+  CadAnnotationScale scale2;
+  scale2.name = "1:20";
+  scale2.paperUnits = 1.f;
+  scale2.drawingUnits = 20.f;
+  st.annotationScales.push_back(scale1);
+  st.annotationScales.push_back(scale2);
+  st.currentAnnotationScaleIndex = 0;
+  CadAnnotation m{};
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.annotative = true;
+  m.text = "Scale me";
+  m.insX = 1.f;
+  m.insY = 2.f;
+  m.boxMinX = 0.f;
+  m.boxMaxX = 10.f;
+  m.boxMinY = 0.f;
+  m.boxMaxY = 2.f;
+  st.cadAnnotations.push_back(std::move(m));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  CHECK(DwgAnnotContextCountObjects(&dwg) >= 3);
+  dwg_free(&dwg);
+}
+
+TEST_CASE("Annotation context scan and import log (REQ-384 inc 1, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  REQUIRE(DwgTestAddBareMtextContextObject(dwg));
+  CHECK(DwgAnnotContextCountObjects(dwg) >= 1);
+  DwgAnnotContextImportBegin();
+  DwgAnnotContextImportScan(dwg);
+  std::vector<std::string> log;
+  DwgAnnotContextImportAppendLog(log);
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back().find("annotation context") != std::string::npos);
+  dwg_free(dwg);
+  std::free(dwg);
 }

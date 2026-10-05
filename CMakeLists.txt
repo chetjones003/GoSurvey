@@ -446,6 +446,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/LibreDwgField.cpp
   src/io/LibreDwgDynamicBlock.cpp
   src/io/LibreDwgMaterial.cpp
+  src/io/LibreDwgAnnotContext.cpp
   src/io/LibreDwgVisualStyle.cpp
   src/io/DxfColors.cpp
   src/io/DwgMeshConvert.cpp
