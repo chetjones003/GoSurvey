@@ -85,6 +85,200 @@ bool Base64Decode(const std::string& in, std::string* out) {
   return true;
 }
 
+// REQ-357: the Drawing Settings object of the trailer. Shared by the drawing and by a project's
+// defaults (REQ-375), so the two can never disagree about a setting's stored form.
+json DrawingSettingsToJson(const DrawingSettings& ds) {
+  json o;
+  o["angularUnits"] = ds.angularUnits == DrawingSettings::AngularUnits::Radians ? "radians"
+                      : ds.angularUnits == DrawingSettings::AngularUnits::Grads ? "grads"
+                                                                                 : "degrees";
+  o["footDefinition"] =
+      ds.footDefinition == DrawingSettings::FootDefinition::International ? "international" : "usSurvey";
+  o["scaleInsertedObjects"] = ds.scaleInsertedObjects;
+  o["setDrawingVariables"] = ds.setDrawingVariables;
+  o["zone"] = ds.zoneCode;  // REQ-358: CS-MAP code, "" = No Datum, No Projection
+  // REQ-359 item 4: the geographic marker (WORLD design point + north, degrees CCW from +X).
+  o["markerX"] = ds.markerX;
+  o["markerY"] = ds.markerY;
+  o["markerNorthDeg"] = ds.markerNorthDeg;
+  {  // REQ-360: the Transformation tab. Angles in degrees, L_ref / rotation point WORLD.
+    const DrawingSettings::Transform& t = ds.transform;
+    json x;
+    x["apply"] = t.apply;
+    x["applySeaLevel"] = t.applySeaLevel;
+    x["elevation"] = t.elevation;
+    x["spheroidRadiusM"] = t.spheroidRadiusM;
+    x["computation"] =
+        t.computation == DrawingSettings::Transform::Computation::UserDefined ? "userDefined" : "referencePoint";
+    x["userScaleFactor"] = t.userScaleFactor;
+    x["refLocal"] = json::array({t.refLocalX, t.refLocalY});
+    x["refGrid"] = json::array({t.refGridE, t.refGridN});
+    x["refPointNumber"] = t.refPointNumber;
+    x["rotation"] = t.rotation == DrawingSettings::Transform::Rotation::RotationPoint ? "rotationPoint"
+                    : t.rotation == DrawingSettings::Transform::Rotation::Azimuth    ? "azimuth"
+                                                                                     : "toNorth";
+    x["rotLocal"] = json::array({t.rotLocalX, t.rotLocalY});
+    x["rotGrid"] = json::array({t.rotGridE, t.rotGridN});
+    x["rotPointNumber"] = t.rotPointNumber;
+    x["toNorthDeg"] = t.toNorthDeg;
+    x["localAzimuthDeg"] = t.localAzimuthDeg;
+    x["gridAzimuthDeg"] = t.gridAzimuthDeg;
+    o["transform"] = std::move(x);
+  }
+  {  // REQ-361: the Object Layers rows, in ObjectLayerKind order.
+    json rows = json::array();
+    for (const ObjectLayerRow& r : ds.objectLayers) {
+      json j;
+      j["layer"] = r.layer;
+      j["modifier"] = r.modifier == ObjectLayerRow::Modifier::Prefix   ? "prefix"
+                      : r.modifier == ObjectLayerRow::Modifier::Suffix ? "suffix"
+                                                                       : "none";
+      j["value"] = r.value;
+      j["locked"] = r.locked;
+      rows.push_back(std::move(j));
+    }
+    o["objectLayers"] = std::move(rows);
+  }
+  // REQ-363: the online map, by name so a reordered enum cannot change a saved choice.
+  o["onlineMap"] = OnlineMapStorageName(ds.onlineMap);
+  if (ds.overridden != 0) {  // REQ-375: which project defaults this drawing overrides, by name
+    json names = json::array();
+    for (unsigned k = 0; k < kProjectDefaultKeyCount; ++k)
+      if (ds.IsOverridden(static_cast<ProjectDefaultKey>(k)))
+        names.push_back(kProjectDefaultKeyNames[k]);
+    o["overridden"] = std::move(names);
+  }
+  // REQ-364: captured map areas — each tile's image exactly as it was served, base64.
+  if (!ds.capturedAreas.empty()) {
+    json areas = json::array();
+    for (const DrawingSettings::CapturedArea& a : ds.capturedAreas) {
+      json ja;
+      ja["map"] = OnlineMapStorageName(a.map);
+      ja["level"] = a.level;
+      json tiles = json::array();
+      for (const DrawingSettings::CapturedTile& t : a.tiles) {
+        if (!t.image)
+          continue;
+        json jt;
+        jt["x"] = t.x;
+        jt["y"] = t.y;
+        jt["image"] = Base64Encode(*t.image);
+        tiles.push_back(std::move(jt));
+      }
+      ja["tiles"] = std::move(tiles);
+      areas.push_back(std::move(ja));
+    }
+    o["capturedAreas"] = std::move(areas);
+  }
+  return o;
+}
+
+void DrawingSettingsFromJson(const json& o, DrawingSettings& ds, std::vector<std::string>& log) {
+  const std::string ang = o.value("angularUnits", std::string("degrees"));
+  ds.angularUnits = ang == "radians" ? DrawingSettings::AngularUnits::Radians
+                                    : ang == "grads" ? DrawingSettings::AngularUnits::Grads
+                                                     : DrawingSettings::AngularUnits::Degrees;
+  ds.footDefinition = o.value("footDefinition", std::string("usSurvey")) == "international"
+                                          ? DrawingSettings::FootDefinition::International
+                                          : DrawingSettings::FootDefinition::UsSurvey;
+  ds.scaleInsertedObjects = o.value("scaleInsertedObjects", true);
+  ds.setDrawingVariables = o.value("setDrawingVariables", true);
+  // REQ-358: kept verbatim, even when this dictionary does not know it (nothing silently dropped).
+  if (o.contains("zone") && o["zone"].is_string())
+    ds.zoneCode = o["zone"].get<std::string>();
+  ds.markerX = o.value("markerX", 0.0);
+  ds.markerY = o.value("markerY", 0.0);
+  ds.markerNorthDeg = o.value("markerNorthDeg", 90.0);
+  // REQ-363: absent or unknown → Map Off.
+  ds.onlineMap = OnlineMapFromStorageName(o.value("onlineMap", std::string()));
+  ds.overridden = 0;
+  if (o.contains("overridden") && o["overridden"].is_array())
+    for (const json& n : o["overridden"])
+      for (unsigned k = 0; k < kProjectDefaultKeyCount; ++k)
+        if (n.is_string() && n.get<std::string>() == kProjectDefaultKeyNames[k])
+          ds.SetOverridden(static_cast<ProjectDefaultKey>(k), true);
+  // REQ-364: captured map areas. A damaged tile (or an area of an unknown map) is dropped and said.
+  if (o.contains("capturedAreas") && o["capturedAreas"].is_array()) {
+    int dropped = 0;
+    for (const json& ja : o["capturedAreas"]) {
+      if (!ja.is_object() || !ja.contains("tiles") || !ja["tiles"].is_array()) {
+        ++dropped;
+        continue;
+      }
+      DrawingSettings::CapturedArea a;
+      a.map = OnlineMapFromStorageName(ja.contains("map") && ja["map"].is_string() ? ja["map"].get<std::string>()
+                                                                                   : std::string());
+      a.level = ja.contains("level") && ja["level"].is_number_integer() ? ja["level"].get<int>() : -1;
+      if (a.map == DrawingSettings::OnlineMap::Off || a.level < 0 || a.level > 30) {
+        dropped += static_cast<int>(ja["tiles"].size());
+        continue;
+      }
+      for (const json& jt : ja["tiles"]) {
+        std::string image;
+        if (!jt.is_object() || !jt.contains("x") || !jt["x"].is_number_integer() || !jt.contains("y") ||
+            !jt["y"].is_number_integer() || !jt.contains("image") || !jt["image"].is_string() ||
+            !Base64Decode(jt["image"].get<std::string>(), &image) || image.empty()) {
+          ++dropped;
+          continue;
+        }
+        a.tiles.push_back({jt["x"].get<int>(), jt["y"].get<int>(), std::make_shared<const std::string>(std::move(image))});
+      }
+      if (!a.tiles.empty())
+        ds.capturedAreas.push_back(std::move(a));
+    }
+    if (dropped > 0)
+      log.push_back("Open: " + std::to_string(dropped) + " damaged captured map tile(s) were dropped (REQ-364).");
+  }
+  if (o.contains("transform") && o["transform"].is_object()) {  // REQ-360; absent → the defaults
+    const json& x = o["transform"];
+    DrawingSettings::Transform& t = ds.transform;
+    const auto pair = [&](const char* key, double* a, double* b) {
+      if (x.contains(key) && x[key].is_array() && x[key].size() == 2 && x[key][0].is_number() &&
+          x[key][1].is_number()) {
+        *a = x[key][0].get<double>();
+        *b = x[key][1].get<double>();
+      }
+    };
+    t.apply = x.value("apply", false);
+    t.applySeaLevel = x.value("applySeaLevel", false);
+    t.elevation = x.value("elevation", 0.0);
+    t.spheroidRadiusM = x.value("spheroidRadiusM", 0.0);
+    t.computation = x.value("computation", std::string("referencePoint")) == "userDefined"
+                        ? DrawingSettings::Transform::Computation::UserDefined
+                        : DrawingSettings::Transform::Computation::ReferencePoint;
+    t.userScaleFactor = x.value("userScaleFactor", 1.0);
+    pair("refLocal", &t.refLocalX, &t.refLocalY);
+    pair("refGrid", &t.refGridE, &t.refGridN);
+    t.refPointNumber = x.value("refPointNumber", 0);
+    const std::string rot = x.value("rotation", std::string("toNorth"));
+    t.rotation = rot == "rotationPoint" ? DrawingSettings::Transform::Rotation::RotationPoint
+                 : rot == "azimuth"     ? DrawingSettings::Transform::Rotation::Azimuth
+                                        : DrawingSettings::Transform::Rotation::ToNorth;
+    pair("rotLocal", &t.rotLocalX, &t.rotLocalY);
+    pair("rotGrid", &t.rotGridE, &t.rotGridN);
+    t.rotPointNumber = x.value("rotPointNumber", 0);
+    t.toNorthDeg = x.value("toNorthDeg", 0.0);
+    t.localAzimuthDeg = x.value("localAzimuthDeg", 0.0);
+    t.gridAzimuthDeg = x.value("gridAzimuthDeg", 0.0);
+  }
+  // REQ-361 item 6: absent (or a row missing) → the NCS defaults.
+  if (o.contains("objectLayers") && o["objectLayers"].is_array()) {
+    const json& rows = o["objectLayers"];
+    for (size_t i = 0; i < rows.size() && i < ds.objectLayers.size(); ++i) {
+      if (!rows[i].is_object())
+        continue;
+      ObjectLayerRow& r = ds.objectLayers[i];
+      r.layer = rows[i].value("layer", r.layer);
+      const std::string mod = rows[i].value("modifier", std::string("none"));
+      r.modifier = mod == "prefix"   ? ObjectLayerRow::Modifier::Prefix
+                   : mod == "suffix" ? ObjectLayerRow::Modifier::Suffix
+                                     : ObjectLayerRow::Modifier::None;
+      r.value = rows[i].value("value", std::string());
+      r.locked = rows[i].value("locked", false);
+    }
+  }
+}
+
 void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["id"] = e.id;  // REQ-076 stable identity; additive, no format-version bump (ADR-020 (d))
   o["layer"] = e.layer;
@@ -922,85 +1116,7 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["modelUnitsPerPlottedInch"] = st.modelUnitsPerPlottedInch;
   doc["drawingInsUnits"] = st.drawingInsUnits;
-  {  // Drawing Settings (REQ-357). Additive: a drawing without it opens with the defaults.
-    const DrawingSettings& ds = st.drawingSettings;
-    json o;
-    o["angularUnits"] = ds.angularUnits == DrawingSettings::AngularUnits::Radians ? "radians"
-                        : ds.angularUnits == DrawingSettings::AngularUnits::Grads ? "grads"
-                                                                                   : "degrees";
-    o["footDefinition"] =
-        ds.footDefinition == DrawingSettings::FootDefinition::International ? "international" : "usSurvey";
-    o["scaleInsertedObjects"] = ds.scaleInsertedObjects;
-    o["setDrawingVariables"] = ds.setDrawingVariables;
-    o["zone"] = ds.zoneCode;  // REQ-358: CS-MAP code, "" = No Datum, No Projection
-    // REQ-359 item 4: the geographic marker (WORLD design point + north, degrees CCW from +X).
-    o["markerX"] = ds.markerX;
-    o["markerY"] = ds.markerY;
-    o["markerNorthDeg"] = ds.markerNorthDeg;
-    {  // REQ-360: the Transformation tab. Angles in degrees, L_ref / rotation point WORLD.
-      const DrawingSettings::Transform& t = ds.transform;
-      json x;
-      x["apply"] = t.apply;
-      x["applySeaLevel"] = t.applySeaLevel;
-      x["elevation"] = t.elevation;
-      x["spheroidRadiusM"] = t.spheroidRadiusM;
-      x["computation"] =
-          t.computation == DrawingSettings::Transform::Computation::UserDefined ? "userDefined" : "referencePoint";
-      x["userScaleFactor"] = t.userScaleFactor;
-      x["refLocal"] = json::array({t.refLocalX, t.refLocalY});
-      x["refGrid"] = json::array({t.refGridE, t.refGridN});
-      x["refPointNumber"] = t.refPointNumber;
-      x["rotation"] = t.rotation == DrawingSettings::Transform::Rotation::RotationPoint ? "rotationPoint"
-                      : t.rotation == DrawingSettings::Transform::Rotation::Azimuth    ? "azimuth"
-                                                                                       : "toNorth";
-      x["rotLocal"] = json::array({t.rotLocalX, t.rotLocalY});
-      x["rotGrid"] = json::array({t.rotGridE, t.rotGridN});
-      x["rotPointNumber"] = t.rotPointNumber;
-      x["toNorthDeg"] = t.toNorthDeg;
-      x["localAzimuthDeg"] = t.localAzimuthDeg;
-      x["gridAzimuthDeg"] = t.gridAzimuthDeg;
-      o["transform"] = std::move(x);
-    }
-    {  // REQ-361: the Object Layers rows, in ObjectLayerKind order.
-      json rows = json::array();
-      for (const ObjectLayerRow& r : ds.objectLayers) {
-        json j;
-        j["layer"] = r.layer;
-        j["modifier"] = r.modifier == ObjectLayerRow::Modifier::Prefix   ? "prefix"
-                        : r.modifier == ObjectLayerRow::Modifier::Suffix ? "suffix"
-                                                                         : "none";
-        j["value"] = r.value;
-        j["locked"] = r.locked;
-        rows.push_back(std::move(j));
-      }
-      o["objectLayers"] = std::move(rows);
-    }
-    // REQ-363: the online map, by name so a reordered enum cannot change a saved choice.
-    o["onlineMap"] = OnlineMapStorageName(ds.onlineMap);
-    // REQ-364: captured map areas — each tile's image exactly as it was served, base64.
-    if (!ds.capturedAreas.empty()) {
-      json areas = json::array();
-      for (const DrawingSettings::CapturedArea& a : ds.capturedAreas) {
-        json ja;
-        ja["map"] = OnlineMapStorageName(a.map);
-        ja["level"] = a.level;
-        json tiles = json::array();
-        for (const DrawingSettings::CapturedTile& t : a.tiles) {
-          if (!t.image)
-            continue;
-          json jt;
-          jt["x"] = t.x;
-          jt["y"] = t.y;
-          jt["image"] = Base64Encode(*t.image);
-          tiles.push_back(std::move(jt));
-        }
-        ja["tiles"] = std::move(tiles);
-        areas.push_back(std::move(ja));
-      }
-      o["capturedAreas"] = std::move(areas);
-    }
-    doc["drawingSettings"] = std::move(o);
-  }
+  doc["drawingSettings"] = DrawingSettingsToJson(st.drawingSettings);  // REQ-357; additive: absent opens with the defaults
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
   doc["currentLayer"] = st.currentLayer;
   doc["currentColor"] = st.currentColor;  // REQ-356; additive, older readers ignore it
@@ -2354,106 +2470,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.modelUnitsPerPlottedInch = doc.value("modelUnitsPerPlottedInch", 50.f);
   st.drawingInsUnits = doc.value("drawingInsUnits", 2);
   st.drawingSettings = DrawingSettings{};  // REQ-357: absent or partial → the defaults
-  if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object()) {
-    const json& o = doc["drawingSettings"];
-    const std::string ang = o.value("angularUnits", std::string("degrees"));
-    st.drawingSettings.angularUnits = ang == "radians" ? DrawingSettings::AngularUnits::Radians
-                                      : ang == "grads" ? DrawingSettings::AngularUnits::Grads
-                                                       : DrawingSettings::AngularUnits::Degrees;
-    st.drawingSettings.footDefinition = o.value("footDefinition", std::string("usSurvey")) == "international"
-                                            ? DrawingSettings::FootDefinition::International
-                                            : DrawingSettings::FootDefinition::UsSurvey;
-    st.drawingSettings.scaleInsertedObjects = o.value("scaleInsertedObjects", true);
-    st.drawingSettings.setDrawingVariables = o.value("setDrawingVariables", true);
-    // REQ-358: kept verbatim, even when this dictionary does not know it (nothing silently dropped).
-    if (o.contains("zone") && o["zone"].is_string())
-      st.drawingSettings.zoneCode = o["zone"].get<std::string>();
-    st.drawingSettings.markerX = o.value("markerX", 0.0);
-    st.drawingSettings.markerY = o.value("markerY", 0.0);
-    st.drawingSettings.markerNorthDeg = o.value("markerNorthDeg", 90.0);
-    // REQ-363: absent or unknown → Map Off.
-    st.drawingSettings.onlineMap = OnlineMapFromStorageName(o.value("onlineMap", std::string()));
-    // REQ-364: captured map areas. A damaged tile (or an area of an unknown map) is dropped and said.
-    if (o.contains("capturedAreas") && o["capturedAreas"].is_array()) {
-      int dropped = 0;
-      for (const json& ja : o["capturedAreas"]) {
-        if (!ja.is_object() || !ja.contains("tiles") || !ja["tiles"].is_array()) {
-          ++dropped;
-          continue;
-        }
-        DrawingSettings::CapturedArea a;
-        a.map = OnlineMapFromStorageName(ja.contains("map") && ja["map"].is_string() ? ja["map"].get<std::string>()
-                                                                                     : std::string());
-        a.level = ja.contains("level") && ja["level"].is_number_integer() ? ja["level"].get<int>() : -1;
-        if (a.map == DrawingSettings::OnlineMap::Off || a.level < 0 || a.level > 30) {
-          dropped += static_cast<int>(ja["tiles"].size());
-          continue;
-        }
-        for (const json& jt : ja["tiles"]) {
-          std::string image;
-          if (!jt.is_object() || !jt.contains("x") || !jt["x"].is_number_integer() || !jt.contains("y") ||
-              !jt["y"].is_number_integer() || !jt.contains("image") || !jt["image"].is_string() ||
-              !Base64Decode(jt["image"].get<std::string>(), &image) || image.empty()) {
-            ++dropped;
-            continue;
-          }
-          a.tiles.push_back({jt["x"].get<int>(), jt["y"].get<int>(), std::make_shared<const std::string>(std::move(image))});
-        }
-        if (!a.tiles.empty())
-          st.drawingSettings.capturedAreas.push_back(std::move(a));
-      }
-      if (dropped > 0)
-        log.push_back("Open: " + std::to_string(dropped) + " damaged captured map tile(s) were dropped (REQ-364).");
-    }
-    if (o.contains("transform") && o["transform"].is_object()) {  // REQ-360; absent → the defaults
-      const json& x = o["transform"];
-      DrawingSettings::Transform& t = st.drawingSettings.transform;
-      const auto pair = [&](const char* key, double* a, double* b) {
-        if (x.contains(key) && x[key].is_array() && x[key].size() == 2 && x[key][0].is_number() &&
-            x[key][1].is_number()) {
-          *a = x[key][0].get<double>();
-          *b = x[key][1].get<double>();
-        }
-      };
-      t.apply = x.value("apply", false);
-      t.applySeaLevel = x.value("applySeaLevel", false);
-      t.elevation = x.value("elevation", 0.0);
-      t.spheroidRadiusM = x.value("spheroidRadiusM", 0.0);
-      t.computation = x.value("computation", std::string("referencePoint")) == "userDefined"
-                          ? DrawingSettings::Transform::Computation::UserDefined
-                          : DrawingSettings::Transform::Computation::ReferencePoint;
-      t.userScaleFactor = x.value("userScaleFactor", 1.0);
-      pair("refLocal", &t.refLocalX, &t.refLocalY);
-      pair("refGrid", &t.refGridE, &t.refGridN);
-      t.refPointNumber = x.value("refPointNumber", 0);
-      const std::string rot = x.value("rotation", std::string("toNorth"));
-      t.rotation = rot == "rotationPoint" ? DrawingSettings::Transform::Rotation::RotationPoint
-                   : rot == "azimuth"     ? DrawingSettings::Transform::Rotation::Azimuth
-                                          : DrawingSettings::Transform::Rotation::ToNorth;
-      pair("rotLocal", &t.rotLocalX, &t.rotLocalY);
-      pair("rotGrid", &t.rotGridE, &t.rotGridN);
-      t.rotPointNumber = x.value("rotPointNumber", 0);
-      t.toNorthDeg = x.value("toNorthDeg", 0.0);
-      t.localAzimuthDeg = x.value("localAzimuthDeg", 0.0);
-      t.gridAzimuthDeg = x.value("gridAzimuthDeg", 0.0);
-    }
-    // REQ-361 item 6: absent (or a row missing) → the NCS defaults.
-    if (o.contains("objectLayers") && o["objectLayers"].is_array()) {
-      const json& rows = o["objectLayers"];
-      for (size_t i = 0; i < rows.size() && i < st.drawingSettings.objectLayers.size(); ++i) {
-        if (!rows[i].is_object())
-          continue;
-        ObjectLayerRow& r = st.drawingSettings.objectLayers[i];
-        r.layer = rows[i].value("layer", r.layer);
-        const std::string mod = rows[i].value("modifier", std::string("none"));
-        r.modifier = mod == "prefix"   ? ObjectLayerRow::Modifier::Prefix
-                     : mod == "suffix" ? ObjectLayerRow::Modifier::Suffix
-                                       : ObjectLayerRow::Modifier::None;
-        r.value = rows[i].value("value", std::string());
-        r.locked = rows[i].value("locked", false);
-      }
-    }
-  }
+  if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object())
+    DrawingSettingsFromJson(doc["drawingSettings"], st.drawingSettings, log);
   // Paper space layouts (REQ-031). Missing/garbage → no layouts, model space (no crash).
   st.paperLayouts.clear();
   if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array()) {
@@ -3788,6 +3806,18 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 }
 
 } // namespace
+
+std::string DrawingSettingsToJsonText(const DrawingSettings& ds) { return DrawingSettingsToJson(ds).dump(); }
+
+bool DrawingSettingsFromJsonText(const std::string& jsonText, DrawingSettings* out) {
+  const json o = json::parse(jsonText, nullptr, false);
+  if (!o.is_object())
+    return false;
+  *out = DrawingSettings{};
+  std::vector<std::string> ignored;  // a project default holds no captured tiles worth reporting
+  DrawingSettingsFromJson(o, *out, ignored);
+  return true;
+}
 
 std::string SerializeGoSurveyJson(const AppCommandState& st) {
   return BuildRoot(st).dump(2);

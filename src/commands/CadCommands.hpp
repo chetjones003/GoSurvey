@@ -1081,10 +1081,36 @@ struct ObjectLayerRow {
   return rows;
 }
 
+struct ProjectSettings;  // ProjectSettings.hpp (REQ-375)
+
+/// REQ-375 / D-2026-10-05-e: the settings a project supplies as defaults that a project drawing may
+/// override. The zone and the drawing unit are enforced instead; the transformation, geographic
+/// marker and online map are always the drawing's own. The names are the trailer's.
+enum class ProjectDefaultKey : unsigned {
+  AngularUnits = 0,
+  FootDefinition,
+  ScaleInsertedObjects,
+  SetDrawingVariables,
+  PlotScale,
+  ObjectLayers,
+};
+inline constexpr unsigned kProjectDefaultKeyCount = 6;
+inline constexpr const char* kProjectDefaultKeyNames[kProjectDefaultKeyCount] = {
+    "angularUnits", "footDefinition", "scaleInsertedObjects", "setDrawingVariables", "plotScale", "objectLayers"};
+
 /// The drawing's own settings that the Drawing Settings window edits (REQ-357). The drawing unit and
 /// the scale are NOT here: they are `AppCommandState::drawingInsUnits` and
 /// `modelUnitsPerPlottedInch`, one value each (REQ-022, D-2026-09-29-c).
 struct DrawingSettings {
+  /// REQ-375: bit per \ref ProjectDefaultKey the drawing overrides. Meaningful only for a project
+  /// drawing; a standalone drawing keeps it 0.
+  unsigned overridden = 0;
+  [[nodiscard]] bool IsOverridden(ProjectDefaultKey k) const { return (overridden >> static_cast<unsigned>(k)) & 1u; }
+  void SetOverridden(ProjectDefaultKey k, bool on) {
+    const unsigned bit = 1u << static_cast<unsigned>(k);
+    overridden = on ? (overridden | bit) : (overridden & ~bit);
+  }
+
   enum class AngularUnits { Degrees = 0, Radians = 1, Grads = 2 };
   enum class FootDefinition { UsSurvey = 0, International = 1 };
   AngularUnits   angularUnits = AngularUnits::Degrees;
@@ -1187,7 +1213,7 @@ struct DrawingSettings {
   }
 
   bool operator==(const DrawingSettings& o) const {
-    return angularUnits == o.angularUnits && footDefinition == o.footDefinition &&
+    return overridden == o.overridden && angularUnits == o.angularUnits && footDefinition == o.footDefinition &&
            scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables &&
            zoneCode == o.zoneCode && markerX == o.markerX && markerY == o.markerY &&
            markerNorthDeg == o.markerNorthDeg && transform == o.transform &&
@@ -4905,6 +4931,9 @@ struct AppCommandState {
     gsproj::Project  project;
     gsproj::LockInfo me;           ///< who we are in the lock file
     bool             readOnly = false;  ///< opened read-only: nothing in the project may be written
+    /// REQ-375: project.settingsJson, parsed once when the project opens and again when Project
+    /// Settings changes it. Never null for an open session.
+    std::shared_ptr<ProjectSettings> settings;
   };
   std::vector<ProjectSession> openProjects;
   uint32_t                    nextProjectUid = 1u;
@@ -4920,6 +4949,8 @@ struct AppCommandState {
     bool             openRequested = false;  ///< ask ImGui to open the modal next frame
   } projectPrompt;
   bool showNewProjectDialog = false;  ///< REQ-374 clause 1; File > New Project / Start screen
+  /// REQ-375: the Project Settings window is open for ProjectSession::uid == this (0 = closed).
+  uint32_t projectSettingsUid = 0;
   /// REQ-308 / D-2026-08-30-a: drawingTabs[0] is the **Start screen** — a non-closable, pinned-first
   /// sentinel that backs no document. documents[0]/viewportRenderers[0] exist for index alignment
   /// but are never meaningful. Real drawings start at FirstDrawingTabIndex().

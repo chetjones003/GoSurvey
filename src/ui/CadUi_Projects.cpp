@@ -6,6 +6,7 @@
 #include "CadUi.hpp"
 
 #include "AppIcon.hpp"  // UserDataDirectory
+#include "ProjectSettings.hpp"
 #include "RecentDrawings.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <ctime>
+#include <memory>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -107,6 +109,9 @@ std::uint32_t EnsureProjectOpen(AppCommandState& cmd, std::vector<std::string>& 
     log.push_back("Project could not be opened (" + AbsUtf8(gsprojFile) + "): " + err);
     return 0;
   }
+  s.settings = std::make_shared<ProjectSettings>();
+  if (!ParseProjectSettings(s.project.settingsJson, s.settings.get(), &err))
+    log.push_back("Project settings of " + s.project.name + " could not be read (" + err + "); none are enforced.");
   s.me = MakeMe();
   if (mode == LockMode::ReadOnly) {
     s.readOnly = true;
@@ -235,6 +240,31 @@ void OpenProjectFile(AppCommandState& cmd, std::vector<std::string>& log, const 
       }
   }
   OpenProjectResolved(cmd, log, file, std::string(), LockMode::Normal);
+}
+
+bool SaveProjectSettings(AppCommandState& cmd, std::uint32_t projectUid, const ProjectSettings& ps,
+                         std::vector<std::string>& log) {
+  for (auto& s : cmd.openProjects) {
+    if (s.uid != projectUid)
+      continue;
+    if (s.readOnly) {
+      log.push_back("Project settings - " + s.project.name + " is open read-only; nothing was changed.");
+      return false;
+    }
+    gsproj::Project next = s.project;
+    next.settingsJson = WriteProjectSettings(next.settingsJson, ps);
+    std::string err;
+    if (!gsproj::Save(next, &err)) {
+      log.push_back("Project settings could not be saved (" + err + "); nothing was changed.");
+      return false;
+    }
+    s.project = std::move(next);
+    *s.settings = ps;
+    log.push_back("Project settings saved: " + s.project.name);
+    return true;
+  }
+  log.push_back("Project settings - the project is no longer open; nothing was changed.");
+  return false;
 }
 
 void RemoveRecentProject(const std::string& absGsprojPath) {
@@ -370,9 +400,13 @@ void DrawNewProjectModal(AppCommandState& cmd, std::vector<std::string>& log) {
   static std::string name;
   static std::string location;
   static std::string error;
+  static int         unitSel = 2;  // index into kDrawingUnitNames; Feet
   if (cmd.showNewProjectDialog) {
     cmd.showNewProjectDialog = false;
     name.clear();
+    for (int i = 0; i < kDrawingUnitCount; ++i)
+      if (kDrawingUnitCodes[i] == 2)
+        unitSel = i;
     error.clear();
     if (location.empty()) {
       const std::string home = EnvVar("USERPROFILE");
@@ -400,6 +434,9 @@ void DrawNewProjectModal(AppCommandState& cmd, std::vector<std::string>& log) {
     if (BrowseFolderUtf8(dir, sizeof(dir)))
       location = dir;
   }
+  ImGui::SetNextItemWidth(360.f);
+  ImGui::Combo("Linear units", &unitSel, kDrawingUnitNames, kDrawingUnitCount);
+  ImGui::TextDisabled("Every drawing in the project uses these units. The coordinate system is chosen next.");
   if (!name.empty() && !location.empty())
     ImGui::TextDisabled("Creates %s", (fs::u8path(location) / fs::u8path(name)).u8string().c_str());
   if (!error.empty())
@@ -412,8 +449,20 @@ void DrawNewProjectModal(AppCommandState& cmd, std::vector<std::string>& log) {
     if (!gsproj::Create(fs::u8path(location), name, &p, &error)) {
       log.push_back("New project failed: " + error);
     } else {
+      // REQ-375: the new project fixes its unit and starts with the standard defaults.
+      ProjectSettings ps;
+      ps.insUnits = kDrawingUnitCodes[std::clamp(unitSel, 0, kDrawingUnitCount - 1)];
+      ps.hasDefaults = true;
+      p.settingsJson = WriteProjectSettings(p.settingsJson, ps);
+      std::string saveErr;
+      if (!gsproj::Save(p, &saveErr))
+        log.push_back("New project: the unit could not be saved (" + saveErr + ").");
       ImGui::CloseCurrentPopup();
       OpenProjectResolved(cmd, log, p.file, std::string(), LockMode::Normal);
+      if (const auto* made = FindSession(cmd, p.file)) {
+        cmd.projectSettingsUid = made->uid;  // pick the coordinate system right away
+        log.push_back("Choose the project's coordinate system in Project Settings (or leave it unset).");
+      }
     }
   }
   ImGui::EndDisabled();
@@ -429,6 +478,7 @@ void DrawNewProjectModal(AppCommandState& cmd, std::vector<std::string>& log) {
 
 void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log) {
   ServiceProjects(cmd);
+  EnforceProjectSettings(cmd, log);  // REQ-375: enforced zone/unit and inherited defaults, every frame
   DrawNewProjectModal(cmd, log);
   DrawProjectPromptModal(cmd, log);
 }

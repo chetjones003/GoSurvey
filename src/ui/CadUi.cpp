@@ -1634,7 +1634,14 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 8.f));
   if (ImGui::BeginMenu("File")) {
     if (ImGui::MenuItem("New", nullptr)) {
+      // REQ-374 clause 1: a new drawing made while a project drawing is active joins that project and
+      // starts with its defaults (EnforceProjectSettings applies them).
+      const std::uint32_t projectUid =
+          cmd.activeDrawingIdx >= 1 && cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size())
+              ? cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid
+              : 0u;
       NewDrawingInTab(cmd, log);
+      cmd.drawingTabs.back().projectUid = projectUid;
     }
     if (ImGui::MenuItem("Open", nullptr)) {
       OpenDrawingInNewTab(cmd, log, nullptr);
@@ -1645,6 +1652,10 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       OpenProjectFile(cmd, log, nullptr);
     // REQ-308: the Start tab has no document to save.
     ImGui::BeginDisabled(cmd.activeDrawingIdx == 0);
+    if (ImGui::MenuItem("Project Settings...", nullptr, false,
+                        !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty() &&
+                            !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx)))
+      cmd.projectSettingsUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-375
     if (ImGui::MenuItem("Save", "Ctrl+S")) {
       SaveActiveDocument(cmd, log);
     }
@@ -9895,6 +9906,7 @@ static void DrawPlotScaleCombo(AppCommandState& cmd, float width = 158.f) {
         } else if (mup != cmd.modelUnitsPerPlottedInch) {
           PushUndoSnapshot(cmd, "Plot scale");  // the plot scale is undoable (REQ-357)
           SetDrawingPlotScale(cmd, mup);
+          NoteUserPlotScale(cmd);  // REQ-375: an override of the project's default, or inherited again
         }
       }
       if (isSel)
