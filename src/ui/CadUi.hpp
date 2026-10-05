@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CadCommands.hpp"
+#include "ProjectSettings.hpp"  // REQ-375: ProjectSettings, NoteUserPlotScale
 #include "CadSnap.hpp"
 #include "RecentDrawings.hpp"  // recent::Entry, for LoadRecentProjects
 
@@ -65,6 +66,10 @@ bool        ProjectIsReadOnlyForTab(const AppCommandState& cmd, int tabIdx);
 void OpenProjectFile(AppCommandState& cmd, std::vector<std::string>& log, const char* gsprojPathUtf8);
 void RemoveRecentProject(const std::string& absGsprojPath);
 std::vector<recent::Entry> LoadRecentProjects();
+/// REQ-375: writes \p ps into the project's .gsproj (atomic) and its open session. False, logged, when the
+/// project is read-only or the file cannot be written; nothing changes then.
+bool SaveProjectSettings(AppCommandState& cmd, std::uint32_t projectUid, const ProjectSettings& ps,
+                         std::vector<std::string>& log);
 /// Closes sessions with no tabs left (releasing their lock). Called every frame by DrawProjectDialogs.
 void ServiceProjects(AppCommandState& cmd);
 /// Releases every held lock; call once on the way out of the app.

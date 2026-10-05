@@ -11027,7 +11027,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   sensible default a single drawing may override.
 - Priority: should
 - Type: functional
-- Decision: D-2026-10-05-d (decision 5).
+- Decision: D-2026-10-05-d (decision 5), D-2026-10-05-e (which settings are which).
 - Depends on: REQ-373, REQ-357..REQ-362 (Drawing Settings, zone, transformation), REQ-022 (drawing unit).
 - Statement:
   1. **Project Settings window** (command `PROJECTSETTINGS` and a Project menu item, in the
@@ -11035,19 +11035,31 @@ capability that does not exist. They are recorded here rather than quietly dropp
   2. **Enforced.** The **coordinate system** (zone) and **linear units** are set by the project and
      **cannot be overridden** by a project drawing; Drawing Settings shows them read-only with an
      "enforced by project" indicator.
-  3. **Inherited.** Every other drawing setting the project exposes is a **project default**. A
-     drawing may override it; Drawing Settings marks each setting **inherited** or **overridden**
-     and offers **Reset to project value**. Overrides are saved in the drawing (ADR-044 trailer).
-     A change to a project default reaches every drawing that has not overridden it.
+  3. **Inherited.** Six settings are **project defaults** (D-2026-10-05-e): angular units, the
+     imperial-to-metric foot definition, "scale objects inserted from other drawings", "set drawing
+     variables to match", the plot scale, and the Object Layers table. A drawing may override each;
+     Drawing Settings marks each **inherited** or **overridden** and offers **Reset to project
+     value**. Overrides are saved in the drawing (ADR-044 trailer `drawingSettings.overridden`).
+     A change to a project default reaches every drawing that has not overridden it, open or not.
+     The transformation, the geographic marker and the online map are always the drawing's own.
+     A value the user changes is an override exactly when it differs from the project's.
+  3a. **Nothing set, nothing enforced.** A project that has no coordinate system (or unit) set
+     enforces none, and one with no defaults supplies none, so a project made before P2 does not
+     alter its drawings. A drawing that disagrees with an enforced value is brought into line when
+     it opens or when the project changes, and each replacement is reported (REQ-201); no
+     coordinate is moved or scaled. The New Project dialog (REQ-374 clause 1) takes the unit and
+     opens Project Settings straight afterwards for the coordinate system.
   4. **Standalone** drawings are unchanged: all settings belong to the drawing (REQ-357).
   5. **Mismatch.** Adding or importing content whose coordinate system or units differ from the
      project's is governed by REQ-378 clause 5 and REQ-383 clause 3.
 - Acceptance:
   - `[req375]` tests: a project drawing cannot change zone/units; an inherited setting follows a
-    project change; an overridden one does not; reset restores inheritance; standalone is unchanged.
+    project change; an overridden one does not; reset restores inheritance; standalone is unchanged;
+    overrides survive save and reopen; a project with nothing set enforces nothing.
 - Owner-layer: Domain (settings resolution), UI (windows), IO (`.gsproj`, trailer)
 - Status: accepted
-- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P2: clause 3 names the
+  six defaults, clause 3a added (D-2026-10-05-e).
 
 ### REQ-376 — Project-wide survey point database shared by every drawing in the project (GitHub issue #696, P3)
 

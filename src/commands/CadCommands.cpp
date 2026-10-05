@@ -1,4 +1,5 @@
 #include "CadCommands.hpp"
+#include "ProjectSettings.hpp"  // REQ-375: NoteUserPlotScale
 #include "CadCommandsInternal.hpp"
 #include "CadColor.hpp"
 #include "CadBlocks.hpp"
@@ -6718,6 +6719,7 @@ const CmdEntry kRegistry[] = {
     {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"drawingsettings", "editdrawingsettings", "Drawing Settings: units, scale and the drawing's settings"},
+    {"projectsettings", "", "Project Settings: the project's coordinate system, units and defaults (REQ-375)"},
     {"geomarkpoint", "", "Place a Position Marker at a picked point (geolocated drawing)"},
     {"geomarklatlong", "", "Place a Position Marker at a typed latitude and longitude"},
     {"georeorientmarker", "", "Set the geographic marker: a design point, then north"},
@@ -7233,6 +7235,18 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     // The window itself refuses the GUI's Start tab (REQ-308); headless runs have no Start tab.
     st.showDrawingSettingsWindow = true;
     log.push_back("DRAWINGSETTINGS — Drawing Settings opened.");
+    return true;
+  }
+  if (primary == "projectsettings") {  // REQ-375
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("PROJECTSETTINGS — this drawing is not in a project.");
+    } else {
+      st.projectSettingsUid = uid;
+      log.push_back("PROJECTSETTINGS — Project Settings opened.");
+    }
     return true;
   }
   if (primary == "style") {
@@ -41810,6 +41824,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         if (pv != st.modelUnitsPerPlottedInch) {
           PushUndoSnapshot(st, "PLOTSCALE");  // the plot scale is undoable (REQ-357)
           SetDrawingPlotScale(st, pv);
+          NoteUserPlotScale(st);  // REQ-375
         }
         log.push_back("Plot scale: 1 plotted inch = " + std::to_string(pv) + " model units.");
       }
