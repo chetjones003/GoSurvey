@@ -1370,6 +1370,12 @@ int main()
       BuildSubObjectHoverHighlight(cmd, &subObjectOverlay.hoverFaceTris, &subObjectOverlay.hoverFaceEdges,
                                    &subHoverLines);
       hoverLines.insert(hoverLines.end(), subHoverLines.begin(), subHoverLines.end());
+      // REQ-370: what the open selection box would select, lit like a hover.
+      std::vector<float> boxPreviewLines;
+      std::vector<float> boxPreviewCircles;
+      BuildBoxPreviewHighlight(cmd, &boxPreviewLines, &boxPreviewCircles);
+      hoverLines.insert(hoverLines.end(), boxPreviewLines.begin(), boxPreviewLines.end());
+      hoverCircles.insert(hoverCircles.end(), boxPreviewCircles.begin(), boxPreviewCircles.end());
     }
 
     // The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b), and the ghost of what an

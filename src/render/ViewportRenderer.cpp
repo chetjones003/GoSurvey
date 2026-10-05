@@ -2851,7 +2851,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     std::vector<float> hvLineRel;
     ConvertLineVertsWorldToView(*hoverLines, viewAnchorX, viewAnchorY, &hvLineRel);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-    glUniform4f(locCol, 0.45f, 0.72f, 1.f, 1.f);
+    glUniform4f(locCol, 0.82f, 0.92f, 1.f, 1.f);  // REQ-370 hover + box preview: bluish white
     glLineWidth(kLwHiLine * 0.72f);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hvLineRel.size() * sizeof(float)), hvLineRel.data(),
                  GL_STREAM_DRAW);
@@ -2872,7 +2872,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
     if (!hvCircGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-      glUniform4f(locCol, 0.45f, 0.72f, 1.f, 1.f);
+      glUniform4f(locCol, 0.82f, 0.92f, 1.f, 1.f);  // REQ-370 hover + box preview: bluish white
       glLineWidth(kLwHiCirc * 0.72f);
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hvCircGeom.size() * sizeof(float)), hvCircGeom.data(),
                    GL_STREAM_DRAW);
@@ -2960,7 +2960,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     std::vector<float> hlLineRel;
     ConvertLineVertsWorldToView(*highlightLines, viewAnchorX, viewAnchorY, &hlLineRel);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-    glUniform4f(locCol, 1.f, 0.92f, 0.15f, 1.f);
+    glUniform4f(locCol, 0.30f, 0.58f, 1.f, 1.f);  // REQ-370 selected: blue tint
     glLineWidth(kLwHiLine);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hlLineRel.size() * sizeof(float)), hlLineRel.data(),
                  GL_STREAM_DRAW);
@@ -2978,7 +2978,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
     if (!hlCircGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-      glUniform4f(locCol, 1.f, 0.88f, 0.22f, 1.f);
+      glUniform4f(locCol, 0.30f, 0.58f, 1.f, 1.f);  // REQ-370 selected: blue tint
       glLineWidth(kLwHiCirc);
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hlCircGeom.size() * sizeof(float)), hlCircGeom.data(),
                    GL_STREAM_DRAW);

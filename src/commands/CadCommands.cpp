@@ -39811,6 +39811,42 @@ void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anch
   st.selBoxWaitingSecond = true;
 }
 
+void UpdateSelectionBoxPreview(AppCommandState& st, float wx, float wy, bool windowMode, const Camera* cam,
+                               float vpW, float vpH) {
+  if (!st.selBoxWaitingSecond) {
+    st.selBoxPreview.clear();
+    st.selBoxPreviewKeyValid = false;
+    return;
+  }
+  const std::array<double, 11> key = {st.selBoxAnchorX,
+                                      st.selBoxAnchorY,
+                                      st.selBoxAnchorZ,
+                                      wx,
+                                      wy,
+                                      st.uiCursorWorldZ,
+                                      windowMode ? 1.0 : 0.0,
+                                      st.viewportPanX + st.viewportPanY,
+                                      st.viewportZoom,
+                                      static_cast<double>(st.cadGpuRevision),
+                                      static_cast<double>(st.hiddenEntityIds.size())};
+  if (st.selBoxPreviewKeyValid && key == st.selBoxPreviewKey)
+    return;
+  st.selBoxPreviewKey = key;
+  st.selBoxPreviewKeyValid = true;
+
+  // ComputeSelectionFromRect merges into st.selection / selectedSurveyPointIndices, so run it on an
+  // empty pair and put the real ones back — the preview must never change the selection.
+  std::vector<SelectedEntity> savedSel;
+  savedSel.swap(st.selection);
+  std::vector<int> savedSurvey;
+  savedSurvey.swap(st.selectedSurveyPointIndices);
+  ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, st.selBoxAnchorZ, wx, wy, st.uiCursorWorldZ,
+                           /*subtract=*/false, windowMode, /*includeSurveyPoints=*/false, cam, vpW, vpH);
+  st.selBoxPreview.swap(st.selection);
+  st.selection.swap(savedSel);
+  st.selectedSurveyPointIndices.swap(savedSurvey);
+}
+
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-035: move viewports
     StartPaperMoveCopyViewports(st, /*copy=*/false, log);

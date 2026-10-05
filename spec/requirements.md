@@ -10814,6 +10814,41 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-10-02 — initial (issue #618; D-2026-10-02-b). 2026-10-02 — increment 2 display
   fidelity (TASK-618). 2026-10-02 — increment 3 GoSurvey dynamic DWG export (TASK-618).
 
+### REQ-370 — AutoCAD-style box selection: window/crossing look, live preview, selected-object tint
+
+- Purpose: the selection box and selected objects should read like AutoCAD / Civil 3D, which is what
+  GoSurvey users already know. Today the model-space box is always blue, selected objects are yellow,
+  and nothing shows what a box will pick until the mouse is released.
+- Priority: should
+- Type: UI
+- Decision: D-2026-10-05-a.
+- Statement:
+  1. **Window box** (drag left-to-right): translucent **blue** fill with a thin **solid** border.
+  2. **Crossing box** (drag right-to-left): translucent **green** fill with a thin **dashed** border.
+     Both fills are clearly visible over the dark drawing background (about 40-45 % opaque), not faint.
+     The window/crossing rule itself is unchanged (REQ-039, REQ-121, REQ-036).
+  3. The same look applies in model space and in a floating model-space viewport.
+  4. **Live preview:** while the second corner is being chosen, every object the box would select if
+     clicked now is drawn in a bright, bluish-white "about to be selected" tint. The preview uses the
+     very same hit test the click uses (`ComputeSelectionFromRect`), so what is lit is what gets
+     selected, for window and crossing alike. It changes no selection until the click.
+  5. **Selected objects** are drawn in a blue tint instead of yellow. The preview tint (item 4) is
+     visibly lighter than the selected tint so the two stay distinguishable. Grips are unchanged.
+  6. The preview must not slow the viewport: it is recomputed only when the cursor or box corner
+     changes, and is skipped (box still drawn) above a drawing-size cap that is logged once (REQ-201).
+- Acceptance:
+  - a left-to-right drag draws a blue, solid-bordered box; a right-to-left drag draws a green,
+    dashed-bordered box; reversing mid-drag switches live;
+  - mid-drag, the set of objects highlighted as preview equals the set selected by releasing the click
+    at that point (unit test comparing the two for window and crossing);
+  - after the click, selected objects draw blue, not yellow; preview leaves `selection` untouched
+    (unit test);
+  - an empty box previews nothing and does not crash; the preview vanishes on click, Esc, or when
+    the box closes.
+- Owner-layer: UI (`CadUi`, overlay), Renderer (highlight colours), Commands (preview helper)
+- Status: accepted
+- Revisions: 2026-10-05 - initial (D-2026-10-05-a; reference screenshots from Civil 3D 2026).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

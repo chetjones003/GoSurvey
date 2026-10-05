@@ -1039,6 +1039,34 @@ void PlateTopHilite(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx) {
 /// rounded outlines fading to nothing. Concentric outlines rather than four
 /// gradient bands because the corners come out right for free, and a dozen
 /// 1px rects is not a cost worth a cleverer shape.
+/// REQ-370 selection box: window (drag L→R) = blue fill + solid border; crossing (R→L) = green fill +
+/// dashed border. Shared by the model-space and floating-viewport overlays so they cannot drift.
+static void DrawSelectionBoxRect(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, bool windowMode) {
+  const ImU32 fill = windowMode ? IM_COL32(0, 90, 230, 115) : IM_COL32(20, 150, 60, 115);
+  const ImU32 edge = IM_COL32(200, 225, 70, 255);
+  dl->AddRectFilled(mn, mx, fill);
+  if (windowMode) {
+    dl->AddRect(mn, mx, edge, 0.f, 0, 1.f);
+    return;
+  }
+  constexpr float kDash = 5.f;
+  constexpr float kGap = 3.f;
+  auto dashed = [&](ImVec2 a, ImVec2 b) {
+    const float len = std::hypot(b.x - a.x, b.y - a.y);
+    if (len < 1e-3f)
+      return;
+    const ImVec2 d((b.x - a.x) / len, (b.y - a.y) / len);
+    for (float t = 0.f; t < len; t += kDash + kGap) {
+      const float t1 = std::min(t + kDash, len);
+      dl->AddLine(ImVec2(a.x + d.x * t, a.y + d.y * t), ImVec2(a.x + d.x * t1, a.y + d.y * t1), edge, 1.f);
+    }
+  };
+  dashed(mn, ImVec2(mx.x, mn.y));
+  dashed(ImVec2(mx.x, mn.y), mx);
+  dashed(mx, ImVec2(mn.x, mx.y));
+  dashed(ImVec2(mn.x, mx.y), mn);
+}
+
 static void DrawWindowDropShadow(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, float rounding) {
   const ImU32 base = g_chrome.windowShadow;
   const int a0 = static_cast<int>((base >> IM_COL32_A_SHIFT) & 0xFFu);
@@ -18089,11 +18117,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const ImVec2 b = mlToScreen(curLX, curLY);
         const ImVec2 mn(std::min(a.x, b.x), std::min(a.y, b.y));
         const ImVec2 mx2(std::max(a.x, b.x), std::max(a.y, b.y));
-        const bool windowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;
-        const ImU32 fill = windowMode ? IM_COL32(59, 130, 246, 40) : IM_COL32(90, 220, 120, 40);
-        const ImU32 edge = windowMode ? IM_COL32(59, 130, 246, 200) : IM_COL32(90, 220, 120, 220);
-        sdl->AddRectFilled(mn, mx2, fill);
-        sdl->AddRect(mn, mx2, edge, 0.f, 0, 1.0f);
+        DrawSelectionBoxRect(sdl, mn, mx2, (mx - cmd.selBoxAnchorScreenX) > 3.f);
       }
       sdl->PopClipRect();
     }
@@ -19295,9 +19319,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     selCam.WorldToScreen(rawX, rawY, static_cast<double>(cmd.uiCursorWorldZ), avail.x, avail.y, &bx, &by);
     const ImVec2 mnSel(imgPos.x + std::min(ax, bx), imgPos.y + std::min(ay, by));
     const ImVec2 mxSel(imgPos.x + std::max(ax, bx), imgPos.y + std::max(ay, by));
-    ImDrawList* dlSel = ImGui::GetWindowDrawList();
-    dlSel->AddRectFilled(mnSel, mxSel, IM_COL32(64, 140, 255, 56));
-    dlSel->AddRect(mnSel, mxSel, IM_COL32(115, 199, 255, 230), 0.f, 0, 1.5f);
+    const bool boxWindowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;  // L→R window, R→L crossing
+    DrawSelectionBoxRect(ImGui::GetWindowDrawList(), mnSel, mxSel, boxWindowMode);
+    // REQ-370 live preview: the same hit test the click runs, same camera rule as `finishBox`.
+    const Camera boxPreviewCam = CadViewCamera(cmd);
+    UpdateSelectionBoxPreview(cmd, static_cast<float>(rawX), static_cast<float>(rawY), boxWindowMode,
+                              CadViewIsPlan(cmd) ? nullptr : &boxPreviewCam, cmd.uiViewportWidthPx,
+                              cmd.uiViewportHeightPx);
+  } else if (!cmd.selBoxPreview.empty() || cmd.selBoxPreviewKeyValid) {
+    UpdateSelectionBoxPreview(cmd, 0.f, 0.f, false, nullptr, 0.f, 0.f);  // box closed: drop the preview
   }
 
   if (modelAnnotationsVisible && !cmd.surveyPoints.empty() && cmd.surveyPointShowIdInViewport) {
