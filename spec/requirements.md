@@ -11203,25 +11203,41 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Purpose: send a whole project by email or share.
 - Priority: should
 - Type: functional
-- Decision: D-2026-10-05-d (decision 10).
-- Depends on: REQ-373, REQ-379, REQ-382.
+- Decision: D-2026-10-05-d (decision 10), D-2026-10-05-i (container).
+- Depends on: REQ-373, REQ-379, REQ-382, REQ-300.
 - Statement:
   1. **Pack Project** runs Project Health (REQ-379) first, then writes a single `.gspack` file
-     containing the project folder (marker, subfolders, tracked items) and its **project ID**.
-  2. **Size warning** shows the total size before writing and offers to **exclude point clouds**
-     (recorded in the pack, shown as unavailable on open, not as errors).
+     containing the project folder (marker, subfolders, tracked items) and its **project ID**. The
+     `.gspack` is a standard ZIP (D-2026-10-05-i, ADR-066) whose entries are project-relative paths,
+     plus a `gspack.json` manifest (format version, project ID, project name, date, left-out files, and
+     each file's exact modified time, restored on open so a point cloud's `.gscloud` cache still matches
+     its cloud). Left out of every pack: the lock file (REQ-382 clause 4) and temporary files. If Health finds problems (linked, missing
+     or unsaved files) the user sees them with the **copy links into the project** action and must
+     either fix them or choose **Pack anyway**; a linked or missing file is not in the pack.
+  2. **Size warning** shows the total size before writing (and, separately, the point clouds' share)
+     and offers to **exclude point clouds**. An excluded cloud is recorded in the pack, written into the
+     opened project's `.gsproj` as left out (a cloud's `.gscloud` cache goes with it), and shown as **unavailable** (not as an error) in Project
+     Files, Project Health and when its drawing opens. The total is the size before compression; a
+     further warning line appears at 25 MB or more (ASSUMPTION recorded in TASK-696-p7: a common email
+     attachment limit; the SPEC gives no number).
   3. **Open Packed Project** extracts to a folder the user picks and opens it; every drawing opens
-     with its attachments loaded and no missing-file errors.
-  4. A pack with a damaged or unsafe entry (path escaping the folder) is rejected with a REQ-201
-     message and extracts nothing.
+     with its attachments loaded and no missing-file errors. The folder must be empty or not yet
+     exist; a folder that already holds files is refused (nothing is overwritten). The project ID is
+     preserved exactly.
+  4. A pack with a damaged or unsafe entry (path escaping the folder, absolute or drive path,
+     backslash, duplicate name, failed checksum, no or unreadable manifest, no marker, a marker whose
+     project ID differs from the manifest's) is rejected with a REQ-201 message and extracts nothing:
+     whatever was written is removed again.
 - Acceptance:
   - `[req380]` tests: pack → open round trip on a sample project including a point cloud and PDF;
-    exclusion; unsafe-path pack rejected; project ID preserved.
+    exclusion; unsafe-path pack rejected; project ID preserved; lock file and temporary files not packed; modified times restored;
+    non-empty destination refused; damaged pack leaves nothing behind.
   - Issue-level: packed, emailed, opened elsewhere loads everything with no missing-file errors.
 - Owner-layer: IO, UI
 - Status: accepted
-- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). The archive container is chosen
-  in P7 under the dependency rule (REQ-300).
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — container chosen, manifest,
+  left-out files, Health gate, empty-destination rule and the full list of rejected packs added
+  (issue #696 P7; D-2026-10-05-i).
 
 ### REQ-381 — Turnover packages (GitHub issue #696, P8)
 

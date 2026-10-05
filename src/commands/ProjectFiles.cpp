@@ -155,8 +155,12 @@ void ApplyProjectFilesOnOpen(AppCommandState& st, std::uint32_t projectUid, cons
       continue;
     const std::string found = projfiles::FindAttachedFile(s->project, rel, pc->sourcePath);
     if (found.empty()) {
-      log.push_back("Point cloud " + fs::u8path(pc->sourcePath).filename().u8string() + " is missing (" +
-                    pc->sourcePath + "); showing its preview sample only.");
+      const std::string name = fs::u8path(pc->sourcePath).filename().u8string();
+      if (projfiles::IsPackOmittedName(s->project, name))  // REQ-380: left out of the pack on purpose
+        log.push_back("Point cloud " + name + " is unavailable (it was left out of the pack); showing its preview "
+                      "sample only.");
+      else
+        log.push_back("Point cloud " + name + " is missing (" + pc->sourcePath + "); showing its preview sample only.");
       continue;
     }
     if (found == pc->sourcePath)

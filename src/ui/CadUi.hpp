@@ -64,6 +64,11 @@ std::string ProjectNameForTab(const AppCommandState& cmd, int tabIdx);
 bool        ProjectIsReadOnlyForTab(const AppCommandState& cmd, int tabIdx);
 /// Open Project: opens \p gsprojPathUtf8 (or browses when null) and lands on an empty drawing tab in it.
 void OpenProjectFile(AppCommandState& cmd, std::vector<std::string>& log, const char* gsprojPathUtf8);
+
+/// REQ-380 (#696 P7): unpacks a `.gspack` into an empty folder and opens the project. A null path asks
+/// with a file / folder dialog. Any problem is logged (REQ-201) and nothing is left on disk.
+void OpenPackedProject(AppCommandState& cmd, std::vector<std::string>& log, const char* packPathUtf8,
+                       const char* destFolderUtf8);
 void RemoveRecentProject(const std::string& absGsprojPath);
 std::vector<recent::Entry> LoadRecentProjects();
 /// REQ-375: writes \p ps into the project's .gsproj (atomic) and its open session. False, logged, when the

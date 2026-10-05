@@ -28,6 +28,7 @@
 #include "PdfAttach.hpp"
 #include "ProjectPointRules.hpp"  // projpts::Db + projpts::Rules (REQ-376, REQ-377)
 #include "Project.hpp"  // gsproj::Project / LockInfo, for AppCommandState::openProjects (REQ-374)
+#include "ProjectPack.hpp"  // gspack::PackPlan, for AppCommandState::projectPackPrompt (REQ-380)
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
 #include "AngleFormat.hpp"
@@ -4996,6 +4997,17 @@ struct AppCommandState {
     bool        openRequested = false;
   } projectAttachPrompt;
   uint32_t projectHealthUid = 0;     ///< REQ-379 clause 4: the Project Health window is open for this project
+  /// REQ-380 (#696 P7): the Pack Project window. `projectUid` is the project being packed (0 = closed);
+  /// the plan is what a pack would hold, refreshed when the window opens and after "Copy links in".
+  struct ProjectPackPrompt {
+    uint32_t         projectUid = 0;
+    bool             planned = false;
+    gspack::PackPlan plan;
+    std::string      planError;
+    bool             excludePointClouds = false;
+    bool             packAnyway = false;  ///< the user accepted the Health problems
+  } projectPackPrompt;
+  bool openPackRequested = false;    ///< REQ-380: OPENPACK asked for Open Packed Project (the UI browses)
   /// REQ-308 / D-2026-08-30-a: drawingTabs[0] is the **Start screen** — a non-closable, pinned-first
   /// sentinel that backs no document. documents[0]/viewportRenderers[0] exist for index alignment
   /// but are never meaningful. Real drawings start at FirstDrawingTabIndex().

@@ -269,6 +269,21 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# miniz (REQ-380 / ADR-066 / D-2026-10-05-i) — ZIP read/write for the project pack (.gspack).
+# Vendored under third_party/miniz/.
+# ---------------------------------------------------------------------------
+if(NOT EXISTS "${GOSURVEY_TP}/miniz/miniz.c")
+  message(FATAL_ERROR "REQ-380: third_party/miniz/miniz.c is missing. See third_party/miniz/VENDORED.md.")
+endif()
+add_library(miniz STATIC "${GOSURVEY_TP}/miniz/miniz.c")
+target_include_directories(miniz PUBLIC "${GOSURVEY_TP}/miniz")
+if(MSVC)
+  target_compile_options(miniz PRIVATE /w)
+else()
+  target_compile_options(miniz PRIVATE -w)
+endif()
+
+# ---------------------------------------------------------------------------
 # ImGui, split into core and backends (ADR-031 (c′)).
 #
 # The split exists because the headless target (REQ-203) needs ImGui *core* and must not have a
@@ -443,6 +458,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/ProjectAddDrawing.cpp
   # REQ-379 (#696 P6): tracked files - attach, record, find, health. Pure <filesystem>/json.
   src/io/ProjectFiles.cpp
+  # REQ-380 (#696 P7): Pack Project / Open Packed Project (.gspack = ZIP via miniz)
+  src/io/ProjectPack.cpp
   # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
   src/io/WhatsNewContent.cpp
   src/io/WikiContent.cpp
@@ -549,7 +566,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${NLOHMANN_JSON_INCLUDE}
   ${CMAKE_BINARY_DIR}/generated
 )
-target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format CsMap::csmap)
+target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32, no glfw — the windowed app adds those itself.
@@ -1164,6 +1181,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-379 (#696 P6): the pure tracked-file rules
     tests/ProjectFilesTests.cpp
     src/io/ProjectFiles.cpp
+    # REQ-380 (#696 P7): the pure pack / unpack
+    tests/ProjectPackTests.cpp
+    src/io/ProjectPack.cpp
     tests/TelemetryPingTests.cpp
     tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
@@ -1297,7 +1317,7 @@ if(GOSURVEY_BUILD_TESTS)
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
-  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
+  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz)
   gosurvey_target_warnings(GoSurveyTests)
   gosurvey_enable_pch(GoSurveyTests)
 

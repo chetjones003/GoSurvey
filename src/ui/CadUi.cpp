@@ -1655,6 +1655,8 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.showNewProjectDialog = true;
     if (ImGui::MenuItem("Open Project...", nullptr))
       OpenProjectFile(cmd, log, nullptr);
+    if (ImGui::MenuItem("Open Packed Project...", nullptr))  // REQ-380
+      OpenPackedProject(cmd, log, nullptr, nullptr);
     // REQ-308: the Start tab has no document to save.
     ImGui::BeginDisabled(cmd.activeDrawingIdx == 0);
     if (ImGui::MenuItem("Project Settings...", nullptr, false,
@@ -1667,6 +1669,10 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.addDrawingToProjectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-378
     if (ImGui::MenuItem("Project Health...", nullptr, false, !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty()))
       cmd.projectHealthUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-379
+    if (ImGui::MenuItem("Pack Project...", nullptr, false, !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty())) {
+      cmd.projectPackPrompt = {};  // REQ-380
+      cmd.projectPackPrompt.projectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;
+    }
     if (ImGui::MenuItem("Save", "Ctrl+S")) {
       SaveActiveDocument(cmd, log);
     }
