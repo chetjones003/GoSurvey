@@ -10869,13 +10869,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. **Export.** At **R2007+**, export writes or reuses VISUALSTYLE dictionary entries and sets each
      exported paper VIEWPORT's `visualstyle` handle from the GoSurvey style. R2000/R2004 export
      omits native visual styles (handles not written).
-  4. **Out of scope (later #624 slices):** MATERIAL, LIGHT, SUN, model-space VPORT table styles,
-     AutoCAD Realistic/Conceptual/X-Ray fidelity beyond the three GoSurvey styles, and per-viewport
-     renderer wiring (import/export parity first).
+  4. **UI / commands.** The Viewports window exposes a per-viewport visual style combo; `VISUALSTYLE`
+     (and `VS`) set the **current** paper viewport's style when one is active (floating or selected),
+     otherwise the model-space style (REQ-064).
+  5. **Floating model space.** While editing through a layout viewport, the model GL pass runs with
+     that viewport's `visualStyle` (not a blank sheet).
+  6. **Out of scope (later #624 slices):** MATERIAL, LIGHT, SUN, model-space VPORT table styles, and
+     AutoCAD Realistic/Conceptual/X-Ray fidelity beyond the three GoSurvey styles.
 - Acceptance:
   - `LibreDwgCadTests` tag `[issue624][req371]`: R2018 export of two paper viewports with Hidden and
     Shaded re-import with the same `VisualStyle` values;
-  - `.gs` save/load preserves `visualStyle` on layout viewports;
+  - `GsIoViewportCameraTests` tag `[req371]`: `.gs` save/load preserves `visualStyle` on layout viewports;
   - REQ-201 / `#614` do not claim visual styles are an untracked #601 gap for paper viewports at R2007+.
 - Owner-layer: IO (`LibreDwgVisualStyle.cpp`, `LibreDwgCad.cpp`), Domain (`PaperSpace.hpp`), IO (`.gs`)
 - Status: accepted

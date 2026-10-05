@@ -6095,10 +6095,19 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         ImGui::BeginGroup();
         ImGui::TextUnformatted("Visual style");
         ImGui::SetNextItemWidth(visualStyleComboW);
-        int vsIdx = static_cast<int>(cmd.viewportVisualStyle);
+        Viewport* ribbonVp = CurrentViewport(cmd);
+        VisualStyle ribbonVs =
+            ribbonVp != nullptr ? ribbonVp->visualStyle : cmd.viewportVisualStyle;
+        int vsIdx = static_cast<int>(ribbonVs);
         const char* kVsItems[] = {"2D Wireframe", "Hidden", "Shaded"};
-        if (ImGui::Combo("##RibbonVisualStyle", &vsIdx, kVsItems, IM_ARRAYSIZE(kVsItems)))
-          cmd.viewportVisualStyle = static_cast<VisualStyle>(vsIdx);
+        if (ImGui::Combo("##RibbonVisualStyle", &vsIdx, kVsItems, IM_ARRAYSIZE(kVsItems))) {
+          const VisualStyle next = static_cast<VisualStyle>(vsIdx);
+          if (ribbonVp != nullptr)
+            ribbonVp->visualStyle = next;
+          else
+            cmd.viewportVisualStyle = next;
+          BumpCadGpuCache(cmd);
+        }
         RibbonItemHelp("How the viewport draws.\n"
                        "2D Wireframe — every edge visible, no depth testing (the classic view).\n"
                        "Hidden — near geometry hides far geometry.\n"

@@ -1443,7 +1443,10 @@ int main()
     tuning.arcCircleSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
     tuning.hardwareAcceleration = cmd.systemHardwareAcceleration;
     tuning.smoothLineDisplay = cmd.gfxSmoothLineDisplay;
-    tuning.visualStyle = cmd.viewportVisualStyle;  // REQ-064
+    if (const Viewport* vpStyle = CurrentViewport(cmd))
+      tuning.visualStyle = vpStyle->visualStyle;  // REQ-371 per layout viewport
+    else
+      tuning.visualStyle = cmd.viewportVisualStyle;  // REQ-064 model space
     tuning.bgR = std::clamp(cmd.viewportBgR, 0.f, 1.f);
     tuning.bgG = std::clamp(cmd.viewportBgG, 0.f, 1.f);
     tuning.bgB = std::clamp(cmd.viewportBgB, 0.f, 1.f);
@@ -1564,7 +1567,8 @@ int main()
     // and any in-place edit previews are drawn as UI overlays. All model-interaction visuals (hover,
     // highlight, preview, rubber, snap glyph, selection rect, survey markers, PDFs) are suppressed here so
     // leftover DXF geometry isn't hover-highlighted behind the sheet.
-    const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex;
+    const bool inFloatingModel = InFloatingModelSpace(cmd);
+    const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !inFloatingModel;
 
     // REQ-073 amendment: the Volume Dashboard's cut/fill map (TASK-095 §6 step 5), model space only
     // like every other GL surface entity. Built fresh each frame from the dashboard's own landed
