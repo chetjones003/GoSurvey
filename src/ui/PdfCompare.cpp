@@ -669,15 +669,15 @@ void PdfCompare::DrawChangesList() {
     // Where on the sheet, in words, rather than a size in points: "Changed - top left", "New - bottom", "Changed - large area".
     const PageSize ps = base_->Sizes()[static_cast<size_t>(basePage_)];
     const double cx = (r.x0 + r.x1) * 0.5 / std::max(1.f, ps.wPt), cy = (r.y0 + r.y1) * 0.5 / std::max(1.f, ps.hPt);
-    const char* col = cx < 1.0 / 3 ? "left" : cx > 2.0 / 3 ? "right" : "";
+    const char* side = cx < 1.0 / 3 ? "left" : cx > 2.0 / 3 ? "right" : "";
     const char* row = cy > 2.0 / 3 ? "top" : cy < 1.0 / 3 ? "bottom" : "";
     char where[48];
     if (r.Width() > 0.25 * ps.wPt || r.Height() > 0.25 * ps.hPt)
       std::snprintf(where, sizeof(where), "large area");
-    else if (*row == 0 && *col == 0)
+    else if (*row == 0 && *side == 0)
       std::snprintf(where, sizeof(where), "middle");
     else
-      std::snprintf(where, sizeof(where), "%s%s%s", row, (*row != 0 && *col != 0) ? " " : "", col);
+      std::snprintf(where, sizeof(where), "%s%s%s", row, (*row != 0 && *side != 0) ? " " : "", side);
     std::snprintf(label, sizeof(label), "%zu  %s - %s##reg%zu", i + 1, what, where, i);
     const ImVec4 col = r.kind == pdfdiff::Kind::Added ? ImVec4(0.3f, 0.85f, 0.45f, 1.f)
                        : r.kind == pdfdiff::Kind::Removed ? ImVec4(0.95f, 0.4f, 0.4f, 1.f)
