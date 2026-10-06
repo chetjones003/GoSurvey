@@ -225,7 +225,7 @@ struct BenchRun {
 // a page never re-renders it; only "Save As" writes them into a new PDF.
 // ---------------------------------------------------------------------------------------------------
 
-enum class Tool { Select, Text, Line, Rect, Ellipse, Calibrate, Length, PolyLength, Area, Angle, Check };
+enum class Tool { Select, Text, Line, Rect, Ellipse, Leader, Calibrate, Length, PolyLength, Area, Angle, Check };
 
 bool IsMeasureTool(Tool t) { return t == Tool::Length || t == Tool::PolyLength || t == Tool::Area || t == Tool::Angle; }
 
@@ -311,6 +311,9 @@ struct AnnotUi {
   ImVec2 pressMouse{0.f, 0.f}; ///< where the button went down: a drag is only a drag once the pointer has moved
   bool dragMoved = false;
   Annot original, preview;    ///< the item before the drag, and as it looks mid-drag
+  bool createSticky = false;  ///< a Line / Rectangle / Ellipse / Leader started by a click: the next click finishes it
+  bool textIsLeader = false;  ///< the text dialog is for a new Leader (its tip is `leaderTip`), not a plain note
+  std::pair<float, float> leaderTip{0.f, 0.f};
   bool textPopup = false;     ///< open the text dialog on the next frame
   int textPage = 0;
   float textX = 0.f, textY = 0.f;
@@ -362,6 +365,10 @@ ImU32 ToImCol(unsigned rgb, int a = 255) {
 void FitTextBox(Annot& a) {
   float w = 0.f, h = 0.f;
   EstimateTextBox(a.text, a.fontSize, w, h);
+  if (a.kind == Annot::Kind::Leader) { // the box has room round its text
+    w += 2.f * kLeaderPad;
+    h += 2.f * kLeaderPad;
+  }
   const float l = std::min(a.x0, a.x1), t = std::max(a.y0, a.y1);
   a.x0 = l;
   a.x1 = l + w;
@@ -372,7 +379,9 @@ void FitTextBox(Annot& a) {
 // Font, colour, width and fill from the tool settings onto an annotation.
 void ApplyStyle(const AnnotUi& u, Annot& a) {
   a.color = PackColor(u.color);
-  if (a.kind == Annot::Kind::Text) {
+  if (a.kind == Annot::Kind::Leader)
+    a.thickness = u.thickness;
+  if (a.kind == Annot::Kind::Text || a.kind == Annot::Kind::Leader) {
     const FontChoice& f = FontChoices()[static_cast<size_t>(std::clamp(u.fontIdx, 0, static_cast<int>(FontChoices().size()) - 1))];
     a.font = f.family;
     a.bold = u.bold;
@@ -393,7 +402,9 @@ void ApplyStyle(const AnnotUi& u, Annot& a) {
 // The reverse: the tool settings show the selected annotation's style.
 void LoadStyle(AnnotUi& u, const Annot& a) {
   UnpackColor(a.color, u.color);
-  if (a.kind == Annot::Kind::Text) {
+  if (a.kind == Annot::Kind::Leader)
+    u.thickness = a.thickness;
+  if (a.kind == Annot::Kind::Text || a.kind == Annot::Kind::Leader) {
     u.bold = a.bold;
     u.italic = a.italic;
     u.fontSize = a.fontSize;
@@ -427,6 +438,12 @@ void BoundsOf(const Annot& a, float& l, float& b, float& r, float& t) {
   r = std::max(a.x0, a.x1);
   b = std::min(a.y0, a.y1);
   t = std::max(a.y0, a.y1);
+  if (a.kind == Annot::Kind::Leader && !a.pts.empty()) { // the box and the tip
+    l = std::min(l, a.pts[0].first);
+    r = std::max(r, a.pts[0].first);
+    b = std::min(b, a.pts[0].second);
+    t = std::max(t, a.pts[0].second);
+  }
 }
 
 float DistToSegment(float px, float py, float ax, float ay, float bx, float by) {
@@ -475,6 +492,12 @@ bool HitTest(const Annot& a, float x, float y, float tol) {
     return DistToSegment(x, y, a.x0, a.y0, a.x1, a.y1) <= std::max(a.thickness * 0.5f, 0.f) + tol;
   case Annot::Kind::Text:
     return x >= l - tol && x <= r + tol && y >= b - tol && y <= t + tol;
+  case Annot::Kind::Leader: {
+    if (x >= l - tol && x <= r + tol && y >= b - tol && y <= t + tol)
+      return true;
+    const LeaderGeom g = LeaderLine(a);
+    return DistToSegment(x, y, g.sx, g.sy, g.tx, g.ty) <= a.thickness * 0.5f + tol;
+  }
   case Annot::Kind::Rect: {
     const float e = tol + a.thickness * 0.5f;
     const bool outer = x >= l - e && x <= r + e && y >= b - e && y <= t + e;
@@ -506,6 +529,8 @@ std::vector<std::pair<float, float>> HandlePoints(const Annot& a) {
     return {{a.x0, a.y0}, {a.x1, a.y1}};
   if (a.kind == Annot::Kind::Text)
     return {{r, b}};
+  if (a.kind == Annot::Kind::Leader && !a.pts.empty())
+    return {a.pts[0], {r, b}}; // the arrow tip, and the box's corner (it scales the text)
   return {{l, t}, {r, t}, {r, b}, {l, b}};
 }
 
@@ -520,7 +545,9 @@ void MoveHandle(Annot& a, const Annot& original, int handle, float x, float y) {
   } else if (a.kind == Annot::Kind::Line) {
     (handle == 0 ? a.x0 : a.x1) = x;
     (handle == 0 ? a.y0 : a.y1) = y;
-  } else if (a.kind == Annot::Kind::Text) {
+  } else if (a.kind == Annot::Kind::Leader && handle == 0 && !a.pts.empty()) {
+    a.pts[0] = {x, y};
+  } else if (a.kind == Annot::Kind::Text || a.kind == Annot::Kind::Leader) {
     const float top = std::max(original.y0, original.y1);
     const float oldH = std::max(1.f, top - std::min(original.y0, original.y1));
     a = original;
@@ -638,6 +665,15 @@ void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bo
   case Annot::Kind::Text:
     dl->AddText(FontForNote(a), a.fontSize * k, S(l, t), col, a.text.c_str());
     break;
+  case Annot::Kind::Leader: {
+    const float bl = std::min(a.x0, a.x1), br = std::max(a.x0, a.x1), bb = std::min(a.y0, a.y1), bt = std::max(a.y0, a.y1);
+    const LeaderGeom g = LeaderLine(a);
+    dl->AddRect(S(bl, bt), S(br, bb), col, 0.f, 0, th);
+    dl->AddLine(S(g.sx, g.sy), S(g.tx, g.ty), col, th);
+    dl->AddTriangleFilled(S(g.tx, g.ty), S(g.w1x, g.w1y), S(g.w2x, g.w2y), col);
+    dl->AddText(FontForNote(a), a.fontSize * k, S(bl + kLeaderPad, bt - kLeaderPad), col, a.text.c_str());
+    break;
+  }
   }
   if (selected) {
     const float pad = 3.f;
@@ -1919,12 +1955,14 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   toolButton("Line", Tool::Line);
   toolButton("Rectangle", Tool::Rect);
   toolButton("Ellipse", Tool::Ellipse);
+  toolButton("Leader", Tool::Leader);
 
   bool changed = false;
   changed |= ImGui::ColorEdit3("##annotcol", u.color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
   ImGui::SameLine();
   const Annot* sel = u.selected >= 0 ? &items[static_cast<size_t>(u.selected)] : nullptr;
-  const bool textStyle = u.tool == Tool::Text || (sel != nullptr && sel->kind == Annot::Kind::Text);
+  const bool leaderStyle = u.tool == Tool::Leader || (sel != nullptr && sel->kind == Annot::Kind::Leader);
+  const bool textStyle = u.tool == Tool::Text || leaderStyle || (sel != nullptr && sel->kind == Annot::Kind::Text);
   if (textStyle) {
     ImGui::SetNextItemWidth(130.f);
     const auto& fonts = FontChoices();
@@ -1944,12 +1982,15 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(70.f);
     changed |= ImGui::DragFloat("##annotsize", &u.fontSize, 0.25f, 4.f, 200.f, "%.0f pt");
-  } else {
+  }
+  if (!textStyle || leaderStyle) { // a Leader has both: its text and the thickness of its box and arrow
+    if (leaderStyle)
+      ImGui::SameLine();
     ImGui::SetNextItemWidth(110.f);
     changed |= ImGui::SliderFloat("##annotw", &u.thickness, 0.5f, 20.f, "%.1f pt");
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("Line thickness");
-    if (u.tool != Tool::Line && !IsMeasureTool(u.tool) &&
+    if (!leaderStyle && u.tool != Tool::Line && !IsMeasureTool(u.tool) &&
         (sel == nullptr || (sel->kind != Annot::Kind::Line && !sel->IsDimension()))) {
       ImGui::SameLine();
       changed |= ImGui::Checkbox("Fill", &u.fill);
@@ -2133,10 +2174,12 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
         u.session.Replace(u.textEdit, a);
       } else {
         Annot a;
-        a.kind = Annot::Kind::Text;
+        a.kind = u.textIsLeader ? Annot::Kind::Leader : Annot::Kind::Text;
         a.page = u.textPage;
-        a.x0 = u.textX;
-        a.y1 = u.textY;
+        a.x0 = a.x1 = u.textX; // the box's top-left corner is the clicked point; FitTextBox sizes it from there
+        a.y0 = a.y1 = u.textY;
+        if (u.textIsLeader)
+          a.pts = {u.leaderTip};
         a.text = u.textBuf;
         ApplyStyle(u, a);
         u.session.Add(a);
@@ -2376,7 +2419,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
         } else {
           SelectAnnot(u, hit);
           const Annot& a = items[static_cast<size_t>(hit)];
-          if (a.kind == Annot::Kind::Text && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+          if ((a.kind == Annot::Kind::Text || a.kind == Annot::Kind::Leader) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             std::snprintf(u.textBuf, sizeof(u.textBuf), "%s", a.text.c_str());
             u.textEdit = hit;
             u.textPopup = true;
@@ -2483,6 +2526,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
       } else if (u.tool == Tool::Text) {
         u.textBuf[0] = 0;
         u.textEdit = -1;
+        u.textIsLeader = false;
         u.textPage = r.page;
         u.textX = x;
         u.textY = y;
@@ -2491,12 +2535,21 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
         float cx, cy;
         toPt(r, cx, cy, true, true);
         Annot a;
-        a.kind = u.tool == Tool::Line ? Annot::Kind::Line : u.tool == Tool::Rect ? Annot::Kind::Rect : Annot::Kind::Ellipse;
+        a.kind = u.tool == Tool::Line     ? Annot::Kind::Line
+                 : u.tool == Tool::Rect   ? Annot::Kind::Rect
+                 : u.tool == Tool::Leader ? Annot::Kind::Leader
+                                          : Annot::Kind::Ellipse;
         a.page = r.page;
         a.x0 = a.x1 = cx;
         a.y0 = a.y1 = cy;
+        if (a.kind == Annot::Kind::Leader) { // the first point is the arrow tip; the box follows the pointer
+          a.pts = {{cx, cy}};
+          a.text = "Note";
+        }
         ApplyStyle(u, a);
         u.drag = AnnotUi::Drag::Create;
+        u.createSticky = false;
+        u.pressMouse = io.MousePos;
         u.dragPage = r.page;
         u.original = u.preview = a;
       }
@@ -2509,6 +2562,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
   const PageRect* r = rectOf(u.dragPage);
   if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
     u.drag = AnnotUi::Drag::None;
+    u.createSticky = false;
     return;
   }
   // A click is not a drag: nothing moves (and nothing snaps) until the pointer has travelled a few pixels, so
@@ -2518,7 +2572,11 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
   if (r != nullptr && (u.dragMoved || u.drag == AnnotUi::Drag::Create)) {
     float x, y;
     toPt(*r, x, y, u.drag != AnnotUi::Drag::Move, u.drag != AnnotUi::Drag::Move);
-    if (u.drag == AnnotUi::Drag::Create) {
+    if (u.drag == AnnotUi::Drag::Create && u.preview.kind == Annot::Kind::Leader) {
+      u.preview.x0 = u.preview.x1 = x; // the box's top-left follows the pointer; FitTextBox sizes it
+      u.preview.y0 = u.preview.y1 = y;
+      FitTextBox(u.preview);
+    } else if (u.drag == AnnotUi::Drag::Create) {
       u.preview.x1 = x;
       u.preview.y1 = y;
     } else if (u.drag == AnnotUi::Drag::Handle) {
@@ -2537,10 +2595,45 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
       }
     }
   }
+  // A shape is made by press-drag-release, or by click, move, click: a release that has not travelled leaves the
+  // shape waiting (with its preview following the pointer) for the second click.
+  const auto finishCreate = [&] {
+    const Annot& p = u.preview;
+    const bool leader = p.kind == Annot::Kind::Leader && !p.pts.empty();
+    const float dx = leader ? p.x0 - p.pts[0].first : p.x1 - p.x0, dy = leader ? p.y1 - p.pts[0].second : p.y1 - p.y0;
+    if (std::hypot(dx, dy) * k < 4.f)
+      return; // both clicks on the same spot: nothing to make
+    if (leader) { // the text is typed next, in the note dialog
+      u.textBuf[0] = 0;
+      u.textEdit = -1;
+      u.textIsLeader = true;
+      u.leaderTip = p.pts[0];
+      u.textPage = p.page;
+      u.textX = p.x0;
+      u.textY = p.y1;
+      u.textPopup = true;
+    } else {
+      u.session.Add(p);
+    }
+  };
+  if (u.drag == AnnotUi::Drag::Create && u.createSticky) {
+    if (!(u.tool == Tool::Line || u.tool == Tool::Rect || u.tool == Tool::Ellipse || u.tool == Tool::Leader)) {
+      u.drag = AnnotUi::Drag::None; // another tool was chosen while waiting for the second click
+      u.createSticky = false;
+    } else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive()) {
+      finishCreate();
+      u.drag = AnnotUi::Drag::None;
+      u.createSticky = false;
+    }
+    return;
+  }
   if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
     if (u.drag == AnnotUi::Drag::Create) {
-      if (std::hypot(u.preview.x1 - u.preview.x0, u.preview.y1 - u.preview.y0) * k >= 4.f)
-        u.session.Add(u.preview);
+      if (std::hypot(io.MousePos.x - u.pressMouse.x, io.MousePos.y - u.pressMouse.y) < 4.f) {
+        u.createSticky = true; // a click, not a drag: wait for the second click
+        return;
+      }
+      finishCreate();
     } else if (u.dragMoved && u.selected >= 0 && u.preview != u.original) {
       u.session.Replace(u.selected, u.preview);
     }

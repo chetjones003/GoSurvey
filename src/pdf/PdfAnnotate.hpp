@@ -18,10 +18,11 @@ namespace pdfview {
 struct Annot {
   /// Length, PolyLength, Area and Angle are the REQ-391 scaled dimensions: their geometry is `pts`, and their
   /// label is worked out from the page's scale (it is never stored, so a scale change keeps it true).
-  enum class Kind { Text, Line, Rect, Ellipse, Length, PolyLength, Area, Angle };
+  enum class Kind { Text, Line, Rect, Ellipse, Leader, Length, PolyLength, Area, Angle };
   Kind kind = Kind::Rect;
   int page = 0; ///< zero-based
   /// Line: start and end. Rect / Ellipse / Text: two opposite corners of the box (any order).
+  /// Leader (REQ-396): the box of the note (as Text, with kLeaderPad round the text) and `pts[0]`, the arrow tip.
   float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
   /// Dimensions: Length 2 points; PolyLength 2 or more; Area 3 or more (closed); Angle 3 (the middle one is the corner).
   std::vector<std::pair<float, float>> pts;
@@ -115,6 +116,18 @@ std::string DimensionLabel(const Annot& a, const PageScale& scale);
 /// Reads back the annotations of \p file that SaveAnnotated writes (Text, Line, Rect, Ellipse); other
 /// annotations in the file are skipped. Empty on any failure.
 std::vector<Annot> ReadAnnotations(const std::filesystem::path& file);
+
+/// REQ-396: the padding between a Leader's box and its text, in points.
+constexpr float kLeaderPad = 4.f;
+
+/// A Leader's drawn line: from the point on its box nearest the tip (the middle of one edge) to the tip, plus the
+/// two back corners of the arrowhead at the tip.
+struct LeaderGeom {
+  float sx = 0.f, sy = 0.f; ///< where the line leaves the box
+  float tx = 0.f, ty = 0.f; ///< the tip
+  float w1x = 0.f, w1y = 0.f, w2x = 0.f, w2y = 0.f; ///< the arrowhead's two back corners
+};
+LeaderGeom LeaderLine(const Annot& a);
 
 /// A text annotation's size estimate in points (no font is loaded): used to size a new note's box.
 void EstimateTextBox(const std::string& utf8, float fontSize, float& wPt, float& hPt);

@@ -260,6 +260,40 @@ void EstimateTextBox(const std::string& utf8, float fontSize, float& wPt, float&
   hPt = static_cast<float>(lines) * fontSize * 1.2f;
 }
 
+LeaderGeom LeaderLine(const Annot& a) {
+  LeaderGeom g;
+  const float tx = a.pts.empty() ? a.x0 : a.pts[0].first, ty = a.pts.empty() ? a.y0 : a.pts[0].second;
+  const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
+  const float cx = (l + r) * 0.5f, cy = (b + t) * 0.5f;
+  const float mids[4][2] = {{l, cy}, {r, cy}, {cx, t}, {cx, b}};
+  int best = 0;
+  float bestD = 1e30f;
+  for (int i = 0; i < 4; ++i) {
+    const float d = std::hypot(mids[i][0] - tx, mids[i][1] - ty);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  g.sx = mids[best][0];
+  g.sy = mids[best][1];
+  g.tx = tx;
+  g.ty = ty;
+  const float len = std::hypot(g.sx - tx, g.sy - ty);
+  if (len > 1e-3f) {
+    const float al = std::min(std::max(6.f, a.thickness * 3.f + 4.f), len * 0.8f), aw = al * 0.35f;
+    const float ux = (g.sx - tx) / len, uy = (g.sy - ty) / len; // from the tip back along the line
+    g.w1x = tx + ux * al - uy * aw;
+    g.w1y = ty + uy * al + ux * aw;
+    g.w2x = tx + ux * al + uy * aw;
+    g.w2y = ty + uy * al - ux * aw;
+  } else {
+    g.w1x = g.w2x = tx;
+    g.w1y = g.w2y = ty;
+  }
+  return g;
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Writing
 // ---------------------------------------------------------------------------------------------------
@@ -681,8 +715,9 @@ bool AddDimension(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, const PageS
   return ok;
 }
 
-bool AddText(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, int serial, std::vector<Patch>& patches,
-             std::string& error) {
+// The font a note (or a Leader's text) is written in: the embedded TrueType file when it has one, else the
+// standard PDF font. Null, with `error` set, when neither loads.
+FPDF_FONT LoadNoteFont(FPDF_DOCUMENT doc, const Annot& a, std::string& error) {
   FPDF_FONT font = nullptr;
   std::string fontBytes;
   if (!a.fontFile.empty()) {
@@ -694,13 +729,15 @@ bool AddText(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, int serial, std:
   }
   if (font == nullptr)
     font = FPDFText_LoadStandardFont(doc, StandardFontName(a).c_str());
-  if (font == nullptr) {
+  if (font == nullptr)
     error = "the font \"" + a.font + "\" could not be loaded";
-    return false;
-  }
+  return font;
+}
+
+// One text object per line of the note, the first line's top at `top` and its left at `left`.
+void NoteTextObjects(FPDF_DOCUMENT doc, FPDF_FONT font, const Annot& a, float left, float top,
+                     std::vector<FPDF_PAGEOBJECT>& objs) {
   const Rgb c = Split(a.color);
-  const float top = std::max(a.y0, a.y1), left = std::min(a.x0, a.x1);
-  std::vector<FPDF_PAGEOBJECT> objs;
   std::istringstream lines(a.text);
   std::string line;
   float baseline = top - a.fontSize * 0.9f;
@@ -717,6 +754,27 @@ bool AddText(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, int serial, std:
     }
     baseline -= a.fontSize * 1.2f;
   }
+}
+
+// The entries both note kinds carry: /DA, the text, and the font label our own reader gets the font back from.
+bool SetNoteEntries(FPDF_ANNOTATION an, const Annot& a, const std::string& marker, size_t padChars) {
+  const Rgb c = Split(a.color);
+  const std::string da = "/Helv " + Num(a.fontSize) + " Tf " + Comp(c.r) + " " + Comp(c.g) + " " + Comp(c.b) + " rg";
+  bool ok = SetString(an, "NM", marker);
+  ok = ok && SetString(an, "GSPAD", std::string(padChars, 'x'));
+  ok = ok && SetString(an, "DA", da);
+  ok = ok && SetString(an, "Contents", a.text);
+  ok = ok && SetString(an, "GSFont", a.font + "|" + (a.bold ? "b" : "-") + "|" + (a.italic ? "i" : "-"));
+  return ok;
+}
+
+bool AddText(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, int serial, std::vector<Patch>& patches,
+             std::string& error) {
+  FPDF_FONT font = LoadNoteFont(doc, a, error);
+  if (font == nullptr)
+    return false;
+  std::vector<FPDF_PAGEOBJECT> objs;
+  NoteTextObjects(doc, font, a, std::min(a.x0, a.x1), std::max(a.y0, a.y1), objs);
   if (objs.empty()) {
     error = "a text note has no text";
     return false;
@@ -733,18 +791,62 @@ bool AddText(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, int serial, std:
   std::snprintf(id, sizeof(id), "gsa%05d", serial);
   p.marker = id;
   p.subtype = "FreeText";
-  const std::string da = "/Helv " + Num(a.fontSize) + " Tf " + Comp(c.r) + " " + Comp(c.g) + " " +
-                         Comp(c.b) + " rg";
-  bool ok = SetString(an, "NM", p.marker);
-  ok = ok && SetString(an, "GSPAD", std::string(kPadChars, 'x'));
-  ok = ok && SetString(an, "DA", da);
-  ok = ok && SetString(an, "Contents", a.text);
-  ok = ok && SetString(an, "GSFont", a.font + "|" + (a.bold ? "b" : "-") + "|" + (a.italic ? "i" : "-"));
+  const bool ok = SetNoteEntries(an, a, p.marker, kPadChars);
   FPDFPage_CloseAnnot(an);
   if (ok)
     patches.push_back(p);
   else
     error = "PDFium could not fill in the text annotation";
+  return ok;
+}
+
+// A Leader (REQ-396): a FreeText callout. The placeholder draws the box, its text and the arrow; the patch makes it
+// a FreeText of intent FreeTextCallout whose /CL starts at the arrow tip. GSLeader keeps the tip and box for our
+// own reader (the annotation's /Rect also covers the arrow).
+bool AddLeader(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, int serial, std::vector<Patch>& patches,
+               std::string& error) {
+  if (a.pts.empty() || a.text.empty()) {
+    error = "a leader has no tip or no text";
+    return false;
+  }
+  FPDF_FONT font = LoadNoteFont(doc, a, error);
+  if (font == nullptr)
+    return false;
+  const Rgb c = Split(a.color);
+  const float w = std::max(0.1f, a.thickness);
+  const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
+  const LeaderGeom g = LeaderLine(a);
+  std::vector<FPDF_PAGEOBJECT> objs;
+  const auto add = [&](FPDF_PAGEOBJECT o) {
+    if (o != nullptr)
+      objs.push_back(o);
+  };
+  add(StrokePath({{l, t}, {r, t}, {r, b}, {l, b}, {l, t}}, c, w, false));
+  add(StrokePath({{g.sx, g.sy}, {g.tx, g.ty}}, c, w, false));
+  add(StrokePath({{g.tx, g.ty}, {g.w1x, g.w1y}, {g.w2x, g.w2y}}, c, 0.1f, true));
+  NoteTextObjects(doc, font, a, l + kLeaderPad, t - kLeaderPad, objs);
+  FPDF_ANNOTATION an = NewObjectAnnot(page, objs);
+  if (an == nullptr) {
+    for (FPDF_PAGEOBJECT o : objs)
+      FPDFPageObj_Destroy(o);
+    error = "PDFium could not create the leader annotation";
+    return false;
+  }
+  Patch p;
+  char id[16];
+  std::snprintf(id, sizeof(id), "gsa%05d", serial);
+  p.marker = id;
+  p.subtype = "FreeText";
+  p.extra = "/IT/FreeTextCallout/CL[" + Num(g.tx) + " " + Num(g.ty) + " " + Num(g.sx) + " " + Num(g.sy) +
+            "]/LE/OpenArrow";
+  bool ok = SetNoteEntries(an, a, p.marker, p.extra.size() + 48);
+  ok = ok && SetString(an, "GSLeader",
+                       Num(g.tx) + " " + Num(g.ty) + " " + Num(l) + " " + Num(b) + " " + Num(r) + " " + Num(t) + " " + Num(w));
+  FPDFPage_CloseAnnot(an);
+  if (ok)
+    patches.push_back(p);
+  else
+    error = "PDFium could not fill in the leader annotation";
   return ok;
 }
 
@@ -909,6 +1011,9 @@ std::string SaveAnnotated(const std::filesystem::path& source, const std::vector
           break;
         case Annot::Kind::Text:
           ok = AddText(doc, page, *a, ++serial, patches, error);
+          break;
+        case Annot::Kind::Leader:
+          ok = AddLeader(doc, page, *a, ++serial, patches, error);
           break;
         case Annot::Kind::Length:
         case Annot::Kind::PolyLength:
@@ -1079,13 +1184,23 @@ std::vector<Annot> ReadAnnotations(const std::filesystem::path& file) {
         a.x1 = rc.right;
         a.y0 = rc.bottom;
         a.y1 = rc.top;
+        float lead[7] = {};
+        if (std::sscanf(GetString(an, "GSLeader").c_str(), "%f %f %f %f %f %f %f", &lead[0], &lead[1], &lead[2], &lead[3],
+                        &lead[4], &lead[5], &lead[6]) == 7) { // a Leader: its tip and box are kept beside the rect
+          a.kind = Annot::Kind::Leader;
+          a.pts = {{lead[0], lead[1]}};
+          a.x0 = lead[2];
+          a.y0 = lead[3];
+          a.x1 = lead[4];
+          a.y1 = lead[5];
+        }
         a.text = GetString(an, "Contents");
         float size = 12.f;
         unsigned col = 0;
         ParseDa(GetString(an, "DA"), size, col);
         a.fontSize = size;
         a.color = col;
-        a.thickness = 1.f;
+        a.thickness = a.kind == Annot::Kind::Leader ? lead[6] : 1.f;
         const std::string f = GetString(an, "GSFont"); // family|b|i
         const size_t p1 = f.find('|');
         if (p1 != std::string::npos && f.size() >= p1 + 4) {
