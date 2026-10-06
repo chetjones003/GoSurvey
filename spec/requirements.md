@@ -11805,6 +11805,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
      likely blunder: a wrong pick, a mistyped value, a wrong unit, or an unreliable drawn dimension). **Use
      best-fit scale** applies it as an ordinary scale change (one undo step); with an outlier present the
      window offers the best fit **without the outlier** as well.
+  4a. **Correction (the user's decision).** From any check (**one is enough**) or from the best fit,
+     **Correct scale...** shows the error and lets the user choose: (a) **Match this check**: scale the page so
+     this check reads exactly its stated value; (b) **Best fit** (two or more checks); (c) **A typed percentage**
+     (for example +0.20 % makes every reading 0.20 % larger); (d) **Leave the scale as it is**. Before anything is
+     applied the box previews the **new difference of every check** under that choice, because correcting to one
+     check moves the error onto the others and the user must see that. Applying is **one undo step** and the page's
+     scale text is marked adjusted ("adjusted +0.19 %"); the Scale report keeps the original calibrated value. The
+     program never applies a correction by itself.
   5. **After a calibration** the window offers a one-click "Check this scale against another dimension", and
      says when the calibrated scale is close to a standard scale (already shown by REQ-390's calibration box).
   6. **Honest limits stated in the window:** the check proves the *picked* distances agree, not that the
@@ -11821,6 +11829,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
     and equals the hand-calculated value; a check implying 3.980 among three that imply 4.000 is the only
     **Outlier**; best fit without the outlier is 4.000; one check alone gives no best fit and no outlier.
   - `[issue732][req394]` test: a calibration counts as a check; applying the best fit is one undo step.
+  - `[issue732][req394]` test: correction by "match this check" (measured 42.98, stated 43.06) makes that check read
+    43.06 and moves the calibration check by the same fraction, and the preview lists exactly those new
+    differences before applying; a typed +0.20 % multiplies every reading by 1.0020; "leave it" changes nothing;
+    each applied correction is one undo step and undo restores the scale and its text exactly.
   - Manual: on the issue's sheet, calibrating on the 180.55 pt "10'-0"" span and checking the "43'-0 3/4""
     dimension shows an amber verdict (about 0.2 %) and marks the calibration as the outlier once two other
     10' spans are checked.
