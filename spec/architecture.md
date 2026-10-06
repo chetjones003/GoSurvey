@@ -4789,3 +4789,45 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   readable by any zip tool; a hand-edited pack that breaks the rules above is refused whole. Packing
   and extracting a very large project blocks the UI thread while it runs (no progress bar yet — recorded
   technical debt, like the P6 copy).
+
+### ADR-067 — The PDF viewer is a floating GoSurvey window over PDFium, rendering pages off the UI thread into a bounded read-ahead cache   (2026-10-06, accepted)
+
+- **Status:** accepted (2026-10-06, D-2026-10-06-a; the user approved the three open-question answers and
+  asked for a better-than-1-second open and no lag spikes while scrolling). Backs REQ-387/388/389
+  (GitHub issue #732).
+- **Context.** PDFium is already vendored (`third_party/pdfium`, used by `PdfPlot` and `PdfAttach`).
+  `PdfAttach` already renders progressively and cancellably. GoSurvey has one GLFW window and draws all
+  windows with Dear ImGui. A several-hundred-page PDF must open at once and scroll without frame spikes.
+- **Decision.**
+  (a) **"New window" = a floating, dockable ImGui window** inside the GoSurvey application window (like
+      the Project window), not a second operating-system window. A second OS window would need a second
+      GL context or ImGui multi-viewport, which the app does not use today. One window per open file.
+  (b) **One pure module, `src/pdf/PdfDocument.{hpp,cpp}`** (PDFium only; no window, no
+      `AppCommandState`): open, page count, per-page sizes, render a page to a pixel buffer at a scale,
+      annotation read/write (REQ-388) and page extraction (`PdfSplit`, REQ-389). Opening reads only the
+      cross-reference table and page tree; page sizes are fetched lazily and cached, so open time does
+      not grow with page count.
+  (c) **Rendering is off the UI thread, one-shot workers (§8), never the UI thread.** PDFium is not
+      thread-safe per document, so each document has **one render worker at a time** guarded by a
+      mutex; a request queue ordered by distance from the viewport, pages ahead of the scroll direction
+      first. Requests for pages that scrolled away are dropped, and a render in progress is stopped
+      through PDFium's progressive-render pause callback. The UI thread only uploads finished bitmaps
+      to textures, **at most a small fixed number per frame** so a burst of finished pages cannot cause
+      a long frame.
+  (d) **Bounded cache.** Page images live in an LRU-by-distance cache with a byte cap (default 256 MB,
+      a setting). Each visible page first gets a **low-resolution stand-in** (cheap, rendered first) and
+      is then re-rendered at the display scale. Textures are released with their cache entry.
+  (e) **Annotations are standard PDF annotations written through PDFium** (REQ-388); edits are held in
+      memory as an undo list and written only by **Save As** to a temporary file renamed into place.
+      The original is never opened for writing (D-2026-10-06-a).
+  (f) **Routing.** One function, `OpenPdfInViewer(path)`, replaces `OpenWithDefaultApp` for `.pdf` at
+      every call site; non-PDF files keep the shell route.
+- **Alternatives.** (1) *Second OS window / ImGui multi-viewport:* heavier, new GL-context risk, no gain
+      for the user. (2) *Render on the UI thread with a time slice:* simpler but cannot guarantee no
+      spikes on a dense drawing sheet. (3) *Annotations in a sidecar:* invisible to other readers and
+      easily separated from the PDF. (4) *A render-thread pool:* PDFium's per-document lock makes it
+      no faster for one document; deferred until measured.
+- **Consequences.** No new dependency. Memory is capped regardless of page count. Page render order
+  logic is a pure scheduler and cache that can be unit-tested without a window. Cost: a dense CAD-plot
+  PDF page can take longer than one frame to render, so the viewer shows the stand-in first; this is
+  the designed behaviour, and the bench reports the worst frame so a regression is visible.

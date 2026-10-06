@@ -11447,6 +11447,112 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #715; D-2026-10-05-h).
 
+### REQ-387 — Built-in PDF viewer window; every PDF opens in it (GitHub issue #732, phase 1)
+
+- Purpose: issue **#732** — GoSurvey hands a PDF to an outside program today
+  (`OpenWithDefaultApp`, `src/ui/CadUi_Toolspace.cpp`). The user wants PDFs to open inside GoSurvey, fast
+  enough that a several-hundred-page plan set feels like scrolling a picture, not loading a file.
+- Priority: should
+- Type: functional + performance
+- Decision: D-2026-10-06-a (answers to the issue's three open questions), ADR-067.
+- Depends on: REQ-201 (honest logging), REQ-100 (frame budget), REQ-300 (dependency rule — PDFium is
+  already in the tree, no new dependency), REQ-378/REQ-379 (Project tab / tracked files).
+- Statement:
+  1. **One viewer, every route.** Opening a PDF from the Project tab (double-click), the tracked-file
+     list, the recent-files list, or an attached PDF underlay's "open" action opens the **PDF Viewer
+     window** (a floating, dockable GoSurvey window, ADR-067 (a)). No route may hand a `.pdf` to
+     `ShellExecute` any more. Opening a file already open in a viewer window focuses that window.
+  2. **View.** Page-by-page and continuous-scroll layouts; zoom (wheel, fit-width, fit-page, typed %);
+     pan; Page Up/Down, Home/End and a page-number box; a thumbnail strip that is itself virtualised
+     (only visible thumbnails exist). A password-protected, damaged or unreadable file shows a stated
+     reason in the window (REQ-201) and never crashes or hangs the app.
+  3. **Speed — open.** The **first page is on screen within 250 ms of the open request** for a 500-page
+     file on the reference machine (page count and page sizes come from the cross-reference table, not
+     from reading every page). "As fast as possible" is the goal; 250 ms is the number we test against
+     (the user asked to beat the 1 s proposal, 2026-10-06).
+  4. **Speed — scroll (no lag spikes).** Once the first pages are visible, scrolling and zooming a
+     500-page file never freezes the UI: **no frame longer than 16 ms (REQ-100) caused by the viewer**,
+     measured while scrolling the whole file top to bottom at fast wheel speed and while jumping
+     between distant pages. Pages are rendered **off the UI thread** (one-shot workers, not a pool —
+     §8), nearest the viewport first, **ahead of the scroll direction** (a read-ahead window of several
+     pages each way), into a **bounded** page-image cache (evicts farthest-first; memory is capped,
+     ADR-067 (d)). A page not ready yet shows a low-resolution stand-in or the page's blank sheet,
+     never a stall; a stale render for a page that scrolled away is cancelled (progressive render, as
+     `PdfAttach` already does).
+  5. **Memory.** Viewing a 500-page file keeps resident memory bounded by the cache cap, not by page
+     count.
+  6. **Out of scope for this REQ:** editing (REQ-388), splitting (REQ-389), text search, form filling,
+     digital signatures, printing, a separate operating-system window.
+- Acceptance:
+  - `[issue732][req387]` unit test: opening a generated 500-page PDF reports page count and per-page
+    sizes without rendering a page; a corrupt file and a password-protected file return a stated error.
+  - `[issue732][req387]` test: the page-image cache never exceeds its cap while a test walks all
+    500 pages, and evicts the page farthest from the viewport first.
+  - `[issue732][req387]` test: the read-ahead scheduler asks for the visible pages first, then the pages
+    ahead of the scroll direction, and cancels a request for a page that left the window.
+  - `[issue732][req387]` bench (`BENCH PDFVIEW`, reference machine, 500-page file): first page ≤ 250 ms;
+    p95 frame while scrolling top to bottom ≤ 16 ms; worst frame over the run is reported.
+  - Manual: every route in clause 1 opens the viewer; none launches an outside program.
+- Owner-layer: Domain/IO (`src/pdf/PdfDocument`, pure), Renderer (page textures), UI (window), Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a).
+
+### REQ-388 — PDF annotations: text, lines, shapes, colour, thickness, font (GitHub issue #732, phase 2)
+
+- Purpose: issue **#732** feature 2 — mark up a PDF in the viewer.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-a (annotations live **inside the PDF**; **Save As only**), ADR-067.
+- Depends on: REQ-387.
+- Statement:
+  1. **Tools.** Text note (free text), line, rectangle and ellipse, each with a **colour**, a **line
+     thickness** (and fill on/off for closed shapes) and, for text, a **font** (the standard PDF fonts
+     plus the fonts GoSurvey already loads) and size.
+  2. **Stored as standard PDF annotations** (FreeText, Line, Square, Circle) written through PDFium's
+     annotation API, so any other PDF reader shows them. No sidecar file.
+  3. **Select / move / resize / delete** an annotation, with **undo/redo** inside the viewer.
+  4. **Save As only.** The original file is **never overwritten**. "Save As" writes a new PDF; the
+     original is byte-for-byte unchanged (REQ-201: the result is logged). Unsaved edits prompt on close.
+  5. Annotating a 500-page file stays inside the REQ-387 frame budget (only the touched page is
+     re-rendered).
+  6. **Out of scope:** editing or deleting existing page content or existing third-party annotations,
+     highlight/stamp/signature tools, comment threads.
+- Acceptance:
+  - `[issue732][req388]` test: each tool writes one annotation of the matching subtype with the chosen
+    colour, thickness and font; re-opening the saved PDF reads them back unchanged.
+  - `[issue732][req388]` test: Save As leaves the source file's bytes identical (hash compared).
+  - `[issue732][req388]` test: undo/redo restores the annotation list exactly.
+  - Manual: the saved PDF opens in a second PDF reader with the annotations visible.
+- Owner-layer: Domain/IO (`src/pdf/`), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a).
+
+### REQ-389 — Split a PDF: save chosen pages as a new PDF (GitHub issue #732, phase 3)
+
+- Purpose: issue **#732** feature 3 — extract pages from a large PDF into a new file.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-a (Save As only), ADR-067.
+- Depends on: REQ-387.
+- Statement:
+  1. **Page-range input** such as `1-5, 9, 12-20`: comma-separated pages and inclusive ranges, spaces
+     allowed, order preserved as typed, a duplicated page repeated. An empty list, a page `< 1` or
+     `> pageCount`, a reversed range (`9-5`) or any other text is **refused with a message naming the
+     problem** (REQ-201); nothing is written.
+  2. **Output** is a **new PDF** containing exactly those pages (via PDFium page import, keeping page
+     content, size and any annotations). The source is never modified; saving over the source path is
+     refused. Written to a temporary file and renamed into place so a failure leaves no partial file.
+  3. **Offered** from the viewer (a Split command and a toolbar button) and as a typed command.
+  4. Splitting a 500-page file does not freeze the UI (worker thread; progress shown).
+- Acceptance:
+  - `[issue732][req389]` test: `1-5, 9, 12-20` on a 20-page file yields 9 pages in that order; each
+    output page matches the source page's size and text.
+  - `[issue732][req389]` test: each refusal case in clause 1 returns an error and writes no file.
+  - `[issue732][req389]` test: source hash unchanged; saving over the source is refused.
+- Owner-layer: Domain/IO (`src/pdf/PdfSplit`, pure), Commands, UI
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

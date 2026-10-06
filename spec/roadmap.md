@@ -282,6 +282,7 @@ A lightweight board that complements the milestones. Keep each column honest.
   P6 file tracking + Project Health → P7 Pack Project (ADR-066, D-2026-10-05-i) → P8 turnovers → P9 warning pass. **No code past
   P0 until this spec PR is merged and a Workshop task cites the phase's REQ.** Cloud storage, merge of
   diverged copies, configurable layout and simultaneous multi-user editing stay out.
+- **Built-in PDF viewer (REQ-387, REQ-388, REQ-389, ADR-067, D-2026-10-06-a, issue #732).** Three phases, one PR each: (1) viewer window + every PDF route + off-thread read-ahead cache + `BENCH PDFVIEW`; (2) annotations, Save As; (3) split by page range. **No code until the spec PR is merged and a Workshop task cites the phase's REQ.** Text search, forms, signatures and printing stay out.
 - **File Format Specs (REQ-170–REQ-174, ADR-041/042, D-2026-08-29-g).** Matrix:
   `spec/file-format-specs.md`. Order: LibreDWG MSVC link + R2004 write of a tiny drawing →
   map into CAD stores / retire converter from File open-save → point cloud + PTS → PTX/LAS/LAZ/E57
