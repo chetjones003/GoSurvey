@@ -6,7 +6,9 @@
 #include "CadUi.hpp"
 
 #include "CadCommands.hpp"
+#include "FontRegistry.hpp"
 #include "GsMigrate.hpp"   // kGsFormatVersion — what the offered build's format is compared against
+#include "MarkdownImGui.hpp"
 #include "UpdateService.hpp"
 
 #include <imgui.h>
@@ -60,7 +62,7 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
   // to Downloading (narrow: one line of text and a Cancel button) the window visibly shrank
   // sideways mid-download. Reported from the first live update, and it looks like a glitch
   // rather than a layout decision.
-  ImGui::SetNextWindowSize(ImVec2(560.f, 0.f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(720.f, 0.f), ImGuiCond_Always);
   // Re-centred EVERY frame, not just on appearing. The dialog's height changes as it moves
   // between phases and as optional content (a compatibility warning, release notes) appears, and
   // with a one-shot position it grows downward from wherever it first landed — which pushed the
@@ -72,8 +74,17 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
   // No close button and no click-away dismissal: every exit from this dialog is one of the
   // explicit choices below, so "I closed the window" can never be mistaken for a decision.
   // NoResize because the width is ours to control now, not the user's to drag.
+  // Same look as the What's New billboard (REQ-336) — see PushBillboardModalStyle.
+  PushBillboardModalStyle(1.f, 2.5f);
   if (!ImGui::BeginPopupModal(kTitle, nullptr, ImGuiWindowFlags_NoResize))
+  {
+    PopBillboardModalStyle();
     return;
+  }
+
+  ImGui::PushFont(FontReg::Billboard());
+  DrawBillboardChrome(1.f, 1.f);
+  DrawBillboardBadge(56.f, 8.f, 8.f);
 
   switch (upd.phase)
   {
@@ -120,10 +131,17 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
       if (!upd.available.notes.empty())
       {
         ImGui::TextUnformatted("What's new:");
-        ImGui::BeginChild("##updatenotes", ImVec2(0.f, 160.f), true,
-                          ImGuiWindowFlags_HorizontalScrollbar);
-        ImGui::TextUnformatted(upd.available.notes.c_str());
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+        if (ImGui::BeginChild("##updatenotes", ImVec2(0.f, 320.f), true,
+                              ImGuiWindowFlags_NoBackground))
+        {
+          DrawBillboardBodyBackdrop();
+          DrawMarkdownImGui(upd.available.notes);
+        }
         ImGui::EndChild();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
       }
 
       ImGui::TextDisabled(
@@ -131,11 +149,11 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
           "first.");
       ImGui::Separator();
 
-      if (ImGui::Button("Update Now", ImVec2(130.f, 0.f)))
+      if (BillboardButton("Update Now", true))
         update::BeginDownload(upd);
 
       ImGui::SameLine();
-      if (ImGui::Button("Remind Me Later", ImVec2(150.f, 0.f)))
+      if (BillboardButton("Remind Me Later", false))
       {
         // No state written: the next launch checks again and offers this same version.
         upd.phase = Phase::Idle;
@@ -143,7 +161,7 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
       }
 
       ImGui::SameLine();
-      if (ImGui::Button("Skip This Version", ImVec2(150.f, 0.f)))
+      if (BillboardButton("Skip This Version", false))
       {
         update::SkipAvailableVersion(upd);
         cmd.updatePrefs = upd.prefs;   // persist the skip through UserPrefs
@@ -163,7 +181,7 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
                       : -1.f;   // indeterminate: ImGui animates a marquee for a negative fraction
       ImGui::ProgressBar(fraction, ImVec2(-1.f, 0.f), FormatProgress(received, total).c_str());
 
-      if (ImGui::Button("Cancel", ImVec2(130.f, 0.f)) && upd.task)
+      if (BillboardButton("Cancel", false) && upd.task)
         upd.task->cancel.store(true, std::memory_order_relaxed);
       break;
     }
@@ -174,14 +192,14 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
       ImGui::TextDisabled("The installer will close GoSurvey, update it, and start it again.");
       ImGui::Separator();
 
-      if (ImGui::Button("Install and Restart", ImVec2(180.f, 0.f)))
+      if (BillboardButton("Install and Restart", true))
       {
         // The unsaved-work guard is the application loop's job, not this dialog's: it owns the
         // drawing list and the existing unsaved-changes modal. Raising the flag hands over.
         upd.awaitingUnsavedCheck = true;
       }
       ImGui::SameLine();
-      if (ImGui::Button("Not Now", ImVec2(130.f, 0.f)))
+      if (BillboardButton("Not Now", false))
       {
         // The verified installer stays on disk; the next launch re-offers and re-uses it.
         upd.phase = Phase::Idle;
@@ -198,7 +216,7 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
       ImGui::TextWrapped("%s", upd.lastError.c_str());
       ImGui::Separator();
       ImGui::TextDisabled("You can keep working; the update will be offered again next time.");
-      if (ImGui::Button("Close", ImVec2(130.f, 0.f)))
+      if (BillboardButton("Close", false))
       {
         upd.lastError.clear();
         upd.phase = Phase::Idle;
@@ -210,5 +228,7 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
       break;
   }
 
+  ImGui::PopFont();
   ImGui::EndPopup();
+  PopBillboardModalStyle();
 }
