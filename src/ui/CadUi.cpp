@@ -1306,6 +1306,8 @@ void DrawFloatingWindowChrome() {
       continue;
     if (w->DockIsActive || w->DockNodeAsHost)
       continue;  // docked panels state their elevation with CastShadowInto instead
+    if (w->ViewportOwned && w->Viewport != nullptr && (w->Viewport->Flags & ImGuiViewportFlags_NoDecoration) == 0)
+      continue;  // a window in its own OS window (the PDF viewer) has the operating system's frame
     // A title bar means "dialog"; the popup/tooltip flags catch menus and combos.
     // Everything else at top level is app furniture that paints its own edges —
     // the dockspace host, the status-bar strip, the floating command bar — and a

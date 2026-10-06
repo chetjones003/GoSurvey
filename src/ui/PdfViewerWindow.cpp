@@ -7,6 +7,14 @@
 
 #include <GL/glew.h>
 #include <imgui.h>
+#include <imgui_internal.h>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -32,12 +40,16 @@ double MsSince(Clock::time_point t) { return std::chrono::duration<double, std::
 constexpr float kBasePxPerPt = 96.f / 72.f; // zoom 100 % = 96 dpi
 constexpr float kGapPt = 8.f;
 constexpr float kMarginPx = 16.f;
-constexpr int kStandInMaxSide = 160;
+constexpr int kStandInMaxSide = 256;  // sharp enough for the largest thumbnail the sidebar can show
+constexpr int kSliceMs = 40;           // a sharp render pauses this often so waiting drafts can draw
+constexpr int kDraftBudgetMs = 120;   // a first stand-in stops here and keeps what it has drawn
 constexpr int kMaxRenderSide = 4096;
 constexpr size_t kUploadBytesPerFrame = 3u * 1024 * 1024; // ADR-067 (c): a burst of finished pages cannot make a long frame
 constexpr size_t kCacheCapBytes = 256ull * 1024 * 1024;
 constexpr int kReadAhead = 6;
-constexpr float kThumbItemH = 150.f;
+constexpr float kThumbWidthDefault = 190.f;
+constexpr float kThumbWidthMin = 120.f;
+constexpr float kThumbWidthMax = 340.f;
 
 // One render worker per document (ADR-067 (c)): a one-shot thread that drains the latest plan and
 // exits when it is empty, so an idle viewer owns no thread.
@@ -71,6 +83,34 @@ struct Worker {
     h = std::max(1, static_cast<int>(std::lround(s.hPt * pxPerPt)));
   }
 
+  /// Draws the drafts at the front of the queue. Called from inside a sharp render's pause.
+  RenderRequest nested{};     ///< the draft being drawn between slices (not queued, not yet in `done`)
+  bool haveNested = false;
+
+  void RunWaitingDrafts() {
+    for (;;) {
+      RenderRequest r;
+      {
+        std::lock_guard<std::mutex> lock(m);
+        if (stop.load() || plan.empty() || plan.front().level != Level::StandIn || plan.front().refine)
+          return;
+        r = plan.front();
+        plan.erase(plan.begin());
+        nested = r;
+        haveNested = true;
+      }
+      int w = 0, h = 0;
+      Dims(doc->Sizes()[static_cast<size_t>(r.page)], r, w, h);
+      RenderResult res;
+      res.req = r;
+      const bool ok = doc->RenderPage(r.page, w, h, res.bm, [this] { return stop.load(); }, 0, kDraftBudgetMs);
+      std::lock_guard<std::mutex> lock(m);
+      haveNested = false;
+      if (ok)
+        done.push_back(std::move(res));
+    }
+  }
+
   void Run() {
     for (;;) {
       RenderRequest r;
@@ -91,11 +131,26 @@ struct Worker {
       Dims(doc->Sizes()[static_cast<size_t>(r.page)], r, w, h);
       RenderResult res;
       res.req = r;
-      const bool ok = doc->RenderPage(r.page, w, h, res.bm, [this] { return abort.load() || stop.load(); });
+      // A stand-in has no use for annotations or LCD text fringes; a first one is a time-boxed draft.
+      const bool stand = r.level == Level::StandIn;
+      const int flags = stand ? 0 : PdfDocument::kDisplayFlags;
+      const int budget = stand && !r.refine ? kDraftBudgetMs : 0;
+      // A long sharp render is cut into slices; between slices any waiting draft (the thumbnail strip) draws.
+      const std::function<void()> between = [this] { RunWaitingDrafts(); };
+      const bool ok = doc->RenderPage(r.page, w, h, res.bm, [this] { return abort.load() || stop.load(); }, flags,
+                                      budget, stand ? 0 : kSliceMs, stand ? std::function<void()>() : between);
+      // A sharp render also yields a full-quality stand-in for nothing: shrink it instead of drawing the page again.
+      RenderResult derived;
+      if (ok && !stand && !res.bm.partial) {
+        derived.req = RenderRequest{r.page, Level::StandIn, 0, true};
+        derived.bm = Downscale(res.bm, kStandInMaxSide);
+      }
       std::lock_guard<std::mutex> lock(m);
       haveCurrent = false;
       if (ok) {
         done.push_back(std::move(res));
+        if (!derived.bm.bgra.empty())
+          done.push_back(std::move(derived));
       } else if (!abort.load() && !stop.load()) {
         res.failed = true; // a real failure: report it so the planner stops asking
         res.bm = {};
@@ -113,6 +168,8 @@ struct Worker {
     // The request in flight is not queued again.
     if (haveCurrent)
       p.erase(std::remove(p.begin(), p.end(), current), p.end());
+    if (haveNested)  // a draft being drawn between slices of a sharp render
+      p.erase(std::remove(p.begin(), p.end(), nested), p.end());
     plan = std::move(p);
     if (!running && !plan.empty()) {
       if (th.joinable())
@@ -128,6 +185,8 @@ struct Worker {
     std::vector<RenderRequest> w;
     for (const RenderResult& r : done)
       w.push_back(r.req);
+    if (haveNested)
+      w.push_back(nested);
     return w;
   }
 
@@ -149,6 +208,10 @@ struct BenchRun {
   std::vector<double> frameMs;
   bool scrolling = false;
   bool finished = false; ///< report written; the viewer closes itself and deletes the file
+  bool real = false;     ///< a real file named by the user: no scrolling pass, and the file is never deleted
+  double thumbFirstMs = -1;  ///< first strip thumbnail on screen
+  double thumbAllMs = -1;    ///< every thumbnail in the visible strip on screen
+  std::vector<double> thumbTimes;  ///< when each strip thumbnail count was reached
   float scrollPx = 0.f;
   std::filesystem::path file;
 };
@@ -159,6 +222,9 @@ struct Viewer {
   std::string title;
   bool open = true;
   bool focusNext = false;
+  bool osFramed = true;    ///< floating in its own OS window: the OS draws the title bar, so ImGui draws none
+  void* framedHwnd = nullptr;  ///< the OS window whose frame colours were last set
+  bool placed = false; ///< first-frame position given; after that the user (or the saved layout) owns it
   std::future<PdfDocument::OpenResult> opening;
   bool loaded = false;
   std::string error;
@@ -169,6 +235,8 @@ struct Viewer {
   float pxPerPt = kBasePxPerPt;
   bool continuous = true;
   bool showThumbs = true;
+  float thumbW = kThumbWidthDefault;  ///< sidebar width, dragged by its edge
+  bool panning = false;                ///< middle button held on the pages
   int curPage = 0;
   float pendingScrollY = -1.f;
   float pendingScrollX = -1.f;
@@ -192,6 +260,28 @@ int g_nextId = 1;
 // Textures are freed at the START of the next frame: this frame's draw lists (the thumbnail strip is
 // recorded before the pages are updated) may still point at them until the frame is rendered.
 std::vector<GLuint> g_graveyard;
+
+#if defined(_WIN32)
+// The viewer's Windows title bar takes GoSurvey's dark chrome instead of the system's light one
+// (Windows 11 honours these; older Windows ignores them and keeps its own frame).
+void ApplyOsFrameColors(void* hwndRaw, ImU32 bar) {
+  using DwmSetFn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+  static DwmSetFn setAttr = [] {
+    HMODULE m = ::LoadLibraryW(L"dwmapi.dll");
+    return m ? reinterpret_cast<DwmSetFn>(::GetProcAddress(m, "DwmSetWindowAttribute")) : nullptr;
+  }();
+  if (setAttr == nullptr || hwndRaw == nullptr)
+    return;
+  HWND hwnd = static_cast<HWND>(hwndRaw);
+  const COLORREF caption = RGB(bar & 0xFF, (bar >> 8) & 0xFF, (bar >> 16) & 0xFF);
+  const COLORREF text = RGB(225, 228, 232);
+  const BOOL dark = TRUE;
+  setAttr(hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
+  setAttr(hwnd, 34 /*DWMWA_BORDER_COLOR*/, &caption, sizeof(caption));
+  setAttr(hwnd, 35 /*DWMWA_CAPTION_COLOR*/, &caption, sizeof(caption));
+  setAttr(hwnd, 36 /*DWMWA_TEXT_COLOR*/, &text, sizeof(text));
+}
+#endif
 
 void DeleteTextures(const std::vector<PageCache::Entry>& gone) {
   for (const PageCache::Entry& e : gone)
@@ -277,6 +367,7 @@ void UploadFinished(Viewer& v, int center, const VisibleRange& keep, std::vector
     e.scaleKey = res.req.scaleKey;
     e.bytes = res.bm.bgra.size();
     e.handle = tex;
+    e.partial = res.bm.partial;
     DeleteTextures(v.cache.Put(e, center, keep));
     uploadedBytes += res.bm.bgra.size();
   }
@@ -298,7 +389,20 @@ void FinishBench(Viewer& v, std::vector<std::string>& log) {
     std::sort(x.begin(), x.end());
     return x[std::min(x.size() - 1, static_cast<size_t>(q * static_cast<double>(x.size())))];
   };
-  char line[300];
+  char line[400];
+  if (b.real) {
+    std::snprintf(line, sizeof(line),
+                  "BENCH PDFVIEW %s: first page shown %.0f ms (sharp %.0f ms) | strip thumbnails: first %.0f ms, all %d visible %.0f ms",
+                  v.title.c_str(), b.firstShownMs, b.firstSharpMs, b.thumbFirstMs, std::max(0, v.thumbLast - v.thumbFirst + 1),
+                  b.thumbAllMs);
+    log.push_back(line);
+    std::fprintf(stderr, "%s\n", line);
+    for (size_t i = 0; i < b.thumbTimes.size(); ++i)
+      std::fprintf(stderr, "  thumbnail %zu on screen at %.0f ms\n", i + 1, b.thumbTimes[i]);
+    b.active = false;
+    b.finished = true;
+    return;
+  }
   std::snprintf(line, sizeof(line),
                 "BENCH PDFVIEW %d pages: first page shown %.0f ms (sharp %.0f ms; target 250) | viewer cost per frame over %zu frames: p95 %.2f ms, worst %.2f ms (target 16) | whole frame: p95 %.1f ms, worst %.1f ms",
                 b.pages, b.firstShownMs, b.firstSharpMs, b.viewerMs.size(), pct(b.viewerMs, 0.95),
@@ -310,9 +414,21 @@ void FinishBench(Viewer& v, std::vector<std::string>& log) {
   b.finished = true;
 }
 
-void DrawToolbar(Viewer& v, float viewH) {
+void DrawToolbar(Viewer& v) {
   const int n = v.layout.PageCount();
-  ImGui::SetNextItemWidth(60.f);
+  const float viewH = v.viewH;
+  // Roomier controls, and buttons that read as buttons against the dark window.
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.f, 8.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.f, 8.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.27f, 0.35f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.42f, 0.58f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20f, 0.48f, 0.80f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.42f, 0.48f, 0.58f, 0.9f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.12f, 0.14f, 0.18f, 1.f));
+  ImGui::Spacing();
+  ImGui::SetNextItemWidth(72.f);
   if (ImGui::InputInt("##pg", &v.pageBox, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue))
     GoToPage(v, v.pageBox - 1);
   ImGui::SameLine();
@@ -329,7 +445,7 @@ void DrawToolbar(Viewer& v, float viewH) {
   if (ImGui::Button("-"))
     ZoomAboutCentre(v, v.pxPerPt / 1.25f);
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(50.f);
+  ImGui::SetNextItemWidth(72.f);
   if (ImGui::InputText("##zoom", v.zoomBuf, sizeof(v.zoomBuf),
                        ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_EnterReturnsTrue)) {
     const float pct = static_cast<float>(std::atof(v.zoomBuf));
@@ -355,13 +471,18 @@ void DrawToolbar(Viewer& v, float viewH) {
     GoToPage(v, v.curPage);
   ImGui::SameLine();
   ImGui::Checkbox("Thumbnails", &v.showThumbs);
+  ImGui::PopStyleColor(5);
+  ImGui::PopStyleVar(4);
+  ImGui::Spacing();
 }
 
 void DrawThumbnails(Viewer& v) {
-  ImGui::BeginChild("##thumbs", ImVec2(132.f, 0.f), true);
+  ImGui::BeginChild("##thumbs", ImVec2(v.thumbW, 0.f), true, ImGuiWindowFlags_NoMove);
   const int n = v.layout.PageCount();
+  const float boxW = v.thumbW - 30.f;               // widest a thumbnail may be
+  const float itemH = boxW * 0.78f + 30.f;          // room for a landscape sheet and its number
   ImGuiListClipper clip;
-  clip.Begin(n, kThumbItemH);
+  clip.Begin(n, itemH);
   v.thumbFirst = n;
   v.thumbLast = -1;
   while (clip.Step()) {
@@ -370,11 +491,11 @@ void DrawThumbnails(Viewer& v) {
       v.thumbLast = std::max(v.thumbLast, p);
       ImGui::PushID(p);
       const ImVec2 pos = ImGui::GetCursorScreenPos();
-      if (ImGui::Selectable("##t", p == v.curPage, 0, ImVec2(0.f, kThumbItemH - 4.f)))
+      if (ImGui::Selectable("##t", p == v.curPage, 0, ImVec2(0.f, itemH - 4.f)))
         GoToPage(v, p);
       ImDrawList* dl = ImGui::GetWindowDrawList();
       const PageSize& s = v.layout.size[static_cast<size_t>(p)];
-      const float maxW = 100.f, maxH = kThumbItemH - 30.f;
+      const float maxW = boxW, maxH = itemH - 30.f;
       const float k = std::min(maxW / s.wPt, maxH / s.hPt);
       const ImVec2 a(pos.x + 4.f, pos.y + 2.f);
       const ImVec2 b(a.x + s.wPt * k, a.y + s.hPt * k);
@@ -428,9 +549,15 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
     v.pendingScrollY = std::max(0.f, ptY * v.pxPerPt + kMarginPx - my);
     v.pendingScrollX = std::max(0.f, ptX * v.pxPerPt + kMarginPx - mx);
   }
-  if (hovered && !io.KeyCtrl && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.f)) {
+  // Pan with the middle mouse button (a plain left click or drag does nothing to the view).
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
+    v.panning = true;
+  if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle))
+    v.panning = false;
+  if (v.panning) {
     ImGui::SetScrollY(ImGui::GetScrollY() - io.MouseDelta.y);
     ImGui::SetScrollX(ImGui::GetScrollX() - io.MouseDelta.x);
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
   }
   if ((ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || hovered) && !io.WantTextInput) {
     if (ImGui::IsKeyPressed(ImGuiKey_PageDown, true))
@@ -493,13 +620,35 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
     const size_t pageBytes = std::max<size_t>(1, static_cast<size_t>(rw) * static_cast<size_t>(rh) * 4u);
     const int readAhead = ReadAheadThatFits(kCacheCapBytes, pageBytes, vis.last - vis.first + 1, kReadAhead);
     std::vector<RenderRequest> plan = PlanRequests(vis, v.layout.PageCount(), v.scrollDir, readAhead, scaleKey, have);
-    if (v.showThumbs) {
+    if (v.showThumbs && v.thumbLast >= v.thumbFirst) {
+      // The strip's drafts go AHEAD of the sharp page renders (a dense sheet can take seconds to draw, and
+      // the strip should not wait behind it), nearest the current page first; refining a draft goes last.
+      std::vector<int> strip;
       for (int p = v.thumbFirst; p <= v.thumbLast; ++p)
-        if (!v.cache.HaveFor(p, scaleKey).standIn) {
-          const RenderRequest r{p, Level::StandIn, 0};
-          if (std::find(plan.begin(), plan.end(), r) == plan.end())
-            plan.push_back(r);
-        }
+        strip.push_back(p);
+      std::stable_sort(strip.begin(), strip.end(),
+                       [&](int a, int b) { return std::abs(a - v.curPage) < std::abs(b - v.curPage); });
+      std::vector<RenderRequest> drafts, refines;
+      for (int p : strip) {
+        const Have h = have(p);
+        if (h.displayAtKey || h.anyDisplay)
+          continue;  // the page's own image serves as its thumbnail
+        if (!h.standIn)
+          drafts.push_back({p, Level::StandIn, 0, false});
+        else if (h.standInPartial)
+          refines.push_back({p, Level::StandIn, 0, true});
+      }
+      // A draft the page plan already holds further back is MOVED forward, not left where it was.
+      for (const RenderRequest& r : drafts)
+        plan.erase(std::remove(plan.begin(), plan.end(), r), plan.end());
+      size_t at = 0;
+      while (at < plan.size() && plan[at].level != Level::Display)
+        ++at;
+      for (const RenderRequest& r : drafts)
+        plan.insert(plan.begin() + static_cast<long>(at++), r);
+      for (const RenderRequest& r : refines)
+        if (std::find(plan.begin(), plan.end(), r) == plan.end())
+          plan.push_back(r);
     }
     v.worker->SetPlan(std::move(plan));
   }
@@ -532,7 +681,22 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
     dl->AddRect(a, b, IM_COL32(90, 90, 90, 255));
   }
 
-  if (v.bench.active) {
+  if (v.bench.active && v.bench.real) {
+    BenchRun& b = v.bench;
+    int present = 0, wanted = 0;
+    for (int p = v.thumbFirst; p <= v.thumbLast; ++p) {
+      ++wanted;
+      present += v.cache.Best(p) != nullptr ? 1 : 0;
+    }
+    while (static_cast<int>(b.thumbTimes.size()) < present)
+      b.thumbTimes.push_back(MsSince(b.t0));
+    if (present > 0 && b.thumbFirstMs < 0.0)
+      b.thumbFirstMs = MsSince(b.t0);
+    if (wanted > 0 && present == wanted && b.thumbAllMs < 0.0)
+      b.thumbAllMs = MsSince(b.t0);
+    if ((b.thumbAllMs >= 0.0 && b.firstSharpMs >= 0.0) || MsSince(b.t0) > 120000.0)
+      FinishBench(v, log);
+  } else if (v.bench.active) {
     BenchRun& b = v.bench;
     if (!b.scrolling && b.firstSharpMs >= 0.0) {
       b.scrolling = true;
@@ -583,6 +747,17 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
     OpenPdfInViewer(cmd.pdfViewerOpenRequest);
     cmd.pdfViewerOpenRequest.clear();
   }
+  if (!cmd.pdfViewBenchPath.empty()) {  // BENCH PDFVIEW <file>: time a real PDF's first page and thumbnail strip
+    const std::string path = cmd.pdfViewBenchPath;
+    cmd.pdfViewBenchPath.clear();
+    OpenPdfInViewer(path);
+    for (auto& vp : g_viewers)
+      if (vp->path == path) {
+        vp->bench.active = true;
+        vp->bench.real = true;
+        vp->bench.t0 = Clock::now();
+      }
+  }
   if (cmd.pdfViewBenchPages > 0) {
     const int pages = cmd.pdfViewBenchPages;
     cmd.pdfViewBenchPages = 0;
@@ -628,17 +803,57 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
     }
     bool open = true;
     double cost = 0.0;
-    if (ImGui::Begin(name, &open)) {
+    // REQ-387 clause 7: its own Windows window (NoAutoMerge makes ImGui give it a viewport instead of
+    // folding it into the main window), with the operating system's frame — minimize, maximize, close
+    // and a task-bar entry. Dragging its tab onto a dock slot docks it into GoSurvey's layout.
+    ImGuiWindowClass viewerClass;
+    viewerClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+    viewerClass.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration | ImGuiViewportFlags_NoTaskBarIcon;
+    ImGui::SetNextWindowClass(&viewerClass);
+    if (!v.placed) {
+      const ImGuiViewport* host = ImGui::GetMainViewport();
+      const float off = 40.f * static_cast<float>(v.id % 6);
+      ImGui::SetNextWindowPos(ImVec2(host->WorkPos.x + 80.f + off, host->WorkPos.y + 60.f + off), ImGuiCond_Always);
+      v.placed = true;
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+    // In its own OS window the operating system draws the title bar and the close button, so ImGui draws no
+    // second one. Docked, the tab is the only handle there is, so it comes back. To dock a floating viewer,
+    // drag it by any empty part of its toolbar.
+    const bool shown = ImGui::Begin(name, &open, v.osFramed ? ImGuiWindowFlags_NoTitleBar : ImGuiWindowFlags_None);
+    ImGui::PopStyleVar();
+    {
+      ImGuiWindow* self = ImGui::GetCurrentWindow();
+      v.osFramed = self->ViewportOwned && !self->DockIsActive && self->Viewport != nullptr &&
+                   (self->Viewport->Flags & ImGuiViewportFlags_NoDecoration) == 0;
+#if defined(_WIN32)
+      if (v.osFramed && self->Viewport->PlatformHandleRaw != nullptr && self->Viewport->PlatformHandleRaw != v.framedHwnd) {
+        ApplyOsFrameColors(self->Viewport->PlatformHandleRaw, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
+        v.framedHwnd = self->Viewport->PlatformHandleRaw;
+      }
+#endif
+    }
+    if (shown) {
       if (!v.error.empty()) {
         ImGui::TextWrapped("This PDF could not be opened: %s.", v.error.c_str());
         ImGui::TextDisabled("%s", v.path.c_str());
       } else if (!v.loaded) {
         ImGui::TextUnformatted("Opening...");
       } else {
-        DrawToolbar(v, ImGui::GetContentRegionAvail().y);
+        DrawToolbar(v);
         if (v.showThumbs) {
           DrawThumbnails(v);
-          ImGui::SameLine();
+          // The sidebar's edge: drag it to resize.
+          ImGui::SameLine(0.f, 0.f);
+          ImGui::InvisibleButton("##thumbsplit", ImVec2(7.f, ImGui::GetContentRegionAvail().y));
+          if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+          if (ImGui::IsItemActive())
+            v.thumbW = std::clamp(v.thumbW + ImGui::GetIO().MouseDelta.x, kThumbWidthMin, kThumbWidthMax);
+          ImGui::GetWindowDrawList()->AddRectFilled(
+              ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+              ImGui::IsItemHovered() || ImGui::IsItemActive() ? IM_COL32(90, 130, 190, 255) : IM_COL32(60, 64, 72, 255));
+          ImGui::SameLine(0.f, 0.f);
         }
         DrawPages(v, log, &cost);
       }

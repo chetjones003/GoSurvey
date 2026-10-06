@@ -46,16 +46,22 @@ enum class Level : int { StandIn = 0, Display = 1 };
 struct RenderRequest {
   int page = 0;
   Level level = Level::Display;
-  int scaleKey = 0; ///< display scale in 1/16 px per pt (ignored for StandIn)
+  int scaleKey = 0;  ///< display scale in 1/16 px per pt (ignored for StandIn)
+  /// StandIn only. A first stand-in is a DRAFT: it stops after a short time budget and keeps whatever has
+  /// been drawn, so a page of a million vector objects shows something at once instead of after seconds.
+  /// A refine request is the unbudgeted full render, queued behind everything else.
+  bool refine = false;
   bool operator==(const RenderRequest& o) const {
-    return page == o.page && level == o.level && scaleKey == o.scaleKey;
+    return page == o.page && level == o.level && scaleKey == o.scaleKey && refine == o.refine;
   }
 };
 
 /// What the cache already holds for a page, so the planner asks only for what is missing.
 struct Have {
   bool standIn = false;
-  bool displayAtKey = false; ///< a Display entry at exactly the wanted scaleKey
+  bool displayAtKey = false;   ///< a Display entry at exactly the wanted scaleKey
+  bool standInPartial = false; ///< the stand-in is an unfinished draft
+  bool anyDisplay = false;     ///< a Display entry at any scale (it also serves as the thumbnail)
 };
 
 /// REQ-387 clause 4: the order pages are rendered in. Visible pages come first (stand-in before
@@ -67,7 +73,7 @@ std::vector<RenderRequest> PlanRequests(const VisibleRange& vis, int pageCount, 
 
 /// How many pages ahead the planner may ask for so that visible + ahead + behind (ahead/2) sharp pages
 /// still fit in the cache; asking for more makes every upload evict a page that is asked for again.
-/// 1/6 of the cap is left for the small stand-ins.
+/// A third of the cap is left for the stand-ins (thumbnails and placeholders).
 int ReadAheadThatFits(size_t capBytes, size_t pageBytes, int visibleCount, int maxAhead);
 
 /// Quantise a display scale (px per pt) so a smooth zoom does not request a render per frame.
@@ -84,6 +90,7 @@ public:
     int scaleKey = 0;
     size_t bytes = 0;
     uint32_t handle = 0; ///< owner's token (GL texture id)
+    bool partial = false; ///< a draft that stopped at its time budget
   };
 
   explicit PageCache(size_t capBytes) : cap_(capBytes) {}

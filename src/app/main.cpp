@@ -366,6 +366,10 @@ int main()
 #endif
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  // REQ-387 clause 7 / ADR-067 (a): a PDF viewer is a real Windows window (minimize / maximize, another
+  // monitor, docking back). Only windows whose class asks for NoAutoMerge get an OS window on their own;
+  // every other panel stays in the main window until it is dragged out.
+  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigInputTextEnterKeepActive = false; // CAD shell: Enter submits without selecting-all next keystroke
 
@@ -1738,6 +1742,16 @@ int main()
     glClearColor(0.06f, 0.06f, 0.07f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    // The detached windows (PDF viewers) draw into their own OS windows; the platform call leaves a
+    // different GL context current, so the main window's is restored before the swap.
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+    {
+      GLFWwindow *mainContext = glfwGetCurrentContext();
+      ImGui::UpdatePlatformWindows();
+      ImGui::RenderPlatformWindowsDefault();
+      glfwMakeContextCurrent(mainContext);
+    }
 
     glfwSwapBuffers(window);
 

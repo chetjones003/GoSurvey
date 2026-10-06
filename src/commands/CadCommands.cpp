@@ -41821,8 +41821,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         if (lower == "pdfview" || lower == "pdf") {
           int pages = 500;
           int v = 0;
-          if (issIdle >> v)
+          const std::streampos beforeArg = issIdle.tellg();
+          if (issIdle >> v) {
             pages = std::clamp(v, 1, 5000);
+          } else {  // not a number: the rest of the line is a real PDF to time (its path may hold spaces)
+            issIdle.clear();
+            issIdle.seekg(beforeArg);
+            std::string path;
+            std::getline(issIdle, path);
+            path = StringUtil::trimCopy(path);
+            if (!path.empty()) {
+              st.pdfViewBenchPath = path;
+              log.push_back("BENCH PDFVIEW - timing " + path);
+              return;
+            }
+          }
           st.pdfViewBenchPages = pages;
           log.push_back("BENCH PDFVIEW — building a " + std::to_string(pages) + "-page PDF; the viewer window will scroll it.");
           return;

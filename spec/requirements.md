@@ -11189,14 +11189,38 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. **Project Health** reports: linked (non-travelling) files, missing files, unsaved drawings, and
      offers **copy links into the project**. It runs before **Pack Project** (REQ-380) and before a
      **turnover** (REQ-381) is created.
+  5. **Add PDF to project (D-2026-10-06-c).** The Project Files section has an **Add PDF...** button
+     (disabled in a read-only project) that tracks a PDF **without placing it in any drawing**, so a
+     PDF that was dropped into a project folder by hand appears in the list and can be opened in the
+     viewer. A PDF already inside the project folder is tracked where it is; one outside goes through
+     the clause 1 prompt (copy into the PDFs folder by default, or link, flagged). It has no drawing
+     association and no placements. Tracking the same file twice changes nothing. Files other than
+     PDFs are not accepted here (point clouds and point files keep their own import commands).
+  6. **Refresh (D-2026-10-06-d).** A **Refresh** button at the top of the Toolspace (project drawings
+     only; disabled in a read-only project) looks through the project folder for **new files** — files
+     of a kind the Project Files list understands (`.dwg`, `.pdf`, `.e57`) that the project does not
+     track — and, **only when the user pressed Refresh**, asks which of them to track. The question
+     lists every new file with a tick box (all ticked), and **Track selected** / **Track none** buttons.
+     Nothing is tracked, copied or moved without that answer, and nothing is scanned or listed
+     automatically. Hidden folders (names starting with `.`), the project's own files (`.gsproj`, lock,
+     shared point database, caches, turnover records, packs) and files already tracked are never
+     offered. "Track none" leaves the files untracked; pressing Refresh again offers them again.
 - Acceptance:
   - `[req379]` tests: copy default; size prompt threshold; link flagged; relative path recorded;
     Health lists each problem class; "copy links in" converts a link to `in-project`.
+  - `[req379][issue732]` test: the new-file scan offers an untracked `.dwg` / `.pdf` / `.e57` in any
+    subfolder, and offers none of: a tracked file (any letter case), a hidden folder's files, the
+    `.gsproj`, a `.gscloud`, a `.gsturnover`, or a file of another kind.
+  - `[req379][issue732]` test: tracking a PDF inside the project adds one `in-project` item with no
+    associations and no placements; tracking it again changes nothing; an outside file becomes a
+    flagged `local-link`.
 - Owner-layer: Domain, UI, IO
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — clause 2 gains the
   PDF `placements` record and the write-on-save rule (issue #696 P6; D-2026-10-05-h). The size prompt
   appears for every copy/link and warns at 100 MB or more (ASSUMPTION, recorded in TASK-696-p6).
+  2026-10-06 — clause 5 added: Add PDF to project (D-2026-10-06-c); clause 6: Refresh and ask to track
+  new files (D-2026-10-06-d).
 
 ### REQ-380 — Pack Project (`.gspack`) and Open Packed Project (GitHub issue #696, P7)
 

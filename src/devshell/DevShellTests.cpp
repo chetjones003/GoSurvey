@@ -1,3 +1,4 @@
+#include "PdfViewerCore.hpp"
 #include "DevShell.hpp"
 
 #ifdef GOSURVEY_DEVELOPER_SHELL
@@ -23,6 +24,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -293,6 +296,99 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     for (int i = 0; i < 400 && viewerShown(); ++i)
       ctx->Yield(30);
     IM_CHECK(!viewerShown());
+  };
+
+  // REQ-387 clause 7 (D-2026-10-06-b): the viewer is its own Windows window with the OS frame, docks
+  // into GoSurvey's layout and comes back out. Real window creation and docking run in the real app;
+  // what a person sees on screen is still checked by hand.
+  //
+  //   build\devshell\GoSurvey.exe --devshell-run pdfview-window
+  // The same measurement on a REAL file named by GOSURVEY_BENCH_PDF: how long until the first page and the
+  // visible thumbnail strip are on screen (REQ-387; reported on stderr like pdfview-bench).
+  ImGuiTest* pdfReal = IM_REGISTER_TEST(engine, "gosurvey", "pdfview-real");
+  pdfReal->TestFunc = [](ImGuiTestContext* ctx) {
+    const char* file = std::getenv("GOSURVEY_BENCH_PDF");
+    IM_CHECK(file != nullptr);
+    if (file == nullptr)
+      return;
+    auto viewerShown = [] {
+      for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+        if (w->WasActive && std::strstr(w->Name, "###pdfview") != nullptr)
+          return true;
+      return false;
+    };
+    IM_CHECK(CancelToIdle(ctx));
+    s_cmd->pdfViewBenchPath = file;
+    ctx->Yield(10);
+    IM_CHECK(viewerShown());
+    for (int i = 0; i < 600 && viewerShown(); ++i)
+      ctx->Yield(30);
+    IM_CHECK(!viewerShown());
+  };
+
+  ImGuiTest* pdfWin = IM_REGISTER_TEST(engine, "gosurvey", "pdfview-window");
+  pdfWin->TestFunc = [](ImGuiTestContext* ctx) {
+    namespace fs = std::filesystem;
+    const fs::path pdf = fs::temp_directory_path() / "gosurvey_pdfview_window.pdf";
+    {
+      const std::string bytes = pdfview::MakeSyntheticPdf(30, 200, 0);
+      std::ofstream f(pdf, std::ios::binary);
+      f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    }
+    auto findViewer = []() -> ImGuiWindow* {
+      for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+        if (w->WasActive && std::strstr(w->Name, "###pdfview") != nullptr)
+          return w;
+      return nullptr;
+    };
+    IM_CHECK(CancelToIdle(ctx));
+    s_cmd->pdfViewerOpenRequest = pdf.u8string();
+    ctx->Yield(60);
+    ImGuiWindow* w = findViewer();
+    IM_CHECK(w != nullptr);
+    if (w == nullptr)
+      return;
+    const ImGuiID mainId = ImGui::GetMainViewport()->ID;
+    // Its own OS window, with the operating system's frame (not ImGui's), and a task-bar entry.
+    IM_CHECK(w->ViewportOwned);
+    IM_CHECK(w->Viewport != nullptr && w->Viewport->ID != mainId);
+    IM_CHECK(w->Viewport != nullptr && (w->Viewport->Flags & ImGuiViewportFlags_NoDecoration) == 0);
+    IM_CHECK(w->Viewport != nullptr && (w->Viewport->Flags & ImGuiViewportFlags_NoTaskBarIcon) == 0);
+    ctx->Yield(120);  // let it render: stays up, no crash with a second GL window
+
+    // Dock it into the layout: it joins the main window's viewport.
+    // Any panel docked in the main layout will do as the target.
+    ImGuiWindow* target = nullptr;
+    for (ImGuiWindow* o : ImGui::GetCurrentContext()->Windows)
+      if (o->WasActive && o != w && o->DockIsActive && o->DockNode != nullptr && o->Viewport != nullptr && o->Viewport->ID == mainId) {
+        target = o;
+        break;
+      }
+    IM_CHECK(target != nullptr);
+    if (target == nullptr)
+      return;
+    DevShell_Logf("pdfview", "docking into the node of '%s'", target->Name);
+    // A floating viewer has no ImGui title bar to drag (the OS draws it), so the Test Engine cannot grab one;
+    // the layout API docks it, which is the same state a drag onto the slot produces.
+    ImGui::DockBuilderDockWindow(w->Name, target->DockNode->ID);
+    ctx->Yield(10);
+    ctx->Yield(10);
+    w = findViewer();
+    IM_CHECK(w != nullptr);
+    IM_CHECK(w != nullptr && w->DockIsActive);
+    IM_CHECK(w != nullptr && w->Viewport != nullptr && w->Viewport->ID == mainId);
+    ctx->Yield(120);
+
+    // And out again: a window of its own once more.
+    if (w != nullptr)
+      ctx->UndockWindow(w->Name);
+    ctx->Yield(10);
+    w = findViewer();
+    IM_CHECK(w != nullptr && !w->DockIsActive);
+    IM_CHECK(w != nullptr && w->ViewportOwned);
+
+    std::error_code ec;
+    fs::remove(pdf, ec);
   };
 
   ImGuiTest* blankEnter = IM_REGISTER_TEST(engine, "gosurvey", "req024-blank-enter-default");

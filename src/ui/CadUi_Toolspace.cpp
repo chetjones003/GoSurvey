@@ -7,6 +7,7 @@
 #include "io/ProjectTurnover.hpp"
 #include "ToolspaceCatalog.hpp"
 #include "PdfViewerWindow.hpp"
+#include "commands/ProjectFiles.hpp"
 #include "WinFileDialogs.hpp"
 
 #if defined(_WIN32)
@@ -538,6 +539,14 @@ void DrawProjectFilesFolder(AppCommandState& cmd, std::vector<std::string>* log)
   }
   if (ImGui::Button("Project Health..."))
     cmd.projectHealthUid = uid;
+  ImGui::SameLine();
+  ImGui::BeginDisabled(s->readOnly);
+  if (ImGui::Button("Add PDF...") && log != nullptr) {  // REQ-379 clause 5
+    char picked[1024] = {};
+    if (BrowseOpenFilePdfUtf8(picked, sizeof(picked)) && picked[0] != '\0')
+      AddPdfToProject(cmd, picked, *log);
+  }
+  ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::BeginDisabled(s->readOnly);
   if (ImGui::Button("Create Turnover...")) {  // REQ-381
@@ -1602,6 +1611,14 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   if (const std::string projName = ProjectNameForTab(cmd, cmd.activeDrawingIdx); !projName.empty()) {
     ImGui::TextColored(kTsAccent, "Project: %s%s", projName.c_str(),
                        ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx) ? "  (read-only)" : "");
+    // REQ-379 clause 6: Refresh looks for new files and asks before tracking any.
+    ImGui::SameLine();
+    ImGui::BeginDisabled(ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx));
+    if (ImGui::SmallButton("Refresh") && log != nullptr)
+      RefreshProjectFiles(cmd, *log);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip("Look for new files in the project folder and choose which to track.");
   }
   ImGui::SetNextItemWidth(-1.f);
   if (ImGui::BeginCombo("##ts_view", comboLabel)) {

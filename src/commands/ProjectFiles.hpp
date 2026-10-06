@@ -26,6 +26,22 @@ bool RequestProjectAttach(AppCommandState& st, AppCommandState::ProjectAttachPro
 /// file to attach and true is returned; on failure (REQ-201 in \p log) false, and nothing is attached.
 bool ResolveProjectAttach(AppCommandState& st, bool copy, std::vector<std::string>& log, std::string* finalPath);
 
+/// REQ-379 clause 5: Add PDF to project. A PDF already inside the project is tracked at once; one outside
+/// raises the copy/link prompt (kind PdfTrack) and is tracked by TrackProjectFile once answered.
+/// Returns true when a prompt was raised or the file was tracked.
+bool AddPdfToProject(AppCommandState& st, const std::string& path, std::vector<std::string>& log);
+
+/// REQ-379 clause 6: Refresh. Looks for new files in the active drawing's project and, if there are any,
+/// raises projectRefreshPrompt (nothing is tracked until the user answers). Logs what it found.
+bool RefreshProjectFiles(AppCommandState& st, std::vector<std::string>& log);
+
+/// Tracks the project-relative \p rels in project \p uid (one save). Returns how many were newly tracked.
+int TrackProjectFiles(AppCommandState& st, std::uint32_t uid, const std::vector<std::string>& rels,
+                      std::vector<std::string>& log);
+
+/// Tracks \p path in project \p uid (no drawing) and saves the .gsproj. False when nothing changed.
+bool TrackProjectFile(AppCommandState& st, std::uint32_t uid, const std::string& path, std::vector<std::string>& log);
+
 /// Clause 2. Called after the drawing of tab \p tabIdx was saved to \p savedPath, while that drawing's
 /// data is loaded in \p st: records, in the project file, what the drawing now holds (point clouds, PDFs
 /// and their placements). A no-op for a standalone drawing, a read-only project, or a drawing saved

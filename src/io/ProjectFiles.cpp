@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <set>
 
 namespace projfiles {
 
@@ -193,6 +194,45 @@ bool CopyIn(const AttachPlan& plan, Role role, std::string* err) {
       copyOne(cache, fs::u8path(plan.dest.u8string() + ".gscloud"));  // a missing cache is rebuilt, not an error
   }
   return true;
+}
+
+std::vector<std::string> FindUntracked(const gsproj::Project& p) {
+  std::vector<std::string> out;
+  std::error_code ec;
+  const fs::path root = p.Folder();
+  if (!fs::is_directory(root, ec))
+    return out;
+  std::set<std::string> tracked;
+  for (const gsproj::TrackedItem& it : p.items)
+    if (it.kind == gsproj::kKindInProject)
+      tracked.insert(Lower(it.path));
+  fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+  for (; !ec && it != end; it.increment(ec)) {
+    const fs::path& entry = it->path();
+    const std::string name = entry.filename().u8string();
+    if (it->is_directory(ec)) {
+      if (!name.empty() && name[0] == '.')
+        it.disable_recursion_pending();  // hidden folder: neither looked into nor offered
+      continue;
+    }
+    if (!it->is_regular_file(ec))
+      continue;
+    const std::string ext = Lower(entry.extension().u8string());
+    if (ext != ".dwg" && ext != ".pdf" && ext != ".e57")
+      continue;
+    const std::string rel = entry.lexically_relative(root).generic_u8string();
+    if (rel.empty() || tracked.count(Lower(rel)) != 0)
+      continue;
+    out.push_back(rel);
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+bool TrackFile(gsproj::Project* p, const fs::path& file) {
+  const size_t before = p->items.size();
+  EnsureItem(p, std::string(), file);
+  return p->items.size() != before;
 }
 
 bool SyncDrawing(gsproj::Project* p, const std::string& drawingRel, const std::vector<Attached>& clouds,
