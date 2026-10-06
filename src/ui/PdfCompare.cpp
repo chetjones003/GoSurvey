@@ -1,5 +1,6 @@
 #include "PdfCompare.hpp"
 
+#include "PdfIcons.hpp"
 #include "PdfPanelStyle.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -463,7 +464,7 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   ImGui::AlignTextToFramePadding();
   ImGui::Text("Comparing  %s  with  %s", baseTitle_.c_str(), revTitle_.c_str());
   ImGui::SameLine();
-  if (ImGui::Button("Close comparison"))
+  if (IconButton(Icon::Close, "Close comparison"))
     keepOpen = false;
 
   if (rev_ == nullptr)
@@ -531,13 +532,13 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   ImGui::AlignTextToFramePadding();
   ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.f, 1.f), "Line up");
   ImGui::SameLine();
-  if (ImGui::Button("One point"))
+  if (IconButton(Icon::OnePoint, "One point", "Line the sheets up with one matching point (shift only)"))
     BeginPick(Pick::OneBase);
   ImGui::SameLine();
-  if (ImGui::Button("Two points"))
+  if (IconButton(Icon::TwoPoints, "Two points", "Line the sheets up with two matching points (shift, scale and rotation)"))
     BeginPick(Pick::TwoBase1);
   ImGui::SameLine();
-  if (ImGui::Button("Reset")) {
+  if (IconButton(Icon::Reset, "Reset", "Go back to the automatic alignment")) {
     xf_ = autoXf_;
     alignNote_ = autoMatched_ ? "Back to the automatic alignment." : "Not adjusted: the two pages are laid on each other at their lower-left corners.";
     pick_ = Pick::None;
@@ -546,18 +547,18 @@ void PdfCompare::DrawBar(bool& keepOpen) {
     ClearChanges();
   }
   ImGui::SameLine();
-  if (pick_ != Pick::None && ImGui::Button("Cancel picking"))
+  if (pick_ != Pick::None && IconButton(Icon::Close, "Cancel picking"))
     BeginPick(Pick::None);
   ImGui::SameLine();
   ImGui::TextUnformatted("|");
   ImGui::SameLine();
-  if (ImGui::Button("-"))
+  if (IconButton(Icon::ZoomOut, "", "Zoom out"))
     pxPerPt_ = std::clamp(pxPerPt_ / 1.25f, 0.05f, 16.f);
   ImGui::SameLine();
-  if (ImGui::Button("+"))
+  if (IconButton(Icon::ZoomIn, "", "Zoom in"))
     pxPerPt_ = std::clamp(pxPerPt_ * 1.25f, 0.05f, 16.f);
   ImGui::SameLine();
-  if (ImGui::Button("Fit page"))
+  if (IconButton(Icon::FitPage, "Fit page"))
     fitPending_ = true;
 
   const char* prompt = nullptr;
@@ -586,17 +587,17 @@ void PdfCompare::DrawChangesBar() {
   ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.f, 1.f), "Changes");
   ImGui::SameLine();
   ImGui::BeginDisabled(anaRunning_);
-  if (ImGui::Button("Align automatically"))
+  if (IconButton(Icon::Align, "Align automatically", "Line the revision up with the base automatically"))
     alignWanted_ = true;
   ImGui::SameLine();
-  if (ImGui::Button("Find changes"))
+  if (IconButton(Icon::Find, "Find changes", "List and box every area where the two sheets differ"))
     StartTask(Task::Find);
   ImGui::EndDisabled();
   if (anaRunning_) {
     ImGui::SameLine();
     ImGui::ProgressBar(anaProgress_.load(), ImVec2(130.f, 0.f), anaTask_ == Task::Align ? "aligning" : "comparing");
     ImGui::SameLine();
-    if (ImGui::Button("Cancel"))
+    if (IconButton(Icon::Close, "Cancel"))
       anaCancel_.store(true);
   }
   ImGui::SameLine();
@@ -628,9 +629,9 @@ void PdfCompare::DrawChangesBar() {
     const int n = static_cast<int>(regions_.size());
     const bool step = !regions_.empty();
     ImGui::BeginDisabled(!step);
-    bool prev = ImGui::Button("Previous"), next = false;
+    bool prev = IconButton(Icon::Prev, "Previous"), next = false;
     ImGui::SameLine();
-    next = ImGui::Button("Next");
+    next = IconButton(Icon::Next, "Next");
     ImGui::EndDisabled();
     if (step && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.WantTextInput) {
       next = next || ImGui::IsKeyPressed(ImGuiKey_N);
@@ -642,7 +643,7 @@ void PdfCompare::DrawChangesBar() {
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!step || saving_.valid());
-    if (ImGui::Button("Write changes as markups..."))
+    if (IconButton(Icon::Markup, "Write changes as markups..."))
       SaveMarkups();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       ImGui::SetTooltip("Save a copy of the revision PDF with a box drawn around each area that differs.\nThe original files are not changed.");
