@@ -314,6 +314,7 @@ struct AnnotUi {
   int calCount = 0;              ///< points picked so far (0..2)
   int calPage = 0;
   float calX[2] = {0.f, 0.f}, calY[2] = {0.f, 0.f};
+  bool calSnapped[2] = {false, false}; ///< whether each calibration point snapped to the drawing or was placed freehand
   bool calPopup = false;         ///< both points picked: ask for the real distance
   double calReal = 10.0;
   int calUnit = 1;
@@ -1025,6 +1026,7 @@ void DrawThumbnails(Viewer& v) {
 }
 
 const PageScale* EffectiveScale(const Viewer& v, int page);
+void StartSnapRead(Viewer& v, int page);
 
 void StartSave(Viewer& v, std::vector<std::string>& log) {
   AnnotUi& u = v.ann;
@@ -1219,7 +1221,14 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
   }
   if (ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     const double pts = std::hypot(static_cast<double>(u.calX[1] - u.calX[0]), static_cast<double>(u.calY[1] - u.calY[0]));
-    ImGui::Text("The two points are %.1f points (%.3f in) apart on the sheet.", pts, pts / 72.0);
+    ImGui::Text("The two points are %.3f points (%.4f in) apart on the sheet.", pts, pts / 72.0);
+    const int freehand = (u.calSnapped[0] ? 0 : 1) + (u.calSnapped[1] ? 0 : 1);
+    if (freehand == 0)
+      ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.5f, 1.f), "Both points snapped to the drawing.");
+    else
+      ImGui::TextColored(ImVec4(1.f, 0.75f, 0.35f, 1.f),
+                         "%s placed freehand: one screen pixel can be %.2f points. Turn Snap on (F3) and pick again for an exact scale.",
+                         freehand == 2 ? "Both points were" : "One point was", 0.75);
     ImGui::TextUnformatted("In reality they are:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100.f);
@@ -1237,8 +1246,32 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
     DrawScopeChooser(v);
     if (!u.scaleError.empty())
       ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", u.scaleError.c_str());
+    // Drawings are almost always plotted at a standard scale: when this calibration is within 1 % of one, say so,
+    // and offer it (a short span picked by eye can be a fraction of a percent out, and a long dimension then reads wrong).
+    const PageScale calibrated = ScaleFromCalibration(pts, u.calReal, units[static_cast<size_t>(u.calUnit)]);
+    const PageScale* nearest = nullptr;
+    double nearDiff = 1.0;
+    if (calibrated.Valid())
+      for (const PageScale& p : PresetScales()) {
+        const double diff = std::fabs(calibrated.PointsToReal(1.0) * UnitInMetres(calibrated.realUnit) / (p.PointsToReal(1.0) * UnitInMetres(p.realUnit)) - 1.0);
+        if (diff < nearDiff) {
+          nearDiff = diff;
+          nearest = &p;
+        }
+      }
+    if (nearest != nullptr && nearDiff < 0.01) {
+      ImGui::Text("Closest standard scale: %s (%.2f %% different).", nearest->label.c_str(), nearDiff * 100.0);
+      if (ImGui::Button("Use the standard scale")) {
+        if (ApplyScaleToScope(v, *nearest, log)) {
+          u.status = "Scale set: " + nearest->RatioText();
+          u.calCount = 0;
+          ImGui::CloseCurrentPopup();
+        }
+      }
+      ImGui::SameLine();
+    }
     if (ImGui::Button("Set scale")) {
-      const PageScale s = ScaleFromCalibration(pts, u.calReal, units[static_cast<size_t>(u.calUnit)]);
+      const PageScale s = calibrated;
       if (!s.Valid())
         u.scaleError = "the distance must be bigger than zero, and the two points must be apart";
       else if (ApplyScaleToScope(v, s, log)) {
@@ -1438,6 +1471,15 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
       ImGui::PopStyleColor(2);
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("Snap to the ends and corners of the drawing (F3)");
+    if (u.snapOn && v.doc != nullptr) { // read the page's points as soon as Snap is on, so the first click can snap
+      SnapPage& sp = u.snapPages[v.curPage];
+      if (!sp.started)
+        StartSnapRead(v, v.curPage);
+      if (sp.reading.valid() && sp.reading.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        sp.index = sp.reading.get();
+        sp.failed = sp.index == nullptr;
+      }
+    }
     const auto cur = u.snapPages.find(v.curPage);
     if (u.snapOn && cur != u.snapPages.end() && cur->second.reading.valid()) {
       ImGui::SameLine();
@@ -1786,6 +1828,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
           u.calPage = r.page;
           u.calX[u.calCount] = cx;
           u.calY[u.calCount] = cy;
+          u.calSnapped[u.calCount] = u.snapHit && u.snapPage == r.page;
           ++u.calCount;
           if (u.calCount == 2) {
             u.calCount = 2; // kept for drawing while the distance is asked

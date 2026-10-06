@@ -13,7 +13,10 @@
 #include "pdf/PdfSnap.hpp"
 #include "pdf/PdfViewerCore.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 
