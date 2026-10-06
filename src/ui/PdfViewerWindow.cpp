@@ -280,8 +280,32 @@ struct SnapPage {
   bool failed = false;
 };
 
+// REQ-395: the automatic scale audit of one page. The page is read and matched on a worker; the verdicts and the
+// consensus are worked out here from the matches, so a changed scale or limit re-judges them at once.
+struct AuditUi {
+  bool openRequest = false;                        ///< open the Audit scale dialog on the next frame
+  std::future<std::shared_ptr<DimMatchSet>> running;
+  std::shared_ptr<std::atomic<bool>> cancel = std::make_shared<std::atomic<bool>>(false);
+  std::shared_ptr<std::atomic<int>> stage = std::make_shared<std::atomic<int>>(0); ///< 0 reading, 1 matching
+  std::chrono::steady_clock::time_point startedAt;
+  int page = -1;                                   ///< the page the running or finished audit is of
+  bool failed = false;                             ///< the page could not be read
+  bool cancelled = false;
+  bool have = false;                               ///< a finished set of matches is held
+  DimMatchSet matches;
+  DimAudit audit;                                  ///< the judgement of \p matches against \p judgedScale and \p judgedLimits
+  PageScale judgedScale;
+  CheckLimits judgedLimits;
+  bool judged = false;
+  bool showOnSheet = true;
+  bool listAll = false;                            ///< list every matched dimension, not only the offenders
+  int selected = -1;                               ///< highlighted match (index into matches.matches)
+  double elapsedMs = 0.0;                          ///< how long the last run took
+};
+
 struct AnnotUi {
   AnnotSession session;
+  AuditUi audit;                       ///< REQ-395
   bool snapOn = false;                 ///< the Snap toggle (F3)
   std::map<int, SnapPage> snapPages;   ///< the last few pages read
   bool snapHit = false;                ///< the pointer is near a snap point this frame ...
@@ -879,6 +903,9 @@ void DestroyViewer(Viewer& v) {
     v.ann.saving.wait(); // so does a Save As
   if (v.ann.readingScales.valid())
     v.ann.readingScales.wait();
+  v.ann.audit.cancel->store(true); // an audit in flight reads the document: stop it and wait
+  if (v.ann.audit.running.valid())
+    v.ann.audit.running.wait();
   for (auto& [page, sp] : v.ann.snapPages) { // snap readers hold the document: stop and wait for them
     sp.cancel->store(true);
     if (sp.reading.valid())
@@ -919,6 +946,18 @@ void GoToPage(Viewer& v, int page) {
   v.curPage = page;
   v.pageBox = page + 1;
   v.pendingScrollY = v.continuous ? v.layout.top[static_cast<size_t>(page)] * v.pxPerPt : 0.f;
+}
+
+// Scrolls so the page point (x, y) is in the middle of the view (REQ-395: clicking an offender in the list).
+void CentreOnPagePoint(Viewer& v, int page, float x, float y) {
+  page = std::clamp(page, 0, v.layout.PageCount() - 1);
+  v.curPage = page;
+  v.pageBox = page + 1;
+  const PageSize& s = v.layout.size[static_cast<size_t>(page)];
+  const float contentW = std::max(v.viewW, v.layout.maxWidth * v.pxPerPt + 2 * kMarginPx);
+  const float left = (contentW - s.wPt * v.pxPerPt) * 0.5f;
+  v.pendingScrollX = std::max(0.f, left + x * v.pxPerPt - v.viewW * 0.5f);
+  v.pendingScrollY = std::max(0.f, kMarginPx + (PageTopPt(v, page) + s.hPt - y) * v.pxPerPt - v.viewH * 0.5f);
 }
 
 void UploadFinished(Viewer& v, int center, const VisibleRange& keep, std::vector<std::string>& log) {
@@ -1652,6 +1691,198 @@ void DrawCheckPopup(Viewer& v, std::vector<std::string>& log) {
   PopDialogStyle();
 }
 
+// REQ-395: reads the page's text and strokes and pairs them, on a worker, with Cancel.
+void StartAudit(Viewer& v, int page) {
+  AuditUi& a = v.ann.audit;
+  if (v.doc == nullptr || a.running.valid())
+    return;
+  a.cancel = std::make_shared<std::atomic<bool>>(false);
+  a.stage = std::make_shared<std::atomic<int>>(0);
+  a.page = page;
+  a.failed = a.cancelled = a.have = a.judged = false;
+  a.matches = {};
+  a.audit = {};
+  a.selected = -1;
+  a.startedAt = std::chrono::steady_clock::now();
+  PdfDocument* doc = v.doc.get();
+  const auto cancel = a.cancel;
+  const auto stage = a.stage;
+  a.running = std::async(std::launch::async, [doc, page, cancel, stage]() -> std::shared_ptr<DimMatchSet> {
+    const auto stop = [cancel] { return cancel->load(); };
+    std::vector<DimText> texts;
+    std::vector<DimSeg> segs;
+    if (!doc->AuditPageData(page, texts, segs, stop))
+      return nullptr;
+    stage->store(1);
+    auto set = std::make_shared<DimMatchSet>();
+    if (!MatchDimensions(texts, segs, DimMatchParams{}, stop, *set))
+      return nullptr;
+    return set;
+  });
+}
+
+// The Audit scale dialog: what the page's own dimension text says about its scale. Suggestions only - the scale
+// changes only when the user presses Use consensus scale.
+void DrawAuditDialog(Viewer& v, std::vector<std::string>& log) {
+  AnnotUi& u = v.ann;
+  AuditUi& a = u.audit;
+  char id[64];
+  std::snprintf(id, sizeof(id), "Audit scale###pdfaudit%d", v.id);
+  if (a.running.valid() && a.running.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    a.elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a.startedAt).count();
+    const std::shared_ptr<DimMatchSet> set = a.running.get();
+    if (set != nullptr) {
+      a.matches = std::move(*set);
+      a.have = true;
+      log.push_back("PDF scale audit: page " + std::to_string(a.page + 1) + " of " + v.title + " - " + std::to_string(a.matches.matches.size()) +
+                    " dimensions matched in " + FormatValue(a.elapsedMs / 1000.0, 2) + " s");
+    } else if (a.cancel->load()) {
+      a.cancelled = true;
+    } else {
+      a.failed = true;
+      log.push_back("PDF scale audit: could not read page " + std::to_string(a.page + 1) + " of " + v.title);
+    }
+  }
+  if (a.openRequest) {
+    a.openRequest = false;
+    ImGui::OpenPopup(id);
+  }
+  ImGui::SetNextWindowSize(ImVec2(820.f, 0.f), ImGuiCond_Appearing);
+  PushDialogStyle();
+  if (!BeginDialog(id)) {
+    PopDialogStyle();
+    return;
+  }
+  const int page = a.page;
+  const PageScale* scale = page >= 0 ? EffectiveScale(v, page) : nullptr;
+  ImGui::TextWrapped("Reads this page's own dimension text, finds the dimension line each one labels and checks the scale against them. "
+                     "These are suggestions: nothing changes unless you press Use consensus scale.");
+  ImGui::Separator();
+  const bool running = a.running.valid();
+  if (running) {
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - a.startedAt).count();
+    ImGui::Text("%s page %d... %.1f s", a.stage->load() == 0 ? "Reading" : "Matching dimensions on", page + 1, secs);
+    ImGui::ProgressBar(-1.f * static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f), a.stage->load() == 0 ? "reading text and lines" : "matching");
+    if (ImGui::Button("Cancel"))
+      a.cancel->store(true);
+  } else if (a.cancelled) {
+    ImGui::TextDisabled("Cancelled. No result was kept.");
+  } else if (a.failed) {
+    ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "Page %d could not be read.", page + 1);
+  } else if (a.have && scale == nullptr) {
+    ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "Page %d has no scale to judge. Set one (Set scale...), then audit again.", page + 1);
+  } else if (a.have) {
+    if (!a.judged || !(a.judgedScale == *scale) || a.judgedLimits.goodPct != u.limits.goodPct || a.judgedLimits.checkPct != u.limits.checkPct) {
+      a.audit = AuditDimensions(a.matches, *scale, u.limits);
+      a.judgedScale = *scale;
+      a.judgedLimits = u.limits;
+      a.judged = true;
+    }
+    const DimAudit& au = a.audit;
+    const auto& ms = a.matches.matches;
+    ImGui::Text("Page %d: %s%s%s%s", page + 1, scale->RatioText().c_str(), scale->note.empty() ? "" : "  (", scale->note.c_str(),
+                scale->note.empty() ? "" : ")");
+    ImGui::Text("%zu dimensions matched, %d text%s with no dimension line, %d dimension line%s with no text.  (%.1f s)", ms.size(),
+                a.matches.unmatchedText, a.matches.unmatchedText == 1 ? "" : "s", a.matches.unmatchedLines,
+                a.matches.unmatchedLines == 1 ? "" : "s", a.elapsedMs / 1000.0);
+    if (!ms.empty())
+      ImGui::Text("Agree with the current scale: %d Good, %d Check, %d Blunder", au.good, au.check, au.blunder);
+    if (!au.message.empty())
+      ImGui::TextColored(VerdictColor(Verdict::Check), "%s", au.message.c_str());
+
+    PageScale consensus;
+    if (au.consensusValid) {
+      consensus = ScaleFromConsensus(au.consensusMetresPerPt, static_cast<int>(ms.size()), *scale);
+      consensus.note.clear();
+      ImGui::Text("Consensus scale: %s", consensus.RatioText().c_str());
+      ImGui::SameLine();
+      const double cur = MetresPerPt(*scale);
+      ImGui::TextDisabled("(%s %s %% from the page's scale)", au.consensusMetresPerPt >= cur ? "+" : "-",
+                          FormatValue(std::fabs(au.consensusMetresPerPt / std::max(1e-12, cur) - 1.0) * 100.0, 3).c_str());
+    }
+    ImGui::BeginDisabled(!au.consensusValid);
+    if (ImGui::Button("Use consensus scale")) {
+      const PageScale next = ScaleFromConsensus(au.consensusMetresPerPt, static_cast<int>(ms.size()), *scale);
+      std::map<int, PageScale> change;
+      change[page] = next;
+      u.session.SetScales(change);
+      log.push_back("PDF scale: page " + std::to_string(page + 1) + " of " + v.title + " set from the audit - " + next.note);
+      u.status = "Scale set from the audit: " + next.RatioText() + ".";
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::Checkbox("Show offenders on the sheet", &a.showOnSheet);
+    ImGui::SameLine();
+    ImGui::Checkbox("List every matched dimension", &a.listAll);
+
+    std::vector<int> rows = a.listAll ? std::vector<int>() : au.offenders;
+    if (a.listAll)
+      for (size_t i = 0; i < ms.size(); ++i)
+        rows.push_back(static_cast<int>(i));
+    if (rows.empty()) {
+      if (!ms.empty())
+        ImGui::TextDisabled("No dimension disagrees with the page's scale by more than the limits.");
+    } else {
+      ImGui::SeparatorText(a.listAll ? "Every matched dimension (click one to centre it)" : "Worst offenders (click one to centre it)");
+      const std::vector<std::pair<const char*, Align>> cols = {{"#", Align::Center}, {"Drawing says", Align::Right}, {"Reads", Align::Right},
+                                                               {"%", Align::Right},  {"Implies", Align::Right},     {"Verdict", Align::Center}};
+      std::vector<std::vector<std::string>> cells;
+      const size_t shown = std::min<size_t>(rows.size(), 400);
+      for (size_t k = 0; k < shown; ++k) {
+        const size_t i = static_cast<size_t>(rows[k]);
+        const CheckResult& r = au.results[i];
+        PageScale implied = *scale;
+        implied.label.clear();
+        implied.note.clear();
+        implied.realValue = ms[i].metresPerPt * 72.0 / UnitInMetres(scale->realUnit);
+        cells.push_back({std::to_string(k + 1), ms[i].text, FormatValue(r.measured, 3) + " " + UnitLabel(ms[i].unit), Signed(r.pct, 2),
+                         implied.RatioText(), VerdictName(r.verdict)});
+      }
+      const std::vector<float> widths = ColumnWidths(cols, cells);
+      PushTableStyle();
+      if (ImGui::BeginTable("##auditrows", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_ScrollY,
+                            ImVec2(0.f, 260.f))) {
+        TableHeader(cols, widths);
+        for (size_t k = 0; k < shown; ++k) {
+          const int i = rows[k];
+          const ImVec4 vc = VerdictColor(au.results[static_cast<size_t>(i)].verdict);
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn();
+          char lab[32];
+          std::snprintf(lab, sizeof(lab), "%zu##arow%d", k + 1, i);
+          if (ImGui::Selectable(lab, a.selected == i, ImGuiSelectableFlags_SpanAllColumns)) {
+            a.selected = i;
+            CentreOnPagePoint(v, page, (ms[static_cast<size_t>(i)].x0 + ms[static_cast<size_t>(i)].x1) * 0.5f,
+                              (ms[static_cast<size_t>(i)].y0 + ms[static_cast<size_t>(i)].y1) * 0.5f);
+          }
+          for (size_t col = 1; col < cols.size(); ++col) {
+            ImGui::TableNextColumn();
+            CellText(cols[col].second, cells[k][col], col == 5 ? &vc : nullptr);
+          }
+        }
+        ImGui::EndTable();
+      }
+      PopTableStyle();
+      if (rows.size() > shown)
+        ImGui::TextDisabled("Showing the first %zu of %zu.", shown, rows.size());
+    }
+    ImGui::TextDisabled("Matching can be wrong: a text may pair with a neighbouring line. Judge each by its text and the line highlighted on the sheet.");
+  }
+  ImGui::Separator();
+  ImGui::BeginDisabled(running);
+  if (ImGui::Button("Run again"))
+    StartAudit(v, std::clamp(v.curPage, 0, v.layout.PageCount() - 1));
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Close")) {
+    if (running)
+      a.cancel->store(true);
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+  PopDialogStyle();
+}
+
 // The Scale checks dialog: the page's checks with verdicts, the best fit and the correction the user may choose
 // (tab 1), and the opt-in robust calibration (tab 2).
 void DrawChecksDialog(Viewer& v, std::vector<std::string>& log) {
@@ -2170,6 +2401,13 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
       ImGui::Checkbox("Show on sheet", &u.showChecks); // hide the check lines and labels to cut the noise
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Show or hide the check lines and labels drawn on the sheet");
+      ImGui::SameLine();
+      if (ImGui::Button("Audit scale")) { // REQ-395
+        u.audit.openRequest = true;
+        StartAudit(v, std::clamp(v.curPage, 0, v.layout.PageCount() - 1));
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Read this page's own dimension text and test the scale against it\n(suggestions only; the scale changes when you say so)");
     }
     else if (!u.scalesRead && u.scalesRequested)
       ImGui::TextDisabled("Scale: reading...");
@@ -2264,6 +2502,7 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   DrawScaleDialogs(v, log);
   DrawCheckPopup(v, log);
   DrawChecksDialog(v, log);
+  DrawAuditDialog(v, log);
 
   // The note text dialog.
   char id[64];
@@ -3021,6 +3260,26 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
           dl->AddCircleFilled(S(c.x1, c.y1), 3.5f, col);
           const ImVec2 mid = S((c.x0 + c.x1) * 0.5f, (c.y0 + c.y1) * 0.5f);
           label(ImVec2(mid.x + 6.f, mid.y + 4.f), "#" + std::to_string(i + 1) + "  " + FormatValue(c.stated, 3) + " " + UnitLabel(c.unit), col);
+        }
+        if (u.audit.showOnSheet && u.audit.judged && u.audit.page == r.page) { // REQ-395: the audit's offenders
+          const AuditUi& au = u.audit;
+          const bool all = au.listAll;
+          const auto& ms = au.matches.matches;
+          for (size_t i = 0; i < ms.size() && i < au.audit.results.size(); ++i) {
+            const Verdict vd = au.audit.results[i].verdict;
+            const bool sel = static_cast<int>(i) == au.selected;
+            if (vd == Verdict::Good && !all && !sel)
+              continue;
+            const ImVec4 vc = VerdictColor(vd);
+            const ImU32 col = IM_COL32(static_cast<int>(vc.x * 255), static_cast<int>(vc.y * 255), static_cast<int>(vc.z * 255), 255);
+            const ImVec2 a0 = S(ms[i].x0, ms[i].y0), a1 = S(ms[i].x1, ms[i].y1);
+            dl->AddLine(a0, a1, col, sel ? 5.f : 3.f);
+            dl->AddCircleFilled(a0, 3.5f, col);
+            dl->AddCircleFilled(a1, 3.5f, col);
+            if (sel || vd != Verdict::Good)
+              label(ImVec2((a0.x + a1.x) * 0.5f + 6.f, (a0.y + a1.y) * 0.5f + 4.f),
+                    ms[i].text + "  (" + Signed(au.audit.results[i].pct, 2) + " %)", col);
+          }
         }
         if (u.tool == Tool::Check && !u.checkPts.empty() && u.checkPage == r.page) {
           const ImVec2 p0 = S(u.checkPts[0].first, u.checkPts[0].second);

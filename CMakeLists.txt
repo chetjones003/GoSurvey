@@ -648,6 +648,7 @@ add_executable(GoSurvey
   src/pdf/PdfMeasure.cpp
   src/pdf/PdfSnap.cpp
   src/pdf/PdfScaleCheck.cpp
+  src/pdf/PdfDimAudit.cpp
   src/pdf/PdfAlign.cpp
   src/pdf/PdfDiff.cpp
   src/ui/PdfViewerWindow.cpp
@@ -1352,6 +1353,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PdfDimensionTests.cpp
     tests/PdfSnapTests.cpp
     tests/PdfScaleCheckTests.cpp
+    tests/PdfDimAuditTests.cpp
+    tests/PdfDimAuditPdfTests.cpp
     tests/PdfAlignTests.cpp
     tests/PdfDiffTests.cpp
     src/pdf/PdfViewerCore.cpp
@@ -1363,6 +1366,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/pdf/PdfMeasure.cpp
     src/pdf/PdfSnap.cpp
     src/pdf/PdfScaleCheck.cpp
+    src/pdf/PdfDimAudit.cpp
     src/pdf/PdfAlign.cpp
     src/pdf/PdfDiff.cpp)
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium)

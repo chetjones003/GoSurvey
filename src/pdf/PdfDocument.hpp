@@ -5,6 +5,7 @@
 // (fonts, caches) and is not safe to enter from two threads at once.
 // The PDFium library itself must already be initialised (PdfAttach_Init at startup).
 
+#include "PdfDimAudit.hpp"
 #include "PdfSnap.hpp"
 #include "PdfViewerCore.hpp"
 
@@ -77,6 +78,10 @@ public:
   /// callout line), in the viewer's page coordinates like SnapPoints. Used only to colour a changed word whole; the
   /// comparison itself is of the drawn picture. \p cancel is polled; false on failure or cancel.
   bool TextBoxes(int page, std::vector<ObjBox>& out, const std::function<bool()>& cancel);
+
+  /// REQ-395: every text run (its string and box) and every straight stroke on \p page, in the viewer's page
+  /// coordinates, for the automatic scale audit. \p cancel is polled; false on failure or cancel.
+  bool AuditPageData(int page, std::vector<DimText>& texts, std::vector<DimSeg>& segs, const std::function<bool()>& cancel);
 
   static constexpr int kDisplayFlags = 0x01 /*FPDF_ANNOT*/ | 0x02 /*FPDF_LCD_TEXT*/;
 
