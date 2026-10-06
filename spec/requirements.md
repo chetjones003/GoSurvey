@@ -11702,7 +11702,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      present in both dark grey, so added work shows blue and removed work red); **Opacity** (the revision
      over the base with a slider); **Base** and **Revision** (each sheet alone, with only what the other
      sheet lacks marked: on Base, ink only the base has is drawn **blue**; on Revision, ink only the revision
-     has is drawn **red**; a mark within about a pixel of the other sheet's is the same mark). All use the same
+     has is drawn **red**; a mark with even a faint one of the other sheet's within about two pixels is the same mark). All use the same
      zoom and pan. (There is no Blink mode: removed by D-2026-10-06-l.)
   3. **Alignment, automatic first.** On opening, the two sheets are lined up **automatically** (the
      transform found by comparing the sheets' line work: shift, uniform scale and a small rotation of up

@@ -137,6 +137,24 @@ TEST_CASE("the Base and Revision views mark only the ink the other sheet lacks",
   CHECK(alpha(2, 2) == 0);
 }
 
+TEST_CASE("the same sheet, drawn through a fractional alignment, has nothing marked", "[issue732][req392]") {
+  pdfview::Bitmap base = White(40, 40);
+  for (int i = 5; i < 35; ++i) {
+    Black(base, i, 20); // a thin line, one pixel thick
+    Black(base, 12, i);
+  }
+  pdfview::Bitmap rev;
+  ResampleAligned(base, 40.f, 1.f, FromOnePoint({0, 0}, {0.4, -0.3}), 40, 40, 1.f, 40.f, rev); // blurred by the resampling
+  const uint8_t blue[3] = {235, 120, 40};
+  pdfview::Bitmap out;
+  MarkOnlyIn(base, rev, blue, out);
+  for (size_t i = 3; i < out.bgra.size(); i += 4)
+    CHECK(out.bgra[i] == 0);
+  MarkOnlyIn(rev, base, blue, out);
+  for (size_t i = 3; i < out.bgra.size(); i += 4)
+    CHECK(out.bgra[i] == 0);
+}
+
 TEST_CASE("a shifted revision is drawn where the transform says", "[issue732][req392]") {
   // Revision page 10 x 10 pt at 1 px/pt with ink at pixel (2, 7), which is the point (2.5, 2.5) in page space.
   pdfview::Bitmap rev = White(10, 10);

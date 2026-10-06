@@ -16,7 +16,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 double MsSince(Clock::time_point t) { return std::chrono::duration<double, std::milli>(Clock::now() - t).count(); }
 
-constexpr int kMaxSide = 3000;                        // the longest side of a comparison image, in pixels
+constexpr int kMaxSide = 4096;                        // the longest side of a comparison image, in pixels
 constexpr size_t kUploadBytesPerFrame = 3u * 1024 * 1024; // ADR-067 (c): an image goes up a slice per frame, never in one long frame
 constexpr float kMarginPx = 16.f;
 constexpr int kFlagsAnnot = 0x01; // FPDF_ANNOT: the page as drawn, without LCD colour fringes (they would read as ink)

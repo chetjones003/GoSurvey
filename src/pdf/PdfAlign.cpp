@@ -109,35 +109,29 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
   out.bgra.assign(sheet.bgra.size(), 0);
   if (other.w != w || other.h != h)
     return;
-  const auto inkAt = [](const pdfview::Bitmap& b, int x, int y) {
-    return x >= 0 && y >= 0 && x < b.w && y < b.h && IsInk(&b.bgra[(static_cast<size_t>(y) * static_cast<size_t>(b.w) + static_cast<size_t>(x)) * 4u]);
+  // The other sheet "has" a mark near here when anything on it is even faintly dark within two pixels: a mark drawn onto
+  // the base's pixel grid through the alignment is blurred a little, and a faint grey is still the same mark.
+  const auto faintAt = [](const pdfview::Bitmap& b, int x, int y) {
+    if (x < 0 || y < 0 || x >= b.w || y >= b.h)
+      return false;
+    const uint8_t* p = &b.bgra[(static_cast<size_t>(y) * static_cast<size_t>(b.w) + static_cast<size_t>(x)) * 4u];
+    return (p[0] + p[1] * 2 + p[2]) / 4 < 225;
   };
-  std::vector<uint8_t> only(static_cast<size_t>(w) * static_cast<size_t>(h), 0);
   for (int y = 0; y < h; ++y)
     for (int x = 0; x < w; ++x) {
-      if (!inkAt(sheet, x, y))
+      const size_t at = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u;
+      if (!IsInk(&sheet.bgra[at]))
         continue;
       bool near = false;
-      for (int dy = -1; dy <= 1 && !near; ++dy)
-        for (int dx = -1; dx <= 1 && !near; ++dx)
-          near = inkAt(other, x + dx, y + dy);
-      only[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)] = near ? 0 : 1;
-    }
-  for (int y = 0; y < h; ++y)
-    for (int x = 0; x < w; ++x) {
-      bool on = false;
-      for (int dy = -1; dy <= 1 && !on; ++dy)
-        for (int dx = -1; dx <= 1 && !on; ++dx) {
-          const int nx = x + dx, ny = y + dy;
-          on = nx >= 0 && ny >= 0 && nx < w && ny < h && only[static_cast<size_t>(ny) * static_cast<size_t>(w) + static_cast<size_t>(nx)] != 0;
-        }
-      if (on) {
-        uint8_t* p = &out.bgra[(static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u];
-        p[0] = bgr[0];
-        p[1] = bgr[1];
-        p[2] = bgr[2];
-        p[3] = 255;
-      }
+      for (int dy = -2; dy <= 2 && !near; ++dy)
+        for (int dx = -2; dx <= 2 && !near; ++dx)
+          near = faintAt(other, x + dx, y + dy);
+      if (near)
+        continue;
+      out.bgra[at] = bgr[0];
+      out.bgra[at + 1] = bgr[1];
+      out.bgra[at + 2] = bgr[2];
+      out.bgra[at + 3] = 255;
     }
 }
 
