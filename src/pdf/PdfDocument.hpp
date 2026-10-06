@@ -25,7 +25,12 @@ struct Bitmap {
   int w = 0;
   int h = 0;
   std::vector<uint8_t> bgra; ///< w*h*4, top-down, opaque white background
+  bool partial = false;      ///< the render stopped at its time budget; only part of the page is drawn
 };
+
+/// Area-averaged copy no larger than \p maxSide on its longer side (a stand-in made from a sharp render
+/// costs a few milliseconds, where rendering one from the page costs as much as the sharp render did).
+Bitmap Downscale(const Bitmap& src, int maxSide);
 
 class PdfDocument {
 public:
@@ -47,7 +52,15 @@ public:
 
   /// Render page `page` to w x h pixels. `cancel` is polled between slices of work; when it returns
   /// true the render stops and false is returned. Returns false on any failure.
-  bool RenderPage(int page, int w, int h, Bitmap& out, const std::function<bool()>& cancel);
+  /// \p flags are FPDF_* render flags; the default is the sharp, annotated display render.
+  /// \p budgetMs > 0: stop after that long and return what is drawn so far (out.partial = true).
+  /// \p sliceMs > 0 with \p between: every sliceMs of drawing the render pauses and calls \p between (which
+  /// may render OTHER pages of this document: PDFium keeps one render context per page), then resumes. This is
+  /// how a seconds-long sharp page lets the thumbnail strip draw in between instead of waiting behind it.
+  bool RenderPage(int page, int w, int h, Bitmap& out, const std::function<bool()>& cancel, int flags = kDisplayFlags,
+                  int budgetMs = 0, int sliceMs = 0, const std::function<void()>& between = {});
+
+  static constexpr int kDisplayFlags = 0x01 /*FPDF_ANNOT*/ | 0x02 /*FPDF_LCD_TEXT*/;
 
 private:
   PdfDocument() = default;

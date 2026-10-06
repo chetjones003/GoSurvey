@@ -5165,6 +5165,7 @@ struct AppCommandState {
   /// has no window of its own; it only asks. Empty path + pick = show the file dialog.
   std::string pdfViewerOpenRequest;
   bool pdfViewerPickRequest = false;
+  std::string pdfViewBenchPath;  ///< `BENCH PDFVIEW <file>`: time this real PDF's first page and thumbnail strip
   int pdfViewBenchPages = 0; ///< `BENCH PDFVIEW [pages]`: build a synthetic PDF this long and time scrolling it
 
   // -------------------------------------------------------------------------

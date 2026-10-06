@@ -73,10 +73,10 @@ std::vector<RenderRequest> PlanRequests(const VisibleRange& vis, int pageCount, 
     if (p < 0 || p >= pageCount)
       return;
     const Have h = have(p);
-    if (standInFirst && !h.standIn && !h.displayAtKey)
-      out.push_back({p, Level::StandIn, 0});
+    if (standInFirst && !h.standIn && !h.displayAtKey && !h.anyDisplay)
+      out.push_back({p, Level::StandIn, 0, false});
     if (!h.displayAtKey)
-      out.push_back({p, Level::Display, scaleKey});
+      out.push_back({p, Level::Display, scaleKey, false});
   };
 
   // 1. Visible pages: every stand-in first (cheap, so the screen is never blank), then sharp ones,
@@ -89,12 +89,12 @@ std::vector<RenderRequest> PlanRequests(const VisibleRange& vis, int pageCount, 
                    [&](int a, int b) { return std::abs(a - mid) < std::abs(b - mid); });
   for (int p : visible) {
     const Have h = have(p);
-    if (!h.standIn && !h.displayAtKey)
-      out.push_back({p, Level::StandIn, 0});
+    if (!h.standIn && !h.displayAtKey && !h.anyDisplay)
+      out.push_back({p, Level::StandIn, 0, false});
   }
   for (int p : visible) {
     if (!have(p).displayAtKey)
-      out.push_back({p, Level::Display, scaleKey});
+      out.push_back({p, Level::Display, scaleKey, false});
   }
 
   // 2. Ahead of the scroll direction, then behind, nearest first.
@@ -102,6 +102,14 @@ std::vector<RenderRequest> PlanRequests(const VisibleRange& vis, int pageCount, 
     addPage(dir > 0 ? vis.last + i : vis.first - i, true);
   for (int i = 1; i <= readAhead / 2; ++i)
     addPage(dir > 0 ? vis.first - i : vis.last + i, true);
+
+  // 3. Last of all: finish the drafts that never got a sharp render (they stay on screen meanwhile).
+  const int lo = std::max(0, vis.first - readAhead / 2), hi = std::min(pageCount - 1, vis.last + readAhead);
+  for (int p = lo; p <= hi; ++p) {
+    const Have h = have(p);
+    if (h.standIn && h.standInPartial && !h.anyDisplay && !h.displayAtKey)
+      out.push_back({p, Level::StandIn, 0, true});
+  }
   return out;
 }
 
@@ -159,8 +167,11 @@ const PageCache::Entry* PageCache::Best(int page) const {
 Have PageCache::HaveFor(int page, int scaleKey) const {
   Have h;
   h.standIn = Find(page, Level::StandIn) != nullptr;
+  if (const Entry* s = Find(page, Level::StandIn))
+    h.standInPartial = s->partial;
   const Entry* d = Find(page, Level::Display);
   h.displayAtKey = d != nullptr && d->scaleKey == scaleKey;
+  h.anyDisplay = d != nullptr;
   return h;
 }
 

@@ -1,12 +1,21 @@
 // REQ-387 / ADR-067: the PDF viewer's pure core (layout, read-ahead plan, bounded cache) and its
 // PDFium wrapper, opened against generated PDFs. No window, no GL.
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "pdf/PdfDocument.hpp"
 #include "pdf/PdfViewerCore.hpp"
 
+#include <algorithm>
+#include <fpdf_edit.h>
+#include <fpdf_thumbnail.h>
+#include <fpdfview.h>
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -179,6 +188,42 @@ TEST_CASE("ReadAheadThatFits never plans more sharp pages than the cache holds",
   }
 }
 
+TEST_CASE("Downscale shrinks to the limit and averages the pixels", "[pdfview][req387]") {
+  Bitmap src;
+  src.w = 8;
+  src.h = 4;
+  src.bgra.assign(8u * 4u * 4u, 0);
+  for (int y = 0; y < 4; ++y)
+    for (int x = 0; x < 8; ++x)
+      src.bgra[(static_cast<size_t>(y) * 8 + x) * 4] = x < 4 ? 0 : 200;  // left half black, right half 200 (blue channel)
+  const Bitmap d = Downscale(src, 4);
+  CHECK(d.w == 4);
+  CHECK(d.h == 2);
+  CHECK(d.bgra[0] == 0);
+  CHECK(d.bgra[(3u) * 4u] == 200);
+  CHECK(Downscale(src, 100).w == 8);  // never enlarges
+  CHECK(Downscale(Bitmap{}, 10).bgra.empty());
+}
+
+TEST_CASE("PlanRequests: drafts first, refinements last, a sharp page needs neither", "[pdfview][req387]") {
+  const VisibleRange vis{5, 5};
+  Have draft;
+  draft.standIn = true;
+  draft.standInPartial = true;
+  const auto have = [&](int p) { return p == 6 ? draft : Have{}; };
+  const auto plan = PlanRequests(vis, 20, +1, 3, 24, have);
+  REQUIRE(!plan.empty());
+  CHECK(plan.back().refine);        // the unfinished draft of page 7 (index 6) is refined, last
+  CHECK(plan.back().page == 6);
+  for (size_t i = 0; i + 1 < plan.size(); ++i)
+    CHECK_FALSE(plan[i].refine);
+  Have sharp = draft;
+  sharp.anyDisplay = true;
+  const auto plan2 = PlanRequests(vis, 20, +1, 3, 24, [&](int p) { return p == 6 ? sharp : Have{}; });
+  for (const RenderRequest& r : plan2)
+    CHECK_FALSE((r.refine && r.page == 6));
+}
+
 TEST_CASE("ScaleKey quantises a smooth zoom", "[pdfview][req387]") {
   CHECK(ScaleKeyFor(1.333f) == ScaleKeyFor(1.34f));
   CHECK(ScaleKeyFor(0.0001f) >= 2);
@@ -254,4 +299,129 @@ TEST_CASE("PdfDocument returns a stated error for a corrupt, empty, missing or e
   CHECK(d.doc == nullptr);
   CHECK(d.error.find("password") != std::string::npos);
   std::filesystem::remove(encPath);
+}
+
+// Hidden benchmark (run by name): thumbnail render cost on a real, large construction set.
+//   set GOSURVEY_BENCH_PDF to the file, then: GoSurveyTests "thumbnail render cost on a real PDF"
+TEST_CASE("thumbnail render cost on a real PDF", "[.thumbbench]") {
+  const char* env = std::getenv("GOSURVEY_BENCH_PDF");
+  if (env == nullptr)
+    SKIP("GOSURVEY_BENCH_PDF not set");
+  const auto t0 = std::chrono::steady_clock::now();
+  auto r = PdfDocument::Open(std::filesystem::path(env));
+  REQUIRE(r.doc != nullptr);
+  const double openMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  std::printf("open: %.0f ms, %d pages\n", openMs, r.doc->PageCount());
+
+  struct Mode {
+    const char* name;
+    int side;
+    int flags;
+  };
+  constexpr int kNoSmooth = 0x1000 | 0x2000 | 0x4000;  // FPDF_RENDER_NO_SMOOTHTEXT | IMAGE | PATH
+  const Mode modes[] = {
+      {"288 annot+lcd (current)", 288, 0x01 | 0x02},
+      {"288 flags 0", 288, 0},
+      {"192 flags 0", 192, 0},
+      {"192 no-smooth", 192, kNoSmooth},
+      {"160 no-smooth", 160, kNoSmooth},
+      {"192 no-smooth+limitedcache", 192, kNoSmooth | 0x200},
+  };
+  const int n = std::min(r.doc->PageCount(), 40);
+  for (const Mode& m : modes) {
+    double total = 0, worst = 0;
+    for (int p = 0; p < n; ++p) {
+      const PageSize s = r.doc->Sizes()[static_cast<size_t>(p)];
+      const float k = static_cast<float>(m.side) / std::max(s.wPt, s.hPt);
+      Bitmap bm;
+      const auto a = std::chrono::steady_clock::now();
+      r.doc->RenderPage(p, std::max(1, static_cast<int>(s.wPt * k)), std::max(1, static_cast<int>(s.hPt * k)), bm,
+                        [] { return false; }, m.flags);
+      const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count();
+      total += ms;
+      worst = std::max(worst, ms);
+    }
+    std::printf("%-30s %d pages: avg %.1f ms, worst %.1f ms, total %.0f ms\n", m.name, n, total / n, worst, total);
+  }
+}
+
+// Where does the time go for one page of a big construction set? (hidden; same environment variable)
+TEST_CASE("where thumbnail time goes on a real PDF", "[.thumbbench2]") {
+  const char* env = std::getenv("GOSURVEY_BENCH_PDF");
+  if (env == nullptr)
+    SKIP("GOSURVEY_BENCH_PDF not set");
+  FPDF_InitLibrary();
+  FPDF_DOCUMENT doc = FPDF_LoadDocument(env, nullptr);
+  REQUIRE(doc != nullptr);
+  auto now = [] { return std::chrono::steady_clock::now(); };
+  auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+  for (int p = 0; p < 12; ++p) {
+    const auto t0 = now();
+    FPDF_PAGE page = FPDF_LoadPage(doc, p);
+    const auto t1 = now();
+    const int objs = FPDFPage_CountObjects(page);  // forces the content stream to be parsed
+    const auto t2 = now();
+    int images = 0, paths = 0, texts = 0;
+    for (int i = 0; i < objs; ++i) {
+      FPDF_PAGEOBJECT o = FPDFPage_GetObject(page, i);
+      const int t = FPDFPageObj_GetType(o);
+      images += t == FPDF_PAGEOBJ_IMAGE;
+      paths += t == FPDF_PAGEOBJ_PATH;
+      texts += t == FPDF_PAGEOBJ_TEXT;
+    }
+    const bool hasThumb = FPDFPage_GetThumbnailAsBitmap(page) != nullptr;
+    // Render 192 px with everything.
+    const float w = FPDF_GetPageWidthF(page), h = FPDF_GetPageHeightF(page);
+    const float k = 192.f / std::max(w, h);
+    const int bw = std::max(1, static_cast<int>(w * k)), bh = std::max(1, static_cast<int>(h * k));
+    std::vector<uint8_t> buf(static_cast<size_t>(bw) * bh * 4, 0xFF);
+    FPDF_BITMAP bm = FPDFBitmap_CreateEx(bw, bh, FPDFBitmap_BGRA, buf.data(), bw * 4);
+    const auto t3 = now();
+    FPDF_RenderPageBitmap(bm, page, 0, 0, bw, bh, 0, 0);
+    const auto t4 = now();
+    // Again on the already-parsed page.
+    FPDF_RenderPageBitmap(bm, page, 0, 0, bw, bh, 0, 0);
+    const auto t5 = now();
+    // Without the images.
+    for (int i = objs - 1; i >= 0; --i) {
+      FPDF_PAGEOBJECT o = FPDFPage_GetObject(page, i);
+      if (FPDFPageObj_GetType(o) == FPDF_PAGEOBJ_IMAGE) {
+        FPDFPage_RemoveObject(page, o);
+        FPDFPageObj_Destroy(o);
+      }
+    }
+    FPDFPage_GenerateContent(page);
+    const auto t6 = now();
+    FPDFBitmap_FillRect(bm, 0, 0, bw, bh, 0xFFFFFFFFu);
+    FPDF_RenderPageBitmap(bm, page, 0, 0, bw, bh, 0, 0);
+    const auto t7 = now();
+    std::printf(
+        "p%-3d %5.0fx%-5.0f objs %6d (img %d path %d text %d) thumb=%d | load %.0f parse %.0f render %.0f render-again %.0f | "
+        "no-images render %.0f\n",
+        p + 1, w, h, objs, images, paths, texts, hasThumb ? 1 : 0, ms(t0, t1), ms(t1, t2), ms(t3, t4), ms(t4, t5),
+        ms(t6, t7));
+    FPDFBitmap_Destroy(bm);
+    FPDF_ClosePage(page);
+  }
+  FPDF_CloseDocument(doc);
+}
+
+TEST_CASE("draft thumbnail cost per page on a real PDF", "[.thumbbench3]") {
+  const char* env = std::getenv("GOSURVEY_BENCH_PDF");
+  if (env == nullptr)
+    SKIP("GOSURVEY_BENCH_PDF not set");
+  auto r = PdfDocument::Open(std::filesystem::path(env));
+  REQUIRE(r.doc != nullptr);
+  double total = 0;
+  for (int p = 0; p < 10; ++p) {
+    const PageSize s = r.doc->Sizes()[static_cast<size_t>(p)];
+    const float k = 256.f / std::max(s.wPt, s.hPt);
+    Bitmap bm;
+    const auto a = std::chrono::steady_clock::now();
+    r.doc->RenderPage(p, static_cast<int>(s.wPt * k), static_cast<int>(s.hPt * k), bm, [] { return false; }, 0, 120);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count();
+    total += ms;
+    std::printf("draft p%d: %.0f ms (partial=%d)\n", p + 1, ms, bm.partial ? 1 : 0);
+  }
+  std::printf("10 drafts: %.0f ms\n", total);
 }

@@ -303,6 +303,29 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   // what a person sees on screen is still checked by hand.
   //
   //   build\devshell\GoSurvey.exe --devshell-run pdfview-window
+  // The same measurement on a REAL file named by GOSURVEY_BENCH_PDF: how long until the first page and the
+  // visible thumbnail strip are on screen (REQ-387; reported on stderr like pdfview-bench).
+  ImGuiTest* pdfReal = IM_REGISTER_TEST(engine, "gosurvey", "pdfview-real");
+  pdfReal->TestFunc = [](ImGuiTestContext* ctx) {
+    const char* file = std::getenv("GOSURVEY_BENCH_PDF");
+    IM_CHECK(file != nullptr);
+    if (file == nullptr)
+      return;
+    auto viewerShown = [] {
+      for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+        if (w->WasActive && std::strstr(w->Name, "###pdfview") != nullptr)
+          return true;
+      return false;
+    };
+    IM_CHECK(CancelToIdle(ctx));
+    s_cmd->pdfViewBenchPath = file;
+    ctx->Yield(10);
+    IM_CHECK(viewerShown());
+    for (int i = 0; i < 600 && viewerShown(); ++i)
+      ctx->Yield(30);
+    IM_CHECK(!viewerShown());
+  };
+
   ImGuiTest* pdfWin = IM_REGISTER_TEST(engine, "gosurvey", "pdfview-window");
   pdfWin->TestFunc = [](ImGuiTestContext* ctx) {
     namespace fs = std::filesystem;
