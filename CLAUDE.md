@@ -38,6 +38,13 @@ The repository has three layers:
 
 `feature/fix/docs branch → PR → beta → release PR → master`
 
+**Branch cleanup (after every merge into `beta`):**
+
+* Only `master` and `beta` should exist, locally and on `origin`.
+* Once a branch is merged into `beta`, delete it on `origin`, delete the local branch, and remove its worktree (`git worktree remove`, then `git remote prune origin`).
+* Before deleting, check `git cherry origin/beta <branch>`. If it has commits that were never merged, tag them `archive/<name>` instead of losing them.
+* Leave the `fork` remote alone.
+
 ---
 
 ## 1. Environment
