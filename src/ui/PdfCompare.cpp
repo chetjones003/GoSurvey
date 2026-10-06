@@ -179,7 +179,11 @@ void PdfCompare::StartTask(Task t) {
       pdfalign::ResampleAligned(rBmp, rs.hPt, static_cast<float>(rppp), xf, bw, bh, static_cast<float>(bppp), bs.hPt, aligned);
       std::vector<uint8_t>().swap(rBmp.bgra);
       prog->store(0.5f);
-      out.found = pdfdiff::FindChanges(bBmp, aligned, bppp, bs.hPt, settings, isCancelled,
+      std::vector<ObjBox> baseText, revText;
+      b->TextBoxes(bp, baseText, isCancelled);
+      r->TextBoxes(rp, revText, isCancelled);
+      out.found = pdfdiff::FindChanges(bBmp, aligned, bppp, bs.hPt, settings, pdfalign::BoxesToPixels(baseText, pdfalign::Transform{}, bs.hPt, bppp, bw, bh),
+                                       pdfalign::BoxesToPixels(revText, xf, bs.hPt, bppp, bw, bh), isCancelled,
                                        [prog](float f) { prog->store(0.5f + 0.5f * f); });
       out.cancelled = out.found.cancelled;
       out.ok = !out.cancelled;

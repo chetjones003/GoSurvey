@@ -125,7 +125,7 @@ std::vector<PixRect> BoxesToPixels(const std::vector<pdfview::ObjBox>& boxes, co
 }
 
 void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out, double pxPerPt,
-                const std::vector<PixRect>& units) {
+                const std::vector<PixRect>& units, double tolPt) {
   const int w = sheet.w, h = sheet.h;
   out.w = w;
   out.h = h;
@@ -136,7 +136,7 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
   const double ppp = std::max(0.1, pxPerPt);
   // The other sheet "has" a mark near here when anything on it is even faintly dark within about half a point: a mark drawn
   // onto the base's pixel grid through the alignment is blurred a little, and a faint grey is still the same mark.
-  const int tol = std::clamp(static_cast<int>(std::lround(0.5 * ppp)), 1, 3);
+  const int tol = std::clamp(static_cast<int>(std::lround(tolPt * ppp)), 1, 3);
   const auto faintIn = [&](const pdfview::Bitmap& bm, int x, int y) {
     if (x < 0 || y < 0 || x >= w || y >= h)
       return false;

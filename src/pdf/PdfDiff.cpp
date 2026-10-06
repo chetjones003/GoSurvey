@@ -55,6 +55,7 @@ Mask Dilate(const Mask& in, int w, int h, int r) {
 const char* KindName(Kind k) { return k == Kind::Added ? "Added" : k == Kind::Removed ? "Removed" : "Changed"; }
 
 Result FindChanges(const pdfview::Bitmap& base, const pdfview::Bitmap& rev, double pxPerPt, double baseHPt, const Settings& s,
+                   const std::vector<pdfalign::PixRect>& baseUnits, const std::vector<pdfalign::PixRect>& revUnits,
                    const std::function<bool()>& cancel, const std::function<void(float)>& progress) {
   Result res;
   const auto stop = [&] { return cancel && cancel(); };
@@ -65,27 +66,31 @@ Result FindChanges(const pdfview::Bitmap& base, const pdfview::Bitmap& rev, doub
   if (base.w != rev.w || base.h != rev.h || base.w <= 0 || base.h <= 0 || pxPerPt <= 0.0)
     return res;
   const int w = base.w, h = base.h;
-  const int tolPx = std::max(1, static_cast<int>(std::lround(s.toleranceMm * kPtPerMm * pxPerPt)));
   const int mergePx = std::max(1, static_cast<int>(std::lround(s.mergeMm * kPtPerMm * pxPerPt)));
 
-  const Mask bInk = InkMask(base), rInk = InkMask(rev);
-  report(0.1f);
+  // What differs is exactly what the Base / Revision views colour: pdfalign::MarkOnlyIn's cleaned marks (strict whole-word test for
+  // text, half a point times the tolerance setting for line work), so the list and the picture always agree.
+  const double tolPt = 0.5 * std::max(0.1, s.toleranceMm);
+  const uint8_t any3[3] = {0, 0, 0};
+  pdfview::Bitmap markRev, markBase;
+  pdfalign::MarkOnlyIn(rev, base, any3, markRev, pxPerPt, revUnits, tolPt);
+  report(0.3f);
   if (stop()) {
     res.cancelled = true;
     return res;
   }
-  const Mask bNear = Dilate(bInk, w, h, tolPx), rNear = Dilate(rInk, w, h, tolPx);
-  report(0.4f);
+  pdfalign::MarkOnlyIn(base, rev, any3, markBase, pxPerPt, baseUnits, tolPt);
+  report(0.5f);
   if (stop()) {
     res.cancelled = true;
     return res;
   }
-  // 1 = a revision mark with none near it on the base (added), 2 = a base mark with none near it on the revision (removed).
-  Mask diff(bInk.size(), 0), any(bInk.size(), 0);
+  // 1 = a revision mark with none on the base (added), 2 = a base mark with none on the revision (removed).
+  Mask diff(static_cast<size_t>(w) * static_cast<size_t>(h), 0), any(diff.size(), 0);
   for (size_t i = 0; i < diff.size(); ++i) {
-    if (rInk[i] && !bNear[i])
+    if (markRev.bgra[i * 4 + 3] != 0)
       diff[i] = 1;
-    else if (bInk[i] && !rNear[i])
+    else if (markBase.bgra[i * 4 + 3] != 0)
       diff[i] = 2;
     any[i] = diff[i] != 0 ? 1 : 0;
   }
@@ -185,8 +190,9 @@ std::vector<pdfview::Annot> RegionsToMarkups(const std::vector<Region>& regions,
     a.y1 = static_cast<float>(hi[1]);
     a.color = r.kind == Kind::Added ? 0x1E9E4B : r.kind == Kind::Removed ? 0xD93A3A : 0xF0A020;
     a.thickness = 1.5f;
+    const char* meaning = r.kind == Kind::Added ? "new in the revision" : r.kind == Kind::Removed ? "gone from the revision" : "changed or moved";
     char note[120];
-    std::snprintf(note, sizeof(note), "%s, %.1f x %.1f pt", KindName(r.kind), r.Width(), r.Height());
+    std::snprintf(note, sizeof(note), "%s: %s", KindName(r.kind), meaning);
     a.text = note;
     out.push_back(a);
   }

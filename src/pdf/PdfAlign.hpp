@@ -63,7 +63,7 @@ std::vector<PixRect> BoxesToPixels(const std::vector<pdfview::ObjBox>& boxes, co
 /// The Base / Revision views (REQ-392 clause 2): an overlay the size of \p sheet that is \p bgr (blue, green, red) where
 /// \p sheet has ink with nothing darker than a faint grey on \p other within two pixels, and transparent elsewhere. Cleaned up by whole objects: a small mark (a letter, a dash, a dot) is changed when a sixth or more of it is new; small marks within about 2 pt of each other (a word, a dot pattern) form a group, and a group with a changed member is coloured whole; in a big connected mark only the new pixels are coloured and clusters under about 6 square points are dropped. \p pxPerPt is the images' pixels per point. \p units are the sheet's text-run boxes (see BoxesToPixels): inside one, the text is changed or not as a whole - coloured whole when about 6 % or more of its ink is new, not coloured at all otherwise - so a changed number is never half coloured.
 void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out, double pxPerPt = 1.0,
-                const std::vector<PixRect>& units = {});
+                const std::vector<PixRect>& units = {}, double tolPt = 0.5);
 
 /// The Tint view from the cleaned marks (see MarkOnlyIn): blue where \p baseOnly marks, red where \p revOnly marks, grey for
 /// the rest of either sheet's ink, white elsewhere. All four bitmaps are the same size.
