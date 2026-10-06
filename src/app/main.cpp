@@ -22,6 +22,7 @@
 #include "WikiHelp.hpp"
 #include "util/framewatch.hpp"
 #include "PdfAttachDialog.hpp"
+#include "PdfViewerWindow.hpp"
 #include "ViewportRenderer.hpp"
 #include "CadOnlineMap.hpp"  // REQ-363 online map controller + tile service
 #include "CadSnap.hpp"
@@ -1247,6 +1248,7 @@ int main()
     DrawPageSetupEditor(cmd, cmdLog);
     DrawBatchPlotDialog(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
+    DrawPdfViewers(cmd, cmdLog);  // REQ-387
     DrawInsertBlockDialog(cmd, cmdLog);
     DrawBlockCreateDialog(cmd, cmdLog);
     DrawWblockDialog(cmd, cmdLog);
@@ -1791,6 +1793,7 @@ int main()
   onlineMap.reset();  // joins the tile workers and releases the map textures while GL is alive
   for (auto &r : viewportRenderers)
     r->Shutdown();
+  ShutdownPdfViewers();  // textures + render workers, while GL is alive
   PdfAttach_Shutdown();
   glfwDestroyWindow(window);
   glfwTerminate();

@@ -6739,6 +6739,7 @@ const CmdEntry kRegistry[] = {
     {"geomarklatlong", "", "Place a Position Marker at a typed latitude and longitude"},
     {"georeorientmarker", "", "Set the geographic marker: a design point, then north"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
+    {"pdfview", "pv", "Open a PDF in the built-in viewer (REQ-387)"},
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
     {"quickselect",  "qs", "Select by object properties"},
@@ -7486,6 +7487,11 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "traverse" || primary == "trav" || primary == "traverseeditor") {
     StartTraverseEditorCommand(st, log);
+    return true;
+  }
+  if (primary == "pdfview") {  // REQ-387: the built-in PDF viewer; the window shows the file dialog
+    st.pdfViewerPickRequest = true;
+    log.push_back("PDFVIEW — choose a PDF to open in the viewer.");
     return true;
   }
   if (primary == "pdfattach" || primary == "pdfatt") {
@@ -41808,6 +41814,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
             frames = v;
           st.bench.solidCount = count;
           StartFrameBudgetBench(st, 1, frames, log);
+          return;
+        }
+        // `BENCH PDFVIEW [pages]` — REQ-387: open a synthetic PDF of that many pages in the viewer
+        // and scroll it top to bottom, reporting first-page time and the viewer's per-frame cost.
+        if (lower == "pdfview" || lower == "pdf") {
+          int pages = 500;
+          int v = 0;
+          if (issIdle >> v)
+            pages = std::clamp(v, 1, 5000);
+          st.pdfViewBenchPages = pages;
+          log.push_back("BENCH PDFVIEW — building a " + std::to_string(pages) + "-page PDF; the viewer window will scroll it.");
           return;
         }
         if (lower == "mesh" || lower == "m") {

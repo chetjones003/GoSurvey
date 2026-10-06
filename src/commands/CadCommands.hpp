@@ -5153,6 +5153,12 @@ struct AppCommandState {
 
   bool pdfAttachDialogOpen = false;
 
+  /// REQ-387 (#732): requests the PDF Viewer window consumes on its next frame. The typed command
+  /// has no window of its own; it only asks. Empty path + pick = show the file dialog.
+  std::string pdfViewerOpenRequest;
+  bool pdfViewerPickRequest = false;
+  int pdfViewBenchPages = 0; ///< `BENCH PDFVIEW [pages]`: build a synthetic PDF this long and time scrolling it
+
   // -------------------------------------------------------------------------
   // INSERT dialog (issue #124)
   // -------------------------------------------------------------------------
