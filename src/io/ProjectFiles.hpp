@@ -63,6 +63,15 @@ struct Attached {
   std::string placementJson;
 };
 
+/// REQ-379 clause 6: files in the project folder (any depth) of a kind the Project Files list shows
+/// (.dwg .pdf .e57) that the project does not track, as project-relative `/` paths, sorted. Hidden
+/// folders and files of other kinds are skipped. Reads the disk; changes nothing.
+std::vector<std::string> FindUntracked(const gsproj::Project& p);
+
+/// REQ-379 clause 5: tracks \p file on its own, tied to no drawing: in-project when it lies inside the
+/// project folder, else a "local-link". True when the project changed (so the caller saves the .gsproj).
+bool TrackFile(gsproj::Project* p, const std::filesystem::path& file);
+
 /// Makes the project's record of the drawing \p drawingRel match what the drawing now holds: the
 /// drawing itself is tracked; every file in \p clouds / \p pdfs is tracked (in-project, or a
 /// "local-link" when outside) and associated with the drawing; a file the drawing no longer holds loses

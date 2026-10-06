@@ -37,7 +37,9 @@ std::uint32_t ActiveProjectUid(const AppCommandState& st) {
   return i >= 1 && i < static_cast<int>(st.drawingTabs.size()) ? st.drawingTabs[static_cast<size_t>(i)].projectUid : 0u;
 }
 
-projfiles::Role RoleOf(Kind k) { return k == Kind::Pdf ? projfiles::Role::Pdf : projfiles::Role::PointCloud; }
+projfiles::Role RoleOf(Kind k) {
+  return (k == Kind::Pdf || k == Kind::PdfTrack) ? projfiles::Role::Pdf : projfiles::Role::PointCloud;
+}
 
 /// The drawing's project-relative name, or "" when it is not inside the project folder.
 std::string DrawingRel(const gsproj::Project& p, const std::string& drawingPath) {
@@ -144,6 +146,98 @@ bool RequestProjectAttach(AppCommandState& st, Kind kind, const std::string& pat
   p.reuse = plan.reuseExisting;
   p.openRequested = true;
   return true;
+}
+
+bool TrackProjectFile(AppCommandState& st, std::uint32_t uid, const std::string& path, std::vector<std::string>& log) {
+  Session* s = FindSessionMut(st, uid);
+  if (s == nullptr || s->readOnly) {
+    log.push_back("Add PDF - the project can no longer be written; nothing was added.");
+    return false;
+  }
+  const std::string name = fs::u8path(path).filename().u8string();
+  if (!projfiles::TrackFile(&s->project, fs::u8path(path))) {
+    log.push_back(name + " is already in the project's file list.");
+    return false;
+  }
+  std::string err;
+  if (!gsproj::Save(s->project, &err)) {
+    log.push_back("The project's file list could not be saved: " + err);
+    return false;
+  }
+  log.push_back("Added " + name + " to the project's file list.");
+  return true;
+}
+
+int TrackProjectFiles(AppCommandState& st, std::uint32_t uid, const std::vector<std::string>& rels,
+                      std::vector<std::string>& log) {
+  Session* s = FindSessionMut(st, uid);
+  if (s == nullptr || s->readOnly) {
+    log.push_back("Refresh - the project can no longer be written; nothing was tracked.");
+    return 0;
+  }
+  int added = 0;
+  for (const std::string& rel : rels)
+    if (gsproj::IsSafeRelativePath(rel) && projfiles::TrackFile(&s->project, s->project.Folder() / fs::u8path(rel)))
+      ++added;
+  if (added == 0)
+    return 0;
+  std::string err;
+  if (!gsproj::Save(s->project, &err)) {
+    log.push_back("The project's file list could not be saved: " + err);
+    return 0;
+  }
+  log.push_back("Now tracking " + std::to_string(added) + " new file" + (added == 1 ? "" : "s") + " in the project.");
+  return added;
+}
+
+bool RefreshProjectFiles(AppCommandState& st, std::vector<std::string>& log) {
+  const std::uint32_t uid = ActiveProjectUid(st);
+  const Session* s = FindSession(st, uid);
+  if (s == nullptr) {
+    log.push_back("Refresh - this drawing is not in a project.");
+    return false;
+  }
+  if (s->readOnly) {
+    log.push_back("Refresh - this project is open read-only.");
+    return false;
+  }
+  AppCommandState::ProjectRefreshPrompt& p = st.projectRefreshPrompt;
+  p = {};
+  p.files = projfiles::FindUntracked(s->project);
+  if (p.files.empty()) {
+    log.push_back("Refresh - no new files in the project folder.");
+    return false;
+  }
+  p.projectUid = uid;
+  p.picked.assign(p.files.size(), 1);
+  p.openRequested = true;
+  log.push_back("Refresh - found " + std::to_string(p.files.size()) + " new file" + (p.files.size() == 1 ? "" : "s") +
+                " not tracked by the project.");
+  return true;
+}
+
+bool AddPdfToProject(AppCommandState& st, const std::string& path, std::vector<std::string>& log) {
+  const std::uint32_t uid = ActiveProjectUid(st);
+  const Session* s = FindSession(st, uid);
+  if (s == nullptr || path.empty()) {
+    log.push_back("Add PDF - open a project drawing first.");
+    return false;
+  }
+  if (s->readOnly) {
+    log.push_back("Add PDF - this project is open read-only.");
+    return false;
+  }
+  std::string ext = fs::u8path(path).extension().u8string();
+  for (char& c : ext)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  std::error_code ec;
+  if (ext != ".pdf" || !fs::is_regular_file(fs::u8path(path), ec)) {
+    log.push_back("Add PDF - " + path + " is not a PDF file that can be read.");
+    return false;
+  }
+  if (projfiles::IsInsideProject(s->project, fs::u8path(path)))
+    return TrackProjectFile(st, uid, path, log);
+  return RequestProjectAttach(st, Kind::PdfTrack, path, log);
 }
 
 bool ResolveProjectAttach(AppCommandState& st, bool copy, std::vector<std::string>& log, std::string* finalPath) {

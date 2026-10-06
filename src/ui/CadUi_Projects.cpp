@@ -930,13 +930,16 @@ void DrawProjectAttachModal(AppCommandState& cmd, std::vector<std::string>& log)
     answer = 3;
   if (answer != 0) {
     const Kind kind = pa.kind;
+    const uint32_t attachUid = pa.projectUid;
     ImGui::CloseCurrentPopup();
     std::string finalPath;
     if (answer == 3) {
       pa = {};
       log.push_back("Attach cancelled.");
     } else if (ResolveProjectAttach(cmd, answer == 1, log, &finalPath)) {
-      if (kind == Kind::PointCloud) {
+      if (kind == Kind::PdfTrack) {  // REQ-379 clause 5: tracked only, never placed
+        TrackProjectFile(cmd, attachUid, finalPath, log);
+      } else if (kind == Kind::PointCloud) {
         StartPointCloudImportAsync(cmd, finalPath, log);
       } else if (finalPath.size() < sizeof(cmd.pdfAttachFilePath)) {
         std::strcpy(cmd.pdfAttachFilePath, finalPath.c_str());
@@ -945,6 +948,61 @@ void DrawProjectAttachModal(AppCommandState& cmd, std::vector<std::string>& log)
         log.push_back("PDFATTACH - the file's path is too long; nothing was attached.");
       }
     }
+  }
+  ImGui::EndPopup();
+  PopProductDialogAccent();
+}
+
+// REQ-379 clause 6: the question Refresh asks. Opened only by the Refresh button; every file starts
+// ticked; nothing is tracked until a button is pressed.
+void DrawProjectRefreshModal(AppCommandState& cmd, std::vector<std::string>& log) {
+  auto& rp = cmd.projectRefreshPrompt;
+  if (rp.openRequested) {
+    ImGui::OpenPopup("New files found##projrefresh");
+    rp.openRequested = false;
+    rp.open = true;
+  }
+  if (!rp.open)
+    return;
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  PushProductDialogAccent();
+  if (!ImGui::BeginPopupModal("New files found##projrefresh", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopProductDialogAccent();
+    return;
+  }
+  PaintProductDialogAccentFrame();
+  BeginStyledDialog();
+  const AppCommandState::ProjectSession* s = SessionByUid(cmd, rp.projectUid);
+  ImGui::TextWrapped("%d new file%s in project %s %s not tracked yet. Track the ones ticked below?",
+                     static_cast<int>(rp.files.size()), rp.files.size() == 1 ? "" : "s", s ? s->project.name.c_str() : "?",
+                     rp.files.size() == 1 ? "is" : "are");
+  ImGui::Spacing();
+  ImGui::BeginChild("##refreshfiles", ImVec2(520.f, std::min(260.f, 28.f * static_cast<float>(rp.files.size()) + 8.f)), true);
+  for (size_t i = 0; i < rp.files.size(); ++i) {
+    bool on = rp.picked[i] != 0;
+    if (ImGui::Checkbox((rp.files[i] + "##rf" + std::to_string(i)).c_str(), &on))
+      rp.picked[i] = on ? 1 : 0;
+  }
+  ImGui::EndChild();
+  ImGui::Spacing();
+  int answer = 0;  // 1 track selected, 2 track none
+  if (ImGui::Button("Track selected"))
+    answer = 1;
+  ImGui::SameLine();
+  if (ImGui::Button("Track none") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+    answer = 2;
+  if (answer != 0) {
+    if (answer == 1) {
+      std::vector<std::string> chosen;
+      for (size_t i = 0; i < rp.files.size(); ++i)
+        if (rp.picked[i] != 0)
+          chosen.push_back(rp.files[i]);
+      TrackProjectFiles(cmd, rp.projectUid, chosen, log);
+    } else {
+      log.push_back("Refresh - left the new files untracked.");
+    }
+    rp = {};
+    ImGui::CloseCurrentPopup();
   }
   ImGui::EndPopup();
   PopProductDialogAccent();
@@ -1262,6 +1320,7 @@ void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log) {
   DrawNewProjectModal(cmd, log);
   DrawProjectPromptModal(cmd, log);
   DrawProjectAttachModal(cmd, log);  // REQ-379
+  DrawProjectRefreshModal(cmd, log);  // REQ-379 clause 6
   DrawPointEditModal(cmd);  // REQ-383 clauses 2 and 4
   DrawPasteWarningModal(cmd, log);  // REQ-383 clauses 1 and 3
   DrawCloseTabWarningModal(cmd);  // REQ-383 clause 6

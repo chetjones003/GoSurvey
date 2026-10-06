@@ -261,3 +261,54 @@ TEST_CASE("req379 a different outside file sharing a copied file's name stays it
   CHECK(clashes == 0);
   CHECK(Find(p, "PDFs/site (2).pdf") != nullptr);
 }
+
+TEST_CASE("req379 clause 5: TrackFile tracks a PDF on its own, once, and links an outside one", "[req379][issue732]") {
+  TempDir root("trackfile");
+  gsproj::Project p = MakeProject(root.path / "proj");
+  const fs::path inside = p.Folder() / "Received" / "PDFs" / "Combined IFC.pdf";
+  WriteText(inside, "%PDF");
+  const size_t before = p.items.size();
+
+  CHECK(projfiles::TrackFile(&p, inside));
+  REQUIRE(p.items.size() == before + 1);
+  const gsproj::TrackedItem* it = Find(p, "Received/PDFs/Combined IFC.pdf");
+  REQUIRE(it != nullptr);
+  CHECK(it->kind == gsproj::kKindInProject);
+  CHECK(it->associations.empty());
+  CHECK(it->placementsJson == "[]");
+  CHECK_FALSE(projfiles::TrackFile(&p, inside));  // again: nothing changes
+  CHECK(p.items.size() == before + 1);
+
+  const fs::path outside = root.path / "elsewhere" / "plan.pdf";
+  WriteText(outside, "%PDF");
+  CHECK(projfiles::TrackFile(&p, outside));
+  bool linked = false;
+  for (const auto& t : p.items)
+    linked = linked || t.kind == gsproj::kKindLocalLink;
+  CHECK(linked);
+}
+
+TEST_CASE("req379 clause 6: the new-file scan offers untracked dwg/pdf/e57 and nothing else", "[req379][issue732]") {
+  TempDir root("refresh");
+  gsproj::Project p = MakeProject(root.path / "proj");
+  const fs::path f = p.Folder();
+  WriteText(f / "Drawings" / "New.dwg", "d");
+  WriteText(f / "Received" / "PDFs" / "Combined IFC.pdf", "p");
+  WriteText(f / "PointClouds" / "scan.E57", "e");          // upper-case extension
+  WriteText(f / "PDFs" / "Tracked.pdf", "p");
+  WriteText(f / "Notes" / "readme.txt", "t");              // another kind
+  WriteText(f / "PointClouds" / "scan.e57.gscloud", "c");  // a cache
+  WriteText(f / "Turnovers" / "x.gsturnover", "t");
+  WriteText(f / ".hidden" / "secret.pdf", "p");            // hidden folder
+
+  gsproj::TrackedItem t;
+  t.path = "pdfs/tracked.PDF";  // same file, different letter case
+  p.items.push_back(t);
+
+  const std::vector<std::string> found = projfiles::FindUntracked(p);
+  const std::vector<std::string> want = {"Drawings/New.dwg", "PointClouds/scan.E57", "Received/PDFs/Combined IFC.pdf"};
+  CHECK(found == want);
+
+  REQUIRE(projfiles::TrackFile(&p, f / "Received" / "PDFs" / "Combined IFC.pdf"));
+  CHECK(projfiles::FindUntracked(p).size() == 2);  // tracked files are not offered again
+}

@@ -5007,7 +5007,7 @@ struct AppCommandState {
   /// the project is attached in a project drawing. Drawn as a modal by DrawProjectDialogs; the answer
   /// goes to ResolveProjectAttach and then on to the attach that asked.
   struct ProjectAttachPrompt {
-    enum class Kind { None, PointCloud, Pdf } kind = Kind::None;
+    enum class Kind { None, PointCloud, Pdf, PdfTrack } kind = Kind::None;  ///< PdfTrack: Add PDF to project (REQ-379 cl. 5), no placement
     uint32_t    projectUid = 0;
     std::string sourcePath;          ///< UTF-8
     std::string destRel;             ///< where a copy would go, project-relative
@@ -5015,6 +5015,14 @@ struct AppCommandState {
     bool        reuse = false;       ///< an identical copy is already in the project
     bool        openRequested = false;
   } projectAttachPrompt;
+  /// REQ-379 clause 6: the answer to Refresh. Filled only when the user pressed Refresh and new files exist.
+  struct ProjectRefreshPrompt {
+    uint32_t                 projectUid = 0;
+    std::vector<std::string> files;   ///< project-relative, `/`
+    std::vector<char>        picked;  ///< one tick per file
+    bool                     openRequested = false;
+    bool                     open = false;
+  } projectRefreshPrompt;
   /// REQ-383 (#696 P9): a point edit in a project drawing that needs the user's answer before it reaches
   /// the shared database. SyncProjectPoints fills it in and waits; DrawProjectDialogs asks; the answer
   /// is stored here and the next SyncProjectPoints frame carries it out. Cleared once the edit is
