@@ -639,6 +639,11 @@ add_executable(GoSurvey
   # PDF underlay — the real, GL-backed implementation (headless links a seam instead)
   src/pdf/PdfAttach.cpp
 
+  # REQ-387 / ADR-067 — the built-in PDF viewer: pure core, PDFium wrapper, ImGui window
+  src/pdf/PdfViewerCore.cpp
+  src/pdf/PdfDocument.cpp
+  src/ui/PdfViewerWindow.cpp
+
   # Platform
   src/platform/AppIcon.cpp
   src/platform/WinFileDialogs.cpp
@@ -1328,7 +1333,19 @@ if(GOSURVEY_BUILD_TESTS)
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
-  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz)
+  # REQ-387: the PDF viewer's pure core and its PDFium wrapper (opened against generated PDFs).
+  target_sources(GoSurveyTests PRIVATE
+    tests/PdfViewerTests.cpp
+    src/pdf/PdfViewerCore.cpp
+    src/pdf/PdfDocument.cpp)
+  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium)
+  if(WIN32)
+    add_custom_command(TARGET GoSurveyTests POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${pdfium_binaries_SOURCE_DIR}/bin/pdfium.dll"
+              "$<TARGET_FILE_DIR:GoSurveyTests>/pdfium.dll"
+      COMMENT "Copy pdfium.dll beside GoSurveyTests")
+  endif()
   gosurvey_target_warnings(GoSurveyTests)
   gosurvey_enable_pch(GoSurveyTests)
 

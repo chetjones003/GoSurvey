@@ -1,5 +1,7 @@
 #include "PdfPlot.hpp"
 
+#include "PdfDocument.hpp"       // pdfview::PdfiumMutex — the viewer renders on a worker thread (REQ-387)
+
 #include "CadCommands.hpp"
 #include "PaperSpace.hpp"
 #include "ShxFont.hpp"           // shared lower-layer SHX stroke geometry (ADR-022)
@@ -114,6 +116,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
     return false;
   }
 
+  // Plotting and the PDF viewer's render worker must not be inside PDFium at the same time (REQ-387).
+  std::lock_guard<std::mutex> pdfiumLock(pdfview::PdfiumMutex());
   RefreshSurfaceDisplayGeometry(st);
 
   // Layer → plottable lookup (excludes off / frozen / non-plottable layers). Unknown layer → plottable.

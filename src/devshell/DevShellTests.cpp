@@ -272,6 +272,29 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   // A unit test cannot see any of that.
   //
   //   build\devshell\GoSurvey.exe --devshell-run req024-blank-enter-default
+  // REQ-387 (#732): the PDF viewer window, driven in the real app. The pure core and the PDFium
+  // wrapper are unit-tested (PdfViewerTests.cpp); this proves the window opens, shows the first page
+  // and survives being scrolled end to end, and reports the REQ-387 timings.
+  //
+  //   build\devshell\GoSurvey.exe --devshell-run pdfview-bench   (report goes to stderr)
+  ImGuiTest* pdfBench = IM_REGISTER_TEST(engine, "gosurvey", "pdfview-bench");
+  pdfBench->TestFunc = [](ImGuiTestContext* ctx) {
+    auto viewerShown = [] {
+      for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+        if (w->WasActive && std::strstr(w->Name, "###pdfview") != nullptr)
+          return true;
+      return false;
+    };
+    IM_CHECK(CancelToIdle(ctx));
+    SubmitCad(ctx, "BENCH PDFVIEW 500");
+    ctx->Yield(10);
+    IM_CHECK(viewerShown());
+    // The bench closes its own viewer when the report is written.
+    for (int i = 0; i < 400 && viewerShown(); ++i)
+      ctx->Yield(30);
+    IM_CHECK(!viewerShown());
+  };
+
   ImGuiTest* blankEnter = IM_REGISTER_TEST(engine, "gosurvey", "req024-blank-enter-default");
   blankEnter->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));

@@ -6,6 +6,7 @@
 #include "io/ProjectFiles.hpp"
 #include "io/ProjectTurnover.hpp"
 #include "ToolspaceCatalog.hpp"
+#include "PdfViewerWindow.hpp"
 #include "WinFileDialogs.hpp"
 
 #if defined(_WIN32)
@@ -436,15 +437,6 @@ void DrawPointGroupsFolderContext(AppCommandState& cmd, std::vector<std::string>
   EndTsContext();
 }
 
-// Open a file with the machine's default program for its type (a PDF opens in the user's PDF viewer).
-void OpenWithDefaultApp(const std::string& utf8Path) {
-#if defined(_WIN32)
-  const std::wstring w = std::filesystem::u8path(utf8Path).make_preferred().wstring();
-  ::ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-#else
-  (void)utf8Path;
-#endif
-}
 
 // Show a file in the system file manager with it selected.
 void RevealPathInFileManager(const std::string& utf8Path) {
@@ -560,7 +552,7 @@ void DrawProjectFilesFolder(AppCommandState& cmd, std::vector<std::string>* log)
   if (!revealPath.empty())
     RevealPathInFileManager(revealPath);
   if (!openPdf.empty())
-    OpenWithDefaultApp(openPdf);
+    OpenPdfInViewer(openPdf);  // REQ-387: the built-in viewer, never an outside program
   if (!openDrawing.empty())
     OpenDrawingInNewTab(cmd, log != nullptr ? *log : discard, openDrawing.c_str());
 }
