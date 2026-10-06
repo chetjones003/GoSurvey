@@ -3306,6 +3306,24 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
   st.cadSurfaces.erase(st.cadSurfaces.begin() + static_cast<std::ptrdiff_t>(index));
   if (index < st.cadSurfaceAttrs.size())
     st.cadSurfaceAttrs.erase(st.cadSurfaceAttrs.begin() + static_cast<std::ptrdiff_t>(index));
+  // The selection is indexed, and `cadSurfaces` has just compacted (architecture SS11.9). Drop the
+  // entry for the surface that is gone, and slide every LATER surface entry down one -- otherwise a
+  // selection either points past the end (the `selection-in-range` document invariant trips on the
+  // next CHECK) or, worse, silently points at whichever surface took the slot, so the next command
+  // acts on a surface the user never picked.
+  //
+  // Done HERE because this is the one erase path (REQ-068): `SURFACEDELETE`, the ERASE command and
+  // both panel Delete buttons all come through it, and only ERASE was clearing up after itself.
+  for (size_t i = st.selection.size(); i-- > 0;) {
+    SelectedEntity& e = st.selection[i];
+    if (e.type != SelectedEntity::Type::Surface || e.index < 0)
+      continue;
+    const size_t ei = static_cast<size_t>(e.index);
+    if (ei == index)
+      st.selection.erase(st.selection.begin() + static_cast<std::ptrdiff_t>(i));
+    else if (ei > index)
+      --e.index;
+  }
   BumpCadGpuCache(st);
 }
 
