@@ -151,6 +151,82 @@ TEST_CASE("Visibility state hides unmatched primitives", "[issue124][block]") {
   REQUIRE(segs.size() == 1);
 }
 
+TEST_CASE("Linear stretch dynamic grip updates block geometry (issue #618 inc4)", "[issue618][inc4][block]") {
+  CadBlockDefinition def;
+  def.name = "PANEL";
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockParameter p;
+  p.name = "Width";
+  p.kind = CadBlockParamKind::Linear;
+  p.value = 2.f;
+  p.minValue = 0.f;
+  p.maxValue = 10.f;
+  def.parameters.push_back(p);
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  def.actions.push_back(stretch);
+  REQUIRE(CadBlockHasLinearStretchDyn(def));
+  CHECK(CadBlockDynGripCount(def) == 2);
+
+  CadBlockRef r;
+  r.defName = def.name;
+  r.paramState = def.parameters;
+  std::vector<CadBlockDefinition> defs;
+  defs.push_back(def);
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  CHECK(segs[0].x1 == Catch::Approx(4.f).margin(0.01f));
+
+  float gx = 0.f;
+  float gy = 0.f;
+  REQUIRE(CadBlockDynGripWorld(def, r, 1, &gx, &gy, nullptr));
+  CadBlockApplyDynGripDrag(&r, def, 1, gx + 2.f, gy);
+  segs.clear();
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  CHECK(segs[0].x1 == Catch::Approx(8.f).margin(0.01f));
+}
+
+TEST_CASE("dynamicAnonymous instance geometry is not re-stretched by GoSurvey actions (issue #618 inc2)",
+          "[issue618][block]") {
+  CadBlockDefinition def;
+  def.name = "*U7";
+  def.dynamicAnonymous = true;
+  def.content.lines = {0.f, 0.f, 0.f, 5.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  stretch.threshold = -1.f;
+  def.actions.push_back(stretch);
+  CadBlockParameter p;
+  p.name = "Width";
+  p.value = 10.f;
+  def.parameters.push_back(p);
+
+  CadBlockRef r;
+  r.defName = def.name;
+  r.paramState.push_back(p);
+  std::vector<CadBlockDefinition> defs;
+  defs.push_back(def);
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  const float span = std::hypot(segs[0].x1 - segs[0].x0, segs[0].y1 - segs[0].y0);
+  CHECK(span == Catch::Approx(5.f).margin(0.001f));
+}
+
 TEST_CASE("Matchline dynamics stretch the negative end and flip labels", "[issue124][block]") {
   CadBlockDefinition def;
   def.name = "_matchline_NORTHING";

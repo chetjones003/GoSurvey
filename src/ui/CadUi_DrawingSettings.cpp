@@ -8,6 +8,7 @@
 
 #include "CadUi.hpp"
 #include "CadUiHelpers.hpp"
+#include "ProjectSettings.hpp"
 #include "geo/CoordinateSystems.hpp"
 #include "util/PlotScales.hpp"
 
@@ -27,6 +28,9 @@ namespace {
 
 constexpr const char* kPopupId = "###GoSurveyDrawingSettings";
 constexpr const char* kNotImplemented = "Not implemented yet.";
+constexpr const char* kTagEnforced = "Enforced by project";
+constexpr const char* kTagInherited = "Inherited from project";
+constexpr const char* kTagOverridden = "Overridden";
 
 /// The read-only details of the staged zone (REQ-358 item 2).
 struct ZoneDetails {
@@ -64,6 +68,13 @@ struct StagedDrawingSettings {
   std::string             transformMessage;
   int                     drawingIdx = -1;             ///< The drawing tab this was seeded from.
   bool                    selectTransformation = false;  ///< Come back on the tab after a pick.
+  // REQ-375. projectMode: the window edits the project's settings, not a drawing's. proj: the project
+  // the drawing being edited belongs to (null for a standalone drawing and in projectMode); refreshed
+  // every frame. seedRef holds the values the window was opened with, to tell what the user changed.
+  bool                   projectMode = false;
+  const ProjectSettings* proj = nullptr;
+  std::string            projName;
+  ProjectSettings        seedRef;
 };
 
 const DrawingTransformFactors& StagedFactors(StagedDrawingSettings& s) {
@@ -105,11 +116,35 @@ void SeedFromDrawing(const AppCommandState& cmd, StagedDrawingSettings& s) {
   std::snprintf(s.customScaleText, sizeof(s.customScaleText), "%g",
                 static_cast<double>(s.modelUnitsPerPlottedInch));
   s.settings = cmd.drawingSettings;
+  s.projectMode = false;
+  s.seedRef = ProjectSettings{};
+  s.seedRef.hasDefaults = true;
+  s.seedRef.defaults = cmd.drawingSettings;
+  s.seedRef.plotScale = cmd.modelUnitsPerPlottedInch;
   s.factorsInsUnits = -1;  // resolve again
   s.transformMessage.clear();
   s.drawingIdx = cmd.activeDrawingIdx;
   // The category list is kept: after Apply the user stays in the category they were browsing
   // (SelectZone reloads it only when it does not list the drawing's zone).
+  SelectZone(s, s.settings.zoneCode);
+}
+
+/// Show a project's settings (REQ-375): its unit, zone and defaults, or the standard defaults for a
+/// project that has none yet.
+void SeedFromProject(const AppCommandState& cmd, const ProjectSettings& p, StagedDrawingSettings& s) {
+  s.insUnits = p.insUnits >= 0 ? p.insUnits : 2;
+  s.modelUnitsPerPlottedInch = p.hasDefaults ? p.plotScale : 50.f;
+  s.customScale = PlotScaleChoiceIndex(PlotScaleChoicesFor(s.insUnits), s.modelUnitsPerPlottedInch) < 0;
+  std::snprintf(s.customScaleText, sizeof(s.customScaleText), "%g",
+                static_cast<double>(s.modelUnitsPerPlottedInch));
+  s.settings = p.hasDefaults ? p.defaults : DrawingSettings{};
+  s.settings.overridden = 0;
+  s.settings.zoneCode = p.zoneCode;
+  s.projectMode = true;
+  s.proj = nullptr;
+  s.factorsInsUnits = -1;
+  s.transformMessage.clear();
+  s.drawingIdx = cmd.activeDrawingIdx;
   SelectZone(s, s.settings.zoneCode);
 }
 
@@ -173,6 +208,8 @@ struct DialogLayout {
   float  labelW = 0.f;  ///< Label column, the fields start here.
   float  fieldW = 0.f;  ///< Every combo and the Custom scale field.
   float  btnW = 0.f;
+  float  tagX = 0.f;    ///< Where the "inherited / overridden / enforced" tag starts (REQ-375).
+  float  tagW = 0.f;
   // Transformation tab: two columns of label + field.
   float  txLabelW = 0.f;
   float  txFieldW = 0.f;
@@ -243,7 +280,13 @@ DialogLayout MeasureLayout() {
                   st.ItemInnerSpacing.x + ImGui::GetFrameHeight();
   L.olValueW = ImGui::CalcTextSize("-*-EXIST").x + st.FramePadding.x * 2.f;
 
-  const float contentW = (std::max)({L.labelW + L.fieldW, checkW, footerW, txW});
+  // REQ-375: a tag after each row of a project drawing — "overridden" and its Reset button, or
+  // "inherited", or "Enforced by project". Always reserved so the window never changes size.
+  L.tagX = (std::max)(L.labelW + L.fieldW, checkW) + st.ItemSpacing.x * 2.f;
+  L.tagW = (std::max)(MaxTextWidth({kTagEnforced, kTagInherited}),
+                      ImGui::CalcTextSize(kTagOverridden).x + st.ItemSpacing.x + ImGui::CalcTextSize("Reset").x +
+                          st.FramePadding.x * 2.f);
+  const float contentW = (std::max)({L.tagX + L.tagW, footerW, txW});
 
   // Body rows, top to bottom: tab bar, spacing, five field rows, spacing, two checkboxes, spacing,
   // the "Zone" separator, six Zone rows and the Zone message line.
@@ -258,7 +301,7 @@ DialogLayout MeasureLayout() {
   // Object Layers: tab bar, spacing, header + eight rows, spacing, the info line (two lines at most),
   // the display-components checkbox and the message line.
   const float tableRow = row + st.CellPadding.y * 2.f + 1.f;  // plus the row border
-  const float olBody = row + gap + 9.f * tableRow + gap + 2.f * message + row + message;
+  const float olBody = row + gap + row + 9.f * tableRow + gap + 2.f * message + row + message;
   const float body = (std::max)({unitsBody, txBody, olBody});
   const float footer = gap + 1.f + gap + row;  // separator line, then the buttons
   const float titleBar = ImGui::GetFontSize() + st.FramePadding.y * 2.f;
@@ -288,6 +331,55 @@ void CommitTypedCode(StagedDrawingSettings& s) {
   }
   SelectZone(s, s.settings.zoneCode);  // the field shows the unchanged selection again
   s.codeError = "\"" + code + "\" is not a coordinate system in this dictionary.";
+}
+
+float StagedScaleOrCurrent(const StagedDrawingSettings& s) {
+  float v = s.modelUnitsPerPlottedInch;
+  StagedScale(s, &v);
+  return v;
+}
+
+/// REQ-375: is \p key an override in this drawing as the window stands? A value the user changed is
+/// an override exactly when it differs from the project's; one left alone keeps the drawing's flag
+/// (so choosing the project's own value is the same as inheriting it).
+bool KeyOverridden(const StagedDrawingSettings& s, ProjectDefaultKey key) {
+  if (!s.proj || !s.proj->hasDefaults)
+    return false;
+  const float v = StagedScaleOrCurrent(s);
+  if (DiffersFromProjectDefault(s.seedRef, key, v, s.settings))
+    return DiffersFromProjectDefault(*s.proj, key, v, s.settings);
+  return s.settings.IsOverridden(key);
+}
+
+/// The tag after a row: "Inherited from project", or "Overridden" with Reset to project value. \p x < 0
+/// puts it on the current line. Nothing for a standalone drawing or when editing the project itself.
+void InheritTag(StagedDrawingSettings& s, ProjectDefaultKey key, float x) {
+  if (!s.proj || !s.proj->hasDefaults)
+    return;
+  if (x < 0.f)
+    ImGui::SameLine();
+  else
+    ImGui::SameLine(x);
+  ImGui::AlignTextToFramePadding();
+  if (!KeyOverridden(s, key)) {
+    ImGui::TextDisabled("%s", kTagInherited);
+    return;
+  }
+  ImGui::TextUnformatted(kTagOverridden);
+  ImGui::SameLine();
+  ImGui::PushID(static_cast<int>(key));
+  if (ImGui::SmallButton("Reset")) {
+    float scale = s.modelUnitsPerPlottedInch;
+    CopyProjectDefault(*s.proj, key, &scale, &s.settings);
+    s.settings.SetOverridden(key, false);
+    if (key == ProjectDefaultKey::PlotScale) {
+      s.modelUnitsPerPlottedInch = scale;
+      s.customScale = PlotScaleChoiceIndex(PlotScaleChoicesFor(s.insUnits), scale) < 0;
+      std::snprintf(s.customScaleText, sizeof(s.customScaleText), "%g", static_cast<double>(scale));
+    }
+  }
+  ImGui::PopID();
+  ItemHelpTooltip("Reset to the project's value.");
 }
 
 void DrawZoneGroup(StagedDrawingSettings& s, const std::function<void(const char*)>& row) {
@@ -352,7 +444,9 @@ void DrawZoneGroup(StagedDrawingSettings& s, const std::function<void(const char
 
   // One message line, kept even when empty so the window never changes size.
   const std::string& msg = loaded ? s.codeError : geo::DictionaryError();
-  if (msg.empty())
+  if (msg.empty() && s.projectMode && s.settings.zoneCode.empty())
+    ImGui::TextDisabled("No coordinate system: each drawing keeps its own.");  // REQ-375
+  else if (msg.empty())
     ImGui::TextUnformatted("");
   else
     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.f), "%s", msg.c_str());
@@ -370,8 +464,19 @@ void DrawUnitsAndZoneTab(StagedDrawingSettings& s, const DialogLayout& L) {
   for (int i = 0; i < kDrawingUnitCount; ++i)
     if (s.insUnits == kDrawingUnitCodes[i])
       unitSel = i;
+  // REQ-375: the project fixes the drawing unit and the coordinate system of its drawings.
+  const bool lockUnits = s.proj && s.proj->insUnits >= 0;
+  const bool lockZone = s.proj && !s.proj->zoneCode.empty();
   row("Drawing units:");
-  if (ImGui::Combo("##ds_units", &unitSel, kDrawingUnitNames, kDrawingUnitCount)) {
+  ImGui::BeginDisabled(lockUnits);
+  const bool unitsPicked = ImGui::Combo("##ds_units", &unitSel, kDrawingUnitNames, kDrawingUnitCount);
+  ImGui::EndDisabled();
+  if (lockUnits) {
+    ImGui::SameLine(L.tagX);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", kTagEnforced);
+  }
+  if (unitsPicked) {
     s.insUnits = kDrawingUnitCodes[std::clamp(unitSel, 0, kDrawingUnitCount - 1)];
     // A relabel: the scale value is kept, and reads as Custom if the new list does not hold it.
     if (!s.customScale &&
@@ -388,12 +493,14 @@ void DrawUnitsAndZoneTab(StagedDrawingSettings& s, const DialogLayout& L) {
   row("Angular units:");
   if (ImGui::Combo("##ds_ang", &ang, kAngular, IM_ARRAYSIZE(kAngular)))
     s.settings.angularUnits = static_cast<DrawingSettings::AngularUnits>(std::clamp(ang, 0, 2));
+  InheritTag(s, ProjectDefaultKey::AngularUnits, L.tagX);
   ItemHelpTooltip("The drawing's angular unit (AUNITS). The app-wide angle display format is set in UNITS.");
 
   int foot = static_cast<int>(s.settings.footDefinition);
   row("Imperial to Metric conversion:");
   if (ImGui::Combo("##ds_foot", &foot, kFoot, IM_ARRAYSIZE(kFoot)))
     s.settings.footDefinition = static_cast<DrawingSettings::FootDefinition>(std::clamp(foot, 0, 1));
+  InheritTag(s, ProjectDefaultKey::FootDefinition, L.tagX);
   ItemHelpTooltip("The foot every feet/meters conversion in this drawing uses. The two differ by "
                   "2 parts per million: about 1 ft at 500,000 ft.");
 
@@ -414,6 +521,7 @@ void DrawUnitsAndZoneTab(StagedDrawingSettings& s, const DialogLayout& L) {
   }
   ItemHelpTooltip("The drawing's plot scale: the same value as the status-bar scale. It sizes survey-point "
                   "markers, labels and plotted text.");
+  InheritTag(s, ProjectDefaultKey::PlotScale, L.tagX);
 
   ImGui::BeginDisabled(!s.customScale);
   row("Custom scale:");
@@ -423,14 +531,18 @@ void DrawUnitsAndZoneTab(StagedDrawingSettings& s, const DialogLayout& L) {
 
   ImGui::Spacing();
   ImGui::Checkbox(kCheckScaleInserted, &s.settings.scaleInsertedObjects);
+  InheritTag(s, ProjectDefaultKey::ScaleInsertedObjects, L.tagX);
   ItemHelpTooltip("On: INSERT converts a block drawn in another unit to this drawing's unit. "
                   "Off: blocks are inserted as drawn.");
   ImGui::Checkbox(kCheckSetVariables, &s.settings.setDrawingVariables);
+  InheritTag(s, ProjectDefaultKey::SetDrawingVariables, L.tagX);
   ItemHelpTooltip("On: saving writes LUNITS and AUNITS from these settings beside INSUNITS.");
 
   ImGui::Spacing();
-  ImGui::SeparatorText("Zone");
+  ImGui::SeparatorText(lockZone ? "Zone (enforced by project)" : "Zone");
+  ImGui::BeginDisabled(lockZone);
   DrawZoneGroup(s, row);
+  ImGui::EndDisabled();
 }
 
 // --- Transformation tab (REQ-360) --------------------------------------------------------------------
@@ -656,6 +768,13 @@ void PadlockToggle(const char* id, bool* locked) {
 
 void DrawObjectLayersTab(StagedDrawingSettings& s, const DialogLayout& L, const AppCommandState& cmd) {
   const float h = ImGui::GetFrameHeight();
+  ImGui::AlignTextToFramePadding();  // REQ-375: one row, kept even for a standalone drawing
+  if (s.proj && s.proj->hasDefaults) {
+    ImGui::TextUnformatted("Layers for new objects:");
+    InheritTag(s, ProjectDefaultKey::ObjectLayers, -1.f);
+  } else {
+    ImGui::TextUnformatted("");
+  }
   const ImGuiTableFlags flags = ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_BordersOuter |
                                 ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit;
   if (ImGui::BeginTable("##ol_rows", 5, flags)) {
@@ -794,30 +913,56 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
   static StagedDrawingSettings staged;
   static bool wasOpen = false;
 
-  if (!cmd.showDrawingSettingsWindow) {
+  // REQ-375: the same window edits the project's settings (PROJECTSETTINGS) — the Units and Zone and
+  // Object Layers tabs, whose values become the project's unit, zone and defaults.
+  const bool projectMode = cmd.projectSettingsUid != 0;
+  const auto closeRequest = [&] {
+    if (projectMode)
+      cmd.projectSettingsUid = 0;
+    else
+      cmd.showDrawingSettingsWindow = false;
+    wasOpen = false;
+  };
+  if (!projectMode && !cmd.showDrawingSettingsWindow) {
     wasOpen = false;
     return;
   }
   if (cmd.activeDrawingIdx == 0) {  // REQ-308: the Start tab owns no drawing
-    cmd.showDrawingSettingsWindow = false;
-    wasOpen = false;
-    log.push_back("DRAWINGSETTINGS — open or create a drawing first.");
+    closeRequest();
+    log.push_back(projectMode ? "PROJECTSETTINGS — open a drawing of the project first."
+                              : "DRAWINGSETTINGS — open or create a drawing first.");
     return;
   }
+  AppCommandState::ProjectSession* session = nullptr;
+  if (projectMode) {
+    for (auto& ps : cmd.openProjects)
+      if (ps.uid == cmd.projectSettingsUid)
+        session = &ps;
+    if (!session || !session->settings) {
+      closeRequest();
+      return;
+    }
+  }
   // REQ-360: hidden while a Transformation pick runs in the drawing; the staged values wait.
-  if (cmd.active == AppCommandState::Kind::DrawingSettingsPick)
+  if (!projectMode && cmd.active == AppCommandState::Kind::DrawingSettingsPick)
     return;
-  if (!wasOpen || staged.drawingIdx != cmd.activeDrawingIdx) {  // a tab switched mid-pick: start over
-    SeedFromDrawing(cmd, staged);
+  if (!wasOpen || staged.drawingIdx != cmd.activeDrawingIdx || staged.projectMode != projectMode) {
+    // a tab switched mid-pick: start over
+    if (projectMode)
+      SeedFromProject(cmd, *session->settings, staged);
+    else
+      SeedFromDrawing(cmd, staged);
     cmd.drawingSettingsPick = {};
     wasOpen = true;
   }
+  staged.proj = projectMode ? nullptr : ProjectSettingsForTab(cmd, cmd.activeDrawingIdx);
   const bool resumed = ConsumePick(cmd, staged);
 
   const std::string name = cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size())
                                ? cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].name
                                : std::string("Drawing");
-  const std::string title = "Drawing Settings - " + name + kPopupId;
+  const std::string title = projectMode ? "Project Settings - " + session->project.name + kPopupId
+                                        : "Drawing Settings - " + name + kPopupId;
   if (!ImGui::IsPopupOpen(kPopupId))  // "###" makes the id independent of the drawing name
     ImGui::OpenPopup(title.c_str());
 
@@ -829,8 +974,7 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
   if (!ImGui::BeginPopupModal(title.c_str(), &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                                                   ImGuiWindowFlags_NoSavedSettings)) {
     PopProductDialogAccent();
-    cmd.showDrawingSettingsWindow = false;  // closed by the title-bar [X]: Cancel
-    wasOpen = false;
+    closeRequest();  // closed by the title-bar [X]: Cancel
     return;
   }
   PaintProductDialogAccentFrame();
@@ -859,7 +1003,7 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
       const ImGuiTabItemFlags txFlags =
           staged.selectTransformation ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
       staged.selectTransformation = false;
-      if (ImGui::BeginTabItem("Transformation", nullptr, txFlags)) {  // REQ-360
+      if (!projectMode && ImGui::BeginTabItem("Transformation", nullptr, txFlags)) {  // REQ-360
         ImGui::Spacing();
         DrawTransformationTab(staged, layout, cmd, log, &picking);
         ImGui::EndTabItem();
@@ -876,7 +1020,7 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
 
   float scale = 0.f;
   const bool scaleValid = StagedScale(staged, &scale);
-  const bool transformValid = ValidateDrawingTransform(staged.settings).empty();  // REQ-360
+  const bool transformValid = projectMode || ValidateDrawingTransform(staged.settings).empty();  // REQ-360
   const bool layersValid = ValidateObjectLayers(staged.settings).empty();         // REQ-361
   const bool valid = scaleValid && transformValid && layersValid;
   const float btnW = layout.btnW;
@@ -900,18 +1044,39 @@ void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& l
   const bool apply = ImGui::Button("Apply", ImVec2(btnW, 0.f));
   ImGui::EndDisabled();
 
-  if ((ok || apply) && ApplyDrawingSettings(cmd, staged.insUnits, scale, staged.settings, log)) {
-    SeedFromDrawing(cmd, staged);
-    if (ok)
+  if (ok || apply) {
+    bool applied = false;
+    if (projectMode) {  // REQ-375: written to the .gsproj
+      ProjectSettings ps;
+      ps.insUnits = staged.insUnits;
+      ps.zoneCode = staged.settings.zoneCode;
+      ps.hasDefaults = true;
+      ps.plotScale = scale;
+      ps.defaults = staged.settings;
+      ps.defaults.overridden = 0;
+      applied = SaveProjectSettings(cmd, cmd.projectSettingsUid, ps, log);
+      if (applied)
+        SeedFromProject(cmd, *session->settings, staged);
+    } else {
+      // A value the user changed is an override exactly when it differs from the project's (REQ-375).
+      for (unsigned k = 0; k < kProjectDefaultKeyCount; ++k) {
+        const auto key = static_cast<ProjectDefaultKey>(k);
+        if (staged.proj && staged.proj->hasDefaults)
+          staged.settings.SetOverridden(key, KeyOverridden(staged, key));
+      }
+      applied = ApplyDrawingSettings(cmd, staged.insUnits, scale, staged.settings, log);
+      if (applied)
+        SeedFromDrawing(cmd, staged);
+    }
+    if (applied && ok)
       close = true;
   }
 
   if (close) {
-    if (cmd.active == AppCommandState::Kind::DrawingSettingsPick)
+    if (!projectMode && cmd.active == AppCommandState::Kind::DrawingSettingsPick)
       CancelActiveCommand(cmd, log);  // started this frame, then Cancel/Esc: the pick goes too
     cmd.drawingSettingsPick = {};
-    cmd.showDrawingSettingsWindow = false;
-    wasOpen = false;
+    closeRequest();
     ImGui::CloseCurrentPopup();
   } else if (picking) {
     ImGui::CloseCurrentPopup();  // reopened (with the staged values) when the pick ends

@@ -23,17 +23,25 @@ EXPECT LOG "ISOLINES = 0"
 EXPECT SOLIDBATCHES 1
 # Two rim circles and two seam lines, and nothing else. The counts here are exact rather than
 # approximate because the tessellation is deterministic: same solid, same tolerance, same segments.
+#
+# 514 = two rim circles at brep::kFullCircleSegments (256) each, plus the two seam lines. That floor
+# is the "torn bolt holes" fix - it keeps a full circle's budget constant however many faces the
+# circle is split across - and it was raised from 50, which is where this file's old 102/104/116
+# came from. The deltas below are what the test is really about and they are unchanged.
+#
 # ISOLINES 4 adds exactly two rulings (one inside each half-face - the other two grid lines fall on
 # the seams, which are already edges), and ISOLINES 16 adds fourteen.
-EXPECT SOLIDEDGESEGS 102
+EXPECT SOLIDEDGESEGS 514
 
 # --- Turning them up adds curves, and only curves -----------------------------------------------------
 CMD ISOLINES 4
-EXPECT SOLIDEDGESEGS 104
+EXPECT SOLIDEDGESEGS 516
 CMD ISOLINES 16
-EXPECT SOLIDEDGESEGS 116
+EXPECT SOLIDEDGESEGS 528
 # The TRIANGLES are untouched by any of it - isolines are wireframe, not tessellation quality.
-EXPECT SOLIDTRIS 200
+# 1024 = 512 side triangles (256 segments round, two per segment) plus 256 per cap, from the same
+# kFullCircleSegments floor the edge counts above come from.
+EXPECT SOLIDTRIS 1024
 
 # --- Bad values are refused and the setting stands (REQ-201) -------------------------------------------
 CMD ISOLINES -1
@@ -50,6 +58,6 @@ SAVEAS %OUT%/iso.dwg
 OPEN %OUT%/iso.dwg
 CMD ISOLINES
 EXPECT LOG "ISOLINES = 16"
-EXPECT SOLIDEDGESEGS 116
+EXPECT SOLIDEDGESEGS 528
 
 CHECK ALL

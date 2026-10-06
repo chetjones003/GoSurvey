@@ -1,6 +1,7 @@
 #include "PdfAttachDialog.hpp"
 
 #include "CadUi.hpp"
+#include "ProjectFiles.hpp"
 #include "PdfAttach.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -155,6 +156,36 @@ static bool ParameterRow(const char* label, float* val, const char* fmt,
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
+void StartPdfAttachBuild(AppCommandState& cmd, std::vector<std::string>& log) {
+  using Ph = AppCommandState::PdfAttachPhase;
+  // Capture params before closing dialog or switching phase.
+  const std::string  capturedPath  = cmd.pdfAttachFilePath;
+  const int          capturedPage  = cmd.pdfAttachSelectedPage;
+  const float        capturedDpi   = cmd.pdfAttachRasterDpi;
+  const bool         capturedLines = cmd.pdfAttachSnapLines;
+  const bool         capturedCirc  = cmd.pdfAttachSnapCircles;
+  const bool         capturedText  = cmd.pdfAttachSnapText;
+  const bool         capturedSpec  = cmd.pdfAttachSpecifyInsert;
+
+  // Kick off the background rasterize task.
+  // Building phase keeps the dialog open (spinner) until the thread completes.
+  auto ab = std::make_unique<AppCommandState::AsyncBuild>();
+  ab->specifyInsert = capturedSpec;
+  auto* abPtr = ab.get();
+
+  abPtr->thread = std::thread([abPtr, capturedPath, capturedPage, capturedDpi,
+                                capturedLines, capturedCirc, capturedText]() {
+    PdfAttach_BuildToBuffer(capturedPath.c_str(), capturedPage, capturedDpi,
+                             capturedLines, capturedCirc, capturedText,
+                             abPtr->result);
+    abPtr->done.store(true, std::memory_order_release);
+  });
+
+  cmd.pdfAttachAsync = std::move(ab);
+  cmd.pdfAttachPhase = Ph::Building;
+  log.push_back("PDFATTACH — rasterizing, please wait...");
+}
+
 bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log) {
   using K  = AppCommandState::Kind;
   using Ph = AppCommandState::PdfAttachPhase;
@@ -374,32 +405,10 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log) {
 
   if (!canAttach) ImGui::BeginDisabled();
   if (StyledButton("Attach", ImVec2(120.f, 0.f), /*primary=*/true)) {
-    // Capture params before closing dialog or switching phase.
-    const std::string  capturedPath  = cmd.pdfAttachFilePath;
-    const int          capturedPage  = cmd.pdfAttachSelectedPage;
-    const float        capturedDpi   = cmd.pdfAttachRasterDpi;
-    const bool         capturedLines = cmd.pdfAttachSnapLines;
-    const bool         capturedCirc  = cmd.pdfAttachSnapCircles;
-    const bool         capturedText  = cmd.pdfAttachSnapText;
-    const bool         capturedSpec  = cmd.pdfAttachSpecifyInsert;
-
-    // Kick off the background rasterize task.
-    // Building phase keeps the dialog open (spinner) until the thread completes.
-    auto ab = std::make_unique<AppCommandState::AsyncBuild>();
-    ab->specifyInsert = capturedSpec;
-    auto* abPtr = ab.get();
-
-    abPtr->thread = std::thread([abPtr, capturedPath, capturedPage, capturedDpi,
-                                  capturedLines, capturedCirc, capturedText]() {
-      PdfAttach_BuildToBuffer(capturedPath.c_str(), capturedPage, capturedDpi,
-                               capturedLines, capturedCirc, capturedText,
-                               abPtr->result);
-      abPtr->done.store(true, std::memory_order_release);
-    });
-
-    cmd.pdfAttachAsync = std::move(ab);
-    cmd.pdfAttachPhase = Ph::Building;
-    log.push_back("PDFATTACH — rasterizing, please wait...");
+    // REQ-379 clause 1: in a project drawing a PDF from outside the project asks copy / link first; the
+    // modal's answer re-enters through StartPdfAttachBuild with the chosen file.
+    if (!RequestProjectAttach(cmd, AppCommandState::ProjectAttachPrompt::Kind::Pdf, cmd.pdfAttachFilePath, log))
+      StartPdfAttachBuild(cmd, log);
   }
   if (!canAttach) ImGui::EndDisabled();
 

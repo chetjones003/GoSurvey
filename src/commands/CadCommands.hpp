@@ -26,6 +26,9 @@
 #include "util/pointcloudcache.hpp"
 #include "DwgIo.hpp"
 #include "PdfAttach.hpp"
+#include "ProjectPointRules.hpp"  // projpts::Db + projpts::Rules (REQ-376, REQ-377)
+#include "Project.hpp"  // gsproj::Project / LockInfo, for AppCommandState::openProjects (REQ-374)
+#include "ProjectPack.hpp"  // gspack::PackPlan, for AppCommandState::projectPackPrompt (REQ-380)
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
 #include "AngleFormat.hpp"
@@ -65,6 +68,7 @@
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -276,7 +280,10 @@ float EffectiveEntityLineweightMm(const EntityAttributes& e, const CadLayerRow* 
 std::string EffectiveEntityLinetypeNameForViewport(const EntityAttributes& e, const CadLayerRow* layer);
 
 void ResolveEntityRgbaForViewport(const EntityAttributes& attr, const CadLayerRow* layer, float defaultR,
-                                    float defaultG, float defaultB, float* outRgba);
+                                  float defaultG, float defaultB, float* outRgba);
+
+/// After entity/layer colour resolution, apply MATERIAL diffuse override for shaded display (REQ-372).
+void ApplyMaterialDiffuseForShaded(const EntityAttributes& attr, float rgba[4]);
 
 int CadDxfLineweightEnum370FromMm(float mm);
 
@@ -862,6 +869,8 @@ struct CadExtendedGeometryInput {
   /// current (same rule as the paper-space overlay). Null viewport or non-positive MUP = no scaling.
   const Viewport* annotativeViewport = nullptr;
   float drawingModelUnitsPerPlottedInch = 0.f;
+  const std::vector<CadAnnotationScale>* annotationScales = nullptr;
+  int currentAnnotationScaleIndex = -1;
 };
 
 /// True when a CSR chain store (polylines, feature lines) holds at least one entity.
@@ -1004,6 +1013,14 @@ struct CadClipboard {
   /// units; paper: paper inches), so a cross-space paste scales annotation height by modelUnitsPerPlottedInch.
   bool fromPaper = false;
 
+  /// REQ-383 clauses 1 and 3: where the copy came from. A paste into a drawing of another project, or
+  /// of another coordinate system / unit, is checked against these (CheckClipboardPaste).
+  uint32_t    srcProjectUid = 0;        ///< 0 = a standalone drawing
+  std::string srcProjectName;
+  std::string srcProjectFolder;         ///< UTF-8; tells apart two open projects that share a name (issue #726)
+  std::string srcZone;                 ///< CS-MAP code of the source drawing; empty = none
+  double      srcMetersPerUnit = 0.0;   ///< the source drawing's unit in meters; 0 = unknown
+
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
            (polyOffsets.size() <= 1) && annotations.empty() && tables.empty() && blockRefs.empty() &&
@@ -1075,10 +1092,37 @@ struct ObjectLayerRow {
   return rows;
 }
 
+struct ProjectSettings;  // ProjectSettings.hpp (REQ-375)
+struct AddDrawingPlan;   // ProjectAddFlow.hpp (REQ-378)
+
+/// REQ-375 / D-2026-10-05-e: the settings a project supplies as defaults that a project drawing may
+/// override. The zone and the drawing unit are enforced instead; the transformation, geographic
+/// marker and online map are always the drawing's own. The names are the trailer's.
+enum class ProjectDefaultKey : unsigned {
+  AngularUnits = 0,
+  FootDefinition,
+  ScaleInsertedObjects,
+  SetDrawingVariables,
+  PlotScale,
+  ObjectLayers,
+};
+inline constexpr unsigned kProjectDefaultKeyCount = 6;
+inline constexpr const char* kProjectDefaultKeyNames[kProjectDefaultKeyCount] = {
+    "angularUnits", "footDefinition", "scaleInsertedObjects", "setDrawingVariables", "plotScale", "objectLayers"};
+
 /// The drawing's own settings that the Drawing Settings window edits (REQ-357). The drawing unit and
 /// the scale are NOT here: they are `AppCommandState::drawingInsUnits` and
 /// `modelUnitsPerPlottedInch`, one value each (REQ-022, D-2026-09-29-c).
 struct DrawingSettings {
+  /// REQ-375: bit per \ref ProjectDefaultKey the drawing overrides. Meaningful only for a project
+  /// drawing; a standalone drawing keeps it 0.
+  unsigned overridden = 0;
+  [[nodiscard]] bool IsOverridden(ProjectDefaultKey k) const { return (overridden >> static_cast<unsigned>(k)) & 1u; }
+  void SetOverridden(ProjectDefaultKey k, bool on) {
+    const unsigned bit = 1u << static_cast<unsigned>(k);
+    overridden = on ? (overridden | bit) : (overridden & ~bit);
+  }
+
   enum class AngularUnits { Degrees = 0, Radians = 1, Grads = 2 };
   enum class FootDefinition { UsSurvey = 0, International = 1 };
   AngularUnits   angularUnits = AngularUnits::Degrees;
@@ -1181,7 +1225,7 @@ struct DrawingSettings {
   }
 
   bool operator==(const DrawingSettings& o) const {
-    return angularUnits == o.angularUnits && footDefinition == o.footDefinition &&
+    return overridden == o.overridden && angularUnits == o.angularUnits && footDefinition == o.footDefinition &&
            scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables &&
            zoneCode == o.zoneCode && markerX == o.markerX && markerY == o.markerY &&
            markerNorthDeg == o.markerNorthDeg && transform == o.transform &&
@@ -1490,6 +1534,7 @@ struct DrawingDocument {
   int                           drawingInsUnits = 2;
   float                         modelUnitsPerPlottedInch = 50.f;
   DrawingSettings               drawingSettings;
+  projpts::Rules                pointVisibility;        ///< REQ-377: per tab, which project points this drawing shows
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
@@ -1734,6 +1779,12 @@ enum class CadGizmoOp {
   /// uniform because the representation has no ellipsoid to hold an unevenly scaled sphere
   /// (REQ-332 item 7). A per-axis handle would advertise a shape the program cannot store.
   Scale,
+};
+
+/// REQ-383 clause 6: a project whose point database changes could not be written, and the drawings open in it.
+struct UnsavedProject {
+  std::string              name;
+  std::vector<std::string> drawings;
 };
 
 struct AppCommandState {
@@ -2116,6 +2167,18 @@ struct AppCommandState {
 
   /// Plot scale: one plotted inch equals this many drawing units (e.g. 50 for 1 inch = 50 feet).
   float modelUnitsPerPlottedInch = 50.f;
+  /// DWG SCALE object list (issue #622). Per-scale visibility/display is not wired yet; stored for fidelity.
+  std::vector<CadAnnotationScale> annotationScales;
+  /// Index into \ref annotationScales for model-space annotative display (-1 = drawing plot scale only).
+  int currentAnnotationScaleIndex = -1;
+  /// REQ-385: LIGHT entities and SUN object from DWG import (issue #624 lights slice).
+  std::vector<CadDwgImportedLight> dwgImportedLights;
+  CadDwgImportedSun dwgImportedSun{};
+  bool dwgImportedSunPresent = false;
+  /// REQ-386: LIGHTLIST registry from DWG import (issue #715).
+  CadDwgImportedLightList dwgImportedLightList{};
+  bool dwgImportedLightListPresent = false;
+  std::string dwgImportedLightListDictKey;
   float defaultPlottedTextHeightInches = 0.125f;
 
   /// Drawing unit, AutoCAD $INSUNITS code (REQ-022). A relabel only — never scales
@@ -2124,6 +2187,9 @@ struct AppCommandState {
   int drawingInsUnits = 2;
   /// The drawing's Drawing Settings (REQ-357): per tab, undoable, saved in the trailer JSON.
   DrawingSettings drawingSettings;
+  /// REQ-377 (#696 P4): which points of the project database this drawing shows. Per tab, saved in the
+  /// trailer; unused (and empty) in a standalone drawing.
+  projpts::Rules pointVisibility;
   /// Drawing Settings window open (REQ-357). Session-only.
   bool showDrawingSettingsWindow = false;
   /// Survey point X marker: horizontal span on paper (inches) → world half-extent = 0.5 × span × MUP (not zoom).
@@ -4071,6 +4137,12 @@ struct AppCommandState {
   /// window vs crossing mode.
   float selBoxAnchorScreenX = 0.f;
   float selBoxAnchorScreenY = 0.f;
+  /// REQ-370: what releasing the box now would select (live preview). Filled by
+  /// `UpdateSelectionBoxPreview`; `selBoxPreviewKey` is the input set it was computed from, so an
+  /// idle cursor costs one comparison per frame instead of a whole-drawing hit test.
+  std::vector<SelectedEntity> selBoxPreview;
+  std::array<double, 11> selBoxPreviewKey{};
+  bool selBoxPreviewKeyValid = false;
 
   /// MTEXT box corner grips (viewport): two-click edit — fixed diagonal corner while resizing box.
   int mtextGripAnnotationIndex = -1;
@@ -4539,7 +4611,7 @@ struct AppCommandState {
   int surfacePropertiesIndex = -1;
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
   /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `.gs`.
-  enum class ToolspaceTab : int { Prospector = 0, Settings = 1 };
+  enum class ToolspaceTab : int { Prospector = 0, Settings = 1, Project = 2 };
   bool showToolspaceWindow = true;
   /// View Manager (REQ-106) — the dialog half of "a VIEW command/dialog". Session-only, like the
   /// other manager windows: which panels are open is not a property of the drawing.
@@ -4893,7 +4965,137 @@ struct AppCommandState {
   struct DrawingTab {
     std::string  name;
     uint32_t     uid = 0;  ///< Stable per-tab ID used in ImGui label suffix to prevent ID collisions.
+    uint32_t     projectUid = 0;  ///< REQ-374: ProjectSession::uid this drawing belongs to; 0 = standalone.
+    /// REQ-376 (#696 P3): how this tab's survey points relate to the project database. Unattached = not
+    /// decided yet (decided on the first frame after the tab is built); Shared = the tab reads and
+    /// writes the project's database; Detached = the drawing arrived carrying points of its own, which
+    /// stay in the DWG untouched until Add Drawing to Project (P5) merges them.
+    enum class PointsMode : uint8_t { Unattached, Shared, Detached };
+    PointsMode   pointsMode = PointsMode::Unattached;
+    /// Shared: the points (WORLD coordinates) this tab last agreed with the database, and the database
+    /// revision that was. The diff against them is what a frame's edits are.
+    std::vector<SurveyPoint> pointsBaseWorld;
+    uint64_t     pointsRevision = 0;
+    /// The rules (REQ-377) the tab last built its point view with; a different live set means "rebuild".
+    projpts::Rules pointsRulesApplied;
   };
+  /// REQ-374 / REQ-382 (#696 P1): one entry per open project. Each drawing tab belongs to exactly one
+  /// session (or none). A session with no tabs left is closed and its lock released (ServiceProjects).
+  struct ProjectSession {
+    uint32_t         uid = 0;
+    gsproj::Project  project;
+    gsproj::LockInfo me;           ///< who we are in the lock file
+    bool             readOnly = false;  ///< opened read-only: nothing in the project may be written
+    /// REQ-375: project.settingsJson, parsed once when the project opens and again when Project
+    /// Settings changes it. Never null for an open session.
+    std::shared_ptr<ProjectSettings> settings;
+    /// REQ-376 / ADR-065: the project's one survey point database, shared by every tab of the project.
+    /// Null when the file could not be read (pointsError says why) — then the project's tabs keep their
+    /// points in the DWG and the damaged file is never written over.
+    std::shared_ptr<projpts::Db> points;
+    std::string                  pointsError;
+  };
+  std::vector<ProjectSession> openProjects;
+  uint32_t                    nextProjectUid = 1u;
+  /// A question the user must answer before a project open can continue (damaged marker, or the lock
+  /// is held). Drawn as a modal by DrawProjectDialogs; the continuation re-enters the open path.
+  struct ProjectPrompt {
+    enum class Kind { None, Damaged, Locked } kind = Kind::None;
+    std::string      gsprojPath;
+    std::string      dwgPath;      ///< the drawing being opened, or empty for Open Project
+    std::string      message;      ///< why the marker is damaged
+    gsproj::LockInfo holder;       ///< Locked: who holds it
+    bool             stale = false;
+    bool             openRequested = false;  ///< ask ImGui to open the modal next frame
+  } projectPrompt;
+  bool showNewProjectDialog = false;  ///< REQ-374 clause 1; File > New Project / Start screen
+  /// REQ-375: the Project Settings window is open for ProjectSession::uid == this (0 = closed).
+  uint32_t projectSettingsUid = 0;
+  /// REQ-378 (#696 P5): Add Drawing to Project was asked for in project \c ProjectSession::uid == this
+  /// (0 = no request). DrawProjectDialogs browses for the drawing, builds \ref addDrawingPlan, and shows
+  /// the preview dialog; nothing is written until the user confirms.
+  uint32_t addDrawingToProjectUid = 0;
+  std::shared_ptr<AddDrawingPlan> addDrawingPlan;
+  /// REQ-379 (#696 P6): the Copy / Link / Cancel question asked when a point cloud or PDF from outside
+  /// the project is attached in a project drawing. Drawn as a modal by DrawProjectDialogs; the answer
+  /// goes to ResolveProjectAttach and then on to the attach that asked.
+  struct ProjectAttachPrompt {
+    enum class Kind { None, PointCloud, Pdf, PdfTrack } kind = Kind::None;  ///< PdfTrack: Add PDF to project (REQ-379 cl. 5), no placement
+    uint32_t    projectUid = 0;
+    std::string sourcePath;          ///< UTF-8
+    std::string destRel;             ///< where a copy would go, project-relative
+    std::uint64_t sizeBytes = 0;
+    bool        reuse = false;       ///< an identical copy is already in the project
+    bool        openRequested = false;
+  } projectAttachPrompt;
+  /// REQ-379 clause 6: the answer to Refresh. Filled only when the user pressed Refresh and new files exist.
+  struct ProjectRefreshPrompt {
+    uint32_t                 projectUid = 0;
+    std::vector<std::string> files;   ///< project-relative, `/`
+    std::vector<char>        picked;  ///< one tick per file
+    bool                     openRequested = false;
+    bool                     open = false;
+  } projectRefreshPrompt;
+  /// REQ-383 (#696 P9): a point edit in a project drawing that needs the user's answer before it reaches
+  /// the shared database. SyncProjectPoints fills it in and waits; DrawProjectDialogs asks; the answer
+  /// is stored here and the next SyncProjectPoints frame carries it out. Cleared once the edit is
+  /// applied, undone, or the user leaves the tab.
+  struct PointEditPrompt {
+    bool        active = false;       ///< an unanswered question is showing (or waiting to show)
+    uint32_t    projectUid = 0;
+    int         tabIdx = 0;
+    std::string projectName;
+    std::vector<int> removed;         ///< numbers the drawing deleted
+    std::vector<int> conflicts;       ///< numbers that already exist in the project, hidden in this drawing
+    int         othersOpenShowing = 0;   ///< other OPEN drawings of the project that show a deleted point
+    int         othersClosedMaybe = 0;   ///< drawings of the project that are not open (rules unread)
+    bool        deletePending = false;   ///< the delete question (not only the number-conflict one) is showing
+    std::vector<std::string> otherNames; ///< names of those open drawings
+    /// The answers. None = not asked yet. Delete: Proceed / HideHere / Cancel. Conflict: Proceed
+    /// (overwrite) / Renumber / Cancel.
+    enum class Answer : uint8_t { None, Proceed, HideHere, Renumber, Cancel };
+    Answer      deleteAnswer = Answer::None;
+    Answer      conflictAnswer = Answer::None;
+  } pointEditPrompt;
+  /// REQ-383 clauses 1 and 3: a paste that crosses a project / coordinate-system / units boundary.
+  /// `block` = coordinate-system mismatch (only Cancel); otherwise Paste anyway / Cancel.
+  struct PastePrompt {
+    bool        active = false;
+    bool        block = false;
+    bool        original = false;    ///< PASTEORIG rather than PASTE
+    std::string text;
+    bool        openRequested = false;
+  } pastePrompt;
+  bool pasteWarningAnswered = false;   ///< "Paste anyway" was chosen: the next paste start skips the check
+  /// REQ-383 clause 6: closing a project's drawing tab while its point database cannot be written.
+  /// `tabIdx` < 0 = no question.
+  struct CloseTabPrompt {
+    int         tabIdx = -1;
+    std::string text;
+    bool        openRequested = false;
+    bool        confirmed = false;   ///< "Close anyway": the tab loop closes it next frame
+  } closeTabPrompt;
+  uint32_t projectHealthUid = 0;     ///< REQ-379 clause 4: the Project Health window is open for this project
+  /// REQ-380 (#696 P7): the Pack Project window. `projectUid` is the project being packed (0 = closed);
+  /// the plan is what a pack would hold, refreshed when the window opens and after "Copy links in".
+  struct ProjectPackPrompt {
+    uint32_t         projectUid = 0;
+    bool             planned = false;
+    bool             planTried = false;  ///< a failed plan is not retried every frame
+    gspack::PackPlan plan;
+    std::string      planError;
+    bool             excludePointClouds = false;
+    bool             packAnyway = false;  ///< the user accepted the Health problems
+  } projectPackPrompt;
+  /// REQ-381 (#696 P8): the Create Turnover window. `projectUid` is the project (0 = closed). Every
+  /// tracked file starts ticked; `unticked` holds the ones the user cleared.
+  struct ProjectTurnoverPrompt {
+    uint32_t              projectUid = 0;
+    std::string           recipient;
+    std::set<std::string> unticked;
+    bool                  acknowledged = false;  ///< the user accepted the Health problems
+  } projectTurnoverPrompt;
+  bool openPackRequested = false;    ///< REQ-380: OPENPACK asked for Open Packed Project (the UI browses)
   /// REQ-308 / D-2026-08-30-a: drawingTabs[0] is the **Start screen** — a non-closable, pinned-first
   /// sentinel that backs no document. documents[0]/viewportRenderers[0] exist for index alignment
   /// but are never meaningful. Real drawings start at FirstDrawingTabIndex().
@@ -4923,6 +5125,8 @@ struct AppCommandState {
 
   // --- Close confirmation ---
   bool confirmCloseModal = false;  ///< Set by the main loop to open the "Unsaved Changes" dialog.
+  /// REQ-383 clause 6: projects whose database could not be written, found when the quit prompt was raised.
+  std::vector<UnsavedProject> closeUnsavedProjects;
   bool closeConfirmed    = false;  ///< Set by the dialog to signal the main loop to exit.
 
   // --- DWG export confirmation (REQ-052) ---
@@ -4969,6 +5173,16 @@ struct AppCommandState {
   } pdfAttachPhase = PdfAttachPhase::WaitDialog;
 
   bool pdfAttachDialogOpen = false;
+
+  /// REQ-387 (#732): requests the PDF Viewer window consumes on its next frame. The typed command
+  /// has no window of its own; it only asks. Empty path + pick = show the file dialog.
+  std::string pdfViewerOpenRequest;
+  bool pdfViewerPickRequest = false;
+  bool pdfSplitRequest = false;  ///< PDFSPLIT (REQ-389): open the Split dialog on the focused viewer
+  std::string pdfViewBenchPath;  ///< `BENCH PDFVIEW <file>`: time this real PDF's first page and thumbnail strip
+  int pdfViewBenchPages = 0; ///< `BENCH PDFVIEW [pages]`: build a synthetic PDF this long and time scrolling it
+  bool pdfDiffBench = false; ///< `BENCH PDFDIFF` (REQ-393): align and compare a generated 36 x 24 in sheet pair
+  int pdfCompareBenchPages = 0; ///< `BENCH PDFCOMPARE [pages]` (REQ-392): build two synthetic PDFs this long and time panning their overlay
 
   // -------------------------------------------------------------------------
   // INSERT dialog (issue #124)
@@ -6246,6 +6460,21 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
 /// Returns true when a surface was produced.
 bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log);
 
+/// Re-lay everything linked to surface p si, after that surface has been rebuilt (ADR-065 (b),
+/// GitHub #150). Called from the only places a TIN is replaced - `SURFACEREBUILD` and the async
+/// reap - so a link means the same thing whichever way the rebuild was driven.
+///
+/// A linked entity whose vertices are no longer over the new ground is LEFT WHERE IT IS and said
+/// so: a surface shrinking under a draped line is not a reason to move or discard the line
+/// (REQ-201). Its link is kept, so it re-drapes on its own once the surface covers it again.
+void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log);
+
+/// The name of the surface p e is draped on and follows, or empty when it follows none
+/// (ADR-065 (d), GitHub #150) - never linked, baked since, or linked to a surface that has been
+/// erased, which are the same thing to the user. The one place the link becomes something a
+/// person reads, so the Properties panel and the `DRAPELINKS` report cannot disagree.
+[[nodiscard]] std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity& e);
+
 /// Create a named surface from \p groupNames and build it. Returns the new surface's index, or -1
 /// when the name is taken or the build produced nothing.
 int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
@@ -7301,6 +7530,10 @@ void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vect
 /// Set the drawing's plot scale (model units per plotted inch) and resize what depends on it — the
 /// survey-point labels and their layout cache. No undo step: callers that edit push their own.
 void SetDrawingPlotScale(AppCommandState& st, float modelUnitsPerPlottedInch);
+/// Pick the annotation-scale list entry closest to the drawing plot scale (issue #622).
+void SyncCurrentAnnotationScaleIndex(AppCommandState& st);
+/// Set CANNOSCALE index for model-space annotative display; bumps GPU cache when changed.
+void SetCurrentAnnotationScaleIndex(AppCommandState& st, int index);
 
 /// Write the Drawing Settings window's values to the drawing as ONE undo step, pushed only when
 /// something changes. A unit change is a relabel and moves no geometry (REQ-022). Refuses (false,
@@ -7884,6 +8117,14 @@ void ClearSelection(AppCommandState& st);
 void ApplySurveyPointClickSelection(AppCommandState& st, int surveyPointIndex, bool shiftModifier,
                                     std::vector<std::string>* log);
 void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anchorScreenX, float anchorScreenY);
+
+/// REQ-370 live preview: refreshes `st.selBoxPreview` with what releasing the selection box at
+/// (\p wx, \p wy) would add to the selection, using the very hit test the click uses
+/// (`ComputeSelectionFromRect`), so the lit objects are the selected objects. `st.selection` and the
+/// survey-point selection are left exactly as they were. Recomputed only when an input changed. Pass
+/// \p cam null in plan view, like the click does. Clears the preview when no box is open.
+void UpdateSelectionBoxPreview(AppCommandState& st, float wx, float wy, bool windowMode, const Camera* cam,
+                               float vpW, float vpH);
 
 void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Clears Shift+RMB one-shot snap (call on pick submit, cancel, reset, clear geometry).

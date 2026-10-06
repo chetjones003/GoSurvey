@@ -4723,3 +4723,207 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   at 256 tiles per capture). AutoCAD does not see captured areas. Adding another provider later
   (e.g. Esri, which needs a key) is a new entry in the map table plus a key decision, with no change
   to the pipeline.
+
+### ADR-062 — Surface-referencing geometry is BAKED by default; a link is opt-in, stamped by stable entity id, marked in the drawing, and degrades to plain geometry when its surface goes   (2026-09-28, accepted)
+
+- **Status:** accepted (2026-09-28). Backs GitHub issue #150 (3D Phase 7) acceptance 6, and gates
+  every other reference item in that phase. Recorded before any of it was implemented.
+- **Context.** Phase 7 connects the 3D kernel to the survey data the program already owns: geometry
+  that is draped or projected onto a surface, geometry that references feature lines and survey
+  points, and solids generated from a surface. The issue names one architectural question and
+  refuses to let Workshop guess it: when the referenced surface changes, does the geometry
+  **re-evaluate** (a live link) or **keep the shape it was given** (a bake)?
+
+  Two facts from the existing tree bear on it, both checked rather than assumed:
+
+  1. **There is no persisted reference today.** Every `surfaceId` in the tree — the display cache,
+     the query cache, the watershed cache — is *live-only* and explicitly never written to `.gs`.
+     So this is new document content, not an extension of something already shipped, and whatever
+     is chosen has to carry its own save/reopen and deletion story.
+  2. **Stable ids already exist and their failure modes are documented.** REQ-076 guarantees an id
+     is not reused within a drawing, and the surface caches are already keyed by id rather than
+     array index *because* `cadSurfaces` compacts on erase — an index key starts applying one
+     surface's data to another after a delete. The rename-in-flight and erase-then-recreate hazards
+     are written up at `CadCommands.hpp:3147`. A reference keyed by anything other than the id would
+     re-introduce a bug the codebase has already paid for.
+
+  The `EXTRACT` command is the existing precedent for the bake side: derived surface geometry can be
+  baked to an unlinked object, and that is how the surface work has behaved so far.
+- **Decision.**
+
+  **(a) Baked is the default.** `DRAPE` and the projection commands stamp elevations once and
+  produce ordinary geometry with no stored reference. A drawing that is opened, plotted or handed
+  over does not change shape because somebody else edited a surface.
+
+  **(b) A link is opt-in and explicit**, requested at the command, never inferred. Linked geometry
+  re-evaluates when the surface it names finishes a rebuild.
+
+  **(c) A link is stored as the surface's stable entity id** (REQ-076), never its name and never its
+  array index. A rename does not break a link; an erase-then-recreate under the same name does not
+  silently re-target one.
+
+  **(d) Linked geometry is visibly marked**, so "this may move when the surface moves" is a property
+  of the drawing the user can see, not a hidden attribute. The unmarked case is the safe one.
+
+  **(e) A reference to a surface that is gone resolves to nothing, and the geometry keeps its last
+  shape as plain geometry.** The reference resolving to nothing is REQ-076's own rule and Phase 7's
+  acceptance line; what the *geometry* does is decided here: it is not deleted and not moved.
+  Destroying drawn geometry because a surface was erased would be a far worse failure than a stale
+  shape, and the stale shape is exactly what the baked default would have produced anyway.
+
+  **(f) A vertex that falls outside the surface is not draped, and the entity is refused by name
+  with the count.** `TinElevationAt` never extrapolates (REQ-074), so there is no elevation to give.
+  Draping the vertices that are covered and leaving the rest at their old elevation would produce a
+  shape that is neither the original nor the ground — wrong in a way that looks plausible, which
+  REQ-201 forbids. Other entities in the same selection still drape; the refusal names the entity
+  and how many of its vertices were off the surface.
+- **Consequences.**
+  - The first increment (`DRAPE`, baked) needs **no** new persisted field at all, so it can land and
+    be proven before any link machinery exists. That ordering is deliberate: the risky, new document
+    content arrives second, against a command already known to compute the right elevations.
+  - The link is additive when it comes — a stored id plus a mark — so it follows ADR-020 (d) and
+    needs no `kGsFormatVersion` bump.
+  - Re-evaluation hangs off the existing rebuild/reap path rather than a new watcher.
+  - Choosing baked-by-default means a surface edit does **not** update linked-by-default geometry,
+    so a user who wants a live model must ask for it per object. That is the accepted cost of never
+    rewriting geometry the user has already approved.
+
+
+### ADR-065 — A project's survey points live in one project-owned file, loaded once and shared by every drawing tab of the project   (2026-10-05, accepted)
+
+- **Status:** accepted (2026-10-05, D-2026-10-05-e; user approved as written before P3 started).
+  Backs REQ-376 and REQ-377 (GitHub issue #696).
+- **Context.** Today a drawing's survey points live inside the drawing (ADR-044 JSON trailer). A project
+  needs ONE set of points that several drawings read and write, kept in step live, that travels in a
+  `.gspack` (REQ-380), and that never leaves two people overwriting each other (REQ-382).
+- **Decision.**
+  (a) **One file in the project, `Points/survey-points.gspdb`.** Same JSON shape the ADR-044 trailer
+      already uses for survey points (no second point schema), plus a `formatVersion`, the project ID
+      and each point's **source drawing**. It is a tracked item (REQ-373) so packs carry it.
+  (b) **One in-memory database per open project**, owned by the project object — a fourth isolation
+      boundary next to the document, the pipe runs (PR #560) and the drawing settings. Every drawing
+      tab of that project holds a *pointer* to it, not a copy, so "live in other tabs" is free:
+      there is only one set of data. Undo records point edits in the tab that made them.
+  (c) **Visibility rules stay in the drawing** (REQ-377), in the ADR-044 trailer. A project drawing's
+      trailer carries **no points**, only its rules and setting overrides.
+  (d) **Writes are atomic and lock-gated.** Only the lock holder (REQ-382) writes; the file is written
+      to a temp file in `Points/` then renamed over the old one. Read-only openers load it and never
+      write.
+  (e) **Standalone drawings are untouched** — points stay in the trailer; none of this code runs.
+- **Alternatives.** (1) *Keep points in every DWG and reconcile on save:* two copies of truth, silent
+      divergence — the exact failure the issue exists to prevent. (2) *A real database engine
+      (SQLite):* a new dependency (REQ-300) for a few thousand to ~100k rows a JSON file handles; revisit
+      only if a measured load/save time breaks REQ-100-style budgets. (3) *Points inside the `.gsproj`:*
+      makes a small marker file huge and rewrites it on every point edit.
+- **Consequences.** A project DWG opened *outside* its project (e.g. copied out alone) shows **no
+  points** — the price of a single source of truth; REQ-374's join rule means this only happens when
+  the drawing leaves the folder, and the user is told (REQ-201). Whole-file rewrite on each save is
+  acceptable at survey scale and is the first thing to measure in P3. Loading and saving the file must
+  stay off the UI frame budget (§8 one-shot worker) if it exceeds a few milliseconds.
+
+### ADR-066 — A project pack is a standard ZIP, written and read through vendored miniz, extracted only after every entry has been checked   (2026-10-05, accepted)
+
+- **Status:** accepted (2026-10-05, D-2026-10-05-i; the user chose the container before P7 started).
+  Backs REQ-380 (GitHub issue #696).
+- **Context.** A pack must travel by email, hold point clouds that can be hundreds of MB, and never
+  write outside the folder the user picked, however the file was made.
+- **Decision.**
+  (a) **The container is ZIP**, via `third_party/miniz` (MIT, two files, REQ-300 / D-2026-10-05-i). Files
+      are streamed through `FILE*` handles opened from `std::filesystem` paths, never loaded whole, so
+      Unicode paths and large point clouds work (zip64 is switched on by miniz when an entry needs it).
+  (b) **One pure module, `src/io/ProjectPack.{hpp,cpp}`** — `<filesystem>`, nlohmann json and miniz only,
+      no window, no `AppCommandState` — like `Project.cpp` / `ProjectFiles.cpp`. The command and UI
+      layers only call it (Health gate, dialogs, opening the result).
+  (c) **Entries are project-relative with `/`.** `gspack.json` at the root carries the format version,
+      project ID, name, date, the left-out files and every file's exact modified time (a ZIP keeps only
+      2-second local time, and a `.gscloud` cache is stamped with its cloud's exact size and time,
+      ADR-060 (b), so extraction restores the recorded time). The `.gsproj` is a normal entry.
+  (d) **Read = check everything, then extract.** Every entry name passes `gsproj::IsSafeRelativePath`
+      plus a no-backslash, no-duplicate rule, the manifest must match the marker's project ID, and the
+      destination must be empty or new. Extraction streams each file and checks its CRC; any failure
+      removes everything written. Writing goes to a temporary file renamed over the target.
+  (e) **Excluded point clouds are recorded in the opened project's `.gsproj`** (a top-level
+      `packOmitted` list kept in `extraJson`, so older readers keep it verbatim) and are reported as
+      unavailable, not missing, while their file is absent.
+- **Alternatives.** (1) *Own uncompressed container:* no dependency but emails too large and only
+      GoSurvey can open it. (2) *Windows Compression API / `tar.exe`:* ties the format to Windows and a
+      non-standard result. (3) *Zip with no manifest:* the project ID would only be inside the `.gsproj`,
+      so a pack could not be identified without parsing project data.
+- **Consequences.** One new vendored dependency (~400 KB source, build time negligible). The pack is
+  readable by any zip tool; a hand-edited pack that breaks the rules above is refused whole. Packing
+  and extracting a very large project blocks the UI thread while it runs (no progress bar yet — recorded
+  technical debt, like the P6 copy).
+
+### ADR-067 — The PDF viewer is a window of its own over PDFium, rendering pages off the UI thread into a bounded read-ahead cache   (2026-10-06, accepted)
+
+- **Status:** accepted (2026-10-06, D-2026-10-06-a; **(a) revised the same day by D-2026-10-06-b**, the user
+  asked for full window control: minimize/maximize and docking); the user approved the three open-question answers and
+  asked for a better-than-1-second open and no lag spikes while scrolling). Backs REQ-387/388/389
+  (GitHub issue #732).
+- **Context.** PDFium is already vendored (`third_party/pdfium`, used by `PdfPlot` and `PdfAttach`).
+  `PdfAttach` already renders progressively and cancellably. GoSurvey has one GLFW window and draws all
+  windows with Dear ImGui. A several-hundred-page PDF must open at once and scroll without frame spikes.
+- **Decision.**
+  (a) **"New window" = a real Windows window** (revised by D-2026-10-06-b; the first version of this
+      ADR said "a floating panel inside the GoSurvey window"). It uses **Dear ImGui multi-viewport**:
+      `ImGuiConfigFlags_ViewportsEnable` with the GLFW and OpenGL3 platform backends, which create a
+      GLFW window per detached ImGui window sharing the main GL context, so page textures made by the
+      viewer are valid in every window. The viewer's window class clears `NoDecoration` (and keeps the
+      task-bar entry) so it gets the OS title bar with minimize / maximize / close, and it docks into
+      GoSurvey's dock space like any ImGui window. A viewer opens detached, on GoSurvey's monitor.
+      One window per open file. **Cost accepted:** the setting is application-wide, so other panels
+      may also be dragged out; the main window's custom title bar, the splash screen, the saved dock
+      layout and the Test Engine driver must keep working (REQ-387 clause 7), and the per-frame
+      `UpdatePlatformWindows` / `RenderPlatformWindowsDefault` calls with GL-context restore are added
+      to the main loop. **Alternatives:** keeping the panel inside the main window (no minimize to the
+      task bar, cannot leave the main window, cannot use a second monitor) was the previous decision and
+      the user declined it for these reasons.
+  (b) **One pure module, `src/pdf/PdfDocument.{hpp,cpp}`** (PDFium only; no window, no
+      `AppCommandState`): open, page count, per-page sizes, render a page to a pixel buffer at a scale,
+      annotation read/write (REQ-388) and page extraction (`PdfSplit`, REQ-389). Opening reads only the
+      cross-reference table and page tree; page sizes are fetched lazily and cached, so open time does
+      not grow with page count.
+  (c) **Rendering is off the UI thread, one-shot workers (§8), never the UI thread.** PDFium is not
+      thread-safe per document, so each document has **one render worker at a time** guarded by a
+      mutex; a request queue ordered by distance from the viewport, pages ahead of the scroll direction
+      first. Requests for pages that scrolled away are dropped, and a render in progress is stopped
+      through PDFium's progressive-render pause callback. The UI thread only uploads finished bitmaps
+      to textures, **at most a small fixed number per frame** so a burst of finished pages cannot cause
+      a long frame.
+  (d) **Bounded cache.** Page images live in an LRU-by-distance cache with a byte cap (default 256 MB,
+      a setting). Each visible page first gets a **low-resolution stand-in** (cheap, rendered first) and
+      is then re-rendered at the display scale. Textures are released with their cache entry.
+  (e) **Annotations are standard PDF annotations written through PDFium** (REQ-388); edits are held in
+      memory as an undo list and written only by **Save As** to a temporary file renamed into place.
+      The original is never opened for writing (D-2026-10-06-a).
+        **Addendum (D-2026-10-06-e):** PDFium cannot create a Line annotation, so the Line tool is the one
+      exception: PDFium writes a placeholder (a Square annotation with the line's appearance stream, colour,
+      border and a fixed-width placeholder `/L` string); after `FPDF_SaveAsCopy` to the temporary file,
+      `PdfAnnotate` finds that annotation's object by its unique `/NM` name and overwrites, **in place and
+      at the same byte length** (padding with spaces), `/Subtype/Square` with `/Subtype/Line` and the `/L(...)`
+      string with the `/L[x1 y1 x2 y2]` array, so no xref offset moves. A miss fails the save (nothing
+      is renamed into place). **Alternative rejected by the user:** an Ink annotation through PDFium.
+      **Addendum 2 (D-2026-10-06-f):** the same Stamp-placeholder-then-patch technique is widened to the
+      measurement annotations (REQ-391): Line, PolyLine and Polygon with a `/Measure` dictionary. The
+      placeholder's pad string is **sized to the longest patch it must hold** (a Measure dictionary and a
+      vertex list are far longer than a Line's end points), the replacement is still same-length, and a
+      miss still fails the save with nothing written. Page scale (REQ-390) is a page `/VP` Viewport entry
+      written the same way. New pure modules: `src/pdf/PdfMeasure` (scale, unit conversion, measure
+      values), `src/pdf/PdfAlign` (REQ-392 alignment of two rendered sheets) and `src/pdf/PdfDiff`
+      (REQ-393 change regions); the render worker and bounded cache of (c)/(d) serve the overlay.
+      **Addendum 3 (D-2026-10-06-h):** scale checking adds two modules: `src/pdf/PdfScaleCheck` (pure: the feet-and-inches
+      value parser, verdicts, length-weighted best fit, outlier rule and the opt-in robust (weighted least squares)
+      calibration with its uncertainty and standardised residuals: REQ-394) and `src/pdf/PdfDimAudit` (PDFium
+      text and path reading plus pure matching of dimension text to dimension lines: REQ-395). Checks are viewer
+      state like annotations (undoable) but are not written to the PDF.
+(f) **Routing.** One function, `OpenPdfInViewer(path)`, replaces `OpenWithDefaultApp` for `.pdf` at
+      every call site; non-PDF files keep the shell route.
+- **Alternatives.** (1) *Second OS window / ImGui multi-viewport:* heavier, new GL-context risk, no gain
+      for the user. (2) *Render on the UI thread with a time slice:* simpler but cannot guarantee no
+      spikes on a dense drawing sheet. (3) *Annotations in a sidecar:* invisible to other readers and
+      easily separated from the PDF. (4) *A render-thread pool:* PDFium's per-document lock makes it
+      no faster for one document; deferred until measured.
+- **Consequences.** No new dependency. Memory is capped regardless of page count. Page render order
+  logic is a pure scheduler and cache that can be unit-tested without a window. Cost: a dense CAD-plot
+  PDF page can take longer than one frame to render, so the viewer shows the stand-in first; this is
+  the designed behaviour, and the bench reports the worst frame so a regression is visible.

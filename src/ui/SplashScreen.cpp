@@ -11,6 +11,7 @@
 #include <GLFW/glfw3.h>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
@@ -222,6 +223,13 @@ void DrawMainWindowTitleBar(GLFWwindow* window) {
   // Supply title bar geometry to the WndProc so WM_NCHITTEST returns HTCAPTION for the drag
   // region and HTCLIENT for the button strip, making hit detection OS-level reliable.
   GlfwPlatformSetTitleBarMetrics(rowH, btnStripW);
+  // ImGui's hovered window is this frame's; the title bar's own window is the hovered one only when no
+  // dialog sits over the pointer.
+  {
+    const ImGuiWindow* hovered = ImGui::GetCurrentContext()->HoveredWindow;
+    const ImGuiWindow* self = ImGui::GetCurrentWindow();
+    GlfwPlatformSetCaptionBlocked(hovered != nullptr && hovered->RootWindow != self->RootWindow);
+  }
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, barBg);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));

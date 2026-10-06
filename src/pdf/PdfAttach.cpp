@@ -1,4 +1,5 @@
 #include "PdfAttach.hpp"
+#include "PdfDocument.hpp"  // pdfview::PdfiumMutex
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -1023,6 +1024,7 @@ PdfDraftCache* PdfDraftCache_Create(const char* filePath) {
   // acquire load of ready.
   cache->loaderThread = std::thread([cache]() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    std::lock_guard<std::recursive_mutex> pdfiumLock(pdfview::PdfiumMutex());
     PdfLog("[PDF] BG: FPDF_LoadDocument start\n");
     PdfTimer tLoad;
     FPDF_DOCUMENT doc = FPDF_LoadDocument(cache->loadPath.c_str(), nullptr);
@@ -1100,8 +1102,10 @@ void PdfDraftCache_Free(PdfDraftCache* cache) {
       cache->loaderThread.join();
     if (cache->thumbThread.joinable())
       cache->thumbThread.join();
-    if (cache->doc)
+    if (cache->doc) {
+      std::lock_guard<std::recursive_mutex> pdfiumLock(pdfview::PdfiumMutex());
       FPDF_CloseDocument(cache->doc);
+    }
     delete cache;
   }).detach();
 }
@@ -1203,6 +1207,7 @@ bool PdfDraftCache_TickThumb(PdfDraftCache* cache) {
       SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 
       PdfLog("[PDF] ThumbThread p%d: start\n", pi);
+      std::lock_guard<std::recursive_mutex> pdfiumLock(pdfview::PdfiumMutex());
 
       if (cache->thumbCancelled.load(std::memory_order_acquire)) {
         cache->thumbResult.done.store(true, std::memory_order_release);
@@ -1336,6 +1341,7 @@ bool PdfDraftCache_RasterizePage(const PdfDraftCache* cache, int pageIndex, floa
   if (!cache || !cache->ready.load(std::memory_order_acquire)) return false;
   if (pageIndex < 0 || pageIndex >= cache->pageCount)
     return false;
+  std::lock_guard<std::recursive_mutex> pdfiumLock(pdfview::PdfiumMutex());  // REQ-387: one thread in PDFium at a time
   FPDF_PAGE page = FPDF_LoadPage(cache->doc, pageIndex);
   if (!page)
     return false;
@@ -1363,6 +1369,7 @@ void PdfDraftCache_ExtractSnap(const PdfDraftCache* cache, int pageIndex,
   if (!cache || !cache->ready.load(std::memory_order_acquire)) return;
   if (pageIndex < 0 || pageIndex >= cache->pageCount)
     return;
+  std::lock_guard<std::recursive_mutex> pdfiumLock(pdfview::PdfiumMutex());  // REQ-387: one thread in PDFium at a time
   FPDF_PAGE page = FPDF_LoadPage(cache->doc, pageIndex);
   if (!page)
     return;
@@ -1431,6 +1438,7 @@ bool PdfAttach_BuildToBuffer(const char* filePath, int pageIndex, float dpi,
     // Meanwhile on this thread: pdfium load for page size + snap geometry.
     float pdfWPts = 0.f, pdfHPts = 0.f;
     {
+      std::lock_guard<std::recursive_mutex> pdfiumLock(pdfview::PdfiumMutex());
       FPDF_DOCUMENT doc2 = FPDF_LoadDocument(filePath, nullptr);
       if (doc2) {
         FS_SIZEF sz{};
@@ -1497,6 +1505,7 @@ bool PdfAttach_BuildToBuffer(const char* filePath, int pageIndex, float dpi,
   // Fallback: pdfium CPU render (progressive, non-blocking via caller's thread).
   // -----------------------------------------------------------------
   PdfLog("[PDF] BuildToBuffer: using pdfium fallback\n");
+  std::lock_guard<std::recursive_mutex> pdfiumLock(pdfview::PdfiumMutex());  // REQ-387: one thread in PDFium at a time
   FPDF_DOCUMENT doc = FPDF_LoadDocument(filePath, nullptr);
   if (!doc) return false;
 
@@ -1755,6 +1764,7 @@ bool PdfAttach_Build(const char* filePath, int pageIndex, float dpi,
   out.pageIndex  = pageIndex;
 
   PdfLog("[PDF] PdfAttach_Build: page %d @ %.0f DPI\n", pageIndex, dpi);
+  std::lock_guard<std::recursive_mutex> pdfiumLock(pdfview::PdfiumMutex());  // REQ-387: one thread in PDFium at a time
 
   FPDF_DOCUMENT doc;
   { PdfTimer t;
