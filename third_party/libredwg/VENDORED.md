@@ -30,6 +30,7 @@ Each change is its own commit. Keep this list current.
 | 4 | `src/dwg_api.c`, `include/dwg_api.h` | `dwg_add_MLEADERSTYLE`, `dwg_add_MULTILEADER`, `dwg_add_MULTILEADER_branches` for R2010+ native multileader DWG export (issue #619). | not yet |
 | 5 | `src/objects.in`, `src/objects.c`, `src/dwg.c` | MLEADERSTYLE marked STABLE; dictionary lookup uses `description` as style name (issue #619). | not yet |
 | 6 | GoSurvey `CMakeLists.txt` (`DEBUG_CLASSES`) | Keep `ACAD_MATERIAL` / MATERIAL objects on DWG encode (REQ-372 export); upstream `fixup_NOD` strips them by default. | not yet |
+| 7 | `src/dwg_api.c` (`dwg_add_POLYLINE_PFACE`) | Last face vertex `prev_entity` links to the previous owned vertex, not `handle-1` (issue #663). | not yet |
 
 ## Moving to a newer upstream release
 A recorded decision (ADR-041 (h)). Replace `src/` and `include/` with the new tag's tracked files,

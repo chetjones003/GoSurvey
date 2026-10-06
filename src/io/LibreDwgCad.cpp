@@ -3002,12 +3002,46 @@ bool WriteIndexedTriangles(int vertexCount, const std::function<void(int, dwg_po
                            const std::vector<std::uint32_t>& indices, Dwg_Object_BLOCK_HEADER* hdr,
                            TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
                            DwgExportMaterialContext* matCtx, const AppCommandState* st, float defR,
-                           float defG, float defB) {
+                           float defG, float defB, bool asPolylinePface) {
   if (hdr == nullptr || vertexCount < 3)
     return false;
   const size_t nTri = indices.size() / 3;
   if (nTri < 1 || nTri > kMaxPfaceFaces || static_cast<unsigned>(vertexCount) > kMaxPfaceVerts)
     return false;
+
+  const auto applyEntity = [&](Dwg_Object_Entity* entParent) {
+    if (entParent == nullptr)
+      return;
+    if (tw != nullptr && attr != nullptr)
+      tw->Apply(entParent, *attr);
+    if (dwg != nullptr && matCtx != nullptr && st != nullptr && attr != nullptr)
+      DwgExportApplyEntityMaterial(dwg, matCtx, *st, entParent, attr, defR, defG, defB);
+  };
+
+  if (!asPolylinePface) {
+    // LibreDWG can SIGSEGV on a second POLYLINE_PFACE in the same block (issue #663). Additional
+    // TIN/mesh exports fall back to one 3DFACE per triangle; the GoSurvey JSON trailer is unchanged.
+    bool wrote = false;
+    for (size_t t = 0; t < nTri; ++t) {
+      const std::uint32_t a = indices[t * 3 + 0];
+      const std::uint32_t b = indices[t * 3 + 1];
+      const std::uint32_t c = indices[t * 3 + 2];
+      if (a >= static_cast<std::uint32_t>(vertexCount) || b >= static_cast<std::uint32_t>(vertexCount) ||
+          c >= static_cast<std::uint32_t>(vertexCount))
+        return false;
+      dwg_point_3d p1{}, p2{}, p3{};
+      fillVertex(static_cast<int>(a), &p1);
+      fillVertex(static_cast<int>(b), &p2);
+      fillVertex(static_cast<int>(c), &p3);
+      Dwg_Entity__3DFACE* face = dwg_add_3DFACE(hdr, &p1, &p2, &p3, nullptr);
+      if (face == nullptr || face->parent == nullptr)
+        return false;
+      applyEntity(face->parent);
+      wrote = true;
+    }
+    return wrote;
+  }
+
   std::vector<dwg_point_3d> verts(static_cast<size_t>(vertexCount));
   for (int vi = 0; vi < vertexCount; ++vi)
     fillVertex(vi, &verts[static_cast<size_t>(vi)]);
@@ -3029,16 +3063,13 @@ bool WriteIndexedTriangles(int vertexCount, const std::function<void(int, dwg_po
                              verts.data(), faces.data());
   if (pf == nullptr || pf->parent == nullptr)
     return false;
-  if (tw != nullptr && attr != nullptr)
-    tw->Apply(pf->parent, *attr);
-  if (dwg != nullptr && matCtx != nullptr && st != nullptr && attr != nullptr)
-    DwgExportApplyEntityMaterial(dwg, matCtx, *st, pf->parent, attr, defR, defG, defB);
+  applyEntity(pf->parent);
   return true;
 }
 
 bool WriteCadMesh(const AppCommandState& st, const CadMesh& mesh, Dwg_Object_BLOCK_HEADER* hdr,
                   TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
-                  DwgExportMaterialContext* matCtx) {
+                  DwgExportMaterialContext* matCtx, bool asPolylinePface) {
   const int nv = mesh.vertexCount();
   if (nv < 3 || mesh.indices.size() < 3)
     return false;
@@ -3058,12 +3089,12 @@ bool WriteCadMesh(const AppCommandState& st, const CadMesh& mesh, Dwg_Object_BLO
                                                      mesh.vertsXyz[o + 2]},
                                      out);
       },
-      mesh.indices, hdr, tw, attr, dwg, matCtx, &st, defR, defG, defB);
+      mesh.indices, hdr, tw, attr, dwg, matCtx, &st, defR, defG, defB, asPolylinePface);
 }
 
 bool WriteCadSurfaceTin(const AppCommandState& st, const CadSurface& surface, Dwg_Object_BLOCK_HEADER* hdr,
                         TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
-                        DwgExportMaterialContext* matCtx) {
+                        DwgExportMaterialContext* matCtx, bool asPolylinePface) {
   if (surface.tin == nullptr)
     return false;
   const CadTin& tin = *surface.tin;
@@ -3078,7 +3109,7 @@ bool WriteCadSurfaceTin(const AppCommandState& st, const CadSurface& surface, Dw
                                                      tin.vertsXyz[o + 2]},
                                      out);
       },
-      tin.indices, hdr, tw, attr, dwg, matCtx, &st, 0.42f, 0.62f, 0.78f);
+      tin.indices, hdr, tw, attr, dwg, matCtx, &st, 0.42f, 0.62f, 0.78f, asPolylinePface);
 }
 
 size_t CountSkippedMeshes(const AppCommandState& st) {
@@ -4896,19 +4927,28 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     log.push_back("CAD export — wrote " + std::to_string(nHatchOut) + " HATCH(es) (REQ-170, issue #608).");
 
   size_t nMeshOut = 0;
+  unsigned pfaceExports = 0;  // LibreDWG: one POLYLINE_PFACE per block (issue #663)
   for (size_t mi = 0; mi < st.cadMeshes.size(); ++mi) {
     const std::shared_ptr<const CadMesh>& mp = st.cadMeshes[mi];
     if (mp == nullptr)
       continue;
     const EntityAttributes* at = mi < st.cadMeshAttrs.size() ? &st.cadMeshAttrs[mi] : nullptr;
-    if (dwg_mesh_export::WriteCadMesh(st, *mp, hdr, &tw, at, dwg, &matCtx))
+    const bool asPface = pfaceExports == 0;
+    if (dwg_mesh_export::WriteCadMesh(st, *mp, hdr, &tw, at, dwg, &matCtx, asPface)) {
       ++nMeshOut;
+      if (asPface)
+        ++pfaceExports;
+    }
   }
   size_t nTinOut = 0;
   for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
     const EntityAttributes* at = si < st.cadSurfaceAttrs.size() ? &st.cadSurfaceAttrs[si] : nullptr;
-    if (dwg_mesh_export::WriteCadSurfaceTin(st, st.cadSurfaces[si], hdr, &tw, at, dwg, &matCtx))
+    const bool asPface = pfaceExports == 0;
+    if (dwg_mesh_export::WriteCadSurfaceTin(st, st.cadSurfaces[si], hdr, &tw, at, dwg, &matCtx, asPface)) {
       ++nTinOut;
+      if (asPface)
+        ++pfaceExports;
+    }
   }
   if (nMeshOut + nTinOut > 0)
     log.push_back("CAD export — wrote " + std::to_string(nMeshOut + nTinOut) +

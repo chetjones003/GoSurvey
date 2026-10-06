@@ -24933,6 +24933,19 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadSolidAttrs.clear();
   st.solidDisplayCache.clear();
   st.solidDisplayGeometry.solids.clear();
+  // TIN surfaces (REQ-068) and their generated display geometry (ADR-036 (e)). The cache is keyed
+  // on stable entity ids and lives on AppCommandState, not in the drawing snapshot — so it must be
+  // dropped whenever the drawing's geometry is cleared or replaced. Leaving it across OPEN/IMPORT
+  // let a cache entry for the same id early-out against a new triangulation and, worse, hand the
+  // renderer buffers built for the previous document (issue #663).
+  st.cadSurfaces.clear();
+  st.cadSurfaceAttrs.clear();
+  st.surfaceDisplayCache.clear();
+  st.surfaceWatershedCache.clear();
+  st.surfaceDisplayGeometry.lines.clear();
+  st.surfaceDisplayGeometry.bandTriangles.clear();
+  st.waterDropPreviewLines.clear();
+  st.surfaceRebuildAsync.clear();  // join/cancel any in-flight worker before ids are reused
   st.blockRefWorldSolids.clear();
   st.blockRefWorldSolidAttrs.clear();
   st.blockRefWorldSolidsSig = 0;
