@@ -47,6 +47,10 @@ const std::vector<PageScale>& PresetScales();
 /// "12.50" style number with a fixed count of decimals.
 std::string FormatValue(double v, int decimals);
 
+/// The rectilinear `<</Type/Measure ...>>` dictionary for a scale: the page's /VP holds it, and so does every
+/// measurement annotation (REQ-391).
+std::string BuildMeasureDict(const PageScale& s);
+
 /// The `/VP[...]` entry for a page of this size and scale.
 std::string BuildViewport(const PageScale& s, double x0, double y0, double x1, double y1);
 

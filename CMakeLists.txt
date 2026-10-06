@@ -1343,6 +1343,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PdfSplitTests.cpp
     tests/PdfAnnotateTests.cpp
     tests/PdfMeasureTests.cpp
+    tests/PdfDimensionTests.cpp
     src/pdf/PdfViewerCore.cpp
     src/pdf/PdfDocument.cpp
     src/pdf/PdfSplit.cpp

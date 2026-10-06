@@ -15,11 +15,17 @@
 namespace pdfview {
 
 struct Annot {
-  enum class Kind { Text, Line, Rect, Ellipse };
+  /// Length, PolyLength, Area and Angle are the REQ-391 scaled dimensions: their geometry is `pts`, and their
+  /// label is worked out from the page's scale (it is never stored, so a scale change keeps it true).
+  enum class Kind { Text, Line, Rect, Ellipse, Length, PolyLength, Area, Angle };
   Kind kind = Kind::Rect;
   int page = 0; ///< zero-based
   /// Line: start and end. Rect / Ellipse / Text: two opposite corners of the box (any order).
   float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
+  /// Dimensions: Length 2 points; PolyLength 2 or more; Area 3 or more (closed); Angle 3 (the middle one is the corner).
+  std::vector<std::pair<float, float>> pts;
+  int decimals = 2; ///< dimensions: digits after the point in the label
+  bool IsDimension() const { return kind >= Kind::Length; }
   unsigned color = 0xFF0000; ///< 0xRRGGBB: the stroke, and the text colour
   float thickness = 1.f;     ///< stroke width in points (Line, Rect, Ellipse)
   bool fill = false;         ///< Rect / Ellipse: fill with `color`
@@ -67,8 +73,23 @@ private:
 /// Writes \p source plus \p items to \p dest as a new PDF ("Save As"). The source is read and closed at once and
 /// is never modified; \p dest equal to \p source is refused. Written to a temporary beside \p dest and renamed
 /// into place, so a failure leaves no partial \p dest. Returns "" on success, otherwise a stated reason.
+/// \p changes are the page scales the user set (REQ-390); \p pageScales is the scale in force on each page that
+/// has a dimension (a dimension on a page missing from it is refused: its value would be a guess).
 std::string SaveAnnotated(const std::filesystem::path& source, const std::vector<Annot>& items,
-                          const std::filesystem::path& dest, const std::map<int, PageScale>& scales = {});
+                          const std::filesystem::path& dest, const std::map<int, PageScale>& changes = {},
+                          const std::map<int, PageScale>& pageScales = {});
+
+/// REQ-391 values, in PDF points / square points / degrees (before the scale).
+double PathLengthPt(const std::vector<std::pair<float, float>>& pts, bool closed);
+double PolygonAreaSqPt(const std::vector<std::pair<float, float>>& pts);
+double AngleDegrees(const std::vector<std::pair<float, float>>& pts); ///< at the middle of three points, 0..180
+bool DimensionComplete(const Annot& a);                             ///< has enough points for its kind
+/// Where a dimension's label is centred, in page points (the longest segment's middle, the area's centre, beside
+/// the angle's corner); the saved file and the on-screen view use the same spot.
+std::pair<float, float> DimensionLabelAnchor(const Annot& a);
+/// The text a dimension shows, in \p scale's real units: "50.00 ft", "A = 1000.00 sq ft" + newline + "P = 140.00 ft",
+/// or "37.50°" (an angle needs no scale).
+std::string DimensionLabel(const Annot& a, const PageScale& scale);
 
 /// Reads back the annotations of \p file that SaveAnnotated writes (Text, Line, Rect, Ellipse); other
 /// annotations in the file are skipped. Empty on any failure.

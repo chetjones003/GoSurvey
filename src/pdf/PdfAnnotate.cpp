@@ -30,7 +30,112 @@ namespace pdfview {
 bool Annot::operator==(const Annot& o) const {
   return kind == o.kind && page == o.page && x0 == o.x0 && y0 == o.y0 && x1 == o.x1 && y1 == o.y1 &&
          color == o.color && thickness == o.thickness && fill == o.fill && text == o.text && font == o.font &&
-         bold == o.bold && italic == o.italic && fontFile == o.fontFile && fontSize == o.fontSize;
+         bold == o.bold && italic == o.italic && fontFile == o.fontFile && fontSize == o.fontSize && pts == o.pts &&
+         decimals == o.decimals;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Dimension values (REQ-391)
+// ---------------------------------------------------------------------------------------------------
+
+double PathLengthPt(const std::vector<std::pair<float, float>>& pts, bool closed) {
+  double sum = 0.0;
+  for (size_t i = 1; i < pts.size(); ++i)
+    sum += std::hypot(static_cast<double>(pts[i].first - pts[i - 1].first), static_cast<double>(pts[i].second - pts[i - 1].second));
+  if (closed && pts.size() > 2)
+    sum += std::hypot(static_cast<double>(pts.back().first - pts.front().first),
+                      static_cast<double>(pts.back().second - pts.front().second));
+  return sum;
+}
+
+double PolygonAreaSqPt(const std::vector<std::pair<float, float>>& pts) {
+  double twice = 0.0;
+  for (size_t i = 0; i < pts.size(); ++i) {
+    const auto& a = pts[i];
+    const auto& b = pts[(i + 1) % pts.size()];
+    twice += static_cast<double>(a.first) * b.second - static_cast<double>(b.first) * a.second;
+  }
+  return std::fabs(twice) * 0.5;
+}
+
+double AngleDegrees(const std::vector<std::pair<float, float>>& pts) {
+  if (pts.size() < 3)
+    return 0.0;
+  const double ax = static_cast<double>(pts[0].first) - pts[1].first, ay = static_cast<double>(pts[0].second) - pts[1].second;
+  const double bx = static_cast<double>(pts[2].first) - pts[1].first, by = static_cast<double>(pts[2].second) - pts[1].second;
+  const double la = std::hypot(ax, ay), lb = std::hypot(bx, by);
+  if (la <= 0.0 || lb <= 0.0)
+    return 0.0;
+  const double c = std::clamp((ax * bx + ay * by) / (la * lb), -1.0, 1.0);
+  return std::acos(c) * 180.0 / 3.14159265358979323846;
+}
+
+bool DimensionComplete(const Annot& a) {
+  switch (a.kind) {
+  case Annot::Kind::Length: return a.pts.size() == 2;
+  case Annot::Kind::PolyLength: return a.pts.size() >= 2;
+  case Annot::Kind::Area: return a.pts.size() >= 3;
+  case Annot::Kind::Angle: return a.pts.size() == 3;
+  default: return false;
+  }
+}
+
+std::pair<float, float> DimensionLabelAnchor(const Annot& a) {
+  const auto& pts = a.pts;
+  if (pts.empty())
+    return {0.f, 0.f};
+  const float fs = std::max(4.f, a.fontSize);
+  float ax = 0.f, ay = 0.f;
+  if (a.kind == Annot::Kind::Area) {
+    for (const auto& p : pts) {
+      ax += p.first;
+      ay += p.second;
+    }
+    ax /= static_cast<float>(pts.size());
+    ay /= static_cast<float>(pts.size());
+  } else if (a.kind == Annot::Kind::Angle && pts.size() >= 3) {
+    const float d1x = pts[0].first - pts[1].first, d1y = pts[0].second - pts[1].second;
+    const float d2x = pts[2].first - pts[1].first, d2y = pts[2].second - pts[1].second;
+    const float l1 = std::max(1e-3f, std::hypot(d1x, d1y)), l2 = std::max(1e-3f, std::hypot(d2x, d2y));
+    float bx = d1x / l1 + d2x / l2, by = d1y / l1 + d2y / l2;
+    const float bl = std::hypot(bx, by);
+    if (bl < 1e-3f) { // a straight angle: the bisector is perpendicular to the line
+      bx = -d1y / l1;
+      by = d1x / l1;
+    } else {
+      bx /= bl;
+      by /= bl;
+    }
+    ax = pts[1].first + bx * fs * 2.5f;
+    ay = pts[1].second + by * fs * 2.5f;
+  } else {
+    float best = -1.f;
+    for (size_t i = 1; i < pts.size(); ++i) {
+      const float len = std::hypot(pts[i].first - pts[i - 1].first, pts[i].second - pts[i - 1].second);
+      if (len > best) {
+        best = len;
+        ax = (pts[i].first + pts[i - 1].first) * 0.5f;
+        ay = (pts[i].second + pts[i - 1].second) * 0.5f;
+      }
+    }
+  }
+  return {ax, ay};
+}
+
+std::string DimensionLabel(const Annot& a, const PageScale& s) {
+  const std::string u = UnitLabel(s.realUnit);
+  switch (a.kind) {
+  case Annot::Kind::Length:
+  case Annot::Kind::PolyLength:
+    return FormatValue(s.PointsToReal(PathLengthPt(a.pts, false)), a.decimals) + " " + u;
+  case Annot::Kind::Area:
+    return "A = " + FormatValue(s.SqPointsToReal(PolygonAreaSqPt(a.pts)), a.decimals) + " sq " + u + "\nP = " +
+           FormatValue(s.PointsToReal(PathLengthPt(a.pts, true)), a.decimals) + " " + u;
+  case Annot::Kind::Angle:
+    return FormatValue(AngleDegrees(a.pts), a.decimals) + "\xC2\xB0";
+  default:
+    return {};
+  }
 }
 
 void AnnotSession::Push() {
@@ -326,6 +431,102 @@ bool AddLine(FPDF_PAGE page, const Annot& a, int serial, std::vector<Patch>& pat
   return ok;
 }
 
+// A scaled dimension (REQ-391): a Stamp placeholder drawn as the path plus its label, then rewritten to a true
+// Line / PolyLine / Polygon carrying the page's /Measure (D-2026-10-06-e).
+bool AddDimension(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, const PageScale& scale, int serial,
+                  std::vector<Patch>& patches, std::string& error) {
+  if (!DimensionComplete(a)) {
+    error = "a dimension on page " + std::to_string(a.page + 1) + " has too few points";
+    return false;
+  }
+  const Rgb c = Split(a.color);
+  const auto& pts = a.pts;
+  const bool closed = a.kind == Annot::Kind::Area;
+  FPDF_PAGEOBJECT path = FPDFPageObj_CreateNewPath(pts[0].first, pts[0].second);
+  if (path == nullptr)
+    return false;
+  for (size_t i = 1; i < pts.size(); ++i)
+    FPDFPath_LineTo(path, pts[i].first, pts[i].second);
+  if (closed)
+    FPDFPath_Close(path);
+  FPDFPageObj_SetStrokeColor(path, c.r, c.g, c.b, 255);
+  FPDFPageObj_SetStrokeWidth(path, std::max(0.1f, a.thickness));
+  FPDFPath_SetDrawMode(path, 0, 1);
+  FPDFPageObj_Transform(path, 1, 0, 0, 1, 0, 0);
+  std::vector<FPDF_PAGEOBJECT> objs = {path};
+
+  const float fs = std::max(4.f, a.fontSize);
+  const auto [ax, ay] = DimensionLabelAnchor(a);
+  const std::string label = DimensionLabel(a, scale);
+  FPDF_FONT font = FPDFText_LoadStandardFont(doc, "Helvetica");
+  if (font == nullptr) {
+    FPDFPageObj_Destroy(path);
+    error = "the font for the dimension label could not be loaded";
+    return false;
+  }
+  float tw = 0.f, th = 0.f;
+  EstimateTextBox(label, fs, tw, th);
+  float baseline = ay + fs * 0.4f + (th - fs * 1.2f); // the first line sits above the anchor, later ones below it
+  std::istringstream lines(label);
+  std::string line;
+  while (std::getline(lines, line)) {
+    FPDF_PAGEOBJECT t = FPDFPageObj_CreateTextObj(doc, font, fs);
+    if (t == nullptr)
+      break;
+    float w1 = 0.f, h1 = 0.f;
+    EstimateTextBox(line, fs, w1, h1);
+    const std::vector<unsigned short> w = Utf16(line);
+    FPDFText_SetText(t, reinterpret_cast<FPDF_WIDESTRING>(w.data()));
+    FPDFPageObj_SetFillColor(t, c.r, c.g, c.b, 255);
+    FPDFPageObj_Transform(t, 1, 0, 0, 1, ax - w1 * 0.5f, baseline);
+    objs.push_back(t);
+    baseline -= fs * 1.2f;
+  }
+  FPDF_ANNOTATION an = NewObjectAnnot(page, objs);
+  if (an == nullptr) {
+    for (FPDF_PAGEOBJECT o : objs)
+      FPDFPageObj_Destroy(o);
+    error = "PDFium could not create a dimension annotation";
+    return false;
+  }
+  Patch p;
+  char id[16];
+  std::snprintf(id, sizeof(id), "gsa%05d", serial);
+  p.marker = id;
+  std::string vertices;
+  for (const auto& pt : pts)
+    vertices += (vertices.empty() ? "" : " ") + Num(pt.first) + " " + Num(pt.second);
+  const std::string style = "/C[" + Comp(c.r) + " " + Comp(c.g) + " " + Comp(c.b) + "]/Border[0 0 " +
+                            Num(std::max(0.1f, a.thickness)) + "]";
+  switch (a.kind) {
+  case Annot::Kind::Length:
+    p.subtype = "Line";
+    p.extra = "/L[" + vertices + "]/IT/LineDimension" + style + "/Measure" + BuildMeasureDict(scale);
+    break;
+  case Annot::Kind::PolyLength:
+    p.subtype = "PolyLine";
+    p.extra = "/Vertices[" + vertices + "]/IT/PolyLineDimension" + style + "/Measure" + BuildMeasureDict(scale);
+    break;
+  case Annot::Kind::Area:
+    p.subtype = "Polygon";
+    p.extra = "/Vertices[" + vertices + "]/IT/PolygonDimension" + style + "/Measure" + BuildMeasureDict(scale);
+    break;
+  default: // Angle: the standard has no angle dimension, so a labelled PolyLine with a GoSurvey mark
+    p.subtype = "PolyLine";
+    p.extra = "/Vertices[" + vertices + "]/GSKind(angle)" + style;
+    break;
+  }
+  bool ok = SetString(an, "NM", p.marker);
+  ok = ok && SetString(an, "GSPAD", std::string(p.extra.size() + 48, 'x'));
+  ok = ok && SetString(an, "Contents", label);
+  FPDFPage_CloseAnnot(an);
+  if (ok)
+    patches.push_back(p);
+  else
+    error = "PDFium could not fill in a dimension annotation";
+  return ok;
+}
+
 bool AddText(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, int serial, std::vector<Patch>& patches,
              std::string& error) {
   FPDF_FONT font = nullptr;
@@ -448,8 +649,12 @@ std::string ApplyPatches(std::string& bytes, const std::vector<Patch>& patches) 
 } // namespace
 
 std::string SaveAnnotated(const std::filesystem::path& source, const std::vector<Annot>& items,
-                          const std::filesystem::path& dest, const std::map<int, PageScale>& scales) {
+                          const std::filesystem::path& dest, const std::map<int, PageScale>& scales,
+                          const std::map<int, PageScale>& pageScales) {
   std::error_code ec;
+  for (const Annot& a : items) // a length or area with no scale would be a guess: refuse before anything is written
+    if (a.IsDimension() && a.kind != Annot::Kind::Angle && pageScales.count(a.page) == 0)
+      return "page " + std::to_string(a.page + 1) + " has a dimension but no scale; set the page's scale first";
   if (source.lexically_normal() == dest.lexically_normal() ||
       (std::filesystem::exists(dest, ec) && std::filesystem::equivalent(source, dest, ec)))
     return "Save As must use a new file name; the original is never overwritten";
@@ -502,6 +707,14 @@ std::string SaveAnnotated(const std::filesystem::path& source, const std::vector
         case Annot::Kind::Text:
           ok = AddText(doc, page, *a, ++serial, patches, error);
           break;
+        case Annot::Kind::Length:
+        case Annot::Kind::PolyLength:
+        case Annot::Kind::Area:
+        case Annot::Kind::Angle: {
+          const auto sc = pageScales.find(a->page);
+          ok = AddDimension(doc, page, *a, sc != pageScales.end() ? sc->second : PageScale{}, ++serial, patches, error);
+          break;
+        }
         }
         if (!ok) {
           if (error.empty())
@@ -621,13 +834,28 @@ std::vector<Annot> ReadAnnotations(const std::filesystem::path& file) {
       a.thickness = bw;
       bool known = true;
       if (st == FPDF_ANNOT_LINE) {
-        a.kind = Annot::Kind::Line;
+        a.kind = FPDFAnnot_HasKey(an, "Measure") ? Annot::Kind::Length : Annot::Kind::Line;
         FS_POINTF s{}, e{};
         FPDFAnnot_GetLine(an, &s, &e);
         a.x0 = s.x;
         a.y0 = s.y;
         a.x1 = e.x;
         a.y1 = e.y;
+        if (a.kind == Annot::Kind::Length) {
+          a.pts = {{s.x, s.y}, {e.x, e.y}};
+          a.text = GetString(an, "Contents");
+        }
+      } else if (st == FPDF_ANNOT_POLYLINE || st == FPDF_ANNOT_POLYGON) {
+        a.kind = st == FPDF_ANNOT_POLYGON ? Annot::Kind::Area
+                 : FPDFAnnot_HasKey(an, "GSKind") ? Annot::Kind::Angle
+                                                  : Annot::Kind::PolyLength;
+        const unsigned long count = FPDFAnnot_GetVertices(an, nullptr, 0);
+        std::vector<FS_POINTF> v2(count);
+        if (count > 0)
+          FPDFAnnot_GetVertices(an, v2.data(), count);
+        for (const FS_POINTF& p : v2)
+          a.pts.push_back({p.x, p.y});
+        a.text = GetString(an, "Contents");
       } else if (st == FPDF_ANNOT_SQUARE || st == FPDF_ANNOT_CIRCLE) {
         a.kind = st == FPDF_ANNOT_SQUARE ? Annot::Kind::Rect : Annot::Kind::Ellipse;
         a.x0 = rc.left + bw / 2;

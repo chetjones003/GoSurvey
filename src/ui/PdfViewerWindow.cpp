@@ -224,7 +224,15 @@ struct BenchRun {
 // a page never re-renders it; only "Save As" writes them into a new PDF.
 // ---------------------------------------------------------------------------------------------------
 
-enum class Tool { Select, Text, Line, Rect, Ellipse, Calibrate };
+enum class Tool { Select, Text, Line, Rect, Ellipse, Calibrate, Length, PolyLength, Area, Angle };
+
+bool IsMeasureTool(Tool t) { return t == Tool::Length || t == Tool::PolyLength || t == Tool::Area || t == Tool::Angle; }
+
+Annot::Kind KindOfMeasureTool(Tool t) {
+  return t == Tool::Length ? Annot::Kind::Length : t == Tool::PolyLength ? Annot::Kind::PolyLength
+                                                 : t == Tool::Area       ? Annot::Kind::Area
+                                                                         : Annot::Kind::Angle;
+}
 
 struct FontChoice {
   std::string family;
@@ -255,6 +263,9 @@ struct AnnotUi {
   int fontIdx = 0;
   bool bold = false, italic = false;
   float fontSize = 14.f;
+  int decimals = 2;                                   ///< REQ-391: digits in a dimension's label
+  std::vector<std::pair<float, float>> measurePts;    ///< REQ-391: the dimension being clicked out
+  int measurePage = 0;
   int selected = -1;
   enum class Drag { None, Create, Move, Handle } drag = Drag::None;
   int dragPage = 0;
@@ -329,6 +340,10 @@ void ApplyStyle(const AnnotUi& u, Annot& a) {
     a.fontSize = std::clamp(u.fontSize, 4.f, 200.f);
     a.fontFile = f.standard ? std::string() : FontReg::FindTtfPath(f.family, u.bold, u.italic);
     FitTextBox(a);
+  } else if (a.IsDimension()) {
+    a.thickness = u.thickness;
+    a.fontSize = std::clamp(u.fontSize, 4.f, 200.f);
+    a.decimals = std::clamp(u.decimals, 0, 6);
   } else {
     a.thickness = u.thickness;
     a.fill = a.kind != Annot::Kind::Line && u.fill;
@@ -345,10 +360,33 @@ void LoadStyle(AnnotUi& u, const Annot& a) {
     for (size_t i = 0; i < FontChoices().size(); ++i)
       if (FontChoices()[i].family == a.font)
         u.fontIdx = static_cast<int>(i);
+  } else if (a.IsDimension()) {
+    u.thickness = a.thickness;
+    u.fontSize = a.fontSize;
+    u.decimals = a.decimals;
   } else {
     u.thickness = a.thickness;
     u.fill = a.fill;
   }
+}
+
+// The bounding box of an annotation in page points.
+void BoundsOf(const Annot& a, float& l, float& b, float& r, float& t) {
+  if (a.IsDimension() && !a.pts.empty()) {
+    l = r = a.pts[0].first;
+    b = t = a.pts[0].second;
+    for (const auto& p : a.pts) {
+      l = std::min(l, p.first);
+      r = std::max(r, p.first);
+      b = std::min(b, p.second);
+      t = std::max(t, p.second);
+    }
+    return;
+  }
+  l = std::min(a.x0, a.x1);
+  r = std::max(a.x0, a.x1);
+  b = std::min(a.y0, a.y1);
+  t = std::max(a.y0, a.y1);
 }
 
 float DistToSegment(float px, float py, float ax, float ay, float bx, float by) {
@@ -362,6 +400,30 @@ float DistToSegment(float px, float py, float ax, float ay, float bx, float by) 
 bool HitTest(const Annot& a, float x, float y, float tol) {
   const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
   switch (a.kind) {
+  case Annot::Kind::Length:
+  case Annot::Kind::PolyLength:
+  case Annot::Kind::Area:
+  case Annot::Kind::Angle: {
+    const bool closed = a.kind == Annot::Kind::Area;
+    const size_t n = a.pts.size();
+    for (size_t i = 0; i + 1 < n + (closed && n > 2 ? 1 : 0); ++i) {
+      const auto& p = a.pts[i];
+      const auto& q = a.pts[(i + 1) % n];
+      if (DistToSegment(x, y, p.first, p.second, q.first, q.second) <= a.thickness * 0.5f + tol)
+        return true;
+    }
+    if (closed && n > 2) { // inside the area counts too
+      bool in = false;
+      for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        const auto& p = a.pts[i];
+        const auto& q = a.pts[j];
+        if (((p.second > y) != (q.second > y)) && (x < (q.first - p.first) * (y - p.second) / (q.second - p.second) + p.first))
+          in = !in;
+      }
+      return in;
+    }
+    return false;
+  }
   case Annot::Kind::Line:
     return DistToSegment(x, y, a.x0, a.y0, a.x1, a.y1) <= std::max(a.thickness * 0.5f, 0.f) + tol;
   case Annot::Kind::Text:
@@ -386,6 +448,8 @@ bool HitTest(const Annot& a, float x, float y, float tol) {
 // The grips of a selected annotation, in page points: a Line's two ends, a shape's four corners
 // (clockwise from top-left), a note's bottom-right corner (it scales the text).
 std::vector<std::pair<float, float>> HandlePoints(const Annot& a) {
+  if (a.IsDimension())
+    return a.pts;
   const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
   if (a.kind == Annot::Kind::Line)
     return {{a.x0, a.y0}, {a.x1, a.y1}};
@@ -395,7 +459,10 @@ std::vector<std::pair<float, float>> HandlePoints(const Annot& a) {
 }
 
 void MoveHandle(Annot& a, const Annot& original, int handle, float x, float y) {
-  if (a.kind == Annot::Kind::Line) {
+  if (a.IsDimension()) {
+    if (handle >= 0 && handle < static_cast<int>(a.pts.size()))
+      a.pts[static_cast<size_t>(handle)] = {x, y};
+  } else if (a.kind == Annot::Kind::Line) {
     (handle == 0 ? a.x0 : a.x1) = x;
     (handle == 0 ? a.y0 : a.y1) = y;
   } else if (a.kind == Annot::Kind::Text) {
@@ -420,12 +487,43 @@ ImFont* FontForNote(const Annot& a) {
 }
 
 // Draw an annotation over its page. `tl` is the page's top-left on screen, `k` the screen pixels per point.
-void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bool selected) {
+void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bool selected, const PageScale* scale = nullptr,
+               const ImVec2* rubberTo = nullptr) {
   const auto S = [&](float x, float y) { return ImVec2(tl.x + x * k, tl.y + (hPt - y) * k); };
   const ImU32 col = ToImCol(a.color);
   const float th = std::max(1.f, a.thickness * k);
-  const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
+  float l, b, r, t;
+  BoundsOf(a, l, b, r, t);
   switch (a.kind) {
+  case Annot::Kind::Length:
+  case Annot::Kind::PolyLength:
+  case Annot::Kind::Area:
+  case Annot::Kind::Angle: {
+    std::vector<ImVec2> sp;
+    for (const auto& p : a.pts)
+      sp.push_back(S(p.first, p.second));
+    if (rubberTo != nullptr)
+      sp.push_back(*rubberTo); // the next point follows the pointer while the dimension is being clicked out
+    if (sp.size() >= 2)
+      dl->AddPolyline(sp.data(), static_cast<int>(sp.size()), col,
+                      a.kind == Annot::Kind::Area && sp.size() > 2 ? ImDrawFlags_Closed : ImDrawFlags_None, th);
+    for (const ImVec2& p : sp)
+      dl->AddCircleFilled(p, std::max(2.f, th * 0.9f), col);
+    if (rubberTo == nullptr && DimensionComplete(a)) {
+      const std::string label = scale != nullptr || a.kind == Annot::Kind::Angle
+                                    ? DimensionLabel(a, scale != nullptr ? *scale : PageScale{})
+                                    : std::string("no scale");
+      const auto [ax, ay] = DimensionLabelAnchor(a);
+      const float fsPx = std::max(4.f, a.fontSize) * k;
+      ImFont* font = ImGui::GetFont();
+      const ImVec2 ts = font->CalcTextSizeA(fsPx, 1e9f, 0.f, label.c_str());
+      const ImVec2 c = S(ax, ay);
+      const ImVec2 p0(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f);
+      dl->AddRectFilled(ImVec2(p0.x - 3.f, p0.y - 1.f), ImVec2(p0.x + ts.x + 3.f, p0.y + ts.y + 1.f), IM_COL32(255, 255, 255, 215));
+      dl->AddText(font, fsPx, p0, col, label.c_str());
+    }
+    break;
+  }
   case Annot::Kind::Line:
     dl->AddLine(S(a.x0, a.y0), S(a.x1, a.y1), col, th);
     break;
@@ -449,7 +547,14 @@ void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bo
     const float pad = 3.f;
     if (a.kind == Annot::Kind::Line)
       dl->AddLine(S(a.x0, a.y0), S(a.x1, a.y1), IM_COL32(60, 140, 255, 110), th + 6.f);
-    else
+    else if (a.IsDimension()) {
+      std::vector<ImVec2> sp;
+      for (const auto& p : a.pts)
+        sp.push_back(S(p.first, p.second));
+      if (sp.size() >= 2)
+        dl->AddPolyline(sp.data(), static_cast<int>(sp.size()), IM_COL32(60, 140, 255, 110),
+                        a.kind == Annot::Kind::Area && sp.size() > 2 ? ImDrawFlags_Closed : ImDrawFlags_None, th + 6.f);
+    } else
       dl->AddRect(ImVec2(S(l, t).x - pad, S(l, t).y - pad), ImVec2(S(r, b).x + pad, S(r, b).y + pad),
                   IM_COL32(60, 140, 255, 255), 0.f, 0, 1.f);
     for (const auto& h : HandlePoints(a)) {
@@ -838,6 +943,8 @@ void DrawThumbnails(Viewer& v) {
   ImGui::EndChild();
 }
 
+const PageScale* EffectiveScale(const Viewer& v, int page);
+
 void StartSave(Viewer& v, std::vector<std::string>& log) {
   AnnotUi& u = v.ann;
   const std::string stem = std::filesystem::u8path(v.path).stem().u8string() + "-annotated.pdf";
@@ -849,8 +956,13 @@ void StartSave(Viewer& v, std::vector<std::string>& log) {
   u.saveDest = out;
   u.status = "Saving...";
   const std::filesystem::path src = std::filesystem::u8path(v.path), dst = std::filesystem::u8path(u.saveDest);
-  u.saving = std::async(std::launch::async, [src, dst, items = u.session.Items(), scales = u.session.Scales()] {
-    return SaveAnnotated(src, items, dst, scales);
+  std::map<int, PageScale> inForce; // the scale on each page that has a dimension: its label is worked out from it
+  for (const Annot& a : u.session.Items())
+    if (a.IsDimension())
+      if (const PageScale* s = EffectiveScale(v, a.page))
+        inForce[a.page] = *s;
+  u.saving = std::async(std::launch::async, [src, dst, items = u.session.Items(), scales = u.session.Scales(), inForce] {
+    return SaveAnnotated(src, items, dst, scales, inForce);
   });
   (void)log;
 }
@@ -1118,8 +1230,12 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
     }
     if (ImGui::Button(label)) {
       u.tool = t;
+      u.measurePts.clear();
+      u.status.clear();
       if (t != Tool::Select)
         u.selected = -1;
+      if (IsMeasureTool(t))
+        u.scalesRequested = true; // the page's scale is needed: read what the file has
     }
     if (on)
       ImGui::PopStyleColor(2);
@@ -1160,7 +1276,8 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
     changed |= ImGui::SliderFloat("##annotw", &u.thickness, 0.5f, 20.f, "%.1f pt");
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("Line thickness");
-    if (u.tool != Tool::Line && (sel == nullptr || sel->kind != Annot::Kind::Line)) {
+    if (u.tool != Tool::Line && !IsMeasureTool(u.tool) &&
+        (sel == nullptr || (sel->kind != Annot::Kind::Line && !sel->IsDimension()))) {
       ImGui::SameLine();
       changed |= ImGui::Checkbox("Fill", &u.fill);
     }
@@ -1219,6 +1336,33 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   if (!u.status.empty()) {
     ImGui::SameLine();
     ImGui::TextDisabled("%s", u.status.c_str());
+  }
+  // REQ-391: the scaled dimension tools, on their own row.
+  ImGui::TextUnformatted("Measure:");
+  ImGui::SameLine();
+  toolButton("Length", Tool::Length);
+  toolButton("Polylength", Tool::PolyLength);
+  toolButton("Area", Tool::Area);
+  toolButton("Angle", Tool::Angle);
+  {
+    const Annot* ds = u.selected >= 0 ? &items[static_cast<size_t>(u.selected)] : nullptr;
+    if (IsMeasureTool(u.tool) || (ds != nullptr && ds->IsDimension())) {
+      ImGui::SetNextItemWidth(120.f);
+      if (ImGui::SliderInt("##decimals", &u.decimals, 0, 4, "%d decimals") && ds != nullptr && ds->IsDimension()) {
+        Annot a = *ds;
+        ApplyStyle(u, a);
+        u.session.Replace(u.selected, a);
+      }
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(70.f);
+      if (ImGui::DragFloat("##dimsize", &u.fontSize, 0.25f, 4.f, 200.f, "%.0f pt") && ds != nullptr && ds->IsDimension()) {
+        Annot a = *ds;
+        ApplyStyle(u, a);
+        u.session.Replace(u.selected, a);
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Label size");
+    }
   }
   ImGui::PopStyleVar(3);
   DrawScaleDialogs(v, log);
@@ -1318,6 +1462,21 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
     }
   };
 
+  // A dimension is complete at its point count; a polyline or area is ended with Enter, a double-click, or (area)
+  // a click on its first point.
+  const auto finishMeasure = [&] {
+    Annot a;
+    a.kind = KindOfMeasureTool(u.tool);
+    a.page = u.measurePage;
+    a.pts = u.measurePts;
+    u.measurePts.clear();
+    if (!DimensionComplete(a))
+      return;
+    ApplyStyle(u, a);
+    u.session.Add(a);
+    u.status.clear();
+  };
+
   // Keys, while no text box has the keyboard.
   if ((ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || hovered) && !io.WantTextInput && u.drag == AnnotUi::Drag::None) {
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z) && u.session.Undo())
@@ -1328,8 +1487,12 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
       u.session.Remove(u.selected);
       u.selected = -1;
     }
+    if (IsMeasureTool(u.tool) && !u.measurePts.empty() &&
+        (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
+      finishMeasure();
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
       u.selected = -1;
+      u.measurePts.clear();
       if (u.tool == Tool::Calibrate) {
         u.tool = Tool::Select;
         u.calCount = 0;
@@ -1383,6 +1546,40 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
             u.original = u.preview = a;
           }
         }
+      } else if (IsMeasureTool(u.tool)) {
+        float cx, cy;
+        toPt(r, cx, cy, true);
+        if (!u.measurePts.empty() && r.page != u.measurePage) {
+          u.status = "Keep all the points on one page.";
+          return;
+        }
+        if (u.measurePts.empty()) {
+          if (u.tool != Tool::Angle && EffectiveScale(v, r.page) == nullptr) {
+            if (!u.scalesRead) { // the file may already have a scale: read it, then ask again
+              u.scalesRequested = true;
+              u.status = "Reading this page's scale... click again in a moment.";
+            } else {
+              u.status = "This page has no scale. Use Set scale... first.";
+            }
+            return;
+          }
+          u.measurePage = r.page;
+        }
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !u.measurePts.empty()) {
+          finishMeasure();
+          return;
+        }
+        if (u.tool == Tool::Area && u.measurePts.size() >= 3 &&
+            std::hypot(cx - u.measurePts[0].first, cy - u.measurePts[0].second) * k <= 8.f) {
+          finishMeasure();
+          return;
+        }
+        u.measurePts.push_back({cx, cy});
+        u.status = u.tool == Tool::PolyLength ? "Click more points; Enter or double-click to finish."
+                   : u.tool == Tool::Area     ? "Click more points; Enter, double-click, or the first point to close."
+                                              : "";
+        if ((u.tool == Tool::Length && u.measurePts.size() == 2) || (u.tool == Tool::Angle && u.measurePts.size() == 3))
+          finishMeasure();
       } else if (u.tool == Tool::Calibrate) {
         float cx, cy;
         toPt(r, cx, cy, true);
@@ -1447,6 +1644,10 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
       u.preview.x1 += dx;
       u.preview.y0 += dy;
       u.preview.y1 += dy;
+      for (auto& p : u.preview.pts) {
+        p.first += dx;
+        p.second += dy;
+      }
     }
   }
   if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
@@ -1642,10 +1843,18 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
         if (items[i].page != r.page)
           continue;
         const bool isSel = static_cast<int>(i) == u.selected;
-        DrawAnnot(dl, dragging && isSel ? u.preview : items[i], r.tl, r.hPt, v.pxPerPt, isSel);
+        DrawAnnot(dl, dragging && isSel ? u.preview : items[i], r.tl, r.hPt, v.pxPerPt, isSel, EffectiveScale(v, r.page));
       }
       if (u.drag == AnnotUi::Drag::Create && u.dragPage == r.page)
         DrawAnnot(dl, u.preview, r.tl, r.hPt, v.pxPerPt, false);
+      if (!u.measurePts.empty() && u.measurePage == r.page && IsMeasureTool(u.tool)) { // the dimension being clicked out
+        Annot cur;
+        cur.kind = KindOfMeasureTool(u.tool);
+        cur.pts = u.measurePts;
+        ApplyStyle(u, cur);
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        DrawAnnot(dl, cur, r.tl, r.hPt, v.pxPerPt, false, nullptr, &mouse);
+      }
       if (u.calCount > 0 && u.calPage == r.page) { // the calibration points picked so far
         const auto S = [&](int i) { return ImVec2(r.tl.x + u.calX[i] * v.pxPerPt, r.tl.y + (r.hPt - u.calY[i]) * v.pxPerPt); };
         if (u.calCount == 2)

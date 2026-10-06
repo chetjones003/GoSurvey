@@ -11665,8 +11665,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      export, dimension styles beyond the above.
 - Acceptance:
   - `[issue732][req391]` test: on a page calibrated 1 pt = 0.5 ft, a Length of 100 pt reads 50 ft; a
-    Polylength of an L-shape reads the sum of its legs; a 100 pt x 40 pt Area reads 5000 sq ft (x scale^2)
-    and 70 ft perimeter (as 140 pt x 0.5); an Angle of three points reads the expected degrees to 0.01.
+    Polylength of an L-shape reads the sum of its legs; a 100 pt x 40 pt Area reads 1000 sq ft (4000 sq pt x 0.25)
+    and a 140 ft perimeter (280 pt x 0.5); an Angle of three points reads the expected degrees to 0.01.
   - `[issue732][req391]` test: each saved dimension is read back with its geometry, value, unit and
     colour; the saved file contains a Measure dictionary for Length / Polylength / Area; the source file's
     bytes are identical.
