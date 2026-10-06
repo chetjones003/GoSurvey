@@ -287,6 +287,8 @@ struct AnnotUi {
   int dragPage = 0;
   float px0 = 0.f, py0 = 0.f; ///< where the press landed, in page points
   int handle = -1;
+  ImVec2 pressMouse{0.f, 0.f}; ///< where the button went down: a drag is only a drag once the pointer has moved
+  bool dragMoved = false;
   Annot original, preview;    ///< the item before the drag, and as it looks mid-drag
   bool textPopup = false;     ///< open the text dialog on the next frame
   int textPage = 0;
@@ -1444,11 +1446,11 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
       ImGui::SameLine();
       ImGui::TextDisabled("this page has nothing to snap to");
     }
-    ImGui::SameLine();
   }
   {
     const Annot* ds = u.selected >= 0 ? &items[static_cast<size_t>(u.selected)] : nullptr;
     if (IsMeasureTool(u.tool) || (ds != nullptr && ds->IsDimension())) {
+      ImGui::SameLine(); // only here: a SameLine left dangling puts the next panel on this row
       ImGui::SetNextItemWidth(120.f);
       if (ImGui::SliderInt("##decimals", &u.decimals, 0, 4, "%d decimals") && ds != nullptr && ds->IsDimension()) {
         Annot a = *ds;
@@ -1699,6 +1701,8 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
           for (size_t i = 0; i < grips.size(); ++i)
             if (std::fabs(x - grips[i].first) <= 7.f / k && std::fabs(y - grips[i].second) <= 7.f / k) {
               u.drag = AnnotUi::Drag::Handle;
+              u.pressMouse = io.MousePos;
+              u.dragMoved = false;
               u.handle = static_cast<int>(i);
               u.dragPage = r.page;
               u.original = u.preview = items[static_cast<size_t>(u.selected)];
@@ -1722,6 +1726,8 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
             u.textPopup = true;
           } else {
             u.drag = AnnotUi::Drag::Move;
+            u.pressMouse = io.MousePos;
+            u.dragMoved = false;
             u.dragPage = r.page;
             u.px0 = x;
             u.py0 = y;
@@ -1821,7 +1827,11 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
     u.drag = AnnotUi::Drag::None;
     return;
   }
-  if (r != nullptr) {
+  // A click is not a drag: nothing moves (and nothing snaps) until the pointer has travelled a few pixels, so
+  // selecting a mark, or clicking one of its grips, leaves it exactly where it was.
+  if (!u.dragMoved && std::hypot(io.MousePos.x - u.pressMouse.x, io.MousePos.y - u.pressMouse.y) >= 4.f)
+    u.dragMoved = true;
+  if (r != nullptr && (u.dragMoved || u.drag == AnnotUi::Drag::Create)) {
     float x, y;
     toPt(*r, x, y, u.drag != AnnotUi::Drag::Move, u.drag != AnnotUi::Drag::Move);
     if (u.drag == AnnotUi::Drag::Create) {
@@ -1847,7 +1857,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
     if (u.drag == AnnotUi::Drag::Create) {
       if (std::hypot(u.preview.x1 - u.preview.x0, u.preview.y1 - u.preview.y0) * k >= 4.f)
         u.session.Add(u.preview);
-    } else if (u.selected >= 0 && u.preview != u.original) {
+    } else if (u.dragMoved && u.selected >= 0 && u.preview != u.original) {
       u.session.Replace(u.selected, u.preview);
     }
     u.drag = AnnotUi::Drag::None;
