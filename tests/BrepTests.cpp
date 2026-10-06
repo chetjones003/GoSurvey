@@ -9301,3 +9301,127 @@ TEST_CASE("A collapsed ring makes one triangle, not a degenerate pair", "[brep][
     REQUIRE(TessellatedVolume(t) == Approx(want).epsilon(1e-2));
   }
 }
+
+// ---------------------------------------------------------------------------
+// GitHub #150 (3D Phase 7): the earthwork pad — a solid between sampled ground and a flat plane.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A height field over `n` x `n` cells of 1 unit, with every cell included and the ground given by
+/// `f(x, y)`.
+template <class F>
+brep::HeightField FieldOf(int n, double flatZ, bool flatIsBottom, F f) {
+  brep::HeightField hf;
+  hf.originX = 0.0;
+  hf.originY = 0.0;
+  hf.cellW = 1.0;
+  hf.cellH = 1.0;
+  hf.cols = n;
+  hf.rows = n;
+  hf.flatZ = flatZ;
+  hf.flatIsBottom = flatIsBottom;
+  hf.nodeZ.resize(static_cast<size_t>(n + 1) * static_cast<size_t>(n + 1));
+  for (int j = 0; j <= n; ++j)
+    for (int i = 0; i <= n; ++i)
+      hf.nodeZ[static_cast<size_t>(j) * static_cast<size_t>(n + 1) + static_cast<size_t>(i)] =
+          f(static_cast<double>(i), static_cast<double>(j));
+  hf.cellIn.assign(static_cast<size_t>(n) * static_cast<size_t>(n), 1);
+  return hf;
+}
+
+}  // namespace
+
+TEST_CASE("A pad under level ground is a box, measured exactly", "[brep][issue150][padsolid]") {
+  Problem why = Problem::Ok;
+  // Ground flat at 10, pad floor at 0, 8 x 8 units of footprint: 640 cubic units, and the answer is
+  // arithmetic rather than a tolerance.
+  brep::Solid s;
+  REQUIRE(brep::MakeHeightFieldSolid(FieldOf(8, 0.0, true, [](double, double) { return 10.0; }), &s, &why));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume == Approx(640.0).epsilon(1e-9));
+  // It is a real solid, not a pile of triangles: closed, consistently wound, and it tessellates.
+  CHECK(brep::Validate(s) == Problem::Ok);
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.02, &t, &why));
+  RequireMeshWatertight(t);
+  RequireWindingMatchesNormals(t);
+  CHECK(TessellatedVolume(t) == Approx(640.0).epsilon(1e-6));
+}
+
+TEST_CASE("A pad under sloping ground measures the prism under the slope", "[brep][issue150][padsolid]") {
+  // Ground rises 1 per unit of x, from 10 at x=0 to 18 at x=8; mean depth over the footprint is 14,
+  // so the volume is 8 * 8 * 14 = 896. A plane is integrated exactly by the two-triangle split, so
+  // this is again arithmetic and not an approximation.
+  Problem why = Problem::Ok;
+  brep::Solid s;
+  REQUIRE(brep::MakeHeightFieldSolid(FieldOf(8, 0.0, true, [](double x, double) { return 10.0 + x; }), &s,
+                                     &why));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume == Approx(896.0).epsilon(1e-9));
+  CHECK(brep::Validate(s) == Problem::Ok);
+}
+
+TEST_CASE("A fill pad is the same solid the other way up", "[brep][issue150][padsolid]") {
+  // Ground at 2, pad surface at 10: the fill is what must be brought in to reach the pad, 8 deep.
+  Problem why = Problem::Ok;
+  brep::Solid s;
+  REQUIRE(brep::MakeHeightFieldSolid(FieldOf(8, 10.0, false, [](double, double) { return 2.0; }), &s, &why));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume == Approx(512.0).epsilon(1e-9));
+  CHECK(brep::Validate(s) == Problem::Ok);
+}
+
+TEST_CASE("Only the marked cells are built, walls and all", "[brep][issue150][padsolid]") {
+  // Half the footprint, so the volume halves and the solid still closes — the walls appear along the
+  // new inside edge, which is what makes an L-shaped or clipped pad possible at all.
+  Problem why = Problem::Ok;
+  brep::HeightField hf = FieldOf(8, 0.0, true, [](double, double) { return 10.0; });
+  for (int cj = 0; cj < hf.rows; ++cj)
+    for (int ci = 0; ci < hf.cols; ++ci)
+      if (ci >= 4)
+        hf.cellIn[static_cast<size_t>(cj) * static_cast<size_t>(hf.cols) + static_cast<size_t>(ci)] = 0;
+  brep::Solid s;
+  REQUIRE(brep::MakeHeightFieldSolid(hf, &s, &why));
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume == Approx(320.0).epsilon(1e-9));
+  CHECK(brep::Validate(s) == Problem::Ok);
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.02, &t, &why));
+  RequireMeshWatertight(t);
+}
+
+TEST_CASE("A pad with no depth anywhere is refused, by name", "[brep][issue150][padsolid]") {
+  // Ground sitting exactly on the pad elevation: there is no earthwork, and an empty solid would be
+  // worse than a refusal (REQ-201).
+  Problem why = Problem::Ok;
+  brep::Solid s;
+  CHECK_FALSE(brep::MakeHeightFieldSolid(FieldOf(4, 5.0, true, [](double, double) { return 5.0; }), &s, &why));
+  CHECK(why == Problem::SlicePlaneMissesSolid);
+}
+
+TEST_CASE("A pad holds up at the size a real site needs", "[brep][issue150][padsolid]") {
+  // 40 x 40 cells is 1,600 columns — about 8,000 faces once tops, bottoms and walls are counted.
+  // Worth asserting rather than assuming: nothing else in this kernel builds a solid with thousands
+  // of planar faces, and the whole pad feature rests on that being a solid the rest of the program
+  // can measure, validate and draw.
+  Problem why = Problem::Ok;
+  brep::Solid s;
+  REQUIRE(brep::MakeHeightFieldSolid(FieldOf(40, 0.0, true, [](double x, double y) {
+                                       return 20.0 + 0.1 * x - 0.05 * y;
+                                     }),
+                                     &s, &why));
+  CHECK(s.faces.size() > 3000u);
+  CHECK(brep::Validate(s) == Problem::Ok);
+  const brep::MassProperties mp = brep::ComputeMassProperties(s);
+  REQUIRE(mp.valid);
+  // Mean ground over the 40 x 40 footprint: 20 + 0.1*20 - 0.05*20 = 21. Volume 1600 * 21 = 33,600.
+  CHECK(mp.volume == Approx(33600.0).epsilon(1e-9));
+  brep::Tessellation t;
+  REQUIRE(brep::Tessellate(s, 0.05, &t, &why));
+  RequireMeshWatertight(t);
+}

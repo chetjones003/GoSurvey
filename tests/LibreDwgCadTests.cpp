@@ -4,6 +4,9 @@
 #include "GsIo.hpp"
 #include "LibreDwg.hpp"
 #include "LibreDwgCad.hpp"
+#include "LibreDwgAnnotContext.hpp"
+#include "LibreDwgMaterial.hpp"
+#include "LibreDwgLights.hpp"
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -41,6 +44,8 @@
 extern "C" {
 #include <dwg.h>
 #include <dwg_api.h>
+
+extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
 }
 
 namespace {
@@ -347,6 +352,39 @@ TEST_CASE("ExportDwgFile writes a built TIN surface as POLYLINE_PFACE (issue #61
   std::vector<std::string> log;
   REQUIRE(ExportDwgFile(st, p.c_str(), log));
   REQUIRE(CountDwgPolylinePface(p.c_str()) == 1);
+}
+
+TEST_CASE("ExportDwgFile survives repeated save with two TIN surfaces (issue #663)",
+          "[dwg][libredwg][issue663]") {
+  HeadlessImGuiScope imgui;
+  ScratchDir dir("dwg-two-tin-stress");
+  const auto p = (dir.path / "two.dwg").string();
+  const std::filesystem::path demo =
+      std::filesystem::path(GOSURVEY_SAMPLES_DIR) / "surface-demo.dwg";
+  REQUIRE(std::filesystem::exists(demo));
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, demo.u8string().c_str(), log));
+  INFO("imported, creating first surface");
+  REQUIRE(CreateSurfaceFromPointGroups(st, "Test EG", {"Existing Ground"}, log) >= 0);
+  EnsureEntityIds(st);
+  RefreshSurfaceDisplayGeometry(st);
+  REQUIRE(CreateSurfaceFromPointGroups(st, "Second", {"Ground + Curb"}, log) >= 0);
+  EnsureEntityIds(st);
+  REQUIRE(st.cadSurfaces.size() >= 2);
+  REQUIRE(st.cadSurfaceAttrs.size() >= 2);
+  REQUIRE(st.cadSurfaceAttrs[0].id != 0);
+  REQUIRE(st.cadSurfaceAttrs[1].id != 0);
+  REQUIRE(st.cadSurfaceAttrs[0].id != st.cadSurfaceAttrs[1].id);
+  REQUIRE(st.cadSurfaces[0].tin != nullptr);
+  REQUIRE(st.cadSurfaces[1].tin != nullptr);
+  for (int i = 0; i < 100; ++i) {
+    CAPTURE(i);
+    RefreshSurfaceDisplayGeometry(st);
+    REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  }
+  // First surface stays POLYLINE_PFACE; the second uses 3DFACE (LibreDWG issue #663 workaround).
+  REQUIRE(CountDwgPolylinePface(p.c_str()) >= 1);
 }
 
 TEST_CASE("DWG export loss summary omits exportable mesh and TIN (issue #611 / #614)",
@@ -4256,6 +4294,200 @@ TEST_CASE("DWG round-trips paper layouts and viewport scales (REQ-170, issue #61
   CHECK(plotB->paperLines.size() == 6);
 }
 
+TEST_CASE("R2018 DWG round-trips paper viewport visual style (REQ-371, issue #624)",
+          "[dwg][libredwg][issue624][req371]") {
+  ScratchDir dir("dwg-vp-visualstyle");
+  const auto p = (dir.path / "vp-vs.dwg").string();
+  AppCommandState st;
+  PaperLayout sheet;
+  sheet.name = "Sheet1";
+  Viewport vpHidden;
+  vpHidden.paperXIn = 1.f;
+  vpHidden.paperYIn = 1.f;
+  vpHidden.paperWIn = 4.f;
+  vpHidden.paperHIn = 3.f;
+  vpHidden.scaleModelPerPaperIn = 120.f;
+  vpHidden.visualStyle = VisualStyle::Hidden;
+  Viewport vpShaded;
+  vpShaded.paperXIn = 6.f;
+  vpShaded.paperYIn = 1.f;
+  vpShaded.paperWIn = 4.f;
+  vpShaded.paperHIn = 3.f;
+  vpShaded.scaleModelPerPaperIn = 120.f;
+  vpShaded.visualStyle = VisualStyle::Shaded;
+  sheet.viewports.push_back(vpHidden);
+  sheet.viewports.push_back(vpShaded);
+  st.paperLayouts.push_back(std::move(sheet));
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  CHECK(CountDwgFixedType(p.c_str(), DWG_TYPE_VISUALSTYLE) >= 1);
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  REQUIRE(in.paperLayouts[0].viewports.size() == 2);
+  CHECK(in.paperLayouts[0].viewports[0].visualStyle == VisualStyle::Hidden);
+  CHECK(in.paperLayouts[0].viewports[1].visualStyle == VisualStyle::Shaded);
+}
+
+TEST_CASE("DWG import applies MATERIAL diffuse to POLYLINE_PFACE host (REQ-372, issue #624)",
+          "[dwg][libredwg][issue624][req372]") {
+  ScratchDir dir("open-mat-pface");
+  const auto p = (dir.path / "mat-pface.dwg").string();
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* m = dwg_model_space_object(dwg);
+  REQUIRE(m != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = m->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(hdr != nullptr);
+
+  const void* matHandle = DwgTestAddDiffuseMaterial(dwg, "RedMat", 0xFF0000u, 1.0);
+  REQUIRE(matHandle != nullptr);
+
+  const dwg_point_3d verts[4] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}, {10.0, 10.0, 0.0}, {0.0, 10.0, 0.0}};
+  const dwg_face faces[2] = {{1, 2, 3, 0}, {1, 3, 4, 0}};
+  Dwg_Entity_POLYLINE_PFACE* pf = dwg_add_POLYLINE_PFACE(hdr, 4, 2, verts, faces);
+  REQUIRE(pf != nullptr);
+  Dwg_Object_Entity* ent = pf->parent;
+  REQUIRE(ent != nullptr);
+  BITCODE_H matRef = static_cast<BITCODE_H>(const_cast<void*>(matHandle));
+  REQUIRE(matRef != nullptr);
+  Dwg_Object* entObj = &dwg->object[ent->objid];
+  ent->material = dwg_add_handleref(dwg, 5, matRef->absolute_ref, entObj);
+
+  EntityAttributes at;
+  DwgMaterialImportBegin();
+  DwgImportApplyEntityMaterial(dwg, ent, &at);
+  CHECK(at.materialDiffuseOverride);
+  CHECK(at.materialDiffuseR == Catch::Approx(1.f).margin(0.02f));
+  CHECK(at.materialDiffuseG == Catch::Approx(0.f).margin(0.02f));
+  CHECK(at.materialDiffuseB == Catch::Approx(0.f).margin(0.02f));
+  CHECK(at.materialName == "RedMat");
+  float shadedRgba[4] = {0.2f, 0.2f, 0.2f, 1.f};
+  ApplyMaterialDiffuseForShaded(at, shadedRgba);
+  CHECK(shadedRgba[0] == Catch::Approx(1.f).margin(0.02f));
+  std::vector<std::string> matLog;
+  DwgMaterialImportAppendLog(matLog);
+  REQUIRE(matLog.size() >= 1);
+  CHECK(matLog[0].find("REQ-372") != std::string::npos);
+
+  LibreDwgLinkBlockEntities(dwg);
+  REQUIRE(dwg_write_file(p.c_str(), dwg) == 0);
+  dwg_free(dwg);
+  std::free(dwg);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, p.c_str(), log));
+  REQUIRE(st.cadMeshes.size() == 1);
+}
+
+TEST_CASE("R2018 export/import round-trips MATERIAL diffuse on mesh (REQ-372, issue #624)",
+          "[dwg][libredwg][issue624][req372][export]") {
+  ScratchDir dir("mat-export-mesh");
+  const auto p = (dir.path / "mat-mesh.dwg").string();
+  AppCommandState st;
+  st.cadMeshes.push_back(MakeUnitSquareMesh());
+  EntityAttributes meshAt;
+  meshAt.materialDiffuseOverride = true;
+  meshAt.materialDiffuseR = 0.2f;
+  meshAt.materialDiffuseG = 0.4f;
+  meshAt.materialDiffuseB = 0.9f;
+  st.cadMeshAttrs.push_back(meshAt);
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  CHECK(CountDwgFixedType(p.c_str(), DWG_TYPE_MATERIAL) >= 1);
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.cadMeshes.size() == 1);
+  REQUIRE(in.cadMeshAttrs.size() == 1);
+  CHECK(in.cadMeshAttrs[0].materialDiffuseOverride);
+  CHECK(in.cadMeshAttrs[0].materialDiffuseG == Catch::Approx(0.4f).margin(0.03f));
+}
+
+TEST_CASE("Mesh MATERIAL diffuse and name persist through GsIo (REQ-372 inc 3, issue #624)",
+          "[gs][gsio][issue624][req372]") {
+  AppCommandState src;
+  src.cadMeshes.push_back(MakeUnitSquareMesh());
+  EntityAttributes at;
+  at.materialDiffuseOverride = true;
+  at.materialDiffuseR = 0.1f;
+  at.materialDiffuseG = 0.5f;
+  at.materialDiffuseB = 0.8f;
+  at.materialName = "SiteConcrete";
+  src.cadMeshAttrs.push_back(at);
+  std::vector<std::string> log;
+  AppCommandState back;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, SerializeGoSurveyJson(src), log));
+  REQUIRE(back.cadMeshes.size() == 1);
+  REQUIRE(back.cadMeshAttrs.size() == 1);
+  CHECK(back.cadMeshAttrs[0].materialDiffuseOverride);
+  CHECK(back.cadMeshAttrs[0].materialName == "SiteConcrete");
+  CHECK(back.cadMeshAttrs[0].materialDiffuseG == Catch::Approx(0.5f).margin(1e-4f));
+}
+
+TEST_CASE("R2018 mesh MATERIAL round-trip; solid material listed in export loss (REQ-372 inc 4)",
+          "[dwg][libredwg][issue624][req372][export]") {
+  ScratchDir dir("mat-inc4-rt");
+  const auto p = (dir.path / "mat-mesh-solid.dwg").string();
+  AppCommandState st;
+  st.cadMeshes.push_back(MakeUnitSquareMesh());
+  EntityAttributes meshAt;
+  meshAt.materialDiffuseOverride = true;
+  meshAt.materialDiffuseR = 0.25f;
+  meshAt.materialDiffuseG = 0.55f;
+  meshAt.materialDiffuseB = 0.15f;
+  meshAt.materialName = "MeshMat";
+  st.cadMeshAttrs.push_back(meshAt);
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 3.0, 3.0, 3.0, &box, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  EntityAttributes solidAt;
+  solidAt.materialDiffuseOverride = true;
+  solidAt.materialDiffuseR = 0.9f;
+  solidAt.materialDiffuseG = 0.1f;
+  solidAt.materialDiffuseB = 0.1f;
+  solidAt.materialName = "SolidMat";
+  st.cadSolidAttrs.push_back(solidAt);
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  bool sawSolidMatLoss = false;
+  for (const DwgExportLoss& loss : ComputeDwgExportLosses(st)) {
+    if (loss.label.find("3DSOLID") != std::string::npos) {
+      sawSolidMatLoss = true;
+      CHECK(loss.count == 1);
+    }
+  }
+  CHECK(sawSolidMatLoss);
+  AppCommandState meshExport;
+  meshExport.cadMeshes = st.cadMeshes;
+  meshExport.cadMeshAttrs = st.cadMeshAttrs;
+  meshExport.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(meshExport, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.cadMeshes.size() == 1);
+  CHECK(in.cadMeshAttrs[0].materialDiffuseOverride);
+  CHECK(in.cadMeshAttrs[0].materialDiffuseG == Catch::Approx(0.55f).margin(0.04f));
+}
+
+TEST_CASE("R2018 DWG round-trips model-space visual style on VPORT *Active (REQ-371, issue #624)",
+          "[dwg][libredwg][issue624][req371][model]") {
+  ScratchDir dir("dwg-model-vs");
+  const auto p = (dir.path / "model-vs.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.viewportVisualStyle = VisualStyle::Hidden;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  CHECK(in.viewportVisualStyle == VisualStyle::Hidden);
+}
+
 // REQ-170, issue #613: SPLINE and trimmed ELLIPSE import as polylines instead of being skipped.
 TEST_CASE("DWG import maps SPLINE and trimmed ELLIPSE to polylines (REQ-170, issue #613)",
           "[dwg][libredwg][req170][issue613]") {
@@ -4378,4 +4610,425 @@ TEST_CASE("DWG import maps POLYLINE_PFACE to CadMesh (REQ-170, issue #613)",
   REQUIRE(st.cadMeshes.size() == 1);
   CHECK(st.cadMeshes[0]->triangleCount() == 2);
   CHECK(st.cadMeshes[0]->vertexCount() == 4);
+}
+
+TEST_CASE("Annotative MTEXT export writes annotation context objects (REQ-384 inc 2, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  ScratchDir dir("anno-mtext-context");
+  const auto p = (dir.path / "anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale scale1;
+  scale1.name = "1:1";
+  scale1.paperUnits = 1.f;
+  scale1.drawingUnits = 1.f;
+  CadAnnotationScale scale2;
+  scale2.name = "1:20";
+  scale2.paperUnits = 1.f;
+  scale2.drawingUnits = 20.f;
+  st.annotationScales.push_back(scale1);
+  st.annotationScales.push_back(scale2);
+  st.currentAnnotationScaleIndex = 0;
+  CadAnnotation m{};
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.annotative = true;
+  m.text = "Scale me";
+  m.insX = 1.f;
+  m.insY = 2.f;
+  m.boxMinX = 0.f;
+  m.boxMaxX = 10.f;
+  m.boxMinY = 0.f;
+  m.boxMaxY = 2.f;
+  st.cadAnnotations.push_back(std::move(m));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  CHECK(DwgAnnotContextCountObjects(&dwg) >= 3);
+  dwg_free(&dwg);
+}
+
+TEST_CASE("Annotative TEXT, INSERT, and DIMENSION export annotation context (REQ-384 inc 3, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  ScratchDir dir("anno-text-blk-dim-context");
+  const auto p = (dir.path / "anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale scale1;
+  scale1.name = "1:1";
+  scale1.paperUnits = 1.f;
+  scale1.drawingUnits = 1.f;
+  CadAnnotationScale scale2;
+  scale2.name = "1:20";
+  scale2.paperUnits = 1.f;
+  scale2.drawingUnits = 20.f;
+  st.annotationScales.push_back(scale1);
+  st.annotationScales.push_back(scale2);
+  st.currentAnnotationScaleIndex = 0;
+
+  CadAnnotation t{};
+  t.kind = CadAnnotation::Kind::Text;
+  t.annotative = true;
+  t.insX = 0.f;
+  t.insY = 0.f;
+  t.plottedHeightInches = 0.125f;
+  t.text = "Label";
+  st.cadAnnotations.push_back(std::move(t));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  CadBlockDefinition def;
+  def.name = "PIN";
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(std::move(def));
+  CadBlockRef ref;
+  ref.defName = "PIN";
+  ref.annotative = true;
+  ref.xf.x = 5.f;
+  ref.xf.y = 5.f;
+  st.cadBlockRefs.push_back(std::move(ref));
+  st.cadBlockRefAttrs.push_back(EntityAttributes{});
+
+  CadAnnotation dim{};
+  dim.kind = CadAnnotation::Kind::DimAligned;
+  dim.annotative = true;
+  dim.dimExt1X = 0.f;
+  dim.dimExt1Y = 0.f;
+  dim.dimExt2X = 10.f;
+  dim.dimExt2Y = 0.f;
+  dim.dimSignedOffset = 2.f;
+  dim.insX = 5.f;
+  dim.insY = 2.f;
+  DimensionStyles::BakeTextOntoDimension(dim, st.activeDimensionStyle);
+  AngleDisplaySettings angleSet{};
+  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle.unitPrecision, angleSet);
+  st.cadAnnotations.push_back(std::move(dim));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int textCtx = 0;
+  int blkCtx = 0;
+  int aldimCtx = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    switch (dwg.object[i].fixedtype) {
+    case DWG_TYPE_TEXTOBJECTCONTEXTDATA:
+      ++textCtx;
+      break;
+    case DWG_TYPE_BLKREFOBJECTCONTEXTDATA:
+      ++blkCtx;
+      break;
+    case DWG_TYPE_ALDIMOBJECTCONTEXTDATA:
+      ++aldimCtx;
+      break;
+    default:
+      break;
+    }
+  }
+  CHECK(textCtx >= 2);
+  CHECK(blkCtx >= 2);
+  CHECK(aldimCtx >= 2);
+  CHECK(DwgAnnotContextCountObjects(&dwg) >= 9);
+  dwg_free(&dwg);
+}
+
+TEST_CASE("Annotative MULTILEADER and HATCH export annotation context (REQ-384 inc 4, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  ScratchDir dir("anno-ml-hatch-context");
+  const auto p = (dir.path / "anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale scale1;
+  scale1.name = "1:1";
+  scale1.paperUnits = 1.f;
+  scale1.drawingUnits = 1.f;
+  CadAnnotationScale scale2;
+  scale2.name = "1:20";
+  scale2.paperUnits = 1.f;
+  scale2.drawingUnits = 20.f;
+  st.annotationScales.push_back(scale1);
+  st.annotationScales.push_back(scale2);
+  st.currentAnnotationScaleIndex = 0;
+
+  CadMultileader ml{};
+  ml.annotative = true;
+  ml.pathXyz = {0.f, 0.f, 0.f, 12.f, 0.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.insX = 12.f;
+  ml.label.insY = 0.f;
+  ml.label.text = "Callout";
+  ml.label.boxMinX = 12.f;
+  ml.label.boxMinY = -1.f;
+  ml.label.boxMaxX = 24.f;
+  ml.label.boxMaxY = 1.f;
+  st.cadMultileaders.push_back(std::move(ml));
+  st.cadMultileaderAttrs.push_back(EntityAttributes{});
+
+  CadFilledRegion fr = SquareHatchRegion(0.f, 0.f, 10.f);
+  fr.annotative = true;
+  st.cadFilledRegions.push_back(std::move(fr));
+  st.cadFilledRegionAttrs.push_back(EntityAttributes{});
+
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int mleaderCtx = 0;
+  int hatchScaleCtx = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].fixedtype == DWG_TYPE_MLEADEROBJECTCONTEXTDATA)
+      ++mleaderCtx;
+    if (dwg.object[i].fixedtype == DWG_TYPE_ANNOTSCALEOBJECTCONTEXTDATA)
+      ++hatchScaleCtx;
+  }
+  CHECK(mleaderCtx >= 2);
+  CHECK(hatchScaleCtx >= 2);
+  dwg_free(&dwg);
+}
+
+TEST_CASE("DWG import reports annotation context and keeps annotative MTEXT (REQ-384 inc 4, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  ScratchDir dir("anno-mtext-import-merge");
+  const auto p = (dir.path / "anno.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale scale1;
+  scale1.name = "1:1";
+  scale1.paperUnits = 1.f;
+  scale1.drawingUnits = 1.f;
+  CadAnnotationScale scale2;
+  scale2.name = "1:20";
+  scale2.paperUnits = 1.f;
+  scale2.drawingUnits = 20.f;
+  st.annotationScales.push_back(scale1);
+  st.annotationScales.push_back(scale2);
+  st.currentAnnotationScaleIndex = 0;
+  CadAnnotation m{};
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.annotative = true;
+  m.text = "Merged";
+  m.insX = 3.f;
+  m.insY = 4.f;
+  m.boxMinX = 3.f;
+  m.boxMaxX = 13.f;
+  m.boxMinY = 3.f;
+  m.boxMaxY = 5.f;
+  st.cadAnnotations.push_back(std::move(m));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  bool sawContextLog = false;
+  for (const std::string& line : log) {
+    if (line.find("annotation context") != std::string::npos)
+      sawContextLog = true;
+  }
+  CHECK(sawContextLog);
+  REQUIRE(in.cadAnnotations.size() == 1);
+  CHECK(in.cadAnnotations[0].annotative);
+  CHECK(in.cadAnnotations[0].text == "Merged");
+}
+
+TEST_CASE("R2018 export re-read preserves MTEXT and DIMENSION annotation context (REQ-384 inc 5, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  ScratchDir dir("anno-mtext-dim-ctx-rt");
+  const auto p = (dir.path / "roundtrip.dwg").string();
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadAnnotationScale scale1;
+  scale1.name = "1:1";
+  scale1.paperUnits = 1.f;
+  scale1.drawingUnits = 1.f;
+  CadAnnotationScale scale2;
+  scale2.name = "1:20";
+  scale2.paperUnits = 1.f;
+  scale2.drawingUnits = 20.f;
+  st.annotationScales.push_back(scale1);
+  st.annotationScales.push_back(scale2);
+  st.currentAnnotationScaleIndex = 0;
+
+  CadAnnotation m{};
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.annotative = true;
+  m.text = "Scale note";
+  m.insX = 0.f;
+  m.insY = 0.f;
+  m.boxMinX = 0.f;
+  m.boxMaxX = 12.f;
+  m.boxMinY = -1.f;
+  m.boxMaxY = 1.f;
+  st.cadAnnotations.push_back(std::move(m));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  CadAnnotation dim{};
+  dim.kind = CadAnnotation::Kind::DimAligned;
+  dim.annotative = true;
+  dim.dimExt1X = 0.f;
+  dim.dimExt1Y = 0.f;
+  dim.dimExt2X = 15.f;
+  dim.dimExt2Y = 0.f;
+  dim.dimSignedOffset = 3.f;
+  dim.insX = 7.f;
+  dim.insY = 3.f;
+  DimensionStyles::BakeTextOntoDimension(dim, st.activeDimensionStyle);
+  AngleDisplaySettings angleSet{};
+  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle.unitPrecision, angleSet);
+  st.cadAnnotations.push_back(std::move(dim));
+  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int mtextCtx = 0;
+  int aldimCtx = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    if (dwg.object[i].fixedtype == DWG_TYPE_MTEXTOBJECTCONTEXTDATA)
+      ++mtextCtx;
+    if (dwg.object[i].fixedtype == DWG_TYPE_ALDIMOBJECTCONTEXTDATA)
+      ++aldimCtx;
+  }
+  CHECK(mtextCtx >= 2);
+  CHECK(aldimCtx >= 2);
+  CHECK(DwgAnnotContextCountObjects(&dwg) >= 6);
+  dwg_free(&dwg);
+}
+
+TEST_CASE("DWG export loss names annotative hatch context gap (REQ-384 inc 5, issue #688)",
+          "[dwg][libredwg][issue688][req384][issue614]") {
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  CadFilledRegion fr = SquareHatchRegion(0.f, 0.f, 8.f);
+  fr.annotative = true;
+  st.cadFilledRegions.push_back(std::move(fr));
+  bool sawHatchContextLoss = false;
+  for (const DwgExportLoss& l : ComputeDwgExportLosses(st)) {
+    if (l.label.find("hatch") != std::string::npos && l.label.find("context") != std::string::npos)
+      sawHatchContextLoss = true;
+  }
+  CHECK(sawHatchContextLoss);
+}
+
+TEST_CASE("Annotation context scan and import log (REQ-384 inc 1, issue #688)",
+          "[dwg][libredwg][issue688][req384]") {
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  REQUIRE(DwgTestAddBareMtextContextObject(dwg));
+  CHECK(DwgAnnotContextCountObjects(dwg) >= 1);
+  DwgAnnotContextImportBegin();
+  DwgAnnotContextImportScan(dwg);
+  std::vector<std::string> log;
+  DwgAnnotContextImportAppendLog(log);
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back().find("annotation context") != std::string::npos);
+  dwg_free(dwg);
+  std::free(dwg);
+}
+
+TEST_CASE("DWG LIGHT export from preserved state (REQ-385, issue #624)",
+          "[dwg][libredwg][issue624][req385]") {
+  AppCommandState st;
+  CadDwgImportedLight l;
+  l.name = "KeyLight";
+  l.type = 2;
+  l.on = true;
+  l.posX = 10.0;
+  l.posY = 20.0;
+  l.posZ = 30.0;
+  l.targetX = 10.0;
+  l.targetY = 21.0;
+  l.targetZ = 30.0;
+  st.dwgImportedLights.push_back(l);
+
+  ScratchDir dir("light-export");
+  const auto out = (dir.path / "lights-out.dwg").string();
+  st.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, out.c_str(), log, /*asDxf=*/false));
+  bool sawLightLog = false;
+  for (const std::string& line : log) {
+    if (line.find("LIGHT entit") != std::string::npos)
+      sawLightLog = true;
+  }
+  CHECK(sawLightLog);
+
+  Dwg_Data reread{};
+  REQUIRE(dwg_read_file(out.c_str(), &reread) < DWG_ERR_CRITICAL);
+  CHECK(DwgLightListCountObjects(&reread) >= 1);
+  dwg_free(&reread);
+}
+
+TEST_CASE("DWG LIGHTLIST import capture and export round-trip (REQ-386, issue #715)",
+          "[dwg][libredwg][issue715][req386]") {
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* mspace = dwg_model_space_object(dwg);
+  REQUIRE(mspace != nullptr);
+  REQUIRE(mspace->tio.object != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = mspace->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(DwgTestAddPointLight(dwg, static_cast<void*>(hdr), "KeyLight", 1.0, 2.0, 3.0));
+  REQUIRE(DwgTestAddLightListForLights(dwg, "Default"));
+  REQUIRE(DwgLightListCountObjects(dwg) >= 1);
+  AppCommandState imported;
+  DwgLightImportScanForTests(dwg, imported);
+  CHECK(imported.dwgImportedLightListPresent);
+  REQUIRE(imported.dwgImportedLights.size() == 1);
+  REQUIRE(imported.dwgImportedLightList.entries.size() == 1);
+
+  ScratchDir dir("lightlist-export");
+  const auto out = (dir.path / "lightlist-out.dwg").string();
+  imported.dwgExportVersion = DwgSaveVersion::R2018;
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(imported, out.c_str(), log, /*asDxf=*/false));
+
+  Dwg_Data reread{};
+  REQUIRE(dwg_read_file(out.c_str(), &reread) < DWG_ERR_CRITICAL);
+  CHECK(DwgLightListCountObjects(&reread) >= 1);
+  CHECK(DwgLightListRegistryEntryCount(&reread) >= 1);
+  dwg_free(&reread);
+  dwg_free(dwg);
+  std::free(dwg);
+}
+
+TEST_CASE("Hand-built LIGHT helper encodes in memory (REQ-385, issue #624)",
+          "[dwg][libredwg][issue624][req385]") {
+  Dwg_Data* dwg = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(dwg != nullptr);
+  Dwg_Object* mspace = dwg_model_space_object(dwg);
+  REQUIRE(mspace != nullptr);
+  REQUIRE(mspace->tio.object != nullptr);
+  Dwg_Object_BLOCK_HEADER* hdr = mspace->tio.object->tio.BLOCK_HEADER;
+  REQUIRE(DwgTestAddPointLight(dwg, static_cast<void*>(hdr), "KeyLight", 1.0, 2.0, 3.0));
+  CHECK(DwgLightCountEntities(dwg) >= 1);
+  dwg_free(dwg);
+  std::free(dwg);
+}
+
+TEST_CASE("DWG export loss names LIGHT/SUN below R2010 (REQ-385, issue #624)",
+          "[dwg][libredwg][issue624][req385][issue614]") {
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2000;
+  CadDwgImportedLight l;
+  l.name = "L1";
+  st.dwgImportedLights.push_back(l);
+  st.dwgImportedSunPresent = true;
+  st.dwgImportedLightListPresent = true;
+  bool sawLoss = false;
+  for (const DwgExportLoss& loss : ComputeDwgExportLosses(st)) {
+    if (loss.label.find("LIGHT/SUN") != std::string::npos)
+      sawLoss = true;
+  }
+  CHECK(sawLoss);
+}
+
+TEST_CASE("DWG export loss counts LIGHTLIST below R2010 (REQ-386, issue #715)",
+          "[dwg][libredwg][issue715][req386][issue614]") {
+  AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2000;
+  st.dwgImportedLightListPresent = true;
+  CHECK(DwgExportCountLightSunLosses(st) >= 1);
 }

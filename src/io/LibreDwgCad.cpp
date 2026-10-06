@@ -1,10 +1,15 @@
 #include "LibreDwgCad.hpp"
+#include "ProjectPoints.hpp"
 
 #include "AcisSatParser.hpp"
 #include "CadCommands.hpp"
 #include "CadField.hpp"
 #include "LibreDwgField.hpp"
 #include "LibreDwgDynamicBlock.hpp"
+#include "LibreDwgAnnotContext.hpp"
+#include "LibreDwgLights.hpp"
+#include "LibreDwgMaterial.hpp"
+#include "LibreDwgVisualStyle.hpp"
 #include "util/cadpiperun.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadDimGeom.hpp"
@@ -286,6 +291,14 @@ void NoteSkip(std::unordered_map<std::string, int>* hist, const char* name) {
   ++(*hist)[name];
 }
 
+static void PushImportedMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* owner,
+                             std::shared_ptr<CadMesh> mesh, EntityAttributes at) {
+  if (dwg != nullptr && owner != nullptr)
+    DwgImportApplyEntityMaterial(dwg, owner, &at);
+  st.cadMeshes.push_back(std::move(mesh));
+  st.cadMeshAttrs.push_back(at);
+}
+
 void LocalLine(AppCommandState& st, double x0, double y0, double z0, double x1, double y1, double z1,
                const EntityAttributes& at) {
   st.userLinesFlat.push_back(x0 - st.worldDocumentOriginX);
@@ -376,9 +389,66 @@ void LocalPolyline(AppCommandState& st, const std::vector<double>& xyz, bool clo
 
 void ImportAnnotativeVisibilityFromEntityEed(const Dwg_Object_Entity* ent, std::vector<std::string>* out);
 
+static void MergeDefaultMtextContextIntoAnnotation(const Dwg_Data* dwg, const Dwg_Object_Entity* ent,
+                                                   const Xf2& xf, AppCommandState& st,
+                                                   CadAnnotation* a) {
+  assert(dwg != nullptr && ent != nullptr && a != nullptr);
+  if (!a->annotative)
+    return;
+  const Dwg_Object* ctxObj = DwgImportResolveDefaultContextObject(dwg, ent);
+  if (ctxObj == nullptr || ctxObj->fixedtype != DWG_TYPE_MTEXTOBJECTCONTEXTDATA ||
+      ctxObj->tio.object == nullptr)
+    return;
+  const Dwg_Object_MTEXTOBJECTCONTEXTDATA* ctx = ctxObj->tio.object->tio.MTEXTOBJECTCONTEXTDATA;
+  if (ctx == nullptr)
+    return;
+  double wx = 0.0;
+  double wy = 0.0;
+  xf.apply(ctx->ins_pt.x, ctx->ins_pt.y, &wx, &wy);
+  a->insX = static_cast<float>(wx - st.worldDocumentOriginX);
+  a->insY = static_cast<float>(wy - st.worldDocumentOriginY);
+  a->insZ = static_cast<float>(ctx->ins_pt.z);
+  const double th = ctx->rect_height > 1e-9 ? ctx->rect_height : ctx->extents_height;
+  const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
+  if (th > 1e-9)
+    a->plottedHeightInches = static_cast<float>(th / mup);
+  const double rot = std::atan2(ctx->x_axis_dir.y, ctx->x_axis_dir.x);
+  a->rotationRad = static_cast<float>(rot + xf.ang);
+  const double bw = std::max(ctx->rect_width, ctx->extents_width);
+  if (bw > 1e-6) {
+    a->boxMinX = a->insX;
+    a->boxMaxX = a->insX + static_cast<float>(bw);
+    a->boxMinY = a->insY - static_cast<float>(th > 1e-9 ? th : 0.18);
+    a->boxMaxY = a->insY + static_cast<float>(th > 1e-9 ? th * 0.2 : 0.18);
+  }
+  DwgImportNoteDefaultContextMerged();
+}
+
+static void MergeDefaultTextContextIntoAnnotation(const Dwg_Data* dwg, const Dwg_Object_Entity* ent,
+                                                  const Xf2& xf, AppCommandState& st, CadAnnotation* a) {
+  assert(dwg != nullptr && ent != nullptr && a != nullptr);
+  if (!a->annotative)
+    return;
+  const Dwg_Object* ctxObj = DwgImportResolveDefaultContextObject(dwg, ent);
+  if (ctxObj == nullptr || ctxObj->fixedtype != DWG_TYPE_TEXTOBJECTCONTEXTDATA ||
+      ctxObj->tio.object == nullptr)
+    return;
+  const Dwg_Object_TEXTOBJECTCONTEXTDATA* ctx = ctxObj->tio.object->tio.TEXTOBJECTCONTEXTDATA;
+  if (ctx == nullptr)
+    return;
+  double wx = 0.0;
+  double wy = 0.0;
+  xf.apply(ctx->ins_pt.x, ctx->ins_pt.y, &wx, &wy);
+  a->insX = static_cast<float>(wx - st.worldDocumentOriginX);
+  a->insY = static_cast<float>(wy - st.worldDocumentOriginY);
+  a->rotationRad = static_cast<float>(ctx->rotation + xf.ang);
+  DwgImportNoteDefaultContextMerged();
+}
+
 void LocalText(AppCommandState& st, double x, double y, double z, double height, double rotRad,
                const std::string& text, CadAnnotation::Kind kind, const EntityAttributes& at,
-               bool annotative = false, const Dwg_Object_Entity* ownerEnt = nullptr) {
+               bool annotative = false, const Dwg_Object_Entity* ownerEnt = nullptr,
+               const Dwg_Data* dwg = nullptr, const Xf2* xf = nullptr) {
   CadAnnotation a{};
   a.kind = kind;
   a.insX = x - st.worldDocumentOriginX;
@@ -393,6 +463,13 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
     ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &a.annotativeVisibleScaleNames);
   st.cadAnnotations.push_back(std::move(a));
   st.cadAnnotationAttrs.push_back(at);
+  if (ownerEnt != nullptr && dwg != nullptr && xf != nullptr) {
+    CadAnnotation* back = &st.cadAnnotations.back();
+    if (kind == CadAnnotation::Kind::Mtext)
+      MergeDefaultMtextContextIntoAnnotation(dwg, ownerEnt, *xf, st, back);
+    else if (kind == CadAnnotation::Kind::Text)
+      MergeDefaultTextContextIntoAnnotation(dwg, ownerEnt, *xf, st, back);
+  }
 }
 
 // REQ-170, issue #613: no native spline — tessellate into a polyline (fit points or control points).
@@ -506,8 +583,8 @@ static bool Import2DSolidOrTrace(AppCommandState& st, const BITCODE_2RD& c1, con
   return true;
 }
 
-static bool Import3DFaceAsMesh(AppCommandState& st, const Dwg_Entity__3DFACE* f, const Xf2& xf,
-                               const EntityAttributes& at) {
+static bool Import3DFaceAsMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object_Entity* owner,
+                               const Dwg_Entity__3DFACE* f, const Xf2& xf, const EntityAttributes& at) {
   if (f == nullptr)
     return false;
   auto same3d = [](const BITCODE_3BD& a, const BITCODE_3BD& b) {
@@ -541,8 +618,7 @@ static bool Import3DFaceAsMesh(AppCommandState& st, const Dwg_Entity__3DFACE* f,
   part.indexBegin = 0;
   part.indexCount = static_cast<int>(mesh->indices.size());
   mesh->parts.push_back(part);
-  st.cadMeshes.push_back(std::move(mesh));
-  st.cadMeshAttrs.push_back(at);
+  PushImportedMesh(st, dwg, owner, std::move(mesh), at);
   return true;
 }
 
@@ -626,8 +702,7 @@ static bool ImportPolylineMesh(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* o
   part.indexBegin = 0;
   part.indexCount = static_cast<int>(mesh->indices.size());
   mesh->parts.push_back(part);
-  st.cadMeshes.push_back(std::move(mesh));
-  st.cadMeshAttrs.push_back(at);
+  PushImportedMesh(st, dwg, obj != nullptr ? obj->tio.entity : nullptr, std::move(mesh), at);
   return true;
 }
 
@@ -757,8 +832,7 @@ static bool ImportPolylinePFace(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* 
   part.indexBegin = 0;
   part.indexCount = static_cast<int>(mesh->indices.size());
   mesh->parts.push_back(part);
-  st.cadMeshes.push_back(std::move(mesh));
-  st.cadMeshAttrs.push_back(at);
+  PushImportedMesh(st, dwg, obj != nullptr ? obj->tio.entity : nullptr, std::move(mesh), at);
   return true;
 }
 
@@ -931,8 +1005,8 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
 /// payload — SAT (v1, text) or SAB (v2+, binary), per `version` (DXF 70). This importer supports SAT
 /// only (issue #301 tracks SAB); a SAB stream, or anything AcisSatParser refuses, is reported through
 /// the same `NoteSkip` mechanism an unrecognized entity type already uses (REQ-201: never silent).
-void ImportAcisSolid(AppCommandState& st, const Dwg_Data* dwg, const Dwg_Entity__3DSOLID* sol,
-                     const Xf2& xf, const EntityAttributes& at,
+void ImportAcisSolid(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object_Entity* ownerEnt,
+                     const Dwg_Entity__3DSOLID* sol, const Xf2& xf, const EntityAttributes& at,
                      std::unordered_map<std::string, int>* skipHist) {
   if (sol->acis_empty || sol->acis_data == nullptr) {
     // GitHub issue #369 / D-2026-09-10-b: name a Civil 3D parts-catalog placeholder for what it
@@ -983,7 +1057,10 @@ void ImportAcisSolid(AppCommandState& st, const Dwg_Data* dwg, const Dwg_Entity_
   const brep::Solid localized =
       brep::Translate(r.solid, ray3d::Vec3{-st.worldDocumentOriginX, -st.worldDocumentOriginY, 0.0});
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(localized));
-  st.cadSolidAttrs.push_back(at);
+  EntityAttributes solidAt = at;
+  if (ownerEnt != nullptr && dwg != nullptr)
+    DwgImportApplyEntityMaterial(dwg, ownerEnt, &solidAt);
+  st.cadSolidAttrs.push_back(solidAt);
 }
 
 [[nodiscard]] bool DwgBlockDefNameIsImportable(std::string_view name) {
@@ -1829,7 +1906,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     xf.apply(e->ins_pt.x, e->ins_pt.y, &x, &y);
     const bool annotative = ImportEedMarksAnnotative(dwg, ent);
     LocalText(st, x, y, e->elevation, e->height, e->rotation + xf.ang, FromT(dwg, e->text_value),
-              CadAnnotation::Kind::Text, at, annotative, ent);
+              CadAnnotation::Kind::Text, at, annotative, ent, dwg, &xf);
     return;
   }
   if (ty == DWG_TYPE_MTEXT && ent->tio.MTEXT != nullptr) {
@@ -1841,7 +1918,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
         ImportEedMarksAnnotative(dwg, ent) ||
         (dwg->header.version >= R_2018 && e->is_not_annotative == 0);
     LocalText(st, x, y, e->ins_pt.z, e->text_height, rot + xf.ang, FromT(dwg, e->text),
-              CadAnnotation::Kind::Mtext, at, annotative, ent);
+              CadAnnotation::Kind::Mtext, at, annotative, ent, dwg, &xf);
     return;
   }
   if (ty == DWG_TYPE_SPLINE && ent->tio.SPLINE != nullptr) {
@@ -1868,7 +1945,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE__3DFACE && ent->tio._3DFACE != nullptr) {
-    if (Import3DFaceAsMesh(st, ent->tio._3DFACE, xf, at))
+    if (Import3DFaceAsMesh(st, dwg, ent, ent->tio._3DFACE, xf, at))
       return;
     NoteSkip(skipHist, "3DFACE(degenerate)");
     return;
@@ -2028,7 +2105,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE__3DSOLID && ent->tio._3DSOLID != nullptr) {
-    ImportAcisSolid(st, dwg, ent->tio._3DSOLID, xf, at, skipHist);
+    ImportAcisSolid(st, dwg, ent, ent->tio._3DSOLID, xf, at, skipHist);
     return;
   }
   if (ty == DWG_TYPE_SEQEND || ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_ENDBLK)
@@ -2252,6 +2329,7 @@ struct TableWriter {
   Dwg_Data* dwg = nullptr;
   bool useTrueColor = false;  // R2004+ entity ENC features (#615, #620)
   const AppCommandState* layerState = nullptr;
+  DwgExportAnnotContext* annotContext = nullptr;
   // Store LibreDWG object indices, not Dwg_Object* — dwg_add_* can reallocate dwg->object and
   // invalidate raw pointers cached from an earlier BuildLayerTable / EnsureLtype call.
   std::unordered_map<std::string, BITCODE_BL> layers;  // lower(name) -> parent objid
@@ -2568,6 +2646,9 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
             e->is_not_annotative = 1;
           if (an.annotative && e->parent != nullptr)
             WriteAnnotativeEntityEed(tw.dwg, e->parent, &an.annotativeVisibleScaleNames);
+          if (an.annotative && e->parent != nullptr && tw.annotContext != nullptr &&
+              tw.layerState != nullptr)
+            DwgExportAttachMtextAnnotationContext(tw.annotContext, e->parent, e, an, *tw.layerState);
         }
         apply(e->parent, at);
       }
@@ -2577,6 +2658,8 @@ void WriteBlockDefinitionGeometry(Dwg_Object_BLOCK_HEADER* blkhdr,
         e->rotation = static_cast<double>(an.rotationRad);
         if (tw.dwg != nullptr && tw.dwg->header.version >= R_2018 && an.annotative && e->parent != nullptr)
           WriteAnnotativeEntityEed(tw.dwg, e->parent, &an.annotativeVisibleScaleNames);
+        if (an.annotative && e->parent != nullptr && tw.annotContext != nullptr && tw.layerState != nullptr)
+          DwgExportAttachTextAnnotationContext(tw.annotContext, e->parent, e, an, *tw.layerState);
         apply(e->parent, at);
       }
     }
@@ -2917,12 +3000,48 @@ constexpr unsigned kMaxPfaceFaces = 5000000u;
 
 bool WriteIndexedTriangles(int vertexCount, const std::function<void(int, dwg_point_3d*)>& fillVertex,
                            const std::vector<std::uint32_t>& indices, Dwg_Object_BLOCK_HEADER* hdr,
-                           TableWriter* tw, const EntityAttributes* attr) {
+                           TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                           DwgExportMaterialContext* matCtx, const AppCommandState* st, float defR,
+                           float defG, float defB, bool asPolylinePface) {
   if (hdr == nullptr || vertexCount < 3)
     return false;
   const size_t nTri = indices.size() / 3;
   if (nTri < 1 || nTri > kMaxPfaceFaces || static_cast<unsigned>(vertexCount) > kMaxPfaceVerts)
     return false;
+
+  const auto applyEntity = [&](Dwg_Object_Entity* entParent) {
+    if (entParent == nullptr)
+      return;
+    if (tw != nullptr && attr != nullptr)
+      tw->Apply(entParent, *attr);
+    if (dwg != nullptr && matCtx != nullptr && st != nullptr && attr != nullptr)
+      DwgExportApplyEntityMaterial(dwg, matCtx, *st, entParent, attr, defR, defG, defB);
+  };
+
+  if (!asPolylinePface) {
+    // LibreDWG can SIGSEGV on a second POLYLINE_PFACE in the same block (issue #663). Additional
+    // TIN/mesh exports fall back to one 3DFACE per triangle; the GoSurvey JSON trailer is unchanged.
+    bool wrote = false;
+    for (size_t t = 0; t < nTri; ++t) {
+      const std::uint32_t a = indices[t * 3 + 0];
+      const std::uint32_t b = indices[t * 3 + 1];
+      const std::uint32_t c = indices[t * 3 + 2];
+      if (a >= static_cast<std::uint32_t>(vertexCount) || b >= static_cast<std::uint32_t>(vertexCount) ||
+          c >= static_cast<std::uint32_t>(vertexCount))
+        return false;
+      dwg_point_3d p1{}, p2{}, p3{};
+      fillVertex(static_cast<int>(a), &p1);
+      fillVertex(static_cast<int>(b), &p2);
+      fillVertex(static_cast<int>(c), &p3);
+      Dwg_Entity__3DFACE* face = dwg_add_3DFACE(hdr, &p1, &p2, &p3, nullptr);
+      if (face == nullptr || face->parent == nullptr)
+        return false;
+      applyEntity(face->parent);
+      wrote = true;
+    }
+    return wrote;
+  }
+
   std::vector<dwg_point_3d> verts(static_cast<size_t>(vertexCount));
   for (int vi = 0; vi < vertexCount; ++vi)
     fillVertex(vi, &verts[static_cast<size_t>(vi)]);
@@ -2944,16 +3063,24 @@ bool WriteIndexedTriangles(int vertexCount, const std::function<void(int, dwg_po
                              verts.data(), faces.data());
   if (pf == nullptr || pf->parent == nullptr)
     return false;
-  if (tw != nullptr && attr != nullptr)
-    tw->Apply(pf->parent, *attr);
+  applyEntity(pf->parent);
   return true;
 }
 
 bool WriteCadMesh(const AppCommandState& st, const CadMesh& mesh, Dwg_Object_BLOCK_HEADER* hdr,
-                  TableWriter* tw, const EntityAttributes* attr) {
+                  TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                  DwgExportMaterialContext* matCtx, bool asPolylinePface) {
   const int nv = mesh.vertexCount();
   if (nv < 3 || mesh.indices.size() < 3)
     return false;
+  float defR = 0.78f;
+  float defG = 0.78f;
+  float defB = 0.78f;
+  if (!mesh.parts.empty()) {
+    defR = mesh.parts[0].r;
+    defG = mesh.parts[0].g;
+    defB = mesh.parts[0].b;
+  }
   return WriteIndexedTriangles(
       nv,
       [&](int vi, dwg_point_3d* out) {
@@ -2962,11 +3089,12 @@ bool WriteCadMesh(const AppCommandState& st, const CadMesh& mesh, Dwg_Object_BLO
                                                      mesh.vertsXyz[o + 2]},
                                      out);
       },
-      mesh.indices, hdr, tw, attr);
+      mesh.indices, hdr, tw, attr, dwg, matCtx, &st, defR, defG, defB, asPolylinePface);
 }
 
 bool WriteCadSurfaceTin(const AppCommandState& st, const CadSurface& surface, Dwg_Object_BLOCK_HEADER* hdr,
-                        TableWriter* tw, const EntityAttributes* attr) {
+                        TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                        DwgExportMaterialContext* matCtx, bool asPolylinePface) {
   if (surface.tin == nullptr)
     return false;
   const CadTin& tin = *surface.tin;
@@ -2981,7 +3109,7 @@ bool WriteCadSurfaceTin(const AppCommandState& st, const CadSurface& surface, Dw
                                                      tin.vertsXyz[o + 2]},
                                      out);
       },
-      tin.indices, hdr, tw, attr);
+      tin.indices, hdr, tw, attr, dwg, matCtx, &st, 0.42f, 0.62f, 0.78f, asPolylinePface);
 }
 
 size_t CountSkippedMeshes(const AppCommandState& st) {
@@ -3240,7 +3368,8 @@ Dwg_Entity__3DSOLID* WriteRecipeSolid(Dwg_Object_BLOCK_HEADER* hdr, const AppCom
 }
 
 bool WriteSolidEntity(const AppCommandState& st, const brep::Solid& solid, Dwg_Object_BLOCK_HEADER* hdr,
-                      TableWriter* tw, const EntityAttributes* attr) {
+                      TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                      DwgExportMaterialContext* matCtx) {
   if (hdr == nullptr)
     return false;
   Dwg_Entity__3DSOLID* ent = WriteRecipeSolid(hdr, st, solid.recipe);
@@ -3254,6 +3383,10 @@ bool WriteSolidEntity(const AppCommandState& st, const brep::Solid& solid, Dwg_O
     return false;
   if (tw != nullptr && attr != nullptr)
     tw->Apply(ent->parent, *attr);
+  // REQ-372: entity-level MATERIAL on 3DSOLID currently corrupts LibreDWG R2018 encode; mesh
+  // hosts (POLYLINE_PFACE) are wired below. Solid subentity materials (DXF 331) are a follow-up.
+  (void)dwg;
+  (void)matCtx;
   return true;
 }
 
@@ -3268,7 +3401,8 @@ size_t CountSkippedSolids(const AppCommandState& st) {
 
 bool WriteStraightPipeRunAsCylinder(const AppCommandState& st, const CadPipeRun& run,
                                     Dwg_Object_BLOCK_HEADER* hdr, TableWriter* tw,
-                                    const EntityAttributes* attr) {
+                                    const EntityAttributes* attr, Dwg_Data* dwg,
+                                    DwgExportMaterialContext* matCtx) {
   if (run.vertsXyz.size() != 6)
     return false;
   double odFeet = 0.0;
@@ -3293,19 +3427,22 @@ bool WriteStraightPipeRunAsCylinder(const AppCommandState& st, const CadPipeRun&
     return false;
   if (tw != nullptr && attr != nullptr)
     tw->Apply(ent->parent, *attr);
+  (void)dwg;
+  (void)matCtx;
   return true;
 }
 
 bool WritePipeRunEntity(const AppCommandState& st, const CadPipeRun& run, Dwg_Object_BLOCK_HEADER* hdr,
-                        TableWriter* tw, const EntityAttributes* attr) {
+                        TableWriter* tw, const EntityAttributes* attr, Dwg_Data* dwg,
+                        DwgExportMaterialContext* matCtx) {
   std::vector<CadSolidPtr> built;
   if (CadBuildPipeRunSolids(run, &built)) {
     for (const CadSolidPtr& sp : built) {
-      if (sp != nullptr && WriteSolidEntity(st, *sp, hdr, tw, attr))
+      if (sp != nullptr && WriteSolidEntity(st, *sp, hdr, tw, attr, dwg, matCtx))
         return true;
     }
   }
-  return WriteStraightPipeRunAsCylinder(st, run, hdr, tw, attr);
+  return WriteStraightPipeRunAsCylinder(st, run, hdr, tw, attr, dwg, matCtx);
 }
 
 size_t CountSkippedPipeRuns(const AppCommandState& st) {
@@ -3453,6 +3590,35 @@ std::vector<DwgExportLoss> ComputeDwgExportLossesImpl(const AppCommandState& st)
   add("3D polyline curve(s) (straightened between vertices; POLYLINE_3D has no bulge)",
       nFlattenedCurves);
 
+  const int nMatAppearance = DwgExportCountMaterialAppearanceLosses(st);
+  if (nMatAppearance > 0) {
+    const bool r2007MaterialExport =
+        LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2007;
+    if (r2007MaterialExport) {
+      add("solid(s) with MATERIAL appearance (entity material not written on 3DSOLID yet)",
+          static_cast<size_t>(nMatAppearance));
+    } else {
+      add("object(s) with MATERIAL appearance (native MATERIAL requires R2010+ DWG export)",
+          static_cast<size_t>(nMatAppearance));
+    }
+  }
+
+  const DwgAnnotContextExportLossCounts annotCtxLoss = DwgExportAnnotContextLossCounts(st);
+  if (annotCtxLoss.annotativeWithoutContext > 0) {
+    add("annotative object(s) (per-scale annotation context requires R2010+ DWG export)",
+        annotCtxLoss.annotativeWithoutContext);
+  }
+  if (annotCtxLoss.hatchSimplifiedContext > 0) {
+    add("annotative hatch(es) (scale-only context; hatch view/geometry context not encoded)",
+        annotCtxLoss.hatchSimplifiedContext);
+  }
+
+  const int lightSunLoss = DwgExportCountLightSunLosses(st);
+  if (lightSunLoss > 0) {
+    add("LIGHT/SUN/LIGHTLIST presentation object(s) (native lights require R2010+ DWG export)",
+        static_cast<size_t>(lightSunLoss));
+  }
+
   return out;
 }
 
@@ -3535,6 +3701,8 @@ static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWrite
   };
   if (ref.annotative && e0->parent != nullptr)
     WriteAnnotativeEntityEed(tw.dwg, e0->parent, &ref.annotativeVisibleScaleNames);
+  if (ref.annotative && e0->parent != nullptr && tw.annotContext != nullptr)
+    DwgExportAttachBlkrefAnnotationContext(tw.annotContext, e0->parent, e0, ref, st);
   if (ref.attributes.empty()) {
     apply(e0->parent, at);
     return;
@@ -3574,7 +3742,8 @@ static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWrite
 }
 
 static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADER* ps, TableWriter& tw,
-                                    const AppCommandState& st, DwgExportFieldContext* fldCtx) {
+                                    const AppCommandState& st, DwgExportFieldContext* fldCtx,
+                                    DwgExportVisualStyleContext* vsCtx) {
   if (ps == nullptr)
     return;
   auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
@@ -3632,6 +3801,8 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
       layerOnly.layer = gv.layer;
       apply(vp->parent, &layerOnly);
     }
+    if (vsCtx != nullptr)
+      DwgExportSetPaperViewportVisualStyle(tw.dwg, vsCtx, vp, gv.visualStyle);
   }
   for (size_t i = 0; i < L.paperBlockRefs.size(); ++i)
     WriteBlockRefInsertToHeader(ps, tw, st, L.paperBlockRefs[i], AttrAt(L.paperBlockRefAttrs, i), 0.0, 0.0,
@@ -3639,7 +3810,8 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
 }
 
 static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, TableWriter& tw,
-                                      std::vector<std::string>& log, DwgExportFieldContext* fldCtx) {
+                                      std::vector<std::string>& log, DwgExportFieldContext* fldCtx,
+                                      DwgExportVisualStyleContext* vsCtx) {
   if (st.paperLayouts.empty())
     return;
   for (const PaperLayout& L : st.paperLayouts) {
@@ -3657,7 +3829,7 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
     if (ps == nullptr)
       continue;
     SetDwgLayoutTabName(dwg, ps, L.name.empty() ? "Layout" : L.name);
-    WritePaperLayoutContent(L, ps, tw, st, fldCtx);
+    WritePaperLayoutContent(L, ps, tw, st, fldCtx, vsCtx);
     ++nWritten;
   }
   if (nWritten > 0) {
@@ -3698,6 +3870,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     vp.modelCenterY = e->view_target.y - st.worldDocumentOriginY;
     if (!at.layer.empty() && at.layer != "0")
       vp.layer = at.layer;
+    vp.visualStyle = DwgImportVisualStyleFromViewport(dwg, e);
     L.viewports.push_back(vp);
     return;
   }
@@ -3777,7 +3950,8 @@ static int EnsureDwgScaleClassNumber(Dwg_Data* dwg) {
   return dwg_add_class(dwg, "SCALE", "AcDbScale", "ObjectDBX Classes", false);
 }
 
-static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationScale& entry) {
+static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationScale& entry,
+                                         BITCODE_HV* outHandle = nullptr) {
   if (dwg == nullptr || entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
     return false;
   const int classNumber = EnsureDwgScaleClassNumber(dwg);
@@ -3811,19 +3985,26 @@ static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationSca
   sc->paper_units = static_cast<double>(entry.paperUnits);
   sc->drawing_units = static_cast<double>(entry.drawingUnits);
   sc->is_unit_scale = 0;
+  if (outHandle != nullptr)
+    *outHandle = obj->handle.value;
   return sc->name != nullptr;
 }
 
 static void WriteAnnotationScalesFromState(const AppCommandState& st, Dwg_Data* dwg,
-                                           std::vector<std::string>& log) {
+                                           std::vector<std::string>& log,
+                                           DwgExportAnnotContext* annotCtx) {
   if (dwg == nullptr || st.annotationScales.empty())
     return;
   if (LibreDwgVersionFromExport(st.dwgExportVersion) < R_2007)
     return;
   size_t nWritten = 0;
   for (const CadAnnotationScale& s : st.annotationScales) {
-    if (AppendDwgAnnotationScaleObject(dwg, s))
+    BITCODE_HV scaleHandle = 0;
+    if (AppendDwgAnnotationScaleObject(dwg, s, &scaleHandle)) {
       ++nWritten;
+      if (annotCtx != nullptr && scaleHandle != 0)
+        DwgExportAnnotContextRegisterScale(annotCtx, s.name, scaleHandle);
+    }
   }
   if (nWritten > 0) {
     log.push_back("CAD export — wrote " + std::to_string(nWritten) +
@@ -3841,13 +4022,17 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
 
   const bool r2018Write = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2018;
 
+  DwgExportAnnotContext annotCtx;
+  DwgExportAnnotContextInit(&annotCtx, dwg, LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2010);
+
   TableWriter tw;
   tw.dwg = dwg;
   tw.useTrueColor = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
   tw.layerState = &st;
+  tw.annotContext = &annotCtx;
   tw.BuildLayerTable(st);
   tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
-  WriteAnnotationScalesFromState(st, dwg, log);
+  WriteAnnotationScalesFromState(st, dwg, log, &annotCtx);
   // Register every linetype the entities reference up front, so no LTYPE table object is created
   // after the entity records have started going into the object array.
   for (const std::vector<EntityAttributes>* v :
@@ -3863,6 +4048,10 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
 
   DwgExportFieldContext fldCtx;
   DwgExportFieldContextInit(&fldCtx, DwgSaveVersionUsesR2004Features(st.dwgExportVersion));
+  DwgExportVisualStyleContext vsCtx;
+  DwgExportVisualStyleContextInit(&vsCtx, LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2007);
+  DwgExportMaterialContext matCtx;
+  DwgExportMaterialContextInit(&matCtx, LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2007);
   std::uint64_t blockOwnerHandle = 0;
   {
     int hdrErr = 0;
@@ -4286,6 +4475,14 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         apply(common->parent, at);
         if (r2018Write && an.annotative && common->parent != nullptr)
           WriteAnnotativeEntityEed(dwg, common->parent, &an.annotativeVisibleScaleNames);
+        if (annotCtx.enabled && an.annotative && common->parent != nullptr) {
+          DwgExportDimContextKind dimCtxKind = DwgExportDimContextKind::Aligned;
+          if (an.kind == CadAnnotation::Kind::DimLinear)
+            dimCtxKind = DwgExportDimContextKind::Linear;
+          else if (an.kind == CadAnnotation::Kind::DimAngular)
+            dimCtxKind = DwgExportDimContextKind::Angular;
+          DwgExportAttachDimensionAnnotationContext(&annotCtx, common->parent, common, dimCtxKind, an, st);
+        }
         ++dimsWritten;
       }
       continue;
@@ -4329,6 +4526,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
             e->is_not_annotative = 1;
           if (an.annotative && e->parent != nullptr)
             WriteAnnotativeEntityEed(dwg, e->parent, &an.annotativeVisibleScaleNames);
+          if (an.annotative && e->parent != nullptr)
+            DwgExportAttachMtextAnnotationContext(&annotCtx, e->parent, e, an, st);
         }
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
@@ -4358,6 +4557,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         e->rotation = static_cast<double>(an.rotationRad);
         if (r2018Write && an.annotative && e->parent != nullptr)
           WriteAnnotativeEntityEed(dwg, e->parent, &an.annotativeVisibleScaleNames);
+        if (annotCtx.enabled && an.annotative && e->parent != nullptr)
+          DwgExportAttachTextAnnotationContext(&annotCtx, e->parent, e, an, st);
         if (styleId != static_cast<BITCODE_BL>(-1))
           e->style = tw.RefObjId(styleId);
         apply(e->parent, at);
@@ -4470,6 +4671,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
           mld->is_annotative = ml.annotative ? 1 : 0;
           if (r2018Write && ml.annotative && mld->parent != nullptr)
             WriteAnnotativeEntityEed(dwg, mld->parent, &ml.annotativeVisibleScaleNames);
+          if (annotCtx.enabled && ml.annotative && mld->parent != nullptr)
+            DwgExportAttachMleaderAnnotationContext(&annotCtx, mld->parent, mld, ml, st);
           apply(mld->parent, at);
           continue;
         }
@@ -4501,7 +4704,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   }
   // REQ-365 / issue #605: survey points, written as a GOSURVEY_POINT block INSERT with visible
   // NUMBER/DESCRIPTION attributes so AutoCAD and Civil 3D show them, not just GoSurvey.
-  if (!st.surveyPoints.empty()) {
+  // REQ-376: a project drawing's points live in the project database, not in the DWG.
+  if (!st.surveyPoints.empty() && !ProjectOwnsActiveTabPoints(st)) {
     const double r = static_cast<double>(PositionMarkerRadiusWorld(st));
     Dwg_Object_BLOCK_HEADER* spBlk = EnsureSurveyPointBlockDef(dwg, r);
     if (spBlk != nullptr) {
@@ -4714,6 +4918,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       if (hatch->parent != nullptr)
         WriteAnnotativeEntityEed(dwg, hatch->parent, &fr.annotativeVisibleScaleNames);
     }
+    if (annotCtx.enabled && fr.annotative && hatch->parent != nullptr)
+      DwgExportAttachHatchAnnotationContext(&annotCtx, hatch->parent, hatch, fr, st);
     apply(hatch->parent, fi < st.cadFilledRegionAttrs.size() ? &st.cadFilledRegionAttrs[fi] : nullptr);
     ++nHatchOut;
   }
@@ -4721,19 +4927,28 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     log.push_back("CAD export — wrote " + std::to_string(nHatchOut) + " HATCH(es) (REQ-170, issue #608).");
 
   size_t nMeshOut = 0;
+  unsigned pfaceExports = 0;  // LibreDWG: one POLYLINE_PFACE per block (issue #663)
   for (size_t mi = 0; mi < st.cadMeshes.size(); ++mi) {
     const std::shared_ptr<const CadMesh>& mp = st.cadMeshes[mi];
     if (mp == nullptr)
       continue;
     const EntityAttributes* at = mi < st.cadMeshAttrs.size() ? &st.cadMeshAttrs[mi] : nullptr;
-    if (dwg_mesh_export::WriteCadMesh(st, *mp, hdr, &tw, at))
+    const bool asPface = pfaceExports == 0;
+    if (dwg_mesh_export::WriteCadMesh(st, *mp, hdr, &tw, at, dwg, &matCtx, asPface)) {
       ++nMeshOut;
+      if (asPface)
+        ++pfaceExports;
+    }
   }
   size_t nTinOut = 0;
   for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
     const EntityAttributes* at = si < st.cadSurfaceAttrs.size() ? &st.cadSurfaceAttrs[si] : nullptr;
-    if (dwg_mesh_export::WriteCadSurfaceTin(st, st.cadSurfaces[si], hdr, &tw, at))
+    const bool asPface = pfaceExports == 0;
+    if (dwg_mesh_export::WriteCadSurfaceTin(st, st.cadSurfaces[si], hdr, &tw, at, dwg, &matCtx, asPface)) {
       ++nTinOut;
+      if (asPface)
+        ++pfaceExports;
+    }
   }
   if (nMeshOut + nTinOut > 0)
     log.push_back("CAD export — wrote " + std::to_string(nMeshOut + nTinOut) +
@@ -4746,14 +4961,14 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       continue;
     const EntityAttributes* at =
         si < st.cadSolidAttrs.size() ? &st.cadSolidAttrs[si] : nullptr;
-    if (dwg_solid_export::WriteSolidEntity(st, *sp, hdr, &tw, at))
+    if (dwg_solid_export::WriteSolidEntity(st, *sp, hdr, &tw, at, dwg, &matCtx))
       ++nSolidOut;
   }
   size_t nPipeSolidOut = 0;
   for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
     const EntityAttributes* at =
         ri < st.cadPipeRunAttrs.size() ? &st.cadPipeRunAttrs[ri] : nullptr;
-    if (dwg_solid_export::WritePipeRunEntity(st, st.cadPipeRuns[ri], hdr, &tw, at))
+    if (dwg_solid_export::WritePipeRunEntity(st, st.cadPipeRuns[ri], hdr, &tw, at, dwg, &matCtx))
       ++nPipeSolidOut;
   }
   if (nSolidOut + nPipeSolidOut > 0)
@@ -4783,9 +4998,14 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     log.push_back("CAD export — wrote " + std::to_string(nPcOut) +
                   " point-cloud extent box(es) with scan path in XDATA (issue #621).");
 
-  FillPaperLayoutsFromState(st, dwg, tw, log, &fldCtx);
+  DwgExportImportedLightsAndSun(st, dwg, static_cast<void*>(hdr), log);
+
+  FillPaperLayoutsFromState(st, dwg, tw, log, &fldCtx, &vsCtx);
+  DwgExportSetModelVisualStyle(dwg, &vsCtx, st.viewportVisualStyle);
 
   DwgExportFinalizeFieldObjects(&fldCtx, dwg, log);
+  DwgExportMaterialAppendLog(matCtx, log);
+  DwgExportAnnotContextAppendLog(annotCtx, log);
 
   // REQ-170 / REQ-201, issue #614: every drop and degradation, named and counted, from the ONE
   // scan the pre-export warning dialog also reads — so the log and the dialog cannot disagree, and
@@ -5148,6 +5368,10 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   Dwg_Data dwg;
   if (!LoadDwgData(pathUtf8, asDxf, &dwg, log))
     return false;
+  dwg_resolve_objectrefs_silent(&dwg);
+  DwgMaterialImportBegin();
+  DwgAnnotContextImportBegin();
+  DwgLightImportBegin();
 
   const double oldOx = st.worldDocumentOriginX;
   const double oldOy = st.worldDocumentOriginY;
@@ -5226,12 +5450,19 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
 
   ImportPaperLayoutsFromDwg(st, &dwg, &skipHist, &degenerateExtrusions);
+  if (dwg.header.version >= R_2007)
+    st.viewportVisualStyle = DwgImportModelVisualStyle(&dwg);
   ImportAnnotationScales(st, &dwg);
   const Dwg_Object* msForCannoscale = dwg_model_space_object(&dwg);
   if (msForCannoscale == nullptr || msForCannoscale->tio.object == nullptr ||
       !ApplyGosurveyCannoscaleFromEed(reinterpret_cast<Dwg_Object_Entity*>(msForCannoscale->tio.object),
                                     st))
     SyncCurrentAnnotationScaleIndex(st);
+
+  if (!asDxf) {
+    DwgLightImportCapture(&dwg, st);
+    DwgAnnotContextImportScan(&dwg);
+  }
 
   dwg_free(&dwg);
 
@@ -5281,6 +5512,9 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
     log.push_back("  skipped \"" + kv.first + "\" × " + std::to_string(kv.second));
     ++printed;
   }
+  DwgMaterialImportAppendLog(log);
+  DwgLightImportAppendLog(log);
+  DwgAnnotContextImportAppendLog(log);
   BumpCadGpuCache(st);
   return true;
 }
@@ -5317,6 +5551,7 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
   }
   AppendSaveTrace("export: fill from state");
   FillFromState(st, dwg, hdr, log);
+  dwg_resolve_objectrefs_silent(dwg);
   if (!asDxf) {  // REQ-362 item 2: the map pin other programs read (DWG only)
     DwgGeoData geo;
     std::string why;

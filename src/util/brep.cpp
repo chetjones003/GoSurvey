@@ -5103,6 +5103,180 @@ bool MakeCone(const ucs::Ucs& frame, double baseRadius, double topRadius, double
   return BuildConical(frame, baseRadius, topRadius, height, /*asCylinder=*/false, out, outWhy);
 }
 
+
+// ---------------------------------------------------------------------------
+// A solid between a sampled height field and a flat plane — the earthwork pad (GitHub #150,
+// 3D Phase 7).
+// ---------------------------------------------------------------------------
+
+bool MakeHeightFieldSolid(const HeightField& hf, Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;  // a null output is a caller bug, not a user-facing reason
+  if (hf.cols < 1 || hf.rows < 1)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  const int nx = hf.cols + 1;
+  const int ny = hf.rows + 1;
+  if (static_cast<int>(hf.nodeZ.size()) != nx * ny ||
+      static_cast<int>(hf.cellIn.size()) != hf.cols * hf.rows)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  if (!AllFinite({hf.originX, hf.originY, hf.cellW, hf.cellH, hf.flatZ}))
+    return Fail(Problem::NonFiniteParameter, outWhy);
+  if (!(hf.cellW > 0.0) || !(hf.cellH > 0.0))
+    return Fail(Problem::NonPositiveWidth, outWhy);
+  for (double z : hf.nodeZ)
+    if (!std::isfinite(z))
+      return Fail(Problem::NonFiniteParameter, outWhy);
+
+  const auto nodeIx = [nx](int i, int j) { return static_cast<std::size_t>(j) * static_cast<std::size_t>(nx) +
+                                                  static_cast<std::size_t>(i); };
+  const auto cellIx = [&hf](int ci, int cj) { return static_cast<std::size_t>(cj) *
+                                                     static_cast<std::size_t>(hf.cols) +
+                                                     static_cast<std::size_t>(ci); };
+  // The two surfaces the solid lies between. For a CUT the ground is on top and the pad is the
+  // floor; for a FILL the pad is the top and the ground is what it rests on. One construction,
+  // because the only difference is which of the two is the upper surface.
+  const auto upperZ = [&hf](double groundZ) { return hf.flatIsBottom ? groundZ : hf.flatZ; };
+  const auto lowerZ = [&hf](double groundZ) { return hf.flatIsBottom ? hf.flatZ : groundZ; };
+  const double eps = 1e-9 * std::max({std::fabs(hf.cellW), std::fabs(hf.cellH), 1.0});
+
+  // A cell is only built where it has REAL thickness at all four corners. A cell that tapers to
+  // nothing — which is what happens along the line where the ground crosses the pad elevation —
+  // would contribute zero-area faces and an edge used more than twice, and the result would not be
+  // a solid at all. Those cells are counted and left out; the caller reports the shortfall rather
+  // than the kernel pretending the shape is exact.
+  std::vector<std::uint8_t> build(static_cast<std::size_t>(hf.cols) * static_cast<std::size_t>(hf.rows), 0);
+  int tapered = 0;
+  for (int cj = 0; cj < hf.rows; ++cj) {
+    for (int ci = 0; ci < hf.cols; ++ci) {
+      if (!hf.cellIn[cellIx(ci, cj)])
+        continue;
+      bool thick = true;
+      for (int dj = 0; dj <= 1 && thick; ++dj)
+        for (int di = 0; di <= 1 && thick; ++di) {
+          const double g = hf.nodeZ[nodeIx(ci + di, cj + dj)];
+          if (!(upperZ(g) - lowerZ(g) > eps))
+            thick = false;
+        }
+      if (thick)
+        build[cellIx(ci, cj)] = 1;
+      else
+        ++tapered;
+    }
+  }
+  if (std::find(build.begin(), build.end(), 1) == build.end())
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);  // nothing of the pad has any depth
+
+  Solid s;
+  // One vertex per (node, upper/lower), created on first use so an unused corner of the grid costs
+  // nothing.
+  std::vector<int> vUp(static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny), -1);
+  std::vector<int> vLo(vUp.size(), -1);
+  const auto nodeXY = [&hf](int i, int j) {
+    return std::pair<double, double>{hf.originX + hf.cellW * static_cast<double>(i),
+                                     hf.originY + hf.cellH * static_cast<double>(j)};
+  };
+  const auto upVert = [&](int i, int j) {
+    int& v = vUp[nodeIx(i, j)];
+    if (v < 0) {
+      const auto xy = nodeXY(i, j);
+      v = AddVertex(&s, Vec3{xy.first, xy.second, upperZ(hf.nodeZ[nodeIx(i, j)])});
+    }
+    return v;
+  };
+  const auto loVert = [&](int i, int j) {
+    int& v = vLo[nodeIx(i, j)];
+    if (v < 0) {
+      const auto xy = nodeXY(i, j);
+      v = AddVertex(&s, Vec3{xy.first, xy.second, lowerZ(hf.nodeZ[nodeIx(i, j)])});
+    }
+    return v;
+  };
+  // Every edge is shared by exactly two faces, which is what makes this a solid rather than a pile
+  // of triangles — so edges are created once and looked up by their vertex pair.
+  std::map<std::pair<int, int>, int> edgeOf;
+  const auto edgeBetween = [&](int a, int b, bool* reversed) {
+    const std::pair<int, int> key = a < b ? std::make_pair(a, b) : std::make_pair(b, a);
+    *reversed = !(a < b);
+    const auto it = edgeOf.find(key);
+    if (it != edgeOf.end())
+      return it->second;
+    const int e = AddLine(&s, key.first, key.second);
+    edgeOf.emplace(key, e);
+    return e;
+  };
+  // The face's plane is derived from the ring itself (Newell), not passed in: a sampled ground
+  // surface is not level, so a top triangle's normal is only +Z when the ground happens to be flat,
+  // and a plane face whose vertices do not lie on its own plane is not a face -- Validate refuses it.
+  const auto faceFrom = [&](const std::vector<int>& ring) {
+    Vec3 nrm{0.0, 0.0, 0.0};
+    for (std::size_t k = 0; k < ring.size(); ++k) {
+      const Vec3& p = s.vertices[static_cast<std::size_t>(ring[k])].p;
+      const Vec3& q = s.vertices[static_cast<std::size_t>(ring[(k + 1) % ring.size()])].p;
+      nrm.x += (p.y - q.y) * (p.z + q.z);
+      nrm.y += (p.z - q.z) * (p.x + q.x);
+      nrm.z += (p.x - q.x) * (p.y + q.y);
+    }
+    const Vec3 normal = ray3d::Normalize(nrm);
+    std::vector<EdgeUse> uses;
+    uses.reserve(ring.size());
+    for (std::size_t k = 0; k < ring.size(); ++k) {
+      bool rev = false;
+      const int e = edgeBetween(ring[k], ring[(k + 1) % ring.size()], &rev);
+      uses.push_back(EdgeUse{e, rev});
+    }
+    s.faces.push_back(MakePlaneFace(s.vertices[static_cast<std::size_t>(ring[0])].p, normal, std::move(uses)));
+  };
+
+  for (int cj = 0; cj < hf.rows; ++cj) {
+    for (int ci = 0; ci < hf.cols; ++ci) {
+      if (!build[cellIx(ci, cj)])
+        continue;
+      // The cell's four corners, counter-clockwise seen from above.
+      const int u00 = upVert(ci, cj), u10 = upVert(ci + 1, cj);
+      const int u11 = upVert(ci + 1, cj + 1), u01 = upVert(ci, cj + 1);
+      const int l00 = loVert(ci, cj), l10 = loVert(ci + 1, cj);
+      const int l11 = loVert(ci + 1, cj + 1), l01 = loVert(ci, cj + 1);
+      // The upper surface is two triangles, not one quad: four sampled ground elevations are not
+      // coplanar in general, and a plane face through four non-coplanar points is not a face.
+      faceFrom({u00, u10, u11});
+      faceFrom({u00, u11, u01});
+      // The lower surface, wound the other way so its normal points out of the solid.
+      faceFrom({l00, l11, l10});
+      faceFrom({l00, l01, l11});
+      // A wall wherever the neighbour is not part of the solid. Each is a vertical quad, and all
+      // four of its corners lie in one vertical plane however the ground slopes, so it stays planar.
+      struct Side { int di, dj, a, b, la, lb; };
+      const Side sides[4] = {
+          {0, -1, u00, u10, l00, l10},   // south
+          {1, 0, u10, u11, l10, l11},    // east
+          {0, 1, u11, u01, l11, l01},    // north
+          {-1, 0, u01, u00, l01, l00},   // west
+      };
+      for (const Side& sd : sides) {
+        const int ni = ci + sd.di;
+        const int nj = cj + sd.dj;
+        const bool neighbourBuilt = ni >= 0 && nj >= 0 && ni < hf.cols && nj < hf.rows &&
+                                    build[cellIx(ni, nj)] != 0;
+        if (neighbourBuilt)
+          continue;
+        const Vec3 a = s.vertices[static_cast<std::size_t>(sd.la)].p;
+        const Vec3 b = s.vertices[static_cast<std::size_t>(sd.lb)].p;
+        (void)a;
+        (void)b;
+        faceFrom({sd.la, sd.lb, sd.b, sd.a});
+      }
+    }
+  }
+
+  AddSingleShell(&s);
+  s.recipe.kind = PrimitiveKind::None;
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return Fail(why, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 bool MakeSphere(const ucs::Ucs& frame, double radius, Solid* out, Problem* outWhy) {
   if (!out)
     return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone

@@ -86,6 +86,21 @@ struct EntityAttributes {
   float lineweightMm = -1.f;
   /// 0 = opaque, 1 = fully transparent; \c -1.f means ByLayer.
   float transparency = -1.f;
+  /// The surface this entity is DRAPED ON and follows, by that surface stable id (ADR-062 (c),
+  /// GitHub #150). **0 means not linked**, the default, and what a baked drape leaves behind.
+  ///
+  /// An id, never a name (a name can be changed) and never an array index (`cadSurfaces` compacts
+  /// on erase, so an index is not a name -- architecture section 11.9). It resolves through
+  /// `FindSurfaceIndexById`, which answers -1 for a surface that is gone, so an erased surface
+  /// leaves the geometry exactly where it is rather than moving or deleting it (ADR-062 (e)).
+  std::uint64_t drapedOnSurfaceId = 0;
+  /// When true, shaded mesh/solid drawing uses \ref materialDiffuseR/G/B (REQ-372 import).
+  bool materialDiffuseOverride = false;
+  float materialDiffuseR = 0.f;
+  float materialDiffuseG = 0.f;
+  float materialDiffuseB = 0.f;
+  /// AutoCAD MATERIAL name when known from DWG import (REQ-372 inc 3); empty if synthesized on export.
+  std::string materialName;
 };
 
 /// The linetypes an entity can be given (\ref EntityAttributes::linetype storage) — the Properties
@@ -1245,6 +1260,46 @@ struct CadAnnotationScale {
   std::string name;
   float paperUnits = 1.f;
   float drawingUnits = 1.f;
+};
+
+/// AutoCAD LIGHT entity preserved from DWG import (REQ-385 / issue #624). GoSurvey does not evaluate
+/// lighting in the viewport; these records exist for R2007+ DWG round-trip.
+struct CadDwgImportedLight {
+  std::string name;
+  unsigned type = 2;  ///< 1 distant, 2 point, 3 spot (AutoCAD LIGHT type codes)
+  bool on = true;
+  unsigned colorRgb24 = 0xFFFFFFu;
+  double intensity = 1.0;
+  double posX = 0.0;
+  double posY = 0.0;
+  double posZ = 0.0;
+  double targetX = 0.0;
+  double targetY = 0.0;
+  double targetZ = 0.0;
+  double hotspotAngle = 0.0;
+  double falloffAngle = 0.0;
+};
+
+/// One entry in AutoCAD's LIGHTLIST registry (REQ-386 / issue #715).
+struct CadDwgImportedLightListEntry {
+  std::string name;
+};
+
+/// Captured LIGHTLIST object from DWG import (REQ-386 / issue #715).
+struct CadDwgImportedLightList {
+  unsigned classVersion = 1;
+  std::vector<CadDwgImportedLightListEntry> entries;
+};
+
+/// AutoCAD SUN dictionary object preserved from DWG import (REQ-385 / issue #624).
+struct CadDwgImportedSun {
+  bool on = true;
+  unsigned colorRgb24 = 0xFFFFFFu;
+  double intensity = 1.0;
+  bool hasShadow = true;
+  unsigned julianDay = 0;
+  unsigned msecs = 0;
+  bool isDst = false;
 };
 
 [[nodiscard]] inline float CadAnnotationScaleModelUnitsPerPlottedInch(const CadAnnotationScale& s) {

@@ -3,6 +3,7 @@
 
 #include "CadCommands.hpp"
 #include "GsMigrate.hpp"
+#include "ProjectPoints.hpp"
 #include "TextStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -85,6 +86,200 @@ bool Base64Decode(const std::string& in, std::string* out) {
   return true;
 }
 
+// REQ-357: the Drawing Settings object of the trailer. Shared by the drawing and by a project's
+// defaults (REQ-375), so the two can never disagree about a setting's stored form.
+json DrawingSettingsToJson(const DrawingSettings& ds) {
+  json o;
+  o["angularUnits"] = ds.angularUnits == DrawingSettings::AngularUnits::Radians ? "radians"
+                      : ds.angularUnits == DrawingSettings::AngularUnits::Grads ? "grads"
+                                                                                 : "degrees";
+  o["footDefinition"] =
+      ds.footDefinition == DrawingSettings::FootDefinition::International ? "international" : "usSurvey";
+  o["scaleInsertedObjects"] = ds.scaleInsertedObjects;
+  o["setDrawingVariables"] = ds.setDrawingVariables;
+  o["zone"] = ds.zoneCode;  // REQ-358: CS-MAP code, "" = No Datum, No Projection
+  // REQ-359 item 4: the geographic marker (WORLD design point + north, degrees CCW from +X).
+  o["markerX"] = ds.markerX;
+  o["markerY"] = ds.markerY;
+  o["markerNorthDeg"] = ds.markerNorthDeg;
+  {  // REQ-360: the Transformation tab. Angles in degrees, L_ref / rotation point WORLD.
+    const DrawingSettings::Transform& t = ds.transform;
+    json x;
+    x["apply"] = t.apply;
+    x["applySeaLevel"] = t.applySeaLevel;
+    x["elevation"] = t.elevation;
+    x["spheroidRadiusM"] = t.spheroidRadiusM;
+    x["computation"] =
+        t.computation == DrawingSettings::Transform::Computation::UserDefined ? "userDefined" : "referencePoint";
+    x["userScaleFactor"] = t.userScaleFactor;
+    x["refLocal"] = json::array({t.refLocalX, t.refLocalY});
+    x["refGrid"] = json::array({t.refGridE, t.refGridN});
+    x["refPointNumber"] = t.refPointNumber;
+    x["rotation"] = t.rotation == DrawingSettings::Transform::Rotation::RotationPoint ? "rotationPoint"
+                    : t.rotation == DrawingSettings::Transform::Rotation::Azimuth    ? "azimuth"
+                                                                                     : "toNorth";
+    x["rotLocal"] = json::array({t.rotLocalX, t.rotLocalY});
+    x["rotGrid"] = json::array({t.rotGridE, t.rotGridN});
+    x["rotPointNumber"] = t.rotPointNumber;
+    x["toNorthDeg"] = t.toNorthDeg;
+    x["localAzimuthDeg"] = t.localAzimuthDeg;
+    x["gridAzimuthDeg"] = t.gridAzimuthDeg;
+    o["transform"] = std::move(x);
+  }
+  {  // REQ-361: the Object Layers rows, in ObjectLayerKind order.
+    json rows = json::array();
+    for (const ObjectLayerRow& r : ds.objectLayers) {
+      json j;
+      j["layer"] = r.layer;
+      j["modifier"] = r.modifier == ObjectLayerRow::Modifier::Prefix   ? "prefix"
+                      : r.modifier == ObjectLayerRow::Modifier::Suffix ? "suffix"
+                                                                       : "none";
+      j["value"] = r.value;
+      j["locked"] = r.locked;
+      rows.push_back(std::move(j));
+    }
+    o["objectLayers"] = std::move(rows);
+  }
+  // REQ-363: the online map, by name so a reordered enum cannot change a saved choice.
+  o["onlineMap"] = OnlineMapStorageName(ds.onlineMap);
+  if (ds.overridden != 0) {  // REQ-375: which project defaults this drawing overrides, by name
+    json names = json::array();
+    for (unsigned k = 0; k < kProjectDefaultKeyCount; ++k)
+      if (ds.IsOverridden(static_cast<ProjectDefaultKey>(k)))
+        names.push_back(kProjectDefaultKeyNames[k]);
+    o["overridden"] = std::move(names);
+  }
+  // REQ-364: captured map areas — each tile's image exactly as it was served, base64.
+  if (!ds.capturedAreas.empty()) {
+    json areas = json::array();
+    for (const DrawingSettings::CapturedArea& a : ds.capturedAreas) {
+      json ja;
+      ja["map"] = OnlineMapStorageName(a.map);
+      ja["level"] = a.level;
+      json tiles = json::array();
+      for (const DrawingSettings::CapturedTile& t : a.tiles) {
+        if (!t.image)
+          continue;
+        json jt;
+        jt["x"] = t.x;
+        jt["y"] = t.y;
+        jt["image"] = Base64Encode(*t.image);
+        tiles.push_back(std::move(jt));
+      }
+      ja["tiles"] = std::move(tiles);
+      areas.push_back(std::move(ja));
+    }
+    o["capturedAreas"] = std::move(areas);
+  }
+  return o;
+}
+
+void DrawingSettingsFromJson(const json& o, DrawingSettings& ds, std::vector<std::string>& log) {
+  const std::string ang = o.value("angularUnits", std::string("degrees"));
+  ds.angularUnits = ang == "radians" ? DrawingSettings::AngularUnits::Radians
+                                    : ang == "grads" ? DrawingSettings::AngularUnits::Grads
+                                                     : DrawingSettings::AngularUnits::Degrees;
+  ds.footDefinition = o.value("footDefinition", std::string("usSurvey")) == "international"
+                                          ? DrawingSettings::FootDefinition::International
+                                          : DrawingSettings::FootDefinition::UsSurvey;
+  ds.scaleInsertedObjects = o.value("scaleInsertedObjects", true);
+  ds.setDrawingVariables = o.value("setDrawingVariables", true);
+  // REQ-358: kept verbatim, even when this dictionary does not know it (nothing silently dropped).
+  if (o.contains("zone") && o["zone"].is_string())
+    ds.zoneCode = o["zone"].get<std::string>();
+  ds.markerX = o.value("markerX", 0.0);
+  ds.markerY = o.value("markerY", 0.0);
+  ds.markerNorthDeg = o.value("markerNorthDeg", 90.0);
+  // REQ-363: absent or unknown → Map Off.
+  ds.onlineMap = OnlineMapFromStorageName(o.value("onlineMap", std::string()));
+  ds.overridden = 0;
+  if (o.contains("overridden") && o["overridden"].is_array())
+    for (const json& n : o["overridden"])
+      for (unsigned k = 0; k < kProjectDefaultKeyCount; ++k)
+        if (n.is_string() && n.get<std::string>() == kProjectDefaultKeyNames[k])
+          ds.SetOverridden(static_cast<ProjectDefaultKey>(k), true);
+  // REQ-364: captured map areas. A damaged tile (or an area of an unknown map) is dropped and said.
+  if (o.contains("capturedAreas") && o["capturedAreas"].is_array()) {
+    int dropped = 0;
+    for (const json& ja : o["capturedAreas"]) {
+      if (!ja.is_object() || !ja.contains("tiles") || !ja["tiles"].is_array()) {
+        ++dropped;
+        continue;
+      }
+      DrawingSettings::CapturedArea a;
+      a.map = OnlineMapFromStorageName(ja.contains("map") && ja["map"].is_string() ? ja["map"].get<std::string>()
+                                                                                   : std::string());
+      a.level = ja.contains("level") && ja["level"].is_number_integer() ? ja["level"].get<int>() : -1;
+      if (a.map == DrawingSettings::OnlineMap::Off || a.level < 0 || a.level > 30) {
+        dropped += static_cast<int>(ja["tiles"].size());
+        continue;
+      }
+      for (const json& jt : ja["tiles"]) {
+        std::string image;
+        if (!jt.is_object() || !jt.contains("x") || !jt["x"].is_number_integer() || !jt.contains("y") ||
+            !jt["y"].is_number_integer() || !jt.contains("image") || !jt["image"].is_string() ||
+            !Base64Decode(jt["image"].get<std::string>(), &image) || image.empty()) {
+          ++dropped;
+          continue;
+        }
+        a.tiles.push_back({jt["x"].get<int>(), jt["y"].get<int>(), std::make_shared<const std::string>(std::move(image))});
+      }
+      if (!a.tiles.empty())
+        ds.capturedAreas.push_back(std::move(a));
+    }
+    if (dropped > 0)
+      log.push_back("Open: " + std::to_string(dropped) + " damaged captured map tile(s) were dropped (REQ-364).");
+  }
+  if (o.contains("transform") && o["transform"].is_object()) {  // REQ-360; absent → the defaults
+    const json& x = o["transform"];
+    DrawingSettings::Transform& t = ds.transform;
+    const auto pair = [&](const char* key, double* a, double* b) {
+      if (x.contains(key) && x[key].is_array() && x[key].size() == 2 && x[key][0].is_number() &&
+          x[key][1].is_number()) {
+        *a = x[key][0].get<double>();
+        *b = x[key][1].get<double>();
+      }
+    };
+    t.apply = x.value("apply", false);
+    t.applySeaLevel = x.value("applySeaLevel", false);
+    t.elevation = x.value("elevation", 0.0);
+    t.spheroidRadiusM = x.value("spheroidRadiusM", 0.0);
+    t.computation = x.value("computation", std::string("referencePoint")) == "userDefined"
+                        ? DrawingSettings::Transform::Computation::UserDefined
+                        : DrawingSettings::Transform::Computation::ReferencePoint;
+    t.userScaleFactor = x.value("userScaleFactor", 1.0);
+    pair("refLocal", &t.refLocalX, &t.refLocalY);
+    pair("refGrid", &t.refGridE, &t.refGridN);
+    t.refPointNumber = x.value("refPointNumber", 0);
+    const std::string rot = x.value("rotation", std::string("toNorth"));
+    t.rotation = rot == "rotationPoint" ? DrawingSettings::Transform::Rotation::RotationPoint
+                 : rot == "azimuth"     ? DrawingSettings::Transform::Rotation::Azimuth
+                                        : DrawingSettings::Transform::Rotation::ToNorth;
+    pair("rotLocal", &t.rotLocalX, &t.rotLocalY);
+    pair("rotGrid", &t.rotGridE, &t.rotGridN);
+    t.rotPointNumber = x.value("rotPointNumber", 0);
+    t.toNorthDeg = x.value("toNorthDeg", 0.0);
+    t.localAzimuthDeg = x.value("localAzimuthDeg", 0.0);
+    t.gridAzimuthDeg = x.value("gridAzimuthDeg", 0.0);
+  }
+  // REQ-361 item 6: absent (or a row missing) → the NCS defaults.
+  if (o.contains("objectLayers") && o["objectLayers"].is_array()) {
+    const json& rows = o["objectLayers"];
+    for (size_t i = 0; i < rows.size() && i < ds.objectLayers.size(); ++i) {
+      if (!rows[i].is_object())
+        continue;
+      ObjectLayerRow& r = ds.objectLayers[i];
+      r.layer = rows[i].value("layer", r.layer);
+      const std::string mod = rows[i].value("modifier", std::string("none"));
+      r.modifier = mod == "prefix"   ? ObjectLayerRow::Modifier::Prefix
+                   : mod == "suffix" ? ObjectLayerRow::Modifier::Suffix
+                                     : ObjectLayerRow::Modifier::None;
+      r.value = rows[i].value("value", std::string());
+      r.locked = rows[i].value("locked", false);
+    }
+  }
+}
+
 void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["id"] = e.id;  // REQ-076 stable identity; additive, no format-version bump (ADR-020 (d))
   o["layer"] = e.layer;
@@ -92,6 +287,19 @@ void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["linetype"] = e.linetype;
   o["lineweightMm"] = e.lineweightMm;
   o["transparency"] = e.transparency;
+  // Omitted when 0 (not linked), so a drawing with no surface link is byte-identical to one
+  // written before this field existed. Additive, no format-version bump (ADR-020 (d), ADR-062).
+  if (e.drapedOnSurfaceId != 0)
+    o["drapedOnSurfaceId"] = e.drapedOnSurfaceId;
+  // REQ-372 inc 3 — additive; omitted when no material override (ADR-020 (d)).
+  if (e.materialDiffuseOverride) {
+    o["materialDiffuseOverride"] = true;
+    o["materialDiffuseR"] = e.materialDiffuseR;
+    o["materialDiffuseG"] = e.materialDiffuseG;
+    o["materialDiffuseB"] = e.materialDiffuseB;
+    if (!e.materialName.empty())
+      o["materialName"] = e.materialName;
+  }
 }
 
 EntityAttributes EntityAttributesFromJson(const json& o) {
@@ -105,6 +313,12 @@ EntityAttributes EntityAttributesFromJson(const json& o) {
   e.linetype     = o.value("linetype",     e.linetype);
   e.lineweightMm = o.value("lineweightMm", e.lineweightMm);
   e.transparency = o.value("transparency", e.transparency);
+  e.drapedOnSurfaceId = o.value("drapedOnSurfaceId", static_cast<std::uint64_t>(0));
+  e.materialDiffuseOverride = o.value("materialDiffuseOverride", false);
+  e.materialDiffuseR = o.value("materialDiffuseR", e.materialDiffuseR);
+  e.materialDiffuseG = o.value("materialDiffuseG", e.materialDiffuseG);
+  e.materialDiffuseB = o.value("materialDiffuseB", e.materialDiffuseB);
+  e.materialName = o.value("materialName", e.materialName);
   return e;
 }
 
@@ -922,85 +1136,7 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["modelUnitsPerPlottedInch"] = st.modelUnitsPerPlottedInch;
   doc["drawingInsUnits"] = st.drawingInsUnits;
-  {  // Drawing Settings (REQ-357). Additive: a drawing without it opens with the defaults.
-    const DrawingSettings& ds = st.drawingSettings;
-    json o;
-    o["angularUnits"] = ds.angularUnits == DrawingSettings::AngularUnits::Radians ? "radians"
-                        : ds.angularUnits == DrawingSettings::AngularUnits::Grads ? "grads"
-                                                                                   : "degrees";
-    o["footDefinition"] =
-        ds.footDefinition == DrawingSettings::FootDefinition::International ? "international" : "usSurvey";
-    o["scaleInsertedObjects"] = ds.scaleInsertedObjects;
-    o["setDrawingVariables"] = ds.setDrawingVariables;
-    o["zone"] = ds.zoneCode;  // REQ-358: CS-MAP code, "" = No Datum, No Projection
-    // REQ-359 item 4: the geographic marker (WORLD design point + north, degrees CCW from +X).
-    o["markerX"] = ds.markerX;
-    o["markerY"] = ds.markerY;
-    o["markerNorthDeg"] = ds.markerNorthDeg;
-    {  // REQ-360: the Transformation tab. Angles in degrees, L_ref / rotation point WORLD.
-      const DrawingSettings::Transform& t = ds.transform;
-      json x;
-      x["apply"] = t.apply;
-      x["applySeaLevel"] = t.applySeaLevel;
-      x["elevation"] = t.elevation;
-      x["spheroidRadiusM"] = t.spheroidRadiusM;
-      x["computation"] =
-          t.computation == DrawingSettings::Transform::Computation::UserDefined ? "userDefined" : "referencePoint";
-      x["userScaleFactor"] = t.userScaleFactor;
-      x["refLocal"] = json::array({t.refLocalX, t.refLocalY});
-      x["refGrid"] = json::array({t.refGridE, t.refGridN});
-      x["refPointNumber"] = t.refPointNumber;
-      x["rotation"] = t.rotation == DrawingSettings::Transform::Rotation::RotationPoint ? "rotationPoint"
-                      : t.rotation == DrawingSettings::Transform::Rotation::Azimuth    ? "azimuth"
-                                                                                       : "toNorth";
-      x["rotLocal"] = json::array({t.rotLocalX, t.rotLocalY});
-      x["rotGrid"] = json::array({t.rotGridE, t.rotGridN});
-      x["rotPointNumber"] = t.rotPointNumber;
-      x["toNorthDeg"] = t.toNorthDeg;
-      x["localAzimuthDeg"] = t.localAzimuthDeg;
-      x["gridAzimuthDeg"] = t.gridAzimuthDeg;
-      o["transform"] = std::move(x);
-    }
-    {  // REQ-361: the Object Layers rows, in ObjectLayerKind order.
-      json rows = json::array();
-      for (const ObjectLayerRow& r : ds.objectLayers) {
-        json j;
-        j["layer"] = r.layer;
-        j["modifier"] = r.modifier == ObjectLayerRow::Modifier::Prefix   ? "prefix"
-                        : r.modifier == ObjectLayerRow::Modifier::Suffix ? "suffix"
-                                                                         : "none";
-        j["value"] = r.value;
-        j["locked"] = r.locked;
-        rows.push_back(std::move(j));
-      }
-      o["objectLayers"] = std::move(rows);
-    }
-    // REQ-363: the online map, by name so a reordered enum cannot change a saved choice.
-    o["onlineMap"] = OnlineMapStorageName(ds.onlineMap);
-    // REQ-364: captured map areas — each tile's image exactly as it was served, base64.
-    if (!ds.capturedAreas.empty()) {
-      json areas = json::array();
-      for (const DrawingSettings::CapturedArea& a : ds.capturedAreas) {
-        json ja;
-        ja["map"] = OnlineMapStorageName(a.map);
-        ja["level"] = a.level;
-        json tiles = json::array();
-        for (const DrawingSettings::CapturedTile& t : a.tiles) {
-          if (!t.image)
-            continue;
-          json jt;
-          jt["x"] = t.x;
-          jt["y"] = t.y;
-          jt["image"] = Base64Encode(*t.image);
-          tiles.push_back(std::move(jt));
-        }
-        ja["tiles"] = std::move(tiles);
-        areas.push_back(std::move(ja));
-      }
-      o["capturedAreas"] = std::move(areas);
-    }
-    doc["drawingSettings"] = std::move(o);
-  }
+  doc["drawingSettings"] = DrawingSettingsToJson(st.drawingSettings);  // REQ-357; additive: absent opens with the defaults
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
   doc["currentLayer"] = st.currentLayer;
   doc["currentColor"] = st.currentColor;  // REQ-356; additive, older readers ignore it
@@ -1169,6 +1305,7 @@ json BuildRoot(const AppCommandState& st) {
         vo["modelCenterX"] = v.modelCenterX;
         vo["modelCenterY"] = v.modelCenterY;
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
+        vo["visualStyle"] = static_cast<int>(v.visualStyle);  // REQ-371 (additive)
         vo["camAzimuthDeg"] = v.camAzimuthDeg;      // REQ-061: per-viewport camera (additive)
         vo["camElevationDeg"] = v.camElevationDeg;
         vo["camRollDeg"] = v.camRollDeg;
@@ -1599,6 +1736,53 @@ json BuildRoot(const AppCommandState& st) {
       doc["currentAnnotationScaleIndex"] = st.currentAnnotationScaleIndex;
   }
 
+  if (!st.dwgImportedLights.empty() || st.dwgImportedSunPresent || st.dwgImportedLightListPresent) {
+    json lights = json::array();
+    for (const CadDwgImportedLight& l : st.dwgImportedLights) {
+      json o;
+      if (!l.name.empty())
+        o["name"] = l.name;
+      o["type"] = l.type;
+      o["on"] = l.on;
+      o["colorRgb24"] = l.colorRgb24;
+      o["intensity"] = l.intensity;
+      o["pos"] = json::array({l.posX, l.posY, l.posZ});
+      o["target"] = json::array({l.targetX, l.targetY, l.targetZ});
+      if (l.hotspotAngle != 0.0)
+        o["hotspotAngle"] = l.hotspotAngle;
+      if (l.falloffAngle != 0.0)
+        o["falloffAngle"] = l.falloffAngle;
+      lights.push_back(std::move(o));
+    }
+    doc["dwgImportedLights"] = std::move(lights);
+    if (st.dwgImportedSunPresent) {
+      json sun;
+      sun["on"] = st.dwgImportedSun.on;
+      sun["colorRgb24"] = st.dwgImportedSun.colorRgb24;
+      sun["intensity"] = st.dwgImportedSun.intensity;
+      sun["hasShadow"] = st.dwgImportedSun.hasShadow;
+      sun["julianDay"] = st.dwgImportedSun.julianDay;
+      sun["msecs"] = st.dwgImportedSun.msecs;
+      sun["isDst"] = st.dwgImportedSun.isDst;
+      doc["dwgImportedSun"] = std::move(sun);
+    }
+    if (st.dwgImportedLightListPresent) {
+      json reg;
+      reg["classVersion"] = st.dwgImportedLightList.classVersion;
+      if (!st.dwgImportedLightListDictKey.empty())
+        reg["dictKey"] = st.dwgImportedLightListDictKey;
+      json entries = json::array();
+      for (const CadDwgImportedLightListEntry& e : st.dwgImportedLightList.entries) {
+        json o;
+        if (!e.name.empty())
+          o["name"] = e.name;
+        entries.push_back(std::move(o));
+      }
+      reg["entries"] = std::move(entries);
+      doc["dwgImportedLightList"] = std::move(reg);
+    }
+  }
+
   // Imported meshes (REQ-063). Additive section — omitted entirely when there are none, so every
   // pre-REQ-063 drawing still serializes byte-identically and no kGsFormatVersion bump is needed
   // (the ADR-020 (d) tolerant-key precedent).
@@ -1908,7 +2092,9 @@ json BuildRoot(const AppCommandState& st) {
   doc["layers"] = std::move(layers);
 
   json survey = json::array();
-  for (const auto& p : st.surveyPoints) {
+  // REQ-376 / ADR-065 (c): a project drawing's trailer carries no points, only its rules and overrides.
+  const std::vector<SurveyPoint> noPoints;
+  for (const auto& p : ProjectOwnsActiveTabPoints(st) ? noPoints : st.surveyPoints) {
     json o;
     o["id"] = p.id;
     o["easting"] = p.easting;
@@ -1923,6 +2109,20 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["surveyPoints"] = std::move(survey);
   doc["createPointsNextId"] = st.createPointsNextId;
+  if (!st.pointVisibility.IsDefault()) {  // REQ-377: a project drawing's point visibility rules; additive
+    const projpts::Rules& r = st.pointVisibility;
+    json v;
+    v["idRanges"] = r.idRanges;
+    v["description"] = r.description;
+    v["useElevation"] = r.useElevation;
+    v["elevMin"] = r.elevMin;
+    v["elevMax"] = r.elevMax;
+    v["group"] = r.group;
+    v["sourceDrawing"] = r.sourceDrawing;
+    v["shown"] = projpts::IdsToText(r.shown);
+    v["hidden"] = projpts::IdsToText(r.hidden);
+    doc["pointVisibility"] = std::move(v);
+  }
   json cpo;
   CreatePointsOptionsToJson(st.createPointsOpts, cpo);
   doc["createPointsOptions"] = std::move(cpo);
@@ -2353,106 +2553,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.modelUnitsPerPlottedInch = doc.value("modelUnitsPerPlottedInch", 50.f);
   st.drawingInsUnits = doc.value("drawingInsUnits", 2);
   st.drawingSettings = DrawingSettings{};  // REQ-357: absent or partial → the defaults
-  if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object()) {
-    const json& o = doc["drawingSettings"];
-    const std::string ang = o.value("angularUnits", std::string("degrees"));
-    st.drawingSettings.angularUnits = ang == "radians" ? DrawingSettings::AngularUnits::Radians
-                                      : ang == "grads" ? DrawingSettings::AngularUnits::Grads
-                                                       : DrawingSettings::AngularUnits::Degrees;
-    st.drawingSettings.footDefinition = o.value("footDefinition", std::string("usSurvey")) == "international"
-                                            ? DrawingSettings::FootDefinition::International
-                                            : DrawingSettings::FootDefinition::UsSurvey;
-    st.drawingSettings.scaleInsertedObjects = o.value("scaleInsertedObjects", true);
-    st.drawingSettings.setDrawingVariables = o.value("setDrawingVariables", true);
-    // REQ-358: kept verbatim, even when this dictionary does not know it (nothing silently dropped).
-    if (o.contains("zone") && o["zone"].is_string())
-      st.drawingSettings.zoneCode = o["zone"].get<std::string>();
-    st.drawingSettings.markerX = o.value("markerX", 0.0);
-    st.drawingSettings.markerY = o.value("markerY", 0.0);
-    st.drawingSettings.markerNorthDeg = o.value("markerNorthDeg", 90.0);
-    // REQ-363: absent or unknown → Map Off.
-    st.drawingSettings.onlineMap = OnlineMapFromStorageName(o.value("onlineMap", std::string()));
-    // REQ-364: captured map areas. A damaged tile (or an area of an unknown map) is dropped and said.
-    if (o.contains("capturedAreas") && o["capturedAreas"].is_array()) {
-      int dropped = 0;
-      for (const json& ja : o["capturedAreas"]) {
-        if (!ja.is_object() || !ja.contains("tiles") || !ja["tiles"].is_array()) {
-          ++dropped;
-          continue;
-        }
-        DrawingSettings::CapturedArea a;
-        a.map = OnlineMapFromStorageName(ja.contains("map") && ja["map"].is_string() ? ja["map"].get<std::string>()
-                                                                                     : std::string());
-        a.level = ja.contains("level") && ja["level"].is_number_integer() ? ja["level"].get<int>() : -1;
-        if (a.map == DrawingSettings::OnlineMap::Off || a.level < 0 || a.level > 30) {
-          dropped += static_cast<int>(ja["tiles"].size());
-          continue;
-        }
-        for (const json& jt : ja["tiles"]) {
-          std::string image;
-          if (!jt.is_object() || !jt.contains("x") || !jt["x"].is_number_integer() || !jt.contains("y") ||
-              !jt["y"].is_number_integer() || !jt.contains("image") || !jt["image"].is_string() ||
-              !Base64Decode(jt["image"].get<std::string>(), &image) || image.empty()) {
-            ++dropped;
-            continue;
-          }
-          a.tiles.push_back({jt["x"].get<int>(), jt["y"].get<int>(), std::make_shared<const std::string>(std::move(image))});
-        }
-        if (!a.tiles.empty())
-          st.drawingSettings.capturedAreas.push_back(std::move(a));
-      }
-      if (dropped > 0)
-        log.push_back("Open: " + std::to_string(dropped) + " damaged captured map tile(s) were dropped (REQ-364).");
-    }
-    if (o.contains("transform") && o["transform"].is_object()) {  // REQ-360; absent → the defaults
-      const json& x = o["transform"];
-      DrawingSettings::Transform& t = st.drawingSettings.transform;
-      const auto pair = [&](const char* key, double* a, double* b) {
-        if (x.contains(key) && x[key].is_array() && x[key].size() == 2 && x[key][0].is_number() &&
-            x[key][1].is_number()) {
-          *a = x[key][0].get<double>();
-          *b = x[key][1].get<double>();
-        }
-      };
-      t.apply = x.value("apply", false);
-      t.applySeaLevel = x.value("applySeaLevel", false);
-      t.elevation = x.value("elevation", 0.0);
-      t.spheroidRadiusM = x.value("spheroidRadiusM", 0.0);
-      t.computation = x.value("computation", std::string("referencePoint")) == "userDefined"
-                          ? DrawingSettings::Transform::Computation::UserDefined
-                          : DrawingSettings::Transform::Computation::ReferencePoint;
-      t.userScaleFactor = x.value("userScaleFactor", 1.0);
-      pair("refLocal", &t.refLocalX, &t.refLocalY);
-      pair("refGrid", &t.refGridE, &t.refGridN);
-      t.refPointNumber = x.value("refPointNumber", 0);
-      const std::string rot = x.value("rotation", std::string("toNorth"));
-      t.rotation = rot == "rotationPoint" ? DrawingSettings::Transform::Rotation::RotationPoint
-                   : rot == "azimuth"     ? DrawingSettings::Transform::Rotation::Azimuth
-                                          : DrawingSettings::Transform::Rotation::ToNorth;
-      pair("rotLocal", &t.rotLocalX, &t.rotLocalY);
-      pair("rotGrid", &t.rotGridE, &t.rotGridN);
-      t.rotPointNumber = x.value("rotPointNumber", 0);
-      t.toNorthDeg = x.value("toNorthDeg", 0.0);
-      t.localAzimuthDeg = x.value("localAzimuthDeg", 0.0);
-      t.gridAzimuthDeg = x.value("gridAzimuthDeg", 0.0);
-    }
-    // REQ-361 item 6: absent (or a row missing) → the NCS defaults.
-    if (o.contains("objectLayers") && o["objectLayers"].is_array()) {
-      const json& rows = o["objectLayers"];
-      for (size_t i = 0; i < rows.size() && i < st.drawingSettings.objectLayers.size(); ++i) {
-        if (!rows[i].is_object())
-          continue;
-        ObjectLayerRow& r = st.drawingSettings.objectLayers[i];
-        r.layer = rows[i].value("layer", r.layer);
-        const std::string mod = rows[i].value("modifier", std::string("none"));
-        r.modifier = mod == "prefix"   ? ObjectLayerRow::Modifier::Prefix
-                     : mod == "suffix" ? ObjectLayerRow::Modifier::Suffix
-                                       : ObjectLayerRow::Modifier::None;
-        r.value = rows[i].value("value", std::string());
-        r.locked = rows[i].value("locked", false);
-      }
-    }
-  }
+  if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object())
+    DrawingSettingsFromJson(doc["drawingSettings"], st.drawingSettings, log);
   // Paper space layouts (REQ-031). Missing/garbage → no layouts, model space (no crash).
   st.paperLayouts.clear();
   if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array()) {
@@ -2490,6 +2592,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
           v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
           v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
+          if (vo.contains("visualStyle") && vo["visualStyle"].is_number_integer()) {
+            const int vsRaw = vo["visualStyle"].get<int>();
+            v.visualStyle = (vsRaw >= 0 && vsRaw <= static_cast<int>(VisualStyle::Shaded))
+                                ? static_cast<VisualStyle>(vsRaw)
+                                : VisualStyle::Wireframe2D;
+          }
           // REQ-061: per-viewport camera. Absent in a legacy .gs -> the defaults (plan view) stand,
           // and ModelToPaperInThroughCamera then reproduces the pre-change projection exactly.
           v.camAzimuthDeg = vo.value("camAzimuthDeg", v.camAzimuthDeg);
@@ -3533,6 +3641,61 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.currentAnnotationScaleIndex = st.annotationScales.empty() ? -1 : 0;
   }
 
+  st.dwgImportedLights.clear();
+  st.dwgImportedSunPresent = false;
+  st.dwgImportedLightList = {};
+  st.dwgImportedLightListPresent = false;
+  st.dwgImportedLightListDictKey.clear();
+  if (doc.contains("dwgImportedLights") && doc["dwgImportedLights"].is_array()) {
+    for (const auto& el : doc["dwgImportedLights"]) {
+      CadDwgImportedLight l;
+      l.name = el.value("name", std::string{});
+      l.type = el.value("type", 2u);
+      l.on = el.value("on", true);
+      l.colorRgb24 = el.value("colorRgb24", 0xFFFFFFu);
+      l.intensity = el.value("intensity", 1.0);
+      if (el.contains("pos") && el["pos"].is_array() && el["pos"].size() >= 3) {
+        l.posX = el["pos"][0].get<double>();
+        l.posY = el["pos"][1].get<double>();
+        l.posZ = el["pos"][2].get<double>();
+      }
+      if (el.contains("target") && el["target"].is_array() && el["target"].size() >= 3) {
+        l.targetX = el["target"][0].get<double>();
+        l.targetY = el["target"][1].get<double>();
+        l.targetZ = el["target"][2].get<double>();
+      }
+      l.hotspotAngle = el.value("hotspotAngle", 0.0);
+      l.falloffAngle = el.value("falloffAngle", 0.0);
+      st.dwgImportedLights.push_back(std::move(l));
+    }
+  }
+  if (doc.contains("dwgImportedSun") && doc["dwgImportedSun"].is_object()) {
+    const auto& sun = doc["dwgImportedSun"];
+    st.dwgImportedSun.on = sun.value("on", true);
+    st.dwgImportedSun.colorRgb24 = sun.value("colorRgb24", 0xFFFFFFu);
+    st.dwgImportedSun.intensity = sun.value("intensity", 1.0);
+    st.dwgImportedSun.hasShadow = sun.value("hasShadow", true);
+    st.dwgImportedSun.julianDay = sun.value("julianDay", 0u);
+    st.dwgImportedSun.msecs = sun.value("msecs", 0u);
+    st.dwgImportedSun.isDst = sun.value("isDst", false);
+    st.dwgImportedSunPresent = true;
+  }
+  if (doc.contains("dwgImportedLightList") && doc["dwgImportedLightList"].is_object()) {
+    const auto& reg = doc["dwgImportedLightList"];
+    st.dwgImportedLightListPresent = true;
+    st.dwgImportedLightList.classVersion = reg.value("classVersion", 1u);
+    st.dwgImportedLightListDictKey = reg.value("dictKey", std::string{});
+    if (reg.contains("entries") && reg["entries"].is_array()) {
+      for (const auto& el : reg["entries"]) {
+        CadDwgImportedLightListEntry e;
+        e.name = el.value("name", std::string{});
+        st.dwgImportedLightList.entries.push_back(std::move(e));
+      }
+    }
+    if (st.dwgImportedLightListDictKey.empty())
+      st.dwgImportedLightListDictKey = "Default";
+  }
+
   st.drawingLayerTable.clear();
   if (doc.contains("layers") && doc["layers"].is_array()) {
     for (const auto& o : doc["layers"])
@@ -3567,6 +3730,20 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
 
   st.createPointsNextId = doc.value("createPointsNextId", 1);
+  st.pointVisibility = projpts::Rules{};  // REQ-377: absent -> show every point of the project
+  if (doc.contains("pointVisibility") && doc["pointVisibility"].is_object()) {
+    const json& v = doc["pointVisibility"];
+    projpts::Rules& r = st.pointVisibility;
+    r.idRanges = v.value("idRanges", std::string());
+    r.description = v.value("description", std::string());
+    r.useElevation = v.value("useElevation", false);
+    r.elevMin = v.value("elevMin", 0.0);
+    r.elevMax = v.value("elevMax", 0.0);
+    r.group = v.value("group", std::string());
+    r.sourceDrawing = v.value("sourceDrawing", std::string());
+    r.shown = projpts::IdsFromText(v.value("shown", std::string()));
+    r.hidden = projpts::IdsFromText(v.value("hidden", std::string()));
+  }
   if (doc.contains("createPointsOptions") && doc["createPointsOptions"].is_object())
     st.createPointsOpts = CreatePointsOptionsFromJson(doc["createPointsOptions"]);
   else
@@ -3781,6 +3958,18 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 }
 
 } // namespace
+
+std::string DrawingSettingsToJsonText(const DrawingSettings& ds) { return DrawingSettingsToJson(ds).dump(); }
+
+bool DrawingSettingsFromJsonText(const std::string& jsonText, DrawingSettings* out) {
+  const json o = json::parse(jsonText, nullptr, false);
+  if (!o.is_object())
+    return false;
+  *out = DrawingSettings{};
+  std::vector<std::string> ignored;  // a project default holds no captured tiles worth reporting
+  DrawingSettingsFromJson(o, *out, ignored);
+  return true;
+}
 
 std::string SerializeGoSurveyJson(const AppCommandState& st) {
   return BuildRoot(st).dump(2);

@@ -1,5 +1,6 @@
 #include "CadUi.hpp"
 #include "CadUiInternal.hpp"
+#include "ProjectFiles.hpp"
 #include "CadUiChrome.hpp"
 #include "CadBlocks.hpp"
 #include "DevShellHooks.hpp"
@@ -1305,6 +1306,8 @@ void DrawFloatingWindowChrome() {
       continue;
     if (w->DockIsActive || w->DockNodeAsHost)
       continue;  // docked panels state their elevation with CastShadowInto instead
+    if (w->ViewportOwned && w->Viewport != nullptr && (w->Viewport->Flags & ImGuiViewportFlags_NoDecoration) == 0)
+      continue;  // a window in its own OS window (the PDF viewer) has the operating system's frame
     // A title bar means "dialog"; the popup/tooltip flags catch menus and combos.
     // Everything else at top level is app furniture that paints its own edges —
     // the dockspace host, the status-bar strip, the floating command bar — and a
@@ -1524,11 +1527,17 @@ static void RestoreDrawingTabAfterFileDialog(AppCommandState& cmd, int tabIdxBef
 }
 
 void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
+  // REQ-382 clause 2: a read-only project cannot be changed, and its drawings are part of it.
+  if (ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx)) {
+    log.push_back("This project is open read-only; the drawing was not saved.");
+    return;
+  }
   char dwgPath[4096]{};
   const std::string& path = cmd.activeDocFilePath;
   if (!path.empty()) {
     if (SaveDrawingDocument(cmd, path.c_str(), log)) {
       cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+      SyncProjectFilesOnSave(cmd, cmd.activeDrawingIdx, path, log);  // REQ-379 clause 2
       RecordRecentDrawing(cmd, path);
     }
     return;
@@ -1548,6 +1557,7 @@ void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
   cmd.activeDocFilePath      = std::string(dwgPath);
   if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
     cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::u8path(dwgPath).stem().u8string();
+  SyncProjectFilesOnSave(cmd, cmd.activeDrawingIdx, cmd.activeDocFilePath, log);  // REQ-379 clause 2
   RecordRecentDrawing(cmd, cmd.activeDocFilePath);
 }
 
@@ -1569,19 +1579,35 @@ void NewDrawingInTab(AppCommandState& cmd, std::vector<std::string>& log) {
 // REQ-055 / REQ-308: open \p dwgPathUtf8 (or browse when null) into a new focused tab. Shared by
 // File ▸ Open and the Start screen's Open button / recent-drawing tiles.
 void OpenDrawingInNewTab(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8) {
+  OpenDrawingInNewTabAs(cmd, log, dwgPathUtf8, ProjectJoin{});
+}
+
+void OpenDrawingInNewTabAs(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8,
+                           ProjectJoin join) {
   char browsed[4096]{};
   if (!dwgPathUtf8) {
     if (!BrowseOpenFileDwgUtf8(browsed, sizeof(browsed)))
       return;
     dwgPathUtf8 = browsed;
   }
+  // REQ-374: find the drawing's project (walking up from its folder) before anything is created. A
+  // false return means a prompt was queued or the project could not be read; the prompt's buttons
+  // re-enter here with the join decided. No .gsproj anywhere above = standalone, exactly as before.
+  if (join.detect) {
+    if (!ResolveProjectJoin(cmd, log, dwgPathUtf8, &join.uid))
+      return;
+  }
   SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
   const std::string tabName = std::filesystem::path(dwgPathUtf8).stem().u8string();
   const int newIdx = static_cast<int>(cmd.drawingTabs.size());
-  cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++});
+  cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++, join.uid});
+  if (join.uid != 0)
+    NoteProjectJoin(cmd, log, join.uid);
   cmd.documents.emplace_back();
   RestoreDocumentFromSnapshot(cmd, newIdx);  // clear cmd to empty state
   if (OpenDrawingDocument(cmd, dwgPathUtf8, log)) {
+    if (join.uid != 0)
+      ApplyProjectFilesOnOpen(cmd, join.uid, dwgPathUtf8, log);  // REQ-379 clause 2
     cmd.activeDocSavedRevision = cmd.cadGpuRevision;
     cmd.activeDocFilePath      = std::string(dwgPathUtf8);
     RecordRecentDrawing(cmd, cmd.activeDocFilePath);
@@ -1615,17 +1641,50 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 8.f));
   if (ImGui::BeginMenu("File")) {
     if (ImGui::MenuItem("New", nullptr)) {
+      // REQ-374 clause 1: a new drawing made while a project drawing is active joins that project and
+      // starts with its defaults (EnforceProjectSettings applies them).
+      const std::uint32_t projectUid =
+          cmd.activeDrawingIdx >= 1 && cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size())
+              ? cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid
+              : 0u;
       NewDrawingInTab(cmd, log);
+      cmd.drawingTabs.back().projectUid = projectUid;
     }
     if (ImGui::MenuItem("Open", nullptr)) {
       OpenDrawingInNewTab(cmd, log, nullptr);
     }
+    if (ImGui::MenuItem("New Project...", nullptr))
+      cmd.showNewProjectDialog = true;
+    if (ImGui::MenuItem("Open Project...", nullptr))
+      OpenProjectFile(cmd, log, nullptr);
+    if (ImGui::MenuItem("Open Packed Project...", nullptr))  // REQ-380
+      OpenPackedProject(cmd, log, nullptr, nullptr);
     // REQ-308: the Start tab has no document to save.
     ImGui::BeginDisabled(cmd.activeDrawingIdx == 0);
+    if (ImGui::MenuItem("Project Settings...", nullptr, false,
+                        !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty() &&
+                            !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx)))
+      cmd.projectSettingsUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-375
+    if (ImGui::MenuItem("Add Drawing to Project...", nullptr, false,
+                        !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty() &&
+                            !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx)))
+      cmd.addDrawingToProjectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-378
+    if (ImGui::MenuItem("Project Health...", nullptr, false, !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty()))
+      cmd.projectHealthUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-379
+    if (ImGui::MenuItem("Pack Project...", nullptr, false, !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty())) {
+      cmd.projectPackPrompt = {};  // REQ-380
+      cmd.projectPackPrompt.projectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;
+    }
+    if (ImGui::MenuItem("Create Turnover...", nullptr, false,
+                        !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty() &&
+                            !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx))) {
+      cmd.projectTurnoverPrompt = {};  // REQ-381
+      cmd.projectTurnoverPrompt.projectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;
+    }
     if (ImGui::MenuItem("Save", "Ctrl+S")) {
       SaveActiveDocument(cmd, log);
     }
-    if (ImGui::MenuItem("Save As...")) {
+    if (ImGui::MenuItem("Save As...", nullptr, false, !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx))) {
       ClearSaveTrace();
       AppendSaveTrace("ui: save-as menu");
       const int tabBeforeDialog = cmd.activeDrawingIdx;
@@ -1645,6 +1704,7 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
           if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
             cmd.drawingTabs[cmd.activeDrawingIdx].name =
                 std::filesystem::u8path(dwgPath).stem().u8string();
+          SyncProjectFilesOnSave(cmd, cmd.activeDrawingIdx, cmd.activeDocFilePath, log);  // REQ-379 clause 2
           AppendSaveTrace("ui: before record recent");
           RecordRecentDrawing(cmd, cmd.activeDocFilePath);
           AppendSaveTrace("ui: save-as complete");
@@ -6095,10 +6155,19 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         ImGui::BeginGroup();
         ImGui::TextUnformatted("Visual style");
         ImGui::SetNextItemWidth(visualStyleComboW);
-        int vsIdx = static_cast<int>(cmd.viewportVisualStyle);
+        Viewport* ribbonVp = CurrentViewport(cmd);
+        VisualStyle ribbonVs =
+            ribbonVp != nullptr ? ribbonVp->visualStyle : cmd.viewportVisualStyle;
+        int vsIdx = static_cast<int>(ribbonVs);
         const char* kVsItems[] = {"2D Wireframe", "Hidden", "Shaded"};
-        if (ImGui::Combo("##RibbonVisualStyle", &vsIdx, kVsItems, IM_ARRAYSIZE(kVsItems)))
-          cmd.viewportVisualStyle = static_cast<VisualStyle>(vsIdx);
+        if (ImGui::Combo("##RibbonVisualStyle", &vsIdx, kVsItems, IM_ARRAYSIZE(kVsItems))) {
+          const VisualStyle next = static_cast<VisualStyle>(vsIdx);
+          if (ribbonVp != nullptr)
+            ribbonVp->visualStyle = next;
+          else
+            cmd.viewportVisualStyle = next;
+          BumpCadGpuCache(cmd);
+        }
         RibbonItemHelp("How the viewport draws.\n"
                        "2D Wireframe — every edge visible, no depth testing (the classic view).\n"
                        "Hidden — near geometry hides far geometry.\n"
@@ -9784,6 +9853,42 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     }
   }
 
+  // ADR-065 (d), GitHub #150: a drape that FOLLOWS a surface must say so where a user looks at
+  // an object. Without this the link is a hidden attribute - the geometry moves on a rebuild and
+  // nothing on screen ever said it would. The text comes from `DrapedOnSurfaceName`, the same
+  // resolver DRAPELINKS uses, so the panel and the report cannot disagree; it is empty for an
+  // object that follows nothing, including one whose surface has been erased.
+  {
+    std::string followed;
+    int followCount = 0;
+    for (const auto& e : sel) {
+      const std::string n = DrapedOnSurfaceName(cmd, e);
+      if (n.empty())
+        continue;
+      ++followCount;
+      if (followed.empty())
+        followed = n;
+      else if (followed != n)
+        followed = "*varies*";
+    }
+    if (followCount > 0 && PropSectionHeader("Surface")) {
+      if (ImGui::BeginTable("props_drape", 2, kPropTableFlags)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        ImGui::TableNextRow();
+        PropValueCellBg();
+        ImGui::TableNextColumn(); ImGui::TextUnformatted("Draped on");
+        ImGui::TableNextColumn(); ImGui::TextUnformatted(followed.c_str());
+        ImGui::TableNextRow();
+        PropValueCellBg();
+        ImGui::TableNextColumn(); ImGui::TextUnformatted("Follows rebuilds");
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(followCount == static_cast<int>(sel.size()) ? "Yes" : "Some");
+        ImGui::EndTable();
+      }
+    }
+  }
+
   if (haveSurveyPick) {
     ImGui::Separator();
     ImGui::TextDisabled("Survey bulk edit: VIEWPOINTS (VWPTS).");
@@ -9863,6 +9968,7 @@ static void DrawPlotScaleCombo(AppCommandState& cmd, float width = 158.f) {
         } else if (mup != cmd.modelUnitsPerPlottedInch) {
           PushUndoSnapshot(cmd, "Plot scale");  // the plot scale is undoable (REQ-357)
           SetDrawingPlotScale(cmd, mup);
+          NoteUserPlotScale(cmd);  // REQ-375: an override of the project's default, or inherited again
         }
       }
       if (isSel)
@@ -13408,7 +13514,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (isStart)
         tflags |= ImGuiTabItemFlags_Leading | ImGuiTabItemFlags_NoReorder;
       // Append "##<uid>" so each tab has a unique ImGui ID even when two tabs share the same display name.
-      const std::string tabLabel = cmd.drawingTabs[i].name + "##dt" + std::to_string(cmd.drawingTabs[i].uid);
+      // REQ-374 clause 8: a project drawing's tab carries its project's name.
+      const std::string projName = ProjectNameForTab(cmd, i);
+      const std::string tabLabel = cmd.drawingTabs[i].name + (projName.empty() ? "" : "  [" + projName + "]") +
+                                   "##dt" + std::to_string(cmd.drawingTabs[i].uid);
       if (ImGui::BeginTabItem(tabLabel.c_str(), isStart ? nullptr : &tabOpen, tflags)) {
         // While a programmatic switch is pending, ignore the selection ImGui reports for any OTHER tab.
         // Tabs are submitted in index order, so the tab that is still selected this frame is reached
@@ -13420,7 +13529,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
         ImGui::EndTabItem();
       }
-      if (!tabOpen && i >= FirstDrawingTabIndex() && cmd.drawingTabs.size() > 2) {
+      if (cmd.closeTabPrompt.confirmed && cmd.closeTabPrompt.tabIdx == i)
+        tabOpen = false;  // REQ-383: "Close anyway" answered last frame
+      if (!tabOpen && i >= FirstDrawingTabIndex() && cmd.drawingTabs.size() > 2 && ProjectTabMayClose(cmd, i, log)) {
         const int closeIdx  = i;
         const int tabCount  = static_cast<int>(cmd.drawingTabs.size());
 

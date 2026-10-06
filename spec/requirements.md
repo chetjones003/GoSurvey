@@ -10849,7 +10849,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-05 - initial (D-2026-10-05-a; reference screenshots from Civil 3D 2026).
 
-### REQ-371 — Side slope grading to a surface: the daylight line
+### REQ-398 — Side slope grading to a surface: the daylight line
 - Purpose:     turn a designed edge into buildable earthwork. A pad or road edge cannot stand on
                vertical walls of soil, so its sides ramp out at a safe slope until they reach
                existing ground. Where they reach it is the **daylight line**, and that line — not
@@ -10929,6 +10929,1145 @@ capability that does not exist. They are recorded here rather than quietly dropp
                crossing, so ground detail finer than one step can hide a second crossing and the
                nearest one is reported. Stated here rather than discovered later; the step is chosen
                against the surface's own triangle scale.
+### REQ-371 — AutoCAD VISUALSTYLE on paper viewports and DWG (GitHub issue #624, increment 1)
+
+- Purpose: issue #624 (visual styles / materials / lights) — **increment 1** maps AutoCAD
+  **VISUALSTYLE** objects to GoSurvey's existing REQ-064 viewport styles on **paper-space
+  VIEWPORT** entities so layout viewports round-trip through `.gs` and R2007+ DWG.
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-b (closes the SPEC GAP on issue #624 for visual styles only; materials
+  and lights remain future increments / spin-offs).
+- Depends on: REQ-064 (GoSurvey visual styles), REQ-170 / issue #610 (paper VIEWPORT export),
+  issue #600 (R2007+ export path).
+- Statement:
+  1. **Storage.** Each `Viewport` carries a `VisualStyle` (default 2D Wireframe), persisted in `.gs`
+     additively on the layout viewport object.
+  2. **Import.** Opening a DWG reads each paper-space VIEWPORT's `visualstyle` handle, resolves the
+     VISUALSTYLE object when LibreDWG decodes it, and maps AutoCAD's style to the nearest
+     GoSurvey `VisualStyle` (2D Wireframe, Hidden, or Shaded).
+  3. **Export.** At **R2007+**, export writes or reuses VISUALSTYLE dictionary entries and sets each
+     exported paper VIEWPORT's `visualstyle` handle from the GoSurvey style, and sets the model-space
+     VPORT table `*Active` record (and `DRAGVS`) from `AppCommandState::viewportVisualStyle`.
+     R2000/R2004 export omits native visual styles (handles not written).
+  3b. **Import (model).** Opening an R2007+ DWG reads VPORT `*Active` `visualstyle` into
+     `viewportVisualStyle` when present.
+  4. **UI / commands.** The Viewports window exposes a per-viewport visual style combo; `VISUALSTYLE`
+     (and `VS`) set the **current** paper viewport's style when one is active (floating or selected),
+     otherwise the model-space style (REQ-064).
+  5. **Floating model space.** While editing through a layout viewport, the model GL pass runs with
+     that viewport's `visualStyle` (not a blank sheet).
+  6. **Out of scope:** AutoCAD Realistic/Conceptual/X-Ray fidelity beyond the three GoSurvey styles;
+     **materials** → **REQ-372**; **lights/sun** → future REQ (issue #624).
+- Acceptance:
+  - `LibreDwgCadTests` tag `[issue624][req371]`: R2018 export of two paper viewports with Hidden and
+    Shaded re-import with the same `VisualStyle` values; tag `[model]` round-trips model
+    `viewportVisualStyle` via VPORT `*Active`;
+  - `GsIoViewportCameraTests` tag `[req371]`: `.gs` save/load preserves `visualStyle` on layout viewports;
+  - REQ-201 / `#614` do not claim visual styles are an untracked #601 gap for paper viewports at R2007+.
+- Owner-layer: IO (`LibreDwgVisualStyle.cpp`, `LibreDwgCad.cpp`), Domain (`PaperSpace.hpp`), IO (`.gs`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #624 increment 1; D-2026-10-05-b). 2026-10-05 — model VPORT
+  `*Active` import/export (increment 2).
+
+### REQ-372 — AutoCAD MATERIAL diffuse display and DWG (GitHub issue #624, materials slice)
+
+- Purpose: issue #624 **materials** — AutoCAD **MATERIAL** objects (R2007+ `ACAD_MATERIAL` dictionary)
+  carry surface appearance for 3D hosts. GoSurvey today shades meshes and tessellated solids from
+  **entity/layer colour only** (REQ-064 / REQ-048). This REQ adds **diffuse RGB** fidelity and DWG
+  round-trip for that slice; textures and full PBR stay deferred with honest logging (REQ-201).
+- Priority: should
+- Type: interop + display
+- Decision: D-2026-10-05-c (closes the SPEC GAP on issue #624 for materials; **lights/sun** remain a
+  separate future REQ; phased delivery like REQ-369 / REQ-368).
+- Depends on: REQ-064 (Shaded draw path), REQ-048 (entity colour), REQ-063/REQ-313 (mesh and solid
+  display hosts), REQ-170 / issue #600 (R2007+ DWG export path), REQ-371 (visual styles — orthogonal).
+- Statement:
+  1. **Increment 1 — import display.** Opening an R2007+ DWG resolves each 3D host's material handle
+     (LibreDWG `MATERIAL` when decoded). When a material exposes a **diffuse colour**, shaded drawing
+     uses that RGB for the mesh or tessellated solid instead of the entity colour alone. Image-based
+     textures, bump/normal maps, and procedural maps are **not** evaluated; import logs how many
+     materials or hosts had only non-diffuse data (REQ-201).
+  2. **Increment 2 — GoSurvey → DWG export.** At **R2007+**, export writes hand-built **`MATERIAL`**
+     objects (LibreDWG has no `dwg_add_MATERIAL`) into `ACAD_MATERIAL`, keyed by a stable name derived
+     from the host's effective diffuse RGB, and attaches material handles to exported **3D hosts**
+     GoSurvey already writes (`POLYLINE_PFACE` meshes/TIN from #611, `3DSOLID` from #612). R2000/R2004
+     export omits native materials (display colour only).
+  3. **Increment 3 — `.gs` persistence.** Optional additive fields on display hosts record the AutoCAD
+     material **name** (when known) and diffuse override so save/load preserves import results without
+     requiring a DWG round-trip.
+  4. **Increment 4 — round trip.** GoSurvey → DWG (R2018) → GoSurvey preserves diffuse material
+     appearance on a representative mesh and `3DSOLID` sample; `#614` loss lines name hosts whose
+     materials could not be encoded (missing writer, unsupported map-only materials).
+  5. **Out of scope:** `LIGHT`, `SUN`, `LIGHTLIST`, geographic sun, material editor UI, assigning
+     materials by layer in GoSurvey, Civil 3D render materials, and full AutoCAD Realistic/Conceptual
+     shader parity. Those remain issue **#624** follow-ups or separate issues.
+- Acceptance:
+  - **(Inc 1)** `[issue624][req372]` import test: a fixture DWG with a diffuse `MATERIAL` on a mesh or
+    solid host draws with that RGB in Shaded (unit/headless where feasible, else fixture + log assertion).
+  - **(Inc 2–4)** `[issue624][req372]` export/import: R2018 round-trip preserves diffuse material on at
+    least one mesh and one `3DSOLID`; export log or `#614` lists map-only materials when present.
+  - **(Inc 3)** `.gs` save/load preserves material name + diffuse override when increment 3 lands.
+  - REQ-201 / `#601` gap doc no longer lists **materials** as an untracked SPEC GAP.
+- Owner-layer: IO (`LibreDwgMaterial.cpp` planned, `LibreDwgCad.cpp`), Renderer (diffuse override on
+  shaded batches), IO (`.gs` additive fields)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #624 materials slice; D-2026-10-05-c). 2026-10-05 —
+  increment 1 shipped (import diffuse display + REQ-201 log). 2026-10-05 — increment 2 shipped
+  (R2007+ export MATERIAL + ACAD_MATERIAL on mesh hosts; 3DSOLID entity material deferred). 2026-10-05 —
+  increment 3 shipped (`.gs` material name + diffuse override on entity attributes). 2026-10-05 —
+  increment 4 shipped (`[issue624][req372]` mesh export round-trip, 3DSOLID import, `#614` solid material loss).
+
+### REQ-373 — Project format: a folder with a `<Name>.gsproj` marker, standard subfolders, relative file references (GitHub issue #696, P1)
+
+- Purpose: issue #696 — GoSurvey works on single drawings only. A **project** is one job's folder
+  (DWGs, points, point clouds, PDFs, turnovers, settings) that can be emailed and opened elsewhere
+  with nothing missing. This REQ fixes what a project *is* on disk.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decisions 1, 2, 8, 9 of the issue), ADR-065.
+- Depends on: REQ-175 / ADR-044 (DWG document), REQ-201 (honest failure).
+- Statement:
+  1. **Marker.** A project is a folder containing exactly one `<Name>.gsproj` file (e.g.
+     `MyJob.gsproj`). A folder without one is not a project. More than one `.gsproj` in a folder is a
+     damaged project (REQ-374 clause 5).
+  2. **Standard subfolders.** Creating a project creates `Drawings/`, `Points/`, `PointClouds/`,
+     `PDFs/`, `Turnovers/` and `Settings/`. Subfolders inside them are allowed. The layout is
+     recorded in the `.gsproj` (name → relative folder) so it can become configurable later; this
+     REQ does not make it configurable.
+  3. **`.gsproj` content.** UTF-8 JSON, versioned (`formatVersion`), holding: a **project ID** (GUID,
+     created once, never changed, carried by packs); the project name; the folder layout; the
+     project settings (REQ-375); the **tracked items** list (clause 4). Unknown fields are preserved
+     on save (additive evolution, REQ-002 spirit).
+  4. **Tracked items.** Every non-drawing file the project owns or links (point clouds, PDFs,
+     turnovers, point files) is an entry with: a **project-relative location**, a **kind**, and its
+     **associations** (e.g. the drawing a point cloud or PDF is attached to). Drawings are tracked
+     too, so their attachments can be listed per drawing.
+  5. **Relative paths only.** Every stored location is relative to the project folder
+     (`PointClouds/site.e57`), never absolute. A path that escapes the project folder (`..`, a drive
+     letter, a UNC path) is rejected on load with a REQ-201 message.
+  6. **Reference kind.** Each reference has `kind` = `in-project` or `local-link`. A `local-link`
+     entry stores an absolute path (the only place one is allowed), and is flagged "will not travel
+     with the project" (REQ-379). The field is a string so a future `remote` kind can be added
+     without a format change; a reader meeting an unknown kind keeps the entry, shows it as
+     unavailable, and does not fail the load.
+  7. **Write safety.** The `.gsproj` is written to a temporary file in the same folder and then
+     renamed over the old one, so a crash never leaves a half-written project file.
+- Acceptance:
+  - `[req373]` tests: create-project makes the marker and six folders; a `.gsproj` round-trips
+    (including an unknown field and an unknown reference kind); `..`/absolute/UNC in-project paths
+    are rejected; two `.gsproj` in one folder reports damage; an interrupted write leaves the
+    previous file intact.
+- Owner-layer: IO (project file reader/writer), Domain (project model)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-374 — Create, open and join projects; several projects open at once (GitHub issue #696, P1)
+
+- Purpose: how a user gets into a project and how a drawing knows which project it belongs to.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decisions 6, 7, 12).
+- Depends on: REQ-373, REQ-308 (Start tab), REQ-055 (drawing tabs), REQ-357 (Drawing Settings).
+- Statement:
+  1. **New Project.** A dialog collects name, location (parent folder), **coordinate system** and
+     **linear units** (REQ-375), and creates the REQ-373 layout. An optional "start from an existing
+     drawing" runs the REQ-378 flow. A new drawing created while a project is active starts empty
+     with the project defaults and skips REQ-378.
+  2. **Open Project.** Choosing a `.gsproj` (or its folder) opens the project. Opening a project does
+     not open every drawing; the Project Files list (REQ-379) shows them.
+  3. **Start screen.** The Start tab (REQ-308) shows **New Project** and **Open Project** buttons and a
+     **Recent Projects** list (name, folder path, last-opened date, thumbnail) **above** the existing
+     Recent Drawings. Each Recent Drawings entry carries its project's name as a tag, or
+     "Standalone". A missing project folder is offered for removal from the list (REQ-201).
+  4. **Auto-detect and join.** On opening a DWG, GoSurvey looks in the drawing's folder, then each
+     parent folder up to the drive root, and uses the **first** `.gsproj` found. The DWG joins that
+     project **only if it lies inside the project folder**. If none is found the drawing is
+     **standalone** and behaves exactly as before this feature (its points stay in the DWG).
+  5. **Damaged project.** If the found `.gsproj` is damaged or unreadable, GoSurvey says so and offers
+     **Open standalone** or **Cancel**. It never silently drops project data.
+  6. **Notice.** A short notice confirms a join ("Opened in project MyJob").
+  7. **Several projects.** Several projects may be open at once. **Each drawing tab belongs to exactly
+     one project** (or none). Opening a drawing whose project is already open adds a tab to it.
+  8. **Name is always visible.** Every drawing tab and the Toolspace header show the active project's
+     name; standalone drawings show nothing.
+- Acceptance:
+  - `[req374]` tests: join resolution (first marker walking up; drawing outside the folder does not
+    join; none → standalone; damaged → prompt result, never silent); two projects open with tabs
+    attributed correctly; recent-projects list persistence and missing-folder handling;
+    DevShell/GUI check of the Start tab layout.
+  - A drawing opened outside any project is unaffected by this feature.
+- Owner-layer: UI (Start tab, dialogs, tabs), Domain (project registry, join resolution), IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-375 — Project settings: enforced coordinate system and units, inheritable defaults, per-drawing overrides (GitHub issue #696, P2)
+
+- Purpose: drawings in one job must agree on where they are and in what units; everything else is a
+  sensible default a single drawing may override.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 5), D-2026-10-05-e (which settings are which).
+- Depends on: REQ-373, REQ-357..REQ-362 (Drawing Settings, zone, transformation), REQ-022 (drawing unit).
+- Statement:
+  1. **Project Settings window** (command `PROJECTSETTINGS` and a Project menu item, in the
+     Drawing Settings dialog style) edits the settings stored in the `.gsproj`.
+  2. **Enforced.** The **coordinate system** (zone) and **linear units** are set by the project and
+     **cannot be overridden** by a project drawing; Drawing Settings shows them read-only with an
+     "enforced by project" indicator.
+  3. **Inherited.** Six settings are **project defaults** (D-2026-10-05-e): angular units, the
+     imperial-to-metric foot definition, "scale objects inserted from other drawings", "set drawing
+     variables to match", the plot scale, and the Object Layers table. A drawing may override each;
+     Drawing Settings marks each **inherited** or **overridden** and offers **Reset to project
+     value**. Overrides are saved in the drawing (ADR-044 trailer `drawingSettings.overridden`).
+     A change to a project default reaches every drawing that has not overridden it, open or not.
+     The transformation, the geographic marker and the online map are always the drawing's own.
+     A value the user changes is an override exactly when it differs from the project's.
+  3a. **Nothing set, nothing enforced.** A project that has no coordinate system (or unit) set
+     enforces none, and one with no defaults supplies none, so a project made before P2 does not
+     alter its drawings. A drawing that disagrees with an enforced value is brought into line when
+     it opens or when the project changes, and each replacement is reported (REQ-201); no
+     coordinate is moved or scaled. The New Project dialog (REQ-374 clause 1) takes the unit and
+     opens Project Settings straight afterwards for the coordinate system.
+  4. **Standalone** drawings are unchanged: all settings belong to the drawing (REQ-357).
+  5. **Mismatch.** Adding or importing content whose coordinate system or units differ from the
+     project's is governed by REQ-378 clause 5 and REQ-383 clause 3.
+- Acceptance:
+  - `[req375]` tests: a project drawing cannot change zone/units; an inherited setting follows a
+    project change; an overridden one does not; reset restores inheritance; standalone is unchanged;
+    overrides survive save and reopen; a project with nothing set enforces nothing.
+- Owner-layer: Domain (settings resolution), UI (windows), IO (`.gsproj`, trailer)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P2: clause 3 names the
+  six defaults, clause 3a added (D-2026-10-05-e).
+
+### REQ-376 — Project-wide survey point database shared by every drawing in the project (GitHub issue #696, P3)
+
+- Purpose: EG, FG and other drawings of one job share one set of points; edits in one are seen by all.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 3), ADR-065.
+- Depends on: REQ-373, REQ-023 (survey points), REQ-067 (point groups), REQ-382 (locking).
+- Statement:
+  1. **One database per project.** A project owns one survey point database (storage: ADR-065). A
+     drawing in a project reads and writes points **through** it; the points are not stored in the
+     DWG.
+  2. **Automatic updates.** Add, edit and delete of a point in any project drawing update the
+     database at once. A change made in one open tab is visible **live** in every other open tab of
+     the same project.
+  3. **Source drawing.** Each point records the drawing that created it (the **source drawing**).
+  4. **Number identity.** A point number is unique in the database. Adding a point whose number
+     already exists prompts **overwrite / renumber / cancel** (REQ-383).
+  5. **Standalone fallback.** A drawing with no project keeps its points inside the DWG exactly as
+     today (REQ-023, ADR-044).
+  6. **Read-only.** A read-only opener (REQ-382) can view points but every command that would change
+     the database is refused with a REQ-201 message.
+  7. **Durability.** The database is saved with the project (not only on drawing save) and written
+     atomically; unsaved database changes are listed on close (REQ-383).
+- Acceptance:
+  - `[req376]` tests: two open project drawings stay in sync on add/edit/delete; source drawing is
+    recorded; duplicate-number prompt outcomes; standalone drawing keeps points in the DWG;
+    read-only refuses writes; atomic-write interruption keeps the previous database.
+  - Issue-level: EG and FG share one database and stay in sync.
+- Owner-layer: Domain (point database), IO (database file), UI (prompts)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-377 — Per-drawing point visibility rules and the Survey Database toolspace section (GitHub issue #696, P4)
+
+- Purpose: two drawings share every point yet each shows only the subset that belongs on it.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 4).
+- Depends on: REQ-376, REQ-067 (point groups), REQ-175 / ADR-044.
+- Statement:
+  1. **Rules.** Each project drawing has **visibility rules**, saved in the drawing (ADR-044 trailer).
+     A rule can combine **point number range**, **description** (wildcard, e.g. `EG*`), **elevation**
+     range, **point group**, and **source drawing**. A point is shown when the rules match it.
+  2. **Default for new points.** A point created in a drawing is visible in that drawing by default
+     and is shown in other drawings only if their rules match.
+  3. **Toolspace.** A **Survey Database** dropdown sits alongside Surfaces and Feature Lines. It lists
+     the project's points and edits the current drawing's rules with filters for point number,
+     description, elevation, point group and source drawing.
+  4. **Hide here only.** A point can be hidden in the current drawing without deleting it from the
+     database (REQ-383 clause 4).
+  5. Hidden points are not drawn, snapped to, selected, or used by surfaces built in that drawing.
+- Acceptance:
+  - `[req377]` tests: each filter, combined filters, source-drawing filter, default visibility of a
+    new point, hide-in-this-drawing-only, rules persisted through DWG save/load; a GUI check of the
+    toolspace section.
+  - Issue-level: EG and FG show different subsets of one database.
+- Owner-layer: Domain (rules), UI (toolspace), IO (trailer)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-378 — Add Drawing to Project: preview, per-conflict choices, copy-in (GitHub issue #696, P5)
+
+- Purpose: bring an existing drawing into a project safely.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 13).
+- Depends on: REQ-374, REQ-375, REQ-376, REQ-377.
+- Statement:
+  1. The user picks a drawing. **Before anything changes** GoSurvey shows a summary (e.g. "47 points
+     found. 12 numbers already exist (3 identical, 9 differ).").
+  2. For each conflict the user chooses **skip**, **overwrite** or **renumber**.
+  3. After confirmation GoSurvey **copies the DWG into `Drawings/`** (the original is untouched), adds
+     its points to the database tagged with that drawing as **source drawing**, and sets the drawing's
+     visibility rules to show exactly those points.
+  4. Settings that differ from the project become **overrides** (REQ-375).
+  5. A **coordinate-system or unit mismatch blocks** the add, with a **convert** option or cancel.
+     **Convert** (D-2026-10-05-g) transforms the copy of the drawing into the project's coordinate
+     system and units as one similarity transform (scale, rotation about the vertical axis, shift)
+     computed with CS-MAP at the drawing's centre and applied to every object, so shapes stay exact.
+     A units mismatch scales X, Y and heights; a coordinate-system mismatch moves X and Y only. The
+     leftover error at the drawing's extents is shown in the preview; above **0.02 m** the convert is
+     refused. A drawing with no coordinate system (or unitless) has nothing to compare, so it is not a
+     mismatch. A drawing holding objects the transform cannot move (surfaces, meshes, point clouds,
+     PDF underlays, position markers, multileaders, paper-space viewports) cannot be converted; it
+     stays blocked and the kinds are named (REQ-201). Saved views, named UCSs, the geographic marker,
+     the transformation and captured map areas refer to the old coordinates and are cleared in the
+     copy (reported). A drawing that was not converted is copied byte for byte with only its GoSurvey
+     trailer replaced; a converted one is saved as a GoSurvey drawing, so its DWG body matches.
+  5a. **Visibility rules.** The drawing shows exactly the points it brought: a point-number filter
+     lists them (a drawing with no points keeps the default rules). A point identical to one already
+     in the database is shared, not duplicated.
+  6. Cancelling at any point leaves the project and the original unchanged.
+- Acceptance:
+  - `[req378]` tests: summary counts (new / identical / differing); each conflict choice; copy-in
+    leaves the original byte-identical; rules equal the added set; overrides captured; mismatch
+    blocks; cancel changes nothing.
+- Owner-layer: Domain, UI, IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — clause 5 defines Convert and
+  clause 5a added (D-2026-10-05-g, issue #696 P5).
+
+### REQ-379 — Tracked files, attach (copy or link), Project Files list and Project Health (GitHub issue #696, P6)
+
+- Purpose: a recipient of an emailed project gets every drawing with its attachments and no missing
+  files.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decisions 8, 9, 10).
+- Depends on: REQ-373, REQ-171/172 (point clouds), PDF underlays.
+- Statement:
+  1. **Attach.** Attaching an external file (point cloud, PDF, point file) to a project drawing
+     **copies it into the project** by default, into the matching standard subfolder, after a
+     **size prompt**. **Link** is allowed but is flagged "will not travel with the project".
+  2. **Associations.** Point clouds and PDFs are recorded as associated with the drawing they are
+     attached to, so opening the drawing finds them via the `.gsproj`. The record is written when the
+     drawing is saved inside the project (an unsaved drawing has no project-relative name yet), and
+     lists exactly what the saved drawing holds. A PDF underlay is not stored in the DWG (REQ-379 /
+     D-2026-10-05-h), so its tracked item also carries a `placements` list — per drawing: page, insertion
+     point (world coordinates), scale, rotation, raster resolution, snap options, layer, fade and
+     background flag — and opening a project drawing re-places each PDF from it. A point cloud found
+     missing at its stored path is resolved to the tracked item of the same file name associated with
+     the drawing. A tracked file that is missing on open is reported (REQ-201) and the drawing still
+     opens. A drawing outside any project is unchanged.
+  3. **Project Files section** in the Toolspace lists tracked items by folder, with a link badge on
+     `local-link` entries.
+  4. **Project Health** reports: linked (non-travelling) files, missing files, unsaved drawings, and
+     offers **copy links into the project**. It runs before **Pack Project** (REQ-380) and before a
+     **turnover** (REQ-381) is created.
+  5. **Add PDF to project (D-2026-10-06-c).** The Project Files section has an **Add PDF...** button
+     (disabled in a read-only project) that tracks a PDF **without placing it in any drawing**, so a
+     PDF that was dropped into a project folder by hand appears in the list and can be opened in the
+     viewer. A PDF already inside the project folder is tracked where it is; one outside goes through
+     the clause 1 prompt (copy into the PDFs folder by default, or link, flagged). It has no drawing
+     association and no placements. Tracking the same file twice changes nothing. Files other than
+     PDFs are not accepted here (point clouds and point files keep their own import commands).
+  6. **Refresh (D-2026-10-06-d).** A **Refresh** button at the top of the Toolspace (project drawings
+     only; disabled in a read-only project) looks through the project folder for **new files** — files
+     of a kind the Project Files list understands (`.dwg`, `.pdf`, `.e57`) that the project does not
+     track — and, **only when the user pressed Refresh**, asks which of them to track. The question
+     lists every new file with a tick box (all ticked), and **Track selected** / **Track none** buttons.
+     Nothing is tracked, copied or moved without that answer, and nothing is scanned or listed
+     automatically. Hidden folders (names starting with `.`), the project's own files (`.gsproj`, lock,
+     shared point database, caches, turnover records, packs) and files already tracked are never
+     offered. "Track none" leaves the files untracked; pressing Refresh again offers them again.
+- Acceptance:
+  - `[req379]` tests: copy default; size prompt threshold; link flagged; relative path recorded;
+    Health lists each problem class; "copy links in" converts a link to `in-project`.
+  - `[req379][issue732]` test: the new-file scan offers an untracked `.dwg` / `.pdf` / `.e57` in any
+    subfolder, and offers none of: a tracked file (any letter case), a hidden folder's files, the
+    `.gsproj`, a `.gscloud`, a `.gsturnover`, or a file of another kind.
+  - `[req379][issue732]` test: tracking a PDF inside the project adds one `in-project` item with no
+    associations and no placements; tracking it again changes nothing; an outside file becomes a
+    flagged `local-link`.
+- Owner-layer: Domain, UI, IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — clause 2 gains the
+  PDF `placements` record and the write-on-save rule (issue #696 P6; D-2026-10-05-h). The size prompt
+  appears for every copy/link and warns at 100 MB or more (ASSUMPTION, recorded in TASK-696-p6).
+  2026-10-06 — clause 5 added: Add PDF to project (D-2026-10-06-c); clause 6: Refresh and ask to track
+  new files (D-2026-10-06-d).
+
+### REQ-380 — Pack Project (`.gspack`) and Open Packed Project (GitHub issue #696, P7)
+
+- Purpose: send a whole project by email or share.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 10), D-2026-10-05-i (container).
+- Depends on: REQ-373, REQ-379, REQ-382, REQ-300.
+- Statement:
+  1. **Pack Project** runs Project Health (REQ-379) first, then writes a single `.gspack` file
+     containing the project folder (marker, subfolders, tracked items) and its **project ID**. The
+     `.gspack` is a standard ZIP (D-2026-10-05-i, ADR-066) whose entries are project-relative paths,
+     plus a `gspack.json` manifest (format version, project ID, project name, date, left-out files, and
+     each file's exact modified time, restored on open so a point cloud's `.gscloud` cache still matches
+     its cloud). Left out of every pack: the lock file (REQ-382 clause 4), temporary files and other `.gspack` files. A
+     folder holding more than one project file at its top level cannot be packed. A point cloud is a file
+     whose type is a point cloud (`.e57`, `.gscloud`), wherever it sits. If Health finds problems (linked, missing
+     or unsaved files) the user sees them with the **copy links into the project** action and must
+     either fix them or choose **Pack anyway**; a linked or missing file is not in the pack.
+  2. **Size warning** shows the total size before writing (and, separately, the point clouds' share)
+     and offers to **exclude point clouds**. An excluded cloud is recorded in the pack, written into the
+     opened project's `.gsproj` as left out (a cloud's `.gscloud` cache goes with it), and shown as **unavailable** (not as an error) in Project
+     Files, Project Health and when its drawing opens. The total is the size before compression; a
+     further warning line appears at 25 MB or more (ASSUMPTION recorded in TASK-696-p7: a common email
+     attachment limit; the SPEC gives no number).
+  3. **Open Packed Project** extracts to a folder the user picks and opens it; every drawing opens
+     with its attachments loaded and no missing-file errors. The folder must be empty or not yet
+     exist; a folder that already holds files is refused (nothing is overwritten). The project ID is
+     preserved exactly.
+  4. A pack with a damaged or unsafe entry (path escaping the folder, absolute or drive path,
+     backslash, duplicate name, failed checksum, no or unreadable manifest, no marker, a marker whose
+     project ID differs from the manifest's) is rejected with a REQ-201 message and extracts nothing:
+     whatever was written is removed again.
+- Acceptance:
+  - `[req380]` tests: pack → open round trip on a sample project including a point cloud and PDF;
+    exclusion; unsafe-path pack rejected; project ID preserved; lock file and temporary files not packed; modified times restored;
+    non-empty destination refused; damaged pack leaves nothing behind.
+  - Issue-level: packed, emailed, opened elsewhere loads everything with no missing-file errors.
+- Owner-layer: IO, UI
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — container chosen, manifest,
+  left-out files, Health gate, empty-destination rule and the full list of rejected packs added
+  (issue #696 P7; D-2026-10-05-i).
+
+### REQ-381 — Turnover packages (GitHub issue #696, P8)
+
+- Purpose: record what was delivered, when, and to whom.
+- Priority: may
+- Type: functional
+- Decision: D-2026-10-05-d (phase P8).
+- Depends on: REQ-379, REQ-380.
+- Statement: Creating a turnover runs Project Health, then writes a **turnover record** in
+  `Turnovers/` with its **contents** (the tracked items included), **date** and **recipient**, built
+  on tracked items. The Project Files section lists turnovers.
+  1. **A record, not a bundle** (D-2026-10-05-j). No file is copied or packed; Pack Project (REQ-380)
+     is how files are sent.
+  2. The record is `Turnovers/<date>_<recipient>.gsturnover` (JSON; a repeat of the same date and
+     recipient gets `-2`, `-3`...). It holds the project ID and name, the recipient, the date (UTC)
+     and, for each chosen tracked item, its path, kind, size and CRC-32; a file not on disk is
+     recorded as missing. The user ticks which tracked items are included (all start ticked); the
+     recipient is required and at least one item must be chosen. Turnover records are not themselves
+     offered as contents.
+  3. Health problems (REQ-379) must be fixed or explicitly accepted before the record is written; a
+     refused turnover writes nothing. The record is tracked, so Project Files lists it.
+  4. Reachable from File > Create Turnover..., the Project Files section and the `TURNOVER` command.
+     Not available in a read-only project.
+- Acceptance: `[req381]` tests: a turnover record lists exactly the chosen items, date and
+  recipient; creation is refused until Health problems are acknowledged.
+- Owner-layer: Domain, UI, IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — clauses 1-4 added
+  (issue #696 P8; D-2026-10-05-j, the user chose "record only").
+
+### REQ-382 — One editor at a time: project lock file and read-only mode (GitHub issue #696, P1)
+
+- Purpose: stop two people (or two copies) silently overwriting one point database.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 11).
+- Depends on: REQ-373.
+- Statement:
+  1. The **first opener** of a project gets editing rights, recorded in a small **lock file** in the
+     project folder (who, machine, since when).
+  2. Anyone else is told who holds it and offered **Open read-only** or **Cancel**. Read-only can
+     view and print but cannot change the database or project files.
+  3. A **stale lock** (e.g. after a crash) can be taken over with an explicit warning.
+  4. The lock is released when the project closes; a lock file is never included in a pack.
+  5. The same process opening the project again (another tab) shares the lock; it is not a conflict.
+- Acceptance: `[req382]` tests: first opener locks; second is offered read-only; read-only refuses
+  writes; stale takeover warns; same-process second tab is not a conflict; pack excludes the lock.
+- Owner-layer: IO, Domain, UI
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P1: **stale** =
+  the holder is on this machine and its process no longer exists, or the lock file is unreadable; a
+  lock held from another machine is never judged stale (the user may still take it over after the
+  warning).
+
+### REQ-383 — Warnings before destructive or cross-project actions on shared data (GitHub issue #696, P9)
+
+- Purpose: no destructive action on shared data happens without a warning that states its effect on
+  other drawings.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d ("Footgun protection").
+- Depends on: REQ-374, REQ-376, REQ-377.
+- Statement:
+  1. **Cross-project paste.** Copy/paste between drawings in different projects warns that pasted
+     points go into the destination project's database; number collisions are renumbered or prompted.
+  2. **Number conflict.** Adding a point whose number exists prompts overwrite / renumber / cancel.
+  3. **Mismatch.** Import or paste from a different coordinate system or units warns. A
+     **coordinate-system** mismatch is **blocking**, with **convert** or **cancel**; a units
+     mismatch warns.
+  4. **Delete.** Deleting a point from a drawing deletes it from the database, so other drawings lose
+     it. GoSurvey says so first, **with the number of other drawings affected**, and offers **hide in
+     this drawing only**.
+  5. **Live edit.** A point edited in one drawing updates live in other open tabs of the project.
+  6. **Unsaved close.** Closing with unsaved database changes lists the affected projects and drawings.
+  Each warning ships with the feature that creates the risk (P3/P5); P9 makes them one consistent pass.
+  7. **How P9 reads clauses 1, 3, 4 and 6** (D-2026-10-05-k and the P9 plan).
+     - **Paste (1, 3).** Copy remembers the project, coordinate system and units it came from. Pasting
+       into a drawing of a *different project* warns. A paste where either drawing is in a project and
+       the coordinate systems differ is **blocked** (cancel only; convert for pasted content is a
+       follow-up issue); differing units warn. A paste between two standalone drawings is unchanged.
+       Survey points are not carried by Copy/Paste today, so no point number can collide through paste.
+     - **Delete (4).** Asked only when another drawing of the project could lose the point: the message
+       gives how many **open** drawings show it and how many **closed** drawings of the project might
+       (their rules are saved inside their own DWG, which is not read for a warning). A project with no
+       other drawing deletes without asking. One question covers all points removed in one step.
+     - **Number conflict (2).** One answer applies to every conflicting number in the same step.
+     - **Unsaved close (6).** The database saves itself a moment after each change, so "unsaved database
+       changes" means changes that could not be written (a full or locked disk). Closing the program or a
+       drawing tab tries the write first and, if it still fails, lists the project and its open drawings.
+       The quit prompt also groups its unsaved drawings under their project.
+- Acceptance: `[req383]` tests: each warning fires with the right counts; "hide only" leaves the
+  database untouched; coordinate-system mismatch blocks; unsaved-close lists projects/drawings.
+- Owner-layer: UI, Domain
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P9: clause 7 added
+  (D-2026-10-05-k).
+
+### REQ-384 — AutoCAD annotation context objects DWG interop (GitHub issue #688)
+
+- Purpose: issue **#688** — follow-up to closed **#622**. GoSurvey-native annotative scaling (SCALE
+  list, CANNOSCALE, AcadAnnotative / GOSURVEY EED, per-scale visibility) is shipped; AutoCAD also
+  stores **per-scale annotation context** (`*_OBJECTCONTEXTDATA`, `CONTEXTDATAMANAGER`) that
+  LibreDWG decodes but GoSurvey does not yet read or write (`HAVE_NO_DWG_ADD_*` for every context
+  class). Without context, AutoCAD may not show every scale-specific representation when a drawing
+  passes through GoSurvey, even when the annotative flag and EED survive.
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-f (accept REQ-384 for #688; **REQ-110** stays **proposed** — it covers UI
+  rescale of existing text, not DWG context blobs).
+- Depends on: issue #622 (shipped), REQ-170 / issue #600 (R2010+ export path), REQ-201 (honest logging).
+- Statement:
+  1. **Increment 1 — import honesty.** On DWG open (not DXF), count decoded annotation context
+     objects. When the count is non-zero, append a REQ-201 log line that per-scale context is not yet
+     merged into GoSurvey geometry (entity-level import + EED markers unchanged).
+  2. **Increment 2 — export MTEXT context.** At **R2010+**, hand-build `MTEXTOBJECTCONTEXTDATA` and
+     wire `CONTEXTDATAMANAGER` for annotative MTEXT GoSurvey exports (one context per SCALE entry
+     where feasible).
+  3. **Increment 3 — TEXT, INSERT, DIMENSION** context objects for the same export path.
+  4. **Increment 4 — HATCH, MULTILEADER, remaining host types** plus import use of default context
+     geometry when present.
+  5. **Increment 5 — round trip.** GoSurvey → DWG (R2018) → AutoCAD-class fixture or LibreDWG
+     re-read preserves annotative context for at least one MTEXT and one DIMENSION sample; `#614`
+     lists hosts whose context could not be encoded.
+- Acceptance:
+  - **(Inc 1)** `[issue688][req384]` unit test: context object count is zero on GoSurvey annotative
+    export; count increases when a test helper adds `MTEXTOBJECTCONTEXTDATA`; import log mentions
+    context when count > 0.
+  - **(Inc 2–5)** `[issue688][req384]` export/import tests per increment; `#601` gap doc updated when
+    #688 closes.
+- Owner-layer: IO (`LibreDwgAnnotContext.cpp`, `LibreDwgCad.cpp`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #688; D-2026-10-05-f). 2026-10-05 — increment 1 shipped
+  (import scan + REQ-201 log). 2026-10-05 — increment 2 shipped (R2010+ hand-built
+  `MTEXTOBJECTCONTEXTDATA` + `CONTEXTDATAMANAGER` on annotative MTEXT export). 2026-10-05 —
+  increment 3 shipped (`TEXTOBJECTCONTEXTDATA`, `BLKREFOBJECTCONTEXTDATA`, `ALDIM` /
+  `ANGDIMOBJECTCONTEXTDATA` on annotative TEXT, INSERT, and DIMENSION export). 2026-10-05 —
+  increment 4 shipped (`MLEADEROBJECTCONTEXTDATA`, `ACDB_HATCHSCALECONTEXTDATA_CLASS` export;
+  default-scale MTEXT/TEXT context geometry merged on import when present). 2026-10-05 —
+  increment 5 shipped (R2018 re-read preserves MTEXT/DIMENSION context objects;
+  `#614` export loss for pre-R2010 annotative hosts and simplified hatch context).
+
+### REQ-385 — AutoCAD LIGHT and SUN DWG interop (GitHub issue #624, lights/sun slice)
+
+- Purpose: issue **#624** — **lights and sun** — AutoCAD stores **LIGHT** entities and a **SUN**
+  object (R2007+ drawing format; GoSurvey export at **R2010+**). GoSurvey does not evaluate scene
+  lighting in the viewport (REQ-064 shaded mode uses fixed lighting). This REQ preserves imported
+  lights/sun through `.gs` and DWG export so drawings opened in AutoCAD retain presentation data.
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-g (closes the SPEC GAP on issue #624 for lights/sun MVP; **LIGHTLIST** and
+  geographic sun study remain deferred with REQ-201 honesty).
+- Depends on: REQ-170 / issue #600 (R2010+ export path), REQ-201 (honest logging), REQ-371 / REQ-372
+  (orthogonal visual-style and material slices).
+- Statement:
+  1. **Import.** Opening an R2007+ DWG captures each decoded **LIGHT** entity and the first **SUN**
+     object into drawing state (name, type, on/off, colour, intensity, position/target). Import logs
+     counts (REQ-201). GoSurvey display is unchanged.
+  2. **Export.** At **R2010+**, export rewrites captured **LIGHT** entities into model space and the
+     **SUN** object via hand-built LibreDWG records (no public `dwg_add_LIGHT` / `dwg_add_SUN`).
+     R2000/R2004 export omits them; `#614` lists the count.
+  3. **`.gs` persistence.** Additive JSON fields preserve captured lights/sun without a format-version
+     bump when absent (ADR-020 (d)).
+  4. **Out of scope:** GoSurvey-authored lights, light editor UI, **LIGHTLIST** / **SUNSTUDY** /
+     **SKYLIGHT_BACKGROUND**, photometric IES files, and Realistic/Conceptual render parity.
+- Acceptance:
+  - `[issue624][req385]` fixture or test helper: DWG with a point LIGHT imports into state, exports
+    at R2018, LibreDWG re-read finds at least one LIGHT.
+  - `[issue624][req385][issue614]` export loss names LIGHT/SUN when export is below R2010 and state
+    holds imported lights/sun.
+  - REQ-201 / `#601` gap doc no longer lists lights/sun as an untracked SPEC GAP.
+- Owner-layer: IO (`LibreDwgLights.cpp`, `LibreDwgCad.cpp`), IO (`.gs`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #624 lights/sun slice; D-2026-10-05-g).
+
+### REQ-386 — AutoCAD LIGHTLIST DWG interop (GitHub issue #715, light registry follow-up)
+
+- Purpose: issue **#715** — after REQ-385 preserves individual **LIGHT** entities and **SUN**, AutoCAD
+  also expects a **LIGHTLIST** registry object wired through **`ACAD_LIGHTLIST`** /
+  **`DICTIONARY_LIGHTLIST`** (R2010+). Without it, some drawings lose the full light registry after a
+  GoSurvey export pass. GoSurvey viewport lighting stays unchanged (REQ-064).
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-h (closes the SPEC GAP on issue #715; hand-built objects because LibreDWG
+  marks **LIGHTLIST** UNSTABLE and exposes `HAVE_NO_DWG_ADD_LIGHTLIST`).
+- Depends on: REQ-385, REQ-170 / issue #600 (R2010+ export), REQ-201 (honest logging).
+- Statement:
+  1. **Import.** Opening an R2010+ DWG that contains **LIGHTLIST** captures registry entries (display
+     name per registered light) and the **ACAD_LIGHTLIST** dictionary key when present. Import logs
+     counts (REQ-201). GoSurvey display is unchanged.
+  2. **Export.** At **R2010+**, when REQ-385 writes one or more **LIGHT** entities, export also writes
+     a **LIGHTLIST** whose handles reference those lights (preserving imported registry order/names
+     when captured; otherwise synthesizing one entry per exported light). Wire **`DICTIONARY_LIGHTLIST`**
+     via **`ACAD_LIGHTLIST`**. R2000/R2004 export omits the registry; `#614` counts it with LIGHT/SUN.
+  3. **`.gs` persistence.** Additive JSON preserves captured registry metadata without a format-version
+     bump when absent (ADR-020 (d)).
+  4. **Out of scope:** GoSurvey-authored lights, light editor UI, **SUNSTUDY**, photometric IES/web
+     lights, and Realistic/Conceptual render parity.
+- Acceptance:
+  - `[issue715][req386]` fixture or test helper: DWG with **LIGHT** + **LIGHTLIST** imports registry
+    into state, exports at R2018, LibreDWG re-read finds at least one **LIGHTLIST** linked to a **LIGHT**.
+  - `[issue715][req386][issue614]` export loss names LIGHT/SUN/**LIGHTLIST** when export is below R2010
+    and state holds imported lights or a captured registry.
+  - REQ-201 / `#601` gap doc no longer lists **LIGHTLIST** as an untracked SPEC GAP.
+- Owner-layer: IO (`LibreDwgLights.cpp`, `LibreDwgCad.cpp`), IO (`.gs`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #715; D-2026-10-05-h).
+
+### REQ-387 — Built-in PDF viewer window; every PDF opens in it (GitHub issue #732, phase 1)
+
+- Purpose: issue **#732** — GoSurvey hands a PDF to an outside program today
+  (`OpenWithDefaultApp`, `src/ui/CadUi_Toolspace.cpp`). The user wants PDFs to open inside GoSurvey, fast
+  enough that a several-hundred-page plan set feels like scrolling a picture, not loading a file.
+- Priority: should
+- Type: functional + performance
+- Decision: D-2026-10-06-a (answers to the issue's three open questions), ADR-067.
+- Depends on: REQ-201 (honest logging), REQ-100 (frame budget), REQ-300 (dependency rule — PDFium is
+  already in the tree, no new dependency), REQ-378/REQ-379 (Project tab / tracked files).
+- Statement:
+  1. **One viewer, every route.** Opening a PDF from the Project tab (double-click), the tracked-file
+     list, the recent-files list, or an attached PDF underlay's "open" action opens the **PDF Viewer
+     window** (a real Windows window of its own, clause 7, ADR-067 (a)). No route may hand a `.pdf` to
+     `ShellExecute` any more. Opening a file already open in a viewer window focuses that window.
+  2. **View.** Page-by-page and continuous-scroll layouts; zoom (wheel, fit-width, fit-page, typed %);
+     pan; Page Up/Down, Home/End and a page-number box; a thumbnail strip that is itself virtualised
+     (only visible thumbnails exist). A password-protected, damaged or unreadable file shows a stated
+     reason in the window (REQ-201) and never crashes or hangs the app.
+  3. **Speed — open.** The **first page is on screen within 250 ms of the open request** for a 500-page
+     file on the reference machine (page count and page sizes come from the cross-reference table, not
+     from reading every page). "As fast as possible" is the goal; 250 ms is the number we test against
+     (the user asked to beat the 1 s proposal, 2026-10-06).
+  4. **Speed — scroll (no lag spikes).** Once the first pages are visible, scrolling and zooming a
+     500-page file never freezes the UI: **no frame longer than 16 ms (REQ-100) caused by the viewer**,
+     measured while scrolling the whole file top to bottom at fast wheel speed and while jumping
+     between distant pages. Pages are rendered **off the UI thread** (one-shot workers, not a pool —
+     §8), nearest the viewport first, **ahead of the scroll direction** (a read-ahead window of several
+     pages each way), into a **bounded** page-image cache (evicts farthest-first; memory is capped,
+     ADR-067 (d)). A page not ready yet shows a low-resolution stand-in or the page's blank sheet,
+     never a stall; a stale render for a page that scrolled away is cancelled (progressive render, as
+     `PdfAttach` already does).
+  5. **Memory.** Viewing a 500-page file keeps resident memory bounded by the cache cap, not by page
+     count.
+  6. **Out of scope for this REQ:** editing (REQ-388), splitting (REQ-389), text search, form filling,
+     digital signatures, printing.
+  7. **Window control (D-2026-10-06-b).** Each viewer is **its own Windows window**: it opens on the
+     same monitor as GoSurvey with the standard title-bar **minimize, maximize/restore and close**
+     buttons, a taskbar entry, and the normal move/resize/snap behaviour; it can be dragged to
+     **another monitor**; and it can be **docked into GoSurvey's dock layout** (drag its title onto a
+     dock slot) and dragged out again. Viewing, rendering, the cache and keyboard/mouse input behave
+     identically docked or on its own. Closing GoSurvey closes every viewer. Turning this on may let
+     other GoSurvey panels be dragged out of the main window too; that is accepted, provided the
+     existing layout, the custom title bar, the splash screen, saved layouts and the Developer Shell
+     keep working unchanged.
+- Acceptance:
+  - `[issue732][req387]` unit test: opening a generated 500-page PDF reports page count and per-page
+    sizes without rendering a page; a corrupt file and a password-protected file return a stated error.
+  - `[issue732][req387]` test: the page-image cache never exceeds its cap while a test walks all
+    500 pages, and evicts the page farthest from the viewport first.
+  - `[issue732][req387]` test: the read-ahead scheduler asks for the visible pages first, then the pages
+    ahead of the scroll direction, and cancels a request for a page that left the window.
+  - `[issue732][req387]` bench (`BENCH PDFVIEW`, reference machine, 500-page file): first page ≤ 250 ms;
+    p95 frame while scrolling top to bottom ≤ 16 ms; worst frame over the run is reported.
+  - Manual: every route in clause 1 opens the viewer; none launches an outside program.
+  - Manual (clause 7): the viewer has working minimize, maximize/restore and close buttons and a taskbar
+    entry; it moves to a second monitor and back; it docks into the GoSurvey layout and undocks; two
+    viewers can be open at once; closing GoSurvey closes them; the first page, scrolling and zoom feel
+    the same docked and undocked.
+  - `[issue732][req387]` the existing Developer Shell end-to-end drivers (`p696-e2e`, `pdfview-bench`)
+    still pass with the window mode turned on.
+- Owner-layer: Domain/IO (`src/pdf/PdfDocument`, pure), Renderer (page textures), UI (window), Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a). 2026-10-06 — clause 7 added and the
+  "separate operating-system window" exclusion removed (D-2026-10-06-b).
+
+### REQ-388 — PDF annotations: text, lines, shapes, colour, thickness, font (GitHub issue #732, phase 2)
+
+- Purpose: issue **#732** feature 2 — mark up a PDF in the viewer.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-a (annotations live **inside the PDF**; **Save As only**), ADR-067.
+- Depends on: REQ-387.
+- Statement:
+  1. **Tools.** Text note (free text), line, rectangle and ellipse, each with a **colour**, a **line
+     thickness** (and fill on/off for closed shapes) and, for text, a **font** (the standard PDF fonts
+     plus the fonts GoSurvey already loads) and size.
+  2. **Stored as standard PDF annotations** (FreeText, Line, Square, Circle), so any other PDF reader shows
+     them. No sidecar file. FreeText, Square and Circle are written through PDFium's annotation API. PDFium
+     cannot create a **Line** annotation, so a line is written as a PDFium placeholder annotation that
+     GoSurvey then turns into a true Line (type and end points) with a same-length edit of the temporary
+     file before it is renamed into place (D-2026-10-06-e); if that edit cannot be made the Save As fails
+     with a stated reason and writes nothing.
+  3. **Select / move / resize / delete** an annotation, with **undo/redo** inside the viewer.
+  4. **Save As only.** The original file is **never overwritten**. "Save As" writes a new PDF; the
+     original is byte-for-byte unchanged (REQ-201: the result is logged). Unsaved edits prompt on close.
+  5. Annotating a 500-page file stays inside the REQ-387 frame budget (only the touched page is
+     re-rendered).
+  6. **Out of scope:** editing or deleting existing page content or existing third-party annotations,
+     highlight/stamp/signature tools, comment threads.
+- Acceptance:
+  - `[issue732][req388]` test: each tool writes one annotation of the matching subtype with the chosen
+    colour, thickness and font; re-opening the saved PDF reads them back unchanged.
+  - `[issue732][req388]` test: Save As leaves the source file's bytes identical (hash compared).
+  - `[issue732][req388]` test: undo/redo restores the annotation list exactly.
+  - Manual: the saved PDF opens in a second PDF reader with the annotations visible.
+- Owner-layer: Domain/IO (`src/pdf/`), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a). 2026-10-06 — clause 2: Line is a true Line written by a post-save patch because PDFium
+  cannot create one (D-2026-10-06-e).
+
+### REQ-389 — Split a PDF: save chosen pages as a new PDF (GitHub issue #732, phase 3)
+
+- Purpose: issue **#732** feature 3 — extract pages from a large PDF into a new file.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-a (Save As only), ADR-067.
+- Depends on: REQ-387.
+- Statement:
+  1. **Page-range input** such as `1-5, 9, 12-20`: comma-separated pages and inclusive ranges, spaces
+     allowed, order preserved as typed, a duplicated page repeated. An empty list, a page `< 1` or
+     `> pageCount`, a reversed range (`9-5`) or any other text is **refused with a message naming the
+     problem** (REQ-201); nothing is written.
+  2. **Output** is a **new PDF** containing exactly those pages (via PDFium page import, keeping page
+     content, size and any annotations). The source is never modified; saving over the source path is
+     refused. Written to a temporary file and renamed into place so a failure leaves no partial file.
+  3. **Offered** from the viewer (a Split command and a toolbar button) and as a typed command.
+  4. Splitting a 500-page file does not freeze the UI (worker thread; progress shown).
+- Acceptance:
+  - `[issue732][req389]` test: `1-5, 9, 12-20` on a 20-page file yields 9 pages in that order; each
+    output page matches the source page's size and text.
+  - `[issue732][req389]` test: each refusal case in clause 1 returns an error and writes no file.
+  - `[issue732][req389]` test: source hash unchanged; saving over the source is refused.
+- Owner-layer: Domain/IO (`src/pdf/PdfSplit`, pure), Commands, UI
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a).
+
+### REQ-390 — PDF scale: set a page's scale, stored as standard PDF measurement data (GitHub issue #732, phase 4)
+
+- Purpose: a plan PDF is a picture of something real; the user wants to say "1 inch on this sheet is 20 feet"
+  once and then measure true distances (REQ-391). Bluebeam-style.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-f (answer 1: standard PDF measurement data, so Bluebeam and Acrobat see the same scale).
+- Depends on: REQ-387, REQ-388 (Save As, the in-place patch technique of D-2026-10-06-e).
+- Statement:
+  1. **Set scale, two ways.** (a) **Calibrate:** pick two points on the page, type the real distance and its
+     unit (inch, foot, yard, mile, millimetre, centimetre, metre, kilometre); the scale is computed from
+     the page's point units. (b) **Preset:** a list of common architectural, engineering and metric scales
+     (for example 1" = 20', 1:100) plus a typed custom ratio "page length = real length".
+  2. **Scope.** The scale applies to the current page, or to all pages, or to a chosen page range (REQ-389
+     page-list syntax). Each page keeps its own scale; a page with none is **unscaled** and the measure
+     tools (REQ-391) refuse it with a message.
+  3. **Stored as standard PDF measurement data:** a page Viewport with a rectilinear Measure dictionary
+     (ISO 32000 Viewport / Measure, as Bluebeam and Acrobat write them), written by **Save As only** into
+     a new file; the original is never changed (REQ-388 clause 4). A scale already in an opened file
+     (from Bluebeam, Acrobat or AutoCAD plots) is **read and used**; if it cannot be understood the page
+     shows as unscaled with the reason (REQ-201).
+  4. **Shown** in the viewer's status area for the current page ("Scale 1 in = 20 ft" or "Unscaled").
+  5. **Out of scope:** non-rectilinear (geospatial) measure data, scale from the drawing's own title block,
+     per-region scales (several viewports on one page).
+- Acceptance:
+  - `[issue732][req390]` test: calibrating 100 pt (1.3889 in) = 50 ft gives a scale that converts any page
+    distance to feet to within 0.01 %; presets and a typed ratio give the same conversion as the equivalent
+    calibration.
+  - `[issue732][req390]` test: a scale saved with Save As is read back unchanged from the new file; the
+    source file's bytes are identical; a file written by a third-party reader (a fixture with a Viewport /
+    Measure) is read correctly.
+  - `[issue732][req390]` test: an unreadable measure entry shows the page as unscaled with a reason.
+  - Manual: a scale set in GoSurvey shows the same scale when the saved file is opened in Bluebeam or
+    Acrobat.
+- Owner-layer: Domain/IO (`src/pdf/PdfMeasure`, pure), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f).
+
+### REQ-391 — Scaled dimensions: length, polylength, area and perimeter, angle (GitHub issue #732, phase 5)
+
+- Purpose: measure real-world sizes on a scaled PDF sheet and leave the dimension on the sheet.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-f (answer 1 standard PDF data; answer 3 the four tools).
+- Depends on: REQ-390, REQ-388.
+- Statement:
+  1. **Tools.** **Length** (two points, then a **third click that places the dimension line**: the line is
+     drawn parallel to the two points at that offset, with extension lines back to the points, an arrow at
+     each end and the label turned along it, as a GoSurvey dimension is; Enter instead of the third click
+     puts the line on the points; D-2026-10-06-g), **Polylength** (a path of points, total length), **Area** (a closed
+     polygon: area and perimeter), **Angle** (three points: the angle at the middle one). Each shows its
+     value as a label on the sheet, in the page's scale and unit; area in square units.
+  2. **Colour, thickness and label font** use the REQ-388 settings; the label shows the number with a
+     chosen number of decimals and the unit. A **Calibrated** or **Preset** scale (REQ-390) is required; on
+     an unscaled page the tool refuses with a message.
+  3. **Stored as standard PDF annotations carrying measurement data:** Length as a Line, Polylength as a
+     PolyLine and Area as a Polygon, each with the page's Measure dictionary and a label appearance; written
+     by Save As with the REQ-388 in-place patch technique (D-2026-10-06-e, widened by ADR-067 (e)
+     addendum 2). **Angle** has no standard dimension type: it is saved as a three-point PolyLine whose
+     label and a private GoSurvey key hold the angle, so other readers show a labelled polyline and
+     GoSurvey recognises it as an angle. This limit is stated in the user-facing help.
+  4. **Edit.** Dimensions select (with the Select tool; Esc leaves a measure tool), move, reshape (drag a
+     point; a Length also has a grip on its dimension line that slides the **offset**), delete and
+     undo/redo like other annotations. **Changing the scale** of a page (REQ-390) recomputes every
+     dimension on it from its geometry, so the labels stay true.
+  5. **Snap.** A **Snap toggle** (button, and F3; off by default) makes points taken by the drawing, measure,
+     calibrate and note tools, and by dragging a grip, snap to the nearest end or corner of the page's
+     vector line work (within about 10 screen pixels, marked on screen) when the page has any; a page that is
+     a scanned image offers no snap. The line work is read in the background the first time a page is used.
+     **Calm snapping:** the reader keeps the ends and corners of real lines (strongest), a round shape's **centre** (strongest) and four quadrant points, drops the tiny steps of a curve, specks and the outlines of text and other small intricate shapes, and candidates within about 6 screen pixels of a stronger one are merged into it (zoomed in, they separate again); the marker stays on its point unless another is clearly closer (D-2026-10-06-i). The Length offset click never snaps. Snap points are in the viewer's page coordinates (rotation and
+     page-box offset accounted for), and marks are carried back to the file's page coordinates when saved
+     (REQ-388), so they land where they were drawn on rotated pages too.
+  6. **Out of scope:** radius/diameter, volume, cutouts inside an area, a measurement legend / markup list
+     export, dimension styles beyond the above.
+- Acceptance:
+  - `[issue732][req391]` test: on a page calibrated 1 pt = 0.5 ft, a Length of 100 pt reads 50 ft; a
+    Polylength of an L-shape reads the sum of its legs; a 100 pt x 40 pt Area reads 1000 sq ft (4000 sq pt x 0.25)
+    and a 140 ft perimeter (280 pt x 0.5); an Angle of three points reads the expected degrees to 0.01.
+  - `[issue732][req391]` test: each saved dimension is read back with its geometry, value, unit and
+    colour; the saved file contains a Measure dictionary for Length / Polylength / Area; the source file's
+    bytes are identical.
+  - `[issue732][req391]` test: changing the page scale changes every dimension's value in proportion.
+  - `[issue732][req391]` test: the tools refuse an unscaled page with a message and add nothing.
+  - Manual: a Length saved in GoSurvey shows the same value, still selectable and re-measurable, in
+    Bluebeam or Acrobat.
+- Owner-layer: Domain/IO (`src/pdf/PdfMeasure`, `src/pdf/PdfAnnotate`), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f). 2026-10-06 — acceptance arithmetic corrected (1000 sq ft, 140 ft); clause 1 Length offset, clause 4 offset grip and Esc, clause 5 Snap toggle (D-2026-10-06-g).
+
+### REQ-392 — Overlay two revisions of a PDF and line them up (GitHub issue #732, phase 6)
+
+- Purpose: put a new revision of a sheet on top of the old one so the changes can be seen at a glance.
+- Priority: should
+- Type: functional + performance
+- Decision: D-2026-10-06-f (answer 2: automatic alignment with a manual fallback).
+- Depends on: REQ-387 (render worker, bounded cache), REQ-388 (annotation overlay drawing).
+- Statement:
+  1. **Compare command.** From a viewer, **Compare...** picks a second PDF (the **revision**) and a page of
+     each (default: the current page of the base and page 1 of the revision). The base file is the one open
+     in the window; neither file is modified.
+  2. **Display modes**, switchable at once: **Tint** (base-only lines drawn blue, revision-only lines red, lines
+     present in both dark grey, so added work shows red and removed work blue, the same colours as the Base and
+     Revision views); **Opacity** (the revision
+     over the base with a slider); **Base** and **Revision** (each sheet alone, with only what the other
+     sheet lacks marked: on Base, ink only the base has is drawn **blue**; on Revision, ink only the revision
+     has is drawn **red**; a mark with even a faint one of the other sheet's within about half a point is the same mark; changes are judged by whole objects: a letter, dash or dot is changed when a sixth or more of it is new, nearby small marks such as the letters of a word or a dot pattern are one group coloured whole when any member changed, and in a big connected mark only the new parts are coloured, tiny leftover clusters being dropped; inside the box of a text run as the PDF stores it, a changed run is coloured entirely and an unchanged one not at all, so a changed number is never half coloured). All use the same
+     zoom and pan. (There is no Blink mode: removed by D-2026-10-06-l.)
+  3. **Alignment, automatic first.** On opening, the two sheets are lined up **automatically** (the
+     transform found by comparing the sheets' line work: shift, uniform scale and a small rotation of up
+     to 5 degrees; sheets of different paper size are allowed). The result and its confidence are shown;
+     a low-confidence result is flagged "check alignment".
+  4. **Alignment, manual fallback.** The user may instead pick **one matching point** on each sheet
+     (shift only) or **two matching points** on each (shift, scale and rotation) and the overlay moves at
+     once. Either replaces the automatic result; "Reset" returns to the automatic one.
+  5. **Speed and memory.** Both pages render off the UI thread through the REQ-387 worker and bounded
+     cache; **no viewer-caused frame over 16 ms** (REQ-100) while panning or zooming the overlay of a
+     500-page file pair; alignment runs on a worker thread, cancellable, with progress, never on the UI
+     thread. Memory stays bounded by the cache cap.
+  6. **Out of scope:** comparing more than two files at once, comparing text or hidden layers rather than
+     the drawn picture, saving the tinted overlay as a PDF (see REQ-393 for saving the found changes).
+- Acceptance:
+  - `[issue732][req392]` test: two generated sheets that differ by a known shift, scale and 2-degree
+    rotation are aligned automatically to within 0.5 pt of the true transform; a pair with nothing in
+    common reports low confidence and does not claim a match.
+  - `[issue732][req392]` test: one-point and two-point manual alignment give the exact transform of the
+    picked points (shift; shift + scale + rotation).
+  - `[issue732][req392]` test: Tint classification of a pixel as base-only, revision-only or both matches a
+    hand-built pair.
+  - `[issue732][req392]` bench (`BENCH PDFCOMPARE`, reference machine): p95 viewer frame while panning the
+    overlay of two 500-page files <= 16 ms; the worst frame is reported.
+  - Manual: Tint, Opacity, Base (removed door in blue) and Revision (added wall in red) all show the changes on real revisions.
+- Owner-layer: Domain/IO (`src/pdf/PdfAlign`, pure), Renderer (page textures), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f). 2026-10-06 — clause 2: Blink removed; Base and Revision views mark what only that sheet has, blue and red (D-2026-10-06-l). 2026-10-06 — Tint colours swapped to match (blue base-only, red revision-only) and changes judged by whole objects (D-2026-10-06-m). 2026-10-06 — text-run boxes decide whole-word colouring (D-2026-10-06-n).
+
+### REQ-393 — Find the changes between two revisions automatically (GitHub issue #732, phase 7)
+
+- Purpose: do the spotting for the user. After the two sheets are lined up (REQ-392), list and highlight
+  what was added, removed or changed.
+- Priority: should
+- Type: functional + performance
+- Decision: D-2026-10-06-f.
+- Depends on: REQ-392.
+- Statement:
+  1. **Detect.** A **Find changes** command compares the aligned pair **by what is drawn** (the pages are
+     rendered at a working resolution and their line work compared; it does not read what the PDF's text says or
+     compare its object structure; the boxes of its text runs are used only to colour a changed word whole in the
+     Base / Revision / Tint views, D-2026-10-06-n). A drawn mark in the revision with no mark near it in the base is **Added**; the
+     reverse is **Removed**; marks present in both but differing are **Changed**. A **tolerance** (a
+     setting, default about 1 mm at print size) ignores anti-aliasing and tiny shifts so identical content
+     shows **no changes**.
+  2. **Group and list.** Nearby differences merge into **change regions** (a bounding box with a kind and
+     a size); regions smaller than a **minimum size** setting are dropped as specks. The viewer shows a
+     **list** of regions; selecting one centres it. **Next / Previous change** keys step through them.
+  3. **Highlight** on both the overlay and the plain views: added in green, removed in red, changed in
+     amber, each as a translucent box drawn over the sheet. The highlights can be hidden.
+  4. **Save the findings.** **Write changes as markups** adds one rectangle annotation per region
+     (REQ-388 tools; colour by kind; contents "Added" / "Removed" / "Changed", with the region size) to the
+     **Save As copy of the revision**; the original files are never changed.
+  5. **Honest limits stated in the window:** the result depends on the alignment (a low-confidence
+     alignment shows a warning before the changes are trusted); a changed scale between revisions or a
+     scanned (image-only) sheet can produce many false regions; the program reports what looks different,
+     not what it means.
+  6. **Speed.** The comparison runs on a worker thread with progress and a Cancel; a full-size
+     (36 x 24 in) sheet pair completes in **10 seconds or less** on the reference machine, and the UI
+     never shows a viewer-caused frame over 16 ms while it runs. (ASSUMPTION recorded, not asked: the
+     10-second target; changeable on request.)
+  7. **Out of scope:** reading what a change means (a moved wall versus a re-drawn wall), text-level
+     diff, comparing more than two files, automatic update of dimensions or the project.
+- Acceptance:
+  - `[issue732][req393]` test: two identical generated sheets, and the same sheet rendered twice with a
+    1-pixel anti-aliasing difference, report **zero** change regions.
+  - `[issue732][req393]` test: a sheet with one line added, one removed and one moved yields exactly one
+    Added, one Removed and one Changed (or a removed + added pair, as documented) region, each containing
+    the true location; a speck under the minimum size is dropped.
+  - `[issue732][req393]` test: a revision shifted by 5 pt reports no changes after automatic alignment, and
+    the same shift with alignment disabled reports many (proving alignment is what removes false changes).
+  - `[issue732][req393]` test: **Write changes as markups** saves one annotation per region with the right
+    kind and bounding box; the source files' bytes are identical.
+  - `[issue732][req393]` bench: a pair of 36 x 24 in line-work sheets compares in <= 10 s; worst viewer
+    frame reported.
+  - Manual: on a real pair of plan revisions the listed regions match what a person marks by eye (a recorded
+    spot check, including false positives and misses).
+- Owner-layer: Domain/IO (`src/pdf/PdfDiff`, pure), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f).
+
+### REQ-394 — Scale check: test a page's scale against dimensions the drawing already states (GitHub issue #732, phase 8)
+
+- Purpose: a scale set by calibrating on one dimension (REQ-390) is only as good as that dimension and those two
+  picks. On a real sheet (issue #732's test set) spans labelled "10'-0"" differ by 0.2 % on paper, so a
+  calibration on one of them made a "43'-0 3/4"" dimension read 42.98 ft. Nothing warned the user. This is
+  blunder detection: test the scale against other known dimensions and say plainly how far off it is.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-h (the user chose "both, manual first": this REQ is the manual check; the automatic
+  audit is REQ-395).
+- Depends on: REQ-390, REQ-391 (points, snap, labels), REQ-388 (annotation overlay).
+- Statement:
+  1. **Check tool.** On a scaled page, **Check** takes two picked points (Snap applies, REQ-391 clause 5) and
+     the value the drawing states for that distance, typed in feet-and-inches (`43'-0 3/4"`, `10'6"`,
+     `6 1/2"`), decimal with a unit (`43.0625 ft`, `12.5 m`, `850 mm`) or a bare number in the page scale's
+     unit. A value that cannot be read is refused with a message naming the problem; nothing is added.
+  2. **Result.** For each check the window shows the **measured** value at the current scale, the **stated**
+     value, the **difference** (in the page's unit and as a percentage of the stated value) and a
+     **verdict**: **Good** (within 0.10 %), **Check** (up to 0.50 %), **Blunder** (more than 0.50 %). The two
+     limits are settings. The verdict colour (green, amber, red) is used everywhere a check is shown.
+  3. **Checks list.** Checks are drawn on the sheet as a labelled line in the verdict colour and kept in a
+     list for the page (select, delete, undo/redo). The **calibration itself** counts as the first check
+     (its picked distance against the distance the user typed). Checks are working marks: they are **not**
+     written into the PDF by Save As; a **Scale report** (text: each check, the best fit, the verdicts) can be
+     copied or written to the log (ASSUMPTION recorded, not asked: not saved into the PDF, to keep the
+     user's drawing free of QA marks).
+  4. **Best fit.** With two or more checks the window shows the **best-fit scale**: the scale that minimises
+     the squared *relative* error of all the checks, each weighted by its length (a long span says more than
+     a short one). A check whose own implied scale differs from the **median implied scale** (a centre one wrong check cannot drag) by more than 0.25 % or by more
+     than three times the median deviation of the checks, whichever is larger, is marked **Outlier** (the
+     likely blunder: a wrong pick, a mistyped value, a wrong unit, or an unreliable drawn dimension). **Use
+     best-fit scale** applies it as an ordinary scale change (one undo step); with an outlier present the
+     window offers the best fit **without the outlier** as well.
+  4a. **Correction (the user's decision).** From any check (**one is enough**) or from the best fit,
+     **Correct scale...** shows the error and lets the user choose: (a) **Match this check**: scale the page so
+     this check reads exactly its stated value; (b) **Best fit** (two or more checks); (c) **A typed percentage**
+     (for example +0.20 % makes every reading 0.20 % larger); (d) **Leave the scale as it is**. Before anything is
+     applied the box previews the **new difference of every check** under that choice, because correcting to one
+     check moves the error onto the others and the user must see that. Applying is **one undo step** and the page's
+     scale text is marked adjusted ("adjusted +0.19 %"); the Scale report keeps the original calibrated value. The
+     program never applies a correction by itself.
+  4b. **Robust calibration (opt-in least squares).** Checking is always optional; a user who does not need the
+     precision never sees it. A user who does picks **Robust calibration...** in the Set scale box. They enter **at
+     least three** known dimensions (two picked points and the printed value each, as in clause 1; the minimum is a
+     setting, default 3) and the program solves **one scale** by weighted least squares. **Weights follow length:**
+     each dimension's uncertainty is the picking error (default 0.25 pt, whatever its length) combined with a small
+     drawing error that grows with length (default 0.05 % of it), so a short span, where one pick is a large share of
+     the length, counts for less than a long one (ASSUMPTION recorded, not asked: these two defaults, both
+     settings). The box shows, live: the **adjusted scale** with its **uncertainty** ("1 in = 3.9956 ft +/- 0.04 %");
+     per dimension the **residual** (what the adjusted scale reads minus what the drawing states, in the page unit
+     and as a percentage) and its **standardised residual**; and the overall fit (the RMS residual). **Blunder
+     detection:** a dimension whose **leave-one-out** standardised residual (its residual against a fit made from the other dimensions, so one wrong long dimension cannot hide itself by dragging the fit) exceeds 3 is flagged **Suspect**, the worst first and then the rest re-tested without it; the user may remove it
+     and see the fit re-solved, or keep it; the program never removes one on its own. **Apply** sets the adjusted
+     scale as one undo step (marked "robust, n dimensions, +/- x %"); **Cancel** changes nothing. With fewer than the
+     minimum the box says how many more are needed and offers nothing to apply. The solution is a single scale
+     (no extra offset parameter).
+  5. **After a calibration** the window offers a one-click "Check this scale against another dimension", and
+     says when the calibrated scale is close to a standard scale (already shown by REQ-390's calibration box).
+  6. **Honest limits stated in the window:** the check proves the *picked* distances agree, not that the
+     drawing is to scale; drawn geometry can differ from printed values by a fraction of a percent, so an
+     Amber verdict on a single check is information, not an error.
+  7. **Out of scope:** reading the sheet's own dimension text (REQ-395), per-region scales, area or angle
+     checks, saving the checks into the PDF.
+- Acceptance:
+  - `[issue732][req394]` test: the value parser reads `43'-0 3/4"`, `43' 0 3/4"`, `10'6"`, `6 1/2"`, `43.0625 ft`,
+    `12.5m`, `850 mm`, a bare `43.0625` and refuses `abc`, `''`, `10'-`, `1/0"`, negative values and trailing text.
+  - `[issue732][req394]` test: measured vs stated, difference and percentage are correct for a known scale,
+    and the verdict changes at exactly the two limits (0.10 %, 0.50 %).
+  - `[issue732][req394]` test: the best fit of checks implying scales 4.000, 4.000, 4.004 weights by length
+    and equals the hand-calculated value; a check implying 3.980 among three that imply 4.000 is the only
+    **Outlier**; best fit without the outlier is 4.000; one check alone gives no best fit and no outlier.
+  - `[issue732][req394]` test: a calibration counts as a check; applying the best fit is one undo step.
+  - `[issue732][req394]` test: robust calibration on a generated set (true 4.000 ft per inch; picks with fixed
+    +/-0.25 pt noise) recovers the scale closer than a single short-span calibration does, with an uncertainty that
+    shrinks as dimensions are added; weights equal 1/(0.25^2 + (0.0005 L)^2) for a span of length L and a long span
+    pulls the answer more than a short one; one deliberately wrong value (a mistyped 10 for 100) is the only
+    **Suspect**, and removing it re-solves; fewer than three dimensions offers nothing to apply; Apply is one undo
+    step and Cancel changes nothing.
+  - `[issue732][req394]` test: correction by "match this check" (measured 42.98, stated 43.06) makes that check read
+    43.06 and moves the calibration check by the same fraction, and the preview lists exactly those new
+    differences before applying; a typed +0.20 % multiplies every reading by 1.0020; "leave it" changes nothing;
+    each applied correction is one undo step and undo restores the scale and its text exactly.
+  - Manual: on the issue's sheet, calibrating on the 180.55 pt "10'-0"" span and checking the "43'-0 3/4""
+    dimension shows an amber verdict (about 0.2 %) and marks the calibration as the outlier once two other
+    10' spans are checked.
+- Owner-layer: Domain (`src/pdf/PdfScaleCheck`, pure: value parser, verdicts, best fit), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-h).
+
+### REQ-395 — Automatic scale audit: read the sheet's own dimension text and test the scale with it (GitHub issue #732, phase 9)
+
+- Purpose: do REQ-394's checking automatically. A drawing already prints hundreds of dimensions; the audit
+  reads their text, measures the dimension lines they describe, and reports whether the page's scale agrees.
+- Priority: could
+- Type: functional + performance
+- Decision: D-2026-10-06-h.
+- Depends on: REQ-394 (verdicts, best fit, Scale report), REQ-391 clause 5 (vector line reading).
+- Statement:
+  1. **Audit command.** **Audit scale** on a scaled page reads the page's **text** for dimension values
+     (feet-and-inches, decimal feet, metres/millimetres, as REQ-394 clause 1), and for each finds the **dimension
+     line** it labels: a straight horizontal or vertical run of drawn line work with an extension line at each
+     end, closest to the text and aligned with it. Text with no such line, and lines with no readable text, are
+     counted as **unmatched** and not used.
+  2. **Result.** The window reports: dimensions matched / unmatched, how many agree with the current scale
+     (Good / Check / Blunder as REQ-394), the **consensus scale** (the most common implied scale among matched
+     dimensions, found robustly so a few wrong matches do not move it, and shown only when at least **five**
+     dimensions matched), and the **worst offenders**, each highlighted on the sheet and listed (click to
+     centre it). **Use consensus scale** applies it as an ordinary scale change.
+  3. **Suggestions, not facts.** Results are labelled as suggestions: each matched dimension shows its text, its
+     measured length and the implied scale so the user can judge it; the audit never changes the scale or any
+     mark by itself.
+  4. **Speed.** Runs on a worker thread with progress and Cancel; a 36 x 24 in sheet with several hundred
+     dimensions finishes in **5 seconds or less** on the reference machine and never causes a viewer frame over
+     16 ms. (ASSUMPTION recorded, not asked: the 5-second target.)
+  5. **Scanned or text-free pages** report "no dimension text found" (REQ-201); nothing crashes.
+  6. **Out of scope:** dimension text drawn as outlines (not real text), leader-style or angular dimensions, text
+     in rotated pages beyond 90 degree turns, correcting dimensions on the drawing.
+- Acceptance:
+  - `[issue732][req395]` test: a generated sheet with N horizontal and vertical dimensions drawn at a known scale
+    (text + extension lines + dimension line) matches all N and its consensus scale is within 0.01 % of the true
+    one; a sheet with one dimension deliberately drawn 1 % long reports it as the worst offender and does not
+    move the consensus.
+  - `[issue732][req395]` test: text with no line near it, and lines with no text, are unmatched; a page with no text
+    and a page with fewer than five matches report so and give no consensus.
+  - `[issue732][req395]` test: cancelling stops the audit and returns no partial result as a verdict.
+  - `[issue732][req395]` bench: the issue's 36 x 24 in sheet audits in <= 5 s; worst viewer frame reported.
+  - Manual: on the issue's sheet the audit's consensus scale is close to 3.9956 ft per inch and it lists the
+    180.55 pt "10'-0"" span among the offenders; a spot check records false matches and misses.
+- Owner-layer: Domain/IO (`src/pdf/PdfDimAudit`, PDFium text + pure matching), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-h).
+
+### REQ-396 — PDF Leader tool, and the drawing tools work by click-click as well as drag (GitHub issue #732, annotation fixes)
+
+- Purpose: while testing REQ-388 the user found that **Text** did not land where they clicked, that **Line** did
+  not draw after two clicks and showed no preview after the first click, and asked for a **Leader**: an arrow
+  pointing at something, with a boxed note at its tail.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-j.
+- Depends on: REQ-388.
+- Statement:
+  1. **Text lands where clicked.** A new text note's top-left corner is the clicked point (or the snapped
+     point, when Snap is on and one is near); it is never placed at the page's left edge.
+  2. **Click-click drawing.** Line, Rectangle and Ellipse can be drawn two ways: **press, drag, release**, or
+     **click, move, click**. After the first click a preview follows the pointer; the second click finishes the
+     shape. Esc cancels. A click-click shape with both clicks on the same spot is not created.
+  3. **Leader tool.** Click 1 is the **arrow tip** (the thing pointed at), click 2 is where the **boxed note**
+     goes; the note text is then typed in the same dialog as a Text note (colour, line thickness, font and size
+     as for Text and Line). A preview (arrow and an empty box) follows the pointer after click 1. The line runs
+     from the box edge nearest the tip to the tip, which carries an arrowhead.
+  4. **Select / move / resize / delete / undo / redo** work on a Leader like on other marks: its grips are the tip
+     and the box's corner (which scales the text, as for a note); double-click edits its text.
+  5. **Stored as a standard PDF FreeText annotation of intent FreeTextCallout** (`/IT /FreeTextCallout`, `/CL`
+     callout line, `/LE /OpenArrow`), with an appearance showing the box, the text and the arrow, so any other
+     reader shows it. Same placeholder-then-patch route as Text and Line (D-2026-10-06-e); a failed patch fails
+     the Save As with a stated reason and writes nothing.
+  6. **Out of scope:** multi-segment (elbow) leaders, leaders with no text, other arrowhead styles.
+- Acceptance:
+  - `[issue732][req396]` test: a Leader saved and re-read has the same tip, box, text, colour and font.
+  - `[issue732][req396]` test: the saved annotation is a FreeText with `/IT /FreeTextCallout` and a `/CL` whose
+    first point is the tip.
+  - `[issue732][req396]` test: a text note whose box starts at (x, y) is stored within a point or two of that
+    corner (the stored rectangle is the text's own bounds), never at the page's left edge.
+  - Manual: Text lands at the click; a Line draws by two clicks, with a preview after the first; the Leader
+    tool draws an arrow with a boxed note and the saved PDF shows it in a second reader.
+- Owner-layer: Domain/IO (`src/pdf/`), UI
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-j; the user asked for the fixes and the Leader tool).
+
+### REQ-397 — PDF viewer defaults: opens maximized; Arial is the default font; romans.shx available (GitHub issue #732)
+
+- Purpose: the user asked that a PDF opens as large as the screen allows, and that every piece of text the viewer
+  adds (notes, leaders, dimension labels) uses Arial unless told otherwise (romans.shx stays available).
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-k.
+- Depends on: REQ-387, REQ-388, REQ-391, REQ-396.
+- Statement:
+  1. **Opens maximized.** A PDF viewer window that opens as its own window is **maximized** the first time it
+     appears. After that the window belongs to the user (resize, restore, dock). A viewer that opens docked is
+     unchanged.
+  2. **Arial is the default and the first entry of the font list** for Text, Leader and the dimension labels
+     (Length, Polylength, Area, Angle); romans.shx stays in the list for the user to pick. The font list on the
+     dimension row lets the label font be changed too. If Arial is not installed, the first entry is the default
+     (romans.shx, else Helvetica). *(The user first asked for romans.shx, then changed it to Arial the same day.)*
+  3. **A PDF cannot embed an SHX font**, so text in an SHX font is written as **stroked line paths** (the way the
+     plot-to-PDF already writes SHX text), in the annotation's appearance, with the text itself kept in the
+     annotation's contents. It looks the same in every reader; it is not selectable text there. The text height is
+     the font size (cap height); lines are 1.5 text heights apart; the on-screen drawing and the saved file use the
+     same strokes and the same measured width.
+  4. **Degree sign:** SHX fonts have no degree glyph, so a label containing one (an angle dimension) is set in a
+     standard font instead (as the plot does).
+- Acceptance:
+  - `[issue732][req397]` test: `MeasureText` for romans.shx is exact (two letters = twice one; two lines = twice the
+    height; a degree sign is refused for stroke drawing).
+  - `[issue732][req397]` test: a note in romans.shx saved and re-read keeps the font name and text, and the saved
+    page shows its strokes inside the note's box.
+  - Manual: a new PDF window opens maximized with the mouse lined up with the buttons from the first frame; new
+    Text, Leader and dimension labels appear in Arial; picking romans.shx draws them in that font.
+- Owner-layer: Domain/IO (`src/pdf/`), UI
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-k; the user asked for both).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

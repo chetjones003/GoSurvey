@@ -668,6 +668,40 @@ inline constexpr int kMaxPyramidSides = 64;
 [[nodiscard]] bool MakePolysolid(const ucs::Ucs& frame, const Path& path, double width, double height,
                                  Justify justify, Solid* out, Problem* outWhy);
 
+
+/// A sampled height field, and the flat plane a pad solid is built between (GitHub #150, Phase 7).
+///
+/// The grid is regular in plan: node (i, j) sits at `origin + (i*cellW, j*cellH)` and carries the
+/// GROUND elevation there. `cellIn` marks which cells belong to the pad — that is where the site
+/// boundary and the cut/fill split have already been applied, so the kernel never needs to know what
+/// a boundary polygon is.
+///
+/// `flatIsBottom` says which way round the two surfaces are: true for a CUT, where the ground is the
+/// top and the pad floor is underneath; false for a FILL, where the pad is the top and the ground is
+/// what it rests on. The construction is the same either way.
+struct HeightField {
+  double originX = 0.0;
+  double originY = 0.0;
+  double cellW = 1.0;
+  double cellH = 1.0;
+  int cols = 0;  ///< cells across; nodes are (cols + 1) wide
+  int rows = 0;  ///< cells up;     nodes are (rows + 1) tall
+  std::vector<double> nodeZ;      ///< (cols+1) * (rows+1), row-major
+  std::vector<std::uint8_t> cellIn;  ///< cols * rows, non-zero = part of the pad
+  double flatZ = 0.0;
+  bool flatIsBottom = true;
+};
+
+/// A solid between \p hf's sampled ground and its flat plane — the earthwork a pad represents.
+///
+/// Cells that taper to nothing (where the ground meets the pad elevation) are left out rather than
+/// built: a zero-thickness cell contributes zero-area faces and an edge used more than twice, and
+/// the result would not be a closed solid. The volume lost is a sliver along that line, and the
+/// caller is the one that reports it.
+///
+/// Refuses \ref Problem::SlicePlaneMissesSolid when no cell has any depth at all.
+[[nodiscard]] bool MakeHeightFieldSolid(const HeightField& hf, Solid* out, Problem* outWhy);
+
 [[nodiscard]] bool MakeTorus(const ucs::Ucs& frame, double majorRadius, double minorRadius, Solid* out,
                              Problem* outWhy);
 

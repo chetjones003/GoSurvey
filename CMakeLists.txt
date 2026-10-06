@@ -183,7 +183,8 @@ target_include_directories(libredwg PUBLIC "${libredwg_SOURCE_DIR}/include")
 # Vendored: silence its warnings so ours stay visible (as for glew below).
 if(MSVC)
   target_compile_options(libredwg PRIVATE /w /utf-8)
-  target_compile_definitions(libredwg PRIVATE _CRT_NONSTDC_NO_WARNINGS _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(libredwg PRIVATE _CRT_NONSTDC_NO_WARNINGS _CRT_SECURE_NO_WARNINGS
+    DEBUG_CLASSES)
 else()
   target_compile_options(libredwg PRIVATE -w)
 endif()
@@ -265,6 +266,21 @@ if(MSVC)
   target_compile_options(md4c PRIVATE /w)
 else()
   target_compile_options(md4c PRIVATE -w)
+endif()
+
+# ---------------------------------------------------------------------------
+# miniz (REQ-380 / ADR-066 / D-2026-10-05-i) — ZIP read/write for the project pack (.gspack).
+# Vendored under third_party/miniz/.
+# ---------------------------------------------------------------------------
+if(NOT EXISTS "${GOSURVEY_TP}/miniz/miniz.c")
+  message(FATAL_ERROR "REQ-380: third_party/miniz/miniz.c is missing. See third_party/miniz/VENDORED.md.")
+endif()
+add_library(miniz STATIC "${GOSURVEY_TP}/miniz/miniz.c")
+target_include_directories(miniz PUBLIC "${GOSURVEY_TP}/miniz")
+if(MSVC)
+  target_compile_options(miniz PRIVATE /w)
+else()
+  target_compile_options(miniz PRIVATE -w)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -362,6 +378,15 @@ set(GOSURVEY_DOMAIN_SOURCES
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
   src/commands/CadCommands_Geo.cpp
+  src/commands/ProjectSettings.cpp
+  src/commands/ProjectPoints.cpp
+  # REQ-383 (#696 P9): the warnings before destructive / cross-project actions on shared data
+  src/commands/ProjectWarnings.cpp
+  # REQ-378 (#696 P5): Add Drawing to Project - the flow, and the whole-drawing conversion it offers
+  src/commands/ProjectAddFlow.cpp
+  # REQ-379 (#696 P6): tracked files at the drawing level (copy/link prompt, save-time record, open-time re-attach)
+  src/commands/ProjectFiles.cpp
+  src/commands/ConvertDrawing.cpp
   src/commands/CadCommands_Mleader.cpp
   src/commands/CadCommands_Ucs.cpp
   src/commands/CadDynInput.cpp
@@ -411,6 +436,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/GsIo.cpp
   # Coordinate systems — the one CS-MAP wrapper (REQ-358 / ADR-063)
   src/geo/CoordinateSystems.cpp
+  # REQ-378 (#696 P5): the pure similarity-transform plan for Convert
+  src/geo/DrawingConversion.cpp
   # REQ-360: the pure local <-> grid transformation (no CS-MAP)
   src/geo/LocalGridTransform.cpp
   # REQ-363 / ADR-064: Web Mercator tile maths (pure)
@@ -426,6 +453,17 @@ set(GOSURVEY_DOMAIN_SOURCES
   # REQ-308 recent-drawings MRU store (D-2026-08-30-b). Pure — <filesystem>/<fstream>/json, path
   # and clock passed in by the caller — so GoSurveyTests links it directly too (see that target).
   src/io/RecentDrawings.cpp
+  # REQ-373/374/382 (#696 P1) project file, join detection, lock file. Pure <filesystem>/json.
+  src/io/Project.cpp
+  src/io/ProjectPointDb.cpp
+  src/io/ProjectPointRules.cpp
+  src/io/ProjectAddDrawing.cpp
+  # REQ-379 (#696 P6): tracked files - attach, record, find, health. Pure <filesystem>/json.
+  src/io/ProjectFiles.cpp
+  # REQ-380 (#696 P7): Pack Project / Open Packed Project (.gspack = ZIP via miniz)
+  src/io/ProjectPack.cpp
+  # REQ-381 (#696 P8): turnover records. Pure <filesystem>/json + miniz CRC.
+  src/io/ProjectTurnover.cpp
   # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
   src/io/WhatsNewContent.cpp
   src/io/WikiContent.cpp
@@ -439,6 +477,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/LibreDwgCad.cpp
   src/io/LibreDwgField.cpp
   src/io/LibreDwgDynamicBlock.cpp
+  src/io/LibreDwgMaterial.cpp
+  src/io/LibreDwgAnnotContext.cpp
+  src/io/LibreDwgVisualStyle.cpp
+  src/io/LibreDwgLights.cpp
   src/io/DxfColors.cpp
   src/io/DwgMeshConvert.cpp
   src/io/GsMigrate.cpp
@@ -529,7 +571,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${NLOHMANN_JSON_INCLUDE}
   ${CMAKE_BINARY_DIR}/generated
 )
-target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format CsMap::csmap)
+target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32, no glfw — the windowed app adds those itself.
@@ -575,6 +617,7 @@ add_executable(GoSurvey
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/CadUi_SignInGate.cpp
   src/ui/CadUi_StartScreen.cpp
+  src/ui/CadUi_Projects.cpp
   src/ui/CadUi_WhatsNew.cpp
   src/ui/CadUi_DrawingSettings.cpp
   src/ui/CadUi_Wiki.cpp
@@ -596,6 +639,21 @@ add_executable(GoSurvey
 
   # PDF underlay — the real, GL-backed implementation (headless links a seam instead)
   src/pdf/PdfAttach.cpp
+
+  # REQ-387 / ADR-067 — the built-in PDF viewer: pure core, PDFium wrapper, ImGui window
+  src/pdf/PdfViewerCore.cpp
+  src/pdf/PdfDocument.cpp
+  src/pdf/PdfSplit.cpp
+  src/pdf/PdfAnnotate.cpp
+  src/pdf/PdfRaw.cpp
+  src/pdf/PdfMeasure.cpp
+  src/pdf/PdfSnap.cpp
+  src/pdf/PdfScaleCheck.cpp
+  src/pdf/PdfDimAudit.cpp
+  src/pdf/PdfAlign.cpp
+  src/pdf/PdfDiff.cpp
+  src/ui/PdfViewerWindow.cpp
+  src/ui/PdfCompare.cpp
 
   # Platform
   src/platform/AppIcon.cpp
@@ -656,9 +714,13 @@ if(GOSURVEY_DEVELOPER_SHELL)
   target_sources(GoSurvey PRIVATE
     src/devshell/DevShell.cpp
     src/devshell/DevShellTests.cpp
+    src/devshell/DevShellProjectTests.cpp
   )
   target_compile_definitions(GoSurvey PRIVATE GOSURVEY_DEVELOPER_SHELL)
   target_link_libraries(GoSurvey PRIVATE imgui_core_testengine)
+  # The domain sources are compiled into this target, so what gosurvey_domain links PUBLIC (miniz,
+  # for ProjectPack / ProjectTurnover - REQ-380/381) has to be linked here too.
+  target_link_libraries(GoSurvey PRIVATE miniz)
 else()
   target_link_libraries(GoSurvey PRIVATE gosurvey_domain)
 endif()
@@ -1088,7 +1150,7 @@ if(GOSURVEY_BUILD_TESTS)
     # example and wrong on exactly the cases a real grading comparison needs (no overlap, self vs
     # self, partial overlap).
     tests/SurfaceVolumeTests.cpp
-    # REQ-371 side slope grading. Every expected offset is hand-computed in the test from the two
+    # REQ-398 side slope grading. Every expected offset is hand-computed in the test from the two
     # equations that cross, because a daylight offset wrong by a slope factor is entirely plausible
     # on screen — and comparing against another approximation of the same thing would hide a
     # systematic error in both.
@@ -1135,6 +1197,25 @@ if(GOSURVEY_BUILD_TESTS)
     src/util/WhatsNewLogic.cpp
     tests/StartScreenTests.cpp
     src/io/RecentDrawings.cpp
+    # REQ-373/374/382 (#696 P1)
+    tests/ProjectTests.cpp
+    src/io/Project.cpp
+    src/io/ProjectPointDb.cpp
+    src/io/ProjectPointRules.cpp
+    tests/ProjectPointRulesTests.cpp
+    tests/ProjectPointDbTests.cpp
+    # REQ-378 (#696 P5): the pure database-merge half of Add Drawing to Project
+    tests/ProjectAddDrawingTests.cpp
+    src/io/ProjectAddDrawing.cpp
+    # REQ-379 (#696 P6): the pure tracked-file rules
+    tests/ProjectFilesTests.cpp
+    src/io/ProjectFiles.cpp
+    # REQ-380 (#696 P7): the pure pack / unpack
+    tests/ProjectPackTests.cpp
+    src/io/ProjectPack.cpp
+    # REQ-381 (#696 P8): the pure turnover records
+    tests/ProjectTurnoverTests.cpp
+    src/io/ProjectTurnover.cpp
     tests/TelemetryPingTests.cpp
     tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
@@ -1222,7 +1303,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/util/tinvolume.cpp
     src/util/surfacequery.cpp
     src/util/gridsurface.cpp
-    # REQ-371 side slope grading. Pure over ISurfaceQuery — no GL, no document — so a reversed cut/
+    # REQ-398 side slope grading. Pure over ISurfaceQuery — no GL, no document — so a reversed cut/
     # fill sign or a daylight offset off by a slope factor is caught against hand arithmetic rather
     # than by looking at a slope in a viewport, where a plausible wrong answer looks correct.
     src/util/daylight.cpp
@@ -1272,7 +1353,40 @@ if(GOSURVEY_BUILD_TESTS)
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
-  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
+  # REQ-387: the PDF viewer's pure core and its PDFium wrapper (opened against generated PDFs).
+  target_sources(GoSurveyTests PRIVATE
+    tests/PdfViewerTests.cpp
+    tests/PdfSplitTests.cpp
+    tests/PdfAnnotateTests.cpp
+    tests/PdfLeaderTests.cpp
+    tests/PdfMeasureTests.cpp
+    tests/PdfDimensionTests.cpp
+    tests/PdfSnapTests.cpp
+    tests/PdfScaleCheckTests.cpp
+    tests/PdfDimAuditTests.cpp
+    tests/PdfDimAuditPdfTests.cpp
+    tests/PdfAlignTests.cpp
+    tests/PdfDiffTests.cpp
+    src/pdf/PdfViewerCore.cpp
+    src/pdf/PdfDocument.cpp
+    src/pdf/PdfSplit.cpp
+    src/pdf/PdfAnnotate.cpp
+    src/font/ShxFont.cpp
+    src/pdf/PdfRaw.cpp
+    src/pdf/PdfMeasure.cpp
+    src/pdf/PdfSnap.cpp
+    src/pdf/PdfScaleCheck.cpp
+    src/pdf/PdfDimAudit.cpp
+    src/pdf/PdfAlign.cpp
+    src/pdf/PdfDiff.cpp)
+  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium)
+  if(WIN32)
+    add_custom_command(TARGET GoSurveyTests POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${pdfium_binaries_SOURCE_DIR}/bin/pdfium.dll"
+              "$<TARGET_FILE_DIR:GoSurveyTests>/pdfium.dll"
+      COMMENT "Copy pdfium.dll beside GoSurveyTests")
+  endif()
   gosurvey_target_warnings(GoSurveyTests)
   gosurvey_enable_pch(GoSurveyTests)
 
@@ -1292,6 +1406,12 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessPdfAttach.cpp
     tests/CadFieldTests.cpp
     tests/CadSnapTests.cpp
+    # DRAPE needs the surface stores and ProcessCommandLineSubmit, both in gosurvey_domain,
+    # so it rides with GoSurveySnapTests like the other command tests above.
+    tests/DrapeCommandTests.cpp
+    # PADSOLID needs the surface stores, the brep kernel and ProcessCommandLineSubmit, so it rides
+    # with GoSurveySnapTests like the other command tests above.
+    tests/PadSolidCommandTests.cpp
     tests/GsIoDimAngularTests.cpp
     tests/GsIoPipeRunTests.cpp
     tests/GsIoViewportCameraTests.cpp
@@ -1336,6 +1456,16 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GizmoSubObjectMoveTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
+    # REQ-375 (#696 P2): project settings resolve against AppCommandState (EnforceProjectSettings), so
+    # this rides with gosurvey_domain like CadBlockImportTests.
+    tests/ProjectSettingsTests.cpp
+    tests/ProjectPointsSyncTests.cpp
+    # REQ-383 (#696 P9): delete / number-conflict / paste / unsaved-close warnings against AppCommandState
+    tests/ProjectWarningsTests.cpp
+    # REQ-378 (#696 P5): Add Drawing to Project end to end + Convert (needs AppCommandState, CS-MAP, LibreDWG)
+    tests/ProjectAddFlowTests.cpp
+    # REQ-379 (#696 P6): attach prompt, save-time record and open-time re-attach against AppCommandState
+    tests/ProjectFilesFlowTests.cpp
     # issue #486 increment B2 (REQ-347) — the PIPERUN command layer: StartPipeRunCommand /
     # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
     # with GoSurveySnapTests (gosurvey_domain), not GoSurveyTests, like CadBlockImportTests above.

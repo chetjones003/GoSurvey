@@ -2,24 +2,15 @@
 
 What GoSurvey's DWG **save** and **open** still leave out for **AutoCAD, Civil 3D and other programs** (the ordinary DWG stream — not the ADR-044 trailer GoSurvey reads on reopen).
 
-Tracking issue: **#601**. Evidence is from `beta` at **`b7503ca9`** (2026-10-02).
+Tracking issue: **#601** (closed 2026-10-05). **#715** (LIGHTLIST / REQ-386) shipped on `beta`. Evidence refreshed 2026-10-05.
 
 ## The short version
 
 GoSurvey saves DWG as **R2000 by default** and can export **R2004 through R2018** (D-2026-10-01-f, #600 closed). It opens R13–R2018. When GoSurvey reopens its own DWG it also reads the private trailer, so a GoSurvey user often sees a full drawing. **Everyone else only sees the DWG file itself.**
 
-As of 2026-10-02, the large **Group A** backlog and most **Group B** format work from the original inventory (#602–#616, #619–#621, #623) are **shipped on `beta`**. The export dialog builds its loss list from the actual drawing (`ComputeDwgExportLosses` in `LibreDwgCad.cpp`, modal in `CadUi_Modals.cpp`, issue #614).
+As of 2026-10-05, the original **Group A** inventory and **Group B** features through annotative scaling, fields, and dynamic blocks (#602–#622, #617, #618) are **shipped on `beta`**. The export dialog builds its loss list from the actual drawing (`ComputeDwgExportLosses` in `LibreDwgCad.cpp`, modal in `CadUi_Modals.cpp`, issue #614).
 
-**Still tracked under #601:**
-
-| Issue | What is left |
-|---|---|
-| **#688** | AutoCAD annotation **context** objects — split from closed [#622](https://github.com/chetjones003/GoSurvey/issues/622); LibreDWG / SPEC GAP (see [#688](https://github.com/chetjones003/GoSurvey/issues/688)). |
-| **#617** | Fields — **REQ-368** (inline codes + evaluation + R2004+ native `FIELD`/`FIELDLIST`). |
-| **#618** | Dynamic blocks — **REQ-369** (increment 1: `*U` INSERT fidelity; full round trip open). |
-| **#624** | Visual styles, materials, lights — **new feature**, SPEC GAP. |
-
-Close **#601** only when those four are resolved or explicitly moved off this tracker.
+**Open DWG fidelity issues:** none tracked for **LIGHTLIST** after REQ-386 (#715). **#601** and **#624** closed 2026-10-05. Sun study and GoSurvey lighting UI remain deferrals in **Remaining gaps** until filed.
 
 ## Shipped on `beta` (child issues closed)
 
@@ -52,7 +43,10 @@ Close **#601** only when those four are resolved or explicitly moved off this tr
 | #620 | Transparency | R2010+ export |
 | #621 | Point cloud external references | R2013+ |
 | #623 | GEODATA layout (local vs projected) | REQ-362 |
-| #622 | Annotative scaling (GoSurvey-native + EED) | Closed 2026-10-05 — PRs **#657–#687**; context parity → **#688** |
+| #617 | Live fields on TEXT/MTEXT + DWG `FIELD`/`FIELDLIST` | REQ-368 — PR **#677** |
+| #618 | Dynamic blocks MVP (`*U` INSERT, linear/flip) | REQ-369 — PR **#678**; optional follow-ups in REQ-369 |
+| #622 | Annotative scaling (GoSurvey-native + EED) | Closed 2026-10-05 — PRs **#657–#687** |
+| #688 | Annotation context (REQ-384) | Shipped 2026-10-05 — PRs **#704–#710** (increments 1–5) |
 
 Some export paths still **degrade** rather than drop (for example 3D polylines with bulge, multileader extra branches on R2000/R2004). Those appear in the dynamic loss list when they apply.
 
@@ -62,26 +56,39 @@ Some export paths still **degrade** rather than drop (for example 3D polylines w
 
 GoSurvey-native annotative scaling shipped in **#622** (closed): CANNOSCALE UI, `.gs` SCALE list, viewport/model annotative draw, multi-SCALE DWG export/import, GOSURVEY / AcadAnnotative EED, per-scale visibility (`annoVisScales`), UI and `[issue622]` tests (PRs **#657–#687**).
 
-**#688** tracks remaining AutoCAD parity: per-object **annotation context** blobs (`*_ANNOTATION_CONTEXT_DATA`, `CONTEXTDATAMANAGER`), native DIMENSION annotative fields where LibreDWG lacks them, and export-loss honesty when context cannot be preserved. **REQ-110** remains **proposed**; context work needs an accepted REQ or a recorded SPEC decision.
+**#688** (REQ-384, D-2026-10-05-f) — **shipped on `beta`:** R2010+ hand-built per-scale **annotation context** export for **MTEXT**, **TEXT**, **INSERT**, **DIMENSION**, **MULTILEADER**, and simplified **HATCH** scale context; import scan + default-scale **MTEXT**/**TEXT** merge; R2018 re-read round-trip tests; `#614` names pre-R2010 annotative hosts and hatch view/geometry context gaps. Full AutoCAD parity (every `*_OBJECTCONTEXTDATA` variant, extension-dictionary round-trip through LibreDWG, per-scale import merge for all hosts) is not claimed — track regressions via `[issue688][req384]` and export loss, not as an open #601 checklist item unless new gaps are filed.
 
-### #617 — Fields
+### #624 — Materials, lights, visual styles
 
-REQ-368 delivers live TEXT/MTEXT fields (area, length, survey point coords, filename/date/layout) with
-inline `%<…>%` wires, viewport evaluation, and R2004+ DWG export of hand-built `FIELD` / `FIELDLIST`
-objects (`LibreDwgField.cpp`). Civil sheet-set / view fields remain out of scope.
+**REQ-371 (shipped):** model + paper viewport `VISUALSTYLE` through `.gs` and R2007+ DWG
+(`LibreDwgVisualStyle.cpp`).
 
-### #618 — Dynamic blocks
+**REQ-372 (shipped):** AutoCAD **`MATERIAL`** diffuse RGB on 3D mesh/solid hosts — import shaded
+display, R2007+ DWG export/import, `.gs` persistence, mesh round-trip and `#614` honesty for map-only
+and **3DSOLID** entity-material encode limits (`LibreDwgMaterial.cpp`, PRs **#697–#702**).
 
-Parameters, actions, visibility states, DWG round trip. **REQ-369** (accepted): `*U` fidelity, foreign
-display, GoSurvey linear/stretch (and flip) export/import, grip re-evaluation, GoSurvey↔DWG round trip for
-linear distance, and R2004+ `#614` loss lines for visibility/unsupported/extra-linear/conflicting INSERTs
-and stretch actions without entity handles (`LibreDwgDynamicBlock.cpp`). Still degraded or manual: visibility
-lookup parameters, per-block multi-linear chains, AutoCAD stretch without entity association handles, and
-Save → AutoCAD → Save → GoSurvey for flip/visibility/lookup.
+**REQ-385 (shipped):** import capture + R2010+ export for **LIGHT** entities and **SUN**
+(`LibreDwgLights.cpp`); `.gs` fields `dwgImportedLights` / `dwgImportedSun`; `#614` loss below R2010.
 
-### #624 — Visual styles, materials, lights
+**REQ-386 (shipped):** **LIGHTLIST** light registry + **DICTIONARY_LIGHTLIST** / **ACAD_LIGHTLIST**
+(`LibreDwgLights.cpp`, issue **#715**); `.gs` field `dwgImportedLightList`; `#614` loss below R2010 with LIGHT/SUN.
 
-3D presentation data beyond REQ-064's current scope. **SPEC GAP**.
+**Still deferred (no issue yet):** **SUNSTUDY**, photometric/web lights beyond REQ-385, GoSurvey-native lighting UI.
+
+## Shipped detail (#617, #618)
+
+### #617 — Fields (closed, REQ-368)
+
+Live TEXT/MTEXT fields (area, length, survey point coords, filename/date/layout) with inline `%<…>%`
+wires, viewport evaluation, and R2004+ DWG export of hand-built `FIELD` / `FIELDLIST` objects
+(`LibreDwgField.cpp`, PR **#677**). Civil sheet-set / view fields remain out of scope.
+
+### #618 — Dynamic blocks (closed MVP, REQ-369)
+
+`*U` INSERT fidelity, foreign display via baked `*U` geometry, GoSurvey linear/stretch (and flip)
+export/import, grip re-evaluation, GoSurvey↔DWG linear parameter round trip, and R2004+ `#614` export
+loss lines (`LibreDwgDynamicBlock.cpp`, PR **#678**). Optional follow-ups: visibility/lookup encoders,
+stretch entity association handles, and manual Save → AutoCAD → Save → GoSurvey for flip/visibility/lookup.
 
 ## Why exports target R2018
 
@@ -96,4 +103,4 @@ DWG versions cluster on a few containers: R2000; R2004/R2010/R2013/R2018 share o
 
 ## Historical recommended order
 
-The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete except** the four rows in the table at the top of this document. New DWG fidelity work should target **#688**, **#617**, **#618**, and **#624** after their REQs exist.
+The 2026-09-30 order in #601 ( #602 → #614 → Group A → #600 → Group B features ) is **complete** for tracked MVP slices. **REQ-371**, **REQ-372**, **REQ-385**, and **REQ-386** (#715 LIGHTLIST) shipped on `beta`.
