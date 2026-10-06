@@ -3,8 +3,8 @@ package store
 import (
 	"fmt"
 	"math/rand"
-	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -13,8 +13,8 @@ import (
 // Ping mirrors tools/telemetry-worker/schema.sql pings table.
 type Ping struct {
 	ID        int    `json:"id"`
-	TS        string `json:"ts"`         // ISO-8601
-	Day       string `json:"day"`        // YYYY-MM-DD
+	TS        string `json:"ts"`  // ISO-8601
+	Day       string `json:"day"` // YYYY-MM-DD
 	InstallID string `json:"install_id"`
 	Event     string `json:"event"` // install | active
 	Version   string `json:"version"`
@@ -34,16 +34,17 @@ type User struct {
 
 // Stats is the overview aggregation (mirrors queries.sql).
 type Stats struct {
-	InstallsTotal int            `json:"installs_total"`
-	Active7d      int            `json:"active_7d"`
-	Active30d     int            `json:"active_30d"`
-	UsersTotal    int            `json:"users_total"`
-	DAU           []DayCount     `json:"dau"`
-	InstallsDaily []DayCount     `json:"installs_daily"`
-	Versions      []GroupCount   `json:"versions"`
-	Channels      []GroupCount   `json:"channels"`
-	Countries     []GroupCount   `json:"countries"`
-	Retention     RetentionStat  `json:"retention"`
+	InstallsTotal int           `json:"installs_total"`
+	Installs30d   int           `json:"installs_30d"`
+	Active7d      int           `json:"active_7d"`
+	Active30d     int           `json:"active_30d"`
+	UsersTotal    int           `json:"users_total"`
+	DAU           []DayCount    `json:"dau"`
+	InstallsDaily []DayCount    `json:"installs_daily"`
+	Versions      []GroupCount  `json:"versions"`
+	Channels      []GroupCount  `json:"channels"`
+	Countries     []GroupCount  `json:"countries"`
+	Retention     RetentionStat `json:"retention"`
 }
 
 type DayCount struct {
@@ -54,35 +55,62 @@ type DayCount struct {
 type GroupCount struct {
 	Key   string `json:"key"`
 	Count int    `json:"count"`
+	Pct   int    `json:"pct"` // bar width: share of the largest group, 0-100
+}
+
+// withPct fills Pct relative to the largest count (the list is sorted desc or by key).
+func withPct(g []GroupCount) []GroupCount {
+	max := 0
+	for _, x := range g {
+		if x.Count > max {
+			max = x.Count
+		}
+	}
+	for i := range g {
+		if max > 0 {
+			g[i].Pct = g[i].Count * 100 / max
+		}
+	}
+	return g
 }
 
 type RetentionStat struct {
-	Cohort      int `json:"cohort"`
-	StillActive int `json:"still_active"`
+	Cohort      int     `json:"cohort"`
+	StillActive int     `json:"still_active"`
 	Percent     float64 `json:"percent"`
 }
 
-// Store holds mock data and optional live D1 config.
+// Store holds the dataset the dashboard renders. Reads never block on the
+// network: live D1 data is fetched in the background (see live.go) and swapped
+// in atomically by setData, which also pre-sorts, pre-indexes and pre-aggregates
+// so a page view is just a copy of already-computed values.
 type Store struct {
-	mu    sync.RWMutex
-	pings []Ping
-	users []User
-	mode  string // "mock" | "live"
+	mu       sync.RWMutex
+	pings    []Ping   // newest first
+	users    []User   // newest first
+	search   []string // lower-cased haystack per ping, parallel to pings
+	stats    Stats
+	statsDay string // UTC day the cached stats were computed for
+	versions []string
+	updated  time.Time
+	mode     string // "mock" | "live"
 }
 
+// New starts the live store: empty ("loading") until the first D1 fetch lands,
+// which happens in the background so the server is up immediately. With MOCK=1
+// it serves seeded demo data instead.
 func New() *Store {
-	s := &Store{mode: "mock"}
-	if LiveEnabled() {
-		// Try live immediately; fall back to mock on error but keep mode as live-error
-		if err := s.RefreshLive(); err != nil {
-			// still seed mock so UI works, but mode stays mock until success
-			s.seedMock()
-			// Keep error for banner
-			fmt.Fprintf(os.Stderr, "[admin] live fetch failed, using mock: %v\n", err)
-			return s
-		}
-		return s
+	if !LiveEnabled() {
+		return NewMock()
 	}
+	s := &Store{mode: "loading"}
+	go s.liveLoop()
+	return s
+}
+
+// NewMock returns a store seeded with deterministic demo data and no network use.
+func NewMock() *Store {
+	s := &Store{mode: "mock"}
 	s.seedMock()
 	return s
 }
@@ -91,6 +119,34 @@ func (s *Store) Mode() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.mode
+}
+
+// Updated is when the data currently being served was loaded.
+func (s *Store) Updated() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.updated
+}
+
+// setData installs a new dataset. Callers must not hold s.mu.
+func (s *Store) setData(pings []Ping, users []User, mode string) {
+	sort.SliceStable(pings, func(a, b int) bool { return pings[a].ID > pings[b].ID })
+	sort.SliceStable(users, func(a, b int) bool { return users[a].CreatedAt > users[b].CreatedAt })
+	search := make([]string, len(pings))
+	for i, p := range pings {
+		search[i] = strings.ToLower(p.InstallID + "|" + p.Email + "|" + p.Version + "|" + p.Country)
+	}
+	day := time.Now().UTC().Format("2006-01-02")
+	stats := computeStats(pings, users)
+	versions := DistinctVersions(pings)
+	s.mu.Lock()
+	s.pings, s.users, s.search = pings, users, search
+	s.stats, s.statsDay, s.versions = stats, day, versions
+	s.updated = time.Now()
+	if mode != "" {
+		s.mode = mode
+	}
+	s.mu.Unlock()
 }
 
 func (s *Store) seedMock() {
@@ -172,8 +228,6 @@ func (s *Store) seedMock() {
 			id++
 		}
 	}
-	sort.Slice(pings, func(a, b int) bool { return pings[a].ID < pings[b].ID })
-	s.pings = pings
 
 	// Users
 	tiers := []string{"free", "free", "free", "pro", "enterprise"}
@@ -188,40 +242,11 @@ func (s *Store) seedMock() {
 		createdAt := now.AddDate(0, 0, -r.Intn(120)).Format(time.RFC3339)
 		users = append(users, User{Auth0Sub: sub, Email: email, Tier: tier, CreatedAt: createdAt})
 	}
-	sort.Slice(users, func(a, b int) bool { return users[a].CreatedAt > users[b].CreatedAt })
-	s.users = users
+	s.setData(pings, users, "mock")
 }
 
-// QueryPings filters and paginates.
-func (s *Store) QueryPings(event, channel, version, search string, page, perPage int) ([]Ping, int) {
-	s.EnsureLive()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	filtered := make([]Ping, 0, len(s.pings))
-	for _, p := range s.pings {
-		if event != "" && p.Event != event {
-			continue
-		}
-		if channel != "" && p.Channel != channel {
-			continue
-		}
-		if version != "" && p.Version != version {
-			continue
-		}
-		if search != "" {
-			needle := strings.ToLower(search)
-			if !strings.Contains(strings.ToLower(p.InstallID), needle) &&
-				!strings.Contains(strings.ToLower(p.Email), needle) &&
-				!strings.Contains(strings.ToLower(p.Version), needle) &&
-				!strings.Contains(strings.ToLower(p.Country), needle) {
-				continue
-			}
-		}
-		filtered = append(filtered, p)
-	}
-	// newest first
-	sort.Slice(filtered, func(a, b int) bool { return filtered[a].ID > filtered[b].ID })
-	total := len(filtered)
+// pageOf returns the [start,end) window of n items for a 1-based page.
+func pageOf(n, page, perPage int) (int, int) {
 	if perPage <= 0 {
 		perPage = 20
 	}
@@ -229,75 +254,183 @@ func (s *Store) QueryPings(event, channel, version, search string, page, perPage
 		page = 1
 	}
 	start := (page - 1) * perPage
-	if start >= total {
-		return []Ping{}, total
+	if start > n {
+		start = n
 	}
-	end := start + perPage
-	if end > total {
-		end = total
-	}
-	return filtered[start:end], total
+	return start, min(start+perPage, n)
 }
 
-func (s *Store) QueryUsers(search, tier string, page, perPage int) ([]User, int) {
-	s.EnsureLive()
+// QueryPings filters, sorts and paginates. sortKey "" means newest first; dir is "asc" or "desc".
+func (s *Store) QueryPings(event, channel, version, search, sortKey, dir string, page, perPage int) ([]Ping, int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	filtered := make([]User, 0, len(s.users))
-	for _, u := range s.users {
+	needle := strings.ToLower(strings.TrimSpace(search))
+	var idx []int
+	for i := range s.pings {
+		p := &s.pings[i]
+		if (event != "" && p.Event != event) || (channel != "" && p.Channel != channel) || (version != "" && p.Version != version) {
+			continue
+		}
+		if needle != "" && !strings.Contains(s.search[i], needle) {
+			continue
+		}
+		idx = append(idx, i)
+	}
+	if less := pingLess(sortKey); less != nil {
+		desc := dir == "desc"
+		sort.SliceStable(idx, func(a, b int) bool {
+			pa, pb := &s.pings[idx[a]], &s.pings[idx[b]]
+			if desc {
+				return less(pb, pa)
+			}
+			return less(pa, pb)
+		})
+	}
+	start, end := pageOf(len(idx), page, perPage)
+	out := make([]Ping, 0, end-start)
+	for _, i := range idx[start:end] {
+		out = append(out, s.pings[i])
+	}
+	return out, len(idx)
+}
+
+func pingLess(key string) func(a, b *Ping) bool {
+	switch key {
+	case "when":
+		return func(a, b *Ping) bool { return a.ID < b.ID }
+	case "event":
+		return func(a, b *Ping) bool { return a.Event < b.Event }
+	case "version":
+		return func(a, b *Ping) bool { return versionLess(a.Version, b.Version) }
+	case "channel":
+		return func(a, b *Ping) bool { return a.Channel < b.Channel }
+	case "os":
+		return func(a, b *Ping) bool { return a.OS < b.OS }
+	case "country":
+		return func(a, b *Ping) bool { return a.Country < b.Country }
+	case "email":
+		return func(a, b *Ping) bool { return strings.ToLower(a.Email) < strings.ToLower(b.Email) }
+	case "install":
+		return func(a, b *Ping) bool { return a.InstallID < b.InstallID }
+	}
+	return nil
+}
+
+// versionLess orders "0.9.0" < "0.10.0" numerically, falling back to string order.
+func versionLess(a, b string) bool {
+	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(pa) && i < len(pb); i++ {
+		na, ea := strconv.Atoi(pa[i])
+		nb, eb := strconv.Atoi(pb[i])
+		if ea != nil || eb != nil {
+			if pa[i] != pb[i] {
+				return pa[i] < pb[i]
+			}
+			continue
+		}
+		if na != nb {
+			return na < nb
+		}
+	}
+	return len(pa) < len(pb)
+}
+
+func (s *Store) QueryUsers(search, tier, sortKey, dir string, page, perPage int) ([]User, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	needle := strings.ToLower(strings.TrimSpace(search))
+	var idx []int
+	for i := range s.users {
+		u := &s.users[i]
 		if tier != "" && u.Tier != tier {
 			continue
 		}
-		if search != "" {
-			needle := strings.ToLower(search)
-			if !strings.Contains(strings.ToLower(u.Email), needle) &&
-				!strings.Contains(strings.ToLower(u.Auth0Sub), needle) {
-				continue
-			}
+		if needle != "" && !strings.Contains(strings.ToLower(u.Email), needle) && !strings.Contains(strings.ToLower(u.Auth0Sub), needle) {
+			continue
 		}
-		filtered = append(filtered, u)
+		idx = append(idx, i)
 	}
-	total := len(filtered)
-	if perPage <= 0 {
-		perPage = 20
+	var less func(a, b *User) bool
+	switch sortKey {
+	case "email":
+		less = func(a, b *User) bool { return strings.ToLower(a.Email) < strings.ToLower(b.Email) }
+	case "tier":
+		less = func(a, b *User) bool { return a.Tier < b.Tier }
+	case "joined":
+		less = func(a, b *User) bool { return a.CreatedAt < b.CreatedAt }
+	case "sub":
+		less = func(a, b *User) bool { return a.Auth0Sub < b.Auth0Sub }
 	}
-	if page < 1 {
-		page = 1
+	if less != nil {
+		desc := dir == "desc"
+		sort.SliceStable(idx, func(a, b int) bool {
+			ua, ub := &s.users[idx[a]], &s.users[idx[b]]
+			if desc {
+				return less(ub, ua)
+			}
+			return less(ua, ub)
+		})
 	}
-	start := (page - 1) * perPage
-	if start >= total {
-		return []User{}, total
+	start, end := pageOf(len(idx), page, perPage)
+	out := make([]User, 0, end-start)
+	for _, i := range idx[start:end] {
+		out = append(out, s.users[i])
 	}
-	end := start + perPage
-	if end > total {
-		end = total
+	return out, len(idx)
+}
+
+// RecentPings returns up to n newest pings.
+func (s *Store) RecentPings(n int) []Ping {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if n > len(s.pings) {
+		n = len(s.pings)
 	}
-	return filtered[start:end], total
+	return append([]Ping(nil), s.pings[:n]...)
+}
+
+// Versions lists every version seen, for the telemetry filter.
+func (s *Store) Versions() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.versions
 }
 
 func (s *Store) AllPings() []Ping {
-	s.EnsureLive()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	cp := make([]Ping, len(s.pings))
-	copy(cp, s.pings)
-	return cp
-}
-func (s *Store) AllUsers() []User {
-	s.EnsureLive()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	cp := make([]User, len(s.users))
-	copy(cp, s.users)
-	return cp
+	return append([]Ping(nil), s.pings...)
 }
 
-func (s *Store) ComputeStats() Stats {
-	s.EnsureLive()
+func (s *Store) AllUsers() []User {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return append([]User(nil), s.users...)
+}
+
+// ComputeStats returns the cached aggregation, recomputing only when the data
+// changed (setData) or the UTC day rolled over (the 7d/30d windows move).
+func (s *Store) ComputeStats() Stats {
+	today := time.Now().UTC().Format("2006-01-02")
+	s.mu.RLock()
+	if s.statsDay == today {
+		st := s.stats
+		s.mu.RUnlock()
+		return st
+	}
+	s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.statsDay != today {
+		s.stats = computeStats(s.pings, s.users)
+		s.statsDay = today
+	}
+	return s.stats
+}
+
+func computeStats(pings []Ping, users []User) Stats {
 	installsTotal := 0
-	for _, p := range s.pings {
+	for _, p := range pings {
 		if p.Event == "install" {
 			installsTotal++
 		}
@@ -307,7 +440,7 @@ func (s *Store) ComputeStats() Stats {
 	cut30 := time.Now().UTC().AddDate(0, 0, -30).Format("2006-01-02")
 	set7 := map[string]struct{}{}
 	set30 := map[string]struct{}{}
-	for _, p := range s.pings {
+	for _, p := range pings {
 		if p.Event != "active" {
 			continue
 		}
@@ -321,7 +454,7 @@ func (s *Store) ComputeStats() Stats {
 	// DAU last 30
 	dauMap := map[string]map[string]struct{}{}
 	installsDaily := map[string]int{}
-	for _, p := range s.pings {
+	for _, p := range pings {
 		if p.Day < cut30 {
 			continue
 		}
@@ -353,7 +486,7 @@ func (s *Store) ComputeStats() Stats {
 	verMap := map[string]map[string]struct{}{}
 	chMap := map[string]map[string]struct{}{}
 	countryMap := map[string]map[string]struct{}{}
-	for _, p := range s.pings {
+	for _, p := range pings {
 		if p.Day < cut30 {
 			continue
 		}
@@ -395,14 +528,14 @@ func (s *Store) ComputeStats() Stats {
 	// retention
 	cut30Old := time.Now().UTC().AddDate(0, 0, -30).Format("2006-01-02")
 	cohortSet := map[string]struct{}{}
-	for _, p := range s.pings {
+	for _, p := range pings {
 		if p.Event == "install" && p.Day <= cut30Old {
 			cohortSet[p.InstallID] = struct{}{}
 		}
 	}
 	still := 0
 	active30Set := map[string]struct{}{}
-	for _, p := range s.pings {
+	for _, p := range pings {
 		if p.Event == "active" && p.Day >= cut30 {
 			active30Set[p.InstallID] = struct{}{}
 		}
@@ -416,16 +549,21 @@ func (s *Store) ComputeStats() Stats {
 	if len(cohortSet) > 0 {
 		percent = float64(still) / float64(len(cohortSet)) * 100
 	}
+	installs30d := 0
+	for _, d := range installsDailyArr {
+		installs30d += d.Count
+	}
 	return Stats{
 		InstallsTotal: installsTotal,
+		Installs30d:   installs30d,
 		Active7d:      len(set7),
 		Active30d:     len(set30),
-		UsersTotal:    len(s.users),
+		UsersTotal:    len(users),
 		DAU:           dau,
 		InstallsDaily: installsDailyArr,
-		Versions:      versions,
-		Channels:      channels,
-		Countries:     countries,
+		Versions:      withPct(versions),
+		Channels:      withPct(channels),
+		Countries:     withPct(countries),
 		Retention:     RetentionStat{Cohort: len(cohortSet), StillActive: still, Percent: percent},
 	}
 }

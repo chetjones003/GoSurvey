@@ -2,12 +2,12 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -19,21 +19,20 @@ type wranglerResult struct {
 	Meta    any              `json:"meta"`
 }
 
-// liveState manages periodic refresh when LIVE_D1=1.
+// liveState tracks the background D1 refresh (LIVE_D1=1).
 type liveState struct {
-	mu        sync.Mutex
-	enabled   bool
-	lastFetch time.Time
-	lastErr   string
-	ttl       time.Duration
+	mu       sync.Mutex
+	enabled  bool
+	lastErr  string
+	interval time.Duration
+	running  sync.Mutex // serialises refreshes so a manual one can't overlap the loop
 }
 
-var live = &liveState{ttl: 30 * time.Second}
+var live = &liveState{interval: 30 * time.Second}
 
 func init() {
-	if os.Getenv("LIVE_D1") == "1" || os.Getenv("LIVE") == "1" {
-		live.enabled = true
-	}
+	// Live D1 is the default. Set MOCK=1 (or LIVE_D1=0) to run on demo data offline.
+	live.enabled = os.Getenv("MOCK") != "1" && os.Getenv("LIVE_D1") != "0"
 }
 
 func LiveEnabled() bool { return live.enabled }
@@ -48,20 +47,13 @@ func setLiveError(err string) {
 	live.mu.Unlock()
 }
 
-// shouldRefresh returns true if live is enabled and ttl expired.
-func shouldRefresh() bool {
-	if !live.enabled {
-		return false
+// liveLoop refreshes immediately and then on every interval. It runs in its own
+// goroutine so neither startup nor page loads ever wait on wrangler.
+func (s *Store) liveLoop() {
+	for {
+		_ = s.RefreshLive()
+		time.Sleep(live.interval)
 	}
-	live.mu.Lock()
-	defer live.mu.Unlock()
-	return time.Since(live.lastFetch) > live.ttl
-}
-
-func markFetched() {
-	live.mu.Lock()
-	live.lastFetch = time.Now()
-	live.mu.Unlock()
 }
 
 // repoRoot finds GoSurvey repo root by walking up from executable or cwd looking for tools/telemetry-worker/wrangler.toml
@@ -102,24 +94,18 @@ func runWrangler(db, sql, configPath string) ([]map[string]any, error) {
 	if !filepath.IsAbs(cfgAbs) {
 		cfgAbs = filepath.Join(root, configPath)
 	}
-	// Prefer npx wrangler, fallback to wrangler
-	// Build command
-	// On Windows cmd, npx is npx.cmd — exec will resolve via PATH with extension.
-	npx := "npx"
-	if runtime.GOOS == "windows" {
-		// exec will find npx.cmd via PATHEXT, but be explicit for logging
-		npx = "npx"
+	args := []string{"d1", "execute", db, "--remote", "--json", "--config", cfgAbs, "--command", sql}
+	// A globally installed wrangler starts in milliseconds; npx can spend
+	// seconds resolving the package first, so only fall back to it.
+	var out []byte
+	var err error
+	if path, lookErr := exec.LookPath("wrangler"); lookErr == nil {
+		out, err = execCommand(path, args, root)
+	} else {
+		out, err = execCommand("npx", append([]string{"wrangler"}, args...), root)
 	}
-	args := []string{"wrangler", "d1", "execute", db, "--remote", "--json", "--config", cfgAbs, "--command", sql}
-	// Try npx wrangler first
-	out, err := execCommand(npx, args, root)
 	if err != nil {
-		// Try bare wrangler
-		out2, err2 := execCommand("wrangler", args[1:], root)
-		if err2 != nil {
-			return nil, fmt.Errorf("wrangler failed (%v / %v): %s", err, err2, firstLine(string(out)+string(out2)))
-		}
-		out = out2
+		return nil, fmt.Errorf("wrangler failed (%v): %s", err, firstLine(string(out)))
 	}
 	// Wrangler prints banner before JSON — find first '['
 	idx := bytes.Index(out, []byte("["))
@@ -145,7 +131,9 @@ func runWrangler(db, sql, configPath string) ([]map[string]any, error) {
 }
 
 func execCommand(name string, args []string, dir string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	// Ensure wrangler creds are found — inherit env
 	cmd.Env = os.Environ()
@@ -260,42 +248,40 @@ func toFloat(v any) float64 {
 	}
 }
 
-// RefreshLive attempts to pull live data and update the store; returns error if live disabled or fetch fails.
+// RefreshLive pulls pings and users from D1 in parallel and swaps them in.
+// If only one query fails the other is still applied and the error is surfaced.
 func (s *Store) RefreshLive() error {
 	if !live.enabled {
-		return fmt.Errorf("live not enabled (set LIVE_D1=1)")
+		return fmt.Errorf("live is disabled (MOCK=1 / LIVE_D1=0)")
 	}
-	pings, err := FetchLivePings(1000)
-	if err != nil {
-		setLiveError(err.Error())
-		return err
-	}
-	users, err := FetchLiveUsers(1000)
-	if err != nil {
-		// pings succeeded but users failed — still use pings
-		setLiveError("users: " + err.Error())
-		// keep users as before, but update pings
-		s.mu.Lock()
-		s.pings = pings
-		s.mode = "live"
-		s.mu.Unlock()
-		markFetched()
-		return err
-	}
-	s.mu.Lock()
-	s.pings = pings
-	s.users = users
-	s.mode = "live"
-	s.mu.Unlock()
-	setLiveError("")
-	markFetched()
-	return nil
-}
+	live.running.Lock()
+	defer live.running.Unlock()
 
-// EnsureLive tries refresh if stale; returns live error if any.
-func (s *Store) EnsureLive() {
-	if !shouldRefresh() {
-		return
+	var (
+		pings            []Ping
+		users            []User
+		pingErr, userErr error
+		wg               sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() { defer wg.Done(); pings, pingErr = FetchLivePings(1000) }()
+	go func() { defer wg.Done(); users, userErr = FetchLiveUsers(1000) }()
+	wg.Wait()
+
+	if pingErr != nil {
+		setLiveError(pingErr.Error())
+		return pingErr
 	}
-	_ = s.RefreshLive()
+	if userErr != nil {
+		// pings succeeded but users failed: keep the previous users
+		setLiveError("users: " + userErr.Error())
+		s.mu.RLock()
+		users = append([]User(nil), s.users...)
+		s.mu.RUnlock()
+		s.setData(pings, users, "live")
+		return userErr
+	}
+	s.setData(pings, users, "live")
+	setLiveError("")
+	return nil
 }

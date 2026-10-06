@@ -1,0 +1,14 @@
+{{define "pager_row"}}
+<tr class="pager-row">
+  <td colspan="{{.Cols}}">
+    <div class="pager">
+      <span class="muted small">{{if .Total}}{{.From}}–{{.To}} of {{num .Total}}{{else}}0 results{{end}}</span>
+      <span class="pager-btns">
+        <button class="btn btn-ghost small" {{if .PrevURL}}hx-get="{{.PrevURL}}"{{else}}disabled{{end}}>← Prev</button>
+        <span class="muted small">page {{.Page}} / {{.TotalPages}}</span>
+        <button class="btn btn-ghost small" {{if .NextURL}}hx-get="{{.NextURL}}"{{else}}disabled{{end}}>Next →</button>
+      </span>
+    </div>
+  </td>
+</tr>
+{{end}}
