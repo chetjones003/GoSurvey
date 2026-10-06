@@ -2,6 +2,8 @@
 
 #include "CadCommands.hpp"
 #include "PdfDocument.hpp"
+#include "FontRegistry.hpp"
+#include "PdfAnnotate.hpp"
 #include "PdfSplit.hpp"
 #include "PdfViewerCore.hpp"
 #include "WinFileDialogs.hpp"
@@ -217,6 +219,228 @@ struct BenchRun {
   std::filesystem::path file;
 };
 
+// ---------------------------------------------------------------------------------------------------
+// REQ-388: annotations. The edits live in `AnnotSession` and are drawn over the page by ImGui, so touching
+// a page never re-renders it; only "Save As" writes them into a new PDF.
+// ---------------------------------------------------------------------------------------------------
+
+enum class Tool { Select, Text, Line, Rect, Ellipse };
+
+struct FontChoice {
+  std::string family;
+  bool standard; ///< one of the 14 standard PDF fonts (no embedding); otherwise an installed TrueType family
+};
+
+// The standard PDF fonts plus the installed TrueType families GoSurvey itself can load (FontReg).
+const std::vector<FontChoice>& FontChoices() {
+  static const std::vector<FontChoice> list = [] {
+    std::vector<FontChoice> out = {{"Helvetica", true}, {"Times", true}, {"Courier", true}};
+    for (const char* f : {"Arial", "Times New Roman", "Courier New", "Calibri", "Verdana", "Tahoma", "Consolas",
+                          "Georgia", "Segoe UI"}) {
+      const std::string p = FontReg::FindTtfPath(f, false, false);
+      if (p.size() > 4 && p.compare(p.size() - 4, 4, ".ttf") == 0) // .ttc collections are not embedded
+        out.push_back({f, false});
+    }
+    return out;
+  }();
+  return list;
+}
+
+struct AnnotUi {
+  AnnotSession session;
+  Tool tool = Tool::Select;
+  float color[3] = {0.85f, 0.10f, 0.10f};
+  float thickness = 2.f;
+  bool fill = false;
+  int fontIdx = 0;
+  bool bold = false, italic = false;
+  float fontSize = 14.f;
+  int selected = -1;
+  enum class Drag { None, Create, Move, Handle } drag = Drag::None;
+  int dragPage = 0;
+  float px0 = 0.f, py0 = 0.f; ///< where the press landed, in page points
+  int handle = -1;
+  Annot original, preview;    ///< the item before the drag, and as it looks mid-drag
+  bool textPopup = false;     ///< open the text dialog on the next frame
+  int textPage = 0;
+  float textX = 0.f, textY = 0.f;
+  int textEdit = -1;          ///< item being edited, or -1 for a new note
+  char textBuf[1024] = "";
+  std::future<std::string> saving;
+  std::string saveDest;
+  std::string status;
+  bool closePrompt = false;   ///< the window was closed with unsaved annotations: ask first
+  bool closeAfterSave = false;
+  bool requestClose = false;
+  bool discardOk = false;
+};
+
+unsigned PackColor(const float c[3]) {
+  const auto b = [](float v) { return static_cast<unsigned>(std::clamp(v, 0.f, 1.f) * 255.f + 0.5f); };
+  return (b(c[0]) << 16) | (b(c[1]) << 8) | b(c[2]);
+}
+void UnpackColor(unsigned rgb, float c[3]) {
+  c[0] = static_cast<float>((rgb >> 16) & 0xFF) / 255.f;
+  c[1] = static_cast<float>((rgb >> 8) & 0xFF) / 255.f;
+  c[2] = static_cast<float>(rgb & 0xFF) / 255.f;
+}
+ImU32 ToImCol(unsigned rgb, int a = 255) {
+  return IM_COL32((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, a);
+}
+
+// A note's box follows its text and size: anchored at its top-left corner.
+void FitTextBox(Annot& a) {
+  float w = 0.f, h = 0.f;
+  EstimateTextBox(a.text, a.fontSize, w, h);
+  const float l = std::min(a.x0, a.x1), t = std::max(a.y0, a.y1);
+  a.x0 = l;
+  a.x1 = l + w;
+  a.y1 = t;
+  a.y0 = t - h;
+}
+
+// Font, colour, width and fill from the tool settings onto an annotation.
+void ApplyStyle(const AnnotUi& u, Annot& a) {
+  a.color = PackColor(u.color);
+  if (a.kind == Annot::Kind::Text) {
+    const FontChoice& f = FontChoices()[static_cast<size_t>(std::clamp(u.fontIdx, 0, static_cast<int>(FontChoices().size()) - 1))];
+    a.font = f.family;
+    a.bold = u.bold;
+    a.italic = u.italic;
+    a.fontSize = std::clamp(u.fontSize, 4.f, 200.f);
+    a.fontFile = f.standard ? std::string() : FontReg::FindTtfPath(f.family, u.bold, u.italic);
+    FitTextBox(a);
+  } else {
+    a.thickness = u.thickness;
+    a.fill = a.kind != Annot::Kind::Line && u.fill;
+  }
+}
+
+// The reverse: the tool settings show the selected annotation's style.
+void LoadStyle(AnnotUi& u, const Annot& a) {
+  UnpackColor(a.color, u.color);
+  if (a.kind == Annot::Kind::Text) {
+    u.bold = a.bold;
+    u.italic = a.italic;
+    u.fontSize = a.fontSize;
+    for (size_t i = 0; i < FontChoices().size(); ++i)
+      if (FontChoices()[i].family == a.font)
+        u.fontIdx = static_cast<int>(i);
+  } else {
+    u.thickness = a.thickness;
+    u.fill = a.fill;
+  }
+}
+
+float DistToSegment(float px, float py, float ax, float ay, float bx, float by) {
+  const float dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+  float t = len2 > 0.f ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0.f;
+  t = std::clamp(t, 0.f, 1.f);
+  return std::hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+// Does a click at page point (x, y) land on the annotation? `tol` is the pick slack in points.
+bool HitTest(const Annot& a, float x, float y, float tol) {
+  const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
+  switch (a.kind) {
+  case Annot::Kind::Line:
+    return DistToSegment(x, y, a.x0, a.y0, a.x1, a.y1) <= std::max(a.thickness * 0.5f, 0.f) + tol;
+  case Annot::Kind::Text:
+    return x >= l - tol && x <= r + tol && y >= b - tol && y <= t + tol;
+  case Annot::Kind::Rect: {
+    const float e = tol + a.thickness * 0.5f;
+    const bool outer = x >= l - e && x <= r + e && y >= b - e && y <= t + e;
+    const bool inner = x > l + e && x < r - e && y > b + e && y < t - e;
+    return outer && (a.fill || !inner);
+  }
+  case Annot::Kind::Ellipse: {
+    const float rx = std::max(0.5f, (r - l) * 0.5f), ry = std::max(0.5f, (t - b) * 0.5f);
+    const float d = std::hypot((x - (l + r) * 0.5f) / rx, (y - (b + t) * 0.5f) / ry);
+    if (a.fill && d <= 1.f)
+      return true;
+    return std::fabs(d - 1.f) * std::min(rx, ry) <= tol + a.thickness * 0.5f;
+  }
+  }
+  return false;
+}
+
+// The grips of a selected annotation, in page points: a Line's two ends, a shape's four corners
+// (clockwise from top-left), a note's bottom-right corner (it scales the text).
+std::vector<std::pair<float, float>> HandlePoints(const Annot& a) {
+  const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
+  if (a.kind == Annot::Kind::Line)
+    return {{a.x0, a.y0}, {a.x1, a.y1}};
+  if (a.kind == Annot::Kind::Text)
+    return {{r, b}};
+  return {{l, t}, {r, t}, {r, b}, {l, b}};
+}
+
+void MoveHandle(Annot& a, const Annot& original, int handle, float x, float y) {
+  if (a.kind == Annot::Kind::Line) {
+    (handle == 0 ? a.x0 : a.x1) = x;
+    (handle == 0 ? a.y0 : a.y1) = y;
+  } else if (a.kind == Annot::Kind::Text) {
+    const float top = std::max(original.y0, original.y1);
+    const float oldH = std::max(1.f, top - std::min(original.y0, original.y1));
+    a = original;
+    a.fontSize = std::clamp(original.fontSize * std::max(0.05f, (top - y) / oldH), 4.f, 200.f);
+    FitTextBox(a);
+  } else {
+    const auto corners = HandlePoints(original);
+    const auto opp = corners[static_cast<size_t>((handle + 2) % 4)];
+    a.x0 = opp.first;
+    a.y0 = opp.second;
+    a.x1 = x;
+    a.y1 = y;
+  }
+}
+
+ImFont* FontForNote(const Annot& a) {
+  std::string name = a.font == "Helvetica" ? "Arial" : a.font == "Times" ? "Times New Roman" : a.font == "Courier" ? "Courier New" : a.font;
+  return FontReg::Resolve(name, a.bold, a.italic);
+}
+
+// Draw an annotation over its page. `tl` is the page's top-left on screen, `k` the screen pixels per point.
+void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bool selected) {
+  const auto S = [&](float x, float y) { return ImVec2(tl.x + x * k, tl.y + (hPt - y) * k); };
+  const ImU32 col = ToImCol(a.color);
+  const float th = std::max(1.f, a.thickness * k);
+  const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
+  switch (a.kind) {
+  case Annot::Kind::Line:
+    dl->AddLine(S(a.x0, a.y0), S(a.x1, a.y1), col, th);
+    break;
+  case Annot::Kind::Rect:
+    if (a.fill)
+      dl->AddRectFilled(S(l, t), S(r, b), col);
+    dl->AddRect(S(l, t), S(r, b), col, 0.f, 0, th);
+    break;
+  case Annot::Kind::Ellipse: {
+    const ImVec2 c = S((l + r) * 0.5f, (b + t) * 0.5f), rad((r - l) * 0.5f * k, (t - b) * 0.5f * k);
+    if (a.fill)
+      dl->AddEllipseFilled(c, rad, col);
+    dl->AddEllipse(c, rad, col, 0.f, 0, th);
+    break;
+  }
+  case Annot::Kind::Text:
+    dl->AddText(FontForNote(a), a.fontSize * k, S(l, t), col, a.text.c_str());
+    break;
+  }
+  if (selected) {
+    const float pad = 3.f;
+    if (a.kind == Annot::Kind::Line)
+      dl->AddLine(S(a.x0, a.y0), S(a.x1, a.y1), IM_COL32(60, 140, 255, 110), th + 6.f);
+    else
+      dl->AddRect(ImVec2(S(l, t).x - pad, S(l, t).y - pad), ImVec2(S(r, b).x + pad, S(r, b).y + pad),
+                  IM_COL32(60, 140, 255, 255), 0.f, 0, 1.f);
+    for (const auto& h : HandlePoints(a)) {
+      const ImVec2 p = S(h.first, h.second);
+      dl->AddRectFilled(ImVec2(p.x - 4.f, p.y - 4.f), ImVec2(p.x + 4.f, p.y + 4.f), IM_COL32(255, 255, 255, 255));
+      dl->AddRect(ImVec2(p.x - 4.f, p.y - 4.f), ImVec2(p.x + 4.f, p.y + 4.f), IM_COL32(60, 140, 255, 255));
+    }
+  }
+}
+
 struct Viewer {
   int id = 0;
   std::string path;
@@ -253,6 +477,7 @@ struct Viewer {
   Clock::time_point openedAt = Clock::now();
   double firstPageMs = -1;
   BenchRun bench;
+  AnnotUi ann; ///< REQ-388
   // REQ-389: the Split dialog. The copy runs on a one-shot worker so a long file never freezes the UI.
   bool splitOpenRequest = false;
   char splitBuf[256] = "";
@@ -308,6 +533,8 @@ void DrainGraveyard() {
 void DestroyViewer(Viewer& v) {
   if (v.splitting.valid())
     v.splitting.wait(); // a split in flight finishes (it reads the file, never changes the source)
+  if (v.ann.saving.valid())
+    v.ann.saving.wait(); // so does a Save As
   v.worker->Shutdown();
   DeleteTextures(v.cache.Clear());
 }
@@ -590,6 +817,363 @@ void DrawThumbnails(Viewer& v) {
   ImGui::EndChild();
 }
 
+void StartSave(Viewer& v, std::vector<std::string>& log) {
+  AnnotUi& u = v.ann;
+  const std::string stem = std::filesystem::u8path(v.path).stem().u8string() + "-annotated.pdf";
+  char out[1024] = {};
+  if (!BrowseSaveFilePdfUtf8(out, sizeof(out), stem.c_str()) || out[0] == 0) {
+    u.closeAfterSave = false;
+    return;
+  }
+  u.saveDest = out;
+  u.status = "Saving...";
+  const std::filesystem::path src = std::filesystem::u8path(v.path), dst = std::filesystem::u8path(u.saveDest);
+  u.saving = std::async(std::launch::async, [src, dst, items = u.session.Items()] { return SaveAnnotated(src, items, dst); });
+  (void)log;
+}
+
+void SelectAnnot(AnnotUi& u, int index) {
+  u.selected = index;
+  if (index >= 0 && index < static_cast<int>(u.session.Items().size()))
+    LoadStyle(u, u.session.Items()[static_cast<size_t>(index)]);
+}
+
+// The annotation row under the toolbar: tools, style, undo/redo, Save As, and the two small dialogs
+// (note text, unsaved-changes prompt).
+void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
+  AnnotUi& u = v.ann;
+  if (u.saving.valid() && u.saving.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    const std::string err = u.saving.get();
+    if (err.empty()) {
+      u.session.MarkSaved();
+      u.status = "Saved a copy: " + u.saveDest;
+      log.push_back("PDF annotations: saved " + u.saveDest);
+      if (u.closeAfterSave)
+        u.requestClose = true;
+    } else {
+      u.status = "Save As failed: " + err;
+      log.push_back("PDF annotations: Save As failed - " + err);
+    }
+    u.closeAfterSave = false;
+  }
+  const bool saving = u.saving.valid();
+  const auto& items = u.session.Items();
+  if (u.selected >= static_cast<int>(items.size()))
+    u.selected = -1;
+
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.f, 5.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.f, 6.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
+  ImGui::TextUnformatted("Annotate:");
+  ImGui::SameLine();
+  const auto toolButton = [&](const char* label, Tool t) {
+    const bool on = u.tool == t;
+    if (on) {
+      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.48f, 0.80f, 1.f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.54f, 0.86f, 1.f));
+    }
+    if (ImGui::Button(label)) {
+      u.tool = t;
+      if (t != Tool::Select)
+        u.selected = -1;
+    }
+    if (on)
+      ImGui::PopStyleColor(2);
+    ImGui::SameLine();
+  };
+  toolButton("Select", Tool::Select);
+  toolButton("Text", Tool::Text);
+  toolButton("Line", Tool::Line);
+  toolButton("Rectangle", Tool::Rect);
+  toolButton("Ellipse", Tool::Ellipse);
+
+  bool changed = false;
+  changed |= ImGui::ColorEdit3("##annotcol", u.color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+  ImGui::SameLine();
+  const Annot* sel = u.selected >= 0 ? &items[static_cast<size_t>(u.selected)] : nullptr;
+  const bool textStyle = u.tool == Tool::Text || (sel != nullptr && sel->kind == Annot::Kind::Text);
+  if (textStyle) {
+    ImGui::SetNextItemWidth(130.f);
+    const auto& fonts = FontChoices();
+    u.fontIdx = std::clamp(u.fontIdx, 0, static_cast<int>(fonts.size()) - 1);
+    if (ImGui::BeginCombo("##annotfont", fonts[static_cast<size_t>(u.fontIdx)].family.c_str())) {
+      for (size_t i = 0; i < fonts.size(); ++i)
+        if (ImGui::Selectable(fonts[i].family.c_str(), static_cast<int>(i) == u.fontIdx)) {
+          u.fontIdx = static_cast<int>(i);
+          changed = true;
+        }
+      ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    changed |= ImGui::Checkbox("Bold", &u.bold);
+    ImGui::SameLine();
+    changed |= ImGui::Checkbox("Italic", &u.italic);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(70.f);
+    changed |= ImGui::DragFloat("##annotsize", &u.fontSize, 0.25f, 4.f, 200.f, "%.0f pt");
+  } else {
+    ImGui::SetNextItemWidth(110.f);
+    changed |= ImGui::SliderFloat("##annotw", &u.thickness, 0.5f, 20.f, "%.1f pt");
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Line thickness");
+    if (u.tool != Tool::Line && (sel == nullptr || sel->kind != Annot::Kind::Line)) {
+      ImGui::SameLine();
+      changed |= ImGui::Checkbox("Fill", &u.fill);
+    }
+  }
+  if (changed && sel != nullptr) {
+    Annot a = *sel;
+    ApplyStyle(u, a);
+    u.session.Replace(u.selected, a);
+  }
+  ImGui::SameLine();
+  ImGui::TextUnformatted("|");
+  ImGui::SameLine();
+  ImGui::BeginDisabled(!u.session.CanUndo() || saving);
+  if (ImGui::Button("Undo")) {
+    u.session.Undo();
+    u.selected = -1;
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(!u.session.CanRedo() || saving);
+  if (ImGui::Button("Redo")) {
+    u.session.Redo();
+    u.selected = -1;
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(u.selected < 0 || saving);
+  if (ImGui::Button("Delete")) {
+    u.session.Remove(u.selected);
+    u.selected = -1;
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(items.empty() || saving);
+  if (ImGui::Button("Save As..."))
+    StartSave(v, log);
+  ImGui::EndDisabled();
+  if (!u.status.empty()) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", u.status.c_str());
+  }
+  ImGui::PopStyleVar(3);
+
+  // The note text dialog.
+  char id[64];
+  std::snprintf(id, sizeof(id), "Text note###pdftext%d", v.id);
+  if (u.textPopup) {
+    u.textPopup = false;
+    ImGui::OpenPopup(id);
+  }
+  ImGui::SetNextWindowSize(ImVec2(420.f, 0.f), ImGuiCond_Appearing);
+  if (ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::IsWindowAppearing())
+      ImGui::SetKeyboardFocusHere();
+    ImGui::InputTextMultiline("##notetext", u.textBuf, sizeof(u.textBuf), ImVec2(400.f, 110.f));
+    const bool empty = u.textBuf[0] == 0;
+    ImGui::BeginDisabled(empty);
+    if (ImGui::Button("OK")) {
+      if (u.textEdit >= 0 && u.textEdit < static_cast<int>(items.size())) {
+        Annot a = items[static_cast<size_t>(u.textEdit)];
+        a.text = u.textBuf;
+        FitTextBox(a);
+        u.session.Replace(u.textEdit, a);
+      } else {
+        Annot a;
+        a.kind = Annot::Kind::Text;
+        a.page = u.textPage;
+        a.x0 = u.textX;
+        a.y1 = u.textY;
+        a.text = u.textBuf;
+        ApplyStyle(u, a);
+        u.session.Add(a);
+      }
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel"))
+      ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
+
+  // The unsaved-changes prompt: the window was closed while the annotation list differs from the last save.
+  std::snprintf(id, sizeof(id), "Unsaved annotations###pdfclose%d", v.id);
+  if (u.closePrompt) {
+    u.closePrompt = false;
+    ImGui::OpenPopup(id);
+  }
+  if (ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("This PDF has annotations that are not saved.");
+    ImGui::TextDisabled("The original file is never changed; Save As writes a new copy.");
+    ImGui::BeginDisabled(saving);
+    if (ImGui::Button("Save As...")) {
+      u.closeAfterSave = true;
+      StartSave(v, log);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Discard")) {
+      u.discardOk = true;
+      u.requestClose = true;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel"))
+      ImGui::CloseCurrentPopup();
+    ImGui::EndDisabled();
+    ImGui::EndPopup();
+  }
+}
+
+struct PageRect {
+  int page;
+  ImVec2 tl; ///< the page's top-left on screen
+  float wPt, hPt;
+};
+
+// Mouse and keyboard on the pages: create with the drawing tools, select / move / resize with Select.
+void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovered, bool panning) {
+  AnnotUi& u = v.ann;
+  const ImGuiIO& io = ImGui::GetIO();
+  const float k = v.pxPerPt;
+  const auto& items = u.session.Items();
+  const auto rectOf = [&](int page) -> const PageRect* {
+    for (const PageRect& r : rects)
+      if (r.page == page)
+        return &r;
+    return nullptr;
+  };
+  const auto toPt = [&](const PageRect& r, float& x, float& y, bool clamp) {
+    x = (io.MousePos.x - r.tl.x) / k;
+    y = r.hPt - (io.MousePos.y - r.tl.y) / k;
+    if (clamp) {
+      x = std::clamp(x, 0.f, r.wPt);
+      y = std::clamp(y, 0.f, r.hPt);
+    }
+  };
+
+  // Keys, while no text box has the keyboard.
+  if ((ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || hovered) && !io.WantTextInput && u.drag == AnnotUi::Drag::None) {
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z) && u.session.Undo())
+      u.selected = -1;
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y) && u.session.Redo())
+      u.selected = -1;
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete) && u.selected >= 0) {
+      u.session.Remove(u.selected);
+      u.selected = -1;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+      u.selected = -1;
+  }
+
+  if (u.drag == AnnotUi::Drag::None) {
+    if (!hovered || panning || !ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive())
+      return;
+    for (const PageRect& r : rects) {
+      const ImVec2 m = io.MousePos;
+      if (m.x < r.tl.x || m.y < r.tl.y || m.x > r.tl.x + r.wPt * k || m.y > r.tl.y + r.hPt * k)
+        continue;
+      float x, y;
+      toPt(r, x, y, false);
+      const float tol = 5.f / k;
+      if (u.tool == Tool::Select) {
+        if (u.selected >= 0 && items[static_cast<size_t>(u.selected)].page == r.page) {
+          const auto grips = HandlePoints(items[static_cast<size_t>(u.selected)]);
+          for (size_t i = 0; i < grips.size(); ++i)
+            if (std::fabs(x - grips[i].first) <= 7.f / k && std::fabs(y - grips[i].second) <= 7.f / k) {
+              u.drag = AnnotUi::Drag::Handle;
+              u.handle = static_cast<int>(i);
+              u.dragPage = r.page;
+              u.original = u.preview = items[static_cast<size_t>(u.selected)];
+              return;
+            }
+        }
+        int hit = -1;
+        for (int i = static_cast<int>(items.size()) - 1; i >= 0; --i)
+          if (items[static_cast<size_t>(i)].page == r.page && HitTest(items[static_cast<size_t>(i)], x, y, tol)) {
+            hit = i;
+            break;
+          }
+        if (hit < 0) {
+          u.selected = -1;
+        } else {
+          SelectAnnot(u, hit);
+          const Annot& a = items[static_cast<size_t>(hit)];
+          if (a.kind == Annot::Kind::Text && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            std::snprintf(u.textBuf, sizeof(u.textBuf), "%s", a.text.c_str());
+            u.textEdit = hit;
+            u.textPopup = true;
+          } else {
+            u.drag = AnnotUi::Drag::Move;
+            u.dragPage = r.page;
+            u.px0 = x;
+            u.py0 = y;
+            u.original = u.preview = a;
+          }
+        }
+      } else if (u.tool == Tool::Text) {
+        u.textBuf[0] = 0;
+        u.textEdit = -1;
+        u.textPage = r.page;
+        u.textX = x;
+        u.textY = y;
+        u.textPopup = true;
+      } else {
+        float cx, cy;
+        toPt(r, cx, cy, true);
+        Annot a;
+        a.kind = u.tool == Tool::Line ? Annot::Kind::Line : u.tool == Tool::Rect ? Annot::Kind::Rect : Annot::Kind::Ellipse;
+        a.page = r.page;
+        a.x0 = a.x1 = cx;
+        a.y0 = a.y1 = cy;
+        ApplyStyle(u, a);
+        u.drag = AnnotUi::Drag::Create;
+        u.dragPage = r.page;
+        u.original = u.preview = a;
+      }
+      return;
+    }
+    return;
+  }
+
+  // A drag in progress.
+  const PageRect* r = rectOf(u.dragPage);
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    u.drag = AnnotUi::Drag::None;
+    return;
+  }
+  if (r != nullptr) {
+    float x, y;
+    toPt(*r, x, y, u.drag != AnnotUi::Drag::Move);
+    if (u.drag == AnnotUi::Drag::Create) {
+      u.preview.x1 = x;
+      u.preview.y1 = y;
+    } else if (u.drag == AnnotUi::Drag::Handle) {
+      u.preview = u.original;
+      MoveHandle(u.preview, u.original, u.handle, x, y);
+    } else {
+      const float dx = x - u.px0, dy = y - u.py0;
+      u.preview = u.original;
+      u.preview.x0 += dx;
+      u.preview.x1 += dx;
+      u.preview.y0 += dy;
+      u.preview.y1 += dy;
+    }
+  }
+  if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    if (u.drag == AnnotUi::Drag::Create) {
+      if (std::hypot(u.preview.x1 - u.preview.x0, u.preview.y1 - u.preview.y0) * k >= 4.f)
+        u.session.Add(u.preview);
+    } else if (u.selected >= 0 && u.preview != u.original) {
+      u.session.Replace(u.selected, u.preview);
+    }
+    u.drag = AnnotUi::Drag::None;
+  }
+}
+
 void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
   const ImVec2 avail = ImGui::GetContentRegionAvail();
   ImGui::SetNextWindowContentSize(ImVec2(std::max(avail.x, v.layout.maxWidth * v.pxPerPt + 2 * kMarginPx), ContentHeightPx(v)));
@@ -734,6 +1318,7 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
   ImDrawList* dl = ImGui::GetWindowDrawList();
   const ImVec2 origin = ImGui::GetCursorScreenPos(); // scrolls with the content
   const float contentW = std::max(avail.x, v.layout.maxWidth * v.pxPerPt + 2 * kMarginPx);
+  std::vector<PageRect> pageRects;
   for (int p = vis.first; !vis.Empty() && p <= vis.last; ++p) {
     const PageSize& s = v.layout.size[static_cast<size_t>(p)];
     const float w = s.wPt * v.pxPerPt, h = s.hPt * v.pxPerPt;
@@ -756,6 +1341,27 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
         dl->AddText(ImVec2(a.x + 12.f, a.y + 12.f), IM_COL32(160, 40, 40, 255), "This page could not be rendered.");
     }
     dl->AddRect(a, b, IM_COL32(90, 90, 90, 255));
+    pageRects.push_back({p, a, s.wPt, s.hPt});
+  }
+
+  // REQ-388: annotations over the pages (input first, so a drag is drawn in the frame it moves).
+  HandleAnnotInput(v, pageRects, hovered, v.panning);
+  {
+    const AnnotUi& u = v.ann;
+    const auto& items = u.session.Items();
+    const bool dragging = u.drag == AnnotUi::Drag::Move || u.drag == AnnotUi::Drag::Handle;
+    for (const PageRect& r : pageRects) {
+      dl->PushClipRect(r.tl, ImVec2(r.tl.x + r.wPt * v.pxPerPt, r.tl.y + r.hPt * v.pxPerPt), true);
+      for (size_t i = 0; i < items.size(); ++i) {
+        if (items[i].page != r.page)
+          continue;
+        const bool isSel = static_cast<int>(i) == u.selected;
+        DrawAnnot(dl, dragging && isSel ? u.preview : items[i], r.tl, r.hPt, v.pxPerPt, isSel);
+      }
+      if (u.drag == AnnotUi::Drag::Create && u.dragPage == r.page)
+        DrawAnnot(dl, u.preview, r.tl, r.hPt, v.pxPerPt, false);
+      dl->PopClipRect();
+    }
   }
 
   if (v.bench.active && v.bench.real) {
@@ -885,7 +1491,7 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
     }
 
     char name[300];
-    std::snprintf(name, sizeof(name), "PDF - %s###pdfview%d", v.title.c_str(), v.id);
+    std::snprintf(name, sizeof(name), "PDF - %s%s###pdfview%d", v.title.c_str(), v.ann.session.Dirty() ? " *" : "", v.id);
     ImGui::SetNextWindowSize(ImVec2(900.f, 700.f), ImGuiCond_FirstUseEver);
     if (v.focusNext) {
       ImGui::SetNextWindowFocus();
@@ -933,6 +1539,7 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
         ImGui::TextUnformatted("Opening...");
       } else {
         DrawToolbar(v);
+        DrawAnnotBar(v, log);
         DrawSplitDialog(v, log);
         if (v.showThumbs) {
           DrawThumbnails(v);
@@ -957,6 +1564,12 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
       v.bench.frameMs.push_back(static_cast<double>(ImGui::GetIO().DeltaTime) * 1000.0);
       if (v.bench.scrolling)
         v.bench.viewerMs.push_back(cost);
+    }
+    if (v.ann.requestClose) {
+      open = false;
+    } else if (!open && v.loaded && v.ann.session.Dirty() && !v.ann.discardOk) {
+      open = true; // unsaved annotations: keep the window and ask (REQ-388 clause 4)
+      v.ann.closePrompt = true;
     }
     if (!open || v.bench.finished) {
       const std::filesystem::path benchFile = v.bench.file;
