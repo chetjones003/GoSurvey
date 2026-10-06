@@ -496,7 +496,7 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   ImGui::Text("of %d", rev_->PageCount());
 
   ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("Show:");
+  ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.f, 1.f), "Show");
   ImGui::SameLine();
   if (ImGui::RadioButton("Tint", mode_ == Mode::Tint))
     mode_ = Mode::Tint;
@@ -528,7 +528,7 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   DrawChangesBar();
 
   ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("Line up:");
+  ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.f, 1.f), "Line up");
   ImGui::SameLine();
   if (ImGui::Button("One point"))
     BeginPick(Pick::OneBase);
@@ -582,7 +582,7 @@ void PdfCompare::DrawBar(bool& keepOpen) {
 void PdfCompare::DrawChangesBar() {
   const ImGuiIO& io = ImGui::GetIO();
   ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("Changes:");
+  ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.f, 1.f), "Changes");
   ImGui::SameLine();
   ImGui::BeginDisabled(anaRunning_);
   if (ImGui::Button("Align automatically"))
@@ -599,13 +599,13 @@ void PdfCompare::DrawChangesBar() {
       anaCancel_.store(true);
   }
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(70.f);
-  ImGui::InputDouble("##tol", &diffSettings_.toleranceMm, 0.0, 0.0, "tol %.1f mm");
+  ImGui::SetNextItemWidth(150.f);
+  ImGui::InputDouble("##tol", &diffSettings_.toleranceMm, 0.0, 0.0, "Tolerance %.1f mm");
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Tolerance: marks that differ by less than this (in millimetres on paper) are treated as the same.");
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(70.f);
-  ImGui::InputDouble("##minsz", &diffSettings_.minSizeMm, 0.0, 0.0, "min %.1f mm");
+  ImGui::SetNextItemWidth(150.f);
+  ImGui::InputDouble("##minsz", &diffSettings_.minSizeMm, 0.0, 0.0, "Smallest %.1f mm");
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Smallest area to report: differences smaller than this (in millimetres on paper) are ignored as specks.");
   diffSettings_.toleranceMm = std::clamp(diffSettings_.toleranceMm, 0.2, 10.0);
@@ -647,8 +647,12 @@ void PdfCompare::DrawChangesBar() {
   if (lowConfidence_)
     ImGui::TextColored(ImVec4(1.f, 0.62f, 0.2f, 1.f), "Check alignment: the sheets do not match closely enough to trust the changes found. Line them up by hand first.");
   if (haveChanges_)
+  {
+    ImGui::PushTextWrapPos(0.f);
     ImGui::TextDisabled("The boxes mark places where the two drawings look different; they do not say what the change means. "
                         "Results depend on how well the sheets line up, and a different scale or a scanned sheet can show false areas.");
+    ImGui::PopTextWrapPos();
+  }
 }
 
 void PdfCompare::DrawChangesList() {
@@ -855,7 +859,26 @@ bool PdfCompare::Draw(std::vector<std::string>& log) {
   const Clock::time_point t0 = Clock::now();
   PollOpen(log);
   bool keepOpen = true;
-  DrawBar(keepOpen);
+  {
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.f, 5.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(9.f, 7.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f, 10.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.17f, 0.21f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.30f, 0.36f, 0.46f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.27f, 0.35f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.42f, 0.58f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20f, 0.48f, 0.80f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.09f, 0.10f, 0.13f, 1.f));
+    ImGui::BeginChild("##cmpbar", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove);
+    DrawBar(keepOpen);
+    ImGui::EndChild();
+    ImGui::PopStyleColor(6);
+    ImGui::PopStyleVar(6);
+  }
   if (!error_.empty()) {
     ImGui::TextWrapped("The revision could not be opened: %s.", error_.c_str());
     return keepOpen;
