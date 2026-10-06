@@ -775,7 +775,7 @@ struct Viewer {
   bool focusNext = false;
   bool osFramed = true;    ///< floating in its own OS window: the OS draws the title bar, so ImGui draws none
   void* framedHwnd = nullptr;  ///< the OS window whose frame colours were last set
-  int framedFrames = 0;        ///< frames the viewer has had its own OS window, counted up to the maximize
+  int framedFrames = 0;        ///< frames the viewer has had its own OS window, counted through the opening maximize steps
   bool maximized = false;     ///< the window has been maximized once, on opening (REQ-397); after that it is the user's
   bool placed = false; ///< first-frame position given; after that the user (or the saved layout) owns it
   std::future<PdfDocument::OpenResult> opening;
@@ -3182,15 +3182,20 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
         ApplyOsFrameColors(self->Viewport->PlatformHandleRaw, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
         v.framedHwnd = self->Viewport->PlatformHandleRaw;
       }
-      // REQ-397: a new viewer opens maximized. Not on its very first frame: maximizing a window ImGui has only
-      // just created left ImGui's idea of where it is out of step (the mouse was offset from the buttons until
-      // the user moved the window), so wait a few frames, then make ImGui ask the OS for the window's position
-      // and size again.
-      if (!v.maximized && v.osFramed && v.framedHwnd != nullptr && ++v.framedFrames >= 4) {
-        ShowWindow(static_cast<HWND>(v.framedHwnd), SW_MAXIMIZE);
-        self->Viewport->PlatformRequestMove = true;
-        self->Viewport->PlatformRequestResize = true;
-        v.maximized = true;
+      // REQ-397: a new viewer opens maximized. A window maximized only once, straight after ImGui created it, was
+      // left with the mouse offset from the buttons (a screenshot showed the pointer over Line with "<" lit) until
+      // the user moved it and maximized it again. So do what the user did: maximize, restore, maximize again,
+      // a few frames apart, each time making ImGui re-read the window's position and size from the OS.
+      if (!v.maximized && v.osFramed && v.framedHwnd != nullptr) {
+        const int step = ++v.framedFrames;
+        const int cmd = step == 4 ? SW_MAXIMIZE : step == 7 ? SW_RESTORE : step == 10 ? SW_MAXIMIZE : -1;
+        if (cmd >= 0) {
+          ShowWindow(static_cast<HWND>(v.framedHwnd), cmd);
+          self->Viewport->PlatformRequestMove = true;
+          self->Viewport->PlatformRequestResize = true;
+        }
+        if (step >= 10)
+          v.maximized = true;
       }
 #endif
     }
