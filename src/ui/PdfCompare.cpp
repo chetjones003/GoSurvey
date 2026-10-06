@@ -597,9 +597,13 @@ void PdfCompare::DrawChangesBar() {
   ImGui::SameLine();
   ImGui::SetNextItemWidth(70.f);
   ImGui::InputDouble("##tol", &diffSettings_.toleranceMm, 0.0, 0.0, "tol %.1f mm");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Tolerance: marks that differ by less than this (in millimetres on paper) are treated as the same.");
   ImGui::SameLine();
   ImGui::SetNextItemWidth(70.f);
   ImGui::InputDouble("##minsz", &diffSettings_.minSizeMm, 0.0, 0.0, "min %.1f mm");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Smallest area to report: differences smaller than this (in millimetres on paper) are ignored as specks.");
   diffSettings_.toleranceMm = std::clamp(diffSettings_.toleranceMm, 0.2, 10.0);
   diffSettings_.minSizeMm = std::clamp(diffSettings_.minSizeMm, 0.0, 50.0);
   if (haveChanges_) {
@@ -625,27 +629,41 @@ void PdfCompare::DrawChangesBar() {
     ImGui::BeginDisabled(!step || saving_.valid());
     if (ImGui::Button("Write changes as markups..."))
       SaveMarkups();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip("Save a copy of the revision PDF with a box drawn around each area that differs.\nThe original files are not changed.");
     ImGui::EndDisabled();
     ImGui::SameLine();
-    ImGui::Text("%d change region%s  (N / P = next / previous)", n, n == 1 ? "" : "s");
+    if (n == 0)
+      ImGui::TextUnformatted("No differences found.");
+    else
+      ImGui::Text("%d area%s differ.  N / P = next / previous", n, n == 1 ? "" : "s");
   }
   if (!savedNote_.empty())
     ImGui::TextDisabled("%s", savedNote_.c_str());
   if (lowConfidence_)
     ImGui::TextColored(ImVec4(1.f, 0.62f, 0.2f, 1.f), "Check alignment: the sheets do not match closely enough to trust the changes found. Line them up by hand first.");
   if (haveChanges_)
-    ImGui::TextDisabled("This lists what looks different on the page, not what it means. The result depends on the alignment; a different scale between the "
-                        "revisions, or a scanned (image-only) sheet, can give many false regions.");
+    ImGui::TextDisabled("The boxes mark places where the two drawings look different; they do not say what the change means. "
+                        "Results depend on how well the sheets line up, and a different scale or a scanned sheet can show false areas.");
 }
 
 void PdfCompare::DrawChangesList() {
-  ImGui::BeginChild("##cmpchanges", ImVec2(270.f, 0.f), true);
-  ImGui::TextUnformatted("Change regions");
+  ImGui::BeginChild("##cmpchanges", ImVec2(290.f, 0.f), true);
+  ImGui::Text("Areas that differ (%d)", static_cast<int>(regions_.size()));
+  ImGui::SameLine(ImGui::GetContentRegionAvail().x - 40.f);
+  const bool closeList = ImGui::SmallButton("Close");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Close this list and the highlight boxes. Press Find changes to run it again.");
+  ImGui::TextDisabled("Click a row to jump to it on the sheet.");
+  ImGui::TextColored(ImVec4(0.3f, 0.85f, 0.45f, 1.f), "Green: new in the revision");
+  ImGui::TextColored(ImVec4(0.95f, 0.4f, 0.4f, 1.f), "Red: in the base, gone from the revision");
+  ImGui::TextColored(ImVec4(0.98f, 0.7f, 0.2f, 1.f), "Amber: changed or moved");
   ImGui::Separator();
   for (size_t i = 0; i < regions_.size(); ++i) {
     const pdfdiff::Region& r = regions_[i];
     char label[120];
-    std::snprintf(label, sizeof(label), "%zu  %s  %.0f x %.0f pt##reg%zu", i + 1, pdfdiff::KindName(r.kind), r.Width(), r.Height(), i);
+    const char* what = r.kind == pdfdiff::Kind::Added ? "New" : r.kind == pdfdiff::Kind::Removed ? "Removed" : "Changed";
+    std::snprintf(label, sizeof(label), "%zu  %s  (%.0f x %.0f pt)##reg%zu", i + 1, what, r.Width(), r.Height(), i);
     const ImVec4 col = r.kind == pdfdiff::Kind::Added ? ImVec4(0.3f, 0.85f, 0.45f, 1.f)
                        : r.kind == pdfdiff::Kind::Removed ? ImVec4(0.95f, 0.4f, 0.4f, 1.f)
                                                           : ImVec4(0.98f, 0.7f, 0.2f, 1.f);
@@ -657,6 +675,8 @@ void PdfCompare::DrawChangesList() {
     ImGui::PopStyleColor();
   }
   ImGui::EndChild();
+  if (closeList)
+    ClearChanges();
 }
 
 void PdfCompare::DrawSheet(std::vector<std::string>& log) {
