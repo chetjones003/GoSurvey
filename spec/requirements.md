@@ -11598,6 +11598,180 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a).
 
+### REQ-390 — PDF scale: set a page's scale, stored as standard PDF measurement data (GitHub issue #732, phase 4)
+
+- Purpose: a plan PDF is a picture of something real; the user wants to say "1 inch on this sheet is 20 feet"
+  once and then measure true distances (REQ-391). Bluebeam-style.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-f (answer 1: standard PDF measurement data, so Bluebeam and Acrobat see the same scale).
+- Depends on: REQ-387, REQ-388 (Save As, the in-place patch technique of D-2026-10-06-e).
+- Statement:
+  1. **Set scale, two ways.** (a) **Calibrate:** pick two points on the page, type the real distance and its
+     unit (inch, foot, yard, mile, millimetre, centimetre, metre, kilometre); the scale is computed from
+     the page's point units. (b) **Preset:** a list of common architectural, engineering and metric scales
+     (for example 1" = 20', 1:100) plus a typed custom ratio "page length = real length".
+  2. **Scope.** The scale applies to the current page, or to all pages, or to a chosen page range (REQ-389
+     page-list syntax). Each page keeps its own scale; a page with none is **unscaled** and the measure
+     tools (REQ-391) refuse it with a message.
+  3. **Stored as standard PDF measurement data:** a page Viewport with a rectilinear Measure dictionary
+     (ISO 32000 Viewport / Measure, as Bluebeam and Acrobat write them), written by **Save As only** into
+     a new file; the original is never changed (REQ-388 clause 4). A scale already in an opened file
+     (from Bluebeam, Acrobat or AutoCAD plots) is **read and used**; if it cannot be understood the page
+     shows as unscaled with the reason (REQ-201).
+  4. **Shown** in the viewer's status area for the current page ("Scale 1 in = 20 ft" or "Unscaled").
+  5. **Out of scope:** non-rectilinear (geospatial) measure data, scale from the drawing's own title block,
+     per-region scales (several viewports on one page).
+- Acceptance:
+  - `[issue732][req390]` test: calibrating 100 pt (1.3889 in) = 50 ft gives a scale that converts any page
+    distance to feet to within 0.01 %; presets and a typed ratio give the same conversion as the equivalent
+    calibration.
+  - `[issue732][req390]` test: a scale saved with Save As is read back unchanged from the new file; the
+    source file's bytes are identical; a file written by a third-party reader (a fixture with a Viewport /
+    Measure) is read correctly.
+  - `[issue732][req390]` test: an unreadable measure entry shows the page as unscaled with a reason.
+  - Manual: a scale set in GoSurvey shows the same scale when the saved file is opened in Bluebeam or
+    Acrobat.
+- Owner-layer: Domain/IO (`src/pdf/PdfMeasure`, pure), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f).
+
+### REQ-391 — Scaled dimensions: length, polylength, area and perimeter, angle (GitHub issue #732, phase 5)
+
+- Purpose: measure real-world sizes on a scaled PDF sheet and leave the dimension on the sheet.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-f (answer 1 standard PDF data; answer 3 the four tools).
+- Depends on: REQ-390, REQ-388.
+- Statement:
+  1. **Tools.** **Length** (two points), **Polylength** (a path of points, total length), **Area** (a closed
+     polygon: area and perimeter), **Angle** (three points: the angle at the middle one). Each shows its
+     value as a label on the sheet, in the page's scale and unit; area in square units.
+  2. **Colour, thickness and label font** use the REQ-388 settings; the label shows the number with a
+     chosen number of decimals and the unit. A **Calibrated** or **Preset** scale (REQ-390) is required; on
+     an unscaled page the tool refuses with a message.
+  3. **Stored as standard PDF annotations carrying measurement data:** Length as a Line, Polylength as a
+     PolyLine and Area as a Polygon, each with the page's Measure dictionary and a label appearance; written
+     by Save As with the REQ-388 in-place patch technique (D-2026-10-06-e, widened by ADR-067 (e)
+     addendum 2). **Angle** has no standard dimension type: it is saved as a three-point PolyLine whose
+     label and a private GoSurvey key hold the angle, so other readers show a labelled polyline and
+     GoSurvey recognises it as an angle. This limit is stated in the user-facing help.
+  4. **Edit.** Dimensions select, move, reshape (drag a point), delete and undo/redo like other
+     annotations. **Changing the scale** of a page (REQ-390) recomputes every dimension on it from its
+     geometry, so the labels stay true.
+  5. **Snap.** Points snap to the ends and corners of the page's vector line work when the page has any
+     (and the user turns snapping on); a page that is a scanned image offers no snap.
+  6. **Out of scope:** radius/diameter, volume, cutouts inside an area, a measurement legend / markup list
+     export, dimension styles beyond the above.
+- Acceptance:
+  - `[issue732][req391]` test: on a page calibrated 1 pt = 0.5 ft, a Length of 100 pt reads 50 ft; a
+    Polylength of an L-shape reads the sum of its legs; a 100 pt x 40 pt Area reads 5000 sq ft (x scale^2)
+    and 70 ft perimeter (as 140 pt x 0.5); an Angle of three points reads the expected degrees to 0.01.
+  - `[issue732][req391]` test: each saved dimension is read back with its geometry, value, unit and
+    colour; the saved file contains a Measure dictionary for Length / Polylength / Area; the source file's
+    bytes are identical.
+  - `[issue732][req391]` test: changing the page scale changes every dimension's value in proportion.
+  - `[issue732][req391]` test: the tools refuse an unscaled page with a message and add nothing.
+  - Manual: a Length saved in GoSurvey shows the same value, still selectable and re-measurable, in
+    Bluebeam or Acrobat.
+- Owner-layer: Domain/IO (`src/pdf/PdfMeasure`, `src/pdf/PdfAnnotate`), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f).
+
+### REQ-392 — Overlay two revisions of a PDF and line them up (GitHub issue #732, phase 6)
+
+- Purpose: put a new revision of a sheet on top of the old one so the changes can be seen at a glance.
+- Priority: should
+- Type: functional + performance
+- Decision: D-2026-10-06-f (answer 2: automatic alignment with a manual fallback).
+- Depends on: REQ-387 (render worker, bounded cache), REQ-388 (annotation overlay drawing).
+- Statement:
+  1. **Compare command.** From a viewer, **Compare...** picks a second PDF (the **revision**) and a page of
+     each (default: the current page of the base and page 1 of the revision). The base file is the one open
+     in the window; neither file is modified.
+  2. **Display modes**, switchable at once: **Tint** (base lines drawn red, revision lines blue, lines
+     present in both dark grey, so added work shows blue and removed work red); **Opacity** (the revision
+     over the base with a slider); **Blink** (the window alternates base and revision at an adjustable
+     rate, and a key holds one of them). All use the same zoom and pan.
+  3. **Alignment, automatic first.** On opening, the two sheets are lined up **automatically** (the
+     transform found by comparing the sheets' line work: shift, uniform scale and a small rotation of up
+     to 5 degrees; sheets of different paper size are allowed). The result and its confidence are shown;
+     a low-confidence result is flagged "check alignment".
+  4. **Alignment, manual fallback.** The user may instead pick **one matching point** on each sheet
+     (shift only) or **two matching points** on each (shift, scale and rotation) and the overlay moves at
+     once. Either replaces the automatic result; "Reset" returns to the automatic one.
+  5. **Speed and memory.** Both pages render off the UI thread through the REQ-387 worker and bounded
+     cache; **no viewer-caused frame over 16 ms** (REQ-100) while panning or zooming the overlay of a
+     500-page file pair; alignment runs on a worker thread, cancellable, with progress, never on the UI
+     thread. Memory stays bounded by the cache cap.
+  6. **Out of scope:** comparing more than two files at once, comparing text or hidden layers rather than
+     the drawn picture, saving the tinted overlay as a PDF (see REQ-393 for saving the found changes).
+- Acceptance:
+  - `[issue732][req392]` test: two generated sheets that differ by a known shift, scale and 2-degree
+    rotation are aligned automatically to within 0.5 pt of the true transform; a pair with nothing in
+    common reports low confidence and does not claim a match.
+  - `[issue732][req392]` test: one-point and two-point manual alignment give the exact transform of the
+    picked points (shift; shift + scale + rotation).
+  - `[issue732][req392]` test: Tint classification of a pixel as base-only, revision-only or both matches a
+    hand-built pair.
+  - `[issue732][req392]` bench (`BENCH PDFCOMPARE`, reference machine): p95 viewer frame while panning the
+    overlay of two 500-page files <= 16 ms; the worst frame is reported.
+  - Manual: Tint, Opacity and Blink all show an added wall and a removed door on real revisions.
+- Owner-layer: Domain/IO (`src/pdf/PdfAlign`, pure), Renderer (page textures), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f).
+
+### REQ-393 — Find the changes between two revisions automatically (GitHub issue #732, phase 7)
+
+- Purpose: do the spotting for the user. After the two sheets are lined up (REQ-392), list and highlight
+  what was added, removed or changed.
+- Priority: should
+- Type: functional + performance
+- Decision: D-2026-10-06-f.
+- Depends on: REQ-392.
+- Statement:
+  1. **Detect.** A **Find changes** command compares the aligned pair **by what is drawn** (the pages are
+     rendered at a working resolution and their line work compared; it does not read the PDF's text or
+     object structure). A drawn mark in the revision with no mark near it in the base is **Added**; the
+     reverse is **Removed**; marks present in both but differing are **Changed**. A **tolerance** (a
+     setting, default about 1 mm at print size) ignores anti-aliasing and tiny shifts so identical content
+     shows **no changes**.
+  2. **Group and list.** Nearby differences merge into **change regions** (a bounding box with a kind and
+     a size); regions smaller than a **minimum size** setting are dropped as specks. The viewer shows a
+     **list** of regions; selecting one centres it. **Next / Previous change** keys step through them.
+  3. **Highlight** on both the overlay and the plain views: added in green, removed in red, changed in
+     amber, each as a translucent box drawn over the sheet. The highlights can be hidden.
+  4. **Save the findings.** **Write changes as markups** adds one rectangle annotation per region
+     (REQ-388 tools; colour by kind; contents "Added" / "Removed" / "Changed", with the region size) to the
+     **Save As copy of the revision**; the original files are never changed.
+  5. **Honest limits stated in the window:** the result depends on the alignment (a low-confidence
+     alignment shows a warning before the changes are trusted); a changed scale between revisions or a
+     scanned (image-only) sheet can produce many false regions; the program reports what looks different,
+     not what it means.
+  6. **Speed.** The comparison runs on a worker thread with progress and a Cancel; a full-size
+     (36 x 24 in) sheet pair completes in **10 seconds or less** on the reference machine, and the UI
+     never shows a viewer-caused frame over 16 ms while it runs. (ASSUMPTION recorded, not asked: the
+     10-second target; changeable on request.)
+  7. **Out of scope:** reading what a change means (a moved wall versus a re-drawn wall), text-level
+     diff, comparing more than two files, automatic update of dimensions or the project.
+- Acceptance:
+  - `[issue732][req393]` test: two identical generated sheets, and the same sheet rendered twice with a
+    1-pixel anti-aliasing difference, report **zero** change regions.
+  - `[issue732][req393]` test: a sheet with one line added, one removed and one moved yields exactly one
+    Added, one Removed and one Changed (or a removed + added pair, as documented) region, each containing
+    the true location; a speck under the minimum size is dropped.
+  - `[issue732][req393]` test: a revision shifted by 5 pt reports no changes after automatic alignment, and
+    the same shift with alignment disabled reports many (proving alignment is what removes false changes).
+  - `[issue732][req393]` test: **Write changes as markups** saves one annotation per region with the right
+    kind and bounding box; the source files' bytes are identical.
+  - `[issue732][req393]` bench: a pair of 36 x 24 in line-work sheets compares in <= 10 s; worst viewer
+    frame reported.
+  - Manual: on a real pair of plan revisions the listed regions match what a person marks by eye (a recorded
+    spot check, including false positives and misses).
+- Owner-layer: Domain/IO (`src/pdf/PdfDiff`, pure), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
