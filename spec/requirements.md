@@ -11460,7 +11460,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Statement:
   1. **One viewer, every route.** Opening a PDF from the Project tab (double-click), the tracked-file
      list, the recent-files list, or an attached PDF underlay's "open" action opens the **PDF Viewer
-     window** (a floating, dockable GoSurvey window, ADR-067 (a)). No route may hand a `.pdf` to
+     window** (a real Windows window of its own, clause 7, ADR-067 (a)). No route may hand a `.pdf` to
      `ShellExecute` any more. Opening a file already open in a viewer window focuses that window.
   2. **View.** Page-by-page and continuous-scroll layouts; zoom (wheel, fit-width, fit-page, typed %);
      pan; Page Up/Down, Home/End and a page-number box; a thumbnail strip that is itself virtualised
@@ -11482,7 +11482,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. **Memory.** Viewing a 500-page file keeps resident memory bounded by the cache cap, not by page
      count.
   6. **Out of scope for this REQ:** editing (REQ-388), splitting (REQ-389), text search, form filling,
-     digital signatures, printing, a separate operating-system window.
+     digital signatures, printing.
+  7. **Window control (D-2026-10-06-b).** Each viewer is **its own Windows window**: it opens on the
+     same monitor as GoSurvey with the standard title-bar **minimize, maximize/restore and close**
+     buttons, a taskbar entry, and the normal move/resize/snap behaviour; it can be dragged to
+     **another monitor**; and it can be **docked into GoSurvey's dock layout** (drag its title onto a
+     dock slot) and dragged out again. Viewing, rendering, the cache and keyboard/mouse input behave
+     identically docked or on its own. Closing GoSurvey closes every viewer. Turning this on may let
+     other GoSurvey panels be dragged out of the main window too; that is accepted, provided the
+     existing layout, the custom title bar, the splash screen, saved layouts and the Developer Shell
+     keep working unchanged.
 - Acceptance:
   - `[issue732][req387]` unit test: opening a generated 500-page PDF reports page count and per-page
     sizes without rendering a page; a corrupt file and a password-protected file return a stated error.
@@ -11493,9 +11502,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - `[issue732][req387]` bench (`BENCH PDFVIEW`, reference machine, 500-page file): first page ≤ 250 ms;
     p95 frame while scrolling top to bottom ≤ 16 ms; worst frame over the run is reported.
   - Manual: every route in clause 1 opens the viewer; none launches an outside program.
+  - Manual (clause 7): the viewer has working minimize, maximize/restore and close buttons and a taskbar
+    entry; it moves to a second monitor and back; it docks into the GoSurvey layout and undocks; two
+    viewers can be open at once; closing GoSurvey closes them; the first page, scrolling and zoom feel
+    the same docked and undocked.
+  - `[issue732][req387]` the existing Developer Shell end-to-end drivers (`p696-e2e`, `pdfview-bench`)
+    still pass with the window mode turned on.
 - Owner-layer: Domain/IO (`src/pdf/PdfDocument`, pure), Renderer (page textures), UI (window), Commands
 - Status: accepted
-- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a).
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a). 2026-10-06 — clause 7 added and the
+  "separate operating-system window" exclusion removed (D-2026-10-06-b).
 
 ### REQ-388 — PDF annotations: text, lines, shapes, colour, thickness, font (GitHub issue #732, phase 2)
 
