@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <limits>
 
 #include "CadEntities.hpp"
@@ -12,15 +13,22 @@
 // same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"
+#include "MultileaderStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
 // util/ray3d beside it, so the coordinate-system rules are testable without a window.
 #include "util/ucs.hpp"
+#include "geo/CoordinateSystems.hpp"
+#include "geo/LocalGridTransform.hpp"
 // ADR-060 .gscloud out-of-core cache: EXTRACTCENTERLINE (REQ-347) keeps one open cache handle
 // across hover frames rather than re-opening it every frame.
 #include "util/pointcloudcache.hpp"
+#include "DwgIo.hpp"
 #include "PdfAttach.hpp"
+#include "ProjectPointRules.hpp"  // projpts::Db + projpts::Rules (REQ-376, REQ-377)
+#include "Project.hpp"  // gsproj::Project / LockInfo, for AppCommandState::openProjects (REQ-374)
+#include "ProjectPack.hpp"  // gspack::PackPlan, for AppCommandState::projectPackPrompt (REQ-380)
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
 #include "AngleFormat.hpp"
@@ -60,6 +68,7 @@
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -92,24 +101,48 @@ struct SelectedEntity {
     BlockRef = 12,
     /// B-rep solid (REQ-313 / ADR-045). Appended after BlockRef so existing type values stay stable.
     ///
-    /// **Display-and-erase only in this increment, like Mesh** — it selects, highlights, erases and
-    /// reports its volume, and no transform command moves it. That is a stated boundary rather than
-    /// an oversight: moving a solid means transforming every surface frame and every arc-edge frame
-    /// in its topology, which is the same class of work REQ-312 found for a single tilted arc, and
-    /// it belongs with #120's Phase 5 direct-modelling requirement. Every transform command refuses
-    /// a solid with a stated reason (REQ-201) rather than silently dropping it from the operation —
-    /// the rule Surface already established.
+    /// Every whole-object transform applies to it — MOVE (REQ-322), ROTATE and SCALE (REQ-332),
+    /// COPY, MIRROR and both ARRAY forms (REQ-351) — through the kernel (`brep::Translate` /
+    /// `Rotate` / `Scale` / `Mirror`), which transforms every vertex, surface frame and edge frame,
+    /// never the tessellation alone. STRETCH, which moves part of an object, refuses it by name
+    /// (REQ-201): no kernel operation moves part of a solid.
     Solid = 13,
-    /// CadPipeRun (issue #486). Appended after Solid so existing type values stay stable. The SAME
-    /// stated boundary Solid has: display, select, highlight, hover-report and erase, but no
-    /// transform command moves it — a pipe run's geometry is DERIVED from its path via auto-fillet
-    /// sweeping (cadpiperun.hpp), so a direct drag would need the same re-solve REQ-070 declined for
-    /// a TIN surface's own derived geometry.
+    /// CadPipeRun (issue #486). Appended after Solid so existing type values stay stable. Its
+    /// geometry is DERIVED from its path via auto-fillet sweeping (cadpiperun.hpp), so a transform
+    /// maps the path's vertices and the pipe is re-derived (REQ-351): the same commands as Solid,
+    /// with SCALE scaling the route but never the pipe's nominal size (D-2026-09-28-f). STRETCH
+    /// refuses it by name, as it does a solid.
     PipeRun = 14,
     /// Point cloud (REQ-171 / ADR-042). Appended after PipeRun so existing type values stay stable.
     /// **Display-and-erase only, like Mesh** — selects, highlights, erases and reports; never
     /// grip-edited or moved by a transform command (REQ-171's stated boundary).
-    PointCloud = 15
+    PointCloud = 15,
+    /// Section plane (REQ-343 amended / ADR-059 (i), GitHub issue #479 acceptance 4/8). Appended
+    /// after PointCloud so existing type values stay stable.
+    ///
+    /// **A type tag, not a member of `AppCommandState::selection`.** The plane stays singular and
+    /// its "is it selected" state stays the dedicated `AppCommandState::sectionPlaneSelected` bool
+    /// ADR-059 (g)/(h) introduced — `selection` is an indexed vector over per-entity stores
+    /// (`e.index` into `cadSolids`, `cadTables`, ...), and there is exactly one section plane, never
+    /// zero-or-many, so giving it an `e.index` slot would be inventing storage this feature does not
+    /// need. What ADR-059 (h) got wrong was concluding from that shape that the plane could not be
+    /// an entity **at all** — it reversed a view-state bool's non-negotiables (no Properties report,
+    /// no `.gs`, no undo), not its selection storage. This tag exists so the Properties panel and the
+    /// transform-refusal doc comments above have a name for what a selected plane IS, the same as
+    /// `Solid`/`PointCloud` do; `DrawPropertiesPanel` still branches on `sectionPlaneSelected`
+    /// directly rather than scanning `selection` for it. **Display-and-erase-and-slide/flip/resize
+    /// only, like Solid/PointCloud/PipeRun**: MOVE/COPY/ROTATE/SCALE/MIRROR/STRETCH/OFFSET/ALIGN
+    /// never see it, because it is never in `selection` for those commands to iterate — the plane's
+    /// own dedicated grip drag (slide/flip/resize) is the only way it moves, which is what REQ-343
+    /// already specifies.
+    SectionPlane = 16,
+    /// Position Marker (REQ-359 item 3, D-2026-09-29-e). Appended so existing type values stay
+    /// stable. MOVE / COPY / ERASE act on marker + label together; ROTATE / SCALE / MIRROR /
+    /// STRETCH refuse it by name (\ref DropPositionMarkersFromSelection).
+    PositionMarker = 17,
+    /// Multileader callout (REQ-367 / issue #619). MOVE / COPY / ERASE act on path + label together;
+    /// ROTATE / SCALE / MIRROR / STRETCH refuse it by name (\ref DropMultileadersFromSelection).
+    Multileader = 18
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -247,7 +280,10 @@ float EffectiveEntityLineweightMm(const EntityAttributes& e, const CadLayerRow* 
 std::string EffectiveEntityLinetypeNameForViewport(const EntityAttributes& e, const CadLayerRow* layer);
 
 void ResolveEntityRgbaForViewport(const EntityAttributes& attr, const CadLayerRow* layer, float defaultR,
-                                    float defaultG, float defaultB, float* outRgba);
+                                  float defaultG, float defaultB, float* outRgba);
+
+/// After entity/layer colour resolution, apply MATERIAL diffuse override for shaded display (REQ-372).
+void ApplyMaterialDiffuseForShaded(const EntityAttributes& attr, float rgba[4]);
 
 int CadDxfLineweightEnum370FromMm(float mm);
 
@@ -829,6 +865,12 @@ struct CadExtendedGeometryInput {
   const std::vector<CadBlockDefinition>* blockDefs = nullptr;
   const std::vector<CadBlockRef>* blockRefs = nullptr;
   const std::vector<EntityAttributes>* blockRefAttrs = nullptr;
+  /// Issue #622: model-tab GL block inserts scale about the insertion point when a layout viewport is
+  /// current (same rule as the paper-space overlay). Null viewport or non-positive MUP = no scaling.
+  const Viewport* annotativeViewport = nullptr;
+  float drawingModelUnitsPerPlottedInch = 0.f;
+  const std::vector<CadAnnotationScale>* annotationScales = nullptr;
+  int currentAnnotationScaleIndex = -1;
 };
 
 /// True when a CSR chain store (polylines, feature lines) holds at least one entity.
@@ -910,8 +952,11 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
                               float* outMxX, float* outMxY);
 
 /// Top-most annotation under point; -1 if none. Uses pixel tolerance from viewport half-height.
+/// \param ray When non-null (an orbited view), each annotation is tested where the camera ray meets
+///        ITS OWN plane (z = insZ) rather than at \p wx, \p wy on the work plane (GitHub issue #564
+///        §2). Null keeps the plan-view test exactly.
 int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
-                        float viewportHeightPx);
+                        float viewportHeightPx, const ray3d::Ray* ray = nullptr);
 int PickCadTableAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
                    float viewportHeightPx);
 void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
@@ -968,6 +1013,14 @@ struct CadClipboard {
   /// units; paper: paper inches), so a cross-space paste scales annotation height by modelUnitsPerPlottedInch.
   bool fromPaper = false;
 
+  /// REQ-383 clauses 1 and 3: where the copy came from. A paste into a drawing of another project, or
+  /// of another coordinate system / unit, is checked against these (CheckClipboardPaste).
+  uint32_t    srcProjectUid = 0;        ///< 0 = a standalone drawing
+  std::string srcProjectName;
+  std::string srcProjectFolder;         ///< UTF-8; tells apart two open projects that share a name (issue #726)
+  std::string srcZone;                 ///< CS-MAP code of the source drawing; empty = none
+  double      srcMetersPerUnit = 0.0;   ///< the source drawing's unit in meters; 0 = unknown
+
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
            (polyOffsets.size() <= 1) && annotations.empty() && tables.empty() && blockRefs.empty() &&
@@ -1003,6 +1056,229 @@ inline void SyncPolylineNormal(std::vector<float>& normal, std::size_t vertsFloa
 /// is far above any realistic vertex count so the two grip families never collide.
 inline constexpr int kPolyBulgeGripBase = 1 << 20;
 
+/// The Object Layers tab's rows (REQ-361): each kind of object that lands on its own layer when it
+/// is created. Stored by index — append only.
+enum class ObjectLayerKind {
+  SurveyPoint = 0,
+  SurveyPointLabel,
+  Surface,      ///< Every TIN surface store entry (TIN, grid, volume, corridor).
+  FeatureLine,
+  PipeRun,
+  PipeFitting,  ///< A pipe-catalogue part placed off any run (D-2026-09-29-f).
+  Solid,
+  Table,
+};
+inline constexpr int kObjectLayerKindCount = 8;
+
+/// One Object Layers row: the base layer, the name modifier and whether a creation dialog may change it.
+struct ObjectLayerRow {
+  enum class Modifier { None = 0, Prefix = 1, Suffix = 2 };
+  std::string layer;
+  Modifier    modifier = Modifier::None;
+  std::string value;   ///< Each `*` becomes the new object's name.
+  bool        locked = false;
+  bool operator==(const ObjectLayerRow& o) const {
+    return layer == o.layer && modifier == o.modifier && value == o.value && locked == o.locked;
+  }
+};
+
+/// REQ-361 item 1's NCS defaults, in \ref ObjectLayerKind order.
+[[nodiscard]] inline std::array<ObjectLayerRow, kObjectLayerKindCount> DefaultObjectLayers() {
+  std::array<ObjectLayerRow, kObjectLayerKindCount> rows;
+  const char* names[kObjectLayerKindCount] = {"V-NODE", "V-NODE-TEXT", "C-TOPO", "C-TOPO-FEAT",
+                                              "C-PIPE", "C-PIPE-FITT", "C-SOLID", "C-ANNO-TABL"};
+  for (int i = 0; i < kObjectLayerKindCount; ++i)
+    rows[static_cast<size_t>(i)].layer = names[i];
+  return rows;
+}
+
+struct ProjectSettings;  // ProjectSettings.hpp (REQ-375)
+struct AddDrawingPlan;   // ProjectAddFlow.hpp (REQ-378)
+
+/// REQ-375 / D-2026-10-05-e: the settings a project supplies as defaults that a project drawing may
+/// override. The zone and the drawing unit are enforced instead; the transformation, geographic
+/// marker and online map are always the drawing's own. The names are the trailer's.
+enum class ProjectDefaultKey : unsigned {
+  AngularUnits = 0,
+  FootDefinition,
+  ScaleInsertedObjects,
+  SetDrawingVariables,
+  PlotScale,
+  ObjectLayers,
+};
+inline constexpr unsigned kProjectDefaultKeyCount = 6;
+inline constexpr const char* kProjectDefaultKeyNames[kProjectDefaultKeyCount] = {
+    "angularUnits", "footDefinition", "scaleInsertedObjects", "setDrawingVariables", "plotScale", "objectLayers"};
+
+/// The drawing's own settings that the Drawing Settings window edits (REQ-357). The drawing unit and
+/// the scale are NOT here: they are `AppCommandState::drawingInsUnits` and
+/// `modelUnitsPerPlottedInch`, one value each (REQ-022, D-2026-09-29-c).
+struct DrawingSettings {
+  /// REQ-375: bit per \ref ProjectDefaultKey the drawing overrides. Meaningful only for a project
+  /// drawing; a standalone drawing keeps it 0.
+  unsigned overridden = 0;
+  [[nodiscard]] bool IsOverridden(ProjectDefaultKey k) const { return (overridden >> static_cast<unsigned>(k)) & 1u; }
+  void SetOverridden(ProjectDefaultKey k, bool on) {
+    const unsigned bit = 1u << static_cast<unsigned>(k);
+    overridden = on ? (overridden | bit) : (overridden & ~bit);
+  }
+
+  enum class AngularUnits { Degrees = 0, Radians = 1, Grads = 2 };
+  enum class FootDefinition { UsSurvey = 0, International = 1 };
+  AngularUnits   angularUnits = AngularUnits::Degrees;
+  /// Imperial to Metric conversion: every feet↔meters conversion in the drawing uses this.
+  FootDefinition footDefinition = FootDefinition::UsSurvey;
+  /// Off → INSERT's unit scale factor is 1 whatever the block's unit.
+  bool scaleInsertedObjects = true;
+  /// On → DWG/DXF save writes LUNITS and AUNITS from these settings, beside INSUNITS.
+  bool setDrawingVariables = true;
+  /// The drawing's coordinate system (zone), a CS-MAP code such as "HARN/TX.TX-C" (REQ-358).
+  /// Empty = No Datum, No Projection. A code the installed dictionary does not know is kept.
+  std::string zoneCode;
+  /// The geographic marker (REQ-359 item 4): the drawing's geolocation reference — a design point and
+  /// a north direction, stored with the zone and read from GEODATA's design point / north by
+  /// REQ-362. The point is WORLD (WCS) coordinates, the frame GEODATA uses, so it does not move when
+  /// the local-storage origin does. Default: the drawing origin (WCS 0,0) with grid north.
+  double markerX = 0.0;
+  double markerY = 0.0;
+  /// North direction, degrees counter-clockwise from +X; 90 = grid north (+Y).
+  double markerNorthDeg = 90.0;
+
+  /// The Transformation tab (REQ-360): local (drawing) ↔ grid,
+  /// `grid = G_ref + k·R(θ)·(L − L_ref)` with k = k_grid · k_sea. Angles are stored in degrees
+  /// whatever the Angular units (the window converts). Belongs to the zone: reset with it.
+  struct Transform {
+    enum class Computation { ReferencePoint = 0, UserDefined = 1 };
+    /// Rotation point: θ from a second point's grid vs local bearing. ToNorth / Azimuth are the two
+    /// kinds of "Specify grid rotation angle".
+    enum class Rotation { RotationPoint = 0, ToNorth = 1, Azimuth = 2 };
+    bool        apply = false;
+    bool        applySeaLevel = false;
+    double      elevation = 0.0;        ///< h, drawing unit
+    double      spheroidRadiusM = 0.0;  ///< R, meters; 0 = the zone ellipsoid's semi-major axis
+    Computation computation = Computation::ReferencePoint;
+    double      userScaleFactor = 1.0;  ///< k_grid when User Defined
+    // Reference point: L_ref (WORLD, drawing unit), G_ref (zone unit), survey point number (0 = none).
+    double      refLocalX = 0.0, refLocalY = 0.0;
+    double      refGridE = 0.0, refGridN = 0.0;
+    int         refPointNumber = 0;
+    Rotation    rotation = Rotation::ToNorth;
+    // Rotation point, the same four values and a point number.
+    double      rotLocalX = 0.0, rotLocalY = 0.0;
+    double      rotGridE = 0.0, rotGridN = 0.0;
+    int         rotPointNumber = 0;
+    double      toNorthDeg = 0.0;       ///< local north → grid north, clockwise
+    double      localAzimuthDeg = 0.0;  ///< Azimuth: this local azimuth (clockwise from north)…
+    double      gridAzimuthDeg = 0.0;   ///< …becomes this grid azimuth
+    bool operator==(const Transform& o) const {
+      return apply == o.apply && applySeaLevel == o.applySeaLevel && elevation == o.elevation &&
+             spheroidRadiusM == o.spheroidRadiusM && computation == o.computation &&
+             userScaleFactor == o.userScaleFactor && refLocalX == o.refLocalX && refLocalY == o.refLocalY &&
+             refGridE == o.refGridE && refGridN == o.refGridN && refPointNumber == o.refPointNumber &&
+             rotation == o.rotation && rotLocalX == o.rotLocalX && rotLocalY == o.rotLocalY &&
+             rotGridE == o.rotGridE && rotGridN == o.rotGridN && rotPointNumber == o.rotPointNumber &&
+             toNorthDeg == o.toNorthDeg && localAzimuthDeg == o.localAzimuthDeg &&
+             gridAzimuthDeg == o.gridAzimuthDeg;
+    }
+    bool operator!=(const Transform& o) const { return !(*this == o); }
+  };
+  Transform transform;
+
+  /// The Object Layers tab (REQ-361): the layer each kind of new object is created on. A drawing
+  /// saved without it opens with the defaults.
+  std::array<ObjectLayerRow, kObjectLayerKindCount> objectLayers = DefaultObjectLayers();
+  [[nodiscard]] const ObjectLayerRow& ObjectLayer(ObjectLayerKind k) const {
+    return objectLayers[static_cast<size_t>(k)];
+  }
+
+  /// The Geolocation tab's online map (REQ-363, D-2026-09-30-b). Map Off draws nothing and fetches
+  /// nothing. Stored values are the trailer's; append, never renumber.
+  enum class OnlineMap { Off = 0, UsgsImagery = 1, UsgsImageryTopo = 2, UsgsTopo = 3 };
+  OnlineMap onlineMap = OnlineMap::Off;
+
+  /// REQ-364: a piece of the online map kept inside the drawing (ADR-064 (e)): its tiles as they were
+  /// served, at one level. Drawn through the same placement as live tiles, with the map on or off.
+  struct CapturedTile {
+    int x = 0;
+    int y = 0;
+    /// The JPEG / PNG exactly as served. Immutable and shared, so undo snapshots copy a pointer.
+    std::shared_ptr<const std::string> image;
+    bool operator==(const CapturedTile& o) const {
+      return x == o.x && y == o.y && (image == o.image || (image && o.image && *image == *o.image));
+    }
+  };
+  struct CapturedArea {
+    OnlineMap                 map = OnlineMap::Off;
+    int                       level = 0;
+    std::vector<CapturedTile> tiles;
+    bool operator==(const CapturedArea& o) const { return map == o.map && level == o.level && tiles == o.tiles; }
+  };
+  std::vector<CapturedArea> capturedAreas;
+
+  /// Geolocated exactly when a zone is set (REQ-358 item 3).
+  [[nodiscard]] bool Geolocated() const { return !zoneCode.empty(); }
+  /// Back to the default geographic marker (drawing origin, grid north).
+  void ResetGeographicMarker() {
+    markerX = 0.0;
+    markerY = 0.0;
+    markerNorthDeg = 90.0;
+  }
+
+  bool operator==(const DrawingSettings& o) const {
+    return overridden == o.overridden && angularUnits == o.angularUnits && footDefinition == o.footDefinition &&
+           scaleInsertedObjects == o.scaleInsertedObjects && setDrawingVariables == o.setDrawingVariables &&
+           zoneCode == o.zoneCode && markerX == o.markerX && markerY == o.markerY &&
+           markerNorthDeg == o.markerNorthDeg && transform == o.transform &&
+           objectLayers == o.objectLayers && onlineMap == o.onlineMap && capturedAreas == o.capturedAreas;
+  }
+  bool operator!=(const DrawingSettings& o) const { return !(*this == o); }
+};
+
+/// One entry of the Map dropdown (REQ-363 item 1), in dropdown order with Map Off last.
+struct OnlineMapInfo {
+  DrawingSettings::OnlineMap map;
+  const char* label;        ///< Dropdown / button text.
+  const char* storageName;  ///< The trailer's value.
+  const char* service;      ///< USGS The National Map service name; nullptr for Map Off.
+  const char* icon;         ///< Ribbon icon (resources/icons/<icon>.png): the item's thumbnail.
+};
+inline constexpr std::array<OnlineMapInfo, 4> kOnlineMaps = {{
+    {DrawingSettings::OnlineMap::UsgsImagery, "USGS Imagery", "usgsImagery", "USGSImageryOnly", "map_usgs_imagery"},
+    {DrawingSettings::OnlineMap::UsgsImageryTopo, "USGS Imagery Topo", "usgsImageryTopo", "USGSImageryTopo",
+     "map_usgs_imagery_topo"},
+    {DrawingSettings::OnlineMap::UsgsTopo, "USGS Topo", "usgsTopo", "USGSTopo", "map_usgs_topo"},
+    {DrawingSettings::OnlineMap::Off, "Map Off", "off", nullptr, "map_off"},
+}};
+[[nodiscard]] inline const OnlineMapInfo& OnlineMapInfoOf(DrawingSettings::OnlineMap m) {
+  for (const OnlineMapInfo& i : kOnlineMaps)
+    if (i.map == m)
+      return i;
+  return kOnlineMaps.back();
+}
+[[nodiscard]] inline const char* OnlineMapStorageName(DrawingSettings::OnlineMap m) {
+  return OnlineMapInfoOf(m).storageName;
+}
+/// Unknown or empty → Map Off.
+[[nodiscard]] inline DrawingSettings::OnlineMap OnlineMapFromStorageName(const std::string& name) {
+  for (const OnlineMapInfo& i : kOnlineMaps)
+    if (name == i.storageName)
+      return i.map;
+  return DrawingSettings::OnlineMap::Off;
+}
+
+/// Inches per meter under \p f: exactly 39.37 (US survey foot) or 1/0.0254 (international foot).
+[[nodiscard]] inline double DrawingInchesPerMeter(DrawingSettings::FootDefinition f) {
+  return f == DrawingSettings::FootDefinition::UsSurvey ? 39.37 : 1.0 / 0.0254;
+}
+
+/// AutoCAD's AUNITS code for \p a (0 degrees, 2 grads, 3 radians).
+[[nodiscard]] inline int DrawingAunitsCode(DrawingSettings::AngularUnits a) {
+  switch (a) {
+    case DrawingSettings::AngularUnits::Radians: return 3;
+    case DrawingSettings::AngularUnits::Grads:   return 2;
+    default:                                      return 0;
+  }
+}
 
 /// Geometry-only snapshot for undo/redo.  PDF glTexId is zeroed to avoid stale GPU references.
 struct DrawingGeometrySnapshot {
@@ -1054,12 +1330,20 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
+  std::vector<EntityAttributes> cadPositionMarkerAttrs;
+  std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
+  std::vector<EntityAttributes> cadMultileaderAttrs;
   /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
   /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
   /// swapped for exactly this reason ("hide everything that is not the block being edited",
   /// LoadBlockPrimitivesIntoDrawing), and cadPipeRuns simply arrived after that pass was written.
   std::vector<CadPipeRun>       cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  /// Named piping networks (issue #486 increment B3 / REQ-345) — swapped alongside `cadPipeRuns`
+  /// for the same BEDIT-isolation reason the comment above states: a network's indices are only
+  /// meaningful against the drawing's OWN `cadPipeRuns`, so it must travel with it, not stay behind.
+  std::vector<CadPipingSystem>  cadPipingSystems;
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
@@ -1076,10 +1360,27 @@ struct DrawingGeometrySnapshot {
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
   double worldDocumentOriginY = 0.0;
+  /// The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Mirrors
+  /// `AppCommandState::viewportSectionClip`/`Offset`/`Flip`/`FrameValid`/`Frame`/`Extent` — moved
+  /// into the undo-tracked snapshot (and, via `GsIo.cpp`, into `.gs`) so creating, deleting, sliding,
+  /// flipping and resizing the plane are all undoable, and the plane survives a save/reload. Local
+  /// coordinates, exactly like every other entity here (see "Local storage invariant").
+  bool                sectionPlaneActive = false;
+  bool                sectionPlaneFrameValid = false;
+  ucs::Ucs            sectionPlaneFrame{};
+  double              sectionPlaneOffset = 0.0;
+  bool                sectionPlaneFlip = false;
+  SectionPlaneExtent  sectionPlaneExtent{};
+  /// Drawing unit, plot scale and Drawing Settings (REQ-357): undoable, so a Drawing Settings
+  /// change is one undo step.
+  int                 drawingInsUnits = 2;
+  float               modelUnitsPerPlottedInch = 50.f;
+  DrawingSettings     drawingSettings;
   std::string description;
 };
 
@@ -1207,6 +1508,20 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
+  std::vector<EntityAttributes> cadPositionMarkerAttrs;
+  std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
+  std::vector<EntityAttributes> cadMultileaderAttrs;
+  /// Pipe runs and the networks that group them (issue #486 / REQ-345). Per DRAWING, like every
+  /// other entity store here: without them, routing a run in one drawing left it rendering — and
+  /// selectable, and snappable — in every other tab, because a tab switch swaps the whole document
+  /// and whatever it does not name simply stays behind. The same defect the section clip had
+  /// (REQ-341, D-2026-09-16-b finding 6) and for the same reason: pipe runs arrived after this
+  /// snapshot pass was written. The derived `pipeRunWorldSolids` are NOT here — they are display
+  /// data rebuilt from these by signature, exactly like `blockRefWorldSolids`.
+  std::vector<CadPipeRun>       cadPipeRuns;
+  std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<CadPipingSystem>  cadPipingSystems;
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
@@ -1214,9 +1529,16 @@ struct DrawingDocument {
   std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
+  std::string                   currentColor = "ByLayer";  ///< Per tab (REQ-356): a new tab starts ByLayer.
+  /// Per tab (REQ-357): drawing unit, plot scale and Drawing Settings travel with their drawing.
+  int                           drawingInsUnits = 2;
+  float                         modelUnitsPerPlottedInch = 50.f;
+  DrawingSettings               drawingSettings;
+  projpts::Rules                pointVisibility;        ///< REQ-377: per tab, which project points this drawing shows
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
@@ -1405,15 +1727,21 @@ constexpr int kRibbonTabView     = 3;
 constexpr int kRibbonTabManage   = 4;
 constexpr int kRibbonTabOutput   = 5;
 constexpr int kRibbonTabSurvey   = 6;
-constexpr int kRibbonTabCount    = 7;
+/// REQ-355 (issue #564 section 8): the solid-modelling and piping commands. A saved slot like the
+/// six before it, so it takes the next index and the session-only contextual tabs move up behind it.
+constexpr int kRibbonTabModeling = 7;
+constexpr int kRibbonTabCount    = 8;
 /// REQ-143: contextual TIN Surface tab. Not counted in \c kRibbonTabCount and not written to prefs.
-constexpr int kRibbonTabSurfaceCtx = 7;
+constexpr int kRibbonTabSurfaceCtx = 8;
 /// REQ-153: contextual SURVEY Point(s) tab. Session-only, not a prefs slot.
-constexpr int kRibbonTabSurveyPointCtx = 8;
+constexpr int kRibbonTabSurveyPointCtx = 9;
 /// Contextual Block Editor tab while BEDIT is open. Not counted in \c kRibbonTabCount / prefs.
-constexpr int kRibbonTabBlockEditor = 9;
+constexpr int kRibbonTabBlockEditor = 10;
 /// REQ-171 (part 14): contextual Point Cloud tab. Not counted in kRibbonTabCount / prefs.
-constexpr int kRibbonTabPointCloudCtx = 10;
+constexpr int kRibbonTabPointCloudCtx = 11;
+/// REQ-359: contextual Geolocation tab, shown while the drawing is geolocated. Session-only, not a
+/// prefs slot; appended after the other contextual tabs and never auto-selected.
+constexpr int kRibbonTabGeolocationCtx = 12;
 
 /// REQ-171 point-cloud vertex colour source, chosen by the user (session-global — see
 /// `AppCommandState::pointCloudDisplay`).
@@ -1453,6 +1781,12 @@ enum class CadGizmoOp {
   Scale,
 };
 
+/// REQ-383 clause 6: a project whose point database changes could not be written, and the drawings open in it.
+struct UnsavedProject {
+  std::string              name;
+  std::vector<std::string> drawings;
+};
+
 struct AppCommandState {
   enum class Kind {
     None,
@@ -1462,10 +1796,18 @@ struct AppCommandState {
     /// REQ-087. Its own command Kind, unlike 3DPOLY which is a mode of POLYLINE — a feature line
     /// commits to a different store, so the two cannot share a commit path.
     FeatureLine,
+    /// REQ-398 side slope grading. Picks a feature line as its baseline, then sits on an options
+    /// prompt until told to grade, projecting cut and fill slopes out to a surface until they
+    /// daylight. \ref gradingPhase drives it.
+    Grading,
     Arc,
     Ellipse,
     Text,
     Mtext,
+    /// Multileader (REQ-367 / issue #619): arrow tip, landing, then in-place MTEXT for the label.
+    Mleader,
+    /// Add a second (or further) arrow branch to the selected multileader.
+    MleaderAddLeader,
     DimAligned,
     DimLinear,
     DimAngular,
@@ -1568,12 +1910,11 @@ struct AppCommandState {
     /// submission is only meaningful while a command is waiting to consume it. Without a waiting
     /// state, clicking `ON` would submit `on` as a top-level command, which is nothing.
     SectionClip,
-    /// SECTIONPLANE: waiting for the user to pick a solid FACE to put the section plane on
-    /// (REQ-342 / ADR-059, GitHub issue #479 acceptance 1).
+    /// SECTIONPLANE: waiting for a solid FACE, or for the two points of a section LINE
+    /// (REQ-342 / ADR-059, GitHub issue #479 acceptance 1; the point form is the 2026-09-18
+    /// revision, which AutoCAD's own prompt asks for in the same breath as the face).
     ///
-    /// A single phase, so there is no `SectionPlanePhase` enum: being active IS "waiting for a
-    /// face". The phases arrive with the manipulation slice, and an enum with one value now would
-    /// be an abstraction with no second use.
+    /// \ref AppCommandState::sectionPlanePhase says which of the two it is waiting for.
     SectionPlane,
     Elev,        ///< Set the elevation new geometry is drawn at (REQ-058).
     /// ORBIT: interactive free orbit — left-drag tumbles the model view; Esc/Enter/right-click
@@ -1653,11 +1994,50 @@ struct AppCommandState {
     /// a path built from a variable number of points needs different state than a fixed-parameter
     /// command, and this one commits into `cadPipeRuns` rather than `cadSolids`.
     PipeRun,
+    /// PIPEFIT (issue #486 increment B7 / REQ-345): manual fitting placement on an ALREADY-ROUTED
+    /// pipe run — pick a station point on the selected run, splice in a catalog part (valve,
+    /// flange, reducer, coupling, ...), snapped via its own connection ports. One phase: the part
+    /// type and target run are both fixed by the time the command starts (`StartPipeFitCommand`),
+    /// so all that remains is a single point pick.
+    PipeFit,
+    /// PIPESPLIT (issue #486 increment B8 / REQ-345): split an already-routed run at a station
+    /// point, no fitting inserted — `PIPEFIT`'s own splice, minus the catalog lookup and block
+    /// placement. Its own `Kind` for the same one-pick-left reason `PipeFit` has one.
+    PipeSplit,
     /// EXTRACTCENTERLINE (REQ-347, GitHub issue #538): hover over a point cloud to preview a
     /// least-squares cylinder-axis fit of the nearby points, click to commit it as a LINE. One
     /// phase — no select-objects step, no typed parameters — closer in shape to `Kind::Pan`'s
     /// hover-then-act than to any multi-phase draw command.
     ExtractCenterline,
+    /// 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3, D-2026-09-28-a): the REQ-060 gizmo,
+    /// summoned by a command instead of appearing on every selection. Three Kinds rather than one
+    /// with a stored op so the command line, right-click repeat and `KindName` each name the verb
+    /// the user typed; the op they drive is still \ref gizmoOp, set for the command's duration.
+    Move3d,
+    Rotate3d,
+    Scale3d,
+    /// CHPROP / MATCHPROP / LAYMCUR (REQ-356, GitHub issue #575): the property commands. One
+    /// phase field, \ref propCmdPhase, drives all three.
+    ChProp,
+    MatchProp,
+    LayMCur,
+    /// Geolocation tab (REQ-359, GitHub issue #582): Mark Position ▸ Point (one pick), Mark
+    /// Position ▸ Lat-Long (latitude, then longitude, typed), and Reorient Marker / Edit Geographic
+    /// Marker (design point, then north direction). \ref geoCmdPhase drives the two-step ones.
+    GeoMarkPoint,
+    GeoMarkLatLong,
+    GeoReorientMarker,
+    /// REQ-360: a point (or a direction) picked for the Drawing Settings Transformation tab while
+    /// its window is hidden. Started only by the tab's pick buttons; \ref drawingSettingsPick says
+    /// what for. The window comes back when it ends (Esc = no change).
+    DrawingSettingsPick,
+    /// REQ-364: Capture Area — the two corners of Pick Area (geoCmdPhase WaitFirst / WaitSecond),
+    /// then Capturing while the tiles are gathered (\ref mapCapture). Esc cancels, storing nothing.
+    GeoCaptureArea,
+    /// GitHub #150 (3D Phase 7). PADSOLID asks for its boundary, then loops on a prompt offering
+    /// Surface and Pad elevation, the way every other command with options does - it does not take
+    /// everything on one line and give up. padSolidPhase drives it.
+    PadSolid,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -1666,10 +2046,13 @@ struct AppCommandState {
     case Kind::Circle:        return "CIRCLE";
     case Kind::Polyline:      return "POLYLINE";
     case Kind::FeatureLine:   return "FEATURELINE";
+    case Kind::Grading:       return "GRADING";
     case Kind::Arc:           return "ARC";
     case Kind::Ellipse:       return "ELLIPSE";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
+    case Kind::Mleader:          return "MLEADER";
+    case Kind::MleaderAddLeader: return "MLEADERADD";
     case Kind::DimAligned:    return "DIMALIGNED";
     case Kind::DimLinear:     return "DIMLINEAR";
     case Kind::DimAngular:    return "DIMANGULAR";
@@ -1735,7 +2118,21 @@ struct AppCommandState {
     case Kind::BConnectEdit:       return "BCONNECTEDIT";
     case Kind::BlockFitting:       return "BLOCKFITTING";
     case Kind::PipeRun:            return "PIPERUN";
+    case Kind::PipeFit:            return "PIPEFIT";
+    case Kind::PipeSplit:          return "PIPESPLIT";
     case Kind::ExtractCenterline:  return "EXTRACTCENTERLINE";
+    case Kind::Move3d:             return "3DMOVE";
+    case Kind::Rotate3d:           return "3DROTATE";
+    case Kind::Scale3d:            return "3DSCALE";
+    case Kind::ChProp:             return "CHPROP";
+    case Kind::MatchProp:          return "MATCHPROP";
+    case Kind::LayMCur:            return "LAYMCUR";
+    case Kind::GeoMarkPoint:       return "GEOMARKPOINT";
+    case Kind::GeoMarkLatLong:     return "GEOMARKLATLONG";
+    case Kind::GeoReorientMarker:  return "GEOREORIENTMARKER";
+    case Kind::DrawingSettingsPick: return "DRAWINGSETTINGS";
+    case Kind::GeoCaptureArea:     return "GEOCAPTUREAREA";
+    case Kind::PadSolid:           return "PADSOLID";
     default:                  return "";
     }
   }
@@ -1775,12 +2172,31 @@ struct AppCommandState {
 
   /// Plot scale: one plotted inch equals this many drawing units (e.g. 50 for 1 inch = 50 feet).
   float modelUnitsPerPlottedInch = 50.f;
+  /// DWG SCALE object list (issue #622). Per-scale visibility/display is not wired yet; stored for fidelity.
+  std::vector<CadAnnotationScale> annotationScales;
+  /// Index into \ref annotationScales for model-space annotative display (-1 = drawing plot scale only).
+  int currentAnnotationScaleIndex = -1;
+  /// REQ-385: LIGHT entities and SUN object from DWG import (issue #624 lights slice).
+  std::vector<CadDwgImportedLight> dwgImportedLights;
+  CadDwgImportedSun dwgImportedSun{};
+  bool dwgImportedSunPresent = false;
+  /// REQ-386: LIGHTLIST registry from DWG import (issue #715).
+  CadDwgImportedLightList dwgImportedLightList{};
+  bool dwgImportedLightListPresent = false;
+  std::string dwgImportedLightListDictKey;
   float defaultPlottedTextHeightInches = 0.125f;
 
   /// Drawing unit, AutoCAD $INSUNITS code (REQ-022). A relabel only — never scales
-  /// geometry. Document property: persisted in .gs and the DXF header. Only the
-  /// survey-relevant codes are offered: 0=Unitless, 2=Feet, 6=Meters.
+  /// geometry. Document property: persisted in the drawing and the DXF header. Offered codes:
+  /// 0=Unitless, 1=Inches, 2=Feet, 4=Millimeters, 6=Meters (REQ-357). Per tab and undoable.
   int drawingInsUnits = 2;
+  /// The drawing's Drawing Settings (REQ-357): per tab, undoable, saved in the trailer JSON.
+  DrawingSettings drawingSettings;
+  /// REQ-377 (#696 P4): which points of the project database this drawing shows. Per tab, saved in the
+  /// trailer; unused (and empty) in a standalone drawing.
+  projpts::Rules pointVisibility;
+  /// Drawing Settings window open (REQ-357). Session-only.
+  bool showDrawingSettingsWindow = false;
   /// Survey point X marker: horizontal span on paper (inches) → world half-extent = 0.5 × span × MUP (not zoom).
   float surveyPointCrossSpanPlottedInches = 0.14f;
   bool surveyPointShowIdInViewport = false;
@@ -2096,8 +2512,17 @@ struct AppCommandState {
 
   enum class EllipsePhase { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
 
+  /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
+  /// elevation is given. The surface is remembered between runs in a drawing, so the common case
+  /// - one ground surface, several pads at different levels - is just a number each time.
+  enum class PadSolidPhase { WaitBoundary, WaitOptions, WaitSurfaceName } padSolidPhase =
+      PadSolidPhase::WaitBoundary;
+  std::uint64_t padSolidBoundaryId = 0;
+  std::string padSolidSurface;
+
   float ellCx = 0.f, ellCy = 0.f;
   float ellMajEx = 0.f, ellMajEy = 0.f;
+  float ellCz = 0.f, ellMajEz = 0.f;  ///< work-plane elevation of each pick (REQ-312), as arcAz/arcBz
 
   /// RECT (REQ-053): first corner, then the opposite corner. The second point also accepts `@dx,dy`, which
   /// is how a rectangle of an exact width and height is drawn.
@@ -2112,6 +2537,13 @@ struct AppCommandState {
   float textRotDraft = 0.f;
 
   enum class MtextPhase { WaitCorner1, WaitCorner2, WaitString } mtextPhase = MtextPhase::WaitCorner1;
+  /// MLEADER (REQ-367): tip, landing, then label editor (\ref MleaderPhase::WaitLabel).
+  enum class MleaderPhase { WaitArrowTip, WaitLanding, WaitLabel } mleaderPhase = MleaderPhase::WaitArrowTip;
+  float mleaderTipX = 0.f;
+  float mleaderTipY = 0.f;
+  float mleaderTipZ = 0.f;
+  /// Multileader index while \ref Kind::MleaderAddLeader is active (-1 = none).
+  int mleaderEditIndex = -1;
 
   float mtxtX1 = 0.f, mtxtY1 = 0.f;
   float mtxtX2 = 0.f, mtxtY2 = 0.f;
@@ -2328,6 +2760,9 @@ struct AppCommandState {
   /// changes nothing there.
   bool  resolvedPointZValid = false;
   float resolvedPointZ = 0.f;
+  /// The published Z was TYPED (`x,y,z`, REQ-354), not read off the work plane — so the next typed
+  /// point without a Z clears it instead of inheriting it.
+  bool  resolvedPointZTyped = false;
   /// Model viewport size in pixels, published by the UI each frame. The command layer needs it to
   /// project geometry to screen for box-selection under an orbited camera (REQ-058); it has no
   /// other way to know the viewport's aspect. Zero means "not yet known" — callers fall back to
@@ -2516,6 +2951,23 @@ struct AppCommandState {
   ray3d::Vec3 sectionP2{};
   ray3d::Vec3 sectionP3{};
 
+  // --- SECTIONPLANE's own phases (REQ-342, 2026-09-18 revision) --------------------------------
+  //
+  // A face answers the command in one click and is still the first thing it offers. Any other point
+  // starts a section LINE instead: the plane then stands square to the work plane, through that
+  // line — which is the only way to aim a plane at a solid with no flat face at all, such as a
+  // sphere or a torus.
+  enum class SectionPlanePhase {
+    PickFaceOrPoint,   ///< A flat face places the plane outright; any other point starts a line.
+    WaitThroughPoint,  ///< The second point of the section line.
+  } sectionPlanePhase = SectionPlanePhase::PickFaceOrPoint;
+  ray3d::Vec3 sectionPlaneP1{};  ///< The first point of the section line, in world coordinates.
+  /// Where the cursor is while the through point is being picked, so the plane can be PREVIEWED
+  /// standing on the line to it (REQ-342, 2026-09-18). Set by the viewport each frame and cleared
+  /// when the command is not asking; nothing is placed from it.
+  ray3d::Vec3 sectionPlanePreviewPoint{};
+  bool sectionPlanePreviewValid = false;
+
   // --- The LOFT command (REQ-315 / ADR-048, GitHub #241) ---------------------------------------
 
   enum class LoftPhase {
@@ -2577,18 +3029,44 @@ struct AppCommandState {
   // --- PIPERUN: interactive CadPipeRun routing (issue #486 increment B2 / REQ-345) --------------
 
   enum class PipeRunPhase {
-    WaitNominalSize,  ///< first prompt of a run: nominal size, optional pressure class
-    WaitFirstPoint,   ///< size known; the next click/point is the run's start
-    WaitNextPoint,    ///< a run is under way; each further point commits a straight segment
+    WaitNominalSize,     ///< first prompt of a run: nominal size, optional pressure class
+    WaitWallThickness,   ///< size known; the wall the pipe is hollow to (D-2026-09-23-a)
+    WaitFirstPoint,      ///< size and wall known; the next click/point is the run's start
+    WaitNextPoint,       ///< a run is under way; each further point commits a straight segment
   } pipeRunPhase = PipeRunPhase::WaitNominalSize;
 
   /// The path so far, storage-coordinate xyz triples (REQ-057) — exactly the form `CadPipeRun`
   /// itself stores, so commit is a plain copy rather than a second representation to keep in step.
   std::vector<double> pipeRunDraftVerts;
   /// Remembered across runs the way POLYSOLID remembers width/height/justify (`polysolidWidth`
-  /// etc. above): a pipe run is almost always drawn at the same size as the last one.
-  std::string pipeRunNominalSize;
+  /// etc. above): a pipe run is almost always drawn at the same size as the last one. Starts at 4in
+  /// rather than empty (D-2026-09-28-k) so the Modeling ribbon's size dropdown always shows a size and
+  /// its PIPERUN button never has to stop and ask (REQ-355).
+  std::string pipeRunNominalSize = "4in";
   std::string pipeRunPressureClassTag;
+  /// Index into `cadPipeRuns` of the PROVISIONAL run PIPERUN materialises while routing, or -1
+  /// (D-2026-09-24-d). The route exists in the drawing from the second click so it can be seen,
+  /// snapped to and spliced into while the command is still open; END retires it and rebuilds the
+  /// finished route (with auto-elbows and branch tees), and Esc removes it.
+  ///
+  /// Always the LAST element of `cadPipeRuns` while it is set — nothing else appends a run while
+  /// PIPERUN holds the command — which is what lets it be withdrawn without renumbering anything
+  /// (architecture invariant §11.9: an index is not a name).
+  int pipeRunLiveIndex = -1;
+  /// Per-run cache behind `pipeRunWorldSolids`: one content signature and one solid list per entry of
+  /// `cadPipeRuns`, so a rebuild only re-sweeps the runs that actually changed.
+  ///
+  /// The array-level signature alone made every click while routing re-sweep EVERY run in the
+  /// drawing, and a run's swept tube is the most expensive thing the command does — measured at
+  /// ~5.2 ms for two points and ~11 ms more per point after that. With live routing (D-2026-09-24-d)
+  /// that cost landed on every click; this keeps it to the one run being drawn.
+  std::vector<std::uint64_t> pipeRunSolidCacheSigs;
+  std::vector<std::vector<CadSolidPtr>> pipeRunSolidCache;
+  /// Wall thickness in INCHES for the run being drafted (D-2026-09-23-a). Unlike the size and class
+  /// beside it this is NOT remembered across runs: blank Enter at its prompt takes the schedule-40
+  /// wall for whatever size was just chosen, so the offered default follows the size rather than
+  /// quietly carrying a one-off thickness onto a different pipe. 0 while no run is in progress.
+  double pipeRunWallThicknessIn = 0.0;
   /// Ortho/polar compass (REQ-346): while \c true, the next-vertex preview and pick snap to
   /// REQ-108's angle set (\ref polarIncrementDeg / \ref polarExtraAnglesDeg) measured from the run's
   /// last committed vertex. Its own toggle, independent of \ref polarMode, so PIPERUN keeps snapping
@@ -2596,6 +3074,21 @@ struct AppCommandState {
   /// 3D's own compass default. Not saved with the drawing — a per-command UI setting, like
   /// \ref orthoMode / \ref polarMode.
   bool pipeRunCompassOn = true;
+
+  // --- PIPEFIT: manual fitting placement on an existing run (issue #486 increment B7) -----------
+
+  /// Index into `cadPipeRuns` the command is splicing into, fixed at `StartPipeFitCommand` time
+  /// (from the caller's own single-pipe-run selection) — never re-resolved from `st.selection`
+  /// again, so a selection change mid-command can't silently retarget a different run.
+  int pipeFitRunIndex = -1;
+  /// The catalog part type to splice in (e.g. Valve, Flange, Reducer), fixed at start time too.
+  CadPipePartType pipeFitPartType = CadPipePartType::None;
+
+  // --- PIPESPLIT: split an existing run at a station, no fitting inserted (issue #486 inc B8) ----
+
+  /// Same fixed-at-start convention as `pipeFitRunIndex` — set by `StartPipeSplitCommand` from the
+  /// caller's own single-pipe-run selection, never re-resolved from `st.selection` mid-command.
+  int pipeSplitRunIndex = -1;
 
   enum class CirclePhase {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
@@ -2668,6 +3161,28 @@ struct AppCommandState {
   std::vector<CadFeatureLineInfo> featureLineInfo;
   std::vector<EntityAttributes> featureLineAttrs;
 
+  /// GRADING (REQ-398): pick the baseline feature line, then sit on an options prompt offering the
+  /// cut slope, the fill slope, the target surface and — for an open baseline only — which side to
+  /// grade. Enter grades. Every value is remembered between runs in a drawing, because a site is
+  /// normally graded to one surface at one pair of slopes and only the baseline changes.
+  enum class GradingPhase {
+    WaitBaseline,
+    WaitOptions,
+    WaitCutSlope,
+    WaitFillSlope,
+    WaitSurfaceName,
+    WaitSide,
+  } gradingPhase = GradingPhase::WaitBaseline;
+  /// The baseline, held by **stable entity id** and never by array index — REQ-076's own words,
+  /// which say "never an array index, so an edit that compacts the store cannot silently retarget
+  /// the reference". Resolved to an index only at the moment it is used.
+  std::uint64_t gradingBaselineId = 0;
+  double gradingCutRun = 2.0;      ///< run of run:rise where the design sits BELOW ground
+  double gradingFillRun = 3.0;     ///< ...and ABOVE it. Separate values, per D-2026-10-05-b.
+  std::string gradingSurface;      ///< target surface name, remembered between runs
+  bool gradingSideLeft = true;     ///< open baselines only; meaningless for a closed one
+  bool gradingSideChosen = false;  ///< an open baseline must be told, so this starts false
+
   /// FEATURELINE command draft — XYZ vertices, and the elevation-point flag for each.
   std::vector<float> featureLineDraftVerts;
   std::vector<uint8_t> featureLineDraftElevPt;
@@ -2717,7 +3232,7 @@ struct AppCommandState {
   /// \c TRIMSTATE: 0 = smart line trim (default), 1 = pick cutting edges first. Persisted in user prefs.
   int trimState = 0;
   /// REQ-302: which top-level ribbon tab is showing. Persisted in user prefs, same shape as
-  /// \c trimState. Values match \c kRibbonTabHome.. \c kRibbonTabSurvey below; an out-of-range value
+  /// \c trimState. Values match \c kRibbonTabHome.. \c kRibbonTabModeling above; an out-of-range value
   /// loaded from a hand-edited prefs file is clamped back into range rather than left invalid.
   /// REQ-143 / REQ-153 may set this to a contextual tab for the session only.
   int activeRibbonTab = 0;
@@ -2737,6 +3252,39 @@ struct AppCommandState {
   /// text wizard, for the same "which mode applies to which snap target" authoring.
   bool showConnectionModesWindow = false;
   int blockAuthoringPaletteTab = 0;  ///< 0 Parameters, 1 Actions, 2 Parameter Sets, 3 Constraints
+  /// REQ-350 — the Pipe Fittings palette. Session state beside `blockAuthoringPaletteOpen` and for
+  /// the same reasons: the window's POSITION persists through `imgui.ini` on its own, and which
+  /// palette happened to be open is not worth a key in the settings file. Opened automatically by
+  /// PIPERUN and by the PIPEPALETTE command; stays open when the run finishes (REQ-350 (a)).
+  bool pipeFittingPaletteOpen = false;
+  int pipeFittingPaletteTab = 0;  ///< a `CadPipePaletteCategory`: 0 Fittings, 1 Flanges, 2 Valves, 3 Nozzles, 4 Other
+  /// The size the palette last filtered on, so it can notice the routed size changing and refresh
+  /// without being reopened (REQ-350's live re-filter acceptance condition).
+  std::string pipeFittingPaletteShownSize;
+  /// REQ-350 (e) / ADR-062 — thumbnail plumbing. The palette RECORDS which parts it wants a picture
+  /// of while it draws; the frame's render pass services them afterwards, which is the one point in a
+  /// frame where binding another framebuffer is safe (the same constraint `ServicePendingThumbnail`
+  /// has, for the same reason).
+  std::vector<std::string> pipeFittingThumbRequests;
+  /// Parts that produced no thumbnail — no solid or 2D geometry to draw, no GL object available, or
+  /// not imported into this drawing yet. Remembered so such a row is asked about ONCE rather than
+  /// re-attempted every frame; cleared whenever the routed size changes.
+  std::vector<std::string> pipeFittingThumbUnavailable;
+  /// The fittings library as the palette last read it, and whether that reading still stands.
+  ///
+  /// Cached because reading it means walking three directories and parsing a JSON sidecar per part —
+  /// real file I/O, which architecture invariant §11.7 does not allow on a per-frame path without a
+  /// profile to justify it. The INSERT dialog rescans every frame, but it is a modal the user closes
+  /// in seconds; this palette stays open for a whole routing session. Invalidated when the palette
+  /// opens, when the routed size changes, when a part is imported, and by the Refresh button — which
+  /// is also the answer for a file copied into the library folder from outside the application.
+  std::vector<CadBlockLibraryEntry> pipeFittingLibraryCache;
+  bool pipeFittingLibraryCacheValid = false;
+  /// Parts whose cached thumbnail is STALE and must be re-rendered — a definition edited in BEDIT is
+  /// the one way a part's geometry changes within a session (ADR-062 (c)). The command layer appends a
+  /// name here rather than calling the renderer, which it must not do: Commands sits BELOW Renderer,
+  /// and the frame's service pass drains this list on the UI side.
+  std::vector<std::string> pipeFittingThumbStale;
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.
@@ -2891,9 +3439,18 @@ struct AppCommandState {
   std::vector<int> pipeRunWorldSolidOwnerIndex;
   std::uint64_t pipeRunWorldSolidsSig = 0;
 
+  /// Named piping networks (issue #486 increment B3 / REQ-345) — see `CadPipingSystem`'s own doc
+  /// comment (CadEntities.hpp) for the ownership model. Metadata only, like `cadPipeRuns` itself;
+  /// persisted in `.gs` (additive array, ADR-020 (d)) and snapshotted on undo alongside it.
+  std::vector<CadPipingSystem> cadPipingSystems;
+
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
+  std::vector<EntityAttributes> cadPositionMarkerAttrs;
+  std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
+  std::vector<EntityAttributes> cadMultileaderAttrs;
 
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef> cadBlockRefs;
@@ -3493,8 +4050,86 @@ struct AppCommandState {
   double gizmoDragDistance = 0.0;
 
   /// What the gizmo does — a user SETTING, not derived from the selection (\ref CadGizmoOp explains
-  /// why this one is stored where \ref CadGizmoMode is not). Set by the `GIZMO` command.
+  /// why this one is stored where \ref CadGizmoMode is not). Set by the `GIZMO` command, and for
+  /// their own duration by 3DMOVE / 3DROTATE / 3DSCALE, which restore it on exit.
   CadGizmoOp gizmoOp = CadGizmoOp::Translate;
+
+  /// True when the user asked for the gizmo to follow every selection (`GIZMO MOVE | ROTATE |
+  /// SCALE`). False — the default — means a selection shows no gizmo, and only 3DMOVE / 3DROTATE /
+  /// 3DSCALE summon one (GitHub issue #564 section 3, D-2026-09-28-a). `GIZMO OFF` clears it.
+  /// Session state, like \ref gizmoOp.
+  bool gizmoPersistent = false;
+
+  /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, asking for the base point the gizmo
+  /// sits on (D-2026-09-28-c), or showing the handles on it.
+  enum class GizmoCmdPhase { SelectObjects, BasePoint, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
+
+  // --- Geolocation tab commands (REQ-359) ---
+  /// GEOMARKLATLONG: WaitFirst = latitude, WaitSecond = longitude. GEOREORIENTMARKER: WaitFirst =
+  /// the design point, WaitSecond = a point along north from it.
+  /// GEOCAPTUREAREA: the two corners, then Capturing while the map controller gathers the tiles.
+  enum class GeoCmdPhase { WaitFirst, WaitSecond, Capturing } geoCmdPhase = GeoCmdPhase::WaitFirst;
+  double geoCmdFirstA = 0.0;  ///< GEOMARKLATLONG: the latitude; GEOREORIENTMARKER: design point X (local)
+  double geoCmdFirstB = 0.0;  ///< GEOREORIENTMARKER: design point Y (local)
+  /// REQ-360: what a running \ref Kind::DrawingSettingsPick picks, and its result for the Drawing
+  /// Settings window (which reads and clears \c done). Points are one pick; ToNorth / LocalAzimuth
+  /// are two (a direction), with the first in geoCmdFirstA/B.
+  struct DrawingSettingsPickState {
+    enum class Target { None, ReferencePoint, RotationPoint, ToNorth, LocalAzimuth } target = Target::None;
+    bool   done = false;         ///< A result is waiting for the window.
+    double worldX = 0.0;         ///< The picked point (WORLD), for the point targets.
+    double worldY = 0.0;
+    int    pointNumber = 0;      ///< The survey point picked there, 0 = none.
+    double azimuthDeg = 0.0;     ///< The picked direction, clockwise from north, for the angle targets.
+  } drawingSettingsPick;
+  /// The Position Marker whose label the MTEXT editor is editing (REQ-359 item 3), or -1. When set,
+  /// \ref MtextRichEditorTargetAnnotation returns that marker's own label.
+  int mtextRichEditorMarkerIndex = -1;
+  /// The editor was opened by placing the marker: committing the label joins the placement's undo
+  /// step rather than pushing a second one (one UNDO removes the marker it placed).
+  bool mtextRichEditorMarkerJustPlaced = false;
+  /// The multileader whose label the MTEXT editor is editing (REQ-367), or -1.
+  int mtextRichEditorMultileaderIndex = -1;
+  bool mtextRichEditorMultileaderJustPlaced = false;
+  /// Edit Location asks the Drawing Settings window to show Units and Zone (REQ-359 item 2).
+  bool drawingSettingsShowUnitsAndZone = false;
+  /// REQ-364: a running Capture Area. The command layer sets the area; the online map controller
+  /// (which knows the displayed level and has the tiles) gathers them, updates the progress, and
+  /// ends the command through CommitMapCapture / FailMapCapture.
+  struct MapCaptureState {
+    bool   visibleArea = true;  ///< Capture what the view shows; else the picked LOCAL rectangle below.
+    double minX = 0.0, minY = 0.0, maxX = 0.0, maxY = 0.0;
+    int    total = 0;           ///< Tiles to gather (0 until the controller has planned them).
+    int    gathered = 0;
+    std::string prompt;         ///< "Capturing map… n of m tiles", kept here so the prompt can point at it.
+  } mapCapture;
+
+  // --- CHPROP / MATCHPROP / LAYMCUR (REQ-356) ---
+  /// SelectObjects is every command's pick step (MATCHPROP's source); CHPROP then asks which
+  /// property (WaitProperty) and its value (WaitValue); MATCHPROP's destinations are SelectTargets.
+  enum class PropCmdPhase { SelectObjects, WaitProperty, WaitValue, SelectTargets };
+  PropCmdPhase propCmdPhase = PropCmdPhase::SelectObjects;
+  /// The property CHPROP is asking a value for.
+  enum class ChPropProperty { Color, Layer, Linetype, Lineweight } chPropProperty = ChPropProperty::Color;
+  /// MATCHPROP's source attributes, copied when the source is picked (an index would not survive an
+  /// undo in between — architecture §11.9).
+  EntityAttributes matchPropSource;
+  /// The source carries a linetype / lineweight (\ref CadLineStyleApplies), so they are copied too.
+  bool matchPropSourceHasLineStyle = false;
+  /// The base point a 3D gizmo command was given (D-2026-09-28-c): where the gizmo sits, the pivot
+  /// of a rotation and the centre of a scale. Invalid means Enter took the default — the centre of
+  /// the selection's box, where the persistent gizmo always sits. Storage coordinates.
+  bool gizmoBaseValid = false;
+  ray3d::Vec3 gizmoBase{0.0, 0.0, 0.0};
+  /// The live TRANSLATE drag as a displacement: `gizmoDragDistance` along the axis for an axis
+  /// handle, or the in-plane offset for a plane handle (D-2026-09-28-c), where no single distance
+  /// says it. The ghost and the commit read this one field so the two cannot disagree.
+  ray3d::Vec3 gizmoDragVec{0.0, 0.0, 0.0};
+  /// Where a plane-handle grab met the plane — the drag is the hit's offset from here.
+  ray3d::Vec3 gizmoGrabPoint{0.0, 0.0, 0.0};
+  /// \ref gizmoOp as it was when a 3D gizmo command started — put back when the command ends,
+  /// however it ends, so the command's op never leaks into the persistent setting.
+  CadGizmoOp gizmoOpBeforeCmd = CadGizmoOp::Translate;
 
   /// In face mode, WHICH face the armed drag is moving — captured at the grab like the anchor.
   ///
@@ -3529,6 +4164,12 @@ struct AppCommandState {
   /// window vs crossing mode.
   float selBoxAnchorScreenX = 0.f;
   float selBoxAnchorScreenY = 0.f;
+  /// REQ-370: what releasing the box now would select (live preview). Filled by
+  /// `UpdateSelectionBoxPreview`; `selBoxPreviewKey` is the input set it was computed from, so an
+  /// idle cursor costs one comparison per frame instead of a whole-drawing hit test.
+  std::vector<SelectedEntity> selBoxPreview;
+  std::array<double, 11> selBoxPreviewKey{};
+  bool selBoxPreviewKeyValid = false;
 
   /// MTEXT box corner grips (viewport): two-click edit — fixed diagonal corner while resizing box.
   int mtextGripAnnotationIndex = -1;
@@ -3953,6 +4594,7 @@ struct AppCommandState {
     VpLayerColor,
     EntitySelection,
     QuickSelectValue,
+    RibbonColor,  ///< REQ-356: the ribbon colour combo's "More colors..." (CadRibbonPickColor)
   };
   bool showSelectColorPopup = false;
   std::string selectColorInitial;
@@ -3996,7 +4638,7 @@ struct AppCommandState {
   int surfacePropertiesIndex = -1;
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
   /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `.gs`.
-  enum class ToolspaceTab : int { Prospector = 0, Settings = 1 };
+  enum class ToolspaceTab : int { Prospector = 0, Settings = 1, Project = 2 };
   bool showToolspaceWindow = true;
   /// View Manager (REQ-106) — the dialog half of "a VIEW command/dialog". Session-only, like the
   /// other manager windows: which panels are open is not a property of the drawing.
@@ -4012,6 +4654,10 @@ struct AppCommandState {
   int featureLineElevIndex = 0;
   /// Current layer for new geometry (ribbon combo + command defaults).
   std::string currentLayer = "0";
+  /// Current colour for new geometry (REQ-356, AutoCAD's CECOLOR): colour storage ("ByLayer", an
+  /// ACI, `#RRGGBB`) stamped beside \ref currentLayer on every new object that takes the current
+  /// layer. Saved and reopened with the drawing exactly as \ref currentLayer is.
+  std::string currentColor = "ByLayer";
   /// Layer table. Layer "0" always exists, **including before anything has been loaded** (issue
   /// #57): the loader used to synthesize it while a newly created drawing had an empty table, so a
   /// new drawing was briefly in a state the rest of the code is entitled to assume cannot happen —
@@ -4036,6 +4682,9 @@ struct AppCommandState {
   DimensionStyle activeDimensionStyle = DimensionStyles::Default();
   DimensionStyle dimStyleDraft = DimensionStyles::Default();
   bool showDimStyleDialog = false;
+  MultileaderStyle activeMultileaderStyle = MultileaderStyles::Default();
+  MultileaderStyle mleaderStyleDraft = MultileaderStyles::Default();
+  bool showMleaderStyleDialog = false;
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
   float viewportCrosshairR = 1.f;
   float viewportCrosshairG = 0.8392157f;
@@ -4224,9 +4873,51 @@ struct AppCommandState {
   /// Frame-time diagnostic HUD (issue #166 investigation). Toggled by the `PERFHUD` command. The
   /// millisecond fields are written each frame by whoever owns that section — `perfRenderMs` in the
   /// app frame loop, the rest in the viewport draw — and read only by the overlay.
+  /// PIPERUN live-routing profiler (user request 2026-09-24), reported by the `PIPEPERF` command.
+  ///
+  /// Routing a pipe builds real geometry on every click (D-2026-09-24-d) and the swept tube is the
+  /// most expensive thing the command does, so these are the four places that time can go. Reset
+  /// automatically when PIPERUN starts, so the report always describes the run just drawn.
+  ///
+  /// `mutable` because the rubber preview takes the state by const reference — it draws, it does not
+  /// edit — and a diagnostic counter is exactly the "does not change observable behaviour" case
+  /// `mutable` is for. Nothing reads these except the report.
+  struct PipeRunPerfStat {
+    double totalMs = 0.0;
+    double maxMs = 0.0;
+    int calls = 0;
+    void Add(double ms) {
+      totalMs += ms;
+      if (ms > maxMs)
+        maxMs = ms;
+      ++calls;
+    }
+    void Reset() { *this = PipeRunPerfStat{}; }
+    [[nodiscard]] double AvgMs() const { return calls > 0 ? totalMs / static_cast<double>(calls) : 0.0; }
+  };
+  struct PipeRunPerf {
+    PipeRunPerfStat sweep;      ///< one run's swept tube (CadBuildPipeRunSolids), inside the rebuild
+    PipeRunPerfStat rebuild;    ///< the whole RebuildPipeRunWorldSolids pass
+    PipeRunPerfStat tessellate; ///< one solid's display tessellation (faces + edges + isolines)
+    PipeRunPerfStat ghost;      ///< the routing rubber preview, per frame
+    PipeRunPerfStat tessFaces;  ///< brep::Tessellate  (the surface triangles)
+    PipeRunPerfStat tessEdges;  ///< brep::TessellateEdges
+    PipeRunPerfStat tessIso;    ///< brep::TessellateIsolines
+    int runsSwept = 0;          ///< runs re-swept by a rebuild (cache miss)
+    int runsReused = 0;         ///< runs served from the per-run solid cache
+    int clicks = 0;             ///< vertices added while routing
+    int lastRunVerts = 0;       ///< vertices in the run at the last rebuild, for reading the curve
+    long long tessTriangles = 0;///< triangles produced by the display tessellation
+    void Reset() { *this = PipeRunPerf{}; }
+  };
+  mutable PipeRunPerf pipeRunPerf;
+
   bool   perfHudVisible = false;
   double perfFrameMs = 0.0;        ///< whole frame, wall-clock frame-to-frame
   double perfRenderMs = 0.0;       ///< the GL RenderScene call
+  /// REQ-363 item 9: online map tiles were drawn last frame, so the viewport shows the attribution.
+  /// Runtime only (set by the app's map controller each frame), never saved.
+  bool onlineMapDrawing = false;
   double perfHoverPickMs = 0.0;    ///< the viewport entity hover-pick block (issue #166)
   bool   perfHoverPickRan = false; ///< did the hover pick actually run this frame, or reuse cache
   double perfSnapMs = 0.0;         ///< the object-snap FindBest block
@@ -4301,7 +4992,137 @@ struct AppCommandState {
   struct DrawingTab {
     std::string  name;
     uint32_t     uid = 0;  ///< Stable per-tab ID used in ImGui label suffix to prevent ID collisions.
+    uint32_t     projectUid = 0;  ///< REQ-374: ProjectSession::uid this drawing belongs to; 0 = standalone.
+    /// REQ-376 (#696 P3): how this tab's survey points relate to the project database. Unattached = not
+    /// decided yet (decided on the first frame after the tab is built); Shared = the tab reads and
+    /// writes the project's database; Detached = the drawing arrived carrying points of its own, which
+    /// stay in the DWG untouched until Add Drawing to Project (P5) merges them.
+    enum class PointsMode : uint8_t { Unattached, Shared, Detached };
+    PointsMode   pointsMode = PointsMode::Unattached;
+    /// Shared: the points (WORLD coordinates) this tab last agreed with the database, and the database
+    /// revision that was. The diff against them is what a frame's edits are.
+    std::vector<SurveyPoint> pointsBaseWorld;
+    uint64_t     pointsRevision = 0;
+    /// The rules (REQ-377) the tab last built its point view with; a different live set means "rebuild".
+    projpts::Rules pointsRulesApplied;
   };
+  /// REQ-374 / REQ-382 (#696 P1): one entry per open project. Each drawing tab belongs to exactly one
+  /// session (or none). A session with no tabs left is closed and its lock released (ServiceProjects).
+  struct ProjectSession {
+    uint32_t         uid = 0;
+    gsproj::Project  project;
+    gsproj::LockInfo me;           ///< who we are in the lock file
+    bool             readOnly = false;  ///< opened read-only: nothing in the project may be written
+    /// REQ-375: project.settingsJson, parsed once when the project opens and again when Project
+    /// Settings changes it. Never null for an open session.
+    std::shared_ptr<ProjectSettings> settings;
+    /// REQ-376 / ADR-065: the project's one survey point database, shared by every tab of the project.
+    /// Null when the file could not be read (pointsError says why) — then the project's tabs keep their
+    /// points in the DWG and the damaged file is never written over.
+    std::shared_ptr<projpts::Db> points;
+    std::string                  pointsError;
+  };
+  std::vector<ProjectSession> openProjects;
+  uint32_t                    nextProjectUid = 1u;
+  /// A question the user must answer before a project open can continue (damaged marker, or the lock
+  /// is held). Drawn as a modal by DrawProjectDialogs; the continuation re-enters the open path.
+  struct ProjectPrompt {
+    enum class Kind { None, Damaged, Locked } kind = Kind::None;
+    std::string      gsprojPath;
+    std::string      dwgPath;      ///< the drawing being opened, or empty for Open Project
+    std::string      message;      ///< why the marker is damaged
+    gsproj::LockInfo holder;       ///< Locked: who holds it
+    bool             stale = false;
+    bool             openRequested = false;  ///< ask ImGui to open the modal next frame
+  } projectPrompt;
+  bool showNewProjectDialog = false;  ///< REQ-374 clause 1; File > New Project / Start screen
+  /// REQ-375: the Project Settings window is open for ProjectSession::uid == this (0 = closed).
+  uint32_t projectSettingsUid = 0;
+  /// REQ-378 (#696 P5): Add Drawing to Project was asked for in project \c ProjectSession::uid == this
+  /// (0 = no request). DrawProjectDialogs browses for the drawing, builds \ref addDrawingPlan, and shows
+  /// the preview dialog; nothing is written until the user confirms.
+  uint32_t addDrawingToProjectUid = 0;
+  std::shared_ptr<AddDrawingPlan> addDrawingPlan;
+  /// REQ-379 (#696 P6): the Copy / Link / Cancel question asked when a point cloud or PDF from outside
+  /// the project is attached in a project drawing. Drawn as a modal by DrawProjectDialogs; the answer
+  /// goes to ResolveProjectAttach and then on to the attach that asked.
+  struct ProjectAttachPrompt {
+    enum class Kind { None, PointCloud, Pdf, PdfTrack } kind = Kind::None;  ///< PdfTrack: Add PDF to project (REQ-379 cl. 5), no placement
+    uint32_t    projectUid = 0;
+    std::string sourcePath;          ///< UTF-8
+    std::string destRel;             ///< where a copy would go, project-relative
+    std::uint64_t sizeBytes = 0;
+    bool        reuse = false;       ///< an identical copy is already in the project
+    bool        openRequested = false;
+  } projectAttachPrompt;
+  /// REQ-379 clause 6: the answer to Refresh. Filled only when the user pressed Refresh and new files exist.
+  struct ProjectRefreshPrompt {
+    uint32_t                 projectUid = 0;
+    std::vector<std::string> files;   ///< project-relative, `/`
+    std::vector<char>        picked;  ///< one tick per file
+    bool                     openRequested = false;
+    bool                     open = false;
+  } projectRefreshPrompt;
+  /// REQ-383 (#696 P9): a point edit in a project drawing that needs the user's answer before it reaches
+  /// the shared database. SyncProjectPoints fills it in and waits; DrawProjectDialogs asks; the answer
+  /// is stored here and the next SyncProjectPoints frame carries it out. Cleared once the edit is
+  /// applied, undone, or the user leaves the tab.
+  struct PointEditPrompt {
+    bool        active = false;       ///< an unanswered question is showing (or waiting to show)
+    uint32_t    projectUid = 0;
+    int         tabIdx = 0;
+    std::string projectName;
+    std::vector<int> removed;         ///< numbers the drawing deleted
+    std::vector<int> conflicts;       ///< numbers that already exist in the project, hidden in this drawing
+    int         othersOpenShowing = 0;   ///< other OPEN drawings of the project that show a deleted point
+    int         othersClosedMaybe = 0;   ///< drawings of the project that are not open (rules unread)
+    bool        deletePending = false;   ///< the delete question (not only the number-conflict one) is showing
+    std::vector<std::string> otherNames; ///< names of those open drawings
+    /// The answers. None = not asked yet. Delete: Proceed / HideHere / Cancel. Conflict: Proceed
+    /// (overwrite) / Renumber / Cancel.
+    enum class Answer : uint8_t { None, Proceed, HideHere, Renumber, Cancel };
+    Answer      deleteAnswer = Answer::None;
+    Answer      conflictAnswer = Answer::None;
+  } pointEditPrompt;
+  /// REQ-383 clauses 1 and 3: a paste that crosses a project / coordinate-system / units boundary.
+  /// `block` = coordinate-system mismatch (only Cancel); otherwise Paste anyway / Cancel.
+  struct PastePrompt {
+    bool        active = false;
+    bool        block = false;
+    bool        original = false;    ///< PASTEORIG rather than PASTE
+    std::string text;
+    bool        openRequested = false;
+  } pastePrompt;
+  bool pasteWarningAnswered = false;   ///< "Paste anyway" was chosen: the next paste start skips the check
+  /// REQ-383 clause 6: closing a project's drawing tab while its point database cannot be written.
+  /// `tabIdx` < 0 = no question.
+  struct CloseTabPrompt {
+    int         tabIdx = -1;
+    std::string text;
+    bool        openRequested = false;
+    bool        confirmed = false;   ///< "Close anyway": the tab loop closes it next frame
+  } closeTabPrompt;
+  uint32_t projectHealthUid = 0;     ///< REQ-379 clause 4: the Project Health window is open for this project
+  /// REQ-380 (#696 P7): the Pack Project window. `projectUid` is the project being packed (0 = closed);
+  /// the plan is what a pack would hold, refreshed when the window opens and after "Copy links in".
+  struct ProjectPackPrompt {
+    uint32_t         projectUid = 0;
+    bool             planned = false;
+    bool             planTried = false;  ///< a failed plan is not retried every frame
+    gspack::PackPlan plan;
+    std::string      planError;
+    bool             excludePointClouds = false;
+    bool             packAnyway = false;  ///< the user accepted the Health problems
+  } projectPackPrompt;
+  /// REQ-381 (#696 P8): the Create Turnover window. `projectUid` is the project (0 = closed). Every
+  /// tracked file starts ticked; `unticked` holds the ones the user cleared.
+  struct ProjectTurnoverPrompt {
+    uint32_t              projectUid = 0;
+    std::string           recipient;
+    std::set<std::string> unticked;
+    bool                  acknowledged = false;  ///< the user accepted the Health problems
+  } projectTurnoverPrompt;
+  bool openPackRequested = false;    ///< REQ-380: OPENPACK asked for Open Packed Project (the UI browses)
   /// REQ-308 / D-2026-08-30-a: drawingTabs[0] is the **Start screen** — a non-closable, pinned-first
   /// sentinel that backs no document. documents[0]/viewportRenderers[0] exist for index alignment
   /// but are never meaningful. Real drawings start at FirstDrawingTabIndex().
@@ -4331,6 +5152,8 @@ struct AppCommandState {
 
   // --- Close confirmation ---
   bool confirmCloseModal = false;  ///< Set by the main loop to open the "Unsaved Changes" dialog.
+  /// REQ-383 clause 6: projects whose database could not be written, found when the quit prompt was raised.
+  std::vector<UnsavedProject> closeUnsavedProjects;
   bool closeConfirmed    = false;  ///< Set by the dialog to signal the main loop to exit.
 
   // --- DWG export confirmation (REQ-052) ---
@@ -4338,6 +5161,7 @@ struct AppCommandState {
   /// before anything is written, because a DWG save can overwrite a drawing GoSurvey did not author.
   bool        dwgLossyExportModal = false;
   std::string dwgPendingExportPath;  ///< Destination chosen in the save dialog, written only on confirm.
+  DwgSaveVersion dwgExportVersion = DwgSaveVersion::R2000;  ///< Format for the pending Export DWG (issue #600).
 
   // -------------------------------------------------------------------------
   // ALIGN command state (Helmert transformation)
@@ -4377,6 +5201,16 @@ struct AppCommandState {
 
   bool pdfAttachDialogOpen = false;
 
+  /// REQ-387 (#732): requests the PDF Viewer window consumes on its next frame. The typed command
+  /// has no window of its own; it only asks. Empty path + pick = show the file dialog.
+  std::string pdfViewerOpenRequest;
+  bool pdfViewerPickRequest = false;
+  bool pdfSplitRequest = false;  ///< PDFSPLIT (REQ-389): open the Split dialog on the focused viewer
+  std::string pdfViewBenchPath;  ///< `BENCH PDFVIEW <file>`: time this real PDF's first page and thumbnail strip
+  int pdfViewBenchPages = 0; ///< `BENCH PDFVIEW [pages]`: build a synthetic PDF this long and time scrolling it
+  bool pdfDiffBench = false; ///< `BENCH PDFDIFF` (REQ-393): align and compare a generated 36 x 24 in sheet pair
+  int pdfCompareBenchPages = 0; ///< `BENCH PDFCOMPARE [pages]` (REQ-392): build two synthetic PDFs this long and time panning their overlay
+
   // -------------------------------------------------------------------------
   // INSERT dialog (issue #124)
   // -------------------------------------------------------------------------
@@ -4411,10 +5245,19 @@ struct AppCommandState {
   bool insertBlockSpecifyAlignFace = false;
   bool insertBlockSpecifyConnectorSnap = false;
   char insertBlockConnectorName[64]{};
+  /// The pipe run whose END the connector snap fitted the part onto, or -1 (REQ-353): the placed
+  /// part — an end flange, a cap — takes that run's layer and colour. Consumed by the placement.
+  int insertBlockSnappedPipeRun = -1;
   /// INSERT dialog override for block insertion units (issue #475 inc6). Empty uses the definition.
   char insertBlockUnitsBuf[32]{};
   bool insertBlockUniformScale = true;
   bool insertBlockExplode = false;
+  /// REQ-350 (f) — set when this INSERT was armed from the Pipe Fittings palette. It changes exactly
+  /// one thing: a pick that lands ON a pipe run splices the part into that run with the engagement
+  /// cutback (the PIPEFIT path) instead of placing a free block reference. A pick anywhere else
+  /// behaves as an ordinary INSERT, which is why this is a flag on INSERT rather than a command of
+  /// its own — the ghost, the snapping, the click routing and ESC are all already correct.
+  bool insertBlockPipeSpliceArmed = false;
   bool insertBlockAttrDialogOpen = false;
   /// Library pane filters (issue #486 increment A5). `None` = no filter on that axis. Size is a
   /// free-text substring match against \ref CadBlockLibraryEntry::nominalSize.
@@ -4436,6 +5279,12 @@ struct AppCommandState {
   int blockCreateConvertMode = 1; // 0 retain, 1 convert, 2 delete
   char blockCreateDescription[256]{};
   char blockCreateUnits[32]{};
+
+  /// WBLOCK save dialog (user request 2026-09-23). `WBLOCK <name>, <path.dwg>` still writes the file
+  /// directly; the bare `WBLOCK` verb, which used to answer with a usage line, opens this instead.
+  bool wblockDialogOpen = false;
+  char wblockName[256]{};
+  char wblockPath[1024]{};
 
   char pdfAttachFilePath[1024]{};
   int  pdfAttachSelectedPage = 0;
@@ -4968,7 +5817,11 @@ enum class EntityKind : std::uint8_t {
   Solid,
   /// REQ-171 / ADR-042. Appended after Solid, for the same reason: inserting anywhere but the end
   /// would renumber every entity in every existing drawing on its next load.
-  PointCloud
+  PointCloud,
+  /// REQ-359 / D-2026-09-29-e. Appended after PointCloud for the same id-sweep reason.
+  PositionMarker,
+  /// REQ-367 / issue #619. Appended after PositionMarker for the same id-sweep reason.
+  Multileader
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -5344,6 +6197,21 @@ void CancelPolysolidCommand(AppCommandState& st);
 // --- PIPERUN (issue #486 increment B2 / REQ-345) -------------------------------------------------
 /// Open the command: prompt for a nominal size (+ optional pressure class).
 void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// Finish an open PIPERUN because something else is about to take the command (D-2026-09-24-d).
+///
+/// Commits the route exactly as END does when it has at least two points, and otherwise drops the
+/// draft; returns false when PIPERUN was not the active command, so callers can use it as a test.
+/// Exists for the Pipe Fittings palette: picking a part starts INSERT, and before the route was
+/// materialised that silently discarded the pipe the user had just drawn.
+bool CadPipeRunFinishForHandoff(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-355 / D-2026-09-28-k: the Modeling ribbon's PIPERUN. Starts at the remembered size (the
+/// ribbon dropdown) with that size's standard wall and goes straight to the start point — neither
+/// question is asked. Falls back to the typed prompts when the size has no standard wall.
+void StartPipeRunAtCurrentSize(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-355: the Modeling ribbon's size dropdown. Choosing a size is typing it alone at PIPERUN's size
+/// prompt — the size is set and the pressure class cleared — so the two are one setting.
+void ChoosePipeRunNominalSize(AppCommandState& st, const std::string& size);
 /// The prompt line, computed rather than literal: it echoes the phase and the size/class in force.
 [[nodiscard]] std::string CadPipeRunPromptText(const AppCommandState& st);
 /// Handle one typed line: the size/class line, a coordinate, or one of `U UNDO END`. \return false
@@ -5353,6 +6221,60 @@ bool HandlePipeRunTextInput(const std::string& line, AppCommandState& st, std::v
 void SubmitPipeRunViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 /// Reset the draft path, keeping the remembered nominal size and pressure class.
 void CancelPipeRunCommand(AppCommandState& st);
+
+// --- PIPEFIT (issue #486 increment B7 / REQ-345) -------------------------------------------------
+/// Open the command: requires exactly one `CadPipeRun` selected and a recognized \p partTypeTok
+/// (`CadPipePartType`'s own tags — valve, flange, reducer, coupling, ...); refuses immediately
+/// (never entering the command) otherwise, mirroring `PIPECATALOG`'s own inline-argument refusals.
+void StartPipeFitCommand(AppCommandState& st, const std::string& partTypeTok, std::vector<std::string>& log);
+/// Flattens a `brep::Tessellation` into the flat per-vertex GL arrays the renderer uploads (REQ-313 /
+/// ADR-045): triangle vertices, one normal per vertex, and the owning face id per TRIANGLE. Shared by
+/// the viewport's solid display cache and REQ-350's part thumbnails, so the two cannot disagree about
+/// what a solid's mesh is.
+void ExpandTessellation(const brep::Tessellation& t, std::vector<float>* verts, std::vector<float>* normals,
+                        std::vector<int>* faceIds);
+
+/// REQ-350 (f) — the pipe run under \p pick, or none. "Under" means within the pipe's own outer
+/// radius (with a little slack) of its centreline; when two runs overlap the pick, the nearer
+/// centreline wins. This is what decides whether a part armed from the Pipe Fittings palette splices
+/// into a run or is placed as a free INSERT.
+[[nodiscard]] bool CadPipeRunUnderPick(const AppCommandState& st, const ray3d::Vec3& pick, int* outRunIdx);
+
+/// REQ-350 (f) — splice the NAMED library part into `st.cadPipeRuns[runIdx]` at the point nearest
+/// \p pick: exactly what `PIPEFIT <part type>` does after its catalog lookup, including the
+/// engagement cutback, the run splitting into two pieces, and one undo step. Named rather than
+/// looked up by type because the palette has already chosen a specific part, and the catalog lookup
+/// refuses when several parts match a type.
+bool CadPipeFitNamedAtPick(AppCommandState& st, int runIdx, const std::string& blockName,
+                           const ray3d::Vec3& pick, std::vector<std::string>& log);
+/// Handle a viewport click: the station point to splice the fitting in at. Always ends the command,
+/// success or refusal — there is nothing left to pick after one point.
+void SubmitPipeFitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Handle one typed line as a station point (`X,Y,Z`). \return false if not consumed.
+bool HandlePipeFitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+
+// --- PIPESPLIT / PIPEJOIN / PIPEPROP (issue #486 increment B8 / REQ-345) --------------------------
+/// Open PIPESPLIT: requires exactly one `CadPipeRun` selected; refuses immediately otherwise.
+void StartPipeSplitCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Handle a viewport click: the station point to split at. Always ends the command.
+void SubmitPipeSplitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Handle one typed line as a station point (`X,Y,Z`). \return false if not consumed.
+bool HandlePipeSplitTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+/// Merge the two selected `CadPipeRun`s into one — they must share the same nominal size and
+/// pressure class and have exactly one coincident endpoint between them. One-shot, no `Kind` state
+/// machine (nothing left to pick once the selection is already made), the same shape `PIPESYS`
+/// itself uses.
+void HandlePipeJoinCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Change nominal size (+ optional pressure class) on every selected `CadPipeRun`, refusing (not
+/// applying anyway) any run whose resulting solid would fail to build — REQ-201's "refuse rather
+/// than guess," applied per run so one bad candidate does not block the rest of the selection.
+void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+
+// --- PIPESYS (issue #486 increment B3 / REQ-345) --------------------------------------------------
+/// One-shot text dispatch for every PIPESYS subverb (NEW/ADD/REMOVE/RENAME/DELETE/LIST — a bare or
+/// unrecognized \p args reports the current networks). \p args is everything typed after the
+/// command name itself. ADD/REMOVE act on `AppCommandState::selection`'s pipe runs.
+void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.
 ///
 /// ONE builder for the preview, the click that commits a point and the Enter that finishes — a
@@ -5364,6 +6286,9 @@ void CancelPipeRunCommand(AppCommandState& st);
 /// Report a solid's properties into \p log — kind, dimensions, volume, surface area, and its
 /// vertex/edge/face counts. The SOLIDLIST command, and the one place those numbers are formatted.
 void CadReportSolids(const AppCommandState& st, std::vector<std::string>& log);
+
+/// Mass properties including inertia and principal axes (REQ-349, GitHub #460) — the MASSPROP command.
+void CadReportMassProperties(const AppCommandState& st, std::vector<std::string>& log);
 
 /// REQ-313 as amended (D-2026-09-09-j) — SOLIDCHECK: report each solid's validity, and separately
 /// whether its surface passes through itself. Read-only; nothing is repaired.
@@ -5562,6 +6487,21 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
 /// Returns true when a surface was produced.
 bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log);
 
+/// Re-lay everything linked to surface p si, after that surface has been rebuilt (ADR-065 (b),
+/// GitHub #150). Called from the only places a TIN is replaced - `SURFACEREBUILD` and the async
+/// reap - so a link means the same thing whichever way the rebuild was driven.
+///
+/// A linked entity whose vertices are no longer over the new ground is LEFT WHERE IT IS and said
+/// so: a surface shrinking under a draped line is not a reason to move or discard the line
+/// (REQ-201). Its link is kept, so it re-drapes on its own once the surface covers it again.
+void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log);
+
+/// The name of the surface p e is draped on and follows, or empty when it follows none
+/// (ADR-065 (d), GitHub #150) - never linked, baked since, or linked to a surface that has been
+/// erased, which are the same thing to the user. The one place the link becomes something a
+/// person reads, so the Properties panel and the `DRAPELINKS` report cannot disagree.
+[[nodiscard]] std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity& e);
+
 /// Create a named surface from \p groupNames and build it. Returns the new surface's index, or -1
 /// when the name is taken or the build produced nothing.
 int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
@@ -5654,6 +6594,30 @@ void SyncDrawingLayerTableWithGeometry(AppCommandState& st);
 
 bool CadAddDrawingLayer(AppCommandState& st, const std::string& name, std::string* err);
 
+// --- Object Layers (REQ-361, GitHub issue #582 increment 5) --------------------------------------
+/// The layer a new object of \p kind named \p objectName goes on: the row's layer, with the Value
+/// (each `*` = the name; dropped when there is no name) before it (Prefix) or after it (Suffix). Pure.
+[[nodiscard]] std::string ResolveObjectLayer(const DrawingSettings& settings, ObjectLayerKind kind,
+                                             std::string_view objectName);
+/// \ref ResolveObjectLayer, made real: a name that cannot be a layer falls back to the row's base
+/// layer (then "0"); a layer the drawing does not have is added with default properties. Call it
+/// AFTER the creating path's PushUndoSnapshot, so one UNDO removes the object and the new layer.
+/// Returns the layer name as the drawing spells it.
+std::string EnsureObjectLayer(AppCommandState& st, ObjectLayerKind kind, std::string_view objectName);
+/// The drawing's layer named \p name (case-insensitive), added with default properties when missing.
+/// Returns the name as the drawing spells it. No undo step of its own.
+std::string EnsureDrawingLayer(AppCommandState& st, const std::string& name);
+/// A sentence naming the first Object Layers row whose base layer is not a usable layer name, or "".
+/// ApplyDrawingSettings refuses such settings.
+[[nodiscard]] std::string ValidateObjectLayers(const DrawingSettings& settings);
+/// The attributes of a newly created object of \p kind: \ref MakeNewEntityAttrs (current colour,
+/// REQ-356) on \ref EnsureObjectLayer's layer. The one stamp every creation path uses (REQ-361 item 3).
+EntityAttributes MakeNewObjectAttrs(AppCommandState& st, ObjectLayerKind kind, std::string_view objectName);
+/// For stores whose creator pushes the object first: grows \p attrs to \p count, the last one (the
+/// new object) from \ref MakeNewObjectAttrs.
+void AppendNewObjectAttrs(AppCommandState& st, std::vector<EntityAttributes>& attrs, size_t count,
+                          ObjectLayerKind kind, std::string_view objectName);
+
 bool CadRenameDrawingLayer(AppCommandState& st, const std::string& oldName, const std::string& newName, std::string* err);
 
 bool CadDeleteDrawingLayer(AppCommandState& st, const std::string& name, std::string* err);
@@ -5696,6 +6660,10 @@ inline void CloseMtextRichEditorUi(AppCommandState& st) {
   st.mtextRichEditorPaperLayout = -1;
   st.mtextRichEditorPlain = false;
   st.mtextRichEditorAnnIndex = -1;
+  st.mtextRichEditorMarkerIndex = -1;  // REQ-359
+  st.mtextRichEditorMarkerJustPlaced = false;
+  st.mtextRichEditorMultileaderIndex = -1;  // REQ-367
+  st.mtextRichEditorMultileaderJustPlaced = false;
   st.mtextRichEditorBuf.clear();
   st.mtextRichEditorFocusRequest = false;
   st.mtextRichEditorCursor = 0;
@@ -5717,6 +6685,14 @@ inline void CloseMtextRichEditorUi(AppCommandState& st) {
 inline CadAnnotation* MtextRichEditorTargetAnnotation(AppCommandState& st) {
   if (!st.mtextRichEditorOpen || st.mtextRichEditorPlacement)
     return nullptr;
+  if (st.mtextRichEditorMarkerIndex >= 0) {  // a Position Marker's own label (REQ-359 item 3)
+    const size_t mi = static_cast<size_t>(st.mtextRichEditorMarkerIndex);
+    return mi < st.cadPositionMarkers.size() ? &st.cadPositionMarkers[mi].label : nullptr;
+  }
+  if (st.mtextRichEditorMultileaderIndex >= 0) {  // REQ-367
+    const size_t li = static_cast<size_t>(st.mtextRichEditorMultileaderIndex);
+    return li < st.cadMultileaders.size() ? &st.cadMultileaders[li].label : nullptr;
+  }
   const int ix = st.mtextRichEditorAnnIndex;
   if (ix < 0)
     return nullptr;
@@ -5740,6 +6716,14 @@ inline CadAnnotation* MtextRichEditorTargetAnnotation(AppCommandState& st) {
 inline EntityAttributes* MtextRichEditorTargetAttrs(AppCommandState& st) {
   if (!st.mtextRichEditorOpen || st.mtextRichEditorPlacement)
     return nullptr;
+  if (st.mtextRichEditorMarkerIndex >= 0) {  // REQ-359: the marker's row
+    const size_t mi = static_cast<size_t>(st.mtextRichEditorMarkerIndex);
+    return mi < st.cadPositionMarkerAttrs.size() ? &st.cadPositionMarkerAttrs[mi] : nullptr;
+  }
+  if (st.mtextRichEditorMultileaderIndex >= 0) {  // REQ-367
+    const size_t li = static_cast<size_t>(st.mtextRichEditorMultileaderIndex);
+    return li < st.cadMultileaderAttrs.size() ? &st.cadMultileaderAttrs[li] : nullptr;
+  }
   const int ix = st.mtextRichEditorAnnIndex;
   if (ix < 0)
     return nullptr;
@@ -5875,14 +6859,17 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
 /// **Interpreted in the active UCS** (REQ-154): under a rotated UCS `10,0` is 10 units along the UCS
 /// X axis, not the world's. Under the WCS — the default, and every drawing that predates the UCS
 /// command — this is the original world-frame parse, unchanged.
+///
+/// A third number is the point's Z (REQ-354): `x,y,z`, or `@dx,dy,dz` measured from \p baseWorldZ
+/// (the work plane when null). It is published through AppCommandState::resolvedPointZ.
 bool ParseStoragePoint(AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
-                       float baseLocalX, float baseLocalY);
+                       float baseLocalX, float baseLocalY, const float* baseWorldZ = nullptr);
 
 /// \ref ParseStoragePoint, additionally reporting the resolved point's world Z. Callers that are
 /// about to commit geometry want this: on a tilted UCS the work plane's elevation varies across it,
 /// so the point's own Z is the only correct answer (see AppCommandState::resolvedPointZ).
 bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, float* ly, double* outWorldZ,
-                        bool allowRelative, float baseLocalX, float baseLocalY);
+                        bool allowRelative, float baseLocalX, float baseLocalY, const float* baseWorldZ = nullptr);
 
 /// Split a typed point into its two numbers and whether it carried a leading `@`, without deciding
 /// which frame those numbers are in. That separation is what lets one parser serve both frames.
@@ -6037,6 +7024,8 @@ bool DeleteFeatureLineElevationPoint(AppCommandState& st, int flNumber, int poin
 /// REQ-085: POLYLINE with per-vertex elevation entry. Shares POLYLINE's draft and `Kind` — the store
 /// is already stride-3 XYZ and the two commands differ only in where a vertex's Z comes from.
 void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-398 — GRADING: side slopes from a feature line baseline out to a surface.
+void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
 
@@ -6085,6 +7074,10 @@ void StartPlanCommand(AppCommandState& st, std::vector<std::string>& log);
 /// consumed. Shared by the command line and the at-cursor dynamic input (REQ-024), so both accept
 /// exactly the same keywords.
 bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+/// REQ-398 — one typed line while GRADING is running. Reached from the blank-line branch too,
+/// because a bare Enter is GRADING's action rather than a no-op.
+void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
+                               std::vector<std::string>& log);
 bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
 
 /// Feed a viewport pick (world coordinates) to the UCS command. Returns true when consumed.
@@ -6165,6 +7158,7 @@ void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimLinearCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimStyleCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartMleaderStyleCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// REQ-074: pick a point for its interpolated surface elevation; pick a second for the grade
@@ -6340,7 +7334,30 @@ void StartSectionPlaneCommand(AppCommandState& st, std::vector<std::string>& log
 /// End the face-select step without placing anything (ESC).
 void CancelSectionPlaneCommand(AppCommandState& st);
 /// The one prompt the command shows, so the hint and the log cannot word it differently.
-[[nodiscard]] const char* CadSectionPlanePromptText();
+[[nodiscard]] const char* CadSectionPlanePromptText(const AppCommandState& st);
+
+/// A typed answer to SECTIONPLANE's point prompts (a coordinate, or Enter). False when the command
+/// is not running, so the dispatcher can pass the line on.
+bool HandleSectionPlaneTextInput(const std::string& line, AppCommandState& st,
+                                 std::vector<std::string>& log);
+
+/// The viewport click that answers SECTIONPLANE's point prompts, in plan-space world coordinates —
+/// the same shape of entry point `SECTION` uses for its own three points.
+void SubmitSectionPlanePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// Track the cursor while SECTIONPLANE is asking for its through point, so the plane can be drawn
+/// where it would land (REQ-342, 2026-09-18). Resolves the ray exactly as the click does — on the
+/// geometry it hits, else on the work plane — so the preview cannot promise a plane the click would
+/// not place. A no-op unless the command is at that prompt.
+void UpdateSectionPlanePreview(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol);
+
+/// Forget the tracked cursor: the command ended, the cursor left the viewport, or the route changed.
+void ClearSectionPlanePreview(AppCommandState& st);
+
+/// The rectangle to draw for that preview, or false when there is nothing to preview (no tracked
+/// cursor, or a cursor that names no plane yet). The same rectangle, in the same place, that the
+/// click will place — it is built by the same code.
+[[nodiscard]] bool CadSectionPlanePreviewIndicator(const AppCommandState& st, SectionClipIndicator* out);
 /// The viewport click that answers "select a flat face". Returns true when a plane was placed;
 /// on any refusal the command stays open and the reason is in \p log.
 bool SubmitSectionPlaneFacePick(AppCommandState& st, const ray3d::Ray& ray,
@@ -6427,7 +7444,64 @@ bool CadHatchTraceAt(const AppCommandState& st, double wx, double wy, std::vecto
 bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std::vector<std::string>& log);
 /// Index of the smallest-area filled region containing (wx,wy), or -1. Lowest pick priority (fills sit under
 /// linework) — the click handler calls this only after geometry/annotation picks miss (REQ-042).
-int PickFilledRegionAt(const AppCommandState& st, double wx, double wy);
+/// \param ray As \ref PickCadAnnotationAt: when non-null, each region is tested where the ray meets
+///        its own plane (the elevation of its first vertex) — issue #564 §2.
+int PickFilledRegionAt(const AppCommandState& st, double wx, double wy, const ray3d::Ray* ray = nullptr);
+
+/// Which kind of thing \ref ResolveViewportPick found under the cursor (GitHub issue #564 §2).
+enum class ViewportPickFamily { None, Table, Annotation, Linework, Solid, FilledRegion };
+
+/// The inputs a viewport hover or click already has, gathered so both ask the SAME question.
+struct ViewportPickRequest {
+  /// The cursor on the work plane — the plan-view pick point, exactly as before.
+  double rawX = 0.0;
+  double rawY = 0.0;
+  /// The orbited-view ray the linework, text and fill picks measure against (REQ-058); null in plan
+  /// view, which keeps every pre-3D XY test byte-identical.
+  const ray3d::Ray* orbitRay = nullptr;
+  /// The camera ray through the pixel, in every view — what the solid pick and every DEPTH
+  /// comparison use.
+  ray3d::Ray eyeRay{};
+  bool eyeRayValid = false;
+  /// Linework tolerance: the hover's tight one or the click's wider one.
+  float lineTol = 0.f;
+  /// For the text / table tolerance (pixel aperture → world).
+  float orthoHalfH = 50.f;
+  float viewportHeightPx = 700.f;
+  bool modelSpace = true;
+  /// A survey point is under the cursor: solids yield to it, as they always have.
+  bool surveyPointUnderCursor = false;
+};
+
+struct ViewportPickResult {
+  ViewportPickFamily family = ViewportPickFamily::None;
+  SelectedEntity entity{};
+  /// For \c Linework: the candidates within tolerance that are VISIBLE (not behind an opaque
+  /// solid), for the disambiguation popup. Empty otherwise.
+  std::vector<CadPickCandidate> candidates;
+};
+
+/// What visible thing is under this pixel (GitHub issue #564 §2, D-2026-09-28-e). The ONE resolution
+/// the viewport hover and both click paths use, so what pre-highlights is what a click takes.
+///
+/// Families keep their long-standing precedence — table, text, linework, solid, fill — with one rule
+/// added: **nothing behind an opaque solid answers.** In Hidden and Shaded a solid's surface is found
+/// along the camera ray and any candidate farther than it (beyond the pick tolerance) is dropped; and
+/// where a solid is nearer the eye than the linework under the cursor, the solid wins. In 2D
+/// Wireframe a solid is see-through (D-2026-09-16-b, Q1 answered 2026-09-28): only its EDGES answer,
+/// by the same nearer-wins rule, and it hides nothing. With no solids in the drawing, every step is
+/// the pre-change call with the pre-change arguments.
+ViewportPickResult ResolveViewportPick(const AppCommandState& st, const ViewportPickRequest& rq);
+
+/// The CLICK's answer (issue #564 §2): the hover's own question first — \p rq with the hover's
+/// \p hoverLineTol — and only when that finds nothing, \p rq as given (the click's wider linework
+/// tolerance). So whatever pre-highlighted is exactly what the click takes, while a click that lands
+/// just outside the aperture keeps the forgiving radius it always had. With only linework under the
+/// cursor this is the pre-change answer: the nearest entity inside the tight radius is also the
+/// nearest inside the wide one. A linework answer carries the WIDE query's visible candidates, as
+/// the disambiguation popup always has.
+ViewportPickResult ResolveViewportClickPick(const AppCommandState& st, const ViewportPickRequest& rq,
+                                            float hoverLineTol);
 
 /// EXTRACTCENTERLINE (REQ-347): re-evaluates the hover's cylinder-axis fit against every visible
 /// point cloud's bounded preview sample under \p ray, writing the result into
@@ -6463,6 +7537,268 @@ void StartOrbitCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The attributes of a selected entity, or nullptr for a type that carries none (survey points,
 /// PDF underlays) or an index that no longer resolves.
 const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, const SelectedEntity& e);
+/// The attributes a layer / colour edit reads and writes (REQ-352): every type that carries them,
+/// solids and pipe runs included — unlike \ref CadEntityAttrsForSelected, which isolation keeps
+/// narrower. nullptr for a type with none or an index that no longer resolves.
+const EntityAttributes* CadEditableAttrsForSelected(const AppCommandState& st, const SelectedEntity& e);
+/// Properties / ribbon layer edit (REQ-352): moves every selected entity that carries attributes —
+/// solids and pipe runs included — to \p layer, as one undo step. A new name joins the layer
+/// table. Returns how many entities changed; nothing changed pushes no undo.
+int CadApplyLayerToSelection(AppCommandState& st, const std::string& layer);
+/// Properties colour edit (REQ-352): the same, for the colour storage string ("ByLayer", an ACI
+/// name, `#RRGGBB`).
+int CadApplyColorToSelection(AppCommandState& st, const std::string& color);
+/// What \ref CadSelectionLayer returns when the selected objects sit on more than one layer.
+inline constexpr const char* kCadSelectionLayerVaries = "*VARIES*";
+/// The layer the selected objects share, \ref kCadSelectionLayerVaries when they differ, or "" when
+/// nothing selected carries a layer — the ribbon Layers combo's preview (REQ-352).
+[[nodiscard]] std::string CadSelectionLayer(const AppCommandState& st);
+/// The ribbon Layers combo's pick (REQ-352, AutoCAD's rule): with objects selected that carry a
+/// layer, moves them to \p layer (one undo step) and leaves the current layer alone; with none,
+/// sets the current layer for new geometry, as it always has.
+void CadRibbonPickLayer(AppCommandState& st, const std::string& layer, std::vector<std::string>& log);
+
+// --- Drawing Settings (REQ-357, GitHub issue #582) --------------------------------------------
+
+/// Set the drawing's plot scale (model units per plotted inch) and resize what depends on it — the
+/// survey-point labels and their layout cache. No undo step: callers that edit push their own.
+void SetDrawingPlotScale(AppCommandState& st, float modelUnitsPerPlottedInch);
+/// Pick the annotation-scale list entry closest to the drawing plot scale (issue #622).
+void SyncCurrentAnnotationScaleIndex(AppCommandState& st);
+/// Set CANNOSCALE index for model-space annotative display; bumps GPU cache when changed.
+void SetCurrentAnnotationScaleIndex(AppCommandState& st, int index);
+
+/// Write the Drawing Settings window's values to the drawing as ONE undo step, pushed only when
+/// something changes. A unit change is a relabel and moves no geometry (REQ-022). Refuses (false,
+/// with a message) a plot scale that is not a positive finite number. Returns true when applied or
+/// when nothing changed.
+bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelUnitsPerPlottedInch,
+                          const DrawingSettings& settings, std::vector<std::string>& log);
+
+/// REQ-358 item 4: the grid coordinate (easting, northing in the zone's own unit) of a drawing point
+/// given in LOCAL coordinates: world = local + worldDocumentOrigin in double (REQ-101), then drawing
+/// unit → meters under the drawing's Imperial to Metric conversion (REQ-357) → the zone's unit. A
+/// Unitless drawing is taken to be in the zone's unit. Fails (with the reason) when the drawing is
+/// not geolocated or its zone is unknown to the loaded dictionary. When the drawing's transform is
+/// applied (REQ-360) the result goes through it. (CadCommands_Geo.cpp)
+[[nodiscard]] geo::GeoResult DrawingPointToGrid(const AppCommandState& st, double localX, double localY);
+
+/// REQ-360: what a drawing's settings resolve to — the unit factor, and the transformation's factors
+/// and angle (the Transformation tab's readouts). \c ok = the zone is usable; \c transformOk = the
+/// transform's own values are (a Reference Point factor needs CS-MAP at G_ref). Without
+/// \p withTransform only the zone and the unit factor are resolved (transformOk stays false).
+struct DrawingTransformFactors {
+  bool        ok = false;
+  std::string error;               ///< Why !ok.
+  double      zoneUnitsPerDrawingUnit = 1.0;
+  std::string zoneUnitName;        ///< e.g. "US Survey Feet", "Meters".
+  bool        transformOk = false;
+  std::string transformError;      ///< Why !transformOk.
+  double      gridFactor = 1.0;    ///< k_grid
+  double      seaFactor = 1.0;     ///< k_sea (1 when the sea level factor is off)
+  double      combined = 1.0;      ///< k = k_grid · k_sea
+  double      spheroidRadiusM = 0.0;  ///< R actually used (the ellipsoid's when the stored one is 0)
+  double      rotationRad = 0.0;   ///< θ, counter-clockwise
+};
+[[nodiscard]] DrawingTransformFactors ResolveDrawingTransform(const DrawingSettings& s, int drawingInsUnits,
+                                                              bool withTransform = true);
+/// REQ-360: the transform's typed values that can never work, as a sentence, or "" — checked only
+/// while Apply transform settings is on. Pure (no dictionary): a scale factor that is not > 0, a
+/// spheroid radius ≤ 0, R + h ≤ 0, and a rotation point coincident with the reference point.
+[[nodiscard]] std::string ValidateDrawingTransform(const DrawingSettings& s);
+/// REQ-358 item 4 + REQ-360 on a WORLD point in drawing units: grid (zone unit) of it.
+[[nodiscard]] geo::GeoResult DrawingWorldToGrid(const DrawingSettings& s, int drawingInsUnits, double worldX,
+                                                double worldY);
+/// The exact inverse of \ref DrawingWorldToGrid: the WORLD point (drawing units) of a grid coordinate.
+[[nodiscard]] geo::GeoResult GridToDrawingWorld(const DrawingSettings& s, int drawingInsUnits, double easting,
+                                                double northing);
+/// REQ-358 item 4: latitude/longitude (degrees, x = longitude) of a LOCAL drawing point, in the
+/// zone's own datum.
+[[nodiscard]] geo::GeoResult DrawingPointToLatLong(const AppCommandState& st, double localX, double localY);
+
+// --- Geolocation tab (REQ-359, GitHub issue #582 increment 3; CadCommands_Geo.cpp) ------------------
+/// The contextual Geolocation tab is shown exactly while the active drawing is geolocated (item 1).
+[[nodiscard]] inline bool GeolocationRibbonTabVisible(const AppCommandState& st) {
+  return st.drawingSettings.Geolocated();
+}
+/// The inverse of \ref DrawingPointToGrid: the LOCAL drawing point (x, y) of a grid coordinate in the
+/// zone's unit. Fails, with the reason, exactly when DrawingPointToGrid would.
+[[nodiscard]] geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing);
+
+/// WGS 84 latitude/longitude ↔ a LOCAL drawing point (REQ-363 item 3, ADR-064 (b)): the same chain as
+/// \ref DrawingPointToGrid / \ref GridToDrawingPoint plus the datum path to WGS 84, with the zone, the
+/// datum paths and the REQ-360 transformation resolved ONCE by \ref Open, so an online map can place
+/// thousands of tile points. Captures the drawing's settings, unit and origin at Open; reopen when any
+/// of them changes. UI thread only (CS-MAP, ADR-063 (c)).
+class DrawingWgs84Frame {
+ public:
+  /// False, with the reason, when the drawing's zone or transformation cannot be resolved.
+  bool Open(const AppCommandState& st, std::string* error);
+  [[nodiscard]] bool IsOpen() const { return converter_.IsOpen(); }
+  /// x = longitude, y = latitude (WGS 84) → local drawing point.
+  [[nodiscard]] geo::GeoResult LocalFromWgs84(double longitude, double latitude) const;
+  /// Local drawing point → WGS 84 (x = longitude).
+  [[nodiscard]] geo::GeoResult Wgs84FromLocal(double localX, double localY) const;
+
+ private:
+  geo::Wgs84GridConverter converter_;
+  bool                    applyTransform_ = false;
+  geo::LocalGridTransform transform_{};
+  double                  zoneUnitsPerDrawingUnit_ = 1.0;
+  double                  originX_ = 0.0;
+  double                  originY_ = 0.0;
+};
+/// "LAT 30°17'10.51249\"N\nLONG 97°44'21.71739\"W" — a Position Marker's default label.
+[[nodiscard]] std::string FormatLatLongLabel(double latitudeDeg, double longitudeDeg);
+/// Decimal degrees, or "D M S" (spaces or °'\" between) with an optional N/S (\p latitude) or E/W
+/// letter; S / W / a leading minus are negative. False when it does not parse or is out of range.
+[[nodiscard]] bool ParseGeoAngleDegrees(const std::string& raw, bool latitude, double* outDeg);
+/// Remove Location (REQ-359 item 2): zone → No Datum, No Projection and the geographic marker back to
+/// its default, as ONE undo step. False (logged) when the drawing is not geolocated.
+bool RemoveGeoLocation(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-363 item 8: choose the drawing's online map, as one undo step. False (logged) when the drawing
+/// is not geolocated and \p map is not Map Off; choosing the current map again changes nothing.
+bool SetOnlineMap(AppCommandState& st, DrawingSettings::OnlineMap map, std::vector<std::string>& log);
+/// REQ-364 item 1: Capture Area (\p pick false: the visible area) or Pick Area (\p pick true: two
+/// corners). Refused (logged) with Map Off, no location, or another command running.
+bool StartCaptureMapArea(AppCommandState& st, bool pick, std::vector<std::string>& log);
+/// REQ-364 item 5: stores \p area as one undo step and ends the command. Called by the map controller.
+void CommitMapCapture(AppCommandState& st, DrawingSettings::CapturedArea area, std::vector<std::string>& log);
+/// REQ-364 item 2: ends the command storing nothing, saying why. Called by the map controller.
+void FailMapCapture(AppCommandState& st, const std::string& why, std::vector<std::string>& log);
+/// REQ-364 item 5: removes every captured area, as one undo step. False (logged) when there is none.
+bool RemoveCapturedMapAreas(AppCommandState& st, std::vector<std::string>& log);
+/// Sets the geographic marker (REQ-359 item 4) to the LOCAL point (stored as WORLD) and a north
+/// direction in degrees CCW from +X. One undo step. False (logged) when not geolocated.
+bool SetGeographicMarker(AppCommandState& st, double localX, double localY, double northDeg,
+                         std::vector<std::string>& log);
+/// A Position Marker's circle radius in drawing units: \ref kPositionMarkerPlottedRadiusIn × scale.
+[[nodiscard]] float PositionMarkerRadiusWorld(const AppCommandState& st);
+/// Moves a marker and its label together.
+void CadPositionMarkerTranslate(CadPositionMarker* m, double dx, double dy, double dz);
+/// LOCAL box around marker \p i's circle and label (box select, zoom).
+void CadPositionMarkerLocalBox(const AppCommandState& st, size_t i, float* mnX, float* mnY, float* mxX, float* mxY);
+/// True when (x, y) LOCAL is within \p tolWorld of marker \p i's circle or on its label box.
+[[nodiscard]] bool CadPositionMarkerHit(const AppCommandState& st, size_t i, double x, double y, float tolWorld,
+                                        double* distSq);
+/// Opens the MTEXT editor on marker \p markerIndex's label; \p justPlaced makes the commit join the
+/// placement's undo step.
+void OpenPositionMarkerLabelEditor(AppCommandState& st, int markerIndex, bool justPlaced);
+/// Mark Position (REQ-359 item 3): places a Position Marker at a LOCAL point, labelled with its
+/// latitude/longitude, as one undo step, and opens the MTEXT editor on the label. Returns its index,
+/// or -1 (logged) when the point has no latitude/longitude (not geolocated, unknown zone, …).
+int PlacePositionMarkerAtLocal(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
+/// Mark Position ▸ Lat-Long: the same, at a latitude/longitude in the zone's datum.
+int PlacePositionMarkerAtLatLong(AppCommandState& st, double latitudeDeg, double longitudeDeg,
+                                 std::vector<std::string>& log);
+/// ROTATE / SCALE / MIRROR / STRETCH refuse a Position Marker by name (D-2026-09-29-e): removes every
+/// marker from the selection and logs "<verb> — N Position Marker(s) left unchanged …". Returns N.
+int DropPositionMarkersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log);
+
+void CadMultileaderTranslate(CadMultileader* ml, double dx, double dy, double dz);
+void CadMultileaderLocalBox(const CadMultileader& ml, float* mnX, float* mnY, float* mxX, float* mxY);
+[[nodiscard]] bool CadMultileaderHit(const CadMultileader& ml, double x, double y, float tolWorld,
+                                     double* distSq);
+int DropMultileadersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log);
+
+void StartMleaderCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartMleaderAddLeaderCommand(AppCommandState& st, std::vector<std::string>& log);
+void RemoveLeaderFromSelectedMultileader(AppCommandState& st, std::vector<std::string>& log);
+void CommitMleaderAddLeaderAt(AppCommandState& st, float tipX, float tipY, std::vector<std::string>& log);
+void ResetMleaderDraft(AppCommandState& st);
+void CommitMleaderLandingAt(AppCommandState& st, float landX, float landY, std::vector<std::string>& log);
+void FinishMleaderCommand(AppCommandState& st, std::vector<std::string>& log);
+void AbandonJustPlacedMultileader(AppCommandState& st);
+void StartGeoMarkPointCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartGeoMarkLatLongCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartGeoReorientMarkerCommand(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-360: start the Transformation tab's pick for \p target (the window hides until it ends).
+/// False (logged) while another command runs or when \p target is None.
+bool StartDrawingSettingsPick(AppCommandState& st, AppCommandState::DrawingSettingsPickState::Target target,
+                              std::vector<std::string>& log);
+/// REQ-362: what an AutoCAD / Civil 3D `GEODATA` object says. Read: copied out by the DWG importer
+/// (IO) and applied by \ref ApplyDwgGeoData. Write (item 2): built by \ref BuildDwgGeoData and
+/// encoded by the DWG exporter.
+struct DwgGeoData {
+  double      designX = 0.0;  ///< Design point, WCS drawing units.
+  double      designY = 0.0;
+  /// What GEODATA's reference point (the design point in the coordinate system) is, by its
+  /// coordinate type: 3 geographic = longitude / latitude (degrees), 2 projected grid = easting /
+  /// northing in the zone's unit; anything else (unknown, local grid) gives no grid reference.
+  enum class Reference { None, Geographic, ProjectedGrid };
+  Reference   reference = Reference::None;
+  double      refX = 0.0;  ///< Longitude or easting.
+  double      refY = 0.0;  ///< Latitude or northing.
+  double      northX = 0.0;  ///< North direction in the drawing; (0, 0) when the file has none.
+  double      northY = 0.0;
+  int         scaleEstimation = 1;  ///< 1 none, 2 user specified, 3 grid scale at reference point, 4 prismoidal
+  double      userScaleFactor = 1.0;
+  bool        seaLevelCorrection = false;
+  double      seaLevelElevation = 0.0;
+  double      projectionRadius = 0.0;
+  std::string coordinateSystemDefinition;  ///< A code, an XML definition, or empty (Civil 3D).
+  int         horizontalUnits = 0;         ///< AutoCAD units value (the INSUNITS codes); written only.
+  double      horizontalUnitScale = 1.0;   ///< Meters per drawing unit; written only.
+};
+/// REQ-362 item 2: the GEODATA a DWG save writes for this drawing — design point = the marker (WCS),
+/// reference = its latitude / longitude from the zone, north, the drawing unit, the zone code and
+/// REQ-360's scale settings. False, with \p why set, when there is no zone or the marker's
+/// latitude / longitude cannot be computed (an unknown zone code, a point outside the zone): then
+/// nothing is written, never a partial GEODATA.
+[[nodiscard]] bool BuildDwgGeoData(const AppCommandState& st, DwgGeoData* out, std::string* why);
+/// The coordinate-system code a GEODATA definition names: the definition itself when it is a bare
+/// code, else the `id` of its first `…CoordinateSystem` element; "" when it names none.
+[[nodiscard]] std::string GeoDataCoordinateSystemCode(const std::string& definition);
+/// REQ-362 item 1: sets the geographic marker (design point, north), the zone when the definition
+/// names one (a code the dictionary does not know is kept, REQ-358 item 5), and REQ-360's scale
+/// settings with the transform left off. No undo step (it is part of opening the file); logs what
+/// it set and, when there is no coordinate system, says so.
+void ApplyDwgGeoData(AppCommandState& st, const DwgGeoData& g, std::vector<std::string>& log);
+/// A viewport pick or typed point for GEOMARKPOINT / GEOREORIENTMARKER (LOCAL coordinates).
+bool SubmitGeoCommandPoint(AppCommandState& st, double localX, double localY, std::vector<std::string>& log);
+/// Typed input while a geolocation command is active; false when none is.
+bool HandleGeoCommandText(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+/// The dynamic-input / command-line prompt for the active geolocation command, or nullptr.
+[[nodiscard]] const char* GeoCommandPrompt(const AppCommandState& st);
+
+// --- CHPROP / MATCHPROP / LAYMCUR, the current colour (REQ-356) ------------------------------
+/// True for the types a linetype / lineweight edit applies to: line, circle, arc, ellipse,
+/// polyline, annotation and table — the set the Properties panel has always edited them on. Every
+/// other type (a solid body, a pipe run, a mesh, ...) takes layer and colour only (REQ-356 item 5).
+[[nodiscard]] bool CadLineStyleApplies(SelectedEntity::Type t);
+/// Linetype edit on the selection (REQ-356): the \ref CadApplyLayerToSelection shape — one undo
+/// step, pushed only when something changes — over the types \ref CadLineStyleApplies names.
+/// Returns how many changed; \p skipped (optional) receives how many selected objects the
+/// property does not apply to.
+int CadApplyLinetypeToSelection(AppCommandState& st, const std::string& linetype, int* skipped = nullptr);
+/// The same, for the lineweight in millimetres (\c -1 = ByLayer).
+int CadApplyLineweightToSelection(AppCommandState& st, float mm, int* skipped = nullptr);
+/// What \ref CadSelectionColor returns when the selected objects carry more than one colour.
+inline constexpr const char* kCadSelectionColorVaries = "*VARIES*";
+/// The colour storage the selected objects share, \ref kCadSelectionColorVaries when they differ,
+/// or "" when nothing selected carries one — the ribbon colour combo's preview (REQ-356).
+[[nodiscard]] std::string CadSelectionColor(const AppCommandState& st);
+/// The ribbon colour combo's pick (REQ-356, REQ-352's rule): recolours a selection (one undo
+/// step), leaving the current colour alone; with nothing selected, sets \ref
+/// AppCommandState::currentColor.
+void CadRibbonPickColor(AppCommandState& st, const std::string& color, std::vector<std::string>& log);
+/// True for \c Kind::ChProp / \c MatchProp / \c LayMCur.
+[[nodiscard]] bool IsPropCommandKind(AppCommandState::Kind k);
+void StartChPropCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartMatchPropCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartLayMCurCommand(AppCommandState& st, std::vector<std::string>& log);
+/// A property command's typed line — Enter included (an empty \p line). Returns false only when no
+/// property command is running.
+bool HandlePropCommandTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+/// The selection changed during a property command's pick step (a click or a closed window). The
+/// single-pick steps act at once — LAYMCUR, MATCHPROP's source and each MATCHPROP destination —
+/// the way AutoCAD's do; CHPROP's step waits for Enter. Called by the viewport after an
+/// accumulate click and by \ref SubmitViewportPick after a window.
+void CadPropCommandSelectionChanged(AppCommandState& st, std::vector<std::string>& log);
+/// The prompt for the property command's current step.
+[[nodiscard]] std::string CadPropCommandPromptText(const AppCommandState& st);
+/// Ends a property command (Esc, or its own finish) and clears its pick selection.
+void EndPropCommand(AppCommandState& st);
 /// True when \p e is currently isolated out. Entity types with no attributes are never hidden.
 bool CadSelectedEntityHidden(const AppCommandState& st, const SelectedEntity& e);
 /// ISOLATEOBJECTS — hide everything EXCEPT the current selection.
@@ -6559,7 +7895,7 @@ struct SubObjectHoverRow {
 /// Move the armed grip to (x, y) in local storage coordinates — the one place grip geometry is written, so
 /// the mouse drag and command-line distance entry cannot drift apart. No-op when no grip is armed.
 /// Callers own the undo snapshot and \ref BumpCadGpuCache.
-void ApplyEntityGripPoint(AppCommandState& st, float x, float y);
+void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z);
 
 void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::string>* log);
 
@@ -6596,6 +7932,12 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
 /// a tilted UCS, which is the half-agreement a tolerance-based acceptance would never catch.
 void ApplyRotationAboutUcsZ(AppCommandState& st, float bx, float by, float bz, float rad,
                             std::vector<std::string>& log);
+
+/// Rotate the whole selection in place by \p rad about the line through \p axisPoint along
+/// \p axisUnit — the rotate gizmo's X and Y rings (D-2026-09-28-b). The same in-place 3D turn typed
+/// ROTATE uses under a tilted UCS, with the same refusals. The caller owns the undo snapshot.
+void ApplyRotationAboutAxis(AppCommandState& st, const ray3d::Vec3& axisPoint,
+                            const ray3d::Vec3& axisUnit, float rad, std::vector<std::string>& log);
 
 /// Scale the whole selection uniformly by \p sc about (\p bx, \p by, \p bz) — the complete typed
 /// SCALE transform (REQ-329 increment 3, REQ-332 increment 2). The caller owns the undo snapshot.
@@ -6657,6 +7999,22 @@ inline constexpr int kGizmoAxisCount = 3;
 inline constexpr float kGizmoHandleLenPx = 70.f;
 /// Grab aperture around a handle, in screen pixels.
 inline constexpr float kGizmoHandleGrabPx = 7.f;
+/// A rotate ring whose normal is within this cosine of perpendicular to the view ray is seen
+/// (nearly) edge-on — a line on screen, round which a drag names no angle — so it is not pickable.
+/// About 5 degrees (D-2026-09-28-b).
+inline constexpr double kGizmoRingEdgeOnCos = 0.09;
+/// The move gizmo's PLANE handles (D-2026-09-28-c) are handle numbers 3, 4, 5 — after the three
+/// axes — for the UCS XY, YZ and ZX planes. Each is a square from the anchor out to this fraction of
+/// the handle length along its two axes.
+inline constexpr int kGizmoPlaneHandleFirst = 3;
+inline constexpr double kGizmoPlaneHandleFrac = 0.35;
+/// The two UCS axes (0 = X, 1 = Y, 2 = Z) spanning plane handle \p plane (0 = XY, 1 = YZ, 2 = ZX).
+inline void CadGizmoPlaneAxes(int plane, int* a, int* b) {
+  *a = plane;
+  *b = (plane + 1) % 3;
+}
+/// How many plane handles the gizmo has: 3 for an entity selection under Translate, else 0.
+[[nodiscard]] int CadGizmoPlaneHandleCountFor(const AppCommandState& st);
 
 /// Where the gizmo hangs, in WCS. False when there is nothing for it to hang off.
 ///
@@ -6694,6 +8052,31 @@ inline constexpr float kGizmoHandleGrabPx = 7.f;
 /// True when a gizmo should be drawn at all: \ref CadGizmoModeFor is not \c None and an anchor
 /// resolves. REQ-060's third acceptance bullet ("no gizmo when the selection is empty") is this.
 [[nodiscard]] bool CadGizmoVisible(const AppCommandState& st);
+
+/// True for \c Kind::Move3d / \c Rotate3d / \c Scale3d (GitHub issue #564 section 3).
+[[nodiscard]] bool IsGizmoCommandKind(AppCommandState::Kind k);
+/// Whether the gizmo has been ASKED for: the persistent `GIZMO` setting is on, or a 3D gizmo
+/// command is at its handles step. A selection alone never summons it (D-2026-09-28-a).
+[[nodiscard]] bool CadGizmoSummoned(const AppCommandState& st);
+/// 3DMOVE / 3DROTATE / 3DSCALE. Honours a pre-selection (straight to the handles), otherwise asks
+/// for objects, Enter when done. Refuses with a stated reason outside model space.
+void StartGizmoCommand(AppCommandState& st, AppCommandState::Kind kind,
+                       std::vector<std::string>& log);
+/// Ends a 3D gizmo command however it ends: abandons any armed drag (nothing has changed yet),
+/// restores \ref AppCommandState::gizmoOp and sets \c active back to \c None.
+void EndGizmoCommand(AppCommandState& st);
+/// Typed input to a running 3D gizmo command. Blank: confirm the selection, commit an armed drag,
+/// or end the command when nothing is armed. A number: the exact value — distance (move), degrees
+/// (rotate) or factor (scale) — along the grabbed handle, or along the only handle when there is
+/// just one. Returns false when no 3D gizmo command is running.
+bool HandleGizmoCommandTextInput(const std::string& line, AppCommandState& st,
+                                 std::vector<std::string>& log);
+/// The base point of a running 3D gizmo command, picked or typed (D-2026-09-28-c): the gizmo moves
+/// there and the command goes on to its handles. Ignored outside that step.
+void SubmitGizmoBasePoint(AppCommandState& st, double x, double y, double z,
+                          std::vector<std::string>& log);
+/// The prompt for the running 3D gizmo command's current step.
+[[nodiscard]] std::string CadGizmoCommandPromptText(const AppCommandState& st);
 
 /// Signed position along the line (\p anchor, \p axisDir) of the point on it nearest \p ray.
 ///
@@ -6767,6 +8150,14 @@ void ClearSelection(AppCommandState& st);
 void ApplySurveyPointClickSelection(AppCommandState& st, int surveyPointIndex, bool shiftModifier,
                                     std::vector<std::string>* log);
 void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anchorScreenX, float anchorScreenY);
+
+/// REQ-370 live preview: refreshes `st.selBoxPreview` with what releasing the selection box at
+/// (\p wx, \p wy) would add to the selection, using the very hit test the click uses
+/// (`ComputeSelectionFromRect`), so the lit objects are the selected objects. `st.selection` and the
+/// survey-point selection are left exactly as they were. Recomputed only when an input changed. Pass
+/// \p cam null in plan view, like the click does. Clears the preview when no box is open.
+void UpdateSelectionBoxPreview(AppCommandState& st, float wx, float wy, bool windowMode, const Camera* cam,
+                               float vpW, float vpH);
 
 void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Clears Shift+RMB one-shot snap (call on pick submit, cancel, reset, clear geometry).
@@ -6884,6 +8275,13 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
                                double* outMxY, int* outSkipped, const Viewport* vpFilter = nullptr);
 // The camera side of zoom-extents is `zoomframing::FrameWorldRect` (ZoomFraming.hpp) — pure, shared
 // by every fit path, and tested there (REQ-122).
+
+/// The drawing's TRUE 3D extents, in storage coordinates, for framing an orbited view (GitHub issue
+/// #564 §1, D-2026-09-28-d): every store ZOOM EXTENTS already sweeps, each with its elevation range,
+/// plus filled regions, block references and pipe runs. Far outliers are dropped by the same
+/// plan-centre rule \ref ComputeRobustWorldExtents uses. False when there is nothing to frame.
+bool ComputeWorldExtents3d(const AppCommandState& st, ray3d::Vec3* outMin, ray3d::Vec3* outMax,
+                           int* outSkipped);
 
 /// The box the section-clip indicator is sized to cover (REQ-341, D-2026-09-16-b), in storage
 /// coordinates: the drawing's extents as ZOOM EXTENTS measures them — every entity kind the clip can

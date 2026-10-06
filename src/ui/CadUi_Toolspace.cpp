@@ -1,8 +1,22 @@
 #include "CadUi.hpp"
 #include "AppIcon.hpp"
 #include "FontRegistry.hpp"
+#include "StringUtil.hpp"
+#include "ProjectPoints.hpp"
+#include "io/ProjectFiles.hpp"
+#include "io/ProjectTurnover.hpp"
 #include "ToolspaceCatalog.hpp"
+#include "PdfViewerWindow.hpp"
+#include "commands/ProjectFiles.hpp"
 #include "WinFileDialogs.hpp"
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -424,6 +438,234 @@ void DrawPointGroupsFolderContext(AppCommandState& cmd, std::vector<std::string>
   EndTsContext();
 }
 
+
+// Show a file in the system file manager with it selected.
+void RevealPathInFileManager(const std::string& utf8Path) {
+#if defined(_WIN32)
+  const std::wstring w = std::filesystem::u8path(utf8Path).make_preferred().wstring();
+  const std::wstring params = L"/select,\"" + w + L"\"";
+  ::ShellExecuteW(nullptr, L"open", L"explorer.exe", params.c_str(), nullptr, SW_SHOWNORMAL);
+#else
+  (void)utf8Path;
+#endif
+}
+
+// REQ-379 clause 3 (#696 P6): the Project Files section - the project's tracked items by folder, with a
+// link badge on files that will not travel and a flag on files that are missing.
+void DrawProjectFilesFolder(AppCommandState& cmd, std::vector<std::string>* log) {
+  std::string openDrawing, openPdf, revealPath;
+  const int tab = cmd.activeDrawingIdx;
+  if (tab < 1 || tab >= static_cast<int>(cmd.drawingTabs.size()))
+    return;
+  const std::uint32_t uid = cmd.drawingTabs[static_cast<size_t>(tab)].projectUid;
+  const AppCommandState::ProjectSession* s = nullptr;
+  for (const auto& ps : cmd.openProjects)
+    if (ps.uid == uid)
+      s = &ps;
+  if (s == nullptr)
+    return;
+  ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+  const bool open = TsTreeNode("##ts_projfiles", kFolder, "c3d_point", "Project Files");
+  if (!open)
+    return;
+  const gsproj::Project& p = s->project;
+  if (p.items.empty())
+    ImGui::TextDisabled("No files tracked yet. Save a drawing to record it.");
+  // Group by the folder an item sits in (its first path segment); a link has no project folder.
+  std::map<std::string, std::vector<const gsproj::TrackedItem*>> byFolder;
+  for (const gsproj::TrackedItem& it : p.items) {
+    std::string folder = "Linked (outside the project)";
+    if (it.kind == gsproj::kKindInProject) {
+      const size_t cut = it.path.find('/');
+      folder = cut == std::string::npos ? std::string("(project root)") : it.path.substr(0, cut);
+    } else if (it.kind != gsproj::kKindLocalLink) {
+      folder = "Unavailable";
+    }
+    byFolder[folder].push_back(&it);
+  }
+  std::error_code ec;
+  for (const auto& [folder, items] : byFolder) {
+    ImGui::TextDisabled("%s", folder.c_str());
+    for (const gsproj::TrackedItem* it : items) {
+      const std::string abs = projfiles::ResolveItem(p, *it);
+      const bool missing = !abs.empty() && !std::filesystem::exists(std::filesystem::u8path(abs), ec);
+      const std::string name = std::filesystem::u8path(it->path).filename().u8string();
+      // Explorer-style row: double-click opens the file, right-click offers the actions.
+      ImGui::PushID(it->path.c_str());
+      ImGui::PushStyleColor(ImGuiCol_Text, missing ? ImVec4(0.85f, 0.25f, 0.2f, 1.f) : ImGui::GetStyleColorVec4(ImGuiCol_Text));
+      ImGui::Bullet();
+      const std::string rowLabel = name + (it->kind == gsproj::kKindLocalLink ? "  [link]" : "") +
+                                   (missing ? "  (missing)" : "");
+      ImGui::Selectable(rowLabel.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
+      ImGui::PopStyleColor();
+      const bool rowHovered = ImGui::IsItemHovered();
+      std::string ext = std::filesystem::u8path(it->path).extension().u8string();
+      std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      const bool isDrawing = ext == ".dwg";
+      const bool isPdf = ext == ".pdf";
+      const bool canOpen = (isDrawing || isPdf) && !missing && !abs.empty();
+      if (canOpen && rowHovered && ImGui::IsMouseDoubleClicked(0))
+        (isDrawing ? openDrawing : openPdf) = abs;
+      const bool showTip = rowHovered && !ImGui::IsPopupOpen("##pfctx");
+      if (BeginTsContext("##pfctx")) {
+        if (ImGui::MenuItem(isPdf ? "Open in PDF Viewer" : "Open", nullptr, false, canOpen))
+          (isDrawing ? openDrawing : openPdf) = abs;
+        ImGui::Separator();
+        if (ImGui::MenuItem("Open Containing Folder", nullptr, false, !abs.empty() && !missing))
+          revealPath = abs;
+        if (ImGui::MenuItem("Copy Full Path", nullptr, false, !abs.empty()))
+          ImGui::SetClipboardText(abs.c_str());
+        EndTsContext();
+      }
+      ImGui::PopID();
+      if (showTip) {
+        std::string tip = it->path;
+        if (it->kind == gsproj::kKindLocalLink)
+          tip += "\nA link: this file will not travel with the project.";
+        projturn::Record rec;
+        std::string      why;
+        if (projturn::IsRecordPath(p, it->path) &&
+            projturn::Read(p.Folder() / std::filesystem::u8path(it->path), &rec, &why))
+          tip += "\nTurnover to " + rec.recipient + " on " + rec.date + ": " + std::to_string(rec.items.size()) +
+                 " file(s)";
+        if (!it->associations.empty()) {
+          tip += "\nAttached to:";
+          for (const std::string& a : it->associations)
+            tip += "\n  " + a;
+        }
+        ImGui::SetTooltip("%s", tip.c_str());
+      }
+    }
+  }
+  if (ImGui::Button("Project Health..."))
+    cmd.projectHealthUid = uid;
+  ImGui::SameLine();
+  ImGui::BeginDisabled(s->readOnly);
+  if (ImGui::Button("Add PDF...") && log != nullptr) {  // REQ-379 clause 5
+    char picked[1024] = {};
+    if (BrowseOpenFilePdfUtf8(picked, sizeof(picked)) && picked[0] != '\0')
+      AddPdfToProject(cmd, picked, *log);
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(s->readOnly);
+  if (ImGui::Button("Create Turnover...")) {  // REQ-381
+    cmd.projectTurnoverPrompt = {};
+    cmd.projectTurnoverPrompt.projectUid = uid;
+  }
+  ImGui::EndDisabled();
+  ImGui::TreePop();
+
+  // Deferred: opening a drawing can rearrange the tabs and projects this function walked.
+  std::vector<std::string> discard;
+  if (!revealPath.empty())
+    RevealPathInFileManager(revealPath);
+  if (!openPdf.empty())
+    OpenPdfInViewer(openPdf);  // REQ-387: the built-in viewer, never an outside program
+  if (!openDrawing.empty())
+    OpenDrawingInNewTab(cmd, log != nullptr ? *log : discard, openDrawing.c_str());
+}
+
+// REQ-377 (#696 P4): the Survey Database section — which points of the project database this drawing
+// shows. Only a project drawing that shares the database has one. Every edit changes the drawing's
+// rules; SyncProjectPoints rebuilds the point view on the next frame.
+void DrawSurveyDatabaseFolder(AppCommandState& cmd, std::vector<std::string>* log) {
+  if (ActiveProjectDb(cmd) == nullptr)
+    return;
+  ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+  const bool open = TsTreeNode("##ts_surveydb", kFolder, "c3d_point", "Survey Database");
+  if (!open)
+    return;
+
+  projpts::Rules& r = cmd.pointVisibility;
+  bool changed = false;
+  const ProjectPointCounts n = CountProjectPoints(cmd);
+  ImGui::TextDisabled("%zu of %zu project points shown here", n.shown, n.total);
+  ImGui::TextDisabled("Filters combine: a point must match every one you fill in.");
+
+  ImGui::SetNextItemWidth(-1.f);
+  changed |= ImGui::InputTextWithHint("##sdb_ids", "Point numbers, e.g. 1-500, 1200", &r.idRanges);
+  std::vector<std::string> bad;
+  if (!r.idRanges.empty()) {
+    [[maybe_unused]] const auto parsed = ParseIdRanges(r.idRanges, &bad);
+    if (!bad.empty())
+      ImGui::TextColored(ImVec4(0.85f, 0.25f, 0.2f, 1.f), "Unreadable number range: %s", bad.front().c_str());
+  }
+  ImGui::SetNextItemWidth(-1.f);
+  changed |= ImGui::InputTextWithHint("##sdb_desc", "Description, e.g. EG*", &r.description);
+
+  changed |= ImGui::Checkbox("Elevation between##sdb_elev", &r.useElevation);
+  if (r.useElevation) {
+    ImGui::SetNextItemWidth(90.f);
+    changed |= ImGui::InputDouble("##sdb_emin", &r.elevMin, 0.0, 0.0, "%.3f");
+    ImGui::SameLine();
+    ImGui::TextUnformatted("and");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90.f);
+    changed |= ImGui::InputDouble("##sdb_emax", &r.elevMax, 0.0, 0.0, "%.3f");
+  }
+
+  ImGui::SetNextItemWidth(-1.f);
+  if (ImGui::BeginCombo("##sdb_group", r.group.empty() ? "Point group: (any)" : ("Point group: " + r.group).c_str())) {
+    if (ImGui::Selectable("(any)", r.group.empty())) {
+      r.group.clear();
+      changed = true;
+    }
+    for (const PointGroup& g : cmd.pointGroups)
+      if (ImGui::Selectable(g.name.c_str(), g.name == r.group)) {
+        r.group = g.name;
+        changed = true;
+      }
+    ImGui::EndCombo();
+  }
+  ImGui::SetNextItemWidth(-1.f);
+  if (ImGui::BeginCombo("##sdb_source",
+                        r.sourceDrawing.empty() ? "Source drawing: (any)" : ("Source drawing: " + r.sourceDrawing).c_str())) {
+    if (ImGui::Selectable("(any)", r.sourceDrawing.empty())) {
+      r.sourceDrawing.clear();
+      changed = true;
+    }
+    for (const std::string& s : ProjectPointSources(cmd))
+      if (ImGui::Selectable(s.c_str(), s == r.sourceDrawing)) {
+        r.sourceDrawing = s;
+        changed = true;
+      }
+    ImGui::EndCombo();
+  }
+
+  if (ImGui::Button("Reset filters")) {
+    r.idRanges.clear();
+    r.description.clear();
+    r.useElevation = false;
+    r.group.clear();
+    r.sourceDrawing.clear();
+    changed = true;
+  }
+  ImGui::SameLine();
+  const bool anySelected = !cmd.selectedSurveyPointIndices.empty();
+  ImGui::BeginDisabled(!anySelected);
+  if (ImGui::Button("Hide selected here") && log != nullptr) {
+    const int hid = HideSelectedPointsHere(cmd);
+    log->push_back("SURVEY DATABASE — hid " + std::to_string(hid) +
+                   " point(s) in this drawing only; they stay in the project database and in other drawings.");
+  }
+  ImGui::EndDisabled();
+  if (!r.hidden.empty()) {
+    ImGui::TextDisabled("%zu point(s) hidden in this drawing only", r.hidden.size());
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Show them again")) {
+      r.hidden.clear();
+      changed = true;
+    }
+  }
+  if (!r.shown.empty() && r.Filtering())
+    ImGui::TextDisabled("Points created in this drawing stay visible whatever the filters say.");
+
+  if (changed)
+    BumpCadGpuCache(cmd);  // the rules are saved with the drawing
+  ImGui::TreePop();
+}
+
 void DrawFeatureLinesFolderContext(AppCommandState& cmd, std::vector<std::string>* log) {
   if (!BeginTsContext("##flfoldctx"))
     return;
@@ -743,6 +985,21 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
   }
 }
 
+// The Project tab: what belongs to the project the active drawing is in (not to the drawing itself).
+void DrawProjectTree(AppCommandState& cmd, std::vector<std::string>* log) {
+  const std::string projName = ProjectNameForTab(cmd, cmd.activeDrawingIdx);
+  if (projName.empty()) {
+    ImGui::TextDisabled("The active drawing is not in a project.");
+    return;
+  }
+  ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+  if (!TsTreeNode("##ts_proj_root", ImGuiTreeNodeFlags_DefaultOpen | kFolder, "New_Drawing", projName.c_str()))
+    return;
+  DrawSurveyDatabaseFolder(cmd, log);
+  DrawProjectFilesFolder(cmd, log);
+  ImGui::TreePop();
+}
+
 void DrawProspectorTree(AppCommandState& cmd, std::vector<std::string>* log, TsPending& pending) {
   const std::string drawing = ToolspaceActiveDrawingName(cmd);
   ImGui::SetNextItemOpen(true, ImGuiCond_Once);
@@ -772,7 +1029,7 @@ void DrawProspectorTree(AppCommandState& cmd, std::vector<std::string>* log, TsP
   }
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  const bool surfFoldOpen = TsTreeNode("##ts_surffold", kFolder, "c3d_surfaces", "Surfaces");
+  const bool surfFoldOpen =TsTreeNode("##ts_surffold", kFolder, "c3d_surfaces", "Surfaces");
   DrawSurfacesFolderContext(cmd, log);
   if (surfFoldOpen) {
     for (size_t i = 0; i < cmd.cadSurfaces.size(); ++i)
@@ -994,8 +1251,14 @@ void ApplyCreatedSurfaceFields(AppCommandState& cmd, const std::string& name, co
   CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(ni)];
   s.description = description;
   s.styleName = styleName;
-  if (static_cast<size_t>(ni) < cmd.cadSurfaceAttrs.size())
-    cmd.cadSurfaceAttrs[static_cast<size_t>(ni)].layer = layer.empty() ? std::string("0") : layer;
+  // The surface was created on its Object Layers layer (REQ-361); a layer picked here (always one of
+  // the drawing's own) replaces it. The unpicked default is left to the creator, which also falls
+  // back to the row's layer when the name cannot be part of a layer name.
+  const std::string chosen = StringUtil::trimCopy(layer);
+  if (static_cast<size_t>(ni) < cmd.cadSurfaceAttrs.size() && !chosen.empty() &&
+      chosen != ResolveObjectLayer(cmd.drawingSettings, ObjectLayerKind::Surface, name) &&
+      !cmd.drawingSettings.ObjectLayer(ObjectLayerKind::Surface).locked)
+    cmd.cadSurfaceAttrs[static_cast<size_t>(ni)].layer = EnsureDrawingLayer(cmd, chosen);
 }
 
 void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
@@ -1003,6 +1266,7 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
   static std::string name;
   static std::string description;
   static std::string layer;
+  static bool layerChosen = false;  // REQ-361: follows the name's Object Layers layer until chosen
   static std::string styleName;
   static std::string error;
   static int kindIdx = 0;
@@ -1015,7 +1279,7 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
     SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
     name = NextSurfaceName(cmd);
     description.clear();
-    layer = cmd.currentLayer.empty() ? std::string("0") : cmd.currentLayer;
+    layerChosen = false;
     styleName = SurfaceStyles::kStandardName;
     error.clear();
     kindIdx = 0;
@@ -1130,19 +1394,30 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
     surfaceCombo("##volcomp", &volComp, kind == CreateSurfaceKind::GridVolume);
   }
 
+  // REQ-361 item 4: the Object Layers layer for this name, until a layer is chosen; a Locked row
+  // keeps it (read-only).
+  const bool layerLocked = cmd.drawingSettings.ObjectLayer(ObjectLayerKind::Surface).locked;
+  if (!layerChosen || layerLocked)
+    layer = ResolveObjectLayer(cmd.drawingSettings, ObjectLayerKind::Surface, name);
   ImGui::TextUnformatted("Surface layer");
   ImGui::SameLine(140.f);
   ImGui::SetNextItemWidth(-40.f);
+  ImGui::BeginDisabled(layerLocked);
   if (ImGui::BeginCombo("##cslayer", layer.c_str())) {
     for (const CadLayerRow& row : cmd.drawingLayerTable) {
       const bool sel = (layer == row.name);
-      if (ImGui::Selectable(row.name.c_str(), sel))
+      if (ImGui::Selectable(row.name.c_str(), sel)) {
         layer = row.name;
+        layerChosen = true;
+      }
       if (sel)
         ImGui::SetItemDefaultFocus();
     }
     ImGui::EndCombo();
   }
+  ImGui::EndDisabled();
+  if (layerLocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("Locked in Drawing Settings > Object Layers.");
   ImGui::SameLine();
   if (ImGui::Button("...##cslaybtn", ImVec2(28.f, 0.f)))
     cmd.showLayerManagerWindow = true;
@@ -1330,9 +1605,25 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.f, 5.f));
   const char* comboLabel = (cmd.toolspaceTab == AppCommandState::ToolspaceTab::Settings)
                                ? "Active Drawing Settings View"
-                               : "Active Drawing View";
+                           : (cmd.toolspaceTab == AppCommandState::ToolspaceTab::Project) ? "Project View"
+                                                                                          : "Active Drawing View";
+  // REQ-374 clause 8: the Toolspace header names the active drawing's project (nothing when standalone).
+  if (const std::string projName = ProjectNameForTab(cmd, cmd.activeDrawingIdx); !projName.empty()) {
+    ImGui::TextColored(kTsAccent, "Project: %s%s", projName.c_str(),
+                       ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx) ? "  (read-only)" : "");
+    // REQ-379 clause 6: Refresh looks for new files and asks before tracking any.
+    ImGui::SameLine();
+    ImGui::BeginDisabled(ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx));
+    if (ImGui::SmallButton("Refresh") && log != nullptr)
+      RefreshProjectFiles(cmd, *log);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip("Look for new files in the project folder and choose which to track.");
+  }
   ImGui::SetNextItemWidth(-1.f);
   if (ImGui::BeginCombo("##ts_view", comboLabel)) {
+    if (ImGui::Selectable("Project View", cmd.toolspaceTab == AppCommandState::ToolspaceTab::Project))
+      cmd.toolspaceTab = AppCommandState::ToolspaceTab::Project;
     if (ImGui::Selectable("Active Drawing View",
                           cmd.toolspaceTab == AppCommandState::ToolspaceTab::Prospector))
       cmd.toolspaceTab = AppCommandState::ToolspaceTab::Prospector;
@@ -1355,6 +1646,17 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kTsSelHov);
   ImGui::PushStyleColor(ImGuiCol_HeaderActive, kTsAccent);
   ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.24f, 0.24f, 0.24f, 1.f));
+  // Widgets inside the tree (Survey Database filters, Project Files buttons) sit on the light paper too:
+  // light fields and buttons with dark text, never the dark theme's frames.
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(1.f, 1.f, 1.f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.93f, 0.95f, 1.f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.88f, 0.92f, 1.f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.93f, 0.94f, 0.96f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.86f, 0.90f, 0.97f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.78f, 0.85f, 0.95f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_CheckMark, kTsInk);
+  ImGui::PushStyleColor(ImGuiCol_InputTextCursor, kTsInk);
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(kTsPaper.x, kTsPaper.y, kTsPaper.z, 0.99f));
   ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.f);
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 6.f));
   ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 20.f);
@@ -1369,6 +1671,8 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::BeginChild("##ts_tree", ImVec2(0.f, treeH), true);
   if (cmd.toolspaceTab == AppCommandState::ToolspaceTab::Settings)
     DrawSettingsTree(cmd);
+  else if (cmd.toolspaceTab == AppCommandState::ToolspaceTab::Project)
+    DrawProjectTree(cmd, log);
   else
     DrawProspectorTree(cmd, log, pending);
   ImGui::EndChild();
@@ -1382,7 +1686,7 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   treeStyle.TreeLinesSize = prevTreeLinesSize;
   treeStyle.TreeLinesRounding = prevTreeLinesRound;
   ImGui::PopStyleVar(4);
-  ImGui::PopStyleColor(8);
+  ImGui::PopStyleColor(17);
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kTsChromeHi);
   ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.12f, 0.12f, 0.12f, 1.f));
@@ -1397,6 +1701,8 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::SameLine(0.f, 4.f);
   ImGui::PushStyleColor(ImGuiCol_ChildBg, BlueTintNeutral(ImVec4(0.14f, 0.14f, 0.14f, 1.f), kCadThemeBlueTintDark));
   ImGui::BeginChild("##ts_tabs", ImVec2(tabW, 0.f), false, ImGuiWindowFlags_NoScrollbar);
+  if (SideTab("##tab_project", "Project", cmd.toolspaceTab == AppCommandState::ToolspaceTab::Project, tabW))
+    cmd.toolspaceTab = AppCommandState::ToolspaceTab::Project;
   if (SideTab("##tab_prospector", "Prospector", cmd.toolspaceTab == AppCommandState::ToolspaceTab::Prospector,
               tabW))
     cmd.toolspaceTab = AppCommandState::ToolspaceTab::Prospector;

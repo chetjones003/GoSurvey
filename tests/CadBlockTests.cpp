@@ -1,3 +1,4 @@
+#include "commands/PaperSpace.hpp"
 #include "util/cadblock.hpp"
 #include "util/brep.hpp"
 #include "util/ucs.hpp"
@@ -74,6 +75,27 @@ TEST_CASE("ByBlock color resolves from the insert", "[issue124][block]") {
   CHECK(r.color == "1");
 }
 
+TEST_CASE("Layer-0 ByLayer content follows the insert's layer and colour", "[issue564][block]") {
+  EntityAttributes prim;  // layer "0", ByLayer — how a library part is drawn
+  EntityAttributes insert;
+  insert.layer = "FITTINGS";
+  insert.color = "3";
+  const EntityAttributes r = CadBlockResolveAttr(prim, insert);
+  CHECK(r.layer == "FITTINGS");
+  CHECK(r.color == "3");
+}
+
+TEST_CASE("Content on its own layer keeps its layer and ByLayer colour", "[issue564][block]") {
+  EntityAttributes prim;
+  prim.layer = "BOLTS";
+  EntityAttributes insert;
+  insert.layer = "FITTINGS";
+  insert.color = "3";
+  const EntityAttributes r = CadBlockResolveAttr(prim, insert);
+  CHECK(r.layer == "BOLTS");
+  CHECK(r.color == "ByLayer");
+}
+
 TEST_CASE("Mirror of a reference flips insertion across the axis", "[issue124][block]") {
   CadBlockRef r;
   r.xf.x = 4.f;
@@ -127,6 +149,82 @@ TEST_CASE("Visibility state hides unmatched primitives", "[issue124][block]") {
   std::vector<CadBlockWorldSeg> segs;
   CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
   REQUIRE(segs.size() == 1);
+}
+
+TEST_CASE("Linear stretch dynamic grip updates block geometry (issue #618 inc4)", "[issue618][inc4][block]") {
+  CadBlockDefinition def;
+  def.name = "PANEL";
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockParameter p;
+  p.name = "Width";
+  p.kind = CadBlockParamKind::Linear;
+  p.value = 2.f;
+  p.minValue = 0.f;
+  p.maxValue = 10.f;
+  def.parameters.push_back(p);
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  def.actions.push_back(stretch);
+  REQUIRE(CadBlockHasLinearStretchDyn(def));
+  CHECK(CadBlockDynGripCount(def) == 2);
+
+  CadBlockRef r;
+  r.defName = def.name;
+  r.paramState = def.parameters;
+  std::vector<CadBlockDefinition> defs;
+  defs.push_back(def);
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  CHECK(segs[0].x1 == Catch::Approx(4.f).margin(0.01f));
+
+  float gx = 0.f;
+  float gy = 0.f;
+  REQUIRE(CadBlockDynGripWorld(def, r, 1, &gx, &gy, nullptr));
+  CadBlockApplyDynGripDrag(&r, def, 1, gx + 2.f, gy);
+  segs.clear();
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  CHECK(segs[0].x1 == Catch::Approx(8.f).margin(0.01f));
+}
+
+TEST_CASE("dynamicAnonymous instance geometry is not re-stretched by GoSurvey actions (issue #618 inc2)",
+          "[issue618][block]") {
+  CadBlockDefinition def;
+  def.name = "*U7";
+  def.dynamicAnonymous = true;
+  def.content.lines = {0.f, 0.f, 0.f, 5.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  stretch.threshold = -1.f;
+  def.actions.push_back(stretch);
+  CadBlockParameter p;
+  p.name = "Width";
+  p.value = 10.f;
+  def.parameters.push_back(p);
+
+  CadBlockRef r;
+  r.defName = def.name;
+  r.paramState.push_back(p);
+  std::vector<CadBlockDefinition> defs;
+  defs.push_back(def);
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  const float span = std::hypot(segs[0].x1 - segs[0].x0, segs[0].y1 - segs[0].y0);
+  CHECK(span == Catch::Approx(5.f).margin(0.001f));
 }
 
 TEST_CASE("Matchline dynamics stretch the negative end and flip labels", "[issue124][block]") {
@@ -401,4 +499,16 @@ TEST_CASE("CadBlockApplyConnectionModeOffset slides the fitting along its port n
   CadBlockSnapInsertToConnection(src, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, &noModeXf);
   CadBlockApplyConnectionModeOffset(src, nullptr, &noModeXf);
   CHECK(noModeXf.z == Catch::Approx(0.f).margin(0.001));
+}
+
+TEST_CASE("Annotative block ref scales insert for layout viewport draw (issue #622)", "[block][issue622]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 20.f;
+  CadBlockRef ref;
+  ref.annotative = true;
+  ref.xf.sx = 2.f;
+  ref.xf.sy = 2.f;
+  const CadBlockRef out = CadBlockRefForViewportDraw(ref, vp, 40.f);
+  REQUIRE(out.xf.sx == Catch::Approx(1.f));
+  REQUIRE(out.xf.sy == Catch::Approx(1.f));
 }

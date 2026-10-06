@@ -181,9 +181,9 @@ if errorlevel 1 exit /b 1
 
 echo.
 if "%VSMULTI%"=="1" (
-  echo Built (%CFGNAME%, %VSCONFIG%): %CD%\%BUILDDIR%\%VSCONFIG%\GoSurvey.exe
+  echo Built ^(%CFGNAME%, %VSCONFIG%^): %CD%\%BUILDDIR%\%VSCONFIG%\GoSurvey.exe
 ) else (
-  echo Built (%CFGNAME%): %CD%\%BUILDDIR%\GoSurvey.exe
+  echo Built ^(%CFGNAME%^): %CD%\%BUILDDIR%\GoSurvey.exe
 )
 exit /b 0
 

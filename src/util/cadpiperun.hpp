@@ -1,7 +1,8 @@
 #pragma once
 
 /// Pipe run solid generation (GitHub issue #486 increment B1 / REQ-345), extended with automatic
-/// bend filleting (increment B2 follow-up, user-requested 2026-09-17). Header-only so Catch2 can
+/// bend filleting (increment B2 follow-up, user-requested 2026-09-17) and with a HOLLOW bore of a
+/// stated wall thickness (D-2026-09-23-a, user-requested). Header-only so Catch2 can
 /// cover the NPS lookup and the swept solids without GL, the same reason cadblock.hpp is.
 ///
 /// A `CadPipeRun` (CadEntities.hpp) stores only its path and a nominal-size LABEL — never a
@@ -17,26 +18,61 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <string_view>
 #include <vector>
 
-/// One entry of the standard NPS (nominal pipe size) → outer-diameter table. Outer diameter alone
-/// is what a swept pipe solid needs — wall thickness (which pressure class actually governs) does
-/// not change the modeled OD, so the table is keyed on size only, not size+class.
+/// One entry of the standard NPS (nominal pipe size) table: the outer diameter a run of that size
+/// is modelled at, and the **schedule 40** wall thickness used when the user does not state one
+/// (D-2026-09-23-a). The OD is what the swept solid's outside comes from; the wall is what makes it
+/// hollow, and is a DEFAULT here rather than a fact about the run — a run carries its own thickness
+/// (`CadPipeRun::wallThicknessIn`), because a real line is specified by schedule or by wall, not by
+/// size alone.
 struct CadPipeNpsEntry {
-  double nps;    ///< nominal size in inches, e.g. 4.0 for "4in"
-  double odIn;   ///< outer diameter in inches
+  double nps;         ///< nominal size in inches, e.g. 4.0 for "4in"
+  double odIn;        ///< outer diameter in inches
+  double sch40WallIn; ///< schedule 40 wall thickness in inches (ASME B36.10M) — except 22in, see
+                      ///< the note on \ref kCadPipeNpsTable
+  const char* colorHex; ///< the size's default display colour, `#RRGGBB` (GitHub issue #564 §7)
 };
 
-/// Standard-wall NPS → OD table for the sizes this codebase's fittings library targets (issue
-/// #486). Deliberately small and exact-match only: a size the table does not carry is a SPEC GAP
-/// for the catalog (increment B4), not something to interpolate or guess.
+/// Standard-wall NPS → OD + schedule-40 wall + default colour table for the sizes this codebase
+/// models (issue #486; extended to 21 sizes by GitHub issue #564 §7 / REQ-353). Deliberately
+/// exact-match only: a size the table does not carry is a SPEC GAP for the catalog, not something
+/// to interpolate or guess.
+///
+/// **22in has no schedule 40** in ASME B36.10M (it goes Sch 30 0.500 → Sch 60 0.875), so its row
+/// carries the STANDARD-weight wall, 0.375, instead (D-2026-09-28-i) — the only row where the
+/// `sch40WallIn` column is not literally schedule 40.
+///
+/// The colour column IS the size palette (REQ-353, D-2026-09-28-i, issue #564 Q5 "built-in, one
+/// table"): a new run is stamped with its size's colour, so a size and its colour live on one line
+/// and cannot drift apart. It is a default, not a lock — the run's colour is an ordinary entity
+/// colour afterwards, and an edit (or `ByLayer`) wins.
 inline constexpr CadPipeNpsEntry kCadPipeNpsTable[] = {
-    {0.5, 0.840},  {0.75, 1.050}, {1.0, 1.315},  {1.25, 1.660}, {1.5, 1.900},
-    {2.0, 2.375},  {2.5, 2.875}, {3.0, 3.500},  {4.0, 4.500},  {6.0, 6.625},
-    {8.0, 8.625},  {10.0, 10.750}, {12.0, 12.750},
+    {0.5, 0.840, 0.109, "#FF3B30"},    // red
+    {0.75, 1.050, 0.113, "#FF7A00"},   // orange
+    {1.0, 1.315, 0.133, "#FFC400"},    // amber
+    {1.25, 1.660, 0.140, "#E8E80F"},   // yellow
+    {1.5, 1.900, 0.145, "#A8E00F"},    // yellow-green
+    {2.0, 2.375, 0.154, "#2ECC40"},    // green
+    {2.5, 2.875, 0.203, "#00C49A"},    // teal
+    {3.0, 3.500, 0.216, "#00BCD4"},    // cyan
+    {3.5, 4.000, 0.226, "#00A2FF"},    // azure
+    {4.0, 4.500, 0.237, "#2D6CDF"},    // blue
+    {5.0, 5.563, 0.258, "#5A4FE0"},    // indigo
+    {6.0, 6.625, 0.280, "#8E44E0"},    // violet
+    {8.0, 8.625, 0.322, "#C44FE0"},    // purple
+    {10.0, 10.750, 0.365, "#E84393"},  // magenta
+    {12.0, 12.750, 0.406, "#E0466B"},  // rose
+    {14.0, 14.000, 0.438, "#A0522D"},  // sienna
+    {16.0, 16.000, 0.500, "#C87137"},  // copper
+    {18.0, 18.000, 0.562, "#8D6E63"},  // taupe
+    {20.0, 20.000, 0.594, "#6C8EBF"},  // steel blue
+    {22.0, 22.000, 0.375, "#B0A160"},  // olive — STD wall, B36.10M has no Sch 40 at 22in
+    {24.0, 24.000, 0.688, "#B0B7C3"},  // light slate
 };
 
 /// Parses an NPS label like `"4in"` or `"1.5in"` into inches. Returns false for anything that
@@ -88,6 +124,92 @@ inline constexpr CadPipeNpsEntry kCadPipeNpsTable[] = {
     }
   }
   return false;
+}
+
+/// The table row for \p nominalSize (a label like `"4in"`), or nullptr for an unparsable label or a
+/// size the table does not carry.
+[[nodiscard]] inline const CadPipeNpsEntry* CadPipeNpsFind(std::string_view nominalSize) {
+  double nps = 0.0;
+  if (!CadParsePipeNominalSizeInches(nominalSize, &nps))
+    return nullptr;
+  for (const CadPipeNpsEntry& e : kCadPipeNpsTable) {
+    if (std::fabs(e.nps - nps) < 1e-9)
+      return &e;
+  }
+  return nullptr;
+}
+
+/// \p nominalSize's default display colour from the size palette (REQ-353), as the `#RRGGBB`
+/// entity colour a new run is stamped with. Returns false (leaving `*outHex` untouched) for a size
+/// the table does not carry — the run then keeps the ordinary new-entity colour, `ByLayer`.
+[[nodiscard]] inline bool CadPipeNominalSizeColor(std::string_view nominalSize, std::string* outHex) {
+  if (!outHex)
+    return false;
+  const CadPipeNpsEntry* e = CadPipeNpsFind(nominalSize);
+  if (!e)
+    return false;
+  *outHex = e->colorHex;
+  return true;
+}
+
+/// Every size the table carries, as the labels PIPERUN accepts ("0.5in, 0.75in, ... 24in") — read
+/// from the table so the prompt's list cannot fall behind it.
+[[nodiscard]] inline std::string CadPipeKnownNominalSizesText() {
+  std::string out;
+  for (const CadPipeNpsEntry& e : kCadPipeNpsTable) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%gin", e.nps);
+    if (!out.empty())
+      out += ", ";
+    out += buf;
+  }
+  return out;
+}
+
+/// The **schedule 40** wall thickness in INCHES for \p nominalSize — the wall `PIPERUN` offers when
+/// the user presses Enter at its wall-thickness prompt, and the wall a run that carries none of its
+/// own is built at (D-2026-09-23-a: a drawing saved before pipes were hollow becomes hollow at the
+/// standard weight rather than staying a rod). Returns false for a label the NPS table does not
+/// carry, exactly as \ref CadPipeNominalOdFeet does and for the same reason — a size this codebase
+/// has no OD for has no wall either, and neither is guessed.
+[[nodiscard]] inline bool CadPipeStandardWallThicknessInches(std::string_view nominalSize,
+                                                             double* outInches) {
+  if (!outInches)
+    return false;
+  double nps = 0.0;
+  if (!CadParsePipeNominalSizeInches(nominalSize, &nps))
+    return false;
+  for (const CadPipeNpsEntry& e : kCadPipeNpsTable) {
+    if (std::fabs(e.nps - nps) < 1e-9) {
+      *outInches = e.sch40WallIn;
+      return true;
+    }
+  }
+  return false;
+}
+
+/// The wall thickness in FEET a \p run is actually built at: its own `wallThicknessIn` when it
+/// states one, otherwise the schedule-40 default for its size. One place resolves this, so the
+/// render path, the command's prompt and any report cannot disagree about how thick a given run is.
+///
+/// Refuses (leaving `*outFeet` untouched) a wall that is not a wall: zero or negative after the
+/// default is applied, or one at least half the outside diameter — that leaves no bore, and a
+/// "solid pipe" is not a thing this models. A refusal here refuses the whole run (REQ-201), the
+/// same as an unresolvable size.
+[[nodiscard]] inline bool CadPipeRunWallThicknessFeet(const CadPipeRun& run, double* outFeet) {
+  if (!outFeet)
+    return false;
+  double odFeet = 0.0;
+  if (!CadPipeNominalOdFeet(run.nominalSize, &odFeet))
+    return false;
+  double wallIn = run.wallThicknessIn;
+  if (!(wallIn > 0.0) && !CadPipeStandardWallThicknessInches(run.nominalSize, &wallIn))
+    return false;
+  const double wallFeet = wallIn / 12.0;
+  if (!(wallFeet > 0.0) || !(wallFeet < odFeet * 0.5))
+    return false;
+  *outFeet = wallFeet;
+  return true;
 }
 
 namespace cadpiperun_detail {
@@ -300,10 +422,14 @@ inline constexpr double kCadPipeFilletStandardAnglesDeg[] = {90.0, 60.0, 45.0, 3
   return true;
 }
 
-/// Builds \p run's swept pipe solid, auto-filleted at every real bend over
-/// \ref cadpiperun_detail::kMinFilletTurnRad — see \ref CadBuildPipeRunSweepPath for the marching
-/// algorithm. A run with fewer than 2 vertices, an unresolvable nominal size, or a corner that
-/// cannot be filleted contributes nothing (REQ-201: nothing invalid is ever stored).
+/// Builds \p run's swept pipe solid — a **hollow** one (D-2026-09-23-a): the wall between the
+/// nominal OD and a bore that much smaller, so a cut or an end shows the wall the way a real pipe
+/// does and the volume is the pipe's own, not a rod's. The wall comes from
+/// \ref CadPipeRunWallThicknessFeet (the run's own, or schedule 40 for its size). Auto-filleted at
+/// every real bend over \ref cadpiperun_detail::kMinFilletTurnRad — see
+/// \ref CadBuildPipeRunSweepPath for the marching algorithm. A run with fewer than 2 vertices, an
+/// unresolvable nominal size, a wall that leaves no bore, or a corner that cannot be filleted
+/// contributes nothing (REQ-201: nothing invalid is ever stored).
 ///
 /// **A snapped angle cannot also hit the exact clicked vertex.** Each corner turns from the
 /// direction the pipe is ACTUALLY travelling (which already carries any upstream snapping error)
@@ -327,12 +453,22 @@ inline constexpr double kCadPipeFilletStandardAnglesDeg[] = {90.0, 60.0, 45.0, 3
   if (!CadBuildPipeRunSweepPath(run, &path, &pipeRadius, &startTangent, &endTangent))
     return false;
 
-  brep::Profile profile;
-  if (!CadBuildPipeProfile(pipeRadius, path.points[0], startTangent, &profile))
+  double wallFeet = 0.0;
+  if (!CadPipeRunWallThicknessFeet(run, &wallFeet))
+    return false;
+  const double boreRadius = pipeRadius - wallFeet;
+  if (!(boreRadius > 0.0))
+    return false;  // guarded by CadPipeRunWallThicknessFeet; belt and braces before the kernel call
+
+  brep::Profile outerProfile;
+  if (!CadBuildPipeProfile(pipeRadius, path.points[0], startTangent, &outerProfile))
+    return false;
+  brep::Profile boreProfile;
+  if (!CadBuildPipeProfile(boreRadius, path.points[0], startTangent, &boreProfile))
     return false;
 
   brep::Problem why = brep::Problem::Ok;
-  return brep::Sweep(profile, path, brep::SweepOptions{}, out, &why);
+  return brep::SweepTube(outerProfile, boreProfile, path, brep::SweepOptions{}, out, &why);
 }
 
 /// A pipe run's own "pipe end" connection point (user-specified 2026-09-17): the centre of the

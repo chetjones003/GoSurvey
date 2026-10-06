@@ -1,0 +1,85 @@
+# Selecting the ellipse a tilted section draws — where it is DRAWN, not where a flat reading put it.
+#
+# User report, 2026-09-24, after testing the part-oval section in the app: "the only problem seemed
+# to be that i could not accurately select the section."
+#
+# Both selection funnels (ADR-034 names them) sampled an ellipse FLAT in world XY and over a FULL
+# turn, ignoring the plane normal (#531) and the drawn span (the #520 follow-up) that the renderer,
+# the snapper and both file formats all honour. This transcript drives the DRAG funnel
+# (`SampleEllipseWorld` -> `ComputeSelectionFromRect`); the click funnel is `PickClosestCadEntity`,
+# covered by GoSurveySnapTests [ellipsesel], because a transcript's PICK feeds command input rather
+# than click-to-select.
+#
+# The pipe below spans z -40 to 10, so the 45-degree cut runs off the top and the section is an
+# elliptical ARC plus its chord. The arc stands in the cut plane: x = 30 sin t, y = -30 cos t,
+# z = -30 cos t. Seen from above that is a CIRCLE OF RADIUS 30 — while the flat reading looked for
+# it 42.4 out along Y, a 12.4-unit miss no pick tolerance closes.
+#
+# Counts below include the PIPE wherever the box is over it: a crossing box takes the solid too, and
+# the whole area of interest sits inside its 30-radius footprint. That is why the numbers are read as
+# "the pipe, plus the arc or not" — the phantom box outside the footprint is the clean zero.
+#
+# A selection is additive and no verb clears one, so each group re-OPENs the saved drawing.
+
+NEW
+
+CMD CYLINDER 0,0,-40 30 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+CMD UCS
+CMD W
+ESC
+EXPECT ELLIPSES 1
+EXPECT LINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+SAVEAS %OUT%/ell-sel.gs
+
+# --- a drag over the curve that is DRAWN catches it --------------------------------------------
+# (0, -30) is on the arc: the pipe AND the arc. Before the fix this was 1 — the pipe alone, with the
+# arc hunted for 12.4 units further out.
+OPEN %OUT%/ell-sel.gs
+EXPECT SELECTED 0
+BOX -2 -32 2 -28
+EXPECT SELECTED 2
+
+# --- and nothing where a flat, whole ellipse would have been -----------------------------------
+# 42.4 out along Y is where the flat reading put the curve, outside the pipe's own footprint, so
+# nothing at all is there. Before the fix this box caught the section from empty space.
+OPEN %OUT%/ell-sel.gs
+BOX -2 -44 2 -41
+EXPECT SELECTED 0
+
+# (0, +30) is the far side of the oval — the 141 degrees the cut removed. Only the pipe is there.
+OPEN %OUT%/ell-sel.gs
+BOX -2 28 2 32
+EXPECT SELECTED 1
+CHECK ALL
+
+# --- a plain flat ellipse drags exactly as it always did ----------------------------------------
+NEW
+CMD ELLIPSE
+PICK 0 0
+PICK 10 0
+CMD 0.5
+EXPECT ELLIPSES 1
+SAVEAS %OUT%/ell-flat.gs
+
+# The major end, then the minor end: both on the curve.
+OPEN %OUT%/ell-flat.gs
+EXPECT SELECTED 0
+BOX 9 -1 11 1
+EXPECT SELECTED 1
+OPEN %OUT%/ell-flat.gs
+BOX -1 4 1 6
+EXPECT SELECTED 1
+
+# The empty middle is still empty — an ellipse fills none of it.
+OPEN %OUT%/ell-flat.gs
+BOX -1 -1 1 1
+EXPECT SELECTED 0
+CHECK ALL

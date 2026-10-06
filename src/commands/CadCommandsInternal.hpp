@@ -21,6 +21,9 @@ struct AppCommandState;
 /// else ByLayer / default.
 EntityAttributes MakeNewEntityAttrs(const AppCommandState& st);
 
+/// REQ-044: new TEXT / MTEXT adopts the active text style (also a Position Marker's label, REQ-359).
+void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a);
+
 // --- Draft-state resets (defined together as a cluster in CadCommands.cpp) ---
 void ResetCircleDraft(AppCommandState& st);
 void ResetPolylineDraft(AppCommandState& st);

@@ -7,6 +7,8 @@
 
 #include "CadUi.hpp"
 #include "CadUiInternal.hpp"
+#include "ProjectFiles.hpp"
+#include "ProjectWarnings.hpp"  // REQ-383
 #include "CadUiChrome.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "NumFormat.hpp"
@@ -128,18 +130,55 @@ void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log
   const std::filesystem::path dst(cmd.dwgPendingExportPath);
   const bool overwriting = std::filesystem::exists(dst);
 
-  ImGui::TextUnformatted("GoSurvey writes DWG with LibreDWG as AutoCAD 2000 (AC1015). This export drops:");
+  // REQ-170 / REQ-201, issue #614: the warning is built from what THIS drawing actually contains
+  // — not a fixed list — so it never claims a loss the writer no longer has, and never stays
+  // silent about one it does.
+  ImGui::TextUnformatted("DWG format:");
+  size_t nFormats = 0;
+  const DwgExportFormatRow* formats = DwgExportFormatRows(&nFormats);
+  char comboPreview[96];
+  std::snprintf(comboPreview, sizeof(comboPreview), "%s (%s)",
+                DwgSaveVersionDisplayName(cmd.dwgExportVersion),
+                DwgSaveVersionAcTag(cmd.dwgExportVersion));
+  if (ImGui::BeginCombo("##dwgformat", comboPreview)) {
+    for (size_t i = 0; i < nFormats; ++i) {
+      const DwgExportFormatRow& row = formats[i];
+      if (!row.selectable) {
+        ImGui::BeginDisabled();
+        char line[96];
+        std::snprintf(line, sizeof(line), "%s (%s) — coming later", row.displayName, row.acTag);
+        ImGui::Selectable(line, false);
+        ImGui::EndDisabled();
+        continue;
+      }
+      const bool selected = cmd.dwgExportVersion == row.version;
+      if (ImGui::Selectable(row.displayName, selected)) {
+        cmd.dwgExportVersion = row.version;
+      }
+      if (selected)
+        ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
   ImGui::Spacing();
-  ImGui::BulletText("hatches, ellipses, meshes, TIN surfaces, and dimensions");
-  ImGui::BulletText("block definitions (inserts are exploded on import; not rebuilt on save)");
-  ImGui::BulletText("paper-space layouts beyond model space");
-  ImGui::BulletText("Civil 3D objects, proxies and anything else GoSurvey does not model");
-  ImGui::Spacing();
+
+  const std::vector<DwgExportLoss> losses = ComputeDwgExportLosses(cmd);
+  if (!losses.empty()) {
+    ImGui::Text("This export drops (as %s):", DwgSaveVersionAcTag(cmd.dwgExportVersion));
+    ImGui::Spacing();
+    for (const DwgExportLoss& loss : losses)
+      ImGui::BulletText("%d %s", loss.count, loss.label.c_str());
+    ImGui::Spacing();
+  }
 
   if (overwriting) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.90f, 0.45f, 0.20f, 1.0f));
-    ImGui::TextWrapped("%s already exists. Overwriting it will permanently discard the data listed above.",
-                       dst.filename().string().c_str());
+    if (losses.empty())
+      ImGui::TextWrapped("%s already exists. Overwriting it will permanently discard its current contents.",
+                         dst.filename().string().c_str());
+    else
+      ImGui::TextWrapped("%s already exists. Overwriting it will permanently discard the data listed above.",
+                         dst.filename().string().c_str());
     ImGui::PopStyleColor();
     ImGui::Spacing();
   }
@@ -188,7 +227,7 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
       dirty.push_back({i, cmd.drawingTabs[i].name});
   }
 
-  if (dirty.empty()) {
+  if (dirty.empty() && cmd.closeUnsavedProjects.empty()) {
     cmd.closeConfirmed = true;
     ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
@@ -196,11 +235,27 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
     return;
   }
 
-  ImGui::TextUnformatted("The following drawings have unsaved changes:");
-  ImGui::Spacing();
-  for (const auto& e : dirty)
-    ImGui::BulletText("%s", e.name.c_str());
-  ImGui::Spacing();
+  if (!dirty.empty()) {
+    ImGui::TextUnformatted("The following drawings have unsaved changes:");
+    ImGui::Spacing();
+    for (const auto& e : dirty) {
+      const std::string proj = ProjectNameForTab(cmd, e.idx);  // REQ-383 clause 6: say which project
+      ImGui::BulletText("%s%s", e.name.c_str(), proj.empty() ? "" : ("  [project " + proj + "]").c_str());
+    }
+    ImGui::Spacing();
+  }
+  if (!cmd.closeUnsavedProjects.empty()) {
+    ImGui::TextWrapped("These projects have point changes that could not be written to their folders "
+                       "(the disk may be full or locked). Closing now loses those changes:");
+    ImGui::Spacing();
+    for (const UnsavedProject& u : cmd.closeUnsavedProjects) {
+      std::string drawings;
+      for (size_t k = 0; k < u.drawings.size(); ++k)
+        drawings += (k ? ", " : "") + u.drawings[k];
+      ImGui::BulletText("%s  (open drawings: %s)", u.name.c_str(), drawings.c_str());
+    }
+    ImGui::Spacing();
+  }
   ImGui::Separator();
   ImGui::Spacing();
 
@@ -224,6 +279,7 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
       if (!path.empty() && SaveDrawingDocument(cmd, path.c_str(), log)) {
         cmd.activeDocSavedRevision = cmd.cadGpuRevision;
         cmd.activeDocFilePath      = path;
+        SyncProjectFilesOnSave(cmd, e.idx, path, log);  // REQ-379 clause 2
         if (!isActive) {
           // Commit updated saved-revision back into the snapshot.
           SaveDocumentToSnapshot(cmd, e.idx);
@@ -233,6 +289,11 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
       }
       if (!isActive)
         RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
+    }
+    if (!cmd.closeUnsavedProjects.empty()) {  // REQ-383: try the project databases again; stay open if they still fail
+      cmd.closeUnsavedProjects = ProjectsWithUnsavedPoints(cmd, 0, log);
+      if (!cmd.closeUnsavedProjects.empty())
+        allOk = false;
     }
     if (allOk) {
       cmd.closeConfirmed = true;

@@ -2296,3 +2296,501 @@ TEST_CASE("PickClosestCadEntity finds a block reference made entirely of solid g
   CHECK(hit.type == SelectedEntity::Type::BlockRef);
   CHECK(hit.index == 0);
 }
+
+// --- PIPECATALOG catalog lookup (issue #486 increment B4 / REQ-345) ----------------------------
+
+namespace {
+CadBlockDefinition MakeFittingDef(const std::string& name, CadPipePartType partType,
+                                  const std::string& nominalSize, CadPipePressureClass pressureClass) {
+  CadBlockDefinition def;
+  def.name = name;
+  def.partType = partType;
+  def.nominalSize = nominalSize;
+  def.pressureClass = pressureClass;
+  return def;
+}
+} // namespace
+
+TEST_CASE("CadPipeCatalogFind matches an already-imported fitting by size, class and type",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("ELBOW90-4IN-CS150", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
+
+  std::string name;
+  std::vector<std::string> log;
+  REQUIRE(CadPipeCatalogFind(st, CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150, &name, log));
+  CHECK(name == "ELBOW90-4IN-CS150");
+}
+
+TEST_CASE("CadPipeCatalogFind refuses with a named reason when no part matches",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("ELBOW90-4IN-CS150", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
+
+  std::string name;
+  std::vector<std::string> log;
+  CHECK_FALSE(CadPipeCatalogFind(st, CadPipePartType::Tee, "4in", CadPipePressureClass::CS150, &name, log));
+  CHECK(name.empty());
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back().find("no tee found") != std::string::npos);
+}
+
+TEST_CASE("CadPipeCatalogFind requires a part type and a nominal size", "[issue486][pipecatalog]") {
+  AppCommandState st;
+  std::string name;
+  std::vector<std::string> log;
+  CHECK_FALSE(CadPipeCatalogFind(st, CadPipePartType::None, "4in", CadPipePressureClass::None, &name, log));
+  CHECK_FALSE(CadPipeCatalogFind(st, CadPipePartType::Elbow90, "", CadPipePressureClass::None, &name, log));
+}
+
+TEST_CASE("A requested class falls back to a class-agnostic part when no exact-classed part exists",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("VALVE-2IN", CadPipePartType::Valve, "2in", CadPipePressureClass::None));
+
+  std::string name;
+  std::vector<std::string> log;
+  REQUIRE(CadPipeCatalogFind(st, CadPipePartType::Valve, "2in", CadPipePressureClass::CS300, &name, log));
+  CHECK(name == "VALVE-2IN");
+}
+
+TEST_CASE("An exact-classed part is preferred over a class-agnostic one", "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("VALVE-2IN-ANY", CadPipePartType::Valve, "2in", CadPipePressureClass::None));
+  st.blockDefs.push_back(
+      MakeFittingDef("VALVE-2IN-CS300", CadPipePartType::Valve, "2in", CadPipePressureClass::CS300));
+
+  std::string name;
+  std::vector<std::string> log;
+  REQUIRE(CadPipeCatalogFind(st, CadPipePartType::Valve, "2in", CadPipePressureClass::CS300, &name, log));
+  CHECK(name == "VALVE-2IN-CS300");
+}
+
+TEST_CASE("A requested class with no restriction (None) matches any classed part, refusing only "
+          "on ambiguity",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("FLANGE-6IN-CS150", CadPipePartType::Flange, "6in", CadPipePressureClass::CS150));
+
+  std::string name;
+  std::vector<std::string> log;
+  REQUIRE(CadPipeCatalogFind(st, CadPipePartType::Flange, "6in", CadPipePressureClass::None, &name, log));
+  CHECK(name == "FLANGE-6IN-CS150");
+}
+
+TEST_CASE("CadPipeCatalogFind refuses as ambiguous when two parts tie on size/class/type",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("ELBOW90-4IN-A", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
+  st.blockDefs.push_back(
+      MakeFittingDef("ELBOW90-4IN-B", CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150));
+
+  std::string name;
+  std::vector<std::string> log;
+  CHECK_FALSE(CadPipeCatalogFind(st, CadPipePartType::Elbow90, "4in", CadPipePressureClass::CS150, &name, log));
+  CHECK(name.empty());
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back().find("ambiguous") != std::string::npos);
+}
+
+TEST_CASE("A non-fitting block definition (partType None) is never offered as a catalog match",
+          "[issue486][pipecatalog]") {
+  AppCommandState st;
+  CadBlockDefinition ordinary;
+  ordinary.name = "4in";  // adversarial: name collides with the nominal size string itself
+  st.blockDefs.push_back(ordinary);
+
+  std::string name;
+  std::vector<std::string> log;
+  CHECK_FALSE(CadPipeCatalogFind(st, CadPipePartType::Elbow90, "4in", CadPipePressureClass::None, &name, log));
+}
+
+TEST_CASE("PIPECATALOG command parses part type, size and optional class", "[issue486][pipecatalog][command]") {
+  AppCommandState st;
+  st.blockDefs.push_back(
+      MakeFittingDef("TEE-3IN-CS300", CadPipePartType::Tee, "3in", CadPipePressureClass::CS300));
+
+  std::vector<std::string> log;
+  std::istringstream args("tee 3in CS300");
+  REQUIRE(CadBlocksTryIdleCommand(st, "pipecatalog", args, log));
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back().find("TEE-3IN-CS300") != std::string::npos);
+}
+
+TEST_CASE("PIPECATALOG command refuses an unknown part type or pressure class",
+          "[issue486][pipecatalog][command]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  std::istringstream badType("bogus 4in");
+  REQUIRE(CadBlocksTryIdleCommand(st, "pipecatalog", badType, log));
+  CHECK(log.back().find("unknown part type") != std::string::npos);
+
+  log.clear();
+  std::istringstream badClass("elbow-90 4in CS999");
+  REQUIRE(CadBlocksTryIdleCommand(st, "pipecatalog", badClass, log));
+  CHECK(log.back().find("unknown pressure class") != std::string::npos);
+}
+
+TEST_CASE("BLOCK Convert removes the source solid instead of duplicating it",
+          "[issue124][block][solid]") {
+  // Reported 2026-09-23 via the Create Block dialog, found by the `block-create-basepoint-pick`
+  // GUI test: `CaptureSelectionInto` has copied solids into the definition since REQ-320, but
+  // `EraseSelectedSources` had no Solid branch — so Convert (and Delete) left the original solid
+  // in the drawing beside a block reference holding a copy of it. Silent geometry duplication.
+  //
+  // Driven through the typed verb because it shares `EraseSelectedSources` with the dialog; the
+  // dialog half is covered in the GUI by `block-create-basepoint-pick`.
+  AppCommandState st;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 10.0, 8.0, &box, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  st.cadSolidAttrs.resize(1);
+  st.selection.push_back({SelectedEntity::Type::Solid, 0});
+
+  std::vector<std::string> log;
+  std::istringstream args("BOXBLOCK, 0, 0, CONVERT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "block", args, log));
+
+  const int di = CadBlockFindDef(st.blockDefs, "BOXBLOCK");
+  REQUIRE(di >= 0);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].content.solids.size() == 1);
+  // The definition holds it, so the drawing must not still hold it too.
+  CHECK(st.cadSolids.empty());
+  CHECK(st.cadSolidAttrs.empty());
+  CHECK(st.cadBlockRefs.size() == 1);
+}
+
+TEST_CASE("BLOCK Retain leaves the source solid in place", "[issue124][block][solid]") {
+  // The other half of the same branch: Retain must NOT erase, or the fix above would have turned a
+  // duplication bug into a deletion bug.
+  AppCommandState st;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 20.0, 10.0, 8.0, &box, &why));
+  st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  st.cadSolidAttrs.resize(1);
+  st.selection.push_back({SelectedEntity::Type::Solid, 0});
+
+  std::vector<std::string> log;
+  std::istringstream args("KEEPBLOCK, 0, 0, RETAIN");
+  REQUIRE(CadBlocksTryIdleCommand(st, "block", args, log));
+
+  REQUIRE(CadBlockFindDef(st.blockDefs, "KEEPBLOCK") >= 0);
+  CHECK(st.cadSolids.size() == 1);
+  CHECK(st.cadSolidAttrs.size() == 1);
+}
+
+TEST_CASE("Bare WBLOCK opens the save dialog instead of printing usage", "[issue284][wblock]") {
+  // User request 2026-09-23: WBLOCK should open a window to save the block. The two-argument form
+  // keeps writing directly (the two tests above this one drive it that way).
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "HYDRANT";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.lineAttrs.resize(1);
+  def.content.lineVis.resize(1);
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream args("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "wblock", args, log));
+  CHECK(st.wblockDialogOpen);
+  CHECK(std::string(st.wblockName) == "HYDRANT");  // the only definition, so it is preselected
+}
+
+TEST_CASE("Bare WBLOCK refuses, with a reason, when the drawing has no blocks", "[issue284][wblock]") {
+  AppCommandState st;
+  std::vector<std::string> log;
+  std::istringstream args("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "wblock", args, log));
+  CHECK_FALSE(st.wblockDialogOpen);
+  bool said = false;
+  for (const std::string& line : log) {
+    if (line.find("no block definitions") != std::string::npos)
+      said = true;
+  }
+  CHECK(said);
+}
+
+TEST_CASE("The WBLOCK dialog writes the chosen block, and stays open when it cannot",
+          "[issue284][wblock]") {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / "gosurvey-wblock-dialog";
+  fs::create_directories(dir);
+  const fs::path dwg = dir / "FROM_DIALOG.dwg";
+  std::error_code rmEc;
+  fs::remove(dwg, rmEc);
+
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "HYDRANT";
+  def.units = CadDrawingInsUnitsName(st.drawingInsUnits);
+  def.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  def.content.lineAttrs.resize(1);
+  def.content.lineVis.resize(1);
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  StartWblockDialog(st, log);
+  REQUIRE(st.wblockDialogOpen);
+
+  // A destination that names no block: the dialog must report and stay open, so the user's typing
+  // survives the correction.
+  std::snprintf(st.wblockName, sizeof(st.wblockName), "%s", "NOT_A_BLOCK");
+  std::snprintf(st.wblockPath, sizeof(st.wblockPath), "%s", dwg.u8string().c_str());
+  CommitWblockDialog(st, log);
+  CHECK(st.wblockDialogOpen);
+  CHECK_FALSE(fs::exists(dwg));
+
+  std::snprintf(st.wblockName, sizeof(st.wblockName), "%s", "HYDRANT");
+  CommitWblockDialog(st, log);
+  CHECK_FALSE(st.wblockDialogOpen);
+  REQUIRE(fs::exists(dwg));
+
+  // And what it wrote is what BLOCKIMPORT reads back — the same round trip the typed form has.
+  AppCommandState dest;
+  std::vector<std::string> importLog;
+  REQUIRE(ImportCadBlocksFromPath(dest, dwg.u8string().c_str(), importLog));
+  CHECK(CadBlockFindDef(dest.blockDefs, "HYDRANT") >= 0);
+}
+
+TEST_CASE("Saving a block in BEDIT marks its palette thumbnail stale",
+          "[issue486][req350][palette][command]") {
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 1.0, 1.0, 2.0, &box, &why));
+
+  AppCommandState st;
+  CadBlockDefinition def;
+  def.name = "PALFIT";
+  def.partType = CadPipePartType::Flange;
+  def.nominalSize = "4in";
+  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  def.content.solidAttrs.push_back(EntityAttributes{});
+  st.blockDefs.push_back(def);
+
+  std::vector<std::string> log;
+  std::istringstream beditArgs("PALFIT");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bedit", beditArgs, log));
+  CHECK(st.pipeFittingThumbStale.empty());  // opening the editor changes no geometry
+
+  std::istringstream bsaveArgs("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bsave", bsaveArgs, log));
+  // ADR-062 (c) — a saved definition is the one way a part's geometry changes in a session, so its
+  // cached picture must be dropped. The command layer only NAMES it; the UI service pass drops it,
+  // because Commands sits below Renderer and must not call it.
+  REQUIRE(st.pipeFittingThumbStale.size() == 1);
+  CHECK(st.pipeFittingThumbStale[0] == "PALFIT");
+
+  // Saving twice does not queue the same name twice.
+  std::istringstream bsaveAgain("");
+  REQUIRE(CadBlocksTryIdleCommand(st, "bsave", bsaveAgain, log));
+  CHECK(st.pipeFittingThumbStale.size() == 1);
+}
+
+// --- REQ-350 (f): the armed palette click must SNAP, not just drop (user report 2026-09-25) -------
+
+namespace {
+/// A blind flange as the bundled part actually is: ONE connection point, whose single mode targets
+/// a flange face and is flagged `isDefault` (what the authoring UI produces for an only mode). One
+/// port is the whole point -- it can never splice into a run, so the palette click has nothing but
+/// the connector snap to orient it with.
+CadBlockDefinition MakeBlindFlangeDef(const std::string& name) {
+  CadBlockDefinition def;
+  def.name = name;
+  def.partType = CadPipePartType::Flange;
+  def.nominalSize = "2in";
+  CadBlockConnection gasket;
+  gasket.name = "GASKET_FACE";
+  gasket.x = 0.f; gasket.y = 0.f; gasket.z = 0.f;
+  gasket.nx = 0.f; gasket.ny = -1.f; gasket.nz = 0.f;
+  gasket.role = CadBlockConnectionRole::Inlet;
+  gasket.compatibilityTag = "class150";
+  CadBlockConnectionMode m;
+  m.name = "Mode 1";
+  m.target = CadConnectionModeTarget::FlangeFace;
+  m.role = CadBlockConnectionRole::Inlet;
+  m.compatibilityTag = "class150";
+  m.isDefault = true;
+  gasket.modes = {m};
+  def.connections = {gasket};
+  return def;
+}
+
+/// An already-placed weld-neck flange, reduced to the one thing these tests need of it: a
+/// gasket-face port sitting in the drawing at \p faceY facing +Y, for a blind flange to bolt onto.
+void PlaceTargetFlange(AppCommandState& st, float faceY) {
+  CadBlockDefinition def;
+  def.name = "TARGET_WN_FLANGE";
+  def.partType = CadPipePartType::Flange;
+  def.nominalSize = "2in";
+  CadBlockConnection gasket;
+  gasket.name = "gasketFace";
+  gasket.x = 0.f; gasket.y = 0.f; gasket.z = 0.f;
+  gasket.nx = 0.f; gasket.ny = 1.f; gasket.nz = 0.f;
+  gasket.role = CadBlockConnectionRole::Inlet;
+  CadBlockConnectionMode m;
+  m.name = "Mode 1";
+  m.target = CadConnectionModeTarget::FlangeFace;
+  m.role = CadBlockConnectionRole::Inlet;
+  m.isDefault = true;
+  gasket.modes = {m};
+  def.connections = {gasket};
+  st.blockDefs.push_back(def);
+
+  CadBlockRef ref;
+  ref.defName = "TARGET_WN_FLANGE";
+  ref.xf.y = faceY;
+  st.cadBlockRefs.push_back(ref);
+}
+
+CadBlockLibraryEntry PaletteRowFor(const std::string& name) {
+  CadBlockLibraryEntry e;
+  e.name = name;
+  e.isFitting = true;
+  e.partType = CadPipePartType::Flange;
+  e.nominalSize = "2in";
+  e.imported = true;
+  return e;
+}
+
+/// The world position/normal of connection \p connIndex on the placed reference to \p defName.
+bool PlacedPortOf(const AppCommandState& st, const std::string& defName, size_t connIndex,
+                  CadBlockWorldConnection* out) {
+  for (int i = 0; i < static_cast<int>(st.cadBlockRefs.size()); ++i) {
+    if (st.cadBlockRefs[static_cast<size_t>(i)].defName != defName)
+      continue;
+    std::vector<CadBlockWorldConnection> world;
+    CadBlockCollectWorldConnections(st.blockDefs, st.cadBlockRefs[static_cast<size_t>(i)], i, &world);
+    if (connIndex >= world.size())
+      return false;
+    *out = world[connIndex];
+    return true;
+  }
+  return false;
+}
+
+bool PaletteLogHas(const std::vector<std::string>& log, const char* needle) {
+  for (const std::string& line : log)
+    if (line.find(needle) != std::string::npos)
+      return true;
+  return false;
+}
+} // namespace
+
+TEST_CASE("A palette-armed blind flange snaps onto a flange face rather than landing unaligned",
+          "[issue486][req350][palette][connectorsnap]") {
+  AppCommandState st;
+  PlaceTargetFlange(st, /*faceY=*/10.f);
+  st.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
+
+  std::vector<std::string> log;
+  REQUIRE(CadPipePaletteArmPart(st, PaletteRowFor("2IN_BLIND_FLANGE"), log));
+  REQUIRE(st.active == AppCommandState::Kind::InsertBlock);
+
+  // Clicked roughly ON the target flange face -- inside the 2ft connector tolerance, the way a user
+  // clicks the face they want the blind flange bolted to.
+  SubmitInsertBlockPick(st, 0.2f, 9.8f, 0.1f, log);
+
+  CadBlockWorldConnection placed{};
+  REQUIRE(PlacedPortOf(st, "2IN_BLIND_FLANGE", 0, &placed));
+  // Its gasket face sits ON the target face, not at the raw click point...
+  CHECK(placed.x == Catch::Approx(0.0).margin(1e-3));
+  CHECK(placed.y == Catch::Approx(10.0).margin(1e-3));
+  CHECK(placed.z == Catch::Approx(0.0).margin(1e-3));
+  // ...and faces INTO it: two mating faces point at each other (-1 against the target +Y).
+  CHECK(placed.ny == Catch::Approx(-1.0).margin(1e-3));
+  CHECK(PaletteLogHas(log, "snapped to"));
+}
+
+TEST_CASE("With nothing in reach the palette places the part at the point and says why",
+          "[issue486][req350][palette][connectorsnap]") {
+  AppCommandState st;
+  PlaceTargetFlange(st, /*faceY=*/10.f);
+  st.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
+
+  std::vector<std::string> log;
+  REQUIRE(CadPipePaletteArmPart(st, PaletteRowFor("2IN_BLIND_FLANGE"), log));
+  SubmitInsertBlockPick(st, 100.f, 100.f, 0.f, log);  // far from anything
+
+  // Staged beside the line is a placement, not a refusal (REQ-350 (f)) -- but the user is told the
+  // orientation is the one it was authored with, rather than being left to wonder.
+  CadBlockWorldConnection placed{};
+  REQUIRE(PlacedPortOf(st, "2IN_BLIND_FLANGE", 0, &placed));
+  CHECK(placed.x == Catch::Approx(100.0).margin(1e-3));
+  CHECK(placed.y == Catch::Approx(100.0).margin(1e-3));
+  CHECK(PaletteLogHas(log, "nothing within 2 ft for its connection point to mate with"));
+}
+
+TEST_CASE("A part that cannot splice still lands where it was clicked",
+          "[issue486][req350][palette][connectorsnap]") {
+  AppCommandState st;
+  CadPipeRun run;
+  run.vertsXyz = {0.0, 0.0, 0.0, 40.0, 0.0, 0.0};
+  run.nominalSize = "2in";
+  st.cadPipeRuns = {run};
+  st.cadPipeRunAttrs = {EntityAttributes{}};
+  st.blockDefs.push_back(MakeBlindFlangeDef("2IN_BLIND_FLANGE"));
+
+  std::vector<std::string> log;
+  REQUIRE(CadPipePaletteArmPart(st, PaletteRowFor("2IN_BLIND_FLANGE"), log));
+  // Mid-run, well clear of either end: the splice cannot take a one-port part, and there is no port
+  // in reach either. Before this fix the click was consumed and NOTHING was placed.
+  SubmitInsertBlockPick(st, 20.f, 0.f, 0.f, log);
+
+  CHECK(PaletteLogHas(log, "two connection ports"));  // said why it could not splice
+  CadBlockWorldConnection placed{};
+  REQUIRE(PlacedPortOf(st, "2IN_BLIND_FLANGE", 0, &placed));
+  CHECK(placed.x == Catch::Approx(20.0).margin(1e-3));
+  CHECK(st.cadPipeRuns.size() == 1);  // and the run was left alone
+}
+TEST_CASE("Every bundled fitting yields drawable geometry under its listed name",
+          "[issue486][req350][palette][block]") {
+  // The invariant REQ-350's thumbnails stand on, and the one whose absence made every palette row a
+  // blank box: a library row can be turned into geometry WITHOUT the part already being in the
+  // drawing. The bundled sweep imports `fittings/*.sat` but not `fittings/*.dwg`, so for a .dwg
+  // fitting `CadBlockFindDef` fails until the part is placed — the thumbnail service therefore
+  // imports into a scratch state, and this pins the two things that has to produce: a definition
+  // under the SAME name the row lists, carrying geometry to draw.
+  AppCommandState st;
+  std::vector<CadBlockLibraryEntry> entries;
+  CadBlocksCollectLibraryEntries(st, &entries);
+
+  int fittingsSeen = 0;
+  for (const CadBlockLibraryEntry& e : entries) {
+    if (!e.isFitting || e.imported)
+      continue;
+    ++fittingsSeen;
+    INFO("library part: " << e.name << " (" << e.path << ")");
+
+    AppCommandState scratch;
+    std::vector<std::string> log;
+    REQUIRE(CadBlocksImportLibraryEntry(scratch, e, log));
+
+    // Under the name the row lists — not under some inner name from the file's own block table,
+    // which would leave the palette unable to find what it just imported.
+    const int di = CadBlockFindDef(scratch.blockDefs, e.name);
+    REQUIRE(di >= 0);
+    const CadBlockDefinition& def = scratch.blockDefs[static_cast<size_t>(di)];
+
+    // Something to picture (and to place).
+    CHECK_FALSE(def.content.solids.empty());
+
+    // Importing a library part for a PREVIEW must not drop loose geometry into the drawing — the
+    // scratch state exists precisely so listing a part changes nothing the user owns.
+    CHECK(scratch.cadSolids.empty());
+    CHECK(scratch.userLinesFlat.empty());
+  }
+  // Guards the test itself: if the bundled library ever stops being found, this must fail loudly
+  // rather than pass by iterating nothing.
+  CHECK(fittingsSeen >= 3);
+}

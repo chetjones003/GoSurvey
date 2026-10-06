@@ -10,6 +10,8 @@
 #include <initializer_list>
 #include <limits>
 #include <map>
+#include <unordered_map>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -27,24 +29,29 @@ constexpr double kHalfPi = 0.5 * kPi;
 constexpr int kMinArcSegments = 2;
 constexpr int kMaxArcSegments = 512;
 
-/// A (near-)full turn gets a much higher segment floor than a small arc sliver needs, independent
-/// of `tol/radius` (issue #486 GUI pass): the app's chord tolerance is a fixed absolute distance
+/// A full turn gets a much higher segment BUDGET than a small arc sliver needs, independent of
+/// `tol/radius` (issue #486 GUI pass): the app's chord tolerance is a fixed absolute distance
 /// (`kSolidChordToleranceFt`), so `tol/radius` — and with it the segment count — shrinks for any
 /// small-to-moderate-radius circle, not just tiny ones; even an ordinary few-foot cylinder read as
-/// visibly faceted. A short arc (a fillet corner, an intersection sliver) does not carry this
-/// complaint — it is already a small fraction of a turn, so it stays on the ordinary floor above.
-/// This is the ONE place a circle or a near-closed arc's parametrisation is turned into a segment
-/// count (`SegmentsForArc`/`SegmentsForEdge`), so raising the floor here reaches every curved solid
-/// face, every curved B-rep edge, AND the rubber-band edge preview (`TessellateEdges`, which every
-/// EXTRUDE/PRESSPULL/CYLINDER/REVOLVE/LOFT/SWEEP ghost in CadRubberPreview.cpp draws through) in one
-/// place, so none of them can drift back out of sync with each other.
-// A cylinder's curved wall is built as TWO half-turn faces (see BuildConical's `sideFace(0, kPi,
-// ...)` / `sideFace(kPi, kTwoPi, ...)` — the seamed-sphere pattern, needed so a boolean/slice
-// operation always has an edge to cut at), so "the whole circle" shows up here as a `kPi` span
-// twice over, not one `kTwoPi` span. The threshold has to catch that half-turn case too, or this
-// floor never engages for the ordinary EXTRUDE/PRESSPULL cylinder it exists for.
-constexpr double kFullTurnSpanThreshold = kPi * 0.999;
-constexpr int kMinFullCircleSegments = 128;
+/// visibly faceted. This is the ONE place a circle or an arc's parametrisation is turned into a
+/// segment count (`SegmentsForArc`/`SegmentsForEdge`), so raising the floor here reaches every
+/// curved solid face, every curved B-rep edge, AND the rubber-band edge preview (`TessellateEdges`,
+/// which every EXTRUDE/PRESSPULL/CYLINDER/REVOLVE/LOFT/SWEEP ghost in CadRubberPreview.cpp draws
+/// through) in one place, so none of them can drift back out of sync with each other. The budget is
+/// PER FULL TURN, scaled by span in `SegmentsForArc` itself — not a step function on span — because
+/// a circle is not always one edge: a cylinder's wall is built as two half-turn faces (see
+/// BuildConical's `sideFace(0, kPi, ...)` / `sideFace(kPi, kTwoPi, ...)`, needed so a boolean/slice
+/// always has an edge to cut at), while elsewhere the same circle can be one full 2*pi rim edge. A
+/// step function keyed on "is this span nearly a full turn" gives EACH half-turn piece the same
+/// absolute floor as the whole circle, doubling the total versus the unsplit case; scaling by span
+/// keeps the per-turn budget constant regardless of how many pieces the circle is cut into.
+///
+/// 256, not 128: every ordinary EXTRUDE/PRESSPULL/CYLINDER wall is the two-half-turn-face case above,
+/// so issue #486's tuning pass (done before the scaled floor existed) was implicitly tuned against
+/// TWO applications of this constant — 256 segments per turn, not 128 — and a user-visible regression
+/// confirmed 128 alone reads as faceted again at ordinary working zoom on a small (2 in radius) part.
+/// The public default, aliased so the two cannot drift apart.
+constexpr int kMinFullCircleSegments = kFullCircleSegments;
 
 [[nodiscard]] bool AllFinite(std::initializer_list<double> vs) {
   for (double v : vs) {
@@ -1536,11 +1543,23 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
 // ---------------------------------------------------------------------------------------------
 
 /// Segments needed so the sagitta of each chord stays within \p tol on a circle of \p radius.
-[[nodiscard]] int SegmentsForArc(double radius, double spanRad, double tol) {
+[[nodiscard]] int SegmentsForArc(double radius, double spanRad, double tol,
+                                 int fullCircleSegments = kMinFullCircleSegments) {
   const double span = std::fabs(spanRad);
   if (!(radius > 0.0) || !(span > 0.0))
     return 1;
-  const int minSegs = span >= kFullTurnSpanThreshold ? kMinFullCircleSegments : kMinArcSegments;
+  // The floor scales with span rather than switching on a near-full-turn threshold (issue: torn
+  // bolt holes). A circle is not always one edge: a primitive's cylindrical wall is built as TWO
+  // half-turn faces (the seamed pattern noted above), while a Phase 4 boolean can just as easily
+  // leave the SAME circle as a single full 2*pi rim edge. Under the old step function both a
+  // half-turn piece and a full-turn piece hit the SAME absolute floor (kMinFullCircleSegments), so
+  // splitting a circle in two doubled its total vertex budget relative to the unsplit case — and
+  // the two disagreed wherever a face tessellated one representation next to a loop that walked the
+  // other (a bore wall next to its own hole's rim, cap vs. wall). Scaling the floor by span keeps
+  // the total segment budget for one full turn constant (kMinFullCircleSegments) no matter how many
+  // pieces it is cut into, so two neighbouring faces sampling the same circle always agree.
+  const int minSegs = std::max(
+      kMinArcSegments, static_cast<int>(std::llround(fullCircleSegments * span / kTwoPi)));
   if (tol >= radius)
     return minSegs;
   const double maxStep = 2.0 * std::acos(1.0 - tol / radius);
@@ -1551,7 +1570,8 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
 }
 
 /// Segment count to walk a curved edge (Arc / Ellipse / Intersection) within \p tol; 1 for a line.
-[[nodiscard]] int SegmentsForEdge(const Edge& e, double tol) {
+[[nodiscard]] int SegmentsForEdge(const Edge& e, double tol,
+                                  int fullCircleSegments = kMinFullCircleSegments) {
   if (e.kind == CurveKind::Line)
     return 1;
   if (e.kind == CurveKind::Intersection) {
@@ -1561,10 +1581,86 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
     for (const Surface& sf : e.isectSurfaces)
       if (sf.radius > 1e-9)
         rr = std::min(rr == 1.0 ? sf.radius : rr, sf.radius);
-    return SegmentsForArc(rr, kHalfPi, tol);
+    return SegmentsForArc(rr, kHalfPi, tol, fullCircleSegments);
   }
   const double r = e.kind == CurveKind::Ellipse ? std::max(e.radius, e.radius2) : e.radius;
-  return SegmentsForArc(r, e.sweep, tol);
+  return SegmentsForArc(r, e.sweep, tol, fullCircleSegments);
+}
+
+/// Curvature-only segment count for a NURBS patch's (u, v) grid (TASK-272 §5) — extracted so the
+/// pre-pass below can fold this into the same shared-edge relaxation as the loop-edge-derived
+/// counts, instead of a Nurbs face silently outrunning whatever count its neighbour settled on.
+/// How finely one PARAMETRIC DIRECTION of \p patch has to be divided to stay within
+/// \p chordTolerance — U when \p alongU, otherwise V.
+///
+/// **Per direction, and that is the whole point.** This used to take the largest gap between
+/// consecutive control points over the WHOLE net and apply the resulting count to both directions.
+/// The net is row-major (`ctrl[j * nu + i]`), so walking it linearly also strides across row
+/// boundaries, and that stride is the distance between successive profiles — the length of the
+/// SWEEP. A pipe tube swept along a 20 ft leg therefore measured 20 ft of "curvature", asked for the
+/// 128-segment ceiling, and applied it to the ruled sweep direction as well as to the small circular
+/// cross-section: ~128x128 quads per patch where ~12x1 is exact. Measured on a four-vertex 2in run:
+/// 1,182,720 triangles and 16-34 SECONDS per solid in `Tessellate` (PIPEPERF, 2026-09-24).
+///
+/// A direction of degree 1 is RULED — the surface runs along straight lines in that parameter, even
+/// rationally weighted — so one division is exact and no sampling can improve it. That is what this
+/// function's own call site already claimed ("a ruled straight span is exact at one quad"); it was
+/// simply never able to say so per direction.
+///
+/// The flatness fallback is kept for the one case degree alone does not settle: a patch that is
+/// degree 1 in BOTH directions can still be a warped bilinear quad, whose middle bulges away from
+/// the two triangles a single quad would emit. That is tested against the chord tolerance exactly as
+/// before, and when it fails both directions are divided.
+[[nodiscard]] int NurbsPatchDirectionSegs(const nurbs::Patch& patch, double chordTolerance, bool alongU,
+                                          int fullCircleSegments = kMinFullCircleSegments) {
+  const int nu = patch.nu;
+  const int nv = patch.nv;
+  if (nu < 2 || nv < 2 || patch.ctrl.size() != static_cast<std::size_t>(nu) * static_cast<std::size_t>(nv))
+    return 1;
+  const auto ctrlAt = [&](int i, int j) -> const Vec3& {
+    return patch.ctrl[static_cast<std::size_t>(j) * static_cast<std::size_t>(nu) + static_cast<std::size_t>(i)];
+  };
+  // The largest control-net step IN THIS DIRECTION: along a row for U, down a column for V. Never
+  // across a row boundary, which is the step that belongs to the other direction entirely.
+  double netStep = 0.0;
+  if (alongU) {
+    for (int j = 0; j < nv; ++j)
+      for (int i = 0; i + 1 < nu; ++i)
+        netStep = std::max(netStep, ray3d::Length(ray3d::Sub(ctrlAt(i + 1, j), ctrlAt(i, j))));
+  } else {
+    for (int i = 0; i < nu; ++i)
+      for (int j = 0; j + 1 < nv; ++j)
+        netStep = std::max(netStep, ray3d::Length(ray3d::Sub(ctrlAt(i, j + 1), ctrlAt(i, j))));
+  }
+
+  bool curved = alongU ? patch.degU > 1 : patch.degV > 1;
+  if (!curved && patch.degU == 1 && patch.degV == 1) {
+    // Both directions ruled: the patch is a bilinear quad, exact at one division UNLESS it is
+    // warped out of plane by more than the tolerance.
+    const Vec3 e1 = ray3d::Sub(ctrlAt(1, 0), ctrlAt(0, 0));
+    const Vec3 e2 = ray3d::Sub(ctrlAt(0, 1), ctrlAt(0, 0));
+    Vec3 nrm = ray3d::Cross(e1, e2);
+    const double nl = ray3d::Length(nrm);
+    if (nl > 1e-12) {
+      nrm = ray3d::Scale(nrm, 1.0 / nl);
+      for (const Vec3& c : patch.ctrl)
+        if (std::fabs(ray3d::Dot(ray3d::Sub(c, ctrlAt(0, 0)), nrm)) > chordTolerance) {
+          curved = true;
+          break;
+        }
+    }
+  }
+  return curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance,
+                                            fullCircleSegments),
+                             std::min(8, fullCircleSegments), 128)
+                : 1;
+}
+
+/// The U-direction division count — the one the face's RIM edges run along, and the count their
+/// shared-edge relaxation (TASK-272 §5) has to agree with.
+[[nodiscard]] int NurbsPatchCurvatureSegs(const nurbs::Patch& patch, double chordTolerance,
+                                          int fullCircleSegments = kMinFullCircleSegments) {
+  return NurbsPatchDirectionSegs(patch, chordTolerance, /*alongU=*/true, fullCircleSegments);
 }
 
 struct MeshBuilder {
@@ -1824,6 +1920,8 @@ const char* ProblemText(Problem p) {
     return "A cut parallel to a cone's axis but not through it is a hyperbola, which is not supported yet.";
   case Problem::SliceCutCrossesCurvedFace:
     return "The cut crosses a curved face of this solid, which is not supported yet.";
+  case Problem::SliceCutTorusCurve:
+    return "A cut of a torus that is not square to its axis is a curve this release cannot hold.";
   case Problem::SliceCutTooSteepForCone:
     return "A cut steeper than a cone's own side is not supported yet.";
   case Problem::SliceCutSeveralOutlines:
@@ -2009,6 +2107,10 @@ const char* ProblemText(Problem p) {
     return "A scale factor must be greater than zero.";
   case Problem::ScaleResultInvalid:
     return "That scale would leave the solid invalid, so it was not applied.";
+  case Problem::MirrorPlaneNotUnit:
+    return "The mirror line has no direction, so there is nothing to reflect the solid across.";
+  case Problem::MirrorResultInvalid:
+    return "That mirror would leave the solid invalid, so it was not applied.";
   case Problem::MoveVertexNotThreePlanes:
     return "That corner is not where exactly three flat faces meet, so it cannot be dragged.";
   case Problem::MoveEdgeFacesParallel:
@@ -2198,6 +2300,137 @@ bool Scale(const Solid& s, const Vec3& basePoint, double factor, Solid* out, Pro
   const Problem why = Validate(r);
   if (why != Problem::Ok)
     return Fail(Problem::ScaleResultInvalid, outWhy);
+  *out = std::move(r);
+  return Succeed(outWhy);
+}
+
+namespace {
+
+/// Reflect \p f and make it right-handed again by negating Y (REQ-351). X and Z are reflected as
+/// directions and kept, so a plane's Z stays its outward normal and a curved surface's axis its axis;
+/// the price is that an angle measured about Z from X toward Y now runs the other way, which every
+/// caller below pays by negating the angles it stores.
+void MirrorFrameInPlace(ucs::Ucs& f, const Vec3& planePoint, const Vec3& planeUnit) {
+  f.origin = ray3d::ReflectPointAcrossPlane(f.origin, planePoint, planeUnit);
+  f.xAxis = ray3d::ReflectVectorAcrossPlane(f.xAxis, planeUnit);
+  f.yAxis = ray3d::Scale(ray3d::ReflectVectorAcrossPlane(f.yAxis, planeUnit), -1.0);
+  f.zAxis = ray3d::ReflectVectorAcrossPlane(f.zAxis, planeUnit);
+}
+
+void MirrorSurfaceInPlace(Surface& sf, const Vec3& planePoint, const Vec3& planeUnit) {
+  MirrorFrameInPlace(sf.frame, planePoint, planeUnit);
+  if (sf.kind == SurfaceKind::Nurbs)
+    sf.patch = nurbs::Mirror(sf.patch, planePoint, planeUnit);
+}
+
+/// The span `[lo, hi]` of an angle that has just been negated: `[-hi, -lo]`, shifted by whole turns
+/// so it starts in `[0, 2pi)` the way every builder writes one. Adding whole turns to both ends
+/// changes no point on the face.
+void NegateAngularSpan(double* lo, double* hi) {
+  double a = -*hi;
+  double b = -*lo;
+  while (a < 0.0) {
+    a += kTwoPi;
+    b += kTwoPi;
+  }
+  *lo = a;
+  *hi = b;
+}
+
+}  // namespace
+
+bool Mirror(const Solid& s, const Vec3& planePoint, const Vec3& planeUnit, Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
+  if (!FinitePoint(planePoint) || !FinitePoint(planeUnit))
+    return Fail(Problem::NonFiniteParameter, outWhy);
+  if (std::fabs(ray3d::Length(planeUnit) - 1.0) > 1e-9)
+    return Fail(Problem::MirrorPlaneNotUnit, outWhy);
+
+  Solid r = s;
+  for (Vertex& v : r.vertices)
+    v.p = ray3d::ReflectPointAcrossPlane(v.p, planePoint, planeUnit);
+  for (Edge& e : r.edges) {
+    if (e.kind != CurveKind::Line) {
+      MirrorFrameInPlace(e.frame, planePoint, planeUnit);
+      // Arc / Ellipse: the frame's Y was negated, so the same points are reached by the opposite
+      // parameter. Intersection: unused (its frame is only a witness point).
+      e.sweep = -e.sweep;
+    }
+    for (Surface& sf : e.isectSurfaces)
+      MirrorSurfaceInPlace(sf, planePoint, planeUnit);
+  }
+  for (Face& f : r.faces) {
+    MirrorSurfaceInPlace(f.surface, planePoint, planeUnit);
+    // Which face parameter the negated Y reverses, and how. A plane has no span; its general trim
+    // loop, if any, is in frame (x, y), so it is v there.
+    bool negateU = false;
+    bool negateV = false;
+    double uShift = 0.0;     // curved: the whole turns NegateAngularSpan added; u -> uShift - u
+    double nurbsUSum = 0.0;  // a + b of the patch's U domain; u -> a + b - u
+    switch (f.surface.kind) {
+    case SurfaceKind::Plane:
+      negateV = true;
+      break;
+    case SurfaceKind::Cylinder:
+    case SurfaceKind::Cone:
+    case SurfaceKind::Sphere:
+    case SurfaceKind::Torus: {
+      negateU = true;
+      const double oldEnd = f.uEnd;
+      NegateAngularSpan(&f.uStart, &f.uEnd);
+      uShift = f.uStart + oldEnd;
+      break;
+    }
+    case SurfaceKind::Nurbs: {
+      const nurbs::Patch& p = f.surface.patch;  // already reversed; its domain is unchanged
+      if (p.knotsU.size() > static_cast<std::size_t>(p.nu) && p.nu > p.degU)
+        nurbsUSum = p.knotsU[static_cast<std::size_t>(p.degU)] + p.knotsU[static_cast<std::size_t>(p.nu)];
+      const double a = nurbsUSum - f.uEnd;
+      const double b = nurbsUSum - f.uStart;
+      f.uStart = a;
+      f.uEnd = b;
+      break;
+    }
+    }
+    for (std::vector<curveisect::Vec2>& poly : f.paramLoops) {
+      for (curveisect::Vec2& q : poly) {
+        if (f.surface.kind == SurfaceKind::Nurbs)
+          q.x = nurbsUSum - q.x;
+        else if (negateU)
+          q.x = uShift - q.x;
+        else if (negateV)
+          q.y = -q.y;
+      }
+      // One parameter negated reverses the polygon's winding; put it back (outer CCW, holes CW).
+      std::reverse(poly.begin(), poly.end());
+    }
+    // A reflection reverses the sense in which every boundary runs round its face.
+    for (Loop& loop : f.loops) {
+      std::reverse(loop.uses.begin(), loop.uses.end());
+      for (EdgeUse& u : loop.uses)
+        u.reversed = !u.reversed;
+    }
+  }
+
+  // The recipe is kept: every primitive is symmetric about its frame's XZ plane (the builders place
+  // box / wedge corners at +-width/2 and the pyramid's first corner on +X), so the reflected frame
+  // describes the reflected primitive. A polysolid's path is in the frame's XY plane, where the
+  // negated Y negates every y, every sweep, and which side of the path is "left".
+  MirrorFrameInPlace(r.recipe.frame, planePoint, planeUnit);
+  r.recipe.path.start.y = -r.recipe.path.start.y;
+  for (PathSeg& seg : r.recipe.path.segs) {
+    seg.end.y = -seg.end.y;
+    seg.sweep = -seg.sweep;
+  }
+  if (r.recipe.justify == Justify::Left)
+    r.recipe.justify = Justify::Right;
+  else if (r.recipe.justify == Justify::Right)
+    r.recipe.justify = Justify::Left;
+
+  const Problem why = Validate(r);
+  if (why != Problem::Ok)
+    return Fail(Problem::MirrorResultInvalid, outWhy);
   *out = std::move(r);
   return Succeed(outWhy);
 }
@@ -4870,6 +5103,180 @@ bool MakeCone(const ucs::Ucs& frame, double baseRadius, double topRadius, double
   return BuildConical(frame, baseRadius, topRadius, height, /*asCylinder=*/false, out, outWhy);
 }
 
+
+// ---------------------------------------------------------------------------
+// A solid between a sampled height field and a flat plane — the earthwork pad (GitHub #150,
+// 3D Phase 7).
+// ---------------------------------------------------------------------------
+
+bool MakeHeightFieldSolid(const HeightField& hf, Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;  // a null output is a caller bug, not a user-facing reason
+  if (hf.cols < 1 || hf.rows < 1)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  const int nx = hf.cols + 1;
+  const int ny = hf.rows + 1;
+  if (static_cast<int>(hf.nodeZ.size()) != nx * ny ||
+      static_cast<int>(hf.cellIn.size()) != hf.cols * hf.rows)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  if (!AllFinite({hf.originX, hf.originY, hf.cellW, hf.cellH, hf.flatZ}))
+    return Fail(Problem::NonFiniteParameter, outWhy);
+  if (!(hf.cellW > 0.0) || !(hf.cellH > 0.0))
+    return Fail(Problem::NonPositiveWidth, outWhy);
+  for (double z : hf.nodeZ)
+    if (!std::isfinite(z))
+      return Fail(Problem::NonFiniteParameter, outWhy);
+
+  const auto nodeIx = [nx](int i, int j) { return static_cast<std::size_t>(j) * static_cast<std::size_t>(nx) +
+                                                  static_cast<std::size_t>(i); };
+  const auto cellIx = [&hf](int ci, int cj) { return static_cast<std::size_t>(cj) *
+                                                     static_cast<std::size_t>(hf.cols) +
+                                                     static_cast<std::size_t>(ci); };
+  // The two surfaces the solid lies between. For a CUT the ground is on top and the pad is the
+  // floor; for a FILL the pad is the top and the ground is what it rests on. One construction,
+  // because the only difference is which of the two is the upper surface.
+  const auto upperZ = [&hf](double groundZ) { return hf.flatIsBottom ? groundZ : hf.flatZ; };
+  const auto lowerZ = [&hf](double groundZ) { return hf.flatIsBottom ? hf.flatZ : groundZ; };
+  const double eps = 1e-9 * std::max({std::fabs(hf.cellW), std::fabs(hf.cellH), 1.0});
+
+  // A cell is only built where it has REAL thickness at all four corners. A cell that tapers to
+  // nothing — which is what happens along the line where the ground crosses the pad elevation —
+  // would contribute zero-area faces and an edge used more than twice, and the result would not be
+  // a solid at all. Those cells are counted and left out; the caller reports the shortfall rather
+  // than the kernel pretending the shape is exact.
+  std::vector<std::uint8_t> build(static_cast<std::size_t>(hf.cols) * static_cast<std::size_t>(hf.rows), 0);
+  int tapered = 0;
+  for (int cj = 0; cj < hf.rows; ++cj) {
+    for (int ci = 0; ci < hf.cols; ++ci) {
+      if (!hf.cellIn[cellIx(ci, cj)])
+        continue;
+      bool thick = true;
+      for (int dj = 0; dj <= 1 && thick; ++dj)
+        for (int di = 0; di <= 1 && thick; ++di) {
+          const double g = hf.nodeZ[nodeIx(ci + di, cj + dj)];
+          if (!(upperZ(g) - lowerZ(g) > eps))
+            thick = false;
+        }
+      if (thick)
+        build[cellIx(ci, cj)] = 1;
+      else
+        ++tapered;
+    }
+  }
+  if (std::find(build.begin(), build.end(), 1) == build.end())
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);  // nothing of the pad has any depth
+
+  Solid s;
+  // One vertex per (node, upper/lower), created on first use so an unused corner of the grid costs
+  // nothing.
+  std::vector<int> vUp(static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny), -1);
+  std::vector<int> vLo(vUp.size(), -1);
+  const auto nodeXY = [&hf](int i, int j) {
+    return std::pair<double, double>{hf.originX + hf.cellW * static_cast<double>(i),
+                                     hf.originY + hf.cellH * static_cast<double>(j)};
+  };
+  const auto upVert = [&](int i, int j) {
+    int& v = vUp[nodeIx(i, j)];
+    if (v < 0) {
+      const auto xy = nodeXY(i, j);
+      v = AddVertex(&s, Vec3{xy.first, xy.second, upperZ(hf.nodeZ[nodeIx(i, j)])});
+    }
+    return v;
+  };
+  const auto loVert = [&](int i, int j) {
+    int& v = vLo[nodeIx(i, j)];
+    if (v < 0) {
+      const auto xy = nodeXY(i, j);
+      v = AddVertex(&s, Vec3{xy.first, xy.second, lowerZ(hf.nodeZ[nodeIx(i, j)])});
+    }
+    return v;
+  };
+  // Every edge is shared by exactly two faces, which is what makes this a solid rather than a pile
+  // of triangles — so edges are created once and looked up by their vertex pair.
+  std::map<std::pair<int, int>, int> edgeOf;
+  const auto edgeBetween = [&](int a, int b, bool* reversed) {
+    const std::pair<int, int> key = a < b ? std::make_pair(a, b) : std::make_pair(b, a);
+    *reversed = !(a < b);
+    const auto it = edgeOf.find(key);
+    if (it != edgeOf.end())
+      return it->second;
+    const int e = AddLine(&s, key.first, key.second);
+    edgeOf.emplace(key, e);
+    return e;
+  };
+  // The face's plane is derived from the ring itself (Newell), not passed in: a sampled ground
+  // surface is not level, so a top triangle's normal is only +Z when the ground happens to be flat,
+  // and a plane face whose vertices do not lie on its own plane is not a face -- Validate refuses it.
+  const auto faceFrom = [&](const std::vector<int>& ring) {
+    Vec3 nrm{0.0, 0.0, 0.0};
+    for (std::size_t k = 0; k < ring.size(); ++k) {
+      const Vec3& p = s.vertices[static_cast<std::size_t>(ring[k])].p;
+      const Vec3& q = s.vertices[static_cast<std::size_t>(ring[(k + 1) % ring.size()])].p;
+      nrm.x += (p.y - q.y) * (p.z + q.z);
+      nrm.y += (p.z - q.z) * (p.x + q.x);
+      nrm.z += (p.x - q.x) * (p.y + q.y);
+    }
+    const Vec3 normal = ray3d::Normalize(nrm);
+    std::vector<EdgeUse> uses;
+    uses.reserve(ring.size());
+    for (std::size_t k = 0; k < ring.size(); ++k) {
+      bool rev = false;
+      const int e = edgeBetween(ring[k], ring[(k + 1) % ring.size()], &rev);
+      uses.push_back(EdgeUse{e, rev});
+    }
+    s.faces.push_back(MakePlaneFace(s.vertices[static_cast<std::size_t>(ring[0])].p, normal, std::move(uses)));
+  };
+
+  for (int cj = 0; cj < hf.rows; ++cj) {
+    for (int ci = 0; ci < hf.cols; ++ci) {
+      if (!build[cellIx(ci, cj)])
+        continue;
+      // The cell's four corners, counter-clockwise seen from above.
+      const int u00 = upVert(ci, cj), u10 = upVert(ci + 1, cj);
+      const int u11 = upVert(ci + 1, cj + 1), u01 = upVert(ci, cj + 1);
+      const int l00 = loVert(ci, cj), l10 = loVert(ci + 1, cj);
+      const int l11 = loVert(ci + 1, cj + 1), l01 = loVert(ci, cj + 1);
+      // The upper surface is two triangles, not one quad: four sampled ground elevations are not
+      // coplanar in general, and a plane face through four non-coplanar points is not a face.
+      faceFrom({u00, u10, u11});
+      faceFrom({u00, u11, u01});
+      // The lower surface, wound the other way so its normal points out of the solid.
+      faceFrom({l00, l11, l10});
+      faceFrom({l00, l01, l11});
+      // A wall wherever the neighbour is not part of the solid. Each is a vertical quad, and all
+      // four of its corners lie in one vertical plane however the ground slopes, so it stays planar.
+      struct Side { int di, dj, a, b, la, lb; };
+      const Side sides[4] = {
+          {0, -1, u00, u10, l00, l10},   // south
+          {1, 0, u10, u11, l10, l11},    // east
+          {0, 1, u11, u01, l11, l01},    // north
+          {-1, 0, u01, u00, l01, l00},   // west
+      };
+      for (const Side& sd : sides) {
+        const int ni = ci + sd.di;
+        const int nj = cj + sd.dj;
+        const bool neighbourBuilt = ni >= 0 && nj >= 0 && ni < hf.cols && nj < hf.rows &&
+                                    build[cellIx(ni, nj)] != 0;
+        if (neighbourBuilt)
+          continue;
+        const Vec3 a = s.vertices[static_cast<std::size_t>(sd.la)].p;
+        const Vec3 b = s.vertices[static_cast<std::size_t>(sd.lb)].p;
+        (void)a;
+        (void)b;
+        faceFrom({sd.la, sd.lb, sd.b, sd.a});
+      }
+    }
+  }
+
+  AddSingleShell(&s);
+  s.recipe.kind = PrimitiveKind::None;
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return Fail(why, outWhy);
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
 bool MakeSphere(const ucs::Ucs& frame, double radius, Solid* out, Problem* outWhy) {
   if (!out)
     return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
@@ -6264,6 +6671,107 @@ bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& op
   // separate undertaking (checking every face against every other). A profile too large, or a path
   // too tightly curved, for this option can build a solid that occupies the same space twice — a
   // known, documented limitation (REQ-315 2026-09-04), not a checked-and-refused case.
+  *out = std::move(s);
+  return Succeed(outWhy);
+}
+
+namespace {
+
+/// Re-aim one loop: walk its edges the other way round. Reversing the order AND flipping each use's
+/// own direction is what keeps the chain connected — the last edge's far end becomes the first's
+/// start — so a loop that was traversed CCW about its face normal is now traversed CW, which is
+/// exactly what turns a sweep's own cap loop into the HOLE loop of an annulus, or an inner band's
+/// outward-facing boundary into an inward-facing one.
+void ReverseLoopInPlace(Loop* lp, int edgeOffset) {
+  std::reverse(lp->uses.begin(), lp->uses.end());
+  for (EdgeUse& u : lp->uses) {
+    u.edge += edgeOffset;
+    u.reversed = !u.reversed;
+  }
+}
+
+} // namespace
+
+bool SweepTube(const Profile& outerProfile, const Profile& innerProfile, const SweepPath& path,
+               const SweepOptions& options, Solid* out, Problem* outWhy) {
+  if (!out)
+    return false;
+  // Matching cross-sections, or the two sweeps produce rings that do not correspond and the caps
+  // cannot close into one annulus. Checked before either sweep runs, so the reason reported is this
+  // one rather than whichever sweep happened to fail first for an unrelated cause.
+  if (outerProfile.vertices.size() != innerProfile.vertices.size() ||
+      outerProfile.edges.size() != innerProfile.edges.size() ||
+      outerProfile.vertices.size() != outerProfile.edges.size())
+    return Fail(Problem::ProfileMalformed, outWhy);
+
+  Solid o;
+  if (!Sweep(outerProfile, path, options, &o, outWhy))
+    return false;
+  Solid i;
+  if (!Sweep(innerProfile, path, options, &i, outWhy))
+    return false;
+
+  // Sweep builds an open path's two planar caps FIRST and every side face after (and a closed path
+  // no caps at all). Rather than trust that order, find them: exactly two planar faces, at indices
+  // 0 and 1, is the shape this merge needs — a closed path (no caps) lands here as "not two", which
+  // is the documented refusal.
+  auto capsAreFirstTwo = [](const Solid& s) {
+    if (s.faces.size() < 3)
+      return false;
+    if (s.faces[0].surface.kind != SurfaceKind::Plane || s.faces[1].surface.kind != SurfaceKind::Plane)
+      return false;
+    for (std::size_t k = 2; k < s.faces.size(); ++k)
+      if (s.faces[k].surface.kind == SurfaceKind::Plane)
+        return false;
+    return true;
+  };
+  if (!capsAreFirstTwo(o) || !capsAreFirstTwo(i) || o.faces.size() != i.faces.size())
+    return Fail(Problem::SweepUnsupportedOption, outWhy);
+
+  Solid s;
+  s.vertices = o.vertices;
+  const int vOff = static_cast<int>(s.vertices.size());
+  s.vertices.insert(s.vertices.end(), i.vertices.begin(), i.vertices.end());
+  s.edges = o.edges;
+  const int eOff = static_cast<int>(s.edges.size());
+  for (Edge e : i.edges) {
+    e.v0 += vOff;
+    e.v1 += vOff;
+    s.edges.push_back(std::move(e));
+  }
+
+  // The outer wall, exactly as swept.
+  for (std::size_t fi = 2; fi < o.faces.size(); ++fi)
+    s.faces.push_back(o.faces[fi]);
+
+  // The inner wall, turned inside out: every loop re-aimed (so each inner edge is still used twice,
+  // once each way, now that its cap use has gone) and the surface marked `inward`, which is what
+  // makes its normal point into the bore and its volume term subtract the void it bounds.
+  for (std::size_t fi = 2; fi < i.faces.size(); ++fi) {
+    Face f = i.faces[fi];
+    f.surface.inward = true;
+    for (Loop& lp : f.loops)
+      ReverseLoopInPlace(&lp, eOff);
+    s.faces.push_back(std::move(f));
+  }
+
+  // Each end cap becomes an annulus: the outer sweep's cap face (already on the right plane, with
+  // the right outward normal and the right outer loop) with the inner sweep's cap loop, re-aimed,
+  // added as the hole.
+  for (std::size_t capIdx = 0; capIdx < 2; ++capIdx) {
+    if (o.faces[capIdx].loops.empty() || i.faces[capIdx].loops.empty())
+      return Fail(Problem::SweepUnsupportedOption, outWhy);
+    Face cap = o.faces[capIdx];
+    Loop hole = i.faces[capIdx].loops.front();
+    ReverseLoopInPlace(&hole, eOff);
+    cap.loops.push_back(std::move(hole));
+    s.faces.push_back(std::move(cap));
+  }
+
+  AddSingleShell(&s);
+  const Problem why = Validate(s);
+  if (why != Problem::Ok)
+    return Fail(why, outWhy);
   *out = std::move(s);
   return Succeed(outWhy);
 }
@@ -7999,6 +8507,347 @@ struct DistRange {
   return Succeed(outWhy);
 }
 
+/// Cut a sphere by any plane through it — the cross-section is a circle, which the kernel holds
+/// (GitHub #520, REQ-314 / REQ-335). Each piece is a spherical cap: the sphere's own surface over the
+/// latitudes the plane leaves, closed by the flat disc of the cut.
+///
+/// The construction works in a frame whose +Z is the kept side's own outward direction, so one
+/// builder serves both caps: the sphere is symmetric under that flip.
+[[nodiscard]] bool SameMeasuredShape(const Solid& a, const Solid& b);
+
+/// A `Sphere` or `Torus` recipe that describes its solid, the way `ConicalRecipeFitsSolid` vets a
+/// cylinder's (D-2026-09-17-a): these builders rebuild the pieces from the recipe, so a recipe whose
+/// primitive is a different shape — a damaged `.gs` frame, a solid edited since — would cut in the
+/// wrong place. A recipe that does not fit is not used, and the cut falls through to the refusal the
+/// solid's geometry earns.
+[[nodiscard]] bool RoundRecipeFitsSolid(const Solid& solid) {
+  const Recipe& rc = solid.recipe;
+  Solid prim;
+  Problem why = Problem::Ok;
+  const bool built = rc.kind == PrimitiveKind::Sphere
+                         ? MakeSphere(rc.frame, rc.radius, &prim, &why)
+                         : (rc.kind == PrimitiveKind::Torus
+                                ? MakeTorus(rc.frame, rc.radius, rc.radius2, &prim, &why)
+                                : false);
+  return built && SameMeasuredShape(solid, prim);
+}
+
+[[nodiscard]] bool SliceSpherePrimitive(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                        SliceKeep keep, Solid* outAbove, Solid* outBelow, bool* handled,
+                                        Problem* outWhy) {
+  *handled = false;
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Sphere || !RoundRecipeFitsSolid(solid))
+    return false;
+
+  *handled = true;
+  const Vec3 centre = rc.frame.origin;
+  const double R = rc.radius;
+  const double eps = 1e-7 * std::max(R, 1.0);
+  const double d = ray3d::Dot(ray3d::Sub(planePoint, centre), pn);  // signed height of the plane
+  if (std::fabs(d) >= R - eps)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+
+  // `up` is the outward direction of the piece being built; `dUp` the plane's height along it.
+  auto build = [&](const Vec3& up, double dUp, Solid* dst) -> bool {
+    ucs::Ucs fr{};
+    if (!ucs::FromNormal(centre, up, &fr))
+      return Fail(Problem::SliceDegeneratePlane, outWhy);
+    const double rCut = std::sqrt(std::max(0.0, R * R - dUp * dUp));
+    const double vCut = std::asin(std::clamp(dUp / R, -1.0, 1.0));  // latitude of the cut circle
+    auto W = [&](const Vec3& local) { return ucs::UcsToWorld(fr, local); };
+
+    Solid s;
+    const Vec3 cutC = W(Vec3{0.0, 0.0, dUp});
+    const int a = AddVertex(&s, W(Vec3{rCut, 0.0, dUp}));   // cut circle at u = 0
+    const int b = AddVertex(&s, W(Vec3{-rCut, 0.0, dUp}));  // cut circle at u = pi
+    const int pole = AddVertex(&s, W(Vec3{0.0, 0.0, R}));
+
+    const Vec3 Z = fr.zAxis;
+    const int cut0 = AddArc(&s, a, b, cutC, Z, kPi);  // the u in [0, pi] half of the cut circle
+    const int cut1 = AddArc(&s, b, a, cutC, Z, kPi);
+    // Meridians from the cut circle to the pole. About -Y the local +X turns toward +Z; about +Y the
+    // local -X does, which is why the two seams carry opposite normals.
+    const double mSweep = kHalfPi - vCut;
+    const int mA = AddArc(&s, a, pole, centre, ray3d::Scale(fr.yAxis, -1.0), mSweep);
+    const int mB = AddArc(&s, b, pole, centre, fr.yAxis, mSweep);
+
+    // The flat disc of the cut, facing away from the material (which is on the +up side).
+    s.faces.push_back(MakePlaneFace(planePoint, ray3d::Scale(Z, -1.0), {{cut1, true}, {cut0, true}}));
+
+    auto capFace = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+      Face f;
+      f.surface.kind = SurfaceKind::Sphere;
+      f.surface.frame = fr;
+      f.surface.radius = R;
+      f.uStart = u0;
+      f.uEnd = u1;
+      f.vStart = vCut;
+      f.vEnd = kHalfPi;
+      Loop lp;
+      lp.uses = std::move(uses);
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    };
+    capFace(0.0, kPi, {{cut0, false}, {mB, false}, {mA, true}});
+    capFace(kPi, kTwoPi, {{cut1, false}, {mA, false}, {mB, true}});
+
+    AddSingleShell(&s);
+    if (Validate(s) != Problem::Ok)
+      return Fail(Problem::SliceResultInvalid, outWhy);
+    *dst = std::move(s);
+    return true;
+  };
+
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+  Solid probe;
+  if (!build(pn, d, &probe) || !build(ray3d::Scale(pn, -1.0), -d, &probe))
+    return false;  // build() already set outWhy
+  if (wantAbove && outAbove && !build(pn, d, outAbove))
+    return false;
+  if (wantBelow && outBelow && !build(ray3d::Scale(pn, -1.0), -d, outBelow))
+    return false;
+  return Succeed(outWhy);
+}
+
+/// Cut a torus by a plane **square to its axis** — the cross-section is a ring, two concentric
+/// circles (GitHub #520, REQ-314 / REQ-335). Each piece is the part of the tube on its side of the
+/// plane, closed by the flat ring.
+///
+
+/// Cut a torus by a plane **through its axis** — the section is two separate circles, one through
+/// each side of the ring (GitHub #520 increment 3, the half this release's first pass left refused).
+///
+/// Each piece is half the doughnut: the tube over half a turn, closed by a flat disc of the tube's
+/// own radius at each end. Both discs face the same way — away from the material, which is all on one
+/// side of the plane — which is what makes a half-doughnut, rather than a wedge.
+///
+/// The two halves are the same construction in two frames: the second is the first turned half a turn
+/// about the axis, which a torus is symmetric under. A plane parallel to the axis but NOT through it
+/// cuts a quartic (two ovals, or one waisted curve) and keeps its own refusal.
+[[nodiscard]] bool SliceTorusThroughAxis(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                         SliceKeep keep, Solid* outAbove, Solid* outBelow, bool* handled,
+                                         Problem* outWhy) {
+  *handled = false;
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Torus)
+    return false;
+  const Vec3 axis = ray3d::Normalize(rc.frame.zAxis);
+  if (std::fabs(ray3d::Dot(pn, axis)) > 1e-6)
+    return false;  // not parallel to the axis — SliceTorusSquareToAxis' remit, or a quartic
+
+  const double R = rc.radius;
+  const double r = rc.radius2;
+  *handled = true;
+  if (r >= R)
+    return Fail(Problem::SliceCutTorusCurve, outWhy);  // a self-intersecting tube is not two circles
+  const double eps = 1e-7 * std::max(R + r, 1.0);
+  // Through the axis, or beside it? Beside it the section is a quartic, not two circles.
+  const double d = ray3d::Dot(ray3d::Sub(planePoint, rc.frame.origin), pn);
+  if (std::fabs(d) > eps)
+    return Fail(Problem::SliceCutTorusCurve, outWhy);
+  if (!RoundRecipeFitsSolid(solid))
+    return false;  // a recipe that does not describe its solid never places a cut (D-2026-09-17-a)
+
+  // The frame this half is built in: +Y is the side the material is on, +Z the torus axis, so the
+  // cut plane is its own XZ plane.
+  auto halfFrame = [&](bool second) {
+    ucs::Ucs f{};
+    f.origin = rc.frame.origin;
+    f.zAxis = axis;
+    f.yAxis = ray3d::Normalize(second ? ray3d::Scale(pn, -1.0) : pn);
+    f.xAxis = ray3d::Normalize(ray3d::Cross(f.yAxis, f.zAxis));
+    return f;
+  };
+
+  auto build = [&](bool second, Solid* dst) -> bool {
+    const ucs::Ucs fr = halfFrame(second);
+    auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(fr, Vec3{x, y, z}); };
+    Solid s;
+    // The four corners of the (u, v) pattern, exactly as MakeTorus names them: u in {0, pi} is the
+    // two cut ends, v in {0, pi} the outer and inner equators.
+    const int v00 = AddVertex(&s, W(R + r, 0.0, 0.0));
+    const int v0p = AddVertex(&s, W(R - r, 0.0, 0.0));
+    const int vp0 = AddVertex(&s, W(-(R + r), 0.0, 0.0));
+    const int vpp = AddVertex(&s, W(-(R - r), 0.0, 0.0));
+
+    const Vec3 Z = fr.zAxis;
+    const Vec3 Y = fr.yAxis;
+    const Vec3 origin = fr.origin;
+    // Ring arcs over this half turn: the outer equator (v = 0) and the inner one (v = pi).
+    const int eOuter = AddArc(&s, v00, vp0, origin, Z, kPi);
+    const int eInner = AddArc(&s, v0p, vpp, origin, Z, kPi);
+    // The tube's own circle at each cut end, in two half sweeps — the ends ARE the section.
+    const Vec3 tube0 = W(R, 0.0, 0.0);
+    const Vec3 tubeP = W(-R, 0.0, 0.0);
+    const int t0a = AddArc(&s, v00, v0p, tube0, ray3d::Scale(Y, -1.0), kPi);
+    const int t0b = AddArc(&s, v0p, v00, tube0, ray3d::Scale(Y, -1.0), kPi);
+    const int tPa = AddArc(&s, vp0, vpp, tubeP, Y, kPi);
+    const int tPb = AddArc(&s, vpp, vp0, tubeP, Y, kPi);
+
+    // The two flat discs, both facing -Y: the material of this half is the +Y side of the plane, so
+    // each end looks away from it. Their loops wind counter-clockwise about -Y, which is the
+    // direction the tube arcs were built to sweep in.
+    s.faces.push_back(MakePlaneFace(tube0, ray3d::Scale(Y, -1.0), {{t0a, false}, {t0b, false}}));
+    s.faces.push_back(MakePlaneFace(tubeP, ray3d::Scale(Y, -1.0), {{tPb, true}, {tPa, true}}));
+
+    auto tubeFace = [&](double v0, double v1, std::vector<EdgeUse> uses) {
+      Face f;
+      f.surface.kind = SurfaceKind::Torus;
+      f.surface.frame = fr;
+      f.surface.radius = R;
+      f.surface.radius2 = r;
+      f.uStart = 0.0;
+      f.uEnd = kPi;
+      f.vStart = v0;
+      f.vEnd = v1;
+      Loop lp;
+      lp.uses = std::move(uses);
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    };
+    // MakeTorus' own two patches over this half turn, unchanged in winding.
+    tubeFace(0.0, kPi, {{eOuter, false}, {tPa, false}, {eInner, true}, {t0a, true}});
+    tubeFace(kPi, kTwoPi, {{eInner, false}, {tPb, false}, {eOuter, true}, {t0b, true}});
+
+    AddSingleShell(&s);
+    if (Validate(s) != Problem::Ok)
+      return Fail(Problem::SliceResultInvalid, outWhy);
+    *dst = std::move(s);
+    return true;
+  };
+
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+  Solid probe;
+  if (!build(false, &probe) || !build(true, &probe))
+    return false;  // build() already set outWhy
+  if (wantAbove && outAbove && !build(false, outAbove))
+    return false;
+  if (wantBelow && outBelow && !build(true, outBelow))
+    return false;
+  return Succeed(outWhy);
+}
+
+/// The tube angle `v` runs from the outer equator (`v = 0`) through the top (`v = pi/2`) to the inner
+/// equator (`v = pi`), so a plane at height `d` cuts the tube at `v = asin(d/r)` and `pi - asin(d/r)`,
+/// and the ring's radii are `R ± sqrt(r^2 - d^2)`. As with a sphere, one builder serves both pieces
+/// because the torus is symmetric about its own centre plane.
+[[nodiscard]] bool SliceTorusSquareToAxis(const Solid& solid, const Vec3& planePoint, const Vec3& pn,
+                                          SliceKeep keep, Solid* outAbove, Solid* outBelow, bool* handled,
+                                          Problem* outWhy) {
+  *handled = false;
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Torus)
+    return false;
+  const double R = rc.radius;
+  const double r = rc.radius2;
+  // A tube as wide as its ring self-intersects, so it has no mass properties to vet its recipe
+  // against — and no ring-shaped cut either. It is refused by name here, before that check: a
+  // refusal cannot place a cut in the wrong place, which is what vetting the recipe guards against.
+  if (r >= R) {
+    *handled = true;
+    return Fail(Problem::SliceCutTorusCurve, outWhy);
+  }
+  if (!RoundRecipeFitsSolid(solid))
+    return false;
+
+  *handled = true;
+  const double eps = 1e-7 * std::max(R + r, 1.0);
+  const Vec3 axis = rc.frame.zAxis;
+  if (std::fabs(std::fabs(ray3d::Dot(pn, axis)) - 1.0) > 1e-6)
+    return Fail(Problem::SliceCutTorusCurve, outWhy);  // any other angle is a quartic curve
+  const double d = ray3d::Dot(ray3d::Sub(planePoint, rc.frame.origin), axis);
+  if (std::fabs(d) >= r - eps)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+
+  auto build = [&](double sign, Solid* dst) -> bool {
+    // A frame flipped about X keeps the torus (its z -> -z image is itself) and turns the piece
+    // below the plane into the piece above it.
+    ucs::Ucs fr = rc.frame;
+    if (sign < 0.0) {
+      fr.yAxis = ray3d::Scale(fr.yAxis, -1.0);
+      fr.zAxis = ray3d::Scale(fr.zAxis, -1.0);
+    }
+    const double dUp = sign * d;
+    const double rc2 = std::sqrt(std::max(0.0, r * r - dUp * dUp));  // half-width of the ring
+    const double vCut = std::asin(std::clamp(dUp / r, -1.0, 1.0));
+    auto W = [&](double x, double y, double z) { return ucs::UcsToWorld(fr, Vec3{x, y, z}); };
+
+    Solid s;
+    const int out0 = AddVertex(&s, W(R + rc2, 0.0, dUp));
+    const int outP = AddVertex(&s, W(-(R + rc2), 0.0, dUp));
+    const int in0 = AddVertex(&s, W(R - rc2, 0.0, dUp));
+    const int inP = AddVertex(&s, W(-(R - rc2), 0.0, dUp));
+
+    const Vec3 Z = fr.zAxis;
+    const Vec3 cutC = W(0.0, 0.0, dUp);
+    const int eOut0 = AddArc(&s, out0, outP, cutC, Z, kPi);  // outer ring, u in [0, pi]
+    const int eOutP = AddArc(&s, outP, out0, cutC, Z, kPi);
+    const int eIn0 = AddArc(&s, in0, inP, cutC, Z, kPi);  // inner ring
+    const int eInP = AddArc(&s, inP, in0, cutC, Z, kPi);
+    // Tube arcs at u = 0 and u = pi, over the top: from the outer cut point to the inner one.
+    const double tSweep = kPi - 2.0 * vCut;
+    const int tube0 = AddArc(&s, out0, in0, W(R, 0.0, 0.0), ray3d::Scale(fr.yAxis, -1.0), tSweep);
+    const int tubeP = AddArc(&s, outP, inP, W(-R, 0.0, 0.0), fr.yAxis, tSweep);
+
+    // The flat ring of the cut, facing away from the material: the outer loop first, then the hole
+    // wound the other way, which is what makes the face's signed area the ring's own.
+    Face cut;
+    cut.surface = PlaneSurface(planePoint, ray3d::Scale(Z, -1.0));
+    Loop outer;
+    outer.uses = {EdgeUse{eOutP, true}, EdgeUse{eOut0, true}};
+    Loop hole;
+    hole.uses = {EdgeUse{eIn0, false}, EdgeUse{eInP, false}};
+    cut.loops.push_back(std::move(outer));
+    cut.loops.push_back(std::move(hole));
+    s.faces.push_back(std::move(cut));
+
+    auto tubeFace = [&](double u0, double u1, std::vector<EdgeUse> uses) {
+      Face f;
+      f.surface.kind = SurfaceKind::Torus;
+      f.surface.frame = fr;
+      f.surface.radius = R;
+      f.surface.radius2 = r;
+      f.uStart = u0;
+      f.uEnd = u1;
+      f.vStart = vCut;
+      f.vEnd = kPi - vCut;
+      Loop lp;
+      lp.uses = std::move(uses);
+      f.loops.push_back(std::move(lp));
+      s.faces.push_back(std::move(f));
+    };
+    tubeFace(0.0, kPi, {{eOut0, false}, {tubeP, false}, {eIn0, true}, {tube0, true}});
+    tubeFace(kPi, kTwoPi, {{eOutP, false}, {tube0, false}, {eInP, true}, {tubeP, true}});
+
+    AddSingleShell(&s);
+    if (Validate(s) != Problem::Ok)
+      return Fail(Problem::SliceResultInvalid, outWhy);
+    *dst = std::move(s);
+    return true;
+  };
+
+  const bool wantAbove = keep == SliceKeep::Above || keep == SliceKeep::Both;
+  const bool wantBelow = keep == SliceKeep::Below || keep == SliceKeep::Both;
+  // "Above" is the +pn side; the builder's +1 piece is the one above the plane along the torus axis.
+  const bool upperIsAbove = ray3d::Dot(pn, axis) > 0.0;
+  Solid* upperDst = upperIsAbove ? outAbove : outBelow;
+  Solid* lowerDst = upperIsAbove ? outBelow : outAbove;
+  const bool wantUpper = upperIsAbove ? wantAbove : wantBelow;
+  const bool wantLower = upperIsAbove ? wantBelow : wantAbove;
+
+  Solid probe;
+  if (!build(1.0, &probe) || !build(-1.0, &probe))
+    return false;
+  if (wantUpper && upperDst && !build(1.0, upperDst))
+    return false;
+  if (wantLower && lowerDst && !build(-1.0, lowerDst))
+    return false;
+  return Succeed(outWhy);
+}
+
 } // namespace
 
 
@@ -8218,6 +9067,19 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
       ok = SliceConicalAlongAxis(*subject, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
       if (handled)
         return ok;
+      // A sphere at any plane (a circle), and a torus cut square to its axis (a ring) — GitHub #520.
+      ok = SliceSpherePrimitive(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
+      if (handled)
+        return ok;
+      // A torus cut THROUGH its axis is two separate circles (#520 increment 3). Asked first because
+      // the square-to-axis recogniser below answers for every OTHER torus plane, including with the
+      // quartic refusal — so it would swallow this one.
+      ok = SliceTorusThroughAxis(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
+      if (handled)
+        return ok;
+      ok = SliceTorusSquareToAxis(solid, planePoint, upn, keep, outAbove, outBelow, &handled, outWhy);
+      if (handled)
+        return ok;
       // Nothing took the cut. For a cone, say which cut it was rather than "flat faces only", which
       // reads as though the user picked the wrong object (GitHub #516, REQ-201). Every cylinder cut
       // and every cut parallel to a cone's axis is handled above, so a cone reaches here only when
@@ -8398,73 +9260,121 @@ bool Slice(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal, 
 // acceptance 5).
 // ---------------------------------------------------------------------------------------------
 
-bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
-                 ucs::Ucs* outPlane, Path* outLoop, Problem* outWhy) {
+namespace {
+
+/// Drop the vertices that sit on a straight run, in place (GitHub #522).
+///
+/// A `UNION` leaves its operands' faces split into fragments along each other's planes, and coplanar
+/// fragments are not merged back, so a cut crosses those internal boundaries and keeps a vertex at
+/// each — a section of two unioned boxes came out with 12 vertices where the shape has 8. The shape
+/// was right; the outline carried vertices nobody drew and had to be cleaned up by hand.
+///
+/// A vertex goes only when **both** of its segments are straight and it lies on the line between its
+/// neighbours to within 1e-9 of the outline's own size — far inside REQ-101's 0.002 ft, so a real
+/// corner, however slight, is kept. An arc's endpoint is never dropped: it carries the sweep.
+void DropCollinearPathVertices(Path* p) {
+  if (!p || !p->closed || p->segs.size() < 3)
+    return;
+  // The ring of points: `start`, then each segment's end. Segment i runs from point i to point i+1,
+  // and the last closes back onto `start`.
+  const std::size_t n = p->segs.size();
+  std::vector<ucs::Point2D> pt;
+  pt.reserve(n);
+  pt.push_back(p->start);
+  for (std::size_t i = 0; i + 1 < n; ++i)
+    pt.push_back(p->segs[i].end);
+
+  double size = 0.0;
+  for (std::size_t i = 0; i < n; ++i)
+    size = std::max(size, std::hypot(pt[i].x - pt[0].x, pt[i].y - pt[0].y));
+  const double tol = std::max(1e-9 * std::max(size, 1.0), 1e-12);
+
+  std::vector<bool> keep(n, true);
+  for (std::size_t i = 0; i < n; ++i) {
+    // Point i is the junction between segment i-1 (arriving) and segment i (leaving).
+    const std::size_t prevSeg = (i + n - 1) % n;
+    if (p->segs[prevSeg].sweep != 0.0 || p->segs[i].sweep != 0.0)
+      continue;  // an arc's endpoint carries its sweep
+    // Its neighbours on the ring, skipping any already dropped, so a run of several goes in one pass.
+    std::size_t a = (i + n - 1) % n;
+    while (a != i && !keep[a])
+      a = (a + n - 1) % n;
+    std::size_t b = (i + 1) % n;
+    while (b != i && !keep[b])
+      b = (b + 1) % n;
+    if (a == i || b == i || a == b)
+      continue;
+    const double ax = pt[b].x - pt[a].x, ay = pt[b].y - pt[a].y;
+    const double len = std::hypot(ax, ay);
+    if (!(len > tol))
+      continue;
+    const double cross = std::fabs((pt[i].x - pt[a].x) * ay - (pt[i].y - pt[a].y) * ax) / len;
+    if (cross > tol)
+      continue;  // a real corner
+    // And it must lie BETWEEN them, not beyond an end: a spike back along the same line is a corner.
+    const double t = ((pt[i].x - pt[a].x) * ax + (pt[i].y - pt[a].y) * ay) / (len * len);
+    if (!(t > 0.0 && t < 1.0))
+      continue;
+    keep[i] = false;
+  }
+
+  std::size_t kept = 0;
+  for (bool k : keep)
+    kept += k ? 1u : 0u;
+  if (kept == n || kept < 3)
+    return;  // nothing to drop, or dropping would leave no outline
+
+  Path out;
+  out.closed = true;
+  std::size_t first = 0;
+  while (first < n && !keep[first])
+    ++first;
+  out.start = pt[first];
+  for (std::size_t k = 1; k <= n; ++k) {
+    const std::size_t i = (first + k) % n;
+    if (!keep[i] && k != n)
+      continue;  // this point is gone; the straight run simply continues
+    PathSeg seg;
+    seg.end = pt[i];
+    // The segment arriving at a kept point is the one that left the previous kept point. Every
+    // segment in a dropped run is straight by the test above, so the merged span is straight too.
+    seg.sweep = p->segs[(i + n - 1) % n].sweep;
+    out.segs.push_back(seg);
+    if (k == n)
+      break;
+  }
+  *p = std::move(out);
+}
+
+/// One loop of a cut face, as a \ref Path in the section frame — the shared body of
+/// \ref SectionOutlines and \ref SectionLoop.
+///
+/// \p flip is whether the face's own normal opposes the section normal, in which case the loop is
+/// walked backwards so the outline a caller receives winds counter-clockwise about the normal it
+/// asked for. A hole loop, wound opposite to its face's outer loop, therefore comes back wound
+/// clockwise — which is what tells the two apart without a second flag.
+[[nodiscard]] bool SectionLoopToPath(const Solid& piece, const Face& face, const Loop& loop,
+                                     const ucs::Ucs& frame, bool flip, Path* out, Problem* outWhy) {
   const auto fail = [&](Problem p) {
     if (outWhy)
       *outWhy = p;
     return false;
   };
-  if (!outPlane || !outLoop)
-    return fail(Problem::IndexOutOfRange);
-
-  ucs::Ucs frame{};
-  if (!ucs::FromNormal(planePoint, planeNormal, &frame))
-    return fail(Problem::SliceDegeneratePlane);
-
-  // The cut itself is \ref Slice's, unchanged and un-extended: sectioning is the same geometry
-  // question asked without keeping the answer, so it inherits Slice's accepted set exactly (planar
-  // solids and cylinder/cone walls today; a sphere or torus is refused there and therefore here,
-  // by Slice's own reason rather than a second one invented alongside it).
-  //
-  // Non-destructiveness is not a property this has to implement. `Slice` takes its input by const
-  // reference and writes to out-parameters, so the source solid is untouched by construction, and
-  // the two pieces are simply dropped when this returns.
-  Solid above, below;
-  Problem why = Problem::Ok;
-  if (!Slice(solid, planePoint, planeNormal, SliceKeep::Both, &above, &below, &why))
-    return fail(why);
-
-  // The section is the face of the ABOVE piece that lies ON the cut plane. Taking it from the
-  // result rather than intersecting the faces by hand is the whole reason this is cheap: Slice has
-  // already done the classification, the ordering and the seam handling.
-  const Face* cut = nullptr;
-  for (const Face& f : above.faces) {
-    if (f.surface.kind != SurfaceKind::Plane)
-      continue;
-    if (std::fabs(std::fabs(ray3d::Dot(f.surface.frame.zAxis, frame.zAxis)) - 1.0) > 1e-9)
-      continue;
-    if (std::fabs(ray3d::Dot(ray3d::Sub(f.surface.frame.origin, planePoint), frame.zAxis)) > 1e-9)
-      continue;
-    if (cut)
-      return fail(Problem::SliceCutSeveralOutlines);  // more than one face on the plane
-    cut = &f;
-  }
-  if (!cut)
-    return fail(Problem::SlicePlaneMissesSolid);
-  if (cut->loops.size() != 1)
-    return fail(Problem::SectionHasHole);  // a section with holes is increment 2 (#520)
-
+  const std::vector<EdgeUse>& uses = loop.uses;
+  if (uses.size() < 2)
+    return fail(Problem::SliceResultInvalid);
   // Every edge must be expressible as a straight or circular segment, because that is what a
   // \ref Path is. An `Ellipse` — what an OBLIQUE cut of a cylinder produces — and an `Intersection`
   // curve are refused BY NAME rather than approximated by a chord or a nearby arc: a section is a
   // measured figure, and one that is quietly the wrong shape is the failure REQ-201 exists to stop.
-  const std::vector<EdgeUse>& uses = cut->loops.front().uses;
-  if (uses.size() < 2)
-    return fail(Problem::SliceResultInvalid);
   for (const EdgeUse& u : uses) {
-    const CurveKind k = above.edges[static_cast<std::size_t>(u.edge)].kind;
+    const CurveKind k = piece.edges[static_cast<std::size_t>(u.edge)].kind;
     if (k == CurveKind::Ellipse)
       return fail(Problem::SectionEllipse);  // named for what it is, not "flat faces only" (#516)
     if (k != CurveKind::Line && k != CurveKind::Arc)
       return fail(Problem::SectionCurve);
   }
-
-  // The `above` piece's cut face looks DOWN — its outward normal points away from the material
-  // above it, so it is anti-parallel to the section normal. Its loop therefore winds clockwise
-  // about `frame.zAxis`, and is reversed here so the Path a caller receives always winds CCW about
-  // the plane normal it asked for, whichever side the geometry happened to come from.
-  const bool flip = ray3d::Dot(cut->surface.frame.zAxis, frame.zAxis) < 0.0;
+  (void)face;
 
   const std::size_t n = uses.size();
   std::vector<const EdgeUse*> order;
@@ -8477,11 +9387,11 @@ bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNo
   path.segs.clear();
   for (std::size_t i = 0; i < n; ++i) {
     const EdgeUse& u = *order[i];
-    const Edge& e = above.edges[static_cast<std::size_t>(u.edge)];
+    const Edge& e = piece.edges[static_cast<std::size_t>(u.edge)];
     // Reversing the loop's ORDER also reverses each edge's own direction of travel.
     const bool rev = flip ? !u.reversed : u.reversed;
-    const Vec3 aW = above.vertices[static_cast<std::size_t>(rev ? e.v1 : e.v0)].p;
-    const Vec3 bW = above.vertices[static_cast<std::size_t>(rev ? e.v0 : e.v1)].p;
+    const Vec3 aW = piece.vertices[static_cast<std::size_t>(rev ? e.v1 : e.v0)].p;
+    const Vec3 bW = piece.vertices[static_cast<std::size_t>(rev ? e.v0 : e.v1)].p;
     if (i == 0)
       path.start = ucs::WorldToPlane(frame, aW);
 
@@ -8496,10 +9406,321 @@ bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNo
     }
     path.segs.push_back(seg);
   }
-
-  *outPlane = frame;
-  *outLoop = std::move(path);
+  DropCollinearPathVertices(&path);
+  *out = std::move(path);
   return true;
+}
+
+/// Every closed outline of the section, plus how many separate cut faces they came from.
+[[nodiscard]] bool SectionAllOutlines(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                      ucs::Ucs* outPlane, std::vector<Path>* outLoops, int* outFaces,
+                                      Problem* outWhy) {
+  const auto fail = [&](Problem p) {
+    if (outWhy)
+      *outWhy = p;
+    return false;
+  };
+  ucs::Ucs frame{};
+  if (!ucs::FromNormal(planePoint, planeNormal, &frame))
+    return fail(Problem::SliceDegeneratePlane);
+
+  // The cut itself is \ref Slice's, unchanged and un-extended: sectioning is the same geometry
+  // question asked without keeping the answer, so it inherits Slice's accepted set exactly.
+  //
+  // Non-destructiveness is not a property this has to implement. `Slice` takes its input by const
+  // reference and writes to out-parameters, so the source solid is untouched by construction, and
+  // the two pieces are simply dropped when this returns.
+  Solid above, below;
+  Problem why = Problem::Ok;
+  if (!Slice(solid, planePoint, planeNormal, SliceKeep::Both, &above, &below, &why))
+    return fail(why);
+
+  // The section is carried by the faces of the ABOVE piece that lie ON the cut plane. Taking them
+  // from the result rather than intersecting the faces by hand is the whole reason this is cheap:
+  // Slice has already done the classification, the ordering and the seam handling.
+  std::vector<const Face*> cuts;
+  for (const Face& f : above.faces) {
+    if (f.surface.kind != SurfaceKind::Plane)
+      continue;
+    if (std::fabs(std::fabs(ray3d::Dot(f.surface.frame.zAxis, frame.zAxis)) - 1.0) > 1e-9)
+      continue;
+    if (std::fabs(ray3d::Dot(ray3d::Sub(f.surface.frame.origin, planePoint), frame.zAxis)) > 1e-9)
+      continue;
+    cuts.push_back(&f);
+  }
+  if (cuts.empty())
+    return fail(Problem::SlicePlaneMissesSolid);
+
+  std::vector<Path> loops;
+  for (const Face* f : cuts) {
+    // The `above` piece's cut face looks DOWN — its outward normal points away from the material
+    // above it, so it is anti-parallel to the section normal, and its loops are walked backwards.
+    const bool flip = ray3d::Dot(f->surface.frame.zAxis, frame.zAxis) < 0.0;
+    for (const Loop& lp : f->loops) {
+      Path p;
+      if (!SectionLoopToPath(above, *f, lp, frame, flip, &p, outWhy))
+        return false;
+      loops.push_back(std::move(p));
+    }
+  }
+  *outPlane = frame;
+  *outLoops = std::move(loops);
+  if (outFaces)
+    *outFaces = static_cast<int>(cuts.size());
+  return Succeed(outWhy);
+}
+
+} // namespace
+
+
+/// The elliptical ARC plus chord a tilted cut exposes when it runs off the end of a cylinder or cone
+/// (GitHub #520 follow-up, D-2026-09-23-b). The ellipse is the one the cut would make on the endless
+/// side surface; the cap cuts a piece out of it, and the chord closes what is left across the cap.
+///
+/// Section-only, and computed from the primitive's own geometry rather than from a cut: `Slice` does
+/// not build the pieces for this cut yet (it refuses with \ref Problem::SliceCutCrossesCurvedEnd), so
+/// there is no cut face to read back. That is the one place sectioning does not inherit Slice's
+/// accepted set, decided with the user and recorded; the follow-up is to teach the cutter the same
+/// cut, after which this can be read from the pieces like every other section.
+struct SectionEllipseArcX {
+  bool valid = false;
+  Vec3 centre{};    ///< world, the full ellipse's centre
+  Vec3 normal{};    ///< world, the caller's plane normal
+  Vec3 majorDir{};  ///< world, unit
+  double majorSemi = 0.0;
+  double minorSemi = 0.0;
+  double startParam = 0.0;  ///< the arc's own parametrisation, measured from `majorDir`
+  double sweep = 0.0;       ///< signed, CCW about `normal`
+  Vec3 chordA{};            ///< world; the arc runs from here...
+  Vec3 chordB{};            ///< ...to here, and the chord closes it across the cap
+};
+
+/// The two parameters at which the ellipse `centre + a cos t * major + b sin t * minor` reaches the
+/// axial height \p capZ, measured along \p axis from \p axisOrigin. False when it never does, or
+/// only grazes it — neither is an arc plus a chord.
+[[nodiscard]] bool EllipseParamsAtAxialHeight(const Vec3& centre, const Vec3& majorDir, const Vec3& minorDir,
+                                              double a, double b, const Vec3& axis, const Vec3& axisOrigin,
+                                              double capZ, double eps, double* outT0, double* outT1) {
+  // z(t) = zc + A cos t + B sin t = capZ  ->  R cos(t - phi) = capZ - zc.
+  const double zc = ray3d::Dot(ray3d::Sub(centre, axisOrigin), axis);
+  const double A = a * ray3d::Dot(majorDir, axis);
+  const double B = b * ray3d::Dot(minorDir, axis);
+  const double R = std::sqrt(A * A + B * B);
+  if (!(R > eps))
+    return false;  // the ellipse is level with the cap: it never crosses it
+  const double c = (capZ - zc) / R;
+  if (std::fabs(c) >= 1.0 - 1e-12)
+    return false;  // tangent or clear of the cap
+  const double phi = std::atan2(B, A);
+  const double d = std::acos(std::clamp(c, -1.0, 1.0));
+  *outT0 = phi - d;
+  *outT1 = phi + d;
+  return true;
+}
+
+[[nodiscard]] bool SectionEllipseArcOutline(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                            ucs::Ucs* outPlane, SectionEllipseArc* outArc,
+                                            Problem* outWhy) {
+  if (!outPlane || !outArc)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  const Recipe& rc = solid.recipe;
+  if (rc.kind != PrimitiveKind::Cylinder && rc.kind != PrimitiveKind::Cone)
+    return Fail(Problem::SliceCurvedFace, outWhy);
+  ucs::Ucs frame{};
+  if (!ucs::FromNormal(planePoint, planeNormal, &frame))
+    return Fail(Problem::SliceDegeneratePlane, outWhy);
+
+  const ucs::Ucs& fr = rc.frame;
+  const Vec3 axis = ray3d::Normalize(fr.zAxis);
+  const Vec3 pn = ray3d::Normalize(planeNormal);
+  const double dotNZ = ray3d::Dot(pn, axis);
+  if (std::fabs(dotNZ) < 1e-6 || std::fabs(dotNZ) > 1.0 - 1e-9)
+    return Fail(Problem::SliceCutCrossesCurvedEnd, outWhy);  // not a tilted cut at all
+  const double h = rc.height;
+  const double scale = std::max(h, std::max(rc.radius, rc.radius2));
+  const double eps = 1e-7 * std::max(scale, 1.0);
+
+  // The full ellipse the plane makes on the side surface, taken from the same geometry the oblique
+  // cutters use: closed form for a cylinder, the quadric solve for a cone.
+  Vec3 centre{}, majorDir{}, minorDir{}, eN{};
+  double ea = 0.0, eb = 0.0;
+  if (rc.kind == PrimitiveKind::Cylinder) {
+    const double r = rc.radius;
+    const Vec3 pl = ucs::WorldToUcs(fr, planePoint);
+    const Vec3 nl{ray3d::Dot(pn, fr.xAxis), ray3d::Dot(pn, fr.yAxis), dotNZ};
+    const double a0 = (nl.x * pl.x + nl.y * pl.y + nl.z * pl.z) / nl.z;
+    centre = ray3d::Add(fr.origin, ray3d::Scale(axis, a0));
+    minorDir = ray3d::Normalize(ray3d::Cross(pn, axis));
+    majorDir = ray3d::Normalize(ray3d::Cross(pn, minorDir));
+    ea = r / std::fabs(dotNZ);
+    eb = r;
+    eN = dotNZ > 0.0 ? pn : ray3d::Scale(pn, -1.0);
+  } else {
+    ConeObliqueEllipse ce{};
+    if (!ComputeConeObliqueEllipse(fr, rc.radius, rc.radius2, h, planePoint, pn, eps, &ce))
+      return Fail(Problem::SliceCutTooSteepForCone, outWhy);
+    centre = ce.centre;
+    majorDir = ce.majorDir;
+    ea = ce.majorSemi;
+    eb = ce.minorSemi;
+    eN = ce.normal;
+    minorDir = ray3d::Cross(eN, majorDir);
+  }
+  if (rc.kind == PrimitiveKind::Cylinder)
+    minorDir = ray3d::Cross(eN, majorDir);  // the frame AddEllipse itself builds
+
+  // Which cap does it run off? Exactly one, or this is not the shape this answers.
+  const double zLoCap = 0.0;
+  const double zHiCap = h;
+  double t0 = 0.0, t1 = 0.0;
+  int crossings = 0;
+  double capZ = 0.0;
+  for (const double cz : {zLoCap, zHiCap}) {
+    double u0 = 0.0, u1 = 0.0;
+    if (EllipseParamsAtAxialHeight(centre, majorDir, minorDir, ea, eb, axis, fr.origin, cz, eps, &u0, &u1)) {
+      ++crossings;
+      t0 = u0;
+      t1 = u1;
+      capZ = cz;
+    }
+  }
+  if (crossings == 0)
+    return Fail(Problem::SectionEllipse, outWhy);  // it stays on the side: a whole ellipse, not this
+  if (crossings > 1)
+    return Fail(Problem::SliceCutCrossesCurvedEnd, outWhy);  // off BOTH ends: two arcs and two chords
+
+  // Of the two spans between the crossings, the section is the one whose points are INSIDE the
+  // solid — on the far side of the cap from the piece the cut removed.
+  const auto pointAt = [&](double t) {
+    return ray3d::Add(centre, ray3d::Add(ray3d::Scale(majorDir, ea * std::cos(t)),
+                                         ray3d::Scale(minorDir, eb * std::sin(t))));
+  };
+  const auto axialOf = [&](const Vec3& p) { return ray3d::Dot(ray3d::Sub(p, fr.origin), axis); };
+  const double mid = axialOf(pointAt(0.5 * (t0 + t1)));
+  const bool keepDirect = capZ == zLoCap ? mid > capZ : mid < capZ;
+  double start = keepDirect ? t0 : t1;
+  double sweep = keepDirect ? (t1 - t0) : (t0 + kTwoPi - t1);
+  while (sweep < 0.0)
+    sweep += kTwoPi;
+  if (!(sweep > eps) || sweep >= kTwoPi - eps)
+    return Fail(Problem::SliceCutCrossesCurvedEnd, outWhy);
+
+  // The caller's plane normal may oppose the ellipse's own, in which case its parametrisation runs
+  // the other way round — so the span is restated in the frame the caller (and the entity) will use.
+  if (ray3d::Dot(frame.zAxis, eN) < 0.0) {
+    start = -start;
+    sweep = -sweep;
+  }
+
+  SectionEllipseArc out;
+  out.valid = true;
+  out.centre = centre;
+  out.normal = frame.zAxis;
+  out.majorDir = majorDir;
+  out.majorSemi = ea;
+  out.minorSemi = eb;
+  out.startParam = start;
+  out.sweep = sweep;
+  out.chordA = pointAt(keepDirect ? t0 : t1);
+  out.chordB = pointAt((keepDirect ? t0 : t1) + (keepDirect ? (t1 - t0) : (t0 + kTwoPi - t1)));
+  *outPlane = frame;
+  *outArc = out;
+  return Succeed(outWhy);
+}
+
+bool SectionEllipseOutline(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                           ucs::Ucs* outPlane, SectionEllipse* outEllipse, Problem* outWhy) {
+  if (!outPlane || !outEllipse)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+
+  ucs::Ucs frame{};
+  if (!ucs::FromNormal(planePoint, planeNormal, &frame))
+    return Fail(Problem::SliceDegeneratePlane, outWhy);
+
+  Solid above, below;
+  Problem why = Problem::Ok;
+  if (!Slice(solid, planePoint, planeNormal, SliceKeep::Both, &above, &below, &why))
+    return Fail(why, outWhy);
+
+  // The same cut face \ref SectionOutlines takes, asked a narrower question: is this one closed
+  // ellipse? A tilted cut of a cylinder or cone is built as two half-sweeps of one ellipse
+  // (`AddEllipse`), so the face's loop is exactly two `Ellipse` edges sharing a frame. Anything
+  // else — a cut that also crosses an end cap, a marched curve — is not this, and says so.
+  const Face* cut = nullptr;
+  for (const Face& f : above.faces) {
+    if (f.surface.kind != SurfaceKind::Plane)
+      continue;
+    if (std::fabs(std::fabs(ray3d::Dot(f.surface.frame.zAxis, frame.zAxis)) - 1.0) > 1e-9)
+      continue;
+    if (std::fabs(ray3d::Dot(ray3d::Sub(f.surface.frame.origin, planePoint), frame.zAxis)) > 1e-9)
+      continue;
+    if (cut)
+      return Fail(Problem::SliceCutSeveralOutlines, outWhy);
+    cut = &f;
+  }
+  if (!cut)
+    return Fail(Problem::SlicePlaneMissesSolid, outWhy);
+  if (cut->loops.size() != 1)
+    return Fail(Problem::SectionHasHole, outWhy);
+
+  const std::vector<EdgeUse>& uses = cut->loops.front().uses;
+  double sweep = 0.0;
+  const Edge* first = nullptr;
+  for (const EdgeUse& u : uses) {
+    const Edge& e = above.edges[static_cast<std::size_t>(u.edge)];
+    if (e.kind != CurveKind::Ellipse)
+      return Fail(Problem::SectionCurve, outWhy);
+    if (!first)
+      first = &e;
+    else if (ray3d::Length(ray3d::Sub(e.frame.origin, first->frame.origin)) > 1e-9 * std::max(1.0, e.radius) ||
+             std::fabs(e.radius - first->radius) > 1e-9 * std::max(1.0, e.radius) ||
+             std::fabs(e.radius2 - first->radius2) > 1e-9 * std::max(1.0, e.radius))
+      return Fail(Problem::SliceCutSeveralOutlines, outWhy);  // two different ellipses, not one
+    sweep += std::fabs(e.sweep);
+  }
+  if (!first)
+    return Fail(Problem::SliceResultInvalid, outWhy);
+  // A closed ellipse, not an arc of one: the sweeps must add to a full turn. A cut that clips an end
+  // cap has a chord as well, and is refused by name where it always was (#516).
+  if (std::fabs(sweep - kTwoPi) > 1e-9)
+    return Fail(Problem::SliceCutCrossesCurvedEnd, outWhy);
+
+  SectionEllipse out;
+  out.valid = true;
+  out.centre = first->frame.origin;
+  out.normal = frame.zAxis;  // the caller's own plane, as \ref SectionOutlines promises
+  out.majorDir = first->frame.xAxis;
+  out.majorSemi = first->radius;
+  out.minorSemi = first->radius2;
+  *outPlane = frame;
+  *outEllipse = out;
+  return Succeed(outWhy);
+}
+
+bool SectionOutlines(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                     ucs::Ucs* outPlane, std::vector<Path>* outLoops, Problem* outWhy) {
+  if (!outPlane || !outLoops)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  return SectionAllOutlines(solid, planePoint, planeNormal, outPlane, outLoops, nullptr, outWhy);
+}
+
+bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                 ucs::Ucs* outPlane, Path* outLoop, Problem* outWhy) {
+  if (!outPlane || !outLoop)
+    return Fail(Problem::IndexOutOfRange, outWhy);
+  std::vector<Path> loops;
+  int faces = 0;
+  if (!SectionAllOutlines(solid, planePoint, planeNormal, outPlane, &loops, &faces, outWhy))
+    return false;
+  // One outline is what this entry point promises. Which of the two ways it can be several matters
+  // to the caller, so they are named apart: separate pieces of solid on the plane, or one piece with
+  // a hole in it. \ref SectionOutlines returns both without refusing.
+  if (faces > 1)
+    return Fail(Problem::SliceCutSeveralOutlines, outWhy);
+  if (loops.size() != 1)
+    return Fail(Problem::SectionHasHole, outWhy);
+  *outLoop = std::move(loops.front());
+  return Succeed(outWhy);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -15923,6 +17144,201 @@ struct PatchPoint {
   return CurvedFaceMoment(f, q);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Second moments of volume — inertia (REQ-349, GitHub #460).
+// ---------------------------------------------------------------------------------------------
+
+/// Volume second moments about `q`: `Sxx = ∫ x'^2 dV`, `Sxy = ∫ x' y' dV`, etc. where `r' = p - q`.
+/// From these `Ixx = Syy + Szz`, `Ixy = -Sxy`. Integrated via the divergence theorem in the same
+/// world-axes, solid-local-origin discipline the centroid uses.
+struct FaceSecondMoment {
+  bool ok = false;
+  double area = 0.0;
+  double volTerm = 0.0;
+  double Sxx = 0.0;
+  double Syy = 0.0;
+  double Szz = 0.0;
+  double Sxy = 0.0;
+  double Sxz = 0.0;
+  double Syz = 0.0;
+};
+
+/// A planar face's second-moment contribution, by Green's theorem along its boundary.
+///
+/// For a plane `r·n = dot(c,n)` is constant, so each volume integral reduces to
+/// `1/5 * dot(c,n) * ∫ f(r) dA` where `f` is quadratic. The region integrals over `(a,b)` are the
+/// same six scalars `PlanarFaceMoment` already computes: `A, Sa, Sb, Saa, Sab, Sbb`.
+[[nodiscard]] FaceSecondMoment PlanarFaceSecondMoment(const Solid& s, const Face& f, const Vec3& q) {
+  FaceSecondMoment out;
+  if (f.loops.size() != 1)
+    return out;
+  const Surface& sf = f.surface;
+  const GaussRule& g = Gauss16();
+
+  double A = 0.0, Sa = 0.0, Sb = 0.0, Saa = 0.0, Sab = 0.0, Sbb = 0.0;
+  for (const EdgeUse& u : f.loops.front().uses) {
+    const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+    for (int i = 0; i < 16; ++i) {
+      const double tRaw = 0.5 * (g.x[i] + 1.0);
+      const double t = u.reversed ? (1.0 - tRaw) : tRaw;
+      const double w = 0.5 * g.w[i] * (u.reversed ? -1.0 : 1.0);
+      Vec3 pw{0, 0, 0}, dw{0, 0, 0};
+      if (!EdgePointAndTangent(s, e, t, &pw, &dw))
+        return out;
+      const Vec3 pl = ucs::WorldToUcs(sf.frame, pw);
+      const Vec3 dl{ray3d::Dot(dw, sf.frame.xAxis), ray3d::Dot(dw, sf.frame.yAxis),
+                    ray3d::Dot(dw, sf.frame.zAxis)};
+      const double a = pl.x, b = pl.y;
+      const double da = dl.x * w, db = dl.y * w;
+      A += a * db;
+      Sa += 0.5 * a * a * db;
+      Sb += -0.5 * b * b * da;
+      Saa += (a * a * a / 3.0) * db;
+      Sbb += -(b * b * b / 3.0) * da;
+      Sab += 0.5 * a * a * b * db;
+    }
+  }
+
+  const Vec3 c = ray3d::Sub(sf.frame.origin, q);
+  const Vec3 X = sf.frame.xAxis, Y = sf.frame.yAxis;
+  Vec3 n = sf.frame.zAxis;
+  if (sf.inward)
+    n = ray3d::Scale(n, -1.0);
+  const double nW[3] = {n.x, n.y, n.z};
+  const double cW[3] = {c.x, c.y, c.z};
+  const double Xw[3] = {X.x, X.y, X.z};
+  const double Yw[3] = {Y.x, Y.y, Y.z};
+  const double dotCN = ray3d::Dot(c, n);
+  // If dot is near zero the face contributes nothing to volume and to second moments.
+  if (std::fabs(dotCN) < 1e-18 && std::fabs(A) < 1e-18) {
+    // Still a valid face, but zero volume contribution.
+  }
+
+  auto integ = [&](int px, int py, double coeff) -> double {
+    // Generic helper not used; keep inline expansions below for clarity.
+    (void)px;
+    (void)py;
+    (void)coeff;
+    return 0.0;
+  };
+  (void)integ;
+  (void)nW;
+
+  // Region integrals of world monomials over the face.
+  // x = c_x + X_x a + Y_x b, etc. Expand and integrate termwise.
+  const double cx = cW[0], cy = cW[1], cz = cW[2];
+
+  // Helpers to compute ∫ x^2 dA, ∫ y^2 dA, ∫ z^2 dA, ∫ xy dA, etc.
+  auto quad = [&](double cx_, double cy_, double cz_, double Xx_, double Xy_, double Xz_, double Yx_,
+                  double Yy_, double Yz_, double* outXX, double* outYY, double* outZZ, double* outXY,
+                  double* outXZ, double* outYZ) {
+    const double A_ = A;
+    const double Sa_ = Sa, Sb_ = Sb, Saa_ = Saa, Sbb_ = Sbb, Sab_ = Sab;
+    *outXX = cx_ * cx_ * A_ + 2 * cx_ * Xx_ * Sa_ + 2 * cx_ * Yx_ * Sb_ + Xx_ * Xx_ * Saa_ +
+             2 * Xx_ * Yx_ * Sab_ + Yx_ * Yx_ * Sbb_;
+    *outYY = cy_ * cy_ * A_ + 2 * cy_ * Xy_ * Sa_ + 2 * cy_ * Yy_ * Sb_ + Xy_ * Xy_ * Saa_ +
+             2 * Xy_ * Yy_ * Sab_ + Yy_ * Yy_ * Sbb_;
+    *outZZ = cz_ * cz_ * A_ + 2 * cz_ * Xz_ * Sa_ + 2 * cz_ * Yz_ * Sb_ + Xz_ * Xz_ * Saa_ +
+             2 * Xz_ * Yz_ * Sab_ + Yz_ * Yz_ * Sbb_;
+    *outXY = cx_ * cy_ * A_ + (cx_ * Xy_ + cy_ * Xx_) * Sa_ + (cx_ * Yy_ + cy_ * Yx_) * Sb_ +
+             Xx_ * Xy_ * Saa_ + (Xx_ * Yy_ + Yx_ * Xy_) * Sab_ + Yx_ * Yy_ * Sbb_;
+    *outXZ = cx_ * cz_ * A_ + (cx_ * Xz_ + cz_ * Xx_) * Sa_ + (cx_ * Yz_ + cz_ * Yx_) * Sb_ +
+             Xx_ * Xz_ * Saa_ + (Xx_ * Yz_ + Yx_ * Xz_) * Sab_ + Yx_ * Yz_ * Sbb_;
+    *outYZ = cy_ * cz_ * A_ + (cy_ * Xz_ + cz_ * Xy_) * Sa_ + (cy_ * Yz_ + cz_ * Yy_) * Sb_ +
+             Xy_ * Xz_ * Saa_ + (Xy_ * Yz_ + Yy_ * Xz_) * Sab_ + Yy_ * Yz_ * Sbb_;
+  };
+
+  double intXX = 0, intYY = 0, intZZ = 0, intXY = 0, intXZ = 0, intYZ = 0;
+  quad(cx, cy, cz, Xw[0], Xw[1], Xw[2], Yw[0], Yw[1], Yw[2], &intXX, &intYY, &intZZ, &intXY,
+       &intXZ, &intYZ);
+
+  const double scale = dotCN / 5.0;
+  out.ok = true;
+  out.area = std::fabs(A);
+  out.volTerm = dotCN * A;
+  out.Sxx = scale * intXX;
+  out.Syy = scale * intYY;
+  out.Szz = scale * intZZ;
+  out.Sxy = scale * intXY;
+  out.Sxz = scale * intXZ;
+  out.Syz = scale * intYZ;
+  return out;
+}
+
+/// A curved face's second-moment contribution, by quadrature over its (u,v) rectangle.
+///
+/// Uses the homogeneous form `∫ f dV = 1/5 ∫ f(r) (r·n) dA` sampled at each Gauss point, where
+/// `r = pW - q` and `f` is `x^2, y^2, z^2, xy, xz, yz`.
+[[nodiscard]] FaceSecondMoment CurvedFaceSecondMoment(const Face& f, const Vec3& q) {
+  FaceSecondMoment out;
+  const Surface& sf = f.surface;
+  double v0 = f.vStart, v1 = f.vEnd;
+  if (sf.kind == SurfaceKind::Cylinder || sf.kind == SurfaceKind::Cone) {
+    v0 = 0.0;
+    v1 = sf.height;
+  }
+  const double u0 = f.uStart, u1 = f.uEnd;
+  if (!(std::fabs(u1 - u0) > 0.0) || !(std::fabs(v1 - v0) > 0.0))
+    return out;
+
+  const GaussRule& g = Gauss16();
+  const double hu = 0.5 * (u1 - u0), mu = 0.5 * (u1 + u0);
+  const double hv = 0.5 * (v1 - v0), mv = 0.5 * (v1 + v0);
+  for (int i = 0; i < 16; ++i) {
+    const double u = mu + hu * g.x[i];
+    for (int j = 0; j < 16; ++j) {
+      const double v = mv + hv * g.x[j];
+      const PatchPoint pt = EvalSurfaceLocal(sf, u, v);
+      Vec3 nl = ray3d::Cross(pt.du, pt.dv);
+      const double jac = ray3d::Length(nl);
+      if (!(jac > 0.0))
+        continue;
+      nl = ray3d::Scale(nl, 1.0 / jac);
+      if (sf.inward)
+        nl = ray3d::Scale(nl, -1.0);
+      const double w = g.w[i] * g.w[j] * hu * hv * jac;
+
+      const Vec3 pW = ucs::UcsToWorld(sf.frame, pt.p);
+      const Vec3 nW = ray3d::Add(
+          ray3d::Add(ray3d::Scale(sf.frame.xAxis, nl.x), ray3d::Scale(sf.frame.yAxis, nl.y)),
+          ray3d::Scale(sf.frame.zAxis, nl.z));
+      const Vec3 r = ray3d::Sub(pW, q);
+      const double dot = ray3d::Dot(r, nW);
+      const double dA = w;
+      const double coeff = dot * dA / 5.0;
+      out.area += dA;
+      out.volTerm += dot * dA;
+      out.Sxx += r.x * r.x * coeff;
+      out.Syy += r.y * r.y * coeff;
+      out.Szz += r.z * r.z * coeff;
+      out.Sxy += r.x * r.y * coeff;
+      out.Sxz += r.x * r.z * coeff;
+      out.Syz += r.y * r.z * coeff;
+    }
+  }
+  out.ok = true;
+  return out;
+}
+
+[[nodiscard]] FaceSecondMoment IntegrateFaceSecondMoment(const Solid& s, const Face& f,
+                                                        const Vec3& q) {
+  if (!f.paramLoops.empty())
+    return FaceSecondMoment{};
+  if (f.surface.kind == SurfaceKind::Plane)
+    return PlanarFaceSecondMoment(s, f, q);
+  if (f.surface.kind == SurfaceKind::Nurbs)
+    return FaceSecondMoment{};
+  if (f.loops.size() != 1)
+    return FaceSecondMoment{};
+  for (const Loop& lp : f.loops)
+    for (const EdgeUse& u : lp.uses) {
+      const CurveKind k = s.edges[static_cast<std::size_t>(u.edge)].kind;
+      if (k == CurveKind::Intersection || k == CurveKind::Ellipse)
+        return FaceSecondMoment{};
+    }
+  return CurvedFaceSecondMoment(f, q);
+}
+
 } // namespace
 
 bool FaceArea(const Solid& s, int faceIndex, double* outArea, Problem* outWhy) {
@@ -16011,7 +17427,202 @@ MassProperties ComputeMassProperties(const Solid& s) {
       mp.centroidValid = true;
     }
   }
+
+  // Second moments — inertia about the centroid (REQ-349).
+  // Shares the same covered set and the same world-axes, solid-local-origin discipline.
+  // Withheld when the centroid is unavailable or a face is outside the set, leaving volume/area/centroid untouched.
+  if (mp.centroidValid) {
+    double Sxx_q = 0.0, Syy_q = 0.0, Szz_q = 0.0, Sxy_q = 0.0, Sxz_q = 0.0, Syz_q = 0.0;
+    double volAbout2 = 0.0;
+    bool covered2 = !s.faces.empty();
+    for (const Face& f : s.faces) {
+      const FaceSecondMoment fm = IntegrateFaceSecondMoment(s, f, q);
+      if (!fm.ok) {
+        covered2 = false;
+        break;
+      }
+      Sxx_q += fm.Sxx;
+      Syy_q += fm.Syy;
+      Szz_q += fm.Szz;
+      Sxy_q += fm.Sxy;
+      Sxz_q += fm.Sxz;
+      Syz_q += fm.Syz;
+      volAbout2 += fm.volTerm;
+    }
+    volAbout2 /= 3.0;
+    if (covered2 && std::fabs(volAbout2) > 1e-12 && std::isfinite(volAbout2) &&
+        std::fabs(volAbout2 - mp.volume) <= 1e-9 * std::fabs(mp.volume) &&
+        std::isfinite(Sxx_q) && std::isfinite(Syy_q) && std::isfinite(Szz_q) &&
+        std::isfinite(Sxy_q) && std::isfinite(Sxz_q) && std::isfinite(Syz_q)) {
+      const Vec3 d = ray3d::Sub(mp.centroid, q);
+      const double dx = d.x, dy = d.y, dz = d.z;
+      const double V = mp.volume;
+      // Transfer second moments from q to centroid: S_c = S_q - V * d_i d_j with correction for diagonal.
+      const double Sxx_c = Sxx_q - V * dx * dx;
+      const double Syy_c = Syy_q - V * dy * dy;
+      const double Szz_c = Szz_q - V * dz * dz;
+      const double Sxy_c = Sxy_q - V * dx * dy;
+      const double Sxz_c = Sxz_q - V * dx * dz;
+      const double Syz_c = Syz_q - V * dy * dz;
+
+      const double Ixx_c = Syy_c + Szz_c;
+      const double Iyy_c = Sxx_c + Szz_c;
+      const double Izz_c = Sxx_c + Syy_c;
+      const double Ixy_c = -Sxy_c;
+      const double Ixz_c = -Sxz_c;
+      const double Iyz_c = -Syz_c;
+
+      if (std::isfinite(Ixx_c) && std::isfinite(Iyy_c) && std::isfinite(Izz_c) &&
+          std::isfinite(Ixy_c) && std::isfinite(Ixz_c) && std::isfinite(Iyz_c) &&
+          Ixx_c >= -1e-12 && Iyy_c >= -1e-12 && Izz_c >= -1e-12) {
+        mp.Ixx = Ixx_c;
+        mp.Iyy = Iyy_c;
+        mp.Izz = Izz_c;
+        mp.Ixy = Ixy_c;
+        mp.Ixz = Ixz_c;
+        mp.Iyz = Iyz_c;
+
+        // Principal axes: eigendecomposition of the centroidal tensor.
+        double A[3][3] = {
+            {Ixx_c, Ixy_c, Ixz_c},
+            {Ixy_c, Iyy_c, Iyz_c},
+            {Ixz_c, Iyz_c, Izz_c},
+        };
+        double eig[3] = {0, 0, 0};
+        double vec[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+        JacobiEigenSymmetric3x3(A, eig, vec);
+        // Sort descending but keep axes paired; Jacobi already sorts, but re-assert ordering for determinism.
+        // The Jacobi routine returns sorted descending.
+        mp.principalI1 = eig[0];
+        mp.principalI2 = eig[1];
+        mp.principalI3 = eig[2];
+        mp.principalAxis1 = Vec3{vec[0][0], vec[1][0], vec[2][0]};
+        mp.principalAxis2 = Vec3{vec[0][1], vec[1][1], vec[2][1]};
+        mp.principalAxis3 = Vec3{vec[0][2], vec[1][2], vec[2][2]};
+        mp.inertiaValid = true;
+      }
+    }
+  }
   return mp;
+}
+
+InertiaTensor InertiaAboutPoint(const MassProperties& mp, const Vec3& p) {
+  InertiaTensor out;
+  if (!mp.inertiaValid)
+    return out;
+  const Vec3 d = ray3d::Sub(p, mp.centroid);
+  const double dx = d.x, dy = d.y, dz = d.z;
+  const double d2 = dx * dx + dy * dy + dz * dz;
+  const double m = mp.volume;
+  out.xx = mp.Ixx + m * (d2 - dx * dx);
+  out.yy = mp.Iyy + m * (d2 - dy * dy);
+  out.zz = mp.Izz + m * (d2 - dz * dz);
+  out.xy = mp.Ixy - m * dx * dy;
+  out.xz = mp.Ixz - m * dx * dz;
+  out.yz = mp.Iyz - m * dy * dz;
+  return out;
+}
+
+void JacobiEigenSymmetric3x3(const double A[3][3], double eig[3], double vec[3][3]) {
+  double B[3][3];
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      B[i][j] = A[i][j];
+  double V[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+  const int maxIter = 50;
+  const double eps = 1e-15;
+  for (int iter = 0; iter < maxIter; ++iter) {
+    int p = 0, q = 1;
+    double maxOff = std::fabs(B[0][1]);
+    if (std::fabs(B[0][2]) > maxOff) {
+      maxOff = std::fabs(B[0][2]);
+      p = 0;
+      q = 2;
+    }
+    if (std::fabs(B[1][2]) > maxOff) {
+      maxOff = std::fabs(B[1][2]);
+      p = 1;
+      q = 2;
+    }
+    if (maxOff < eps)
+      break;
+    const double app = B[p][p];
+    const double aqq = B[q][q];
+    const double apq = B[p][q];
+    const double phi = 0.5 * std::atan2(2.0 * apq, aqq - app);
+    const double c = std::cos(phi);
+    const double s = std::sin(phi);
+    // Rotate B
+    for (int k = 0; k < 3; ++k) {
+      if (k == p || k == q)
+        continue;
+      const double bpk = B[p][k];
+      const double bqk = B[q][k];
+      B[p][k] = c * bpk - s * bqk;
+      B[k][p] = B[p][k];
+      B[q][k] = s * bpk + c * bqk;
+      B[k][q] = B[q][k];
+    }
+    B[p][p] = c * c * app - 2.0 * s * c * apq + s * s * aqq;
+    B[q][q] = s * s * app + 2.0 * s * c * apq + c * c * aqq;
+    B[p][q] = 0.0;
+    B[q][p] = 0.0;
+    // Rotate eigenvectors
+    for (int k = 0; k < 3; ++k) {
+      const double vkp = V[k][p];
+      const double vkq = V[k][q];
+      V[k][p] = c * vkp - s * vkq;
+      V[k][q] = s * vkp + c * vkq;
+    }
+  }
+  eig[0] = B[0][0];
+  eig[1] = B[1][1];
+  eig[2] = B[2][2];
+  // Sort descending with corresponding vectors (stable for equal values)
+  for (int i = 0; i < 3; ++i) {
+    for (int j = i + 1; j < 3; ++j) {
+      if (eig[j] > eig[i]) {
+        std::swap(eig[i], eig[j]);
+        for (int k = 0; k < 3; ++k)
+          std::swap(V[k][i], V[k][j]);
+      }
+    }
+  }
+  // Canonicalize sign: make the largest-magnitude component of each eigenvector positive
+  for (int j = 0; j < 3; ++j) {
+    double maxAbs = 0.0;
+    int idx = 0;
+    for (int k = 0; k < 3; ++k) {
+      const double ab = std::fabs(V[k][j]);
+      if (ab > maxAbs) {
+        maxAbs = ab;
+        idx = k;
+      }
+    }
+    if (V[idx][j] < 0.0) {
+      for (int k = 0; k < 3; ++k)
+        V[k][j] = -V[k][j];
+    }
+  }
+  // Enforce right-handedness: det of V should be +1
+  const double det = V[0][0] * (V[1][1] * V[2][2] - V[1][2] * V[2][1]) -
+                     V[0][1] * (V[1][0] * V[2][2] - V[1][2] * V[2][0]) +
+                     V[0][2] * (V[1][0] * V[2][1] - V[1][1] * V[2][0]);
+  if (det < 0.0) {
+    for (int k = 0; k < 3; ++k)
+      V[k][2] = -V[k][2];
+  }
+  // Orthonormalize for safety (Jacobi maintains orthonormality up to round-off)
+  for (int j = 0; j < 3; ++j) {
+    double len = std::sqrt(V[0][j] * V[0][j] + V[1][j] * V[1][j] + V[2][j] * V[2][j]);
+    if (len > 1e-12) {
+      for (int k = 0; k < 3; ++k)
+        V[k][j] /= len;
+    }
+  }
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      vec[i][j] = V[i][j];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -16149,44 +17760,450 @@ namespace {
 /// is ample for a profile cap. A profile is the first thing to hand \ref Tessellate a non-convex
 /// plane face — ADR-045 named that "Phase 4's problem, when a boolean first produces a face that
 /// needs one", and an extruded L-shape needs it now.
-void EarClip(const std::vector<ucs::Point2D>& ring, std::vector<std::array<int, 3>>* tris) {
+///
+/// Returns false if a full pass finds no clippable ear before the ring is down to a triangle. A
+/// valid simple polygon always has at least two ears (the standard "two ears theorem"), so that can
+/// only happen from a genuinely malformed ring OR — this used to be the unhandled case — from the
+/// exact-zero convexity/containment comparisons below spuriously rejecting an ear that numerically
+/// exists but is very thin (a nearly-collinear triple, e.g. along a hole-to-outer-boundary bridge
+/// slit). The old code treated "no ear found" as "stop early and fan whatever is left from one
+/// point" — which for a non-star-shaped remainder produces self-overlapping triangles. That defect
+/// was invisible to a total-signed-area check (the shoelace identity gives the same total for a
+/// self-overlapping decomposition as for a valid one) and only showed up as a wrong VOLUME much
+/// later, once the triangles were integrated in 3D — see issue "torn bolt holes" / TASK-272. Failing
+/// loudly here instead turns that into an immediate, attributable refusal.
+[[nodiscard]] bool EarClip(const std::vector<ucs::Point2D>& ring, std::vector<std::array<int, 3>>* tris) {
   const int n = static_cast<int>(ring.size());
+  if (n < 3)
+    return false;
+  double minX = ring[0].x, maxX = ring[0].x, minY = ring[0].y, maxY = ring[0].y;
+  for (const ucs::Point2D& p : ring) {
+    minX = std::min(minX, p.x);
+    maxX = std::max(maxX, p.x);
+    minY = std::min(minY, p.y);
+    maxY = std::max(maxY, p.y);
+  }
+  // A relative tolerance, scaled to the ring's own extent: an absolute epsilon would be meaningless
+  // across the wide range of magnitudes this kernel tessellates at (a bolt-hole flange vs. a
+  // survey-scale part), and too tight a tolerance is exactly what let a valid-but-thin ear near a
+  // bridge slit get spuriously rejected in the first place.
+  const double scale = std::max({maxX - minX, maxY - minY, 1.0});
+  double areaEps = 1e-9 * scale * scale;
+  double containEps = 1e-9 * scale;
+
   std::vector<int> idx(static_cast<std::size_t>(n));
   for (int i = 0; i < n; ++i)
     idx[static_cast<std::size_t>(i)] = i;
 
   int guard = 0;
+  int stallEscalations = 0;
+  // TASK-272 §9h: which ear gets clipped each pass used to always scan starting at index 0 — on a
+  // large, mostly-convex boundary (a bridged multi-hole ring easily has 1000+ points), index 0 (or
+  // whatever is now next to it) is very often IMMEDIATELY valid, so the scan kept re-clipping from
+  // the same end every single pass instead of walking around the ring. That is a VALID triangulation
+  // (every "two ears theorem" guarantee still holds — this was never a correctness bug, which is why
+  // it passed watertightness, per-point radius, and self-intersection checks) but a geometrically
+  // terrible one: it peels into a fan of thousands of long, thin sliver triangles converging on one
+  // or two points, rather than a well-shaped mesh hugging the boundary. Confirmed directly by
+  // rendering the actual dumped mesh for a real multi-hole flange face offline (see TASK-272 §9g) —
+  // exactly this fan pattern, not a crack. Thin slivers are exactly what a GPU rasterizer can drop
+  // sub-pixel coverage on at a grazing/foreshortened view angle, which is what read as "torn" edges
+  // in Shaded view. Fix: resume scanning from where the LAST clip happened instead of restarting at
+  // 0 every pass — the standard "walk the boundary" ear-clip technique — so clips distribute evenly
+  // around the ring instead of always favouring whichever region sits near index 0.
+  int scan = 0;
   while (idx.size() > 3 && guard++ < 4 * n) {
     const int m = static_cast<int>(idx.size());
     bool clipped = false;
-    for (int i = 0; i < m; ++i) {
+    // TASK-272 §9m: taking the FIRST valid ear found (§9h's walk-the-ring fix) still lets a genuinely
+    // thin ear win whenever it happens to be first in the scan window — confirmed directly on the
+    // real flange: 6007 individual triangles with aspect ratio > 50, one at 4.4 MILLION, even with
+    // §9h's fix already active, all still well-formed (watertight, correctly wound — never a
+    // correctness bug) but thin enough that a GPU rasterizer can drop sub-pixel coverage on them,
+    // leaving a visible gap at exactly the hole/outer rim a bridge slit runs along — the actual,
+    // finally-confirmed cause of "torn" Shaded-view edges this whole task has been chasing. Fix:
+    // look at up to `kQualityWindow` candidate ears from the current scan position (bounded, so the
+    // overall algorithm stays close to its prior cost) and clip the BEST-shaped one (by min interior
+    // angle, a standard sliver-quality proxy) instead of the first, falling back to first-found if
+    // none of the window's candidates are notably better than "any valid ear" — this can only ever
+    // improve triangle shape, never change which polygon gets triangulated or reject a valid ring.
+    constexpr int kQualityWindow = 24;
+    int bestI = -1, bestI0 = -1, bestI1 = -1, bestI2 = -1;
+    double bestQuality = -1.0;
+    for (int k = 0, tried = 0; k < m && tried < kQualityWindow; ++k) {
+      const int i = (scan + k) % m;
       const int i0 = idx[static_cast<std::size_t>((i + m - 1) % m)];
       const int i1 = idx[static_cast<std::size_t>(i)];
       const int i2 = idx[static_cast<std::size_t>((i + 1) % m)];
       const ucs::Point2D& a = ring[static_cast<std::size_t>(i0)];
       const ucs::Point2D& b = ring[static_cast<std::size_t>(i1)];
       const ucs::Point2D& c = ring[static_cast<std::size_t>(i2)];
-      if ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) <= 0.0)
-        continue;  // reflex or straight — not an ear tip
+      const double area2 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+      if (area2 <= areaEps)
+        continue;  // reflex or (numerically) straight — not an ear tip
       bool contains = false;
       for (int j = 0; j < m && !contains; ++j) {
         const int ij = idx[static_cast<std::size_t>(j)];
         if (ij == i0 || ij == i1 || ij == i2)
           continue;
-        contains = PointInTriangle2D(ring[static_cast<std::size_t>(ij)], a, b, c);
+        // A point exactly ON the ear's boundary (common right at a bridge slit, where a duplicated
+        // vertex from the other side of the slit can sit precisely on this edge) must NOT count as
+        // "inside" — that is what made a genuinely valid ear look blocked. `PointInTriangle2D`'s
+        // strict signs already treat an exact zero as neither positive nor negative, which is
+        // correct; padding the SIGN test itself in `containEps` would instead misclassify a
+        // truly-inside point near the edge as outside, so only the containment point's PROXIMITY to
+        // each of the triangle's own edges is padded, not the sign test.
+        const ucs::Point2D& q = ring[static_cast<std::size_t>(ij)];
+        const bool onA = ray3d::Length(ray3d::Sub(Vec3{q.x, q.y, 0}, Vec3{a.x, a.y, 0})) < containEps;
+        const bool onB = ray3d::Length(ray3d::Sub(Vec3{q.x, q.y, 0}, Vec3{b.x, b.y, 0})) < containEps;
+        const bool onC = ray3d::Length(ray3d::Sub(Vec3{q.x, q.y, 0}, Vec3{c.x, c.y, 0})) < containEps;
+        if (onA || onB || onC)
+          continue;  // coincides with a triangle corner (a bridge duplicate) — not "inside"
+        contains = PointInTriangle2D(q, a, b, c);
       }
       if (contains)
         continue;
-      tris->push_back({i0, i1, i2});
-      idx.erase(idx.begin() + i);
-      clipped = true;
-      break;
+      ++tried;
+      // Quality proxy: area / (perimeter^2), scale-free and maximized by an equilateral triangle,
+      // near zero for a sliver — cheap (no acos/atan2) and monotonic with "thinness" for this purpose.
+      const double ab = ray3d::Length(ray3d::Sub(Vec3{b.x, b.y, 0}, Vec3{a.x, a.y, 0}));
+      const double bc = ray3d::Length(ray3d::Sub(Vec3{c.x, c.y, 0}, Vec3{b.x, b.y, 0}));
+      const double ca = ray3d::Length(ray3d::Sub(Vec3{a.x, a.y, 0}, Vec3{c.x, c.y, 0}));
+      const double perim = ab + bc + ca;
+      const double quality = perim > 1e-300 ? area2 / (perim * perim) : 0.0;
+      if (bestI < 0 || quality > bestQuality) {
+        bestQuality = quality;
+        bestI = i;
+        bestI0 = i0;
+        bestI1 = i1;
+        bestI2 = i2;
+      }
     }
-    if (!clipped)
-      break;  // no ear found (degenerate input) — fan whatever is left rather than loop
+    if (bestI >= 0) {
+      tris->push_back({bestI0, bestI1, bestI2});
+      idx.erase(idx.begin() + bestI);
+      // Resume next pass's scan right where this clip happened (mod the now-one-shorter ring),
+      // instead of jumping back to index 0 — this is what keeps clips walking around the boundary.
+      scan = (m > 1) ? bestI % (m - 1) : 0;
+      clipped = true;
+    }
+    if (!clipped) {
+      // By the "two ears theorem" a valid simple polygon always has at least two clippable ears, so
+      // a full pass finding none — on a polygon this large (a multi-hole bridge easily reaches into
+      // the thousands of vertices) — is far more often float precision defeating the strict tests
+      // above than a genuinely malformed ring. Loosen the tolerance by 10x and retry the SAME
+      // remaining ring before concluding it is actually malformed; capped, so a truly bad ring still
+      // gets refused rather than silently accepted at an absurdly coarse tolerance.
+      if (stallEscalations < 6) {
+        areaEps *= 10.0;
+        containEps *= 10.0;
+        ++stallEscalations;
+        continue;
+      }
+      return false;  // a genuinely malformed ring (self-intersecting or degenerate) — refuse
+    }
+    stallEscalations = 0;  // progress was made; the next stall gets its own fresh escalation budget
   }
   for (std::size_t i = 1; i + 1 < idx.size(); ++i)
     tris->push_back({idx[0], idx[i], idx[i + 1]});
+  // The final `idx.size() == 3` fan above (and, rarely, a triangle clipped just before it) can be
+  // degenerate when two of the three remaining points are a bridge's exact-duplicate pair (`M` or
+  // `target`, re-emitted to close a hole's slit — see `BridgeHoleIntoOuter`) that never got
+  // consumed as an ear along the way. A zero-area triangle contributes nothing to area or volume,
+  // so dropping it changes nothing about the triangulation except removing a spurious duplicate
+  // triangle edge — this is what left the very last handful of cracked mesh edges after the
+  // robustness fix above (verified via a `triFace`-tagged dump: the crack was one degenerate
+  // triangle, with two coincident vertices, double-booking one real edge).
+  tris->erase(std::remove_if(tris->begin(), tris->end(),
+                             [&](const std::array<int, 3>& t3) {
+                               const ucs::Point2D& a = ring[static_cast<std::size_t>(t3[0])];
+                               const ucs::Point2D& b = ring[static_cast<std::size_t>(t3[1])];
+                               const ucs::Point2D& c = ring[static_cast<std::size_t>(t3[2])];
+                               const double area2 =
+                                   (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                               return std::fabs(area2) <= areaEps;
+                             }),
+              tris->end());
+  return true;
+}
+
+/// TASK-272 §9p: local Delaunay-style edge-flip pass over an `EarClip` triangulation.
+///
+/// Ear-clipping a SIMPLE POLYGON necessarily removes 3 CONSECUTIVE boundary vertices at a time — for
+/// a finely-sampled near-circular boundary (any real bolt hole or bore rim at a tight chord
+/// tolerance), that is structurally a thin sliver almost every time (three consecutive points on a
+/// fine circle are close to collinear by construction), independent of which valid ear the clipper
+/// happens to pick. Confirmed directly on the real reported flange: even scanning the ENTIRE
+/// remaining ring each pass for the best-quality available ear (the `kQualityWindow` widening tried
+/// first) left the worst offender completely unchanged — proof the problem is not "which ear got
+/// picked" but the one-consecutive-triple-at-a-time nature of ear-clipping itself. These slivers are
+/// never a CORRECTNESS bug (watertight, correctly wound — confirmed independently), but a triangle
+/// thin enough interpolates its vertex normals across a huge, near-degenerate footprint, which is
+/// what actually read as "torn" Shaded-view edges right at hole/bore rims specifically (confirmed:
+/// raising the Shaded shader's ambient floor smoothed the plain OUTER rim — ordinary curvature
+/// shading — but left the bolt holes and bore exactly as torn, since those are the only boundaries
+/// this bridge+EarClip path ever triangulates).
+///
+/// The standard fix for "valid mesh, bad triangle shapes" is a LOCAL edge flip: for every interior
+/// edge shared by two triangles (forming a quadrilateral), replace it with the OTHER diagonal when
+/// that diagonal gives a better-shaped pair — this changes triangle SHAPE only, never the boundary,
+/// the vertex set, the winding, or the covered area, so it cannot affect watertightness, volume, or
+/// which triangle belongs to which face. Bounded to a fixed number of sweeps (a full Delaunay
+/// convergence is not needed — only removing the SEVERE outliers is), and gated by convexity (a flip
+/// across a reflex quad would leave the polygon self-intersecting) and a real quality improvement
+/// (never flips a good pair into a worse one).
+void ImproveTriangulationQuality(const std::vector<ucs::Point2D>& ring,
+                                  std::vector<std::array<int, 3>>* tris) {
+  auto triQuality = [&](int a, int b, int c) {
+    const ucs::Point2D& pa = ring[static_cast<std::size_t>(a)];
+    const ucs::Point2D& pb = ring[static_cast<std::size_t>(b)];
+    const ucs::Point2D& pc = ring[static_cast<std::size_t>(c)];
+    const double area2 = (pb.x - pa.x) * (pc.y - pa.y) - (pb.y - pa.y) * (pc.x - pa.x);
+    const double ab = std::hypot(pb.x - pa.x, pb.y - pa.y);
+    const double bc = std::hypot(pc.x - pb.x, pc.y - pb.y);
+    const double ca = std::hypot(pa.x - pc.x, pa.y - pc.y);
+    const double perim = ab + bc + ca;
+    return perim > 1e-300 ? area2 / (perim * perim) : 0.0;  // area2 keeps the CCW-positive sign
+  };
+  // Map an undirected edge (lo, hi) to the up-to-two triangle indices that use it, and which corner
+  // (opposite vertex) each one contributes — enough to reconstruct both candidate diagonals.
+  std::map<std::pair<int, int>, std::array<int, 2>> edgeTris;  // {-1,-1} default = unseen
+  auto edgeKey = [](int u, int v) { return u < v ? std::make_pair(u, v) : std::make_pair(v, u); };
+  for (std::size_t ti = 0; ti < tris->size(); ++ti) {
+    const std::array<int, 3>& t3 = (*tris)[ti];
+    for (int e = 0; e < 3; ++e) {
+      const int u = t3[static_cast<std::size_t>(e)];
+      const int v = t3[static_cast<std::size_t>((e + 1) % 3)];
+      std::array<int, 2>& slot = edgeTris[edgeKey(u, v)];
+      if (slot[0] < 0)
+        slot[0] = static_cast<int>(ti);
+      else
+        slot[1] = static_cast<int>(ti);
+    }
+  }
+  for (int pass = 0; pass < 6; ++pass) {
+    bool changedAny = false;
+    for (auto& [key, slot] : edgeTris) {
+      if (slot[0] < 0 || slot[1] < 0)
+        continue;  // a boundary edge (or a bridge slit edge) — only one triangle uses it, never flip
+      std::array<int, 3>& t0 = (*tris)[static_cast<std::size_t>(slot[0])];
+      std::array<int, 3>& t1 = (*tris)[static_cast<std::size_t>(slot[1])];
+      // Find the two "opposite" corners (the quad's other diagonal) and confirm the shared edge is
+      // really (key.first, key.second) oriented oppositely in each triangle, as a consistent
+      // 2-manifold triangulation guarantees.
+      auto oppositeOf = [&](const std::array<int, 3>& t, int lo, int hi) {
+        for (int e = 0; e < 3; ++e) {
+          const int u = t[static_cast<std::size_t>(e)];
+          const int v = t[static_cast<std::size_t>((e + 1) % 3)];
+          if ((u == lo && v == hi) || (u == hi && v == lo))
+            return t[static_cast<std::size_t>((e + 2) % 3)];
+        }
+        return -1;
+      };
+      const int p = oppositeOf(t0, key.first, key.second);
+      const int q = oppositeOf(t1, key.first, key.second);
+      if (p < 0 || q < 0 || p == q)
+        continue;
+      // Only ever flip a CONVEX quad — a reflex one flipped would self-intersect. Convexity here
+      // means p and q lie on opposite sides of edge (key.first,key.second) (guaranteed by the two
+      // triangles sharing it with opposite winding) AND key.first/key.second lie on opposite sides
+      // of the candidate new diagonal (p, q).
+      const ucs::Point2D& P = ring[static_cast<std::size_t>(p)];
+      const ucs::Point2D& Q = ring[static_cast<std::size_t>(q)];
+      const ucs::Point2D& Lo = ring[static_cast<std::size_t>(key.first)];
+      const ucs::Point2D& Hi = ring[static_cast<std::size_t>(key.second)];
+      const double sideLo = (Q.x - P.x) * (Lo.y - P.y) - (Q.y - P.y) * (Lo.x - P.x);
+      const double sideHi = (Q.x - P.x) * (Hi.y - P.y) - (Q.y - P.y) * (Hi.x - P.x);
+      if (sideLo * sideHi >= 0.0)
+        continue;  // not a convex quad — flipping would self-intersect
+      // Current pairing's worst quality vs. the flipped pairing's worst quality; flip only on a
+      // real improvement, never sideways or for a worse split (this can only ever raise quality).
+      const double q0a = std::fabs(triQuality(key.first, p, key.second));
+      const double q0b = std::fabs(triQuality(key.second, q, key.first));
+      const double q1a = std::fabs(triQuality(p, q, key.second));
+      const double q1b = std::fabs(triQuality(q, p, key.first));
+      const double before = std::min(q0a, q0b);
+      const double after = std::min(q1a, q1b);
+      if (after <= before * 1.05)
+        continue;  // require a clear win (5% margin), not just noise-level — never flip sideways
+      // Rebuild both triangles around the new diagonal (p, q). Don't assume which of the two
+      // orderings is CCW (that depends on which side of the original edge p fell on, which this
+      // function does not track) — derive it from the signed area directly, the same quantity
+      // `triQuality` already computes, so a flip can never silently introduce an inverted normal.
+      std::array<int, 3> newT0 = {p, key.second, q};
+      std::array<int, 3> newT1 = {q, key.first, p};
+      if (triQuality(newT0[0], newT0[1], newT0[2]) < 0.0)
+        std::swap(newT0[1], newT0[2]);
+      if (triQuality(newT1[0], newT1[1], newT1[2]) < 0.0)
+        std::swap(newT1[1], newT1[2]);
+      t0 = newT0;
+      t1 = newT1;
+      changedAny = true;
+    }
+    if (!changedAny)
+      break;
+  }
+}
+
+/// Splices \p hole into \p outer as a zero-width slit (Held's bridging technique), so the two rings
+/// become one simple polygon `EarClip` can triangulate exactly. \p hole must already be wound
+/// opposite \p outer (CW inside a CCW outer, the usual even-odd hole convention) — the caller is
+/// responsible for that, since it can cheaply check once per loop rather than this being re-derived
+/// per bridge. \p awayFrom is a point well inside the shape (the ORIGINAL outer ring's own centroid,
+/// computed once by the caller before any bridging, not recomputed per hole) that the bridge
+/// direction points away from.
+///
+/// Finds the hole's own extremal vertex in the direction `hole centroid - awayFrom` — "outward",
+/// radially — and ray-casts further in that SAME direction to the nearest edge of the CURRENT
+/// `outer` (so a second, third, ... hole bridged afterward sees earlier bridges as part of the
+/// boundary and cannot cross them), connecting to that edge's farther-along-the-ray endpoint. A
+/// fixed cast direction (this used to always be +X) works for exactly one hole, but for several
+/// holes arranged around a shape — a bolt circle, the actual case that motivated this function — a
+/// hole on the far side casting toward the SAME fixed direction has to cross the shape's interior,
+/// and can cross another hole or an earlier bridge on the way, which `EarClip` then correctly (if
+/// unhelpfully) refuses as a self-intersecting input. Cast radially instead, and every hole's bridge
+/// points a different way, like spokes — for a bolt-circle-shaped arrangement (the common case)
+/// spokes from distinct holes do not cross each other or pass through a third hole in between.
+///
+/// This still assumes the target vertex is visible along the ray from the hole's own extremal point
+/// — true whenever the outer boundary has no reflex vertex in the way, which holds for every convex
+/// or near-convex outer boundary this kernel's callers produce (a flange, a plate, an extruded
+/// profile); a pathological concave outer boundary, or holes clustered close enough together that
+/// their own radial spokes cross, could still defeat it — the caller is expected to treat a `false`
+/// return as "fall back to a different tessellation strategy", never as fatal.
+///
+/// The bridge is left an EXACT zero-width slit (the closing pair duplicates the hole's own extremal
+/// point and the target precisely) — `EarClip`'s own robustness (proximity-to-corner skip in its
+/// containment test) is what makes that safe, rather than perturbing the duplicate points, which was
+/// tried first and did not address the actual defect (see TASK-272).
+[[nodiscard]] bool BridgeHoleIntoOuter(std::vector<ucs::Point2D>* outer,
+                                       const std::vector<ucs::Point2D>& hole,
+                                       const ucs::Point2D& awayFrom) {
+  if (hole.size() < 3 || outer->size() < 3)
+    return false;
+
+  ucs::Point2D holeC{0.0, 0.0};
+  double holeExtent = 0.0;
+  for (const ucs::Point2D& p : hole) {
+    holeC.x += p.x / static_cast<double>(hole.size());
+    holeC.y += p.y / static_cast<double>(hole.size());
+  }
+  for (const ucs::Point2D& p : hole)
+    holeExtent = std::max(holeExtent, std::hypot(p.x - holeC.x, p.y - holeC.y));
+  double dx = holeC.x - awayFrom.x;
+  double dy = holeC.y - awayFrom.y;
+  double dlen = std::sqrt(dx * dx + dy * dy);
+  // TASK-272 §9i: a CONCENTRIC hole (a flange's own central bore, sharing the outer ring's axis) has
+  // `holeC` and `awayFrom` both landing on — or, after only floating-point summation noise, a hair's
+  // breadth from — the same true centre point. The old check only caught an EXACT (or near-exact,
+  // 1e-12 absolute) zero; a "concentric but not bit-identical" case (near-guaranteed: `holeC` and
+  // `awayFrom` are each an independent average over a DIFFERENT sample count/spacing of two
+  // DIFFERENT circles, so they only agree to summation-noise precision, not exactly) left `dlen` a
+  // tiny but nonzero number — and normalizing (dx, dy) by a near-zero `dlen` amplifies THAT noise
+  // into an effectively arbitrary, numerically unstable ray direction, rather than the safe, fixed
+  // fallback direction the exact-zero case already had. Confirmed as the actual cause of a torn bore
+  // rim on a real flange (RenderDoc frame capture of the live GPU output — see TASK-272 §9g/§9h/§9i
+  // — the 4 well-separated bolt holes rendered perfectly clean, only the CONCENTRIC bore tore, which
+  // is exactly what a direction-instability bug predicts and a general triangulation-quality bug
+  // does not). Compare against the hole's own SIZE, not an absolute constant, so this catches
+  // "concentric to within noise" robustly regardless of the part's overall scale.
+  if (dlen < 1e-6 * std::max(holeExtent, 1e-9)) {
+    dx = 1.0;
+    dy = 0.0;
+    dlen = 1.0;
+  }
+  dx /= dlen;
+  dy /= dlen;
+
+  std::size_t mi = 0;
+  double bestDot = hole[0].x * dx + hole[0].y * dy;
+  for (std::size_t i = 1; i < hole.size(); ++i) {
+    const double d = hole[i].x * dx + hole[i].y * dy;
+    if (d > bestDot) {
+      bestDot = d;
+      mi = i;
+    }
+  }
+  const ucs::Point2D M = hole[mi];
+
+  // Ray-cast M + t*(dx,dy), t > 0, against every edge of the current outer ring; keep the nearest.
+  double bestT = std::numeric_limits<double>::infinity();
+  std::size_t bestEdge = SIZE_MAX;
+  const std::size_t n = outer->size();
+  for (std::size_t i = 0; i < n; ++i) {
+    const ucs::Point2D& a = (*outer)[i];
+    const ucs::Point2D& b = (*outer)[(i + 1) % n];
+    const double ex = b.x - a.x;
+    const double ey = b.y - a.y;
+    const double den = dx * ey - dy * ex;
+    if (std::fabs(den) < 1e-15)
+      continue;  // parallel to the ray
+    const double t = ((a.x - M.x) * ey - (a.y - M.y) * ex) / den;
+    const double s = ((a.x - M.x) * dy - (a.y - M.y) * dx) / den;
+    if (t > 1e-12 && s >= -1e-9 && s <= 1.0 + 1e-9 && t < bestT) {
+      bestT = t;
+      bestEdge = i;
+    }
+  }
+  if (bestEdge == SIZE_MAX)
+    return false;  // M's radial ray never left the shape (shouldn't happen for a validated solid)
+
+  const ucs::Point2D& a = (*outer)[bestEdge];
+  const ucs::Point2D& b = (*outer)[(bestEdge + 1) % n];
+  const double aDot = a.x * dx + a.y * dy;
+  const double bDot = b.x * dx + b.y * dy;
+  const std::size_t targetIdx = (aDot >= bDot) ? bestEdge : (bestEdge + 1) % n;
+  const ucs::Point2D target = (*outer)[targetIdx];
+
+  // TASK-272 §9q: a RenderDoc capture of the real reported file confirmed the "torn" Shaded pixels
+  // are genuine sub-pixel rasterization dropout — a real, gap-free, but extremely thin (aspect ratio
+  // in the millions) triangle at a bridge slit that a GPU's fixed MSAA sample positions can miss
+  // entirely, letting the black background bleed through. A fix was attempted here (thickening the
+  // slit into a tiny real-width corridor) but it changed which side of the bridge is "inside" the
+  // polygon for at least one real hole arrangement, measurably CRACKING the real flange import (120
+  // of 18540 edges, was 0) — worse than the rasterization artifact it targeted. Reverted rather than
+  // ship a regression; see TASK-272 §9.6/§9q for the root cause and what a correct fix needs to
+  // preserve (the polygon's covered AREA, not just its vertex count).
+  //
+  // TASK-272 §9r (2026-09-23): a second attempt — keep `M`/`target` exactly in place and instead bow
+  // the corridor's two RAILS apart only in the middle (tapering to zero width at both ends, so the
+  // shared boundary points stay bit-exact) — was tried and is ALSO wrong, for a reason that's
+  // structural, not a tuning mistake: confirmed by testing two corridor widths 100x apart and getting
+  // the identical cracked-edge count (8720 of 30456) and identical worst aspect ratio (97784.1) both
+  // times, which only makes sense if the width value never mattered. It doesn't, because of how this
+  // whole scheme's watertightness actually works: the ORIGINAL zero-width slit passes watertightness
+  // only because the outbound edge (target -> M) and the return edge (M -> target) are POSITIONALLY
+  // IDENTICAL, so the test's quantize-by-position edge-count happens to see "2 uses of the same
+  // edge" even though it's really one degenerate fold-back, not a real second triangle. The instant
+  // the two rails stop being positionally identical (any nonzero bow, in any direction, any width),
+  // every one of those newly-distinct edges becomes a real boundary edge used only ONCE — nothing
+  // else in the mesh was ever built to be its twin, since a bridge is internal to one face's own
+  // EarClip ring and no neighbouring face's geometry has any reason to sample this corridor at all.
+  // A single simple-polygon ring literally cannot represent a real-width, still-watertight corridor
+  // this way: doing so needs FOUR distinct rail points forming a true quadrilateral loop with an
+  // internal diagonal of its own, not two rails that only work by coinciding. Reverted; do not retry
+  // this shape of fix again without addressing that structural point first. The likely correct place
+  // for this fix is downstream of `Tessellate`'s topology entirely: a render-only vertex nudge (or a
+  // screen-space "minimum triangle coverage" technique) applied to the GPU vertex buffer, which does
+  // not need to preserve the shared-edge-count-of-2 invariant the CSG/volume-facing mesh does.
+  std::vector<ucs::Point2D> result;
+  result.reserve(n + hole.size() + 2);
+  for (std::size_t i = 0; i < n; ++i) {
+    result.push_back((*outer)[i]);
+    if (i == targetIdx) {
+      // The hole loop below already starts AT `mi` (j == 0 gives `hole[mi] == M`), so pushing `M`
+      // again here first would insert it three times total (this one, the loop's own first point,
+      // and the closing M below) with a zero-length edge between the first two — confirmed as the
+      // actual cause of an EarClip stall on a multi-hole face: not a self-intersection (checked
+      // directly, none), just a redundant degenerate point compounding once per bridged hole.
+      for (std::size_t j = 0; j < hole.size(); ++j)
+        result.push_back(hole[(mi + j) % hole.size()]);
+      result.push_back(M);
+      result.push_back(target);
+    }
+  }
+  *outer = std::move(result);
+  return true;
 }
 
 /// World-space position of \p sf at parameter `(u, v)`, via the same `LocalSurfaceDerivs` the
@@ -16233,10 +18250,53 @@ int GeneralLoopChordDepth(const Surface& sf, curveisect::Vec2 pa, curveisect::Ve
 /// excluded automatically by the even-odd rule. Each trapezoid is then filled with a
 /// chord-tolerance grid exactly like the rectangle path's, so a curved surface still tessellates
 /// finely inside the loop, not just accurately along its edge.
-void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder* mb) {
+void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder* mb, const Solid* s = nullptr,
+                                const std::map<int, int>* edgeSegs = nullptr) {
   const Surface& sf = f.surface;
   if (f.paramLoops.empty())
     return;
+
+  // TASK-272 §9l: an extremal band row (v == the face's own overall v0/v1, i.e. a real rim, not an
+  // interior hole pinch) that corresponds to one whole rim edge is raised to that edge's UNIFIED
+  // `segsForEdge` count — the same count `Tessellate`'s `reconstructParamLoop2D` now uses (§9.4,
+  // §9l) for the neighbouring Plane cap's own hole/outer boundary on the SAME shared edge. Confirmed
+  // by direct measurement that doing only one side or the other makes cracking WORSE, not better
+  // (§9.4's reverted attempt, and this section's own first try): the two sides must land on the same
+  // final count, not just a higher one. Only ever raises (never lowers) `nCols` — the same monotonic
+  // safety rule as every other resolution fix in this task.
+  auto localV = [&](const Vec3& w) {
+    const Vec3 l = ucs::WorldToUcs(sf.frame, w);
+    return sf.kind == SurfaceKind::Plane ? l.y : l.z;
+  };
+  auto segsForEdgeLocal = [&](int edgeIdx, const Edge& e) {
+    if (edgeSegs) {
+      const auto it = edgeSegs->find(edgeIdx);
+      if (it != edgeSegs->end())
+        return it->second;
+    }
+    return SegmentsForEdge(e, chordTolerance);
+  };
+  std::vector<std::pair<double, int>> rimEdges;
+  if (s && edgeSegs && !f.loops.empty()) {
+    const double vTol = 1e-6 * std::max(1.0, std::fabs(f.vStart) + std::fabs(f.vEnd));
+    for (const EdgeUse& u : f.loops[0].uses) {
+      const Edge& e = s->edges[static_cast<std::size_t>(u.edge)];
+      if (e.kind == CurveKind::Line)
+        continue;
+      const double v0v = localV(EdgePointAt(*s, e, 0.0));
+      const double v1v = localV(EdgePointAt(*s, e, 1.0));
+      const double vMid = localV(EdgePointAt(*s, e, 0.5));
+      if (std::fabs(v0v - v1v) < vTol && std::fabs(v0v - vMid) < vTol)
+        rimEdges.emplace_back(v0v, u.edge);
+    }
+  }
+  auto findRimEdgeAt = [&](double v) -> int {
+    const double vTol = 1e-6 * std::max(1.0, std::fabs(f.vStart) + std::fabs(f.vEnd));
+    for (const auto& [rv, edgeIdx] : rimEdges)
+      if (std::fabs(rv - v) < vTol)
+        return edgeIdx;
+    return -1;
+  };
 
   std::vector<double> vBreaks;
   for (const std::vector<curveisect::Vec2>& poly : f.paramLoops)
@@ -16259,6 +18319,26 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
     return mb->Push(ucs::UcsToWorld(sf.frame, p), ucs::UcsVectorToWorld(sf.frame, n));
   };
 
+  // `nCols` for a band used to be chosen from that band's OWN two horizontal rows alone — nothing
+  // tied it to the row a neighbouring band computes for the SAME shared boundary (band i's `v1` row
+  // is band i+1's `v0` row). Each band's count was `max(its own bottom need, its own top need)`, and
+  // those "own" needs are generally different between two bands that only share ONE of their two
+  // rows, so the shared row could legitimately get a different column count on each side of it — a
+  // T-junction crack inside a single face's own triangulation (confirmed on a box-minus-cylinder
+  // bore: the cracked mesh edges all had only one triangle touching them, i.e. the crack was WITHIN
+  // one face, not between two faces as first suspected). Fixed with a small pre-pass: gather every
+  // band's raw per-row needs first, resolve each SHARED boundary to the max of what either side
+  // independently asked for (only where the two sides' interval topology actually matches — same
+  // count of inside/outside crossings — since a topology change at a v-break, e.g. a hole starting,
+  // means the two sides legitimately don't correspond row-for-row), then build geometry using those
+  // resolved counts. This only ever RAISES a band's resolution versus the old per-band-only formula,
+  // never lowers it, so it cannot make an already-fine face coarser.
+  struct BandInfo {
+    double v0 = 0.0, v1 = 0.0;
+    std::vector<double> xs0, xs1;
+  };
+  std::vector<BandInfo> bands;
+  bands.reserve(vBreaks.size());
   for (std::size_t bi = 0; bi + 1 < vBreaks.size(); ++bi) {
     const double v0 = vBreaks[bi];
     const double v1 = vBreaks[bi + 1];
@@ -16268,8 +18348,55 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
     // visibly the outermost band's own outer edge. Sampling a hair inside the band sidesteps that
     // without changing which edges bound this band (guaranteed constant within it by `vBreaks`).
     const double eps = 1e-9 * std::max(1.0, v1 - v0);
-    const std::vector<double> xs0 = GeneralLoopScanline(f.paramLoops, v0 + eps);
-    const std::vector<double> xs1 = GeneralLoopScanline(f.paramLoops, v1 - eps);
+    BandInfo bandInfo;
+    bandInfo.v0 = v0;
+    bandInfo.v1 = v1;
+    bandInfo.xs0 = GeneralLoopScanline(f.paramLoops, v0 + eps);
+    bandInfo.xs1 = GeneralLoopScanline(f.paramLoops, v1 - eps);
+    bands.push_back(std::move(bandInfo));
+  }
+
+  // Per band, per interval k: the column count that band would use on its own (its old, purely
+  // local `max(bottom need, top need)`). `nCols` is ONE number applied to a band's WHOLE grid — both
+  // its rows — so raising just the row-level "need" at a shared boundary is not enough: if band i's
+  // resolution is pinned high by its OWN unrelated bottom row, that higher count applies to band i's
+  // top row too, and band i+1 must match THAT (not just band i's raw top-row need). Two relaxation
+  // sweeps (forward then backward) propagate the max through every run of bands whose interval
+  // topology matches its neighbour, so the whole run converges on one shared count — like a
+  // union-find over a simple chain.
+  std::vector<std::vector<int>> nColsFor(bands.size());
+  for (std::size_t bi = 0; bi < bands.size(); ++bi) {
+    const BandInfo& b = bands[bi];
+    if (b.xs0.size() != b.xs1.size() || b.xs0.size() < 2)
+      continue;
+    nColsFor[bi].assign(b.xs0.size() / 2, 1);
+    for (std::size_t k = 0; k + 1 < b.xs0.size(); k += 2) {
+      if (b.xs0[k + 1] <= b.xs0[k] && b.xs1[k + 1] <= b.xs1[k])
+        continue;
+      const int botNeed = GeneralLoopChordSegments(sf, {b.xs0[k], b.v0}, {b.xs0[k + 1], b.v0}, chordTolerance);
+      const int topNeed = GeneralLoopChordSegments(sf, {b.xs1[k], b.v1}, {b.xs1[k + 1], b.v1}, chordTolerance);
+      nColsFor[bi][k / 2] = std::max(1, std::max(botNeed, topNeed));
+    }
+  }
+  auto topologyMatches = [&](std::size_t bi) {
+    return bi + 1 < bands.size() && nColsFor[bi].size() == nColsFor[bi + 1].size() &&
+           !nColsFor[bi].empty();
+  };
+  for (std::size_t bi = 0; bi + 1 < bands.size(); ++bi)
+    if (topologyMatches(bi))
+      for (std::size_t k = 0; k < nColsFor[bi].size(); ++k)
+        nColsFor[bi + 1][k] = std::max(nColsFor[bi + 1][k], nColsFor[bi][k]);
+  for (std::size_t bi = bands.size(); bi-- > 1;)
+    if (topologyMatches(bi - 1))
+      for (std::size_t k = 0; k < nColsFor[bi].size(); ++k)
+        nColsFor[bi - 1][k] = std::max(nColsFor[bi - 1][k], nColsFor[bi][k]);
+
+  for (std::size_t bi = 0; bi < bands.size(); ++bi) {
+    const BandInfo& band = bands[bi];
+    const double v0 = band.v0;
+    const double v1 = band.v1;
+    const std::vector<double>& xs0 = band.xs0;
+    const std::vector<double>& xs1 = band.xs1;
     if (xs0.size() != xs1.size() || xs0.size() < 2)
       continue;  // a numerically-degenerate band (a break landing exactly on a vertex pair) — skip
     for (std::size_t k = 0; k + 1 < xs0.size(); k += 2) {
@@ -16282,8 +18409,19 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
 
       const int nRows = std::max(1, std::max(GeneralLoopChordSegments(sf, {u0L, v0}, {u1L, v1}, chordTolerance),
                                              GeneralLoopChordSegments(sf, {u0R, v0}, {u1R, v1}, chordTolerance)));
-      const int nCols = std::max(1, std::max(GeneralLoopChordSegments(sf, {u0L, v0}, {u0R, v0}, chordTolerance),
-                                             GeneralLoopChordSegments(sf, {u1L, v1}, {u1R, v1}, chordTolerance)));
+      int nCols = nColsFor[bi][k / 2];
+      if (xs0.size() == 2) {
+        if (bi == 0) {
+          const int edgeIdx = findRimEdgeAt(v0);
+          if (edgeIdx >= 0)
+            nCols = std::max(nCols, segsForEdgeLocal(edgeIdx, s->edges[static_cast<std::size_t>(edgeIdx)]));
+        }
+        if (bi + 1 == bands.size()) {
+          const int edgeIdx = findRimEdgeAt(v1);
+          if (edgeIdx >= 0)
+            nCols = std::max(nCols, segsForEdgeLocal(edgeIdx, s->edges[static_cast<std::size_t>(edgeIdx)]));
+        }
+      }
 
       std::vector<std::vector<std::uint32_t>> grid(
           static_cast<std::size_t>(nRows) + 1,
@@ -16314,7 +18452,8 @@ void TessellateGeneralLoopFace(const Face& f, double chordTolerance, MeshBuilder
 
 } // namespace
 
-bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy) {
+bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy,
+                int fullCircleSegments) {
   if (!out)
     return false;  // a null output is a caller bug, not a user-facing reason: outWhy is left alone
   if (!std::isfinite(chordTolerance) || !(chordTolerance > 0.0))
@@ -16326,29 +18465,373 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
   Tessellation mesh;
   MeshBuilder mb{&mesh};
 
+  // Shared-edge resolution unification (TASK-272 §5): a NURBS band's two v-boundary edges (its rim
+  // at v=vStart and v=vEnd — see the `case SurfaceKind::Nurbs` block below) are now sampled DIRECTLY
+  // from those loop edges, so that boundary is bit-identical to whatever neighbouring face (a flat
+  // cap, or the next band in a multi-band loft/sweep) also walks the same edge — the same
+  // "derive-the-shared-boundary-from-the-edge" fix that resolved §1's planar-hole crack.
+  //
+  // A uniform (u, v) grid needs ONE resolution for its whole u-direction, but its two v-boundary
+  // edges can independently want different counts (different radii, e.g. a frustum band between two
+  // differently-sized circles) — and a neighbouring face may separately want a HIGHER count still
+  // (its own curvature need, or a further edge it shares elsewhere). Force every v-boundary edge to
+  // the MAX segment count that any face touching it needs, propagated by repeated relaxation until
+  // stable. This is monotonic (only ever raises a count), so it can only add resolution to an
+  // already-correct neighbour, never invalidate it — the same safety argument the (now superseded)
+  // two-pass relaxation in TASK-272 §3 relied on, this time paired with edge-exact sampling rather
+  // than grid-only counts, which is what that earlier attempt was missing (see §5.2's failed retry).
+  // Which loop edge is the v=vLo / v=vHi rim is found GEOMETRICALLY (by matching each edge-use's
+  // world endpoints against the patch's own (u,v) corner points), not by assuming a fixed ordinal
+  // position (`uses[0]`/`uses[2]`) or a fixed edge-kind pattern (Arc/Line/Arc/Line) — a real
+  // imported/generated NURBS band does not reliably take that shape (confirmed: on a real pipe-
+  // fitting transition piece, some bands' "side" edges are themselves arcs, and the ordinal
+  // convention that held for a synthetic `brep::Loft` repro did not hold for the real geometry,
+  // so the fix silently no-op'd despite "engaging"). `flip` records whether the edge's own natural
+  // t=0 lands at the uHi corner instead of uLo, so the grid loop below knows which way to walk it.
+  struct NurbsBoundaryEdge { int edge = -1; bool flip = false; };
+  std::vector<std::array<NurbsBoundaryEdge, 2>> nurbsBoundaryEdges(s.faces.size());
+  std::map<int, int> edgeSegs;
+  for (std::size_t fi2 = 0; fi2 < s.faces.size(); ++fi2) {
+    const Face& f2 = s.faces[fi2];
+    if (f2.surface.kind != SurfaceKind::Nurbs)
+      continue;
+    if (!f2.paramLoops.empty() || f2.loops.size() != 1 || f2.loops[0].uses.size() != 4)
+      continue;
+    const Loop& lp = f2.loops[0];
+    const nurbs::Patch& patch = f2.surface.patch;
+    const double uLo = std::min(f2.uStart, f2.uEnd), uHi = std::max(f2.uStart, f2.uEnd);
+    const double vLo = std::min(f2.vStart, f2.vEnd), vHi = std::max(f2.vStart, f2.vEnd);
+    const Vec3 c00 = nurbs::Evaluate(patch, uLo, vLo);
+    const Vec3 c10 = nurbs::Evaluate(patch, uHi, vLo);
+    const Vec3 c01 = nurbs::Evaluate(patch, uLo, vHi);
+    const Vec3 c11 = nurbs::Evaluate(patch, uHi, vHi);
+    const double diag = std::max({ray3d::Length(ray3d::Sub(c11, c00)), ray3d::Length(ray3d::Sub(c10, c00)),
+                                   ray3d::Length(ray3d::Sub(c01, c00)), 1e-6});
+    const double tol = diag * 1e-4;
+    auto near = [&](const Vec3& a, const Vec3& b) { return ray3d::Length(ray3d::Sub(a, b)) < tol; };
+    int loEdge = -1, hiEdge = -1;
+    bool loFlip = false, hiFlip = false;
+    for (const EdgeUse& u : lp.uses) {
+      const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+      const Vec3 p0 = EdgePointAt(s, e, 0.0);
+      const Vec3 p1 = EdgePointAt(s, e, 1.0);
+      if ((near(p0, c00) && near(p1, c10)) || (near(p0, c10) && near(p1, c00))) {
+        loEdge = u.edge;
+        loFlip = near(p0, c10);
+      } else if ((near(p0, c01) && near(p1, c11)) || (near(p0, c11) && near(p1, c01))) {
+        hiEdge = u.edge;
+        hiFlip = near(p0, c11);
+      }
+    }
+    // No corner match means this face's loop is not the standard 4-edge rectangle this fix knows
+    // how to read (a future Sweep mitred corner, say) — leave it on the curvature-only grid.
+    if (loEdge < 0 || hiEdge < 0)
+      continue;
+    const int curvatureSegs = NurbsPatchCurvatureSegs(patch, chordTolerance, fullCircleSegments);
+    nurbsBoundaryEdges[fi2] = {NurbsBoundaryEdge{loEdge, loFlip}, NurbsBoundaryEdge{hiEdge, hiFlip}};
+    for (const int edgeIdx : {loEdge, hiEdge}) {
+      const Edge& be = s.edges[static_cast<std::size_t>(edgeIdx)];
+      const int natural = std::max(SegmentsForEdge(be, chordTolerance, fullCircleSegments), curvatureSegs);
+      auto [it, inserted] = edgeSegs.try_emplace(edgeIdx, natural);
+      if (!inserted)
+        it->second = std::max(it->second, natural);
+    }
+  }
+  for (int pass = 0; pass < 8; ++pass) {
+    bool changed = false;
+    for (const std::array<NurbsBoundaryEdge, 2>& be : nurbsBoundaryEdges) {
+      if (be[0].edge < 0)
+        continue;
+      const int shared = std::max(edgeSegs[be[0].edge], edgeSegs[be[1].edge]);
+      if (edgeSegs[be[0].edge] != shared) { edgeSegs[be[0].edge] = shared; changed = true; }
+      if (edgeSegs[be[1].edge] != shared) { edgeSegs[be[1].edge] = shared; changed = true; }
+    }
+    if (!changed)
+      break;
+  }
+  // Every other consumer of `SegmentsForEdge` (flat-cap loop sampling, the planar-hole bridging
+  // path, `TessellateGeneralLoopFace`'s fallback) must use the unified count too, or a cap will
+  // still sample its shared rim at its own smaller natural count while the NURBS band next to it
+  // samples the same edge at the relaxed, larger one.
+  //
+  // TASK-272 §9j: this same unification is what a paramLoops-bearing Plane/Cylinder/Cone face's
+  // boundary needs too, and here the unification is trivial — `Loop::uses` already names the real
+  // shared `Edge` by INDEX (no geometric corner-matching needed, unlike the NURBS case above, which
+  // had no such back-reference), so every face that walks a given edge just needs to register its
+  // own natural need against that one shared key.
+  for (const Face& f2 : s.faces) {
+    if (f2.paramLoops.empty())
+      continue;
+    for (const Loop& lp : f2.loops) {
+      for (const EdgeUse& u : lp.uses) {
+        const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+        if (e.kind == CurveKind::Line)
+          continue;
+        const int natural = SegmentsForEdge(e, chordTolerance, fullCircleSegments);
+        auto [it, inserted] = edgeSegs.try_emplace(u.edge, natural);
+        if (!inserted)
+          it->second = std::max(it->second, natural);
+      }
+    }
+  }
+  auto segsForEdge = [&](int edgeIdx, const Edge& e) {
+    const auto it = edgeSegs.find(edgeIdx);
+    return it != edgeSegs.end() ? it->second : SegmentsForEdge(e, chordTolerance, fullCircleSegments);
+  };
+
+  // TASK-272 §9j: a paramLoops-bearing face's boundary as the IMPORTER sampled it (a fixed low
+  // count — `kArcSamples` in `AcisSatParser.cpp`, 32 for a Plane, 8 for a Cylinder/Cone — chosen
+  // only well enough to classify inside/outside, per `Face::paramLoops`' own docs) is not what a
+  // NEIGHBOURING face's boundary is sampled at, even when both walk the same real `Edge`: a Plane
+  // cap used its own points as-is (§9.2b) while `TessellateGeneralLoopFace` re-derived an
+  // independent, chord-tolerance-driven count for a Cylinder/Cone wall — two different points for
+  // the one physical rim, which is exactly what the real flange import's 1728-cracked-edge count
+  // (evenly divisible into per-loop chunks matching each loop's own fixed sample count) turned out
+  // to be. Fix: reconstruct a loop's 2D boundary directly from its real edges at the UNIFIED
+  // `segsForEdge` count instead of trusting the raw `paramLoops` points, but only when that
+  // reconstruction is confirmed (by enclosed-area agreement) to be the SAME loop the raw points
+  // describe — hand-built test fixtures (`BrepTests.cpp`) set `paramLoops` on a face whose `loops`
+  // still holds a differently-shaped primitive loop (ADR-052 (c) explicitly does not require them to
+  // match), and reconstructing from THOSE edges would silently substitute the wrong boundary. A real
+  // importer's `paramLoops` and `loops` always describe the same edges by construction, so the areas
+  // agree closely there and the substitution safely engages.
+  auto reconstructParamLoop2D = [&](const Surface& sf2, const Loop& lp,
+                                     const std::vector<curveisect::Vec2>& raw)
+      -> std::optional<std::vector<curveisect::Vec2>> {
+    if (lp.uses.empty() || raw.size() < 3)
+      return std::nullopt;
+    std::vector<curveisect::Vec2> rebuilt;
+    double contU = 0.0, prevRaw = 0.0;
+    bool haveRaw = false;
+    for (const EdgeUse& u : lp.uses) {
+      const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+      const int segs = (e.kind == CurveKind::Line) ? 1 : segsForEdge(u.edge, e);
+      for (int i = 0; i < segs; ++i) {
+        const double t = static_cast<double>(i) / static_cast<double>(segs);
+        const Vec3 w = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+        if (sf2.kind == SurfaceKind::Plane) {
+          const ucs::Point2D p2 = ucs::WorldToPlane(sf2.frame, w);
+          rebuilt.push_back({p2.x, p2.y});
+        } else {
+          // Cylinder/Cone general-trim convention (`BuildConeGeneralTrim`, AcisSatParser.cpp):
+          // u = atan2(y, x) in the face frame, continuously unwrapped; v = frame-local z.
+          const Vec3 local = ucs::WorldToUcs(sf2.frame, w);
+          const double rawU = std::atan2(local.y, local.x);
+          if (!haveRaw) {
+            contU = rawU;
+            haveRaw = true;
+          } else {
+            double delta = rawU - prevRaw;
+            while (delta > kPi)
+              delta -= kTwoPi;
+            while (delta <= -kPi)
+              delta += kTwoPi;
+            contU += delta;
+          }
+          prevRaw = rawU;
+          rebuilt.push_back({contU, local.z});
+        }
+      }
+    }
+    if (rebuilt.size() < 3)
+      return std::nullopt;
+    auto signedArea = [](const std::vector<curveisect::Vec2>& p) {
+      double a = 0.0;
+      for (std::size_t i = 0, n = p.size(); i < n; ++i)
+        a += p[i].x * p[(i + 1) % n].y - p[(i + 1) % n].x * p[i].y;
+      return 0.5 * a;
+    };
+    const double aRaw = std::fabs(signedArea(raw));
+    const double aRebuilt = std::fabs(signedArea(rebuilt));
+    // TASK-272 §9l: raw's area and the rebuild's area are each an INSCRIBED-polygon approximation of
+    // the same true curve, at two different point counts (`raw` at the importer's fixed
+    // `kArcSamples`, `rebuilt` at the unified, usually much higher, `segsForEdge` count) — so they
+    // legitimately differ by the polygon-discretization error itself, not just by whether they are
+    // "the same loop". Measured directly on the real flange import: a genuinely-matching loop (same
+    // edges, 32 vs 256 points) differs by 0.64%, comfortably past the original, too-tight 0.1% gate
+    // (confirmed via a temporary print: EVERY real loop in the flange was being rejected by it, which
+    // is why §9.4's `reconstructParamLoop2D` measured as a no-op — it was silently declining to
+    // engage on every real loop, not succeeding and failing to help). 2% comfortably covers a 32-gon's
+    // worst-case discretization error against a much finer reconstruction while still rejecting a
+    // hand-built test fixture's genuinely different shape (an unrelated box edge loop differs by
+    // orders of magnitude, not a couple of percent).
+    if (aRaw < 1e-12 || std::fabs(aRaw - aRebuilt) > 0.02 * aRaw)
+      return std::nullopt;  // not confirmed to be the same loop — keep the raw points, don't misfire
+    return rebuilt;
+  };
+
   for (std::size_t fi = 0; fi < s.faces.size(); ++fi) {
     const Face& f = s.faces[fi];
     mb.face = static_cast<int>(fi);
     const Surface& sf = f.surface;
-    if (!f.paramLoops.empty()) {
+    // TASK-272 §9: a real imported solid (ACIS/DWG conversion) sets `paramLoops` on EVERY face, not
+    // just the general-trim cases ADR-052 introduced it for — which used to route every such face
+    // through `TessellateGeneralLoopFace` unconditionally, before it ever reached the bridge+EarClip
+    // fix below. That fix works just as well from `paramLoops`' own 2D points (a Plane's param-loop
+    // IS already its own (u, v) = plane-local 2D polygon, and using it AS-IS — not resampling it via
+    // `SegmentsForEdge`/`EdgePointAt` — keeps this face's boundary bit-identical to whatever a
+    // neighbouring face's paramLoops-derived boundary already agrees it should be, since an importer
+    // that populates paramLoops populates it consistently for both sides of a shared edge). So a
+    // Plane face with a hole is exempted from the early exit below and still gets the exact
+    // triangulation; every OTHER paramLoops face (no holes, or curved) is unaffected by this task.
+    const bool planeWithHoles = sf.kind == SurfaceKind::Plane && f.loops.size() > 1;
+    if (!f.paramLoops.empty() && !planeWithHoles) {
       // A general trim loop (ADR-052, issue #306) overrides the rectangle-span grid below for
       // every `SurfaceKind` — issue #308's counterpart to issue #307's numeric-integral branch.
-      TessellateGeneralLoopFace(f, chordTolerance, &mb);
+      // TASK-272 §9j: reconstruct each loop's boundary from its real edges at the unified
+      // `segsForEdge` count (see `reconstructParamLoop2D` above) wherever that is confirmed safe,
+      // so a Cylinder/Cone wall's rim is bit-identical to whatever a neighbouring cap or NURBS band
+      // samples the same shared edge at, instead of this face re-deriving its own independent count.
+      Face fFixed = f;
+      for (std::size_t li = 0; li < f.paramLoops.size() && li < f.loops.size(); ++li) {
+        std::optional<std::vector<curveisect::Vec2>> rebuilt =
+            reconstructParamLoop2D(sf, f.loops[li], f.paramLoops[li]);
+        if (rebuilt)
+          fFixed.paramLoops[li] = std::move(*rebuilt);
+      }
+      TessellateGeneralLoopFace(fFixed, chordTolerance, &mb, &s, &edgeSegs);
       continue;
     }
     switch (sf.kind) {
     case SurfaceKind::Plane: {
-      if (f.loops.size() > 2) {
-        // Multi-hole planar face (e.g. flange with 4 bolt holes) – convert 3D loops to 2D paramLoops
-        // and use the general even-odd tessellator which already handles any number of loops.
+      if (f.loops.size() > 1) {
+        // A face with at least one hole (a single bolt hole is loops.size() == 2; a flange with
+        // several is more). A plane has no curvature, so — unlike the general-loop path below,
+        // which grids each face in chord-tolerance bands for a possibly-curved surface — the 2D
+        // polygon these loops trace can be triangulated EXACTLY: bridge each hole into the outer
+        // ring as a zero-width slit (`BridgeHoleIntoOuter`), which turns the whole face into one
+        // simple polygon, then ear-clip it (`EarClip`, made robust to a bridge's thin/degenerate
+        // geometry — see its own docs and TASK-272). This sidesteps a real bug in the old approach
+        // (routing through `TessellateGeneralLoopFace`'s per-band grid): at a hole's own top/bottom
+        // extremum, the scanline's interval count genuinely changes between adjacent bands, which
+        // is not a resolution-matching problem no per-band column count can reconcile, and cracked
+        // every hole at exactly those two points.
+        //
+        // `BridgeHoleIntoOuter`'s bridging assumes visibility with no reflex-vertex check (see its
+        // own docs), which is not guaranteed for every real hole ARRANGEMENT (several holes around
+        // a circular outer boundary, not just one hole in a rectangle) — confirmed on an actual
+        // multi-hole flange, where it left a face untessellated entirely (the part vanished from
+        // the render) instead of merely cracked. Rather than trust it unconditionally, this whole
+        // attempt is speculative: on ANY failure (a hole this kernel could not bridge, or a bridged
+        // polygon `EarClip` refuses), fall back to the always-available `TessellateGeneralLoopFace`
+        // band grid below — worse (the pinch crack this fix targets), but never worse than not
+        // rendering the face at all, which is the one regression this must never reintroduce.
+        // TASK-272 §9: when this face came from a general-trim-loop import, `paramLoops` already
+        // carries the outer/hole boundaries as plane-local 2D points — for a Plane, that IS the same
+        // 2D space `WorldToPlane`/`PlaneToWorld` use (see `TessellateGeneralLoopFace`'s own
+        // `pushVertex`, which treats a param-loop point's (u, v) as literal plane-local coordinates).
+        // Use those points AS-IS instead of resampling from `s.edges` — an importer that populates
+        // `paramLoops` does so consistently for every face that shares a boundary, so using its exact
+        // points (not re-deriving new ones) is what keeps this face's boundary bit-identical to a
+        // neighbour's, the same "derive-from-the-authoritative-source, don't resample" principle as
+        // the edge-based path below uses when there is no param loop to read.
+        const bool useParamLoops = !f.paramLoops.empty() && f.paramLoops.size() == f.loops.size();
+        bool bridgedOk = true;
+        std::vector<ucs::Point2D> outer2;
+        if (useParamLoops) {
+          // TASK-272 §9j: prefer a real-edge reconstruction at the unified segment count over the
+          // raw (fixed, importer-chosen) paramLoops points, when confirmed to be the same loop —
+          // see `reconstructParamLoop2D` above; this is what keeps this outer rim bit-identical to
+          // a neighbouring Cylinder/Cone wall's own edge-derived boundary.
+          std::optional<std::vector<curveisect::Vec2>> rebuilt =
+              reconstructParamLoop2D(sf, f.loops[0], f.paramLoops[0]);
+          const std::vector<curveisect::Vec2>& src = rebuilt ? *rebuilt : f.paramLoops[0];
+          outer2.reserve(src.size());
+          for (const curveisect::Vec2& p : src)
+            outer2.push_back(ucs::Point2D{p.x, p.y});
+        } else {
+          for (const EdgeUse& u : f.loops[0].uses) {
+            const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+            const int segs = segsForEdge(u.edge, e);
+            for (int i = 0; i < segs; ++i) {
+              const double t = static_cast<double>(i) / static_cast<double>(segs);
+              const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+              outer2.push_back(ucs::WorldToPlane(sf.frame, p));
+            }
+          }
+        }
+        if (outer2.size() < 3) {
+          bridgedOk = false;
+        } else {
+          if (SignedArea2D(outer2) < 0.0)
+            std::reverse(outer2.begin(), outer2.end());
+          ucs::Point2D outerCentroid{0.0, 0.0};
+          for (const ucs::Point2D& p : outer2) {
+            outerCentroid.x += p.x / static_cast<double>(outer2.size());
+            outerCentroid.y += p.y / static_cast<double>(outer2.size());
+          }
+          for (std::size_t li = 1; bridgedOk && li < f.loops.size(); ++li) {
+            std::vector<ucs::Point2D> hole2;
+            if (useParamLoops) {
+              std::optional<std::vector<curveisect::Vec2>> rebuilt =
+                  reconstructParamLoop2D(sf, f.loops[li], f.paramLoops[li]);
+              const std::vector<curveisect::Vec2>& src = rebuilt ? *rebuilt : f.paramLoops[li];
+              hole2.reserve(src.size());
+              for (const curveisect::Vec2& p : src)
+                hole2.push_back(ucs::Point2D{p.x, p.y});
+            } else {
+              for (const EdgeUse& u : f.loops[li].uses) {
+                const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+                const int segs = segsForEdge(u.edge, e);
+                for (int i = 0; i < segs; ++i) {
+                  const double t = static_cast<double>(i) / static_cast<double>(segs);
+                  const Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
+                  hole2.push_back(ucs::WorldToPlane(sf.frame, p));
+                }
+              }
+            }
+            if (hole2.size() < 3)
+              continue;  // a degenerate hole loop contributes nothing to bridge
+            if (SignedArea2D(hole2) > 0.0)
+              std::reverse(hole2.begin(), hole2.end());  // holes wind opposite the outer ring
+            if (!BridgeHoleIntoOuter(&outer2, hole2, outerCentroid)) {
+              bridgedOk = false;
+            }
+          }
+        }
+        std::vector<std::array<int, 3>> tris;
+        if (bridgedOk && !EarClip(outer2, &tris)) {
+          bridgedOk = false;
+        }
+        if (bridgedOk)
+          ImproveTriangulationQuality(outer2, &tris);
+        if (bridgedOk) {
+          const Vec3 planeN = sf.frame.zAxis;
+          std::vector<Vec3> world(outer2.size());
+          for (std::size_t i = 0; i < outer2.size(); ++i)
+            world[i] = ucs::PlaneToWorld(sf.frame, outer2[i]);
+          // Every triangle on a flat face must wind to match the SAME single normal, `planeN` —
+          // unlike a curved surface (where winding can only sensibly be checked against a
+          // neighbour, since the "expected" direction varies per point), a flat face's correct
+          // winding is unambiguous per triangle, so each is checked and, if needed, flipped
+          // individually rather than deciding once.
+          std::vector<std::uint32_t> verts(outer2.size());
+          for (std::size_t i = 0; i < outer2.size(); ++i)
+            verts[i] = mb.Push(world[i], planeN);
+          for (const std::array<int, 3>& t3 : tris) {
+            const Vec3& a3 = world[static_cast<std::size_t>(t3[0])];
+            const Vec3& b3 = world[static_cast<std::size_t>(t3[1])];
+            const Vec3& c3 = world[static_cast<std::size_t>(t3[2])];
+            const Vec3 g = ray3d::Cross(ray3d::Sub(b3, a3), ray3d::Sub(c3, a3));
+            const bool flip = ray3d::Length(g) > 1e-15 && ray3d::Dot(g, planeN) < 0.0;
+            if (!flip)
+              mb.Tri(verts[static_cast<std::size_t>(t3[0])], verts[static_cast<std::size_t>(t3[1])],
+                     verts[static_cast<std::size_t>(t3[2])]);
+            else
+              mb.Tri(verts[static_cast<std::size_t>(t3[0])], verts[static_cast<std::size_t>(t3[2])],
+                     verts[static_cast<std::size_t>(t3[1])]);
+          }
+          break;
+        }
+        // Fallback: the pre-existing band-grid tessellator, unchanged.
         Face tmp = f;
         tmp.paramLoops.clear();
         tmp.paramLoops.reserve(f.loops.size());
         for (const Loop& lp : f.loops) {
           std::vector<curveisect::Vec2> poly;
           for (const EdgeUse& u : lp.uses) {
-            const Edge& e = s.edges[static_cast<size_t>(u.edge)];
-            int segs = SegmentsForEdge(e, chordTolerance);
+            const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+            int segs = segsForEdge(u.edge, e);
             for (int i = 0; i < segs; ++i) {
               double t = double(i) / double(segs);
               Vec3 p = EdgePointAt(s, e, u.reversed ? 1.0 - t : t);
@@ -16358,7 +18841,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
           }
           tmp.paramLoops.push_back(std::move(poly));
         }
-        TessellateGeneralLoopFace(tmp, chordTolerance, &mb);
+        TessellateGeneralLoopFace(tmp, chordTolerance, &mb, &s, &edgeSegs);
         break;
       }
       // Walk each loop into a polyline. Arc edges are subdivided by the same chord rule the curved
@@ -16367,8 +18850,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         std::vector<Vec3> r;
         for (const EdgeUse& u : lp.uses) {
           const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
-          const int segs =
-              SegmentsForEdge(e, chordTolerance);
+          const int segs = segsForEdge(u.edge, e);
           for (int i = 0; i < segs; ++i) {
             const double t = static_cast<double>(i) / static_cast<double>(segs);
             r.push_back(EdgePointAt(s, e, u.reversed ? 1.0 - t : t));
@@ -16377,85 +18859,6 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         return r;
       };
       const Vec3 n = sf.frame.zAxis;
-
-      if (f.loops.size() == 2) {
-        // An annular face (a bored boss face, a stepped-stack ring — REQ-314 B1): strip it between
-        // the outer and inner loop by angle about the hole centre, which is convex-outer, star-shaped
-        // territory — all B1 produces. Both loops are sampled by the shared chord rule.
-        std::vector<Vec3> outer3 = sampleLoop(f.loops[0]);
-        std::vector<Vec3> inner3 = sampleLoop(f.loops[1]);
-        if (outer3.size() < 3 || inner3.size() < 3)
-          return Fail(Problem::DegenerateFace, outWhy);
-        std::vector<ucs::Point2D> outer2;
-        std::vector<ucs::Point2D> inner2;
-        for (const Vec3& p : outer3)
-          outer2.push_back(ucs::WorldToPlane(sf.frame, p));
-        for (const Vec3& p : inner3)
-          inner2.push_back(ucs::WorldToPlane(sf.frame, p));
-        ucs::Point2D hc{0.0, 0.0};
-        for (const ucs::Point2D& p : inner2) {
-          hc.x += p.x / static_cast<double>(inner2.size());
-          hc.y += p.y / static_cast<double>(inner2.size());
-        }
-        // The far intersection of the ray hc + t*dir (t > 0) with a closed 2D polyline.
-        auto rayHit = [&](const std::vector<ucs::Point2D>& poly, double dx, double dy) {
-          double bestT = 0.0;
-          ucs::Point2D hit{hc.x + dx, hc.y + dy};
-          for (std::size_t i = 0; i < poly.size(); ++i) {
-            const ucs::Point2D& a = poly[i];
-            const ucs::Point2D& b = poly[(i + 1) % poly.size()];
-            const double ex = b.x - a.x;
-            const double ey = b.y - a.y;
-            const double den = dx * ey - dy * ex;
-            if (std::fabs(den) < 1e-15)
-              continue;
-            const double t = ((a.x - hc.x) * ey - (a.y - hc.y) * ex) / den;
-            const double s2 = ((a.x - hc.x) * dy - (a.y - hc.y) * dx) / den;
-            if (t > 1e-12 && s2 >= -1e-9 && s2 <= 1.0 + 1e-9 && t > bestT) {
-              bestT = t;
-              hit = ucs::Point2D{hc.x + dx * t, hc.y + dy * t};
-            }
-          }
-          return hit;
-        };
-        std::vector<double> angs;
-        for (const ucs::Point2D& p : outer2)
-          angs.push_back(std::atan2(p.y - hc.y, p.x - hc.x));
-        for (const ucs::Point2D& p : inner2)
-          angs.push_back(std::atan2(p.y - hc.y, p.x - hc.x));
-        std::sort(angs.begin(), angs.end());
-        angs.erase(std::unique(angs.begin(), angs.end(),
-                               [](double u, double v) { return std::fabs(u - v) < 1e-7; }),
-                   angs.end());
-        const std::size_t m = angs.size();
-        auto backToWorld = [&](const ucs::Point2D& q) { return ucs::PlaneToWorld(sf.frame, q); };
-        for (std::size_t k = 0; k < m; ++k) {
-          const double a0 = angs[k];
-          const double a1 = angs[(k + 1) % m];
-          const double d0x = std::cos(a0);
-          const double d0y = std::sin(a0);
-          const double d1x = std::cos(a1);
-          const double d1y = std::sin(a1);
-          const Vec3 oi = backToWorld(rayHit(outer2, d0x, d0y));
-          const Vec3 oj = backToWorld(rayHit(outer2, d1x, d1y));
-          const Vec3 ii = backToWorld(rayHit(inner2, d0x, d0y));
-          const Vec3 ij = backToWorld(rayHit(inner2, d1x, d1y));
-          const std::uint32_t voi = mb.Push(oi, n);
-          const std::uint32_t voj = mb.Push(oj, n);
-          const std::uint32_t vii = mb.Push(ii, n);
-          const std::uint32_t vij = mb.Push(ij, n);
-          // Orient the first quad against n, then keep that winding for the ring.
-          const Vec3 g = ray3d::Cross(ray3d::Sub(oj, oi), ray3d::Sub(ii, oi));
-          if (ray3d::Dot(g, n) >= 0.0) {
-            mb.Tri(voi, voj, vii);
-            mb.Tri(voj, vij, vii);
-          } else {
-            mb.Tri(voi, vii, voj);
-            mb.Tri(voj, vii, vij);
-          }
-        }
-        break;
-      }
 
       std::vector<Vec3> ring = sampleLoop(f.loops[0]);
       if (ring.size() < 3)
@@ -16490,7 +18893,9 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         for (int o : order)
           ccwRing.push_back(ring2[static_cast<std::size_t>(o)]);
         std::vector<std::array<int, 3>> tris;
-        EarClip(ccwRing, &tris);
+        if (!EarClip(ccwRing, &tris))
+          return Fail(Problem::DegenerateFace, outWhy);
+        ImproveTriangulationQuality(ccwRing, &tris);
         std::vector<std::uint32_t> idx;
         idx.reserve(ring.size());
         for (const Vec3& p : ring)
@@ -16572,6 +18977,8 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       };
       std::vector<std::uint32_t> lower(static_cast<std::size_t>(nu) + 1);
       std::vector<std::uint32_t> upper(static_cast<std::size_t>(nu) + 1);
+      std::vector<Vec3> lowerP(static_cast<std::size_t>(nu) + 1);
+      std::vector<Vec3> upperP(static_cast<std::size_t>(nu) + 1);
       for (int i = 0; i <= nu; ++i) {
         const double t = f.uStart + (f.uEnd - f.uStart) * static_cast<double>(i) / static_cast<double>(nu);
         const Vec3 n = ConicalNormal(sf, r0, r1, t);
@@ -16586,18 +18993,41 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
         if (coneCut && coneStrip.valid())
           (void)ConeCutStripAt(coneStrip, t, &zA, &zB);  // exact — never pinches (SliceConeOblique's
                                                           // own guard keeps the cut off both caps
-        lower[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r1, t, zA), n);
-        upper[static_cast<std::size_t>(i)] = mb.Push(ConicalPoint(sf, r0, r1, t, zB), n);
+        lowerP[static_cast<std::size_t>(i)] = ConicalPoint(sf, r0, r1, t, zA);
+        upperP[static_cast<std::size_t>(i)] = ConicalPoint(sf, r0, r1, t, zB);
+        lower[static_cast<std::size_t>(i)] = mb.Push(lowerP[static_cast<std::size_t>(i)], n);
+        upper[static_cast<std::size_t>(i)] = mb.Push(upperP[static_cast<std::size_t>(i)], n);
       }
+      // Where a band's ring collapses to a point — the APEX of a sharp cone, whose whole upper ring
+      // is one vertex — a quad is a triangle, and emitting it as two triangles makes the second one
+      // a zero-area sliver with two coincident corners. Such a sliver draws nothing, so it looked
+      // harmless, but its two "different" edges are the SAME rim-to-apex edge, which counts that
+      // edge twice: every apex edge was used 4 times instead of 2, and the mesh read as non-manifold
+      // (`RequireMeshWatertight`). A sharp cone was HALF degenerate triangles — 128 of 256 per side
+      // half-face. Collapse-aware emission fixes the manifold count and halves the cone's side mesh.
+      const double ringEps = 1e-12 * std::max({std::fabs(r0), std::fabs(r1), std::fabs(sf.height), 1.0});
+      auto samePoint = [&](const Vec3& p, const Vec3& q) {
+        return ray3d::Length(ray3d::Sub(p, q)) <= ringEps;
+      };
       for (int i = 0; i < nu; ++i) {
         const std::size_t a = static_cast<std::size_t>(i);
         const std::size_t b = static_cast<std::size_t>(i + 1);
+        const bool upperPinched = samePoint(upperP[a], upperP[b]);
+        const bool lowerPinched = samePoint(lowerP[a], lowerP[b]);
+        if (upperPinched && lowerPinched)
+          continue;  // the whole segment is a point: nothing to draw
+        // Emission ORDER is unchanged from before the collapse test, so a band with no collapsed
+        // ring — every cylinder, every frustum — produces the identical index buffer it always has.
         if (sf.inward) {  // REQ-314 B2a: a bore wall — reverse winding to match the flipped normal
-          mb.Tri(lower[a], upper[b], lower[b]);
-          mb.Tri(lower[a], upper[a], upper[b]);
+          if (!lowerPinched)
+            mb.Tri(lower[a], upper[b], lower[b]);
+          if (!upperPinched)
+            mb.Tri(lower[a], upper[a], upper[b]);
         } else {
-          mb.Tri(lower[a], lower[b], upper[b]);
-          mb.Tri(lower[a], upper[b], upper[a]);
+          if (!lowerPinched)
+            mb.Tri(lower[a], lower[b], upper[b]);
+          if (!upperPinched)
+            mb.Tri(lower[a], upper[b], upper[a]);
         }
       }
       break;
@@ -16666,6 +19096,7 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
                          : SegmentsForArc(uRadius, f.uEnd - f.uStart, chordTolerance);
       const int nv = SegmentsForArc(vRadius, f.vEnd - f.vStart, chordTolerance);
       std::vector<std::uint32_t> grid(static_cast<std::size_t>(nu + 1) * static_cast<std::size_t>(nv + 1));
+      std::vector<Vec3> gridP(static_cast<std::size_t>(nu + 1) * static_cast<std::size_t>(nv + 1));
       for (int i = 0; i <= nu; ++i) {
         const double t = f.uStart + (f.uEnd - f.uStart) * static_cast<double>(i) / static_cast<double>(nu);
         double vA = f.vStart;
@@ -16676,21 +19107,44 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
           const double v = vA + (vB - vA) * static_cast<double>(j) / static_cast<double>(nv);
           const Vec3 p = sphere ? SphericalPoint(sf, t, v) : ToroidalPoint(sf, t, v);
           const Vec3 n = sphere ? SphericalNormal(sf, t, v) : ToroidalNormal(sf, t, v);
-          grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(nv + 1) +
-               static_cast<std::size_t>(j)] = mb.Push(p, n);
+          const std::size_t gi = static_cast<std::size_t>(i) * static_cast<std::size_t>(nv + 1) +
+                                 static_cast<std::size_t>(j);
+          gridP[gi] = p;
+          grid[gi] = mb.Push(p, n);
         }
       }
+      // The same collapse the conical band has, at a SPHERE'S POLES: every longitude meets at one
+      // point, so the pole row of the grid is a single position repeated. Emitting each cell as two
+      // triangles makes one of them a zero-area sliver whose two "different" edges are the same
+      // pole-to-ring edge, counting it twice — 512 edges of a sphere read as non-manifold. A torus
+      // has no pole and is unaffected.
+      const double gridEps =
+          1e-12 * std::max({std::fabs(uRadius), std::fabs(vRadius), 1.0});
+      auto sameGridPoint = [&](std::size_t p, std::size_t q) {
+        return ray3d::Length(ray3d::Sub(gridP[p], gridP[q])) <= gridEps;
+      };
       const std::size_t stride = static_cast<std::size_t>(nv + 1);
       for (int i = 0; i < nu; ++i) {
         for (int j = 0; j < nv; ++j) {
           const std::size_t a = static_cast<std::size_t>(i) * stride + static_cast<std::size_t>(j);
           const std::size_t b = a + stride;
+          // Each cell's two v-edges: the pair at this j, and the pair at j+1. Either may be a pole.
+          const bool pinchedLo = sameGridPoint(a, b);
+          const bool pinchedHi = sameGridPoint(a + 1, b + 1);
+          if (pinchedLo && pinchedHi)
+            continue;  // the whole cell is a point
+          // Emission order is unchanged, so a patch with no collapsed row — every torus, every
+          // sphere band away from the poles — produces the index buffer it always has.
           if (sf.inward) {  // REQ-314 B2a: reverse winding to match the flipped normal
-            mb.Tri(grid[a], grid[b + 1], grid[b]);
-            mb.Tri(grid[a], grid[a + 1], grid[b + 1]);
+            if (!pinchedLo)
+              mb.Tri(grid[a], grid[b + 1], grid[b]);
+            if (!pinchedHi)
+              mb.Tri(grid[a], grid[a + 1], grid[b + 1]);
           } else {
-            mb.Tri(grid[a], grid[b], grid[b + 1]);
-            mb.Tri(grid[a], grid[b + 1], grid[a + 1]);
+            if (!pinchedLo)
+              mb.Tri(grid[a], grid[b], grid[b + 1]);
+            if (!pinchedHi)
+              mb.Tri(grid[a], grid[b + 1], grid[a + 1]);
           }
         }
       }
@@ -16705,47 +19159,60 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
       const double uHi = std::max(f.uStart, f.uEnd);
       const double vLo = std::min(f.vStart, f.vEnd);
       const double vHi = std::max(f.vStart, f.vEnd);
-      double netStep = 0.0;
-      for (std::size_t k = 0; k + 1 < patch.ctrl.size(); ++k)
-        netStep = std::max(netStep, ray3d::Length(ray3d::Sub(patch.ctrl[k + 1], patch.ctrl[k])));
-      // A patch is flat enough for one quad only when it is bilinear AND its control net is planar —
-      // a *twisted* ruled patch (a swept-with-twist side face) is degree 1 in both directions but
-      // genuinely curved.
-      bool curved = patch.degU > 1 || patch.degV > 1;
-      if (!curved && patch.ctrl.size() >= 4) {
-        const Vec3 e1 = ray3d::Sub(patch.ctrl[1], patch.ctrl[0]);
-        const Vec3 e2 = ray3d::Sub(patch.ctrl[static_cast<std::size_t>(patch.nu)], patch.ctrl[0]);
-        Vec3 nrm = ray3d::Cross(e1, e2);
-        const double nl = ray3d::Length(nrm);
-        if (nl > 1e-12) {
-          nrm = ray3d::Scale(nrm, 1.0 / nl);
-          for (const Vec3& c : patch.ctrl)
-            if (std::fabs(ray3d::Dot(ray3d::Sub(c, patch.ctrl[0]), nrm)) > chordTolerance) {
-              curved = true;
-              break;
-            }
-        }
-      }
-      const int n = curved ? std::clamp(SegmentsForArc(std::max(netStep, 1e-9), kHalfPi, chordTolerance),
-                                        8, 128)
-                           : 1;
-      std::vector<std::uint32_t> grid(static_cast<std::size_t>(n + 1) * static_cast<std::size_t>(n + 1));
+      // TASK-272 §5: when the pre-pass above identified this face's two v-boundary (rim) edges, use
+      // the unified, shared-edge-relaxed segment count instead of this face's own independent
+      // curvature estimate, so this boundary lands on exactly the same resolution as whatever
+      // neighbouring face (cap or band) also walks those edges.
+      const std::array<NurbsBoundaryEdge, 2>& boundaryEdges = nurbsBoundaryEdges[fi];
+      const int n = boundaryEdges[0].edge >= 0
+                        ? edgeSegs.at(boundaryEdges[0].edge)
+                        : NurbsPatchCurvatureSegs(patch, chordTolerance, fullCircleSegments);
+      // V is divided on its OWN curvature, which for a ruled sweep direction is one division and
+      // exactly right. U keeps the shared, edge-relaxed count above because the rim edges run along
+      // it and neighbouring faces must land on the same resolution (TASK-272 §5) — that is why this
+      // is two numbers and not one. See NurbsPatchDirectionSegs for what using one cost.
+      const int nvSegs =
+          std::max(1, NurbsPatchDirectionSegs(patch, chordTolerance, /*alongU=*/false, fullCircleSegments));
+      std::vector<std::uint32_t> grid(static_cast<std::size_t>(n + 1) * static_cast<std::size_t>(nvSegs + 1));
+      // The two v-boundary rows (j=0 at v=vLo, j=n at v=vHi) are sampled DIRECTLY from their loop
+      // edges rather than `nurbs::EvaluateWithDerivs`, so they are bit-identical to the same edge's
+      // sampling on the neighbouring face (a flat cap's `sampleLoop`, or the next band's own
+      // boundary row) — the phase-matching half of the fix that §5.2's resolution-only floor was
+      // missing. `flip` (found geometrically by the pre-pass above, by matching this edge's own
+      // endpoints against the patch's own (u, v) corners) says whether the edge's own t=0 lands at
+      // the uHi end instead of uLo, so u-index i maps to edge-native t = flip ? 1-i/n : i/n.
+      const Edge* loEdge = boundaryEdges[0].edge >= 0 ? &s.edges[static_cast<std::size_t>(boundaryEdges[0].edge)] : nullptr;
+      const Edge* hiEdge = boundaryEdges[1].edge >= 0 ? &s.edges[static_cast<std::size_t>(boundaryEdges[1].edge)] : nullptr;
       for (int i = 0; i <= n; ++i)
-        for (int j = 0; j <= n; ++j) {
+        for (int j = 0; j <= nvSegs; ++j) {
           const double u = uLo + (uHi - uLo) * static_cast<double>(i) / static_cast<double>(n);
-          const double v = vLo + (vHi - vLo) * static_cast<double>(j) / static_cast<double>(n);
-          const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
-          Vec3 nrm = sp.normal;
+          const double v = vLo + (vHi - vLo) * static_cast<double>(j) / static_cast<double>(nvSegs);
+          Vec3 p;
+          Vec3 nrm;
+          const Edge* boundaryEdge = (j == 0) ? loEdge : (j == nvSegs) ? hiEdge : nullptr;
+          if (boundaryEdge) {
+            const bool flip = (j == 0) ? boundaryEdges[0].flip : boundaryEdges[1].flip;
+            const double s_ = static_cast<double>(i) / static_cast<double>(n);
+            const double t = flip ? 1.0 - s_ : s_;
+            p = EdgePointAt(s, *boundaryEdge, t);
+            // The analytic patch normal at the matching (u, v) still gives correct shading — only the
+            // POSITION needs to come from the edge; a boundary curve has no separate "edge normal".
+            nrm = nurbs::EvaluateWithDerivs(patch, u, v).normal;
+          } else {
+            const nurbs::SurfacePoint sp = nurbs::EvaluateWithDerivs(patch, u, v);
+            p = sp.p;
+            nrm = sp.normal;
+          }
           if (!(ray3d::Dot(nrm, nrm) > 0.25))
             nrm = Vec3{0.0, 0.0, 1.0};  // a collapsed edge (a pole) — a loft patch has none
           if (sf.inward)
             nrm = ray3d::Scale(nrm, -1.0);
-          grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(n + 1) +
-               static_cast<std::size_t>(j)] = mb.Push(sp.p, nrm);
+          grid[static_cast<std::size_t>(i) * static_cast<std::size_t>(nvSegs + 1) +
+               static_cast<std::size_t>(j)] = mb.Push(p, nrm);
         }
-      const std::size_t stride = static_cast<std::size_t>(n + 1);
+      const std::size_t stride = static_cast<std::size_t>(nvSegs + 1);
       for (int i = 0; i < n; ++i)
-        for (int j = 0; j < n; ++j) {
+        for (int j = 0; j < nvSegs; ++j) {
           const std::size_t a = static_cast<std::size_t>(i) * stride + static_cast<std::size_t>(j);
           const std::size_t b = a + stride;
           if (sf.inward) {
@@ -16763,30 +19230,90 @@ bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Proble
 
   // Weld duplicate vertices that share position AND normal (smooth seams, e.g. cylinder halves).
   // Keep hard edges (cap ↔ wall, 90°) separate by requiring normal match, so wall/cap seams stay hard.
+  //
+  // Through a SPATIAL HASH, not a linear scan. This was a plain double loop — every vertex compared
+  // against every unique vertex kept so far — which is O(n^2) and, on the meshes this actually
+  // produces, catastrophic: a ten-vertex 2in pipe run tessellates to roughly 400,000 vertices, and
+  // welding them took **26 seconds** while the application appeared to hang (measured 2026-09-24,
+  // user-reported freeze on finishing a long run). It is the dominant cost of Tessellate for any
+  // dense mesh and it got worse as the square of the size.
+  //
+  // The rule is unchanged, and so is the result: a candidate within `posEps` of a vertex must lie in
+  // that vertex's own cell or one of the 26 around it, because the cell size IS `posEps`. So the 27
+  // cells are probed, and within them the same position-and-normal comparison decides, in the same
+  // order (ascending kept-index), which means the winning match — and therefore the remap and the
+  // final vertex numbering — is identical to what the linear scan produced.
   {
     const double posEps = 1e-9;
     const double nrmEps = 1e-6;
-    std::vector<uint32_t> remap(mesh.vertsXyz.size()/3, 0xFFFFFFFFu);
+    const std::size_t vertCount = mesh.vertsXyz.size() / 3;
+    std::vector<uint32_t> remap(vertCount, 0xFFFFFFFFu);
     std::vector<double> newVerts, newNorms;
     newVerts.reserve(mesh.vertsXyz.size());
     newNorms.reserve(mesh.normalsXyz.size());
-    for(size_t i=0;i<mesh.vertsXyz.size()/3;++i){
-      double x=mesh.vertsXyz[i*3], y=mesh.vertsXyz[i*3+1], z=mesh.vertsXyz[i*3+2];
-      double nx=mesh.normalsXyz[i*3], ny=mesh.normalsXyz[i*3+1], nz=mesh.normalsXyz[i*3+2];
-      uint32_t found=0xFFFFFFFFu;
-      for(size_t j=0;j<newVerts.size()/3;++j){
-        double dx=newVerts[j*3]-x, dy=newVerts[j*3+1]-y, dz=newVerts[j*3+2]-z;
-        double dnx=newNorms[j*3]-nx, dny=newNorms[j*3+1]-ny, dnz=newNorms[j*3+2]-nz;
-        if(dx*dx+dy*dy+dz*dz < posEps*posEps && dnx*dnx+dny*dny+dnz*dnz < nrmEps*nrmEps){ found=(uint32_t)j; break; }
+
+    // Cell index of a coordinate, at cell size == posEps. Storage coordinates reach ~1e5 ft and the
+    // cell is 1e-9, so the quotient needs the full 64-bit range.
+    const auto cellOf = [&](double v) {
+      return static_cast<std::int64_t>(std::floor(v / posEps));
+    };
+    struct CellKey {
+      std::int64_t x, y, z;
+      bool operator==(const CellKey& o) const { return x == o.x && y == o.y && z == o.z; }
+    };
+    struct CellHash {
+      std::size_t operator()(const CellKey& k) const {
+        std::uint64_t h = 1469598103934665603ull;
+        const auto mix = [&h](std::uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+        mix(static_cast<std::uint64_t>(k.x));
+        mix(static_cast<std::uint64_t>(k.y));
+        mix(static_cast<std::uint64_t>(k.z));
+        return static_cast<std::size_t>(h);
       }
-      if(found==0xFFFFFFFFu){
-        found=(uint32_t)(newVerts.size()/3);
-        newVerts.push_back(x); newVerts.push_back(y); newVerts.push_back(z);
-        newNorms.push_back(nx); newNorms.push_back(ny); newNorms.push_back(nz);
+    };
+    std::unordered_map<CellKey, std::vector<uint32_t>, CellHash> cells;
+    cells.reserve(vertCount * 2);
+
+    for (std::size_t i = 0; i < vertCount; ++i) {
+      const double x = mesh.vertsXyz[i * 3], y = mesh.vertsXyz[i * 3 + 1], z = mesh.vertsXyz[i * 3 + 2];
+      const double nx = mesh.normalsXyz[i * 3], ny = mesh.normalsXyz[i * 3 + 1],
+                   nz = mesh.normalsXyz[i * 3 + 2];
+      const std::int64_t cx = cellOf(x), cy = cellOf(y), cz = cellOf(z);
+      uint32_t found = 0xFFFFFFFFu;
+      for (std::int64_t dx = -1; dx <= 1 && found == 0xFFFFFFFFu; ++dx)
+        for (std::int64_t dy = -1; dy <= 1 && found == 0xFFFFFFFFu; ++dy)
+          for (std::int64_t dz = -1; dz <= 1 && found == 0xFFFFFFFFu; ++dz) {
+            const auto it = cells.find(CellKey{cx + dx, cy + dy, cz + dz});
+            if (it == cells.end())
+              continue;
+            // Ascending kept-index, so the FIRST acceptable match is the same one the linear scan
+            // would have found.
+            for (const uint32_t j : it->second) {
+              const double ddx = newVerts[j * 3] - x, ddy = newVerts[j * 3 + 1] - y,
+                           ddz = newVerts[j * 3 + 2] - z;
+              const double dnx = newNorms[j * 3] - nx, dny = newNorms[j * 3 + 1] - ny,
+                           dnz = newNorms[j * 3 + 2] - nz;
+              if (ddx * ddx + ddy * ddy + ddz * ddz < posEps * posEps &&
+                  dnx * dnx + dny * dny + dnz * dnz < nrmEps * nrmEps) {
+                found = j;
+                break;
+              }
+            }
+          }
+      if (found == 0xFFFFFFFFu) {
+        found = static_cast<uint32_t>(newVerts.size() / 3);
+        newVerts.push_back(x);
+        newVerts.push_back(y);
+        newVerts.push_back(z);
+        newNorms.push_back(nx);
+        newNorms.push_back(ny);
+        newNorms.push_back(nz);
+        cells[CellKey{cx, cy, cz}].push_back(found);
       }
-      remap[i]=found;
+      remap[i] = found;
     }
-    for(auto &idx: mesh.indices) idx = remap[idx];
+    for (auto& idx : mesh.indices)
+      idx = remap[idx];
     mesh.vertsXyz.swap(newVerts);
     mesh.normalsXyz.swap(newNorms);
   }

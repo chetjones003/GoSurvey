@@ -20,6 +20,7 @@
 #include "CadBlocks.hpp"
 // CadCoord::WorldFromLocal, for EXPECT LINEXYZ (REQ-154) and EXPECT VERTEX / EXPECT ELEVATION
 #include "CadCoordinateFrame.hpp"
+#include "CadDynInput.hpp"
 #include "DxfIo.hpp"
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
@@ -152,7 +153,30 @@ struct Run {
   double hoverY = 0.0;
   std::weak_ptr<const CadTin> lastSurfaceTin;
   bool sawSurfaceTin = false;
+
+  /// The point prompt's dynamic input (REQ-354): the same model the viewport's boxes draw from.
+  /// Fresh for each prompt — `dynLogMark` is the log length when it was last touched, so any
+  /// command output in between (a point landing, ESC) starts the next DYN on new boxes.
+  dyninput::Group dyn;
+  bool dynActive = false;
+  size_t dynLogMark = 0;
 };
+
+/// Bring the transcript's dynamic-input model up to the active prompt: new boxes when this is a new
+/// prompt (anything was logged since the last DYN, or the opening layout changed), the current Z
+/// visibility either way. False when the prompt has no point field group.
+bool SyncDynInput(Run& run) {
+  const CadDynInputPrompt dp = CadDynInputPromptFor(run.st);
+  if (!dp.pointEntry || dp.ucsPolar)
+    return false;
+  if (!run.dynActive || run.dynLogMark != run.log.size() || dp.initialMode != run.dyn.initial) {
+    dyninput::Reset(run.dyn, dp.initialMode, dp.showZ);
+    run.dynActive = true;
+    run.dynLogMark = run.log.size();
+  }
+  run.dyn.showZ = dp.showZ;
+  return true;
+}
 
 /// Expand %OUT% to the run's temp directory. Transcripts must never write into the source tree
 /// (CON-07 / REQ-200), and a fuzz run writes a lot of files.
@@ -516,6 +540,60 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // sheet, so it needs no framebuffer — which is exactly why it is the one zoom behaviour a
     // transcript can drive end to end.
     ProcessPendingViewportZoom(run.st, nullptr, nullptr, nullptr, 0, 0, 1.f, run.log);
+  } else if (verb == "DYN" || verb == "DYNKEY") {
+    // DYN <text>                  — type into the point prompt's dynamic input (REQ-354)
+    // DYNKEY TAB | BACKSPACE | ENTER
+    //
+    // GitHub issue #564 section 5 asks for "headless transcript coverage for each mode's parse, so
+    // the field labelling and the parse cannot drift apart". These drive the dyninput model the
+    // viewport draws its boxes from — keystroke for keystroke — and ENTER submits the text that
+    // model composes through the ordinary command line, so `EXPECT DYNLABELS` and the geometry
+    // assertions that follow are checking one thing. The live cursor is the last HOVER.
+    if (!SyncDynInput(run)) {
+      Fail(run, "state", verb + ": the active prompt has no point dynamic input", sourceLine);
+      return false;
+    }
+    const auto takeFocus = [&run]() {
+      if (run.dyn.requestFocus >= 0) {
+        run.dyn.focus = run.dyn.requestFocus;
+        run.dyn.requestFocus = -1;
+      }
+    };
+    if (verb == "DYN") {
+      dyninput::TypeText(run.dyn, ExpandVars(run, rest));
+    } else {
+      const std::string key = UpperAscii(Trim(rest));
+      if (key == "TAB") {
+        run.dyn.focus = (run.dyn.focus + 1) % dyninput::FieldCount(run.dyn);
+      } else if (key == "BACKSPACE") {
+        dyninput::Field& f = run.dyn.f[static_cast<size_t>(run.dyn.focus)];
+        if (!f.locked) {
+          dyninput::BackspaceAtEmpty(run.dyn, run.dyn.focus);
+        } else {
+          std::string shorter = f.text;
+          shorter.pop_back();
+          dyninput::EditText(run.dyn, run.dyn.focus, shorter);
+        }
+      } else if (key == "ENTER") {
+        const CadDynInputPrompt dp = CadDynInputPromptFor(run.st);
+        double cwx = 0.0, cwy = 0.0;
+        CadCoord::WorldFromLocal(run.st, static_cast<float>(run.hoverX), static_cast<float>(run.hoverY), &cwx, &cwy);
+        const double cwz = ucs::WorkPlaneZAt(CadActiveWorkPlane(run.st), run.hoverX, run.hoverY);
+        const dyninput::Live live = CadDynInputLive(run.st, dp, run.dyn.mode, cwx, cwy, cwz);
+        const std::string text = dyninput::Compose(run.dyn, live, dp.directDistance);
+        run.dynActive = false;
+        run.logMarkBeforeLastCmd = run.log.size();
+        char buf[1024];
+        std::snprintf(buf, sizeof buf, "%s", text.c_str());
+        ProcessCommandLineSubmit(buf, static_cast<int>(sizeof buf), run.st, run.log);
+        return true;
+      } else {
+        Fail(run, "parse", "DYNKEY expects TAB, BACKSPACE or ENTER, got: " + rest, sourceLine);
+        return false;
+      }
+    }
+    takeFocus();
+    run.dynLogMark = run.log.size();
   } else if (verb == "PICK") {
     std::istringstream is(rest);
     float x = 0.f;
@@ -751,6 +829,28 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     case ViewportClickRoute::InsertBlockPick:
       SubmitInsertBlockPick(run.st, x, y, clickHasZ ? clickZ : 0.f, run.log);
       break;
+    // 3DMOVE / 3DROTATE / 3DSCALE past their selection step (GitHub issue #564): the click goes to
+    // `SubmitGizmoClick` along the camera's ray at (x, y, z), as the viewport sends it. GIZMO
+    // GRAB/DROP say which gesture they mean; CLICK proves the route reaches the gizmo at all.
+    case ViewportClickRoute::GizmoHandlePick: {
+      if (run.st.uiViewportWidthPx <= 0.f || run.st.uiViewportHeightPx <= 0.f) {
+        run.st.uiViewportWidthPx = 1200.f;
+        run.st.uiViewportHeightPx = 700.f;
+      }
+      const Camera gCam = CadViewCamera(run.st);
+      float gsx = 0.f, gsy = 0.f;
+      gCam.WorldToScreen(static_cast<double>(x), static_cast<double>(y),
+                         static_cast<double>(clickHasZ ? clickZ : 0.f), run.st.uiViewportWidthPx,
+                         run.st.uiViewportHeightPx, &gsx, &gsy);
+      const ray3d::Ray gRay =
+          gCam.ScreenRay(gsx, gsy, run.st.uiViewportWidthPx, run.st.uiViewportHeightPx);
+      const double gTol = static_cast<double>(CadSnap::WorldToleranceFromPixels(
+          run.st.uiViewportHeightPx, (1.f / std::max(run.st.viewportZoom, 1.e-9f)) * 50.f,
+          kGizmoHandleGrabPx));
+      if (!SubmitGizmoClick(run.st, gRay, gTol, run.log))
+        run.log.push_back(CadGizmoCommandPromptText(run.st));
+      break;
+    }
     case ViewportClickRoute::Ignore:
       // The whole point of this verb: a command the UI does not route is a failure, not a no-op.
       Fail(run, "state",
@@ -1380,6 +1480,19 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              "ANNKIND: annotation " + std::to_string(ix) + " expected " + want + ", got " + got, sourceLine);
         return false;
       }
+    } else if (what == "DYNLABELS") {
+      // EXPECT DYNLABELS <labels> — the boxes the point prompt's dynamic input shows right now,
+      // e.g. `X Y`, `@ ΔX ΔY ΔZ`, `Distance < Angle` (REQ-354). Nothing typed yet: the prompt's own
+      // opening layout.
+      if (!SyncDynInput(run)) {
+        Fail(run, "state", "EXPECT DYNLABELS: the active prompt has no point dynamic input", sourceLine);
+        return false;
+      }
+      const std::string got = dyninput::LabelLine(run.dyn);
+      if (got != Trim(arg)) {
+        Fail(run, "expect", "DYNLABELS: expected '" + Trim(arg) + "', got '" + got + "'", sourceLine);
+        return false;
+      }
     } else if (what == "VERTEX" || what == "ELEVATION") {
       // EXPECT VERTEX    <kind> <entity> <vertex> <x> <y> <z>   — one vertex, in WORLD coordinates
       // EXPECT ELEVATION <kind> <entity> <z>                    — EVERY vertex of one entity, at z
@@ -1622,6 +1735,30 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       std::string needle = Trim(expanded.substr(std::min(expanded.size(), expanded.find(path) + path.size())));
       if (needle.size() >= 2 && needle.front() == '"' && needle.back() == '"')
         needle = needle.substr(1, needle.size() - 2);
+      // Escapes, so the needle can be anchored to the START OF A LINE. Without \n this is a bare
+      // substring test, which cannot tell a DOCUMENT-level key from the same key inside a block
+      // definition nested ten spaces deeper — and the template ships block definitions that carry
+      // solids, so "this drawing wrote no solids array" was not provable at all. Only these four:
+      // enough to pin an indent, and deliberately not a regex language inside a transcript.
+      {
+        std::string unescaped;
+        unescaped.reserve(needle.size());
+        for (size_t ni = 0; ni < needle.size(); ++ni) {
+          if (needle[ni] != '\\' || ni + 1 >= needle.size()) {
+            unescaped.push_back(needle[ni]);
+            continue;
+          }
+          const char esc = needle[++ni];
+          switch (esc) {
+            case 'n':  unescaped.push_back('\n'); break;
+            case 't':  unescaped.push_back('\t'); break;
+            case '"':  unescaped.push_back('"'); break;
+            case '\\': unescaped.push_back('\\'); break;
+            default:   unescaped.push_back('\\'); unescaped.push_back(esc); break;
+          }
+        }
+        needle.swap(unescaped);
+      }
       if (needle.empty()) {
         Fail(run, "parse", "EXPECT " + what + ": the text to look for is empty", sourceLine);
         return false;

@@ -304,7 +304,7 @@
 #define PACKAGE_NAME "LibreDWG"
 
 /* Define to the full name and version of this package. */
-#define PACKAGE_STRING "LibreDWG 0.13.4-0-ge3774bd"
+#define PACKAGE_STRING "LibreDWG 0.14-0-gd9468ae"
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME "libredwg"
@@ -313,7 +313,7 @@
 #define PACKAGE_URL "https://savannah.gnu.org/projects/libredwg/"
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "0.13.4-0-ge3774bd"
+#define PACKAGE_VERSION "0.14-0-gd9468ae"
 
 /* Defined in configure.ac to the libtool version-info of the shared lib. */
 #define LIBREDWG_SO_VERSION ""

@@ -689,7 +689,8 @@ A change is rejected if it breaks any of these:
 
 #### ADR-024 addendum — native codec is LibreDWG   (2026-08-29, accepted)
 Phase 1 (converter) is unchanged as **shipped history**. The native phase in (d) is **ADR-041 /
-REQ-170**, not a from-scratch codec and not ODA. DWG write in that epic is R2000/R2004 only.
+REQ-170**, not a from-scratch codec and not ODA. DWG write in that epic is R2000–R2018 (not R2007;
+D-2026-10-01-f).
 See `spec/file-format-specs.md` and D-2026-08-29-g.
 
 ### ADR-023 — WYSIWYG MTEXT editing: an offset-carrying rich-span API + an in-tree rich text edit widget   (2026-07-30, accepted)
@@ -855,8 +856,9 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   kernel to tessellate, which is a larger project than everything else here combined).
   (c) **A mesh is a new entity type, and it is reference geometry** (REQ-063). It stores interleaved XYZ
   positions (§11.8 applies unchanged), one normal per vertex, `uint32` indices, and a per-part colour.
-  GoSurvey **does not author or edit meshes**: no command creates one, no grip moves a vertex, and they
-  are excluded from DXF/DWG export, which has no lossless representation. They are visible, selectable,
+  GoSurvey **does not author or edit meshes**: no command creates one, no grip moves a vertex. **DWG
+  export (amended 2026-10-01, D-2026-10-01-e, issue #611)** writes each exportable mesh as a
+  `POLYLINE_PFACE` triangle soup via LibreDWG; DXF export remains excluded. They are visible, selectable,
   erasable, layer-controlled, and included in extents. Treating them as draftable would drag mesh
   editing, mesh snapping and mesh export into scope for no requirement that asks for it.
   (d) **A parser is written in-tree; no glTF library is vendored.** glTF is JSON plus a binary buffer,
@@ -1009,9 +1011,9 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   **discarded** if that generation is stale on completion. This is the existing `AsyncBuild` pattern
   (`AppCommandState::pdfAttachAsync`) as its second concrete use — which is what makes writing it
   into §8 legitimate rather than speculative (§11.4).
-  (f) **Surfaces are not written to DXF or DWG, and the exclusion is logged** (REQ-068) — the ADR-026
-  (c) precedent for meshes, for the same reason and with the same REQ-201 obligation. Extracted
-  contours are ordinary polylines and export normally.
+  (f) **Surfaces are not written to DXF; DWG writes a built TIN as `POLYLINE_PFACE` (amended
+  2026-10-01, D-2026-10-01-e, issue #611).** A surface without a built triangulation stays in the
+  REQ-201 loss list. Extracted contours are ordinary polylines and export normally.
   (g) **Point groups are rules, not lists, and are not entities** (REQ-067). No geometry, no layer, no
   selection, not drawn. They resolve against the current point set on demand, which is what makes a
   surface pick up points imported after it was defined. `SurveyPoint` already carries a stable `id`,
@@ -1039,6 +1041,15 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   left open and not designed for: contour smoothing (linear contours only), proximity / wall /
   non-destructive breaklines, surface import from Civil 3D, DEM and point-cloud sources, and grading
   design objects.
+
+  **Alternative (5) has now been reversed in full, in two steps.** Feature lines came off it
+  2026-08-19 (D-2026-08-19-a) and were built as REQ-087 / REQ-088. Grading objects came off it
+  2026-10-05 (D-2026-10-05-b), whose first increment is REQ-398 — side slopes projected from a
+  feature line to a surface, producing the daylight line. Neither reversal needed this ADR's design
+  to change: REQ-398 adds **no store and no entity kind**, so none of the consequences above grows
+  a new case. Its solver is pure `util/` over `ISurfaceQuery` — the shape this ADR's first
+  consequence already prescribes — and the daylight line is baked ordinary geometry on the EXTRACT
+  precedent (D-2026-08-12 D2) rather than a live object. The rest of the list above still stands.
 
 ### ADR-029 — Distribution: a CI-built installer, a manifest asset, and an updater with no updater binary   (2026-08-15, accepted)
 - Context: releases are built by hand today — CMake bumped locally, a fresh `<version>.iss` copied
@@ -1824,13 +1835,15 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
 - Consequences: REQ-161; FetchContent `imgui_test_engine`; Debug-only CLI; a Release ctest that
   `dumpbin`s `GoSurvey.exe`. Screenshot golden images remain out of scope.
 
-### ADR-041 — LibreDWG is the DXF/DWG codec; DWG write stops at R2004   (2026-08-29, accepted)
+### ADR-041 — LibreDWG is the DXF/DWG codec; DWG write through R2018   (2026-08-29, accepted;
+amended 2026-10-01 D-2026-10-01-f)
 - Context:    ADR-024 shipped Phase 1 (DWG↔DXF via ODA File Converter or `accoreconsole`) and left
   the native codec as later work. `docs/dwg-plan.txt` PART 4 listed Route A (in-tree), B (LibreDWG),
   C (ODA SDK), D (converter). The user chose **B** for File Format Specs (D-2026-08-29-g): a full
-  DXF/DWG codec in-process, DWG **write up to 2004**, no ODA membership. Linking LibreDWG is GPL-3.0,
-  which the 2026-07-30 open-source decision already allowed. R2018 write still fails CRC upstream;
-  the user accepted down-convert rather than waiting for it.
+  DXF/DWG codec in-process, DWG **write up to 2004** initially, no ODA membership. Linking LibreDWG
+  is GPL-3.0, which the 2026-07-30 open-source decision already allowed. **2026-10-01 (D-2026-10-01-f):**
+  write extended through **R2018** for GoSurvey-synthesized files (vendored LibreDWG 0.14 + in-tree
+  fixes); foreign R2018 databases are still not bit-preserved (DM-08).
 - Decision:
   (a) **GNU LibreDWG is the CAD interchange codec.** IO owns a wrapper (`io/` beside `DwgIo` /
       `DxfIo`) that talks to LibreDWG. Commands/UI keep the existing File Import/Export entries.
@@ -1838,8 +1851,9 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
       DWG/DXF becomes LibreDWG, not `DxfIo` + a child process.
   (b) **Read:** every DWG version LibreDWG decodes (through AC1032 / R2018) and DXF (ASCII and
       binary as the library supports). No converter required for the happy path.
-  (c) **Write DWG:** R2000 (AC1015) and R2004 (AC1018) only. **Default R2004.** R2007+ emit is
-      refused with a message, not a Recover-bait file. DXF write uses LibreDWG’s DXF writer for
+  (c) **Write DWG:** R2000 (AC1015), R2004 (AC1018), R2010 (AC1024), R2013 (AC1027), and R2018
+      (AC1032). **Default R2000** (D-2026-09-30-c). **R2007 (AC1021) is not offered.** Amended
+      2026-10-01 (D-2026-10-01-f). DXF write uses LibreDWG’s DXF writer for
       versions it supports; the log still names every GoSurvey type that has no DXF/DWG
       representation (meshes, TIN, clouds, PDF).
   (d) **Write is synthesized from the GoSurvey document**, not a bit-exact rewrite of an unread
@@ -1854,6 +1868,24 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (g) **MSVC:** LibreDWG is built with the pinned `cl` + Ninja presets (project.md §7). If
       upstream CMake is untested on MSVC, that is integration work in IO/Build, not a second
       compiler.
+  (h) (2026-09-30, D-2026-09-30-d) **GoSurvey maintains its own
+      LibreDWG, as full source in this repository.** `third_party/libredwg/` holds the complete
+      upstream **library** source of tag 0.13.4 (`src/`, `include/`, the one header the library
+      includes from `programs/`, and the licence and copyright files) plus GoSurvey's changes.
+      Upstream's tests, examples, docs, command-line programs and bindings are not copied. It is compiled as a static library by the GoSurvey build, with the same MSVC
+      configuration the prebuilt `.lib` used, and the prebuilt `.lib` is removed.
+      - Every change to LibreDWG is its own commit, listed in `third_party/libredwg/VENDORED.md`
+        with what it fixes, why, and whether it has been offered upstream.
+      - Moving to a newer upstream release is a recorded decision, and our changes are re-applied
+        on top of it.
+      - The first change removes the extra bit in the R2000 GEODATA layout (REQ-362 item 3).
+      - Cost: compiling the library alone from clean takes about 60 s on the reference machine
+        (measured 2026-09-30, 22 compile steps, configure included). REQ-205's clean-build budget
+        must still hold. Measured by TASK-299: a clean build went from 94 s to 146 s. The user kept
+        the library optimized and raised the budget to ~2.5 min (D-2026-09-30-e), rather than
+        building it unoptimized (98 s clean, DWG read 0.06 → 0.10 s on a 3.4 MB drawing).
+      - This supersedes D-2026-08-31-b for LibreDWG only; every other dependency stays vendored
+        as before. The GPL-3.0 obligation (e) is met by the source being in this repository.
 - Alternatives: **(1) Route A in-tree codec** — rejected; months of bit packing for a writer we
   are capping at R2004 anyway. **(2) ODA Drawings SDK** — rejected by the user (cost + proprietary
   SDK). **(3) Keep converter forever** — rejected (ADR-024 (d)). **(4) Write R2018 anyway** —
@@ -2093,13 +2125,14 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (h) **`ucs::Ucs` is the frame type throughout** — for a surface, for an arc edge, and for
   placement. REQ-311 already settled that there is exactly one plane/frame type in this project, and
   a kernel that introduced a second would reopen the disagreement that decision closed.
-  (i) **Solids are EXCLUDED from DXF/DWG export, with an explicit message naming what was skipped.**
-  A real solid in DXF/DWG is an ACIS `3DSOLID` — a proprietary binary B-rep we cannot write without
-  a large third-party kernel that REQ-300 does not permit. This is the same boundary ADR-026 (c)
-  drew for `CadMesh` and for the same reason, and it is stated out loud rather than dropped
-  silently (REQ-201). Writing a tessellated approximation instead was considered and rejected by the
-  user: it hands back a picture of the solid that round-trips as an uneditable bag of triangles with
-  an approximate volume. If that is wanted it is an explicit opt-in export and its own issue.
+  (i) **Solids and pipe-run geometry in DWG export (amended 2026-10-01, D-2026-10-01-d, issue #612).**
+  **DWG:** every exportable `CadSolid` and every pipe run's swept solid is written as a LibreDWG
+  `3DSOLID` carrying ACIS SAT — primitive recipes via `dwg_add_BOX` / `CYLINDER` / … (ASM-compatible
+  streams), other analytic B-reps via in-tree `acissat::ExportSatSolid` within ADR-051's scope. Solids
+  the writer cannot encode remain **counted and named** in the REQ-201 pre-export loss list (never
+  silent). **DXF** export is unchanged: still excluded with an explicit message until separately
+  decided. Writing a tessellated approximation was considered and rejected: it round-trips as an
+  uneditable mesh with approximate volume (ADR-026 (c) boundary for `CadMesh` unchanged).
 - Alternatives: **(1) Recipe-only parametric primitives** (no topology; faces generated on demand) —
   smallest possible kernel, exact volumes for free, tiny files. Rejected because Phase 4 has nowhere
   to put a boolean result, so the real kernel would have to be built anyway, *and* every solid
@@ -2352,8 +2385,9 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
     the typed / prompted shape the primitive commands already use, each one undo step.
   - No renderer change — feature results tessellate through REQ-313's cached path and REQ-100
     profile (d) is unaffected.
-  - DXF / DWG export is unchanged: ADR-045 (i) already excludes every `CadSolid` with a counted,
-    named message.
+  - **DXF export** is unchanged (solids still excluded with a counted message). **DWG export** writes
+    exportable solids and pipe runs as ACIS `3DSOLID` per ADR-045 (i) as amended by D-2026-10-01-d
+    (issue #612); only solids the SAT writer refuses stay in the loss list.
   - **Still not addressed here** (sweep / loft moved to ADR-048, accepted 2026-09-03): multi-loop profiles; fillet / chamfer
     on a solid edge (#120 Phase 5); sectioning, centroid, moments of inertia (#120 Phase 6);
     interactive placement and 3D grips for a feature result (#120 Phase 5).
@@ -3749,6 +3783,19 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   if split, representation exists). Decided with the user 2026-09-07. An all-flat polyline keeps
   exporting as one `LWPOLYLINE`/`POLYLINE`, byte-identical to today.
 
+  **(f) DXF/DWG amendment (2026-09-22, D-2026-09-22-a, GitHub issue #521): the split is for polylines
+  whose segments disagree about their plane, not for every tilted one.** (e) reads the format ceiling
+  correctly — one elevation and one extrusion per entity — but draws the line in the wrong place. A
+  polyline whose vertices AND whose every curved segment lie in one plane needs exactly one
+  extrusion, so it is written whole, in its own OCS. The split stands for a polyline whose segments
+  genuinely lie in different planes, and a level polyline is untouched.
+
+  The same amendment ends the flattening this writer did for every non-level polyline (first vertex's
+  Z as group 38, extrusion left at (0, 0, 1), vertices projected onto XY) — the very failure (e)
+  rejected for a tilted segment, still being done to straight ones. A polyline that is not planar at
+  all is now written as a 3D `POLYLINE`/`VERTEX` pair rather than flattened. On import, group 210 is
+  read and the vertices mapped back through REQ-312's Arbitrary Axis frame.
+
 - **Consequences.**
   - No behavior change for any existing polyline: `userPolylineVertsNormal` is empty (or all-+Z) for
     every polyline that exists today, and every consumer that does not yet know about it (increments
@@ -4318,6 +4365,56 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   both. That is one function knowing about two stores, against every consumer knowing about one
   extra kind.
 
+  > **Superseded in part by (i), 2026-09-21.** (h)'s conclusion — "the plane has no layer, no
+  > attributes, no id and no place in `.gs`" — was stated as a consequence of the selection-storage
+  > argument above it, but it is a SEPARATE decision that argument does not actually force. Issue
+  > #479 acceptance 4 and 8 require exactly what (h) ruled out: a Properties report and `.gs`/UNDO
+  > persistence. (i) restores those two without touching the selection-storage half of (h), which
+  > still holds unchanged — see (i) for the boundary.
+
+- **(i) The plane is an entity for persistence and reporting, but stays out of `selection` for
+  storage** (added 2026-09-21, REQ-343 amended, GitHub issue #479 acceptance 4/8 — partially
+  supersedes (h)).
+
+  (h) conflated two questions and answered both "no" from one argument: *where does "is it
+  selected?" live* (answer: `sectionPlaneSelected`, a bool — (h) is right, and stays) and *can the
+  plane be reported, saved and undone* (answer, now: yes). The second question turned out not to
+  depend on the first at all — a value can be undo-tracked and `.gs`-persisted without ever
+  appearing in `AppCommandState::selection`, the same way `activeDimensionStyle`, `pointGroups` and
+  every other non-indexed field in `DrawingGeometrySnapshot` already is.
+
+  **What actually changed:** `SelectedEntity::Type::SectionPlane` was appended (a type TAG,
+  `selection`-vector-free, used only by the Properties panel and by these doc comments — see its own
+  comment for why it carries no `e.index`); the plane's frame/offset/flip/extent were added to
+  `DrawingGeometrySnapshot` (undo/redo) and to `.gs` (`GsIo.cpp`, additive, no format-version bump —
+  ADR-020 (d)); `DrawPropertiesPanel` grew an early branch on `sectionPlaneSelected`, parallel to the
+  paper-entity branch just above it, reporting origin, normal, offset, flip and extent.
+
+  **REQ-341's `SECTIONCLIP` (UCS-aimed) is deliberately UNCHANGED and stays exactly the view state
+  (h) described.** The two commands share the same underlying fields ("one clip plane, two ways to
+  aim it", (a) above) so undo-tracking could not simply be turned on for the fields — a `SECTIONCLIP
+  4` typed after a `SECTIONPLANE` creation, or on its own with no plane ever placed, still makes no
+  undo entry and is still absent from `.gs`. The gate is
+  `AppCommandState::viewportSectionClipFrameValid`: `CaptureGeometrySnapshot` only copies the fields
+  into a snapshot when it is true (a face-derived plane exists), and `RestoreGeometrySnapshot` reads
+  three cases — the snapshot has a face-derived plane (restore it), the snapshot has none but the
+  LIVE state currently does (this step predates the plane's creation — turn it off, "as if it never
+  existed"), or neither (leave the live `SECTIONCLIP` state untouched, exactly REQ-341's own
+  "UNDO reaches straight past it"). `.gs` follows the same shape: nothing is written unless
+  `viewportSectionClip` is on, and a file with no `sectionPlane` key loads with the clip off.
+
+  **Found while wiring this up:** `req342-section-plane.txt`'s own transcript had asserted the old
+  (h) behaviour outright — "UNDO here must therefore undo the BOX, not the section plane" — and had
+  to be corrected to two UNDOs (plane, then box) once creation started pushing its own entry; a
+  green diff that had not touched that file would have meant the new push was never reached by a
+  real undo, not that it was safe.
+
+  **Selection storage is NOT reopened.** The plane is still singular — never zero-or-many — so an
+  `e.index` into `selection` would be inventing storage this feature does not need, and every
+  MOVE/COPY/ROTATE/SCALE/MIRROR/STRETCH/OFFSET/ALIGN switch in `CadCommands.cpp` still never sees a
+  `SectionPlane` case, because the plane is never in `selection` for them to iterate — precisely (h)'s
+  own reasoning, which this decision leaves standing.
+
 - **Alternatives considered.** *Store the plane's appearance as geometry when the command runs* —
   breaks (c). *Give SECTIONPLANE its own independent plane* — breaks (a). *Reuse the 2D hatch
   engine* — breaks (d). *Accept any face and project the frame to the nearest plane* — silently
@@ -4325,9 +4422,11 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   `Ctrl` requirement and document it* — a command that asks for a face and then ignores clicks on
   faces is the bug this slice exists downstream of. *Commit a drag through the undo stack* — a slide
   changes no geometry, so there would be nothing to undo but a number; the honest consequence, that
-  `UNDO` does not step a slide back, is written into REQ-343 instead. *Make the section plane a
-  `SelectedEntity`* — breaks (h), and would promise Properties and `.gs` support that slice 2 of
-  this issue does not deliver.
+  `UNDO` does not step a slide back, was written into REQ-343 at the time — see (i) and REQ-343's own
+  revision history for why that is no longer true. *Give the plane an `e.index` slot in `selection`*
+  — considered again under (i) and rejected again: it is singular, never zero-or-many, so a
+  `selection` slot would be storage the feature does not need; (i) gets persistence and reporting
+  without it.
 
 ### ADR-060 — Point-cloud out-of-core octree: a versioned `.gscloud` sidecar, source-stamped, rebuilt on mismatch   (2026-09-17, accepted)
 
@@ -4379,3 +4478,461 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   file size; this is disclosed to the user (progress/log), not hidden. Deleting or moving the
   `.gscloud` file has no effect beyond a one-time reindex — it is a cache, not a required
   companion file for correctness.
+
+### ADR-061 — Inertia is integrated by the same quadrature, the same world-axes/solid-local-origin discipline, and an in-tree Jacobi eigensolver with a canonical degenerate basis   (2026-09-18, accepted)
+
+- **Status:** accepted (2026-09-18). Backs REQ-349 (GitHub issue #460).
+- **Context.** ADR-055 settled how the *first* moment (the centroid) is integrated: quadrature over
+  the exact analytic surface, accumulated in world axes, about a solid-local reference point `q`,
+  because per-face-frame accumulation is invisibly wrong on a tilted solid and origin-referencing is
+  wrong by thousands of feet at survey magnitude. Issue #460 asks for the *second* moment — the
+  inertia tensor — plus an eigendecomposition for its principal axes. Every property ADR-055
+  measured about the first moment applies to the second, and worse: the integrand now squares a
+  coordinate, so both the frame-covariance failure and the origin-cancellation failure grow rather
+  than merely persist.
+- **Decision.**
+
+  **(a) Reuse the centroid's instrument, not a new one.** The second-moment integrand
+  (`∫ x'² dV`, `∫ x'y' dV`, … with `r' = p − q`) is integrated by the same 16-point Gauss-Legendre
+  quadrature ADR-055 (b) chose for the centroid: Green's-theorem boundary quadrature for a planar
+  face (extending `PlanarFaceMoment`'s six region scalars — `A, Sa, Sb, Saa, Sab, Sbb` — into the
+  world-frame quadratic expansion `PlanarFaceSecondMoment` needs), and 16×16 Gauss quadrature over
+  the `(u,v)` patch for a curved face (`CurvedFaceSecondMoment`), using the divergence-theorem form
+  `∫ f dV = 1/5 ∫ f(r)(r·n) dA`. No new closed forms per surface kind were derived — the same
+  five-closed-forms-times-two-integrands cost ADR-055 (context) rejected for the first moment
+  applies doubly to the second, which has more distinct terms per surface (six second moments
+  against three first moments).
+
+  **(b) World axes, about the same solid-local `q`, exactly as ADR-055 (a) mandates — restated here
+  because it is the load-bearing decision twice over.** Every face's contribution accumulates as
+  `r = p_world − q` in world coordinates, never in the face's own local frame rotated afterward.
+  Squaring `r` makes ADR-055's two measured failure modes worse, not merely present: a tilted
+  solid's per-face-frame error was 2–3 ft on the *first* moment, and a wrong-frame second moment
+  would be off by the square of a similar quantity; the origin-referenced error on the centroid was
+  46–6,978 ft at easting 2.2e6, and squaring that scale is what makes a test suite written only at
+  the origin structurally unable to catch either bug — the same blind spot ADR-055 names for its
+  own integral.
+
+  **(c) The centroidal tensor, not the tensor about `q`, is the primary stored quantity.** The
+  integrator accumulates second moments about `q` (the same point volume/centroid already use),
+  then transfers them to the centroid by the parallel-axis relation before storing
+  `Ixx, Iyy, Izz, Ixy, Ixz, Iyz`. This matches the issue's own framing — principal axes are defined
+  in the centroidal frame — and keeps `InertiaAboutPoint(mp, p)` a pure, cheap function of the
+  stored tensor rather than a second integration pass.
+
+  **(d) A third validity flag, `inertiaValid`, alongside `valid` and `centroidValid` — with a
+  stated, coded dependency on `centroidValid`, not a false independence.** ADR-055 (d) added
+  `centroidValid` as a second flag rather than overload `valid`, "to avoid suppressing two good
+  figures". `inertiaValid` is its own field for the same reason applied one level further down:
+  the tensor is reported **about the centroid**, so it cannot exist without one — `inertiaValid`
+  *implies* `centroidValid`, and `ComputeMassProperties` codes that implication directly by gating
+  the whole second-moment pass on `centroidValid` already being true. The converse does not hold —
+  a solid can have a valid centroid and no inertia, if the second-moment integrand refuses a face
+  shape the first-moment one accepts (in this increment the two covered-shape sets happen to be
+  identical — both refuse `Nurbs`, `paramLoops`, multi-loop faces, and `Ellipse`/`Intersection`
+  boundary edges — but nothing enforces that they stay identical). A solid whose inertia cannot be
+  computed must never silently withhold the volume, area, or centroid that computed successfully;
+  that is what the separate flag (not folding into `centroidValid`) guarantees, not that the two
+  flags vary independently of each other.
+
+  **(e) Eigendecomposition: an in-tree, cyclic-pivot Jacobi iteration over the real-symmetric
+  centroidal tensor, not an external linear-algebra dependency.** REQ-300 already bars a new
+  dependency for a 3×3 problem the issue itself names Jacobi for. `JacobiEigenSymmetric3x3` runs a
+  bounded number of classic Jacobi sweeps (largest-off-diagonal pivot each iteration, a fixed
+  iteration cap, not sensitive to input scale because the pivot angle formula is scale-invariant),
+  producing eigenvalues sorted descending and eigenvectors as an explicitly re-orthonormalized,
+  sign-canonicalized, right-handed basis (columns of `V`; `det(V)` forced to `+1` by negating the
+  third column if needed; each eigenvector's sign fixed by making its largest-magnitude component
+  positive). The pivot selection is a deterministic function of the input matrix, not of iteration
+  order or memory state, which is what makes a degenerate spectrum (two or three equal eigenvalues
+  — sphere, cylinder, cone, regular pyramid) still return the *same* basis on every call and after a
+  `.gs` save/reload, even though the issue notes such a basis is mathematically arbitrary within its
+  own degenerate subspace. Determinism, not a "geometrically preferred" arbitrary axis, is what the
+  acceptance criterion asks for.
+
+  **(f) The centroidal tensor is cross-checked against volume before being reported**, exactly as
+  ADR-055 (e) cross-checks the centroid: the second-moment integrator re-derives the volume as it
+  accumulates, and it must agree with `ComputeMassProperties`'s own volume to a relative `1e-9` or
+  `inertiaValid` stays false. A tensor computed against a different volume than the one being
+  reported would describe a different solid.
+
+  **(g) Tolerance is relative, and stated as two tiers.** An inertia has units of length⁵ (unit
+  density), so REQ-101's absolute ±0.002 ft has no meaning here. `1e-8` relative per component
+  covers the seven primitives at any coordinate magnitude — three orders tighter than the ~`1e-12`
+  quadrature residual ADR-055 measured for the analogous first-moment case, leaving margin to catch
+  a dropped or mis-signed term without being so tight that ordinary floating-point summation order
+  trips it. `1e-7` (one order looser) covers a Boolean composite or a tilted/survey-magnitude
+  fixture, where composition and cross-solid transfer add their own rounding.
+
+  **(h) Reporting rides both surfaces the centroid already reaches, plus a new dedicated verb.**
+  `SOLIDLIST` gains a centroid/inertia/principal-axis block per solid (the issue calls `SOLIDLIST`
+  "the obvious place"), and a new `MASSPROP` command (aliased `MASSPROPERTIES`/`SOLIDMASSPROP`/
+  `MASSP`, matching the AutoCAD verb a surveyor/drafter already knows) prints the full block for
+  every solid in the drawing, including the tensor about the world origin as a parallel-axis
+  demonstration. `SOLIDCHECK` is left alone — validity/self-intersection reporting is its whole
+  contract, and widening it would blur that line for no benefit.
+
+- **Alternatives considered.** *Derive closed-form second moments per surface kind* — five surface
+  kinds × six tensor components is thirty fresh analytic derivations against ten for the volume
+  alone, each a distinct chance at a plausible wrong number; ADR-055 already rejected the equivalent
+  choice for the centroid on the same grounds and the second moment has more terms per surface.
+  *Fold inertia into the existing `centroidValid` flag* — would either force every uncovered-inertia
+  solid to also lose its (perfectly good) centroid, or force every uncovered-centroid solid to
+  pretend it might still have inertia; a solid case cannot exist under one flag. *An external
+  eigensolver (LAPACK/Eigen)* — barred by REQ-300 for a 3×3 problem with a well-known in-tree
+  algorithm; adds a build dependency to save perhaps 100 lines. *Leave degenerate-spectrum axes
+  unconstrained ("any valid basis")* — the issue explicitly calls out determinism as the interesting
+  requirement; an unconstrained basis would pass a same-process test and fail a save/reload one, the
+  exact split ADR-055's own centroid work exists to prevent for a different quantity.
+- **Consequences.** `MassProperties` gains three flags' worth of surface area
+  (`inertiaValid`, six tensor doubles, three eigenvalues, three `Vec3` eigenvectors) with no change
+  to `.gs`'s persisted schema — the tensor is derived on demand from a `Solid`, exactly as volume,
+  area and centroid already are, so no `kGsFormatVersion` bump is needed. `FaceArea`'s existing
+  asymmetry (it does not refuse a self-intersecting solid; `ComputeMassProperties` does) is
+  unchanged and unaffected by this ADR. Increment 2 — extending second-moment coverage to `Nurbs`,
+  general trim loops, holes, and `Ellipse`/`Intersection` boundary edges — is carried together with
+  REQ-334's own increment 2, since inertia cannot be computed for a face shape the centroid itself
+  cannot yet integrate.
+
+### ADR-062 — Part thumbnails are rendered by the renderer into per-part cached textures, from the tessellation the viewport already draws   (2026-09-24, accepted)
+
+- **Status:** accepted (2026-09-24, D-2026-09-24-a (4)). Backs REQ-350 (GitHub issue #486, Track
+  A5/B7 follow-up).
+- **Context.** REQ-350's palette must show each library fitting as a *shaded* preview — a flange, a
+  cap and a blind flange are indistinguishable as the top-down wireframe the existing INSERT library
+  pane draws (`DrawInsertLibraryPreview`, increment A5), which is the whole reason that preview earns
+  so little. A shaded preview means lit triangles, which means GL, and the palette is UI code.
+  Architecture invariant §11.6 puts every `gl*` call behind the Renderer/Platform boundary, so the
+  question is not *whether* the renderer draws it but *what shape* that entry point takes — and
+  REQ-100 decides the rest: a per-frame re-render of every visible row is precisely the linear
+  per-object per-frame cost GitHub issue #194 was opened for and #198 fixed for solids.
+- **Decision.**
+
+  **(a) The renderer renders it; the palette draws a texture.** `ViewportRenderer` — already the
+  single owner of the FBO, the shaded program and the solid draw path — gains one narrow entry point
+  that takes a part's tessellated geometry plus its connection ports and returns a GL texture id. The
+  palette passes that id to `ImGui::Image`, exactly as the viewport itself already passes
+  `ColorTexture()` to `DrawDrawingViewport` (`main.cpp:1079`). No `gl*` call appears in `src/ui/`, and
+  UI → Renderer is a downward dependency, which §2 permits.
+
+  **(b) Not `RenderScene`.** The existing scene entry point is a ~40-parameter *positional* call whose
+  own comment records that it is positional at its one call site and that inserting a parameter
+  anywhere but the end silently reassigns every argument after it. A thumbnail is not a scene: it has
+  one solid, a fitted camera, no grid, no snap overlay, no layers, no paper space. It gets its own
+  small function rather than a 41st parameter and a fleet of `nullptr`s.
+
+  **(c) Each cached thumbnail owns its own FBO + texture, keyed by part name.** The cache lives on
+  `ViewportRenderer` (one visible owner, §11.3 — no new global), and a part is rendered **once**: on
+  the frame its row first becomes visible. Rendering into a *shared* small FBO and copying out would
+  be a second GL path and an extra blit per part for nothing, and rendering into one shared texture is
+  simply wrong — `ImGui::Image` records a texture id and samples it after all UI code has run, so
+  every row would display the last part rendered. A library part's geometry does not change during a
+  session (a part is imported from a file and not edited in place), so the cache is keyed by
+  definition name with a bounded entry count and needs no revision counter; a part that *is* edited
+  through BEDIT invalidates by name.
+
+  **(d) The geometry is the tessellation the viewport already uses.** The thumbnail tessellates the
+  part's `brep::Solid` through the same `CadSolidTessellation` path (ADR-045) the viewport draws, at
+  the same chord tolerance, and lights it with the same `shadedProgram_` and the same ambient
+  constant. A preview is only useful if it looks like what placing the part will produce, and a second
+  tessellation or a second shader would be free to drift from the first.
+
+  **(e) The camera is a fixed isometric fitted to the part's bounds.** One canonical view per part
+  rather than a user-orbitable preview: the palette's job is recognition at 64 px, not inspection, and
+  a per-row camera would be per-row state to store, invalidate and cache against.
+- **Alternatives considered.** *(i) Keep the A5 top-down wireframe* — free, and rejected by the user
+  on exactly the grounds above. *(ii) A second `ViewportRenderer` instance used as a thumbnail rig* —
+  reuses everything with no new code, but drags a per-part point-cloud/mesh/solid cache set and a
+  full scene signature apparatus behind a 64 px picture, and still needs (c)'s per-part texture to
+  avoid the last-one-wins bug. *(iii) Render thumbnails on the CPU* — no GL, no cache invalidation,
+  and no lighting worth the name; a software rasteriser for 64 px icons is a second renderer, which
+  is the duplicate architecture CLAUDE.md §7 forbids.
+- **Consequences.** `ViewportRenderer` gains a thumbnail FBO/texture cache and one public entry point;
+  its destructor releases them with the FBOs it already owns. The palette holds no GL state and can be
+  unit-tested for its filtering and category logic without a GL context, since the texture id is
+  opaque to it. A headless build renders no thumbnail (no context) and must therefore degrade to the
+  name-only row rather than crash — the same discipline `CaptureThumbnailBmp` already follows by
+  returning false rather than asserting. First-open cost is one small render per visible part, not per
+  frame; REQ-350's acceptance states the REQ-100 condition in those terms.
+
+### ADR-063 — Coordinate systems come from CS-MAP, behind one `src/geo/` wrapper; the zone is drawing data   (2026-09-29, accepted)
+
+- **Status:** accepted (2026-09-29, D-2026-09-29-b). Backs REQ-358..REQ-362 (GitHub issue #582).
+- **Context.** Issue #582 needs a drawing to carry a coordinate system chosen from a complete
+  catalogue with Civil 3D's codes (`HARN/TX.TX-C`, `TX83-CF`) and categories, to convert grid ↔
+  latitude/longitude at survey grade, to shift between datums, and to exchange the zone with Civil 3D
+  through `GEODATA`. None of this exists in the tree; the only unit conversion is INSERT's fixed
+  international-foot factor.
+- **Decision.**
+  (a) **CS-MAP is the catalogue and the projection engine**, chosen over PROJ/EPSG because it is the
+      dictionary Civil 3D uses, so codes and categories match without a mapping table.
+  (b) **Vendored like LibreDWG** (D-2026-08-31-b): `third_party/csmap/` holds headers, a prebuilt
+      win-x64 Release `/MD` `.lib`, `VENDORED.md` (upstream URL, tag, rebuild recipe, dictionary
+      compile recipe) and `LICENSE`. The compiled dictionaries and the redistributable datum-shift grid
+      files are **installer payload**, not build inputs, installed beside the executable; tests find
+      them through the build tree. They are committed under `third_party/csmap/dictionaries/`, and
+      only the US horizontal grids are included (D-2026-09-29-d).
+  (c) **One wrapper, `src/geo/`**, a pure layer with no UI or GL: category/system enumeration, code
+      lookup, forward/inverse projection, point scale factor, datum shift, and REQ-360's local ↔ grid
+      transformation. It is the only code that includes a CS-MAP header, so replacing or updating
+      CS-MAP touches one directory. It returns results with a status, never throws across the C
+      boundary, and reports a failed dictionary load instead of crashing (REQ-201).
+  (d) **The zone is drawing data.** It lives in `drawingSettings` (REQ-357) on `DrawingDocument` and
+      in the ADR-044 trailer; GEODATA (REQ-362) is an interchange copy read into it (writing it is
+      deferred to issue #590, D-2026-09-29-g), not a second source of truth. Choosing a zone never moves geometry.
+- **Alternatives.** (1) PROJ + EPSG — declined by the user: different codes from Civil 3D, so a
+  mapping table would be needed for GEODATA exchange. (2) An in-tree projection library for state
+  plane only — fails the "complete catalogue" requirement and datum shifts. (3) Source build of
+  CS-MAP — reintroduces the clean-build cost D-2026-08-31-b removed.
+- **Consequences.** A new dependency and a much larger installer (grid files). `src/geo/` is
+  unit-testable against NGS datasheet values without a GL context. The dictionary format is CS-MAP's;
+  an updated CS-MAP means recompiling the dictionaries with it, recorded in `VENDORED.md`.
+
+### ADR-064 — The online map is Web Mercator tiles, fetched off the UI thread, placed per tile through `src/geo/`, drawn in the underlay pass; a capture keeps the tiles   (2026-09-30, accepted)
+
+- **Status:** accepted (2026-09-30, D-2026-09-30-b). Backs REQ-363 and REQ-364 (GitHub issue #583).
+- **Context.** A geolocated drawing (REQ-358) should show a map under its geometry that lines up with
+  its local coordinates, never costs a frame (REQ-100), and survives going offline. The map is USGS
+  The National Map (D-2026-09-30-b), which serves 256-pixel Web Mercator tiles; the drawing is in a
+  CS-MAP zone, possibly with a REQ-360 local ↔ grid transformation.
+- **Decision.**
+  (a) **Tiles, not one server-rendered image.** Tiles are cached per tile on disk and reused across
+      pans and zooms and across drawings, and the same tile key names what a capture keeps.
+  (b) **Placement per tile, through `src/geo/`.** Each tile is a small grid of vertices (at least
+      4 × 4 cells) whose WGS 84 positions go through the same chain as every other geolocation
+      conversion: CS-MAP datum path → zone grid → `GridToDrawingWorld` (REQ-360) → local. It is
+      computed once per tile on the UI thread (CS-MAP is single-threaded, ADR-063 (c)), with the
+      zone's conversion set up once per zone rather than per point, and a per-frame budget. It is
+      never computed per frame. Bending the image across the vertex grid absorbs the projection's
+      curvature and any grid rotation, so no whole-image reprojection or resampling is needed. The
+      Web Mercator tile maths (level choice, tile range, tile bounds) is pure and in `src/geo/`.
+  (c) **Background work in `src/platform/`** owns the network and the disk, as §8 one-shot workers:
+      one per tile, a bounded number alive at once, with no pool and no queue shared with a thread.
+      Each looks in the disk cache first, then fetches through WinHTTP (`HttpFetch`), decodes with the
+      vendored `stb_image`, and release-stores its result for the UI thread to collect. The UI thread
+      only uploads textures, a bounded number per frame. The fetch
+      function is injectable, so failure handling is unit-tested with no network. No new dependency
+      (REQ-300): WinHTTP ships with Windows and `stb_image` is already vendored.
+  (d) **Drawn in the renderer's existing underlay pass**, the textured-quad program PDF underlays
+      use (vec2 position on Z = 0 + UV). Tiles go first, then captured areas, then PDF underlays, then
+      geometry. Tile textures are a bounded least-recently-used set, released when a drawing tab
+      closes or the map is turned off.
+  (e) **A capture stores the tiles' original bytes** (z/x/y + map + the JPEG/PNG as downloaded) in
+      `drawingSettings`, saved in the ADR-044 trailer. It is drawn through the same placement as live
+      tiles, so it lines up identically and needs no image encoder. The byte blobs are immutable and
+      shared, so the undo snapshots that copy `drawingSettings` copy pointers, not megabytes.
+- **Alternatives.** (1) Ask USGS's `export` endpoint for one image already in the zone's projection:
+      that needs an EPSG code for every CS-MAP zone (the mapping ADR-063 declined), cannot express a
+      REQ-360 transformation, and refetches on every pan. (2) Reproject the pixels on the CPU: costly
+      per tile, and it loses sharpness, where the vertex grid is exact at the vertices and sub-pixel
+      between them. (3) Save a capture as an external image referenced by an AutoCAD IMAGE entity:
+      declined by the user (D-2026-09-30-b); a drawing copied without its image would lose the map.
+- **Consequences.** A network-backed feature exists outside the startup checks. Its failures are
+  the REQ-201 single-message kind. Captured areas make drawings larger (≈ 20-40 KB per tile, capped
+  at 256 tiles per capture). AutoCAD does not see captured areas. Adding another provider later
+  (e.g. Esri, which needs a key) is a new entry in the map table plus a key decision, with no change
+  to the pipeline.
+
+### ADR-062 — Surface-referencing geometry is BAKED by default; a link is opt-in, stamped by stable entity id, marked in the drawing, and degrades to plain geometry when its surface goes   (2026-09-28, accepted)
+
+- **Status:** accepted (2026-09-28). Backs GitHub issue #150 (3D Phase 7) acceptance 6, and gates
+  every other reference item in that phase. Recorded before any of it was implemented.
+- **Context.** Phase 7 connects the 3D kernel to the survey data the program already owns: geometry
+  that is draped or projected onto a surface, geometry that references feature lines and survey
+  points, and solids generated from a surface. The issue names one architectural question and
+  refuses to let Workshop guess it: when the referenced surface changes, does the geometry
+  **re-evaluate** (a live link) or **keep the shape it was given** (a bake)?
+
+  Two facts from the existing tree bear on it, both checked rather than assumed:
+
+  1. **There is no persisted reference today.** Every `surfaceId` in the tree — the display cache,
+     the query cache, the watershed cache — is *live-only* and explicitly never written to `.gs`.
+     So this is new document content, not an extension of something already shipped, and whatever
+     is chosen has to carry its own save/reopen and deletion story.
+  2. **Stable ids already exist and their failure modes are documented.** REQ-076 guarantees an id
+     is not reused within a drawing, and the surface caches are already keyed by id rather than
+     array index *because* `cadSurfaces` compacts on erase — an index key starts applying one
+     surface's data to another after a delete. The rename-in-flight and erase-then-recreate hazards
+     are written up at `CadCommands.hpp:3147`. A reference keyed by anything other than the id would
+     re-introduce a bug the codebase has already paid for.
+
+  The `EXTRACT` command is the existing precedent for the bake side: derived surface geometry can be
+  baked to an unlinked object, and that is how the surface work has behaved so far.
+- **Decision.**
+
+  **(a) Baked is the default.** `DRAPE` and the projection commands stamp elevations once and
+  produce ordinary geometry with no stored reference. A drawing that is opened, plotted or handed
+  over does not change shape because somebody else edited a surface.
+
+  **(b) A link is opt-in and explicit**, requested at the command, never inferred. Linked geometry
+  re-evaluates when the surface it names finishes a rebuild.
+
+  **(c) A link is stored as the surface's stable entity id** (REQ-076), never its name and never its
+  array index. A rename does not break a link; an erase-then-recreate under the same name does not
+  silently re-target one.
+
+  **(d) Linked geometry is visibly marked**, so "this may move when the surface moves" is a property
+  of the drawing the user can see, not a hidden attribute. The unmarked case is the safe one.
+
+  **(e) A reference to a surface that is gone resolves to nothing, and the geometry keeps its last
+  shape as plain geometry.** The reference resolving to nothing is REQ-076's own rule and Phase 7's
+  acceptance line; what the *geometry* does is decided here: it is not deleted and not moved.
+  Destroying drawn geometry because a surface was erased would be a far worse failure than a stale
+  shape, and the stale shape is exactly what the baked default would have produced anyway.
+
+  **(f) A vertex that falls outside the surface is not draped, and the entity is refused by name
+  with the count.** `TinElevationAt` never extrapolates (REQ-074), so there is no elevation to give.
+  Draping the vertices that are covered and leaving the rest at their old elevation would produce a
+  shape that is neither the original nor the ground — wrong in a way that looks plausible, which
+  REQ-201 forbids. Other entities in the same selection still drape; the refusal names the entity
+  and how many of its vertices were off the surface.
+- **Consequences.**
+  - The first increment (`DRAPE`, baked) needs **no** new persisted field at all, so it can land and
+    be proven before any link machinery exists. That ordering is deliberate: the risky, new document
+    content arrives second, against a command already known to compute the right elevations.
+  - The link is additive when it comes — a stored id plus a mark — so it follows ADR-020 (d) and
+    needs no `kGsFormatVersion` bump.
+  - Re-evaluation hangs off the existing rebuild/reap path rather than a new watcher.
+  - Choosing baked-by-default means a surface edit does **not** update linked-by-default geometry,
+    so a user who wants a live model must ask for it per object. That is the accepted cost of never
+    rewriting geometry the user has already approved.
+
+
+### ADR-065 — A project's survey points live in one project-owned file, loaded once and shared by every drawing tab of the project   (2026-10-05, accepted)
+
+- **Status:** accepted (2026-10-05, D-2026-10-05-e; user approved as written before P3 started).
+  Backs REQ-376 and REQ-377 (GitHub issue #696).
+- **Context.** Today a drawing's survey points live inside the drawing (ADR-044 JSON trailer). A project
+  needs ONE set of points that several drawings read and write, kept in step live, that travels in a
+  `.gspack` (REQ-380), and that never leaves two people overwriting each other (REQ-382).
+- **Decision.**
+  (a) **One file in the project, `Points/survey-points.gspdb`.** Same JSON shape the ADR-044 trailer
+      already uses for survey points (no second point schema), plus a `formatVersion`, the project ID
+      and each point's **source drawing**. It is a tracked item (REQ-373) so packs carry it.
+  (b) **One in-memory database per open project**, owned by the project object — a fourth isolation
+      boundary next to the document, the pipe runs (PR #560) and the drawing settings. Every drawing
+      tab of that project holds a *pointer* to it, not a copy, so "live in other tabs" is free:
+      there is only one set of data. Undo records point edits in the tab that made them.
+  (c) **Visibility rules stay in the drawing** (REQ-377), in the ADR-044 trailer. A project drawing's
+      trailer carries **no points**, only its rules and setting overrides.
+  (d) **Writes are atomic and lock-gated.** Only the lock holder (REQ-382) writes; the file is written
+      to a temp file in `Points/` then renamed over the old one. Read-only openers load it and never
+      write.
+  (e) **Standalone drawings are untouched** — points stay in the trailer; none of this code runs.
+- **Alternatives.** (1) *Keep points in every DWG and reconcile on save:* two copies of truth, silent
+      divergence — the exact failure the issue exists to prevent. (2) *A real database engine
+      (SQLite):* a new dependency (REQ-300) for a few thousand to ~100k rows a JSON file handles; revisit
+      only if a measured load/save time breaks REQ-100-style budgets. (3) *Points inside the `.gsproj`:*
+      makes a small marker file huge and rewrites it on every point edit.
+- **Consequences.** A project DWG opened *outside* its project (e.g. copied out alone) shows **no
+  points** — the price of a single source of truth; REQ-374's join rule means this only happens when
+  the drawing leaves the folder, and the user is told (REQ-201). Whole-file rewrite on each save is
+  acceptable at survey scale and is the first thing to measure in P3. Loading and saving the file must
+  stay off the UI frame budget (§8 one-shot worker) if it exceeds a few milliseconds.
+
+### ADR-066 — A project pack is a standard ZIP, written and read through vendored miniz, extracted only after every entry has been checked   (2026-10-05, accepted)
+
+- **Status:** accepted (2026-10-05, D-2026-10-05-i; the user chose the container before P7 started).
+  Backs REQ-380 (GitHub issue #696).
+- **Context.** A pack must travel by email, hold point clouds that can be hundreds of MB, and never
+  write outside the folder the user picked, however the file was made.
+- **Decision.**
+  (a) **The container is ZIP**, via `third_party/miniz` (MIT, two files, REQ-300 / D-2026-10-05-i). Files
+      are streamed through `FILE*` handles opened from `std::filesystem` paths, never loaded whole, so
+      Unicode paths and large point clouds work (zip64 is switched on by miniz when an entry needs it).
+  (b) **One pure module, `src/io/ProjectPack.{hpp,cpp}`** — `<filesystem>`, nlohmann json and miniz only,
+      no window, no `AppCommandState` — like `Project.cpp` / `ProjectFiles.cpp`. The command and UI
+      layers only call it (Health gate, dialogs, opening the result).
+  (c) **Entries are project-relative with `/`.** `gspack.json` at the root carries the format version,
+      project ID, name, date, the left-out files and every file's exact modified time (a ZIP keeps only
+      2-second local time, and a `.gscloud` cache is stamped with its cloud's exact size and time,
+      ADR-060 (b), so extraction restores the recorded time). The `.gsproj` is a normal entry.
+  (d) **Read = check everything, then extract.** Every entry name passes `gsproj::IsSafeRelativePath`
+      plus a no-backslash, no-duplicate rule, the manifest must match the marker's project ID, and the
+      destination must be empty or new. Extraction streams each file and checks its CRC; any failure
+      removes everything written. Writing goes to a temporary file renamed over the target.
+  (e) **Excluded point clouds are recorded in the opened project's `.gsproj`** (a top-level
+      `packOmitted` list kept in `extraJson`, so older readers keep it verbatim) and are reported as
+      unavailable, not missing, while their file is absent.
+- **Alternatives.** (1) *Own uncompressed container:* no dependency but emails too large and only
+      GoSurvey can open it. (2) *Windows Compression API / `tar.exe`:* ties the format to Windows and a
+      non-standard result. (3) *Zip with no manifest:* the project ID would only be inside the `.gsproj`,
+      so a pack could not be identified without parsing project data.
+- **Consequences.** One new vendored dependency (~400 KB source, build time negligible). The pack is
+  readable by any zip tool; a hand-edited pack that breaks the rules above is refused whole. Packing
+  and extracting a very large project blocks the UI thread while it runs (no progress bar yet — recorded
+  technical debt, like the P6 copy).
+
+### ADR-067 — The PDF viewer is a window of its own over PDFium, rendering pages off the UI thread into a bounded read-ahead cache   (2026-10-06, accepted)
+
+- **Status:** accepted (2026-10-06, D-2026-10-06-a; **(a) revised the same day by D-2026-10-06-b**, the user
+  asked for full window control: minimize/maximize and docking); the user approved the three open-question answers and
+  asked for a better-than-1-second open and no lag spikes while scrolling). Backs REQ-387/388/389
+  (GitHub issue #732).
+- **Context.** PDFium is already vendored (`third_party/pdfium`, used by `PdfPlot` and `PdfAttach`).
+  `PdfAttach` already renders progressively and cancellably. GoSurvey has one GLFW window and draws all
+  windows with Dear ImGui. A several-hundred-page PDF must open at once and scroll without frame spikes.
+- **Decision.**
+  (a) **"New window" = a real Windows window** (revised by D-2026-10-06-b; the first version of this
+      ADR said "a floating panel inside the GoSurvey window"). It uses **Dear ImGui multi-viewport**:
+      `ImGuiConfigFlags_ViewportsEnable` with the GLFW and OpenGL3 platform backends, which create a
+      GLFW window per detached ImGui window sharing the main GL context, so page textures made by the
+      viewer are valid in every window. The viewer's window class clears `NoDecoration` (and keeps the
+      task-bar entry) so it gets the OS title bar with minimize / maximize / close, and it docks into
+      GoSurvey's dock space like any ImGui window. A viewer opens detached, on GoSurvey's monitor.
+      One window per open file. **Cost accepted:** the setting is application-wide, so other panels
+      may also be dragged out; the main window's custom title bar, the splash screen, the saved dock
+      layout and the Test Engine driver must keep working (REQ-387 clause 7), and the per-frame
+      `UpdatePlatformWindows` / `RenderPlatformWindowsDefault` calls with GL-context restore are added
+      to the main loop. **Alternatives:** keeping the panel inside the main window (no minimize to the
+      task bar, cannot leave the main window, cannot use a second monitor) was the previous decision and
+      the user declined it for these reasons.
+  (b) **One pure module, `src/pdf/PdfDocument.{hpp,cpp}`** (PDFium only; no window, no
+      `AppCommandState`): open, page count, per-page sizes, render a page to a pixel buffer at a scale,
+      annotation read/write (REQ-388) and page extraction (`PdfSplit`, REQ-389). Opening reads only the
+      cross-reference table and page tree; page sizes are fetched lazily and cached, so open time does
+      not grow with page count.
+  (c) **Rendering is off the UI thread, one-shot workers (§8), never the UI thread.** PDFium is not
+      thread-safe per document, so each document has **one render worker at a time** guarded by a
+      mutex; a request queue ordered by distance from the viewport, pages ahead of the scroll direction
+      first. Requests for pages that scrolled away are dropped, and a render in progress is stopped
+      through PDFium's progressive-render pause callback. The UI thread only uploads finished bitmaps
+      to textures, **at most a small fixed number per frame** so a burst of finished pages cannot cause
+      a long frame.
+  (d) **Bounded cache.** Page images live in an LRU-by-distance cache with a byte cap (default 256 MB,
+      a setting). Each visible page first gets a **low-resolution stand-in** (cheap, rendered first) and
+      is then re-rendered at the display scale. Textures are released with their cache entry.
+  (e) **Annotations are standard PDF annotations written through PDFium** (REQ-388); edits are held in
+      memory as an undo list and written only by **Save As** to a temporary file renamed into place.
+      The original is never opened for writing (D-2026-10-06-a).
+        **Addendum (D-2026-10-06-e):** PDFium cannot create a Line annotation, so the Line tool is the one
+      exception: PDFium writes a placeholder (a Square annotation with the line's appearance stream, colour,
+      border and a fixed-width placeholder `/L` string); after `FPDF_SaveAsCopy` to the temporary file,
+      `PdfAnnotate` finds that annotation's object by its unique `/NM` name and overwrites, **in place and
+      at the same byte length** (padding with spaces), `/Subtype/Square` with `/Subtype/Line` and the `/L(...)`
+      string with the `/L[x1 y1 x2 y2]` array, so no xref offset moves. A miss fails the save (nothing
+      is renamed into place). **Alternative rejected by the user:** an Ink annotation through PDFium.
+      **Addendum 2 (D-2026-10-06-f):** the same Stamp-placeholder-then-patch technique is widened to the
+      measurement annotations (REQ-391): Line, PolyLine and Polygon with a `/Measure` dictionary. The
+      placeholder's pad string is **sized to the longest patch it must hold** (a Measure dictionary and a
+      vertex list are far longer than a Line's end points), the replacement is still same-length, and a
+      miss still fails the save with nothing written. Page scale (REQ-390) is a page `/VP` Viewport entry
+      written the same way. New pure modules: `src/pdf/PdfMeasure` (scale, unit conversion, measure
+      values), `src/pdf/PdfAlign` (REQ-392 alignment of two rendered sheets) and `src/pdf/PdfDiff`
+      (REQ-393 change regions); the render worker and bounded cache of (c)/(d) serve the overlay.
+      **Addendum 3 (D-2026-10-06-h):** scale checking adds two modules: `src/pdf/PdfScaleCheck` (pure: the feet-and-inches
+      value parser, verdicts, length-weighted best fit, outlier rule and the opt-in robust (weighted least squares)
+      calibration with its uncertainty and standardised residuals: REQ-394) and `src/pdf/PdfDimAudit` (PDFium
+      text and path reading plus pure matching of dimension text to dimension lines: REQ-395). Checks are viewer
+      state like annotations (undoable) but are not written to the PDF.
+(f) **Routing.** One function, `OpenPdfInViewer(path)`, replaces `OpenWithDefaultApp` for `.pdf` at
+      every call site; non-PDF files keep the shell route.
+- **Alternatives.** (1) *Second OS window / ImGui multi-viewport:* heavier, new GL-context risk, no gain
+      for the user. (2) *Render on the UI thread with a time slice:* simpler but cannot guarantee no
+      spikes on a dense drawing sheet. (3) *Annotations in a sidecar:* invisible to other readers and
+      easily separated from the PDF. (4) *A render-thread pool:* PDFium's per-document lock makes it
+      no faster for one document; deferred until measured.
+- **Consequences.** No new dependency. Memory is capped regardless of page count. Page render order
+  logic is a pure scheduler and cache that can be unit-tested without a window. Cost: a dense CAD-plot
+  PDF page can take longer than one frame to render, so the viewer shows the stand-in first; this is
+  the designed behaviour, and the bench reports the worst frame so a regression is visible.

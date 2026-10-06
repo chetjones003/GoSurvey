@@ -31,8 +31,10 @@ format, `.gst` (same JSON shape, no file association, not opened as a drawing).
 
 1. **LibreDWG is the DXF/DWG codec.** Not a from-scratch bit codec, not ODA Drawings SDK, not
    the Phase 1 external converter as the long-term path.
-2. **DWG write in this epic is R2000 (AC1015) and R2004 (AC1018) only.** Default save is
-   **R2004**. R2007+ write is out. AutoCAD 2018–2027 still open R2004 files.
+2. **DWG write in this epic is R2000 through R2018** (AC1015, AC1018, AC1024, AC1027, AC1032).
+   Default export is **R2000**; the user picks the version in Export DWG (D-2026-10-01-f amends
+   D-2026-10-01-a / D-2026-09-30-c). **R2007 (AC1021) is not offered.** AutoCAD 2000–2027 open
+   R2000 files; R2010+ saves unlock container features used by later #601 fidelity work.
 3. **DWG read** is every version LibreDWG decodes (through R2018 / AC1032, including current
    AutoCAD which still writes AC1032). Objects LibreDWG skips are named in the import log
    (REQ-201), not silently absorbed (REQ-001).
@@ -58,7 +60,7 @@ Legend: **R** = read into GoSurvey, **W** = write from GoSurvey, **—** = out o
 
 | Ext | R | W | Codec | Notes |
 |-----|---|---|--------|--------|
-| `.dwg` | yes | R2000 / R2004 | LibreDWG | Open does not require ODA File Converter or AutoCAD. Save default AC1018. Written file must open in AutoCAD **without Recover** for the entity set we emit. |
+| `.dwg` | yes | R2000–R2018 (not R2007) | LibreDWG | Open does not require ODA File Converter or AutoCAD. Save default AC1015 (D-2026-09-30-c). Written file must open in AutoCAD **without Recover** for the entity set we emit. |
 | `.dxf` | yes | yes | LibreDWG | ASCII and binary DXF as LibreDWG supports them. Replaces `DxfIo` as the **interchange** path once REQ-170 is verified; Phase 1 converter may remain a **test oracle**. |
 | `.gs` | — | — | — | Retired as a document format (D-2026-09-03-h). Its JSON schema survives only as the DWG trailer and as `.gst` (workspace template). |
 
@@ -105,7 +107,7 @@ Path is stored; missing file on reload is a logged unload, not a crash (PDF-unde
 ## 4. Explicitly out of scope (this epic)
 
 - ODA Drawings SDK / Scan-to-BIM / Civil / Map / Mechanical extensions
-- LibreDWG write of R2007, R2010, R2013, R2018
+- LibreDWG write of R2007 only (R2010–R2018 write shipped per D-2026-10-01-f)
 - Native LGS, LGSX, BLK, BLKX, IMP, Leica `.bin`, PTG
 - Autodesk RCP / RCS (ReCap is Autodesk, not Leica)
 - IFC authoring or round-trip

@@ -29,9 +29,29 @@ bool CadBlocksImportWithPicker(AppCommandState& dest, std::vector<std::string>& 
 /// Place one INSERT (or explode it). Applies INSUNITS scale. Returns false on a missing name.
 bool CadBlockPlaceInsert(AppCommandState& st, std::string_view name, CadBlockXform xf, bool explode,
                          std::vector<std::string>& log);
+/// Same as `CadBlockPlaceInsert`, without exploding, and WITHOUT pushing its own undo snapshot —
+/// for a caller (PIPERUN's auto-fitting, issue #486 increment B5) that places several elbows as
+/// part of one larger multi-step operation already covered by its own single `PushUndoSnapshot`.
+/// \p lineAttrs, when given, is the pipe run the part is fitted into: the insert takes that run's
+/// layer and colour instead of the current ones, so a line reads as one colour end to end and its
+/// layer hides its fittings with it (REQ-353, D-2026-09-28-i).
+bool CadBlockPlaceInsertNoUndo(AppCommandState& st, std::string_view name, CadBlockXform xf,
+                               std::vector<std::string>& log,
+                               const EntityAttributes* lineAttrs = nullptr);
 
 void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log);
+
+/// Write one block definition out as its own `.dwg` (issue #284). The single write path shared by
+/// the typed `WBLOCK <name>, <path.dwg>` form and the save dialog; it reports its own failures.
+bool CadBlocksWriteBlockToFile(AppCommandState& st, std::string_view name, const char* pathUtf8,
+                               std::vector<std::string>& log);
+/// Open the WBLOCK save dialog (bare `WBLOCK`). A no-op, with a stated reason, when the drawing has
+/// no block definitions.
+void StartWblockDialog(AppCommandState& st, std::vector<std::string>& log);
+/// Write the dialog's chosen block to its chosen path. The dialog stays open if the write fails.
+void CommitWblockDialog(AppCommandState& st, std::vector<std::string>& log);
+void CancelWblockDialog(AppCommandState& st, std::vector<std::string>& log);
 void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log);
 void SubmitBlockCreateBasePointPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 void CommitBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log);
@@ -53,7 +73,14 @@ void AppendInsertBlockGhostRubber(const AppCommandState& st, const CadBlockXform
 bool SubmitInsertBlockAlignFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
                                     std::vector<std::string>& log);
 /// Target connection pick during WaitConnectorTarget (issue #475 inc5).
-bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log);
+/// Snap the block being inserted onto a nearby connection port or pipe end (REQ-107 / issue #496).
+///
+/// \p optional = "snap if there is something to snap to": the two not-found paths return false
+/// WITHOUT logging a refusal, so a caller that has a legitimate fallback (the Pipe Fittings
+/// palette placing a part staged beside the line, REQ-350 (f)) can take it and report its own
+/// outcome. Every other caller leaves it false and gets the refusal by name (REQ-201).
+bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz,
+                                    std::vector<std::string>& log, bool optional = false);
 /// Face pick during BCONNECT authoring in BEDIT.
 bool SubmitBconnectFacePick(AppCommandState& st, const ray3d::Ray& ray, const solidpick::Tolerance& tol,
                             std::vector<std::string>& log);
@@ -68,26 +95,78 @@ void CadBlockRestoreDynGripOrig(AppCommandState& st, CadBlockRef* r);
 /// Merge bundled `resources/blocks/*.{gs,dxf}` into \p dest. Skips names that already exist.
 void LoadBundledBlockLibrary(AppCommandState& dest, std::vector<std::string>& log);
 
-/// One row in the INSERT dialog library pane (drawing defs + bundled files not yet imported).
-/// `partType`/`nominalSize`/`pressureClass` (issue #486 increment A5) come from the definition
-/// itself when already imported, or from a LIBEXPORT `.json` sidecar beside an unimported file —
-/// read without importing, so the library pane can filter before the user picks anything.
-struct CadBlockLibraryEntry {
-  std::string name;
-  std::string path;
-  bool imported = false;
-  bool isFitting = false;
-  CadPipePartType partType = CadPipePartType::None;
-  std::string nominalSize;
-  CadPipePressureClass pressureClass = CadPipePressureClass::None;
-};
-
 void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBlockLibraryEntry>* out);
+/// Catalog lookup (issue #486 increment B4 / REQ-345): maps (size, class, part type) to a block
+/// definition name in the bundled/user fittings library, importing it into \p st.blockDefs if it
+/// was found but not yet imported. Refuses (returns false, reason pushed to \p log) when nothing
+/// matches, or when the match is ambiguous (more than one candidate) — never guesses among several.
+/// \p pressureClass may be `None` to mean "no restriction"; a specific class prefers an exact-tagged
+/// part and falls back to a class-agnostic one only if no exact match exists, mirroring
+/// `CadBlockResolveMode`'s own exact-then-default precedent.
+bool CadPipeCatalogFind(AppCommandState& st, CadPipePartType partType, const std::string& nominalSize,
+                        CadPipePressureClass pressureClass, std::string* outBlockName,
+                        std::vector<std::string>& log);
 /// `<UserDataDirectory>/blocks/fittings` — where LIBEXPORT writes user-authored fitting parts
 /// (issue #486 increment A3). Empty if the user data directory cannot be determined.
 [[nodiscard]] std::filesystem::path CadFittingLibraryExportDir();
 /// Import a bundled library file when the user picks an entry that is not yet in \p st.blockDefs.
 bool CadBlocksImportLibraryEntry(AppCommandState& st, const CadBlockLibraryEntry& entry, std::vector<std::string>& log);
+
+/// One right-hand tab of the Pipe Fittings palette (REQ-350 (b), D-2026-09-24-a (1)). A tab is a
+/// CATEGORY, grouping several `CadPipePartType` values, because one tab per part type is ten vertical
+/// tabs in a tall window of which most are empty in any real library.
+enum class CadPipePaletteCategory : std::uint8_t { Fittings = 0, Flanges, Valves, Nozzles, Other };
+inline constexpr int kCadPipePaletteCategoryCount = 5;
+
+/// The tab's label ("Flanges"), and the lower-case plural it reads as in prose ("flanges") for the
+/// empty-tab sentence. Two functions rather than one label plus `toLower` at the call site, because
+/// "Other" pluralises as "other parts", not "others".
+[[nodiscard]] std::string_view CadPipePaletteCategoryLabel(CadPipePaletteCategory c);
+[[nodiscard]] std::string_view CadPipePaletteCategoryPlural(CadPipePaletteCategory c);
+
+/// Which tab \p t files under. Total by construction — `None` and anything the enum gains later
+/// answer `Other`, so a part type added without touching this function lists somewhere visible
+/// instead of vanishing from every tab.
+[[nodiscard]] CadPipePaletteCategory CadPipePaletteCategoryOf(CadPipePartType t);
+
+/// The rows one palette tab shows (REQ-350 (c)/(d)): the library entries that are piping parts, file
+/// under \p category, and match \p runNominalSize EXACTLY — compared through
+/// `CadParsePipeNominalSizeInches` on both sides, so `2in`, `2 in` and `2.0in` are one size and a
+/// string compare cannot make them three.
+///
+/// Pressure class follows `CadPipeCatalogFind`'s own recorded precedence rather than a second rule
+/// invented here: with a class on the run, a part tagged with that exact class wins, a part tagged
+/// class-agnostic is accepted only when no exact-class part of **the same part type** exists, and a
+/// part tagged with a DIFFERENT class never matches. Per part type, not per tab — a Fittings tab
+/// holding a CS150 elbow and an untagged tee must still show the tee, which a per-tab scope would
+/// hide.
+///
+/// An unparsable or empty \p runNominalSize yields NO rows rather than every row: "we don't know the
+/// size" must not read as "here is the whole library" (REQ-201's spirit — never present a guess as an
+/// answer). Clears \p out first.
+void CadPipePaletteCollectRows(const std::vector<CadBlockLibraryEntry>& entries,
+                               std::string_view runNominalSize, CadPipePressureClass runClass,
+                               CadPipePaletteCategory category, std::vector<CadBlockLibraryEntry>* out);
+
+/// The sentence an empty tab shows instead of a blank pane (REQ-350 (g)) — it names the size that was
+/// filtered on and what to do about it, because "your library has no 2in valve" and "this window is
+/// broken" look identical otherwise.
+[[nodiscard]] std::string CadPipePaletteEmptyReason(CadPipePaletteCategory category,
+                                                   std::string_view runNominalSize);
+
+/// REQ-350 (a) — open or close the Pipe Fittings palette (the PIPEPALETTE command, and the same call
+/// PIPERUN makes to open it).
+void CadPipePaletteSetOpen(AppCommandState& st, bool open, std::vector<std::string>& log);
+
+/// REQ-350 (f) — arm \p entry for placement from the palette: import it if the library has not been
+/// read into this drawing yet, then put INSERT into its single-click, no-scale/rotation-prompt state
+/// with the pipe-splice flag set. The next viewport pick places it — spliced into a run if it lands on
+/// one, free-standing if it does not.
+///
+/// Returns false, with the reason logged, when the part cannot be imported (REQ-201: a named refusal,
+/// never a silently armed command that would place the wrong thing or nothing at all).
+bool CadPipePaletteArmPart(AppCommandState& st, const CadBlockLibraryEntry& entry,
+                           std::vector<std::string>& log);
 /// Block-unit scale for INSERT: honours \c insertBlockUnitsBuf when set (issue #475 inc6).
 [[nodiscard]] float CadBlockInsertUnitsScale(const AppCommandState& st, const CadBlockDefinition& def);
 

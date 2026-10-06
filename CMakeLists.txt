@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GoSurvey VERSION 0.6.0 LANGUAGES CXX C RC)
+project(GoSurvey VERSION 0.7.0 LANGUAGES CXX C RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -162,24 +162,51 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${GOSURVEY_TP}/glfw" "${CMAKE_BINARY_DIR}/glfw-build" EXCLUDE_FROM_ALL)
 
-# --- LibreDWG: vendored headers + prebuilt static lib (REQ-170 / ADR-041) ---
-# The 0.13.3 tag's headers (public + the src/*.h that LibreDwgCad.cpp includes:
-# bits.h, out_dxf.h, …) and the generated config.h, plus a prebuilt MSVC x64
-# Release /MD static lib. Building LibreDWG from source cost ~30 try_compile
-# probes + ~400 s of C compile on every clean build (issue #142 §5).
+# --- LibreDWG: GoSurvey's own copy, built from source (REQ-170 / ADR-041 (h), D-2026-09-30-d) ---
+# The library source of upstream tag 0.14 plus GoSurvey's changes (third_party/libredwg/VENDORED.md).
+# Only the library is built: upstream's own CMakeLists (its ~30 try_compile probes, programs and
+# tests) is not used. src/config.h is the one upstream's CMake generates for MSVC x64, committed,
+# so there is nothing to configure. Sources and flags mirror upstream's LIBREDWG_LIBONLY build
+# with JSON disabled and write enabled.
 set(libredwg_SOURCE_DIR "${GOSURVEY_TP}/libredwg")
 set(libredwg_BINARY_DIR "${GOSURVEY_TP}/libredwg")   # config.h lives beside src/*.h
-add_library(libredwg STATIC IMPORTED GLOBAL)
-set_target_properties(libredwg PROPERTIES
-  IMPORTED_LOCATION "${GOSURVEY_TP}/libredwg/lib/win-x64/libredwg.lib"
-  INTERFACE_INCLUDE_DIRECTORIES "${GOSURVEY_TP}/libredwg/include")
-if(WIN32)
-  set_property(TARGET libredwg APPEND PROPERTY INTERFACE_LINK_LIBRARIES ws2_32)
+set(_lrd "${libredwg_SOURCE_DIR}/src")
+add_library(libredwg STATIC
+  ${_lrd}/bits.c ${_lrd}/codepages.c ${_lrd}/common.c ${_lrd}/logging.c ${_lrd}/classes.c
+  ${_lrd}/objects.c ${_lrd}/decode.c ${_lrd}/decode2.c ${_lrd}/decode_r11.c ${_lrd}/decode_r2007.c
+  ${_lrd}/dwg.c ${_lrd}/hash.c ${_lrd}/dwg_api.c ${_lrd}/dynapi.c ${_lrd}/dxfclasses.c ${_lrd}/free.c
+  ${_lrd}/geom.c ${_lrd}/out_dxf.c ${_lrd}/out_dxfb.c ${_lrd}/encode.c ${_lrd}/encode2.c
+  ${_lrd}/in_dxf.c ${_lrd}/reedsolomon.c ${_lrd}/print.c)
+set_property(TARGET libredwg PROPERTY C_STANDARD 99)
+target_include_directories(libredwg PRIVATE "${_lrd}")
+target_include_directories(libredwg PUBLIC "${libredwg_SOURCE_DIR}/include")
+# Vendored: silence its warnings so ours stay visible (as for glew below).
+if(MSVC)
+  target_compile_options(libredwg PRIVATE /w /utf-8)
+  target_compile_definitions(libredwg PRIVATE _CRT_NONSTDC_NO_WARNINGS _CRT_SECURE_NO_WARNINGS
+    DEBUG_CLASSES)
+else()
+  target_compile_options(libredwg PRIVATE -w)
 endif()
-set_property(TARGET libredwg APPEND PROPERTY
-  INTERFACE_COMPILE_DEFINITIONS "GOSURVEY_LIBREDWG_VERSION=\"0.13.3\"")
+if(WIN32)
+  target_link_libraries(libredwg PUBLIC ws2_32)
+endif()
+target_compile_definitions(libredwg INTERFACE "GOSURVEY_LIBREDWG_VERSION=\"0.14\"")
 add_library(LibreDWG::libredwg ALIAS libredwg)
-message(STATUS "LibreDWG 0.13.3 vendored (prebuilt third_party/libredwg/lib/win-x64/libredwg.lib)")
+unset(_lrd)
+
+# --- CS-MAP: vendored headers + prebuilt static lib + dictionaries (REQ-358 / ADR-063) ---
+# OSGeo MetaCRS CS-MAP, the coordinate-system catalogue and projection engine. Prebuilt MSVC x64
+# Release /MD static lib, like LibreDWG. Its headers are NOT an interface include directory: only
+# src/geo/CoordinateSystems.cpp may include them (ADR-063 (c)), so they are added to that one source
+# below. The compiled dictionaries and the US grid files (D-2026-09-29-d) are staged beside the
+# executable as resources/csmap/ — installer payload and what the tests load.
+set(GOSURVEY_CSMAP_DIR "${GOSURVEY_TP}/csmap")
+add_library(csmap STATIC IMPORTED GLOBAL)
+set_target_properties(csmap PROPERTIES
+  IMPORTED_LOCATION "${GOSURVEY_CSMAP_DIR}/lib/win-x64/csmap.lib")
+add_library(CsMap::csmap ALIAS csmap)
+message(STATUS "CS-MAP r3078 vendored (prebuilt third_party/csmap/lib/win-x64/csmap.lib)")
 
 # --- Xerces-C: vendored headers + prebuilt static lib (dependency of libE57Format) ---
 if(NOT EXISTS "${GOSURVEY_TP}/xerces-c/lib/win-x64/xerces-c_3.lib")
@@ -239,6 +266,21 @@ if(MSVC)
   target_compile_options(md4c PRIVATE /w)
 else()
   target_compile_options(md4c PRIVATE -w)
+endif()
+
+# ---------------------------------------------------------------------------
+# miniz (REQ-380 / ADR-066 / D-2026-10-05-i) — ZIP read/write for the project pack (.gspack).
+# Vendored under third_party/miniz/.
+# ---------------------------------------------------------------------------
+if(NOT EXISTS "${GOSURVEY_TP}/miniz/miniz.c")
+  message(FATAL_ERROR "REQ-380: third_party/miniz/miniz.c is missing. See third_party/miniz/VENDORED.md.")
+endif()
+add_library(miniz STATIC "${GOSURVEY_TP}/miniz/miniz.c")
+target_include_directories(miniz PUBLIC "${GOSURVEY_TP}/miniz")
+if(MSVC)
+  target_compile_options(miniz PRIVATE /w)
+else()
+  target_compile_options(miniz PRIVATE -w)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -331,10 +373,23 @@ target_link_libraries(imgui_backend PUBLIC glfw)
 set(GOSURVEY_DOMAIN_SOURCES
   # Command system
   src/commands/CadCommands.cpp
+  src/commands/CadField.cpp
   # Cohesive slices split out of the CadCommands.cpp mega-TU (TASK-150 Phase 2,
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
+  src/commands/CadCommands_Geo.cpp
+  src/commands/ProjectSettings.cpp
+  src/commands/ProjectPoints.cpp
+  # REQ-383 (#696 P9): the warnings before destructive / cross-project actions on shared data
+  src/commands/ProjectWarnings.cpp
+  # REQ-378 (#696 P5): Add Drawing to Project - the flow, and the whole-drawing conversion it offers
+  src/commands/ProjectAddFlow.cpp
+  # REQ-379 (#696 P6): tracked files at the drawing level (copy/link prompt, save-time record, open-time re-attach)
+  src/commands/ProjectFiles.cpp
+  src/commands/ConvertDrawing.cpp
+  src/commands/CadCommands_Mleader.cpp
   src/commands/CadCommands_Ucs.cpp
+  src/commands/CadDynInput.cpp
   src/commands/CadCommands_Bench.cpp
   src/commands/CadBlocks.cpp
   src/commands/CadLinetype.cpp
@@ -379,12 +434,36 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # I/O
   src/io/GsIo.cpp
+  # Coordinate systems — the one CS-MAP wrapper (REQ-358 / ADR-063)
+  src/geo/CoordinateSystems.cpp
+  # REQ-378 (#696 P5): the pure similarity-transform plan for Convert
+  src/geo/DrawingConversion.cpp
+  # REQ-360: the pure local <-> grid transformation (no CS-MAP)
+  src/geo/LocalGridTransform.cpp
+  # REQ-363 / ADR-064: Web Mercator tile maths (pure)
+  src/geo/WebMercator.cpp
+  # REQ-363 / ADR-064 (c): online map tile fetch + disk cache (fetch injected; no WinHTTP here)
+  src/platform/MapTileService.cpp
+  src/platform/StbImage.cpp
+  # REQ-363: the online map controller (GL-free; the app injects texture upload)
+  src/commands/CadOnlineMap.cpp
   # User preferences. In the domain set for UserDataDirectory(), which the BENCH command writes its
   # results through — pure <filesystem>, no window.
   src/io/UserPrefs.cpp
   # REQ-308 recent-drawings MRU store (D-2026-08-30-b). Pure — <filesystem>/<fstream>/json, path
   # and clock passed in by the caller — so GoSurveyTests links it directly too (see that target).
   src/io/RecentDrawings.cpp
+  # REQ-373/374/382 (#696 P1) project file, join detection, lock file. Pure <filesystem>/json.
+  src/io/Project.cpp
+  src/io/ProjectPointDb.cpp
+  src/io/ProjectPointRules.cpp
+  src/io/ProjectAddDrawing.cpp
+  # REQ-379 (#696 P6): tracked files - attach, record, find, health. Pure <filesystem>/json.
+  src/io/ProjectFiles.cpp
+  # REQ-380 (#696 P7): Pack Project / Open Packed Project (.gspack = ZIP via miniz)
+  src/io/ProjectPack.cpp
+  # REQ-381 (#696 P8): turnover records. Pure <filesystem>/json + miniz CRC.
+  src/io/ProjectTurnover.cpp
   # REQ-336 — What's New markdown load (path resolve + read); dismiss predicates in WhatsNewLogic.
   src/io/WhatsNewContent.cpp
   src/io/WikiContent.cpp
@@ -396,6 +475,12 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/DwgProbe.cpp
   src/io/LibreDwg.cpp
   src/io/LibreDwgCad.cpp
+  src/io/LibreDwgField.cpp
+  src/io/LibreDwgDynamicBlock.cpp
+  src/io/LibreDwgMaterial.cpp
+  src/io/LibreDwgAnnotContext.cpp
+  src/io/LibreDwgVisualStyle.cpp
+  src/io/LibreDwgLights.cpp
   src/io/DxfColors.cpp
   src/io/DwgMeshConvert.cpp
   src/io/GsMigrate.cpp
@@ -424,6 +509,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/tinvolume.cpp
   src/util/surfacequery.cpp
   src/util/gridsurface.cpp
+  src/util/daylight.cpp
   src/util/benchscene.cpp
   # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). Pure by that ADR — no GL, no ImGui, no
   # document — so a wrong volume integral or an unclosed shell is caught against a closed-form
@@ -433,6 +519,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # and dependency-free like brep.cpp itself — no LibreDWG, no GL — so a malformed or unsupported
   # record is caught against a hand-authored SAT fixture rather than a real vendor block library.
   src/util/AcisSatParser.cpp
+  src/util/AcisSatWriter.cpp
   # REQ-315 / ADR-048: the freeform (NURBS) surface patch — pure math (evaluation, derivatives,
   # validation, the loft builders), no GL and no brep coupling, so its correctness is pinned against
   # closed-form circle / plane expectations rather than a viewport.
@@ -484,7 +571,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${NLOHMANN_JSON_INCLUDE}
   ${CMAKE_BINARY_DIR}/generated
 )
-target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format)
+target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32, no glfw — the windowed app adds those itself.
@@ -530,7 +617,9 @@ add_executable(GoSurvey
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/CadUi_SignInGate.cpp
   src/ui/CadUi_StartScreen.cpp
+  src/ui/CadUi_Projects.cpp
   src/ui/CadUi_WhatsNew.cpp
+  src/ui/CadUi_DrawingSettings.cpp
   src/ui/CadUi_Wiki.cpp
   src/ui/CadUi_ColorPicker.cpp
   src/ui/MarkdownImGui.cpp
@@ -542,6 +631,7 @@ add_executable(GoSurvey
   src/ui/PdfAttachDialog.cpp
   src/ui/CadUi_InsertBlock.cpp
   src/ui/CadUi_BlockAuthoring.cpp
+  src/ui/CadUi_PipeFittingPalette.cpp
   src/ui/CadUi_ConnectionModes.cpp
 
   # I/O (windowed application only)
@@ -549,6 +639,21 @@ add_executable(GoSurvey
 
   # PDF underlay — the real, GL-backed implementation (headless links a seam instead)
   src/pdf/PdfAttach.cpp
+
+  # REQ-387 / ADR-067 — the built-in PDF viewer: pure core, PDFium wrapper, ImGui window
+  src/pdf/PdfViewerCore.cpp
+  src/pdf/PdfDocument.cpp
+  src/pdf/PdfSplit.cpp
+  src/pdf/PdfAnnotate.cpp
+  src/pdf/PdfRaw.cpp
+  src/pdf/PdfMeasure.cpp
+  src/pdf/PdfSnap.cpp
+  src/pdf/PdfScaleCheck.cpp
+  src/pdf/PdfDimAudit.cpp
+  src/pdf/PdfAlign.cpp
+  src/pdf/PdfDiff.cpp
+  src/ui/PdfViewerWindow.cpp
+  src/ui/PdfCompare.cpp
 
   # Platform
   src/platform/AppIcon.cpp
@@ -598,6 +703,7 @@ target_link_libraries(GoSurvey PRIVATE
   pdfium
   LibreDWG::libredwg
   E57Format::E57Format
+  CsMap::csmap
   md4c
 )
 target_include_directories(GoSurvey PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/devshell)
@@ -608,12 +714,25 @@ if(GOSURVEY_DEVELOPER_SHELL)
   target_sources(GoSurvey PRIVATE
     src/devshell/DevShell.cpp
     src/devshell/DevShellTests.cpp
+    src/devshell/DevShellProjectTests.cpp
   )
   target_compile_definitions(GoSurvey PRIVATE GOSURVEY_DEVELOPER_SHELL)
   target_link_libraries(GoSurvey PRIVATE imgui_core_testengine)
+  # The domain sources are compiled into this target, so what gosurvey_domain links PUBLIC (miniz,
+  # for ProjectPack / ProjectTurnover - REQ-380/381) has to be linked here too.
+  target_link_libraries(GoSurvey PRIVATE miniz)
 else()
   target_link_libraries(GoSurvey PRIVATE gosurvey_domain)
 endif()
+
+# ADR-063 (c): the only source that sees CS-MAP's headers. No PCH: cs_map.h is a C header with its
+# own platform macros, kept out of the shared precompiled header.
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+  APPEND PROPERTY INCLUDE_DIRECTORIES "${GOSURVEY_CSMAP_DIR}/include")
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+  PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
+  APPEND PROPERTY COMPILE_DEFINITIONS WIN32 _WINDOWS)
 
 if(TARGET libredwg)
   set_property(SOURCE
@@ -774,6 +893,22 @@ add_custom_command(
   COMMENT "Stage bundled resources beside GoSurvey executable")
 add_custom_target(gosurvey_stage_resources DEPENDS "${_GOSURVEY_RESOURCE_STAMP}")
 add_dependencies(GoSurvey gosurvey_stage_resources)
+
+# CS-MAP dictionaries + US grid files (REQ-358, D-2026-09-29-d) → resources/csmap/. Their own stamp:
+# ~230 MB is copied only when one of them changes, not on every resource edit.
+file(GLOB_RECURSE GOSURVEY_CSMAP_DICTIONARY_FILES CONFIGURE_DEPENDS "${GOSURVEY_CSMAP_DIR}/dictionaries/*")
+set(_GOSURVEY_CSMAP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_csmap.stamp")
+add_custom_command(
+  OUTPUT "${_GOSURVEY_CSMAP_STAMP}"
+  DEPENDS ${GOSURVEY_CSMAP_DICTIONARY_FILES}
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_CURRENT_BINARY_DIR}/resources/csmap"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${GOSURVEY_CSMAP_DIR}/dictionaries"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/csmap"
+  COMMAND ${CMAKE_COMMAND} -E touch "${_GOSURVEY_CSMAP_STAMP}"
+  COMMENT "Stage CS-MAP dictionaries beside GoSurvey executable")
+add_custom_target(gosurvey_stage_csmap DEPENDS "${_GOSURVEY_CSMAP_STAMP}")
+add_dependencies(GoSurvey gosurvey_stage_csmap)
 
 # Copy pdfium.dll next to the executable so it can be found at runtime.
 if(WIN32)
@@ -953,10 +1088,14 @@ if(GOSURVEY_BUILD_TESTS)
     # subject is the point/direction split: a frame's origin and its axes transform by different
     # rules, and getting that wrong still produces a solid Validate accepts.
     tests/RotateSolidTests.cpp
+    # REQ-351 / D-2026-09-28-f — mirror. Its own file because its subject is ORIENTATION: a naive
+    # reflection leaves left-handed frames and inside-out loops, and these cases pin the repair.
+    tests/MirrorSolidTests.cpp
     # REQ-320 / ADR-051 — the ACIS SAT parser (GitHub issue #299). Pure, so a hand-authored SAT
     # fixture pins the supported plane/cylinder/cone shapes and every refusal without a DWG file.
     tests/AcisSatParserTests.cpp
     src/util/AcisSatParser.cpp
+  src/util/AcisSatWriter.cpp
     src/util/brep.cpp
     # REQ-315 / ADR-048: the NURBS patch math. Partition-of-unity, a bilinear patch reproducing a
     # plane, a rational arc row that is exactly on its circle, and derivative agreement with finite
@@ -1011,6 +1150,11 @@ if(GOSURVEY_BUILD_TESTS)
     # example and wrong on exactly the cases a real grading comparison needs (no overlap, self vs
     # self, partial overlap).
     tests/SurfaceVolumeTests.cpp
+    # REQ-398 side slope grading. Every expected offset is hand-computed in the test from the two
+    # equations that cross, because a daylight offset wrong by a slope factor is entirely plausible
+    # on screen — and comparing against another approximation of the same thing would hide a
+    # systematic error in both.
+    tests/DaylightTests.cpp
     tests/CadTableTests.cpp
     tests/CadBlockTests.cpp
     tests/CadPipeRunTests.cpp
@@ -1053,6 +1197,25 @@ if(GOSURVEY_BUILD_TESTS)
     src/util/WhatsNewLogic.cpp
     tests/StartScreenTests.cpp
     src/io/RecentDrawings.cpp
+    # REQ-373/374/382 (#696 P1)
+    tests/ProjectTests.cpp
+    src/io/Project.cpp
+    src/io/ProjectPointDb.cpp
+    src/io/ProjectPointRules.cpp
+    tests/ProjectPointRulesTests.cpp
+    tests/ProjectPointDbTests.cpp
+    # REQ-378 (#696 P5): the pure database-merge half of Add Drawing to Project
+    tests/ProjectAddDrawingTests.cpp
+    src/io/ProjectAddDrawing.cpp
+    # REQ-379 (#696 P6): the pure tracked-file rules
+    tests/ProjectFilesTests.cpp
+    src/io/ProjectFiles.cpp
+    # REQ-380 (#696 P7): the pure pack / unpack
+    tests/ProjectPackTests.cpp
+    src/io/ProjectPack.cpp
+    # REQ-381 (#696 P8): the pure turnover records
+    tests/ProjectTurnoverTests.cpp
+    src/io/ProjectTurnover.cpp
     tests/TelemetryPingTests.cpp
     tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
@@ -1140,6 +1303,10 @@ if(GOSURVEY_BUILD_TESTS)
     src/util/tinvolume.cpp
     src/util/surfacequery.cpp
     src/util/gridsurface.cpp
+    # REQ-398 side slope grading. Pure over ISurfaceQuery — no GL, no document — so a reversed cut/
+    # fill sign or a daylight offset off by a slope factor is caught against hand arithmetic rather
+    # than by looking at a slope in a viewport, where a plausible wrong answer looks correct.
+    src/util/daylight.cpp
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.
@@ -1186,7 +1353,40 @@ if(GOSURVEY_BUILD_TESTS)
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
-  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
+  # REQ-387: the PDF viewer's pure core and its PDFium wrapper (opened against generated PDFs).
+  target_sources(GoSurveyTests PRIVATE
+    tests/PdfViewerTests.cpp
+    tests/PdfSplitTests.cpp
+    tests/PdfAnnotateTests.cpp
+    tests/PdfLeaderTests.cpp
+    tests/PdfMeasureTests.cpp
+    tests/PdfDimensionTests.cpp
+    tests/PdfSnapTests.cpp
+    tests/PdfScaleCheckTests.cpp
+    tests/PdfDimAuditTests.cpp
+    tests/PdfDimAuditPdfTests.cpp
+    tests/PdfAlignTests.cpp
+    tests/PdfDiffTests.cpp
+    src/pdf/PdfViewerCore.cpp
+    src/pdf/PdfDocument.cpp
+    src/pdf/PdfSplit.cpp
+    src/pdf/PdfAnnotate.cpp
+    src/font/ShxFont.cpp
+    src/pdf/PdfRaw.cpp
+    src/pdf/PdfMeasure.cpp
+    src/pdf/PdfSnap.cpp
+    src/pdf/PdfScaleCheck.cpp
+    src/pdf/PdfDimAudit.cpp
+    src/pdf/PdfAlign.cpp
+    src/pdf/PdfDiff.cpp)
+  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium)
+  if(WIN32)
+    add_custom_command(TARGET GoSurveyTests POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${pdfium_binaries_SOURCE_DIR}/bin/pdfium.dll"
+              "$<TARGET_FILE_DIR:GoSurveyTests>/pdfium.dll"
+      COMMENT "Copy pdfium.dll beside GoSurveyTests")
+  endif()
   gosurvey_target_warnings(GoSurveyTests)
   gosurvey_enable_pch(GoSurveyTests)
 
@@ -1204,7 +1404,14 @@ if(GOSURVEY_BUILD_TESTS)
   add_executable(GoSurveySnapTests
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
+    tests/CadFieldTests.cpp
     tests/CadSnapTests.cpp
+    # DRAPE needs the surface stores and ProcessCommandLineSubmit, both in gosurvey_domain,
+    # so it rides with GoSurveySnapTests like the other command tests above.
+    tests/DrapeCommandTests.cpp
+    # PADSOLID needs the surface stores, the brep kernel and ProcessCommandLineSubmit, so it rides
+    # with GoSurveySnapTests like the other command tests above.
+    tests/PadSolidCommandTests.cpp
     tests/GsIoDimAngularTests.cpp
     tests/GsIoPipeRunTests.cpp
     tests/GsIoViewportCameraTests.cpp
@@ -1235,6 +1442,10 @@ if(GOSURVEY_BUILD_TESTS)
     # and the two negatives (a click that misses every handle, an empty selection). Needs
     # gosurvey_domain for SubmitGizmoClick / ApplyTranslationToSelection.
     tests/GizmoTranslateTests.cpp
+    # GitHub issue #564 s1: orbited ZOOM EXTENTS, driven through ProcessPendingViewportZoom (domain).
+    tests/ZoomExtents3dTests.cpp
+    # GitHub issue #564 s2: depth-ordered hover/click resolution (ResolveViewportPick, domain).
+    tests/ViewportPickDepthTests.cpp
     # REQ-060 rotate/scale handles (TASK-232, slice 4c). Its own file because its subject is the
     # AGREEMENT: a gizmo drag and the function the typed command calls, compared coordinate for
     # coordinate — which is the acceptance itself rather than a proxy for it.
@@ -1245,10 +1456,51 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GizmoSubObjectMoveTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
+    # REQ-375 (#696 P2): project settings resolve against AppCommandState (EnforceProjectSettings), so
+    # this rides with gosurvey_domain like CadBlockImportTests.
+    tests/ProjectSettingsTests.cpp
+    tests/ProjectPointsSyncTests.cpp
+    # REQ-383 (#696 P9): delete / number-conflict / paste / unsaved-close warnings against AppCommandState
+    tests/ProjectWarningsTests.cpp
+    # REQ-378 (#696 P5): Add Drawing to Project end to end + Convert (needs AppCommandState, CS-MAP, LibreDWG)
+    tests/ProjectAddFlowTests.cpp
+    # REQ-379 (#696 P6): attach prompt, save-time record and open-time re-attach against AppCommandState
+    tests/ProjectFilesFlowTests.cpp
     # issue #486 increment B2 (REQ-347) — the PIPERUN command layer: StartPipeRunCommand /
     # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
     # with GoSurveySnapTests (gosurvey_domain), not GoSurveyTests, like CadBlockImportTests above.
     tests/CadPipeRunCommandTests.cpp
+    # REQ-350 / TASK-275 — the Pipe Fittings palette's filtering and grouping rules. Pure functions,
+    # but they live in CadBlocks.cpp beside the library scan they filter, so this rides with
+    # GoSurveySnapTests (gosurvey_domain) for the same reason CadPipeRunCommandTests above does.
+    tests/CadPipePaletteTests.cpp
+    # REQ-351 / D-2026-09-28-f — MOVE / ROTATE / SCALE / MIRROR / COPY / ARRAY on a pipe run.
+    tests/ModifyPipeRunTests.cpp
+    # REQ-352 / D-2026-09-28-g — layer and colour edits on solids and pipe runs.
+    tests/SolidLayerColorTests.cpp
+    # REQ-353 / D-2026-09-28-i — pipe colour by nominal size (issue #564 section 7).
+    tests/PipeSizePaletteTests.cpp
+    # REQ-354 / D-2026-09-28-j — the dynamic input shows its mode (issue #564 section 5).
+    tests/DynInputTests.cpp
+    tests/ModelingRibbonTests.cpp
+    # REQ-356 / D-2026-09-29-a — CHPROP, MATCHPROP, LAYMCUR, the current colour (issue #575).
+    tests/PropertyCommandTests.cpp
+    # REQ-370 / D-2026-10-05-a — box-selection live preview.
+    tests/BoxSelectionPreviewTests.cpp
+    # REQ-357 / D-2026-09-29-b,c — the Drawing Settings window (issue #582 increment 1).
+    tests/DrawingSettingsTests.cpp
+    # REQ-358: the CS-MAP wrapper + the zone as drawing data (loads the staged dictionary).
+    tests/CoordinateSystemsTests.cpp
+    # REQ-359 / D-2026-09-29-e: the Geolocation tab's commands and the Position Marker.
+    tests/GeolocationTests.cpp
+    # REQ-360: the Drawing Settings Transformation tab (local <-> grid).
+    tests/TransformationTests.cpp
+    # REQ-361 / D-2026-09-29-f: the Object Layers tab and every creation path that uses it.
+    tests/ObjectLayersTests.cpp
+    # REQ-362 / D-2026-09-29-g: reading an AutoCAD / Civil 3D GEODATA (write deferred to #590).
+    tests/GeoDataReadTests.cpp
+    # REQ-363 / D-2026-09-30-b / ADR-064: the online base map (issue #583 increment 1).
+    tests/OnlineMapTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
     # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
     tests/TrimLinePreviewTests.cpp
@@ -1295,7 +1547,9 @@ if(GOSURVEY_BUILD_TESTS)
   )
   target_link_libraries(GoSurveySnapTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
   target_compile_definitions(GoSurveySnapTests PRIVATE
-    GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
+    GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
+    GOSURVEY_CSMAP_DICTIONARY_DIR="${CMAKE_CURRENT_BINARY_DIR}/resources/csmap")
+  add_dependencies(GoSurveySnapTests gosurvey_stage_csmap)  # REQ-358 tests load the staged copy
   gosurvey_target_warnings(GoSurveySnapTests)
   gosurvey_enable_pch(GoSurveySnapTests)
   catch_discover_tests(GoSurveySnapTests)

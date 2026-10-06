@@ -3,8 +3,7 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
+#include <stb_image.h>  // compiled once, in StbImage.cpp
 
 #include <cmath>
 #include <cstring>

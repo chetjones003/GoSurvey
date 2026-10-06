@@ -65,7 +65,7 @@ float InsertLiveRotDeg(const AppCommandState& st, float wx, float wy) {
 EntityAttributes NewBlockAttr(const AppCommandState& st) {
   EntityAttributes a;
   a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
-  a.color = "ByLayer";
+  a.color = st.currentColor.empty() ? std::string("ByLayer") : st.currentColor;  // REQ-356
   a.linetype = "ByLayer";
   a.lineweightMm = -1.f;
   a.transparency = -1.f;
@@ -269,12 +269,17 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadSurfaceAttrs.clear();
   st.cadTables.clear();
   st.cadTableAttrs.clear();
+  st.cadPositionMarkers.clear();  // REQ-359: model-space objects, never block content
+  st.cadPositionMarkerAttrs.clear();
+  st.cadMultileaders.clear();  // REQ-367: model-space objects, never block content
+  st.cadMultileaderAttrs.clear();
   // Pipe runs (issue #486 / REQ-345) are model-space entities, never block content, so they hide
   // the same way cadTables/cadSurfaces above do — a run drawn in the main drawing is not the block
   // being edited. pipeRunWorldSolidsSig is left stale on purpose: it is a content hash, and this
   // clear changes the content, so RefreshSolidDisplayGeometry's next pass re-derives it naturally.
   st.cadPipeRuns.clear();
   st.cadPipeRunAttrs.clear();
+  st.cadPipingSystems.clear();  // issue #486 increment B3 / REQ-345 — same reason as cadPipeRuns above
   st.cadBlockRefs.clear();
   st.cadBlockRefAttrs.clear();
   st.surveyPoints.clear();
@@ -410,9 +415,14 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   bool ok = false;
   if (ext == ".dxf")
     ok = ImportDxfFile(scratch, pathUtf8, log);
-  else if (ext == ".dwg")
+  else if (ext == ".dwg") {
+    const size_t logStart = log.size();
     ok = ImportDwgFile(scratch, pathUtf8, log);
-  else if (ext == ".sat")
+    // The source file's GEODATA (REQ-362) set the scratch drawing's location, not this one's.
+    log.erase(std::remove_if(log.begin() + static_cast<std::ptrdiff_t>(logStart), log.end(),
+                             [](const std::string& l) { return l.rfind("GEODATA", 0) == 0; }),
+              log.end());
+  } else if (ext == ".sat")
     ok = ImportSatFileToScratch(scratch, pathUtf8, log);
   else {
     // .gs block-library import was removed by issue #264 (D-2026-09-03-h); re-adding a
@@ -516,6 +526,11 @@ void EraseSelectedSources(AppCommandState& st) {
   std::vector<int> arcs;
   std::vector<int> meshes;
   std::vector<int> refs;
+  // Solids were missing here while `CaptureSelectionInto` has copied them into the definition since
+  // REQ-320 — so BLOCK's "Convert to block" and "Delete" left the original solid in the drawing
+  // alongside a block reference holding a copy of it, silently duplicating the geometry (found by
+  // the `block-create-basepoint-pick` GUI test, 2026-09-23).
+  std::vector<int> solids;
   for (const SelectedEntity& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg)
       lines.push_back(e.index);
@@ -529,6 +544,8 @@ void EraseSelectedSources(AppCommandState& st) {
       meshes.push_back(e.index);
     else if (e.type == SelectedEntity::Type::BlockRef)
       refs.push_back(e.index);
+    else if (e.type == SelectedEntity::Type::Solid)
+      solids.push_back(e.index);
   }
   auto dropLines = [&](std::vector<int>& idx) {
     std::sort(idx.begin(), idx.end());
@@ -593,6 +610,14 @@ void EraseSelectedSources(AppCommandState& st) {
     if (k >= 0 && static_cast<size_t>(k) < st.cadBlockRefAttrs.size())
       st.cadBlockRefAttrs.erase(st.cadBlockRefAttrs.begin() + k);
   }
+  std::sort(solids.begin(), solids.end());
+  for (int i = static_cast<int>(solids.size()) - 1; i >= 0; --i) {
+    const int k = solids[static_cast<size_t>(i)];
+    if (k >= 0 && static_cast<size_t>(k) < st.cadSolids.size())
+      st.cadSolids.erase(st.cadSolids.begin() + k);
+    if (k >= 0 && static_cast<size_t>(k) < st.cadSolidAttrs.size())
+      st.cadSolidAttrs.erase(st.cadSolidAttrs.begin() + k);
+  }
   st.selection.clear();
 }
 
@@ -631,7 +656,8 @@ void ExplodeRef(AppCommandState& st, const CadBlockRef& ref, const EntityAttribu
 }
 
 bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform xf, bool explode,
-                     std::vector<std::string>& log) {
+                     std::vector<std::string>& log, bool pushUndo = true,
+                     const EntityAttributes* lineAttrs = nullptr) {
   const int di = CadBlockFindDef(st.blockDefs, name);
   if (di < 0) {
     log.push_back("INSERT — no block named \"" + std::string(name) + "\".");
@@ -640,7 +666,8 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
   CadBlockRef r;
   r.defName = st.blockDefs[static_cast<size_t>(di)].name;
   r.xf = xf;
-  PushUndoSnapshot(st, "Insert");
+  if (pushUndo)
+    PushUndoSnapshot(st, "Insert");
   const float us = CadBlockInsertUnitsScale(st, st.blockDefs[static_cast<size_t>(di)]);
   r.xf.sx *= us;
   r.xf.sy *= us;
@@ -648,7 +675,14 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
   const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
   for (const CadBlockAttrDef& ad : def.attrDefs)
     CadBlockAttrSet(&r, ad.tag, ad.defaultValue);
-  const EntityAttributes attr = NewBlockAttr(st);
+  EntityAttributes attr = NewBlockAttr(st);
+  if (lineAttrs) {  // a pipe fitting takes its run's layer and colour (REQ-353)
+    attr.layer = lineAttrs->layer;
+    attr.color = lineAttrs->color;
+  } else if (def.partType != CadPipePartType::None) {
+    // A catalogue part off any run: the Pipe fitting row (REQ-361, D-2026-09-29-f).
+    attr.layer = EnsureObjectLayer(st, ObjectLayerKind::PipeFitting, def.name);
+  }
   const bool paper = ActivePaperGeometryTarget(st) != nullptr;
   if (paper && explode) {
     log.push_back("INSERT — explode is model space only; placing as a reference.");
@@ -726,16 +760,21 @@ std::filesystem::path CadFittingLibraryExportDir() {
 }
 
 float CadBlockInsertUnitsScale(const AppCommandState& st, const CadBlockDefinition& def) {
+  // REQ-357: "Scale objects inserted from other drawings" off → inserted as drawn.
+  if (!st.drawingSettings.scaleInsertedObjects)
+    return 1.f;
+  const double inchesPerMeter = DrawingInchesPerMeter(st.drawingSettings.footDefinition);
+  const std::string drawUnits = CadDrawingInsUnitsName(st.drawingInsUnits);
   if (st.insertBlockUnitsBuf[0] != '\0')
-    return CadBlockUnitsScale(st.insertBlockUnitsBuf, CadDrawingInsUnitsName(st.drawingInsUnits));
-  return CadBlockUnitsScale(def.units, CadDrawingInsUnitsName(st.drawingInsUnits));
+    return CadBlockUnitsScale(st.insertBlockUnitsBuf, drawUnits, inchesPerMeter);
+  return CadBlockUnitsScale(def.units, drawUnits, inchesPerMeter);
 }
 
 void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBlockLibraryEntry>* out) {
   assert(out != nullptr);
   out->clear();
   for (const CadBlockDefinition& d : st.blockDefs) {
-    if (d.name.empty())
+    if (d.name.empty() || d.dynamicAnonymous)
       continue;
     CadBlockLibraryEntry e;
     e.name = d.name;
@@ -835,6 +874,251 @@ bool CadBlocksImportLibraryEntry(AppCommandState& st, const CadBlockLibraryEntry
   return CadBlockFindDef(st.blockDefs, entry.name) >= 0 || static_cast<int>(st.blockDefs.size()) > nBefore;
 }
 
+std::string_view CadPipePaletteCategoryLabel(CadPipePaletteCategory c) {
+  switch (c) {
+    case CadPipePaletteCategory::Flanges: return "Flanges";
+    case CadPipePaletteCategory::Valves: return "Valves";
+    case CadPipePaletteCategory::Nozzles: return "Nozzles";
+    case CadPipePaletteCategory::Other: return "Other";
+    case CadPipePaletteCategory::Fittings:
+    default: return "Fittings";
+  }
+}
+
+std::string_view CadPipePaletteCategoryPlural(CadPipePaletteCategory c) {
+  switch (c) {
+    case CadPipePaletteCategory::Flanges: return "flanges";
+    case CadPipePaletteCategory::Valves: return "valves";
+    case CadPipePaletteCategory::Nozzles: return "nozzles";
+    case CadPipePaletteCategory::Other: return "other parts";
+    case CadPipePaletteCategory::Fittings:
+    default: return "fittings";
+  }
+}
+
+CadPipePaletteCategory CadPipePaletteCategoryOf(CadPipePartType t) {
+  switch (t) {
+    case CadPipePartType::Elbow90:
+    case CadPipePartType::Elbow45:
+    case CadPipePartType::Tee:
+    case CadPipePartType::Cross:
+    case CadPipePartType::Reducer:
+    case CadPipePartType::Coupling:
+      return CadPipePaletteCategory::Fittings;
+    case CadPipePartType::Flange:
+      return CadPipePaletteCategory::Flanges;
+    case CadPipePartType::Valve:
+      return CadPipePaletteCategory::Valves;
+    case CadPipePartType::Nozzle:
+      return CadPipePaletteCategory::Nozzles;
+    case CadPipePartType::Cap:
+    case CadPipePartType::Other:
+    case CadPipePartType::None:
+    default:
+      return CadPipePaletteCategory::Other;
+  }
+}
+
+void CadPipePaletteCollectRows(const std::vector<CadBlockLibraryEntry>& entries,
+                               std::string_view runNominalSize, CadPipePressureClass runClass,
+                               CadPipePaletteCategory category, std::vector<CadBlockLibraryEntry>* out) {
+  assert(out != nullptr);
+  out->clear();
+  double runNps = 0.0;
+  if (!CadParsePipeNominalSizeInches(runNominalSize, &runNps))
+    return;  // no usable size — offer nothing rather than the whole library
+
+  for (const CadBlockLibraryEntry& e : entries) {
+    // An ordinary (non-fitting) block is not a catalog part, and an untagged fitting has no category
+    // to file under — neither belongs in a palette that exists to answer "what fits this pipe?".
+    if (!e.isFitting || e.partType == CadPipePartType::None)
+      continue;
+    if (CadPipePaletteCategoryOf(e.partType) != category)
+      continue;
+    double nps = 0.0;
+    if (!CadParsePipeNominalSizeInches(e.nominalSize, &nps))
+      continue;
+    if (std::fabs(nps - runNps) > 1e-9)
+      continue;
+    out->push_back(e);
+  }
+
+  if (runClass == CadPipePressureClass::None)
+    return;  // the run states no class, so every size match stands
+
+  // `CadPipeCatalogFind`'s precedence, scoped per part type (see the header's note on why not per
+  // tab). O(n^2) over the handful of parts one tab shows, which is cheaper to read than a grouping
+  // pass and measurably free at this size.
+  std::vector<CadBlockLibraryEntry> kept;
+  kept.reserve(out->size());
+  for (const CadBlockLibraryEntry& e : *out) {
+    if (e.pressureClass == runClass) {
+      kept.push_back(e);
+      continue;
+    }
+    if (e.pressureClass != CadPipePressureClass::None)
+      continue;  // tagged for a DIFFERENT class — never a match, same as the catalog lookup
+    bool exactExists = false;
+    for (const CadBlockLibraryEntry& o : *out) {
+      if (o.partType == e.partType && o.pressureClass == runClass) {
+        exactExists = true;
+        break;
+      }
+    }
+    if (!exactExists)
+      kept.push_back(e);
+  }
+  *out = std::move(kept);
+}
+
+std::string CadPipePaletteEmptyReason(CadPipePaletteCategory category, std::string_view runNominalSize) {
+  const std::string size = StringUtil::trimCopy(std::string(runNominalSize));
+  if (size.empty())
+    return "No pipe size yet — start PIPERUN and choose a size to see the parts that fit it.";
+  return "No " + size + " " + std::string(CadPipePaletteCategoryPlural(category)) +
+         " in the fittings library. Tag a part with BLOCKFITTING and LIBEXPORT it, or drop a .json "
+         "sidecar beside the file (see resources/blocks/fittings/README.md).";
+}
+
+void CadPipePaletteSetOpen(AppCommandState& st, bool open, std::vector<std::string>& log) {
+  if (st.pipeFittingPaletteOpen == open)
+    return;
+  st.pipeFittingPaletteOpen = open;
+  log.push_back(open ? "Pipe Fittings palette opened (PIPEPALETTE closes it)."
+                     : "Pipe Fittings palette closed (PIPEPALETTE reopens it).");
+}
+
+bool CadPipePaletteArmPart(AppCommandState& st, const CadBlockLibraryEntry& entry,
+                           std::vector<std::string>& log) {
+  if (entry.name.empty()) {
+    log.push_back("Pipe Fittings — that row has no block name.");
+    return false;
+  }
+  // A library row may not be in this drawing's block table yet. Import it now, exactly as picking it
+  // in the INSERT dialog does — and refuse by name if that fails, rather than arming a command that
+  // would have nothing to place (REQ-201).
+  if (CadBlockFindDef(st.blockDefs, entry.name) < 0 && !CadBlocksImportLibraryEntry(st, entry, log)) {
+    log.push_back("Pipe Fittings — could not import \"" + entry.name + "\" from the library.");
+    return false;
+  }
+
+  // Picking a part takes the command away from whatever holds it. If that is an open PIPERUN,
+  // FINISH the route first (D-2026-09-24-d) — before the route was a real entity this threw away the
+  // pipe the user had just drawn, which is precisely the reported "the pipe run disappears".
+  (void)CadPipeRunFinishForHandoff(st, log);
+
+  std::snprintf(st.insertBlockName, sizeof(st.insertBlockName), "%s", entry.name.c_str());
+  // One click places it: no scale, rotation or face-align prompt, so `InsertAdvanceAfterPoint` goes
+  // straight to placing. A fitting's size comes from the catalog, not from a dragged scale, and its
+  // orientation comes from the port it snaps to.
+  st.insertBlockSpecifyScale = false;
+  st.insertBlockSpecifyRot = false;
+  st.insertBlockSpecifyAlignFace = false;
+  st.insertBlockExplode = false;
+  // Every port on the part is a candidate for the connector snap the click may take
+  // (`SubmitInsertBlockPick`), so whichever one's own configured mode matches what is under the
+  // cursor wins. A name left behind in the INSERT dialog would pin the search to that one port
+  // instead — and on a part it does not even belong to, refuse the snap outright.
+  st.insertBlockConnectorName[0] = '\0';
+  st.insertBlockSpecifyConnectorSnap = false;  // the palette drives the snap itself, per click
+  st.insertBlockRotXDeg = 0.f;
+  st.insertBlockRotYDeg = 0.f;
+  st.insertBlockSx = 1.f;
+  st.insertBlockSy = 1.f;
+  st.insertBlockSz = 1.f;
+  st.insertBlockUniformScale = true;
+  st.insertBlockRotDeg = 0.f;
+  st.insertBlockDialogOpen = false;
+  st.insertBlockPipeSpliceArmed = true;
+  st.insertBlockPhase = AppCommandState::InsertBlockPhase::WaitInsertPoint;
+  st.active = AppCommandState::Kind::InsertBlock;
+  log.push_back("Pipe Fittings — \"" + entry.name +
+                "\": click on a pipe run to splice it in, on a connection port or pipe end to snap "
+                "onto it, or anywhere else to place it (ESC cancels).");
+  return true;
+}
+
+bool CadPipeCatalogFind(AppCommandState& st, CadPipePartType partType, const std::string& nominalSize,
+                        CadPipePressureClass pressureClass, std::string* outBlockName,
+                        std::vector<std::string>& log) {
+  if (!outBlockName)
+    return false;
+  outBlockName->clear();
+  if (partType == CadPipePartType::None) {
+    log.push_back("PIPECATALOG - a part type is required.");
+    return false;
+  }
+  if (nominalSize.empty()) {
+    log.push_back("PIPECATALOG - a nominal size is required.");
+    return false;
+  }
+
+  std::vector<CadBlockLibraryEntry> entries;
+  CadBlocksCollectLibraryEntries(st, &entries);
+
+  std::vector<const CadBlockLibraryEntry*> sizeTypeMatches;
+  for (const CadBlockLibraryEntry& e : entries) {
+    if (e.isFitting && e.partType == partType && e.nominalSize == nominalSize)
+      sizeTypeMatches.push_back(&e);
+  }
+
+  const std::string partTag(CadPipePartTypeTag(partType));
+  const std::string classDesc = pressureClass == CadPipePressureClass::None
+                                    ? std::string()
+                                    : (" " + std::string(CadPipePressureClassTag(pressureClass)));
+  const auto refuseNoMatch = [&]() {
+    log.push_back("PIPECATALOG - no " + partTag + " found for " + nominalSize + classDesc +
+                  ". Import or LIBEXPORT a matching fitting first, or PIPECATALOG with a different size/class.");
+    return false;
+  };
+  if (sizeTypeMatches.empty())
+    return refuseNoMatch();
+
+  // A requested class prefers an EXACT match; if none is tagged for that class, fall back to a
+  // class-agnostic part (pressureClass == None on the library entry) rather than refusing outright
+  // — the same exact-then-default precedent `CadBlockResolveMode` already uses for connection modes.
+  // No requested class (None) means no restriction at all: every size/type match qualifies.
+  std::vector<const CadBlockLibraryEntry*> chosen;
+  if (pressureClass != CadPipePressureClass::None) {
+    for (const CadBlockLibraryEntry* e : sizeTypeMatches)
+      if (e->pressureClass == pressureClass)
+        chosen.push_back(e);
+    if (chosen.empty()) {
+      for (const CadBlockLibraryEntry* e : sizeTypeMatches)
+        if (e->pressureClass == CadPipePressureClass::None)
+          chosen.push_back(e);
+    }
+  } else {
+    chosen = sizeTypeMatches;
+  }
+  if (chosen.empty())
+    return refuseNoMatch();
+
+  if (chosen.size() > 1) {
+    std::string names;
+    for (size_t i = 0; i < chosen.size(); ++i) {
+      if (i)
+        names += ", ";
+      names += chosen[i]->name;
+    }
+    // REQ-201: nothing invalid — or ambiguous — is ever guessed. A duplicate-classed catalog is a
+    // library authoring problem for the user to fix, not something this lookup silently resolves.
+    log.push_back("PIPECATALOG - ambiguous: " + std::to_string(chosen.size()) + " parts match " +
+                  partTag + " " + nominalSize + classDesc + " (" + names +
+                  "). Narrow the pressure class, or remove/retag the duplicate in the library.");
+    return false;
+  }
+
+  const CadBlockLibraryEntry entry = *chosen.front();  // copy: CadBlocksImportLibraryEntry mutates st
+  if (!CadBlocksImportLibraryEntry(st, entry, log)) {
+    log.push_back("PIPECATALOG - found \"" + entry.name + "\" but it failed to import.");
+    return false;
+  }
+  *outBlockName = entry.name;
+  log.push_back("PIPECATALOG - " + partTag + " " + nominalSize + classDesc + " -> \"" + entry.name + "\".");
+  return true;
+}
+
 bool CadBlocksImportWithPicker(AppCommandState& dest, std::vector<std::string>& log) {
   char buf[4096]{};
   if (!BrowseOpenFileBlockUtf8(buf, sizeof(buf))) {
@@ -850,7 +1134,19 @@ bool CadBlocksImportWithPicker(AppCommandState& dest, std::vector<std::string>& 
 
 bool CadBlockPlaceInsert(AppCommandState& st, std::string_view name, CadBlockXform xf, bool explode,
                          std::vector<std::string>& log) {
-  return PlaceInsertImpl(st, name, xf, explode, log);
+  // A part the connector snap fitted onto a pipe run's end joins that line (REQ-353).
+  const int runIdx = st.insertBlockSnappedPipeRun;
+  st.insertBlockSnappedPipeRun = -1;
+  const EntityAttributes* lineAttrs =
+      runIdx >= 0 && static_cast<size_t>(runIdx) < st.cadPipeRunAttrs.size()
+          ? &st.cadPipeRunAttrs[static_cast<size_t>(runIdx)]
+          : nullptr;
+  return PlaceInsertImpl(st, name, xf, explode, log, /*pushUndo=*/true, lineAttrs);
+}
+
+bool CadBlockPlaceInsertNoUndo(AppCommandState& st, std::string_view name, CadBlockXform xf,
+                               std::vector<std::string>& log, const EntityAttributes* lineAttrs) {
+  return PlaceInsertImpl(st, name, xf, /*explode=*/false, log, /*pushUndo=*/false, lineAttrs);
 }
 
 void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -879,6 +1175,7 @@ void StartInsertBlockCommand(AppCommandState& st, std::vector<std::string>& log)
   st.insertBlockRotYBuf[0] = '\0';
   st.insertBlockSpecifyAlignFace = false;
   st.insertBlockSpecifyConnectorSnap = false;
+  st.insertBlockSnappedPipeRun = -1;
   st.insertBlockConnectorName[0] = '\0';
   st.insertBlockUnitsBuf[0] = '\0';
   st.insertBlockPath[0] = '\0';
@@ -1024,6 +1321,68 @@ void CancelBlockCreateDialog(AppCommandState& st, std::vector<std::string>& log)
   st.blockCreatePhase = AppCommandState::BlockCreatePhase::WaitDialog;
 }
 
+bool CadBlocksWriteBlockToFile(AppCommandState& st, std::string_view name, const char* pathUtf8,
+                               std::vector<std::string>& log) {
+  // issue #284: WBLOCK writes a single block definition out to its own .dwg, using the same ADR-044
+  // JSON trailer mechanism as whole-drawing save. The trailer's blockDefs array holds just this one
+  // definition; BLOCKIMPORT reading it back finds scratch.blockDefs already populated (see
+  // ImportCadBlocksFromPathImpl) and merges it directly — no drawing-capture needed.
+  //
+  // Lifted out of the `wblock` verb so the save dialog writes through exactly this path: two entry
+  // points that each formatted their own messages is how a dialog and a typed command drift apart.
+  if (!pathUtf8 || pathUtf8[0] == '\0') {
+    log.push_back("WBLOCK — no destination file given.");
+    return false;
+  }
+  const int di = CadBlockFindDef(st.blockDefs, name);
+  if (di < 0) {
+    log.push_back("WBLOCK — no block named \"" + std::string(name) + "\".");
+    return false;
+  }
+  AppCommandState tmp;
+  tmp.blockDefs.push_back(st.blockDefs[static_cast<size_t>(di)]);
+  if (!ExportDwgFile(tmp, pathUtf8, log)) {
+    log.push_back("WBLOCK — could not write " + std::string(pathUtf8) + ".");
+    return false;
+  }
+  log.push_back("WBLOCK — wrote \"" + std::string(name) + "\" to " + pathUtf8 + ".");
+  return true;
+}
+
+void StartWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.blockDefs.empty()) {
+    // Refused with a reason rather than opening an empty picker (REQ-201's shape): there is nothing
+    // to write, and a dialog listing nothing cannot say why.
+    log.push_back("WBLOCK — this drawing has no block definitions to write.");
+    return;
+  }
+  st.wblockDialogOpen = true;
+  // Default to the most recently used definition when there is one, else the first — the same
+  // "start where the user last was" rule CadBlocksApplyInsertNameDefaults uses for INSERT.
+  std::string pick = st.blockDefs.front().name;
+  if (!st.blockRecent.empty() && CadBlockFindDef(st.blockDefs, st.blockRecent.front()) >= 0)
+    pick = st.blockRecent.front();
+  std::snprintf(st.wblockName, sizeof(st.wblockName), "%s", pick.c_str());
+  st.wblockPath[0] = '\0';
+  log.push_back("WBLOCK — choose a block and a destination file.");
+}
+
+void CommitWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.wblockDialogOpen)
+    return;
+  if (CadBlocksWriteBlockToFile(st, st.wblockName, st.wblockPath, log)) {
+    st.wblockDialogOpen = false;
+    return;
+  }
+  // Left OPEN on failure, so the message names what to change and the user's chosen path and block
+  // are still there to correct — closing it would make them start over to fix a typo.
+}
+
+void CancelWblockDialog(AppCommandState& st, std::vector<std::string>& log) {
+  (void)log;
+  st.wblockDialogOpen = false;
+}
+
 void CadBlocksApplyInsertNameDefaults(AppCommandState& st) {
   const int di = CadBlockFindDef(st.blockDefs, st.insertBlockName);
   if (di < 0) {
@@ -1137,6 +1496,9 @@ void InsertAdvanceAfterAlignFace(AppCommandState& st, std::vector<std::string>& 
 }
 
 void FinishInsertCommand(AppCommandState& st) {
+  // REQ-350 (f) — the palette's splice arming lasts exactly one placement. Cleared here (and on
+  // cancel) so an ordinary INSERT typed afterwards can never inherit it and splice a run.
+  st.insertBlockPipeSpliceArmed = false;
   st.insertBlockDialogOpen = false;
   st.insertBlockAttrDialogOpen = false;
   st.insertBlockAttrRefIndex = -1;
@@ -1333,11 +1695,14 @@ bool FindNearestDrawingConnector(const AppCommandState& st, float px, float py, 
 /// vertices, because auto-filleting can move an end slightly off its clicked position; using
 /// anything else here would offer a connection point at a spot the rendered pipe does not actually
 /// end at.
+///
+/// `*outRunIndex` receives the index of the `CadPipeRun` whose end won, or -1 for a bare line's.
 static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float py, float pz, float maxDist,
                                     float* outX, float* outY, float* outZ, float* outNx, float* outNy,
-                                    float* outNz) {
+                                    float* outNz, int* outRunIndex) {
   bool any = false;
   float bestD = maxDist * maxDist;
+  int candidateRun = -1;
   auto consider = [&](float ex, float ey, float ez, float dirx, float diry, float dirz) {
     const float dx = ex - px;
     const float dy = ey - py;
@@ -1350,6 +1715,7 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
       return;
     bestD = d2;
     any = true;
+    *outRunIndex = candidateRun;
     *outX = ex;
     *outY = ey;
     *outZ = ez;
@@ -1367,10 +1733,12 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
     consider(x0, y0, z0, x0 - x1, y0 - y1, z0 - z1);
     consider(x1, y1, z1, x1 - x0, y1 - y0, z1 - z0);
   }
-  for (const CadPipeRun& run : st.cadPipeRuns) {
+  for (size_t ri = 0; ri < st.cadPipeRuns.size(); ++ri) {
+    const CadPipeRun& run = st.cadPipeRuns[ri];
     CadPipeRunEndPort start, end;
     if (!CadPipeRunEndPorts(run, &start, &end))
       continue;  // an unfillable/unresolvable run offers no connection point (REQ-201)
+    candidateRun = static_cast<int>(ri);
     consider(static_cast<float>(start.point.x), static_cast<float>(start.point.y),
              static_cast<float>(start.point.z), static_cast<float>(start.outwardNormal.x),
              static_cast<float>(start.outwardNormal.y), static_cast<float>(start.outwardNormal.z));
@@ -1381,7 +1749,8 @@ static bool FindNearestPipeEndpoint(const AppCommandState& st, float px, float p
   return any;
 }
 
-bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log) {
+bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, float wz, std::vector<std::string>& log,
+                                    bool optional) {
   using Ph = AppCommandState::InsertBlockPhase;
   if (st.active != AppCommandState::Kind::InsertBlock || st.insertBlockPhase != Ph::WaitConnectorTarget)
     return false;
@@ -1397,10 +1766,16 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
   CadBlockWorldConnection tgt;
   const bool foundPortRaw = FindNearestDrawingConnector(st, wx, wy, wz, kSnap, &tgt);
   float pipeX = 0.f, pipeY = 0.f, pipeZ = 0.f, pipeNx = 0.f, pipeNy = 0.f, pipeNz = 0.f;
-  const bool foundPipeEndRaw =
-      FindNearestPipeEndpoint(st, wx, wy, wz, kSnap, &pipeX, &pipeY, &pipeZ, &pipeNx, &pipeNy, &pipeNz);
+  int pipeRun = -1;
+  const bool foundPipeEndRaw = FindNearestPipeEndpoint(st, wx, wy, wz, kSnap, &pipeX, &pipeY, &pipeZ, &pipeNx,
+                                                       &pipeNy, &pipeNz, &pipeRun);
   if (!foundPortRaw && !foundPipeEndRaw) {
-    log.push_back("INSERT — no connection port near that point (within 2 ft).");
+    // `optional` is the Pipe Fittings palette asking "snap if there is anything to snap to"
+    // (REQ-350 (f)): a part staged beside the line is a placement, not a failure, so the
+    // caller places it plainly and says so. Every other caller asked for a snap and gets the
+    // refusal by name (REQ-201).
+    if (!optional)
+      log.push_back("INSERT — no connection port near that point (within 2 ft).");
     return false;
   }
   const CadConnectionModeTarget portTarget = CadBlockClassifyPortTarget(tgt.ownerPartType);
@@ -1460,9 +1835,10 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
     }
   }
   if (!src) {
-    log.push_back(insertedDef.connections.size() > 1
-                      ? "INSERT — nothing near that point matches any of this block's connection points."
-                      : "INSERT — nothing near that point matches this connection point's configured mode(s).");
+    if (!optional)
+      log.push_back(insertedDef.connections.size() > 1
+                        ? "INSERT — nothing near that point matches any of this block's connection points."
+                        : "INSERT — nothing near that point matches this connection point's configured mode(s).");
     return false;
   }
 
@@ -1483,6 +1859,7 @@ bool SubmitInsertBlockConnectorPick(AppCommandState& st, float wx, float wy, flo
   CadBlockSnapInsertToConnection(*src, tX, tY, tZ, tNx, tNy, tNz, &xf);
   CadBlockApplyConnectionModeOffset(*src, mode, &xf);
   ApplyInsertXformToDialog(xf, st);
+  st.insertBlockSnappedPipeRun = usePipeEnd ? pipeRun : -1;
   const std::string targetName = usePipeEnd ? std::string("pipe end") : tgt.name;
   std::string msg = "INSERT — snapped to " + targetName + " (" + std::string(CadConnectionModeTargetTag(target)) + ")";
   if (mode)
@@ -1996,7 +2373,8 @@ void BlockFittingStart(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back(
       "BLOCKFITTING — part type [" +
       (def.partType == CadPipePartType::None ? std::string("none") : std::string(CadPipePartTypeTag(def.partType))) +
-      "] (elbow-90|elbow-45|tee|cross|reducer|flange|valve|coupling|cap|other|none, Enter to keep current):");
+      "] (elbow-90|elbow-45|tee|cross|reducer|flange|valve|coupling|cap|nozzle|other|none, "
+      "Enter to keep current):");
 }
 
 void BlockFittingSubmitLine(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
@@ -2317,6 +2695,13 @@ bool CadBlockArmDynGrip(AppCommandState& st, int refIndex, int which) {
     CadBlockToggleMatchlineFlip(&r, def);
     return false;
   }
+  if (CadBlockHasLinearStretchDyn(def)) {
+    const std::string pname = CadBlockFirstLinearStretchParamName(def);
+    st.entityGripOrigX0 = CadBlockParamValue(r, def, pname);
+    st.entityGripOrigCx = r.xf.x;
+    st.entityGripOrigCy = r.xf.y;
+    return true;
+  }
   st.entityGripOrigX0 = CadBlockParamValue(r, def, "DistNeg");
   st.entityGripOrigY0 = CadBlockParamValue(r, def, "DistPos");
   st.entityGripOrigX1 = CadBlockParamValue(r, def, "SheetOff");
@@ -2330,6 +2715,18 @@ bool CadBlockArmDynGrip(AppCommandState& st, int refIndex, int which) {
 void CadBlockRestoreDynGripOrig(AppCommandState& st, CadBlockRef* r) {
   if (!r)
     return;
+  const int di = CadBlockFindDef(st.blockDefs, r->defName);
+  if (di >= 0) {
+    const CadBlockDefinition& def = st.blockDefs[static_cast<size_t>(di)];
+    if (CadBlockHasLinearStretchDyn(def)) {
+      const std::string pname = CadBlockFirstLinearStretchParamName(def);
+      if (!pname.empty())
+        CadBlockParamSet(r, pname, st.entityGripOrigX0);
+      r->xf.x = st.entityGripOrigCx;
+      r->xf.y = st.entityGripOrigCy;
+      return;
+    }
+  }
   CadBlockParamSet(r, "DistNeg", st.entityGripOrigX0);
   CadBlockParamSet(r, "DistPos", st.entityGripOrigY0);
   CadBlockParamSet(r, "SheetOff", st.entityGripOrigX1);
@@ -2412,6 +2809,54 @@ void SubmitInsertBlockPick(AppCommandState& st, float wx, float wy, float wz, st
     st.insertBlockX = wx;
     st.insertBlockY = wy;
     st.insertBlockZ = wz;
+    // REQ-350 (f) — armed from the Pipe Fittings palette, ONE click places the part and WHERE it
+    // lands decides how. Three outcomes, tried in this order, because each is strictly more
+    // specific than the next:
+    //
+    //   1. on a pipe run -> splice it in (the PIPEFIT path: engagement cutback, run split in two,
+    //      one undo step);
+    //   2. otherwise, near a connection port or pipe end -> snap to it, which is what orients the
+    //      part (REQ-107 / issue #496, the same `SubmitInsertBlockConnectorPick` INSERT already
+    //      uses, asked OPTIONALLY so "nothing nearby" is not a refusal here);
+    //   3. otherwise -> place it free at the point.
+    //
+    // Step 2 was MISSING, and that is the "the blind flange is not aligning correctly" report: a
+    // blind flange bolts onto another flange FACE, never into the middle of a pipe, so its click
+    // never reaches step 1 — and without step 2 it fell straight through to step 3 and was dropped
+    // with the identity rotation it was authored with. REQ-350 (f) has said "with connection-port
+    // snapping (REQ-107)" all along; `CadPipePaletteArmPart` never turned it on.
+    //
+    // A failed SPLICE also falls through rather than ending the click: a part that cannot splice
+    // (a blind flange has ONE port; `PickElbowPorts` needs two) would otherwise consume the click
+    // and place nothing at all, which is not a refusal the user can act on (REQ-201). The splice
+    // has already logged WHY, and the part still lands where it was clicked.
+    if (st.insertBlockPipeSpliceArmed) {
+      const ray3d::Vec3 pick{static_cast<double>(wx), static_cast<double>(wy), static_cast<double>(wz)};
+      const std::string armed = st.insertBlockName;
+      int runIdx = -1;
+      if (CadPipeRunUnderPick(st, pick, &runIdx)) {
+        st.insertBlockPipeSpliceArmed = false;
+        st.insertBlockPhase = Ph::WaitInsertPoint;
+        st.active = AppCommandState::Kind::None;
+        if (CadPipeFitNamedAtPick(st, runIdx, armed, pick, log))
+          return;
+        // Refused, and said why. Re-arm just enough to finish the click as a placement.
+        st.active = AppCommandState::Kind::InsertBlock;
+        st.insertBlockPhase = Ph::WaitInsertPoint;
+      }
+      st.insertBlockPipeSpliceArmed = false;
+      st.insertBlockPhase = Ph::WaitConnectorTarget;
+      if (SubmitInsertBlockConnectorPick(st, wx, wy, wz, log, /*optional=*/true))
+        return;  // snapped and placed
+      st.insertBlockPhase = Ph::WaitInsertPoint;
+      // The REASON, not the outcome: `InsertAdvanceAfterPoint` below is what actually places
+      // it, and "within 2 ft" covers both "nothing there" and "nothing there this part can
+      // mate with" — the snap refuses for either, and the user needs to know only that it
+      // went down with the orientation it was authored with.
+      log.push_back("Pipe Fittings — \"" + armed +
+                    "\": nothing within 2 ft for its connection point to mate with; placing "
+                    "it as authored.");
+    }
     InsertAdvanceAfterPoint(st, log);
     return;
   }
@@ -2769,6 +3214,12 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     st.blockEditorDirty = false;
     BumpCadGpuCache(st);
     st.blockEditCleanRevision = st.cadGpuRevision;
+    // REQ-350 / ADR-062 — this definition's geometry just changed, so any cached Pipe Fittings
+    // thumbnail of it now shows the part as it WAS. Marked for re-render; the UI's service pass is what
+    // actually drops it, because the renderer is not this layer's to call.
+    if (std::find(st.pipeFittingThumbStale.begin(), st.pipeFittingThumbStale.end(), st.blockEditorName) ==
+        st.pipeFittingThumbStale.end())
+      st.pipeFittingThumbStale.push_back(st.blockEditorName);
     log.push_back("BSAVE — saved \"" + st.blockEditorName + "\". All references update.");
     return true;
   }
@@ -3276,7 +3727,12 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("INSUNITS — " + CadDrawingInsUnitsName(st.drawingInsUnits) + ".");
       return true;
     }
-    st.drawingInsUnits = CadDrawingInsUnitsCode(f[0]);
+    const int code = CadDrawingInsUnitsCode(f[0]);
+    if (code != st.drawingInsUnits) {
+      PushUndoSnapshot(st, "INSUNITS");  // the drawing unit is undoable (REQ-357)
+      st.drawingInsUnits = code;
+      BumpCadGpuCache(st);
+    }
     log.push_back("INSUNITS — drawing units " + CadDrawingInsUnitsName(st.drawingInsUnits) + ".");
     return true;
   }
@@ -3357,23 +3813,53 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     // ADR-044 JSON trailer mechanism as whole-drawing save. The trailer's blockDefs array holds
     // just this one definition; BLOCKIMPORT reading it back finds scratch.blockDefs already
     // populated (see ImportCadBlocksFromPathImpl) and merges it directly — no drawing-capture needed.
+    // Both arguments given: write straight out, the way scripts and the two `[issue284][wblock]`
+    // tests drive it. Bare `WBLOCK` used to answer with a usage line; at the user's request
+    // (2026-09-23) it now opens the save dialog, which is what AutoCAD's own WBLOCK does.
     const std::vector<std::string> f = SplitCommaRest(args);
     if (f.size() < 2) {
-      log.push_back("WBLOCK — usage: WBLOCK <name>, <path.dwg>.");
+      StartWblockDialog(st, log);
       return true;
     }
-    const int di = CadBlockFindDef(st.blockDefs, f[0]);
-    if (di < 0) {
-      log.push_back("WBLOCK — no block named \"" + f[0] + "\".");
+    CadBlocksWriteBlockToFile(st, f[0], f[1].c_str(), log);
+    return true;
+  }
+
+  if (tok == "pipepalette" || tok == "pipepal") {
+    // REQ-350 (a) — reopen (or close) the Pipe Fittings palette. PIPERUN opens it on its own; this is
+    // how it comes back after the close box, and how it is reached without starting a run at all.
+    CadPipePaletteSetOpen(st, !st.pipeFittingPaletteOpen, log);
+    return true;
+  }
+
+  if (tok == "pipecatalog" || tok == "pcat") {
+    // Catalog lookup (issue #486 increment B4 / REQ-345). One-shot report over CadPipeCatalogFind —
+    // no state machine, the same "bare/short verb, immediate answer" shape PIPESYS's own report
+    // verbs use, because this is a query (and a side-effecting import when the match is not yet
+    // imported), not something routed interactively.
+    std::string partTypeTok, sizeTok, classTok;
+    args >> partTypeTok >> sizeTok;
+    if (partTypeTok.empty() || sizeTok.empty()) {
+      log.push_back("PIPECATALOG - usage: PIPECATALOG <part type> <nominal size> [pressure class]. Part "
+                    "types: elbow-90, elbow-45, tee, cross, reducer, flange, valve, coupling, cap, "
+                    "nozzle, other.");
       return true;
     }
-    AppCommandState tmp;
-    tmp.blockDefs.push_back(st.blockDefs[static_cast<size_t>(di)]);
-    if (!ExportDwgFile(tmp, f[1].c_str(), log)) {
-      log.push_back("WBLOCK — could not write " + f[1] + ".");
+    const CadPipePartType partType = ParseCadPipePartType(StringUtil::toLowerAsciiCopy(partTypeTok));
+    if (partType == CadPipePartType::None) {
+      log.push_back("PIPECATALOG - unknown part type \"" + partTypeTok + "\".");
       return true;
     }
-    log.push_back("WBLOCK — wrote \"" + f[0] + "\" to " + f[1] + ".");
+    CadPipePressureClass pressureClass = CadPipePressureClass::None;
+    if (args >> classTok) {
+      pressureClass = ParseCadPipePressureClass(classTok);
+      if (pressureClass == CadPipePressureClass::None) {
+        log.push_back("PIPECATALOG - unknown pressure class \"" + classTok + "\". Use CS150 or CS300.");
+        return true;
+      }
+    }
+    std::string blockName;
+    (void)CadPipeCatalogFind(st, partType, sizeTok, pressureClass, &blockName, log);
     return true;
   }
 

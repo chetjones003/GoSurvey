@@ -72,6 +72,21 @@
     ((sizeof (var) == 1 && n <= 0xff) || (sizeof (var) == 2 && n <= 0xffff)   \
      || (sizeof (var) >= 4))
 
+#  ifdef HANDLE_STREAM_ERROR_CLEANUP
+#    define RETURN_VALUEOUTOFBOUNDS                                        \
+      do                                                                   \
+        {                                                                  \
+          if (hdl_dat != dat && hdl_dat->chain != dat->chain)              \
+            bit_chain_free (hdl_dat);                                      \
+          if (str_dat != dat && str_dat->chain)                            \
+            bit_chain_free (str_dat);                                      \
+          return DWG_ERR_VALUEOUTOFBOUNDS;                                 \
+        }                                                                  \
+      while (0)
+#  else
+#    define RETURN_VALUEOUTOFBOUNDS return DWG_ERR_VALUEOUTOFBOUNDS
+#  endif
+
 #  ifndef IS_FREE
 #    define VALUEOUTOFBOUNDS(field, maxvalue)                                 \
       if (_IN_RANGE (_obj->field, maxvalue) && _obj->field > maxvalue)        \
@@ -79,7 +94,7 @@
           LOG_ERROR ("Invalid %s." #field " %lu", obj ? obj->name : "",       \
                      (unsigned long)_obj->field);                             \
           _obj->field = 0;                                                    \
-          return DWG_ERR_VALUEOUTOFBOUNDS;                                    \
+          RETURN_VALUEOUTOFBOUNDS;                                            \
         }
 #    define SUB_VALUEOUTOFBOUNDS(o, field, maxvalue)                          \
       if (_IN_RANGE (_obj->o.field, maxvalue) && _obj->o.field > maxvalue)    \
@@ -87,18 +102,18 @@
           LOG_ERROR ("Invalid %s." #field " %lu", obj ? obj->name : "",       \
                      (unsigned long)_obj->o.field);                           \
           _obj->o.field = 0;                                                  \
-          return DWG_ERR_VALUEOUTOFBOUNDS;                                    \
+          RETURN_VALUEOUTOFBOUNDS;                                            \
         }
 #  else
 #    define VALUEOUTOFBOUNDS(field, maxvalue)                                 \
       if (_IN_RANGE (_obj->field, maxvalue) && _obj->field > maxvalue)        \
         {                                                                     \
-          return DWG_ERR_VALUEOUTOFBOUNDS;                                    \
+          RETURN_VALUEOUTOFBOUNDS;                                            \
         }
 #    define SUB_VALUEOUTOFBOUNDS(o, field, maxvalue)                          \
       if (_IN_RANGE (_obj->o.field, maxvalue) && _obj->o.field > maxvalue)    \
         {                                                                     \
-          return DWG_ERR_VALUEOUTOFBOUNDS;                                    \
+          RETURN_VALUEOUTOFBOUNDS;                                            \
         }
 #  endif
 
@@ -576,6 +591,8 @@
       {                                                                       \
         if (hdl_dat != dat && hdl_dat->chain != dat->chain)                   \
           bit_chain_free (hdl_dat);                                           \
+        if (str_dat != dat && str_dat->chain)                                 \
+          bit_chain_free (str_dat);                                           \
         return error;                                                         \
       }
 #elif defined IS_FREE
@@ -807,7 +824,7 @@
       {                                                                       \
         LOG_ERROR ("Invalid %s." #name " rcount1 %ld", SAFEDXFNAME,           \
                    (long)times);                                              \
-        return DWG_ERR_VALUEOUTOFBOUNDS;                                      \
+        RETURN_VALUEOUTOFBOUNDS;                                              \
       }                                                                       \
     if (_obj->name != NULL)                                                   \
       for (rcount1 = 0; rcount1 < (BITCODE_BL)times; rcount1++)
@@ -818,7 +835,7 @@
       {                                                                       \
         LOG_ERROR ("Invalid %s." #name " rcount" #idx " %ld", SAFEDXFNAME,    \
                    (long)_obj->times);                                        \
-        return DWG_ERR_VALUEOUTOFBOUNDS;                                      \
+        RETURN_VALUEOUTOFBOUNDS;                                              \
       }                                                                       \
     if (_obj->times > 0 && _obj->name != NULL)                                \
       for (rcount##idx = 0; rcount##idx < (BITCODE_BL)_obj->times;            \
@@ -859,7 +876,7 @@
       {                                                                       \
         LOG_ERROR ("Invalid %s." #name " rcount" #idx " %ld", SAFEDXFNAME,    \
                    (long)times);                                              \
-        return DWG_ERR_VALUEOUTOFBOUNDS;                                      \
+        RETURN_VALUEOUTOFBOUNDS;                                              \
       }                                                                       \
     if (_obj->name != NULL)                                                   \
       for (rcount##idx = 0; rcount##idx < (BITCODE_BL)times; rcount##idx++)
@@ -1051,6 +1068,7 @@
     }
 #endif
 
+// clang-format off
 #ifndef LOG_FLAG_LWPOLYLINE
 #  define LOG_FLAG_LWPOLYLINE_W(w)                                            \
     if (_obj->flag & FLAG_LWPOLYLINE_##w)                                     \
@@ -1061,22 +1079,23 @@
       if (_obj->flag)                                                         \
         {                                                                     \
           LOG_TRACE ("      ");                                               \
-          LOG_FLAG_LWPOLYLINE_W (HAS_EXTRUSION);                              \
-          LOG_FLAG_LWPOLYLINE_W (HAS_THICKNESS);                              \
-          LOG_FLAG_LWPOLYLINE_W (HAS_CONSTWIDTH);                             \
-          LOG_FLAG_LWPOLYLINE_W (HAS_ELEVATION);                              \
-          LOG_FLAG_LWPOLYLINE_W (HAS_NUM_BULGES);                             \
-          LOG_FLAG_LWPOLYLINE_W (HAS_NUM_WIDTHS);                             \
-          LOG_FLAG_LWPOLYLINE_W (UNKNOWN_64);                                 \
-          LOG_FLAG_LWPOLYLINE_W (UNKNOWN_128);                                \
-          LOG_FLAG_LWPOLYLINE_W (PLINEGEN);                                   \
-          LOG_FLAG_LWPOLYLINE_W (CLOSED);                                     \
-          LOG_FLAG_LWPOLYLINE_W (VERTEXIDCOUNT);                              \
+          LOG_FLAG_LWPOLYLINE_W (HAS_EXTRUSION);  /* 1 */                     \
+          LOG_FLAG_LWPOLYLINE_W (HAS_THICKNESS);  /* 2 */                     \
+          LOG_FLAG_LWPOLYLINE_W (HAS_CONSTWIDTH); /* 4 */                     \
+          LOG_FLAG_LWPOLYLINE_W (HAS_ELEVATION);  /* 8 */                     \
+          LOG_FLAG_LWPOLYLINE_W (HAS_NUM_BULGES); /* 16 */                    \
+          LOG_FLAG_LWPOLYLINE_W (HAS_NUM_WIDTHS); /* 32 */                    \
+          LOG_FLAG_LWPOLYLINE_W (UNKNOWN_64);     /* 64 */                    \
+          LOG_FLAG_LWPOLYLINE_W (UNKNOWN_128);    /* 128 */                   \
+          LOG_FLAG_LWPOLYLINE_W (PLINEGEN);       /* 256 */                   \
+          LOG_FLAG_LWPOLYLINE_W (CLOSED);         /* 512 */                   \
+          LOG_FLAG_LWPOLYLINE_W (VERTEXIDCOUNT);  /* 1024 */                  \
           LOG_FLAG_MAX (_obj->flag, 2047);                                    \
           LOG_TRACE ("\n");                                                   \
         }                                                                     \
     }
 #endif
+// clang-format on
 
 #ifndef LOG_FLAG_POLYLINE
 #  define LOG_FLAG_POLYLINE_W(w)                                              \
