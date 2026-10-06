@@ -18,9 +18,11 @@
 #include "util/gizmooverlay.hpp"  // CadGizmoOverlay, constructed here (REQ-060)
 #include "TransformPreview.hpp"
 #include "CadUi.hpp"
+#include "ProjectWarnings.hpp"  // REQ-383: ProjectsWithUnsavedPoints
 #include "WikiHelp.hpp"
 #include "util/framewatch.hpp"
 #include "PdfAttachDialog.hpp"
+#include "PdfViewerWindow.hpp"
 #include "ViewportRenderer.hpp"
 #include "CadOnlineMap.hpp"  // REQ-363 online map controller + tile service
 #include "CadSnap.hpp"
@@ -364,6 +366,10 @@ int main()
 #endif
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  // REQ-387 clause 7 / ADR-067 (a): a PDF viewer is a real Windows window (minimize / maximize, another
+  // monitor, docking back). Only windows whose class asks for NoAutoMerge get an OS window on their own;
+  // every other panel stays in the main window until it is dragged out.
+  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigInputTextEnterKeepActive = false; // CAD shell: Enter submits without selecting-all next keystroke
 
@@ -753,6 +759,11 @@ int main()
             cmd.documents[i].cadGpuRevision != cmd.documents[i].savedRevision)
           anyDirty = true;
       }
+      // REQ-383 clause 6: a project database that could not be written is "unsaved" too. Found once
+      // here (the write is tried first), not every frame the prompt is open.
+      cmd.closeUnsavedProjects = ProjectsWithUnsavedPoints(cmd, 0, cmdLog);
+      if (!cmd.closeUnsavedProjects.empty())
+        anyDirty = true;
       if (anyDirty)
         cmd.confirmCloseModal = true;
       else
@@ -770,6 +781,7 @@ int main()
 
     if (cmd.closeConfirmed)
     {
+      ReleaseAllProjects(cmd, cmdLog);  // REQ-382: a clean exit leaves no stale project lock
       // Work is saved or deliberately discarded by this point, so it is safe to hand over.
       // Inno closes this process via the AppMutex, replaces the files, and restarts us.
       if (updateExitPending)
@@ -1240,6 +1252,7 @@ int main()
     DrawPageSetupEditor(cmd, cmdLog);
     DrawBatchPlotDialog(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
+    DrawPdfViewers(cmd, cmdLog);  // REQ-387
     DrawInsertBlockDialog(cmd, cmdLog);
     DrawBlockCreateDialog(cmd, cmdLog);
     DrawWblockDialog(cmd, cmdLog);
@@ -1264,6 +1277,7 @@ int main()
     cmd.updatePrefs.enabled        = updateState.prefs.enabled;
     cmd.updatePrefs.useBetaChannel = updateState.prefs.useBetaChannel;
     DrawDwgLossyExportModal(cmd, cmdLog);
+    DrawProjectDialogs(cmd, cmdLog);  // REQ-374 / REQ-382: New Project, lock + damaged-marker prompts
 
     // The point a click would COMMIT at, which is NOT the cursor. When an object snap is acquired,
     // SubmitViewportPick commits at the snap point (CadUi: commitX/commitY), while curX/curY is only
@@ -1370,6 +1384,12 @@ int main()
       BuildSubObjectHoverHighlight(cmd, &subObjectOverlay.hoverFaceTris, &subObjectOverlay.hoverFaceEdges,
                                    &subHoverLines);
       hoverLines.insert(hoverLines.end(), subHoverLines.begin(), subHoverLines.end());
+      // REQ-370: what the open selection box would select, lit like a hover.
+      std::vector<float> boxPreviewLines;
+      std::vector<float> boxPreviewCircles;
+      BuildBoxPreviewHighlight(cmd, &boxPreviewLines, &boxPreviewCircles);
+      hoverLines.insert(hoverLines.end(), boxPreviewLines.begin(), boxPreviewLines.end());
+      hoverCircles.insert(hoverCircles.end(), boxPreviewCircles.begin(), boxPreviewCircles.end());
     }
 
     // The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b), and the ghost of what an
@@ -1429,13 +1449,18 @@ int main()
     ext.blockRefAttrs = &cmd.cadBlockRefAttrs;
     ext.drawingModelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
     ext.annotativeViewport = CurrentViewport(cmd);
+    ext.annotationScales = cmd.annotationScales.empty() ? nullptr : &cmd.annotationScales;
+    ext.currentAnnotationScaleIndex = cmd.currentAnnotationScaleIndex;
 
     activeRenderer.SetSize(fbW, fbH);
     RenderTuning tuning{};
     tuning.arcCircleSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
     tuning.hardwareAcceleration = cmd.systemHardwareAcceleration;
     tuning.smoothLineDisplay = cmd.gfxSmoothLineDisplay;
-    tuning.visualStyle = cmd.viewportVisualStyle;  // REQ-064
+    if (const Viewport* vpStyle = CurrentViewport(cmd))
+      tuning.visualStyle = vpStyle->visualStyle;  // REQ-371 per layout viewport
+    else
+      tuning.visualStyle = cmd.viewportVisualStyle;  // REQ-064 model space
     tuning.bgR = std::clamp(cmd.viewportBgR, 0.f, 1.f);
     tuning.bgG = std::clamp(cmd.viewportBgG, 0.f, 1.f);
     tuning.bgB = std::clamp(cmd.viewportBgB, 0.f, 1.f);
@@ -1556,7 +1581,8 @@ int main()
     // and any in-place edit previews are drawn as UI overlays. All model-interaction visuals (hover,
     // highlight, preview, rubber, snap glyph, selection rect, survey markers, PDFs) are suppressed here so
     // leftover DXF geometry isn't hover-highlighted behind the sheet.
-    const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex;
+    const bool inFloatingModel = InFloatingModelSpace(cmd);
+    const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !inFloatingModel;
 
     // REQ-073 amendment: the Volume Dashboard's cut/fill map (TASK-095 §6 step 5), model space only
     // like every other GL surface entity. Built fresh each frame from the dashboard's own landed
@@ -1717,6 +1743,16 @@ int main()
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
+    // The detached windows (PDF viewers) draw into their own OS windows; the platform call leaves a
+    // different GL context current, so the main window's is restored before the swap.
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+    {
+      GLFWwindow *mainContext = glfwGetCurrentContext();
+      ImGui::UpdatePlatformWindows();
+      ImGui::RenderPlatformWindowsDefault();
+      glfwMakeContextCurrent(mainContext);
+    }
+
     glfwSwapBuffers(window);
 
     // Reveal the main window only after its first real frame is on screen (see the hide in the
@@ -1771,6 +1807,7 @@ int main()
   onlineMap.reset();  // joins the tile workers and releases the map textures while GL is alive
   for (auto &r : viewportRenderers)
     r->Shutdown();
+  ShutdownPdfViewers();  // textures + render workers, while GL is alive
   PdfAttach_Shutdown();
   glfwDestroyWindow(window);
   glfwTerminate();

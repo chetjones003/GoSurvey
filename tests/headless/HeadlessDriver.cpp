@@ -1735,6 +1735,30 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       std::string needle = Trim(expanded.substr(std::min(expanded.size(), expanded.find(path) + path.size())));
       if (needle.size() >= 2 && needle.front() == '"' && needle.back() == '"')
         needle = needle.substr(1, needle.size() - 2);
+      // Escapes, so the needle can be anchored to the START OF A LINE. Without \n this is a bare
+      // substring test, which cannot tell a DOCUMENT-level key from the same key inside a block
+      // definition nested ten spaces deeper — and the template ships block definitions that carry
+      // solids, so "this drawing wrote no solids array" was not provable at all. Only these four:
+      // enough to pin an indent, and deliberately not a regex language inside a transcript.
+      {
+        std::string unescaped;
+        unescaped.reserve(needle.size());
+        for (size_t ni = 0; ni < needle.size(); ++ni) {
+          if (needle[ni] != '\\' || ni + 1 >= needle.size()) {
+            unescaped.push_back(needle[ni]);
+            continue;
+          }
+          const char esc = needle[++ni];
+          switch (esc) {
+            case 'n':  unescaped.push_back('\n'); break;
+            case 't':  unescaped.push_back('\t'); break;
+            case '"':  unescaped.push_back('"'); break;
+            case '\\': unescaped.push_back('\\'); break;
+            default:   unescaped.push_back('\\'); unescaped.push_back(esc); break;
+          }
+        }
+        needle.swap(unescaped);
+      }
       if (needle.empty()) {
         Fail(run, "parse", "EXPECT " + what + ": the text to look for is empty", sourceLine);
         return false;

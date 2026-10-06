@@ -1,4 +1,7 @@
 #include "CadCommands.hpp"
+#include "ProjectSettings.hpp"  // REQ-375: NoteUserPlotScale
+#include "ProjectFiles.hpp"  // REQ-379: RequestProjectAttach
+#include "ProjectWarnings.hpp"  // REQ-383: TagClipboardOrigin / CheckClipboardPaste
 #include "CadCommandsInternal.hpp"
 #include "CadColor.hpp"
 #include "CadBlocks.hpp"
@@ -156,6 +159,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.drawingInsUnits        = cmd.drawingInsUnits;  // REQ-357: unit, scale and settings are per drawing
   doc.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
   doc.drawingSettings        = cmd.drawingSettings;
+  doc.pointVisibility        = cmd.pointVisibility;
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
@@ -270,6 +274,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.drawingInsUnits            = doc.drawingInsUnits;  // REQ-357
   cmd.modelUnitsPerPlottedInch   = doc.modelUnitsPerPlottedInch;
   cmd.drawingSettings            = doc.drawingSettings;
+  cmd.pointVisibility            = doc.pointVisibility;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.activeDimensionStyle       = doc.dimensionStyle;
@@ -3301,6 +3306,24 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
   st.cadSurfaces.erase(st.cadSurfaces.begin() + static_cast<std::ptrdiff_t>(index));
   if (index < st.cadSurfaceAttrs.size())
     st.cadSurfaceAttrs.erase(st.cadSurfaceAttrs.begin() + static_cast<std::ptrdiff_t>(index));
+  // The selection is indexed, and `cadSurfaces` has just compacted (architecture SS11.9). Drop the
+  // entry for the surface that is gone, and slide every LATER surface entry down one -- otherwise a
+  // selection either points past the end (the `selection-in-range` document invariant trips on the
+  // next CHECK) or, worse, silently points at whichever surface took the slot, so the next command
+  // acts on a surface the user never picked.
+  //
+  // Done HERE because this is the one erase path (REQ-068): `SURFACEDELETE`, the ERASE command and
+  // both panel Delete buttons all come through it, and only ERASE was clearing up after itself.
+  for (size_t i = st.selection.size(); i-- > 0;) {
+    SelectedEntity& e = st.selection[i];
+    if (e.type != SelectedEntity::Type::Surface || e.index < 0)
+      continue;
+    const size_t ei = static_cast<size_t>(e.index);
+    if (ei == index)
+      st.selection.erase(st.selection.begin() + static_cast<std::ptrdiff_t>(i));
+    else if (ei > index)
+      --e.index;
+  }
   BumpCadGpuCache(st);
 }
 
@@ -5131,6 +5154,12 @@ void ExecuteToolspaceCommand(AppCommandState& st, const std::string& args, std::
     log.push_back("TOOLSPACE — Prospector.");
     return;
   }
+  if (verb == "project") {
+    st.showToolspaceWindow = true;
+    st.toolspaceTab = AppCommandState::ToolspaceTab::Project;
+    log.push_back("TOOLSPACE — Project.");
+    return;
+  }
   if (verb == "settings") {
     st.showToolspaceWindow = true;
     st.toolspaceTab = AppCommandState::ToolspaceTab::Settings;
@@ -6719,10 +6748,18 @@ const CmdEntry kRegistry[] = {
     {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"drawingsettings", "editdrawingsettings", "Drawing Settings: units, scale and the drawing's settings"},
+    {"projectsettings", "", "Project Settings: the project's coordinate system, units and defaults (REQ-375)"},
+    {"projecthealth", "", "Project Health: linked, missing and unsaved files before you pack or hand over (REQ-379)"},
+    {"packproject", "", "Pack Project: write the whole project as one .gspack file to send (REQ-380)"},
+    {"turnover", "", "Create Turnover: record which project files were handed to whom, and when (REQ-381)"},
+    {"openpack", "", "Open Packed Project: unpack a .gspack into a folder and open it (REQ-380)"},
+    {"adddrawing", "", "Add Drawing to Project: bring an existing drawing and its points into this project (REQ-378)"},
     {"geomarkpoint", "", "Place a Position Marker at a picked point (geolocated drawing)"},
     {"geomarklatlong", "", "Place a Position Marker at a typed latitude and longitude"},
     {"georeorientmarker", "", "Set the geographic marker: a design point, then north"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
+    {"pdfview", "pv", "Open a PDF in the built-in viewer (REQ-387)"},
+    {"pdfsplit", "", "Save chosen pages of the open PDF as a new PDF (REQ-389)"},
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
     {"quickselect",  "qs", "Select by object properties"},
@@ -7236,6 +7273,73 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     log.push_back("DRAWINGSETTINGS — Drawing Settings opened.");
     return true;
   }
+  if (primary == "projectsettings") {  // REQ-375
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("PROJECTSETTINGS — this drawing is not in a project.");
+    } else {
+      st.projectSettingsUid = uid;
+      log.push_back("PROJECTSETTINGS — Project Settings opened.");
+    }
+    return true;
+  }
+  if (primary == "projecthealth") {  // REQ-379 clause 4
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("PROJECTHEALTH — this drawing is not in a project.");
+    } else {
+      st.projectHealthUid = uid;
+      log.push_back("PROJECTHEALTH — Project Health opened.");
+    }
+    return true;
+  }
+  if (primary == "packproject") {  // REQ-380
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("PACKPROJECT — this drawing is not in a project.");
+    } else {
+      st.projectPackPrompt = {};
+      st.projectPackPrompt.projectUid = uid;
+      log.push_back("PACKPROJECT — Pack Project opened.");
+    }
+    return true;
+  }
+  if (primary == "turnover") {  // REQ-381
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("TURNOVER — this drawing is not in a project.");
+    } else {
+      st.projectTurnoverPrompt = {};
+      st.projectTurnoverPrompt.projectUid = uid;
+      log.push_back("TURNOVER — Create Turnover opened.");
+    }
+    return true;
+  }
+  if (primary == "openpack") {  // REQ-380
+    st.openPackRequested = true;
+    log.push_back("OPENPACK — choose the .gspack file to open.");
+    return true;
+  }
+  if (primary == "adddrawing") {  // REQ-378
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("ADDDRAWING — open a drawing of the project first.");
+    } else {
+      st.addDrawingToProjectUid = uid;
+      log.push_back("ADDDRAWING — choose the drawing to add.");
+    }
+    return true;
+  }
   if (primary == "style") {
     TextStyles::EnsureStandard(st.textStyles);
     st.showTextStyleManagerWindow = true;
@@ -7403,6 +7507,15 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "traverse" || primary == "trav" || primary == "traverseeditor") {
     StartTraverseEditorCommand(st, log);
+    return true;
+  }
+  if (primary == "pdfview") {  // REQ-387: the built-in PDF viewer; the window shows the file dialog
+    st.pdfViewerPickRequest = true;
+    log.push_back("PDFVIEW — choose a PDF to open in the viewer.");
+    return true;
+  }
+  if (primary == "pdfsplit") {  // REQ-389: the viewer window shows the Split dialog
+    st.pdfSplitRequest = true;
     return true;
   }
   if (primary == "pdfattach" || primary == "pdfatt") {
@@ -15613,6 +15726,7 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
   }
   CadClipboard& cb = st.clipboard;
   cb = CadClipboard{};
+  TagClipboardOrigin(st);  // REQ-383
   cb.fromPaper = true;
   float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
   auto expandBbox = [&](float x, float y) {
@@ -15739,6 +15853,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
   }
   CadClipboard& cb = st.clipboard;
   cb = CadClipboard{};
+  TagClipboardOrigin(st);  // REQ-383
   cb.fromPaper = false;  // copied from model space
 
   float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
@@ -15882,11 +15997,30 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
                   "duplicate one in place.");
 }
 
+/// REQ-383 clauses 1 and 3: true when this paste must not start now — it is blocked, or it waits for
+/// the user's answer to the warning the UI is about to show. "Paste anyway" sets
+/// `pasteWarningAnswered` and starts the paste again, which lets it through once.
+static bool PasteWaitsForUser(AppCommandState& st, bool original, std::vector<std::string>& log) {
+  if (st.pasteWarningAnswered) {
+    st.pasteWarningAnswered = false;
+    return false;
+  }
+  const PasteCheck pc = CheckClipboardPaste(st);
+  if (pc.verdict == PasteCheck::Verdict::Ok)
+    return false;
+  st.pastePrompt = {true, pc.verdict == PasteCheck::Verdict::Block, original, pc.text, true};
+  log.push_back(std::string(original ? "PASTEORIG" : "PASTE") +
+                (pc.verdict == PasteCheck::Verdict::Block ? " — blocked: " : " — check before pasting: ") + pc.text);
+  return true;
+}
+
 void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.clipboard.empty()) {
     log.push_back("PASTE — clipboard is empty. Use Ctrl+C to copy objects first.");
     return;
   }
+  if (PasteWaitsForUser(st, false, log))
+    return;
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Paste;
@@ -15903,6 +16037,8 @@ void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("PASTEORIG — clipboard is empty. Use Ctrl+C to copy objects first.");
     return;
   }
+  if (PasteWaitsForUser(st, true, log))
+    return;
   PushUndoSnapshot(st, "Paste original");
   CommitPasteFromClipboard(st, 0.f, 0.f, log);
   log.push_back("PASTEORIG — objects pasted at original coordinates.");
@@ -25005,6 +25141,13 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadAnnotationAttrs.clear();
   st.cadFilledRegions.clear();
   st.cadFilledRegionAttrs.clear();
+  st.annotationScales.clear();
+  st.currentAnnotationScaleIndex = -1;
+  st.dwgImportedLights.clear();
+  st.dwgImportedSunPresent = false;
+  st.dwgImportedLightList = {};
+  st.dwgImportedLightListPresent = false;
+  st.dwgImportedLightListDictKey.clear();
   st.cadMeshes.clear();
   st.cadMeshAttrs.clear();
   st.cadPointClouds.clear();
@@ -25013,6 +25156,19 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadSolidAttrs.clear();
   st.solidDisplayCache.clear();
   st.solidDisplayGeometry.solids.clear();
+  // TIN surfaces (REQ-068) and their generated display geometry (ADR-036 (e)). The cache is keyed
+  // on stable entity ids and lives on AppCommandState, not in the drawing snapshot — so it must be
+  // dropped whenever the drawing's geometry is cleared or replaced. Leaving it across OPEN/IMPORT
+  // let a cache entry for the same id early-out against a new triangulation and, worse, hand the
+  // renderer buffers built for the previous document (issue #663).
+  st.cadSurfaces.clear();
+  st.cadSurfaceAttrs.clear();
+  st.surfaceDisplayCache.clear();
+  st.surfaceWatershedCache.clear();
+  st.surfaceDisplayGeometry.lines.clear();
+  st.surfaceDisplayGeometry.bandTriangles.clear();
+  st.waterDropPreviewLines.clear();
+  st.surfaceRebuildAsync.clear();  // join/cancel any in-flight worker before ids are reused
   st.blockRefWorldSolids.clear();
   st.blockRefWorldSolidAttrs.clear();
   st.blockRefWorldSolidsSig = 0;
@@ -31291,6 +31447,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     VisibleSolid vs;
     vs.tess = &*it;
     ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
+    ApplyMaterialDiffuseForShaded(attr, vs.rgba);
     vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
     visible.push_back(vs);
     mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
@@ -31319,6 +31476,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     VisibleSolid vs;
     vs.tess = &*it;
     ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
+    ApplyMaterialDiffuseForShaded(attr, vs.rgba);
     vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
     visible.push_back(vs);
     mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
@@ -31347,6 +31505,7 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     VisibleSolid vs;
     vs.tess = &*it;
     ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
+    ApplyMaterialDiffuseForShaded(attr, vs.rgba);
     vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
     visible.push_back(vs);
     mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
@@ -37837,8 +37996,14 @@ bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vec
     log.push_back("VISUALSTYLE — enter 2D, HIDDEN or SHADED.");
     return false;
   }
-  st.viewportVisualStyle = s;
-  log.push_back(std::string("Visual style = ") + VisualStyleName(s) + ".");
+  if (Viewport* vp = CurrentViewport(st)) {
+    vp->visualStyle = s;
+    log.push_back(std::string("Viewport visual style = ") + VisualStyleName(s) + ".");
+  } else {
+    st.viewportVisualStyle = s;
+    log.push_back(std::string("Visual style = ") + VisualStyleName(s) + ".");
+  }
+  BumpCadGpuCache(st);
   return true;
 }
 
@@ -39124,6 +39289,37 @@ void SetDrawingPlotScale(AppCommandState& st, float modelUnitsPerPlottedInch) {
   st.surveyLabelLayoutCacheHalfH = st.viewportLastSurveyLayoutOrthoHalfH;
   st.surveyLabelLayoutCacheVpHeightPx = st.viewportLastSurveyLayoutHeightPx;
   st.surveyLabelLayoutCacheMup = st.modelUnitsPerPlottedInch;
+  SyncCurrentAnnotationScaleIndex(st);
+  BumpCadGpuCache(st);
+}
+
+void SyncCurrentAnnotationScaleIndex(AppCommandState& st) {
+  st.currentAnnotationScaleIndex = -1;
+  if (st.annotationScales.empty())
+    return;
+  int best = 0;
+  float bestDiff = 1.e30f;
+  for (int i = 0; i < static_cast<int>(st.annotationScales.size()); ++i) {
+    const float m = CadAnnotationScaleModelUnitsPerPlottedInch(st.annotationScales[static_cast<size_t>(i)]);
+    const float d = std::fabs(m - st.modelUnitsPerPlottedInch);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = i;
+    }
+  }
+  st.currentAnnotationScaleIndex = best;
+}
+
+void SetCurrentAnnotationScaleIndex(AppCommandState& st, int index) {
+  if (st.annotationScales.empty()) {
+    st.currentAnnotationScaleIndex = -1;
+    return;
+  }
+  const int n = static_cast<int>(st.annotationScales.size());
+  const int ix = std::clamp(index, 0, n - 1);
+  if (ix == st.currentAnnotationScaleIndex)
+    return;
+  st.currentAnnotationScaleIndex = ix;
   BumpCadGpuCache(st);
 }
 
@@ -39976,6 +40172,42 @@ void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anch
   st.selBoxAnchorScreenX = anchorScreenX;
   st.selBoxAnchorScreenY = anchorScreenY;
   st.selBoxWaitingSecond = true;
+}
+
+void UpdateSelectionBoxPreview(AppCommandState& st, float wx, float wy, bool windowMode, const Camera* cam,
+                               float vpW, float vpH) {
+  if (!st.selBoxWaitingSecond) {
+    st.selBoxPreview.clear();
+    st.selBoxPreviewKeyValid = false;
+    return;
+  }
+  const std::array<double, 11> key = {st.selBoxAnchorX,
+                                      st.selBoxAnchorY,
+                                      st.selBoxAnchorZ,
+                                      wx,
+                                      wy,
+                                      st.uiCursorWorldZ,
+                                      windowMode ? 1.0 : 0.0,
+                                      st.viewportPanX + st.viewportPanY,
+                                      st.viewportZoom,
+                                      static_cast<double>(st.cadGpuRevision),
+                                      static_cast<double>(st.hiddenEntityIds.size())};
+  if (st.selBoxPreviewKeyValid && key == st.selBoxPreviewKey)
+    return;
+  st.selBoxPreviewKey = key;
+  st.selBoxPreviewKeyValid = true;
+
+  // ComputeSelectionFromRect merges into st.selection / selectedSurveyPointIndices, so run it on an
+  // empty pair and put the real ones back — the preview must never change the selection.
+  std::vector<SelectedEntity> savedSel;
+  savedSel.swap(st.selection);
+  std::vector<int> savedSurvey;
+  savedSurvey.swap(st.selectedSurveyPointIndices);
+  ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, st.selBoxAnchorZ, wx, wy, st.uiCursorWorldZ,
+                           /*subtract=*/false, windowMode, /*includeSurveyPoints=*/false, cam, vpW, vpH);
+  st.selBoxPreview.swap(st.selection);
+  st.selection.swap(savedSel);
+  st.selectedSurveyPointIndices.swap(savedSurvey);
 }
 
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -41430,6 +41662,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         }
         path = buf;
       }
+      // REQ-379 clause 1: in a project drawing a file from outside the project asks copy / link first;
+      // the modal's answer starts the import.
+      if (RequestProjectAttach(st, AppCommandState::ProjectAttachPrompt::Kind::PointCloud, path, log))
+        return;
       StartPointCloudImportAsync(st, path, log);
       return;
     }
@@ -41816,6 +42052,48 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           StartFrameBudgetBench(st, 1, frames, log);
           return;
         }
+        // `BENCH PDFVIEW [pages]` — REQ-387: open a synthetic PDF of that many pages in the viewer
+        // and scroll it top to bottom, reporting first-page time and the viewer's per-frame cost.
+        if (lower == "pdfview" || lower == "pdf") {
+          int pages = 500;
+          int v = 0;
+          const std::streampos beforeArg = issIdle.tellg();
+          if (issIdle >> v) {
+            pages = std::clamp(v, 1, 5000);
+          } else {  // not a number: the rest of the line is a real PDF to time (its path may hold spaces)
+            issIdle.clear();
+            issIdle.seekg(beforeArg);
+            std::string path;
+            std::getline(issIdle, path);
+            path = StringUtil::trimCopy(path);
+            if (!path.empty()) {
+              st.pdfViewBenchPath = path;
+              log.push_back("BENCH PDFVIEW - timing " + path);
+              return;
+            }
+          }
+          st.pdfViewBenchPages = pages;
+          log.push_back("BENCH PDFVIEW — building a " + std::to_string(pages) + "-page PDF; the viewer window will scroll it.");
+          return;
+        }
+        // `BENCH PDFCOMPARE [pages]` — REQ-392: overlay two generated PDFs of that many pages in a
+        // viewer, zoom and pan the overlay, and report the viewer's per-frame cost.
+        if (lower == "pdfcompare") {
+          int pages = 500;
+          int v = 0;
+          if (issIdle >> v)
+            pages = std::clamp(v, 1, 5000);
+          st.pdfCompareBenchPages = pages;
+          log.push_back("BENCH PDFCOMPARE — building two " + std::to_string(pages) + "-page PDFs; the viewer window will overlay and pan them.");
+          return;
+        }
+        // `BENCH PDFDIFF` — REQ-393: automatically align and compare a generated pair of 36 x 24 in sheets (a few
+        // hundred thousand line segments) and report the time and the worst viewer frame.
+        if (lower == "pdfdiff") {
+          st.pdfDiffBench = true;
+          log.push_back("BENCH PDFDIFF — building two 36 x 24 in sheets; the viewer window will align and compare them.");
+          return;
+        }
         if (lower == "mesh" || lower == "m") {
           int tris = 2000000;  // REQ-100 (b): the density decided 2026-08-15, TASK-041's fixture
           int v = 0;
@@ -41932,6 +42210,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         if (pv != st.modelUnitsPerPlottedInch) {
           PushUndoSnapshot(st, "PLOTSCALE");  // the plot scale is undoable (REQ-357)
           SetDrawingPlotScale(st, pv);
+          NoteUserPlotScale(st);  // REQ-375
         }
         log.push_back("Plot scale: 1 plotted inch = " + std::to_string(pv) + " model units.");
       }
@@ -44237,6 +44516,15 @@ void ResolveEntityRgbaForViewport(const EntityAttributes& attr, const CadLayerRo
       col = layer->color;
   }
   ResolveStoredColorForViewport(col, tr, defaultR, defaultG, defaultB, outRgba);
+}
+
+void ApplyMaterialDiffuseForShaded(const EntityAttributes& attr, float rgba[4]) {
+  assert(rgba != nullptr);
+  if (!attr.materialDiffuseOverride)
+    return;
+  rgba[0] = attr.materialDiffuseR;
+  rgba[1] = attr.materialDiffuseG;
+  rgba[2] = attr.materialDiffuseB;
 }
 
 struct DxfLwPair {

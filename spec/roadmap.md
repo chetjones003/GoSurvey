@@ -275,6 +275,15 @@ A lightweight board that complements the milestones. Keep each column honest.
   length / Properties on arc segments; (3) JOIN of lines + arcs, and arc-segment grips;
   (4) TRIM / OFFSET / FILLET / CHAMFER of bulge polylines. **No code past a slice until its
   Workshop task cites REQ-316 and passes Verification.**
+- **Projects (REQ-373…REQ-383, ADR-065 accepted, D-2026-10-05-d/-e, issue #696).** Ten phases, one
+  PR each, tracked as checkboxes in the issue: P0 spec → P1 project foundation (`.gsproj`, New/Open,
+  Start screen, join, lock) → P2 project settings → P3 shared point database (ADR-065 accepted 2026-10-05)
+  → P4 Survey Database toolspace + visibility rules → P5 Add Drawing to Project →
+  P6 file tracking + Project Health → P7 Pack Project (ADR-066, D-2026-10-05-i) → P8 turnovers → P9 warning pass. **No code past
+  P0 until this spec PR is merged and a Workshop task cites the phase's REQ.** Cloud storage, merge of
+  diverged copies, configurable layout and simultaneous multi-user editing stay out.
+- **Built-in PDF viewer (REQ-387, REQ-388, REQ-389, ADR-067, D-2026-10-06-a, issue #732).** Three phases, one PR each: (1) viewer window + every PDF route + off-thread read-ahead cache + `BENCH PDFVIEW`; (2) annotations, Save As; (3) split by page range. **No code until the spec PR is merged and a Workshop task cites the phase's REQ.** Text search, forms, signatures and printing stay out.
+- **PDF measure, compare and change detection (REQ-390, REQ-391, REQ-392, REQ-393, ADR-067 addendum 2, D-2026-10-06-f, issue #732).** Four phases, one PR each: (4) page scale (calibrate / preset, standard Viewport + Measure data); (5) scaled dimensions (length, polylength, area and perimeter, angle); (6) overlay two revisions (tint / opacity / blink) with manual one- and two-point alignment; (7) automatic alignment, automatic change detection, change list and write-as-markups; and, added by D-2026-10-06-h after real-sheet testing, scale blunder detection: (8) a manual Check tool with verdicts and best-fit scale (REQ-394), (9) an automatic audit that reads the sheet's dimension text (REQ-395). **No code until this spec PR is merged and a Workshop task cites the phase's REQ.** Other Bluebeam-style markup tools are unspecified and wait for the user's choice.
 - **File Format Specs (REQ-170–REQ-174, ADR-041/042, D-2026-08-29-g).** Matrix:
   `spec/file-format-specs.md`. Order: LibreDWG MSVC link + R2004 write of a tiny drawing →
   map into CAD stores / retire converter from File open-save → point cloud + PTS → PTX/LAS/LAZ/E57
@@ -324,9 +333,9 @@ A lightweight board that complements the milestones. Keep each column honest.
 - **Parametric constraints** — geometric/dimensional constraint solving.
   Low priority for a survey-focused CAD tool. From Known Limitations,
   2026-08-23.
-- **Dynamic blocks and a block-library browser** — deliberately excluded from
-  REQ-107 (block support, foundational only). From Known Limitations,
-  2026-08-23.
+- **Block-library browser** — deliberately excluded from REQ-107 (block support,
+  foundational only). From Known Limitations, 2026-08-23. **Dynamic blocks** are
+  **REQ-369** / issue #618 (accepted 2026-10-02), not Someday.
 - **`XREF` / external references** — From Known Limitations, 2026-08-23.
 - **`TABLE` command** — depends on block/annotation work landing first
   (REQ-107). From Known Limitations, 2026-08-23.

@@ -1864,6 +1864,22 @@ void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLi
   AppendEntityHighlight(cmd, e, hoverLines, hoverCircles);
 }
 
+void BuildBoxPreviewHighlight(const AppCommandState& cmd, std::vector<float>* previewLines,
+                              std::vector<float>* previewCircles) {
+  previewLines->clear();
+  previewCircles->clear();
+  if (!cmd.selBoxWaitingSecond)
+    return;
+  for (const auto& e : cmd.selBoxPreview) {
+    // Already selected: the selection stroke is drawn over this anyway, so skip the double draw.
+    const bool selected = std::any_of(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& s) {
+      return s.type == e.type && s.index == e.index;
+    });
+    if (!selected)
+      AppendEntityHighlight(cmd, e, previewLines, previewCircles);
+  }
+}
+
 // --- The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b) --------------------------
 
 namespace {

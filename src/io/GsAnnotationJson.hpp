@@ -83,6 +83,8 @@ inline void CadAnnotationToJson(const CadAnnotation& a, nlohmann::json& o) {
     o["ovItalic"] = true;
   if (a.annotative)
     o["annotative"] = true;
+  if (!a.annotativeVisibleScaleNames.empty())
+    o["annotativeVisibleScaleNames"] = a.annotativeVisibleScaleNames;
   o["dimExt1X"] = a.dimExt1X;
   o["dimExt1Y"] = a.dimExt1Y;
   o["dimExt2X"] = a.dimExt2X;
@@ -131,6 +133,8 @@ inline CadAnnotation CadAnnotationFromJson(const nlohmann::json& o) {
   a.ovBold = o.value("ovBold", a.ovBold);
   a.ovItalic = o.value("ovItalic", a.ovItalic);
   a.annotative = o.value("annotative", a.annotative);
+  if (o.contains("annotativeVisibleScaleNames") && o["annotativeVisibleScaleNames"].is_array())
+    a.annotativeVisibleScaleNames = o["annotativeVisibleScaleNames"].get<std::vector<std::string>>();
   a.dimExt1X = o.value("dimExt1X", a.dimExt1X);
   a.dimExt1Y = o.value("dimExt1Y", a.dimExt1Y);
   a.dimExt2X = o.value("dimExt2X", a.dimExt2X);

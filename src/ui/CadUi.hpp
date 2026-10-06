@@ -1,7 +1,9 @@
 #pragma once
 
 #include "CadCommands.hpp"
+#include "ProjectSettings.hpp"  // REQ-375: ProjectSettings, NoteUserPlotScale
 #include "CadSnap.hpp"
+#include "RecentDrawings.hpp"  // recent::Entry, for LoadRecentProjects
 
 #include <imgui.h>
 
@@ -39,6 +41,49 @@ void NewDrawingInTab(AppCommandState& cmd, std::vector<std::string>& log);
 /// Open \p dwgPathUtf8 (or browse when null) into a new focused tab; a path that fails to open is
 /// dropped from the recent list. REQ-055 / REQ-308.
 void OpenDrawingInNewTab(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8);
+
+/// REQ-374 (#696): how a drawing being opened relates to a project. `detect` = walk up from the file to
+/// find a .gsproj (the normal case); otherwise `uid` is the ProjectSession it joins (0 = standalone).
+struct ProjectJoin {
+  bool          detect = true;
+  std::uint32_t uid = 0;
+};
+/// As OpenDrawingInNewTab, with the join decided by the caller. Used to continue after a project prompt.
+void OpenDrawingInNewTabAs(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8,
+                           ProjectJoin join);
+
+// --- Projects (REQ-374 / REQ-382, issue #696 P1) — CadUi_Projects.cpp ---
+/// Detects the drawing's project and opens/joins it. Returns false when the open must stop here (a
+/// prompt was queued, or the project could not be read); *projectUidOut = 0 means standalone.
+bool ResolveProjectJoin(AppCommandState& cmd, std::vector<std::string>& log, const std::string& dwgPath,
+                        std::uint32_t* projectUidOut);
+/// Logs the "Opened in project X" notice (REQ-374 clause 6).
+void NoteProjectJoin(const AppCommandState& cmd, std::vector<std::string>& log, std::uint32_t projectUid);
+/// The project name a tab belongs to, or empty for a standalone drawing / the Start tab.
+std::string ProjectNameForTab(const AppCommandState& cmd, int tabIdx);
+bool        ProjectIsReadOnlyForTab(const AppCommandState& cmd, int tabIdx);
+/// Open Project: opens \p gsprojPathUtf8 (or browses when null) and lands on an empty drawing tab in it.
+void OpenProjectFile(AppCommandState& cmd, std::vector<std::string>& log, const char* gsprojPathUtf8);
+
+/// REQ-380 (#696 P7): unpacks a `.gspack` into an empty folder and opens the project. A null path asks
+/// with a file / folder dialog. Any problem is logged (REQ-201) and nothing is left on disk.
+void OpenPackedProject(AppCommandState& cmd, std::vector<std::string>& log, const char* packPathUtf8,
+                       const char* destFolderUtf8);
+void RemoveRecentProject(const std::string& absGsprojPath);
+std::vector<recent::Entry> LoadRecentProjects();
+/// REQ-375: writes \p ps into the project's .gsproj (atomic) and its open session. False, logged, when the
+/// project is read-only or the file cannot be written; nothing changes then.
+bool SaveProjectSettings(AppCommandState& cmd, std::uint32_t projectUid, const ProjectSettings& ps,
+                         std::vector<std::string>& log);
+/// Closes sessions with no tabs left (releasing their lock). Called every frame by DrawProjectDialogs.
+void ServiceProjects(AppCommandState& cmd, std::vector<std::string>& log);
+/// REQ-383 clause 6: false (and a question raised) when closing drawing tab \p tabIdx would close its
+/// project while the project's point database could not be written. True otherwise.
+bool ProjectTabMayClose(AppCommandState& cmd, int tabIdx, std::vector<std::string>& log);
+/// Releases every held lock; call once on the way out of the app.
+void ReleaseAllProjects(AppCommandState& cmd, std::vector<std::string>& log);
+/// New Project dialog, the lock / damaged-marker prompts, and the per-frame project sweep.
+void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log);
 /// REQ-308 — drop a drawing from the recent-drawings store (used when a recent tile fails to open).
 void RemoveRecentDrawing(const std::string& absDrawingPath);
 void ClearRecentDrawings();
