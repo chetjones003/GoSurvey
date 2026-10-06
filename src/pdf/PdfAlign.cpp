@@ -157,33 +157,39 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
           near = faintAt(x + dx, y + dy);
       only[at] = near ? 0 : 1;
     }
-  // What the OTHER sheet has that this one lacks, with a running 2-D sum so "how much is new on the other sheet inside this
-  // box" is one lookup. A changed word is changed on both sheets, even when one sheet's copy of it happens to sit on top of
-  // ink that is close to the other's (digits of one number over the digits of another).
-  std::vector<uint32_t> integ(static_cast<size_t>(w + 1) * static_cast<size_t>(h + 1), 0);
+  // Is a box (a word, a text run) changed? Judged strictly, pixel on pixel: of all the ink the two sheets have in the box, the
+  // share that has no ink (even faint) at the very same pixel on the other sheet. The sheets are aligned to a fraction of a
+  // pixel and drawn by the same renderer, so the same word differs by almost nothing (0 to 3 % on a real pair) while a word with
+  // even one changed digit differs by 8 % or more; the half-point tolerance used to colour pixels is far too loose for this
+  // (one digit lies within it of another). Two running 2-D sums make a box one lookup.
+  std::vector<uint32_t> diffSum(static_cast<size_t>(w + 1) * static_cast<size_t>(h + 1), 0), inkSum(diffSum.size(), 0);
   for (int y = 0; y < h; ++y) {
-    uint32_t row = 0;
+    uint32_t dRow = 0, iRow = 0;
     for (int x = 0; x < w; ++x) {
-      bool newOnOther = false;
-      if (IsInk(&other.bgra[(static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u])) {
-        newOnOther = true;
-        for (int dy = -tol; dy <= tol && newOnOther; ++dy)
-          for (int dx = -tol; dx <= tol && newOnOther; ++dx)
-            newOnOther = !faintIn(sheet, x + dx, y + dy);
-      }
-      row += newOnOther ? 1u : 0u;
-      integ[static_cast<size_t>(y + 1) * static_cast<size_t>(w + 1) + static_cast<size_t>(x + 1)] = integ[static_cast<size_t>(y) * static_cast<size_t>(w + 1) + static_cast<size_t>(x + 1)] + row;
+      const size_t at = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u;
+      const auto lum = [&](const pdfview::Bitmap& m) { const uint8_t* q = &m.bgra[at]; return (q[0] + q[1] * 2 + q[2]) / 4; };
+      const bool a = lum(sheet) < 110, b = lum(other) < 110; // only well-covered pixels: a blurred edge is not a mark here
+      iRow += (a ? 1u : 0u) + (b ? 1u : 0u);
+      const auto darker = [&](const pdfview::Bitmap& m) { const uint8_t* q = &m.bgra[at]; return (q[0] + q[1] * 2 + q[2]) / 4 < 242; }; // any real darkening counts as ink here
+      dRow += (a && !darker(other) ? 1u : 0u) + (b && !darker(sheet) ? 1u : 0u);
+      const size_t cell = static_cast<size_t>(y + 1) * static_cast<size_t>(w + 1) + static_cast<size_t>(x + 1), up = static_cast<size_t>(y) * static_cast<size_t>(w + 1) + static_cast<size_t>(x + 1);
+      diffSum[cell] = diffSum[up] + dRow;
+      inkSum[cell] = inkSum[up] + iRow;
     }
   }
-  const auto newOnOtherIn = [&](int x0, int y0, int x1, int y1) -> size_t {
+  const auto strictlyChangedIn = [&](int x0, int y0, int x1, int y1) -> bool {
     x0 = std::clamp(x0, 0, w);
     x1 = std::clamp(x1, 0, w);
     y0 = std::clamp(y0, 0, h);
     y1 = std::clamp(y1, 0, h);
     if (x1 <= x0 || y1 <= y0)
-      return 0;
-    const auto at = [&](int x, int y) { return integ[static_cast<size_t>(y) * static_cast<size_t>(w + 1) + static_cast<size_t>(x)]; };
-    return static_cast<size_t>(at(x1, y1) + at(x0, y0) - at(x0, y1) - at(x1, y0));
+      return false;
+    const auto box = [&](const std::vector<uint32_t>& sum) {
+      const auto at = [&](int x, int y) { return sum[static_cast<size_t>(y) * static_cast<size_t>(w + 1) + static_cast<size_t>(x)]; };
+      return static_cast<size_t>(at(x1, y1) + at(x0, y0) - at(x0, y1) - at(x1, y0));
+    };
+    const size_t d = box(diffSum), ink = box(inkSum);
+    return d >= 6 && d * 100 >= ink * 6;
   };
 
   // Clean up by whole objects, not by pixel. Every connected mark of the sheet (a letter, a dash, a dot, a run of line) is
@@ -275,8 +281,8 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
       }
   }
   // A group (a word, a dot pattern) is changed when any letter of it is a sixth or more new, or a few percent of the whole
-  // group is new, or the other sheet has a tenth as much new ink inside the group's box as the group has ink: the last is
-  // what catches a changed number whose digits all sit close to the other number's digits.
+  // group is new, or the box passes the strict pixel-on-pixel test above: the last is what catches a changed number whose
+  // digits all sit close to the other number's digits.
   struct Group {
     int minx = 1 << 30, miny = 1 << 30, maxx = -1, maxy = -1;
     size_t count = 0, marked = 0;
@@ -301,8 +307,7 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
     const Group& g = groups[id];
     if (g.maxx < 0)
       continue;
-    const size_t theirs = newOnOtherIn(g.minx - 1, g.miny - 1, g.maxx + 2, g.maxy + 2);
-    groupChanged[id] = g.anyChanged || (g.marked >= 3 && g.marked * 100 >= g.count * 4) || (theirs >= 6 && theirs * 10 >= g.count) ? 1 : 0;
+    groupChanged[id] = g.anyChanged || (g.marked >= 3 && g.marked * 100 >= g.count * 4) || strictlyChangedIn(g.minx - 1, g.miny - 1, g.maxx + 2, g.maxy + 2) ? 1 : 0;
   }
 
   std::vector<uint8_t> keep(n, 0), big(n, 0);
@@ -330,8 +335,7 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
         inkN += ink[p];
         onlyN += only[p];
       }
-    const size_t theirs = newOnOtherIn(u.x0, u.y0, u.x1, u.y1);
-    const bool changed = (onlyN >= 3 && onlyN * 1000 >= inkN * 25) || (theirs >= 6 && theirs * 100 >= inkN * 4);
+    const bool changed = (onlyN >= 3 && onlyN * 1000 >= inkN * 25) || strictlyChangedIn(u.x0, u.y0, u.x1, u.y1);
     for (int y = u.y0; y < u.y1; ++y)
       for (int x = u.x0; x < u.x1; ++x) {
         const size_t p = static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x);
