@@ -1796,6 +1796,10 @@ struct AppCommandState {
     /// REQ-087. Its own command Kind, unlike 3DPOLY which is a mode of POLYLINE — a feature line
     /// commits to a different store, so the two cannot share a commit path.
     FeatureLine,
+    /// REQ-398 side slope grading. Picks a feature line as its baseline, then sits on an options
+    /// prompt until told to grade, projecting cut and fill slopes out to a surface until they
+    /// daylight. \ref gradingPhase drives it.
+    Grading,
     Arc,
     Ellipse,
     Text,
@@ -2042,6 +2046,7 @@ struct AppCommandState {
     case Kind::Circle:        return "CIRCLE";
     case Kind::Polyline:      return "POLYLINE";
     case Kind::FeatureLine:   return "FEATURELINE";
+    case Kind::Grading:       return "GRADING";
     case Kind::Arc:           return "ARC";
     case Kind::Ellipse:       return "ELLIPSE";
     case Kind::Text:          return "TEXT";
@@ -3155,6 +3160,28 @@ struct AppCommandState {
   std::vector<uint8_t> featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
   std::vector<EntityAttributes> featureLineAttrs;
+
+  /// GRADING (REQ-398): pick the baseline feature line, then sit on an options prompt offering the
+  /// cut slope, the fill slope, the target surface and — for an open baseline only — which side to
+  /// grade. Enter grades. Every value is remembered between runs in a drawing, because a site is
+  /// normally graded to one surface at one pair of slopes and only the baseline changes.
+  enum class GradingPhase {
+    WaitBaseline,
+    WaitOptions,
+    WaitCutSlope,
+    WaitFillSlope,
+    WaitSurfaceName,
+    WaitSide,
+  } gradingPhase = GradingPhase::WaitBaseline;
+  /// The baseline, held by **stable entity id** and never by array index — REQ-076's own words,
+  /// which say "never an array index, so an edit that compacts the store cannot silently retarget
+  /// the reference". Resolved to an index only at the moment it is used.
+  std::uint64_t gradingBaselineId = 0;
+  double gradingCutRun = 2.0;      ///< run of run:rise where the design sits BELOW ground
+  double gradingFillRun = 3.0;     ///< ...and ABOVE it. Separate values, per D-2026-10-05-b.
+  std::string gradingSurface;      ///< target surface name, remembered between runs
+  bool gradingSideLeft = true;     ///< open baselines only; meaningless for a closed one
+  bool gradingSideChosen = false;  ///< an open baseline must be told, so this starts false
 
   /// FEATURELINE command draft — XYZ vertices, and the elevation-point flag for each.
   std::vector<float> featureLineDraftVerts;
@@ -6997,6 +7024,8 @@ bool DeleteFeatureLineElevationPoint(AppCommandState& st, int flNumber, int poin
 /// REQ-085: POLYLINE with per-vertex elevation entry. Shares POLYLINE's draft and `Kind` — the store
 /// is already stride-3 XYZ and the two commands differ only in where a vertex's Z comes from.
 void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log);
+/// REQ-398 — GRADING: side slopes from a feature line baseline out to a surface.
+void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
 
@@ -7045,6 +7074,10 @@ void StartPlanCommand(AppCommandState& st, std::vector<std::string>& log);
 /// consumed. Shared by the command line and the at-cursor dynamic input (REQ-024), so both accept
 /// exactly the same keywords.
 bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
+/// REQ-398 — one typed line while GRADING is running. Reached from the blank-line branch too,
+/// because a bare Enter is GRADING's action rather than a no-op.
+void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
+                               std::vector<std::string>& log);
 bool ProcessPlanCommandLine(AppCommandState& st, const std::string& line, std::vector<std::string>& log);
 
 /// Feed a viewport pick (world coordinates) to the UCS command. Returns true when consumed.
