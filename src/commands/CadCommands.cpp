@@ -4451,6 +4451,7 @@ void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vec
 /// EXTRACT (REQ-071) — defined further down, beside the layer helpers it needs, and declared here
 /// because the command dispatch above reaches it first.
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void ExecuteDrapeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 
 // SURFSTYLE (REQ-070) — the command form of the Surface Style editor.
 //
@@ -24350,6 +24351,205 @@ int AppendContoursAsPolylines(AppCommandState& st, const ContourResult& r, const
   return made;
 }
 
+
+/// `DRAPE <surface>` — lay the selection on a surface, each vertex taking the elevation of the
+/// ground under it (REQ-074's query; GitHub issue #150, 3D Phase 7).
+///
+/// **Baked, with no stored reference** (ADR-062 (a)): the elevations are stamped once and the result
+/// is ordinary geometry, so a drawing does not change shape later because someone edited a surface.
+/// The opt-in link is a later increment and needs nothing changed here — it adds a field, it does
+/// not change what this computes.
+///
+/// A vertex the surface does not cover is not draped, and its whole entity is refused by name with
+/// the count (ADR-062 (f)). `TinElevationAt` never extrapolates (REQ-074), so there is no elevation
+/// to give it; draping the covered vertices and leaving the rest at their old height would make a
+/// shape that is neither the original nor the ground — wrong in a way that looks plausible, which
+/// REQ-201 forbids. Every other entity in the selection still drapes.
+void ExecuteDrapeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  auto typeName = [](SelectedEntity::Type t) -> const char* {
+    switch (t) {
+      case SelectedEntity::Type::LineSeg: return "line";
+      case SelectedEntity::Type::Polyline: return "polyline";
+      case SelectedEntity::Type::FeatureLine: return "feature line";
+      case SelectedEntity::Type::Circle: return "circle";
+      case SelectedEntity::Type::Arc: return "arc";
+      case SelectedEntity::Type::Ellipse: return "ellipse";
+      case SelectedEntity::Type::Solid: return "solid";
+      default: return "object";
+    }
+  };
+
+  std::string surfaceName = StringUtil::trimCopy(args);
+  // Same disambiguation as EXTRACT: one surface needs no naming, several are listed rather than
+  // guessed, because picking silently is how the wrong surface gets used.
+  if (surfaceName.empty()) {
+    if (st.cadSurfaces.size() == 1) {
+      surfaceName = st.cadSurfaces[0].name;
+    } else if (st.cadSurfaces.empty()) {
+      log.push_back("DRAPE - the drawing has no surfaces.");
+      return;
+    } else {
+      std::string names;
+      for (const CadSurface& s : st.cadSurfaces)
+        names += (names.empty() ? "" : ", ") + s.name;
+      log.push_back("DRAPE - usage: DRAPE <surface>. Surfaces: " + names + ".");
+      return;
+    }
+  }
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0) {
+    log.push_back("DRAPE - no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!surf.tin || surf.tin->indices.empty()) {
+    log.push_back("DRAPE - \"" + surf.name + "\" has never been built; nothing to drape onto.");
+    return;
+  }
+  if (st.selection.empty()) {
+    log.push_back("DRAPE - select the objects to drape first.");
+    return;
+  }
+
+  // The same per-surface index SURFELEV's walk builds and caches, keyed by stable id and TIN pointer
+  // (REQ-126 / ADR-039 (c)); a drape of a long feature line would otherwise rescan every triangle
+  // once per vertex.
+  const std::uint64_t surfId = static_cast<size_t>(si) < st.cadSurfaceAttrs.size()
+                                   ? st.cadSurfaceAttrs[static_cast<size_t>(si)].id
+                                   : 0;
+  const TinSpatialIndex* index = nullptr;
+  for (AppCommandState::SurfaceQueryCacheEntry& e : st.surfaceQueryCache) {
+    if (e.surfaceId == surfId && e.builtFrom.lock() == surf.tin) {
+      index = &e.index;
+      break;
+    }
+  }
+  if (!index) {
+    AppCommandState::SurfaceQueryCacheEntry e;
+    e.surfaceId = surfId;
+    e.builtFrom = surf.tin;
+    e.index = BuildTinSpatialIndex(surf.tin->vertsXyz, surf.tin->indices);
+    st.surfaceQueryCache.push_back(std::move(e));
+    index = &st.surfaceQueryCache.back().index;
+  }
+  auto groundAt = [&](double x, double y, double* outZ) {
+    return (index && !index->empty())
+               ? TinElevationAtIndexed(surf.tin->vertsXyz, surf.tin->indices, *index, x, y, outZ)
+               : TinElevationAt(surf.tin->vertsXyz, surf.tin->indices, x, y, outZ);
+  };
+
+  // Every vertex the selection offers, gathered per entity BEFORE any of them is written: an entity
+  // is all-or-nothing, so its vertices must be known to be covered before the first one moves.
+  struct Target {
+    SelectedEntity::Type type = SelectedEntity::Type::LineSeg;
+    std::vector<double*> z;
+    std::vector<double> x;
+    std::vector<double> y;
+  };
+  std::vector<Target> targets;
+  int refusedKind = 0;
+  std::string firstKindRefused;
+
+  auto gatherRun = [&](Target& t, const std::vector<int>& offsets, std::vector<double>& verts, int pi) {
+    if (pi < 0 || static_cast<size_t>(pi) + 1 >= offsets.size())
+      return;
+    const int v0 = offsets[static_cast<size_t>(pi)];
+    const int v1 = offsets[static_cast<size_t>(pi) + 1];
+    for (int vi = v0; vi < v1; ++vi) {
+      const size_t k = static_cast<size_t>(vi) * 3;
+      if (k + 2 >= verts.size())
+        break;
+      t.x.push_back(verts[k]);
+      t.y.push_back(verts[k + 1]);
+      t.z.push_back(&verts[k + 2]);
+    }
+  };
+
+  for (const SelectedEntity& sel : st.selection) {
+    Target t;
+    t.type = sel.type;
+    switch (sel.type) {
+    case SelectedEntity::Type::LineSeg: {
+      const size_t k = static_cast<size_t>(sel.index) * 6;
+      if (sel.index < 0 || k + 5 >= st.userLinesFlat.size())
+        continue;
+      for (size_t e = 0; e < 2; ++e) {
+        t.x.push_back(st.userLinesFlat[k + e * 3]);
+        t.y.push_back(st.userLinesFlat[k + e * 3 + 1]);
+        t.z.push_back(&st.userLinesFlat[k + e * 3 + 2]);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Polyline:
+      gatherRun(t, st.userPolylineOffsets, st.userPolylineVerts, sel.index);
+      break;
+    case SelectedEntity::Type::FeatureLine:
+      gatherRun(t, st.featureLineOffsets, st.featureLineVerts, sel.index);
+      break;
+    default:
+      // A circle, arc or ellipse cannot be draped and still be itself: its shape is not a list of
+      // vertices, and giving sampled points the ground's height would leave something that is no
+      // longer a circle. Refused by name (REQ-201), never silently skipped.
+      ++refusedKind;
+      if (firstKindRefused.empty())
+        firstKindRefused = typeName(sel.type);
+      continue;
+    }
+    if (!t.z.empty())
+      targets.push_back(std::move(t));
+  }
+
+  // Resolve every elevation before writing any, so a refusal costs nothing and the undo entry is
+  // pushed only when something is actually going to move.
+  struct Resolved {
+    std::vector<double*> z;
+    std::vector<double> newZ;
+  };
+  std::vector<Resolved> ready;
+  for (const Target& t : targets) {
+    Resolved r;
+    int off = 0;
+    for (size_t i = 0; i < t.z.size(); ++i) {
+      double z = 0.0;
+      if (!groundAt(t.x[i], t.y[i], &z)) {
+        ++off;
+        continue;
+      }
+      r.newZ.push_back(z);
+      r.z.push_back(t.z[i]);
+    }
+    if (off > 0) {
+      log.push_back(std::string("DRAPE - ") + typeName(t.type) + " not draped: " + std::to_string(off) +
+                    " of " + std::to_string(t.z.size()) + " vertices are off \"" + surf.name + "\".");
+      continue;
+    }
+    ready.push_back(std::move(r));
+  }
+
+  if (ready.empty()) {
+    if (refusedKind > 0)
+      log.push_back("DRAPE - nothing draped: " + std::to_string(refusedKind) + " selected object(s) (" +
+                    firstKindRefused + ") cannot be draped.");
+    else
+      log.push_back("DRAPE - nothing draped.");
+    return;
+  }
+
+  PushUndoSnapshot(st, "Drape");
+  int moved = 0;
+  for (const Resolved& r : ready) {
+    for (size_t i = 0; i < r.z.size(); ++i)
+      *r.z[i] = r.newZ[i];
+    ++moved;
+  }
+  BumpCadGpuCache(st);
+  std::string msg =
+      "DRAPE - " + std::to_string(moved) + " object(s) draped onto \"" + surf.name + "\".";
+  if (refusedKind > 0)
+    msg += " " + std::to_string(refusedKind) + " could not be draped (" + firstKindRefused + ").";
+  log.push_back(msg);
+}
+
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   SurfaceStyles::EnsureStandard(st.surfaceStyles);
 
@@ -42018,6 +42218,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     // REQ-071. `EXTRACT <surface>[, <layer>]` — comma-separated, because a surface name and a layer
     // name both routinely contain spaces.
+    // GitHub #150 (3D Phase 7). `DRAPE <surface>` - lay the selection on the ground. Baked, with
+    // no stored reference (ADR-062 (a)); the opt-in link is a later increment.
+    if (plotTok == "drape") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteDrapeCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
     if (plotTok == "extract") {
       std::string rest;
       std::getline(issIdle, rest);

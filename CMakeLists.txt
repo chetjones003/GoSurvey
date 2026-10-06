@@ -1392,6 +1392,9 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessPdfAttach.cpp
     tests/CadFieldTests.cpp
     tests/CadSnapTests.cpp
+    # DRAPE needs the surface stores and ProcessCommandLineSubmit, both in gosurvey_domain,
+    # so it rides with GoSurveySnapTests like the other command tests above.
+    tests/DrapeCommandTests.cpp
     tests/GsIoDimAngularTests.cpp
     tests/GsIoPipeRunTests.cpp
     tests/GsIoViewportCameraTests.cpp
