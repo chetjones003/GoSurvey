@@ -776,6 +776,10 @@ struct Viewer {
   bool osFramed = true;    ///< floating in its own OS window: the OS draws the title bar, so ImGui draws none
   void* framedHwnd = nullptr;  ///< the OS window whose frame colours were last set
   int framedFrames = 0;        ///< frames the viewer has had its own OS window, counted through the opening maximize steps
+  int syncBad = 0;             ///< consecutive frames ImGui's idea of the window differed from the OS's
+  int syncLogged = 0;
+  bool syncApply = false;      ///< next frame, put ImGui's window where the OS window really is
+  ImVec2 syncPos{0.f, 0.f}, syncSize{0.f, 0.f};
   bool maximized = false;     ///< the window has been maximized once, on opening (REQ-397); after that it is the user's
   bool placed = false; ///< first-frame position given; after that the user (or the saved layout) owns it
   std::future<PdfDocument::OpenResult> opening;
@@ -3167,6 +3171,11 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
       ImGui::SetNextWindowPos(ImVec2(host->WorkPos.x + 80.f + off, host->WorkPos.y + 60.f + off), ImGuiCond_Always);
       v.placed = true;
     }
+    if (v.syncApply) { // ImGui's window was out of step with the OS window: take the OS's position and size
+      ImGui::SetNextWindowPos(v.syncPos, ImGuiCond_Always);
+      ImGui::SetNextWindowSize(v.syncSize, ImGuiCond_Always);
+      v.syncApply = false;
+    }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
     // In its own OS window the operating system draws the title bar and the close button, so ImGui draws no
     // second one. Docked, the tab is the only handle there is, so it comes back. To dock a floating viewer,
@@ -3196,6 +3205,31 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
         }
         if (step >= 10)
           v.maximized = true;
+      }
+      // Self-check (REQ-397): ImGui must think the window is exactly where the OS has it, or the mouse lands on
+      // the wrong button (seen after the opening maximize). If the two stay apart for a few frames, say so in the
+      // log and set ImGui's window to the OS's position and size.
+      if (v.osFramed && v.framedHwnd != nullptr && !IsIconic(static_cast<HWND>(v.framedHwnd))) {
+        POINT origin{0, 0};
+        RECT client{};
+        ClientToScreen(static_cast<HWND>(v.framedHwnd), &origin);
+        GetClientRect(static_cast<HWND>(v.framedHwnd), &client);
+        const ImVec2 vp = self->Viewport->Pos, vs = self->Viewport->Size;
+        const bool apart = std::fabs(vp.x - static_cast<float>(origin.x)) > 1.5f || std::fabs(vp.y - static_cast<float>(origin.y)) > 1.5f ||
+                           std::fabs(vs.x - static_cast<float>(client.right)) > 1.5f || std::fabs(vs.y - static_cast<float>(client.bottom)) > 1.5f;
+        v.syncBad = apart && !ImGui::IsMouseDown(ImGuiMouseButton_Left) ? v.syncBad + 1 : 0;
+        if (v.syncBad >= 3 && !v.syncApply) {
+          v.syncPos = ImVec2(static_cast<float>(origin.x), static_cast<float>(origin.y));
+          v.syncSize = ImVec2(static_cast<float>(client.right), static_cast<float>(client.bottom));
+          v.syncApply = true;
+          v.syncBad = 0;
+          if (v.syncLogged++ < 5) {
+            char msg[200];
+            std::snprintf(msg, sizeof(msg), "PDF viewer: window out of step (ImGui %.0f,%.0f %.0fx%.0f; OS %ld,%ld %ldx%ld) - corrected.",
+                          vp.x, vp.y, vs.x, vs.y, origin.x, origin.y, client.right, client.bottom);
+            log.push_back(msg);
+          }
+        }
       }
 #endif
     }
