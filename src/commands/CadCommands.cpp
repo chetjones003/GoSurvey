@@ -6740,6 +6740,7 @@ const CmdEntry kRegistry[] = {
     {"georeorientmarker", "", "Set the geographic marker: a design point, then north"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
     {"pdfview", "pv", "Open a PDF in the built-in viewer (REQ-387)"},
+    {"pdfsplit", "", "Save chosen pages of the open PDF as a new PDF (REQ-389)"},
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
     {"quickselect",  "qs", "Select by object properties"},
@@ -7492,6 +7493,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   if (primary == "pdfview") {  // REQ-387: the built-in PDF viewer; the window shows the file dialog
     st.pdfViewerPickRequest = true;
     log.push_back("PDFVIEW — choose a PDF to open in the viewer.");
+    return true;
+  }
+  if (primary == "pdfsplit") {  // REQ-389: the viewer window shows the Split dialog
+    st.pdfSplitRequest = true;
     return true;
   }
   if (primary == "pdfattach" || primary == "pdfatt") {
