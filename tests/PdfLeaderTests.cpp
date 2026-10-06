@@ -155,6 +155,59 @@ TEST_CASE("a leader line leaves the box edge nearest the tip", "[pdfannot][req39
   CHECK(Near(g.sy, std::max(a.y0, a.y1)));
 }
 
+// REQ-397: romans.shx is the default font; a PDF cannot embed an SHX font, so its text is written as strokes.
+TEST_CASE("romans.shx text is measured exactly and written to the PDF as strokes", "[pdfannot][req397][issue732]") {
+  if (StrokeFontFor("romans.shx", "A") == nullptr) {
+    WARN("romans.shx is not installed on this machine; the stroke-font checks are skipped");
+    return;
+  }
+  float w1 = 0, h1 = 0, w2 = 0, h2 = 0, wm = 0, hm = 0;
+  MeasureText("romans.shx", "A", 10.f, w1, h1);
+  MeasureText("romans.shx", "AA", 10.f, w2, h2);
+  MeasureText("romans.shx", "A\nA", 10.f, wm, hm);
+  CHECK(w1 > 1.f);
+  CHECK(Near(w2, 2.f * w1, 0.01f));
+  CHECK(Near(h1, 10.f * kStrokeLineSpacing));
+  CHECK(Near(hm, 2.f * h1));
+  CHECK(Near(wm, w1, 0.01f));
+  CHECK(StrokeFontFor("romans.shx", "45\xc2\xb0") == nullptr); // no degree glyph: falls back to a normal font
+  CHECK(StrokeFontFor("Helvetica", "A") == nullptr);
+
+  const auto src = WriteBytes("gs_shx_src.pdf", MakeSyntheticPdf(1, 0, 0));
+  const auto dst = TempPath("gs_shx_out.pdf");
+  std::filesystem::remove(dst);
+  Annot note = Note(0, 100.f, 400.f, "HELLO", 20.f);
+  note.font = "romans.shx";
+  note.color = 0xFF0000;
+  float w = 0, h = 0;
+  MeasureText(note.font, note.text, note.fontSize, w, h);
+  note.x1 = note.x0 + w;
+  note.y0 = note.y1 - h;
+  const std::string err = SaveAnnotated(src, {note}, dst);
+  INFO(err);
+  REQUIRE(err.empty());
+  const std::vector<Annot> back = ReadAnnotations(dst);
+  REQUIRE(back.size() == 1);
+  CHECK(back[0].font == "romans.shx");
+  CHECK(back[0].text == "HELLO");
+  auto d = PdfDocument::Open(dst);
+  REQUIRE(d.doc != nullptr);
+  const PageSize ps = d.doc->Sizes()[0];
+  Bitmap bm;
+  REQUIRE(d.doc->RenderPage(0, static_cast<int>(ps.wPt), static_cast<int>(ps.hPt), bm, [] { return false; }));
+  int red = 0; // the strokes put red pixels inside the note's box
+  for (int y = static_cast<int>(ps.hPt - note.y1); y <= static_cast<int>(ps.hPt - note.y0); ++y)
+    for (int x = static_cast<int>(note.x0); x <= static_cast<int>(note.x1); ++x) {
+      const uint8_t* p = bm.bgra.data() + (static_cast<size_t>(y) * bm.w + static_cast<size_t>(x)) * 4u;
+      if (p[2] > 200 && p[1] < 80 && p[0] < 80)
+        ++red;
+    }
+  CHECK(red > 20);
+  d.doc.reset();
+  std::filesystem::remove(src);
+  std::filesystem::remove(dst);
+}
+
 TEST_CASE("a note whose box starts at the clicked point is stored with its left at x and its top at y",
           "[pdfannot][req396][issue732]") {
   const auto src = WriteBytes("gs_note_src.pdf", MakeSyntheticPdf(1, 0, 0));

@@ -11951,6 +11951,38 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-j; the user asked for the fixes and the Leader tool).
 
+### REQ-397 — PDF viewer defaults: opens maximized; romans.shx is the default font (GitHub issue #732)
+
+- Purpose: the user asked that a PDF opens as large as the screen allows, and that every piece of text the viewer
+  adds (notes, leaders, dimension labels) uses the drafting font romans.shx unless told otherwise.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-k.
+- Depends on: REQ-387, REQ-388, REQ-391, REQ-396.
+- Statement:
+  1. **Opens maximized.** A PDF viewer window that opens as its own window is **maximized** the first time it
+     appears. After that the window belongs to the user (resize, restore, dock). A viewer that opens docked is
+     unchanged.
+  2. **romans.shx is the default and the first entry of the font list** for Text, Leader and the dimension labels
+     (Length, Polylength, Area, Angle). The font list on the dimension row lets the label font be changed too. If
+     romans.shx is not installed, the list falls back to Helvetica as before.
+  3. **A PDF cannot embed an SHX font**, so text in an SHX font is written as **stroked line paths** (the way the
+     plot-to-PDF already writes SHX text), in the annotation's appearance, with the text itself kept in the
+     annotation's contents. It looks the same in every reader; it is not selectable text there. The text height is
+     the font size (cap height); lines are 1.5 text heights apart; the on-screen drawing and the saved file use the
+     same strokes and the same measured width.
+  4. **Degree sign:** SHX fonts have no degree glyph, so a label containing one (an angle dimension) is set in a
+     standard font instead (as the plot does).
+- Acceptance:
+  - `[issue732][req397]` test: `MeasureText` for romans.shx is exact (two letters = twice one; two lines = twice the
+    height; a degree sign is refused for stroke drawing).
+  - `[issue732][req397]` test: a note in romans.shx saved and re-read keeps the font name and text, and the saved
+    page shows its strokes inside the note's box.
+  - Manual: a new PDF window opens maximized; new Text, Leader and dimension labels appear in romans.shx.
+- Owner-layer: Domain/IO (`src/pdf/`), UI
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-k; the user asked for both).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

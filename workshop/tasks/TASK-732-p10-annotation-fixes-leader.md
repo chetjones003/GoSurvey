@@ -10,3 +10,9 @@
 - Verified: 4 new test cases (callout bytes and read-back, drawn pixels for box edge and arrow line, nearest-edge geometry, note position); all 48 `[issue732]` cases pass.
 - Not verified by a person: the mouse flow on screen (click-click Line with live preview, Text landing at the click, drawing a Leader and typing its note). Synthetic mouse input cannot drive these frames.
 - Assumptions: leader box is placed with its top-left at the second click; the arrowhead is a filled triangle drawn in the appearance (readers that rebuild the appearance from `/LE` draw an open arrow); the box is outlined, not filled, on screen and in the file.
+
+## Addendum: defaults (REQ-397, D-2026-10-06-k)
+- The viewer window is maximized once when it first opens as an OS window (`ShowWindow(SW_MAXIMIZE)`, flag `Viewer::maximized`).
+- romans.shx is the first font in the list (when installed) so it is the default for Text, Leader and dimension labels; dimension annotations now carry a `font`, with a font list on the dimension row.
+- SHX text is written as stroked paths (`StrokeLine`), measured with `MeasureText`, and drawn on screen with the same strokes (`DrawStrokeBlock`). `windows.h` renames `DrawText`, so `PdfViewerWindow.cpp` undefines it after the include.
+- Tests: `[req397]` case in `tests/PdfLeaderTests.cpp`; `src/font/ShxFont.cpp` added to the test target. Not verified by a person: the look of the strokes on screen and in another reader, and the maximize on the real window.

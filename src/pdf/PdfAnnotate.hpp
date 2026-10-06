@@ -13,6 +13,10 @@
 #include <string>
 #include <vector>
 
+namespace Shx {
+class Font;
+}
+
 namespace pdfview {
 
 struct Annot {
@@ -128,6 +132,17 @@ struct LeaderGeom {
   float w1x = 0.f, w1y = 0.f, w2x = 0.f, w2y = 0.f; ///< the arrowhead's two back corners
 };
 LeaderGeom LeaderLine(const Annot& a);
+
+/// REQ-397: the line pitch of stroke (SHX) text, as a multiple of its text height (CAD's 5/3 is too loose for notes).
+constexpr float kStrokeLineSpacing = 1.5f;
+
+/// The SHX stroke font to draw \p text in when \p family names one (romans.shx) and it is installed, else null
+/// (use a TrueType / standard PDF font). Null too when the text has a degree sign: SHX fonts have no glyph for it.
+Shx::Font* StrokeFontFor(const std::string& family, const std::string& text);
+
+/// The size of \p utf8 set in \p family at \p size points (the text height for a stroke font): exact advances for a
+/// stroke font, EstimateTextBox's estimate otherwise.
+void MeasureText(const std::string& family, const std::string& utf8, float size, float& wPt, float& hPt);
 
 /// A text annotation's size estimate in points (no font is loaded): used to size a new note's box.
 void EstimateTextBox(const std::string& utf8, float fontSize, float& wPt, float& hPt);
