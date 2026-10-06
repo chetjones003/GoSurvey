@@ -6,6 +6,7 @@
 
 #include <fpdf_edit.h>
 #include <fpdf_progressive.h>
+#include <fpdf_text.h>
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
@@ -446,6 +447,138 @@ bool PdfDocument::SnapPoints(int page, std::vector<SnapPoint>& out, const std::f
   FPDF_ClosePage(p);
   if (cancel()) {
     out.clear();
+    return false;
+  }
+  return true;
+}
+
+namespace {
+
+// REQ-395: text runs (string and box) and straight strokes, in viewer coordinates.
+struct AuditCtx {
+  const std::function<bool()>& cancel;
+  Mat toViewer;
+  FPDF_TEXTPAGE textPage;
+  std::vector<DimText>& texts;
+  std::vector<DimSeg>& segs;
+  size_t visited = 0;
+  bool stop = false;
+
+  bool ToViewer(const Mat& m, float x, float y, float& vx, float& vy) const {
+    const float ux = m.a * x + m.c * y + m.e, uy = m.b * x + m.d * y + m.f;
+    vx = toViewer.a * ux + toViewer.c * uy + toViewer.e;
+    vy = toViewer.b * ux + toViewer.d * uy + toViewer.f;
+    return std::isfinite(vx) && std::isfinite(vy);
+  }
+  void Seg(float ax, float ay, float bx, float by) {
+    if (std::fabs(ax - bx) > 0.f || std::fabs(ay - by) > 0.f)
+      segs.push_back({ax, ay, bx, by});
+  }
+};
+
+void CollectAudit(FPDF_PAGEOBJECT obj, const Mat& outer, int depth, AuditCtx& ctx) {
+  if (ctx.stop || obj == nullptr || depth > 8)
+    return;
+  if ((++ctx.visited & 255u) == 0 && ctx.cancel()) {
+    ctx.stop = true;
+    return;
+  }
+  const int type = FPDFPageObj_GetType(obj);
+  if (type == FPDF_PAGEOBJ_TEXT) {
+    float l = 0.f, b = 0.f, r = 0.f, t = 0.f;
+    if (!FPDFPageObj_GetBounds(obj, &l, &b, &r, &t))
+      return;
+    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+    for (const std::pair<float, float> c : {std::pair<float, float>{l, b}, {r, b}, {l, t}, {r, t}}) {
+      float vx = 0.f, vy = 0.f;
+      if (!ctx.ToViewer(outer, c.first, c.second, vx, vy))
+        return;
+      x0 = std::min(x0, vx);
+      x1 = std::max(x1, vx);
+      y0 = std::min(y0, vy);
+      y1 = std::max(y1, vy);
+    }
+    const unsigned long bytes = FPDFTextObj_GetText(obj, ctx.textPage, nullptr, 0);
+    if (bytes < 4 || bytes > 4096)
+      return;
+    std::vector<FPDF_WCHAR> w(bytes / sizeof(FPDF_WCHAR) + 1, 0);
+    FPDFTextObj_GetText(obj, ctx.textPage, w.data(), bytes);
+    std::string utf8; // the drawings' value text is ASCII; anything else is kept as '?' (it cannot be a length anyway)
+    for (size_t i = 0; i < w.size() && w[i] != 0; ++i)
+      utf8.push_back(w[i] < 0x80 ? static_cast<char>(w[i]) : (w[i] == 0x2019 || w[i] == 0x2032 ? '\'' : w[i] == 0x201D || w[i] == 0x2033 ? '"' : '?'));
+    while (!utf8.empty() && static_cast<unsigned char>(utf8.back()) <= ' ') // PDFium may end a run with a space or a break
+      utf8.pop_back();
+    if (!utf8.empty())
+      ctx.texts.push_back({std::move(utf8), x0, y0, x1, y1});
+  } else if (type == FPDF_PAGEOBJ_PATH) {
+    FS_MATRIX fm{1, 0, 0, 1, 0, 0};
+    FPDFPageObj_GetMatrix(obj, &fm);
+    const Mat t = Then(Mat{fm.a, fm.b, fm.c, fm.d, fm.e, fm.f}, outer);
+    const int n = FPDFPath_CountSegments(obj);
+    float fx = 0.f, fy = 0.f, px = 0.f, py = 0.f; // the subpath's first point and the previous one
+    bool have = false;
+    for (int i = 0; i < n && !ctx.stop; ++i) {
+      FPDF_PATHSEGMENT seg = FPDFPath_GetPathSegment(obj, i);
+      if (seg == nullptr)
+        continue;
+      const int st = FPDFPathSegment_GetType(seg);
+      float x = 0.f, y = 0.f, vx = 0.f, vy = 0.f;
+      if (!FPDFPathSegment_GetPoint(seg, &x, &y) || !ctx.ToViewer(t, x, y, vx, vy)) {
+        have = false;
+        continue;
+      }
+      if (st == FPDF_SEGMENT_MOVETO) {
+        fx = px = vx;
+        fy = py = vy;
+        have = true;
+      } else if (st == FPDF_SEGMENT_LINETO) {
+        if (have)
+          ctx.Seg(px, py, vx, vy);
+        px = vx;
+        py = vy;
+      } else { // a curve is not a dimension line; its end only moves the pen
+        px = vx;
+        py = vy;
+      }
+      if (FPDFPathSegment_GetClose(seg) && have)
+        ctx.Seg(px, py, fx, fy);
+    }
+  } else if (type == FPDF_PAGEOBJ_FORM) {
+    FS_MATRIX fm{1, 0, 0, 1, 0, 0};
+    FPDFPageObj_GetMatrix(obj, &fm);
+    const Mat inner = Then(Mat{fm.a, fm.b, fm.c, fm.d, fm.e, fm.f}, outer);
+    const unsigned long n = static_cast<unsigned long>(FPDFFormObj_CountObjects(obj));
+    for (unsigned long i = 0; i < n && !ctx.stop; ++i)
+      CollectAudit(FPDFFormObj_GetObject(obj, i), inner, depth + 1, ctx);
+  }
+}
+
+} // namespace
+
+bool PdfDocument::AuditPageData(int page, std::vector<DimText>& texts, std::vector<DimSeg>& segs,
+                                const std::function<bool()>& cancel) {
+  texts.clear();
+  segs.clear();
+  if (page < 0 || page >= PageCount())
+    return false;
+  std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
+  FPDF_PAGE p = FPDF_LoadPage(impl_->doc, page);
+  if (p == nullptr)
+    return false;
+  FPDF_TEXTPAGE tp = FPDFText_LoadPage(p);
+  if (tp == nullptr) {
+    FPDF_ClosePage(p);
+    return false;
+  }
+  AuditCtx ctx{cancel, ViewerMatrix(p), tp, texts, segs, 0, false};
+  const int n = FPDFPage_CountObjects(p);
+  for (int i = 0; i < n && !ctx.stop; ++i)
+    CollectAudit(FPDFPage_GetObject(p, i), Mat{}, 0, ctx);
+  FPDFText_ClosePage(tp);
+  FPDF_ClosePage(p);
+  if (cancel && cancel()) {
+    texts.clear();
+    segs.clear();
     return false;
   }
   return true;
