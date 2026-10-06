@@ -713,6 +713,12 @@ void PdfCompare::DrawSheet(std::vector<std::string>& log) {
     pendY_ = std::max(0.f, (pendY_ >= 0.f ? pendY_ : ImGui::GetScrollY()) + 8.f);
   }
 
+  if (centerReq_ >= 0 && centerReq_ < static_cast<int>(regions_.size()) && !raw) { // zoom so the chosen area fills most of the view
+    const pdfdiff::Region& z = regions_[static_cast<size_t>(centerReq_)];
+    const float fitX = (avail.x - ImGui::GetStyle().ScrollbarSize) * 0.6f / std::max(1.f, static_cast<float>(z.Width()));
+    const float fitY = (avail.y - ImGui::GetStyle().ScrollbarSize) * 0.6f / std::max(1.f, static_cast<float>(z.Height()));
+    pxPerPt_ = std::clamp(std::min(fitX, fitY), 0.05f, 6.f); // a tiny area is not blown up past 6 px per point
+  }
   const float pw = vs.wPt * pxPerPt_, ph = vs.hPt * pxPerPt_;
   const float contentW = std::max(avail.x, pw + 2 * kMarginPx);
   if (centerReq_ >= 0 && centerReq_ < static_cast<int>(regions_.size()) && !raw) { // a region chosen in the list or by N / P
