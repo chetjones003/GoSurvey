@@ -816,6 +816,8 @@ set_source_files_properties(src/pdf/PdfAttach.cpp PROPERTIES SKIP_PRECOMPILE_HEA
 set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-template.gst")
 set(GOSURVEY_WHATS_NEW_MD "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new.md")
 set(GOSURVEY_WHATS_NEW_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new-bg.png")
+set(GOSURVEY_WHATS_NEW_IMG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new")
+file(GLOB GOSURVEY_WHATS_NEW_IMAGES CONFIGURE_DEPENDS "${GOSURVEY_WHATS_NEW_IMG_DIR}/*.png")
 set(GOSURVEY_SPLASH_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/splash-bg.png")
 # REQ-336: the billboard content must exist at configure time so a missing file fails the build,
 # not only a packaged installer.
@@ -847,6 +849,7 @@ set(GOSURVEY_BUNDLED_RESOURCE_FILES
   "${GOSURVEY_WHATS_NEW_MD}"
   "${GOSURVEY_WHATS_NEW_BG}"
   "${GOSURVEY_SPLASH_BG}"
+  ${GOSURVEY_WHATS_NEW_IMAGES}
   ${GOSURVEY_RESOURCE_DIR_FILES})
 set(_GOSURVEY_RESOURCE_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_resources.stamp")
 add_custom_command(
@@ -863,6 +866,7 @@ add_custom_command(
           "${CMAKE_CURRENT_BINARY_DIR}/resources/blocks"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/fonts"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/wiki"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/whats-new"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/default-template.gst"
@@ -890,6 +894,9 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/wiki"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${GOSURVEY_WHATS_NEW_IMG_DIR}"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/whats-new"
   COMMAND ${CMAKE_COMMAND} -E touch "${_GOSURVEY_RESOURCE_STAMP}"
   COMMENT "Stage bundled resources beside GoSurvey executable")
 add_custom_target(gosurvey_stage_resources DEPENDS "${_GOSURVEY_RESOURCE_STAMP}")

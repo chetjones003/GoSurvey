@@ -26,7 +26,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <string>
+#include <unordered_map>
 
 namespace {
 
@@ -141,6 +143,41 @@ BackdropTex& WhatsNewBackdrop() {
       slot.tex = LoadIconTextureRgba(path, &slot.w, &slot.h);
   }
   return slot;
+}
+
+struct WhatsNewImageCacheEntry {
+  unsigned int tex = 0;
+  int          w = 0;
+  int          h = 0;
+};
+
+std::unordered_map<std::string, WhatsNewImageCacheEntry>& WhatsNewImageCache() {
+  static std::unordered_map<std::string, WhatsNewImageCacheEntry> cache;
+  return cache;
+}
+
+unsigned int ResolveWhatsNewImage(std::string_view src, int* outW, int* outH) {
+  assert(outW != nullptr);
+  assert(outH != nullptr);
+
+  std::string fileName(src);
+  constexpr std::string_view kPrefix = "whats-new:";
+  if (fileName.rfind(kPrefix, 0) == 0)
+    fileName.erase(0, kPrefix.size());
+  if (fileName.empty())
+    return 0;
+
+  WhatsNewImageCacheEntry& slot = WhatsNewImageCache()[fileName];
+  if (slot.tex == 0) {
+    const std::filesystem::path path =
+        ResolveBundledAssetPath(std::filesystem::path("resources") / "whats-new" / fileName);
+    if (!path.empty())
+      slot.tex = LoadIconTextureRgba(path, &slot.w, &slot.h);
+  }
+
+  *outW = slot.w;
+  *outH = slot.h;
+  return slot.tex;
 }
 
 struct LaunchSpinnerLayout {
@@ -555,7 +592,10 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
     // Keep markdown above the backdrop in z-order by drawing text after the image.
     DrawBillboardBodyBackdrop();
     if (cachedContent.ok) {
-      DrawMarkdownImGui(cachedContent.markdown);
+      MarkdownImGuiHooks hooks;
+      hooks.resolveImage = ResolveWhatsNewImage;
+      hooks.headingFont  = FontReg::WikiHeading();
+      DrawMarkdownImGui(cachedContent.markdown, &hooks);
     } else {
       ImGui::TextWrapped("%s", cachedContent.fallbackMessage.c_str());
       ImGui::Spacing();
