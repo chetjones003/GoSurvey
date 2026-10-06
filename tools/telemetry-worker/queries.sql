@@ -85,3 +85,18 @@ WHERE i.event = 'install'
       AND a.event = 'active'
       AND a.day >= date('now', '-30 days')
   );
+
+
+-- Startup failure reports (POST /v1/startup-report), newest first.
+SELECT ts, version, stage, install_id, substr(report, 1, 120) AS preview
+FROM startup_reports
+ORDER BY ts DESC
+LIMIT 50;
+
+
+-- Startup failures by stage in the last 30 days.
+SELECT stage, COUNT(*) AS reports
+FROM startup_reports
+WHERE ts >= datetime('now', '-30 days')
+GROUP BY stage
+ORDER BY reports DESC;

@@ -26,7 +26,7 @@ anything else, use `queries.sql` or the D1 console in the Cloudflare dashboard.
 | File | What it is |
 |---|---|
 | `src/index.js` | The Worker. Plain JS — no build step, no `node_modules`. |
-| `schema.sql` | The `pings` table and its indexes. Idempotent; safe to re-run. |
+| `schema.sql` | The `pings` and `startup_reports` tables and indexes. Idempotent; safe to re-run. |
 | `stats.mjs` | `npm run stats` — installs and active users. |
 | `queries.sql` | The analytics queries worth having. Run individually. |
 | `wrangler.toml` | Deploy config. `database_id` must be filled in before first deploy. |
@@ -48,10 +48,17 @@ all. See BUG-020 in `TRACKER.md`.
 
 ## Deploy
 
+After changing `schema.sql` or `src/index.js`:
+
 ```bash
+npx wrangler d1 execute gosurvey-telemetry --remote --file=./schema.sql
 npx wrangler deploy
 ```
 
 Changing the deployed URL means changing a **compile-time constant** in the C++ client and
 shipping a new build — the endpoint is deliberately not configurable at runtime (ADR-032 (f)).
 Settle the final hostname before the first release.
+
+**Startup failure reports:** `POST /v1/startup-report` stores rows in `startup_reports`. The
+desktop client sends silently when GLFW/OpenGL init fails (see `StartupFailure.cpp`). Query with
+the samples at the bottom of `queries.sql`.

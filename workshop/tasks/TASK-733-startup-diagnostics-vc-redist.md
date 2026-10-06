@@ -6,7 +6,7 @@ User request (2026-10-06): bundle runtime dependencies and show a Windows dialog
 
 ## Scope
 
-- **In:** Inno Setup ships and runs `VC_redist.x64.exe`; CI downloads it before `ISCC`. `StartupFailure` module shows a scrollable Win32 dialog and appends `%APPDATA%\GoSurvey\startup-failure.log` on GLFW/OpenGL init failure. **Send This Report** copies the report and opens a pre-filled GitHub issue (user signs in on github.com). Wiki troubleshooting updates.
+- **In:** Inno Setup ships and runs `VC_redist.x64.exe`; CI downloads it before `ISCC`. `StartupFailure` module shows a scrollable Win32 dialog and appends `%APPDATA%\GoSurvey\startup-failure.log` on GLFW/OpenGL init failure. **Silent:** `POST /v1/startup-report` on the telemetry Worker → D1 `startup_reports` (operator must re-run `schema.sql` and `wrangler deploy`). **Send This Report** copies the report and opens a pre-filled GitHub issue. Wiki troubleshooting updates.
 - **Out:** Bundling a software OpenGL stack (Mesa/ANGLE) — OpenGL is supplied by the GPU driver, not redistributable like VC++. Loader failures before `main` (missing `pdfium.dll`) still use Windows loader dialogs.
 
 ## Files

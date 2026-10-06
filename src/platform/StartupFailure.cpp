@@ -1,7 +1,12 @@
 #include "StartupFailure.hpp"
 
 #include "AppPaths.hpp"
+#include "HttpFetch.hpp"
+#include "TelemetryPing.hpp"
+#include "UserPrefs.hpp"
 #include "Version.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <cstdio>
 #include <cstring>
@@ -21,22 +26,44 @@
 namespace startupFailure {
 namespace {
 
+const char* StageWireName(Stage stage) {
+  switch (stage) {
+  case Stage::GlfwInit:
+    return "glfw_init";
+  case Stage::GlfwCreateWindow:
+    return "glfw_window";
+  case Stage::OpenGlInit:
+    return "opengl_init";
+  }
+  return "glfw_init";
+}
+
+void TryPostStartupReportSilent(Stage stage, const std::string& reportUtf8) {
 #ifdef _WIN32
-int         g_lastGlfwErrorCode = 0;
-std::string g_lastGlfwErrorText;
+  if (!HasInternetConnectivity())
+    return;
 
-constexpr const char* kIssueNewUrlBase = "https://github.com/chetjones003/GoSurvey/issues/new";
+  std::string report = reportUtf8;
+  constexpr size_t kMaxReport = 16384;
+  if (report.size() > kMaxReport)
+    report.resize(kMaxReport);
 
-std::wstring Utf8ToWide(const std::string& utf8) {
-  if (utf8.empty())
-    return std::wstring();
-  const int need =
-      ::MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
-  if (need <= 0)
-    return std::wstring();
-  std::wstring out(static_cast<size_t>(need), L'\0');
-  ::MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), out.data(), need);
-  return out;
+  const TelemetryIds ids = GetTelemetryIds();
+  nlohmann::json body;
+  body["installId"] = ids.installId.empty() ? "unknown" : ids.installId;
+  body["version"]     = GOSURVEY_VERSION_FULL;
+  body["channel"]     = "stable";
+  body["os"]          = "windows";
+  body["stage"]       = StageWireName(stage);
+  body["report"]      = report;
+
+  std::string error;
+  std::string response;
+  (void)HttpPostJson(StartupReportEndpoint, body.dump(), 8000, error, &response);
+#else
+  (void)stage;
+  (void)reportUtf8;
+#endif
 }
 
 std::string StageSummary(Stage stage) {
@@ -56,6 +83,24 @@ std::string StageSummary(Stage stage) {
            "Acceleration after you can open the app from a machine that works.";
   }
   return "GoSurvey could not start.";
+}
+
+#ifdef _WIN32
+int         g_lastGlfwErrorCode = 0;
+std::string g_lastGlfwErrorText;
+
+constexpr const char* kIssueNewUrlBase = "https://github.com/chetjones003/GoSurvey/issues/new";
+
+std::wstring Utf8ToWide(const std::string& utf8) {
+  if (utf8.empty())
+    return std::wstring();
+  const int need =
+      ::MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+  if (need <= 0)
+    return std::wstring();
+  std::wstring out(static_cast<size_t>(need), L'\0');
+  ::MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), out.data(), need);
+  return out;
 }
 
 /// Query-component encoding (UTF-8 in, ASCII percent-escapes out).
@@ -336,6 +381,8 @@ void NoteGlfwError(int code, const char* description) {
   body += "\n\nUse \"Send This Report\" to copy this text and open GitHub to file an issue.";
 
   std::fprintf(stderr, "%s\n", body.c_str());
+
+  TryPostStartupReportSilent(stage, body);
 
 #ifdef _WIN32
   ShowFailureDialog(body);
