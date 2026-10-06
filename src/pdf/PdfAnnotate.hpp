@@ -5,7 +5,10 @@
 // which never opens the original for writing. Coordinates are PDF user space: points, origin at the
 // page's bottom-left, y up. PDFium must already be initialised.
 
+#include "PdfMeasure.hpp"
+
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -34,7 +37,11 @@ struct Annot {
 /// The in-memory edit list. Every change is one undo step; a new change clears redo.
 class AnnotSession {
 public:
-  const std::vector<Annot>& Items() const { return items_; }
+  const std::vector<Annot>& Items() const { return state_.items; }
+  /// Page scales set in this session (REQ-390): page -> scale; an invalid scale means "remove this page's scale".
+  /// Pages not listed keep whatever scale the file already has.
+  const std::map<int, PageScale>& Scales() const { return state_.scales; }
+  bool SetScales(const std::map<int, PageScale>& changes); ///< one undo step; false when nothing changes
   int Add(const Annot& a);                     ///< returns the new item's index
   bool Remove(int index);
   bool Replace(int index, const Annot& a);
@@ -43,20 +50,25 @@ public:
   bool Undo();
   bool Redo();
   /// True when the list differs from the last MarkSaved (or from empty before any save).
-  bool Dirty() const { return items_ != saved_; }
-  void MarkSaved() { saved_ = items_; }
+  bool Dirty() const { return !(state_ == saved_); }
+  void MarkSaved() { saved_ = state_; }
 
 private:
+  struct State {
+    std::vector<Annot> items;
+    std::map<int, PageScale> scales;
+    bool operator==(const State& o) const { return items == o.items && scales == o.scales; }
+  };
   void Push();
-  std::vector<Annot> items_, saved_;
-  std::vector<std::vector<Annot>> undo_, redo_;
+  State state_, saved_;
+  std::vector<State> undo_, redo_;
 };
 
 /// Writes \p source plus \p items to \p dest as a new PDF ("Save As"). The source is read and closed at once and
 /// is never modified; \p dest equal to \p source is refused. Written to a temporary beside \p dest and renamed
 /// into place, so a failure leaves no partial \p dest. Returns "" on success, otherwise a stated reason.
 std::string SaveAnnotated(const std::filesystem::path& source, const std::vector<Annot>& items,
-                          const std::filesystem::path& dest);
+                          const std::filesystem::path& dest, const std::map<int, PageScale>& scales = {});
 
 /// Reads back the annotations of \p file that SaveAnnotated writes (Text, Line, Rect, Ellipse); other
 /// annotations in the file are skipped. Empty on any failure.

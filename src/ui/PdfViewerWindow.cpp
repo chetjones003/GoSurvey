@@ -224,7 +224,7 @@ struct BenchRun {
 // a page never re-renders it; only "Save As" writes them into a new PDF.
 // ---------------------------------------------------------------------------------------------------
 
-enum class Tool { Select, Text, Line, Rect, Ellipse };
+enum class Tool { Select, Text, Line, Rect, Ellipse, Calibrate };
 
 struct FontChoice {
   std::string family;
@@ -269,6 +269,25 @@ struct AnnotUi {
   std::future<std::string> saving;
   std::string saveDest;
   std::string status;
+  // REQ-390: page scale. What the file already says, read in the background; the session holds the edits.
+  std::future<ScaleRead> readingScales;
+  ScaleRead fileScales;
+  bool scalesRequested = false;
+  bool scalesRead = false;
+  bool scaleDialog = false;      ///< open the Set scale dialog on the next frame
+  int scaleMode = 0;             ///< 0 preset, 1 typed ratio
+  int presetIdx = 8;             ///< index into PresetScales()
+  double typedPage = 1.0, typedReal = 20.0;
+  int typedPageUnit = 0, typedRealUnit = 1; ///< indexes into AllUnits(): inch, foot
+  int scope = 0;                 ///< 0 this page, 1 every page, 2 the pages typed in `scopeBuf`
+  char scopeBuf[128] = "";
+  std::string scaleError;
+  int calCount = 0;              ///< points picked so far (0..2)
+  int calPage = 0;
+  float calX[2] = {0.f, 0.f}, calY[2] = {0.f, 0.f};
+  bool calPopup = false;         ///< both points picked: ask for the real distance
+  double calReal = 10.0;
+  int calUnit = 1;
   bool closePrompt = false;   ///< the window was closed with unsaved annotations: ask first
   bool closeAfterSave = false;
   bool requestClose = false;
@@ -535,6 +554,8 @@ void DestroyViewer(Viewer& v) {
     v.splitting.wait(); // a split in flight finishes (it reads the file, never changes the source)
   if (v.ann.saving.valid())
     v.ann.saving.wait(); // so does a Save As
+  if (v.ann.readingScales.valid())
+    v.ann.readingScales.wait();
   v.worker->Shutdown();
   DeleteTextures(v.cache.Clear());
 }
@@ -828,7 +849,9 @@ void StartSave(Viewer& v, std::vector<std::string>& log) {
   u.saveDest = out;
   u.status = "Saving...";
   const std::filesystem::path src = std::filesystem::u8path(v.path), dst = std::filesystem::u8path(u.saveDest);
-  u.saving = std::async(std::launch::async, [src, dst, items = u.session.Items()] { return SaveAnnotated(src, items, dst); });
+  u.saving = std::async(std::launch::async, [src, dst, items = u.session.Items(), scales = u.session.Scales()] {
+    return SaveAnnotated(src, items, dst, scales);
+  });
   (void)log;
 }
 
@@ -836,6 +859,208 @@ void SelectAnnot(AnnotUi& u, int index) {
   u.selected = index;
   if (index >= 0 && index < static_cast<int>(u.session.Items().size()))
     LoadStyle(u, u.session.Items()[static_cast<size_t>(index)]);
+}
+
+// The scale in force on a page: this session's change if there is one, else what the file says. Null = unscaled.
+const PageScale* EffectiveScale(const Viewer& v, int page) {
+  const AnnotUi& u = v.ann;
+  const auto ov = u.session.Scales().find(page);
+  if (ov != u.session.Scales().end())
+    return ov->second.Valid() ? &ov->second : nullptr;
+  const auto f = u.fileScales.scales.find(page);
+  return f != u.fileScales.scales.end() ? &f->second : nullptr;
+}
+
+// Which pages a scale change applies to (REQ-390 clause 2). False with a message when the typed range is bad.
+bool ScopePages(const Viewer& v, std::vector<int>& pages, std::string& err) {
+  const AnnotUi& u = v.ann;
+  const int n = v.layout.PageCount();
+  pages.clear();
+  if (u.scope == 0) {
+    pages.push_back(std::clamp(v.curPage, 0, n - 1));
+  } else if (u.scope == 1) {
+    for (int i = 0; i < n; ++i)
+      pages.push_back(i);
+  } else {
+    const PageListResult pl = ParsePageList(u.scopeBuf, n);
+    if (!pl.error.empty()) {
+      err = pl.error;
+      return false;
+    }
+    pages = pl.pages;
+  }
+  return true;
+}
+
+void DrawScopeChooser(Viewer& v) {
+  AnnotUi& u = v.ann;
+  ImGui::TextUnformatted("Apply to:");
+  ImGui::SameLine();
+  ImGui::RadioButton("This page", &u.scope, 0);
+  ImGui::SameLine();
+  ImGui::RadioButton("Every page", &u.scope, 1);
+  ImGui::SameLine();
+  ImGui::RadioButton("Pages:", &u.scope, 2);
+  ImGui::SameLine();
+  ImGui::BeginDisabled(u.scope != 2);
+  ImGui::SetNextItemWidth(140.f);
+  ImGui::InputTextWithHint("##scopepages", "1-5, 9, 12-20", u.scopeBuf, sizeof(u.scopeBuf));
+  ImGui::EndDisabled();
+}
+
+// Applies \p scale to the chosen pages as one undo step. A scale that is not valid clears them.
+bool ApplyScaleToScope(Viewer& v, const PageScale& scale, std::vector<std::string>& log) {
+  AnnotUi& u = v.ann;
+  std::vector<int> pages;
+  if (!ScopePages(v, pages, u.scaleError))
+    return false;
+  std::map<int, PageScale> change;
+  for (int p : pages)
+    change[p] = scale;
+  u.session.SetScales(change);
+  u.scaleError.clear();
+  log.push_back(scale.Valid() ? "PDF scale: " + scale.RatioText() + " set on " + std::to_string(pages.size()) + " page(s) of " + v.title
+                              : "PDF scale: cleared on " + std::to_string(pages.size()) + " page(s) of " + v.title);
+  return true;
+}
+
+// The Set scale dialog and the Known distance popup that follows two calibration clicks.
+void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
+  AnnotUi& u = v.ann;
+  char id[64];
+  std::snprintf(id, sizeof(id), "Set scale###pdfscale%d", v.id);
+  if (u.scaleDialog) {
+    u.scaleDialog = false;
+    u.scaleError.clear();
+    u.scalesRequested = true; // reading what the file already has is wanted now
+    ImGui::OpenPopup(id);
+  }
+  ImGui::SetNextWindowSize(ImVec2(520.f, 0.f), ImGuiCond_Appearing);
+  if (ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    const PageScale* cur = EffectiveScale(v, v.curPage);
+    ImGui::Text("Page %d now: %s", v.curPage + 1, cur != nullptr ? cur->RatioText().c_str() : "unscaled");
+    ImGui::Separator();
+    ImGui::RadioButton("Preset", &u.scaleMode, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("Typed ratio", &u.scaleMode, 1);
+    const auto& presets = PresetScales();
+    u.presetIdx = std::clamp(u.presetIdx, 0, static_cast<int>(presets.size()) - 1);
+    if (u.scaleMode == 0) {
+      ImGui::SetNextItemWidth(240.f);
+      if (ImGui::BeginCombo("##preset", presets[static_cast<size_t>(u.presetIdx)].label.c_str())) {
+        for (size_t i = 0; i < presets.size(); ++i) {
+          if (i == 0 || i == 11 || i == 19)
+            ImGui::SeparatorText(i == 0 ? "Architectural" : i == 11 ? "Engineering" : "Metric");
+          if (ImGui::Selectable(presets[i].label.c_str(), static_cast<int>(i) == u.presetIdx))
+            u.presetIdx = static_cast<int>(i);
+        }
+        ImGui::EndCombo();
+      }
+    } else {
+      const auto& units = AllUnits();
+      const auto unitCombo = [&](const char* label, int& idx) {
+        ImGui::SetNextItemWidth(110.f);
+        if (ImGui::BeginCombo(label, UnitName(units[static_cast<size_t>(idx)]))) {
+          for (size_t i = 0; i < units.size(); ++i)
+            if (ImGui::Selectable(UnitName(units[i]), static_cast<int>(i) == idx))
+              idx = static_cast<int>(i);
+          ImGui::EndCombo();
+        }
+      };
+      ImGui::SetNextItemWidth(90.f);
+      ImGui::InputDouble("##pv", &u.typedPage, 0.0, 0.0, "%.5g");
+      ImGui::SameLine();
+      unitCombo("##pu", u.typedPageUnit);
+      ImGui::SameLine();
+      ImGui::TextUnformatted("on the sheet  =");
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(90.f);
+      ImGui::InputDouble("##rv", &u.typedReal, 0.0, 0.0, "%.5g");
+      ImGui::SameLine();
+      unitCombo("##ru", u.typedRealUnit);
+      ImGui::SameLine();
+      ImGui::TextUnformatted("in reality");
+    }
+    DrawScopeChooser(v);
+    if (!u.scaleError.empty())
+      ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", u.scaleError.c_str());
+    if (ImGui::Button("Apply")) {
+      PageScale s;
+      if (u.scaleMode == 0) {
+        s = presets[static_cast<size_t>(u.presetIdx)];
+      } else {
+        s.pageValue = u.typedPage;
+        s.pageUnit = AllUnits()[static_cast<size_t>(u.typedPageUnit)];
+        s.realValue = u.typedReal;
+        s.realUnit = AllUnits()[static_cast<size_t>(u.typedRealUnit)];
+      }
+      if (!s.Valid())
+        u.scaleError = "both lengths must be bigger than zero";
+      else if (ApplyScaleToScope(v, s, log))
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Calibrate from two points...")) {
+      u.tool = Tool::Calibrate;
+      u.calCount = 0;
+      u.selected = -1;
+      u.status = "Click two points a known distance apart on the page.";
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Clear scale")) {
+      if (ApplyScaleToScope(v, PageScale{0.0, Unit::Inch, 0.0, Unit::Foot, ""}, log))
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel"))
+      ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
+
+  std::snprintf(id, sizeof(id), "Known distance###pdfcal%d", v.id);
+  if (u.calPopup) {
+    u.calPopup = false;
+    u.scaleError.clear();
+    ImGui::OpenPopup(id);
+  }
+  if (ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    const double pts = std::hypot(static_cast<double>(u.calX[1] - u.calX[0]), static_cast<double>(u.calY[1] - u.calY[0]));
+    ImGui::Text("The two points are %.1f points (%.3f in) apart on the sheet.", pts, pts / 72.0);
+    ImGui::TextUnformatted("In reality they are:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100.f);
+    ImGui::InputDouble("##calreal", &u.calReal, 0.0, 0.0, "%.5g");
+    ImGui::SameLine();
+    const auto& units = AllUnits();
+    u.calUnit = std::clamp(u.calUnit, 0, static_cast<int>(units.size()) - 1);
+    ImGui::SetNextItemWidth(110.f);
+    if (ImGui::BeginCombo("##calunit", UnitName(units[static_cast<size_t>(u.calUnit)]))) {
+      for (size_t i = 0; i < units.size(); ++i)
+        if (ImGui::Selectable(UnitName(units[i]), static_cast<int>(i) == u.calUnit))
+          u.calUnit = static_cast<int>(i);
+      ImGui::EndCombo();
+    }
+    DrawScopeChooser(v);
+    if (!u.scaleError.empty())
+      ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", u.scaleError.c_str());
+    if (ImGui::Button("Set scale")) {
+      const PageScale s = ScaleFromCalibration(pts, u.calReal, units[static_cast<size_t>(u.calUnit)]);
+      if (!s.Valid())
+        u.scaleError = "the distance must be bigger than zero, and the two points must be apart";
+      else if (ApplyScaleToScope(v, s, log)) {
+        u.status = "Scale set: " + s.RatioText();
+        u.calCount = 0;
+        ImGui::CloseCurrentPopup();
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+      u.calCount = 0;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
 }
 
 // The annotation row under the toolbar: tools, style, undo/redo, Save As, and the two small dialogs
@@ -855,6 +1080,25 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
       log.push_back("PDF annotations: Save As failed - " + err);
     }
     u.closeAfterSave = false;
+  }
+  // REQ-390: read the scales the file already has, in the background. Small files at once (after the first
+  // page is up); a big one only when the user asks (Set scale / a measure tool), so opening stays fast.
+  if (!u.scalesRequested && !u.scalesRead && v.firstPageMs >= 0.0 && MsSince(v.openedAt) > v.firstPageMs + 2000.0) {
+    std::error_code ec;
+    if (std::filesystem::file_size(std::filesystem::u8path(v.path), ec) < 40ull * 1024 * 1024)
+      u.scalesRequested = true;
+  }
+  if (u.scalesRequested && !u.scalesRead && !u.readingScales.valid()) {
+    const std::filesystem::path p = std::filesystem::u8path(v.path);
+    u.readingScales = std::async(std::launch::async, [p] { return ReadPageScales(p); });
+  }
+  if (u.readingScales.valid() && u.readingScales.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    u.fileScales = u.readingScales.get();
+    u.scalesRead = true;
+    if (!u.fileScales.error.empty())
+      log.push_back("PDF scale: could not read the scales in " + v.title + " - " + u.fileScales.error);
+    for (const auto& [page, why] : u.fileScales.unusable)
+      log.push_back("PDF scale: page " + std::to_string(page + 1) + " of " + v.title + " has a scale that cannot be used - " + why);
   }
   const bool saving = u.saving.valid();
   const auto& items = u.session.Items();
@@ -950,15 +1194,34 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
-  ImGui::BeginDisabled(items.empty() || saving);
+  ImGui::BeginDisabled(!u.session.Dirty() || saving);
   if (ImGui::Button("Save As..."))
     StartSave(v, log);
   ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::TextUnformatted("|");
+  ImGui::SameLine();
+  if (ImGui::Button("Set scale..."))
+    u.scaleDialog = true;
+  ImGui::SameLine();
+  {
+    const PageScale* cur = EffectiveScale(v, v.curPage);
+    const auto unusable = u.fileScales.unusable.find(v.curPage);
+    if (cur != nullptr)
+      ImGui::Text("Scale: %s", cur->RatioText().c_str());
+    else if (!u.scalesRead && u.scalesRequested)
+      ImGui::TextDisabled("Scale: reading...");
+    else if (unusable != u.fileScales.unusable.end())
+      ImGui::TextDisabled("Unscaled (%s)", unusable->second.c_str());
+    else
+      ImGui::TextDisabled(u.scalesRead ? "Unscaled" : "Scale: not read yet");
+  }
   if (!u.status.empty()) {
     ImGui::SameLine();
     ImGui::TextDisabled("%s", u.status.c_str());
   }
   ImGui::PopStyleVar(3);
+  DrawScaleDialogs(v, log);
 
   // The note text dialog.
   char id[64];
@@ -1065,8 +1328,14 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
       u.session.Remove(u.selected);
       u.selected = -1;
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
       u.selected = -1;
+      if (u.tool == Tool::Calibrate) {
+        u.tool = Tool::Select;
+        u.calCount = 0;
+        u.status.clear();
+      }
+    }
   }
 
   if (u.drag == AnnotUi::Drag::None) {
@@ -1113,6 +1382,23 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
             u.py0 = y;
             u.original = u.preview = a;
           }
+        }
+      } else if (u.tool == Tool::Calibrate) {
+        float cx, cy;
+        toPt(r, cx, cy, true);
+        if (u.calCount == 0 || r.page == u.calPage) {
+          u.calPage = r.page;
+          u.calX[u.calCount] = cx;
+          u.calY[u.calCount] = cy;
+          ++u.calCount;
+          if (u.calCount == 2) {
+            u.calCount = 2; // kept for drawing while the distance is asked
+            u.calPopup = true;
+            u.tool = Tool::Select;
+            u.status.clear();
+          }
+        } else {
+          u.status = "Pick both points on the same page.";
         }
       } else if (u.tool == Tool::Text) {
         u.textBuf[0] = 0;
@@ -1360,6 +1646,15 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
       }
       if (u.drag == AnnotUi::Drag::Create && u.dragPage == r.page)
         DrawAnnot(dl, u.preview, r.tl, r.hPt, v.pxPerPt, false);
+      if (u.calCount > 0 && u.calPage == r.page) { // the calibration points picked so far
+        const auto S = [&](int i) { return ImVec2(r.tl.x + u.calX[i] * v.pxPerPt, r.tl.y + (r.hPt - u.calY[i]) * v.pxPerPt); };
+        if (u.calCount == 2)
+          dl->AddLine(S(0), S(1), IM_COL32(255, 160, 0, 255), 2.f);
+        for (int i = 0; i < u.calCount; ++i) {
+          dl->AddCircleFilled(S(i), 5.f, IM_COL32(255, 160, 0, 255));
+          dl->AddCircle(S(i), 7.f, IM_COL32(0, 0, 0, 200), 0, 1.5f);
+        }
+      }
       dl->PopClipRect();
     }
   }

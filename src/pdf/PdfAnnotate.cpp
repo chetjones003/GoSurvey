@@ -34,37 +34,48 @@ bool Annot::operator==(const Annot& o) const {
 }
 
 void AnnotSession::Push() {
-  undo_.push_back(items_);
+  undo_.push_back(state_);
   redo_.clear();
 }
 
 int AnnotSession::Add(const Annot& a) {
   Push();
-  items_.push_back(a);
-  return static_cast<int>(items_.size()) - 1;
+  state_.items.push_back(a);
+  return static_cast<int>(state_.items.size()) - 1;
 }
 
 bool AnnotSession::Remove(int index) {
-  if (index < 0 || index >= static_cast<int>(items_.size()))
+  if (index < 0 || index >= static_cast<int>(state_.items.size()))
     return false;
   Push();
-  items_.erase(items_.begin() + index);
+  state_.items.erase(state_.items.begin() + index);
   return true;
 }
 
 bool AnnotSession::Replace(int index, const Annot& a) {
-  if (index < 0 || index >= static_cast<int>(items_.size()) || items_[static_cast<size_t>(index)] == a)
+  if (index < 0 || index >= static_cast<int>(state_.items.size()) || state_.items[static_cast<size_t>(index)] == a)
     return false;
   Push();
-  items_[static_cast<size_t>(index)] = a;
+  state_.items[static_cast<size_t>(index)] = a;
+  return true;
+}
+
+bool AnnotSession::SetScales(const std::map<int, PageScale>& changes) {
+  State next = state_;
+  for (const auto& [page, scale] : changes)
+    next.scales[page] = scale;
+  if (next == state_)
+    return false;
+  Push();
+  state_ = std::move(next);
   return true;
 }
 
 bool AnnotSession::Undo() {
   if (undo_.empty())
     return false;
-  redo_.push_back(items_);
-  items_ = std::move(undo_.back());
+  redo_.push_back(state_);
+  state_ = std::move(undo_.back());
   undo_.pop_back();
   return true;
 }
@@ -72,8 +83,8 @@ bool AnnotSession::Undo() {
 bool AnnotSession::Redo() {
   if (redo_.empty())
     return false;
-  undo_.push_back(items_);
-  items_ = std::move(redo_.back());
+  undo_.push_back(state_);
+  state_ = std::move(redo_.back());
   redo_.pop_back();
   return true;
 }
@@ -437,7 +448,7 @@ std::string ApplyPatches(std::string& bytes, const std::vector<Patch>& patches) 
 } // namespace
 
 std::string SaveAnnotated(const std::filesystem::path& source, const std::vector<Annot>& items,
-                          const std::filesystem::path& dest) {
+                          const std::filesystem::path& dest, const std::map<int, PageScale>& scales) {
   std::error_code ec;
   if (source.lexically_normal() == dest.lexically_normal() ||
       (std::filesystem::exists(dest, ec) && std::filesystem::equivalent(source, dest, ec)))
@@ -509,6 +520,15 @@ std::string SaveAnnotated(const std::filesystem::path& source, const std::vector
         error = "PDFium could not write the new PDF";
       else
         error = ApplyPatches(w.bytes, patches);
+      if (error.empty() && !scales.empty()) { // REQ-390: each changed page's /VP, on the bytes PDFium just wrote
+        std::vector<PageSize> sizes(static_cast<size_t>(pageCount));
+        for (int i = 0; i < pageCount; ++i) {
+          FS_SIZEF sz{};
+          if (FPDF_GetPageSizeByIndexF(doc, i, &sz))
+            sizes[static_cast<size_t>(i)] = {sz.width, sz.height};
+        }
+        error = ApplyPageScales(w.bytes, scales, sizes);
+      }
     }
     FPDF_CloseDocument(doc);
   }
