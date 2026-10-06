@@ -9,7 +9,7 @@
 ## Requirement authority
 
 REQ-074 (surface elevation query, never extrapolated), REQ-101, REQ-201, REQ-076.
-**ADR-062** (new, this task) and **D-2026-09-28-f** settle the reference model the whole phase hangs
+**ADR-065** (new, this task) and **D-2026-09-28-l** settle the reference model the whole phase hangs
 on, and were recorded before any of this was written.
 
 ## Why this, and why first
@@ -38,15 +38,15 @@ content — exists.
   content, which is the second reason to defer it.
 - The surface caches are keyed by stable id rather than array index *because* `cadSurfaces` compacts
   on erase — the rename-in-flight and erase-then-recreate hazards are written up at
-  `CadCommands.hpp:3147`. ADR-062 (c) keys a link the same way rather than re-earning that bug.
+  `CadCommands.hpp:3147`. ADR-065 (c) keys a link the same way rather than re-earning that bug.
 - The only `Drape` in the tree was a ribbon button reading "not implemented yet".
 
 ## What changed
 
-- `spec/architecture.md` — **ADR-062**: baked by default; link opt-in, keyed by stable entity id,
+- `spec/architecture.md` — **ADR-065**: baked by default; link opt-in, keyed by stable entity id,
   visibly marked, and degrading to plain geometry when its surface goes; a vertex off the surface
   refuses its whole entity.
-- `spec/project.md` — **D-2026-09-28-f**.
+- `spec/project.md` — **D-2026-09-28-l**.
 - `src/commands/CadCommands.cpp` — `ExecuteDrapeCommand`, and `DRAPE` in the dispatch beside
   `EXTRACT`, whose surface-naming shape it follows (one surface needs no naming; several are listed
   rather than guessed, because picking silently is how the wrong surface gets used).
@@ -93,7 +93,7 @@ again at the next rebuild.
   definition of "on the ground".
 - **An erased surface needs no cleanup pass.** `FindSurfaceIndexById` already answers -1 for an id
   that no longer resolves (and for 0), so the link simply stops resolving and the geometry stays
-  exactly where it is (ADR-062 (e)). Nothing is cleared eagerly, which also means undoing the
+  exactly where it is (ADR-065 (e)). Nothing is cleared eagerly, which also means undoing the
   erase restores the link for free.
 - **A linked entity that leaves the ground is left where it is and reported**, keeping its link, so
   it re-drapes on its own once the surface covers it again.
@@ -107,13 +107,40 @@ the link, and the no-undo-step-on-refusal rule. The transcript proves the link *
 and reopen** by rebuilding after reopening and watching it re-drape - a stored field nobody reads
 back would pass a weaker test - and that a **rename** does not break it.
 
+## Increment 3 - the visible mark (ADR-065 (d))
+
+A link that lived only in a file and a rebuild would be a hidden attribute: geometry moves and
+nothing ever said it would. Two surfaces, one resolver.
+
+- `DrapedOnSurfaceName` (declared in `CadCommands.hpp`) is the single place a link becomes text a
+  person reads, so the panel and the report cannot disagree. It answers empty for all three cases
+  that are the same to the user - never linked, baked since, and **linked to a surface that has
+  been erased** (ADR-065 (e)): the id stays on the entity but the object is no longer following
+  anything and must not claim to be.
+- **Properties panel** gains a `Surface` section with `Draped on` and `Follows rebuilds`, shown only
+  when something in the selection follows a surface. A mixed selection reads `*varies*`, and
+  `Follows rebuilds` says `Some` when only part of the selection is linked.
+- **`DRAPELINKS`** lists every object that follows a surface, and which one. This is the
+  drawing-wide half: the panel answers "does THIS one move?", `DRAPELINKS` answers "what in here
+  moves when I rebuild?" - the question actually asked before editing a surface. It is also the
+  only one of the two a headless transcript can assert.
+
+Tests: `[drapemark]` covers the resolver (including a non-drapeable type and an out-of-range index,
+which answer "follows nothing" rather than reading off the end of a store), the erased-surface
+case, and the three `DRAPELINKS` outcomes. The transcript drives `DRAPELINKS` end to end: nothing
+linked, one linked, baking it off the list again, and an object whose surface was deleted.
+
+### Found while doing it, and NOT fixed here
+
+`SURFACEDELETE` leaves a **dangling selection**: `RunSurfaceDelete` -> `EraseSurfaceAtIndex` never
+touches `st.selection`, so deleting a surface that is selected leaves a selection entry pointing at
+a surface that no longer exists, and the document invariant `selection-in-range` trips on the next
+`CHECK ALL`. Pre-existing on `beta` - this work touches neither function - and sidestepped in the
+transcript by reopening the drawing (which clears the selection) rather than fixed in an increment
+about the drape mark. `ESC` does not help: it cancels the active command, not the selection.
+
 ## Not in scope
 
-- **ADR-062 (d), the visible mark, is NOT built yet.** A link is stored, honoured, persisted and
-  re-evaluated — but nothing on screen yet says "this one follows a surface". It is the single clause
-  of the ADR this task does not satisfy, and it is called out rather than quietly skipped. The
-  Properties panel is its natural home, and a panel row is not reachable from a headless transcript,
-  so it wants its own slice with whatever test shape the UI layer allows.
 - Projecting along a direction other than straight down.
 - A solid generated from a surface + boundary + depth, and a general `SWEEP` command — later Phase 7
   increments.

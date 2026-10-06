@@ -6447,7 +6447,7 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
 /// Returns true when a surface was produced.
 bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log);
 
-/// Re-lay everything linked to surface p si, after that surface has been rebuilt (ADR-062 (b),
+/// Re-lay everything linked to surface p si, after that surface has been rebuilt (ADR-065 (b),
 /// GitHub #150). Called from the only places a TIN is replaced - `SURFACEREBUILD` and the async
 /// reap - so a link means the same thing whichever way the rebuild was driven.
 ///
@@ -6455,6 +6455,12 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
 /// so: a surface shrinking under a draped line is not a reason to move or discard the line
 /// (REQ-201). Its link is kept, so it re-drapes on its own once the surface covers it again.
 void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::string>& log);
+
+/// The name of the surface p e is draped on and follows, or empty when it follows none
+/// (ADR-065 (d), GitHub #150) - never linked, baked since, or linked to a surface that has been
+/// erased, which are the same thing to the user. The one place the link becomes something a
+/// person reads, so the Properties panel and the `DRAPELINKS` report cannot disagree.
+[[nodiscard]] std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity& e);
 
 /// Create a named surface from \p groupNames and build it. Returns the new surface's index, or -1
 /// when the name is taken or the build produced nothing.
