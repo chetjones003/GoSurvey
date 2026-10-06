@@ -40,12 +40,14 @@ double MsSince(Clock::time_point t) { return std::chrono::duration<double, std::
 constexpr float kBasePxPerPt = 96.f / 72.f; // zoom 100 % = 96 dpi
 constexpr float kGapPt = 8.f;
 constexpr float kMarginPx = 16.f;
-constexpr int kStandInMaxSide = 160;
+constexpr int kStandInMaxSide = 288;  // sharp enough for the largest thumbnail the sidebar can show
 constexpr int kMaxRenderSide = 4096;
 constexpr size_t kUploadBytesPerFrame = 3u * 1024 * 1024; // ADR-067 (c): a burst of finished pages cannot make a long frame
 constexpr size_t kCacheCapBytes = 256ull * 1024 * 1024;
 constexpr int kReadAhead = 6;
-constexpr float kThumbItemH = 150.f;
+constexpr float kThumbWidthDefault = 190.f;
+constexpr float kThumbWidthMin = 120.f;
+constexpr float kThumbWidthMax = 340.f;
 
 // One render worker per document (ADR-067 (c)): a one-shot thread that drains the latest plan and
 // exits when it is empty, so an idle viewer owns no thread.
@@ -180,6 +182,8 @@ struct Viewer {
   float pxPerPt = kBasePxPerPt;
   bool continuous = true;
   bool showThumbs = true;
+  float thumbW = kThumbWidthDefault;  ///< sidebar width, dragged by its edge
+  bool panning = false;                ///< middle button held on the pages
   int curPage = 0;
   float pendingScrollY = -1.f;
   float pendingScrollX = -1.f;
@@ -343,9 +347,21 @@ void FinishBench(Viewer& v, std::vector<std::string>& log) {
   b.finished = true;
 }
 
-void DrawToolbar(Viewer& v, float viewH) {
+void DrawToolbar(Viewer& v) {
   const int n = v.layout.PageCount();
-  ImGui::SetNextItemWidth(60.f);
+  const float viewH = v.viewH;
+  // Roomier controls, and buttons that read as buttons against the dark window.
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.f, 8.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.f, 8.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.27f, 0.35f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.42f, 0.58f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20f, 0.48f, 0.80f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.42f, 0.48f, 0.58f, 0.9f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.12f, 0.14f, 0.18f, 1.f));
+  ImGui::Spacing();
+  ImGui::SetNextItemWidth(72.f);
   if (ImGui::InputInt("##pg", &v.pageBox, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue))
     GoToPage(v, v.pageBox - 1);
   ImGui::SameLine();
@@ -362,7 +378,7 @@ void DrawToolbar(Viewer& v, float viewH) {
   if (ImGui::Button("-"))
     ZoomAboutCentre(v, v.pxPerPt / 1.25f);
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(50.f);
+  ImGui::SetNextItemWidth(72.f);
   if (ImGui::InputText("##zoom", v.zoomBuf, sizeof(v.zoomBuf),
                        ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_EnterReturnsTrue)) {
     const float pct = static_cast<float>(std::atof(v.zoomBuf));
@@ -388,13 +404,18 @@ void DrawToolbar(Viewer& v, float viewH) {
     GoToPage(v, v.curPage);
   ImGui::SameLine();
   ImGui::Checkbox("Thumbnails", &v.showThumbs);
+  ImGui::PopStyleColor(5);
+  ImGui::PopStyleVar(4);
+  ImGui::Spacing();
 }
 
 void DrawThumbnails(Viewer& v) {
-  ImGui::BeginChild("##thumbs", ImVec2(132.f, 0.f), true, ImGuiWindowFlags_NoMove);
+  ImGui::BeginChild("##thumbs", ImVec2(v.thumbW, 0.f), true, ImGuiWindowFlags_NoMove);
   const int n = v.layout.PageCount();
+  const float boxW = v.thumbW - 30.f;               // widest a thumbnail may be
+  const float itemH = boxW * 0.78f + 30.f;          // room for a landscape sheet and its number
   ImGuiListClipper clip;
-  clip.Begin(n, kThumbItemH);
+  clip.Begin(n, itemH);
   v.thumbFirst = n;
   v.thumbLast = -1;
   while (clip.Step()) {
@@ -403,11 +424,11 @@ void DrawThumbnails(Viewer& v) {
       v.thumbLast = std::max(v.thumbLast, p);
       ImGui::PushID(p);
       const ImVec2 pos = ImGui::GetCursorScreenPos();
-      if (ImGui::Selectable("##t", p == v.curPage, 0, ImVec2(0.f, kThumbItemH - 4.f)))
+      if (ImGui::Selectable("##t", p == v.curPage, 0, ImVec2(0.f, itemH - 4.f)))
         GoToPage(v, p);
       ImDrawList* dl = ImGui::GetWindowDrawList();
       const PageSize& s = v.layout.size[static_cast<size_t>(p)];
-      const float maxW = 100.f, maxH = kThumbItemH - 30.f;
+      const float maxW = boxW, maxH = itemH - 30.f;
       const float k = std::min(maxW / s.wPt, maxH / s.hPt);
       const ImVec2 a(pos.x + 4.f, pos.y + 2.f);
       const ImVec2 b(a.x + s.wPt * k, a.y + s.hPt * k);
@@ -461,9 +482,15 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
     v.pendingScrollY = std::max(0.f, ptY * v.pxPerPt + kMarginPx - my);
     v.pendingScrollX = std::max(0.f, ptX * v.pxPerPt + kMarginPx - mx);
   }
-  if (hovered && !io.KeyCtrl && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.f)) {
+  // Pan with the middle mouse button (a plain left click or drag does nothing to the view).
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle))
+    v.panning = true;
+  if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle))
+    v.panning = false;
+  if (v.panning) {
     ImGui::SetScrollY(ImGui::GetScrollY() - io.MouseDelta.y);
     ImGui::SetScrollX(ImGui::GetScrollX() - io.MouseDelta.x);
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
   }
   if ((ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || hovered) && !io.WantTextInput) {
     if (ImGui::IsKeyPressed(ImGuiKey_PageDown, true))
@@ -698,10 +725,20 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
       } else if (!v.loaded) {
         ImGui::TextUnformatted("Opening...");
       } else {
-        DrawToolbar(v, ImGui::GetContentRegionAvail().y);
+        DrawToolbar(v);
         if (v.showThumbs) {
           DrawThumbnails(v);
-          ImGui::SameLine();
+          // The sidebar's edge: drag it to resize.
+          ImGui::SameLine(0.f, 0.f);
+          ImGui::InvisibleButton("##thumbsplit", ImVec2(7.f, ImGui::GetContentRegionAvail().y));
+          if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+          if (ImGui::IsItemActive())
+            v.thumbW = std::clamp(v.thumbW + ImGui::GetIO().MouseDelta.x, kThumbWidthMin, kThumbWidthMax);
+          ImGui::GetWindowDrawList()->AddRectFilled(
+              ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+              ImGui::IsItemHovered() || ImGui::IsItemActive() ? IM_COL32(90, 130, 190, 255) : IM_COL32(60, 64, 72, 255));
+          ImGui::SameLine(0.f, 0.f);
         }
         DrawPages(v, log, &cost);
       }

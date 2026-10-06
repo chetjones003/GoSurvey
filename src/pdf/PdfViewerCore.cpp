@@ -48,7 +48,7 @@ VisibleRange VisiblePages(const Layout& layout, float scrollPt, float viewPt) {
 }
 
 int ReadAheadThatFits(size_t capBytes, size_t pageBytes, int visibleCount, int maxAhead) {
-  const size_t usable = capBytes - capBytes / 6;
+  const size_t usable = capBytes - capBytes / 3;
   const int fit = static_cast<int>(usable / std::max<size_t>(1, pageBytes));
   return std::clamp((fit - visibleCount) * 2 / 3, 0, maxAhead);
 }
