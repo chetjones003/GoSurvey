@@ -40222,6 +40222,36 @@ void SetDrawingPlotScale(AppCommandState& st, float modelUnitsPerPlottedInch) {
   BumpCadGpuCache(st);
 }
 
+void SyncCurrentAnnotationScaleIndex(AppCommandState& st) {
+  st.currentAnnotationScaleIndex = -1;
+  if (st.annotationScales.empty())
+    return;
+  int best = 0;
+  float bestDiff = 1.e30f;
+  for (int i = 0; i < static_cast<int>(st.annotationScales.size()); ++i) {
+    const float m = CadAnnotationScaleModelUnitsPerPlottedInch(st.annotationScales[static_cast<size_t>(i)]);
+    const float d = std::fabs(m - st.modelUnitsPerPlottedInch);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = i;
+    }
+  }
+  st.currentAnnotationScaleIndex = best;
+}
+
+void SetCurrentAnnotationScaleIndex(AppCommandState& st, int index) {
+  if (st.annotationScales.empty()) {
+    st.currentAnnotationScaleIndex = -1;
+    return;
+  }
+  const int n = static_cast<int>(st.annotationScales.size());
+  const int ix = std::clamp(index, 0, n - 1);
+  if (ix == st.currentAnnotationScaleIndex)
+    return;
+  st.currentAnnotationScaleIndex = ix;
+  BumpCadGpuCache(st);
+}
+
 bool ApplyDrawingSettings(AppCommandState& st, int drawingInsUnits, float modelUnitsPerPlottedInch,
                           const DrawingSettings& settings, std::vector<std::string>& log) {
   if (!std::isfinite(modelUnitsPerPlottedInch) || modelUnitsPerPlottedInch <= 0.f) {
@@ -41071,6 +41101,42 @@ void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anch
   st.selBoxAnchorScreenX = anchorScreenX;
   st.selBoxAnchorScreenY = anchorScreenY;
   st.selBoxWaitingSecond = true;
+}
+
+void UpdateSelectionBoxPreview(AppCommandState& st, float wx, float wy, bool windowMode, const Camera* cam,
+                               float vpW, float vpH) {
+  if (!st.selBoxWaitingSecond) {
+    st.selBoxPreview.clear();
+    st.selBoxPreviewKeyValid = false;
+    return;
+  }
+  const std::array<double, 11> key = {st.selBoxAnchorX,
+                                      st.selBoxAnchorY,
+                                      st.selBoxAnchorZ,
+                                      wx,
+                                      wy,
+                                      st.uiCursorWorldZ,
+                                      windowMode ? 1.0 : 0.0,
+                                      st.viewportPanX + st.viewportPanY,
+                                      st.viewportZoom,
+                                      static_cast<double>(st.cadGpuRevision),
+                                      static_cast<double>(st.hiddenEntityIds.size())};
+  if (st.selBoxPreviewKeyValid && key == st.selBoxPreviewKey)
+    return;
+  st.selBoxPreviewKey = key;
+  st.selBoxPreviewKeyValid = true;
+
+  // ComputeSelectionFromRect merges into st.selection / selectedSurveyPointIndices, so run it on an
+  // empty pair and put the real ones back — the preview must never change the selection.
+  std::vector<SelectedEntity> savedSel;
+  savedSel.swap(st.selection);
+  std::vector<int> savedSurvey;
+  savedSurvey.swap(st.selectedSurveyPointIndices);
+  ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, st.selBoxAnchorZ, wx, wy, st.uiCursorWorldZ,
+                           /*subtract=*/false, windowMode, /*includeSurveyPoints=*/false, cam, vpW, vpH);
+  st.selBoxPreview.swap(st.selection);
+  st.selection.swap(savedSel);
+  st.selectedSurveyPointIndices.swap(savedSurvey);
 }
 
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -45363,6 +45429,15 @@ void ResolveEntityRgbaForViewport(const EntityAttributes& attr, const CadLayerRo
       col = layer->color;
   }
   ResolveStoredColorForViewport(col, tr, defaultR, defaultG, defaultB, outRgba);
+}
+
+void ApplyMaterialDiffuseForShaded(const EntityAttributes& attr, float rgba[4]) {
+  assert(rgba != nullptr);
+  if (!attr.materialDiffuseOverride)
+    return;
+  rgba[0] = attr.materialDiffuseR;
+  rgba[1] = attr.materialDiffuseG;
+  rgba[2] = attr.materialDiffuseB;
 }
 
 struct DxfLwPair {
