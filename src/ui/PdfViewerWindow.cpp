@@ -159,6 +159,7 @@ struct Viewer {
   std::string title;
   bool open = true;
   bool focusNext = false;
+  bool placed = false; ///< first-frame position given; after that the user (or the saved layout) owns it
   std::future<PdfDocument::OpenResult> opening;
   bool loaded = false;
   std::string error;
@@ -628,7 +629,23 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
     }
     bool open = true;
     double cost = 0.0;
-    if (ImGui::Begin(name, &open)) {
+    // REQ-387 clause 7: its own Windows window (NoAutoMerge makes ImGui give it a viewport instead of
+    // folding it into the main window), with the operating system's frame — minimize, maximize, close
+    // and a task-bar entry. Dragging its tab onto a dock slot docks it into GoSurvey's layout.
+    ImGuiWindowClass viewerClass;
+    viewerClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+    viewerClass.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration | ImGuiViewportFlags_NoTaskBarIcon;
+    ImGui::SetNextWindowClass(&viewerClass);
+    if (!v.placed) {
+      const ImGuiViewport* host = ImGui::GetMainViewport();
+      const float off = 40.f * static_cast<float>(v.id % 6);
+      ImGui::SetNextWindowPos(ImVec2(host->WorkPos.x + 80.f + off, host->WorkPos.y + 60.f + off), ImGuiCond_Always);
+      v.placed = true;
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+    const bool shown = ImGui::Begin(name, &open);
+    ImGui::PopStyleVar();
+    if (shown) {
       if (!v.error.empty()) {
         ImGui::TextWrapped("This PDF could not be opened: %s.", v.error.c_str());
         ImGui::TextDisabled("%s", v.path.c_str());
