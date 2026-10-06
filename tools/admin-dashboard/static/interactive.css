@@ -1,0 +1,27 @@
+/* Interactive tables and charts. Loaded after style.css. */
+.table.rt{table-layout:fixed}
+.table.rt td{overflow:hidden; text-overflow:ellipsis}
+.table.rt th{position:sticky; top:0; user-select:none; overflow:hidden; text-overflow:ellipsis; padding-right:16px}
+.table.rt th.sortable{cursor:pointer}
+.table.rt th.sortable:hover{color:var(--text); background:#eef2f7}
+.table.rt th[aria-sort]{color:var(--text)}
+.table.rt th[aria-sort="ascending"]::after{content:" ▲"; font-size:9px}
+.table.rt th[aria-sort="descending"]::after{content:" ▼"; font-size:9px}
+.rs{position:absolute; top:0; right:0; width:9px; height:100%; cursor:col-resize; touch-action:none}
+.rs::after{content:""; position:absolute; right:4px; top:25%; height:50%; width:1px; background:var(--border)}
+.rs:hover::after, body.resizing .rs::after{background:var(--accent); width:2px}
+body.resizing{cursor:col-resize; user-select:none}
+.table-wrap{overflow:auto}
+.table.rt .pager-row td{overflow:visible; position:sticky; left:0}
+.copy.copied{color:var(--accent); background:#ecfdf5}
+.table.rt tbody tr:hover{background:#f1f5f9}
+
+.chart-wrap{position:relative; width:100%}
+.chart{display:block; touch-action:none}
+.chart-tip{display:none; position:absolute; pointer-events:none; background:#0f172a; color:#fff; font-size:12px; line-height:1.4; padding:6px 10px; border-radius:8px; white-space:nowrap; z-index:5; box-shadow:0 4px 12px rgba(15,23,42,.25)}
+.chart-tip b{font-size:14px}
+.chart-tip span{color:#94a3b8}
+.seg{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden}
+.seg button{border:0; background:#fff; padding:3px 10px; font-size:12px; color:var(--muted); cursor:pointer}
+.seg button + button{border-left:1px solid var(--border)}
+.seg button.on{background:var(--text); color:#fff}

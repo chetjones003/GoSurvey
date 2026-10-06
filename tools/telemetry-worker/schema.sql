@@ -46,3 +46,20 @@ CREATE INDEX IF NOT EXISTS ix_pings_event_day ON pings (event, day);
 
 -- Version and channel distribution, for deciding what is safe to stop supporting.
 CREATE INDEX IF NOT EXISTS ix_pings_version ON pings (version);
+
+-- Startup failure reports (silent POST from StartupFailure.cpp before the error dialog).
+CREATE TABLE IF NOT EXISTS startup_reports (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts         TEXT NOT NULL,   -- ISO-8601 UTC
+  install_id TEXT NOT NULL,   -- telemetry install id, or the literal "unknown"
+  version    TEXT NOT NULL,
+  channel    TEXT NOT NULL CHECK (channel IN ('stable', 'beta')),
+  os         TEXT NOT NULL,
+  stage      TEXT NOT NULL CHECK (stage IN ('glfw_init', 'glfw_window', 'opengl_init')),
+  country    TEXT,            -- server-derived; NULL when Cloudflare omits it
+  report     TEXT NOT NULL    -- full diagnostic text from the client (bounded in the Worker)
+);
+
+CREATE INDEX IF NOT EXISTS ix_startup_reports_ts ON startup_reports (ts);
+CREATE INDEX IF NOT EXISTS ix_startup_reports_version ON startup_reports (version);
+CREATE INDEX IF NOT EXISTS ix_startup_reports_stage ON startup_reports (stage);

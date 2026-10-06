@@ -34,6 +34,11 @@
   #define OutputDir "Output"
 #endif
 
+; Microsoft VC++ 2015–2022 x64 runtime (placed in build/ by CI or tools/fetch-vc-redist.ps1).
+#ifexist "..\build\vc_redist.x64.exe"
+  #define VcRedistBundled
+#endif
+
 #define MyAppName "GoSurvey"
 #define MyAppPublisher "Chet Jones"
 #define MyAppURL "https://github.com/chetjones003/GoSurvey"
@@ -99,6 +104,10 @@ Type: filesandordirs; Name: "{app}\resources\blocks"
 Source: "{#BuildDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\resources\*"; DestDir: "{app}\resources"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#BuildDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
+#ifdef VcRedistBundled
+; Redistributable under Microsoft's license terms; installed quietly during setup (see [Run]).
+Source: "{#BuildDir}\vc_redist.x64.exe"; DestDir: "{app}\redist"; DestName: "VC_redist.x64.exe"; Flags: ignoreversion
+#endif
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
@@ -120,7 +129,16 @@ begin
   Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
 end;
 
+function ShouldInstallVcRedist: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\redist\VC_redist.x64.exe'));
+end;
+
 [Run]
+#ifdef VcRedistBundled
+; Idempotent on machines that already have the runtime; required for GoSurvey.exe (/MD).
+Filename: "{app}\redist\VC_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ runtime..."; Flags: waituntilterminated; Check: ShouldInstallVcRedist
+#endif
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 ; The updater's relaunch, routed through Explorer.
 ;

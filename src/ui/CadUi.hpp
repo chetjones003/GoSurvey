@@ -216,6 +216,16 @@ bool LaunchSequenceOverlayActive(const AppCommandState& cmd, bool updateOfferBlo
 void MaybeAutoOpenWhatsNew(AppCommandState& cmd);
 void RequestWhatsNewWindow(AppCommandState& cmd);
 
+/// Shared "billboard" modal look (What's New + Software Update). Push BEFORE BeginPopupModal and
+/// pop after the matching EndPopup — or right away when BeginPopupModal returns false.
+/// `Chrome` paints the gradient + glow and `Badge` the GS logo row; `BodyBackdrop` fills a child.
+void PushBillboardModalStyle(float alpha, float borderSize);
+void PopBillboardModalStyle();
+void DrawBillboardChrome(float alpha, float glowT);
+void DrawBillboardBadge(float size, float padTop, float padBottom);
+void DrawBillboardBodyBackdrop();
+bool BillboardButton(const char* label, bool primary);
+
 /// Shipped user manual (resources/wiki). F1 and Help → User Manual.
 void RequestWikiWindow(AppCommandState& cmd, std::string_view pageSlug = "Home");
 void RequestContextualWikiWindow(AppCommandState& cmd, const char* cmdBuf);

@@ -1,157 +1,91 @@
+{{define "content"}}
+{{with .Stats}}
 <div class="kpi-grid">
   <div class="kpi">
     <div class="kpi-label">Total installs</div>
-    <div class="kpi-value">{{.Stats.InstallsTotal}}</div>
-    <div class="kpi-hint">COUNT(*) where event='install'</div>
+    <div class="kpi-value">{{num .InstallsTotal}}</div>
+    <div class="kpi-hint">+{{num .Installs30d}} in the last 30 days</div>
   </div>
   <div class="kpi">
-    <div class="kpi-label">Active 7d</div>
-    <div class="kpi-value">{{.Stats.Active7d}}</div>
-    <div class="kpi-hint">DISTINCT install_id, event='active'</div>
+    <div class="kpi-label">Active · 7 days</div>
+    <div class="kpi-value">{{num .Active7d}}</div>
+    <div class="kpi-hint">{{percent .Active7d .InstallsTotal}}% of installs</div>
   </div>
   <div class="kpi">
-    <div class="kpi-label">Active 30d</div>
-    <div class="kpi-value">{{.Stats.Active30d}}</div>
-    <div class="kpi-hint">DISTINCT install_id — launches, not deduped</div>
+    <div class="kpi-label">Active · 30 days</div>
+    <div class="kpi-value">{{num .Active30d}}</div>
+    <div class="kpi-hint">{{percent .Active30d .InstallsTotal}}% of installs</div>
   </div>
   <div class="kpi">
     <div class="kpi-label">Registered users</div>
-    <div class="kpi-value">{{.Stats.UsersTotal}}</div>
-    <div class="kpi-hint">gosurvey-accounts.users</div>
+    <div class="kpi-value">{{num .UsersTotal}}</div>
+    <div class="kpi-hint"><a href="/accounts">View accounts →</a></div>
   </div>
 </div>
 
 <div class="grid-2">
   <section class="card">
-    <div class="card-head">
-      <h3>Daily active users</h3>
-      <span class="card-sub">DISTINCT install_id per day — launches deduplicated per day</span>
-    </div>
-    <canvas id="dauChart" height="140"></canvas>
+    <div class="card-head"><h3>Daily active users</h3><div class="seg" data-for="dau-chart"><button data-r="7">7d</button><button data-r="14">14d</button><button data-r="30" class="on">30d</button></div></div>
+    <div class="chart-wrap"><canvas id="dau-chart" class="chart" data-chart="line" data-src="dau-data" data-color="--accent" data-label="active installs"></canvas></div>
+    <script type="application/json" id="dau-data">{{toJSON .DAU}}</script>
   </section>
   <section class="card">
-    <div class="card-head">
-      <h3>Installs per day</h3>
-      <span class="card-sub">New install events</span>
-    </div>
-    <canvas id="installChart" height="140"></canvas>
+    <div class="card-head"><h3>Installs per day</h3><div class="seg" data-for="installs-chart"><button data-r="7">7d</button><button data-r="14">14d</button><button data-r="30" class="on">30d</button></div></div>
+    <div class="chart-wrap"><canvas id="installs-chart" class="chart" data-chart="bar" data-src="installs-data" data-color="--accent-2" data-label="new installs"></canvas></div>
+    <script type="application/json" id="installs-data">{{toJSON .InstallsDaily}}</script>
   </section>
 </div>
 
 <div class="grid-3">
   <section class="card">
-    <div class="card-head"><h3>Version mix</h3><span class="card-sub">Last 30d distinct users</span></div>
+    <div class="card-head"><h3>Version mix</h3><span class="card-sub">Installs seen, last 30d</span></div>
     <div class="bar-list">
-      {{range .Stats.Versions}}
-      <div class="bar-row">
-        <span class="bar-label">{{.Key}}</span>
-        <div class="bar-track"><div class="bar-fill" style="width: {{percent .Count $.Stats.Active30d}}%"></div></div>
-        <span class="bar-val">{{.Count}}</span>
-      </div>
-      {{end}}
+      {{range .Versions}}<div class="bar-row"><span class="bar-label">{{.Key}}</span><div class="bar-track"><div class="bar-fill" style="width:{{.Pct}}%"></div></div><span class="bar-val">{{num .Count}}</span></div>
+      {{else}}<div class="empty">No data yet</div>{{end}}
     </div>
   </section>
   <section class="card">
-    <div class="card-head"><h3>Channel</h3><span class="card-sub">stable vs beta</span></div>
+    <div class="card-head"><h3>Channel &amp; retention</h3><span class="card-sub">stable vs beta</span></div>
     <div class="bar-list">
-      {{range .Stats.Channels}}
-      <div class="bar-row">
-        <span class="bar-label">{{.Key}}</span>
-        <div class="bar-track"><div class="bar-fill alt" style="width: {{percent .Count $.Stats.Active30d}}%"></div></div>
-        <span class="bar-val">{{.Count}}</span>
-      </div>
-      {{end}}
+      {{range .Channels}}<div class="bar-row"><span class="bar-label">{{.Key}}</span><div class="bar-track"><div class="bar-fill alt" style="width:{{.Pct}}%"></div></div><span class="bar-val">{{num .Count}}</span></div>
+      {{else}}<div class="empty">No data yet</div>{{end}}
     </div>
     <div class="retention">
-      <div class="ret-label">Retention (installed 30d+ ago)</div>
-      <div class="ret-val">{{.Stats.Retention.StillActive}} / {{.Stats.Retention.Cohort}} still active — {{printf "%.1f" .Stats.Retention.Percent}}%</div>
-      <div class="bar-track"><div class="bar-fill" style="width: {{printf "%.1f" .Stats.Retention.Percent}}%"></div></div>
+      <div class="ret-label">30-day retention</div>
+      <div class="ret-big">{{printf "%.0f" .Retention.Percent}}%</div>
+      <div class="bar-track"><div class="bar-fill" style="width:{{printf "%.1f" .Retention.Percent}}%"></div></div>
+      <div class="muted small">{{num .Retention.StillActive}} of {{num .Retention.Cohort}} installs from 30+ days ago are still active</div>
     </div>
   </section>
   <section class="card">
-    <div class="card-head"><h3>Countries</h3><span class="card-sub">Top 8, server-derived cf.country</span></div>
-    <table class="mini-table">
-      <thead><tr><th>Country</th><th>Users</th></tr></thead>
-      <tbody>
-        {{range .Stats.Countries}}<tr><td>{{.Key}}</td><td>{{.Count}}</td></tr>{{end}}
-      </tbody>
-    </table>
+    <div class="card-head"><h3>Countries</h3><span class="card-sub">Top 8</span></div>
+    <div class="bar-list">
+      {{range .Countries}}<div class="bar-row wide"><span class="bar-label name" title="{{.Key}}">{{country .Key}}</span><div class="bar-track"><div class="bar-fill" style="width:{{.Pct}}%"></div></div><span class="bar-val">{{num .Count}}</span></div>
+      {{else}}<div class="empty">No data yet</div>{{end}}
+    </div>
   </section>
 </div>
+{{end}}
 
-<section class="card">
-  <div class="card-head">
-    <h3>Recent pings</h3>
-    <a class="link" href="/telemetry">Open telemetry →</a>
-  </div>
+<section class="card flush">
+  <div class="card-head pad"><h3>Recent pings</h3><a class="link" href="/telemetry">Open telemetry →</a></div>
   <div class="table-wrap">
-    <table class="table">
-      <thead><tr><th>ID</th><th>TS</th><th>Event</th><th>Version</th><th>Channel</th><th>Country</th><th>Email</th><th>Install ID</th></tr></thead>
+    <table class="table rt" data-table="recent" data-client="1">
+      <thead><tr><th data-sort="when">When</th><th data-sort="event">Event</th><th data-sort="version">Version</th><th data-sort="channel">Channel</th><th data-sort="country">Country</th><th data-sort="email">Email</th><th data-sort="install">Install ID</th></tr></thead>
       <tbody>
-        {{range slice .Pings 0 8}}
+        {{range .Pings}}
         <tr>
-          <td class="mono">{{.ID}}</td>
-          <td class="mono muted">{{.TS}}</td>
+          <td data-v="{{.ID}}" title="{{.TS}}">{{ago .TS}} <span class="muted mono">{{stamp .TS}}</span></td>
           <td><span class="badge {{.Event}}">{{.Event}}</span></td>
           <td class="mono">{{.Version}}</td>
           <td><span class="badge ch">{{.Channel}}</span></td>
-          <td>{{if .Country}}{{.Country}}{{else}}—{{end}}</td>
-          <td class="mono muted">{{if .Email}}{{.Email}}{{else}}—{{end}}</td>
-          <td class="mono muted" title="{{.InstallID}}">{{slice .InstallID 0 8}}…</td>
+          <td>{{if .Country}}{{country .Country}}{{else}}<span class="muted">—</span>{{end}}</td>
+          <td class="mono">{{if .Email}}{{.Email}}{{else}}<span class="muted">—</span>{{end}}</td>
+          <td class="mono muted copy" title="Click to copy" data-copy="{{.InstallID}}">{{.InstallID}}</td>
         </tr>
-        {{end}}
+        {{else}}<tr><td colspan="7" class="empty">No pings yet</td></tr>{{end}}
       </tbody>
     </table>
   </div>
 </section>
-
-<script>
-window.__DAU__ = {{toJSON .Stats.DAU}};
-window.__INSTALLS__ = {{toJSON .Stats.InstallsDaily}};
-</script>
-<script>
-(function(){
-  function draw(canvasId, data, color){
-    var c=document.getElementById(canvasId); if(!c) return;
-    var ctx=c.getContext('2d');
-    var dpr=window.devicePixelRatio||1;
-    var rect=c.getBoundingClientRect();
-    c.width=rect.width*dpr; c.height=rect.height*dpr;
-    ctx.scale(dpr,dpr);
-    var W=rect.width, H=rect.height, padL=28, padR=12, padT=12, padB=22;
-    var vals=data.map(function(d){return d.count});
-    var max=Math.max(1, Math.max.apply(null, vals));
-    var stepX=(W-padL-padR)/Math.max(1,data.length-1);
-    ctx.clearRect(0,0,W,H);
-    ctx.strokeStyle='#e5e7eb'; ctx.lineWidth=1;
-    for(var g=0; g<=4; g++){
-      var y=padT + (H-padT-padB)*g/4;
-      ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
-      var label=Math.round(max*(1-g/4));
-      ctx.fillStyle='#9ca3af'; ctx.font='11px ui-monospace, monospace'; ctx.fillText(String(label), 2, y+3);
-    }
-    ctx.strokeStyle=color; ctx.lineWidth=2; ctx.beginPath();
-    data.forEach(function(d,i){
-      var x=padL + i*stepX;
-      var y=padT + (H-padT-padB)*(1 - d.count/max);
-      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    });
-    ctx.stroke();
-    ctx.fillStyle=color;
-    data.forEach(function(d,i){
-      var x=padL + i*stepX;
-      var y=padT + (H-padT-padB)*(1 - d.count/max);
-      ctx.beginPath(); ctx.arc(x,y,2.5,0,Math.PI*2); ctx.fill();
-    });
-    ctx.fillStyle='#6b7280'; ctx.font='10px ui-sans-serif,system-ui';
-    [0, Math.floor(data.length/2), data.length-1].forEach(function(i){
-      var x=padL + i*stepX;
-      ctx.fillText(data[i].day.slice(5), x-12, H-4);
-    });
-  }
-  window.addEventListener('load', function(){
-    draw('dauChart', window.__DAU__, '#0f766e');
-    draw('installChart', window.__INSTALLS__, '#334155');
-  });
-})();
-</script>
+{{end}}

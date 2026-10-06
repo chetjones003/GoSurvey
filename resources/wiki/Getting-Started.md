@@ -28,7 +28,9 @@ Drawings are saved as `.gs`. Exchange with other CAD is through **DXF** (built i
    your PC"*. Choose **More info → Run anyway** if you trust the release.
 
 **If the program will not start with a missing-DLL error**, install the
-[Visual C++ Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
+The installer installs the **Microsoft Visual C++ runtime** automatically. You only need a [manual VC++ install](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if an IT policy blocked the install step or you copied `GoSurvey.exe` without running the installer.
+
+GoSurvey needs **OpenGL 3.3** from your graphics driver (normal on current Windows PCs with updated drivers). If startup fails, read the dialog and `%APPDATA%\GoSurvey\startup-failure.log`.
 
 ### Updates
 

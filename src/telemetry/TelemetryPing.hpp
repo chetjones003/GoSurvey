@@ -17,6 +17,11 @@
 /// superseded it and lives in git history if ever needed.
 constexpr const char* TelemetryEndpoint = "https://gosurvey-telemetry.gosurvey.workers.dev/v1/ping";
 
+/// Silent startup-failure diagnostics (StartupFailure.cpp). Same host as telemetry; separate route
+/// and D1 table. Fire-and-forget — the client does not retry or surface errors to the user.
+constexpr const char* StartupReportEndpoint =
+    "https://gosurvey-telemetry.gosurvey.workers.dev/v1/startup-report";
+
 struct TelemetryPayload {
   std::string installId;
   std::string event;  // "install" or "active"

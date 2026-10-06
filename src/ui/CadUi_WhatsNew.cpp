@@ -26,7 +26,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <string>
+#include <unordered_map>
 
 namespace {
 
@@ -141,6 +143,41 @@ BackdropTex& WhatsNewBackdrop() {
       slot.tex = LoadIconTextureRgba(path, &slot.w, &slot.h);
   }
   return slot;
+}
+
+struct WhatsNewImageCacheEntry {
+  unsigned int tex = 0;
+  int          w = 0;
+  int          h = 0;
+};
+
+std::unordered_map<std::string, WhatsNewImageCacheEntry>& WhatsNewImageCache() {
+  static std::unordered_map<std::string, WhatsNewImageCacheEntry> cache;
+  return cache;
+}
+
+unsigned int ResolveWhatsNewImage(std::string_view src, int* outW, int* outH) {
+  assert(outW != nullptr);
+  assert(outH != nullptr);
+
+  std::string fileName(src);
+  constexpr std::string_view kPrefix = "whats-new:";
+  if (fileName.rfind(kPrefix, 0) == 0)
+    fileName.erase(0, kPrefix.size());
+  if (fileName.empty())
+    return 0;
+
+  WhatsNewImageCacheEntry& slot = WhatsNewImageCache()[fileName];
+  if (slot.tex == 0) {
+    const std::filesystem::path path =
+        ResolveBundledAssetPath(std::filesystem::path("resources") / "whats-new" / fileName);
+    if (!path.empty())
+      slot.tex = LoadIconTextureRgba(path, &slot.w, &slot.h);
+  }
+
+  *outW = slot.w;
+  *outH = slot.h;
+  return slot.tex;
 }
 
 struct LaunchSpinnerLayout {
@@ -394,6 +431,70 @@ void DrawLaunchSequenceOverlay(AppCommandState& cmd, const bool updateOfferBlock
   DrawLaunchSpinnerForeground(vp, spinnerStatus);
 }
 
+void PushBillboardModalStyle(const float alpha, const float borderSize) {
+  const ImVec4 winBg = IsDark() ? ImVec4(0.03f, 0.05f, 0.10f, 1.f) : ImVec4(0.98f, 0.99f, 1.f, 1.f);
+  const ImVec4 titleBg = Lerp(IsDark() ? ImVec4(0.025f, 0.04f, 0.08f, 1.f)
+                                       : ImVec4(0.88f, 0.92f, 0.97f, 1.f),
+                              Accent(), 0.55f);
+  ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, borderSize);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 12.f));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, winBg);
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, WhatsNewBodyBase());
+  ImGui::PushStyleColor(ImGuiCol_Border, Accent());
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, titleBg);
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, AccentLo());
+  ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, titleBg);
+  ImGui::PushStyleColor(ImGuiCol_CheckMark, AccentHi());
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, IsDark() ? ImVec4(0.04f, 0.07f, 0.12f, 1.f)
+                                                   : ImVec4(0.90f, 0.93f, 0.97f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Lerp(winBg, Accent(), 0.20f));
+  ImGui::PushStyleColor(ImGuiCol_Separator, Lerp(winBg, Accent(), 0.45f));
+}
+
+void PopBillboardModalStyle() {
+  ImGui::PopStyleColor(10);
+  ImGui::PopStyleVar(4);
+}
+
+void DrawBillboardChrome(const float alpha, const float glowT) {
+  const ImVec2 a = ImGui::GetWindowPos();
+  const ImVec2 b(a.x + ImGui::GetWindowSize().x, a.y + ImGui::GetWindowSize().y);
+  const float  rnd = ImGui::GetStyle().WindowRounding;
+  DrawWhatsNewWindowGradient(ImGui::GetWindowDrawList(), a, b, rnd);
+
+  ImDrawList* bg = ImGui::GetBackgroundDrawList();
+  ImVec4 accentGlow = AccentHi();
+  accentGlow.w *= alpha * glowT;
+  bg->AddRectFilled(ImVec2(a.x + 8.f, a.y + 10.f), ImVec2(b.x + 8.f, b.y + 10.f),
+                    ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.45f * alpha)), rnd);
+  bg->AddRect(ImVec2(a.x - 1.f, a.y - 1.f), ImVec2(b.x + 1.f, b.y + 1.f),
+              ImGui::GetColorU32(accentGlow), rnd + 1.f, 0, LerpFloat(0.5f, 2.f, glowT));
+}
+
+void DrawBillboardBadge(const float size, const float padTop, const float padBottom) {
+  const ImVec2 logoRow  = ImGui::GetCursorScreenPos();
+  const float  contentW = ImGui::GetContentRegionAvail().x;
+  ImGui::Dummy(ImVec2(0.f, padTop + size + padBottom));
+  DrawGsBadge(ImGui::GetWindowDrawList(),
+              ImVec2(logoRow.x + contentW * 0.5f, logoRow.y + padTop + size * 0.5f), size);
+}
+
+// Call as the first thing inside a child opened with ImGuiWindowFlags_NoBackground.
+void DrawBillboardBodyBackdrop() {
+  ImDrawList*  dl = ImGui::GetWindowDrawList();
+  const ImVec2 a  = ImGui::GetWindowPos();
+  const ImVec2 b(a.x + ImGui::GetWindowSize().x, a.y + ImGui::GetWindowSize().y);
+  dl->AddRectFilled(a, b, ImGui::GetColorU32(WhatsNewBodyBase()), 6.f);
+  DrawFaintBackdrop(dl, a, b);
+  ImGui::SetCursorPos(ImGui::GetStyle().WindowPadding);
+}
+
+bool BillboardButton(const char* label, const bool primary) {
+  return AccentButton(label, primary);
+}
+
 void DrawWhatsNewWindow(AppCommandState& cmd) {
   const char* kPopupId = "What's New##GoSurvey336";
 
@@ -456,24 +557,7 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
   ImGui::SetNextWindowPos(ImVec2(center.x, center.y + yLift), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
   const ImVec4 winBg = IsDark() ? ImVec4(0.03f, 0.05f, 0.10f, 1.f) : ImVec4(0.98f, 0.99f, 1.f, 1.f);
-  const ImVec4 titleBg = Lerp(IsDark() ? ImVec4(0.025f, 0.04f, 0.08f, 1.f)
-                                       : ImVec4(0.88f, 0.92f, 0.97f, 1.f),
-                              Accent(), 0.55f);
-  ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alphaT);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.f);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, LerpFloat(0.5f, 2.5f, scaleEase));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 12.f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, winBg);
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, WhatsNewBodyBase());
-  ImGui::PushStyleColor(ImGuiCol_Border, Accent());
-  ImGui::PushStyleColor(ImGuiCol_TitleBg, titleBg);
-  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, AccentLo());
-  ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, titleBg);
-  ImGui::PushStyleColor(ImGuiCol_CheckMark, AccentHi());
-  ImGui::PushStyleColor(ImGuiCol_FrameBg, IsDark() ? ImVec4(0.04f, 0.07f, 0.12f, 1.f)
-                                                   : ImVec4(0.90f, 0.93f, 0.97f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Lerp(winBg, Accent(), 0.20f));
-  ImGui::PushStyleColor(ImGuiCol_Separator, Lerp(winBg, Accent(), 0.45f));
+  PushBillboardModalStyle(alphaT, LerpFloat(0.5f, 2.5f, scaleEase));
 
   // Modal: blocks every click/hover to windows behind until Close (same pattern as SignInGate /
   // UpdateDialog). No close button — exit is explicit Close or View release notes only.
@@ -482,8 +566,7 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
                                  ImGuiWindowFlags_NoSavedSettings;
 
   if (!ImGui::BeginPopupModal(kPopupId, nullptr, flags)) {
-    ImGui::PopStyleColor(10);
-    ImGui::PopStyleVar(4);
+    PopBillboardModalStyle();
     return;
   }
 
@@ -492,40 +575,11 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
 
   ImGui::PushFont(FontReg::Billboard());
 
-  {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2  a  = ImGui::GetWindowPos();
-    const ImVec2  b(a.x + ImGui::GetWindowSize().x, a.y + ImGui::GetWindowSize().y);
-    const float   rnd = ImGui::GetStyle().WindowRounding;
-    DrawWhatsNewWindowGradient(dl, a, b, rnd);
-  }
-
-  {
-    ImDrawList* bg = ImGui::GetBackgroundDrawList();
-    const ImVec2 a = ImGui::GetWindowPos();
-    const ImVec2 b(a.x + ImGui::GetWindowSize().x, a.y + ImGui::GetWindowSize().y);
-    const float rnd = ImGui::GetStyle().WindowRounding;
-    const float glowA = alphaT * LerpFloat(0.f, 1.f, scaleEase);
-    ImVec4 accentGlow = AccentHi();
-    accentGlow.w *= glowA;
-    bg->AddRectFilled(ImVec2(a.x + 8.f, a.y + 10.f), ImVec2(b.x + 8.f, b.y + 10.f),
-                      ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.45f * alphaT)), rnd);
-    bg->AddRect(ImVec2(a.x - 1.f, a.y - 1.f), ImVec2(b.x + 1.f, b.y + 1.f),
-                ImGui::GetColorU32(accentGlow), rnd + 1.f, 0, LerpFloat(0.5f, 2.f, scaleEase));
-  }
+  DrawBillboardChrome(alphaT, scaleEase);
 
   // Centered app logo (crisp GS badge — same mark as the Start hero).
-  {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 logoRow = ImGui::GetCursorScreenPos();
-    const float contentW = ImGui::GetContentRegionAvail().x;
-    const float logoSz = LerpFloat(52.f, 72.f, scaleEase);
-    const float logoPadTop = LerpFloat(14.f, 22.f, scaleEase);
-    const float logoPadBot = LerpFloat(10.f, 16.f, scaleEase);
-    ImGui::Dummy(ImVec2(0.f, logoPadTop + logoSz + logoPadBot));
-    const ImVec2 logoCenter(logoRow.x + contentW * 0.5f, logoRow.y + logoPadTop + logoSz * 0.5f);
-    DrawGsBadge(dl, logoCenter, logoSz);
-  }
+  DrawBillboardBadge(LerpFloat(52.f, 72.f, scaleEase), LerpFloat(14.f, 22.f, scaleEase),
+                     LerpFloat(10.f, 16.f, scaleEase));
 
   const ImVec2 bodySize(0.f, -ImGui::GetFrameHeightWithSpacing() * 2.6f);
   ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f);
@@ -535,16 +589,13 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f));
   if (ImGui::BeginChild("##whatsNewBody", bodySize, true,
                         ImGuiWindowFlags_NoBackground)) {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 a = ImGui::GetWindowPos();
-    const ImVec2 b(a.x + ImGui::GetWindowSize().x, a.y + ImGui::GetWindowSize().y);
-    dl->AddRectFilled(a, b, ImGui::GetColorU32(WhatsNewBodyBase()), 6.f);
-    DrawFaintBackdrop(dl, a, b);
-
     // Keep markdown above the backdrop in z-order by drawing text after the image.
-    ImGui::SetCursorPos(ImVec2(ImGui::GetStyle().WindowPadding.x, ImGui::GetStyle().WindowPadding.y));
+    DrawBillboardBodyBackdrop();
     if (cachedContent.ok) {
-      DrawMarkdownImGui(cachedContent.markdown);
+      MarkdownImGuiHooks hooks;
+      hooks.resolveImage = ResolveWhatsNewImage;
+      hooks.headingFont  = FontReg::WikiHeading();
+      DrawMarkdownImGui(cachedContent.markdown, &hooks);
     } else {
       ImGui::TextWrapped("%s", cachedContent.fallbackMessage.c_str());
       ImGui::Spacing();
@@ -576,6 +627,5 @@ void DrawWhatsNewWindow(AppCommandState& cmd) {
 
   ImGui::PopFont();
   ImGui::EndPopup();
-  ImGui::PopStyleColor(10);
-  ImGui::PopStyleVar(4);
+  PopBillboardModalStyle();
 }

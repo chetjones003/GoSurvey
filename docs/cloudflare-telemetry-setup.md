@@ -88,7 +88,7 @@ Verify the table is really there, in the real database:
 npx wrangler d1 execute gosurvey-telemetry --remote --command "SELECT name FROM sqlite_master WHERE type='table'"
 ```
 
-You should see `pings`.
+You should see `pings` and `startup_reports` (re-run this command after pulling schema changes — it is idempotent).
 
 ---
 
