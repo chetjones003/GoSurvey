@@ -1,9 +1,11 @@
 #pragma once
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -84,7 +86,31 @@ struct EntityAttributes {
   float lineweightMm = -1.f;
   /// 0 = opaque, 1 = fully transparent; \c -1.f means ByLayer.
   float transparency = -1.f;
+  /// The surface this entity is DRAPED ON and follows, by that surface stable id (ADR-062 (c),
+  /// GitHub #150). **0 means not linked**, the default, and what a baked drape leaves behind.
+  ///
+  /// An id, never a name (a name can be changed) and never an array index (`cadSurfaces` compacts
+  /// on erase, so an index is not a name -- architecture section 11.9). It resolves through
+  /// `FindSurfaceIndexById`, which answers -1 for a surface that is gone, so an erased surface
+  /// leaves the geometry exactly where it is rather than moving or deleting it (ADR-062 (e)).
+  std::uint64_t drapedOnSurfaceId = 0;
+  /// When true, shaded mesh/solid drawing uses \ref materialDiffuseR/G/B (REQ-372 import).
+  bool materialDiffuseOverride = false;
+  float materialDiffuseR = 0.f;
+  float materialDiffuseG = 0.f;
+  float materialDiffuseB = 0.f;
+  /// AutoCAD MATERIAL name when known from DWG import (REQ-372 inc 3); empty if synthesized on export.
+  std::string materialName;
 };
+
+/// The linetypes an entity can be given (\ref EntityAttributes::linetype storage) — the Properties
+/// panel's list and the values CHPROP accepts (REQ-356), one list so the two cannot disagree.
+inline constexpr const char* kEntityLinetypeStorage[] = {"ByLayer", "ByBlock", "Continuous", "DASHED", "HIDDEN", "CENTER",
+                                                         "PHANTOM", "DIVIDE", "BORDER"};
+/// The lineweights an entity can be given, in millimetres; \c -1 = ByLayer. Same sharing as above.
+inline constexpr float kEntityLineweightMmPresets[] = {
+    -1.f,  0.f,   0.05f, 0.09f, 0.13f, 0.15f, 0.18f, 0.20f, 0.25f, 0.30f, 0.35f, 0.40f,
+    0.50f, 0.53f, 0.60f, 0.70f, 0.80f, 0.90f, 1.00f, 1.06f, 1.20f, 1.40f, 1.58f, 2.00f, 2.11f};
 
 /// A named text style (REQ-044 / ADR-020): reusable font + size + slant + weight applied to TEXT/MTEXT.
 /// Color is intentionally NOT a style property — it stays a layer/object property (AutoCAD-faithful).
@@ -332,6 +358,10 @@ struct CadAnnotation {
   /// Per-property override flags: when set, this annotation's own field wins over its style and a style
   /// edit does not re-bake that property (ADR-020).
   bool ovFont = false, ovHeight = false, ovOblique = false, ovBold = false, ovItalic = false;
+  /// When true, plotted height follows the active viewport scale (issue #622 / REQ-110 sketch).
+  bool annotative = false;
+  /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
+  std::vector<std::string> annotativeVisibleScaleNames;
   /// \c Kind::DimAligned / \c DimLinear / \c DimAngular — extension or ray points (on measured geometry).
   float dimExt1X = 0.f, dimExt1Y = 0.f, dimExt2X = 0.f, dimExt2Y = 0.f;
   /// \c Kind::DimAngular — vertex (center) of the measured angle.
@@ -357,6 +387,53 @@ struct CadAnnotation {
   int tableCols = 0;
   std::vector<std::string> tableCells;
 };
+
+/// A multileader callout (REQ-367 / issue #619): leader path in LOCAL XYZ (triplets) plus MTEXT at the
+/// landing. v1 is DWG import/export and display; the MLEADER command is a follow-up increment.
+struct CadMultileader {
+  std::vector<float> pathXyz; ///< tip → … → landing, local storage (Z absolute like CadAnnotation::insZ).
+  /// Additional arrow branches sharing the same landing / label (Add Leader).
+  std::vector<std::vector<float>> extraLeaderPaths;
+  /// When true, label height follows viewport/paper scale (issue #622); otherwise model plot scale only.
+  bool annotative = false;
+  /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
+  std::vector<std::string> annotativeVisibleScaleNames;
+  CadAnnotation label;        ///< Kind::Mtext at the text side of the landing.
+};
+
+inline void CadMultileaderLandingLocal(const CadMultileader& ml, float* x, float* y, float* z) {
+  assert(x != nullptr && y != nullptr && z != nullptr);
+  assert(ml.pathXyz.size() >= 3);
+  const size_t n = ml.pathXyz.size();
+  *x = ml.pathXyz[n - 3];
+  *y = ml.pathXyz[n - 2];
+  *z = ml.pathXyz[n - 1];
+}
+
+inline int CadMultileaderBranchCount(const CadMultileader& ml) {
+  return 1 + static_cast<int>(ml.extraLeaderPaths.size());
+}
+
+/// A Position Marker (REQ-359 item 3, D-2026-09-29-e): a cross inside a circle at a point, drawn at a
+/// fixed plotted size, plus its OWN multi-line label. One object — MOVE / COPY / ERASE / UNDO act on
+/// the marker and its label together — so the label lives here, not in `cadAnnotations`.
+struct CadPositionMarker {
+  /// LOCAL coordinates (world = local + worldDocumentOrigin), in double: the marker is a surveyed
+  /// position and REQ-359 checks it to 0.001 ft, which a float cannot hold at state-plane offsets.
+  double x = 0.0;
+  double y = 0.0;
+  /// Elevation, absolute (the local rebase is X/Y-only, as CadAnnotation::insZ).
+  float z = 0.f;
+  /// Latitude / longitude (degrees, the zone's datum) when it was placed. Informational: the label
+  /// is what the user wrote, and a later zone change does not rewrite either.
+  double latitudeDeg = 0.0;
+  double longitudeDeg = 0.0;
+  /// Kind::Mtext, in the same LOCAL coordinates as every model annotation.
+  CadAnnotation label;
+};
+
+/// Radius of a Position Marker's circle in plotted inches; the model size is this × drawing scale.
+inline constexpr float kPositionMarkerPlottedRadiusIn = 0.1f;
 
 [[nodiscard]] inline bool CadAnnotationHasTextBox(CadAnnotation::Kind k) {
   return k == CadAnnotation::Kind::Mtext || k == CadAnnotation::Kind::Table;
@@ -487,10 +564,40 @@ struct CadPipeRun {
   /// NPS label used for BOTH display and catalog lookup (D-2026-09-12 decision 4), e.g. "4in".
   /// Not parametric — `CadPipeNominalOdFeet` (cadpiperun.hpp) is the one place it becomes a size.
   std::string nominalSize;
+  /// Wall thickness in INCHES (D-2026-09-23-a, user-requested) — a pipe is a tube, not a rod, and
+  /// this is what makes it one: the bore is the OD less twice this. Inches, like `nominalSize`, not
+  /// drawing feet, because that is the unit a pipe wall is specified in everywhere else.
+  ///
+  /// **0 means "not stated", not "solid"**: the run is then built at the schedule-40 wall for its
+  /// size (`CadPipeStandardWallThicknessInches`, cadpiperun.hpp). That is what makes a drawing
+  /// saved before pipes were hollow — every run in it carrying 0 — open as real pipe rather than as
+  /// rod, with no migration step and no `.gs` version bump.
+  double wallThicknessIn = 0.0;
   /// "CS150" / "CS300" (D-2026-09-12 decision 1) or empty for an unclassified run. Kept a string,
   /// not `CadPipePressureClass`, so this header stays free of cadblock.hpp's heavier includes;
   /// `ParseCadPipePressureClass` / `CadPipePressureClassTag` convert at the few sites that need it.
   std::string pressureClassTag;
+};
+
+/// A named PIPING NETWORK (issue #486 increment B3 / REQ-345): a container that owns a set of
+/// `CadPipeRun`s, so a set of routed runs can be selected, renamed and reported on together as one
+/// system rather than as loose, unrelated entities. "Piping owns topology, blocks own geometry"
+/// (the issue's own architectural note) applies one level up here too: a `CadPipingSystem` owns no
+/// geometry of its own — it is a list of indices into `AppCommandState::cadPipeRuns` plus a name.
+/// D-2026-09-12 decision 3: multiple named networks per drawing, each independent.
+///
+/// A pipe run belongs to AT MOST ONE network at a time (the simplest topology a "system" name can
+/// mean — two networks both claiming the same run would make "this system's total length" and
+/// similar reports ambiguous about double-counting). `PIPESYS ADD` moves a run out of any network
+/// it already belongs to before adding it to the new one, rather than refusing or duplicating.
+struct CadPipingSystem {
+  /// User-facing name. Never empty for a stored network — `PIPESYS NEW` refuses a blank name the
+  /// same way `PIPERUN`'s own nominal-size prompt refuses an empty one.
+  std::string name;
+  /// Indices into `AppCommandState::cadPipeRuns`. Kept sorted ascending and duplicate-free so
+  /// reports (`PIPESYS LIST`) and the reindexing that runs when a pipe run is deleted
+  /// (`ExecuteDeleteSelection`) don't have to special-case either.
+  std::vector<int> pipeRunIndices;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -749,19 +856,109 @@ inline void CurveEndpointsWorld(const CadArc& a, ray3d::Vec3* outStart, ray3d::V
     *outEnd = CurvePointAt(plane, r, static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad));
 }
 
-/// Axis-aligned ellipse: center + major-axis vector (semi-major length = |majV|) + minor/major ratio (0,1].
+/// An ellipse: centre + major-axis vector (semi-major length = |majV|) + minor/major ratio (0,1],
+/// in the plane its normal names.
 struct CadEllipse {
   double cx = 0.0;
   double cy = 0.0;
   /// Major-axis vector and ratio stay `float` — a direction and a shape ratio, not coordinates
   /// (see \ref CadArc angle note). Keeps the DXF ellipse round-trip byte-stable (issue #113).
+  ///
+  /// Read in the ellipse's OWN plane (\ref CurvePlane), the way \ref CadArc::startRad is: for the
+  /// flat case that plane's axes ARE world X and Y, so this is the same pair of numbers it has
+  /// always been, and a flat ellipse is bit-identical through save and reload (GitHub #531).
   float majVx = 1.f;
   float majVy = 0.f;
   float ratio = 0.5f;
-  /// Elevation of the ellipse's plane (REQ-057 / ADR-025) — parallel to XY, absolute
-  /// (ADR-025 D2), always 0 in paper space (ADR-025 (g)). Same rationale as \ref CadArc::z.
+  /// Elevation of the ellipse's CENTRE (REQ-057 / ADR-025) — absolute (ADR-025 D2), always 0 in
+  /// paper space (ADR-025 (g)). Same rationale as \ref CadArc::z; on a tilted ellipse it is the
+  /// centre's own height, not one every point shares.
   double z = 0.0;
+  /// Plane normal (REQ-312's rule, extended to the ellipse by GitHub #531). World +Z is the flat
+  /// case — every ellipse that existed before this field — and `ucs::FromNormal` maps a +Z normal
+  /// onto the world X and Y axes exactly, so nothing flat moves. A tilted ellipse lies in
+  /// `ucs::FromNormal({cx, cy, z}, {nx, ny, nz})`: the Arbitrary Axis Algorithm, so a DXF consumer
+  /// rebuilding the frame from group 210 lands on the same points. Paper space stays flat.
+  float nx = 0.f;
+  float ny = 0.f;
+  float nz = 1.f;
+  /// The span actually drawn, measured in the ellipse's own parametrisation from its major axis
+  /// (GitHub #520 follow-up: a tilted cut that runs off the end of a pipe is an elliptical ARC plus
+  /// a chord). A full turn — `startRad = 0`, `sweepRad = 2*pi` — is every ellipse that existed
+  /// before this field, so nothing closed moves, and `EllipseIsFullTurn` is the one test for it.
+  ///
+  /// Angles stay `float` for the reason \ref CadArc's do, and are the same pair DXF states in groups
+  /// 41 and 42.
+  float startRad = 0.f;
+  float sweepRad = 6.28318530717958647692f;
 };
+
+/// The plane an ellipse lies in (GitHub #531) — the same frame, at its centre.
+[[nodiscard]] inline ucs::Ucs CurvePlane(const CadEllipse& e) {
+  return CurvePlane(static_cast<double>(e.cx), static_cast<double>(e.cy), static_cast<double>(e.z),
+                    static_cast<double>(e.nx), static_cast<double>(e.ny), static_cast<double>(e.nz));
+}
+
+/// The world point at parameter \p t (radians) on \p e, through the ellipse's own plane.
+///
+/// `centre + majV·cos t + minorV·sin t`, with both axes taken in that plane — so for a flat ellipse
+/// this is the world XY arithmetic it has always been, and for a tilted one it is the same curve
+/// stood up. The one place an ellipse is turned into points, so render, pick and snap cannot
+/// disagree about where it runs.
+[[nodiscard]] inline ray3d::Vec3 EllipseWorldPointAt(const CadEllipse& e, double t) {
+  const ucs::Ucs plane = CurvePlane(e);
+  const double mx = static_cast<double>(e.majVx);
+  const double my = static_cast<double>(e.majVy);
+  const double r = static_cast<double>(e.ratio);
+  const double c = std::cos(t);
+  const double s = std::sin(t);
+  // The minor axis is the major turned a quarter turn IN THE PLANE, scaled by the ratio.
+  const double u = mx * c - my * r * s;
+  const double v = my * c + mx * r * s;
+  return ucs::PlaneToWorld(plane, ucs::Point2D{u, v});
+}
+
+/// Whether \p e lies flat in world XY — the case every ellipse was before GitHub #531, and the one
+/// the paper space, DXF-elevation and plan-view paths are allowed to assume.
+[[nodiscard]] inline bool EllipseIsFlat(const CadEllipse& e) { return IsFlatNormal(e.nx, e.ny, e.nz); }
+
+/// Whether \p e is a closed ellipse — every ellipse before the arc span existed, and the case the
+/// area, the closed-outline draw and the `.gs`/DXF byte-stability all key off.
+[[nodiscard]] inline bool EllipseIsFullTurn(const CadEllipse& e) {
+  return std::fabs(std::fabs(static_cast<double>(e.sweepRad)) - 6.283185307179586) < 1e-6;
+}
+
+/// The angle at \p t in [0, 1] along \p e's drawn span — a full ellipse walks the whole turn, an
+/// elliptical arc only the part it was cut to.
+[[nodiscard]] inline double EllipseSpanAngleAt(const CadEllipse& e, double t) {
+  return static_cast<double>(e.startRad) + static_cast<double>(e.sweepRad) * t;
+}
+
+/// Whether \p e offers grips at all, and \ref EllipseGripPoints their three world positions: the
+/// centre, the major-axis endpoint and the minor-axis endpoint (GitHub #531).
+///
+/// One helper because four places ask — the grip hit test in `CadCommands.cpp`, the hover hit test
+/// and both grip draws in `CadUi.cpp` — and a handle drawn anywhere but where it is grabbed is worse
+/// than no handle at all. A flat ellipse's three points are the world XY arithmetic they have always
+/// been; a tilted one's stand in its own plane.
+///
+/// A part-drawn ellipse (a section's elliptical arc) offers none: an axis endpoint need not lie on
+/// the drawn span, so an axis grip there is a handle in empty space — the exact fault this pass
+/// removed. Endpoint grips for an elliptical arc are their own slice.
+[[nodiscard]] inline bool EllipseHasGrips(const CadEllipse& e) {
+  return EllipseIsFullTurn(e) && std::hypot(static_cast<double>(e.majVx), static_cast<double>(e.majVy)) > 1e-12;
+}
+
+/// The three grip positions of \p e in world space, in grip-index order (centre, major, minor).
+/// Only meaningful when \ref EllipseHasGrips is true.
+inline void EllipseGripPoints(const CadEllipse& e, ray3d::Vec3 out[3]) {
+  constexpr double kHalfPi = 1.57079632679489661923;
+  out[0] = ray3d::Vec3{static_cast<double>(e.cx), static_cast<double>(e.cy), static_cast<double>(e.z)};
+  // t = 0 is the major-axis endpoint and t = pi/2 the minor one, which for a flat ellipse are
+  // exactly `centre + majV` and `centre + perp(majV) * ratio`.
+  out[1] = EllipseWorldPointAt(e, 0.0);
+  out[2] = EllipseWorldPointAt(e, kHalfPi);
+}
 
 /// One named sub-range of a mesh — a single object from the imported model (REQ-063).
 ///
@@ -779,8 +976,8 @@ struct CadMeshPart {
 
 /// An imported triangle mesh (REQ-063 / ADR-026 (c)) — **reference geometry, never authored here**.
 ///
-/// No command creates one, no grip moves a vertex, and it is excluded from DXF/DWG export, which
-/// has no lossless representation for it. It participates in layers, selection, erase and extents.
+/// No command creates one, no grip moves a vertex. DWG export writes triangles as `POLYLINE_PFACE`
+/// (issue #611); DXF export remains excluded. It participates in layers, selection, erase and extents.
 ///
 /// **Held as `shared_ptr<const CadMesh>`** by both the live state and every undo snapshot
 /// (architecture §11.5 as amended 2026-08-12). That is not an optimisation detail — it is what
@@ -958,9 +1155,8 @@ enum class SurfaceKind : std::uint8_t { Tin, Grid, TinVolume, GridVolume, Corrid
 /// Small and copyable: the heavy triangulation hangs off a shared pointer, so copying a surface —
 /// which every undo snapshot does — is a couple of strings and a refcount bump.
 ///
-/// Surfaces are **not written to DXF or DWG**: there is no representation GoSurvey can write
-/// losslessly, and the exclusion is stated in the export log rather than left to be discovered
-/// (ADR-028 (f), REQ-201) — the same treatment \ref CadMesh gets.
+/// Surfaces are **not written to DXF**; **DWG** writes a built TIN as `POLYLINE_PFACE` (issue #611).
+/// A surface without a triangulation stays in the export loss list (ADR-028 (f), REQ-201).
 struct CadSurface {
   std::string name;  ///< Unique within the drawing.
   SurfaceKind kind = SurfaceKind::Tin;
@@ -1058,6 +1254,72 @@ struct CadSurface {
   [[nodiscard]] int triangleCount() const { return tin ? tin->triangleCount() : 0; }
 };
 
+/// AutoCAD SCALE dictionary entry (issue #622). Ratio \p drawingUnits / \p paperUnits is model units per
+/// plotted inch for that scale name (same units as the drawing's INSUNITS vs paper inches).
+struct CadAnnotationScale {
+  std::string name;
+  float paperUnits = 1.f;
+  float drawingUnits = 1.f;
+};
+
+/// AutoCAD LIGHT entity preserved from DWG import (REQ-385 / issue #624). GoSurvey does not evaluate
+/// lighting in the viewport; these records exist for R2007+ DWG round-trip.
+struct CadDwgImportedLight {
+  std::string name;
+  unsigned type = 2;  ///< 1 distant, 2 point, 3 spot (AutoCAD LIGHT type codes)
+  bool on = true;
+  unsigned colorRgb24 = 0xFFFFFFu;
+  double intensity = 1.0;
+  double posX = 0.0;
+  double posY = 0.0;
+  double posZ = 0.0;
+  double targetX = 0.0;
+  double targetY = 0.0;
+  double targetZ = 0.0;
+  double hotspotAngle = 0.0;
+  double falloffAngle = 0.0;
+};
+
+/// One entry in AutoCAD's LIGHTLIST registry (REQ-386 / issue #715).
+struct CadDwgImportedLightListEntry {
+  std::string name;
+};
+
+/// Captured LIGHTLIST object from DWG import (REQ-386 / issue #715).
+struct CadDwgImportedLightList {
+  unsigned classVersion = 1;
+  std::vector<CadDwgImportedLightListEntry> entries;
+};
+
+/// AutoCAD SUN dictionary object preserved from DWG import (REQ-385 / issue #624).
+struct CadDwgImportedSun {
+  bool on = true;
+  unsigned colorRgb24 = 0xFFFFFFu;
+  double intensity = 1.0;
+  bool hasShadow = true;
+  unsigned julianDay = 0;
+  unsigned msecs = 0;
+  bool isDst = false;
+};
+
+[[nodiscard]] inline float CadAnnotationScaleModelUnitsPerPlottedInch(const CadAnnotationScale& s) {
+  if (s.paperUnits <= 0.f)
+    return 0.f;
+  return s.drawingUnits / s.paperUnits;
+}
+
+/// Status-bar / combo label for a SCALE dictionary entry (issue #622).
+[[nodiscard]] inline std::string CadAnnotationScaleStatusLabel(const CadAnnotationScale& s) {
+  if (!s.name.empty())
+    return s.name;
+  const float mup = CadAnnotationScaleModelUnitsPerPlottedInch(s);
+  if (mup <= 0.f)
+    return "Scale";
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "1:%.4g", mup);
+  return buf;
+}
+
 /// A solid-filled region (ADR-011), imported from a SOLID-fill HATCH. Holds one or more closed boundary
 /// loops in the same local coordinate frame as line geometry: loop 0 is the outer boundary, any further
 /// loops are holes (islands). Rendered filled with even-odd rule in the GL pass and re-exported as a HATCH.
@@ -1075,6 +1337,10 @@ struct CadFilledRegion {
   std::string patternName;
   float patternAngleDeg = 0.f;   ///< Extra rotation added to the pattern's base direction(s).
   float patternScale = 1.f;      ///< Multiplies the line spacing (larger = sparser).
+  /// When true, pattern spacing follows viewport scale (issue #622).
+  bool annotative = false;
+  /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
+  std::vector<std::string> annotativeVisibleScaleNames;
   /// True when this region is a solid fill (no line pattern).
   bool isSolid() const { return patternName.empty() || patternName == "SOLID"; }
   /// Vertex count of loop \p k.

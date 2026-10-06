@@ -52,6 +52,10 @@ EXPECT SELECTEDSURFACES 1
 # triangle edges — distance zero from the pick, not "close enough".
 CMD SELECT
 CMD OFFSET
+# OFFSET asks for the DISTANCE before the entity, so the pick below never reached the entity step
+# while this line was missing - the transcript was answering the distance prompt with a click and
+# then asserting a refusal the command had not got as far as making.
+CMD 5
 PICK 7.107 16.881
 EXPECT LOG "1 surface ignored"
 EXPECT LOG "a surface cannot be offset"
@@ -107,6 +111,7 @@ EXPECT SELECTEDSURFACES 0
 # It refuses the entity pick too, not only the box — the two funnels are separate code and either
 # one alone would leave the object half-hidden.
 CMD OFFSET
+CMD 5
 PICK 7.107 16.881
 EXPECT LOG "nothing under cursor"
 ESC

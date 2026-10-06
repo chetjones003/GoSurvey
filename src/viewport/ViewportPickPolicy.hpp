@@ -119,6 +119,10 @@ enum class ViewportClickRoute : std::uint8_t {
   /// `HeadlessDriver`'s `PICK` verb calls `SubmitViewportPick` directly and never reaches the
   /// routing layer at all, so no transcript can cover this, however many steps it has.
   SubObjectFacePick,
+  /// 3DMOVE / 3DROTATE / 3DSCALE past their selection step (GitHub issue #564 section 3): the click
+  /// grabs or drops a gizmo handle through `SubmitGizmoClick`, and a click off every handle is not
+  /// a selection change — the command is holding that selection for its handles.
+  GizmoHandlePick,
 };
 
 /// \see ViewportClickRoute. Model space (and floating model space) only — pure paper space has its
@@ -165,6 +169,10 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::MoveTinPoint:
   case K::DelTinLine:
   case K::QuickProfile:
+  case K::GeoMarkPoint:       // REQ-359: Mark Position ▸ Point
+  case K::GeoReorientMarker:  // REQ-359: design point, then a point along north
+  case K::DrawingSettingsPick:  // REQ-360: the Transformation tab's reference / rotation point or direction
+  case K::GeoCaptureArea:       // REQ-364: Pick Area's two corners (a click while capturing is ignored)
     return R::SnappedPointPick;
 
   // --- Entity-pick commands: raw cursor, hit-tested by PickClosestCadEntity. ---
@@ -172,6 +180,14 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::DesignateBreakline:
   case K::DesignateBoundary:
     return R::RawEntityPick;
+
+  // REQ-371 GRADING: the only click it takes names the baseline FEATURE LINE, so it is an entity
+  // pick rather than a coordinate. Every later phase is typed at the options prompt, and routing a
+  // click there to `Ignore` would swallow it in silence — the TASK-082 failure, which no transcript
+  // can catch because a transcript types and never clicks.
+  case K::Grading:
+    return cmd.gradingPhase == AppCommandState::GradingPhase::WaitBaseline ? R::RawEntityPick
+                                                                           : R::Ignore;
 
   // REQ-317 POLYSOLID: points, except at the `O`bject prompt, where the click names an existing
   // Line, Arc, Circle or Polyline to sweep along instead of a coordinate.
@@ -204,6 +220,28 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Rotate:
     return cmd.rotatePhase == AppCommandState::RotatePhase::PickSelection ? R::SelectionAccumulate
                                                                           : R::SnappedPointPick;
+  // 3DMOVE / 3DROTATE / 3DSCALE (GitHub issue #564 section 3): select objects, then the handles.
+  case K::Move3d:
+  case K::Rotate3d:
+  case K::Scale3d:
+    // The base point (D-2026-09-28-c) is an ordinary snapped coordinate, like MOVE's.
+    switch (cmd.gizmoCmdPhase) {
+    case AppCommandState::GizmoCmdPhase::SelectObjects:
+      return R::SelectionAccumulate;
+    case AppCommandState::GizmoCmdPhase::BasePoint:
+      return R::SnappedPointPick;
+    case AppCommandState::GizmoCmdPhase::Handles:
+      return R::GizmoHandlePick;
+    }
+    return R::Ignore;
+  // CHPROP / MATCHPROP / LAYMCUR (REQ-356): every pick step is a "select objects" step; CHPROP's
+  // typed property and value steps take no click.
+  case K::ChProp:
+    return cmd.propCmdPhase == AppCommandState::PropCmdPhase::SelectObjects ? R::SelectionAccumulate
+                                                                           : R::Ignore;
+  case K::MatchProp:
+  case K::LayMCur:
+    return R::SelectionAccumulate;
   // EXTRUDE (REQ-314): select closed polylines / circles (the accumulate-and-Enter shape its
   // siblings use), then a height that is either typed or picked off the cursor ray — a snapped
   // point pick, resolved to a height by SubmitExtrudeViewportPick.
@@ -419,6 +457,8 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::TrimState:
   case K::Elev:
     return R::Ignore;  // system-variable text prompts, answered on the command line
+  case K::GeoMarkLatLong:
+    return R::Ignore;  // REQ-359: latitude and longitude are typed on the command line
   case K::SectionClip:
     // REQ-341. Same shape as the two above: the bare `SECTIONCLIP` prompt is waiting for ON, OFF,
     // FLIP or a distance, all of which arrive on the command line — a viewport click answers none
@@ -507,6 +547,8 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   case R::InsertBlockPick:
   case R::InsertBlockAlignFacePick:
   case R::BconnectFacePick:
+  // A gizmo handle is a widget to drag, not an object to select (GitHub issue #564).
+  case R::GizmoHandlePick:
   case R::Ignore:
     return false;
   }

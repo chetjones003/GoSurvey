@@ -70,3 +70,28 @@ TEST_CASE("unknown annotation kind tag loads as TEXT without crashing (issue #12
   const CadAnnotation a = CadAnnotationFromJson(o);
   REQUIRE(a.kind == CadAnnotation::Kind::Text);
 }
+
+TEST_CASE("annotation annotative flag persists through JSON (issue #622)", "[gs][issue622]") {
+  CadAnnotation a;
+  a.kind = CadAnnotation::Kind::Mtext;
+  a.annotative = true;
+  a.text = "Scale me";
+  json o;
+  CadAnnotationToJson(a, o);
+  REQUIRE(o.at("annotative").get<bool>());
+  const CadAnnotation b = CadAnnotationFromJson(o);
+  REQUIRE(b.annotative);
+}
+
+TEST_CASE("annotation visible scale names persist through JSON (issue #622)", "[gs][issue622]") {
+  CadAnnotation a;
+  a.annotative = true;
+  a.annotativeVisibleScaleNames = {"1:10", "1:50"};
+  json o;
+  CadAnnotationToJson(a, o);
+  REQUIRE(o.at("annotativeVisibleScaleNames").size() == 2);
+  const CadAnnotation b = CadAnnotationFromJson(o);
+  REQUIRE(b.annotativeVisibleScaleNames.size() == 2);
+  CHECK(b.annotativeVisibleScaleNames[0] == "1:10");
+  CHECK(b.annotativeVisibleScaleNames[1] == "1:50");
+}

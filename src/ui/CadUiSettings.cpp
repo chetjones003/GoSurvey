@@ -15,6 +15,8 @@
 
 #include <imgui_stdlib.h>
 
+#include <GL/glew.h>
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -269,13 +271,26 @@ static void DrawGraphicsPerformanceDialog(AppCommandState& cmd, std::vector<std:
   if (!cmd.showGraphicsPerformanceDialog) return;
   ImGui::SetNextWindowSize(ImVec2(560, 640), ImGuiCond_FirstUseEver);
   bool open = cmd.showGraphicsPerformanceDialog;
-  if (!ImGui::Begin("Graphics Performance", &open, ImGuiWindowFlags_NoCollapse)) {
+  if (!ImGui::Begin("Graphics Performance", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) {
     cmd.showGraphicsPerformanceDialog = open; ImGui::End(); return;
   }
   cmd.showGraphicsPerformanceDialog = open;
-  ImGui::TextDisabled("Video Card:       OpenGL (driver-reported)");
-  ImGui::TextDisabled("Driver Version:   reported by GLFW / driver");
-  ImGui::TextDisabled("Virtual Device:   OpenGL %d.x", 3);
+  // Real GL queries (this used to be hardcoded placeholder text — "driver-reported", "3.x" — which
+  // told a user nothing when they were actually trying to diagnose a rendering problem, e.g. jagged
+  // shaded-solid silhouettes that only multisampling fixes, per the MSAA gate in ViewportRenderer).
+  const GLubyte* vendor = glGetString(GL_VENDOR);
+  const GLubyte* renderer = glGetString(GL_RENDERER);
+  const GLubyte* version = glGetString(GL_VERSION);
+  ImGui::TextDisabled("Video Card:       %s", renderer ? reinterpret_cast<const char*>(renderer) : "(unavailable)");
+  ImGui::TextDisabled("Vendor:           %s", vendor ? reinterpret_cast<const char*>(vendor) : "(unavailable)");
+  ImGui::TextDisabled("Driver Version:   %s", version ? reinterpret_cast<const char*>(version) : "(unavailable)");
+  GLint maxSamples = 0;
+  glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+  ImGui::TextDisabled("Max MSAA samples: %d%s", static_cast<int>(maxSamples),
+                       maxSamples < 2 ? "  (multisampling unavailable on this driver — shaded solid"
+                                        " edges and circle/cylinder silhouettes will look jagged/"
+                                        "stair-stepped no matter what Settings say)"
+                                      : "");
   ImGui::Separator();
   ImGui::TextUnformatted("Hardware Acceleration");
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 60.f);
@@ -850,7 +865,7 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::SetNextWindowSize(ImVec2(960, 720), ImGuiCond_FirstUseEver);
   bool open = cmd.showSettingsWindow;
   PushProductDialogAccent();
-  if (!ImGui::Begin("Options", &open, ImGuiWindowFlags_NoCollapse)) {
+  if (!ImGui::Begin("Options", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking)) {
     cmd.showSettingsWindow = open;
     ImGui::End();
     PopProductDialogAccent();
@@ -1211,14 +1226,20 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
   BoxBegin("Insertion scale", 95.f);
   {
     ImGui::TextUnformatted("Units to scale inserted content:");
-    const char* kInsNames[] = {"Feet", "Meters", "Unitless"};
-    const int   kInsCodes[] = {2, 6, 0};
     int insSel = 0;
-    for (int i = 0; i < 3; ++i)
-      if (cmd.drawingInsUnits == kInsCodes[i]) insSel = i;
+    for (int i = 0; i < kDrawingUnitCount; ++i)
+      if (cmd.drawingInsUnits == kDrawingUnitCodes[i]) insSel = i;
     ImGui::SetNextItemWidth(220.f);
-    if (ImGui::Combo("##ins_units", &insSel, kInsNames, IM_ARRAYSIZE(kInsNames))) {
-      cmd.drawingInsUnits = kInsCodes[std::clamp(insSel, 0, 2)];
+    // REQ-375: a project that fixes the drawing unit owns it.
+    const ProjectSettings* proj = ProjectSettingsForTab(cmd, cmd.activeDrawingIdx);
+    const bool unitEnforced = proj && proj->insUnits >= 0;
+    ImGui::BeginDisabled(unitEnforced);
+    const bool unitPicked = ImGui::Combo("##ins_units", &insSel, kDrawingUnitNames, kDrawingUnitCount);
+    ImGui::EndDisabled();
+    if (unitEnforced)
+      ItemHelpTooltip("Enforced by the project (Project Settings).");
+    if (unitPicked) {
+      cmd.drawingInsUnits = kDrawingUnitCodes[std::clamp(insSel, 0, kDrawingUnitCount - 1)];
       BumpCadGpuCache(cmd);  // document property: flag the drawing as modified
     }
     ItemHelpTooltip("AutoCAD INSUNITS. A relabel only: it tells the drawing (and the DXF $INSUNITS header) what unit it is in. It never rescales or converts geometry.");
@@ -1242,6 +1263,13 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
 
   ImGui::Separator();
   if (ImGui::Button("OK", ImVec2(90.f, 0.f))) {
+    // REQ-357: the drawing unit is undoable — record the value the dialog opened with.
+    if (cmd.drawingInsUnits != gSnapInsUnits) {
+      const int chosen = cmd.drawingInsUnits;
+      cmd.drawingInsUnits = gSnapInsUnits;
+      PushUndoSnapshot(cmd, "UNITS");
+      cmd.drawingInsUnits = chosen;
+    }
     if (SaveUserStartupPrefs(cmd)) {
       if (log) log->push_back("Drawing units saved (gosurvey-user.json).");
     } else if (log) {

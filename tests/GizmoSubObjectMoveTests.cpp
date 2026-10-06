@@ -22,6 +22,7 @@ namespace {
 /// A drawing holding one solid, with one sub-object of \p kind at \p index selected.
 AppCommandState WithSelectedSubObject(brep::Solid&& solid, solidpick::Kind kind, int index) {
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo these tests exercise (D-2026-09-28-a)
   st.uiViewportWidthPx = 1200.f;
   st.uiViewportHeightPx = 700.f;
   auto sp = std::make_shared<const brep::Solid>(std::move(solid));

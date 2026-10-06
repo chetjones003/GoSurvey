@@ -61,7 +61,7 @@ struct WinHttpSession {
 /// Opens \p url and sends the request, leaving \p s.request ready to read from.
 /// Returns false with a reason on any failure, including a non-200 status.
 bool OpenRequest(const std::string& url, int timeoutMs, WinHttpSession& s, std::string& errorOut,
-                 const std::wstring& extraHeaders = std::wstring())
+                 const std::wstring& extraHeaders = std::wstring(), int* httpStatusOut = nullptr)
 {
   const std::wstring wideUrl = Widen(url);
   if (wideUrl.empty())
@@ -150,6 +150,8 @@ bool OpenRequest(const std::string& url, int timeoutMs, WinHttpSession& s, std::
     errorOut = LastErrorText("WinHttpQueryHeaders");
     return false;
   }
+  if (httpStatusOut)
+    *httpStatusOut = static_cast<int>(status);
   if (status != 200)
   {
     // 404 is the ordinary case for a channel that has never published, so it is a plain
@@ -210,16 +212,18 @@ bool HasInternetConnectivity()
 }
 
 bool HttpGetString(const std::string& url, int timeoutMs, std::string& out, std::string& errorOut,
-                   const std::string& bearerToken)
+                   const std::string& bearerToken, int* httpStatusOut)
 {
   out.clear();
   errorOut.clear();
+  if (httpStatusOut)
+    *httpStatusOut = 0;
 
   const std::wstring extraHeaders =
       bearerToken.empty() ? std::wstring() : L"Authorization: Bearer " + Widen(bearerToken) + L"\r\n";
 
   WinHttpSession s;
-  if (!OpenRequest(url, timeoutMs, s, errorOut, extraHeaders))
+  if (!OpenRequest(url, timeoutMs, s, errorOut, extraHeaders, httpStatusOut))
     return false;
 
   // A manifest is a few hundred bytes. The cap stops a wrong or hostile URL from being read

@@ -530,6 +530,11 @@ enum class Problem {
   /// command that caused them (`ucs::IsRightHandedOrthonormal`). A reflection is its own operation.
   ScaleFactorNonPositive,
   ScaleResultInvalid,          ///< The scaled solid did not validate. Should not happen; refused if it does.
+  /// The mirror plane's normal is not a unit vector (REQ-351). Refused rather than normalized for
+  /// \ref Problem::RotateAxisNotUnit's reason: a zero normal reflects nothing and a long one reflects
+  /// too far, and both would still validate.
+  MirrorPlaneNotUnit,
+  MirrorResultInvalid,         ///< The mirrored solid did not validate. Should not happen; refused if it does.
 
   // --- Moving a vertex or an edge (REQ-333, ADR-046 amendment (n)). ---
   /// A vertex where fewer or more than three PLANAR faces meet. Three planes are exactly a point,
@@ -598,6 +603,9 @@ enum class Problem {
   /// The cut crosses a curved face of a solid that is not a cylinder or cone primitive — a fillet, a
   /// drilled hole's wall, a sphere. A cut that misses every curved face is taken (GitHub #518).
   SliceCutCrossesCurvedFace,
+  /// A cut of a torus at any angle but square to its axis: the curve is a quartic, not a circle
+  /// (GitHub #520). Also a torus whose tube is as wide as its ring, whose square cut is not a ring.
+  SliceCutTorusCurve,
 };
 
 /// A short, user-facing sentence for \p p. Never returns null.
@@ -659,6 +667,40 @@ inline constexpr int kMaxPyramidSides = 64;
 /// approximated (ADR-050 (b), (c)).
 [[nodiscard]] bool MakePolysolid(const ucs::Ucs& frame, const Path& path, double width, double height,
                                  Justify justify, Solid* out, Problem* outWhy);
+
+
+/// A sampled height field, and the flat plane a pad solid is built between (GitHub #150, Phase 7).
+///
+/// The grid is regular in plan: node (i, j) sits at `origin + (i*cellW, j*cellH)` and carries the
+/// GROUND elevation there. `cellIn` marks which cells belong to the pad — that is where the site
+/// boundary and the cut/fill split have already been applied, so the kernel never needs to know what
+/// a boundary polygon is.
+///
+/// `flatIsBottom` says which way round the two surfaces are: true for a CUT, where the ground is the
+/// top and the pad floor is underneath; false for a FILL, where the pad is the top and the ground is
+/// what it rests on. The construction is the same either way.
+struct HeightField {
+  double originX = 0.0;
+  double originY = 0.0;
+  double cellW = 1.0;
+  double cellH = 1.0;
+  int cols = 0;  ///< cells across; nodes are (cols + 1) wide
+  int rows = 0;  ///< cells up;     nodes are (rows + 1) tall
+  std::vector<double> nodeZ;      ///< (cols+1) * (rows+1), row-major
+  std::vector<std::uint8_t> cellIn;  ///< cols * rows, non-zero = part of the pad
+  double flatZ = 0.0;
+  bool flatIsBottom = true;
+};
+
+/// A solid between \p hf's sampled ground and its flat plane — the earthwork a pad represents.
+///
+/// Cells that taper to nothing (where the ground meets the pad elevation) are left out rather than
+/// built: a zero-thickness cell contributes zero-area faces and an edge used more than twice, and
+/// the result would not be a closed solid. The volume lost is a sliver along that line, and the
+/// caller is the one that reports it.
+///
+/// Refuses \ref Problem::SlicePlaneMissesSolid when no cell has any depth at all.
+[[nodiscard]] bool MakeHeightFieldSolid(const HeightField& hf, Solid* out, Problem* outWhy);
 
 [[nodiscard]] bool MakeTorus(const ucs::Ucs& frame, double majorRadius, double minorRadius, Solid* out,
                              Problem* outWhy);
@@ -852,6 +894,32 @@ struct SweepOptions {
 [[nodiscard]] bool Sweep(const Profile& profile, const SweepPath& path, const SweepOptions& options,
                          Solid* out, Problem* outWhy);
 
+/// Sweep a **hollow** cross-section — \p outerProfile with \p innerProfile removed from it — along
+/// \p path (REQ-315 as amended 2026-09-23, GitHub issue #486): a tube, not a rod. The wall is the
+/// material between the two profiles, and each open end closes with an **annular** cap, so a cut
+/// pipe shows its wall thickness the way a real one does.
+///
+/// Built as \ref Sweep run twice over the same path and frames, merged into one shell: the outer
+/// sweep's side faces unchanged, the inner sweep's side faces reversed and marked
+/// \ref Surface::inward (so they bound the void — the same treatment a bored hole's wall gets from a
+/// Boolean SUBTRACT), and the two planar caps rebuilt with the inner rim as a hole loop. Everything
+/// \ref Sweep decides — path validity, the rotation-minimizing frame, corner handling, twist, the
+/// arc-axis clearance test — is decided by \ref Sweep itself, once per profile, so a tube is refused
+/// in exactly the cases a rod of either radius would be and **for the same reason, by name**.
+///
+/// The two profiles must have the same vertex/edge counts and must be built on the same plane, so
+/// their rings correspond and the caps close (\ref Problem::ProfileMalformed otherwise); the inner
+/// one must lie strictly inside the outer, which is the caller's business — a zero or negative wall
+/// is a bad parameter, and an inner profile that crosses the outer builds a shell whose volume is
+/// not positive and is refused by \ref Validate rather than silently stored (REQ-201).
+///
+/// A **closed** path is refused (\ref Problem::SweepUnsupportedOption): with no ends there are no
+/// caps to turn into annuli, so the result would be two disjoint shells rather than one tube, and no
+/// caller needs that yet.
+[[nodiscard]] bool SweepTube(const Profile& outerProfile, const Profile& innerProfile,
+                             const SweepPath& path, const SweepOptions& options, Solid* out,
+                             Problem* outWhy);
+
 /// Which side (or sides) of the cut \ref Slice keeps. "Above" is the `+planeNormal` side.
 enum class SliceKeep : std::uint8_t { Above, Below, Both };
 
@@ -916,6 +984,68 @@ enum class SliceKeep : std::uint8_t { Above, Below, Both };
 /// silent-wrong-answer failure REQ-201 exists to prevent.
 [[nodiscard]] bool SectionLoop(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
                                ucs::Ucs* outPlane, Path* outLoop, Problem* outWhy);
+
+/// The ellipse a tilted cut of a cylinder or cone exposes (GitHub #531, D-2026-09-23-a).
+///
+/// A section-only result rather than a new \ref PathSeg kind: `Path` is this kernel's chain of lines
+/// and arcs, and every feature that consumes one — a wall swept along a path, a loft, a sweep — would
+/// otherwise have to learn an ellipse segment only to refuse it. Sectioning is the one caller that
+/// wants this shape, so it is the one that names it.
+struct SectionEllipse {
+  bool valid = false;
+  Vec3 centre{};    ///< world
+  Vec3 normal{};    ///< world — the caller's own plane normal
+  Vec3 majorDir{};  ///< world, unit
+  double majorSemi = 0.0;
+  double minorSemi = 0.0;
+};
+
+/// The elliptical ARC and chord a tilted cut exposes when it runs off the end of a cylinder or cone
+/// (GitHub #520 follow-up, D-2026-09-23-b) — the shape \ref Problem::SliceCutCrossesCurvedEnd names.
+///
+/// **This one does not come from a cut.** `Slice` does not build the pieces for it yet, so there is no
+/// cut face to read back, and the outline is computed from the primitive's own geometry instead. It
+/// is the single place sectioning does not inherit Slice's accepted set; teaching the cutter the same
+/// cut is the follow-up, after which this reads back like every other section.
+struct SectionEllipseArc {
+  bool valid = false;
+  Vec3 centre{};    ///< world, the full ellipse's centre
+  Vec3 normal{};    ///< world — the caller's own plane normal
+  Vec3 majorDir{};  ///< world, unit
+  double majorSemi = 0.0;
+  double minorSemi = 0.0;
+  double startParam = 0.0;  ///< measured from \ref majorDir, about \ref normal
+  double sweep = 0.0;       ///< signed about \ref normal
+  Vec3 chordA{};            ///< world; the arc runs from here...
+  Vec3 chordB{};            ///< ...to here, and the chord closes it across the cap
+};
+
+/// See \ref SectionEllipseArc. Refuses a cut that runs off BOTH ends (two arcs and two chords), one
+/// that stays on the side (\ref Problem::SectionEllipse — a whole ellipse, \ref SectionEllipseOutline's
+/// job), and anything that is not a tilted cut of a cylinder or cone.
+[[nodiscard]] bool SectionEllipseArcOutline(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                            ucs::Ucs* outPlane, SectionEllipseArc* outArc, Problem* outWhy);
+
+/// The cross-section of \p solid when it is exactly one closed ellipse (GitHub #531).
+///
+/// Same cut, same plane and same accepted set as \ref SectionOutlines — this asks the narrower
+/// question those refuse with \ref Problem::SectionEllipse. A cut that also crosses an end cap is an
+/// elliptical arc plus a chord, not one ellipse, and keeps its own refusal
+/// (\ref Problem::SliceCutCrossesCurvedEnd).
+[[nodiscard]] bool SectionEllipseOutline(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                         ucs::Ucs* outPlane, SectionEllipse* outEllipse, Problem* outWhy);
+
+/// **Every** closed outline of the cross-section, for a cut whose shape is more than one loop
+/// (REQ-335 increment 2, D-2026-09-18-a, GitHub #520) — a ring, where a hole sits inside an outer
+/// outline (a torus cut square to its axis, a drilled box), or separate pieces of solid on the plane.
+///
+/// Same geometry, plane and accepted set as \ref SectionLoop, which is this function restricted to
+/// the single-outline case. The outlines come back in \p outLoops with an **outer** outline wound
+/// counter-clockwise about \p planeNormal and a **hole** wound clockwise, so a caller can tell the
+/// two apart by signed area alone, and each is a closed \ref Path in \p outPlane's 2D coordinates.
+/// A hole follows the outline it sits in.
+[[nodiscard]] bool SectionOutlines(const Solid& solid, const Vec3& planePoint, const Vec3& planeNormal,
+                                   ucs::Ucs* outPlane, std::vector<Path>* outLoops, Problem* outWhy);
 
 /// Boolean combination of two solids (REQ-314 increment 4 / ADR-046 — the B1 subset). The result is
 /// written to \p out as one or more solids: usually one, but a UNION of solids that do not touch is
@@ -1024,6 +1154,28 @@ struct MassProperties {
   /// between suppressing two good figures and reporting a third that was not computed.
   Vec3 centroid{};
   bool centroidValid = false;
+
+  /// Moments and products of inertia about the **centroid** (REQ-349, GitHub #460) — unit density, so
+  /// mass == volume. `Ixx = ∫(y'^2 + z'^2) dV` where `r' = p - centroid`, etc., `Ixy = -∫ x' y' dV`.
+  /// Reported through its own `inertiaValid` flag, separate from `valid` and `centroidValid`, because
+  /// its integrator covers the same face shapes as the centroid in this increment and is withheld
+  /// rather than approximated when a face is outside that set, leaving volume/area/centroid untouched.
+  bool inertiaValid = false;
+  double Ixx = 0.0;
+  double Iyy = 0.0;
+  double Izz = 0.0;
+  double Ixy = 0.0;
+  double Ixz = 0.0;
+  double Iyz = 0.0;
+
+  /// Principal moments (eigenvalues of the centroidal tensor, sorted descending) and their
+  /// orthonormal, right-handed axes in world coordinates. Valid only when `inertiaValid`.
+  double principalI1 = 0.0;
+  double principalI2 = 0.0;
+  double principalI3 = 0.0;
+  Vec3 principalAxis1{};
+  Vec3 principalAxis2{};
+  Vec3 principalAxis3{};
 };
 
 /// Exact volume and surface area of \p s, integrated over its **analytic** faces — not summed from
@@ -1044,7 +1196,31 @@ struct MassProperties {
 /// shapes than the volume does; see that field. It is also cross-checked before being reported: the
 /// volume its own integrator re-derives must agree with the volume above, since a centroid built on
 /// a different figure than the one being reported would describe a different solid.
+///
+/// **Moments of inertia** (REQ-349, GitHub #460) are integrated the same way — about the same `q`,
+/// in world axes, over the exact analytic surfaces — and reported through `inertiaValid`. The
+/// centroidal tensor is `Ixx = ∫(y'^2+z'^2) dV` etc. with `r' = p - centroid`, `Ixy = -∫ x' y' dV`,
+/// unit density so mass == volume. Principal axes are the eigenvectors of that tensor, orthonormal
+/// and right-handed, deterministic across runs and `.gs` save/reload.
 [[nodiscard]] MassProperties ComputeMassProperties(const Solid& s);
+
+/// Inertia tensor about an arbitrary world point `p`, derived from the centroidal one by the
+/// parallel-axis theorem: `I_p = I_c + m * ((d·d)E - d d^T)` where `d = p - centroid`, `m = volume`.
+/// `mp.inertiaValid` must be true or the result is zero.
+struct InertiaTensor {
+  double xx = 0.0;
+  double yy = 0.0;
+  double zz = 0.0;
+  double xy = 0.0;
+  double xz = 0.0;
+  double yz = 0.0;
+};
+[[nodiscard]] InertiaTensor InertiaAboutPoint(const MassProperties& mp, const Vec3& p);
+
+/// Diagonalize a real symmetric 3×3 matrix. Input `A[3][3]` symmetric, output eigenvalues sorted
+/// descending in `eig[3]` and orthonormal right-handed eigenvectors as columns in `vec[3][3]`
+/// (`vec[i][j]` is component `i` of eigenvector `j`). Deterministic for degenerate spectra.
+void JacobiEigenSymmetric3x3(const double A[3][3], double eig[3], double vec[3][3]);
 
 /// Exact area of the **single face** \p faceIndex of \p s, in \p outArea (REQ-313 as amended,
 /// D-2026-09-09-g, GitHub #149 acceptance 2).
@@ -1131,7 +1307,26 @@ struct Tessellation {
 /// outer loop with no holes. Every one of the seven primitives produces only such faces; a general
 /// polygon triangulation is Phase 4's problem, when a boolean first produces a face that needs one,
 /// and until then it would be an abstraction with no call site.
-[[nodiscard]] bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy);
+/// Segments one FULL turn of a circular edge is divided into, before the chord tolerance asks for
+/// more. A floor, not a target: it keeps the budget for a full circle constant however many faces
+/// that circle is split across, so two neighbouring faces sampling the same circle always agree
+/// (the "torn bolt holes" fix). At the default it also decides how round a small circle looks,
+/// because for anything smaller than a few feet it is the floor, not the tolerance, that binds.
+inline constexpr int kFullCircleSegments = 256;
+
+/// A coarser budget for geometry that is being DRAFTED — redrawn on every click while a command is
+/// still running, where the cost of the default is paid over and over and the result is replaced
+/// moments later anyway (REQ-345 live pipe routing, D-2026-09-24-e).
+///
+/// 64 is chosen to be indistinguishable at working zoom rather than merely tolerable: a full circle
+/// in 64 facets turns 5.6 degrees per facet, which on a 2in pipe is a chord error of about a
+/// thousandth of an inch. The finished geometry is tessellated at \ref kFullCircleSegments.
+inline constexpr int kDraftFullCircleSegments = 64;
+
+/// \param fullCircleSegments the circular-edge budget described above — \ref kFullCircleSegments
+///        for finished geometry, \ref kDraftFullCircleSegments for geometry still being drafted.
+[[nodiscard]] bool Tessellate(const Solid& s, double chordTolerance, Tessellation* out, Problem* outWhy,
+                              int fullCircleSegments = kFullCircleSegments);
 
 /// The solid's **edges** as line segments, at the same chord tolerance: six doubles per segment
 /// (both endpoints), the `GL_LINES` layout the rest of the project uses.
@@ -1262,6 +1457,33 @@ struct Tessellation {
 /// Refuses a factor that is zero, negative or non-finite (\ref Problem::ScaleFactorNonPositive).
 [[nodiscard]] bool Scale(const Solid& s, const Vec3& basePoint, double factor, Solid* out,
                          Problem* outWhy);
+
+/// The mirror image of \p s across the plane through \p planePoint with unit normal \p planeUnit
+/// (REQ-351, D-2026-09-28-f).
+///
+/// **A reflection is not "a scale of -1".** It turns a right-hand glove into a left-hand one: applied
+/// naively, every frame becomes left-handed and every loop winds the wrong way round its outward
+/// normal, so the solid reads as inside-out — negative volume, Booleans and fillets that refuse, and
+/// an export that other programs reject. This function reflects every position and direction and
+/// then puts the orientation back:
+///
+/// - **every frame is made right-handed again by negating its Y axis** — X' = R·X, Y' = -R·Y,
+///   Z' = R·Z — so a plane's Z stays its outward normal and a curved surface's axis stays its axis;
+/// - negating Y maps an angle measured about Z to its negative, so a curved face's longitude span
+///   becomes `[-uEnd, -uStart]` (shifted by whole turns back into `[0, 2pi)`), an arc or ellipse edge's
+///   `sweep` negates, and a general trim loop negates the same parameter and is re-wound;
+/// - a NURBS patch has its control net reflected and its **U direction reversed**, which is what
+///   keeps `Su x Sv` pointing outward (\ref nurbs::Mirror);
+/// - **every loop is reversed** — the order of its uses and the direction of each — because a
+///   reflection reverses the sense in which a boundary runs round its face.
+///
+/// Lengths and angles are preserved, so volume and area are too, exactly. The recipe is **kept**:
+/// every primitive is symmetric about its own frame's XZ plane, so the reflected frame describes the
+/// reflected primitive, and a polysolid path negates its y, its sweeps and its justification.
+///
+/// Refuses a normal that is not a unit vector (\ref Problem::MirrorPlaneNotUnit).
+[[nodiscard]] bool Mirror(const Solid& s, const Vec3& planePoint, const Vec3& planeUnit, Solid* out,
+                          Problem* outWhy);
 
 /// Move face \p faceIndex of \p s along its own outward normal by \p distance (REQ-319).
 ///

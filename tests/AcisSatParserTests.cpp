@@ -1,11 +1,14 @@
 #include "util/AcisSatParser.hpp"
 
 #include "util/brep.hpp"
+#include "util/cadpiperun.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 
@@ -484,6 +487,60 @@ TEST_CASE("ACIS SAT import: a real Civil 3D flange (.sat, ACISOUT) imports as a 
   REQUIRE(brep::Tessellate(r.solid, 0.001, &tess, &tessWhy));
   CHECK(tess.indices.size() % 3 == 0);
   CHECK(tess.indices.size() > 60);   // 16 faces, several with holes
+  {
+    // TASK-272: this is the exact real-world file class (ACISOUT flange, bolt-circle + bore) the
+    // originally-reported torn-hole crack came from — assert watertightness directly on it rather
+    // than trusting only the synthetic repros.
+    auto pos = [&](std::uint32_t i) {
+      return brep::Vec3{tess.vertsXyz[3 * i], tess.vertsXyz[3 * i + 1], tess.vertsXyz[3 * i + 2]};
+    };
+    auto quant = [](double v) { return static_cast<long long>(std::llround(v * 1.0e6)); };
+    using Key = std::array<long long, 3>;
+    auto key = [&](const brep::Vec3& p) { return Key{quant(p.x), quant(p.y), quant(p.z)}; };
+    std::map<std::pair<Key, Key>, std::pair<int, int>> edgeUses;
+    for (std::size_t i = 0; i + 2 < tess.indices.size(); i += 3) {
+      const int face = i / 3 < tess.triFace.size() ? tess.triFace[i / 3] : -1;
+      const std::uint32_t tri[3] = {tess.indices[i], tess.indices[i + 1], tess.indices[i + 2]};
+      for (int e = 0; e < 3; ++e) {
+        const Key a = key(pos(tri[e]));
+        const Key b = key(pos(tri[(e + 1) % 3]));
+        if (a == b) continue;
+        auto& v = edgeUses[a < b ? std::make_pair(a, b) : std::make_pair(b, a)];
+        v.first++;
+        v.second = face;
+      }
+    }
+    int cracked = 0;
+    std::map<int, int> crackedByFace;
+    for (const auto& [k, v] : edgeUses)
+      if (v.first != 2) { ++cracked; crackedByFace[v.second]++; }
+    std::ostringstream byFace;
+    for (const auto& [face, cnt] : crackedByFace) byFace << " face" << face << "=" << cnt;
+    INFO("cracked (non-manifold) triangle edges: " << cracked << " of " << edgeUses.size()
+         << " by face:" << byFace.str());
+    CHECK(cracked == 0);
+
+    // A loose ceiling on triangulation QUALITY, not just on gaps: ear-clipping a bridged hole can
+    // hand the renderer arbitrarily thin triangles, and while that turned out NOT to be the cause
+    // of TASK-272's torn rims (that was depth-buffer precision — see Camera::OrthoDepthPad), a
+    // tessellator that starts emitting million-to-one slivers on a real import has regressed at
+    // something. 10000 is a guard rail with room to spare, not a target.
+    double worstAspect = 0.0;
+    for (std::size_t i = 0; i + 2 < tess.indices.size(); i += 3) {
+      const brep::Vec3 a = pos(tess.indices[i]);
+      const brep::Vec3 b = pos(tess.indices[i + 1]);
+      const brep::Vec3 c = pos(tess.indices[i + 2]);
+      const double ab = std::hypot(std::hypot(a.x - b.x, a.y - b.y), a.z - b.z);
+      const double bc = std::hypot(std::hypot(b.x - c.x, b.y - c.y), b.z - c.z);
+      const double ca = std::hypot(std::hypot(c.x - a.x, c.y - a.y), c.z - a.z);
+      const double longest = std::max({ab, bc, ca});
+      const double shortest = std::min({ab, bc, ca});
+      if (shortest > 1e-12)
+        worstAspect = std::max(worstAspect, longest / shortest);
+    }
+    INFO("worst triangle aspect ratio: " << worstAspect);
+    CHECK(worstAspect < 10000.0);
+  }
 
   // The body transform places the part near (4998.96, 4998.90) — its bounds must be there, not at
   // the origin where the raw ACIS geometry lives.
@@ -492,4 +549,70 @@ TEST_CASE("ACIS SAT import: a real Civil 3D flange (.sat, ACISOUT) imports as a 
   CHECK(b.mn.x == Catch::Approx(4998.59457).margin(0.01));   // the body transform placed the part
   CHECK(b.mn.y == Catch::Approx(4998.52899).margin(0.01));
   CHECK(b.mx.z == Catch::Approx(0.25).margin(0.01));
+}
+
+TEST_CASE("ExportSatSolid round-trips a primitive box (issue #612)", "[issue612][acissat]") {
+  brep::Solid s;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(ucs::Ucs{}, 2.0, 3.0, 4.0, &s, &why));
+  const acissat::ExportResult ex = acissat::ExportSatSolid(s, "box");
+  REQUIRE(ex.ok);
+  CHECK(Contains(ex.sat, "ASM"));
+  const acissat::ImportResult im = acissat::ImportSatSolid(ex.sat, "box");
+  INFO(im.error);
+  REQUIRE(im.ok);
+  const brep::MassProperties mp = brep::ComputeMassProperties(im.solid);
+  REQUIRE(mp.valid);
+  CHECK(mp.volume == Catch::Approx(2.0 * 3.0 * 4.0).margin(0.05));
+}
+
+TEST_CASE("ExportSatSolid round-trips a primitive cylinder (issue #612)", "[issue612][acissat]") {
+  brep::Solid s;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeCylinder(ucs::Ucs{}, 2.0, 5.0, &s, &why));
+  const acissat::ExportResult ex = acissat::ExportSatSolid(s, "cylinder");
+  INFO(ex.error);
+  REQUIRE(ex.ok);
+  const acissat::ImportResult im = acissat::ImportSatSolid(ex.sat, "cylinder");
+  INFO(im.error);
+  REQUIRE(im.ok);
+  const brep::MassProperties mp = brep::ComputeMassProperties(im.solid);
+  REQUIRE(mp.valid);
+  const double pi = 3.14159265358979323846;
+  CHECK(mp.volume == Catch::Approx(pi * 2.0 * 2.0 * 5.0).margin(0.1));
+}
+
+TEST_CASE("ExportSatSolid round-trips a straight pipe run sweep (issue #612)", "[issue612][acissat]") {
+  CadPipeRun run;
+  run.nominalSize = "4in";
+  run.vertsXyz = {0.f, 0.f, 0.f, 20.f, 0.f, 0.f};
+  std::vector<CadSolidPtr> built;
+  REQUIRE(CadBuildPipeRunSolids(run, &built));
+  REQUIRE(built.size() == 1);
+  const acissat::ExportResult ex = acissat::ExportSatSolid(*built[0], "pipe");
+  INFO(ex.error);
+  REQUIRE(ex.ok);
+  const acissat::ImportResult im = acissat::ImportSatSolid(ex.sat, "pipe");
+  INFO(im.error);
+  REQUIRE(im.ok);
+  const brep::MassProperties before = brep::ComputeMassProperties(*built[0]);
+  const brep::MassProperties after = brep::ComputeMassProperties(im.solid);
+  REQUIRE(before.valid);
+  REQUIRE(after.valid);
+  CHECK(after.volume == Catch::Approx(before.volume).margin(before.volume * 0.05));
+}
+
+TEST_CASE("ExportSatSolid round-trips an L-shaped pipe run sweep (issue #612)", "[issue612][acissat]") {
+  CadPipeRun run;
+  run.nominalSize = "4in";
+  run.vertsXyz = {0.f, 0.f, 0.f, 20.f, 0.f, 0.f, 20.f, 15.f, 0.f};
+  std::vector<CadSolidPtr> built;
+  REQUIRE(CadBuildPipeRunSolids(run, &built));
+  REQUIRE(built.size() == 1);
+  const acissat::ExportResult ex = acissat::ExportSatSolid(*built[0], "pipe");
+  INFO(ex.error);
+  REQUIRE(ex.ok);
+  const acissat::ImportResult im = acissat::ImportSatSolid(ex.sat, "pipe");
+  INFO(im.error);
+  REQUIRE(im.ok);
 }

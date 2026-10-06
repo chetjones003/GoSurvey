@@ -147,6 +147,18 @@ namespace FontReg {
 
 void SetDefault(ImFont* f) { g_default = f; }
 
+std::string FindTtfPath(const std::string& family, bool bold, bool italic) {
+  std::string key = Lower(family);
+  if (const auto dot = key.rfind('.'); dot != std::string::npos)
+    key = key.substr(0, dot);
+  std::string norm;
+  for (char c : key)
+    if (c != ' ')
+      norm += c;
+  bool gotBold = false, gotItalic = false;
+  return ResolvePath(norm, bold, italic, &gotBold, &gotItalic);
+}
+
 ImFont* Resolve(const std::string& fontNameOrShx, bool bold, bool italic, bool* outRealBold, bool* outRealItalic) {
   if (fontNameOrShx.empty()) {
     if (outRealBold) *outRealBold = false;

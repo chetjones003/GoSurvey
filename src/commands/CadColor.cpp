@@ -4,6 +4,7 @@
 
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <string_view>
 
 namespace {
@@ -107,6 +108,51 @@ std::string CadColorStorageFromRgbPacked(uint32_t rgbPacked) {
   char buf[16]{};
   DxfRgbPackedToHex(rgbPacked & 0xFFFFFFu, buf, sizeof(buf));
   return std::string(buf);
+}
+
+bool CadColorStorageFromTyped(std::string_view typed, std::string* out) {
+  if (out == nullptr || typed.empty())
+    return false;
+  std::string lower(typed);
+  for (char& c : lower)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (lower == "bylayer") {
+    *out = "ByLayer";
+    return true;
+  }
+  if (lower == "byblock") {
+    *out = "ByBlock";
+    return true;
+  }
+  if (std::isdigit(static_cast<unsigned char>(lower[0]))) {
+    for (char c : lower)
+      if (!std::isdigit(static_cast<unsigned char>(c)))
+        return false;
+    if (lower.size() > 3)
+      return false;
+    const int aci = std::atoi(lower.c_str());
+    if (aci < 1 || aci > 255)
+      return false;
+    *out = CadColorStorageFromAci(aci);
+    return true;
+  }
+  if (lower[0] == '#') {
+    uint32_t rgb = 0;
+    if (lower.size() != 7 || !DxfColorStringToRgbPacked(lower, &rgb))
+      return false;
+    for (size_t i = 1; i < lower.size(); ++i)
+      if (!std::isxdigit(static_cast<unsigned char>(lower[i])))
+        return false;
+    *out = CadColorStorageFromRgbPacked(rgb);
+    return true;
+  }
+  std::string title = lower;
+  title[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(title[0])));
+  const int named = NamedColorToAci(title);
+  if (named < 0)
+    return false;
+  *out = CadColorStorageFromAci(named);
+  return true;
 }
 
 std::string CadColorDisplayLabel(const std::string& storage) {

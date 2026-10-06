@@ -3,6 +3,7 @@
 
 #include "CadCommands.hpp"
 #include "GsMigrate.hpp"
+#include "ProjectPoints.hpp"
 #include "TextStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -25,6 +26,260 @@ namespace {
 
 using nlohmann::json;
 
+// REQ-364: a captured map tile's image travels in the trailer JSON as standard base64 (RFC 4648,
+// padded). Private here: this file is its only reader and writer.
+constexpr char kBase64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string Base64Encode(const std::string& in) {
+  std::string out;
+  out.reserve((in.size() + 2) / 3 * 4);
+  size_t i = 0;
+  for (; i + 2 < in.size(); i += 3) {
+    const unsigned v = (static_cast<unsigned char>(in[i]) << 16) | (static_cast<unsigned char>(in[i + 1]) << 8) |
+                       static_cast<unsigned char>(in[i + 2]);
+    out += kBase64[(v >> 18) & 63];
+    out += kBase64[(v >> 12) & 63];
+    out += kBase64[(v >> 6) & 63];
+    out += kBase64[v & 63];
+  }
+  if (i < in.size()) {
+    unsigned v = static_cast<unsigned char>(in[i]) << 16;
+    if (i + 1 < in.size())
+      v |= static_cast<unsigned char>(in[i + 1]) << 8;
+    out += kBase64[(v >> 18) & 63];
+    out += kBase64[(v >> 12) & 63];
+    out += i + 1 < in.size() ? kBase64[(v >> 6) & 63] : '=';
+    out += '=';
+  }
+  return out;
+}
+
+/// False on any character outside the alphabet or a bad length: a damaged tile is dropped, not
+/// half-decoded.
+bool Base64Decode(const std::string& in, std::string* out) {
+  if (in.size() % 4 != 0)
+    return false;
+  out->clear();
+  out->reserve(in.size() / 4 * 3);
+  auto value = [](char c) -> int {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+  };
+  for (size_t i = 0; i < in.size(); i += 4) {
+    const bool last = i + 4 == in.size();
+    const int pad = last ? (in[i + 3] == '=') + (in[i + 2] == '=') : 0;
+    int v[4] = {};
+    for (int k = 0; k < 4 - pad; ++k)
+      if ((v[k] = value(in[i + k])) < 0)
+        return false;
+    const unsigned n = (v[0] << 18) | (v[1] << 12) | (v[2] << 6) | v[3];
+    out->push_back(static_cast<char>((n >> 16) & 0xFF));
+    if (pad < 2)
+      out->push_back(static_cast<char>((n >> 8) & 0xFF));
+    if (pad < 1)
+      out->push_back(static_cast<char>(n & 0xFF));
+  }
+  return true;
+}
+
+// REQ-357: the Drawing Settings object of the trailer. Shared by the drawing and by a project's
+// defaults (REQ-375), so the two can never disagree about a setting's stored form.
+json DrawingSettingsToJson(const DrawingSettings& ds) {
+  json o;
+  o["angularUnits"] = ds.angularUnits == DrawingSettings::AngularUnits::Radians ? "radians"
+                      : ds.angularUnits == DrawingSettings::AngularUnits::Grads ? "grads"
+                                                                                 : "degrees";
+  o["footDefinition"] =
+      ds.footDefinition == DrawingSettings::FootDefinition::International ? "international" : "usSurvey";
+  o["scaleInsertedObjects"] = ds.scaleInsertedObjects;
+  o["setDrawingVariables"] = ds.setDrawingVariables;
+  o["zone"] = ds.zoneCode;  // REQ-358: CS-MAP code, "" = No Datum, No Projection
+  // REQ-359 item 4: the geographic marker (WORLD design point + north, degrees CCW from +X).
+  o["markerX"] = ds.markerX;
+  o["markerY"] = ds.markerY;
+  o["markerNorthDeg"] = ds.markerNorthDeg;
+  {  // REQ-360: the Transformation tab. Angles in degrees, L_ref / rotation point WORLD.
+    const DrawingSettings::Transform& t = ds.transform;
+    json x;
+    x["apply"] = t.apply;
+    x["applySeaLevel"] = t.applySeaLevel;
+    x["elevation"] = t.elevation;
+    x["spheroidRadiusM"] = t.spheroidRadiusM;
+    x["computation"] =
+        t.computation == DrawingSettings::Transform::Computation::UserDefined ? "userDefined" : "referencePoint";
+    x["userScaleFactor"] = t.userScaleFactor;
+    x["refLocal"] = json::array({t.refLocalX, t.refLocalY});
+    x["refGrid"] = json::array({t.refGridE, t.refGridN});
+    x["refPointNumber"] = t.refPointNumber;
+    x["rotation"] = t.rotation == DrawingSettings::Transform::Rotation::RotationPoint ? "rotationPoint"
+                    : t.rotation == DrawingSettings::Transform::Rotation::Azimuth    ? "azimuth"
+                                                                                     : "toNorth";
+    x["rotLocal"] = json::array({t.rotLocalX, t.rotLocalY});
+    x["rotGrid"] = json::array({t.rotGridE, t.rotGridN});
+    x["rotPointNumber"] = t.rotPointNumber;
+    x["toNorthDeg"] = t.toNorthDeg;
+    x["localAzimuthDeg"] = t.localAzimuthDeg;
+    x["gridAzimuthDeg"] = t.gridAzimuthDeg;
+    o["transform"] = std::move(x);
+  }
+  {  // REQ-361: the Object Layers rows, in ObjectLayerKind order.
+    json rows = json::array();
+    for (const ObjectLayerRow& r : ds.objectLayers) {
+      json j;
+      j["layer"] = r.layer;
+      j["modifier"] = r.modifier == ObjectLayerRow::Modifier::Prefix   ? "prefix"
+                      : r.modifier == ObjectLayerRow::Modifier::Suffix ? "suffix"
+                                                                       : "none";
+      j["value"] = r.value;
+      j["locked"] = r.locked;
+      rows.push_back(std::move(j));
+    }
+    o["objectLayers"] = std::move(rows);
+  }
+  // REQ-363: the online map, by name so a reordered enum cannot change a saved choice.
+  o["onlineMap"] = OnlineMapStorageName(ds.onlineMap);
+  if (ds.overridden != 0) {  // REQ-375: which project defaults this drawing overrides, by name
+    json names = json::array();
+    for (unsigned k = 0; k < kProjectDefaultKeyCount; ++k)
+      if (ds.IsOverridden(static_cast<ProjectDefaultKey>(k)))
+        names.push_back(kProjectDefaultKeyNames[k]);
+    o["overridden"] = std::move(names);
+  }
+  // REQ-364: captured map areas — each tile's image exactly as it was served, base64.
+  if (!ds.capturedAreas.empty()) {
+    json areas = json::array();
+    for (const DrawingSettings::CapturedArea& a : ds.capturedAreas) {
+      json ja;
+      ja["map"] = OnlineMapStorageName(a.map);
+      ja["level"] = a.level;
+      json tiles = json::array();
+      for (const DrawingSettings::CapturedTile& t : a.tiles) {
+        if (!t.image)
+          continue;
+        json jt;
+        jt["x"] = t.x;
+        jt["y"] = t.y;
+        jt["image"] = Base64Encode(*t.image);
+        tiles.push_back(std::move(jt));
+      }
+      ja["tiles"] = std::move(tiles);
+      areas.push_back(std::move(ja));
+    }
+    o["capturedAreas"] = std::move(areas);
+  }
+  return o;
+}
+
+void DrawingSettingsFromJson(const json& o, DrawingSettings& ds, std::vector<std::string>& log) {
+  const std::string ang = o.value("angularUnits", std::string("degrees"));
+  ds.angularUnits = ang == "radians" ? DrawingSettings::AngularUnits::Radians
+                                    : ang == "grads" ? DrawingSettings::AngularUnits::Grads
+                                                     : DrawingSettings::AngularUnits::Degrees;
+  ds.footDefinition = o.value("footDefinition", std::string("usSurvey")) == "international"
+                                          ? DrawingSettings::FootDefinition::International
+                                          : DrawingSettings::FootDefinition::UsSurvey;
+  ds.scaleInsertedObjects = o.value("scaleInsertedObjects", true);
+  ds.setDrawingVariables = o.value("setDrawingVariables", true);
+  // REQ-358: kept verbatim, even when this dictionary does not know it (nothing silently dropped).
+  if (o.contains("zone") && o["zone"].is_string())
+    ds.zoneCode = o["zone"].get<std::string>();
+  ds.markerX = o.value("markerX", 0.0);
+  ds.markerY = o.value("markerY", 0.0);
+  ds.markerNorthDeg = o.value("markerNorthDeg", 90.0);
+  // REQ-363: absent or unknown → Map Off.
+  ds.onlineMap = OnlineMapFromStorageName(o.value("onlineMap", std::string()));
+  ds.overridden = 0;
+  if (o.contains("overridden") && o["overridden"].is_array())
+    for (const json& n : o["overridden"])
+      for (unsigned k = 0; k < kProjectDefaultKeyCount; ++k)
+        if (n.is_string() && n.get<std::string>() == kProjectDefaultKeyNames[k])
+          ds.SetOverridden(static_cast<ProjectDefaultKey>(k), true);
+  // REQ-364: captured map areas. A damaged tile (or an area of an unknown map) is dropped and said.
+  if (o.contains("capturedAreas") && o["capturedAreas"].is_array()) {
+    int dropped = 0;
+    for (const json& ja : o["capturedAreas"]) {
+      if (!ja.is_object() || !ja.contains("tiles") || !ja["tiles"].is_array()) {
+        ++dropped;
+        continue;
+      }
+      DrawingSettings::CapturedArea a;
+      a.map = OnlineMapFromStorageName(ja.contains("map") && ja["map"].is_string() ? ja["map"].get<std::string>()
+                                                                                   : std::string());
+      a.level = ja.contains("level") && ja["level"].is_number_integer() ? ja["level"].get<int>() : -1;
+      if (a.map == DrawingSettings::OnlineMap::Off || a.level < 0 || a.level > 30) {
+        dropped += static_cast<int>(ja["tiles"].size());
+        continue;
+      }
+      for (const json& jt : ja["tiles"]) {
+        std::string image;
+        if (!jt.is_object() || !jt.contains("x") || !jt["x"].is_number_integer() || !jt.contains("y") ||
+            !jt["y"].is_number_integer() || !jt.contains("image") || !jt["image"].is_string() ||
+            !Base64Decode(jt["image"].get<std::string>(), &image) || image.empty()) {
+          ++dropped;
+          continue;
+        }
+        a.tiles.push_back({jt["x"].get<int>(), jt["y"].get<int>(), std::make_shared<const std::string>(std::move(image))});
+      }
+      if (!a.tiles.empty())
+        ds.capturedAreas.push_back(std::move(a));
+    }
+    if (dropped > 0)
+      log.push_back("Open: " + std::to_string(dropped) + " damaged captured map tile(s) were dropped (REQ-364).");
+  }
+  if (o.contains("transform") && o["transform"].is_object()) {  // REQ-360; absent → the defaults
+    const json& x = o["transform"];
+    DrawingSettings::Transform& t = ds.transform;
+    const auto pair = [&](const char* key, double* a, double* b) {
+      if (x.contains(key) && x[key].is_array() && x[key].size() == 2 && x[key][0].is_number() &&
+          x[key][1].is_number()) {
+        *a = x[key][0].get<double>();
+        *b = x[key][1].get<double>();
+      }
+    };
+    t.apply = x.value("apply", false);
+    t.applySeaLevel = x.value("applySeaLevel", false);
+    t.elevation = x.value("elevation", 0.0);
+    t.spheroidRadiusM = x.value("spheroidRadiusM", 0.0);
+    t.computation = x.value("computation", std::string("referencePoint")) == "userDefined"
+                        ? DrawingSettings::Transform::Computation::UserDefined
+                        : DrawingSettings::Transform::Computation::ReferencePoint;
+    t.userScaleFactor = x.value("userScaleFactor", 1.0);
+    pair("refLocal", &t.refLocalX, &t.refLocalY);
+    pair("refGrid", &t.refGridE, &t.refGridN);
+    t.refPointNumber = x.value("refPointNumber", 0);
+    const std::string rot = x.value("rotation", std::string("toNorth"));
+    t.rotation = rot == "rotationPoint" ? DrawingSettings::Transform::Rotation::RotationPoint
+                 : rot == "azimuth"     ? DrawingSettings::Transform::Rotation::Azimuth
+                                        : DrawingSettings::Transform::Rotation::ToNorth;
+    pair("rotLocal", &t.rotLocalX, &t.rotLocalY);
+    pair("rotGrid", &t.rotGridE, &t.rotGridN);
+    t.rotPointNumber = x.value("rotPointNumber", 0);
+    t.toNorthDeg = x.value("toNorthDeg", 0.0);
+    t.localAzimuthDeg = x.value("localAzimuthDeg", 0.0);
+    t.gridAzimuthDeg = x.value("gridAzimuthDeg", 0.0);
+  }
+  // REQ-361 item 6: absent (or a row missing) → the NCS defaults.
+  if (o.contains("objectLayers") && o["objectLayers"].is_array()) {
+    const json& rows = o["objectLayers"];
+    for (size_t i = 0; i < rows.size() && i < ds.objectLayers.size(); ++i) {
+      if (!rows[i].is_object())
+        continue;
+      ObjectLayerRow& r = ds.objectLayers[i];
+      r.layer = rows[i].value("layer", r.layer);
+      const std::string mod = rows[i].value("modifier", std::string("none"));
+      r.modifier = mod == "prefix"   ? ObjectLayerRow::Modifier::Prefix
+                   : mod == "suffix" ? ObjectLayerRow::Modifier::Suffix
+                                     : ObjectLayerRow::Modifier::None;
+      r.value = rows[i].value("value", std::string());
+      r.locked = rows[i].value("locked", false);
+    }
+  }
+}
+
 void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["id"] = e.id;  // REQ-076 stable identity; additive, no format-version bump (ADR-020 (d))
   o["layer"] = e.layer;
@@ -32,6 +287,19 @@ void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["linetype"] = e.linetype;
   o["lineweightMm"] = e.lineweightMm;
   o["transparency"] = e.transparency;
+  // Omitted when 0 (not linked), so a drawing with no surface link is byte-identical to one
+  // written before this field existed. Additive, no format-version bump (ADR-020 (d), ADR-062).
+  if (e.drapedOnSurfaceId != 0)
+    o["drapedOnSurfaceId"] = e.drapedOnSurfaceId;
+  // REQ-372 inc 3 — additive; omitted when no material override (ADR-020 (d)).
+  if (e.materialDiffuseOverride) {
+    o["materialDiffuseOverride"] = true;
+    o["materialDiffuseR"] = e.materialDiffuseR;
+    o["materialDiffuseG"] = e.materialDiffuseG;
+    o["materialDiffuseB"] = e.materialDiffuseB;
+    if (!e.materialName.empty())
+      o["materialName"] = e.materialName;
+  }
 }
 
 EntityAttributes EntityAttributesFromJson(const json& o) {
@@ -45,6 +313,12 @@ EntityAttributes EntityAttributesFromJson(const json& o) {
   e.linetype     = o.value("linetype",     e.linetype);
   e.lineweightMm = o.value("lineweightMm", e.lineweightMm);
   e.transparency = o.value("transparency", e.transparency);
+  e.drapedOnSurfaceId = o.value("drapedOnSurfaceId", static_cast<std::uint64_t>(0));
+  e.materialDiffuseOverride = o.value("materialDiffuseOverride", false);
+  e.materialDiffuseR = o.value("materialDiffuseR", e.materialDiffuseR);
+  e.materialDiffuseG = o.value("materialDiffuseG", e.materialDiffuseG);
+  e.materialDiffuseB = o.value("materialDiffuseB", e.materialDiffuseB);
+  e.materialName = o.value("materialName", e.materialName);
   return e;
 }
 
@@ -440,6 +714,8 @@ json CadBlockDefToJson(const CadBlockDefinition& d) {
   }
   o["actions"] = std::move(acts);
   o["visibilityStates"] = d.visibilityStates;
+  if (d.dynamicAnonymous)
+    o["dynamicAnonymous"] = true;
   if (!d.connections.empty()) {
     json conns = json::array();
     for (const CadBlockConnection& c : d.connections) {
@@ -534,6 +810,7 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
   }
   if (o.contains("visibilityStates") && o["visibilityStates"].is_array())
     d.visibilityStates = o["visibilityStates"].get<std::vector<std::string>>();
+  d.dynamicAnonymous = o.value("dynamicAnonymous", false);
   if (o.contains("connections") && o["connections"].is_array()) {
     for (const auto& cj : o["connections"]) {
       CadBlockConnection c;
@@ -569,10 +846,16 @@ CadBlockDefinition CadBlockDefFromJson(const json& o) {
 json CadBlockRefToJson(const CadBlockRef& r) {
   json o;
   o["defName"] = r.defName;
+  if (!r.dynamicCanonicalName.empty())
+    o["dynamicCanonicalName"] = r.dynamicCanonicalName;
   json xf;
   CadBlockXformToJson(r.xf, xf);
   o["xf"] = std::move(xf);
   o["visState"] = r.visState;
+  if (r.annotative)
+    o["annotative"] = true;
+  if (!r.annotativeVisibleScaleNames.empty())
+    o["annotativeVisibleScaleNames"] = r.annotativeVisibleScaleNames;
   json av = json::array();
   for (const CadBlockAttrValue& v : r.attributes) {
     json e;
@@ -595,9 +878,13 @@ json CadBlockRefToJson(const CadBlockRef& r) {
 CadBlockRef CadBlockRefFromJson(const json& o) {
   CadBlockRef r;
   r.defName = o.value("defName", "");
+  r.dynamicCanonicalName = o.value("dynamicCanonicalName", "");
   if (o.contains("xf"))
     r.xf = CadBlockXformFromJson(o["xf"]);
   r.visState = o.value("visState", "");
+  r.annotative = o.value("annotative", false);
+  if (o.contains("annotativeVisibleScaleNames") && o["annotativeVisibleScaleNames"].is_array())
+    r.annotativeVisibleScaleNames = o["annotativeVisibleScaleNames"].get<std::vector<std::string>>();
   if (o.contains("attributes") && o["attributes"].is_array()) {
     for (const auto& e : o["attributes"])
       r.attributes.push_back(CadBlockAttrValue{e.value("tag", ""), e.value("value", "")});
@@ -686,6 +973,19 @@ void CadEllipseToJson(const CadEllipse& e, json& o) {
   o["ratio"] = e.ratio;
   if (e.z != 0.f)  // additive, omitted when flat — see CadArcToJson
     o["z"] = e.z;
+  // Additive and omitted when flat, exactly as a tilted arc's is (REQ-312 / GitHub #531): a drawing
+  // with no tilted ellipse re-saves byte-identically, and a pre-#531 file loads with world +Z.
+  if (!IsFlatNormal(e.nx, e.ny, e.nz)) {
+    o["nx"] = e.nx;
+    o["ny"] = e.ny;
+    o["nz"] = e.nz;
+  }
+  // The drawn span, additive and omitted for a closed ellipse — which is every ellipse that existed
+  // before an elliptical ARC could (GitHub #520 follow-up), so nothing closed re-saves differently.
+  if (!EllipseIsFullTurn(e)) {
+    o["startRad"] = e.startRad;
+    o["sweepRad"] = e.sweepRad;
+  }
 }
 
 CadEllipse CadEllipseFromJson(const json& o) {
@@ -696,6 +996,11 @@ CadEllipse CadEllipseFromJson(const json& o) {
   e.majVy = o.value("majVy", e.majVy);
   e.ratio = o.value("ratio", e.ratio);
   e.z     = o.value("z",     e.z);  // absent → 0: legacy ellipses load flat (REQ-057)
+  e.nx    = o.value("nx",    e.nx);  // absent → world +Z: legacy ellipses load flat (GitHub #531)
+  e.ny    = o.value("ny",    e.ny);
+  e.nz    = o.value("nz",    e.nz);
+  e.startRad = o.value("startRad", e.startRad);  // absent → a full turn (GitHub #520 follow-up)
+  e.sweepRad = o.value("sweepRad", e.sweepRad);
   return e;
 }
 
@@ -704,7 +1009,7 @@ void CreatePointsOptionsToJson(const CreatePointsOptions& c, json& o) {
   o["sequentialNumbering"] = c.sequentialNumbering;
   o["pointNumberOffset"] = c.pointNumberOffset;
   o["sequenceNumbersFrom"] = c.sequenceNumbersFrom;
-  o["layer"] = c.layer;
+  o["layerOverride"] = c.layer;  // REQ-361: empty = the Object Layers Survey point layer
   o["defaultDescription"] = c.defaultDescription;
   o["defaultElevation"] = c.defaultElevation;
   o["duplicatePolicy"] = static_cast<int>(c.duplicatePolicy);
@@ -716,7 +1021,7 @@ CreatePointsOptions CreatePointsOptionsFromJson(const json& o) {
   c.sequentialNumbering = o.value("sequentialNumbering", c.sequentialNumbering);
   c.pointNumberOffset  = o.value("pointNumberOffset",  c.pointNumberOffset);
   c.sequenceNumbersFrom = o.value("sequenceNumbersFrom", c.sequenceNumbersFrom);
-  c.layer              = o.value("layer",              c.layer);
+  c.layer              = o.value("layerOverride",      c.layer);
   c.defaultDescription = o.value("defaultDescription", c.defaultDescription);
   c.defaultElevation   = o.value("defaultElevation",   c.defaultElevation);
   if (o.contains("duplicatePolicy")) {
@@ -782,6 +1087,34 @@ json BuildRoot(const AppCommandState& st) {
   json doc;
   doc["worldDocumentOriginX"] = st.worldDocumentOriginX;
   doc["worldDocumentOriginY"] = st.worldDocumentOriginY;
+  // The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Additive: a reader that
+  // does not know the key ignores it, and a file saved before this loads with the clip off — the
+  // same "legacy file loads unchanged" rule every other additive section here follows (ADR-020
+  // (d)), so no kGsFormatVersion bump. Local coordinates, like every other frame in this file.
+  //
+  // Gated on `viewportSectionClipFrameValid`, NOT just `viewportSectionClip` — REQ-341's
+  // `SECTIONCLIP` (aimed from the active UCS, no face) stays the view state it always was and is
+  // still NEVER written to `.gs`, exactly like it is never undo-tracked (see
+  // `CaptureGeometrySnapshot`'s comment, ADR-059 (i)). Without this gate a plain `SECTIONCLIP ON`
+  // with no `SECTIONPLANE` ever placed would start round-tripping through save/reopen, which REQ-341
+  // explicitly rules out.
+  if (st.viewportSectionClip && st.viewportSectionClipFrameValid) {
+    json sp;
+    sp["active"] = true;
+    sp["frameValid"] = true;
+    sp["frame"] = UcsFrameToJson(st.viewportSectionClipFrame);
+    sp["offset"] = st.viewportSectionClipOffset;
+    sp["flip"] = st.viewportSectionClipFlip;
+    if (st.viewportSectionClipExtent.valid) {
+      json ext;
+      ext["cu"] = st.viewportSectionClipExtent.cu;
+      ext["cv"] = st.viewportSectionClipExtent.cv;
+      ext["halfU"] = st.viewportSectionClipExtent.halfU;
+      ext["halfV"] = st.viewportSectionClipExtent.halfV;
+      sp["extent"] = std::move(ext);
+    }
+    doc["sectionPlane"] = std::move(sp);
+  }
   // REQ-076: the id counter is saved so ids are not reused across a save/load, which is what makes a
   // stored reference safe over a file's whole life rather than only within one session.
   doc["nextEntityId"] = st.nextEntityId;
@@ -803,8 +1136,10 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["modelUnitsPerPlottedInch"] = st.modelUnitsPerPlottedInch;
   doc["drawingInsUnits"] = st.drawingInsUnits;
+  doc["drawingSettings"] = DrawingSettingsToJson(st.drawingSettings);  // REQ-357; additive: absent opens with the defaults
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
   doc["currentLayer"] = st.currentLayer;
+  doc["currentColor"] = st.currentColor;  // REQ-356; additive, older readers ignore it
   // Named text styles (REQ-044). Additive — older readers ignore it; no kGsFormatVersion bump.
   doc["activeTextStyleName"] = st.activeTextStyleName;
   {
@@ -909,6 +1244,23 @@ json BuildRoot(const AppCommandState& st) {
       doc["dimensionStyle"] = std::move(o);
     }
   }
+  {
+    const MultileaderStyle& ms = st.activeMultileaderStyle;
+    const MultileaderStyle def = MultileaderStyles::Default();
+    if (ms != def) {
+      json o;
+      if (!ms.name.empty() && ms.name != "Standard")
+        o["name"] = ms.name;
+      if (ms.annotativeDefault)
+        o["annotativeDefault"] = true;
+      o["textSizeInches"] = ms.textSizeInches;
+      if (!ms.textFont.empty())
+        o["textFont"] = ms.textFont;
+      o["arrowSizeInches"] = ms.arrowSizeInches;
+      o["landingGapInches"] = ms.landingGapInches;
+      doc["multileaderStyle"] = std::move(o);
+    }
+  }
   // Paper space layouts (REQ-031). Viewports/frozen layers persist in a later increment.
   {
     // REQ-155: while floating model space is entered, the floating viewport's active UCS is held
@@ -953,6 +1305,7 @@ json BuildRoot(const AppCommandState& st) {
         vo["modelCenterX"] = v.modelCenterX;
         vo["modelCenterY"] = v.modelCenterY;
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
+        vo["visualStyle"] = static_cast<int>(v.visualStyle);  // REQ-371 (additive)
         vo["camAzimuthDeg"] = v.camAzimuthDeg;      // REQ-061: per-viewport camera (additive)
         vo["camElevationDeg"] = v.camElevationDeg;
         vo["camRollDeg"] = v.camRollDeg;
@@ -1167,6 +1520,19 @@ json BuildRoot(const AppCommandState& st) {
     if (anyBulge)
       doc["polylineVertsBulge"] = st.userPolylineVertsBulge;
   }
+  // REQ-325 / ADR-053: the plane each curved segment turns in. Additive and guarded exactly as the
+  // bulge array above is — written only when something is actually tilted, so a drawing with nothing
+  // tilted re-saves byte-identically. Without it a section on a vertical or tilted plane came back
+  // from its own file lying flat, and exported flat (GitHub #521): the store existed but no file
+  // carried it.
+  {
+    bool anyTilted = false;
+    for (std::size_t i = 0; i + 2 < st.userPolylineVertsNormal.size(); i += 3)
+      if (!IsFlatNormal(st.userPolylineVertsNormal[i], st.userPolylineVertsNormal[i + 1],
+                        st.userPolylineVertsNormal[i + 2])) { anyTilted = true; break; }
+    if (anyTilted)
+      doc["polylineVertsNormal"] = st.userPolylineVertsNormal;
+  }
   json polyClosed = json::array();
   for (uint8_t c : st.userPolylineClosed)
     polyClosed.push_back(static_cast<int>(c));
@@ -1240,6 +1606,61 @@ json BuildRoot(const AppCommandState& st) {
   if (!tableAttrs.empty())
     doc["tableAttrs"] = std::move(tableAttrs);
 
+  // Position Markers (REQ-359 item 3): additive arrays, absent when empty (ADR-020 (d)).
+  json markers = json::array();
+  for (const CadPositionMarker& m : st.cadPositionMarkers) {
+    json o;
+    o["x"] = m.x;
+    o["y"] = m.y;
+    o["z"] = m.z;
+    o["lat"] = m.latitudeDeg;
+    o["lon"] = m.longitudeDeg;
+    json label;
+    CadAnnotationToJson(m.label, label);
+    o["label"] = std::move(label);
+    markers.push_back(std::move(o));
+  }
+  if (!markers.empty())
+    doc["positionMarkers"] = std::move(markers);
+  json markerAttrs = json::array();
+  for (const auto& a : st.cadPositionMarkerAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    markerAttrs.push_back(std::move(o));
+  }
+  if (!markerAttrs.empty())
+    doc["positionMarkerAttrs"] = std::move(markerAttrs);
+
+  json multileaders = json::array();
+  for (const CadMultileader& ml : st.cadMultileaders) {
+    json o;
+    o["path"] = ml.pathXyz;
+    if (ml.annotative)
+      o["annotative"] = true;
+    if (!ml.annotativeVisibleScaleNames.empty())
+      o["annotativeVisibleScaleNames"] = ml.annotativeVisibleScaleNames;
+    if (!ml.extraLeaderPaths.empty()) {
+      json extras = json::array();
+      for (const std::vector<float>& branch : ml.extraLeaderPaths)
+        extras.push_back(branch);
+      o["extraPaths"] = std::move(extras);
+    }
+    json label;
+    CadAnnotationToJson(ml.label, label);
+    o["label"] = std::move(label);
+    multileaders.push_back(std::move(o));
+  }
+  if (!multileaders.empty())
+    doc["multileaders"] = std::move(multileaders);
+  json multileaderAttrs = json::array();
+  for (const auto& a : st.cadMultileaderAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    multileaderAttrs.push_back(std::move(o));
+  }
+  if (!multileaderAttrs.empty())
+    doc["multileaderAttrs"] = std::move(multileaderAttrs);
+
   doc["drawingInsUnits"] = st.drawingInsUnits;
   json blockDefs = json::array();
   for (const CadBlockDefinition& d : st.blockDefs)
@@ -1293,9 +1714,74 @@ json BuildRoot(const AppCommandState& st) {
       o["patAngle"] = fr.patternAngleDeg;
       o["patScale"] = fr.patternScale;
     }
+    if (fr.annotative)
+      o["annotative"] = true;
+    if (!fr.annotativeVisibleScaleNames.empty())
+      o["annotativeVisibleScaleNames"] = fr.annotativeVisibleScaleNames;
     fills.push_back(std::move(o));
   }
   doc["filledRegions"] = std::move(fills);
+
+  if (!st.annotationScales.empty()) {
+    json scales = json::array();
+    for (const CadAnnotationScale& s : st.annotationScales) {
+      json o;
+      o["name"] = s.name;
+      o["paperUnits"] = s.paperUnits;
+      o["drawingUnits"] = s.drawingUnits;
+      scales.push_back(std::move(o));
+    }
+    doc["annotationScales"] = std::move(scales);
+    if (st.currentAnnotationScaleIndex >= 0)
+      doc["currentAnnotationScaleIndex"] = st.currentAnnotationScaleIndex;
+  }
+
+  if (!st.dwgImportedLights.empty() || st.dwgImportedSunPresent || st.dwgImportedLightListPresent) {
+    json lights = json::array();
+    for (const CadDwgImportedLight& l : st.dwgImportedLights) {
+      json o;
+      if (!l.name.empty())
+        o["name"] = l.name;
+      o["type"] = l.type;
+      o["on"] = l.on;
+      o["colorRgb24"] = l.colorRgb24;
+      o["intensity"] = l.intensity;
+      o["pos"] = json::array({l.posX, l.posY, l.posZ});
+      o["target"] = json::array({l.targetX, l.targetY, l.targetZ});
+      if (l.hotspotAngle != 0.0)
+        o["hotspotAngle"] = l.hotspotAngle;
+      if (l.falloffAngle != 0.0)
+        o["falloffAngle"] = l.falloffAngle;
+      lights.push_back(std::move(o));
+    }
+    doc["dwgImportedLights"] = std::move(lights);
+    if (st.dwgImportedSunPresent) {
+      json sun;
+      sun["on"] = st.dwgImportedSun.on;
+      sun["colorRgb24"] = st.dwgImportedSun.colorRgb24;
+      sun["intensity"] = st.dwgImportedSun.intensity;
+      sun["hasShadow"] = st.dwgImportedSun.hasShadow;
+      sun["julianDay"] = st.dwgImportedSun.julianDay;
+      sun["msecs"] = st.dwgImportedSun.msecs;
+      sun["isDst"] = st.dwgImportedSun.isDst;
+      doc["dwgImportedSun"] = std::move(sun);
+    }
+    if (st.dwgImportedLightListPresent) {
+      json reg;
+      reg["classVersion"] = st.dwgImportedLightList.classVersion;
+      if (!st.dwgImportedLightListDictKey.empty())
+        reg["dictKey"] = st.dwgImportedLightListDictKey;
+      json entries = json::array();
+      for (const CadDwgImportedLightListEntry& e : st.dwgImportedLightList.entries) {
+        json o;
+        if (!e.name.empty())
+          o["name"] = e.name;
+        entries.push_back(std::move(o));
+      }
+      reg["entries"] = std::move(entries);
+      doc["dwgImportedLightList"] = std::move(reg);
+    }
+  }
 
   // Imported meshes (REQ-063). Additive section — omitted entirely when there are none, so every
   // pre-REQ-063 drawing still serializes byte-identically and no kGsFormatVersion bump is needed
@@ -1404,6 +1890,11 @@ json BuildRoot(const AppCommandState& st) {
         o["name"] = r.name;
       if (!r.nominalSize.empty())
         o["nominalSize"] = r.nominalSize;
+      // Wall thickness (D-2026-09-23-a). Omitted when unstated, so a run left at the schedule-40
+      // default re-saves byte-identically to how it loaded and a reader without this key is
+      // unaffected (ADR-020 (d), additive).
+      if (r.wallThicknessIn > 0.0)
+        o["wallThicknessIn"] = r.wallThicknessIn;
       if (!r.pressureClassTag.empty())
         o["pressureClassTag"] = r.pressureClassTag;
       pipeRuns.push_back(std::move(o));
@@ -1416,6 +1907,20 @@ json BuildRoot(const AppCommandState& st) {
       pipeRunAttrs.push_back(std::move(o));
     }
     doc["pipeRunAttrs"] = std::move(pipeRunAttrs);
+  }
+
+  // Piping networks (issue #486 increment B3 / REQ-345). Additive and omitted when there are none,
+  // same ADR-020 (d) shape as pipeRuns just above — a network is metadata only (a name plus indices
+  // into pipeRuns), never geometry.
+  if (!st.cadPipingSystems.empty()) {
+    json pipingSystems = json::array();
+    for (const CadPipingSystem& sys : st.cadPipingSystems) {
+      json o;
+      o["name"] = sys.name;
+      o["pipeRunIndices"] = sys.pipeRunIndices;
+      pipingSystems.push_back(std::move(o));
+    }
+    doc["pipingSystems"] = std::move(pipingSystems);
   }
 
   // TIN surfaces (REQ-068). Additive and omitted when there are none, so a pre-REQ-068 drawing still
@@ -1587,7 +2092,9 @@ json BuildRoot(const AppCommandState& st) {
   doc["layers"] = std::move(layers);
 
   json survey = json::array();
-  for (const auto& p : st.surveyPoints) {
+  // REQ-376 / ADR-065 (c): a project drawing's trailer carries no points, only its rules and overrides.
+  const std::vector<SurveyPoint> noPoints;
+  for (const auto& p : ProjectOwnsActiveTabPoints(st) ? noPoints : st.surveyPoints) {
     json o;
     o["id"] = p.id;
     o["easting"] = p.easting;
@@ -1602,6 +2109,20 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["surveyPoints"] = std::move(survey);
   doc["createPointsNextId"] = st.createPointsNextId;
+  if (!st.pointVisibility.IsDefault()) {  // REQ-377: a project drawing's point visibility rules; additive
+    const projpts::Rules& r = st.pointVisibility;
+    json v;
+    v["idRanges"] = r.idRanges;
+    v["description"] = r.description;
+    v["useElevation"] = r.useElevation;
+    v["elevMin"] = r.elevMin;
+    v["elevMax"] = r.elevMax;
+    v["group"] = r.group;
+    v["sourceDrawing"] = r.sourceDrawing;
+    v["shown"] = projpts::IdsToText(r.shown);
+    v["hidden"] = projpts::IdsToText(r.hidden);
+    doc["pointVisibility"] = std::move(v);
+  }
   json cpo;
   CreatePointsOptionsToJson(st.createPointsOpts, cpo);
   doc["createPointsOptions"] = std::move(cpo);
@@ -1969,6 +2490,45 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   // hand out an id that is already in use.
   st.nextEntityId = doc.value("nextEntityId", static_cast<std::uint64_t>(1));
 
+  // The section plane (REQ-343 amended, issue #479 acceptance 8). Absent → off, which is a fresh
+  // document's and a pre-#479 file's state alike.
+  st.viewportSectionClip = false;
+  st.viewportSectionClipFrameValid = false;
+  st.viewportSectionClipFrame = ucs::Ucs{};
+  st.viewportSectionClipOffset = 0.0;
+  st.viewportSectionClipFlip = false;
+  st.viewportSectionClipExtent = SectionPlaneExtent{};
+  st.sectionPlaneSelected = false;
+  if (doc.contains("sectionPlane") && doc["sectionPlane"].is_object()) {
+    const json& sp = doc["sectionPlane"];
+    st.viewportSectionClip = sp.value("active", false);
+    if (sp.contains("frame")) {
+      ucs::Ucs frame;
+      if (UcsFrameFromJson(sp["frame"], &frame)) {
+        st.viewportSectionClipFrame = frame;
+        st.viewportSectionClipFrameValid = sp.value("frameValid", true);
+      }
+    }
+    st.viewportSectionClipOffset = sp.value("offset", 0.0);
+    st.viewportSectionClipFlip = sp.value("flip", false);
+    if (sp.contains("extent") && sp["extent"].is_object()) {
+      const json& ext = sp["extent"];
+      SectionPlaneExtent e;
+      e.cu = ext.value("cu", 0.0);
+      e.cv = ext.value("cv", 0.0);
+      e.halfU = ext.value("halfU", 0.0);
+      e.halfV = ext.value("halfV", 0.0);
+      e.valid = (e.halfU > 1e-9 && e.halfV > 1e-9);
+      st.viewportSectionClipExtent = e;
+    }
+    // A malformed/non-finite offset must not silently clip the whole model or refuse to load it
+    // (REQ-201's "refuse rather than misbehave" applies to a hand-edited file too).
+    if (!std::isfinite(st.viewportSectionClipOffset)) {
+      st.viewportSectionClip = false;
+      st.viewportSectionClipOffset = 0.0;
+    }
+  }
+
   // Point groups (REQ-067). Absent in every file written before them → no groups, which is the
   // "legacy `.gs` loads unchanged" acceptance condition.
   st.pointGroups.clear();
@@ -1992,6 +2552,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   st.modelUnitsPerPlottedInch = doc.value("modelUnitsPerPlottedInch", 50.f);
   st.drawingInsUnits = doc.value("drawingInsUnits", 2);
+  st.drawingSettings = DrawingSettings{};  // REQ-357: absent or partial → the defaults
+  if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object())
+    DrawingSettingsFromJson(doc["drawingSettings"], st.drawingSettings, log);
   // Paper space layouts (REQ-031). Missing/garbage → no layouts, model space (no crash).
   st.paperLayouts.clear();
   if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array()) {
@@ -2029,6 +2592,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
           v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
           v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
+          if (vo.contains("visualStyle") && vo["visualStyle"].is_number_integer()) {
+            const int vsRaw = vo["visualStyle"].get<int>();
+            v.visualStyle = (vsRaw >= 0 && vsRaw <= static_cast<int>(VisualStyle::Shaded))
+                                ? static_cast<VisualStyle>(vsRaw)
+                                : VisualStyle::Wireframe2D;
+          }
           // REQ-061: per-viewport camera. Absent in a legacy .gs -> the defaults (plan view) stand,
           // and ModelToPaperInThroughCamera then reproduces the pre-change projection exactly.
           v.camAzimuthDeg = vo.value("camAzimuthDeg", v.camAzimuthDeg);
@@ -2215,6 +2784,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.currentLayer = doc["currentLayer"].get<std::string>();
   else
     st.currentLayer = "0";
+  // REQ-356: a drawing saved before the current colour existed opens ByLayer, as it was drawn.
+  if (doc.contains("currentColor") && doc["currentColor"].is_string() &&
+      !doc["currentColor"].get<std::string>().empty())
+    st.currentColor = doc["currentColor"].get<std::string>();
+  else
+    st.currentColor = "ByLayer";
 
   // Named text styles (REQ-044). Read tolerantly: a missing table (older .gs) synthesizes "Standard",
   // so existing text — which carries no styleName — renders from its own fields, unchanged.
@@ -2348,6 +2923,21 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.dimStyleDraft = ds;
   }
 
+  {
+    MultileaderStyle ms = MultileaderStyles::Default();
+    if (doc.contains("multileaderStyle") && doc["multileaderStyle"].is_object()) {
+      const auto& o = doc["multileaderStyle"];
+      ms.name = o.value("name", ms.name);
+      ms.textSizeInches = o.value("textSizeInches", ms.textSizeInches);
+      ms.textFont = o.value("textFont", ms.textFont);
+      ms.arrowSizeInches = o.value("arrowSizeInches", ms.arrowSizeInches);
+      ms.landingGapInches = o.value("landingGapInches", ms.landingGapInches);
+      ms.annotativeDefault = o.value("annotativeDefault", false);
+    }
+    st.activeMultileaderStyle = ms;
+    st.mleaderStyleDraft = ms;
+  }
+
   st.userLinesFlat.clear();
   for (const auto& v : doc["lineVerts"])
     st.userLinesFlat.push_back(v.get<double>());
@@ -2418,6 +3008,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.userPolylineVertsBulge.push_back(v.get<float>());
   if (!st.userPolylineVertsBulge.empty())
     SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+  // REQ-325 / ADR-053, same guarded shape: a file without the key loads with the array EMPTY, which
+  // every reader treats as "every segment flat" (GitHub #521).
+  st.userPolylineVertsNormal.clear();
+  if (doc.contains("polylineVertsNormal"))
+    for (const auto& v : doc["polylineVertsNormal"])
+      st.userPolylineVertsNormal.push_back(v.get<float>());
+  if (!st.userPolylineVertsNormal.empty())
+    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
   st.userPolylineClosed.clear();
   for (const auto& v : doc["polylineClosed"])
     st.userPolylineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
@@ -2478,6 +3076,71 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   st.cadTableAttrs.resize(st.cadTables.size());
   MigrateLegacyAnnotationTables(st);
+
+  // Position Markers (REQ-359 item 3). Missing / garbage entries are skipped, never a crash.
+  st.cadPositionMarkers.clear();
+  st.cadPositionMarkerAttrs.clear();
+  if (doc.contains("positionMarkers") && doc["positionMarkers"].is_array()) {
+    for (const auto& o : doc["positionMarkers"]) {
+      if (!o.is_object())
+        continue;
+      CadPositionMarker m;
+      m.x = o.value("x", 0.0);
+      m.y = o.value("y", 0.0);
+      m.z = o.value("z", 0.f);
+      m.latitudeDeg = o.value("lat", 0.0);
+      m.longitudeDeg = o.value("lon", 0.0);
+      if (o.contains("label") && o["label"].is_object())
+        m.label = CadAnnotationFromJson(o["label"]);
+      m.label.kind = CadAnnotation::Kind::Mtext;
+      st.cadPositionMarkers.push_back(std::move(m));
+    }
+  }
+  if (doc.contains("positionMarkerAttrs") && doc["positionMarkerAttrs"].is_array()) {
+    for (const auto& o : doc["positionMarkerAttrs"])
+      st.cadPositionMarkerAttrs.push_back(EntityAttributesFromJson(o));
+  }
+  st.cadPositionMarkerAttrs.resize(st.cadPositionMarkers.size());
+
+  st.cadMultileaders.clear();
+  st.cadMultileaderAttrs.clear();
+  if (doc.contains("multileaders") && doc["multileaders"].is_array()) {
+    for (const auto& o : doc["multileaders"]) {
+      if (!o.is_object())
+        continue;
+      CadMultileader ml;
+      if (o.contains("path") && o["path"].is_array()) {
+        for (const auto& v : o["path"])
+          if (v.is_number())
+            ml.pathXyz.push_back(static_cast<float>(v.get<double>()));
+      }
+      ml.annotative = o.value("annotative", false);
+      if (o.contains("annotativeVisibleScaleNames") && o["annotativeVisibleScaleNames"].is_array())
+        ml.annotativeVisibleScaleNames = o["annotativeVisibleScaleNames"].get<std::vector<std::string>>();
+      if (o.contains("extraPaths") && o["extraPaths"].is_array()) {
+        for (const auto& branch : o["extraPaths"]) {
+          if (!branch.is_array())
+            continue;
+          std::vector<float> path;
+          for (const auto& v : branch)
+            if (v.is_number())
+              path.push_back(static_cast<float>(v.get<double>()));
+          if (path.size() >= 6)
+            ml.extraLeaderPaths.push_back(std::move(path));
+        }
+      }
+      if (o.contains("label") && o["label"].is_object())
+        ml.label = CadAnnotationFromJson(o["label"]);
+      ml.label.kind = CadAnnotation::Kind::Mtext;
+      if (ml.pathXyz.size() >= 6)
+        st.cadMultileaders.push_back(std::move(ml));
+    }
+  }
+  if (doc.contains("multileaderAttrs") && doc["multileaderAttrs"].is_array()) {
+    for (const auto& o : doc["multileaderAttrs"])
+      st.cadMultileaderAttrs.push_back(EntityAttributesFromJson(o));
+  }
+  st.cadMultileaderAttrs.resize(st.cadMultileaders.size());
 
   st.drawingInsUnits = doc.value("drawingInsUnits", st.drawingInsUnits);
   st.blockDefs.clear();
@@ -2674,6 +3337,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         r.name = el["name"].get<std::string>();
       if (el.contains("nominalSize") && el["nominalSize"].is_string())
         r.nominalSize = el["nominalSize"].get<std::string>();
+      // Absent (every drawing written before pipes were hollow) leaves 0, which builds at the
+      // schedule-40 wall for the run's size rather than as a rod — D-2026-09-23-a, the user's call.
+      if (el.contains("wallThicknessIn") && el["wallThicknessIn"].is_number())
+        r.wallThicknessIn = el["wallThicknessIn"].get<double>();
       if (el.contains("pressureClassTag") && el["pressureClassTag"].is_string())
         r.pressureClassTag = el["pressureClassTag"].get<std::string>();
       st.cadPipeRuns.push_back(std::move(r));
@@ -2683,6 +3350,32 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& o : doc["pipeRunAttrs"])
       st.cadPipeRunAttrs.push_back(EntityAttributesFromJson(o));
   st.cadPipeRunAttrs.resize(st.cadPipeRuns.size());  // keep the parallel arrays length-locked
+
+  // Piping networks (issue #486 increment B3 / REQ-345). Guarded, so a drawing written before them
+  // simply has none. An out-of-range index (a hand-edited or corrupted file) is dropped rather than
+  // trusted — REQ-201: nothing invalid is ever stored, and pipeRuns above is already loaded so its
+  // final size is known here.
+  st.cadPipingSystems.clear();
+  if (doc.contains("pipingSystems") && doc["pipingSystems"].is_array()) {
+    for (const auto& el : doc["pipingSystems"]) {
+      if (!el.is_object())
+        continue;
+      CadPipingSystem sys;
+      sys.name = el.value("name", std::string());
+      if (sys.name.empty())
+        continue;  // an unnamed network cannot be referenced or managed
+      if (el.contains("pipeRunIndices") && el["pipeRunIndices"].is_array()) {
+        for (const auto& iv : el["pipeRunIndices"]) {
+          if (!iv.is_number_integer())
+            continue;
+          const int idx = iv.get<int>();
+          if (idx >= 0 && static_cast<size_t>(idx) < st.cadPipeRuns.size())
+            sys.pipeRunIndices.push_back(idx);
+        }
+      }
+      st.cadPipingSystems.push_back(std::move(sys));
+    }
+  }
 
   // TIN surfaces (REQ-068). Guarded, so a drawing written before them simply has none.
   st.cadSurfaces.clear();
@@ -2911,6 +3604,9 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           fr.patternAngleDeg = el["patAngle"].get<float>();
         if (el.contains("patScale"))
           fr.patternScale = el["patScale"].get<float>();
+        fr.annotative = el.value("annotative", false);
+        if (el.contains("annotativeVisibleScaleNames") && el["annotativeVisibleScaleNames"].is_array())
+          fr.annotativeVisibleScaleNames = el["annotativeVisibleScaleNames"].get<std::vector<std::string>>();
       } else if (el.is_array()) {
         // Legacy pre-multi-loop form: a bare flat XY array = one loop. Expand to XYZ at Z = 0.
         for (size_t i = 0; i + 1 < el.size(); i += 2) {
@@ -2928,6 +3624,76 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   if (doc.contains("filledRegionAttrs") && doc["filledRegionAttrs"].is_array()) {
     for (const auto& o : doc["filledRegionAttrs"])
       st.cadFilledRegionAttrs.push_back(EntityAttributesFromJson(o));
+  }
+
+  st.annotationScales.clear();
+  if (doc.contains("annotationScales") && doc["annotationScales"].is_array()) {
+    for (const auto& el : doc["annotationScales"]) {
+      CadAnnotationScale s;
+      s.name = el.value("name", std::string{});
+      s.paperUnits = el.value("paperUnits", 1.f);
+      s.drawingUnits = el.value("drawingUnits", 1.f);
+      if (!s.name.empty() && s.paperUnits > 0.f && s.drawingUnits > 0.f)
+        st.annotationScales.push_back(std::move(s));
+    }
+    st.currentAnnotationScaleIndex = doc.value("currentAnnotationScaleIndex", -1);
+    if (st.currentAnnotationScaleIndex >= static_cast<int>(st.annotationScales.size()))
+      st.currentAnnotationScaleIndex = st.annotationScales.empty() ? -1 : 0;
+  }
+
+  st.dwgImportedLights.clear();
+  st.dwgImportedSunPresent = false;
+  st.dwgImportedLightList = {};
+  st.dwgImportedLightListPresent = false;
+  st.dwgImportedLightListDictKey.clear();
+  if (doc.contains("dwgImportedLights") && doc["dwgImportedLights"].is_array()) {
+    for (const auto& el : doc["dwgImportedLights"]) {
+      CadDwgImportedLight l;
+      l.name = el.value("name", std::string{});
+      l.type = el.value("type", 2u);
+      l.on = el.value("on", true);
+      l.colorRgb24 = el.value("colorRgb24", 0xFFFFFFu);
+      l.intensity = el.value("intensity", 1.0);
+      if (el.contains("pos") && el["pos"].is_array() && el["pos"].size() >= 3) {
+        l.posX = el["pos"][0].get<double>();
+        l.posY = el["pos"][1].get<double>();
+        l.posZ = el["pos"][2].get<double>();
+      }
+      if (el.contains("target") && el["target"].is_array() && el["target"].size() >= 3) {
+        l.targetX = el["target"][0].get<double>();
+        l.targetY = el["target"][1].get<double>();
+        l.targetZ = el["target"][2].get<double>();
+      }
+      l.hotspotAngle = el.value("hotspotAngle", 0.0);
+      l.falloffAngle = el.value("falloffAngle", 0.0);
+      st.dwgImportedLights.push_back(std::move(l));
+    }
+  }
+  if (doc.contains("dwgImportedSun") && doc["dwgImportedSun"].is_object()) {
+    const auto& sun = doc["dwgImportedSun"];
+    st.dwgImportedSun.on = sun.value("on", true);
+    st.dwgImportedSun.colorRgb24 = sun.value("colorRgb24", 0xFFFFFFu);
+    st.dwgImportedSun.intensity = sun.value("intensity", 1.0);
+    st.dwgImportedSun.hasShadow = sun.value("hasShadow", true);
+    st.dwgImportedSun.julianDay = sun.value("julianDay", 0u);
+    st.dwgImportedSun.msecs = sun.value("msecs", 0u);
+    st.dwgImportedSun.isDst = sun.value("isDst", false);
+    st.dwgImportedSunPresent = true;
+  }
+  if (doc.contains("dwgImportedLightList") && doc["dwgImportedLightList"].is_object()) {
+    const auto& reg = doc["dwgImportedLightList"];
+    st.dwgImportedLightListPresent = true;
+    st.dwgImportedLightList.classVersion = reg.value("classVersion", 1u);
+    st.dwgImportedLightListDictKey = reg.value("dictKey", std::string{});
+    if (reg.contains("entries") && reg["entries"].is_array()) {
+      for (const auto& el : reg["entries"]) {
+        CadDwgImportedLightListEntry e;
+        e.name = el.value("name", std::string{});
+        st.dwgImportedLightList.entries.push_back(std::move(e));
+      }
+    }
+    if (st.dwgImportedLightListDictKey.empty())
+      st.dwgImportedLightListDictKey = "Default";
   }
 
   st.drawingLayerTable.clear();
@@ -2964,6 +3730,20 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
 
   st.createPointsNextId = doc.value("createPointsNextId", 1);
+  st.pointVisibility = projpts::Rules{};  // REQ-377: absent -> show every point of the project
+  if (doc.contains("pointVisibility") && doc["pointVisibility"].is_object()) {
+    const json& v = doc["pointVisibility"];
+    projpts::Rules& r = st.pointVisibility;
+    r.idRanges = v.value("idRanges", std::string());
+    r.description = v.value("description", std::string());
+    r.useElevation = v.value("useElevation", false);
+    r.elevMin = v.value("elevMin", 0.0);
+    r.elevMax = v.value("elevMax", 0.0);
+    r.group = v.value("group", std::string());
+    r.sourceDrawing = v.value("sourceDrawing", std::string());
+    r.shown = projpts::IdsFromText(v.value("shown", std::string()));
+    r.hidden = projpts::IdsFromText(v.value("hidden", std::string()));
+  }
   if (doc.contains("createPointsOptions") && doc["createPointsOptions"].is_object())
     st.createPointsOpts = CreatePointsOptionsFromJson(doc["createPointsOptions"]);
   else
@@ -3179,6 +3959,18 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 
 } // namespace
 
+std::string DrawingSettingsToJsonText(const DrawingSettings& ds) { return DrawingSettingsToJson(ds).dump(); }
+
+bool DrawingSettingsFromJsonText(const std::string& jsonText, DrawingSettings* out) {
+  const json o = json::parse(jsonText, nullptr, false);
+  if (!o.is_object())
+    return false;
+  *out = DrawingSettings{};
+  std::vector<std::string> ignored;  // a project default holds no captured tiles worth reporting
+  DrawingSettingsFromJson(o, *out, ignored);
+  return true;
+}
+
 std::string SerializeGoSurveyJson(const AppCommandState& st) {
   return BuildRoot(st).dump(2);
 }
@@ -3256,6 +4048,11 @@ bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, st
 
     if (root.contains("settings") && root["settings"].is_object())
       ApplySettingsFromJson(st, root["settings"]);
+
+    if (!st.annotationScales.empty() &&
+        (st.currentAnnotationScaleIndex < 0 ||
+         st.currentAnnotationScaleIndex >= static_cast<int>(st.annotationScales.size())))
+      SyncCurrentAnnotationScaleIndex(st);
 
     EnsureAttrCounts(st);
     SyncDrawingLayerTableWithGeometry(st);

@@ -3,6 +3,7 @@
 #include "CadCommands.hpp"
 #include "CadSnap.hpp"
 #include "PdfAttach.hpp"
+#include "CadOnlineMap.hpp"
 #include "gizmooverlay.hpp"
 #include "render/SectionClip.hpp"
 #include "util/pointcloudcache.hpp"
@@ -14,6 +15,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -54,6 +56,8 @@ struct RenderTuning {
   /// grabs — the rule REQ-318's sub-object hover already follows.
   int sectionPlaneGripHover = -1;
   int sectionPlaneGripDrag = -1;
+  /// REQ-363 / ADR-064 (d) — the online map tiles, drawn first, under everything. Null = no map.
+  const std::vector<MapTileDraw>* mapTiles = nullptr;
 };
 
 class ViewportRenderer {
@@ -191,10 +195,51 @@ public:
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
+  /// REQ-363 / ADR-064 (d): an online map tile's texture from top-row-first RGBA — linear filtered,
+  /// clamped at the edges so neighbouring tiles meet without a seam. 0 on failure. Static: tiles are
+  /// shared by every drawing tab's renderer (one GL context), and owned by the map controller.
+  static unsigned int CreateMapTileTexture(const std::vector<unsigned char>& rgba, int width, int height);
+  static void DeleteMapTileTexture(unsigned int texture);
+
   /// REQ-308 — write the last-rendered viewport image as a 24-bit BMP, downscaled so its longer
   /// side is at most \p maxDim. Best-effort: returns false and writes nothing on any failure.
   /// Call right after RenderScene for the drawing being pictured.
   [[nodiscard]] bool CaptureThumbnailBmp(const char* pathUtf8, int maxDim) const;
+
+  /// One library part's geometry, ready to be drawn as a palette thumbnail (ADR-062 / REQ-350).
+  ///
+  /// Plain float arrays rather than a domain type, because §7 of the architecture spec asks the
+  /// render API to take submitted data: the renderer should not know what a "fitting" is, only how
+  /// to light some triangles and draw some lines. Coordinates are the part's own local/storage
+  /// coordinates — the thumbnail centres and fits them itself, so no view anchor applies.
+  struct PartThumbnailInput {
+    const std::vector<float>* triVerts = nullptr;    ///< `GL_TRIANGLES`, nine floats per triangle.
+    const std::vector<float>* triNormals = nullptr;  ///< one unit normal per vertex, parallel to triVerts.
+    const std::vector<float>* edgeVerts = nullptr;   ///< `GL_LINES`, six floats per segment.
+    /// Connection ports as points: seven floats each — x, y, z, r, g, b, a. Coloured per port by the
+    /// caller (the role colours the BEDIT gizmo uses), because the renderer does not know what a
+    /// role is.
+    const std::vector<float>* portMarkers = nullptr;
+    float rgba[4] = {0.78f, 0.80f, 0.84f, 1.f};  ///< the part's body colour.
+  };
+
+  /// Render \p in as a \p px by \p px shaded thumbnail and cache it under \p key, or do nothing (and
+  /// return true) when \p key is already cached at that size — a part is drawn ONCE, which is what
+  /// keeps REQ-350's palette inside REQ-100's frame budget. Returns false when there is nothing to
+  /// draw or a GL object could not be created; the caller then shows the row without a picture
+  /// rather than failing.
+  ///
+  /// Must be called at a point in the frame where binding another framebuffer is safe — i.e. AFTER
+  /// RenderScene, the same constraint (and the same reason) CaptureThumbnailBmp has.
+  bool EnsurePartThumbnail(const std::string& key, const PartThumbnailInput& in, int px);
+
+  /// The cached texture for \p key, or 0 when nothing is cached — which is the palette's cue to draw
+  /// a placeholder. Opaque to the caller: no GL call is needed to use it beyond handing it to ImGui.
+  [[nodiscard]] unsigned int PartThumbnailTexture(const std::string& key) const;
+
+  /// Drop \p key's cached thumbnail, so the next request re-renders it. Called when a block
+  /// definition is edited (ADR-062 (c) — the one way a part's geometry changes in a session).
+  void InvalidatePartThumbnail(const std::string& key);
 
 private:
   bool EnsureFramebuffer(int w, int h);
@@ -205,6 +250,30 @@ private:
   void DestroyShader();
   static void Ortho(float left, float right, float bottom, float top, float nearp, float farp,
                     float* outColMajor);
+
+  /// ADR-062 — one cached part thumbnail. Each owns its OWN framebuffer and colour texture, rather
+  /// than sharing one small FBO and copying out: `ImGui::Image` records a texture id and samples it
+  /// after every UI call has run, so a shared target would make every row in the palette display
+  /// whichever part was rendered last.
+  struct PartThumbnailEntry {
+    std::string key;
+    unsigned int fbo = 0;
+    unsigned int tex = 0;
+    unsigned int depthRbo = 0;
+    int px = 0;
+    /// Monotonic use stamp, for evicting the least recently asked-for entry when the cache is full.
+    std::uint64_t stamp = 0;
+  };
+  void ReleasePartThumbnails();
+  void DestroyPartThumbnailEntry(PartThumbnailEntry& e);
+
+  std::vector<PartThumbnailEntry> partThumbs_;
+  std::uint64_t partThumbStamp_ = 0;
+  /// Scratch VAO/VBO shared by every thumbnail render. Deliberately NOT the scene's `vaoLines_` /
+  /// `vboShaded_`: those hold committed geometry whose re-upload is gated on `cadGpuRevision`, so
+  /// streaming a thumbnail through them would blank the drawing until an unrelated edit bumped it.
+  unsigned int partThumbVao_ = 0;
+  unsigned int partThumbVbo_ = 0;
 
   unsigned int fbo_ = 0;
   unsigned int colorTex_ = 0;
@@ -232,6 +301,7 @@ private:
   unsigned int shadedProgram_ = 0;
   unsigned int vaoShaded_ = 0;
   unsigned int vboShaded_ = 0;
+  std::vector<float> mapTileScratch_;  ///< One map tile's float vertices (REQ-363), reused per tile.
   std::vector<float> cpuShadedTris_;  ///< x,y,z,nx,ny,nz per vertex; scratch for the filled-region quad.
 
   /// One mesh's GPU residency (REQ-063). Meshes are **immutable** (ADR-026 (c)), so the buffers

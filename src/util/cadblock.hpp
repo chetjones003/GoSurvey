@@ -138,7 +138,12 @@ enum class CadPipePartType : std::uint8_t {
   Valve,
   Coupling,
   Cap,
-  Other
+  Other,
+  /// REQ-350 / D-2026-09-24-a (1). Appended AFTER `Other` rather than inserted in category order so
+  /// no existing enumerator's numeric value moves — the tag string is what .gs and the LIBEXPORT
+  /// sidecars persist, but a stable numeric value costs nothing to keep, and an in-memory value that
+  /// silently changed meaning would be the worst kind of bug to go looking for.
+  Nozzle
 };
 
 [[nodiscard]] inline std::string_view CadPipePartTypeTag(CadPipePartType t) {
@@ -153,6 +158,7 @@ enum class CadPipePartType : std::uint8_t {
     case CadPipePartType::Coupling: return "coupling";
     case CadPipePartType::Cap: return "cap";
     case CadPipePartType::Other: return "other";
+    case CadPipePartType::Nozzle: return "nozzle";
     case CadPipePartType::None:
     default: return "";
   }
@@ -169,6 +175,7 @@ enum class CadPipePartType : std::uint8_t {
   if (s == "coupling") return CadPipePartType::Coupling;
   if (s == "cap") return CadPipePartType::Cap;
   if (s == "other") return CadPipePartType::Other;
+  if (s == "nozzle") return CadPipePartType::Nozzle;
   return CadPipePartType::None;
 }
 
@@ -358,6 +365,8 @@ enum class CadPipePressureClass : std::uint8_t { None = 0, CS150, CS300 };
 struct CadBlockDefinition {
   std::uint64_t id = 0;
   std::string name;
+  /// True when \p name is an AutoCAD dynamic-block anonymous instance block (`*U…`).
+  bool dynamicAnonymous = false;
   std::string description;
   float baseX = 0.f;
   float baseY = 0.f;
@@ -379,13 +388,50 @@ struct CadBlockDefinition {
   std::string partNumber;
 };
 
+/// One row of the block library: the drawing's own definitions, plus the bundled/user files not yet
+/// imported. `partType`/`nominalSize`/`pressureClass` (issue #486 increment A5) come from the
+/// definition itself when it is already imported, or from a LIBEXPORT `.json` sidecar beside an
+/// unimported file — read WITHOUT importing, so a pane or palette can filter before the user picks
+/// anything.
+///
+/// Lives here beside CadBlockDefinition rather than in `CadBlocks.hpp` (its original home)
+/// because `AppCommandState` caches a listing of these (REQ-350), and `CadBlocks.hpp` sits ABOVE
+/// `AppCommandState` — a plain description of a library file belongs at the level of the data it
+/// describes, not at the level of the code that scans for it.
+struct CadBlockLibraryEntry {
+  std::string name;
+  std::string path;
+  bool imported = false;
+  bool isFitting = false;
+  CadPipePartType partType = CadPipePartType::None;
+  std::string nominalSize;
+  CadPipePressureClass pressureClass = CadPipePressureClass::None;
+};
+
 struct CadBlockRef {
   std::string defName;
+  /// Named dynamic-block definition when \p defName is `*U…` (empty when unknown).
+  std::string dynamicCanonicalName;
   CadBlockXform xf;
   std::vector<CadBlockAttrValue> attributes;
   std::vector<CadBlockParameter> paramState;
   std::string visState;
+  /// When true, insert scale follows viewport scale on the sheet (issue #622).
+  bool annotative = false;
+  /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
+  std::vector<std::string> annotativeVisibleScaleNames;
 };
+
+/// Scales an insert uniformly about its insertion point for annotative display through \p vp.
+[[nodiscard]] inline CadBlockRef CadBlockRefForAnnotativeViewport(const CadBlockRef& ref, float displayScaleFactor) {
+  if (displayScaleFactor <= 0.f || std::fabs(displayScaleFactor - 1.f) < 1.e-6f)
+    return ref;
+  CadBlockRef out = ref;
+  out.xf.sx *= displayScaleFactor;
+  out.xf.sy *= displayScaleFactor;
+  out.xf.sz *= displayScaleFactor;
+  return out;
+}
 
 struct CadBlockWorldSeg {
   float x0 = 0.f, y0 = 0.f, z0 = 0.f;
@@ -403,6 +449,11 @@ struct CadBlockWorldSolid {
   CadSolidPtr solid;
   EntityAttributes attr;
 };
+
+/// AutoCAD dynamic-block inserts reference an anonymous `*U…` block holding the evaluated geometry.
+[[nodiscard]] inline bool CadBlockNameIsDynamicAnonymous(std::string_view name) {
+  return name.size() >= 2 && name[0] == '*' && (name[1] == 'U' || name[1] == 'u');
+}
 
 [[nodiscard]] inline bool CadBlockEqCi(std::string_view a, std::string_view b) {
   if (a.size() != b.size())
@@ -495,6 +546,24 @@ inline void CadBlockXformDirection(const CadBlockXform& xf, float lx, float ly, 
 
 namespace cadblock_detail {
 
+/// Extracts the rotZ/rotY/rotX Euler angles (`CadBlockXformDirection`'s own rotZ-then-rotY-then-rotX
+/// order) from a 3x3 rotation matrix, \p m[row][col]. Shared by `RotationFromUnitToUnit` (built from
+/// a single-axis rotation) and `RotationAligningTwoDirections` (built from two orthonormal frames) —
+/// one decomposition, so the two callers can never disagree about which Euler convention this
+/// codebase uses.
+inline void EulerXYZFromMatrix(const double m[3][3], CadBlockXform* xf) {
+  const double sy = std::sqrt(m[0][0] * m[0][0] + m[1][0] * m[1][0]);
+  if (sy > 1e-6) {
+    xf->rotZ = static_cast<float>(std::atan2(m[1][0], m[0][0]));
+    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
+    xf->rotX = static_cast<float>(std::atan2(m[2][1], m[2][2]));
+  } else {
+    xf->rotZ = static_cast<float>(std::atan2(-m[0][1], m[1][1]));
+    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
+    xf->rotX = 0.f;
+  }
+}
+
 inline void RotationFromUnitToUnit(float ax, float ay, float az, float bx, float by, float bz, CadBlockXform* xf) {
   assert(xf != nullptr);
   using ray3d::Cross;
@@ -535,16 +604,57 @@ inline void RotationFromUnitToUnit(float ax, float ay, float az, float bx, float
   rotCol(1.f, 0.f, 0.f, 0, m);
   rotCol(0.f, 1.f, 0.f, 1, m);
   rotCol(0.f, 0.f, 1.f, 2, m);
-  const double sy = std::sqrt(m[0][0] * m[0][0] + m[1][0] * m[1][0]);
-  if (sy > 1e-6) {
-    xf->rotZ = static_cast<float>(std::atan2(m[1][0], m[0][0]));
-    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
-    xf->rotX = static_cast<float>(std::atan2(m[2][1], m[2][2]));
-  } else {
-    xf->rotZ = static_cast<float>(std::atan2(-m[0][1], m[1][1]));
-    xf->rotY = static_cast<float>(std::atan2(-m[2][0], sy));
-    xf->rotX = 0.f;
+  EulerXYZFromMatrix(m, xf);
+}
+
+/// Rotation aligning TWO local direction pairs simultaneously: \p a1 -> \p b1 AND \p a2 -> \p b2
+/// (issue #486 increment B5). Needed to orient a two-port fitting (an elbow) so BOTH its connection
+/// normals match the two pipe legs at a bend at once — `RotationFromUnitToUnit`'s single-direction
+/// alignment leaves the "roll" about the aligned axis wherever the minimal rotation happens to put
+/// it, which a second constraint cannot then steer.
+///
+/// Built from two orthonormal frames (one from \p a1/\p a2, one from \p b1/\p b2 — the local frame's
+/// own "up" and target frame's own "up" are each derived the SAME way from their pair's cross
+/// product, so the same handedness convention applies on both sides) rather than composing two
+/// single-axis rotations, which is both simpler and exact rather than iterative.
+///
+/// Assumes the angle between \p a1/\p a2 already equals the angle between \p b1/\p b2 (true for a
+/// correctly authored fitting whose PART TYPE tag actually matches the corner's own snapped bend
+/// angle — see `ElbowPartTypeForSnappedAngleDeg`); if the two frames disagree, the TARGET pair (\p
+/// b1/\p b2) wins — \p a2 only supplies which way is "up" for the local frame, never a magnitude.
+/// No-op (identity-ish, whatever \p xf already held) if either pair is degenerate (collinear).
+[[nodiscard]] inline bool RotationAligningTwoDirections(ray3d::Vec3 a1, ray3d::Vec3 a2, ray3d::Vec3 b1,
+                                                         ray3d::Vec3 b2, CadBlockXform* xf) {
+  assert(xf != nullptr);
+  using ray3d::Cross;
+  using ray3d::Length;
+  using ray3d::Normalize;
+  a1 = Normalize(a1);
+  b1 = Normalize(b1);
+  ray3d::Vec3 az = Cross(a1, a2);
+  ray3d::Vec3 bz = Cross(b1, b2);
+  if (Length(az) < 1e-9 || Length(bz) < 1e-9)
+    return false;
+  az = Normalize(az);
+  bz = Normalize(bz);
+  const ray3d::Vec3 ay = Cross(az, a1);
+  const ray3d::Vec3 by = Cross(bz, b1);
+  // Columns of Ua: (a1, ay, az); columns of Ub: (b1, by, bz) — both orthonormal. R = Ub * Ua^T maps
+  // a1->b1, ay->by, az->bz (and therefore a2, which lies in the a1/ay plane, to the matching
+  // combination of b1/by — i.e. to b2 whenever the angle assumption above holds).
+  const double Ua[3][3] = {{a1.x, ay.x, az.x}, {a1.y, ay.y, az.y}, {a1.z, ay.z, az.z}};
+  const double Ub[3][3] = {{b1.x, by.x, bz.x}, {b1.y, by.y, bz.y}, {b1.z, by.z, bz.z}};
+  double R[3][3]{};
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      double s = 0.0;
+      for (int k = 0; k < 3; ++k)
+        s += Ub[i][k] * Ua[j][k];
+      R[i][j] = s;
+    }
   }
+  EulerXYZFromMatrix(R, xf);
+  return true;
 }
 
 } // namespace cadblock_detail
@@ -584,6 +694,20 @@ inline void CadBlockSnapInsertToConnection(const CadBlockConnection& src, float 
   xf->x = tgtX - wx;
   xf->y = tgtY - wy;
   xf->z = tgtZ - wz;
+}
+
+/// Orients \p xf (rotation only — call before setting a translation) so a two-port fitting's own
+/// two connection normals (\p nearLocal, \p farLocal) match two ANTI-aligned world directions at
+/// once: \p nearLocal -> `-incomingDir`, \p farLocal -> `outgoingDir` (issue #486 increment B5). The
+/// two-port counterpart of `CadBlockSnapInsertToConnection`'s single-port alignment, used to
+/// auto-insert an elbow at a pipe bend where BOTH of the elbow's ports must match a leg direction
+/// simultaneously — a single-port alignment leaves the roll about that axis undetermined, which is
+/// exactly the ambiguity a bend cannot tolerate (the elbow would still point the wrong way out).
+[[nodiscard]] inline bool CadBlockOrientTwoPortFitting(const ray3d::Vec3& nearLocal, const ray3d::Vec3& farLocal,
+                                                        const ray3d::Vec3& incomingDir, const ray3d::Vec3& outgoingDir,
+                                                        CadBlockXform* xf) {
+  const ray3d::Vec3 bNear = ray3d::Scale(incomingDir, -1.0);
+  return cadblock_detail::RotationAligningTwoDirections(nearLocal, farLocal, bNear, outgoingDir, xf);
 }
 
 /// Classifies a placed connection port as a smart-mode snap target (issue #496): a flange-typed
@@ -719,6 +843,9 @@ inline void CadBlockApplyActionsToPoint(const CadBlockDefinition& def, const Cad
                                         std::string_view prim = {}, std::string_view group = {}) {
   assert(x != nullptr);
   assert(y != nullptr);
+  // AutoCAD `*U` instance blocks already carry evaluated geometry (REQ-369 increment 2).
+  if (def.dynamicAnonymous)
+    return;
   for (const CadBlockAction& a : def.actions) {
     if (!CadBlockActionApplies(a, prim, group))
       continue;
@@ -764,13 +891,24 @@ inline void CadBlockApplyActionsToPoint(const CadBlockDefinition& def, const Cad
   return !CadBlockEqCi(primVis, active);
 }
 
+/// The attributes a block's primitive is drawn with, given the insert that places it.
+///
+/// ByBlock takes the insert's value. A primitive on layer 0 **follows the insert fully**
+/// (D-2026-09-28-h): it moves to the insert's layer — AutoCAD's layer-0 rule, so turning the
+/// insert's layer Off / Frozen hides it — and a ByLayer colour / linetype on it takes the insert's
+/// own, so recolouring a block (a pipe fitting drawn on layer 0) recolours its content. AutoCAD
+/// would leave that last case on the layer's colour; the user chose "the block's colour wins".
 [[nodiscard]] inline EntityAttributes CadBlockResolveAttr(const EntityAttributes& prim, const EntityAttributes& insert) {
   EntityAttributes o = prim;
-  if (CadBlockEqCi(prim.color, "ByBlock") || prim.color.empty())
+  const bool onLayer0 = prim.layer.empty() || prim.layer == "0";
+  const auto follows = [&](const std::string& v) {
+    return v.empty() || CadBlockEqCi(v, "ByBlock") || (onLayer0 && CadBlockEqCi(v, "ByLayer"));
+  };
+  if (follows(prim.color))
     o.color = insert.color.empty() ? std::string("ByLayer") : insert.color;
-  if (CadBlockEqCi(prim.linetype, "ByBlock"))
+  if (!prim.linetype.empty() && follows(prim.linetype))
     o.linetype = insert.linetype.empty() ? std::string("ByLayer") : insert.linetype;
-  if (prim.layer.empty())
+  if (onLayer0)
     o.layer = insert.layer.empty() ? std::string("0") : insert.layer;
   o.id = insert.id;
   return o;
@@ -1465,27 +1603,34 @@ inline void CadBlockParamSet(CadBlockRef* r, std::string name, float value) {
   return false;
 }
 
-[[nodiscard]] inline float CadBlockUnitsScale(std::string_view fromUnits, std::string_view toUnits) {
+/// International-foot inches per meter (1 ft = 0.3048 m exactly) — the default when a caller has no
+/// drawing to ask; a drawing's own definition comes from its Drawing Settings (REQ-357).
+inline constexpr double kInchesPerMeterInternational = 1.0 / 0.0254;
+
+/// Scale from \p fromUnits to \p toUnits, computed in double. \p inchesPerMeter is the drawing's
+/// Imperial to Metric conversion (REQ-357): 39.37 for the US survey foot, 1/0.0254 international.
+[[nodiscard]] inline float CadBlockUnitsScale(std::string_view fromUnits, std::string_view toUnits,
+                                              double inchesPerMeter = kInchesPerMeterInternational) {
   // "unitless" means the geometry is already in the drawing's model-unit system (ACIS `.sat`
   // imports, issue #473/#475) — do not infer inches and apply a feet conversion.
   if (fromUnits.empty() || CadBlockEqCi(fromUnits, "unitless"))
     return 1.f;
-  auto u = [](std::string_view s) {
+  auto u = [inchesPerMeter](std::string_view s) {
     if (CadBlockEqCi(s, "inches") || CadBlockEqCi(s, "in") || CadBlockEqCi(s, "inch"))
-      return 1.f;
+      return 1.0;
     if (CadBlockEqCi(s, "feet") || CadBlockEqCi(s, "ft") || CadBlockEqCi(s, "foot"))
-      return 12.f;
+      return 12.0;
     if (CadBlockEqCi(s, "meters") || CadBlockEqCi(s, "m") || CadBlockEqCi(s, "metre"))
-      return 39.3700787f;
+      return inchesPerMeter;
     if (CadBlockEqCi(s, "millimeters") || CadBlockEqCi(s, "mm"))
-      return 0.0393700787f;
-    return 1.f;
+      return inchesPerMeter / 1000.0;
+    return 1.0;
   };
-  const float a = u(fromUnits);
-  const float b = u(toUnits);
-  if (b == 0.f)
+  const double a = u(fromUnits);
+  const double b = u(toUnits);
+  if (b == 0.0)
     return 1.f;
-  return a / b;
+  return static_cast<float>(a / b);
 }
 
 [[nodiscard]] inline std::string CadDrawingInsUnitsName(int code) {
@@ -1493,6 +1638,8 @@ inline void CadBlockParamSet(CadBlockRef* r, std::string name, float value) {
     return "inches";
   if (code == 2)
     return "feet";
+  if (code == 4)
+    return "millimeters";
   if (code == 6)
     return "meters";
   return "unitless";
@@ -1503,10 +1650,25 @@ inline void CadBlockParamSet(CadBlockRef* r, std::string name, float value) {
     return 1;
   if (CadBlockEqCi(s, "feet") || CadBlockEqCi(s, "ft") || CadBlockEqCi(s, "foot"))
     return 2;
+  if (CadBlockEqCi(s, "millimeters") || CadBlockEqCi(s, "mm") || CadBlockEqCi(s, "millimetre"))
+    return 4;
   if (CadBlockEqCi(s, "meters") || CadBlockEqCi(s, "m") || CadBlockEqCi(s, "metre"))
     return 6;
   return 0;
 }
+
+/// True for an INSUNITS code the drawing unit offers (REQ-357): Unitless, Inches, Feet,
+/// Millimeters, Meters. Importers adopt only these and leave the unit unchanged otherwise.
+[[nodiscard]] inline bool CadDrawingInsUnitsOffered(int code) {
+  return code == 0 || code == 1 || code == 2 || code == 4 || code == 6;
+}
+
+/// The drawing units the UNITS dialog and the Drawing Settings window offer, in display order
+/// (REQ-357) — one list, so the two windows cannot drift apart.
+inline constexpr int kDrawingUnitCount = 5;
+inline constexpr const char* kDrawingUnitNames[kDrawingUnitCount] = {"Unitless", "Inches", "Feet", "Meters",
+                                                                     "Millimeters"};
+inline constexpr int kDrawingUnitCodes[kDrawingUnitCount] = {0, 1, 2, 6, 4};
 
 [[nodiscard]] inline bool CadBlockHasMatchlineDyn(const CadBlockDefinition& def) {
   for (const CadBlockParameter& p : def.parameters) {
@@ -1514,6 +1676,35 @@ inline void CadBlockParamSet(CadBlockRef* r, std::string name, float value) {
       return true;
   }
   return false;
+}
+
+[[nodiscard]] inline const CadBlockAction* CadBlockFindLinearStretchAction(const CadBlockDefinition& def,
+                                                                           std::string_view* paramNameOut) {
+  for (const CadBlockAction& a : def.actions) {
+    if (a.kind != CadBlockActionKind::Stretch || !a.applyTo.empty())
+      continue;
+    for (const CadBlockParameter& p : def.parameters) {
+      if (p.kind == CadBlockParamKind::Linear && CadBlockEqCi(p.name, a.paramName)) {
+        if (paramNameOut != nullptr)
+          *paramNameOut = p.name;
+        return &a;
+      }
+    }
+  }
+  return nullptr;
+}
+
+[[nodiscard]] inline bool CadBlockHasLinearStretchDyn(const CadBlockDefinition& def) {
+  if (def.dynamicAnonymous || CadBlockHasMatchlineDyn(def))
+    return false;
+  return CadBlockFindLinearStretchAction(def, nullptr) != nullptr;
+}
+
+[[nodiscard]] inline std::string CadBlockFirstLinearStretchParamName(const CadBlockDefinition& def) {
+  std::string_view name;
+  if (CadBlockFindLinearStretchAction(def, &name) == nullptr)
+    return {};
+  return std::string(name);
 }
 
 inline void CadBlockAuthorMatchlineDynamics(CadBlockDefinition* def) {
@@ -1623,6 +1814,20 @@ inline bool CadBlockDynGripWorld(const CadBlockDefinition& def, const CadBlockRe
       *wz = ref.xf.z;
     return true;
   }
+  if (CadBlockHasLinearStretchDyn(def)) {
+    if (which != 1)
+      return false;
+    const CadBlockAction* stretch = CadBlockFindLinearStretchAction(def, nullptr);
+    if (stretch == nullptr)
+      return false;
+    const float v = CadBlockParamValue(ref, def, stretch->paramName);
+    float lx = stretch->originX + stretch->dirX * v;
+    float ly = stretch->originY + stretch->dirY * v;
+    float lz = 0.f;
+    CadBlockApplyActionsToPoint(def, ref, &lx, &ly, "geom", {});
+    CadBlockXformPoint(ref.xf, lx, ly, lz, wx, wy, wz);
+    return true;
+  }
   if (!CadBlockHasMatchlineDyn(def))
     return false;
   float lx = 0.f, ly = 0.f, lz = 0.f;
@@ -1655,7 +1860,11 @@ inline bool CadBlockDynGripWorld(const CadBlockDefinition& def, const CadBlockRe
 }
 
 inline int CadBlockDynGripCount(const CadBlockDefinition& def) {
-  return CadBlockHasMatchlineDyn(def) ? kCadBlockDynGripCount : 1;
+  if (CadBlockHasMatchlineDyn(def))
+    return kCadBlockDynGripCount;
+  if (CadBlockHasLinearStretchDyn(def))
+    return 2;
+  return 1;
 }
 
 enum class CadBlockDynGripShape : std::uint8_t { Square = 0, StretchArrow, OffsetTriangle, FlipArrow };
@@ -1702,6 +1911,26 @@ inline void CadBlockApplyDynGripDrag(CadBlockRef* r, const CadBlockDefinition& d
   if (which == 0) {
     r->xf.x = wx;
     r->xf.y = wy;
+    return;
+  }
+  if (CadBlockHasLinearStretchDyn(def)) {
+    if (which != 1)
+      return;
+    const CadBlockAction* stretch = CadBlockFindLinearStretchAction(def, nullptr);
+    if (stretch == nullptr)
+      return;
+    float lx = 0.f;
+    float ly = 0.f;
+    CadBlockWorldToLocal(r->xf, wx, wy, &lx, &ly);
+    const float along =
+        (lx - stretch->originX) * stretch->dirX + (ly - stretch->originY) * stretch->dirY;
+    for (const CadBlockParameter& p : def.parameters) {
+      if (p.kind == CadBlockParamKind::Linear && CadBlockEqCi(p.name, stretch->paramName)) {
+        const float clamped = std::clamp(along, p.minValue, p.maxValue);
+        CadBlockParamSet(r, p.name, clamped);
+        break;
+      }
+    }
     return;
   }
   if (!CadBlockHasMatchlineDyn(def))

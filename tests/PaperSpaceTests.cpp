@@ -640,3 +640,86 @@ TEST_CASE("Paper box-select follows an MTEXT's real box (TASK-198)", "[paperspac
   SelectPaperEntitiesInBox(L, 9.f, 19.f, 15.f, 24.f, /*windowMode=*/true, out);
   REQUIRE(out.size() == 1);
 }
+
+TEST_CASE("Annotative hatch pattern scale tracks viewport scale (issue #622)", "[paperspace][issue622]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 40.f;
+  CadFilledRegion fr;
+  fr.patternName = "ANSI31";
+  fr.patternScale = 2.f;
+  fr.annotative = true;
+  const CadFilledRegion scaled = FilledRegionForAnnotativeDraw(fr, &vp, 80.f);
+  REQUIRE(scaled.patternScale == Catch::Approx(1.f));
+  fr.annotative = false;
+  REQUIRE(FilledRegionForAnnotativeDraw(fr, &vp, 80.f).patternScale == Catch::Approx(2.f));
+}
+
+TEST_CASE("Annotation scale entry converts to model units per plotted inch (issue #622)", "[paperspace][issue622]") {
+  CadAnnotationScale s;
+  s.name = "1:50";
+  s.paperUnits = 1.f;
+  s.drawingUnits = 50.f;
+  REQUIRE(CadAnnotationScaleModelUnitsPerPlottedInch(s) == Catch::Approx(50.f));
+}
+
+TEST_CASE("Annotative TEXT uses current annotation scale in model space (issue #622)", "[paperspace][issue622]") {
+  std::vector<CadAnnotationScale> scales(1);
+  scales[0].paperUnits = 1.f;
+  scales[0].drawingUnits = 25.f;
+  CadAnnotation t;
+  t.annotative = true;
+  REQUIRE(AnnotativeModelUnitsPerPlottedInch(t, nullptr, 80.f, &scales, 0) == Catch::Approx(25.f));
+}
+
+TEST_CASE("Annotation scale status label uses DWG name when present (issue #622)", "[paperspace][issue622]") {
+  CadAnnotationScale s;
+  s.name = "1/4\" = 1'-0\"";
+  REQUIRE(CadAnnotationScaleStatusLabel(s) == "1/4\" = 1'-0\"");
+}
+
+TEST_CASE("Annotative block ref uses model annotation scale index (issue #622)", "[paperspace][issue622]") {
+  std::vector<CadAnnotationScale> scales(2);
+  scales[0].paperUnits = 1.f;
+  scales[0].drawingUnits = 10.f;
+  scales[1].paperUnits = 1.f;
+  scales[1].drawingUnits = 20.f;
+  CadBlockRef ref;
+  ref.annotative = true;
+  ref.xf.sx = 2.f;
+  ref.xf.sy = 2.f;
+  const CadBlockRef out =
+      CadBlockRefForAnnotativeDisplay(ref, nullptr, 40.f, &scales, 1);
+  REQUIRE(out.xf.sx == Catch::Approx(1.f));
+  REQUIRE(out.xf.sy == Catch::Approx(1.f));
+}
+
+TEST_CASE("Annotative hatch pattern scales with model annotation scale (issue #622)", "[paperspace][issue622]") {
+  std::vector<CadAnnotationScale> scales(1);
+  scales[0].paperUnits = 1.f;
+  scales[0].drawingUnits = 40.f;
+  CadFilledRegion fr;
+  fr.patternName = "ANSI31";
+  fr.patternScale = 2.f;
+  fr.annotative = true;
+  const CadFilledRegion scaled = FilledRegionForAnnotativeDraw(fr, nullptr, 80.f, &scales, 0);
+  REQUIRE(scaled.patternScale == Catch::Approx(1.f));
+}
+
+TEST_CASE("Annotative per-scale visibility gate (issue #622)", "[paperspace][issue622]") {
+  std::vector<CadAnnotationScale> scales(2);
+  scales[0].name = "1:10";
+  scales[0].paperUnits = 1.f;
+  scales[0].drawingUnits = 10.f;
+  scales[1].name = "1:50";
+  scales[1].paperUnits = 1.f;
+  scales[1].drawingUnits = 50.f;
+  std::vector<std::string> vis{"1:10"};
+  REQUIRE(CadAnnotativeVisibleAtActiveScale(true, vis, &scales, 0, nullptr, 40.f));
+  REQUIRE_FALSE(CadAnnotativeVisibleAtActiveScale(true, vis, &scales, 1, nullptr, 40.f));
+  REQUIRE(CadAnnotativeVisibleAtActiveScale(true, {}, &scales, 1, nullptr, 40.f));
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 50.f;
+  REQUIRE_FALSE(CadAnnotativeVisibleAtActiveScale(true, vis, &scales, -1, &vp, 40.f));
+  vp.scaleModelPerPaperIn = 10.f;
+  REQUIRE(CadAnnotativeVisibleAtActiveScale(true, vis, &scales, -1, &vp, 40.f));
+}

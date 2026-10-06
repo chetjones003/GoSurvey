@@ -34,6 +34,7 @@ constexpr double kPi = 3.14159265358979323846;
 
 AppCommandState WithSelectedLine(float x0, float y0, float z0, float x1, float y1, float z1) {
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo these tests exercise (D-2026-09-28-a)
   st.userLinesFlat = {x0, y0, z0, x1, y1, z1};
   st.userLineAttrs.push_back(EntityAttributes{});
   SelectedEntity e;
@@ -110,9 +111,9 @@ TEST_CASE("Gizmo: how many handles each operation has, and why", "[gizmo][req060
   st.gizmoOp = CadGizmoOp::Translate;
   CHECK(CadGizmoAxisCountFor(st) == 3);  // the UCS X, Y and Z
   st.gizmoOp = CadGizmoOp::Rotate;
-  CHECK(CadGizmoAxisCountFor(st) == 1);  // typed ROTATE is UCS-Z-only, so one ring
+  CHECK(CadGizmoAxisCountFor(st) == 3);  // one ring per UCS axis (D-2026-09-28-b)
   st.gizmoOp = CadGizmoOp::Scale;
-  CHECK(CadGizmoAxisCountFor(st) == 1);  // a uniform scale has no per-axis meaning
+  CHECK(CadGizmoAxisCountFor(st) == 3);  // three handles, every one uniform (D-2026-09-28-c)
 
   // REQ-060's third acceptance bullet, under every operation: an empty selection has no gizmo.
   st.selection.clear();
@@ -129,6 +130,7 @@ TEST_CASE("Gizmo: a solid FACE gets a push handle and nothing else", "[gizmo][re
   // Rotate or Scale the face selection gets NO gizmo, the same answer an edge or a vertex gets,
   // rather than a handle that would refuse on drop.
   AppCommandState st;
+  st.gizmoPersistent = true;  // the always-on gizmo these tests exercise (D-2026-09-28-a)
   st.uiViewportWidthPx = 1200.f;
   st.uiViewportHeightPx = 700.f;
   brep::Solid box;
@@ -223,7 +225,7 @@ TEST_CASE("Gizmo ROTATE agrees with the typed command under a TILTED UCS too",
   ray3d::Vec3 anchor{};
   REQUIRE(CadGizmoAnchorWorld(byGizmo, &anchor));
   const double len = static_cast<double>(CadGizmoHandleLenWorld(byGizmo));
-  const ray3d::Vec3 n = CadGizmoAxisWorld(byGizmo, 0);
+  const ray3d::Vec3 n = CadGizmoAxisWorld(byGizmo, 2);  // ring 2 = the UCS Z ring
   CHECK(n.y == Approx(-1.0));  // the ring turns about the UCS Z, not world Z
 
   // Aim along the ring's own normal so every ray meets its plane squarely.
@@ -317,4 +319,51 @@ TEST_CASE("Gizmo: a drag that changes nothing is a cancel, per operation", "[giz
   const auto before = st.userLinesFlat;  // `double` since ADR-054's storage migration
   CHECK_FALSE(CommitGizmoDrag(st, log));  // dropped where it was grabbed: nothing happened
   CHECK(st.userLinesFlat == before);
+}
+
+TEST_CASE("Gizmo ROTATE: the X ring turns the selection about the UCS X axis (D-2026-09-28-b)",
+          "[gizmo][rotate][issue564]") {
+  // A line along Y, so a turn about X actually moves it: (10,0,0)-(10,10,0), anchor (10,5,0).
+  // A quarter turn CCW about +X through the anchor sends (0,-5,0) to (0,0,-5) and (0,5,0) to (0,0,5).
+  std::vector<std::string> log;
+  AppCommandState st = WithSelectedLine(10.f, 0.f, 0.f, 10.f, 10.f, 0.f);
+  st.gizmoOp = CadGizmoOp::Rotate;
+  REQUIRE(CadGizmoAxisCountFor(st) == 3);
+  ray3d::Vec3 anchor{};
+  REQUIRE(CadGizmoAnchorWorld(st, &anchor));
+  const double len = static_cast<double>(CadGizmoHandleLenWorld(st));
+  const ray3d::Vec3 n = CadGizmoAxisWorld(st, 0);
+  CHECK(n.x == Approx(1.0));
+
+  // Looking down -X the X ring is face-on and the other two are edge-on, so only it can be taken.
+  const ray3d::Vec3 look{-1.0, 0.0, 0.0};
+  CHECK(PickGizmoAxis(st, RayThrough(OnRing(anchor, n, len, 0.0), look), len * 0.1) == 0);
+  REQUIRE(SubmitGizmoClick(st, RayThrough(OnRing(anchor, n, len, 0.0), look), len * 0.1, log));
+  CHECK(st.gizmoDragAxis == 0);
+  UpdateGizmoDrag(st, RayThrough(OnRing(anchor, n, len, 0.5 * kPi), look));
+  CHECK(st.gizmoDragDistance == Approx(0.5 * kPi).margin(1e-9));
+  REQUIRE(CommitGizmoDrag(st, log));
+  CHECK(st.userLinesFlat[0] == Approx(10.0));
+  CHECK(st.userLinesFlat[1] == Approx(5.0));
+  CHECK(st.userLinesFlat[2] == Approx(-5.0));
+  CHECK(st.userLinesFlat[3] == Approx(10.0));
+  CHECK(st.userLinesFlat[4] == Approx(5.0));
+  CHECK(st.userLinesFlat[5] == Approx(5.0));
+}
+
+TEST_CASE("Gizmo ROTATE: a ring seen edge-on is not a target (D-2026-09-28-b)",
+          "[gizmo][rotate][issue564]") {
+  // In plan the X and Y rings are lines through the anchor. A click on one names no angle, so it
+  // must not grab — or pre-highlight — anything; only the Z ring (seen face-on) can be taken.
+  std::vector<std::string> log;
+  AppCommandState st = WithSelectedLine(10.f, 0.f, 0.f, 20.f, 0.f, 0.f);
+  st.gizmoOp = CadGizmoOp::Rotate;
+  ray3d::Vec3 anchor{};
+  REQUIRE(CadGizmoAnchorWorld(st, &anchor));
+  const double len = static_cast<double>(CadGizmoHandleLenWorld(st));
+  const ray3d::Vec3 down{0.0, 0.0, -1.0};
+  // Half-way out along the X ring's on-screen line: far from the Z ring, on the X ring's shadow.
+  const ray3d::Vec3 onXShadow = ray3d::Add(anchor, ray3d::Vec3{0.0, 0.5 * len, 0.0});
+  CHECK(PickGizmoAxis(st, RayThrough(onXShadow, down), len * 0.05) == -1);
+  CHECK(PickGizmoAxis(st, RayThrough(OnRing(anchor, {0, 0, 1}, len, 1.0), down), len * 0.05) == 2);
 }

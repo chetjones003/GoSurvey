@@ -15,7 +15,8 @@ its `VENDORED.md` in the same commit.
 | `glfw/` | github.com/glfw/glfw | `3.4` | source (no docs/tests/examples) |
 | `glew/` | github.com/nigels-com/glew | `2.2.0` | source (`glew.c` + headers) |
 | `catch2/` | github.com/catchorg/Catch2 | `v3.5.2` | amalgamated `.hpp`/`.cpp` + `catch2/` shims |
-| `libredwg/` | github.com/LibreDWG/libredwg | `0.13.3` | headers + prebuilt `lib/win-x64/libredwg.lib` |
+| `libredwg/` | github.com/LibreDWG/libredwg | `0.14` + GoSurvey changes | library source (`src/`, `include/`), built by our CMake — see its `VENDORED.md` |
+| `csmap/` | svn.osgeo.org/metacrs/csmap (OSGeo MetaCRS) | trunk r3078 | headers + prebuilt `lib/win-x64/csmap.lib` + compiled dictionaries + US grids (REQ-358) |
 | `pdfium/` | github.com/bblanchon/pdfium-binaries | `chromium/7857` | prebuilt binaries |
 | `nlohmann/` | github.com/nlohmann/json | `v3.11.3` | `json.hpp` single header |
 | `stb_image.h` | github.com/nothings/stb | (see file header) | single header |

@@ -381,6 +381,12 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       // invariant's range check. Fixed alongside PointCloud rather than filed separately since it
       // is the same one-line shape as every case above it.
       case T::PipeRun:      return st.cadPipeRuns.size();
+      // REQ-343 amended / ADR-059 (i), issue #479. SectionPlane is a type TAG only — the plane is
+      // singular and its "is it selected" state lives in the dedicated `sectionPlaneSelected` bool,
+      // never as an entry in `st.selection` (see the enumerator's doc comment in CadCommands.hpp).
+      // So this case can never actually be reached by the loop below; 0 is correct either way, but
+      // it is stated explicitly rather than left to silently fall through -Wswitch.
+      case T::SectionPlane: return 0;
       }
       return 0;
     };

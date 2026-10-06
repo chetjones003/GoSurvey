@@ -3,6 +3,7 @@
 #include "CadCommands.hpp"
 #include "MtextRichFormat.hpp"
 #include "NumFormat.hpp"
+#include "StringUtil.hpp"
 
 #include <imgui.h>
 
@@ -188,8 +189,15 @@ void ResetCreatePointsNextIdFromSettings(AppCommandState& st) {
   st.createPointsNextId = st.createPointsOpts.startNumber;
 }
 
+std::string CreatePointsLayer(AppCommandState& st) {
+  const std::string typed = StringUtil::trimCopy(st.createPointsOpts.layer);
+  if (typed.empty() || st.drawingSettings.ObjectLayer(ObjectLayerKind::SurveyPoint).locked)
+    return EnsureObjectLayer(st, ObjectLayerKind::SurveyPoint, {});
+  return EnsureDrawingLayer(st, typed);
+}
+
 bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, double elevation,
-                         std::vector<std::string>& log) {
+                         std::vector<std::string>& log, bool pushUndo) {
   auto& opts = st.createPointsOpts;
   const int idTry = st.createPointsNextId;
   const int step = opts.pointNumberOffset != 0 ? opts.pointNumberOffset : 1;
@@ -200,12 +208,15 @@ bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, d
   };
 
   auto commitNew = [&](int id) {
+    // One undo step: the point, its label and any Object Layers layer they create (REQ-361).
+    if (pushUndo)
+      PushUndoSnapshot(st, "Create point");
     SurveyPoint p{};
     p.id = id;
     p.easting = easting;
     p.northing = northing;
     p.elevation = elevation;
-    p.layer = opts.layer;
+    p.layer = CreatePointsLayer(st);
     p.description = opts.defaultDescription;
     // A point created here carries what the user typed, so the raw code is the same string
     // (REQ-066). They diverge only when the description is later edited.
@@ -253,11 +264,13 @@ bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, d
 
   case SurveyDuplicatePolicy::Overwrite: {
     const int ix = FindSurveyPointIndexById(st.surveyPoints, idTry);
+    if (pushUndo)
+      PushUndoSnapshot(st, "Create point");
     SurveyPoint& p = st.surveyPoints[static_cast<size_t>(ix)];
     p.easting = easting;
     p.northing = northing;
     p.elevation = elevation;
-    p.layer = opts.layer;
+    p.layer = CreatePointsLayer(st);  // replaced: a new point (REQ-361)
     p.description = opts.defaultDescription;
     // Overwrite replaces the point, so the raw code is replaced with it. Merge (above) deliberately
     // does NOT touch rawDescription: it appends to the description of a point that keeps its
@@ -938,6 +951,8 @@ void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::ve
   st.cadAnnotations.push_back(std::move(ann));
   while (st.cadAnnotationAttrs.size() < st.cadAnnotations.size())
     st.cadAnnotationAttrs.emplace_back();
+  // A new label goes on the Object Layers Survey point label layer (REQ-361).
+  st.cadAnnotationAttrs.back().layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPointLabel, {});
   // Allocate eagerly rather than waiting for the sweep: the point records the id in the next line,
   // and a reference to id 0 would be a reference to nothing (REQ-076).
   const std::uint64_t labelId = AllocEntityId(st);
@@ -1028,8 +1043,8 @@ bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::ve
       search = objEnd + 1;
       continue;
     }
-    if (!ExtractJsonStringField(obj, "layer", &p.layer))
-      p.layer = "0";
+    if (!ExtractJsonStringField(obj, "layer", &p.layer) || p.layer.empty())
+      p.layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPoint, {});  // REQ-361
     if (!ExtractJsonStringField(obj, "description", &p.description))
       p.description.clear();
     int ls = static_cast<int>(SurveyPointLabelStyle::NumberDesc);

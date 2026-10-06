@@ -1,7 +1,9 @@
 #pragma once
 
 #include "CadCommands.hpp"
+#include "ProjectSettings.hpp"  // REQ-375: ProjectSettings, NoteUserPlotScale
 #include "CadSnap.hpp"
+#include "RecentDrawings.hpp"  // recent::Entry, for LoadRecentProjects
 
 #include <imgui.h>
 
@@ -39,6 +41,49 @@ void NewDrawingInTab(AppCommandState& cmd, std::vector<std::string>& log);
 /// Open \p dwgPathUtf8 (or browse when null) into a new focused tab; a path that fails to open is
 /// dropped from the recent list. REQ-055 / REQ-308.
 void OpenDrawingInNewTab(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8);
+
+/// REQ-374 (#696): how a drawing being opened relates to a project. `detect` = walk up from the file to
+/// find a .gsproj (the normal case); otherwise `uid` is the ProjectSession it joins (0 = standalone).
+struct ProjectJoin {
+  bool          detect = true;
+  std::uint32_t uid = 0;
+};
+/// As OpenDrawingInNewTab, with the join decided by the caller. Used to continue after a project prompt.
+void OpenDrawingInNewTabAs(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8,
+                           ProjectJoin join);
+
+// --- Projects (REQ-374 / REQ-382, issue #696 P1) — CadUi_Projects.cpp ---
+/// Detects the drawing's project and opens/joins it. Returns false when the open must stop here (a
+/// prompt was queued, or the project could not be read); *projectUidOut = 0 means standalone.
+bool ResolveProjectJoin(AppCommandState& cmd, std::vector<std::string>& log, const std::string& dwgPath,
+                        std::uint32_t* projectUidOut);
+/// Logs the "Opened in project X" notice (REQ-374 clause 6).
+void NoteProjectJoin(const AppCommandState& cmd, std::vector<std::string>& log, std::uint32_t projectUid);
+/// The project name a tab belongs to, or empty for a standalone drawing / the Start tab.
+std::string ProjectNameForTab(const AppCommandState& cmd, int tabIdx);
+bool        ProjectIsReadOnlyForTab(const AppCommandState& cmd, int tabIdx);
+/// Open Project: opens \p gsprojPathUtf8 (or browses when null) and lands on an empty drawing tab in it.
+void OpenProjectFile(AppCommandState& cmd, std::vector<std::string>& log, const char* gsprojPathUtf8);
+
+/// REQ-380 (#696 P7): unpacks a `.gspack` into an empty folder and opens the project. A null path asks
+/// with a file / folder dialog. Any problem is logged (REQ-201) and nothing is left on disk.
+void OpenPackedProject(AppCommandState& cmd, std::vector<std::string>& log, const char* packPathUtf8,
+                       const char* destFolderUtf8);
+void RemoveRecentProject(const std::string& absGsprojPath);
+std::vector<recent::Entry> LoadRecentProjects();
+/// REQ-375: writes \p ps into the project's .gsproj (atomic) and its open session. False, logged, when the
+/// project is read-only or the file cannot be written; nothing changes then.
+bool SaveProjectSettings(AppCommandState& cmd, std::uint32_t projectUid, const ProjectSettings& ps,
+                         std::vector<std::string>& log);
+/// Closes sessions with no tabs left (releasing their lock). Called every frame by DrawProjectDialogs.
+void ServiceProjects(AppCommandState& cmd, std::vector<std::string>& log);
+/// REQ-383 clause 6: false (and a question raised) when closing drawing tab \p tabIdx would close its
+/// project while the project's point database could not be written. True otherwise.
+bool ProjectTabMayClose(AppCommandState& cmd, int tabIdx, std::vector<std::string>& log);
+/// Releases every held lock; call once on the way out of the app.
+void ReleaseAllProjects(AppCommandState& cmd, std::vector<std::string>& log);
+/// New Project dialog, the lock / damaged-marker prompts, and the per-frame project sweep.
+void DrawProjectDialogs(AppCommandState& cmd, std::vector<std::string>& log);
 /// REQ-308 — drop a drawing from the recent-drawings store (used when a recent tile fails to open).
 void RemoveRecentDrawing(const std::string& absDrawingPath);
 void ClearRecentDrawings();
@@ -178,11 +223,20 @@ void DrawWikiWindow(AppCommandState& cmd);
 /// Clears per-frame command-bar help state (call once at frame start; Start tab skips DrawCommandLinePanel).
 void CadUiBeginHelpFrame();
 bool CadUiIsCommandInputActive();
+/// Whether a UI widget has already submitted a command line on THIS ImGui frame. The raw Enter
+/// poll in main.cpp asks before firing, so one keypress can never be submitted twice
+/// (D-2026-09-24-f).
+bool CadUiCommandLineSubmittedThisFrame();
 /// Lowercase primary from the command-bar fuzzy suggestion list, or empty.
 const std::string& QueryCommandBarFuzzyPrimary();
 
 /// Drawing Units dialog (UNITS command). REQ-020. Owns displayLinearPrecision.
 void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+
+/// Drawing Settings window (DRAWINGSETTINGS, File menu, ribbon Palettes). REQ-357.
+void DrawDrawingSettingsWindow(AppCommandState& cmd, std::vector<std::string>& log);
+/// The ribbon icon of an Object Layers row (REQ-361 item 1), drawn square inside [mn, mx].
+void DrawObjectLayerIcon(ImDrawList* dl, ObjectLayerKind kind, const ImVec2& mn, const ImVec2& mx);
 
 /// Right-Click Customization dialog (Options → User Preferences). REQ-084 (a). Sole owner of the
 /// three context modes and the time-sensitive preference; Cancel reverts to the values it opened with.
@@ -213,6 +267,7 @@ void DrawConnectionModesWindow(AppCommandState& cmd, std::vector<std::string>* l
 /// touches no surface definition, so nothing here can re-triangulate anything.
 void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 void DrawDimStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+void DrawMleaderStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 /// Surfaces panel (REQ-075): leftover definition explorer. Style/analysis is DrawSurfaceStyleWindow.
 void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 /// Surface Properties (Information / Definition / Analysis / Statistics) for one named surface.
@@ -249,11 +304,28 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log);
 /// INSERT configuration dialog + pick-phase hint overlay (GitHub issue #124).
 void DrawInsertBlockDialog(AppCommandState& cmd, std::vector<std::string>& log);
 void DrawBlockCreateDialog(AppCommandState& cmd, std::vector<std::string>& log);
+/// WBLOCK's save window — pick a definition, pick a destination `.dwg`, write it. Opened by the
+/// bare `WBLOCK` verb; call once per frame like the other block dialogs.
+void DrawWblockDialog(AppCommandState& cmd, std::vector<std::string>& log);
 /// Civil 3D-style Edit Block Definition picker (BEDIT with no name).
 void DrawEditBlockDefinitionDialog(AppCommandState& cmd, std::vector<std::string>& log);
 
 /// BEDIT Block Authoring Palettes (Parameters / Actions / Parameter Sets / Constraints).
 void DrawBlockAuthoringPalettes(AppCommandState& cmd, std::vector<std::string>& log);
+
+/// REQ-350 — the Pipe Fittings palette: the library parts matching the pipe run being routed, in
+/// right-hand category tabs, each with a shaded preview and its name. Opened by PIPERUN and by
+/// PIPEPALETTE; stays open when a run finishes.
+///
+/// Takes the renderer only to read back already-rendered thumbnail textures (ADR-062) — the palette
+/// itself makes no GL call.
+void DrawPipeFittingPalette(AppCommandState& cmd, std::vector<std::string>& log, ViewportRenderer& renderer);
+
+/// REQ-350 (e) / ADR-062 — render the thumbnails the palette asked for while it was drawing, a few per
+/// frame. Must be called AFTER the scene's own RenderScene, which is the one point in the frame where
+/// binding another framebuffer cannot disturb the drawing's image (the same rule and reason as
+/// `ServicePendingThumbnail`). No-op when nothing is pending.
+void ServicePipeFittingThumbnails(AppCommandState& cmd, ViewportRenderer& renderer);
 
 /// ALIGN results window: editable pair list, live Helmert solution, Apply button, report generation.
 void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log);

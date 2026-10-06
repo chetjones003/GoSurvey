@@ -244,6 +244,7 @@ for a compact list inside the program.
 |---|---|---|---|
 | `IMPORTMODEL` | `GLTF`, `IMPORT3D` | Import a glTF/GLB 3D model as reference geometry | [[Commands/importmodel]] |
 | `PDFATTACH` | `PA` | Attach a PDF underlay | [[Commands/pdfattach]] |
+| `PDFVIEW` | `PV` | Open a PDF in the built-in viewer (REQ-387) | [[Commands/pdfview]] |
 
 ### Diagnostics
 
@@ -349,6 +350,7 @@ for a compact list inside the program.
 | `PASTEBLOCK` | — | [[Commands/pasteblock]] |
 | `PASTEORIG` | `PO` | [[Commands/pasteorig]] |
 | `PDFATTACH` | `PA` | [[Commands/pdfattach]] |
+| `PDFVIEW` | `PV` | [[Commands/pdfview]] |
 | `PERSPECTIVE` | `PROJECTION`, `PERSP` | [[Commands/perspective]] |
 | `PLAN` | — | [[Commands/plan]] |
 | `PLOTSCALE` | `PSCALE` | [[Commands/plotscale]] |

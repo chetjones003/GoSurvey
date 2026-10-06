@@ -376,6 +376,23 @@ requirements is a planning failure, not a sign of rigor.
   `g_chrome.axisDistance` (amber) / `axisAngle` (violet) colors. Live-updating
   the unlocked field from the cursor position every frame was already true of
   the existing implementation; this revision only adds the color bands.
+  **2026-09-24 (D-2026-09-24-b) — Enter with NOTHING typed belongs to the COMMAND, not to the
+  field.** A dynamic-input Enter was unconditionally turned into a point built from the LIVE cursor
+  distance/angle (or x/y), including when the user had typed nothing at all — so a command whose
+  prompt says "Enter to finish" or "Enter to accept <default>" silently placed another point instead,
+  and the promise in its own prompt could not be kept from the viewport. A field group whose fields
+  are all still unlocked (nothing typed) now submits a **blank line**, which is the same input the
+  command layer already receives from an empty command bar and already has a per-command meaning for.
+  Typing into any field is unchanged in every respect, including the distance-only and angle-only
+  forms and REQ-154's UCS-prompt exception: those lock a field, so they take the unchanged path. A
+  point is placed from the viewport by CLICKING, or by typing a value and pressing Enter — which is
+  AutoCAD's own behaviour and what the prompts have always advertised.
+  2026-09-28 (D-2026-09-28-j, REQ-354) — the field group re-lays itself as the
+  user types (`@` → ΔX/ΔY, `<` → Distance < Angle, `,` → next box), gains a Z
+  box when the view is not plan to the UCS, and PIPERUN joins it; the absolute
+  boxes read the active UCS's coordinates under a UCS (the frame a typed point is
+  read in). A relative or bearing value no longer "locks both fields" in X — it
+  re-lays the boxes instead. See REQ-354.
 
 ### REQ-025 — Model and Paper space with layout tabs and a space toggle
 - Purpose: compose a model onto sheets, the way AutoCAD model/paper space works
@@ -892,7 +909,13 @@ requirements is a planning failure, not a sign of rigor.
   dialog (create/rename/delete/edit + re-bake referencing text); Phase 3 = Properties per-text
   overrides + oblique rendering. 2026-07-29 — DXF STYLE-table round-trip un-deferred: import now
   registers the STYLE table as live text styles and links imported TEXT/MTEXT to them (imported height
-  is a per-text override); editing an imported style's font ripples to the imported text.
+  is a per-text override); editing an imported style's font ripples to the imported text. 2026-10-01 —
+  DWG export, issue #604: writes a STYLE table entry (font, height, oblique angle — not bold/italic;
+  LibreDWG's STYLE record has no flags for them) for every non-Standard style and points each
+  TEXT/MTEXT at the right one by name, alongside fixing rotation (both entity types), MTEXT
+  attachment/insertion point and height (none were written before), and the degree/plus-minus signs
+  (AutoCAD's codepage-independent `%%d`/`%%p` control codes — see REQ-170's revision for why full
+  Unicode is deferred).
 
 ### REQ-045 — PAN command (interactive view pan via the command line)
 - Purpose: AutoCAD-style typed panning — the user asked for a PAN command because only
@@ -1224,7 +1247,8 @@ requirements is a planning failure, not a sign of rigor.
   as the native format. All are itemised in `docs/dwg-plan.txt`.
   2026-08-29 — **Native codec path decided: LibreDWG (REQ-170, ADR-041, D-2026-08-29-g).** Phase 1
   converter remains until REQ-170 is verified, then leaves the user-facing path. **This epic does
-  not close DM-08** (unknown-object preservation / R2018 write). DWG write is R2000/R2004 only.
+  not close DM-08** (unknown-object preservation). DWG write is R2000–R2018 (D-2026-10-01-f); DM-08
+  pass-through of foreign objects is still out.
 
 ### REQ-053 — RECT command, and polylines survive a DXF/DWG save
 - Purpose: rectangles are the most-drawn shape in survey deliverables (parcels, structures, title-block
@@ -1910,7 +1934,18 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-11 — initial. 2026-08-11 — **amended**: the statement originally specified
   additive parallel Z arrays per ADR-025 D1. That design rested on an incorrect reading of the
   existing strides (`userLinesFlat` and `userPolylineVerts` already carry Z inline). Corrected to
-  interleaved XYZ throughout; see the ADR-025 correction note and the decision log.
+  interleaved XYZ throughout; see the ADR-025 correction note and the decision log. 2026-10-01 —
+  **amended** (D-2026-10-01-a, issue #603): "Z survives a round-trip through DXF, DWG and `.gs`"
+  had never actually been true for DWG polylines — `src/io/LibreDwgCad.cpp` built every polyline
+  as a flat LWPOLYLINE at Z = 0 regardless of its vertices' real Z, and never set LWPOLYLINE's own
+  `elevation` field even for a flat polyline sitting at a non-zero Z. Fixed: a run whose vertices
+  share one Z writes as LWPOLYLINE with that elevation; a run whose vertices do not writes as
+  POLYLINE_3D (a real Z per vertex) instead, degrading only its bulge (POLYLINE_3D carries none) —
+  not its elevations. Survey feature lines, not covered by this REQ's entity list, now write the
+  same way, with name/description as GOSURVEY-appid XDATA (the user's choice over a plain
+  polyline with no identity data; invisible to AutoCAD/Civil 3D, read only by a future
+  GoSurvey-aware tool — GoSurvey's own reopen already recovers them losslessly from the ADR-044
+  trailer).
 
 ### REQ-058 — Orbitable 3D camera with ray picking and a UCS work plane
 - Purpose: make the third dimension inspectable and drawable-in
@@ -1948,6 +1983,36 @@ requirements is a planning failure, not a sign of rigor.
   built as flat world geometry is unreadable in a near-horizontal view.
   2026-08-12 — signed off. The prior status ("only LINE is carried through; CIRCLE is known broken")
   had been stale since TASK-036 and is superseded.
+- **Amendment 2026-09-28 (D-2026-09-28-e) — hover and click pick what is VISIBLE, through one
+  resolution (GitHub issue #564 §2, TASK-283).**
+  1. **One resolution.** `ResolveViewportPick` answers "what visible thing is under this pixel" for the
+     viewport hover and both click paths (idle, and a command's select-objects step). Families keep
+     their precedence — table, text, linework, solid, fill — and every family is judged on the camera
+     ray: orbited, text and fills are hit where the ray meets their own plane (`PickCadAnnotationAt` /
+     `PickFilledRegionAt` take the ray).
+  2. **Occlusion.** In **Hidden** and **Shaded** a solid is opaque: its surface is found along the ray,
+     anything farther (beyond the pick tolerance — a line drawn ON a face counts as in front) does not
+     answer and does not pre-highlight, and where a solid is nearer the eye than the linework under the
+     cursor the solid wins. In **2D Wireframe** a solid is see-through (issue #564 Q1, answered
+     "pick what's drawn", extending D-2026-09-16-b): only its edges answer, by the same nearer-wins
+     rule, and it hides nothing.
+  3. **Winner among linework.** Among the visible candidates within tolerance, the one **nearest the
+     eye** wins (ray parameter orbited, highest Z in plan); on a tie, the one **nearest the cursor**.
+     The tolerance decides what is a candidate, not which wins. (Before, the hover took the nearest to
+     the cursor and the default click the highest, *first-drawn* on a tie, so in a flat drawing the two
+     disagreed; the user chose this rule knowing it changes that tie case.)
+  4. **Hover = click.** The click asks the hover's question first (the hover's aperture tolerance,
+     D-2026-09-02-g) and only when that finds nothing widens to its own radius
+     (`ResolveViewportClickPick`). So whatever pre-highlights is what the click takes; a click just
+     outside the aperture keeps its forgiving radius; the disambiguation popup keeps the wide list.
+  5. Plan view with no solids: the same calls with the same inputs; only the tie in item 3 differs.
+     The resolution runs inside the existing `HoverPickGate` budget (issue #166), not beside it.
+  - Additional acceptance:
+    - hovering anywhere on a solid's visible surface highlights it, including where linework passes
+      behind it; linework in front of it still wins, linework behind it does not;
+    - the entity that pre-highlights on hover is the entity a click at that pixel selects;
+    - Wireframe / Hidden / Shaded each pick what they display;
+    - plan-view picking on a 2D drawing is unchanged apart from the item-3 tie.
 
 ### REQ-059 — ViewCube (view navigation widget)
 - Purpose: direct, discoverable view control and continuous orientation feedback
@@ -2093,6 +2158,74 @@ requirements is a planning failure, not a sign of rigor.
   block recorded on 2026-09-04. `CadGizmoAnchorWorld`'s note that its precision "does not affect any
   move" was corrected in the same change: that is true of a translation, where the anchor cancels
   between grab and drop, and false of a rotation or a scale, where it is the pivot and the base.
+  2026-09-28 — **the gizmo is SUMMONED, not shown on every selection** (D-2026-09-28-a, GitHub issue
+  #564 section 3, TASK-280). See the amendment below; it narrows the Statement's "with a selection
+  active" and adds the acceptance bullets that follow it.
+- **Amendment 2026-09-28 (D-2026-09-28-a) — selecting shows no gizmo; 3DMOVE / 3DROTATE / 3DSCALE
+  summon it.** The Statement's *"with a selection active, a gizmo operates on it"* is narrowed to
+  *"with a selection active and the gizmo summoned"*. Everything else above — the handle counts, the
+  anchor, the UCS axes, agreement with the typed command, one undo per drag — is unchanged.
+  1. **A selection alone draws no gizmo.** The gizmo is summoned by a 3D gizmo command for that
+     command's duration, or by the persistent `GIZMO` setting (item 4). `CadGizmoSummoned` is tested
+     first in `CadGizmoModeFor`, so the overlay, the hover, the click and every transcript assertion
+     inherit the rule from one place.
+  2. **`3DMOVE` / `3DROTATE` / `3DSCALE`** set the gizmo op to Translate / Rotate / Scale for their own
+     duration and restore the previous op however they end (commit, `Esc`, or another command
+     started over them). Shape: select objects (a pre-selection is honoured, and 3DMOVE's select step
+     takes `Ctrl`+click on a solid face / edge / vertex) → Enter → the gizmo appears → drag a handle
+     **or type an exact value** — distance (move, along the grabbed handle, or the only handle when
+     there is one), degrees (rotate), factor > 0 (scale) → the commit is the end of the command. A
+     blank Enter commits an armed drag, or ends the command having changed nothing. One undo step per
+     completed operation — the existing gizmo commit, unchanged.
+  3. **`Esc` restores the pre-command state exactly**: one `Esc` abandons an armed drag (which has
+     changed nothing) and ends the command, restoring the op. A selection that cannot carry a gizmo
+     under the command's op (a face under 3DROTATE, several sub-objects, paper space) is refused with
+     the reason stated (REQ-201) rather than leaving a command with nothing on screen to drag.
+  4. **`GIZMO MOVE | ROTATE | SCALE` is the persistent mode** — the old always-on behaviour, doing that
+     op — and **`GIZMO OFF`** returns to the default. Default OFF, session state like the op itself.
+     `GIZMO` is refused while a 3D gizmo command owns the op.
+  - Additional acceptance:
+    - selecting a solid, a line, or a mix draws no gizmo;
+    - 3DMOVE / 3DROTATE / 3DSCALE each raise the correct gizmo and operate on the selection;
+    - a typed exact value works in each (distance, angle, factor);
+    - `Esc` restores the pre-command state exactly; `Ctrl+Z` after a commit undoes the whole operation;
+    - the handles keep their axis colours (X red / Y green / Z blue) and the face-normal handle its
+      purple — the overlay is unchanged.
+- **Amendment 2026-09-28 (D-2026-09-28-b) — the rotate gizmo has three rings.** The "ONE ring, about
+  the active UCS Z" count recorded above for TASK-232 is replaced: ROTATE draws **one ring per active-UCS
+  axis**, X red / Y green / Z blue, each grabbable. The **Z ring** commits through
+  `ApplyRotationAboutUcsZ` — typed ROTATE, so the second acceptance bullet holds for it exactly as
+  before. The **X and Y rings** commit through `ApplyRotationAboutAxis`, the in-place arbitrary-axis
+  turn typed ROTATE already uses under a tilted UCS, with its refusals (REQ-201). With three rings a
+  typed angle needs a ring grabbed first. A ring seen within about 5° of edge-on is not pickable
+  (`kGizmoRingEdgeOnCos`): on screen it is a line, round which a drag names no angle. The drag ghost
+  rotates / scales the preview rather than sliding it.
+  - Additional acceptance:
+    - 3DROTATE (and `GIZMO ROTATE`) shows three rings in the axis colours, following the active UCS;
+    - dragging, or grabbing and typing an angle on, the X / Y / Z ring turns the selection about that
+      UCS axis through the gizmo's anchor; one undo per operation;
+    - the Z ring's result agrees with typed ROTATE (unchanged).
+- **Amendment 2026-09-28 (D-2026-09-28-c) — AutoCAD's 3DMOVE / 3DSCALE widgets, and a base point.**
+  1. **Base point.** After the selection, 3DMOVE / 3DROTATE / 3DSCALE ask for a base point — a
+     snapped pick, or typed X,Y[,Z] read as MOVE reads one; Enter keeps the centre of the selection's
+     box. The gizmo sits on it, and it is the pivot of a rotation and the centre of a scale
+     (`CadGizmoAnchorWorld`). A solid face / edge / vertex selection skips the step; the persistent
+     `GIZMO` always uses the centre. A small circle marks the base point.
+  2. **Move** draws cone arrowheads and three **plane handles** — the UCS XY, YZ and ZX squares out to
+     `kGizmoPlaneHandleFrac` of the handle length, handle numbers 3–5 — each drawn as its two far
+     sides in the colours of the axes they run along. Dragging one slides the selection within that
+     plane (an arrow within the grab aperture wins over a square; a plane seen nearly edge-on is not
+     a target); after grabbing one, typed `dx,dy` is the offset along the plane's two UCS axes. Whole
+     entities only. The commit is `ApplyTranslationToSelection`, as for an arrow.
+  3. **Scale** draws three axis handles with box tips and AutoCAD's triangle marks between them.
+     **Every handle scales uniformly** (REQ-332 item 7); a one-direction stretch is not offered and
+     remains issue #564 Q2. A typed factor needs no handle grabbed.
+  - Additional acceptance:
+    - each command asks for a base point; a typed or picked one moves the gizmo there and is the pivot
+      / centre; Enter keeps the selection centre;
+    - dragging a 3DMOVE plane square, or grabbing it and typing dx,dy, moves the selection within
+      that UCS plane, one undo step;
+    - every 3DSCALE handle gives the same uniform result.
 
 ### REQ-061 — Per-viewport camera in paper space
 - Purpose: put a plan view and an isometric on the same sheet
@@ -3504,7 +3637,7 @@ requirements is a planning failure, not a sign of rigor.
 
 ### REQ-170 — LibreDWG is the DXF and DWG codec
 - Purpose: File Format Specs — open and save DWG/DXF in-process with no ODA/AutoCAD converter on
-  the customer machine; write DWG only as far as LibreDWG is trustworthy (R2004)
+  the customer machine; write DWG through R2018 where LibreDWG encode is verified (D-2026-10-01-f)
 - Priority: must
 - Type: functional
 - Statement: **GNU LibreDWG** is the codec for `.dwg` and `.dxf` (ADR-041). GoSurvey links it and
@@ -3514,10 +3647,10 @@ requirements is a planning failure, not a sign of rigor.
   reason (REQ-001). Entities and tables LibreDWG decoded are mapped into the GoSurvey domain;
   every skipped class, exploded INSERT (until REQ-107), extra layout, and proxy is **named in the
   log** (REQ-201). State-plane coordinates obey REQ-101 (origin subtract in double before float).
-  **Save DWG:** only **R2000** or **R2004**; default **R2004**. R2007+ is refused. The file AutoCAD
-  opens must do so **without a Recover prompt** for the entity set we emit. Before overwrite, the
-  UI lists what this down-convert / domain mapping will drop. Failed write leaves the destination
-  untouched.
+  **Save DWG:** **R2000**, **R2004**, **R2010**, **R2013**, or **R2018**; default **R2000**
+  (D-2026-09-30-c). **R2007** is not offered. The file AutoCAD opens must do so **without a Recover
+  prompt** for the entity set we emit. Before overwrite, the UI lists what this down-convert / domain
+  mapping will drop. Failed write leaves the destination untouched.
   **Save DXF:** LibreDWG’s DXF writer; binary DXF is included to the extent the library writes it
   (this **subsumes** proposed REQ-112 when implemented). Types with no representation (TIN, mesh,
   cloud, PDF) are logged exclusions, not silent drops.
@@ -3528,15 +3661,31 @@ requirements is a planning failure, not a sign of rigor.
     environment, and model-space LINE/CIRCLE/LWPOLYLINE/TEXT/MTEXT/HATCH that LibreDWG decoded
     appear in the drawing;
   - a non-DWG renamed to `.dwg` is refused and the document is unchanged;
-  - File ▸ Export DWG (default) writes R2004; AutoCAD or ODA File Converter (oracle) opens it
+  - File ▸ Export DWG (default) writes R2000; AutoCAD or ODA File Converter (oracle) opens it
     **without Recover** and the emitted entity counts match the log;
-  - exporting R2018 is refused by name; the destination file is not created;
+  - choosing R2018 in Export DWG writes AC1032; the in-process reader round-trips the emitted set
+    and reports `r2018` (regression tests; oracle optional);
   - a failed encode does not truncate an existing destination;
   - `GoSurvey` / installer materials state GPL-3.0-or-later.
 - Owner-layer: IO (codec), Domain (mapping), UI (lossy-save list), Build (link LibreDWG, MSVC)
 - Status: accepted
 - Revisions: 2026-08-29 — File Format Specs (D-2026-08-29-g, ADR-041). Does not replace REQ-052
   Phase 1 until this requirement is verified.
+  2026-09-30 — default save R2004 → **R2000** (D-2026-09-30-c): the product has always written
+  R2000, and LibreDWG 0.13.4 crashes building an R2004 document from scratch (TASK-298). Issue #590
+  (PR #595) made those R2000 files open in AutoCAD 2027 without Recover.
+  2026-10-01 — issue #604, text character fix scoped down: non-ASCII UTF-8 text written to an
+  R2000 DWG is misread by AutoCAD as garbage (R2000 is pre-R2007, ANSI-codepage strings), and
+  LibreDWG 0.13.4's own fix for this (`bit_utf8_to_TV`, a `\U+XXXX` escaper) is wired into no
+  caller anywhere in the library — completely unexercised code, the same category of risk that
+  produced D-2026-09-30-f's crash. Scoped to the two symbols survey text actually needs (degree,
+  plus/minus — bearings and tolerances), substituted via AutoCAD's own codepage-independent `%%d`
+  /`%%p` control codes, which need no Unicode handling at all. Other non-ASCII characters (accents,
+  non-Latin letters) still write as raw UTF-8 bytes and still misread, unchanged from before; wiring
+  up the general fix, verified under page heap first, is deferred.
+  2026-10-01 — **R2010/R2013/R2018 export** (D-2026-10-01-f): `DwgSaveVersion` and Export DWG dialog
+  offer five selectable versions (R2007 omitted). `ExportLibreCadFile` encodes via LibreDWG
+  `R_2010`/`R_2013`/`R_2018`; GEODATA uses class version 2 when `DwgSaveVersionUsesR2010Geodata()`.
 
 ### REQ-171 — Point cloud entity
 - Purpose: File Format Specs — hold laser-scan points without pretending they are a TIN (REQ-068)
@@ -4240,7 +4389,7 @@ requirements is a planning failure, not a sign of rigor.
 - Purpose: GoSurvey has no block/insert mechanism, which blocks title-block reuse, standard symbols, and any future TABLE/annotation work; DWG export always explodes geometry for exactly this reason
 - Priority: should
 - Type: functional
-- Statement: Add BLOCK (define from selection), INSERT (place with position/scale/rotation), WBLOCK (write to its own file), and ATTDEF/block attributes. Dynamic blocks and a block-library browser are explicitly out of scope — see roadmap Someday.
+- Statement: Add BLOCK (define from selection), INSERT (place with position/scale/rotation), WBLOCK (write to its own file), and ATTDEF/block attributes. **AutoCAD dynamic blocks** are **REQ-369** (issue #618), not this requirement's scope. A **block-library browser** remains out of scope — see roadmap Someday.
 - Acceptance (sketch): a block definition stores its entities once; each INSERT is a lightweight reference, not a geometry copy; editing a definition updates every insert; DWG/DXF export writes real INSERT/BLOCK records; erasing a definition with live inserts is handled per REQ-201, never silently.
 - Acceptance (block editor — BEDIT in-place isolated editing, D-2026-08-29-h / ADR-043):
   - BEDIT with a block name from model space enters an **edit session** for that definition; BEDIT
@@ -4279,9 +4428,18 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i).
   2026-08-29 — accepted for the block-editor slice (D-2026-08-29-h, ADR-043): in-place isolated
-  editing via a model-store swap, with a Save/Don't-Save/Cancel close gate. Dynamic blocks and a
-  block-library browser remain out of scope (roadmap Someday).
+  editing via a model-store swap, with a Save/Don't-Save/Cancel close gate. Dynamic blocks moved to
+  REQ-369 (2026-10-02); a block-library browser remains out of scope (roadmap Someday).
   2026-08-29 — D-2026-08-29-i: live INSERT rubber-band preview + object snapping to placed inserts.
+  2026-10-01 — "DWG/DXF export writes real INSERT/BLOCK records" made true for DWG (issue #606):
+  `src/io/LibreDwgCad.cpp` writes a BLOCK_HEADER/BLOCK/ENDBLK per definition (lines, circles, arcs,
+  ellipses, flat polylines, text/MTEXT, plus an ATTDEF per attribute definition), and an INSERT per
+  block reference (position/scale/rotation from the ref's transform) with an ATTRIB per attribute
+  value. Nested blocks, meshes and solids inside a definition are not written yet (same degradation
+  class FillFromState already discloses for model space, via the #614 loss summary). Finding this
+  gap's real scope — an INSERT with more than two attributes — surfaced and fixed the true root
+  cause of D-2026-09-30-f's heap-corruption crash (`in_postprocess_SEQEND` in the vendored
+  LibreDWG, not the workaround that PR shipped); see that decision's entry for detail.
 
 ### REQ-108 — Polar and tracking input aids
 - Purpose: the POLAR status-bar toggle lights up with no behavior behind it, there is no object-snap tracking, and there's no typed polar-coordinate entry
@@ -5100,6 +5258,36 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-26); closes the remainder of GitHub issue #88 alongside REQ-120
 - Revisions: 2026-08-26 — accepted (D-2026-08-26-c); raised by chetjones003 on issue #88 after PR #93
   merged, asking for #88's ZOOMEXTENTS acceptance list to be verified rather than assumed.
+  2026-09-28 — **ZOOM EXTENTS frames an ORBITED view in the camera's own frame** (D-2026-09-28-d,
+  GitHub issue #564 §1, TASK-282). See the amendment below.
+- **Amendment 2026-09-28 (D-2026-09-28-d) — orbited ZOOM EXTENTS.** The Statement's "a world
+  rectangle" is the PLAN case. When the view is not plan (azimuth or elevation off plan, or a rolled
+  tilted-UCS PLAN), ZOOM EXTENTS instead:
+  1. sweeps the drawing's **true 3D extents** (`ComputeWorldExtents3d`) — every store the 2D sweep
+     covers, each with its elevation range (a tilted circle / arc / ellipse by its radius), plus
+     filled regions, block references (2D content at the insertion elevation and their solids in
+     full 3D) and pipe runs (centreline widened by the pipe's radius); far outliers dropped by the
+     same plan-centre rule `ComputeRobustWorldExtents` uses;
+  2. frames that box by the **projection of its eight corners** through the current camera
+     (`zoomframing::FrameBoxInView`): the target is the box centre (which centres the silhouette —
+     a box's projection is symmetric about the projected centre), and the zoom comes from
+     `FrameWorldRect` on the corners' screen half-extents, so guarantees (1)–(3) above — margin,
+     aspect, one-unit floor, finite-only — are this requirement's own, not a copy. Under
+     **perspective** the half-height is the exact closed form `max(|u|/((1−m)·aspect), |v|/(1−m)) + w·tan(fov/2)`
+     over the corners. Neither depends on the current view, so repeating ZOOM EXTENTS is stable.
+  3. The camera target's elevation (`viewportPanZ`) is set to the box centre's.
+  **Plan view is unchanged**: the pre-change path runs exactly as before. The one addition there: when
+  the 2D sweep finds nothing, the 3D sweep's plan footprint is framed rather than "nothing to frame",
+  so a drawing of pipe runs alone frames in plan too. Paper space and the floating-viewport path
+  (REQ-123) are untouched.
+  - Additional acceptance:
+    - orbited to any azimuth / elevation (and under perspective), the whole model's 3D box is on
+      screen inside the margin, centred, and tight on the binding axis;
+    - a tall model (large Z, small footprint) frames by its height;
+    - repeating ZOOM EXTENTS in an orbited view does not creep;
+    - plan-view framing of an existing drawing is byte-identical to before;
+    - a drawing of solids or pipe runs alone frames, in plan and orbited;
+    - a non-finite extent is refused with a reason and the view unchanged; paper space frames the sheet.
 
 ### REQ-123 — ZOOM EXTENTS through an activated viewport frames the model into that viewport (GitHub issue #100)
 - Purpose: a floating viewport is the model-space window the user is actually working in, and
@@ -6036,6 +6224,46 @@ capability that does not exist. They are recorded here rather than quietly dropp
   REQ-101. This closes the stability concern the `req312-dxf-arbitrary-plane-roundtrip` transcript
   had recorded as open.
 
+  2026-09-23 — **an ellipse carries its own plane, and a tilted cut is drawn as one**
+  (D-2026-09-23-a, TASK-276, GitHub issue #531). REQ-312 gave arcs and circles a plane normal and
+  left the ellipse flat, which had three costs: `SECTION` refused every tilted cut of a cylinder or
+  cone ("this cut is an ellipse, which a section outline cannot hold yet"), `ELLIPSE` on a tilted UCS
+  landed flat, and a tilted `ELLIPSE` read from DXF arrived flat and in the wrong place with no
+  message (REQ-201) — group 210 was not read at all.
+
+  `CadEllipse` now carries the same normal, on the same terms: world +Z is every ellipse that existed
+  before, `ucs::FromNormal` maps it onto the world axes exactly, and the major-axis vector is read in
+  the ellipse's own plane — so a flat ellipse is bit-identical through save, reload and DXF. A tilted
+  one lies in `ucs::FromNormal({cx, cy, z}, {nx, ny, nz})`, and is drawn, saved and written through
+  that one frame.
+
+  **Interchange.** `.gs` persists the normal, omitted when +Z (additive, no format bump). DXF states
+  an ELLIPSE's centre and major axis in WORLD axes with group 210 naming the plane — unlike an
+  LWPOLYLINE, which is written in its own OCS — so the writer emits the real 11/21/31 and 210/220/230,
+  and the reader takes both.
+
+  **The section.** A tilted cut of a cylinder or cone that stays between its caps is one closed
+  ellipse, and `SECTION` draws it as an `ELLIPSE` standing in the cut plane. A cut that also crosses
+  an end cap is an elliptical arc plus a chord — two shapes, not one — and keeps its own refusal
+  (`SliceCutCrossesCurvedEnd`).
+
+  **Object snap reaches a tilted ellipse**: its centre, and points on the curve itself, taken through
+  the ellipse's own plane and carrying the height the curve has there — the rule REQ-312 item 3 set
+  for a tilted arc. What a tilted ellipse does NOT yet do: the plan-space ENTITY PICK and the three
+  GRIPS **skip** it, exactly as REQ-312's own
+  increments skipped a tilted arc before its snap and pick work landed. They compute in plan, and a
+  tilted ellipse's curve is not the one they would draw there, so acting on it would put a snap or a
+  handle somewhere the curve never goes (REQ-201). A flat ellipse keeps both. That slice is the
+  follow-up.
+
+  Acceptance added:
+  - a flat ellipse, drawn or loaded, is unchanged, and the existing ellipse transcripts and the
+    DXF round trip are byte-stable;
+  - a 45° cut of a cylinder of radius r sections to an ellipse with semi-minor r and semi-major
+    r / cos 45, centred where the plane crosses the axis, to REQ-101 and at survey magnitudes;
+  - that ellipse survives `.gs` and a DXF round trip, plane included;
+  - a cut that crosses an end cap is still refused by name.
+
 ### REQ-313 — The B-rep solid kernel and the seven primitive solids (GitHub issue #146)
 - Purpose: GoSurvey has no solids. `CadMesh` (REQ-063 / ADR-026 (c)) is import-only reference
   geometry — no faces that mean anything, no edges, no volume — and `CadTin` is a surface, which by
@@ -6168,8 +6396,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
     same integral this requirement already performed, exposed per face rather than only summed — but
     the centroid is a genuinely new integrand (the first moments of volume, with no closed form
     written for any surface kind) and stays out of scope here. Moments of inertia and principal axes
-    are carried by GitHub issue #460, split out of #149 because #149's own acceptance list does not
-    name them.
+    are carried by REQ-349 (GitHub issue #460), split out of #149 because #149's own acceptance list
+    does not name them.
   - **Plane faces are triangulated as a centroid fan**, correct for the convex, hole-free faces every
     primitive produces and refused by name for anything else. General polygon triangulation is Phase
     4's problem, when a boolean first produces a face that needs one.
@@ -6548,6 +6776,41 @@ capability that does not exist. They are recorded here rather than quietly dropp
   a recipe-less cylinder or cone cuts exactly as the primitive does, a damaged recipe does not
   misplace a cut, and look-alikes (stepped shaft, twisted loft, barrel) are still refused by name — as
   `SliceCutCrossesCurvedFace` since the #518 revision above, for the cuts that cross their curved faces.
+
+  2026-09-18 — **a sphere is cut at any plane, and a torus square to its axis** (D-2026-09-18-a,
+  TASK-272, GitHub issue #520). Both were refused at every plane, though their cuts are shapes the
+  kernel holds:
+  - a **sphere**, any plane through it → two caps, the cut a circle of radius √(R² − d²) centred on
+    the foot of the perpendicular;
+  - a **torus**, a plane square to its axis and through the tube → two pieces, the cut a ring of
+    radii R ± √(r² − d²).
+
+  Each piece is rebuilt from the recipe, as the cylinder and cone recognisers do: the sphere's cap
+  carries a `Sphere` face over the latitudes the plane leaves, the torus piece a `Torus` face over the
+  tube angles it leaves, each closed by the flat face of the cut. Every other torus cut — any angle
+  but square to the axis, and a tube as wide as its ring — is refused as `SliceCutTorusCurve`, whose
+  curve is a quartic, not a circle. Acceptance added: a sphere cut at distance d gives those two
+  pieces and that circle, a torus cut through its centre gives circles of R + r and R − r, and both
+  hold at survey coordinate magnitudes.
+
+  2026-09-23 — **a torus cut through its axis is two circles** (TASK-278, GitHub issue #520
+  increment 3, the half the 2026-09-18 pass left refused). A plane containing the axis meets the ring
+  on both sides, so the section is two separate circles of the tube's own radius, centred where the
+  plane crosses the ring — and each piece is half the doughnut: the tube over half a turn, closed by a
+  flat disc at each end, both facing away from the material.
+
+  The two halves are the same construction in two frames, the second turned half a turn about the
+  axis, which a torus is symmetric under. This recogniser is asked **before** the square-to-axis one,
+  which otherwise answers for every other torus plane — including with the quartic refusal — and would
+  swallow this cut.
+
+  A plane parallel to the axis but **beside** it still cuts a quartic (two ovals, or one waisted
+  curve) and keeps `SliceCutTorusCurve`, as does every tilted plane. No decision entry: increment 3
+  already named this cut and its shape; this delivers it.
+
+  Acceptance added: a torus cut through its axis sections to two circles of radius r whose centres are
+  2R apart, slices into two pieces of half the volume each with the analytic surface area, and holds at
+  survey coordinate magnitudes; beside the axis is still refused by name.
 
 ### REQ-337 — Composite-operand analytic Booleans (GitHub issue #493, continues REQ-314)
 - Purpose: REQ-314's Boolean increments (B1/B2a/B2b-1/B2b-2, plus the branch-pipe and sphere∩cylinder
@@ -7047,6 +7310,23 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - The result stores **topology only** by default; it may optionally record a recipe (profile / path
     entity ids and parameters) that is never consulted by validity, mass properties or tessellation
     (ADR-045 (c), ADR-046 (e)).
+  - **A HOLLOW sweep — `brep::SweepTube` (2026-09-23, D-2026-09-23-a, GitHub issue #486).** Sweeping
+    an OUTER profile with an INNER profile removed from it produces a **tube**: outer wall, inner
+    wall, and an **annular** planar cap at each open end, as one closed shell. Built by running the
+    sweep above **twice over the same path and frames** and merging — the inner sweep's side faces
+    re-aimed and marked `Surface::inward` (the treatment a Boolean SUBTRACT's bore wall already
+    gets, so the volume is the difference and the bore's normals point into it), and the two caps
+    rebuilt with the inner rim as a hole loop. Every decision about the path — validity, the
+    rotation-minimizing frame, corner and twist handling, arc-axis clearance — is therefore **the
+    sweep's own, unchanged and unduplicated**: a tube is refused exactly where a rod of either
+    radius would be, with the same named reason. The two profiles must match edge-for-edge
+    (`Problem::ProfileMalformed` otherwise); an inner profile that is not strictly inside the outer
+    encloses no positive volume and is refused by `Validate` (REQ-201) rather than stored inside
+    out. A **closed** path is refused (`Problem::SweepUnsupportedOption`): with no ends there are no
+    caps to turn into annuli, so the result would be two disjoint shells rather than one tube.
+    Whole-face `V - E + F` still reports 2 for a tube even though it is genuinely genus 1 — an
+    annular cap is one face that is not a disk — so hollowness is asserted by volume and by the
+    caps' hole loops, not by the Euler count.
 - Acceptance:
   - **Loft and sweep each produce a valid closed solid** from planar profiles — `brep::Validate`
     passes (manifold, oriented, geometrically closed per ADR-045 (e)) and `brep::SelfIntersects` is
@@ -7942,6 +8222,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
      neither of which any kernel operation does. **ROTATE with Copy also still refuses**, because
      duplicating a solid is entity-creation bookkeeping rather than a transform — the work
      Rectangular ARRAY had to write separately.
+
+     **6c. AMENDED 2026-09-28 (D-2026-09-28-f, REQ-351, TASK-284): MIRROR, Polar ARRAY and ROTATE
+     with Copy take a solid too** — `brep::Mirror` is the reflection 6b named as its own operation,
+     and duplicating a solid is now shared bookkeeping (`TransformSelectedSolids`' duplicate mode).
+     **STRETCH alone still refuses**, for its own reason: it moves part of an object.
 - Acceptance:
   - a typed MOVE with a Z component moves a line, a circle, an arc, an ellipse, a polyline, a
     feature line, an annotation and a block reference by that Z, and their reported elevations change
@@ -8358,7 +8643,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      the whole solid.
   6. **A scale factor that is zero, negative or non-finite is refused by name.** Zero collapses the
      solid; negative **mirrors** it, leaving left-handed frames that would be rejected far away from
-     the command that caused them. A reflection is its own operation and is not this one.
+     the command that caused them. A reflection is its own operation and is not this one — it is
+     REQ-351's `brep::Mirror` (D-2026-09-28-f).
   7. **Non-uniform scale is out of scope, and not by omission**: `SurfaceKind` has no ellipsoid and
      no elliptical cylinder, so an unevenly scaled sphere has nowhere to be stored. The signature
      offers a single factor, so there is no non-uniform request to refuse.
@@ -8477,7 +8763,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   general trim loops, `Nurbs`), which need the same treatment `IntegrateFace` already gives them for
   the volume. Phase 6 of GitHub #120, filed as #149, acceptance 4. **Moments of inertia and
   principal axes are NOT part of this requirement** — #120 names them, #149's acceptance list does
-  not, and they are carried by GitHub issue #460.
+  not, and they are carried by REQ-349 (GitHub issue #460).
 
 ### REQ-333 — A solid's vertex or edge can be moved
 
@@ -8602,7 +8888,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a boundary that is not lines and arcs, a plane that misses the solid, and a degenerate normal
     are each refused by name and draw nothing;
   - the command creates one closed polyline per solid in **one undo step**, and a refusal leaves the
-    document unchanged;
+    document unchanged — **one per OUTLINE** since the 2026-09-18 increment 2 revision, a ring being
+    two, still in the one undo step;
   - the figures hold at survey coordinate magnitudes;
   - **the command PROMPTS rather than refusing**: after asking for a selection it is still running,
     a click during that step selects without ending it, Enter confirms, and three points then define
@@ -8667,6 +8954,65 @@ capability that does not exist. They are recorded here rather than quietly dropp
   sphere now reports, in place of "flat faces only". Acceptance added: a filleted box is sectioned
   within REQ-101's ±0.002 ft at planes that miss its fillets, the solid is unchanged, and the command is
   one undo step.
+
+  2026-09-18 — **increment 2: a section can be more than one outline** (D-2026-09-18-a, TASK-272,
+  GitHub issue #520). A section had to be a single closed outline, so a cut shaped like a ring — a
+  torus cut square to its axis, and in time a drilled box — was refused ("a section with holes is
+  increment 2"). The kernel gains `SectionOutlines`, which returns **every** closed outline of the
+  cut: an outer outline wound counter-clockwise about the section normal, and a hole wound clockwise,
+  so the two are told apart by signed area with no second flag. `SectionLoop` remains, as that
+  function restricted to the single-outline case, and names which of the two ways there were several
+  (`SliceCutSeveralOutlines` for separate pieces on the plane, `SectionHasHole` for a hole).
+
+  **`SECTION` draws one closed polyline per outline** — a ring gives two, the outer and the hole —
+  and they arrive together in **one undo step**, as one section. This is the AutoCAD answer and it
+  keeps each outline a measured figure: each can be selected, listed and its own area taken, which a
+  single polyline bridging the two with a connecting line could not (the bridged outline is a shape the
+  cut never made, and its area would be wrong). A sphere now sections as one circle (REQ-314 revision
+  of this date). Acceptance added: a ring section creates two closed polylines in one undo step, the
+  solid unchanged; the sphere's circle and the torus's two circles hold to REQ-101 at survey
+  magnitudes; and every unsupported cut still names the kind of cut it is.
+
+  2026-09-23 — **a section outline keeps only the corners the shape has** (TASK-275, GitHub issue
+  #522). A `UNION` leaves its operands' faces split into fragments along each other's planes, and
+  coplanar fragments are not merged back. A cut crossed each of those internal boundaries and kept a
+  vertex there, so two unioned boxes sectioned to **12** vertices where the outline has **8** — the
+  shape right, the vertices not ones anyone drew, and a clean-up job for the user.
+
+  A vertex is now dropped when **both** of its segments are straight and it lies on the line between
+  its neighbours to within 1e-9 of the outline's own size — far inside REQ-101's ±0.002 ft, so a real
+  corner, however slight, is kept. An arc's endpoint is never dropped: it carries the sweep.
+
+  The issue offered two places to fix this: merge coplanar faces after a Boolean, or tidy the outline.
+  The outline is where it is done. No decision entry: merging faces would change every Boolean
+  result's own vertex, edge and face counts — a larger change, to geometry this issue does not claim
+  is wrong — and is recorded as the follow-up it is. Acceptance added: the union above sections to
+  exactly eight vertices with its area unchanged, a single box still sections to four, and an outline
+  whose corners are all real keeps every one.
+
+  2026-09-23 — **a tilted cut that runs off the end of a pipe is drawn too** (D-2026-09-23-b,
+  TASK-279, GitHub issue #520 follow-up). The cut BETWEEN the caps became an ellipse with #531; this
+  is the other half. Where the cut leaves through an end, the outline is an **elliptical arc plus the
+  chord** across that cap — two shapes, so `SECTION` draws **two objects for one cut**, in one undo
+  step: an `ELLIPSE` carrying the span it was cut to, and a `LINE` closing it.
+
+  `CadEllipse` gains that span (`startRad` / `sweepRad`, the pair DXF states in groups 41 and 42). A
+  full turn is every ellipse that existed before, so nothing closed moves, and the span is written to
+  `.gs` and DXF only when it is not one. It also pays off TASK-114's DEBT-1: a trimmed ELLIPSE read
+  from DXF was tessellated because there was nowhere to put its range, and is now kept as itself.
+
+  **This one outline does not come from a cut.** `Slice` does not build the pieces for it — it still
+  refuses with `SliceCutCrossesCurvedEnd` — so the outline is computed from the primitive's own
+  geometry. That is the single place sectioning does not inherit Slice's accepted set, decided with
+  the user against the alternative of teaching the cutter the same cut first; the cutter is the
+  follow-up, after which this reads back from the pieces like every other section.
+
+  A cut that runs off **both** ends is two arcs and two chords and keeps its refusal.
+
+  Acceptance added: such a cut draws an arc of the ellipse the cut would have made, with both ends on
+  the cap and on the wall, every point of the arc inside the solid, plus the chord joining those ends;
+  both objects arrive in one undo step and survive `.gs` and a DXF round trip with the span intact;
+  and the figures hold at survey coordinate magnitudes.
 
 ### REQ-336 — Start Screen Billboard (What's New)
 - Purpose: Users launching a new version do not know what changed unless they hunt for release notes.
@@ -8907,8 +9253,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a click on a flat face places the plane on that face's plane, with the face's outward normal,
     offset 0 and flip off;
   - at offset 0 **every vertex of the picked solid survives the clip**;
-  - a curved face, an edge, a vertex and a miss are each refused **by name**, and the command stays
-    open after every one of them;
+  - a curved face, an edge, a vertex and a miss each leave the command open — **superseded by the
+    2026-09-18 revision**, which makes each of them the first point of a section line instead of a
+    refusal (the command staying open is unchanged);
   - picking a second face re-aims the same plane and **resets the offset and flip**, which were
     measured from the face that is no longer in force;
   - `SECTIONCLIP`'s offset, `FLIP` and `OFF` all act on a face-defined plane;
@@ -8929,6 +9276,33 @@ capability that does not exist. They are recorded here rather than quietly dropp
   arrows**; they belong with the grips that move them.
   2026-09-11 — **(2) delivered by REQ-343**, which also moved the section line from the lowest edge
   to the plane's CENTRE, and gave the plane selection and handles. (1) and (3) still stand.
+
+  2026-09-18 — **a section plane can be placed on a section LINE, not only on a face**
+  (D-2026-09-18-b, TASK-273). Reported from the real app against AutoCAD: *"i have not selected a face
+  but have instead selected a different part, for this instance it is the mid point of this torus …
+  ours currently can only do sectionplanes off of a face of an object."* AutoCAD's own prompt asks for
+  both in one breath — "Select face or any point to locate section line", then "Specify through
+  point" — and a sphere or a torus has **no flat face at all**, so the face form cannot aim a plane at
+  one by any click.
+
+  `SECTIONPLANE` now offers both. A flat face still answers the command in one click and is unchanged.
+  Any other click — a curved face, an edge, a vertex, empty space — is a **point**, taken on the
+  geometry it hit or otherwise on the work plane, and asks for a **through point**. The plane then
+  stands square to the work plane through those two points: its normal is across the line, level with
+  the work plane. Points may also be typed, so the command is drivable without a mouse.
+
+  **The curved-face rule below is unchanged in substance:** a curved face's own frame is still never
+  used to aim the plane — its Z is the surface's axis, which would put the plane through the middle of
+  the solid at right angles to what was clicked. What changes is that clicking one is no longer a
+  refusal: it is a point on that surface. The refusals that remain are the ones that name no plane:
+  two points in the same place, and a line running square to the work plane (REQ-201).
+
+  Acceptance added:
+  - a flat face places the plane exactly as before;
+  - two points place a plane whose normal is across the line and level with the work plane, for a
+    sphere and a torus as well as a box;
+  - a click on a curved face, an edge or a vertex starts the line at that point on the geometry;
+  - the two refusals above leave any plane a previous run placed exactly where it was.
 
 ### REQ-343 — The section plane can be grabbed: slide, flip and resize by handle
 - Purpose: move the cut by dragging it, the way it is thought about — not by typing a distance along
@@ -8975,11 +9349,35 @@ capability that does not exist. They are recorded here rather than quietly dropp
   re-aimed at a different face**, for the same reason the offset is: it was measured in a basis
   derived from the old normal.
 
-  **Selection is not a `SelectedEntity`.** The plane remains a view state with no layer, no
-  attributes and no place in `.gs`, so putting it in `selection` would put a branch for it in every
-  consumer of that vector, and the first one that forgot would be a view setting silently exported
-  or erased. It deselects with ESC and with a click away from it, and deselecting is **not** turning
-  the clip off.
+  **Selection storage is not a `SelectedEntity` slot** (unchanged by the 2026-09-21 amendment
+  below). The plane is singular — never zero-or-many — so an `e.index` into `AppCommandState::
+  selection` would be storage this feature does not need; `sectionPlaneSelected` stays its own bool,
+  and putting the plane in `selection` would put a branch for it in every MOVE/COPY/DELETE/DXF-export
+  consumer of that vector that this feature has no reason to touch. It deselects with ESC and with a
+  click away from it, and deselecting is **not** turning the clip off.
+
+  **It IS now an entity for persistence and reporting purposes (amended 2026-09-21, GitHub issue
+  #479 acceptance 4/8, ADR-059 (i)).** `SelectedEntity::Type::SectionPlane` exists as a type tag the
+  Properties panel and this document use to talk about a selected plane the same way they do about a
+  selected `Solid` or `PointCloud` — a click reports origin, normal, offset, flip and extent in the
+  Properties panel, exactly like any other selectable thing in this application. **Creating,
+  re-aiming, deleting, sliding, flipping and resizing the plane now each push one undo entry**,
+  pushed at the same moment every other creating/dragging/one-shot command in `CadCommands.cpp`
+  pushes one (grip drags at the grab, one-shot flips and deletes before the mutation) — a placement,
+  flip or resize a user could not undo would be the odd one out among every other command in this
+  file, now that the plane reports and persists like a real thing. **The plane round-trips through
+  `.gs`**, additively (`GsIo.cpp`'s `"sectionPlane"` key; no format-version bump, per the tolerant-
+  key convention ADR-020 (d) already established for every other additive section here), so a file
+  saved with the clip on reopens with it on, at the same face, offset, flip and stretched size, to
+  REQ-101's ±0.002 ft at survey magnitudes.
+
+  **REQ-341's `SECTIONCLIP` (aimed from the active UCS, not a face) is UNCHANGED by this and remains
+  a pure view state**: its own offset/flip/on-off edits still make no undo entry and are still
+  absent from `.gs`, even after a `SECTIONPLANE` has been placed and the two commands are sharing the
+  same underlying fields ("one clip plane, two ways to aim it", ADR-059 (a)). The gate is
+  `viewportSectionClipFrameValid` — see ADR-059 (i) for exactly how undo capture/restore and `.gs`
+  save/load read it, and why that is the only way to keep both this paragraph and REQ-341's own
+  "the clip is a view state" true at once.
 - Acceptance:
   - the section line passes through the rectangle's centre, spans its full width, and lies on the
     plane;
@@ -9016,20 +9414,37 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a stretch cannot invert the rectangle, however far it is dragged;
   - re-aiming the plane at another face resets the stored size;
   - every handle lies on the plane and within the rectangle, under a tilted frame as well as a level
-    one.
-- Owner-layer: Commands, Render (`src/render/SectionClip.hpp`, `ViewportRenderer`), UI
-- Status: accepted (2026-09-11) — see D-2026-09-11-c.
+    one;
+  - **(added 2026-09-21) a selected plane reports itself in the Properties panel** — origin, normal,
+    offset, flip state and extent (or "Auto" when never stretched);
+  - **(added 2026-09-21) creating, re-aiming, deleting, flipping, sliding and resizing the plane each
+    make one `UNDO`-able entry**; undoing a creation removes the plane and leaves any solid it was
+    placed on untouched, undoing a delete restores it exactly as it was;
+  - **(added 2026-09-21) the plane round-trips through `.gs`** — frame, offset, flip and stretched
+    extent — to REQ-101's ±0.002 ft at E 2,196,000 / N 1,400,000; a file with no plane, or one saved
+    before this, loads with the clip off;
+  - **(added 2026-09-21) REQ-341's `SECTIONCLIP` stays undo-exempt and `.gs`-absent** even while a
+    face-derived plane exists and shares its fields — an `UNDO` step that predates the plane's
+    creation must not also revert an unrelated `SECTIONCLIP` offset/flip typed after that creation.
+- Owner-layer: Commands, Render (`src/render/SectionClip.hpp`, `ViewportRenderer`), UI, IO (`GsIo.cpp`)
+- Status: accepted (2026-09-11) — see D-2026-09-11-c; amended 2026-09-21.
 - Revisions: 2026-09-11 — proposed and accepted (D-2026-09-11-c, ADR-059 extended, TASK-259).
   Slice 2 of GitHub #479, delivering acceptance 5, 6 and 7 and the selection half of 4.
   2026-09-15 — **DELETE now erases a selected plane** (user report: "it will not let me use the
   delete command or button ... to delete it"). It was not in `st.selection` by design, so DELETE
   walked past a plane the user could see was selected and opened a "click objects" prompt instead —
   the cost of ADR-059 (h), unnoticed until someone tried it. The flag is tested in `StartDeleteCommand`,
-  which is the one place that means "erase what is selected". **Stated
-  increments:** the plane is still **not an entity** — no Properties row, no `.gs`, and its
-  manipulation makes **no undo entry**, which is consistent with it being a view state but means
-  `UNDO` will not step a slide back; the section line carries **no direction arrows**; and there is
-  no contextual ribbon.
+  which is the one place that means "erase what is selected".
+  2026-09-21 — **the plane gains a Properties report, `.gs` persistence and undo/redo** (GitHub
+  issue #479 acceptance 4 and 8, ADR-059 (i), which partially supersedes ADR-059 (h) — (h)'s
+  selection-storage argument still holds; only its "therefore no Properties/`.gs`/undo" conclusion
+  is reversed). This is the increment the 2026-09-11 revision above called out as missing.
+  `SelectedEntity::Type::SectionPlane` was appended as a type tag (not a `selection`-vector member);
+  `DrawingGeometrySnapshot` and `GsIo.cpp` gained the plane's frame/offset/flip/extent, gated on
+  `viewportSectionClipFrameValid` so `SECTIONCLIP`'s own edits stay exempt (see ADR-059 (i)); DELETE
+  now pushes an undo entry too, reversing the "no undo entry" clause the 2026-09-15 revision above
+  had just written down. **Still not delivered:** the section line's direction arrows, and the
+  contextual ribbon (explicitly deferred, issue #479 slice 4, "polish, not required").
 
 ### REQ-344 — A section-plane drag snaps, and its handles are drawn as what they do
 - Purpose: place a section exactly — on a midpoint, an endpoint, a face centre — and make the
@@ -9264,6 +9679,2395 @@ capability that does not exist. They are recorded here rather than quietly dropp
   the format is retired), snap glyph (`ViewportRenderer.cpp`), OSNAP settings + Shift+right-click
   menu entries (`CadUi.cpp`/`CadUiSettings.cpp`), `GetOrOpenPointCloudCache` generalized from
   `GetOrOpenExtractCenterlineCache` (`CadCommands.hpp/.cpp`), 6 Catch2 cases (`CadSnapTests.cpp`).
+
+### REQ-349 — Moments of inertia and principal axes for a solid (GitHub issue #460)
+- Purpose: REQ-334 reports a solid's volume, surface area and centroid but stops there. GitHub
+  issue #120's Mass Properties section asks for a fifth and sixth quantity — the moments/products
+  of inertia and the principal axes — which #149's own acceptance list did not carry (it named only
+  the centroid), so it was split out as issue #460 rather than silently widening that requirement.
+  Inertia is a second-moment integral, not a bigger version of the first-moment one REQ-334 added:
+  it needs its own integrand, its own tensor, and an eigendecomposition, and squares the same
+  survey-magnitude cancellation risk that ADR-055 measured for the centroid.
+- Priority: should
+- Type: functional
+- Depends on: REQ-334 / ADR-055 (the volume, centroid, `q` reference point and covered-face-shape
+  set this reuses verbatim), REQ-300 (no new dependency — the eigensolver is in-tree), REQ-201
+  (named refusal, not silent repair, for a self-intersecting solid or an uncovered face shape).
+- Statement: for the same seven primitives and the same face-shape coverage REQ-334 reports a
+  centroid for (`Plane`, `Cylinder`, `Cone`, `Sphere`, `Torus` closed forms/quadrature patches; a
+  `Nurbs` face, a general trim loop, a face with holes, or an `Ellipse`/`Intersection` boundary
+  edge withholds it), `brep::ComputeMassProperties` additionally reports:
+  - the six independent components of the **inertia tensor about the centroid**
+    (`Ixx, Iyy, Izz, Ixy, Ixz, Iyz`), unit density so mass equals volume, through its own
+    `MassProperties::inertiaValid` flag — a *third* flag alongside `valid` and `centroidValid`.
+    **`inertiaValid` implies `centroidValid`**: the tensor is reported about the centroid, so it
+    cannot exist without one, and `ComputeMassProperties` gates the whole second-moment pass on
+    `centroidValid` being true first. The flag is still its own field, not folded into
+    `centroidValid`, because the converse does not hold — the second-moment integrand can in
+    principle refuse a face shape the first-moment one accepts (a distinct covered-shape set), in
+    which case a solid keeps a valid centroid while withholding inertia;
+  - `brep::InertiaAboutPoint(mp, p)`, the tensor about an arbitrary point, by the parallel-axis
+    theorem `I_p = I_c + m((d·d)E − d dᵀ)` with `d = p − centroid`, `m = volume`;
+  - the three **principal moments** (eigenvalues of the centroidal tensor, sorted descending) and
+    their **principal axes** (the corresponding eigenvectors), orthonormal and right-handed, found
+    by an in-tree real-symmetric Jacobi eigenvalue iteration (`brep::JacobiEigenSymmetric3x3`) —
+    no external linear-algebra dependency.
+  - **Degenerate spectra are handled deterministically, not left arbitrary.** A sphere (isotropic:
+    every direction is principal) and a cylinder/cone/regular pyramid (two equal principal moments
+    about its own axis) still return *some* orthonormal, right-handed basis, and the same solid
+    returns the *same* basis on every call and after a `.gs` save/reload — enforced by canonical
+    sign selection (the larger-magnitude component of each eigenvector is made positive) and a
+    `det(V) == +1` handedness correction on the third axis, both independent of iteration order.
+  - **Every second-moment term is taken about the same solid-local `q = ReferencePoint(s)` that
+    volume/centroid already use, and accumulated in world axes, never a per-face local frame** —
+    ADR-055's two measured failure modes (frame non-covariance on a tilted solid; origin-referenced
+    cancellation at survey magnitude) apply *worse* here, because squaring the coordinate makes
+    both errors grow rather than merely persist.
+  - The centroidal tensor is **cross-checked** before being reported: the second-moment integrator
+    re-derives the volume as it accumulates, and that figure must agree with the one
+    `ComputeMassProperties` already reports to a relative `1e-9`, or inertia is withheld — the same
+    discipline ADR-055 (e) applies to the centroid.
+  - A solid that fails `Validate` or `SelfIntersects` reports **no** inertia, on the same gate that
+    already withholds volume/area/centroid — inertia is volume-weighted twice over (it is a second
+    moment), so it is exactly as meaningless as the volume for a self-intersecting shell.
+  - The tolerance is **relative**, not REQ-101's absolute ±0.002 ft, because an inertia has units of
+    length⁵ (unit density) rather than length: **`1e-8` relative per component** for the seven
+    primitives at any coordinate magnitude (measured residual from quadrature alone is ~`1e-12`,
+    leaving four orders of margin before a formula error would be missed), and **`1e-7`** for a
+    Boolean composite or a tilted/survey-magnitude fixture, one order looser to absorb the added
+    quadrature and composition error.
+  - Reported through `SOLIDLIST` (extended with a centroid/inertia/principal-axis block per solid
+    when available) and a dedicated `MASSPROP` command (aliases `MASSPROPERTIES`, `SOLIDMASSPROP`,
+    `MASSP`) that prints the full block for every solid — volume, area, centroid, the centroidal
+    tensor, the tensor about the world origin (a parallel-axis demonstration), and the principal
+    moments/axes — with a named reason in place of numbers for a solid that cannot report them.
+- Acceptance:
+  - the centroidal tensor matches the closed-form analytic tensor for each of the seven primitives,
+    axis-aligned and tilted, at the origin and at survey coordinates (≈ easting 2.2e6 / northing
+    1.4e6), within the `1e-8`/`1e-7` relative tolerances stated above;
+  - `InertiaAboutPoint` matches a direct re-evaluation of the same integral about that point (the
+    parallel-axis transfer is not merely self-consistent, it agrees with the definition);
+  - principal axes are orthonormal (`|eᵢ| ≈ 1`, `eᵢ·eⱼ ≈ 0`) and right-handed (`det([e₁ e₂ e₃]) ≈
+    +1`) for every primitive, and the eigenvalues match the analytic principal moments;
+  - a sphere and a cylinder/cone/pyramid — the degenerate-spectrum cases — each return an
+    orthonormal, right-handed basis that is bit-identical across repeated calls and across a `.gs`
+    save/reopen;
+  - a Boolean result's inertia matches the composite (Steiner/parallel-axis combination) of its
+    parts' tensors within tolerance;
+  - a self-intersecting solid reports no inertia (`inertiaValid == false`), on the same refusal
+    `ComputeMassProperties` already gives volume/centroid;
+  - a solid with a face shape outside the covered set reports no inertia while volume, area and
+    centroid (when available) are unaffected;
+  - `SOLIDLIST` and `MASSPROP` both print the tensor and principal axes for a solid that has them,
+    and a named reason for one that does not.
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`), Commands (`src/commands/CadCommands.{hpp,cpp}` —
+  `SOLIDLIST` extension and the new `MASSPROP` verb)
+- Status: accepted (2026-09-18) — see ADR-061.
+- Revisions: 2026-09-18 — proposed and accepted. Increment 1: the same face-shape coverage REQ-334
+  increment 1 reports a centroid for. Increment 2 (uncovered — `Nurbs`, general trim loops, holes,
+  `Ellipse`/`Intersection` boundary edges) is carried alongside REQ-334's own increment 2, not
+  before it, since inertia cannot be computed for a shape the centroid itself cannot yet integrate.
+
+### REQ-351 — The whole-object Modify commands apply to solids and pipe runs (GitHub issue #564 §4)
+
+- Purpose: issue #564 §4 — "solids are the last thing in the drawing you cannot move". REQ-322 and
+  REQ-332 gave MOVE, in-place ROTATE and SCALE, and D-2026-09-07-c gave Rectangular ARRAY a solid;
+  COPY, MIRROR, Polar ARRAY and ROTATE Copy still refused a solid or skipped it, and **every** Modify
+  command left a pipe run behind without saying so (a REQ-201 violation).
+- Priority: must
+- Type: functional
+- Depends on: REQ-313 / ADR-045 (the kernel), REQ-322, REQ-332, REQ-329 (3D / UCS modify), REQ-345
+  (pipe runs), REQ-201.
+- Decision: D-2026-09-28-f.
+- Statement:
+  1. **`brep::Mirror`** reflects a solid across a plane and returns a correctly oriented solid: every
+     frame is reflected and made right-handed again, every loop is reversed, a NURBS patch's control
+     net is reflected and its U direction reversed, and the recipe is kept (every primitive is
+     symmetric about its own frame's XZ plane; a polysolid path negates y, sweep and justification).
+     A normal that is not a unit vector is refused by name.
+  2. **COPY, MIRROR, ROTATE Copy and both ARRAY forms copy a selected solid**, through the kernel
+     (`Translate` / `Rotate` / `Mirror`), and the copy carries the source's attributes
+     (`DuplicatedEntityAttrs`). MIRROR's erase-source removes the solid it mirrored.
+  3. **Every whole-object Modify command applies to a pipe run** — MOVE, COPY, ROTATE (plan and
+     tilted, in place and Copy), SCALE, MIRROR, both ARRAY forms, and the 3DMOVE / 3DROTATE /
+     3DSCALE gizmos, which call the same functions. A transform maps the run's path vertices; the
+     swept pipe is re-derived from the path. SCALE scales the route in 3D about the base point and
+     **never the nominal size or the wall** (D-2026-09-28-f). A copied run carries its attributes
+     and joins no piping network.
+  4. **Scale stays uniform.** Every SCALE takes one factor, so non-uniform scale cannot be asked for;
+     it is out of scope and would be its own requirement (REQ-332 item 7's reason still holds).
+  5. **STRETCH still refuses a solid, and now refuses a pipe run, by name**: STRETCH moves part of an
+     object, and no kernel operation moves part of a solid.
+  6. One undo step per operation, a mixed selection included.
+- Acceptance:
+  - a mirrored box, wedge, pyramid, cylinder, cone, sphere, torus, bored box (an inward face) and
+    NURBS loft each keep their volume and area to a relative 1e-9, every frame is right-handed and
+    orthonormal, every vertex is the reflected point, and mirroring twice restores the original;
+  - a mirrored solid validates and takes part in a Boolean UNION with the expected volume;
+  - a mirrored wedge, pyramid and polysolid rebuilt from their kept recipe reproduce the mirrored
+    corners;
+  - COPY, MIRROR (with and without erase-source), ROTATE Copy and Polar ARRAY each produce solids of
+    the source's volume and topology at the expected bounds, with no "excluded" line, and a mixed
+    selection is one undo;
+  - a pipe run is moved (in 3D), rotated, scaled (route doubled, size and wall unchanged), mirrored
+    (copy carries the layer, joins no network), copied with a solid in one undo, polar-arrayed, and
+    mirrored with erase-source; STRETCH refuses it by name and leaves it untouched;
+  - every refusal has a sentence a user can read (REQ-201).
+- Owner-layer: Domain (`src/util/brep.{hpp,cpp}`, `src/util/nurbs.{hpp,cpp}`), Commands
+  (`src/commands/CadCommands.{hpp,cpp}`)
+- Status: accepted (2026-09-28) — D-2026-09-28-f, TASK-284.
+- Revisions: 2026-09-28 — proposed and accepted.
+
+### REQ-352 — Solids and pipe runs take layer and colour edits (GitHub issue #564 §6)
+
+- Purpose: issue #564 §6 — a solid is an entity like any other for layer and colour. Creation,
+  ByLayer resolution, layer Off / Freeze and persistence already worked, but the Properties panel's
+  layer and colour edits skipped solids and pipe runs without a word (REQ-201), a pipe run's
+  already-built pipe kept drawing in its old colour, and no layer or colour edit could be undone
+  for any entity type.
+- Priority: must
+- Type: functional
+- Depends on: REQ-313 / ADR-045 (solids), REQ-345 (pipe runs), REQ-201.
+- Decision: D-2026-09-28-g, D-2026-09-28-h.
+- Statement:
+  1. **The Properties panel shows and edits `Layer` and `Color` for a solid and a pipe run**,
+     alone or in a mixed selection with other entities, through one command-layer edit
+     (`CadApplyLayerToSelection` / `CadApplyColorToSelection`) covering every entity type that
+     carries attributes. A typed new layer name joins the layer table, whichever entity type
+     carries it.
+  2. **Every layer or colour edit is one undo step**, pushed only when something actually changes.
+  3. **The ribbon Layers combo follows AutoCAD's rule**: with objects selected it shows their
+     layer ("(varies)" when they differ) and a pick moves them to the chosen layer, leaving the
+     current layer alone; with nothing selected it sets the current layer, as before.
+  4. **The display follows the edit**: a pipe run's pipe solids take the run's new attributes, and
+     a block reference's (a pipe fitting's) world solids are re-derived when its layer or colour
+     changes.
+  5. **A block's layer-0 content follows its insert** (D-2026-09-28-h): it takes the insert's
+     layer (so the insert's layer Off / Freeze hides it) and a ByLayer colour / linetype on it
+     takes the insert's own — recolouring a pipe fitting recolours its body. ByBlock content
+     takes the insert's value as before; content on its own layer keeps its layer and ByLayer.
+  6. **Out of scope** (D-2026-09-28-g): `CHPROP`, `MATCHPROP`, `LAYMCUR` and a ribbon colour
+     dropdown do not exist for any entity type and are GitHub issue #575; layer **Lock** is
+     enforced for no entity type and stays REQ-102's (a solid behaves as a 2D entity does);
+     linetype / lineweight on a shaded body and materials, per the issue. DWG / DXF cannot carry a
+     GoSurvey solid at all (an ACIS body — export skips it with a stated count), so there is no
+     exported solid to write a layer on; the drawing's own save (ADR-044 trailer) keeps both.
+- Acceptance:
+  - a solid's colour edit changes the colour the viewport is handed, and undo / redo restore it;
+  - a ByLayer solid moved onto a layer draws in that layer's colour and follows a change to it;
+  - a solid and a pipe run on a layer turned Off or Frozen are not drawn, and reappear on thaw;
+  - a pipe run's colour edit reaches its already-built pipe solids;
+  - a solid, a pipe run and a line take one layer in one action and one undo step;
+  - recolouring a block whose solid is layer-0 / ByLayer changes the drawn colour; moving it to a
+    layer shows that layer's colour and its Off hides the solid;
+  - a new layer name given to a solid alone joins the layer table and can be turned off;
+  - an edit that changes nothing pushes no undo step;
+  - the ribbon combo moves a selection without changing the current layer, reports how many
+    objects moved, and sets the current layer when nothing is selected;
+  - a solid's and a pipe run's layer and colour survive a save and reload.
+- Owner-layer: Commands (`src/commands/CadCommands.{hpp,cpp}`), UI (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-09-28) — D-2026-09-28-g, D-2026-09-28-h, TASK-285.
+- Revisions: 2026-09-28 — proposed and accepted. 2026-09-28 — item 5 added after the user's GUI test (D-2026-09-28-h).
+
+### REQ-353 — Pipe colour by nominal size, with a built-in palette (GitHub issue #564 §7)
+
+- Purpose: issue #564 §7 — a piping drawing is read by size, but every pipe run was the same colour,
+  and the NPS table carried only 13 of the sizes the issue asks for.
+- Priority: must
+- Type: functional
+- Depends on: REQ-345 (pipe runs), REQ-352 (solid / pipe layer and colour; D-2026-09-28-h: a
+  block's layer-0 content follows its insert).
+- Decision: D-2026-09-28-i; issue #564 Q4 (reducer = the run's own size) and Q5 (palette built in,
+  one table).
+- Statement:
+  1. **`kCadPipeNpsTable` carries 21 sizes** — the 13 it had plus 3-1/2, 5, 14, 16, 18, 20, 22 and 24
+     — each with its OD and schedule-40 wall (ASME B36.10M). The issue says "20 sizes"; its own two
+     lists name 21, and the lists govern. **22in has no schedule 40** in B36.10M, so its row carries
+     the standard-weight (STD) wall, 0.375in (D-2026-09-28-i).
+  2. **The same table carries each size's default colour** (the issue's palette, `#RRGGBB`), so a
+     size and its colour are one row and cannot drift apart.
+  3. **A new pipe run is stamped with its size's colour**, on the current layer. It is an ordinary
+     entity colour from then on: a Properties edit, including `ByLayer`, wins and is saved.
+  4. **A fitting on a run takes that run's layer and colour** — PIPERUN's auto elbows and tees,
+     PIPEFIT's splice, and a part INSERT's connector snap fits onto a run's END (an end flange, a
+     cap) — so a line reads as one colour end to end and its layer hides its fittings with it
+     (D-2026-09-28-i). A reducer therefore reads as the run it was spliced into (Q4). A part placed
+     off any run, or snapped to a bare line's end, is an ordinary block INSERT.
+  5. **A split keeps the line**: the far piece of a PIPEFIT or PIPESPLIT keeps the run's layer and
+     colour, an override included.
+  6. **Out of scope**: the Pipe Fittings palette (REQ-350, not yet on `beta` — branch
+     `feat/pipe-fitting-palette`), whose on-run splice must hand the run's attributes to
+     `CadBlockPlaceInsertNoUndo` the same way when it lands; runs already in a drawing are
+     not recoloured on open (the palette applies at creation); a user-editable palette (Q5);
+     library parts for the new sizes (PIPERUN draws smooth bends when the catalog has no part, as
+     for any size).
+- Acceptance:
+  - the table carries all 21 sizes with the stated OD and wall, and 21 distinct colours;
+  - PIPERUN accepts a new size (22in offers the 0.375in wall) and its refusal lists every size;
+  - a 4in run is stamped and displayed `#2D6CDF` and a 2in run beside it `#2ECC40`, with no user
+    action;
+  - an auto-inserted elbow takes its run's colour and layer;
+  - a spliced valve and a spliced reducer take the run's layer and override colour, and so does
+    the far piece;
+  - a flange connector-snapped onto a run's end takes the run's layer and colour; one snapped onto a
+    bare line's end does not;
+  - PIPESPLIT keeps an override on both pieces;
+  - a colour override wins over the palette and survives a save and reload.
+- Owner-layer: Domain (`src/util/cadpiperun.hpp`), Commands (`src/commands/CadCommands.cpp`,
+  `src/commands/CadBlocks.{hpp,cpp}`)
+- Status: accepted (2026-09-28) — D-2026-09-28-i, TASK-286.
+- Revisions: 2026-09-28 — proposed and accepted. 2026-09-29 — item 3's "on the current layer" is superseded by REQ-361 (D-2026-09-29-b): a new run goes on the Object Layers Pipe run layer; item 4 is unchanged (D-2026-09-29-f).
+
+### REQ-354 — The dynamic input shows which mode it is in (GitHub issue #564 §5)
+
+- Purpose: issue #564 §5 — typing `@` or `<` into the point prompt's X box changed what was being
+  collected but not what the boxes said: a relative offset went into a box still labelled X, the
+  second box was silently ignored, `<` could not be parsed at all, and there was no Z box in a 3D
+  modelling space.
+- Priority: must
+- Type: functional
+- Depends on: REQ-024 (the dynamic-input field group), REQ-154 (typed points are read in the active
+  UCS), REQ-346 (PIPERUN's compass direct-distance entry).
+- Decision: D-2026-09-28-j; issue #564 Q3 (a Z box whenever the view is not plan to the current UCS).
+- Statement:
+  1. **The field group re-lays itself as the user types**, on the keystroke, for every point prompt
+     (one model, `dyninput::Group` in `src/commands/CadDynInput.*`, which the viewport draws and
+     the headless driver types into):
+
+     | Typed | Boxes |
+     |---|---|
+     | (nothing) | `X` `Y` (`Z`) — absolute |
+     | `@` | `@` `ΔX` `ΔY` (`ΔZ`) — relative to the prompt's base point |
+     | `<` after a distance | `Distance` `<` `Angle` — polar, from the frame origin |
+     | `@…<` | `@` `Distance` `<` `Angle` — polar, relative |
+
+     The mode character is consumed into the labels (an `@` badge, the `<` between the pair) and
+     never left inside a number. A `,` moves on to the next box. A prompt that follows an anchor
+     (LINE / POLYLINE's second point and on, PIPERUN's next point) opens in the relative polar form,
+     as REQ-024 already required; there `@` switches to `ΔX` `ΔY`, and a comma after a number in the
+     Distance box switches to absolute `X` `Y` — the command line's own reading of `5,5`
+     (D-2026-09-28-j).
+  2. **Backspace in the box a mode character left the user in**, with nothing typed there, reverts to
+     the previous layout and keeps what was typed before the character.
+  3. **The submitted text is what the labels say**: `x,y[,z]`, `@dx,dy[,dz]`, or a polar pair
+     resolved to one of those (the command line has no polar grammar; the angle box is a bearing,
+     as REQ-024's pair already was). An untouched box commits the cursor's reading **in the frame a
+     typed point is read in** — the active UCS under a UCS (REQ-154), so the absolute boxes now read
+     UCS coordinates there. Nothing typed submits a blank line (D-2026-09-24-b). A keyword typed into
+     the first box (`C`, `U`, `END`, `2P`) is submitted as typed. An unreadable box is submitted as
+     typed so the command refuses it by name (REQ-201). At a prompt with no base point `@` still
+     re-lays the boxes and the command refuses the relative point by name, as it always has.
+  4. **A Z box** appears whenever the view is not plan to the current UCS (issue #564 Q3), in model
+     space. Typing a second comma in `Y` shows it for the rest of the prompt rather than dropping
+     the value. An untouched Z is not sent (the command's work plane is the cursor's reading).
+  5. **Every point prompt reads a typed Z** (D-2026-09-28-j): the shared parser
+     (`ParseStoragePointZ`) accepts `x,y,z` and `@dx,dy,dz` — dz from the caller's base Z (LINE /
+     POLYLINE's anchor) or the work plane — publishes it through `resolvedPointZ`, lets it beat a
+     leftover mouse snap, and refuses four or more numbers. A typed Z does not carry into the next
+     point.
+  6. **PIPERUN** has the point field group at its start and next points, takes `@dx,dy[,dz]` from its
+     last vertex, reads an absolute `x,y,z` wholly in the active UCS (the frame its Z box shows; the
+     solid commands keep their world-elevation Z), and a distance typed with the angle left live goes to its compass direct-distance
+     entry (REQ-346), which owns the direction.
+  7. **Unchanged**: REQ-154's UCS directional prompts keep their own distance / angle pair; live
+     tracking, type-to-start, lock-on-edit, Tab between boxes, Enter / click commit (REQ-024).
+- Acceptance:
+  - in LINE, MOVE, COPY and PIPERUN, typing `@` shows `ΔX` `ΔY` before the next character, and `<`
+    shows `Distance < Angle`;
+  - the committed point matches the labels in all four modes (headless transcripts
+    `issue564-dyninput-modes`, `issue564-dyninput-modify-z`; GUI test `req354-dyninput-modes`);
+  - every box on screen is read: `5,5` in LINE's Distance box is the point 5,5, and a Z box appears
+    in an orbited view and is honoured at LINE;
+  - Backspace on `@` or `<` reverts and keeps the typed value;
+  - a keyword in the first box still answers the prompt; `x,y,z,w` is refused.
+- Owner-layer: Commands (`src/commands/CadDynInput.{hpp,cpp}`, `src/commands/CadCommands.cpp`),
+  UI (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-09-28) — D-2026-09-28-j, TASK-287.
+- Revisions: 2026-09-28 — proposed and accepted.
+
+### REQ-355 — A Modeling ribbon tab, with a pipe-size dropdown beside PIPERUN (GitHub issue #564 §8)
+
+- Purpose: issue #564 §8 — none of the 3D modelling or piping commands had a ribbon home; they were
+  command-line only.
+- Priority: must
+- Type: functional (UI)
+- Depends on: REQ-302 (the ribbon and its layout engine, ADR-053), REQ-313/314/315/317 (the solid
+  commands), REQ-323/331 (solid-edge FILLET / CHAMFER), REQ-060 / D-2026-09-28-a (3DMOVE /
+  3DROTATE / 3DSCALE), REQ-351 (MOVE / COPY / ARRAY on solids), REQ-345 (piping), REQ-353 (the
+  21-size NPS table).
+- Decision: D-2026-09-28-k.
+- Statement:
+  1. **A permanent `Modeling` tab** sits in the ribbon strip after `Survey`. It is a saved-tab slot
+     like the others (the contextual tabs renumber behind it; none of them is ever saved).
+  2. **Its sections**: Primitives (BOX, WEDGE, CONE, CYLINDER, SPHERE, TORUS, PYRAMID, POLYSOLID),
+     Create (EXTRUDE, REVOLVE, SWEEP, LOFT), Booleans (UNION, SUBTRACT, INTERSECT, SLICE), Edit
+     (FILLET, CHAMFER, SECTION, SECTIONPLANE), 3D Modify (3DMOVE, 3DROTATE, 3DSCALE, MOVE, COPY,
+     ARRAY) and Piping (PIPERUN with its size dropdown, PIPEFIT, PIPESPLIT, PIPEJOIN).
+  3. **A button runs its command exactly as typed**: it cancels any running command (a ribbon click
+     starts a new command, as in AutoCAD) and submits the command's name through the command line.
+     One table holds each button's command text, and the button and its test both read it. Every
+     listed command exists, so no button is a not-implemented placeholder.
+  4. **PIPEFIT's button opens a part-type menu** (the command requires a part type), and each item
+     submits `PIPEFIT <part type>`.
+  5. **The pipe-size dropdown lists all 21 NPS sizes** of REQ-353 and is bound to
+     `AppCommandState::pipeRunNominalSize` — the size PIPERUN remembers — so the dropdown and the
+     command-line prompt are one setting and each shows a change made in the other. It is disabled
+     while a run is being drawn (the size is already fixed for that run).
+  6. **The ribbon's PIPERUN asks neither question**: it starts at the dropdown's size with that
+     size's standard wall (schedule 40; STD for 22in) and goes straight to "start point"
+     (D-2026-09-28-k). Choosing a size in the dropdown is typing that size alone at the prompt: it
+     clears the pressure class, as a bare typed size does. **Typed PIPERUN is unchanged**:
+     it still asks the size (offering the current one, Enter to keep) and then the wall.
+  7. **The remembered size starts at 4in** in a new session instead of empty, so the dropdown always
+     shows a size and the button always works in one click; typed PIPERUN therefore offers `[4in]`
+     on its first use (D-2026-09-28-k).
+  8. The tab's content is model-space only, as the Survey tab's is; in paper space it is empty.
+  9. **Out of scope**: PRESSPULL, SECTIONCLIP and the other solid / piping commands the section does
+     not list; new icon artwork (the library icon set already has one for every button).
+- Acceptance:
+  - the strip shows `Modeling` with the six sections;
+  - every button's command text is a command the command line accepts, and running it from the
+    ribbon enters the same command state as typing it (a running command is cancelled first);
+  - the dropdown offers all 21 sizes; choosing one changes the size the next PIPERUN builds;
+  - the ribbon's PIPERUN goes straight to the start-point prompt at the dropdown's size and its
+    standard wall; typed PIPERUN still shows the current size and accepts a new one;
+  - a size typed at the command line shows in the dropdown, and vice versa;
+  - the ribbon is exercised in a Debug build (REQ-302 gotchas: deferred section closures capture by
+    value; `RibbonNyiButton` asserts a label).
+- Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/ModelingRibbon.hpp`), Commands
+  (`src/commands/CadCommands.{hpp,cpp}`)
+- Status: accepted (2026-09-28) — D-2026-09-28-k, TASK-288.
+- Revisions: 2026-09-28 — proposed and accepted. Same day, from code review on PR #579: the
+  dropdown clears the pressure class (it had kept it, so a 6in pick after a 2in CS300 run built
+  6in CS300 — a class never chosen at that size, and not what typing 6in does).
+
+### REQ-356 — CHPROP, MATCHPROP, LAYMCUR, a current colour and a ribbon colour dropdown (GitHub issue #575)
+
+- Purpose: issue #575 (split from #564 §6, D-2026-09-28-g) — the property commands a CAD user
+  reaches for (`CHPROP`, `MATCHPROP`, `LAYMCUR`) did not exist for any entity type, the ribbon's
+  "Match Properties" button said "not implemented yet", there was no ribbon colour control, and
+  there was no current colour: every new object was created `ByLayer`.
+- Priority: must
+- Type: functional
+- Depends on: REQ-352 (the layer / colour edit over every attribute-carrying type, one undo step,
+  and the ribbon Layers combo's selection rule), REQ-353 (pipe runs are stamped with their size's
+  colour), REQ-121 (the "Select objects, ENTER to continue" step), REQ-201.
+- Decision: D-2026-09-29-a.
+- Statement:
+  1. **`CHPROP`** acts on the selection held when it starts; with none it asks for objects (click or
+     window, Enter to continue). It then asks `Property to change [Color/LAyer/LType/LWeight]`
+     (the full word or the capitalised abbreviation), then the new value, applies it, and asks again;
+     Enter at that prompt ends it. Each applied value is **one undo step**, pushed only when something
+     changes, and the command reports how many objects changed and how many were skipped because the
+     property does not apply to them. Accepted values:
+     - Color: `ByLayer`, `ByBlock`, an index `1`..`255`, a colour name, or `#RRGGBB`;
+     - LAyer: a layer that exists in the drawing — an unknown name is refused (AutoCAD's rule; a
+       typo does not create a layer);
+     - LType: the linetypes the Properties panel offers (`ByLayer`, `ByBlock`, `Continuous`,
+       `DASHED`, `HIDDEN`, `CENTER`, `PHANTOM`, `DIVIDE`, `BORDER`);
+     - LWeight: `ByLayer` or a millimetre value from the Properties panel's lineweight list.
+  2. **`MATCHPROP`** asks for one source object — a held selection of exactly one object is the
+     source — and then for destination objects. **Each destination click or window applies at
+     once** (AutoCAD's behaviour), as one undo step: the source's layer and colour, and its linetype
+     and lineweight where both source and destination carry them (item 5). Enter or Esc ends it. The
+     ribbon's Match Properties button starts it.
+  3. **`LAYMCUR`** makes the layer of one picked object current — a held selection is used at once.
+     A selection whose objects sit on more than one layer is refused with a message and nothing
+     changes.
+  4. **A current colour** (`AppCommandState::currentColor`, default `ByLayer`) is stamped on every new
+     object that is stamped with the current layer, and is saved and reopened with the drawing exactly
+     as the current layer is. Objects that already take a colour of their own keep it: a new pipe run
+     takes its size's colour (REQ-353), a fitting on a run takes the run's (REQ-353 item 4), and the
+     WATERDROP path stays yellow.
+  5. **Which types take which property**: layer and colour apply to every type REQ-352 edits, solids
+     and pipe runs included. Linetype and lineweight apply to the types the Properties panel already
+     edits them on — line, circle, arc, ellipse, polyline, annotation (text / MTEXT / dimension) and
+     table — and every other type is skipped and counted (#564 §6: none on a solid body). The
+     Properties panel's linetype and lineweight edits go through the same command-layer edit and so
+     become one undo step each.
+  6. **A ribbon colour dropdown** sits under the Layers combo in the persistent Layers strip, with a
+     swatch, and follows REQ-352's rule: with objects selected it shows their colour ("(varies)"
+     when they differ) and a pick recolours them (one undo step), leaving the current colour alone;
+     with nothing selected it shows and sets the current colour. It offers `ByLayer`, `ByBlock`, the
+     seven standard colours and "More colors…" (the existing colour picker).
+  7. **Out of scope**: transparency, linetype scale and thickness; MATCHPROP's Settings dialog and
+     its special properties (text, dimension and hatch styles); paper-space objects (REQ-352's edit
+     covers model-space selections only); a current linetype / lineweight.
+- Acceptance:
+  - CHPROP changes the colour, layer, linetype and lineweight of a held selection, each as one undo
+    step, and reports the count; with nothing held it collects a window selection first;
+  - CHPROP colours a solid and a pipe run, and skips (and counts) them for linetype / lineweight;
+  - CHPROP refuses an unknown layer, an out-of-range index, an unknown linetype and a lineweight
+    not in the list, changing nothing;
+  - MATCHPROP copies layer, colour, linetype and lineweight from a line to another line, and layer
+    and colour onto a solid, one undo step per destination pick;
+  - LAYMCUR makes a picked solid's layer current, and refuses a selection on two layers;
+  - with the current colour set to red, a new line and a new solid are red; a new pipe run still
+    takes its size's colour; the current colour survives a save and reload;
+  - the ribbon colour pick recolours a selection without changing the current colour, and sets the
+    current colour when nothing is selected;
+  - the Properties panel's linetype edit is undone by one UNDO.
+- Owner-layer: Commands (`src/commands/CadCommands.{hpp,cpp}`), IO (`src/io/GsIo.cpp`), UI
+  (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-09-29) — D-2026-09-29-a, TASK-289.
+- Revisions: 2026-09-29 — proposed and accepted.
+
+### REQ-357 — Drawing Settings window: entry points, Units and Zone top section, per-drawing settings (GitHub issue #582, increment 1)
+
+- Purpose: issue #582 — a Civil 3D–style *Edit Drawing Settings* window where a drawing gets its
+  units, scale and (later increments) its coordinate system, transformation and object layers. This
+  increment builds the window, its entry points, the **Units and Zone** tab's top section, and the
+  per-drawing storage the later increments (REQ-358..REQ-362) add to.
+- Priority: should
+- Type: functional
+- Depends on: REQ-020 / REQ-022 (the drawing unit), REQ-107 (INSERT's unit scale factor),
+  REQ-308 (Start tab), REQ-084 (*not implemented yet*), REQ-175 / ADR-044 (DWG trailer).
+- Decision: D-2026-09-29-b, D-2026-09-29-c.
+- Statement:
+  1. **Entry points.** A `DRAWINGSETTINGS` command, with the alias `EDITDRAWINGSETTINGS`, and a
+     **File ▸ Drawing Settings…** menu item open the window. The menu item is disabled on the Start
+     tab exactly as Save is (REQ-308); the typed command on the Start tab is refused with a message
+     (REQ-201). The ribbon Palettes panel's Drawing Settings button (today "not implemented yet") opens it too.
+  2. **Window.** A modal window in GoSurvey's own dialog style (`BeginStyledDialog` + the product
+     accent frame, as What's New / Account Details), titled `Drawing Settings - <drawing name>`, with
+     three tabs — **Units and Zone**, **Transformation**, **Object Layers** — and **OK** (apply and
+     close), **Cancel** / Esc (discard, nothing changes) and **Apply** (apply, stay open). No Help
+     button. A tab whose requirement is not yet delivered shows its title greyed with a *not
+     implemented yet* tooltip (REQ-084). Civil 3D's Abbreviations and Ambient Settings tabs are out.
+  3. **Edits are staged.** The window edits a copy of the drawing's settings; only OK and Apply write
+     them to the drawing. A write that changes anything marks the drawing dirty and is **one undo
+     step**.
+  4. **Units and Zone — top section:**
+     - **Drawing units** ∈ {Unitless, Inches, Feet, Meters, Millimeters}. This **is**
+       `AppCommandState::drawingInsUnits` (REQ-022) — one value, never a second copy. The UNITS
+       dialog (REQ-020) gains Inches and Millimeters so both windows offer the same list. Changing it
+       is a relabel and moves no geometry (REQ-022). DXF writes `$INSUNITS` Inches=1, Millimeters=4.
+     - **Angular units** ∈ {Degrees, Radians, Grads} — a per-drawing value used by the angle fields
+       of this window (REQ-360) and written as the DWG/DXF `AUNITS` header when *Set drawing variables to match* is on. It does
+       **not** change REQ-021's app-wide angle display format, which stays a user preference.
+     - **Imperial to Metric conversion** ∈ {US Survey Foot (1 m = 39.37 in exactly), International
+       Foot (1 ft = 0.3048 m exactly)}, default US Survey Foot. It is the factor every feet↔meters
+       conversion in the drawing uses: INSERT's unit scale factor (`CadBlockInsertUnitsScale`, today a
+       fixed international 39.3700787 in/m) and the zone conversions of REQ-358/REQ-360. The factor
+       is computed in `double`.
+     - **Scale** **is** the drawing's existing plot scale, `AppCommandState::modelUnitsPerPlottedInch`
+       (model units per plotted inch) — the value the status-bar plot-scale dropdown shows and sets.
+       One value, never a second copy: changing it here does exactly what that dropdown does
+       (survey-point markers, labels and plotted text resize). Both controls offer one shared list,
+       chosen by the drawing unit — imperial `1" = 1'` … `1" = 500'` (the status bar's existing
+       sixteen); metric `1:1`, `1:10`, `1:20`, `1:50`, `1:100`, `1:200`, `1:250`, `1:500`, `1:1000`,
+       `1:2000`, `1:5000` for Meters (`1:N` = `0.0254·N` m per plotted inch) and Millimeters
+       (`25.4·N` mm) — plus **Custom**, which enables a **Custom scale** number of model units per
+       plotted inch (> 0; anything else is refused). The default stays `1" = 50'`.
+     - ☐ **Scale objects inserted from other drawings** (default on). Off → INSERT's unit scale factor
+       is 1 whatever the block's unit; on → today's behaviour.
+     - ☐ **Set drawing variables to match** (default on). On → DWG/DXF save writes `INSUNITS`,
+       `LUNITS` (2, decimal) and `AUNITS` (0 degrees, 3 radians, 2 grads) from these settings; off →
+       only `INSUNITS` is written, as today.
+  5. **Per drawing.** The settings live on the drawing: in `DrawingDocument` for tab isolation (the
+     same boundary as `cadPipeRuns`, so each tab keeps its own) and in the ADR-044 trailer JSON under
+     a `drawingSettings` object. A drawing without that object opens with the defaults above.
+- Acceptance:
+  - `DRAWINGSETTINGS`, `EDITDRAWINGSETTINGS`, File ▸ Drawing Settings… and the Palettes-panel button all
+    open the window; the menu item is disabled and the command refused on the Start tab;
+  - Cancel changes nothing; Apply changes the drawing and keeps the window open; OK applies and
+    closes; one UNDO restores the previous settings;
+  - changing Drawing units in this window shows the same value in UNITS and vice versa, and moves no
+    coordinate (a known line's endpoints are identical within REQ-101);
+  - with US Survey Foot a 1 m block inserted into a feet drawing scales by 3.280833333…; with
+    International Foot by 3.280839895…; with "Scale objects inserted…" off by 1;
+  - choosing `1" = 20'` in the window shows `1" = 20'` in the status-bar dropdown and vice versa;
+    a Custom scale of 0 or text is refused; every setting survives DWG save → close → reopen, and
+    two open drawings keep different settings when switching tabs;
+  - with "Set drawing variables to match" on, a saved DXF carries `$AUNITS` matching Angular units.
+- Owner-layer: Commands (`src/commands/CadCommands.{hpp,cpp}` — settings struct, apply + undo),
+  IO (`src/io/GsIo.cpp` trailer JSON, `src/io/DxfIo.cpp` / `LibreDwgCad.cpp` headers), UI
+  (`src/ui/` window, File menu, ribbon Palettes button).
+- Status: accepted (2026-09-29) — D-2026-09-29-b, TASK-290.
+- Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — Scale amended (D-2026-09-29-c): it is
+  the existing plot scale, not a second stored value.
+
+### REQ-358 — Coordinate-system zone from the CS-MAP catalogue; a drawing becomes geolocated (GitHub issue #582, increment 2)
+
+- Purpose: issue #582 — let a drawing carry a coordinate system (zone) chosen from the **complete**
+  CS-MAP catalogue, with the same codes and categories Civil 3D uses, so drawings exchanged with
+  Civil 3D keep their zone.
+- Priority: should
+- Type: functional
+- Depends on: REQ-357, REQ-300 (dependency), REQ-101, ADR-063.
+- Decision: D-2026-09-29-b.
+- Statement:
+  1. **CS-MAP is vendored** per ADR-063: `third_party/csmap/` holds its headers and a prebuilt
+     win-x64 `.lib` with `VENDORED.md` and the upstream `LICENSE`; the installer ships the compiled
+     CS-MAP dictionaries **and the United States horizontal datum-shift grid files** (NADCON,
+     HARN/HPGN, NSRS 2007, NSRS 2011, plus the VERTCON files CS-MAP's NADCON setup requires — public
+     domain), all committed under `third_party/csmap/` (D-2026-09-29-d), and the installer's licence
+     page carries CS-MAP's notice. Other countries' grids are not shipped: a datum shift that needs
+     one fails with a message (REQ-201). All CS-MAP calls go through one GoSurvey wrapper
+     (`src/geo/`); no other file includes a CS-MAP header.
+  2. **Zone group** on the Units and Zone tab:
+     - **Categories**: `No Datum, No Projection`, then `Lat Longs`, then **every** category in the
+       shipped dictionary, in the dictionary's order (Afghanistan … Zimbabwe, sub-categories such as
+       `USA, Texas` included). The list is read from the dictionary, never hard-coded.
+     - **Available coordinate systems**: every system in the selected category.
+     - Read-only details: **Selected coordinate system code** (e.g. `HARN/TX.TX-C`), **Description**,
+       **Projection** (CS-MAP projection key, e.g. `LM`), **Datum**. The code field is also typeable:
+       Enter or leaving the field with a known code selects its category and system; an unknown code
+       is refused with a message and the selection is unchanged.
+     - With `No Datum, No Projection` the details read `.`, `No Datum, No Projection`, `Unknown
+       projection`, `Unknown Datum`.
+  3. **Geolocated.** A drawing is *geolocated* exactly when its zone code is not empty (not `No
+     Datum, No Projection`). Choosing or changing a zone is a relabel: it moves no geometry.
+  4. **Grid and geographic coordinates.** A drawing point's **grid** coordinate is its world
+     coordinate (`local + worldDocumentOrigin`, in `double`, REQ-101), converted from the drawing unit
+     to the zone's unit with REQ-357's Imperial to Metric factor, then passed through REQ-360's
+     transformation when that is applied. Its **latitude/longitude** is CS-MAP's inverse projection
+     of the grid coordinate in the zone's own datum. Conversion to and from WGS 84 (`LL84`) uses
+     CS-MAP's datum path, including the shipped grid files.
+  5. **Stored** as the zone's CS-MAP code in the `drawingSettings` trailer object (REQ-357) and in
+     `DrawingDocument`. A code the installed dictionary does not know is kept, shown as
+     `<code> (unknown in this dictionary)`, and the drawing is still geolocated — nothing is silently
+     dropped (REQ-201).
+  6. **Missing dictionary.** If the dictionaries cannot be loaded, the Zone group is disabled with the
+     reason shown, and nothing else in the window is affected.
+- Acceptance:
+  - the Categories list equals the shipped dictionary's category list, with `No Datum, No
+    Projection` and `Lat Longs` first;
+  - `USA, Texas` lists every Texas system in the dictionary, including the NAD27, NAD83,
+    NAD83(HARN), NSRS 2007 and NSRS 2011 state-plane zones in Meter and US Foot;
+  - selecting `HARN/TX.TX-C` shows its description, `LM` and `HARN/TX`; typing `TX83-CF` selects its
+    category and system; typing `NOSUCH` is refused;
+  - a published NGS control point in Texas Central NAD83 (the test records the PID and datasheet
+    values) converts grid → lat/long and back within 0.001 ft and 0.00001″ of the datasheet;
+  - a NAD27 point converts to NAD83 through the shipped NADCON grid within NADCON's stated accuracy of
+    NGS's own NADCON output for the same point (recorded in the test);
+  - the zone survives DWG save → close → reopen; two tabs keep different zones; choosing a zone
+    moves no coordinate.
+- Owner-layer: new `src/geo/` (CS-MAP wrapper, pure, no UI), Commands, IO (trailer), UI (Zone
+  group), build (`third_party/csmap/`, `CMakeLists.txt`), installer (`installer/GoSurvey.iss`).
+- Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-d, TASK-291.
+- Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — item 1 narrowed (D-2026-09-29-d): the
+  data files are committed to the repository and only the US horizontal grids ship.
+
+### REQ-359 — Geolocation contextual ribbon tab (GitHub issue #582, increment 3)
+
+- Purpose: issue #582 — Civil 3D shows a **Geolocation** tab on a geolocated drawing; GoSurvey
+  should too, with the online-map controls present but deferred to issue #583.
+- Priority: should
+- Type: functional
+- Depends on: REQ-358, REQ-143 (contextual tab pattern), REQ-084.
+- Decision: D-2026-09-29-b.
+- Statement:
+  1. While the active drawing is geolocated (REQ-358 item 3), the ribbon gains a contextual
+     **Geolocation** tab. It is not a persisted prefs slot (as REQ-143). It does not steal focus from
+     a tab the user is on; it appears at the end of the strip.
+  2. **Location** panel:
+     - **Edit Location** — split button: the main action opens Drawing Settings on Units and Zone;
+       the second item, **Edit Geographic Marker**, re-picks the marker (item 4).
+     - **Reorient Marker** — picks a point then a north direction for the marker.
+     - **Remove Location** — asks for confirmation, then sets the zone to `No Datum, No Projection`
+       and clears the marker, as one undo step; the tab disappears.
+  3. **Tools** panel: **Mark Position** — split button: **Lat-Long** (type a latitude and longitude)
+     and **Point** (pick a point). Either places a **Position Marker** (D-2026-09-29-e): a GoSurvey
+     object of its own, on the current layer, drawn as a cross inside a circle at a fixed plotted
+     size, with its **own** multi-line (MTEXT) label. After placement the MTEXT editor opens on the
+     label, pre-filled with the point's latitude and longitude (REQ-358 item 4, in the zone's
+     datum); the text the user commits is the label. Marker and label are **one object**: select,
+     MOVE, COPY, ERASE and UNDO act on both; the node (Survey point) and Center object snaps
+     find the marker's centre; ROTATE,
+     SCALE, MIRROR, STRETCH and grips refuse it by name. It is saved with the drawing (ADR-044
+     trailer, per drawing tab) and is **also written into the DWG / DXF body** as a CIRCLE, two
+     LINEs and an MTEXT so other programs show it (as loose pieces). GoSurvey's own DWG reopen
+     reads the trailer, so the exported pieces are not imported twice.
+  4. **The geographic marker** is the drawing's geolocation reference — a design point in the drawing
+     and a north direction — drawn as a viewport overlay glyph, not an entity. By default it is the
+     drawing origin with grid north. It is stored with the zone (REQ-358 item 5) and is what REQ-362
+     reads from GEODATA's design point and north direction, and writes into it on DWG save (REQ-362
+     item 2, D-2026-09-30-d).
+  5. **Online Map** panel: a **Map** dropdown showing **Map Off** and a **Capture Area** button, both
+     disabled with a *not implemented yet* tooltip (REQ-084). They are delivered by issue #583:
+     REQ-363 (Map) and REQ-364 (Capture Area) replace this item as each is delivered.
+- Acceptance:
+  - assigning a zone shows the tab; Remove Location (confirmed) hides it, clears the zone, and one
+    UNDO brings both back; switching to a non-geolocated drawing tab hides it;
+  - Edit Location opens Drawing Settings on Units and Zone;
+  - Mark Position ▸ Lat-Long at the NGS point of REQ-358's test places a Position Marker at that
+    point's grid coordinate within 0.001 ft, and the MTEXT editor opens on its label pre-filled with
+    that latitude/longitude;
+  - a Position Marker selects, moves, copies and erases as one object with its label, undoes in one
+    step, snaps (Survey point / Center) at its centre, survives DWG save → close → reopen once (no duplicate), and
+    the saved DWG / DXF body holds its CIRCLE, LINEs and MTEXT;
+  - Map and Capture Area are visible, disabled, and show *not implemented yet* — until REQ-363 /
+    REQ-364 deliver them.
+- Owner-layer: UI (`src/ui/` ribbon tab + marker overlay), Commands (Remove Location, Mark Position,
+  marker pick).
+- Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-e, TASK-292.
+- Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — item 3 and its
+  acceptance amended (D-2026-09-29-e): Mark Position places a Position Marker object. 2026-09-29 —
+  "OSNAP Node" reworded: GoSurvey has no separate Node snap; its node snap is the Survey point snap.
+  2026-09-30 — item 5: the Map and Capture Area are delivered by REQ-363 / REQ-364 (D-2026-09-30-b).
+
+### REQ-360 — Transformation tab: local ↔ grid with scale factor, sea-level factor and rotation (GitHub issue #582, increment 4)
+
+- Purpose: issue #582 — relate a drawing's local (ground) coordinates to the zone's grid coordinates,
+  as Civil 3D's Transformation tab does.
+- Priority: should
+- Type: functional
+- Depends on: REQ-358, REQ-101, REQ-021 (angle entry convention).
+- Decision: D-2026-09-29-b.
+- Statement:
+  1. The tab shows the **Zone description** (read-only) and ☐ **Apply transform settings**; every
+     control below it is disabled until that is checked. With no zone, the line *Zone units are in
+     Unknown.* is shown and the checkbox is disabled.
+  2. **The transformation** (all in `double`, drawing unit converted to the zone unit by REQ-357's
+     factor):
+     `grid = G_ref + k · R(θ) · (L − L_ref)` and its exact inverse, where `L` is a world coordinate,
+     `L_ref`/`G_ref` the reference point's local and grid coordinates, `R(θ)` a rotation by θ, and
+     `k = k_grid · k_sea`.
+  3. ☐ **Apply sea level scale factor**: `k_sea = R / (R + h)` with **Elevation** `h` (drawing unit)
+     and **Spheroid radius** `R` (meters, default the zone datum ellipsoid's semi-major axis). Off →
+     `k_sea = 1`.
+  4. **Grid Scale Factor**: **Computation** ∈ {Reference Point, User Defined}. Reference Point →
+     `k_grid` is CS-MAP's point scale factor at `G_ref`; User Defined → typed (> 0).
+  5. **Reference point**: a pick button (a point, or a survey point, in the drawing) sets `L_ref`;
+     the readout shows *Point number* (survey point only), *Local Northing / Easting* and *Grid
+     Northing / Easting*, and the grid pair is typeable.
+  6. **Rotation**, one of:
+     - ◯ **Rotation point**: a second picked point with typed grid coordinates; θ is the difference
+       between its grid and local bearings from the reference point. Coincident points are refused;
+     - ◉ **Specify grid rotation angle**: **To north** (the angle from local north to grid north) or
+       **Azimuth** (a local azimuth and the grid azimuth it should become), each with a pick button;
+       angles are entered and shown in the drawing's Angular units (REQ-357).
+  7. When applied, every grid/lat-long computation (REQ-358 item 4, REQ-359 markers) uses it. It is
+     stored in `drawingSettings` and moves no geometry.
+- Acceptance:
+  - with the transform off, grid = world converted to zone units;
+  - a hand-computed case (reference point, k = 0.9999, θ = 1°) maps a local point to the expected
+    grid within 0.0001 ft and back to itself within 1e-9 relative;
+  - Reference Point computation returns CS-MAP's scale factor at the NGS test point within 1e-8 of
+    the datasheet's; `R = 20,906,000 ft`, `h = 1000 ft` gives `k_sea = 0.999952…`;
+  - a rotation point coincident with the reference point is refused;
+  - all settings survive DWG save → reopen; every control is disabled until Apply transform settings
+    is checked.
+- Owner-layer: `src/geo/` (pure transformation + scale factor), Commands, UI (tab), IO (trailer).
+- Status: accepted (2026-09-29) — D-2026-09-29-b, TASK-293.
+- Revisions: 2026-09-29 — proposed and accepted.
+
+### REQ-361 — Object Layers tab: per-object creation layers with NCS defaults (GitHub issue #582, increment 5)
+
+- Purpose: issue #582 — Civil 3D puts each new object on a layer set per drawing; today GoSurvey
+  puts every new object on the current layer (survey points imported from CSV on `0`).
+- Priority: should
+- Type: functional
+- Depends on: REQ-357, REQ-356 (current layer/colour stamping).
+- Decision: D-2026-09-29-b (user chose NCS-style defaults, a deliberate behaviour change);
+  D-2026-09-29-f (a fitting on a run keeps its run's layer).
+- Statement:
+  1. A grid with the columns **Object | Layer | Modifier | Value | Locked**, one row per GoSurvey
+     object type below, each row showing the ribbon icon of that type:
+
+     | Object | Default layer |
+     |---|---|
+     | Survey point | `V-NODE` |
+     | Survey point label | `V-NODE-TEXT` |
+     | TIN surface | `C-TOPO` |
+     | Feature line | `C-TOPO-FEAT` |
+     | Pipe run | `C-PIPE` |
+     | Pipe fitting | `C-PIPE-FITT` |
+     | Solid | `C-SOLID` |
+     | Table | `C-ANNO-TABL` |
+
+     A breakline is not a row: it designates an existing line or polyline and creates no object.
+     **Pipe fitting** means a pipe-catalogue part placed off any run; a fitting on a run keeps its
+     run's layer (REQ-353 item 4, D-2026-09-29-f).
+  2. **Layer**: a combo of the drawing's layers, or a typed new name. **Modifier** ∈ {None, Prefix,
+     Suffix}; **Value** is text, where each `*` is replaced by the new object's name (e.g. surface
+     `EG`, Suffix `-*` → `C-TOPO-EG`). An object with no name drops the `*`. **Locked** is a padlock
+     toggle.
+  3. **Every path that creates one of these objects** — command, dialog, palette, CSV/point import —
+     places it on the resolved layer, creating the layer (default properties) if it does not exist.
+     The new layer creation and the object are one undo step. REQ-356's current colour still applies.
+  4. A creation dialog that offers a layer choice defaults to the resolved layer; with **Locked** on,
+     that choice is read-only.
+  5. The info line *"Enter a single \* (asterisk) in the value field to include the object name as
+     the prefix or suffix value in a layer name."* is shown. ☐ **Immediate and independent layer
+     on/off control of display components** is shown disabled with *not implemented yet* (REQ-084).
+  6. The table is stored in `drawingSettings`. A drawing without it opens with the defaults above —
+     including existing drawings, whose new objects therefore start landing on these layers.
+- Acceptance:
+  - in a new drawing, a new survey point lands on `V-NODE`, a new TIN surface `EG` with Suffix `-*`
+    on `C-TOPO-EG`, a new pipe run on `C-PIPE` — each layer created if missing, one UNDO removing
+    object and layer;
+  - CSV-imported survey points land on the Survey point row's layer;
+  - a Locked row makes the creation dialog's layer choice read-only;
+  - the table survives DWG save → reopen and differs per drawing tab.
+- Owner-layer: Commands (a single resolve-creation-layer function used by every creation path), UI
+  (tab), IO (trailer).
+- Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-f, TASK-294.
+- Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — Pipe fitting row narrowed to parts placed off any run (D-2026-09-29-f): REQ-353 item 4 and this row both claimed a fitting on a run.
+
+### REQ-362 — GEODATA: read Civil 3D's / AutoCAD's geolocation (GitHub issue #582, increment 6)
+
+- Purpose: issue #582 open question 1, decided "full two-way" (D-2026-09-29-b), narrowed to READ by
+  D-2026-09-29-g after the feasibility spike failed: a Civil 3D / AutoCAD drawing opened in GoSurvey
+  keeps its location. Writing GEODATA is item 2 (D-2026-09-30-d).
+- Priority: should
+- Type: interop
+- Depends on: REQ-358, REQ-359 item 4, REQ-360, REQ-170 / REQ-175 / ADR-041 / ADR-044.
+- Decision: D-2026-09-29-b; D-2026-09-29-g (read now, write later); D-2026-09-30-a (trailer clause).
+- Statement:
+  1. **Read.** Opening a DWG that contains an AutoCAD `GEODATA` object (model space's extension
+     dictionary, `ACAD_GEOGRAPHICDATA`) and **no GoSurvey trailer** sets:
+     - the **geographic marker** (REQ-359 item 4) from its design point (WCS, drawing units) and its
+       north direction (degrees counter-clockwise from +X);
+     - the **zone** from its coordinate-system definition when that names a coordinate system: the
+       definition itself when it is a bare code, else the `id` of its first coordinate-system
+       element. A named code the dictionary does not know follows REQ-358 item 5 (kept verbatim).
+       A GEODATA with no definition leaves the drawing with no zone, and the log says so (REQ-201) —
+       Civil 3D keeps its zone elsewhere (TASK-295 finding 2);
+     - REQ-360's **scale settings**, stored with *Apply transform settings* left off for the user to
+       review: scale estimation "user specified" → User Defined with its factor, "grid scale at
+       reference point" → Reference Point; sea level correction, elevation and spheroid radius; the
+       reference point = the design point, with its grid coordinate when the zone is known.
+     A GoSurvey DWG (with its trailer) opens from the trailer as before (ADR-044). GoSurvey writes
+     the trailer and the GEODATA (item 2) from the same drawing state, so the trailer is the one read;
+     AutoCAD drops the trailer when it re-saves a file, and GoSurvey then reads that file's GEODATA.
+  2. **Write** (D-2026-09-30-d). Saving a drawing that has
+     **both** a geographic marker (REQ-359 item 4) **and** a zone (REQ-358) writes one `GEODATA`
+     object (class `AcDbGeoData`) on model space's extension dictionary under
+     `ACAD_GEOGRAPHICDATA`, in the R2000 file (D-2026-09-30-c), carrying:
+     - the **design point** = the marker (WCS, drawing units);
+     - the **reference point** = the marker's latitude / longitude, computed from the zone through
+       `src/geo/` (CS-MAP);
+     - the **north direction** = the marker's north, and the horizontal **unit** = the drawing unit;
+     - the **coordinate-system definition** = the zone code (e.g. `TX83-CF`);
+     - REQ-360's **scale settings** (scale estimation, user factor, sea-level correction and
+       elevation, spheroid radius).
+     A drawing with no marker, or with a marker but no zone, writes no GEODATA; the save log says
+     which and why (REQ-201). GoSurvey writes no geo mesh.
+  3. **Feasibility result.** TASK-295 (2026-09-29) failed on issue #590. Re-run 2026-09-30 (TASK-298
+     follow-up), after #590 was fixed:
+     - LibreDWG 0.13.4's R2000 (class version 1) GEODATA layout has **one extra bit** in its Civil 3D
+       block (a second `unknown_b` after `zero2`). It therefore misreads AutoCAD's R2000 GEODATA, and
+       AutoCAD refuses a file holding one LibreDWG wrote (`eDwgCRCDoesNotMatch`).
+     - With that bit removed, AutoCAD 2027 opens the file and reads back the design point, reference
+       point, north, units, scale estimation and coordinate-system definition, and adopts the zone as
+       `CGEOCS`.
+     - R2000 stores the north direction as an angle in radians (from +Y), three times. It stores no
+       vertical unit; AutoCAD derives one.
+     - AutoCAD reports coordinate type 1 (local grid) for such a GEODATA, where its own R2000 copy of
+       the Civil 3D sample reports 2 (projected grid) from identical GEODATA fields. The source of
+       AutoCAD's value is still to be found; the implementing task investigates it and reports back
+       if it cannot be matched. *TASK-300 (2026-09-30):* the GEODATA GoSurvey's save writes for a
+       marker inside its zone (`TX83-CF`, NGS AG9976) reads back as coordinate type **2**. The spike's
+       type 1 came from a reference point south of the Texas Central zone.
+- Acceptance:
+  - `samples/duke-main-clean-r2018.dwg` (Civil 3D, GEODATA with no coordinate-system definition):
+    opening it sets the marker to design point (1846238.730, 13629548.130) within REQ-101 and north
+    to its direction (≈ 89.812°), Reference Point scale estimation, no zone, and the log says the
+    GEODATA names no coordinate system;
+  - a GEODATA naming a dictionary code (bare, or as the `id` of an XML definition) sets that zone and
+    the reference point's grid coordinate; an unknown code is kept verbatim;
+  - a GoSurvey DWG with a trailer opens from the trailer, unchanged;
+  - a DWG without GEODATA opens as before;
+  - *(write)* a drawing in `TX83-CF` with a marker, saved as DWG, opens in AutoCAD 2027
+    with no error. Its GEODATA reads back: the design point = the marker within REQ-101; the
+    reference point within 1e-7° of CS-MAP's latitude / longitude for the marker; north within
+    0.001°; the definition `TX83-CF`; and `CGEOCS` = `TX83-CF`. This is an `accoreconsole` check,
+    recorded in the task;
+  - *(write)* the same file with its trailer removed reopens in GoSurvey with the zone,
+    marker, north and scale settings from GEODATA alone, within REQ-101 (automated);
+  - *(write)* a drawing with no marker, or with a marker but no zone, writes no GEODATA,
+    and the log says why;
+  - *(write)* a small R2000 fixture that AutoCAD saved with a GEODATA reads with the values
+    AutoCAD reports (guards the corrected LibreDWG layout);
+  - *(write)* opening the file in Civil 3D shows Texas Central NAD83 US Foot with the marker
+    at the same point. Manual, by the user: Civil 3D is not on the build machine.
+- Owner-layer: IO (`src/io/LibreDwgCad.cpp`), Commands (applying the read values), `src/geo/`;
+  the in-tree LibreDWG (ADR-041 (h)) for the layout fix.
+- Status: accepted (2026-09-29) — D-2026-09-29-b, D-2026-09-29-g, D-2026-09-30-a, TASK-295. Item 2
+  (write) accepted 2026-09-30 (D-2026-09-30-d).
+- Revisions: 2026-09-29 — proposed and accepted. 2026-09-29 — narrowed to READ (D-2026-09-29-g): the
+  feasibility spike did not prove AutoCAD reads a GEODATA GoSurvey writes; write deferred to #590.
+  2026-09-30 — the trailer-vs-GEODATA clause replaced (D-2026-09-30-a): the two cannot meet in one file.
+  2026-09-30 — write re-proposed and accepted (D-2026-09-30-d) after the re-run spike succeeded with a patched
+  LibreDWG; the trailer clause of item 1 updated, since GoSurvey now writes both.
+
+### REQ-363 — Online base map: USGS maps under model space (GitHub issue #583, increment 1)
+
+- Purpose: issue #583 — a geolocated drawing can show an aerial or topographic map under its
+  geometry, lined up with the drawing's own coordinates, as Civil 3D's Geolocation ▸ Map does.
+- Priority: should
+- Type: functional
+- Depends on: REQ-358 (zone), REQ-359 (Geolocation tab), REQ-360 (transformation), REQ-100, REQ-101,
+  REQ-201, REQ-300.
+- Decision: D-2026-09-30-b (USGS only; Esri and Bing not offered; split into REQ-363 / REQ-364).
+- Statement:
+  1. **Map dropdown** (Geolocation tab ▸ Online Map, replacing REQ-359 item 5's disabled one). Items,
+     each with a small thumbnail: **USGS Imagery**, **USGS Imagery Topo**, **USGS Topo**, a separator,
+     **Map Off**. The button shows the current choice; the default is **Map Off**. The thumbnails are
+     images shipped with GoSurvey, not downloaded. Esri and Bing are not offered (D-2026-09-30-b).
+  2. **Source.** USGS The National Map tile services (`basemap.nationalmap.gov`, services
+     `USGSImageryOnly`, `USGSImageryTopo`, `USGSTopo`): public domain, no key, no account. They serve
+     256-pixel Web Mercator tiles at levels 0-16 (about 2 m per pixel at level 16) and only cover the
+     United States. The level is the one whose pixel is nearest the screen pixel, capped at 16;
+     zoomed in further, level-16 tiles are shown stretched. At most 64 tiles are drawn for a view; a
+     view that would need more uses a coarser level.
+  3. **Placement.** Each tile is placed by converting points across it (at least a 4 × 4 grid of
+     cells) from WGS 84 latitude/longitude into the drawing: to the zone's datum (CS-MAP datum path,
+     REQ-358), to the zone's grid, through the REQ-360 transformation when it is applied, to local
+     drawing coordinates (REQ-101 local-storage invariant). The tile is drawn on the world XY plane
+     (Z = 0), opaque, **under** PDF underlays and all model-space geometry. It is not an object: it
+     cannot be selected or snapped to, and it is on no layer.
+  4. **Views.** Model space only. In an orbited view the map still lies on Z = 0, and the tiles
+     loaded are those a plan view at the same centre and zoom would show. Paper-space viewports,
+     plotting and PDF / image export do not show it (out of scope for this increment).
+  5. **Never blocks a frame (REQ-100).** Tiles are fetched on a background thread through the
+     existing WinHTTP `HttpFetch` and decoded there with the vendored `stb_image`. The UI thread
+     uploads at most a few tiles to the GPU per frame. A tile's placement is computed once when it
+     arrives and then kept.
+  6. **Disk cache.** Tiles are cached under the user's data folder, per map and tile. A cached tile is
+     shown without any network request. The cache is kept under 500 MB by deleting the least recently
+     used tiles when GoSurvey starts.
+  7. **Failure (REQ-201).** With no internet, a timeout or a server error, the map shows only cached
+     tiles, and the command line prints **one** message naming the reason (*Online map: USGS could
+     not be reached — …; showing cached tiles only.*). It does not repeat until a fetch has succeeded
+     again. A place USGS has no tiles for prints once *Online map: USGS has no map at this location.*
+     A zone CS-MAP cannot convert prints once and draws no map. Never a stall or a crash.
+  8. **Per drawing.** The choice is stored in `drawingSettings` (ADR-044 trailer). Each drawing tab
+     has its own, and changing it is one undo step. **Map Off draws nothing and makes no request.**
+     Remove Location (REQ-359 item 2) also turns the map off, in the same undo step.
+  9. **Attribution.** While map tiles are drawn, the viewport's lower-right corner shows
+     *Map: USGS The National Map*.
+- Acceptance:
+  - the dropdown lists the four items with thumbnails, and the button shows the choice; the choice
+    survives DWG save → reopen, differs per drawing tab, and UNDO restores the previous one;
+  - with Map Off, or with the drawing not geolocated, no tile request is made;
+  - on a drawing whose zone holds the NGS point of REQ-358's test, the tile pixel containing that
+    point's WGS 84 latitude/longitude is placed within one level-16 pixel (≈ 2 m) of the point's
+    local coordinate, both with the transformation off and with an applied REQ-360 transformation
+    (k ≠ 1, θ ≠ 0);
+  - with the fetcher failing, no stall or crash occurs, cached tiles still draw, and exactly one
+    message is printed until a fetch succeeds;
+  - a tile already in the disk cache draws with the network unavailable;
+  - panning and orbiting a full-screen view with USGS Imagery on, while tiles stream in, keeps p95
+    frame time within REQ-100's 16 ms on the reference machine (PERFHUD);
+  - the attribution line is shown exactly while tiles are drawn.
+- Owner-layer: `src/geo/` (Web Mercator tile maths and tile-point placement, pure), `src/platform/`
+  (tile fetch + disk cache worker), `src/render/` (tile pass), Commands (map choice, undo), UI
+  (dropdown, attribution), IO (trailer).
+- Status: accepted (2026-09-30) — D-2026-09-30-b, ADR-064, TASK-296.
+- Revisions: 2026-09-30 — proposed and accepted.
+
+### REQ-364 — Capture Area: keep a piece of the online map inside the drawing (GitHub issue #583, increment 2)
+
+- Purpose: issue #583 — keep the map of a job site with the drawing so it still shows offline.
+- Priority: should
+- Type: functional
+- Depends on: REQ-363, ADR-044.
+- Decision: D-2026-09-30-b (the captured map is stored inside the drawing, not as an external file).
+- Statement:
+  1. **Capture Area** (Online Map panel) is a split button: **Capture Area** (the main action, the
+     visible area), **Pick Area** (two corners), and **Remove Captured Areas**. Capture Area and Pick
+     Area are disabled with Map Off; Remove Captured Areas is disabled when there is nothing to remove.
+  2. **Capturing** copies the current map's tiles covering the area, at the level being displayed,
+     into the drawing. The tiles' original image bytes are kept as downloaded, with no re-encoding.
+     Tiles not yet downloaded are fetched first, in the background (REQ-363 item 5), and the prompt
+     shows *Capturing map… n of m tiles*. Esc cancels. A failed fetch cancels the capture, stores
+     nothing and prints why (REQ-201). A capture needing more than 256 tiles is refused: *Zoom in or
+     pick a smaller area.*
+  3. **Stored inside the drawing** (ADR-044 trailer), never as a separate file. AutoCAD / Civil 3D
+     does not show it.
+  4. **Drawn** exactly as REQ-363 items 3 and 4 place tiles, above the live map and under PDF
+     underlays and geometry. It draws with Map Off and with no network. The REQ-363 item 9
+     attribution is shown while a captured area is drawn.
+  5. Each capture, and Remove Captured Areas, is one undo step. Captured areas are not objects: they
+     cannot be selected, and only Remove Captured Areas deletes them. They survive DWG save → reopen
+     and belong to their own drawing tab.
+- Acceptance:
+  - Capture Area stores the tiles of the visible area; after DWG save → close → reopen with the
+    network unavailable and Map Off, the captured area draws in the same place;
+  - Pick Area stores only the tiles covering the picked rectangle;
+  - a capture needing more than 256 tiles is refused, and a failed fetch stores nothing, each with a
+    message;
+  - UNDO removes a capture, and Remove Captured Areas removes all of them in one undo step;
+  - Capture Area and Pick Area are disabled with Map Off.
+- Owner-layer: Commands (capture job, remove, undo), UI (split button, prompt), IO (trailer),
+  `src/render/` (the REQ-363 tile pass).
+- Status: accepted (2026-09-30) — D-2026-09-30-b, ADR-064, TASK-297.
+- Revisions: 2026-09-30 — proposed and accepted.
+
+### REQ-365 — DWG export writes survey points as a visible block insert (GitHub issue #605)
+
+- Purpose: issue #605 — a GoSurvey DWG opened in AutoCAD or Civil 3D showed no survey points at
+  all; `st.surveyPoints` had no DWG writer.
+- Priority: should
+- Type: functional
+- Decision: D-2026-09-30-f (block-with-attributes representation, not POINT + MTEXT; two
+  attributes, not three, per the LibreDWG crash found while implementing this).
+- Statement: DWG export writes one shared block definition, `GOSURVEY_POINT` (a small marker
+  circle plus two attribute tags, `NUMBER` and `DESCRIPTION`, positioned beside the marker — the
+  Civil 3D/Carlson PNEZD convention), and one `INSERT` of it per survey point, placed at the
+  point's world coordinate (REQ-101 double precision) with its own Z as the point's elevation.
+  Each `INSERT` carries two `ATTRIB`s filled with the point's id and description (falling back to
+  `rawDescription` when `description` is empty). This is for **other programs only** — GoSurvey
+  reopening its own DWG prefers the lossless ADR-044 trailer (`DwgIo.cpp`) over these entities, so
+  nothing here needs to round-trip through GoSurvey's own importer, and no GOSURVEY XDATA identity
+  is written on them.
+- Acceptance: a drawing with N survey points writes N `INSERT`s of the `GOSURVEY_POINT` block at
+  the right world coordinates, each with `NUMBER` and `DESCRIPTION` attributes matching the point;
+  the DWG export loss summary (REQ-170 / issue #614) no longer lists survey points as dropped;
+  GoSurvey reopening its own saved file recovers all points unchanged, via the trailer.
+- Owner-layer: IO (`src/io/LibreDwgCad.cpp`)
+- Status: accepted
+- Revisions: 2026-09-30 — initial (resolves issue #605; D-2026-09-30-f).
+
+### REQ-366 — DWG save/open writes and reads native DIMENSION objects (GitHub issue #607)
+
+- Purpose: issue #607 — GoSurvey's three dimension kinds (`CadAnnotation::Kind::DimAligned` /
+  `DimLinear` / `DimAngular`) are dropped both ways on DWG: the save writes nothing for them
+  (`LibreDwgCad.cpp` writes only `Text`/`Mtext`), and the open skips every AutoCAD `DIMENSION`
+  entity. REQ-201's save/open loss summary already mentions dimensions without counting them.
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-01-c (native objects, not an explode-to-lines fallback; explicitly
+  independent of REQ-111/associative dimensions).
+- Statement:
+  1. **Save.** Writes one `DIMSTYLE` per distinct `DimensionStyle` used by a saved dimension
+     (named from `DimensionStyle::name`; a collision is disambiguated by appending `_2`, `_3`, …),
+     plus one `DIMENSION_ALIGNED` for each `Kind::DimAligned`, one `DIMENSION_LINEAR` for each
+     `Kind::DimLinear`, and one `DIMENSION_ANG3PT` for each `Kind::DimAngular`, using
+     `dwg_add_DIMENSION_*` (LibreDWG, in-tree per D-2026-09-30-d). Definition points come from the
+     annotation's existing `dimExt1`/`dimExt2`/`dimAngVertex`/`dimSignedOffset` fields (the same
+     geometry `CadDimStroke` already strokes for the viewport/PDF/DXF paths) — no new geometry
+     model. Each DIMENSION also gets the anonymous `*D` block AutoCAD expects, holding the same
+     drawn lines/arrows/text `CadDimBuildWorldStrokes` produces, so a reader that does not
+     regenerate dimensions on open still shows the correct picture.
+  2. **DIMSTYLE field mapping** — only the fields `DimensionStyle.hpp` actually stores; every other
+     DIMSTYLE field is left at AutoCAD's own stock `Standard` values:
+     | GoSurvey (`DimensionStyle`) | DWG DIMSTYLE field |
+     |---|---|
+     | `textSizeInches` | `DIMTXT` |
+     | `arrowSizeInches` | `DIMASZ` |
+     | `arrowType` (`ClosedFilled`/`ClosedBlank`/`Tick`/`Dot`/`Open`/`None`) | `DIMBLK` (arrow block name; `None` sets `DIMSE1`/`DIMSE2`-style suppression is NOT implied — only the block choice maps) |
+     | `unitPrecision` | `DIMDEC` |
+     | `dimLineColor` | `DIMCLRD` |
+     | `extLineColor` | `DIMCLRE` |
+     | `textColor` | `DIMCLRT` |
+
+     `arrowColor` is not separately representable in DIMSTYLE (AutoCAD ties arrow colour to
+     `DIMCLRD`) and is not mapped — the dimension line colour is used for both. `unitFormat`
+     (`Architectural`/`Engineering`/`Fractional`) and `unitScale` are **not mapped** — GoSurvey's
+     own formatter is decimal-only today (`FormatLinearDim`), so mapping them would assert a
+     fidelity the app does not have; `DIMLUNIT` is left at AutoCAD's default.
+  3. **Open.** An AutoCAD `DIMENSION` whose subtype is Aligned, Linear (rotated or orthogonal), or
+     3-point Angular is read back into the matching `CadAnnotation::Kind`, its definition points and
+     measured value recovered from the DIMENSION's own group codes (not the `*D` block). A
+     DIMENSION of any other subtype (Radius, Diameter, Ordinate, 2-line Angular) is **not** mapped
+     to a GoSurvey dimension kind; its `*D` block's drawn geometry (lines/arcs/text) is kept as
+     plain entities, as any other block insert's content would be, and the subtype is named once in
+     the REQ-201 save/open log rather than silently dropped.
+  4. This requirement changes only the DWG **file representation**. GoSurvey's own dimensioning
+     model, editing commands, and rendering (`CadDimStroke`, `DimensionStyle`) are unchanged and do
+     not depend on REQ-111 (associative dimensions), which remains unaccepted.
+- Acceptance:
+  - one `DimAligned`, one `DimLinear`, and one `DimAngular` dimension survive save → open in
+    AutoCAD (each recognised as its correct DIMENSION subtype, correct definition points, correct
+    measured value shown) → reopen in GoSurvey (same kind, geometry and style);
+  - the DWG save/open log (REQ-201) counts dimensions written/read instead of silently omitting
+    them;
+  - a DWG containing a Radius dimension opens without crashing or dropping data: its `*D` block
+    geometry appears as plain entities and the log names one skipped Radius dimension.
+- Owner-layer: IO (`src/io/LibreDwgCad.cpp`)
+- Status: accepted
+- Revisions: 2026-10-01 — initial (resolves SPEC GAP on issue #607; D-2026-10-01-c).
+
+### REQ-367 — Multileaders: domain storage and DWG round trip (GitHub issue #619)
+
+- Purpose: issue #619 — AutoCAD/Civil 3D drawings use `MULTILEADER` callouts; GoSurvey skipped them.
+  v1 delivers storage, persistence, import, and export so foreign drawings show callouts and GoSurvey
+  can round-trip them; the interactive `MLEADER` command and native `MULTILEADER` write at R2010+ are
+  follow-ups (TASK-305).
+- Priority: should
+- Type: interop (+ domain)
+- Decision: D-2026-10-01-g (superseded for R2010+ save by D-2026-10-01-h — native `MULTILEADER` export).
+- Statement:
+  1. **Domain:** `CadMultileader` holds a leader path (local XYZ triplets) and an embedded `CadAnnotation`
+     (`Kind::Mtext`) for the landing text. Parallel `cadMultileaderAttrs` like other entity stores.
+  2. **Persistence:** `.gs` / ADR-044 trailer arrays `multileaders` / `multileaderAttrs` (additive).
+  3. **Open:** a decoded `MULTILEADER` with **mtext** content imports into `CadMultileader`. Block-content
+     multileaders are named once in the REQ-201 log, not silently dropped. Legacy `LEADER` import unchanged.
+  4. **Save:** when the chosen DWG version is **R2010 or newer**, each multileader writes as a native
+     `MULTILEADER` linked to a **Standard** `MLEADERSTYLE` (vendored `dwg_add_MULTILEADER` /
+     `dwg_add_MLEADERSTYLE`). Older saves still use associated `LEADER` + `MTEXT` (or segment `LINE`s
+     if `dwg_add_LEADER` fails). Custom multileader styles in the UI are not editable yet.
+  5. **Display (v1):** leader segments and label render in the viewport like other model annotations.
+- Acceptance:
+  - a synthetic multileader with two path points and text survives Export DWG (R2018) → Import via
+    `ImportLibreCadFile` with the same path point count and text; the saved R2018 file contains a
+    `MULTILEADER` object (not only `LEADER` + `MTEXT`);
+  - a DWG containing only block-content multileaders logs the skip reason;
+  - multileaders persist through `.gs` save/load when present.
+- Owner-layer: Domain, IO, UI (command later)
+- Status: accepted
+- Revisions: 2026-10-01 — initial (issue #619; D-2026-10-01-g). 2026-10-01 — R2010+ native
+  `MULTILEADER` export (D-2026-10-01-h).
+
+### REQ-368 — Live fields on TEXT/MTEXT and DWG field codes (GitHub issue #617)
+
+- Purpose: issue #617 — AutoCAD-style **fields**: text that updates from geometry or drawing
+  metadata (polyline area/length, survey point coordinates, filename, date, layout tab name) and
+  round-trips through `.gs` and DWG where the format allows.
+- Priority: should
+- Type: functional + interop
+- Decision: D-2026-10-02-a (inline `%<…>%` wires in annotation `text`; native `FIELD`/`FIELDLIST`
+  on R2004+ DWG export via hand-built AcDbField objects — issue #617 / D-2026-10-02-b).
+- Statement:
+  1. **Storage.** Field definitions live in the annotation's existing `text` string as AutoCAD-style
+     inline codes. GoSurvey-native bindings use `%<\GoSurvey Ent <id> Prop …>%` or
+     `%<\GoSurvey Point <n> Prop …>%`; document variables use `%<\AcVar …>%`. The wire string is what
+     `.gs` saves and what R2004+ DWG export writes into TEXT/MTEXT.
+  2. **Evaluation.** Before viewport draw and on R2000 DWG export, codes evaluate to their current
+     values. Supported bindings: closed polyline **Area** and path **Length** (bulge-aware);
+     circle **Area** and **Circumference**; survey point **Number**, **Easting**, **Northing**,
+     **Elevation**; document **Filename**, **Date**, **LayoutName**.
+  3. **Update.** When a referenced entity or document path/layout changes, the displayed value
+     updates on the next frame without an edit command.
+  4. **UI.** REQ-051's MTEXT toolbar **Insert field** control is enabled: with no selection it inserts
+     the drawing filename; with a single polyline or circle selected it inserts that entity's area field.
+  5. **DWG.** Import keeps TEXT/MTEXT strings as read (including foreign field codes). Export at
+     **R2004+** writes native **`FIELD`** objects (with **`FIELDLIST`** in the NOD, `_FldIdx` MTEXT
+     wires, and reactors on hosts) for GoSurvey entity and **AcVar** bindings; **AcObjProp** codes
+     reference exported geometry handles. Export at **R2000** substitutes evaluated plain text (no
+     `FIELD` objects — AutoCAD 2000 format).
+  6. **Out of scope:** Civil 3D sheet-set / view fields (`AcSm`, `ViewType`), full AutoCAD field
+     editor parity, and nested Civil `AcExpr` trees beyond minimal `childval` checksum entries.
+- Acceptance:
+  - a closed polyline with an area field in MTEXT shows the correct area and updates when a vertex
+    moves;
+  - `.gs` save → load preserves the `%<…>%` wire unchanged;
+  - DWG export R2004+ preserves the wire; R2000 export shows evaluated numbers with no `%<` markers;
+  - `CadFieldTests` green;
+  - REQ-201 no longer lists "fields" as an untracked #601 gap for TEXT/MTEXT hosts;
+  - R2004+ DWG export of a polyline area field in MTEXT creates at least one `FIELD` and a
+    `FIELDLIST` (`LibreDwgCadTests` issue #617 case).
+- Owner-layer: Domain/Commands (`CadField`), UI (MTEXT toolbar), IO (`LibreDwgCad.cpp`)
+- Status: accepted
+- Revisions: 2026-10-02 — initial (closes SPEC GAP on issue #617; D-2026-10-02-a).
+
+### REQ-369 — AutoCAD dynamic blocks: parameters, visibility, grips, and DWG round trip (GitHub issue #618)
+
+- Purpose: issue #618 — **dynamic blocks** (stretch, flip, visibility states, lookup tables) so one
+  block definition covers many sizes/states, AutoCAD dynamic blocks open with their current geometry
+  intact, and edits round-trip through `.gs` and DWG where LibreDWG allows.
+- Priority: should
+- Type: functional + interop
+- Decision: D-2026-10-02-b (moves dynamic blocks off roadmap Someday; amends REQ-107's out-of-scope
+  note; phased delivery — increment 1 lands first in TASK-618).
+- Depends on: REQ-107 (blocks/INSERT), REQ-170 / REQ-175 (DWG document), issue #606 (named BLOCK/INSERT
+  fidelity). R2004+ objects (`ACAD_EVALUATION_GRAPH`, many action classes) follow #600's export path
+  when a slice needs them.
+- Statement:
+  1. **Increment 1 — anonymous instance fidelity (R2000+).** A model-space INSERT that references an
+     AutoCAD dynamic-block anonymous block (`*U…`) imports as a real `CadBlockRef` to that `*U`
+     definition (evaluated geometry), not as exploded loose entities. DWG export writes the `*U`
+     BLOCK/ENDBLK and INSERT with the same transform; reopen in GoSurvey preserves one ref, not
+     model-space lines. Anonymous defs are hidden from the block library browser.
+  2. **Increment 2 — foreign dynamic-block display.** Opening a DWG from AutoCAD/Civil 3D shows each
+     dynamic insert in its **current** visibility/size state (the `*U` geometry), even when GoSurvey
+     does not yet evaluate parameters locally.
+  3. **Increment 3 — GoSurvey-authored dynamics → DWG (R2004+).** Block definitions authored with
+     BEDIT `BPARAM` / `BACTION` / `BVISIBILITY` export native dynamic-block objects
+     (`BLOCKLINEARPARAMETER`, `BLOCKSTRETCHACTION`, `BLOCKVISIBILITYPARAMETER`, …) and an
+     `ACAD_EVALUATION_GRAPH` sufficient for AutoCAD to treat the block as dynamic again.
+  4. **Increment 4 — import evaluation + grips.** Import reads parameter values and visibility state
+     from foreign DWGs where LibreDWG decodes them; placed inserts expose grips (`CadBlockArmDynGrip`)
+     that edit parameters and re-evaluate actions using GoSurvey's existing parameter/action model
+     (`CadBlockParameter`, `CadBlockAction`).
+  5. **Increment 5 — full round trip.** Save → AutoCAD → Save → GoSurvey preserves parameter values,
+     visibility, and geometry for a representative test set (linear stretch, flip, visibility lookup).
+     `#614` loss summary names any dynamic-block class still dropped or degraded.
+  6. **Out of scope:** block-library browser (still roadmap Someday), LISP-driven dynamic block
+     creation in AutoCAD, and parameters LibreDWG marks DEBUGGING when no stable decode exists —
+     those are logged per REQ-201 rather than guessed.
+- Acceptance:
+  - **(Inc 1)** `LibreDwgCadTests` issue #618 cases pass: `*U` INSERT export/import keeps
+    `cadBlockRefs` and empty model-space lines; foreign `*U` DWG imports as one ref.
+  - **(Inc 2)** `LibreDwgCadTests` / `CadBlockTests` tag `issue618`/`inc2`: viewport collection uses
+    baked `*U` geometry (no GoSurvey action re-evaluation); foreign golden DWG shows stretched length
+    from `*U`, not the named definition's default size; INSERTs aimed at a dynamic **definition**
+    block are skipped with a logged reason rather than exploded default geometry.
+  - **(Inc 3)** `LibreDwgCadTests` tag `[issue618][inc3]`: R2004 export of a GoSurvey block with linear
+    parameter + stretch action writes `BLOCKLINEARPARAMETER`, `BLOCKSTRETCHACTION`, and
+    `ACAD_EVALUATION_GRAPH` readable by `dwg_read_file`.
+  - **(Inc 4)** `LibreDwgCadTests` tag `[issue618][inc4]` restores `BPARAM`/`BACTION` from DWG; `CadBlockTests`
+    tag `[issue618][inc4]` verifies linear stretch grip re-evaluation on placed INSERTs.
+  - **(Inc 5)** `LibreDwgCadTests` tag `[issue618][inc5]`: GoSurvey → DWG → GoSurvey preserves a placed
+    INSERT's linear parameter distance when all instances agree; `#614` loss summary at R2004+ names
+    visibility parameters, unsupported parameter kinds, extra linear chains, conflicting INSERT values,
+    and stretch actions without entity handles. Full Save → AutoCAD → Save → GoSurvey remains a manual
+    check for flip/visibility/lookup until encoders exist.
+  - REQ-107 no longer lists dynamic blocks as permanently out of scope.
+- Owner-layer: Domain/Commands (`CadBlocks`, `cadblock.hpp`), IO (`LibreDwgCad.cpp`), UI (BEDIT ribbon)
+- Status: accepted — increments 1–5 delivered (MVP: linear stretch + flip export/import; visibility/lookup
+  logged as export loss); issue #618 may close when manual AutoCAD parity is recorded (TASK-618)
+- Revisions: 2026-10-02 — initial (issue #618; D-2026-10-02-b). 2026-10-02 — increment 2 display
+  fidelity (TASK-618). 2026-10-02 — increment 3 GoSurvey dynamic DWG export (TASK-618).
+
+### REQ-370 — AutoCAD-style box selection: window/crossing look, live preview, selected-object tint
+
+- Purpose: the selection box and selected objects should read like AutoCAD / Civil 3D, which is what
+  GoSurvey users already know. Today the model-space box is always blue, selected objects are yellow,
+  and nothing shows what a box will pick until the mouse is released.
+- Priority: should
+- Type: UI
+- Decision: D-2026-10-05-a.
+- Statement:
+  1. **Window box** (drag left-to-right): translucent **blue** fill with a thin **solid** border.
+  2. **Crossing box** (drag right-to-left): translucent **green** fill with a thin **dashed** border.
+     Both fills are clearly visible over the dark drawing background (about 40-45 % opaque), not faint.
+     The window/crossing rule itself is unchanged (REQ-039, REQ-121, REQ-036).
+  3. The same look applies in model space and in a floating model-space viewport.
+  4. **Live preview:** while the second corner is being chosen, every object the box would select if
+     clicked now is drawn in a bright, bluish-white "about to be selected" tint. The preview uses the
+     very same hit test the click uses (`ComputeSelectionFromRect`), so what is lit is what gets
+     selected, for window and crossing alike. It changes no selection until the click.
+  5. **Selected objects** are drawn in a blue tint instead of yellow. The preview tint (item 4) is
+     visibly lighter than the selected tint so the two stay distinguishable. Grips are unchanged.
+  6. The preview must not slow the viewport: it is recomputed only when the cursor or box corner
+     changes, and is skipped (box still drawn) above a drawing-size cap that is logged once (REQ-201).
+- Acceptance:
+  - a left-to-right drag draws a blue, solid-bordered box; a right-to-left drag draws a green,
+    dashed-bordered box; reversing mid-drag switches live;
+  - mid-drag, the set of objects highlighted as preview equals the set selected by releasing the click
+    at that point (unit test comparing the two for window and crossing);
+  - after the click, selected objects draw blue, not yellow; preview leaves `selection` untouched
+    (unit test);
+  - an empty box previews nothing and does not crash; the preview vanishes on click, Esc, or when
+    the box closes.
+- Owner-layer: UI (`CadUi`, overlay), Renderer (highlight colours), Commands (preview helper)
+- Status: accepted
+- Revisions: 2026-10-05 - initial (D-2026-10-05-a; reference screenshots from Civil 3D 2026).
+
+### REQ-398 — Side slope grading to a surface: the daylight line
+- Purpose:     turn a designed edge into buildable earthwork. A pad or road edge cannot stand on
+               vertical walls of soil, so its sides ramp out at a safe slope until they reach
+               existing ground. Where they reach it is the **daylight line**, and that line — not
+               the pad — is what says how much land the work disturbs, which is what gets stripped,
+               fenced and silt-fenced, and what decides whether the design fits the parcel at all
+- Priority:    should
+- Type:        functional
+- Statement:   A **side slope grading** is computed from a **feature line** (REQ-087) used as its
+               baseline, whose per-vertex elevations are the design, and a target **surface**
+               (REQ-069) standing for existing ground.
+
+               Two slopes are given, **separately**: a **cut slope**, used where the baseline sits
+               *below* existing ground, and a **fill slope**, used where it sits *above*. Real
+               earthwork uses different values for the two — a cut face stands steeper than placed
+               fill — so one slope for both would be a simplification with no engineering meaning.
+               Slopes are stated and reported as **run:rise** *and* **percent**, in the exact
+               wording REQ-074 already uses (`grade <n>%  slope <n>:1`), because REQ-105 was amended
+               on 2026-09-09 specifically so that `SURFELEV` and `DIST` could not describe one slope
+               two ways; grading joins that convention rather than adding a third.
+
+               From each baseline point the slope is projected **outward**, horizontally away from
+               the baseline, descending for fill and climbing for cut, until its elevation equals
+               the surface's. That intersection is a **daylight point**; the ordered chain of them
+               is the **daylight line**, which the command produces as ordinary drawing geometry.
+
+               **Outward** is defined without ambiguity: for a **closed** baseline it is away from
+               the enclosed interior; for an **open** one there is no intrinsic outward, so the
+               command requires the side to be chosen, the way Civil 3D's grading tools do.
+
+               A projection that leaves the surface **never extrapolates** — REQ-074's accepted
+               rule. It reports the station that failed to daylight and contributes no point there,
+               rather than inventing ground beyond the surface's edge. A projection that cannot meet
+               the ground at all, because the ground falls away at least as fast as the fill slope
+               descends, is reported the same way rather than searched indefinitely.
+
+               The daylight line is **baked** geometry, not a live object: it is produced once from
+               the inputs as they stand, following the EXTRACT precedent set for contours by
+               decision D-2026-08-12 (D2), and does not track later edits to the baseline or the
+               surface. Re-running the command is how it is refreshed.
+- Acceptance:
+  - on a surface of known plane, a fill baseline of known height above it daylights at the offset
+    computed by hand, within REQ-101, and the daylight point's elevation equals the surface's there;
+  - the same for a cut baseline below the surface, at the separately stated cut slope;
+  - cut slope and fill slope differing produces different offsets, each matching its own hand value,
+    so the two are demonstrably not one slope used twice;
+  - a baseline point already at the surface's elevation daylights at that point, offset zero;
+  - a projection that runs past the surface's edge reports that station as not daylighted, adds no
+    point for it, and reports no elevation beyond the edge (REQ-074);
+  - a fill slope over ground falling away at least as fast reports that it never meets the surface,
+    and the command terminates;
+  - the reported slope wording matches REQ-074's exactly, in both conventions;
+  - a closed baseline's daylight line encloses the baseline, and an open baseline requires a side;
+  - the daylight line survives a `.gs` round trip as ordinary geometry;
+  - every offset above holds at survey coordinate magnitudes (E 2,196,000 / N 1,400,000) within
+    REQ-101, which ADR-054's `double` stores make reachable.
+- Owner-layer: Domain, Commands, IO
+- Status:      proposed
+- Revisions:   2026-10-05 — initial. Reverses the **grading design objects** exclusion carried by
+               ADR-028 and restated in `roadmap.md`'s M-Surfaces out-of-scope list, by decision
+               **D-2026-10-05-b**. That exclusion has already been reversed once in exactly this
+               shape: feature lines sat on the same list until D-2026-08-19-a moved them off it, and
+               this requirement consumes the entity that reversal produced.
+
+               **Deliberately NOT in this requirement**, each because it is separable and none
+               needed for the daylight line to be useful:
+               - the **earthwork volume** between baseline, slopes and ground. Without a design
+                 surface there is nothing for `ComputeSurfaceVolume` to measure against, so a volume
+                 here would mean new integration code rather than reuse;
+               - a **graded design surface** built from the pad, its slopes and the daylight line —
+                 which is what Civil 3D's grading groups produce, and which would give volumes,
+                 contours and statistics for free from tools already built. The larger and more
+                 valuable follow-on;
+               - **linking** the daylight line to its baseline or surface so it updates when they
+                 change. Baked-only is deliberate for the first increment, per the Statement;
+               - **intermediate slope breaks** (a bench or berm part-way down the slope).
+- Known limit: the outward projection advances in finite steps before bisecting the bracketed
+               crossing, so ground detail finer than one step can hide a second crossing and the
+               nearest one is reported. Stated here rather than discovered later; the step is chosen
+               against the surface's own triangle scale.
+### REQ-371 — AutoCAD VISUALSTYLE on paper viewports and DWG (GitHub issue #624, increment 1)
+
+- Purpose: issue #624 (visual styles / materials / lights) — **increment 1** maps AutoCAD
+  **VISUALSTYLE** objects to GoSurvey's existing REQ-064 viewport styles on **paper-space
+  VIEWPORT** entities so layout viewports round-trip through `.gs` and R2007+ DWG.
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-b (closes the SPEC GAP on issue #624 for visual styles only; materials
+  and lights remain future increments / spin-offs).
+- Depends on: REQ-064 (GoSurvey visual styles), REQ-170 / issue #610 (paper VIEWPORT export),
+  issue #600 (R2007+ export path).
+- Statement:
+  1. **Storage.** Each `Viewport` carries a `VisualStyle` (default 2D Wireframe), persisted in `.gs`
+     additively on the layout viewport object.
+  2. **Import.** Opening a DWG reads each paper-space VIEWPORT's `visualstyle` handle, resolves the
+     VISUALSTYLE object when LibreDWG decodes it, and maps AutoCAD's style to the nearest
+     GoSurvey `VisualStyle` (2D Wireframe, Hidden, or Shaded).
+  3. **Export.** At **R2007+**, export writes or reuses VISUALSTYLE dictionary entries and sets each
+     exported paper VIEWPORT's `visualstyle` handle from the GoSurvey style, and sets the model-space
+     VPORT table `*Active` record (and `DRAGVS`) from `AppCommandState::viewportVisualStyle`.
+     R2000/R2004 export omits native visual styles (handles not written).
+  3b. **Import (model).** Opening an R2007+ DWG reads VPORT `*Active` `visualstyle` into
+     `viewportVisualStyle` when present.
+  4. **UI / commands.** The Viewports window exposes a per-viewport visual style combo; `VISUALSTYLE`
+     (and `VS`) set the **current** paper viewport's style when one is active (floating or selected),
+     otherwise the model-space style (REQ-064).
+  5. **Floating model space.** While editing through a layout viewport, the model GL pass runs with
+     that viewport's `visualStyle` (not a blank sheet).
+  6. **Out of scope:** AutoCAD Realistic/Conceptual/X-Ray fidelity beyond the three GoSurvey styles;
+     **materials** → **REQ-372**; **lights/sun** → future REQ (issue #624).
+- Acceptance:
+  - `LibreDwgCadTests` tag `[issue624][req371]`: R2018 export of two paper viewports with Hidden and
+    Shaded re-import with the same `VisualStyle` values; tag `[model]` round-trips model
+    `viewportVisualStyle` via VPORT `*Active`;
+  - `GsIoViewportCameraTests` tag `[req371]`: `.gs` save/load preserves `visualStyle` on layout viewports;
+  - REQ-201 / `#614` do not claim visual styles are an untracked #601 gap for paper viewports at R2007+.
+- Owner-layer: IO (`LibreDwgVisualStyle.cpp`, `LibreDwgCad.cpp`), Domain (`PaperSpace.hpp`), IO (`.gs`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #624 increment 1; D-2026-10-05-b). 2026-10-05 — model VPORT
+  `*Active` import/export (increment 2).
+
+### REQ-372 — AutoCAD MATERIAL diffuse display and DWG (GitHub issue #624, materials slice)
+
+- Purpose: issue #624 **materials** — AutoCAD **MATERIAL** objects (R2007+ `ACAD_MATERIAL` dictionary)
+  carry surface appearance for 3D hosts. GoSurvey today shades meshes and tessellated solids from
+  **entity/layer colour only** (REQ-064 / REQ-048). This REQ adds **diffuse RGB** fidelity and DWG
+  round-trip for that slice; textures and full PBR stay deferred with honest logging (REQ-201).
+- Priority: should
+- Type: interop + display
+- Decision: D-2026-10-05-c (closes the SPEC GAP on issue #624 for materials; **lights/sun** remain a
+  separate future REQ; phased delivery like REQ-369 / REQ-368).
+- Depends on: REQ-064 (Shaded draw path), REQ-048 (entity colour), REQ-063/REQ-313 (mesh and solid
+  display hosts), REQ-170 / issue #600 (R2007+ DWG export path), REQ-371 (visual styles — orthogonal).
+- Statement:
+  1. **Increment 1 — import display.** Opening an R2007+ DWG resolves each 3D host's material handle
+     (LibreDWG `MATERIAL` when decoded). When a material exposes a **diffuse colour**, shaded drawing
+     uses that RGB for the mesh or tessellated solid instead of the entity colour alone. Image-based
+     textures, bump/normal maps, and procedural maps are **not** evaluated; import logs how many
+     materials or hosts had only non-diffuse data (REQ-201).
+  2. **Increment 2 — GoSurvey → DWG export.** At **R2007+**, export writes hand-built **`MATERIAL`**
+     objects (LibreDWG has no `dwg_add_MATERIAL`) into `ACAD_MATERIAL`, keyed by a stable name derived
+     from the host's effective diffuse RGB, and attaches material handles to exported **3D hosts**
+     GoSurvey already writes (`POLYLINE_PFACE` meshes/TIN from #611, `3DSOLID` from #612). R2000/R2004
+     export omits native materials (display colour only).
+  3. **Increment 3 — `.gs` persistence.** Optional additive fields on display hosts record the AutoCAD
+     material **name** (when known) and diffuse override so save/load preserves import results without
+     requiring a DWG round-trip.
+  4. **Increment 4 — round trip.** GoSurvey → DWG (R2018) → GoSurvey preserves diffuse material
+     appearance on a representative mesh and `3DSOLID` sample; `#614` loss lines name hosts whose
+     materials could not be encoded (missing writer, unsupported map-only materials).
+  5. **Out of scope:** `LIGHT`, `SUN`, `LIGHTLIST`, geographic sun, material editor UI, assigning
+     materials by layer in GoSurvey, Civil 3D render materials, and full AutoCAD Realistic/Conceptual
+     shader parity. Those remain issue **#624** follow-ups or separate issues.
+- Acceptance:
+  - **(Inc 1)** `[issue624][req372]` import test: a fixture DWG with a diffuse `MATERIAL` on a mesh or
+    solid host draws with that RGB in Shaded (unit/headless where feasible, else fixture + log assertion).
+  - **(Inc 2–4)** `[issue624][req372]` export/import: R2018 round-trip preserves diffuse material on at
+    least one mesh and one `3DSOLID`; export log or `#614` lists map-only materials when present.
+  - **(Inc 3)** `.gs` save/load preserves material name + diffuse override when increment 3 lands.
+  - REQ-201 / `#601` gap doc no longer lists **materials** as an untracked SPEC GAP.
+- Owner-layer: IO (`LibreDwgMaterial.cpp` planned, `LibreDwgCad.cpp`), Renderer (diffuse override on
+  shaded batches), IO (`.gs` additive fields)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #624 materials slice; D-2026-10-05-c). 2026-10-05 —
+  increment 1 shipped (import diffuse display + REQ-201 log). 2026-10-05 — increment 2 shipped
+  (R2007+ export MATERIAL + ACAD_MATERIAL on mesh hosts; 3DSOLID entity material deferred). 2026-10-05 —
+  increment 3 shipped (`.gs` material name + diffuse override on entity attributes). 2026-10-05 —
+  increment 4 shipped (`[issue624][req372]` mesh export round-trip, 3DSOLID import, `#614` solid material loss).
+
+### REQ-373 — Project format: a folder with a `<Name>.gsproj` marker, standard subfolders, relative file references (GitHub issue #696, P1)
+
+- Purpose: issue #696 — GoSurvey works on single drawings only. A **project** is one job's folder
+  (DWGs, points, point clouds, PDFs, turnovers, settings) that can be emailed and opened elsewhere
+  with nothing missing. This REQ fixes what a project *is* on disk.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decisions 1, 2, 8, 9 of the issue), ADR-065.
+- Depends on: REQ-175 / ADR-044 (DWG document), REQ-201 (honest failure).
+- Statement:
+  1. **Marker.** A project is a folder containing exactly one `<Name>.gsproj` file (e.g.
+     `MyJob.gsproj`). A folder without one is not a project. More than one `.gsproj` in a folder is a
+     damaged project (REQ-374 clause 5).
+  2. **Standard subfolders.** Creating a project creates `Drawings/`, `Points/`, `PointClouds/`,
+     `PDFs/`, `Turnovers/` and `Settings/`. Subfolders inside them are allowed. The layout is
+     recorded in the `.gsproj` (name → relative folder) so it can become configurable later; this
+     REQ does not make it configurable.
+  3. **`.gsproj` content.** UTF-8 JSON, versioned (`formatVersion`), holding: a **project ID** (GUID,
+     created once, never changed, carried by packs); the project name; the folder layout; the
+     project settings (REQ-375); the **tracked items** list (clause 4). Unknown fields are preserved
+     on save (additive evolution, REQ-002 spirit).
+  4. **Tracked items.** Every non-drawing file the project owns or links (point clouds, PDFs,
+     turnovers, point files) is an entry with: a **project-relative location**, a **kind**, and its
+     **associations** (e.g. the drawing a point cloud or PDF is attached to). Drawings are tracked
+     too, so their attachments can be listed per drawing.
+  5. **Relative paths only.** Every stored location is relative to the project folder
+     (`PointClouds/site.e57`), never absolute. A path that escapes the project folder (`..`, a drive
+     letter, a UNC path) is rejected on load with a REQ-201 message.
+  6. **Reference kind.** Each reference has `kind` = `in-project` or `local-link`. A `local-link`
+     entry stores an absolute path (the only place one is allowed), and is flagged "will not travel
+     with the project" (REQ-379). The field is a string so a future `remote` kind can be added
+     without a format change; a reader meeting an unknown kind keeps the entry, shows it as
+     unavailable, and does not fail the load.
+  7. **Write safety.** The `.gsproj` is written to a temporary file in the same folder and then
+     renamed over the old one, so a crash never leaves a half-written project file.
+- Acceptance:
+  - `[req373]` tests: create-project makes the marker and six folders; a `.gsproj` round-trips
+    (including an unknown field and an unknown reference kind); `..`/absolute/UNC in-project paths
+    are rejected; two `.gsproj` in one folder reports damage; an interrupted write leaves the
+    previous file intact.
+- Owner-layer: IO (project file reader/writer), Domain (project model)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-374 — Create, open and join projects; several projects open at once (GitHub issue #696, P1)
+
+- Purpose: how a user gets into a project and how a drawing knows which project it belongs to.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decisions 6, 7, 12).
+- Depends on: REQ-373, REQ-308 (Start tab), REQ-055 (drawing tabs), REQ-357 (Drawing Settings).
+- Statement:
+  1. **New Project.** A dialog collects name, location (parent folder), **coordinate system** and
+     **linear units** (REQ-375), and creates the REQ-373 layout. An optional "start from an existing
+     drawing" runs the REQ-378 flow. A new drawing created while a project is active starts empty
+     with the project defaults and skips REQ-378.
+  2. **Open Project.** Choosing a `.gsproj` (or its folder) opens the project. Opening a project does
+     not open every drawing; the Project Files list (REQ-379) shows them.
+  3. **Start screen.** The Start tab (REQ-308) shows **New Project** and **Open Project** buttons and a
+     **Recent Projects** list (name, folder path, last-opened date, thumbnail) **above** the existing
+     Recent Drawings. Each Recent Drawings entry carries its project's name as a tag, or
+     "Standalone". A missing project folder is offered for removal from the list (REQ-201).
+  4. **Auto-detect and join.** On opening a DWG, GoSurvey looks in the drawing's folder, then each
+     parent folder up to the drive root, and uses the **first** `.gsproj` found. The DWG joins that
+     project **only if it lies inside the project folder**. If none is found the drawing is
+     **standalone** and behaves exactly as before this feature (its points stay in the DWG).
+  5. **Damaged project.** If the found `.gsproj` is damaged or unreadable, GoSurvey says so and offers
+     **Open standalone** or **Cancel**. It never silently drops project data.
+  6. **Notice.** A short notice confirms a join ("Opened in project MyJob").
+  7. **Several projects.** Several projects may be open at once. **Each drawing tab belongs to exactly
+     one project** (or none). Opening a drawing whose project is already open adds a tab to it.
+  8. **Name is always visible.** Every drawing tab and the Toolspace header show the active project's
+     name; standalone drawings show nothing.
+- Acceptance:
+  - `[req374]` tests: join resolution (first marker walking up; drawing outside the folder does not
+    join; none → standalone; damaged → prompt result, never silent); two projects open with tabs
+    attributed correctly; recent-projects list persistence and missing-folder handling;
+    DevShell/GUI check of the Start tab layout.
+  - A drawing opened outside any project is unaffected by this feature.
+- Owner-layer: UI (Start tab, dialogs, tabs), Domain (project registry, join resolution), IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-375 — Project settings: enforced coordinate system and units, inheritable defaults, per-drawing overrides (GitHub issue #696, P2)
+
+- Purpose: drawings in one job must agree on where they are and in what units; everything else is a
+  sensible default a single drawing may override.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 5), D-2026-10-05-e (which settings are which).
+- Depends on: REQ-373, REQ-357..REQ-362 (Drawing Settings, zone, transformation), REQ-022 (drawing unit).
+- Statement:
+  1. **Project Settings window** (command `PROJECTSETTINGS` and a Project menu item, in the
+     Drawing Settings dialog style) edits the settings stored in the `.gsproj`.
+  2. **Enforced.** The **coordinate system** (zone) and **linear units** are set by the project and
+     **cannot be overridden** by a project drawing; Drawing Settings shows them read-only with an
+     "enforced by project" indicator.
+  3. **Inherited.** Six settings are **project defaults** (D-2026-10-05-e): angular units, the
+     imperial-to-metric foot definition, "scale objects inserted from other drawings", "set drawing
+     variables to match", the plot scale, and the Object Layers table. A drawing may override each;
+     Drawing Settings marks each **inherited** or **overridden** and offers **Reset to project
+     value**. Overrides are saved in the drawing (ADR-044 trailer `drawingSettings.overridden`).
+     A change to a project default reaches every drawing that has not overridden it, open or not.
+     The transformation, the geographic marker and the online map are always the drawing's own.
+     A value the user changes is an override exactly when it differs from the project's.
+  3a. **Nothing set, nothing enforced.** A project that has no coordinate system (or unit) set
+     enforces none, and one with no defaults supplies none, so a project made before P2 does not
+     alter its drawings. A drawing that disagrees with an enforced value is brought into line when
+     it opens or when the project changes, and each replacement is reported (REQ-201); no
+     coordinate is moved or scaled. The New Project dialog (REQ-374 clause 1) takes the unit and
+     opens Project Settings straight afterwards for the coordinate system.
+  4. **Standalone** drawings are unchanged: all settings belong to the drawing (REQ-357).
+  5. **Mismatch.** Adding or importing content whose coordinate system or units differ from the
+     project's is governed by REQ-378 clause 5 and REQ-383 clause 3.
+- Acceptance:
+  - `[req375]` tests: a project drawing cannot change zone/units; an inherited setting follows a
+    project change; an overridden one does not; reset restores inheritance; standalone is unchanged;
+    overrides survive save and reopen; a project with nothing set enforces nothing.
+- Owner-layer: Domain (settings resolution), UI (windows), IO (`.gsproj`, trailer)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P2: clause 3 names the
+  six defaults, clause 3a added (D-2026-10-05-e).
+
+### REQ-376 — Project-wide survey point database shared by every drawing in the project (GitHub issue #696, P3)
+
+- Purpose: EG, FG and other drawings of one job share one set of points; edits in one are seen by all.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 3), ADR-065.
+- Depends on: REQ-373, REQ-023 (survey points), REQ-067 (point groups), REQ-382 (locking).
+- Statement:
+  1. **One database per project.** A project owns one survey point database (storage: ADR-065). A
+     drawing in a project reads and writes points **through** it; the points are not stored in the
+     DWG.
+  2. **Automatic updates.** Add, edit and delete of a point in any project drawing update the
+     database at once. A change made in one open tab is visible **live** in every other open tab of
+     the same project.
+  3. **Source drawing.** Each point records the drawing that created it (the **source drawing**).
+  4. **Number identity.** A point number is unique in the database. Adding a point whose number
+     already exists prompts **overwrite / renumber / cancel** (REQ-383).
+  5. **Standalone fallback.** A drawing with no project keeps its points inside the DWG exactly as
+     today (REQ-023, ADR-044).
+  6. **Read-only.** A read-only opener (REQ-382) can view points but every command that would change
+     the database is refused with a REQ-201 message.
+  7. **Durability.** The database is saved with the project (not only on drawing save) and written
+     atomically; unsaved database changes are listed on close (REQ-383).
+- Acceptance:
+  - `[req376]` tests: two open project drawings stay in sync on add/edit/delete; source drawing is
+    recorded; duplicate-number prompt outcomes; standalone drawing keeps points in the DWG;
+    read-only refuses writes; atomic-write interruption keeps the previous database.
+  - Issue-level: EG and FG share one database and stay in sync.
+- Owner-layer: Domain (point database), IO (database file), UI (prompts)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-377 — Per-drawing point visibility rules and the Survey Database toolspace section (GitHub issue #696, P4)
+
+- Purpose: two drawings share every point yet each shows only the subset that belongs on it.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 4).
+- Depends on: REQ-376, REQ-067 (point groups), REQ-175 / ADR-044.
+- Statement:
+  1. **Rules.** Each project drawing has **visibility rules**, saved in the drawing (ADR-044 trailer).
+     A rule can combine **point number range**, **description** (wildcard, e.g. `EG*`), **elevation**
+     range, **point group**, and **source drawing**. A point is shown when the rules match it.
+  2. **Default for new points.** A point created in a drawing is visible in that drawing by default
+     and is shown in other drawings only if their rules match.
+  3. **Toolspace.** A **Survey Database** dropdown sits alongside Surfaces and Feature Lines. It lists
+     the project's points and edits the current drawing's rules with filters for point number,
+     description, elevation, point group and source drawing.
+  4. **Hide here only.** A point can be hidden in the current drawing without deleting it from the
+     database (REQ-383 clause 4).
+  5. Hidden points are not drawn, snapped to, selected, or used by surfaces built in that drawing.
+- Acceptance:
+  - `[req377]` tests: each filter, combined filters, source-drawing filter, default visibility of a
+    new point, hide-in-this-drawing-only, rules persisted through DWG save/load; a GUI check of the
+    toolspace section.
+  - Issue-level: EG and FG show different subsets of one database.
+- Owner-layer: Domain (rules), UI (toolspace), IO (trailer)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+
+### REQ-378 — Add Drawing to Project: preview, per-conflict choices, copy-in (GitHub issue #696, P5)
+
+- Purpose: bring an existing drawing into a project safely.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 13).
+- Depends on: REQ-374, REQ-375, REQ-376, REQ-377.
+- Statement:
+  1. The user picks a drawing. **Before anything changes** GoSurvey shows a summary (e.g. "47 points
+     found. 12 numbers already exist (3 identical, 9 differ).").
+  2. For each conflict the user chooses **skip**, **overwrite** or **renumber**.
+  3. After confirmation GoSurvey **copies the DWG into `Drawings/`** (the original is untouched), adds
+     its points to the database tagged with that drawing as **source drawing**, and sets the drawing's
+     visibility rules to show exactly those points.
+  4. Settings that differ from the project become **overrides** (REQ-375).
+  5. A **coordinate-system or unit mismatch blocks** the add, with a **convert** option or cancel.
+     **Convert** (D-2026-10-05-g) transforms the copy of the drawing into the project's coordinate
+     system and units as one similarity transform (scale, rotation about the vertical axis, shift)
+     computed with CS-MAP at the drawing's centre and applied to every object, so shapes stay exact.
+     A units mismatch scales X, Y and heights; a coordinate-system mismatch moves X and Y only. The
+     leftover error at the drawing's extents is shown in the preview; above **0.02 m** the convert is
+     refused. A drawing with no coordinate system (or unitless) has nothing to compare, so it is not a
+     mismatch. A drawing holding objects the transform cannot move (surfaces, meshes, point clouds,
+     PDF underlays, position markers, multileaders, paper-space viewports) cannot be converted; it
+     stays blocked and the kinds are named (REQ-201). Saved views, named UCSs, the geographic marker,
+     the transformation and captured map areas refer to the old coordinates and are cleared in the
+     copy (reported). A drawing that was not converted is copied byte for byte with only its GoSurvey
+     trailer replaced; a converted one is saved as a GoSurvey drawing, so its DWG body matches.
+  5a. **Visibility rules.** The drawing shows exactly the points it brought: a point-number filter
+     lists them (a drawing with no points keeps the default rules). A point identical to one already
+     in the database is shared, not duplicated.
+  6. Cancelling at any point leaves the project and the original unchanged.
+- Acceptance:
+  - `[req378]` tests: summary counts (new / identical / differing); each conflict choice; copy-in
+    leaves the original byte-identical; rules equal the added set; overrides captured; mismatch
+    blocks; cancel changes nothing.
+- Owner-layer: Domain, UI, IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — clause 5 defines Convert and
+  clause 5a added (D-2026-10-05-g, issue #696 P5).
+
+### REQ-379 — Tracked files, attach (copy or link), Project Files list and Project Health (GitHub issue #696, P6)
+
+- Purpose: a recipient of an emailed project gets every drawing with its attachments and no missing
+  files.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decisions 8, 9, 10).
+- Depends on: REQ-373, REQ-171/172 (point clouds), PDF underlays.
+- Statement:
+  1. **Attach.** Attaching an external file (point cloud, PDF, point file) to a project drawing
+     **copies it into the project** by default, into the matching standard subfolder, after a
+     **size prompt**. **Link** is allowed but is flagged "will not travel with the project".
+  2. **Associations.** Point clouds and PDFs are recorded as associated with the drawing they are
+     attached to, so opening the drawing finds them via the `.gsproj`. The record is written when the
+     drawing is saved inside the project (an unsaved drawing has no project-relative name yet), and
+     lists exactly what the saved drawing holds. A PDF underlay is not stored in the DWG (REQ-379 /
+     D-2026-10-05-h), so its tracked item also carries a `placements` list — per drawing: page, insertion
+     point (world coordinates), scale, rotation, raster resolution, snap options, layer, fade and
+     background flag — and opening a project drawing re-places each PDF from it. A point cloud found
+     missing at its stored path is resolved to the tracked item of the same file name associated with
+     the drawing. A tracked file that is missing on open is reported (REQ-201) and the drawing still
+     opens. A drawing outside any project is unchanged.
+  3. **Project Files section** in the Toolspace lists tracked items by folder, with a link badge on
+     `local-link` entries.
+  4. **Project Health** reports: linked (non-travelling) files, missing files, unsaved drawings, and
+     offers **copy links into the project**. It runs before **Pack Project** (REQ-380) and before a
+     **turnover** (REQ-381) is created.
+  5. **Add PDF to project (D-2026-10-06-c).** The Project Files section has an **Add PDF...** button
+     (disabled in a read-only project) that tracks a PDF **without placing it in any drawing**, so a
+     PDF that was dropped into a project folder by hand appears in the list and can be opened in the
+     viewer. A PDF already inside the project folder is tracked where it is; one outside goes through
+     the clause 1 prompt (copy into the PDFs folder by default, or link, flagged). It has no drawing
+     association and no placements. Tracking the same file twice changes nothing. Files other than
+     PDFs are not accepted here (point clouds and point files keep their own import commands).
+  6. **Refresh (D-2026-10-06-d).** A **Refresh** button at the top of the Toolspace (project drawings
+     only; disabled in a read-only project) looks through the project folder for **new files** — files
+     of a kind the Project Files list understands (`.dwg`, `.pdf`, `.e57`) that the project does not
+     track — and, **only when the user pressed Refresh**, asks which of them to track. The question
+     lists every new file with a tick box (all ticked), and **Track selected** / **Track none** buttons.
+     Nothing is tracked, copied or moved without that answer, and nothing is scanned or listed
+     automatically. Hidden folders (names starting with `.`), the project's own files (`.gsproj`, lock,
+     shared point database, caches, turnover records, packs) and files already tracked are never
+     offered. "Track none" leaves the files untracked; pressing Refresh again offers them again.
+- Acceptance:
+  - `[req379]` tests: copy default; size prompt threshold; link flagged; relative path recorded;
+    Health lists each problem class; "copy links in" converts a link to `in-project`.
+  - `[req379][issue732]` test: the new-file scan offers an untracked `.dwg` / `.pdf` / `.e57` in any
+    subfolder, and offers none of: a tracked file (any letter case), a hidden folder's files, the
+    `.gsproj`, a `.gscloud`, a `.gsturnover`, or a file of another kind.
+  - `[req379][issue732]` test: tracking a PDF inside the project adds one `in-project` item with no
+    associations and no placements; tracking it again changes nothing; an outside file becomes a
+    flagged `local-link`.
+- Owner-layer: Domain, UI, IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — clause 2 gains the
+  PDF `placements` record and the write-on-save rule (issue #696 P6; D-2026-10-05-h). The size prompt
+  appears for every copy/link and warns at 100 MB or more (ASSUMPTION, recorded in TASK-696-p6).
+  2026-10-06 — clause 5 added: Add PDF to project (D-2026-10-06-c); clause 6: Refresh and ask to track
+  new files (D-2026-10-06-d).
+
+### REQ-380 — Pack Project (`.gspack`) and Open Packed Project (GitHub issue #696, P7)
+
+- Purpose: send a whole project by email or share.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 10), D-2026-10-05-i (container).
+- Depends on: REQ-373, REQ-379, REQ-382, REQ-300.
+- Statement:
+  1. **Pack Project** runs Project Health (REQ-379) first, then writes a single `.gspack` file
+     containing the project folder (marker, subfolders, tracked items) and its **project ID**. The
+     `.gspack` is a standard ZIP (D-2026-10-05-i, ADR-066) whose entries are project-relative paths,
+     plus a `gspack.json` manifest (format version, project ID, project name, date, left-out files, and
+     each file's exact modified time, restored on open so a point cloud's `.gscloud` cache still matches
+     its cloud). Left out of every pack: the lock file (REQ-382 clause 4), temporary files and other `.gspack` files. A
+     folder holding more than one project file at its top level cannot be packed. A point cloud is a file
+     whose type is a point cloud (`.e57`, `.gscloud`), wherever it sits. If Health finds problems (linked, missing
+     or unsaved files) the user sees them with the **copy links into the project** action and must
+     either fix them or choose **Pack anyway**; a linked or missing file is not in the pack.
+  2. **Size warning** shows the total size before writing (and, separately, the point clouds' share)
+     and offers to **exclude point clouds**. An excluded cloud is recorded in the pack, written into the
+     opened project's `.gsproj` as left out (a cloud's `.gscloud` cache goes with it), and shown as **unavailable** (not as an error) in Project
+     Files, Project Health and when its drawing opens. The total is the size before compression; a
+     further warning line appears at 25 MB or more (ASSUMPTION recorded in TASK-696-p7: a common email
+     attachment limit; the SPEC gives no number).
+  3. **Open Packed Project** extracts to a folder the user picks and opens it; every drawing opens
+     with its attachments loaded and no missing-file errors. The folder must be empty or not yet
+     exist; a folder that already holds files is refused (nothing is overwritten). The project ID is
+     preserved exactly.
+  4. A pack with a damaged or unsafe entry (path escaping the folder, absolute or drive path,
+     backslash, duplicate name, failed checksum, no or unreadable manifest, no marker, a marker whose
+     project ID differs from the manifest's) is rejected with a REQ-201 message and extracts nothing:
+     whatever was written is removed again.
+- Acceptance:
+  - `[req380]` tests: pack → open round trip on a sample project including a point cloud and PDF;
+    exclusion; unsafe-path pack rejected; project ID preserved; lock file and temporary files not packed; modified times restored;
+    non-empty destination refused; damaged pack leaves nothing behind.
+  - Issue-level: packed, emailed, opened elsewhere loads everything with no missing-file errors.
+- Owner-layer: IO, UI
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — container chosen, manifest,
+  left-out files, Health gate, empty-destination rule and the full list of rejected packs added
+  (issue #696 P7; D-2026-10-05-i).
+
+### REQ-381 — Turnover packages (GitHub issue #696, P8)
+
+- Purpose: record what was delivered, when, and to whom.
+- Priority: may
+- Type: functional
+- Decision: D-2026-10-05-d (phase P8).
+- Depends on: REQ-379, REQ-380.
+- Statement: Creating a turnover runs Project Health, then writes a **turnover record** in
+  `Turnovers/` with its **contents** (the tracked items included), **date** and **recipient**, built
+  on tracked items. The Project Files section lists turnovers.
+  1. **A record, not a bundle** (D-2026-10-05-j). No file is copied or packed; Pack Project (REQ-380)
+     is how files are sent.
+  2. The record is `Turnovers/<date>_<recipient>.gsturnover` (JSON; a repeat of the same date and
+     recipient gets `-2`, `-3`...). It holds the project ID and name, the recipient, the date (UTC)
+     and, for each chosen tracked item, its path, kind, size and CRC-32; a file not on disk is
+     recorded as missing. The user ticks which tracked items are included (all start ticked); the
+     recipient is required and at least one item must be chosen. Turnover records are not themselves
+     offered as contents.
+  3. Health problems (REQ-379) must be fixed or explicitly accepted before the record is written; a
+     refused turnover writes nothing. The record is tracked, so Project Files lists it.
+  4. Reachable from File > Create Turnover..., the Project Files section and the `TURNOVER` command.
+     Not available in a read-only project.
+- Acceptance: `[req381]` tests: a turnover record lists exactly the chosen items, date and
+  recipient; creation is refused until Health problems are acknowledged.
+- Owner-layer: Domain, UI, IO
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — clauses 1-4 added
+  (issue #696 P8; D-2026-10-05-j, the user chose "record only").
+
+### REQ-382 — One editor at a time: project lock file and read-only mode (GitHub issue #696, P1)
+
+- Purpose: stop two people (or two copies) silently overwriting one point database.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d (decision 11).
+- Depends on: REQ-373.
+- Statement:
+  1. The **first opener** of a project gets editing rights, recorded in a small **lock file** in the
+     project folder (who, machine, since when).
+  2. Anyone else is told who holds it and offered **Open read-only** or **Cancel**. Read-only can
+     view and print but cannot change the database or project files.
+  3. A **stale lock** (e.g. after a crash) can be taken over with an explicit warning.
+  4. The lock is released when the project closes; a lock file is never included in a pack.
+  5. The same process opening the project again (another tab) shares the lock; it is not a conflict.
+- Acceptance: `[req382]` tests: first opener locks; second is offered read-only; read-only refuses
+  writes; stale takeover warns; same-process second tab is not a conflict; pack excludes the lock.
+- Owner-layer: IO, Domain, UI
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P1: **stale** =
+  the holder is on this machine and its process no longer exists, or the lock file is unreadable; a
+  lock held from another machine is never judged stale (the user may still take it over after the
+  warning).
+
+### REQ-383 — Warnings before destructive or cross-project actions on shared data (GitHub issue #696, P9)
+
+- Purpose: no destructive action on shared data happens without a warning that states its effect on
+  other drawings.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-05-d ("Footgun protection").
+- Depends on: REQ-374, REQ-376, REQ-377.
+- Statement:
+  1. **Cross-project paste.** Copy/paste between drawings in different projects warns that pasted
+     points go into the destination project's database; number collisions are renumbered or prompted.
+  2. **Number conflict.** Adding a point whose number exists prompts overwrite / renumber / cancel.
+  3. **Mismatch.** Import or paste from a different coordinate system or units warns. A
+     **coordinate-system** mismatch is **blocking**, with **convert** or **cancel**; a units
+     mismatch warns.
+  4. **Delete.** Deleting a point from a drawing deletes it from the database, so other drawings lose
+     it. GoSurvey says so first, **with the number of other drawings affected**, and offers **hide in
+     this drawing only**.
+  5. **Live edit.** A point edited in one drawing updates live in other open tabs of the project.
+  6. **Unsaved close.** Closing with unsaved database changes lists the affected projects and drawings.
+  Each warning ships with the feature that creates the risk (P3/P5); P9 makes them one consistent pass.
+  7. **How P9 reads clauses 1, 3, 4 and 6** (D-2026-10-05-k and the P9 plan).
+     - **Paste (1, 3).** Copy remembers the project, coordinate system and units it came from. Pasting
+       into a drawing of a *different project* warns. A paste where either drawing is in a project and
+       the coordinate systems differ is **blocked** (cancel only; convert for pasted content is a
+       follow-up issue); differing units warn. A paste between two standalone drawings is unchanged.
+       Survey points are not carried by Copy/Paste today, so no point number can collide through paste.
+     - **Delete (4).** Asked only when another drawing of the project could lose the point: the message
+       gives how many **open** drawings show it and how many **closed** drawings of the project might
+       (their rules are saved inside their own DWG, which is not read for a warning). A project with no
+       other drawing deletes without asking. One question covers all points removed in one step.
+     - **Number conflict (2).** One answer applies to every conflicting number in the same step.
+     - **Unsaved close (6).** The database saves itself a moment after each change, so "unsaved database
+       changes" means changes that could not be written (a full or locked disk). Closing the program or a
+       drawing tab tries the write first and, if it still fails, lists the project and its open drawings.
+       The quit prompt also groups its unsaved drawings under their project.
+- Acceptance: `[req383]` tests: each warning fires with the right counts; "hide only" leaves the
+  database untouched; coordinate-system mismatch blocks; unsaved-close lists projects/drawings.
+- Owner-layer: UI, Domain
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P9: clause 7 added
+  (D-2026-10-05-k).
+
+### REQ-384 — AutoCAD annotation context objects DWG interop (GitHub issue #688)
+
+- Purpose: issue **#688** — follow-up to closed **#622**. GoSurvey-native annotative scaling (SCALE
+  list, CANNOSCALE, AcadAnnotative / GOSURVEY EED, per-scale visibility) is shipped; AutoCAD also
+  stores **per-scale annotation context** (`*_OBJECTCONTEXTDATA`, `CONTEXTDATAMANAGER`) that
+  LibreDWG decodes but GoSurvey does not yet read or write (`HAVE_NO_DWG_ADD_*` for every context
+  class). Without context, AutoCAD may not show every scale-specific representation when a drawing
+  passes through GoSurvey, even when the annotative flag and EED survive.
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-f (accept REQ-384 for #688; **REQ-110** stays **proposed** — it covers UI
+  rescale of existing text, not DWG context blobs).
+- Depends on: issue #622 (shipped), REQ-170 / issue #600 (R2010+ export path), REQ-201 (honest logging).
+- Statement:
+  1. **Increment 1 — import honesty.** On DWG open (not DXF), count decoded annotation context
+     objects. When the count is non-zero, append a REQ-201 log line that per-scale context is not yet
+     merged into GoSurvey geometry (entity-level import + EED markers unchanged).
+  2. **Increment 2 — export MTEXT context.** At **R2010+**, hand-build `MTEXTOBJECTCONTEXTDATA` and
+     wire `CONTEXTDATAMANAGER` for annotative MTEXT GoSurvey exports (one context per SCALE entry
+     where feasible).
+  3. **Increment 3 — TEXT, INSERT, DIMENSION** context objects for the same export path.
+  4. **Increment 4 — HATCH, MULTILEADER, remaining host types** plus import use of default context
+     geometry when present.
+  5. **Increment 5 — round trip.** GoSurvey → DWG (R2018) → AutoCAD-class fixture or LibreDWG
+     re-read preserves annotative context for at least one MTEXT and one DIMENSION sample; `#614`
+     lists hosts whose context could not be encoded.
+- Acceptance:
+  - **(Inc 1)** `[issue688][req384]` unit test: context object count is zero on GoSurvey annotative
+    export; count increases when a test helper adds `MTEXTOBJECTCONTEXTDATA`; import log mentions
+    context when count > 0.
+  - **(Inc 2–5)** `[issue688][req384]` export/import tests per increment; `#601` gap doc updated when
+    #688 closes.
+- Owner-layer: IO (`LibreDwgAnnotContext.cpp`, `LibreDwgCad.cpp`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #688; D-2026-10-05-f). 2026-10-05 — increment 1 shipped
+  (import scan + REQ-201 log). 2026-10-05 — increment 2 shipped (R2010+ hand-built
+  `MTEXTOBJECTCONTEXTDATA` + `CONTEXTDATAMANAGER` on annotative MTEXT export). 2026-10-05 —
+  increment 3 shipped (`TEXTOBJECTCONTEXTDATA`, `BLKREFOBJECTCONTEXTDATA`, `ALDIM` /
+  `ANGDIMOBJECTCONTEXTDATA` on annotative TEXT, INSERT, and DIMENSION export). 2026-10-05 —
+  increment 4 shipped (`MLEADEROBJECTCONTEXTDATA`, `ACDB_HATCHSCALECONTEXTDATA_CLASS` export;
+  default-scale MTEXT/TEXT context geometry merged on import when present). 2026-10-05 —
+  increment 5 shipped (R2018 re-read preserves MTEXT/DIMENSION context objects;
+  `#614` export loss for pre-R2010 annotative hosts and simplified hatch context).
+
+### REQ-385 — AutoCAD LIGHT and SUN DWG interop (GitHub issue #624, lights/sun slice)
+
+- Purpose: issue **#624** — **lights and sun** — AutoCAD stores **LIGHT** entities and a **SUN**
+  object (R2007+ drawing format; GoSurvey export at **R2010+**). GoSurvey does not evaluate scene
+  lighting in the viewport (REQ-064 shaded mode uses fixed lighting). This REQ preserves imported
+  lights/sun through `.gs` and DWG export so drawings opened in AutoCAD retain presentation data.
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-g (closes the SPEC GAP on issue #624 for lights/sun MVP; **LIGHTLIST** and
+  geographic sun study remain deferred with REQ-201 honesty).
+- Depends on: REQ-170 / issue #600 (R2010+ export path), REQ-201 (honest logging), REQ-371 / REQ-372
+  (orthogonal visual-style and material slices).
+- Statement:
+  1. **Import.** Opening an R2007+ DWG captures each decoded **LIGHT** entity and the first **SUN**
+     object into drawing state (name, type, on/off, colour, intensity, position/target). Import logs
+     counts (REQ-201). GoSurvey display is unchanged.
+  2. **Export.** At **R2010+**, export rewrites captured **LIGHT** entities into model space and the
+     **SUN** object via hand-built LibreDWG records (no public `dwg_add_LIGHT` / `dwg_add_SUN`).
+     R2000/R2004 export omits them; `#614` lists the count.
+  3. **`.gs` persistence.** Additive JSON fields preserve captured lights/sun without a format-version
+     bump when absent (ADR-020 (d)).
+  4. **Out of scope:** GoSurvey-authored lights, light editor UI, **LIGHTLIST** / **SUNSTUDY** /
+     **SKYLIGHT_BACKGROUND**, photometric IES files, and Realistic/Conceptual render parity.
+- Acceptance:
+  - `[issue624][req385]` fixture or test helper: DWG with a point LIGHT imports into state, exports
+    at R2018, LibreDWG re-read finds at least one LIGHT.
+  - `[issue624][req385][issue614]` export loss names LIGHT/SUN when export is below R2010 and state
+    holds imported lights/sun.
+  - REQ-201 / `#601` gap doc no longer lists lights/sun as an untracked SPEC GAP.
+- Owner-layer: IO (`LibreDwgLights.cpp`, `LibreDwgCad.cpp`), IO (`.gs`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #624 lights/sun slice; D-2026-10-05-g).
+
+### REQ-386 — AutoCAD LIGHTLIST DWG interop (GitHub issue #715, light registry follow-up)
+
+- Purpose: issue **#715** — after REQ-385 preserves individual **LIGHT** entities and **SUN**, AutoCAD
+  also expects a **LIGHTLIST** registry object wired through **`ACAD_LIGHTLIST`** /
+  **`DICTIONARY_LIGHTLIST`** (R2010+). Without it, some drawings lose the full light registry after a
+  GoSurvey export pass. GoSurvey viewport lighting stays unchanged (REQ-064).
+- Priority: should
+- Type: interop
+- Decision: D-2026-10-05-h (closes the SPEC GAP on issue #715; hand-built objects because LibreDWG
+  marks **LIGHTLIST** UNSTABLE and exposes `HAVE_NO_DWG_ADD_LIGHTLIST`).
+- Depends on: REQ-385, REQ-170 / issue #600 (R2010+ export), REQ-201 (honest logging).
+- Statement:
+  1. **Import.** Opening an R2010+ DWG that contains **LIGHTLIST** captures registry entries (display
+     name per registered light) and the **ACAD_LIGHTLIST** dictionary key when present. Import logs
+     counts (REQ-201). GoSurvey display is unchanged.
+  2. **Export.** At **R2010+**, when REQ-385 writes one or more **LIGHT** entities, export also writes
+     a **LIGHTLIST** whose handles reference those lights (preserving imported registry order/names
+     when captured; otherwise synthesizing one entry per exported light). Wire **`DICTIONARY_LIGHTLIST`**
+     via **`ACAD_LIGHTLIST`**. R2000/R2004 export omits the registry; `#614` counts it with LIGHT/SUN.
+  3. **`.gs` persistence.** Additive JSON preserves captured registry metadata without a format-version
+     bump when absent (ADR-020 (d)).
+  4. **Out of scope:** GoSurvey-authored lights, light editor UI, **SUNSTUDY**, photometric IES/web
+     lights, and Realistic/Conceptual render parity.
+- Acceptance:
+  - `[issue715][req386]` fixture or test helper: DWG with **LIGHT** + **LIGHTLIST** imports registry
+    into state, exports at R2018, LibreDWG re-read finds at least one **LIGHTLIST** linked to a **LIGHT**.
+  - `[issue715][req386][issue614]` export loss names LIGHT/SUN/**LIGHTLIST** when export is below R2010
+    and state holds imported lights or a captured registry.
+  - REQ-201 / `#601` gap doc no longer lists **LIGHTLIST** as an untracked SPEC GAP.
+- Owner-layer: IO (`LibreDwgLights.cpp`, `LibreDwgCad.cpp`), IO (`.gs`)
+- Status: accepted
+- Revisions: 2026-10-05 — initial (issue #715; D-2026-10-05-h).
+
+### REQ-387 — Built-in PDF viewer window; every PDF opens in it (GitHub issue #732, phase 1)
+
+- Purpose: issue **#732** — GoSurvey hands a PDF to an outside program today
+  (`OpenWithDefaultApp`, `src/ui/CadUi_Toolspace.cpp`). The user wants PDFs to open inside GoSurvey, fast
+  enough that a several-hundred-page plan set feels like scrolling a picture, not loading a file.
+- Priority: should
+- Type: functional + performance
+- Decision: D-2026-10-06-a (answers to the issue's three open questions), ADR-067.
+- Depends on: REQ-201 (honest logging), REQ-100 (frame budget), REQ-300 (dependency rule — PDFium is
+  already in the tree, no new dependency), REQ-378/REQ-379 (Project tab / tracked files).
+- Statement:
+  1. **One viewer, every route.** Opening a PDF from the Project tab (double-click), the tracked-file
+     list, the recent-files list, or an attached PDF underlay's "open" action opens the **PDF Viewer
+     window** (a real Windows window of its own, clause 7, ADR-067 (a)). No route may hand a `.pdf` to
+     `ShellExecute` any more. Opening a file already open in a viewer window focuses that window.
+  2. **View.** Page-by-page and continuous-scroll layouts; zoom (wheel, fit-width, fit-page, typed %);
+     pan; Page Up/Down, Home/End and a page-number box; a thumbnail strip that is itself virtualised
+     (only visible thumbnails exist). A password-protected, damaged or unreadable file shows a stated
+     reason in the window (REQ-201) and never crashes or hangs the app.
+  3. **Speed — open.** The **first page is on screen within 250 ms of the open request** for a 500-page
+     file on the reference machine (page count and page sizes come from the cross-reference table, not
+     from reading every page). "As fast as possible" is the goal; 250 ms is the number we test against
+     (the user asked to beat the 1 s proposal, 2026-10-06).
+  4. **Speed — scroll (no lag spikes).** Once the first pages are visible, scrolling and zooming a
+     500-page file never freezes the UI: **no frame longer than 16 ms (REQ-100) caused by the viewer**,
+     measured while scrolling the whole file top to bottom at fast wheel speed and while jumping
+     between distant pages. Pages are rendered **off the UI thread** (one-shot workers, not a pool —
+     §8), nearest the viewport first, **ahead of the scroll direction** (a read-ahead window of several
+     pages each way), into a **bounded** page-image cache (evicts farthest-first; memory is capped,
+     ADR-067 (d)). A page not ready yet shows a low-resolution stand-in or the page's blank sheet,
+     never a stall; a stale render for a page that scrolled away is cancelled (progressive render, as
+     `PdfAttach` already does).
+  5. **Memory.** Viewing a 500-page file keeps resident memory bounded by the cache cap, not by page
+     count.
+  6. **Out of scope for this REQ:** editing (REQ-388), splitting (REQ-389), text search, form filling,
+     digital signatures, printing.
+  7. **Window control (D-2026-10-06-b).** Each viewer is **its own Windows window**: it opens on the
+     same monitor as GoSurvey with the standard title-bar **minimize, maximize/restore and close**
+     buttons, a taskbar entry, and the normal move/resize/snap behaviour; it can be dragged to
+     **another monitor**; and it can be **docked into GoSurvey's dock layout** (drag its title onto a
+     dock slot) and dragged out again. Viewing, rendering, the cache and keyboard/mouse input behave
+     identically docked or on its own. Closing GoSurvey closes every viewer. Turning this on may let
+     other GoSurvey panels be dragged out of the main window too; that is accepted, provided the
+     existing layout, the custom title bar, the splash screen, saved layouts and the Developer Shell
+     keep working unchanged.
+- Acceptance:
+  - `[issue732][req387]` unit test: opening a generated 500-page PDF reports page count and per-page
+    sizes without rendering a page; a corrupt file and a password-protected file return a stated error.
+  - `[issue732][req387]` test: the page-image cache never exceeds its cap while a test walks all
+    500 pages, and evicts the page farthest from the viewport first.
+  - `[issue732][req387]` test: the read-ahead scheduler asks for the visible pages first, then the pages
+    ahead of the scroll direction, and cancels a request for a page that left the window.
+  - `[issue732][req387]` bench (`BENCH PDFVIEW`, reference machine, 500-page file): first page ≤ 250 ms;
+    p95 frame while scrolling top to bottom ≤ 16 ms; worst frame over the run is reported.
+  - Manual: every route in clause 1 opens the viewer; none launches an outside program.
+  - Manual (clause 7): the viewer has working minimize, maximize/restore and close buttons and a taskbar
+    entry; it moves to a second monitor and back; it docks into the GoSurvey layout and undocks; two
+    viewers can be open at once; closing GoSurvey closes them; the first page, scrolling and zoom feel
+    the same docked and undocked.
+  - `[issue732][req387]` the existing Developer Shell end-to-end drivers (`p696-e2e`, `pdfview-bench`)
+    still pass with the window mode turned on.
+- Owner-layer: Domain/IO (`src/pdf/PdfDocument`, pure), Renderer (page textures), UI (window), Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a). 2026-10-06 — clause 7 added and the
+  "separate operating-system window" exclusion removed (D-2026-10-06-b).
+
+### REQ-388 — PDF annotations: text, lines, shapes, colour, thickness, font (GitHub issue #732, phase 2)
+
+- Purpose: issue **#732** feature 2 — mark up a PDF in the viewer.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-a (annotations live **inside the PDF**; **Save As only**), ADR-067.
+- Depends on: REQ-387.
+- Statement:
+  1. **Tools.** Text note (free text), line, rectangle and ellipse, each with a **colour**, a **line
+     thickness** (and fill on/off for closed shapes) and, for text, a **font** (the standard PDF fonts
+     plus the fonts GoSurvey already loads) and size.
+  2. **Stored as standard PDF annotations** (FreeText, Line, Square, Circle), so any other PDF reader shows
+     them. No sidecar file. FreeText, Square and Circle are written through PDFium's annotation API. PDFium
+     cannot create a **Line** annotation, so a line is written as a PDFium placeholder annotation that
+     GoSurvey then turns into a true Line (type and end points) with a same-length edit of the temporary
+     file before it is renamed into place (D-2026-10-06-e); if that edit cannot be made the Save As fails
+     with a stated reason and writes nothing.
+  3. **Select / move / resize / delete** an annotation, with **undo/redo** inside the viewer.
+  4. **Save As only.** The original file is **never overwritten**. "Save As" writes a new PDF; the
+     original is byte-for-byte unchanged (REQ-201: the result is logged). Unsaved edits prompt on close.
+  5. Annotating a 500-page file stays inside the REQ-387 frame budget (only the touched page is
+     re-rendered).
+  6. **Out of scope:** editing or deleting existing page content or existing third-party annotations,
+     highlight/stamp/signature tools, comment threads.
+- Acceptance:
+  - `[issue732][req388]` test: each tool writes one annotation of the matching subtype with the chosen
+    colour, thickness and font; re-opening the saved PDF reads them back unchanged.
+  - `[issue732][req388]` test: Save As leaves the source file's bytes identical (hash compared).
+  - `[issue732][req388]` test: undo/redo restores the annotation list exactly.
+  - Manual: the saved PDF opens in a second PDF reader with the annotations visible.
+- Owner-layer: Domain/IO (`src/pdf/`), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a). 2026-10-06 — clause 2: Line is a true Line written by a post-save patch because PDFium
+  cannot create one (D-2026-10-06-e).
+
+### REQ-389 — Split a PDF: save chosen pages as a new PDF (GitHub issue #732, phase 3)
+
+- Purpose: issue **#732** feature 3 — extract pages from a large PDF into a new file.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-a (Save As only), ADR-067.
+- Depends on: REQ-387.
+- Statement:
+  1. **Page-range input** such as `1-5, 9, 12-20`: comma-separated pages and inclusive ranges, spaces
+     allowed, order preserved as typed, a duplicated page repeated. An empty list, a page `< 1` or
+     `> pageCount`, a reversed range (`9-5`) or any other text is **refused with a message naming the
+     problem** (REQ-201); nothing is written.
+  2. **Output** is a **new PDF** containing exactly those pages (via PDFium page import, keeping page
+     content, size and any annotations). The source is never modified; saving over the source path is
+     refused. Written to a temporary file and renamed into place so a failure leaves no partial file.
+  3. **Offered** from the viewer (a Split command and a toolbar button) and as a typed command.
+  4. Splitting a 500-page file does not freeze the UI (worker thread; progress shown).
+- Acceptance:
+  - `[issue732][req389]` test: `1-5, 9, 12-20` on a 20-page file yields 9 pages in that order; each
+    output page matches the source page's size and text.
+  - `[issue732][req389]` test: each refusal case in clause 1 returns an error and writes no file.
+  - `[issue732][req389]` test: source hash unchanged; saving over the source is refused.
+- Owner-layer: Domain/IO (`src/pdf/PdfSplit`, pure), Commands, UI
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a).
+
+### REQ-390 — PDF scale: set a page's scale, stored as standard PDF measurement data (GitHub issue #732, phase 4)
+
+- Purpose: a plan PDF is a picture of something real; the user wants to say "1 inch on this sheet is 20 feet"
+  once and then measure true distances (REQ-391). Bluebeam-style.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-f (answer 1: standard PDF measurement data, so Bluebeam and Acrobat see the same scale).
+- Depends on: REQ-387, REQ-388 (Save As, the in-place patch technique of D-2026-10-06-e).
+- Statement:
+  1. **Set scale, two ways.** (a) **Calibrate:** pick two points on the page, type the real distance and its
+     unit (inch, foot, yard, mile, millimetre, centimetre, metre, kilometre); the scale is computed from
+     the page's point units. (b) **Preset:** a list of common architectural, engineering and metric scales
+     (for example 1" = 20', 1:100) plus a typed custom ratio "page length = real length".
+  2. **Scope.** The scale applies to the current page, or to all pages, or to a chosen page range (REQ-389
+     page-list syntax). Each page keeps its own scale; a page with none is **unscaled** and the measure
+     tools (REQ-391) refuse it with a message.
+  3. **Stored as standard PDF measurement data:** a page Viewport with a rectilinear Measure dictionary
+     (ISO 32000 Viewport / Measure, as Bluebeam and Acrobat write them), written by **Save As only** into
+     a new file; the original is never changed (REQ-388 clause 4). A scale already in an opened file
+     (from Bluebeam, Acrobat or AutoCAD plots) is **read and used**; if it cannot be understood the page
+     shows as unscaled with the reason (REQ-201).
+  4. **Shown** in the viewer's status area for the current page ("Scale 1 in = 20 ft" or "Unscaled").
+  5. **Out of scope:** non-rectilinear (geospatial) measure data, scale from the drawing's own title block,
+     per-region scales (several viewports on one page).
+- Acceptance:
+  - `[issue732][req390]` test: calibrating 100 pt (1.3889 in) = 50 ft gives a scale that converts any page
+    distance to feet to within 0.01 %; presets and a typed ratio give the same conversion as the equivalent
+    calibration.
+  - `[issue732][req390]` test: a scale saved with Save As is read back unchanged from the new file; the
+    source file's bytes are identical; a file written by a third-party reader (a fixture with a Viewport /
+    Measure) is read correctly.
+  - `[issue732][req390]` test: an unreadable measure entry shows the page as unscaled with a reason.
+  - Manual: a scale set in GoSurvey shows the same scale when the saved file is opened in Bluebeam or
+    Acrobat.
+- Owner-layer: Domain/IO (`src/pdf/PdfMeasure`, pure), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f).
+
+### REQ-391 — Scaled dimensions: length, polylength, area and perimeter, angle (GitHub issue #732, phase 5)
+
+- Purpose: measure real-world sizes on a scaled PDF sheet and leave the dimension on the sheet.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-f (answer 1 standard PDF data; answer 3 the four tools).
+- Depends on: REQ-390, REQ-388.
+- Statement:
+  1. **Tools.** **Length** (two points, then a **third click that places the dimension line**: the line is
+     drawn parallel to the two points at that offset, with extension lines back to the points, an arrow at
+     each end and the label turned along it, as a GoSurvey dimension is; Enter instead of the third click
+     puts the line on the points; D-2026-10-06-g), **Polylength** (a path of points, total length), **Area** (a closed
+     polygon: area and perimeter), **Angle** (three points: the angle at the middle one). Each shows its
+     value as a label on the sheet, in the page's scale and unit; area in square units.
+  2. **Colour, thickness and label font** use the REQ-388 settings; the label shows the number with a
+     chosen number of decimals and the unit. A **Calibrated** or **Preset** scale (REQ-390) is required; on
+     an unscaled page the tool refuses with a message.
+  3. **Stored as standard PDF annotations carrying measurement data:** Length as a Line, Polylength as a
+     PolyLine and Area as a Polygon, each with the page's Measure dictionary and a label appearance; written
+     by Save As with the REQ-388 in-place patch technique (D-2026-10-06-e, widened by ADR-067 (e)
+     addendum 2). **Angle** has no standard dimension type: it is saved as a three-point PolyLine whose
+     label and a private GoSurvey key hold the angle, so other readers show a labelled polyline and
+     GoSurvey recognises it as an angle. This limit is stated in the user-facing help.
+  4. **Edit.** Dimensions select (with the Select tool; Esc leaves a measure tool), move, reshape (drag a
+     point; a Length also has a grip on its dimension line that slides the **offset**), delete and
+     undo/redo like other annotations. **Changing the scale** of a page (REQ-390) recomputes every
+     dimension on it from its geometry, so the labels stay true.
+  5. **Snap.** A **Snap toggle** (button, and F3; off by default) makes points taken by the drawing, measure,
+     calibrate and note tools, and by dragging a grip, snap to the nearest end or corner of the page's
+     vector line work (within about 10 screen pixels, marked on screen) when the page has any; a page that is
+     a scanned image offers no snap. The line work is read in the background the first time a page is used.
+     **Calm snapping:** the reader keeps the ends and corners of real lines (strongest), a round shape's **centre** (strongest) and four quadrant points, drops the tiny steps of a curve, specks and the outlines of text and other small intricate shapes, and candidates within about 6 screen pixels of a stronger one are merged into it (zoomed in, they separate again); the marker stays on its point unless another is clearly closer (D-2026-10-06-i). The Length offset click never snaps. Snap points are in the viewer's page coordinates (rotation and
+     page-box offset accounted for), and marks are carried back to the file's page coordinates when saved
+     (REQ-388), so they land where they were drawn on rotated pages too.
+  6. **Out of scope:** radius/diameter, volume, cutouts inside an area, a measurement legend / markup list
+     export, dimension styles beyond the above.
+- Acceptance:
+  - `[issue732][req391]` test: on a page calibrated 1 pt = 0.5 ft, a Length of 100 pt reads 50 ft; a
+    Polylength of an L-shape reads the sum of its legs; a 100 pt x 40 pt Area reads 1000 sq ft (4000 sq pt x 0.25)
+    and a 140 ft perimeter (280 pt x 0.5); an Angle of three points reads the expected degrees to 0.01.
+  - `[issue732][req391]` test: each saved dimension is read back with its geometry, value, unit and
+    colour; the saved file contains a Measure dictionary for Length / Polylength / Area; the source file's
+    bytes are identical.
+  - `[issue732][req391]` test: changing the page scale changes every dimension's value in proportion.
+  - `[issue732][req391]` test: the tools refuse an unscaled page with a message and add nothing.
+  - Manual: a Length saved in GoSurvey shows the same value, still selectable and re-measurable, in
+    Bluebeam or Acrobat.
+- Owner-layer: Domain/IO (`src/pdf/PdfMeasure`, `src/pdf/PdfAnnotate`), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f). 2026-10-06 — acceptance arithmetic corrected (1000 sq ft, 140 ft); clause 1 Length offset, clause 4 offset grip and Esc, clause 5 Snap toggle (D-2026-10-06-g).
+
+### REQ-392 — Overlay two revisions of a PDF and line them up (GitHub issue #732, phase 6)
+
+- Purpose: put a new revision of a sheet on top of the old one so the changes can be seen at a glance.
+- Priority: should
+- Type: functional + performance
+- Decision: D-2026-10-06-f (answer 2: automatic alignment with a manual fallback).
+- Depends on: REQ-387 (render worker, bounded cache), REQ-388 (annotation overlay drawing).
+- Statement:
+  1. **Compare command.** From a viewer, **Compare...** picks a second PDF (the **revision**) and a page of
+     each (default: the current page of the base and page 1 of the revision). The base file is the one open
+     in the window; neither file is modified.
+  2. **Display modes**, switchable at once: **Tint** (base-only lines drawn blue, revision-only lines red, lines
+     present in both dark grey, so added work shows red and removed work blue, the same colours as the Base and
+     Revision views); **Opacity** (the revision
+     over the base with a slider); **Base** and **Revision** (each sheet alone, with only what the other
+     sheet lacks marked: on Base, ink only the base has is drawn **blue**; on Revision, ink only the revision
+     has is drawn **red**; a mark with even a faint one of the other sheet's within about half a point is the same mark; changes are judged by whole objects: a letter, dash or dot is changed when a sixth or more of it is new, nearby small marks such as the letters of a word or a dot pattern are one group coloured whole when any member changed, and in a big connected mark only the new parts are coloured, tiny leftover clusters being dropped; inside the box of a text run as the PDF stores it, a changed run is coloured entirely and an unchanged one not at all, so a changed number is never half coloured). All use the same
+     zoom and pan. (There is no Blink mode: removed by D-2026-10-06-l.)
+  3. **Alignment, automatic first.** On opening, the two sheets are lined up **automatically** (the
+     transform found by comparing the sheets' line work: shift, uniform scale and a small rotation of up
+     to 5 degrees; sheets of different paper size are allowed). The result and its confidence are shown;
+     a low-confidence result is flagged "check alignment".
+  4. **Alignment, manual fallback.** The user may instead pick **one matching point** on each sheet
+     (shift only) or **two matching points** on each (shift, scale and rotation) and the overlay moves at
+     once. Either replaces the automatic result; "Reset" returns to the automatic one.
+  5. **Speed and memory.** Both pages render off the UI thread through the REQ-387 worker and bounded
+     cache; **no viewer-caused frame over 16 ms** (REQ-100) while panning or zooming the overlay of a
+     500-page file pair; alignment runs on a worker thread, cancellable, with progress, never on the UI
+     thread. Memory stays bounded by the cache cap.
+  6. **Out of scope:** comparing more than two files at once, comparing text or hidden layers rather than
+     the drawn picture, saving the tinted overlay as a PDF (see REQ-393 for saving the found changes).
+- Acceptance:
+  - `[issue732][req392]` test: two generated sheets that differ by a known shift, scale and 2-degree
+    rotation are aligned automatically to within 0.5 pt of the true transform; a pair with nothing in
+    common reports low confidence and does not claim a match.
+  - `[issue732][req392]` test: one-point and two-point manual alignment give the exact transform of the
+    picked points (shift; shift + scale + rotation).
+  - `[issue732][req392]` test: Tint classification of a pixel as base-only, revision-only or both matches a
+    hand-built pair.
+  - `[issue732][req392]` bench (`BENCH PDFCOMPARE`, reference machine): p95 viewer frame while panning the
+    overlay of two 500-page files <= 16 ms; the worst frame is reported.
+  - Manual: Tint, Opacity, Base (removed door in blue) and Revision (added wall in red) all show the changes on real revisions.
+- Owner-layer: Domain/IO (`src/pdf/PdfAlign`, pure), Renderer (page textures), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f). 2026-10-06 — clause 2: Blink removed; Base and Revision views mark what only that sheet has, blue and red (D-2026-10-06-l). 2026-10-06 — Tint colours swapped to match (blue base-only, red revision-only) and changes judged by whole objects (D-2026-10-06-m). 2026-10-06 — text-run boxes decide whole-word colouring (D-2026-10-06-n).
+
+### REQ-393 — Find the changes between two revisions automatically (GitHub issue #732, phase 7)
+
+- Purpose: do the spotting for the user. After the two sheets are lined up (REQ-392), list and highlight
+  what was added, removed or changed.
+- Priority: should
+- Type: functional + performance
+- Decision: D-2026-10-06-f.
+- Depends on: REQ-392.
+- Statement:
+  1. **Detect.** A **Find changes** command compares the aligned pair **by what is drawn** (the pages are
+     rendered at a working resolution and their line work compared; it does not read what the PDF's text says or
+     compare its object structure; the boxes of its text runs are used only to colour a changed word whole in the
+     Base / Revision / Tint views, D-2026-10-06-n). A drawn mark in the revision with no mark near it in the base is **Added**; the
+     reverse is **Removed**; marks present in both but differing are **Changed**. A **tolerance** (a
+     setting, default about 1 mm at print size) ignores anti-aliasing and tiny shifts so identical content
+     shows **no changes**.
+  2. **Group and list.** Nearby differences merge into **change regions** (a bounding box with a kind and
+     a size); regions smaller than a **minimum size** setting are dropped as specks. The viewer shows a
+     **list** of regions; selecting one centres it. **Next / Previous change** keys step through them.
+  3. **Highlight** on both the overlay and the plain views: added in green, removed in red, changed in
+     amber, each as a translucent box drawn over the sheet. The highlights can be hidden.
+  4. **Save the findings.** **Write changes as markups** adds one rectangle annotation per region
+     (REQ-388 tools; colour by kind; contents "Added" / "Removed" / "Changed", with the region size) to the
+     **Save As copy of the revision**; the original files are never changed.
+  5. **Honest limits stated in the window:** the result depends on the alignment (a low-confidence
+     alignment shows a warning before the changes are trusted); a changed scale between revisions or a
+     scanned (image-only) sheet can produce many false regions; the program reports what looks different,
+     not what it means.
+  6. **Speed.** The comparison runs on a worker thread with progress and a Cancel; a full-size
+     (36 x 24 in) sheet pair completes in **10 seconds or less** on the reference machine, and the UI
+     never shows a viewer-caused frame over 16 ms while it runs. (ASSUMPTION recorded, not asked: the
+     10-second target; changeable on request.)
+  7. **Out of scope:** reading what a change means (a moved wall versus a re-drawn wall), text-level
+     diff, comparing more than two files, automatic update of dimensions or the project.
+- Acceptance:
+  - `[issue732][req393]` test: two identical generated sheets, and the same sheet rendered twice with a
+    1-pixel anti-aliasing difference, report **zero** change regions.
+  - `[issue732][req393]` test: a sheet with one line added, one removed and one moved yields exactly one
+    Added, one Removed and one Changed (or a removed + added pair, as documented) region, each containing
+    the true location; a speck under the minimum size is dropped.
+  - `[issue732][req393]` test: a revision shifted by 5 pt reports no changes after automatic alignment, and
+    the same shift with alignment disabled reports many (proving alignment is what removes false changes).
+  - `[issue732][req393]` test: **Write changes as markups** saves one annotation per region with the right
+    kind and bounding box; the source files' bytes are identical.
+  - `[issue732][req393]` bench: a pair of 36 x 24 in line-work sheets compares in <= 10 s; worst viewer
+    frame reported.
+  - Manual: on a real pair of plan revisions the listed regions match what a person marks by eye (a recorded
+    spot check, including false positives and misses).
+- Owner-layer: Domain/IO (`src/pdf/PdfDiff`, pure), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f).
+
+### REQ-394 — Scale check: test a page's scale against dimensions the drawing already states (GitHub issue #732, phase 8)
+
+- Purpose: a scale set by calibrating on one dimension (REQ-390) is only as good as that dimension and those two
+  picks. On a real sheet (issue #732's test set) spans labelled "10'-0"" differ by 0.2 % on paper, so a
+  calibration on one of them made a "43'-0 3/4"" dimension read 42.98 ft. Nothing warned the user. This is
+  blunder detection: test the scale against other known dimensions and say plainly how far off it is.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-h (the user chose "both, manual first": this REQ is the manual check; the automatic
+  audit is REQ-395).
+- Depends on: REQ-390, REQ-391 (points, snap, labels), REQ-388 (annotation overlay).
+- Statement:
+  1. **Check tool.** On a scaled page, **Check** takes two picked points (Snap applies, REQ-391 clause 5) and
+     the value the drawing states for that distance, typed in feet-and-inches (`43'-0 3/4"`, `10'6"`,
+     `6 1/2"`), decimal with a unit (`43.0625 ft`, `12.5 m`, `850 mm`) or a bare number in the page scale's
+     unit. A value that cannot be read is refused with a message naming the problem; nothing is added.
+  2. **Result.** For each check the window shows the **measured** value at the current scale, the **stated**
+     value, the **difference** (in the page's unit and as a percentage of the stated value) and a
+     **verdict**: **Good** (within 0.10 %), **Check** (up to 0.50 %), **Blunder** (more than 0.50 %). The two
+     limits are settings. The verdict colour (green, amber, red) is used everywhere a check is shown.
+  3. **Checks list.** Checks are drawn on the sheet as a labelled line in the verdict colour and kept in a
+     list for the page (select, delete, undo/redo). The **calibration itself** counts as the first check
+     (its picked distance against the distance the user typed). Checks are working marks: they are **not**
+     written into the PDF by Save As; a **Scale report** (text: each check, the best fit, the verdicts) can be
+     copied or written to the log (ASSUMPTION recorded, not asked: not saved into the PDF, to keep the
+     user's drawing free of QA marks).
+  4. **Best fit.** With two or more checks the window shows the **best-fit scale**: the scale that minimises
+     the squared *relative* error of all the checks, each weighted by its length (a long span says more than
+     a short one). A check whose own implied scale differs from the **median implied scale** (a centre one wrong check cannot drag) by more than 0.25 % or by more
+     than three times the median deviation of the checks, whichever is larger, is marked **Outlier** (the
+     likely blunder: a wrong pick, a mistyped value, a wrong unit, or an unreliable drawn dimension). **Use
+     best-fit scale** applies it as an ordinary scale change (one undo step); with an outlier present the
+     window offers the best fit **without the outlier** as well.
+  4a. **Correction (the user's decision).** From any check (**one is enough**) or from the best fit,
+     **Correct scale...** shows the error and lets the user choose: (a) **Match this check**: scale the page so
+     this check reads exactly its stated value; (b) **Best fit** (two or more checks); (c) **A typed percentage**
+     (for example +0.20 % makes every reading 0.20 % larger); (d) **Leave the scale as it is**. Before anything is
+     applied the box previews the **new difference of every check** under that choice, because correcting to one
+     check moves the error onto the others and the user must see that. Applying is **one undo step** and the page's
+     scale text is marked adjusted ("adjusted +0.19 %"); the Scale report keeps the original calibrated value. The
+     program never applies a correction by itself.
+  4b. **Robust calibration (opt-in least squares).** Checking is always optional; a user who does not need the
+     precision never sees it. A user who does picks **Robust calibration...** in the Set scale box. They enter **at
+     least three** known dimensions (two picked points and the printed value each, as in clause 1; the minimum is a
+     setting, default 3) and the program solves **one scale** by weighted least squares. **Weights follow length:**
+     each dimension's uncertainty is the picking error (default 0.25 pt, whatever its length) combined with a small
+     drawing error that grows with length (default 0.05 % of it), so a short span, where one pick is a large share of
+     the length, counts for less than a long one (ASSUMPTION recorded, not asked: these two defaults, both
+     settings). The box shows, live: the **adjusted scale** with its **uncertainty** ("1 in = 3.9956 ft +/- 0.04 %");
+     per dimension the **residual** (what the adjusted scale reads minus what the drawing states, in the page unit
+     and as a percentage) and its **standardised residual**; and the overall fit (the RMS residual). **Blunder
+     detection:** a dimension whose **leave-one-out** standardised residual (its residual against a fit made from the other dimensions, so one wrong long dimension cannot hide itself by dragging the fit) exceeds 3 is flagged **Suspect**, the worst first and then the rest re-tested without it; the user may remove it
+     and see the fit re-solved, or keep it; the program never removes one on its own. **Apply** sets the adjusted
+     scale as one undo step (marked "robust, n dimensions, +/- x %"); **Cancel** changes nothing. With fewer than the
+     minimum the box says how many more are needed and offers nothing to apply. The solution is a single scale
+     (no extra offset parameter).
+  5. **After a calibration** the window offers a one-click "Check this scale against another dimension", and
+     says when the calibrated scale is close to a standard scale (already shown by REQ-390's calibration box).
+  6. **Honest limits stated in the window:** the check proves the *picked* distances agree, not that the
+     drawing is to scale; drawn geometry can differ from printed values by a fraction of a percent, so an
+     Amber verdict on a single check is information, not an error.
+  7. **Out of scope:** reading the sheet's own dimension text (REQ-395), per-region scales, area or angle
+     checks, saving the checks into the PDF.
+- Acceptance:
+  - `[issue732][req394]` test: the value parser reads `43'-0 3/4"`, `43' 0 3/4"`, `10'6"`, `6 1/2"`, `43.0625 ft`,
+    `12.5m`, `850 mm`, a bare `43.0625` and refuses `abc`, `''`, `10'-`, `1/0"`, negative values and trailing text.
+  - `[issue732][req394]` test: measured vs stated, difference and percentage are correct for a known scale,
+    and the verdict changes at exactly the two limits (0.10 %, 0.50 %).
+  - `[issue732][req394]` test: the best fit of checks implying scales 4.000, 4.000, 4.004 weights by length
+    and equals the hand-calculated value; a check implying 3.980 among three that imply 4.000 is the only
+    **Outlier**; best fit without the outlier is 4.000; one check alone gives no best fit and no outlier.
+  - `[issue732][req394]` test: a calibration counts as a check; applying the best fit is one undo step.
+  - `[issue732][req394]` test: robust calibration on a generated set (true 4.000 ft per inch; picks with fixed
+    +/-0.25 pt noise) recovers the scale closer than a single short-span calibration does, with an uncertainty that
+    shrinks as dimensions are added; weights equal 1/(0.25^2 + (0.0005 L)^2) for a span of length L and a long span
+    pulls the answer more than a short one; one deliberately wrong value (a mistyped 10 for 100) is the only
+    **Suspect**, and removing it re-solves; fewer than three dimensions offers nothing to apply; Apply is one undo
+    step and Cancel changes nothing.
+  - `[issue732][req394]` test: correction by "match this check" (measured 42.98, stated 43.06) makes that check read
+    43.06 and moves the calibration check by the same fraction, and the preview lists exactly those new
+    differences before applying; a typed +0.20 % multiplies every reading by 1.0020; "leave it" changes nothing;
+    each applied correction is one undo step and undo restores the scale and its text exactly.
+  - Manual: on the issue's sheet, calibrating on the 180.55 pt "10'-0"" span and checking the "43'-0 3/4""
+    dimension shows an amber verdict (about 0.2 %) and marks the calibration as the outlier once two other
+    10' spans are checked.
+- Owner-layer: Domain (`src/pdf/PdfScaleCheck`, pure: value parser, verdicts, best fit), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-h).
+
+### REQ-395 — Automatic scale audit: read the sheet's own dimension text and test the scale with it (GitHub issue #732, phase 9)
+
+- Purpose: do REQ-394's checking automatically. A drawing already prints hundreds of dimensions; the audit
+  reads their text, measures the dimension lines they describe, and reports whether the page's scale agrees.
+- Priority: could
+- Type: functional + performance
+- Decision: D-2026-10-06-h.
+- Depends on: REQ-394 (verdicts, best fit, Scale report), REQ-391 clause 5 (vector line reading).
+- Statement:
+  1. **Audit command.** **Audit scale** on a scaled page reads the page's **text** for dimension values
+     (feet-and-inches, decimal feet, metres/millimetres, as REQ-394 clause 1), and for each finds the **dimension
+     line** it labels: a straight horizontal or vertical run of drawn line work with an extension line at each
+     end, closest to the text and aligned with it. Text with no such line, and lines with no readable text, are
+     counted as **unmatched** and not used.
+  2. **Result.** The window reports: dimensions matched / unmatched, how many agree with the current scale
+     (Good / Check / Blunder as REQ-394), the **consensus scale** (the most common implied scale among matched
+     dimensions, found robustly so a few wrong matches do not move it, and shown only when at least **five**
+     dimensions matched), and the **worst offenders**, each highlighted on the sheet and listed (click to
+     centre it). **Use consensus scale** applies it as an ordinary scale change.
+  3. **Suggestions, not facts.** Results are labelled as suggestions: each matched dimension shows its text, its
+     measured length and the implied scale so the user can judge it; the audit never changes the scale or any
+     mark by itself.
+  4. **Speed.** Runs on a worker thread with progress and Cancel; a 36 x 24 in sheet with several hundred
+     dimensions finishes in **5 seconds or less** on the reference machine and never causes a viewer frame over
+     16 ms. (ASSUMPTION recorded, not asked: the 5-second target.)
+  5. **Scanned or text-free pages** report "no dimension text found" (REQ-201); nothing crashes.
+  6. **Out of scope:** dimension text drawn as outlines (not real text), leader-style or angular dimensions, text
+     in rotated pages beyond 90 degree turns, correcting dimensions on the drawing.
+- Acceptance:
+  - `[issue732][req395]` test: a generated sheet with N horizontal and vertical dimensions drawn at a known scale
+    (text + extension lines + dimension line) matches all N and its consensus scale is within 0.01 % of the true
+    one; a sheet with one dimension deliberately drawn 1 % long reports it as the worst offender and does not
+    move the consensus.
+  - `[issue732][req395]` test: text with no line near it, and lines with no text, are unmatched; a page with no text
+    and a page with fewer than five matches report so and give no consensus.
+  - `[issue732][req395]` test: cancelling stops the audit and returns no partial result as a verdict.
+  - `[issue732][req395]` bench: the issue's 36 x 24 in sheet audits in <= 5 s; worst viewer frame reported.
+  - Manual: on the issue's sheet the audit's consensus scale is close to 3.9956 ft per inch and it lists the
+    180.55 pt "10'-0"" span among the offenders; a spot check records false matches and misses.
+- Owner-layer: Domain/IO (`src/pdf/PdfDimAudit`, PDFium text + pure matching), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-h).
+
+### REQ-396 — PDF Leader tool, and the drawing tools work by click-click as well as drag (GitHub issue #732, annotation fixes)
+
+- Purpose: while testing REQ-388 the user found that **Text** did not land where they clicked, that **Line** did
+  not draw after two clicks and showed no preview after the first click, and asked for a **Leader**: an arrow
+  pointing at something, with a boxed note at its tail.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-j.
+- Depends on: REQ-388.
+- Statement:
+  1. **Text lands where clicked.** A new text note's top-left corner is the clicked point (or the snapped
+     point, when Snap is on and one is near); it is never placed at the page's left edge.
+  2. **Click-click drawing.** Line, Rectangle and Ellipse can be drawn two ways: **press, drag, release**, or
+     **click, move, click**. After the first click a preview follows the pointer; the second click finishes the
+     shape. Esc cancels. A click-click shape with both clicks on the same spot is not created.
+  3. **Leader tool.** Click 1 is the **arrow tip** (the thing pointed at), click 2 is where the **boxed note**
+     goes; the note text is then typed in the same dialog as a Text note (colour, line thickness, font and size
+     as for Text and Line). A preview (arrow and an empty box) follows the pointer after click 1. The line runs
+     from the box edge nearest the tip to the tip, which carries an arrowhead.
+  4. **Select / move / resize / delete / undo / redo** work on a Leader like on other marks: its grips are the tip
+     and the box's corner (which scales the text, as for a note); double-click edits its text.
+  5. **Stored as a standard PDF FreeText annotation of intent FreeTextCallout** (`/IT /FreeTextCallout`, `/CL`
+     callout line, `/LE /OpenArrow`), with an appearance showing the box, the text and the arrow, so any other
+     reader shows it. Same placeholder-then-patch route as Text and Line (D-2026-10-06-e); a failed patch fails
+     the Save As with a stated reason and writes nothing.
+  6. **Out of scope:** multi-segment (elbow) leaders, leaders with no text, other arrowhead styles.
+- Acceptance:
+  - `[issue732][req396]` test: a Leader saved and re-read has the same tip, box, text, colour and font.
+  - `[issue732][req396]` test: the saved annotation is a FreeText with `/IT /FreeTextCallout` and a `/CL` whose
+    first point is the tip.
+  - `[issue732][req396]` test: a text note whose box starts at (x, y) is stored within a point or two of that
+    corner (the stored rectangle is the text's own bounds), never at the page's left edge.
+  - Manual: Text lands at the click; a Line draws by two clicks, with a preview after the first; the Leader
+    tool draws an arrow with a boxed note and the saved PDF shows it in a second reader.
+- Owner-layer: Domain/IO (`src/pdf/`), UI
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-j; the user asked for the fixes and the Leader tool).
+
+### REQ-397 — PDF viewer defaults: opens maximized; Arial is the default font; romans.shx available (GitHub issue #732)
+
+- Purpose: the user asked that a PDF opens as large as the screen allows, and that every piece of text the viewer
+  adds (notes, leaders, dimension labels) uses Arial unless told otherwise (romans.shx stays available).
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-k.
+- Depends on: REQ-387, REQ-388, REQ-391, REQ-396.
+- Statement:
+  1. **Opens maximized.** A PDF viewer window that opens as its own window is **maximized** the first time it
+     appears. After that the window belongs to the user (resize, restore, dock). A viewer that opens docked is
+     unchanged.
+  2. **Arial is the default and the first entry of the font list** for Text, Leader and the dimension labels
+     (Length, Polylength, Area, Angle); romans.shx stays in the list for the user to pick. The font list on the
+     dimension row lets the label font be changed too. If Arial is not installed, the first entry is the default
+     (romans.shx, else Helvetica). *(The user first asked for romans.shx, then changed it to Arial the same day.)*
+  3. **A PDF cannot embed an SHX font**, so text in an SHX font is written as **stroked line paths** (the way the
+     plot-to-PDF already writes SHX text), in the annotation's appearance, with the text itself kept in the
+     annotation's contents. It looks the same in every reader; it is not selectable text there. The text height is
+     the font size (cap height); lines are 1.5 text heights apart; the on-screen drawing and the saved file use the
+     same strokes and the same measured width.
+  4. **Degree sign:** SHX fonts have no degree glyph, so a label containing one (an angle dimension) is set in a
+     standard font instead (as the plot does).
+- Acceptance:
+  - `[issue732][req397]` test: `MeasureText` for romans.shx is exact (two letters = twice one; two lines = twice the
+    height; a degree sign is refused for stroke drawing).
+  - `[issue732][req397]` test: a note in romans.shx saved and re-read keeps the font name and text, and the saved
+    page shows its strokes inside the note's box.
+  - Manual: a new PDF window opens maximized with the mouse lined up with the buttons from the first frame; new
+    Text, Leader and dimension labels appear in Arial; picking romans.shx draws them in that font.
+- Owner-layer: Domain/IO (`src/pdf/`), UI
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-k; the user asked for both).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -9502,6 +12306,93 @@ capability that does not exist. They are recorded here rather than quietly dropp
   because re-centring rounded every stored coordinate through `float` — is dropped, since `double`
   re-centring does not lose precision.
 
+### REQ-350 — Pipe fitting tool palette: size-matched library parts while routing (GitHub issue #486, Track A5/B7 follow-up)
+- Purpose: while `PIPERUN` (REQ-345 increment B2) is routing, nothing on screen tells the user which
+  library parts fit the pipe being drawn. Reaching a 2in flange today means leaving the command,
+  opening the INSERT dialog, and typing the size into its library filter (increment A5). Every
+  underlying piece already exists — parts carry a type/size/class (A1), the library pane already
+  filters on them (A5), and `PIPEFIT` already splices one into a routed run (B7). What is missing is a
+  surface that puts the matching parts *in front of* the user, filtered to the run in progress.
+- Priority: should
+- Type: functional
+- Depends on: REQ-345 (the palette reads the active run's nominal size and pressure class from the
+  `PIPERUN` command state, and places through its own B7 `PIPEFIT` splice), REQ-107 (block INSERT,
+  connection ports, `CadBlockSnapInsertToConnection`), REQ-313 / ADR-045 (the solid tessellation the
+  shaded preview draws), REQ-100 (the preview is rendered geometry, so its cost is measured, not
+  assumed), REQ-300 (no new dependency — the preview reuses the existing GL path), REQ-201 (a part
+  that cannot be resolved, imported or placed is refused by name, never approximated or silently
+  skipped).
+- Statement: a floating, movable **Pipe Fittings palette** lists the library parts whose nominal size
+  matches the pipe run being routed, grouped by category, each with a shaded preview of the part and
+  its name, and places the picked part with one further click.
+  - **(a) Lifecycle.** The palette opens by itself when `PIPERUN` starts, and **stays open** when the
+    run is committed or cancelled — closing it the instant routing ends would hide it exactly when the
+    user reaches for a flange, which is the `PIPEFIT` case this palette exists to serve. Its open
+    state and position persist like every other palette window (the same `AppCommandState` flag +
+    ImGui ini pattern `blockAuthoringPaletteOpen` already uses); the close box closes it and a command
+    reopens it. It is a **palette, not a modal** — it never blocks the command line or the viewport.
+  - **(b) Categories.** Right-hand vertical tabs, built by the same `PaletteTabButton` /
+    `BeditVerticalText` pair the BEDIT Block Authoring Palettes already use, so the two windows read
+    as one family: **Fittings** (`Elbow90`, `Elbow45`, `Tee`, `Cross`, `Reducer`, `Coupling`),
+    **Flanges** (`Flange`), **Valves** (`Valve`), **Nozzles** (`Nozzle`), **Other** (`Cap`, `Other`).
+    `Nozzle` is a **new** `CadPipePartType` value (D-2026-09-24-a (1)) — additive, so no existing
+    sidecar, block definition or drawing changes meaning.
+  - **(c) Size matching is exact.** A run of nominal size `N` lists only parts tagged `N`, compared by
+    the same `CadParsePipeNominalSizeInches` numeric parse the rest of REQ-345 uses (so `2in`,
+    `2 in` and `2.0in` are one size, and a label the NPS table does not carry lists nothing rather
+    than being interpolated). A `1.5in` reducer is **not** offered on a `2in` run: which *other* sizes
+    are relevant at a size change is a real product rule (reducer direction, branch sizes) that
+    belongs to a later increment, not a guess made here (D-2026-09-24-a (3)).
+  - **(d) Pressure class follows the catalog's own precedence.** Class filtering reuses
+    `CadPipeCatalogFind`'s recorded rule verbatim — a run with a class prefers parts tagged with that
+    exact class and falls back to class-agnostic (untagged) parts only when no exact match exists —
+    rather than inventing a second, palette-only rule that could disagree with what auto-fitting picks
+    at a bend.
+  - **(e) Each row is a shaded preview plus a name.** The preview is the part's own B-rep solid,
+    lit and shaded, rendered **offscreen by the renderer** into a per-part cached texture and drawn by
+    the palette as an image (**ADR-062**) — not a wireframe: a flange, a cap and a blind flange are
+    indistinguishable as top-down circles, which is the whole reason the existing A5 preview earns so
+    little. Connection ports are marked on the preview in the role colours the BEDIT gizmo and the A5
+    pane already use (green inlet / blue outlet / orange branch), so how a part mates is visible
+    before it is placed. Beside the preview: the part's name as the library holds it
+    (`2in Weld Neck Flange`), with its size and class beneath.
+  - **(f) Placement is one click, and where you click decides which kind.** Clicking a row arms the
+    part with a cursor ghost. A click **on a pipe run** splices the part into that run with the
+    engagement cutback — the existing `PIPEFIT` path (B7), unchanged, including its refusals and its
+    single undo step. A click **off any run** places the part as an ordinary block INSERT at that
+    point, with connection-port snapping (REQ-107) — which is what makes the palette usable for a
+    nozzle on a vessel or a flange staged beside the line, neither of which is a run splice.
+    `ESC` disarms. Both paths are the commands that already exist; the palette is a way of *reaching*
+    them, and adds no third placement rule of its own.
+  - **(g) An empty category says why.** A tab with no size-matching part shows a plain sentence naming
+    the size it filtered on, not a blank pane — the difference between "your library has no 2in valve"
+    and "this window is broken" is the whole message (REQ-201's spirit at the UI: never present a
+    silent nothing where a stated reason exists).
+  - **(h) The bundled fittings are tagged.** The three parts shipped in `resources/blocks/fittings/`
+    carry no metadata sidecar today, so they have no type or size and would list under no tab at all.
+    A sidecar is authored for each (D-2026-09-24-a (2)); they are written **class-agnostic**, because
+    the real pressure class of those parts is not knowable from the files and a guessed `CS150` would
+    wrongly hide them from a `CS300` run, whereas untagged matches either by (d).
+- Acceptance:
+  - Starting `PIPERUN` opens the palette by itself, as a floating window that can be moved and
+    resized, without blocking the command line.
+  - With a `2in` run active, the **Flanges** tab lists `2IN_BLIND_FLANGE` and `2in_WELD_NECK_FLANGE`
+    and does **not** list `CJ_4in_WELD_NECK_FLANGE`; routing a `4in` run instead lists the `4in` part
+    and not the `2in` ones, re-filtered live without the palette being reopened.
+  - Every listed row shows a shaded preview of that part with its connection ports marked, and the
+    part's name beside it.
+  - Picking a row and then clicking **on** the routed run inserts the part and splits the run exactly
+    as `PIPEFIT` does, as **one** undo step.
+  - Picking a row and then clicking **off** any run places the part as a block INSERT at that point.
+  - The palette is still open after the run is committed or cancelled; its close box closes it; the
+    reopen command shows it again with its position kept.
+  - A category with no size-matching part shows a sentence naming the filtered size, not a blank pane.
+  - A `Nozzle`-tagged part round-trips through a sidecar, a block definition and `.gs` without losing
+    its type, and a drawing written before `Nozzle` existed still loads with every part type intact.
+  - REQ-100 holds: the palette open with every category populated does not push the frame past the
+    16 ms p95 budget on the reference machine, because each part's preview is rendered **once** and
+    cached, not re-rendered per frame.
+
 ---
 
 ## Quality requirements
@@ -9619,6 +12510,37 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Build/Platform
 - Status: accepted (2026-09-06)
 - Revisions: 2026-09-06 — initial.
+
+  2026-09-22 — **a polyline that lies in ONE plane exports as one `LWPOLYLINE` in that plane**
+  (D-2026-09-22-a, ADR-053 amendment (f), TASK-274, GitHub issue #521). Increment 4 above splits a
+  polyline with a tilted curved segment into flat runs plus one ARC each, because `LWPOLYLINE` carries
+  one elevation and one extrusion for the whole entity. That ceiling is real, but it only bites when
+  the segments disagree about their plane. When the whole polyline — vertices and every curved
+  segment — lies in a single plane, that one extrusion is all it needs: the entity is written in its
+  own OCS (group 210/220/230 = the plane normal, group 38 and the vertices in that plane), bulges and
+  closure intact, and it round-trips as itself.
+
+  What made this urgent is that the same writer **flattened** every non-level polyline: group 38 took
+  the first vertex's Z, the extrusion stayed (0, 0, 1) and the vertices were the XY projection, so a
+  100 × 50 vertical `SECTION` of a box exported as a zero-area sliver 100 long. `SECTION` did not
+  exist when that was recorded as debt (TASK-034); it now makes non-level outlines routinely.
+
+  So, on export:
+  - level polyline → unchanged, byte-identical;
+  - planar but not level → one `LWPOLYLINE` in its own OCS;
+  - segments in different planes → increment 4's split, unchanged;
+  - not planar at all → a 3D `POLYLINE` / `VERTEX` pair, the only DXF entity with a Z per vertex.
+
+  On import, group 210 on an `LWPOLYLINE` is read and its vertices mapped back through the same
+  Arbitrary Axis frame REQ-312 uses, and the plane is stored per vertex so a curved segment keeps it.
+
+  Acceptance added:
+  - a vertical and a tilted `SECTION` outline of a box survive export and re-import, every vertex in
+    all three axes;
+  - a sphere's vertical section — a circle standing on edge, whose two vertices are level while its
+    arcs are not — exports as one `LWPOLYLINE` with group 210, not as ARCs, and comes back as one
+    closed polyline with its bulges;
+  - a level polyline exports exactly as before.
 
 ### REQ-326 — 3D Object Snap: AutoCAD-parity solid-geometry snapping, independent of 2D Object Snap (issue #395)
 - Purpose: let a user snap the cursor to B-rep solid geometry (vertices, edges, faces, and — for
@@ -10242,7 +13164,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
   | Measure | Budget |
   |---|---|
-  | Clean `ninja-release` local build | ≤ ~2 min |
+  | Clean `ninja-release` local build | ≤ ~2.5 min (D-2026-09-30-e; was ~2 min) |
   | CI `build` job (warm dep cache) | ≤ ~6 min; ≤ ~10 min on a cold cache |
   | Incremental rebuild after touching one `src/ui/*.cpp` or `src/commands/*.cpp` | ≤ ~20 s |
 
@@ -10272,6 +13194,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-08-31) — GitHub issue #142; see D-2026-08-31-a and the decision log.
 - Revisions: 2026-08-31 — initial. Accepted the same day (D-2026-08-31-a) after Phase 1 (PCH,
   CI gating) and the first Phase 2 slices landed green.
+  2026-09-30 — clean local budget ~2 min → **~2.5 min** (D-2026-09-30-e): LibreDWG is now built
+  from source (ADR-041 (h)) and kept optimized; measured 146 s clean against 94 s with the old
+  prebuilt library (TASK-299).
 
 ---
 
@@ -10308,6 +13233,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
+| REQ-350 | UI/Commands/Render | `CadPipePaletteTests` (category → part-type grouping incl. the new `Nozzle`; exact size match accepts `2in`/`2 in`/`2.0in` and rejects `1.5in`/`4in`; class-agnostic parts match either class while an exact class wins; a non-fitting library entry never lists; empty-category reason names the filtered size; armed-part placement routes to the splice on a run and to INSERT off one) **Amended 2026-09-25 (D-2026-09-25-a, TASK-277): (f)'s connection-port snapping is now actually performed, and a palette click always places the part.** `CadPipePaletteArmPart` armed a one-click INSERT and never enabled any snap, so the off-run half of (f) was a plain drop at the click point with the identity rotation the part was authored with - reported with screenshots as "the blind flange is not aligning correctly". A blind flange bolts onto another flange's FACE and can never splice into a run, so that path was the only one it had. The click now resolves in three ordered outcomes: **on a run** -> the existing `PIPEFIT` splice, unchanged; **otherwise, within 2 ft of a connection port or pipe end** -> `SubmitInsertBlockConnectorPick` (REQ-107 / issue #496, unchanged, including TASK-269's exact-match-before-default two-pass search - which is what makes a blind flange prefer the flange FACE over the pipe end also in reach, since its only mode targets `flange-face` exactly and accepts `pipe-end` merely as an `isDefault` fallback); **otherwise** -> a free placement at the point, reported as such. A REFUSED splice also falls through to the snap/placement rather than ending the click (D-2026-09-25-a): the bundled blind flange has ONE connection point and `PickElbowPorts` needs two, so a run click used to be consumed with nothing placed at all. `SubmitInsertBlockConnectorPick` gains a defaulted `optional` parameter - when set, the two not-found paths return false WITHOUT logging a refusal, so a caller with a legitimate fallback can take it; every other caller is unchanged and keeps its named refusals (REQ-201). Arming also clears `insertBlockConnectorName` and the stale dialog rotations, so every port on the part is a snap candidate rather than whichever one an earlier INSERT dialog left named. `CadBlockImportTests` gains 3 `[connectorsnap]` cases (a blind flange clicked on a placed flange's gasket face landing ON that face with its own face turned INTO it; nothing within 2 ft still placing, and saying why it is unoriented; a part that cannot splice still landing where it was clicked with the splice's own refusal logged). All three fail against the code they were written for. Full suite green: `GoSurveySnapTests` 437/437 (up from 434), `GoSurveyTests` 1218/1219, ctest 1809/1817 - the same 8 pre-existing failures named under TASK-275/276. **Deliberately out of scope, by name**: enforcing `CadBlockConnectionMode::compatibilityTag` (a CS150 part snapping to a CS300 face is not refused), and the 2 ft `kSnap` tolerance itself, which is REQ-107's existing figure. | accepted |
 | REQ-001 | IO | `<TEST-001>` | accepted |
 | REQ-330 | Viewport/UI/Render/IO | `CadSnapTests` `[CadSnap][issue401]` (TOP+world N/E/S/W within REQ-101; rotated UCS follows the axes; orbited camera + tilted circle all four on the circle; circle plane ⟂ UCS plane falls back to the curve's local axes with four distinct points; arc offers only in-sweep quadrants; F3 master gate + per-type toggle; Shift+right-click "snap once" override reaches it when the toggle is off) | accepted |
 | REQ-100 | Renderer | `BenchSceneTests` (exact segment count; byte-identical regeneration; segment count changes density not extent; iso-elevation contours; nearest-rank percentile) + the `BENCH` / `BENCH SURFACE` / `BENCH MESH` commands on the reference machine (`project.md` §7), MSVC, RTX 5060 — segments 1.38 ms, meshes 1.97 ms, surface 10.28 ms vs 16 ms, 2026-08-15 (TASK-052, TASK-053) | accepted (device pending BUG-013) |
@@ -10325,7 +13251,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-021 | Domain/UI | `AngleFormatTests` (DD/DMS/Surveyor's, direction/base, default parity) | accepted |
 | REQ-022 | UI/IO | manual (insertion units stored + sampled; survey precision independent) | accepted |
 | REQ-023 | IO | runtime DXF round-trip (survey points reconstructed via XDATA; existing points preserved + merged, id conflict → overwrite/offset prompt; foreign POINT → cross-lines) | accepted |
-| REQ-024 | UI | manual (LINE first point shows x/y field pair, x highlighted; Tab moves highlight without committing; typed value locks a field and Tab carries the lock forward; @dx,dy / bearing locks both fields; Enter/click commits; LINE second point shows distance/angle pair; CIRCLE center shows x/y; non-point prompt single field; REQ-154 UCS directional prompts unchanged) | accepted |
+| REQ-024 | UI | manual (LINE first point shows x/y field pair, x highlighted; Tab moves highlight without committing; typed value locks a field and Tab carries the lock forward; @dx,dy / bearing locks both fields; Enter/click commits; LINE second point shows distance/angle pair; CIRCLE center shows x/y; non-point prompt single field; REQ-154 UCS directional prompts unchanged) **Amended 2026-09-24 by D-2026-09-24-b, D-2026-09-24-c and D-2026-09-24-f, all from user reports on the same behaviour: a bare Enter must reach the active command, and ONE Enter must be ONE submission.** The last of the three is the mechanism change: `main.cpp`'s raw Enter poll no longer infers from ImGui state whether a field already consumed the keypress — the UI stamps the frame on every submission it makes (`UiSubmitCommandLine` / `CadUiCommandLineSubmittedThisFrame`, `src/ui/CadUi.cpp`) and the poll asks. Pinned by the Developer Shell test `d-2026-09-24-f-one-enter-one-submit` (REQ-161) alongside `req024-blank-enter-default`; both fail against the code they were written for. | accepted |
 | REQ-340 | UI/Commands | manual (MOVE/COPY base-point hover shows green triangle at the snap candidate, gone on move-off/pick/Esc; four-arrow icon shown from base point picked through second-point commit; ROTATE/SCALE show the triangle, not the arrow icon; object-selection steps show only the REQ-121 pickbox; no glyph with no command running; crosshair unchanged) | accepted |
 | REQ-025 | UI/Domain | manual (Model + Paper layout tabs; add/rename/delete; MODEL/PAPER status button toggles) | accepted |
 | REQ-026 | UI/Domain | manual (paper size + orientation render the sheet outline at physical size) | accepted |
@@ -10461,7 +13387,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-154 | Commands/Renderer/UI/IO | done (TASK-140) — `UcsTests` (33 cases); `req154-ucs-plan` transcript; `UCS` / `PLAN` / `UCSFOLLOW` (GitHub issue #126). 2026-09-10 (TASK-243, D-2026-09-10-a, GitHub #156): `Object` now aligns to a planar face of a B-rep solid — deferred item 4 partially lifted, thin consumer of the REQ-318 sub-object pick; `headless.issue156-ucs-object-solid-face` | accepted |
 | REQ-155 | Commands/Renderer/UI/IO | done (TASK-157) — `ViewportUcsTests` T1–T6: point typed while floating resolves in the viewport frame; `UCSFOLLOW=1` re-plans only the active viewport (sibling + model-view camera unchanged); viewport-UCS field independence; `.gs` round-trip + legacy load all-World; readout resolves in the viewport frame; save-while-floating records the drawing frame. Manual GUI spot-check (float a viewport, `UCS`, grid/crosshair rotate in that viewport only) pending — headless cannot render. (GitHub issue #155, D-2026-08-31-c) | accepted |
 | REQ-161 | Application/UI/Build | planned — Debug Developer Shell + Test Engine; Release `dumpbin` ctest; `--devshell-run` script | accepted |
-| REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2004 default write; no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
+| REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2000 default write (D-2026-09-30-c); no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
 | REQ-171 | Domain/Renderer/IO | planned — point cloud entity; shared immutable payload; logged DXF/DWG exclusion | accepted |
 | REQ-172 | IO/Domain/UI | planned — PTS→PTX→LAS→LAZ→E57 read+write; malformed refuse | accepted |
 | REQ-173 | Domain/IO/Renderer/UI | planned — JPEG/PNG/BMP IMAGE underlay; missing file unloads image only | accepted |
@@ -10484,8 +13410,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-336 | UI/IO/Build | planned (D-2026-09-10-d, ADR-056). What's New billboard: `resources/whats-new.md` + vendored md4c + ImGui draw layer; auto-open once per launch from Start unless prefs dismiss version matches; Help → About reopens same window without clearing dismiss; releases-list URL; missing-file fallback; CI presence gate; agent rule + git hook authoring lock | accepted |
 | REQ-341 | Render/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 6 — **the last of that issue's eight criteria**, D-2026-09-10-e, ADR-058, TASK-249). `SECTIONCLIP` — hide the model in front of the **active UCS plane**, offset along its Z, `FLIP` to keep the other half. A **view state**: no geometry, no undo entry, not persisted to `.gs`. **Live means no rebuild** — the plane is a `gl_ClipDistance[0]` uniform re-read every frame, so moving it invalidates no cached geometry; the transcript asserts the display-regeneration counter is unchanged across five plane moves, a flip and an off/on. `uMVP` and every REQ-058 camera path are untouched, which is what keeps plan-view parity intact. **The decision that carries the risk is the anchor rebasing** (ADR-058 (c)): vertices arrive with XY relative to the view anchor and the anchor IS the pan point, so a world-stated plane is **bit-identical to the correct one at the origin**, sits **2,196,000 ft out at easting 2.196e6**, and **moves one foot per foot of pan** — while a horizontal cut is exact in *both*, so neither an origin test nor a level plane can catch it. `SectionClipTests` (9 cases: the UCS plane and its offset, FLIP, a moved-and-turned frame, CPU/shader predicate parity, survey magnitudes on an axis-aligned/oblique/horizontal plane, the origin bit-identity, an anchor sweep, and REQ-101 resolution at 0.002 ft steps on a 2.2e6 constant) **measures where the plane actually lands by bisection** rather than checking that two answers differ — the P3 lesson. **Proven to bite:** removing the anchor term fails 4 of the 9 cases and 13 assertions. Plus `headless.req341-section-clip` (87 steps: every spelling and refusal with the previous state surviving each, UNDO reaching *past* the clip to the previous edit, the solid byte-identical, the no-rebuild sweep, and the clip not surviving a new drawing). Full suite **1451/1451**, up from 1441. **Two limits stated as increments, not gaps:** dimensions, annotation text and line-pattern hatches are ImGui-overlay drawn and **no GPU clip plane can reach them**; and the cut is **uncapped**, so a clipped solid shows its interior — `brep::SectionLoop` (REQ-335) is already the geometry a cap needs. **The GUI check `--devshell-run req341-section-clip-viewport` RAN GREEN** (six viewport captures: the whole box; only the BOTTOM FACE surviving a cut at offset 0, which places the plane exactly where it was asked for; a third and then two thirds of the box at offsets 4 and 8, both open at the top — ADR-058 (f)'s uncapped cut seen directly; the COMPLEMENT slab under FLIP; and `off-again` byte-identical to `off`). **It caught a bug nothing else did: `SECTIONCLIP 0` switched the clip OFF**, because the command had copied `PERSPECTIVE`'s `1`/`0` aliases into a command whose argument is a distance. The numeric aliases are removed and four transcript lines pin `0` and `1` as offsets. It reached the GUI because the transcript's liveness block already typed `SECTIONCLIP 0` and asserted only that nothing was rebuilt — which is trivially true of a command that did nothing. Two harness facts were established getting there and are recorded in TASK-249: the devshell is **compiled out of Release builds** (CMakeLists:148, REQ-161) so it needs `build/debug`, and `DevShell_RequestScreenshot` reads the window's `GL_FRONT` and returns **pure black** on an uncomposited window — six identical black frames that read exactly like "the clip does nothing". `DevShell_RequestViewportCapture` was added, reading the renderer's own framebuffer through `CaptureThumbnailBmp` (REQ-308). **Still correct-by-construction rather than observed:** the unconditional `glDisable(GL_CLIP_DISTANCE0)` at `finish_render` that keeps the clip out of ImGui's draws — the captures hold no UI and the test engine drives items, not pixels. **Amended 2026-09-16 after the code review on #478** (D-2026-09-16-b, TASK-249 §15): the plane is packed against each draw's OWN cached anchor, so a tilted cut no longer slides while the view pans (GUI-measured: a cached frame and a freshly uploaded frame at the same pan differ by 0 px); TIN surfaces clip; the clip is per tab; picks and snaps ignore what it hides; the indicator sizes from the drawing's extents | accepted |
 | REQ-342 | Render/Commands/Viewport | accepted, slice 1 delivered (GitHub issue #479 acceptance 1-3, D-2026-09-11-b, ADR-059, TASK-258). `SECTIONPLANE` — click a flat face, and REQ-341's clip plane is placed on that face's own plane, drawn **hatched with a section line** along its base. **One clip plane, two ways to aim it**: `SECTIONCLIP` still derives it from the active UCS, `SECTIONPLANE` gives it a stored face frame, and `CadEffectiveSectionClipFrame` is the single place that decides — so the offset, `FLIP` and `OFF` act on a face-defined plane without a second vocabulary. **A planar face's frame IS the plane**: `brep::Surface::frame` is a `ucs::Ucs` with its origin on the face and its Z the outward normal, so the conversion is `SectionClipFromUcs(frame, 0, false)` and nothing more — measured in probe P1/P2 (2026-09-11, linking the shipping kernel) across 22 planar faces of BOX/WEDGE/PYRAMID/CYLINDER/CONE with frame-origin deviation exactly `0.000e+00`, and the outward claim holding with **no counterexample** for `BooleanSubtract`, `BooleanUnion` (46 planar faces each) and an oblique `Slice`, identically at the origin and at **E 2,196,000 / N 1,400,000**. The offset starts at **zero**, so creating a plane shows a plane and hides nothing — asserted as "every vertex of the picked solid survives the clip". A **curved** face is refused **by name** ("that is a cylindrical face"), as are an edge, a vertex and a miss, and the command **stays open** after each. Tests: `SectionClipTests` `[sectionplane]` (7 cases / 390 assertions — every hatch endpoint on the plane under a tilted frame, inside the rectangle measured in its own axes, `GL_LINES` pairs with no zero-length segments and a bounded count, density invariant between a 4 ft and a 900 ft rectangle, REQ-101's 0.002 ft at E 2.196e6, and the section line being the lowest real edge); `SubObjectSelectionTests` `[sectionplaneface]` (3 cases / 52 assertions — the face rules, with the pick tolerance **stated**, which the headless driver cannot do because `CadOffsetEntityPickTolWorld` is screen-derived and collapses to ~0.002 ft with no window); `ViewportPickPolicyTests` `[req342]`; and `headless.req342-section-plane` (71 steps, driven with **CLICK** rather than PICK so the routing layer is actually exercised). **Proven to bite:** routing `SectionPlane` to `Ignore` fails the policy tests, removing the hatch clipping puts endpoints 29 ft outside the rectangle, and a world hatch spacing gives 2 lines where 512 are expected. Full suite **1489/1489**, up from 1478. **The routing is the part worth recording**: `ViewportClickRoute::SubObjectFacePick` + `ViewportIsFacePickStep` exist because the sub-object pick had only ever been `Ctrl`+click dispatched *above* the route table, with the hover carrying a **second, separate** gate — the shape that produced two user-reported bugs in one session on the previous slice. It nearly produced a third: the first implementation put the face branch inside the `IdleSelection` case, a **different route**, so the click would have fallen out of the switch silently — and **`/W4` omits MSVC's unhandled-enumerator warning (C4061/C4062)**, so it compiled clean. Caught by reading the switch. **Not yet delivered, as stated increments:** the plane is **not an entity** (no selection, erase, Properties or `.gs` — slice 2), has **no grips** (slice 3), and the section line carries **no direction arrows**. **Not verified by automation:** that any of it is actually drawn — there is no GL context in any test, and the hatch geometry is measured rather than seen | accepted |
-| REQ-343 | Commands/Render/UI | accepted, slice 2 delivered (GitHub issue #479 acceptance 5-7 and the selection half of 4, D-2026-09-11-c, ADR-059 (g)/(h), TASK-259). The section plane is **selectable** and carries a **section line through its centre** — moved from REQ-342's lowest edge, which coincided with the rectangle's own outline and left the middle, where the handles have to be, unmarked. **Six handles:** Move (centre, drags along the plane's **own normal**, so the cut stays parallel to the face it came from however the view turns), Flip (**a click**, since there is no halfway between looking at one half and the other), and two pairs that resize the drawn rectangle. Sliding writes `viewportSectionClipOffset` directly, so **the cut moves on the same frame** and dropping the drag is only disarming — a view state has no geometry to rebuild and therefore no commit step. Resizing writes a `SectionPlaneExtent` stated in the plane's **own basis**, so sliding leaves it untouched, and it is reset when the plane is re-aimed. **Resizing never changes the cut**: the cut is unbounded and the rectangle is a finite patch drawn so the plane can be found, so geometry appearing while a user drags a corner would be the defect — asserted directly. Dragging one edge moves **that** edge; the opposite one stays put; a stretch is clamped so the rectangle cannot be turned inside out. Selection is a **bool, not a `SelectedEntity`** (ADR-059 (h)): the plane has no layer, attributes or `.gs` presence, so entering `selection` would put a branch in every consumer of that vector and the first to forget would silently export or erase a view setting. `CadSectionClipIndicator` is now the **single** source of the rectangle, called by the renderer AND the pick — the bounds walk that `main.cpp` did inline is gone, because two copies of "where is the rectangle?" is how a user clicks the plane they can see and grabs nothing. Tests: `SectionClipTests` `[sectionplane]` (14 cases / 485 assertions — handle placement on a tilted frame, handles inside the rectangle, unit drag directions, opposite-facing pairs, handles following a slide, the stored extent overriding the model bounds and surviving a slide, and a long thin stretched plane still hatching); `SubObjectSelectionTests` `[sectionplanegrip]` (10 cases / 97 assertions — select, deselect, drag, flip, stretch, clamp, re-aim, ESC). Full suite **1506/1506**, up from 1489. **Two real bugs were found by these tests, not by reading:** (1) the drag axis was re-derived each frame from a handle the drag itself had moved, so the delta collapsed to zero on frame 2 — a held cursor snapped the plane back to the grab point and a moving one oscillated; the axis is now **frozen at the grab** and the guard is five no-op frames, which fails on frame 1 when reinstated. (2) A stretch moved the grabbed edge **twice** as far as the cursor, from applying the full delta to both the half-size and the centre. Neither is visible to a test that calls the drag once. **Stated increments:** the plane is still not an entity (no Properties, no `.gs`), its manipulation makes **no undo entry** — consistent with a view state, but `UNDO` will not step a slide back — the section line has **no direction arrows**, and there is no contextual ribbon. **Not verified by automation:** that any of it is drawn or that a real mouse drag reaches it; there is no GL context in any test, and the handles are geometry-checked rather than seen | accepted |
-| REQ-345 | Domain/IO/Render | accepted, increment B1 delivered (GitHub issue #486, TASK-263). **`CadPipeRun`** — a piping run's PATH, not its geometry: an ordered polyline of 3D vertices plus a nominal-size (NPS inch) label and an optional pressure-class tag ("CS150"/"CS300", D-2026-09-12 decision 1). The swept pipe solid is derived, never stored — one right-circular cylinder per straight segment, radius from a standard NPS→OD table (`CadPipeNominalOdFeet`, cadpiperun.hpp), rebuilt from the path whenever it changes (`RebuildPipeRunWorldSolids`, the same signature-gated derived-array shape `blockRefWorldSolids` already uses) and fed through the existing solid tessellation/coalescing pipeline (REQ-313/issue #194) so a pipe run draws exactly like any other B-rep solid with no second render path. This is the "piping owns topology, blocks own geometry" split the issue's architectural notes call for, extended from fittings (blocks) to pipe segments. Persists in `.gs` as the path and labels only (additive `pipeRuns`/`pipeRunAttrs` arrays, ADR-020 (d) — no version bump, ADR-025's absolute storage coordinates for vertices); the solid is rebuilt on load. An unresolvable nominal size or a run under 2 vertices contributes no solid rather than a guessed or invalid one (REQ-201); a degenerate (coincident-vertex) segment is skipped and its neighbours still sweep. `CadPipeRunTests` (10 cases: NPS label parsing incl. whitespace and rejection of non-numeric/negative/unit-less input; known-size lookup against the standard OD table and refusal of an unlisted size; a straight run's single cylinder volume checked in closed form; a bent run producing one cylinder per segment; a coincident-vertex segment silently skipped while its neighbour still sweeps; and both under-2-vertex and unresolvable-size runs producing zero solids). Full suite green, no regressions. **Deliberately deferred to later Track B increments, by name**: the interactive routing command (B2), the `CadPipingSystem` container (B3), catalog lookup by size+class+part type (B4), automatic elbow/tee insertion at bends and branches (B5/B6), manual fitting placement on a run (B7), and edit operations — grip-editing a vertex, changing size/class, splitting/merging (B8). Track A (A1–A5, fitting metadata/connection roles/library export/authoring/browser) was already fully delivered before this increment (PRs #488–#491). **Increment B2 delivered (TASK-264): the interactive `PIPERUN` command** — shaped after `POLYSOLID` (its nearest existing analogue: its own `Kind`, its own path-building state machine, remembered settings across runs). Prompted nominal size + optional pressure class first (validated against the same `CadPipeNominalOdFeet`/`ParseCadPipePressureClass` B1 already uses — an unresolvable size or class refuses and re-prompts rather than being guessed), then click-to-add straight vertices; `U`/`UNDO` drops the last vertex (never the start point — mirrors `POLYLINE`'s own guard); `END` or a blank Enter commits the run as one `PushUndoSnapshot` step; `ESC` cancels the draft but **remembers** the size/class for the next run, the same reason `POLYSOLID`'s width/height/justify survive its own cancel. The live rubber-band preview (`CadRubberPreview.cpp`) calls the SAME `CadBuildPipeRunSolids` the next click commits and Enter finishes — `POLYSOLID`'s own "one function, not a separately-drawn approximation" reasoning, applied here: the ghost run is the committed draft plus the cursor point, tessellated and drawn exactly like `POLYSOLID`'s ghost wall. Osnap (including to existing block connection ports and solid faces) is inherited for free: `CadSnap::FindBest` is gated only on `cmd.active != Kind::None`, not on which command, so `PIPERUN` gets full 3D snap the moment it is added to `ViewportClickRouteFor` (`SnappedPointPick`, beside `POLYSOLID`'s own case) — the same reason the click coordinates and `CadCommitElevation`'s snapped-Z already carry through untouched from `SubmitPolylineVertex`'s established pattern. `CadPipeRunCommandTests` (11 cases, `GoSurveySnapTests` — needs `gosurvey_domain` for the command-layer functions, like `CadBlockImportTests` beside it: start/prompt phase, unknown-size and unknown-class refusal with the prompt held, size+class accepted, a full click-U-click-END round trip landing in `cadPipeRuns`/`cadPipeRunAttrs`, blank-Enter finishing the same as `END`, `END` refusing with only a start point, `U` undoing a vertex but never the start point, `ESC`-equivalent cancel clearing the draft while remembering size/class, a second run reusing the remembered size on a blank Enter, and a click before any size is set being refused rather than silently accepted). Full suite green (`GoSurveyTests` 1160/1160, `GoSurveySnapTests` 310/310), no regressions. **Deliberately out of scope, by name**: wiring the ribbon's existing "Pipe Network" NYI button (`CadUi.cpp` Create Design section) to `PIPERUN` — that button is one of twelve built by one shared disabled-button helper, and rewiring a single one is ribbon-layout work, not command-layer work; the command is reachable today by typing `PIPERUN`. B3–B8 remain as B1 stated them.
+| REQ-343 | Commands/Render/UI | accepted, slice 2 delivered (GitHub issue #479 acceptance 5-7 and the selection half of 4, D-2026-09-11-c, ADR-059 (g)/(h), TASK-259). The section plane is **selectable** and carries a **section line through its centre** — moved from REQ-342's lowest edge, which coincided with the rectangle's own outline and left the middle, where the handles have to be, unmarked. **Six handles:** Move (centre, drags along the plane's **own normal**, so the cut stays parallel to the face it came from however the view turns), Flip (**a click**, since there is no halfway between looking at one half and the other), and two pairs that resize the drawn rectangle. Sliding writes `viewportSectionClipOffset` directly, so **the cut moves on the same frame** and dropping the drag is only disarming — a view state has no geometry to rebuild and therefore no commit step. Resizing writes a `SectionPlaneExtent` stated in the plane's **own basis**, so sliding leaves it untouched, and it is reset when the plane is re-aimed. **Resizing never changes the cut**: the cut is unbounded and the rectangle is a finite patch drawn so the plane can be found, so geometry appearing while a user drags a corner would be the defect — asserted directly. Dragging one edge moves **that** edge; the opposite one stays put; a stretch is clamped so the rectangle cannot be turned inside out. Selection is a **bool, not a `SelectedEntity`** (ADR-059 (h)): the plane has no layer, attributes or `.gs` presence, so entering `selection` would put a branch in every consumer of that vector and the first to forget would silently export or erase a view setting. `CadSectionClipIndicator` is now the **single** source of the rectangle, called by the renderer AND the pick — the bounds walk that `main.cpp` did inline is gone, because two copies of "where is the rectangle?" is how a user clicks the plane they can see and grabs nothing. Tests: `SectionClipTests` `[sectionplane]` (14 cases / 485 assertions — handle placement on a tilted frame, handles inside the rectangle, unit drag directions, opposite-facing pairs, handles following a slide, the stored extent overriding the model bounds and surviving a slide, and a long thin stretched plane still hatching); `SubObjectSelectionTests` `[sectionplanegrip]` (10 cases / 97 assertions — select, deselect, drag, flip, stretch, clamp, re-aim, ESC). Full suite **1506/1506**, up from 1489. **Two real bugs were found by these tests, not by reading:** (1) the drag axis was re-derived each frame from a handle the drag itself had moved, so the delta collapsed to zero on frame 2 — a held cursor snapped the plane back to the grab point and a moving one oscillated; the axis is now **frozen at the grab** and the guard is five no-op frames, which fails on frame 1 when reinstated. (2) A stretch moved the grabbed edge **twice** as far as the cursor, from applying the full delta to both the half-size and the centre. Neither is visible to a test that calls the drag once. **Stated increments (as of 2026-09-11):** the plane is still not an entity (no Properties, no `.gs`), its manipulation makes **no undo entry** — consistent with a view state, but `UNDO` will not step a slide back — the section line has **no direction arrows**, and there is no contextual ribbon. **Not verified by automation:** that any of it is drawn or that a real mouse drag reaches it; there is no GL context in any test, and the handles are geometry-checked rather than seen.
+
+  **Amended 2026-09-21 (GitHub issue #479 acceptance 4/8, ADR-059 (i)):** the "not an entity" increment above is resolved for Properties/`.gs`/undo — `SelectedEntity::Type::SectionPlane` is a type tag (selection storage stays the `sectionPlaneSelected` bool, per (h), which (i) leaves standing); `DrawPropertiesPanel` reports a selected plane's origin/normal/offset/flip/extent; create/re-aim/delete/flip/slide/resize each push one undo entry; the plane round-trips through `.gs` (additive `"sectionPlane"` key, `GsIo.cpp`, no version bump) to REQ-101's ±0.002 ft at E 2,196,000 / N 1,400,000. REQ-341's `SECTIONCLIP` stays undo-exempt and `.gs`-absent throughout, gated on `viewportSectionClipFrameValid`. New tests: `req343-sectionplane-persist` (headless — flip undo/redo, `.gs` round-trip at survey magnitude, legacy-file-loads-with-clip-off) plus the corrected `req342-section-plane` (creation now undoes in its own step, two UNDOs to reach the box). Full suite **1704/1704** (8 pre-existing unrelated failures on `beta` reproduced identically, none touched by this change). Still deferred: direction arrows, contextual ribbon (issue #479 slice 4, explicitly polish). | accepted |
+| REQ-345 | Domain/IO/Render | accepted, increment B1 delivered (GitHub issue #486, TASK-263). **`CadPipeRun`** — a piping run's PATH, not its geometry: an ordered polyline of 3D vertices plus a nominal-size (NPS inch) label and an optional pressure-class tag ("CS150"/"CS300", D-2026-09-12 decision 1). The swept pipe solid is derived, never stored — one right-circular cylinder per straight segment, radius from a standard NPS→OD table (`CadPipeNominalOdFeet`, cadpiperun.hpp), rebuilt from the path whenever it changes (`RebuildPipeRunWorldSolids`, the same signature-gated derived-array shape `blockRefWorldSolids` already uses) and fed through the existing solid tessellation/coalescing pipeline (REQ-313/issue #194) so a pipe run draws exactly like any other B-rep solid with no second render path. This is the "piping owns topology, blocks own geometry" split the issue's architectural notes call for, extended from fittings (blocks) to pipe segments. Persists in `.gs` as the path and labels only (additive `pipeRuns`/`pipeRunAttrs` arrays, ADR-020 (d) — no version bump, ADR-025's absolute storage coordinates for vertices); the solid is rebuilt on load. An unresolvable nominal size or a run under 2 vertices contributes no solid rather than a guessed or invalid one (REQ-201); a degenerate (coincident-vertex) segment is skipped and its neighbours still sweep. `CadPipeRunTests` (10 cases: NPS label parsing incl. whitespace and rejection of non-numeric/negative/unit-less input; known-size lookup against the standard OD table and refusal of an unlisted size; a straight run's single cylinder volume checked in closed form; a bent run producing one cylinder per segment; a coincident-vertex segment silently skipped while its neighbour still sweeps; and both under-2-vertex and unresolvable-size runs producing zero solids). Full suite green, no regressions. **Deliberately deferred to later Track B increments, by name**: the interactive routing command (B2), the `CadPipingSystem` container (B3), catalog lookup by size+class+part type (B4), automatic elbow/tee insertion at bends and branches (B5/B6), manual fitting placement on a run (B7), and edit operations — grip-editing a vertex, changing size/class, splitting/merging (B8). Track A (A1–A5, fitting metadata/connection roles/library export/authoring/browser) was already fully delivered before this increment (PRs #488–#491). **Amended 2026-09-24 (D-2026-09-24-d): the route is REAL geometry while it is drawn.** From the second click the draft is materialised as a `CadPipeRun` in the drawing and replaced in place as the route grows (and as `U` shortens it), so the pipe can be seen, snapped to and spliced into while the command is still open — which is what lets a flange be placed on the end just routed. It is PROVISIONAL: END still runs the full commit below (auto-elbow splitting, branch tees), which needs the whole route, so the provisional entity is retired immediately beforehand and the finished drawing is unchanged from B2's original behaviour. It carries no undo entry of its own — the commit's single "Create Pipe Run" snapshot is still the one undo step — and Esc removes it. Picking a part from the REQ-350 palette finishes the open run rather than abandoning it. **Increment B2 delivered (TASK-264): the interactive `PIPERUN` command** — shaped after `POLYSOLID` (its nearest existing analogue: its own `Kind`, its own path-building state machine, remembered settings across runs). Prompted nominal size + optional pressure class first (validated against the same `CadPipeNominalOdFeet`/`ParseCadPipePressureClass` B1 already uses — an unresolvable size or class refuses and re-prompts rather than being guessed), then click-to-add straight vertices; `U`/`UNDO` drops the last vertex (never the start point — mirrors `POLYLINE`'s own guard); `END` or a blank Enter commits the run as one `PushUndoSnapshot` step; `ESC` cancels the draft but **remembers** the size/class for the next run, the same reason `POLYSOLID`'s width/height/justify survive its own cancel. The live rubber-band preview (`CadRubberPreview.cpp`) calls the SAME `CadBuildPipeRunSolids` the next click commits and Enter finishes — `POLYSOLID`'s own "one function, not a separately-drawn approximation" reasoning, applied here: the ghost run is the committed draft plus the cursor point, tessellated and drawn exactly like `POLYSOLID`'s ghost wall. Osnap (including to existing block connection ports and solid faces) is inherited for free: `CadSnap::FindBest` is gated only on `cmd.active != Kind::None`, not on which command, so `PIPERUN` gets full 3D snap the moment it is added to `ViewportClickRouteFor` (`SnappedPointPick`, beside `POLYSOLID`'s own case) — the same reason the click coordinates and `CadCommitElevation`'s snapped-Z already carry through untouched from `SubmitPolylineVertex`'s established pattern. `CadPipeRunCommandTests` (11 cases, `GoSurveySnapTests` — needs `gosurvey_domain` for the command-layer functions, like `CadBlockImportTests` beside it: start/prompt phase, unknown-size and unknown-class refusal with the prompt held, size+class accepted, a full click-U-click-END round trip landing in `cadPipeRuns`/`cadPipeRunAttrs`, blank-Enter finishing the same as `END`, `END` refusing with only a start point, `U` undoing a vertex but never the start point, `ESC`-equivalent cancel clearing the draft while remembering size/class, a second run reusing the remembered size on a blank Enter, and a click before any size is set being refused rather than silently accepted). Full suite green (`GoSurveyTests` 1160/1160, `GoSurveySnapTests` 310/310), no regressions. **Deliberately out of scope, by name**: wiring the ribbon's existing "Pipe Network" NYI button (`CadUi.cpp` Create Design section) to `PIPERUN` — that button is one of twelve built by one shared disabled-button helper, and rewiring a single one is ribbon-layout work, not command-layer work; the command is reachable today by typing `PIPERUN`. B3–B8 remain as B1 stated them.
+
+**Increment B3 delivered (`CadPipingSystem`, named piping networks):** a network is metadata only — a name plus a de-duplicated, ascending-sorted list of indices into `cadPipeRuns` (`CadPipingSystem`, CadEntities.hpp) — the same "container owns no geometry" split the issue's own architectural notes call for, one level up from B1's own "topology, not geometry" split for a single run. A pipe run belongs to AT MOST ONE network at a time (declared in the struct's own doc comment): `PIPESYS ADD` drops a run from whichever network already holds it before adding it to the new one, so "this network's total length" and similar future reports never have to reason about double-counting. New one-shot, text-only `PIPESYS` command (`HandlePipingSystemCommand`, CadCommands.cpp/hpp) — deliberately NOT a multi-turn `AppCommandState::Kind` state machine, the same "bare verb reports, verb + args sets" shape `SOLIDLIST`/`ISOLINES` already use, because a network groups ALREADY-ROUTED runs rather than routing anything itself: `PIPESYS NEW <name>` (refuses blank/duplicate names), `PIPESYS ADD <name>` / `PIPESYS REMOVE <name>` (act on the current `AppCommandState::selection`'s pipe runs), `PIPESYS RENAME <old> <new>` (matches `<old>` against every existing network's name as a LONGEST prefix of the typed line, since both names may contain spaces and a naive single-token split would truncate "Loop A" to "Loop"), `PIPESYS DELETE <name>` (removes the network only — its runs are unaffected, never deleted), and a bare `PIPESYS`/`PIPESYS LIST` reporting every network's name and run count. Persists in `.gs` as an additive `pipingSystems` array (ADR-020 (d), no version bump) alongside `pipeRuns`; an out-of-range index in a hand-edited file is dropped on load rather than trusted (REQ-201). Snapshotted on undo and swapped/cleared by BEDIT alongside `cadPipeRuns`, for the same isolation reason B1's own doc comment gives. Deleting a pipe run (`ExecuteDeleteSelection`) now also drops it from whichever network held it and reindexes every remaining reference — the same shift a `std::vector::erase` on `cadPipeRuns` itself just performed, applied a second time to `CadPipingSystem::pipeRunIndices` so the two never drift apart. `CadPipeRunCommandTests` gains 13 `[pipesys]` cases (create/refuse-duplicate/refuse-blank; add moves a run and drops it from any prior network; add/remove refuse with nothing selected or an unknown network name; rename with multi-word names on both sides, including a refused name collision; delete leaves runs in place; a pipe-run delete reindexing a network's remaining reference; a bare/`LIST` report). `GsIoPipeRunTests` gains 3 cases (a network with runs round-trips through save/load with indices intact; a drawing with no networks omits the `pipingSystems` key; a hand-corrupted out-of-range index is dropped, not carried forward). Full suite green (`GoSurveySnapTests` — all `[pipesys]`/`[piperun]` cases pass; remaining failures in the wider suite — a CIRCLE-prompt headless case, OFFSET/UCS, surface selection, feature-line, and a DWG solid-export headless case, plus one PIPERUN test that only fails through this repo's ctest name-filter mangling an em-dash in its own title — are pre-existing and untouched by this increment's diff, confirmed unaffected on `beta` before this change). **Deliberately out of scope, by name, same reasoning B2 gave**: wiring a ribbon button to `PIPESYS` (typing the command is the reachable path today); B4 (catalog lookup by size+class+part type), B5/B6 (automatic elbow/tee insertion at bends and branches), B7 (manual fitting placement on a run via BCONNECT ports), and B8 (grip-editing a run vertex, changing size/class, splitting/merging runs) remain exactly as B1 stated them.
+
+**Increment B4 delivered (`CadPipeCatalogFind`, catalog lookup by size/class/part type):** maps `(partType, nominalSize, pressureClass)` to a block definition name in the bundled/user fittings library (`CadBlocks.cpp`/`.hpp`), reusing A5's own `CadBlocksCollectLibraryEntries` — the same list the library-browser pane filters — rather than a second enumeration of the library, so an import path and a lookup path can never disagree about what the library contains. A match already imported into `st.blockDefs` is returned as-is; a match still sitting in the bundled/user library on disk (not yet imported) is imported first (`CadBlocksImportLibraryEntry`, A3/A5's own import path) so the returned name is immediately usable for `INSERT`/`BCONNECT`. `pressureClass` may be `None` ("no restriction"); a specific requested class prefers an EXACT-tagged part and falls back to a class-agnostic one (`pressureClass == None` on the library entry) only when no exact-classed part exists — the same exact-then-default precedent `CadBlockResolveMode` (#496) already established for connection modes, applied one level up here to whole catalog parts. **Refuses rather than guesses (REQ-201) in two distinct cases, each with a named reason**: zero matches ("no `<type>` found for `<size> <class>`"), and an AMBIGUOUS match — two or more parts tied on size/class/type — named explicitly with every candidate's name, rather than silently picking the first one found; a duplicate-classed catalog is a library-authoring problem for the user to fix, not something this lookup resolves on its own. New one-shot `PIPECATALOG <part type> <size> [class]` command (alias `PCAT`, `CadBlocksTryIdleCommand`, CadBlocks.cpp) reports the lookup directly — the same "bare/short verb, immediate answer, no state machine" shape B3's `PIPESYS` established, since this is a query (plus a side-effecting import on a not-yet-imported match), not something routed interactively; refuses an unknown part-type or pressure-class token by name rather than silently treating it as "no restriction." `CadBlockImportTests` gains 10 `[pipecatalog]` cases (exact size/class/type match; named refusal on no match; missing part-type/size refused; class fallback to a class-agnostic part; an exact-classed part preferred over a class-agnostic one; `None` class matching any classed part; refusing two tied candidates as ambiguous; a non-fitting `partType == None` definition never offered even when its NAME happens to collide with the queried size string; the `PIPECATALOG` command parsing part type/size/optional class and reporting the match; the command refusing an unknown part type or pressure class token). Full suite green — the same 8 pre-existing, unrelated failures already named under B3 remain (confirmed unaffected by this increment's diff). **Deliberately out of scope, by name**: B5/B6 (automatic elbow/tee insertion at bends and branches — the natural CALLER of this lookup, not built yet), B7 (manual fitting placement on a run via BCONNECT ports), B8 (edit operations), and wiring a ribbon button (the command is reachable today by typing `PIPECATALOG`).
+
+**Increment B5 delivered (auto-insert elbow fittings at bends, D-2026-09-22-a):** a recorded architecture decision preceded this increment — the user chose "replace smooth bends at PIPERUN's own commit time" over a separate follow-up command, so `PIPERUN`'s existing live routing/preview is UNCHANGED (still the smooth rubber-band ghost) and only the FINAL commit (`CommitPipeRunDraft`, CadCommands.cpp) decides, per bend, whether a real elbow block replaces the smooth fillet. Only `elbow-90`/`elbow-45` exist in `CadPipePartType`'s own vocabulary (`ElbowPartTypeForSnappedAngleDeg`) — a bend whose snapped angle is one of the OTHER four standard fitting angles (60/30/22.5/11.25) has no catalog concept to search for at all and always keeps the existing smooth fillet, not because a catalog lookup failed. For a 90/45 bend, `PlanPipeRunAutoFittings` (CadCommands.cpp, anonymous namespace — PIPERUN-specific, not public API) walks the draft path and, at each qualifying bend, calls B4's own `CadPipeCatalogFind` for `(elbowType, run.nominalSize, run.pressureClassTag)`; on a match, `TryPlanAutoFitBend` resolves which of the matched block's two connections mates with which leg (a role-tagged Inlet/Outlet pair when present, else definition order — `PickElbowPorts`), reads the near port's engagement length (`CadBlockResolveMode(..., PipeEnd)`, falling back to the port's own legacy field) as the amount to cut the incoming pipe back from the corner, and orients the fitting with a NEW two-direction rigid-alignment primitive (`CadBlockOrientTwoPortFitting`/`cadblock_detail::RotationAligningTwoDirections`, cadblock.hpp) — unlike the existing single-port `CadBlockSnapInsertToConnection` (whose minimal rotation leaves the roll about the aligned axis wherever it lands, fine for one port but wrong for two), this builds two matched orthonormal frames (one from the fitting's own two port normals, one from the two target leg directions) and solves the FULL rotation in one step, so both ports land correctly with no roll ambiguity. **The elbow's own real second-port location — not an independently guessed "far cutback point" — decides where the OUTGOING segment starts**, a deliberate scope choice recorded here: computing both sides' cutbacks independently would require the fitting's authored geometry to exactly match the sum of both engagement lengths, which nothing enforces, so trusting the model after pinning the near side avoids a gap/overlap inconsistency that no amount of engagement-length tuning could fix on its own. Any failure — no catalog match, a matched part without exactly two connections (`PickElbowPorts`), an engagement length exceeding 90% of the available leg length, or collinear port normals (`RotationAligningTwoDirections` returns false) — falls back to the existing smooth fillet for THAT bend only, logged with a named reason; the run as a whole never refuses on this account. A PLANNING pass (catalog lookups/imports only — catalog import is idempotent and harmless even if the run is later refused) always precedes any commit: every resulting piece's swept solid is validated (the same `CadBuildPipeRunSolids` call the pre-B5 path used) BEFORE `PushUndoSnapshot` and before any `CadPipeRun` or `CadBlockRef` is created, preserving the pre-B5 all-or-nothing commit guarantee — a tight corner that cannot be solved either way (elbow or smooth) still refuses the WHOLE run, draft left open for `U`/`Esc`, exactly as before. A run whose bends produce ZERO elbow substitutions ends up with `pieces.size()==1` and no elbows — bit-identical to the pre-B5 single-`CadPipeRun` commit, which is why every existing PIPERUN/PIPESYS/PIPECATALOG test (none of which register a matching library part) is unaffected. New `CadBlockPlaceInsertNoUndo` (CadBlocks.cpp/.hpp, `PlaceInsertImpl`'s own body with a `pushUndo` flag added) lets several elbows commit under ONE `PushUndoSnapshot` alongside their pipe pieces, instead of `CadBlockPlaceInsert`'s own per-call undo push. `CadPipeRunCommandTests` gains 7 `[autofit]` cases (a 90-degree bend auto-inserts the matching library part, splitting into two `CadPipeRun` pieces with the block ref positioned at the corner; no matching part collapses to the original single-run smooth behavior; the near port's engagement length shortens the incoming piece by exactly that amount; a matched part with only one connection port falls back to smooth; an engagement length too large for the leg falls back to smooth; the whole multi-piece-plus-elbow commit undoes in one `DoUndo` step; a 45-degree bend picks the `elbow-45`-tagged part over a co-registered `elbow-90` one). Full suite green — the same 8 pre-existing, unrelated failures already named under B3/B4 remain, confirmed unaffected by this increment's diff. **Deliberately out of scope, by name**: B6 (vertical risers/offset transitions and tee/cross insertion at BRANCH nodes — a single `CadPipeRun`'s path has no branch topology to detect at all; this increment is bends only, on one run), B7 (manual fitting placement on a run via BCONNECT ports), B8 (edit operations — grip-editing a vertex, changing size/class, splitting/merging runs, INCLUDING what happens to an already-auto-fitted bend under any of those), and wiring a ribbon button (the command is reachable today by typing `PIPERUN`, unchanged). **Increment B6 delivered (auto-insert tee fittings at branch nodes, D-2026-09-22-b):** the issue's own B6 line names three things — "vertical risers, offset transitions, tee/cross insertion at branch nodes." The first two turn out to ALREADY be covered by B5, unmodified: its bend detection (`PlanPipeRunAutoFittings`) works on the full 3D turn angle between two consecutive segments of one run's own path, never assuming a horizontal plane, so a vertical riser or a 45/45 offset jog is just an ordinary bend already handled. The only genuinely new capability this increment adds is **tee insertion where a new `PIPERUN` draft's endpoint meets two OTHER already-committed runs' own endpoints** — a scope choice recorded here: a mid-span tie-in (splicing into the SIDE of an existing straight run, which would first require splitting that run's own path) and a cross (4+ legs at one node) are both deferred, so this increment recognizes exactly one shape — a plain 3-way joint. At `CommitPipeRunDraft` (after B5's elbow pieces are resolved, so the endpoints checked are the draft's TRUE start/end regardless of how many interior bends split it), `TryApplyBranchAtEndpoint` checks the draft's start and end independently: `FindExistingRunLegsAt` collects any OTHER run's own start/end vertex sitting exactly at that point; with exactly two found (plus the new run itself, three total), `TryPlanBranchTee` classifies them — the pair whose directions are most nearly opposite (dot < -0.85) is the through run, the third is the branch — then looks up a `tee` catalog part (B4) and resolves its Inlet/Outlet/Branch-tagged ports (`PickTeePorts`, all three roles required, `CadBlockConnectionRole::Branch` already existed for exactly this). **Orientation reuses B5's `CadBlockOrientTwoPortFitting` primitive, but solved from the INLET/BRANCH pair, not inlet/outlet** — a real tee's through-ports point in anti-parallel directions, which makes `RotationAligningTwoDirections`'s own cross-product frame construction degenerate (a straight run has zero turn angle, and two anti-parallel local references can't fix a roll any more than two parallel ones can); the branch port is never collinear with the through run, so that pair always fully constrains the rotation. The inlet's engagement length (`CadBlockResolveMode(..., PipeEnd)`, `PipeEnd` already generalized by B5) cuts the incoming leg back from the node exactly as B5's elbow does; the OUTLET's and BRANCH's own resulting world positions are then read from the fitting's own solved geometry and trusted directly — B5's `PlannedElbow::farPoint` precedent, extended here to a second unpinned port instead of the elbow's one, deliberately NOT cross-checked against an idealized position (an early draft of this increment tried that and found it over-constrains a physically valid, if asymmetric, engagement — B5 never validates its own far side either). A PLANNING pass validates every affected run — the two EXISTING runs' own scratch-mutated endpoints, in addition to the pre-existing per-piece check — before anything commits, so a tee that would leave one of the three legs geometrically invalid falls back to leaving all three runs unconnected at that node (no smooth-fillet equivalent exists across separate entities), logged with a named reason, exactly as a single bend falls back to a smooth fillet. `CadPipeRunCommandTests` gains 6 `[branch]` cases (a matching tee auto-inserts where a new run's endpoint meets two existing runs' own ends, oriented and positioned at the node; the inlet-side engagement length cuts that leg back by exactly that amount; only one other leg present is not enough for a tee; three legs with no roughly-opposite through pair get no tee; an engagement length exceeding budget on any of the three legs falls back to no tee with the existing runs left untouched; the whole multi-run commit — new run, two cutback existing runs, and the tee block — undoes in one `DoUndo` step). Full suite green — the same pre-existing, unrelated failures already named under B3/B5 remain (plus one Windows/ctest-only discovery artifact on a test NAME containing an em dash, unrelated to this diff — see B2's own ASCII-name lesson elsewhere in this codebase), confirmed unaffected. **Deliberately out of scope, by name**: a mid-span tie-in onto the SIDE of an existing run, a cross fitting (4+ legs), and any node where 3+ runs already meet before this increment's own commit-time check ever fires (e.g. loaded from a template) — all left as an unconnected joint with no auto-fitting, same as today. B7/B8 remain as B1 stated them. **Increment B7 delivered (manual fitting placement on a run, `PIPEFIT`, D-2026-09-22-c):** unlike B5/B6 (automatic, triggered only at `PIPERUN`'s own commit time), this is user-directed: `PIPEFIT <part type>` requires exactly one `CadPipeRun` already selected (`SelectedPipeRunIndices`, B3's own helper, reused as-is) and a recognized `CadPipePartType` tag, refusing immediately — never entering the command — otherwise (the same "args upfront, refuse before any state changes" shape `PIPECATALOG` already established for its own inline arguments). One viewport click (or a typed `X,Y,Z`, `HandlePipeFitTextInput` mirroring `PIPERUN`'s own coordinate-entry path) supplies the station: `NearestPointOnPipeRun` projects the raw pick onto the nearest point of the SELECTED run's own polyline, clamped per segment (never extrapolated past a vertex), so an approximate click near the pipe is enough — exact accuracy is not required the way an osnap hit would demand. **Orientation deliberately reuses neither B5's nor B6's two-port rigid-alignment primitive**: a round pipe's cross-section is rotationally symmetric, so unlike an elbow or a tee, nothing here needs a fixed roll — the existing single-direction `CadBlockSnapInsertToConnection` (#475 increment 5, already used by ordinary `INSERT` connector-snap) anti-aligns the inlet port's normal with the segment's own direction and pins the inlet to the cutback point, exactly as if the pipe's own local direction were a real connection port's outward normal. `PickElbowPorts` (B5) is reused unchanged for the 2-port Inlet/Outlet resolution — an inline valve/flange/reducer/coupling needs exactly the same port shape a through-run elbow does, just without a turn. The engagement-length budget check applies independently to BOTH sides this time (not just the pinned one, unlike B5/B6) — since a mid-span splice has two ordinary pipe legs on the SAME already-existing run rather than one leg plus a to-be-decided far point, checking both is the natural symmetric guard. On success, the ORIGINAL run's own index is mutated in place to become the near piece (so any `CadPipingSystem`/selection/other reference to that index keeps working unchanged) and the far piece is appended as a new `CadPipeRun`, added to whichever network the original belonged to (if any) — no reindexing anywhere else, unlike a full delete. A validation pass builds both pieces' swept solids before anything commits, same all-or-nothing guarantee as every other Track B increment; a refusal (unknown catalog part, wrong port count, an engagement length exceeding either side's own budget) leaves the run and selection completely untouched and ends the command — there is nothing left to retry with a single point pick. `CadPipeRunCommandTests` gains 9 `[pipefit]` cases (refusal with no/wrong selection count; refusal on an unknown part type; a successful splice splitting a run in two with the block positioned and oriented at the station; the inlet engagement length cutting the near side back; a one-port part refusing rather than partially splicing; an oversized engagement length refusing without touching the run; the whole split-plus-block commit undoing in one `DoUndo` step; the new piece joining the same network the original run belonged to; an off-centerline pick projecting onto the run's own line). Full suite green (`GoSurveySnapTests` 424/424 `[issue486]`, full ctest 1751 total) — the same pre-existing, unrelated failures already named under B6 remain, confirmed unaffected. **Deliberately out of scope, by name**: BCONNECT-driven interactive port picking during the splice itself (the issue's own "snap via BCONNECT ports" phrasing is satisfied by reusing the SAME port role/engagement metadata BCONNECT authors, not by re-running the BCONNECT wizard at insert time — B5/B6 already established that precedent for automatic insertion, and this increment keeps it for manual insertion too), splicing where the picked run belongs to more than one candidate (only ONE pre-selected run is ever the target), and wiring a ribbon button (reachable today by typing `PIPEFIT`). B8 remains as B1 stated it. **Increment B8 delivered IN PART (`PIPESPLIT`/`PIPEJOIN`/`PIPEPROP`, D-2026-09-22-d) — a recorded scope decision, not a guess:** B1's own line named four things under B8 — grip-editing a vertex, changing size/class, and splitting/merging runs. Two of the four are delivered here; the other two are deliberately deferred, by name, with the reason recorded rather than silently dropped. **Grip-editing a single vertex in the viewport is deferred**: the existing "CAD ENTITY GRIPS" system (`AppCommandState::entityGripType` and the `entityGripOrig*` fields beside it) is 2D-only — local X/Y storage with no Z field anywhere in its drag state, built for `LineSeg`/`Circle`/`Polyline`/`Arc`/`Ellipse` — and giving a `CadPipeRun` vertex a live 3D drag (including what happens to a fitting already spliced onto the segment that vertex anchors) is its own substantial increment, not a corner of this one. **"Replace fitting" is deferred**: which existing `CadBlockRef` counts as "the" fitting on a run is not well-defined without picking it explicitly, and the increment delivered here already covers the same end result by composition — delete the old block, `PIPEJOIN` the two pipe pieces it used to sit between back into one run, `PIPEFIT` the replacement part back in. `PIPESPLIT` is `PIPEFIT`'s own splice (`NearestPointOnPipeRun` projection, same all-or-nothing two-piece solid validation) with the catalog lookup and block placement removed — no part, no engagement cutback, the two pieces meet EXACTLY at the picked station. `PIPEJOIN` requires exactly two `CadPipeRun`s selected sharing the SAME nominal size and pressure class (refusing rather than guessing which one wins, REQ-201) and EXACTLY one coincident endpoint between them (all four start/end pairings handled — `endStart`/`endEnd`/`startStart`/`startEnd` — with the shared vertex not duplicated in the merged path); the lower selected index survives as the merged run (keeping its own existing `CadPipingSystem` membership unchanged, the same "near piece stays where it already was" precedent `PIPEFIT`/`PIPESPLIT` both set for their own surviving index) and the higher index is erased and reindexed via a small `EraseOnePipeRunReindexed` helper pulled out of `ExecuteDeleteSelection`'s own pipe-run erase — one shared erase path rather than a second copy of the same reindexing loop. `PIPEPROP <size> [class]` changes nominal size/pressure class on EVERY selected run at once — unlike a single-run command's all-or-nothing commit, each run is validated (`CadBuildPipeRunSolids`) and applied INDEPENDENTLY, since these are separate pre-existing entities rather than pieces of one atomic path: a resize that would leave one run's existing corner too tight for the new size's fillet radius refuses just that run (REQ-201's "refuse rather than guess," not the issue's own looser "or warn" language — kept consistent with every earlier Track B increment's own posture rather than introducing a second, softer failure mode this late) while the rest of the batch still updates, reported as "N updated, M refused." `CadPipeRunCommandTests` gains 13 cases across three new `[pipesplit]`/`[pipejoin]`/`[pipeprop]` tags (PIPESPLIT: refusal without exactly one run selected, a station split into two pieces with NO block inserted and no cutback gap, undo in one step; PIPEJOIN: refusal on a run-count mismatch, refusal on mismatched size/class, refusal with no coincident endpoint, a parameterized case merging all four end-to-end pairings into the correct 3-vertex path, undo restoring both runs AND the piping-network reference the merge had dropped; PIPEPROP: refusal with nothing selected, refusal on an unknown size leaving the run untouched, a single run's size+class both updated, a two-run batch updating independently, undo in one step). Full suite green (`GoSurveySnapTests` 479/479 `[issue486]`, full ctest 1764 total) — the same pre-existing, unrelated failures already named under B7 remain, confirmed unaffected.
 
 **BEDIT isolation fix (2026-09-17, TASK-264 follow-up):** `cadPipeRuns`/`cadPipeRunAttrs` were never added to BEDIT's model-array swap (`DrawingGeometrySnapshot`/`CaptureGeometrySnapshot`/`RestoreGeometrySnapshot`, CadCommands.hpp/.cpp), unlike `cadTables`/`cadBlockRefs` beside them — a pipe run drawn in the main drawing kept rendering inside the block editor's own viewport (user-reported, with a screenshot). Fixed the same way those two already are: added to the snapshot struct, both capture/restore functions, and cleared in `LoadBlockPrimitivesIntoDrawing` (CadBlocks.cpp) alongside `cadTables`/`cadSurfaces`. `CadPipeRunCommandTests` gains a 12th case driving `CadBlocksEnterNamedEditor` directly: a run committed before BEDIT opens is invisible inside it, and `CadRestoreGeometrySnapshot` (BCLOSE's own restore call) brings it back.
 
@@ -10499,7 +13433,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 **Connection-point-driven candidate filtering (2026-09-17, user follow-up, TASK-268):** `SubmitInsertBlockConnectorPick` (CadBlocks.cpp) previously picked between a nearby real block connection port and a nearby bare pipe/pipe-run end by DISTANCE ALONE, resolving the source port's own configured `CadBlockConnectionMode` only AFTER a candidate had already won — so a fitting's port configured only to mate with a pipe end could still snap onto a closer but incompatible flange face, and vice versa (user report: "detect what we are snapping to and use that block's connection point logic"). New `CadBlockConnectionAcceptsTarget(conn, target)` (cadblock.hpp) — `true` for a legacy mode-less port (unchanged any-kind behaviour) or when `CadBlockResolveMode` finds an exact or `isDefault`-fallback mode for that target, `false` otherwise — now FILTERS each candidate before the nearer-wins comparison runs: an incompatible port or pipe end is never even considered, however close. A wrong-kind-only-nearby refusal now names the reason ("nothing near that point matches this connection point's configured mode(s)") rather than the generic "no connection port near that point." `CadBlockImportTests` gains 2 cases: a pipe-end-only-configured port correctly ignoring a GEOMETRICALLY CLOSER but incompatible generic block port and snapping to the farther but compatible pipe end instead; a flange-face-only-configured port refusing outright when only an (incompatible) pipe end is nearby. Full suite green: `GoSurveyTests` 1169/1169, `GoSurveySnapTests` 319/319 (up from 317), no regressions.
 
-**Multi-port auto-detection + exact-match priority (2026-09-17, user follow-up with screenshots, TASK-269):** TASK-268's filtering still used exactly ONE source connection point — `InsertSourceConnection` returned whichever port was explicitly chosen in the INSERT dialog, or, when none was, always `connections.front()`, the FIRST port defined on the block, regardless of what was actually being snapped to. Reported directly: a flange authored with a `gasketFace` port (mode targeting `Flange face`) and a separate `weldNeckFace` port (mode targeting `Pipe end`), both flagged `isDefault` (the natural state for an only-mode connection point — the UI's own default), snapped to a pipe end using `gasketFace`'s mode instead of `weldNeckFace`'s. **Two compounding causes, both fixed:** (1) `gasketFace` was never even considered as an alternative — `SubmitInsertBlockConnectorPick` now builds a CANDIDATE LIST of every connection point on the block being inserted (or just the one explicitly chosen, unchanged, if the INSERT dialog named one) and picks the nearest ACCEPTED (port, target) pairing across all of them, not a single fixed port. (2) Even considering both ports, `CadBlockConnectionAcceptsTarget`'s `isDefault` fallback (TASK-268) made `gasketFace` look "compatible" with a pipe-end target too, since its own single mode happened to be flagged default — an authoring habit (the only mode on a port defaults to looking like "the" mode), not a deliberate "accept anything" declaration. New `CadBlockConnectionHasExactMode(conn, target)` (cadblock.hpp) checks for a target-tagged mode WITHOUT the `isDefault` fallback; the candidate search now runs in two passes — exact-match candidates first (any port tagged specifically for the target under the cursor beats every default-fallback port, regardless of distance), falling back to the old default-inclusive pass only when no port has an exact match at all. `CadBlockImportTests` gains the exact reported scenario as a regression case (both ports' single mode flagged `isDefault`, `weldNeckFace` defined SECOND — proving neither definition order nor the default flag can steal the pick from the exactly-tagged port). Full suite green: `GoSurveyTests` 1169/1169, `GoSurveySnapTests` 320/320 (up from 319), no regressions. | accepted |
+**Per-drawing ownership fix (2026-09-23, user-reported, TASK-273):** a pipe run routed in one drawing rendered — and picked, hovered and snapped — in EVERY other open drawing. `cadPipeRuns`/`cadPipeRunAttrs`/`cadPipingSystems` were never added to `DrawingDocument` or to `SaveDocumentToSnapshot`/`RestoreDocumentFromSnapshot` (CadCommands.hpp/.cpp), so a tab switch swapped every other entity store and left these behind; `NewDrawingInTab` and `OpenDrawingInNewTab` (CadUi.cpp) both reach the live state through that same restore, which is why File ▸ New showed the previous drawing's piping too. The same omission (and the same fix) as the BEDIT paragraph above, one level up — this is a pipe run's THIRD isolation boundary after BEDIT's model swap and the `.gs` document, and it is now covered by a test rather than by inspection. `ClearCadGeometry` gained the same three arrays plus the derived `pipeRunWorldSolids*`: it is what a DXF/DWG import calls to replace a drawing's CAD content, and pipe runs are CAD content, so an import into a drawing that already had runs was keeping them. The derived solids are cleared and their signature zeroed on restore rather than left to the content hash, because two drawings can legitimately hash identically (two empty ones always do) and the gate would then certify the outgoing drawing's solids as current. `CadPipeRunCommandTests` gains two cases: a run (plus its `CadPipingSystem`) saved into tab 1 is absent after restoring tab 2 and intact after restoring tab 1, with `RefreshSolidDisplayGeometry` asserted on both sides so a stale derived array cannot pass; and `ClearCadGeometry` leaving no run and no derived solid behind.
+
+**Hollow pipe with a stated wall thickness (2026-09-23, user-requested, D-2026-09-23-a, TASK-274):** a pipe run's solid is now a **tube, not a rod**. B1's own note that "wall thickness does not change the modeled OD, so the table is keyed on size only" is **reversed**: the OD is still what the outside is built at, but the bore is that less twice the wall, so an end or a cut shows the wall the way a real pipe does and the volume is the pipe's own rather than a solid bar's (a 4in schedule-40 run is **20%** of the metal the rod was). `CadPipeRun` gains `wallThicknessIn` — INCHES, like `nominalSize`, because that is the unit a wall is specified in. The geometry comes from `brep::SweepTube` (REQ-315 as amended the same day), NOT from a second nested solid and not from a Boolean: one closed shell, annular end caps, and every path decision still the sweep's own. **`PIPERUN` asks for the wall immediately after the size** (the user's own sequencing), because both the default offered and the maximum accepted depend on which size was just chosen: blank Enter takes the **schedule-40** wall for that size from the NPS table (`CadPipeStandardWallThicknessInches`), a typed number overrides it, and a wall at or over half the OD is refused by name with the limit stated — it leaves no bore, and a "solid pipe" is not a thing this models. Unlike the size and class beside it the wall is deliberately **not remembered across runs**: the offered default follows the size, so a one-off heavy wall on a 4in run cannot silently become the wall of the next run at another size. **`wallThicknessIn == 0` means "not stated", never "solid"** — the run is then built at the schedule-40 wall, which is what makes every drawing saved before this one open as real pipe with no migration step, no `.gs` version bump and no silent geometry left over (the user chose this over leaving old runs as rods). The `.gs` key is additive and written only when a run states a wall, so a defaulted run re-saves byte-identically. `PIPEPROP` gained the wall as an optional bare-number argument (`PIPEPROP 4in 0.5`, `PIPEPROP 4in CS150 0.5` — a number is a wall, anything else is a class, so every existing invocation is unchanged), and a run whose existing wall leaves no bore at a NEW smaller size is refused **in terms of the wall** rather than being blamed on a fillet radius it has nothing to do with. `PIPEFIT`/`PIPESPLIT`/`PIPEJOIN` carry the wall through their pieces, as they already carried the size. Hover and Properties report the effective wall, marked `(sch 40)` when it is the default, read from the same resolution the solid is built from. Tests: `BrepTests [tube]` (3 — straight tube's annular volume and tessellated volume, two inward bands, two two-loop caps; a bent path's volume against Pappus and against the rod's; and the three refusals), `CadPipeRunTests [wall]` (4), `CadPipeRunCommandTests [wall]` (3 incl. the prompt's refusals and that the offered default follows the size), and a `.gs` round-trip asserting the key is written only for a stated wall. **Not in scope:** fittings (blocks from the catalog) are unchanged — they are library geometry, not swept runs; and `PIPERUN` still takes a wall, not a SCHEDULE name, since only schedule 40 has a table here.
+
+**Multi-port auto-detection + exact-match priority (2026-09-17, user follow-up with screenshots, TASK-269):** TASK-268's filtering still used exactly ONE source connection point — `InsertSourceConnection` returned whichever port was explicitly chosen in the INSERT dialog, or, when none was, always `connections.front()`, the FIRST port defined on the block, regardless of what was actually being snapped to. Reported directly: a flange authored with a `gasketFace` port (mode targeting `Flange face`) and a separate `weldNeckFace` port (mode targeting `Pipe end`), both flagged `isDefault` (the natural state for an only-mode connection point — the UI's own default), snapped to a pipe end using `gasketFace`'s mode instead of `weldNeckFace`'s. **Two compounding causes, both fixed:** (1) `gasketFace` was never even considered as an alternative — `SubmitInsertBlockConnectorPick` now builds a CANDIDATE LIST of every connection point on the block being inserted (or just the one explicitly chosen, unchanged, if the INSERT dialog named one) and picks the nearest ACCEPTED (port, target) pairing across all of them, not a single fixed port. (2) Even considering both ports, `CadBlockConnectionAcceptsTarget`'s `isDefault` fallback (TASK-268) made `gasketFace` look "compatible" with a pipe-end target too, since its own single mode happened to be flagged default — an authoring habit (the only mode on a port defaults to looking like "the" mode), not a deliberate "accept anything" declaration. New `CadBlockConnectionHasExactMode(conn, target)` (cadblock.hpp) checks for a target-tagged mode WITHOUT the `isDefault` fallback; the candidate search now runs in two passes — exact-match candidates first (any port tagged specifically for the target under the cursor beats every default-fallback port, regardless of distance), falling back to the old default-inclusive pass only when no port has an exact match at all. `CadBlockImportTests` gains the exact reported scenario as a regression case (both ports' single mode flagged `isDefault`, `weldNeckFace` defined SECOND — proving neither definition order nor the default flag can steal the pick from the exactly-tagged port). Full suite green: `GoSurveyTests` 1169/1169, `GoSurveySnapTests` 320/320 (up from 319), no regressions. **The same rule applied to the SPLICE path (2026-09-24, user report with screenshot, TASK-276):** TASK-269 fixed which port `INSERT`'s connector snap uses; `PickElbowPorts` — B5's port resolver, reused unchanged by B7's `PIPEFIT` splice and therefore by REQ-350's palette — never got it. It ranked a two-port fitting's ports as "the Inlet/Outlet pair when both roles are tagged, else definition order", and `TrySplicePipeFitNamed` welds whichever port it returns as `near` onto the pipe. The bundled `2in_WELD_NECK_FLANGE` defeats both tests at once: its `gasketFace` (mode target `flange-face`) and `weldNeckFace` (mode target `pipe-end`) are BOTH tagged with the `Inlet` role and the gasket face is defined FIRST, so the gasket face was welded to the pipe and the flange was placed end-for-end — reported as "the flange is placed backwards... it seems like the connection point logic is not being used". `PickElbowPorts` now ranks by `CadBlockConnectionHasExactMode(c, PipeEnd)` first (never the `isDefault` fallback, for TASK-269's own reason: the authoring UI flags an only-mode port default as a matter of habit, not intent), falling through to the existing role and definition-order resolution otherwise. The rule fires only when EXACTLY ONE of the two ports carries that tag, so an elbow, a tee's through pair and an inline valve — all of which have a pipe end on both sides — keep the Inlet/Outlet resolution they were authored with. `CadPipeRunCommandTests` gains 3 `[flangeport]` cases (the reported part modelled port-for-port, asserting the weld neck lands ON the run's station and the gasket face one flange length downstream; the engagement cutback read from the weld neck rather than the gasket face; and a both-sides-pipe-end valve with its Outlet defined first still resolving by role). **Deliberately out of scope, by name:** placing a fitting ON a run's END rather than splicing THROUGH it — `PIPEFIT` has exactly one placement model, so a pick at the very end still splits the run and leaves a short piece beyond the fitting; which end, what happens to the run's length and whether the far port must stay free are product rules of their own. Full suite green: `GoSurveySnapTests` 434/434 (up from 431), `GoSurveyTests` 1218/1219 and ctest 1806/1814 — the same 8 pre-existing failures named under TASK-275, unchanged. | accepted |
 | REQ-344 | Commands/UI/Render | accepted, slice 3 delivered (GitHub issue #479, D-2026-09-11-d, TASK-260). **A section-plane handle drag snaps.** It joins the dimension, entity and MTEXT grip drags in the snap gate's `midCmd` test — no `Kind` is active during one, because the plane is a view state — so the marker, the aperture and the cursor pull are the ordinary ones with no second code path. The snapped point almost never lies ON the drag axis (the axis is a line through the handle; a midpoint is out in the model), so the handle goes where that point **projects** onto the axis, which puts **the whole plane through the snapped point** exactly, to REQ-101's ±0.002 ft, because the plane is perpendicular to the axis it slides along. Applies to every draggable handle, not just Move: "make the plane reach that corner" is the same request as "cut at that midpoint". **No second distance test on whether to honour a snap** — `CadSnap::FindBest` answers only inside a pixel-derived aperture around a real feature, so a point reaching the drag is one the user is pointing at, and a further check would second-guess the snap system with a worse rule while rejecting the very case the feature exists for. The drag update **moved in the frame**, to after the snap is computed: reading the previous frame's snap leaves the plane one frame behind its own marker, visible at drag speed as the plane trailing the glyph it is locked to. **Handle symbols** replace six identical squares, which had made the user read the plane to work out which one flipped it: a diamond with a double-headed arrow **through the plane along the normal** for Move (the one handle whose travel leaves the plane, and the only symbol here that is not flat), back-to-back triangles along the normal for Flip, outward arrowheads at the section line's ends for the length pair, outward triangles on the u-parallel edges for the height pair — all built in the plane's own basis and sized from the rectangle's diagonal, so they lie on the plane and do not change with zoom; the hovered or grabbed one is drawn larger. Tests: `SubObjectSelectionTests` `[req344]` (4 cases — the plane landing exactly through a snapped point while the cursor is aimed elsewhere, no drift across four held frames, releasing the snap handing back to the cursor **measured from the original grab**, and a stretch snapping without touching the cut) inside `[sectionplanegrip]` (14 cases / 131 assertions). Full suite **1510/1510**, up from 1506. **Proven to bite:** ignoring the snapped point fails 3 of the 4 cases and 7 assertions. **A test fixture bug found on the way, worth recording:** the first stretch-snap case displaced its snapped point in world X/Y to get it "off the axis", but the plane's u is not a world axis — part of that displacement lay along u, and the test was then measuring its own arithmetic. Displacements are now stated in the plane's own basis. **Stated increments:** nothing automated sees the symbols — there is no GL context in the suite, so their geometry is unit-tested and their appearance is the user's check; and the section line still carries no direction arrows . **Fixed the same day (user report): the snapped placement was RELATIVE when it must be ABSOLUTE.** The projection is the distance the handle must travel, but the grab's own cursor parameter was subtracted from it, so the plane landed wrong by however far off-centre the click had been — "it looks like it is going to snap too far and then snaps too close". Every case missed it because every fixture aimed its grab ray straight at the handle, making that term exactly zero; `[req344]` now grabs off-centre by design and asserts three different grabs give an identical answer. Reinstated, it lands 2.25 ft out on a 2.25 ft off-centre grab | accepted |
 
 ---

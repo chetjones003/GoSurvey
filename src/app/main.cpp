@@ -18,10 +18,13 @@
 #include "util/gizmooverlay.hpp"  // CadGizmoOverlay, constructed here (REQ-060)
 #include "TransformPreview.hpp"
 #include "CadUi.hpp"
+#include "ProjectWarnings.hpp"  // REQ-383: ProjectsWithUnsavedPoints
 #include "WikiHelp.hpp"
 #include "util/framewatch.hpp"
 #include "PdfAttachDialog.hpp"
+#include "PdfViewerWindow.hpp"
 #include "ViewportRenderer.hpp"
+#include "CadOnlineMap.hpp"  // REQ-363 online map controller + tile service
 #include "CadSnap.hpp"
 #include "PdfAttach.hpp"
 #include "SurveyPoints.hpp"
@@ -210,6 +213,30 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 #endif
 
+// REQ-363 / ADR-064 — the online map's platform hooks: where tiles are cached and how one is fetched
+// (WinHTTP, on the tile service's worker threads). Texture upload is the renderer's.
+//
+// The cache is under LOCAL app data, not the roaming UserDataDirectory(): up to 500 MB of tiles
+// must not travel with a roaming profile.
+static std::filesystem::path MapTileCacheDirectory()
+{
+#ifdef _WIN32
+  wchar_t local[MAX_PATH];
+  if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH) > 0)
+    return std::filesystem::path(local) / "GoSurvey" / "MapTiles";
+#endif
+  const std::filesystem::path dir = UserDataDirectory();
+  return dir.empty() ? dir : dir / "MapTiles";
+}
+
+static MapTileStatus FetchMapTileOverWinHttp(const std::string &url, std::string &body, std::string &error)
+{
+  int status = 0;
+  if (HttpGetString(url, 10000, body, error, std::string(), &status))  // also bounds the exit wait
+    return MapTileStatus::Ok;
+  return status == 404 ? MapTileStatus::NotFound : MapTileStatus::Failed;
+}
+
 // GitHub issue #168 — append one diagnostic line per stall episode to
 // `%APPDATA%\GoSurvey\frame-watch.log`. Written to a file, not the command line, for the same reason
 // BENCH is (CadCommands_Bench.cpp): a stall that forces a kill of the app takes the scrollback with
@@ -312,6 +339,14 @@ int main()
     return 1;
   }
 
+  // REQ-363 / ADR-064: one online map for the application. Tiles and textures are shared by every
+  // drawing tab; each drawing's own map choice and location decide what is drawn.
+  auto onlineMap = std::make_unique<OnlineMapController>(
+      // Six fetches at a time, as a browser opens per host: each one is its own TLS connection.
+      // Each is a §8 one-shot worker (see MapTileService.hpp); six is the most alive at once.
+      std::make_unique<MapTileService>(MapTileCacheDirectory(), FetchMapTileOverWinHttp, 6),
+      OnlineMapTextureHooks{ViewportRenderer::CreateMapTileTexture, ViewportRenderer::DeleteMapTileTexture});
+
   AppLogoGpu appLogo{};
   {
     namespace fs = std::filesystem;
@@ -331,6 +366,10 @@ int main()
 #endif
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  // REQ-387 clause 7 / ADR-067 (a): a PDF viewer is a real Windows window (minimize / maximize, another
+  // monitor, docking back). Only windows whose class asks for NoAutoMerge get an OS window on their own;
+  // every other panel stays in the main window until it is dragged out.
+  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigInputTextEnterKeepActive = false; // CAD shell: Enter submits without selecting-all next keystroke
 
@@ -356,6 +395,18 @@ int main()
     DevShell_RegisterTests(devEngine, &cmd);
 #endif
   LoadUserStartupPrefs(cmd);
+  // REQ-358: the coordinate-system dictionary installed beside the exe. A failure is not fatal: the
+  // Drawing Settings Zone group shows the reason and nothing else is affected. CS-MAP opens files
+  // through narrow (ANSI) paths, so a folder name the code page cannot hold is a load failure too.
+  {
+    std::string csmapDir;
+    try {
+      csmapDir = ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string();
+    } catch (const std::exception&) {
+    }
+    if (!geo::LoadDictionaries(csmapDir))
+      std::fprintf(stderr, "GoSurvey: %s\n", geo::DictionaryError().c_str());
+  }
 #ifdef GOSURVEY_DEVELOPER_SHELL
   if (devshellCli) {
     cmd.authGateResolved = true;
@@ -708,6 +759,11 @@ int main()
             cmd.documents[i].cadGpuRevision != cmd.documents[i].savedRevision)
           anyDirty = true;
       }
+      // REQ-383 clause 6: a project database that could not be written is "unsaved" too. Found once
+      // here (the write is tried first), not every frame the prompt is open.
+      cmd.closeUnsavedProjects = ProjectsWithUnsavedPoints(cmd, 0, cmdLog);
+      if (!cmd.closeUnsavedProjects.empty())
+        anyDirty = true;
       if (anyDirty)
         cmd.confirmCloseModal = true;
       else
@@ -725,6 +781,7 @@ int main()
 
     if (cmd.closeConfirmed)
     {
+      ReleaseAllProjects(cmd, cmdLog);  // REQ-382: a clean exit leaves no stale project lock
       // Work is saved or deliberately discarded by this point, so it is safe to hand over.
       // Inno closes this process via the AppMutex, replaces the files, and restarts us.
       if (updateExitPending)
@@ -819,7 +876,9 @@ int main()
         cmdLog.push_back("Section plane drag cancelled.");
         cmdBuf[0] = '\0';
       }
-      else if (cmd.gizmoDragActive)
+      // Not inside 3DMOVE / 3DROTATE / 3DSCALE: there the drag IS the command, and one ESC ends
+      // both and restores the gizmo op (GitHub issue #564 section 3) via CancelActiveCommand below.
+      else if (cmd.gizmoDragActive && !IsGizmoCommandKind(cmd.active))
       {
         // A TRUE cancel, not an undo: a live gizmo drag changes nothing in the store until it is
         // committed, so abandoning one costs an undo step nobody spent. Ahead of the other grips
@@ -1109,10 +1168,35 @@ int main()
     // LINE/POLYLINE AP: after two picks the bottom command InputText is hidden — Enter must still lock bearing.
     // Keyboard-only "A" then bearing: Enter with empty buffer cancels awaiting mode when no text field is focused.
     {
-      ImGuiIO &ioEnter = ImGui::GetIO();
       const bool enterDown =
           ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
-      if (enterDown && !ioEnter.WantTextInput && cmd.active != AppCommandState::Kind::None)
+      // The gate is "no widget is actively capturing", NOT `WantTextInput` (D-2026-09-24-c).
+      //
+      // `WantTextInput` is true whenever a text field merely WANTS keys — including a command-line
+      // field that is focused but has not taken this Enter yet — and it is computed from the
+      // previous frame. Measured through the Developer Shell: with the old gate, ONE Enter produced
+      // TWO submits of the same text (this poll, then the command bar's own `exec` on the same
+      // keypress), and the second arrived at the next prompt carrying the text the first had just
+      // consumed — so a prompt offering a default answered itself with the previous command's
+      // argument and reported it as invalid. That is what "pressing Enter does nothing" was.
+      //
+      // `IsAnyItemActive()` is the same discipline the paper-space Enter poll a few thousand lines
+      // into CadUi.cpp already uses ("GetActiveID() == 0 is the guard that keeps the two callers
+      // from double-firing on one keypress"): when a field is active, its own Enter handler runs and
+      // this poll must stay silent; when none is, this poll is the only handler there is.
+      //
+      // `IsAnyItemActive()` alone is NOT enough, and the gap is what a user reported as "Enter has
+      // random behavior" (D-2026-09-24-f). An InputText flagged `EnterReturnsTrue` clears its own
+      // active ID as the last thing it does, and `ReleaseSubmittedCommandInput` clears it again —
+      // both of them earlier in THIS frame than this poll. So on the one frame that matters, the
+      // frame a field just took the Enter, the gate reads "nothing is active" and this poll submits
+      // a SECOND time; `ProcessCommandLineSubmit` has already emptied the buffer, so the second one
+      // arrives as a bare Enter. That phantom Enter exited ORBIT the instant ORBIT started, and
+      // walked PIPERUN two prompts per keypress until it reported itself cancelled. Asking the UI
+      // whether it already submitted this frame closes it for every command at once, rather than
+      // per command.
+      if (enterDown && !ImGui::IsAnyItemActive() && !CadUiCommandLineSubmittedThisFrame() &&
+          cmd.active != AppCommandState::Kind::None)
         ProcessCommandLineSubmit(cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, cmdLog);
     }
 
@@ -1125,12 +1209,14 @@ int main()
     DrawWhatsNewWindow(cmd);  // REQ-336
     DrawWikiWindow(cmd);
     DrawUnitsDialog(cmd, &cmdLog);
+    DrawDrawingSettingsWindow(cmd, cmdLog);  // REQ-357
     DrawRightClickCustomizationDialog(cmd, &cmdLog);  // REQ-084 (a)
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
     DrawViewManagerWindow(cmd, &cmdLog);
     DrawTextStyleManagerWindow(cmd, &cmdLog);
     DrawDimStyleWindow(cmd, &cmdLog);
+    DrawMleaderStyleWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);
     DrawConnectionModesWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
@@ -1166,10 +1252,15 @@ int main()
     DrawPageSetupEditor(cmd, cmdLog);
     DrawBatchPlotDialog(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
+    DrawPdfViewers(cmd, cmdLog);  // REQ-387
     DrawInsertBlockDialog(cmd, cmdLog);
     DrawBlockCreateDialog(cmd, cmdLog);
+    DrawWblockDialog(cmd, cmdLog);
     DrawEditBlockDefinitionDialog(cmd, cmdLog);
     DrawBlockAuthoringPalettes(cmd, cmdLog);
+    // REQ-350 — the Pipe Fittings palette, beside the other palette window and for the same reason:
+    // both are ordinary floating windows drawn every frame, each gated on its own open flag.
+    DrawPipeFittingPalette(cmd, cmdLog, activeRenderer);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawPointCloudImportProgress(cmd);
     DrawCloseConfirmModal(cmd, cmdLog);
@@ -1186,6 +1277,7 @@ int main()
     cmd.updatePrefs.enabled        = updateState.prefs.enabled;
     cmd.updatePrefs.useBetaChannel = updateState.prefs.useBetaChannel;
     DrawDwgLossyExportModal(cmd, cmdLog);
+    DrawProjectDialogs(cmd, cmdLog);  // REQ-374 / REQ-382: New Project, lock + damaged-marker prompts
 
     // The point a click would COMMIT at, which is NOT the cursor. When an object snap is acquired,
     // SubmitViewportPick commits at the snap point (CadUi: commitX/commitY), while curX/curY is only
@@ -1292,6 +1384,12 @@ int main()
       BuildSubObjectHoverHighlight(cmd, &subObjectOverlay.hoverFaceTris, &subObjectOverlay.hoverFaceEdges,
                                    &subHoverLines);
       hoverLines.insert(hoverLines.end(), subHoverLines.begin(), subHoverLines.end());
+      // REQ-370: what the open selection box would select, lit like a hover.
+      std::vector<float> boxPreviewLines;
+      std::vector<float> boxPreviewCircles;
+      BuildBoxPreviewHighlight(cmd, &boxPreviewLines, &boxPreviewCircles);
+      hoverLines.insert(hoverLines.end(), boxPreviewLines.begin(), boxPreviewLines.end());
+      hoverCircles.insert(hoverCircles.end(), boxPreviewCircles.begin(), boxPreviewCircles.end());
     }
 
     // The translate gizmo (REQ-060, GitHub issue #148 Phase 5 slice 4b), and the ghost of what an
@@ -1349,13 +1447,20 @@ int main()
     ext.blockDefs = &cmd.blockDefs;
     ext.blockRefs = &cmd.cadBlockRefs;
     ext.blockRefAttrs = &cmd.cadBlockRefAttrs;
+    ext.drawingModelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
+    ext.annotativeViewport = CurrentViewport(cmd);
+    ext.annotationScales = cmd.annotationScales.empty() ? nullptr : &cmd.annotationScales;
+    ext.currentAnnotationScaleIndex = cmd.currentAnnotationScaleIndex;
 
     activeRenderer.SetSize(fbW, fbH);
     RenderTuning tuning{};
     tuning.arcCircleSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
     tuning.hardwareAcceleration = cmd.systemHardwareAcceleration;
     tuning.smoothLineDisplay = cmd.gfxSmoothLineDisplay;
-    tuning.visualStyle = cmd.viewportVisualStyle;  // REQ-064
+    if (const Viewport* vpStyle = CurrentViewport(cmd))
+      tuning.visualStyle = vpStyle->visualStyle;  // REQ-371 per layout viewport
+    else
+      tuning.visualStyle = cmd.viewportVisualStyle;  // REQ-064 model space
     tuning.bgR = std::clamp(cmd.viewportBgR, 0.f, 1.f);
     tuning.bgG = std::clamp(cmd.viewportBgG, 0.f, 1.f);
     tuning.bgB = std::clamp(cmd.viewportBgB, 0.f, 1.f);
@@ -1378,6 +1483,21 @@ int main()
       tuning.sectionPlaneGrips = CadSectionPlaneGrips(cmd);
       tuning.sectionPlaneGripHover = cmd.sectionPlaneGripHover;
       tuning.sectionPlaneGripDrag = cmd.sectionPlaneGripDrag;
+    }
+    // REQ-342 (2026-09-18) — while SECTIONPLANE is asking for its through point, the rectangle drawn
+    // is the plane that WOULD be placed, standing on the line from the first point to the cursor.
+    // It replaces the current plane's rectangle, because that is the one being aimed; the clip
+    // itself is untouched, so nothing is cut until the click. No handles: there is nothing to grab
+    // on a plane that does not exist yet.
+    {
+      SectionClipIndicator previewInd{};
+      if (CadSectionPlanePreviewIndicator(cmd, &previewInd)) {
+        tuning.sectionClipIndicator = previewInd;
+        tuning.sectionPlaneGraphics = SectionPlaneGraphicsFor(previewInd);
+        tuning.sectionPlaneGrips = SectionPlaneGrips{};
+        tuning.sectionPlaneGripHover = -1;
+        tuning.sectionPlaneGripDrag = -1;
+      }
     }
     // Build PDF render list: committed attachments + cursor-follow preview when picking insert point.
     std::vector<PdfAttachment> pdfRenderList;
@@ -1461,7 +1581,8 @@ int main()
     // and any in-place edit previews are drawn as UI overlays. All model-interaction visuals (hover,
     // highlight, preview, rubber, snap glyph, selection rect, survey markers, PDFs) are suppressed here so
     // leftover DXF geometry isn't hover-highlighted behind the sheet.
-    const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex;
+    const bool inFloatingModel = InFloatingModelSpace(cmd);
+    const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !inFloatingModel;
 
     // REQ-073 amendment: the Volume Dashboard's cut/fill map (TASK-095 §6 step 5), model space only
     // like every other GL surface entity. Built fresh each frame from the dashboard's own landed
@@ -1487,6 +1608,13 @@ int main()
     // REQ-308: the Start tab owns no drawing — nothing to render into its (phantom) FBO, and the
     // start screen is drawn by DrawDrawingViewport as ImGui. Skip the scene pass entirely.
     const bool startTab = (cmd.activeDrawingIdx == 0);
+
+    // REQ-363: the online map. Updated every frame, even with Map Off, so turning it off stops the
+    // requests at once; only model space draws it (item 4).
+    onlineMap->Update(cmd, !paperSpace && !startTab, CadViewCamera(cmd), fbW, fbH, cmdLog);
+    cmd.onlineMapDrawing = onlineMap->Drawing();
+    if (onlineMap->Drawing())
+      tuning.mapTiles = &onlineMap->DrawList();
 
     static const std::vector<float> kEmptyVerts;
     static const std::vector<double> kEmptyVertsD;
@@ -1573,6 +1701,11 @@ int main()
     // REQ-308: after a drawing is opened or saved, its first rendered frame is captured as the
     // Recent-list thumbnail. No-op unless a capture is pending for this exact tab.
     ServicePendingThumbnail(cmd, activeRenderer);
+
+    // REQ-350 / ADR-062 — render the part thumbnails the palette asked for above. Here, not inside the
+    // palette: this is after RenderScene, the one point in the frame where binding another framebuffer
+    // cannot disturb the drawing's own image — exactly why ServicePendingThumbnail sits here too.
+    ServicePipeFittingThumbnails(cmd, activeRenderer);
 #ifdef GOSURVEY_DEVELOPER_SHELL
     // REQ-161 (TASK-249): a devshell test capturing the VIEWPORT, serviced here because this is the
     // one point in the frame where the renderer has just drawn and its framebuffer still holds the
@@ -1609,6 +1742,16 @@ int main()
     glClearColor(0.06f, 0.06f, 0.07f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    // The detached windows (PDF viewers) draw into their own OS windows; the platform call leaves a
+    // different GL context current, so the main window's is restored before the swap.
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+    {
+      GLFWwindow *mainContext = glfwGetCurrentContext();
+      ImGui::UpdatePlatformWindows();
+      ImGui::RenderPlatformWindowsDefault();
+      glfwMakeContextCurrent(mainContext);
+    }
 
     glfwSwapBuffers(window);
 
@@ -1661,8 +1804,10 @@ int main()
     cmd.pdfDraftCache = nullptr;
   }
 
+  onlineMap.reset();  // joins the tile workers and releases the map textures while GL is alive
   for (auto &r : viewportRenderers)
     r->Shutdown();
+  ShutdownPdfViewers();  // textures + render workers, while GL is alive
   PdfAttach_Shutdown();
   glfwDestroyWindow(window);
   glfwTerminate();

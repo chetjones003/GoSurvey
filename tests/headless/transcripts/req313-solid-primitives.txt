@@ -186,18 +186,28 @@ CHECK ALL
 # --- A legacy drawing with no solids round-trips unchanged ------------------------------------------
 # The `solids` key is omitted entirely when there are none, which is what keeps every pre-REQ-313
 # drawing serializing exactly as it did (the ADR-020 (d) tolerant-key precedent).
+#
+# Anchored to the start of a line, with the DOCUMENT's own four-space indent. A bare substring test
+# cannot do this job any more: the drawing template ships block definitions (`_matchline_*`) that
+# contain solids of their own, and a block definition's keys sit ten spaces deeper. The old test
+# looked for "solids" anywhere in the file and so reported a failure for a block it was never about.
+#
+# The FILECONTAINS line below is not decoration: it proves the anchor matches document-level keys at
+# all, so the FILELACKS above it is a real check rather than one that can only ever pass.
 NEW
 CMD LINE
 CMD 0,0
 CMD 10,10
 ESC
 SAVEAS %OUT%/nosolids.dwg
-EXPECT FILELACKS %OUT%/nosolids.dwg "solids"
+EXPECT FILELACKS %OUT%/nosolids.dwg "\n    \"solids\""
+EXPECT FILECONTAINS %OUT%/nosolids.dwg "\n    \"circles\""
 OPEN %OUT%/nosolids.dwg
 EXPECT SOLIDS 0
 EXPECT LINES 1
 
 CHECK ALL
+
 
 # --- A solid on an off layer is not drawn, and a frozen one is not either -------------------------
 # The rule every entity kind is held to (REQ-084 (d) / REQ-068): what is invisible must also be
@@ -206,41 +216,54 @@ CHECK ALL
 # renderer is handed. Without this triple, deleting the visibility check entirely would leave the
 # suite green.
 NEW
-CLAYER SOLIDS-A
+# REQ-361 (issue #582, D-2026-09-29-b): a new solid goes on its OBJECT layer, not the current one.
+# `MakeNewObjectAttrs` overrides `MakeNewEntityAttrs`'s current-layer choice with
+# `EnsureObjectLayer(..., ObjectLayerKind::Solid)`, whose NCS default is C-SOLID. So CLAYER no longer
+# decides where a solid lands, and this block drives C-SOLID directly. Before this was updated the
+# section was testing a layer that held nothing: LAYERSTATE SOLIDS-A OFF hid no solid, and the three
+# "the batch splits / the filter removes it" assertions were all passing or failing for the wrong
+# reason.
 CMD BOX 0,0 4 4 4
 CMD BOX 20,0 4 4 4
-# Two solids, one layer, one colour — GitHub #194 merges them into a SINGLE draw batch.
-EXPECT SOLIDVISIBLE 2
-EXPECT SOLIDBATCHES 1
-
-# Put a third solid on another layer and give that layer a different colour: the batch SPLITS,
-# because coalescing only merges solids that would draw identically anyway.
-CLAYER SOLIDS-B
-LAYERSTATE SOLIDS-B COLOR Red
 CMD SPHERE 50,0 3
 EXPECT SOLIDS 3
+# Three solids, one object layer, one colour — GitHub #194 merges them into a SINGLE draw batch.
 EXPECT SOLIDVISIBLE 3
-EXPECT SOLIDBATCHES 2
-
-LAYERSTATE SOLIDS-A OFF
-EXPECT SOLIDS 3
-EXPECT SOLIDVISIBLE 1
 EXPECT SOLIDBATCHES 1
 
-LAYERSTATE SOLIDS-B FREEZE
+# The visibility filter still removes them, which is the REQ-084 (d) half this block exists for:
+# what is invisible must also be unclickable, and SOLIDS (the document) must not move when it does.
+LAYERSTATE C-SOLID OFF
 EXPECT SOLIDS 3
 EXPECT SOLIDVISIBLE 0
 EXPECT SOLIDBATCHES 0
 
-LAYERSTATE SOLIDS-A ON
-LAYERSTATE SOLIDS-B THAW
+LAYERSTATE C-SOLID ON
 EXPECT SOLIDVISIBLE 3
-EXPECT SOLIDBATCHES 2
+EXPECT SOLIDBATCHES 1
+
+LAYERSTATE C-SOLID FREEZE
+EXPECT SOLIDS 3
+EXPECT SOLIDVISIBLE 0
+EXPECT SOLIDBATCHES 0
+
+LAYERSTATE C-SOLID THAW
+EXPECT SOLIDVISIBLE 3
+EXPECT SOLIDBATCHES 1
+
+# NOT covered here any more: the batch SPLITTING when two solids resolve to different colours.
+# Under REQ-361 every solid created by a transcript lands on the same object layer, and there is no
+# typed or driver route to the current colour (`CadRibbonPickColor` is reached from the ribbon only,
+# the way CLAYER and LAYERSTATE exist precisely because the Layer manager is a dialog). So a
+# transcript can no longer build two solids that draw differently. The merge half above still holds
+# the coalescer honest; the split half wants either a driver verb for the current colour or a unit
+# test over the assembly, and is recorded as a gap rather than quietly dropped.
 
 # The tessellation cache held throughout: three solids, three tessellations, and none of the
-# visibility or colour changes above retessellated anything (#120 / issue #194 acceptance).
+# visibility changes above retessellated anything (#120 / issue #194 acceptance).
 EXPECT SOLIDTESSGEN 3
 EXPECT SOLIDTESSGEN 3
+
 
 # --- Erase takes a solid out in one undo step, and undo brings it back ----------------------------
 # Through the real selection flow (CMD SELECT + a crossing box), not a direct store poke: the point
@@ -254,7 +277,8 @@ EXPECT SOLIDBATCHES 0
 UNDO
 EXPECT SOLIDS 3
 EXPECT SOLIDVISIBLE 3
-EXPECT SOLIDBATCHES 2
+# One batch, not two: all three are on the same object layer now (REQ-361).
+EXPECT SOLIDBATCHES 1
 
 CHECK ALL
 
