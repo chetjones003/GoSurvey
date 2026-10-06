@@ -11951,10 +11951,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-j; the user asked for the fixes and the Leader tool).
 
-### REQ-397 — PDF viewer defaults: opens maximized; romans.shx is the default font (GitHub issue #732)
+### REQ-397 — PDF viewer defaults: opens maximized; Arial is the default font; romans.shx available (GitHub issue #732)
 
 - Purpose: the user asked that a PDF opens as large as the screen allows, and that every piece of text the viewer
-  adds (notes, leaders, dimension labels) uses the drafting font romans.shx unless told otherwise.
+  adds (notes, leaders, dimension labels) uses Arial unless told otherwise (romans.shx stays available).
 - Priority: should
 - Type: functional
 - Decision: D-2026-10-06-k.
@@ -11963,9 +11963,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. **Opens maximized.** A PDF viewer window that opens as its own window is **maximized** the first time it
      appears. After that the window belongs to the user (resize, restore, dock). A viewer that opens docked is
      unchanged.
-  2. **romans.shx is the default and the first entry of the font list** for Text, Leader and the dimension labels
-     (Length, Polylength, Area, Angle). The font list on the dimension row lets the label font be changed too. If
-     romans.shx is not installed, the list falls back to Helvetica as before.
+  2. **Arial is the default and the first entry of the font list** for Text, Leader and the dimension labels
+     (Length, Polylength, Area, Angle); romans.shx stays in the list for the user to pick. The font list on the
+     dimension row lets the label font be changed too. If Arial is not installed, the first entry is the default
+     (romans.shx, else Helvetica). *(The user first asked for romans.shx, then changed it to Arial the same day.)*
   3. **A PDF cannot embed an SHX font**, so text in an SHX font is written as **stroked line paths** (the way the
      plot-to-PDF already writes SHX text), in the annotation's appearance, with the text itself kept in the
      annotation's contents. It looks the same in every reader; it is not selectable text there. The text height is
@@ -11978,7 +11979,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
     height; a degree sign is refused for stroke drawing).
   - `[issue732][req397]` test: a note in romans.shx saved and re-read keeps the font name and text, and the saved
     page shows its strokes inside the note's box.
-  - Manual: a new PDF window opens maximized; new Text, Leader and dimension labels appear in romans.shx.
+  - Manual: a new PDF window opens maximized with the mouse lined up with the buttons from the first frame; new
+    Text, Leader and dimension labels appear in Arial; picking romans.shx draws them in that font.
 - Owner-layer: Domain/IO (`src/pdf/`), UI
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-k; the user asked for both).

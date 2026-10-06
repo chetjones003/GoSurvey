@@ -250,7 +250,7 @@ const std::vector<FontChoice>& FontChoices() {
   static const std::vector<FontChoice> list = [] {
     std::vector<FontChoice> out;
     if (Shx::Font* shx = Shx::Resolve("romans.shx"); shx != nullptr && shx->valid())
-      out.push_back({"romans.shx", false, true}); // first, so it is the default (REQ-397)
+      out.push_back({"romans.shx", false, true});
     for (const char* f : {"Helvetica", "Times", "Courier"})
       out.push_back({f, true});
     for (const char* f : {"Arial", "Times New Roman", "Courier New", "Calibri", "Verdana", "Tahoma", "Consolas",
@@ -259,6 +259,10 @@ const std::vector<FontChoice>& FontChoices() {
       if (p.size() > 4 && p.compare(p.size() - 4, 4, ".ttf") == 0) // .ttc collections are not embedded
         out.push_back({f, false});
     }
+    // Arial first, so it is the default (REQ-397); without it the first entry (romans.shx or Helvetica) is.
+    const auto arial = std::find_if(out.begin(), out.end(), [](const FontChoice& c) { return c.family == "Arial"; });
+    if (arial != out.end())
+      std::rotate(out.begin(), arial, arial + 1);
     return out;
   }();
   return list;
@@ -771,7 +775,8 @@ struct Viewer {
   bool focusNext = false;
   bool osFramed = true;    ///< floating in its own OS window: the OS draws the title bar, so ImGui draws none
   void* framedHwnd = nullptr;  ///< the OS window whose frame colours were last set
-  bool maximized = false;      ///< the window has been maximized once, on opening (REQ-397); after that it is the user's
+  int framedFrames = 0;        ///< frames the viewer has had its own OS window, counted up to the maximize
+  bool maximized = false;     ///< the window has been maximized once, on opening (REQ-397); after that it is the user's
   bool placed = false; ///< first-frame position given; after that the user (or the saved layout) owns it
   std::future<PdfDocument::OpenResult> opening;
   bool loaded = false;
@@ -3176,10 +3181,16 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
       if (v.osFramed && self->Viewport->PlatformHandleRaw != nullptr && self->Viewport->PlatformHandleRaw != v.framedHwnd) {
         ApplyOsFrameColors(self->Viewport->PlatformHandleRaw, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
         v.framedHwnd = self->Viewport->PlatformHandleRaw;
-        if (!v.maximized) { // REQ-397: a new viewer opens maximized
-          ShowWindow(static_cast<HWND>(v.framedHwnd), SW_MAXIMIZE);
-          v.maximized = true;
-        }
+      }
+      // REQ-397: a new viewer opens maximized. Not on its very first frame: maximizing a window ImGui has only
+      // just created left ImGui's idea of where it is out of step (the mouse was offset from the buttons until
+      // the user moved the window), so wait a few frames, then make ImGui ask the OS for the window's position
+      // and size again.
+      if (!v.maximized && v.osFramed && v.framedHwnd != nullptr && ++v.framedFrames >= 4) {
+        ShowWindow(static_cast<HWND>(v.framedHwnd), SW_MAXIMIZE);
+        self->Viewport->PlatformRequestMove = true;
+        self->Viewport->PlatformRequestResize = true;
+        v.maximized = true;
       }
 #endif
     }
