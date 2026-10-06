@@ -4839,6 +4839,14 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
       at the same byte length** (padding with spaces), `/Subtype/Square` with `/Subtype/Line` and the `/L(...)`
       string with the `/L[x1 y1 x2 y2]` array, so no xref offset moves. A miss fails the save (nothing
       is renamed into place). **Alternative rejected by the user:** an Ink annotation through PDFium.
+      **Addendum 2 (D-2026-10-06-f):** the same Stamp-placeholder-then-patch technique is widened to the
+      measurement annotations (REQ-391): Line, PolyLine and Polygon with a `/Measure` dictionary. The
+      placeholder's pad string is **sized to the longest patch it must hold** (a Measure dictionary and a
+      vertex list are far longer than a Line's end points), the replacement is still same-length, and a
+      miss still fails the save with nothing written. Page scale (REQ-390) is a page `/VP` Viewport entry
+      written the same way. New pure modules: `src/pdf/PdfMeasure` (scale, unit conversion, measure
+      values), `src/pdf/PdfAlign` (REQ-392 alignment of two rendered sheets) and `src/pdf/PdfDiff`
+      (REQ-393 change regions); the render worker and bounded cache of (c)/(d) serve the overlay.
 (f) **Routing.** One function, `OpenPdfInViewer(path)`, replaces `OpenWithDefaultApp` for `.pdf` at
       every call site; non-PDF files keep the shell route.
 - **Alternatives.** (1) *Second OS window / ImGui multi-viewport:* heavier, new GL-context risk, no gain
