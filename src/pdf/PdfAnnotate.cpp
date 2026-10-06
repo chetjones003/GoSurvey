@@ -461,6 +461,8 @@ bool AddRect(FPDF_PAGE page, const Annot& a) {
   if (a.fill)
     ok = ok && FPDFAnnot_SetColor(an, FPDFANNOT_COLORTYPE_InteriorColor, c.r, c.g, c.b, 255) != 0;
   ok = ok && FPDFAnnot_SetBorder(an, 0.f, 0.f, t) != 0;
+  if (!a.text.empty()) // REQ-393: a change region's note ("Added ...") shows as the annotation's comment
+    ok = ok && SetString(an, "Contents", a.text);
   // The appearance PDFium does not generate for us: the shape, in page space, inside the annotation rect.
   std::ostringstream ap;
   ap << "q " << Comp(c.r) << " " << Comp(c.g) << " " << Comp(c.b) << " RG ";
@@ -1272,6 +1274,7 @@ std::vector<Annot> ReadAnnotations(const std::filesystem::path& file) {
         a.y0 = rc.bottom + bw / 2;
         a.y1 = rc.top - bw / 2;
         a.fill = FPDFAnnot_HasKey(an, "IC") != 0;
+        a.text = GetString(an, "Contents");
       } else if (st == FPDF_ANNOT_FREETEXT) {
         a.kind = Annot::Kind::Text;
         a.x0 = rc.left;

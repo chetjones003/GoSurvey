@@ -6,6 +6,7 @@
 
 #include "PdfDocument.hpp" // Bitmap only
 
+#include <functional>
 #include <string>
 
 namespace pdfalign {
@@ -50,5 +51,19 @@ void ResampleAligned(const pdfview::Bitmap& rev, float revHPt, float revPxPerPt,
 
 /// Per-pixel Tint of two same-sized bitmaps (REQ-392 clause 2).
 void TintImage(const pdfview::Bitmap& base, const pdfview::Bitmap& rev, pdfview::Bitmap& out);
+
+/// REQ-393 (and REQ-392 clause 3): find the shift, uniform scale and small rotation (up to 5 degrees) that lay the
+/// revision's line work onto the base's. Both bitmaps are drawn at \p pxPerPt (they may differ in size: sheets of
+/// different paper size are allowed); \p baseHPt / \p revHPt are the pages' heights in points. `confidence` is the
+/// share of the revision's ink that lies within about 2 pt of base ink after alignment; under kLowConfidence the
+/// result is not claimed (`matched` false) and the transform is the identity.
+constexpr double kLowConfidence = 0.6;
+struct AutoResult {
+  Transform xf;
+  double confidence = 0.0;
+  bool matched = false;
+};
+AutoResult AutoAlign(const pdfview::Bitmap& base, double baseHPt, const pdfview::Bitmap& rev, double revHPt, double pxPerPt,
+                     const std::function<bool()>& cancel = {});
 
 } // namespace pdfalign

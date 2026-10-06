@@ -121,4 +121,9 @@ private:
 /// `variedEvery` pages when > 0. Returns the file bytes.
 std::string MakeSyntheticPdf(int pages, int linesPerPage, int variedEvery);
 
+/// One page of \p wPt x \p hPt points holding \p segments pseudo-random line segments (the same for the same \p seed),
+/// a stand-in for a large plan sheet (`BENCH PDFDIFF`, REQ-393). \p variant 0 is the base sheet; variant 1 is the same
+/// sheet as a later revision: drawn 5 pt right and 3 pt up, with one segment in every 400 left out and 20 new ones.
+std::string MakeLineWorkPdf(double wPt, double hPt, int segments, unsigned seed, int variant);
+
 } // namespace pdfview

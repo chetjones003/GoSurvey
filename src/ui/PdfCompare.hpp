@@ -5,6 +5,7 @@
 // thread and uploaded a slice per frame, so panning and zooming never wait on them.
 
 #include "PdfAlign.hpp"
+#include "PdfDiff.hpp"
 #include "PdfDocument.hpp"
 
 #include <atomic>
@@ -31,6 +32,9 @@ public:
   /// `BENCH PDFCOMPARE`: zoom and pan the overlay for a fixed run and report the viewer's cost per frame.
   /// \p deleteRevAfter removes the revision file (a generated one) when the comparison is destroyed.
   void StartBench(int pages, bool deleteRevAfter);
+  /// `BENCH PDFDIFF`: align a generated 36 x 24 in sheet pair automatically, find the changes, and report the time and
+  /// the worst viewer frame while it ran.
+  void StartDiffBench(bool deleteRevAfter);
   bool BenchFinished() const { return benchDone_; }
 
   /// Free textures queued for deletion. Call at the start of a frame, and once more before the GL context goes.
@@ -63,7 +67,16 @@ private:
     float wPt = 0.f, hPt = 0.f;
     bool Complete() const;
   };
-  enum class Mode { Tint, Opacity, Blink };
+  enum class Mode { Tint, Opacity, Blink, Base, Revision };
+  enum class Task { None, Align, Find };
+  struct AnaOut {
+    Task task = Task::None;
+    bool ok = false;
+    bool cancelled = false;
+    pdfalign::AutoResult align;
+    pdfdiff::Result found;
+    double ms = 0;
+  };
   enum class Pick { None, OneBase, OneRev, TwoBase1, TwoRev1, TwoBase2, TwoRev2 };
 
   void PollOpen(std::vector<std::string>& log);
@@ -73,6 +86,12 @@ private:
   void DrawSheet(std::vector<std::string>& log);
   bool WantRaw() const { return pick_ == Pick::OneRev || pick_ == Pick::TwoRev1 || pick_ == Pick::TwoRev2; }
   void BeginPick(Pick p);
+  void PumpAnalysis(std::vector<std::string>& log);
+  void StartTask(Task t);
+  void DrawChangesBar();
+  void DrawChangesList();
+  void SaveMarkups();
+  void ClearChanges();
   void TakePick(pdfalign::Pt p);
   static void Retire(Set& s);
 
@@ -90,6 +109,27 @@ private:
   Pick pick_ = Pick::None;
   pdfalign::Pt picks_[4];
   int pickCount_ = 0;
+
+  // REQ-393: automatic alignment and change detection (one analysis at a time, on a worker, cancellable, with progress)
+  std::future<AnaOut> ana_;
+  bool anaRunning_ = false;
+  Task anaTask_ = Task::None;
+  std::atomic<bool> anaCancel_{false};
+  std::atomic<float> anaProgress_{0.f};
+  int anaBasePage_ = 0, anaRevPage_ = 0, anaVersion_ = 0;
+  bool alignWanted_ = true; ///< run the automatic alignment as soon as the revision is open (and after a page change)
+  bool autoMatched_ = false;
+  double autoConfidence_ = 0.0;
+  pdfalign::Transform autoXf_;
+  bool lowConfidence_ = false;
+  pdfdiff::Settings diffSettings_;
+  std::vector<pdfdiff::Region> regions_;
+  bool haveChanges_ = false;
+  int selRegion_ = -1;
+  int centerReq_ = -1;
+  bool showHighlights_ = true;
+  std::future<std::string> saving_; ///< Write changes as markups, on a worker
+  std::string savedNote_;
 
   Mode mode_ = Mode::Tint;
   float opacity_ = 0.5f;
@@ -114,6 +154,10 @@ private:
 
   // bench
   bool bench_ = false;
+  bool diffBench_ = false;
+  bool diffBenchFinding_ = false;
+  double diffBenchAlignMs_ = 0;
+  double diffBenchWorstFrameMs_ = 0;
   bool benchDone_ = false;
   bool deleteRev_ = false;
   int benchPages_ = 0;

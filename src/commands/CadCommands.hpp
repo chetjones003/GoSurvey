@@ -5168,6 +5168,7 @@ struct AppCommandState {
   bool pdfSplitRequest = false;  ///< PDFSPLIT (REQ-389): open the Split dialog on the focused viewer
   std::string pdfViewBenchPath;  ///< `BENCH PDFVIEW <file>`: time this real PDF's first page and thumbnail strip
   int pdfViewBenchPages = 0; ///< `BENCH PDFVIEW [pages]`: build a synthetic PDF this long and time scrolling it
+  bool pdfDiffBench = false; ///< `BENCH PDFDIFF` (REQ-393): align and compare a generated 36 x 24 in sheet pair
   int pdfCompareBenchPages = 0; ///< `BENCH PDFCOMPARE [pages]` (REQ-392): build two synthetic PDFs this long and time panning their overlay
 
   // -------------------------------------------------------------------------
