@@ -11644,7 +11644,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Decision: D-2026-10-06-f (answer 1 standard PDF data; answer 3 the four tools).
 - Depends on: REQ-390, REQ-388.
 - Statement:
-  1. **Tools.** **Length** (two points), **Polylength** (a path of points, total length), **Area** (a closed
+  1. **Tools.** **Length** (two points, then a **third click that places the dimension line**: the line is
+     drawn parallel to the two points at that offset, with extension lines back to the points, an arrow at
+     each end and the label turned along it, as a GoSurvey dimension is; Enter instead of the third click
+     puts the line on the points; D-2026-10-06-g), **Polylength** (a path of points, total length), **Area** (a closed
      polygon: area and perimeter), **Angle** (three points: the angle at the middle one). Each shows its
      value as a label on the sheet, in the page's scale and unit; area in square units.
   2. **Colour, thickness and label font** use the REQ-388 settings; the label shows the number with a
@@ -11656,17 +11659,23 @@ capability that does not exist. They are recorded here rather than quietly dropp
      addendum 2). **Angle** has no standard dimension type: it is saved as a three-point PolyLine whose
      label and a private GoSurvey key hold the angle, so other readers show a labelled polyline and
      GoSurvey recognises it as an angle. This limit is stated in the user-facing help.
-  4. **Edit.** Dimensions select, move, reshape (drag a point), delete and undo/redo like other
-     annotations. **Changing the scale** of a page (REQ-390) recomputes every dimension on it from its
-     geometry, so the labels stay true.
-  5. **Snap.** Points snap to the ends and corners of the page's vector line work when the page has any
-     (and the user turns snapping on); a page that is a scanned image offers no snap.
+  4. **Edit.** Dimensions select (with the Select tool; Esc leaves a measure tool), move, reshape (drag a
+     point; a Length also has a grip on its dimension line that slides the **offset**), delete and
+     undo/redo like other annotations. **Changing the scale** of a page (REQ-390) recomputes every
+     dimension on it from its geometry, so the labels stay true.
+  5. **Snap.** A **Snap toggle** (button, and F3; off by default) makes points taken by the drawing, measure,
+     calibrate and note tools, and by dragging a grip, snap to the nearest end or corner of the page's
+     vector line work (within about 10 screen pixels, marked on screen) when the page has any; a page that is
+     a scanned image offers no snap. The line work is read in the background the first time a page is used.
+     **Calm snapping:** the reader keeps the ends and corners of real lines (strongest), a round shape's **centre** (strongest) and four quadrant points, drops the tiny steps of a curve, specks and the outlines of text and other small intricate shapes, and candidates within about 6 screen pixels of a stronger one are merged into it (zoomed in, they separate again); the marker stays on its point unless another is clearly closer (D-2026-10-06-i). The Length offset click never snaps. Snap points are in the viewer's page coordinates (rotation and
+     page-box offset accounted for), and marks are carried back to the file's page coordinates when saved
+     (REQ-388), so they land where they were drawn on rotated pages too.
   6. **Out of scope:** radius/diameter, volume, cutouts inside an area, a measurement legend / markup list
      export, dimension styles beyond the above.
 - Acceptance:
   - `[issue732][req391]` test: on a page calibrated 1 pt = 0.5 ft, a Length of 100 pt reads 50 ft; a
-    Polylength of an L-shape reads the sum of its legs; a 100 pt x 40 pt Area reads 5000 sq ft (x scale^2)
-    and 70 ft perimeter (as 140 pt x 0.5); an Angle of three points reads the expected degrees to 0.01.
+    Polylength of an L-shape reads the sum of its legs; a 100 pt x 40 pt Area reads 1000 sq ft (4000 sq pt x 0.25)
+    and a 140 ft perimeter (280 pt x 0.5); an Angle of three points reads the expected degrees to 0.01.
   - `[issue732][req391]` test: each saved dimension is read back with its geometry, value, unit and
     colour; the saved file contains a Measure dictionary for Length / Polylength / Area; the source file's
     bytes are identical.
@@ -11676,7 +11685,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
     Bluebeam or Acrobat.
 - Owner-layer: Domain/IO (`src/pdf/PdfMeasure`, `src/pdf/PdfAnnotate`), UI, Commands
 - Status: accepted
-- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f).
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f). 2026-10-06 — acceptance arithmetic corrected (1000 sq ft, 140 ft); clause 1 Length offset, clause 4 offset grip and Esc, clause 5 Snap toggle (D-2026-10-06-g).
 
 ### REQ-392 — Overlay two revisions of a PDF and line them up (GitHub issue #732, phase 6)
 
@@ -11800,7 +11809,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      user's drawing free of QA marks).
   4. **Best fit.** With two or more checks the window shows the **best-fit scale**: the scale that minimises
      the squared *relative* error of all the checks, each weighted by its length (a long span says more than
-     a short one). A check whose own implied scale differs from the best fit by more than 0.25 % or by more
+     a short one). A check whose own implied scale differs from the **median implied scale** (a centre one wrong check cannot drag) by more than 0.25 % or by more
      than three times the median deviation of the checks, whichever is larger, is marked **Outlier** (the
      likely blunder: a wrong pick, a mistyped value, a wrong unit, or an unreliable drawn dimension). **Use
      best-fit scale** applies it as an ordinary scale change (one undo step); with an outlier present the
@@ -11823,7 +11832,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      settings). The box shows, live: the **adjusted scale** with its **uncertainty** ("1 in = 3.9956 ft +/- 0.04 %");
      per dimension the **residual** (what the adjusted scale reads minus what the drawing states, in the page unit
      and as a percentage) and its **standardised residual**; and the overall fit (the RMS residual). **Blunder
-     detection:** a dimension whose standardised residual exceeds 3 is flagged **Suspect**; the user may remove it
+     detection:** a dimension whose **leave-one-out** standardised residual (its residual against a fit made from the other dimensions, so one wrong long dimension cannot hide itself by dragging the fit) exceeds 3 is flagged **Suspect**, the worst first and then the rest re-tested without it; the user may remove it
      and see the fit re-solved, or keep it; the program never removes one on its own. **Apply** sets the adjusted
      scale as one undo step (marked "robust, n dimensions, +/- x %"); **Cancel** changes nothing. With fewer than the
      minimum the box says how many more are needed and offers nothing to apply. The solution is a single scale

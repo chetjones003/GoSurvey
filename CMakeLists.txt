@@ -646,6 +646,8 @@ add_executable(GoSurvey
   src/pdf/PdfAnnotate.cpp
   src/pdf/PdfRaw.cpp
   src/pdf/PdfMeasure.cpp
+  src/pdf/PdfSnap.cpp
+  src/pdf/PdfScaleCheck.cpp
   src/ui/PdfViewerWindow.cpp
 
   # Platform
@@ -1343,12 +1345,17 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PdfSplitTests.cpp
     tests/PdfAnnotateTests.cpp
     tests/PdfMeasureTests.cpp
+    tests/PdfDimensionTests.cpp
+    tests/PdfSnapTests.cpp
+    tests/PdfScaleCheckTests.cpp
     src/pdf/PdfViewerCore.cpp
     src/pdf/PdfDocument.cpp
     src/pdf/PdfSplit.cpp
     src/pdf/PdfAnnotate.cpp
     src/pdf/PdfRaw.cpp
-    src/pdf/PdfMeasure.cpp)
+    src/pdf/PdfMeasure.cpp
+    src/pdf/PdfSnap.cpp
+    src/pdf/PdfScaleCheck.cpp)
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD

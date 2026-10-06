@@ -4,7 +4,10 @@
 
 #include "PdfDocument.hpp"
 
+#include <fpdf_edit.h>
 #include <fpdf_progressive.h>
+#include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
 #include <chrono>
 #include <fpdfview.h>
@@ -162,6 +165,242 @@ Bitmap Downscale(const Bitmap& src, int maxSide) {
     }
   }
   return out;
+}
+
+namespace {
+
+struct Mat {
+  float a = 1.f, b = 0.f, c = 0.f, d = 1.f, e = 0.f, f = 0.f; ///< x' = a x + c y + e,  y' = b x + d y + f
+};
+
+// The transform that does \p first and then \p then.
+Mat Then(const Mat& first, const Mat& then) {
+  Mat r;
+  r.a = then.a * first.a + then.c * first.b;
+  r.c = then.a * first.c + then.c * first.d;
+  r.e = then.a * first.e + then.c * first.f + then.e;
+  r.b = then.b * first.a + then.d * first.b;
+  r.d = then.b * first.c + then.d * first.d;
+  r.f = then.b * first.e + then.d * first.f + then.f;
+  return r;
+}
+
+struct SnapCtx {
+  const std::function<bool()>& cancel;
+  size_t maxPoints;
+  Mat toViewer; ///< page user space -> the viewer's page coordinates
+  std::vector<SnapPoint>& out;
+  std::unordered_map<int64_t, size_t> seen; ///< quarter-point cell -> index in out (a point seen again keeps the larger weight)
+  size_t visited = 0;
+  bool stop = false;
+
+  // A page point in the viewer's coordinates; false if it is not a finite number.
+  bool ToViewer(const Mat& m, float x, float y, std::pair<float, float>& v) const {
+    const float ux = m.a * x + m.c * y + m.e, uy = m.b * x + m.d * y + m.f;
+    const float vx = toViewer.a * ux + toViewer.c * uy + toViewer.e, vy = toViewer.b * ux + toViewer.d * uy + toViewer.f;
+    if (!std::isfinite(vx) || !std::isfinite(vy))
+      return false;
+    v = {vx, vy};
+    return true;
+  }
+
+  void Add(float vx, float vy, float weight) {
+    const int64_t key = (static_cast<int64_t>(std::lround(vx * 4.f)) << 32) ^ static_cast<uint32_t>(std::lround(vy * 4.f));
+    const auto it = seen.find(key);
+    if (it != seen.end()) {
+      out[it->second].weight = std::max(out[it->second].weight, weight);
+      return;
+    }
+    seen.emplace(key, out.size());
+    out.push_back({vx, vy, weight});
+    if (out.size() >= maxPoints)
+      stop = true;
+  }
+
+  // One run of connected line work (viewer coordinates). Keeps the points a person would snap to and drops the noise:
+  //  - a run shorter than 1.5 pt is a speck (a dot, the tip of a hatch) and gives nothing;
+  //  - the ends of an open run, and every corner of a closed one, are the real thing (weight 3);
+  //  - a vertex in the middle is dropped when both its neighbours are under 2.5 pt away and the line barely turns
+  //    there (40 degrees): that is a curve drawn as tiny steps, not a corner;
+  //  - any other vertex is kept, with weight 3 next to a long segment (6 pt or more) and weight 1 otherwise.
+  void Subpath(const std::vector<std::pair<float, float>>& p, bool closed, bool hadCurve) {
+    const size_t n = p.size();
+    if (n < 2)
+      return;
+    const auto dist = [&](size_t a, size_t b) { return std::hypot(p[a].first - p[b].first, p[a].second - p[b].second); };
+    float total = 0.f;
+    for (size_t i = 1; i < n; ++i)
+      total += dist(i, i - 1);
+    if (closed)
+      total += dist(0, n - 1);
+    if (total < 1.5f)
+      return;
+    // A round shape (a circle drawn as four curves, or as a ring of short steps) is one thing with a centre and four
+    // quadrant points, not a ring of vertices: the centre is the strongest point (weight 4), the quadrants weight 2.
+    const bool ring = closed || dist(0, n - 1) < 0.75f;
+    if (ring && n >= (hadCurve ? 4u : 12u)) {
+      const size_t m = (!closed && dist(0, n - 1) < 0.75f) ? n - 1 : n; // the duplicate end point is not a vertex
+      float cx = 0.f, cy = 0.f;
+      for (size_t i = 0; i < m; ++i) {
+        cx += p[i].first;
+        cy += p[i].second;
+      }
+      cx /= static_cast<float>(m);
+      cy /= static_cast<float>(m);
+      float mean = 0.f;
+      for (size_t i = 0; i < m; ++i)
+        mean += std::hypot(p[i].first - cx, p[i].second - cy);
+      mean /= static_cast<float>(m);
+      float worst = 0.f;
+      for (size_t i = 0; i < m; ++i)
+        worst = std::max(worst, std::fabs(std::hypot(p[i].first - cx, p[i].second - cy) - mean));
+      if (mean > 0.8f && worst / mean < (hadCurve ? 0.12f : 0.06f)) {
+        size_t lo[2] = {0, 0}, hi[2] = {0, 0};
+        for (size_t i = 1; i < m; ++i) {
+          if (p[i].first < p[lo[0]].first) lo[0] = i;
+          if (p[i].first > p[hi[0]].first) hi[0] = i;
+          if (p[i].second < p[lo[1]].second) lo[1] = i;
+          if (p[i].second > p[hi[1]].second) hi[1] = i;
+        }
+        Add(cx, cy, 4.f);
+        for (size_t i : {lo[0], hi[0], lo[1], hi[1]})
+          Add(p[i].first, p[i].second, 2.f);
+        return;
+      }
+    }
+    // Text drawn as outlines (every letter its own small shape) and other small, intricate shapes would put a dozen
+    // points in a few pixels. Nobody snaps to the edge of a letter: a run no bigger than 14 pt that has 8 or more
+    // vertices (6 with curves) and is not round gives nothing.
+    {
+      float minX = p[0].first, maxX = minX, minY = p[0].second, maxY = minY;
+      for (const auto& q : p) {
+        minX = std::min(minX, q.first);
+        maxX = std::max(maxX, q.first);
+        minY = std::min(minY, q.second);
+        maxY = std::max(maxY, q.second);
+      }
+      if (std::max(maxX - minX, maxY - minY) <= 14.f && (n >= 8 || (hadCurve && n >= 6)))
+        return;
+    }
+    for (size_t i = 0; i < n && !stop; ++i) {
+      const bool hasPrev = i > 0 || closed, hasNext = i + 1 < n || closed;
+      const size_t ip = (i + n - 1) % n, in = (i + 1) % n;
+      const float lp = hasPrev ? dist(i, ip) : 0.f, ln = hasNext ? dist(i, in) : 0.f;
+      float weight = 3.f;
+      if (hasPrev && hasNext) { // a vertex in the middle of the run
+        float turn = 0.f;
+        if (lp > 1e-4f && ln > 1e-4f) {
+          const float ax = p[i].first - p[ip].first, ay = p[i].second - p[ip].second;
+          const float bx = p[in].first - p[i].first, by = p[in].second - p[i].second;
+          const float c = std::clamp((ax * bx + ay * by) / (lp * ln), -1.f, 1.f);
+          turn = std::acos(c) * 180.f / 3.14159265f;
+        }
+        if (lp < 2.5f && ln < 2.5f && turn < 40.f)
+          continue;
+        weight = std::max(lp, ln) >= 6.f ? 3.f : 1.f;
+      }
+      Add(p[i].first, p[i].second, weight);
+    }
+  }
+};
+
+void CollectSnap(FPDF_PAGEOBJECT obj, const Mat& outer, int depth, SnapCtx& ctx) {
+  if (ctx.stop || obj == nullptr || depth > 8)
+    return;
+  if ((++ctx.visited & 255u) == 0 && ctx.cancel()) {
+    ctx.stop = true;
+    return;
+  }
+  FS_MATRIX fm{1, 0, 0, 1, 0, 0};
+  FPDFPageObj_GetMatrix(obj, &fm);
+  const Mat own{fm.a, fm.b, fm.c, fm.d, fm.e, fm.f};
+  const int type = FPDFPageObj_GetType(obj);
+  if (type == FPDF_PAGEOBJ_PATH) {
+    const Mat t = Then(own, outer);
+    const int n = FPDFPath_CountSegments(obj);
+    std::vector<std::pair<float, float>> run;
+    bool closed = false, curved = false;
+    int bezier = 0;
+    const auto flush = [&] {
+      ctx.Subpath(run, closed, curved);
+      run.clear();
+      closed = false;
+      curved = false;
+    };
+    for (int i = 0; i < n && !ctx.stop; ++i) {
+      FPDF_PATHSEGMENT seg = FPDFPath_GetPathSegment(obj, i);
+      if (seg == nullptr)
+        continue;
+      const int st = FPDFPathSegment_GetType(seg);
+      if (st == FPDF_SEGMENT_MOVETO) {
+        flush();
+        bezier = 0;
+      }
+      if (st == FPDF_SEGMENT_BEZIERTO) { // a curve is three points: two controls, then the end that counts
+        curved = true;
+        if (++bezier % 3 != 0)
+          continue;
+      } else if (st != FPDF_SEGMENT_MOVETO) {
+        bezier = 0;
+      }
+      float x = 0.f, y = 0.f;
+      std::pair<float, float> v;
+      if (FPDFPathSegment_GetPoint(seg, &x, &y) && ctx.ToViewer(t, x, y, v))
+        run.push_back(v);
+      if (FPDFPathSegment_GetClose(seg))
+        closed = true;
+    }
+    flush();
+  } else if (type == FPDF_PAGEOBJ_FORM) {
+    const Mat inner = Then(own, outer);
+    const unsigned long n = static_cast<unsigned long>(FPDFFormObj_CountObjects(obj));
+    for (unsigned long i = 0; i < n && !ctx.stop; ++i)
+      CollectSnap(FPDFFormObj_GetObject(obj, i), inner, depth + 1, ctx);
+  }
+}
+
+} // namespace
+
+bool PdfDocument::SnapPoints(int page, std::vector<SnapPoint>& out, const std::function<bool()>& cancel,
+                             size_t maxPoints) {
+  out.clear();
+  if (page < 0 || page >= PageCount())
+    return false;
+  std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
+  FPDF_PAGE p = FPDF_LoadPage(impl_->doc, page);
+  if (p == nullptr)
+    return false;
+  // The viewer's coordinates: points from the bottom-left of the page as it is displayed. Found by asking PDFium
+  // where three user-space points land on a page-sized device, so rotation and the page box offset are included.
+  const float W = FPDF_GetPageWidthF(p), H = FPDF_GetPageHeightF(p);
+  constexpr int kScale = 8;
+  const int dw = std::max(1, static_cast<int>(std::lround(W * kScale))), dh = std::max(1, static_cast<int>(std::lround(H * kScale)));
+  const float sx = static_cast<float>(dw) / std::max(1e-3f, W), sy = static_cast<float>(dh) / std::max(1e-3f, H);
+  int ox = 0, oy = 0;
+  FPDF_PageToDevice(p, 0, 0, dw, dh, 0, 0.0, 0.0, &ox, &oy);
+  // The device grid is whole pixels, so the axes are measured over a 100-point baseline.
+  int ex2 = 0, ey2 = 0, fx2 = 0, fy2 = 0;
+  FPDF_PageToDevice(p, 0, 0, dw, dh, 0, 100.0, 0.0, &ex2, &ey2);
+  FPDF_PageToDevice(p, 0, 0, dw, dh, 0, 0.0, 100.0, &fx2, &fy2);
+  Mat toViewer; // user (x, y) -> device -> viewer (device / scale, flipped so y is up)
+  const float a = static_cast<float>(ex2 - ox) / 100.f / sx, b = static_cast<float>(ey2 - oy) / 100.f / sy;
+  const float c = static_cast<float>(fx2 - ox) / 100.f / sx, d = static_cast<float>(fy2 - oy) / 100.f / sy;
+  toViewer.a = a;
+  toViewer.c = c;
+  toViewer.e = static_cast<float>(ox) / sx;
+  toViewer.b = -b;
+  toViewer.d = -d;
+  toViewer.f = H - static_cast<float>(oy) / sy;
+  SnapCtx ctx{cancel, maxPoints, toViewer, out, {}, 0, false};
+  const int n = FPDFPage_CountObjects(p);
+  for (int i = 0; i < n && !ctx.stop; ++i)
+    CollectSnap(FPDFPage_GetObject(p, i), Mat{}, 0, ctx);
+  FPDF_ClosePage(p);
+  if (cancel()) {
+    out.clear();
+    return false;
+  }
+  return true;
 }
 
 bool PdfDocument::RenderPage(int page, int w, int h, Bitmap& out, const std::function<bool()>& cancel, int flags,

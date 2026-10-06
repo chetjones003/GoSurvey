@@ -4,6 +4,7 @@
 #include "PdfDocument.hpp"
 #include "FontRegistry.hpp"
 #include "PdfAnnotate.hpp"
+#include "PdfSnap.hpp"
 #include "PdfSplit.hpp"
 #include "PdfViewerCore.hpp"
 #include "WinFileDialogs.hpp"
@@ -224,7 +225,15 @@ struct BenchRun {
 // a page never re-renders it; only "Save As" writes them into a new PDF.
 // ---------------------------------------------------------------------------------------------------
 
-enum class Tool { Select, Text, Line, Rect, Ellipse, Calibrate };
+enum class Tool { Select, Text, Line, Rect, Ellipse, Calibrate, Length, PolyLength, Area, Angle, Check };
+
+bool IsMeasureTool(Tool t) { return t == Tool::Length || t == Tool::PolyLength || t == Tool::Area || t == Tool::Angle; }
+
+Annot::Kind KindOfMeasureTool(Tool t) {
+  return t == Tool::Length ? Annot::Kind::Length : t == Tool::PolyLength ? Annot::Kind::PolyLength
+                                                 : t == Tool::Area       ? Annot::Kind::Area
+                                                                         : Annot::Kind::Angle;
+}
 
 struct FontChoice {
   std::string family;
@@ -246,8 +255,44 @@ const std::vector<FontChoice>& FontChoices() {
   return list;
 }
 
+// The ends and corners of one page's line work, read in the background for snapping (REQ-391 clause 5).
+struct SnapPage {
+  std::future<std::shared_ptr<SnapIndex>> reading;
+  std::shared_ptr<SnapIndex> index; ///< null until read (or if reading failed)
+  std::shared_ptr<std::atomic<bool>> cancel = std::make_shared<std::atomic<bool>>(false);
+  bool started = false;
+  bool failed = false;
+};
+
 struct AnnotUi {
   AnnotSession session;
+  bool snapOn = false;                 ///< the Snap toggle (F3)
+  std::map<int, SnapPage> snapPages;   ///< the last few pages read
+  bool snapHit = false;                ///< the pointer is near a snap point this frame ...
+  int snapPage = 0;
+  float snapX = 0.f, snapY = 0.f;      ///< ... and this is it, in page points
+  bool snapPrevValid = false;          ///< the point the marker sat on last frame, so it can stay there
+  int snapPrevPage = 0;
+  float snapPrevX = 0.f, snapPrevY = 0.f;
+  float measureOffset = 0.f;           ///< the Length being made: where its dimension line goes
+
+  // REQ-394: checking the scale against dimensions the drawing states.
+  bool showChecks = true;              ///< draw the checks on the sheet (off hides them to reduce noise)
+  CheckLimits limits;                  ///< Good / Check / Blunder limits (settings of this viewer)
+  RobustParams robustParams;           ///< robust calibration settings
+  std::vector<std::pair<float, float>> checkPts; ///< the Check tool's picked points (0..2)
+  int checkPage = 0;
+  int checkTarget = 0;                 ///< 0: a check on the page's scale; 1: a dimension for the robust calibration
+  bool checkPopup = false;             ///< both points picked: ask for the stated value
+  char checkText[96] = "";
+  bool checksDialog = false;           ///< open the Scale checks dialog on the next frame
+  int checksTab = 0;                   ///< 0 checks, 1 robust calibration
+  int correctionMode = 0;              ///< 0 match a check, 1 best fit, 2 best fit without the outlier, 3 typed %, 4 leave
+  int matchIdx = 0;                    ///< which check "match this check" uses (index into the page's checks)
+  double typedPct = 0.0;
+  int selectedCheck = -1;              ///< highlighted row (index into the session's checks)
+  std::vector<std::pair<ScaleCheck, bool>> robustPicks; ///< robust calibration: the dimensions, and whether each is used
+  std::string checkMessage;
   Tool tool = Tool::Select;
   float color[3] = {0.85f, 0.10f, 0.10f};
   float thickness = 2.f;
@@ -255,11 +300,16 @@ struct AnnotUi {
   int fontIdx = 0;
   bool bold = false, italic = false;
   float fontSize = 14.f;
+  int decimals = 2;                                   ///< REQ-391: digits in a dimension's label
+  std::vector<std::pair<float, float>> measurePts;    ///< REQ-391: the dimension being clicked out
+  int measurePage = 0;
   int selected = -1;
   enum class Drag { None, Create, Move, Handle } drag = Drag::None;
   int dragPage = 0;
   float px0 = 0.f, py0 = 0.f; ///< where the press landed, in page points
   int handle = -1;
+  ImVec2 pressMouse{0.f, 0.f}; ///< where the button went down: a drag is only a drag once the pointer has moved
+  bool dragMoved = false;
   Annot original, preview;    ///< the item before the drag, and as it looks mid-drag
   bool textPopup = false;     ///< open the text dialog on the next frame
   int textPage = 0;
@@ -285,6 +335,7 @@ struct AnnotUi {
   int calCount = 0;              ///< points picked so far (0..2)
   int calPage = 0;
   float calX[2] = {0.f, 0.f}, calY[2] = {0.f, 0.f};
+  bool calSnapped[2] = {false, false}; ///< whether each calibration point snapped to the drawing or was placed freehand
   bool calPopup = false;         ///< both points picked: ask for the real distance
   double calReal = 10.0;
   int calUnit = 1;
@@ -329,6 +380,10 @@ void ApplyStyle(const AnnotUi& u, Annot& a) {
     a.fontSize = std::clamp(u.fontSize, 4.f, 200.f);
     a.fontFile = f.standard ? std::string() : FontReg::FindTtfPath(f.family, u.bold, u.italic);
     FitTextBox(a);
+  } else if (a.IsDimension()) {
+    a.thickness = u.thickness;
+    a.fontSize = std::clamp(u.fontSize, 4.f, 200.f);
+    a.decimals = std::clamp(u.decimals, 0, 6);
   } else {
     a.thickness = u.thickness;
     a.fill = a.kind != Annot::Kind::Line && u.fill;
@@ -345,10 +400,33 @@ void LoadStyle(AnnotUi& u, const Annot& a) {
     for (size_t i = 0; i < FontChoices().size(); ++i)
       if (FontChoices()[i].family == a.font)
         u.fontIdx = static_cast<int>(i);
+  } else if (a.IsDimension()) {
+    u.thickness = a.thickness;
+    u.fontSize = a.fontSize;
+    u.decimals = a.decimals;
   } else {
     u.thickness = a.thickness;
     u.fill = a.fill;
   }
+}
+
+// The bounding box of an annotation in page points.
+void BoundsOf(const Annot& a, float& l, float& b, float& r, float& t) {
+  if (a.IsDimension() && !a.pts.empty()) {
+    l = r = a.pts[0].first;
+    b = t = a.pts[0].second;
+    for (const auto& p : a.pts) {
+      l = std::min(l, p.first);
+      r = std::max(r, p.first);
+      b = std::min(b, p.second);
+      t = std::max(t, p.second);
+    }
+    return;
+  }
+  l = std::min(a.x0, a.x1);
+  r = std::max(a.x0, a.x1);
+  b = std::min(a.y0, a.y1);
+  t = std::max(a.y0, a.y1);
 }
 
 float DistToSegment(float px, float py, float ax, float ay, float bx, float by) {
@@ -362,6 +440,37 @@ float DistToSegment(float px, float py, float ax, float ay, float bx, float by) 
 bool HitTest(const Annot& a, float x, float y, float tol) {
   const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
   switch (a.kind) {
+  case Annot::Kind::Length:
+  case Annot::Kind::PolyLength:
+  case Annot::Kind::Area:
+  case Annot::Kind::Angle: {
+    if (a.kind == Annot::Kind::Length && a.pts.size() == 2) { // the dimension line and the two extension lines
+      const DimLine d = LengthDimLine(a);
+      const float slack = a.thickness * 0.5f + tol;
+      return DistToSegment(x, y, d.x0, d.y0, d.x1, d.y1) <= slack ||
+             DistToSegment(x, y, a.pts[0].first, a.pts[0].second, d.x0, d.y0) <= slack ||
+             DistToSegment(x, y, a.pts[1].first, a.pts[1].second, d.x1, d.y1) <= slack;
+    }
+    const bool closed = a.kind == Annot::Kind::Area;
+    const size_t n = a.pts.size();
+    for (size_t i = 0; i + 1 < n + (closed && n > 2 ? 1 : 0); ++i) {
+      const auto& p = a.pts[i];
+      const auto& q = a.pts[(i + 1) % n];
+      if (DistToSegment(x, y, p.first, p.second, q.first, q.second) <= a.thickness * 0.5f + tol)
+        return true;
+    }
+    if (closed && n > 2) { // inside the area counts too
+      bool in = false;
+      for (size_t i = 0, j = n - 1; i < n; j = i++) {
+        const auto& p = a.pts[i];
+        const auto& q = a.pts[j];
+        if (((p.second > y) != (q.second > y)) && (x < (q.first - p.first) * (y - p.second) / (q.second - p.second) + p.first))
+          in = !in;
+      }
+      return in;
+    }
+    return false;
+  }
   case Annot::Kind::Line:
     return DistToSegment(x, y, a.x0, a.y0, a.x1, a.y1) <= std::max(a.thickness * 0.5f, 0.f) + tol;
   case Annot::Kind::Text:
@@ -386,6 +495,12 @@ bool HitTest(const Annot& a, float x, float y, float tol) {
 // The grips of a selected annotation, in page points: a Line's two ends, a shape's four corners
 // (clockwise from top-left), a note's bottom-right corner (it scales the text).
 std::vector<std::pair<float, float>> HandlePoints(const Annot& a) {
+  if (a.kind == Annot::Kind::Length && a.pts.size() == 2) { // the two points, and the middle of the dimension line
+    const DimLine d = LengthDimLine(a);
+    return {a.pts[0], a.pts[1], {(d.x0 + d.x1) * 0.5f, (d.y0 + d.y1) * 0.5f}};
+  }
+  if (a.IsDimension())
+    return a.pts;
   const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
   if (a.kind == Annot::Kind::Line)
     return {{a.x0, a.y0}, {a.x1, a.y1}};
@@ -395,7 +510,14 @@ std::vector<std::pair<float, float>> HandlePoints(const Annot& a) {
 }
 
 void MoveHandle(Annot& a, const Annot& original, int handle, float x, float y) {
-  if (a.kind == Annot::Kind::Line) {
+  if (a.kind == Annot::Kind::Length && a.pts.size() == 2 && handle == 2) { // the dimension line: slide it
+    const DimLine d = LengthDimLine(original);
+    a = original;
+    a.offset = (x - original.pts[0].first) * d.nx + (y - original.pts[0].second) * d.ny;
+  } else if (a.IsDimension()) {
+    if (handle >= 0 && handle < static_cast<int>(a.pts.size()))
+      a.pts[static_cast<size_t>(handle)] = {x, y};
+  } else if (a.kind == Annot::Kind::Line) {
     (handle == 0 ? a.x0 : a.x1) = x;
     (handle == 0 ? a.y0 : a.y1) = y;
   } else if (a.kind == Annot::Kind::Text) {
@@ -420,12 +542,84 @@ ImFont* FontForNote(const Annot& a) {
 }
 
 // Draw an annotation over its page. `tl` is the page's top-left on screen, `k` the screen pixels per point.
-void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bool selected) {
+void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bool selected, const PageScale* scale = nullptr,
+               const ImVec2* rubberTo = nullptr) {
   const auto S = [&](float x, float y) { return ImVec2(tl.x + x * k, tl.y + (hPt - y) * k); };
   const ImU32 col = ToImCol(a.color);
   const float th = std::max(1.f, a.thickness * k);
-  const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
+  float l, b, r, t;
+  BoundsOf(a, l, b, r, t);
   switch (a.kind) {
+  case Annot::Kind::Length:
+  case Annot::Kind::PolyLength:
+  case Annot::Kind::Area:
+  case Annot::Kind::Angle: {
+    if (a.kind == Annot::Kind::Length && a.pts.size() == 2 && rubberTo == nullptr) {
+      // A dimension as GoSurvey draws one: extension lines from the two points to the dimension line, the line
+      // with an arrow at each end, and the label turned along it.
+      const DimLine d = LengthDimLine(a);
+      const ImVec2 d0 = S(d.x0, d.y0), d1 = S(d.x1, d.y1);
+      if (std::fabs(a.offset) > 0.5f) {
+        const float s = a.offset > 0.f ? 1.f : -1.f, gap = std::min(2.f, std::fabs(a.offset) * 0.3f), over = 2.f;
+        for (int i = 0; i < 2; ++i) {
+          const auto& p = a.pts[static_cast<size_t>(i)];
+          dl->AddLine(S(p.first + d.nx * s * gap, p.second + d.ny * s * gap),
+                      S((i == 0 ? d.x0 : d.x1) + d.nx * s * over, (i == 0 ? d.y0 : d.y1) + d.ny * s * over), col, th);
+        }
+      }
+      dl->AddLine(d0, d1, col, th);
+      const float lenPx = std::hypot(d1.x - d0.x, d1.y - d0.y);
+      if (lenPx > 1e-3f) {
+        const float ux = (d1.x - d0.x) / lenPx, uy = (d1.y - d0.y) / lenPx;
+        const float al = std::clamp(std::max(4.f, a.fontSize) * 0.6f * k, 3.f, lenPx / 3.f), aw = al * 0.3f;
+        dl->AddTriangleFilled(d0, ImVec2(d0.x + ux * al - uy * aw, d0.y + uy * al + ux * aw),
+                              ImVec2(d0.x + ux * al + uy * aw, d0.y + uy * al - ux * aw), col);
+        dl->AddTriangleFilled(d1, ImVec2(d1.x - ux * al - uy * aw, d1.y - uy * al + ux * aw),
+                              ImVec2(d1.x - ux * al + uy * aw, d1.y - uy * al - ux * aw), col);
+      }
+      const std::string label = scale != nullptr ? DimensionLabel(a, *scale) : std::string("no scale");
+      const auto [ax, ay] = DimensionLabelAnchor(a);
+      const float fsPx = std::max(4.f, a.fontSize) * k;
+      ImFont* font = ImGui::GetFont();
+      const ImVec2 ts = font->CalcTextSizeA(fsPx, 1e9f, 0.f, label.c_str());
+      const ImVec2 c = S(ax, ay);
+      const float rad = -DimensionLabelAngleDeg(a) * 3.14159265f / 180.f, cs = std::cos(rad), sn = std::sin(rad); // screen y is down
+      const auto rot = [&](ImVec2 p) { return ImVec2(c.x + (p.x - c.x) * cs - (p.y - c.y) * sn, c.y + (p.x - c.x) * sn + (p.y - c.y) * cs); };
+      const ImVec2 p0(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f);
+      const ImVec2 q[4] = {rot(ImVec2(p0.x - 3.f, p0.y - 1.f)), rot(ImVec2(p0.x + ts.x + 3.f, p0.y - 1.f)),
+                           rot(ImVec2(p0.x + ts.x + 3.f, p0.y + ts.y + 1.f)), rot(ImVec2(p0.x - 3.f, p0.y + ts.y + 1.f))};
+      dl->AddConvexPolyFilled(q, 4, IM_COL32(255, 255, 255, 215));
+      const int v0 = dl->VtxBuffer.Size;
+      dl->AddText(font, fsPx, p0, col, label.c_str());
+      for (int i = v0; i < dl->VtxBuffer.Size; ++i) // turn the text's quads about the label's centre
+        dl->VtxBuffer[i].pos = rot(dl->VtxBuffer[i].pos);
+      break;
+    }
+    std::vector<ImVec2> sp;
+    for (const auto& p : a.pts)
+      sp.push_back(S(p.first, p.second));
+    if (rubberTo != nullptr)
+      sp.push_back(*rubberTo); // the next point follows the pointer while the dimension is being clicked out
+    if (sp.size() >= 2)
+      dl->AddPolyline(sp.data(), static_cast<int>(sp.size()), col,
+                      a.kind == Annot::Kind::Area && sp.size() > 2 ? ImDrawFlags_Closed : ImDrawFlags_None, th);
+    for (const ImVec2& p : sp)
+      dl->AddCircleFilled(p, std::max(2.f, th * 0.9f), col);
+    if (rubberTo == nullptr && DimensionComplete(a)) {
+      const std::string label = scale != nullptr || a.kind == Annot::Kind::Angle
+                                    ? DimensionLabel(a, scale != nullptr ? *scale : PageScale{})
+                                    : std::string("no scale");
+      const auto [ax, ay] = DimensionLabelAnchor(a);
+      const float fsPx = std::max(4.f, a.fontSize) * k;
+      ImFont* font = ImGui::GetFont();
+      const ImVec2 ts = font->CalcTextSizeA(fsPx, 1e9f, 0.f, label.c_str());
+      const ImVec2 c = S(ax, ay);
+      const ImVec2 p0(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f);
+      dl->AddRectFilled(ImVec2(p0.x - 3.f, p0.y - 1.f), ImVec2(p0.x + ts.x + 3.f, p0.y + ts.y + 1.f), IM_COL32(255, 255, 255, 215));
+      dl->AddText(font, fsPx, p0, col, label.c_str());
+    }
+    break;
+  }
   case Annot::Kind::Line:
     dl->AddLine(S(a.x0, a.y0), S(a.x1, a.y1), col, th);
     break;
@@ -449,7 +643,14 @@ void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bo
     const float pad = 3.f;
     if (a.kind == Annot::Kind::Line)
       dl->AddLine(S(a.x0, a.y0), S(a.x1, a.y1), IM_COL32(60, 140, 255, 110), th + 6.f);
-    else
+    else if (a.IsDimension()) {
+      std::vector<ImVec2> sp;
+      for (const auto& p : a.pts)
+        sp.push_back(S(p.first, p.second));
+      if (sp.size() >= 2)
+        dl->AddPolyline(sp.data(), static_cast<int>(sp.size()), IM_COL32(60, 140, 255, 110),
+                        a.kind == Annot::Kind::Area && sp.size() > 2 ? ImDrawFlags_Closed : ImDrawFlags_None, th + 6.f);
+    } else
       dl->AddRect(ImVec2(S(l, t).x - pad, S(l, t).y - pad), ImVec2(S(r, b).x + pad, S(r, b).y + pad),
                   IM_COL32(60, 140, 255, 255), 0.f, 0, 1.f);
     for (const auto& h : HandlePoints(a)) {
@@ -556,6 +757,11 @@ void DestroyViewer(Viewer& v) {
     v.ann.saving.wait(); // so does a Save As
   if (v.ann.readingScales.valid())
     v.ann.readingScales.wait();
+  for (auto& [page, sp] : v.ann.snapPages) { // snap readers hold the document: stop and wait for them
+    sp.cancel->store(true);
+    if (sp.reading.valid())
+      sp.reading.wait();
+  }
   v.worker->Shutdown();
   DeleteTextures(v.cache.Clear());
 }
@@ -572,7 +778,9 @@ void SetZoom(Viewer& v, float pxPerPt);
 
 // The -/+ buttons and the typed %: keep the point at the centre of the view where it is.
 void ZoomAboutCentre(Viewer& v, float pxPerPt) {
-  const float cy = v.lastScrollY + v.viewH * 0.5f, cx = v.lastScrollX + v.viewW * 0.5f;
+  const float sy = v.pendingScrollY >= 0.f ? v.pendingScrollY : v.lastScrollY; // a scroll already asked for wins
+  const float sx = v.pendingScrollX >= 0.f ? v.pendingScrollX : v.lastScrollX;
+  const float cy = sy + v.viewH * 0.5f, cx = sx + v.viewW * 0.5f;
   const float ptY = (cy - kMarginPx) / v.pxPerPt, ptX = (cx - kMarginPx) / v.pxPerPt;
   SetZoom(v, pxPerPt);
   v.pendingScrollY = std::max(0.f, ptY * v.pxPerPt + kMarginPx - v.viewH * 0.5f);
@@ -740,6 +948,25 @@ void DrawToolbar(Viewer& v) {
 }
 
 // REQ-389: choose pages, then "Save As..." writes them as a new PDF. The original is never touched.
+// A modal dialog that moves only by its title bar. (Dear ImGui lets a window be dragged from anywhere on it by
+// default, which makes a click on a table or a button move the whole dialog.) The window is made unmovable and the
+// title bar is dragged by hand.
+bool BeginDialog(const char* id, ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize) {
+  if (!ImGui::BeginPopupModal(id, nullptr, flags | ImGuiWindowFlags_NoMove))
+    return false;
+  static std::map<ImGuiID, bool> dragging;
+  ImGuiWindow* w = ImGui::GetCurrentWindow();
+  bool& drag = dragging[w->ID];
+  const ImGuiIO& io = ImGui::GetIO();
+  if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && w->TitleBarRect().Contains(io.MousePos))
+    drag = true;
+  if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    drag = false;
+  if (drag)
+    ImGui::SetWindowPos(ImVec2(w->Pos.x + io.MouseDelta.x, w->Pos.y + io.MouseDelta.y));
+  return true;
+}
+
 void DrawSplitDialog(Viewer& v, std::vector<std::string>& log) {
   char id[64];
   std::snprintf(id, sizeof(id), "Split PDF###pdfsplit%d", v.id);
@@ -749,7 +976,7 @@ void DrawSplitDialog(Viewer& v, std::vector<std::string>& log) {
     ImGui::OpenPopup(id);
   }
   ImGui::SetNextWindowSize(ImVec2(460.f, 0.f), ImGuiCond_Appearing);
-  if (!ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+  if (!BeginDialog(id))
     return;
   const bool busy = v.splitting.valid();
   if (busy && v.splitting.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -838,6 +1065,9 @@ void DrawThumbnails(Viewer& v) {
   ImGui::EndChild();
 }
 
+const PageScale* EffectiveScale(const Viewer& v, int page);
+void StartSnapRead(Viewer& v, int page);
+
 void StartSave(Viewer& v, std::vector<std::string>& log) {
   AnnotUi& u = v.ann;
   const std::string stem = std::filesystem::u8path(v.path).stem().u8string() + "-annotated.pdf";
@@ -849,8 +1079,13 @@ void StartSave(Viewer& v, std::vector<std::string>& log) {
   u.saveDest = out;
   u.status = "Saving...";
   const std::filesystem::path src = std::filesystem::u8path(v.path), dst = std::filesystem::u8path(u.saveDest);
-  u.saving = std::async(std::launch::async, [src, dst, items = u.session.Items(), scales = u.session.Scales()] {
-    return SaveAnnotated(src, items, dst, scales);
+  std::map<int, PageScale> inForce; // the scale on each page that has a dimension: its label is worked out from it
+  for (const Annot& a : u.session.Items())
+    if (a.IsDimension())
+      if (const PageScale* s = EffectiveScale(v, a.page))
+        inForce[a.page] = *s;
+  u.saving = std::async(std::launch::async, [src, dst, items = u.session.Items(), scales = u.session.Scales(), inForce] {
+    return SaveAnnotated(src, items, dst, scales, inForce);
   });
   (void)log;
 }
@@ -909,7 +1144,7 @@ void DrawScopeChooser(Viewer& v) {
 }
 
 // Applies \p scale to the chosen pages as one undo step. A scale that is not valid clears them.
-bool ApplyScaleToScope(Viewer& v, const PageScale& scale, std::vector<std::string>& log) {
+bool ApplyScaleToScope(Viewer& v, const PageScale& scale, std::vector<std::string>& log, const ScaleCheck* calibration = nullptr) {
   AnnotUi& u = v.ann;
   std::vector<int> pages;
   if (!ScopePages(v, pages, u.scaleError))
@@ -917,7 +1152,7 @@ bool ApplyScaleToScope(Viewer& v, const PageScale& scale, std::vector<std::strin
   std::map<int, PageScale> change;
   for (int p : pages)
     change[p] = scale;
-  u.session.SetScales(change);
+  u.session.SetScales(change, calibration); // a calibration counts as the first scale check (REQ-394)
   u.scaleError.clear();
   log.push_back(scale.Valid() ? "PDF scale: " + scale.RatioText() + " set on " + std::to_string(pages.size()) + " page(s) of " + v.title
                               : "PDF scale: cleared on " + std::to_string(pages.size()) + " page(s) of " + v.title);
@@ -936,7 +1171,7 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
     ImGui::OpenPopup(id);
   }
   ImGui::SetNextWindowSize(ImVec2(520.f, 0.f), ImGuiCond_Appearing);
-  if (ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+  if (BeginDialog(id)) {
     const PageScale* cur = EffectiveScale(v, v.curPage);
     ImGui::Text("Page %d now: %s", v.curPage + 1, cur != nullptr ? cur->RatioText().c_str() : "unscaled");
     ImGui::Separator();
@@ -1009,7 +1244,7 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
     }
     ImGui::SameLine();
     if (ImGui::Button("Clear scale")) {
-      if (ApplyScaleToScope(v, PageScale{0.0, Unit::Inch, 0.0, Unit::Foot, ""}, log))
+      if (ApplyScaleToScope(v, PageScale{0.0, Unit::Inch, 0.0, Unit::Foot, "", "", 0.0}, log))
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -1024,9 +1259,16 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
     u.scaleError.clear();
     ImGui::OpenPopup(id);
   }
-  if (ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+  if (BeginDialog(id)) {
     const double pts = std::hypot(static_cast<double>(u.calX[1] - u.calX[0]), static_cast<double>(u.calY[1] - u.calY[0]));
-    ImGui::Text("The two points are %.1f points (%.3f in) apart on the sheet.", pts, pts / 72.0);
+    ImGui::Text("The two points are %.3f points (%.4f in) apart on the sheet.", pts, pts / 72.0);
+    const int freehand = (u.calSnapped[0] ? 0 : 1) + (u.calSnapped[1] ? 0 : 1);
+    if (freehand == 0)
+      ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.5f, 1.f), "Both points snapped to the drawing.");
+    else
+      ImGui::TextColored(ImVec4(1.f, 0.75f, 0.35f, 1.f),
+                         "%s placed freehand: one screen pixel can be %.2f points. Turn Snap on (F3) and pick again for an exact scale.",
+                         freehand == 2 ? "Both points were" : "One point was", 0.75);
     ImGui::TextUnformatted("In reality they are:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100.f);
@@ -1044,13 +1286,54 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
     DrawScopeChooser(v);
     if (!u.scaleError.empty())
       ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", u.scaleError.c_str());
-    if (ImGui::Button("Set scale")) {
-      const PageScale s = ScaleFromCalibration(pts, u.calReal, units[static_cast<size_t>(u.calUnit)]);
+    // The calibration itself is the first scale check: the picked distance against the distance the user typed.
+    ScaleCheck calCheck;
+    calCheck.page = u.calPage;
+    calCheck.x0 = u.calX[0];
+    calCheck.y0 = u.calY[0];
+    calCheck.x1 = u.calX[1];
+    calCheck.y1 = u.calY[1];
+    calCheck.stated = u.calReal;
+    calCheck.unit = units[static_cast<size_t>(u.calUnit)];
+    calCheck.calibration = true;
+    // Drawings are almost always plotted at a standard scale: when this calibration is within 1 % of one, say so,
+    // and offer it (a short span picked by eye can be a fraction of a percent out, and a long dimension then reads wrong).
+    const PageScale calibrated = ScaleFromCalibration(pts, u.calReal, units[static_cast<size_t>(u.calUnit)]);
+    const PageScale* nearest = nullptr;
+    double nearDiff = 1.0;
+    if (calibrated.Valid())
+      for (const PageScale& p : PresetScales()) {
+        const double diff = std::fabs(calibrated.PointsToReal(1.0) * UnitInMetres(calibrated.realUnit) / (p.PointsToReal(1.0) * UnitInMetres(p.realUnit)) - 1.0);
+        if (diff < nearDiff) {
+          nearDiff = diff;
+          nearest = &p;
+        }
+      }
+    if (nearest != nullptr && nearDiff < 0.01) {
+      ImGui::Text("Closest standard scale: %s (%.2f %% different).", nearest->label.c_str(), nearDiff * 100.0);
+      if (ImGui::Button("Use the standard scale")) {
+        if (ApplyScaleToScope(v, *nearest, log, &calCheck)) {
+          u.status = "Scale set: " + nearest->RatioText();
+          u.calCount = 0;
+          ImGui::CloseCurrentPopup();
+        }
+      }
+      ImGui::SameLine();
+    }
+    bool checkNext = false;
+    if (ImGui::Button("Set scale") || (checkNext = ImGui::Button("Set scale and check..."))) {
+      const PageScale s = calibrated;
       if (!s.Valid())
         u.scaleError = "the distance must be bigger than zero, and the two points must be apart";
-      else if (ApplyScaleToScope(v, s, log)) {
+      else if (ApplyScaleToScope(v, s, log, &calCheck)) {
         u.status = "Scale set: " + s.RatioText();
         u.calCount = 0;
+        if (checkNext) { // test it against another dimension the drawing states (REQ-394 clause 5)
+          u.tool = Tool::Check;
+          u.checkTarget = 0;
+          u.checkPts.clear();
+          u.status = "Scale set. Click the two ends of another dimension to check it.";
+        }
         ImGui::CloseCurrentPopup();
       }
     }
@@ -1061,6 +1344,503 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
     }
     ImGui::EndPopup();
   }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// REQ-394: checking the scale against dimensions the drawing already states
+// ---------------------------------------------------------------------------------------------------
+
+ImVec4 VerdictColor(Verdict v) {
+  return v == Verdict::Good ? ImVec4(0.35f, 0.85f, 0.45f, 1.f) : v == Verdict::Check ? ImVec4(0.96f, 0.69f, 0.16f, 1.f)
+                                                                                      : ImVec4(0.95f, 0.30f, 0.26f, 1.f);
+}
+
+std::string Signed(double v, int decimals) { return (v >= 0.0 ? "+" : "-") + FormatValue(std::fabs(v), decimals); }
+
+// Two picked points and the typed text -> a check. False with the reason when the text cannot be read.
+bool MakeCheck(const AnnotUi& u, const PageScale* scale, ScaleCheck& out, std::string& why) {
+  ParsedLength p;
+  if (!ParseLength(u.checkText, p, why))
+    return false;
+  out = ScaleCheck{};
+  out.page = u.checkPage;
+  out.x0 = u.checkPts[0].first;
+  out.y0 = u.checkPts[0].second;
+  out.x1 = u.checkPts[1].first;
+  out.y1 = u.checkPts[1].second;
+  out.stated = p.value;
+  out.unit = p.hasUnit ? p.unit : (scale != nullptr ? scale->realUnit : Unit::Foot);
+  return true;
+}
+
+// The page's checks as indexes into the session's list.
+std::vector<int> PageChecks(const AnnotUi& u, int page) {
+  std::vector<int> idx;
+  for (size_t i = 0; i < u.session.Checks().size(); ++i)
+    if (u.session.Checks()[i].page == page)
+      idx.push_back(static_cast<int>(i));
+  return idx;
+}
+
+double MetresPerPt(const PageScale& s) { return s.RealPerPoint() * UnitInMetres(s.realUnit); }
+
+// A dialog that stands out from the sheet behind it: a lighter body, a bright frame and title, a darker dim.
+void PushDialogStyle() {
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.15f, 0.17f, 0.22f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.35f, 0.62f, 1.00f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.16f, 0.34f, 0.60f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.20f, 0.42f, 0.74f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.f, 0.f, 0.f, 0.62f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.f, 12.f));
+}
+void PopDialogStyle() {
+  ImGui::PopStyleVar(3);
+  ImGui::PopStyleColor(5);
+}
+
+// Tables with a clear header, borders and banded rows, and room around the text.
+void PushTableStyle() {
+  ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, ImVec4(0.20f, 0.38f, 0.64f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TableBorderStrong, ImVec4(0.50f, 0.62f, 0.80f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TableBorderLight, ImVec4(0.32f, 0.40f, 0.54f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TableRowBg, ImVec4(0.12f, 0.14f, 0.18f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, ImVec4(0.18f, 0.21f, 0.28f, 1.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(10.f, 5.f));
+}
+void PopTableStyle() {
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor(5);
+}
+
+enum class Align { Left, Right, Center };
+
+// Text placed in a table cell: numbers read best right-aligned, a verdict centred, words left.
+void CellText(Align a, const std::string& text, const ImVec4* color = nullptr) {
+  const float w = ImGui::CalcTextSize(text.c_str()).x, avail = ImGui::GetContentRegionAvail().x;
+  const float off = a == Align::Right ? avail - w : a == Align::Center ? (avail - w) * 0.5f : 0.f;
+  if (off > 0.f)
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + off);
+  if (color != nullptr)
+    ImGui::TextColored(*color, "%s", text.c_str());
+  else
+    ImGui::TextUnformatted(text.c_str());
+}
+
+// Each column as wide as the wider of its title and its widest cell, plus the cell padding either side, so
+// nothing is cut off even when a column's cells are empty.
+std::vector<float> ColumnWidths(const std::vector<std::pair<const char*, Align>>& cols, const std::vector<std::vector<std::string>>& rows) {
+  std::vector<float> w;
+  for (size_t i = 0; i < cols.size(); ++i) {
+    float m = ImGui::CalcTextSize(cols[i].first).x;
+    for (const auto& r : rows)
+      if (i < r.size())
+        m = std::max(m, ImGui::CalcTextSize(r[i].c_str()).x);
+    w.push_back(m + 24.f); // 2 x the 10 px cell padding, and a little air
+  }
+  return w;
+}
+
+// The header row, each title aligned like the column beneath it.
+void TableHeader(const std::vector<std::pair<const char*, Align>>& cols, const std::vector<float>& widths) {
+  for (size_t i = 0; i < cols.size(); ++i)
+    ImGui::TableSetupColumn(cols[i].first, ImGuiTableColumnFlags_WidthFixed, widths[i]);
+  ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+  for (size_t i = 0; i < cols.size(); ++i) {
+    ImGui::TableSetColumnIndex(static_cast<int>(i));
+    const ImVec4 white(1.f, 1.f, 1.f, 1.f);
+    CellText(cols[i].second, cols[i].first, &white);
+  }
+}
+
+// The "Check a dimension" popup that follows the Check tool's two clicks.
+void DrawCheckPopup(Viewer& v, std::vector<std::string>& log) {
+  AnnotUi& u = v.ann;
+  char id[64];
+  std::snprintf(id, sizeof(id), "Check a dimension###pdfcheck%d", v.id);
+  if (u.checkPopup) {
+    u.checkPopup = false;
+    ImGui::OpenPopup(id);
+  }
+  PushDialogStyle();
+  if (!BeginDialog(id)) {
+    PopDialogStyle();
+    return;
+  }
+  const PageScale* scale = EffectiveScale(v, u.checkPage);
+  const double pts = u.checkPts.size() == 2 ? std::hypot(static_cast<double>(u.checkPts[1].first - u.checkPts[0].first),
+                                                        static_cast<double>(u.checkPts[1].second - u.checkPts[0].second))
+                                            : 0.0;
+  ImGui::Text("The two points are %.3f points (%.4f in) apart on the sheet.", pts, pts / 72.0);
+  ImGui::TextUnformatted("The drawing states:");
+  ImGui::SameLine();
+  if (ImGui::IsWindowAppearing())
+    ImGui::SetKeyboardFocusHere();
+  ImGui::SetNextItemWidth(220.f);
+  ImGui::InputTextWithHint("##checkval", "43'-0 3/4\"   10'6\"   12.5 m   850 mm", u.checkText, sizeof(u.checkText));
+  ScaleCheck made;
+  std::string why;
+  const bool typed = u.checkText[0] != 0;
+  const bool ok = u.checkPts.size() == 2 && MakeCheck(u, scale, made, why);
+  if (typed && !ok)
+    ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", why.c_str());
+  if (ok && u.checkTarget == 0 && scale != nullptr) {
+    const CheckResult r = EvaluateCheck(made, *scale, u.limits);
+    ImGui::TextColored(VerdictColor(r.verdict), "Reads %s %s, the drawing says %s %s: difference %s %s (%s %%) - %s",
+                       FormatValue(r.measured, 4).c_str(), UnitLabel(made.unit), FormatValue(r.stated, 4).c_str(), UnitLabel(made.unit),
+                       Signed(r.diff, 4).c_str(), UnitLabel(made.unit), Signed(r.pct, 2).c_str(), VerdictName(r.verdict));
+  } else if (ok) {
+    ImGui::TextDisabled("Added to the robust calibration list; the fit is shown there.");
+  }
+  ImGui::BeginDisabled(!ok);
+  if (ImGui::Button("OK")) {
+    if (u.checkTarget == 0) {
+      u.session.AddCheck(made);
+      u.status = "Check added.";
+      log.push_back("PDF scale check: " + FormatValue(made.stated, 4) + " " + UnitLabel(made.unit) + " stated on page " +
+                    std::to_string(made.page + 1) + " of " + v.title);
+    } else {
+      u.robustPicks.push_back({made, true});
+      u.checksDialog = true;
+      u.checksTab = 1;
+      u.tool = Tool::Select;
+      u.status.clear();
+    }
+    u.checkPts.clear();
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel")) {
+    u.checkPts.clear();
+    if (u.checkTarget == 1) {
+      u.checksDialog = true;
+      u.checksTab = 1;
+      u.tool = Tool::Select;
+    }
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+  PopDialogStyle();
+}
+
+// The Scale checks dialog: the page's checks with verdicts, the best fit and the correction the user may choose
+// (tab 1), and the opt-in robust calibration (tab 2).
+void DrawChecksDialog(Viewer& v, std::vector<std::string>& log) {
+  AnnotUi& u = v.ann;
+  char id[64];
+  std::snprintf(id, sizeof(id), "Scale checks###pdfchecks%d", v.id);
+  if (u.checksDialog) {
+    u.checksDialog = false;
+    ImGui::OpenPopup(id);
+  }
+  ImGui::SetNextWindowSize(ImVec2(860.f, 0.f), ImGuiCond_Appearing);
+  PushDialogStyle();
+  if (!BeginDialog(id)) {
+    PopDialogStyle();
+    return;
+  }
+  const int page = std::clamp(v.curPage, 0, v.layout.PageCount() - 1);
+  const PageScale* scale = EffectiveScale(v, page);
+  const auto& all = u.session.Checks();
+  const std::vector<int> idx = PageChecks(u, page);
+  int deleteCheck = -1;
+
+  if (ImGui::BeginTabBar("##chktabs")) {
+    // ---- Tab 1: the checks ------------------------------------------------------------------------
+    if (ImGui::BeginTabItem("Checks", nullptr, u.checksTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) {
+      if (scale == nullptr) {
+        ImGui::TextWrapped("Page %d has no scale yet. Set one (Set scale...), then check it against dimensions the drawing states.", page + 1);
+      } else {
+        ImGui::Text("Page %d: %s%s%s%s", page + 1, scale->RatioText().c_str(), scale->note.empty() ? "" : "  (", scale->note.c_str(),
+                    scale->note.empty() ? "" : ")");
+        ImGui::SetNextItemWidth(90.f);
+        ImGui::InputDouble("Good up to (%)", &u.limits.goodPct, 0.0, 0.0, "%.2f");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90.f);
+        ImGui::InputDouble("Check up to (%)", &u.limits.checkPct, 0.0, 0.0, "%.2f");
+        ImGui::SameLine();
+        ImGui::Checkbox("Show checks on the sheet", &u.showChecks);
+        u.limits.goodPct = std::clamp(u.limits.goodPct, 0.0, 100.0);
+        u.limits.checkPct = std::clamp(u.limits.checkPct, u.limits.goodPct, 100.0);
+        if (idx.empty()) {
+          ImGui::TextDisabled("No checks on this page yet. Use the Check tool: click the two ends of a dimension, then type its printed value.");
+        }
+        std::vector<FitObs> fit;
+        for (int i : idx)
+          fit.push_back({all[static_cast<size_t>(i)].MeasuredPt(), all[static_cast<size_t>(i)].StatedMetres()});
+        const BestFit bf = BestFitScale(fit);
+
+        if (!idx.empty()) {
+          const std::vector<std::pair<const char*, Align>> cols = {{"#", Align::Center}, {"Kind", Align::Left}, {"Drawing says", Align::Right},
+                                                                   {"Reads", Align::Right}, {"Difference", Align::Right}, {"%", Align::Right},
+                                                                   {"Verdict", Align::Center}, {"Flag", Align::Center}, {"", Align::Center}};
+          std::vector<std::vector<std::string>> cells;
+          std::vector<CheckResult> results;
+          for (size_t k = 0; k < idx.size(); ++k) {
+            const ScaleCheck& c = all[static_cast<size_t>(idx[k])];
+            const CheckResult r = EvaluateCheck(c, *scale, u.limits);
+            results.push_back(r);
+            cells.push_back({std::to_string(k + 1), c.calibration ? "calibration" : "check",
+                             FormatValue(r.stated, 4) + " " + UnitLabel(c.unit), FormatValue(r.measured, 4) + " " + UnitLabel(c.unit),
+                             Signed(r.diff, 4) + " " + UnitLabel(c.unit), Signed(r.pct, 2), VerdictName(r.verdict),
+                             (k < bf.outlier.size() && bf.outlier[k]) ? "Outlier" : "", "Delete"});
+          }
+          const std::vector<float> widths = ColumnWidths(cols, cells);
+          PushTableStyle();
+          if (ImGui::BeginTable("##checks", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+            TableHeader(cols, widths);
+            for (size_t k = 0; k < idx.size(); ++k) {
+              const int i = idx[k];
+              const ImVec4 vc = VerdictColor(results[k].verdict);
+              ImGui::TableNextRow();
+              ImGui::TableNextColumn();
+              char lab[32];
+              std::snprintf(lab, sizeof(lab), "%zu##row%d", k + 1, i);
+              if (ImGui::Selectable(lab, u.selectedCheck == i, ImGuiSelectableFlags_SpanAllColumns))
+                u.selectedCheck = i;
+              for (size_t col = 1; col < 7; ++col) {
+                ImGui::TableNextColumn();
+                CellText(cols[col].second, cells[k][col], col == 6 ? &vc : nullptr);
+              }
+              ImGui::TableNextColumn();
+              if (!cells[k][7].empty()) {
+                const ImVec4 red(0.95f, 0.30f, 0.26f, 1.f);
+                CellText(Align::Center, cells[k][7], &red);
+              }
+              ImGui::TableNextColumn();
+              std::snprintf(lab, sizeof(lab), "Delete##del%d", i);
+              if (ImGui::SmallButton(lab))
+                deleteCheck = i;
+            }
+            ImGui::EndTable();
+          }
+          PopTableStyle();
+        }
+
+        if (bf.valid) {
+          PageScale fitted = *scale;
+          fitted.label.clear();
+          fitted.note.clear();
+          fitted.realValue = bf.metresPerPt * 72.0 / UnitInMetres(scale->realUnit);
+          ImGui::Text("Best fit of %zu checks (longer ones count for more): %s", idx.size(), fitted.RatioText().c_str());
+          if (bf.anyOutlier)
+            ImGui::TextColored(ImVec4(0.95f, 0.30f, 0.26f, 1.f),
+                               "One or more checks disagree with the rest (marked Outlier): a wrong pick, a mistyped value or a wrong unit.");
+          else if (idx.size() == 2 && std::fabs(fit[0].metres / fit[0].pts / (fit[1].metres / fit[1].pts) - 1.0) > 0.0025)
+            ImGui::TextColored(VerdictColor(Verdict::Check), "The two checks disagree: add a third to see which one is off.");
+        }
+        ImGui::TextDisabled("A check shows the picked distances agree, not that the drawing is to scale: drawn lines can differ from printed values by a fraction of a percent.");
+
+        // ---- The correction the user may choose ----------------------------------------------------
+        if (!idx.empty()) {
+          ImGui::SeparatorText("Correct the scale (your choice; nothing is changed until you apply)");
+          u.matchIdx = std::clamp(u.matchIdx, 0, static_cast<int>(idx.size()) - 1);
+          ImGui::RadioButton("Match this check", &u.correctionMode, 0);
+          ImGui::SameLine();
+          ImGui::SetNextItemWidth(70.f);
+          if (ImGui::BeginCombo("##matchsel", std::to_string(u.matchIdx + 1).c_str())) {
+            for (size_t k = 0; k < idx.size(); ++k)
+              if (ImGui::Selectable(std::to_string(k + 1).c_str(), static_cast<int>(k) == u.matchIdx))
+                u.matchIdx = static_cast<int>(k);
+            ImGui::EndCombo();
+          }
+          ImGui::BeginDisabled(!bf.valid);
+          ImGui::RadioButton("Best fit", &u.correctionMode, 1);
+          ImGui::EndDisabled();
+          ImGui::BeginDisabled(!bf.withoutValid);
+          ImGui::SameLine();
+          ImGui::RadioButton("Best fit without the outlier", &u.correctionMode, 2);
+          ImGui::EndDisabled();
+          ImGui::RadioButton("A percentage", &u.correctionMode, 3);
+          ImGui::SameLine();
+          ImGui::SetNextItemWidth(90.f);
+          ImGui::InputDouble("##pct", &u.typedPct, 0.0, 0.0, "%+.3f");
+          ImGui::SameLine();
+          ImGui::TextUnformatted("% (+ makes every reading larger)");
+          ImGui::RadioButton("Leave the scale as it is", &u.correctionMode, 4);
+          if ((u.correctionMode == 1 && !bf.valid) || (u.correctionMode == 2 && !bf.withoutValid))
+            u.correctionMode = 0;
+
+          const double cur = MetresPerPt(*scale);
+          double factor = 1.0;
+          if (u.correctionMode == 0)
+            factor = FactorMatching(all[static_cast<size_t>(idx[static_cast<size_t>(u.matchIdx)])], *scale);
+          else if (u.correctionMode == 1 && bf.valid && cur > 0.0)
+            factor = bf.metresPerPt / cur;
+          else if (u.correctionMode == 2 && bf.withoutValid && cur > 0.0)
+            factor = bf.withoutMetresPerPt / cur;
+          else if (u.correctionMode == 3)
+            factor = FactorFromPercent(u.typedPct);
+          std::vector<ScaleCheck> pageChecks;
+          for (int i : idx)
+            pageChecks.push_back(all[static_cast<size_t>(i)]);
+          const std::vector<CheckResult> after = PreviewCorrection(pageChecks, *scale, factor, u.limits);
+          const PageScale next = ApplyFactor(*scale, factor);
+          ImGui::Text("After this correction: %s%s%s%s", next.RatioText().c_str(), next.note.empty() ? "" : "  (", next.note.c_str(),
+                      next.note.empty() ? "" : ")");
+          const std::vector<std::pair<const char*, Align>> cols = {{"#", Align::Center}, {"Would read", Align::Right}, {"Difference", Align::Right},
+                                                                   {"%", Align::Right}, {"Verdict", Align::Center}};
+          std::vector<std::vector<std::string>> cells;
+          for (size_t k = 0; k < after.size(); ++k)
+            cells.push_back({std::to_string(k + 1), FormatValue(after[k].measured, 4) + " " + UnitLabel(pageChecks[k].unit),
+                             Signed(after[k].diff, 4) + " " + UnitLabel(pageChecks[k].unit), Signed(after[k].pct, 2), VerdictName(after[k].verdict)});
+          const std::vector<float> widths = ColumnWidths(cols, cells);
+          PushTableStyle();
+          if (ImGui::BeginTable("##after", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+            TableHeader(cols, widths);
+            for (size_t k = 0; k < after.size(); ++k) {
+              const ImVec4 vc = VerdictColor(after[k].verdict);
+              ImGui::TableNextRow();
+              for (size_t col = 0; col < cols.size(); ++col) {
+                ImGui::TableNextColumn();
+                CellText(cols[col].second, cells[k][col], col == 4 ? &vc : nullptr);
+              }
+            }
+            ImGui::EndTable();
+          }
+          PopTableStyle();
+          ImGui::TextDisabled("Correcting to one check moves the error onto the others: compare the table above with the one before.");
+          ImGui::BeginDisabled(factor == 1.0 || u.correctionMode == 4);
+          if (ImGui::Button("Apply correction")) {
+            std::map<int, PageScale> change;
+            change[page] = next;
+            u.session.SetScales(change);
+            log.push_back("PDF scale: corrected page " + std::to_string(page + 1) + " of " + v.title + " - " + next.note);
+            u.status = "Scale " + next.note + ".";
+          }
+          ImGui::EndDisabled();
+          ImGui::SameLine();
+        }
+        if (ImGui::Button("Copy report")) {
+          std::vector<ScaleCheck> pageChecks;
+          for (int i : idx)
+            pageChecks.push_back(all[static_cast<size_t>(i)]);
+          const std::string rep = ScaleReport(v.title, page, *scale, pageChecks, u.limits);
+          ImGui::SetClipboardText(rep.c_str());
+          log.push_back(rep);
+          u.status = "Scale report copied.";
+        }
+      }
+      ImGui::EndTabItem();
+    }
+    // ---- Tab 2: robust calibration -----------------------------------------------------------------
+    if (ImGui::BeginTabItem("Robust calibration", nullptr, u.checksTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) {
+      ImGui::TextWrapped("For a more exact scale: add at least %d dimensions the drawing states. One scale is solved by least squares; "
+                         "long dimensions count for more, because one pick is a small part of them. Nothing changes until you Apply.",
+                         u.robustParams.minDimensions);
+      ImGui::SetNextItemWidth(80.f);
+      ImGui::InputDouble("Pick error (pt)", &u.robustParams.pickPt, 0.0, 0.0, "%.2f");
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(80.f);
+      double drawPct = u.robustParams.drawingFraction * 100.0;
+      if (ImGui::InputDouble("Drawing error (% of length)", &drawPct, 0.0, 0.0, "%.3f"))
+        u.robustParams.drawingFraction = std::max(0.0, drawPct) / 100.0;
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(70.f);
+      ImGui::InputInt("Minimum", &u.robustParams.minDimensions, 0, 0);
+      u.robustParams.pickPt = std::max(0.01, u.robustParams.pickPt);
+      u.robustParams.minDimensions = std::clamp(u.robustParams.minDimensions, 2, 50);
+
+      if (ImGui::Button("Add dimension...")) {
+        u.tool = Tool::Check;
+        u.checkTarget = 1;
+        u.checkPts.clear();
+        u.status = "Robust calibration: click the two ends of a dimension the drawing states.";
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Clear list"))
+        u.robustPicks.clear();
+
+      std::vector<RobustObs> obs;
+      for (const auto& [c, use] : u.robustPicks)
+        obs.push_back({c.MeasuredPt(), c.StatedMetres(), use});
+      const RobustResult res = SolveRobust(obs, u.robustParams);
+      int removeRow = -1;
+      if (!u.robustPicks.empty()) {
+        const std::vector<std::pair<const char*, Align>> cols = {{"Use", Align::Center}, {"#", Align::Center}, {"Drawing says", Align::Right},
+                                                                 {"Picked (pt)", Align::Right}, {"Residual", Align::Right}, {"%", Align::Right},
+                                                                 {"Std. residual", Align::Right}, {"", Align::Center}};
+        std::vector<std::vector<std::string>> cells;
+        for (size_t i = 0; i < u.robustPicks.size(); ++i) {
+          const ScaleCheck& c = u.robustPicks[i].first;
+          const bool have = res.ok && u.robustPicks[i].second && i < res.residualMetres.size();
+          cells.push_back({"Use", std::to_string(i + 1), FormatValue(c.stated, 4) + " " + UnitLabel(c.unit), FormatValue(c.MeasuredPt(), 3),
+                           have ? Signed(res.residualMetres[i] / UnitInMetres(c.unit), 4) + " " + UnitLabel(c.unit) : "",
+                           have ? Signed(res.residualPct[i], 2) : "",
+                           have ? Signed(res.z[i], 1) + (res.suspect[i] ? "  Suspect" : "") : "", "Remove"});
+        }
+        const std::vector<float> widths = ColumnWidths(cols, cells);
+        PushTableStyle();
+        if (ImGui::BeginTable("##robust", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+          TableHeader(cols, widths);
+          for (size_t i = 0; i < u.robustPicks.size(); ++i) {
+            auto& [c, use] = u.robustPicks[i];
+            (void)c;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            char lab[32];
+            std::snprintf(lab, sizeof(lab), "##use%zu", i);
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight()) * 0.5f);
+            ImGui::Checkbox(lab, &use);
+            for (size_t col = 1; col < 7; ++col) {
+              ImGui::TableNextColumn();
+              const bool suspect = col == 6 && res.ok && use && i < res.suspect.size() && res.suspect[i];
+              const ImVec4 red = VerdictColor(Verdict::Blunder);
+              CellText(cols[col].second, cells[i][col], suspect ? &red : nullptr);
+            }
+            ImGui::TableNextColumn();
+            std::snprintf(lab, sizeof(lab), "Remove##rm%zu", i);
+            if (ImGui::SmallButton(lab))
+              removeRow = static_cast<int>(i);
+          }
+          ImGui::EndTable();
+        }
+        PopTableStyle();
+      }
+      if (removeRow >= 0)
+        u.robustPicks.erase(u.robustPicks.begin() + removeRow);
+
+      if (res.ok) {
+        const Unit unit = scale != nullptr ? scale->realUnit : u.robustPicks.front().first.unit;
+        const PageScale made = ScaleFromRobust(res, unit, scale);
+        ImGui::Text("Adjusted scale: %s +/- %s %%  (%d dimensions; RMS residual %s %s)", made.RatioText().c_str(),
+                    FormatValue(res.relSigma * 100.0, 3).c_str(), res.used, FormatValue(res.rmsMetres / UnitInMetres(unit), 4).c_str(),
+                    UnitLabel(unit));
+        bool anySuspect = false;
+        for (bool s : res.suspect)
+          anySuspect = anySuspect || s;
+        if (anySuspect)
+          ImGui::TextColored(VerdictColor(Verdict::Blunder),
+                             "A dimension is Suspect (a wrong pick or a mistyped value). Untick it to re-solve, or keep it.");
+        if (ImGui::Button("Apply")) {
+          const int rpage = u.robustPicks.empty() ? page : u.robustPicks.front().first.page;
+          std::map<int, PageScale> change;
+          change[rpage] = made;
+          u.session.SetScales(change);
+          log.push_back("PDF scale: robust calibration of page " + std::to_string(rpage + 1) + " of " + v.title + " - " + made.note);
+          u.status = "Scale " + made.note + ".";
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+      } else {
+        ImGui::TextColored(VerdictColor(Verdict::Check), "%s", res.why.c_str());
+      }
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+  u.checksTab = -1;
+  if (deleteCheck >= 0) {
+    u.session.RemoveCheck(deleteCheck);
+    u.selectedCheck = -1;
+  }
+  if (ImGui::Button("Close"))
+    ImGui::CloseCurrentPopup();
+  ImGui::EndPopup();
+  PopDialogStyle();
 }
 
 // The annotation row under the toolbar: tools, style, undo/redo, Save As, and the two small dialogs
@@ -1118,8 +1898,17 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
     }
     if (ImGui::Button(label)) {
       u.tool = t;
+      u.measurePts.clear();
+      u.status.clear();
       if (t != Tool::Select)
         u.selected = -1;
+      if (IsMeasureTool(t) || t == Tool::Check)
+        u.scalesRequested = true; // the page's scale is needed: read what the file has
+      if (t == Tool::Check) {
+        u.checkTarget = 0;
+        u.checkPts.clear();
+        u.status = "Check: click the two ends of a dimension the drawing states.";
+      }
     }
     if (on)
       ImGui::PopStyleColor(2);
@@ -1160,7 +1949,8 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
     changed |= ImGui::SliderFloat("##annotw", &u.thickness, 0.5f, 20.f, "%.1f pt");
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("Line thickness");
-    if (u.tool != Tool::Line && (sel == nullptr || sel->kind != Annot::Kind::Line)) {
+    if (u.tool != Tool::Line && !IsMeasureTool(u.tool) &&
+        (sel == nullptr || (sel->kind != Annot::Kind::Line && !sel->IsDimension()))) {
       ImGui::SameLine();
       changed |= ImGui::Checkbox("Fill", &u.fill);
     }
@@ -1207,8 +1997,44 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   {
     const PageScale* cur = EffectiveScale(v, v.curPage);
     const auto unusable = u.fileScales.unusable.find(v.curPage);
-    if (cur != nullptr)
-      ImGui::Text("Scale: %s", cur->RatioText().c_str());
+    if (cur != nullptr) {
+      ImGui::Text("Scale: %s%s%s%s", cur->RatioText().c_str(), cur->note.empty() ? "" : " (", cur->note.c_str(), cur->note.empty() ? "" : ")");
+      ImGui::SameLine();
+      // A real button, coloured by the worst verdict among this page's checks (blue when there are none yet), so
+      // it is obvious that the checks exist and where to open them.
+      const std::vector<int> mine = PageChecks(u, v.curPage);
+      bool haveVerdict = false;
+      Verdict worst = Verdict::Good;
+      for (int i : mine) {
+        const Verdict vd = EvaluateCheck(u.session.Checks()[static_cast<size_t>(i)], *cur, u.limits).verdict;
+        if (!haveVerdict || static_cast<int>(vd) > static_cast<int>(worst))
+          worst = vd;
+        haveVerdict = true;
+      }
+      const ImVec4 base = !haveVerdict ? ImVec4(0.20f, 0.45f, 0.78f, 1.f)
+                          : worst == Verdict::Good ? ImVec4(0.17f, 0.55f, 0.28f, 1.f)
+                          : worst == Verdict::Check ? ImVec4(0.74f, 0.50f, 0.08f, 1.f)
+                                                    : ImVec4(0.74f, 0.22f, 0.20f, 1.f);
+      ImGui::PushStyleColor(ImGuiCol_Button, base);
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(std::min(1.f, base.x + 0.10f), std::min(1.f, base.y + 0.10f), std::min(1.f, base.z + 0.10f), 1.f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(base.x * 0.8f, base.y * 0.8f, base.z * 0.8f, 1.f));
+      ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.f, 1.f, 1.f, 0.55f));
+      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
+      char lab[64];
+      std::snprintf(lab, sizeof(lab), "Scale checks (%zu)", mine.size());
+      if (ImGui::Button(lab)) {
+        u.checksDialog = true;
+        u.checksTab = 0;
+      }
+      ImGui::PopStyleVar();
+      ImGui::PopStyleColor(4);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("See how this page's scale agrees with the dimensions you checked,\ncorrect it, or run a robust calibration");
+      ImGui::SameLine();
+      ImGui::Checkbox("Show on sheet", &u.showChecks); // hide the check lines and labels to cut the noise
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Show or hide the check lines and labels drawn on the sheet");
+    }
     else if (!u.scalesRead && u.scalesRequested)
       ImGui::TextDisabled("Scale: reading...");
     else if (unusable != u.fileScales.unusable.end())
@@ -1220,8 +2046,70 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
     ImGui::SameLine();
     ImGui::TextDisabled("%s", u.status.c_str());
   }
+  // REQ-391: the scaled dimension tools, on their own row.
+  ImGui::TextUnformatted("Measure:");
+  ImGui::SameLine();
+  toolButton("Length", Tool::Length);
+  toolButton("Polylength", Tool::PolyLength);
+  toolButton("Area", Tool::Area);
+  toolButton("Angle", Tool::Angle);
+  toolButton("Check", Tool::Check);
+  ImGui::TextUnformatted("|");
+  ImGui::SameLine();
+  { // Snap: end points and corners of the page's own line work (F3)
+    if (u.snapOn) {
+      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.28f, 1.f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.62f, 0.34f, 1.f));
+    }
+    if (ImGui::Button(u.snapOn ? "Snap: on" : "Snap: off"))
+      u.snapOn = !u.snapOn;
+    if (u.snapOn)
+      ImGui::PopStyleColor(2);
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Snap to the ends and corners of the drawing (F3)");
+    if (u.snapOn && v.doc != nullptr) { // read the page's points as soon as Snap is on, so the first click can snap
+      SnapPage& sp = u.snapPages[v.curPage];
+      if (!sp.started)
+        StartSnapRead(v, v.curPage);
+      if (sp.reading.valid() && sp.reading.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        sp.index = sp.reading.get();
+        sp.failed = sp.index == nullptr;
+      }
+    }
+    const auto cur = u.snapPages.find(v.curPage);
+    if (u.snapOn && cur != u.snapPages.end() && cur->second.reading.valid()) {
+      ImGui::SameLine();
+      ImGui::TextDisabled("reading this page...");
+    } else if (u.snapOn && cur != u.snapPages.end() && cur->second.failed) {
+      ImGui::SameLine();
+      ImGui::TextDisabled("this page has nothing to snap to");
+    }
+  }
+  {
+    const Annot* ds = u.selected >= 0 ? &items[static_cast<size_t>(u.selected)] : nullptr;
+    if (IsMeasureTool(u.tool) || (ds != nullptr && ds->IsDimension())) {
+      ImGui::SameLine(); // only here: a SameLine left dangling puts the next panel on this row
+      ImGui::SetNextItemWidth(120.f);
+      if (ImGui::SliderInt("##decimals", &u.decimals, 0, 4, "%d decimals") && ds != nullptr && ds->IsDimension()) {
+        Annot a = *ds;
+        ApplyStyle(u, a);
+        u.session.Replace(u.selected, a);
+      }
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(70.f);
+      if (ImGui::DragFloat("##dimsize", &u.fontSize, 0.25f, 4.f, 200.f, "%.0f pt") && ds != nullptr && ds->IsDimension()) {
+        Annot a = *ds;
+        ApplyStyle(u, a);
+        u.session.Replace(u.selected, a);
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Label size");
+    }
+  }
   ImGui::PopStyleVar(3);
   DrawScaleDialogs(v, log);
+  DrawCheckPopup(v, log);
+  DrawChecksDialog(v, log);
 
   // The note text dialog.
   char id[64];
@@ -1231,7 +2119,7 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
     ImGui::OpenPopup(id);
   }
   ImGui::SetNextWindowSize(ImVec2(420.f, 0.f), ImGuiCond_Appearing);
-  if (ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+  if (BeginDialog(id)) {
     if (ImGui::IsWindowAppearing())
       ImGui::SetKeyboardFocusHere();
     ImGui::InputTextMultiline("##notetext", u.textBuf, sizeof(u.textBuf), ImVec2(400.f, 110.f));
@@ -1268,7 +2156,7 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
     u.closePrompt = false;
     ImGui::OpenPopup(id);
   }
-  if (ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+  if (BeginDialog(id)) {
     ImGui::TextUnformatted("This PDF has annotations that are not saved.");
     ImGui::TextDisabled("The original file is never changed; Save As writes a new copy.");
     ImGui::BeginDisabled(saving);
@@ -1291,6 +2179,36 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   }
 }
 
+// Reads a page's ends and corners in the background (REQ-391 clause 5). One at a time per page; a few pages are
+// kept and the farthest finished one is dropped to make room.
+void StartSnapRead(Viewer& v, int page) {
+  AnnotUi& u = v.ann;
+  SnapPage& sp = u.snapPages[page];
+  if (sp.started || v.doc == nullptr)
+    return;
+  while (u.snapPages.size() > 4) {
+    int farthest = -1;
+    for (const auto& [p, other] : u.snapPages)
+      if (p != page && !other.reading.valid() && (farthest < 0 || std::abs(p - page) > std::abs(farthest - page)))
+        farthest = p;
+    if (farthest < 0)
+      break;
+    u.snapPages.erase(farthest);
+  }
+  SnapPage& cur = u.snapPages[page];
+  cur.started = true;
+  PdfDocument* doc = v.doc.get();
+  const auto cancel = cur.cancel;
+  cur.reading = std::async(std::launch::async, [doc, page, cancel]() -> std::shared_ptr<SnapIndex> {
+    std::vector<SnapPoint> pts;
+    if (!doc->SnapPoints(page, pts, [cancel] { return cancel->load(); }))
+      return nullptr;
+    auto idx = std::make_shared<SnapIndex>();
+    idx->Build(std::move(pts));
+    return idx;
+  });
+}
+
 struct PageRect {
   int page;
   ImVec2 tl; ///< the page's top-left on screen
@@ -1309,13 +2227,86 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
         return &r;
     return nullptr;
   };
-  const auto toPt = [&](const PageRect& r, float& x, float& y, bool clamp) {
+  // The pointer in page points. With `snap`, the nearest end or corner of the page's own line work wins when the
+  // Snap toggle is on and one is close (found just below).
+  const auto toPt = [&](const PageRect& r, float& x, float& y, bool clamp, bool snap = false) {
     x = (io.MousePos.x - r.tl.x) / k;
     y = r.hPt - (io.MousePos.y - r.tl.y) / k;
     if (clamp) {
       x = std::clamp(x, 0.f, r.wPt);
       y = std::clamp(y, 0.f, r.hPt);
     }
+    if (snap && u.snapHit && u.snapPage == r.page) {
+      x = u.snapX;
+      y = u.snapY;
+    }
+  };
+
+  // Snap: the nearest end or corner of the page under the pointer, while a tool is placing points. The page's
+  // points are read in the background the first time; the Length offset click is free (never snapped).
+  u.snapHit = false;
+  {
+    const bool placing = u.tool != Tool::Select || u.drag == AnnotUi::Drag::Handle || u.drag == AnnotUi::Drag::Create;
+    const bool offsetClick = (u.tool == Tool::Length && u.measurePts.size() == 2) ||
+                             (u.drag == AnnotUi::Drag::Handle && u.handle == 2 && u.preview.kind == Annot::Kind::Length);
+    if (u.snapOn && placing && !offsetClick && hovered && !panning) {
+      for (const PageRect& r : rects) {
+        const ImVec2 m = io.MousePos;
+        if (m.x < r.tl.x || m.y < r.tl.y || m.x > r.tl.x + r.wPt * k || m.y > r.tl.y + r.hPt * k)
+          continue;
+        SnapPage& sp = u.snapPages[r.page];
+        if (!sp.started)
+          StartSnapRead(v, r.page);
+        if (sp.reading.valid() && sp.reading.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+          sp.index = sp.reading.get();
+          sp.failed = sp.index == nullptr;
+        }
+        if (sp.index != nullptr) {
+          float px, py;
+          toPt(r, px, py, false);
+          SnapIndex::Pt hit;
+          const float radius = 10.f / k;
+          bool found = sp.index->Nearest(px, py, radius, hit, 6.f / k); // points within 6 screen pixels merge into the strongest
+          // Stay on the last point while the pointer is still near it, unless another is clearly closer (5 screen
+          // pixels): without this the marker flips between neighbouring points as the pointer drifts.
+          if (found && u.snapPrevValid && u.snapPrevPage == r.page) {
+            const float dPrev = std::hypot(u.snapPrevX - px, u.snapPrevY - py), dNew = std::hypot(hit.first - px, hit.second - py);
+            if (dPrev <= radius && dNew > dPrev - 5.f / k)
+              hit = {u.snapPrevX, u.snapPrevY};
+          }
+          if (found) {
+            u.snapHit = true;
+            u.snapPage = r.page;
+            u.snapX = hit.first;
+            u.snapY = hit.second;
+            u.snapPrevValid = true;
+            u.snapPrevPage = r.page;
+            u.snapPrevX = hit.first;
+            u.snapPrevY = hit.second;
+          }
+        }
+        break;
+      }
+    }
+    if (!u.snapHit)
+      u.snapPrevValid = false;
+  }
+
+  // A dimension is complete at its point count; a polyline or area is ended with Enter, a double-click, or (area)
+  // a click on its first point. A Length takes a third click for its dimension line (Enter: on the points).
+  const auto finishMeasure = [&] {
+    Annot a;
+    a.kind = KindOfMeasureTool(u.tool);
+    a.page = u.measurePage;
+    a.pts = u.measurePts;
+    a.offset = a.kind == Annot::Kind::Length ? u.measureOffset : 0.f;
+    u.measurePts.clear();
+    u.measureOffset = 0.f;
+    if (!DimensionComplete(a))
+      return;
+    ApplyStyle(u, a);
+    u.session.Add(a);
+    u.status.clear();
   };
 
   // Keys, while no text box has the keyboard.
@@ -1328,11 +2319,23 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
       u.session.Remove(u.selected);
       u.selected = -1;
     }
+    if (IsMeasureTool(u.tool) && !u.measurePts.empty() &&
+        (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
+      finishMeasure();
+    if (ImGui::IsKeyPressed(ImGuiKey_F3))
+      u.snapOn = !u.snapOn;
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+      const bool wasMidway = !u.measurePts.empty() || !u.checkPts.empty();
       u.selected = -1;
+      u.measurePts.clear();
+      u.checkPts.clear();
+      u.measureOffset = 0.f;
       if (u.tool == Tool::Calibrate) {
         u.tool = Tool::Select;
         u.calCount = 0;
+        u.status.clear();
+      } else if (!wasMidway && u.tool != Tool::Select) { // a second Esc leaves the tool: back to selecting
+        u.tool = Tool::Select;
         u.status.clear();
       }
     }
@@ -1346,7 +2349,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
       if (m.x < r.tl.x || m.y < r.tl.y || m.x > r.tl.x + r.wPt * k || m.y > r.tl.y + r.hPt * k)
         continue;
       float x, y;
-      toPt(r, x, y, false);
+      toPt(r, x, y, false, u.tool == Tool::Text); // only a note's position snaps; picking an existing mark never does
       const float tol = 5.f / k;
       if (u.tool == Tool::Select) {
         if (u.selected >= 0 && items[static_cast<size_t>(u.selected)].page == r.page) {
@@ -1354,6 +2357,8 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
           for (size_t i = 0; i < grips.size(); ++i)
             if (std::fabs(x - grips[i].first) <= 7.f / k && std::fabs(y - grips[i].second) <= 7.f / k) {
               u.drag = AnnotUi::Drag::Handle;
+              u.pressMouse = io.MousePos;
+              u.dragMoved = false;
               u.handle = static_cast<int>(i);
               u.dragPage = r.page;
               u.original = u.preview = items[static_cast<size_t>(u.selected)];
@@ -1377,19 +2382,94 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
             u.textPopup = true;
           } else {
             u.drag = AnnotUi::Drag::Move;
+            u.pressMouse = io.MousePos;
+            u.dragMoved = false;
             u.dragPage = r.page;
             u.px0 = x;
             u.py0 = y;
             u.original = u.preview = a;
           }
         }
+      } else if (IsMeasureTool(u.tool)) {
+        float cx, cy;
+        toPt(r, cx, cy, true, true);
+        if (!u.measurePts.empty() && r.page != u.measurePage) {
+          u.status = "Keep all the points on one page.";
+          return;
+        }
+        if (u.measurePts.empty()) {
+          if (u.tool != Tool::Angle && EffectiveScale(v, r.page) == nullptr) {
+            if (!u.scalesRead) { // the file may already have a scale: read it, then ask again
+              u.scalesRequested = true;
+              u.status = "Reading this page's scale... click again in a moment.";
+            } else {
+              u.status = "This page has no scale. Use Set scale... first.";
+            }
+            return;
+          }
+          u.measurePage = r.page;
+        }
+        if (u.tool == Tool::Length && u.measurePts.size() == 2) { // the third click places the dimension line
+          Annot tmp;
+          tmp.kind = Annot::Kind::Length;
+          tmp.pts = u.measurePts;
+          const DimLine dl = LengthDimLine(tmp);
+          u.measureOffset = (cx - u.measurePts[0].first) * dl.nx + (cy - u.measurePts[0].second) * dl.ny;
+          finishMeasure();
+          return;
+        }
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !u.measurePts.empty() && u.tool != Tool::Length) {
+          finishMeasure();
+          return;
+        }
+        if (u.tool == Tool::Area && u.measurePts.size() >= 3 &&
+            std::hypot(cx - u.measurePts[0].first, cy - u.measurePts[0].second) * k <= 8.f) {
+          finishMeasure();
+          return;
+        }
+        u.measurePts.push_back({cx, cy});
+        u.status = u.tool == Tool::PolyLength ? "Click more points; Enter or double-click to finish."
+                   : u.tool == Tool::Area     ? "Click more points; Enter, double-click, or the first point to close."
+                   : u.tool == Tool::Length   ? (u.measurePts.size() == 1 ? "Click the second point."
+                                                                          : "Click where the dimension line goes (Enter: on the points).")
+                                              : "";
+        if (u.tool == Tool::Angle && u.measurePts.size() == 3)
+          finishMeasure();
+      } else if (u.tool == Tool::Check) {
+        float cx, cy;
+        toPt(r, cx, cy, true, true);
+        if (!u.checkPts.empty() && r.page != u.checkPage) {
+          u.status = "Keep both points on one page.";
+          return;
+        }
+        if (u.checkPts.empty()) {
+          if (u.checkTarget == 0 && EffectiveScale(v, r.page) == nullptr) { // a check tests a scale, so there must be one
+            if (!u.scalesRead) {
+              u.scalesRequested = true;
+              u.status = "Reading this page's scale... click again in a moment.";
+            } else {
+              u.status = "This page has no scale. Use Set scale... first.";
+            }
+            return;
+          }
+          u.checkPage = r.page;
+        }
+        u.checkPts.push_back({cx, cy});
+        if (u.checkPts.size() == 2) {
+          u.checkPopup = true;
+          u.checkText[0] = 0;
+          u.status.clear();
+        } else {
+          u.status = "Click the other end of the dimension.";
+        }
       } else if (u.tool == Tool::Calibrate) {
         float cx, cy;
-        toPt(r, cx, cy, true);
+        toPt(r, cx, cy, true, true);
         if (u.calCount == 0 || r.page == u.calPage) {
           u.calPage = r.page;
           u.calX[u.calCount] = cx;
           u.calY[u.calCount] = cy;
+          u.calSnapped[u.calCount] = u.snapHit && u.snapPage == r.page;
           ++u.calCount;
           if (u.calCount == 2) {
             u.calCount = 2; // kept for drawing while the distance is asked
@@ -1409,7 +2489,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
         u.textPopup = true;
       } else {
         float cx, cy;
-        toPt(r, cx, cy, true);
+        toPt(r, cx, cy, true, true);
         Annot a;
         a.kind = u.tool == Tool::Line ? Annot::Kind::Line : u.tool == Tool::Rect ? Annot::Kind::Rect : Annot::Kind::Ellipse;
         a.page = r.page;
@@ -1431,9 +2511,13 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
     u.drag = AnnotUi::Drag::None;
     return;
   }
-  if (r != nullptr) {
+  // A click is not a drag: nothing moves (and nothing snaps) until the pointer has travelled a few pixels, so
+  // selecting a mark, or clicking one of its grips, leaves it exactly where it was.
+  if (!u.dragMoved && std::hypot(io.MousePos.x - u.pressMouse.x, io.MousePos.y - u.pressMouse.y) >= 4.f)
+    u.dragMoved = true;
+  if (r != nullptr && (u.dragMoved || u.drag == AnnotUi::Drag::Create)) {
     float x, y;
-    toPt(*r, x, y, u.drag != AnnotUi::Drag::Move);
+    toPt(*r, x, y, u.drag != AnnotUi::Drag::Move, u.drag != AnnotUi::Drag::Move);
     if (u.drag == AnnotUi::Drag::Create) {
       u.preview.x1 = x;
       u.preview.y1 = y;
@@ -1447,13 +2531,17 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
       u.preview.x1 += dx;
       u.preview.y0 += dy;
       u.preview.y1 += dy;
+      for (auto& p : u.preview.pts) {
+        p.first += dx;
+        p.second += dy;
+      }
     }
   }
   if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
     if (u.drag == AnnotUi::Drag::Create) {
       if (std::hypot(u.preview.x1 - u.preview.x0, u.preview.y1 - u.preview.y0) * k >= 4.f)
         u.session.Add(u.preview);
-    } else if (u.selected >= 0 && u.preview != u.original) {
+    } else if (u.dragMoved && u.selected >= 0 && u.preview != u.original) {
       u.session.Replace(u.selected, u.preview);
     }
     u.drag = AnnotUi::Drag::None;
@@ -1473,16 +2561,14 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
     v.fitWidthPending = false;
     GoToPage(v, v.curPage);
   }
-  if (v.pendingScrollY >= 0.f) {
-    ImGui::SetScrollY(v.pendingScrollY);
-    v.pendingScrollY = -1.f;
-  }
-  if (v.pendingScrollX >= 0.f) {
-    ImGui::SetScrollX(v.pendingScrollX);
-    v.pendingScrollX = -1.f;
-  }
   if (v.bench.active && v.bench.scrolling)
     ImGui::SetScrollY(v.bench.scrollPx);
+
+  // The scroll position that is really wanted: a change asked for this frame or last (ImGui applies a
+  // SetScroll one frame late, so its own GetScroll is stale right after a zoom). Zooming twice before ImGui
+  // caught up used to start the second zoom from that stale value and land several pages away.
+  const auto wantedY = [&] { return v.pendingScrollY >= 0.f ? v.pendingScrollY : ImGui::GetScrollY(); };
+  const auto wantedX = [&] { return v.pendingScrollX >= 0.f ? v.pendingScrollX : ImGui::GetScrollX(); };
 
   const bool hovered = ImGui::IsWindowHovered();
   const ImGuiIO& io = ImGui::GetIO();
@@ -1490,8 +2576,8 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
     // Zoom about the pointer: the point under it stays under it.
     const ImVec2 wp = ImGui::GetWindowPos();
     const float mx = io.MousePos.x - wp.x, my = io.MousePos.y - wp.y;
-    const float ptY = (ImGui::GetScrollY() + my - kMarginPx) / v.pxPerPt;
-    const float ptX = (ImGui::GetScrollX() + mx - kMarginPx) / v.pxPerPt;
+    const float ptY = (wantedY() + my - kMarginPx) / v.pxPerPt;
+    const float ptX = (wantedX() + mx - kMarginPx) / v.pxPerPt;
     SetZoom(v, v.pxPerPt * (io.MouseWheel > 0 ? 1.15f : 1.f / 1.15f));
     v.pendingScrollY = std::max(0.f, ptY * v.pxPerPt + kMarginPx - my);
     v.pendingScrollX = std::max(0.f, ptX * v.pxPerPt + kMarginPx - mx);
@@ -1502,8 +2588,8 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
   if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle))
     v.panning = false;
   if (v.panning) {
-    ImGui::SetScrollY(ImGui::GetScrollY() - io.MouseDelta.y);
-    ImGui::SetScrollX(ImGui::GetScrollX() - io.MouseDelta.x);
+    v.pendingScrollY = std::max(0.f, wantedY() - io.MouseDelta.y);
+    v.pendingScrollX = std::max(0.f, wantedX() - io.MouseDelta.x);
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
   }
   if ((ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || hovered) && !io.WantTextInput) {
@@ -1519,8 +2605,25 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
 
   v.viewW = ImGui::GetWindowWidth();
   v.viewH = ImGui::GetWindowHeight();
-  v.lastScrollX = ImGui::GetScrollX();
-  const float scrollY = ImGui::GetScrollY();
+
+  // Take the wanted scroll position NOW, for drawing and for picking: ImGui moves its own scroll next frame, so
+  // this frame is drawn as if it already had (the pages are shifted by the difference). Without this, the frame
+  // after a zoom or a page jump showed the new layout at the old scroll offset: a flash of some other page.
+  float scrollY = ImGui::GetScrollY(), scrollX = ImGui::GetScrollX();
+  if (v.pendingScrollY >= 0.f) {
+    const float maxY = std::max(0.f, ContentHeightPx(v) - v.viewH);
+    scrollY = std::clamp(v.pendingScrollY, 0.f, maxY);
+    ImGui::SetScrollY(scrollY);
+    v.pendingScrollY = -1.f;
+  }
+  if (v.pendingScrollX >= 0.f) {
+    const float maxX = std::max(0.f, std::max(avail.x, v.layout.maxWidth * v.pxPerPt + 2 * kMarginPx) - v.viewW);
+    scrollX = std::clamp(v.pendingScrollX, 0.f, maxX);
+    ImGui::SetScrollX(scrollX);
+    v.pendingScrollX = -1.f;
+  }
+  const float shiftY = ImGui::GetScrollY() - scrollY, shiftX = ImGui::GetScrollX() - scrollX;
+  v.lastScrollX = scrollX;
   if (scrollY != v.lastScrollY)
     v.scrollDir = scrollY > v.lastScrollY ? 1 : -1;
   v.lastScrollY = scrollY;
@@ -1602,7 +2705,9 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
 
   // Draw only the visible pages.
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  const ImVec2 origin = ImGui::GetCursorScreenPos(); // scrolls with the content
+  ImVec2 origin = ImGui::GetCursorScreenPos(); // scrolls with the content
+  origin.x += shiftX;                           // ... as if ImGui's scroll were already at the wanted position
+  origin.y += shiftY;
   const float contentW = std::max(avail.x, v.layout.maxWidth * v.pxPerPt + 2 * kMarginPx);
   std::vector<PageRect> pageRects;
   for (int p = vis.first; !vis.Empty() && p <= vis.last; ++p) {
@@ -1642,10 +2747,82 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
         if (items[i].page != r.page)
           continue;
         const bool isSel = static_cast<int>(i) == u.selected;
-        DrawAnnot(dl, dragging && isSel ? u.preview : items[i], r.tl, r.hPt, v.pxPerPt, isSel);
+        DrawAnnot(dl, dragging && isSel ? u.preview : items[i], r.tl, r.hPt, v.pxPerPt, isSel, EffectiveScale(v, r.page));
       }
       if (u.drag == AnnotUi::Drag::Create && u.dragPage == r.page)
         DrawAnnot(dl, u.preview, r.tl, r.hPt, v.pxPerPt, false);
+      if (!u.measurePts.empty() && u.measurePage == r.page && IsMeasureTool(u.tool)) { // the dimension being clicked out
+        Annot cur;
+        cur.kind = KindOfMeasureTool(u.tool);
+        cur.pts = u.measurePts;
+        ApplyStyle(u, cur);
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        if (u.tool == Tool::Length && cur.pts.size() == 2) { // both points placed: the line follows the pointer
+          const DimLine d = LengthDimLine(cur);
+          const float mx = (mouse.x - r.tl.x) / v.pxPerPt, my = r.hPt - (mouse.y - r.tl.y) / v.pxPerPt;
+          cur.offset = (mx - cur.pts[0].first) * d.nx + (my - cur.pts[0].second) * d.ny;
+          DrawAnnot(dl, cur, r.tl, r.hPt, v.pxPerPt, false, EffectiveScale(v, r.page));
+        } else {
+          DrawAnnot(dl, cur, r.tl, r.hPt, v.pxPerPt, false, nullptr, &mouse);
+        }
+      }
+      if (u.snapHit && u.snapPage == r.page) { // the end or corner the next click will take
+        const ImVec2 c(r.tl.x + u.snapX * v.pxPerPt, r.tl.y + (r.hPt - u.snapY) * v.pxPerPt);
+        dl->AddRect(ImVec2(c.x - 6.f, c.y - 6.f), ImVec2(c.x + 6.f, c.y + 6.f), IM_COL32(0, 0, 0, 220), 0.f, 0, 3.5f);
+        dl->AddRect(ImVec2(c.x - 6.f, c.y - 6.f), ImVec2(c.x + 6.f, c.y + 6.f), IM_COL32(60, 255, 90, 255), 0.f, 0, 1.8f);
+      }
+      {
+        // REQ-394: the checks on this page, in their verdict colour, with what they read against what the drawing says;
+        // and the robust calibration's dimensions; and the Check tool's line while it is being picked.
+        const PageScale* sc = EffectiveScale(v, r.page);
+        const auto S = [&](float x, float y) { return ImVec2(r.tl.x + x * v.pxPerPt, r.tl.y + (r.hPt - y) * v.pxPerPt); };
+        // A label as a solid chip in the check's colour with dark text, so it reads on any drawing.
+        const auto label = [&](ImVec2 at, const std::string& text, ImU32 col) {
+          const float fsPx = 16.f;
+          ImFont* font = ImGui::GetFont();
+          const ImVec2 ts = font->CalcTextSizeA(fsPx, 1e9f, 0.f, text.c_str());
+          dl->AddRectFilled(ImVec2(at.x - 5.f, at.y - 3.f), ImVec2(at.x + ts.x + 5.f, at.y + ts.y + 3.f), col, 4.f);
+          dl->AddRect(ImVec2(at.x - 5.f, at.y - 3.f), ImVec2(at.x + ts.x + 5.f, at.y + ts.y + 3.f), IM_COL32(0, 0, 0, 200), 4.f, 0, 1.5f);
+          dl->AddText(font, fsPx, at, IM_COL32(10, 10, 10, 255), text.c_str());
+        };
+        const auto& checks = u.session.Checks();
+        for (size_t i = 0; u.showChecks && i < checks.size(); ++i) {
+          const ScaleCheck& c = checks[i];
+          if (c.page != r.page)
+            continue;
+          ImU32 col = IM_COL32(150, 150, 150, 255);
+          std::string text = "no scale";
+          if (sc != nullptr) {
+            const CheckResult cr = EvaluateCheck(c, *sc, u.limits);
+            const ImVec4 vc = VerdictColor(cr.verdict);
+            col = IM_COL32(static_cast<int>(vc.x * 255), static_cast<int>(vc.y * 255), static_cast<int>(vc.z * 255), 255);
+            text = FormatValue(cr.measured, 3) + " vs " + FormatValue(cr.stated, 3) + " " + UnitLabel(c.unit) + "  (" + Signed(cr.pct, 2) + " %)";
+          }
+          const bool sel = static_cast<int>(i) == u.selectedCheck;
+          dl->AddLine(S(c.x0, c.y0), S(c.x1, c.y1), col, sel ? 4.f : 2.f);
+          dl->AddCircleFilled(S(c.x0, c.y0), 3.5f, col);
+          dl->AddCircleFilled(S(c.x1, c.y1), 3.5f, col);
+          const ImVec2 mid = S((c.x0 + c.x1) * 0.5f, (c.y0 + c.y1) * 0.5f);
+          label(ImVec2(mid.x + 6.f, mid.y + 4.f), text, col);
+        }
+        for (size_t i = 0; u.showChecks && i < u.robustPicks.size(); ++i) {
+          const ScaleCheck& c = u.robustPicks[i].first;
+          if (c.page != r.page)
+            continue;
+          const ImU32 col = u.robustPicks[i].second ? IM_COL32(60, 140, 255, 255) : IM_COL32(150, 150, 150, 255);
+          dl->AddLine(S(c.x0, c.y0), S(c.x1, c.y1), col, 2.f);
+          dl->AddCircleFilled(S(c.x0, c.y0), 3.5f, col);
+          dl->AddCircleFilled(S(c.x1, c.y1), 3.5f, col);
+          const ImVec2 mid = S((c.x0 + c.x1) * 0.5f, (c.y0 + c.y1) * 0.5f);
+          label(ImVec2(mid.x + 6.f, mid.y + 4.f), "#" + std::to_string(i + 1) + "  " + FormatValue(c.stated, 3) + " " + UnitLabel(c.unit), col);
+        }
+        if (u.tool == Tool::Check && !u.checkPts.empty() && u.checkPage == r.page) {
+          const ImVec2 p0 = S(u.checkPts[0].first, u.checkPts[0].second);
+          const ImVec2 p1 = u.checkPts.size() == 2 ? S(u.checkPts[1].first, u.checkPts[1].second) : ImGui::GetIO().MousePos;
+          dl->AddLine(p0, p1, IM_COL32(60, 140, 255, 255), 2.f);
+          dl->AddCircleFilled(p0, 4.f, IM_COL32(60, 140, 255, 255));
+        }
+      }
       if (u.calCount > 0 && u.calPage == r.page) { // the calibration points picked so far
         const auto S = [&](int i) { return ImVec2(r.tl.x + u.calX[i] * v.pxPerPt, r.tl.y + (r.hPt - u.calY[i]) * v.pxPerPt); };
         if (u.calCount == 2)

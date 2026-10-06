@@ -247,7 +247,7 @@ TEST_CASE("Save As writes page scales that read back, replace old ones, and leav
   std::filesystem::remove(dst2);
   std::map<int, PageScale> change;
   change[0] = *Preset("1:100");
-  change[2] = PageScale{0.0, Unit::Inch, 0.0, Unit::Foot, ""}; // invalid = remove
+  change[2] = PageScale{0.0, Unit::Inch, 0.0, Unit::Foot, "", "", 0.0}; // invalid = remove
   const std::string err2 = SaveAnnotated(dst, {}, dst2, change);
   INFO(err2);
   REQUIRE(err2.empty());

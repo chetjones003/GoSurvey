@@ -133,7 +133,7 @@ std::string PageScale::RatioText() const {
 
 bool PageScale::operator==(const PageScale& o) const {
   return pageValue == o.pageValue && pageUnit == o.pageUnit && realValue == o.realValue && realUnit == o.realUnit &&
-         label == o.label;
+         label == o.label && note == o.note && originalRealValue == o.originalRealValue;
 }
 
 PageScale ScaleFromCalibration(double pagePoints, double realValue, Unit realUnit) {
@@ -245,15 +245,20 @@ std::string ReadString(const std::string& s, size_t pos) {
 
 } // namespace
 
-std::string BuildViewport(const PageScale& s, double x0, double y0, double x1, double y1) {
+std::string BuildMeasureDict(const PageScale& s) {
   const std::string unit = UnitLabel(s.realUnit);
-  const double perPt = s.RealPerPoint();
-  std::string fmt = "/Type/NumberFormat/F/D/D 100";
+  const std::string fmt = "/Type/NumberFormat/F/D/D 100";
+  std::ostringstream o;
+  o << "<</Type/Measure/Subtype/RL/R" << PdfString(s.RatioText()) << "/X[<<" << fmt << "/U" << PdfString(unit) << "/C "
+    << Num(s.RealPerPoint()) << ">>]/D[<<" << fmt << "/U" << PdfString(unit) << "/C 1>>]/A[<<" << fmt << "/U"
+    << PdfString("sq " + unit) << "/C 1>>]/O[0 0]>>";
+  return o.str();
+}
+
+std::string BuildViewport(const PageScale& s, double x0, double y0, double x1, double y1) {
   std::ostringstream o;
   o << "/VP[<</Type/Viewport/BBox[" << Num(x0) << " " << Num(y0) << " " << Num(x1) << " " << Num(y1)
-    << "]/Name(GoSurvey)/Measure<</Type/Measure/Subtype/RL/R" << PdfString(s.RatioText()) << "/X[<<" << fmt << "/U"
-    << PdfString(unit) << "/C " << Num(perPt) << ">>]/D[<<" << fmt << "/U" << PdfString(unit) << "/C 1>>]/A[<<" << fmt << "/U"
-    << PdfString("sq " + unit) << "/C 1>>]/O[0 0]>>>>]";
+    << "]/Name(GoSurvey)/Measure" << BuildMeasureDict(s) << ">>]";
   return o.str();
 }
 
