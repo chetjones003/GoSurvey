@@ -7,6 +7,7 @@
 #include "PdfSnap.hpp"
 #include "PdfSplit.hpp"
 #include "PdfViewerCore.hpp"
+#include "ShxDraw.hpp"
 #include "WinFileDialogs.hpp"
 
 #include <GL/glew.h>
@@ -18,6 +19,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#ifdef DrawText
+#undef DrawText // windows.h renames it to DrawTextA; Shx::DrawText (the stroke-font drawer) is the one used here
+#endif
 #endif
 
 #include <algorithm>
@@ -225,7 +229,7 @@ struct BenchRun {
 // a page never re-renders it; only "Save As" writes them into a new PDF.
 // ---------------------------------------------------------------------------------------------------
 
-enum class Tool { Select, Text, Line, Rect, Ellipse, Calibrate, Length, PolyLength, Area, Angle, Check };
+enum class Tool { Select, Text, Line, Rect, Ellipse, Leader, Calibrate, Length, PolyLength, Area, Angle, Check };
 
 bool IsMeasureTool(Tool t) { return t == Tool::Length || t == Tool::PolyLength || t == Tool::Area || t == Tool::Angle; }
 
@@ -238,18 +242,27 @@ Annot::Kind KindOfMeasureTool(Tool t) {
 struct FontChoice {
   std::string family;
   bool standard; ///< one of the 14 standard PDF fonts (no embedding); otherwise an installed TrueType family
+  bool stroke = false; ///< an SHX stroke font (romans.shx): written to the PDF as strokes, not as a font (REQ-397)
 };
 
 // The standard PDF fonts plus the installed TrueType families GoSurvey itself can load (FontReg).
 const std::vector<FontChoice>& FontChoices() {
   static const std::vector<FontChoice> list = [] {
-    std::vector<FontChoice> out = {{"Helvetica", true}, {"Times", true}, {"Courier", true}};
+    std::vector<FontChoice> out;
+    if (Shx::Font* shx = Shx::Resolve("romans.shx"); shx != nullptr && shx->valid())
+      out.push_back({"romans.shx", false, true});
+    for (const char* f : {"Helvetica", "Times", "Courier"})
+      out.push_back({f, true});
     for (const char* f : {"Arial", "Times New Roman", "Courier New", "Calibri", "Verdana", "Tahoma", "Consolas",
                           "Georgia", "Segoe UI"}) {
       const std::string p = FontReg::FindTtfPath(f, false, false);
       if (p.size() > 4 && p.compare(p.size() - 4, 4, ".ttf") == 0) // .ttc collections are not embedded
         out.push_back({f, false});
     }
+    // Arial first, so it is the default (REQ-397); without it the first entry (romans.shx or Helvetica) is.
+    const auto arial = std::find_if(out.begin(), out.end(), [](const FontChoice& c) { return c.family == "Arial"; });
+    if (arial != out.end())
+      std::rotate(out.begin(), arial, arial + 1);
     return out;
   }();
   return list;
@@ -311,6 +324,9 @@ struct AnnotUi {
   ImVec2 pressMouse{0.f, 0.f}; ///< where the button went down: a drag is only a drag once the pointer has moved
   bool dragMoved = false;
   Annot original, preview;    ///< the item before the drag, and as it looks mid-drag
+  bool createSticky = false;  ///< a Line / Rectangle / Ellipse / Leader started by a click: the next click finishes it
+  bool textIsLeader = false;  ///< the text dialog is for a new Leader (its tip is `leaderTip`), not a plain note
+  std::pair<float, float> leaderTip{0.f, 0.f};
   bool textPopup = false;     ///< open the text dialog on the next frame
   int textPage = 0;
   float textX = 0.f, textY = 0.f;
@@ -361,7 +377,11 @@ ImU32 ToImCol(unsigned rgb, int a = 255) {
 // A note's box follows its text and size: anchored at its top-left corner.
 void FitTextBox(Annot& a) {
   float w = 0.f, h = 0.f;
-  EstimateTextBox(a.text, a.fontSize, w, h);
+  MeasureText(a.font, a.text, a.fontSize, w, h);
+  if (a.kind == Annot::Kind::Leader) { // the box has room round its text
+    w += 2.f * kLeaderPad;
+    h += 2.f * kLeaderPad;
+  }
   const float l = std::min(a.x0, a.x1), t = std::max(a.y0, a.y1);
   a.x0 = l;
   a.x1 = l + w;
@@ -372,15 +392,18 @@ void FitTextBox(Annot& a) {
 // Font, colour, width and fill from the tool settings onto an annotation.
 void ApplyStyle(const AnnotUi& u, Annot& a) {
   a.color = PackColor(u.color);
-  if (a.kind == Annot::Kind::Text) {
+  if (a.kind == Annot::Kind::Leader)
+    a.thickness = u.thickness;
+  if (a.kind == Annot::Kind::Text || a.kind == Annot::Kind::Leader) {
     const FontChoice& f = FontChoices()[static_cast<size_t>(std::clamp(u.fontIdx, 0, static_cast<int>(FontChoices().size()) - 1))];
     a.font = f.family;
     a.bold = u.bold;
     a.italic = u.italic;
     a.fontSize = std::clamp(u.fontSize, 4.f, 200.f);
-    a.fontFile = f.standard ? std::string() : FontReg::FindTtfPath(f.family, u.bold, u.italic);
+    a.fontFile = f.standard || f.stroke ? std::string() : FontReg::FindTtfPath(f.family, u.bold, u.italic);
     FitTextBox(a);
   } else if (a.IsDimension()) {
+    a.font = FontChoices()[static_cast<size_t>(std::clamp(u.fontIdx, 0, static_cast<int>(FontChoices().size()) - 1))].family;
     a.thickness = u.thickness;
     a.fontSize = std::clamp(u.fontSize, 4.f, 200.f);
     a.decimals = std::clamp(u.decimals, 0, 6);
@@ -393,7 +416,9 @@ void ApplyStyle(const AnnotUi& u, Annot& a) {
 // The reverse: the tool settings show the selected annotation's style.
 void LoadStyle(AnnotUi& u, const Annot& a) {
   UnpackColor(a.color, u.color);
-  if (a.kind == Annot::Kind::Text) {
+  if (a.kind == Annot::Kind::Leader)
+    u.thickness = a.thickness;
+  if (a.kind == Annot::Kind::Text || a.kind == Annot::Kind::Leader) {
     u.bold = a.bold;
     u.italic = a.italic;
     u.fontSize = a.fontSize;
@@ -404,6 +429,9 @@ void LoadStyle(AnnotUi& u, const Annot& a) {
     u.thickness = a.thickness;
     u.fontSize = a.fontSize;
     u.decimals = a.decimals;
+    for (size_t i = 0; i < FontChoices().size(); ++i)
+      if (FontChoices()[i].family == a.font)
+        u.fontIdx = static_cast<int>(i);
   } else {
     u.thickness = a.thickness;
     u.fill = a.fill;
@@ -427,6 +455,12 @@ void BoundsOf(const Annot& a, float& l, float& b, float& r, float& t) {
   r = std::max(a.x0, a.x1);
   b = std::min(a.y0, a.y1);
   t = std::max(a.y0, a.y1);
+  if (a.kind == Annot::Kind::Leader && !a.pts.empty()) { // the box and the tip
+    l = std::min(l, a.pts[0].first);
+    r = std::max(r, a.pts[0].first);
+    b = std::min(b, a.pts[0].second);
+    t = std::max(t, a.pts[0].second);
+  }
 }
 
 float DistToSegment(float px, float py, float ax, float ay, float bx, float by) {
@@ -475,6 +509,12 @@ bool HitTest(const Annot& a, float x, float y, float tol) {
     return DistToSegment(x, y, a.x0, a.y0, a.x1, a.y1) <= std::max(a.thickness * 0.5f, 0.f) + tol;
   case Annot::Kind::Text:
     return x >= l - tol && x <= r + tol && y >= b - tol && y <= t + tol;
+  case Annot::Kind::Leader: {
+    if (x >= l - tol && x <= r + tol && y >= b - tol && y <= t + tol)
+      return true;
+    const LeaderGeom g = LeaderLine(a);
+    return DistToSegment(x, y, g.sx, g.sy, g.tx, g.ty) <= a.thickness * 0.5f + tol;
+  }
   case Annot::Kind::Rect: {
     const float e = tol + a.thickness * 0.5f;
     const bool outer = x >= l - e && x <= r + e && y >= b - e && y <= t + e;
@@ -506,6 +546,8 @@ std::vector<std::pair<float, float>> HandlePoints(const Annot& a) {
     return {{a.x0, a.y0}, {a.x1, a.y1}};
   if (a.kind == Annot::Kind::Text)
     return {{r, b}};
+  if (a.kind == Annot::Kind::Leader && !a.pts.empty())
+    return {a.pts[0], {r, b}}; // the arrow tip, and the box's corner (it scales the text)
   return {{l, t}, {r, t}, {r, b}, {l, b}};
 }
 
@@ -520,7 +562,9 @@ void MoveHandle(Annot& a, const Annot& original, int handle, float x, float y) {
   } else if (a.kind == Annot::Kind::Line) {
     (handle == 0 ? a.x0 : a.x1) = x;
     (handle == 0 ? a.y0 : a.y1) = y;
-  } else if (a.kind == Annot::Kind::Text) {
+  } else if (a.kind == Annot::Kind::Leader && handle == 0 && !a.pts.empty()) {
+    a.pts[0] = {x, y};
+  } else if (a.kind == Annot::Kind::Text || a.kind == Annot::Kind::Leader) {
     const float top = std::max(original.y0, original.y1);
     const float oldH = std::max(1.f, top - std::min(original.y0, original.y1));
     a = original;
@@ -539,6 +583,52 @@ void MoveHandle(Annot& a, const Annot& original, int handle, float x, float y) {
 ImFont* FontForNote(const Annot& a) {
   std::string name = a.font == "Helvetica" ? "Arial" : a.font == "Times" ? "Times New Roman" : a.font == "Courier" ? "Courier New" : a.font;
   return FontReg::Resolve(name, a.bold, a.italic);
+}
+
+// Stroke text as the saved PDF will show it (REQ-397): `text`'s lines, the first line's baseline-left at
+// (left, firstBaselineY), turned `rotRad` (counter-clockwise on screen) about `pivot`. `capPx` is the text height.
+void DrawStrokeBlock(ImDrawList* dl, Shx::Font& font, float left, float firstBaselineY, float pitchPx, ImVec2 pivot, float rotRad,
+                     float capPx, ImU32 col, const std::string& text) {
+  const float cr = std::cos(rotRad), sr = std::sin(rotRad), thick = std::max(1.f, capPx * 0.07f);
+  size_t from = 0;
+  for (int i = 0;; ++i) {
+    const size_t nl = text.find('\n', from);
+    const std::string line = text.substr(from, nl == std::string::npos ? std::string::npos : nl - from);
+    const float dx = left - pivot.x, dy = firstBaselineY + static_cast<float>(i) * pitchPx - pivot.y;
+    Shx::DrawText(dl, font, ImVec2(pivot.x + dx * cr - dy * sr, pivot.y + dx * sr + dy * cr), capPx, rotRad, col, line, thick);
+    if (nl == std::string::npos)
+      break;
+    from = nl + 1;
+  }
+}
+
+// A note's text with its top-left at `topLeft`: SHX strokes when its font is a stroke font, else the TrueType font.
+void DrawNoteText(ImDrawList* dl, const Annot& a, ImVec2 topLeft, float k, ImU32 col) {
+  if (Shx::Font* sf = StrokeFontFor(a.font, a.text)) {
+    const float capPx = a.fontSize * k;
+    DrawStrokeBlock(dl, *sf, topLeft.x, topLeft.y + capPx, capPx * kStrokeLineSpacing, topLeft, 0.f, capPx, col, a.text);
+    return;
+  }
+  dl->AddText(FontForNote(a), a.fontSize * k, topLeft, col, a.text.c_str());
+}
+
+// The size of a dimension label on screen: the stroke font's own width, else the interface font's.
+ImVec2 LabelSizePx(const Annot& a, const std::string& label, float fsPx) {
+  if (Shx::Font* sf = StrokeFontFor(a.font, label)) {
+    float w = 0.f;
+    int lines = 1;
+    size_t from = 0;
+    while (true) {
+      const size_t nl = label.find('\n', from);
+      w = std::max(w, Shx::MeasureWidthPx(*sf, label.substr(from, nl == std::string::npos ? std::string::npos : nl - from), fsPx));
+      if (nl == std::string::npos)
+        break;
+      ++lines;
+      from = nl + 1;
+    }
+    return ImVec2(w, fsPx + static_cast<float>(lines - 1) * fsPx * kStrokeLineSpacing);
+  }
+  return ImGui::GetFont()->CalcTextSizeA(fsPx, 1e9f, 0.f, label.c_str());
 }
 
 // Draw an annotation over its page. `tl` is the page's top-left on screen, `k` the screen pixels per point.
@@ -581,7 +671,7 @@ void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bo
       const auto [ax, ay] = DimensionLabelAnchor(a);
       const float fsPx = std::max(4.f, a.fontSize) * k;
       ImFont* font = ImGui::GetFont();
-      const ImVec2 ts = font->CalcTextSizeA(fsPx, 1e9f, 0.f, label.c_str());
+      const ImVec2 ts = LabelSizePx(a, label, fsPx);
       const ImVec2 c = S(ax, ay);
       const float rad = -DimensionLabelAngleDeg(a) * 3.14159265f / 180.f, cs = std::cos(rad), sn = std::sin(rad); // screen y is down
       const auto rot = [&](ImVec2 p) { return ImVec2(c.x + (p.x - c.x) * cs - (p.y - c.y) * sn, c.y + (p.x - c.x) * sn + (p.y - c.y) * cs); };
@@ -589,10 +679,14 @@ void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bo
       const ImVec2 q[4] = {rot(ImVec2(p0.x - 3.f, p0.y - 1.f)), rot(ImVec2(p0.x + ts.x + 3.f, p0.y - 1.f)),
                            rot(ImVec2(p0.x + ts.x + 3.f, p0.y + ts.y + 1.f)), rot(ImVec2(p0.x - 3.f, p0.y + ts.y + 1.f))};
       dl->AddConvexPolyFilled(q, 4, IM_COL32(255, 255, 255, 215));
-      const int v0 = dl->VtxBuffer.Size;
-      dl->AddText(font, fsPx, p0, col, label.c_str());
-      for (int i = v0; i < dl->VtxBuffer.Size; ++i) // turn the text's quads about the label's centre
-        dl->VtxBuffer[i].pos = rot(dl->VtxBuffer[i].pos);
+      if (Shx::Font* sf = StrokeFontFor(a.font, label)) {
+        DrawStrokeBlock(dl, *sf, p0.x, p0.y + fsPx, fsPx * kStrokeLineSpacing, c, rad, fsPx, col, label);
+      } else {
+        const int v0 = dl->VtxBuffer.Size;
+        dl->AddText(font, fsPx, p0, col, label.c_str());
+        for (int i = v0; i < dl->VtxBuffer.Size; ++i) // turn the text's quads about the label's centre
+          dl->VtxBuffer[i].pos = rot(dl->VtxBuffer[i].pos);
+      }
       break;
     }
     std::vector<ImVec2> sp;
@@ -612,11 +706,14 @@ void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bo
       const auto [ax, ay] = DimensionLabelAnchor(a);
       const float fsPx = std::max(4.f, a.fontSize) * k;
       ImFont* font = ImGui::GetFont();
-      const ImVec2 ts = font->CalcTextSizeA(fsPx, 1e9f, 0.f, label.c_str());
+      const ImVec2 ts = LabelSizePx(a, label, fsPx);
       const ImVec2 c = S(ax, ay);
       const ImVec2 p0(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f);
       dl->AddRectFilled(ImVec2(p0.x - 3.f, p0.y - 1.f), ImVec2(p0.x + ts.x + 3.f, p0.y + ts.y + 1.f), IM_COL32(255, 255, 255, 215));
-      dl->AddText(font, fsPx, p0, col, label.c_str());
+      if (Shx::Font* sf = StrokeFontFor(a.font, label))
+        DrawStrokeBlock(dl, *sf, p0.x, p0.y + fsPx, fsPx * kStrokeLineSpacing, c, 0.f, fsPx, col, label);
+      else
+        dl->AddText(font, fsPx, p0, col, label.c_str());
     }
     break;
   }
@@ -636,8 +733,17 @@ void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bo
     break;
   }
   case Annot::Kind::Text:
-    dl->AddText(FontForNote(a), a.fontSize * k, S(l, t), col, a.text.c_str());
+    DrawNoteText(dl, a, S(l, t), k, col);
     break;
+  case Annot::Kind::Leader: {
+    const float bl = std::min(a.x0, a.x1), br = std::max(a.x0, a.x1), bb = std::min(a.y0, a.y1), bt = std::max(a.y0, a.y1);
+    const LeaderGeom g = LeaderLine(a);
+    dl->AddRect(S(bl, bt), S(br, bb), col, 0.f, 0, th);
+    dl->AddLine(S(g.sx, g.sy), S(g.tx, g.ty), col, th);
+    dl->AddTriangleFilled(S(g.tx, g.ty), S(g.w1x, g.w1y), S(g.w2x, g.w2y), col);
+    DrawNoteText(dl, a, S(bl + kLeaderPad, bt - kLeaderPad), k, col);
+    break;
+  }
   }
   if (selected) {
     const float pad = 3.f;
@@ -669,6 +775,12 @@ struct Viewer {
   bool focusNext = false;
   bool osFramed = true;    ///< floating in its own OS window: the OS draws the title bar, so ImGui draws none
   void* framedHwnd = nullptr;  ///< the OS window whose frame colours were last set
+  int framedFrames = 0;        ///< frames the viewer has had its own OS window, counted through the opening maximize steps
+  int syncBad = 0;             ///< consecutive frames ImGui's idea of the window differed from the OS's
+  int syncLogged = 0;
+  bool syncApply = false;      ///< next frame, put ImGui's window where the OS window really is
+  ImVec2 syncPos{0.f, 0.f}, syncSize{0.f, 0.f};
+  bool maximized = false;     ///< the window has been maximized once, on opening (REQ-397); after that it is the user's
   bool placed = false; ///< first-frame position given; after that the user (or the saved layout) owns it
   std::future<PdfDocument::OpenResult> opening;
   bool loaded = false;
@@ -1919,12 +2031,14 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   toolButton("Line", Tool::Line);
   toolButton("Rectangle", Tool::Rect);
   toolButton("Ellipse", Tool::Ellipse);
+  toolButton("Leader", Tool::Leader);
 
   bool changed = false;
   changed |= ImGui::ColorEdit3("##annotcol", u.color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
   ImGui::SameLine();
   const Annot* sel = u.selected >= 0 ? &items[static_cast<size_t>(u.selected)] : nullptr;
-  const bool textStyle = u.tool == Tool::Text || (sel != nullptr && sel->kind == Annot::Kind::Text);
+  const bool leaderStyle = u.tool == Tool::Leader || (sel != nullptr && sel->kind == Annot::Kind::Leader);
+  const bool textStyle = u.tool == Tool::Text || leaderStyle || (sel != nullptr && sel->kind == Annot::Kind::Text);
   if (textStyle) {
     ImGui::SetNextItemWidth(130.f);
     const auto& fonts = FontChoices();
@@ -1944,12 +2058,15 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(70.f);
     changed |= ImGui::DragFloat("##annotsize", &u.fontSize, 0.25f, 4.f, 200.f, "%.0f pt");
-  } else {
+  }
+  if (!textStyle || leaderStyle) { // a Leader has both: its text and the thickness of its box and arrow
+    if (leaderStyle)
+      ImGui::SameLine();
     ImGui::SetNextItemWidth(110.f);
     changed |= ImGui::SliderFloat("##annotw", &u.thickness, 0.5f, 20.f, "%.1f pt");
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("Line thickness");
-    if (u.tool != Tool::Line && !IsMeasureTool(u.tool) &&
+    if (!leaderStyle && u.tool != Tool::Line && !IsMeasureTool(u.tool) &&
         (sel == nullptr || (sel->kind != Annot::Kind::Line && !sel->IsDimension()))) {
       ImGui::SameLine();
       changed |= ImGui::Checkbox("Fill", &u.fill);
@@ -2104,6 +2221,24 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
       }
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Label size");
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(130.f);
+      const auto& fonts = FontChoices();
+      u.fontIdx = std::clamp(u.fontIdx, 0, static_cast<int>(fonts.size()) - 1);
+      if (ImGui::BeginCombo("##dimfont", fonts[static_cast<size_t>(u.fontIdx)].family.c_str())) {
+        for (size_t i = 0; i < fonts.size(); ++i)
+          if (ImGui::Selectable(fonts[i].family.c_str(), static_cast<int>(i) == u.fontIdx)) {
+            u.fontIdx = static_cast<int>(i);
+            if (ds != nullptr && ds->IsDimension()) {
+              Annot a = *ds;
+              ApplyStyle(u, a);
+              u.session.Replace(u.selected, a);
+            }
+          }
+        ImGui::EndCombo();
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Label font");
     }
   }
   ImGui::PopStyleVar(3);
@@ -2133,10 +2268,12 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
         u.session.Replace(u.textEdit, a);
       } else {
         Annot a;
-        a.kind = Annot::Kind::Text;
+        a.kind = u.textIsLeader ? Annot::Kind::Leader : Annot::Kind::Text;
         a.page = u.textPage;
-        a.x0 = u.textX;
-        a.y1 = u.textY;
+        a.x0 = a.x1 = u.textX; // the box's top-left corner is the clicked point; FitTextBox sizes it from there
+        a.y0 = a.y1 = u.textY;
+        if (u.textIsLeader)
+          a.pts = {u.leaderTip};
         a.text = u.textBuf;
         ApplyStyle(u, a);
         u.session.Add(a);
@@ -2376,7 +2513,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
         } else {
           SelectAnnot(u, hit);
           const Annot& a = items[static_cast<size_t>(hit)];
-          if (a.kind == Annot::Kind::Text && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+          if ((a.kind == Annot::Kind::Text || a.kind == Annot::Kind::Leader) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             std::snprintf(u.textBuf, sizeof(u.textBuf), "%s", a.text.c_str());
             u.textEdit = hit;
             u.textPopup = true;
@@ -2483,6 +2620,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
       } else if (u.tool == Tool::Text) {
         u.textBuf[0] = 0;
         u.textEdit = -1;
+        u.textIsLeader = false;
         u.textPage = r.page;
         u.textX = x;
         u.textY = y;
@@ -2491,12 +2629,21 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
         float cx, cy;
         toPt(r, cx, cy, true, true);
         Annot a;
-        a.kind = u.tool == Tool::Line ? Annot::Kind::Line : u.tool == Tool::Rect ? Annot::Kind::Rect : Annot::Kind::Ellipse;
+        a.kind = u.tool == Tool::Line     ? Annot::Kind::Line
+                 : u.tool == Tool::Rect   ? Annot::Kind::Rect
+                 : u.tool == Tool::Leader ? Annot::Kind::Leader
+                                          : Annot::Kind::Ellipse;
         a.page = r.page;
         a.x0 = a.x1 = cx;
         a.y0 = a.y1 = cy;
+        if (a.kind == Annot::Kind::Leader) { // the first point is the arrow tip; the box follows the pointer
+          a.pts = {{cx, cy}};
+          a.text = "Note";
+        }
         ApplyStyle(u, a);
         u.drag = AnnotUi::Drag::Create;
+        u.createSticky = false;
+        u.pressMouse = io.MousePos;
         u.dragPage = r.page;
         u.original = u.preview = a;
       }
@@ -2509,6 +2656,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
   const PageRect* r = rectOf(u.dragPage);
   if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
     u.drag = AnnotUi::Drag::None;
+    u.createSticky = false;
     return;
   }
   // A click is not a drag: nothing moves (and nothing snaps) until the pointer has travelled a few pixels, so
@@ -2518,7 +2666,11 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
   if (r != nullptr && (u.dragMoved || u.drag == AnnotUi::Drag::Create)) {
     float x, y;
     toPt(*r, x, y, u.drag != AnnotUi::Drag::Move, u.drag != AnnotUi::Drag::Move);
-    if (u.drag == AnnotUi::Drag::Create) {
+    if (u.drag == AnnotUi::Drag::Create && u.preview.kind == Annot::Kind::Leader) {
+      u.preview.x0 = u.preview.x1 = x; // the box's top-left follows the pointer; FitTextBox sizes it
+      u.preview.y0 = u.preview.y1 = y;
+      FitTextBox(u.preview);
+    } else if (u.drag == AnnotUi::Drag::Create) {
       u.preview.x1 = x;
       u.preview.y1 = y;
     } else if (u.drag == AnnotUi::Drag::Handle) {
@@ -2537,10 +2689,45 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
       }
     }
   }
+  // A shape is made by press-drag-release, or by click, move, click: a release that has not travelled leaves the
+  // shape waiting (with its preview following the pointer) for the second click.
+  const auto finishCreate = [&] {
+    const Annot& p = u.preview;
+    const bool leader = p.kind == Annot::Kind::Leader && !p.pts.empty();
+    const float dx = leader ? p.x0 - p.pts[0].first : p.x1 - p.x0, dy = leader ? p.y1 - p.pts[0].second : p.y1 - p.y0;
+    if (std::hypot(dx, dy) * k < 4.f)
+      return; // both clicks on the same spot: nothing to make
+    if (leader) { // the text is typed next, in the note dialog
+      u.textBuf[0] = 0;
+      u.textEdit = -1;
+      u.textIsLeader = true;
+      u.leaderTip = p.pts[0];
+      u.textPage = p.page;
+      u.textX = p.x0;
+      u.textY = p.y1;
+      u.textPopup = true;
+    } else {
+      u.session.Add(p);
+    }
+  };
+  if (u.drag == AnnotUi::Drag::Create && u.createSticky) {
+    if (!(u.tool == Tool::Line || u.tool == Tool::Rect || u.tool == Tool::Ellipse || u.tool == Tool::Leader)) {
+      u.drag = AnnotUi::Drag::None; // another tool was chosen while waiting for the second click
+      u.createSticky = false;
+    } else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive()) {
+      finishCreate();
+      u.drag = AnnotUi::Drag::None;
+      u.createSticky = false;
+    }
+    return;
+  }
   if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
     if (u.drag == AnnotUi::Drag::Create) {
-      if (std::hypot(u.preview.x1 - u.preview.x0, u.preview.y1 - u.preview.y0) * k >= 4.f)
-        u.session.Add(u.preview);
+      if (std::hypot(io.MousePos.x - u.pressMouse.x, io.MousePos.y - u.pressMouse.y) < 4.f) {
+        u.createSticky = true; // a click, not a drag: wait for the second click
+        return;
+      }
+      finishCreate();
     } else if (u.dragMoved && u.selected >= 0 && u.preview != u.original) {
       u.session.Replace(u.selected, u.preview);
     }
@@ -2984,6 +3171,11 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
       ImGui::SetNextWindowPos(ImVec2(host->WorkPos.x + 80.f + off, host->WorkPos.y + 60.f + off), ImGuiCond_Always);
       v.placed = true;
     }
+    if (v.syncApply) { // ImGui's window was out of step with the OS window: take the OS's position and size
+      ImGui::SetNextWindowPos(v.syncPos, ImGuiCond_Always);
+      ImGui::SetNextWindowSize(v.syncSize, ImGuiCond_Always);
+      v.syncApply = false;
+    }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
     // In its own OS window the operating system draws the title bar and the close button, so ImGui draws no
     // second one. Docked, the tab is the only handle there is, so it comes back. To dock a floating viewer,
@@ -2998,6 +3190,46 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
       if (v.osFramed && self->Viewport->PlatformHandleRaw != nullptr && self->Viewport->PlatformHandleRaw != v.framedHwnd) {
         ApplyOsFrameColors(self->Viewport->PlatformHandleRaw, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
         v.framedHwnd = self->Viewport->PlatformHandleRaw;
+      }
+      // REQ-397: a new viewer opens maximized. A window maximized only once, straight after ImGui created it, was
+      // left with the mouse offset from the buttons (a screenshot showed the pointer over Line with "<" lit) until
+      // the user moved it and maximized it again. So do what the user did: maximize, restore, maximize again,
+      // a few frames apart, each time making ImGui re-read the window's position and size from the OS.
+      if (!v.maximized && v.osFramed && v.framedHwnd != nullptr) {
+        const int step = ++v.framedFrames;
+        const int cmd = step == 4 ? SW_MAXIMIZE : step == 7 ? SW_RESTORE : step == 10 ? SW_MAXIMIZE : -1;
+        if (cmd >= 0) {
+          ShowWindow(static_cast<HWND>(v.framedHwnd), cmd);
+          self->Viewport->PlatformRequestMove = true;
+          self->Viewport->PlatformRequestResize = true;
+        }
+        if (step >= 10)
+          v.maximized = true;
+      }
+      // Self-check (REQ-397): ImGui must think the window is exactly where the OS has it, or the mouse lands on
+      // the wrong button (seen after the opening maximize). If the two stay apart for a few frames, say so in the
+      // log and set ImGui's window to the OS's position and size.
+      if (v.osFramed && v.framedHwnd != nullptr && !IsIconic(static_cast<HWND>(v.framedHwnd))) {
+        POINT origin{0, 0};
+        RECT client{};
+        ClientToScreen(static_cast<HWND>(v.framedHwnd), &origin);
+        GetClientRect(static_cast<HWND>(v.framedHwnd), &client);
+        const ImVec2 vp = self->Viewport->Pos, vs = self->Viewport->Size;
+        const bool apart = std::fabs(vp.x - static_cast<float>(origin.x)) > 1.5f || std::fabs(vp.y - static_cast<float>(origin.y)) > 1.5f ||
+                           std::fabs(vs.x - static_cast<float>(client.right)) > 1.5f || std::fabs(vs.y - static_cast<float>(client.bottom)) > 1.5f;
+        v.syncBad = apart && !ImGui::IsMouseDown(ImGuiMouseButton_Left) ? v.syncBad + 1 : 0;
+        if (v.syncBad >= 3 && !v.syncApply) {
+          v.syncPos = ImVec2(static_cast<float>(origin.x), static_cast<float>(origin.y));
+          v.syncSize = ImVec2(static_cast<float>(client.right), static_cast<float>(client.bottom));
+          v.syncApply = true;
+          v.syncBad = 0;
+          if (v.syncLogged++ < 5) {
+            char msg[200];
+            std::snprintf(msg, sizeof(msg), "PDF viewer: window out of step (ImGui %.0f,%.0f %.0fx%.0f; OS %ld,%ld %ldx%ld) - corrected.",
+                          vp.x, vp.y, vs.x, vs.y, origin.x, origin.y, client.right, client.bottom);
+            log.push_back(msg);
+          }
+        }
       }
 #endif
     }

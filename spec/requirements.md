@@ -11913,6 +11913,78 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-h).
 
+### REQ-396 — PDF Leader tool, and the drawing tools work by click-click as well as drag (GitHub issue #732, annotation fixes)
+
+- Purpose: while testing REQ-388 the user found that **Text** did not land where they clicked, that **Line** did
+  not draw after two clicks and showed no preview after the first click, and asked for a **Leader**: an arrow
+  pointing at something, with a boxed note at its tail.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-j.
+- Depends on: REQ-388.
+- Statement:
+  1. **Text lands where clicked.** A new text note's top-left corner is the clicked point (or the snapped
+     point, when Snap is on and one is near); it is never placed at the page's left edge.
+  2. **Click-click drawing.** Line, Rectangle and Ellipse can be drawn two ways: **press, drag, release**, or
+     **click, move, click**. After the first click a preview follows the pointer; the second click finishes the
+     shape. Esc cancels. A click-click shape with both clicks on the same spot is not created.
+  3. **Leader tool.** Click 1 is the **arrow tip** (the thing pointed at), click 2 is where the **boxed note**
+     goes; the note text is then typed in the same dialog as a Text note (colour, line thickness, font and size
+     as for Text and Line). A preview (arrow and an empty box) follows the pointer after click 1. The line runs
+     from the box edge nearest the tip to the tip, which carries an arrowhead.
+  4. **Select / move / resize / delete / undo / redo** work on a Leader like on other marks: its grips are the tip
+     and the box's corner (which scales the text, as for a note); double-click edits its text.
+  5. **Stored as a standard PDF FreeText annotation of intent FreeTextCallout** (`/IT /FreeTextCallout`, `/CL`
+     callout line, `/LE /OpenArrow`), with an appearance showing the box, the text and the arrow, so any other
+     reader shows it. Same placeholder-then-patch route as Text and Line (D-2026-10-06-e); a failed patch fails
+     the Save As with a stated reason and writes nothing.
+  6. **Out of scope:** multi-segment (elbow) leaders, leaders with no text, other arrowhead styles.
+- Acceptance:
+  - `[issue732][req396]` test: a Leader saved and re-read has the same tip, box, text, colour and font.
+  - `[issue732][req396]` test: the saved annotation is a FreeText with `/IT /FreeTextCallout` and a `/CL` whose
+    first point is the tip.
+  - `[issue732][req396]` test: a text note whose box starts at (x, y) is stored within a point or two of that
+    corner (the stored rectangle is the text's own bounds), never at the page's left edge.
+  - Manual: Text lands at the click; a Line draws by two clicks, with a preview after the first; the Leader
+    tool draws an arrow with a boxed note and the saved PDF shows it in a second reader.
+- Owner-layer: Domain/IO (`src/pdf/`), UI
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-j; the user asked for the fixes and the Leader tool).
+
+### REQ-397 — PDF viewer defaults: opens maximized; Arial is the default font; romans.shx available (GitHub issue #732)
+
+- Purpose: the user asked that a PDF opens as large as the screen allows, and that every piece of text the viewer
+  adds (notes, leaders, dimension labels) uses Arial unless told otherwise (romans.shx stays available).
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-k.
+- Depends on: REQ-387, REQ-388, REQ-391, REQ-396.
+- Statement:
+  1. **Opens maximized.** A PDF viewer window that opens as its own window is **maximized** the first time it
+     appears. After that the window belongs to the user (resize, restore, dock). A viewer that opens docked is
+     unchanged.
+  2. **Arial is the default and the first entry of the font list** for Text, Leader and the dimension labels
+     (Length, Polylength, Area, Angle); romans.shx stays in the list for the user to pick. The font list on the
+     dimension row lets the label font be changed too. If Arial is not installed, the first entry is the default
+     (romans.shx, else Helvetica). *(The user first asked for romans.shx, then changed it to Arial the same day.)*
+  3. **A PDF cannot embed an SHX font**, so text in an SHX font is written as **stroked line paths** (the way the
+     plot-to-PDF already writes SHX text), in the annotation's appearance, with the text itself kept in the
+     annotation's contents. It looks the same in every reader; it is not selectable text there. The text height is
+     the font size (cap height); lines are 1.5 text heights apart; the on-screen drawing and the saved file use the
+     same strokes and the same measured width.
+  4. **Degree sign:** SHX fonts have no degree glyph, so a label containing one (an angle dimension) is set in a
+     standard font instead (as the plot does).
+- Acceptance:
+  - `[issue732][req397]` test: `MeasureText` for romans.shx is exact (two letters = twice one; two lines = twice the
+    height; a degree sign is refused for stroke drawing).
+  - `[issue732][req397]` test: a note in romans.shx saved and re-read keeps the font name and text, and the saved
+    page shows its strokes inside the note's box.
+  - Manual: a new PDF window opens maximized with the mouse lined up with the buttons from the first frame; new
+    Text, Leader and dimension labels appear in Arial; picking romans.shx draws them in that font.
+- Owner-layer: Domain/IO (`src/pdf/`), UI
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-k; the user asked for both).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

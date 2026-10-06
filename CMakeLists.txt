@@ -1344,6 +1344,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PdfViewerTests.cpp
     tests/PdfSplitTests.cpp
     tests/PdfAnnotateTests.cpp
+    tests/PdfLeaderTests.cpp
     tests/PdfMeasureTests.cpp
     tests/PdfDimensionTests.cpp
     tests/PdfSnapTests.cpp
@@ -1352,6 +1353,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/pdf/PdfDocument.cpp
     src/pdf/PdfSplit.cpp
     src/pdf/PdfAnnotate.cpp
+    src/font/ShxFont.cpp
     src/pdf/PdfRaw.cpp
     src/pdf/PdfMeasure.cpp
     src/pdf/PdfSnap.cpp
