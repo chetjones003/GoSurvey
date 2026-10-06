@@ -466,7 +466,7 @@ void StageFilters(ImGuiTestContext* ctx)
   ChkIds("a new drawing with no rules shows every project point", ViewIds(), allIds);
 
   s_cmd->showToolspaceWindow = true;
-  s_cmd->toolspaceTab = AppCommandState::ToolspaceTab::Prospector;
+  s_cmd->toolspaceTab = AppCommandState::ToolspaceTab::Project;  // the project's sections live on the Project tab
   Frames(ctx, 4);
   const ImGuiTestItemInfo ts = ctx->WindowInfo("//TOOLSPACE", ImGuiTestOpFlags_NoError);
   Chk(ts.Window != nullptr, "TOOLSPACE window exists");
