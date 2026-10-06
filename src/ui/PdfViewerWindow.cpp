@@ -225,7 +225,7 @@ struct BenchRun {
 // a page never re-renders it; only "Save As" writes them into a new PDF.
 // ---------------------------------------------------------------------------------------------------
 
-enum class Tool { Select, Text, Line, Rect, Ellipse, Calibrate, Length, PolyLength, Area, Angle };
+enum class Tool { Select, Text, Line, Rect, Ellipse, Calibrate, Length, PolyLength, Area, Angle, Check };
 
 bool IsMeasureTool(Tool t) { return t == Tool::Length || t == Tool::PolyLength || t == Tool::Area || t == Tool::Angle; }
 
@@ -272,6 +272,23 @@ struct AnnotUi {
   int snapPage = 0;
   float snapX = 0.f, snapY = 0.f;      ///< ... and this is it, in page points
   float measureOffset = 0.f;           ///< the Length being made: where its dimension line goes
+
+  // REQ-394: checking the scale against dimensions the drawing states.
+  CheckLimits limits;                  ///< Good / Check / Blunder limits (settings of this viewer)
+  RobustParams robustParams;           ///< robust calibration settings
+  std::vector<std::pair<float, float>> checkPts; ///< the Check tool's picked points (0..2)
+  int checkPage = 0;
+  int checkTarget = 0;                 ///< 0: a check on the page's scale; 1: a dimension for the robust calibration
+  bool checkPopup = false;             ///< both points picked: ask for the stated value
+  char checkText[96] = "";
+  bool checksDialog = false;           ///< open the Scale checks dialog on the next frame
+  int checksTab = 0;                   ///< 0 checks, 1 robust calibration
+  int correctionMode = 0;              ///< 0 match a check, 1 best fit, 2 best fit without the outlier, 3 typed %, 4 leave
+  int matchIdx = 0;                    ///< which check "match this check" uses (index into the page's checks)
+  double typedPct = 0.0;
+  int selectedCheck = -1;              ///< highlighted row (index into the session's checks)
+  std::vector<std::pair<ScaleCheck, bool>> robustPicks; ///< robust calibration: the dimensions, and whether each is used
+  std::string checkMessage;
   Tool tool = Tool::Select;
   float color[3] = {0.85f, 0.10f, 0.10f};
   float thickness = 2.f;
@@ -1104,7 +1121,7 @@ void DrawScopeChooser(Viewer& v) {
 }
 
 // Applies \p scale to the chosen pages as one undo step. A scale that is not valid clears them.
-bool ApplyScaleToScope(Viewer& v, const PageScale& scale, std::vector<std::string>& log) {
+bool ApplyScaleToScope(Viewer& v, const PageScale& scale, std::vector<std::string>& log, const ScaleCheck* calibration = nullptr) {
   AnnotUi& u = v.ann;
   std::vector<int> pages;
   if (!ScopePages(v, pages, u.scaleError))
@@ -1112,7 +1129,7 @@ bool ApplyScaleToScope(Viewer& v, const PageScale& scale, std::vector<std::strin
   std::map<int, PageScale> change;
   for (int p : pages)
     change[p] = scale;
-  u.session.SetScales(change);
+  u.session.SetScales(change, calibration); // a calibration counts as the first scale check (REQ-394)
   u.scaleError.clear();
   log.push_back(scale.Valid() ? "PDF scale: " + scale.RatioText() + " set on " + std::to_string(pages.size()) + " page(s) of " + v.title
                               : "PDF scale: cleared on " + std::to_string(pages.size()) + " page(s) of " + v.title);
@@ -1204,7 +1221,7 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
     }
     ImGui::SameLine();
     if (ImGui::Button("Clear scale")) {
-      if (ApplyScaleToScope(v, PageScale{0.0, Unit::Inch, 0.0, Unit::Foot, ""}, log))
+      if (ApplyScaleToScope(v, PageScale{0.0, Unit::Inch, 0.0, Unit::Foot, "", "", 0.0}, log))
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -1246,6 +1263,16 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
     DrawScopeChooser(v);
     if (!u.scaleError.empty())
       ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", u.scaleError.c_str());
+    // The calibration itself is the first scale check: the picked distance against the distance the user typed.
+    ScaleCheck calCheck;
+    calCheck.page = u.calPage;
+    calCheck.x0 = u.calX[0];
+    calCheck.y0 = u.calY[0];
+    calCheck.x1 = u.calX[1];
+    calCheck.y1 = u.calY[1];
+    calCheck.stated = u.calReal;
+    calCheck.unit = units[static_cast<size_t>(u.calUnit)];
+    calCheck.calibration = true;
     // Drawings are almost always plotted at a standard scale: when this calibration is within 1 % of one, say so,
     // and offer it (a short span picked by eye can be a fraction of a percent out, and a long dimension then reads wrong).
     const PageScale calibrated = ScaleFromCalibration(pts, u.calReal, units[static_cast<size_t>(u.calUnit)]);
@@ -1262,7 +1289,7 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
     if (nearest != nullptr && nearDiff < 0.01) {
       ImGui::Text("Closest standard scale: %s (%.2f %% different).", nearest->label.c_str(), nearDiff * 100.0);
       if (ImGui::Button("Use the standard scale")) {
-        if (ApplyScaleToScope(v, *nearest, log)) {
+        if (ApplyScaleToScope(v, *nearest, log, &calCheck)) {
           u.status = "Scale set: " + nearest->RatioText();
           u.calCount = 0;
           ImGui::CloseCurrentPopup();
@@ -1270,13 +1297,20 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
       }
       ImGui::SameLine();
     }
-    if (ImGui::Button("Set scale")) {
+    bool checkNext = false;
+    if (ImGui::Button("Set scale") || (checkNext = ImGui::Button("Set scale and check..."))) {
       const PageScale s = calibrated;
       if (!s.Valid())
         u.scaleError = "the distance must be bigger than zero, and the two points must be apart";
-      else if (ApplyScaleToScope(v, s, log)) {
+      else if (ApplyScaleToScope(v, s, log, &calCheck)) {
         u.status = "Scale set: " + s.RatioText();
         u.calCount = 0;
+        if (checkNext) { // test it against another dimension the drawing states (REQ-394 clause 5)
+          u.tool = Tool::Check;
+          u.checkTarget = 0;
+          u.checkPts.clear();
+          u.status = "Scale set. Click the two ends of another dimension to check it.";
+        }
         ImGui::CloseCurrentPopup();
       }
     }
@@ -1287,6 +1321,409 @@ void DrawScaleDialogs(Viewer& v, std::vector<std::string>& log) {
     }
     ImGui::EndPopup();
   }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// REQ-394: checking the scale against dimensions the drawing already states
+// ---------------------------------------------------------------------------------------------------
+
+ImVec4 VerdictColor(Verdict v) {
+  return v == Verdict::Good ? ImVec4(0.35f, 0.85f, 0.45f, 1.f) : v == Verdict::Check ? ImVec4(0.96f, 0.69f, 0.16f, 1.f)
+                                                                                      : ImVec4(0.95f, 0.30f, 0.26f, 1.f);
+}
+
+std::string Signed(double v, int decimals) { return (v >= 0.0 ? "+" : "-") + FormatValue(std::fabs(v), decimals); }
+
+// Two picked points and the typed text -> a check. False with the reason when the text cannot be read.
+bool MakeCheck(const AnnotUi& u, const PageScale* scale, ScaleCheck& out, std::string& why) {
+  ParsedLength p;
+  if (!ParseLength(u.checkText, p, why))
+    return false;
+  out = ScaleCheck{};
+  out.page = u.checkPage;
+  out.x0 = u.checkPts[0].first;
+  out.y0 = u.checkPts[0].second;
+  out.x1 = u.checkPts[1].first;
+  out.y1 = u.checkPts[1].second;
+  out.stated = p.value;
+  out.unit = p.hasUnit ? p.unit : (scale != nullptr ? scale->realUnit : Unit::Foot);
+  return true;
+}
+
+// The page's checks as indexes into the session's list.
+std::vector<int> PageChecks(const AnnotUi& u, int page) {
+  std::vector<int> idx;
+  for (size_t i = 0; i < u.session.Checks().size(); ++i)
+    if (u.session.Checks()[i].page == page)
+      idx.push_back(static_cast<int>(i));
+  return idx;
+}
+
+double MetresPerPt(const PageScale& s) { return s.RealPerPoint() * UnitInMetres(s.realUnit); }
+
+// The "Check a dimension" popup that follows the Check tool's two clicks.
+void DrawCheckPopup(Viewer& v, std::vector<std::string>& log) {
+  AnnotUi& u = v.ann;
+  char id[64];
+  std::snprintf(id, sizeof(id), "Check a dimension###pdfcheck%d", v.id);
+  if (u.checkPopup) {
+    u.checkPopup = false;
+    ImGui::OpenPopup(id);
+  }
+  if (!ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    return;
+  const PageScale* scale = EffectiveScale(v, u.checkPage);
+  const double pts = u.checkPts.size() == 2 ? std::hypot(static_cast<double>(u.checkPts[1].first - u.checkPts[0].first),
+                                                        static_cast<double>(u.checkPts[1].second - u.checkPts[0].second))
+                                            : 0.0;
+  ImGui::Text("The two points are %.3f points (%.4f in) apart on the sheet.", pts, pts / 72.0);
+  ImGui::TextUnformatted("The drawing states:");
+  ImGui::SameLine();
+  if (ImGui::IsWindowAppearing())
+    ImGui::SetKeyboardFocusHere();
+  ImGui::SetNextItemWidth(220.f);
+  ImGui::InputTextWithHint("##checkval", "43'-0 3/4\"   10'6\"   12.5 m   850 mm", u.checkText, sizeof(u.checkText));
+  ScaleCheck made;
+  std::string why;
+  const bool typed = u.checkText[0] != 0;
+  const bool ok = u.checkPts.size() == 2 && MakeCheck(u, scale, made, why);
+  if (typed && !ok)
+    ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", why.c_str());
+  if (ok && u.checkTarget == 0 && scale != nullptr) {
+    const CheckResult r = EvaluateCheck(made, *scale, u.limits);
+    ImGui::TextColored(VerdictColor(r.verdict), "Reads %s %s, the drawing says %s %s: difference %s %s (%s %%) - %s",
+                       FormatValue(r.measured, 4).c_str(), UnitLabel(made.unit), FormatValue(r.stated, 4).c_str(), UnitLabel(made.unit),
+                       Signed(r.diff, 4).c_str(), UnitLabel(made.unit), Signed(r.pct, 2).c_str(), VerdictName(r.verdict));
+  } else if (ok) {
+    ImGui::TextDisabled("Added to the robust calibration list; the fit is shown there.");
+  }
+  ImGui::BeginDisabled(!ok);
+  if (ImGui::Button("OK")) {
+    if (u.checkTarget == 0) {
+      u.session.AddCheck(made);
+      u.status = "Check added.";
+      log.push_back("PDF scale check: " + FormatValue(made.stated, 4) + " " + UnitLabel(made.unit) + " stated on page " +
+                    std::to_string(made.page + 1) + " of " + v.title);
+    } else {
+      u.robustPicks.push_back({made, true});
+      u.checksDialog = true;
+      u.checksTab = 1;
+      u.tool = Tool::Select;
+      u.status.clear();
+    }
+    u.checkPts.clear();
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel")) {
+    u.checkPts.clear();
+    if (u.checkTarget == 1) {
+      u.checksDialog = true;
+      u.checksTab = 1;
+      u.tool = Tool::Select;
+    }
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+}
+
+// The Scale checks dialog: the page's checks with verdicts, the best fit and the correction the user may choose
+// (tab 1), and the opt-in robust calibration (tab 2).
+void DrawChecksDialog(Viewer& v, std::vector<std::string>& log) {
+  AnnotUi& u = v.ann;
+  char id[64];
+  std::snprintf(id, sizeof(id), "Scale checks###pdfchecks%d", v.id);
+  if (u.checksDialog) {
+    u.checksDialog = false;
+    ImGui::OpenPopup(id);
+  }
+  ImGui::SetNextWindowSize(ImVec2(820.f, 0.f), ImGuiCond_Appearing);
+  if (!ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    return;
+  const int page = std::clamp(v.curPage, 0, v.layout.PageCount() - 1);
+  const PageScale* scale = EffectiveScale(v, page);
+  const auto& all = u.session.Checks();
+  const std::vector<int> idx = PageChecks(u, page);
+  int deleteCheck = -1;
+
+  if (ImGui::BeginTabBar("##chktabs")) {
+    // ---- Tab 1: the checks ------------------------------------------------------------------------
+    if (ImGui::BeginTabItem("Checks", nullptr, u.checksTab == 0 ? ImGuiTabItemFlags_SetSelected : 0)) {
+      if (scale == nullptr) {
+        ImGui::TextWrapped("Page %d has no scale yet. Set one (Set scale...), then check it against dimensions the drawing states.", page + 1);
+      } else {
+        ImGui::Text("Page %d: %s%s%s%s", page + 1, scale->RatioText().c_str(), scale->note.empty() ? "" : "  (", scale->note.c_str(),
+                    scale->note.empty() ? "" : ")");
+        ImGui::SetNextItemWidth(90.f);
+        ImGui::InputDouble("Good up to (%)", &u.limits.goodPct, 0.0, 0.0, "%.2f");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90.f);
+        ImGui::InputDouble("Check up to (%)", &u.limits.checkPct, 0.0, 0.0, "%.2f");
+        u.limits.goodPct = std::clamp(u.limits.goodPct, 0.0, 100.0);
+        u.limits.checkPct = std::clamp(u.limits.checkPct, u.limits.goodPct, 100.0);
+        if (idx.empty()) {
+          ImGui::TextDisabled("No checks on this page yet. Use the Check tool: click the two ends of a dimension, then type its printed value.");
+        }
+        std::vector<FitObs> fit;
+        for (int i : idx)
+          fit.push_back({all[static_cast<size_t>(i)].MeasuredPt(), all[static_cast<size_t>(i)].StatedMetres()});
+        const BestFit bf = BestFitScale(fit);
+
+        if (!idx.empty() && ImGui::BeginTable("##checks", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+          for (const char* h : {"#", "Kind", "Drawing says", "Reads", "Difference", "%", "Verdict", "", ""})
+            ImGui::TableSetupColumn(h);
+          ImGui::TableHeadersRow();
+          for (size_t k = 0; k < idx.size(); ++k) {
+            const int i = idx[k];
+            const ScaleCheck& c = all[static_cast<size_t>(i)];
+            const CheckResult r = EvaluateCheck(c, *scale, u.limits);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            char lab[32];
+            std::snprintf(lab, sizeof(lab), "%zu##row%d", k + 1, i);
+            if (ImGui::Selectable(lab, u.selectedCheck == i, ImGuiSelectableFlags_SpanAllColumns))
+              u.selectedCheck = i;
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(c.calibration ? "calibration" : "check");
+            ImGui::TableNextColumn();
+            ImGui::Text("%s %s", FormatValue(r.stated, 4).c_str(), UnitLabel(c.unit));
+            ImGui::TableNextColumn();
+            ImGui::Text("%s %s", FormatValue(r.measured, 4).c_str(), UnitLabel(c.unit));
+            ImGui::TableNextColumn();
+            ImGui::Text("%s %s", Signed(r.diff, 4).c_str(), UnitLabel(c.unit));
+            ImGui::TableNextColumn();
+            ImGui::Text("%s", Signed(r.pct, 2).c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextColored(VerdictColor(r.verdict), "%s", VerdictName(r.verdict));
+            ImGui::TableNextColumn();
+            if (k < bf.outlier.size() && bf.outlier[k])
+              ImGui::TextColored(ImVec4(0.95f, 0.30f, 0.26f, 1.f), "Outlier");
+            ImGui::TableNextColumn();
+            std::snprintf(lab, sizeof(lab), "Delete##del%d", i);
+            if (ImGui::SmallButton(lab))
+              deleteCheck = i;
+          }
+          ImGui::EndTable();
+        }
+
+        if (bf.valid) {
+          PageScale fitted = *scale;
+          fitted.label.clear();
+          fitted.note.clear();
+          fitted.realValue = bf.metresPerPt * 72.0 / UnitInMetres(scale->realUnit);
+          ImGui::Text("Best fit of %zu checks (longer ones count for more): %s", idx.size(), fitted.RatioText().c_str());
+          if (bf.anyOutlier)
+            ImGui::TextColored(ImVec4(0.95f, 0.30f, 0.26f, 1.f),
+                               "One or more checks disagree with the rest (marked Outlier): a wrong pick, a mistyped value or a wrong unit.");
+          else if (idx.size() == 2 && std::fabs(fit[0].metres / fit[0].pts / (fit[1].metres / fit[1].pts) - 1.0) > 0.0025)
+            ImGui::TextColored(VerdictColor(Verdict::Check), "The two checks disagree: add a third to see which one is off.");
+        }
+        ImGui::TextDisabled("A check shows the picked distances agree, not that the drawing is to scale: drawn lines can differ from printed values by a fraction of a percent.");
+
+        // ---- The correction the user may choose ----------------------------------------------------
+        if (!idx.empty()) {
+          ImGui::SeparatorText("Correct the scale (your choice; nothing is changed until you apply)");
+          u.matchIdx = std::clamp(u.matchIdx, 0, static_cast<int>(idx.size()) - 1);
+          ImGui::RadioButton("Match this check", &u.correctionMode, 0);
+          ImGui::SameLine();
+          ImGui::SetNextItemWidth(70.f);
+          if (ImGui::BeginCombo("##matchsel", std::to_string(u.matchIdx + 1).c_str())) {
+            for (size_t k = 0; k < idx.size(); ++k)
+              if (ImGui::Selectable(std::to_string(k + 1).c_str(), static_cast<int>(k) == u.matchIdx))
+                u.matchIdx = static_cast<int>(k);
+            ImGui::EndCombo();
+          }
+          ImGui::BeginDisabled(!bf.valid);
+          ImGui::RadioButton("Best fit", &u.correctionMode, 1);
+          ImGui::EndDisabled();
+          ImGui::BeginDisabled(!bf.withoutValid);
+          ImGui::SameLine();
+          ImGui::RadioButton("Best fit without the outlier", &u.correctionMode, 2);
+          ImGui::EndDisabled();
+          ImGui::RadioButton("A percentage", &u.correctionMode, 3);
+          ImGui::SameLine();
+          ImGui::SetNextItemWidth(90.f);
+          ImGui::InputDouble("##pct", &u.typedPct, 0.0, 0.0, "%+.3f");
+          ImGui::SameLine();
+          ImGui::TextUnformatted("% (+ makes every reading larger)");
+          ImGui::RadioButton("Leave the scale as it is", &u.correctionMode, 4);
+          if ((u.correctionMode == 1 && !bf.valid) || (u.correctionMode == 2 && !bf.withoutValid))
+            u.correctionMode = 0;
+
+          const double cur = MetresPerPt(*scale);
+          double factor = 1.0;
+          if (u.correctionMode == 0)
+            factor = FactorMatching(all[static_cast<size_t>(idx[static_cast<size_t>(u.matchIdx)])], *scale);
+          else if (u.correctionMode == 1 && bf.valid && cur > 0.0)
+            factor = bf.metresPerPt / cur;
+          else if (u.correctionMode == 2 && bf.withoutValid && cur > 0.0)
+            factor = bf.withoutMetresPerPt / cur;
+          else if (u.correctionMode == 3)
+            factor = FactorFromPercent(u.typedPct);
+          std::vector<ScaleCheck> pageChecks;
+          for (int i : idx)
+            pageChecks.push_back(all[static_cast<size_t>(i)]);
+          const std::vector<CheckResult> after = PreviewCorrection(pageChecks, *scale, factor, u.limits);
+          const PageScale next = ApplyFactor(*scale, factor);
+          ImGui::Text("After this correction: %s%s%s%s", next.RatioText().c_str(), next.note.empty() ? "" : "  (", next.note.c_str(),
+                      next.note.empty() ? "" : ")");
+          if (ImGui::BeginTable("##after", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
+            for (const char* h : {"#", "Reads", "Difference", "%", "Verdict"})
+              ImGui::TableSetupColumn(h);
+            ImGui::TableHeadersRow();
+            for (size_t k = 0; k < after.size(); ++k) {
+              const CheckResult& r = after[k];
+              ImGui::TableNextRow();
+              ImGui::TableNextColumn();
+              ImGui::Text("%zu", k + 1);
+              ImGui::TableNextColumn();
+              ImGui::Text("%s %s", FormatValue(r.measured, 4).c_str(), UnitLabel(pageChecks[k].unit));
+              ImGui::TableNextColumn();
+              ImGui::Text("%s %s", Signed(r.diff, 4).c_str(), UnitLabel(pageChecks[k].unit));
+              ImGui::TableNextColumn();
+              ImGui::Text("%s", Signed(r.pct, 2).c_str());
+              ImGui::TableNextColumn();
+              ImGui::TextColored(VerdictColor(r.verdict), "%s", VerdictName(r.verdict));
+            }
+            ImGui::EndTable();
+          }
+          ImGui::TextDisabled("Correcting to one check moves the error onto the others: compare the table above with the one before.");
+          ImGui::BeginDisabled(factor == 1.0 || u.correctionMode == 4);
+          if (ImGui::Button("Apply correction")) {
+            std::map<int, PageScale> change;
+            change[page] = next;
+            u.session.SetScales(change);
+            log.push_back("PDF scale: corrected page " + std::to_string(page + 1) + " of " + v.title + " - " + next.note);
+            u.status = "Scale " + next.note + ".";
+          }
+          ImGui::EndDisabled();
+          ImGui::SameLine();
+        }
+        if (ImGui::Button("Copy report")) {
+          std::vector<ScaleCheck> pageChecks;
+          for (int i : idx)
+            pageChecks.push_back(all[static_cast<size_t>(i)]);
+          const std::string rep = ScaleReport(v.title, page, *scale, pageChecks, u.limits);
+          ImGui::SetClipboardText(rep.c_str());
+          log.push_back(rep);
+          u.status = "Scale report copied.";
+        }
+      }
+      ImGui::EndTabItem();
+    }
+    // ---- Tab 2: robust calibration -----------------------------------------------------------------
+    if (ImGui::BeginTabItem("Robust calibration", nullptr, u.checksTab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) {
+      ImGui::TextWrapped("For a more exact scale: add at least %d dimensions the drawing states. One scale is solved by least squares; "
+                         "long dimensions count for more, because one pick is a small part of them. Nothing changes until you Apply.",
+                         u.robustParams.minDimensions);
+      ImGui::SetNextItemWidth(80.f);
+      ImGui::InputDouble("Pick error (pt)", &u.robustParams.pickPt, 0.0, 0.0, "%.2f");
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(80.f);
+      double drawPct = u.robustParams.drawingFraction * 100.0;
+      if (ImGui::InputDouble("Drawing error (% of length)", &drawPct, 0.0, 0.0, "%.3f"))
+        u.robustParams.drawingFraction = std::max(0.0, drawPct) / 100.0;
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(70.f);
+      ImGui::InputInt("Minimum", &u.robustParams.minDimensions, 0, 0);
+      u.robustParams.pickPt = std::max(0.01, u.robustParams.pickPt);
+      u.robustParams.minDimensions = std::clamp(u.robustParams.minDimensions, 2, 50);
+
+      if (ImGui::Button("Add dimension...")) {
+        u.tool = Tool::Check;
+        u.checkTarget = 1;
+        u.checkPts.clear();
+        u.status = "Robust calibration: click the two ends of a dimension the drawing states.";
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Clear list"))
+        u.robustPicks.clear();
+
+      std::vector<RobustObs> obs;
+      for (const auto& [c, use] : u.robustPicks)
+        obs.push_back({c.MeasuredPt(), c.StatedMetres(), use});
+      const RobustResult res = SolveRobust(obs, u.robustParams);
+      int removeRow = -1;
+      if (!u.robustPicks.empty() && ImGui::BeginTable("##robust", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+        for (const char* h : {"Use", "#", "Drawing says", "Picked (pt)", "Residual", "%", "Std. residual", ""})
+          ImGui::TableSetupColumn(h);
+        ImGui::TableHeadersRow();
+        for (size_t i = 0; i < u.robustPicks.size(); ++i) {
+          auto& [c, use] = u.robustPicks[i];
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn();
+          char lab[32];
+          std::snprintf(lab, sizeof(lab), "##use%zu", i);
+          ImGui::Checkbox(lab, &use);
+          ImGui::TableNextColumn();
+          ImGui::Text("%zu", i + 1);
+          ImGui::TableNextColumn();
+          ImGui::Text("%s %s", FormatValue(c.stated, 4).c_str(), UnitLabel(c.unit));
+          ImGui::TableNextColumn();
+          ImGui::Text("%.3f", c.MeasuredPt());
+          const bool have = res.ok && use && i < res.residualMetres.size();
+          ImGui::TableNextColumn();
+          if (have)
+            ImGui::Text("%s %s", Signed(res.residualMetres[i] / UnitInMetres(c.unit), 4).c_str(), UnitLabel(c.unit));
+          ImGui::TableNextColumn();
+          if (have)
+            ImGui::Text("%s", Signed(res.residualPct[i], 2).c_str());
+          ImGui::TableNextColumn();
+          if (have) {
+            if (res.suspect[i])
+              ImGui::TextColored(VerdictColor(Verdict::Blunder), "%s  Suspect", Signed(res.z[i], 1).c_str());
+            else
+              ImGui::Text("%s", Signed(res.z[i], 1).c_str());
+          }
+          ImGui::TableNextColumn();
+          std::snprintf(lab, sizeof(lab), "Remove##rm%zu", i);
+          if (ImGui::SmallButton(lab))
+            removeRow = static_cast<int>(i);
+        }
+        ImGui::EndTable();
+      }
+      if (removeRow >= 0)
+        u.robustPicks.erase(u.robustPicks.begin() + removeRow);
+
+      if (res.ok) {
+        const Unit unit = scale != nullptr ? scale->realUnit : u.robustPicks.front().first.unit;
+        const PageScale made = ScaleFromRobust(res, unit, scale);
+        ImGui::Text("Adjusted scale: %s +/- %s %%  (%d dimensions; RMS residual %s %s)", made.RatioText().c_str(),
+                    FormatValue(res.relSigma * 100.0, 3).c_str(), res.used, FormatValue(res.rmsMetres / UnitInMetres(unit), 4).c_str(),
+                    UnitLabel(unit));
+        bool anySuspect = false;
+        for (bool s : res.suspect)
+          anySuspect = anySuspect || s;
+        if (anySuspect)
+          ImGui::TextColored(VerdictColor(Verdict::Blunder),
+                             "A dimension is Suspect (a wrong pick or a mistyped value). Untick it to re-solve, or keep it.");
+        if (ImGui::Button("Apply")) {
+          const int rpage = u.robustPicks.empty() ? page : u.robustPicks.front().first.page;
+          std::map<int, PageScale> change;
+          change[rpage] = made;
+          u.session.SetScales(change);
+          log.push_back("PDF scale: robust calibration of page " + std::to_string(rpage + 1) + " of " + v.title + " - " + made.note);
+          u.status = "Scale " + made.note + ".";
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+      } else {
+        ImGui::TextColored(VerdictColor(Verdict::Check), "%s", res.why.c_str());
+      }
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+  u.checksTab = -1;
+  if (deleteCheck >= 0) {
+    u.session.RemoveCheck(deleteCheck);
+    u.selectedCheck = -1;
+  }
+  if (ImGui::Button("Close"))
+    ImGui::CloseCurrentPopup();
+  ImGui::EndPopup();
 }
 
 // The annotation row under the toolbar: tools, style, undo/redo, Save As, and the two small dialogs
@@ -1348,8 +1785,13 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
       u.status.clear();
       if (t != Tool::Select)
         u.selected = -1;
-      if (IsMeasureTool(t))
+      if (IsMeasureTool(t) || t == Tool::Check)
         u.scalesRequested = true; // the page's scale is needed: read what the file has
+      if (t == Tool::Check) {
+        u.checkTarget = 0;
+        u.checkPts.clear();
+        u.status = "Check: click the two ends of a dimension the drawing states.";
+      }
     }
     if (on)
       ImGui::PopStyleColor(2);
@@ -1438,8 +1880,16 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   {
     const PageScale* cur = EffectiveScale(v, v.curPage);
     const auto unusable = u.fileScales.unusable.find(v.curPage);
-    if (cur != nullptr)
-      ImGui::Text("Scale: %s", cur->RatioText().c_str());
+    if (cur != nullptr) {
+      ImGui::Text("Scale: %s%s%s%s", cur->RatioText().c_str(), cur->note.empty() ? "" : " (", cur->note.c_str(), cur->note.empty() ? "" : ")");
+      ImGui::SameLine();
+      char lab[48];
+      std::snprintf(lab, sizeof(lab), "Checks (%zu)", PageChecks(u, v.curPage).size());
+      if (ImGui::SmallButton(lab)) {
+        u.checksDialog = true;
+        u.checksTab = 0;
+      }
+    }
     else if (!u.scalesRead && u.scalesRequested)
       ImGui::TextDisabled("Scale: reading...");
     else if (unusable != u.fileScales.unusable.end())
@@ -1458,6 +1908,7 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   toolButton("Polylength", Tool::PolyLength);
   toolButton("Area", Tool::Area);
   toolButton("Angle", Tool::Angle);
+  toolButton("Check", Tool::Check);
   ImGui::TextUnformatted("|");
   ImGui::SameLine();
   { // Snap: end points and corners of the page's own line work (F3)
@@ -1512,6 +1963,8 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   }
   ImGui::PopStyleVar(3);
   DrawScaleDialogs(v, log);
+  DrawCheckPopup(v, log);
+  DrawChecksDialog(v, log);
 
   // The note text dialog.
   char id[64];
@@ -1712,9 +2165,10 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
     if (ImGui::IsKeyPressed(ImGuiKey_F3))
       u.snapOn = !u.snapOn;
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-      const bool wasMidway = !u.measurePts.empty();
+      const bool wasMidway = !u.measurePts.empty() || !u.checkPts.empty();
       u.selected = -1;
       u.measurePts.clear();
+      u.checkPts.clear();
       u.measureOffset = 0.f;
       if (u.tool == Tool::Calibrate) {
         u.tool = Tool::Select;
@@ -1821,6 +2275,33 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
                                               : "";
         if (u.tool == Tool::Angle && u.measurePts.size() == 3)
           finishMeasure();
+      } else if (u.tool == Tool::Check) {
+        float cx, cy;
+        toPt(r, cx, cy, true, true);
+        if (!u.checkPts.empty() && r.page != u.checkPage) {
+          u.status = "Keep both points on one page.";
+          return;
+        }
+        if (u.checkPts.empty()) {
+          if (u.checkTarget == 0 && EffectiveScale(v, r.page) == nullptr) { // a check tests a scale, so there must be one
+            if (!u.scalesRead) {
+              u.scalesRequested = true;
+              u.status = "Reading this page's scale... click again in a moment.";
+            } else {
+              u.status = "This page has no scale. Use Set scale... first.";
+            }
+            return;
+          }
+          u.checkPage = r.page;
+        }
+        u.checkPts.push_back({cx, cy});
+        if (u.checkPts.size() == 2) {
+          u.checkPopup = true;
+          u.checkText[0] = 0;
+          u.status.clear();
+        } else {
+          u.status = "Click the other end of the dimension.";
+        }
       } else if (u.tool == Tool::Calibrate) {
         float cx, cy;
         toPt(r, cx, cy, true, true);
@@ -2129,6 +2610,56 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
         const ImVec2 c(r.tl.x + u.snapX * v.pxPerPt, r.tl.y + (r.hPt - u.snapY) * v.pxPerPt);
         dl->AddRect(ImVec2(c.x - 6.f, c.y - 6.f), ImVec2(c.x + 6.f, c.y + 6.f), IM_COL32(0, 0, 0, 220), 0.f, 0, 3.5f);
         dl->AddRect(ImVec2(c.x - 6.f, c.y - 6.f), ImVec2(c.x + 6.f, c.y + 6.f), IM_COL32(60, 255, 90, 255), 0.f, 0, 1.8f);
+      }
+      {
+        // REQ-394: the checks on this page, in their verdict colour, with what they read against what the drawing says;
+        // and the robust calibration's dimensions; and the Check tool's line while it is being picked.
+        const PageScale* sc = EffectiveScale(v, r.page);
+        const auto S = [&](float x, float y) { return ImVec2(r.tl.x + x * v.pxPerPt, r.tl.y + (r.hPt - y) * v.pxPerPt); };
+        const auto label = [&](ImVec2 at, const std::string& text, ImU32 col) {
+          const float fsPx = 13.f;
+          ImFont* font = ImGui::GetFont();
+          const ImVec2 ts = font->CalcTextSizeA(fsPx, 1e9f, 0.f, text.c_str());
+          dl->AddRectFilled(ImVec2(at.x - 3.f, at.y - 2.f), ImVec2(at.x + ts.x + 3.f, at.y + ts.y + 2.f), IM_COL32(255, 255, 255, 225));
+          dl->AddText(font, fsPx, at, col, text.c_str());
+        };
+        const auto& checks = u.session.Checks();
+        for (size_t i = 0; i < checks.size(); ++i) {
+          const ScaleCheck& c = checks[i];
+          if (c.page != r.page)
+            continue;
+          ImU32 col = IM_COL32(150, 150, 150, 255);
+          std::string text = "no scale";
+          if (sc != nullptr) {
+            const CheckResult cr = EvaluateCheck(c, *sc, u.limits);
+            const ImVec4 vc = VerdictColor(cr.verdict);
+            col = IM_COL32(static_cast<int>(vc.x * 255), static_cast<int>(vc.y * 255), static_cast<int>(vc.z * 255), 255);
+            text = FormatValue(cr.measured, 3) + " vs " + FormatValue(cr.stated, 3) + " " + UnitLabel(c.unit) + "  (" + Signed(cr.pct, 2) + " %)";
+          }
+          const bool sel = static_cast<int>(i) == u.selectedCheck;
+          dl->AddLine(S(c.x0, c.y0), S(c.x1, c.y1), col, sel ? 4.f : 2.f);
+          dl->AddCircleFilled(S(c.x0, c.y0), 3.5f, col);
+          dl->AddCircleFilled(S(c.x1, c.y1), 3.5f, col);
+          const ImVec2 mid = S((c.x0 + c.x1) * 0.5f, (c.y0 + c.y1) * 0.5f);
+          label(ImVec2(mid.x + 6.f, mid.y + 4.f), text, col);
+        }
+        for (size_t i = 0; i < u.robustPicks.size(); ++i) {
+          const ScaleCheck& c = u.robustPicks[i].first;
+          if (c.page != r.page)
+            continue;
+          const ImU32 col = u.robustPicks[i].second ? IM_COL32(60, 140, 255, 255) : IM_COL32(150, 150, 150, 255);
+          dl->AddLine(S(c.x0, c.y0), S(c.x1, c.y1), col, 2.f);
+          dl->AddCircleFilled(S(c.x0, c.y0), 3.5f, col);
+          dl->AddCircleFilled(S(c.x1, c.y1), 3.5f, col);
+          const ImVec2 mid = S((c.x0 + c.x1) * 0.5f, (c.y0 + c.y1) * 0.5f);
+          label(ImVec2(mid.x + 6.f, mid.y + 4.f), "#" + std::to_string(i + 1) + "  " + FormatValue(c.stated, 3) + " " + UnitLabel(c.unit), col);
+        }
+        if (u.tool == Tool::Check && !u.checkPts.empty() && u.checkPage == r.page) {
+          const ImVec2 p0 = S(u.checkPts[0].first, u.checkPts[0].second);
+          const ImVec2 p1 = u.checkPts.size() == 2 ? S(u.checkPts[1].first, u.checkPts[1].second) : ImGui::GetIO().MousePos;
+          dl->AddLine(p0, p1, IM_COL32(60, 140, 255, 255), 2.f);
+          dl->AddCircleFilled(p0, 4.f, IM_COL32(60, 140, 255, 255));
+        }
       }
       if (u.calCount > 0 && u.calPage == r.page) { // the calibration points picked so far
         const auto S = [&](int i) { return ImVec2(r.tl.x + u.calX[i] * v.pxPerPt, r.tl.y + (r.hPt - u.calY[i]) * v.pxPerPt); };

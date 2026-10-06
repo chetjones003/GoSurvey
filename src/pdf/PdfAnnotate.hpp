@@ -6,6 +6,7 @@
 // page's bottom-left, y up. PDFium must already be initialised.
 
 #include "PdfMeasure.hpp"
+#include "PdfScaleCheck.hpp"
 
 #include <filesystem>
 #include <map>
@@ -50,7 +51,14 @@ public:
   /// Page scales set in this session (REQ-390): page -> scale; an invalid scale means "remove this page's scale".
   /// Pages not listed keep whatever scale the file already has.
   const std::map<int, PageScale>& Scales() const { return state_.scales; }
-  bool SetScales(const std::map<int, PageScale>& changes); ///< one undo step; false when nothing changes
+  /// One undo step; false when nothing changes. \p alsoAdd (optional) records a scale check in the same step: a
+  /// calibration counts as the first check (REQ-394).
+  bool SetScales(const std::map<int, PageScale>& changes, const ScaleCheck* alsoAdd = nullptr);
+  /// REQ-394: the checks the user has made. They are working marks, undoable like the rest, but they are never
+  /// written to the PDF and do not make the session "unsaved".
+  const std::vector<ScaleCheck>& Checks() const { return state_.checks; }
+  int AddCheck(const ScaleCheck& c);
+  bool RemoveCheck(int index);
   int Add(const Annot& a);                     ///< returns the new item's index
   bool Remove(int index);
   bool Replace(int index, const Annot& a);
@@ -66,7 +74,8 @@ private:
   struct State {
     std::vector<Annot> items;
     std::map<int, PageScale> scales;
-    bool operator==(const State& o) const { return items == o.items && scales == o.scales; }
+    std::vector<ScaleCheck> checks;
+    bool operator==(const State& o) const { return items == o.items && scales == o.scales; } // checks are not saved
   };
   void Push();
   State state_, saved_;

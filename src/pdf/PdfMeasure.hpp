@@ -28,6 +28,10 @@ struct PageScale {
   double realValue = 1.0; ///< ... is this much in the real world
   Unit realUnit = Unit::Foot;
   std::string label;      ///< display text when it is a named preset ("1:100"); else built from the numbers
+  /// REQ-394: set when the user corrected the scale after checking it. Shown beside the scale and in the report; not
+  /// written into the PDF. \p originalRealValue is the real value per page unit before the first correction (0 = never).
+  std::string note;       ///< "adjusted +0.19 %" or "robust, 5 dimensions, +/- 0.04 %"
+  double originalRealValue = 0.0;
 
   bool Valid() const { return pageValue > 0.0 && realValue > 0.0; }
   double RealPerPoint() const;                         ///< real units (realUnit) per PDF point

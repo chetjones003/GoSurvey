@@ -11809,7 +11809,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      user's drawing free of QA marks).
   4. **Best fit.** With two or more checks the window shows the **best-fit scale**: the scale that minimises
      the squared *relative* error of all the checks, each weighted by its length (a long span says more than
-     a short one). A check whose own implied scale differs from the best fit by more than 0.25 % or by more
+     a short one). A check whose own implied scale differs from the **median implied scale** (a centre one wrong check cannot drag) by more than 0.25 % or by more
      than three times the median deviation of the checks, whichever is larger, is marked **Outlier** (the
      likely blunder: a wrong pick, a mistyped value, a wrong unit, or an unreliable drawn dimension). **Use
      best-fit scale** applies it as an ordinary scale change (one undo step); with an outlier present the
@@ -11832,7 +11832,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      settings). The box shows, live: the **adjusted scale** with its **uncertainty** ("1 in = 3.9956 ft +/- 0.04 %");
      per dimension the **residual** (what the adjusted scale reads minus what the drawing states, in the page unit
      and as a percentage) and its **standardised residual**; and the overall fit (the RMS residual). **Blunder
-     detection:** a dimension whose standardised residual exceeds 3 is flagged **Suspect**; the user may remove it
+     detection:** a dimension whose **leave-one-out** standardised residual (its residual against a fit made from the other dimensions, so one wrong long dimension cannot hide itself by dragging the fit) exceeds 3 is flagged **Suspect**, the worst first and then the rest re-tested without it; the user may remove it
      and see the fit re-solved, or keep it; the program never removes one on its own. **Apply** sets the adjusted
      scale as one undo step (marked "robust, n dimensions, +/- x %"); **Cancel** changes nothing. With fewer than the
      minimum the box says how many more are needed and offers nothing to apply. The solution is a single scale

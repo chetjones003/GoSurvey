@@ -133,7 +133,7 @@ std::string PageScale::RatioText() const {
 
 bool PageScale::operator==(const PageScale& o) const {
   return pageValue == o.pageValue && pageUnit == o.pageUnit && realValue == o.realValue && realUnit == o.realUnit &&
-         label == o.label;
+         label == o.label && note == o.note && originalRealValue == o.originalRealValue;
 }
 
 PageScale ScaleFromCalibration(double pagePoints, double realValue, Unit realUnit) {

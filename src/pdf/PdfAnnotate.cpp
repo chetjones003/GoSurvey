@@ -201,14 +201,30 @@ bool AnnotSession::Replace(int index, const Annot& a) {
   return true;
 }
 
-bool AnnotSession::SetScales(const std::map<int, PageScale>& changes) {
+bool AnnotSession::SetScales(const std::map<int, PageScale>& changes, const ScaleCheck* alsoAdd) {
   State next = state_;
   for (const auto& [page, scale] : changes)
     next.scales[page] = scale;
-  if (next == state_)
+  if (alsoAdd != nullptr)
+    next.checks.push_back(*alsoAdd);
+  if (next == state_ && alsoAdd == nullptr)
     return false;
   Push();
   state_ = std::move(next);
+  return true;
+}
+
+int AnnotSession::AddCheck(const ScaleCheck& c) {
+  Push();
+  state_.checks.push_back(c);
+  return static_cast<int>(state_.checks.size()) - 1;
+}
+
+bool AnnotSession::RemoveCheck(int index) {
+  if (index < 0 || index >= static_cast<int>(state_.checks.size()))
+    return false;
+  Push();
+  state_.checks.erase(state_.checks.begin() + index);
   return true;
 }
 
