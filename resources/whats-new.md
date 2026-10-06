@@ -3,6 +3,20 @@
 This release is built around **Projects** — one place for every drawing, point file, PDF, and cloud
 that belongs to a job. The sections below walk through what is new and how it fits together.
 
+## Key Features
+
+- **Projects** — organize every drawing, point file, PDF, and cloud for one job in one place; share
+  survey points across tabs; pack and email the whole project when it is ready to send
+- **Coordinate systems and maps** — work in real survey zones; show USGS aerial imagery under your
+  drawing and keep captured map areas with the file
+- **Built-in PDF viewer** — open plan sheets inside GoSurvey, mark them up, measure, compare
+  revisions, and split pages without leaving the app
+- **Point clouds** — attach scan and LIDAR data, clip and style it, and use it alongside your linework
+- **Piping** — lay out **pipe runs** with standard fittings from the library; export pipe geometry
+  with your drawing
+- **3D surfaces and grading** — build TIN surfaces, drape linework, grade side slopes to daylight,
+  and model pads and solids on real ground
+
 ---
 
 ## Projects

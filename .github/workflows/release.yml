@@ -263,11 +263,23 @@ jobs:
       # ---------------------------------------------------------------------
       # Package
       # ---------------------------------------------------------------------
+      - name: Download VC++ redistributable (x64)
+        shell: pwsh
+        run: |
+          $out = 'build\vc_redist.x64.exe'
+          if (-not (Test-Path $out)) {
+            Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile $out
+          }
+          if (-not (Test-Path $out)) { throw 'Failed to download vc_redist.x64.exe for the installer.' }
+
       - name: Build the installer
         shell: pwsh
         run: |
           if (-not (Test-Path 'build\GoSurvey.exe')) {
             throw "Expected build\GoSurvey.exe after artifact download (Inno Source)."
+          }
+          if (-not (Test-Path 'build\vc_redist.x64.exe')) {
+            throw 'Expected build\vc_redist.x64.exe — the installer must ship the VC++ runtime.'
           }
           $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $iscc) {

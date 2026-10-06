@@ -14,6 +14,8 @@
 
 import worker from './src/index.js';
 
+const STARTUP_REPORT_PATH = '/v1/startup-report';
+
 let failures = 0;
 
 function check(name, condition, detail) {
@@ -182,6 +184,35 @@ console.log('\nduplicates and outages');
   const r = await call(post(VALID), stubDb({ throws: true }));
   check('D1 failure is 503', r.status === 503, `got ${r.status}`);
   check('D1 failure does NOT say ok:true', !r.text.includes('"ok":true'), r.text);
+}
+
+const STARTUP_VALID = {
+  installId: 'unknown',
+  version: '0.7.0',
+  channel: 'stable',
+  os: 'windows',
+  stage: 'opengl_init',
+  report: 'GoSurvey could not initialize OpenGL 3.3.\n\ndetail: glewInit failed',
+};
+
+console.log('\nstartup report routing');
+{
+  const r = await call(post(STARTUP_VALID, { path: STARTUP_REPORT_PATH }));
+  check('startup path accepts POST', r.status === 200, `got ${r.status}`);
+  check('startup body says ok:true', r.text.includes('"ok":true'), r.text);
+  check('startup one insert', r.db.calls.length === 1, `${r.db.calls.length}`);
+  const { params } = r.db.calls[0];
+  check('startup binds 8 columns', params.length === 8, `${params.length}`);
+  check('startup stage passed through', params[5] === STARTUP_VALID.stage);
+  check('startup report passed through', params[7] === STARTUP_VALID.report);
+}
+{
+  const r = await call(post({ ...STARTUP_VALID, stage: 'bad' }, { path: STARTUP_REPORT_PATH }));
+  check('startup bad stage is 400', r.status === 400, `got ${r.status}`);
+}
+{
+  const r = await call(post({ ...STARTUP_VALID, report: '' }, { path: STARTUP_REPORT_PATH }));
+  check('startup empty report is 400', r.status === 400, `got ${r.status}`);
 }
 
 console.log(failures === 0

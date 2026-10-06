@@ -16,6 +16,56 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.7.0
+
+**Projects — start here**
+- Organize a job as a **project**: one folder, one shared **survey point database**, and every
+  drawing tab that belongs to the job.
+- **Recent Projects** on the start screen; open several projects at once when you need to.
+- **Add drawing to project** with a preview; align units and coordinate system when a drawing
+  comes from outside the project.
+- Track DWG, PDF, and point cloud files; **pack project** into a single archive to email or archive.
+- Project settings enforce zone and units; per-drawing overrides where you need them.
+- Turnover records and warnings when files are missing, out of date, or edited elsewhere.
+
+**Coordinate systems and maps**
+- Work in named **coordinate systems** (state plane and other zones) with project-wide enforcement.
+- Show **USGS aerial imagery** as an online map under your linework.
+- **Capture** a map extent into the drawing so the background stays with the file offline.
+- Geographic marker and geodata travel through save, reopen, and DWG exchange where supported.
+
+**Built-in PDF viewer**
+- Open PDFs with **PDFVIEW** or from the project file list — no external viewer required.
+- Dedicated PDF window with zoom, pan, and fast page rendering.
+- Mark up sheets; measure length, area, and angle; set drawing scale on the PDF.
+- Compare two revisions side by side and see what changed.
+- Split a PDF into pages; add PDFs to a project file list without placing them on a layout.
+
+**Point clouds**
+- Attach point cloud scans (including **E57**); control display density and color.
+- Clip and style clouds; use them with surfaces and linework in the same drawing.
+- Project file tracking includes cloud paths when you pack a job.
+
+**Piping and fittings**
+- Route **pipe runs** with size, elevation, and fitting-aware geometry.
+- Place standard **fittings** from the built-in library (for example flanges).
+- Snap to pipe run ends; move and copy runs like other model objects.
+- Export pipe geometry in DWG with the rest of the drawing.
+
+**Surfaces, grading, and 3D**
+- Build and edit TIN **surfaces**; volumes, contours, and surface styles.
+- **DRAPE** linework onto a surface; linked geometry can follow surface rebuilds.
+- **GRADING** side slopes from a feature line to a **daylight line** on existing ground.
+- **PADSOLID** models cut and fill for building pads.
+- **3D solids**, meshes, sections, and improved DWG import/export for civil and piping models.
+
+**Drawing, exchange, and polish**
+- Dynamic blocks, fields, materials, and visual styles in DWG round trip (where supported).
+- Multileaders, improved dimensions, box selection preview, and object-layer rules.
+- Press **F1** for the updated in-app manual and command reference.
+
+---
+
 ## 0.6.0
 
 **3D solids — new**
