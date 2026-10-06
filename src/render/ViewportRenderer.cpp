@@ -2,6 +2,7 @@
 
 #include "CadLinetype.hpp"
 #include "CadSnap.hpp"
+#include "PaperSpace.hpp"
 #include "geom2d.hpp"
 
 #include <GL/glew.h>
@@ -1790,6 +1791,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         float rgba[4] = {part.r, part.g, part.b, 1.f};
         if (attr && !(attr->color.empty() || attr->color == "ByLayer"))
           ResolveEntityRgbaForViewport(*attr, lr, part.r, part.g, part.b, rgba);
+        if (attr)
+          ApplyMaterialDiffuseForShaded(*attr, rgba);
         glUniform4f(locShColor, rgba[0], rgba[1], rgba[2], 1.f);
         glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT,
                        reinterpret_cast<const void*>(static_cast<std::uintptr_t>(begin) * sizeof(std::uint32_t)));
@@ -2396,6 +2399,13 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       if (filledRegionAttrs && fi < filledRegionAttrs->size() &&
           CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, (*filledRegionAttrs)[fi].id))
         continue;
+      if (!CadAnnotativeVisibleAtActiveScale(
+              fr.annotative, fr.annotativeVisibleScaleNames,
+              extended ? extended->annotationScales : nullptr,
+              extended ? extended->currentAnnotationScaleIndex : -1,
+              extended ? extended->annotativeViewport : nullptr,
+              extended ? extended->drawingModelUnitsPerPlottedInch : 0.f))
+        continue;
       fan.clear();
       double mnx = 1e300, mxx = -1e300, mny = 1e300, mxy = -1e300;
       // The stencil cover quad spans the region's XY bounds and so needs one elevation; a filled
@@ -2689,10 +2699,18 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
               ia = (*extended->blockRefAttrs)[bi];
             if (CadEntityIdHidden(hiddenIds, ia.id))
               continue;
-            CadBlockRef drawRef = (*extended->blockRefs)[bi];
-            if (extended->annotativeViewport != nullptr && extended->drawingModelUnitsPerPlottedInch > 0.f)
-              drawRef = CadBlockRefForViewportDraw(drawRef, *extended->annotativeViewport,
-                                                   extended->drawingModelUnitsPerPlottedInch);
+            const CadBlockRef& srcRef = (*extended->blockRefs)[bi];
+            if (!CadAnnotativeVisibleAtActiveScale(
+                    srcRef.annotative, srcRef.annotativeVisibleScaleNames, extended->annotationScales,
+                    extended->currentAnnotationScaleIndex, extended->annotativeViewport,
+                    extended->drawingModelUnitsPerPlottedInch))
+              continue;
+            CadBlockRef drawRef = srcRef;
+            if (extended->drawingModelUnitsPerPlottedInch > 0.f)
+              drawRef = CadBlockRefForAnnotativeDisplay(drawRef, extended->annotativeViewport,
+                                                        extended->drawingModelUnitsPerPlottedInch,
+                                                        extended->annotationScales,
+                                                        extended->currentAnnotationScaleIndex);
             std::vector<CadBlockWorldSeg> segs;
             CadBlockCollectWorldLines(*extended->blockDefs, drawRef, ia, &segs);
             for (const CadBlockWorldSeg& s : segs)
@@ -2835,7 +2853,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     std::vector<float> hvLineRel;
     ConvertLineVertsWorldToView(*hoverLines, viewAnchorX, viewAnchorY, &hvLineRel);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-    glUniform4f(locCol, 0.45f, 0.72f, 1.f, 1.f);
+    glUniform4f(locCol, 0.82f, 0.92f, 1.f, 1.f);  // REQ-370 hover + box preview: bluish white
     glLineWidth(kLwHiLine * 0.72f);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hvLineRel.size() * sizeof(float)), hvLineRel.data(),
                  GL_STREAM_DRAW);
@@ -2856,7 +2874,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
     if (!hvCircGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-      glUniform4f(locCol, 0.45f, 0.72f, 1.f, 1.f);
+      glUniform4f(locCol, 0.82f, 0.92f, 1.f, 1.f);  // REQ-370 hover + box preview: bluish white
       glLineWidth(kLwHiCirc * 0.72f);
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hvCircGeom.size() * sizeof(float)), hvCircGeom.data(),
                    GL_STREAM_DRAW);
@@ -2944,7 +2962,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     std::vector<float> hlLineRel;
     ConvertLineVertsWorldToView(*highlightLines, viewAnchorX, viewAnchorY, &hlLineRel);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-    glUniform4f(locCol, 1.f, 0.92f, 0.15f, 1.f);
+    glUniform4f(locCol, 0.30f, 0.58f, 1.f, 1.f);  // REQ-370 selected: blue tint
     glLineWidth(kLwHiLine);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hlLineRel.size() * sizeof(float)), hlLineRel.data(),
                  GL_STREAM_DRAW);
@@ -2962,7 +2980,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
     if (!hlCircGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-      glUniform4f(locCol, 1.f, 0.88f, 0.22f, 1.f);
+      glUniform4f(locCol, 0.30f, 0.58f, 1.f, 1.f);  // REQ-370 selected: blue tint
       glLineWidth(kLwHiCirc);
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hlCircGeom.size() * sizeof(float)), hlCircGeom.data(),
                    GL_STREAM_DRAW);

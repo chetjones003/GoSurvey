@@ -16,6 +16,10 @@ namespace FontReg {
 ImFont* Resolve(const std::string& fontNameOrShx, bool bold, bool italic, bool* outRealBold = nullptr,
                 bool* outRealItalic = nullptr);
 
+/// The TrueType file this registry would load for \p family at the given style, or "" when none is installed.
+/// (REQ-388: the PDF viewer embeds the same fonts GoSurvey already uses.)
+std::string FindTtfPath(const std::string& family, bool bold, bool italic);
+
 /// Register the application's default/fallback font (used when a name can't be resolved).
 void SetDefault(ImFont* f);
 

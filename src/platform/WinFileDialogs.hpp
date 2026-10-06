@@ -24,6 +24,16 @@ bool BrowseSaveFileDwgUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNam
 /// Not a general drawing-document format — see issue #264.
 bool BrowseOpenFileGstUtf8(char* utf8Out, size_t utf8Cap);
 
+/// REQ-374 (#696): a project file (`.gsproj`) for Open Project.
+bool BrowseOpenFileGsprojUtf8(char* utf8Out, size_t utf8Cap);
+
+/// REQ-380 (#696 P7): a project pack (`.gspack`) to open, and where to save one.
+bool BrowseOpenFileGspackUtf8(char* utf8Out, size_t utf8Cap);
+bool BrowseSaveFileGspackUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
+/// REQ-374 (#696): a folder picker (New Project location). UTF-8 path; false if cancelled.
+bool BrowseFolderUtf8(char* utf8Out, size_t utf8Cap);
+
 bool BrowseOpenFilePdfUtf8(char* utf8Out, size_t utf8Cap);
 
 /// UTF-8 path for saving a plotted PDF; suggests default file name.

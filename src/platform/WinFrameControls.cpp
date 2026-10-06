@@ -21,6 +21,7 @@ GLFWwindow* g_borderlessWindow = nullptr;
 // Updated each frame by GlfwPlatformSetTitleBarMetrics so WM_NCHITTEST can route correctly.
 float g_titleBarRowH     = 0.f;
 float g_btnStripWidthPx  = 0.f;
+bool  g_captionBlocked   = false;  // another ImGui window covers the title bar under the pointer
 
 int EdgeBorderPx() {
   HDC dc = GetDC(nullptr);
@@ -31,6 +32,12 @@ int EdgeBorderPx() {
 }
 
 LRESULT CALLBACK BorderlessWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  // The window carries WS_THICKFRAME so Windows treats it as a normal resizable window (Aero Snap:
+  // drag to the top to maximize, to a side to half-screen, snap layouts). The whole window is client
+  // area, so the frame is never drawn. A caption-less window is maximized to exactly the work area (no
+  // frame overhang), so nothing is trimmed here.
+  if (msg == WM_NCCALCSIZE && wParam == TRUE)
+    return 0;
   if (msg == WM_NCHITTEST && g_prevWndProc) {
     LRESULT hit = CallWindowProc(g_prevWndProc, hwnd, msg, wParam, lParam);
     if (hit != HTCLIENT)
@@ -62,7 +69,9 @@ LRESULT CALLBACK BorderlessWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
     // Title bar — button strip stays HTCLIENT (ImGui handles it); drag area returns HTCAPTION
     // so Windows manages the move natively without going through ImGui.
-    if (g_titleBarRowH > 0.f && pt.y >= 0 && pt.y < (int)g_titleBarRowH) {
+    // A dialog dragged over the title bar must stay a dialog: the OS only gets the caption when the
+    // title bar itself is what is under the pointer.
+    if (!g_captionBlocked && g_titleBarRowH > 0.f && pt.y >= 0 && pt.y < (int)g_titleBarRowH) {
       if (g_btnStripWidthPx > 0.f && pt.x >= ww - (int)g_btnStripWidthPx)
         return HTCLIENT;
       return HTCAPTION;
@@ -91,11 +100,19 @@ LRESULT CALLBACK BorderlessWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 void GlfwPlatformInstallBorderlessResize(GLFWwindow* window) {
   if (!window)
     return;
-  static bool installed = false;
-  if (installed)
-    return;
   HWND hwnd = glfwGetWin32Window(window);
   if (!hwnd)
+    return;
+  // Undecorated GLFW windows are plain WS_POPUP, which Windows never snaps or maximizes by drag.
+  const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+  const LONG_PTR want = style | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU;
+  if (want != style) {
+    SetWindowLongPtrW(hwnd, GWL_STYLE, want);
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+  }
+  static bool installed = false;
+  if (installed)
     return;
   g_prevWndProc = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(hwnd, GWLP_WNDPROC));
   if (!g_prevWndProc)
@@ -118,6 +135,10 @@ void GlfwPlatformBeginCaptionDrag(GLFWwindow* window) {
 void GlfwPlatformSetTitleBarMetrics(float rowHeightPx, float btnStripWidthPx) {
   g_titleBarRowH    = rowHeightPx;
   g_btnStripWidthPx = btnStripWidthPx;
+}
+
+void GlfwPlatformSetCaptionBlocked(bool blocked) {
+  g_captionBlocked = blocked;
 }
 
 void GlfwPlatformApplySplashRoundedRegion(GLFWwindow* window, float cornerRadiusPx) {

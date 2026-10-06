@@ -1230,7 +1230,15 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
     for (int i = 0; i < kDrawingUnitCount; ++i)
       if (cmd.drawingInsUnits == kDrawingUnitCodes[i]) insSel = i;
     ImGui::SetNextItemWidth(220.f);
-    if (ImGui::Combo("##ins_units", &insSel, kDrawingUnitNames, kDrawingUnitCount)) {
+    // REQ-375: a project that fixes the drawing unit owns it.
+    const ProjectSettings* proj = ProjectSettingsForTab(cmd, cmd.activeDrawingIdx);
+    const bool unitEnforced = proj && proj->insUnits >= 0;
+    ImGui::BeginDisabled(unitEnforced);
+    const bool unitPicked = ImGui::Combo("##ins_units", &insSel, kDrawingUnitNames, kDrawingUnitCount);
+    ImGui::EndDisabled();
+    if (unitEnforced)
+      ItemHelpTooltip("Enforced by the project (Project Settings).");
+    if (unitPicked) {
       cmd.drawingInsUnits = kDrawingUnitCodes[std::clamp(insSel, 0, kDrawingUnitCount - 1)];
       BumpCadGpuCache(cmd);  // document property: flag the drawing as modified
     }

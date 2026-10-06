@@ -1,5 +1,6 @@
 #include "CadUi.hpp"
 #include "CadUiInternal.hpp"
+#include "ProjectFiles.hpp"
 #include "CadUiChrome.hpp"
 #include "CadBlocks.hpp"
 #include "DevShellHooks.hpp"
@@ -8,6 +9,7 @@
 #include "ModelingRibbon.hpp"
 // REQ-141 Analyze ribbon + contour label overlay.
 #include "CadCoordinateFrame.hpp"
+#include "CadField.hpp"
 #include "CadDynInput.hpp"  // point-entry dynamic input model (REQ-354)
 #include "ViewCube.hpp"
 #include "UcsIcon.hpp"  // in-tree orientation widget (REQ-059)
@@ -118,6 +120,37 @@ static void SubmitRibbonCommand(AppCommandState& cmd, std::vector<std::string>& 
 static void RunRibbonTypedCommand(AppCommandState& cmd, std::vector<std::string>& log, const std::string& line) {
   CancelActiveCommand(cmd, log);
   SubmitRibbonCommand(cmd, log, line);
+}
+
+// Issue #622: comma-separated SCALE names; empty vector = visible at every scale.
+static void ParseCommaSeparatedScaleNames(const std::string& edited, std::vector<std::string>* out) {
+  assert(out != nullptr);
+  out->clear();
+  size_t i = 0;
+  while (i < edited.size()) {
+    const size_t j = edited.find(',', i);
+    const size_t end = j == std::string::npos ? edited.size() : j;
+    std::string tok = edited.substr(i, end - i);
+    while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t'))
+      tok.erase(tok.begin());
+    while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t'))
+      tok.pop_back();
+    if (!tok.empty())
+      out->push_back(std::move(tok));
+    if (j == std::string::npos)
+      break;
+    i = j + 1;
+  }
+}
+
+static std::string JoinCommaSeparatedScaleNames(const std::vector<std::string>& names) {
+  std::string visJoined;
+  for (size_t vi = 0; vi < names.size(); ++vi) {
+    if (vi > 0)
+      visJoined += ',';
+    visJoined += names[vi];
+  }
+  return visJoined;
 }
 
 static void UiSubmitViewportPick(AppCommandState& cmd, double x, double y, std::vector<std::string>& log,
@@ -1007,6 +1040,34 @@ void PlateTopHilite(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx) {
 /// rounded outlines fading to nothing. Concentric outlines rather than four
 /// gradient bands because the corners come out right for free, and a dozen
 /// 1px rects is not a cost worth a cleverer shape.
+/// REQ-370 selection box: window (drag L→R) = blue fill + solid border; crossing (R→L) = green fill +
+/// dashed border. Shared by the model-space and floating-viewport overlays so they cannot drift.
+static void DrawSelectionBoxRect(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, bool windowMode) {
+  const ImU32 fill = windowMode ? IM_COL32(0, 90, 230, 115) : IM_COL32(20, 150, 60, 115);
+  const ImU32 edge = IM_COL32(200, 225, 70, 255);
+  dl->AddRectFilled(mn, mx, fill);
+  if (windowMode) {
+    dl->AddRect(mn, mx, edge, 0.f, 0, 1.f);
+    return;
+  }
+  constexpr float kDash = 5.f;
+  constexpr float kGap = 3.f;
+  auto dashed = [&](ImVec2 a, ImVec2 b) {
+    const float len = std::hypot(b.x - a.x, b.y - a.y);
+    if (len < 1e-3f)
+      return;
+    const ImVec2 d((b.x - a.x) / len, (b.y - a.y) / len);
+    for (float t = 0.f; t < len; t += kDash + kGap) {
+      const float t1 = std::min(t + kDash, len);
+      dl->AddLine(ImVec2(a.x + d.x * t, a.y + d.y * t), ImVec2(a.x + d.x * t1, a.y + d.y * t1), edge, 1.f);
+    }
+  };
+  dashed(mn, ImVec2(mx.x, mn.y));
+  dashed(ImVec2(mx.x, mn.y), mx);
+  dashed(mx, ImVec2(mn.x, mx.y));
+  dashed(ImVec2(mn.x, mx.y), mn);
+}
+
 static void DrawWindowDropShadow(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, float rounding) {
   const ImU32 base = g_chrome.windowShadow;
   const int a0 = static_cast<int>((base >> IM_COL32_A_SHIFT) & 0xFFu);
@@ -1245,6 +1306,8 @@ void DrawFloatingWindowChrome() {
       continue;
     if (w->DockIsActive || w->DockNodeAsHost)
       continue;  // docked panels state their elevation with CastShadowInto instead
+    if (w->ViewportOwned && w->Viewport != nullptr && (w->Viewport->Flags & ImGuiViewportFlags_NoDecoration) == 0)
+      continue;  // a window in its own OS window (the PDF viewer) has the operating system's frame
     // A title bar means "dialog"; the popup/tooltip flags catch menus and combos.
     // Everything else at top level is app furniture that paints its own edges —
     // the dockspace host, the status-bar strip, the floating command bar — and a
@@ -1464,11 +1527,17 @@ static void RestoreDrawingTabAfterFileDialog(AppCommandState& cmd, int tabIdxBef
 }
 
 void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
+  // REQ-382 clause 2: a read-only project cannot be changed, and its drawings are part of it.
+  if (ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx)) {
+    log.push_back("This project is open read-only; the drawing was not saved.");
+    return;
+  }
   char dwgPath[4096]{};
   const std::string& path = cmd.activeDocFilePath;
   if (!path.empty()) {
     if (SaveDrawingDocument(cmd, path.c_str(), log)) {
       cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+      SyncProjectFilesOnSave(cmd, cmd.activeDrawingIdx, path, log);  // REQ-379 clause 2
       RecordRecentDrawing(cmd, path);
     }
     return;
@@ -1488,6 +1557,7 @@ void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
   cmd.activeDocFilePath      = std::string(dwgPath);
   if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
     cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::u8path(dwgPath).stem().u8string();
+  SyncProjectFilesOnSave(cmd, cmd.activeDrawingIdx, cmd.activeDocFilePath, log);  // REQ-379 clause 2
   RecordRecentDrawing(cmd, cmd.activeDocFilePath);
 }
 
@@ -1509,19 +1579,35 @@ void NewDrawingInTab(AppCommandState& cmd, std::vector<std::string>& log) {
 // REQ-055 / REQ-308: open \p dwgPathUtf8 (or browse when null) into a new focused tab. Shared by
 // File ▸ Open and the Start screen's Open button / recent-drawing tiles.
 void OpenDrawingInNewTab(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8) {
+  OpenDrawingInNewTabAs(cmd, log, dwgPathUtf8, ProjectJoin{});
+}
+
+void OpenDrawingInNewTabAs(AppCommandState& cmd, std::vector<std::string>& log, const char* dwgPathUtf8,
+                           ProjectJoin join) {
   char browsed[4096]{};
   if (!dwgPathUtf8) {
     if (!BrowseOpenFileDwgUtf8(browsed, sizeof(browsed)))
       return;
     dwgPathUtf8 = browsed;
   }
+  // REQ-374: find the drawing's project (walking up from its folder) before anything is created. A
+  // false return means a prompt was queued or the project could not be read; the prompt's buttons
+  // re-enter here with the join decided. No .gsproj anywhere above = standalone, exactly as before.
+  if (join.detect) {
+    if (!ResolveProjectJoin(cmd, log, dwgPathUtf8, &join.uid))
+      return;
+  }
   SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
   const std::string tabName = std::filesystem::path(dwgPathUtf8).stem().u8string();
   const int newIdx = static_cast<int>(cmd.drawingTabs.size());
-  cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++});
+  cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++, join.uid});
+  if (join.uid != 0)
+    NoteProjectJoin(cmd, log, join.uid);
   cmd.documents.emplace_back();
   RestoreDocumentFromSnapshot(cmd, newIdx);  // clear cmd to empty state
   if (OpenDrawingDocument(cmd, dwgPathUtf8, log)) {
+    if (join.uid != 0)
+      ApplyProjectFilesOnOpen(cmd, join.uid, dwgPathUtf8, log);  // REQ-379 clause 2
     cmd.activeDocSavedRevision = cmd.cadGpuRevision;
     cmd.activeDocFilePath      = std::string(dwgPathUtf8);
     RecordRecentDrawing(cmd, cmd.activeDocFilePath);
@@ -1555,17 +1641,50 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 8.f));
   if (ImGui::BeginMenu("File")) {
     if (ImGui::MenuItem("New", nullptr)) {
+      // REQ-374 clause 1: a new drawing made while a project drawing is active joins that project and
+      // starts with its defaults (EnforceProjectSettings applies them).
+      const std::uint32_t projectUid =
+          cmd.activeDrawingIdx >= 1 && cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size())
+              ? cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid
+              : 0u;
       NewDrawingInTab(cmd, log);
+      cmd.drawingTabs.back().projectUid = projectUid;
     }
     if (ImGui::MenuItem("Open", nullptr)) {
       OpenDrawingInNewTab(cmd, log, nullptr);
     }
+    if (ImGui::MenuItem("New Project...", nullptr))
+      cmd.showNewProjectDialog = true;
+    if (ImGui::MenuItem("Open Project...", nullptr))
+      OpenProjectFile(cmd, log, nullptr);
+    if (ImGui::MenuItem("Open Packed Project...", nullptr))  // REQ-380
+      OpenPackedProject(cmd, log, nullptr, nullptr);
     // REQ-308: the Start tab has no document to save.
     ImGui::BeginDisabled(cmd.activeDrawingIdx == 0);
+    if (ImGui::MenuItem("Project Settings...", nullptr, false,
+                        !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty() &&
+                            !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx)))
+      cmd.projectSettingsUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-375
+    if (ImGui::MenuItem("Add Drawing to Project...", nullptr, false,
+                        !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty() &&
+                            !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx)))
+      cmd.addDrawingToProjectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-378
+    if (ImGui::MenuItem("Project Health...", nullptr, false, !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty()))
+      cmd.projectHealthUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;  // REQ-379
+    if (ImGui::MenuItem("Pack Project...", nullptr, false, !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty())) {
+      cmd.projectPackPrompt = {};  // REQ-380
+      cmd.projectPackPrompt.projectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;
+    }
+    if (ImGui::MenuItem("Create Turnover...", nullptr, false,
+                        !ProjectNameForTab(cmd, cmd.activeDrawingIdx).empty() &&
+                            !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx))) {
+      cmd.projectTurnoverPrompt = {};  // REQ-381
+      cmd.projectTurnoverPrompt.projectUid = cmd.drawingTabs[static_cast<size_t>(cmd.activeDrawingIdx)].projectUid;
+    }
     if (ImGui::MenuItem("Save", "Ctrl+S")) {
       SaveActiveDocument(cmd, log);
     }
-    if (ImGui::MenuItem("Save As...")) {
+    if (ImGui::MenuItem("Save As...", nullptr, false, !ProjectIsReadOnlyForTab(cmd, cmd.activeDrawingIdx))) {
       ClearSaveTrace();
       AppendSaveTrace("ui: save-as menu");
       const int tabBeforeDialog = cmd.activeDrawingIdx;
@@ -1585,6 +1704,7 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
           if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
             cmd.drawingTabs[cmd.activeDrawingIdx].name =
                 std::filesystem::u8path(dwgPath).stem().u8string();
+          SyncProjectFilesOnSave(cmd, cmd.activeDrawingIdx, cmd.activeDocFilePath, log);  // REQ-379 clause 2
           AppendSaveTrace("ui: before record recent");
           RecordRecentDrawing(cmd, cmd.activeDocFilePath);
           AppendSaveTrace("ui: save-as complete");
@@ -6035,10 +6155,19 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         ImGui::BeginGroup();
         ImGui::TextUnformatted("Visual style");
         ImGui::SetNextItemWidth(visualStyleComboW);
-        int vsIdx = static_cast<int>(cmd.viewportVisualStyle);
+        Viewport* ribbonVp = CurrentViewport(cmd);
+        VisualStyle ribbonVs =
+            ribbonVp != nullptr ? ribbonVp->visualStyle : cmd.viewportVisualStyle;
+        int vsIdx = static_cast<int>(ribbonVs);
         const char* kVsItems[] = {"2D Wireframe", "Hidden", "Shaded"};
-        if (ImGui::Combo("##RibbonVisualStyle", &vsIdx, kVsItems, IM_ARRAYSIZE(kVsItems)))
-          cmd.viewportVisualStyle = static_cast<VisualStyle>(vsIdx);
+        if (ImGui::Combo("##RibbonVisualStyle", &vsIdx, kVsItems, IM_ARRAYSIZE(kVsItems))) {
+          const VisualStyle next = static_cast<VisualStyle>(vsIdx);
+          if (ribbonVp != nullptr)
+            ribbonVp->visualStyle = next;
+          else
+            cmd.viewportVisualStyle = next;
+          BumpCadGpuCache(cmd);
+        }
         RibbonItemHelp("How the viewport draws.\n"
                        "2D Wireframe — every edge visible, no depth testing (the classic view).\n"
                        "Hidden — near geometry hides far geometry.\n"
@@ -6757,6 +6886,18 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           BumpCadGpuCache(cmd);
         }
       };
+      auto setVisibleScaleNames = [&](const std::vector<std::string>& names) {
+        if (hatchEditing) {
+          snapEdit();
+          for (int i : hatchSel)
+            cmd.cadFilledRegions[static_cast<size_t>(i)].annotativeVisibleScaleNames = names;
+          BumpCadGpuCache(cmd);
+        }
+      };
+      std::string wVisScales;
+      if (hatchEditing)
+        wVisScales = JoinCommaSeparatedScaleNames(
+            cmd.cadFilledRegions[static_cast<size_t>(hatchSel[0])].annotativeVisibleScaleNames);
 
       static hatchpat::Def s_solidDef = [] { hatchpat::Def d; d.name = "SOLID"; return d; }();
       const ImU32 swInk = IM_COL32(static_cast<int>(wRgb[0] * 255.f), static_cast<int>(wRgb[1] * 255.f),
@@ -6859,6 +7000,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       if (hatchEditing) {
         if (ImGui::Checkbox("Annotative##hatch", &wAnnotative))
           setAnnotative(wAnnotative);
+        if (wAnnotative && !cmd.annotationScales.empty()) {
+          char visBuf[256]{};
+          std::snprintf(visBuf, sizeof(visBuf), "%s", wVisScales.c_str());
+          ImGui::SetNextItemWidth(140.f);
+          if (ImGui::InputTextWithHint("Vis scales##hatch", "1:20,1:50", visBuf, sizeof(visBuf)) &&
+              ImGui::IsItemDeactivatedAfterEdit()) {
+            std::vector<std::string> parsed;
+            ParseCommaSeparatedScaleNames(std::string(visBuf), &parsed);
+            setVisibleScaleNames(parsed);
+          }
+        }
       }
       ImGui::EndGroup();
     }
@@ -7910,6 +8062,34 @@ static char PropRowAxis(const char* label) {
   return (c == 'X' || c == 'Y' || c == 'Z') ? c : 0;
 }
 
+/// Properties-table rows: Annotative + optional Visible scales (requires an open table).
+static void PropAnnotativeAndVisibleScalesRows(AppCommandState& cmd, bool* annotative,
+                                               std::vector<std::string>* visNames, const char* annotId,
+                                               const char* visInputId) {
+  assert(annotative != nullptr);
+  assert(visNames != nullptr);
+  ImGui::TableNextRow();
+  ImGui::TableNextColumn();
+  ImGui::TextUnformatted("Annotative");
+  ImGui::TableNextColumn();
+  if (ImGui::Checkbox(annotId, annotative))
+    BumpCadGpuCache(cmd);
+  if (*annotative && !cmd.annotationScales.empty()) {
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted("Visible scales");
+    ImGui::TableNextColumn();
+    char visBuf[256]{};
+    const std::string visJoined = JoinCommaSeparatedScaleNames(*visNames);
+    std::snprintf(visBuf, sizeof(visBuf), "%s", visJoined.c_str());
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText(visInputId, visBuf, sizeof(visBuf)) && ImGui::IsItemDeactivatedAfterEdit()) {
+      ParseCommaSeparatedScaleNames(std::string(visBuf), visNames);
+      BumpCadGpuCache(cmd);
+    }
+  }
+}
+
 // REQ-101: `v` points at LOCAL storage (world = local + worldDocumentOrigin). `originOffset`
 // lets an X/Y row display and edit the WORLD value a user actually typed/expects, while the
 // pointed-to storage keeps holding the precision-safe local one — pass `cmd.worldDocumentOriginX`
@@ -8265,12 +8445,8 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
 
     if (ann.kind == CadAnnotation::Kind::Text || ann.kind == CadAnnotation::Kind::Mtext ||
         CadAnnotationIsDimension(ann)) {
-      ImGui::TableNextRow();
-      ImGui::TableNextColumn();
-      ImGui::TextUnformatted("Annotative");
-      ImGui::TableNextColumn();
-      if (ImGui::Checkbox("##annAnnotative", &ann.annotative))
-        BumpCadGpuCache(cmd);
+      PropAnnotativeAndVisibleScalesRows(cmd, &ann.annotative, &ann.annotativeVisibleScaleNames, "##annAnnotative",
+                                         "##annVisScales");
     }
 
     if (ann.kind == CadAnnotation::Kind::Text) {
@@ -9321,6 +9497,8 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int nAnn  = 0;
   int nTable = 0;
   int nBlock = 0;
+  int nMultileader = 0;
+  int nFilledRegion = 0;
   int nPdf  = 0;
   int nSurf = 0;
   int firstSurfIx = -1;
@@ -9333,6 +9511,8 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     else if (e.type == SelectedEntity::Type::Annotation) ++nAnn;
     else if (e.type == SelectedEntity::Type::Table) ++nTable;
     else if (e.type == SelectedEntity::Type::BlockRef) ++nBlock;
+    else if (e.type == SelectedEntity::Type::Multileader) ++nMultileader;
+    else if (e.type == SelectedEntity::Type::FilledRegion) ++nFilledRegion;
     else if (e.type == SelectedEntity::Type::PdfUnderlay)++nPdf;
     else if (e.type == SelectedEntity::Type::Surface) {
       ++nSurf;
@@ -9527,6 +9707,63 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
           r.xf.rotZ = deg * 0.01745329252f;
         if (ImGui::Checkbox("Annotative##blk", &r.annotative))
           BumpCadGpuCache(cmd);
+        if (r.annotative && !cmd.annotationScales.empty()) {
+          char visBuf[256]{};
+          const std::string visJoined = JoinCommaSeparatedScaleNames(r.annotativeVisibleScaleNames);
+          std::snprintf(visBuf, sizeof(visBuf), "%s", visJoined.c_str());
+          ImGui::TextUnformatted("Visible scales");
+          ImGui::SetNextItemWidth(-1);
+          if (ImGui::InputText("##blkVisScales", visBuf, sizeof(visBuf)) && ImGui::IsItemDeactivatedAfterEdit()) {
+            ParseCommaSeparatedScaleNames(std::string(visBuf), &r.annotativeVisibleScaleNames);
+            BumpCadGpuCache(cmd);
+          }
+        }
+      }
+    }
+  } else if (nLine == 0 && nCirc == 0 && nAnn == 0 && nTable == 0 && nBlock == 0 && nMultileader > 0) {
+    int mlIdx = -1;
+    for (const auto& e : sel) {
+      if (e.type == SelectedEntity::Type::Multileader) {
+        mlIdx = e.index;
+        break;
+      }
+    }
+    if (nMultileader == 1 && mlIdx >= 0 && static_cast<size_t>(mlIdx) < cmd.cadMultileaders.size()) {
+      CadMultileader& ml = cmd.cadMultileaders[static_cast<size_t>(mlIdx)];
+      if (PropSectionHeader("Multileader")) {
+        if (ImGui::BeginTable("props_multileader", 2, kPropTableFlags)) {
+          ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+          ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+          PropAnnotativeAndVisibleScalesRows(cmd, &ml.annotative, &ml.annotativeVisibleScaleNames,
+                                             "##mlAnnotative", "##mlVisScales");
+          ImGui::EndTable();
+        }
+      }
+    }
+  } else if (nLine == 0 && nCirc == 0 && nAnn == 0 && nTable == 0 && nBlock == 0 && nMultileader == 0 &&
+             nFilledRegion > 0) {
+    int frIdx = -1;
+    for (const auto& e : sel) {
+      if (e.type == SelectedEntity::Type::FilledRegion) {
+        frIdx = e.index;
+        break;
+      }
+    }
+    if (nFilledRegion == 1 && frIdx >= 0 && static_cast<size_t>(frIdx) < cmd.cadFilledRegions.size()) {
+      CadFilledRegion& fr = cmd.cadFilledRegions[static_cast<size_t>(frIdx)];
+      if (PropSectionHeader("Hatch")) {
+        if (ImGui::BeginTable("props_hatch", 2, kPropTableFlags)) {
+          ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+          ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn();
+          ImGui::TextUnformatted("Pattern");
+          ImGui::TableNextColumn();
+          ImGui::TextUnformatted(fr.patternName.empty() ? "SOLID" : fr.patternName.c_str());
+          PropAnnotativeAndVisibleScalesRows(cmd, &fr.annotative, &fr.annotativeVisibleScaleNames,
+                                             "##frAnnotative", "##frVisScales");
+          ImGui::EndTable();
+        }
       }
     }
   } else if (nCirc == 0 && nAnn == 0 && nLine > 0) {
@@ -9731,6 +9968,7 @@ static void DrawPlotScaleCombo(AppCommandState& cmd, float width = 158.f) {
         } else if (mup != cmd.modelUnitsPerPlottedInch) {
           PushUndoSnapshot(cmd, "Plot scale");  // the plot scale is undoable (REQ-357)
           SetDrawingPlotScale(cmd, mup);
+          NoteUserPlotScale(cmd);  // REQ-375: an override of the project's default, or inherited again
         }
       }
       if (isSel)
@@ -9741,6 +9979,38 @@ static void DrawPlotScaleCombo(AppCommandState& cmd, float width = 158.f) {
   ItemHelpTooltip(tvp ? "Viewport scale: model units per paper inch for the active/selected viewport."
                       : "Drawing scale: model units per plotted inch (e.g. 50 for 1\" = 50'). "
                         "Use PSCALE for values not in the list.");
+  ImGui::PopID();
+}
+
+static void DrawAnnotationScaleCombo(AppCommandState& cmd, float width = 120.f) {
+  if (cmd.annotationScales.empty())
+    return;
+  const int n = static_cast<int>(cmd.annotationScales.size());
+  int cur = cmd.currentAnnotationScaleIndex;
+  if (cur < 0 || cur >= n)
+    cur = 0;
+
+  ImGui::PushID("annoscalecombo");
+  ImGui::SetNextItemWidth(width);
+  const std::string preview =
+      std::string("Anno ") + CadAnnotationScaleStatusLabel(cmd.annotationScales[static_cast<size_t>(cur)]);
+  if (ImGui::BeginCombo("##annoscale", preview.c_str(), ImGuiComboFlags_HeightLargest)) {
+    for (int i = 0; i < n; ++i) {
+      const bool isSel = (cur == i);
+      const std::string lbl = CadAnnotationScaleStatusLabel(cmd.annotationScales[static_cast<size_t>(i)]);
+      if (ImGui::Selectable(lbl.c_str(), isSel)) {
+        if (i != cmd.currentAnnotationScaleIndex) {
+          PushUndoSnapshot(cmd, "Annotation scale");
+          SetCurrentAnnotationScaleIndex(cmd, i);
+        }
+      }
+      if (isSel)
+        ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
+  ItemHelpTooltip("Annotation scale — model-space size for annotative text, dimensions, hatches, and blocks "
+                  "(AutoCAD CANNOSCALE, issue #622).");
   ImGui::PopID();
 }
 
@@ -10440,11 +10710,16 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   const char* spaceLbl = InFloatingModelSpace(cmd) ? "FLOAT"
                                                    : (cmd.activeSpaceIndex != kModelSpaceIndex ? "PAPER" : "MODEL");
   float plotScaleW = 158.f;
+  float annoScaleW = 120.f;
+  const bool showAnnoScaleCombo =
+      !cmd.annotationScales.empty() &&
+      (cmd.activeSpaceIndex == kModelSpaceIndex || InFloatingModelSpace(cmd));
   float btnSp = 4.f;
   constexpr float kRightLeadGap = 8.f;
   constexpr float kMinPlotScaleW = 72.f;
+  constexpr float kMinAnnoScaleW = 72.f;
   const int rightItemCount =
-      9
+      9 + (showAnnoScaleCombo ? 1 : 0)
 #ifdef GOSURVEY_DEVELOPER_SHELL
       + 1
 #endif
@@ -10456,12 +10731,18 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
               + statusBtnW("DEV")
 #endif
               + plotScaleW + statusBtnW("Multi Selection");
+    if (showAnnoScaleCombo)
+      w += annoScaleW;
     w += btnSp * static_cast<float>(rightItemCount - 1);
     return w;
   };
   float rightW = measureRightW();
   while (leftW + rightW + kRightLeadGap + 48.f > contentW && plotScaleW > kMinPlotScaleW) {
     plotScaleW = std::max(kMinPlotScaleW, plotScaleW - 12.f);
+    rightW = measureRightW();
+  }
+  while (showAnnoScaleCombo && leftW + rightW + kRightLeadGap + 48.f > contentW && annoScaleW > kMinAnnoScaleW) {
+    annoScaleW = std::max(kMinAnnoScaleW, annoScaleW - 12.f);
     rightW = measureRightW();
   }
   while (leftW + rightW + kRightLeadGap + 48.f > contentW && btnSp > 2.f) {
@@ -10739,6 +11020,10 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
 #endif
     DrawPlotScaleCombo(cmd, plotScaleW);
     ImGui::SameLine(0, sp);
+    if (showAnnoScaleCombo) {
+      DrawAnnotationScaleCombo(cmd, annoScaleW);
+      ImGui::SameLine(0, sp);
+    }
     {
       const bool on = cmd.multiSelectionEnabled;
       PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
@@ -12754,13 +13039,39 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
           {"##alignD", MtextTbGlyph::AlignDist, "Distribute (not yet supported)"},
           {"##spacing", MtextTbGlyph::LineSpacing, "Line spacing (not yet supported)"},
           {"##lists", MtextTbGlyph::Lists, "Bullets and numbering (not yet supported)"},
-          {"##field", MtextTbGlyph::Field, "Insert field (not yet supported)"},
       };
       for (const auto& b : kParaTb) {
         ImGui::BeginDisabled();
         MtextTbIconButton(b.id, b.glyph);
         ImGui::EndDisabled();
         MtextTbTip(b.tip);
+        ImGui::SameLine();
+      }
+      {
+        ImGui::BeginDisabled(target == nullptr);
+        if (MtextTbIconButton("##field", MtextTbGlyph::Field)) {
+          if (target != nullptr) {
+            std::string insert = CadFieldMakeAcVarWire("Filename", "tc1");
+            if (cmd.selection.size() == 1) {
+              const SelectedEntity& sel = cmd.selection[0];
+              std::uint64_t eid = 0;
+              if (sel.type == SelectedEntity::Type::Polyline &&
+                  sel.index >= 0 &&
+                  static_cast<size_t>(sel.index) < cmd.userPolylineAttrs.size())
+                eid = cmd.userPolylineAttrs[static_cast<size_t>(sel.index)].id;
+              else if (sel.type == SelectedEntity::Type::Circle &&
+                         sel.index >= 0 &&
+                         static_cast<size_t>(sel.index) < cmd.userCircleAttrs.size())
+                eid = cmd.userCircleAttrs[static_cast<size_t>(sel.index)].id;
+              if (eid != 0)
+                insert = CadFieldMakeGoSurveyWire(eid, "Area", ".2f");
+            }
+            MtextRichInsertAtCaret(cmd, insert.c_str());
+          }
+        }
+        ImGui::EndDisabled();
+        MtextTbTip(target ? "Insert field (filename, or area of selected polyline/circle)"
+                          : "Insert field — available once the MTEXT is placed");
         ImGui::SameLine();
       }
 
@@ -13203,7 +13514,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (isStart)
         tflags |= ImGuiTabItemFlags_Leading | ImGuiTabItemFlags_NoReorder;
       // Append "##<uid>" so each tab has a unique ImGui ID even when two tabs share the same display name.
-      const std::string tabLabel = cmd.drawingTabs[i].name + "##dt" + std::to_string(cmd.drawingTabs[i].uid);
+      // REQ-374 clause 8: a project drawing's tab carries its project's name.
+      const std::string projName = ProjectNameForTab(cmd, i);
+      const std::string tabLabel = cmd.drawingTabs[i].name + (projName.empty() ? "" : "  [" + projName + "]") +
+                                   "##dt" + std::to_string(cmd.drawingTabs[i].uid);
       if (ImGui::BeginTabItem(tabLabel.c_str(), isStart ? nullptr : &tabOpen, tflags)) {
         // While a programmatic switch is pending, ignore the selection ImGui reports for any OTHER tab.
         // Tabs are submitted in index order, so the tab that is still selected this frame is reached
@@ -13215,7 +13529,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
         ImGui::EndTabItem();
       }
-      if (!tabOpen && i >= FirstDrawingTabIndex() && cmd.drawingTabs.size() > 2) {
+      if (cmd.closeTabPrompt.confirmed && cmd.closeTabPrompt.tabIdx == i)
+        tabOpen = false;  // REQ-383: "Close anyway" answered last frame
+      if (!tabOpen && i >= FirstDrawingTabIndex() && cmd.drawingTabs.size() > 2 && ProjectTabMayClose(cmd, i, log)) {
         const int closeIdx  = i;
         const int tabCount  = static_cast<int>(cmd.drawingTabs.size());
 
@@ -16535,6 +16851,65 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           wid = 1.6f;
         }
       };
+      ImFont* vpFont = ImGui::GetFont();
+      const std::vector<CadAnnotationScale>* vpAnnoScales =
+          cmd.annotationScales.empty() ? nullptr : &cmd.annotationScales;
+      auto drawVpMtext = [&](const CadAnnotation& ann, const ViewportTextOverlayPlan& plan, ImU32 tcol) {
+        std::string fieldResolved;
+        const std::string* drawText = &ann.text;
+        if (CadTextContainsFieldCodes(ann.text)) {
+          fieldResolved = CadAnnotationResolvedText(cmd, ann);
+          drawText = &fieldResolved;
+        }
+        const ImVec2 tl = m2s(static_cast<double>(ann.boxMinX) + oX, static_cast<double>(ann.boxMaxY) + oY);
+        const ImVec2 brc = m2s(static_cast<double>(ann.boxMaxX) + oX, static_cast<double>(ann.boxMinY) + oY);
+        const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
+        const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
+        const int acol = (ann.mtextAttach - 1) % 3;
+        const int arow = (ann.mtextAttach - 1) / 3;
+        float pw = 8.f, ph = fontPx * 1.22f;
+        MtextRichNaturalContentPx(vpFont, fontPx, *drawText, &pw, &ph, plan.fontFamily);
+        float drawX = tl.x + 4.f, drawY = tl.y + 4.f;
+        if (acol == 1)
+          drawX = tl.x + 0.5f * ((brc.x - tl.x) - pw);
+        else if (acol == 2)
+          drawX = brc.x - pw - 4.f;
+        if (arow == 1)
+          drawY = tl.y + 0.5f * ((brc.y - tl.y) - ph);
+        else if (arow == 2)
+          drawY = brc.y - ph - 4.f;
+        float wrapPx = std::max(8.f, (brc.x - tl.x) - 8.f);
+        if (acol != 0)
+          wrapPx = std::max(pw, 8.f);
+        Shx::Font* sfm = CadIsShxFontName(plan.fontFamily) ? Shx::Resolve(plan.fontFamily) : nullptr;
+        if (sfm && sfm->valid()) {
+          const std::string plain = MtextRichFlattenToPlain(*drawText);
+          const float lineH = fontPx * 1.4f;
+          const float thick = std::max(1.f, fontPx * 0.05f);
+          std::string ln;
+          float ly = drawY;
+          auto flush = [&](const std::string& line) {
+            const float w = Shx::MeasureWidthPx(*sfm, line, fontPx);
+            float lx = drawX;
+            if (acol == 1)
+              lx = tl.x + 0.5f * ((brc.x - tl.x) - w);
+            else if (acol == 2)
+              lx = std::max(tl.x + 4.f, brc.x - w - 4.f);
+            Shx::DrawText(sdl, *sfm, ImVec2(lx, ly + fontPx), fontPx, 0.f, tcol, line, thick);
+            ly += lineH;
+          };
+          for (char ch : plain) {
+            if (ch == '\n') {
+              flush(ln);
+              ln.clear();
+            } else
+              ln += ch;
+          }
+          flush(ln);
+        } else {
+          MtextRichDrawWrapped(sdl, vpFont, fontPx, ImVec2(drawX, drawY), wrapPx, tcol, *drawText, plan.fontFamily);
+        }
+      };
       // Lines (REQ-028: skip frozen layers).
       for (size_t i = 0; i + 5 < cmd.userLinesFlat.size(); i += 6) {
         const size_t lineIdx = i / 6;
@@ -16707,6 +17082,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const std::string layer = attr.layer.empty() ? std::string("0") : attr.layer;
         if (IsLayerFrozenInViewport(vp, layer))
           continue;
+        if (!CadAnnotativeVisibleAtActiveScale(cmd.cadBlockRefs[bi].annotative,
+                                               cmd.cadBlockRefs[bi].annotativeVisibleScaleNames, vpAnnoScales,
+                                               cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
+          continue;
         const CadBlockRef drawRef =
             CadBlockRefForViewportDraw(cmd.cadBlockRefs[bi], vp, cmd.modelUnitsPerPlottedInch);
         std::vector<CadBlockWorldSeg> segs;
@@ -16733,6 +17112,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             continue;
           const std::string layer = fa.layer.empty() ? std::string("0") : fa.layer;
           if (IsLayerFrozenInViewport(vp, layer))
+            continue;
+          if (!CadAnnotativeVisibleAtActiveScale(fr.annotative, fr.annotativeVisibleScaleNames, vpAnnoScales,
+                                                 cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
             continue;
           const hatchpat::Def* pdef = hatchpat::Find(HatchLibrary(), fr.patternName);
           if (!pdef)
@@ -16834,57 +17216,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       // Model TEXT / MTEXT through this viewport (issue #115): same m2s + clip as linework.
       {
-        ImFont* vpFont = ImGui::GetFont();
-        auto drawVpMtext = [&](const CadAnnotation& ann, const ViewportTextOverlayPlan& plan, ImU32 tcol) {
-          const ImVec2 tl = m2s(static_cast<double>(ann.boxMinX) + oX, static_cast<double>(ann.boxMaxY) + oY);
-          const ImVec2 brc = m2s(static_cast<double>(ann.boxMaxX) + oX, static_cast<double>(ann.boxMinY) + oY);
-          const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
-          const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
-          const int acol = (ann.mtextAttach - 1) % 3;
-          const int arow = (ann.mtextAttach - 1) / 3;
-          float pw = 8.f, ph = fontPx * 1.22f;
-          MtextRichNaturalContentPx(vpFont, fontPx, ann.text, &pw, &ph, plan.fontFamily);
-          float drawX = tl.x + 4.f, drawY = tl.y + 4.f;
-          if (acol == 1)
-            drawX = tl.x + 0.5f * ((brc.x - tl.x) - pw);
-          else if (acol == 2)
-            drawX = brc.x - pw - 4.f;
-          if (arow == 1)
-            drawY = tl.y + 0.5f * ((brc.y - tl.y) - ph);
-          else if (arow == 2)
-            drawY = brc.y - ph - 4.f;
-          float wrapPx = std::max(8.f, (brc.x - tl.x) - 8.f);
-          if (acol != 0)
-            wrapPx = std::max(pw, 8.f);
-          Shx::Font* sfm = CadIsShxFontName(plan.fontFamily) ? Shx::Resolve(plan.fontFamily) : nullptr;
-          if (sfm && sfm->valid()) {
-            const std::string plain = MtextRichFlattenToPlain(ann.text);
-            const float lineH = fontPx * 1.4f;
-            const float thick = std::max(1.f, fontPx * 0.05f);
-            std::string ln;
-            float ly = drawY;
-            auto flush = [&](const std::string& line) {
-              const float w = Shx::MeasureWidthPx(*sfm, line, fontPx);
-              float lx = drawX;
-              if (acol == 1)
-                lx = tl.x + 0.5f * ((brc.x - tl.x) - w);
-              else if (acol == 2)
-                lx = std::max(tl.x + 4.f, brc.x - w - 4.f);
-              Shx::DrawText(sdl, *sfm, ImVec2(lx, ly + fontPx), fontPx, 0.f, tcol, line, thick);
-              ly += lineH;
-            };
-            for (char ch : plain) {
-              if (ch == '\n') {
-                flush(ln);
-                ln.clear();
-              } else
-                ln += ch;
-            }
-            flush(ln);
-          } else {
-            MtextRichDrawWrapped(sdl, vpFont, fontPx, ImVec2(drawX, drawY), wrapPx, tcol, ann.text, plan.fontFamily);
-          }
-        };
         for (size_t bi = 0; bi < cmd.cadBlockRefs.size(); ++bi) {
           const EntityAttributes* bp =
               bi < cmd.cadBlockRefAttrs.size() ? &cmd.cadBlockRefAttrs[bi] : nullptr;
@@ -16893,12 +17224,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const std::string blayer = bp ? (bp->layer.empty() ? std::string("0") : bp->layer) : std::string("0");
           if (IsLayerFrozenInViewport(vp, blayer))
             continue;
+          if (!CadAnnotativeVisibleAtActiveScale(cmd.cadBlockRefs[bi].annotative,
+                                                 cmd.cadBlockRefs[bi].annotativeVisibleScaleNames, vpAnnoScales,
+                                                 cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
+            continue;
           const CadBlockRef drawRef =
               CadBlockRefForViewportDraw(cmd.cadBlockRefs[bi], vp, cmd.modelUnitsPerPlottedInch);
           std::vector<CadAnnotation> blockAnns;
           CadBlockCollectWorldAnnotations(cmd.blockDefs, drawRef, &blockAnns);
           const ImU32 btcol = vpBaseCol(blayer, bp ? bp->color : std::string("ByLayer"));
           for (const CadAnnotation& ban : blockAnns) {
+            if (!CadAnnotativeVisibleAtActiveScale(ban.annotative, ban.annotativeVisibleScaleNames, vpAnnoScales,
+                                                   cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
+              continue;
             if (ban.kind == CadAnnotation::Kind::Text) {
               const ImVec2 sp = m2s(static_cast<double>(ban.insX) + oX, static_cast<double>(ban.insY) + oY);
               const float textMup =
@@ -16918,6 +17256,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (CadAnnotationIsDimension(ann))
             continue;
           if (ann.kind != CadAnnotation::Kind::Table && ann.text.empty())
+            continue;
+          if (!CadAnnotativeVisibleAtActiveScale(ann.annotative, ann.annotativeVisibleScaleNames, vpAnnoScales,
+                                                 cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
             continue;
           const EntityAttributes* aa =
               (ai < cmd.cadAnnotationAttrs.size()) ? &cmd.cadAnnotationAttrs[ai] : nullptr;
@@ -17107,6 +17448,43 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             DrawCadDimStrokesOnDrawList(sdl, draft, dstrokes, dimWts, fontPx, preview, preview, preview, preview,
                                         vpFont, dsp.arrowType);
           }
+        }
+      }
+      // Multileaders through this viewport (REQ-367 / issue #622).
+      {
+        auto drawVpLeaderPath = [&](const std::vector<float>& path, ImU32 col, float thick) {
+          for (size_t pi = 0; pi + 5 < path.size(); pi += 3) {
+            const ImVec2 a =
+                m2sz(static_cast<double>(path[pi]) + oX, static_cast<double>(path[pi + 1]) + oY, path[pi + 2]);
+            const ImVec2 b = m2sz(static_cast<double>(path[pi + 3]) + oX, static_cast<double>(path[pi + 4]) + oY,
+                                  path[pi + 5]);
+            sdl->AddLine(a, b, col, thick);
+          }
+        };
+        for (size_t li = 0; li < cmd.cadMultileaders.size(); ++li) {
+          const CadMultileader& ml = cmd.cadMultileaders[li];
+          const EntityAttributes* lp =
+              li < cmd.cadMultileaderAttrs.size() ? &cmd.cadMultileaderAttrs[li] : nullptr;
+          if (lp && CadEntityIdHidden(&cmd.hiddenEntityIds, lp->id))
+            continue;
+          const std::string layer = lp ? (lp->layer.empty() ? std::string("0") : lp->layer) : std::string("0");
+          if (IsLayerFrozenInViewport(vp, layer))
+            continue;
+          if (!CadAnnotativeVisibleAtActiveScale(ml.annotative, ml.annotativeVisibleScaleNames, vpAnnoScales,
+                                                 cmd.currentAnnotationScaleIndex, &vp, cmd.modelUnitsPerPlottedInch))
+            continue;
+          const ImU32 mcol = vpBaseCol(layer, lp ? lp->color : std::string("ByLayer"));
+          drawVpLeaderPath(ml.pathXyz, mcol, 1.5f);
+          for (const std::vector<float>& branch : ml.extraLeaderPaths)
+            drawVpLeaderPath(branch, mcol, 1.5f);
+          if (cmd.mtextRichEditorOpen && cmd.mtextRichEditorMultileaderIndex == static_cast<int>(li))
+            continue;
+          CadAnnotation label = ml.label;
+          if (ml.annotative)
+            label.annotative = true;
+          const ViewportTextOverlayPlan plan =
+              PlanViewportTextOverlay(label, false, vp, cmd.modelUnitsPerPlottedInch);
+          drawVpMtext(label, plan, mcol);
         }
       }
       // Entity grips (REQ-036): squares at each selected entity's grip points; the grabbed grip is hot.
@@ -17850,11 +18228,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const ImVec2 b = mlToScreen(curLX, curLY);
         const ImVec2 mn(std::min(a.x, b.x), std::min(a.y, b.y));
         const ImVec2 mx2(std::max(a.x, b.x), std::max(a.y, b.y));
-        const bool windowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;
-        const ImU32 fill = windowMode ? IM_COL32(59, 130, 246, 40) : IM_COL32(90, 220, 120, 40);
-        const ImU32 edge = windowMode ? IM_COL32(59, 130, 246, 200) : IM_COL32(90, 220, 120, 220);
-        sdl->AddRectFilled(mn, mx2, fill);
-        sdl->AddRect(mn, mx2, edge, 0.f, 0, 1.0f);
+        DrawSelectionBoxRect(sdl, mn, mx2, (mx - cmd.selBoxAnchorScreenX) > 3.f);
       }
       sdl->PopClipRect();
     }
@@ -17898,6 +18272,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // space or floating model space). In a paper layout the canvas is the sheet (paper inches), so drawing
   // model text here would paint it at local-coord positions on the sheet — the stray "artifacts" bug (REQ-038).
   const bool modelAnnotationsVisible = modelSpace || InFloatingModelSpace(cmd);
+  const std::vector<CadAnnotationScale>* const kAnnoScales =
+      cmd.annotationScales.empty() ? nullptr : &cmd.annotationScales;
 
   // HATCH preview (REQ-043): translucent fill + bright outline of the candidate region under the cursor.
   if (modelAnnotationsVisible && cmd.active == AK::Hatch && cmd.hatchPreviewValid &&
@@ -17936,11 +18312,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const CadFilledRegion& fr = cmd.cadFilledRegions[fi];
       if (fr.isSolid())
         continue;
+      if (!CadAnnotativeVisibleAtActiveScale(fr.annotative, fr.annotativeVisibleScaleNames, kAnnoScales,
+                                             cmd.currentAnnotationScaleIndex, hatchVp, cmd.modelUnitsPerPlottedInch))
+        continue;
       const hatchpat::Def* pdef = hatchpat::Find(HatchLibrary(), fr.patternName);
       if (!pdef)
         continue;
-      const CadFilledRegion drawFr =
-          FilledRegionForAnnotativeDraw(fr, hatchVp, cmd.modelUnitsPerPlottedInch);
+      const CadFilledRegion drawFr = FilledRegionForAnnotativeDraw(fr, hatchVp, cmd.modelUnitsPerPlottedInch,
+                                                                   kAnnoScales, cmd.currentAnnotationScaleIndex);
       segs.clear();
       if (hatchpattern::BuildSegments(drawFr, *pdef, &segs) == 0)
         continue;
@@ -18012,7 +18391,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     auto drawAnnotationVisual = [&](const CadAnnotation& a, const EntityAttributes* attrPtr, ImU32 colFallback,
                                     std::optional<bool> multileaderAnnotative = std::nullopt) {
       const Viewport* annVp = CurrentViewport(cmd);
-      const float drawMup = AnnotativeModelUnitsPerPlottedInch(a, annVp, cmd.modelUnitsPerPlottedInch);
+      if (!CadAnnotativeVisibleAtActiveScale(
+              a.annotative, a.annotativeVisibleScaleNames, kAnnoScales, cmd.currentAnnotationScaleIndex, annVp,
+              cmd.modelUnitsPerPlottedInch))
+        return;
+      const float drawMup = AnnotativeModelUnitsPerPlottedInch(a, annVp, cmd.modelUnitsPerPlottedInch, kAnnoScales,
+                                                                 cmd.currentAnnotationScaleIndex);
       const float hWorld = CadAnnotationHeightWorld(a, drawMup);
       if (CadAnnotationIsDimension(a) && cmd.activeSpaceIndex >= 0)
         return;
@@ -18310,6 +18694,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         } else if (const Viewport* mvp = CurrentViewport(cmd)) {
           mtextMup = MtextScaleThroughViewport(a, *mvp, cmd.modelUnitsPerPlottedInch);
         }
+        std::string mtextFieldResolved;
+        const std::string* mtextDrawText = &a.text;
+        if (CadTextContainsFieldCodes(a.text)) {
+          mtextFieldResolved = CadAnnotationResolvedText(cmd, a);
+          mtextDrawText = &mtextFieldResolved;
+        }
         const float hWorldMtext = CadAnnotationHeightWorld(a, mtextMup);
         // The screen-size cap belongs to survey-point labels only: those are sized for legibility, not to
         // scale. Applying it to plain MTEXT made the text stop growing once zoomed past ~128 px while the
@@ -18332,7 +18722,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (a.surveyPointLabelForId >= 0) {
           float pw = 8.f;
           float ph = fontPx * 1.22f;
-          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, mtextFam);
+          MtextRichNaturalContentPx(font, fontPx, *mtextDrawText, &pw, &ph, mtextFam);
           drawX = rx0 + 0.5f * ((rx1 - rx0) - pw);
           drawY = ry0 + 0.5f * ((ry1 - ry0) - ph);
           wrapW = std::max(pw, 8.f);
@@ -18399,7 +18789,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const int acol = (a.mtextAttach - 1) % 3;
           const int arow = (a.mtextAttach - 1) / 3;
           float pw = 8.f, ph = fontPx * 1.22f;
-          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, mtextFam);
+          MtextRichNaturalContentPx(font, fontPx, *mtextDrawText, &pw, &ph, mtextFam);
           // Anchor to the box, but never clamp back inside it: content taller or wider than the box
           // must overhang rather than be shoved in (and then clipped away).
           if (acol == 1)      drawX = rx0 + 0.5f * ((rx1 - rx0) - pw);
@@ -18421,8 +18811,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         Shx::Font* sfm = CadIsShxFontName(mtextFam) ? Shx::Resolve(mtextFam) : nullptr;
         if (sfm && sfm->valid()) {
           // Render MTEXT as SHX strokes (exact AutoCAD match), line by line, honoring the attachment.
-          const std::string plain = MtextRichFlattenToPlain(a.text);
-          const bool underline = a.text.find("[[u]]") != std::string::npos;
+          const std::string plain = MtextRichFlattenToPlain(*mtextDrawText);
+          const bool underline = mtextDrawText->find("[[u]]") != std::string::npos;
           const int acol = (a.mtextAttach - 1) % 3;
           const float lineH = fontPx * 1.4f;
           const float thick = std::max(1.f, fontPx * 0.05f);
@@ -18453,7 +18843,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             ly += lineH;
           }
         } else {
-          MtextRichDrawWrapped(dl, font, fontPx, ImVec2(drawX, drawY), wrapW, col, a.text, mtextFam);
+          MtextRichDrawWrapped(dl, font, fontPx, ImVec2(drawX, drawY), wrapW, col, *mtextDrawText, mtextFam);
         }
         if (rotateMtext)
           RotateDrawListVertsAround(dl, mtextVtx0, mtextPivot, a.rotationRad);
@@ -18545,10 +18935,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (bp && CadEntityIdHidden(&cmd.hiddenEntityIds, bp->id))
         continue;
       const Viewport* blkVp = CurrentViewport(cmd);
-      const CadBlockRef drawRef = blkVp != nullptr
-                                      ? CadBlockRefForViewportDraw(cmd.cadBlockRefs[bi], *blkVp,
-                                                                     cmd.modelUnitsPerPlottedInch)
-                                      : cmd.cadBlockRefs[bi];
+      if (!CadAnnotativeVisibleAtActiveScale(cmd.cadBlockRefs[bi].annotative,
+                                             cmd.cadBlockRefs[bi].annotativeVisibleScaleNames, kAnnoScales,
+                                             cmd.currentAnnotationScaleIndex, blkVp, cmd.modelUnitsPerPlottedInch))
+        continue;
+      const CadBlockRef drawRef =
+          CadBlockRefForAnnotativeDisplay(cmd.cadBlockRefs[bi], blkVp, cmd.modelUnitsPerPlottedInch, kAnnoScales,
+                                          cmd.currentAnnotationScaleIndex);
       std::vector<CadAnnotation> blockAnns;
       CadBlockCollectWorldAnnotations(cmd.blockDefs, drawRef, &blockAnns);
       for (const CadAnnotation& a : blockAnns)
@@ -18638,6 +19031,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const EntityAttributes* lp =
             li < cmd.cadMultileaderAttrs.size() ? &cmd.cadMultileaderAttrs[li] : nullptr;
         if (lp && CadEntityIdHidden(&cmd.hiddenEntityIds, lp->id))
+          continue;
+        const Viewport* mlVp = CurrentViewport(cmd);
+        if (!CadAnnotativeVisibleAtActiveScale(ml.annotative, ml.annotativeVisibleScaleNames, kAnnoScales,
+                                               cmd.currentAnnotationScaleIndex, mlVp,
+                                               cmd.modelUnitsPerPlottedInch))
           continue;
         ImU32 col = kAnnCol;
         if (lp) {
@@ -19032,9 +19430,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     selCam.WorldToScreen(rawX, rawY, static_cast<double>(cmd.uiCursorWorldZ), avail.x, avail.y, &bx, &by);
     const ImVec2 mnSel(imgPos.x + std::min(ax, bx), imgPos.y + std::min(ay, by));
     const ImVec2 mxSel(imgPos.x + std::max(ax, bx), imgPos.y + std::max(ay, by));
-    ImDrawList* dlSel = ImGui::GetWindowDrawList();
-    dlSel->AddRectFilled(mnSel, mxSel, IM_COL32(64, 140, 255, 56));
-    dlSel->AddRect(mnSel, mxSel, IM_COL32(115, 199, 255, 230), 0.f, 0, 1.5f);
+    const bool boxWindowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;  // L→R window, R→L crossing
+    DrawSelectionBoxRect(ImGui::GetWindowDrawList(), mnSel, mxSel, boxWindowMode);
+    // REQ-370 live preview: the same hit test the click runs, same camera rule as `finishBox`.
+    const Camera boxPreviewCam = CadViewCamera(cmd);
+    UpdateSelectionBoxPreview(cmd, static_cast<float>(rawX), static_cast<float>(rawY), boxWindowMode,
+                              CadViewIsPlan(cmd) ? nullptr : &boxPreviewCam, cmd.uiViewportWidthPx,
+                              cmd.uiViewportHeightPx);
+  } else if (!cmd.selBoxPreview.empty() || cmd.selBoxPreviewKeyValid) {
+    UpdateSelectionBoxPreview(cmd, 0.f, 0.f, false, nullptr, 0.f, 0.f);  // box closed: drop the preview
   }
 
   if (modelAnnotationsVisible && !cmd.surveyPoints.empty() && cmd.surveyPointShowIdInViewport) {
