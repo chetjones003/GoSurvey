@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "PdfDocument.hpp"
+#include "PdfSplit.hpp"
 #include "PdfViewerCore.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -252,10 +253,19 @@ struct Viewer {
   Clock::time_point openedAt = Clock::now();
   double firstPageMs = -1;
   BenchRun bench;
+  // REQ-389: the Split dialog. The copy runs on a one-shot worker so a long file never freezes the UI.
+  bool splitOpenRequest = false;
+  char splitBuf[256] = "";
+  std::string splitError;
+  std::future<std::string> splitting;
+  std::atomic<int> splitProgress{0};
+  int splitTotal = 0;
+  std::string splitDest;
 };
 
 std::vector<std::unique_ptr<Viewer>> g_viewers;
 int g_nextId = 1;
+int g_focusedId = 0; ///< the viewer that last had focus: the target of the PDFSPLIT command
 
 // Textures are freed at the START of the next frame: this frame's draw lists (the thumbnail strip is
 // recorded before the pages are updated) may still point at them until the frame is rendered.
@@ -296,6 +306,8 @@ void DrainGraveyard() {
 }
 
 void DestroyViewer(Viewer& v) {
+  if (v.splitting.valid())
+    v.splitting.wait(); // a split in flight finishes (it reads the file, never changes the source)
   v.worker->Shutdown();
   DeleteTextures(v.cache.Clear());
 }
@@ -471,9 +483,74 @@ void DrawToolbar(Viewer& v) {
     GoToPage(v, v.curPage);
   ImGui::SameLine();
   ImGui::Checkbox("Thumbnails", &v.showThumbs);
+  ImGui::SameLine();
+  if (ImGui::Button("Split..."))
+    v.splitOpenRequest = true;
   ImGui::PopStyleColor(5);
   ImGui::PopStyleVar(4);
   ImGui::Spacing();
+}
+
+// REQ-389: choose pages, then "Save As..." writes them as a new PDF. The original is never touched.
+void DrawSplitDialog(Viewer& v, std::vector<std::string>& log) {
+  char id[64];
+  std::snprintf(id, sizeof(id), "Split PDF###pdfsplit%d", v.id);
+  if (v.splitOpenRequest) {
+    v.splitOpenRequest = false;
+    v.splitError.clear();
+    ImGui::OpenPopup(id);
+  }
+  ImGui::SetNextWindowSize(ImVec2(460.f, 0.f), ImGuiCond_Appearing);
+  if (!ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    return;
+  const bool busy = v.splitting.valid();
+  if (busy && v.splitting.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    const std::string err = v.splitting.get();
+    if (err.empty()) {
+      log.push_back("PDF split: saved " + std::to_string(v.splitTotal) + " page(s) to " + v.splitDest);
+      ImGui::CloseCurrentPopup();
+    } else {
+      v.splitError = err;
+      log.push_back("PDF split failed: " + err);
+    }
+  }
+  ImGui::Text("Pages to keep (of %d):", v.layout.PageCount());
+  ImGui::BeginDisabled(v.splitting.valid());
+  ImGui::SetNextItemWidth(-1.f);
+  ImGui::InputTextWithHint("##splitpages", "for example 1-5, 9, 12-20", v.splitBuf, sizeof(v.splitBuf));
+  ImGui::EndDisabled();
+  ImGui::TextDisabled("Saved as a new PDF; the original file is not changed.");
+  if (!v.splitError.empty())
+    ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", v.splitError.c_str());
+  if (v.splitting.valid()) {
+    const float f = v.splitTotal > 0 ? static_cast<float>(v.splitProgress.load()) / static_cast<float>(v.splitTotal) : 0.f;
+    ImGui::ProgressBar(f, ImVec2(-1.f, 0.f));
+  } else {
+    if (ImGui::Button("Save As...")) {
+      const PageListResult pl = ParsePageList(v.splitBuf, v.layout.PageCount());
+      if (!pl.error.empty()) {
+        v.splitError = pl.error;
+      } else {
+        const std::string stem = std::filesystem::u8path(v.path).stem().u8string() + "-split.pdf";
+        char out[1024] = {};
+        if (BrowseSaveFilePdfUtf8(out, sizeof(out), stem.c_str()) && out[0] != '\0') {
+          v.splitError.clear();
+          v.splitDest = out;
+          v.splitTotal = static_cast<int>(pl.pages.size());
+          v.splitProgress = 0;
+          const std::filesystem::path src = std::filesystem::u8path(v.path);
+          const std::filesystem::path dst = std::filesystem::u8path(v.splitDest);
+          v.splitting = std::async(std::launch::async, [src, dst, pages = pl.pages, &prog = v.splitProgress] {
+            return SplitPdf(src, pages, dst, &prog);
+          });
+        }
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel"))
+      ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
 }
 
 void DrawThumbnails(Viewer& v) {
@@ -747,6 +824,19 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
     OpenPdfInViewer(cmd.pdfViewerOpenRequest);
     cmd.pdfViewerOpenRequest.clear();
   }
+  if (cmd.pdfSplitRequest) {  // PDFSPLIT: open the Split dialog on the viewer that last had focus
+    cmd.pdfSplitRequest = false;
+    Viewer* target = nullptr;
+    for (auto& vp : g_viewers)
+      if (vp->loaded && (target == nullptr || vp->id == g_focusedId))
+        target = vp.get();
+    if (target != nullptr) {
+      target->splitOpenRequest = true;
+      target->focusNext = true;
+    } else {
+      log.push_back("PDFSPLIT - open the PDF in the viewer first (PDFVIEW), then run PDFSPLIT.");
+    }
+  }
   if (!cmd.pdfViewBenchPath.empty()) {  // BENCH PDFVIEW <file>: time a real PDF's first page and thumbnail strip
     const std::string path = cmd.pdfViewBenchPath;
     cmd.pdfViewBenchPath.clear();
@@ -833,6 +923,8 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
       }
 #endif
     }
+    if (shown && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows))
+      g_focusedId = v.id;
     if (shown) {
       if (!v.error.empty()) {
         ImGui::TextWrapped("This PDF could not be opened: %s.", v.error.c_str());
@@ -841,6 +933,7 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
         ImGui::TextUnformatted("Opening...");
       } else {
         DrawToolbar(v);
+        DrawSplitDialog(v, log);
         if (v.showThumbs) {
           DrawThumbnails(v);
           // The sidebar's edge: drag it to resize.

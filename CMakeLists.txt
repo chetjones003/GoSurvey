@@ -642,6 +642,7 @@ add_executable(GoSurvey
   # REQ-387 / ADR-067 — the built-in PDF viewer: pure core, PDFium wrapper, ImGui window
   src/pdf/PdfViewerCore.cpp
   src/pdf/PdfDocument.cpp
+  src/pdf/PdfSplit.cpp
   src/ui/PdfViewerWindow.cpp
 
   # Platform
@@ -1336,8 +1337,10 @@ if(GOSURVEY_BUILD_TESTS)
   # REQ-387: the PDF viewer's pure core and its PDFium wrapper (opened against generated PDFs).
   target_sources(GoSurveyTests PRIVATE
     tests/PdfViewerTests.cpp
+    tests/PdfSplitTests.cpp
     src/pdf/PdfViewerCore.cpp
-    src/pdf/PdfDocument.cpp)
+    src/pdf/PdfDocument.cpp
+    src/pdf/PdfSplit.cpp)
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD
