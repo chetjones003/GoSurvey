@@ -4598,7 +4598,7 @@ struct AppCommandState {
   int surfacePropertiesIndex = -1;
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
   /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `.gs`.
-  enum class ToolspaceTab : int { Prospector = 0, Settings = 1 };
+  enum class ToolspaceTab : int { Prospector = 0, Settings = 1, Project = 2 };
   bool showToolspaceWindow = true;
   /// View Manager (REQ-106) — the dialog half of "a VIEW command/dialog". Session-only, like the
   /// other manager windows: which panels are open is not a property of the drawing.

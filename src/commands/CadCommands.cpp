@@ -5135,6 +5135,12 @@ void ExecuteToolspaceCommand(AppCommandState& st, const std::string& args, std::
     log.push_back("TOOLSPACE — Prospector.");
     return;
   }
+  if (verb == "project") {
+    st.showToolspaceWindow = true;
+    st.toolspaceTab = AppCommandState::ToolspaceTab::Project;
+    log.push_back("TOOLSPACE — Project.");
+    return;
+  }
   if (verb == "settings") {
     st.showToolspaceWindow = true;
     st.toolspaceTab = AppCommandState::ToolspaceTab::Settings;

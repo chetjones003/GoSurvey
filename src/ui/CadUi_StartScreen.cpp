@@ -267,6 +267,38 @@ void DrawDwgPlaceholder(ImDrawList* dl, ImVec2 a, ImVec2 b) {
   dl->AddText(ImVec2(c.x - ts.x * 0.5f, p1.y - ts.y - 3.f), label, t);
 }
 
+// A flat "project" glyph (folder holding a stack of drawing sheets) for a Recent Projects card. A
+// project has no single picture to capture, so every project card shows this instead of a thumbnail.
+void DrawProjectPlaceholder(ImDrawList* dl, ImVec2 a, ImVec2 b) {
+  const ImU32 top = ImGui::GetColorU32(Lerp(HeroBg(), Accent(), 0.16f));
+  const ImU32 bot = ImGui::GetColorU32(HeroBg());
+  dl->AddRectFilledMultiColor(a, b, top, top, bot, bot);
+  const ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+  const float  u = std::min(b.x - a.x, b.y - a.y) * 0.30f;  // half the folder width
+  const ImU32  sheet = ImGui::GetColorU32(ImVec4(0.86f, 0.88f, 0.92f, 1.f));
+  const ImU32  sheetEdge = ImGui::GetColorU32(ImVec4(0.62f, 0.66f, 0.72f, 1.f));
+  const ImU32  back = ImGui::GetColorU32(AccentLo());
+  const ImU32  front = ImGui::GetColorU32(Accent());
+  const ImU32  badge = ImGui::GetColorU32(AccentHi());
+  const float  fy = c.y - u * 0.55f;  // folder top edge
+  // Folder back panel and tab.
+  dl->AddRectFilled(ImVec2(c.x - u, fy - u * 0.18f), ImVec2(c.x - u * 0.25f, fy + u * 0.1f), back, 3.f);
+  dl->AddRectFilled(ImVec2(c.x - u, fy), ImVec2(c.x + u, c.y + u * 0.8f), back, 4.f);
+  // Two sheets peeking out of the folder.
+  for (int i = 0; i < 2; ++i) {
+    const float off = static_cast<float>(i) * u * 0.18f;
+    const ImVec2 s0(c.x - u * 0.72f + off, fy - u * 0.34f + off * 0.5f);
+    const ImVec2 s1(c.x + u * 0.60f + off, c.y + u * 0.2f);
+    dl->AddRectFilled(s0, s1, sheet, 2.f);
+    dl->AddRect(s0, s1, sheetEdge, 2.f);
+  }
+  // Folder front panel, with a "PROJECT" tag line below it.
+  dl->AddRectFilled(ImVec2(c.x - u, c.y - u * 0.15f), ImVec2(c.x + u, c.y + u * 0.8f), front, 4.f);
+  const char* t = "PROJECT";
+  const ImVec2 ts = ImGui::CalcTextSize(t);
+  dl->AddText(ImVec2(c.x - ts.x * 0.5f, c.y + u * 0.8f + 5.f), badge, t);
+}
+
 // End-truncate `s` with a trailing ellipsis until it fits `maxW` pixels at the current font.
 // Steps back over UTF-8 continuation bytes so a multi-byte glyph is never split.
 std::string EllipsizeToWidth(const std::string& s, float maxW) {
@@ -378,33 +410,39 @@ void DrawRecentProjects(AppCommandState& cmd, std::vector<std::string>& log) {
 
   ImDrawList* dl = ImGui::GetWindowDrawList();
   std::string openPath, removePath;
-  const float rowH = 48.f;
+  // Same card as a Recent Drawings grid tile: size, shadow, rounded caption (project glyph for the picture).
+  const float tileW = 208.f;
+  const float thumbH = 132.f;
+  const float capH = 52.f;
+  const float gap = 18.f;
+  const int   perRow = std::max(1, static_cast<int>((ImGui::GetContentRegionAvail().x + gap) / (tileW + gap)));
+  int col = 0;
   for (const recent::Entry& e : projects) {
     ImGui::PushID(e.path.c_str());
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
-    const float rowW = ImGui::GetContentRegionAvail().x;
-    const ImVec2 p1(p0.x + rowW, p0.y + rowH);
-    if (ImGui::InvisibleButton("proj", ImVec2(rowW, rowH)))
+    const ImVec2 p1(p0.x + tileW, p0.y + thumbH + capH);
+    if (ImGui::InvisibleButton("proj", ImVec2(tileW, thumbH + capH)))
       openPath = e.path;
     const bool hov = ImGui::IsItemHovered();
-    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(hov ? CardBgHover() : CardBg()), 6.f);
-    dl->AddRect(p0, p1, ImGui::GetColorU32(hov ? Accent() : CardBorder()), 6.f, 0, hov ? 2.f : 1.f);
 
-    // Folder glyph in place of a thumbnail (a project has no single picture to capture yet).
-    const ImVec2 g0(p0.x + 12.f, p0.y + 14.f);
-    const ImU32  gc = ImGui::GetColorU32(Accent());
-    dl->AddRectFilled(g0, ImVec2(g0.x + 12.f, g0.y + 4.f), gc, 1.5f);
-    dl->AddRectFilled(ImVec2(g0.x, g0.y + 3.f), ImVec2(g0.x + 28.f, g0.y + 20.f), gc, 2.5f);
+    SoftShadow(dl, p0, p1, 8.f, hov ? 12.f : 7.f);
+    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(hov ? CardBgHover() : CardBg()), 8.f);
 
-    const float textX = p0.x + 52.f;
-    const float textW = std::max(40.f, p1.x - textX - 12.f);
-    dl->AddText(ImVec2(textX, p0.y + 6.f), ImGui::GetColorU32(ImGuiCol_Text),
+    const ImVec2 t0 = p0, t1(p1.x, p0.y + thumbH);
+    dl->PushClipRect(t0, t1, true);
+    DrawProjectPlaceholder(dl, t0, t1);
+    dl->PopClipRect();
+    dl->AddLine(ImVec2(t0.x, t1.y), ImVec2(t1.x, t1.y), ImGui::GetColorU32(CardBorder()), 1.f);
+
+    const float textW = tileW - 24.f;
+    dl->AddText(ImVec2(p0.x + 12.f, t1.y + 8.f), ImGui::GetColorU32(ImGuiCol_Text),
                 EllipsizeToWidth(e.name, textW).c_str());
-    const std::string folder = std::filesystem::u8path(e.path).parent_path().u8string();
-    dl->AddText(ImVec2(textX, p0.y + 26.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                EllipsizeToWidth(folder + "  \xC2\xB7  " + RelativeTimeText(e.lastOpenedUnix), textW).c_str());
+    dl->AddText(ImVec2(p0.x + 12.f, t1.y + 27.f), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                EllipsizeToWidth(RelativeTimeText(e.lastOpenedUnix) + "  \xC2\xB7  Project", textW).c_str());
+
+    dl->AddRect(p0, p1, ImGui::GetColorU32(hov ? Accent() : CardBorder()), 8.f, 0, hov ? 2.f : 1.f);
     if (hov)
-      ImGui::SetTooltip("%s", e.path.c_str());
+      ImGui::SetTooltip("%s\n%s", e.name.c_str(), e.path.c_str());
     if (ImGui::BeginPopupContextItem("##projctx")) {
       if (ImGui::MenuItem("Open"))
         openPath = e.path;
@@ -413,7 +451,12 @@ void DrawRecentProjects(AppCommandState& cmd, std::vector<std::string>& log) {
       ImGui::EndPopup();
     }
     ImGui::PopID();
-    ImGui::Dummy(ImVec2(0.f, 4.f));
+    if (++col < perRow && &e != &projects.back())
+      ImGui::SameLine(0.f, gap);
+    else {
+      col = 0;
+      ImGui::Dummy(ImVec2(0.f, gap));
+    }
   }
   ImGui::Dummy(ImVec2(0.f, 6.f));
 

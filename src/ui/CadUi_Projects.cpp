@@ -960,6 +960,56 @@ void HealthList(const char* title, const std::vector<std::string>& items) {
   ImGui::Spacing();
 }
 
+// The Project Health report as a cell table: one row per file, the problem class in the first column.
+// Information-only rows ("omitted") are shown but never count as problems.
+void HealthTable(const projfiles::Health& h, int themeIdx) {
+  struct Row {
+    const char*  status;
+    const char*  meaning;
+    ImVec4       colour;
+    const std::vector<std::string>* items;
+  };
+  const Row rows[] = {
+      {"Missing", "Not on disk", ImVec4(0.75f, 0.15f, 0.12f, 1.f), &h.missing},
+      {"Unsaved", "Drawing has unsaved changes", ImVec4(0.80f, 0.45f, 0.05f, 1.f), &h.unsaved},
+      {"Linked", "Outside the project; will not travel with it", ImVec4(0.70f, 0.50f, 0.05f, 1.f), &h.linked},
+      {"Unreachable", "This version cannot reach it", ImVec4(0.75f, 0.15f, 0.12f, 1.f), &h.unavailable},
+      {"Left out", "Left out of the pack this project was opened from", ImVec4(0.30f, 0.45f, 0.65f, 1.f), &h.omitted},
+  };
+  size_t count = 0;
+  for (const Row& r : rows)
+    count += r.items->size();
+  // Long file names and details wrap inside their cells, so a row can take two lines; the table is as
+  // tall as its rows (up to a cap) and scrolls past that.
+  const float lineH = ImGui::GetTextLineHeightWithSpacing();
+  const float height = std::min(320.f, lineH * (2.f * static_cast<float>(count) + 1.5f) + 8.f);
+  PushPropertyPaperColors(themeIdx);
+  if (ImGui::BeginTable("##healthtable", 3,
+                        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                        ImVec2(640.f, height))) {
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 100.f);
+    ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch, 0.45f);
+    ImGui::TableSetupColumn("Detail", ImGuiTableColumnFlags_WidthStretch, 0.55f);
+    ImGui::TableHeadersRow();
+    PushPropertyPaperBodyText(themeIdx);
+    for (const Row& r : rows) {
+      for (const std::string& item : *r.items) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextColored(r.colour, "%s", r.status);
+        ImGui::TableNextColumn();
+        ImGui::TextWrapped("%s", item.c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextWrapped("%s", r.meaning);
+      }
+    }
+    PopPropertyPaperBodyText();
+    ImGui::EndTable();
+  }
+  PopPropertyPaperColors();
+}
+
 // REQ-379 clause 4: Project Health.
 void DrawProjectHealthModal(AppCommandState& cmd, std::vector<std::string>& log) {
   if (cmd.projectHealthUid != 0 && !ImGui::IsPopupOpen("Project Health##projhealth"))
@@ -982,16 +1032,19 @@ void DrawProjectHealthModal(AppCommandState& cmd, std::vector<std::string>& log)
     return;
   }
   const projfiles::Health h = ProjectHealthFor(cmd, cmd.projectHealthUid);
-  ImGui::TextWrapped("Project %s", s->project.name.c_str());
-  ImGui::Spacing();
-  auto list = HealthList;
-  list("Linked files (will NOT travel with the project):", h.linked);
-  list("Missing files:", h.missing);
-  list("Files this version cannot reach:", h.unavailable);
-  list("Unavailable (left out of the pack this project was opened from):", h.omitted);
-  list("Drawings with unsaved changes:", h.unsaved);
+  ImGui::SetWindowFontScale(1.2f);
+  ImGui::Text("Project Health: %s", s->project.name.c_str());
+  ImGui::SetWindowFontScale(1.f);
+  const size_t problems = h.linked.size() + h.missing.size() + h.unavailable.size() + h.unsaved.size();
   if (h.Clean())
-    ImGui::TextWrapped("No problems found: every tracked file is in the project and every drawing is saved.");
+    ImGui::TextColored(ImVec4(0.25f, 0.65f, 0.30f, 1.f),
+                       "No problems found: every tracked file is in the project and every drawing is saved.");
+  else
+    ImGui::TextColored(ImVec4(0.85f, 0.45f, 0.10f, 1.f), "%zu problem%s found", problems, problems == 1 ? "" : "s");
+  ImGui::Spacing();
+  if (!h.Clean() || !h.omitted.empty())
+    HealthTable(h, cmd.displayColorThemeIdx);
+  ImGui::Spacing();
 
   ImGui::BeginDisabled(h.linked.empty() || s->readOnly);
   if (ImGui::Button("Copy links into the project")) {
