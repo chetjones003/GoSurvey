@@ -117,7 +117,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
   }
 
   // Plotting and the PDF viewer's render worker must not be inside PDFium at the same time (REQ-387).
-  std::lock_guard<std::mutex> pdfiumLock(pdfview::PdfiumMutex());
+  std::lock_guard<std::recursive_mutex> pdfiumLock(pdfview::PdfiumMutex());
   RefreshSurfaceDisplayGeometry(st);
 
   // Layer → plottable lookup (excludes off / frozen / non-plottable layers). Unknown layer → plottable.

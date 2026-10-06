@@ -166,6 +166,19 @@ TEST_CASE("PageCache replaces a same-level entry and reports the old one", "[pdf
   CHECK(cache.Best(3)->handle == 8);
 }
 
+TEST_CASE("ReadAheadThatFits never plans more sharp pages than the cache holds", "[pdfview][req387]") {
+  const size_t cap = 256ull * 1024 * 1024;
+  CHECK(ReadAheadThatFits(cap, 3'400'000, 2, 6) == 6);        // letter page, normal zoom: full window
+  CHECK(ReadAheadThatFits(cap, 50'000'000, 1, 6) == 2);       // 36x48 sheet: only a couple fit
+  CHECK(ReadAheadThatFits(cap, 80'000'000, 2, 6) == 0);       // visible pages alone fill the cap
+  for (size_t bytes : {1'000'000ull, 20'000'000ull, 60'000'000ull}) {
+    const int vis = 2;
+    const int ra = ReadAheadThatFits(cap, bytes, vis, 6);
+    const bool fits = static_cast<size_t>(vis + ra + ra / 2) * bytes <= cap - cap / 6;
+    CHECK((fits || ra == 0));
+  }
+}
+
 TEST_CASE("ScaleKey quantises a smooth zoom", "[pdfview][req387]") {
   CHECK(ScaleKeyFor(1.333f) == ScaleKeyFor(1.34f));
   CHECK(ScaleKeyFor(0.0001f) >= 2);

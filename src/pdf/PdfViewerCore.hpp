@@ -65,6 +65,11 @@ struct Have {
 std::vector<RenderRequest> PlanRequests(const VisibleRange& vis, int pageCount, int scrollDir, int readAhead,
                                         int scaleKey, const std::function<Have(int page)>& have);
 
+/// How many pages ahead the planner may ask for so that visible + ahead + behind (ahead/2) sharp pages
+/// still fit in the cache; asking for more makes every upload evict a page that is asked for again.
+/// 1/6 of the cap is left for the small stand-ins.
+int ReadAheadThatFits(size_t capBytes, size_t pageBytes, int visibleCount, int maxAhead);
+
 /// Quantise a display scale (px per pt) so a smooth zoom does not request a render per frame.
 int ScaleKeyFor(float pxPerPt);
 float PxPerPtFor(int scaleKey);

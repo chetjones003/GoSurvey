@@ -44,6 +44,7 @@ constexpr float kThumbItemH = 150.f;
 struct RenderResult {
   RenderRequest req;
   Bitmap bm;
+  bool failed = false; ///< PDFium could not render it (not merely cancelled)
 };
 
 struct Worker {
@@ -93,8 +94,13 @@ struct Worker {
       const bool ok = doc->RenderPage(r.page, w, h, res.bm, [this] { return abort.load() || stop.load(); });
       std::lock_guard<std::mutex> lock(m);
       haveCurrent = false;
-      if (ok)
+      if (ok) {
         done.push_back(std::move(res));
+      } else if (!abort.load() && !stop.load()) {
+        res.failed = true; // a real failure: report it so the planner stops asking
+        res.bm = {};
+        done.push_back(std::move(res));
+      }
     }
   }
 
@@ -114,6 +120,15 @@ struct Worker {
       running = true;
       th = std::thread([this] { Run(); });
     }
+  }
+
+  /// Requests already rendered and waiting for the UI thread to upload them.
+  std::vector<RenderRequest> Waiting() {
+    std::lock_guard<std::mutex> lock(m);
+    std::vector<RenderRequest> w;
+    for (const RenderResult& r : done)
+      w.push_back(r.req);
+    return w;
   }
 
   void Shutdown() {
@@ -158,6 +173,9 @@ struct Viewer {
   float pendingScrollY = -1.f;
   float pendingScrollX = -1.f;
   float lastScrollY = 0.f;
+  float lastScrollX = 0.f;
+  float viewW = 800.f, viewH = 600.f; ///< the page canvas, for zooming about its centre
+  std::vector<int> failedPages;       ///< pages PDFium could not render (reported once, never retried)
   int scrollDir = 1;
   bool fitWidthPending = true;
   int thumbFirst = 0, thumbLast = -1;
@@ -171,12 +189,20 @@ struct Viewer {
 std::vector<std::unique_ptr<Viewer>> g_viewers;
 int g_nextId = 1;
 
+// Textures are freed at the START of the next frame: this frame's draw lists (the thumbnail strip is
+// recorded before the pages are updated) may still point at them until the frame is rendered.
+std::vector<GLuint> g_graveyard;
+
 void DeleteTextures(const std::vector<PageCache::Entry>& gone) {
-  for (const PageCache::Entry& e : gone) {
-    const GLuint t = e.handle;
-    if (t != 0)
-      glDeleteTextures(1, &t);
-  }
+  for (const PageCache::Entry& e : gone)
+    if (e.handle != 0)
+      g_graveyard.push_back(e.handle);
+}
+
+void DrainGraveyard() {
+  for (GLuint t : g_graveyard)
+    glDeleteTextures(1, &t);
+  g_graveyard.clear();
 }
 
 void DestroyViewer(Viewer& v) {
@@ -192,6 +218,17 @@ float ContentHeightPx(const Viewer& v) {
   return v.layout.size[static_cast<size_t>(v.curPage)].hPt * v.pxPerPt + 2 * kMarginPx;
 }
 
+void SetZoom(Viewer& v, float pxPerPt);
+
+// The -/+ buttons and the typed %: keep the point at the centre of the view where it is.
+void ZoomAboutCentre(Viewer& v, float pxPerPt) {
+  const float cy = v.lastScrollY + v.viewH * 0.5f, cx = v.lastScrollX + v.viewW * 0.5f;
+  const float ptY = (cy - kMarginPx) / v.pxPerPt, ptX = (cx - kMarginPx) / v.pxPerPt;
+  SetZoom(v, pxPerPt);
+  v.pendingScrollY = std::max(0.f, ptY * v.pxPerPt + kMarginPx - v.viewH * 0.5f);
+  v.pendingScrollX = std::max(0.f, ptX * v.pxPerPt + kMarginPx - v.viewW * 0.5f);
+}
+
 void SetZoom(Viewer& v, float pxPerPt) {
   v.pxPerPt = std::clamp(pxPerPt, 0.05f, 16.f);
   std::snprintf(v.zoomBuf, sizeof(v.zoomBuf), "%d", static_cast<int>(std::lround(v.pxPerPt / kBasePxPerPt * 100.f)));
@@ -204,7 +241,7 @@ void GoToPage(Viewer& v, int page) {
   v.pendingScrollY = v.continuous ? v.layout.top[static_cast<size_t>(page)] * v.pxPerPt : 0.f;
 }
 
-void UploadFinished(Viewer& v, int center, const VisibleRange& keep) {
+void UploadFinished(Viewer& v, int center, const VisibleRange& keep, std::vector<std::string>& log) {
   size_t uploadedBytes = 0;
   while (uploadedBytes < kUploadBytesPerFrame) {  // the first upload always runs
     RenderResult res;
@@ -214,6 +251,13 @@ void UploadFinished(Viewer& v, int center, const VisibleRange& keep) {
         break;
       res = std::move(v.worker->done.front());
       v.worker->done.pop_front();
+    }
+    if (res.failed) {
+      if (std::find(v.failedPages.begin(), v.failedPages.end(), res.req.page) == v.failedPages.end()) {
+        v.failedPages.push_back(res.req.page);
+        log.push_back("PDF viewer: page " + std::to_string(res.req.page + 1) + " of " + v.title + " could not be rendered.");
+      }
+      continue;
     }
     GLuint tex = 0;
     glGenTextures(1, &tex);
@@ -283,20 +327,20 @@ void DrawToolbar(Viewer& v, float viewH) {
   ImGui::TextUnformatted("|");
   ImGui::SameLine();
   if (ImGui::Button("-"))
-    SetZoom(v, v.pxPerPt / 1.25f);
+    ZoomAboutCentre(v, v.pxPerPt / 1.25f);
   ImGui::SameLine();
   ImGui::SetNextItemWidth(50.f);
   if (ImGui::InputText("##zoom", v.zoomBuf, sizeof(v.zoomBuf),
                        ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_EnterReturnsTrue)) {
     const float pct = static_cast<float>(std::atof(v.zoomBuf));
     if (pct > 0.f)
-      SetZoom(v, pct / 100.f * kBasePxPerPt);
+      ZoomAboutCentre(v, pct / 100.f * kBasePxPerPt);
   }
   ImGui::SameLine();
   ImGui::TextUnformatted("%");
   ImGui::SameLine();
   if (ImGui::Button("+"))
-    SetZoom(v, v.pxPerPt * 1.25f);
+    ZoomAboutCentre(v, v.pxPerPt * 1.25f);
   ImGui::SameLine();
   if (ImGui::Button("Fit width"))
     v.fitWidthPending = true;
@@ -352,7 +396,8 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
   const ImVec2 avail = ImGui::GetContentRegionAvail();
   ImGui::SetNextWindowContentSize(ImVec2(std::max(avail.x, v.layout.maxWidth * v.pxPerPt + 2 * kMarginPx), ContentHeightPx(v)));
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.30f, 0.30f, 0.32f, 1.f));
-  ImGui::BeginChild("##pages", ImVec2(0.f, 0.f), false, ImGuiWindowFlags_HorizontalScrollbar);
+  // NoMove: a drag on the page pans the page; it must not also carry the whole window along.
+  ImGui::BeginChild("##pages", ImVec2(0.f, 0.f), false, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoMove);
   ImGui::PopStyleColor();
 
   if (v.fitWidthPending) {
@@ -387,7 +432,7 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
     ImGui::SetScrollY(ImGui::GetScrollY() - io.MouseDelta.y);
     ImGui::SetScrollX(ImGui::GetScrollX() - io.MouseDelta.x);
   }
-  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || hovered) {
+  if ((ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || hovered) && !io.WantTextInput) {
     if (ImGui::IsKeyPressed(ImGuiKey_PageDown, true))
       GoToPage(v, v.curPage + 1);
     if (ImGui::IsKeyPressed(ImGuiKey_PageUp, true))
@@ -398,6 +443,9 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
       GoToPage(v, v.layout.PageCount() - 1);
   }
 
+  v.viewW = ImGui::GetWindowWidth();
+  v.viewH = ImGui::GetWindowHeight();
+  v.lastScrollX = ImGui::GetScrollX();
   const float scrollY = ImGui::GetScrollY();
   if (scrollY != v.lastScrollY)
     v.scrollDir = scrollY > v.lastScrollY ? 1 : -1;
@@ -421,11 +469,30 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
 
   const int scaleKey = ScaleKeyFor(v.pxPerPt);
   if (!vis.Empty()) {
-    UploadFinished(v, v.curPage, vis);
+    UploadFinished(v, v.curPage, vis, log);
 
     // The plan, then the thumbnail strip's stand-ins behind it.
-    auto have = [&](int p) { return v.cache.HaveFor(p, scaleKey); };
-    std::vector<RenderRequest> plan = PlanRequests(vis, v.layout.PageCount(), v.scrollDir, kReadAhead, scaleKey, have);
+    // Pages already rendered and waiting for upload, and pages PDFium cannot render, are not asked for again.
+    const std::vector<RenderRequest> waiting = v.worker->Waiting();
+    auto have = [&](int p) {
+      Have h = v.cache.HaveFor(p, scaleKey);
+      for (const RenderRequest& w : waiting)
+        if (w.page == p) {
+          h.standIn = h.standIn || w.level == Level::StandIn;
+          h.displayAtKey = h.displayAtKey || (w.level == Level::Display && w.scaleKey == scaleKey);
+        }
+      if (std::find(v.failedPages.begin(), v.failedPages.end(), p) != v.failedPages.end())
+        return Have{true, true};
+      return h;
+    };
+    // Never plan more sharp pages than the cache can hold, or each upload evicts a page the planner
+    // asks for again and the worker renders forever. Stand-ins take ~15 % of the cap.
+    const PageSize& cs = v.layout.size[static_cast<size_t>(std::clamp(v.curPage, 0, v.layout.PageCount() - 1))];
+    int rw = 0, rh = 0;
+    Worker::Dims(cs, RenderRequest{v.curPage, Level::Display, scaleKey}, rw, rh);
+    const size_t pageBytes = std::max<size_t>(1, static_cast<size_t>(rw) * static_cast<size_t>(rh) * 4u);
+    const int readAhead = ReadAheadThatFits(kCacheCapBytes, pageBytes, vis.last - vis.first + 1, kReadAhead);
+    std::vector<RenderRequest> plan = PlanRequests(vis, v.layout.PageCount(), v.scrollDir, readAhead, scaleKey, have);
     if (v.showThumbs) {
       for (int p = v.thumbFirst; p <= v.thumbLast; ++p)
         if (!v.cache.HaveFor(p, scaleKey).standIn) {
@@ -459,6 +526,8 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
         v.bench.firstSharpMs = MsSince(v.bench.t0);
     } else {
       dl->AddRectFilled(a, b, IM_COL32(255, 255, 255, 255));
+      if (std::find(v.failedPages.begin(), v.failedPages.end(), p) != v.failedPages.end())
+        dl->AddText(ImVec2(a.x + 12.f, a.y + 12.f), IM_COL32(160, 40, 40, 255), "This page could not be rendered.");
     }
     dl->AddRect(a, b, IM_COL32(90, 90, 90, 255));
   }
@@ -499,9 +568,11 @@ void ShutdownPdfViewers() {
   for (auto& v : g_viewers)
     DestroyViewer(*v);
   g_viewers.clear();
+  DrainGraveyard();
 }
 
 void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
+  DrainGraveyard();
   if (cmd.pdfViewerPickRequest) {
     cmd.pdfViewerPickRequest = false;
     char tmp[1024] = {};
@@ -515,7 +586,10 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
   if (cmd.pdfViewBenchPages > 0) {
     const int pages = cmd.pdfViewBenchPages;
     cmd.pdfViewBenchPages = 0;
-    const std::filesystem::path file = std::filesystem::temp_directory_path() / "gosurvey_pdfview_bench.pdf";
+    // A name no open viewer can already have, so the new viewer is always the last one in the list.
+    static int benchSerial = 0;
+    const std::filesystem::path file =
+        std::filesystem::temp_directory_path() / ("gosurvey_pdfview_bench_" + std::to_string(++benchSerial) + ".pdf");
     {
       const std::string bytes = MakeSyntheticPdf(pages, 400, 50);
       std::ofstream f(file, std::ios::binary);

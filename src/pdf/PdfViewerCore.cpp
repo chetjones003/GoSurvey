@@ -47,6 +47,12 @@ VisibleRange VisiblePages(const Layout& layout, float scrollPt, float viewPt) {
   return r;
 }
 
+int ReadAheadThatFits(size_t capBytes, size_t pageBytes, int visibleCount, int maxAhead) {
+  const size_t usable = capBytes - capBytes / 6;
+  const int fit = static_cast<int>(usable / std::max<size_t>(1, pageBytes));
+  return std::clamp((fit - visibleCount) * 2 / 3, 0, maxAhead);
+}
+
 int ScaleKeyFor(float pxPerPt) {
   // Steps of 1/8 of a pixel-per-point keep a smooth wheel zoom from asking for a render every frame
   // while staying sharp to within ~6 %.

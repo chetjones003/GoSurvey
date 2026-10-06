@@ -27,10 +27,11 @@
 ## 4. Assumptions and technical debt
 - The viewer manager is file-static state in `PdfViewerWindow.cpp` (like other UI windows' caches);
   freed by `ShutdownPdfViewers()` before the GL context goes.
-- `PdfAttach.cpp` (underlay) does not take `PdfiumMutex`; only the viewer and `PdfPlot` do. Using the
-  viewer while PDFATTACH's own worker threads run is not serialised. Follow-up.
+- `PdfiumMutex` (recursive) is taken by the viewer, `PdfPlot` and the PDF underlay code (`PdfAttach.cpp`
+  loader/thumbnail/raster/snap/build sites). `PlotLayoutsToPdf` holds it for the whole plot, so a plot
+  waits for a page render in progress and viewer renders wait for the plot (user-initiated, not scrolling).
 - The "attached underlay: open" and "recent files" routes named in REQ-387 clause 1 do not exist in the
   app today (the recent list holds drawings only; underlays have no open action), so the routes wired
   are Project-tab double-click and the `PDFVIEW` command.
 - Measured (release devshell build, 500 pages, 400 lines/page): first page 19-25 ms, sharp 31-39 ms;
-  viewer cost per frame p95 0.8-2.1 ms, worst 10-15 ms; whole-frame worst ~35 ms (not yet attributed; it appears at the same size on every run, the viewer share is the line above).
+  viewer cost per frame p95 0.8-2.1 ms, worst 6-15 ms; whole-frame worst ~35 ms (not yet attributed; it appears at the same size on every run, the viewer share is the line above).

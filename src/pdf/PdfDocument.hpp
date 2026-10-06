@@ -17,8 +17,9 @@
 
 namespace pdfview {
 
-/// The one lock around PDFium use by the viewer and by PDF plotting (PdfPlot takes it too).
-std::mutex& PdfiumMutex();
+/// The one lock around PDFium use: the viewer's worker, PDF plotting and the PDF underlay code all
+/// take it. Recursive, so a function that holds it may call another that takes it.
+std::recursive_mutex& PdfiumMutex();
 
 struct Bitmap {
   int w = 0;

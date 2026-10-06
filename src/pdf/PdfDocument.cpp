@@ -12,8 +12,8 @@
 
 namespace pdfview {
 
-std::mutex& PdfiumMutex() {
-  static std::mutex m;
+std::recursive_mutex& PdfiumMutex() {
+  static std::recursive_mutex m;
   return m;
 }
 
@@ -66,7 +66,7 @@ PdfDocument::OpenResult PdfDocument::Open(const std::filesystem::path& path) {
   std::unique_ptr<PdfDocument> d(new PdfDocument());
   d->impl_ = std::make_unique<Impl>();
   d->path_ = path;
-  std::lock_guard<std::mutex> lock(PdfiumMutex());
+  std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
 
 #if defined(_WIN32)
   d->impl_->src.f = _wfopen(path.c_str(), L"rb");
@@ -119,7 +119,7 @@ PdfDocument::OpenResult PdfDocument::Open(const std::filesystem::path& path) {
 }
 
 PdfDocument::~PdfDocument() {
-  std::lock_guard<std::mutex> lock(PdfiumMutex());
+  std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
   if (impl_ != nullptr) {
     if (impl_->doc != nullptr)
       FPDF_CloseDocument(impl_->doc);
@@ -132,7 +132,7 @@ bool PdfDocument::RenderPage(int page, int w, int h, Bitmap& out, const std::fun
   out = {};
   if (page < 0 || page >= PageCount() || w < 1 || h < 1)
     return false;
-  std::lock_guard<std::mutex> lock(PdfiumMutex());
+  std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
   FPDF_PAGE p = FPDF_LoadPage(impl_->doc, page);
   if (p == nullptr)
     return false;
