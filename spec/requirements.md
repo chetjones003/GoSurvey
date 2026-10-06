@@ -11548,8 +11548,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. **Tools.** Text note (free text), line, rectangle and ellipse, each with a **colour**, a **line
      thickness** (and fill on/off for closed shapes) and, for text, a **font** (the standard PDF fonts
      plus the fonts GoSurvey already loads) and size.
-  2. **Stored as standard PDF annotations** (FreeText, Line, Square, Circle) written through PDFium's
-     annotation API, so any other PDF reader shows them. No sidecar file.
+  2. **Stored as standard PDF annotations** (FreeText, Line, Square, Circle), so any other PDF reader shows
+     them. No sidecar file. FreeText, Square and Circle are written through PDFium's annotation API. PDFium
+     cannot create a **Line** annotation, so a line is written as a PDFium placeholder annotation that
+     GoSurvey then turns into a true Line (type and end points) with a same-length edit of the temporary
+     file before it is renamed into place (D-2026-10-06-e); if that edit cannot be made the Save As fails
+     with a stated reason and writes nothing.
   3. **Select / move / resize / delete** an annotation, with **undo/redo** inside the viewer.
   4. **Save As only.** The original file is **never overwritten**. "Save As" writes a new PDF; the
      original is byte-for-byte unchanged (REQ-201: the result is logged). Unsaved edits prompt on close.
@@ -11565,7 +11569,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Manual: the saved PDF opens in a second PDF reader with the annotations visible.
 - Owner-layer: Domain/IO (`src/pdf/`), UI, Commands
 - Status: accepted
-- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a).
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a). 2026-10-06 — clause 2: Line is a true Line written by a post-save patch because PDFium
+  cannot create one (D-2026-10-06-e).
 
 ### REQ-389 — Split a PDF: save chosen pages as a new PDF (GitHub issue #732, phase 3)
 
