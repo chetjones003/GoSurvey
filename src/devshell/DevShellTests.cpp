@@ -298,6 +298,28 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(!viewerShown());
   };
 
+  // REQ-392: the comparison overlay of two generated 500-page PDFs, zoomed and panned in the real app; the
+  // viewer's cost per frame is reported on stderr (target: no frame over 16 ms).
+  //
+  //   build\devshell\GoSurvey.exe --devshell-run pdfcompare-bench
+  ImGuiTest* pdfCompareBench = IM_REGISTER_TEST(engine, "gosurvey", "pdfcompare-bench");
+  pdfCompareBench->TestFunc = [](ImGuiTestContext* ctx) {
+    auto viewerShown = [] {
+      for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+        if (w->WasActive && std::strstr(w->Name, "###pdfview") != nullptr)
+          return true;
+      return false;
+    };
+    IM_CHECK(CancelToIdle(ctx));
+    SubmitCad(ctx, "BENCH PDFCOMPARE 500");
+    ctx->Yield(10);
+    IM_CHECK(viewerShown());
+    // The bench closes its own viewer (and deletes its two files) when the report is written.
+    for (int i = 0; i < 400 && viewerShown(); ++i)
+      ctx->Yield(30);
+    IM_CHECK(!viewerShown());
+  };
+
   // REQ-387 clause 7 (D-2026-10-06-b): the viewer is its own Windows window with the OS frame, docks
   // into GoSurvey's layout and comes back out. Real window creation and docking run in the real app;
   // what a person sees on screen is still checked by hand.

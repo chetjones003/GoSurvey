@@ -41858,6 +41858,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           log.push_back("BENCH PDFVIEW — building a " + std::to_string(pages) + "-page PDF; the viewer window will scroll it.");
           return;
         }
+        // `BENCH PDFCOMPARE [pages]` — REQ-392: overlay two generated PDFs of that many pages in a
+        // viewer, zoom and pan the overlay, and report the viewer's per-frame cost.
+        if (lower == "pdfcompare") {
+          int pages = 500;
+          int v = 0;
+          if (issIdle >> v)
+            pages = std::clamp(v, 1, 5000);
+          st.pdfCompareBenchPages = pages;
+          log.push_back("BENCH PDFCOMPARE — building two " + std::to_string(pages) + "-page PDFs; the viewer window will overlay and pan them.");
+          return;
+        }
         if (lower == "mesh" || lower == "m") {
           int tris = 2000000;  // REQ-100 (b): the density decided 2026-08-15, TASK-041's fixture
           int v = 0;

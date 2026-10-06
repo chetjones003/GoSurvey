@@ -4,6 +4,7 @@
 #include "PdfDocument.hpp"
 #include "FontRegistry.hpp"
 #include "PdfAnnotate.hpp"
+#include "PdfCompare.hpp"
 #include "PdfSnap.hpp"
 #include "PdfSplit.hpp"
 #include "PdfViewerCore.hpp"
@@ -786,6 +787,10 @@ struct Viewer {
   bool loaded = false;
   std::string error;
   std::unique_ptr<PdfDocument> doc;
+  std::unique_ptr<PdfCompare> compare; ///< REQ-392: set while this window shows a comparison with another PDF (must die before doc)
+  bool comparePickRequest = false;
+  std::filesystem::path benchRev;      ///< BENCH PDFCOMPARE: the generated revision to compare with once the base has opened
+  int benchRevPages = 0;
   std::unique_ptr<Worker> worker = std::make_unique<Worker>();
   Layout layout;
   PageCache cache{kCacheCapBytes};
@@ -857,12 +862,14 @@ void DeleteTextures(const std::vector<PageCache::Entry>& gone) {
 }
 
 void DrainGraveyard() {
+  PdfCompare::DrainGraveyard();
   for (GLuint t : g_graveyard)
     glDeleteTextures(1, &t);
   g_graveyard.clear();
 }
 
 void DestroyViewer(Viewer& v) {
+  v.compare.reset(); // stops its worker, which reads the base document
   if (v.splitting.valid())
     v.splitting.wait(); // a split in flight finishes (it reads the file, never changes the source)
   if (v.ann.saving.valid())
@@ -1054,6 +1061,9 @@ void DrawToolbar(Viewer& v) {
   ImGui::SameLine();
   if (ImGui::Button("Split..."))
     v.splitOpenRequest = true;
+  ImGui::SameLine();
+  if (ImGui::Button("Compare..."))
+    v.comparePickRequest = true;
   ImGui::PopStyleColor(5);
   ImGui::PopStyleVar(4);
   ImGui::Spacing();
@@ -3133,6 +3143,27 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
     v.bench.file = file;
   }
 
+  if (cmd.pdfCompareBenchPages > 0) {  // BENCH PDFCOMPARE [pages]: two generated files, the second a little different
+    const int pages = cmd.pdfCompareBenchPages;
+    cmd.pdfCompareBenchPages = 0;
+    static int compareSerial = 0;
+    const int serial = ++compareSerial;
+    const auto write = [&](const char* tag, int lines) {
+      const std::filesystem::path file =
+          std::filesystem::temp_directory_path() / ("gosurvey_pdfcompare_" + std::string(tag) + "_" + std::to_string(serial) + ".pdf");
+      const std::string bytes = MakeSyntheticPdf(pages, lines, 50);
+      std::ofstream f(file, std::ios::binary);
+      f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+      return file;
+    };
+    const std::filesystem::path baseFile = write("base", 400), revFile = write("rev", 380);
+    OpenPdfInViewer(baseFile.u8string());
+    Viewer& v = *g_viewers.back();
+    v.bench.file = baseFile;
+    v.benchRev = revFile;
+    v.benchRevPages = pages;
+  }
+
   for (size_t i = 0; i < g_viewers.size();) {
     Viewer& v = *g_viewers[i];
     if (v.opening.valid() && v.opening.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -3242,6 +3273,23 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
       } else if (!v.loaded) {
         ImGui::TextUnformatted("Opening...");
       } else {
+        if (v.comparePickRequest) {  // REQ-392 clause 1: Compare... asks for the revision
+          v.comparePickRequest = false;
+          char tmp[1024] = {};
+          if (BrowseOpenFilePdfUtf8(tmp, sizeof(tmp)) && tmp[0] != '\0')
+            v.compare = std::make_unique<PdfCompare>(v.doc.get(), v.title, v.curPage, std::filesystem::u8path(tmp));
+        }
+        if (!v.benchRev.empty()) {  // BENCH PDFCOMPARE
+          v.compare = std::make_unique<PdfCompare>(v.doc.get(), v.title, 0, v.benchRev);
+          v.compare->StartBench(v.benchRevPages, true);
+          v.benchRev.clear();
+        }
+        if (v.compare != nullptr) {
+          if (!v.compare->Draw(log))
+            v.compare.reset();
+          else if (v.compare->BenchFinished())
+            v.bench.finished = true;
+        } else {
         DrawToolbar(v);
         DrawAnnotBar(v, log);
         DrawSplitDialog(v, log);
@@ -3260,6 +3308,7 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
           ImGui::SameLine(0.f, 0.f);
         }
         DrawPages(v, log, &cost);
+        }
       }
     }
     ImGui::End();
