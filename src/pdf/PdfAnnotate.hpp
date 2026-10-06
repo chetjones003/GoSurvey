@@ -25,6 +25,9 @@ struct Annot {
   /// Dimensions: Length 2 points; PolyLength 2 or more; Area 3 or more (closed); Angle 3 (the middle one is the corner).
   std::vector<std::pair<float, float>> pts;
   int decimals = 2; ///< dimensions: digits after the point in the label
+  /// Length only: how far the dimension line sits from the two measured points, perpendicular to them. Positive is
+  /// to the left of the direction from the first point to the second; 0 puts the line on the points.
+  float offset = 0.f;
   bool IsDimension() const { return kind >= Kind::Length; }
   unsigned color = 0xFF0000; ///< 0xRRGGBB: the stroke, and the text colour
   float thickness = 1.f;     ///< stroke width in points (Line, Rect, Ellipse)
@@ -84,6 +87,15 @@ double PathLengthPt(const std::vector<std::pair<float, float>>& pts, bool closed
 double PolygonAreaSqPt(const std::vector<std::pair<float, float>>& pts);
 double AngleDegrees(const std::vector<std::pair<float, float>>& pts); ///< at the middle of three points, 0..180
 bool DimensionComplete(const Annot& a);                             ///< has enough points for its kind
+/// A Length dimension's drawn line (REQ-391): the two measured points moved sideways by the offset, with the unit
+/// normal (to the left of point 1 -> point 2) the offset is measured along.
+struct DimLine {
+  float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
+  float nx = 0.f, ny = 1.f;
+};
+DimLine LengthDimLine(const Annot& a);
+/// The angle of a dimension's label text in degrees, turned so it never reads upside down (0 for all but Length).
+float DimensionLabelAngleDeg(const Annot& a);
 /// Where a dimension's label is centred, in page points (the longest segment's middle, the area's centre, beside
 /// the angle's corner); the saved file and the on-screen view use the same spot.
 std::pair<float, float> DimensionLabelAnchor(const Annot& a);

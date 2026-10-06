@@ -60,6 +60,13 @@ public:
   bool RenderPage(int page, int w, int h, Bitmap& out, const std::function<bool()>& cancel, int flags = kDisplayFlags,
                   int budgetMs = 0, int sliceMs = 0, const std::function<void()>& between = {});
 
+  /// REQ-391 clause 5: the ends and corners of the vector line work on \p page (the corners of its paths,
+  /// forms included), in the viewer's page coordinates (points from the page's bottom-left as displayed, so
+  /// rotation and an offset page box are already accounted for). \p cancel is polled; the first \p maxPoints
+  /// distinct points are kept. Returns false on any failure or when cancelled.
+  bool SnapPoints(int page, std::vector<std::pair<float, float>>& out, const std::function<bool()>& cancel,
+                  size_t maxPoints = 2000000);
+
   static constexpr int kDisplayFlags = 0x01 /*FPDF_ANNOT*/ | 0x02 /*FPDF_LCD_TEXT*/;
 
 private:

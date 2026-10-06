@@ -4,7 +4,9 @@
 
 #include "PdfDocument.hpp"
 
+#include <fpdf_edit.h>
 #include <fpdf_progressive.h>
+#include <unordered_set>
 #include <algorithm>
 #include <chrono>
 #include <fpdfview.h>
@@ -162,6 +164,129 @@ Bitmap Downscale(const Bitmap& src, int maxSide) {
     }
   }
   return out;
+}
+
+namespace {
+
+struct Mat {
+  float a = 1.f, b = 0.f, c = 0.f, d = 1.f, e = 0.f, f = 0.f; ///< x' = a x + c y + e,  y' = b x + d y + f
+};
+
+// The transform that does \p first and then \p then.
+Mat Then(const Mat& first, const Mat& then) {
+  Mat r;
+  r.a = then.a * first.a + then.c * first.b;
+  r.c = then.a * first.c + then.c * first.d;
+  r.e = then.a * first.e + then.c * first.f + then.e;
+  r.b = then.b * first.a + then.d * first.b;
+  r.d = then.b * first.c + then.d * first.d;
+  r.f = then.b * first.e + then.d * first.f + then.f;
+  return r;
+}
+
+struct SnapCtx {
+  const std::function<bool()>& cancel;
+  size_t maxPoints;
+  Mat toViewer; ///< page user space -> the viewer's page coordinates
+  std::vector<std::pair<float, float>>& out;
+  std::unordered_set<int64_t> seen;
+  size_t visited = 0;
+  bool stop = false;
+
+  void Add(const Mat& m, float x, float y) {
+    const float ux = m.a * x + m.c * y + m.e, uy = m.b * x + m.d * y + m.f;
+    const float vx = toViewer.a * ux + toViewer.c * uy + toViewer.e, vy = toViewer.b * ux + toViewer.d * uy + toViewer.f;
+    if (!std::isfinite(vx) || !std::isfinite(vy))
+      return;
+    const int64_t key = (static_cast<int64_t>(std::lround(vx * 4.f)) << 32) ^ static_cast<uint32_t>(std::lround(vy * 4.f));
+    if (seen.insert(key).second) { // one point per quarter-point cell
+      out.emplace_back(vx, vy);
+      if (out.size() >= maxPoints)
+        stop = true;
+    }
+  }
+};
+
+void CollectSnap(FPDF_PAGEOBJECT obj, const Mat& outer, int depth, SnapCtx& ctx) {
+  if (ctx.stop || obj == nullptr || depth > 8)
+    return;
+  if ((++ctx.visited & 255u) == 0 && ctx.cancel()) {
+    ctx.stop = true;
+    return;
+  }
+  FS_MATRIX fm{1, 0, 0, 1, 0, 0};
+  FPDFPageObj_GetMatrix(obj, &fm);
+  const Mat own{fm.a, fm.b, fm.c, fm.d, fm.e, fm.f};
+  const int type = FPDFPageObj_GetType(obj);
+  if (type == FPDF_PAGEOBJ_PATH) {
+    const Mat t = Then(own, outer);
+    const int n = FPDFPath_CountSegments(obj);
+    int bezier = 0;
+    for (int i = 0; i < n && !ctx.stop; ++i) {
+      FPDF_PATHSEGMENT seg = FPDFPath_GetPathSegment(obj, i);
+      if (seg == nullptr)
+        continue;
+      const int st = FPDFPathSegment_GetType(seg);
+      if (st == FPDF_SEGMENT_BEZIERTO) { // a curve is three points: two controls, then the end that counts
+        if (++bezier % 3 != 0)
+          continue;
+      } else {
+        bezier = 0;
+      }
+      float x = 0.f, y = 0.f;
+      if (FPDFPathSegment_GetPoint(seg, &x, &y))
+        ctx.Add(t, x, y);
+    }
+  } else if (type == FPDF_PAGEOBJ_FORM) {
+    const Mat inner = Then(own, outer);
+    const unsigned long n = static_cast<unsigned long>(FPDFFormObj_CountObjects(obj));
+    for (unsigned long i = 0; i < n && !ctx.stop; ++i)
+      CollectSnap(FPDFFormObj_GetObject(obj, i), inner, depth + 1, ctx);
+  }
+}
+
+} // namespace
+
+bool PdfDocument::SnapPoints(int page, std::vector<std::pair<float, float>>& out, const std::function<bool()>& cancel,
+                             size_t maxPoints) {
+  out.clear();
+  if (page < 0 || page >= PageCount())
+    return false;
+  std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
+  FPDF_PAGE p = FPDF_LoadPage(impl_->doc, page);
+  if (p == nullptr)
+    return false;
+  // The viewer's coordinates: points from the bottom-left of the page as it is displayed. Found by asking PDFium
+  // where three user-space points land on a page-sized device, so rotation and the page box offset are included.
+  const float W = FPDF_GetPageWidthF(p), H = FPDF_GetPageHeightF(p);
+  constexpr int kScale = 8;
+  const int dw = std::max(1, static_cast<int>(std::lround(W * kScale))), dh = std::max(1, static_cast<int>(std::lround(H * kScale)));
+  const float sx = static_cast<float>(dw) / std::max(1e-3f, W), sy = static_cast<float>(dh) / std::max(1e-3f, H);
+  int ox = 0, oy = 0;
+  FPDF_PageToDevice(p, 0, 0, dw, dh, 0, 0.0, 0.0, &ox, &oy);
+  // The device grid is whole pixels, so the axes are measured over a 100-point baseline.
+  int ex2 = 0, ey2 = 0, fx2 = 0, fy2 = 0;
+  FPDF_PageToDevice(p, 0, 0, dw, dh, 0, 100.0, 0.0, &ex2, &ey2);
+  FPDF_PageToDevice(p, 0, 0, dw, dh, 0, 0.0, 100.0, &fx2, &fy2);
+  Mat toViewer; // user (x, y) -> device -> viewer (device / scale, flipped so y is up)
+  const float a = static_cast<float>(ex2 - ox) / 100.f / sx, b = static_cast<float>(ey2 - oy) / 100.f / sy;
+  const float c = static_cast<float>(fx2 - ox) / 100.f / sx, d = static_cast<float>(fy2 - oy) / 100.f / sy;
+  toViewer.a = a;
+  toViewer.c = c;
+  toViewer.e = static_cast<float>(ox) / sx;
+  toViewer.b = -b;
+  toViewer.d = -d;
+  toViewer.f = H - static_cast<float>(oy) / sy;
+  SnapCtx ctx{cancel, maxPoints, toViewer, out, {}, 0, false};
+  const int n = FPDFPage_CountObjects(p);
+  for (int i = 0; i < n && !ctx.stop; ++i)
+    CollectSnap(FPDFPage_GetObject(p, i), Mat{}, 0, ctx);
+  FPDF_ClosePage(p);
+  if (cancel()) {
+    out.clear();
+    return false;
+  }
+  return true;
 }
 
 bool PdfDocument::RenderPage(int page, int w, int h, Bitmap& out, const std::function<bool()>& cancel, int flags,

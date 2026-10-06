@@ -190,3 +190,71 @@ TEST_CASE("a dimension on a page with no scale is refused and nothing is written
   std::filesystem::remove(src);
   std::filesystem::remove(dst);
 }
+
+TEST_CASE("a length can be offset from its two points, like a GoSurvey dimension", "[pdfdim][req391][issue732]") {
+  // Geometry: the dimension line is the measured line moved along its left normal by the offset.
+  Annot a = Dim(Annot::Kind::Length, 0, {{100, 400}, {300, 400}});
+  a.offset = 30.f;
+  const DimLine d = LengthDimLine(a);
+  CHECK(std::fabs(d.y0 - 430.f) < 1e-3f);
+  CHECK(std::fabs(d.y1 - 430.f) < 1e-3f);
+  CHECK(std::fabs(d.x0 - 100.f) < 1e-3f);
+  a.offset = -30.f;
+  CHECK(std::fabs(LengthDimLine(a).y0 - 370.f) < 1e-3f);
+  // The label's text turns with the line but never reads upside down.
+  CHECK(std::fabs(DimensionLabelAngleDeg(a)) < 1e-3f);
+  Annot rev = Dim(Annot::Kind::Length, 0, {{300, 400}, {100, 400}});
+  CHECK(std::fabs(DimensionLabelAngleDeg(rev)) < 1e-3f); // right to left, still upright
+  Annot diag = Dim(Annot::Kind::Length, 0, {{0, 0}, {100, 100}});
+  CHECK(std::fabs(DimensionLabelAngleDeg(diag) - 45.f) < 0.01f);
+  // The offset does not change the measured value.
+  Annot with = Dim(Annot::Kind::Length, 0, {{100, 400}, {300, 400}});
+  with.offset = 55.f;
+  CHECK(DimensionLabel(with, HalfFoot()) == "100.00 ft");
+
+  const auto src = WriteBytes("gs_dim_off_src.pdf", MakeSyntheticPdf(1, 0, 0));
+  const auto dst = TempPath("gs_dim_off_out.pdf");
+  std::filesystem::remove(dst);
+  Annot up = Dim(Annot::Kind::Length, 0, {{100, 400}, {300, 400}}, 0xFF0000);
+  up.offset = 40.f;
+  Annot down = Dim(Annot::Kind::Length, 0, {{100, 200}, {300, 260}}, 0x0000FF);
+  down.offset = -25.f;
+  std::map<int, PageScale> ps;
+  ps[0] = HalfFoot();
+  const std::string err = SaveAnnotated(src, {up, down}, dst, {}, ps);
+  INFO(err);
+  REQUIRE(err.empty());
+
+  const std::vector<Annot> back = ReadAnnotations(dst);
+  REQUIRE(back.size() == 2);
+  const Annot* in[2] = {&up, &down};
+  for (int i = 0; i < 2; ++i) {
+    INFO("dimension " << i);
+    CHECK(back[static_cast<size_t>(i)].kind == Annot::Kind::Length);
+    REQUIRE(back[static_cast<size_t>(i)].pts.size() == 2);
+    for (size_t k = 0; k < 2; ++k) {
+      CHECK(std::fabs(back[static_cast<size_t>(i)].pts[k].first - in[i]->pts[k].first) < 0.01f);
+      CHECK(std::fabs(back[static_cast<size_t>(i)].pts[k].second - in[i]->pts[k].second) < 0.01f);
+    }
+    CHECK(std::fabs(back[static_cast<size_t>(i)].offset - in[i]->offset) < 0.01f);
+    CHECK(back[static_cast<size_t>(i)].text == DimensionLabel(*in[i], HalfFoot()));
+  }
+
+  // Drawn as a real dimension: the line at its offset, extension lines back to the points, and nothing where
+  // there is no line.
+  auto d2 = PdfDocument::Open(dst);
+  REQUIRE(d2.doc != nullptr);
+  const PageSize sz = d2.doc->Sizes()[0];
+  Bitmap bm;
+  REQUIRE(d2.doc->RenderPage(0, static_cast<int>(sz.wPt), static_cast<int>(sz.hPt), bm, [] { return false; }));
+  const auto pixel = [&](float x, float y) {
+    const uint8_t* p = bm.bgra.data() + (static_cast<size_t>(sz.hPt - y) * bm.w + static_cast<size_t>(x)) * 4u;
+    return (static_cast<unsigned>(p[2]) << 16) | (static_cast<unsigned>(p[1]) << 8) | p[0];
+  };
+  CHECK(pixel(130, 440) == 0xFF0000);   // on the dimension line (y = 400 + 40), clear of the label and arrow
+  CHECK(pixel(100, 420) == 0xFF0000);   // on the left extension line, between the point and the line
+  CHECK(pixel(130, 400) == 0xFFFFFF);   // the measured line itself is not drawn
+  d2.doc.reset();
+  std::filesystem::remove(src);
+  std::filesystem::remove(dst);
+}

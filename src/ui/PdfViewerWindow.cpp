@@ -4,6 +4,7 @@
 #include "PdfDocument.hpp"
 #include "FontRegistry.hpp"
 #include "PdfAnnotate.hpp"
+#include "PdfSnap.hpp"
 #include "PdfSplit.hpp"
 #include "PdfViewerCore.hpp"
 #include "WinFileDialogs.hpp"
@@ -254,8 +255,23 @@ const std::vector<FontChoice>& FontChoices() {
   return list;
 }
 
+// The ends and corners of one page's line work, read in the background for snapping (REQ-391 clause 5).
+struct SnapPage {
+  std::future<std::shared_ptr<SnapIndex>> reading;
+  std::shared_ptr<SnapIndex> index; ///< null until read (or if reading failed)
+  std::shared_ptr<std::atomic<bool>> cancel = std::make_shared<std::atomic<bool>>(false);
+  bool started = false;
+  bool failed = false;
+};
+
 struct AnnotUi {
   AnnotSession session;
+  bool snapOn = false;                 ///< the Snap toggle (F3)
+  std::map<int, SnapPage> snapPages;   ///< the last few pages read
+  bool snapHit = false;                ///< the pointer is near a snap point this frame ...
+  int snapPage = 0;
+  float snapX = 0.f, snapY = 0.f;      ///< ... and this is it, in page points
+  float measureOffset = 0.f;           ///< the Length being made: where its dimension line goes
   Tool tool = Tool::Select;
   float color[3] = {0.85f, 0.10f, 0.10f};
   float thickness = 2.f;
@@ -404,6 +420,13 @@ bool HitTest(const Annot& a, float x, float y, float tol) {
   case Annot::Kind::PolyLength:
   case Annot::Kind::Area:
   case Annot::Kind::Angle: {
+    if (a.kind == Annot::Kind::Length && a.pts.size() == 2) { // the dimension line and the two extension lines
+      const DimLine d = LengthDimLine(a);
+      const float slack = a.thickness * 0.5f + tol;
+      return DistToSegment(x, y, d.x0, d.y0, d.x1, d.y1) <= slack ||
+             DistToSegment(x, y, a.pts[0].first, a.pts[0].second, d.x0, d.y0) <= slack ||
+             DistToSegment(x, y, a.pts[1].first, a.pts[1].second, d.x1, d.y1) <= slack;
+    }
     const bool closed = a.kind == Annot::Kind::Area;
     const size_t n = a.pts.size();
     for (size_t i = 0; i + 1 < n + (closed && n > 2 ? 1 : 0); ++i) {
@@ -448,6 +471,10 @@ bool HitTest(const Annot& a, float x, float y, float tol) {
 // The grips of a selected annotation, in page points: a Line's two ends, a shape's four corners
 // (clockwise from top-left), a note's bottom-right corner (it scales the text).
 std::vector<std::pair<float, float>> HandlePoints(const Annot& a) {
+  if (a.kind == Annot::Kind::Length && a.pts.size() == 2) { // the two points, and the middle of the dimension line
+    const DimLine d = LengthDimLine(a);
+    return {a.pts[0], a.pts[1], {(d.x0 + d.x1) * 0.5f, (d.y0 + d.y1) * 0.5f}};
+  }
   if (a.IsDimension())
     return a.pts;
   const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1), b = std::min(a.y0, a.y1), t = std::max(a.y0, a.y1);
@@ -459,7 +486,11 @@ std::vector<std::pair<float, float>> HandlePoints(const Annot& a) {
 }
 
 void MoveHandle(Annot& a, const Annot& original, int handle, float x, float y) {
-  if (a.IsDimension()) {
+  if (a.kind == Annot::Kind::Length && a.pts.size() == 2 && handle == 2) { // the dimension line: slide it
+    const DimLine d = LengthDimLine(original);
+    a = original;
+    a.offset = (x - original.pts[0].first) * d.nx + (y - original.pts[0].second) * d.ny;
+  } else if (a.IsDimension()) {
     if (handle >= 0 && handle < static_cast<int>(a.pts.size()))
       a.pts[static_cast<size_t>(handle)] = {x, y};
   } else if (a.kind == Annot::Kind::Line) {
@@ -499,6 +530,47 @@ void DrawAnnot(ImDrawList* dl, const Annot& a, ImVec2 tl, float hPt, float k, bo
   case Annot::Kind::PolyLength:
   case Annot::Kind::Area:
   case Annot::Kind::Angle: {
+    if (a.kind == Annot::Kind::Length && a.pts.size() == 2 && rubberTo == nullptr) {
+      // A dimension as GoSurvey draws one: extension lines from the two points to the dimension line, the line
+      // with an arrow at each end, and the label turned along it.
+      const DimLine d = LengthDimLine(a);
+      const ImVec2 d0 = S(d.x0, d.y0), d1 = S(d.x1, d.y1);
+      if (std::fabs(a.offset) > 0.5f) {
+        const float s = a.offset > 0.f ? 1.f : -1.f, gap = std::min(2.f, std::fabs(a.offset) * 0.3f), over = 2.f;
+        for (int i = 0; i < 2; ++i) {
+          const auto& p = a.pts[static_cast<size_t>(i)];
+          dl->AddLine(S(p.first + d.nx * s * gap, p.second + d.ny * s * gap),
+                      S((i == 0 ? d.x0 : d.x1) + d.nx * s * over, (i == 0 ? d.y0 : d.y1) + d.ny * s * over), col, th);
+        }
+      }
+      dl->AddLine(d0, d1, col, th);
+      const float lenPx = std::hypot(d1.x - d0.x, d1.y - d0.y);
+      if (lenPx > 1e-3f) {
+        const float ux = (d1.x - d0.x) / lenPx, uy = (d1.y - d0.y) / lenPx;
+        const float al = std::clamp(std::max(4.f, a.fontSize) * 0.6f * k, 3.f, lenPx / 3.f), aw = al * 0.3f;
+        dl->AddTriangleFilled(d0, ImVec2(d0.x + ux * al - uy * aw, d0.y + uy * al + ux * aw),
+                              ImVec2(d0.x + ux * al + uy * aw, d0.y + uy * al - ux * aw), col);
+        dl->AddTriangleFilled(d1, ImVec2(d1.x - ux * al - uy * aw, d1.y - uy * al + ux * aw),
+                              ImVec2(d1.x - ux * al + uy * aw, d1.y - uy * al - ux * aw), col);
+      }
+      const std::string label = scale != nullptr ? DimensionLabel(a, *scale) : std::string("no scale");
+      const auto [ax, ay] = DimensionLabelAnchor(a);
+      const float fsPx = std::max(4.f, a.fontSize) * k;
+      ImFont* font = ImGui::GetFont();
+      const ImVec2 ts = font->CalcTextSizeA(fsPx, 1e9f, 0.f, label.c_str());
+      const ImVec2 c = S(ax, ay);
+      const float rad = -DimensionLabelAngleDeg(a) * 3.14159265f / 180.f, cs = std::cos(rad), sn = std::sin(rad); // screen y is down
+      const auto rot = [&](ImVec2 p) { return ImVec2(c.x + (p.x - c.x) * cs - (p.y - c.y) * sn, c.y + (p.x - c.x) * sn + (p.y - c.y) * cs); };
+      const ImVec2 p0(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f);
+      const ImVec2 q[4] = {rot(ImVec2(p0.x - 3.f, p0.y - 1.f)), rot(ImVec2(p0.x + ts.x + 3.f, p0.y - 1.f)),
+                           rot(ImVec2(p0.x + ts.x + 3.f, p0.y + ts.y + 1.f)), rot(ImVec2(p0.x - 3.f, p0.y + ts.y + 1.f))};
+      dl->AddConvexPolyFilled(q, 4, IM_COL32(255, 255, 255, 215));
+      const int v0 = dl->VtxBuffer.Size;
+      dl->AddText(font, fsPx, p0, col, label.c_str());
+      for (int i = v0; i < dl->VtxBuffer.Size; ++i) // turn the text's quads about the label's centre
+        dl->VtxBuffer[i].pos = rot(dl->VtxBuffer[i].pos);
+      break;
+    }
     std::vector<ImVec2> sp;
     for (const auto& p : a.pts)
       sp.push_back(S(p.first, p.second));
@@ -661,6 +733,11 @@ void DestroyViewer(Viewer& v) {
     v.ann.saving.wait(); // so does a Save As
   if (v.ann.readingScales.valid())
     v.ann.readingScales.wait();
+  for (auto& [page, sp] : v.ann.snapPages) { // snap readers hold the document: stop and wait for them
+    sp.cancel->store(true);
+    if (sp.reading.valid())
+      sp.reading.wait();
+  }
   v.worker->Shutdown();
   DeleteTextures(v.cache.Clear());
 }
@@ -677,7 +754,9 @@ void SetZoom(Viewer& v, float pxPerPt);
 
 // The -/+ buttons and the typed %: keep the point at the centre of the view where it is.
 void ZoomAboutCentre(Viewer& v, float pxPerPt) {
-  const float cy = v.lastScrollY + v.viewH * 0.5f, cx = v.lastScrollX + v.viewW * 0.5f;
+  const float sy = v.pendingScrollY >= 0.f ? v.pendingScrollY : v.lastScrollY; // a scroll already asked for wins
+  const float sx = v.pendingScrollX >= 0.f ? v.pendingScrollX : v.lastScrollX;
+  const float cy = sy + v.viewH * 0.5f, cx = sx + v.viewW * 0.5f;
   const float ptY = (cy - kMarginPx) / v.pxPerPt, ptX = (cx - kMarginPx) / v.pxPerPt;
   SetZoom(v, pxPerPt);
   v.pendingScrollY = std::max(0.f, ptY * v.pxPerPt + kMarginPx - v.viewH * 0.5f);
@@ -1344,6 +1423,29 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   toolButton("Polylength", Tool::PolyLength);
   toolButton("Area", Tool::Area);
   toolButton("Angle", Tool::Angle);
+  ImGui::TextUnformatted("|");
+  ImGui::SameLine();
+  { // Snap: end points and corners of the page's own line work (F3)
+    if (u.snapOn) {
+      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.28f, 1.f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.62f, 0.34f, 1.f));
+    }
+    if (ImGui::Button(u.snapOn ? "Snap: on" : "Snap: off"))
+      u.snapOn = !u.snapOn;
+    if (u.snapOn)
+      ImGui::PopStyleColor(2);
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Snap to the ends and corners of the drawing (F3)");
+    const auto cur = u.snapPages.find(v.curPage);
+    if (u.snapOn && cur != u.snapPages.end() && cur->second.reading.valid()) {
+      ImGui::SameLine();
+      ImGui::TextDisabled("reading this page...");
+    } else if (u.snapOn && cur != u.snapPages.end() && cur->second.failed) {
+      ImGui::SameLine();
+      ImGui::TextDisabled("this page has nothing to snap to");
+    }
+    ImGui::SameLine();
+  }
   {
     const Annot* ds = u.selected >= 0 ? &items[static_cast<size_t>(u.selected)] : nullptr;
     if (IsMeasureTool(u.tool) || (ds != nullptr && ds->IsDimension())) {
@@ -1435,6 +1537,36 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   }
 }
 
+// Reads a page's ends and corners in the background (REQ-391 clause 5). One at a time per page; a few pages are
+// kept and the farthest finished one is dropped to make room.
+void StartSnapRead(Viewer& v, int page) {
+  AnnotUi& u = v.ann;
+  SnapPage& sp = u.snapPages[page];
+  if (sp.started || v.doc == nullptr)
+    return;
+  while (u.snapPages.size() > 4) {
+    int farthest = -1;
+    for (const auto& [p, other] : u.snapPages)
+      if (p != page && !other.reading.valid() && (farthest < 0 || std::abs(p - page) > std::abs(farthest - page)))
+        farthest = p;
+    if (farthest < 0)
+      break;
+    u.snapPages.erase(farthest);
+  }
+  SnapPage& cur = u.snapPages[page];
+  cur.started = true;
+  PdfDocument* doc = v.doc.get();
+  const auto cancel = cur.cancel;
+  cur.reading = std::async(std::launch::async, [doc, page, cancel]() -> std::shared_ptr<SnapIndex> {
+    std::vector<std::pair<float, float>> pts;
+    if (!doc->SnapPoints(page, pts, [cancel] { return cancel->load(); }))
+      return nullptr;
+    auto idx = std::make_shared<SnapIndex>();
+    idx->Build(std::move(pts));
+    return idx;
+  });
+}
+
 struct PageRect {
   int page;
   ImVec2 tl; ///< the page's top-left on screen
@@ -1453,23 +1585,66 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
         return &r;
     return nullptr;
   };
-  const auto toPt = [&](const PageRect& r, float& x, float& y, bool clamp) {
+  // The pointer in page points. With `snap`, the nearest end or corner of the page's own line work wins when the
+  // Snap toggle is on and one is close (found just below).
+  const auto toPt = [&](const PageRect& r, float& x, float& y, bool clamp, bool snap = false) {
     x = (io.MousePos.x - r.tl.x) / k;
     y = r.hPt - (io.MousePos.y - r.tl.y) / k;
     if (clamp) {
       x = std::clamp(x, 0.f, r.wPt);
       y = std::clamp(y, 0.f, r.hPt);
     }
+    if (snap && u.snapHit && u.snapPage == r.page) {
+      x = u.snapX;
+      y = u.snapY;
+    }
   };
 
+  // Snap: the nearest end or corner of the page under the pointer, while a tool is placing points. The page's
+  // points are read in the background the first time; the Length offset click is free (never snapped).
+  u.snapHit = false;
+  {
+    const bool placing = u.tool != Tool::Select || u.drag == AnnotUi::Drag::Handle || u.drag == AnnotUi::Drag::Create;
+    const bool offsetClick = (u.tool == Tool::Length && u.measurePts.size() == 2) ||
+                             (u.drag == AnnotUi::Drag::Handle && u.handle == 2 && u.preview.kind == Annot::Kind::Length);
+    if (u.snapOn && placing && !offsetClick && hovered && !panning) {
+      for (const PageRect& r : rects) {
+        const ImVec2 m = io.MousePos;
+        if (m.x < r.tl.x || m.y < r.tl.y || m.x > r.tl.x + r.wPt * k || m.y > r.tl.y + r.hPt * k)
+          continue;
+        SnapPage& sp = u.snapPages[r.page];
+        if (!sp.started)
+          StartSnapRead(v, r.page);
+        if (sp.reading.valid() && sp.reading.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+          sp.index = sp.reading.get();
+          sp.failed = sp.index == nullptr;
+        }
+        if (sp.index != nullptr) {
+          float px, py;
+          toPt(r, px, py, false);
+          SnapIndex::Pt hit;
+          if (sp.index->Nearest(px, py, 10.f / k, hit)) {
+            u.snapHit = true;
+            u.snapPage = r.page;
+            u.snapX = hit.first;
+            u.snapY = hit.second;
+          }
+        }
+        break;
+      }
+    }
+  }
+
   // A dimension is complete at its point count; a polyline or area is ended with Enter, a double-click, or (area)
-  // a click on its first point.
+  // a click on its first point. A Length takes a third click for its dimension line (Enter: on the points).
   const auto finishMeasure = [&] {
     Annot a;
     a.kind = KindOfMeasureTool(u.tool);
     a.page = u.measurePage;
     a.pts = u.measurePts;
+    a.offset = a.kind == Annot::Kind::Length ? u.measureOffset : 0.f;
     u.measurePts.clear();
+    u.measureOffset = 0.f;
     if (!DimensionComplete(a))
       return;
     ApplyStyle(u, a);
@@ -1490,12 +1665,19 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
     if (IsMeasureTool(u.tool) && !u.measurePts.empty() &&
         (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
       finishMeasure();
+    if (ImGui::IsKeyPressed(ImGuiKey_F3))
+      u.snapOn = !u.snapOn;
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+      const bool wasMidway = !u.measurePts.empty();
       u.selected = -1;
       u.measurePts.clear();
+      u.measureOffset = 0.f;
       if (u.tool == Tool::Calibrate) {
         u.tool = Tool::Select;
         u.calCount = 0;
+        u.status.clear();
+      } else if (!wasMidway && u.tool != Tool::Select) { // a second Esc leaves the tool: back to selecting
+        u.tool = Tool::Select;
         u.status.clear();
       }
     }
@@ -1509,7 +1691,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
       if (m.x < r.tl.x || m.y < r.tl.y || m.x > r.tl.x + r.wPt * k || m.y > r.tl.y + r.hPt * k)
         continue;
       float x, y;
-      toPt(r, x, y, false);
+      toPt(r, x, y, false, u.tool == Tool::Text); // only a note's position snaps; picking an existing mark never does
       const float tol = 5.f / k;
       if (u.tool == Tool::Select) {
         if (u.selected >= 0 && items[static_cast<size_t>(u.selected)].page == r.page) {
@@ -1548,7 +1730,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
         }
       } else if (IsMeasureTool(u.tool)) {
         float cx, cy;
-        toPt(r, cx, cy, true);
+        toPt(r, cx, cy, true, true);
         if (!u.measurePts.empty() && r.page != u.measurePage) {
           u.status = "Keep all the points on one page.";
           return;
@@ -1565,7 +1747,16 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
           }
           u.measurePage = r.page;
         }
-        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !u.measurePts.empty()) {
+        if (u.tool == Tool::Length && u.measurePts.size() == 2) { // the third click places the dimension line
+          Annot tmp;
+          tmp.kind = Annot::Kind::Length;
+          tmp.pts = u.measurePts;
+          const DimLine dl = LengthDimLine(tmp);
+          u.measureOffset = (cx - u.measurePts[0].first) * dl.nx + (cy - u.measurePts[0].second) * dl.ny;
+          finishMeasure();
+          return;
+        }
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !u.measurePts.empty() && u.tool != Tool::Length) {
           finishMeasure();
           return;
         }
@@ -1577,12 +1768,14 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
         u.measurePts.push_back({cx, cy});
         u.status = u.tool == Tool::PolyLength ? "Click more points; Enter or double-click to finish."
                    : u.tool == Tool::Area     ? "Click more points; Enter, double-click, or the first point to close."
+                   : u.tool == Tool::Length   ? (u.measurePts.size() == 1 ? "Click the second point."
+                                                                          : "Click where the dimension line goes (Enter: on the points).")
                                               : "";
-        if ((u.tool == Tool::Length && u.measurePts.size() == 2) || (u.tool == Tool::Angle && u.measurePts.size() == 3))
+        if (u.tool == Tool::Angle && u.measurePts.size() == 3)
           finishMeasure();
       } else if (u.tool == Tool::Calibrate) {
         float cx, cy;
-        toPt(r, cx, cy, true);
+        toPt(r, cx, cy, true, true);
         if (u.calCount == 0 || r.page == u.calPage) {
           u.calPage = r.page;
           u.calX[u.calCount] = cx;
@@ -1606,7 +1799,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
         u.textPopup = true;
       } else {
         float cx, cy;
-        toPt(r, cx, cy, true);
+        toPt(r, cx, cy, true, true);
         Annot a;
         a.kind = u.tool == Tool::Line ? Annot::Kind::Line : u.tool == Tool::Rect ? Annot::Kind::Rect : Annot::Kind::Ellipse;
         a.page = r.page;
@@ -1630,7 +1823,7 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
   }
   if (r != nullptr) {
     float x, y;
-    toPt(*r, x, y, u.drag != AnnotUi::Drag::Move);
+    toPt(*r, x, y, u.drag != AnnotUi::Drag::Move, u.drag != AnnotUi::Drag::Move);
     if (u.drag == AnnotUi::Drag::Create) {
       u.preview.x1 = x;
       u.preview.y1 = y;
@@ -1674,16 +1867,14 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
     v.fitWidthPending = false;
     GoToPage(v, v.curPage);
   }
-  if (v.pendingScrollY >= 0.f) {
-    ImGui::SetScrollY(v.pendingScrollY);
-    v.pendingScrollY = -1.f;
-  }
-  if (v.pendingScrollX >= 0.f) {
-    ImGui::SetScrollX(v.pendingScrollX);
-    v.pendingScrollX = -1.f;
-  }
   if (v.bench.active && v.bench.scrolling)
     ImGui::SetScrollY(v.bench.scrollPx);
+
+  // The scroll position that is really wanted: a change asked for this frame or last (ImGui applies a
+  // SetScroll one frame late, so its own GetScroll is stale right after a zoom). Zooming twice before ImGui
+  // caught up used to start the second zoom from that stale value and land several pages away.
+  const auto wantedY = [&] { return v.pendingScrollY >= 0.f ? v.pendingScrollY : ImGui::GetScrollY(); };
+  const auto wantedX = [&] { return v.pendingScrollX >= 0.f ? v.pendingScrollX : ImGui::GetScrollX(); };
 
   const bool hovered = ImGui::IsWindowHovered();
   const ImGuiIO& io = ImGui::GetIO();
@@ -1691,8 +1882,8 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
     // Zoom about the pointer: the point under it stays under it.
     const ImVec2 wp = ImGui::GetWindowPos();
     const float mx = io.MousePos.x - wp.x, my = io.MousePos.y - wp.y;
-    const float ptY = (ImGui::GetScrollY() + my - kMarginPx) / v.pxPerPt;
-    const float ptX = (ImGui::GetScrollX() + mx - kMarginPx) / v.pxPerPt;
+    const float ptY = (wantedY() + my - kMarginPx) / v.pxPerPt;
+    const float ptX = (wantedX() + mx - kMarginPx) / v.pxPerPt;
     SetZoom(v, v.pxPerPt * (io.MouseWheel > 0 ? 1.15f : 1.f / 1.15f));
     v.pendingScrollY = std::max(0.f, ptY * v.pxPerPt + kMarginPx - my);
     v.pendingScrollX = std::max(0.f, ptX * v.pxPerPt + kMarginPx - mx);
@@ -1703,8 +1894,8 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
   if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle))
     v.panning = false;
   if (v.panning) {
-    ImGui::SetScrollY(ImGui::GetScrollY() - io.MouseDelta.y);
-    ImGui::SetScrollX(ImGui::GetScrollX() - io.MouseDelta.x);
+    v.pendingScrollY = std::max(0.f, wantedY() - io.MouseDelta.y);
+    v.pendingScrollX = std::max(0.f, wantedX() - io.MouseDelta.x);
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
   }
   if ((ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || hovered) && !io.WantTextInput) {
@@ -1720,8 +1911,25 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
 
   v.viewW = ImGui::GetWindowWidth();
   v.viewH = ImGui::GetWindowHeight();
-  v.lastScrollX = ImGui::GetScrollX();
-  const float scrollY = ImGui::GetScrollY();
+
+  // Take the wanted scroll position NOW, for drawing and for picking: ImGui moves its own scroll next frame, so
+  // this frame is drawn as if it already had (the pages are shifted by the difference). Without this, the frame
+  // after a zoom or a page jump showed the new layout at the old scroll offset: a flash of some other page.
+  float scrollY = ImGui::GetScrollY(), scrollX = ImGui::GetScrollX();
+  if (v.pendingScrollY >= 0.f) {
+    const float maxY = std::max(0.f, ContentHeightPx(v) - v.viewH);
+    scrollY = std::clamp(v.pendingScrollY, 0.f, maxY);
+    ImGui::SetScrollY(scrollY);
+    v.pendingScrollY = -1.f;
+  }
+  if (v.pendingScrollX >= 0.f) {
+    const float maxX = std::max(0.f, std::max(avail.x, v.layout.maxWidth * v.pxPerPt + 2 * kMarginPx) - v.viewW);
+    scrollX = std::clamp(v.pendingScrollX, 0.f, maxX);
+    ImGui::SetScrollX(scrollX);
+    v.pendingScrollX = -1.f;
+  }
+  const float shiftY = ImGui::GetScrollY() - scrollY, shiftX = ImGui::GetScrollX() - scrollX;
+  v.lastScrollX = scrollX;
   if (scrollY != v.lastScrollY)
     v.scrollDir = scrollY > v.lastScrollY ? 1 : -1;
   v.lastScrollY = scrollY;
@@ -1803,7 +2011,9 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
 
   // Draw only the visible pages.
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  const ImVec2 origin = ImGui::GetCursorScreenPos(); // scrolls with the content
+  ImVec2 origin = ImGui::GetCursorScreenPos(); // scrolls with the content
+  origin.x += shiftX;                           // ... as if ImGui's scroll were already at the wanted position
+  origin.y += shiftY;
   const float contentW = std::max(avail.x, v.layout.maxWidth * v.pxPerPt + 2 * kMarginPx);
   std::vector<PageRect> pageRects;
   for (int p = vis.first; !vis.Empty() && p <= vis.last; ++p) {
@@ -1853,7 +2063,19 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
         cur.pts = u.measurePts;
         ApplyStyle(u, cur);
         const ImVec2 mouse = ImGui::GetIO().MousePos;
-        DrawAnnot(dl, cur, r.tl, r.hPt, v.pxPerPt, false, nullptr, &mouse);
+        if (u.tool == Tool::Length && cur.pts.size() == 2) { // both points placed: the line follows the pointer
+          const DimLine d = LengthDimLine(cur);
+          const float mx = (mouse.x - r.tl.x) / v.pxPerPt, my = r.hPt - (mouse.y - r.tl.y) / v.pxPerPt;
+          cur.offset = (mx - cur.pts[0].first) * d.nx + (my - cur.pts[0].second) * d.ny;
+          DrawAnnot(dl, cur, r.tl, r.hPt, v.pxPerPt, false, EffectiveScale(v, r.page));
+        } else {
+          DrawAnnot(dl, cur, r.tl, r.hPt, v.pxPerPt, false, nullptr, &mouse);
+        }
+      }
+      if (u.snapHit && u.snapPage == r.page) { // the end or corner the next click will take
+        const ImVec2 c(r.tl.x + u.snapX * v.pxPerPt, r.tl.y + (r.hPt - u.snapY) * v.pxPerPt);
+        dl->AddRect(ImVec2(c.x - 6.f, c.y - 6.f), ImVec2(c.x + 6.f, c.y + 6.f), IM_COL32(0, 0, 0, 220), 0.f, 0, 3.5f);
+        dl->AddRect(ImVec2(c.x - 6.f, c.y - 6.f), ImVec2(c.x + 6.f, c.y + 6.f), IM_COL32(60, 255, 90, 255), 0.f, 0, 1.8f);
       }
       if (u.calCount > 0 && u.calPage == r.page) { // the calibration points picked so far
         const auto S = [&](int i) { return ImVec2(r.tl.x + u.calX[i] * v.pxPerPt, r.tl.y + (r.hPt - u.calY[i]) * v.pxPerPt); };
