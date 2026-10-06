@@ -744,12 +744,23 @@ void ViewportRenderer::DeleteMapTileTexture(unsigned int texture) {
   glDeleteTextures(1, &tex);
 }
 
-bool ViewportRenderer::Init() {
-  if (glewInit() != GLEW_OK)
+bool ViewportRenderer::Init(std::string* errorOut) {
+  const GLenum glewErr = glewInit();
+  if (glewErr != GLEW_OK) {
+    if (errorOut) {
+      const char* msg = reinterpret_cast<const char*>(glewGetErrorString(glewErr));
+      *errorOut       = (msg && msg[0]) ? msg : "glewInit failed";
+    }
     return false;
+  }
   // GLEW fires GL_INVALID_ENUM on core contexts; clear once (common workaround).
   glGetError();
-  return EnsureShader();
+  if (!EnsureShader()) {
+    if (errorOut)
+      *errorOut = "OpenGL shader setup failed (driver may not support OpenGL 3.3 core).";
+    return false;
+  }
+  return true;
 }
 
 void ViewportRenderer::Shutdown() {

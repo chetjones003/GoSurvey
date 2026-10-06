@@ -45,6 +45,7 @@
 #include "HttpFetch.hpp"  // HasInternetConnectivity — launch auth spinner timer
 #include "Version.hpp"
 #include "WhatsNewLogic.hpp"
+#include "StartupFailure.hpp"
 
 #include <chrono>
 #include <ctime>
@@ -168,6 +169,7 @@ namespace
 
 static void GlfwErrorCallback(int error, const char *description)
 {
+  startupFailure::NoteGlfwError(error, description);
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
 }
 
@@ -293,7 +295,7 @@ int main()
 
   glfwSetErrorCallback(GlfwErrorCallback);
   if (!glfwInit())
-    return 1;
+    startupFailure::FailAndShow(startupFailure::Stage::GlfwInit);
 
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -313,7 +315,7 @@ int main()
   if (!window)
   {
     glfwTerminate();
-    return 1;
+    startupFailure::FailAndShow(startupFailure::Stage::GlfwCreateWindow);
   }
   if (GLFWmonitor *primary = glfwGetPrimaryMonitor())
   {
@@ -331,12 +333,15 @@ int main()
   // One ViewportRenderer (owns its own FBO + texture) per open drawing tab.
   std::vector<std::unique_ptr<ViewportRenderer>> viewportRenderers;
   viewportRenderers.push_back(std::make_unique<ViewportRenderer>());
-  if (!viewportRenderers[0]->Init())
   {
-    PdfAttach_Shutdown();
-    glfwDestroyWindow(window);
-    glfwTerminate();
-    return 1;
+    std::string openGlError;
+    if (!viewportRenderers[0]->Init(&openGlError))
+    {
+      PdfAttach_Shutdown();
+      glfwDestroyWindow(window);
+      glfwTerminate();
+      startupFailure::FailAndShow(startupFailure::Stage::OpenGlInit, openGlError);
+    }
   }
 
   // REQ-363 / ADR-064: one online map for the application. Tiles and textures are shared by every

@@ -10,7 +10,8 @@ Press `F2` for the full console and scroll back — most of the answers below ar
 | Problem | Cause | Solution |
 |---|---|---|
 | *"Windows protected your PC"* on the installer | The installer is not code-signed yet | **More info → Run anyway**, if you trust the release |
-| The program will not start — missing DLL | The Visual C++ runtime is not installed | Install the [Visual C++ Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) |
+| The program will not start — missing DLL | An older install without the bundled runtime, or a corrupted install | Reinstall from the latest installer (it installs the VC++ runtime automatically). You can also install the [Visual C++ Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) manually. |
+| Double-click does nothing (no window at all) | Startup failed before the main UI (often OpenGL 3.3 or display drivers) | GoSurvey should show a **Could not start** dialog and append details to `%APPDATA%\GoSurvey\startup-failure.log`. Update your graphics driver (Windows Update optional drivers, or your PC/GPU vendor). OpenGL comes from the driver — it is not a separate redistributable like Visual C++. |
 | Startup hangs on *"Checking for updates"* | Slow or blocked network | Press **Continue without checking**. Turn the check off in **Settings → System** |
 | Graphics glitches, or the window is black | Driver or GPU incompatibility | **Settings → System** — turn off **Hardware Acceleration**, or tick **Prefer the integrated GPU** |
 | The bundled template was not found | `resources/` is missing beside the executable | Reinstall. Resources resolve relative to the executable |
