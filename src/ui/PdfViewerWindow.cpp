@@ -5,6 +5,7 @@
 #include "FontRegistry.hpp"
 #include "PdfAnnotate.hpp"
 #include "PdfCompare.hpp"
+#include "PdfPanelStyle.hpp"
 #include "PdfSnap.hpp"
 #include "PdfSplit.hpp"
 #include "PdfViewerCore.hpp"
@@ -1152,6 +1153,7 @@ void DrawSplitDialog(Viewer& v, std::vector<std::string>& log) {
 }
 
 void DrawThumbnails(Viewer& v) {
+  PushPanelStyle();
   ImGui::BeginChild("##thumbs", ImVec2(v.thumbW, 0.f), true, ImGuiWindowFlags_NoMove);
   const int n = v.layout.PageCount();
   const float boxW = v.thumbW - 30.f;               // widest a thumbnail may be
@@ -1186,6 +1188,7 @@ void DrawThumbnails(Viewer& v) {
     }
   }
   ImGui::EndChild();
+  PopPanelStyle();
 }
 
 const PageScale* EffectiveScale(const Viewer& v, int page);
@@ -3314,8 +3317,13 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
           else if (v.compare->BenchFinished())
             v.bench.finished = true;
         } else {
+        PushPanelStyle(); // the tool bars sit in a raised panel, like the comparison bar
+        ImGui::BeginChild("##pdftools", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove);
         DrawToolbar(v);
         DrawAnnotBar(v, log);
+        ImGui::EndChild();
+        PopPanelStyle();
         DrawSplitDialog(v, log);
         if (v.showThumbs) {
           DrawThumbnails(v);

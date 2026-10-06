@@ -1,5 +1,6 @@
 #include "PdfCompare.hpp"
 
+#include "PdfPanelStyle.hpp"
 #include "WinFileDialogs.hpp"
 
 #include <GL/glew.h>
@@ -599,15 +600,25 @@ void PdfCompare::DrawChangesBar() {
       anaCancel_.store(true);
   }
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(150.f);
-  ImGui::InputDouble("##tol", &diffSettings_.toleranceMm, 0.0, 0.0, "Tolerance %.1f mm");
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Tolerance");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(70.f);
+  ImGui::InputDouble("##tol", &diffSettings_.toleranceMm, 0.0, 0.0, "%.1f");
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Tolerance: marks that differ by less than this (in millimetres on paper) are treated as the same.");
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(150.f);
-  ImGui::InputDouble("##minsz", &diffSettings_.minSizeMm, 0.0, 0.0, "Smallest %.1f mm");
+  ImGui::TextUnformatted("mm");
+  ImGui::SameLine();
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Smallest");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(70.f);
+  ImGui::InputDouble("##minsz", &diffSettings_.minSizeMm, 0.0, 0.0, "%.1f");
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Smallest area to report: differences smaller than this (in millimetres on paper) are ignored as specks.");
+  ImGui::SameLine();
+  ImGui::TextUnformatted("mm");
   diffSettings_.toleranceMm = std::clamp(diffSettings_.toleranceMm, 0.2, 10.0);
   diffSettings_.minSizeMm = std::clamp(diffSettings_.minSizeMm, 0.0, 50.0);
   if (haveChanges_) {
@@ -657,6 +668,7 @@ void PdfCompare::DrawChangesBar() {
 
 void PdfCompare::DrawChangesList() {
   // NoMove: a click or drag on the list must not carry the whole window along.
+  PushPanelStyle();
   ImGui::BeginChild("##cmpchanges", ImVec2(listW_, 0.f), true, ImGuiWindowFlags_NoMove);
   ImGui::Text("Areas that differ (%d)", static_cast<int>(regions_.size()));
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 40.f);
@@ -698,6 +710,7 @@ void PdfCompare::DrawChangesList() {
     ImGui::PopStyleColor();
   }
   ImGui::EndChild();
+  PopPanelStyle();
   if (closeList)
     ClearChanges();
 }
@@ -860,24 +873,12 @@ bool PdfCompare::Draw(std::vector<std::string>& log) {
   PollOpen(log);
   bool keepOpen = true;
   {
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.f, 5.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(9.f, 7.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f, 10.f));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.17f, 0.21f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.30f, 0.36f, 0.46f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.22f, 0.27f, 0.35f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.42f, 0.58f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20f, 0.48f, 0.80f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.09f, 0.10f, 0.13f, 1.f));
+    PushPanelStyle();
     ImGui::BeginChild("##cmpbar", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove);
     DrawBar(keepOpen);
     ImGui::EndChild();
-    ImGui::PopStyleColor(6);
-    ImGui::PopStyleVar(6);
+    PopPanelStyle();
   }
   if (!error_.empty()) {
     ImGui::TextWrapped("The revision could not be opened: %s.", error_.c_str());
