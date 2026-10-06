@@ -345,7 +345,10 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     if (target == nullptr)
       return;
     DevShell_Logf("pdfview", "docking into the node of '%s'", target->Name);
-    ctx->DockInto(ImGuiTestRef(w->Name), ImGuiTestRef(target->DockNode->ID));
+    // A floating viewer has no ImGui title bar to drag (the OS draws it), so the Test Engine cannot grab one;
+    // the layout API docks it, which is the same state a drag onto the slot produces.
+    ImGui::DockBuilderDockWindow(w->Name, target->DockNode->ID);
+    ctx->Yield(10);
     ctx->Yield(10);
     w = findViewer();
     IM_CHECK(w != nullptr);

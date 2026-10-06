@@ -7,6 +7,14 @@
 
 #include <GL/glew.h>
 #include <imgui.h>
+#include <imgui_internal.h>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -159,6 +167,8 @@ struct Viewer {
   std::string title;
   bool open = true;
   bool focusNext = false;
+  bool osFramed = true;    ///< floating in its own OS window: the OS draws the title bar, so ImGui draws none
+  void* framedHwnd = nullptr;  ///< the OS window whose frame colours were last set
   bool placed = false; ///< first-frame position given; after that the user (or the saved layout) owns it
   std::future<PdfDocument::OpenResult> opening;
   bool loaded = false;
@@ -193,6 +203,28 @@ int g_nextId = 1;
 // Textures are freed at the START of the next frame: this frame's draw lists (the thumbnail strip is
 // recorded before the pages are updated) may still point at them until the frame is rendered.
 std::vector<GLuint> g_graveyard;
+
+#if defined(_WIN32)
+// The viewer's Windows title bar takes GoSurvey's dark chrome instead of the system's light one
+// (Windows 11 honours these; older Windows ignores them and keeps its own frame).
+void ApplyOsFrameColors(void* hwndRaw, ImU32 bar) {
+  using DwmSetFn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+  static DwmSetFn setAttr = [] {
+    HMODULE m = ::LoadLibraryW(L"dwmapi.dll");
+    return m ? reinterpret_cast<DwmSetFn>(::GetProcAddress(m, "DwmSetWindowAttribute")) : nullptr;
+  }();
+  if (setAttr == nullptr || hwndRaw == nullptr)
+    return;
+  HWND hwnd = static_cast<HWND>(hwndRaw);
+  const COLORREF caption = RGB(bar & 0xFF, (bar >> 8) & 0xFF, (bar >> 16) & 0xFF);
+  const COLORREF text = RGB(225, 228, 232);
+  const BOOL dark = TRUE;
+  setAttr(hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
+  setAttr(hwnd, 34 /*DWMWA_BORDER_COLOR*/, &caption, sizeof(caption));
+  setAttr(hwnd, 35 /*DWMWA_CAPTION_COLOR*/, &caption, sizeof(caption));
+  setAttr(hwnd, 36 /*DWMWA_TEXT_COLOR*/, &text, sizeof(text));
+}
+#endif
 
 void DeleteTextures(const std::vector<PageCache::Entry>& gone) {
   for (const PageCache::Entry& e : gone)
@@ -359,7 +391,7 @@ void DrawToolbar(Viewer& v, float viewH) {
 }
 
 void DrawThumbnails(Viewer& v) {
-  ImGui::BeginChild("##thumbs", ImVec2(132.f, 0.f), true);
+  ImGui::BeginChild("##thumbs", ImVec2(132.f, 0.f), true, ImGuiWindowFlags_NoMove);
   const int n = v.layout.PageCount();
   ImGuiListClipper clip;
   clip.Begin(n, kThumbItemH);
@@ -643,8 +675,22 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
       v.placed = true;
     }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
-    const bool shown = ImGui::Begin(name, &open);
+    // In its own OS window the operating system draws the title bar and the close button, so ImGui draws no
+    // second one. Docked, the tab is the only handle there is, so it comes back. To dock a floating viewer,
+    // drag it by any empty part of its toolbar.
+    const bool shown = ImGui::Begin(name, &open, v.osFramed ? ImGuiWindowFlags_NoTitleBar : ImGuiWindowFlags_None);
     ImGui::PopStyleVar();
+    {
+      ImGuiWindow* self = ImGui::GetCurrentWindow();
+      v.osFramed = self->ViewportOwned && !self->DockIsActive && self->Viewport != nullptr &&
+                   (self->Viewport->Flags & ImGuiViewportFlags_NoDecoration) == 0;
+#if defined(_WIN32)
+      if (v.osFramed && self->Viewport->PlatformHandleRaw != nullptr && self->Viewport->PlatformHandleRaw != v.framedHwnd) {
+        ApplyOsFrameColors(self->Viewport->PlatformHandleRaw, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
+        v.framedHwnd = self->Viewport->PlatformHandleRaw;
+      }
+#endif
+    }
     if (shown) {
       if (!v.error.empty()) {
         ImGui::TextWrapped("This PDF could not be opened: %s.", v.error.c_str());
