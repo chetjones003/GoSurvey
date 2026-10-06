@@ -59,6 +59,7 @@ struct Viewport {
   double modelCenterX = 0.0;  // model-space point shown at the viewport's center
   double modelCenterY = 0.0;
   float scaleModelPerPaperIn = 50.f;  // model units per paper inch (AutoCAD viewport scale)
+  VisualStyle visualStyle = VisualStyle::Wireframe2D;  // REQ-371 / #624: per-viewport draw style (DWG VISUALSTYLE)
   std::string layer = "0";            // viewport's layer; if not plottable, its border is omitted from plots
   std::vector<std::string> frozenLayers;  // layer names hidden only in this viewport (REQ-028)
   // Per-viewport layer COLOR override (REQ-046): parallel arrays (layer name -> override color, same
@@ -151,39 +152,125 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   return drawingModelUnitsPerPlottedInch;
 }
 
-/// Issue #622: annotative TEXT/MTEXT/dimensions use the viewport's scale so plotted height stays
-/// constant on the sheet. Non-annotative objects keep the drawing plot scale.
-[[nodiscard]] inline float AnnotativeModelUnitsPerPlottedInch(const CadAnnotation& a, const Viewport* vp,
+/// Closest SCALE-list entry to a model-units-per-plotted-inch value (issue #622).
+[[nodiscard]] inline int CadAnnotationScaleIndexClosestToMup(const std::vector<CadAnnotationScale>& scales,
+                                                             float modelUnitsPerPlottedInch) {
+  if (scales.empty() || modelUnitsPerPlottedInch <= 0.f)
+    return -1;
+  int best = 0;
+  float bestDiff = 1.e30f;
+  for (int i = 0; i < static_cast<int>(scales.size()); ++i) {
+    const float m = CadAnnotationScaleModelUnitsPerPlottedInch(scales[static_cast<size_t>(i)]);
+    const float d = std::fabs(m - modelUnitsPerPlottedInch);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/// Active SCALE dictionary name for display: viewport scale on a layout sheet, else CANNOSCALE index.
+[[nodiscard]] inline std::string CadActiveAnnotationScaleName(const std::vector<CadAnnotationScale>* scales,
+                                                              int currentScaleIndex, const Viewport* vp,
                                                               float drawingModelUnitsPerPlottedInch) {
-  if (!a.annotative || vp == nullptr)
+  if (scales == nullptr || scales->empty())
+    return {};
+  int ix = currentScaleIndex;
+  if (vp != nullptr)
+    ix = CadAnnotationScaleIndexClosestToMup(*scales, vp->safeScale());
+  else if (ix < 0 || ix >= static_cast<int>(scales->size()))
+    ix = CadAnnotationScaleIndexClosestToMup(*scales, drawingModelUnitsPerPlottedInch);
+  if (ix < 0 || ix >= static_cast<int>(scales->size()))
+    return {};
+  return (*scales)[static_cast<size_t>(ix)].name;
+}
+
+/// Per-scale visibility gate for annotative objects (empty list = visible at all scales).
+[[nodiscard]] inline bool CadAnnotativeVisibleAtActiveScale(
+    bool annotative, const std::vector<std::string>& visibleAtScaleNames,
+    const std::vector<CadAnnotationScale>* scales, int currentScaleIndex, const Viewport* vp,
+    float drawingModelUnitsPerPlottedInch) {
+  if (!annotative || visibleAtScaleNames.empty())
+    return true;
+  if (scales == nullptr || scales->empty())
+    return true;
+  const std::string active =
+      CadActiveAnnotationScaleName(scales, currentScaleIndex, vp, drawingModelUnitsPerPlottedInch);
+  if (active.empty())
+    return true;
+  for (const std::string& n : visibleAtScaleNames) {
+    if (n == active)
+      return true;
+  }
+  return false;
+}
+
+/// Model-space CANNOSCALE stand-in: current annotation scale entry, else drawing plot scale (issue #622).
+[[nodiscard]] inline float ModelSpaceAnnotativeModelUnitsPerPlottedInch(
+    float drawingModelUnitsPerPlottedInch, const std::vector<CadAnnotationScale>* scales, int currentScaleIndex) {
+  if (scales != nullptr && currentScaleIndex >= 0 &&
+      currentScaleIndex < static_cast<int>(scales->size())) {
+    const float m =
+        CadAnnotationScaleModelUnitsPerPlottedInch((*scales)[static_cast<size_t>(currentScaleIndex)]);
+    if (m > 0.f)
+      return m;
+  }
+  return drawingModelUnitsPerPlottedInch;
+}
+
+/// Issue #622: annotative TEXT/MTEXT/dimensions use the viewport's scale on a layout sheet, or the
+/// current annotation scale in model space. Non-annotative objects keep the drawing plot scale.
+[[nodiscard]] inline float AnnotativeModelUnitsPerPlottedInch(
+    const CadAnnotation& a, const Viewport* vp, float drawingModelUnitsPerPlottedInch,
+    const std::vector<CadAnnotationScale>* scales = nullptr, int currentScaleIndex = -1) {
+  if (!a.annotative)
     return drawingModelUnitsPerPlottedInch;
-  return vp->safeScale();
+  if (vp != nullptr)
+    return vp->safeScale();
+  return ModelSpaceAnnotativeModelUnitsPerPlottedInch(drawingModelUnitsPerPlottedInch, scales, currentScaleIndex);
 }
 
-[[nodiscard]] inline float AnnotativeDisplayScaleFactor(const Viewport* vp, float drawingModelUnitsPerPlottedInch) {
-  if (vp == nullptr || drawingModelUnitsPerPlottedInch <= 0.f)
+[[nodiscard]] inline float AnnotativeDisplayScaleFactor(
+    const Viewport* vp, float drawingModelUnitsPerPlottedInch,
+    const std::vector<CadAnnotationScale>* scales = nullptr, int currentScaleIndex = -1) {
+  if (drawingModelUnitsPerPlottedInch <= 0.f)
     return 1.f;
-  return vp->safeScale() / drawingModelUnitsPerPlottedInch;
+  const float activeMup = vp != nullptr ? vp->safeScale()
+                                        : ModelSpaceAnnotativeModelUnitsPerPlottedInch(drawingModelUnitsPerPlottedInch,
+                                                                                       scales, currentScaleIndex);
+  return activeMup / drawingModelUnitsPerPlottedInch;
 }
 
-/// Copy of \p fr with patternScale adjusted for annotative display through \p vp (issue #622).
-[[nodiscard]] inline CadFilledRegion FilledRegionForAnnotativeDraw(const CadFilledRegion& fr, const Viewport* vp,
-                                                                    float drawingModelUnitsPerPlottedInch) {
+/// Copy of \p fr with patternScale adjusted for annotative display (issue #622).
+[[nodiscard]] inline CadFilledRegion FilledRegionForAnnotativeDraw(
+    const CadFilledRegion& fr, const Viewport* vp, float drawingModelUnitsPerPlottedInch,
+    const std::vector<CadAnnotationScale>* scales = nullptr, int currentScaleIndex = -1) {
   CadFilledRegion out = fr;
-  if (!fr.annotative || vp == nullptr)
+  if (!fr.annotative)
     return out;
-  const float factor = AnnotativeDisplayScaleFactor(vp, drawingModelUnitsPerPlottedInch);
-  if (factor > 0.f)
+  const float factor = AnnotativeDisplayScaleFactor(vp, drawingModelUnitsPerPlottedInch, scales, currentScaleIndex);
+  if (factor > 0.f && std::fabs(factor - 1.f) > 1.e-6f)
     out.patternScale = fr.patternScale * factor;
   return out;
+}
+
+/// Annotative block INSERT: viewport on a layout sheet, or model tab with a current annotation scale.
+[[nodiscard]] inline CadBlockRef CadBlockRefForAnnotativeDisplay(
+    const CadBlockRef& ref, const Viewport* vp, float drawingModelUnitsPerPlottedInch,
+    const std::vector<CadAnnotationScale>* scales = nullptr, int currentScaleIndex = -1) {
+  if (!ref.annotative)
+    return ref;
+  const float factor = AnnotativeDisplayScaleFactor(vp, drawingModelUnitsPerPlottedInch, scales, currentScaleIndex);
+  if (factor <= 0.f || std::fabs(factor - 1.f) < 1.e-6f)
+    return ref;
+  return CadBlockRefForAnnotativeViewport(ref, factor);
 }
 
 /// Block INSERT drawn through a layout viewport; annotative refs scale about the insertion point.
 [[nodiscard]] inline CadBlockRef CadBlockRefForViewportDraw(const CadBlockRef& ref, const Viewport& vp,
                                                               float drawingModelUnitsPerPlottedInch) {
-  if (!ref.annotative)
-    return ref;
-  return CadBlockRefForAnnotativeViewport(ref, AnnotativeDisplayScaleFactor(&vp, drawingModelUnitsPerPlottedInch));
+  return CadBlockRefForAnnotativeDisplay(ref, &vp, drawingModelUnitsPerPlottedInch, nullptr, -1);
 }
 
 /// Height on the sheet (paper inches) of \p a when it is plotted through \p vp.

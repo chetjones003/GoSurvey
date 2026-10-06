@@ -284,6 +284,17 @@ std::vector<std::string> Generate(std::uint64_t seed, const std::vector<std::str
     // unreached. Coordinates stay plain because the anchor's whole job is to be a GUARANTEED commit:
     // a hostile value that the command legitimately refuses would leave the undo stack untouched and
     // put the false positive straight back.
+    //
+    // A plain coordinate is not enough on its own, which seed 1 showed once two entries were added
+    // to the command registry and every later random draw shifted. The body above can leave a
+    // command RUNNING — it had drawn `CMD MIRROR` and never escaped it — and a running command owns
+    // the typing box. The anchor's `CMD LINE` is then read as input to MIRROR rather than as a
+    // command, nothing is committed, "Nothing to undo" follows, and EXPECT DIFFERENTFILE asserts a
+    // change that could not have happened. The program is right in that exchange and says so; the
+    // oracle was wrong. So end whatever is running first: the anchor cannot be a guaranteed commit
+    // while something else is holding the prompt.
+    lines.push_back("ESC");
+
     const int anchor = r.Int(0, 3);
     const double ax = PlainScalar(r);
     const double ay = PlainScalar(r);

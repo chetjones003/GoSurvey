@@ -86,6 +86,14 @@ void DrawViewportsWindow(AppCommandState& cmd, std::vector<std::string>& log) {
     ch |= ImGui::InputFloat("H##vph", &V.paperHIn, 0.f, 0.f, "%.3f");
     ImGui::SetNextItemWidth(140.f);
     ch |= ImGui::InputFloat("Scale (model/in)##vps", &V.scaleModelPerPaperIn, 0.f, 0.f, "%.4f");
+    {
+      int vsIdx = static_cast<int>(V.visualStyle);
+      ImGui::SetNextItemWidth(150.f);
+      if (ImGui::Combo("Visual style##vpvs", &vsIdx, "2D Wireframe\0Hidden\0Shaded\0")) {
+        V.visualStyle = static_cast<VisualStyle>(vsIdx);
+        ch = true;
+      }
+    }
     ImGui::SetNextItemWidth(120.f);
     ch |= ImGui::InputDouble("Center X##vpcx", &V.modelCenterX, 0., 0., "%.4f");
     ImGui::SameLine();

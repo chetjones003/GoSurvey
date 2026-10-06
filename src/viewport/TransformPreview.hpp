@@ -86,6 +86,11 @@ void BuildSubObjectHoverHighlight(const AppCommandState& cmd, std::vector<float>
 /// the handle, and two handles for one operation is worse than either.
 void BuildSubObjectFaceGhost(const AppCommandState& cmd, std::vector<float>* outPreview);
 
+/// REQ-370: highlight geometry for the objects the open selection box would select (`selBoxPreview`).
+/// Empty when no box is open. Drawn through the hover channel's slot with the lighter preview tint.
+void BuildBoxPreviewHighlight(const AppCommandState& cmd, std::vector<float>* outPreviewLines,
+                              std::vector<float>* outPreviewCircles);
+
 /// Hover highlight geometry for the viewport (entity under idle cursor, distinct from selection).
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* outHoverLines,
                          std::vector<float>* outHoverCircles);

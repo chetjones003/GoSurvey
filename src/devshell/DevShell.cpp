@@ -33,6 +33,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -496,6 +497,27 @@ void DevShell_RegisterTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   IM_ASSERT(engine != nullptr);
   IM_ASSERT(cmd != nullptr);
   DevShell_RegisterUiTests(engine, cmd);
+  DevShell_RegisterProjectTests(engine, cmd);
+}
+
+namespace {
+std::mutex g_mainJobMutex;
+std::function<void()> g_mainJob;
+}  // namespace
+
+bool DevShell_RunOnMainThread(std::function<void()> job)
+{
+  std::lock_guard<std::mutex> lock(g_mainJobMutex);
+  if (g_mainJob)
+    return false;
+  g_mainJob = std::move(job);
+  return true;
+}
+
+bool DevShell_MainThreadJobPending()
+{
+  std::lock_guard<std::mutex> lock(g_mainJobMutex);
+  return static_cast<bool>(g_mainJob);
 }
 
 void DevShell_PostSwap(ImGuiTestEngine* engine)
@@ -503,6 +525,21 @@ void DevShell_PostSwap(ImGuiTestEngine* engine)
   if (!engine)
     return;
   ImGuiTestEngine_PostSwap(engine);
+  {
+    // A Test Engine test runs on a coroutine thread with no GL context. A job queued from there runs
+    // here instead - on the main thread, GL current - so it behaves as it does when a user clicks.
+    std::function<void()> job;
+    {
+      std::lock_guard<std::mutex> lock(g_mainJobMutex);
+      job = g_mainJob;
+    }
+    if (job)
+    {
+      job();
+      std::lock_guard<std::mutex> lock(g_mainJobMutex);
+      g_mainJob = nullptr;
+    }
+  }
   if (g_resizeW > 0 && g_resizeH > 0) {
     GLFWwindow* win = glfwGetCurrentContext();
     if (!win)

@@ -4,6 +4,7 @@
 
 #include "CadCommands.hpp"
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,7 +21,14 @@ void DevShell_Logf(const char* channel, const char* fmt, ...);
 void DevShell_Create(ImGuiTestEngine** outEngine);
 void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd);
 void DevShell_RegisterTests(ImGuiTestEngine* engine, AppCommandState* cmd);
+/// Issue #696 (projects) end-to-end driver — DevShellProjectTests.cpp.
+void DevShell_RegisterProjectTests(ImGuiTestEngine* engine, AppCommandState* cmd);
 void DevShell_PostSwap(ImGuiTestEngine* engine);
+/// Queue \p job to run on the main thread right after the next buffer swap (GL context current).
+/// For a Test Engine test, which runs on a coroutine thread: anything that creates GL textures (opening
+/// a drawing that re-places a PDF) must run there. False when a job is already queued.
+bool DevShell_RunOnMainThread(std::function<void()> job);
+[[nodiscard]] bool DevShell_MainThreadJobPending();
 /// Stop the Test Engine coroutine while the ImGui context still exists.
 void DevShell_Stop(ImGuiTestEngine* engine);
 /// Destroy the Test Engine. Must run *after* ImGui::DestroyContext() (imgui_te_engine.h).
