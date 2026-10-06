@@ -4847,6 +4847,11 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
       written the same way. New pure modules: `src/pdf/PdfMeasure` (scale, unit conversion, measure
       values), `src/pdf/PdfAlign` (REQ-392 alignment of two rendered sheets) and `src/pdf/PdfDiff`
       (REQ-393 change regions); the render worker and bounded cache of (c)/(d) serve the overlay.
+      **Addendum 3 (D-2026-10-06-h):** scale checking adds two modules: `src/pdf/PdfScaleCheck` (pure: the feet-and-inches
+      value parser, verdicts, length-weighted best fit, outlier rule and the opt-in robust (weighted least squares)
+      calibration with its uncertainty and standardised residuals: REQ-394) and `src/pdf/PdfDimAudit` (PDFium
+      text and path reading plus pure matching of dimension text to dimension lines: REQ-395). Checks are viewer
+      state like annotations (undoable) but are not written to the PDF.
 (f) **Routing.** One function, `OpenPdfInViewer(path)`, replaces `OpenWithDefaultApp` for `.pdf` at
       every call site; non-PDF files keep the shell route.
 - **Alternatives.** (1) *Second OS window / ImGui multi-viewport:* heavier, new GL-context risk, no gain
