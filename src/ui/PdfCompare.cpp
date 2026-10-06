@@ -1,5 +1,7 @@
 #include "PdfCompare.hpp"
 
+#include "WinFileDialogs.hpp"
+
 #include <GL/glew.h>
 #include <imgui.h>
 
@@ -58,8 +60,13 @@ PdfCompare::PdfCompare(PdfDocument* base, const std::string& baseTitle, int base
 
 PdfCompare::~PdfCompare() {
   cancel_.store(true);
+  anaCancel_.store(true);
   if (job_.valid())
     job_.wait();
+  if (ana_.valid())
+    ana_.wait();
+  if (saving_.valid())
+    saving_.wait();
   if (opening_.valid())
     opening_.wait();
   Retire(cur_);
@@ -92,6 +99,171 @@ void PdfCompare::PollOpen(std::vector<std::string>& log) {
   }
 }
 
+void PdfCompare::StartDiffBench(bool deleteRevAfter) {
+  diffBench_ = true;
+  deleteRev_ = deleteRevAfter;
+  benchT0_ = Clock::now();
+}
+
+void PdfCompare::ClearChanges() {
+  regions_.clear();
+  haveChanges_ = false;
+  selRegion_ = -1;
+  centerReq_ = -1;
+}
+
+// REQ-393 clause 6: the automatic alignment and the change search run on one worker at a time, can be cancelled, and
+// report progress; the UI thread only starts them and collects the result.
+void PdfCompare::StartTask(Task t) {
+  anaCancel_.store(false);
+  anaProgress_.store(0.f);
+  anaTask_ = t;
+  anaRunning_ = true;
+  anaBasePage_ = basePage_;
+  anaRevPage_ = revPage_;
+  anaVersion_ = version_;
+  PdfDocument* b = base_;
+  PdfDocument* r = rev_.get();
+  const int bp = basePage_, rp = revPage_;
+  const pdfalign::Transform xf = xf_;
+  const pdfdiff::Settings settings = diffSettings_;
+  std::atomic<bool>* cancel = &anaCancel_;
+  std::atomic<float>* prog = &anaProgress_;
+  ana_ = std::async(std::launch::async, [=]() {
+    AnaOut out;
+    out.task = t;
+    const Clock::time_point t0 = Clock::now();
+    const auto isCancelled = [cancel] { return cancel->load(); };
+    const PageSize bs = b->Sizes()[static_cast<size_t>(bp)];
+    const PageSize rs = r->Sizes()[static_cast<size_t>(rp)];
+    const auto fit = [](const PageSize& s, double ppp, int side, int& w, int& h) {
+      ppp = std::min(ppp, static_cast<double>(side) / std::max(s.wPt, s.hPt));
+      w = std::max(1, static_cast<int>(std::lround(s.wPt * ppp)));
+      h = std::max(1, static_cast<int>(std::lround(s.hPt * ppp)));
+      return ppp;
+    };
+    Bitmap bBmp, rBmp;
+    int bw = 0, bh = 0, rw = 0, rh = 0;
+    if (t == Task::Align) {
+      // A coarse picture of each sheet is enough to find a shift, a scale and a small turn.
+      const double ppp = std::min(1.0, 3000.0 / std::max({bs.wPt, bs.hPt, rs.wPt, rs.hPt}));
+      const double bppp = fit(bs, ppp, 100000, bw, bh), rppp = fit(rs, ppp, 100000, rw, rh);
+      if (!b->RenderPage(bp, bw, bh, bBmp, isCancelled, kFlagsAnnot)) {
+        out.cancelled = isCancelled();
+        return out;
+      }
+      prog->store(0.3f);
+      if (!r->RenderPage(rp, rw, rh, rBmp, isCancelled, kFlagsAnnot)) {
+        out.cancelled = isCancelled();
+        return out;
+      }
+      prog->store(0.5f);
+      (void)rppp;
+      out.align = pdfalign::AutoAlign(bBmp, bs.hPt, rBmp, rs.hPt, bppp, isCancelled);
+      out.cancelled = isCancelled();
+      out.ok = !out.cancelled;
+    } else {
+      const double bppp = fit(bs, 1.5, 4000, bw, bh);
+      if (!b->RenderPage(bp, bw, bh, bBmp, isCancelled, kFlagsAnnot)) {
+        out.cancelled = isCancelled();
+        return out;
+      }
+      prog->store(0.2f);
+      const double rppp = fit(rs, bppp * std::max(0.05, xf.Scale()), 6000, rw, rh);
+      if (!r->RenderPage(rp, rw, rh, rBmp, isCancelled, kFlagsAnnot)) {
+        out.cancelled = isCancelled();
+        return out;
+      }
+      prog->store(0.4f);
+      Bitmap aligned;
+      pdfalign::ResampleAligned(rBmp, rs.hPt, static_cast<float>(rppp), xf, bw, bh, static_cast<float>(bppp), bs.hPt, aligned);
+      std::vector<uint8_t>().swap(rBmp.bgra);
+      prog->store(0.5f);
+      out.found = pdfdiff::FindChanges(bBmp, aligned, bppp, bs.hPt, settings, isCancelled,
+                                       [prog](float f) { prog->store(0.5f + 0.5f * f); });
+      out.cancelled = out.found.cancelled;
+      out.ok = !out.cancelled;
+    }
+    out.ms = MsSince(t0);
+    return out;
+  });
+}
+
+void PdfCompare::PumpAnalysis(std::vector<std::string>& log) {
+  if (anaRunning_ && ana_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    AnaOut out = ana_.get();
+    anaRunning_ = false;
+    const bool stale = anaBasePage_ != basePage_ || anaRevPage_ != revPage_;
+    if (stale) {
+      if (out.task == Task::Align)
+        alignWanted_ = true; // the pages changed while it ran: do it again for the new pair
+    } else if (!out.ok) {
+      if (!out.cancelled)
+        status_ = out.task == Task::Align ? "A page could not be rendered for the alignment." : "A page could not be rendered to find the changes.";
+    } else if (out.task == Task::Align) {
+      autoConfidence_ = out.align.confidence;
+      autoMatched_ = out.align.matched;
+      lowConfidence_ = !out.align.matched;
+      autoXf_ = out.align.matched ? out.align.xf : pdfalign::Transform{};
+      xf_ = autoXf_;
+      ++version_;
+      ClearChanges();
+      char note[240];
+      if (out.align.matched)
+        std::snprintf(note, sizeof(note), "Aligned automatically (confidence %.0f %%): scale %.5f, rotation %.3f degrees.", out.align.confidence * 100.0,
+                      xf_.Scale(), xf_.RotationDeg());
+      else
+        std::snprintf(note, sizeof(note), "Check alignment: no automatic match (confidence %.0f %%). The pages are laid corner on corner; line them up by hand.",
+                      out.align.confidence * 100.0);
+      alignNote_ = note;
+      if (diffBench_) {
+        diffBenchAlignMs_ = out.ms;
+        diffBenchFinding_ = true;
+        StartTask(Task::Find);
+      }
+    } else if (anaVersion_ == version_) {
+      regions_ = std::move(out.found.regions);
+      haveChanges_ = true;
+      selRegion_ = -1;
+      char msg[160];
+      std::snprintf(msg, sizeof(msg), "PDF viewer: %zu change region(s) found in %.1f s.", regions_.size(), out.ms / 1000.0);
+      log.push_back(msg);
+      if (diffBench_ && diffBenchFinding_) {
+        char line[300];
+        std::snprintf(line, sizeof(line),
+                      "BENCH PDFDIFF 36 x 24 in line-work sheets: automatic alignment %.0f ms + find changes %.0f ms = %.0f ms (target 10000) | %zu regions | worst viewer frame while it ran %.2f ms (target 16)",
+                      diffBenchAlignMs_, out.ms, diffBenchAlignMs_ + out.ms, regions_.size(), diffBenchWorstFrameMs_);
+        log.push_back(line);
+        std::fprintf(stderr, "%s\n", line);
+        benchDone_ = true;
+      }
+    }
+  }
+  if (!anaRunning_ && alignWanted_ && rev_ != nullptr) {
+    alignWanted_ = false;
+    StartTask(Task::Align);
+  }
+  if (saving_.valid() && saving_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    const std::string err = saving_.get();
+    savedNote_ = err.empty() ? "Markups written to the copy of the revision." : "Could not write the markups: " + err + ".";
+    log.push_back("PDF viewer: " + savedNote_);
+  }
+}
+
+void PdfCompare::SaveMarkups() {
+  if (regions_.empty() || saving_.valid())
+    return;
+  const std::string stem = revPath_.stem().u8string() + "-changes.pdf";
+  char dest[1024] = {};
+  if (!BrowseSaveFilePdfUtf8(dest, sizeof(dest), stem.c_str()) || dest[0] == '\0')
+    return;
+  savedNote_ = "Saving...";
+  // The marks go on a Save As COPY of the revision, in the revision's own points; the original files are never changed.
+  std::vector<Annot> marks = pdfdiff::RegionsToMarkups(regions_, revPage_, xf_.Inverse());
+  const std::filesystem::path src = revPath_, dst = std::filesystem::u8path(dest);
+  saving_ = std::async(std::launch::async, [src, dst, marks] { return SaveAnnotated(src, marks, dst); });
+}
+
 void PdfCompare::BeginPick(Pick p) {
   pick_ = p;
   pickCount_ = 0;
@@ -108,6 +280,7 @@ void PdfCompare::TakePick(pdfalign::Pt p) {
     pick_ = Pick::None;
     pickCount_ = 0;
     ++version_;
+    ClearChanges();
     break;
   case Pick::TwoBase1: pick_ = Pick::TwoRev1; break;
   case Pick::TwoRev1: pick_ = Pick::TwoBase2; break;
@@ -121,6 +294,7 @@ void PdfCompare::TakePick(pdfalign::Pt p) {
       std::snprintf(note, sizeof(note), "Adjusted by two matching points: scale %.5f, rotation %.3f degrees.", t.Scale(), t.RotationDeg());
       alignNote_ = note;
       ++version_;
+      ClearChanges();
     } else {
       status_ = "Alignment not changed: " + why + ".";
     }
@@ -286,6 +460,9 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   if (ImGui::InputInt("##cmpbp", &bp, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
     basePage_ = std::clamp(bp, 1, base_->PageCount()) - 1;
     BeginPick(Pick::None);
+    ClearChanges();
+    alignWanted_ = true;
+    anaCancel_.store(true);
   }
   ImGui::SameLine();
   ImGui::Text("of %d", base_->PageCount());
@@ -296,6 +473,9 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   if (ImGui::InputInt("##cmprp", &rp, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
     revPage_ = std::clamp(rp, 1, rev_->PageCount()) - 1;
     BeginPick(Pick::None);
+    ClearChanges();
+    alignWanted_ = true;
+    anaCancel_.store(true);
   }
   ImGui::SameLine();
   ImGui::Text("of %d", rev_->PageCount());
@@ -312,6 +492,12 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   if (ImGui::RadioButton("Blink", mode_ == Mode::Blink))
     mode_ = Mode::Blink;
   ImGui::SameLine();
+  if (ImGui::RadioButton("Base", mode_ == Mode::Base))
+    mode_ = Mode::Base;
+  ImGui::SameLine();
+  if (ImGui::RadioButton("Revision", mode_ == Mode::Revision))
+    mode_ = Mode::Revision;
+  ImGui::SameLine();
   if (mode_ == Mode::Opacity) {
     ImGui::SetNextItemWidth(150.f);
     ImGui::SliderFloat("##cmpop", &opacity_, 0.f, 1.f, "revision %.2f");
@@ -320,13 +506,15 @@ void PdfCompare::DrawBar(bool& keepOpen) {
     ImGui::SliderFloat("##cmphz", &blinkHz_, 0.25f, 6.f, "%.2f blinks/s");
     ImGui::SameLine();
     ImGui::TextDisabled("hold B = base, R = revision");
-  } else {
+  } else if (mode_ == Mode::Tint) {
     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f), "red: only in the base");
     ImGui::SameLine();
     ImGui::TextColored(ImVec4(0.35f, 0.55f, 1.f, 1.f), "blue: only in the revision");
     ImGui::SameLine();
     ImGui::TextDisabled("grey: in both");
   }
+
+  DrawChangesBar();
 
   ImGui::AlignTextToFramePadding();
   ImGui::TextUnformatted("Line up:");
@@ -338,11 +526,12 @@ void PdfCompare::DrawBar(bool& keepOpen) {
     BeginPick(Pick::TwoBase1);
   ImGui::SameLine();
   if (ImGui::Button("Reset")) {
-    xf_ = pdfalign::Transform{};
-    alignNote_ = "Not adjusted: the two pages are laid on each other at their lower-left corners.";
+    xf_ = autoXf_;
+    alignNote_ = autoMatched_ ? "Back to the automatic alignment." : "Not adjusted: the two pages are laid on each other at their lower-left corners.";
     pick_ = Pick::None;
     pickCount_ = 0;
     ++version_;
+    ClearChanges();
   }
   ImGui::SameLine();
   if (pick_ != Pick::None && ImGui::Button("Cancel picking"))
@@ -379,6 +568,90 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   }
 }
 
+void PdfCompare::DrawChangesBar() {
+  const ImGuiIO& io = ImGui::GetIO();
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Changes:");
+  ImGui::SameLine();
+  ImGui::BeginDisabled(anaRunning_);
+  if (ImGui::Button("Align automatically"))
+    alignWanted_ = true;
+  ImGui::SameLine();
+  if (ImGui::Button("Find changes"))
+    StartTask(Task::Find);
+  ImGui::EndDisabled();
+  if (anaRunning_) {
+    ImGui::SameLine();
+    ImGui::ProgressBar(anaProgress_.load(), ImVec2(130.f, 0.f), anaTask_ == Task::Align ? "aligning" : "comparing");
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel"))
+      anaCancel_.store(true);
+  }
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(70.f);
+  ImGui::InputDouble("##tol", &diffSettings_.toleranceMm, 0.0, 0.0, "tol %.1f mm");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(70.f);
+  ImGui::InputDouble("##minsz", &diffSettings_.minSizeMm, 0.0, 0.0, "min %.1f mm");
+  diffSettings_.toleranceMm = std::clamp(diffSettings_.toleranceMm, 0.2, 10.0);
+  diffSettings_.minSizeMm = std::clamp(diffSettings_.minSizeMm, 0.0, 50.0);
+  if (haveChanges_) {
+    ImGui::SameLine();
+    ImGui::Checkbox("Highlights", &showHighlights_);
+    ImGui::SameLine();
+    const int n = static_cast<int>(regions_.size());
+    const bool step = !regions_.empty();
+    ImGui::BeginDisabled(!step);
+    bool prev = ImGui::Button("Previous"), next = false;
+    ImGui::SameLine();
+    next = ImGui::Button("Next");
+    ImGui::EndDisabled();
+    if (step && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.WantTextInput) {
+      next = next || ImGui::IsKeyPressed(ImGuiKey_N);
+      prev = prev || ImGui::IsKeyPressed(ImGuiKey_P);
+    }
+    if (step && (next || prev)) {
+      selRegion_ = next ? (selRegion_ + 1) % n : (selRegion_ <= 0 ? n - 1 : selRegion_ - 1);
+      centerReq_ = selRegion_;
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!step || saving_.valid());
+    if (ImGui::Button("Write changes as markups..."))
+      SaveMarkups();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::Text("%d change region%s  (N / P = next / previous)", n, n == 1 ? "" : "s");
+  }
+  if (!savedNote_.empty())
+    ImGui::TextDisabled("%s", savedNote_.c_str());
+  if (lowConfidence_)
+    ImGui::TextColored(ImVec4(1.f, 0.62f, 0.2f, 1.f), "Check alignment: the sheets do not match closely enough to trust the changes found. Line them up by hand first.");
+  if (haveChanges_)
+    ImGui::TextDisabled("This lists what looks different on the page, not what it means. The result depends on the alignment; a different scale between the "
+                        "revisions, or a scanned (image-only) sheet, can give many false regions.");
+}
+
+void PdfCompare::DrawChangesList() {
+  ImGui::BeginChild("##cmpchanges", ImVec2(270.f, 0.f), true);
+  ImGui::TextUnformatted("Change regions");
+  ImGui::Separator();
+  for (size_t i = 0; i < regions_.size(); ++i) {
+    const pdfdiff::Region& r = regions_[i];
+    char label[120];
+    std::snprintf(label, sizeof(label), "%zu  %s  %.0f x %.0f pt##reg%zu", i + 1, pdfdiff::KindName(r.kind), r.Width(), r.Height(), i);
+    const ImVec4 col = r.kind == pdfdiff::Kind::Added ? ImVec4(0.3f, 0.85f, 0.45f, 1.f)
+                       : r.kind == pdfdiff::Kind::Removed ? ImVec4(0.95f, 0.4f, 0.4f, 1.f)
+                                                          : ImVec4(0.98f, 0.7f, 0.2f, 1.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, col);
+    if (ImGui::Selectable(label, static_cast<int>(i) == selRegion_)) {
+      selRegion_ = static_cast<int>(i);
+      centerReq_ = selRegion_;
+    }
+    ImGui::PopStyleColor();
+  }
+  ImGui::EndChild();
+}
+
 void PdfCompare::DrawSheet(std::vector<std::string>& log) {
   (void)log;
   const bool raw = WantRaw();
@@ -400,6 +673,12 @@ void PdfCompare::DrawSheet(std::vector<std::string>& log) {
 
   const float pw = vs.wPt * pxPerPt_, ph = vs.hPt * pxPerPt_;
   const float contentW = std::max(avail.x, pw + 2 * kMarginPx);
+  if (centerReq_ >= 0 && centerReq_ < static_cast<int>(regions_.size()) && !raw) { // a region chosen in the list or by N / P
+    const pdfdiff::Region& g = regions_[static_cast<size_t>(centerReq_)];
+    pendX_ = std::max(0.f, (contentW - pw) * 0.5f + static_cast<float>((g.x0 + g.x1) * 0.5) * pxPerPt_ - avail.x * 0.5f);
+    pendY_ = std::max(0.f, kMarginPx + (vs.hPt - static_cast<float>((g.y0 + g.y1) * 0.5)) * pxPerPt_ - avail.y * 0.5f);
+  }
+  centerReq_ = -1;
   ImGui::SetNextWindowContentSize(ImVec2(contentW, ph + 2 * kMarginPx));
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.30f, 0.30f, 0.32f, 1.f));
   ImGui::BeginChild("##cmpsheet", ImVec2(0.f, 0.f), false, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoMove);
@@ -458,7 +737,7 @@ void PdfCompare::DrawSheet(std::vector<std::string>& log) {
     dl->AddImage(TexId(cur_.tex[0]), a, b);
   } else {
     const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || hovered;
-    bool showRev = false, showBoth = false;
+    bool showRev = mode_ == Mode::Revision, showBoth = false;
     if (mode_ == Mode::Blink) {
       showRev = std::fmod(ImGui::GetTime() * static_cast<double>(blinkHz_), 1.0) >= 0.5;
       if (focused && !io.WantTextInput) {
@@ -480,6 +759,35 @@ void PdfCompare::DrawSheet(std::vector<std::string>& log) {
     }
   }
   dl->AddRect(a, b, IM_COL32(90, 90, 90, 255));
+
+  // REQ-393 clause 3: the change regions, translucent over the sheet (added green, removed red, changed amber). They are in
+  // the base's points; on the revision sheet alone they are carried through the alignment.
+  if (showHighlights_ && haveChanges_ && shown) {
+    const pdfalign::Transform inv = xf_.Inverse();
+    for (size_t i = 0; i < regions_.size(); ++i) {
+      const pdfdiff::Region& g = regions_[i];
+      double lo[2] = {g.x0, g.y0}, hi[2] = {g.x1, g.y1};
+      if (raw) {
+        lo[0] = lo[1] = 1e30;
+        hi[0] = hi[1] = -1e30;
+        for (const pdfalign::Pt c : {pdfalign::Pt{g.x0, g.y0}, pdfalign::Pt{g.x1, g.y0}, pdfalign::Pt{g.x0, g.y1}, pdfalign::Pt{g.x1, g.y1}}) {
+          const pdfalign::Pt q = inv.Apply(c);
+          lo[0] = std::min(lo[0], q.x);
+          lo[1] = std::min(lo[1], q.y);
+          hi[0] = std::max(hi[0], q.x);
+          hi[1] = std::max(hi[1], q.y);
+        }
+      }
+      const ImVec2 p0(a.x + static_cast<float>(lo[0]) * pxPerPt_, a.y + (vs.hPt - static_cast<float>(hi[1])) * pxPerPt_);
+      const ImVec2 p1(a.x + static_cast<float>(hi[0]) * pxPerPt_, a.y + (vs.hPt - static_cast<float>(lo[1])) * pxPerPt_);
+      const bool sel = static_cast<int>(i) == selRegion_;
+      const int rr = g.kind == pdfdiff::Kind::Added ? 40 : g.kind == pdfdiff::Kind::Removed ? 235 : 250;
+      const int gg = g.kind == pdfdiff::Kind::Added ? 200 : g.kind == pdfdiff::Kind::Removed ? 60 : 175;
+      const int bb = g.kind == pdfdiff::Kind::Added ? 90 : g.kind == pdfdiff::Kind::Removed ? 60 : 30;
+      dl->AddRectFilled(p0, p1, IM_COL32(rr, gg, bb, sel ? 95 : 55));
+      dl->AddRect(p0, p1, IM_COL32(rr, gg, bb, 235), 0.f, 0, sel ? 3.f : 1.5f);
+    }
+  }
 
   // Picking: the click is a point on the sheet being shown, in that page's points.
   if (pick_ != Pick::None) {
@@ -514,9 +822,16 @@ bool PdfCompare::Draw(std::vector<std::string>& log) {
     return keepOpen;
   }
   PumpJob();
+  PumpAnalysis(log);
   UploadSlice();
+  if (haveChanges_ && !regions_.empty()) {
+    DrawChangesList();
+    ImGui::SameLine();
+  }
   DrawSheet(log);
 
+  if (diffBench_ && !benchDone_)
+    diffBenchWorstFrameMs_ = std::max(diffBenchWorstFrameMs_, MsSince(t0));
   if (bench_ && haveCur_ && !benchDone_) {
     costMs_.push_back(MsSince(t0));
     if (++benchFrame_ >= kBenchFrames) {

@@ -232,4 +232,53 @@ std::string MakeSyntheticPdf(int pages, int linesPerPage, int variedEvery) {
   return out;
 }
 
+std::string MakeLineWorkPdf(double wPt, double hPt, int segments, unsigned seed, int variant) {
+  unsigned s = seed;
+  const auto rnd = [&s] {
+    s = s * 1664525u + 1013904223u;
+    return static_cast<double>((s >> 8) & 0xFFFF) / 65535.0;
+  };
+  std::string content = "0.5 w\n";
+  if (variant == 1)
+    content += "1 0 0 1 5 3 cm\n";
+  char buf[96];
+  for (int k = 0; k < segments; ++k) {
+    const double x = 40 + rnd() * (wPt - 200), y = 40 + rnd() * (hPt - 200), len = 20 + rnd() * 120;
+    const bool horizontal = rnd() < 0.5;
+    if (variant == 1 && k % 400 == 399)
+      continue; // removed in the revision
+    std::snprintf(buf, sizeof(buf), "%.2f %.2f m %.2f %.2f l S\n", x, y, horizontal ? x + len : x, horizontal ? y : y + len);
+    content += buf;
+  }
+  if (variant == 1)
+    for (int k = 0; k < 20; ++k) {
+      std::snprintf(buf, sizeof(buf), "%.2f %.2f m %.2f %.2f l S\n", 60.0 + k * 90.0, 50.0 + (k % 7) * 20.0, 100.0 + k * 90.0, 50.0 + (k % 7) * 20.0);
+      content += buf;
+    }
+  std::string out = "%PDF-1.4\n";
+  std::vector<size_t> offs(4, 0);
+  const auto begin = [&](int num) {
+    offs[static_cast<size_t>(num - 1)] = out.size();
+    out += std::to_string(num) + " 0 obj\n";
+  };
+  begin(1);
+  out += "<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+  begin(2);
+  out += "<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n";
+  begin(3);
+  out += "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + std::to_string(static_cast<int>(wPt)) + " " + std::to_string(static_cast<int>(hPt)) +
+         "] /Contents 4 0 R >>\nendobj\n";
+  begin(4);
+  out += "<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content + "endstream\nendobj\n";
+  const size_t xref = out.size();
+  out += "xref\n0 5\n0000000000 65535 f \n";
+  for (int n = 0; n < 4; ++n) {
+    char line[32];
+    std::snprintf(line, sizeof(line), "%010zu 00000 n \n", offs[static_cast<size_t>(n)]);
+    out += line;
+  }
+  out += "trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
+  return out;
+}
+
 } // namespace pdfview

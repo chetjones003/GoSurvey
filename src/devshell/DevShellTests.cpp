@@ -320,6 +320,28 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
     IM_CHECK(!viewerShown());
   };
 
+  // REQ-393: automatic alignment and change detection on a generated 36 x 24 in sheet pair, in the real app; the time
+  // (target 10 s) and the worst viewer frame (target 16 ms) are reported on stderr.
+  //
+  //   build\devshell\GoSurvey.exe --devshell-run pdfdiff-bench
+  ImGuiTest* pdfDiffBench = IM_REGISTER_TEST(engine, "gosurvey", "pdfdiff-bench");
+  pdfDiffBench->TestFunc = [](ImGuiTestContext* ctx) {
+    auto viewerShown = [] {
+      for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+        if (w->WasActive && std::strstr(w->Name, "###pdfview") != nullptr)
+          return true;
+      return false;
+    };
+    IM_CHECK(CancelToIdle(ctx));
+    SubmitCad(ctx, "BENCH PDFDIFF");
+    ctx->Yield(10);
+    IM_CHECK(viewerShown());
+    // The bench closes its own viewer (and deletes its two files) when the report is written.
+    for (int i = 0; i < 600 && viewerShown(); ++i)
+      ctx->Yield(30);
+    IM_CHECK(!viewerShown());
+  };
+
   // REQ-387 clause 7 (D-2026-10-06-b): the viewer is its own Windows window with the OS frame, docks
   // into GoSurvey's layout and comes back out. Real window creation and docking run in the real app;
   // what a person sees on screen is still checked by hand.

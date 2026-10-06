@@ -41869,6 +41869,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           log.push_back("BENCH PDFCOMPARE — building two " + std::to_string(pages) + "-page PDFs; the viewer window will overlay and pan them.");
           return;
         }
+        // `BENCH PDFDIFF` — REQ-393: automatically align and compare a generated pair of 36 x 24 in sheets (a few
+        // hundred thousand line segments) and report the time and the worst viewer frame.
+        if (lower == "pdfdiff") {
+          st.pdfDiffBench = true;
+          log.push_back("BENCH PDFDIFF — building two 36 x 24 in sheets; the viewer window will align and compare them.");
+          return;
+        }
         if (lower == "mesh" || lower == "m") {
           int tris = 2000000;  // REQ-100 (b): the density decided 2026-08-15, TASK-041's fixture
           int v = 0;

@@ -791,6 +791,7 @@ struct Viewer {
   bool comparePickRequest = false;
   std::filesystem::path benchRev;      ///< BENCH PDFCOMPARE: the generated revision to compare with once the base has opened
   int benchRevPages = 0;
+  bool benchDiff = false;              ///< BENCH PDFDIFF: the comparison runs the automatic alignment and the change search
   std::unique_ptr<Worker> worker = std::make_unique<Worker>();
   Layout layout;
   PageCache cache{kCacheCapBytes};
@@ -3164,6 +3165,26 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
     v.benchRevPages = pages;
   }
 
+  if (cmd.pdfDiffBench) {  // BENCH PDFDIFF: two generated 36 x 24 in sheets, the second a later revision of the first
+    cmd.pdfDiffBench = false;
+    static int diffSerial = 0;
+    const int serial = ++diffSerial;
+    const auto write = [&](const char* tag, int variant) {
+      const std::filesystem::path file =
+          std::filesystem::temp_directory_path() / ("gosurvey_pdfdiff_" + std::string(tag) + "_" + std::to_string(serial) + ".pdf");
+      const std::string bytes = MakeLineWorkPdf(2592.0, 1728.0, 60000, 12345u, variant);
+      std::ofstream f(file, std::ios::binary);
+      f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+      return file;
+    };
+    const std::filesystem::path baseFile = write("base", 0), revFile = write("rev", 1);
+    OpenPdfInViewer(baseFile.u8string());
+    Viewer& v = *g_viewers.back();
+    v.bench.file = baseFile;
+    v.benchRev = revFile;
+    v.benchDiff = true;
+  }
+
   for (size_t i = 0; i < g_viewers.size();) {
     Viewer& v = *g_viewers[i];
     if (v.opening.valid() && v.opening.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -3281,7 +3302,10 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
         }
         if (!v.benchRev.empty()) {  // BENCH PDFCOMPARE
           v.compare = std::make_unique<PdfCompare>(v.doc.get(), v.title, 0, v.benchRev);
-          v.compare->StartBench(v.benchRevPages, true);
+          if (v.benchDiff)
+            v.compare->StartDiffBench(true);
+          else
+            v.compare->StartBench(v.benchRevPages, true);
           v.benchRev.clear();
         }
         if (v.compare != nullptr) {
