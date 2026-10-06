@@ -4790,18 +4790,30 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   and extracting a very large project blocks the UI thread while it runs (no progress bar yet — recorded
   technical debt, like the P6 copy).
 
-### ADR-067 — The PDF viewer is a floating GoSurvey window over PDFium, rendering pages off the UI thread into a bounded read-ahead cache   (2026-10-06, accepted)
+### ADR-067 — The PDF viewer is a window of its own over PDFium, rendering pages off the UI thread into a bounded read-ahead cache   (2026-10-06, accepted)
 
-- **Status:** accepted (2026-10-06, D-2026-10-06-a; the user approved the three open-question answers and
+- **Status:** accepted (2026-10-06, D-2026-10-06-a; **(a) revised the same day by D-2026-10-06-b**, the user
+  asked for full window control: minimize/maximize and docking); the user approved the three open-question answers and
   asked for a better-than-1-second open and no lag spikes while scrolling). Backs REQ-387/388/389
   (GitHub issue #732).
 - **Context.** PDFium is already vendored (`third_party/pdfium`, used by `PdfPlot` and `PdfAttach`).
   `PdfAttach` already renders progressively and cancellably. GoSurvey has one GLFW window and draws all
   windows with Dear ImGui. A several-hundred-page PDF must open at once and scroll without frame spikes.
 - **Decision.**
-  (a) **"New window" = a floating, dockable ImGui window** inside the GoSurvey application window (like
-      the Project window), not a second operating-system window. A second OS window would need a second
-      GL context or ImGui multi-viewport, which the app does not use today. One window per open file.
+  (a) **"New window" = a real Windows window** (revised by D-2026-10-06-b; the first version of this
+      ADR said "a floating panel inside the GoSurvey window"). It uses **Dear ImGui multi-viewport**:
+      `ImGuiConfigFlags_ViewportsEnable` with the GLFW and OpenGL3 platform backends, which create a
+      GLFW window per detached ImGui window sharing the main GL context, so page textures made by the
+      viewer are valid in every window. The viewer's window class clears `NoDecoration` (and keeps the
+      task-bar entry) so it gets the OS title bar with minimize / maximize / close, and it docks into
+      GoSurvey's dock space like any ImGui window. A viewer opens detached, on GoSurvey's monitor.
+      One window per open file. **Cost accepted:** the setting is application-wide, so other panels
+      may also be dragged out; the main window's custom title bar, the splash screen, the saved dock
+      layout and the Test Engine driver must keep working (REQ-387 clause 7), and the per-frame
+      `UpdatePlatformWindows` / `RenderPlatformWindowsDefault` calls with GL-context restore are added
+      to the main loop. **Alternatives:** keeping the panel inside the main window (no minimize to the
+      task bar, cannot leave the main window, cannot use a second monitor) was the previous decision and
+      the user declined it for these reasons.
   (b) **One pure module, `src/pdf/PdfDocument.{hpp,cpp}`** (PDFium only; no window, no
       `AppCommandState`): open, page count, per-page sizes, render a page to a pixel buffer at a scale,
       annotation read/write (REQ-388) and page extraction (`PdfSplit`, REQ-389). Opening reads only the
