@@ -16,6 +16,14 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.7.1
+
+**Installation and startup**
+- The installer now includes the **Visual C++ runtime** GoSurvey needs, so it starts on a fresh PC without extra downloads.
+- If GoSurvey cannot start, a **startup problem dialog** explains what went wrong, and **Send This Report** opens a pre-filled support issue.
+
+**Updates**
+- The **Software Update** dialog now uses the same illustrated look as What's New.
 ## 0.7.0
 
 **Projects — start here**
