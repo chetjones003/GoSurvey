@@ -643,6 +643,7 @@ add_executable(GoSurvey
   src/pdf/PdfViewerCore.cpp
   src/pdf/PdfDocument.cpp
   src/pdf/PdfSplit.cpp
+  src/pdf/PdfAnnotate.cpp
   src/ui/PdfViewerWindow.cpp
 
   # Platform
@@ -1338,9 +1339,11 @@ if(GOSURVEY_BUILD_TESTS)
   target_sources(GoSurveyTests PRIVATE
     tests/PdfViewerTests.cpp
     tests/PdfSplitTests.cpp
+    tests/PdfAnnotateTests.cpp
     src/pdf/PdfViewerCore.cpp
     src/pdf/PdfDocument.cpp
-    src/pdf/PdfSplit.cpp)
+    src/pdf/PdfSplit.cpp
+    src/pdf/PdfAnnotate.cpp)
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD

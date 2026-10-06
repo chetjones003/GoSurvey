@@ -1,0 +1,652 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#include "PdfAnnotate.hpp"
+
+#include "PdfDocument.hpp"
+
+#include <fpdf_annot.h>
+#include <fpdf_edit.h>
+#include <fpdf_save.h>
+#include <fpdfview.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iterator>
+#include <map>
+#include <sstream>
+#include <system_error>
+
+namespace pdfview {
+
+// ---------------------------------------------------------------------------------------------------
+// Annot / AnnotSession
+// ---------------------------------------------------------------------------------------------------
+
+bool Annot::operator==(const Annot& o) const {
+  return kind == o.kind && page == o.page && x0 == o.x0 && y0 == o.y0 && x1 == o.x1 && y1 == o.y1 &&
+         color == o.color && thickness == o.thickness && fill == o.fill && text == o.text && font == o.font &&
+         bold == o.bold && italic == o.italic && fontFile == o.fontFile && fontSize == o.fontSize;
+}
+
+void AnnotSession::Push() {
+  undo_.push_back(items_);
+  redo_.clear();
+}
+
+int AnnotSession::Add(const Annot& a) {
+  Push();
+  items_.push_back(a);
+  return static_cast<int>(items_.size()) - 1;
+}
+
+bool AnnotSession::Remove(int index) {
+  if (index < 0 || index >= static_cast<int>(items_.size()))
+    return false;
+  Push();
+  items_.erase(items_.begin() + index);
+  return true;
+}
+
+bool AnnotSession::Replace(int index, const Annot& a) {
+  if (index < 0 || index >= static_cast<int>(items_.size()) || items_[static_cast<size_t>(index)] == a)
+    return false;
+  Push();
+  items_[static_cast<size_t>(index)] = a;
+  return true;
+}
+
+bool AnnotSession::Undo() {
+  if (undo_.empty())
+    return false;
+  redo_.push_back(items_);
+  items_ = std::move(undo_.back());
+  undo_.pop_back();
+  return true;
+}
+
+bool AnnotSession::Redo() {
+  if (redo_.empty())
+    return false;
+  undo_.push_back(items_);
+  items_ = std::move(redo_.back());
+  redo_.pop_back();
+  return true;
+}
+
+void EstimateTextBox(const std::string& utf8, float fontSize, float& wPt, float& hPt) {
+  size_t lines = 1, widest = 0, cur = 0;
+  for (unsigned char c : utf8) {
+    if (c == '\n') {
+      ++lines;
+      cur = 0;
+    } else if ((c & 0xC0) != 0x80) { // count code points, not bytes
+      widest = std::max(widest, ++cur);
+    }
+  }
+  wPt = std::max(1.f, static_cast<float>(widest)) * fontSize * 0.55f;
+  hPt = static_cast<float>(lines) * fontSize * 1.2f;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Writing
+// ---------------------------------------------------------------------------------------------------
+
+namespace {
+
+std::vector<unsigned short> Utf16(const std::string& s) {
+  std::vector<unsigned short> out;
+  for (size_t i = 0; i < s.size();) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    unsigned cp = 0xFFFD;
+    size_t len = 1;
+    if (c < 0x80) {
+      cp = c;
+    } else if ((c >> 5) == 0x6 && i + 1 < s.size()) {
+      cp = ((c & 0x1Fu) << 6) | (static_cast<unsigned char>(s[i + 1]) & 0x3Fu);
+      len = 2;
+    } else if ((c >> 4) == 0xE && i + 2 < s.size()) {
+      cp = ((c & 0x0Fu) << 12) | ((static_cast<unsigned char>(s[i + 1]) & 0x3Fu) << 6) |
+           (static_cast<unsigned char>(s[i + 2]) & 0x3Fu);
+      len = 3;
+    } else if ((c >> 3) == 0x1E && i + 3 < s.size()) {
+      cp = ((c & 0x07u) << 18) | ((static_cast<unsigned char>(s[i + 1]) & 0x3Fu) << 12) |
+           ((static_cast<unsigned char>(s[i + 2]) & 0x3Fu) << 6) | (static_cast<unsigned char>(s[i + 3]) & 0x3Fu);
+      len = 4;
+    }
+    i += len;
+    if (cp >= 0x10000) {
+      cp -= 0x10000;
+      out.push_back(static_cast<unsigned short>(0xD800 + (cp >> 10)));
+      out.push_back(static_cast<unsigned short>(0xDC00 + (cp & 0x3FF)));
+    } else {
+      out.push_back(static_cast<unsigned short>(cp));
+    }
+  }
+  out.push_back(0);
+  return out;
+}
+
+std::string Utf8(const std::vector<unsigned short>& u16, size_t n) {
+  std::string out;
+  for (size_t i = 0; i < n; ++i) {
+    unsigned cp = u16[i];
+    if (cp >= 0xD800 && cp < 0xDC00 && i + 1 < n) {
+      cp = 0x10000 + ((cp - 0xD800) << 10) + (u16[i + 1] - 0xDC00u);
+      ++i;
+    }
+    if (cp < 0x80) {
+      out += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+      out += static_cast<char>(0xC0 | (cp >> 6));
+      out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+      out += static_cast<char>(0xE0 | (cp >> 12));
+      out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+      out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+      out += static_cast<char>(0xF0 | (cp >> 18));
+      out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+      out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+      out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+  }
+  return out;
+}
+
+bool SetString(FPDF_ANNOTATION a, const char* key, const std::string& utf8) {
+  const std::vector<unsigned short> w = Utf16(utf8);
+  return FPDFAnnot_SetStringValue(a, key, reinterpret_cast<FPDF_WIDESTRING>(w.data())) != 0;
+}
+
+std::string GetString(FPDF_ANNOTATION a, const char* key) {
+  const unsigned long bytes = FPDFAnnot_GetStringValue(a, key, nullptr, 0);
+  if (bytes < 2)
+    return {};
+  std::vector<unsigned short> buf(bytes / 2 + 1, 0);
+  FPDFAnnot_GetStringValue(a, key, reinterpret_cast<FPDF_WCHAR*>(buf.data()), bytes);
+  return Utf8(buf, bytes / 2 - 1);
+}
+
+struct Rgb {
+  unsigned r, g, b;
+};
+Rgb Split(unsigned c) { return {(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF}; }
+
+std::string Num(float v) {
+  char b[32];
+  std::snprintf(b, sizeof(b), "%.4f", static_cast<double>(v));
+  return b;
+}
+
+// A colour component 0..255 as the PDF 0..1 number: enough digits that PDFium's truncating read gives the byte back.
+std::string Comp(unsigned v) {
+  char b[32];
+  std::snprintf(b, sizeof(b), "%.6f", (static_cast<double>(v) + 0.001) / 255.0);
+  return b;
+}
+
+// The PDF font behind a text annotation: a standard font by name, or an embedded TrueType file.
+std::string StandardFontName(const Annot& a) {
+  std::string f = a.font;
+  std::string fam = "Helvetica";
+  if (f.rfind("Times", 0) == 0)
+    fam = "Times";
+  else if (f.rfind("Courier", 0) == 0)
+    fam = "Courier";
+  if (fam == "Times")
+    return a.bold ? (a.italic ? "Times-BoldItalic" : "Times-Bold") : (a.italic ? "Times-Italic" : "Times-Roman");
+  return fam + (a.bold ? (a.italic ? "-BoldOblique" : "-Bold") : (a.italic ? "-Oblique" : ""));
+}
+
+constexpr size_t kPadChars = 200; // room, inside the placeholder annotation, for the Line / FreeText byte patch
+
+// One annotation that PDFium cannot write as-is: it is created as a Stamp (which keeps the drawn objects as its
+// appearance) and rewritten to its true type in the saved bytes (D-2026-10-06-e).
+struct Patch {
+  std::string marker;     ///< unique /NM value that finds the annotation in the saved file
+  std::string subtype;    ///< "Line" or "FreeText"
+  std::string extra;      ///< for a Line: "/L[x1 y1 x2 y2]/C[r g b]/Border[0 0 w]"
+};
+
+bool AddRect(FPDF_PAGE page, const Annot& a) {
+  const float t = std::max(0.f, a.thickness);
+  const float l = std::min(a.x0, a.x1), r = std::max(a.x0, a.x1);
+  const float b = std::min(a.y0, a.y1), tp = std::max(a.y0, a.y1);
+  const bool ellipse = a.kind == Annot::Kind::Ellipse;
+  FPDF_ANNOTATION an = FPDFPage_CreateAnnot(page, ellipse ? FPDF_ANNOT_CIRCLE : FPDF_ANNOT_SQUARE);
+  if (an == nullptr)
+    return false;
+  const Rgb c = Split(a.color);
+  FS_RECTF rc{l - t / 2, tp + t / 2, r + t / 2, b - t / 2}; // left, top, right, bottom
+  bool ok = FPDFAnnot_SetRect(an, &rc) != 0;
+  ok = ok && FPDFAnnot_SetColor(an, FPDFANNOT_COLORTYPE_Color, c.r, c.g, c.b, 255) != 0;
+  if (a.fill)
+    ok = ok && FPDFAnnot_SetColor(an, FPDFANNOT_COLORTYPE_InteriorColor, c.r, c.g, c.b, 255) != 0;
+  ok = ok && FPDFAnnot_SetBorder(an, 0.f, 0.f, t) != 0;
+  // The appearance PDFium does not generate for us: the shape, in page space, inside the annotation rect.
+  std::ostringstream ap;
+  ap << "q " << Comp(c.r) << " " << Comp(c.g) << " " << Comp(c.b) << " RG ";
+  if (a.fill)
+    ap << Comp(c.r) << " " << Comp(c.g) << " " << Comp(c.b) << " rg ";
+  ap << Num(t) << " w ";
+  if (!ellipse) {
+    ap << Num(l) << " " << Num(b) << " " << Num(r - l) << " " << Num(tp - b) << " re ";
+  } else {
+    const float cx = (l + r) / 2, cy = (b + tp) / 2, rx = (r - l) / 2, ry = (tp - b) / 2, k = 0.5522847f;
+    ap << Num(cx + rx) << " " << Num(cy) << " m ";
+    ap << Num(cx + rx) << " " << Num(cy + k * ry) << " " << Num(cx + k * rx) << " " << Num(cy + ry) << " " << Num(cx)
+       << " " << Num(cy + ry) << " c ";
+    ap << Num(cx - k * rx) << " " << Num(cy + ry) << " " << Num(cx - rx) << " " << Num(cy + k * ry) << " " << Num(cx - rx)
+       << " " << Num(cy) << " c ";
+    ap << Num(cx - rx) << " " << Num(cy - k * ry) << " " << Num(cx - k * rx) << " " << Num(cy - ry) << " " << Num(cx)
+       << " " << Num(cy - ry) << " c ";
+    ap << Num(cx + k * rx) << " " << Num(cy - ry) << " " << Num(cx + rx) << " " << Num(cy - k * ry) << " " << Num(cx + rx)
+       << " " << Num(cy) << " c h ";
+  }
+  ap << (a.fill ? "B" : "S") << " Q";
+  const std::vector<unsigned short> w = Utf16(ap.str());
+  ok = ok && FPDFAnnot_SetAP(an, FPDF_ANNOT_APPEARANCEMODE_NORMAL, reinterpret_cast<FPDF_WIDESTRING>(w.data())) != 0;
+  FPDFPage_CloseAnnot(an);
+  return ok;
+}
+
+// A Stamp annotation holding the given page objects; its rectangle is exactly their bounds.
+FPDF_ANNOTATION NewObjectAnnot(FPDF_PAGE page, const std::vector<FPDF_PAGEOBJECT>& objs) {
+  FPDF_ANNOTATION an = FPDFPage_CreateAnnot(page, FPDF_ANNOT_STAMP);
+  if (an == nullptr)
+    return nullptr;
+  float l = 1e30f, b = 1e30f, r = -1e30f, t = -1e30f;
+  for (FPDF_PAGEOBJECT o : objs) {
+    float ol, ob, orr, ot;
+    if (FPDFPageObj_GetBounds(o, &ol, &ob, &orr, &ot)) {
+      l = std::min(l, ol);
+      b = std::min(b, ob);
+      r = std::max(r, orr);
+      t = std::max(t, ot);
+    }
+  }
+  // The rectangle goes in first: PDFium takes the appearance's BBox from it when the objects are appended.
+  FS_RECTF rc{l, t, r, b};
+  if (!FPDFAnnot_SetRect(an, &rc)) {
+    FPDFPage_CloseAnnot(an);
+    return nullptr;
+  }
+  for (FPDF_PAGEOBJECT o : objs)
+    if (!FPDFAnnot_AppendObject(an, o)) {
+      FPDFPage_CloseAnnot(an);
+      return nullptr;
+    }
+  return an;
+}
+
+bool AddLine(FPDF_PAGE page, const Annot& a, int serial, std::vector<Patch>& patches) {
+  const Rgb c = Split(a.color);
+  FPDF_PAGEOBJECT path = FPDFPageObj_CreateNewPath(a.x0, a.y0);
+  if (path == nullptr)
+    return false;
+  FPDFPath_LineTo(path, a.x1, a.y1);
+  FPDFPageObj_SetStrokeColor(path, c.r, c.g, c.b, 255);
+  FPDFPageObj_SetStrokeWidth(path, std::max(0.1f, a.thickness));
+  FPDFPath_SetDrawMode(path, 0, 1);
+  FPDFPageObj_Transform(path, 1, 0, 0, 1, 0, 0); // makes PDFium work out the object's bounds, stroke width included
+  FPDF_ANNOTATION an = NewObjectAnnot(page, {path});
+  if (an == nullptr) {
+    FPDFPageObj_Destroy(path);
+    return false;
+  }
+  Patch p;
+  char id[16];
+  std::snprintf(id, sizeof(id), "gsa%05d", serial);
+  p.marker = id;
+  p.subtype = "Line";
+  // PDFium refuses colour and border on a Stamp, so they ride in the same patch as the end points.
+  p.extra = "/L[" + Num(a.x0) + " " + Num(a.y0) + " " + Num(a.x1) + " " + Num(a.y1) + "]/C[" + Comp(c.r) + " " +
+            Comp(c.g) + " " + Comp(c.b) + "]/Border[0 0 " + Num(std::max(0.1f, a.thickness)) + "]";
+  bool ok = SetString(an, "NM", p.marker);
+  ok = ok && SetString(an, "GSPAD", std::string(kPadChars, 'x'));
+  FPDFPage_CloseAnnot(an);
+  if (ok)
+    patches.push_back(p);
+  return ok;
+}
+
+bool AddText(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, int serial, std::vector<Patch>& patches,
+             std::string& error) {
+  FPDF_FONT font = nullptr;
+  std::string fontBytes;
+  if (!a.fontFile.empty()) {
+    std::ifstream in(std::filesystem::u8path(a.fontFile), std::ios::binary);
+    fontBytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    if (!fontBytes.empty())
+      font = FPDFText_LoadFont(doc, reinterpret_cast<const uint8_t*>(fontBytes.data()),
+                               static_cast<uint32_t>(fontBytes.size()), FPDF_FONT_TRUETYPE, 0);
+  }
+  if (font == nullptr)
+    font = FPDFText_LoadStandardFont(doc, StandardFontName(a).c_str());
+  if (font == nullptr) {
+    error = "the font \"" + a.font + "\" could not be loaded";
+    return false;
+  }
+  const Rgb c = Split(a.color);
+  const float top = std::max(a.y0, a.y1), left = std::min(a.x0, a.x1);
+  std::vector<FPDF_PAGEOBJECT> objs;
+  std::istringstream lines(a.text);
+  std::string line;
+  float baseline = top - a.fontSize * 0.9f;
+  while (std::getline(lines, line)) {
+    if (!line.empty()) {
+      FPDF_PAGEOBJECT t = FPDFPageObj_CreateTextObj(doc, font, a.fontSize);
+      if (t == nullptr)
+        break;
+      const std::vector<unsigned short> w = Utf16(line);
+      FPDFText_SetText(t, reinterpret_cast<FPDF_WIDESTRING>(w.data()));
+      FPDFPageObj_SetFillColor(t, c.r, c.g, c.b, 255);
+      FPDFPageObj_Transform(t, 1, 0, 0, 1, left, baseline);
+      objs.push_back(t);
+    }
+    baseline -= a.fontSize * 1.2f;
+  }
+  if (objs.empty()) {
+    error = "a text note has no text";
+    return false;
+  }
+  FPDF_ANNOTATION an = NewObjectAnnot(page, objs);
+  if (an == nullptr) {
+    for (FPDF_PAGEOBJECT o : objs)
+      FPDFPageObj_Destroy(o);
+    error = "PDFium could not create the text annotation";
+    return false;
+  }
+  Patch p;
+  char id[16];
+  std::snprintf(id, sizeof(id), "gsa%05d", serial);
+  p.marker = id;
+  p.subtype = "FreeText";
+  const std::string da = "/Helv " + Num(a.fontSize) + " Tf " + Comp(c.r) + " " + Comp(c.g) + " " +
+                         Comp(c.b) + " rg";
+  bool ok = SetString(an, "NM", p.marker);
+  ok = ok && SetString(an, "GSPAD", std::string(kPadChars, 'x'));
+  ok = ok && SetString(an, "DA", da);
+  ok = ok && SetString(an, "Contents", a.text);
+  ok = ok && SetString(an, "GSFont", a.font + "|" + (a.bold ? "b" : "-") + "|" + (a.italic ? "i" : "-"));
+  FPDFPage_CloseAnnot(an);
+  if (ok)
+    patches.push_back(p);
+  else
+    error = "PDFium could not fill in the text annotation";
+  return ok;
+}
+
+struct MemWriter : FPDF_FILEWRITE {
+  std::string bytes;
+};
+int WriteMem(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
+  static_cast<MemWriter*>(self)->bytes.append(static_cast<const char*>(data), size);
+  return 1;
+}
+
+// Rewrites each placeholder annotation to its true type, in place and at the same total length, so no
+// cross-reference offset moves. Returns "" or the reason it could not.
+std::string ApplyPatches(std::string& bytes, const std::vector<Patch>& patches) {
+  for (const Patch& p : patches) {
+    const std::string nm = "/NM(" + p.marker + ")";
+    const size_t at = bytes.find(nm);
+    if (at == std::string::npos)
+      return "the saved file did not contain an expected annotation entry";
+    const size_t objStart = bytes.rfind(" obj", at);
+    const size_t objEnd = bytes.find("endobj", at);
+    if (objStart == std::string::npos || objEnd == std::string::npos)
+      return "the saved file's annotation object could not be located";
+    std::string obj = bytes.substr(objStart, objEnd - objStart);
+
+    const std::string oldType = "/Subtype/Stamp";
+    const size_t st = obj.find(oldType);
+    const size_t padAt = obj.find("/GSPAD(");
+    if (st == std::string::npos || padAt == std::string::npos)
+      return "the saved file's annotation entries were not in the expected form";
+    const size_t padEnd = obj.find(')', padAt);
+    if (padEnd == std::string::npos)
+      return "the saved file's annotation padding was not in the expected form";
+    const std::string newType = "/Subtype/" + p.subtype;
+    const long delta = static_cast<long>(newType.size()) - static_cast<long>(oldType.size());
+    const size_t padLen = padEnd + 1 - padAt;
+    const long room = static_cast<long>(padLen) - delta;
+    if (room < static_cast<long>(p.extra.size()))
+      return "the saved file's annotation had no room for the line end points";
+    std::string repl = p.extra + std::string(static_cast<size_t>(room) - p.extra.size(), ' ');
+    // Edit the later position first so the earlier one's index stays valid.
+    if (st < padAt) {
+      obj.replace(padAt, padLen, repl);
+      obj.replace(st, oldType.size(), newType);
+    } else {
+      obj.replace(st, oldType.size(), newType);
+      obj.replace(padAt, padLen, repl);
+    }
+    if (obj.size() != objEnd - objStart)
+      return "internal error: the annotation edit changed the file length";
+    bytes.replace(objStart, obj.size(), obj);
+  }
+  return {};
+}
+
+} // namespace
+
+std::string SaveAnnotated(const std::filesystem::path& source, const std::vector<Annot>& items,
+                          const std::filesystem::path& dest) {
+  std::error_code ec;
+  if (source.lexically_normal() == dest.lexically_normal() ||
+      (std::filesystem::exists(dest, ec) && std::filesystem::equivalent(source, dest, ec)))
+    return "Save As must use a new file name; the original is never overwritten";
+
+  std::string bytes;
+  {
+    std::ifstream in(source, std::ios::binary);
+    if (!in)
+      return "cannot read the original file";
+    bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  if (bytes.empty())
+    return "the original file is empty";
+
+  std::string error;
+  MemWriter w;
+  {
+    std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
+    FPDF_InitLibrary();
+    FPDF_DOCUMENT doc = FPDF_LoadMemDocument(bytes.data(), static_cast<int>(bytes.size()), nullptr);
+    if (doc == nullptr)
+      return "the original file could not be read as a PDF";
+    const int pageCount = FPDF_GetPageCount(doc);
+    std::map<int, std::vector<const Annot*>> byPage;
+    for (const Annot& a : items) {
+      if (a.page < 0 || a.page >= pageCount) {
+        FPDF_CloseDocument(doc);
+        return "an annotation is on page " + std::to_string(a.page + 1) + ", which is not in the file";
+      }
+      byPage[a.page].push_back(&a);
+    }
+    std::vector<Patch> patches;
+    int serial = 0;
+    for (const auto& [pageIdx, list] : byPage) {
+      FPDF_PAGE page = FPDF_LoadPage(doc, pageIdx);
+      if (page == nullptr) {
+        error = "page " + std::to_string(pageIdx + 1) + " could not be loaded";
+        break;
+      }
+      for (const Annot* a : list) {
+        bool ok = false;
+        switch (a->kind) {
+        case Annot::Kind::Rect:
+        case Annot::Kind::Ellipse:
+          ok = AddRect(page, *a);
+          break;
+        case Annot::Kind::Line:
+          ok = AddLine(page, *a, ++serial, patches);
+          break;
+        case Annot::Kind::Text:
+          ok = AddText(doc, page, *a, ++serial, patches, error);
+          break;
+        }
+        if (!ok) {
+          if (error.empty())
+            error = "PDFium could not create an annotation on page " + std::to_string(pageIdx + 1);
+          break;
+        }
+      }
+      FPDF_ClosePage(page);
+      if (!error.empty())
+        break;
+    }
+    if (error.empty()) {
+      w.version = 1;
+      w.WriteBlock = &WriteMem;
+      if (FPDF_SaveAsCopy(doc, &w, 0) == 0)
+        error = "PDFium could not write the new PDF";
+      else
+        error = ApplyPatches(w.bytes, patches);
+    }
+    FPDF_CloseDocument(doc);
+  }
+  if (!error.empty())
+    return error;
+
+  const std::filesystem::path tmp = dest.parent_path() / (dest.filename().string() + ".gsannot.tmp");
+  {
+    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+    out.write(w.bytes.data(), static_cast<std::streamsize>(w.bytes.size()));
+    out.close();
+    if (!out) {
+      std::filesystem::remove(tmp, ec);
+      return "writing the new PDF failed (disk full or no permission?)";
+    }
+  }
+  std::filesystem::rename(tmp, dest, ec);
+  if (ec) {
+    std::error_code ec2;
+    std::filesystem::remove(tmp, ec2);
+    return "could not put the new file in place: " + ec.message();
+  }
+  return {};
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Reading back
+// ---------------------------------------------------------------------------------------------------
+
+namespace {
+
+// Pulls "<size> Tf" and "<r> <g> <b> rg" out of a /DA string.
+void ParseDa(const std::string& da, float& size, unsigned& color) {
+  std::istringstream in(da);
+  std::vector<std::string> tok;
+  std::string t;
+  while (in >> t)
+    tok.push_back(t);
+  for (size_t i = 0; i < tok.size(); ++i) {
+    if (tok[i] == "Tf" && i >= 1)
+      size = static_cast<float>(std::atof(tok[i - 1].c_str()));
+    if (tok[i] == "rg" && i >= 3) {
+      const auto to8 = [](const std::string& s) {
+        return static_cast<unsigned>(std::lround(std::clamp(std::atof(s.c_str()), 0.0, 1.0) * 255.0));
+      };
+      color = (to8(tok[i - 3]) << 16) | (to8(tok[i - 2]) << 8) | to8(tok[i - 1]);
+    }
+  }
+}
+
+} // namespace
+
+std::vector<Annot> ReadAnnotations(const std::filesystem::path& file) {
+  std::vector<Annot> out;
+  std::string bytes;
+  {
+    std::ifstream in(file, std::ios::binary);
+    bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  if (bytes.empty())
+    return out;
+  std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
+  FPDF_InitLibrary();
+  FPDF_DOCUMENT doc = FPDF_LoadMemDocument(bytes.data(), static_cast<int>(bytes.size()), nullptr);
+  if (doc == nullptr)
+    return out;
+  const int pages = FPDF_GetPageCount(doc);
+  for (int pi = 0; pi < pages; ++pi) {
+    FPDF_PAGE page = FPDF_LoadPage(doc, pi);
+    if (page == nullptr)
+      continue;
+    const int n = FPDFPage_GetAnnotCount(page);
+    for (int i = 0; i < n; ++i) {
+      FPDF_ANNOTATION an = FPDFPage_GetAnnot(page, i);
+      if (an == nullptr)
+        continue;
+      const FPDF_ANNOTATION_SUBTYPE st = FPDFAnnot_GetSubtype(an);
+      Annot a;
+      a.page = pi;
+      FS_RECTF rc{};
+      FPDFAnnot_GetRect(an, &rc);
+      float h = 0.f, v = 0.f, bw = 1.f;
+      FPDFAnnot_GetBorder(an, &h, &v, &bw);
+      // GetColor refuses an annotation that has an appearance stream; this document is a private in-memory
+      // copy that is never saved, so the appearance is dropped to read the colour entries.
+      FPDFAnnot_SetAP(an, FPDF_ANNOT_APPEARANCEMODE_NORMAL, nullptr);
+      unsigned r = 0, g = 0, b = 0, alpha = 0;
+      const bool hasColor = FPDFAnnot_GetColor(an, FPDFANNOT_COLORTYPE_Color, &r, &g, &b, &alpha) != 0;
+      a.color = (r << 16) | (g << 8) | b;
+      a.thickness = bw;
+      bool known = true;
+      if (st == FPDF_ANNOT_LINE) {
+        a.kind = Annot::Kind::Line;
+        FS_POINTF s{}, e{};
+        FPDFAnnot_GetLine(an, &s, &e);
+        a.x0 = s.x;
+        a.y0 = s.y;
+        a.x1 = e.x;
+        a.y1 = e.y;
+      } else if (st == FPDF_ANNOT_SQUARE || st == FPDF_ANNOT_CIRCLE) {
+        a.kind = st == FPDF_ANNOT_SQUARE ? Annot::Kind::Rect : Annot::Kind::Ellipse;
+        a.x0 = rc.left + bw / 2;
+        a.x1 = rc.right - bw / 2;
+        a.y0 = rc.bottom + bw / 2;
+        a.y1 = rc.top - bw / 2;
+        a.fill = FPDFAnnot_HasKey(an, "IC") != 0;
+      } else if (st == FPDF_ANNOT_FREETEXT) {
+        a.kind = Annot::Kind::Text;
+        a.x0 = rc.left;
+        a.x1 = rc.right;
+        a.y0 = rc.bottom;
+        a.y1 = rc.top;
+        a.text = GetString(an, "Contents");
+        float size = 12.f;
+        unsigned col = 0;
+        ParseDa(GetString(an, "DA"), size, col);
+        a.fontSize = size;
+        a.color = col;
+        a.thickness = 1.f;
+        const std::string f = GetString(an, "GSFont"); // family|b|i
+        const size_t p1 = f.find('|');
+        if (p1 != std::string::npos && f.size() >= p1 + 4) {
+          a.font = f.substr(0, p1);
+          a.bold = f[p1 + 1] == 'b';
+          a.italic = f[p1 + 3] == 'i';
+        }
+      } else {
+        known = false;
+      }
+      (void)hasColor;
+      FPDFPage_CloseAnnot(an);
+      if (known)
+        out.push_back(a);
+    }
+    FPDF_ClosePage(page);
+  }
+  FPDF_CloseDocument(doc);
+  return out;
+}
+
+} // namespace pdfview
