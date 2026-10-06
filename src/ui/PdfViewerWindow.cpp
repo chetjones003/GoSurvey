@@ -271,6 +271,9 @@ struct AnnotUi {
   bool snapHit = false;                ///< the pointer is near a snap point this frame ...
   int snapPage = 0;
   float snapX = 0.f, snapY = 0.f;      ///< ... and this is it, in page points
+  bool snapPrevValid = false;          ///< the point the marker sat on last frame, so it can stay there
+  int snapPrevPage = 0;
+  float snapPrevX = 0.f, snapPrevY = 0.f;
   float measureOffset = 0.f;           ///< the Length being made: where its dimension line goes
 
   // REQ-394: checking the scale against dimensions the drawing states.
@@ -2197,7 +2200,7 @@ void StartSnapRead(Viewer& v, int page) {
   PdfDocument* doc = v.doc.get();
   const auto cancel = cur.cancel;
   cur.reading = std::async(std::launch::async, [doc, page, cancel]() -> std::shared_ptr<SnapIndex> {
-    std::vector<std::pair<float, float>> pts;
+    std::vector<SnapPoint> pts;
     if (!doc->SnapPoints(page, pts, [cancel] { return cancel->load(); }))
       return nullptr;
     auto idx = std::make_shared<SnapIndex>();
@@ -2262,16 +2265,31 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
           float px, py;
           toPt(r, px, py, false);
           SnapIndex::Pt hit;
-          if (sp.index->Nearest(px, py, 10.f / k, hit)) {
+          const float radius = 10.f / k;
+          bool found = sp.index->Nearest(px, py, radius, hit, 6.f / k); // points within 6 screen pixels merge into the strongest
+          // Stay on the last point while the pointer is still near it, unless another is clearly closer (5 screen
+          // pixels): without this the marker flips between neighbouring points as the pointer drifts.
+          if (found && u.snapPrevValid && u.snapPrevPage == r.page) {
+            const float dPrev = std::hypot(u.snapPrevX - px, u.snapPrevY - py), dNew = std::hypot(hit.first - px, hit.second - py);
+            if (dPrev <= radius && dNew > dPrev - 5.f / k)
+              hit = {u.snapPrevX, u.snapPrevY};
+          }
+          if (found) {
             u.snapHit = true;
             u.snapPage = r.page;
             u.snapX = hit.first;
             u.snapY = hit.second;
+            u.snapPrevValid = true;
+            u.snapPrevPage = r.page;
+            u.snapPrevX = hit.first;
+            u.snapPrevY = hit.second;
           }
         }
         break;
       }
     }
+    if (!u.snapHit)
+      u.snapPrevValid = false;
   }
 
   // A dimension is complete at its point count; a polyline or area is ended with Enter, a double-click, or (area)

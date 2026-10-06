@@ -11667,7 +11667,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      calibrate and note tools, and by dragging a grip, snap to the nearest end or corner of the page's
      vector line work (within about 10 screen pixels, marked on screen) when the page has any; a page that is
      a scanned image offers no snap. The line work is read in the background the first time a page is used.
-     The Length offset click never snaps. Snap points are in the viewer's page coordinates (rotation and
+     **Calm snapping:** the reader keeps the ends and corners of real lines (strongest), a round shape's **centre** (strongest) and four quadrant points, drops the tiny steps of a curve, specks and the outlines of text and other small intricate shapes, and candidates within about 6 screen pixels of a stronger one are merged into it (zoomed in, they separate again); the marker stays on its point unless another is clearly closer (D-2026-10-06-i). The Length offset click never snaps. Snap points are in the viewer's page coordinates (rotation and
      page-box offset accounted for), and marks are carried back to the file's page coordinates when saved
      (REQ-388), so they land where they were drawn on rotated pages too.
   6. **Out of scope:** radius/diameter, volume, cutouts inside an area, a measurement legend / markup list

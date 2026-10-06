@@ -59,17 +59,17 @@ std::string BuildPdf(const std::string& pageKeys, const std::string& content, co
   return out;
 }
 
-bool Has(const std::vector<std::pair<float, float>>& pts, float x, float y, float tol = 0.3f) {
+bool Has(const std::vector<SnapPoint>& pts, float x, float y, float tol = 0.3f) {
   for (const auto& p : pts)
-    if (std::fabs(p.first - x) <= tol && std::fabs(p.second - y) <= tol)
+    if (std::fabs(p.x - x) <= tol && std::fabs(p.y - y) <= tol)
       return true;
   return false;
 }
 
-std::vector<std::pair<float, float>> Snap(const std::filesystem::path& p, bool* ok = nullptr) {
+std::vector<SnapPoint> Snap(const std::filesystem::path& p, bool* ok = nullptr) {
   auto r = PdfDocument::Open(p);
   REQUIRE(r.doc != nullptr);
-  std::vector<std::pair<float, float>> pts;
+  std::vector<SnapPoint> pts;
   const bool good = r.doc->SnapPoints(0, pts, [] { return false; });
   if (ok != nullptr)
     *ok = good;
@@ -81,7 +81,7 @@ std::vector<std::pair<float, float>> Snap(const std::filesystem::path& p, bool* 
 
 TEST_CASE("SnapIndex finds the nearest point within the radius", "[pdfsnap][req391][issue732]") {
   SnapIndex idx;
-  idx.Build({{10.f, 10.f}, {50.f, 50.f}, {52.f, 50.f}, {-30.f, -40.f}, {1000.f, 1000.f}});
+  idx.Build({{10.f, 10.f, 1.f}, {50.f, 50.f, 1.f}, {52.f, 50.f, 1.f}, {-30.f, -40.f, 1.f}, {1000.f, 1000.f, 1.f}});
   SnapIndex::Pt out;
   REQUIRE(idx.Nearest(11.f, 9.f, 5.f, out));
   CHECK(out == SnapIndex::Pt(10.f, 10.f));
@@ -94,6 +94,114 @@ TEST_CASE("SnapIndex finds the nearest point within the radius", "[pdfsnap][req3
   CHECK(idx.Size() == 5);
   SnapIndex empty;
   CHECK_FALSE(empty.Nearest(0.f, 0.f, 10.f, out));
+}
+
+TEST_CASE("an end of a real line beats a stray vertex that is a little nearer", "[pdfsnap][req391][issue732]") {
+  SnapIndex idx;
+  // A stray vertex (weight 1) 1.0 from the pointer and a line end (weight 3) 3.5 away; radius 10.
+  idx.Build({{101.f, 100.f, 1.f}, {96.5f, 100.f, 3.f}});
+  SnapIndex::Pt out;
+  REQUIRE(idx.Nearest(100.f, 100.f, 10.f, out));
+  CHECK(out == SnapIndex::Pt(96.5f, 100.f)); // two steps of weight = 3.0 of extra closeness: 3.5 - 3.0 < 1.0
+  // But not one that is much farther: the stray vertex wins when the end is 9 away.
+  SnapIndex far;
+  far.Build({{101.f, 100.f, 1.f}, {91.f, 100.f, 3.f}});
+  REQUIRE(far.Nearest(100.f, 100.f, 10.f, out));
+  CHECK(out == SnapIndex::Pt(101.f, 100.f));
+  // Equal weights: the nearest.
+  SnapIndex same;
+  same.Build({{103.f, 100.f, 3.f}, {98.f, 100.f, 3.f}});
+  REQUIRE(same.Nearest(100.f, 100.f, 10.f, out));
+  CHECK(out == SnapIndex::Pt(98.f, 100.f));
+  // Merging: a cluster a few pixels wide offers only its strongest point.
+  SnapIndex cluster;
+  cluster.Build({{100.f, 100.f, 1.f}, {102.f, 100.f, 2.f}, {140.f, 100.f, 1.f}});
+  REQUIRE(cluster.Nearest(100.f, 100.f, 10.f, out));
+  CHECK(out == SnapIndex::Pt(100.f, 100.f));             // without merging the nearest wins
+  REQUIRE(cluster.Nearest(100.f, 100.f, 10.f, out, 4.f)); // with a 4-point merge radius the stronger one 2 away wins
+  CHECK(out == SnapIndex::Pt(102.f, 100.f));
+  REQUIRE(cluster.Nearest(100.f, 100.f, 10.f, out, 1.f)); // zoomed in (1 point on screen): both are on offer again
+  CHECK(out == SnapIndex::Pt(100.f, 100.f));
+  // A far, unrelated weak point is not touched by the merge.
+  REQUIRE(cluster.Nearest(140.f, 100.f, 10.f, out, 4.f));
+  CHECK(out == SnapIndex::Pt(140.f, 100.f));
+  // Outside the radius nothing is offered, whatever its weight.
+  SnapIndex none;
+  none.Build({{150.f, 100.f, 3.f}});
+  CHECK_FALSE(none.Nearest(100.f, 100.f, 10.f, out));
+}
+
+TEST_CASE("the tiny steps of a curve and specks are not snap points; real corners are", "[pdfsnap][req391][issue732]") {
+  // A "circle" of radius 5 drawn as 48 straight steps (about 0.65 pt each), a 1 pt speck, a 20 x 10 rectangle
+  // and an L whose short leg is 1.8 pt.
+  std::string content = "0 0 0 RG\n";
+  char buf[96];
+  for (int i = 0; i <= 48; ++i) {
+    const double a = 6.283185307 * i / 48.0;
+    std::snprintf(buf, sizeof(buf), "%.4f %.4f %s\n", 100.0 + 5.0 * std::cos(a), 100.0 + 5.0 * std::sin(a), i == 0 ? "m" : "l");
+    content += buf;
+  }
+  content += "S\n";
+  content += "200 200 m 200.5 200.5 l S\n";                   // a speck: under 1.5 pt long
+  content += "50 150 20 10 re S\n";                            // corners (50,150) (70,150) (70,160) (50,160)
+  content += "250 100 m 250 101.8 l 270 101.8 l S\n";          // an L: its middle vertex is a real corner (a 20 pt leg)
+  const auto p = WriteBytes("gs_snap_noise.pdf", BuildPdf("/MediaBox[0 0 400 300]", content));
+  const auto pts = Snap(p);
+  // The 48 vertices of the circle collapse to its centre and four quadrant points.
+  int nearCircle = 0;
+  float centreWeight = 0.f;
+  for (const auto& q : pts)
+    if (std::hypot(q.x - 100.f, q.y - 100.f) < 6.f) {
+      ++nearCircle;
+      if (std::hypot(q.x - 100.f, q.y - 100.f) < 0.3f)
+        centreWeight = q.weight;
+    }
+  CHECK(nearCircle <= 5);
+  CHECK(Has(pts, 100, 100));   // the centre ...
+  CHECK(centreWeight == 4.f);  // ... is the strongest point
+  CHECK(Has(pts, 105, 100));   // a quadrant
+  CHECK(Has(pts, 100, 105));
+  CHECK(Has(pts, 95, 100));
+  CHECK(Has(pts, 100, 95));
+  CHECK_FALSE(Has(pts, 200, 200)); // the speck gives nothing
+  for (const auto& corner : {std::pair<float, float>{50, 150}, {70, 150}, {70, 160}, {50, 160}}) {
+    INFO("corner " << corner.first << "," << corner.second);
+    REQUIRE(Has(pts, corner.first, corner.second));
+    for (const auto& q : pts)
+      if (std::fabs(q.x - corner.first) < 0.3f && std::fabs(q.y - corner.second) < 0.3f)
+        CHECK(q.weight >= 3.f); // the corner of a real line is the strongest kind
+  }
+  CHECK(Has(pts, 250, 100));
+  CHECK(Has(pts, 250, 101.8f)); // the L's bend is kept: one side is a 20 pt line
+  CHECK(Has(pts, 270, 101.8f));
+  std::filesystem::remove(p);
+
+}
+
+TEST_CASE("a circle drawn as four curves snaps at its centre and quadrants, not its control points", "[pdfsnap][req391][issue732]") {
+  // Radius 5 at (100, 100); each quarter is a Bezier with the usual 0.5523 handles (2.76).
+  const std::string content =
+      "105 100 m 105 102.76 102.76 105 100 105 c 97.24 105 95 102.76 95 100 c 95 97.24 97.24 95 100 95 c 102.76 95 105 97.24 105 100 c S\n"
+      "300 300 m 320 300 l 320 310 l 300 310 l h S\n"; // a plain rectangle keeps all four corners
+  const auto p = WriteBytes("gs_snap_bezcircle.pdf", BuildPdf("/MediaBox[0 0 400 400]", content));
+  const auto pts = Snap(p);
+  CHECK(Has(pts, 100, 100));
+  CHECK(Has(pts, 105, 100));
+  CHECK(Has(pts, 100, 105));
+  CHECK(Has(pts, 95, 100));
+  CHECK(Has(pts, 100, 95));
+  CHECK_FALSE(Has(pts, 105, 102.76f)); // a handle, not a point on the curve
+  CHECK_FALSE(Has(pts, 102.76f, 105));
+  int nearCircle = 0;
+  for (const auto& q : pts)
+    if (std::hypot(q.x - 100.f, q.y - 100.f) < 7.f)
+      ++nearCircle;
+  CHECK(nearCircle == 5);
+  CHECK(Has(pts, 300, 300)); // the square is not mistaken for a circle
+  CHECK(Has(pts, 320, 300));
+  CHECK(Has(pts, 320, 310));
+  CHECK(Has(pts, 300, 310));
+  std::filesystem::remove(p);
 }
 
 TEST_CASE("snap points are the ends and corners of the page's own lines", "[pdfsnap][req391][issue732]") {
@@ -160,13 +268,13 @@ TEST_CASE("snap points land on the drawn line on a rotated page and an offset pa
   const PageSize sz = r.doc->Sizes()[0];
   CHECK(sz.wPt == 100.f); // displayed turned: 100 wide, 200 tall
   CHECK(sz.hPt == 200.f);
-  std::vector<std::pair<float, float>> sp;
+  std::vector<SnapPoint> sp;
   REQUIRE(r.doc->SnapPoints(0, sp, [] { return false; }));
   REQUIRE(sp.size() == 2);
   Bitmap bm;
   REQUIRE(r.doc->RenderPage(0, 100, 200, bm, [] { return false; }));
   for (const auto& q : sp) {
-    const int px = static_cast<int>(q.first), py = static_cast<int>(sz.hPt - q.second);
+    const int px = static_cast<int>(q.x), py = static_cast<int>(sz.hPt - q.y);
     // Within a couple of pixels of the point there is dark ink (the 4 pt stroke's end).
     bool ink = false;
     for (int dy = -2; dy <= 2; ++dy)
@@ -175,7 +283,7 @@ TEST_CASE("snap points land on the drawn line on a rotated page and an offset pa
         if (x >= 0 && y >= 0 && x < bm.w && y < bm.h && bm.bgra[(static_cast<size_t>(y) * bm.w + x) * 4u] < 100)
           ink = true;
       }
-    INFO("snap point " << q.first << "," << q.second);
+    INFO("snap point " << q.x << "," << q.y);
     CHECK(ink);
   }
   r.doc.reset();
@@ -233,7 +341,7 @@ TEST_CASE("snap reading can be cancelled and bounded", "[pdfsnap][req391][issue7
   const auto p = WriteBytes("gs_snap_cancel.pdf", MakeSyntheticPdf(1, 400, 0));
   auto r = PdfDocument::Open(p);
   REQUIRE(r.doc != nullptr);
-  std::vector<std::pair<float, float>> pts;
+  std::vector<SnapPoint> pts;
   CHECK_FALSE(r.doc->SnapPoints(0, pts, [] { return true; })); // cancelled
   CHECK(pts.empty());
   REQUIRE(r.doc->SnapPoints(0, pts, [] { return false; }, 100)); // bounded

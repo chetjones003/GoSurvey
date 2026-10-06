@@ -5,6 +5,7 @@
 // (fonts, caches) and is not safe to enter from two threads at once.
 // The PDFium library itself must already be initialised (PdfAttach_Init at startup).
 
+#include "PdfSnap.hpp"
 #include "PdfViewerCore.hpp"
 
 #include <atomic>
@@ -64,7 +65,7 @@ public:
   /// forms included), in the viewer's page coordinates (points from the page's bottom-left as displayed, so
   /// rotation and an offset page box are already accounted for). \p cancel is polled; the first \p maxPoints
   /// distinct points are kept. Returns false on any failure or when cancelled.
-  bool SnapPoints(int page, std::vector<std::pair<float, float>>& out, const std::function<bool()>& cancel,
+  bool SnapPoints(int page, std::vector<SnapPoint>& out, const std::function<bool()>& cancel,
                   size_t maxPoints = 2000000);
 
   static constexpr int kDisplayFlags = 0x01 /*FPDF_ANNOT*/ | 0x02 /*FPDF_LCD_TEXT*/;
