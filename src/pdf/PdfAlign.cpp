@@ -102,36 +102,112 @@ void ResampleAligned(const pdfview::Bitmap& rev, float revHPt, float revPxPerPt,
   }
 }
 
-void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out) {
+void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out, double pxPerPt) {
   const int w = sheet.w, h = sheet.h;
   out.w = w;
   out.h = h;
   out.bgra.assign(sheet.bgra.size(), 0);
   if (other.w != w || other.h != h)
     return;
+  const size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
   // The other sheet "has" a mark near here when anything on it is even faintly dark within two pixels: a mark drawn onto
   // the base's pixel grid through the alignment is blurred a little, and a faint grey is still the same mark.
-  const auto faintAt = [](const pdfview::Bitmap& b, int x, int y) {
-    if (x < 0 || y < 0 || x >= b.w || y >= b.h)
+  const auto faintAt = [&](int x, int y) {
+    if (x < 0 || y < 0 || x >= w || y >= h)
       return false;
-    const uint8_t* p = &b.bgra[(static_cast<size_t>(y) * static_cast<size_t>(b.w) + static_cast<size_t>(x)) * 4u];
+    const uint8_t* p = &other.bgra[(static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u];
     return (p[0] + p[1] * 2 + p[2]) / 4 < 225;
   };
+  std::vector<uint8_t> ink(n, 0), only(n, 0);
   for (int y = 0; y < h; ++y)
     for (int x = 0; x < w; ++x) {
-      const size_t at = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u;
-      if (!IsInk(&sheet.bgra[at]))
+      const size_t at = static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x);
+      if (!IsInk(&sheet.bgra[at * 4u]))
         continue;
+      ink[at] = 1;
       bool near = false;
       for (int dy = -2; dy <= 2 && !near; ++dy)
         for (int dx = -2; dx <= 2 && !near; ++dx)
-          near = faintAt(other, x + dx, y + dy);
-      if (near)
-        continue;
-      out.bgra[at] = bgr[0];
-      out.bgra[at + 1] = bgr[1];
-      out.bgra[at + 2] = bgr[2];
-      out.bgra[at + 3] = 255;
+          near = faintAt(x + dx, y + dy);
+      only[at] = near ? 0 : 1;
+    }
+
+  // Clean up by whole marks (a letter, a dash, a dot, a line run), not by pixel: a small mark of the sheet is coloured
+  // whole when a good part of it is new and left alone when only a sliver is (a dash that sits a little off, a letter's
+  // edge); in a big connected mark only the new pixels are coloured, and tiny leftover clusters are dropped as specks.
+  const double ppp = std::max(0.1, pxPerPt);
+  const size_t smallMax = static_cast<size_t>(400.0 * ppp * ppp);
+  const size_t speck = static_cast<size_t>(std::max(3.0, 6.0 * ppp * ppp));
+  std::vector<uint8_t> seen(n, 0), keep(n, 0), big(n, 0);
+  std::vector<size_t> comp, stack;
+  const auto neighbours = [&](size_t p, auto&& visit) {
+    const int x = static_cast<int>(p % static_cast<size_t>(w)), y = static_cast<int>(p / static_cast<size_t>(w));
+    for (int dy = -1; dy <= 1; ++dy)
+      for (int dx = -1; dx <= 1; ++dx) {
+        const int nx = x + dx, ny = y + dy;
+        if ((dx != 0 || dy != 0) && nx >= 0 && ny >= 0 && nx < w && ny < h)
+          visit(static_cast<size_t>(ny) * static_cast<size_t>(w) + static_cast<size_t>(nx));
+      }
+  };
+  for (size_t i0 = 0; i0 < n; ++i0) {
+    if (!ink[i0] || seen[i0])
+      continue;
+    comp.clear();
+    stack.assign(1, i0);
+    seen[i0] = 1;
+    size_t marked = 0;
+    while (!stack.empty()) {
+      const size_t p = stack.back();
+      stack.pop_back();
+      comp.push_back(p);
+      marked += only[p];
+      neighbours(p, [&](size_t q) {
+        if (ink[q] && !seen[q]) {
+          seen[q] = 1;
+          stack.push_back(q);
+        }
+      });
+    }
+    if (marked == 0)
+      continue;
+    if (comp.size() <= smallMax) {
+      if (marked * 100 >= comp.size() * 35)
+        for (size_t p : comp)
+          keep[p] = 1;
+    } else {
+      for (size_t p : comp)
+        if (only[p])
+          keep[p] = big[p] = 1;
+    }
+  }
+  std::fill(seen.begin(), seen.end(), 0);
+  for (size_t i0 = 0; i0 < n; ++i0) {
+    if (!big[i0] || !keep[i0] || seen[i0])
+      continue;
+    comp.clear();
+    stack.assign(1, i0);
+    seen[i0] = 1;
+    while (!stack.empty()) {
+      const size_t p = stack.back();
+      stack.pop_back();
+      comp.push_back(p);
+      neighbours(p, [&](size_t q) {
+        if (big[q] && keep[q] && !seen[q]) {
+          seen[q] = 1;
+          stack.push_back(q);
+        }
+      });
+    }
+    if (comp.size() < speck)
+      for (size_t p : comp)
+        keep[p] = 0;
+  }
+  for (size_t i = 0; i < n; ++i)
+    if (keep[i]) {
+      out.bgra[i * 4u] = bgr[0];
+      out.bgra[i * 4u + 1] = bgr[1];
+      out.bgra[i * 4u + 2] = bgr[2];
+      out.bgra[i * 4u + 3] = 255;
     }
 }
 

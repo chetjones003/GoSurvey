@@ -137,6 +137,41 @@ TEST_CASE("the Base and Revision views mark only the ink the other sheet lacks",
   CHECK(alpha(2, 2) == 0);
 }
 
+TEST_CASE("a dash a little off is left plain; a dash that is really new is coloured whole; a speck is dropped", "[issue732][req392]") {
+  const auto dash = [](pdfview::Bitmap& b, int x0, int x1, int y) {
+    for (int x = x0; x <= x1; ++x)
+      Black(b, x, y);
+  };
+  const uint8_t blue[3] = {235, 120, 40};
+  pdfview::Bitmap out;
+  const auto marked = [&](int x, int y) { return out.bgra[(static_cast<size_t>(y) * 60u + static_cast<size_t>(x)) * 4u + 3u] == 255; };
+  {
+    pdfview::Bitmap base = White(60, 20), rev = White(60, 20);
+    dash(base, 10, 29, 5); // 20 px long
+    dash(rev, 13, 32, 5);  // the same dash 3 px off: only its end sticks out past the other sheet's tolerance
+    MarkOnlyIn(base, rev, blue, out);
+    for (int x = 0; x < 60; ++x)
+      CHECK_FALSE(marked(x, 5));
+  }
+  {
+    pdfview::Bitmap base = White(60, 20), rev = White(60, 20);
+    dash(base, 10, 29, 5);
+    dash(rev, 40, 59, 5); // far away: the base dash is gone from the revision
+    MarkOnlyIn(base, rev, blue, out);
+    for (int x = 10; x <= 29; ++x)
+      CHECK(marked(x, 5)); // the whole dash, not a piece of it
+  }
+  {
+    // A connected line with a one-pixel nub that the other sheet lacks: the nub is a sliver of a mark, not a change.
+    pdfview::Bitmap base = White(60, 20), rev = White(60, 20);
+    dash(base, 0, 59, 10);
+    dash(rev, 0, 59, 10);
+    Black(base, 30, 9);
+    MarkOnlyIn(base, rev, blue, out, 1.0);
+    CHECK_FALSE(marked(30, 9));
+  }
+}
+
 TEST_CASE("the same sheet, drawn through a fractional alignment, has nothing marked", "[issue732][req392]") {
   pdfview::Bitmap base = White(40, 40);
   for (int i = 5; i < 35; ++i) {

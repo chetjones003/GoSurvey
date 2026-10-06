@@ -50,8 +50,8 @@ void ResampleAligned(const pdfview::Bitmap& rev, float revHPt, float revPxPerPt,
                      float basePxPerPt, float baseHPt, pdfview::Bitmap& out);
 
 /// The Base / Revision views (REQ-392 clause 2): an overlay the size of \p sheet that is \p bgr (blue, green, red) where
-/// \p sheet has ink with nothing darker than a faint grey on \p other within two pixels, and transparent elsewhere.
-void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out);
+/// \p sheet has ink with nothing darker than a faint grey on \p other within two pixels, and transparent elsewhere. Cleaned up by whole marks: a small mark (a letter, a dash, a dot) is coloured whole when about a third or more of it is new and left plain when only a sliver is; in a big connected mark only the new pixels are coloured and clusters under about 6 square points are dropped. \p pxPerPt is the images' pixels per point.
+void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out, double pxPerPt = 1.0);
 
 /// Per-pixel Tint of two same-sized bitmaps (REQ-392 clause 2).
 void TintImage(const pdfview::Bitmap& base, const pdfview::Bitmap& rev, pdfview::Bitmap& out);

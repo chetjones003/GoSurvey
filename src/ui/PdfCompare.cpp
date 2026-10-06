@@ -403,8 +403,8 @@ void PdfCompare::PumpJob() {
     pdfalign::ResampleAligned(revRaw, rs.hPt, rppp, xf, bw, bh, bppp, bs.hPt, out.img[1]);
     pdfalign::TintImage(out.img[0], out.img[1], out.img[2]);
     const uint8_t blue[3] = {235, 120, 40}, red[3] = {40, 40, 230}; // B, G, R
-    pdfalign::MarkOnlyIn(out.img[0], out.img[1], blue, out.img[3]);
-    pdfalign::MarkOnlyIn(out.img[1], out.img[0], red, out.img[4]);
+    pdfalign::MarkOnlyIn(out.img[0], out.img[1], blue, out.img[3], bppp);
+    pdfalign::MarkOnlyIn(out.img[1], out.img[0], red, out.img[4], bppp);
     out.n = 5;
     out.wPt = bs.wPt;
     out.hPt = bs.hPt;
