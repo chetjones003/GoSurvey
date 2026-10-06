@@ -11772,6 +11772,105 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f).
 
+### REQ-394 — Scale check: test a page's scale against dimensions the drawing already states (GitHub issue #732, phase 8)
+
+- Purpose: a scale set by calibrating on one dimension (REQ-390) is only as good as that dimension and those two
+  picks. On a real sheet (issue #732's test set) spans labelled "10'-0"" differ by 0.2 % on paper, so a
+  calibration on one of them made a "43'-0 3/4"" dimension read 42.98 ft. Nothing warned the user. This is
+  blunder detection: test the scale against other known dimensions and say plainly how far off it is.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-06-h (the user chose "both, manual first": this REQ is the manual check; the automatic
+  audit is REQ-395).
+- Depends on: REQ-390, REQ-391 (points, snap, labels), REQ-388 (annotation overlay).
+- Statement:
+  1. **Check tool.** On a scaled page, **Check** takes two picked points (Snap applies, REQ-391 clause 5) and
+     the value the drawing states for that distance, typed in feet-and-inches (`43'-0 3/4"`, `10'6"`,
+     `6 1/2"`), decimal with a unit (`43.0625 ft`, `12.5 m`, `850 mm`) or a bare number in the page scale's
+     unit. A value that cannot be read is refused with a message naming the problem; nothing is added.
+  2. **Result.** For each check the window shows the **measured** value at the current scale, the **stated**
+     value, the **difference** (in the page's unit and as a percentage of the stated value) and a
+     **verdict**: **Good** (within 0.10 %), **Check** (up to 0.50 %), **Blunder** (more than 0.50 %). The two
+     limits are settings. The verdict colour (green, amber, red) is used everywhere a check is shown.
+  3. **Checks list.** Checks are drawn on the sheet as a labelled line in the verdict colour and kept in a
+     list for the page (select, delete, undo/redo). The **calibration itself** counts as the first check
+     (its picked distance against the distance the user typed). Checks are working marks: they are **not**
+     written into the PDF by Save As; a **Scale report** (text: each check, the best fit, the verdicts) can be
+     copied or written to the log (ASSUMPTION recorded, not asked: not saved into the PDF, to keep the
+     user's drawing free of QA marks).
+  4. **Best fit.** With two or more checks the window shows the **best-fit scale**: the scale that minimises
+     the squared *relative* error of all the checks, each weighted by its length (a long span says more than
+     a short one). A check whose own implied scale differs from the best fit by more than 0.25 % or by more
+     than three times the median deviation of the checks, whichever is larger, is marked **Outlier** (the
+     likely blunder: a wrong pick, a mistyped value, a wrong unit, or an unreliable drawn dimension). **Use
+     best-fit scale** applies it as an ordinary scale change (one undo step); with an outlier present the
+     window offers the best fit **without the outlier** as well.
+  5. **After a calibration** the window offers a one-click "Check this scale against another dimension", and
+     says when the calibrated scale is close to a standard scale (already shown by REQ-390's calibration box).
+  6. **Honest limits stated in the window:** the check proves the *picked* distances agree, not that the
+     drawing is to scale; drawn geometry can differ from printed values by a fraction of a percent, so an
+     Amber verdict on a single check is information, not an error.
+  7. **Out of scope:** reading the sheet's own dimension text (REQ-395), per-region scales, area or angle
+     checks, saving the checks into the PDF.
+- Acceptance:
+  - `[issue732][req394]` test: the value parser reads `43'-0 3/4"`, `43' 0 3/4"`, `10'6"`, `6 1/2"`, `43.0625 ft`,
+    `12.5m`, `850 mm`, a bare `43.0625` and refuses `abc`, `''`, `10'-`, `1/0"`, negative values and trailing text.
+  - `[issue732][req394]` test: measured vs stated, difference and percentage are correct for a known scale,
+    and the verdict changes at exactly the two limits (0.10 %, 0.50 %).
+  - `[issue732][req394]` test: the best fit of checks implying scales 4.000, 4.000, 4.004 weights by length
+    and equals the hand-calculated value; a check implying 3.980 among three that imply 4.000 is the only
+    **Outlier**; best fit without the outlier is 4.000; one check alone gives no best fit and no outlier.
+  - `[issue732][req394]` test: a calibration counts as a check; applying the best fit is one undo step.
+  - Manual: on the issue's sheet, calibrating on the 180.55 pt "10'-0"" span and checking the "43'-0 3/4""
+    dimension shows an amber verdict (about 0.2 %) and marks the calibration as the outlier once two other
+    10' spans are checked.
+- Owner-layer: Domain (`src/pdf/PdfScaleCheck`, pure: value parser, verdicts, best fit), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-h).
+
+### REQ-395 — Automatic scale audit: read the sheet's own dimension text and test the scale with it (GitHub issue #732, phase 9)
+
+- Purpose: do REQ-394's checking automatically. A drawing already prints hundreds of dimensions; the audit
+  reads their text, measures the dimension lines they describe, and reports whether the page's scale agrees.
+- Priority: could
+- Type: functional + performance
+- Decision: D-2026-10-06-h.
+- Depends on: REQ-394 (verdicts, best fit, Scale report), REQ-391 clause 5 (vector line reading).
+- Statement:
+  1. **Audit command.** **Audit scale** on a scaled page reads the page's **text** for dimension values
+     (feet-and-inches, decimal feet, metres/millimetres, as REQ-394 clause 1), and for each finds the **dimension
+     line** it labels: a straight horizontal or vertical run of drawn line work with an extension line at each
+     end, closest to the text and aligned with it. Text with no such line, and lines with no readable text, are
+     counted as **unmatched** and not used.
+  2. **Result.** The window reports: dimensions matched / unmatched, how many agree with the current scale
+     (Good / Check / Blunder as REQ-394), the **consensus scale** (the most common implied scale among matched
+     dimensions, found robustly so a few wrong matches do not move it, and shown only when at least **five**
+     dimensions matched), and the **worst offenders**, each highlighted on the sheet and listed (click to
+     centre it). **Use consensus scale** applies it as an ordinary scale change.
+  3. **Suggestions, not facts.** Results are labelled as suggestions: each matched dimension shows its text, its
+     measured length and the implied scale so the user can judge it; the audit never changes the scale or any
+     mark by itself.
+  4. **Speed.** Runs on a worker thread with progress and Cancel; a 36 x 24 in sheet with several hundred
+     dimensions finishes in **5 seconds or less** on the reference machine and never causes a viewer frame over
+     16 ms. (ASSUMPTION recorded, not asked: the 5-second target.)
+  5. **Scanned or text-free pages** report "no dimension text found" (REQ-201); nothing crashes.
+  6. **Out of scope:** dimension text drawn as outlines (not real text), leader-style or angular dimensions, text
+     in rotated pages beyond 90 degree turns, correcting dimensions on the drawing.
+- Acceptance:
+  - `[issue732][req395]` test: a generated sheet with N horizontal and vertical dimensions drawn at a known scale
+    (text + extension lines + dimension line) matches all N and its consensus scale is within 0.01 % of the true
+    one; a sheet with one dimension deliberately drawn 1 % long reports it as the worst offender and does not
+    move the consensus.
+  - `[issue732][req395]` test: text with no line near it, and lines with no text, are unmatched; a page with no text
+    and a page with fewer than five matches report so and give no consensus.
+  - `[issue732][req395]` test: cancelling stops the audit and returns no partial result as a verdict.
+  - `[issue732][req395]` bench: the issue's 36 x 24 in sheet audits in <= 5 s; worst viewer frame reported.
+  - Manual: on the issue's sheet the audit's consensus scale is close to 3.9956 ft per inch and it lists the
+    180.55 pt "10'-0"" span among the offenders; a spot check records false matches and misses.
+- Owner-layer: Domain/IO (`src/pdf/PdfDimAudit`, PDFium text + pure matching), UI, Commands
+- Status: accepted
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-h).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
