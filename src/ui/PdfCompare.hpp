@@ -126,6 +126,7 @@ private:
   std::vector<pdfdiff::Region> regions_;
   bool haveChanges_ = false;
   int selRegion_ = -1;
+  float listW_ = 290.f; ///< the change list's width, dragged by its edge like the thumbnail strip
   int centerReq_ = -1;
   bool showHighlights_ = true;
   std::future<std::string> saving_; ///< Write changes as markups, on a worker

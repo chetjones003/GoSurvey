@@ -648,22 +648,37 @@ void PdfCompare::DrawChangesBar() {
 }
 
 void PdfCompare::DrawChangesList() {
-  ImGui::BeginChild("##cmpchanges", ImVec2(290.f, 0.f), true);
+  // NoMove: a click or drag on the list must not carry the whole window along.
+  ImGui::BeginChild("##cmpchanges", ImVec2(listW_, 0.f), true, ImGuiWindowFlags_NoMove);
   ImGui::Text("Areas that differ (%d)", static_cast<int>(regions_.size()));
   ImGui::SameLine(ImGui::GetContentRegionAvail().x - 40.f);
   const bool closeList = ImGui::SmallButton("Close");
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Close this list and the highlight boxes. Press Find changes to run it again.");
+  ImGui::PushTextWrapPos(0.f);
   ImGui::TextDisabled("Click a row to jump to it on the sheet.");
   ImGui::TextColored(ImVec4(0.3f, 0.85f, 0.45f, 1.f), "Green: new in the revision");
-  ImGui::TextColored(ImVec4(0.95f, 0.4f, 0.4f, 1.f), "Red: in the base, gone from the revision");
+  ImGui::TextColored(ImVec4(0.95f, 0.4f, 0.4f, 1.f), "Red: removed from the revision");
   ImGui::TextColored(ImVec4(0.98f, 0.7f, 0.2f, 1.f), "Amber: changed or moved");
+  ImGui::PopTextWrapPos();
   ImGui::Separator();
   for (size_t i = 0; i < regions_.size(); ++i) {
     const pdfdiff::Region& r = regions_[i];
     char label[120];
     const char* what = r.kind == pdfdiff::Kind::Added ? "New" : r.kind == pdfdiff::Kind::Removed ? "Removed" : "Changed";
-    std::snprintf(label, sizeof(label), "%zu  %s  (%.0f x %.0f pt)##reg%zu", i + 1, what, r.Width(), r.Height(), i);
+    // Where on the sheet, in words, rather than a size in points: "Changed - top left", "New - bottom", "Changed - large area".
+    const PageSize ps = base_->Sizes()[static_cast<size_t>(basePage_)];
+    const double cx = (r.x0 + r.x1) * 0.5 / std::max(1.f, ps.wPt), cy = (r.y0 + r.y1) * 0.5 / std::max(1.f, ps.hPt);
+    const char* col = cx < 1.0 / 3 ? "left" : cx > 2.0 / 3 ? "right" : "";
+    const char* row = cy > 2.0 / 3 ? "top" : cy < 1.0 / 3 ? "bottom" : "";
+    char where[48];
+    if (r.Width() > 0.25 * ps.wPt || r.Height() > 0.25 * ps.hPt)
+      std::snprintf(where, sizeof(where), "large area");
+    else if (*row == 0 && *col == 0)
+      std::snprintf(where, sizeof(where), "middle");
+    else
+      std::snprintf(where, sizeof(where), "%s%s%s", row, (*row != 0 && *col != 0) ? " " : "", col);
+    std::snprintf(label, sizeof(label), "%zu  %s - %s##reg%zu", i + 1, what, where, i);
     const ImVec4 col = r.kind == pdfdiff::Kind::Added ? ImVec4(0.3f, 0.85f, 0.45f, 1.f)
                        : r.kind == pdfdiff::Kind::Removed ? ImVec4(0.95f, 0.4f, 0.4f, 1.f)
                                                           : ImVec4(0.98f, 0.7f, 0.2f, 1.f);
@@ -844,7 +859,16 @@ bool PdfCompare::Draw(std::vector<std::string>& log) {
   UploadSlice();
   if (haveChanges_ && !regions_.empty()) {
     DrawChangesList();
-    ImGui::SameLine();
+    // The list's edge: drag it to resize, like the thumbnail strip.
+    ImGui::SameLine(0.f, 0.f);
+    ImGui::InvisibleButton("##cmplistsplit", ImVec2(7.f, ImGui::GetContentRegionAvail().y));
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    if (ImGui::IsItemActive())
+      listW_ = std::clamp(listW_ + ImGui::GetIO().MouseDelta.x, 180.f, 600.f);
+    ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                              ImGui::IsItemHovered() || ImGui::IsItemActive() ? IM_COL32(90, 130, 190, 255) : IM_COL32(60, 64, 72, 255));
+    ImGui::SameLine(0.f, 0.f);
   }
   DrawSheet(log);
 
