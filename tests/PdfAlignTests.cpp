@@ -116,6 +116,27 @@ TEST_CASE("Tint classes: base only, revision only, both, neither", "[issue732][r
   CHECK(d[0] == 255);
 }
 
+TEST_CASE("the Base and Revision views mark only the ink the other sheet lacks", "[issue732][req392]") {
+  pdfview::Bitmap base = White(12, 12), rev = White(12, 12);
+  Black(base, 2, 2); // in both
+  Black(rev, 2, 2);
+  Black(base, 8, 8); // only in the base
+  Black(rev, 3, 8);  // only in the revision (2+ px from anything in the base)
+  Black(rev, 3, 3);  // within a pixel of base ink: the same mark, not a change
+  const uint8_t blue[3] = {235, 120, 40};
+  pdfview::Bitmap out;
+  MarkOnlyIn(base, rev, blue, out);
+  const auto alpha = [&](int x, int y) { return out.bgra[(static_cast<size_t>(y) * 12u + static_cast<size_t>(x)) * 4u + 3u]; };
+  CHECK(alpha(8, 8) == 255);
+  CHECK(out.bgra[(8u * 12u + 8u) * 4u] == 235); // blue channel of the mark
+  CHECK(alpha(2, 2) == 0);
+  CHECK(alpha(0, 11) == 0);
+  MarkOnlyIn(rev, base, blue, out);
+  CHECK(alpha(3, 8) == 255);
+  CHECK(alpha(3, 3) == 0);
+  CHECK(alpha(2, 2) == 0);
+}
+
 TEST_CASE("a shifted revision is drawn where the transform says", "[issue732][req392]") {
   // Revision page 10 x 10 pt at 1 px/pt with ink at pixel (2, 7), which is the point (2.5, 2.5) in page space.
   pdfview::Bitmap rev = White(10, 10);

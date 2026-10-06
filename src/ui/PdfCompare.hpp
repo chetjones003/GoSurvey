@@ -1,7 +1,7 @@
 #pragma once
 
 // REQ-392 — compare two revisions of a sheet inside a PDF viewer window: the revision laid over the base in
-// Tint, Opacity or Blink, lined up by hand with one or two matching points. The images are made on a worker
+// Tint, Opacity, or either sheet alone with its changes marked, lined up by hand with one or two matching points. The images are made on a worker
 // thread and uploaded a slice per frame, so panning and zooming never wait on them.
 
 #include "PdfAlign.hpp"
@@ -55,19 +55,19 @@ private:
     bool ok = false;
     Key key;
     int n = 0;
-    Bitmap img[3]; ///< overlay: base, aligned revision, tint. raw: the revision page alone
+    Bitmap img[5]; ///< overlay: base, aligned revision, tint, base-only ink (blue), revision-only ink (red). raw: the revision page alone
     float wPt = 0.f, hPt = 0.f;
   };
   struct Set {
     Key key;
     int n = 0;
-    unsigned tex[3] = {0, 0, 0};
-    Bitmap img[3];
-    int rowsDone[3] = {0, 0, 0};
+    unsigned tex[5] = {0, 0, 0, 0, 0};
+    Bitmap img[5];
+    int rowsDone[5] = {0, 0, 0, 0, 0};
     float wPt = 0.f, hPt = 0.f;
     bool Complete() const;
   };
-  enum class Mode { Tint, Opacity, Blink, Base, Revision };
+  enum class Mode { Tint, Opacity, Base, Revision };
   enum class Task { None, Align, Find };
   struct AnaOut {
     Task task = Task::None;
@@ -133,7 +133,6 @@ private:
 
   Mode mode_ = Mode::Tint;
   float opacity_ = 0.5f;
-  float blinkHz_ = 1.5f;
 
   float pxPerPt_ = 96.f / 72.f;
   bool panning_ = false; ///< the middle button is held on the sheet

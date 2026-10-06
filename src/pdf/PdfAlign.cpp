@@ -102,6 +102,45 @@ void ResampleAligned(const pdfview::Bitmap& rev, float revHPt, float revPxPerPt,
   }
 }
 
+void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out) {
+  const int w = sheet.w, h = sheet.h;
+  out.w = w;
+  out.h = h;
+  out.bgra.assign(sheet.bgra.size(), 0);
+  if (other.w != w || other.h != h)
+    return;
+  const auto inkAt = [](const pdfview::Bitmap& b, int x, int y) {
+    return x >= 0 && y >= 0 && x < b.w && y < b.h && IsInk(&b.bgra[(static_cast<size_t>(y) * static_cast<size_t>(b.w) + static_cast<size_t>(x)) * 4u]);
+  };
+  std::vector<uint8_t> only(static_cast<size_t>(w) * static_cast<size_t>(h), 0);
+  for (int y = 0; y < h; ++y)
+    for (int x = 0; x < w; ++x) {
+      if (!inkAt(sheet, x, y))
+        continue;
+      bool near = false;
+      for (int dy = -1; dy <= 1 && !near; ++dy)
+        for (int dx = -1; dx <= 1 && !near; ++dx)
+          near = inkAt(other, x + dx, y + dy);
+      only[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)] = near ? 0 : 1;
+    }
+  for (int y = 0; y < h; ++y)
+    for (int x = 0; x < w; ++x) {
+      bool on = false;
+      for (int dy = -1; dy <= 1 && !on; ++dy)
+        for (int dx = -1; dx <= 1 && !on; ++dx) {
+          const int nx = x + dx, ny = y + dy;
+          on = nx >= 0 && ny >= 0 && nx < w && ny < h && only[static_cast<size_t>(ny) * static_cast<size_t>(w) + static_cast<size_t>(nx)] != 0;
+        }
+      if (on) {
+        uint8_t* p = &out.bgra[(static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u];
+        p[0] = bgr[0];
+        p[1] = bgr[1];
+        p[2] = bgr[2];
+        p[3] = 255;
+      }
+    }
+}
+
 void TintImage(const pdfview::Bitmap& base, const pdfview::Bitmap& rev, pdfview::Bitmap& out) {
   out.w = base.w;
   out.h = base.h;

@@ -38,7 +38,7 @@ bool PdfCompare::Set::Complete() const {
 }
 
 void PdfCompare::Retire(Set& s) {
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < 5; ++i)
     if (s.tex[i] != 0)
       g_dead.push_back(s.tex[i]);
   s = Set{};
@@ -402,7 +402,10 @@ void PdfCompare::PumpJob() {
       return out;
     pdfalign::ResampleAligned(revRaw, rs.hPt, rppp, xf, bw, bh, bppp, bs.hPt, out.img[1]);
     pdfalign::TintImage(out.img[0], out.img[1], out.img[2]);
-    out.n = 3;
+    const uint8_t blue[3] = {235, 120, 40}, red[3] = {40, 40, 230}; // B, G, R
+    pdfalign::MarkOnlyIn(out.img[0], out.img[1], blue, out.img[3]);
+    pdfalign::MarkOnlyIn(out.img[1], out.img[0], red, out.img[4]);
+    out.n = 5;
     out.wPt = bs.wPt;
     out.hPt = bs.hPt;
     out.ok = true;
@@ -489,9 +492,6 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   if (ImGui::RadioButton("Opacity", mode_ == Mode::Opacity))
     mode_ = Mode::Opacity;
   ImGui::SameLine();
-  if (ImGui::RadioButton("Blink", mode_ == Mode::Blink))
-    mode_ = Mode::Blink;
-  ImGui::SameLine();
   if (ImGui::RadioButton("Base", mode_ == Mode::Base))
     mode_ = Mode::Base;
   ImGui::SameLine();
@@ -501,11 +501,10 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   if (mode_ == Mode::Opacity) {
     ImGui::SetNextItemWidth(150.f);
     ImGui::SliderFloat("##cmpop", &opacity_, 0.f, 1.f, "revision %.2f");
-  } else if (mode_ == Mode::Blink) {
-    ImGui::SetNextItemWidth(150.f);
-    ImGui::SliderFloat("##cmphz", &blinkHz_, 0.25f, 6.f, "%.2f blinks/s");
-    ImGui::SameLine();
-    ImGui::TextDisabled("hold B = base, R = revision");
+  } else if (mode_ == Mode::Base) {
+    ImGui::TextColored(ImVec4(0.35f, 0.55f, 1.f, 1.f), "blue: only in the base (what the revision removed)");
+  } else if (mode_ == Mode::Revision) {
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f), "red: only in the revision (what it added)");
   } else if (mode_ == Mode::Tint) {
     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f), "red: only in the base");
     ImGui::SameLine();
@@ -736,26 +735,17 @@ void PdfCompare::DrawSheet(std::vector<std::string>& log) {
   } else if (raw) {
     dl->AddImage(TexId(cur_.tex[0]), a, b);
   } else {
-    const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || hovered;
-    bool showRev = mode_ == Mode::Revision, showBoth = false;
-    if (mode_ == Mode::Blink) {
-      showRev = std::fmod(ImGui::GetTime() * static_cast<double>(blinkHz_), 1.0) >= 0.5;
-      if (focused && !io.WantTextInput) {
-        if (ImGui::IsKeyDown(ImGuiKey_B))
-          showRev = false;
-        else if (ImGui::IsKeyDown(ImGuiKey_R))
-          showRev = true;
-      }
-    } else if (mode_ == Mode::Opacity) {
-      showBoth = true;
-    }
     if (mode_ == Mode::Tint) {
       dl->AddImage(TexId(cur_.tex[2]), a, b);
-    } else if (showBoth) {
+    } else if (mode_ == Mode::Opacity) {
       dl->AddImage(TexId(cur_.tex[0]), a, b);
       dl->AddImage(TexId(cur_.tex[1]), a, b, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, static_cast<int>(opacity_ * 255.f)));
-    } else {
-      dl->AddImage(TexId(cur_.tex[showRev ? 1 : 0]), a, b);
+    } else if (mode_ == Mode::Base) { // the base, with what only it has in blue
+      dl->AddImage(TexId(cur_.tex[0]), a, b);
+      dl->AddImage(TexId(cur_.tex[3]), a, b);
+    } else { // the revision, with what only it has in red
+      dl->AddImage(TexId(cur_.tex[1]), a, b);
+      dl->AddImage(TexId(cur_.tex[4]), a, b);
     }
   }
   dl->AddRect(a, b, IM_COL32(90, 90, 90, 255));

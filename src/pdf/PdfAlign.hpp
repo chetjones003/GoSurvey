@@ -49,6 +49,10 @@ void TintBgra(Ink k, uint8_t out[4]);
 void ResampleAligned(const pdfview::Bitmap& rev, float revHPt, float revPxPerPt, const Transform& revToBase, int outW, int outH,
                      float basePxPerPt, float baseHPt, pdfview::Bitmap& out);
 
+/// The Base / Revision views (REQ-392 clause 2): an overlay the size of \p sheet that is \p bgr (blue, green, red) where
+/// \p sheet has ink with none on \p other within a pixel, a little thickened so it reads, and transparent elsewhere.
+void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out);
+
 /// Per-pixel Tint of two same-sized bitmaps (REQ-392 clause 2).
 void TintImage(const pdfview::Bitmap& base, const pdfview::Bitmap& rev, pdfview::Bitmap& out);
 
