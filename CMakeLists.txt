@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GoSurvey VERSION 0.6.0 LANGUAGES CXX C RC)
+project(GoSurvey VERSION 0.7.0 LANGUAGES CXX C RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -662,6 +662,7 @@ add_executable(GoSurvey
   src/platform/HttpFetch.cpp
   src/platform/OAuthListener.cpp
   src/platform/CredentialStore.cpp
+  src/platform/StartupFailure.cpp
 
   # Telemetry (REQ-080, ADR-032)
   src/telemetry/TelemetryPing.cpp
