@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace pdfalign {
 
@@ -50,9 +51,19 @@ void TintBgra(Ink k, uint8_t out[4]);
 void ResampleAligned(const pdfview::Bitmap& rev, float revHPt, float revPxPerPt, const Transform& revToBase, int outW, int outH,
                      float basePxPerPt, float baseHPt, pdfview::Bitmap& out);
 
+/// A pixel rectangle, x0 / y0 inclusive, x1 / y1 exclusive.
+struct PixRect {
+  int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+};
+
+/// \p boxes (a sheet's text-run boxes, in its own page points) as pixel rectangles on the base's grid: carried through \p toBase,
+/// then to pixels at \p pxPerPt for a base page \p baseHPt tall, padded a pixel, clipped to w x h.
+std::vector<PixRect> BoxesToPixels(const std::vector<pdfview::ObjBox>& boxes, const Transform& toBase, double baseHPt, double pxPerPt, int w, int h);
+
 /// The Base / Revision views (REQ-392 clause 2): an overlay the size of \p sheet that is \p bgr (blue, green, red) where
-/// \p sheet has ink with nothing darker than a faint grey on \p other within two pixels, and transparent elsewhere. Cleaned up by whole objects: a small mark (a letter, a dash, a dot) is changed when a sixth or more of it is new; small marks within about 2 pt of each other (a word, a dot pattern) form a group, and a group with a changed member is coloured whole; in a big connected mark only the new pixels are coloured and clusters under about 6 square points are dropped. \p pxPerPt is the images' pixels per point.
-void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out, double pxPerPt = 1.0);
+/// \p sheet has ink with nothing darker than a faint grey on \p other within two pixels, and transparent elsewhere. Cleaned up by whole objects: a small mark (a letter, a dash, a dot) is changed when a sixth or more of it is new; small marks within about 2 pt of each other (a word, a dot pattern) form a group, and a group with a changed member is coloured whole; in a big connected mark only the new pixels are coloured and clusters under about 6 square points are dropped. \p pxPerPt is the images' pixels per point. \p units are the sheet's text-run boxes (see BoxesToPixels): inside one, the text is changed or not as a whole - coloured whole when about 6 % or more of its ink is new, not coloured at all otherwise - so a changed number is never half coloured.
+void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out, double pxPerPt = 1.0,
+                const std::vector<PixRect>& units = {});
 
 /// The Tint view from the cleaned marks (see MarkOnlyIn): blue where \p baseOnly marks, red where \p revOnly marks, grey for
 /// the rest of either sheet's ink, white elsewhere. All four bitmaps are the same size.

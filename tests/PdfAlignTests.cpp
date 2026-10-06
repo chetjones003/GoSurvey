@@ -193,6 +193,34 @@ TEST_CASE("a changed word is coloured whole, letter by letter changes do not lea
   CHECK_FALSE(marked(41, 6)); // the far letter is its own word and unchanged
 }
 
+TEST_CASE("a text run is coloured whole or not at all", "[issue732][req392]") {
+  const auto glyph = [](pdfview::Bitmap& b, int x0, int y0) {
+    for (int y = y0; y < y0 + 6; ++y)
+      for (int x = x0; x < x0 + 3; ++x)
+        Black(b, x, y);
+  };
+  // A run of ten glyphs spaced 6 px apart (too far for the grouping), where only the middle glyph differs.
+  pdfview::Bitmap base = White(100, 20), rev = White(100, 20);
+  for (int g = 0; g < 10; ++g) {
+    glyph(base, 5 + g * 6, 5);
+    if (g != 5)
+      glyph(rev, 5 + g * 6, 5);
+  }
+  const uint8_t blue[3] = {235, 120, 40};
+  pdfview::Bitmap out;
+  const auto marked = [&](int x, int y) { return out.bgra[(static_cast<size_t>(y) * 100u + static_cast<size_t>(x)) * 4u + 3u] == 255; };
+  const std::vector<PixRect> run = {{4, 4, 66, 12}}; // the run's box
+  MarkOnlyIn(base, rev, blue, out, 1.0, run);
+  for (int g = 0; g < 10; ++g)
+    CHECK(marked(6 + g * 6, 7)); // every glyph, changed or not
+  // The same run with a one-pixel nub of difference: noise, so no part of it is coloured.
+  pdfview::Bitmap rev2 = base;
+  Black(base, 60, 11);
+  MarkOnlyIn(base, rev2, blue, out, 1.0, run);
+  for (int g = 0; g < 10; ++g)
+    CHECK_FALSE(marked(6 + g * 6, 7));
+}
+
 TEST_CASE("the same sheet, drawn through a fractional alignment, has nothing marked", "[issue732][req392]") {
   pdfview::Bitmap base = White(40, 40);
   for (int i = 5; i < 35; ++i) {

@@ -102,7 +102,30 @@ void ResampleAligned(const pdfview::Bitmap& rev, float revHPt, float revPxPerPt,
   }
 }
 
-void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out, double pxPerPt) {
+std::vector<PixRect> BoxesToPixels(const std::vector<pdfview::ObjBox>& boxes, const Transform& toBase, double baseHPt, double pxPerPt, int w, int h) {
+  std::vector<PixRect> out;
+  for (const pdfview::ObjBox& b : boxes) {
+    double lo[2] = {1e30, 1e30}, hi[2] = {-1e30, -1e30};
+    for (const Pt c : {Pt{b.x0, b.y0}, Pt{b.x1, b.y0}, Pt{b.x0, b.y1}, Pt{b.x1, b.y1}}) {
+      const Pt q = toBase.Apply(c);
+      lo[0] = std::min(lo[0], q.x);
+      hi[0] = std::max(hi[0], q.x);
+      lo[1] = std::min(lo[1], q.y);
+      hi[1] = std::max(hi[1], q.y);
+    }
+    PixRect r;
+    r.x0 = std::max(0, static_cast<int>(std::floor(lo[0] * pxPerPt)) - 1);
+    r.x1 = std::min(w, static_cast<int>(std::ceil(hi[0] * pxPerPt)) + 1);
+    r.y0 = std::max(0, static_cast<int>(std::floor((baseHPt - hi[1]) * pxPerPt)) - 1);
+    r.y1 = std::min(h, static_cast<int>(std::ceil((baseHPt - lo[1]) * pxPerPt)) + 1);
+    if (r.x1 > r.x0 && r.y1 > r.y0)
+      out.push_back(r);
+  }
+  return out;
+}
+
+void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out, double pxPerPt,
+                const std::vector<PixRect>& units) {
   const int w = sheet.w, h = sheet.h;
   out.w = w;
   out.h = h;
@@ -243,6 +266,29 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
     } else if (only[p]) {
       keep[p] = big[p] = 1;
     }
+  }
+  // A text run is changed or not as a whole: inside its box, ink of small marks (the letters) is coloured entirely when about
+  // 6 % or more of the run's ink is new, and not coloured at all (a sliver of one letter's edge is noise) otherwise.
+  for (const PixRect& u : units) {
+    size_t inkN = 0, onlyN = 0;
+    for (int y = u.y0; y < u.y1; ++y)
+      for (int x = u.x0; x < u.x1; ++x) {
+        const size_t p = static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x);
+        inkN += ink[p];
+        onlyN += only[p];
+      }
+    const bool changed = onlyN >= 3 && onlyN * 100 >= inkN * 6;
+    for (int y = u.y0; y < u.y1; ++y)
+      for (int x = u.x0; x < u.x1; ++x) {
+        const size_t p = static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x);
+        if (!ink[p])
+          continue;
+        const bool smallMark = label[p] >= 0 && comps[static_cast<size_t>(label[p])].small;
+        if (changed)
+          keep[p] = (smallMark || only[p]) ? 1 : keep[p];
+        else if (smallMark)
+          keep[p] = 0;
+      }
   }
   std::vector<uint8_t> seen(n, 0);
   std::vector<size_t> cluster;

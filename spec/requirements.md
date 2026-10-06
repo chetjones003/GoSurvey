@@ -11703,7 +11703,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      Revision views); **Opacity** (the revision
      over the base with a slider); **Base** and **Revision** (each sheet alone, with only what the other
      sheet lacks marked: on Base, ink only the base has is drawn **blue**; on Revision, ink only the revision
-     has is drawn **red**; a mark with even a faint one of the other sheet's within about half a point is the same mark; changes are judged by whole objects: a letter, dash or dot is changed when a sixth or more of it is new, nearby small marks such as the letters of a word or a dot pattern are one group coloured whole when any member changed, and in a big connected mark only the new parts are coloured, tiny leftover clusters being dropped). All use the same
+     has is drawn **red**; a mark with even a faint one of the other sheet's within about half a point is the same mark; changes are judged by whole objects: a letter, dash or dot is changed when a sixth or more of it is new, nearby small marks such as the letters of a word or a dot pattern are one group coloured whole when any member changed, and in a big connected mark only the new parts are coloured, tiny leftover clusters being dropped; inside the box of a text run as the PDF stores it, a changed run is coloured entirely and an unchanged one not at all, so a changed number is never half coloured). All use the same
      zoom and pan. (There is no Blink mode: removed by D-2026-10-06-l.)
   3. **Alignment, automatic first.** On opening, the two sheets are lined up **automatically** (the
      transform found by comparing the sheets' line work: shift, uniform scale and a small rotation of up
@@ -11731,7 +11731,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Manual: Tint, Opacity, Base (removed door in blue) and Revision (added wall in red) all show the changes on real revisions.
 - Owner-layer: Domain/IO (`src/pdf/PdfAlign`, pure), Renderer (page textures), UI, Commands
 - Status: accepted
-- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f). 2026-10-06 — clause 2: Blink removed; Base and Revision views mark what only that sheet has, blue and red (D-2026-10-06-l). 2026-10-06 — Tint colours swapped to match (blue base-only, red revision-only) and changes judged by whole objects (D-2026-10-06-m).
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f). 2026-10-06 — clause 2: Blink removed; Base and Revision views mark what only that sheet has, blue and red (D-2026-10-06-l). 2026-10-06 — Tint colours swapped to match (blue base-only, red revision-only) and changes judged by whole objects (D-2026-10-06-m). 2026-10-06 — text-run boxes decide whole-word colouring (D-2026-10-06-n).
 
 ### REQ-393 — Find the changes between two revisions automatically (GitHub issue #732, phase 7)
 
@@ -11743,8 +11743,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Depends on: REQ-392.
 - Statement:
   1. **Detect.** A **Find changes** command compares the aligned pair **by what is drawn** (the pages are
-     rendered at a working resolution and their line work compared; it does not read the PDF's text or
-     object structure). A drawn mark in the revision with no mark near it in the base is **Added**; the
+     rendered at a working resolution and their line work compared; it does not read what the PDF's text says or
+     compare its object structure; the boxes of its text runs are used only to colour a changed word whole in the
+     Base / Revision / Tint views, D-2026-10-06-n). A drawn mark in the revision with no mark near it in the base is **Added**; the
      reverse is **Removed**; marks present in both but differing are **Changed**. A **tolerance** (a
      setting, default about 1 mm at print size) ignores anti-aliasing and tiny shifts so identical content
      shows **no changes**.

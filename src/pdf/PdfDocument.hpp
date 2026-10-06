@@ -33,6 +33,11 @@ struct Bitmap {
 /// costs a few milliseconds, where rendering one from the page costs as much as the sharp render did).
 Bitmap Downscale(const Bitmap& src, int maxSide);
 
+/// A rectangle in a page's viewer coordinates (points from the lower-left of the page as displayed).
+struct ObjBox {
+  float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
+};
+
 class PdfDocument {
 public:
   struct OpenResult {
@@ -67,6 +72,11 @@ public:
   /// distinct points are kept. Returns false on any failure or when cancelled.
   bool SnapPoints(int page, std::vector<SnapPoint>& out, const std::function<bool()>& cancel,
                   size_t maxPoints = 2000000);
+
+  /// REQ-393: the box of every text object on \p page (a run of text as the drawing program stored it: a word, a
+  /// callout line), in the viewer's page coordinates like SnapPoints. Used only to colour a changed word whole; the
+  /// comparison itself is of the drawn picture. \p cancel is polled; false on failure or cancel.
+  bool TextBoxes(int page, std::vector<ObjBox>& out, const std::function<bool()>& cancel);
 
   static constexpr int kDisplayFlags = 0x01 /*FPDF_ANNOT*/ | 0x02 /*FPDF_LCD_TEXT*/;
 

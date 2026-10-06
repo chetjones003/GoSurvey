@@ -404,8 +404,14 @@ void PdfCompare::PumpJob() {
     uint8_t blue[4], red[4];
     pdfalign::TintBgra(pdfalign::Ink::BaseOnly, blue);
     pdfalign::TintBgra(pdfalign::Ink::RevOnly, red);
-    pdfalign::MarkOnlyIn(out.img[0], out.img[1], blue, out.img[3], bppp);
-    pdfalign::MarkOnlyIn(out.img[1], out.img[0], red, out.img[4], bppp);
+    // The text runs of each sheet decide what is coloured whole (a changed number is not left half coloured).
+    std::vector<ObjBox> baseText, revText;
+    b->TextBoxes(want.basePage, baseText, isCancelled);
+    r->TextBoxes(want.revPage, revText, isCancelled);
+    const std::vector<pdfalign::PixRect> baseUnits = pdfalign::BoxesToPixels(baseText, pdfalign::Transform{}, bs.hPt, bppp, bw, bh);
+    const std::vector<pdfalign::PixRect> revUnits = pdfalign::BoxesToPixels(revText, xf, bs.hPt, bppp, bw, bh);
+    pdfalign::MarkOnlyIn(out.img[0], out.img[1], blue, out.img[3], bppp, baseUnits);
+    pdfalign::MarkOnlyIn(out.img[1], out.img[0], red, out.img[4], bppp, revUnits);
     pdfalign::TintFromMarks(out.img[0], out.img[1], out.img[3], out.img[4], out.img[2]);
     out.n = 5;
     out.wPt = bs.wPt;
