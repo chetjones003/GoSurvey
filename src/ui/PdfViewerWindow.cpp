@@ -5,6 +5,8 @@
 #include "FontRegistry.hpp"
 #include "PdfAnnotate.hpp"
 #include "PdfCompare.hpp"
+#include "PdfIcons.hpp"
+#include "PdfPanelStyle.hpp"
 #include "PdfSnap.hpp"
 #include "PdfSplit.hpp"
 #include "PdfViewerCore.hpp"
@@ -1022,15 +1024,15 @@ void DrawToolbar(Viewer& v) {
   ImGui::SameLine();
   ImGui::Text("/ %d", n);
   ImGui::SameLine();
-  if (ImGui::Button("<"))
+  if (IconButton(Icon::Prev, "", "Previous page"))
     GoToPage(v, v.curPage - 1);
   ImGui::SameLine();
-  if (ImGui::Button(">"))
+  if (IconButton(Icon::Next, "", "Next page"))
     GoToPage(v, v.curPage + 1);
   ImGui::SameLine();
   ImGui::TextUnformatted("|");
   ImGui::SameLine();
-  if (ImGui::Button("-"))
+  if (IconButton(Icon::ZoomOut, "", "Zoom out"))
     ZoomAboutCentre(v, v.pxPerPt / 1.25f);
   ImGui::SameLine();
   ImGui::SetNextItemWidth(72.f);
@@ -1043,13 +1045,13 @@ void DrawToolbar(Viewer& v) {
   ImGui::SameLine();
   ImGui::TextUnformatted("%");
   ImGui::SameLine();
-  if (ImGui::Button("+"))
+  if (IconButton(Icon::ZoomIn, "", "Zoom in"))
     ZoomAboutCentre(v, v.pxPerPt * 1.25f);
   ImGui::SameLine();
-  if (ImGui::Button("Fit width"))
+  if (IconButton(Icon::FitWidth, "Fit width"))
     v.fitWidthPending = true;
   ImGui::SameLine();
-  if (ImGui::Button("Fit page")) {
+  if (IconButton(Icon::FitPage, "Fit page")) {
     const PageSize& s = v.layout.size[static_cast<size_t>(v.curPage)];
     SetZoom(v, (viewH - 2 * kMarginPx) / s.hPt);
     GoToPage(v, v.curPage);
@@ -1060,10 +1062,10 @@ void DrawToolbar(Viewer& v) {
   ImGui::SameLine();
   ImGui::Checkbox("Thumbnails", &v.showThumbs);
   ImGui::SameLine();
-  if (ImGui::Button("Split..."))
+  if (IconButton(Icon::Split, "Split...", "Save chosen pages as a new PDF"))
     v.splitOpenRequest = true;
   ImGui::SameLine();
-  if (ImGui::Button("Compare..."))
+  if (IconButton(Icon::Compare, "Compare...", "Compare with another revision of this sheet"))
     v.comparePickRequest = true;
   ImGui::PopStyleColor(5);
   ImGui::PopStyleVar(4);
@@ -1152,6 +1154,7 @@ void DrawSplitDialog(Viewer& v, std::vector<std::string>& log) {
 }
 
 void DrawThumbnails(Viewer& v) {
+  PushPanelStyle();
   ImGui::BeginChild("##thumbs", ImVec2(v.thumbW, 0.f), true, ImGuiWindowFlags_NoMove);
   const int n = v.layout.PageCount();
   const float boxW = v.thumbW - 30.f;               // widest a thumbnail may be
@@ -1186,6 +1189,7 @@ void DrawThumbnails(Viewer& v) {
     }
   }
   ImGui::EndChild();
+  PopPanelStyle();
 }
 
 const PageScale* EffectiveScale(const Viewer& v, int page);
@@ -2019,7 +2023,11 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.48f, 0.80f, 1.f));
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.26f, 0.54f, 0.86f, 1.f));
     }
-    if (ImGui::Button(label)) {
+    const Icon ico = t == Tool::Select ? Icon::Select : t == Tool::Text ? Icon::Text : t == Tool::Line ? Icon::Line : t == Tool::Rect ? Icon::Rect
+                     : t == Tool::Ellipse ? Icon::Ellipse : t == Tool::Leader ? Icon::Leader : t == Tool::Calibrate ? Icon::Calibrate
+                     : t == Tool::Length ? Icon::Length : t == Tool::PolyLength ? Icon::PolyLength : t == Tool::Area ? Icon::Area
+                     : t == Tool::Angle ? Icon::Angle : Icon::Check;
+    if (IconButton(ico, label)) {
       u.tool = t;
       u.measurePts.clear();
       u.status.clear();
@@ -2092,34 +2100,34 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   ImGui::TextUnformatted("|");
   ImGui::SameLine();
   ImGui::BeginDisabled(!u.session.CanUndo() || saving);
-  if (ImGui::Button("Undo")) {
+  if (IconButton(Icon::Undo, "Undo")) {
     u.session.Undo();
     u.selected = -1;
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::BeginDisabled(!u.session.CanRedo() || saving);
-  if (ImGui::Button("Redo")) {
+  if (IconButton(Icon::Redo, "Redo")) {
     u.session.Redo();
     u.selected = -1;
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::BeginDisabled(u.selected < 0 || saving);
-  if (ImGui::Button("Delete")) {
+  if (IconButton(Icon::Delete, "Delete")) {
     u.session.Remove(u.selected);
     u.selected = -1;
   }
   ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::BeginDisabled(!u.session.Dirty() || saving);
-  if (ImGui::Button("Save As..."))
+  if (IconButton(Icon::SaveAs, "Save As...", "Save a copy of this PDF with your markups"))
     StartSave(v, log);
   ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::TextUnformatted("|");
   ImGui::SameLine();
-  if (ImGui::Button("Set scale..."))
+  if (IconButton(Icon::Scale, "Set scale...", "Set the drawing scale of this page"))
     u.scaleDialog = true;
   ImGui::SameLine();
   {
@@ -2189,7 +2197,7 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.28f, 1.f));
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.62f, 0.34f, 1.f));
     }
-    if (ImGui::Button(u.snapOn ? "Snap: on" : "Snap: off"))
+    if (IconButton(Icon::Snap, u.snapOn ? "Snap: on" : "Snap: off"))
       u.snapOn = !u.snapOn;
     if (u.snapOn)
       ImGui::PopStyleColor(2);
@@ -3314,8 +3322,13 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
           else if (v.compare->BenchFinished())
             v.bench.finished = true;
         } else {
+        PushPanelStyle(); // the tool bars sit in a raised panel, like the comparison bar
+        ImGui::BeginChild("##pdftools", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove);
         DrawToolbar(v);
         DrawAnnotBar(v, log);
+        ImGui::EndChild();
+        PopPanelStyle();
         DrawSplitDialog(v, log);
         if (v.showThumbs) {
           DrawThumbnails(v);

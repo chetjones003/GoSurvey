@@ -42,10 +42,11 @@ struct Result {
 /// it is Removed; added and removed differences within the merge distance of each other make one Changed region.
 /// \p cancel is polled and \p progress (0..1) reported between stages; both may be empty.
 Result FindChanges(const pdfview::Bitmap& base, const pdfview::Bitmap& rev, double pxPerPt, double baseHPt, const Settings& s,
+                   const std::vector<pdfalign::PixRect>& baseUnits = {}, const std::vector<pdfalign::PixRect>& revUnits = {},
                    const std::function<bool()>& cancel = {}, const std::function<void(float)>& progress = {});
 
 /// REQ-393 clause 4: one rectangle annotation per region, on revision page \p revPage, in the revision's own
-/// points (the regions are carried through \p baseToRev). Colour by kind, contents "Added, 12.3 x 4.5 pt".
+/// points (the regions are carried through \p baseToRev). Colour by kind, contents "Added: new in the revision".
 std::vector<pdfview::Annot> RegionsToMarkups(const std::vector<Region>& regions, int revPage, const pdfalign::Transform& baseToRev);
 
 } // namespace pdfdiff

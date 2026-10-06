@@ -110,10 +110,133 @@ TEST_CASE("Tint classes: base only, revision only, both, neither", "[issue732][r
   TintBgra(Ink::RevOnly, b);
   TintBgra(Ink::Both, c);
   TintBgra(Ink::None, d);
-  CHECK(a[2] > a[0]); // base is red
-  CHECK(b[0] > b[2]); // revision is blue
+  CHECK(a[0] > a[2]); // base is blue
+  CHECK(b[2] > b[0]); // revision is red
   CHECK(c[0] == c[2]); // both is grey
   CHECK(d[0] == 255);
+}
+
+TEST_CASE("the Base and Revision views mark only the ink the other sheet lacks", "[issue732][req392]") {
+  pdfview::Bitmap base = White(12, 12), rev = White(12, 12);
+  Black(base, 2, 2); // in both
+  Black(rev, 2, 2);
+  Black(base, 8, 8); // only in the base
+  Black(rev, 3, 8);  // only in the revision (2+ px from anything in the base)
+  Black(rev, 3, 3);  // within a pixel of base ink: the same mark, not a change
+  const uint8_t blue[3] = {235, 120, 40};
+  pdfview::Bitmap out;
+  MarkOnlyIn(base, rev, blue, out);
+  const auto alpha = [&](int x, int y) { return out.bgra[(static_cast<size_t>(y) * 12u + static_cast<size_t>(x)) * 4u + 3u]; };
+  CHECK(alpha(8, 8) == 255);
+  CHECK(out.bgra[(8u * 12u + 8u) * 4u] == 235); // blue channel of the mark
+  CHECK(alpha(2, 2) == 0);
+  CHECK(alpha(0, 11) == 0);
+  MarkOnlyIn(rev, base, blue, out);
+  CHECK(alpha(3, 8) == 255);
+  CHECK(alpha(3, 3) == 0);
+  CHECK(alpha(2, 2) == 0);
+}
+
+TEST_CASE("a dash a little off is left plain; a dash that is really new is coloured whole; a speck is dropped", "[issue732][req392]") {
+  const auto dash = [](pdfview::Bitmap& b, int x0, int x1, int y) {
+    for (int x = x0; x <= x1; ++x)
+      Black(b, x, y);
+  };
+  const uint8_t blue[3] = {235, 120, 40};
+  pdfview::Bitmap out;
+  const auto marked = [&](int x, int y) { return out.bgra[(static_cast<size_t>(y) * 60u + static_cast<size_t>(x)) * 4u + 3u] == 255; };
+  {
+    pdfview::Bitmap base = White(60, 20), rev = White(60, 20);
+    dash(base, 10, 29, 5); // 20 px long
+    dash(rev, 13, 32, 5);  // the same dash 3 px off: only its end sticks out past the other sheet's tolerance
+    MarkOnlyIn(base, rev, blue, out);
+    for (int x = 0; x < 60; ++x)
+      CHECK_FALSE(marked(x, 5));
+  }
+  {
+    pdfview::Bitmap base = White(60, 20), rev = White(60, 20);
+    dash(base, 10, 29, 5);
+    dash(rev, 40, 59, 5); // far away: the base dash is gone from the revision
+    MarkOnlyIn(base, rev, blue, out);
+    for (int x = 10; x <= 29; ++x)
+      CHECK(marked(x, 5)); // the whole dash, not a piece of it
+  }
+  {
+    // A connected line with a one-pixel nub that the other sheet lacks: the nub is a sliver of a mark, not a change.
+    pdfview::Bitmap base = White(60, 20), rev = White(60, 20);
+    dash(base, 0, 59, 10);
+    dash(rev, 0, 59, 10);
+    Black(base, 30, 9);
+    MarkOnlyIn(base, rev, blue, out, 1.0);
+    CHECK_FALSE(marked(30, 9));
+  }
+}
+
+TEST_CASE("a changed word is coloured whole, letter by letter changes do not leave gaps", "[issue732][req392]") {
+  const auto block = [](pdfview::Bitmap& b, int x0, int y0) {
+    for (int y = y0; y < y0 + 4; ++y)
+      for (int x = x0; x < x0 + 4; ++x)
+        Black(b, x, y);
+  };
+  pdfview::Bitmap base = White(60, 20), rev = White(60, 20);
+  block(base, 5, 5);  // letter A: only in the base
+  block(base, 10, 5); // letter B: in both, one pixel from A
+  block(rev, 10, 5);
+  block(base, 40, 5); // a separate letter far away, in both
+  block(rev, 40, 5);
+  const uint8_t blue[3] = {235, 120, 40};
+  pdfview::Bitmap out;
+  MarkOnlyIn(base, rev, blue, out, 1.0);
+  const auto marked = [&](int x, int y) { return out.bgra[(static_cast<size_t>(y) * 60u + static_cast<size_t>(x)) * 4u + 3u] == 255; };
+  CHECK(marked(6, 6));   // A, new
+  CHECK(marked(11, 6));  // B, unchanged but part of the same word, so coloured with it
+  CHECK_FALSE(marked(41, 6)); // the far letter is its own word and unchanged
+}
+
+TEST_CASE("a text run is coloured whole or not at all", "[issue732][req392]") {
+  const auto glyph = [](pdfview::Bitmap& b, int x0, int y0) {
+    for (int y = y0; y < y0 + 6; ++y)
+      for (int x = x0; x < x0 + 3; ++x)
+        Black(b, x, y);
+  };
+  // A run of ten glyphs spaced 6 px apart (too far for the grouping), where only the middle glyph differs.
+  pdfview::Bitmap base = White(100, 20), rev = White(100, 20);
+  for (int g = 0; g < 10; ++g) {
+    glyph(base, 5 + g * 6, 5);
+    if (g != 5)
+      glyph(rev, 5 + g * 6, 5);
+  }
+  const uint8_t blue[3] = {235, 120, 40};
+  pdfview::Bitmap out;
+  const auto marked = [&](int x, int y) { return out.bgra[(static_cast<size_t>(y) * 100u + static_cast<size_t>(x)) * 4u + 3u] == 255; };
+  const std::vector<PixRect> run = {{4, 4, 66, 12}}; // the run's box
+  MarkOnlyIn(base, rev, blue, out, 1.0, run);
+  for (int g = 0; g < 10; ++g)
+    CHECK(marked(6 + g * 6, 7)); // every glyph, changed or not
+  // The same run with a one-pixel nub of difference: noise, so no part of it is coloured.
+  pdfview::Bitmap rev2 = base;
+  Black(base, 60, 11);
+  MarkOnlyIn(base, rev2, blue, out, 1.0, run);
+  for (int g = 0; g < 10; ++g)
+    CHECK_FALSE(marked(6 + g * 6, 7));
+}
+
+TEST_CASE("the same sheet, drawn through a fractional alignment, has nothing marked", "[issue732][req392]") {
+  pdfview::Bitmap base = White(40, 40);
+  for (int i = 5; i < 35; ++i) {
+    Black(base, i, 20); // a thin line, one pixel thick
+    Black(base, 12, i);
+  }
+  pdfview::Bitmap rev;
+  ResampleAligned(base, 40.f, 1.f, FromOnePoint({0, 0}, {0.4, -0.3}), 40, 40, 1.f, 40.f, rev); // blurred by the resampling
+  const uint8_t blue[3] = {235, 120, 40};
+  pdfview::Bitmap out;
+  MarkOnlyIn(base, rev, blue, out);
+  for (size_t i = 3; i < out.bgra.size(); i += 4)
+    CHECK(out.bgra[i] == 0);
+  MarkOnlyIn(rev, base, blue, out);
+  for (size_t i = 3; i < out.bgra.size(); i += 4)
+    CHECK(out.bgra[i] == 0);
 }
 
 TEST_CASE("a shifted revision is drawn where the transform says", "[issue732][req392]") {

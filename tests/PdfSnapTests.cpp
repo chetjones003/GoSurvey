@@ -79,6 +79,20 @@ std::vector<SnapPoint> Snap(const std::filesystem::path& p, bool* ok = nullptr) 
 
 } // namespace
 
+TEST_CASE("text boxes: the box of a text object is read in the viewer's page coordinates", "[issue732][req393]") {
+  // MakeSyntheticPdf puts "Page 1" at (40, h - 40) in 18 pt Helvetica.
+  const auto path = WriteBytes("gosurvey_textbox.pdf", MakeSyntheticPdf(1, 5, 0));
+  auto r = PdfDocument::Open(path);
+  REQUIRE(r.doc != nullptr);
+  std::vector<ObjBox> boxes;
+  REQUIRE(r.doc->TextBoxes(0, boxes, [] { return false; }));
+  REQUIRE(boxes.size() == 1);
+  CHECK(std::fabs(boxes[0].x0 - 40.f) < 1.5f);
+  CHECK(boxes[0].x1 - boxes[0].x0 > 30.f);
+  CHECK(boxes[0].y0 > 792.f - 60.f);
+  CHECK(boxes[0].y1 < 792.f - 20.f);
+}
+
 TEST_CASE("SnapIndex finds the nearest point within the radius", "[pdfsnap][req391][issue732]") {
   SnapIndex idx;
   idx.Build({{10.f, 10.f, 1.f}, {50.f, 50.f, 1.f}, {52.f, 50.f, 1.f}, {-30.f, -40.f, 1.f}, {1000.f, 1000.f, 1.f}});

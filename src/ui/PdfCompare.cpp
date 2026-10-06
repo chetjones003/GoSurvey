@@ -1,5 +1,7 @@
 #include "PdfCompare.hpp"
 
+#include "PdfIcons.hpp"
+#include "PdfPanelStyle.hpp"
 #include "WinFileDialogs.hpp"
 
 #include <GL/glew.h>
@@ -16,7 +18,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 double MsSince(Clock::time_point t) { return std::chrono::duration<double, std::milli>(Clock::now() - t).count(); }
 
-constexpr int kMaxSide = 3000;                        // the longest side of a comparison image, in pixels
+constexpr int kMaxSide = 4096;                        // the longest side of a comparison image, in pixels
 constexpr size_t kUploadBytesPerFrame = 3u * 1024 * 1024; // ADR-067 (c): an image goes up a slice per frame, never in one long frame
 constexpr float kMarginPx = 16.f;
 constexpr int kFlagsAnnot = 0x01; // FPDF_ANNOT: the page as drawn, without LCD colour fringes (they would read as ink)
@@ -38,7 +40,7 @@ bool PdfCompare::Set::Complete() const {
 }
 
 void PdfCompare::Retire(Set& s) {
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < 5; ++i)
     if (s.tex[i] != 0)
       g_dead.push_back(s.tex[i]);
   s = Set{};
@@ -179,7 +181,11 @@ void PdfCompare::StartTask(Task t) {
       pdfalign::ResampleAligned(rBmp, rs.hPt, static_cast<float>(rppp), xf, bw, bh, static_cast<float>(bppp), bs.hPt, aligned);
       std::vector<uint8_t>().swap(rBmp.bgra);
       prog->store(0.5f);
-      out.found = pdfdiff::FindChanges(bBmp, aligned, bppp, bs.hPt, settings, isCancelled,
+      std::vector<ObjBox> baseText, revText;
+      b->TextBoxes(bp, baseText, isCancelled);
+      r->TextBoxes(rp, revText, isCancelled);
+      out.found = pdfdiff::FindChanges(bBmp, aligned, bppp, bs.hPt, settings, pdfalign::BoxesToPixels(baseText, pdfalign::Transform{}, bs.hPt, bppp, bw, bh),
+                                       pdfalign::BoxesToPixels(revText, xf, bs.hPt, bppp, bw, bh), isCancelled,
                                        [prog](float f) { prog->store(0.5f + 0.5f * f); });
       out.cancelled = out.found.cancelled;
       out.ok = !out.cancelled;
@@ -401,8 +407,19 @@ void PdfCompare::PumpJob() {
     if (isCancelled())
       return out;
     pdfalign::ResampleAligned(revRaw, rs.hPt, rppp, xf, bw, bh, bppp, bs.hPt, out.img[1]);
-    pdfalign::TintImage(out.img[0], out.img[1], out.img[2]);
-    out.n = 3;
+    uint8_t blue[4], red[4];
+    pdfalign::TintBgra(pdfalign::Ink::BaseOnly, blue);
+    pdfalign::TintBgra(pdfalign::Ink::RevOnly, red);
+    // The text runs of each sheet decide what is coloured whole (a changed number is not left half coloured).
+    std::vector<ObjBox> baseText, revText;
+    b->TextBoxes(want.basePage, baseText, isCancelled);
+    r->TextBoxes(want.revPage, revText, isCancelled);
+    const std::vector<pdfalign::PixRect> baseUnits = pdfalign::BoxesToPixels(baseText, pdfalign::Transform{}, bs.hPt, bppp, bw, bh);
+    const std::vector<pdfalign::PixRect> revUnits = pdfalign::BoxesToPixels(revText, xf, bs.hPt, bppp, bw, bh);
+    pdfalign::MarkOnlyIn(out.img[0], out.img[1], blue, out.img[3], bppp, baseUnits);
+    pdfalign::MarkOnlyIn(out.img[1], out.img[0], red, out.img[4], bppp, revUnits);
+    pdfalign::TintFromMarks(out.img[0], out.img[1], out.img[3], out.img[4], out.img[2]);
+    out.n = 5;
     out.wPt = bs.wPt;
     out.hPt = bs.hPt;
     out.ok = true;
@@ -447,7 +464,7 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   ImGui::AlignTextToFramePadding();
   ImGui::Text("Comparing  %s  with  %s", baseTitle_.c_str(), revTitle_.c_str());
   ImGui::SameLine();
-  if (ImGui::Button("Close comparison"))
+  if (IconButton(Icon::Close, "Close comparison"))
     keepOpen = false;
 
   if (rev_ == nullptr)
@@ -481,16 +498,13 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   ImGui::Text("of %d", rev_->PageCount());
 
   ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("Show:");
+  ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.f, 1.f), "Show");
   ImGui::SameLine();
   if (ImGui::RadioButton("Tint", mode_ == Mode::Tint))
     mode_ = Mode::Tint;
   ImGui::SameLine();
   if (ImGui::RadioButton("Opacity", mode_ == Mode::Opacity))
     mode_ = Mode::Opacity;
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Blink", mode_ == Mode::Blink))
-    mode_ = Mode::Blink;
   ImGui::SameLine();
   if (ImGui::RadioButton("Base", mode_ == Mode::Base))
     mode_ = Mode::Base;
@@ -501,15 +515,14 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   if (mode_ == Mode::Opacity) {
     ImGui::SetNextItemWidth(150.f);
     ImGui::SliderFloat("##cmpop", &opacity_, 0.f, 1.f, "revision %.2f");
-  } else if (mode_ == Mode::Blink) {
-    ImGui::SetNextItemWidth(150.f);
-    ImGui::SliderFloat("##cmphz", &blinkHz_, 0.25f, 6.f, "%.2f blinks/s");
-    ImGui::SameLine();
-    ImGui::TextDisabled("hold B = base, R = revision");
+  } else if (mode_ == Mode::Base) {
+    ImGui::TextColored(ImVec4(0.35f, 0.55f, 1.f, 1.f), "blue: only in the base (what the revision removed)");
+  } else if (mode_ == Mode::Revision) {
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f), "red: only in the revision (what it added)");
   } else if (mode_ == Mode::Tint) {
-    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f), "red: only in the base");
+    ImGui::TextColored(ImVec4(0.35f, 0.55f, 1.f, 1.f), "blue: only in the base");
     ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.35f, 0.55f, 1.f, 1.f), "blue: only in the revision");
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f), "red: only in the revision");
     ImGui::SameLine();
     ImGui::TextDisabled("grey: in both");
   }
@@ -517,15 +530,15 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   DrawChangesBar();
 
   ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("Line up:");
+  ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.f, 1.f), "Line up");
   ImGui::SameLine();
-  if (ImGui::Button("One point"))
+  if (IconButton(Icon::OnePoint, "One point", "Line the sheets up with one matching point (shift only)"))
     BeginPick(Pick::OneBase);
   ImGui::SameLine();
-  if (ImGui::Button("Two points"))
+  if (IconButton(Icon::TwoPoints, "Two points", "Line the sheets up with two matching points (shift, scale and rotation)"))
     BeginPick(Pick::TwoBase1);
   ImGui::SameLine();
-  if (ImGui::Button("Reset")) {
+  if (IconButton(Icon::Reset, "Reset", "Go back to the automatic alignment")) {
     xf_ = autoXf_;
     alignNote_ = autoMatched_ ? "Back to the automatic alignment." : "Not adjusted: the two pages are laid on each other at their lower-left corners.";
     pick_ = Pick::None;
@@ -534,18 +547,18 @@ void PdfCompare::DrawBar(bool& keepOpen) {
     ClearChanges();
   }
   ImGui::SameLine();
-  if (pick_ != Pick::None && ImGui::Button("Cancel picking"))
+  if (pick_ != Pick::None && IconButton(Icon::Close, "Cancel picking"))
     BeginPick(Pick::None);
   ImGui::SameLine();
   ImGui::TextUnformatted("|");
   ImGui::SameLine();
-  if (ImGui::Button("-"))
+  if (IconButton(Icon::ZoomOut, "", "Zoom out"))
     pxPerPt_ = std::clamp(pxPerPt_ / 1.25f, 0.05f, 16.f);
   ImGui::SameLine();
-  if (ImGui::Button("+"))
+  if (IconButton(Icon::ZoomIn, "", "Zoom in"))
     pxPerPt_ = std::clamp(pxPerPt_ * 1.25f, 0.05f, 16.f);
   ImGui::SameLine();
-  if (ImGui::Button("Fit page"))
+  if (IconButton(Icon::FitPage, "Fit page"))
     fitPending_ = true;
 
   const char* prompt = nullptr;
@@ -571,28 +584,42 @@ void PdfCompare::DrawBar(bool& keepOpen) {
 void PdfCompare::DrawChangesBar() {
   const ImGuiIO& io = ImGui::GetIO();
   ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted("Changes:");
+  ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.f, 1.f), "Changes");
   ImGui::SameLine();
   ImGui::BeginDisabled(anaRunning_);
-  if (ImGui::Button("Align automatically"))
+  if (IconButton(Icon::Align, "Align automatically", "Line the revision up with the base automatically"))
     alignWanted_ = true;
   ImGui::SameLine();
-  if (ImGui::Button("Find changes"))
+  if (IconButton(Icon::Find, "Find changes", "List and box every area where the two sheets differ"))
     StartTask(Task::Find);
   ImGui::EndDisabled();
   if (anaRunning_) {
     ImGui::SameLine();
     ImGui::ProgressBar(anaProgress_.load(), ImVec2(130.f, 0.f), anaTask_ == Task::Align ? "aligning" : "comparing");
     ImGui::SameLine();
-    if (ImGui::Button("Cancel"))
+    if (IconButton(Icon::Close, "Cancel"))
       anaCancel_.store(true);
   }
   ImGui::SameLine();
-  ImGui::SetNextItemWidth(70.f);
-  ImGui::InputDouble("##tol", &diffSettings_.toleranceMm, 0.0, 0.0, "tol %.1f mm");
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Tolerance");
   ImGui::SameLine();
   ImGui::SetNextItemWidth(70.f);
-  ImGui::InputDouble("##minsz", &diffSettings_.minSizeMm, 0.0, 0.0, "min %.1f mm");
+  ImGui::InputDouble("##tol", &diffSettings_.toleranceMm, 0.0, 0.0, "%.1f");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Tolerance: marks that differ by less than this (in millimetres on paper) are treated as the same.");
+  ImGui::SameLine();
+  ImGui::TextUnformatted("mm");
+  ImGui::SameLine();
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Smallest");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(70.f);
+  ImGui::InputDouble("##minsz", &diffSettings_.minSizeMm, 0.0, 0.0, "%.1f");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Smallest area to report: differences smaller than this (in millimetres on paper) are ignored as specks.");
+  ImGui::SameLine();
+  ImGui::TextUnformatted("mm");
   diffSettings_.toleranceMm = std::clamp(diffSettings_.toleranceMm, 0.2, 10.0);
   diffSettings_.minSizeMm = std::clamp(diffSettings_.minSizeMm, 0.0, 50.0);
   if (haveChanges_) {
@@ -602,9 +629,9 @@ void PdfCompare::DrawChangesBar() {
     const int n = static_cast<int>(regions_.size());
     const bool step = !regions_.empty();
     ImGui::BeginDisabled(!step);
-    bool prev = ImGui::Button("Previous"), next = false;
+    bool prev = IconButton(Icon::Prev, "Previous"), next = false;
     ImGui::SameLine();
-    next = ImGui::Button("Next");
+    next = IconButton(Icon::Next, "Next");
     ImGui::EndDisabled();
     if (step && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.WantTextInput) {
       next = next || ImGui::IsKeyPressed(ImGuiKey_N);
@@ -616,29 +643,63 @@ void PdfCompare::DrawChangesBar() {
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!step || saving_.valid());
-    if (ImGui::Button("Write changes as markups..."))
+    if (IconButton(Icon::Markup, "Write changes as markups..."))
       SaveMarkups();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip("Save a copy of the revision PDF with a box drawn around each area that differs.\nThe original files are not changed.");
     ImGui::EndDisabled();
     ImGui::SameLine();
-    ImGui::Text("%d change region%s  (N / P = next / previous)", n, n == 1 ? "" : "s");
+    if (n == 0)
+      ImGui::TextUnformatted("No differences found.");
+    else
+      ImGui::Text("%d area%s differ.  N / P = next / previous", n, n == 1 ? "" : "s");
   }
   if (!savedNote_.empty())
     ImGui::TextDisabled("%s", savedNote_.c_str());
   if (lowConfidence_)
     ImGui::TextColored(ImVec4(1.f, 0.62f, 0.2f, 1.f), "Check alignment: the sheets do not match closely enough to trust the changes found. Line them up by hand first.");
   if (haveChanges_)
-    ImGui::TextDisabled("This lists what looks different on the page, not what it means. The result depends on the alignment; a different scale between the "
-                        "revisions, or a scanned (image-only) sheet, can give many false regions.");
+  {
+    ImGui::PushTextWrapPos(0.f);
+    ImGui::TextDisabled("The boxes mark places where the two drawings look different; they do not say what the change means. "
+                        "Results depend on how well the sheets line up, and a different scale or a scanned sheet can show false areas.");
+    ImGui::PopTextWrapPos();
+  }
 }
 
 void PdfCompare::DrawChangesList() {
-  ImGui::BeginChild("##cmpchanges", ImVec2(270.f, 0.f), true);
-  ImGui::TextUnformatted("Change regions");
+  // NoMove: a click or drag on the list must not carry the whole window along.
+  PushPanelStyle();
+  ImGui::BeginChild("##cmpchanges", ImVec2(listW_, 0.f), true, ImGuiWindowFlags_NoMove);
+  ImGui::Text("Areas that differ (%d)", static_cast<int>(regions_.size()));
+  ImGui::SameLine(ImGui::GetContentRegionAvail().x - 40.f);
+  const bool closeList = ImGui::SmallButton("Close");
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Close this list and the highlight boxes. Press Find changes to run it again.");
+  ImGui::PushTextWrapPos(0.f);
+  ImGui::TextDisabled("Click a row to jump to it on the sheet.");
+  ImGui::TextColored(ImVec4(0.3f, 0.85f, 0.45f, 1.f), "Green: new in the revision");
+  ImGui::TextColored(ImVec4(0.95f, 0.4f, 0.4f, 1.f), "Red: removed from the revision");
+  ImGui::TextColored(ImVec4(0.98f, 0.7f, 0.2f, 1.f), "Amber: changed or moved");
+  ImGui::PopTextWrapPos();
   ImGui::Separator();
   for (size_t i = 0; i < regions_.size(); ++i) {
     const pdfdiff::Region& r = regions_[i];
     char label[120];
-    std::snprintf(label, sizeof(label), "%zu  %s  %.0f x %.0f pt##reg%zu", i + 1, pdfdiff::KindName(r.kind), r.Width(), r.Height(), i);
+    const char* what = r.kind == pdfdiff::Kind::Added ? "New" : r.kind == pdfdiff::Kind::Removed ? "Removed" : "Changed";
+    // Where on the sheet, in words, rather than a size in points: "Changed - top left", "New - bottom", "Changed - large area".
+    const PageSize ps = base_->Sizes()[static_cast<size_t>(basePage_)];
+    const double cx = (r.x0 + r.x1) * 0.5 / std::max(1.f, ps.wPt), cy = (r.y0 + r.y1) * 0.5 / std::max(1.f, ps.hPt);
+    const char* side = cx < 1.0 / 3 ? "left" : cx > 2.0 / 3 ? "right" : "";
+    const char* row = cy > 2.0 / 3 ? "top" : cy < 1.0 / 3 ? "bottom" : "";
+    char where[48];
+    if (r.Width() > 0.25 * ps.wPt || r.Height() > 0.25 * ps.hPt)
+      std::snprintf(where, sizeof(where), "large area");
+    else if (*row == 0 && *side == 0)
+      std::snprintf(where, sizeof(where), "middle");
+    else
+      std::snprintf(where, sizeof(where), "%s%s%s", row, (*row != 0 && *side != 0) ? " " : "", side);
+    std::snprintf(label, sizeof(label), "%zu  %s - %s##reg%zu", i + 1, what, where, i);
     const ImVec4 col = r.kind == pdfdiff::Kind::Added ? ImVec4(0.3f, 0.85f, 0.45f, 1.f)
                        : r.kind == pdfdiff::Kind::Removed ? ImVec4(0.95f, 0.4f, 0.4f, 1.f)
                                                           : ImVec4(0.98f, 0.7f, 0.2f, 1.f);
@@ -650,6 +711,9 @@ void PdfCompare::DrawChangesList() {
     ImGui::PopStyleColor();
   }
   ImGui::EndChild();
+  PopPanelStyle();
+  if (closeList)
+    ClearChanges();
 }
 
 void PdfCompare::DrawSheet(std::vector<std::string>& log) {
@@ -671,6 +735,12 @@ void PdfCompare::DrawSheet(std::vector<std::string>& log) {
     pendY_ = std::max(0.f, (pendY_ >= 0.f ? pendY_ : ImGui::GetScrollY()) + 8.f);
   }
 
+  if (centerReq_ >= 0 && centerReq_ < static_cast<int>(regions_.size()) && !raw) { // zoom so the chosen area fills most of the view
+    const pdfdiff::Region& z = regions_[static_cast<size_t>(centerReq_)];
+    const float fitX = (avail.x - ImGui::GetStyle().ScrollbarSize) * 0.6f / std::max(1.f, static_cast<float>(z.Width()));
+    const float fitY = (avail.y - ImGui::GetStyle().ScrollbarSize) * 0.6f / std::max(1.f, static_cast<float>(z.Height()));
+    pxPerPt_ = std::clamp(std::min(fitX, fitY), 0.05f, 6.f); // a tiny area is not blown up past 6 px per point
+  }
   const float pw = vs.wPt * pxPerPt_, ph = vs.hPt * pxPerPt_;
   const float contentW = std::max(avail.x, pw + 2 * kMarginPx);
   if (centerReq_ >= 0 && centerReq_ < static_cast<int>(regions_.size()) && !raw) { // a region chosen in the list or by N / P
@@ -736,26 +806,17 @@ void PdfCompare::DrawSheet(std::vector<std::string>& log) {
   } else if (raw) {
     dl->AddImage(TexId(cur_.tex[0]), a, b);
   } else {
-    const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || hovered;
-    bool showRev = mode_ == Mode::Revision, showBoth = false;
-    if (mode_ == Mode::Blink) {
-      showRev = std::fmod(ImGui::GetTime() * static_cast<double>(blinkHz_), 1.0) >= 0.5;
-      if (focused && !io.WantTextInput) {
-        if (ImGui::IsKeyDown(ImGuiKey_B))
-          showRev = false;
-        else if (ImGui::IsKeyDown(ImGuiKey_R))
-          showRev = true;
-      }
-    } else if (mode_ == Mode::Opacity) {
-      showBoth = true;
-    }
     if (mode_ == Mode::Tint) {
       dl->AddImage(TexId(cur_.tex[2]), a, b);
-    } else if (showBoth) {
+    } else if (mode_ == Mode::Opacity) {
       dl->AddImage(TexId(cur_.tex[0]), a, b);
       dl->AddImage(TexId(cur_.tex[1]), a, b, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, static_cast<int>(opacity_ * 255.f)));
-    } else {
-      dl->AddImage(TexId(cur_.tex[showRev ? 1 : 0]), a, b);
+    } else if (mode_ == Mode::Base) { // the base, with what only it has in blue
+      dl->AddImage(TexId(cur_.tex[0]), a, b);
+      dl->AddImage(TexId(cur_.tex[3]), a, b);
+    } else { // the revision, with what only it has in red
+      dl->AddImage(TexId(cur_.tex[1]), a, b);
+      dl->AddImage(TexId(cur_.tex[4]), a, b);
     }
   }
   dl->AddRect(a, b, IM_COL32(90, 90, 90, 255));
@@ -812,7 +873,14 @@ bool PdfCompare::Draw(std::vector<std::string>& log) {
   const Clock::time_point t0 = Clock::now();
   PollOpen(log);
   bool keepOpen = true;
-  DrawBar(keepOpen);
+  {
+    PushPanelStyle();
+    ImGui::BeginChild("##cmpbar", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove);
+    DrawBar(keepOpen);
+    ImGui::EndChild();
+    PopPanelStyle();
+  }
   if (!error_.empty()) {
     ImGui::TextWrapped("The revision could not be opened: %s.", error_.c_str());
     return keepOpen;
@@ -826,7 +894,16 @@ bool PdfCompare::Draw(std::vector<std::string>& log) {
   UploadSlice();
   if (haveChanges_ && !regions_.empty()) {
     DrawChangesList();
-    ImGui::SameLine();
+    // The list's edge: drag it to resize, like the thumbnail strip.
+    ImGui::SameLine(0.f, 0.f);
+    ImGui::InvisibleButton("##cmplistsplit", ImVec2(7.f, ImGui::GetContentRegionAvail().y));
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    if (ImGui::IsItemActive())
+      listW_ = std::clamp(listW_ + ImGui::GetIO().MouseDelta.x, 180.f, 600.f);
+    ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                              ImGui::IsItemHovered() || ImGui::IsItemActive() ? IM_COL32(90, 130, 190, 255) : IM_COL32(60, 64, 72, 255));
+    ImGui::SameLine(0.f, 0.f);
   }
   DrawSheet(log);
 

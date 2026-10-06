@@ -359,19 +359,9 @@ void CollectSnap(FPDF_PAGEOBJECT obj, const Mat& outer, int depth, SnapCtx& ctx)
   }
 }
 
-} // namespace
-
-bool PdfDocument::SnapPoints(int page, std::vector<SnapPoint>& out, const std::function<bool()>& cancel,
-                             size_t maxPoints) {
-  out.clear();
-  if (page < 0 || page >= PageCount())
-    return false;
-  std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
-  FPDF_PAGE p = FPDF_LoadPage(impl_->doc, page);
-  if (p == nullptr)
-    return false;
-  // The viewer's coordinates: points from the bottom-left of the page as it is displayed. Found by asking PDFium
-  // where three user-space points land on a page-sized device, so rotation and the page box offset are included.
+// The viewer's coordinates: points from the bottom-left of the page as it is displayed. Found by asking PDFium
+// where three user-space points land on a page-sized device, so rotation and the page box offset are included.
+Mat ViewerMatrix(FPDF_PAGE p) {
   const float W = FPDF_GetPageWidthF(p), H = FPDF_GetPageHeightF(p);
   constexpr int kScale = 8;
   const int dw = std::max(1, static_cast<int>(std::lround(W * kScale))), dh = std::max(1, static_cast<int>(std::lround(H * kScale)));
@@ -391,12 +381,90 @@ bool PdfDocument::SnapPoints(int page, std::vector<SnapPoint>& out, const std::f
   toViewer.b = -b;
   toViewer.d = -d;
   toViewer.f = H - static_cast<float>(oy) / sy;
+  return toViewer;
+}
+
+struct TextCtx {
+  const std::function<bool()>& cancel;
+  Mat toViewer;
+  std::vector<ObjBox>& out;
+  size_t visited = 0;
+  bool stop = false;
+};
+
+void CollectText(FPDF_PAGEOBJECT obj, const Mat& outer, int depth, TextCtx& ctx) {
+  if (ctx.stop || obj == nullptr || depth > 8)
+    return;
+  if ((++ctx.visited & 255u) == 0 && ctx.cancel()) {
+    ctx.stop = true;
+    return;
+  }
+  const int type = FPDFPageObj_GetType(obj);
+  if (type == FPDF_PAGEOBJ_TEXT) {
+    float l = 0.f, b = 0.f, r = 0.f, t = 0.f;
+    if (!FPDFPageObj_GetBounds(obj, &l, &b, &r, &t))
+      return;
+    float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+    for (const std::pair<float, float> c : {std::pair<float, float>{l, b}, {r, b}, {l, t}, {r, t}}) {
+      const float ux = outer.a * c.first + outer.c * c.second + outer.e, uy = outer.b * c.first + outer.d * c.second + outer.f;
+      const float vx = ctx.toViewer.a * ux + ctx.toViewer.c * uy + ctx.toViewer.e, vy = ctx.toViewer.b * ux + ctx.toViewer.d * uy + ctx.toViewer.f;
+      if (!std::isfinite(vx) || !std::isfinite(vy))
+        return;
+      x0 = std::min(x0, vx);
+      x1 = std::max(x1, vx);
+      y0 = std::min(y0, vy);
+      y1 = std::max(y1, vy);
+    }
+    if (x1 - x0 >= 0.5f && y1 - y0 >= 0.5f)
+      ctx.out.push_back({x0, y0, x1, y1});
+  } else if (type == FPDF_PAGEOBJ_FORM) {
+    FS_MATRIX fm{1, 0, 0, 1, 0, 0};
+    FPDFPageObj_GetMatrix(obj, &fm);
+    const Mat inner = Then(Mat{fm.a, fm.b, fm.c, fm.d, fm.e, fm.f}, outer);
+    const unsigned long n = static_cast<unsigned long>(FPDFFormObj_CountObjects(obj));
+    for (unsigned long i = 0; i < n && !ctx.stop; ++i)
+      CollectText(FPDFFormObj_GetObject(obj, i), inner, depth + 1, ctx);
+  }
+}
+
+} // namespace
+
+bool PdfDocument::SnapPoints(int page, std::vector<SnapPoint>& out, const std::function<bool()>& cancel,
+                             size_t maxPoints) {
+  out.clear();
+  if (page < 0 || page >= PageCount())
+    return false;
+  std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
+  FPDF_PAGE p = FPDF_LoadPage(impl_->doc, page);
+  if (p == nullptr)
+    return false;
+  const Mat toViewer = ViewerMatrix(p);
   SnapCtx ctx{cancel, maxPoints, toViewer, out, {}, 0, false};
   const int n = FPDFPage_CountObjects(p);
   for (int i = 0; i < n && !ctx.stop; ++i)
     CollectSnap(FPDFPage_GetObject(p, i), Mat{}, 0, ctx);
   FPDF_ClosePage(p);
   if (cancel()) {
+    out.clear();
+    return false;
+  }
+  return true;
+}
+
+bool PdfDocument::TextBoxes(int page, std::vector<ObjBox>& out, const std::function<bool()>& cancel) {
+  out.clear();
+  if (page < 0 || page >= PageCount())
+    return false;
+  std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
+  FPDF_PAGE p = FPDF_LoadPage(impl_->doc, page);
+  if (p == nullptr)
+    return false;
+  TextCtx ctx{cancel, ViewerMatrix(p), out, 0, false};
+  const int n = FPDFPage_CountObjects(p);
+  for (int i = 0; i < n && !ctx.stop; ++i)
+    CollectText(FPDFPage_GetObject(p, i), Mat{}, 0, ctx);
+  FPDF_ClosePage(p);
+  if (cancel && cancel()) {
     out.clear();
     return false;
   }
