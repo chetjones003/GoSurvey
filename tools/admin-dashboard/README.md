@@ -16,7 +16,11 @@ PORT=8081 go run .       # custom port
 go build -o admin . && ./admin
 ```
 
-Mock data is seeded deterministically (240 installs, ~1800 active pings, 68 users) so the dashboard works with no credentials. Replace `internal/store` with live D1 calls via `wrangler` API when you wire real credentials.
+With `MOCK=1`, data is seeded deterministically (240 installs, ~1800 active pings, 68 users) so the dashboard works with no credentials.
+
+**Tables** (all pages): click a header to sort (asc → desc → off), drag a column edge to resize, double-click the edge to fit to content; widths are remembered per table. Click an ID to copy it. **Charts**: hover for exact values, 7d/14d/30d range buttons.
+
+**Live D1 is the default:** just `go run .` (needs `wrangler login` once). The server starts instantly, shows "Connecting…", fetches pings + users from D1 in parallel in the background, reloads itself when data lands, then re-fetches every 30s. Page loads never wait on wrangler. A globally installed `wrangler` is used if found (much faster to start than `npx`). Set `MOCK=1` (or `LIVE_D1=0`) to run offline on seeded demo data.
 
 ## Pages
 
@@ -41,7 +45,8 @@ GET /partials/users
 ## Stack
 
 - Go `net/http` + `html/template` (embedded via `embed.FS`) — no external router
-- HTMX 1.9 via CDN, CSS without framework (so no purple-gradient AI tell)
+- HTMX 1.9 vendored in `static/` (no CDN round trip), CSS without framework (so no purple-gradient AI tell)
+- Templates are parsed once at startup; stats, sort order and search index are computed once per data refresh, not per request
 - `internal/store` is the only place to swap mock → live D1
 
 ## Wrangler parity
