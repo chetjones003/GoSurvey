@@ -62,7 +62,7 @@ struct RenderTuning {
 
 class ViewportRenderer {
 public:
-  bool Init();
+  bool Init(std::string* errorOut = nullptr);
   void Shutdown();
 
   void SetSize(int width, int height);
