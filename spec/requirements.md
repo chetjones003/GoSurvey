@@ -11813,6 +11813,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
      check moves the error onto the others and the user must see that. Applying is **one undo step** and the page's
      scale text is marked adjusted ("adjusted +0.19 %"); the Scale report keeps the original calibrated value. The
      program never applies a correction by itself.
+  4b. **Robust calibration (opt-in least squares).** Checking is always optional; a user who does not need the
+     precision never sees it. A user who does picks **Robust calibration...** in the Set scale box. They enter **at
+     least three** known dimensions (two picked points and the printed value each, as in clause 1; the minimum is a
+     setting, default 3) and the program solves **one scale** by weighted least squares. **Weights follow length:**
+     each dimension's uncertainty is the picking error (default 0.25 pt, whatever its length) combined with a small
+     drawing error that grows with length (default 0.05 % of it), so a short span, where one pick is a large share of
+     the length, counts for less than a long one (ASSUMPTION recorded, not asked: these two defaults, both
+     settings). The box shows, live: the **adjusted scale** with its **uncertainty** ("1 in = 3.9956 ft +/- 0.04 %");
+     per dimension the **residual** (what the adjusted scale reads minus what the drawing states, in the page unit
+     and as a percentage) and its **standardised residual**; and the overall fit (the RMS residual). **Blunder
+     detection:** a dimension whose standardised residual exceeds 3 is flagged **Suspect**; the user may remove it
+     and see the fit re-solved, or keep it; the program never removes one on its own. **Apply** sets the adjusted
+     scale as one undo step (marked "robust, n dimensions, +/- x %"); **Cancel** changes nothing. With fewer than the
+     minimum the box says how many more are needed and offers nothing to apply. The solution is a single scale
+     (no extra offset parameter).
   5. **After a calibration** the window offers a one-click "Check this scale against another dimension", and
      says when the calibrated scale is close to a standard scale (already shown by REQ-390's calibration box).
   6. **Honest limits stated in the window:** the check proves the *picked* distances agree, not that the
@@ -11829,6 +11844,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
     and equals the hand-calculated value; a check implying 3.980 among three that imply 4.000 is the only
     **Outlier**; best fit without the outlier is 4.000; one check alone gives no best fit and no outlier.
   - `[issue732][req394]` test: a calibration counts as a check; applying the best fit is one undo step.
+  - `[issue732][req394]` test: robust calibration on a generated set (true 4.000 ft per inch; picks with fixed
+    +/-0.25 pt noise) recovers the scale closer than a single short-span calibration does, with an uncertainty that
+    shrinks as dimensions are added; weights equal 1/(0.25^2 + (0.0005 L)^2) for a span of length L and a long span
+    pulls the answer more than a short one; one deliberately wrong value (a mistyped 10 for 100) is the only
+    **Suspect**, and removing it re-solves; fewer than three dimensions offers nothing to apply; Apply is one undo
+    step and Cancel changes nothing.
   - `[issue732][req394]` test: correction by "match this check" (measured 42.98, stated 43.06) makes that check read
     43.06 and moves the calibration check by the same fraction, and the preview lists exactly those new
     differences before applying; a typed +0.20 % multiplies every reading by 1.0020; "leave it" changes nothing;
