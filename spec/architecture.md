@@ -4832,7 +4832,14 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   (e) **Annotations are standard PDF annotations written through PDFium** (REQ-388); edits are held in
       memory as an undo list and written only by **Save As** to a temporary file renamed into place.
       The original is never opened for writing (D-2026-10-06-a).
-  (f) **Routing.** One function, `OpenPdfInViewer(path)`, replaces `OpenWithDefaultApp` for `.pdf` at
+        **Addendum (D-2026-10-06-e):** PDFium cannot create a Line annotation, so the Line tool is the one
+      exception: PDFium writes a placeholder (a Square annotation with the line's appearance stream, colour,
+      border and a fixed-width placeholder `/L` string); after `FPDF_SaveAsCopy` to the temporary file,
+      `PdfAnnotate` finds that annotation's object by its unique `/NM` name and overwrites, **in place and
+      at the same byte length** (padding with spaces), `/Subtype/Square` with `/Subtype/Line` and the `/L(...)`
+      string with the `/L[x1 y1 x2 y2]` array, so no xref offset moves. A miss fails the save (nothing
+      is renamed into place). **Alternative rejected by the user:** an Ink annotation through PDFium.
+(f) **Routing.** One function, `OpenPdfInViewer(path)`, replaces `OpenWithDefaultApp` for `.pdf` at
       every call site; non-PDF files keep the shell route.
 - **Alternatives.** (1) *Second OS window / ImGui multi-viewport:* heavier, new GL-context risk, no gain
       for the user. (2) *Render on the UI thread with a time slice:* simpler but cannot guarantee no
