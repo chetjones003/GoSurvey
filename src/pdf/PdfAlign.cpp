@@ -331,7 +331,7 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
         onlyN += only[p];
       }
     const size_t theirs = newOnOtherIn(u.x0, u.y0, u.x1, u.y1);
-    const bool changed = (onlyN >= 3 && onlyN * 100 >= inkN * 6) || (theirs >= 6 && theirs * 100 >= inkN * 8);
+    const bool changed = (onlyN >= 3 && onlyN * 1000 >= inkN * 25) || (theirs >= 6 && theirs * 100 >= inkN * 4);
     for (int y = u.y0; y < u.y1; ++y)
       for (int x = u.x0; x < u.x1; ++x) {
         const size_t p = static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x);
@@ -340,8 +340,8 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
         const bool smallMark = label[p] >= 0 && comps[static_cast<size_t>(label[p])].small;
         if (changed)
           keep[p] = (smallMark || only[p]) ? 1 : keep[p];
-        else if (smallMark)
-          keep[p] = 0;
+        // an unchanged run is left as the group rule judged it; clearing here hid real changes in a box that is mostly other ink
+
       }
   }
   std::vector<uint8_t> seen(n, 0);
