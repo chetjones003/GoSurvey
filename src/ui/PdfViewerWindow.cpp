@@ -1361,6 +1361,62 @@ std::vector<int> PageChecks(const AnnotUi& u, int page) {
 
 double MetresPerPt(const PageScale& s) { return s.RealPerPoint() * UnitInMetres(s.realUnit); }
 
+// A dialog that stands out from the sheet behind it: a lighter body, a bright frame and title, a darker dim.
+void PushDialogStyle() {
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.15f, 0.17f, 0.22f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.35f, 0.62f, 1.00f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.16f, 0.34f, 0.60f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.20f, 0.42f, 0.74f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.f, 0.f, 0.f, 0.62f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.f, 12.f));
+}
+void PopDialogStyle() {
+  ImGui::PopStyleVar(3);
+  ImGui::PopStyleColor(5);
+}
+
+// Tables with a clear header, borders and banded rows, and room around the text.
+void PushTableStyle() {
+  ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, ImVec4(0.20f, 0.38f, 0.64f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TableBorderStrong, ImVec4(0.50f, 0.62f, 0.80f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TableBorderLight, ImVec4(0.32f, 0.40f, 0.54f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TableRowBg, ImVec4(0.12f, 0.14f, 0.18f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, ImVec4(0.18f, 0.21f, 0.28f, 1.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(10.f, 5.f));
+}
+void PopTableStyle() {
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor(5);
+}
+
+enum class Align { Left, Right, Center };
+
+// Text placed in a table cell: numbers read best right-aligned, a verdict centred, words left.
+void CellText(Align a, const std::string& text, const ImVec4* color = nullptr) {
+  const float w = ImGui::CalcTextSize(text.c_str()).x, avail = ImGui::GetContentRegionAvail().x;
+  const float off = a == Align::Right ? avail - w : a == Align::Center ? (avail - w) * 0.5f : 0.f;
+  if (off > 0.f)
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + off);
+  if (color != nullptr)
+    ImGui::TextColored(*color, "%s", text.c_str());
+  else
+    ImGui::TextUnformatted(text.c_str());
+}
+
+// The header row, each title aligned like the column beneath it.
+void TableHeader(const std::vector<std::pair<const char*, Align>>& cols) {
+  for (const auto& c : cols)
+    ImGui::TableSetupColumn(c.first);
+  ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+  for (size_t i = 0; i < cols.size(); ++i) {
+    ImGui::TableSetColumnIndex(static_cast<int>(i));
+    const ImVec4 white(1.f, 1.f, 1.f, 1.f);
+    CellText(cols[i].second, cols[i].first, &white);
+  }
+}
+
 // The "Check a dimension" popup that follows the Check tool's two clicks.
 void DrawCheckPopup(Viewer& v, std::vector<std::string>& log) {
   AnnotUi& u = v.ann;
@@ -1370,8 +1426,11 @@ void DrawCheckPopup(Viewer& v, std::vector<std::string>& log) {
     u.checkPopup = false;
     ImGui::OpenPopup(id);
   }
-  if (!ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+  PushDialogStyle();
+  if (!ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopDialogStyle();
     return;
+  }
   const PageScale* scale = EffectiveScale(v, u.checkPage);
   const double pts = u.checkPts.size() == 2 ? std::hypot(static_cast<double>(u.checkPts[1].first - u.checkPts[0].first),
                                                         static_cast<double>(u.checkPts[1].second - u.checkPts[0].second))
@@ -1426,6 +1485,7 @@ void DrawCheckPopup(Viewer& v, std::vector<std::string>& log) {
     ImGui::CloseCurrentPopup();
   }
   ImGui::EndPopup();
+  PopDialogStyle();
 }
 
 // The Scale checks dialog: the page's checks with verdicts, the best fit and the correction the user may choose
@@ -1438,9 +1498,12 @@ void DrawChecksDialog(Viewer& v, std::vector<std::string>& log) {
     u.checksDialog = false;
     ImGui::OpenPopup(id);
   }
-  ImGui::SetNextWindowSize(ImVec2(820.f, 0.f), ImGuiCond_Appearing);
-  if (!ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+  ImGui::SetNextWindowSize(ImVec2(860.f, 0.f), ImGuiCond_Appearing);
+  PushDialogStyle();
+  if (!ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    PopDialogStyle();
     return;
+  }
   const int page = std::clamp(v.curPage, 0, v.layout.PageCount() - 1);
   const PageScale* scale = EffectiveScale(v, page);
   const auto& all = u.session.Checks();
@@ -1470,41 +1533,47 @@ void DrawChecksDialog(Viewer& v, std::vector<std::string>& log) {
           fit.push_back({all[static_cast<size_t>(i)].MeasuredPt(), all[static_cast<size_t>(i)].StatedMetres()});
         const BestFit bf = BestFitScale(fit);
 
-        if (!idx.empty() && ImGui::BeginTable("##checks", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
-          for (const char* h : {"#", "Kind", "Drawing says", "Reads", "Difference", "%", "Verdict", "", ""})
-            ImGui::TableSetupColumn(h);
-          ImGui::TableHeadersRow();
-          for (size_t k = 0; k < idx.size(); ++k) {
-            const int i = idx[k];
-            const ScaleCheck& c = all[static_cast<size_t>(i)];
-            const CheckResult r = EvaluateCheck(c, *scale, u.limits);
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            char lab[32];
-            std::snprintf(lab, sizeof(lab), "%zu##row%d", k + 1, i);
-            if (ImGui::Selectable(lab, u.selectedCheck == i, ImGuiSelectableFlags_SpanAllColumns))
-              u.selectedCheck = i;
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(c.calibration ? "calibration" : "check");
-            ImGui::TableNextColumn();
-            ImGui::Text("%s %s", FormatValue(r.stated, 4).c_str(), UnitLabel(c.unit));
-            ImGui::TableNextColumn();
-            ImGui::Text("%s %s", FormatValue(r.measured, 4).c_str(), UnitLabel(c.unit));
-            ImGui::TableNextColumn();
-            ImGui::Text("%s %s", Signed(r.diff, 4).c_str(), UnitLabel(c.unit));
-            ImGui::TableNextColumn();
-            ImGui::Text("%s", Signed(r.pct, 2).c_str());
-            ImGui::TableNextColumn();
-            ImGui::TextColored(VerdictColor(r.verdict), "%s", VerdictName(r.verdict));
-            ImGui::TableNextColumn();
-            if (k < bf.outlier.size() && bf.outlier[k])
-              ImGui::TextColored(ImVec4(0.95f, 0.30f, 0.26f, 1.f), "Outlier");
-            ImGui::TableNextColumn();
-            std::snprintf(lab, sizeof(lab), "Delete##del%d", i);
-            if (ImGui::SmallButton(lab))
-              deleteCheck = i;
+        if (!idx.empty()) {
+          PushTableStyle();
+          if (ImGui::BeginTable("##checks", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+            TableHeader({{"#", Align::Center}, {"Kind", Align::Left}, {"Drawing says", Align::Right}, {"Reads", Align::Right},
+                         {"Difference", Align::Right}, {"%", Align::Right}, {"Verdict", Align::Center}, {"Flag", Align::Center}, {"", Align::Center}});
+            for (size_t k = 0; k < idx.size(); ++k) {
+              const int i = idx[k];
+              const ScaleCheck& c = all[static_cast<size_t>(i)];
+              const CheckResult r = EvaluateCheck(c, *scale, u.limits);
+              const ImVec4 vc = VerdictColor(r.verdict);
+              ImGui::TableNextRow();
+              ImGui::TableNextColumn();
+              char lab[32];
+              std::snprintf(lab, sizeof(lab), "%zu##row%d", k + 1, i);
+              if (ImGui::Selectable(lab, u.selectedCheck == i, ImGuiSelectableFlags_SpanAllColumns))
+                u.selectedCheck = i;
+              ImGui::TableNextColumn();
+              CellText(Align::Left, c.calibration ? "calibration" : "check");
+              ImGui::TableNextColumn();
+              CellText(Align::Right, FormatValue(r.stated, 4) + " " + UnitLabel(c.unit));
+              ImGui::TableNextColumn();
+              CellText(Align::Right, FormatValue(r.measured, 4) + " " + UnitLabel(c.unit));
+              ImGui::TableNextColumn();
+              CellText(Align::Right, Signed(r.diff, 4) + " " + UnitLabel(c.unit));
+              ImGui::TableNextColumn();
+              CellText(Align::Right, Signed(r.pct, 2));
+              ImGui::TableNextColumn();
+              CellText(Align::Center, VerdictName(r.verdict), &vc);
+              ImGui::TableNextColumn();
+              if (k < bf.outlier.size() && bf.outlier[k]) {
+                const ImVec4 red(0.95f, 0.30f, 0.26f, 1.f);
+                CellText(Align::Center, "Outlier", &red);
+              }
+              ImGui::TableNextColumn();
+              std::snprintf(lab, sizeof(lab), "Delete##del%d", i);
+              if (ImGui::SmallButton(lab))
+                deleteCheck = i;
+            }
+            ImGui::EndTable();
           }
-          ImGui::EndTable();
+          PopTableStyle();
         }
 
         if (bf.valid) {
@@ -1568,26 +1637,27 @@ void DrawChecksDialog(Viewer& v, std::vector<std::string>& log) {
           const PageScale next = ApplyFactor(*scale, factor);
           ImGui::Text("After this correction: %s%s%s%s", next.RatioText().c_str(), next.note.empty() ? "" : "  (", next.note.c_str(),
                       next.note.empty() ? "" : ")");
-          if (ImGui::BeginTable("##after", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
-            for (const char* h : {"#", "Reads", "Difference", "%", "Verdict"})
-              ImGui::TableSetupColumn(h);
-            ImGui::TableHeadersRow();
+          PushTableStyle();
+          if (ImGui::BeginTable("##after", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+            TableHeader({{"#", Align::Center}, {"Would read", Align::Right}, {"Difference", Align::Right}, {"%", Align::Right}, {"Verdict", Align::Center}});
             for (size_t k = 0; k < after.size(); ++k) {
               const CheckResult& r = after[k];
+              const ImVec4 vc = VerdictColor(r.verdict);
               ImGui::TableNextRow();
               ImGui::TableNextColumn();
-              ImGui::Text("%zu", k + 1);
+              CellText(Align::Center, std::to_string(k + 1));
               ImGui::TableNextColumn();
-              ImGui::Text("%s %s", FormatValue(r.measured, 4).c_str(), UnitLabel(pageChecks[k].unit));
+              CellText(Align::Right, FormatValue(r.measured, 4) + " " + UnitLabel(pageChecks[k].unit));
               ImGui::TableNextColumn();
-              ImGui::Text("%s %s", Signed(r.diff, 4).c_str(), UnitLabel(pageChecks[k].unit));
+              CellText(Align::Right, Signed(r.diff, 4) + " " + UnitLabel(pageChecks[k].unit));
               ImGui::TableNextColumn();
-              ImGui::Text("%s", Signed(r.pct, 2).c_str());
+              CellText(Align::Right, Signed(r.pct, 2));
               ImGui::TableNextColumn();
-              ImGui::TextColored(VerdictColor(r.verdict), "%s", VerdictName(r.verdict));
+              CellText(Align::Center, VerdictName(r.verdict), &vc);
             }
             ImGui::EndTable();
           }
+          PopTableStyle();
           ImGui::TextDisabled("Correcting to one check moves the error onto the others: compare the table above with the one before.");
           ImGui::BeginDisabled(factor == 1.0 || u.correctionMode == 4);
           if (ImGui::Button("Apply correction")) {
@@ -1646,43 +1716,48 @@ void DrawChecksDialog(Viewer& v, std::vector<std::string>& log) {
         obs.push_back({c.MeasuredPt(), c.StatedMetres(), use});
       const RobustResult res = SolveRobust(obs, u.robustParams);
       int removeRow = -1;
-      if (!u.robustPicks.empty() && ImGui::BeginTable("##robust", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
-        for (const char* h : {"Use", "#", "Drawing says", "Picked (pt)", "Residual", "%", "Std. residual", ""})
-          ImGui::TableSetupColumn(h);
-        ImGui::TableHeadersRow();
-        for (size_t i = 0; i < u.robustPicks.size(); ++i) {
-          auto& [c, use] = u.robustPicks[i];
-          ImGui::TableNextRow();
-          ImGui::TableNextColumn();
-          char lab[32];
-          std::snprintf(lab, sizeof(lab), "##use%zu", i);
-          ImGui::Checkbox(lab, &use);
-          ImGui::TableNextColumn();
-          ImGui::Text("%zu", i + 1);
-          ImGui::TableNextColumn();
-          ImGui::Text("%s %s", FormatValue(c.stated, 4).c_str(), UnitLabel(c.unit));
-          ImGui::TableNextColumn();
-          ImGui::Text("%.3f", c.MeasuredPt());
-          const bool have = res.ok && use && i < res.residualMetres.size();
-          ImGui::TableNextColumn();
-          if (have)
-            ImGui::Text("%s %s", Signed(res.residualMetres[i] / UnitInMetres(c.unit), 4).c_str(), UnitLabel(c.unit));
-          ImGui::TableNextColumn();
-          if (have)
-            ImGui::Text("%s", Signed(res.residualPct[i], 2).c_str());
-          ImGui::TableNextColumn();
-          if (have) {
-            if (res.suspect[i])
-              ImGui::TextColored(VerdictColor(Verdict::Blunder), "%s  Suspect", Signed(res.z[i], 1).c_str());
-            else
-              ImGui::Text("%s", Signed(res.z[i], 1).c_str());
+      if (!u.robustPicks.empty()) {
+        PushTableStyle();
+        if (ImGui::BeginTable("##robust", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+          TableHeader({{"Use", Align::Center}, {"#", Align::Center}, {"Drawing says", Align::Right}, {"Picked (pt)", Align::Right},
+                       {"Residual", Align::Right}, {"%", Align::Right}, {"Std. residual", Align::Right}, {"", Align::Center}});
+          for (size_t i = 0; i < u.robustPicks.size(); ++i) {
+            auto& [c, use] = u.robustPicks[i];
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            char lab[32];
+            std::snprintf(lab, sizeof(lab), "##use%zu", i);
+            ImGui::Checkbox(lab, &use);
+            ImGui::TableNextColumn();
+            CellText(Align::Center, std::to_string(i + 1));
+            ImGui::TableNextColumn();
+            CellText(Align::Right, FormatValue(c.stated, 4) + " " + UnitLabel(c.unit));
+            ImGui::TableNextColumn();
+            CellText(Align::Right, FormatValue(c.MeasuredPt(), 3));
+            const bool have = res.ok && use && i < res.residualMetres.size();
+            ImGui::TableNextColumn();
+            if (have)
+              CellText(Align::Right, Signed(res.residualMetres[i] / UnitInMetres(c.unit), 4) + " " + UnitLabel(c.unit));
+            ImGui::TableNextColumn();
+            if (have)
+              CellText(Align::Right, Signed(res.residualPct[i], 2));
+            ImGui::TableNextColumn();
+            if (have) {
+              if (res.suspect[i]) {
+                const ImVec4 red = VerdictColor(Verdict::Blunder);
+                CellText(Align::Right, Signed(res.z[i], 1) + "  Suspect", &red);
+              } else {
+                CellText(Align::Right, Signed(res.z[i], 1));
+              }
+            }
+            ImGui::TableNextColumn();
+            std::snprintf(lab, sizeof(lab), "Remove##rm%zu", i);
+            if (ImGui::SmallButton(lab))
+              removeRow = static_cast<int>(i);
           }
-          ImGui::TableNextColumn();
-          std::snprintf(lab, sizeof(lab), "Remove##rm%zu", i);
-          if (ImGui::SmallButton(lab))
-            removeRow = static_cast<int>(i);
+          ImGui::EndTable();
         }
-        ImGui::EndTable();
+        PopTableStyle();
       }
       if (removeRow >= 0)
         u.robustPicks.erase(u.robustPicks.begin() + removeRow);
@@ -1724,6 +1799,7 @@ void DrawChecksDialog(Viewer& v, std::vector<std::string>& log) {
   if (ImGui::Button("Close"))
     ImGui::CloseCurrentPopup();
   ImGui::EndPopup();
+  PopDialogStyle();
 }
 
 // The annotation row under the toolbar: tools, style, undo/redo, Save As, and the two small dialogs
@@ -1883,12 +1959,36 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
     if (cur != nullptr) {
       ImGui::Text("Scale: %s%s%s%s", cur->RatioText().c_str(), cur->note.empty() ? "" : " (", cur->note.c_str(), cur->note.empty() ? "" : ")");
       ImGui::SameLine();
-      char lab[48];
-      std::snprintf(lab, sizeof(lab), "Checks (%zu)", PageChecks(u, v.curPage).size());
-      if (ImGui::SmallButton(lab)) {
+      // A real button, coloured by the worst verdict among this page's checks (blue when there are none yet), so
+      // it is obvious that the checks exist and where to open them.
+      const std::vector<int> mine = PageChecks(u, v.curPage);
+      bool haveVerdict = false;
+      Verdict worst = Verdict::Good;
+      for (int i : mine) {
+        const Verdict vd = EvaluateCheck(u.session.Checks()[static_cast<size_t>(i)], *cur, u.limits).verdict;
+        if (!haveVerdict || static_cast<int>(vd) > static_cast<int>(worst))
+          worst = vd;
+        haveVerdict = true;
+      }
+      const ImVec4 base = !haveVerdict ? ImVec4(0.20f, 0.45f, 0.78f, 1.f)
+                          : worst == Verdict::Good ? ImVec4(0.17f, 0.55f, 0.28f, 1.f)
+                          : worst == Verdict::Check ? ImVec4(0.74f, 0.50f, 0.08f, 1.f)
+                                                    : ImVec4(0.74f, 0.22f, 0.20f, 1.f);
+      ImGui::PushStyleColor(ImGuiCol_Button, base);
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(std::min(1.f, base.x + 0.10f), std::min(1.f, base.y + 0.10f), std::min(1.f, base.z + 0.10f), 1.f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(base.x * 0.8f, base.y * 0.8f, base.z * 0.8f, 1.f));
+      ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.f, 1.f, 1.f, 0.55f));
+      ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
+      char lab[64];
+      std::snprintf(lab, sizeof(lab), "Scale checks (%zu)", mine.size());
+      if (ImGui::Button(lab)) {
         u.checksDialog = true;
         u.checksTab = 0;
       }
+      ImGui::PopStyleVar();
+      ImGui::PopStyleColor(4);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("See how this page's scale agrees with the dimensions you checked,\ncorrect it, or run a robust calibration");
     }
     else if (!u.scalesRead && u.scalesRequested)
       ImGui::TextDisabled("Scale: reading...");
@@ -2616,12 +2716,14 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
         // and the robust calibration's dimensions; and the Check tool's line while it is being picked.
         const PageScale* sc = EffectiveScale(v, r.page);
         const auto S = [&](float x, float y) { return ImVec2(r.tl.x + x * v.pxPerPt, r.tl.y + (r.hPt - y) * v.pxPerPt); };
+        // A label as a solid chip in the check's colour with dark text, so it reads on any drawing.
         const auto label = [&](ImVec2 at, const std::string& text, ImU32 col) {
-          const float fsPx = 13.f;
+          const float fsPx = 16.f;
           ImFont* font = ImGui::GetFont();
           const ImVec2 ts = font->CalcTextSizeA(fsPx, 1e9f, 0.f, text.c_str());
-          dl->AddRectFilled(ImVec2(at.x - 3.f, at.y - 2.f), ImVec2(at.x + ts.x + 3.f, at.y + ts.y + 2.f), IM_COL32(255, 255, 255, 225));
-          dl->AddText(font, fsPx, at, col, text.c_str());
+          dl->AddRectFilled(ImVec2(at.x - 5.f, at.y - 3.f), ImVec2(at.x + ts.x + 5.f, at.y + ts.y + 3.f), col, 4.f);
+          dl->AddRect(ImVec2(at.x - 5.f, at.y - 3.f), ImVec2(at.x + ts.x + 5.f, at.y + ts.y + 3.f), IM_COL32(0, 0, 0, 200), 4.f, 0, 1.5f);
+          dl->AddText(font, fsPx, at, IM_COL32(10, 10, 10, 255), text.c_str());
         };
         const auto& checks = u.session.Checks();
         for (size_t i = 0; i < checks.size(); ++i) {
