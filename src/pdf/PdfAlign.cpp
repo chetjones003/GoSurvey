@@ -63,8 +63,8 @@ Ink Classify(bool baseInk, bool revInk) {
 void TintBgra(Ink k, uint8_t o[4]) {
   // B, G, R, A
   switch (k) {
-  case Ink::BaseOnly: o[0] = 40; o[1] = 40; o[2] = 220; break;
-  case Ink::RevOnly: o[0] = 230; o[1] = 90; o[2] = 30; break;
+  case Ink::BaseOnly: o[0] = 235; o[1] = 120; o[2] = 40; break; // blue: only on the base (REQ-392, D-2026-10-06-m)
+  case Ink::RevOnly: o[0] = 40; o[1] = 40; o[2] = 230; break;  // red: only on the revision
   case Ink::Both: o[0] = o[1] = o[2] = 70; break;
   default: o[0] = o[1] = o[2] = 255; break;
   }
@@ -110,8 +110,10 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
   if (other.w != w || other.h != h)
     return;
   const size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
-  // The other sheet "has" a mark near here when anything on it is even faintly dark within two pixels: a mark drawn onto
-  // the base's pixel grid through the alignment is blurred a little, and a faint grey is still the same mark.
+  const double ppp = std::max(0.1, pxPerPt);
+  // The other sheet "has" a mark near here when anything on it is even faintly dark within about half a point: a mark drawn
+  // onto the base's pixel grid through the alignment is blurred a little, and a faint grey is still the same mark.
+  const int tol = std::clamp(static_cast<int>(std::lround(0.5 * ppp)), 1, 3);
   const auto faintAt = [&](int x, int y) {
     if (x < 0 || y < 0 || x >= w || y >= h)
       return false;
@@ -126,20 +128,30 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
         continue;
       ink[at] = 1;
       bool near = false;
-      for (int dy = -2; dy <= 2 && !near; ++dy)
-        for (int dx = -2; dx <= 2 && !near; ++dx)
+      for (int dy = -tol; dy <= tol && !near; ++dy)
+        for (int dx = -tol; dx <= tol && !near; ++dx)
           near = faintAt(x + dx, y + dy);
       only[at] = near ? 0 : 1;
     }
 
-  // Clean up by whole marks (a letter, a dash, a dot, a line run), not by pixel: a small mark of the sheet is coloured
-  // whole when a good part of it is new and left alone when only a sliver is (a dash that sits a little off, a letter's
-  // edge); in a big connected mark only the new pixels are coloured, and tiny leftover clusters are dropped as specks.
-  const double ppp = std::max(0.1, pxPerPt);
+  // Clean up by whole objects, not by pixel. Every connected mark of the sheet (a letter, a dash, a dot, a run of line) is
+  // judged: a small one is "changed" when a sixth or more of it is new. Small marks that sit close together (the letters of a
+  // word, the dots of a pattern) are one group, and a group with any changed member is coloured whole - so a changed
+  // callout is red or blue all through, not letter by letter. A big connected mark (a frame, a long line) gets only its
+  // new pixels coloured, and clusters of those under about 6 square points are dropped as specks.
   const size_t smallMax = static_cast<size_t>(400.0 * ppp * ppp);
   const size_t speck = static_cast<size_t>(std::max(3.0, 6.0 * ppp * ppp));
-  std::vector<uint8_t> seen(n, 0), keep(n, 0), big(n, 0);
-  std::vector<size_t> comp, stack;
+  const int gap = std::max(1, static_cast<int>(std::lround(2.0 * ppp)));
+  const int textMax = static_cast<int>(30.0 * ppp); // only marks no bigger than a line of text are grouped
+  struct Comp {
+    int minx, miny, maxx, maxy;
+    size_t count = 0, marked = 0;
+    bool small = true;
+    int parent = 0;
+  };
+  std::vector<Comp> comps;
+  std::vector<int32_t> label(n, -1);
+  std::vector<size_t> stack;
   const auto neighbours = [&](size_t p, auto&& visit) {
     const int x = static_cast<int>(p % static_cast<size_t>(w)), y = static_cast<int>(p / static_cast<size_t>(w));
     for (int dy = -1; dy <= 1; ++dy)
@@ -150,47 +162,100 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
       }
   };
   for (size_t i0 = 0; i0 < n; ++i0) {
-    if (!ink[i0] || seen[i0])
+    if (!ink[i0] || label[i0] >= 0)
       continue;
-    comp.clear();
+    const int id = static_cast<int>(comps.size());
+    Comp c;
+    c.minx = c.maxx = static_cast<int>(i0 % static_cast<size_t>(w));
+    c.miny = c.maxy = static_cast<int>(i0 / static_cast<size_t>(w));
+    c.parent = id;
+    label[i0] = id;
     stack.assign(1, i0);
-    seen[i0] = 1;
-    size_t marked = 0;
     while (!stack.empty()) {
       const size_t p = stack.back();
       stack.pop_back();
-      comp.push_back(p);
-      marked += only[p];
+      const int x = static_cast<int>(p % static_cast<size_t>(w)), y = static_cast<int>(p / static_cast<size_t>(w));
+      c.minx = std::min(c.minx, x);
+      c.maxx = std::max(c.maxx, x);
+      c.miny = std::min(c.miny, y);
+      c.maxy = std::max(c.maxy, y);
+      ++c.count;
+      c.marked += only[p];
       neighbours(p, [&](size_t q) {
-        if (ink[q] && !seen[q]) {
-          seen[q] = 1;
+        if (ink[q] && label[q] < 0) {
+          label[q] = id;
           stack.push_back(q);
         }
       });
     }
-    if (marked == 0)
+    c.small = c.count <= smallMax;
+    comps.push_back(c);
+  }
+
+  // Group the small, text-sized marks that lie within `gap` of each other (union-find over a coarse grid).
+  const auto find = [&](int a) {
+    while (comps[static_cast<size_t>(a)].parent != a) {
+      comps[static_cast<size_t>(a)].parent = comps[static_cast<size_t>(comps[static_cast<size_t>(a)].parent)].parent;
+      a = comps[static_cast<size_t>(a)].parent;
+    }
+    return a;
+  };
+  const int cell = std::max(16, 4 * gap);
+  const int gw = w / cell + 1, gh = h / cell + 1;
+  std::vector<std::vector<int>> grid(static_cast<size_t>(gw) * static_cast<size_t>(gh));
+  const auto grouped = [&](const Comp& c) { return c.small && c.maxx - c.minx <= textMax && c.maxy - c.miny <= textMax; };
+  for (int id = 0; id < static_cast<int>(comps.size()); ++id) {
+    const Comp& c = comps[static_cast<size_t>(id)];
+    if (!grouped(c))
       continue;
-    if (comp.size() <= smallMax) {
-      if (marked * 100 >= comp.size() * 35)
-        for (size_t p : comp)
-          keep[p] = 1;
-    } else {
-      for (size_t p : comp)
-        if (only[p])
-          keep[p] = big[p] = 1;
+    for (int gy = std::max(0, (c.miny - gap) / cell); gy <= std::min(gh - 1, (c.maxy + gap) / cell); ++gy)
+      for (int gx = std::max(0, (c.minx - gap) / cell); gx <= std::min(gw - 1, (c.maxx + gap) / cell); ++gx) {
+        std::vector<int>& bucket = grid[static_cast<size_t>(gy) * static_cast<size_t>(gw) + static_cast<size_t>(gx)];
+        for (int other : bucket) {
+          const Comp& o = comps[static_cast<size_t>(other)];
+          if (o.minx - gap <= c.maxx && c.minx - gap <= o.maxx && o.miny - gap <= c.maxy && c.miny - gap <= o.maxy) {
+            const int ra = find(id), rb = find(other);
+            if (ra != rb)
+              comps[static_cast<size_t>(ra)].parent = rb;
+          }
+        }
+        bucket.push_back(id);
+      }
+  }
+  std::vector<uint8_t> groupChanged(comps.size(), 0);
+  for (int id = 0; id < static_cast<int>(comps.size()); ++id) {
+    const Comp& c = comps[static_cast<size_t>(id)];
+    if (grouped(c) && c.marked * 6 >= c.count)
+      groupChanged[static_cast<size_t>(find(id))] = 1;
+  }
+
+  std::vector<uint8_t> keep(n, 0), big(n, 0);
+  for (size_t p = 0; p < n; ++p) {
+    if (label[p] < 0)
+      continue;
+    const Comp& c = comps[static_cast<size_t>(label[p])];
+    if (grouped(c)) {
+      if (groupChanged[static_cast<size_t>(find(label[p]))])
+        keep[p] = 1;
+    } else if (c.small) {
+      if (c.marked * 6 >= c.count)
+        keep[p] = 1; // a small mark too long to be text (a short run of line): whole when a sixth of it is new
+    } else if (only[p]) {
+      keep[p] = big[p] = 1;
     }
   }
-  std::fill(seen.begin(), seen.end(), 0);
+  std::vector<uint8_t> seen(n, 0);
+  std::vector<size_t> cluster;
   for (size_t i0 = 0; i0 < n; ++i0) {
     if (!big[i0] || !keep[i0] || seen[i0])
       continue;
-    comp.clear();
+    cluster.clear();
     stack.assign(1, i0);
     seen[i0] = 1;
     while (!stack.empty()) {
       const size_t p = stack.back();
       stack.pop_back();
-      comp.push_back(p);
+      cluster.push_back(p);
       neighbours(p, [&](size_t q) {
         if (big[q] && keep[q] && !seen[q]) {
           seen[q] = 1;
@@ -198,8 +263,8 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
         }
       });
     }
-    if (comp.size() < speck)
-      for (size_t p : comp)
+    if (cluster.size() < speck)
+      for (size_t p : cluster)
         keep[p] = 0;
   }
   for (size_t i = 0; i < n; ++i)
@@ -209,6 +274,25 @@ void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, cons
       out.bgra[i * 4u + 2] = bgr[2];
       out.bgra[i * 4u + 3] = 255;
     }
+}
+
+void TintFromMarks(const pdfview::Bitmap& base, const pdfview::Bitmap& rev, const pdfview::Bitmap& baseOnly, const pdfview::Bitmap& revOnly,
+                   pdfview::Bitmap& out) {
+  out.w = base.w;
+  out.h = base.h;
+  out.bgra.assign(base.bgra.size(), 255);
+  const size_t n = std::min({base.bgra.size(), rev.bgra.size(), baseOnly.bgra.size(), revOnly.bgra.size()}) / 4u;
+  for (size_t i = 0; i < n; ++i) {
+    const bool b = baseOnly.bgra[i * 4 + 3] != 0, r = revOnly.bgra[i * 4 + 3] != 0;
+    Ink k = Classify(IsInk(&base.bgra[i * 4]), IsInk(&rev.bgra[i * 4]));
+    if (r)
+      k = Ink::RevOnly;
+    else if (b)
+      k = Ink::BaseOnly;
+    else if (k != Ink::None)
+      k = Ink::Both; // ink that is only a slight shift of the other sheet's is the same mark
+    TintBgra(k, &out.bgra[i * 4]);
+  }
 }
 
 void TintImage(const pdfview::Bitmap& base, const pdfview::Bitmap& rev, pdfview::Bitmap& out) {

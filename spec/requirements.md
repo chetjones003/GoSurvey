@@ -11698,11 +11698,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. **Compare command.** From a viewer, **Compare...** picks a second PDF (the **revision**) and a page of
      each (default: the current page of the base and page 1 of the revision). The base file is the one open
      in the window; neither file is modified.
-  2. **Display modes**, switchable at once: **Tint** (base lines drawn red, revision lines blue, lines
-     present in both dark grey, so added work shows blue and removed work red); **Opacity** (the revision
+  2. **Display modes**, switchable at once: **Tint** (base-only lines drawn blue, revision-only lines red, lines
+     present in both dark grey, so added work shows red and removed work blue, the same colours as the Base and
+     Revision views); **Opacity** (the revision
      over the base with a slider); **Base** and **Revision** (each sheet alone, with only what the other
      sheet lacks marked: on Base, ink only the base has is drawn **blue**; on Revision, ink only the revision
-     has is drawn **red**; a mark with even a faint one of the other sheet's within about two pixels is the same mark). All use the same
+     has is drawn **red**; a mark with even a faint one of the other sheet's within about half a point is the same mark; changes are judged by whole objects: a letter, dash or dot is changed when a sixth or more of it is new, nearby small marks such as the letters of a word or a dot pattern are one group coloured whole when any member changed, and in a big connected mark only the new parts are coloured, tiny leftover clusters being dropped). All use the same
      zoom and pan. (There is no Blink mode: removed by D-2026-10-06-l.)
   3. **Alignment, automatic first.** On opening, the two sheets are lined up **automatically** (the
      transform found by comparing the sheets' line work: shift, uniform scale and a small rotation of up
@@ -11730,7 +11731,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Manual: Tint, Opacity, Base (removed door in blue) and Revision (added wall in red) all show the changes on real revisions.
 - Owner-layer: Domain/IO (`src/pdf/PdfAlign`, pure), Renderer (page textures), UI, Commands
 - Status: accepted
-- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f). 2026-10-06 — clause 2: Blink removed; Base and Revision views mark what only that sheet has, blue and red (D-2026-10-06-l).
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-f). 2026-10-06 — clause 2: Blink removed; Base and Revision views mark what only that sheet has, blue and red (D-2026-10-06-l). 2026-10-06 — Tint colours swapped to match (blue base-only, red revision-only) and changes judged by whole objects (D-2026-10-06-m).
 
 ### REQ-393 — Find the changes between two revisions automatically (GitHub issue #732, phase 7)
 

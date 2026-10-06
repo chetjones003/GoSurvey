@@ -40,7 +40,8 @@ bool IsInk(const uint8_t* bgra);
 enum class Ink { None, BaseOnly, RevOnly, Both };
 Ink Classify(bool baseInk, bool revInk);
 
-/// The Tint colour of a class as BGRA: base only red, revision only blue, both dark grey, neither white.
+/// The Tint colour of a class as BGRA: base only blue, revision only red, both dark grey, neither white (the same blue and
+/// red as the Base and Revision views).
 void TintBgra(Ink k, uint8_t out[4]);
 
 /// Draw the revision into the base's pixel grid: \p out is outW x outH at \p basePxPerPt for a base page
@@ -50,8 +51,13 @@ void ResampleAligned(const pdfview::Bitmap& rev, float revHPt, float revPxPerPt,
                      float basePxPerPt, float baseHPt, pdfview::Bitmap& out);
 
 /// The Base / Revision views (REQ-392 clause 2): an overlay the size of \p sheet that is \p bgr (blue, green, red) where
-/// \p sheet has ink with nothing darker than a faint grey on \p other within two pixels, and transparent elsewhere. Cleaned up by whole marks: a small mark (a letter, a dash, a dot) is coloured whole when about a third or more of it is new and left plain when only a sliver is; in a big connected mark only the new pixels are coloured and clusters under about 6 square points are dropped. \p pxPerPt is the images' pixels per point.
+/// \p sheet has ink with nothing darker than a faint grey on \p other within two pixels, and transparent elsewhere. Cleaned up by whole objects: a small mark (a letter, a dash, a dot) is changed when a sixth or more of it is new; small marks within about 2 pt of each other (a word, a dot pattern) form a group, and a group with a changed member is coloured whole; in a big connected mark only the new pixels are coloured and clusters under about 6 square points are dropped. \p pxPerPt is the images' pixels per point.
 void MarkOnlyIn(const pdfview::Bitmap& sheet, const pdfview::Bitmap& other, const uint8_t bgr[3], pdfview::Bitmap& out, double pxPerPt = 1.0);
+
+/// The Tint view from the cleaned marks (see MarkOnlyIn): blue where \p baseOnly marks, red where \p revOnly marks, grey for
+/// the rest of either sheet's ink, white elsewhere. All four bitmaps are the same size.
+void TintFromMarks(const pdfview::Bitmap& base, const pdfview::Bitmap& rev, const pdfview::Bitmap& baseOnly, const pdfview::Bitmap& revOnly,
+                   pdfview::Bitmap& out);
 
 /// Per-pixel Tint of two same-sized bitmaps (REQ-392 clause 2).
 void TintImage(const pdfview::Bitmap& base, const pdfview::Bitmap& rev, pdfview::Bitmap& out);

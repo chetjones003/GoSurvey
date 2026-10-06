@@ -110,8 +110,8 @@ TEST_CASE("Tint classes: base only, revision only, both, neither", "[issue732][r
   TintBgra(Ink::RevOnly, b);
   TintBgra(Ink::Both, c);
   TintBgra(Ink::None, d);
-  CHECK(a[2] > a[0]); // base is red
-  CHECK(b[0] > b[2]); // revision is blue
+  CHECK(a[0] > a[2]); // base is blue
+  CHECK(b[2] > b[0]); // revision is red
   CHECK(c[0] == c[2]); // both is grey
   CHECK(d[0] == 255);
 }
@@ -170,6 +170,27 @@ TEST_CASE("a dash a little off is left plain; a dash that is really new is colou
     MarkOnlyIn(base, rev, blue, out, 1.0);
     CHECK_FALSE(marked(30, 9));
   }
+}
+
+TEST_CASE("a changed word is coloured whole, letter by letter changes do not leave gaps", "[issue732][req392]") {
+  const auto block = [](pdfview::Bitmap& b, int x0, int y0) {
+    for (int y = y0; y < y0 + 4; ++y)
+      for (int x = x0; x < x0 + 4; ++x)
+        Black(b, x, y);
+  };
+  pdfview::Bitmap base = White(60, 20), rev = White(60, 20);
+  block(base, 5, 5);  // letter A: only in the base
+  block(base, 10, 5); // letter B: in both, one pixel from A
+  block(rev, 10, 5);
+  block(base, 40, 5); // a separate letter far away, in both
+  block(rev, 40, 5);
+  const uint8_t blue[3] = {235, 120, 40};
+  pdfview::Bitmap out;
+  MarkOnlyIn(base, rev, blue, out, 1.0);
+  const auto marked = [&](int x, int y) { return out.bgra[(static_cast<size_t>(y) * 60u + static_cast<size_t>(x)) * 4u + 3u] == 255; };
+  CHECK(marked(6, 6));   // A, new
+  CHECK(marked(11, 6));  // B, unchanged but part of the same word, so coloured with it
+  CHECK_FALSE(marked(41, 6)); // the far letter is its own word and unchanged
 }
 
 TEST_CASE("the same sheet, drawn through a fractional alignment, has nothing marked", "[issue732][req392]") {

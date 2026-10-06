@@ -401,10 +401,12 @@ void PdfCompare::PumpJob() {
     if (isCancelled())
       return out;
     pdfalign::ResampleAligned(revRaw, rs.hPt, rppp, xf, bw, bh, bppp, bs.hPt, out.img[1]);
-    pdfalign::TintImage(out.img[0], out.img[1], out.img[2]);
-    const uint8_t blue[3] = {235, 120, 40}, red[3] = {40, 40, 230}; // B, G, R
+    uint8_t blue[4], red[4];
+    pdfalign::TintBgra(pdfalign::Ink::BaseOnly, blue);
+    pdfalign::TintBgra(pdfalign::Ink::RevOnly, red);
     pdfalign::MarkOnlyIn(out.img[0], out.img[1], blue, out.img[3], bppp);
     pdfalign::MarkOnlyIn(out.img[1], out.img[0], red, out.img[4], bppp);
+    pdfalign::TintFromMarks(out.img[0], out.img[1], out.img[3], out.img[4], out.img[2]);
     out.n = 5;
     out.wPt = bs.wPt;
     out.hPt = bs.hPt;
@@ -506,9 +508,9 @@ void PdfCompare::DrawBar(bool& keepOpen) {
   } else if (mode_ == Mode::Revision) {
     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f), "red: only in the revision (what it added)");
   } else if (mode_ == Mode::Tint) {
-    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f), "red: only in the base");
+    ImGui::TextColored(ImVec4(0.35f, 0.55f, 1.f, 1.f), "blue: only in the base");
     ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.35f, 0.55f, 1.f, 1.f), "blue: only in the revision");
+    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f), "red: only in the revision");
     ImGui::SameLine();
     ImGui::TextDisabled("grey: in both");
   }
