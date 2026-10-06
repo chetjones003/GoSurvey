@@ -1399,6 +1399,9 @@ if(GOSURVEY_BUILD_TESTS)
     # DRAPE needs the surface stores and ProcessCommandLineSubmit, both in gosurvey_domain,
     # so it rides with GoSurveySnapTests like the other command tests above.
     tests/DrapeCommandTests.cpp
+    # PADSOLID needs the surface stores, the brep kernel and ProcessCommandLineSubmit, so it rides
+    # with GoSurveySnapTests like the other command tests above.
+    tests/PadSolidCommandTests.cpp
     tests/GsIoDimAngularTests.cpp
     tests/GsIoPipeRunTests.cpp
     tests/GsIoViewportCameraTests.cpp

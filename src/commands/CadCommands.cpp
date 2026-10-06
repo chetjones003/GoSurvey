@@ -1,7 +1,4 @@
 #include "CadCommands.hpp"
-#include "ProjectSettings.hpp"  // REQ-375: NoteUserPlotScale
-#include "ProjectFiles.hpp"  // REQ-379: RequestProjectAttach
-#include "ProjectWarnings.hpp"  // REQ-383: TagClipboardOrigin / CheckClipboardPaste
 #include "CadCommandsInternal.hpp"
 #include "CadColor.hpp"
 #include "CadBlocks.hpp"
@@ -159,7 +156,6 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.drawingInsUnits        = cmd.drawingInsUnits;  // REQ-357: unit, scale and settings are per drawing
   doc.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
   doc.drawingSettings        = cmd.drawingSettings;
-  doc.pointVisibility        = cmd.pointVisibility;
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
@@ -274,7 +270,6 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.drawingInsUnits            = doc.drawingInsUnits;  // REQ-357
   cmd.modelUnitsPerPlottedInch   = doc.modelUnitsPerPlottedInch;
   cmd.drawingSettings            = doc.drawingSettings;
-  cmd.pointVisibility            = doc.pointVisibility;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.activeDimensionStyle       = doc.dimensionStyle;
@@ -3306,24 +3301,6 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
   st.cadSurfaces.erase(st.cadSurfaces.begin() + static_cast<std::ptrdiff_t>(index));
   if (index < st.cadSurfaceAttrs.size())
     st.cadSurfaceAttrs.erase(st.cadSurfaceAttrs.begin() + static_cast<std::ptrdiff_t>(index));
-  // The selection is indexed, and `cadSurfaces` has just compacted (architecture SS11.9). Drop the
-  // entry for the surface that is gone, and slide every LATER surface entry down one -- otherwise a
-  // selection either points past the end (the `selection-in-range` document invariant trips on the
-  // next CHECK) or, worse, silently points at whichever surface took the slot, so the next command
-  // acts on a surface the user never picked.
-  //
-  // Done HERE because this is the one erase path (REQ-068): `SURFACEDELETE`, the ERASE command and
-  // both panel Delete buttons all come through it, and only ERASE was clearing up after itself.
-  for (size_t i = st.selection.size(); i-- > 0;) {
-    SelectedEntity& e = st.selection[i];
-    if (e.type != SelectedEntity::Type::Surface || e.index < 0)
-      continue;
-    const size_t ei = static_cast<size_t>(e.index);
-    if (ei == index)
-      st.selection.erase(st.selection.begin() + static_cast<std::ptrdiff_t>(i));
-    else if (ei > index)
-      --e.index;
-  }
   BumpCadGpuCache(st);
 }
 
@@ -3360,7 +3337,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
           msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
         log.push_back(msg);
         MarkVolumeSurfacesDirtyForParent(st, surface.name);
-        // A link means the same thing whichever way the rebuild was driven (ADR-065 (b)): the
+        // A link means the same thing whichever way the rebuild was driven (ADR-062 (b)): the
         // command path above and this async reap are the only two places a TIN is replaced.
         ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);
       } else {
@@ -4307,7 +4284,7 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
     PushUndoSnapshot(st, "Rebuild surfaces");
     for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
       BuildSurfaceFromSources(st, st.cadSurfaces[i], log);
-      ReDrapeLinkedToSurface(st, i, log);  // ADR-065 (b)
+      ReDrapeLinkedToSurface(st, i, log);  // ADR-062 (b)
     }
     BumpCadGpuCache(st);
     return;
@@ -4319,7 +4296,7 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
   }
   PushUndoSnapshot(st, "Rebuild surface");
   BuildSurfaceFromSources(st, st.cadSurfaces[static_cast<size_t>(si)], log);
-  ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);  // ADR-065 (b)
+  ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);  // ADR-062 (b)
   BumpCadGpuCache(st);
 }
 
@@ -4458,6 +4435,11 @@ void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vec
 /// because the command dispatch above reaches it first.
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void ExecuteDrapeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void ExecutePadSolidCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void StartPadSolidCommand(AppCommandState& st, std::vector<std::string>& log);
+void HandlePadSolidPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+void BuildPadSolids(AppCommandState& st, const std::string& surfaceName, std::uint64_t boundaryId,
+                    double padZ, std::vector<std::string>& log);
 
 // SURFSTYLE (REQ-070) — the command form of the Surface Style editor.
 //
@@ -5158,12 +5140,6 @@ void ExecuteToolspaceCommand(AppCommandState& st, const std::string& args, std::
     st.showToolspaceWindow = true;
     st.toolspaceTab = AppCommandState::ToolspaceTab::Prospector;
     log.push_back("TOOLSPACE — Prospector.");
-    return;
-  }
-  if (verb == "project") {
-    st.showToolspaceWindow = true;
-    st.toolspaceTab = AppCommandState::ToolspaceTab::Project;
-    log.push_back("TOOLSPACE — Project.");
     return;
   }
   if (verb == "settings") {
@@ -6750,22 +6726,15 @@ const CmdEntry kRegistry[] = {
     {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
     {"surfstyle", "ss", "Surface style editor: contours, triangles, border (REQ-070)"},
     {"extract", "", "Bake a surface's displayed contours into polylines: EXTRACT <surface>[, <layer>]"},
+    {"padsolid", "pad", "Cut/fill solids for a pad: select the boundary, then PADSOLID <surface>, <elevation>"},
     {"volumes", "vol", "Cut/fill/net volume between two surfaces: VOLUMES <base>, <comparison>[, <clip id>]"},
     {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"drawingsettings", "editdrawingsettings", "Drawing Settings: units, scale and the drawing's settings"},
-    {"projectsettings", "", "Project Settings: the project's coordinate system, units and defaults (REQ-375)"},
-    {"projecthealth", "", "Project Health: linked, missing and unsaved files before you pack or hand over (REQ-379)"},
-    {"packproject", "", "Pack Project: write the whole project as one .gspack file to send (REQ-380)"},
-    {"turnover", "", "Create Turnover: record which project files were handed to whom, and when (REQ-381)"},
-    {"openpack", "", "Open Packed Project: unpack a .gspack into a folder and open it (REQ-380)"},
-    {"adddrawing", "", "Add Drawing to Project: bring an existing drawing and its points into this project (REQ-378)"},
     {"geomarkpoint", "", "Place a Position Marker at a picked point (geolocated drawing)"},
     {"geomarklatlong", "", "Place a Position Marker at a typed latitude and longitude"},
     {"georeorientmarker", "", "Set the geographic marker: a design point, then north"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
-    {"pdfview", "pv", "Open a PDF in the built-in viewer (REQ-387)"},
-    {"pdfsplit", "", "Save chosen pages of the open PDF as a new PDF (REQ-389)"},
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
     {"quickselect",  "qs", "Select by object properties"},
@@ -7215,6 +7184,12 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     StartDistCommand(st, log);
     return true;
   }
+  if (primary == "padsolid") {
+    // Bare PADSOLID: the usage line, so a user who types the name alone is told what it wants
+    // rather than met with silence.
+    ExecutePadSolidCommand(st, std::string(), log);
+    return true;
+  }
   if (primary == "extract") {
     ExecuteExtractCommand(st, std::string(), log);
     return true;
@@ -7277,73 +7252,6 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     // The window itself refuses the GUI's Start tab (REQ-308); headless runs have no Start tab.
     st.showDrawingSettingsWindow = true;
     log.push_back("DRAWINGSETTINGS — Drawing Settings opened.");
-    return true;
-  }
-  if (primary == "projectsettings") {  // REQ-375
-    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
-                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
-                             : 0u;
-    if (uid == 0) {
-      log.push_back("PROJECTSETTINGS — this drawing is not in a project.");
-    } else {
-      st.projectSettingsUid = uid;
-      log.push_back("PROJECTSETTINGS — Project Settings opened.");
-    }
-    return true;
-  }
-  if (primary == "projecthealth") {  // REQ-379 clause 4
-    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
-                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
-                             : 0u;
-    if (uid == 0) {
-      log.push_back("PROJECTHEALTH — this drawing is not in a project.");
-    } else {
-      st.projectHealthUid = uid;
-      log.push_back("PROJECTHEALTH — Project Health opened.");
-    }
-    return true;
-  }
-  if (primary == "packproject") {  // REQ-380
-    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
-                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
-                             : 0u;
-    if (uid == 0) {
-      log.push_back("PACKPROJECT — this drawing is not in a project.");
-    } else {
-      st.projectPackPrompt = {};
-      st.projectPackPrompt.projectUid = uid;
-      log.push_back("PACKPROJECT — Pack Project opened.");
-    }
-    return true;
-  }
-  if (primary == "turnover") {  // REQ-381
-    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
-                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
-                             : 0u;
-    if (uid == 0) {
-      log.push_back("TURNOVER — this drawing is not in a project.");
-    } else {
-      st.projectTurnoverPrompt = {};
-      st.projectTurnoverPrompt.projectUid = uid;
-      log.push_back("TURNOVER — Create Turnover opened.");
-    }
-    return true;
-  }
-  if (primary == "openpack") {  // REQ-380
-    st.openPackRequested = true;
-    log.push_back("OPENPACK — choose the .gspack file to open.");
-    return true;
-  }
-  if (primary == "adddrawing") {  // REQ-378
-    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
-                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
-                             : 0u;
-    if (uid == 0) {
-      log.push_back("ADDDRAWING — open a drawing of the project first.");
-    } else {
-      st.addDrawingToProjectUid = uid;
-      log.push_back("ADDDRAWING — choose the drawing to add.");
-    }
     return true;
   }
   if (primary == "style") {
@@ -7513,15 +7421,6 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "traverse" || primary == "trav" || primary == "traverseeditor") {
     StartTraverseEditorCommand(st, log);
-    return true;
-  }
-  if (primary == "pdfview") {  // REQ-387: the built-in PDF viewer; the window shows the file dialog
-    st.pdfViewerPickRequest = true;
-    log.push_back("PDFVIEW — choose a PDF to open in the viewer.");
-    return true;
-  }
-  if (primary == "pdfsplit") {  // REQ-389: the viewer window shows the Split dialog
-    st.pdfSplitRequest = true;
     return true;
   }
   if (primary == "pdfattach" || primary == "pdfatt") {
@@ -13556,6 +13455,12 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     return;
   }
 
+  if (st.active == K::PadSolid) {
+    if (st.padSolidPhase == AppCommandState::PadSolidPhase::WaitBoundary)
+      HandlePadSolidPick(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::Ellipse) {
     using EP = AppCommandState::EllipsePhase;
     switch (st.ellPhase) {
@@ -15732,7 +15637,6 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
   }
   CadClipboard& cb = st.clipboard;
   cb = CadClipboard{};
-  TagClipboardOrigin(st);  // REQ-383
   cb.fromPaper = true;
   float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
   auto expandBbox = [&](float x, float y) {
@@ -15859,7 +15763,6 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
   }
   CadClipboard& cb = st.clipboard;
   cb = CadClipboard{};
-  TagClipboardOrigin(st);  // REQ-383
   cb.fromPaper = false;  // copied from model space
 
   float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
@@ -16003,30 +15906,11 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
                   "duplicate one in place.");
 }
 
-/// REQ-383 clauses 1 and 3: true when this paste must not start now — it is blocked, or it waits for
-/// the user's answer to the warning the UI is about to show. "Paste anyway" sets
-/// `pasteWarningAnswered` and starts the paste again, which lets it through once.
-static bool PasteWaitsForUser(AppCommandState& st, bool original, std::vector<std::string>& log) {
-  if (st.pasteWarningAnswered) {
-    st.pasteWarningAnswered = false;
-    return false;
-  }
-  const PasteCheck pc = CheckClipboardPaste(st);
-  if (pc.verdict == PasteCheck::Verdict::Ok)
-    return false;
-  st.pastePrompt = {true, pc.verdict == PasteCheck::Verdict::Block, original, pc.text, true};
-  log.push_back(std::string(original ? "PASTEORIG" : "PASTE") +
-                (pc.verdict == PasteCheck::Verdict::Block ? " — blocked: " : " — check before pasting: ") + pc.text);
-  return true;
-}
-
 void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.clipboard.empty()) {
     log.push_back("PASTE — clipboard is empty. Use Ctrl+C to copy objects first.");
     return;
   }
-  if (PasteWaitsForUser(st, false, log))
-    return;
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Paste;
@@ -16043,8 +15927,6 @@ void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("PASTEORIG — clipboard is empty. Use Ctrl+C to copy objects first.");
     return;
   }
-  if (PasteWaitsForUser(st, true, log))
-    return;
   PushUndoSnapshot(st, "Paste original");
   CommitPasteFromClipboard(st, 0.f, 0.f, log);
   log.push_back("PASTEORIG — objects pasted at original coordinates.");
@@ -24431,7 +24313,7 @@ void GatherDrapeRun(DrapeTarget& t, const std::vector<int>& offsets, std::vector
   }
 }
 
-/// The surface's cached spatial index, built on first use — the same cache SURFELEV's walk keeps,
+/// The surface's cached spatial index, built on first use ΓÇö the same cache SURFELEV's walk keeps,
 /// keyed by stable id and TIN pointer (REQ-126 / ADR-039 (c)). A drape of a long feature line would
 /// otherwise rescan every triangle once per vertex.
 [[nodiscard]] const TinSpatialIndex* DrapeSurfaceIndex(AppCommandState& st, size_t si) {
@@ -24456,7 +24338,7 @@ struct DrapeResolved {
   std::vector<double> newZ;
 };
 
-/// What laying these entities on surface `si` would do — resolved without writing anything, so a
+/// What laying these entities on surface `si` would do ΓÇö resolved without writing anything, so a
 /// refusal costs nothing and no undo entry is pushed for a drape that turns out to move nothing.
 ///
 /// The one place a drape is worked out, so the `DRAPE` command and the re-drape a rebuild triggers
@@ -24516,7 +24398,7 @@ struct DrapeResolved {
   return ready;
 }
 
-/// Write what `ResolveDrapeOnto` worked out, stamping each entity's link — the surface's stable id
+/// Write what `ResolveDrapeOnto` worked out, stamping each entity's link ΓÇö the surface's stable id
 /// to link it, or 0 to bake it (which also clears a link a previous drape left).
 int ApplyResolvedDrape(AppCommandState& st, const std::vector<DrapeResolved>& ready, std::uint64_t linkTo) {
   int moved = 0;
@@ -24582,7 +24464,7 @@ void ReDrapeLinkedToSurface(AppCommandState& st, size_t si, std::vector<std::str
 /// The one place the link is turned into something a person reads, so the Properties panel and the
 /// `DRAPELINKS` report cannot disagree about what is linked.
 ///
-/// Empty covers three cases that are the same to the user — never linked, baked since, or linked to
+/// Empty covers three cases that are the same to the user ΓÇö never linked, baked since, or linked to
 /// a surface that has been erased. The last is ADR-065 (e): the id stays on the entity and simply
 /// stops resolving, so the geometry is no longer following anything and must not claim to be.
 std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity& e) {
@@ -24606,10 +24488,10 @@ std::string DrapedOnSurfaceName(const AppCommandState& st, const SelectedEntity&
 
 namespace {
 
-/// `DRAPELINKS` — every object in the drawing that follows a surface, and which one.
+/// `DRAPELINKS` ΓÇö every object in the drawing that follows a surface, and which one.
 ///
 /// The drawing-wide half of ADR-065 (d): the Properties panel answers "does THIS one move?", and this
-/// answers "what in here moves when I rebuild?" — which is the question actually asked before editing
+/// answers "what in here moves when I rebuild?" ΓÇö which is the question actually asked before editing
 /// a surface. A link that only existed in a file and in a panel would be a hidden attribute by any
 /// practical measure.
 void ExecuteDrapeLinksCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -24656,12 +24538,12 @@ void ExecuteDrapeLinksCommand(AppCommandState& st, std::vector<std::string>& log
 }  // namespace
 namespace {
 
-/// `DRAPE <surface>[, LINK]` — lay the selection on a surface, each vertex taking the elevation of
+/// `DRAPE <surface>[, LINK]` ΓÇö lay the selection on a surface, each vertex taking the elevation of
 /// the ground under it (REQ-074's query; GitHub issue #150, 3D Phase 7).
 ///
 /// **Baked unless `LINK` is asked for** (ADR-065 (a)/(b)). A baked drape stamps the elevations once
 /// and stores nothing, so the drawing never changes shape because somebody edited a surface. `LINK`
-/// stores the surface's **stable entity id** (ADR-065 (c) — never its name, which can be changed,
+/// stores the surface's **stable entity id** (ADR-065 (c) ΓÇö never its name, which can be changed,
 /// and never its array index, which another surface takes after an erase), and the geometry
 /// re-drapes whenever that surface is rebuilt.
 ///
@@ -24672,7 +24554,7 @@ namespace {
 /// A vertex the surface does not cover is not draped, and its whole entity is refused by name with
 /// the count (ADR-065 (f)). `TinElevationAt` never extrapolates (REQ-074), so there is no elevation
 /// to give it; draping the covered vertices and leaving the rest at their old height would make a
-/// shape that is neither the original nor the ground — wrong in a way that looks plausible, which
+/// shape that is neither the original nor the ground ΓÇö wrong in a way that looks plausible, which
 /// REQ-201 forbids. Every other entity in the selection still drapes.
 void ExecuteDrapeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitCommaFields(StringUtil::trimCopy(args));
@@ -24758,6 +24640,357 @@ void ExecuteDrapeCommand(AppCommandState& st, const std::string& args, std::vect
     msg += " " + std::to_string(refusedKind) + " could not be draped (" + firstKindRefused + ").";
   log.push_back(msg);
 }
+
+
+/// `PADSOLID <surface>, <boundary entity id>, <elevation>` — the earthwork a building pad represents,
+/// as solids you can see and measure (GitHub #150, 3D Phase 7).
+///
+/// Produces up to **two** solids: the CUT (ground above the pad — material to dig out) and the FILL
+/// (ground below it — material to bring in). A real pad cut into a slope is usually both, they are
+/// physically different shapes, and they are billed separately, so they are never merged into one
+/// lump whose volume would be the two partly cancelling each other out (D-2026-10-02-a).
+///
+/// The depth is given as the **finished elevation** of the pad floor, which is how a site plan states
+/// it — not as a thickness below ground, which would follow every bump and have no flat floor.
+///
+/// The boundary is a closed polyline named by its stable entity id, resolved through
+/// `VolumeClipRingLocalXy` — the same resolver `VOLUMES` uses for REQ-131's clip, so a ring that
+/// bounds a volume and a ring that bounds a pad cannot mean different things.
+
+void BuildPadSolids(AppCommandState& st, const std::string& surfaceName, std::uint64_t boundaryId,
+                    double padZ, std::vector<std::string>& log) {
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0) {
+    log.push_back("PADSOLID - no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!surf.tin || surf.tin->indices.empty()) {
+    log.push_back("PADSOLID - \"" + surf.name + "\" has never been built; nothing to cut into.");
+    return;
+  }
+  std::vector<std::pair<double, double>> ring;
+  std::string ringErr;
+  if (!VolumeClipRingLocalXy(st, boundaryId, &ring, &ringErr) || ring.size() < 3) {
+    log.push_back("PADSOLID - the boundary " +
+                  (ringErr.empty() ? std::string("must be a closed polyline") : ringErr) + ".");
+    return;
+  }
+  if (!std::isfinite(padZ)) {
+    log.push_back("PADSOLID - the pad elevation is not a number.");
+    return;
+  }
+  // The grid the pad is built on. Deliberately coarser than the volume sampler's 250,000 cells: every
+  // cell becomes four or more B-rep faces, so that resolution would be a solid with a million faces.
+  // ~1,600 cells is a few thousand faces, which measures and draws like any other solid, and the
+  // staircase it leaves on the boundary is smaller than the ring's own vertex spacing on any real
+  // site.
+  constexpr double kTargetPadCells = 1600.0;
+  double minX = ring[0].first, maxX = minX, minY = ring[0].second, maxY = minY;
+  for (const auto& p : ring) {
+    minX = std::min(minX, p.first);
+    maxX = std::max(maxX, p.first);
+    minY = std::min(minY, p.second);
+    maxY = std::max(maxY, p.second);
+  }
+  const double w = maxX - minX;
+  const double h = maxY - minY;
+  if (!(w > 0.0) || !(h > 0.0)) {
+    log.push_back("PADSOLID - the boundary encloses no area.");
+    return;
+  }
+  const double cell = std::max(std::sqrt((w * h) / kTargetPadCells), 1e-6);
+  const int cols = std::max(1, static_cast<int>(std::ceil(w / cell)));
+  const int rows = std::max(1, static_cast<int>(std::ceil(h / cell)));
+  const double cellW = w / static_cast<double>(cols);
+  const double cellH = h / static_cast<double>(rows);
+
+  const TinSpatialIndex index = BuildTinSpatialIndex(surf.tin->vertsXyz, surf.tin->indices);
+  const auto groundAt = [&](double x, double y, double* z) {
+    return index.empty() ? TinElevationAt(surf.tin->vertsXyz, surf.tin->indices, x, y, z)
+                         : TinElevationAtIndexed(surf.tin->vertsXyz, surf.tin->indices, index, x, y, z);
+  };
+
+  // Node elevations first; a node the surface does not cover makes every cell touching it unbuildable,
+  // which is how the pad stops at the edge of the survey rather than extrapolating (REQ-074).
+  const int nx = cols + 1;
+  const int ny = rows + 1;
+  std::vector<double> nodeZ(static_cast<size_t>(nx) * static_cast<size_t>(ny), 0.0);
+  std::vector<std::uint8_t> nodeOk(nodeZ.size(), 0);
+  for (int j = 0; j < ny; ++j) {
+    for (int i = 0; i < nx; ++i) {
+      const size_t k = static_cast<size_t>(j) * static_cast<size_t>(nx) + static_cast<size_t>(i);
+      double z = 0.0;
+      if (groundAt(minX + cellW * i, minY + cellH * j, &z)) {
+        nodeZ[k] = z;
+        nodeOk[k] = 1;
+      }
+    }
+  }
+
+  // A cell belongs to the cut or the fill by where its CENTRE sits — inside the ring, and which side
+  // of the pad elevation the ground is. Centres are what REQ-131's clip already uses, so a pad and a
+  // bounded volume over the same ring agree about which cells are in.
+  std::vector<std::uint8_t> cutIn(static_cast<size_t>(cols) * static_cast<size_t>(rows), 0);
+  std::vector<std::uint8_t> fillIn(cutIn.size(), 0);
+  int outside = 0;
+  for (int cj = 0; cj < rows; ++cj) {
+    for (int ci = 0; ci < cols; ++ci) {
+      const size_t c = static_cast<size_t>(cj) * static_cast<size_t>(cols) + static_cast<size_t>(ci);
+      bool corners = true;
+      for (int dj = 0; dj <= 1 && corners; ++dj)
+        for (int di = 0; di <= 1 && corners; ++di)
+          if (!nodeOk[static_cast<size_t>(cj + dj) * static_cast<size_t>(nx) + static_cast<size_t>(ci + di)])
+            corners = false;
+      if (!corners) {
+        ++outside;
+        continue;
+      }
+      const double cx = minX + cellW * (static_cast<double>(ci) + 0.5);
+      const double cy = minY + cellH * (static_cast<double>(cj) + 0.5);
+      if (!TinPointInPolygon(cx, cy, ring))
+        continue;
+      double gz = 0.0;
+      if (!groundAt(cx, cy, &gz)) {
+        ++outside;
+        continue;
+      }
+      if (gz > padZ)
+        cutIn[c] = 1;
+      else if (gz < padZ)
+        fillIn[c] = 1;
+    }
+  }
+
+  brep::HeightField hf;
+  hf.originX = minX;
+  hf.originY = minY;
+  hf.cellW = cellW;
+  hf.cellH = cellH;
+  hf.cols = cols;
+  hf.rows = rows;
+  hf.nodeZ = nodeZ;
+  hf.flatZ = padZ;
+
+  struct Made { const char* what; double volume; };
+  std::vector<Made> made;
+  std::vector<brep::Solid> solids;
+  const auto build = [&](std::vector<std::uint8_t>& mask, bool flatIsBottom, const char* what) {
+    if (std::find(mask.begin(), mask.end(), 1) == mask.end())
+      return;
+    hf.cellIn = mask;
+    hf.flatIsBottom = flatIsBottom;
+    brep::Solid s;
+    brep::Problem why = brep::Problem::Ok;
+    if (!brep::MakeHeightFieldSolid(hf, &s, &why)) {
+      log.push_back(std::string("PADSOLID - no ") + what + " solid: " + brep::ProblemText(why) + ".");
+      return;
+    }
+    const brep::MassProperties mp = brep::ComputeMassProperties(s);
+    made.push_back({what, mp.valid ? mp.volume : 0.0});
+    solids.push_back(std::move(s));
+  };
+  build(cutIn, /*flatIsBottom=*/true, "cut");
+  build(fillIn, /*flatIsBottom=*/false, "fill");
+
+  if (solids.empty()) {
+    log.push_back("PADSOLID - the ground already sits at " + FormatLinear(padZ, st.displayLinearPrecision) +
+                  " across the boundary; there is nothing to cut or fill.");
+    return;
+  }
+
+  PushUndoSnapshot(st, "Pad solid");
+  for (brep::Solid& s : solids) {
+    st.cadSolids.push_back(std::make_shared<brep::Solid>(std::move(s)));
+    st.cadSolidAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Solid, {}));  // REQ-361
+  }
+  EnsureAttrCounts(st);
+  BumpCadGpuCache(st);
+
+  const int p = st.displayLinearPrecision;
+  for (const Made& m : made)
+    log.push_back(std::string("PADSOLID - ") + m.what + " solid created, volume " + FormatVolumeYd3(m.volume, p) + ".");
+  if (outside > 0)
+    log.push_back("PADSOLID - " + std::to_string(outside) +
+                  " cell(s) of the boundary are not over \"" + surf.name + "\" and were left out.");
+}
+
+
+
+/// The surface PADSOLID will use if the user does not name one: the one it used last, else the only
+/// surface in the drawing. Empty when there is a genuine choice to make.
+std::string PadSolidDefaultSurface(const AppCommandState& st) {
+  if (!st.padSolidSurface.empty() && FindSurfaceIndex(st, st.padSolidSurface) >= 0)
+    return st.padSolidSurface;
+  if (st.cadSurfaces.size() == 1)
+    return st.cadSurfaces[0].name;
+  return std::string();
+}
+
+/// The options prompt PADSOLID sits on, naming what it already has — the shape every other command
+/// with keywords uses, so a user can see the current surface rather than having to remember it.
+void PadSolidPrompt(AppCommandState& st, std::vector<std::string>& log) {
+  const std::string surf = PadSolidDefaultSurface(st);
+  st.padSolidPhase = AppCommandState::PadSolidPhase::WaitOptions;
+  log.push_back("PADSOLID - specify pad elevation, or [Surface]" +
+                (surf.empty() ? std::string(" (no surface chosen yet)") : " <" + surf + ">") +
+                ". ESC cancels.");
+}
+
+/// The boundary the command will use: the closed polyline the user has selected, or 0.
+std::uint64_t PadSolidSelectedBoundary(AppCommandState& st, int* outCount) {
+  int n = 0;
+  std::uint64_t id = 0;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Polyline || e.index < 0)
+      continue;
+    if (static_cast<size_t>(e.index) >= st.userPolylineAttrs.size())
+      continue;
+    ++n;
+    id = st.userPolylineAttrs[static_cast<size_t>(e.index)].id;
+  }
+  if (outCount)
+    *outCount = n;
+  return id;
+}
+
+
+void StartPadSolidCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::PadSolid;
+  st.lastCommand = AppCommandState::Kind::PadSolid;
+  st.padSolidBoundaryId = 0;
+  EnsureEntityIds(st);  // so a ring drawn moments ago already has the id the pad will remember it by
+
+  int n = 0;
+  const std::uint64_t id = PadSolidSelectedBoundary(st, &n);
+  if (n == 1) {
+    // A pre-selection is honoured, the way MOVE and ROTATE honour one.
+    st.padSolidBoundaryId = id;
+    PadSolidPrompt(st, log);
+    return;
+  }
+  st.padSolidPhase = AppCommandState::PadSolidPhase::WaitBoundary;
+  log.push_back(n > 1 ? "PADSOLID - select ONE closed polyline for the boundary. ESC cancels."
+                      : "PADSOLID - select the closed polyline that bounds the pad. ESC cancels.");
+}
+
+
+/// One typed line while PADSOLID is running: a pad elevation, or `S` to name the surface.
+void HandlePadSolidText(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
+  using P = AppCommandState::PadSolidPhase;
+  const std::string tr = StringUtil::trimCopy(line);
+  const std::string low = StringUtil::toLowerAsciiCopy(tr);
+
+  if (st.padSolidPhase == P::WaitSurfaceName) {
+    if (tr.empty()) {
+      PadSolidPrompt(st, log);
+      return;
+    }
+    if (FindSurfaceIndex(st, tr) < 0) {
+      std::string names;
+      for (const CadSurface& s : st.cadSurfaces)
+        names += (names.empty() ? "" : ", ") + s.name;
+      log.push_back("PADSOLID - no surface named \"" + tr + "\"." +
+                    (names.empty() ? "" : " Surfaces: " + names + "."));
+      return;  // stay on this prompt rather than throwing the command away
+    }
+    st.padSolidSurface = tr;
+    PadSolidPrompt(st, log);
+    return;
+  }
+
+  if (st.padSolidPhase != P::WaitOptions)
+    return;
+
+  if (low == "s" || low == "surface") {
+    std::string names;
+    for (const CadSurface& s : st.cadSurfaces)
+      names += (names.empty() ? "" : ", ") + s.name;
+    st.padSolidPhase = P::WaitSurfaceName;
+    log.push_back(names.empty() ? "PADSOLID - the drawing has no surfaces."
+                                : "PADSOLID - enter surface name. Surfaces: " + names + ".");
+    return;
+  }
+  if (tr.empty()) {
+    PadSolidPrompt(st, log);  // a bare Enter re-states what it is waiting for
+    return;
+  }
+
+  char* end = nullptr;
+  const double padZ = std::strtod(tr.c_str(), &end);
+  if (!end || end == tr.c_str() || *end != '\0' || !std::isfinite(padZ)) {
+    log.push_back("PADSOLID - enter a pad elevation, or S to choose the surface.");
+    return;
+  }
+  const std::string surf = PadSolidDefaultSurface(st);
+  if (surf.empty()) {
+    log.push_back("PADSOLID - choose a surface first: type S.");
+    return;
+  }
+  st.padSolidSurface = surf;
+  BuildPadSolids(st, surf, st.padSolidBoundaryId, padZ, log);
+  st.active = AppCommandState::Kind::None;
+  st.padSolidPhase = P::WaitBoundary;
+}
+
+/// A viewport pick while PADSOLID is waiting for its boundary.
+void HandlePadSolidPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2) ||
+      hit.type != SelectedEntity::Type::Polyline) {
+    log.push_back("PADSOLID - that is not a closed polyline. Pick the ring that bounds the pad.");
+    return;
+  }
+  if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.userPolylineAttrs.size())
+    return;
+  EnsureEntityIds(st);
+  const std::uint64_t id = st.userPolylineAttrs[static_cast<size_t>(hit.index)].id;
+  std::vector<std::pair<double, double>> ring;
+  std::string err;
+  if (!VolumeClipRingLocalXy(st, id, &ring, &err) || ring.size() < 3) {
+    log.push_back("PADSOLID - that polyline is not closed; the boundary must be a closed ring.");
+    return;
+  }
+  st.padSolidBoundaryId = id;
+  ClearCadSelection(st);
+  st.selection.push_back(hit);
+  PadSolidPrompt(st, log);
+}
+
+/// `PADSOLID` on its own starts the prompted command; `PADSOLID <surface>, <elevation>` does the
+/// whole thing in one line for a script or a transcript. Both end in the same `BuildPadSolids`.
+void ExecutePadSolidCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::string trimmed = StringUtil::trimCopy(args);
+  if (trimmed.empty()) {
+    StartPadSolidCommand(st, log);
+    return;
+  }
+  const std::vector<std::string> f = SplitCommaFields(trimmed);
+  if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+    log.push_back("PADSOLID - usage: PADSOLID <surface>, <pad elevation>, or just PADSOLID to be asked.");
+    return;
+  }
+  int n = 0;
+  const std::uint64_t id = PadSolidSelectedBoundary(st, &n);
+  if (n != 1) {
+    log.push_back(n == 0 ? "PADSOLID - select the closed polyline that bounds the pad first."
+                         : "PADSOLID - select ONE closed polyline for the boundary, not " +
+                               std::to_string(n) + ".");
+    return;
+  }
+  char* end = nullptr;
+  const double padZ = std::strtod(f[1].c_str(), &end);
+  if (!end || end == f[1].c_str() || *end != '\0' || !std::isfinite(padZ)) {
+    log.push_back("PADSOLID - pad elevation must be a number, not \"" + f[1] + "\".");
+    return;
+  }
+  st.padSolidSurface = f[0];
+  BuildPadSolids(st, f[0], id, padZ, log);
+}
+
 
 void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   SurfaceStyles::EnsureStandard(st.surfaceStyles);
@@ -25350,13 +25583,6 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadAnnotationAttrs.clear();
   st.cadFilledRegions.clear();
   st.cadFilledRegionAttrs.clear();
-  st.annotationScales.clear();
-  st.currentAnnotationScaleIndex = -1;
-  st.dwgImportedLights.clear();
-  st.dwgImportedSunPresent = false;
-  st.dwgImportedLightList = {};
-  st.dwgImportedLightListPresent = false;
-  st.dwgImportedLightListDictKey.clear();
   st.cadMeshes.clear();
   st.cadMeshAttrs.clear();
   st.cadPointClouds.clear();
@@ -25365,19 +25591,6 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadSolidAttrs.clear();
   st.solidDisplayCache.clear();
   st.solidDisplayGeometry.solids.clear();
-  // TIN surfaces (REQ-068) and their generated display geometry (ADR-036 (e)). The cache is keyed
-  // on stable entity ids and lives on AppCommandState, not in the drawing snapshot — so it must be
-  // dropped whenever the drawing's geometry is cleared or replaced. Leaving it across OPEN/IMPORT
-  // let a cache entry for the same id early-out against a new triangulation and, worse, hand the
-  // renderer buffers built for the previous document (issue #663).
-  st.cadSurfaces.clear();
-  st.cadSurfaceAttrs.clear();
-  st.surfaceDisplayCache.clear();
-  st.surfaceWatershedCache.clear();
-  st.surfaceDisplayGeometry.lines.clear();
-  st.surfaceDisplayGeometry.bandTriangles.clear();
-  st.waterDropPreviewLines.clear();
-  st.surfaceRebuildAsync.clear();  // join/cancel any in-flight worker before ids are reused
   st.blockRefWorldSolids.clear();
   st.blockRefWorldSolidAttrs.clear();
   st.blockRefWorldSolidsSig = 0;
@@ -31656,7 +31869,6 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     VisibleSolid vs;
     vs.tess = &*it;
     ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
-    ApplyMaterialDiffuseForShaded(attr, vs.rgba);
     vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
     visible.push_back(vs);
     mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
@@ -31685,7 +31897,6 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     VisibleSolid vs;
     vs.tess = &*it;
     ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
-    ApplyMaterialDiffuseForShaded(attr, vs.rgba);
     vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
     visible.push_back(vs);
     mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
@@ -31714,7 +31925,6 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
     VisibleSolid vs;
     vs.tess = &*it;
     ResolveEntityRgbaForViewport(attr, lr, kSolidDefaultR, kSolidDefaultG, kSolidDefaultB, vs.rgba);
-    ApplyMaterialDiffuseForShaded(attr, vs.rgba);
     vs.lineweightMm = EffectiveEntityLineweightMm(attr, lr);
     visible.push_back(vs);
     mix(reinterpret_cast<std::uintptr_t>(it->triVerts.data()));
@@ -38205,14 +38415,8 @@ bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vec
     log.push_back("VISUALSTYLE — enter 2D, HIDDEN or SHADED.");
     return false;
   }
-  if (Viewport* vp = CurrentViewport(st)) {
-    vp->visualStyle = s;
-    log.push_back(std::string("Viewport visual style = ") + VisualStyleName(s) + ".");
-  } else {
-    st.viewportVisualStyle = s;
-    log.push_back(std::string("Visual style = ") + VisualStyleName(s) + ".");
-  }
-  BumpCadGpuCache(st);
+  st.viewportVisualStyle = s;
+  log.push_back(std::string("Visual style = ") + VisualStyleName(s) + ".");
   return true;
 }
 
@@ -39498,37 +39702,6 @@ void SetDrawingPlotScale(AppCommandState& st, float modelUnitsPerPlottedInch) {
   st.surveyLabelLayoutCacheHalfH = st.viewportLastSurveyLayoutOrthoHalfH;
   st.surveyLabelLayoutCacheVpHeightPx = st.viewportLastSurveyLayoutHeightPx;
   st.surveyLabelLayoutCacheMup = st.modelUnitsPerPlottedInch;
-  SyncCurrentAnnotationScaleIndex(st);
-  BumpCadGpuCache(st);
-}
-
-void SyncCurrentAnnotationScaleIndex(AppCommandState& st) {
-  st.currentAnnotationScaleIndex = -1;
-  if (st.annotationScales.empty())
-    return;
-  int best = 0;
-  float bestDiff = 1.e30f;
-  for (int i = 0; i < static_cast<int>(st.annotationScales.size()); ++i) {
-    const float m = CadAnnotationScaleModelUnitsPerPlottedInch(st.annotationScales[static_cast<size_t>(i)]);
-    const float d = std::fabs(m - st.modelUnitsPerPlottedInch);
-    if (d < bestDiff) {
-      bestDiff = d;
-      best = i;
-    }
-  }
-  st.currentAnnotationScaleIndex = best;
-}
-
-void SetCurrentAnnotationScaleIndex(AppCommandState& st, int index) {
-  if (st.annotationScales.empty()) {
-    st.currentAnnotationScaleIndex = -1;
-    return;
-  }
-  const int n = static_cast<int>(st.annotationScales.size());
-  const int ix = std::clamp(index, 0, n - 1);
-  if (ix == st.currentAnnotationScaleIndex)
-    return;
-  st.currentAnnotationScaleIndex = ix;
   BumpCadGpuCache(st);
 }
 
@@ -40381,42 +40554,6 @@ void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anch
   st.selBoxAnchorScreenX = anchorScreenX;
   st.selBoxAnchorScreenY = anchorScreenY;
   st.selBoxWaitingSecond = true;
-}
-
-void UpdateSelectionBoxPreview(AppCommandState& st, float wx, float wy, bool windowMode, const Camera* cam,
-                               float vpW, float vpH) {
-  if (!st.selBoxWaitingSecond) {
-    st.selBoxPreview.clear();
-    st.selBoxPreviewKeyValid = false;
-    return;
-  }
-  const std::array<double, 11> key = {st.selBoxAnchorX,
-                                      st.selBoxAnchorY,
-                                      st.selBoxAnchorZ,
-                                      wx,
-                                      wy,
-                                      st.uiCursorWorldZ,
-                                      windowMode ? 1.0 : 0.0,
-                                      st.viewportPanX + st.viewportPanY,
-                                      st.viewportZoom,
-                                      static_cast<double>(st.cadGpuRevision),
-                                      static_cast<double>(st.hiddenEntityIds.size())};
-  if (st.selBoxPreviewKeyValid && key == st.selBoxPreviewKey)
-    return;
-  st.selBoxPreviewKey = key;
-  st.selBoxPreviewKeyValid = true;
-
-  // ComputeSelectionFromRect merges into st.selection / selectedSurveyPointIndices, so run it on an
-  // empty pair and put the real ones back — the preview must never change the selection.
-  std::vector<SelectedEntity> savedSel;
-  savedSel.swap(st.selection);
-  std::vector<int> savedSurvey;
-  savedSurvey.swap(st.selectedSurveyPointIndices);
-  ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, st.selBoxAnchorZ, wx, wy, st.uiCursorWorldZ,
-                           /*subtract=*/false, windowMode, /*includeSurveyPoints=*/false, cam, vpW, vpH);
-  st.selBoxPreview.swap(st.selection);
-  st.selection.swap(savedSel);
-  st.selectedSurveyPointIndices.swap(savedSurvey);
 }
 
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -41871,10 +42008,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         }
         path = buf;
       }
-      // REQ-379 clause 1: in a project drawing a file from outside the project asks copy / link first;
-      // the modal's answer starts the import.
-      if (RequestProjectAttach(st, AppCommandState::ProjectAttachPrompt::Kind::PointCloud, path, log))
-        return;
       StartPointCloudImportAsync(st, path, log);
       return;
     }
@@ -42261,48 +42394,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           StartFrameBudgetBench(st, 1, frames, log);
           return;
         }
-        // `BENCH PDFVIEW [pages]` — REQ-387: open a synthetic PDF of that many pages in the viewer
-        // and scroll it top to bottom, reporting first-page time and the viewer's per-frame cost.
-        if (lower == "pdfview" || lower == "pdf") {
-          int pages = 500;
-          int v = 0;
-          const std::streampos beforeArg = issIdle.tellg();
-          if (issIdle >> v) {
-            pages = std::clamp(v, 1, 5000);
-          } else {  // not a number: the rest of the line is a real PDF to time (its path may hold spaces)
-            issIdle.clear();
-            issIdle.seekg(beforeArg);
-            std::string path;
-            std::getline(issIdle, path);
-            path = StringUtil::trimCopy(path);
-            if (!path.empty()) {
-              st.pdfViewBenchPath = path;
-              log.push_back("BENCH PDFVIEW - timing " + path);
-              return;
-            }
-          }
-          st.pdfViewBenchPages = pages;
-          log.push_back("BENCH PDFVIEW — building a " + std::to_string(pages) + "-page PDF; the viewer window will scroll it.");
-          return;
-        }
-        // `BENCH PDFCOMPARE [pages]` — REQ-392: overlay two generated PDFs of that many pages in a
-        // viewer, zoom and pan the overlay, and report the viewer's per-frame cost.
-        if (lower == "pdfcompare") {
-          int pages = 500;
-          int v = 0;
-          if (issIdle >> v)
-            pages = std::clamp(v, 1, 5000);
-          st.pdfCompareBenchPages = pages;
-          log.push_back("BENCH PDFCOMPARE — building two " + std::to_string(pages) + "-page PDFs; the viewer window will overlay and pan them.");
-          return;
-        }
-        // `BENCH PDFDIFF` — REQ-393: automatically align and compare a generated pair of 36 x 24 in sheets (a few
-        // hundred thousand line segments) and report the time and the worst viewer frame.
-        if (lower == "pdfdiff") {
-          st.pdfDiffBench = true;
-          log.push_back("BENCH PDFDIFF — building two 36 x 24 in sheets; the viewer window will align and compare them.");
-          return;
-        }
         if (lower == "mesh" || lower == "m") {
           int tris = 2000000;  // REQ-100 (b): the density decided 2026-08-15, TASK-041's fixture
           int v = 0;
@@ -42419,7 +42510,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         if (pv != st.modelUnitsPerPlottedInch) {
           PushUndoSnapshot(st, "PLOTSCALE");  // the plot scale is undoable (REQ-357)
           SetDrawingPlotScale(st, pv);
-          NoteUserPlotScale(st);  // REQ-375
         }
         log.push_back("Plot scale: 1 plotted inch = " + std::to_string(pv) + " model units.");
       }
@@ -42427,7 +42517,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     // REQ-071. `EXTRACT <surface>[, <layer>]` — comma-separated, because a surface name and a layer
     // name both routinely contain spaces.
-    // ADR-065 (d), GitHub #150: what in this drawing moves when a surface is rebuilt.
+    // ADR-062 (d), GitHub #150: what in this drawing moves when a surface is rebuilt.
     if (plotTok == "drapelinks") {
       ExecuteDrapeLinksCommand(st, log);
       return;
@@ -42437,6 +42527,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       std::string rest;
       std::getline(issIdle, rest);
       ExecuteDrapeCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
+    // GitHub #150 (3D Phase 7). `PADSOLID <surface>, <boundary id>, <pad elevation>` - the cut and
+    // fill a building pad represents, as solids you can measure (D-2026-10-02-c).
+    if (plotTok == "padsolid" || plotTok == "pad") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecutePadSolidCommand(st, StringUtil::trimCopy(rest), log);
       return;
     }
     if (plotTok == "extract") {
@@ -43633,6 +43731,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (st.active == K::PadSolid) {
+    HandlePadSolidText(st, line, log);
+    return;
+  }
+
   if (st.active == K::Ellipse && st.ellPhase == AppCommandState::EllipsePhase::WaitRatio) {
     const std::string tr = StringUtil::trimCopy(line);
     float ratio = 0.5f;
@@ -44729,15 +44832,6 @@ void ResolveEntityRgbaForViewport(const EntityAttributes& attr, const CadLayerRo
       col = layer->color;
   }
   ResolveStoredColorForViewport(col, tr, defaultR, defaultG, defaultB, outRgba);
-}
-
-void ApplyMaterialDiffuseForShaded(const EntityAttributes& attr, float rgba[4]) {
-  assert(rgba != nullptr);
-  if (!attr.materialDiffuseOverride)
-    return;
-  rgba[0] = attr.materialDiffuseR;
-  rgba[1] = attr.materialDiffuseG;
-  rgba[2] = attr.materialDiffuseB;
 }
 
 struct DxfLwPair {

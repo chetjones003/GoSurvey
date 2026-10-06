@@ -2030,6 +2030,10 @@ struct AppCommandState {
     /// REQ-364: Capture Area — the two corners of Pick Area (geoCmdPhase WaitFirst / WaitSecond),
     /// then Capturing while the tiles are gathered (\ref mapCapture). Esc cancels, storing nothing.
     GeoCaptureArea,
+    /// GitHub #150 (3D Phase 7). PADSOLID asks for its boundary, then loops on a prompt offering
+    /// Surface and Pad elevation, the way every other command with options does - it does not take
+    /// everything on one line and give up. padSolidPhase drives it.
+    PadSolid,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -2123,6 +2127,7 @@ struct AppCommandState {
     case Kind::GeoReorientMarker:  return "GEOREORIENTMARKER";
     case Kind::DrawingSettingsPick: return "DRAWINGSETTINGS";
     case Kind::GeoCaptureArea:     return "GEOCAPTUREAREA";
+    case Kind::PadSolid:           return "PADSOLID";
     default:                  return "";
     }
   }
@@ -2501,6 +2506,14 @@ struct AppCommandState {
   float arcAz = 0.f, arcBz = 0.f;   ///< work-plane elevation of each pick (REQ-312), as circleCz
 
   enum class EllipsePhase { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
+
+  /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
+  /// elevation is given. The surface is remembered between runs in a drawing, so the common case
+  /// - one ground surface, several pads at different levels - is just a number each time.
+  enum class PadSolidPhase { WaitBoundary, WaitOptions, WaitSurfaceName } padSolidPhase =
+      PadSolidPhase::WaitBoundary;
+  std::uint64_t padSolidBoundaryId = 0;
+  std::string padSolidSurface;
 
   float ellCx = 0.f, ellCy = 0.f;
   float ellMajEx = 0.f, ellMajEy = 0.f;
