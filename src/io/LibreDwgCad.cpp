@@ -3804,6 +3804,27 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
     if (vsCtx != nullptr)
       DwgExportSetPaperViewportVisualStyle(tw.dwg, vsCtx, vp, gv.visualStyle);
   }
+  // REQ-113 / issue #765: the rest of the paper-space set (circles, arcs, ellipses, polylines, TEXT,
+  // MTEXT) goes through the block-definition writer: sheet coordinates are paper inches with no
+  // document-origin shift, exactly like block-local content. Lines are written above.
+  CadBlockContent rest;
+  for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
+    rest.circles.insert(rest.circles.end(), {static_cast<double>(L.paperCircles[i]),
+                                             static_cast<double>(L.paperCircles[i + 1]), 0.0,
+                                             static_cast<double>(L.paperCircles[i + 2])});
+  }
+  rest.circleAttrs = L.paperCircleAttrs;
+  rest.arcs = L.paperArcs;
+  rest.arcAttrs = L.paperArcAttrs;
+  rest.ellipses = L.paperEllipses;
+  rest.ellAttrs = L.paperEllAttrs;
+  rest.polyOffsets = L.paperPolyOffsets;
+  rest.polyVerts.assign(L.paperPolyVerts.begin(), L.paperPolyVerts.end());
+  rest.polyClosed = L.paperPolyClosed;
+  rest.polyAttrs = L.paperPolyAttrs;
+  rest.texts = L.paperTexts;
+  rest.textAttrs = L.paperTextAttrs;
+  WriteBlockDefinitionGeometry(ps, rest, tw);
   for (size_t i = 0; i < L.paperBlockRefs.size(); ++i)
     WriteBlockRefInsertToHeader(ps, tw, st, L.paperBlockRefs[i], AttrAt(L.paperBlockRefAttrs, i), 0.0, 0.0,
                                 fldCtx);
@@ -3819,6 +3840,10 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
       tw.EnsureLtype(a.linetype);
     for (const EntityAttributes& a : L.paperBlockRefAttrs)
       tw.EnsureLtype(a.linetype);
+    for (const std::vector<EntityAttributes>* v : {&L.paperCircleAttrs, &L.paperArcAttrs, &L.paperEllAttrs,
+                                                   &L.paperPolyAttrs, &L.paperTextAttrs})
+      for (const EntityAttributes& a : *v)
+        tw.EnsureLtype(a.linetype);
     (void)L;
   }
   size_t nWritten = 0;
@@ -3892,7 +3917,53 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
   }
   if (ty == DWG_TYPE_BLOCK || ty == DWG_TYPE_ENDBLK)
     return;
-  NoteSkip(skipHist, "paper-space entity (unsupported type)");
+  // REQ-113 / issue #765: TEXT, MTEXT, CIRCLE, ARC, ELLIPSE and polylines reuse the model-space reader.
+  // They land in a scratch state with origin 0 and 1 model unit per plotted inch, so every number is
+  // already in paper inches, then move into the layout's own stores.
+  if (ty == DWG_TYPE_TEXT || ty == DWG_TYPE_MTEXT || ty == DWG_TYPE_CIRCLE || ty == DWG_TYPE_ARC ||
+      ty == DWG_TYPE_ELLIPSE || ty == DWG_TYPE_LWPOLYLINE || ty == DWG_TYPE_POLYLINE_2D) {
+    AppCommandState scratch;
+    scratch.worldDocumentOriginX = 0.0;
+    scratch.worldDocumentOriginY = 0.0;
+    scratch.modelUnitsPerPlottedInch = 1.f;
+    ImportObject(scratch, dwg, obj, Xf2{}, 0, skipHist, degenerateExtrusions, nullptr);
+    for (size_t i = 0; i + 3 < scratch.userCirclesCxCyZR.size(); i += 4) {
+      L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i]));
+      L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 1]));
+      L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 3]));
+    }
+    L.paperCircleAttrs.insert(L.paperCircleAttrs.end(), scratch.userCircleAttrs.begin(),
+                              scratch.userCircleAttrs.end());
+    L.paperArcs.insert(L.paperArcs.end(), scratch.userArcs.begin(), scratch.userArcs.end());
+    L.paperArcAttrs.insert(L.paperArcAttrs.end(), scratch.userArcAttrs.begin(), scratch.userArcAttrs.end());
+    L.paperEllipses.insert(L.paperEllipses.end(), scratch.userEllipses.begin(), scratch.userEllipses.end());
+    L.paperEllAttrs.insert(L.paperEllAttrs.end(), scratch.userEllAttrs.begin(), scratch.userEllAttrs.end());
+    for (size_t p = 0; p + 1 < scratch.userPolylineOffsets.size(); ++p) {
+      if (L.paperPolyOffsets.empty())
+        L.paperPolyOffsets.push_back(0);
+      const int a = scratch.userPolylineOffsets[p];
+      const int b = scratch.userPolylineOffsets[p + 1];
+      for (int v = a * 3; v < b * 3; ++v)
+        L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[static_cast<size_t>(v)]));
+      L.paperPolyOffsets.push_back(L.paperPolyOffsets.back() + (b - a));
+      L.paperPolyClosed.push_back(scratch.userPolylineClosed[p]);
+      L.paperPolyAttrs.push_back(scratch.userPolylineAttrs[p]);
+    }
+    // The sheet's polyline store has no per-vertex bulge, so curved segments come in straight (REQ-201).
+    for (const float bg : scratch.userPolylineVertsBulge) {
+      if (bg != 0.f) {
+        NoteSkip(skipHist, "paper-space polyline arc segments drawn straight (no bulge store)");
+        break;
+      }
+    }
+    L.paperTexts.insert(L.paperTexts.end(), scratch.cadAnnotations.begin(), scratch.cadAnnotations.end());
+    L.paperTextAttrs.insert(L.paperTextAttrs.end(), scratch.cadAnnotationAttrs.begin(),
+                            scratch.cadAnnotationAttrs.end());
+    return;
+  }
+  const std::string skipName = std::string("paper-space entity (unsupported type ") +
+                               (obj->dxfname != nullptr ? obj->dxfname : "?") + ")";
+  NoteSkip(skipHist, skipName.c_str());
 }
 
 static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
