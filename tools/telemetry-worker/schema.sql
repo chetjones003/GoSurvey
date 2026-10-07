@@ -63,3 +63,19 @@ CREATE TABLE IF NOT EXISTS startup_reports (
 CREATE INDEX IF NOT EXISTS ix_startup_reports_ts ON startup_reports (ts);
 CREATE INDEX IF NOT EXISTS ix_startup_reports_version ON startup_reports (version);
 CREATE INDEX IF NOT EXISTS ix_startup_reports_stage ON startup_reports (stage);
+
+CREATE TABLE IF NOT EXISTS crash_reports (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts         TEXT NOT NULL,
+  install_id TEXT NOT NULL,
+  version    TEXT NOT NULL,
+  channel    TEXT NOT NULL CHECK (channel IN ('stable', 'beta')),
+  os         TEXT NOT NULL,
+  reason     TEXT NOT NULL,
+  country    TEXT,
+  report     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_crash_reports_ts ON crash_reports (ts);
+CREATE INDEX IF NOT EXISTS ix_crash_reports_version ON crash_reports (version);
+CREATE INDEX IF NOT EXISTS ix_crash_reports_reason ON crash_reports (reason);

@@ -22,6 +22,9 @@ constexpr const char* TelemetryEndpoint = "https://gosurvey-telemetry.gosurvey.w
 constexpr const char* StartupReportEndpoint =
     "https://gosurvey-telemetry.gosurvey.workers.dev/v1/startup-report";
 
+constexpr const char* CrashReportEndpoint =
+    "https://gosurvey-telemetry.gosurvey.workers.dev/v1/crash-report";
+
 struct TelemetryPayload {
   std::string installId;
   std::string event;  // "install" or "active"
