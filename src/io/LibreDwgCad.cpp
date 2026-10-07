@@ -3949,6 +3949,13 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
       L.paperPolyClosed.push_back(scratch.userPolylineClosed[p]);
       L.paperPolyAttrs.push_back(scratch.userPolylineAttrs[p]);
     }
+    // The sheet's polyline store has no per-vertex bulge, so curved segments come in straight (REQ-201).
+    for (const float bg : scratch.userPolylineVertsBulge) {
+      if (bg != 0.f) {
+        NoteSkip(skipHist, "paper-space polyline arc segments drawn straight (no bulge store)");
+        break;
+      }
+    }
     L.paperTexts.insert(L.paperTexts.end(), scratch.cadAnnotations.begin(), scratch.cadAnnotations.end());
     L.paperTextAttrs.insert(L.paperTextAttrs.end(), scratch.cadAnnotationAttrs.begin(),
                             scratch.cadAnnotationAttrs.end());
