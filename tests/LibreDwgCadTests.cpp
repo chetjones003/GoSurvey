@@ -23,12 +23,14 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -5031,4 +5033,266 @@ TEST_CASE("DWG export loss counts LIGHTLIST below R2010 (REQ-386, issue #715)",
   st.dwgExportVersion = DwgSaveVersion::R2000;
   st.dwgImportedLightListPresent = true;
   CHECK(DwgExportCountLightSunLosses(st) >= 1);
+}
+
+// REQ-113 / issue #765 — paper-space content through DXF export and DWG import.
+namespace {
+
+// Lists DXF entities that carry group 67 = 1 as (type, owner block-record handle).
+std::vector<std::pair<std::string, std::string>> DxfPaperEntities(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  std::vector<std::pair<std::string, std::string>> pairs;
+  std::string code, val;
+  while (std::getline(in, code) && std::getline(in, val)) {
+    while (!code.empty() && (code.back() == '\r' || code.back() == ' '))
+      code.pop_back();
+    while (!val.empty() && val.back() == '\r')
+      val.pop_back();
+    pairs.emplace_back(code, val);
+  }
+  std::vector<std::pair<std::string, std::string>> out;  // (type, layout name)
+  bool inEntities = false;
+  for (size_t i = 0; i < pairs.size(); ++i) {
+    if (pairs[i].first == "2" && (pairs[i].second == "ENTITIES" || pairs[i].second == "BLOCKS"))
+      inEntities = true;
+    if (pairs[i].first == "0" && pairs[i].second == "ENDSEC")
+      inEntities = false;
+    if (!inEntities || pairs[i].first != "0")
+      continue;
+    bool paper = false;
+    std::string layout;
+    for (size_t j = i + 1; j < pairs.size() && pairs[j].first != "0"; ++j) {
+      if (pairs[j].first == "67" && pairs[j].second == "1")
+        paper = true;
+      if (pairs[j].first == "330")
+        layout = pairs[j].second;
+    }
+    if (paper)
+      out.emplace_back(pairs[i].second, layout);
+  }
+  return out;
+}
+
+PaperLayout MakePaperLayoutWithEveryType(const char* name) {
+  PaperLayout L;
+  L.name = name;
+  L.paperLines = {1.f, 1.f, 0.f, 5.f, 1.f, 0.f};
+  L.paperLineAttrs.resize(1);
+  L.paperCircles = {3.f, 3.f, 0.5f};
+  L.paperCircleAttrs.resize(1);
+  CadArc arc{};
+  arc.cx = 4.0;
+  arc.cy = 4.0;
+  arc.r = 1.0;
+  arc.startRad = 0.0;
+  arc.sweepRad = 1.5;
+  L.paperArcs.push_back(arc);
+  L.paperArcAttrs.resize(1);
+  CadEllipse el{};
+  el.cx = 6.0;
+  el.cy = 2.0;
+  el.majVx = 1.f;
+  el.majVy = 0.f;
+  el.ratio = 0.5f;
+  L.paperEllipses.push_back(el);
+  L.paperEllAttrs.resize(1);
+  L.paperPolyOffsets = {0, 3};
+  L.paperPolyVerts = {1.f, 6.f, 0.f, 2.f, 7.f, 0.f, 3.f, 6.f, 0.f};
+  L.paperPolyClosed = {1};
+  L.paperPolyAttrs.resize(1);
+  CadAnnotation t{};
+  t.kind = CadAnnotation::Kind::Text;
+  t.insX = 2.f;
+  t.insY = 8.f;
+  t.plottedHeightInches = 0.125f;
+  t.text = "TITLE";
+  L.paperTexts.push_back(t);
+  CadAnnotation m = t;
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.insY = 9.f;
+  m.boxMinX = 2.f;
+  m.boxMaxX = 5.f;
+  m.text = "NOTES";
+  L.paperTexts.push_back(m);
+  L.paperTextAttrs.resize(2);
+  Viewport vp;
+  L.viewports.push_back(vp);
+  return L;
+}
+
+}  // namespace
+
+TEST_CASE("DXF export writes every paper-space entity type tagged with its layout (issue #765)",
+          "[dxf][paperspace][issue765]") {
+  ScratchDir dir("p765dxf");
+  const auto p = (dir.path / "paper.dxf").string();
+  AppCommandState st;
+  OneLine(st);
+  st.paperLayouts.push_back(MakePaperLayoutWithEveryType("Sheet A"));
+  st.paperLayouts.push_back(MakePaperLayoutWithEveryType("Sheet B"));
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+
+  const auto ents = DxfPaperEntities(p);
+  std::vector<std::string> owners;  // one block record per layout
+  for (const auto& e : ents)
+    if (std::find(owners.begin(), owners.end(), e.second) == owners.end())
+      owners.push_back(e.second);
+  REQUIRE(owners.size() == 2);
+  for (const std::string& owner : owners) {
+    for (const char* type :
+         {"LINE", "CIRCLE", "ARC", "ELLIPSE", "LWPOLYLINE", "TEXT", "MTEXT", "VIEWPORT"}) {
+      INFO(owner << " " << type);
+      CHECK(std::count(ents.begin(), ents.end(), std::make_pair(std::string(type), owner)) == 1);
+    }
+  }
+  CHECK(ents.size() == 16);
+  // The model-space line is still model space (no group 67).
+  const std::string text = [&] {
+    std::ifstream f(p, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(f), {});
+  }();
+  CHECK(text.find("\r\n*Paper_Space0\r\n") != std::string::npos);  // second layout's own block
+  CHECK(text.find("\r\nACAD_LAYOUT\r\n") != std::string::npos);
+  CHECK(text.find("\r\nSheet B\r\n") != std::string::npos);
+}
+
+TEST_CASE("DXF export names paper-space block references it cannot write (issue #765, REQ-201)",
+          "[dxf][paperspace][issue765]") {
+  ScratchDir dir("p765blk");
+  const auto p = (dir.path / "paperblk.dxf").string();
+  AppCommandState st;
+  OneLine(st);
+  PaperLayout L = MakePaperLayoutWithEveryType("Sheet A");
+  L.paperBlockRefs.resize(2);
+  L.paperBlockRefAttrs.resize(2);
+  st.paperLayouts.push_back(L);
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  bool named = false;
+  for (const std::string& l : log)
+    if (l.find("2 paper-space block reference(s) not written") != std::string::npos)
+      named = true;
+  CHECK(named);
+  for (const auto& e : DxfPaperEntities(p))
+    CHECK(e.first != "INSERT");
+}
+
+TEST_CASE("DXF export without paper layouts writes no paper-space entities (issue #765)",
+          "[dxf][paperspace][issue765]") {
+  ScratchDir dir("p765none");
+  const auto p = (dir.path / "none.dxf").string();
+  AppCommandState st;
+  OneLine(st);
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  CHECK(DxfPaperEntities(p).empty());
+}
+
+TEST_CASE("DWG import names each skipped paper-space type on a real sheet (issue #765)",
+          "[dwg][libredwg][paperspace][issue765]") {
+  const std::string p = SamplePath("duke-main-clean-r2018.dwg");
+  REQUIRE(std::filesystem::exists(p));
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  size_t texts = 0, curves = 0, polys = 0, lines = 0;
+  for (const PaperLayout& L : in.paperLayouts) {
+    texts += L.paperTexts.size();
+    curves += L.paperCircles.size() / 3 + L.paperArcs.size() + L.paperEllipses.size();
+    polys += L.paperPolyAttrs.size();
+    lines += L.paperLines.size() / 6;
+    CHECK(L.paperCircleAttrs.size() == L.paperCircles.size() / 3);
+    CHECK(L.paperTextAttrs.size() == L.paperTexts.size());
+    CHECK(L.paperPolyAttrs.size() == (L.paperPolyOffsets.empty() ? 0 : L.paperPolyOffsets.size() - 1));
+  }
+  INFO("lines=" << lines << " texts=" << texts << " curves=" << curves << " polys=" << polys);
+  // This sheet's remaining objects are outside the paper-space set (fills, points, a table) and its
+  // text/curves were never in paper space; the point here is the existing import is intact and every
+  // skip is named by type (REQ-201), not lumped under "unsupported type".
+  CHECK(lines > 0);
+  CHECK(texts + curves + polys == 0);
+  bool named = false;
+  for (const std::string& l : log)
+    if (l.find("unsupported type HATCH") != std::string::npos)
+      named = true;
+  CHECK(named);
+}
+
+// The Duke sheet has only LINE/VIEWPORT/INSERT plus HATCH/POINT/table on its paper space, so it cannot
+// exercise the new readers. The DWG exporter now writes the whole paper-space set, so this is a real
+// GoSurvey -> DWG -> GoSurvey round trip of every type.
+TEST_CASE("DWG round-trips every paper-space entity type (issue #765)",
+          "[dwg][libredwg][paperspace][issue765]") {
+  ScratchDir dir("p765dwg");
+  const auto p = (dir.path / "paper.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.paperLayouts.push_back(MakePaperLayoutWithEveryType("Sheet A"));
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  log.clear();
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  std::string allLog;
+  for (const std::string& l : log)
+    allLog += l + " | ";
+  INFO(allLog);
+  REQUIRE(in.paperLayouts.size() == 1);
+  const PaperLayout& L = in.paperLayouts[0];
+  CHECK(L.name == "Sheet A");
+  CHECK(L.paperLines.size() == 6);
+  REQUIRE(L.paperCircles.size() == 3);
+  CHECK(L.paperCircles[0] == Catch::Approx(3.f).margin(0.01f));
+  CHECK(L.paperCircles[1] == Catch::Approx(3.f).margin(0.01f));
+  CHECK(L.paperCircles[2] == Catch::Approx(0.5f).margin(0.01f));
+  REQUIRE(L.paperArcs.size() == 1);
+  CHECK(L.paperArcs[0].cx == Catch::Approx(4.0).margin(0.01));
+  CHECK(L.paperArcs[0].r == Catch::Approx(1.0).margin(0.01));
+  CHECK(L.paperArcs[0].sweepRad == Catch::Approx(1.5).margin(0.01));
+  REQUIRE(L.paperEllipses.size() == 1);
+  CHECK(L.paperEllipses[0].cx == Catch::Approx(6.0).margin(0.01));
+  CHECK(L.paperEllipses[0].ratio == Catch::Approx(0.5).margin(0.01));
+  REQUIRE(L.paperPolyAttrs.size() == 1);
+  CHECK(L.paperPolyOffsets.back() == 3);
+  CHECK(L.paperPolyClosed[0] == 1);
+  CHECK(L.paperPolyVerts[4] == Catch::Approx(7.f).margin(0.01f));
+  REQUIRE(L.paperTexts.size() == 2);
+  bool sawText = false, sawMtext = false;
+  for (const CadAnnotation& a : L.paperTexts) {
+    if (a.kind == CadAnnotation::Kind::Text) {
+      sawText = true;
+      CHECK(a.text == "TITLE");
+      CHECK(a.plottedHeightInches == Catch::Approx(0.125f).margin(0.001f));
+    } else {
+      sawMtext = true;
+      CHECK(a.text.find("NOTES") != std::string::npos);
+    }
+  }
+  CHECK(sawText);
+  CHECK(sawMtext);
+  CHECK(L.viewports.size() == 1);
+  // Nothing landed in model space by mistake.
+  CHECK(in.userCirclesCxCyZR.empty());
+  CHECK(in.userArcs.empty());
+  CHECK(in.cadAnnotations.empty());
+  CHECK(L.paperCircleAttrs.size() == 1);
+  CHECK(L.paperTextAttrs.size() == 2);
+}
+
+TEST_CASE("A DXF with paper space still re-imports (issue #765)", "[dxf][libredwg][paperspace][issue765]") {
+  ScratchDir dir("p765re");
+  const auto p = (dir.path / "paper.dxf").string();
+  AppCommandState st;
+  OneLine(st);
+  st.paperLayouts.push_back(MakePaperLayoutWithEveryType("Sheet A"));
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  AppCommandState in;
+  log.clear();
+  const bool ok = ImportDxfFile(in, p.c_str(), log);
+  for (const std::string& l : log)
+    UNSCOPED_INFO(l);
+  REQUIRE(ok);
+  CHECK(in.userLinesFlat.size() == 6);
 }
