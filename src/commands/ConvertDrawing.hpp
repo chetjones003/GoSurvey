@@ -28,3 +28,19 @@ bool DrawingWorldExtents(const AppCommandState& st, double* minX, double* maxX, 
 /// and captured map areas belong to the old coordinate system and are reset (each is reported in
 /// \p log). The caller has checked UnconvertibleKinds. Does not change the drawing unit or zone.
 void ApplyDrawingConversion(AppCommandState& st, const geo::Similarity& t, std::vector<std::string>& log);
+
+// ---- a clipboard (REQ-383 clause 7 / D-2026-10-07-a) --------------------------------------------
+// A paste into a drawing of another coordinate system or unit is converted with the same transform as a
+// whole drawing; these three move the clipboard's objects instead of a drawing's.
+
+/// Kinds of copied object the transform cannot move exactly (see the drawing overload). Empty = convertible.
+[[nodiscard]] std::vector<std::string> UnconvertibleKinds(const CadClipboard& cb, bool rotates);
+
+/// The copied objects' extents in the SOURCE drawing's WORLD coordinates (CadClipboard::srcOrigin included).
+/// False when there is nothing to measure.
+bool ClipboardWorldExtents(const CadClipboard& cb, double* minX, double* maxX, double* minY, double* maxY);
+
+/// Moves every copied object by \p t and re-expresses it in a destination whose document origin is
+/// (\p destOriginX, \p destOriginY), so it lands at the same ground position. The clipboard's own origin becomes the
+/// destination's; the caller sets the coordinate system and unit it now belongs to.
+void ApplyClipboardConversion(CadClipboard& cb, const geo::Similarity& t, double destOriginX, double destOriginY);

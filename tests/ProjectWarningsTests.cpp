@@ -3,11 +3,16 @@
 // question the domain raised and call AnswerPointEdit, which is what these tests do.
 
 #include "CadCommands.hpp"
+#include "ConvertDrawing.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectWarnings.hpp"
+#include "geo/CoordinateSystems.hpp"
 #include "geo/DrawingConversion.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+
+#include <cmath>
 
 #include <filesystem>
 #include <fstream>
@@ -15,6 +20,7 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+using Catch::Approx;
 
 namespace {
 
@@ -531,6 +537,8 @@ TEST_CASE("req383 copying records where the objects came from", "[req383]") {
   CHECK(st.clipboard.srcZone == "TX83-CF");
   CHECK(st.clipboard.srcMetersPerUnit > 0.30);
   CHECK(st.clipboard.srcMetersPerUnit < 0.31);
+  CHECK(st.clipboard.srcOriginX == st.worldDocumentOriginX);  // convert needs the origin (issue #722)
+  CHECK(st.clipboard.srcOriginY == st.worldDocumentOriginY);
 }
 
 // ---- clause 6: closing -------------------------------------------------------------------------------
@@ -575,4 +583,202 @@ TEST_CASE("req383 a saved or read-only project has nothing unsaved", "[req383]")
   SyncProjectPoints(st, log, now += 0.016);
   CHECK(ProjectsWithUnsavedPoints(st, 0, log).empty());  // the write simply succeeds
   CHECK(ProjectsWithUnsavedPoints(st, 99, log).empty());  // an unknown project
+}
+
+// ---- convert pasted content (D-2026-10-07-a, issue #722) ---------------------------------------------
+
+namespace {
+
+void LoadShippedDictionary() {
+  if (!geo::DictionariesLoaded())
+    REQUIRE(geo::LoadDictionaries(GOSURVEY_CSMAP_DICTIONARY_DIR));
+}
+
+/// A copy from a Texas Central (US feet) drawing near Austin, pasted into a Texas North (metres) drawing.
+/// The destination's origin sits where the copy lands, as a real drawing's does (local storage, REQ-101).
+constexpr double kSrcOx = 3115000.0, kSrcOy = 10077000.0;
+
+void ZoneConvertSetup(AppCommandState& st, const fs::path& dir, double* worldX, double* worldY) {
+  LoadShippedDictionary();
+  PasteSetup(st, dir);
+  st.drawingTabs[1].projectUid = 7;  // same project: only the coordinate system and unit differ
+  st.clipboard.srcZone = "HARN/TX.TX-CF";
+  st.clipboard.srcMetersPerUnit = 1200.0 / 3937.0;
+  st.clipboard.srcOriginX = kSrcOx;
+  st.clipboard.srcOriginY = kSrcOy;
+  st.clipboard.lines = {243.14, 391.26, 150.0, 743.14, 391.26, 160.0};
+  st.clipboard.basePtX = 243.14f;
+  st.clipboard.basePtY = 391.26f;
+  st.drawingSettings.zoneCode = "HARN/TX.TX-N";
+  st.drawingInsUnits = 6;
+  // CS-MAP's own answer for the first corner is where the converted line must start.
+  const geo::GeoResult ll = geo::GridToLatLong("HARN/TX.TX-CF", kSrcOx + 243.14, kSrcOy + 391.26);
+  REQUIRE(ll.ok);
+  const geo::GeoResult dt = geo::ConvertLatLong("HARN/TX.TX-CF", "HARN/TX.TX-N", ll.x, ll.y);
+  REQUIRE(dt.ok);
+  const geo::GeoResult g = geo::LatLongToGrid("HARN/TX.TX-N", dt.x, dt.y);
+  REQUIRE(g.ok);
+  *worldX = g.x;
+  *worldY = g.y;
+  st.worldDocumentOriginX = std::round(g.x);
+  st.worldDocumentOriginY = std::round(g.y);
+}
+
+}  // namespace
+
+TEST_CASE("req383 a coordinate-system mismatch can be converted and lands at the same place on the ground",
+          "[req383][issue722]") {
+  TempDir d("paste-convert-zone");
+  AppCommandState st;
+  double wx = 0.0, wy = 0.0;
+  ZoneConvertSetup(st, d.path, &wx, &wy);
+
+  const PasteCheck pc = CheckClipboardPaste(st);
+  CHECK(pc.verdict == PasteCheck::Verdict::Block);
+  CHECK(pc.canConvert);
+  CHECK(pc.text.find("Convert") != std::string::npos);
+
+  std::vector<std::string> log;
+  StartPasteCommand(st, log);
+  REQUIRE(st.pastePrompt.active);
+  CHECK(st.pastePrompt.block);
+  CHECK(st.pastePrompt.canConvert);  // the dialog offers Convert and paste
+
+  REQUIRE(ConvertClipboardForPaste(st, log));
+  const CadClipboard& cb = st.clipboard;
+  // The first corner is within the tolerance of CS-MAP's own answer, expressed in the destination's origin.
+  const double gx = st.worldDocumentOriginX + cb.lines[0];
+  const double gy = st.worldDocumentOriginY + cb.lines[1];
+  CHECK(std::hypot(gx - wx, gy - wy) < geo::kMaxResidualMeters);
+  // One similarity: the 500 ft run is 500 ft in metres times a grid factor, not bent.
+  const double len = std::hypot(cb.lines[3] - cb.lines[0], cb.lines[4] - cb.lines[1]);
+  CHECK(len / (500.0 * 1200.0 / 3937.0) == Approx(1.0).margin(0.01));
+  CHECK(cb.lines[2] == Approx(150.0 * 1200.0 / 3937.0).margin(1e-4));  // heights scale with the unit
+  CHECK(cb.basePtX == Approx(cb.lines[0]).margin(1e-3));               // the paste anchor moves with the copy
+  CHECK(cb.srcZone == "HARN/TX.TX-N");
+  CHECK(cb.srcMetersPerUnit == Approx(1.0));
+  CHECK(cb.srcOriginX == st.worldDocumentOriginX);
+
+  // Now it matches: no warning, and the paste starts.
+  CHECK(CheckClipboardPaste(st).verdict == PasteCheck::Verdict::Ok);
+  st.pastePrompt = {};
+  st.pasteWarningAnswered = true;
+  StartPasteCommand(st, log);
+  CHECK(st.active == AppCommandState::Kind::Paste);
+}
+
+TEST_CASE("req383 a units mismatch can be converted: lengths, heights, radii and the origin all follow",
+          "[req383][issue722]") {
+  TempDir d("paste-convert-units");
+  AppCommandState st;
+  PasteSetup(st, d.path);
+  st.drawingTabs[1].projectUid = 7;
+  const double m = geo::MetersPerInsUnit(
+      2, st.drawingSettings.footDefinition == DrawingSettings::FootDefinition::UsSurvey);
+  st.clipboard.srcMetersPerUnit = 1.0;  // copied from a metre drawing, pasted into feet
+  st.clipboard.srcOriginX = 10.0;
+  st.clipboard.srcOriginY = 20.0;
+  st.worldDocumentOriginX = 100.0;
+  st.worldDocumentOriginY = 200.0;
+  st.clipboard.lines = {0, 0, 1, 100, 0, 5};
+  st.clipboard.circlesCxCyZR = {50, 50, 2, 10};
+  st.clipboard.circleNormals = {0.f, 0.f, 1.f};
+  st.clipboard.basePtX = 0.f;
+  st.clipboard.basePtY = 0.f;
+
+  const PasteCheck pc = CheckClipboardPaste(st);
+  CHECK(pc.verdict == PasteCheck::Verdict::Warn);
+  CHECK(pc.canConvert);
+
+  std::vector<std::string> log;
+  REQUIRE(ConvertClipboardForPaste(st, log));
+  const double k = 1.0 / m;  // feet in a metre
+  const double offX = (10.0 * k) - 100.0, offY = (20.0 * k) - 200.0;  // T(srcOrigin) - destOrigin
+  const CadClipboard& cb = st.clipboard;
+  CHECK(cb.lines[0] == Approx(offX).margin(1e-4));
+  CHECK(cb.lines[1] == Approx(offY).margin(1e-4));
+  CHECK(cb.lines[3] == Approx(100.0 * k + offX).margin(1e-4));
+  CHECK(cb.lines[2] == Approx(1.0 * k).margin(1e-6));
+  CHECK(cb.lines[5] == Approx(5.0 * k).margin(1e-6));
+  CHECK(cb.circlesCxCyZR[0] == Approx(50.0 * k + offX).margin(1e-4));
+  CHECK(cb.circlesCxCyZR[3] == Approx(10.0 * k).margin(1e-6));  // a radius is a length: scaled, not shifted
+  CHECK(cb.circleNormals[2] == Approx(1.f));
+  CHECK(cb.srcMetersPerUnit == Approx(m));
+  CHECK(CheckClipboardPaste(st).verdict == PasteCheck::Verdict::Ok);
+}
+
+TEST_CASE("req383 a copy that cannot be turned exactly is not converted across coordinate systems",
+          "[req383][issue722]") {
+  TempDir d("paste-convert-tilted");
+  AppCommandState st;
+  double wx = 0.0, wy = 0.0;
+  ZoneConvertSetup(st, d.path, &wx, &wy);
+  CadArc a;
+  a.cx = 250.f;
+  a.cy = 400.f;
+  a.r = 10.f;
+  a.sweepRad = 1.f;
+  a.nx = 0.6f;
+  a.ny = 0.f;
+  a.nz = 0.8f;  // tilted
+  st.clipboard.arcs.push_back(a);
+  const std::vector<double> before = st.clipboard.lines;
+
+  const PasteCheck pc = CheckClipboardPaste(st);
+  CHECK(pc.verdict == PasteCheck::Verdict::Block);
+  CHECK_FALSE(pc.canConvert);
+  CHECK(pc.text.find("tilted") != std::string::npos);  // the kind is named (REQ-201)
+
+  std::vector<std::string> log;
+  CHECK_FALSE(ConvertClipboardForPaste(st, log));
+  CHECK(st.clipboard.lines == before);  // nothing moved
+  CHECK(st.clipboard.srcZone == "HARN/TX.TX-CF");
+  CHECK(st.clipboard.arcs[0].cx == 250.f);
+
+  // A tilted arc is fine when only the unit differs: a scale does not turn anything.
+  st.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  CHECK(CheckClipboardPaste(st).canConvert);
+}
+
+TEST_CASE("req383 a copy too big to convert within 0.02 m is refused and left alone", "[req383][issue722]") {
+  TempDir d("paste-convert-big");
+  AppCommandState st;
+  double wx = 0.0, wy = 0.0;
+  ZoneConvertSetup(st, d.path, &wx, &wy);
+  st.clipboard.lines = {0, 0, 0, 6.0e6, 6.0e6, 0};  // ~2000 km: no single transform fits that
+  const std::vector<double> before = st.clipboard.lines;
+
+  const PasteCheck pc = CheckClipboardPaste(st);
+  CHECK(pc.verdict == PasteCheck::Verdict::Block);
+  CHECK_FALSE(pc.canConvert);
+  std::vector<std::string> log;
+  CHECK_FALSE(ConvertClipboardForPaste(st, log));
+  CHECK(st.clipboard.lines == before);
+  CHECK(st.clipboard.srcZone == "HARN/TX.TX-CF");
+}
+
+TEST_CASE("req383 cancelling the paste prompt changes neither the clipboard nor the drawing", "[req383][issue722]") {
+  TempDir d("paste-convert-cancel");
+  AppCommandState st;
+  double wx = 0.0, wy = 0.0;
+  ZoneConvertSetup(st, d.path, &wx, &wy);
+  const std::vector<double> before = st.clipboard.lines;
+  std::vector<std::string> log;
+  StartPasteCommand(st, log);
+  REQUIRE(st.pastePrompt.active);
+  st.pastePrompt = {};  // Cancel
+  CHECK(st.clipboard.lines == before);
+  CHECK(st.clipboard.srcZone == "HARN/TX.TX-CF");
+  CHECK(st.active != AppCommandState::Kind::Paste);
+}
+
+TEST_CASE("req383 a paper-space copy has nothing to convert", "[req383][issue722]") {
+  TempDir d("paste-convert-paper");
+  AppCommandState st;
+  double wx = 0.0, wy = 0.0;
+  ZoneConvertSetup(st, d.path, &wx, &wy);
+  st.clipboard.fromPaper = true;
+  CHECK_FALSE(CheckClipboardPaste(st).canConvert);
+  std::vector<std::string> log;
+  CHECK_FALSE(ConvertClipboardForPaste(st, log));
 }

@@ -1,10 +1,12 @@
 #include "ProjectWarnings.hpp"
 
+#include "ConvertDrawing.hpp"
 #include "ProjectPoints.hpp"
 #include "geo/DrawingConversion.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <unordered_map>
 #include <unordered_set>
@@ -178,7 +180,43 @@ void TagClipboardOrigin(AppCommandState& st) {
   cb.srcProjectFolder = s ? s->project.Folder().u8string() : std::string();
   cb.srcZone = st.drawingSettings.zoneCode;
   cb.srcMetersPerUnit = MetersPerUnitOf(st);
+  cb.srcOriginX = st.worldDocumentOriginX;
+  cb.srcOriginY = st.worldDocumentOriginY;
 }
+
+namespace {
+
+/// What converting the clipboard into the ACTIVE drawing would take, and what stands in the way (why).
+geo::ConversionPlan PlanClipboardConversion(const AppCommandState& st, std::string& why) {
+  const CadClipboard& cb = st.clipboard;
+  geo::ConversionInput in;
+  in.fromZone = cb.srcZone;
+  in.toZone = st.drawingSettings.zoneCode;
+  in.fromMetersPerUnit = cb.srcMetersPerUnit;
+  in.toMetersPerUnit = MetersPerUnitOf(st);
+  ClipboardWorldExtents(cb, &in.minX, &in.maxX, &in.minY, &in.maxY);
+  geo::ConversionPlan plan = geo::PlanConversion(in);
+  if (cb.fromPaper) {
+    plan.ok = false;
+    why = "A copy from a paper layout has no ground coordinates to convert.";
+    return plan;
+  }
+  if (!plan.ok) {
+    why = plan.error;
+    return plan;
+  }
+  const std::vector<std::string> blockers = UnconvertibleKinds(cb, plan.zoneDiffers);
+  if (!blockers.empty()) {
+    plan.ok = false;
+    why = "Convert cannot move";
+    for (size_t i = 0; i < blockers.size(); ++i)
+      why += (i == 0 ? " " : ", ") + blockers[i];
+    why += ".";
+  }
+  return plan;
+}
+
+}  // namespace
 
 PasteCheck CheckClipboardPaste(const AppCommandState& st) {
   PasteCheck pc;
@@ -208,9 +246,18 @@ PasteCheck CheckClipboardPaste(const AppCommandState& st) {
     pc.verdict = PasteCheck::Verdict::Block;
     pc.text = "The copied objects use the coordinate system " + cb.srcZone + ", but this drawing (project " + destName +
               ") uses " + st.drawingSettings.zoneCode +
-              ". Pasting would put them in the wrong place on the ground, so this paste is blocked. "
-              "Converting pasted objects is not available yet; open the source drawing and use Add Drawing to Project "
-              "(which can convert), or cancel.";
+              ". Pasting them as they are would put them in the wrong place on the ground, so this paste is blocked.";
+    std::string why;
+    const geo::ConversionPlan plan = PlanClipboardConversion(st, why);
+    pc.canConvert = plan.ok;
+    if (plan.ok) {
+      char buf[96];
+      std::snprintf(buf, sizeof buf, " The leftover error after converting is %.4f m.", plan.residualMeters);
+      pc.text += " Convert moves them into this drawing's coordinate system and units, keeping their place on the ground." +
+                 std::string(buf);
+    } else {
+      pc.text += " They cannot be converted: " + why;
+    }
     return pc;
   }
   std::string text;
@@ -218,12 +265,39 @@ PasteCheck CheckClipboardPaste(const AppCommandState& st) {
     text += "The copied objects come from project \"" + srcName + "\" and are being pasted into project \"" + destName +
             "\". Anything pasted becomes part of the destination project, and point numbers that collide there are "
             "renumbered or you are asked.\n";
-  if (unitsDiffer)
+  if (unitsDiffer) {
     text += "The copied objects are drawn in a different unit than this drawing, so they will come in at the wrong size "
-            "unless you scale them afterwards.\n";
+            "unless you convert them.\n";
+    std::string why;
+    pc.canConvert = PlanClipboardConversion(st, why).ok;
+  }
   if (!text.empty()) {
     pc.verdict = PasteCheck::Verdict::Warn;
     pc.text = std::move(text);
   }
   return pc;
+}
+
+bool ConvertClipboardForPaste(AppCommandState& st, std::vector<std::string>& log) {
+  std::string why;
+  const geo::ConversionPlan plan = PlanClipboardConversion(st, why);
+  if (!plan.Needed()) {
+    log.push_back("PASTE - nothing to convert: the copied objects already match this drawing.");
+    return true;
+  }
+  if (!plan.ok) {
+    log.push_back("PASTE - not converted: " + why);
+    return false;
+  }
+  CadClipboard& cb = st.clipboard;
+  ApplyClipboardConversion(cb, plan.transform, st.worldDocumentOriginX, st.worldDocumentOriginY);
+  cb.srcZone = st.drawingSettings.zoneCode;
+  cb.srcMetersPerUnit = MetersPerUnitOf(st);
+  char buf[96];
+  std::snprintf(buf, sizeof buf, " (leftover error %.4f m).", plan.residualMeters);
+  std::string what = plan.zoneDiffers ? "coordinate system" : "unit";
+  if (plan.zoneDiffers && plan.unitsDiffer)
+    what += " and unit";
+  log.push_back("PASTE - the copied objects were converted to this drawing's " + what + buf);
+  return true;
 }
