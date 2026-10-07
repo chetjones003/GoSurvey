@@ -30,3 +30,4 @@ Wire three Home/Insert ribbon controls that already have working commands elsewh
 
 - Buttons enabled (not greyed NYI)
 - Tooltips match wired behavior (same as Modeling / Survey contextual / other Properties buttons)
+- `tests/RibbonWiringGapTests.cpp` — static regression guard (issue #762 follow-up automation)
