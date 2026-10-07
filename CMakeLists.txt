@@ -1228,6 +1228,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ProjectTurnoverTests.cpp
     src/io/ProjectTurnover.cpp
     tests/TelemetryPingTests.cpp
+    tests/CrashReporterTests.cpp
+    src/platform/CrashReporterWireReason.cpp
     tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
     tests/GpuPreferenceTests.cpp
@@ -1437,7 +1439,6 @@ if(GOSURVEY_BUILD_TESTS)
     # rides with GoSurveySnapTests (has the imgui include path) rather than GoSurveyTests.
     tests/RibbonLayoutPlaceTests.cpp
     tests/ViewportUcsTests.cpp
-    tests/PaperTypedPointsTests.cpp
     # REQ-154 / issue #371 — ORTHO squaring to a vertical (Front/Left/Right-style) UCS. Needs
     # gosurvey_domain for ApplyOrthoConstrainFromAnchor, so it rides with GoSurveySnapTests like
     # ViewportUcsTests.cpp above.
