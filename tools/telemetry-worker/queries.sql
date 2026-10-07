@@ -100,3 +100,16 @@ FROM startup_reports
 WHERE ts >= datetime('now', '-30 days')
 GROUP BY stage
 ORDER BY reports DESC;
+
+
+SELECT ts, version, reason, install_id, substr(report, 1, 120) AS preview
+FROM crash_reports
+ORDER BY ts DESC
+LIMIT 50;
+
+
+SELECT reason, COUNT(*) AS reports
+FROM crash_reports
+WHERE ts >= datetime('now', '-30 days')
+GROUP BY reason
+ORDER BY reports DESC;

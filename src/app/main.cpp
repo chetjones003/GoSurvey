@@ -46,6 +46,7 @@
 #include "Version.hpp"
 #include "WhatsNewLogic.hpp"
 #include "StartupFailure.hpp"
+#include "CrashReporter.hpp"
 
 #include <chrono>
 #include <ctime>
@@ -290,6 +291,11 @@ static void AppendFrameWatchLog(const AppCommandState& cmd, const framewatch::Ti
 int main()
 {
 #ifdef _WIN32
+  if (crashReporter::TryRunCrashReportUiMode())
+    return 0;
+  crashReporter::InstallHandler();
+  if (crashReporter::CommandLineHasTestCrash())
+    crashReporter::TriggerTestCrash();
   PublishInstallerDetectionMutex();
 #endif
 
@@ -400,6 +406,9 @@ int main()
     DevShell_RegisterTests(devEngine, &cmd);
 #endif
   LoadUserStartupPrefs(cmd);
+#ifdef _WIN32
+  crashReporter::SetReportChannel(cmd.updatePrefs.useBetaChannel ? "beta" : "stable");
+#endif
   // REQ-358: the coordinate-system dictionary installed beside the exe. A failure is not fatal: the
   // Drawing Settings Zone group shows the reason and nothing else is affected. CS-MAP opens files
   // through narrow (ANSI) paths, so a folder name the code page cannot hold is a load failure too.

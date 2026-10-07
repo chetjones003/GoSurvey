@@ -15,6 +15,7 @@
 import worker from './src/index.js';
 
 const STARTUP_REPORT_PATH = '/v1/startup-report';
+const CRASH_REPORT_PATH = '/v1/crash-report';
 
 let failures = 0;
 
@@ -213,6 +214,35 @@ console.log('\nstartup report routing');
 {
   const r = await call(post({ ...STARTUP_VALID, report: '' }, { path: STARTUP_REPORT_PATH }));
   check('startup empty report is 400', r.status === 400, `got ${r.status}`);
+}
+
+const CRASH_VALID = {
+  installId: 'unknown',
+  version: '0.7.0',
+  channel: 'stable',
+  os: 'windows',
+  reason: 'access_violation',
+  report: 'GoSurvey stopped because of an unexpected error.\n\nSummary:\nAccess violation',
+};
+
+console.log('\ncrash report routing');
+{
+  const r = await call(post(CRASH_VALID, { path: CRASH_REPORT_PATH }));
+  check('crash path accepts POST', r.status === 200, `got ${r.status}`);
+  check('crash body says ok:true', r.text.includes('"ok":true'), r.text);
+  check('crash one insert', r.db.calls.length === 1, `${r.db.calls.length}`);
+  const { params } = r.db.calls[0];
+  check('crash binds 8 columns', params.length === 8, `${params.length}`);
+  check('crash reason passed through', params[5] === CRASH_VALID.reason);
+  check('crash report passed through', params[7] === CRASH_VALID.report);
+}
+{
+  const r = await call(post({ ...CRASH_VALID, reason: 'bad reason!' }, { path: CRASH_REPORT_PATH }));
+  check('crash bad reason is 400', r.status === 400, `got ${r.status}`);
+}
+{
+  const r = await call(post({ ...CRASH_VALID, report: '' }, { path: CRASH_REPORT_PATH }));
+  check('crash empty report is 400', r.status === 400, `got ${r.status}`);
 }
 
 console.log(failures === 0
