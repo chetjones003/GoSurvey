@@ -54,7 +54,15 @@ void TagClipboardOrigin(AppCommandState& st);
 struct PasteCheck {
   enum class Verdict { Ok, Warn, Block } verdict = Verdict::Ok;
   std::string text;  ///< plain-English reason; empty when Ok
+  bool canConvert = false;  ///< Convert (D-2026-10-07-a) would make the paste match: within tolerance, nothing in the way
 };
 /// Compares the clipboard's origin with the ACTIVE drawing. Two standalone drawings are never checked, so
 /// nothing changes outside projects.
 PasteCheck CheckClipboardPaste(const AppCommandState& st);
+
+/// Convert the clipboard into the ACTIVE drawing's coordinate system and units (REQ-383 clause 7): the same
+/// similarity transform as Add Drawing, applied to the copied objects so they keep their ground position.
+/// On success the clipboard belongs to the active drawing's system, so the paste check passes. On failure
+/// (out of tolerance, an object the transform cannot move, a paper-space copy) the clipboard is untouched and
+/// the reason is logged.
+bool ConvertClipboardForPaste(AppCommandState& st, std::vector<std::string>& log);

@@ -830,16 +830,31 @@ void DrawPasteWarningModal(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::PopTextWrapPos();
   ImGui::Spacing();
   bool close = false;
+  // "Paste anyway" and "Convert and paste" both let the paste through once (pasteWarningAnswered) and
+  // start it again; Convert first moves the clipboard into this drawing's coordinate system and units.
+  auto proceed = [&](bool convert) {
+    const bool original = pp.original;
+    if (convert && !ConvertClipboardForPaste(cmd, log))
+      return false;  // stays open: the reason is in the log and the dialog still offers Cancel
+    pp = {};
+    cmd.pasteWarningAnswered = true;
+    ImGui::CloseCurrentPopup();
+    if (original)
+      StartPasteOrigCommand(cmd, log);
+    else
+      StartPasteCommand(cmd, log);
+    return true;
+  };
+  if (pp.canConvert) {
+    if (ImGui::Button("Convert and paste") && proceed(true)) {
+      ImGui::EndPopup();
+      PopProductDialogAccent();
+      return;
+    }
+    ImGui::SameLine();
+  }
   if (!pp.block) {
-    if (ImGui::Button("Paste anyway")) {
-      const bool original = pp.original;
-      pp = {};
-      cmd.pasteWarningAnswered = true;
-      ImGui::CloseCurrentPopup();
-      if (original)
-        StartPasteOrigCommand(cmd, log);
-      else
-        StartPasteCommand(cmd, log);
+    if (ImGui::Button("Paste anyway") && proceed(false)) {
       ImGui::EndPopup();
       PopProductDialogAccent();
       return;

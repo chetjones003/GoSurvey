@@ -1020,6 +1020,7 @@ struct CadClipboard {
   std::string srcProjectFolder;         ///< UTF-8; tells apart two open projects that share a name (issue #726)
   std::string srcZone;                 ///< CS-MAP code of the source drawing; empty = none
   double      srcMetersPerUnit = 0.0;   ///< the source drawing's unit in meters; 0 = unknown
+  double      srcOriginX = 0.0, srcOriginY = 0.0;  ///< the source drawing's document origin: world = local + origin
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
@@ -5100,6 +5101,7 @@ struct AppCommandState {
     bool        original = false;    ///< PASTEORIG rather than PASTE
     std::string text;
     bool        openRequested = false;
+    bool        canConvert = false;  ///< the dialog offers "Convert and paste" (D-2026-10-07-a)
   } pastePrompt;
   bool pasteWarningAnswered = false;   ///< "Paste anyway" was chosen: the next paste start skips the check
   /// REQ-383 clause 6: closing a project's drawing tab while its point database cannot be written.

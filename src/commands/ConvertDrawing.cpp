@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -19,6 +20,7 @@ bool NormalIsVertical(float nx, float ny) { return std::fabs(nx) < kFlatTol && s
 struct Xf {
   double s, c, sn, sz;
   double rot;
+  double dx = 0.0, dy = 0.0;  ///< added to every POINT (not to a direction or a length): see ApplyClipboardConversion
   bool   Turns() const { return std::fabs(rot) > 1e-12; }
   void P(double x, double y, double* ox, double* oy) const {
     *ox = s * (c * x - sn * y);
@@ -27,8 +29,8 @@ struct Xf {
   template <class T> void Pt(T* x, T* y) const {
     double a, b;
     P(static_cast<double>(*x), static_cast<double>(*y), &a, &b);
-    *x = static_cast<T>(a);
-    *y = static_cast<T>(b);
+    *x = static_cast<T>(a + dx);
+    *y = static_cast<T>(b + dy);
   }
   template <class T> void Z(T* z) const { *z = static_cast<T>(sz * static_cast<double>(*z)); }
   template <class T> void Dir(T* x, T* y) const {  // a direction: turned, not scaled
@@ -41,6 +43,109 @@ struct Xf {
 
 std::string Plural(size_t n, const char* one, const char* many) {
   return std::to_string(n) + " " + (n == 1 ? one : many);
+}
+
+// The per-kind moves below serve both a whole drawing (ApplyDrawingConversion) and a clipboard
+// (ApplyClipboardConversion): the same objects, the same exact transform.
+template <class V> void MoveLines(V& lines, const Xf& f) {
+  for (size_t i = 0; i + 5 < lines.size(); i += 6) {
+    f.Pt(&lines[i], &lines[i + 1]);
+    f.Z(&lines[i + 2]);
+    f.Pt(&lines[i + 3], &lines[i + 4]);
+    f.Z(&lines[i + 5]);
+  }
+}
+
+template <class V, class N> void MoveCircles(V& cxCyZR, N& normals, const Xf& f) {
+  for (size_t i = 0; i + 3 < cxCyZR.size(); i += 4) {
+    f.Pt(&cxCyZR[i], &cxCyZR[i + 1]);
+    f.Z(&cxCyZR[i + 2]);
+    cxCyZR[i + 3] *= f.s;
+  }
+  for (size_t i = 0; i + 2 < normals.size(); i += 3)
+    f.Dir(&normals[i], &normals[i + 1]);
+}
+
+void MoveArcs(std::vector<CadArc>& arcs, const Xf& f, double rotationRad) {
+  for (CadArc& a : arcs) {
+    f.Pt(&a.cx, &a.cy);
+    f.Z(&a.z);
+    a.r *= f.s;
+    if (f.Turns() && NormalIsVertical(a.nx, a.ny))  // seen from the normal, a turn about +Z is a turn about N·sign(nz)
+      a.startRad += static_cast<float>(a.nz >= 0.f ? rotationRad : -rotationRad);
+  }
+}
+
+void MoveEllipses(std::vector<CadEllipse>& ellipses, const Xf& f) {
+  for (CadEllipse& e : ellipses) {
+    f.Pt(&e.cx, &e.cy);
+    f.Z(&e.z);
+    double mx = 0.0, my = 0.0;  // the major axis is a vector: scaled and turned, not shifted
+    f.P(e.majVx, e.majVy, &mx, &my);
+    e.majVx = static_cast<float>(mx);
+    e.majVy = static_cast<float>(my);
+  }
+}
+
+template <class V> void MovePolylineVerts(V& verts, const Xf& f) {
+  for (size_t i = 0; i + 2 < verts.size(); i += 3) {
+    f.Pt(&verts[i], &verts[i + 1]);
+    f.Z(&verts[i + 2]);
+  }
+}
+
+void MoveFilledRegions(std::vector<CadFilledRegion>& regions, const Xf& f, double rotationRad) {
+  for (CadFilledRegion& r : regions) {
+    MovePolylineVerts(r.vertsXyz, f);
+    r.patternAngleDeg += static_cast<float>(rotationRad * 180.0 / 3.14159265358979323846);
+    r.patternScale *= static_cast<float>(f.s);
+  }
+}
+
+void MoveAnnotations(std::vector<CadAnnotation>& annotations, const Xf& f, double rotationRad) {
+  for (CadAnnotation& a : annotations) {
+    if (a.surveyPointLabelForId >= 0)
+      continue;  // a point's label is rebuilt from the point
+    f.Pt(&a.insX, &a.insY);
+    f.Z(&a.insZ);
+    a.rotationRad += static_cast<float>(rotationRad);
+    float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
+    float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
+    for (int k = 0; k < 4; ++k)
+      f.Pt(&xs[k], &ys[k]);
+    a.boxMinX = *std::min_element(xs, xs + 4);
+    a.boxMaxX = *std::max_element(xs, xs + 4);
+    a.boxMinY = *std::min_element(ys, ys + 4);
+    a.boxMaxY = *std::max_element(ys, ys + 4);
+    if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+      f.Pt(&a.dimExt1X, &a.dimExt1Y);
+      f.Pt(&a.dimExt2X, &a.dimExt2Y);
+      a.dimSignedOffset *= static_cast<float>(f.s);
+    }
+    if (a.kind == CadAnnotation::Kind::DimAngular)
+      f.Pt(&a.dimAngVertexX, &a.dimAngVertexY);
+  }
+}
+
+void MoveTables(std::vector<CadTable>& tables, const Xf& f, double rotationRad) {
+  for (CadTable& tb : tables) {
+    f.Pt(&tb.insX, &tb.insY);
+    f.Z(&tb.insZ);
+    tb.rotationRad += static_cast<float>(rotationRad);
+    tb.width *= static_cast<float>(f.s);
+    tb.height *= static_cast<float>(f.s);
+  }
+}
+
+void MoveBlockRefs(std::vector<CadBlockRef>& refs, const Xf& f, double rotationRad) {
+  for (CadBlockRef& b : refs) {
+    f.Pt(&b.xf.x, &b.xf.y);
+    f.Z(&b.xf.z);
+    b.xf.sx *= static_cast<float>(f.s);
+    b.xf.sy *= static_cast<float>(f.s);
+    b.xf.sz *= static_cast<float>(f.sz);
+    b.xf.rotZ += static_cast<float>(rotationRad);
+  }
 }
 
 }  // namespace
@@ -107,89 +212,18 @@ void ApplyDrawingConversion(AppCommandState& st, const geo::Similarity& t, std::
   st.worldDocumentOriginX = ox;
   st.worldDocumentOriginY = oy;
 
-  for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
-    f.Pt(&st.userLinesFlat[i], &st.userLinesFlat[i + 1]);
-    f.Z(&st.userLinesFlat[i + 2]);
-    f.Pt(&st.userLinesFlat[i + 3], &st.userLinesFlat[i + 4]);
-    f.Z(&st.userLinesFlat[i + 5]);
-  }
-  for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {
-    f.Pt(&st.userCirclesCxCyZR[i], &st.userCirclesCxCyZR[i + 1]);
-    f.Z(&st.userCirclesCxCyZR[i + 2]);
-    st.userCirclesCxCyZR[i + 3] *= f.s;
-  }
-  for (size_t i = 0; i + 2 < st.userCircleNormals.size(); i += 3)
-    f.Dir(&st.userCircleNormals[i], &st.userCircleNormals[i + 1]);
-  for (CadArc& a : st.userArcs) {
-    f.Pt(&a.cx, &a.cy);
-    f.Z(&a.z);
-    a.r *= f.s;
-    if (f.Turns() && NormalIsVertical(a.nx, a.ny))  // seen from the normal, a turn about +Z is a turn about N·sign(nz)
-      a.startRad += static_cast<float>(a.nz >= 0.f ? t.rotationRad : -t.rotationRad);
-  }
-  for (CadEllipse& e : st.userEllipses) {
-    f.Pt(&e.cx, &e.cy);
-    f.Z(&e.z);
-    double mx = 0.0, my = 0.0;  // the major axis is a vector: scaled and turned, not shifted
-    f.P(e.majVx, e.majVy, &mx, &my);
-    e.majVx = static_cast<float>(mx);
-    e.majVy = static_cast<float>(my);
-  }
-  for (size_t i = 0; i + 2 < st.userPolylineVerts.size(); i += 3) {
-    f.Pt(&st.userPolylineVerts[i], &st.userPolylineVerts[i + 1]);
-    f.Z(&st.userPolylineVerts[i + 2]);
-  }
+  MoveLines(st.userLinesFlat, f);
+  MoveCircles(st.userCirclesCxCyZR, st.userCircleNormals, f);
+  MoveArcs(st.userArcs, f, t.rotationRad);
+  MoveEllipses(st.userEllipses, f);
+  MovePolylineVerts(st.userPolylineVerts, f);
   for (size_t i = 0; i + 2 < st.userPolylineVertsNormal.size(); i += 3)
     f.Dir(&st.userPolylineVertsNormal[i], &st.userPolylineVertsNormal[i + 1]);
-  for (size_t i = 0; i + 2 < st.featureLineVerts.size(); i += 3) {
-    f.Pt(&st.featureLineVerts[i], &st.featureLineVerts[i + 1]);
-    f.Z(&st.featureLineVerts[i + 2]);
-  }
-  for (CadFilledRegion& r : st.cadFilledRegions) {
-    for (size_t i = 0; i + 2 < r.vertsXyz.size(); i += 3) {
-      f.Pt(&r.vertsXyz[i], &r.vertsXyz[i + 1]);
-      f.Z(&r.vertsXyz[i + 2]);
-    }
-    r.patternAngleDeg += static_cast<float>(t.rotationRad * 180.0 / 3.14159265358979323846);
-    r.patternScale *= static_cast<float>(f.s);
-  }
-  for (CadAnnotation& a : st.cadAnnotations) {
-    if (a.surveyPointLabelForId >= 0)
-      continue;  // a point's label is rebuilt from the point below
-    f.Pt(&a.insX, &a.insY);
-    f.Z(&a.insZ);
-    a.rotationRad += static_cast<float>(t.rotationRad);
-    float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
-    float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
-    for (int k = 0; k < 4; ++k)
-      f.Pt(&xs[k], &ys[k]);
-    a.boxMinX = *std::min_element(xs, xs + 4);
-    a.boxMaxX = *std::max_element(xs, xs + 4);
-    a.boxMinY = *std::min_element(ys, ys + 4);
-    a.boxMaxY = *std::max_element(ys, ys + 4);
-    if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
-      f.Pt(&a.dimExt1X, &a.dimExt1Y);
-      f.Pt(&a.dimExt2X, &a.dimExt2Y);
-      a.dimSignedOffset *= static_cast<float>(f.s);
-    }
-    if (a.kind == CadAnnotation::Kind::DimAngular)
-      f.Pt(&a.dimAngVertexX, &a.dimAngVertexY);
-  }
-  for (CadTable& tb : st.cadTables) {
-    f.Pt(&tb.insX, &tb.insY);
-    f.Z(&tb.insZ);
-    tb.rotationRad += static_cast<float>(t.rotationRad);
-    tb.width *= static_cast<float>(f.s);
-    tb.height *= static_cast<float>(f.s);
-  }
-  for (CadBlockRef& b : st.cadBlockRefs) {
-    f.Pt(&b.xf.x, &b.xf.y);
-    f.Z(&b.xf.z);
-    b.xf.sx *= static_cast<float>(f.s);
-    b.xf.sy *= static_cast<float>(f.s);
-    b.xf.sz *= static_cast<float>(f.sz);
-    b.xf.rotZ += static_cast<float>(t.rotationRad);
-  }
+  MovePolylineVerts(st.featureLineVerts, f);
+  MoveFilledRegions(st.cadFilledRegions, f, t.rotationRad);
+  MoveAnnotations(st.cadAnnotations, f, t.rotationRad);
+  MoveTables(st.cadTables, f, t.rotationRad);
+  MoveBlockRefs(st.cadBlockRefs, f, t.rotationRad);
   for (SurveyPoint& p : st.surveyPoints) {
     f.Pt(&p.easting, &p.northing);
     f.Z(&p.elevation);
@@ -223,4 +257,88 @@ void ApplyDrawingConversion(AppCommandState& st, const geo::Similarity& t, std::
 
   RegenerateAllSurveyPointLabels(st);
   BumpCadGpuCache(st);
+}
+
+// ---- a clipboard (REQ-383 clause 7 / D-2026-10-07-a) -------------------------------------------
+
+std::vector<std::string> UnconvertibleKinds(const CadClipboard& cb, bool rotates) {
+  std::vector<std::string> k;
+  if (rotates) {  // the same rule as for a drawing: a turn about the vertical axis cannot tilt an arc exactly
+    size_t tilted = 0;
+    for (const CadArc& a : cb.arcs)
+      if (!NormalIsVertical(a.nx, a.ny))
+        ++tilted;
+    for (const CadEllipse& e : cb.ellipses)
+      if (!NormalIsPlusZ(e.nx, e.ny, e.nz))
+        ++tilted;
+    if (tilted > 0)
+      k.push_back(Plural(tilted, "arc or ellipse in a tilted plane", "arcs or ellipses in tilted planes"));
+  }
+  return k;
+}
+
+bool ClipboardWorldExtents(const CadClipboard& cb, double* minX, double* maxX, double* minY, double* maxY) {
+  double x0 = std::numeric_limits<double>::max(), x1 = std::numeric_limits<double>::lowest();
+  double y0 = x0, y1 = x1;
+  auto add = [&](double x, double y, double r = 0.0) {
+    x0 = std::min(x0, x - r);
+    x1 = std::max(x1, x + r);
+    y0 = std::min(y0, y - r);
+    y1 = std::max(y1, y + r);
+  };
+  for (size_t i = 0; i + 5 < cb.lines.size(); i += 6) {
+    add(cb.lines[i], cb.lines[i + 1]);
+    add(cb.lines[i + 3], cb.lines[i + 4]);
+  }
+  for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size(); i += 4)
+    add(cb.circlesCxCyZR[i], cb.circlesCxCyZR[i + 1], cb.circlesCxCyZR[i + 3]);
+  for (const CadArc& a : cb.arcs)
+    add(a.cx, a.cy, a.r);
+  for (const CadEllipse& e : cb.ellipses)
+    add(e.cx, e.cy, std::hypot(static_cast<double>(e.majVx), static_cast<double>(e.majVy)));
+  for (size_t i = 0; i + 2 < cb.polyVerts.size(); i += 3)
+    add(cb.polyVerts[i], cb.polyVerts[i + 1]);
+  for (const CadAnnotation& a : cb.annotations) {
+    add(a.insX, a.insY);
+    add(a.boxMinX, a.boxMinY);
+    add(a.boxMaxX, a.boxMaxY);
+  }
+  for (const CadTable& tb : cb.tables)
+    add(tb.insX, tb.insY, std::max(tb.width, tb.height));
+  for (const CadBlockRef& b : cb.blockRefs)
+    add(b.xf.x, b.xf.y);
+  for (const CadFilledRegion& r : cb.filledRegions)
+    for (size_t i = 0; i + 2 < r.vertsXyz.size(); i += 3)
+      add(r.vertsXyz[i], r.vertsXyz[i + 1]);
+  if (x0 > x1) {  // nothing to measure
+    *minX = *maxX = cb.srcOriginX;
+    *minY = *maxY = cb.srcOriginY;
+    return false;
+  }
+  *minX = x0 + cb.srcOriginX;
+  *maxX = x1 + cb.srcOriginX;
+  *minY = y0 + cb.srcOriginY;
+  *maxY = y1 + cb.srcOriginY;
+  return true;
+}
+
+void ApplyClipboardConversion(CadClipboard& cb, const geo::Similarity& t, double destOriginX, double destOriginY) {
+  // world' = T(world) with world = srcOrigin + local, and the destination stores local = world' - destOrigin,
+  // so local' = sR·local + (T(srcOrigin) - destOrigin): one shift on every point, none on a direction or length.
+  double nx = 0.0, ny = 0.0;
+  t.Apply(cb.srcOriginX, cb.srcOriginY, &nx, &ny);
+  Xf f{t.scale, std::cos(t.rotationRad), std::sin(t.rotationRad), t.scaleZ, t.rotationRad, nx - destOriginX, ny - destOriginY};
+
+  MoveLines(cb.lines, f);
+  MoveCircles(cb.circlesCxCyZR, cb.circleNormals, f);
+  MoveArcs(cb.arcs, f, t.rotationRad);
+  MoveEllipses(cb.ellipses, f);
+  MovePolylineVerts(cb.polyVerts, f);
+  MoveFilledRegions(cb.filledRegions, f, t.rotationRad);
+  MoveAnnotations(cb.annotations, f, t.rotationRad);
+  MoveTables(cb.tables, f, t.rotationRad);
+  MoveBlockRefs(cb.blockRefs, f, t.rotationRad);
+  f.Pt(&cb.basePtX, &cb.basePtY);
+  cb.srcOriginX = destOriginX;
+  cb.srcOriginY = destOriginY;
 }

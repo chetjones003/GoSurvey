@@ -1,4 +1,5 @@
 #include "CadCommands.hpp"
+#include "ProjectWarnings.hpp"  // REQ-383: TagClipboardOrigin / CheckClipboardPaste
 #include "CadCommandsInternal.hpp"
 #include "CadColor.hpp"
 #include "CadBlocks.hpp"
@@ -15781,6 +15782,7 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
   }
   CadClipboard& cb = st.clipboard;
   cb = CadClipboard{};
+  TagClipboardOrigin(st);  // REQ-383
   cb.fromPaper = true;
   float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
   auto expandBbox = [&](float x, float y) {
@@ -15907,6 +15909,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
   }
   CadClipboard& cb = st.clipboard;
   cb = CadClipboard{};
+  TagClipboardOrigin(st);  // REQ-383
   cb.fromPaper = false;  // copied from model space
 
   float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
@@ -16050,11 +16053,30 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
                   "duplicate one in place.");
 }
 
+/// REQ-383 clauses 1 and 3: true when this paste must not start now — it is blocked, or it waits for
+/// the user's answer to the warning the UI is about to show. "Paste anyway" and "Convert and paste" set
+/// `pasteWarningAnswered` and start the paste again, which lets it through once.
+static bool PasteWaitsForUser(AppCommandState& st, bool original, std::vector<std::string>& log) {
+  if (st.pasteWarningAnswered) {
+    st.pasteWarningAnswered = false;
+    return false;
+  }
+  const PasteCheck pc = CheckClipboardPaste(st);
+  if (pc.verdict == PasteCheck::Verdict::Ok)
+    return false;
+  st.pastePrompt = {true, pc.verdict == PasteCheck::Verdict::Block, original, pc.text, true, pc.canConvert};
+  log.push_back(std::string(original ? "PASTEORIG" : "PASTE") +
+                (pc.verdict == PasteCheck::Verdict::Block ? " — blocked: " : " — check before pasting: ") + pc.text);
+  return true;
+}
+
 void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.clipboard.empty()) {
     log.push_back("PASTE — clipboard is empty. Use Ctrl+C to copy objects first.");
     return;
   }
+  if (PasteWaitsForUser(st, false, log))
+    return;
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Paste;
@@ -16071,6 +16093,8 @@ void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("PASTEORIG — clipboard is empty. Use Ctrl+C to copy objects first.");
     return;
   }
+  if (PasteWaitsForUser(st, true, log))
+    return;
   PushUndoSnapshot(st, "Paste original");
   CommitPasteFromClipboard(st, 0.f, 0.f, log);
   log.push_back("PASTEORIG — objects pasted at original coordinates.");
