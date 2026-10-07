@@ -51,3 +51,10 @@ TEST_CASE("Issue #762 wiring gaps stay connected in CadUi.cpp", "[ribbon][issue7
   REQUIRE(Contains(src, "else if (id == \"##RibbonInsPointsFile\")"));
   REQUIRE(Contains(src, "StartImportPointsCommand(cmd, log);  // issue #762"));
 }
+
+TEST_CASE("Issue #762 Manage tab uses placeholder panel not NYI button grid", "[ribbon][issue762]") {
+  const std::string src = ReadCadUiSource();
+  REQUIRE(Contains(src, "RibbonSecMgPlaceholder"));
+  CHECK_FALSE(Contains(src, "##MgCreateDS"));
+  CHECK_FALSE(Contains(src, "##MgDynamoPlayer"));
+}
