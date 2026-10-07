@@ -14024,7 +14024,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     screenToPaperIn(&curX, &curY);
     // Snap MOVE/COPY/ROTATE/MIRROR pick points to paper geometry (REQ-037); entity-selection clicks
     // stay on the raw cursor so picking small objects is not deflected.
-    if (paperSnapActive && (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0)) {
+    if (paperSnapActive && (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0 ||
+                            cmd.paperScalePhase != 0)) {
       curX = paperSnapXIn;
       curY = paperSnapYIn;
     }
@@ -14071,13 +14072,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
       if (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0 ||
-          cmd.paperLengthenPhase != 0 || cmd.paperExtendPhase != 0 || cmd.paperBreakPhase != 0 ||
+          cmd.paperScalePhase != 0 || cmd.paperLengthenPhase != 0 || cmd.paperExtendPhase != 0 || cmd.paperBreakPhase != 0 ||
           cmd.paperStretchPhase != 0 || cmd.paperFilletPhase != 0 || cmd.paperChamferPhase != 0 ||
           cmd.paperGripCorner != -2 || cmd.paperSelBoxActive ||
           cmd.paperMoveWaitingSelection || cmd.paperDeleteWaitingSelection) {  // REQ-307
         cmd.paperMovePhase = 0;
         cmd.paperRotatePhase = 0;
         cmd.paperMirrorPhase = 0;
+        cmd.paperScalePhase = 0;
         cmd.paperLengthenPhase = 0;
         cmd.paperExtendPhase = 0;
         cmd.paperExtendBoundaries.clear();
@@ -14143,7 +14145,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // cursor (mirrors the model viewportHoverEntity). Cleared otherwise so the highlight does not linger.
     cmd.paperHoverValid = false;
     if (hovered && !cmd.paperSelBoxActive && cmd.paperMovePhase == 0 && cmd.paperRotatePhase == 0 &&
-        cmd.paperMirrorPhase == 0 && cmd.paperLengthenPhase == 0 && cmd.paperExtendPhase == 0 &&
+        cmd.paperMirrorPhase == 0 && cmd.paperScalePhase == 0 && cmd.paperLengthenPhase == 0 &&
+        cmd.paperExtendPhase == 0 &&
         cmd.paperBreakPhase == 0 && cmd.paperStretchPhase == 0 && cmd.paperFilletPhase == 0 &&
         cmd.paperChamferPhase == 0 &&
         cmd.paperGripCorner == -2 && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
@@ -14282,12 +14285,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.paperMovePhase = 2;
       log.push_back("Click the destination point.");
     } else if (clickL && cmd.paperMovePhase == 2) {  // MOVE/COPY: destination
-      const float ddx = curX - cmd.paperMoveBaseXIn, ddy = curY - cmd.paperMoveBaseYIn;
-      if (!cmd.selectedPaperEntities.empty())
-        TranslateSelectedPaperEntities(cmd, ddx, ddy, cmd.paperMoveIsCopy, log);  // REQ-037
-      if (!cmd.selectedViewports.empty())
-        TranslateSelectedViewports(cmd, ddx, ddy, cmd.paperMoveIsCopy, log);  // REQ-035
-      cmd.paperMovePhase = 0;
+      FinishPaperMoveCopy(cmd, curX - cmd.paperMoveBaseXIn, curY - cmd.paperMoveBaseYIn, log);
     } else if (clickL && cmd.paperRotatePhase == 1) {  // ROTATE: base point (REQ-037)
       cmd.paperRotateBaseXIn = curX;
       cmd.paperRotateBaseYIn = curY;
@@ -14303,11 +14301,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.paperMirrorPhase = 2;
       log.push_back("Click the second point of the mirror line.");
     } else if (clickL && cmd.paperMirrorPhase == 2) {  // MIRROR: second point, commits (REQ-103)
-      if (std::hypot(curX - cmd.paperMirrorP1XIn, curY - cmd.paperMirrorP1YIn) < 1e-6f)
-        log.push_back("MIRROR — mirror line needs two distinct points; click again.");
-      else
-        MirrorSelectedPaperEntities(cmd, cmd.paperMirrorP1XIn, cmd.paperMirrorP1YIn, curX, curY, log);
-      cmd.paperMirrorPhase = 0;
+      FinishPaperMirror(cmd, curX, curY, log);
+    } else if (clickL && cmd.paperScalePhase == 1) {  // SCALE: base point (#764)
+      cmd.paperScaleBaseXIn = curX;
+      cmd.paperScaleBaseYIn = curY;
+      cmd.paperScalePhase = 2;
+      log.push_back("SCALE — type the scale factor (>0), or click a point: its distance from the base in paper "
+                    "inches is the factor.");
+    } else if (clickL && cmd.paperScalePhase == 2) {  // SCALE: factor from the clicked point's distance (#764)
+      const float f = std::hypot(curX - cmd.paperScaleBaseXIn, curY - cmd.paperScaleBaseYIn);
+      if (f < 1e-6f)
+        log.push_back("SCALE — that point is on the base point; click a different point or type a factor.");
+      else {
+        ScaleSelectedPaperEntities(cmd, cmd.paperScaleBaseXIn, cmd.paperScaleBaseYIn, f, log);
+        cmd.paperScalePhase = 0;
+      }
     } else if (clickL && cmd.paperLengthenPhase == 1) {  // LENGTHEN: pick + apply (REQ-103)
       PaperEntityRef pr;
       if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))

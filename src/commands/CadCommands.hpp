@@ -1640,6 +1640,14 @@ void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool ad
 void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& log);
 void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
                                     std::vector<std::string>& log);
+/// #764 - paper-space SCALE: uniform scale of the selected paper entities about a point (paper inches).
+void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float factor,
+                                std::vector<std::string>& log);
+/// Destination step of paper MOVE/COPY (click or typed): applies the (dx, dy) displacement in paper
+/// inches to the selected paper entities and viewports, then ends the gesture.
+void FinishPaperMoveCopy(AppCommandState& st, float dxIn, float dyIn, std::vector<std::string>& log);
+/// Second-point step of paper MIRROR (click or typed). Refuses a zero-length mirror line.
+void FinishPaperMirror(AppCommandState& st, float x2In, float y2In, std::vector<std::string>& log);
 void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float angRad,
                                  std::vector<std::string>& log);
 /// REQ-103 MIRROR, pure-paper-space path. Always duplicates and keeps the source (see the
@@ -5362,6 +5370,11 @@ struct AppCommandState {
   // Paper-space MIRROR of selected paper entities (REQ-103): 0 idle, 1 need first mirror-line point,
   // 2 need second point (commits immediately — no erase-source prompt in paper space; see
   // MirrorSelectedPaperEntities's comment).
+  // Paper-space SCALE of selected paper entities (#764): 0 idle, 1 need base point, 2 need scale factor
+  // (a typed number, or a point whose distance from the base in paper inches is the factor).
+  int   paperScalePhase = 0;
+  float paperScaleBaseXIn = 0.f;
+  float paperScaleBaseYIn = 0.f;
   int   paperMirrorPhase = 0;
   float paperMirrorP1XIn = 0.f;
   float paperMirrorP1YIn = 0.f;
