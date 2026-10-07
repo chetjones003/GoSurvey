@@ -663,6 +663,9 @@ add_executable(GoSurvey
   src/platform/OAuthListener.cpp
   src/platform/CredentialStore.cpp
   src/platform/StartupFailure.cpp
+  src/platform/FailureReportUi.cpp
+  src/platform/CrashReporter.cpp
+  src/platform/CrashReporterWireReason.cpp
 
   # Telemetry (REQ-080, ADR-032)
   src/telemetry/TelemetryPing.cpp
@@ -749,7 +752,7 @@ if(WIN32)
   # ole32 is for the Network List Manager connectivity query in HttpFetch.cpp (REQ-077).
   # ws2_32 is the REQ-091 loopback OAuth listener's raw Winsock socket calls (ADR-037 (b));
   # advapi32 is Windows Credential Manager (ADR-037 (c)). Both ship with Windows.
-  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32 ws2_32 advapi32 shell32)
+  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32 ws2_32 advapi32 shell32 dbghelp)
   target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
 
   # Embed the application icon so Windows shows it in Explorer, the taskbar,
@@ -1434,6 +1437,7 @@ if(GOSURVEY_BUILD_TESTS)
     # rides with GoSurveySnapTests (has the imgui include path) rather than GoSurveyTests.
     tests/RibbonLayoutPlaceTests.cpp
     tests/ViewportUcsTests.cpp
+    tests/PaperTypedPointsTests.cpp
     # REQ-154 / issue #371 — ORTHO squaring to a vertical (Front/Left/Right-style) UCS. Needs
     # gosurvey_domain for ApplyOrthoConstrainFromAnchor, so it rides with GoSurveySnapTests like
     # ViewportUcsTests.cpp above.
@@ -1491,6 +1495,8 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-354 / D-2026-09-28-j — the dynamic input shows its mode (issue #564 section 5).
     tests/DynInputTests.cpp
     tests/ModelingRibbonTests.cpp
+    # GitHub issue #762 — regression guard for Home/Insert ribbon wiring gaps.
+    tests/RibbonWiringGapTests.cpp
     # REQ-356 / D-2026-09-29-a — CHPROP, MATCHPROP, LAYMCUR, the current colour (issue #575).
     tests/PropertyCommandTests.cpp
     # REQ-370 / D-2026-10-05-a — box-selection live preview.
