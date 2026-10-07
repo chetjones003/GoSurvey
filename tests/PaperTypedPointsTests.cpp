@@ -192,3 +192,12 @@ TEST_CASE("A stale paper gesture does not swallow typed points in model space (#
   Submit(st, "0,0", log);
   CHECK(st.paperMovePhase == 1);  // untouched: the text was not consumed as a paper base point
 }
+
+TEST_CASE("Paper SCALE reads a comma pair as a point, not as its first number (#764)", "[req039][issue764]") {
+  AppCommandState st = PaperDrawing();
+  std::vector<std::string> log;
+  StartScaleCommand(st, log);
+  Submit(st, "0,0", log);
+  Submit(st, "3,4", log);  // distance 5 from the base -> factor 5 (a prefix parse would give 3)
+  CHECK(Sheet(st).paperLines[3] == Approx(10.f));
+}

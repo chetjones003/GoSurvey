@@ -42163,16 +42163,17 @@ static bool HandlePaperPhaseText(AppCommandState& st, const std::string& line, s
                   "inches is the factor.");
     return true;
   }
+  // A point first: ParseOneFloat would read the "3" of "3,4" as a factor.
   float factor = 0.f;
-  if (ParseOneFloat(line, &factor)) {
-    if (!(factor > 0.f) || !std::isfinite(factor)) {
-      log.push_back("SCALE — scale factor must be a positive finite number.");
-      return true;
-    }
-  } else if (ParsePaperPoint(line, true, st.paperScaleBaseXIn, st.paperScaleBaseYIn, &x, &y)) {
+  if (ParsePaperPoint(line, true, st.paperScaleBaseXIn, st.paperScaleBaseYIn, &x, &y)) {
     factor = std::hypot(x - st.paperScaleBaseXIn, y - st.paperScaleBaseYIn);
     if (!(factor > 1e-6f)) {
       log.push_back("SCALE — that point is on the base point; pick a different point or type a factor.");
+      return true;
+    }
+  } else if (ParseOneFloat(line, &factor)) {
+    if (!(factor > 0.f) || !std::isfinite(factor)) {
+      log.push_back("SCALE — scale factor must be a positive finite number.");
       return true;
     }
   } else {
