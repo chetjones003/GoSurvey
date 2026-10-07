@@ -289,6 +289,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.selectedViewportLayout = -1;
   cmd.paperGripCorner = -2;
   cmd.paperMovePhase = 0;
+  cmd.paperScalePhase = 0;
   cmd.paperSelBoxActive = false;
   cmd.floatingViewportLayout = -1;  // floating model space is transient, not per-document
   cmd.floatingViewportIndex = -1;
@@ -607,7 +608,23 @@ void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<st
   cmd.active = AppCommandState::Kind::None;  // paper-space edit ops are not a model command
   cmd.paperMovePhase = 1;
   cmd.paperMoveIsCopy = copy;
-  log.push_back(std::string(copy ? "COPY" : "MOVE") + " — click the base point (Esc to cancel).");
+  log.push_back(std::string(copy ? "COPY" : "MOVE") + " — specify base point (click or type X,Y). ESC to cancel.");
+}
+
+void FinishPaperMoveCopy(AppCommandState& st, float dxIn, float dyIn, std::vector<std::string>& log) {
+  if (!st.selectedPaperEntities.empty())
+    TranslateSelectedPaperEntities(st, dxIn, dyIn, st.paperMoveIsCopy, log);  // REQ-037
+  if (!st.selectedViewports.empty())
+    TranslateSelectedViewports(st, dxIn, dyIn, st.paperMoveIsCopy, log);      // REQ-035
+  st.paperMovePhase = 0;
+}
+
+void FinishPaperMirror(AppCommandState& st, float x2In, float y2In, std::vector<std::string>& log) {
+  if (std::hypot(x2In - st.paperMirrorP1XIn, y2In - st.paperMirrorP1YIn) < 1e-6f)
+    log.push_back("MIRROR — mirror line needs two distinct points; click again.");
+  else
+    MirrorSelectedPaperEntities(st, st.paperMirrorP1XIn, st.paperMirrorP1YIn, x2In, y2In, log);
+  st.paperMirrorPhase = 0;
 }
 
 // REQ-307 (GitHub #106): Enter acting on the paper-space MOVE/COPY/DELETE selection step. A free
@@ -625,7 +642,7 @@ void ProcessPaperMoveWaitingSelectionEnter(AppCommandState& st, std::vector<std:
   }
   st.paperMoveWaitingSelection = false;
   st.paperMovePhase = 1;
-  log.push_back(std::string(st.paperMoveIsCopy ? "COPY" : "MOVE") + " — click the base point (Esc to cancel).");
+  log.push_back(std::string(st.paperMoveIsCopy ? "COPY" : "MOVE") + " — specify base point (click or type X,Y). ESC to cancel.");
 }
 
 void ProcessPaperDeleteWaitingSelectionEnter(AppCommandState& st, std::vector<std::string>& log) {
@@ -10931,6 +10948,48 @@ static void ApplyScaleToSelectedSurveyPoints(AppCommandState& st, float bx, floa
   }
 }
 
+// Scales one annotation about (bx,by) — shared by model-space SCALE and paper-space SCALE (#764).
+static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& a, float bx, float by, float sc) {
+  if (a.kind == CadAnnotation::Kind::Text) {
+    ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+  } else if (a.kind == CadAnnotation::Kind::Mtext) {
+    ScalePtAroundBase(bx, by, sc, &a.boxMinX, &a.boxMinY);
+    ScalePtAroundBase(bx, by, sc, &a.boxMaxX, &a.boxMaxY);
+    if (a.boxMinX > a.boxMaxX)
+      std::swap(a.boxMinX, a.boxMaxX);
+    if (a.boxMinY > a.boxMaxY)
+      std::swap(a.boxMinY, a.boxMaxY);
+    a.insX = a.boxMinX;
+    a.insY = a.boxMinY;
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+  } else if (a.kind == CadAnnotation::Kind::DimLinear) {
+    ScaleCadDimLinearAroundBase(bx, by, sc, &a);
+    ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+  } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+    ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
+    ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
+    a.dimSignedOffset *= sc;
+    ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+    if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+      a.rotationRad = std::atan2(ty, tx);
+    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+  } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+    ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
+    ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
+    ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
+    a.dimSignedOffset *= sc;
+    ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+    CadDimAngularSyncTextPlacement(&a, st.modelUnitsPerPlottedInch);
+    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+  }
+}
+
 void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, float sc,
                            std::vector<std::string>& log) {
   if (!(sc > 0.f) || !std::isfinite(sc))
@@ -11027,45 +11086,7 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     const size_t k = static_cast<size_t>(e.index);
     if (k >= st.cadAnnotations.size())
       continue;
-    CadAnnotation& a = st.cadAnnotations[k];
-    if (a.kind == CadAnnotation::Kind::Text) {
-      ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
-      a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
-    } else if (a.kind == CadAnnotation::Kind::Mtext) {
-      ScalePtAroundBase(bx, by, sc, &a.boxMinX, &a.boxMinY);
-      ScalePtAroundBase(bx, by, sc, &a.boxMaxX, &a.boxMaxY);
-      if (a.boxMinX > a.boxMaxX)
-        std::swap(a.boxMinX, a.boxMaxX);
-      if (a.boxMinY > a.boxMaxY)
-        std::swap(a.boxMinY, a.boxMaxY);
-      a.insX = a.boxMinX;
-      a.insY = a.boxMinY;
-      a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
-    } else if (a.kind == CadAnnotation::Kind::DimLinear) {
-      ScaleCadDimLinearAroundBase(bx, by, sc, &a);
-      ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
-      a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
-      CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
-    } else if (a.kind == CadAnnotation::Kind::DimAligned) {
-      ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
-      ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
-      a.dimSignedOffset *= sc;
-      ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
-      a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
-      float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
-      if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-        a.rotationRad = std::atan2(ty, tx);
-      CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
-    } else if (a.kind == CadAnnotation::Kind::DimAngular) {
-      ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
-      ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
-      ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
-      a.dimSignedOffset *= sc;
-      ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
-      a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
-      CadDimAngularSyncTextPlacement(&a, st.modelUnitsPerPlottedInch);
-      CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
-    }
+    ScaleAnnotationAroundBase(st, st.cadAnnotations[k], bx, by, sc);
   }
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Table)
@@ -11499,6 +11520,81 @@ void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float b
   // `ApplyScaleToSelection` would agree in plan view and diverge under a tilted UCS.
   if (!CadWorkPlaneIsWorldXy(st))
     ScaleSelectionZAboutBase(st, bz, sc);
+}
+
+// #764 — paper-space SCALE: uniform scale of the selected paper entities about (baseX, baseY), all in
+// paper inches. Model-space SCALE only ever sees the model selection, so before this a paper SCALE
+// restarted at "click objects" and changed nothing on the sheet. Viewports are not scaled here.
+void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float factor,
+                                std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L || st.selectedPaperEntities.empty())
+    return;
+  if (!(factor > 0.f) || !std::isfinite(factor)) {
+    log.push_back("SCALE — scale factor must be a positive finite number.");
+    return;
+  }
+  PushUndoSnapshot(st, "Scale paper geometry");
+  for (const PaperRef& r : st.selectedPaperEntities) {
+    switch (r.type) {
+    case PaperRef::Type::Line: {
+      const size_t i = static_cast<size_t>(r.index) * 6;
+      if (i + 5 >= L->paperLines.size())
+        break;
+      ScalePtAroundBase(baseX, baseY, factor, &L->paperLines[i], &L->paperLines[i + 1]);
+      ScalePtAroundBase(baseX, baseY, factor, &L->paperLines[i + 3], &L->paperLines[i + 4]);
+      break;
+    }
+    case PaperRef::Type::Circle: {
+      const size_t i = static_cast<size_t>(r.index) * 3;
+      if (i + 2 >= L->paperCircles.size())
+        break;
+      ScalePtAroundBase(baseX, baseY, factor, &L->paperCircles[i], &L->paperCircles[i + 1]);
+      L->paperCircles[i + 2] *= factor;
+      break;
+    }
+    case PaperRef::Type::Arc: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperArcs.size())
+        break;
+      CadArc& a = L->paperArcs[static_cast<size_t>(r.index)];
+      ScalePtAroundBase(baseX, baseY, factor, &a.cx, &a.cy);
+      a.r *= factor;
+      break;
+    }
+    case PaperRef::Type::Ellipse: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperEllipses.size())
+        break;
+      CadEllipse& e = L->paperEllipses[static_cast<size_t>(r.index)];
+      ScalePtAroundBase(baseX, baseY, factor, &e.cx, &e.cy);
+      e.majVx *= factor;  // the major-axis vector is relative to the centre, so it just scales
+      e.majVy *= factor;
+      break;
+    }
+    case PaperRef::Type::Polyline: {
+      const int pi = r.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+        break;
+      const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+      const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+      for (int vi = v0; vi < v1; ++vi)
+        ScalePtAroundBase(baseX, baseY, factor, &L->paperPolyVerts[static_cast<size_t>(vi * 3)],
+                          &L->paperPolyVerts[static_cast<size_t>(vi * 3 + 1)]);
+      break;
+    }
+    case PaperRef::Type::Text: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperTexts.size())
+        ScaleAnnotationAroundBase(st, L->paperTexts[static_cast<size_t>(r.index)], baseX, baseY, factor);
+      break;
+    }
+    case PaperRef::Type::Block: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperBlockRefs.size())
+        CadBlockScaleAbout(&L->paperBlockRefs[static_cast<size_t>(r.index)], baseX, baseY, factor);
+      break;
+    }
+    }
+  }
+  BumpCadGpuCache(st);
+  log.push_back("SCALE — scaled paper object(s).");
 }
 
 namespace {
@@ -41215,7 +41311,7 @@ void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
     }
     st.active = AppCommandState::Kind::None;  // paper-space edit ops are not a model command
     st.paperRotatePhase = 1;
-    log.push_back("ROTATE — click the base point (Esc to cancel).");
+    log.push_back("ROTATE — specify base point (click or type X,Y). ESC to cancel.");
     return;
   }
   ClearPendingViewportZoom(st);
@@ -41236,6 +41332,16 @@ void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // #764: scale paper geometry
+    if (st.selectedPaperEntities.empty()) {
+      log.push_back("SCALE — select paper object(s) first.");
+      return;
+    }
+    st.active = AppCommandState::Kind::None;  // paper-space edit ops are not a model command
+    st.paperScalePhase = 1;
+    log.push_back("SCALE — specify base point (click or type X,Y). ESC to cancel.");
+    return;
+  }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Scale;
@@ -41261,7 +41367,7 @@ void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
     }
     st.active = AppCommandState::Kind::None;  // paper-space edit ops are not a model command
     st.paperMirrorPhase = 1;
-    log.push_back("MIRROR — click the first point of the mirror line (Esc to cancel).");
+    log.push_back("MIRROR — specify first point of mirror line (click or type X,Y). ESC to cancel.");
     return;
   }
   ClearPendingViewportZoom(st);
@@ -41964,6 +42070,119 @@ void SubmitViewportPick(AppCommandState& st, double localX, double localY, std::
 // extents centre. Precision only needs the locals to be small, not centred: a 5,000 ft site whose
 // origin sits at one corner still stores locals under 5,000, which float represents to ~1e-4 ft. This
 // also matches what the DXF importer already does when its header extents are untrustworthy.
+// #764 - typed points for the pure-paper-space MOVE / COPY / ROTATE / MIRROR / SCALE gestures, which are
+// click-driven state machines (cmd.paper*Phase) and never set cmd.active, so the model-space typed-input
+// handlers cannot see them. Paper points are plain paper inches (no document origin, no UCS), and `@dx,dy`
+// is relative to the previous point, as in model space. Returns true when it consumed the line; text that is
+// not a point (a command name) falls through to normal dispatch, as it always did mid-gesture.
+static bool ParsePaperPoint(const std::string& line, bool allowRelative, float baseX, float baseY, float* x,
+                            float* y) {
+  double px = 0., py = 0.;
+  if (!ParseWorldPointD(line, &px, &py, allowRelative, static_cast<double>(baseX), static_cast<double>(baseY)))
+    return false;
+  if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(static_cast<float>(px)) ||
+      !std::isfinite(static_cast<float>(py)))
+    return false;
+  *x = static_cast<float>(px);
+  *y = static_cast<float>(py);
+  return true;
+}
+
+static bool HandlePaperPhaseText(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
+  const bool move = st.paperMovePhase != 0, rot = st.paperRotatePhase != 0, mir = st.paperMirrorPhase != 0,
+             scl = st.paperScalePhase != 0;
+  if (line.empty() || !(move || rot || mir || scl))
+    return false;
+  // A gesture left half-finished by a space switch must not swallow typed model-space points.
+  if (st.activeSpaceIndex == kModelSpaceIndex || InFloatingModelSpace(st))
+    return false;
+  float x = 0.f, y = 0.f;
+  if (move) {
+    const char* name = st.paperMoveIsCopy ? "COPY" : "MOVE";
+    if (st.paperMovePhase == 1) {
+      if (!ParsePaperPoint(line, false, 0.f, 0.f, &x, &y)) {
+        return false;
+      }
+      st.paperMoveBaseXIn = x;
+      st.paperMoveBaseYIn = y;
+      st.paperMovePhase = 2;
+      log.push_back(std::string(name) + " — specify destination (click, X,Y or @dx,dy).");
+      return true;
+    }
+    if (!ParsePaperPoint(line, true, st.paperMoveBaseXIn, st.paperMoveBaseYIn, &x, &y)) {
+      return false;
+    }
+    FinishPaperMoveCopy(st, x - st.paperMoveBaseXIn, y - st.paperMoveBaseYIn, log);
+    return true;
+  }
+  if (rot) {
+    if (st.paperRotatePhase == 1) {
+      if (!ParsePaperPoint(line, false, 0.f, 0.f, &x, &y)) {
+        return false;
+      }
+      st.paperRotateBaseXIn = x;
+      st.paperRotateBaseYIn = y;
+      st.paperRotatePhase = 2;
+      log.push_back("ROTATE — specify a point that sets the rotation angle (click, X,Y or @dx,dy).");
+      return true;
+    }
+    if (!ParsePaperPoint(line, true, st.paperRotateBaseXIn, st.paperRotateBaseYIn, &x, &y)) {
+      return false;
+    }
+    RotateSelectedPaperEntities(st, st.paperRotateBaseXIn, st.paperRotateBaseYIn,
+                                std::atan2(y - st.paperRotateBaseYIn, x - st.paperRotateBaseXIn), log);
+    st.paperRotatePhase = 0;
+    return true;
+  }
+  if (mir) {
+    if (st.paperMirrorPhase == 1) {
+      if (!ParsePaperPoint(line, false, 0.f, 0.f, &x, &y)) {
+        return false;
+      }
+      st.paperMirrorP1XIn = x;
+      st.paperMirrorP1YIn = y;
+      st.paperMirrorPhase = 2;
+      log.push_back("MIRROR — specify second point of mirror line (click, X,Y or @dx,dy).");
+      return true;
+    }
+    if (!ParsePaperPoint(line, true, st.paperMirrorP1XIn, st.paperMirrorP1YIn, &x, &y)) {
+      return false;
+    }
+    FinishPaperMirror(st, x, y, log);
+    return true;
+  }
+  // SCALE
+  if (st.paperScalePhase == 1) {
+    if (!ParsePaperPoint(line, false, 0.f, 0.f, &x, &y)) {
+      return false;
+    }
+    st.paperScaleBaseXIn = x;
+    st.paperScaleBaseYIn = y;
+    st.paperScalePhase = 2;
+    log.push_back("SCALE — type the scale factor (>0), or pick a point: its distance from the base in paper "
+                  "inches is the factor.");
+    return true;
+  }
+  float factor = 0.f;
+  if (ParseOneFloat(line, &factor)) {
+    if (!(factor > 0.f) || !std::isfinite(factor)) {
+      log.push_back("SCALE — scale factor must be a positive finite number.");
+      return true;
+    }
+  } else if (ParsePaperPoint(line, true, st.paperScaleBaseXIn, st.paperScaleBaseYIn, &x, &y)) {
+    factor = std::hypot(x - st.paperScaleBaseXIn, y - st.paperScaleBaseYIn);
+    if (!(factor > 1e-6f)) {
+      log.push_back("SCALE — that point is on the base point; pick a different point or type a factor.");
+      return true;
+    }
+  } else {
+    return false;  // not a number or point: let a typed command name fall through
+  }
+  ScaleSelectedPaperEntities(st, st.paperScaleBaseXIn, st.paperScaleBaseYIn, factor, log);
+  st.paperScalePhase = 0;
+  return true;
+}
+
 static void MaybeEstablishDocumentOriginFromTypedPoint(AppCommandState& st, const std::string& line,
                                                        std::vector<std::string>& log) {
   if (st.worldDocumentOriginX != 0.0 || st.worldDocumentOriginY != 0.0)
@@ -42102,6 +42321,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
   }
+
+  // #764: typed points for the click-driven paper MOVE/COPY/ROTATE/MIRROR/SCALE gestures.
+  if (HandlePaperPhaseText(st, line, log))
+    return;
 
   const bool segPickNeedAdjust =
       ((st.active == K::Line && st.linePhase == LP::NeedNextPoint) ||
