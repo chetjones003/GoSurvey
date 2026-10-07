@@ -11423,9 +11423,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
   7. **How P9 reads clauses 1, 3, 4 and 6** (D-2026-10-05-k and the P9 plan).
      - **Paste (1, 3).** Copy remembers the project, coordinate system and units it came from. Pasting
        into a drawing of a *different project* warns. A paste where either drawing is in a project and
-       the coordinate systems differ is **blocked** (cancel only; convert for pasted content is a
-       follow-up issue); differing units warn. A paste between two standalone drawings is unchanged.
-       Survey points are not carried by Copy/Paste today, so no point number can collide through paste.
+       the coordinate systems differ is **blocked**: the user may **convert** the pasted objects or
+       cancel (D-2026-10-07-a); differing units warn, and the same convert is offered. A paste between
+       two standalone drawings is unchanged.
+       Survey points are not carried by Copy/Paste today, so no point number can collide through paste (issue #782).
+     - **Convert pasted content (3).** The copied objects are transformed into the destination
+       drawing's coordinate system and units with the SAME one similarity transform as Add Drawing
+       (REQ-378 clause 5): scale, rotation about the vertical axis and shift, computed with CS-MAP at the
+       centre of the copied objects and applied to every copied object, so shapes stay exact. A units
+       mismatch scales X, Y and heights; a coordinate-system mismatch moves X and Y only. The leftover
+       error at the copy's extents is shown; above **0.02 m** the convert is refused. A copy holding an
+       arc or ellipse in a tilted plane cannot be turned exactly and stays blocked, with the kind named
+       (REQ-201). The converted objects land at the same place on the ground, expressed in the
+       destination drawing's own origin, and the clipboard then belongs to the destination's coordinate
+       system and units. Cancelling leaves the clipboard and the drawing unchanged. Paper-space copies
+       have no coordinates to convert.
      - **Delete (4).** Asked only when another drawing of the project could lose the point: the message
        gives how many **open** drawings show it and how many **closed** drawings of the project might
        (their rules are saved inside their own DWG, which is not read for a warning). A project with no
@@ -11436,11 +11448,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
        drawing tab tries the write first and, if it still fails, lists the project and its open drawings.
        The quit prompt also groups its unsaved drawings under their project.
 - Acceptance: `[req383]` tests: each warning fires with the right counts; "hide only" leaves the
-  database untouched; coordinate-system mismatch blocks; unsaved-close lists projects/drawings.
+  database untouched; coordinate-system mismatch blocks; unsaved-close lists projects/drawings; convert of pasted
+  content puts the copy at the same ground position in the destination's system and units, refuses
+  above 0.02 m or for a tilted arc, and cancel changes nothing.
 - Owner-layer: UI, Domain
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P9: clause 7 added
-  (D-2026-10-05-k).
+  (D-2026-10-05-k). 2026-10-07 — clause 7: convert for pasted content (D-2026-10-07-a, issue #722).
 
 ### REQ-384 — AutoCAD annotation context objects DWG interop (GitHub issue #688)
 
