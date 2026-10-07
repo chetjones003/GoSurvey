@@ -14,6 +14,7 @@ on:
     branches: [master]
     paths:
       - 'site/**'
+      - 'resources/whats-new/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -39,6 +40,12 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+
+      # Same PNGs as the in-app What's New billboard — one source under resources/whats-new.
+      - name: Stage feature screenshots for the site
+        run: |
+          mkdir -p site/img/features
+          cp resources/whats-new/*.png site/img/features/
 
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
