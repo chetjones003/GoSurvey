@@ -330,12 +330,26 @@ int AddPaperLayout(AppCommandState& cmd) {
 void DeletePaperLayout(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.paperLayouts.size())
     return;
+  PushUndoSnapshot(cmd, "Delete layout");  // before the erase, so UNDO brings the layout back (#763)
+  // Leave floating model space first when it targets the doomed layout (restores the drawing's UCS).
+  if (cmd.floatingViewportIndex >= 0 && cmd.floatingViewportLayout == idx) {
+    std::vector<std::string> ignored;
+    ExitFloatingModelSpace(cmd, ignored);
+  }
   cmd.paperLayouts.erase(cmd.paperLayouts.begin() + idx);
-  // Fix up the active space and the toggle target.
-  if (cmd.activeSpaceIndex == idx)
+  // Re-point everything that holds a layout index.
+  if (cmd.floatingViewportLayout > idx)
+    --cmd.floatingViewportLayout;
+  if (cmd.selectedViewportLayout == idx)
+    ClearViewportSelection(cmd);
+  else if (cmd.selectedViewportLayout > idx)
+    --cmd.selectedViewportLayout;
+  if (cmd.activeSpaceIndex == idx) {
     cmd.activeSpaceIndex = kModelSpaceIndex;          // deleted the active layout → fall back to model
-  else if (cmd.activeSpaceIndex > idx)
+    cmd.selectedPaperEntities.clear();                 // those indices belonged to the deleted layout
+  } else if (cmd.activeSpaceIndex > idx) {
     --cmd.activeSpaceIndex;                            // indices after the removed one shift down
+  }
   cmd.lastPaperLayoutIndex =
       std::clamp(cmd.lastPaperLayoutIndex, 0, std::max(0, static_cast<int>(cmd.paperLayouts.size()) - 1));
   BumpCadGpuCache(cmd);
@@ -1689,8 +1703,22 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.activeMultileaderStyle = snap.multileaderStyle;
   st.mleaderStyleDraft = snap.multileaderStyle;
   st.pdfAttachments       = snap.pdfAttachments;
+  // A restore that adds/removes a layout (undo/redo of layout delete or add) shifts every layout
+  // index, so the floating/viewport/active-space state would point at the wrong layout (#763).
+  const bool layoutCountChanged = st.paperLayouts.size() != snap.paperLayouts.size();
+  if (layoutCountChanged && st.floatingViewportIndex >= 0) {
+    std::vector<std::string> ignored;
+    ExitFloatingModelSpace(st, ignored);  // before the swap, so the drawing's UCS is restored
+  }
   st.paperLayouts         = snap.paperLayouts;
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
+  if (layoutCountChanged) {
+    ClearViewportSelection(st);
+    if (st.activeSpaceIndex >= static_cast<int>(st.paperLayouts.size()))
+      st.activeSpaceIndex = kModelSpaceIndex;
+    st.lastPaperLayoutIndex =
+        std::clamp(st.lastPaperLayoutIndex, 0, std::max(0, static_cast<int>(st.paperLayouts.size()) - 1));
+  }
   st.worldDocumentOriginX = snap.worldDocumentOriginX;
   st.worldDocumentOriginY = snap.worldDocumentOriginY;
   // Section plane (REQ-343 amended, issue #479 acceptance 8).

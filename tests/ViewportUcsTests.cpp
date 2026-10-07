@@ -215,3 +215,95 @@ TEST_CASE("Saving .gs while floating records the drawing's UCS, not the viewport
 
   ExitFloatingModelSpace(st, log);
 }
+
+// Issue #763 (REQ-036/037/039) — deleting a paper layout re-points or clears every layout index and
+// is undoable. A drawing with three named layouts, one viewport each, tab 1 active.
+namespace {
+AppCommandState MakeThreeLayouts() {
+  AppCommandState st;
+  st.documents.resize(2);
+  st.activeDrawingIdx = 1;
+  for (const char* name : {"A", "B", "C"}) {
+    PaperLayout L;
+    L.name = name;
+    Viewport v;
+    v.paperWIn = 5.f;
+    v.paperHIn = 4.f;
+    L.viewports.push_back(v);
+    st.paperLayouts.push_back(L);
+  }
+  return st;
+}
+}  // namespace
+
+TEST_CASE("Deleting a layout other than the floating one re-points the floating index (#763)", "[req036][issue763]") {
+  for (int del : {0, 1}) {  // first, middle (the floating layout is the last one)
+    AppCommandState st = MakeThreeLayouts();
+    std::vector<std::string> log;
+    SetActiveSpace(st, 2);
+    EnterFloatingModelSpace(st, 2, 0, log);
+    DeletePaperLayout(st, del);
+    REQUIRE(st.paperLayouts.size() == 2);
+    CHECK(st.floatingViewportLayout == 1);  // still "C"
+    CHECK(st.paperLayouts[static_cast<size_t>(st.floatingViewportLayout)].name == "C");
+    CHECK(st.activeSpaceIndex == 1);
+  }
+}
+
+TEST_CASE("Deleting the floating/active layout exits floating and clears selections (#763)", "[req036][issue763]") {
+  AppCommandState st = MakeThreeLayouts();
+  std::vector<std::string> log;
+  SetActiveSpace(st, 2);  // last layout
+  st.selectedPaperEntities.push_back({PaperEntityRef::Type::Line, 0});
+  SelectViewport(st, 0, false);
+  EnterFloatingModelSpace(st, 2, 0, log);
+  DeletePaperLayout(st, 2);
+  CHECK(st.floatingViewportLayout == -1);
+  CHECK(st.floatingViewportIndex == -1);
+  CHECK_FALSE(st.floatingUcsSwapActive);
+  CHECK(st.selectedPaperEntities.empty());
+  CHECK(st.selectedViewports.empty());
+  CHECK(st.selectedViewportIndex == -1);
+  CHECK(st.selectedViewportLayout == -1);
+  CHECK(st.activeSpaceIndex == kModelSpaceIndex);
+}
+
+TEST_CASE("A viewport selection on a later layout shifts down with it (#763)", "[req036][issue763]") {
+  AppCommandState st = MakeThreeLayouts();
+  SetActiveSpace(st, 2);
+  SelectViewport(st, 0, false);
+  DeletePaperLayout(st, 0);
+  CHECK(st.selectedViewportLayout == 1);
+}
+
+TEST_CASE("UNDO restores a deleted layout and REDO deletes it again (#763)", "[req037][issue763]") {
+  for (int del : {0, 1, 2}) {  // first, middle, last
+    AppCommandState st = MakeThreeLayouts();
+    st.paperLayouts[static_cast<size_t>(del)].viewports[0].paperWIn = 9.f;  // fingerprint
+    std::vector<std::string> log;
+    SetActiveSpace(st, 1);
+    DeletePaperLayout(st, del);
+    REQUIRE(st.paperLayouts.size() == 2);
+
+    REQUIRE(DoUndo(st, log));
+    REQUIRE(st.paperLayouts.size() == 3);
+    CHECK(st.paperLayouts[static_cast<size_t>(del)].name == std::string(1, static_cast<char>('A' + del)));
+    CHECK(st.paperLayouts[static_cast<size_t>(del)].viewports[0].paperWIn == 9.f);
+    CHECK(st.activeSpaceIndex < static_cast<int>(st.paperLayouts.size()));
+
+    REQUIRE(DoRedo(st, log));
+    CHECK(st.paperLayouts.size() == 2);
+  }
+}
+
+TEST_CASE("Undo of a layout delete while floating elsewhere leaves no dangling floating state (#763)",
+          "[req036][issue763]") {
+  AppCommandState st = MakeThreeLayouts();
+  std::vector<std::string> log;
+  SetActiveSpace(st, 2);
+  EnterFloatingModelSpace(st, 2, 0, log);
+  DeletePaperLayout(st, 0);
+  REQUIRE(DoUndo(st, log));
+  CHECK(st.floatingViewportLayout == -1);  // count changed -> floating dropped, never mis-pointed
+  CHECK(st.activeSpaceIndex < static_cast<int>(st.paperLayouts.size()));
+}
