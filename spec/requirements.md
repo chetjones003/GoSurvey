@@ -4493,15 +4493,16 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-08-29 — File Format Specs: implementation
   belongs to REQ-170, not a parallel `DxfIo` branch.
 
-### REQ-113 — DXF paper-space import
-- Purpose: since REQ-037 gave GoSurvey native paper-space geometry, an imported DXF's paper-space entities and title block have somewhere real to go, but import still discards them and only logs a count
-- Priority: could
+### REQ-113 — DXF/DWG paper-space content
+- Purpose: GoSurvey's paper-space stores hold lines, text, MTEXT, circles, arcs, ellipses, polylines, block references and viewports (REQ-037, ADR-009/013), but DXF export writes none of them and DWG import reads only LINE, INSERT and VIEWPORT, so a sheet loses its title block and annotation on the way through a file (issue #765, SPEC GAP S1 / #768)
+- Priority: should
 - Type: functional
-- Statement: DXF import reconstructs each paper-space layout's entities into GoSurvey's native `PaperLayout` store (REQ-037/ADR-009), the same way model-space entities and REQ-023 survey points already reconstruct.
-- Acceptance (sketch): importing a DXF with a title block and paper-space annotations recreates them as editable native paper-space entities on the matching layout tab; entity types with no paper-space import branch yet are named in the log, not silently dropped (REQ-201).
+- Statement: The **paper-space entity set** that DXF and DWG must carry is: LINE, TEXT, MTEXT, CIRCLE, ARC, ELLIPSE, polyline, block reference (INSERT) and VIEWPORT. DXF export writes every member of that set from each layout's `PaperLayout` store into that layout's paper space; DXF import and DWG import reconstruct every member into the matching layout's native store (REQ-037/ADR-009), the same way model-space entities reconstruct. A paper-space entity of any type outside the set is named in the log with its count and type, never silently dropped (REQ-201).
+- Acceptance (sketch): (1) a drawing with a paper line, circle, arc, ellipse, polyline, text, MTEXT, block reference and a viewport survives DXF export then DXF import with each present on the same layout, with equal geometry; (2) `samples/duke-main-clean-r2018.dwg` imports its paper-space members of the set (it logs 203 "unsupported type" skips today) and any remaining skip is reported by type per REQ-201; (3) a paper-space type outside the set is reported, not dropped silently; (4) a malformed paper-space entity is rejected per REQ-001, not partially absorbed.
+- Not in this requirement: hatch/fill, leader, table, spline, image and point in paper space; paper size and orientation; viewport view direction, frozen layers, lock and on/off; DWG export of the full set (issue #753 I3). Each needs its own decision.
 - Owner-layer: IO
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Status: accepted
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-06 — accepted, widened from "DXF paper-space import" to the entity set above for DXF export, DXF import and DWG import (D-2026-10-06-o). First increment: DXF export + DWG import (issue #765); DXF import and DWG export are follow-on increments.
 
 ### REQ-114 — Autosave, backup, and crash recovery
 - Purpose: there is no safety net between manual `Ctrl+S` saves; a crash or accidental close loses unsaved work
@@ -13329,7 +13330,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-110 | Domain/UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-111 | Domain/Commands/IO/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-112 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-113 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-113 | IO | DXF/DWG paper-space entity set (D-2026-10-06-o); first increment DXF export + DWG import (#765) | accepted |
 | REQ-114 | IO/UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
