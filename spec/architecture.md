@@ -3568,6 +3568,33 @@ amended 2026-10-01 D-2026-10-01-f)
   (impossible without Autodesk's SDK, ADR-026); the ACDS/SAB work in #366/#301, which is the
   distinct case of files that *do* carry portable ACIS data in the newer storage format.
 
+#### ADR-051 addendum — R2013+ AcDs ASM/SAB solid import (Plant 3D piping DWGs)   (2026-10-07, accepted)
+
+- **Context (D-2026-10-07-a, TASK-734, `samples/example-piping-system.dwg`).** AutoCAD 2018 Plant /
+  PI piping drawings commonly store `3DSOLID` geometry in the **AcDb:AcDsPrototype_1b** section as
+  **ASM BinaryFile** (ShapeManager) streams with `has_ds_data=1` and `acis_empty=1` on the entity.
+  Vendored LibreDWG decodes the AcDs header and datidx but marks **`_data_` segments unhandled**;
+  its post-decode attach pass searches only the **`ACIS BinaryFile`** sentinel, so **zero** blobs
+  bind on files that carry only **`ASM BinaryFile`** (37 such headers in the reference fixture).
+  GoSurvey's `ImportAcisSolid` therefore logs `3DSOLID(empty)` even though portable B-rep bytes exist.
+  This is **not** the Civil 3D parts-catalog dead-end (ADR-051 addendum 2026-09-10): those files have
+  no AcDs payload at all and `AECC_*` classes; the reference fixture has **`ACPP*`** classes **and**
+  recoverable ASM blobs.
+- **Decision.**
+  1. **Increment 2 of REQ-320 / ADR-051 (a)** extends import to **SAB/ASM binary** (`version` ≥ 2),
+     including AcDs-resolved payloads, using the same analytic scope and refuse-by-name rules as SAT.
+     No mesh approximation (user chose B-rep-only for v1).
+  2. **LibreDWG vendor changes** (recorded in `third_party/libredwg/VENDORED.md`): decode AcDs
+     `_data_` record blobs; attach ASM and ACIS binary streams to the correct `3DSOLID` handles
+     (search/datidx, not FIFO brute-force only); extend `dwg_convert_SAB_to_SAT1` (or equivalent) to
+     accept **`ASM BinaryFile`** headers, not only `ACIS BinaryFile`.
+  3. **GoSurvey IO:** after attach, convert binary → SAT tokens → existing `AcisSatParser`; keep
+     `NoteSkip` for undecodable or out-of-scope bodies. **ADR-026 unchanged:** proprietary `ACPP*`
+     objects without a portable B-rep are still out of scope; this addendum covers **stored ASM
+     solids**, not reimplementing Plant's parametric engine.
+- **Out of scope:** decoding `ACPPPIPE` / connector custom objects when no ASM solid is stored;
+  AutoCAD-at-import-time conversion (ADR-026 addendum); DWG export changes.
+
 #### ADR-051 addendum — the real ACIS SAT schema, and standalone `.sat` import   (2026-09-10, accepted)
 
 - **Context (GitHub issue #473, D-2026-09-10-c).** ADR-051 (a) built `AcisSatParser` against a
