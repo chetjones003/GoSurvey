@@ -15,6 +15,10 @@ void GlfwPlatformSetCaptionBlocked(bool blocked);
 void GlfwPlatformApplySplashRoundedRegion(GLFWwindow* window, float cornerRadiusPx);
 /// Remove a prior \ref GlfwPlatformApplySplashRoundedRegion before the main shell resizes.
 void GlfwPlatformClearWindowRegion(GLFWwindow* window);
+/// REQ-399: bring \p window to the foreground even when another of this process's own OS windows (a
+/// floating PDF viewer, ADR-067) currently has it. Restores it first if minimized; plain
+/// glfwFocusWindow does not reliably win focus away from a sibling top-level window on Windows.
+void GlfwPlatformForceFocus(GLFWwindow* window);
 #else
 inline void GlfwPlatformInstallBorderlessResize(GLFWwindow*) {}
 inline void GlfwPlatformBeginCaptionDrag(GLFWwindow*) {}
@@ -22,4 +26,5 @@ inline void GlfwPlatformSetTitleBarMetrics(float, float) {}
 inline void GlfwPlatformSetCaptionBlocked(bool) {}
 inline void GlfwPlatformApplySplashRoundedRegion(GLFWwindow*, float) {}
 inline void GlfwPlatformClearWindowRegion(GLFWwindow*) {}
+inline void GlfwPlatformForceFocus(GLFWwindow*) {}
 #endif

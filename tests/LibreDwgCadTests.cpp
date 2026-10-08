@@ -15,20 +15,27 @@
 #include "SurveyPoints.hpp"
 #include "io/SurveyCsv.hpp"
 #include "util/ucs.hpp"
+#include "util/AcisSatParser.hpp"
 #include "util/brep.hpp"
 #include "util/cadpiperun.hpp"
+
+#include "SolidMeasure.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -184,7 +191,7 @@ TEST_CASE("LibreDWG DWG round-trips a model-space LINE", "[dwg][libredwg]") {
   OneLine(st);
   std::vector<std::string> log;
   REQUIRE(ExportDwgFile(st, p.c_str(), log));
-  REQUIRE(DwgVersionName(p.c_str()) == "AutoCAD 2000");
+  REQUIRE(DwgVersionName(p.c_str()) == "AutoCAD 2018");
   AppCommandState in;
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   REQUIRE(in.userLinesFlat.size() == 6);
@@ -1557,6 +1564,7 @@ TEST_CASE("Nested block INSERT in definition round-trips through DWG (issue #622
   ScratchDir dir("dwg-nested-block-insert");
   const auto p = (dir.path / "nested-blk.dwg").string();
   AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2000;
   CadBlockDefinition leaf;
   leaf.name = "NEST_LEAF";
   leaf.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
@@ -2116,6 +2124,153 @@ TEST_CASE("Civil3D parts-catalog class signature is detected from the class tabl
   Dwg_Data empty = {};
   CHECK_FALSE(libredwgcad_detail::DwgHasCivil3dCatalogClasses(&empty));
   CHECK_FALSE(libredwgcad_detail::DwgHasCivil3dCatalogClasses(nullptr));
+}
+
+// issue #786 / TASK-734 (REQ-320 increment 2, D-2026-10-08-a/b) — the Plant 3D PI piping fixture,
+// checked against AutoCAD itself. `samples/example-piping-system.acad-*.csv` hold AutoCAD 2027's
+// MASSPROP of the same solids (tools/acad/*.lsp regenerate them); `Validate` passing is not evidence
+// of the right shape on its own, so every solid GoSurvey keeps must match AutoCAD's volume and
+// extents. Volume and extents are taken from the tessellated mesh — what the viewport draws.
+namespace {
+
+struct AcadSolid {
+  std::string key;  // 3DSOLID handle (blocks file) or Plant part handle (placed file)
+  double volume = 0.0;
+  brep::Vec3 mn, mx;
+  bool used = false;
+};
+
+std::vector<AcadSolid> LoadAcadSolids(const char* fileName, int keyColumns) {
+  std::vector<AcadSolid> out;
+  std::ifstream in(std::string(GOSURVEY_SAMPLES_DIR) + "/" + fileName);
+  std::string line;
+  bool header = true;
+  while (std::getline(in, line)) {
+    if (line.empty() || line[0] == '#')
+      continue;
+    if (header) {
+      header = false;
+      continue;
+    }
+    std::vector<std::string> cols;
+    std::stringstream ss(line);
+    for (std::string c; std::getline(ss, c, ',');)
+      cols.push_back(c);
+    if (cols.size() != static_cast<size_t>(keyColumns) + 7)
+      continue;
+    AcadSolid a;
+    a.key = cols[0];
+    const auto num = [&](int i) { return std::stod(cols[static_cast<size_t>(keyColumns + i)]); };
+    a.volume = num(0);
+    a.mn = brep::Vec3{num(1), num(2), num(3)};
+    a.mx = brep::Vec3{num(4), num(5), num(6)};
+    out.push_back(a);
+  }
+  return out;
+}
+
+/// Same solid as AutoCAD's: volume within 0.1% (the mesh's chord error) and every extent within
+/// 0.005 drawing units.
+bool MatchesAcad(const AcadSolid& a, double volume, const brep::Vec3& mn, const brep::Vec3& mx) {
+  constexpr double kTol = 5e-3;
+  return std::fabs(volume - a.volume) <= 1e-3 * a.volume && std::fabs(mn.x - a.mn.x) <= kTol &&
+         std::fabs(mn.y - a.mn.y) <= kTol && std::fabs(mn.z - a.mn.z) <= kTol && std::fabs(mx.x - a.mx.x) <= kTol &&
+         std::fabs(mx.y - a.mx.y) <= kTol && std::fabs(mx.z - a.mx.z) <= kTol;
+}
+
+std::string HexHandle(unsigned long long h) {
+  char buf[32];
+  std::snprintf(buf, sizeof buf, "%llX", h);
+  return buf;
+}
+
+}  // namespace
+
+TEST_CASE("every ACIS body the Plant fixture yields matches AutoCAD's solid", "[dwg][libredwg][issue786]") {
+  const std::string p = std::string(GOSURVEY_SAMPLES_DIR) + "/example-piping-system.dwg";
+  std::vector<AcadSolid> acad = LoadAcadSolids("example-piping-system.acad-blocks.csv", 2);
+  REQUIRE(acad.size() == 89);
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int bodies = 0;
+  int imported = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    Dwg_Object* obj = &dwg.object[i];
+    if (obj->supertype != DWG_SUPERTYPE_ENTITY || obj->fixedtype != DWG_TYPE__3DSOLID)
+      continue;
+    Dwg_Entity__3DSOLID* sol = obj->tio.entity->tio._3DSOLID;
+    // Each 3DSOLID gets its own AcDs body through the index (never a neighbour's).
+    REQUIRE(sol != nullptr);
+    REQUIRE_FALSE(sol->acis_empty);
+    ++bodies;
+    REQUIRE(dwg_convert_SAB_to_SAT1(sol) == 0);
+    std::string sat;
+    for (BITCODE_BL b = 0; b < sol->num_blocks && sol->block_size[b] != 0; ++b)
+      sat.append(sol->encr_sat_data[b], sol->block_size[b]);
+    const acissat::ImportResult r = acissat::ImportSatSolid(sat, "3DSOLID");
+    if (!r.ok) {
+      CHECK_FALSE(r.error.empty());  // refused by name (REQ-201)
+      continue;
+    }
+    const std::string handle = HexHandle(obj->handle.value);
+    const auto row = std::find_if(acad.begin(), acad.end(), [&](const AcadSolid& a) { return a.key == handle; });
+    REQUIRE(row != acad.end());
+    double volume = 0.0;
+    brep::Vec3 mn, mx;
+    REQUIRE(MeshVolumeAndExtents(r.solid, brep::Vec3{}, &volume, &mn, &mx));
+    INFO("3DSOLID " << handle << " volume " << volume << " vs AutoCAD " << row->volume);
+    CHECK(MatchesAcad(*row, volume, mn, mx));
+    ++imported;
+  }
+  dwg_free(&dwg);
+  CHECK(bodies == 89);
+  // 60 bodies were exact against AutoCAD when this landed; fewer is a regression.
+  CHECK(imported >= 60);
+}
+
+TEST_CASE("opening the Plant fixture places every part where AutoCAD does", "[dwg][libredwg][issue786]") {
+  const std::string p = std::string(GOSURVEY_SAMPLES_DIR) + "/example-piping-system.dwg";
+  std::vector<AcadSolid> acad = LoadAcadSolids("example-piping-system.acad-placed.csv", 1);
+  REQUIRE(acad.size() == 127);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, p.c_str(), log));
+  const brep::Vec3 docOrigin{st.worldDocumentOriginX, st.worldDocumentOriginY, 0.0};
+  int matched = 0;
+  for (size_t i = 0; i < st.cadSolids.size(); ++i) {
+    double volume = 0.0;
+    brep::Vec3 mn, mx;
+    REQUIRE(MeshVolumeAndExtents(*st.cadSolids[i], docOrigin, &volume, &mn, &mx));
+    const auto row = std::find_if(acad.begin(), acad.end(), [&](const AcadSolid& a) {
+      return !a.used && MatchesAcad(a, volume, mn, mx);
+    });
+    INFO("solid " << i << " volume " << volume << " at " << mn.x << ", " << mn.y << ", " << mn.z);
+    if (row == acad.end())
+      continue;
+    row->used = true;
+    ++matched;
+  }
+  // 59 pipes, 52 fittings and 7 gaskets when this landed; fewer is a regression. The 117 W8x28
+  // beams are not in the AutoCAD explode answer key (they have no stored solid); they are counted
+  // apart from the rows they must not steal.
+  CHECK(matched >= 118);
+  CHECK(st.cadSolids.size() == static_cast<size_t>(matched) + 117);
+  double mnX = 0.0, mxX = 0.0, mnY = 0.0, mxY = 0.0;
+  REQUIRE(ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY));
+  CHECK(mxX > mnX);
+  CHECK(mxY > mnY);
+
+  // What is not imported is named (REQ-201). A fitting whose catalog solid the parser refuses says so.
+  // Wide-flange beams are built from their standard name and are not in that skip list.
+  const auto logged = [&](const char* text) {
+    return std::any_of(log.begin(), log.end(), [&](const std::string& l) { return l.find(text) != std::string::npos; });
+  };
+  CHECK_FALSE(logged("ACPPSTRUCTUREBEAM"));
+  CHECK(logged("ACPPPIPEINLINEASSET(catalog part not imported: 3DSOLID("));
+  CHECK_FALSE(logged("3DSOLID(empty)"));
+  CHECK_FALSE(logged("data layout not recognized"));
 }
 
 // issue #140 / DEBT-151-a — end-to-end against a real LibreDWG-decoded file: a multi-layer table
@@ -2929,6 +3084,7 @@ TEST_CASE("DWG export links every model-space entity explicitly (issue #590)", "
   const auto p = (dir.path / "mixed.dwg").string();
 
   AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2000;
   st.userLinesFlat = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 10.f, 0.f, 0.f, 10.f, 10.f, 0.f};
   st.userLineAttrs = {EntityAttributes{}, EntityAttributes{}};
   st.userCirclesCxCyZR = {5.f, 5.f, 0.f, 2.f};
@@ -5031,4 +5187,266 @@ TEST_CASE("DWG export loss counts LIGHTLIST below R2010 (REQ-386, issue #715)",
   st.dwgExportVersion = DwgSaveVersion::R2000;
   st.dwgImportedLightListPresent = true;
   CHECK(DwgExportCountLightSunLosses(st) >= 1);
+}
+
+// REQ-113 / issue #765 — paper-space content through DXF export and DWG import.
+namespace {
+
+// Lists DXF entities that carry group 67 = 1 as (type, owner block-record handle).
+std::vector<std::pair<std::string, std::string>> DxfPaperEntities(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  std::vector<std::pair<std::string, std::string>> pairs;
+  std::string code, val;
+  while (std::getline(in, code) && std::getline(in, val)) {
+    while (!code.empty() && (code.back() == '\r' || code.back() == ' '))
+      code.pop_back();
+    while (!val.empty() && val.back() == '\r')
+      val.pop_back();
+    pairs.emplace_back(code, val);
+  }
+  std::vector<std::pair<std::string, std::string>> out;  // (type, layout name)
+  bool inEntities = false;
+  for (size_t i = 0; i < pairs.size(); ++i) {
+    if (pairs[i].first == "2" && (pairs[i].second == "ENTITIES" || pairs[i].second == "BLOCKS"))
+      inEntities = true;
+    if (pairs[i].first == "0" && pairs[i].second == "ENDSEC")
+      inEntities = false;
+    if (!inEntities || pairs[i].first != "0")
+      continue;
+    bool paper = false;
+    std::string layout;
+    for (size_t j = i + 1; j < pairs.size() && pairs[j].first != "0"; ++j) {
+      if (pairs[j].first == "67" && pairs[j].second == "1")
+        paper = true;
+      if (pairs[j].first == "330")
+        layout = pairs[j].second;
+    }
+    if (paper)
+      out.emplace_back(pairs[i].second, layout);
+  }
+  return out;
+}
+
+PaperLayout MakePaperLayoutWithEveryType(const char* name) {
+  PaperLayout L;
+  L.name = name;
+  L.paperLines = {1.f, 1.f, 0.f, 5.f, 1.f, 0.f};
+  L.paperLineAttrs.resize(1);
+  L.paperCircles = {3.f, 3.f, 0.5f};
+  L.paperCircleAttrs.resize(1);
+  CadArc arc{};
+  arc.cx = 4.0;
+  arc.cy = 4.0;
+  arc.r = 1.0;
+  arc.startRad = 0.0;
+  arc.sweepRad = 1.5;
+  L.paperArcs.push_back(arc);
+  L.paperArcAttrs.resize(1);
+  CadEllipse el{};
+  el.cx = 6.0;
+  el.cy = 2.0;
+  el.majVx = 1.f;
+  el.majVy = 0.f;
+  el.ratio = 0.5f;
+  L.paperEllipses.push_back(el);
+  L.paperEllAttrs.resize(1);
+  L.paperPolyOffsets = {0, 3};
+  L.paperPolyVerts = {1.f, 6.f, 0.f, 2.f, 7.f, 0.f, 3.f, 6.f, 0.f};
+  L.paperPolyClosed = {1};
+  L.paperPolyAttrs.resize(1);
+  CadAnnotation t{};
+  t.kind = CadAnnotation::Kind::Text;
+  t.insX = 2.f;
+  t.insY = 8.f;
+  t.plottedHeightInches = 0.125f;
+  t.text = "TITLE";
+  L.paperTexts.push_back(t);
+  CadAnnotation m = t;
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.insY = 9.f;
+  m.boxMinX = 2.f;
+  m.boxMaxX = 5.f;
+  m.text = "NOTES";
+  L.paperTexts.push_back(m);
+  L.paperTextAttrs.resize(2);
+  Viewport vp;
+  L.viewports.push_back(vp);
+  return L;
+}
+
+}  // namespace
+
+TEST_CASE("DXF export writes every paper-space entity type tagged with its layout (issue #765)",
+          "[dxf][paperspace][issue765]") {
+  ScratchDir dir("p765dxf");
+  const auto p = (dir.path / "paper.dxf").string();
+  AppCommandState st;
+  OneLine(st);
+  st.paperLayouts.push_back(MakePaperLayoutWithEveryType("Sheet A"));
+  st.paperLayouts.push_back(MakePaperLayoutWithEveryType("Sheet B"));
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+
+  const auto ents = DxfPaperEntities(p);
+  std::vector<std::string> owners;  // one block record per layout
+  for (const auto& e : ents)
+    if (std::find(owners.begin(), owners.end(), e.second) == owners.end())
+      owners.push_back(e.second);
+  REQUIRE(owners.size() == 2);
+  for (const std::string& owner : owners) {
+    for (const char* type :
+         {"LINE", "CIRCLE", "ARC", "ELLIPSE", "LWPOLYLINE", "TEXT", "MTEXT", "VIEWPORT"}) {
+      INFO(owner << " " << type);
+      CHECK(std::count(ents.begin(), ents.end(), std::make_pair(std::string(type), owner)) == 1);
+    }
+  }
+  CHECK(ents.size() == 16);
+  // The model-space line is still model space (no group 67).
+  const std::string text = [&] {
+    std::ifstream f(p, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(f), {});
+  }();
+  CHECK(text.find("\r\n*Paper_Space0\r\n") != std::string::npos);  // second layout's own block
+  CHECK(text.find("\r\nACAD_LAYOUT\r\n") != std::string::npos);
+  CHECK(text.find("\r\nSheet B\r\n") != std::string::npos);
+}
+
+TEST_CASE("DXF export names paper-space block references it cannot write (issue #765, REQ-201)",
+          "[dxf][paperspace][issue765]") {
+  ScratchDir dir("p765blk");
+  const auto p = (dir.path / "paperblk.dxf").string();
+  AppCommandState st;
+  OneLine(st);
+  PaperLayout L = MakePaperLayoutWithEveryType("Sheet A");
+  L.paperBlockRefs.resize(2);
+  L.paperBlockRefAttrs.resize(2);
+  st.paperLayouts.push_back(L);
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  bool named = false;
+  for (const std::string& l : log)
+    if (l.find("2 paper-space block reference(s) not written") != std::string::npos)
+      named = true;
+  CHECK(named);
+  for (const auto& e : DxfPaperEntities(p))
+    CHECK(e.first != "INSERT");
+}
+
+TEST_CASE("DXF export without paper layouts writes no paper-space entities (issue #765)",
+          "[dxf][paperspace][issue765]") {
+  ScratchDir dir("p765none");
+  const auto p = (dir.path / "none.dxf").string();
+  AppCommandState st;
+  OneLine(st);
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  CHECK(DxfPaperEntities(p).empty());
+}
+
+TEST_CASE("DWG import names each skipped paper-space type on a real sheet (issue #765)",
+          "[dwg][libredwg][paperspace][issue765]") {
+  const std::string p = SamplePath("duke-main-clean-r2018.dwg");
+  REQUIRE(std::filesystem::exists(p));
+  AppCommandState in;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  size_t texts = 0, curves = 0, polys = 0, lines = 0;
+  for (const PaperLayout& L : in.paperLayouts) {
+    texts += L.paperTexts.size();
+    curves += L.paperCircles.size() / 3 + L.paperArcs.size() + L.paperEllipses.size();
+    polys += L.paperPolyAttrs.size();
+    lines += L.paperLines.size() / 6;
+    CHECK(L.paperCircleAttrs.size() == L.paperCircles.size() / 3);
+    CHECK(L.paperTextAttrs.size() == L.paperTexts.size());
+    CHECK(L.paperPolyAttrs.size() == (L.paperPolyOffsets.empty() ? 0 : L.paperPolyOffsets.size() - 1));
+  }
+  INFO("lines=" << lines << " texts=" << texts << " curves=" << curves << " polys=" << polys);
+  // This sheet's remaining objects are outside the paper-space set (fills, points, a table) and its
+  // text/curves were never in paper space; the point here is the existing import is intact and every
+  // skip is named by type (REQ-201), not lumped under "unsupported type".
+  CHECK(lines > 0);
+  CHECK(texts + curves + polys == 0);
+  bool named = false;
+  for (const std::string& l : log)
+    if (l.find("unsupported type HATCH") != std::string::npos)
+      named = true;
+  CHECK(named);
+}
+
+// The Duke sheet has only LINE/VIEWPORT/INSERT plus HATCH/POINT/table on its paper space, so it cannot
+// exercise the new readers. The DWG exporter now writes the whole paper-space set, so this is a real
+// GoSurvey -> DWG -> GoSurvey round trip of every type.
+TEST_CASE("DWG round-trips every paper-space entity type (issue #765)",
+          "[dwg][libredwg][paperspace][issue765]") {
+  ScratchDir dir("p765dwg");
+  const auto p = (dir.path / "paper.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.paperLayouts.push_back(MakePaperLayoutWithEveryType("Sheet A"));
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  log.clear();
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  std::string allLog;
+  for (const std::string& l : log)
+    allLog += l + " | ";
+  INFO(allLog);
+  REQUIRE(in.paperLayouts.size() == 1);
+  const PaperLayout& L = in.paperLayouts[0];
+  CHECK(L.name == "Sheet A");
+  CHECK(L.paperLines.size() == 6);
+  REQUIRE(L.paperCircles.size() == 3);
+  CHECK(L.paperCircles[0] == Catch::Approx(3.f).margin(0.01f));
+  CHECK(L.paperCircles[1] == Catch::Approx(3.f).margin(0.01f));
+  CHECK(L.paperCircles[2] == Catch::Approx(0.5f).margin(0.01f));
+  REQUIRE(L.paperArcs.size() == 1);
+  CHECK(L.paperArcs[0].cx == Catch::Approx(4.0).margin(0.01));
+  CHECK(L.paperArcs[0].r == Catch::Approx(1.0).margin(0.01));
+  CHECK(L.paperArcs[0].sweepRad == Catch::Approx(1.5).margin(0.01));
+  REQUIRE(L.paperEllipses.size() == 1);
+  CHECK(L.paperEllipses[0].cx == Catch::Approx(6.0).margin(0.01));
+  CHECK(L.paperEllipses[0].ratio == Catch::Approx(0.5).margin(0.01));
+  REQUIRE(L.paperPolyAttrs.size() == 1);
+  CHECK(L.paperPolyOffsets.back() == 3);
+  CHECK(L.paperPolyClosed[0] == 1);
+  CHECK(L.paperPolyVerts[4] == Catch::Approx(7.f).margin(0.01f));
+  REQUIRE(L.paperTexts.size() == 2);
+  bool sawText = false, sawMtext = false;
+  for (const CadAnnotation& a : L.paperTexts) {
+    if (a.kind == CadAnnotation::Kind::Text) {
+      sawText = true;
+      CHECK(a.text == "TITLE");
+      CHECK(a.plottedHeightInches == Catch::Approx(0.125f).margin(0.001f));
+    } else {
+      sawMtext = true;
+      CHECK(a.text.find("NOTES") != std::string::npos);
+    }
+  }
+  CHECK(sawText);
+  CHECK(sawMtext);
+  CHECK(L.viewports.size() == 1);
+  // Nothing landed in model space by mistake.
+  CHECK(in.userCirclesCxCyZR.empty());
+  CHECK(in.userArcs.empty());
+  CHECK(in.cadAnnotations.empty());
+  CHECK(L.paperCircleAttrs.size() == 1);
+  CHECK(L.paperTextAttrs.size() == 2);
+}
+
+TEST_CASE("A DXF with paper space still re-imports (issue #765)", "[dxf][libredwg][paperspace][issue765]") {
+  ScratchDir dir("p765re");
+  const auto p = (dir.path / "paper.dxf").string();
+  AppCommandState st;
+  OneLine(st);
+  st.paperLayouts.push_back(MakePaperLayoutWithEveryType("Sheet A"));
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  AppCommandState in;
+  log.clear();
+  const bool ok = ImportDxfFile(in, p.c_str(), log);
+  for (const std::string& l : log)
+    UNSCOPED_INFO(l);
+  REQUIRE(ok);
+  CHECK(in.userLinesFlat.size() == 6);
 }

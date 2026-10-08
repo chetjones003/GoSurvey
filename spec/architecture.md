@@ -920,6 +920,12 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   keeps its structure. **glTF remains the preferred route** and the one to use when a producer
   exists. Recovering colour by grouping exploded solids per colour is the obvious next step and is
   deliberately not attempted here.
+- Amendment (2026-10-08, D-2026-10-08-b): where a Plant 3D drawing **stores** a part's B-rep (an
+  AcDs ASM body in a `Plant3DCatalogItem_*` block), GoSurvey now reads that solid and the part
+  entity's placement fields directly, with no AutoCAD at import time (ADR-051 amendment,
+  D-2026-10-08-b), and builds a straight pipe from its stored centreline and radius. (a) still holds
+  for everything else: Plant's parametric engine data is not interpreted, and a part with neither a
+  stored solid nor a straight-pipe centreline (a structural member) is refused by name.
 
 ### ADR-027 — Stable entity identity   (2026-08-12, accepted)
 - Context:  Raised as a **blocking Verification finding against REQ-069**, before any code was
@@ -3567,6 +3573,63 @@ amended 2026-10-01 D-2026-10-01-f)
 - **Out of scope, unchanged:** reimplementing or vendoring Civil 3D's Parts Catalog engine
   (impossible without Autodesk's SDK, ADR-026); the ACDS/SAB work in #366/#301, which is the
   distinct case of files that *do* carry portable ACIS data in the newer storage format.
+
+#### ADR-051 addendum — R2013+ AcDs ASM/SAB solid import (Plant 3D piping DWGs)   (2026-10-07, accepted)
+
+- **Context (D-2026-10-07-b, TASK-734, `samples/example-piping-system.dwg`).** AutoCAD 2018 Plant /
+  PI piping drawings commonly store `3DSOLID` geometry in the **AcDb:AcDsPrototype_1b** section as
+  **ASM BinaryFile** (ShapeManager) streams with `has_ds_data=1` and `acis_empty=1` on the entity.
+  Vendored LibreDWG decodes the AcDs header and datidx but marks **`_data_` segments unhandled**;
+  its post-decode attach pass searches only the **`ACIS BinaryFile`** sentinel, so **zero** blobs
+  bind on files that carry only **`ASM BinaryFile`** (37 such headers in the reference fixture).
+  GoSurvey's `ImportAcisSolid` therefore logs `3DSOLID(empty)` even though portable B-rep bytes exist.
+  This is **not** the Civil 3D parts-catalog dead-end (ADR-051 addendum 2026-09-10): those files have
+  no AcDs payload at all and `AECC_*` classes; the reference fixture has **`ACPP*`** classes **and**
+  recoverable ASM blobs.
+- **Decision.**
+  1. **Increment 2 of REQ-320 / ADR-051 (a)** extends import to **SAB/ASM binary** (`version` ≥ 2),
+     including AcDs-resolved payloads, using the same analytic scope and refuse-by-name rules as SAT.
+     No mesh approximation (user chose B-rep-only for v1).
+  2. **LibreDWG vendor changes** (recorded in `third_party/libredwg/VENDORED.md`): decode AcDs
+     `_data_` record blobs; attach ASM and ACIS binary streams to the correct `3DSOLID` handles
+     (search/datidx, not FIFO brute-force only); extend `dwg_convert_SAB_to_SAT1` (or equivalent) to
+     accept **`ASM BinaryFile`** headers, not only `ACIS BinaryFile`.
+  3. **GoSurvey IO:** after attach, convert binary → SAT tokens → existing `AcisSatParser`; keep
+     `NoteSkip` for undecodable or out-of-scope bodies. **ADR-026 unchanged:** proprietary `ACPP*`
+     objects without a portable B-rep are still out of scope; this addendum covers **stored ASM
+     solids**, not reimplementing Plant's parametric engine.
+- **Out of scope:** decoding `ACPPPIPE` / connector custom objects when no ASM solid is stored;
+  AutoCAD-at-import-time conversion (ADR-026 addendum); DWG export changes.
+- **Amendment (2026-10-08, D-2026-10-08-a).**
+  1. **Torus and sphere faces are in scope** for increment 2 (the ADR-051 (b-1) fast-follows);
+     Plant 3D pipe elbows are torus segments. True-ellipse edges and spline/blend surfaces stay
+     refused by name.
+  2. **Bodies bind to solids through the AcDs index, never by position.** Each `datidx` entry names a
+     `_data_` slot (`segment + 48 + offset`: slot size, 1, `RLL` handle, `RL` local offset); the record
+     sits at `segment + objdata_algn_offset * 16 + local offset` as an `RL` length then the bytes.
+     Records that are not `ASM`/`ACIS BinaryFile` (preview images) or whose handle is not a
+     `3DSOLID` are skipped; nothing is attached by guessing.
+  3. **SAB → SAT keeps full double precision** (`%.17g`). Six significant digits made full-circle
+     edges and torus seams miss `brep::Validate`'s exact closure test.
+  4. **Correctness oracle:** every fixture solid the importer accepts is checked against AutoCAD
+     2027 `MASSPROP` (volume and bounding box); `Validate` passing alone is not evidence of the
+     right shape (a stretched cone validated as a cylinder before this amendment).
+- **Amendment (2026-10-08, D-2026-10-08-b) — Plant 3D placement, a narrow ADR-026 exception.**
+  1. **What is read.** `src/io/LibreDwgPlant.*` decodes, from the bits LibreDWG leaves undecoded on a
+     Plant entity (`Dwg_Object::unknown_bits`), only: the `AcPpDb3dPart` header (skipped, its port
+     list included), a fitting's origin / X / Z axes and catalog block record, a connector's frame and
+     its `AcPpDb3dBlockSubPart` 3×4 placements and block records, and a pipe's centreline, radius and
+     start/end cut-backs. Field order follows the entity's own DXF output; types are DWG bit codes;
+     strings come from the R2007+ string stream and handles from the handle stream.
+  2. **Fail closed.** Each decode must end exactly at the entity's data boundary (string stream, or
+     the has-strings flag); a mismatch refuses the entity by name rather than placing it.
+  3. **What is placed.** A placed catalog solid is the block's stored 3DSOLID moved rigidly
+     (`brep::Rotate` + `brep::Translate`) into the part's frame; a pipe is `brep::MakeCylinder`.
+     Unreferenced catalog blocks are not imported into model space. Plant's parametric engine data
+     (sizes, specs, connections) is never interpreted — ADR-026 stands for everything but placement.
+  4. **Oracle.** `tools/acad/plant-placed-massprop.lsp` explodes every part in AutoCAD and records
+     each world-placed solid; `LibreDwgCadTests [issue786]` requires every solid GoSurvey places to
+     match one of them.
 
 #### ADR-051 addendum — the real ACIS SAT schema, and standalone `.sat` import   (2026-09-10, accepted)
 

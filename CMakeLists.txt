@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GoSurvey VERSION 0.7.1 LANGUAGES CXX C RC)
+project(GoSurvey VERSION 0.7.2 LANGUAGES CXX C RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -481,6 +481,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/LibreDwgAnnotContext.cpp
   src/io/LibreDwgVisualStyle.cpp
   src/io/LibreDwgLights.cpp
+  src/io/LibreDwgPlant.cpp
   src/io/DxfColors.cpp
   src/io/DwgMeshConvert.cpp
   src/io/GsMigrate.cpp
@@ -650,6 +651,7 @@ add_executable(GoSurvey
   src/pdf/PdfSnap.cpp
   src/pdf/PdfScaleCheck.cpp
   src/pdf/PdfDimAudit.cpp
+  src/pdf/PdfCoordExtract.cpp
   src/pdf/PdfAlign.cpp
   src/pdf/PdfDiff.cpp
   src/ui/PdfViewerWindow.cpp
@@ -663,6 +665,9 @@ add_executable(GoSurvey
   src/platform/OAuthListener.cpp
   src/platform/CredentialStore.cpp
   src/platform/StartupFailure.cpp
+  src/platform/FailureReportUi.cpp
+  src/platform/CrashReporter.cpp
+  src/platform/CrashReporterWireReason.cpp
 
   # Telemetry (REQ-080, ADR-032)
   src/telemetry/TelemetryPing.cpp
@@ -749,7 +754,7 @@ if(WIN32)
   # ole32 is for the Network List Manager connectivity query in HttpFetch.cpp (REQ-077).
   # ws2_32 is the REQ-091 loopback OAuth listener's raw Winsock socket calls (ADR-037 (b));
   # advapi32 is Windows Credential Manager (ADR-037 (c)). Both ship with Windows.
-  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32 ws2_32 advapi32 shell32)
+  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32 ws2_32 advapi32 shell32 dbghelp)
   target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
 
   # Embed the application icon so Windows shows it in Explorer, the taskbar,
@@ -1225,6 +1230,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ProjectTurnoverTests.cpp
     src/io/ProjectTurnover.cpp
     tests/TelemetryPingTests.cpp
+    tests/CrashReporterTests.cpp
+    src/platform/CrashReporterWireReason.cpp
     tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
     tests/GpuPreferenceTests.cpp
@@ -1375,6 +1382,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PdfDimAuditPdfTests.cpp
     tests/PdfAlignTests.cpp
     tests/PdfDiffTests.cpp
+    tests/PdfCoordExtractTests.cpp
     src/pdf/PdfViewerCore.cpp
     src/pdf/PdfDocument.cpp
     src/pdf/PdfSplit.cpp
@@ -1385,6 +1393,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/pdf/PdfSnap.cpp
     src/pdf/PdfScaleCheck.cpp
     src/pdf/PdfDimAudit.cpp
+    src/pdf/PdfCoordExtract.cpp
     src/pdf/PdfAlign.cpp
     src/pdf/PdfDiff.cpp)
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium)
@@ -1491,6 +1500,8 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-354 / D-2026-09-28-j — the dynamic input shows its mode (issue #564 section 5).
     tests/DynInputTests.cpp
     tests/ModelingRibbonTests.cpp
+    # GitHub issue #762 — regression guard for Home/Insert ribbon wiring gaps.
+    tests/RibbonWiringGapTests.cpp
     # REQ-356 / D-2026-09-29-a — CHPROP, MATCHPROP, LAYMCUR, the current colour (issue #575).
     tests/PropertyCommandTests.cpp
     # REQ-370 / D-2026-10-05-a — box-selection live preview.

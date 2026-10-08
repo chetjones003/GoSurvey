@@ -3647,8 +3647,8 @@ requirements is a planning failure, not a sign of rigor.
   reason (REQ-001). Entities and tables LibreDWG decoded are mapped into the GoSurvey domain;
   every skipped class, exploded INSERT (until REQ-107), extra layout, and proxy is **named in the
   log** (REQ-201). State-plane coordinates obey REQ-101 (origin subtract in double before float).
-  **Save DWG:** **R2000**, **R2004**, **R2010**, **R2013**, or **R2018**; default **R2000**
-  (D-2026-09-30-c). **R2007** is not offered. The file AutoCAD opens must do so **without a Recover
+  **Save DWG:** **R2000**, **R2004**, **R2010**, **R2013**, or **R2018**; default **R2018**
+  (D-2026-10-08-c). **R2007** is not offered. The file AutoCAD opens must do so **without a Recover
   prompt** for the entity set we emit. Before overwrite, the UI lists what this down-convert / domain
   mapping will drop. Failed write leaves the destination untouched.
   **Save DXF:** LibreDWG’s DXF writer; binary DXF is included to the extent the library writes it
@@ -3661,7 +3661,7 @@ requirements is a planning failure, not a sign of rigor.
     environment, and model-space LINE/CIRCLE/LWPOLYLINE/TEXT/MTEXT/HATCH that LibreDWG decoded
     appear in the drawing;
   - a non-DWG renamed to `.dwg` is refused and the document is unchanged;
-  - File ▸ Export DWG (default) writes R2000; AutoCAD or ODA File Converter (oracle) opens it
+  - File ▸ Export DWG (default) writes R2018; AutoCAD or the in-process reader opens it
     **without Recover** and the emitted entity counts match the log;
   - choosing R2018 in Export DWG writes AC1032; the in-process reader round-trips the emitted set
     and reports `r2018` (regression tests; oracle optional);
@@ -3686,6 +3686,9 @@ requirements is a planning failure, not a sign of rigor.
   2026-10-01 — **R2010/R2013/R2018 export** (D-2026-10-01-f): `DwgSaveVersion` and Export DWG dialog
   offer five selectable versions (R2007 omitted). `ExportLibreCadFile` encodes via LibreDWG
   `R_2010`/`R_2013`/`R_2018`; GEODATA uses class version 2 when `DwgSaveVersionUsesR2010Geodata()`.
+  2026-10-08 — default save **R2018** (D-2026-10-08-c). R2000 through R2013 stay selectable.
+  DWG export of a solid writes every analytic face and edge import already accepts (torus, sphere,
+  ellipse, intersection), so a Plant fitting is not counted as a drop.
 
 ### REQ-171 — Point cloud entity
 - Purpose: File Format Specs — hold laser-scan points without pretending they are a TIN (REQ-068)
@@ -4493,15 +4496,16 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-08-29 — File Format Specs: implementation
   belongs to REQ-170, not a parallel `DxfIo` branch.
 
-### REQ-113 — DXF paper-space import
-- Purpose: since REQ-037 gave GoSurvey native paper-space geometry, an imported DXF's paper-space entities and title block have somewhere real to go, but import still discards them and only logs a count
-- Priority: could
+### REQ-113 — DXF/DWG paper-space content
+- Purpose: GoSurvey's paper-space stores hold lines, text, MTEXT, circles, arcs, ellipses, polylines, block references and viewports (REQ-037, ADR-009/013), but DXF export writes none of them and DWG import reads only LINE, INSERT and VIEWPORT, so a sheet loses its title block and annotation on the way through a file (issue #765, SPEC GAP S1 / #768)
+- Priority: should
 - Type: functional
-- Statement: DXF import reconstructs each paper-space layout's entities into GoSurvey's native `PaperLayout` store (REQ-037/ADR-009), the same way model-space entities and REQ-023 survey points already reconstruct.
-- Acceptance (sketch): importing a DXF with a title block and paper-space annotations recreates them as editable native paper-space entities on the matching layout tab; entity types with no paper-space import branch yet are named in the log, not silently dropped (REQ-201).
+- Statement: The **paper-space entity set** that DXF and DWG must carry is: LINE, TEXT, MTEXT, CIRCLE, ARC, ELLIPSE, polyline, block reference (INSERT) and VIEWPORT. DXF export writes every member of that set from each layout's `PaperLayout` store into that layout's paper space; DXF import and DWG import reconstruct every member into the matching layout's native store (REQ-037/ADR-009), the same way model-space entities reconstruct. A paper-space entity of any type outside the set is named in the log with its count and type, never silently dropped (REQ-201).
+- Acceptance (sketch): (1) a drawing with a paper line, circle, arc, ellipse, polyline, text, MTEXT, block reference and a viewport survives DXF export then DXF import with each present on the same layout, with equal geometry; (2) `samples/duke-main-clean-r2018.dwg` imports its paper-space members of the set (it logs 203 "unsupported type" skips today) and any remaining skip is reported by type per REQ-201; (3) a paper-space type outside the set is reported, not dropped silently; (4) a malformed paper-space entity is rejected per REQ-001, not partially absorbed.
+- Not in this requirement: hatch/fill, leader, table, spline, image and point in paper space; paper size and orientation; viewport view direction, frozen layers, lock and on/off; DWG export of the full set (issue #753 I3). Each needs its own decision.
 - Owner-layer: IO
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Status: accepted
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-06 — accepted, widened from "DXF paper-space import" to the entity set above for DXF export, DXF import and DWG import (D-2026-10-06-o). First increment: DXF export + DWG import (issue #765); DXF import and DWG export are follow-on increments.
 
 ### REQ-114 — Autosave, backup, and crash recovery
 - Purpose: there is no safety net between manual `Ctrl+S` saves; a crash or accidental close loses unsaved work
@@ -8064,7 +8068,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   wording implies.
 - Revisions: 2026-09-04 — initial (D-2026-09-04-c, GitHub issue #148 criteria 3, 7 and 8).
 
-### REQ-320 — Import an ACIS 3D-solid block (analytic primitives, SAT only)
+### REQ-320 — Import an ACIS 3D-solid block (analytic primitives; SAT increment 1, AcDs ASM/SAB increment 2)
 
 - Purpose: real-world vendor block libraries (Plant 3D piping/mechanical symbols) commonly store their
   only geometry as an ACIS `3DSOLID` entity; GoSurvey's DWG/DXF importer silently skips it today,
@@ -8085,12 +8089,38 @@ capability that does not exist. They are recorded here rather than quietly dropp
   when the entity lives inside a block definition, carried by `CadBlockContent::solids` so it survives
   `INSERT`/`WBLOCK`/`BLOCKIMPORT`, closing the same round-trip gap #284 fixed for 2D geometry).
 
-  ACIS payloads or content outside that scope are **refused, never approximated or silently dropped**
-  (ADR-051 (d), REQ-201): SAB encoding, free-form/blend/swept surfaces, sphere/torus surfaces (this
-  increment), a curved face whose loop does not match a recognized shape, a wire or sheet (non-solid)
-  body. The refusal names the entity's handle and the specific record or face
-  that could not be represented, and reaches the log the same way an unrecognized entity type already
-  does (`NoteSkip`) — the import completes with a message, not a silent empty result.
+  **Increment 1** accepts only **SAT text** (DXF 70 `version` = 1) payloads, inline in `acis_data`.
+  **Increment 2** (D-2026-10-07-b, TASK-734) additionally accepts **SAB/ASM binary** payloads
+  (`version` ≥ 2), including those stored in the R2013+ **AcDs** datastorage section (`has_ds_data`),
+  after vendored LibreDWG resolves the blob onto `Dwg_Entity__3DSOLID::acis_data` (ASM `BinaryFile`
+  headers as well as legacy `ACIS BinaryFile`). Binary streams are converted to the same SAT record
+  model increment 1 consumes (`AcisSatParser`), not approximated to mesh.
+
+  Increment 2 also accepts **torus** and **sphere** faces (the ADR-051 (b-1) fast-follows,
+  D-2026-10-08-a) — Plant 3D pipe elbows are torus segments — on the same terms: the face's real
+  boundary is kept and the solid must close exactly.
+
+  **Plant 3D placement (D-2026-10-08-b).** A Plant 3D drawing stores each fitting's solid once, in a
+  `Plant3DCatalogItem_*` block definition no INSERT references, and places it with a Plant custom
+  entity. Increment 2 reads only those entities' placement fields (`ACPPPIPEINLINEASSET` and
+  `ACPPCONNECTOR` block sub-parts: origin, X and Z axes, block record) and puts each referenced
+  catalog solid in model space where the drawing places it; a straight pipe (`ACPPPIPE`), which
+  stores no solid, becomes a solid cylinder along its centreline less its start and end cut-backs.
+  A structural beam (`ACPPSTRUCTUREBEAM`) stores a centreline, a section orientation, and a standard
+  shape name (`W4` through `W27` in the standard wide-flange list). The solid is that shape's published wide-flange outline
+  (AISC outer dimensions, no fillet) extruded along the centreline. Any other shape name, or a
+  centreline that does not decode, is refused by name.
+  Plant's parametric data is never interpreted (ADR-026): a Plant entity with no stored solid or
+  placement or a layout the reader does not recognise is refused by name, and
+  catalog blocks no part places are not dropped into model space.
+
+  ACIS payloads or content outside the analytic scope are **refused, never approximated or silently
+  dropped** (ADR-051 (d), REQ-201): free-form/blend/swept surfaces, a curved face whose loop does not
+  match a recognized shape,
+  a wire or sheet (non-solid) body, or a binary stream that cannot be decoded. The refusal names the
+  entity and the specific record or face that could not be represented, and reaches the log the same
+  way an unrecognized entity type already does (`NoteSkip`) — the import completes with a message,
+  not a silent empty result.
 
   A `3DSOLID` with **no ACIS payload at all** (`acis_empty`, no inline stream, no ACDS reference) that
   **co-occurs with any `AECC_*` custom class** in the file's class table is a **Civil 3D parts-catalog
@@ -8106,8 +8136,19 @@ capability that does not exist. They are recorded here rather than quietly dropp
     `CadSolid` has the expected face count, surface kinds and volume (within REQ-101) for the source
     shape;
   - the same solid inserted via `INSERT` and then `WBLOCK`'d back out survives with its solid intact;
-  - a `.dwg` `3DSOLID` using SAB encoding is refused with a message naming the entity and "binary (SAB)
-    ACIS is not yet supported" (or equivalent), and the rest of the file still imports;
+  - **(increment 1 only, superseded by increment 2 for supported SAB/ASM)** a `.dwg` `3DSOLID` using
+    SAB encoding that increment 2 does not yet decode is refused with a message naming the entity and
+    the binary/SAB/ASM reason, and the rest of the file still imports;
+  - **(increment 2)** opening `samples/example-piping-system.dwg` (Plant 3D / PI piping, AutoCAD 2018)
+    imports **at least one** `brep::Solid`, **ZOOM EXTENTS** frames imported solid geometry, and the
+    log is not solely `3DSOLID(empty)` for every solid in that fixture; solids whose ASM body is
+    outside the analytic scope are refused by name and the remainder of the file still imports;
+    every solid it does import has the volume and extents of the same solid in the source drawing
+    (within REQ-101), each `3DSOLID` receiving its own stored body (D-2026-10-08-a);
+  - **(increment 2)** opening that fixture places its Plant 3D pipes, fittings and gaskets in model
+    space where AutoCAD's own exploded geometry puts them — each placed solid matches the volume and
+    extents of AutoCAD's (`samples/example-piping-system.acad-placed.csv`) — and names in the log
+    every Plant part it does not place (D-2026-10-08-b);
   - a `.dwg` `3DSOLID` containing a spline/blend surface, or a face whose boundary does not reduce to a
     parametric rectangle, is refused with a message naming the entity and the specific face/record, and
     the rest of the file still imports;
@@ -8124,11 +8165,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
     imports as a valid `brep::Solid` (D-2026-09-10-c, ADR-051 addendum, GitHub issue #473).
 - Owner-layer: IO (`src/util/AcisSatParser.*`, `src/io/LibreDwgCad.cpp`), Domain (`brep::Solid` is the
   target representation, unchanged), Commands (`CadBlockContent`/`CadBlocks.cpp` round-trip plumbing)
-- Status: accepted — **increment 1 of 3**. SAB (#301) and free-form/blend/swept surfaces (#300) are
-  separate, deferred increments; general trimmed-face boundaries are a kernel extension tracked
-  separately (#302) and not a prerequisite here. The real ACIS SAT schema and standalone `.sat`
-  import landed 2026-09-10 (D-2026-09-10-c, GitHub #473) without changing the increment split.
+- Status: accepted — **increment 1 delivered**; **increment 2 accepted** (D-2026-10-07-b, TASK-734,
+  GitHub issue #786). Free-form/blend/swept surfaces (#300) remain a deferred increment; general
+  trimmed-face boundaries are a kernel extension tracked separately (#302) and not a prerequisite
+  here. Increment 2 subsumes the former #301 / #366 SAB+AcDs scope for **import** (no commercial ACIS
+  kernel, REQ-300).
 - Revisions: 2026-09-05 — initial (ADR-051, GitHub issue #299).
+  2026-10-07 — D-2026-10-07-b (TASK-734): increment 2 — AcDs-resolved ASM/SAB `3DSOLID` import;
+  fixture `samples/example-piping-system.dwg`.
+  2026-10-08 — D-2026-10-08-a (TASK-734): increment 2 also accepts torus and sphere faces; imported
+  fixture solids must match the source drawing's volume and extents.
+  2026-10-08 — D-2026-10-08-b (TASK-734): Plant 3D parts are placed where the drawing puts them
+  (narrow ADR-026 exception: placement fields only).
   2026-09-10 — D-2026-09-10-b (ADR-051 addendum, GitHub issue #369, TASK-244): a payload-less
   `3DSOLID` co-occurring with `AECC_*` classes is named as a Civil 3D parts-catalog component and its
   block's 2D content is kept, not refused wholesale.
@@ -11422,9 +11470,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
   7. **How P9 reads clauses 1, 3, 4 and 6** (D-2026-10-05-k and the P9 plan).
      - **Paste (1, 3).** Copy remembers the project, coordinate system and units it came from. Pasting
        into a drawing of a *different project* warns. A paste where either drawing is in a project and
-       the coordinate systems differ is **blocked** (cancel only; convert for pasted content is a
-       follow-up issue); differing units warn. A paste between two standalone drawings is unchanged.
-       Survey points are not carried by Copy/Paste today, so no point number can collide through paste.
+       the coordinate systems differ is **blocked**: the user may **convert** the pasted objects or
+       cancel (D-2026-10-07-a); differing units warn, and the same convert is offered. A paste between
+       two standalone drawings is unchanged.
+       Survey points are not carried by Copy/Paste today, so no point number can collide through paste (issue #782).
+     - **Convert pasted content (3).** The copied objects are transformed into the destination
+       drawing's coordinate system and units with the SAME one similarity transform as Add Drawing
+       (REQ-378 clause 5): scale, rotation about the vertical axis and shift, computed with CS-MAP at the
+       centre of the copied objects and applied to every copied object, so shapes stay exact. A units
+       mismatch scales X, Y and heights; a coordinate-system mismatch moves X and Y only. The leftover
+       error at the copy's extents is shown; above **0.02 m** the convert is refused. A copy holding an
+       arc or ellipse in a tilted plane cannot be turned exactly and stays blocked, with the kind named
+       (REQ-201). The converted objects land at the same place on the ground, expressed in the
+       destination drawing's own origin, and the clipboard then belongs to the destination's coordinate
+       system and units. Cancelling leaves the clipboard and the drawing unchanged. Paper-space copies
+       have no coordinates to convert.
      - **Delete (4).** Asked only when another drawing of the project could lose the point: the message
        gives how many **open** drawings show it and how many **closed** drawings of the project might
        (their rules are saved inside their own DWG, which is not read for a warning). A project with no
@@ -11435,11 +11495,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
        drawing tab tries the write first and, if it still fails, lists the project and its open drawings.
        The quit prompt also groups its unsaved drawings under their project.
 - Acceptance: `[req383]` tests: each warning fires with the right counts; "hide only" leaves the
-  database untouched; coordinate-system mismatch blocks; unsaved-close lists projects/drawings.
+  database untouched; coordinate-system mismatch blocks; unsaved-close lists projects/drawings; convert of pasted
+  content puts the copy at the same ground position in the destination's system and units, refuses
+  above 0.02 m or for a tilted arc, and cancel changes nothing.
 - Owner-layer: UI, Domain
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P9: clause 7 added
-  (D-2026-10-05-k).
+  (D-2026-10-05-k). 2026-10-07 — clause 7: convert for pasted content (D-2026-10-07-a, issue #722).
 
 ### REQ-384 — AutoCAD annotation context objects DWG interop (GitHub issue #688)
 
@@ -12068,6 +12130,43 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain/IO (`src/pdf/`), UI
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-k; the user asked for both).
+
+### REQ-399 — Extract coordinates from a PDF region into survey points or circles
+
+- Purpose: survey drawings reference monument/control coordinates that exist only as text in a PDF (a CAD-exported plan sheet). Getting them into the drawing today means manually retyping each value. The user wants to select a region of a PDF, have GoSurvey read and classify the coordinate text in it, review the result against the source before anything is created, and on acceptance get real drawing geometry at those coordinates with the drawing brought into view.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-08-d.
+- Depends on: REQ-387 (PDF viewer window), REQ-395 (PDFium text precedent — no OCR dependency in this codebase), REQ-023 (overwrite/offset id-conflict modal, reused here).
+- Statement:
+  1. **Entry point.** An **Extract Coordinates** action is available in the PDF viewer window (REQ-387) only while a PDF page is the active view.
+  2. **Region selection.** Starting the action lets the user drag a rectangle over the page; the rectangle is drawn as a semi-transparent yellow overlay tracking the drag, using the same press-drag-release / click-move-click interaction REQ-396 already gives the other PDF drawing tools.
+  3. **Text source — selectable text only.** On release, GoSurvey reads the **selectable PDF text** inside the rectangle via PDFium's text API (the same route REQ-395 uses) — no OCR. If the region contains **no selectable text**, GoSurvey does not guess; it reports that the region is **likely a scanned image and that GoSurvey does not yet have OCR text recognition**, and creates nothing.
+  4. **Shape recognition.** The extracted text is classified into one of three shapes:
+     - **a. Single monument block** — a description line plus labeled fields (`N:` northing, `E:` easting, `EL`/`ELEV` elevation); no point number.
+     - **b. Table** — a header row identifies columns (point number, description, elevation, northing, easting in any order); each subsequent row is one candidate point, point number taken from its column when present.
+     - **c. Bare pair** — only a northing and an easting value, no description, elevation, or point number label found.
+     Text that does not fit any shape, or is missing both northing and easting, is reported as **unparsed** for that region and produces no candidate.
+  5. **Review before anything changes.** Every parsed candidate is shown next to (or over) its source text in the PDF view, with the fields GoSurvey read, before any drawing is touched. Each candidate (or the batch, for a table) has **Accept** and **Deny** controls. Deny discards it; nothing is created or changed.
+  6. **What Accept creates.**
+     - A candidate with northing, easting, elevation **and** description (shape a or b with all fields present) creates a **survey point**.
+     - A candidate with only northing and easting (shape c, or shape a/b missing description/elevation) creates a **circle** at that location — not a survey point.
+  7. **Point numbering.** A survey point whose source gave no point number is assigned the **lowest currently unused** integer point number in the active drawing. A survey point whose source point number **already exists** in the drawing is resolved through the **existing overwrite/offset id-conflict modal** (the same one DXF import and COPY/rotate-copy already use, REQ-023) — never a silent overwrite.
+  8. **Focus after accept.** Accepting brings the active drawing window to focus and frames/zooms the view to the newly created entities' extents.
+  9. **Out of scope for this REQ:** OCR / scanned-page text recognition, freehand (non-rectangular) region selection, editing a candidate's parsed values before accepting, extraction spanning multiple pages in one selection.
+- Acceptance:
+  - `[req399]` test: given the single-monument fixture (description + `N:`/`E:`/`EL.` labels), the parsed candidate's northing, easting, elevation and description match the source, and accepting creates one survey point at that location with an auto-assigned lowest-unused point number.
+  - `[req399]` test: given the multi-row table fixture, each row produces one candidate correctly mapped by its header columns (including point number), and accepting creates one survey point per row at the correct coordinates and point numbers.
+  - `[req399]` test: given the bare northing/easting fixture, the candidate has no description/elevation/point number, and accepting creates a circle (not a survey point) at that location.
+  - `[req399]` test: a region with no selectable text produces the "likely scanned, no OCR yet" message and creates nothing.
+  - `[req399]` test: a region whose text has no recognizable northing/easting is reported unparsed and creates nothing.
+  - `[req399]` test: Deny on a shown candidate leaves the drawing unchanged.
+  - `[req399]` test: a parsed point number that already exists in the drawing triggers the existing overwrite/offset modal; both resolutions produce the correct point/number in the drawing.
+  - `[req399]` test: auto-assigned point numbers are verified as the lowest integers not already present among the drawing's survey points.
+  - Manual: after Accept, the drawing window has focus and the view is framed to include the newly created point(s)/circle(s).
+- Owner-layer: Domain/IO (`src/pdf/PdfCoordExtract`, PDFium text + pure parsing), UI (PDF viewer selection + review panel), Commands (survey point/circle creation, zoom-to-extents)
+- Status: accepted
+- Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -13329,7 +13428,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-110 | Domain/UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-111 | Domain/Commands/IO/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-112 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-113 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-113 | IO | DXF/DWG paper-space entity set (D-2026-10-06-o); first increment DXF export + DWG import (#765) | accepted |
 | REQ-114 | IO/UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
@@ -13398,7 +13497,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
 | REQ-305 | Commands/Viewport | done (GitHub issue #87, D-2026-08-25-m, TASK-111 — relabeled from REQ-304/TASK-109 while merging `master` into `beta`, see the requirement's own header note). ARRAY (rectangular + polar) follows the MOVE/COPY/ROTATE/SCALE/MIRROR transform-command shape end to end; survey points excluded from the array selection, confirmed with the user (D-2026-08-25-m addendum). Amended once (D-2026-08-25-n, TASK-112): the shared "select objects" step was click-or-box-and-accumulate-until-Enter for MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY (STRETCH excluded — its crossing box is load-bearing geometry, REQ-103 step 5), replacing the box-only shape all seven originally shared. `GoSurveyTests.exe` 542/542, headless transcript corpus green (1 pre-existing disabled, unrelated) | accepted |
 | REQ-318 | Domain/UI | accepted, increment 1 of 2 delivered — the SHARED pick query (GitHub issue #148, D-2026-09-03-c, ADR-049, TASK-189). **What was new is not what the issue claimed.** The ray/triangle → `triFace` → `ClosestPointOnSurface` pipeline already shipped with REQ-313, inside `src/viewport/CadSnap.cpp`; what it could not do was serve a second caller, because `RayHitSolidFace`, `ClosestRayPointToEdge` and `RayNearBounds` were file-private. So increment 1 is a *consolidation*: `ray3d::RayTriangleIntersect` and the new pure `src/util/solidpick.{hpp,cpp}` are the one home, and `CadSnap` now routes through both instead of keeping its own copies. That mattered concretely — the snap copy used an absolute determinant epsilon and exact barycentric bounds while the shared one is scale-relative with a barycentric slack, so on the hairline crack between two faces of the deliberately unwelded tessellation the two disagreed: snap reported nothing where a selection would report a hit, and a user would have seen the snap marker and the sub-object highlight name different things under one cursor. Above the geometry, what is genuinely new is the **expiring sub-object reference** (an index is durable across a topology-preserving edit and meaningless across one that changes the counts, so it is paired with a `weak_ptr` to the solid and expires rather than re-binding), and precedence and occlusion as stated rules. The projection remains the sharpest point and is measured: a raw triangle hit sits 0.00986 ft off a cylinder's true surface at the shipping chord tolerance — inside REQ-101's ±0.01 ft but 98.6% of the whole budget — and projected the residual is at the arithmetic floor. **The tests assert the picked AZIMUTH as well as the radius**, because `ClosestPointOnSurface` rescales any nearby point to exactly `r`: a radius assertion alone cannot fail for the reason it appears to test, and an earlier draft of this row cited one that could not. Occlusion is measured against the nearest *triangle* rather than the nearest usable face, so a corrupt face id cannot move the baseline to the far side of the solid; the ray is normalized on entry, because `RayTriangleIntersect`'s parameter scales as `1/\|dir\|` and `RayPointDistance`'s as `\|dir\|`, which on a non-unit ray makes the occlusion comparison meaningless rather than merely imprecise; and the curved-edge chord budget keys on the curve KIND, not on `sweep`, which a `CurveKind::Intersection` edge leaves zero. Increment 2 is the selection mode, its store, the highlight treatment and coexistence with the entity pick — where #148 acceptance criteria 1 and 2 are actually met. | `SolidPickTests` (21 cases: cylinder radius AND azimuth from 24 azimuths; the same oblique geometry passing at storage magnitude and failing at absolute state-plane magnitude, which pins the local-coordinates precondition with evidence rather than prose; near-face-wins from both directions; vertex/edge/face precedence; zero tolerance disables a kind; occluded far-side vertex refused, and still refused when the occluding triangle's id is corrupt; a non-unit ray giving an identical answer and an unchanged depth; a ray just outside the silhouette still reaching the edges; the rim picked on the true arc; and refusals for a miss, a solid behind the cursor, a degenerate ray, a null result, mismatched buffers and an empty solid) + `Ray3dTests` (10 new cases for the primitive, including a hit on a shared edge reported by both triangles and a 0.25 ft triangle at easting 2e6 — the case an absolute degeneracy epsilon would reject). The refactored snap path is covered by the existing `GoSurveySnapTests` and the `req313-solid-picked` headless transcript, both unchanged and green. Full suite 1062/1062. | accepted |
-| REQ-320 | IO/Domain/Commands | increment 1 delivered (GitHub issue #299, ADR-051, TASK-205) — SAT-only ACIS `3DSOLID` import of analytic primitives, refuse otherwise; `AcisSatParserTests`. **Amended 2026-09-10** (D-2026-09-10-b, ADR-051 addendum, GitHub issue #369, TASK-244): a payload-less `3DSOLID` co-occurring with `AECC_*` classes is a Civil 3D parts-catalog component with no portable geometry — named as `3DSOLID(Civil3D parts-catalog part, no portable geometry)` (conservative two-sign detection, `libredwgcad_detail::DwgHasCivil3dCatalogClasses`) and its block's 2D content is kept, not refused wholesale. `LibreDwgCadTests [issue369]`. **Amended 2026-09-10** (D-2026-09-10-c, ADR-051 addendum, GitHub issue #473, TASK-246): `AcisSatParser` now reads the real ACIS/ASM record schema — `NormalizeRealAcisSchema` rewrites real-format records onto the simplified layout, `Build` applies the `body` `transform` (rigid rotate + translate + uniform scale; reflection/shear refused), and a multi-hole planar face goes in as an ADR-052 `paramLoops` general trim loop (`BuildPlaneGeneralTrim`, the plane counterpart of `BuildConeGeneralTrim`). `.sat` is an importable file type in `BLOCKIMPORT` and the Import Block dialog: the solid is **re-based onto the origin** (centred in X/Y, lowest point at Z 0 — a `.sat` carries its absolute position, ~4999 units, from the source drawing) and **dropped straight into the drawing** as an ordinary solid, with a block definition named after the file kept alongside; units are left `unitless` (the header's mm-per-unit is unreliable). It is **not** placed via INSERT — `CadBlockContent::solids` is never drawn from a block reference and INSERT picks no Z, so it cannot position a solid in 3D; the user MOVEs the dropped solid into place. INSERT of a solid-bearing block logs that and places only the block's 2D content. Fixture `samples/CJ_4in_WELD_NECK_FLANGE.sat` (real Civil 3D `ACISOUT` flange, 16 faces). `AcisSatParserTests [issue473]`, `CadBlockImportTests [issue473]`, `headless.issue473-sat-blockimport`. A block-*reference* path for a solid (instancing on INSERT, or a 3D INSERT with a Z pick) is future work, tracked in #473. | accepted |
+| REQ-320 | IO/Domain/Commands | increment 1 delivered (GitHub issue #299, ADR-051, TASK-205) — SAT-only ACIS `3DSOLID` import of analytic primitives, refuse otherwise; `AcisSatParserTests`. **Amended 2026-09-10** (D-2026-09-10-b, ADR-051 addendum, GitHub issue #369, TASK-244): a payload-less `3DSOLID` co-occurring with `AECC_*` classes is a Civil 3D parts-catalog component with no portable geometry — named as `3DSOLID(Civil3D parts-catalog part, no portable geometry)` (conservative two-sign detection, `libredwgcad_detail::DwgHasCivil3dCatalogClasses`) and its block's 2D content is kept, not refused wholesale. `LibreDwgCadTests [issue369]`. **Amended 2026-09-10** (D-2026-09-10-c, ADR-051 addendum, GitHub issue #473, TASK-246): `AcisSatParser` now reads the real ACIS/ASM record schema — `NormalizeRealAcisSchema` rewrites real-format records onto the simplified layout, `Build` applies the `body` `transform` (rigid rotate + translate + uniform scale; reflection/shear refused), and a multi-hole planar face goes in as an ADR-052 `paramLoops` general trim loop (`BuildPlaneGeneralTrim`, the plane counterpart of `BuildConeGeneralTrim`). `.sat` is an importable file type in `BLOCKIMPORT` and the Import Block dialog: the solid is **re-based onto the origin** (centred in X/Y, lowest point at Z 0 — a `.sat` carries its absolute position, ~4999 units, from the source drawing) and **dropped straight into the drawing** as an ordinary solid, with a block definition named after the file kept alongside; units are left `unitless` (the header's mm-per-unit is unreliable). It is **not** placed via INSERT — `CadBlockContent::solids` is never drawn from a block reference and INSERT picks no Z, so it cannot position a solid in 3D; the user MOVEs the dropped solid into place. INSERT of a solid-bearing block logs that and places only the block's 2D content. Fixture `samples/CJ_4in_WELD_NECK_FLANGE.sat` (real Civil 3D `ACISOUT` flange, 16 faces). `AcisSatParserTests [issue473]`, `CadBlockImportTests [issue473]`, `headless.issue473-sat-blockimport`. A block-*reference* path for a solid (instancing on INSERT, or a 3D INSERT with a Z pick) is future work, tracked in #473. **Increment 2 accepted 2026-10-07** (D-2026-10-07-b, TASK-734, GitHub #786, ADR-051 addendum): AcDs-resolved **ASM/SAB** `3DSOLID` import; fixture `samples/example-piping-system.dwg`. **Amended 2026-10-08** (D-2026-10-08-a): increment 2 also accepts torus and sphere faces; imported fixture solids match AutoCAD's volume and extents. **Amended 2026-10-08** (D-2026-10-08-b): Plant 3D pipes, fittings and gaskets are placed in model space from their Plant entities' placement fields (`src/io/LibreDwgPlant.*`); every placed fixture solid matches AutoCAD's exploded geometry. | accepted |
 | REQ-323 | Domain/Commands | increments 1 and 2 delivered — kernel (TASK-210), the FILLET command (TASK-217), edge chains + the spherical corner patch (TASK-218). `FilletEdgeTests` (a box against the single-edge closed forms volume 1520+20pi / area 792+22pi; ALL TWELVE edges against the rounded-box forms 1120+344pi/3 and 368+120pi with topology 24/48/26 and 6 planes + 12 cylinders + 8 octants; a WEDGE whose 68.199-degree dihedral gives setback 40/(sqrt(464)-8); every refusal by name including a partial and an oblique corner) + `headless.req323-fillet-solid` (Ctrl+click edges then `FILLET 2`, a three-edge corner, the selection cleared, UNDO, four refusals leaving the solid untouched, a .gs round-trip, and a bare FILLET still being the 2D command). **#148 acceptance 5 closed for the fillet**; the chamfer half is REQ-331 (delivered 2026-09-08), which closes it for both. **Item 4 AMENDED 2026-09-08 as item 4b** (D-2026-09-08-g, ADR-046 amendment (l), TASK-223): the precondition was per-EDGE and measured against the ORIGINAL solid, so it could not see two requested fillets colliding — `FILLET 6` on two opposite top edges of a 20 x 10 x 8 box was ACCEPTED and returned a self-intersecting solid reporting volume 1290.97336, which `Validate` passes because it is topological. Now refused by name (`FilletRadiusOverlapsAnother`, `FilletEdgeTooShortForItsCorners`) through a precondition shared with REQ-331, with 4 new `FilletEdgeTests` cases asserting both the refusals AND the largest value that still fits (4.9 on two opposite edges, 3.9 on all twelve) so the envelope is provably unchanged. Found by a code-review pass on REQ-331, not by any test. **TASK-224**: a refused radius no longer earns a "Could not parse FILLET input" trailer — the return value of `HandleFilletText` means "was this input understood", not "did the command advance", now documented; asserted with the driver's new `EXPECT NOLOG`, which was proven to fail when the defect is put back |
 | REQ-329 | Commands/Survey/Viewport | accepted, sliced per command (GitHub issue #402, D-2026-09-08-b). Increment 1 (MOVE/COPY 3D + active-UCS picks and typed input) done — TASK-218, `issue402-move-copy-ucs` transcript. Increment 2 (ROTATE about the UCS Z axis; `RotateSelectionInPlaceAboutAxis`; in-plane picked angle) done — TASK-219, `issue402-rotate-ucs` transcript. Increment 3 (SCALE uniform on every axis about the UCS-resolved base; `ScaleSelectionZAboutBase`) done — TASK-220, `issue402-scale-ucs` transcript. Increment 4 (STRETCH crossing box + displacement in the UCS plane; `stretchRectInUcsPlane`) done — TASK-221, `issue402-stretch-ucs` transcript. Increment 5 (MIRROR across the plane containing the mirror line; `ray3d::ReflectPointAcrossPlane`, `DuplicateCadSelectionReflectedAcrossPlane`) done — TASK-222, `issue402-mirror-ucs` transcript. Increment 6 (ALIGN) closed no-change (D-2026-09-08-c). Increment 7 (OFFSET in-plane perpendicular + plane-frame side pick; `OffsetPlaneLocal`) done — TASK-223, `issue402-offset-ucs` transcript. **REQ-329 fully delivered.** ROTATE is UCS-Z-only (REQ-328 primitive), a full ROTATE3D is a separate future issue. | accepted |
 | REQ-331 | Domain/Commands | increments 1 and 2 delivered 2026-09-08 (D-2026-09-08-f, ADR-046 amendment (k), TASK-222) — kernel + the `CHAMFER` verb on a sub-object edge selection, in one task because the delta over REQ-323 is small and entirely mechanical. `ChamferEdgeTests` (15 cases: a box against the single-edge closed forms volume **1560** / area **796+40*sqrt(2)**, topology 10/15/7, and every face planar and every edge straight; ALL TWELVE edges against the bevelled-box forms **1344** and **368+232*sqrt(2)** with topology **32/48/18** — 6 quads + 12 HEXAGONS, no corner face, and every vertex of degree 3; a WEDGE proving the setback does NOT move with the dihedral where REQ-323's proves that it does; the three-edge corner landing one vertex at the meet of the three bevel planes; every refusal by name including the partial and non-orthogonal corners, the oblique end face, NaN, and the same edge twice) + `headless.req331-chamfer-solid` (Ctrl+click edges then `CHAMFER 2`, a three-edge corner at **1530** / **734+67*sqrt(2)**, all twelve edges end-to-end through the pick, the selection cleared, UNDO, four refusals leaving the solid untouched, a .gs round-trip, the prompted form with ESC and with a bad then a refused answer, edges gathered from INSIDE the running command, and a bare CHAMFER with nothing selected still being the 2D command). **#148 acceptance 5 now closed for BOTH halves**, which closes the last of the seven slices #148's own pre-implementation survey listed. **The cross-check is the finding worth keeping:** the bevelled box's inner-box-plus-slabs term is **1120** and its planar-face total is **368** — the identical constants in REQ-323's rounded box `1120 + 344*pi/3` and `368 + 120*pi`, because a fillet and a chamfer share their inner box and slabs exactly and differ only in what fills the twelve edge channels and the eight corners. Two independently derived acceptances confirming each other; neither could do that alone. Also discharges **TASK-221 DEBT-1** — the sub-object pre-highlight now reaches CHAMFER, which that task deferred in as many words until a solid chamfer existed. **Deferred by decision, each by name:** the AutoCAD two-distance / base-face form (D-2026-09-08-f item 13 — and the coupling is stated: with `D1 != D2` the corner stays a point but the cut-vertex solve changes and the increment-2 closed forms are replaced), a concave edge, an oblique or curved end face, a curved edge, a partial corner and a non-orthogonal corner. **TASK-224** (same review, Finding 2): a value the kernel REFUSED was followed by "Could not parse CHAMFER input", contradicting the refusal one line above it — `Handle*Text`'s return value was being read as "did the command advance" when the caller's only use of it is the trailer decision, so it now means "was this input understood" and is documented as such. FILLET had the same defect and both were fixed together; the driver gains `EXPECT NOLOG` (scoped to the last command, because nothing resets the log) and it was proven to bite. **Item 4 AMENDED 2026-09-08 as item 4b** (D-2026-09-08-g, ADR-046 amendment (l), TASK-223) after `/code-review high` found the precondition was per-EDGE and read the ORIGINAL solid: `CHAMFER 6` on two opposite top edges was ACCEPTED and returned a self-intersecting solid reporting volume 880. REQ-323 had the same defect and both were fixed together through ONE shared implementation, on the user's instruction. 4 new `ChamferEdgeTests` cases assert the refusals and the largest value that still fits. Full suite 1333/1333. **TASK-229** (2026-09-09): driving the real GUI with the Developer Shell (REQ-161) found that only the HOVER half of the mid-command Ctrl+click had been added - `CadUi.cpp` routed the pick to the sub-object path for `Kind::Fillet` alone, so during CHAMFER an edge lit up under the cursor and clicking it did NOTHING. Invisible to every existing test: the transcripts drive the pick with the `SUBOBJECT` verb, which calls `SubmitSubObjectPick` DIRECTLY and never passes through that routing, so `headless.req331-chamfer-solid` ran green straight across the gap. Fixed, and covered by `--devshell-run req331-chamfer-viewport` - the first devshell test to reach the VIEWPORT, which also supplies the pre-highlight MEASUREMENT that TASK-221 DEBT-2 and TASK-222 had both stood in for with an argument from similarity | accepted |

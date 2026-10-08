@@ -1020,6 +1020,7 @@ struct CadClipboard {
   std::string srcProjectFolder;         ///< UTF-8; tells apart two open projects that share a name (issue #726)
   std::string srcZone;                 ///< CS-MAP code of the source drawing; empty = none
   double      srcMetersPerUnit = 0.0;   ///< the source drawing's unit in meters; 0 = unknown
+  double      srcOriginX = 0.0, srcOriginY = 0.0;  ///< the source drawing's document origin: world = local + origin
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
@@ -1640,6 +1641,14 @@ void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool ad
 void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& log);
 void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
                                     std::vector<std::string>& log);
+/// #764 - paper-space SCALE: uniform scale of the selected paper entities about a point (paper inches).
+void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float factor,
+                                std::vector<std::string>& log);
+/// Destination step of paper MOVE/COPY (click or typed): applies the (dx, dy) displacement in paper
+/// inches to the selected paper entities and viewports, then ends the gesture.
+void FinishPaperMoveCopy(AppCommandState& st, float dxIn, float dyIn, std::vector<std::string>& log);
+/// Second-point step of paper MIRROR (click or typed). Refuses a zero-length mirror line.
+void FinishPaperMirror(AppCommandState& st, float x2In, float y2In, std::vector<std::string>& log);
 void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float angRad,
                                  std::vector<std::string>& log);
 /// REQ-103 MIRROR, pure-paper-space path. Always duplicates and keeps the source (see the
@@ -2488,6 +2497,9 @@ struct AppCommandState {
   /// Applied on the next viewport zoom processing step (needs framebuffer size).
   bool pendingZoomExtents = false;
   bool pendingZoomWindow = false;
+  /// REQ-399: bring the main GoSurvey window to the foreground on the next frame (the main loop owns
+  /// the GLFW window handle, so this is a request rather than a direct call from the PDF viewer window).
+  bool requestMainWindowFocus = false;
   float pendingZoomMnX = 0.f;
   float pendingZoomMxX = 0.f;
   float pendingZoomMnY = 0.f;
@@ -5092,6 +5104,7 @@ struct AppCommandState {
     bool        original = false;    ///< PASTEORIG rather than PASTE
     std::string text;
     bool        openRequested = false;
+    bool        canConvert = false;  ///< the dialog offers "Convert and paste" (D-2026-10-07-a)
   } pastePrompt;
   bool pasteWarningAnswered = false;   ///< "Paste anyway" was chosen: the next paste start skips the check
   /// REQ-383 clause 6: closing a project's drawing tab while its point database cannot be written.
@@ -5161,7 +5174,7 @@ struct AppCommandState {
   /// before anything is written, because a DWG save can overwrite a drawing GoSurvey did not author.
   bool        dwgLossyExportModal = false;
   std::string dwgPendingExportPath;  ///< Destination chosen in the save dialog, written only on confirm.
-  DwgSaveVersion dwgExportVersion = DwgSaveVersion::R2000;  ///< Format for the pending Export DWG (issue #600).
+  DwgSaveVersion dwgExportVersion = DwgSaveVersion::R2018;  ///< Format for the pending Export DWG (issue #600, D-2026-10-08-c).
 
   // -------------------------------------------------------------------------
   // ALIGN command state (Helmert transformation)
@@ -5362,6 +5375,11 @@ struct AppCommandState {
   // Paper-space MIRROR of selected paper entities (REQ-103): 0 idle, 1 need first mirror-line point,
   // 2 need second point (commits immediately — no erase-source prompt in paper space; see
   // MirrorSelectedPaperEntities's comment).
+  // Paper-space SCALE of selected paper entities (#764): 0 idle, 1 need base point, 2 need scale factor
+  // (a typed number, or a point whose distance from the base in paper inches is the factor).
+  int   paperScalePhase = 0;
+  float paperScaleBaseXIn = 0.f;
+  float paperScaleBaseYIn = 0.f;
   int   paperMirrorPhase = 0;
   float paperMirrorP1XIn = 0.f;
   float paperMirrorP1YIn = 0.f;
@@ -7525,6 +7543,13 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
                                 std::vector<float>* previewLines, std::vector<float>* previewCircles);
 
 void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// Commits a circle at (\p cx,\p cy,\p cz) with radius \p r, normal (\p nx,\p ny,\p nz), local
+/// coordinates (REQ-312 plane convention) - the same commit the CIRCLE command uses, exposed for
+/// REQ-399's bare northing/easting candidates (the CIRCLE command's own commit function has internal
+/// linkage inside CadCommands.cpp, so this is a thin externally-visible forwarder, not a rename).
+void CommitCircleExternal(AppCommandState& st, float cx, float cy, float cz, float r, float nx, float ny, float nz,
+                          std::vector<std::string>& log);
 void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log);
 /// PAN command (REQ-045): enters interactive pan mode — left-drag pans the active view (hand cursor);
 /// Esc / Enter / right-click exits. Reuses the existing middle-drag view-pan math.

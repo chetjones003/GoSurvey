@@ -4,6 +4,7 @@
  * Routes:
  *   POST /v1/ping            — anonymous install/active pings (existing contract)
  *   POST /v1/startup-report  — silent startup failure diagnostics from the desktop client
+ *   POST /v1/crash-report    — silent runtime crash diagnostics from the desktop client
  *
  * THE RESPONSE BODY IS PART OF THE CONTRACT for /v1/ping. `TelemetryService.cpp` greps for
  * `"ok":true`. Startup reports use the same `{ ok: true }` shape on success but the client
@@ -12,6 +13,7 @@
 
 const PING_PATH = '/v1/ping';
 const STARTUP_REPORT_PATH = '/v1/startup-report';
+const CRASH_REPORT_PATH = '/v1/crash-report';
 
 const PING_FIELDS = {
   installId: /^[A-Za-z0-9_-]{1,64}$/,
@@ -30,6 +32,15 @@ const STARTUP_FIELDS = {
 };
 
 const MAX_STARTUP_REPORT_CHARS = 16384;
+const MAX_CRASH_REPORT_CHARS = 16384;
+
+const CRASH_FIELDS = {
+  installId: /^[A-Za-z0-9_-]{1,64}$/,
+  version:   /^[A-Za-z0-9.+_-]{1,32}$/,
+  channel:   /^(stable|beta)$/,
+  os:        /^[a-z0-9_-]{1,16}$/,
+  reason:    /^[a-z0-9_]{1,64}$/,
+};
 
 function json(body, status) {
   return new Response(JSON.stringify(body), {
@@ -110,6 +121,45 @@ async function handlePing(request, env) {
   }
 }
 
+async function handleCrashReport(request, env) {
+  if (request.method !== 'POST') {
+    return json({ error: 'method not allowed' }, 405);
+  }
+
+  const parsed = await readJsonObject(request, 65536);
+  if (parsed.error) return parsed.error;
+  const payload = parsed.payload;
+
+  const bad = validateFields(payload, CRASH_FIELDS);
+  if (bad) {
+    return json({ error: `invalid or missing field: ${bad}` }, 400);
+  }
+
+  const reportRaw = typeof payload.report === 'string' ? payload.report : '';
+  if (reportRaw.length < 1 || reportRaw.length > MAX_CRASH_REPORT_CHARS) {
+    return json({ error: 'invalid or missing field: report' }, 400);
+  }
+
+  const now = new Date();
+  const ts = now.toISOString();
+  const country = request.cf?.country ?? null;
+
+  try {
+    const result = await env.DB.prepare(
+      `INSERT INTO crash_reports (ts, install_id, version, channel, os, reason, country, report)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+      .bind(ts, payload.installId, payload.version, payload.channel, payload.os,
+            payload.reason, country, reportRaw)
+      .run();
+
+    return json({ ok: true, stored: result.meta.changes === 1 }, 200);
+  } catch (err) {
+    console.error('crash report insert failed:', err);
+    return json({ error: 'storage unavailable' }, 503);
+  }
+}
+
 async function handleStartupReport(request, env) {
   if (request.method !== 'POST') {
     return json({ error: 'method not allowed' }, 405);
@@ -158,6 +208,9 @@ export default {
     }
     if (url.pathname === STARTUP_REPORT_PATH) {
       return handleStartupReport(request, env);
+    }
+    if (url.pathname === CRASH_REPORT_PATH) {
+      return handleCrashReport(request, env);
     }
     return json({ error: 'not found' }, 404);
   },

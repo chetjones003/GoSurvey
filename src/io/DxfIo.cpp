@@ -2488,6 +2488,257 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   return true;
 }
 
+// REQ-113 / issue #765: paper-space entities. One block record + BLOCK per layout (the first reuses
+// the fixed *Paper_Space pair); every entity is owned by its layout's block record (group 330) and tagged
+// group 67 = 1 and group 410 = the layout name. AutoCAD needs 410 to put an entity on the right sheet
+// (measured: without it every paper entity landed on the first layout). LibreDWG's DXF reader rejects
+// 410 on entities, which does not matter here: the app reads DXF with DxfIo's own parser.
+std::string DxfPaperBlockName(size_t layoutIdx) {
+  return layoutIdx == 0 ? std::string("*Paper_Space") : "*Paper_Space" + std::to_string(layoutIdx - 1);
+}
+
+// Entities a layout writes. Counted by the same rule the writer uses, so the HANDSEED and the writer
+// cannot drift apart (a degenerate polyline is counted but not written: a gap in handles is legal).
+uint64_t DxfPaperLayoutEntityCount(const PaperLayout& L) {
+  const size_t nPoly = L.paperPolyOffsets.size() > 0 ? L.paperPolyOffsets.size() - 1 : 0;
+  return L.paperLines.size() / 6 + L.paperCircles.size() / 3 + L.paperArcs.size() + L.paperEllipses.size() +
+         nPoly + L.paperTexts.size() + L.viewports.size();
+}
+
+std::string DxfHex(uint64_t v) {
+  char b[24];
+  std::snprintf(b, sizeof(b), "%llX", static_cast<unsigned long long>(v));
+  return b;
+}
+
+// Inserts groups 67 and 410 right after the AcDbEntity subclass marker, where AutoCAD writes them.
+void DxfTagPaperSpace(std::vector<DxfOutPair>* v, const std::string& layoutName) {
+  for (size_t i = 0; i < v->size(); ++i) {
+    if ((*v)[i].code == 100 && (*v)[i].value == "AcDbEntity") {
+      v->insert(v->begin() + static_cast<std::ptrdiff_t>(i + 1),
+                {DxfOutPair{67, "1"}, DxfOutPair{410, layoutName}});
+      return;
+    }
+  }
+}
+
+// Appends one layout's paper-space entities (REQ-113). Coordinates are paper inches and are written as
+// they are: no document-origin shift, because a sheet is not in the drawing's coordinate system.
+// Paper block references are NOT written: the DXF writer has no BLOCK-definition export (model space
+// either), so an INSERT would name a block the file does not contain. The caller logs them (REQ-201).
+void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& L, const std::string& ownerHex,
+                                  const std::unordered_map<std::string, uint32_t>& layerRgbHint,
+                                  uint64_t* nextHandle, std::vector<DxfOutPair>* out, size_t* nWritten) {
+  constexpr double kPiD = 3.14159265358979323846;
+  auto num = [](double v) { return std::to_string(v); };
+  struct Common {
+    std::string layer, ltype, aci, lw, tr;
+    bool hasTr = false;
+  };
+  auto commonOf = [&](const EntityAttributes& at) {
+    Common c;
+    c.layer = at.layer.empty() ? std::string("0") : at.layer;
+    c.ltype = DxfExportEntityLtype6(at);
+    c.aci = std::to_string(DxfNearestAciFromRgbPacked(AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu));
+    c.lw = at.lineweightMm < 0.f ? std::string("-1") : std::to_string(CadDxfLineweightEnum370FromMm(at.lineweightMm));
+    int pack = 0;
+    if (DxfTransparency440(EffectiveEntityTransparency01(at, FindLayerRowDxfExport(st, c.layer)), &pack)) {
+      c.hasTr = true;
+      c.tr = std::to_string(pack);
+    }
+    return c;
+  };
+  // Starts an entity: type, handle, owner, AcDbEntity, 67/410, layer, linetype, colour, lineweight.
+  auto begin = [&](std::vector<DxfOutPair>& v, const char* type, const Common& c) {
+    v.push_back({0, type});
+    v.push_back({5, DxfHex((*nextHandle)++)});
+    v.push_back({330, ownerHex});
+    v.push_back({100, "AcDbEntity"});
+    v.push_back({67, "1"});
+    v.push_back({410, L.name});
+    v.push_back({8, c.layer});
+    v.push_back({6, c.ltype});
+    v.push_back({62, c.aci});
+    v.push_back({370, c.lw});
+    if (c.hasTr)
+      v.push_back({440, c.tr});
+  };
+  auto flat = [](std::vector<DxfOutPair>& v) {
+    v.push_back({210, "0.0"});
+    v.push_back({220, "0.0"});
+    v.push_back({230, "1.0"});
+  };
+  auto attrAt = [](const std::vector<EntityAttributes>& a, size_t i) {
+    return i < a.size() ? a[i] : EntityAttributes{};
+  };
+  auto flush = [&](const std::vector<DxfOutPair>& v) {
+    out->insert(out->end(), v.begin(), v.end());
+    ++*nWritten;
+  };
+  auto oneLine = [](std::string t) {
+    for (char& ch : t)
+      if (ch == '\r' || ch == '\n')
+        ch = ' ';
+    return t;
+  };
+
+  for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
+    std::vector<DxfOutPair> v;
+    begin(v, "LINE", commonOf(attrAt(L.paperLineAttrs, i / 6)));
+    v.push_back({100, "AcDbLine"});
+    for (int k = 0; k < 3; ++k)
+      v.push_back({10 + 10 * k, num(L.paperLines[i + static_cast<size_t>(k)])});
+    for (int k = 0; k < 3; ++k)
+      v.push_back({11 + 10 * k, num(L.paperLines[i + 3 + static_cast<size_t>(k)])});
+    flat(v);
+    flush(v);
+  }
+  for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
+    std::vector<DxfOutPair> v;
+    begin(v, "CIRCLE", commonOf(attrAt(L.paperCircleAttrs, i / 3)));
+    v.push_back({100, "AcDbCircle"});
+    v.push_back({10, num(L.paperCircles[i])});
+    v.push_back({20, num(L.paperCircles[i + 1])});
+    v.push_back({30, "0.0"});
+    v.push_back({40, num(L.paperCircles[i + 2])});
+    flat(v);
+    flush(v);
+  }
+  for (size_t i = 0; i < L.paperArcs.size(); ++i) {
+    const CadArc& a = L.paperArcs[i];
+    const DxfArcAsWritten aw = DxfArcToWrite(a);
+    std::vector<DxfOutPair> v;
+    begin(v, "ARC", commonOf(attrAt(L.paperArcAttrs, i)));
+    v.push_back({100, "AcDbCircle"});
+    v.push_back({10, num(a.cx)});
+    v.push_back({20, num(a.cy)});
+    v.push_back({30, "0.0"});
+    v.push_back({40, num(a.r)});
+    flat(v);
+    v.push_back({100, "AcDbArc"});
+    v.push_back({50, aw.startDeg});
+    v.push_back({51, aw.endDeg});
+    flush(v);
+  }
+  for (size_t i = 0; i < L.paperEllipses.size(); ++i) {
+    const CadEllipse& el = L.paperEllipses[i];
+    const DxfEllipseAsWritten ew = DxfEllipseToWrite(el);
+    std::vector<DxfOutPair> v;
+    begin(v, "ELLIPSE", commonOf(attrAt(L.paperEllAttrs, i)));
+    v.push_back({100, "AcDbEllipse"});
+    v.push_back({10, num(el.cx)});
+    v.push_back({20, num(el.cy)});
+    v.push_back({30, "0.0"});
+    v.push_back({11, num(ew.majVx)});
+    v.push_back({21, num(ew.majVy)});
+    v.push_back({31, "0.0"});
+    flat(v);
+    v.push_back({40, num(ew.ratio)});
+    v.push_back({41, "0.0"});
+    v.push_back({42, num(2.0 * kPiD)});
+    flush(v);
+  }
+  const size_t nPoly = L.paperPolyOffsets.size() > 0 ? L.paperPolyOffsets.size() - 1 : 0;
+  for (size_t p = 0; p < nPoly; ++p) {
+    const int a = L.paperPolyOffsets[p];
+    const int b = L.paperPolyOffsets[p + 1];
+    if (b - a < 2 || static_cast<size_t>(b) * 3 > L.paperPolyVerts.size())
+      continue;  // degenerate: the model writer skips these too
+    const Common c = commonOf(attrAt(L.paperPolyAttrs, p));
+    DxfLwPolylineRecord rec;
+    rec.handleHex = DxfHex((*nextHandle)++);
+    rec.ownerHandleHex = ownerHex;
+    rec.layer = c.layer;
+    rec.linetype = c.ltype;
+    rec.colorAci = c.aci;
+    rec.lineweight370 = c.lw;
+    rec.hasTransparency = c.hasTr;
+    rec.transparency440 = c.tr;
+    rec.closed = p < L.paperPolyClosed.size() && L.paperPolyClosed[p] != 0;
+    for (int vi = a; vi < b; ++vi)
+      rec.vertices.push_back({num(L.paperPolyVerts[static_cast<size_t>(vi) * 3]),
+                              num(L.paperPolyVerts[static_cast<size_t>(vi) * 3 + 1])});
+    std::vector<DxfOutPair> v;
+    DxfAppendLwPolylineRecord(rec, &v);
+    DxfTagPaperSpace(&v, L.name);
+    flush(v);
+  }
+  for (size_t i = 0; i < L.paperTexts.size(); ++i) {
+    const CadAnnotation& an = L.paperTexts[i];
+    const Common c = commonOf(attrAt(L.paperTextAttrs, i));
+    // Paper text height is plotted inches, i.e. paper inches: no model-unit scale applies.
+    const double h = static_cast<double>(an.plottedHeightInches);
+    const double rotDeg = static_cast<double>(an.rotationRad) * (180.0 / kPiD);
+    if (an.kind == CadAnnotation::Kind::Mtext) {
+      std::vector<DxfOutPair> v;
+      begin(v, "MTEXT", c);
+      v.push_back({100, "AcDbMText"});
+      v.push_back({10, num(an.insX)});
+      v.push_back({20, num(an.insY)});
+      v.push_back({30, "0.0"});
+      v.push_back({40, num(h)});
+      v.push_back({41, num(std::max(1.0, std::fabs(static_cast<double>(an.boxMaxX - an.boxMinX))))});
+      v.push_back({71, "1"});  // top-left: insX/insY is the box's top-left corner
+      v.push_back({72, "0"});
+      v.push_back({11, num(std::cos(static_cast<double>(an.rotationRad)))});
+      v.push_back({21, num(std::sin(static_cast<double>(an.rotationRad)))});
+      v.push_back({31, "0.0"});  // direction vector carries the rotation; LibreDWG rejects group 50 here
+      flat(v);
+      v.push_back({1, oneLine(MtextRichFlattenToPlain(an.text))});
+      flush(v);
+    } else if (an.kind == CadAnnotation::Kind::Text) {
+      DxfTextRecord rec;
+      rec.handleHex = DxfHex((*nextHandle)++);
+      rec.ownerHandleHex = ownerHex;
+      rec.layer = c.layer;
+      rec.linetype = c.ltype;
+      rec.colorAci = c.aci;
+      rec.lineweight370 = c.lw;
+      rec.hasTransparency = c.hasTr;
+      rec.transparency440 = c.tr;
+      // insX/insY is the top-left; DXF group 10/20 is the baseline (one text height lower).
+      rec.x = num(an.insX);
+      rec.y = num(static_cast<double>(an.insY) - h);
+      rec.z = "0.0";
+      rec.height = num(h);
+      rec.text = (an.underline ? std::string("%%u") : std::string()) + oneLine(an.text);
+      rec.rotationDeg = num(rotDeg);
+      std::vector<DxfOutPair> v;
+      DxfAppendTextRecord(rec, &v);
+      DxfTagPaperSpace(&v, L.name);
+      flush(v);
+    }
+  }
+  int vpId = 2;  // id 1 is the sheet's own viewport
+  for (const Viewport& gv : L.viewports) {
+    EntityAttributes la;
+    la.layer = gv.layer;
+    std::vector<DxfOutPair> v;
+    begin(v, "VIEWPORT", commonOf(la));
+    v.push_back({100, "AcDbViewport"});
+    v.push_back({10, num(gv.paperXIn + gv.paperWIn * 0.5)});
+    v.push_back({20, num(gv.paperYIn + gv.paperHIn * 0.5)});
+    v.push_back({30, "0.0"});
+    v.push_back({40, num(gv.paperWIn)});
+    v.push_back({41, num(gv.paperHIn)});
+    v.push_back({68, "1"});  // on
+    v.push_back({69, std::to_string(vpId++)});
+    const double cx = gv.modelCenterX + st.worldDocumentOriginX;
+    const double cy = gv.modelCenterY + st.worldDocumentOriginY;
+    v.push_back({12, num(cx)});
+    v.push_back({22, num(cy)});
+    v.push_back({16, "0.0"});
+    v.push_back({26, "0.0"});
+    v.push_back({36, "1.0"});
+    v.push_back({17, num(cx)});
+    v.push_back({27, num(cy)});
+    v.push_back({37, "0.0"});
+    v.push_back({42, "50.0"});
+    v.push_back({45, num(static_cast<double>(gv.paperHIn) * static_cast<double>(gv.safeScale()))});
+    flush(v);
+  }
+}
+
 bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || pathUtf8[0] == '\0') {
     log.push_back("DXF export — no path.");
@@ -2523,6 +2774,14 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     addLayerName(st.userArcAttrs[i].layer);
   for (size_t i = 0; i < st.userEllAttrs.size(); ++i)
     addLayerName(st.userEllAttrs[i].layer);
+  for (const PaperLayout& pl : st.paperLayouts) {
+    for (const auto* attrs : {&pl.paperLineAttrs, &pl.paperCircleAttrs, &pl.paperArcAttrs, &pl.paperEllAttrs,
+                              &pl.paperPolyAttrs, &pl.paperTextAttrs})
+      for (const EntityAttributes& at : *attrs)
+        addLayerName(at.layer);
+    for (const Viewport& gv : pl.viewports)
+      addLayerName(gv.layer);
+  }
   for (const SurveyPoint& p : st.surveyPoints)
     addLayerName(p.layer);
   for (const CadLayerRow& lr : st.drawingLayerTable) {
@@ -2612,7 +2871,13 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   const uint64_t objDictAcadGroup = objDictRoot + 1ull;
   const uint64_t objPlotDictWdflt = objDictAcadGroup + 1ull;
   const uint64_t objPlotPlaceholder = objPlotDictWdflt + 1ull;
-  const uint64_t handSeedVal = objPlotPlaceholder + 1ull;
+  // Paper-space handles (REQ-113): one ACAD_LAYOUT dictionary; per layout its entities and a LAYOUT
+  // object, plus a block record and a BLOCK/ENDBLK pair for every layout after the first.
+  const uint64_t paperHandleBase = objPlotPlaceholder + 1ull;
+  uint64_t paperHandleCount = st.paperLayouts.empty() ? 0ull : 2ull;  // dictionary + Model LAYOUT
+  for (size_t li = 0; li < st.paperLayouts.size(); ++li)
+    paperHandleCount += DxfPaperLayoutEntityCount(st.paperLayouts[li]) + 1ull + (li == 0 ? 0ull : 3ull);
+  const uint64_t handSeedVal = paperHandleBase + paperHandleCount;
   char handSeedBuf[24];
   std::snprintf(handSeedBuf, sizeof(handSeedBuf), "%llX", static_cast<unsigned long long>(handSeedVal));
 
@@ -3498,6 +3763,54 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(70, "0");
   emitPair(280, "1");
   emitPair(281, "0");
+  // REQ-113: handles for every layout's block record, BLOCK/ENDBLK pair, LAYOUT object and entities.
+  struct PaperHandles {
+    uint64_t br = 0, b0 = 0, b1 = 0, layout = 0, ent = 0;
+  };
+  std::vector<PaperHandles> paperH;
+  uint64_t paperNext = paperHandleBase + 1ull;  // paperHandleBase itself is the ACAD_LAYOUT dictionary
+  const uint64_t modelLayoutHandle = st.paperLayouts.empty() ? 0ull : paperNext++;
+  for (size_t li = 0; li < st.paperLayouts.size(); ++li) {
+    PaperHandles x;
+    if (li == 0) {
+      x.br = symBrPaper;
+      x.b0 = symBlkPaper0;
+      x.b1 = symBlkPaper1;
+    } else {
+      x.br = paperNext++;
+      x.b0 = paperNext++;
+      x.b1 = paperNext++;
+    }
+    x.layout = paperNext++;
+    x.ent = paperNext;
+    paperNext += DxfPaperLayoutEntityCount(st.paperLayouts[li]);
+    paperH.push_back(x);
+  }
+  // Entity records are built here, once: the first layout's go in ENTITIES (as AutoCAD writes them),
+  // every later layout's go inside its own BLOCK definition (AutoCAD puts them on the wrong sheet if
+  // they are all in ENTITIES — measured with accoreconsole).
+  std::vector<std::vector<DxfOutPair>> paperPairs(st.paperLayouts.size());
+  size_t nPaperWritten = 0;
+  size_t nPaperBlockRefsSkipped = 0;
+  for (size_t li = 0; li < st.paperLayouts.size(); ++li) {
+    uint64_t h = paperH[li].ent;
+    DxfAppendPaperLayoutEntities(st, st.paperLayouts[li], DxfHex(paperH[li].br), layerRgbHint, &h, &paperPairs[li],
+                                 &nPaperWritten);
+    nPaperBlockRefsSkipped += st.paperLayouts[li].paperBlockRefs.size();
+  }
+  if (!paperH.empty())
+    emitPair(340, DxfHex(paperH[0].layout));
+  for (size_t li = 1; li < paperH.size(); ++li) {
+    emitPair(0, "BLOCK_RECORD");
+    emitPair(5, DxfHex(paperH[li].br));
+    emitPair(100, "AcDbSymbolTableRecord");
+    emitPair(100, "AcDbBlockTableRecord");
+    emitPair(2, DxfPaperBlockName(li));
+    emitPair(70, "0");
+    emitPair(280, "1");
+    emitPair(281, "0");
+    emitPair(340, DxfHex(paperH[li].layout));
+  }
   emitPair(0, "ENDTAB");
 
   emitPair(0, "ENDSEC");
@@ -3529,7 +3842,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(8, "0");
   emitPair(100, "AcDbBlockBegin");
   emitPair(2, "*Paper_Space");
-  emitPair(70, "1");
+  emitPair(70, "0");  // AutoCAD audits flag 1 here as an "invalid anonymous block"
   emitPair(10, "0.0");
   emitPair(20, "0.0");
   emitPair(30, "0.0");
@@ -3540,6 +3853,28 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(100, "AcDbEntity");
   emitPair(8, "0");
   emitPair(100, "AcDbBlockEnd");
+  for (size_t li = 1; li < paperH.size(); ++li) {
+    emitPair(0, "BLOCK");
+    emitPair(5, DxfHex(paperH[li].b0));
+    emitPair(330, DxfHex(paperH[li].br));
+    emitPair(100, "AcDbEntity");
+    emitPair(8, "0");
+    emitPair(100, "AcDbBlockBegin");
+    emitPair(2, DxfPaperBlockName(li));
+    emitPair(70, "0");
+    emitPair(10, "0.0");
+    emitPair(20, "0.0");
+    emitPair(30, "0.0");
+    emitPair(3, DxfPaperBlockName(li));
+    for (const DxfOutPair& pp : paperPairs[li])
+      emitPair(pp.code, pp.value);
+    emitPair(0, "ENDBLK");
+    emitPair(5, DxfHex(paperH[li].b1));
+    emitPair(330, DxfHex(paperH[li].br));
+    emitPair(100, "AcDbEntity");
+    emitPair(8, "0");
+    emitPair(100, "AcDbBlockEnd");
+  }
   emitPair(0, "ENDSEC");
 
   emitPair(0, "SECTION");
@@ -4589,6 +4924,20 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     ++nHatchOut;
   }
 
+  // Paper space (REQ-113, issue #765): each layout's entities, owned by that layout's block record.
+  {
+    if (!paperPairs.empty())
+      for (const DxfOutPair& pp : paperPairs[0])
+        emitPair(pp.code, pp.value);
+    if (!st.paperLayouts.empty())
+      log.push_back("DXF export — wrote " + std::to_string(nPaperWritten) + " paper-space entit" +
+                    (nPaperWritten == 1 ? "y" : "ies") + " on " + std::to_string(st.paperLayouts.size()) +
+                    " layout(s) (REQ-113).");
+    if (nPaperBlockRefsSkipped > 0)
+      log.push_back("DXF export — " + std::to_string(nPaperBlockRefsSkipped) +
+                    " paper-space block reference(s) not written: DXF export has no block definitions yet (REQ-113).");
+  }
+
   emitPair(0, "ENDSEC");
 
   // Named object dictionary: ACAD_GROUP + ACAD_PLOTSTYLENAME (required for LAYER group 390).
@@ -4603,6 +4952,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(350, hObjAcadGroup);
   emitPair(3, "ACAD_PLOTSTYLENAME");
   emitPair(350, hObjPlotDict);
+  if (!paperH.empty()) {
+    emitPair(3, "ACAD_LAYOUT");
+    emitPair(350, DxfHex(paperHandleBase));
+  }
   emitPair(0, "DICTIONARY");
   emitPair(5, hObjAcadGroup);
   emitPair(330, hObjRoot);
@@ -4620,6 +4973,84 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(350, hObjPlotPh);
   emitPair(100, "AcDbDictionaryWithDefault");
   emitPair(340, hObjPlotPh);
+  if (!paperH.empty()) {
+    // REQ-113: the layout dictionary AutoCAD expects: "Model" plus one AcDbLayout per paper layout.
+    emitPair(0, "DICTIONARY");
+    emitPair(5, DxfHex(paperHandleBase));
+    emitPair(330, hObjRoot);
+    emitPair(100, "AcDbDictionary");
+    emitPair(281, "1");
+    emitPair(3, "Model");
+    emitPair(350, DxfHex(modelLayoutHandle));
+    for (size_t li = 0; li < paperH.size(); ++li) {
+      emitPair(3, st.paperLayouts[li].name);
+      emitPair(350, DxfHex(paperH[li].layout));
+    }
+    auto emitLayoutObject = [&](uint64_t handle, const std::string& name, int tabOrder, double wIn, double hIn,
+                                uint64_t blockRecord) {
+      emitPair(0, "LAYOUT");
+      emitPair(5, DxfHex(handle));
+      emitPair(330, DxfHex(paperHandleBase));
+      emitPair(100, "AcDbPlotSettings");
+      emitPair(1, "");
+      emitPair(2, "none_device");
+      emitPair(4, "");
+      emitPair(6, "");
+      for (int g : {40, 41, 42, 43})
+        emitPair(g, "0.0");
+      emitPair(44, std::to_string(wIn));
+      emitPair(45, std::to_string(hIn));
+      for (int g : {46, 47, 48, 49, 140, 141})
+        emitPair(g, "0.0");
+      emitPair(142, "1.0");
+      emitPair(143, "1.0");
+      emitPair(70, "0");
+      emitPair(72, "0");  // paper units: inches
+      emitPair(73, "0");
+      emitPair(74, "5");
+      emitPair(7, "");
+      emitPair(75, "16");
+      emitPair(147, "1.0");
+      emitPair(148, "0.0");
+      emitPair(149, "0.0");
+      emitPair(100, "AcDbLayout");
+      emitPair(1, name);
+      emitPair(70, "1");
+      emitPair(71, std::to_string(tabOrder));
+      emitPair(10, "0.0");
+      emitPair(20, "0.0");
+      emitPair(11, std::to_string(wIn));
+      emitPair(21, std::to_string(hIn));
+      emitPair(12, "0.0");
+      emitPair(22, "0.0");
+      emitPair(32, "0.0");
+      emitPair(14, "0.0");
+      emitPair(24, "0.0");
+      emitPair(34, "0.0");
+      emitPair(15, std::to_string(wIn));
+      emitPair(25, std::to_string(hIn));
+      emitPair(35, "0.0");
+      emitPair(146, "0.0");
+      emitPair(13, "0.0");
+      emitPair(23, "0.0");
+      emitPair(33, "0.0");
+      emitPair(16, "1.0");
+      emitPair(26, "0.0");
+      emitPair(36, "0.0");
+      emitPair(17, "0.0");
+      emitPair(27, "1.0");
+      emitPair(37, "0.0");
+      emitPair(76, "0");
+      emitPair(330, DxfHex(blockRecord));
+    };
+    emitLayoutObject(modelLayoutHandle, "Model", 0, 12.0, 9.0, symBrModel);
+    for (size_t li = 0; li < paperH.size(); ++li) {
+      const PaperLayout& pl = st.paperLayouts[li];
+      emitLayoutObject(paperH[li].layout, pl.name, static_cast<int>(li) + 1,
+                       static_cast<double>(pl.sheetWidthIn()), static_cast<double>(pl.sheetHeightIn()),
+                       paperH[li].br);
+    }
+  }
   emitPair(0, "ENDSEC");
 
   emitPair(0, "EOF");

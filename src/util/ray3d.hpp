@@ -78,6 +78,48 @@ inline Vec3 ReflectPointAcrossPlane(const Vec3& p, const Vec3& planePoint, const
   return Add(planePoint, ReflectVectorAcrossPlane(Sub(p, planePoint), planeUnit));
 }
 
+/// Decompose a proper rotation matrix (row-major `m[0..8]`, column-vector convention `p' = M p`)
+/// into the axis/angle \ref RotatePointAboutAxis and `brep::Rotate` take. Returns false only when
+/// `m` is not close to a rotation (its trace gives an out-of-range angle); an angle near zero yields
+/// `angleRad == 0` with an arbitrary unit axis. Shared by the ACIS body transform and Plant 3D part
+/// placement (issue #786), which both receive their rotation as a matrix.
+inline bool RotationMatrixToAxisAngle(const double m[9], Vec3* axis, double* angleRad) {
+  constexpr double kPi = 3.14159265358979323846;
+  const double trace = m[0] + m[4] + m[8];
+  double c = (trace - 1.0) * 0.5;
+  if (c > 1.0) c = 1.0;
+  if (c < -1.0) c = -1.0;
+  const double angle = std::acos(c);
+  *angleRad = angle;
+  if (angle < 1e-9) {
+    *axis = Vec3{0.0, 0.0, 1.0};
+    return true;
+  }
+  if (kPi - angle < 1e-6) {
+    // 180 degrees: R is symmetric, axis from the largest diagonal term of (R + I)/2.
+    const double xx = (m[0] + 1.0) * 0.5, yy = (m[4] + 1.0) * 0.5, zz = (m[8] + 1.0) * 0.5;
+    Vec3 a{};
+    if (xx >= yy && xx >= zz) {
+      a.x = std::sqrt(xx > 0.0 ? xx : 0.0);
+      a.y = (m[1] + m[3]) * 0.25 / (a.x != 0.0 ? a.x : 1.0);
+      a.z = (m[2] + m[6]) * 0.25 / (a.x != 0.0 ? a.x : 1.0);
+    } else if (yy >= zz) {
+      a.y = std::sqrt(yy > 0.0 ? yy : 0.0);
+      a.x = (m[1] + m[3]) * 0.25 / (a.y != 0.0 ? a.y : 1.0);
+      a.z = (m[5] + m[7]) * 0.25 / (a.y != 0.0 ? a.y : 1.0);
+    } else {
+      a.z = std::sqrt(zz > 0.0 ? zz : 0.0);
+      a.x = (m[2] + m[6]) * 0.25 / (a.z != 0.0 ? a.z : 1.0);
+      a.y = (m[5] + m[7]) * 0.25 / (a.z != 0.0 ? a.z : 1.0);
+    }
+    *axis = Normalize(a);
+    return Length(*axis) > 0.5;
+  }
+  const double s = 2.0 * std::sin(angle);
+  *axis = Normalize(Vec3{(m[7] - m[5]) / s, (m[2] - m[6]) / s, (m[3] - m[1]) / s});
+  return Length(*axis) > 0.5;
+}
+
 /// A ray: a point and a direction. \c dir is expected normalized; a zero \c dir marks it invalid.
 struct Ray {
   Vec3 origin;

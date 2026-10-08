@@ -16,6 +16,36 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.7.2
+
+**Extract Coordinates from a PDF — new**
+- Drag a box over coordinate text on a PDF sheet — a monument block, a point table, or a bare
+  northing/easting — and GoSurvey reads it for you.
+- Review what it read next to the source text and accept or deny each one, or accept or deny them
+  all at once, before anything is created.
+- An accepted point becomes a survey point (auto-numbered, or matched to a conflicting number
+  through the usual overwrite/offset prompt) or a circle when there is no description or
+  elevation. Accepting brings you straight to the drawing.
+- A region with no selectable text — a scanned page — says so plainly instead of pretending to
+  find something.
+
+**Paste and drawing exchange**
+- Paste between projects now offers to convert the pasted content to the destination's
+  coordinate system and units.
+- Paper space content (viewports and sheet geometry) now survives DXF export and a DWG round
+  trip.
+
+**Plant 3D / DWG**
+- More Plant 3D piping solids import correctly, verified against AutoCAD's own geometry.
+- Plant fittings are written back out on save; DWG save now defaults to AutoCAD 2018.
+
+**Fixes**
+- Deleting a paper layout no longer leaves the drawing pointing at stale state.
+- Several ribbon wiring gaps on paper-space tools fixed.
+- MOVE/COPY/ROTATE/MIRROR on paper-space points, and a real paper-space SCALE.
+
+---
+
 ## 0.7.1
 
 **Installation and startup**

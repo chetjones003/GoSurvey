@@ -486,7 +486,15 @@ struct CylinderCut {
     n = Vec3{0.0, 0.0, 1.0};
     break;
   case SurfaceKind::Cylinder:
-    n = rho > 1e-12 ? Vec3{loc.x / rho, loc.y / rho, 0.0} : Vec3{1.0, 0.0, 0.0};
+    if (sf.radius2 > 1e-9 && std::fabs(sf.radius - sf.radius2) > 1e-8 * std::max(sf.radius, 1e-9)) {
+      // Elliptical cylinder: \ref radius along frame X, \ref radius2 along frame Y. Used for a
+      // Plant fillet whose cone record carries a radius ratio other than 1.
+      const double a = sf.radius;
+      const double b = sf.radius2;
+      n = Vec3{loc.x / (a * a), loc.y / (b * b), 0.0};
+    } else {
+      n = rho > 1e-12 ? Vec3{loc.x / rho, loc.y / rho, 0.0} : Vec3{1.0, 0.0, 0.0};
+    }
     break;
   case SurfaceKind::Sphere: {
     const double len = ray3d::Length(loc);
@@ -564,19 +572,26 @@ struct CylinderCut {
   pts.reserve(static_cast<std::size_t>(n) + 1);
   pts.push_back(start);
 
-  // A rough length: start -> witness -> end. The marching step is a fraction of it.
-  const double rough = ray3d::Length(ray3d::Sub(witness, start)) + ray3d::Length(ray3d::Sub(end, witness));
+  // A closed fillet stores one edge whose start and end are the same vertex. The open-curve stop
+  // at v1 would halt on the first step; leave that point and walk until the loop returns.
+  const double closeEps = 1e-8 * (1.0 + ray3d::Length(start));
+  const bool closed = ray3d::Length(ray3d::Sub(end, start)) <= closeEps;
+  double rough = ray3d::Length(ray3d::Sub(witness, start)) + ray3d::Length(ray3d::Sub(end, witness));
+  if (closed) {
+    const double radius = ray3d::Length(ray3d::Sub(witness, start));
+    rough = std::max(rough, 2.0 * 3.14159265358979323846 * std::max(radius, 1e-6));
+  }
   const double step = std::max(rough / static_cast<double>(n), 1e-12);
   Vec3 p = start;
-  // Head toward the witness on the first step, then keep the same travel sense.
   Vec3 prevDir = ray3d::Normalize(ray3d::Sub(witness, start));
   const int guard = 8 * n + 64;
   bool nearEndArmed = false;
+  bool leftHome = false;
   for (int it = 0; it < guard; ++it) {
     Vec3 tangent = ray3d::Cross(SurfaceNormalGeom(sa, p), SurfaceNormalGeom(sb, p));
     const double tl = ray3d::Length(tangent);
     if (!(tl > 1e-14))
-      break;  // surfaces tangent here — outside B2b-2's remit
+      break;
     tangent = ray3d::Scale(tangent, 1.0 / tl);
     if (ray3d::Dot(tangent, prevDir) < 0.0)
       tangent = ray3d::Scale(tangent, -1.0);
@@ -586,10 +601,21 @@ struct CylinderCut {
     if (!(moved > 1e-15))
       break;
     prevDir = ray3d::Scale(realDir, 1.0 / moved);
-    const double distToEnd = ray3d::Length(ray3d::Sub(next, end));
-    if (nearEndArmed && distToEnd >= ray3d::Length(ray3d::Sub(p, end))) {
-      break;  // walked past the closest approach to v1 — stop and close on it
+    if (closed) {
+      const double distHome = ray3d::Length(ray3d::Sub(next, start));
+      if (!leftHome && distHome > 4.0 * step)
+        leftHome = true;
+      pts.push_back(next);
+      p = next;
+      if (leftHome && distHome <= step)
+        break;
+      if (static_cast<int>(pts.size()) > 6 * n)
+        break;
+      continue;
     }
+    const double distToEnd = ray3d::Length(ray3d::Sub(next, end));
+    if (nearEndArmed && distToEnd >= ray3d::Length(ray3d::Sub(p, end)))
+      break;
     if (distToEnd <= step)
       nearEndArmed = true;
     pts.push_back(next);
@@ -652,6 +678,72 @@ struct CylinderCut {
   return false;
 }
 
+/// Walk one revolution-surface loop into a (u, v) polyline: `u` is continuously unwrapped `atan2`,
+/// `v` is frame-local Z — the same convention as `LocalSurfaceDerivs` and ACIS `paramLoops`.
+[[nodiscard]] std::vector<curveisect::Vec2> ProjectRevolutionLoopToParam(const Solid& s, const Loop& lp,
+                                                                           const Surface& sf) {
+  constexpr int kArcSamples = 8;
+  std::vector<curveisect::Vec2> poly;
+  bool haveRaw = false;
+  double prevRaw = 0.0;
+  double contU = 0.0;
+  for (const EdgeUse& u : lp.uses) {
+    const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
+    int samples = 1;
+    if (e.kind == CurveKind::Line)
+      samples = 1;
+    else if (e.kind == CurveKind::Ellipse)
+      samples = 32;
+    else if (e.kind == CurveKind::Arc)
+      samples = std::max(kArcSamples,
+                         static_cast<int>(std::ceil(32.0 * std::fabs(e.sweep) / kTwoPi)));
+    else
+      samples = kArcSamples;
+    for (int k = 0; k < samples; ++k) {
+      const double tTraverse = static_cast<double>(k) / static_cast<double>(samples);
+      const double edgeT = u.reversed ? (1.0 - tTraverse) : tTraverse;
+      const Vec3 local = ucs::WorldToUcs(sf.frame, EdgePointAt(s, e, edgeT));
+      const double rawU = std::atan2(local.y, local.x);
+      if (!haveRaw) {
+        contU = rawU;
+        haveRaw = true;
+      } else {
+        double delta = rawU - prevRaw;
+        while (delta > kPi)
+          delta -= 2.0 * kPi;
+        while (delta <= -kPi)
+          delta += 2.0 * kPi;
+        contU += delta;
+      }
+      prevRaw = rawU;
+      poly.push_back(curveisect::Vec2{contU, local.z});
+    }
+  }
+  return poly;
+}
+
+[[nodiscard]] bool RevolutionFaceEdgeParamBbox(const Solid& s, const Face& f, double* uLo, double* uHi,
+                                               double* vLo, double* vHi) {
+  bool any = false;
+  for (const Loop& lp : f.loops) {
+    const std::vector<curveisect::Vec2> poly = ProjectRevolutionLoopToParam(s, lp, f.surface);
+    for (const curveisect::Vec2& p : poly) {
+      if (!any) {
+        *uLo = *uHi = p.x;
+        *vLo = *vHi = p.y;
+        any = true;
+      } else {
+        *uLo = std::min(*uLo, p.x);
+        *uHi = std::max(*uHi, p.x);
+        *vLo = std::min(*vLo, p.y);
+        *vHi = std::max(*vHi, p.y);
+      }
+    }
+  }
+  return any;
+}
+
+/// True when the face's stored rectangle / height over-counts material vs its real 3D boundary.
 // 8-node Gauss–Legendre on [-1, 1] (four symmetric pairs).
 constexpr double kGL8x[4] = {0.18343464249564980, 0.52553240991632899, 0.79666647741362674,
                              0.96028985649753623};
@@ -1016,55 +1108,130 @@ struct IsectStrip {
 struct ConeCutStrip {
   const Surface* sf = nullptr;
   double rimZ = 0.0;
-  double nx = 0.0, ny = 0.0, nz = 0.0, planeC = 0.0;  // plane, in the cone's own local frame
+  bool haveRim = false;
+  int cutCount = 0;
+  static constexpr int kMaxCuts = 2;
+  double nx[kMaxCuts]{};
+  double ny[kMaxCuts]{};
+  double nz[kMaxCuts]{};
+  double planeC[kMaxCuts]{};
   [[nodiscard]] bool valid() const { return sf != nullptr; }
 };
 
 [[nodiscard]] ConeCutStrip MakeConeCutStrip(const Solid& s, const Face& f) {
   ConeCutStrip st;
-  bool haveRim = false;
-  bool haveCut = false;
   auto takePlane = [&](const Vec3& nWorld, const Vec3& originWorld) {
-    st.nx = ray3d::Dot(nWorld, f.surface.frame.xAxis);
-    st.ny = ray3d::Dot(nWorld, f.surface.frame.yAxis);
-    st.nz = ray3d::Dot(nWorld, f.surface.frame.zAxis);
-    st.planeC = ray3d::Dot(nWorld, ray3d::Sub(originWorld, f.surface.frame.origin));
-    haveCut = true;
+    if (st.cutCount >= ConeCutStrip::kMaxCuts)
+      return;
+    const int i = st.cutCount++;
+    st.nx[i] = ray3d::Dot(nWorld, f.surface.frame.xAxis);
+    st.ny[i] = ray3d::Dot(nWorld, f.surface.frame.yAxis);
+    st.nz[i] = ray3d::Dot(nWorld, f.surface.frame.zAxis);
+    st.planeC[i] = ray3d::Dot(nWorld, ray3d::Sub(originWorld, f.surface.frame.origin));
   };
   for (const Loop& lp : f.loops)
     for (const EdgeUse& u : lp.uses) {
       const Edge& e = s.edges[static_cast<std::size_t>(u.edge)];
       if (e.kind == CurveKind::Arc) {
         st.rimZ = ucs::WorldToUcs(f.surface.frame, s.vertices[static_cast<std::size_t>(e.v0)].p).z;
-        haveRim = true;
+        st.haveRim = true;
       } else if (e.kind == CurveKind::Ellipse) {
-        takePlane(e.frame.zAxis, e.frame.origin);  // the ellipse edge's own normal is the plane's
+        takePlane(e.frame.zAxis, e.frame.origin);
       } else if (e.kind == CurveKind::Intersection) {
         for (const Surface& sf : e.isectSurfaces)
           if (sf.kind == SurfaceKind::Plane)
             takePlane(sf.frame.zAxis, sf.frame.origin);
       }
     }
-  if (haveRim && haveCut)
+  if (st.cutCount >= 2 || (st.haveRim && st.cutCount >= 1))
     st.sf = &f.surface;
   return st;
 }
 
-/// The exact (rational, not marching) cone-generator/plane crossing height at azimuth `u`, and the
-/// resulting `[zLo, zHi]` this face's material occupies there (between the flat rim and the cut).
-[[nodiscard]] bool ConeCutStripAt(const ConeCutStrip& st, double u, double* zLo, double* zHi) {
-  const double r0 = st.sf->radius;
-  const double r1 = st.sf->radius2;
-  const double h = st.sf->height;
+[[nodiscard]] bool RevolutionFaceNeedsBoundaryIntegral(const Solid& s, const Face& f) {
+  if (f.surface.kind != SurfaceKind::Cylinder && f.surface.kind != SurfaceKind::Cone)
+    return false;
+  if (FaceLoopHasIntersectionEdge(s, f))
+    return false;
+  // Plant ASM lists a frustum wall as one loop / one full-turn rim edge; `IntegrateRevolutionTrimFaceNumeric`
+  // collapses that to zero `(u,v)` area — use `ConicalFaceIntegrals` on the stretched patch instead.
+  if (f.loops.size() == 1 && f.loops[0].uses.size() == 1) {
+    const Edge& rim = s.edges[static_cast<std::size_t>(f.loops[0].uses[0].edge)];
+    if (rim.kind == CurveKind::Arc && rim.v0 == rim.v1 && std::fabs(rim.sweep) + 0.05 >= kTwoPi)
+      return false;
+  }
+  if (FaceLoopHasEllipseEdge(s, f)) {
+    if (f.surface.kind == SurfaceKind::Cylinder) {
+      CylinderCut cc;
+      return !CylinderCutZExtent(s, f, &cc);
+    }
+    return !MakeConeCutStrip(s, f).valid();
+  }
+  double uLo = 0.0;
+  double uHi = 0.0;
+  double vLo = 0.0;
+  double vHi = 0.0;
+  if (!RevolutionFaceEdgeParamBbox(s, f, &uLo, &uHi, &vLo, &vHi))
+    return false;
+  const double uSpan = uHi - uLo;
+  const double vSpan = vHi - vLo;
+  const double curU = std::max(f.uEnd - f.uStart, 0.0);
+  const double scale = std::fabs(f.surface.height) + std::fabs(vSpan) + f.surface.radius + 1.0;
+  const double tol = 1e-5 * scale;
+  // Require a positive walked axial span — a single full-circle rim has vSpan≈0 but may still use
+  // the full `[0,height]` analytic patch after `FinalizeSingleRimConeFaces`.
+  if (vSpan > tol && vSpan + tol < f.surface.height)
+    return true;
+  if (vSpan > tol && f.surface.height + tol < vSpan)
+    return true;
+  // Partial circumferential band only — not a full 2π wall (would break primitive cones).
+  if (uSpan < 2.0 * kPi - 0.05 && uSpan + 0.05 < curU)
+    return true;
+  return false;
+}
+
+[[nodiscard]] bool ConePlaneCutHeightAt(const Surface& sf, double nx, double ny, double nz, double planeC,
+                                        double u, double* zCut) {
+  const double r0 = sf.radius;
+  const double r1 = sf.radius2;
+  const double h = sf.height;
   const double kk = (r1 - r0) / h;
-  const double a = st.nx * std::cos(u) + st.ny * std::sin(u);
-  const double denom = kk * a + st.nz;
+  const double a = nx * std::cos(u) + ny * std::sin(u);
+  const double denom = kk * a + nz;
   if (!(std::fabs(denom) > 1e-12))
-    return false;  // the generator at this u is parallel to the plane — shouldn't occur for a face
-                   // built strictly inside both caps (SliceConeOblique's own guard)
-  const double zCut = (st.planeC - r0 * a) / denom;
-  *zLo = std::min(st.rimZ, zCut);
-  *zHi = std::max(st.rimZ, zCut);
+    return false;
+  *zCut = (planeC - r0 * a) / denom;
+  return std::isfinite(*zCut);
+}
+
+/// The exact cone-generator/plane crossing height(s) at azimuth `u`, and the `[zLo, zHi]` band the
+/// face occupies (rim-to-cut, or between two plane cuts).
+[[nodiscard]] bool ConeCutStripAt(const ConeCutStrip& st, double u, double* zLo, double* zHi) {
+  const double h = st.sf->height;
+  if (st.cutCount >= 2) {
+    double zA = 0.0;
+    double zB = 0.0;
+    if (!ConePlaneCutHeightAt(*st.sf, st.nx[0], st.ny[0], st.nz[0], st.planeC[0], u, &zA) ||
+        !ConePlaneCutHeightAt(*st.sf, st.nx[1], st.ny[1], st.nz[1], st.planeC[1], u, &zB))
+      return false;
+    *zLo = std::min(zA, zB);
+    *zHi = std::max(zA, zB);
+    *zLo = std::max(*zLo, 0.0);
+    *zHi = std::min(*zHi, h);
+    return *zHi > *zLo + 1e-12 * (std::fabs(*zHi) + std::fabs(*zLo) + h);
+  }
+  if (st.cutCount != 1)
+    return false;
+  double zCut = 0.0;
+  if (!ConePlaneCutHeightAt(*st.sf, st.nx[0], st.ny[0], st.nz[0], st.planeC[0], u, &zCut))
+    return false;
+  if (st.haveRim) {
+    *zLo = std::min(st.rimZ, zCut);
+    *zHi = std::max(st.rimZ, zCut);
+  } else {
+    *zLo = std::min(0.0, zCut);
+    *zHi = std::max(0.0, zCut);
+  }
   return true;
 }
 
@@ -1095,11 +1262,11 @@ struct ConeCutStrip {
   auto iRhoZ = [&](double zLo, double zHi) {
     return r0 * (zHi * zHi - zLo * zLo) * 0.5 + kk * (zHi * zHi * zHi - zLo * zLo * zLo) / 3.0;
   };
-  out.area = GradedGaussIntegrate(f.uStart, f.uEnd, 48, [&](double u) {
+  out.area = GradedGaussIntegrate(f.uStart, f.uEnd, 64, [&](double u) {
     double zLo = 0.0, zHi = 0.0;
     return ConeCutStripAt(st, u, &zLo, &zHi) ? slant * iRho(zLo, zHi) : 0.0;
   });
-  out.volTerm = GradedGaussIntegrate(f.uStart, f.uEnd, 48, [&](double u) {
+  out.volTerm = GradedGaussIntegrate(f.uStart, f.uEnd, 64, [&](double u) {
     double zLo = 0.0, zHi = 0.0;
     if (!ConeCutStripAt(st, u, &zLo, &zHi))
       return 0.0;
@@ -1359,6 +1526,10 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
 /// defined below \ref ToroidalPoint since it needs those surface-point/derivative formulas.
 [[nodiscard]] FaceIntegrals IntegrateGeneralLoopFace(const Face& f, const Vec3& qLocal);
 
+/// Closure-probe integral of a cone/cylinder face from its walked 3D boundary (not `paramLoops`).
+[[nodiscard]] FaceIntegrals IntegrateRevolutionTrimFaceNumeric(const Solid& s, const Face& f,
+                                                               const Vec3& q);
+
 /// \p q is the world-frame reference point; each branch transforms it into the surface's own frame.
 ///
 /// \p honorGeneralLoops gates the `Face::paramLoops` branch (issue #307). `Validate`'s own internal
@@ -1413,6 +1584,10 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
       }
       break;
     }
+    if (RevolutionFaceNeedsBoundaryIntegral(s, f)) {
+      out = IntegrateRevolutionTrimFaceNumeric(s, f, q);
+      break;
+    }
     CylinderCut cc;
     const ConeIntegrals ci =
         CylinderCutZExtent(s, f, &cc)
@@ -1424,7 +1599,11 @@ void SphereStripsAt(const SphereIsectStrip& st, double u,
     break;
   }
   case SurfaceKind::Cone: {
-    if (FaceLoopHasEllipseEdge(s, f) || FaceLoopHasIntersectionEdge(s, f)) {
+    if (FaceLoopHasIntersectionEdge(s, f)) {
+      out = IntegrateConeCutFaceNumeric(s, f, q);
+    } else if (RevolutionFaceNeedsBoundaryIntegral(s, f)) {
+      out = IntegrateRevolutionTrimFaceNumeric(s, f, q);
+    } else if (FaceLoopHasEllipseEdge(s, f)) {
       out = IntegrateConeCutFaceNumeric(s, f, q);
     } else {
       const ConeIntegrals ci =
@@ -1704,6 +1883,14 @@ struct MeshBuilder {
   return ucs::UcsToWorld(sf.frame, Vec3{rho * std::cos(t), rho * std::sin(t), z});
 }
 
+[[nodiscard]] Vec3 CylinderPoint(const Surface& sf, double u, double v) {
+  const bool ellipse =
+      sf.radius2 > 1e-9 && std::fabs(sf.radius - sf.radius2) > 1e-8 * std::max(sf.radius, 1e-9);
+  if (!ellipse)
+    return ConicalPoint(sf, sf.radius, sf.radius, u, v);
+  return ucs::UcsToWorld(sf.frame, Vec3{sf.radius * std::cos(u), sf.radius2 * std::sin(u), v});
+}
+
 [[nodiscard]] Vec3 SphericalPoint(const Surface& sf, double t, double v) {
   const double cv = std::cos(v);
   return ucs::UcsToWorld(sf.frame,
@@ -1743,9 +1930,12 @@ void LocalSurfaceDerivs(const Surface& sf, double u, double v, Vec3* p, Vec3* su
     *sv = Vec3{0.0, 1.0, 0.0};
     return;
   case SurfaceKind::Cylinder: {
-    const double r = sf.radius;
-    *p = Vec3{r * std::cos(u), r * std::sin(u), v};
-    *su = Vec3{-r * std::sin(u), r * std::cos(u), 0.0};
+    const double a = sf.radius;
+    const bool ellipse =
+        sf.radius2 > 1e-9 && std::fabs(sf.radius - sf.radius2) > 1e-8 * std::max(sf.radius, 1e-9);
+    const double b = ellipse ? sf.radius2 : a;
+    *p = Vec3{a * std::cos(u), b * std::sin(u), v};
+    *su = Vec3{-a * std::sin(u), b * std::cos(u), 0.0};
     *sv = Vec3{0.0, 0.0, 1.0};
     return;
   }
@@ -1867,6 +2057,54 @@ void LocalSurfaceDerivs(const Surface& sf, double u, double v, Vec3* p, Vec3* su
     out.volTerm += GradedGaussIntegrate(v0, v1, kVPanels, [&](double v) { return stripIntegral(v, true); });
   }
   return out;
+}
+
+[[nodiscard]] FaceIntegrals IntegrateRevolutionTrimFaceNumeric(const Solid& s, const Face& f,
+                                                               const Vec3& q) {
+  const Vec3 qLocal = ucs::WorldToUcs(f.surface.frame, q);
+  Face scratch;
+  scratch.surface = f.surface;
+  scratch.uStart = f.uStart;
+  scratch.uEnd = f.uEnd;
+  scratch.vStart = f.vStart;
+  scratch.vEnd = f.vEnd;
+  scratch.paramLoops.reserve(f.loops.size());
+  std::vector<std::vector<curveisect::Vec2>> polys;
+  polys.reserve(f.loops.size());
+  for (const Loop& lp : f.loops) {
+    std::vector<curveisect::Vec2> poly = ProjectRevolutionLoopToParam(s, lp, f.surface);
+    if (poly.size() >= 3)
+      polys.push_back(std::move(poly));
+  }
+  if (polys.empty())
+    return {};
+  auto signedArea = [](const std::vector<curveisect::Vec2>& poly) {
+    double acc = 0.0;
+    for (std::size_t i = 0; i < poly.size(); ++i) {
+      const curveisect::Vec2& a = poly[i];
+      const curveisect::Vec2& b = poly[(i + 1) % poly.size()];
+      acc += a.x * b.y - b.x * a.y;
+    }
+    return 0.5 * acc;
+  };
+  size_t outerIdx = 0;
+  double outerArea = -1.0;
+  for (size_t i = 0; i < polys.size(); ++i) {
+    const double a = std::fabs(signedArea(polys[i]));
+    if (a > outerArea) {
+      outerArea = a;
+      outerIdx = i;
+    }
+  }
+  for (size_t j = 0; j < polys.size(); ++j) {
+    std::vector<curveisect::Vec2> poly = std::move(polys[j]);
+    const bool wantCcw = (j == outerIdx);
+    const double sa = signedArea(poly);
+    if ((wantCcw && sa < 0.0) || (!wantCcw && sa > 0.0))
+      std::reverse(poly.begin(), poly.end());
+    scratch.paramLoops.push_back(std::move(poly));
+  }
+  return IntegrateGeneralLoopFace(scratch, qLocal);
 }
 
 } // namespace
@@ -4507,10 +4745,30 @@ Vec3 ClosestPointOnSurface(const Surface& sf, const Vec3& p) {
   case SurfaceKind::Plane:
     return toWorld(Vec3{local.x, local.y, 0.0});
   case SurfaceKind::Cylinder: {
-    if (!(rho > 1e-12))
-      return p;
-    const double k = sf.radius / rho;
-    return toWorld(Vec3{local.x * k, local.y * k, local.z});
+    const double a = sf.radius;
+    const double b = sf.radius2;
+    const bool ellipse = b > 1e-9 && std::fabs(a - b) > 1e-8 * std::max(a, 1e-9);
+    if (!ellipse) {
+      if (!(rho > 1e-12))
+        return p;
+      const double k = sf.radius / rho;
+      return toWorld(Vec3{local.x * k, local.y * k, local.z});
+    }
+    double th = std::atan2(local.y / b, local.x / a);
+    for (int it = 0; it < 8; ++it) {
+      const double c = std::cos(th);
+      const double s = std::sin(th);
+      const double px = a * c;
+      const double py = b * s;
+      const double dx = -a * s;
+      const double dy = b * c;
+      const double f = (px - local.x) * dx + (py - local.y) * dy;
+      const double df = dx * dx + (px - local.x) * (-a * c) + dy * dy + (py - local.y) * (-b * s);
+      if (!(std::fabs(df) > 1e-18))
+        break;
+      th -= f / df;
+    }
+    return toWorld(Vec3{a * std::cos(th), b * std::sin(th), local.z});
   }
   case SurfaceKind::Cone: {
     if (!(rho > 1e-12))
@@ -4715,7 +4973,7 @@ Vec3 CurvedFaceMidpoint(const Face& f) {
   case SurfaceKind::Plane:
     return sf.frame.origin;  // caller error (only meant for curved faces) — a harmless fallback
   case SurfaceKind::Cylinder:
-    return ConicalPoint(sf, sf.radius, sf.radius, u, v);
+    return CylinderPoint(sf, u, v);
   case SurfaceKind::Cone:
     return ConicalPoint(sf, sf.radius, sf.radius2, u, v);
   case SurfaceKind::Sphere:
@@ -16562,6 +16820,14 @@ namespace {
   const double d2 = cross(p2, p3, p1);
   const double d3 = cross(p0, p1, p2);
   const double d4 = cross(p0, p1, p3);
+  // A full-turn trim closes across the periodic seam. A vertex that only touches that seam is not
+  // an interior crossing; a real crossing separates the endpoints by a visible gap.
+  const double len01 = std::hypot(p1.x - p0.x, p1.y - p0.y);
+  const double len23 = std::hypot(p3.x - p2.x, p3.y - p2.y);
+  const double touch = 1e-6;
+  if (std::fabs(d1) <= touch * std::max(len23, 1e-12) || std::fabs(d2) <= touch * std::max(len23, 1e-12) ||
+      std::fabs(d3) <= touch * std::max(len01, 1e-12) || std::fabs(d4) <= touch * std::max(len01, 1e-12))
+    return false;
   return ((d1 > 0.0) != (d2 > 0.0)) && ((d3 > 0.0) != (d4 > 0.0));
 }
 
@@ -16584,6 +16850,22 @@ namespace {
 
 /// Even-odd ray cast: is \p p inside \p poly (closed by wrap-around)?
 [[nodiscard]] bool PointInPolygon2D(const curveisect::Vec2& p, const std::vector<curveisect::Vec2>& poly) {
+  const std::size_t nEdge = poly.size();
+  for (std::size_t i = 0, j = nEdge - 1; i < nEdge; j = i++) {
+    const curveisect::Vec2& a = poly[j];
+    const curveisect::Vec2& b = poly[i];
+    const double abx = b.x - a.x;
+    const double aby = b.y - a.y;
+    const double ab2 = abx * abx + aby * aby;
+    if (!(ab2 > 1e-24))
+      continue;
+    double t = ((p.x - a.x) * abx + (p.y - a.y) * aby) / ab2;
+    t = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t);
+    const double dx = p.x - (a.x + abx * t);
+    const double dy = p.y - (a.y + aby * t);
+    if (dx * dx + dy * dy < 1e-8)
+      return true;
+  }
   bool inside = false;
   const std::size_t n = poly.size();
   for (std::size_t i = 0, j = n - 1; i < n; j = i++) {
@@ -16650,8 +16932,12 @@ Problem Validate(const Solid& s) {
             return Problem::DegenerateEdge;
         }
       }
-      if (ray3d::Length(ray3d::Sub(s.vertices[static_cast<std::size_t>(e.v1)].p,
-                                   s.vertices[static_cast<std::size_t>(e.v0)].p)) <= lenEps)
+      const Vec3& a = s.vertices[static_cast<std::size_t>(e.v0)].p;
+      const Vec3& b = s.vertices[static_cast<std::size_t>(e.v1)].p;
+      // A closed fillet starts and ends on one vertex. It still has length when the witness sits
+      // off that vertex.
+      if (ray3d::Length(ray3d::Sub(b, a)) <= lenEps &&
+          ray3d::Length(ray3d::Sub(e.frame.origin, a)) <= lenEps)
         return Problem::DegenerateEdge;
     } else {
       if (!AllFinite({e.radius, e.radius2, e.sweep}) || !FinitePoint(e.frame.origin))
@@ -16814,16 +17100,29 @@ Problem Validate(const Solid& s) {
     // plane-cut face's u-integral has no tractable closed form (ADR-045 (b), extended).
     if (f.surface.kind == SurfaceKind::Cone && FaceLoopHasEllipseEdge(s, f))
       hasNumericFace = true;
+    if ((f.surface.kind == SurfaceKind::Cone || f.surface.kind == SurfaceKind::Cylinder) &&
+        RevolutionFaceNeedsBoundaryIntegral(s, f))
+      hasNumericFace = true;
   }
   const double closeTol = (hasNumericFace ? 1e-5 : 1e-8) * scale * scale * scale;
 
   const Vec3 probe = ray3d::Add(q, Vec3{scale, 0.7 * scale, -1.3 * scale});
   const double probeVolume = VolumeAbout(s, probe, nullptr, /*honorGeneralLoops=*/false);
-  if (!std::isfinite(probeVolume) || std::fabs(volume - probeVolume) > closeTol)
-    return Problem::NotClosed;
-
-  if (!(volume > areaEps * lenEps))
-    return Problem::NotClosed;
+  const bool edgeClosed = std::isfinite(probeVolume) && std::fabs(volume - probeVolume) <= closeTol &&
+                          (volume > areaEps * lenEps);
+  if (!edgeClosed) {
+    // A full-turn cone trimmed by a true ellipse is closed in its (u, v) loops. The edge integral
+    // (which ignores those loops) does not see that trim, so it reports a gap the mesh does not have.
+    bool finiteTrim = true;
+    const double trimVolume = VolumeAbout(s, q, &finiteTrim, /*honorGeneralLoops=*/true);
+    const double trimProbe = VolumeAbout(s, probe, nullptr, /*honorGeneralLoops=*/true);
+    // Quadrature of a periodic trim is not origin-invariant to 1e-5; half a percent of the volume
+    // still rejects a missing face, whose gap is on the order of the part itself.
+    const double trimTol = std::max(closeTol, 0.005 * std::max(std::fabs(trimVolume), 1.0));
+    if (!finiteTrim || !std::isfinite(trimProbe) || std::fabs(trimVolume - trimProbe) > trimTol ||
+        !(trimVolume > areaEps * lenEps))
+      return Problem::NotClosed;
+  }
 
   return Problem::Ok;
 }
@@ -19335,7 +19634,7 @@ namespace {
   case SurfaceKind::Plane:
     return sf.frame.origin;
   case SurfaceKind::Cylinder:
-    return ConicalPoint(sf, sf.radius, sf.radius, u, v);
+    return CylinderPoint(sf, u, v);
   case SurfaceKind::Cone:
     return ConicalPoint(sf, sf.radius, sf.radius2, u, v);
   case SurfaceKind::Sphere:

@@ -1928,14 +1928,18 @@ new_encr_sat_data_line (Dwg_Entity_3DSOLID *restrict _obj, Bit_Chain *dest,
 
 // TODO SAT_enum
 
+// Position of the next logical within the current record (face: sense, sides, containment).
+// Reset whenever a new record identifier starts: a face whose logicals are followed by records
+// that carry none (Plant ASM attribs/loops) must not hand its count on to the next face.
+static int SAT_boolean_argc = 0;
+
 // logical values are class-specific, and must be strings.
 static const char *
 SAT_boolean (const char *act_record, bool value)
 {
-  static int argc = 0;
   if (!strEQc (act_record, "varblendsplsur") && !strEQc (act_record, "face")
       && !strEQc (act_record, "bdy_geom"))
-    argc = 0;
+    SAT_boolean_argc = 0;
 
   if (strEQc (act_record, "sphere") || strEQc (act_record, "plane")
       || strEQc (act_record, "stripc") || strEQc (act_record, "torus"))
@@ -1970,63 +1974,63 @@ SAT_boolean (const char *act_record, bool value)
   // now the few classes with mult. locical args
   else if (strEQc (act_record, "face"))
     {
-      if (!argc)
+      if (!SAT_boolean_argc)
         {
-          argc++;
+          SAT_boolean_argc++;
           return !value ? "forward" : "reversed";
         }
-      else if (argc == 1)
+      else if (SAT_boolean_argc == 1)
         {
-          argc++;
+          SAT_boolean_argc++;
           return !value ? "single" : "double";
         }
       else
         {
-          argc = 0;
+          SAT_boolean_argc = 0;
           return !value ? "out" : "in";
         }
     }
   else if (strEQc (act_record, "varblendsplsur"))
     {
-      if (!argc)
+      if (!SAT_boolean_argc)
         {
-          argc++;
+          SAT_boolean_argc++;
           return !value ? "concave" : "convex";
         }
       else
         {
-          argc = 0;
+          SAT_boolean_argc = 0;
           return !value ? "rb_snapshot" : "rb_envelope";
         }
     }
   else if (strEQc (act_record, "attrib_var_blend"))
     {
-      if (!argc)
+      if (!SAT_boolean_argc)
         {
-          argc++;
+          SAT_boolean_argc++;
           return value ? "uncalibrated" : "calibrated";
         }
-      else if (argc == 1)
+      else if (SAT_boolean_argc == 1)
         {
-          argc++;
+          SAT_boolean_argc++;
           return !value ? "one_radius" : "two_radii";
         }
       else
         {
-          argc = 0;
+          SAT_boolean_argc = 0;
           return !value ? "forward" : "reversed";
         }
     }
   else if (strEQc (act_record, "bdy_geom"))
     {
-      if (!argc)
+      if (!SAT_boolean_argc)
         {
-          argc++;
+          SAT_boolean_argc++;
           return value ? "non_cross" : "cross";
         }
       else
         {
-          argc++;
+          SAT_boolean_argc++;
           return !value ? "non_smooth" : "smooth";
         }
     }
@@ -2058,6 +2062,16 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
   int skip_hist = 0;
   char act_record[80];
   int error;
+#  ifdef CAN_ACIS_IN_DS_DATA
+  /* ASM tag 0x0C refs are RecordTable indices; SAT $refs are post-header record
+     indices (split on '#'). Map table index -> SAT index as records complete. */
+  unsigned int rt_count = 0;
+  unsigned int sat_count = 0;
+  unsigned int rt_map_cap = 512;
+  int32_t *rt_map = NULL;
+  int new_record = 1;
+  int record_open = 0;
+#  endif
   // We need dwg->header.version for the target ACIS version.
   const Dwg_Object *obj = dwg_obj_generic_to_object (_obj, &error);
   const Dwg_Data *dwg = obj ? obj->parent : NULL;
@@ -2081,20 +2095,25 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
     _obj->sab_size = _obj->block_size[0];
   // end = &p[_obj->sab_size];
 
-  if (!_obj->acis_data
-      || strlen ((char *)_obj->acis_data) < sizeof ("ACIS BinaryFile") - 1
-      || !memBEGINc ((char *)_obj->acis_data, "ACIS BinaryFile"))
-    {
-      LOG_ERROR ("acis_data is not a SAB 2 'ACIS BinaryFile'");
-      _obj->num_blocks = 0;
-      _obj->encr_sat_data[0] = NULL;
-      return 1;
-    }
-  // dest = &_obj->encr_sat_data[0][0];
-  // enddest = &dest[size];
-  bit_chain_alloc (&dest);
-  src.chain = &_obj->acis_data[15];
-  src.size = _obj->sab_size - 15;
+  {
+    size_t hdr_skip = 0;
+    if (_obj->acis_data && _obj->sab_size >= 15
+        && memBEGINc ((char *)_obj->acis_data, "ACIS BinaryFile"))
+      hdr_skip = 15;
+    else if (_obj->acis_data && _obj->sab_size >= 15
+             && memBEGINc ((char *)_obj->acis_data, "ASM BinaryFile"))
+      hdr_skip = 15; /* includes trailing '4' or '8' width digit */
+    if (!hdr_skip)
+      {
+        LOG_ERROR ("acis_data is not a SAB 2 'ACIS/ASM BinaryFile'");
+        _obj->num_blocks = 0;
+        _obj->encr_sat_data[0] = NULL;
+        return 1;
+      }
+    bit_chain_alloc (&dest);
+    src.chain = &_obj->acis_data[hdr_skip];
+    src.size = _obj->sab_size - hdr_skip;
+  }
 
 // header only
 #  define SAB_RD(key)                                                         \
@@ -2103,20 +2122,22 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
     key = bit_read_RD (&src);                                                 \
     dest.byte += sprintf ((char *)&dest.chain[dest.byte], "%g ", key);        \
     LOG_TRACE ("%g ", key)
-// record variant
+// record variant. %.17g round-trips the binary double exactly: %g kept only 6
+// significant digits, so a full-circle sweep read back as 6.28318 and closed
+// solids failed exact closure checks downstream (GoSurvey issue #786).
 #  define SAB_RD1()                                                           \
     {                                                                         \
       double f = bit_read_RD (&src);                                          \
       int s;                                                                  \
-      if (dest.byte + 16 >= dest.size)                                        \
+      if (dest.byte + 32 >= dest.size)                                        \
         bit_chain_alloc (&dest);                                              \
-      if (l + 16 > 255)                                                       \
+      if (l + 32 > 255)                                                       \
         {                                                                     \
           bit_write_TF (&dest, (BITCODE_TF) "\n", 1);                         \
           LOG_TRACE ("Split overlong SAT line\n");                            \
           l = 0;                                                              \
         }                                                                     \
-      s = sprintf ((char *)&dest.chain[dest.byte], "%g ", f);                 \
+      s = sprintf ((char *)&dest.chain[dest.byte], "%.17g ", f);             \
       dest.byte += s;                                                         \
       l += s;                                                                 \
       LOG_TRACE ("%g ", f);                                                   \
@@ -2211,6 +2232,12 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
   i = new_encr_sat_data_line (_obj, &dest, i);
   LOG_TRACE ("\n");
 
+#  ifdef CAN_ACIS_IN_DS_DATA
+  if (num_records > 0 && num_records + 64 > rt_map_cap)
+    rt_map_cap = (unsigned)num_records + 64;
+  rt_map = (int32_t *)calloc (rt_map_cap, sizeof (int32_t));
+#  endif
+
   c = bit_read_RC (&src); // type tag
   while (src.byte < src.size)
     {
@@ -2238,13 +2265,22 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
               dest.byte += s;
               l += s;
               LOG_TRACE ("#\n");
+#  ifdef CAN_ACIS_IN_DS_DATA
+              if (record_open && rt_map && rt_count < rt_map_cap)
+                {
+                  rt_map[rt_count] = (int32_t)sat_count;
+                  rt_count++;
+                  sat_count++;
+                }
+              record_open = 0;
+              new_record = 1;
+#  endif
             }
           // i = new_encr_sat_data_line (_obj, &dest, i);
           l = 0;
           skip_hist = 0;
           break;
         case 13: // ident
-          _obj->encr_sat_data[i] = (char *)dest.chain;
           // fallthru
         case 7:  // char len
         case 14: // subident
@@ -2256,12 +2292,43 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
               {
                 LOG_ERROR ("Invalid SAB len=%d [RC]", len);
                 bit_chain_free (&dest);
+#  ifdef CAN_ACIS_IN_DS_DATA
+                free (rt_map);
+#  endif
                 _obj->num_blocks = 0;
                 _obj->encr_sat_data[0] = NULL;
                 return 1;
               }
             if (dest.byte + len + 4 >= dest.size)
               bit_chain_alloc (&dest);
+#  ifdef CAN_ACIS_IN_DS_DATA
+            if ((c == 14 || c == 13) && len == 4
+                && !memcmp (&src.chain[src.byte], "body", 4))
+              {
+                int s;
+                if (dest.byte + 12 >= dest.size)
+                  bit_chain_alloc (&dest);
+                if (!new_record && record_open && rt_map && rt_count < rt_map_cap)
+                  {
+                    rt_map[rt_count] = (int32_t)sat_count;
+                    rt_count++;
+                    sat_count++;
+                    record_open = 0;
+                    s = sprintf ((char *)&dest.chain[dest.byte], "#\nbody ");
+                  }
+                else
+                  s = sprintf ((char *)&dest.chain[dest.byte], "body ");
+                dest.byte += s;
+                l = 0;
+                memcpy (act_record, "body", 4);
+                act_record[4] = '\0';
+                SAT_boolean_argc = 0;
+                src.byte += 4;
+                record_open = 1;
+                new_record = 0;
+                break;
+              }
+#  endif
             if (c == 7 && i < 3)
               {
                 int s = sprintf ((char *)&dest.chain[dest.byte], "%d ", len);
@@ -2296,6 +2363,7 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
                 memcpy (act_record, &src.chain[src.byte], len);
                 // to find identifier-specific true/false strings
                 act_record[len] = '\0';
+                SAT_boolean_argc = 0;
               }
             // TODO Begin-of-ACIS-History-Data => new line
             // TODO End-of-ACIS-History-Section => new line
@@ -2308,6 +2376,10 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
             else
               bit_write_TF (&dest, (BITCODE_TF) " ", 1);
             l++;
+#  ifdef CAN_ACIS_IN_DS_DATA
+            record_open = 1;
+            new_record = 0;
+#  endif
             break;
           }
         case 8: // short len
@@ -2317,6 +2389,9 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
               {
                 LOG_ERROR ("Invalid SAB");
                 bit_chain_free (&dest);
+#  ifdef CAN_ACIS_IN_DS_DATA
+                free (rt_map);
+#  endif
                 _obj->num_blocks = 0;
                 _obj->encr_sat_data[0] = NULL;
                 return 1;
@@ -2337,6 +2412,9 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
               {
                 LOG_ERROR ("Invalid SAB");
                 bit_chain_free (&dest);
+#  ifdef CAN_ACIS_IN_DS_DATA
+                free (rt_map);
+#  endif
                 _obj->num_blocks = 0;
                 _obj->encr_sat_data[0] = NULL;
                 return 1;
@@ -2406,17 +2484,22 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
             LOG_TRACE ("%" PRId16 " ", ll);
           }
           break;
-        case 4:  // long constant
-        case 21: // enum value. See GH jmplonka/InventorLoader:Acis.py
+        case 4:  // LONG — entity id / history (plain int in SAT, not a $ pointer)
+        case 21: // ENUM_VALUE
           {
             int s;
             BITCODE_RLd ll = (BITCODE_RLd)bit_read_RL (&src);
             if (dest.byte + 16 >= dest.size)
               bit_chain_alloc (&dest);
+#  ifdef CAN_ACIS_IN_DS_DATA
+            s = sprintf ((char *)&dest.chain[dest.byte], "%" PRId32 " ", ll);
+            LOG_TRACE ("%" PRId32 " ", ll);
+#  else
             s = sprintf ((char *)&dest.chain[dest.byte], "$%" PRId32 " ", ll);
+            LOG_TRACE ("$%" PRId32 " ", ll);
+#  endif
             dest.byte += s;
             l += s;
-            LOG_TRACE ("$%" PRId32 " ", ll);
           }
           break;
         case 5: // float constant
@@ -2500,6 +2583,43 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
   // if (c != 17) // last line didn't end with #, but End-of-ACIS-data or
   // End-of-ASM-data
   //   i = new_encr_sat_data_line (_obj, &dest, i);
+#  ifdef CAN_ACIS_IN_DS_DATA
+  if (rt_map && rt_count > 0)
+    {
+      Bit_Chain mapped = { 0 };
+      bit_chain_alloc (&mapped);
+      for (size_t bi = 0; bi < dest.byte;)
+        {
+          if (dest.chain[bi] == '$')
+            {
+              char *start = (char *)&dest.chain[bi + 1];
+              char *end = NULL;
+              const long tbl = strtol (start, &end, 10);
+              bit_write_TF (&mapped, (BITCODE_TF) "$", 1);
+              if (end != start && tbl >= 0 && (unsigned)tbl < rt_count)
+                {
+                  char num[24];
+                  const int n = sprintf (num, "%" PRId32, rt_map[(unsigned)tbl]);
+                  bit_write_TF (&mapped, (BITCODE_TF) num, (unsigned)n);
+                  bi = (size_t)(end - (char *)dest.chain);
+                }
+              else
+                {
+                  bi++;
+                  while (bi < dest.byte && dest.chain[bi] >= '0' && dest.chain[bi] <= '9')
+                    bit_write_TF (&mapped, &dest.chain[bi++], 1);
+                }
+            }
+          else
+            {
+              bit_write_TF (&mapped, &dest.chain[bi], 1);
+              bi++;
+            }
+        }
+      bit_chain_free (&dest);
+      dest = mapped;
+    }
+#  endif
   num_blocks = _obj->num_blocks = 1;
   // Nope, keep it. Teigha always adds it, ASM not.
   // if (strEQc((char*)&dest.chain[dest.byte-17], "End-of-ACIS-data "))
@@ -2541,6 +2661,9 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
     LOG_TRACE ("block_size[%d] = %" PRId64 "\n", i, size);
   }
   bit_chain_free (&dest);
+#  ifdef CAN_ACIS_IN_DS_DATA
+  free (rt_map);
+#  endif
   LOG_TRACE ("\n");
   _obj->acis_empty = 0;
   _obj->version = 1; // conversion complete
@@ -2548,7 +2671,7 @@ dwg_convert_SAB_to_SAT1 (Dwg_Entity_3DSOLID *restrict _obj)
   if (i + 2 >= num_blocks)
     _obj->block_size = (BITCODE_BL *)realloc (_obj->block_size,
                                               (i + 2) * sizeof (BITCODE_BL));
-  _obj->num_blocks = i;
+  _obj->num_blocks = i + 1;
   _obj->block_size[i + 1] = 0;
   return 0;
 }

@@ -432,8 +432,10 @@ EXPORT int my_strcasecmp (const char *a, const char *b);
 #  endif
 #endif
 
-#undef CAN_ACIS_IN_DS_DATA
-#undef CAN_ACIS_HISTORY
+/* GoSurvey (REQ-320 / issue #786): keep AcDs ASM SAB geometry and history when
+   converting to SAT for import — upstream leaves these undefined for DXF export. */
+#define CAN_ACIS_IN_DS_DATA
+#define CAN_ACIS_HISTORY
 #define TODO_ENCODER HANDLER (OUTPUT, "TODO: Encoder\n");
 #define TODO_DECODER HANDLER (OUTPUT, "TODO: Decoder\n");
 
