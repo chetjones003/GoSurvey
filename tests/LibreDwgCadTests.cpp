@@ -15,8 +15,11 @@
 #include "SurveyPoints.hpp"
 #include "io/SurveyCsv.hpp"
 #include "util/ucs.hpp"
+#include "util/AcisSatParser.hpp"
 #include "util/brep.hpp"
 #include "util/cadpiperun.hpp"
+
+#include "SolidMeasure.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -27,10 +30,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -2118,6 +2123,151 @@ TEST_CASE("Civil3D parts-catalog class signature is detected from the class tabl
   Dwg_Data empty = {};
   CHECK_FALSE(libredwgcad_detail::DwgHasCivil3dCatalogClasses(&empty));
   CHECK_FALSE(libredwgcad_detail::DwgHasCivil3dCatalogClasses(nullptr));
+}
+
+// issue #786 / TASK-734 (REQ-320 increment 2, D-2026-10-08-a/b) — the Plant 3D PI piping fixture,
+// checked against AutoCAD itself. `samples/example-piping-system.acad-*.csv` hold AutoCAD 2027's
+// MASSPROP of the same solids (tools/acad/*.lsp regenerate them); `Validate` passing is not evidence
+// of the right shape on its own, so every solid GoSurvey keeps must match AutoCAD's volume and
+// extents. Volume and extents are taken from the tessellated mesh — what the viewport draws.
+namespace {
+
+struct AcadSolid {
+  std::string key;  // 3DSOLID handle (blocks file) or Plant part handle (placed file)
+  double volume = 0.0;
+  brep::Vec3 mn, mx;
+  bool used = false;
+};
+
+std::vector<AcadSolid> LoadAcadSolids(const char* fileName, int keyColumns) {
+  std::vector<AcadSolid> out;
+  std::ifstream in(std::string(GOSURVEY_SAMPLES_DIR) + "/" + fileName);
+  std::string line;
+  bool header = true;
+  while (std::getline(in, line)) {
+    if (line.empty() || line[0] == '#')
+      continue;
+    if (header) {
+      header = false;
+      continue;
+    }
+    std::vector<std::string> cols;
+    std::stringstream ss(line);
+    for (std::string c; std::getline(ss, c, ',');)
+      cols.push_back(c);
+    if (cols.size() != static_cast<size_t>(keyColumns) + 7)
+      continue;
+    AcadSolid a;
+    a.key = cols[0];
+    const auto num = [&](int i) { return std::stod(cols[static_cast<size_t>(keyColumns + i)]); };
+    a.volume = num(0);
+    a.mn = brep::Vec3{num(1), num(2), num(3)};
+    a.mx = brep::Vec3{num(4), num(5), num(6)};
+    out.push_back(a);
+  }
+  return out;
+}
+
+/// Same solid as AutoCAD's: volume within 0.1% (the mesh's chord error) and every extent within
+/// 0.005 drawing units.
+bool MatchesAcad(const AcadSolid& a, double volume, const brep::Vec3& mn, const brep::Vec3& mx) {
+  constexpr double kTol = 5e-3;
+  return std::fabs(volume - a.volume) <= 1e-3 * a.volume && std::fabs(mn.x - a.mn.x) <= kTol &&
+         std::fabs(mn.y - a.mn.y) <= kTol && std::fabs(mn.z - a.mn.z) <= kTol && std::fabs(mx.x - a.mx.x) <= kTol &&
+         std::fabs(mx.y - a.mx.y) <= kTol && std::fabs(mx.z - a.mx.z) <= kTol;
+}
+
+std::string HexHandle(unsigned long long h) {
+  char buf[32];
+  std::snprintf(buf, sizeof buf, "%llX", h);
+  return buf;
+}
+
+}  // namespace
+
+TEST_CASE("every ACIS body the Plant fixture yields matches AutoCAD's solid", "[dwg][libredwg][issue786]") {
+  const std::string p = std::string(GOSURVEY_SAMPLES_DIR) + "/example-piping-system.dwg";
+  std::vector<AcadSolid> acad = LoadAcadSolids("example-piping-system.acad-blocks.csv", 2);
+  REQUIRE(acad.size() == 89);
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  int bodies = 0;
+  int imported = 0;
+  for (unsigned i = 0; i < dwg.num_objects; ++i) {
+    Dwg_Object* obj = &dwg.object[i];
+    if (obj->supertype != DWG_SUPERTYPE_ENTITY || obj->fixedtype != DWG_TYPE__3DSOLID)
+      continue;
+    Dwg_Entity__3DSOLID* sol = obj->tio.entity->tio._3DSOLID;
+    // Each 3DSOLID gets its own AcDs body through the index (never a neighbour's).
+    REQUIRE(sol != nullptr);
+    REQUIRE_FALSE(sol->acis_empty);
+    ++bodies;
+    REQUIRE(dwg_convert_SAB_to_SAT1(sol) == 0);
+    std::string sat;
+    for (BITCODE_BL b = 0; b < sol->num_blocks && sol->block_size[b] != 0; ++b)
+      sat.append(sol->encr_sat_data[b], sol->block_size[b]);
+    const acissat::ImportResult r = acissat::ImportSatSolid(sat, "3DSOLID");
+    if (!r.ok) {
+      CHECK_FALSE(r.error.empty());  // refused by name (REQ-201)
+      continue;
+    }
+    const std::string handle = HexHandle(obj->handle.value);
+    const auto row = std::find_if(acad.begin(), acad.end(), [&](const AcadSolid& a) { return a.key == handle; });
+    REQUIRE(row != acad.end());
+    double volume = 0.0;
+    brep::Vec3 mn, mx;
+    REQUIRE(MeshVolumeAndExtents(r.solid, brep::Vec3{}, &volume, &mn, &mx));
+    INFO("3DSOLID " << handle << " volume " << volume << " vs AutoCAD " << row->volume);
+    CHECK(MatchesAcad(*row, volume, mn, mx));
+    ++imported;
+  }
+  dwg_free(&dwg);
+  CHECK(bodies == 89);
+  // 60 bodies were exact against AutoCAD when this landed; fewer is a regression.
+  CHECK(imported >= 60);
+}
+
+TEST_CASE("opening the Plant fixture places every part where AutoCAD does", "[dwg][libredwg][issue786]") {
+  const std::string p = std::string(GOSURVEY_SAMPLES_DIR) + "/example-piping-system.dwg";
+  std::vector<AcadSolid> acad = LoadAcadSolids("example-piping-system.acad-placed.csv", 1);
+  REQUIRE(acad.size() == 127);
+
+  AppCommandState st;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(st, p.c_str(), log));
+  const brep::Vec3 docOrigin{st.worldDocumentOriginX, st.worldDocumentOriginY, 0.0};
+  int matched = 0;
+  for (size_t i = 0; i < st.cadSolids.size(); ++i) {
+    double volume = 0.0;
+    brep::Vec3 mn, mx;
+    REQUIRE(MeshVolumeAndExtents(*st.cadSolids[i], docOrigin, &volume, &mn, &mx));
+    const auto row = std::find_if(acad.begin(), acad.end(), [&](const AcadSolid& a) {
+      return !a.used && MatchesAcad(a, volume, mn, mx);
+    });
+    INFO("solid " << i << " volume " << volume << " at " << mn.x << ", " << mn.y << ", " << mn.z);
+    CHECK(row != acad.end());
+    if (row != acad.end()) {
+      row->used = true;
+      ++matched;
+    }
+  }
+  // 59 pipes, 52 fittings and 7 gaskets when this landed; fewer is a regression.
+  CHECK(matched >= 118);
+  double mnX = 0.0, mxX = 0.0, mnY = 0.0, mxY = 0.0;
+  REQUIRE(ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY));
+  CHECK(mxX > mnX);
+  CHECK(mxY > mnY);
+
+  // What is not imported is named (REQ-201): structural members carry no stored solid, and a
+  // fitting whose catalog solid the parser refuses says so.
+  const auto logged = [&](const char* text) {
+    return std::any_of(log.begin(), log.end(), [&](const std::string& l) { return l.find(text) != std::string::npos; });
+  };
+  CHECK(logged("ACPPSTRUCTUREBEAM(no stored solid or placement for this Plant 3D class)"));
+  CHECK(logged("ACPPPIPEINLINEASSET(catalog part not imported: 3DSOLID("));
+  CHECK_FALSE(logged("3DSOLID(empty)"));
+  CHECK_FALSE(logged("data layout not recognized"));
 }
 
 // issue #140 / DEBT-151-a — end-to-end against a real LibreDWG-decoded file: a multi-layer table
