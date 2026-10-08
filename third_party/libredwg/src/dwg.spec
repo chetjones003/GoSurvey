@@ -2973,7 +2973,7 @@ static int free_3dsolid (Dwg_Object *restrict obj, Dwg_Entity_3DSOLID *restrict 
       if (FIELD_VALUE (encr_sat_data))
         {
           LOG_HANDLE ("Free %s.num_blocks %u\n", obj->name, _obj->num_blocks);
-          for (BITCODE_BL i = 0; i <= FIELD_VALUE (num_blocks); i++)
+          for (BITCODE_BL i = 0; i < FIELD_VALUE (num_blocks); i++)
             {
               if (FIELD_VALUE (encr_sat_data[i]) != NULL)
                 FIELD_TF (encr_sat_data[i], block_size[i], 0);

@@ -9,6 +9,7 @@
 #include "LibreDwgAnnotContext.hpp"
 #include "LibreDwgLights.hpp"
 #include "LibreDwgMaterial.hpp"
+#include "LibreDwgPlant.hpp"
 #include "LibreDwgVisualStyle.hpp"
 #include "util/cadpiperun.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -122,6 +123,26 @@ std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
   char buf[16];
   std::snprintf(buf, sizeof(buf), "#%06X", static_cast<unsigned>(DxfRgbPackedFromAci(index) & 0xFFFFFFu));
   return std::string(buf);
+}
+
+/// REQ-320 increment 2 (TASK-734): convert LibreDWG-attached SAB/ASM binary to SAT text.
+[[nodiscard]] std::string SatTextFrom3dSolidSab(Dwg_Entity__3DSOLID* sol) {
+  if (sol == nullptr || sol->acis_data == nullptr || sol->sab_size == 0)
+    return {};
+  // Converting again would rebuild `encr_sat_data` over the first conversion's buffers (leaking
+  // them); a solid reached twice reuses the SAT it already has.
+  if (!sol->_dxf_sab_converted && dwg_convert_SAB_to_SAT1(sol) != 0)
+    return {};
+  std::string sat;
+  if (sol->num_blocks > 0 && sol->block_size != nullptr && sol->encr_sat_data != nullptr) {
+    for (BITCODE_BL i = 0; i < sol->num_blocks; ++i) {
+      if (sol->block_size[i] == 0)
+        break;
+      if (sol->encr_sat_data[i] != nullptr)
+        sat.append(sol->encr_sat_data[i], sol->block_size[i]);
+    }
+  }
+  return sat;
 }
 
 }  // namespace libredwgcad_detail
@@ -1000,24 +1021,55 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
                   std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
                   AppCommandState* blockDefCatalog);
 
-/// REQ-320 / ADR-051 (GitHub issue #299): a `3DSOLID` entity's geometry is an ACIS record stream,
-/// not lines/circles LibreDWG can hand back directly. `acis_data` is LibreDWG's already-decrypted
-/// payload — SAT (v1, text) or SAB (v2+, binary), per `version` (DXF 70). This importer supports SAT
-/// only (issue #301 tracks SAB); a SAB stream, or anything AcisSatParser refuses, is reported through
-/// the same `NoteSkip` mechanism an unrecognized entity type already uses (REQ-201: never silent).
-void ImportAcisSolid(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object_Entity* ownerEnt,
-                     const Dwg_Entity__3DSOLID* sol, const Xf2& xf, const EntityAttributes& at,
-                     std::unordered_map<std::string, int>* skipHist) {
+/// REQ-320 / ADR-051 (GitHub issue #299, increment 2 TASK-734): a `3DSOLID` entity's geometry is an
+/// ACIS record stream, not lines/circles LibreDWG can hand back directly. `acis_data` is SAT (v1) or
+/// SAB/ASM binary (v2+, including AcDs-attached ShapeManager streams). Unsupported content is reported
+/// through `NoteSkip` (REQ-201: never silent).
+/// The `brep::Solid` a `3DSOLID` entity stores, in its own (SAT) coordinates. On failure returns
+/// false and sets \p skipLabel to the `NoteSkip` label naming why (REQ-201).
+bool LoadAcisSolid(Dwg_Data* dwg, const Dwg_Entity__3DSOLID* sol, brep::Solid* out, std::string* skipLabel) {
   if (sol->acis_empty || sol->acis_data == nullptr) {
     // GitHub issue #369 / D-2026-09-10-b: name a Civil 3D parts-catalog placeholder for what it
     // is, rather than the ambiguous "(empty)" that reads like a decode failure. The block's other
     // 2D/annotation content still imports (BLOCKIMPORT keeps it).
-    NoteSkip(skipHist,
-             libredwgcad_detail::DwgHasCivil3dCatalogClasses(dwg)
-                 ? "3DSOLID(Civil3D parts-catalog part, no portable geometry)"
-                 : "3DSOLID(empty)");
-    return;
+    *skipLabel = libredwgcad_detail::DwgHasCivil3dCatalogClasses(dwg)
+                     ? "3DSOLID(Civil3D parts-catalog part, no portable geometry)"
+                     : "3DSOLID(empty)";
+    return false;
   }
+  std::string sat;
+  if (sol->version >= 2) {
+    auto* mutableSol = const_cast<Dwg_Entity__3DSOLID*>(sol);
+    sat = libredwgcad_detail::SatTextFrom3dSolidSab(mutableSol);
+    if (sat.empty()) {
+      *skipLabel = "3DSOLID(SAB/ASM binary could not be converted to SAT)";
+      return false;
+    }
+  } else {
+    // `acis_data` is LibreDWG's decrypted buffer; the SAT-decryption cipher preserves length, so the
+    // encrypted blocks' summed size is the decrypted length — read exactly that many bytes rather than
+    // trusting a NUL terminator, which a corrupted or unusually-encoded file need not have.
+    if (sol->num_blocks > 0 && sol->block_size != nullptr) {
+      std::size_t total = 0;
+      for (BITCODE_BL i = 0; i < sol->num_blocks; ++i)
+        total += sol->block_size[i];
+      sat.assign(reinterpret_cast<const char*>(sol->acis_data), total);
+    } else {
+      sat.assign(reinterpret_cast<const char*>(sol->acis_data));
+    }
+  }
+  acissat::ImportResult r = acissat::ImportSatSolid(sat, "3DSOLID");
+  if (!r.ok) {
+    *skipLabel = "3DSOLID(" + r.error + ")";
+    return false;
+  }
+  *out = std::move(r.solid);
+  return true;
+}
+
+void ImportAcisSolid(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object_Entity* ownerEnt,
+                     const Dwg_Entity__3DSOLID* sol, const Xf2& xf, const EntityAttributes& at,
+                     std::unordered_map<std::string, int>* skipHist) {
   // A rotated or non-uniformly-scaled placement (a 3DSOLID reached through a rotated/scaled nested
   // INSERT) would need every surface/edge frame in the imported solid transformed consistently, not
   // just its vertices — out of scope this increment. The primary case (a block DEFINITION's own
@@ -1025,29 +1077,14 @@ void ImportAcisSolid(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object_Entity
   const bool identityXf = std::fabs(xf.ox) < 1e-9 && std::fabs(xf.oy) < 1e-9 &&
                            std::fabs(xf.ang) < 1e-9 && std::fabs(xf.sx - 1.0) < 1e-9 &&
                            std::fabs(xf.sy - 1.0) < 1e-9;
-  if (!identityXf) {
+  if (!identityXf && !sol->acis_empty && sol->acis_data != nullptr) {
     NoteSkip(skipHist, "3DSOLID(rotated/scaled placement not supported)");
     return;
   }
-  if (sol->version >= 2) {
-    NoteSkip(skipHist, "3DSOLID(SAB binary ACIS not supported, issue #301)");
-    return;
-  }
-  // `acis_data` is LibreDWG's decrypted buffer; the SAT-decryption cipher preserves length, so the
-  // encrypted blocks' summed size is the decrypted length — read exactly that many bytes rather than
-  // trusting a NUL terminator, which a corrupted or unusually-encoded file need not have.
-  std::string sat;
-  if (sol->num_blocks > 0 && sol->block_size != nullptr) {
-    std::size_t total = 0;
-    for (BITCODE_BL i = 0; i < sol->num_blocks; ++i)
-      total += sol->block_size[i];
-    sat.assign(reinterpret_cast<const char*>(sol->acis_data), total);
-  } else {
-    sat.assign(reinterpret_cast<const char*>(sol->acis_data));
-  }
-  const acissat::ImportResult r = acissat::ImportSatSolid(sat, "3DSOLID");
-  if (!r.ok) {
-    NoteSkip(skipHist, ("3DSOLID(" + r.error + ")").c_str());
+  brep::Solid solid;
+  std::string skipLabel;
+  if (!LoadAcisSolid(dwg, sol, &solid, &skipLabel)) {
+    NoteSkip(skipHist, skipLabel.c_str());
     return;
   }
   // Every other imported entity localizes against the document origin (LocalLine/LocalCircle/etc.,
@@ -1055,12 +1092,90 @@ void ImportAcisSolid(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object_Entity
   // exports offset from every other entity in a state-plane drawing (REQ-101's Local storage
   // invariant).
   const brep::Solid localized =
-      brep::Translate(r.solid, ray3d::Vec3{-st.worldDocumentOriginX, -st.worldDocumentOriginY, 0.0});
+      brep::Translate(solid, ray3d::Vec3{-st.worldDocumentOriginX, -st.worldDocumentOriginY, 0.0});
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(localized));
   EntityAttributes solidAt = at;
   if (ownerEnt != nullptr && dwg != nullptr)
     DwgImportApplyEntityMaterial(dwg, ownerEnt, &solidAt);
   st.cadSolidAttrs.push_back(solidAt);
+}
+
+/// Plant 3D parts in model space (REQ-320 increment 2, D-2026-10-08-b, GitHub issue #786). A
+/// fitting or gasket places the solid of a `Plant3DCatalogItem_*` block definition that no INSERT
+/// references; a straight pipe is built from its centreline and radius. Each catalog block's solid
+/// is loaded once, however many parts place it. Anything not placed is named in the log (REQ-201).
+void ImportPlantParts(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* mspace,
+                      std::unordered_map<std::string, int>* skipHist) {
+  struct CatalogSolids {
+    std::vector<brep::Solid> solids;  // block-local, base point at the origin
+    std::string refused;              // NoteSkip label when the block's solid could not be read
+  };
+  std::unordered_map<unsigned long long, CatalogSolids> catalog;
+  const auto catalogSolids = [&](unsigned long long blockHandle) -> const CatalogSolids& {
+    const auto found = catalog.find(blockHandle);
+    if (found != catalog.end())
+      return found->second;
+    CatalogSolids c;
+    Dwg_Object* blk = dwg_resolve_handle(dwg, blockHandle);
+    const Dwg_Object_BLOCK_HEADER* hdr =
+        (blk != nullptr && blk->tio.object != nullptr) ? blk->tio.object->tio.BLOCK_HEADER : nullptr;
+    if (hdr != nullptr) {
+      const ray3d::Vec3 base{-hdr->base_pt.x, -hdr->base_pt.y, -hdr->base_pt.z};
+      for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e)) {
+        if (e->fixedtype != DWG_TYPE__3DSOLID || e->tio.entity == nullptr || e->tio.entity->tio._3DSOLID == nullptr)
+          continue;
+        brep::Solid s;
+        std::string label;
+        if (LoadAcisSolid(dwg, e->tio.entity->tio._3DSOLID, &s, &label))
+          c.solids.push_back(brep::Translate(s, base));
+        else
+          c.refused = label;
+      }
+    }
+    if (c.solids.empty() && c.refused.empty())
+      c.refused = "catalog block holds no solid";
+    return catalog.emplace(blockHandle, std::move(c)).first->second;
+  };
+
+  const ray3d::Vec3 docOrigin{st.worldDocumentOriginX, st.worldDocumentOriginY, 0.0};
+  for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e)) {
+    const std::string cls = libredwgplant::PlantClassName(dwg, e);
+    if (cls.empty() || e->supertype != DWG_SUPERTYPE_ENTITY || e->tio.entity == nullptr)
+      continue;
+    libredwgplant::Part part;
+    std::string why;
+    if (!libredwgplant::DecodePart(dwg, e, &part, &why)) {
+      NoteSkip(skipHist, (cls + "(" + why + ")").c_str());
+      continue;
+    }
+    const EntityAttributes at = AttrFromEnt(dwg, e->tio.entity);
+    const auto keep = [&](brep::Solid&& s) {
+      st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(s)));
+      st.cadSolidAttrs.push_back(at);
+    };
+    if (part.kind == libredwgplant::Part::Kind::Pipe) {
+      brep::Solid pipe;
+      if (libredwgplant::MakePipe(part, docOrigin, &pipe))
+        keep(std::move(pipe));
+      else
+        NoteSkip(skipHist, (cls + "(pipe solid could not be built)").c_str());
+      continue;
+    }
+    for (const libredwgplant::BlockPlacement& placement : part.blocks) {
+      const CatalogSolids& c = catalogSolids(placement.blockHandle);
+      if (!c.refused.empty()) {
+        NoteSkip(skipHist, (cls + "(catalog part not imported: " + c.refused + ")").c_str());
+        continue;
+      }
+      for (const brep::Solid& local : c.solids) {
+        brep::Solid placed;
+        if (libredwgplant::PlaceSolid(local, placement, docOrigin, &placed))
+          keep(std::move(placed));
+        else
+          NoteSkip(skipHist, (cls + "(placement is not a rigid rotation)").c_str());
+      }
+    }
+  }
 }
 
 [[nodiscard]] bool DwgBlockDefNameIsImportable(std::string_view name) {
@@ -2110,6 +2225,12 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
   }
   if (ty == DWG_TYPE_SEQEND || ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_ENDBLK)
     return;
+  if (const std::string plant = libredwgplant::PlantClassName(dwg, obj); !plant.empty()) {
+    // Model-space Plant 3D parts are placed by ImportPlantParts (D-2026-10-08-b).
+    if (depth != 0)
+      NoteSkip(skipHist, (plant + "(inside a block, not placed)").c_str());
+    return;
+  }
   NoteSkip(skipHist, obj->dxfname != nullptr ? obj->dxfname : "UNKNOWN");
 }
 
@@ -5484,10 +5605,11 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   if (mspace != nullptr) {
     for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e))
       ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions, nullptr);
+    ImportPlantParts(st, &dwg, mspace, &skipHist);
   }
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
                          st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
-                         st.cadMultileaders.empty() && st.cadBlockRefs.empty();
+                         st.cadMultileaders.empty() && st.cadBlockRefs.empty() && st.cadSolids.empty();
   // DXF decode often leaves BLOCK_HEADER.first_entity unset or pointing at BLOCK/ENDBLK only.
   if (emptyGeom) {
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {

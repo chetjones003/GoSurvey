@@ -2369,8 +2369,8 @@ read_2004_section_classes (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
                      dwg->dwg_class[i].item_class_id);
 
           dwg->dwg_class[i].num_instances = bit_read_BL (&sec_dat);
-          dwg->dwg_class[i].dwg_version = bit_read_BS (&sec_dat);
-          dwg->dwg_class[i].maint_version = bit_read_BS (&sec_dat);
+          dwg->dwg_class[i].dwg_version = bit_read_BL (&sec_dat);
+          dwg->dwg_class[i].maint_version = bit_read_BL (&sec_dat);
           dwg->dwg_class[i].unknown_1 = bit_read_BL (&sec_dat);
           dwg->dwg_class[i].unknown_1 = bit_read_BL (&sec_dat);
           LOG_TRACE ("num_instances:    %u\n",

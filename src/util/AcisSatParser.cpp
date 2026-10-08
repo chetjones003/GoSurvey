@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 /// See AcisSatParser.hpp for scope. This file also documents, in one place, the exact SAT field
 /// layout this parser understands (a fixed subset of the real ACIS standard schema, chosen because
@@ -21,15 +22,16 @@
 ///   face            attrib next loop owner surface sense("forward"/"reversed") sides("single"/"double")
 ///   loop            attrib next coedge owner
 ///   coedge          attrib next previous partner edge sense("forward"/"reversed") owner
-///   edge            attrib start-vertex end-vertex curve sense("forward"/"reversed")
+///   edge            attrib start-vertex end-vertex curve sense("forward"/"reversed"); curve may be $-1
 ///   vertex          attrib edge point
 ///   point           attrib x y z
 ///   straight-curve  attrib origin.xyz direction.xyz
 ///   ellipse-curve   attrib centre.xyz normal.xyz major-axis.xyz radius-ratio
+///   intcurve-curve  attrib { int_int_cur ... sample.xyz* torus centre axis major minor refdir plane origin normal refdir ... }
 ///   plane-surface   attrib origin.xyz normal.xyz refdir.xyz
 ///   cone-surface    attrib origin.xyz axis.xyz refdir.xyz sin-angle cos-angle major-radius radius-ratio
 ///   sphere-surface  attrib centre.xyz axis.xyz refdir.xyz radius
-///   torus-surface   attrib centre.xyz axis.xyz refdir.xyz major-radius minor-radius
+///   torus-surface   attrib centre.xyz axis.xyz major-radius minor-radius refdir.xyz
 ///   spline-surface  attrib degU degV nu nv rational knotsU[nu+degU+1] knotsV[nv+degV+1]
 ///                          ctrlpt[nu*nv](x y z [w if rational])
 ///   blend-surface   attrib underlying-surface
@@ -142,6 +144,20 @@ std::vector<SatRecord> Tokenize(const std::string& sat) {
 constexpr double kTol = 1e-6;
 constexpr double kPi = 3.14159265358979323846;
 
+[[nodiscard]] bool DetectPlantAsmSatStream(const std::vector<SatRecord>& recs) {
+  bool plantFaceLayout = false;
+  bool plantSolidHistory = false;
+  for (const SatRecord& r : recs) {
+    if (r.type == "persubent-acadSolidHistory-attrib")
+      plantSolidHistory = true;
+    if (r.type == "face" && r.fields.size() >= 9 && !r.fields[0].empty() && r.fields[0][0] == '$' &&
+        r.fields[0] != "$-1" && r.fields[1] == "-1" && r.fields[2] == "$-1")
+      plantFaceLayout = true;
+  }
+  // Civil 3D ACISOUT shares the face token layout but not Plant's solid-history attribs (issue #473).
+  return plantFaceLayout && plantSolidHistory;
+}
+
 /// The ACIS header's third line is `<mm-per-unit> <resabs> <resnor>`; a standalone `.sat` file
 /// carries no other unit hint. Returns 0 when the line cannot be read.
 double HeaderMmPerUnit(const std::string& sat) {
@@ -165,11 +181,228 @@ double HeaderMmPerUnit(const std::string& sat) {
 /// several records, extra pointer/parameter fields the hand-authored fixture schema this parser was
 /// first built against (ADR-051, GitHub #299) omits. Rather than fork every field accessor, this
 /// rewrites a real-format record's `fields` in place to that simplified layout — dropping the
-/// attribute/pattern/id fields and the fields this importer never reads (edge parameter ranges,
-/// curve/surface bound markers, `pcurve` back-pointers) and keeping only what `BuildConeFace` &c.
-/// index. Unknown record types (`color-adesk-attrib`, and `transform`, which `Build` reads with its
-/// real layout) are left untouched so `$n` record numbering stays intact (GitHub #473).
+/// attribute/pattern/id fields, curve/surface bound markers, and coedge back-pointers, while
+/// preserving edge parameter ranges needed for partial rim arcs (Plant ASM, issue #786). Unknown
+/// record types (`color-adesk-attrib`, and `transform`, which `Build` reads with its real layout)
+/// are left untouched so `$n` record numbering stays intact (GitHub #473).
 ///
+/// LibreDWG's ASM→SAT conversion (AcDs / ShapeManager, issue #786) can emit `shell`/`face`/`transform`
+/// records while the `body`/`lump` pair stays inside the binary `asmheader` wrapper. Append a
+/// fixture-schema body/lump that points at the first shell (and optional transform) so `Build` can run.
+/// Plant ASM loop records carry a bare record-id `-1` field and put `next/coedge/owner` at [3..5].
+/// Rewrite to the hand-authored fixture layout (`loop $-1 $next $coedge $owner`) \ref WalkLoop expects.
+/// Plant `body` records place the lump pointer at field [3] (`body $-1 -1 $-1 $lump $-1 $transform`).
+void AdaptPlantAsmBodyRecord(std::vector<SatRecord>& recs) {
+  for (SatRecord& r : recs) {
+    if (r.type != "body" || r.fields.size() < 4)
+      continue;
+    if (r.fields[1] != "-1" || r.fields[2] != "$-1")
+      continue;
+    if (r.fields[3].empty() || r.fields[3][0] != '$')
+      continue;
+    const std::string lump = r.fields[3];
+    const std::string transform =
+        (r.fields.size() > 5 && !r.fields[5].empty() && r.fields[5][0] == '$') ? r.fields[5] : std::string("$-1");
+    r.fields = {"$-1", lump, "$-1", transform};
+  }
+}
+
+void AdaptPlantAsmLumpShellRecords(std::vector<SatRecord>& recs) {
+  for (SatRecord& r : recs) {
+    if (r.type == "lump" && r.fields.size() >= 5 && r.fields[1] == "-1" && r.fields[4][0] == '$') {
+      const std::string owner = (r.fields.size() > 5 && r.fields[5][0] == '$') ? r.fields[5] : std::string("$-1");
+      r.fields = {"$-1", "$-1", r.fields[4], owner};
+      continue;
+    }
+    if (r.type == "shell" && r.fields.size() >= 6 && r.fields[1] == "-1") {
+      std::string facePtr = "$-1";
+      std::string ownerPtr = "$-1";
+      for (size_t i = 3; i < r.fields.size(); ++i) {
+        if (r.fields[i].empty() || r.fields[i][0] != '$' || r.fields[i] == "$-1")
+          continue;
+        const int id = static_cast<int>(std::strtol(r.fields[i].c_str() + 1, nullptr, 10));
+        if (id < 0 || static_cast<size_t>(id) >= recs.size())
+          continue;
+        if (recs[static_cast<size_t>(id)].type == "face" && facePtr == "$-1")
+          facePtr = r.fields[i];
+        else if (facePtr != "$-1")
+          ownerPtr = r.fields[i];
+      }
+      r.fields = {"$-1", "$-1", "$-1", facePtr, "$-1", ownerPtr};
+    }
+  }
+}
+
+void AdaptPlantAsmEdgeRecords(std::vector<SatRecord>& recs) {
+  auto pick = [](const SatRecord& r, std::initializer_list<size_t> idx) {
+    std::vector<std::string> out;
+    for (size_t i : idx)
+      out.push_back(i < r.fields.size() ? r.fields[i] : std::string("$-1"));
+    return out;
+  };
+  auto edgeHasParamRange = [](const std::vector<std::string>& f) {
+    if (f.size() < 8)
+      return false;
+    auto isNum = [](const std::string& tok) {
+      if (tok.empty() || tok[0] == '$')
+        return false;
+      char* end = nullptr;
+      const double v = std::strtod(tok.c_str(), &end);
+      return end != tok.c_str() && std::isfinite(v);
+    };
+    return f[3][0] == '$' && isNum(f[4]) && f[5][0] == '$' && isNum(f[6]);
+  };
+  for (SatRecord& r : recs) {
+    if (r.type != "edge" || r.fields.size() < 8 || r.fields[1] != "-1")
+      continue;
+    // Real Plant ASM: curve at [8] ($-1 for null-curve seams); [7] is a coedge back-pointer.
+    if (edgeHasParamRange(r.fields)) {
+      std::vector<std::string> nf = pick(r, {0, 3, 5, 8});
+      nf.push_back(r.fields[4]);
+      nf.push_back(r.fields[6]);
+      r.fields = std::move(nf);
+    } else if (r.fields.size() <= 5) {
+      r.fields = pick(r, {0, 1, 2, 3});
+    } else {
+      r.fields = pick(r, {0, 3, 5, 8});
+    }
+  }
+}
+
+/// Plant ASM skips \ref NormalizeRealAcisSchema (face records must stay on the Plant layout). Rewrite
+/// vertex/point/curve/surface numeric fields to the fixture layout the importer already expects.
+void AdaptPlantAsmVertexPointAndGeometryRecords(std::vector<SatRecord>& recs) {
+  auto pick = [](const SatRecord& r, std::initializer_list<size_t> idx) {
+    std::vector<std::string> out;
+    for (size_t i : idx)
+      out.push_back(i < r.fields.size() ? r.fields[i] : std::string("$-1"));
+    return out;
+  };
+  for (SatRecord& r : recs) {
+    if (r.type == "vertex") {
+      size_t pt = 4;
+      if (r.fields.size() > 4 && !r.fields[4].empty() && r.fields[4][0] != '$')
+        pt = 5;
+      r.fields = pick(r, {0, 3, pt});
+    } else if (r.type == "point") {
+      r.fields = pick(r, {0, 3, 4, 5});
+    } else if (r.type == "ellipse-curve") {
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});
+    } else if (r.type == "straight-curve") {
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8});
+    } else if (r.type == "plane-surface") {
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11});
+    } else if (r.type == "cone-surface") {
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, 16, 17, 12});
+      // Plant often leaves sin/cos as 0/1 placeholders; the ref-direction length is the section radius.
+      if (r.fields.size() > 12) {
+        double sinA = 0.0;
+        double cosA = 1.0;
+        char* end = nullptr;
+        sinA = std::strtod(r.fields[10].c_str(), &end);
+        if (end == r.fields[10].c_str())
+          sinA = 0.0;
+        end = nullptr;
+        cosA = std::strtod(r.fields[11].c_str(), &end);
+        if (end == r.fields[11].c_str())
+          cosA = 1.0;
+        if (std::fabs(sinA) < 1e-12 && std::fabs(cosA - 1.0) < 1e-12) {
+          double rx = 0.0;
+          double ry = 0.0;
+          double rz = 0.0;
+          end = nullptr;
+          rx = std::strtod(r.fields[7].c_str(), &end);
+          if (end != r.fields[7].c_str()) {
+            end = nullptr;
+            ry = std::strtod(r.fields[8].c_str(), &end);
+            end = nullptr;
+            rz = std::strtod(r.fields[9].c_str(), &end);
+            const double refLen = std::hypot(rx, std::hypot(ry, rz));
+            if (refLen > kTol)
+              r.fields[12] = std::to_string(refLen);
+          }
+        }
+      }
+    } else if (r.type == "torus-surface") {
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13});
+    } else if (r.type == "sphere-surface") {
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});
+    }
+  }
+}
+
+void AdaptPlantAsmCoedgeRecords(std::vector<SatRecord>& recs) {
+  for (SatRecord& r : recs) {
+    if (r.type != "coedge" || r.fields.size() < 8)
+      continue;
+    if (r.fields[1] != "-1")
+      continue;
+    if (r.fields.size() < 8 || r.fields[3].empty() || r.fields[3][0] != '$' || r.fields[6].empty() ||
+        r.fields[6][0] != '$')
+      continue;
+    std::string sense = r.fields[7];
+    if (sense == "I")
+      sense = "reversed";
+    else if (sense == "F")
+      sense = "forward";
+    const std::string owner =
+        (r.fields.size() > 8 && !r.fields[8].empty() && r.fields[8][0] == '$') ? r.fields[8] : std::string("$-1");
+    const std::string partner =
+        (r.fields[5].empty() || r.fields[5][0] != '$') ? std::string("$-1") : r.fields[5];
+    r.fields = {"$-1", r.fields[3], r.fields[4], partner, r.fields[6], sense, owner};
+  }
+}
+
+void AdaptPlantAsmLoopRecords(std::vector<SatRecord>& recs) {
+  for (SatRecord& r : recs) {
+    if (r.type != "loop" || r.fields.size() < 6)
+      continue;
+    if (r.fields[1] != "-1" || r.fields[2] != "$-1")
+      continue;
+    if (r.fields[3].empty() || r.fields[3][0] != '$' || r.fields[4].empty() || r.fields[4][0] != '$')
+      continue;
+    const std::string owner = (r.fields.size() > 5 && !r.fields[5].empty()) ? r.fields[5] : std::string("$-1");
+    r.fields = {"$-1", r.fields[3], r.fields[4], owner};
+  }
+}
+
+void SynthesizeBodyLumpIfMissing(std::vector<SatRecord>& recs) {
+  for (const SatRecord& r : recs)
+    if (r.type == "body")
+      return;
+  int shellIdx = -1;
+  for (size_t i = 0; i < recs.size(); ++i) {
+    if (recs[i].type == "shell") {
+      shellIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  if (shellIdx < 0)
+    return;
+  int transformIdx = -1;
+  for (size_t i = 0; i < recs.size(); ++i) {
+    if (recs[i].type == "transform") {
+      transformIdx = static_cast<int>(i);
+      break;
+    }
+  }
+  const int lumpIdx = static_cast<int>(recs.size());
+  SatRecord lump;
+  lump.type = "lump";
+  // Real ACIS layout (pre-`NormalizeRealAcisSchema`); field 4 is the shell pointer.
+  lump.fields = {"$-1", "-1", "$-1", "$-1", "$" + std::to_string(shellIdx), "$-1"};
+  recs.push_back(std::move(lump));
+  SatRecord body;
+  body.type = "body";
+  body.fields = {"$-1",
+                 "-1",
+                 "$-1",
+                 "$" + std::to_string(lumpIdx),
+                 "$-1",
+                 transformIdx >= 0 ? "$" + std::to_string(transformIdx) : std::string("$-1")};
+  recs.push_back(std::move(body));
+}
+
 /// Detection: a real-format `body` record's second field is the bare id `-1`; the fixture schema's
 /// is the `$lump` pointer. Returns true when the stream was real-format (and was rewritten).
 bool NormalizeRealAcisSchema(std::vector<SatRecord>& recs) {
@@ -181,6 +414,24 @@ bool NormalizeRealAcisSchema(std::vector<SatRecord>& recs) {
     }
   if (body == nullptr || body->fields.size() < 2 || body->fields[1].empty() || body->fields[1][0] == '$')
     return false;  // fixture schema, or no body — leave it to the existing path / error
+  // LibreDWG Plant ASM (issue #786): same face token layout as some Civil exports, but Plant also carries
+  // `persubent-acadSolidHistory-attrib`. Skip real-ACIS rewrite only for that stream — Civil flange (#473)
+  // shares the face layout and still needs `NormalizeRealAcisSchema`.
+  if (DetectPlantAsmSatStream(recs))
+    return false;
+
+  auto edgeHasParamRange = [](const std::vector<std::string>& f) {
+    if (f.size() < 8)
+      return false;
+    auto isNum = [](const std::string& tok) {
+      if (tok.empty() || tok[0] == '$')
+        return false;
+      char* end = nullptr;
+      const double v = std::strtod(tok.c_str(), &end);
+      return end != tok.c_str() && std::isfinite(v);
+    };
+    return f[3][0] == '$' && isNum(f[4]) && f[5][0] == '$' && isNum(f[6]) && f[7][0] == '$';
+  };
 
   auto pick = [](const SatRecord& r, std::initializer_list<size_t> idx) {
     std::vector<std::string> out;
@@ -197,8 +448,26 @@ bool NormalizeRealAcisSchema(std::vector<SatRecord>& recs) {
     else if (r.type == "face")       r.fields = pick(r, {0, 3, 4, 5, 7, 8, 9});        // attrib next loop owner surface sense sides
     else if (r.type == "loop")       r.fields = pick(r, {0, 3, 4});                    // attrib next coedge
     else if (r.type == "coedge")     r.fields = pick(r, {0, 3, 4, 5, 6, 7});           // attrib next prev partner edge sense
-    else if (r.type == "edge")       r.fields = pick(r, {0, 3, 5, 8});                 // attrib start-vtx end-vtx curve ([7]=coedge, skipped)
-    else if (r.type == "vertex")     r.fields = pick(r, {0, 3, 4});                    // attrib edge point
+    else if (r.type == "edge") {
+      // Real ASM: start-vtx, t0, end-vtx, t1, coedge, curve — curve is at [8] ($-1 for null-curve seams).
+      if (edgeHasParamRange(r.fields)) {
+        std::vector<std::string> nf = pick(r, {0, 3, 5, 8});
+        nf.push_back(r.fields[4]);
+        nf.push_back(r.fields[6]);
+        r.fields = std::move(nf);
+      } else if (r.fields.size() <= 5) {
+        r.fields = pick(r, {0, 1, 2, 3});  // hand-authored fixture: attrib start end curve
+      } else {
+        r.fields = pick(r, {0, 3, 5, 8});
+      }
+    }
+    else if (r.type == "vertex") {
+      // Real Civil 3D SAT: point at [4]. Plant ASM convert inserts a flag int at [4], point at [5].
+      size_t pt = 4;
+      if (r.fields.size() > 4 && !r.fields[4].empty() && r.fields[4][0] != '$')
+        pt = 5;
+      r.fields = pick(r, {0, 3, pt}); // attrib edge point
+    }
     else if (r.type == "point")      r.fields = pick(r, {0, 3, 4, 5});                 // attrib x y z
     else if (r.type == "ellipse-curve")
       r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});                        // attrib centre[3] normal[3] major[3] ratio
@@ -208,51 +477,57 @@ bool NormalizeRealAcisSchema(std::vector<SatRecord>& recs) {
       r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11});                            // attrib origin[3] normal[3] refdir[3]
     else if (r.type == "cone-surface")
       r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, 16, 17, 12});            // attrib origin[3] axis[3] refdir[3] sin cos radius ratio
+    else if (r.type == "torus-surface")
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13});                    // attrib centre[3] axis[3] refdir[3] major minor
+    else if (r.type == "sphere-surface")
+      r.fields = pick(r, {0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});                       // attrib centre[3] radius axis[3] refdir[3]
     // else: attribute records, transform, or an unknown type — untouched.
   }
   return true;
 }
 
-/// Decompose a proper rotation matrix (row-major `m[0..8]`) into an axis/angle. Returns false only
-/// when `m` is not close to a rotation (its trace gives an out-of-range angle); an angle near zero
-/// yields `angleRad == 0` with an arbitrary unit axis.
-bool RotationMatrixToAxisAngle(const double m[9], Vec3* axis, double* angleRad) {
-  const double trace = m[0] + m[4] + m[8];
-  double c = (trace - 1.0) * 0.5;
-  if (c > 1.0) c = 1.0;
-  if (c < -1.0) c = -1.0;
-  const double angle = std::acos(c);
-  *angleRad = angle;
-  if (angle < 1e-9) {
-    *axis = Vec3{0.0, 0.0, 1.0};
-    return true;
-  }
-  if (kPi - angle < 1e-6) {
-    // 180 degrees: R is symmetric, axis from the largest diagonal term of (R + I)/2.
-    const double xx = (m[0] + 1.0) * 0.5, yy = (m[4] + 1.0) * 0.5, zz = (m[8] + 1.0) * 0.5;
-    Vec3 a{};
-    if (xx >= yy && xx >= zz) {
-      a.x = std::sqrt(std::max(xx, 0.0));
-      a.y = (m[1] + m[3]) * 0.25 / (a.x != 0.0 ? a.x : 1.0);
-      a.z = (m[2] + m[6]) * 0.25 / (a.x != 0.0 ? a.x : 1.0);
-    } else if (yy >= zz) {
-      a.y = std::sqrt(std::max(yy, 0.0));
-      a.x = (m[1] + m[3]) * 0.25 / (a.y != 0.0 ? a.y : 1.0);
-      a.z = (m[5] + m[7]) * 0.25 / (a.y != 0.0 ? a.y : 1.0);
-    } else {
-      a.z = std::sqrt(std::max(zz, 0.0));
-      a.x = (m[2] + m[6]) * 0.25 / (a.z != 0.0 ? a.z : 1.0);
-      a.y = (m[5] + m[7]) * 0.25 / (a.z != 0.0 ? a.z : 1.0);
-    }
-    *axis = ray3d::Normalize(a);
-    return ray3d::Length(*axis) > 0.5;
-  }
-  const double s = 2.0 * std::sin(angle);
-  *axis = ray3d::Normalize(Vec3{(m[7] - m[5]) / s, (m[2] - m[6]) / s, (m[3] - m[1]) / s});
-  return ray3d::Length(*axis) > 0.5;
+bool IsFinite(const Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
+
+bool TryFieldDouble(const std::string& tok, double* out) {
+  if (tok.empty() || tok[0] == '$')
+    return false;
+  char* end = nullptr;
+  const double v = std::strtod(tok.c_str(), &end);
+  if (end == tok.c_str() || !std::isfinite(v))
+    return false;
+  *out = v;
+  return true;
 }
 
-bool IsFinite(const Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
+bool TryFieldVec3(const std::vector<std::string>& fields, size_t field0, Vec3* out) {
+  if (field0 + 2 >= fields.size())
+    return false;
+  return TryFieldDouble(fields[field0], &out->x) && TryFieldDouble(fields[field0 + 1], &out->y) &&
+         TryFieldDouble(fields[field0 + 2], &out->z);
+}
+
+size_t FindFieldWord(const std::vector<std::string>& fields, const char* word) {
+  for (size_t i = 0; i < fields.size(); ++i) {
+    if (fields[i] == word)
+      return i;
+  }
+  return fields.size();
+}
+
+size_t FindFieldWordAfter(const std::vector<std::string>& fields, const char* word, size_t afterIdx) {
+  for (size_t i = afterIdx + 1; i < fields.size(); ++i) {
+    if (fields[i] == word)
+      return i;
+  }
+  return fields.size();
+}
+
+double SignedAreaPoly(const std::vector<curveisect::Vec2>& poly) {
+  double a = 0.0;
+  for (size_t i = 0, n = poly.size(); i < n; ++i)
+    a += poly[i].x * poly[(i + 1) % n].y - poly[(i + 1) % n].x * poly[i].y;
+  return 0.5 * a;
+}
 
 struct BuiltEdge {
   int edgeIndex = -1;
@@ -263,6 +538,19 @@ struct LoopWalk {
   std::vector<brep::EdgeUse> uses;
 };
 
+void RotateFrameInPlace(ucs::Ucs& f, const Vec3& axisPoint, const Vec3& axisUnit, double angleRad) {
+  f.origin = ray3d::RotatePointAboutAxis(f.origin, axisPoint, axisUnit, angleRad);
+  f.xAxis = ray3d::RotateVectorAboutAxis(f.xAxis, axisUnit, angleRad);
+  f.yAxis = ray3d::RotateVectorAboutAxis(f.yAxis, axisUnit, angleRad);
+  f.zAxis = ray3d::RotateVectorAboutAxis(f.zAxis, axisUnit, angleRad);
+}
+
+void RotateSurfaceInPlace(brep::Surface& sf, const Vec3& axisPoint, const Vec3& axisUnit, double angleRad) {
+  RotateFrameInPlace(sf.frame, axisPoint, axisUnit, angleRad);
+  if (sf.kind == brep::SurfaceKind::Nurbs)
+    sf.patch = nurbs::Rotate(sf.patch, axisPoint, axisUnit, angleRad);
+}
+
 // ---------------------------------------------------------------------------------------------
 // The importer. One instance per body; every method returns false and sets `error_` on the first
 // unsupported or malformed thing it finds (see file header — no exceptions in this codebase).
@@ -270,15 +558,18 @@ struct LoopWalk {
 
 class Importer {
  public:
-  Importer(std::vector<SatRecord> recs, std::string label) : recs_(std::move(recs)), label_(std::move(label)) {}
+  Importer(std::vector<SatRecord> recs, std::string label, bool plantAsm)
+      : recs_(std::move(recs)), label_(std::move(label)), plantAsm_(plantAsm) {}
 
-  bool Run(brep::Solid* out) {
-    if (!Build(out)) {
+  bool Run(brep::Solid* out, bool validateSolid) {
+    if (!Build(out, validateSolid)) {
       error_ = (label_.empty() ? std::string() : (label_ + ": ")) + error_;
       return false;
     }
     return true;
   }
+
+  bool Run(brep::Solid* out) { return Run(out, true); }
 
   const std::string& Error() const { return error_; }
 
@@ -319,6 +610,129 @@ class Importer {
       return Fail(std::string("malformed ") + what + " pointer in a '" + r.type + "' record");
     *out = static_cast<int>(v);
     return true;
+  }
+
+  [[nodiscard]] bool TryPtr(const SatRecord& r, size_t field, int* out) const {
+    if (field >= r.fields.size() || r.fields[field].empty() || r.fields[field][0] != '$')
+      return false;
+    const char* digits = r.fields[field].c_str() + 1;
+    char* end = nullptr;
+    const long v = std::strtol(digits, &end, 10);
+    if (end == digits || *end != '\0')
+      return false;
+    *out = static_cast<int>(v);
+    return true;
+  }
+
+  [[nodiscard]] bool IsPlantAsmFaceRecord(const SatRecord& face) const {
+    return plantAsm_ && face.type == "face" && face.fields.size() >= 9 && !face.fields[0].empty() &&
+           face.fields[0][0] == '$' && face.fields[0] != "$-1" && face.fields[1] == "-1" &&
+           face.fields[2] == "$-1";
+  }
+
+  [[nodiscard]] bool IsSurfaceRecord(int recId) const {
+    const SatRecord* r = At(recId);
+    if (r == nullptr)
+      return false;
+    return r->type == "plane-surface" || r->type == "cone-surface" || r->type == "sphere-surface" ||
+           r->type == "torus-surface" || r->type == "spline-surface" || r->type == "blend-surface" ||
+           r->type == "sweep-surface";
+  }
+
+  /// Plant face layout: `$attrib -1 $-1 $next $loop $shell $subshell $surface sense sides`. The
+  /// surface pointer is explicit — record order is not (the next face often precedes this face's
+  /// surface record), so never infer it from position.
+  [[nodiscard]] int ResolvePlantFaceSurfaceId(const SatRecord& face) const {
+    int surfaceId = -1;
+    if (!TryPtr(face, 7, &surfaceId) || !IsSurfaceRecord(surfaceId))
+      return -1;
+    return surfaceId;
+  }
+
+  [[nodiscard]] bool LoopOwnerMatchesFace(int loopRecIdx, int faceRecIdx) const {
+    const SatRecord* loop = At(loopRecIdx);
+    if (loop == nullptr || loop->type != "loop" || loop->fields.size() < 4)
+      return false;
+    int ownerId = 0;
+    if (!TryPtr(*loop, 3, &ownerId))
+      return false;
+    return ownerId == faceRecIdx;
+  }
+
+  static void DedupeIdenticalLoopWalks(std::vector<LoopWalk>* loops) {
+    if (loops == nullptr || loops->size() < 2)
+      return;
+    auto signature = [](const LoopWalk& lw) {
+      std::vector<int> sig;
+      sig.reserve(lw.uses.size() * 2);
+      for (const brep::EdgeUse& u : lw.uses) {
+        sig.push_back(u.edge);
+        sig.push_back(u.reversed ? 1 : 0);
+      }
+      return sig;
+    };
+    std::vector<LoopWalk> unique;
+    unique.reserve(loops->size());
+    for (LoopWalk& lw : *loops) {
+      const std::vector<int> sig = signature(lw);
+      bool seen = false;
+      for (const LoopWalk& prior : unique) {
+        if (signature(prior) == sig) {
+          seen = true;
+          break;
+        }
+      }
+      if (!seen)
+        unique.push_back(std::move(lw));
+    }
+    *loops = std::move(unique);
+  }
+
+  bool AppendLoopChain(int startLoopId, brep::Solid* out, std::unordered_set<int>* seenLoopRec,
+                       std::vector<LoopWalk>* loops) {
+    int lId = startLoopId;
+    int guardLoops = 0;
+    while (lId >= 0) {
+      if (seenLoopRec->count(lId) != 0)
+        break;
+      if (++guardLoops > 64)
+        return Fail("face has an implausible number of loops (possible ACIS record corruption)");
+      seenLoopRec->insert(lId);
+      LoopWalk lw;
+      if (!WalkLoop(lId, out, &lw))
+        return false;
+      if (!lw.uses.empty())
+        loops->push_back(std::move(lw));
+      const SatRecord* lr = nullptr;
+      if (!Req(lId, "loop", &lr))
+        return false;
+      int lNext = -1;
+      if (!TryPtr(*lr, 1, &lNext))
+        break;
+      lId = lNext;
+    }
+    return true;
+  }
+
+  bool CollectLoopsForFace(int faceRecIdx, const SatRecord& face, brep::Solid* out, std::vector<LoopWalk>* loops) {
+    loops->clear();
+    std::unordered_set<int> seenLoopRec;
+    if (IsPlantAsmFaceRecord(face)) {
+      for (size_t i = 0; i < recs_.size(); ++i) {
+        if (recs_[i].type != "loop")
+          continue;
+        if (!LoopOwnerMatchesFace(static_cast<int>(i), faceRecIdx))
+          continue;
+        if (!AppendLoopChain(static_cast<int>(i), out, &seenLoopRec, loops))
+          return false;
+      }
+      DedupeIdenticalLoopWalks(loops);
+      return true;
+    }
+    int loopId = 0;
+    if (!Ptr(face, 2, "face.loop", &loopId))
+      return false;
+    return AppendLoopChain(loopId, out, &seenLoopRec, loops);
   }
 
   bool Num(const SatRecord& r, size_t field, const char* what, double* out) {
@@ -385,7 +799,8 @@ class Importer {
   }
 
   bool BuildCircularArc(const SatRecord& c, const Vec3& v0Pos, const Vec3& v1Pos, bool full,
-                         brep::Edge* out) {
+                         brep::Edge* out, bool haveEdgeParams = false, double edgeT0 = 0.0,
+                         double edgeT1 = 0.0) {
     Vec3 centre{}, normalRaw{}, majorAxis{};
     double ratio = 0.0;
     if (!Vec(c, 1, "ellipse-curve.centre", &centre) || !Vec(c, 4, "ellipse-curve.normal", &normalRaw) ||
@@ -414,7 +829,11 @@ class Importer {
     out->kind = brep::CurveKind::Arc;
     out->frame = f2;
     out->radius = radius;
-    if (full) {
+    if (haveEdgeParams) {
+      out->sweep = edgeT1 - edgeT0;
+      if (out->sweep <= 1e-12)
+        out->sweep = 2.0 * kPi;
+    } else if (full) {
       out->sweep = 2.0 * kPi;
     } else {
       const Vec3 r1 = ray3d::Sub(v1Pos, centre);
@@ -423,6 +842,202 @@ class Importer {
         sweep += 2.0 * kPi;
       out->sweep = sweep;
     }
+    return true;
+  }
+
+  /// Plant ASM `intcurve-curve` records embed the two analytic surfaces whose intersection is the
+  /// edge (torus + plane fillets on piping). NURBS knot/control data is ignored; marching uses
+  /// \ref brep::CurveKind::Intersection like the kernel's B-rep tests.
+  bool SurfaceFromIntcurveEmbeddedTorus(const SatRecord& c, size_t torusWord, brep::Surface* out) {
+    if (torusWord + 11 >= c.fields.size())
+      return Fail("intcurve-curve embedded torus parameters are truncated");
+    Vec3 centre{}, axisRaw{}, refRaw{};
+    double majorR = 0.0;
+    double minorR = 0.0;
+    if (!TryFieldVec3(c.fields, torusWord + 1, &centre) || !TryFieldVec3(c.fields, torusWord + 4, &axisRaw) ||
+        !TryFieldDouble(c.fields[torusWord + 7], &majorR) || !TryFieldDouble(c.fields[torusWord + 8], &minorR) ||
+        !TryFieldVec3(c.fields, torusWord + 9, &refRaw))
+      return Fail("intcurve-curve embedded torus has malformed numeric fields");
+    if (!IsFinite(centre) || !IsFinite(axisRaw) || !IsFinite(refRaw))
+      return Fail("intcurve-curve embedded torus has a non-finite placement vector");
+    if (!(majorR > kTol) || !(minorR > kTol))
+      return Fail("intcurve-curve embedded torus has a non-positive major or minor radius");
+    if (std::fabs(majorR - minorR) < kTol)
+      return Fail("intcurve-curve embedded torus is degenerate (equal major and minor radii)");
+    ucs::Ucs frame;
+    if (!TorusFrameFromAcis(centre, axisRaw, refRaw, &frame))
+      return Fail("intcurve-curve embedded torus has a degenerate axis or ref direction");
+    out->kind = brep::SurfaceKind::Torus;
+    out->frame = frame;
+    out->radius = majorR;
+    out->radius2 = minorR;
+    out->inward = false;
+    return true;
+  }
+
+  bool SurfaceFromIntcurveEmbeddedCone(const SatRecord& c, size_t coneWord, const Vec3& v0Pos, const Vec3& v1Pos,
+                                       brep::Surface* out) {
+    if (coneWord + 10 >= c.fields.size())
+      return Fail("intcurve-curve embedded cone parameters are truncated");
+    Vec3 axisOrigin{}, axisRaw{};
+    if (!TryFieldVec3(c.fields, coneWord + 1, &axisOrigin) || !TryFieldVec3(c.fields, coneWord + 4, &axisRaw))
+      return Fail("intcurve-curve embedded cone has malformed origin or axis");
+    axisRaw = ray3d::Normalize(axisRaw);
+    if (!IsFinite(axisOrigin) || !IsFinite(axisRaw) || ray3d::Length(axisRaw) < 0.5)
+      return Fail("intcurve-curve embedded cone has a degenerate origin or axis");
+    // Plant ASM matches raw `cone-surface`: refdir occupies [7..9]; sin/cos/major follow the `F F` flags.
+    double sinA = 0.0;
+    double cosA = 1.0;
+    double majorRadius = 0.0;
+    bool haveMajor = false;
+    for (size_t i = coneWord + 10; i + 2 < c.fields.size(); ++i) {
+      if (c.fields[i] == "F" || c.fields[i] == "forward_v" || c.fields[i] == "nullbs")
+        continue;
+      double a = 0.0;
+      double b = 0.0;
+      double m = 0.0;
+      if (TryFieldDouble(c.fields[i], &a) && TryFieldDouble(c.fields[i + 1], &b) &&
+          TryFieldDouble(c.fields[i + 2], &m) && m > kTol) {
+        sinA = a;
+        cosA = b;
+        majorRadius = m;
+        haveMajor = true;
+        break;
+      }
+    }
+    if (!haveMajor) {
+      if (!TryFieldDouble(c.fields[coneWord + 7], &majorRadius) || !(majorRadius > kTol))
+        return Fail("intcurve-curve embedded cone has a non-positive major radius");
+      sinA = 0.0;
+      cosA = 1.0;
+    }
+    if (std::fabs(cosA) < 1e-12)
+      return Fail("intcurve-curve embedded cone has a degenerate half-angle");
+    double tMin = 0.0;
+    double tMax = 0.0;
+    bool first = true;
+    for (const Vec3& v : {v0Pos, v1Pos}) {
+      const double t = ray3d::Dot(ray3d::Sub(v, axisOrigin), axisRaw);
+      if (first || t < tMin)
+        tMin = t;
+      if (first || t > tMax)
+        tMax = t;
+      first = false;
+    }
+    const double pad = std::max(0.05 * (tMax - tMin), 0.01);
+    tMin -= pad;
+    tMax += pad;
+    const double height = tMax - tMin;
+    if (!(height > kTol))
+      return Fail("intcurve-curve embedded cone has zero axial extent along the edge");
+    const Vec3 base = ray3d::Add(axisOrigin, ray3d::Scale(axisRaw, tMin));
+    ucs::Ucs frame;
+    if (!ucs::FromNormal(base, axisRaw, &frame))
+      return Fail("intcurve-curve embedded cone has a degenerate axis");
+    const bool isCylinder = std::fabs(sinA) < 1e-9 && cosA > 0.0;
+    out->kind = isCylinder ? brep::SurfaceKind::Cylinder : brep::SurfaceKind::Cone;
+    out->frame = frame;
+    out->height = height;
+    out->inward = false;
+    if (isCylinder) {
+      out->radius = majorRadius;
+    } else {
+      const double tanA = sinA / cosA;
+      const double rBase = majorRadius + tMin * tanA;
+      const double rTop = majorRadius + tMax * tanA;
+      if (!(rBase > kTol) || !(rTop >= 0.0))
+        return Fail("intcurve-curve embedded cone produces a non-positive radius over the edge extent");
+      out->radius = rBase;
+      out->radius2 = rTop;
+    }
+    return true;
+  }
+
+  bool SurfaceFromIntcurveEmbeddedPlane(const SatRecord& c, size_t planeWord, brep::Surface* out) {
+    if (planeWord + 9 >= c.fields.size())
+      return Fail("intcurve-curve embedded plane parameters are truncated");
+    Vec3 origin{}, normalRaw{};
+    if (!TryFieldVec3(c.fields, planeWord + 1, &origin) || !TryFieldVec3(c.fields, planeWord + 4, &normalRaw))
+      return Fail("intcurve-curve embedded plane has malformed numeric fields");
+    const Vec3 normalN = ray3d::Normalize(normalRaw);
+    if (!IsFinite(origin) || !IsFinite(normalN) || ray3d::Length(normalN) < 0.5)
+      return Fail("intcurve-curve embedded plane has a degenerate origin or normal");
+    ucs::Ucs frame;
+    if (!ucs::FromNormal(origin, normalN, &frame))
+      return Fail("intcurve-curve embedded plane has a degenerate normal");
+    out->kind = brep::SurfaceKind::Plane;
+    out->frame = frame;
+    out->inward = false;
+    return true;
+  }
+
+  bool IntcurveMarchWitness(const SatRecord& c, size_t torusWord, const Vec3& v0Pos, const Vec3& v1Pos,
+                            Vec3* witness) {
+    std::vector<Vec3> samples;
+    for (size_t i = 5; i + 2 < torusWord; ++i) {
+      Vec3 p{};
+      if (!TryFieldVec3(c.fields, i, &p) || !IsFinite(p))
+        continue;
+      samples.push_back(p);
+      i += 2;
+    }
+    if (samples.empty()) {
+      *witness = ray3d::Scale(ray3d::Add(v0Pos, v1Pos), 0.5);
+      return true;
+    }
+    const Vec3 mid = ray3d::Scale(ray3d::Add(v0Pos, v1Pos), 0.5);
+    size_t best = samples.size() / 2;
+    double bestScore = -1.0;
+    for (size_t k = 0; k < samples.size(); ++k) {
+      const double score =
+          ray3d::Length(ray3d::Sub(samples[k], mid)) + 0.25 * ray3d::Length(ray3d::Sub(samples[k], v0Pos)) +
+          0.25 * ray3d::Length(ray3d::Sub(samples[k], v1Pos));
+      if (score > bestScore) {
+        bestScore = score;
+        best = k;
+      }
+    }
+    *witness = samples[best];
+    return true;
+  }
+
+  bool BuildIntcurveIntersectionEdge(const SatRecord& c, const Vec3& v0Pos, const Vec3& v1Pos, brep::Edge* out) {
+    const size_t torusWord = FindFieldWord(c.fields, "torus");
+    brep::Surface surfA;
+    brep::Surface surfB;
+    size_t witnessBefore = c.fields.size();
+    if (torusWord < c.fields.size()) {
+      const size_t planeWord = FindFieldWordAfter(c.fields, "plane", torusWord);
+      const size_t coneWord = FindFieldWordAfter(c.fields, "cone", torusWord);
+      if (!SurfaceFromIntcurveEmbeddedTorus(c, torusWord, &surfA))
+        return false;
+      if (planeWord < c.fields.size()) {
+        if (!SurfaceFromIntcurveEmbeddedPlane(c, planeWord, &surfB))
+          return false;
+      } else if (coneWord < c.fields.size()) {
+        if (!SurfaceFromIntcurveEmbeddedCone(c, coneWord, v0Pos, v1Pos, &surfB))
+          return false;
+      } else {
+        return Fail("intcurve-curve does not embed plane or cone with the torus (only those shapes are supported)");
+      }
+      witnessBefore = torusWord;
+    } else {
+      const size_t cone0 = FindFieldWord(c.fields, "cone");
+      const size_t cone1 = FindFieldWordAfter(c.fields, "cone", cone0);
+      if (cone0 >= c.fields.size() || cone1 >= c.fields.size())
+        return Fail("intcurve-curve does not embed torus+mate or two cones (Plant intersection expected)");
+      if (!SurfaceFromIntcurveEmbeddedCone(c, cone0, v0Pos, v1Pos, &surfA))
+        return false;
+      if (!SurfaceFromIntcurveEmbeddedCone(c, cone1, v0Pos, v1Pos, &surfB))
+        return false;
+      witnessBefore = cone1;
+    }
+    Vec3 witness{};
+    if (!IntcurveMarchWitness(c, witnessBefore, v0Pos, v1Pos, &witness))
+      return false;
+    out->kind = brep::CurveKind::Intersection;
+    out->isectSurfaces = {surfA, surfB};
+    out->frame.origin = witness;
     return true;
   }
 
@@ -439,25 +1054,48 @@ class Importer {
     if (!Ptr(*e, 1, "edge.start-vertex", &v0Id) || !Ptr(*e, 2, "edge.end-vertex", &v1Id) ||
         !Ptr(*e, 3, "edge.curve", &curveId))
       return false;
-    const SatRecord* curve = nullptr;
-    if (!Req(curveId, "curve", &curve))
-      return false;
+    if (curveId < 0 && v0Id == v1Id) {
+      // Null-curve seam on one vertex — no geometric edge; do not instantiate orphan vertices.
+      outEdge->edgeIndex = -1;
+      edgeCache_[edgeRecId] = *outEdge;
+      return true;
+    }
     int vi0 = 0, vi1 = 0;
     if (!VertexOf(v0Id, out, &vi0) || !VertexOf(v1Id, out, &vi1))
       return false;
     brep::Edge built;
+    built.v0 = vi0;
+    built.v1 = vi1;
+    if (curveId < 0) {
+      built.kind = brep::CurveKind::Line;
+      const int idx = static_cast<int>(out->edges.size());
+      out->edges.push_back(built);
+      outEdge->edgeIndex = idx;
+      edgeCache_[edgeRecId] = *outEdge;
+      return true;
+    }
+    double edgeT0 = 0.0;
+    double edgeT1 = 0.0;
+    const bool haveEdgeParams =
+        e->fields.size() >= 6 && TryFieldDouble(e->fields[4], &edgeT0) && TryFieldDouble(e->fields[5], &edgeT1);
+    const SatRecord* curve = nullptr;
+    if (!Req(curveId, "curve", &curve))
+      return false;
     if (curve->type == "straight-curve") {
       built.kind = brep::CurveKind::Line;
     } else if (curve->type == "ellipse-curve") {
-      const bool full = (v0Id == v1Id);
+      const bool full = (v0Id == v1Id) && !haveEdgeParams;
       if (!BuildCircularArc(*curve, out->vertices[static_cast<size_t>(vi0)].p,
-                             out->vertices[static_cast<size_t>(vi1)].p, full, &built))
+                             out->vertices[static_cast<size_t>(vi1)].p, full, &built, haveEdgeParams,
+                             edgeT0, edgeT1))
+        return false;
+    } else if (curve->type == "intcurve-curve") {
+      if (!BuildIntcurveIntersectionEdge(*curve, out->vertices[static_cast<size_t>(vi0)].p,
+                                         out->vertices[static_cast<size_t>(vi1)].p, &built))
         return false;
     } else {
       return Fail("edge curve kind '" + curve->type + "' is not supported by this importer (see issue #300)");
     }
-    built.v0 = vi0;
-    built.v1 = vi1;
     const int idx = static_cast<int>(out->edges.size());
     out->edges.push_back(built);
     outEdge->edgeIndex = idx;
@@ -484,15 +1122,44 @@ class Importer {
       std::string sense;
       if (!Ptr(*co, 4, "coedge.edge", &edgeRecId) || !Word(*co, 5, "coedge.sense", &sense))
         return false;
+      // Real ASM SAT (Plant 3D) encodes coedge sense as I/F, not the Civil 3D text "forward"/"reversed".
+      // I/F are flipped relative to edge direction compared to the text tokens (issue #786 torus loop).
+      if (sense == "I")
+        sense = "reversed";
+      else if (sense == "F")
+        sense = "forward";
       if (sense != "forward" && sense != "reversed")
         return Fail("coedge sense '" + sense + "' is not 'forward'/'reversed'");
       BuiltEdge be;
       if (!EdgeOf(edgeRecId, out, &be))
         return false;
-      brep::EdgeUse use;
-      use.edge = be.edgeIndex;
-      use.reversed = (sense == "reversed");
-      outLw->uses.push_back(use);
+      if (be.edgeIndex < 0 && plantAsm_) {
+        int partnerCoIdx = -1;
+        if (TryPtr(*co, 3, &partnerCoIdx) && partnerCoIdx >= 0) {
+          const SatRecord* pco = nullptr;
+          if (Req(partnerCoIdx, "coedge", &pco)) {
+            int pEdgeRecId = 0;
+            std::string pSense;
+            if (Ptr(*pco, 4, "coedge.edge", &pEdgeRecId) && Word(*pco, 5, "coedge.sense", &pSense)) {
+              if (pSense == "I")
+                pSense = "reversed";
+              else if (pSense == "F")
+                pSense = "forward";
+              BuiltEdge pbe;
+              if (EdgeOf(pEdgeRecId, out, &pbe) && pbe.edgeIndex >= 0) {
+                be = pbe;
+                sense = (sense == "reversed") ? "forward" : "reversed";
+              }
+            }
+          }
+        }
+      }
+      if (be.edgeIndex >= 0) {
+        brep::EdgeUse use;
+        use.edge = be.edgeIndex;
+        use.reversed = (sense == "reversed");
+        outLw->uses.push_back(use);
+      }
       int nextCo = 0;
       if (!Ptr(*co, 1, "coedge.next", &nextCo))
         return false;
@@ -501,7 +1168,7 @@ class Importer {
       coId = nextCo;
     }
     if (outLw->uses.empty())
-      return Fail("loop has no coedges");
+      return true;  // degenerate loop (apex seam of null-curve edges only) — caller may skip
     return true;
   }
 
@@ -642,6 +1309,8 @@ class Importer {
   /// here but then fail `Validate` with `NotClosed`, refused rather than silently misimported.
   bool BuildConeGeneralTrim(const brep::Solid& out, const LoopWalk& loop, const ucs::Ucs& frame,
                              brep::Face* outFace) {
+    if (ApplyConeRectangularTrimFromConstantVRim(out, loop, outFace->surface.height, frame, outFace))
+      return true;
     constexpr int kArcSamples = 8;
     std::vector<curveisect::Vec2> poly;
     bool haveRaw = false;
@@ -675,8 +1344,417 @@ class Importer {
     }
     if (poly.size() < 3)
       return Fail("cylindrical/conical face's general trim loop has too few points to enclose an area");
-    // `brep::Validate` requires the outer trim loop to wind counter-clockwise (positive signed
-    // area); the raw ACIS coedge order can list it either way, so normalise here.
+    if (SignedAreaPoly(poly) < 0.0)
+      std::reverse(poly.begin(), poly.end());
+    double uLo = poly[0].x, uHi = poly[0].x, vLo = poly[0].y, vHi = poly[0].y;
+    for (const curveisect::Vec2& p : poly) {
+      uLo = std::min(uLo, p.x);
+      uHi = std::max(uHi, p.x);
+      vLo = std::min(vLo, p.y);
+      vHi = std::max(vHi, p.y);
+    }
+    outFace->uStart = uLo;
+    outFace->uEnd = uHi;
+    outFace->vStart = vLo;
+    outFace->vEnd = vHi;
+    outFace->paramLoops.assign(1, std::move(poly));
+    return true;
+  }
+
+  std::vector<curveisect::Vec2> ProjectConeLoopToParam(const brep::Solid& solid, const LoopWalk& loop,
+                                                         const ucs::Ucs& frame) {
+    constexpr int kArcSamples = 8;
+    std::vector<curveisect::Vec2> poly;
+    bool haveRaw = false;
+    double prevRaw = 0.0;
+    double contU = 0.0;
+    for (const brep::EdgeUse& u : loop.uses) {
+      const brep::Edge& e = solid.edges[static_cast<size_t>(u.edge)];
+      const int samples = (e.kind == brep::CurveKind::Line) ? 1 : kArcSamples;
+      for (int k = 0; k < samples; ++k) {
+        const double tTraverse = static_cast<double>(k) / samples;
+        const double s = u.reversed ? (1.0 - tTraverse) : tTraverse;
+        const Vec3 local = ucs::WorldToUcs(frame, brep::EdgePointAt(solid, e, s));
+        const double rawU = std::atan2(local.y, local.x);
+        if (!haveRaw) {
+          contU = rawU;
+          haveRaw = true;
+        } else {
+          double delta = rawU - prevRaw;
+          while (delta > kPi)
+            delta -= 2.0 * kPi;
+          while (delta <= -kPi)
+            delta += 2.0 * kPi;
+          contU += delta;
+        }
+        prevRaw = rawU;
+        poly.push_back(curveisect::Vec2{contU, local.z});
+      }
+    }
+    return poly;
+  }
+
+  /// `ConicalFaceIntegrals` uses `surface.height`, not `paramLoops`. Shrink the analytic patch when trim
+  /// `(vStart,vEnd)` spans less than the vertex-derived height from \ref BuildConeGeneralTrimMulti.
+  void ShrinkRevolutionFaceToParamHeight(brep::Face* f) {
+    if (f->surface.kind != brep::SurfaceKind::Cone && f->surface.kind != brep::SurfaceKind::Cylinder)
+      return;
+    if (f->paramLoops.empty())
+      return;
+    const double vSpan = f->vEnd - f->vStart;
+    if (!(vSpan > kTol))
+      return;
+    if (f->surface.height <= vSpan + std::max(kTol, 1e-4 * vSpan))
+      return;
+    const ucs::Ucs& frame = f->surface.frame;
+    const double oldH = std::max(f->surface.height, kTol);
+    const double v0 = f->vStart;
+    const auto radiusAtOldZ = [&](double zOld) {
+      if (f->surface.kind == brep::SurfaceKind::Cylinder)
+        return f->surface.radius;
+      return f->surface.radius + (f->surface.radius2 - f->surface.radius) * (zOld / oldH);
+    };
+    const double rBase = radiusAtOldZ(v0);
+    const double rTop = radiusAtOldZ(v0 + vSpan);
+    f->surface.frame.origin = ucs::UcsToWorld(frame, Vec3{0.0, 0.0, v0});
+    f->surface.height = vSpan;
+    if (f->surface.kind == brep::SurfaceKind::Cone) {
+      f->surface.radius = std::max(rBase, kTol);
+      f->surface.radius2 = std::max(rTop, 0.0);
+    }
+    const double uSpan = f->uEnd - f->uStart;
+    const double uShift = f->uStart;
+    for (std::vector<curveisect::Vec2>& poly : f->paramLoops)
+      for (curveisect::Vec2& p : poly) {
+        p.y -= v0;
+        p.x -= uShift;
+      }
+    f->vStart = 0.0;
+    f->vEnd = vSpan;
+    f->uStart = 0.0;
+    f->uEnd = uSpan;
+  }
+
+  bool RepackConeParamLoops(const brep::Solid& solid, std::vector<LoopWalk>* loops, const ucs::Ucs& frame,
+                            brep::Face* outFace) {
+    std::vector<LoopWalk> validLoops;
+    std::vector<std::vector<curveisect::Vec2>> polys;
+    validLoops.reserve(loops->size());
+    polys.reserve(loops->size());
+    for (LoopWalk& lw : *loops) {
+      std::vector<curveisect::Vec2> poly = ProjectConeLoopToParam(solid, lw, frame);
+      if (poly.size() < 3)
+        continue;  // apex seam loop of null-curve edges — no area in (u,v)
+      validLoops.push_back(std::move(lw));
+      polys.push_back(std::move(poly));
+    }
+    if (polys.empty())
+      return Fail("cylindrical/conical face's general trim loop has too few points to enclose an area");
+    *loops = std::move(validLoops);
+    if (loops->size() == 1) {
+      bool useRectangularTrim = true;
+      if (plantAsm_) {
+        const brep::Edge& e = solid.edges[static_cast<size_t>((*loops)[0].uses[0].edge)];
+        useRectangularTrim =
+            (e.kind == brep::CurveKind::Arc && e.v0 == e.v1 && std::fabs(e.sweep) + 0.05 >= 2.0 * kPi);
+      }
+      if (useRectangularTrim &&
+          ApplyConeRectangularTrimFromConstantVRim(solid, (*loops)[0], outFace->surface.height, frame, outFace))
+        return true;
+      brep::Face scratch;
+      scratch.surface = outFace->surface;
+      if (BuildConeGeneralTrim(solid, (*loops)[0], frame, &scratch)) {
+        outFace->uStart = scratch.uStart;
+        outFace->uEnd = scratch.uEnd;
+        outFace->vStart = scratch.vStart;
+        outFace->vEnd = scratch.vEnd;
+        outFace->paramLoops = std::move(scratch.paramLoops);
+        return true;
+      }
+    }
+    size_t outerIdx = 0;
+    double outerArea = -1.0;
+    for (size_t i = 0; i < polys.size(); ++i) {
+      const double a = std::fabs(SignedAreaPoly(polys[i]));
+      if (a > outerArea) {
+        outerArea = a;
+        outerIdx = i;
+      }
+    }
+    std::vector<size_t> order;
+    order.push_back(outerIdx);
+    for (size_t i = 0; i < polys.size(); ++i)
+      if (i != outerIdx)
+        order.push_back(i);
+    std::vector<LoopWalk> reLoops;
+    std::vector<std::vector<curveisect::Vec2>> reParam;
+    double uLo = 0.0;
+    double uHi = 0.0;
+    double vLo = 0.0;
+    double vHi = 0.0;
+    bool first = true;
+    for (size_t j = 0; j < order.size(); ++j) {
+      std::vector<curveisect::Vec2> poly = std::move(polys[order[j]]);
+      const bool wantCcw = (j == 0);
+      if ((wantCcw && SignedAreaPoly(poly) < 0.0) || (!wantCcw && SignedAreaPoly(poly) > 0.0))
+        std::reverse(poly.begin(), poly.end());
+      for (const curveisect::Vec2& p : poly) {
+        if (first) {
+          uLo = uHi = p.x;
+          vLo = vHi = p.y;
+          first = false;
+        } else {
+          uLo = std::min(uLo, p.x);
+          uHi = std::max(uHi, p.x);
+          vLo = std::min(vLo, p.y);
+          vHi = std::max(vHi, p.y);
+        }
+      }
+      reParam.push_back(std::move(poly));
+      reLoops.push_back(std::move((*loops)[order[j]]));
+    }
+    *loops = std::move(reLoops);
+    outFace->paramLoops = std::move(reParam);
+    outFace->uStart = uLo;
+    outFace->uEnd = uHi;
+    outFace->vStart = vLo;
+    outFace->vEnd = vHi;
+    ShrinkRevolutionFaceToParamHeight(outFace);
+    return true;
+  }
+
+  [[nodiscard]] static double RadialDistanceFromAxis(const Vec3& p, const Vec3& axisOrigin, const Vec3& axisUnit) {
+    const Vec3 d = ray3d::Sub(p, axisOrigin);
+    const Vec3 perp = ray3d::Sub(d, ray3d::Scale(axisUnit, ray3d::Dot(d, axisUnit)));
+    return ray3d::Length(perp);
+  }
+
+  /// A conical face's end radii from the surface itself: `r(t) = r0 + t tan(alpha)` at the face's
+  /// axial extent [tMin, tMax]. A face whose base reaches the apex is refused rather than reshaped.
+  bool ConeEndRadii(double majorRadius, double sinA, double cosA, double tMin, double tMax, double* rBase,
+                    double* rTop) {
+    if (std::fabs(cosA) < 1e-12)
+      return Fail("cone-surface has a degenerate half-angle");
+    const double tanA = sinA / cosA;
+    *rBase = majorRadius + tMin * tanA;
+    *rTop = majorRadius + tMax * tanA;
+    if (!(*rBase > kTol) || *rTop < -kTol)
+      return Fail("conical face reaches its apex at its base — not supported by this importer");
+    if (*rTop < 0.0)
+      *rTop = 0.0;
+    return true;
+  }
+
+  void ClipConeAxialExtentToApex(double majorRadius, double sinA, double cosA, double* tMin, double* tMax) {
+    if (std::fabs(sinA) < 1e-9 && cosA > 0.0)
+      return;
+    if (std::fabs(cosA) < 1e-12)
+      return;
+    const double tanA = sinA / cosA;
+    if (std::fabs(tanA) < 1e-12)
+      return;
+    const double tApex = -majorRadius / tanA;
+    if (*tMax <= tApex + kTol)
+      return;  // face lies entirely on the apex-tip side — leave extent unchanged
+    if (*tMin < tApex)
+      *tMin = tApex;
+  }
+
+  /// Plant ASM often gives a cone face a single circular rim loop (constant axial height). Expand to a
+  /// thin axial sliver so the analytic cone patch and general trim can be built.
+  /// Plant ASM often bounds a cone/cylinder wall with one circular rim at a single axial height. Sampling
+  /// that loop into (u, v) yields a near-zero-height strip that closes with a 2π jump in u and fails
+  /// `Validate` as self-intersecting. Use the analytic rectangle span instead (same as a full revolve).
+  bool ApplyConeRectangularTrimFromConstantVRim(const brep::Solid& solid, const LoopWalk& loop,
+                                                double height, const ucs::Ucs& frame, brep::Face* outFace) {
+    if (!(height > kTol))
+      return false;
+    constexpr int kSamples = 16;
+    double vLo = 0.0;
+    double vHi = 0.0;
+    bool firstV = true;
+    bool haveU = false;
+    double prevRaw = 0.0;
+    double contU = 0.0;
+    double uAtStart = 0.0;
+    double uAtEnd = 0.0;
+    for (const brep::EdgeUse& u : loop.uses) {
+      const brep::Edge& e = solid.edges[static_cast<size_t>(u.edge)];
+      const int samples = (e.kind == brep::CurveKind::Line) ? 2 : kSamples;
+      for (int k = 0; k < samples; ++k) {
+        const double tTraverse = (samples <= 1) ? 0.0 : static_cast<double>(k) / static_cast<double>(samples - 1);
+        const double s = u.reversed ? (1.0 - tTraverse) : tTraverse;
+        const Vec3 local = ucs::WorldToUcs(frame, brep::EdgePointAt(solid, e, s));
+        if (firstV) {
+          vLo = vHi = local.z;
+          firstV = false;
+        } else {
+          vLo = std::min(vLo, local.z);
+          vHi = std::max(vHi, local.z);
+        }
+        const double rawU = std::atan2(local.y, local.x);
+        if (!haveU) {
+          contU = rawU;
+          uAtStart = contU;
+          haveU = true;
+        } else {
+          double delta = rawU - prevRaw;
+          while (delta > kPi)
+            delta -= 2.0 * kPi;
+          while (delta <= -kPi)
+            delta += 2.0 * kPi;
+          contU += delta;
+        }
+        prevRaw = rawU;
+        uAtEnd = contU;
+      }
+    }
+    if (!haveU)
+      return false;
+    const double axialTol = std::max(kTol, 1e-4 * height);
+    if (vHi - vLo > axialTol)
+      return false;
+    double uSpan = uAtEnd - uAtStart;
+    if (loop.uses.size() == 1) {
+      const brep::Edge& e = solid.edges[static_cast<size_t>(loop.uses[0].edge)];
+      if (e.kind == brep::CurveKind::Arc && e.v0 == e.v1) {
+        if (plantAsm_ && std::fabs(e.sweep) + 0.05 < 2.0 * kPi)
+          return false;
+        uSpan = 2.0 * kPi;
+      }
+    }
+    if (!(uSpan > 0.25 * kPi))
+      return false;
+    outFace->uStart = 0.0;
+    outFace->uEnd = (uSpan >= 2.0 * kPi - 1e-3) ? 2.0 * kPi : uSpan;
+    outFace->vStart = 0.0;
+    outFace->vEnd = height;
+    outFace->paramLoops.clear();
+    return true;
+  }
+
+  bool BuildConeGeneralTrimMulti(const SatRecord& surface, const std::string& faceSense, brep::Solid* out,
+                                 std::vector<LoopWalk>* loops, brep::Face* outFace, int /*plantOwnedLoopRecords*/) {
+    Vec3 axisOrigin{}, axisRaw{};
+    double sinA = 0.0;
+    double cosA = 0.0;
+    double majorRadius = 0.0;
+    if (!Vec(surface, 1, "cone-surface.origin", &axisOrigin) || !Vec(surface, 4, "cone-surface.axis", &axisRaw) ||
+        !Num(surface, 10, "cone-surface.sin-angle", &sinA) || !Num(surface, 11, "cone-surface.cos-angle", &cosA) ||
+        !Num(surface, 12, "cone-surface.major-radius", &majorRadius))
+      return false;
+    axisRaw = ray3d::Normalize(axisRaw);
+    if (!IsFinite(axisOrigin) || !IsFinite(axisRaw) || ray3d::Length(axisRaw) < 0.5)
+      return Fail("cone-surface has a degenerate origin or axis");
+    if (!(majorRadius > kTol))
+      return Fail("cone-surface has a non-positive major radius");
+    double tMin = 0.0;
+    double tMax = 0.0;
+    bool first = true;
+    for (const LoopWalk& lw : *loops) {
+      for (const brep::EdgeUse& u : lw.uses) {
+        const brep::Edge& e = out->edges[static_cast<size_t>(u.edge)];
+        for (int vi : {e.v0, e.v1}) {
+          const double t = ray3d::Dot(ray3d::Sub(out->vertices[static_cast<size_t>(vi)].p, axisOrigin), axisRaw);
+          if (first || t < tMin)
+            tMin = t;
+          if (first || t > tMax)
+            tMax = t;
+          first = false;
+        }
+      }
+    }
+    ClipConeAxialExtentToApex(majorRadius, sinA, cosA, &tMin, &tMax);
+    const double height = tMax - tMin;
+    if (!(height > kTol))
+      return Fail("cylindrical/conical face has zero axial extent");
+    const Vec3 base = ray3d::Add(axisOrigin, ray3d::Scale(axisRaw, tMin));
+    ucs::Ucs frame;
+    if (!ucs::FromNormal(base, axisRaw, &frame))
+      return Fail("cone-surface has a degenerate axis");
+    const bool isCylinder = std::fabs(sinA) < 1e-9 && cosA > 0.0;
+    outFace->surface.kind = isCylinder ? brep::SurfaceKind::Cylinder : brep::SurfaceKind::Cone;
+    outFace->surface.frame = frame;
+    outFace->surface.height = height;
+    if (isCylinder) {
+      outFace->surface.radius = majorRadius;
+    } else {
+      if (!ConeEndRadii(majorRadius, sinA, cosA, tMin, tMax, &outFace->surface.radius, &outFace->surface.radius2))
+        return false;
+    }
+    outFace->surface.inward = (faceSense == "reversed");
+    return RepackConeParamLoops(*out, loops, frame, outFace);
+  }
+
+  /// Builds a right-handed torus frame: Z along the axis of revolution, X from the ACIS ref direction
+  /// projected into the equatorial plane (u = 0).
+  bool TorusFrameFromAcis(const Vec3& centre, const Vec3& axisRaw, const Vec3& refRaw, ucs::Ucs* frame) {
+    const Vec3 zAxis = ray3d::Normalize(axisRaw);
+    if (!IsFinite(zAxis) || ray3d::Length(zAxis) < 0.5)
+      return false;
+    Vec3 xRaw = ray3d::Sub(refRaw, ray3d::Scale(zAxis, ray3d::Dot(refRaw, zAxis)));
+    if (!IsFinite(xRaw) || ray3d::Length(xRaw) < kTol)
+      return false;
+    const Vec3 xAxis = ray3d::Normalize(xRaw);
+    const Vec3 yAxis = ray3d::Normalize(ray3d::Cross(zAxis, xAxis));
+    frame->origin = centre;
+    frame->xAxis = xAxis;
+    frame->yAxis = yAxis;
+    frame->zAxis = zAxis;
+    return ucs::IsRightHandedOrthonormal(*frame);
+  }
+
+  /// Samples a torus face loop into (u, v) parameter space matching `brep::SurfaceParamDeriv` for
+  /// `SurfaceKind::Torus` (u = angle around axis, v = angle around the tube).
+  bool BuildTorusGeneralTrim(const brep::Solid& solid, const LoopWalk& loop, const ucs::Ucs& frame,
+                               double majorR, double minorR, brep::Face* outFace) {
+    constexpr int kArcSamples = 8;
+    std::vector<curveisect::Vec2> poly;
+    bool haveU = false;
+    bool haveV = false;
+    double prevRawU = 0.0;
+    double prevRawV = 0.0;
+    double contU = 0.0;
+    double contV = 0.0;
+    auto unwrap = [](double raw, double prevRaw, bool* have, double* cont) {
+      if (!*have) {
+        *cont = raw;
+        *have = true;
+      } else {
+        double delta = raw - prevRaw;
+        while (delta > kPi)
+          delta -= 2.0 * kPi;
+        while (delta <= -kPi)
+          delta += 2.0 * kPi;
+        *cont += delta;
+      }
+    };
+    auto addPoint = [&](const Vec3& p3) {
+      const Vec3 local = ucs::WorldToUcs(frame, p3);
+      const double x = local.x;
+      const double y = local.y;
+      const double z = local.z;
+      const double rho = std::hypot(x, y);
+      const double rawU = std::atan2(y, x);
+      unwrap(rawU, prevRawU, &haveU, &contU);
+      prevRawU = rawU;
+      const double tubeRadial = rho - majorR;
+      const double rawV = std::atan2(z, tubeRadial);
+      unwrap(rawV, prevRawV, &haveV, &contV);
+      prevRawV = rawV;
+      poly.push_back(curveisect::Vec2{contU, contV});
+    };
+    for (const brep::EdgeUse& u : loop.uses) {
+      const brep::Edge& e = solid.edges[static_cast<size_t>(u.edge)];
+      const int samples = (e.kind == brep::CurveKind::Line) ? 1 : kArcSamples;
+      for (int k = 0; k < samples; ++k) {
+        const double tTraverse = static_cast<double>(k) / samples;
+        const double s = u.reversed ? (1.0 - tTraverse) : tTraverse;
+        addPoint(brep::EdgePointAt(solid, e, s));
+      }
+    }
+    if (poly.size() < 3)
+      return Fail("torus face's trim loop has too few points to enclose an area");
     {
       double a = 0.0;
       for (size_t i = 0, n = poly.size(); i < n; ++i)
@@ -696,13 +1774,463 @@ class Importer {
     outFace->vStart = vLo;
     outFace->vEnd = vHi;
     outFace->paramLoops.assign(1, std::move(poly));
+    (void)minorR;
     return true;
+  }
+
+  std::vector<curveisect::Vec2> ProjectTorusLoopToParam(const brep::Solid& solid, const LoopWalk& loop,
+                                                         const ucs::Ucs& frame, double majorR) {
+    constexpr int kArcSamples = 8;
+    std::vector<curveisect::Vec2> poly;
+    bool haveU = false;
+    bool haveV = false;
+    double prevRawU = 0.0;
+    double prevRawV = 0.0;
+    double contU = 0.0;
+    double contV = 0.0;
+    auto unwrap = [](double raw, double prevRaw, bool* have, double* cont) {
+      if (!*have) {
+        *cont = raw;
+        *have = true;
+      } else {
+        double delta = raw - prevRaw;
+        while (delta > kPi)
+          delta -= 2.0 * kPi;
+        while (delta <= -kPi)
+          delta += 2.0 * kPi;
+        *cont += delta;
+      }
+    };
+    for (const brep::EdgeUse& u : loop.uses) {
+      const brep::Edge& e = solid.edges[static_cast<size_t>(u.edge)];
+      const int samples = (e.kind == brep::CurveKind::Line) ? 1 : kArcSamples;
+      for (int k = 0; k < samples; ++k) {
+        const double tTraverse = static_cast<double>(k) / samples;
+        const double s = u.reversed ? (1.0 - tTraverse) : tTraverse;
+        const Vec3 local = ucs::WorldToUcs(frame, brep::EdgePointAt(solid, e, s));
+        const double rho = std::hypot(local.x, local.y);
+        const double rawU = std::atan2(local.y, local.x);
+        unwrap(rawU, prevRawU, &haveU, &contU);
+        prevRawU = rawU;
+        const double tubeRadial = rho - majorR;
+        const double rawV = std::atan2(local.z, tubeRadial);
+        unwrap(rawV, prevRawV, &haveV, &contV);
+        prevRawV = rawV;
+        poly.push_back(curveisect::Vec2{contU, contV});
+      }
+    }
+    return poly;
+  }
+
+  bool RepackTorusParamLoops(const brep::Solid& solid, std::vector<LoopWalk>* loops, const ucs::Ucs& frame,
+                             double majorR, brep::Face* outFace) {
+    std::vector<LoopWalk> validLoops;
+    std::vector<std::vector<curveisect::Vec2>> polys;
+    validLoops.reserve(loops->size());
+    polys.reserve(loops->size());
+    for (LoopWalk& lw : *loops) {
+      std::vector<curveisect::Vec2> poly = ProjectTorusLoopToParam(solid, lw, frame, majorR);
+      if (poly.size() < 3)
+        continue;
+      validLoops.push_back(std::move(lw));
+      polys.push_back(std::move(poly));
+    }
+    if (polys.empty())
+      return Fail("torus face's trim loop has too few points to enclose an area");
+    *loops = std::move(validLoops);
+    size_t outerIdx = 0;
+    double outerArea = -1.0;
+    for (size_t i = 0; i < polys.size(); ++i) {
+      const double a = std::fabs(SignedAreaPoly(polys[i]));
+      if (a > outerArea) {
+        outerArea = a;
+        outerIdx = i;
+      }
+    }
+    std::vector<size_t> order;
+    order.push_back(outerIdx);
+    for (size_t i = 0; i < polys.size(); ++i)
+      if (i != outerIdx)
+        order.push_back(i);
+    std::vector<LoopWalk> reLoops;
+    std::vector<std::vector<curveisect::Vec2>> reParam;
+    double uLo = 0.0;
+    double uHi = 0.0;
+    double vLo = 0.0;
+    double vHi = 0.0;
+    bool first = true;
+    for (size_t j = 0; j < order.size(); ++j) {
+      std::vector<curveisect::Vec2> poly = std::move(polys[order[j]]);
+      const bool wantCcw = (j == 0);
+      if ((wantCcw && SignedAreaPoly(poly) < 0.0) || (!wantCcw && SignedAreaPoly(poly) > 0.0))
+        std::reverse(poly.begin(), poly.end());
+      for (const curveisect::Vec2& p : poly) {
+        if (first) {
+          uLo = uHi = p.x;
+          vLo = vHi = p.y;
+          first = false;
+        } else {
+          uLo = std::min(uLo, p.x);
+          uHi = std::max(uHi, p.x);
+          vLo = std::min(vLo, p.y);
+          vHi = std::max(vHi, p.y);
+        }
+      }
+      reParam.push_back(std::move(poly));
+      reLoops.push_back(std::move((*loops)[order[j]]));
+    }
+    *loops = std::move(reLoops);
+    outFace->paramLoops = std::move(reParam);
+    outFace->uStart = uLo;
+    outFace->uEnd = uHi;
+    outFace->vStart = vLo;
+    outFace->vEnd = vHi;
+    return true;
+  }
+
+  bool BuildTorusGeneralTrimMulti(const SatRecord& surface, const std::string& faceSense,
+                                  const brep::Solid& solid, std::vector<LoopWalk>* loops,
+                                  brep::Face* outFace) {
+    Vec3 centre{}, axisRaw{}, refRaw{};
+    double majorR = 0.0;
+    double minorR = 0.0;
+    if (!Vec(surface, 1, "torus-surface.centre", &centre) || !Vec(surface, 4, "torus-surface.axis", &axisRaw) ||
+        !Num(surface, 7, "torus-surface.major-radius", &majorR) ||
+        !Num(surface, 8, "torus-surface.minor-radius", &minorR) || !Vec(surface, 9, "torus-surface.refdir", &refRaw))
+      return false;
+    if (!IsFinite(centre) || !IsFinite(axisRaw) || !IsFinite(refRaw))
+      return Fail("torus-surface has a non-finite placement vector");
+    if (!(majorR > kTol) || !(minorR > kTol))
+      return Fail("torus-surface has a non-positive major or minor radius");
+    if (std::fabs(majorR - minorR) < kTol)
+      return Fail("torus-surface has equal major and minor radii — degenerate for this kernel");
+    ucs::Ucs frame;
+    if (!TorusFrameFromAcis(centre, axisRaw, refRaw, &frame))
+      return Fail("torus-surface has a degenerate axis or ref direction");
+    outFace->surface.kind = brep::SurfaceKind::Torus;
+    outFace->surface.frame = frame;
+    outFace->surface.radius = majorR;
+    outFace->surface.radius2 = minorR;
+    outFace->surface.inward = (faceSense == "reversed");
+    return RepackTorusParamLoops(solid, loops, frame, majorR, outFace);
+  }
+
+  /// Sphere (u, v): u = longitude about +Z, v = latitude (`brep::SurfaceParamDeriv`).
+  bool BuildSphereGeneralTrim(const brep::Solid& solid, const LoopWalk& loop, const ucs::Ucs& frame,
+                              double radius, brep::Face* outFace) {
+    constexpr int kArcSamples = 8;
+    std::vector<curveisect::Vec2> poly;
+    bool haveU = false;
+    bool haveV = false;
+    double prevRawU = 0.0;
+    double prevRawV = 0.0;
+    double contU = 0.0;
+    double contV = 0.0;
+    auto unwrap = [](double raw, double prevRaw, bool* have, double* cont) {
+      if (!*have) {
+        *cont = raw;
+        *have = true;
+      } else {
+        double delta = raw - prevRaw;
+        while (delta > kPi)
+          delta -= 2.0 * kPi;
+        while (delta <= -kPi)
+          delta += 2.0 * kPi;
+        *cont += delta;
+      }
+    };
+    auto addPoint = [&](const Vec3& p3) {
+      const Vec3 local = ucs::WorldToUcs(frame, p3);
+      const double rho = std::hypot(local.x, local.y);
+      const double rawU = std::atan2(local.y, local.x);
+      unwrap(rawU, prevRawU, &haveU, &contU);
+      prevRawU = rawU;
+      const double rawV = std::atan2(local.z, rho);
+      unwrap(rawV, prevRawV, &haveV, &contV);
+      prevRawV = rawV;
+      poly.push_back(curveisect::Vec2{contU, contV});
+    };
+    for (const brep::EdgeUse& u : loop.uses) {
+      const brep::Edge& e = solid.edges[static_cast<size_t>(u.edge)];
+      const int samples = (e.kind == brep::CurveKind::Line) ? 1 : kArcSamples;
+      for (int k = 0; k < samples; ++k) {
+        const double tTraverse = static_cast<double>(k) / samples;
+        const double s = u.reversed ? (1.0 - tTraverse) : tTraverse;
+        addPoint(brep::EdgePointAt(solid, e, s));
+      }
+    }
+    if (poly.size() < 3)
+      return Fail("sphere face's trim loop has too few points to enclose an area");
+    {
+      double a = 0.0;
+      for (size_t i = 0, n = poly.size(); i < n; ++i)
+        a += poly[i].x * poly[(i + 1) % n].y - poly[(i + 1) % n].x * poly[i].y;
+      if (a < 0.0)
+        std::reverse(poly.begin(), poly.end());
+    }
+    double uLo = poly[0].x, uHi = poly[0].x, vLo = poly[0].y, vHi = poly[0].y;
+    for (const curveisect::Vec2& p : poly) {
+      uLo = std::min(uLo, p.x);
+      uHi = std::max(uHi, p.x);
+      vLo = std::min(vLo, p.y);
+      vHi = std::max(vHi, p.y);
+    }
+    outFace->uStart = uLo;
+    outFace->uEnd = uHi;
+    outFace->vStart = vLo;
+    outFace->vEnd = vHi;
+    outFace->paramLoops.assign(1, std::move(poly));
+    (void)radius;
+    return true;
+  }
+
+  bool BuildSphereGeneralTrimMulti(const SatRecord& surface, const std::string& faceSense,
+                                   const brep::Solid& solid, std::vector<LoopWalk>* loops,
+                                   brep::Face* outFace) {
+    Vec3 centre{}, axisRaw{}, refRaw{};
+    double radius = 0.0;
+    size_t radiusField = 10;
+    size_t axisField = 4;
+    size_t refField = 7;
+    if (surface.fields.size() >= 11 && !surface.fields[4].empty() && surface.fields[4][0] != '$') {
+      radiusField = 4;
+      axisField = 5;
+      refField = 8;
+    }
+    if (!Vec(surface, 1, "sphere-surface.centre", &centre) ||
+        !Num(surface, radiusField, "sphere-surface.radius", &radius) ||
+        !Vec(surface, axisField, "sphere-surface.axis", &axisRaw) ||
+        !Vec(surface, refField, "sphere-surface.refdir", &refRaw))
+      return false;
+    ucs::Ucs frame;
+    if (!TorusFrameFromAcis(centre, axisRaw, refRaw, &frame))
+      return Fail("sphere-surface has a degenerate axis or ref direction");
+    outFace->surface.kind = brep::SurfaceKind::Sphere;
+    outFace->surface.frame = frame;
+    outFace->surface.radius = radius;
+    outFace->surface.inward = (faceSense == "reversed");
+
+    constexpr int kArcSamples = 8;
+    auto project = [&](const LoopWalk& lw) {
+      std::vector<curveisect::Vec2> poly;
+      bool haveU = false;
+      bool haveV = false;
+      double prevRawU = 0.0;
+      double prevRawV = 0.0;
+      double contU = 0.0;
+      double contV = 0.0;
+      auto unwrap = [](double raw, double prevRaw, bool* have, double* cont) {
+        if (!*have) {
+          *cont = raw;
+          *have = true;
+        } else {
+          double delta = raw - prevRaw;
+          while (delta > kPi)
+            delta -= 2.0 * kPi;
+          while (delta <= -kPi)
+            delta += 2.0 * kPi;
+          *cont += delta;
+        }
+      };
+      for (const brep::EdgeUse& u : lw.uses) {
+        const brep::Edge& e = solid.edges[static_cast<size_t>(u.edge)];
+        const int samples = (e.kind == brep::CurveKind::Line) ? 1 : kArcSamples;
+        for (int k = 0; k < samples; ++k) {
+          const double tTraverse = static_cast<double>(k) / samples;
+          const double s = u.reversed ? (1.0 - tTraverse) : tTraverse;
+          const Vec3 local = ucs::WorldToUcs(frame, brep::EdgePointAt(solid, e, s));
+          const double rho = std::hypot(local.x, local.y);
+          const double rawU = std::atan2(local.y, local.x);
+          unwrap(rawU, prevRawU, &haveU, &contU);
+          prevRawU = rawU;
+          const double rawV = std::atan2(local.z, rho);
+          unwrap(rawV, prevRawV, &haveV, &contV);
+          prevRawV = rawV;
+          poly.push_back(curveisect::Vec2{contU, contV});
+        }
+      }
+      return poly;
+    };
+    auto signedArea = [](const std::vector<curveisect::Vec2>& p) {
+      double a = 0.0;
+      for (size_t i = 0, n = p.size(); i < n; ++i)
+        a += p[i].x * p[(i + 1) % n].x - p[(i + 1) % n].x * p[i].y;
+      return 0.5 * a;
+    };
+
+    std::vector<std::vector<curveisect::Vec2>> polys;
+    polys.reserve(loops->size());
+    size_t outerIdx = 0;
+    double outerArea = -1.0;
+    for (size_t i = 0; i < loops->size(); ++i) {
+      polys.push_back(project((*loops)[i]));
+      if (polys.back().size() < 3)
+        return Fail("sphere face's general trim loop has too few points to enclose an area");
+      const double a = std::fabs(signedArea(polys.back()));
+      if (a > outerArea) {
+        outerArea = a;
+        outerIdx = i;
+      }
+    }
+
+    std::vector<size_t> order;
+    order.push_back(outerIdx);
+    for (size_t i = 0; i < loops->size(); ++i)
+      if (i != outerIdx)
+        order.push_back(i);
+
+    std::vector<LoopWalk> reLoops;
+    std::vector<std::vector<curveisect::Vec2>> reParam;
+    double uLo = 0, uHi = 0, vLo = 0, vHi = 0;
+    bool first = true;
+    for (size_t j = 0; j < order.size(); ++j) {
+      std::vector<curveisect::Vec2> poly = std::move(polys[order[j]]);
+      const bool wantCcw = (j == 0);
+      if ((wantCcw && signedArea(poly) < 0.0) || (!wantCcw && signedArea(poly) > 0.0))
+        std::reverse(poly.begin(), poly.end());
+      for (const curveisect::Vec2& p : poly) {
+        if (first) {
+          uLo = uHi = p.x;
+          vLo = vHi = p.y;
+          first = false;
+        } else {
+          uLo = std::min(uLo, p.x);
+          uHi = std::max(uHi, p.x);
+          vLo = std::min(vLo, p.y);
+          vHi = std::max(vHi, p.y);
+        }
+      }
+      reParam.push_back(std::move(poly));
+      reLoops.push_back(std::move((*loops)[order[j]]));
+    }
+    *loops = std::move(reLoops);
+    outFace->paramLoops = std::move(reParam);
+    outFace->uStart = uLo;
+    outFace->uEnd = uHi;
+    outFace->vStart = vLo;
+    outFace->vEnd = vHi;
+    return true;
+  }
+
+  bool BuildSphereFace(const SatRecord& surface, const std::string& faceSense, LoopWalk* loop,
+                       const brep::Solid& solid, brep::Face* outFace) {
+    Vec3 centre{}, axisRaw{}, refRaw{};
+    double radius = 0.0;
+    size_t radiusField = 10;
+    size_t axisField = 4;
+    size_t refField = 7;
+    // Real ASM (after NormalizeRealAcisSchema): centre[1..3] radius[4] axis[5..7] ref[8..10].
+    if (surface.fields.size() >= 11 && surface.fields[4].empty() == false &&
+        surface.fields[4][0] != '$') {
+      radiusField = 4;
+      axisField = 5;
+      refField = 8;
+    }
+    if (!Vec(surface, 1, "sphere-surface.centre", &centre) ||
+        !Num(surface, radiusField, "sphere-surface.radius", &radius) ||
+        !Vec(surface, axisField, "sphere-surface.axis", &axisRaw) ||
+        !Vec(surface, refField, "sphere-surface.refdir", &refRaw))
+      return false;
+    if (!IsFinite(centre) || !IsFinite(axisRaw) || !IsFinite(refRaw))
+      return Fail("sphere-surface has a non-finite placement vector");
+    if (!(radius > kTol))
+      return Fail("sphere-surface has a non-positive radius");
+    ucs::Ucs frame;
+    if (!TorusFrameFromAcis(centre, axisRaw, refRaw, &frame))
+      return Fail("sphere-surface has a degenerate axis or ref direction");
+    outFace->surface.kind = brep::SurfaceKind::Sphere;
+    outFace->surface.frame = frame;
+    outFace->surface.radius = radius;
+    outFace->surface.inward = (faceSense == "reversed");
+    return BuildSphereGeneralTrim(solid, *loop, frame, radius, outFace);
+  }
+
+  bool BuildTorusFace(const SatRecord& surface, const std::string& faceSense, LoopWalk* loop,
+                      const brep::Solid& solid, brep::Face* outFace) {
+    Vec3 centre{}, axisRaw{}, refRaw{};
+    double majorR = 0.0;
+    double minorR = 0.0;
+    if (!Vec(surface, 1, "torus-surface.centre", &centre) || !Vec(surface, 4, "torus-surface.axis", &axisRaw) ||
+        !Num(surface, 7, "torus-surface.major-radius", &majorR) ||
+        !Num(surface, 8, "torus-surface.minor-radius", &minorR) || !Vec(surface, 9, "torus-surface.refdir", &refRaw))
+      return false;
+    if (!IsFinite(centre) || !IsFinite(axisRaw) || !IsFinite(refRaw))
+      return Fail("torus-surface has a non-finite placement vector");
+    if (!(majorR > kTol) || !(minorR > kTol))
+      return Fail("torus-surface has a non-positive major or minor radius");
+    if (std::fabs(majorR - minorR) < kTol)
+      return Fail("torus-surface has equal major and minor radii — degenerate for this kernel");
+    ucs::Ucs frame;
+    if (!TorusFrameFromAcis(centre, axisRaw, refRaw, &frame))
+      return Fail("torus-surface has a degenerate axis or ref direction");
+    outFace->surface.kind = brep::SurfaceKind::Torus;
+    outFace->surface.frame = frame;
+    outFace->surface.radius = majorR;
+    outFace->surface.radius2 = minorR;
+    outFace->surface.inward = (faceSense == "reversed");
+    return BuildTorusGeneralTrim(solid, *loop, frame, majorR, minorR, outFace);
   }
 
   /// Recognizes the two cylinder/cone loop shapes this importer maps straight to `Face`'s
   /// rectangular `uStart..uEnd` span (see AcisSatParser.hpp) — any other single-loop shape falls
   /// through to \ref BuildConeGeneralTrim instead. Derives the rectangular span directly from the
   /// recognized shape rather than from a generic vertex scan — see ADR-051 (b-1) for why.
+  /// A conical face bounded by a single full-circle rim (any other loop is only the degenerate apex
+  /// point) is the whole cone from that rim to its tip — Plant valve bodies are two of these meeting
+  /// tip to tip. The axial extent is analytic (`t_apex = -r0 / tan(alpha)`), not read from
+  /// neighbouring faces. Topology mirrors `brep::MakeCone`'s pointed form: rim, then a seam line to
+  /// the apex vertex walked out and back.
+  bool BuildPointedConeFace(const Vec3& axisOrigin, const Vec3& axisUnit, double sinA, double cosA,
+                            double majorRadius, const std::string& faceSense, LoopWalk* loop,
+                            brep::Solid* out, brep::Face* outFace) {
+    if (std::fabs(cosA) < 1e-12)
+      return Fail("cone-surface has a degenerate half-angle");
+    const brep::EdgeUse rimUse = loop->uses[0];
+    const brep::Edge& rim = out->edges[static_cast<size_t>(rimUse.edge)];
+    const Vec3 rimP = out->vertices[static_cast<size_t>(rim.v0)].p;
+    const double tRim = ray3d::Dot(ray3d::Sub(rimP, axisOrigin), axisUnit);
+    const double tApex = -majorRadius * cosA / sinA;
+    const double height = std::fabs(tApex - tRim);
+    if (!(height > kTol))
+      return Fail("conical face's rim lies at its apex — degenerate");
+    const Vec3 apexP = ray3d::Add(axisOrigin, ray3d::Scale(axisUnit, tApex));
+    int apexV = -1;
+    for (size_t i = 0; i < out->vertices.size(); ++i)
+      if (ray3d::Length(ray3d::Sub(out->vertices[i].p, apexP)) <= 1e-6 * (1.0 + height)) {
+        apexV = static_cast<int>(i);
+        break;
+      }
+    if (apexV < 0) {
+      apexV = static_cast<int>(out->vertices.size());
+      out->vertices.push_back(brep::Vertex{apexP});
+    }
+    brep::Edge seam;
+    seam.kind = brep::CurveKind::Line;
+    seam.v0 = rim.v0;
+    seam.v1 = apexV;
+    const int seamIdx = static_cast<int>(out->edges.size());
+    out->edges.push_back(seam);
+    loop->uses = {rimUse, {seamIdx, false}, {seamIdx, true}};
+
+    // Frame Z runs from the rim toward the apex, so the base is the rim and the top radius is 0.
+    const Vec3 toApex = (tApex > tRim) ? axisUnit : ray3d::Scale(axisUnit, -1.0);
+    const Vec3 base = ray3d::Add(axisOrigin, ray3d::Scale(axisUnit, tRim));
+    ucs::Ucs frame;
+    if (!ucs::FromNormal(base, toApex, &frame))
+      return Fail("cone-surface has a degenerate axis");
+    outFace->surface.kind = brep::SurfaceKind::Cone;
+    outFace->surface.frame = frame;
+    outFace->surface.height = height;
+    outFace->surface.radius = RadialDistanceFromAxis(rimP, axisOrigin, axisUnit);
+    outFace->surface.radius2 = 0.0;
+    outFace->surface.inward = (faceSense == "reversed");
+    outFace->uStart = 0.0;
+    outFace->uEnd = 2.0 * kPi;
+    outFace->vStart = 0.0;
+    outFace->vEnd = height;
+    return true;
+  }
+
   bool BuildConeFace(const SatRecord& surface, const std::string& faceSense, LoopWalk* loop,
                       brep::Solid* out, brep::Face* outFace) {
     Vec3 axisOrigin{}, axisRaw{};
@@ -744,6 +2272,12 @@ class Importer {
     // traversed once each direction. It has no effect on the analytic area/volume (those integrate
     // the surface in closed form from uStart/uEnd, not from the loop's shape) — it exists only to
     // satisfy the topology check.
+    const bool isCylinder = std::fabs(sinA) < 1e-9 && cosA > 0.0;
+    if (!isCylinder && n == 1 && edgeKind(0) == brep::CurveKind::Arc) {
+      const brep::Edge& rim = out->edges[static_cast<size_t>(loop->uses[0].edge)];
+      if (rim.v0 == rim.v1 && std::fabs(rim.sweep) + 1e-3 >= 2.0 * kPi)
+        return BuildPointedConeFace(axisOrigin, axisRaw, sinA, cosA, majorRadius, faceSense, loop, out, outFace);
+    }
     if (full) {
       const brep::Edge& e0 = out->edges[static_cast<size_t>(loop->uses[0].edge)];
       const brep::Edge& e1 = out->edges[static_cast<size_t>(loop->uses[1].edge)];
@@ -775,6 +2309,7 @@ class Importer {
         first = false;
       }
     }
+    ClipConeAxialExtentToApex(majorRadius, sinA, cosA, &tMin, &tMax);
     const double height = tMax - tMin;
     if (!(height > kTol))
       return Fail("cylindrical/conical face has zero axial extent");
@@ -784,21 +2319,16 @@ class Importer {
     if (!ucs::FromNormal(base, axisRaw, &frame))
       return Fail("cone-surface has a degenerate axis");
 
-    const bool isCylinder = std::fabs(sinA) < 1e-9 && cosA > 0.0;
     outFace->surface.kind = isCylinder ? brep::SurfaceKind::Cylinder : brep::SurfaceKind::Cone;
     outFace->surface.frame = frame;
     outFace->surface.height = height;
     if (isCylinder) {
       outFace->surface.radius = majorRadius;
     } else {
-      if (std::fabs(cosA) < 1e-12)
-        return Fail("cone-surface has a degenerate half-angle");
-      const double tanA = sinA / cosA;
-      const auto radiusAt = [&](double t) { return majorRadius + t * tanA; };
-      const double rBase = radiusAt(tMin);
-      const double rTop = radiusAt(tMax);
-      if (!(rBase > kTol) || !(rTop >= 0.0))
-        return Fail("cone-surface produces a non-positive radius over this face's extent");
+      double rBase = 0.0;
+      double rTop = 0.0;
+      if (!ConeEndRadii(majorRadius, sinA, cosA, tMin, tMax, &rBase, &rTop))
+        return false;
       outFace->surface.radius = rBase;
       outFace->surface.radius2 = rTop;
     }
@@ -808,6 +2338,8 @@ class Importer {
       outFace->uEnd = 2.0 * kPi;
       return true;
     }
+    if (ApplyConeRectangularTrimFromConstantVRim(*out, *loop, height, frame, outFace))
+      return true;
     return BuildConeGeneralTrim(*out, *loop, frame, outFace);
   }
 
@@ -947,7 +2479,7 @@ class Importer {
   /// `blend-surface` and `sweep-surface` records recurse through the surface they name as their
   /// representable reduction (a `$-1` "underlying-surface" pointer means they have none) — see the
   /// field-layout comment at the top of this file.
-  bool BuildFaceForSurface(int surfaceId, const std::string& faceSense, std::vector<LoopWalk>* loops,
+  bool BuildFaceForSurface(int faceRecIdx, int surfaceId, const std::string& faceSense, std::vector<LoopWalk>* loops,
                             brep::Solid* out, brep::Face* outFace, int depth) {
     if (depth > 8)
       return Fail("surface reduction chain is implausibly deep (possible ACIS record corruption)");
@@ -973,8 +2505,10 @@ class Importer {
         merged.uses = {(*loops)[0].uses[0], (*loops)[1].uses[0]};
         *loops = std::vector<LoopWalk>{std::move(merged)};
       }
+      if (loops->size() >= 2)
+        return BuildConeGeneralTrimMulti(*surface, faceSense, out, loops, outFace, 0);
       if (loops->size() != 1)
-        return Fail("cylindrical/conical face has a hole loop — not a supported loop shape (issue #302)");
+        return Fail("cylindrical/conical face has no boundary loop");
       return BuildConeFace(*surface, faceSense, &loops->front(), out, outFace);
     }
     if (surface->type == "spline-surface") {
@@ -998,15 +2532,26 @@ class Importer {
         return Fail("'" + surface->type +
                     "' does not reduce to a surface this importer can represent — not supported "
                     "(issue #300)");
-      return BuildFaceForSurface(underlyingId, faceSense, loops, out, outFace, depth + 1);
+      return BuildFaceForSurface(faceRecIdx, underlyingId, faceSense, loops, out, outFace, depth + 1);
     }
-    if (surface->type == "sphere-surface" || surface->type == "torus-surface")
-      return Fail("surface kind '" + surface->type +
-                  "' is recognized but not yet mapped by this importer (fast-follow of issue #299)");
+    if (surface->type == "torus-surface") {
+      if (loops->size() >= 2)
+        return BuildTorusGeneralTrimMulti(*surface, faceSense, *out, loops, outFace);
+      if (loops->size() != 1)
+        return Fail("torus face has no boundary loop");
+      return BuildTorusFace(*surface, faceSense, &loops->front(), *out, outFace);
+    }
+    if (surface->type == "sphere-surface") {
+      if (loops->size() >= 2)
+        return BuildSphereGeneralTrimMulti(*surface, faceSense, *out, loops, outFace);
+      if (loops->size() != 1)
+        return Fail("sphere face has no boundary loop");
+      return BuildSphereFace(*surface, faceSense, &loops->front(), *out, outFace);
+    }
     return Fail("surface kind '" + surface->type + "' is not supported by this importer (see issue #300)");
   }
 
-  bool Build(brep::Solid* out) {
+  bool Build(brep::Solid* out, bool validateSolid) {
     const int bodyId = FindFirst("body");
     if (bodyId < 0)
       return Fail("no ACIS 'body' record found");
@@ -1052,45 +2597,39 @@ class Importer {
       const SatRecord* face = nullptr;
       if (!Req(faceId, "face", &face))
         return false;
-      int loopId = 0, surfaceId = 0;
+      int surfaceId = 0;
       std::string faceSense;
-      if (!Ptr(*face, 2, "face.loop", &loopId) || !Ptr(*face, 4, "face.surface", &surfaceId) ||
-          !Word(*face, 5, "face.sense", &faceSense))
-        return false;
+      if (IsPlantAsmFaceRecord(*face)) {
+        if (!Word(*face, 8, "face.sense", &faceSense))
+          return false;
+        surfaceId = ResolvePlantFaceSurfaceId(*face);
+        if (surfaceId < 0)
+          return Fail("Plant ASM face's surface pointer does not name a surface record");
+      } else {
+        if (!Ptr(*face, 4, "face.surface", &surfaceId) || !Word(*face, 5, "face.sense", &faceSense))
+          return false;
+      }
       if (faceSense != "forward" && faceSense != "reversed")
         return Fail("face sense '" + faceSense + "' is not 'forward'/'reversed'");
 
       std::vector<LoopWalk> loops;
-      {
-        int lId = loopId;
-        int guardLoops = 0;
-        while (lId >= 0) {
-          if (++guardLoops > 64)
-            return Fail("face has an implausible number of loops (possible ACIS record corruption)");
-          LoopWalk lw;
-          if (!WalkLoop(lId, out, &lw))
-            return false;
-          loops.push_back(std::move(lw));
-          const SatRecord* lr = nullptr;
-          if (!Req(lId, "loop", &lr))
-            return false;
-          int lNext = 0;
-          if (!Ptr(*lr, 1, "loop.next", &lNext))
-            return false;
-          lId = lNext;
-        }
-      }
+      if (!CollectLoopsForFace(faceId, *face, out, &loops))
+        return false;
 
       brep::Face outFace;
-      if (!BuildFaceForSurface(surfaceId, faceSense, &loops, out, &outFace, 0))
+      if (!BuildFaceForSurface(faceId, surfaceId, faceSense, &loops, out, &outFace, 0))
         return false;
       for (LoopWalk& lw : loops)
         outFace.loops.push_back(brep::Loop{std::move(lw.uses)});
       out->faces.push_back(std::move(outFace));
 
       int faceNext = 0;
-      if (!Ptr(*face, 1, "face.next", &faceNext))
+      if (IsPlantAsmFaceRecord(*face)) {
+        if (!TryPtr(*face, 3, &faceNext))
+          return Fail("malformed face.next pointer in a 'face' record");
+      } else if (!Ptr(*face, 1, "face.next", &faceNext)) {
         return false;
+      }
       faceId = faceNext;
     }
 
@@ -1102,13 +2641,60 @@ class Importer {
       sh.faces[i] = static_cast<int>(i);
     out->shells.push_back(std::move(sh));
 
-    if (transformId >= 0 && !ApplyBodyTransform(transformId, out))
+    if (transformId >= 0 && !ApplyBodyTransform(transformId, out, validateSolid))
       return false;
 
-    const brep::Problem why = brep::Validate(*out);
-    if (why != brep::Problem::Ok)
-      return Fail(std::string("imported topology failed validation: ") + brep::ProblemText(why));
+    if (validateSolid) {
+      const brep::Problem why = brep::Validate(*out);
+      if (why != brep::Problem::Ok)
+        return Fail(std::string("imported topology failed validation: ") + brep::ProblemText(why));
+    }
     return true;
+  }
+
+  /// `brep::Rotate` turns surface frames and vertices but leaves `Face::paramLoops` in the pre-motion
+  /// (u, v) plane; re-sample from the moved topology so `Validate` still sees a consistent trim.
+  void RebuildGeneralTrimLoops(brep::Solid* solid) {
+    for (brep::Face& f : solid->faces) {
+      if (f.paramLoops.empty())
+        continue;
+      std::vector<LoopWalk> walks;
+      walks.reserve(f.loops.size());
+      for (const brep::Loop& lp : f.loops) {
+        LoopWalk lw;
+        lw.uses = lp.uses;
+        walks.push_back(std::move(lw));
+      }
+      if (walks.empty())
+        continue;
+      brep::Face scratch;
+      scratch.surface = f.surface;
+      bool ok = false;
+      if (walks.size() == 1) {
+        if (f.surface.kind == brep::SurfaceKind::Torus)
+          ok = BuildTorusGeneralTrim(*solid, walks[0], f.surface.frame, f.surface.radius, f.surface.radius2,
+                                     &scratch);
+        else if (f.surface.kind == brep::SurfaceKind::Sphere)
+          ok = BuildSphereGeneralTrim(*solid, walks[0], f.surface.frame, f.surface.radius, &scratch);
+        else if (f.surface.kind == brep::SurfaceKind::Cylinder || f.surface.kind == brep::SurfaceKind::Cone)
+          ok = BuildConeGeneralTrim(*solid, walks[0], f.surface.frame, &scratch);
+      } else if (f.surface.kind == brep::SurfaceKind::Torus) {
+        ok = RepackTorusParamLoops(*solid, &walks, f.surface.frame, f.surface.radius, &scratch);
+      } else if (f.surface.kind == brep::SurfaceKind::Cylinder || f.surface.kind == brep::SurfaceKind::Cone) {
+        ok = RepackConeParamLoops(*solid, &walks, f.surface.frame, &scratch);
+      }
+      if (ok) {
+        f.uStart = scratch.uStart;
+        f.uEnd = scratch.uEnd;
+        f.vStart = scratch.vStart;
+        f.vEnd = scratch.vEnd;
+        f.paramLoops = std::move(scratch.paramLoops);
+        if (walks.size() == f.loops.size()) {
+          for (size_t i = 0; i < walks.size(); ++i)
+            f.loops[i].uses = std::move(walks[i].uses);
+        }
+      }
+    }
   }
 
   /// Applies the `body`'s `transform` record — a 3x3 rotation, a translation, and a uniform scale —
@@ -1116,7 +2702,7 @@ class Importer {
   /// bodies keep their placement here rather than baked into the geometry; the fixture schema has no
   /// transform record so this is never reached for those. Reflection or shear is refused (out of
   /// scope, and neither maps onto `brep`'s rigid transforms).
-  bool ApplyBodyTransform(int transformId, brep::Solid* out) {
+  bool ApplyBodyTransform(int transformId, brep::Solid* out, bool validateSolid) {
     const SatRecord* t = nullptr;
     if (!Req(transformId, "transform", &t))
       return false;
@@ -1150,29 +2736,43 @@ class Importer {
     }
     Vec3 axis{};
     double angle = 0.0;
-    if (!RotationMatrixToAxisAngle(m, &axis, &angle))
+    if (!ray3d::RotationMatrixToAxisAngle(m, &axis, &angle))
       return Fail("body transform's matrix is not a rotation (reflection or non-orthogonal)");
     if (angle > 1e-9) {
-      brep::Solid rotated;
-      brep::Problem why = brep::Problem::Ok;
-      if (!brep::Rotate(work, Vec3{0, 0, 0}, axis, angle, &rotated, &why))
-        return Fail(std::string("body transform rotation rejected: ") + brep::ProblemText(why));
-      work = std::move(rotated);
+      for (brep::Vertex& v : work.vertices)
+        v.p = ray3d::RotatePointAboutAxis(v.p, Vec3{0, 0, 0}, axis, angle);
+      for (brep::Edge& e : work.edges) {
+        if (e.kind != brep::CurveKind::Line)
+          RotateFrameInPlace(e.frame, Vec3{0, 0, 0}, axis, angle);
+        for (brep::Surface& sf : e.isectSurfaces)
+          RotateSurfaceInPlace(sf, Vec3{0, 0, 0}, axis, angle);
+      }
+      for (brep::Face& f : work.faces)
+        RotateSurfaceInPlace(f.surface, Vec3{0, 0, 0}, axis, angle);
+      RotateFrameInPlace(work.recipe.frame, Vec3{0, 0, 0}, axis, angle);
+      RebuildGeneralTrimLoops(&work);
     }
-    *out = brep::Translate(work, trans);
+    work = brep::Translate(work, trans);
+    RebuildGeneralTrimLoops(&work);
+    *out = std::move(work);
+    if (validateSolid) {
+      const brep::Problem why = brep::Validate(*out);
+      if (why != brep::Problem::Ok)
+        return Fail(std::string("body transform left invalid topology: ") + brep::ProblemText(why));
+    }
     return true;
   }
 
   std::vector<SatRecord> recs_;
   std::string label_;
+  bool plantAsm_ = false;  // a Plant 3D AcDs ASM stream (DetectPlantAsmSatStream)
   std::string error_;
   std::unordered_map<int, int> vertexIndex_;   // ACIS vertex record id -> out.vertices index
   std::unordered_map<int, BuiltEdge> edgeCache_;  // ACIS edge record id -> already-built edge
 };
 
-}  // namespace
-
-ImportResult ImportSatSolid(const std::string& sat, const std::string& entityLabel) {
+/// Builds the solid without the final `brep::Validate` (ImportSatSolid adds it).
+ImportResult ImportSatSolidBuildOnly(const std::string& sat, const std::string& entityLabel) {
   ImportResult result;
   result.mmPerUnit = HeaderMmPerUnit(sat);
   std::vector<SatRecord> recs = Tokenize(sat);
@@ -1181,16 +2781,41 @@ ImportResult ImportSatSolid(const std::string& sat, const std::string& entityLab
                     "ACIS SAT stream is empty or has no records";
     return result;
   }
+  const bool plantAsm = DetectPlantAsmSatStream(recs);
+  SynthesizeBodyLumpIfMissing(recs);
+  if (plantAsm) {
+    AdaptPlantAsmBodyRecord(recs);
+    AdaptPlantAsmLumpShellRecords(recs);
+    AdaptPlantAsmEdgeRecords(recs);
+    AdaptPlantAsmCoedgeRecords(recs);
+    AdaptPlantAsmLoopRecords(recs);
+    AdaptPlantAsmVertexPointAndGeometryRecords(recs);
+  }
   NormalizeRealAcisSchema(recs);
-  Importer importer(std::move(recs), entityLabel);
+  Importer importer(std::move(recs), entityLabel, plantAsm);
   brep::Solid solid;
-  if (!importer.Run(&solid)) {
+  if (!importer.Run(&solid, false)) {
     result.ok = false;
     result.error = importer.Error();
     return result;
   }
   result.ok = true;
   result.solid = std::move(solid);
+  return result;
+}
+
+}  // namespace
+
+ImportResult ImportSatSolid(const std::string& sat, const std::string& entityLabel) {
+  ImportResult result = ImportSatSolidBuildOnly(sat, entityLabel);
+  if (!result.ok)
+    return result;
+  const brep::Problem why = brep::Validate(result.solid);
+  if (why != brep::Problem::Ok) {
+    result.ok = false;
+    result.error = (entityLabel.empty() ? std::string() : entityLabel + ": ") +
+                   std::string("imported topology failed validation: ") + brep::ProblemText(why);
+  }
   return result;
 }
 

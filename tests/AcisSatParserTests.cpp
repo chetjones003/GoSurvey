@@ -3,11 +3,14 @@
 #include "util/brep.hpp"
 #include "util/cadpiperun.hpp"
 
+#include "SolidMeasure.hpp"
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <sstream>
 #include <string>
@@ -356,19 +359,6 @@ TEST_CASE("ACIS SAT import: blend-surface with no representable reduction is ref
   CHECK(Contains(r.error, "does not reduce"));
 }
 
-TEST_CASE("ACIS SAT import: sphere-surface is recognized but refused as a fast-follow", "[acissat]") {
-  std::string sat = kCylinderSat;
-  const std::string from = "cone-surface $-1 0 0 0 0 0 1 1 0 0 0 1 2 1 #";
-  const std::string to = "sphere-surface $-1 0 0 0 0 0 1 1 0 0 2 #";
-  const size_t pos = sat.find(from);
-  REQUIRE(pos != std::string::npos);
-  sat.replace(pos, from.size(), to);
-
-  const acissat::ImportResult r = acissat::ImportSatSolid(sat, "");
-  CHECK_FALSE(r.ok);
-  CHECK(Contains(r.error, "sphere-surface"));
-}
-
 TEST_CASE("ACIS SAT import: a wire body (no lump) is refused, not silently empty", "[acissat]") {
   const std::string sat = kHeader + std::string(R"(
 body $-1 $-1 $1 $-1 #
@@ -418,14 +408,8 @@ TEST_CASE("ACIS SAT import: a non-rectangular trimmed cylindrical face imports v
   CHECK_FALSE(tess.indices.empty());
 }
 
-TEST_CASE("ACIS SAT import: a cylindrical face with a hole loop is still refused by name even "
-          "though general trim loops are now accepted (issue #310)",
+TEST_CASE("ACIS SAT import: cylindrical face with a second loop uses general param trim (issue #302)",
           "[acissat]") {
-  // Gives the wall face a second loop (record index 60, appended below, reusing the same coedge
-  // chain — its content doesn't matter, only that `loops.size()` becomes 2) by pointing the wall's
-  // own loop (index 47) at it via `loop.next`. `BuildFaceForSurface`'s cone-surface branch refuses
-  // any loop count other than exactly 1 before general-trim building ever runs, so this must still
-  // be refused by name rather than silently misimported as, say, an annular general trim.
   std::string sat = kQuarterCylinderSat;
   const std::string from = "loop $-1 $-1 $48 $-1 #\ncoedge $-1 $49";
   const std::string to = "loop $-1 $60 $48 $-1 #\ncoedge $-1 $49";
@@ -437,9 +421,75 @@ TEST_CASE("ACIS SAT import: a cylindrical face with a hole loop is still refused
   REQUIRE(endPos != std::string::npos);
   sat.insert(endPos, "loop $-1 $-1 $48 $-1 #\n");
 
+  // A second loop on a cylindrical face is now built as an ADR-052 general trim (#302) rather than
+  // refused for being a second loop; this loop is a junk duplicate, so only that refusal reason is
+  // checked, not success.
   const acissat::ImportResult r = acissat::ImportSatSolid(sat, "");
+  INFO(r.error);
+  CHECK_FALSE(Contains(r.error, "hole loop"));
+}
+
+// Issue #786 (REQ-320 increment 2) — real Plant 3D ASM bodies, converted from
+// samples/example-piping-system.dwg, one per surface family the importer reaches. The expected
+// figures are AutoCAD 2027's own MASSPROP of the same solid (samples/example-piping-system.acad-
+// blocks.csv): the importer must produce that shape, not merely a solid that validates.
+namespace {
+
+struct PlantAsmFixture {
+  const char* file;
+  double volume;
+  brep::Vec3 mn, mx;
+};
+
+void CheckPlantAsmFixture(const PlantAsmFixture& f) {
+  const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/" + f.file;
+  std::ifstream in(path, std::ios::binary);
+  REQUIRE(in);
+  const std::string sat((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  const acissat::ImportResult r = acissat::ImportSatSolid(sat, f.file);
+  INFO(f.file << ": " << r.error);
+  REQUIRE(r.ok);
+  double volume = 0.0;
+  brep::Vec3 mn, mx;
+  REQUIRE(MeshVolumeAndExtents(r.solid, brep::Vec3{}, &volume, &mn, &mx));
+  CHECK(volume == Catch::Approx(f.volume).epsilon(1e-3));
+  CHECK(mn.x == Catch::Approx(f.mn.x).margin(5e-3));
+  CHECK(mn.y == Catch::Approx(f.mn.y).margin(5e-3));
+  CHECK(mn.z == Catch::Approx(f.mn.z).margin(5e-3));
+  CHECK(mx.x == Catch::Approx(f.mx.x).margin(5e-3));
+  CHECK(mx.y == Catch::Approx(f.mx.y).margin(5e-3));
+  CHECK(mx.z == Catch::Approx(f.mx.z).margin(5e-3));
+}
+
+}  // namespace
+
+TEST_CASE("ACIS SAT import: Plant ASM pipe stub (cylinder and two caps) matches AutoCAD", "[acissat][issue786]") {
+  CheckPlantAsmFixture({"plant-asm-pipe-stub.sat", 3.53478962, {-0.10795455, -1.29545455, -1.29545455},
+                        {0.56249999, 1.29545455, 1.29545455}});
+}
+
+TEST_CASE("ACIS SAT import: Plant ASM valve body (two cones meeting at their tips) matches AutoCAD",
+          "[acissat][issue786]") {
+  CheckPlantAsmFixture({"plant-asm-valve-body.sat", 2.99126254, {0.0, -0.9375, -0.9375}, {3.25, 0.9375, 0.9375}});
+}
+
+TEST_CASE("ACIS SAT import: Plant ASM elbow (torus segment) matches AutoCAD", "[acissat][issue786]") {
+  CheckPlantAsmFixture({"plant-asm-elbow.sat", 11.55009016, {-1.81196113, -1.1875, -1.1875},
+                        {1.375, 1.81196113, 1.1875}});
+}
+
+TEST_CASE("ACIS SAT import: Plant ASM gasket (holed caps) matches AutoCAD", "[acissat][issue786]") {
+  CheckPlantAsmFixture({"plant-asm-gasket.sat", 1.20370123, {0.0, -2.065, -2.065}, {0.125, 2.065, 2.065}});
+}
+
+TEST_CASE("ACIS SAT import: a Plant ASM tee with a true-ellipse edge is refused by name", "[acissat][issue786]") {
+  const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/plant-asm-tee-ellipse.sat";
+  std::ifstream in(path, std::ios::binary);
+  REQUIRE(in);
+  const std::string sat((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  const acissat::ImportResult r = acissat::ImportSatSolid(sat, "tee");
   CHECK_FALSE(r.ok);
-  CHECK(Contains(r.error, "hole loop"));
+  CHECK(Contains(r.error, "true ellipse"));
 }
 
 // GitHub issue #473 — a REAL ACIS SAT file, exported by Civil 3D's ACISOUT from a 4" weld-neck

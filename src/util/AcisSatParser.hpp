@@ -16,16 +16,17 @@
 /// surfaces onto the existing \ref brep::SurfaceKind values.
 ///
 /// **Scope (ADR-051), all by deliberate, recorded decision — not an oversight:**
-/// - **SAT (text) only.** SAB (binary ACIS) is a different token framing of the same record model and
-///   is deferred to GitHub issue #301. The caller (`LibreDwgCad.cpp`) is expected to check the DWG
-///   `3DSOLID`'s `version` field and refuse SAB before ever calling this parser.
-/// - **Analytic primitive surfaces: plane/cylinder/cone**, plus **free-form and derived surfaces**
+/// - **SAT text.** SAB / ASM binary (REQ-320 increment 2, issue #786) reaches this parser already
+///   converted to SAT by vendored LibreDWG (`dwg_convert_SAB_to_SAT1`); Plant 3D's ASM record layout
+///   is recognized and adapted onto the same record model.
+/// - **Analytic primitive surfaces: plane/cylinder/cone, torus and sphere** (D-2026-10-08-a; torus and
+///   sphere faces carry ADR-052 general (u, v) trim loops), plus **free-form and derived surfaces**
 ///   (`spline-surface`, `blend-surface`, `sweep-surface` — GitHub issue #300) that map onto
-///   `SurfaceKind::Nurbs` (REQ-315/ADR-048) when representable. `sphere-surface` and `torus-surface`
-///   are recognized but refused — their loops can pinch at a pole or wrap a periodic tube seam, a
-///   genuinely different shape than cylinder/cone's two recognizable loop patterns below, and are a
-///   tracked fast-follow of this same feature rather than a hastily-generalized recognizer
-///   (ADR-051 (b-1)).
+///   `SurfaceKind::Nurbs` (REQ-315/ADR-048) when representable. A conical face bounded by one rim and
+///   its apex is the whole cone from rim to tip. `intcurve-curve` edges become
+///   `CurveKind::Intersection` when the record embeds torus+plane, torus+cone, or two cones (issue
+///   #786). Null curve (`$-1`) seam edges omit geometry when start/end coincide. Cone/cylinder/torus
+///   hole loops use multi-loop `paramLoops` (#302). A true-ellipse edge is refused by name.
 /// - **A `spline-surface` face's loop must bound the whole, untrimmed patch rectangle** (four edges at
 ///   the patch's four corners) — ADR-048 (b) never allows a proper trim, so a spline surface with a
 ///   genuinely trimmed boundary is refused by name rather than approximated. Degree is limited to
