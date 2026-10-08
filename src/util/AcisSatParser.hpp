@@ -26,7 +26,8 @@
 ///   its apex is the whole cone from rim to tip. `intcurve-curve` edges become
 ///   `CurveKind::Intersection` when the record embeds torus+plane, torus+cone, or two cones (issue
 ///   #786). Null curve (`$-1`) seam edges omit geometry when start/end coincide. Cone/cylinder/torus
-///   hole loops use multi-loop `paramLoops` (#302). A true-ellipse edge is refused by name.
+///   hole loops use multi-loop `paramLoops` (#302). A circular `ellipse-curve` is an arc; a true ellipse
+///   keeps the SAT major axis as `CurveKind::Ellipse`.
 /// - **A `spline-surface` face's loop must bound the whole, untrimmed patch rectangle** (four edges at
 ///   the patch's four corners) — ADR-048 (b) never allows a proper trim, so a spline surface with a
 ///   genuinely trimmed boundary is refused by name rather than approximated. Degree is limited to
@@ -80,8 +81,11 @@ struct ExportResult {
   std::string error;
 };
 
-/// Builds a SAT v1 text stream for \p solid when its topology stays within ADR-051 export scope.
-/// \p entityLabel names the object in refusal messages only.
-[[nodiscard]] ExportResult ExportSatSolid(const brep::Solid& solid, std::string_view entityLabel);
+/// Builds a SAT v1 text stream for \p solid when its topology stays within the analytic scope
+/// import already accepts (plane, cone, cylinder, sphere, torus, line, arc, ellipse, intersection).
+/// \p entityLabel names the object in refusal messages only. \p mmPerUnit is the ACIS header scale
+/// (millimetres in one model unit): 304.8 for feet, 25.4 for inches.
+[[nodiscard]] ExportResult ExportSatSolid(const brep::Solid& solid, std::string_view entityLabel,
+                                          double mmPerUnit = 304.8);
 
 }  // namespace acissat

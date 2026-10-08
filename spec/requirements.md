@@ -3647,8 +3647,8 @@ requirements is a planning failure, not a sign of rigor.
   reason (REQ-001). Entities and tables LibreDWG decoded are mapped into the GoSurvey domain;
   every skipped class, exploded INSERT (until REQ-107), extra layout, and proxy is **named in the
   log** (REQ-201). State-plane coordinates obey REQ-101 (origin subtract in double before float).
-  **Save DWG:** **R2000**, **R2004**, **R2010**, **R2013**, or **R2018**; default **R2000**
-  (D-2026-09-30-c). **R2007** is not offered. The file AutoCAD opens must do so **without a Recover
+  **Save DWG:** **R2000**, **R2004**, **R2010**, **R2013**, or **R2018**; default **R2018**
+  (D-2026-10-08-c). **R2007** is not offered. The file AutoCAD opens must do so **without a Recover
   prompt** for the entity set we emit. Before overwrite, the UI lists what this down-convert / domain
   mapping will drop. Failed write leaves the destination untouched.
   **Save DXF:** LibreDWG’s DXF writer; binary DXF is included to the extent the library writes it
@@ -3661,7 +3661,7 @@ requirements is a planning failure, not a sign of rigor.
     environment, and model-space LINE/CIRCLE/LWPOLYLINE/TEXT/MTEXT/HATCH that LibreDWG decoded
     appear in the drawing;
   - a non-DWG renamed to `.dwg` is refused and the document is unchanged;
-  - File ▸ Export DWG (default) writes R2000; AutoCAD or ODA File Converter (oracle) opens it
+  - File ▸ Export DWG (default) writes R2018; AutoCAD or the in-process reader opens it
     **without Recover** and the emitted entity counts match the log;
   - choosing R2018 in Export DWG writes AC1032; the in-process reader round-trips the emitted set
     and reports `r2018` (regression tests; oracle optional);
@@ -3686,6 +3686,9 @@ requirements is a planning failure, not a sign of rigor.
   2026-10-01 — **R2010/R2013/R2018 export** (D-2026-10-01-f): `DwgSaveVersion` and Export DWG dialog
   offer five selectable versions (R2007 omitted). `ExportLibreCadFile` encodes via LibreDWG
   `R_2010`/`R_2013`/`R_2018`; GEODATA uses class version 2 when `DwgSaveVersionUsesR2010Geodata()`.
+  2026-10-08 — default save **R2018** (D-2026-10-08-c). R2000 through R2013 stay selectable.
+  DWG export of a solid writes every analytic face and edge import already accepts (torus, sphere,
+  ellipse, intersection), so a Plant fitting is not counted as a drop.
 
 ### REQ-171 — Point cloud entity
 - Purpose: File Format Specs — hold laser-scan points without pretending they are a TIN (REQ-068)
@@ -8103,13 +8106,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
   `ACPPCONNECTOR` block sub-parts: origin, X and Z axes, block record) and puts each referenced
   catalog solid in model space where the drawing places it; a straight pipe (`ACPPPIPE`), which
   stores no solid, becomes a solid cylinder along its centreline less its start and end cut-backs.
+  A structural beam (`ACPPSTRUCTUREBEAM`) stores a centreline, a section orientation, and a standard
+  shape name (`W4` through `W27` in the standard wide-flange list). The solid is that shape's published wide-flange outline
+  (AISC outer dimensions, no fillet) extruded along the centreline. Any other shape name, or a
+  centreline that does not decode, is refused by name.
   Plant's parametric data is never interpreted (ADR-026): a Plant entity with no stored solid or
-  placement (structural members) or a layout the reader does not recognise is refused by name, and
+  placement or a layout the reader does not recognise is refused by name, and
   catalog blocks no part places are not dropped into model space.
 
   ACIS payloads or content outside the analytic scope are **refused, never approximated or silently
-  dropped** (ADR-051 (d), REQ-201): free-form/blend/swept surfaces, a true-ellipse boundary edge, a
-  curved face whose loop does not match a recognized shape,
+  dropped** (ADR-051 (d), REQ-201): free-form/blend/swept surfaces, a curved face whose loop does not
+  match a recognized shape,
   a wire or sheet (non-solid) body, or a binary stream that cannot be decoded. The refusal names the
   entity and the specific record or face that could not be represented, and reaches the log the same
   way an unrecognized entity type already does (`NoteSkip`) — the import completes with a message,

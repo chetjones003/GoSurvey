@@ -28,15 +28,20 @@ struct BlockPlacement {
 };
 
 struct Part {
-  enum class Kind { Fitting, Connector, Pipe };
+  enum class Kind { Fitting, Connector, Pipe, Beam };
   Kind kind = Kind::Fitting;
   /// Fitting: exactly one. Connector: one per block sub-part (a weld has none).
   std::vector<BlockPlacement> blocks;
-  brep::Vec3 pipeStart{};      ///< Pipe only: the centreline's start.
-  brep::Vec3 pipeEnd{};        ///< Pipe only: the centreline's end.
+  brep::Vec3 pipeStart{};      ///< Pipe: centreline start. Beam: member start.
+  brep::Vec3 pipeEnd{};        ///< Pipe: centreline end. Beam: member end.
   double pipeRadius = 0.0;     ///< Pipe only.
   double pipeStartTrim = 0.0;  ///< Pipe only: the solid starts this far along from `pipeStart`.
   double pipeEndTrim = 0.0;    ///< Pipe only: the solid stops this far short of `pipeEnd`.
+  brep::Vec3 beamX{};          ///< Beam only: flange-width direction, unit length.
+  double beamDepth = 0.0;      ///< Beam only: overall depth, drawing units (inches in this fixture).
+  double beamWidth = 0.0;      ///< Beam only: flange width.
+  double beamFlange = 0.0;     ///< Beam only: flange thickness.
+  double beamWeb = 0.0;        ///< Beam only: web thickness.
 };
 
 /// The Plant 3D class name of \p obj (`ACPPPIPEINLINEASSET`, `ACPPCONNECTOR`, `ACPPPIPE`,
@@ -57,5 +62,9 @@ struct Part {
 /// A straight pipe as a solid cylinder along its centreline, less its start and end cut-backs,
 /// shifted by `-docOrigin`.
 [[nodiscard]] bool MakePipe(const Part& pipe, const brep::Vec3& docOrigin, brep::Solid* out);
+
+/// A straight wide-flange beam extruded along its centreline, shifted by `-docOrigin`. The
+/// cross-section is the published outer dimensions of a standard W4–W27 shape (no fillet).
+[[nodiscard]] bool MakeBeam(const Part& beam, const brep::Vec3& docOrigin, brep::Solid* out);
 
 }  // namespace libredwgplant

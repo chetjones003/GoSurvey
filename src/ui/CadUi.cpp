@@ -1744,7 +1744,7 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       }
     }
     if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("LibreDWG — R2000 (AC1015) on save.");
+      ImGui::SetTooltip("LibreDWG — AutoCAD 2018 (AC1032) on save.");
     ImGui::Separator();
     if (ImGui::MenuItem("Quit Application", nullptr)) {
       bool anyDirty = (cmd.cadGpuRevision != cmd.activeDocSavedRevision);

@@ -191,7 +191,7 @@ TEST_CASE("LibreDWG DWG round-trips a model-space LINE", "[dwg][libredwg]") {
   OneLine(st);
   std::vector<std::string> log;
   REQUIRE(ExportDwgFile(st, p.c_str(), log));
-  REQUIRE(DwgVersionName(p.c_str()) == "AutoCAD 2000");
+  REQUIRE(DwgVersionName(p.c_str()) == "AutoCAD 2018");
   AppCommandState in;
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   REQUIRE(in.userLinesFlat.size() == 6);
@@ -1564,6 +1564,7 @@ TEST_CASE("Nested block INSERT in definition round-trips through DWG (issue #622
   ScratchDir dir("dwg-nested-block-insert");
   const auto p = (dir.path / "nested-blk.dwg").string();
   AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2000;
   CadBlockDefinition leaf;
   leaf.name = "NEST_LEAF";
   leaf.content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
@@ -2246,25 +2247,27 @@ TEST_CASE("opening the Plant fixture places every part where AutoCAD does", "[dw
       return !a.used && MatchesAcad(a, volume, mn, mx);
     });
     INFO("solid " << i << " volume " << volume << " at " << mn.x << ", " << mn.y << ", " << mn.z);
-    CHECK(row != acad.end());
-    if (row != acad.end()) {
-      row->used = true;
-      ++matched;
-    }
+    if (row == acad.end())
+      continue;
+    row->used = true;
+    ++matched;
   }
-  // 59 pipes, 52 fittings and 7 gaskets when this landed; fewer is a regression.
+  // 59 pipes, 52 fittings and 7 gaskets when this landed; fewer is a regression. The 117 W8x28
+  // beams are not in the AutoCAD explode answer key (they have no stored solid); they are counted
+  // apart from the rows they must not steal.
   CHECK(matched >= 118);
+  CHECK(st.cadSolids.size() == static_cast<size_t>(matched) + 117);
   double mnX = 0.0, mxX = 0.0, mnY = 0.0, mxY = 0.0;
   REQUIRE(ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY));
   CHECK(mxX > mnX);
   CHECK(mxY > mnY);
 
-  // What is not imported is named (REQ-201): structural members carry no stored solid, and a
-  // fitting whose catalog solid the parser refuses says so.
+  // What is not imported is named (REQ-201). A fitting whose catalog solid the parser refuses says so.
+  // Wide-flange beams are built from their standard name and are not in that skip list.
   const auto logged = [&](const char* text) {
     return std::any_of(log.begin(), log.end(), [&](const std::string& l) { return l.find(text) != std::string::npos; });
   };
-  CHECK(logged("ACPPSTRUCTUREBEAM(no stored solid or placement for this Plant 3D class)"));
+  CHECK_FALSE(logged("ACPPSTRUCTUREBEAM"));
   CHECK(logged("ACPPPIPEINLINEASSET(catalog part not imported: 3DSOLID("));
   CHECK_FALSE(logged("3DSOLID(empty)"));
   CHECK_FALSE(logged("data layout not recognized"));
@@ -3081,6 +3084,7 @@ TEST_CASE("DWG export links every model-space entity explicitly (issue #590)", "
   const auto p = (dir.path / "mixed.dwg").string();
 
   AppCommandState st;
+  st.dwgExportVersion = DwgSaveVersion::R2000;
   st.userLinesFlat = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f, 10.f, 0.f, 0.f, 10.f, 10.f, 0.f};
   st.userLineAttrs = {EntityAttributes{}, EntityAttributes{}};
   st.userCirclesCxCyZR = {5.f, 5.f, 0.f, 2.f};

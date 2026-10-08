@@ -1161,6 +1161,14 @@ void ImportPlantParts(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* mspace,
         NoteSkip(skipHist, (cls + "(pipe solid could not be built)").c_str());
       continue;
     }
+    if (part.kind == libredwgplant::Part::Kind::Beam) {
+      brep::Solid beam;
+      if (libredwgplant::MakeBeam(part, docOrigin, &beam))
+        keep(std::move(beam));
+      else
+        NoteSkip(skipHist, (cls + "(beam solid could not be built)").c_str());
+      continue;
+    }
     for (const libredwgplant::BlockPlacement& placement : part.blocks) {
       const CatalogSolids& c = catalogSolids(placement.blockHandle);
       if (!c.refused.empty()) {
@@ -3495,7 +3503,16 @@ bool WriteSolidEntity(const AppCommandState& st, const brep::Solid& solid, Dwg_O
     return false;
   Dwg_Entity__3DSOLID* ent = WriteRecipeSolid(hdr, st, solid.recipe);
   if (ent == nullptr) {
-    const acissat::ExportResult er = acissat::ExportSatSolid(solid, "3DSOLID");
+    double mmPerUnit = 304.8;
+    switch (st.drawingInsUnits) {
+    case 1: mmPerUnit = 25.4; break;
+    case 4: mmPerUnit = 1.0; break;
+    case 5: mmPerUnit = 10.0; break;
+    case 6: mmPerUnit = 1000.0; break;
+    case 2: mmPerUnit = 304.8; break;
+    default: break;
+    }
+    const acissat::ExportResult er = acissat::ExportSatSolid(solid, "3DSOLID", mmPerUnit);
     if (!er.ok)
       return false;
     ent = dwg_add_3DSOLID(hdr, er.sat.c_str());

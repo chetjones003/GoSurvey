@@ -5171,7 +5171,7 @@ struct AppCommandState {
   /// before anything is written, because a DWG save can overwrite a drawing GoSurvey did not author.
   bool        dwgLossyExportModal = false;
   std::string dwgPendingExportPath;  ///< Destination chosen in the save dialog, written only on confirm.
-  DwgSaveVersion dwgExportVersion = DwgSaveVersion::R2000;  ///< Format for the pending Export DWG (issue #600).
+  DwgSaveVersion dwgExportVersion = DwgSaveVersion::R2018;  ///< Format for the pending Export DWG (issue #600, D-2026-10-08-c).
 
   // -------------------------------------------------------------------------
   // ALIGN command state (Helmert transformation)
