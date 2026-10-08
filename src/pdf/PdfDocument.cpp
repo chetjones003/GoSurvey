@@ -308,7 +308,7 @@ struct SnapCtx {
 void CollectSnap(FPDF_PAGEOBJECT obj, const Mat& outer, int depth, SnapCtx& ctx) {
   if (ctx.stop || obj == nullptr || depth > 8)
     return;
-  if ((++ctx.visited & 255u) == 0 && ctx.cancel()) {
+  if ((++ctx.visited & 255u) == 0 && ctx.cancel && ctx.cancel()) {
     ctx.stop = true;
     return;
   }
@@ -396,7 +396,7 @@ struct TextCtx {
 void CollectText(FPDF_PAGEOBJECT obj, const Mat& outer, int depth, TextCtx& ctx) {
   if (ctx.stop || obj == nullptr || depth > 8)
     return;
-  if ((++ctx.visited & 255u) == 0 && ctx.cancel()) {
+  if ((++ctx.visited & 255u) == 0 && ctx.cancel && ctx.cancel()) {
     ctx.stop = true;
     return;
   }
@@ -445,7 +445,7 @@ bool PdfDocument::SnapPoints(int page, std::vector<SnapPoint>& out, const std::f
   for (int i = 0; i < n && !ctx.stop; ++i)
     CollectSnap(FPDFPage_GetObject(p, i), Mat{}, 0, ctx);
   FPDF_ClosePage(p);
-  if (cancel()) {
+  if (cancel && cancel()) {
     out.clear();
     return false;
   }
@@ -479,7 +479,7 @@ struct AuditCtx {
 void CollectAudit(FPDF_PAGEOBJECT obj, const Mat& outer, int depth, AuditCtx& ctx) {
   if (ctx.stop || obj == nullptr || depth > 8)
     return;
-  if ((++ctx.visited & 255u) == 0 && ctx.cancel()) {
+  if ((++ctx.visited & 255u) == 0 && ctx.cancel && ctx.cancel()) {
     ctx.stop = true;
     return;
   }

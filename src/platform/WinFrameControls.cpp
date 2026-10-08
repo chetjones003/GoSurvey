@@ -172,4 +172,36 @@ void GlfwPlatformClearWindowRegion(GLFWwindow* window) {
   SetWindowRgn(hwnd, NULL, TRUE);
 }
 
+void GlfwPlatformForceFocus(GLFWwindow* window) {
+  if (!window)
+    return;
+  HWND hwnd = glfwGetWin32Window(window);
+  if (!hwnd)
+    return;
+  if (IsIconic(hwnd))
+    ShowWindow(hwnd, SW_RESTORE);
+  // AttachThreadInput lets this thread's SetForegroundWindow win even when Windows' foreground lock
+  // would otherwise ignore it — both windows belong to this same process, but they can still be driven
+  // by different message-pump calls (an ImGui viewport's own window loop), which is enough for Windows
+  // to treat the request as "not the thread that currently owns the foreground."
+  const DWORD thisThread = GetCurrentThreadId();
+  const DWORD fgThread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+  const bool attach = fgThread != 0 && fgThread != thisThread;
+  if (attach)
+    AttachThreadInput(thisThread, fgThread, TRUE);
+  // The topmost-toggle trick: Windows lets ANY window raise itself to HWND_TOPMOST regardless of the
+  // foreground lock, so flipping it on then straight back off forces the z-order change that
+  // SetForegroundWindow alone is sometimes refused (silently, no error) when the caller is not the
+  // thread Windows currently considers "has recent input" — which a same-process sibling window
+  // (the floating PDF viewer, ADR-067) does not reliably count as.
+  SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  BringWindowToTop(hwnd);
+  SetForegroundWindow(hwnd);
+  SetActiveWindow(hwnd);
+  if (attach)
+    AttachThreadInput(thisThread, fgThread, FALSE);
+  glfwFocusWindow(window);
+}
+
 #endif // _WIN32

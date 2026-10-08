@@ -12131,6 +12131,43 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-k; the user asked for both).
 
+### REQ-399 — Extract coordinates from a PDF region into survey points or circles
+
+- Purpose: survey drawings reference monument/control coordinates that exist only as text in a PDF (a CAD-exported plan sheet). Getting them into the drawing today means manually retyping each value. The user wants to select a region of a PDF, have GoSurvey read and classify the coordinate text in it, review the result against the source before anything is created, and on acceptance get real drawing geometry at those coordinates with the drawing brought into view.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-08-d.
+- Depends on: REQ-387 (PDF viewer window), REQ-395 (PDFium text precedent — no OCR dependency in this codebase), REQ-023 (overwrite/offset id-conflict modal, reused here).
+- Statement:
+  1. **Entry point.** An **Extract Coordinates** action is available in the PDF viewer window (REQ-387) only while a PDF page is the active view.
+  2. **Region selection.** Starting the action lets the user drag a rectangle over the page; the rectangle is drawn as a semi-transparent yellow overlay tracking the drag, using the same press-drag-release / click-move-click interaction REQ-396 already gives the other PDF drawing tools.
+  3. **Text source — selectable text only.** On release, GoSurvey reads the **selectable PDF text** inside the rectangle via PDFium's text API (the same route REQ-395 uses) — no OCR. If the region contains **no selectable text**, GoSurvey does not guess; it reports that the region is **likely a scanned image and that GoSurvey does not yet have OCR text recognition**, and creates nothing.
+  4. **Shape recognition.** The extracted text is classified into one of three shapes:
+     - **a. Single monument block** — a description line plus labeled fields (`N:` northing, `E:` easting, `EL`/`ELEV` elevation); no point number.
+     - **b. Table** — a header row identifies columns (point number, description, elevation, northing, easting in any order); each subsequent row is one candidate point, point number taken from its column when present.
+     - **c. Bare pair** — only a northing and an easting value, no description, elevation, or point number label found.
+     Text that does not fit any shape, or is missing both northing and easting, is reported as **unparsed** for that region and produces no candidate.
+  5. **Review before anything changes.** Every parsed candidate is shown next to (or over) its source text in the PDF view, with the fields GoSurvey read, before any drawing is touched. Each candidate (or the batch, for a table) has **Accept** and **Deny** controls. Deny discards it; nothing is created or changed.
+  6. **What Accept creates.**
+     - A candidate with northing, easting, elevation **and** description (shape a or b with all fields present) creates a **survey point**.
+     - A candidate with only northing and easting (shape c, or shape a/b missing description/elevation) creates a **circle** at that location — not a survey point.
+  7. **Point numbering.** A survey point whose source gave no point number is assigned the **lowest currently unused** integer point number in the active drawing. A survey point whose source point number **already exists** in the drawing is resolved through the **existing overwrite/offset id-conflict modal** (the same one DXF import and COPY/rotate-copy already use, REQ-023) — never a silent overwrite.
+  8. **Focus after accept.** Accepting brings the active drawing window to focus and frames/zooms the view to the newly created entities' extents.
+  9. **Out of scope for this REQ:** OCR / scanned-page text recognition, freehand (non-rectangular) region selection, editing a candidate's parsed values before accepting, extraction spanning multiple pages in one selection.
+- Acceptance:
+  - `[req399]` test: given the single-monument fixture (description + `N:`/`E:`/`EL.` labels), the parsed candidate's northing, easting, elevation and description match the source, and accepting creates one survey point at that location with an auto-assigned lowest-unused point number.
+  - `[req399]` test: given the multi-row table fixture, each row produces one candidate correctly mapped by its header columns (including point number), and accepting creates one survey point per row at the correct coordinates and point numbers.
+  - `[req399]` test: given the bare northing/easting fixture, the candidate has no description/elevation/point number, and accepting creates a circle (not a survey point) at that location.
+  - `[req399]` test: a region with no selectable text produces the "likely scanned, no OCR yet" message and creates nothing.
+  - `[req399]` test: a region whose text has no recognizable northing/easting is reported unparsed and creates nothing.
+  - `[req399]` test: Deny on a shown candidate leaves the drawing unchanged.
+  - `[req399]` test: a parsed point number that already exists in the drawing triggers the existing overwrite/offset modal; both resolutions produce the correct point/number in the drawing.
+  - `[req399]` test: auto-assigned point numbers are verified as the lowest integers not already present among the drawing's survey points.
+  - Manual: after Accept, the drawing window has focus and the view is framed to include the newly created point(s)/circle(s).
+- Owner-layer: Domain/IO (`src/pdf/PdfCoordExtract`, PDFium text + pure parsing), UI (PDF viewer selection + review panel), Commands (survey point/circle creation, zoom-to-extents)
+- Status: accepted
+- Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

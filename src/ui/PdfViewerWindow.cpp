@@ -5,12 +5,14 @@
 #include "FontRegistry.hpp"
 #include "PdfAnnotate.hpp"
 #include "PdfCompare.hpp"
+#include "PdfCoordExtract.hpp"
 #include "PdfIcons.hpp"
 #include "PdfPanelStyle.hpp"
 #include "PdfSnap.hpp"
 #include "PdfSplit.hpp"
 #include "PdfViewerCore.hpp"
 #include "ShxDraw.hpp"
+#include "SurveyPoints.hpp"
 #include "WinFileDialogs.hpp"
 
 #include <GL/glew.h>
@@ -39,6 +41,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 using namespace pdfview;
@@ -232,7 +235,7 @@ struct BenchRun {
 // a page never re-renders it; only "Save As" writes them into a new PDF.
 // ---------------------------------------------------------------------------------------------------
 
-enum class Tool { Select, Text, Line, Rect, Ellipse, Leader, Calibrate, Length, PolyLength, Area, Angle, Check };
+enum class Tool { Select, Text, Line, Rect, Ellipse, Leader, Calibrate, Length, PolyLength, Area, Angle, Check, Extract };
 
 bool IsMeasureTool(Tool t) { return t == Tool::Length || t == Tool::PolyLength || t == Tool::Area || t == Tool::Angle; }
 
@@ -301,6 +304,22 @@ struct AuditUi {
   bool listAll = false;                            ///< list every matched dimension, not only the offenders
   int selected = -1;                               ///< highlighted match (index into matches.matches)
   double elapsedMs = 0.0;                          ///< how long the last run took
+};
+
+// REQ-399 - the Extract Coordinates tool. Its drag rectangle and parsed result are kept apart from
+// AnnotUi: a candidate is never a PDF annotation, and nothing here is written by Save As.
+struct ExtractUi {
+  bool dragging = false;        ///< a drag rectangle is being dragged out right now
+  int page = -1;                ///< the page being dragged on
+  float x0 = 0.f, y0 = 0.f;     ///< press point, page points
+  float x1 = 0.f, y1 = 0.f;     ///< current/release point, page points
+  ImVec2 pressMouse{0.f, 0.f};
+  bool dragMoved = false;
+  std::optional<pdfview::ExtractResult> result; ///< the last region's parsed candidates, shown for review
+  int resultPage = -1;                          ///< the page `result` was read from (for the overlay)
+  float resultX0 = 0.f, resultY0 = 0.f, resultX1 = 0.f, resultY1 = 0.f; ///< the region `result` covers
+  bool openRequested = false;   ///< a region was just dragged out: open the review window next frame
+  bool panelOpen = false;       ///< the review window is open (non-modal: never blocks the rest of the app)
 };
 
 struct AnnotUi {
@@ -842,6 +861,7 @@ struct Viewer {
   double firstPageMs = -1;
   BenchRun bench;
   AnnotUi ann; ///< REQ-388
+  ExtractUi extract; ///< REQ-399
   // REQ-389: the Split dialog. The copy runs on a one-shot worker so a long file never freezes the UI.
   bool splitOpenRequest = false;
   char splitBuf[256] = "";
@@ -2257,7 +2277,7 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
     const Icon ico = t == Tool::Select ? Icon::Select : t == Tool::Text ? Icon::Text : t == Tool::Line ? Icon::Line : t == Tool::Rect ? Icon::Rect
                      : t == Tool::Ellipse ? Icon::Ellipse : t == Tool::Leader ? Icon::Leader : t == Tool::Calibrate ? Icon::Calibrate
                      : t == Tool::Length ? Icon::Length : t == Tool::PolyLength ? Icon::PolyLength : t == Tool::Area ? Icon::Area
-                     : t == Tool::Angle ? Icon::Angle : Icon::Check;
+                     : t == Tool::Angle ? Icon::Angle : t == Tool::Extract ? Icon::Rect : Icon::Check;
     if (IconButton(ico, label)) {
       u.tool = t;
       u.measurePts.clear();
@@ -2270,6 +2290,12 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
         u.checkTarget = 0;
         u.checkPts.clear();
         u.status = "Check: click the two ends of a dimension the drawing states.";
+      }
+      if (t == Tool::Extract) {
+        v.extract.dragging = false;
+        v.extract.panelOpen = false;
+        v.extract.result.reset();
+        u.status = "Extract Coordinates: drag a box around the coordinate text.";
       }
     }
     if (on)
@@ -2428,6 +2454,12 @@ void DrawAnnotBar(Viewer& v, std::vector<std::string>& log) {
   toolButton("Area", Tool::Area);
   toolButton("Angle", Tool::Angle);
   toolButton("Check", Tool::Check);
+  ImGui::TextUnformatted("|");
+  ImGui::SameLine();
+  toolButton("Extract Coords", Tool::Extract);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Drag a box around coordinate text (REQ-399) to read northing/easting/elevation/\n"
+                      "description into survey points or circles in the active drawing");
   ImGui::TextUnformatted("|");
   ImGui::SameLine();
   { // Snap: end points and corners of the page's own line work (F3)
@@ -2612,6 +2644,8 @@ struct PageRect {
 
 // Mouse and keyboard on the pages: create with the drawing tools, select / move / resize with Select.
 void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovered, bool panning) {
+  if (v.ann.tool == Tool::Extract) // REQ-399: its own input handler (HandleExtractInput), not an annotation
+    return;
   AnnotUi& u = v.ann;
   const ImGuiIO& io = ImGui::GetIO();
   const float k = v.pxPerPt;
@@ -2993,6 +3027,74 @@ void HandleAnnotInput(Viewer& v, const std::vector<PageRect>& rects, bool hovere
   }
 }
 
+// REQ-399: drag a rectangle, release to read the region's text. A click too small to be a drag (< 4 px,
+// the same slack HandleAnnotInput uses) is discarded, same as a click-not-drag Rectangle tool.
+void HandleExtractInput(Viewer& v, const std::vector<PageRect>& rects) {
+  ExtractUi& e = v.extract;
+  if (v.ann.tool != Tool::Extract) {
+    e.dragging = false;
+    return;
+  }
+  const ImGuiIO& io = ImGui::GetIO();
+  const float k = v.pxPerPt;
+  const auto toPt = [&](const PageRect& r, float& x, float& y) {
+    x = std::clamp((io.MousePos.x - r.tl.x) / k, 0.f, r.wPt);
+    y = std::clamp(r.hPt - (io.MousePos.y - r.tl.y) / k, 0.f, r.hPt);
+  };
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    e.dragging = false;
+    return;
+  }
+  if (!e.dragging) {
+    if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive())
+      return;
+    for (const PageRect& r : rects) {
+      const ImVec2 m = io.MousePos;
+      if (m.x < r.tl.x || m.y < r.tl.y || m.x > r.tl.x + r.wPt * k || m.y > r.tl.y + r.hPt * k)
+        continue;
+      e.dragging = true;
+      e.dragMoved = false;
+      e.page = r.page;
+      e.pressMouse = m;
+      toPt(r, e.x0, e.y0);
+      e.x1 = e.x0;
+      e.y1 = e.y0;
+      return;
+    }
+    return;
+  }
+  const PageRect* r = nullptr;
+  for (const PageRect& pr : rects)
+    if (pr.page == e.page)
+      r = &pr;
+  if (!e.dragMoved && std::hypot(io.MousePos.x - e.pressMouse.x, io.MousePos.y - e.pressMouse.y) >= 4.f)
+    e.dragMoved = true;
+  if (r != nullptr)
+    toPt(*r, e.x1, e.y1);
+  if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    e.dragging = false;
+    if (e.dragMoved && r != nullptr) {
+      std::vector<pdfview::DimText> texts;
+      std::vector<pdfview::DimSeg> segs;
+      try {
+        v.doc->AuditPageData(e.page, texts, segs, {});
+        e.result = pdfview::ExtractCoordinates(texts, e.x0, e.y0, e.x1, e.y1);
+      } catch (const std::exception&) { // REQ-201: a reason, never a crash
+        pdfview::ExtractResult failed;
+        failed.status = pdfview::ExtractStatus::Unparsed;
+        failed.message = "This region's text could not be read.";
+        e.result = failed;
+      }
+      e.resultPage = e.page;
+      e.resultX0 = e.x0;
+      e.resultY0 = e.y0;
+      e.resultX1 = e.x1;
+      e.resultY1 = e.y1;
+      e.openRequested = true;
+    }
+  }
+}
+
 void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
   const ImVec2 avail = ImGui::GetContentRegionAvail();
   ImGui::SetNextWindowContentSize(ImVec2(std::max(avail.x, v.layout.maxWidth * v.pxPerPt + 2 * kMarginPx), ContentHeightPx(v)));
@@ -3180,6 +3282,24 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
     pageRects.push_back({p, a, s.wPt, s.hPt});
   }
 
+  // REQ-399: the Extract Coordinates drag rectangle (its own input/draw, not an annotation).
+  if (hovered && !v.panning)
+    HandleExtractInput(v, pageRects);
+  for (const PageRect& r : pageRects) {
+    const auto S = [&](float x, float y) { return ImVec2(r.tl.x + x * v.pxPerPt, r.tl.y + (r.hPt - y) * v.pxPerPt); };
+    if (v.extract.dragging && v.extract.dragMoved && v.extract.page == r.page) {
+      const ImVec2 a = S(std::min(v.extract.x0, v.extract.x1), std::max(v.extract.y0, v.extract.y1));
+      const ImVec2 b = S(std::max(v.extract.x0, v.extract.x1), std::min(v.extract.y0, v.extract.y1));
+      dl->AddRectFilled(a, b, IM_COL32(255, 220, 0, 70));
+      dl->AddRect(a, b, IM_COL32(230, 180, 0, 255), 0.f, 0, 2.f);
+    } else if (v.extract.result.has_value() && v.extract.resultPage == r.page) {
+      const ImVec2 a = S(std::min(v.extract.resultX0, v.extract.resultX1), std::max(v.extract.resultY0, v.extract.resultY1));
+      const ImVec2 b = S(std::max(v.extract.resultX0, v.extract.resultX1), std::min(v.extract.resultY0, v.extract.resultY1));
+      dl->AddRectFilled(a, b, IM_COL32(255, 220, 0, 45));
+      dl->AddRect(a, b, IM_COL32(230, 180, 0, 200), 0.f, 0, 1.5f);
+    }
+  }
+
   // REQ-388: annotations over the pages (input first, so a drag is drawn in the frame it moves).
   HandleAnnotInput(v, pageRects, hovered, v.panning);
   {
@@ -3329,6 +3449,205 @@ void DrawPages(Viewer& v, std::vector<std::string>& log, double* viewerCostMs) {
   }
   *viewerCostMs = MsSince(costStart);
   ImGui::EndChild();
+}
+
+// ---------------------------------------------------------------------------------------------------
+// REQ-399: Extract Coordinates review panel and Accept/Deny commit.
+// ---------------------------------------------------------------------------------------------------
+
+bool ExtractIdInUse(const AppCommandState& cmd, int id) {
+  for (const SurveyPoint& p : cmd.surveyPoints)
+    if (p.id == id)
+      return true;
+  return false;
+}
+
+// The lowest point number not already used by any survey point in the active drawing (REQ-399 clause 7).
+int LowestUnusedExtractPointId(const AppCommandState& cmd) {
+  int id = 1;
+  while (ExtractIdInUse(cmd, id))
+    ++id;
+  return id;
+}
+
+// Accept (REQ-399 clauses 6-8): create a survey point or a circle at the candidate's coordinates, route
+// a colliding point number through the existing DXF-import overwrite/offset modal (REQ-023), then bring
+// the drawing into focus framed on everything (the smallest correct reuse of StartZoomExtentsCommand,
+// which already includes anything just added).
+void AcceptExtractCandidate(AppCommandState& cmd, std::vector<std::string>& log, const pdfview::CoordCandidate& c) {
+  if (c.IsSurveyPoint()) {
+    const int id = c.pointNumber.value_or(LowestUnusedExtractPointId(cmd));
+    if (ExtractIdInUse(cmd, id)) {
+      SurveyPoint w{};
+      w.id = id;
+      w.easting = c.easting; // world (state-plane) coordinates, as ResolveConflictingWorldSurveyPoints expects
+      w.northing = c.northing;
+      w.elevation = *c.elevation;
+      w.description = c.description;
+      w.rawDescription = c.description;
+      int maxId = 0;
+      for (const SurveyPoint& p : cmd.surveyPoints)
+        maxId = std::max(maxId, p.id);
+      cmd.pendingDxfConflictPoints.push_back(w);
+      cmd.dxfPointConflictOffset = std::max(maxId, 1);
+      cmd.dxfPointConflictModalOpen = true;
+      cmd.dxfPointConflictModalOpenRequested = true;
+      log.push_back("Extract Coordinates — point " + std::to_string(id) +
+                    " already exists; choose overwrite or offset.");
+      return; // the modal creates it once resolved; focus/zoom happen there would need a second hook,
+              // so this one case does not auto-focus (REQ-399 is silent on it; the user is already looking
+              // at the conflict they must resolve).
+    }
+    PushUndoSnapshot(cmd, "Extract coordinates");
+    SurveyPoint p{};
+    p.id = id;
+    p.easting = c.easting - cmd.worldDocumentOriginX;
+    p.northing = c.northing - cmd.worldDocumentOriginY;
+    p.elevation = *c.elevation;
+    p.description = c.description;
+    p.rawDescription = c.description;
+    p.layer = CreatePointsLayer(cmd);
+    cmd.surveyPoints.push_back(p);
+    EnsureSurveyPointLabelMtext(cmd, cmd.surveyPoints.size() - 1, &log);
+    log.push_back("Extract Coordinates — survey point " + std::to_string(id) + " created.");
+  } else {
+    const float cx = static_cast<float>(c.easting - cmd.worldDocumentOriginX);
+    const float cy = static_cast<float>(c.northing - cmd.worldDocumentOriginY);
+    const float cz = static_cast<float>(c.elevation.value_or(0.0));
+    const float radius = SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
+    CommitCircleExternal(cmd, cx, cy, cz, radius, 0.f, 0.f, 1.f, log);
+    log.push_back("Extract Coordinates — circle created at N " + std::to_string(c.northing) + " E " + std::to_string(c.easting) + ".");
+  }
+  StartZoomExtentsCommand(cmd, log);
+  cmd.requestMainWindowFocus = true;
+}
+
+// REQ-399 clause 5 review table. One row per candidate; a row's Accept/Deny decides just that row.
+// The outcome, not "Accept"/"Deny" literally, is what Accept All / Deny All below drive in bulk.
+enum class ExtractRowOutcome { None, Accepted, Denied };
+
+ExtractRowOutcome DrawExtractCandidateRow(AppCommandState& cmd, std::vector<std::string>& log, pdfview::CoordCandidate& c, int idx) {
+  ImGui::PushID(idx);
+  ImGui::TableNextRow();
+  ImGui::TableSetColumnIndex(0);
+  ImGui::Text("%.3f", c.northing);
+  ImGui::TableSetColumnIndex(1);
+  ImGui::Text("%.3f", c.easting);
+  ImGui::TableSetColumnIndex(2);
+  if (c.HasElevation())
+    ImGui::Text("%.3f", *c.elevation);
+  else
+    ImGui::TextDisabled("-");
+  ImGui::TableSetColumnIndex(3);
+  ImGui::TextUnformatted(c.HasDescription() ? c.description.c_str() : "-");
+  ImGui::TableSetColumnIndex(4);
+  if (c.pointNumber.has_value())
+    ImGui::Text("%d", *c.pointNumber);
+  else
+    ImGui::TextDisabled("auto");
+  ImGui::TableSetColumnIndex(5);
+  ImGui::TextUnformatted(c.IsSurveyPoint() ? "Point" : "Circle");
+  ImGui::TableSetColumnIndex(6);
+  ExtractRowOutcome outcome = ExtractRowOutcome::None;
+  if (ImGui::SmallButton("Accept")) {
+    AcceptExtractCandidate(cmd, log, c);
+    outcome = ExtractRowOutcome::Accepted;
+  }
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Deny")) {
+    log.push_back("Extract Coordinates — candidate denied, nothing created.");
+    outcome = ExtractRowOutcome::Denied;
+  }
+  ImGui::PopID();
+  return outcome;
+}
+
+// NOT modal: a modal popup blocks input to every other window while open, and Accept (REQ-399 clause
+// 8) deliberately moves focus away to the drawing — a modal left open there would silently block the
+// WHOLE app (invisible, since it is pinned to a PDF viewer window that no longer has focus). A plain
+// window pinned to the PDF viewer's own platform viewport gets both properties right: it stays with
+// this PDF viewer (not its own floating OS window, ADR-067) and never blocks anything else.
+void DrawExtractPanel(Viewer& v, AppCommandState& cmd, std::vector<std::string>& log) {
+  ExtractUi& e = v.extract;
+  if (e.openRequested) {
+    e.openRequested = false;
+    e.panelOpen = true;
+  }
+  if (!e.panelOpen || !e.result.has_value())
+    return;
+  const std::string title = "Extract Coordinates - " + v.title + "###extract" + std::to_string(v.id);
+  if (ImGuiViewport* vp = ImGui::GetWindowViewport())
+    ImGui::SetNextWindowViewport(vp->ID);
+  // AlwaysAutoResize with nothing but wrapped text to size against collapses to a sliver a few frames
+  // in (each frame's wrap width depends on the PREVIOUS frame's already-shrunk width); a minimum width
+  // constraint breaks that feedback loop.
+  ImGui::SetNextWindowSizeConstraints(ImVec2(420.f, 0.f), ImVec2(1.0e9f, 1.0e9f));
+  bool open = true;
+  PushPanelStyle();
+  const bool shown = ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking);
+  if (shown) {
+    pdfview::ExtractResult& r = *e.result;
+    if (r.status == pdfview::ExtractStatus::NoText || r.status == pdfview::ExtractStatus::Unparsed) {
+      ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 400.f);
+      ImGui::TextWrapped("%s", r.message.c_str());
+      ImGui::PopTextWrapPos();
+      ImGui::Dummy(ImVec2(0.f, 6.f));
+      if (ImGui::Button("Close")) {
+        e.result.reset();
+        open = false;
+      }
+    } else {
+      ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 400.f);
+      ImGui::TextWrapped("%d candidate(s) read from the selected region. Review each against its "
+                         "source text, then Accept or Deny — or decide them all at once.",
+                         static_cast<int>(r.candidates.size()));
+      ImGui::PopTextWrapPos();
+      ImGui::Dummy(ImVec2(0.f, 4.f));
+      if (ImGui::Button("Accept all")) {
+        for (pdfview::CoordCandidate& c : r.candidates)
+          AcceptExtractCandidate(cmd, log, c);
+        r.candidates.clear();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Deny all")) {
+        log.push_back("Extract Coordinates — " + std::to_string(r.candidates.size()) + " candidate(s) denied, nothing created.");
+        r.candidates.clear();
+      }
+      ImGui::Dummy(ImVec2(0.f, 6.f));
+      constexpr ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit;
+      if (ImGui::BeginTable("##extracttable", 7, flags)) {
+        ImGui::TableSetupColumn("Northing");
+        ImGui::TableSetupColumn("Easting");
+        ImGui::TableSetupColumn("Elev");
+        ImGui::TableSetupColumn("Description");
+        ImGui::TableSetupColumn("Pt #");
+        ImGui::TableSetupColumn("Creates");
+        ImGui::TableSetupColumn("");
+        ImGui::TableHeadersRow();
+        for (size_t i = 0; i < r.candidates.size();) {
+          if (DrawExtractCandidateRow(cmd, log, r.candidates[i], static_cast<int>(i)) != ExtractRowOutcome::None)
+            r.candidates.erase(r.candidates.begin() + static_cast<long>(i));
+          else
+            ++i;
+        }
+        ImGui::EndTable();
+      }
+      if (r.candidates.empty()) {
+        ImGui::Dummy(ImVec2(0.f, 6.f));
+        ImGui::TextDisabled("All candidates decided.");
+        if (ImGui::Button("Close")) {
+          e.result.reset();
+          open = false;
+        }
+      }
+    }
+  }
+  ImGui::End();
+  PopPanelStyle();
+  if (!open) {
+    e.panelOpen = false;
+    e.result.reset();
+  }
 }
 
 } // namespace
@@ -3604,6 +3923,7 @@ void DrawPdfViewers(AppCommandState& cmd, std::vector<std::string>& log) {
           ImGui::SameLine(0.f, 0.f);
         }
         DrawPages(v, log, &cost);
+        DrawExtractPanel(v, cmd, log); // REQ-399
         }
       }
     }

@@ -1267,6 +1267,10 @@ int main()
     DrawBatchPlotDialog(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
     DrawPdfViewers(cmd, cmdLog);  // REQ-387
+    if (cmd.requestMainWindowFocus) { // REQ-399: Accept brings the drawing window to focus
+      cmd.requestMainWindowFocus = false;
+      GlfwPlatformForceFocus(window);
+    }
     DrawInsertBlockDialog(cmd, cmdLog);
     DrawBlockCreateDialog(cmd, cmdLog);
     DrawWblockDialog(cmd, cmdLog);

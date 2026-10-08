@@ -2497,6 +2497,9 @@ struct AppCommandState {
   /// Applied on the next viewport zoom processing step (needs framebuffer size).
   bool pendingZoomExtents = false;
   bool pendingZoomWindow = false;
+  /// REQ-399: bring the main GoSurvey window to the foreground on the next frame (the main loop owns
+  /// the GLFW window handle, so this is a request rather than a direct call from the PDF viewer window).
+  bool requestMainWindowFocus = false;
   float pendingZoomMnX = 0.f;
   float pendingZoomMxX = 0.f;
   float pendingZoomMnY = 0.f;
@@ -7540,6 +7543,13 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
                                 std::vector<float>* previewLines, std::vector<float>* previewCircles);
 
 void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// Commits a circle at (\p cx,\p cy,\p cz) with radius \p r, normal (\p nx,\p ny,\p nz), local
+/// coordinates (REQ-312 plane convention) - the same commit the CIRCLE command uses, exposed for
+/// REQ-399's bare northing/easting candidates (the CIRCLE command's own commit function has internal
+/// linkage inside CadCommands.cpp, so this is a thin externally-visible forwarder, not a rename).
+void CommitCircleExternal(AppCommandState& st, float cx, float cy, float cz, float r, float nx, float ny, float nz,
+                          std::vector<std::string>& log);
 void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log);
 /// PAN command (REQ-045): enters interactive pan mode — left-drag pans the active view (hand cursor);
 /// Esc / Enter / right-click exits. Reuses the existing middle-drag view-pan math.

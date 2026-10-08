@@ -40157,6 +40157,16 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
                 "ESC cancels.");
 }
 
+// CommitCircle (REQ-312) has internal linkage (defined inside an anonymous namespace further up this
+// file, around the CIRCLE command); this is a true external forwarder for REQ-399's bare N/E candidates,
+// placed at file scope so it is NOT itself swept into that anonymous namespace. Unqualified lookup of
+// CommitCircle still finds it: an unnamed namespace injects an implicit using-directive into its
+// enclosing (here, global) scope for the rest of the translation unit.
+void CommitCircleExternal(AppCommandState& st, float cx, float cy, float cz, float r, float nx, float ny, float nz,
+                          std::vector<std::string>& log) {
+  CommitCircle(st, cx, cy, cz, r, nx, ny, nz, log);
+}
+
 void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
   if (st.active != K::None) {
