@@ -96,5 +96,23 @@ a project folder with shared survey points and tracked files.
 
 ---
 
+## What's changed since 0.7.0
+
+**0.7.1**
+- Installer now bundles the Visual C++ runtime GoSurvey needs, so it starts on a fresh PC.
+- A startup problem dialog explains what went wrong and can send a pre-filled support report.
+- Software Update dialog uses the same illustrated look as What's New.
+
+**0.7.2**
+- **Extract Coordinates** — drag a box over coordinate text in a PDF and read it straight into
+  survey points or circles, reviewed before anything is created.
+- Pasted content can be converted to the destination project's coordinate system and units.
+- Paper-space content (viewports, sheet geometry) now survives DXF export and DWG round-trip.
+- Plant 3D piping DWGs: more solids import correctly, and Plant fittings now write back out on save.
+- Runtime crash reports: a shared dialog explains what happened and can send a report.
+- Various paper-space and ribbon fixes.
+
+---
+
 See the [releases page](https://github.com/chetjones003/GoSurvey/releases) for the installer and
 full release notes.
