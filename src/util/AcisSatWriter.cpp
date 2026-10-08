@@ -158,12 +158,18 @@ void ExpandToRealAcisSchema(std::vector<SatRecord>* recs) {
     } else if (r.type == "straight-curve") {
       r.fields = {"$-1", "-1", "$-1", s[1], s[2], s[3], s[4], s[5], s[6], "I", "I"};
     } else if (r.type == "ellipse-curve") {
-      r.fields = {"$-1", "-1", "$-1", s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9], s[10], s[11], "I", "I"};
+      r.fields = {"$-1", "-1", "$-1", s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9], s[10], "I", "I"};
     } else if (r.type == "plane-surface") {
       r.fields = {"$-1", "-1", "$-1", s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9], "I", "I", "I", "I"};
     } else if (r.type == "cone-surface") {
-      r.fields = {"$-1", "-1", "$-1", s[1],  s[2],  s[3],  s[4],  s[5],  s[6],
-                  s[7],  s[8],  s[9],  "I",   "I",   "I",   s[10], s[11], s[12], s[13], "I", "I", "I", "I"};
+      // Same order Plant writes and NormalizeRealAcisSchema reads back: ref, ratio, F F, sin, cos, major.
+      r.fields = {"$-1", "-1", "$-1", s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9],
+                  s[13], "F", "F", s[10], s[11], s[12], "I", "I", "I", "I"};
+    } else if (r.type == "torus-surface") {
+      r.fields = {"$-1", "-1", "$-1", s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9], s[10], s[11],
+                  "F", "F", "F", "F", "F"};
+    } else if (r.type == "sphere-surface") {
+      r.fields = {"$-1", "-1", "$-1", s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9], s[10]};
     }
   }
 }
@@ -176,13 +182,7 @@ class SatWriter {
     assert(err_ != nullptr);
     if (s.shells.size() != 1)
       return fail("solid has other than one shell — not supported for ACIS export (issue #612)");
-    for (const brep::Edge& e : s.edges) {
-      if (e.kind == brep::CurveKind::Intersection || e.kind == brep::CurveKind::Ellipse)
-        return fail("edge uses a curve kind not supported for ACIS export (issue #612)");
-    }
     for (const brep::Face& f : s.faces) {
-      if (f.surface.kind == brep::SurfaceKind::Sphere || f.surface.kind == brep::SurfaceKind::Torus)
-        return fail("face surface kind not supported for ACIS export (issue #612)");
       if (f.surface.kind == brep::SurfaceKind::Nurbs &&
           nurbs::ValidatePatch(f.surface.patch) != nurbs::PatchProblem::Ok)
         return fail("NURBS face patch is invalid — not exported (issue #612)");
@@ -211,12 +211,16 @@ class SatWriter {
         d = ray3d::Scale(d, 1.0 / len);
         curveId_[ei] = add({"straight-curve", Ref(-1), Fmt(p0.x), Fmt(p0.y), Fmt(p0.z), Fmt(d.x), Fmt(d.y),
                             Fmt(d.z)});
-      } else if (e.kind == brep::CurveKind::Arc) {
+      } else if (e.kind == brep::CurveKind::Arc || e.kind == brep::CurveKind::Ellipse) {
         const ucs::Ucs& fr = e.frame;
         const ray3d::Vec3 major = ray3d::Scale(fr.xAxis, e.radius);
+        const double ratio = (e.kind == brep::CurveKind::Ellipse && e.radius > 0.0) ? e.radius2 / e.radius : 1.0;
         curveId_[ei] = add({"ellipse-curve", Ref(-1), Fmt(fr.origin.x), Fmt(fr.origin.y), Fmt(fr.origin.z),
                             Fmt(fr.zAxis.x), Fmt(fr.zAxis.y), Fmt(fr.zAxis.z), Fmt(major.x), Fmt(major.y),
-                            Fmt(major.z), "1"});
+                            Fmt(major.z), Fmt(ratio)});
+      } else if (e.kind == brep::CurveKind::Intersection) {
+        if (!emitIntcurve(s, e, &curveId_[ei]))
+          return false;
       } else {
         return fail("unsupported edge curve kind for ACIS export");
       }
@@ -276,13 +280,14 @@ class SatWriter {
     return SerializeSat("700 0 1 0", "17 GoSurvey 7 32.0.2 NT 24 today", "1 9.9999999999999995e-07 1e-10", recs_);
   }
 
-  [[nodiscard]] std::string finishRealAsm() const {
+  [[nodiscard]] std::string finishRealAsm(double mmPerUnit) const {
     const std::string simplified = finishSimplified();
     std::vector<SatRecord> recs = TokenizeBody(simplified);
     ExpandToRealAcisSchema(&recs);
-    // Model coordinates are in feet; ACIS header stores mm per model unit (304.8 mm = 1 ft).
+    char scale[64];
+    std::snprintf(scale, sizeof(scale), "%.17g", mmPerUnit > 0.0 ? mmPerUnit : 304.8);
     return SerializeSat("700 0 1 0", "8 GoSurvey 19 ASM 223.0.1.1930 NT 24 today",
-                        "304.79999999999995 9.999999999999999547e-07 1.000000000000000036e-10", recs);
+                        std::string(scale) + " 9.999999999999999547e-07 1.000000000000000036e-10", recs);
   }
 
  private:
@@ -308,6 +313,93 @@ class SatWriter {
     return id;
   }
 
+  void push3(std::vector<std::string>* f, const ray3d::Vec3& v) {
+    f->push_back(Fmt(v.x));
+    f->push_back(Fmt(v.y));
+    f->push_back(Fmt(v.z));
+  }
+
+  void appendEmbeddedSurface(std::vector<std::string>* f, const brep::Surface& sf) {
+    const ucs::Ucs& fr = sf.frame;
+    if (sf.kind == brep::SurfaceKind::Plane) {
+      f->push_back("plane");
+      push3(f, fr.origin);
+      push3(f, fr.zAxis);
+      push3(f, fr.xAxis);
+      return;
+    }
+    if (sf.kind == brep::SurfaceKind::Torus) {
+      f->push_back("torus");
+      push3(f, fr.origin);
+      push3(f, fr.zAxis);
+      f->push_back(Fmt(sf.radius));
+      f->push_back(Fmt(sf.radius2));
+      push3(f, fr.xAxis);
+      return;
+    }
+    if (sf.kind == brep::SurfaceKind::Sphere) {
+      f->push_back("sphere");
+      push3(f, fr.origin);
+      f->push_back(Fmt(sf.radius));
+      push3(f, fr.zAxis);
+      push3(f, fr.xAxis);
+      return;
+    }
+    // Cylinder and cone share ACIS's cone record. A cylinder has no taper; an ellipse uses the ratio.
+    f->push_back("cone");
+    push3(f, fr.origin);
+    push3(f, fr.zAxis);
+    const double major = sf.radius;
+    const ray3d::Vec3 ref = ray3d::Scale(fr.xAxis, major > 0.0 ? major : 1.0);
+    push3(f, ref);
+    double ratio = 1.0;
+    double sinA = 0.0;
+    double cosA = 1.0;
+    if (sf.kind == brep::SurfaceKind::Cylinder) {
+      if (sf.radius2 > 1e-9 && std::fabs(sf.radius - sf.radius2) > 1e-8 * std::max(sf.radius, 1e-9) &&
+          sf.radius > 0.0)
+        ratio = sf.radius2 / sf.radius;
+    } else if (sf.height > 0.0) {
+      const double dr = sf.radius - sf.radius2;
+      const double hyp = std::hypot(sf.height, dr);
+      sinA = hyp > 0.0 ? dr / hyp : 0.0;
+      cosA = hyp > 0.0 ? sf.radius / hyp : 1.0;
+    }
+    f->push_back(Fmt(ratio));
+    f->push_back("F");
+    f->push_back("F");
+    f->push_back(Fmt(sinA));
+    f->push_back(Fmt(cosA));
+    f->push_back(Fmt(major));
+  }
+
+  [[nodiscard]] bool emitIntcurve(const brep::Solid& solid, const brep::Edge& e, int* outId) {
+    if (e.isectSurfaces.size() != 2)
+      return fail("intersection edge is missing its two surfaces (ACIS export)");
+    const brep::Surface* first = &e.isectSurfaces[0];
+    const brep::Surface* second = &e.isectSurfaces[1];
+    if (second->kind == brep::SurfaceKind::Torus && first->kind != brep::SurfaceKind::Torus)
+      std::swap(first, second);
+    const ray3d::Vec3& witness = e.frame.origin;
+    std::vector<std::string> fields;
+    fields.push_back("$-1");
+    fields.push_back("{");
+    fields.push_back("int_int_cur");
+    fields.push_back("3");
+    push3(&fields, witness);
+    appendEmbeddedSurface(&fields, *first);
+    appendEmbeddedSurface(&fields, *second);
+    fields.push_back("}");
+    fields.push_back("F");
+    (void)solid;
+    SatRecord rec;
+    rec.type = "intcurve-curve";
+    rec.fields = std::move(fields);
+    *outId = static_cast<int>(recs_.size());
+    recs_.push_back(std::move(rec));
+    return true;
+  }
+
   [[nodiscard]] bool emitSurface(const brep::Surface& sf, int* outId) {
     assert(outId != nullptr);
     const ucs::Ucs& fr = sf.frame;
@@ -320,9 +412,11 @@ class SatWriter {
                     Fmt(x.x), Fmt(x.y), Fmt(x.z)});
       return true;
     case brep::SurfaceKind::Cylinder: {
-      const double r = sf.radius;
+      const bool ellipse = sf.radius2 > 1e-9 &&
+                           std::fabs(sf.radius - sf.radius2) > 1e-8 * std::max(sf.radius, 1e-9);
+      const double ratio = ellipse && sf.radius > 0.0 ? sf.radius2 / sf.radius : 1.0;
       *outId = add({"cone-surface", Ref(-1), Fmt(o.x), Fmt(o.y), Fmt(o.z), Fmt(z.x), Fmt(z.y), Fmt(z.z),
-                    Fmt(x.x), Fmt(x.y), Fmt(x.z), "0", "1", Fmt(r), "1"});
+                    Fmt(x.x), Fmt(x.y), Fmt(x.z), "0", "1", Fmt(sf.radius), Fmt(ratio)});
       return true;
     }
     case brep::SurfaceKind::Cone: {
@@ -334,6 +428,14 @@ class SatWriter {
                     Fmt(x.x), Fmt(x.y), Fmt(x.z), Fmt(sinA), Fmt(cosA), Fmt(sf.radius), "1"});
       return true;
     }
+    case brep::SurfaceKind::Torus:
+      *outId = add({"torus-surface", Ref(-1), Fmt(o.x), Fmt(o.y), Fmt(o.z), Fmt(z.x), Fmt(z.y), Fmt(z.z),
+                    Fmt(sf.radius), Fmt(sf.radius2), Fmt(x.x), Fmt(x.y), Fmt(x.z)});
+      return true;
+    case brep::SurfaceKind::Sphere:
+      *outId = add({"sphere-surface", Ref(-1), Fmt(o.x), Fmt(o.y), Fmt(o.z), Fmt(sf.radius), Fmt(z.x),
+                    Fmt(z.y), Fmt(z.z), Fmt(x.x), Fmt(x.y), Fmt(x.z)});
+      return true;
     case brep::SurfaceKind::Nurbs:
       return emitSplineSurface(sf.patch, outId);
     default:
@@ -380,7 +482,7 @@ class SatWriter {
 
 }  // namespace
 
-ExportResult ExportSatSolid(const brep::Solid& solid, std::string_view entityLabel) {
+ExportResult ExportSatSolid(const brep::Solid& solid, std::string_view entityLabel, double mmPerUnit) {
   ExportResult r;
   (void)entityLabel;
   if (brep::Validate(solid) != brep::Problem::Ok) {
@@ -390,7 +492,7 @@ ExportResult ExportSatSolid(const brep::Solid& solid, std::string_view entityLab
   SatWriter w(&r.error);
   if (!w.emit(solid))
     return r;
-  r.sat = w.finishRealAsm();
+  r.sat = w.finishRealAsm(mmPerUnit);
   r.ok = true;
   return r;
 }

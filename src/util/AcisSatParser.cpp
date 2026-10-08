@@ -807,28 +807,40 @@ class Importer {
         !Vec(c, 7, "ellipse-curve.major-axis", &majorAxis) ||
         !Num(c, 10, "ellipse-curve.radius-ratio", &ratio))
       return false;
-    if (std::fabs(ratio - 1.0) > 1e-4)
-      return Fail("edge curve is a true ellipse (radius ratio != 1) — not supported by this importer");
     const Vec3 normal = ray3d::Normalize(normalRaw);
-    const double radius = ray3d::Length(majorAxis);
-    if (!(radius > kTol))
-      return Fail("circular edge has a non-positive radius");
-    ucs::Ucs frame;
-    if (ray3d::Length(normal) < 0.5 || !ucs::FromNormal(centre, normal, &frame))
-      return Fail("circular edge has a degenerate plane normal");
-    // Re-align frame X toward v0 so `sweep` measures the actual arc traversed (ucs::FromNormal's X
-    // is otherwise arbitrary), matching the convention every other Arc edge in the kernel uses.
-    const Vec3 r0 = ray3d::Sub(v0Pos, centre);
-    const double a0 = std::atan2(ray3d::Dot(r0, frame.yAxis), ray3d::Dot(r0, frame.xAxis));
+    const double semiMajor = ray3d::Length(majorAxis);
+    if (!(semiMajor > kTol) || !(ratio > kTol))
+      return Fail("elliptical edge has a non-positive radius");
+    if (ray3d::Length(normal) < 0.5)
+      return Fail("elliptical edge has a degenerate plane normal");
+    const bool isCircle = std::fabs(ratio - 1.0) <= 1e-4;
     ucs::Ucs f2;
     f2.origin = centre;
-    f2.zAxis = frame.zAxis;
-    f2.xAxis = ray3d::Normalize(
-        ray3d::Add(ray3d::Scale(frame.xAxis, std::cos(a0)), ray3d::Scale(frame.yAxis, std::sin(a0))));
-    f2.yAxis = ray3d::Cross(f2.zAxis, f2.xAxis);
-    out->kind = brep::CurveKind::Arc;
+    f2.zAxis = normal;
+    if (isCircle) {
+      // Re-align frame X toward v0 so `sweep` measures the arc from the start vertex. A circle is
+      // unchanged by that rotation; an ellipse is not, so a true ellipse keeps the SAT major axis.
+      ucs::Ucs frame;
+      if (!ucs::FromNormal(centre, normal, &frame))
+        return Fail("circular edge has a degenerate plane normal");
+      const Vec3 r0 = ray3d::Sub(v0Pos, centre);
+      const double a0 = std::atan2(ray3d::Dot(r0, frame.yAxis), ray3d::Dot(r0, frame.xAxis));
+      f2.xAxis = ray3d::Normalize(
+          ray3d::Add(ray3d::Scale(frame.xAxis, std::cos(a0)), ray3d::Scale(frame.yAxis, std::sin(a0))));
+      out->kind = brep::CurveKind::Arc;
+      out->radius = semiMajor;
+    } else {
+      const Vec3 majorDir = ray3d::Normalize(majorAxis);
+      const Vec3 xRaw = ray3d::Sub(majorDir, ray3d::Scale(normal, ray3d::Dot(majorDir, normal)));
+      if (ray3d::Length(xRaw) < 0.5)
+        return Fail("elliptical edge major axis is parallel to the plane normal");
+      f2.xAxis = ray3d::Normalize(xRaw);
+      out->kind = brep::CurveKind::Ellipse;
+      out->radius = semiMajor;
+      out->radius2 = semiMajor * ratio;
+    }
+    f2.yAxis = ray3d::Normalize(ray3d::Cross(f2.zAxis, f2.xAxis));
     out->frame = f2;
-    out->radius = radius;
     if (haveEdgeParams) {
       out->sweep = edgeT1 - edgeT0;
       if (out->sweep <= 1e-12)
@@ -911,6 +923,40 @@ class Importer {
       sinA = 0.0;
       cosA = 1.0;
     }
+    double sectionRatio = 1.0;
+    for (size_t i = coneWord + 10; i + 1 < c.fields.size(); ++i) {
+      if (c.fields[i + 1] != "F")
+        continue;
+      double ratio = 0.0;
+      if (TryFieldDouble(c.fields[i], &ratio) && ratio > kTol && ratio < 1.0 - 1e-6) {
+        sectionRatio = ratio;
+        break;
+      }
+    }
+    if (std::fabs(sinA) < 1e-9 && sectionRatio < 1.0 - 1e-6) {
+      // Circular in name only: the cross-section is an ellipse, major axis along the ref direction,
+      // minor = major * ratio. A round cylinder misses the fillet by the difference of those radii.
+      Vec3 ref{};
+      if (!TryFieldVec3(c.fields, coneWord + 7, &ref))
+        return Fail("intcurve-curve embedded cone has a malformed ref direction");
+      const Vec3 z = axisRaw;
+      Vec3 x = ray3d::Sub(ref, ray3d::Scale(z, ray3d::Dot(ref, z)));
+      if (!(ray3d::Length(x) > kTol))
+        return Fail("intcurve-curve embedded cone major axis is parallel to its axis");
+      x = ray3d::Normalize(x);
+      const Vec3 y = ray3d::Normalize(ray3d::Cross(z, x));
+      const double major = majorRadius > kTol ? majorRadius : ray3d::Length(ref);
+      out->kind = brep::SurfaceKind::Cylinder;
+      out->frame.origin = axisOrigin;
+      out->frame.zAxis = z;
+      out->frame.xAxis = x;
+      out->frame.yAxis = y;
+      out->radius = major;
+      out->radius2 = major * sectionRatio;
+      out->height = 0.0;
+      out->inward = false;
+      return true;
+    }
     if (std::fabs(cosA) < 1e-12)
       return Fail("intcurve-curve embedded cone has a degenerate half-angle");
     double tMin = 0.0;
@@ -971,27 +1017,112 @@ class Importer {
     return true;
   }
 
-  bool IntcurveMarchWitness(const SatRecord& c, size_t torusWord, const Vec3& v0Pos, const Vec3& v1Pos,
-                            Vec3* witness) {
-    std::vector<Vec3> samples;
-    for (size_t i = 5; i + 2 < torusWord; ++i) {
-      Vec3 p{};
-      if (!TryFieldVec3(c.fields, i, &p) || !IsFinite(p))
-        continue;
-      samples.push_back(p);
-      i += 2;
-    }
-    if (samples.empty()) {
-      *witness = ray3d::Scale(ray3d::Add(v0Pos, v1Pos), 0.5);
+  bool SurfaceFromIntcurveEmbeddedSphere(const SatRecord& c, size_t sphereWord, brep::Surface* out) {
+    if (sphereWord + 10 >= c.fields.size())
+      return Fail("intcurve-curve embedded sphere parameters are truncated");
+    Vec3 centre{}, axisRaw{}, refRaw{};
+    double radius = 0.0;
+    if (!TryFieldVec3(c.fields, sphereWord + 1, &centre) ||
+        !TryFieldDouble(c.fields[sphereWord + 4], &radius) ||
+        !TryFieldVec3(c.fields, sphereWord + 5, &axisRaw) ||
+        !TryFieldVec3(c.fields, sphereWord + 8, &refRaw))
+      return Fail("intcurve-curve embedded sphere has malformed numeric fields");
+    if (!IsFinite(centre) || !IsFinite(axisRaw) || !IsFinite(refRaw) || !(radius > kTol))
+      return Fail("intcurve-curve embedded sphere has a degenerate centre, axis, or radius");
+    ucs::Ucs frame;
+    if (!TorusFrameFromAcis(centre, axisRaw, refRaw, &frame))
+      return Fail("intcurve-curve embedded sphere has a degenerate axis or ref direction");
+    out->kind = brep::SurfaceKind::Sphere;
+    out->frame = frame;
+    out->radius = radius;
+    out->inward = false;
+    return true;
+  }
+
+  bool IntcurveMarchWitness(const SatRecord& c, size_t beforeSurfaces, const Vec3& v0Pos, const Vec3& v1Pos,
+                            const brep::Surface& surfA, const brep::Surface& surfB, Vec3* witness) {
+    const auto onBoth = [&](const Vec3& p) {
+      const double tol = 1e-3 * (1.0 + ray3d::Length(p));
+      return ray3d::Length(ray3d::Sub(p, brep::ClosestPointOnSurface(surfA, p))) <= tol &&
+             ray3d::Length(ray3d::Sub(p, brep::ClosestPointOnSurface(surfB, p))) <= tol;
+    };
+    // A closed fillet's only "3" marker is the vertex itself. The control points sit just before
+    // the surface block; one of them, settled onto both surfaces, is the direction around the loop.
+    const double closeEps = 1e-8 * (1.0 + ray3d::Length(v0Pos));
+    if (ray3d::Length(ray3d::Sub(v0Pos, v1Pos)) <= closeEps) {
+      auto settle = [&](Vec3 p) {
+        for (int n = 0; n < 24; ++n) {
+          const Vec3 onA = brep::ClosestPointOnSurface(surfA, p);
+          const Vec3 onB = brep::ClosestPointOnSurface(surfB, onA);
+          if (ray3d::Length(ray3d::Sub(onB, p)) <= 1e-13 * (1.0 + ray3d::Length(onB)))
+            return onB;
+          p = onB;
+        }
+        return p;
+      };
+      Vec3 best{};
+      double bestDist = 0.0;
+      bool have = false;
+      for (size_t i = 0; i + 2 < beforeSurfaces; ++i) {
+        Vec3 raw{};
+        if (!TryFieldVec3(c.fields, i, &raw) || !IsFinite(raw))
+          continue;
+        if (ray3d::Length(ray3d::Sub(raw, v0Pos)) > 20.0 || !onBoth(raw))
+          continue;
+        const Vec3 p = settle(raw);
+        if (!onBoth(p))
+          continue;
+        const double dist = ray3d::Length(ray3d::Sub(p, v0Pos));
+        if (dist < 1e-4)
+          continue;
+        if (dist > bestDist) {
+          bestDist = dist;
+          best = p;
+          have = true;
+        }
+      }
+      if (!have)
+        return Fail("intcurve-curve has no sample point on both surfaces");
+      *witness = best;
       return true;
     }
+    // Fit points are marked by a leading "3" (dimension). Knot values and the spline degree are
+    // also numeric, so a stride from the start of the record locks onto those and picks a witness
+    // that is not on the curve — a closed fillet then looks like a point.
+    std::vector<Vec3> samples;
+    for (size_t i = 0; i + 3 < beforeSurfaces; ++i) {
+      if (c.fields[i] != "3")
+        continue;
+      Vec3 p{};
+      if (!TryFieldVec3(c.fields, i + 1, &p) || !IsFinite(p))
+        continue;
+      if (ray3d::Length(ray3d::Sub(p, v0Pos)) > 20.0 || !onBoth(p))
+        continue;
+      if (ray3d::Length(ray3d::Sub(p, v0Pos)) < 1e-4 && ray3d::Length(ray3d::Sub(p, v1Pos)) < 1e-4)
+        continue;
+      samples.push_back(p);
+    }
+    if (samples.empty()) {
+      // No dimension-3 fit point sat on both surfaces. Fall back to any finite triple before the
+      // surface block (cone-cone fillets are packed this way) and keep the one farthest from the
+      // chord, which is the old witness rule.
+      for (size_t i = 5; i + 2 < beforeSurfaces; ++i) {
+        Vec3 p{};
+        if (!TryFieldVec3(c.fields, i, &p) || !IsFinite(p))
+          continue;
+        if (ray3d::Length(ray3d::Sub(p, v0Pos)) > 50.0)
+          continue;
+        samples.push_back(p);
+        i += 2;
+      }
+    }
+    if (samples.empty())
+      return Fail("intcurve-curve has no sample point on both surfaces");
     const Vec3 mid = ray3d::Scale(ray3d::Add(v0Pos, v1Pos), 0.5);
-    size_t best = samples.size() / 2;
+    size_t best = 0;
     double bestScore = -1.0;
     for (size_t k = 0; k < samples.size(); ++k) {
-      const double score =
-          ray3d::Length(ray3d::Sub(samples[k], mid)) + 0.25 * ray3d::Length(ray3d::Sub(samples[k], v0Pos)) +
-          0.25 * ray3d::Length(ray3d::Sub(samples[k], v1Pos));
+      const double score = ray3d::Length(ray3d::Sub(samples[k], mid));
       if (score > bestScore) {
         bestScore = score;
         best = k;
@@ -1018,22 +1149,47 @@ class Importer {
         if (!SurfaceFromIntcurveEmbeddedCone(c, coneWord, v0Pos, v1Pos, &surfB))
           return false;
       } else {
-        return Fail("intcurve-curve does not embed plane or cone with the torus (only those shapes are supported)");
+        const size_t sphereWord = FindFieldWordAfter(c.fields, "sphere", torusWord);
+        if (sphereWord >= c.fields.size() || !SurfaceFromIntcurveEmbeddedSphere(c, sphereWord, &surfB))
+          return Fail("intcurve-curve does not embed plane, cone, or sphere with the torus");
       }
       witnessBefore = torusWord;
     } else {
       const size_t cone0 = FindFieldWord(c.fields, "cone");
       const size_t cone1 = FindFieldWordAfter(c.fields, "cone", cone0);
-      if (cone0 >= c.fields.size() || cone1 >= c.fields.size())
+      const size_t sphere0 = FindFieldWord(c.fields, "sphere");
+      if (cone0 < c.fields.size() && cone1 < c.fields.size()) {
+        if (!SurfaceFromIntcurveEmbeddedCone(c, cone0, v0Pos, v1Pos, &surfA) ||
+            !SurfaceFromIntcurveEmbeddedCone(c, cone1, v0Pos, v1Pos, &surfB))
+          return false;
+        witnessBefore = cone1;
+      } else if (sphere0 < c.fields.size()) {
+        const size_t sphere1 = FindFieldWordAfter(c.fields, "sphere", sphere0);
+        const size_t mateCone = FindFieldWord(c.fields, "cone");
+        const size_t matePlane = FindFieldWord(c.fields, "plane");
+        if (!SurfaceFromIntcurveEmbeddedSphere(c, sphere0, &surfA))
+          return false;
+        if (sphere1 < c.fields.size()) {
+          if (!SurfaceFromIntcurveEmbeddedSphere(c, sphere1, &surfB))
+            return false;
+          witnessBefore = sphere1;
+        } else if (mateCone < c.fields.size()) {
+          if (!SurfaceFromIntcurveEmbeddedCone(c, mateCone, v0Pos, v1Pos, &surfB))
+            return false;
+          witnessBefore = std::min(sphere0, mateCone);
+        } else if (matePlane < c.fields.size()) {
+          if (!SurfaceFromIntcurveEmbeddedPlane(c, matePlane, &surfB))
+            return false;
+          witnessBefore = std::min(sphere0, matePlane);
+        } else {
+          return Fail("intcurve-curve does not embed torus+mate or two cones (Plant intersection expected)");
+        }
+      } else {
         return Fail("intcurve-curve does not embed torus+mate or two cones (Plant intersection expected)");
-      if (!SurfaceFromIntcurveEmbeddedCone(c, cone0, v0Pos, v1Pos, &surfA))
-        return false;
-      if (!SurfaceFromIntcurveEmbeddedCone(c, cone1, v0Pos, v1Pos, &surfB))
-        return false;
-      witnessBefore = cone1;
+      }
     }
     Vec3 witness{};
-    if (!IntcurveMarchWitness(c, witnessBefore, v0Pos, v1Pos, &witness))
+    if (!IntcurveMarchWitness(c, witnessBefore, v0Pos, v1Pos, surfA, surfB, &witness))
       return false;
     out->kind = brep::CurveKind::Intersection;
     out->isectSurfaces = {surfA, surfB};
@@ -1285,6 +1441,40 @@ class Importer {
     return true;
   }
 
+  /// Eccentric angle of an elliptical cylinder (major \p radius along frame X, minor \p radius2 along Y).
+  /// A circular section keeps `atan2(y, x)`.
+  double RevolutionSectionAngle(const Vec3& local, double radius, double radius2) const {
+    const bool ellipse =
+        radius > kTol && radius2 > kTol && std::fabs(radius - radius2) > 1e-8 * radius;
+    if (!ellipse)
+      return std::atan2(local.y, local.x);
+    return std::atan2(local.y / radius2, local.x / radius);
+  }
+
+  /// A cone-surface with sin≈0 and a radius ratio other than 1 is an elliptical cylinder. The ref
+  /// direction is the major axis; the minor axis is that ratio times the major.
+  bool ApplyEllipticalCylinderSection(const SatRecord& surface, brep::Surface* sf) {
+    if (sf == nullptr || sf->kind != brep::SurfaceKind::Cylinder)
+      return true;
+    double ratio = 1.0;
+    if (surface.fields.size() <= 13 || !TryFieldDouble(surface.fields[13], &ratio))
+      return true;
+    if (!(ratio > kTol) || !(ratio < 1.0 - 1e-6))
+      return true;
+    Vec3 ref{};
+    if (!TryFieldVec3(surface.fields, 7, &ref))
+      return Fail("cone-surface elliptical section has a malformed ref direction");
+    const Vec3 z = sf->frame.zAxis;
+    Vec3 x = ray3d::Sub(ref, ray3d::Scale(z, ray3d::Dot(ref, z)));
+    if (!(ray3d::Length(x) > kTol))
+      return Fail("cone-surface elliptical major axis is parallel to its axis");
+    x = ray3d::Normalize(x);
+    sf->frame.xAxis = x;
+    sf->frame.yAxis = ray3d::Normalize(ray3d::Cross(z, x));
+    sf->radius2 = sf->radius * ratio;
+    return true;
+  }
+
   /// Maps a cone/cylinder face's loop into a general parametric trim loop (`Face::paramLoops`,
   /// ADR-052, issue #306) for the non-full-revolve case `BuildConeFace` cannot reduce to its
   /// rectangular `uStart..uEnd` span — issue #310's concrete case for stopping the outright refusal.
@@ -1318,7 +1508,7 @@ class Importer {
     double contU = 0.0;
     auto addPoint = [&](const Vec3& p3) {
       const Vec3 local = ucs::WorldToUcs(frame, p3);
-      const double rawU = std::atan2(local.y, local.x);
+      const double rawU = RevolutionSectionAngle(local, outFace->surface.radius, outFace->surface.radius2);
       if (!haveRaw) {
         contU = rawU;
         haveRaw = true;
@@ -1333,10 +1523,12 @@ class Importer {
       prevRaw = rawU;
       poly.push_back(curveisect::Vec2{contU, local.z});
     };
-    for (const brep::EdgeUse& u : loop.uses) {
+    for (size_t ui = 0; ui < loop.uses.size(); ++ui) {
+      const brep::EdgeUse& u = loop.uses[ui];
       const brep::Edge& e = out.edges[static_cast<size_t>(u.edge)];
       const int samples = (e.kind == brep::CurveKind::Line) ? 1 : kArcSamples;
-      for (int k = 0; k < samples; ++k) {
+      const int count = (ui + 1 == loop.uses.size()) ? samples + 1 : samples;
+      for (int k = 0; k < count; ++k) {
         const double tTraverse = static_cast<double>(k) / samples;
         const double s = u.reversed ? (1.0 - tTraverse) : tTraverse;
         addPoint(brep::EdgePointAt(out, e, s));
@@ -1362,20 +1554,22 @@ class Importer {
   }
 
   std::vector<curveisect::Vec2> ProjectConeLoopToParam(const brep::Solid& solid, const LoopWalk& loop,
-                                                         const ucs::Ucs& frame) {
+                                                         const ucs::Ucs& frame, double radius, double radius2) {
     constexpr int kArcSamples = 8;
     std::vector<curveisect::Vec2> poly;
     bool haveRaw = false;
     double prevRaw = 0.0;
     double contU = 0.0;
-    for (const brep::EdgeUse& u : loop.uses) {
+    for (size_t ui = 0; ui < loop.uses.size(); ++ui) {
+      const brep::EdgeUse& u = loop.uses[ui];
       const brep::Edge& e = solid.edges[static_cast<size_t>(u.edge)];
       const int samples = (e.kind == brep::CurveKind::Line) ? 1 : kArcSamples;
-      for (int k = 0; k < samples; ++k) {
+      const int count = (ui + 1 == loop.uses.size()) ? samples + 1 : samples;
+      for (int k = 0; k < count; ++k) {
         const double tTraverse = static_cast<double>(k) / samples;
         const double s = u.reversed ? (1.0 - tTraverse) : tTraverse;
         const Vec3 local = ucs::WorldToUcs(frame, brep::EdgePointAt(solid, e, s));
-        const double rawU = std::atan2(local.y, local.x);
+        const double rawU = RevolutionSectionAngle(local, radius, radius2);
         if (!haveRaw) {
           contU = rawU;
           haveRaw = true;
@@ -1442,7 +1636,8 @@ class Importer {
     validLoops.reserve(loops->size());
     polys.reserve(loops->size());
     for (LoopWalk& lw : *loops) {
-      std::vector<curveisect::Vec2> poly = ProjectConeLoopToParam(solid, lw, frame);
+      std::vector<curveisect::Vec2> poly = ProjectConeLoopToParam(solid, lw, frame, outFace->surface.radius,
+                                                                 outFace->surface.radius2);
       if (poly.size() < 3)
         continue;  // apex seam loop of null-curve edges — no area in (u,v)
       validLoops.push_back(std::move(lw));
@@ -1470,6 +1665,28 @@ class Importer {
         outFace->vEnd = scratch.vEnd;
         outFace->paramLoops = std::move(scratch.paramLoops);
         return true;
+      }
+    }
+    if (!polys.empty()) {
+      double ref = 0.0;
+      for (const curveisect::Vec2& p : polys[0])
+        ref += p.x;
+      ref /= static_cast<double>(polys[0].size());
+      for (std::vector<curveisect::Vec2>& poly : polys) {
+        double mean = 0.0;
+        for (const curveisect::Vec2& p : poly)
+          mean += p.x;
+        mean /= static_cast<double>(poly.size());
+        while (mean - ref > kPi) {
+          for (curveisect::Vec2& p : poly)
+            p.x -= 2.0 * kPi;
+          mean -= 2.0 * kPi;
+        }
+        while (ref - mean > kPi) {
+          for (curveisect::Vec2& p : poly)
+            p.x += 2.0 * kPi;
+          mean += 2.0 * kPi;
+        }
       }
     }
     size_t outerIdx = 0;
@@ -1633,6 +1850,103 @@ class Importer {
     return true;
   }
 
+  /// Two full-turn rims do not share a vertex, so each (u, v) loop closes with a chord that cuts the
+  /// curve. A ruling of the cone joins one point on each rim; walked down and back it is one loop.
+  void SeamFullTurnRims(brep::Solid* solid, std::vector<LoopWalk>* loops, const ucs::Ucs& frame) {
+    if (solid == nullptr || loops == nullptr || loops->size() < 2)
+      return;
+    const auto uSpan = [&](const LoopWalk& lw) {
+      const std::vector<curveisect::Vec2> poly = ProjectConeLoopToParam(*solid, lw, frame, 0.0, 0.0);
+      if (poly.size() < 3)
+        return 0.0;
+      double lo = poly[0].x;
+      double hi = poly[0].x;
+      for (const curveisect::Vec2& p : poly) {
+        lo = std::min(lo, p.x);
+        hi = std::max(hi, p.x);
+      }
+      return hi - lo;
+    };
+    std::vector<int> full;
+    for (int i = 0; i < static_cast<int>(loops->size()); ++i) {
+      if (uSpan((*loops)[static_cast<size_t>(i)]) > 5.0)
+        full.push_back(i);
+    }
+    if (full.size() != 2)
+      return;
+    int circleIdx = -1;
+    for (int i : full) {
+      if ((*loops)[static_cast<size_t>(i)].uses.size() != 1)
+        continue;
+      const brep::Edge& e = solid->edges[static_cast<size_t>((*loops)[static_cast<size_t>(i)].uses[0].edge)];
+      if ((e.kind == brep::CurveKind::Arc || e.kind == brep::CurveKind::Ellipse) && e.v0 == e.v1)
+        circleIdx = i;
+    }
+    if (circleIdx < 0)
+      return;
+    const int rimIdx = full[0] == circleIdx ? full[1] : full[0];
+    const auto startOf = [&](const brep::EdgeUse& u) {
+      const brep::Edge& e = solid->edges[static_cast<size_t>(u.edge)];
+      return u.reversed ? e.v1 : e.v0;
+    };
+    LoopWalk rim = (*loops)[static_cast<size_t>(rimIdx)];
+    if (rim.uses.empty())
+      return;
+    const int seamFrom = startOf(rim.uses[0]);
+    const brep::EdgeUse circleUse = (*loops)[static_cast<size_t>(circleIdx)].uses[0];
+    brep::Edge& circle = solid->edges[static_cast<size_t>(circleUse.edge)];
+    const int circleVert = circle.v0;
+    int owners = 0;
+    for (const brep::Edge& e : solid->edges) {
+      if (e.v0 == circleVert || e.v1 == circleVert)
+        ++owners;
+    }
+    if (owners != 1)
+      return;
+    const Vec3 fromLocal = ucs::WorldToUcs(frame, solid->vertices[static_cast<size_t>(seamFrom)].p);
+    const double uTarget = std::atan2(fromLocal.y, fromLocal.x);
+    Vec3 best = solid->vertices[static_cast<size_t>(circleVert)].p;
+    double bestGap = 1e9;
+    for (int k = 0; k <= 64; ++k) {
+      const Vec3 p = brep::EdgePointAt(*solid, circle, static_cast<double>(k) / 64.0);
+      const Vec3 loc = ucs::WorldToUcs(frame, p);
+      double gap = std::atan2(loc.y, loc.x) - uTarget;
+      while (gap > kPi)
+        gap -= 2.0 * kPi;
+      while (gap < -kPi)
+        gap += 2.0 * kPi;
+      if (std::fabs(gap) < bestGap) {
+        bestGap = std::fabs(gap);
+        best = p;
+      }
+    }
+    Vec3 radial = ray3d::Sub(best, circle.frame.origin);
+    radial = ray3d::Sub(radial, ray3d::Scale(circle.frame.zAxis, ray3d::Dot(radial, circle.frame.zAxis)));
+    if (ray3d::Length(radial) < kTol)
+      return;
+    circle.frame.xAxis = ray3d::Normalize(radial);
+    circle.frame.yAxis = ray3d::Normalize(ray3d::Cross(circle.frame.zAxis, circle.frame.xAxis));
+    solid->vertices[static_cast<size_t>(circleVert)].p = best;
+    brep::Edge seam;
+    seam.kind = brep::CurveKind::Line;
+    seam.v0 = seamFrom;
+    seam.v1 = circleVert;
+    solid->edges.push_back(seam);
+    const int seamIdx = static_cast<int>(solid->edges.size()) - 1;
+    LoopWalk merged;
+    merged.uses = rim.uses;
+    merged.uses.push_back(brep::EdgeUse{seamIdx, false});
+    merged.uses.push_back(circleUse);
+    merged.uses.push_back(brep::EdgeUse{seamIdx, true});
+    std::vector<LoopWalk> kept;
+    kept.push_back(std::move(merged));
+    for (int i = 0; i < static_cast<int>(loops->size()); ++i) {
+      if (i != circleIdx && i != rimIdx)
+        kept.push_back((*loops)[static_cast<size_t>(i)]);
+    }
+    *loops = std::move(kept);
+  }
+
   bool BuildConeGeneralTrimMulti(const SatRecord& surface, const std::string& faceSense, brep::Solid* out,
                                  std::vector<LoopWalk>* loops, brep::Face* outFace, int /*plantOwnedLoopRecords*/) {
     Vec3 axisOrigin{}, axisRaw{};
@@ -1678,11 +1992,14 @@ class Importer {
     outFace->surface.height = height;
     if (isCylinder) {
       outFace->surface.radius = majorRadius;
+      if (!ApplyEllipticalCylinderSection(surface, &outFace->surface))
+        return false;
     } else {
       if (!ConeEndRadii(majorRadius, sinA, cosA, tMin, tMax, &outFace->surface.radius, &outFace->surface.radius2))
         return false;
     }
     outFace->surface.inward = (faceSense == "reversed");
+    SeamFullTurnRims(out, loops, frame);
     return RepackConeParamLoops(*out, loops, frame, outFace);
   }
 
@@ -1704,11 +2021,58 @@ class Importer {
     return ucs::IsRightHandedOrthonormal(*frame);
   }
 
+  /// An elbow's tube outline is stored as two full turns: down one end, across the seam, down the
+  /// other end (another turn), and back on the seam one period away. Reflecting the second turn
+  /// across that seam makes one simple patch. A loop that already comes back is left alone.
+  void FoldDoubleWoundTorusLoop(std::vector<curveisect::Vec2>* poly) {
+    if (poly == nullptr || poly->size() < 8)
+      return;
+    double vMin = poly->front().y;
+    double vMax = vMin;
+    for (const curveisect::Vec2& p : *poly) {
+      vMin = std::min(vMin, p.y);
+      vMax = std::max(vMax, p.y);
+    }
+    if (vMax - vMin <= 3.0 * kPi)
+      return;
+    constexpr double kVTol = 1e-3;
+    size_t seamEnd = 0;
+    bool found = false;
+    size_t i = 1;
+    while (i + 1 < poly->size()) {
+      if (std::fabs((*poly)[i].y - (*poly)[i - 1].y) > kVTol) {
+        ++i;
+        continue;
+      }
+      size_t j = i;
+      while (j + 1 < poly->size() && std::fabs((*poly)[j + 1].y - (*poly)[i].y) <= kVTol)
+        ++j;
+      if (j >= i + 1) {
+        seamEnd = j;
+        found = true;
+        break;
+      }
+      i = j + 1;
+    }
+    if (!found || seamEnd + 1 >= poly->size())
+      return;
+    const double vSeam = (*poly)[seamEnd].y;
+    const double away = vSeam - poly->front().y;
+    if (!(std::fabs(away) > 1.0))
+      return;
+    if (((*poly)[seamEnd + 1].y - vSeam) * away <= 0.0)
+      return;
+    for (size_t k = seamEnd + 1; k < poly->size(); ++k)
+      (*poly)[k].y = 2.0 * vSeam - (*poly)[k].y;
+  }
+
   /// Samples a torus face loop into (u, v) parameter space matching `brep::SurfaceParamDeriv` for
   /// `SurfaceKind::Torus` (u = angle around axis, v = angle around the tube).
   bool BuildTorusGeneralTrim(const brep::Solid& solid, const LoopWalk& loop, const ucs::Ucs& frame,
                                double majorR, double minorR, brep::Face* outFace) {
-    constexpr int kArcSamples = 8;
+    // Eight samples per turn leave a chord that cuts about 0.2% off an elbow. Thirty-two stays
+    // inside the 0.1% volume band AutoCAD's solid is checked against.
+    constexpr int kArcSamples = 32;
     std::vector<curveisect::Vec2> poly;
     bool haveU = false;
     bool haveV = false;
@@ -1755,6 +2119,7 @@ class Importer {
     }
     if (poly.size() < 3)
       return Fail("torus face's trim loop has too few points to enclose an area");
+    FoldDoubleWoundTorusLoop(&poly);
     {
       double a = 0.0;
       for (size_t i = 0, n = poly.size(); i < n; ++i)
@@ -1780,7 +2145,7 @@ class Importer {
 
   std::vector<curveisect::Vec2> ProjectTorusLoopToParam(const brep::Solid& solid, const LoopWalk& loop,
                                                          const ucs::Ucs& frame, double majorR) {
-    constexpr int kArcSamples = 8;
+    constexpr int kArcSamples = 32;
     std::vector<curveisect::Vec2> poly;
     bool haveU = false;
     bool haveV = false;
@@ -2324,6 +2689,8 @@ class Importer {
     outFace->surface.height = height;
     if (isCylinder) {
       outFace->surface.radius = majorRadius;
+      if (!ApplyEllipticalCylinderSection(surface, &outFace->surface))
+        return false;
     } else {
       double rBase = 0.0;
       double rTop = 0.0;

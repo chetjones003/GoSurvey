@@ -482,14 +482,8 @@ TEST_CASE("ACIS SAT import: Plant ASM gasket (holed caps) matches AutoCAD", "[ac
   CheckPlantAsmFixture({"plant-asm-gasket.sat", 1.20370123, {0.0, -2.065, -2.065}, {0.125, 2.065, 2.065}});
 }
 
-TEST_CASE("ACIS SAT import: a Plant ASM tee with a true-ellipse edge is refused by name", "[acissat][issue786]") {
-  const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/plant-asm-tee-ellipse.sat";
-  std::ifstream in(path, std::ios::binary);
-  REQUIRE(in);
-  const std::string sat((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-  const acissat::ImportResult r = acissat::ImportSatSolid(sat, "tee");
-  CHECK_FALSE(r.ok);
-  CHECK(Contains(r.error, "true ellipse"));
+TEST_CASE("ACIS SAT import: Plant ASM tee (true-ellipse rim) matches AutoCAD", "[acissat][issue786]") {
+  CheckPlantAsmFixture({"plant-asm-tee-ellipse.sat", 15.47011953, {-1.5, -1.1875, -1.1875}, {1.5, 1.5, 1.1875}});
 }
 
 // GitHub issue #473 — a REAL ACIS SAT file, exported by Civil 3D's ACISOUT from a 4" weld-neck
@@ -630,6 +624,33 @@ TEST_CASE("ExportSatSolid round-trips a primitive cylinder (issue #612)", "[issu
   REQUIRE(mp.valid);
   const double pi = 3.14159265358979323846;
   CHECK(mp.volume == Catch::Approx(pi * 2.0 * 2.0 * 5.0).margin(0.1));
+}
+
+TEST_CASE("ExportSatSolid round-trips a Plant elbow (torus and intersection edges)", "[issue612][acissat][issue786]") {
+  const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/plant-asm-elbow.sat";
+  std::ifstream in(path, std::ios::binary);
+  REQUIRE(in);
+  const std::string sat((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  const acissat::ImportResult first = acissat::ImportSatSolid(sat, "elbow");
+  INFO(first.error);
+  REQUIRE(first.ok);
+  const acissat::ExportResult ex = acissat::ExportSatSolid(first.solid, "elbow");
+  INFO(ex.error);
+  REQUIRE(ex.ok);
+  const acissat::ImportResult second = acissat::ImportSatSolid(ex.sat, "elbow");
+  INFO(second.error);
+  REQUIRE(second.ok);
+  double v0 = 0.0, v1 = 0.0;
+  brep::Vec3 a0, b0, a1, b1;
+  REQUIRE(MeshVolumeAndExtents(first.solid, brep::Vec3{}, &v0, &a0, &b0));
+  REQUIRE(MeshVolumeAndExtents(second.solid, brep::Vec3{}, &v1, &a1, &b1));
+  CHECK(v1 == Catch::Approx(v0).epsilon(1e-3));
+  CHECK(a1.x == Catch::Approx(a0.x).margin(5e-3));
+  CHECK(a1.y == Catch::Approx(a0.y).margin(5e-3));
+  CHECK(a1.z == Catch::Approx(a0.z).margin(5e-3));
+  CHECK(b1.x == Catch::Approx(b0.x).margin(5e-3));
+  CHECK(b1.y == Catch::Approx(b0.y).margin(5e-3));
+  CHECK(b1.z == Catch::Approx(b0.z).margin(5e-3));
 }
 
 TEST_CASE("ExportSatSolid round-trips a straight pipe run sweep (issue #612)", "[issue612][acissat]") {
