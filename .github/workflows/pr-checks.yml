@@ -1,0 +1,205 @@
+# PR gating checks (REQ-402) — build/test, lint, and security, run on every pull request into
+# master or beta, with the SAME check set on both branches.
+#
+# Deliberately split into separate, independently-named jobs rather than one monolithic job: the
+# PR checks list in GitHub's UI shows one line per job, so a failure is attributable at a glance
+# (`lint / clang-tidy` failed vs `security / gitleaks` failed) instead of digging through one big
+# log. Nothing here publishes anything — that stays in release.yml (REQ-202/ADR-029), which is
+# manual-dispatch only and untouched by this file.
+#
+# msvc-analyze is deliberately NON-blocking here (see CMakeLists.txt's GOSURVEY_ENABLE_ANALYZE
+# comment): the existing codebase has never been triaged against /analyze, so failing the whole
+# build on a pre-existing, untouched-file warning would block unrelated PRs. It stays
+# annotation-only until a separate triage pass (tracked as its own task) clears the backlog, at
+# which point GOSURVEY_ENABLE_ANALYZE can be paired with /WX here and this comment/job updated.
+
+name: pr-checks
+
+on:
+  pull_request:
+    branches: [master, beta]
+
+concurrency:
+  group: pr-checks-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # build / test — REQ-203/REQ-300 canonical suite, mirrors dev/test.
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    name: build / test
+    runs-on: windows-latest
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Ensure Ninja
+        shell: pwsh
+        run: |
+          if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
+          $ver = '1.12.1'
+          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Run sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Configure
+        run: >
+          cmake --preset ninja-release
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DGOSURVEY_BUILD_HEADLESS=ON
+          -DGOSURVEY_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test (ctest)
+        run: ctest --test-dir build --output-on-failure --no-tests=error
+
+      - name: sccache stats
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:SCCACHE_PATH) { & $env:SCCACHE_PATH --show-stats }
+          else { sccache --show-stats }
+
+  # ---------------------------------------------------------------------------
+  # lint / clang-tidy — scoped to changed lines only (diff-aware), so pre-existing,
+  # untouched-file findings never block an unrelated PR. New file config: .clang-tidy.
+  # ---------------------------------------------------------------------------
+  lint-clang-tidy:
+    name: lint / clang-tidy
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Ensure Ninja
+        shell: pwsh
+        run: |
+          if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
+          $ver = '1.12.1'
+          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Configure (compile_commands.json only, no build)
+        run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: clang-tidy (changed lines only)
+        uses: ZedThree/clang-tidy-review@v0.20.1
+        id: review
+        with:
+          build_dir: build
+          config_file: '.clang-tidy'
+          exclude: 'third_party/*,build/*'
+          split_workflow: false
+
+      - name: Fail if clang-tidy found issues
+        if: steps.review.outputs.total_comments > 0
+        run: |
+          echo "clang-tidy found ${{ steps.review.outputs.total_comments }} issue(s) in changed lines."
+          exit 1
+
+  # ---------------------------------------------------------------------------
+  # lint / msvc-analyze — report-only (see header comment). Always "passes"; findings
+  # surface as build annotations via the existing problem matcher.
+  # ---------------------------------------------------------------------------
+  lint-msvc-analyze:
+    name: lint / msvc-analyze (report-only)
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Ensure Ninja
+        shell: pwsh
+        run: |
+          if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
+          $ver = '1.12.1'
+          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Configure
+        run: cmake --preset ninja-release -DGOSURVEY_ENABLE_ANALYZE=ON -DGOSURVEY_BUILD_HEADLESS=OFF -DGOSURVEY_BUILD_TESTS=OFF
+
+      - name: Register MSVC /analyze problem matcher
+        run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
+
+      - name: Build (findings become annotations, build is not failed by them)
+        run: cmake --build build
+
+  # ---------------------------------------------------------------------------
+  # security / gitleaks — secret scanning over the PR diff.
+  # ---------------------------------------------------------------------------
+  security-gitleaks:
+    name: security / gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # security / dependency-scan — vendored third_party/ has no lockfile for the usual
+  # Dependabot/npm-audit style tools, so this is a source-composition/CVE filesystem
+  # scan (Trivy) instead.
+  # ---------------------------------------------------------------------------
+  security-dependency-scan:
+    name: security / dependency-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true

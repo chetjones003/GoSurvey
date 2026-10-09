@@ -116,10 +116,14 @@ jobs:
             $tag      = "v$version"
           } elseif ($branch -eq 'beta') {
             $channel  = 'beta'
-            # The run number is monotonic per workflow, so betas order correctly within a
-            # cycle: 0.5.0-beta.2 < 0.5.0-beta.10 (numeric compare, not string).
-            $suffix   = "-beta.${{ github.run_number }}"
-            $full     = "$version$suffix"
+            # REQ-402 (2026-10-09): no auto-appended "-beta.N" suffix. The target beta version
+            # (e.g. 0.7.1 vs 0.8.0 — a real decision, not a running counter) is chosen in CLI
+            # conversation and committed as a project(VERSION) bump BEFORE this workflow is
+            # dispatched against beta, the same way a master release is decided. The rolling
+            # `channel-beta` prerelease tag/assets still get replaced on every dispatch; only the
+            # version STRING shown to users is now the plain version, matching what was bumped.
+            $suffix   = ''
+            $full     = $version
             $quadLast = "${{ github.run_number }}"
             $tag      = 'channel-beta'
           } else {
@@ -300,10 +304,32 @@ jobs:
         # unsigned for now, so SmartScreen will warn and the manifest's SHA-256 proves integrity
         # but not authenticity. The step exists so signing drops in without restructuring the
         # pipeline. Since the 2023 CA/Browser hardware-key rules this needs a cloud signing
-        # service (Azure Trusted Signing / SSL.com eSigner / DigiCert KeyLocker), NOT a .pfx in
-        # a repository secret.
+        # service, NOT a .pfx in a repository secret.
+        #
+        # 2026-10-09: chose SignPath Foundation (signpath.org), which signs OSS projects for
+        # free — but their application requires the project to already be independently
+        # findable (a Google search for the project name, a homepage that isn't just the bare
+        # repo). GoSurvey isn't there yet, so the application is ON HOLD, not submitted. This
+        # step stays a no-op until that's resolved. DO NOT wire in SignPath until the account
+        # exists and the four secrets below are confirmed present in repo settings.
+        #
+        # Once SIGNPATH_API_TOKEN / SIGNPATH_ORGANIZATION_ID / SIGNPATH_PROJECT_SLUG /
+        # SIGNPATH_SIGNING_POLICY exist as repo secrets, replace this step's `run:` block with:
+        #
+        #   - name: Sign the installer
+        #     uses: signpath/github-action-submit-signing-request@v1
+        #     with:
+        #       api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+        #       organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+        #       project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+        #       signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY }}
+        #       artifact-configuration-slug: 'installer'
+        #       github-artifact-id: <id of an installer\Output\*.exe artifact uploaded just before this step>
+        #       wait-for-completion: true
+        #       output-artifact-directory: 'installer\Output\signed'
+        #     # then replace installer\Output\*.exe with the signed copy before the manifest/publish steps.
         shell: pwsh
-        run: Write-Host "Code signing not configured - shipping unsigned (recorded technical debt)."
+        run: Write-Host "Code signing not configured - shipping unsigned (recorded technical debt; SignPath application on hold, see comment above)."
 
       - name: Write the update manifest
         id: manifest
