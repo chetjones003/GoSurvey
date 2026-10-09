@@ -36,6 +36,7 @@
 #include "DwgIo.hpp"
 #include "WinFileDialogs.hpp"
 #include "NumFormat.hpp"
+#include "util/PlotScales.hpp"  // VPSCALE (REQ-401): PlotScaleLabel / metric-ratio helpers
 #include "MtextRichFormat.hpp"
 #include "AppPaths.hpp"
 
@@ -38303,6 +38304,197 @@ void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std
 }
 
 // ---------------------------------------------------------------------------------------------
+// LAYOUT (REQ-401, issue #751/#753 V3) — typed equivalent of the layout tab bar's add/rename/
+// delete (REQ-025). One-shot, text-only, same shape as PIPESYS: a layout isn't routed or picked,
+// so it needs no `AppCommandState::Kind` of its own.
+// ---------------------------------------------------------------------------------------------
+
+void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log) {
+  std::istringstream iss(args);
+  std::string verb;
+  iss >> verb;
+  for (char& c : verb) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+  if (verb.empty()) {
+    log.push_back("LAYOUT - usage: LAYOUT [New/Rename/Delete].");
+    return;
+  }
+
+  if (verb == "new") {
+    std::string name;
+    std::getline(iss, name);
+    name = StringUtil::trimCopy(name);
+    const int idx = AddPaperLayout(st);
+    if (!name.empty()) {
+      bool taken = false;
+      for (int i = 0; i < static_cast<int>(st.paperLayouts.size()); ++i) {
+        if (i != idx && st.paperLayouts[static_cast<size_t>(i)].name == name) {
+          taken = true;
+          break;
+        }
+      }
+      if (taken) {
+        log.push_back("LAYOUT NEW - a layout named \"" + name + "\" already exists; created \"" +
+                      st.paperLayouts[static_cast<size_t>(idx)].name + "\" instead.");
+      } else {
+        st.paperLayouts[static_cast<size_t>(idx)].name = name;
+      }
+    }
+    log.push_back("LAYOUT - created \"" + st.paperLayouts[static_cast<size_t>(idx)].name + "\".");
+    return;
+  }
+
+  // RENAME and DELETE both need an existing layout. Names may contain spaces, so the same
+  // greedy-longest-prefix match PIPESYS RENAME uses (above) resolves <target> against the rest of
+  // the line; with nothing left over after the match, the active layout is the default target.
+  if (verb == "rename" || verb == "delete") {
+    std::string rest;
+    std::getline(iss, rest);
+    rest = StringUtil::trimCopy(rest);
+    int targetIx = -1;
+    size_t matchLen = 0;
+    for (size_t i = 0; i < st.paperLayouts.size(); ++i) {
+      const std::string& candidate = st.paperLayouts[i].name;
+      if (rest == candidate) {
+        targetIx = static_cast<int>(i);
+        matchLen = rest.size();
+        break;
+      }
+      if (rest.size() > candidate.size() && rest.compare(0, candidate.size(), candidate) == 0 &&
+          rest[candidate.size()] == ' ' && candidate.size() > matchLen) {
+        targetIx = static_cast<int>(i);
+        matchLen = candidate.size();
+      }
+    }
+    std::string remainder = (targetIx >= 0) ? StringUtil::trimCopy(rest.substr(matchLen)) : rest;
+    if (targetIx < 0) {
+      // No layout name matched (or the whole line was blank) — fall back to the active layout.
+      if (st.activeSpaceIndex >= 0 && st.activeSpaceIndex < static_cast<int>(st.paperLayouts.size())) {
+        targetIx = st.activeSpaceIndex;
+        remainder = rest;
+      }
+    }
+    if (targetIx < 0) {
+      log.push_back("LAYOUT " + verb + " - no paper layout to target; switch to one first, or name it, "
+                    "e.g. LAYOUT " + verb + " Layout1.");
+      return;
+    }
+
+    if (verb == "rename") {
+      const std::string newName = StringUtil::trimCopy(remainder);
+      if (newName.empty()) {
+        log.push_back("LAYOUT RENAME - a new name is required, e.g. LAYOUT RENAME " +
+                      st.paperLayouts[static_cast<size_t>(targetIx)].name + " Site Plan.");
+        return;
+      }
+      for (int i = 0; i < static_cast<int>(st.paperLayouts.size()); ++i) {
+        if (i != targetIx && st.paperLayouts[static_cast<size_t>(i)].name == newName) {
+          log.push_back("LAYOUT RENAME - a layout named \"" + newName + "\" already exists.");
+          return;
+        }
+      }
+      const std::string oldName = st.paperLayouts[static_cast<size_t>(targetIx)].name;
+      PushUndoSnapshot(st, "Rename layout");
+      st.paperLayouts[static_cast<size_t>(targetIx)].name = newName;
+      log.push_back("LAYOUT - \"" + oldName + "\" renamed to \"" + newName + "\".");
+      return;
+    }
+
+    // DELETE: same path (confirmation/undo) as the tab-bar's own Delete, per REQ-401.
+    const std::string deletedName = st.paperLayouts[static_cast<size_t>(targetIx)].name;
+    DeletePaperLayout(st, targetIx);
+    log.push_back("LAYOUT - \"" + deletedName + "\" deleted.");
+    return;
+  }
+
+  log.push_back("LAYOUT - unknown option \"" + verb + "\". Use NEW, RENAME or DELETE.");
+}
+
+// ---------------------------------------------------------------------------------------------
+// VPSCALE (REQ-401, issue #751/#753 V3) — typed equivalent of the viewport-scale combo
+// (DrawPlotScaleCombo in CadUi.cpp), targeting the same "current viewport" `CurrentViewport`
+// resolves: the floating viewport when inside one, else the single selected paper viewport.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+/// Accepts "1:N" / "N:1" ratio notation (model:paper, matching the scale list's own sense) or a
+/// bare positive number read directly as model units per plotted inch. Returns false if \p raw
+/// parses as neither.
+bool ParseTypedVpScale(const std::string& raw, int insUnits, float& outMup) {
+  const std::string s = StringUtil::trimCopy(raw);
+  if (s.empty())
+    return false;
+  const size_t colon = s.find(':');
+  try {
+    if (colon != std::string::npos) {
+      const double paperPart = std::stod(StringUtil::trimCopy(s.substr(0, colon)));
+      const double modelPart = std::stod(StringUtil::trimCopy(s.substr(colon + 1)));
+      if (paperPart <= 0.0 || modelPart <= 0.0)
+        return false;
+      const double ratio = modelPart / paperPart;  // model units per one paper unit
+      outMup = static_cast<float>(PlotScaleUnitsAreMetric(insUnits)
+                                       ? MetricPlotScaleUnitsPerInch(insUnits) * ratio
+                                       : (insUnits == 1 ? 12.0 : 1.0) * ratio);
+      return true;
+    }
+    const double v = std::stod(s);
+    if (v <= 0.0)
+      return false;
+    outMup = static_cast<float>(v);
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+} // namespace
+
+void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log) {
+  Viewport* vp = CurrentViewport(st);
+  if (!vp) {
+    log.push_back("VPSCALE - no current viewport; enter a floating viewport (MSPACE) or select "
+                  "exactly one viewport in a paper layout first.");
+    return;
+  }
+  const std::string typed = StringUtil::trimCopy(args);
+  if (typed.empty()) {
+    log.push_back("VPSCALE - current viewport scale is " +
+                  PlotScaleLabel(st.drawingInsUnits, vp->scaleModelPerPaperIn) +
+                  ". Usage: VPSCALE 1:20, or VPSCALE 50.");
+    return;
+  }
+  float mup = 0.f;
+  if (!ParseTypedVpScale(typed, st.drawingInsUnits, mup)) {
+    log.push_back("VPSCALE - could not read \"" + typed + "\" as a scale. Use 1:N (e.g. 1:20) or a "
+                  "plain number of model units per plotted inch.");
+    return;
+  }
+  PushUndoSnapshot(st, "Viewport scale");
+  vp->scaleModelPerPaperIn = mup;
+  BumpCadGpuCache(st);
+  log.push_back("VPSCALE - viewport scale set to " + PlotScaleLabel(st.drawingInsUnits, mup) + ".");
+}
+
+// ---------------------------------------------------------------------------------------------
+// PAGESETUP (REQ-401, issue #751/#753 V3) — typed equivalent of the layout tab bar's right-click
+// "Page Setup Manager…" (CadUi.cpp), opening the same dialog for the active layout.
+// ---------------------------------------------------------------------------------------------
+
+void StartPageSetupCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex == kModelSpaceIndex) {
+    log.push_back("PAGESETUP - not available in model space; switch to a paper layout first.");
+    return;
+  }
+  EnsureStandardPageSetup(st);
+  st.pageSetupLayoutIdx = st.activeSpaceIndex;
+  st.pageSetupManagerSel = -1;
+  st.showPageSetupManager = true;
+  log.push_back("PAGESETUP - opened for \"" + st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].name +
+                "\".");
+}
+
+// ---------------------------------------------------------------------------------------------
 // PIPEFIT (issue #486 increment B7 / REQ-345) — manual fitting placement on an already-routed run.
 // Unlike B5/B6 (automatic, triggered at PIPERUN commit time), this is a user-directed splice into
 // an EXISTING CadPipeRun: pick the run (via ordinary selection, like PIPESYS ADD), name a part
@@ -43058,6 +43250,25 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
       HandlePipingSystemCommand(restOfLine, st, log);
+      return;
+    }
+    // LAYOUT (REQ-401, issue #751/#753 V3): typed NEW/RENAME/DELETE, mirroring the layout tab bar.
+    if (plotTok == "layout") {
+      std::string restOfLine;
+      std::getline(issIdle, restOfLine);
+      HandleLayoutCommand(restOfLine, st, log);
+      return;
+    }
+    // VPSCALE (REQ-401, issue #751/#753 V3): typed equivalent of the viewport-scale combo.
+    if (plotTok == "vpscale") {
+      std::string restOfLine;
+      std::getline(issIdle, restOfLine);
+      HandleVpscaleCommand(restOfLine, st, log);
+      return;
+    }
+    // PAGESETUP (REQ-401, issue #751/#753 V3): typed equivalent of "Page Setup Manager…".
+    if (plotTok == "pagesetup") {
+      StartPageSetupCommand(st, log);
       return;
     }
     // PIPEFIT (issue #486 increment B7 / REQ-345): manual fitting placement on an already-selected

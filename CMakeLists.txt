@@ -1515,6 +1515,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/RibbonWiringGapTests.cpp
     # REQ-356 / D-2026-09-29-a — CHPROP, MATCHPROP, LAYMCUR, the current colour (issue #575).
     tests/PropertyCommandTests.cpp
+    # REQ-401 / D-2026-10-09-b — LAYOUT / PAGESETUP / VPSCALE typed commands (issue #751/#753 V3).
+    tests/LayoutCommandTests.cpp
     # REQ-370 / D-2026-10-05-a — box-selection live preview.
     tests/BoxSelectionPreviewTests.cpp
     # REQ-357 / D-2026-09-29-b,c — the Drawing Settings window (issue #582 increment 1).
