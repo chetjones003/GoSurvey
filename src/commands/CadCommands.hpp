@@ -4642,6 +4642,15 @@ struct AppCommandState {
   bool showPointGroupManagerWindow = false;  ///< Point Group manager (REQ-067).
   /// When set, the Point Group manager selects this named group on the next draw.
   std::string pointGroupManagerFocusName;
+  bool showSurveyPointGridWindow = false;  ///< Survey Point Database grid (REQ-400).
+  /// REQ-400 clause 5: a grid edit that retagged a point to a number already in the database, waiting
+  /// on the user's overwrite / renumber / cancel answer. Cleared once answered or the window closes.
+  struct SurveyPointGridConflict {
+    bool        active = false;
+    int         oldNumber = 0;    ///< the row being edited (its number before the edit)
+    int         newNumber = 0;    ///< the number the user typed, already taken
+    SurveyPoint pendingValues;    ///< the rest of the edit, applied once the conflict is resolved
+  } surveyPointGridConflict;
   bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068). definition edits live in Toolspace.
   /// Create Surface dialog (Toolspace Surfaces ▸ Create Surface...). Session-only.
   bool showCreateSurfaceWindow = false;
@@ -8322,3 +8331,26 @@ bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float
                          float* r);
 
 bool LoadApplicationFont();
+
+/// DevShell Fonts tab (debug-only live font tuner): one TTF path (or, for the bundled Wiki roles, a
+/// filename under resources/fonts/) and a pixel size per role. Mirrors the roles LoadApplicationFont
+/// wires up at startup.
+struct FontTuningRole {
+  std::string path;
+  float       sizePx = 16.f;
+};
+struct FontTuning {
+  FontTuningRole defaultFont{"C:/Windows/Fonts/arial.ttf", 16.f};
+  FontTuningRole toolspace{"C:/Windows/Fonts/arial.ttf", 16.f};
+  FontTuningRole billboard{"C:/Windows/Fonts/arial.ttf", 20.f};
+  FontTuningRole wikiBody{"IBMPlexSans-Regular.ttf", 16.f};
+  FontTuningRole wikiHeading{"IBMPlexSansCondensed-SemiBold.ttf", 17.f};
+  FontTuningRole wikiMono{"IBMPlexMono-Regular.ttf", 15.f};
+};
+
+/// Rebuilds every FontReg role from \p tuning. Clears and repopulates io.Fonts, but does NOT touch
+/// the GL texture — the caller (DevShell) must follow a successful call with
+/// ImGui_ImplOpenGL3_DestroyFontsTexture + io.Fonts->Build + ImGui_ImplOpenGL3_CreateFontsTexture,
+/// since this file has no OpenGL dependency. False (default font missing) leaves io.Fonts empty;
+/// the caller should not proceed to the texture rebuild in that case.
+bool LoadApplicationFontWithTuning(const FontTuning& tuning);

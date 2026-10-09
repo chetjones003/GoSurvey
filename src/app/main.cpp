@@ -377,10 +377,6 @@ int main()
 #endif
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-  // REQ-387 clause 7 / ADR-067 (a): a PDF viewer is a real Windows window (minimize / maximize, another
-  // monitor, docking back). Only windows whose class asks for NoAutoMerge get an OS window on their own;
-  // every other panel stays in the main window until it is dragged out.
-  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigInputTextEnterKeepActive = false; // CAD shell: Enter submits without selecting-all next keystroke
 
@@ -460,6 +456,27 @@ int main()
   RunStartupSplash(window, devshellCli ? 0.0 : 5.0, &updateState);
 #else
   RunStartupSplash(window, 5.0, &updateState);
+#endif
+  // REQ-387 clause 7 / ADR-067 (a): a PDF viewer is a real Windows window (minimize / maximize, another
+  // monitor, docking back). Only windows whose class asks for NoAutoMerge get an OS window on their own;
+  // every other panel stays in the main window until it is dragged out. Enabled only AFTER the splash:
+  // RunStartupSplash's own frame loop (SplashScreen.cpp) calls ImGui::Render() but never
+  // UpdatePlatformWindows()/RenderPlatformWindowsDefault(), so turning this on before the splash runs
+  // desyncs ImGui's internal FrameCount vs FrameCountPlatformEnded for every splash frame — invisible
+  // in a Release build (the check is an assert(), compiled out), but an immediate
+  // `IM_ASSERT(g.FrameCount == 0 || g.FrameCount == g.FrameCountPlatformEnded)` abort in Debug.
+  //
+  // Debug-only (GOSURVEY_DEVELOPER_SHELL) leaves it OFF entirely: the splash fix above stops the
+  // startup-time desync, but the same assert still fires a few seconds into the main loop on a Debug
+  // build with the Developer Shell's Test Engine active — the Test Engine's own frame bookkeeping
+  // does not pair cleanly with ImGui's multi-viewport platform-window updates (confirmed by isolation:
+  // removing this flag is what stops the abort; narrowing to the exact Test Engine interaction is
+  // unresolved and out of scope for the font-tuner work that surfaced it). Debug is the developer/test
+  // build, not what ships, so losing "drag a PDF viewer into its own OS window" there only is an
+  // acceptable trade against an outright crash. Release — what the app actually ships as — is
+  // unaffected.
+#ifndef GOSURVEY_DEVELOPER_SHELL
+  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 #endif
   // The splash ran in a small (~880x640) window. Maximizing it for the main stage leaves the stale
   // splash front buffer stretched fullscreen for the frames it takes DWM to catch up — the "glitchy
@@ -1232,6 +1249,7 @@ int main()
     DrawDimStyleWindow(cmd, &cmdLog);
     DrawMleaderStyleWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);
+    DrawSurveyPointGridWindow(cmd, &cmdLog);  // REQ-400
     DrawConnectionModesWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
     DrawSurfaceStyleWindow(cmd, &cmdLog);

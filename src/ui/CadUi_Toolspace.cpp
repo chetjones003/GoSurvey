@@ -605,6 +605,9 @@ void DrawSurveyDatabaseFolder(AppCommandState& cmd, std::vector<std::string>* lo
     changed |= ImGui::InputDouble("##sdb_emax", &r.elevMax, 0.0, 0.0, "%.3f");
   }
 
+  if (ImGui::Button("Open table##sdb_opentable"))  // REQ-400
+    cmd.showSurveyPointGridWindow = true;
+
   ImGui::SetNextItemWidth(-1.f);
   if (ImGui::BeginCombo("##sdb_group", r.group.empty() ? "Point group: (any)" : ("Point group: " + r.group).c_str())) {
     if (ImGui::Selectable("(any)", r.group.empty())) {

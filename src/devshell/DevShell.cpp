@@ -23,11 +23,14 @@
 #endif
 
 #include <imgui.h>
+#include <imgui_stdlib.h>
 #include <imgui_te_context.h>
 #include <imgui_te_coroutine.h>
 #include <imgui_te_engine.h>
 #include <imgui_te_ui.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -290,6 +293,28 @@ void CopyCommandLogToClipboard(const std::vector<std::string>& commandLog)
   DevShell_Log("log", "copied command log to clipboard");
 }
 
+void AppendFontRole(std::string* dump, const char* roleField, const FontTuningRole& r)
+{
+  char line[256];
+  std::snprintf(line, sizeof(line), "  t.%s.path = \"%s\"; t.%s.sizePx = %.1ff;\n", roleField, r.path.c_str(),
+               roleField, r.sizePx);
+  *dump += line;
+}
+
+void CopyFontTuningToClipboard(const FontTuning& t)
+{
+  std::string dump = "// Developer Shell Fonts tab — paste in chat to persist into LoadApplicationFont\n";
+  dump += "FontTuning t;\n";
+  AppendFontRole(&dump, "defaultFont", t.defaultFont);
+  AppendFontRole(&dump, "toolspace", t.toolspace);
+  AppendFontRole(&dump, "billboard", t.billboard);
+  AppendFontRole(&dump, "wikiBody", t.wikiBody);
+  AppendFontRole(&dump, "wikiHeading", t.wikiHeading);
+  AppendFontRole(&dump, "wikiMono", t.wikiMono);
+  ImGui::SetClipboardText(dump.c_str());
+  DevShell_Log("fonts", "copied font tuning to clipboard — paste in chat to persist");
+}
+
 void CopyActivityLogToClipboard()
 {
   std::vector<LogLine> snap;
@@ -455,6 +480,151 @@ void DrawChromeTuner()
   DrawChromeImGuiColors();
 }
 
+// Starts equal to LoadApplicationFont()'s own defaults (CadCommands.cpp); session-only, never saved.
+FontTuning g_fontTuning;
+std::string g_fontApplyMsg;
+
+std::string ToLowerAscii(std::string s)
+{
+  for (char& c : s)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return s;
+}
+
+/// Installed TrueType/OpenType filenames under C:/Windows/Fonts (basenames only — Default/Toolspace/
+/// Billboard store an absolute path, so the combo below prefixes this folder back on). Scanned once.
+const std::vector<std::string>& SystemFontFiles()
+{
+  static std::vector<std::string> files;
+  static bool scanned = false;
+  if (!scanned) {
+    scanned = true;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator("C:/Windows/Fonts", ec)) {
+      if (!entry.is_regular_file())
+        continue;
+      const std::string ext = ToLowerAscii(entry.path().extension().string());
+      if (ext == ".ttf" || ext == ".ttc" || ext == ".otf")
+        files.push_back(entry.path().filename().string());
+    }
+    std::sort(files.begin(), files.end(),
+              [](const std::string& a, const std::string& b) { return ToLowerAscii(a) < ToLowerAscii(b); });
+  }
+  return files;
+}
+
+/// Bundled resources/fonts filenames (the Wiki roles store a bare filename from this folder, same as
+/// LoadBundledUiFont resolves). Scanned once.
+const std::vector<std::string>& BundledFontFiles()
+{
+  static std::vector<std::string> files;
+  static bool scanned = false;
+  if (!scanned) {
+    scanned = true;
+    const std::filesystem::path dir = ResolveBundledAssetPath(std::filesystem::path("resources") / "fonts");
+    std::error_code ec;
+    if (!dir.empty())
+      for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file())
+          continue;
+        const std::string ext = ToLowerAscii(entry.path().extension().string());
+        if (ext == ".ttf" || ext == ".otf")
+          files.push_back(entry.path().filename().string());
+      }
+    std::sort(files.begin(), files.end(),
+              [](const std::string& a, const std::string& b) { return ToLowerAscii(a) < ToLowerAscii(b); });
+  }
+  return files;
+}
+
+/// \p bundled: \p choices are resources/fonts basenames and \p r->path is stored bare (matches
+/// LoadBundledUiFont). Otherwise \p choices are C:/Windows/Fonts basenames and \p r->path is stored
+/// as the full "C:/Windows/Fonts/<name>" path. The text field stays editable too, for a font outside
+/// either folder.
+bool FontRoleRow(const char* label, FontTuningRole* r, const std::vector<std::string>& choices, bool bundled)
+{
+  bool changed = false;
+  ImGui::PushID(label);
+  ImGui::TextUnformatted(label);
+
+  const std::string currentFile = std::filesystem::path(r->path).filename().string();
+  ImGui::SetNextItemWidth(220.f);
+  if (ImGui::BeginCombo("##pick", currentFile.empty() ? "(choose a font)" : currentFile.c_str())) {
+    for (const std::string& f : choices) {
+      const bool sel = (f == currentFile);
+      if (ImGui::Selectable(f.c_str(), sel)) {
+        r->path = bundled ? f : ("C:/Windows/Fonts/" + f);
+        changed = true;
+      }
+      if (sel)
+        ImGui::SetItemDefaultFocus();
+    }
+    if (choices.empty())
+      ImGui::TextDisabled("(none found)");
+    ImGui::EndCombo();
+  }
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(-140.f);
+  changed |= ImGui::InputText("##path", &r->path);
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(100.f);
+  changed |= ImGui::DragFloat("px##size", &r->sizePx, 0.25f, 6.f, 72.f, "%.1f");
+  ImGui::PopID();
+  return changed;
+}
+
+bool g_fontApplyPending = false;  // set by the Apply button; serviced in DevShell_PostSwap (below)
+
+/// Rebuilds io.Fonts from g_fontTuning. Clearing the atlas invalidates every ImFont* currently in use
+/// by widgets this frame already queued to draw (including FontReg's cached role pointers), so this
+/// must run AFTER the frame's own Render/SwapBuffers, never from inside the Apply button's own
+/// ImGui::Button() handler — g_fontApplyPending defers it to DevShell_PostSwap, the same pattern
+/// DevShell_SetWindowSize/DevShell_RequestScreenshot already use for exactly this reason.
+void ApplyFontTuningNow()
+{
+  if (!LoadApplicationFontWithTuning(g_fontTuning)) {
+    g_fontApplyMsg = "Default font path could not be loaded — fonts unchanged.";
+    DevShell_Log("fonts", g_fontApplyMsg.c_str());
+    return;
+  }
+  // Dear ImGui 1.92's texture system re-uploads any atlas texture marked dirty by Build() the next
+  // time it is drawn (ImGui_ImplOpenGL3_UpdateTexture, called from RenderDrawData) — there is no
+  // separate Create/DestroyFontsTexture call in this backend version.
+  ImGui::GetIO().Fonts->Build();
+  g_fontApplyMsg = "Applied.";
+  DevShell_Log("fonts", "applied font tuning (atlas rebuilt)");
+}
+
+void DrawFontTuner()
+{
+  ImGui::TextWrapped(
+      "Live font swap: pick a font from the dropdown (or type a path directly) and a pixel size, then "
+      "Apply to rebuild the ImGui font atlas. Session-only.");
+  const std::vector<std::string>& sysFonts = SystemFontFiles();
+  const std::vector<std::string>& bundledFonts = BundledFontFiles();
+  bool changed = false;
+  changed |= FontRoleRow("Default (CAD UI)", &g_fontTuning.defaultFont, sysFonts, /*bundled=*/false);
+  changed |= FontRoleRow("Toolspace", &g_fontTuning.toolspace, sysFonts, /*bundled=*/false);
+  changed |= FontRoleRow("Billboard (What's New)", &g_fontTuning.billboard, sysFonts, /*bundled=*/false);
+  changed |= FontRoleRow("Wiki body (bundled)", &g_fontTuning.wikiBody, bundledFonts, /*bundled=*/true);
+  changed |= FontRoleRow("Wiki heading (bundled)", &g_fontTuning.wikiHeading, bundledFonts, /*bundled=*/true);
+  changed |= FontRoleRow("Wiki mono (bundled)", &g_fontTuning.wikiMono, bundledFonts, /*bundled=*/true);
+  (void)changed;  // Apply is explicit — a rebuild is too expensive to run on every keystroke
+
+  if (ImGui::Button("Apply"))
+    g_fontApplyPending = true;  // carried out in DevShell_PostSwap, after this frame renders
+  ImGui::SameLine();
+  if (ImGui::Button("Reset to defaults")) {
+    g_fontTuning = FontTuning{};
+    g_fontApplyMsg.clear();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Copy for chat"))
+    CopyFontTuningToClipboard(g_fontTuning);
+  if (!g_fontApplyMsg.empty())
+    ImGui::TextDisabled("%s", g_fontApplyMsg.c_str());
+}
+
 } // namespace
 
 void DevShell_Log(std::string_view channel, std::string_view message)
@@ -553,6 +723,10 @@ void DevShell_PostSwap(ImGuiTestEngine* engine)
     g_shotPending.clear();
     (void)DevShell_SaveWindowScreenshot(p.c_str());
   }
+  if (g_fontApplyPending) {
+    g_fontApplyPending = false;
+    ApplyFontTuningNow();
+  }
   if (g_cliQueued && !g_cliDone)
   {
     ++g_cliWait;
@@ -613,6 +787,11 @@ void DevShell_Draw(AppCommandState& cmd, std::vector<std::string>& commandLog)
     if (ImGui::BeginTabItem("Chrome"))
     {
       DrawChromeTuner();
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Fonts"))
+    {
+      DrawFontTuner();
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Log"))

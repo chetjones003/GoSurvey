@@ -373,6 +373,110 @@ std::vector<std::string> ProjectPointSources(AppCommandState& st) {
   return out;
 }
 
+EditDatabasePointResult EditDatabasePoint(AppCommandState& st, int pointNumber, const SurveyPoint& newValues,
+                                          double now, std::vector<std::string>& log) {
+  EditDatabasePointResult r;
+  const int i = st.activeDrawingIdx;
+  if (i < 1 || i >= static_cast<int>(st.drawingTabs.size()))
+    return r;
+  const Tab& tab = st.drawingTabs[static_cast<size_t>(i)];
+  if (tab.projectUid == 0 || tab.pointsMode != Tab::PointsMode::Shared)
+    return r;
+  AppCommandState::ProjectSession* s = SessionOf(st, tab.projectUid);
+  if (!s || !s->points)
+    return r;
+  if (s->readOnly) {
+    r.status = EditDatabasePointStatus::ReadOnly;
+    return r;
+  }
+  projpts::Db& db = *s->points;
+  const auto it = std::find_if(db.points.begin(), db.points.end(),
+                               [&](const projpts::Entry& e) { return e.point.id == pointNumber; });
+  if (it == db.points.end())
+    return r;
+  if (newValues.id != pointNumber) {
+    const auto collide = std::find_if(db.points.begin(), db.points.end(),
+                                      [&](const projpts::Entry& e) { return e.point.id == newValues.id; });
+    if (collide != db.points.end()) {
+      r.status = EditDatabasePointStatus::Collision;
+      return r;
+    }
+  }
+  const std::string renamedFrom = it->point.id != newValues.id ? std::to_string(it->point.id) : std::string();
+  it->point.id = newValues.id;
+  it->point.easting = newValues.easting;
+  it->point.northing = newValues.northing;
+  it->point.elevation = newValues.elevation;
+  it->point.description = newValues.description;
+  ++db.revision;
+  if (!db.dirty) {
+    db.dirty = true;
+    db.dirtySince = now;
+  }
+  if (!renamedFrom.empty())
+    log.push_back("Survey Point Database - point " + renamedFrom + " renumbered " + std::to_string(newValues.id) + ".");
+  r.status = EditDatabasePointStatus::Applied;
+  return r;
+}
+
+int SelectDatabasePoints(AppCommandState& st, const std::vector<int>& pointNumbers) {
+  st.selectedSurveyPointIndices.clear();
+  std::unordered_set<int> want(pointNumbers.begin(), pointNumbers.end());
+  std::unordered_set<int> found;
+  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
+    if (want.count(st.surveyPoints[i].id)) {
+      st.selectedSurveyPointIndices.push_back(static_cast<int>(i));
+      found.insert(st.surveyPoints[i].id);
+    }
+  int refused = 0;
+  for (const int id : pointNumbers)
+    if (!found.count(id))
+      ++refused;
+  return refused;
+}
+
+void ResolveGridNumberConflict(AppCommandState& st, GridConflictAnswer answer, double now,
+                               std::vector<std::string>& log) {
+  auto& c = st.surveyPointGridConflict;
+  if (!c.active)
+    return;
+  if (answer == GridConflictAnswer::Cancel) {
+    log.push_back("Survey Point Database - renumber cancelled; point " + std::to_string(c.oldNumber) +
+                  " unchanged.");
+    c = {};
+    return;
+  }
+  projpts::Db* db = ActiveProjectDb(st);
+  if (!db) {
+    c = {};
+    return;
+  }
+  SurveyPoint values = c.pendingValues;
+  if (answer == GridConflictAnswer::Overwrite) {
+    const int overwritten = c.newNumber;
+    db->points.erase(std::remove_if(db->points.begin(), db->points.end(),
+                                    [&](const projpts::Entry& e) {
+                                      return e.point.id == overwritten && e.point.id != c.oldNumber;
+                                    }),
+                     db->points.end());
+    log.push_back("Survey Point Database - point " + std::to_string(overwritten) +
+                  " was overwritten by renumbering point " + std::to_string(c.oldNumber) + ".");
+  } else {  // Renumber: the colliding entry keeps its number; the edited point gets a fresh one instead
+    std::unordered_set<int> used;
+    for (const projpts::Entry& e : db->points)
+      used.insert(e.point.id);
+    int next = 1;
+    while (used.count(next))
+      ++next;
+    log.push_back("Survey Point Database - point " + std::to_string(c.newNumber) +
+                  " already exists; point " + std::to_string(c.oldNumber) + " was renumbered " +
+                  std::to_string(next) + " instead.");
+    values.id = next;
+  }
+  EditDatabasePoint(st, c.oldNumber, values, now, log);
+  c = {};
+}
+
 int HideSelectedPointsHere(AppCommandState& st) {
   if (!ActiveProjectDb(st))
     return 0;

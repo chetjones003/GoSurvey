@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
+cmake_policy(SET CMP0091 NEW)  # let CMAKE_MSVC_RUNTIME_LIBRARY (below) control /MD vs /MDd
 project(GoSurvey VERSION 0.7.2 LANGUAGES CXX C RC)
+
+if(MSVC)
+  # third_party/xerces-c/lib/win-x64/xerces-c_3.lib is vendored prebuilt against the Release DLL CRT
+  # (/MD) only — there is no /MDd build available. Left alone, a Debug configure links every other
+  # object file against /MDd and fails at link time with ~500 LNK2038 CRT-mismatch errors, all against
+  # xerces-c_3.lib. Force the Release DLL CRT in every configuration, matching the vendored lib,
+  # rather than carrying a Debug CRT mismatch no vendored replacement can fix.
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -608,6 +618,7 @@ add_executable(GoSurvey
   src/ui/CadUi_ImportExportPoints.cpp
   src/ui/CadUi_TraverseEditor.cpp
   src/ui/CadUi_PointGroups.cpp
+  src/ui/CadUi_SurveyPointGrid.cpp
   src/ui/CadUi_Surfaces.cpp
   src/ui/CadUi_SurfaceStyles.cpp
   src/ui/CadUi_Toolspace.cpp
