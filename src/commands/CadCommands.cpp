@@ -42330,15 +42330,23 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("Grip — distance must be non-zero.");
         return;
       }
-      float cursorLocalX = 0.f;
-      float cursorLocalY = 0.f;
-      CadCoord::LocalFromWorld(st, static_cast<double>(st.uiCursorWorldX), static_cast<double>(st.uiCursorWorldY),
-                               &cursorLocalX, &cursorLocalY);
       float ux = 0.f;
       float uy = 0.f;
-      if (!OrthoUnitTowardPoint(st.entityGripAnchorX, st.entityGripAnchorY, cursorLocalX, cursorLocalY, &ux, &uy)) {
-        log.push_back("Grip distance needs a direction — move the crosshair off the grip, then enter a distance.");
-        return;
+      if (st.entityGripLengthenMode) {
+        // Lengthen (REQ-356): the direction is the line's own frozen angle, not wherever the
+        // cursor happens to be — a typed distance here never needs the crosshair off-axis.
+        ux = st.entityGripLengthenDirX;
+        uy = st.entityGripLengthenDirY;
+      } else {
+        float cursorLocalX = 0.f;
+        float cursorLocalY = 0.f;
+        CadCoord::LocalFromWorld(st, static_cast<double>(st.uiCursorWorldX), static_cast<double>(st.uiCursorWorldY),
+                                 &cursorLocalX, &cursorLocalY);
+        if (!OrthoUnitTowardPoint(st.entityGripAnchorX, st.entityGripAnchorY, cursorLocalX, cursorLocalY, &ux,
+                                  &uy)) {
+          log.push_back("Grip distance needs a direction — move the crosshair off the grip, then enter a distance.");
+          return;
+        }
       }
       st.entityGripTypedX = st.entityGripAnchorX + ux * gripDist;
       st.entityGripTypedY = st.entityGripAnchorY + uy * gripDist;
@@ -42347,9 +42355,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // whatever the live drag had put there — one undo returns the entity to where it started.
       ApplyEntityGripPoint(st, st.entityGripTypedX, st.entityGripTypedY, CadCommitElevation(st));
       char gripMsg[128];
-      std::snprintf(gripMsg, sizeof(gripMsg), "Grip stretched %.6g %s.",
-                    static_cast<double>(std::fabs(gripDist)),
-                    ux > 0.f ? "right" : (ux < 0.f ? "left" : (uy > 0.f ? "up" : "down")));
+      if (st.entityGripLengthenMode)
+        std::snprintf(gripMsg, sizeof(gripMsg), "Grip lengthened %.6g along the line's angle.",
+                      static_cast<double>(gripDist));
+      else
+        std::snprintf(gripMsg, sizeof(gripMsg), "Grip stretched %.6g %s.",
+                      static_cast<double>(std::fabs(gripDist)),
+                      ux > 0.f ? "right" : (ux < 0.f ? "left" : (uy > 0.f ? "up" : "down")));
       log.push_back(gripMsg);
       ClearEntityGripInteraction(st);
       BumpCadGpuCache(st);

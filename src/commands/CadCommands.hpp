@@ -4260,6 +4260,26 @@ struct AppCommandState {
   /// the live stretch distance (REQ-024).
   float entityGripLiveDistance = 0.f;
 
+  // --- Grip hover menu (REQ-356): Lengthen/Stretch for a line-endpoint grip ---
+  /// Set when the drag was armed via the hover menu's "Lengthen" item rather than a plain click-drag:
+  /// the live update and the typed-distance box both measure along \c entityGripLengthenDir instead of
+  /// free cursor position / ORTHO, so the endpoint can only move along the line's own original angle.
+  bool entityGripLengthenMode = false;
+  /// Unit vector from the FIXED endpoint toward the grip being dragged, at the moment "Lengthen" was
+  /// chosen — the line's own angle, frozen for the rest of this drag.
+  float entityGripLengthenDirX = 0.f;
+  float entityGripLengthenDirY = 0.f;
+  /// Dwell timer + identity for the grip hover menu: which selected line-endpoint grip (if any) the
+  /// cursor is currently resting on, used to open the Lengthen/Stretch popup after ~0.5s and to reset
+  /// the timer the instant the hovered grip changes (REQ-356).
+  HoverDwell gripMenuHoverDwell{};
+  int gripMenuHoverEntityIndex = -1;
+  int gripMenuHoverWhich = -1;
+  /// The grip the popup is open for (or was last open for) — latched separately from the hover above
+  /// so the popup's own content doesn't vanish the instant the cursor leaves the grip to reach the menu.
+  int gripMenuPendingEntityIndex = -1;
+  int gripMenuPendingWhich = -1;
+
   // --- MOVE / COPY ---
   enum class ModifyPhase { PickSelection, NeedBase, NeedDestination } modifyPhase = ModifyPhase::PickSelection;
 
@@ -6785,6 +6805,7 @@ inline void ClearEntityGripInteraction(AppCommandState& st) {
   st.entityGripDownWorldX = 0.f;
   st.entityGripDownWorldY = 0.f;
   st.entityGripTypedDistanceValid = false;
+  st.entityGripLengthenMode = false;
 }
 
 inline void RestoreEntityGripOriginal(AppCommandState& st) {
