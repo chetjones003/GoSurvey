@@ -12168,6 +12168,55 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted.
 
+### REQ-400 — Survey Point Database grid panel
+
+- Purpose: REQ-377's Survey Database toolspace section lets a user filter which points a drawing
+  shows, but there is still no way to see the database's rows — number, coordinates, elevation,
+  description — at all. The user wants an Excel-style grid of the whole project point database.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-09-a.
+- Depends on: REQ-376 (project point database), REQ-377 (visibility rules, point groups).
+- Statement:
+  1. **Panel.** A dockable **Survey Point Database** panel (opened from the toolspace Survey
+     Database section, alongside the existing filters) shows every point in the active project's
+     database as one row per point, sortable by any column by clicking its header.
+  2. **Columns.** Point number, northing, easting, elevation, description, **visible** (whether the
+     point passes the ACTIVE drawing's REQ-377 rules — yes/no, not a cross-project count), source
+     drawing, point group.
+  3. **No open project.** With no project open (or no project drawing active), the panel is absent,
+     matching REQ-377's toolspace section.
+  4. **Editing.** Point number, northing, easting, elevation and description are editable in place
+     (double-click or tab into a cell, Enter commits). An edit writes through to the project point
+     database exactly as editing the point in a drawing would (REQ-376 clause 2): it updates at once
+     and is visible live in every open tab. Visible/source drawing/point group are read-only in this
+     panel (set elsewhere — drawing visibility rules, Add Drawing to Project, point group
+     membership).
+  5. **Number-conflict edits.** Editing a row's point number to one that already exists in the
+     database is resolved through the existing overwrite/renumber/cancel prompt (REQ-376 clause 4) —
+     never a silent overwrite.
+  6. **Read-only project.** In a read-only-opened project (REQ-382), the grid is still populated but
+     every cell is non-editable, matching REQ-376 clause 6.
+  7. **Selection.** Selecting one or more rows selects the corresponding points in the active
+     drawing's point selection (so, e.g., "Hide selected here" in the existing toolspace filters
+     works from a grid selection too); a point not visible in the active drawing (REQ-377) cannot be
+     selected this way.
+- Acceptance:
+  - `[req400]` tests: grid lists every database point with correct values for all seven columns;
+    sorting by each column; editing each editable field updates the database and is visible in a
+    second open tab; a point-number edit colliding with an existing number raises the
+    overwrite/renumber/cancel prompt and each outcome leaves the correct state; visibility column
+    matches REQ-377 rule evaluation for the active drawing; read-only project disables all cell
+    edits; no project open hides the panel; row selection updates the drawing's point selection and
+    is refused for a point hidden by the active drawing's rules.
+  - Issue-level: opening the panel on a project with points from two drawings shows all of them in
+    one table, editable, with each one's visibility and source drawing correct.
+- Owner-layer: Domain (reuses `projpts::Db` / `projpts::Rules`), UI (new dock panel in
+  `CadUi_Toolspace.cpp` or a sibling file), Commands (point edit/select glue already used by
+  `ProjectPoints.cpp`)
+- Status: accepted
+- Revisions: 2026-10-09 — initial (D-2026-10-09-a).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

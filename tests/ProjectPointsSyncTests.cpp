@@ -482,3 +482,138 @@ TEST_CASE("req377 a standalone drawing has no rules and no helpers act", "[req37
   CHECK(HideSelectedPointsHere(st) == 0);
   CHECK(st.pointVisibility.hidden.empty());
 }
+
+TEST_CASE("req400 editing a database field writes through and is seen by another tab", "[req400]") {
+  TempDir d("grid-edit");
+  AppCommandState st;
+  TwoTabProject(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+  SyncProjectPoints(st, log, now);
+  st.surveyPoints = {Pt(1, 10, 10, 1)};
+  SyncProjectPoints(st, log, now += 0.016);
+
+  SurveyPoint edited = st.openProjects[0].points->points[0].point;
+  edited.elevation = 9.5;
+  edited.description = "EDITED";
+  const EditDatabasePointResult r = EditDatabasePoint(st, 1, edited, now += 0.016, log);
+  CHECK(r.status == EditDatabasePointStatus::Applied);
+  CHECK(st.openProjects[0].points->points[0].point.elevation == 9.5);
+  CHECK(st.openProjects[0].points->points[0].point.description == "EDITED");
+  CHECK(st.openProjects[0].points->dirty);
+
+  SwitchTo(st, 2);
+  SyncProjectPoints(st, log, now += 0.016);
+  REQUIRE(st.surveyPoints.size() == 1);
+  CHECK(st.surveyPoints[0].elevation == 9.5);
+  CHECK(st.surveyPoints[0].description == "EDITED");
+}
+
+TEST_CASE("req400 renumbering onto an existing number is refused, not overwritten", "[req400]") {
+  TempDir d("grid-collide");
+  AppCommandState st;
+  TwoTabProject(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+  SyncProjectPoints(st, log, now);
+  st.surveyPoints = {Pt(1, 10, 10, 1), Pt(2, 20, 20, 2)};
+  SyncProjectPoints(st, log, now += 0.016);
+
+  SurveyPoint edited = st.openProjects[0].points->points[0].point;  // point 1, renumbered to 2
+  edited.id = 2;
+  const EditDatabasePointResult r = EditDatabasePoint(st, 1, edited, now += 0.016, log);
+  CHECK(r.status == EditDatabasePointStatus::Collision);
+  REQUIRE(st.openProjects[0].points->points.size() == 2);
+  CHECK(st.openProjects[0].points->points[0].point.id == 1);  // unchanged
+}
+
+TEST_CASE("req400 a read-only project refuses an edit", "[req400]") {
+  TempDir d("grid-readonly");
+  AppCommandState st;
+  TwoTabProject(st, d.path, /*readOnly=*/true);
+  std::vector<std::string> log;
+  double now = 0.0;
+  SyncProjectPoints(st, log, now);
+
+  SurveyPoint p = Pt(1, 10, 10, 1);
+  const EditDatabasePointResult r = EditDatabasePoint(st, 1, p, now += 0.016, log);
+  CHECK(r.status == EditDatabasePointStatus::ReadOnly);
+}
+
+TEST_CASE("req400 selecting database points skips ones hidden in the active drawing", "[req400]") {
+  TempDir d("grid-select");
+  AppCommandState st;
+  TwoTabProject(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+  SyncProjectPoints(st, log, now);
+  st.surveyPoints = {Pt(1, 10, 10, 1), Pt(2, 20, 20, 2)};
+  SyncProjectPoints(st, log, now += 0.016);
+  st.selectedSurveyPointIndices = {0, 1};
+  REQUIRE(HideSelectedPointsHere(st) == 2);  // hide both here only
+  SyncProjectPoints(st, log, now += 0.016);  // rebuild the visible view
+  CHECK(st.surveyPoints.empty());
+
+  const int refused = SelectDatabasePoints(st, {1, 2});
+  CHECK(refused == 2);
+  CHECK(st.selectedSurveyPointIndices.empty());
+}
+
+TEST_CASE("req400 Overwrite and Renumber resolve a grid number conflict", "[req400]") {
+  TempDir d("grid-conflict-overwrite");
+  AppCommandState st;
+  TwoTabProject(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+  SyncProjectPoints(st, log, now);
+  st.surveyPoints = {Pt(1, 10, 10, 1), Pt(2, 20, 20, 2)};
+  SyncProjectPoints(st, log, now += 0.016);
+
+  auto& c = st.surveyPointGridConflict;
+  c.active = true;
+  c.oldNumber = 1;
+  c.newNumber = 2;
+  c.pendingValues = st.openProjects[0].points->points[0].point;
+  c.pendingValues.id = 2;
+  ResolveGridNumberConflict(st, GridConflictAnswer::Overwrite, now += 0.016, log);
+  CHECK_FALSE(st.surveyPointGridConflict.active);
+  REQUIRE(st.openProjects[0].points->points.size() == 1);
+  CHECK(st.openProjects[0].points->points[0].point.id == 2);
+
+  // Renumber: point 1 (re-added) colliding with 2 keeps 2 and gets the next free number instead.
+  st.openProjects[0].points->points.push_back(
+      {Pt(1, 10, 10, 1), "EG"});
+  c.active = true;
+  c.oldNumber = 1;
+  c.newNumber = 2;
+  c.pendingValues = Pt(2, 11, 11, 1);
+  ResolveGridNumberConflict(st, GridConflictAnswer::Renumber, now += 0.016, log);
+  REQUIRE(st.openProjects[0].points->points.size() == 2);
+  const bool stillHas2 = st.openProjects[0].points->points[0].point.id == 2 ||
+                         st.openProjects[0].points->points[1].point.id == 2;
+  CHECK(stillHas2);
+  CHECK((st.openProjects[0].points->points[0].point.id == 3 || st.openProjects[0].points->points[1].point.id == 3));
+}
+
+TEST_CASE("req400 Cancel leaves the database unchanged", "[req400]") {
+  TempDir d("grid-conflict-cancel");
+  AppCommandState st;
+  TwoTabProject(st, d.path);
+  std::vector<std::string> log;
+  double now = 0.0;
+  SyncProjectPoints(st, log, now);
+  st.surveyPoints = {Pt(1, 10, 10, 1)};
+  SyncProjectPoints(st, log, now += 0.016);
+  const auto before = st.openProjects[0].points->points;
+
+  auto& c = st.surveyPointGridConflict;
+  c.active = true;
+  c.oldNumber = 1;
+  c.newNumber = 99;
+  c.pendingValues = before[0].point;
+  c.pendingValues.id = 99;
+  ResolveGridNumberConflict(st, GridConflictAnswer::Cancel, now += 0.016, log);
+  CHECK_FALSE(st.surveyPointGridConflict.active);
+  REQUIRE(st.openProjects[0].points->points.size() == 1);
+  CHECK(st.openProjects[0].points->points[0].point.id == 1);
+}
