@@ -15380,8 +15380,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // still beats ORTHO, matching the draw commands, so the constraint is skipped on a snapped cursor.
     float curWx = curWxRaw;
     float curWy = curWyRaw;
-    if (!cmd.viewportSnapPickValid)
+    if (cmd.entityGripLengthenMode) {
+      // Lengthen (REQ-356): the endpoint may only move along the line's OWN frozen angle, not
+      // wherever the cursor is — project the raw cursor onto the ray from the anchor along that
+      // angle, ignoring ORTHO and any off-axis snap entirely.
+      const float toCurX = curWxRaw - cmd.entityGripAnchorX;
+      const float toCurY = curWyRaw - cmd.entityGripAnchorY;
+      // How far the moving endpoint has already travelled from its ORIGINAL position along the
+      // line's own direction, plus how much further the cursor asks to go along that same axis.
+      const float along = toCurX * cmd.entityGripLengthenDirX + toCurY * cmd.entityGripLengthenDirY;
+      curWx = cmd.entityGripAnchorX + cmd.entityGripLengthenDirX * along;
+      curWy = cmd.entityGripAnchorY + cmd.entityGripLengthenDirY * along;
+    } else if (!cmd.viewportSnapPickValid) {
       ApplyOrthoConstrainFromAnchor(cmd, cmd.entityGripAnchorX, cmd.entityGripAnchorY, &curWx, &curWy, cmd.orthoMode);
+    }
 
     cmd.entityGripLiveDistance =
         std::hypot(curWx - cmd.entityGripAnchorX, curWy - cmd.entityGripAnchorY);
@@ -19884,6 +19896,106 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGui::PopStyleVar(1);
   }
 
+  // Grip hover context menu (REQ-356): resting on a line-endpoint grip for ~0.5s, with nothing
+  // already being dragged, offers Lengthen (extend along the line's existing angle by a typed
+  // distance) and Stretch (today's free-move drag — the menu is purely informational for it,
+  // dismissing itself so the usual click-drag still works). No other grip type has more than one
+  // possible action, so none of them are hover-tested here and none ever show a menu.
+  {
+    const bool gripMenuEligible =
+        modelSpace && hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y &&
+        cmd.active == AppCommandState::Kind::None && !cmd.entityGripMoveActive && !cmd.dimGripMoveActive &&
+        !cmd.mtextGripMoveActive && !cmd.gizmoDragActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+        !ImGui::IsMouseDown(ImGuiMouseButton_Right) && !ImGui::IsPopupOpen("##gos_grip_menu");
+
+    int hoverIdx = -1, hoverWhich = -1;
+    if (gripMenuEligible) {
+      const Camera gripMenuCam = CadViewCamera(cmd);
+      const float hitPx = 10.f;
+      float bestD2 = hitPx * hitPx;
+      for (const SelectedEntity& sel : cmd.selection) {
+        if (sel.type != SelectedEntity::Type::LineSeg)
+          continue;
+        const size_t k = static_cast<size_t>(sel.index) * 6;
+        if (k + 5 >= cmd.userLinesFlat.size())
+          continue;
+        const double gx[2] = {cmd.userLinesFlat[k], cmd.userLinesFlat[k + 3]};
+        const double gy[2] = {cmd.userLinesFlat[k + 1], cmd.userLinesFlat[k + 4]};
+        const double gz[2] = {cmd.userLinesFlat[k + 2], cmd.userLinesFlat[k + 5]};
+        for (int w = 0; w < 2; ++w) {
+          float sx = 0.f, sy = 0.f;
+          gripMenuCam.WorldToScreen(gx[w], gy[w], gz[w], avail.x, avail.y, &sx, &sy);
+          const float dx = mx - sx, dy = my - sy;
+          const float d2 = dx * dx + dy * dy;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            hoverIdx = sel.index;
+            hoverWhich = w;
+          }
+        }
+      }
+    }
+
+    // The hovered grip's IDENTITY changing resets the dwell exactly like a move does — resting on a
+    // different grip (even at the same pixel, impossible here, but also a selection change under a
+    // static cursor) must cost a fresh rest, not inherit one that was timed for something else.
+    if (hoverIdx != cmd.gripMenuHoverEntityIndex || hoverWhich != cmd.gripMenuHoverWhich) {
+      cmd.gripMenuHoverEntityIndex = hoverIdx;
+      cmd.gripMenuHoverWhich = hoverWhich;
+      ResetHoverDwell(&cmd.gripMenuHoverDwell, mx, my, ImGui::GetTime());
+    }
+
+    if (hoverIdx >= 0) {
+      const HoverDwellTick menuTick = UpdateHoverDwell(&cmd.gripMenuHoverDwell, mx, my, ImGui::GetTime(), 3.f, 0.5);
+      if (menuTick.elapsed) {
+        cmd.gripMenuPendingEntityIndex = hoverIdx;
+        cmd.gripMenuPendingWhich = hoverWhich;
+        ImGui::OpenPopup("##gos_grip_menu");
+      }
+    }
+  }
+
+  ImGui::SetNextWindowPos(mouse, ImGuiCond_Appearing);
+  if (ImGui::BeginPopup("##gos_grip_menu", ImGuiWindowFlags_AlwaysAutoResize)) {
+    const int pendIdx = cmd.gripMenuPendingEntityIndex;
+    const int pendWhich = cmd.gripMenuPendingWhich;
+    if (ImGui::Selectable("Stretch")) {
+      // The default free-move drag needs nothing armed here — the usual click-drag on the grip
+      // still does it. This item exists so Stretch is a visible, named choice next to Lengthen.
+      ImGui::CloseCurrentPopup();
+    }
+    if (ImGui::Selectable("Lengthen")) {
+      if (pendIdx >= 0 && static_cast<size_t>(pendIdx) * 6 + 5 < cmd.userLinesFlat.size()) {
+        PushUndoSnapshot(cmd, "Grip edit");
+        const size_t k = static_cast<size_t>(pendIdx) * 6;
+        cmd.entityGripOrigX0 = cmd.userLinesFlat[k];
+        cmd.entityGripOrigY0 = cmd.userLinesFlat[k + 1];
+        cmd.entityGripOrigX1 = cmd.userLinesFlat[k + 3];
+        cmd.entityGripOrigY1 = cmd.userLinesFlat[k + 4];
+        const float fixedX = pendWhich == 0 ? cmd.entityGripOrigX1 : cmd.entityGripOrigX0;
+        const float fixedY = pendWhich == 0 ? cmd.entityGripOrigY1 : cmd.entityGripOrigY0;
+        const float movingX = pendWhich == 0 ? cmd.entityGripOrigX0 : cmd.entityGripOrigX1;
+        const float movingY = pendWhich == 0 ? cmd.entityGripOrigY0 : cmd.entityGripOrigY1;
+        const float ddx = movingX - fixedX, ddy = movingY - fixedY;
+        const float len = std::hypot(ddx, ddy);
+        if (len > 1e-9f) {
+          cmd.entityGripMoveActive = true;
+          cmd.entityGripType = SelectedEntity::Type::LineSeg;
+          cmd.entityGripEntityIndex = pendIdx;
+          cmd.entityGripWhich = pendWhich;
+          cmd.entityGripAnchorX = movingX;
+          cmd.entityGripAnchorY = movingY;
+          cmd.entityGripTypedDistanceValid = false;
+          cmd.entityGripLengthenMode = true;
+          cmd.entityGripLengthenDirX = ddx / len;
+          cmd.entityGripLengthenDirY = ddy / len;
+        }
+      }
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+
   // Grip stretch dynamic input (REQ-024 / REQ-047). A grip drag runs with no active command, so the
   // command palette above never appears for it. This is the same box at the cursor, showing the live
   // stretch distance with its text SELECTED — so typing a distance replaces it, exactly like AutoCAD.
@@ -19906,7 +20018,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (showGripDynInput) {
     ImGuiIO& ioGrip = ImGui::GetIO();
     const ImGuiViewport* gripViewport = ImGui::GetMainViewport();
-    const char* gripPrompt = cmd.orthoMode ? "Specify stretch distance (ortho):" : "Specify stretch distance:";
+    const char* gripPrompt = cmd.entityGripLengthenMode
+        ? "Specify length to extend:"
+        : (cmd.orthoMode ? "Specify stretch distance (ortho):" : "Specify stretch distance:");
 
     // The live value the field mirrors until the user types over it.
     const std::string liveText =
