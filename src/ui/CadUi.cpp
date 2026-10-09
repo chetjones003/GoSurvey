@@ -14537,6 +14537,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const bool blockSnapPickMenu = cmd.mtextRichEditorOpen || cmd.tableCellEditorOpen || cmd.selBoxWaitingSecond ||
                                      cmd.dimGripMoveActive ||
                                      cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
+      // A grip drag is a view state, not a command (`cmd.active` stays `None` throughout), but it is
+      // just as much "doing something that wants a forced snap" as an active command is — so it must
+      // count as the same kind of "active" for the override popup (REQ-356 grip menu work).
+      const bool gripDragActive = cmd.entityGripMoveActive || cmd.dimGripMoveActive || cmd.mtextGripMoveActive;
       // REQ-121 rule (1), second seam (GitHub #91 review, D-2026-08-26-d, re-derived post-#103 as
       // D-2026-08-26-e). The snap OVERRIDE menu is a way of forcing a snap, so offering it during an
       // object-selection step offers the user the exact behaviour the rule removes. Picking a
@@ -14545,8 +14549,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // menu-level gate is what stops the lock from being armed off a selection-step pixel at all —
       // otherwise it would silently apply to the next NON-selection snap instead, a smaller but real
       // surprise (the override outliving the click that seemed to have no effect).
-      const bool allowSnapCycle = cmd.active != AK::None && cmd.objectSnapEnabled &&
-                                  !blockSnapPickMenu && !ViewportIsObjectSelectionStep(cmd);
+      //
+      // `blockSnapPickMenu` also blocks the override popup while a grip is hot, because originally a
+      // right-click during a grip drag meant only one thing (cancel the drag) and the two gestures
+      // would otherwise collide on the same click. Shift+right-click is unambiguous, so it is let
+      // through regardless of that block; the plain-right-click cancel sites below each gain their own
+      // Shift guard so the two gestures no longer collide.
+      const bool allowSnapCycle = (cmd.active != AK::None || gripDragActive) && cmd.objectSnapEnabled &&
+                                  (!blockSnapPickMenu || gripDragActive) && !ViewportIsObjectSelectionStep(cmd);
       using DM = AppCommandState::RightClickDefaultMode;
       using EM = AppCommandState::RightClickEditMode;
       using CM = AppCommandState::RightClickCommandMode;
@@ -15382,8 +15392,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     BumpCadGpuCache(cmd);
   }
 
-  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
-      my < avail.y && cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0) {
+  // Shift+right-click is reserved for the snap-override popup above, not the plain-right-click
+  // cancel below it would otherwise collide with on the same click (REQ-356).
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::GetIO().KeyShift && mx >= 0 &&
+      mx < avail.x && my >= 0 && my < avail.y && cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0) {
     const int idx = cmd.entityGripEntityIndex;
     switch (cmd.entityGripType) {
     case SelectedEntity::Type::LineSeg: {
@@ -15451,8 +15463,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     BumpCadGpuCache(cmd);
   }
 
-  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
-      my < avail.y && cmd.mtextGripMoveActive && cmd.mtextGripAnnotationIndex >= 0) {
+  // Shift+right-click is reserved for the snap-override popup above, not the plain-right-click
+  // cancel below it would otherwise collide with on the same click (REQ-356).
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::GetIO().KeyShift && mx >= 0 &&
+      mx < avail.x && my >= 0 && my < avail.y && cmd.mtextGripMoveActive && cmd.mtextGripAnnotationIndex >= 0) {
     AbortMtextGripInteraction(cmd);
     BumpCadGpuCache(cmd);
   }
@@ -15465,8 +15479,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     BumpCadGpuCache(cmd);
   }
 
-  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
-      my < avail.y && cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0) {
+  // Shift+right-click is reserved for the snap-override popup above, not the plain-right-click
+  // cancel below it would otherwise collide with on the same click (REQ-356).
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::GetIO().KeyShift && mx >= 0 &&
+      mx < avail.x && my >= 0 && my < avail.y && cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0) {
     const size_t gi = static_cast<size_t>(cmd.dimGripAnnotationIndex);
     if (gi < cmd.cadAnnotations.size()) {
       CadAnnotation& ann = cmd.cadAnnotations[gi];
