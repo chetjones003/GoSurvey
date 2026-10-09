@@ -12217,6 +12217,50 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-09 — initial (D-2026-10-09-a).
 
+### REQ-401 — Typed command-line equivalents for layout management (issue #751 follow-up, V3)
+- Purpose: issue #751's paper-space audit found that layout management (REQ-025) and viewport
+  scale (REQ-027) are reachable only through the tab bar / UI, with no typed command. A sheet-
+  drafting user who prefers the command line (the normal way to drive every other GoSurvey
+  command) cannot add, rename, or delete a layout, open Page Setup, or set a viewport's scale by
+  typing.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-09-b — add typed commands for the layout actions REQ-025/027 already define
+  in the UI. No new behavior: each command drives the existing add/rename/delete/page-setup/scale
+  logic. `MVSETUP` and `VPCLIP` are explicitly out of scope (VPCLIP depends on polygonal viewports,
+  REQ-034, which is withdrawn; MVSETUP is a multi-viewport-layout wizard with no existing UI
+  equivalent to expose, so it would be new scope, not a typed equivalent of existing scope).
+- Statement:
+  1. **LAYOUT.** Typing `LAYOUT` at the command line prompts for a sub-keyword
+     `[New/Rename/Delete]`, mirroring the tab-bar's add/rename/delete (REQ-025). `New` optionally
+     takes a name (default auto-generated unique name, same as the tab-bar "+"); `Rename` prompts
+     for the target layout (default: active layout) then the new name; `Delete` prompts for the
+     target layout (default: active layout) and runs the same confirmation/undo path as the
+     tab-bar Delete. Typing `LAYOUT` while Model space is active still offers New (a layout can be
+     created without first switching to one).
+  2. **PAGESETUP.** Typing `PAGESETUP` opens the same Page Setup dialog the tab-bar's right-click
+     "Page Setup" opens, for the active layout. Refused with a clear message when Model space is
+     active (Page Setup has no meaning there).
+  3. **VPSCALE.** Typing `VPSCALE` while a paper layout is active prompts for a scale (accepts the
+     same formats the Page Setup/viewport-scale UI already accepts, e.g. `1:20`, `0.05`, or a
+     named scale from the existing scale list) and applies it to the **current viewport** — the
+     one floating model space is inside when in floating model space, otherwise a pre-selected
+     viewport, otherwise (no current/selected viewport) the command refuses with a message naming
+     that a viewport must be selected or current first. This mirrors the existing viewport-scale
+     UI control's own target resolution.
+- Acceptance:
+  - `[req401]` tests: `LAYOUT` `New` creates a layout with a unique name and switches no state
+    unexpectedly; `Rename` on an existing layout changes its tab name; `Delete` removes a layout
+    through the same confirmation/undo path as the tab-bar delete (L1-L3 from issue #751/#763 must
+    not regress); `PAGESETUP` opens the Page Setup dialog pre-filled with the active layout's
+    current settings and refuses in Model space; `VPSCALE` changes the resolved viewport's scale
+    to the typed value and refuses clearly when no viewport is current or selected; none of the
+    three commands is reachable as a behavior change beyond what REQ-025/027's existing UI already
+    does.
+- Owner-layer: Commands (`CadCommands.cpp`), UI (Page Setup dialog reuse)
+- Status: accepted
+- Revisions: 2026-10-09 — initial (D-2026-10-09-b, issue #751/#753 follow-up V3).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

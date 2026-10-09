@@ -6322,6 +6322,16 @@ void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::ve
 /// unrecognized \p args reports the current networks). \p args is everything typed after the
 /// command name itself. ADD/REMOVE act on `AppCommandState::selection`'s pipe runs.
 void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+
+// --- LAYOUT / VPSCALE / PAGESETUP (REQ-401, issue #751/#753 V3) -----------------------------------
+/// One-shot text dispatch for LAYOUT's NEW/RENAME/DELETE subverbs — the typed equivalent of the
+/// layout tab bar's add/rename/delete (REQ-025). \p args is everything typed after "LAYOUT".
+void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+/// Sets `CurrentViewport(st)`'s scale from a typed "1:N" ratio or a bare model-units-per-inch
+/// number; a blank \p args reports the current viewport's scale instead.
+void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+/// Opens the Page Setup Manager dialog for the active layout (refuses in model space).
+void StartPageSetupCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.
 ///
 /// ONE builder for the preview, the click that commits a point and the Enter that finishes — a
