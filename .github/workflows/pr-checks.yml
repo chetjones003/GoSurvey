@@ -82,8 +82,15 @@ jobs:
           else { sccache --show-stats }
 
   # ---------------------------------------------------------------------------
-  # lint / clang-tidy — scoped to changed lines only (diff-aware), so pre-existing,
+  # lint / clang-tidy — scoped to files the PR actually touched, so pre-existing,
   # untouched-file findings never block an unrelated PR. New file config: .clang-tidy.
+  #
+  # Runs natively on windows-latest rather than via a container action (e.g.
+  # ZedThree/clang-tidy-review): GitHub Actions container actions require a Linux runner,
+  # and compile_commands.json here only resolves against the MSVC toolchain (Windows-only),
+  # so a container-based reviewer can't see real compile flags anyway. windows-latest ships
+  # LLVM's clang-tidy.exe (C:\Program Files\LLVM\bin), which is used directly against the
+  # MSVC-generated compile database instead.
   # ---------------------------------------------------------------------------
   lint-clang-tidy:
     name: lint / clang-tidy
@@ -112,20 +119,46 @@ jobs:
       - name: Configure (compile_commands.json only, no build)
         run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
-      - name: clang-tidy (changed lines only)
-        uses: ZedThree/clang-tidy-review@v0.20.1
-        id: review
-        with:
-          build_dir: build
-          config_file: '.clang-tidy'
-          exclude: 'third_party/*,build/*'
-          split_workflow: false
-
-      - name: Fail if clang-tidy found issues
-        if: steps.review.outputs.total_comments > 0
+      - name: clang-tidy (files changed in this PR only)
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          echo "clang-tidy found ${{ steps.review.outputs.total_comments }} issue(s) in changed lines."
-          exit 1
+          $clangTidy = Get-Command clang-tidy -ErrorAction SilentlyContinue
+          if (-not $clangTidy) {
+            $candidate = 'C:\Program Files\LLVM\bin\clang-tidy.exe'
+            if (-not (Test-Path $candidate)) { throw "clang-tidy.exe not found on this runner image." }
+            $clangTidy = $candidate
+          } else {
+            $clangTidy = $clangTidy.Source
+          }
+          Write-Host "Using $clangTidy ($(& $clangTidy --version | Select-Object -First 1))"
+
+          git fetch --depth=1 origin $env:BASE_SHA
+          $changed = git diff --name-only --diff-filter=ACMR "$env:BASE_SHA" HEAD |
+            Where-Object { $_ -match '\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$' } |
+            Where-Object { $_ -notmatch '^third_party/' } |
+            Where-Object { Test-Path $_ }
+
+          if (-not $changed) {
+            Write-Host "No changed C/C++ files to lint."
+            exit 0
+          }
+          Write-Host "Linting:`n$($changed -join "`n")"
+
+          $failed = $false
+          foreach ($file in $changed) {
+            # --warnings-as-errors=* makes a Checks: match fail the run (the exit code is 0 on
+            # warnings otherwise); .clang-tidy's own WarningsAsErrors stays '' since that field
+            # would apply even on a plain `clang-tidy` invocation outside this workflow (e.g. a
+            # local editor integration), where warnings-not-errors is the more useful default.
+            & $clangTidy --config-file=.clang-tidy --warnings-as-errors=* -p build $file
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+          }
+          if ($failed) {
+            Write-Host "::error::clang-tidy found issue(s) in changed files."
+            exit 1
+          }
 
   # ---------------------------------------------------------------------------
   # lint / msvc-analyze — report-only (see header comment). Always "passes"; findings
@@ -196,7 +229,7 @@ jobs:
           fetch-depth: 1
 
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           scan-type: fs
           scan-ref: .

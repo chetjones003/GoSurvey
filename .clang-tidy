@@ -1,8 +1,8 @@
 # clang-tidy config for GoSurvey PR checks (REQ-402).
 #
-# Enforced only against CHANGED lines in a PR (.github/workflows/pr-checks.yml uses
-# ZedThree/clang-tidy-review, a diff-aware runner) — never against the whole, untriaged
-# codebase. That is what makes it safe to run as a blocking check from day one.
+# Enforced only against files CHANGED in a PR (.github/workflows/pr-checks.yml diffs against
+# the PR base and runs clang-tidy.exe directly, not a container action) — never against the
+# whole, untriaged codebase. That is what makes it safe to run as a blocking check from day one.
 #
 # Checks are deliberately conservative: bug-finding and correctness checks are on;
 # style/naming checks are off, since this codebase has its own established conventions

@@ -12720,7 +12720,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   | Job | Tool | Blocking? | Scope |
   |---|---|---|---|
   | `build / test` | `cmake --preset ninja-release` + `ctest` (REQ-203/REQ-300 suite) | yes | whole build |
-  | `lint / clang-tidy` | `ZedThree/clang-tidy-review`, config in `.clang-tidy` | yes | changed lines only |
+  | `lint / clang-tidy` | `clang-tidy.exe` run directly against PR-changed files, config in `.clang-tidy` | yes | changed files only |
   | `lint / msvc-analyze (report-only)` | MSVC `/analyze` | no (see REQ-324) | whole build, annotations only |
   | `security / gitleaks` | `gitleaks/gitleaks-action` | yes | PR diff |
   | `security / dependency-scan` | Trivy filesystem scan (no lockfile exists for `third_party/`'s vendored deps — D-2026-08-31-b — so this is a source-composition/CVE scan, not a manifest audit) | yes (CRITICAL/HIGH) | whole tree |
@@ -12728,7 +12728,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
   clang-tidy and `/analyze` are deliberately NOT both blocking against the whole codebase: neither
   has ever been triaged against GoSurvey's existing code, so clang-tidy is scoped to only the
-  lines a PR actually changes (safe to block immediately), while `/analyze` stays report-only
+  files a PR actually changes (safe to block immediately), while `/analyze` stays report-only
   until a separate triage pass clears its backlog across the whole codebase — at which point it
   can be paired with `/WX` and promoted to blocking (tracked as follow-up work, not part of this
   requirement's acceptance).
