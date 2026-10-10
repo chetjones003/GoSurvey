@@ -1,0 +1,137 @@
+# GitHub issue #402 / REQ-329 increment 3 — SCALE is uniform about the UCS-resolved base point.
+#
+# `ApplyScaleToSelection` already scales X/Y (and every size) about the base. REQ-329 adds: the base
+# point carries its picked elevation, and under a TILTED UCS the elevations scale about the base
+# elevation too (a uniform scale is uniform on every axis).
+#
+# Regression guard: plan view, and any UCS whose Z axis is world-Z-parallel, keep the pre-REQ-329
+# "elevations untouched" behaviour byte-for-byte.
+
+# --- Regression: World UCS, SCALE 2 about the origin --------------------------------------------
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+EXPECT SELECTED 1
+CMD SCALE
+CMD 0,0
+CMD 2
+ESC
+EXPECT LINEXYZ 0 20 0 0 40 0 0
+CHECK ALL
+
+# --- Regression: World UCS, a line WITH elevation — Z is NOT scaled ------------------------------
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+CMD MOVE
+CMD 0,0
+CMD 0,0,5
+ESC
+EXPECT LINEXYZ 0 10 0 5 20 0 5
+BOX 5 -5 25 5
+CMD SCALE
+CMD 0,0
+CMD 2
+ESC
+# X doubles about the origin; the elevation is untouched (plan-view behaviour, unchanged).
+EXPECT LINEXYZ 0 20 0 5 40 0 5
+CHECK ALL
+
+# --- Tilted UCS (X 90): a line along the UCS Y axis (world Z) scales its elevation ---------------
+# UCS X 90: basis X=(1,0,0), Y=(0,0,1), Z=(0,-1,0). Line UCS (0,0)-(0,10) = world (0,0,0)-(0,0,10).
+# SCALE 2 about UCS (0,0) = world origin. World X/Y are unchanged (both 0); the Z scales about 0:
+# (0,0,10) -> (0,0,20). Before this change the far endpoint would stay at (0,0,10).
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 0 10
+ESC
+BOX -5 -5 5 5
+EXPECT SELECTED 1
+CMD SCALE
+CLICKUCS 0 0
+CMD 2
+ESC
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 0 0 0 20
+CHECK ALL
+
+# --- Tilted UCS: a circle off the base plane — centre elevation and radius both scale -----------
+# Circle UCS (0,10) = world (0,0,10), r 2. SCALE 2 about world origin: centre (0,0,10) -> (0,0,20),
+# r 2 -> 4. Normal (0,-1,0) is unchanged (a uniform scale does not tip the plane).
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 0 10
+CMD 2
+ESC
+BOX -5 -5 5 5
+EXPECT SELECTED 1
+CMD SCALE
+CLICKUCS 0 0
+CMD 2
+ESC
+CMD UCS
+CMD W
+EXPECT CIRCLES 1
+EXPECT CIRCLEXYZ 0 0 0 20 4 0 -1 0
+CHECK ALL
+
+# --- Tilted UCS: SCALE about a NON-ZERO base elevation -----------------------------------------
+# Line UCS (0,10)-(0,20) = world (0,0,10)-(0,0,20). Base UCS (0,5) = world (0,0,5). SCALE 3:
+# Z: 10 -> 5 + 3*(10-5) = 20; 20 -> 5 + 3*(20-5) = 50.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 10
+CLICKUCS 0 20
+ESC
+BOX -5 -5 5 5
+CMD SCALE
+CLICKUCS 0 5
+CMD 3
+ESC
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 20 0 0 50
+CHECK ALL
+
+# --- Regression: UCS rotated 30 about Z (Z still world Z) keeps elevations untouched -------------
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+CMD MOVE
+CMD 0,0
+CMD 0,0,5
+ESC
+CMD UCS
+CMD Z
+CMD 30
+BOX 5 -10 25 10
+CMD SCALE
+CMD 0,0
+CMD 2
+ESC
+CMD UCS
+CMD W
+# The typed base `0,0` still lands at the world origin under the Z-30 UCS, so this doubles about the
+# origin. World-Z-parallel UCS => the Z pass does not run => elevation stays 5, matching plan view.
+EXPECT LINEXYZ 0 20 0 5 40 0 5
+CHECK ALL

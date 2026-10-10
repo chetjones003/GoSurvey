@@ -1,0 +1,139 @@
+# Issue #63 — an arc must come back from a DXF as an arc, and an ellipse as an ellipse.
+#
+# The defect was TWO-SIDED, and the issue title named only one side:
+#
+#   EXPORT — `src/io/DxfIo.cpp`'s writer had branches for LINE, CIRCLE, POINT, LWPOLYLINE, MTEXT
+#            and HATCH/SOLID, and named `userArcs` / `userEllipses` NOWHERE. Both entity types were
+#            silently absent from every DXF GoSurvey ever wrote. A drawing holding one ellipse and
+#            nothing else exported a file containing ZERO entities of any kind.
+#
+#   IMPORT — even once written, neither came back. The ARC branch read groups 50/51 correctly and
+#            then threw the identity away into 48 line segments, and `appendEllipseXF` — which
+#            reads like a sink — tessellated as well. So an arc drawn in Civil 3D arrived here as
+#            loose segments that could not be selected, trimmed or offset as the object it is.
+#
+# BOTH ARC DIRECTIONS ARE DRAWN ON PURPOSE. DXF ARC always runs counter-clockwise from group 50 to
+# group 51, while `CadArc::sweepRad` is SIGNED. A clockwise arc written as 50=start, 51=start+sweep
+# describes the COMPLEMENT of the intended arc — the one failure mode here that yields a
+# plausible-looking file rather than an obviously broken one. The two arcs below are the same three
+# points traversed in opposite orders.
+#
+# ## This is the SURVIVAL half only, and that is deliberate
+#
+# `dxf-export-stable` has two halves (see its own header): SURVIVAL — entity counts across the round
+# trip — and STABILITY — `EXPECT SAMEFILE` on two successive exports. #63 is a survival defect, and
+# this file holds exactly that half closed.
+#
+# The stability half is NOT here because it does not pass, for a reason that has nothing to do with
+# arcs or ellipses. `$EXTMIN`/`$EXTMAX` are written at six decimals; the importer sets the document
+# origin from those ROUNDED values and then `RebaseDrawingToLocalOrigin` re-derives it from the
+# UNROUNDED geometry. The two disagree by up to ~5e-7 — over the 1e-9 no-op guard in
+# `ApplyDocumentOriginRebase` — so every stored float is shifted and re-rounded, and the second
+# export lands ~1e-6 off in every coordinate.
+#
+# That is a PRE-EXISTING defect, independent of this one, and it was measured rather than assumed:
+# two LINEs at coordinates that are not exact at six decimals, with no arc or ellipse anywhere,
+# reproduce it byte-for-byte on the unmodified writer. It is why `dxf-export-stable` stays DISABLED
+# even though #63 is now closed — the same call TASK-083 made when it closed #64 and left that
+# oracle off for #63. One open defect does not keep another's regression test off the suite.
+
+NEW
+
+# Two ordinary lines, so the check cannot pass by the importer simply calling everything an arc.
+CMD LINE
+CMD 0,0
+CMD 100,0
+CMD 100,50
+ESC
+
+# CCW arc: centre (200,0), r = 20. Start (220,0) = 0 deg, through the top, end (180,0) = 180 deg.
+CMD ARC
+PICK 220 0
+PICK 200 20
+PICK 180 0
+ESC
+
+# CW arc: centre (400,0), r = 20 — the same shape traversed the other way, so sweepRad is negative.
+CMD ARC
+PICK 380 0
+PICK 400 20
+PICK 420 0
+ESC
+
+# A full ellipse: centre (500,100), semi-major 40 along +X, minor/major ratio 0.5.
+# Placed well OUTSIDE the bounding box of everything above, because the $EXTMIN/$EXTMAX sweep is one
+# of the three book-keeping sweeps this fix had to touch — an entity type missing from it is one the
+# document origin is not derived from.
+CMD ELLIPSE
+PICK 500 100
+PICK 540 100
+CMD 0.5
+
+CHECK ALL
+EXPECT LINES 2
+EXPECT ARCS 2
+EXPECT ELLIPSES 1
+
+EXPORT DXF %OUT%/r63-a.dxf
+
+# The two book-keeping invariants the new export branches must not break. Arcs and ellipses consumed
+# ZERO handles before this fix precisely because they had no branch, so `entityHandleCount` had to
+# gain both stores in the same change (#71), and the `addLayerName` sweep had to name their layers
+# (#72). Both are cheap to get wrong and invisible to a count check.
+EXPECT HANDLESUNIQUE %OUT%/r63-a.dxf
+EXPECT LAYERSDEFINED %OUT%/r63-a.dxf
+
+# ---------------------------------------------------------------------------
+# SURVIVAL — every entity that went in comes back out, as the object it was.
+#
+# Fails before the fix:
+#   step "EXPECT ARCS 2"     -> ARCS: expected 2, got 0
+#   step "EXPECT ELLIPSES 1" -> ELLIPSES: expected 1, got 0
+# ---------------------------------------------------------------------------
+
+NEW
+IMPORT DXF %OUT%/r63-a.dxf
+CHECK ALL
+
+EXPECT LINES 2
+EXPECT ARCS 2
+EXPECT ELLIPSES 1
+
+# ---------------------------------------------------------------------------
+# FAILURE MODE — a DXF holding ONLY arcs and ellipses is not read twice.
+#
+# Giving arcs and ellipses stores of their own opened a trap that could not exist before: the
+# importer decides "this file had no geometry, fall back to reading the *MODEL_SPACE block" from a
+# list of stores, and until now arcs always landed in `userLinesFlat` as tessellation, so the list
+# did not need to mention them. A file with nothing but arcs would have been judged empty and read a
+# SECOND time — silently duplicating every entity in it.
+#
+# Without `userArcs`/`userEllipses` in that test this section reports ARCS 2 / ELLIPSES 2.
+# ---------------------------------------------------------------------------
+
+NEW
+
+CMD ARC
+PICK 220 0
+PICK 200 20
+PICK 180 0
+ESC
+
+CMD ELLIPSE
+PICK 500 100
+PICK 540 100
+CMD 0.5
+
+CHECK ALL
+EXPECT LINES 0
+EXPECT ARCS 1
+EXPECT ELLIPSES 1
+
+EXPORT DXF %OUT%/r63-curves-only.dxf
+
+NEW
+IMPORT DXF %OUT%/r63-curves-only.dxf
+CHECK ALL
+EXPECT LINES 0
+EXPECT ARCS 1
+EXPECT ELLIPSES 1

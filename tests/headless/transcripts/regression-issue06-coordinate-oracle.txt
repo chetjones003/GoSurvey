@@ -1,0 +1,67 @@
+# Issue 06 — the harness could not assert a coordinate.
+#
+# Every other EXPECT in this suite counts entities, matches log text, or checks a structural
+# invariant. None of those can see a drawing whose coordinates are well-formed and WRONG:
+# CheckDocumentInvariants is a corruption oracle, and a drawing with every Z replaced by 0 is
+# correctly strided, entirely finite, unchanged in count and id, and passes it. That is how eight
+# editing commands discarded elevation under a fully green suite.
+#
+# This transcript is the oracle testing itself. It also covers the three commands the driver
+# previously could not route at all.
+
+NEW
+CMD ELEV 286.715
+
+# --- LINE: both endpoints carry the working elevation ------------------------------------------
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+EXPECT LINES 1
+EXPECT ELEVATION LINE 0 286.715
+EXPECT VERTEX LINE 0 0 0 0 286.715
+EXPECT VERTEX LINE 0 1 100 0 286.715
+
+# --- POLYLINE: EVERY vertex, which is what catches a PARTIAL flattening -------------------------
+# A blank Enter ends a polyline (REQ-303); ESC would cancel it.
+CMD POLYLINE
+CMD 0,0
+CMD 50,0
+CMD 50,50
+CMD
+EXPECT POLYLINES 1
+EXPECT ELEVATION POLYLINE 0 286.715
+EXPECT VERTEX POLYLINE 0 0 0 0 286.715
+EXPECT VERTEX POLYLINE 0 2 50 50 286.715
+
+# --- CIRCLE and ARC carry a single plane elevation (REQ-057 / ADR-025) --------------------------
+CMD CIRCLE
+CMD 200,200
+CMD 25
+ESC
+EXPECT CIRCLES 1
+EXPECT ELEVATION CIRCLE 0 286.715
+
+# --- The coordinates are WORLD, not storage-local ----------------------------------------------
+# Storage is local in XY and absolute in Z (ADR-025 (b)). Asserting local values would make every
+# expected number depend on whether the drawing happened to have been rebased.
+EXPECT VERTEX CIRCLE 0 0 200 200 286.715
+
+# --- HATCH is routable (gap 3) -----------------------------------------------------------------
+# Before this, CLICK refused HatchPick outright, so no filled region could be created headless and
+# nothing about hatches had a transcript: not their rendering, not their Z, not their round trip.
+CMD RECT
+CMD 300,300
+CMD 400,400
+ESC
+CMD HATCH
+CLICK 350 350
+EXPECT LOG "solid fill placed"
+
+# A miss leaves the command active and says so, rather than failing (REQ-201).
+CMD HATCH
+CLICK 9000 9000
+EXPECT LOG "no closed boundary found"
+ESC
+
+CHECK ALL

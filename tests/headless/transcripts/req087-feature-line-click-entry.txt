@@ -1,0 +1,146 @@
+# REQ-087 / TASK-082 — FEATURELINE drawn with the mouse: a click gives X,Y, then the command
+# prompts for the elevation.
+#
+# BUG-1, which this fixes, is worth stating plainly: K::FeatureLine was missing from BOTH lists a
+# point-picking command must appear in — CadUi.cpp's "the click is a coordinate" list and
+# SubmitViewportPick's per-command dispatch — so every click during FEATURELINE was silently
+# discarded and the command appeared to hang on its first prompt. The comment above the first of
+# those lists names that exact failure ("...which is exactly what RECT did before it was added
+# here"). No transcript caught it because a transcript types coordinates and never clicks. This one
+# clicks.
+#
+# Every assertion was run against unpatched code first and failed there, except T6, which is a
+# regression guard and is marked as one.
+
+# ---------------------------------------------------------------------------------------------
+# T1/T2 — a click prompts, and the typed elevation commits the vertex at the clicked X,Y.
+# The default offered for the FIRST point is the work plane (ELEV), which is 0 in a new drawing.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Clicked
+PICK 10 20
+EXPECT LOG "FEATURELINE — elevation for point 1 <0.000>:"
+CMD 100
+EXPECT LOG "FEATURELINE PI 1 at elevation 100.000."
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T3 — ASSUMPTION-1: the default for the NEXT point is the PREVIOUS point's elevation, not the work
+# plane. Grading a line means most points sit near the last one, so that is the answer that needs
+# least typing.
+# ---------------------------------------------------------------------------------------------
+PICK 60 20
+EXPECT LOG "FEATURELINE — elevation for point 2 <100.000>:"
+
+# ---------------------------------------------------------------------------------------------
+# T4 — a bare Enter accepts the default.
+# ---------------------------------------------------------------------------------------------
+CMD
+EXPECT LOG "FEATURELINE PI 2 at elevation 100.000."
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T8 — a non-numeric elevation is refused AND the prompt stays. Dropping back to point entry would
+# silently discard the point just clicked, and the user would have no way to tell which of the two
+# inputs was lost.
+# ---------------------------------------------------------------------------------------------
+PICK 110 20
+EXPECT LOG "FEATURELINE — elevation for point 3 <100.000>:"
+CMD not-a-number
+EXPECT LOG "FEATURELINE — elevation must be a number. Type one, or Enter for <100.000>:"
+CMD 90
+EXPECT LOG "FEATURELINE PI 3 at elevation 90.000."
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T5 — bare E arms the elevation-point flag and the NEXT click consumes it. Before a click could
+# supply coordinates, E had to be followed by them on the same line; now they arrive from the
+# mouse, so the flag has to survive until the click does.
+# ---------------------------------------------------------------------------------------------
+CMD E
+EXPECT LOG "next point will be an elevation point"
+PICK 130 20
+EXPECT LOG "FEATURELINE — elevation for elevation point 4 <90.000>:"
+CMD 85
+EXPECT LOG "FEATURELINE elevation point 4 at elevation 85.000."
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# A second click while an elevation is owed MOVES the pending point rather than being ignored. The
+# click is unambiguous, and dropping it would repeat BUG-1 in miniature.
+# ---------------------------------------------------------------------------------------------
+PICK 160 20
+EXPECT LOG "FEATURELINE — elevation for point 5 <85.000>:"
+PICK 170 25
+EXPECT LOG "FEATURELINE — point moved. Elevation for point 5 <85.000>:"
+CMD 80
+EXPECT LOG "FEATURELINE PI 5 at elevation 80.000."
+
+# ---------------------------------------------------------------------------------------------
+# T9 — the finished line is exactly what was clicked, at exactly the elevations typed, with the
+# elevation point flagged and the moved point at its SECOND position.
+# ---------------------------------------------------------------------------------------------
+CMD END
+CMD FLELEV 1
+EXPECT LOG "feature line 1 "Clicked": 5 points"
+EXPECT LOG "  4  elev pt"
+CMD FEATURELINELIST
+EXPECT LOG "PI      1: 10.000, 20.000, elevation 100.000"
+EXPECT LOG "PI      2: 60.000, 20.000, elevation 100.000"
+EXPECT LOG "PI      3: 110.000, 20.000, elevation 90.000"
+EXPECT LOG "elev pt 4: 130.000, 20.000, elevation 85.000"
+EXPECT LOG "PI      5: 170.000, 25.000, elevation 80.000"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T7 — a typed X,Y prompts too. The rule is "a point that arrives WITHOUT an elevation prompts for
+# one", not "clicks prompt" — so the mouse and the keyboard behave the same way.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Typed2D
+CMD 0,0
+EXPECT LOG "FEATURELINE — elevation for point 1 <0.000>:"
+CMD 5
+EXPECT LOG "FEATURELINE PI 1 at elevation 5.000."
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T6 — REGRESSION GUARD, and the reason Q1 was answered the way it was. A typed X,Y,Z already
+# carries its elevation, so it must commit with NO prompt: every transcript written before this
+# task uses that form, and prompting would have broken all of them.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Typed3D
+CMD 0,0,10
+EXPECT LOG "FEATURELINE PI 1 at elevation 10.000."
+CMD 100,0,12
+EXPECT LOG "FEATURELINE PI 2 at elevation 12.000."
+CMD END
+CMD FEATURELINELIST
+EXPECT LOG "PI      1: 0.000, 0.000, elevation 10.000"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# ESC cancels the whole command, which is ASSUMPTION-2 — and it now SAYS so. CancelActiveCommand
+# had no FeatureLine branch, so cancelling used to report nothing at all (REQ-201).
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Abandoned
+PICK 10 10
+EXPECT LOG "FEATURELINE — elevation for point 1 <0.000>:"
+ESC
+EXPECT LOG "FEATURELINE canceled."
+CMD FEATURELINELIST
+EXPECT LOG "no feature lines in the drawing"
+CHECK ALL
+
+# The cancelled draft must not survive into the next FEATURELINE. ResetAllCadDraftTools did not
+# touch the feature-line draft at all before this task — harmless only while nothing read it, which
+# stopped being true when the rubber-band preview started reading it.
+CMD FEATURELINE Fresh
+CMD 0,0,1
+CMD 50,0,2
+CMD END
+CMD FEATURELINELIST
+EXPECT LOG "Feature line 1: "Fresh" — 2 vertices"
+CHECK ALL

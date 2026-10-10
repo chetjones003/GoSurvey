@@ -1,0 +1,161 @@
+# GitHub #150 (3D Phase 7) — DRAPE lays geometry on the ground, against a REAL surface.
+#
+# The exact elevations are checked in GoSurveySnapTests [drape], where the ground is a TIN whose
+# height is an analytic plane and every draped vertex has a hand-computable answer. This transcript
+# is the other half: the command reaching a surface built the way the app builds one — from a point
+# group in a real drawing — and behaving as a command (undo, refusals, selection).
+#
+# DRAPE is BAKED (ADR-065 (a)): the elevations are stamped once and nothing is stored linking the
+# geometry to the surface, so a later surface edit does not move it. The opt-in link is a later
+# increment.
+#
+# Coordinates: a typed point is WORLD, storage and PICK are LOCAL, and this drawing's origin is
+# (13.607, 0.308) — the same note req069-surface-definition-commands.txt carries. Local (30,25) and
+# (45,30) were confirmed to sit on this surface with SURFELEV before being used here.
+
+OPEN samples/surface-demo.dwg
+CMD SURFACECREATE Test EG, Existing Ground
+CMD SURFACEREBUILD Test EG
+EXPECT SURFACES 1
+
+# A flat polyline lying across the ground at elevation 0 — world coords, so local (30,25)-(45,30).
+CMD POLYLINE
+CMD 43.607,25.308
+CMD 58.607,30.308
+CMD END
+ESC
+EXPECT POLYLINES 1
+CHECK ALL
+
+# --- it drapes ----------------------------------------------------------------------------------
+BOX -500 -500 500 500
+CMD DRAPE Test EG
+EXPECT LOG "draped onto "Test EG""
+CHECK ALL
+
+# --- and one UNDO takes the whole drape back ------------------------------------------------------
+CMD UNDO
+EXPECT POLYLINES 1
+CHECK ALL
+CMD REDO
+EXPECT POLYLINES 1
+CHECK ALL
+
+# --- the drape survives the drawing's own file ----------------------------------------------------
+SAVEAS %OUT%/phase7-drape.dwg
+OPEN %OUT%/phase7-drape.dwg
+EXPECT POLYLINES 1
+CHECK ALL
+
+# --- refusals say which surface, and why ----------------------------------------------------------
+NEW
+CMD DRAPE
+EXPECT LOG "the drawing has no surfaces"
+
+OPEN samples/surface-demo.dwg
+CMD SURFACECREATE Test EG, Existing Ground
+CMD SURFACEREBUILD Test EG
+CMD DRAPE Nope
+EXPECT LOG "no surface named "Nope""
+CMD DRAPE Test EG
+EXPECT LOG "select the objects to drape first"
+CHECK ALL
+
+# A vertex off the ground refuses its whole entity, with the count (ADR-065 (f)): TinElevationAt
+# never extrapolates (REQ-074), and a half-draped shape is neither the original nor the ground.
+CMD POLYLINE
+CMD 43.607,25.308
+CMD 5000,5000
+CMD END
+ESC
+BOX -10000 -10000 10000 10000
+CMD DRAPE Test EG
+EXPECT LOG "not draped"
+EXPECT LOG "vertices are off "Test EG""
+CHECK ALL
+
+# --- LINK: the drape follows the surface, and the link survives the file ---------------------------
+# ADR-065 (b)/(c): LINK stores the surface's STABLE ID, so the tie survives a save, a reopen and a
+# rename. Proving it survived is done the honest way — reopen the file and rebuild the surface, and
+# see the linked object re-drape. A stored field nobody reads back would pass a weaker test.
+OPEN samples/surface-demo.dwg
+CMD SURFACECREATE Test EG, Existing Ground
+CMD SURFACEREBUILD Test EG
+CMD POLYLINE
+CMD 43.607,25.308
+CMD 58.607,30.308
+CMD END
+ESC
+BOX -500 -500 500 500
+CMD DRAPE Test EG, LINK
+EXPECT LOG "linked"
+CHECK ALL
+
+SAVEAS %OUT%/phase7-linked.dwg
+OPEN %OUT%/phase7-linked.dwg
+EXPECT POLYLINES 1
+EXPECT SURFACES 1
+# The link came back with the drawing: rebuilding the surface re-drapes it.
+CMD SURFACEREBUILD Test EG
+EXPECT LOG "linked object(s) re-draped"
+CHECK ALL
+
+# A rename does not break it — the link is by id, not by name (ADR-065 (c)).
+CMD SURFACERENAME Test EG, Renamed EG
+CMD SURFACEREBUILD Renamed EG
+EXPECT LOG "linked object(s) re-draped"
+CHECK ALL
+
+# --- baking clears the link ------------------------------------------------------------------------
+BOX -500 -500 500 500
+CMD DRAPE Renamed EG
+EXPECT LOG "draped onto "Renamed EG""
+CMD SURFACEREBUILD Renamed EG
+EXPECT NOLOG "linked object(s) re-draped"
+CHECK ALL
+
+# --- the link is VISIBLE, not a hidden attribute (ADR-065 (d)) --------------------------------------
+# The Properties panel answers "does THIS one move?" and is not reachable from a transcript;
+# DRAPELINKS answers "what in here moves when I rebuild?", which is the question actually asked
+# before editing a surface, and is assertable end to end.
+OPEN samples/surface-demo.dwg
+CMD SURFACECREATE Test EG, Existing Ground
+CMD SURFACEREBUILD Test EG
+CMD DRAPELINKS
+EXPECT LOG "nothing in the drawing follows a surface"
+
+CMD POLYLINE
+CMD 43.607,25.308
+CMD 58.607,30.308
+CMD END
+ESC
+BOX -500 -500 500 500
+CMD DRAPE Test EG, LINK
+CMD DRAPELINKS
+EXPECT LOG "follows "Test EG""
+EXPECT LOG "1 object(s) follow a surface"
+CHECK ALL
+
+# Baking it again takes it off the list: what the report says and what a rebuild does agree.
+BOX -500 -500 500 500
+CMD DRAPE Test EG
+CMD DRAPELINKS
+EXPECT LOG "nothing in the drawing follows a surface"
+CHECK ALL
+
+# An object whose surface has been erased is reported apart — it follows nothing and stays put.
+BOX -500 -500 500 500
+CMD DRAPE Test EG, LINK
+# Saved and reopened before the delete, purely to clear the selection: a BOX also picks the
+# SURFACE, and SURFACEDELETE does not clear the selection of the surface it erased, so CHECK ALL
+# would trip on a selection entry pointing at a surface that is gone. ESC does not help - it
+# cancels the active command, not the selection. That is a pre-existing fault in SURFACEDELETE
+# (RunSurfaceDelete -> EraseSurfaceAtIndex never touches st.selection), not something this work
+# introduced, and it is sidestepped here rather than fixed in an increment about the drape mark.
+SAVEAS %OUT%/phase7-mark.dwg
+OPEN %OUT%/phase7-mark.dwg
+CMD SURFACEDELETE Test EG
+CMD DRAPELINKS
+EXPECT LOG "name a surface that is gone"
+EXPECT LOG "stay where they are"
+CHECK ALL

@@ -1,0 +1,33 @@
+# GitHub issue #473 — BLOCKIMPORT of a standalone ACIS .sat file (Civil 3D ACISOUT).
+#
+# samples/CJ_4in_WELD_NECK_FLANGE.sat is a real 4" weld-neck flange: 16 analytic faces, two of
+# them planar faces pierced by an 8-bolt circle. The .sat carries the model's absolute position
+# from the drawing it was exported from (~4999 units); BLOCKIMPORT drops the solid straight into
+# the drawing, re-based onto the origin (centred in X/Y, lowest point at Z 0), and keeps a block
+# definition. (INSERT cannot place a 3D solid — a 2D command; the user MOVEs it into position.)
+
+NEW
+EXPECT SOLIDS 0
+
+DIALOG OPEN %DATA%/CJ_4in_WELD_NECK_FLANGE.sat
+CMD BLOCKIMPORT
+EXPECT LOG "BLOCKIMPORT — imported an ACIS solid"
+
+# The flange is in the drawing, on the origin — not ~4999 units out where the .sat put it.
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Solid
+EXPECT SOLIDBOUNDS 0 -0.37503 -0.37503 0.0 0.37503 0.37503 0.25000
+
+# The block definition is registered too.
+CMD BLOCKLIST
+EXPECT LOG "CJ_4in_WELD_NECK_FLANGE"
+
+# It is a normal drawing solid — box-select it and MOVE it into position.
+BOX -1 -1 1 1
+EXPECT SELECTED 1
+CMD MOVE
+CMD 0,0
+CMD 10,20
+EXPECT SOLIDBOUNDS 0 9.62497 19.62497 0.0 10.37503 20.37503 0.25000
+UNDO
+EXPECT SOLIDBOUNDS 0 -0.37503 -0.37503 0.0 0.37503 0.37503 0.25000

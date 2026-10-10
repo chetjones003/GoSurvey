@@ -1,0 +1,34 @@
+# Malformed numeric arguments to the block-authoring commands must be reported,
+# not thrown. BLOCKREDEF / ATTDEF / BPARAM / BACTION / BSETPARAM / BEDITADD once
+# called std::stof with no guard, so a non-numeric token raised std::invalid_argument
+# straight out of the command dispatcher and terminated the process.
+
+NEW
+CMD MKLINE 0,0, 10,0
+CMD SELLINE
+CMD BLOCK SHAPE, 0, 0, CONVERT
+EXPECT LOG "BLOCK — created"
+
+# each of these used to crash; now each is a logged usage error and the app lives on
+CMD BLOCKREDEF SHAPE, wide, 0
+EXPECT LOG "BLOCKREDEF — base point must be numbers"
+
+CMD BEDIT SHAPE
+EXPECT LOG "editing"
+CMD ATTDEF ID, Number, n, left, 0
+EXPECT LOG "ATTDEF — x and y must be numbers"
+CMD BPARAM WIDTH, LINEAR, wide
+EXPECT LOG "BPARAM — value must be a number"
+CMD BACTION STRETCH, WIDTH, a, b, c, d, e
+EXPECT LOG "BACTION — ox, oy, dx, dy and thresh must be numbers"
+CMD BEDITADD LINE, 0, 0, far, 3
+EXPECT LOG "BEDITADD — x1, y1, x2, y2 must be numbers"
+CMD BCLOSE
+
+CMD SELBLOCK
+CMD BSETPARAM WIDTH, wide
+EXPECT LOG "BSETPARAM — value must be a number"
+
+# still responsive
+CMD MKLINE 1,1, 2,2
+EXPECT LINES 1

@@ -1,0 +1,100 @@
+# TASK-225 — a REFUSED value is not an UNPARSED one, across every command behind the trailer.
+#
+# `ReportUnparsedCommandInput` appends a generic "Could not parse X input" when a command's typed
+# handler returns false. That return conflates two situations, and most handlers cannot separate them
+# because one `if (!Parse(...) || out-of-range)` covers both:
+#
+#   * the input did not parse — the fallback is the only message the user gets, and it is wanted;
+#   * the input parsed, was UNDERSTOOD, and was declined on a rule — the handler already said so in
+#     the command's own words (REQ-201), and the fallback then adds nothing at best and contradicts
+#     it at worst. `0` columns, a scale factor of `-2`, a mirror line whose two points coincide.
+#
+# So the rule is at the CALLER and is uniform: **the generic fallback is suppressed when the handler
+# already spoke.** The "X is still running, so \"circle\" was read as input to it" half is NOT
+# suppressed, ever — it answers a different confusion ("I thought this command had finished") that no
+# handler message addresses.
+#
+# TASK-224 fixed FILLET and CHAMFER by making their return value mean "was this understood"; those
+# two are asserted in their own transcripts. This one covers the rest of the sweep and, just as
+# importantly, the two REGRESSION risks: the fallback must still appear when the handler is silent,
+# and the still-running hint must still appear for a command name.
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+EXPECT LINES 1
+
+# --- SCALE: a factor that PARSES and is declined on a rule -------------------------------------------
+# `ParseOneFloat("-2")` succeeds, so the input was understood; `!(sf > 0)` then declines it.
+
+BOX -10 -10 110 10
+EXPECT SELECTED 1
+CMD SCALE
+CMD 50,25
+EXPECT LOG "pick second point or type factor"
+CMD -2
+EXPECT LOG "scale factor must be a positive finite number"
+EXPECT NOLOG "Could not parse"
+ESC
+
+# --- SCALE: input that does NOT parse — the fallback must SURVIVE ------------------------------------
+# At the base-point prompt `ParseStoragePoint` fails and says nothing, so the fallback is the only
+# message there is. Removing it would leave the user with silence, which is worse than a generic line.
+
+BOX -10 -10 110 10
+CMD SCALE
+CMD banana
+EXPECT LOG "Could not parse SCALE input"
+ESC
+
+# --- SCALE: a COMMAND NAME typed into a live prompt — the useful half must SURVIVE -------------------
+# This is what `ReportUnparsedCommandInput` was written for and it is never suppressed.
+
+BOX -10 -10 110 10
+CMD SCALE
+CMD CIRCLE
+EXPECT LOG "SCALE is still running"
+EXPECT LOG "Press Esc to end SCALE"
+ESC
+
+# --- ARRAY: a column count that parses and is out of range -------------------------------------------
+
+BOX -10 -10 110 10
+CMD ARRAY
+CMD r
+CMD 0
+EXPECT LOG "number of columns must be a positive whole number"
+EXPECT NOLOG "Could not parse"
+ESC
+
+# --- ARRAY: still-running still works, one prompt deeper ---------------------------------------------
+
+BOX -10 -10 110 10
+CMD ARRAY
+CMD r
+CMD CIRCLE
+EXPECT LOG "ARRAY is still running"
+ESC
+
+# --- MIRROR: two points that parse but coincide ------------------------------------------------------
+# Both points parsed. The mirror line is what is degenerate, which is a rule and not a syntax error.
+
+BOX -10 -10 110 10
+CMD MIRROR
+CMD 0,50
+CMD 0,50
+EXPECT LOG "mirror line needs two distinct points"
+EXPECT NOLOG "Could not parse"
+ESC
+
+# --- MOVE: nothing parsed and nothing was said — the fallback is the whole message -------------------
+
+BOX -10 -10 110 10
+CMD MOVE
+CMD banana
+EXPECT LOG "Could not parse MOVE/COPY input"
+ESC
+
+CHECK ALL

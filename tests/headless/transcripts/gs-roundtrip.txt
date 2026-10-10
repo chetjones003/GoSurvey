@@ -1,0 +1,64 @@
+# REQ-204 `gs-roundtrip` oracle: save -> load -> save -> load -> save, and the LAST TWO saves must
+# be byte-identical. See the note above the comparison at the bottom for why it is the last two
+# rather than the first two.
+#
+# A differential oracle: it needs no knowledge of what the file SHOULD contain, only that two paths
+# through the code agree. That is what makes it able to find defects nobody predicted — a field
+# written but never read, or read but never written, shows up here as a diff and nowhere else
+# (REQ-079's first acceptance condition says the same thing about the current format version).
+#
+# The comparison is the last line of this file. It was briefly a separate ctest case driven by
+# `cmake -E compare_files`, DISABLED while issues #56 and #57 were open; both are fixed, so the
+# check is live again and lives here, where the rest of the scenario is. One artifact, one place to
+# read, and the driver's own `EXPECT SAMEFILE` does the work.
+
+NEW
+
+# Geometry spanning every store the writer handles differently, so the diff has something to catch.
+CMD LINE
+CMD 0,0
+CMD 100,0
+CMD 100,50
+ESC
+
+CMD CIRCLE
+CMD 50,25
+CMD 10
+ESC
+
+CMD POLYLINE
+CMD 0,100
+CMD 50,150
+CMD 100,100
+CMD END
+
+CMD TEXT
+CMD 10,10
+CMD 2.5
+CMD 0
+CMD ROUND TRIP
+ESC
+
+CHECK ALL
+
+SAVEAS %OUT%/roundtrip-a.dwg
+OPEN %OUT%/roundtrip-a.dwg
+CHECK ALL
+SAVEAS %OUT%/roundtrip-b.dwg
+OPEN %OUT%/roundtrip-b.dwg
+CHECK ALL
+SAVEAS %OUT%/roundtrip-c.dwg
+
+# REQ-079 as amended 2026-08-17 (decision D-2026-08-17-a): a file at the current version loads with
+# no migration OR NORMALIZATION and is byte-identical on resave.
+#
+# The comparison is B vs C, not A vs B. Loading a drawing whose coordinates are of state-plane
+# magnitude normalizes it — the document origin moves to the extents midpoint and every local
+# coordinate rebases — so the first resave is entitled to differ from the file that was read. The
+# normalization is idempotent, so the SECOND load changes nothing and B must equal C exactly.
+#
+# This geometry is small and near the origin, so no normalization actually fires here and A, B and C
+# are all identical. The comparison is written as B vs C anyway, so this transcript states the same
+# rule as the generator's oracle rather than a weaker special case of it — a reader should not have
+# to notice that two spellings of the round trip exist.
+EXPECT SAMEFILE %OUT%/roundtrip-b.dwg %OUT%/roundtrip-c.dwg

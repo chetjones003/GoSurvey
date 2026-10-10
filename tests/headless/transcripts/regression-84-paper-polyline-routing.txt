@@ -1,0 +1,45 @@
+# Issue #84 — a POLYLINE drawn while a paper layout is active must commit to that layout's
+# paperPoly* stores, not to the model store (REQ-039 acceptance conditions (5) and (6)).
+#
+# CommitPolylineDraft had no ActivePaperGeometryTarget branch anywhere in its body, unlike its
+# sibling CommitRectangle (which already routes RECT correctly). So a polyline drawn on a sheet
+# appeared on the paper canvas at draw time but landed in st.userPolylineVerts/Offsets/Closed/Attrs
+# — the MODEL store — and reappeared in model space the moment the user switched back to the Model
+# tab. Reproduced with END below; CLOSE (the second block) is the same commit function and fails
+# the same way.
+#
+# Fails before the fix:
+#   step "EXPECT POLYLINES 0" after the first POLYLINE      -> POLYLINES: expected 0, got 1
+#   step "EXPECT PAPERPOLYLINES 1" after the first POLYLINE -> PAPERPOLYLINES: expected 1, got 0
+#   step "EXPECT POLYLINES 0" after the CLOSE'd POLYLINE    -> POLYLINES: expected 0, got 2
+#   step "EXPECT PAPERPOLYLINES 2" after the CLOSE'd POLYLINE -> PAPERPOLYLINES: expected 2, got 1
+
+NEW
+LAYOUT NEW
+
+CMD POLYLINE
+CMD 1,1
+CMD 5,1
+CMD 5,4
+CMD END
+
+CHECK ALL
+EXPECT POLYLINES 0
+EXPECT PAPERPOLYLINES 1
+
+# CLOSE goes through the same CommitPolylineDraft, with `closed` true instead of false — both paths
+# in the fixed function must route the same way.
+CMD POLYLINE
+CMD 8,1
+CMD 12,1
+CMD 12,4
+CMD CLOSE
+
+CHECK ALL
+EXPECT POLYLINES 0
+EXPECT PAPERPOLYLINES 2
+
+# Switching back to model space must not have moved anything there either.
+LAYOUT MODEL
+EXPECT POLYLINES 0
+EXPECT PAPERPOLYLINES 2

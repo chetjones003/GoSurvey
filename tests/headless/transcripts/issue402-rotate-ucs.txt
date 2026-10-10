@@ -1,0 +1,177 @@
+# GitHub issue #402 / REQ-329 increment 2 — ROTATE turns the selection about an axis through the
+# picked base point PARALLEL TO THE ACTIVE UCS Z (REQ-328's `RotateSelectionAboutAxis` primitive),
+# not always world Z.
+#
+# Regression guard: plan view, and any UCS whose Z axis is still world-Z-parallel (rotated in plan),
+# go through the unchanged `ApplyRotationToSelection` / `DuplicateCadSelectionRotated` — byte-identical
+# to before. Only a genuinely TILTED UCS takes the new axis-aware path.
+
+# --- Regression: World UCS, typed ROTATE 90 about the origin (CW in plan) -------------------------
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+EXPECT SELECTED 1
+CMD ROTATE
+CMD 0,0
+CMD 90
+ESC
+# 90 CW-from-north about world Z: (10,0)->(0,-10), (20,0)->(0,-20).
+EXPECT LINEXYZ 0 0 -10 0 0 -20 0
+CHECK ALL
+
+# --- Regression: World UCS, PICKED angle ---------------------------------------------------------
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+BOX 5 -5 25 5
+CMD ROTATE
+CLICKUCS 0 0
+CLICKUCS 0 -10
+ESC
+# base (0,0), cursor straight down (0,-10) => -atan2(0,-10) = -pi => 180 deg.
+EXPECT LINEXYZ 0 -10 0 0 -20 0 0
+CHECK ALL
+
+# --- Regression: UCS rotated 30 about Z (Z still world Z) uses the unchanged world-Z path --------
+# The picked angle stays measured against world north here (regression guard — this case already
+# worked), so a click straight up world +Y is a 0-degree rotation.
+NEW
+CMD LINE
+CMD 10,0
+CMD 20,0
+ESC
+CMD UCS
+CMD Z
+CMD 30
+BOX 5 -5 25 5
+CMD ROTATE
+CMD 0,0
+CMD 90
+ESC
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 -10 0 0 -20 0
+CHECK ALL
+
+# --- Tilted UCS (X 90): typed ROTATE 90 spins the selection about the UCS Z axis -----------------
+# UCS X 90: basis X=(1,0,0), Y=(0,0,1), Z=(0,-1,0). Line at UCS (0,0)-(10,0) = world (0,0,0)-(10,0,0).
+# ROTATE base UCS (0,0), angle 90 (rad = -pi/2). Rodrigues about (0,-1,0) by -pi/2 sends
+# world (10,0,0) -> (0,0,-10). The base endpoint is on the axis and does not move.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+ESC
+BOX -5 -5 15 5
+EXPECT SELECTED 1
+CMD ROTATE
+CLICKUCS 0 0
+CMD 90
+ESC
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 0 0 0 -10
+CHECK ALL
+
+# --- Tilted UCS: a circle's centre AND plane normal rotate about the UCS Z axis ------------------
+# Circle at UCS (5,0) = world (5,0,0), normal (0,-1,0). ROTATE 90 about the tilted axis through the
+# origin: centre (5,0,0) -> (0,0,-5); the normal is parallel to the axis, so it is unchanged.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 5 0
+CMD 2
+ESC
+BOX 0 -5 10 5
+EXPECT SELECTED 1
+CMD ROTATE
+CLICKUCS 0 0
+CMD 90
+ESC
+CMD UCS
+CMD W
+EXPECT CIRCLES 1
+EXPECT CIRCLEXYZ 0 0 0 -5 2 0 -1 0
+CHECK ALL
+
+# --- Tilted UCS: PICKED angle is measured in the work plane, not world XY ------------------------
+# Line UCS (0,0)-(10,0) = world (0,0,0)-(10,0,0). Angle picked at UCS (10,10): in the work plane's
+# own local frame anchored at the base that is (10,10) => -atan2(10,10) = -pi/4 (45 deg). Rodrigues
+# about (0,-1,0) by -pi/4 sends world (10,0,0) -> (7.07107, 0, -7.07107).
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+ESC
+BOX -5 -5 15 5
+CMD ROTATE
+CLICKUCS 0 0
+CLICKUCS 10 10
+ESC
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 0 7.07107 0 -7.07107
+CHECK ALL
+
+# --- Tilted UCS: ROTATE copy mode duplicates the rotated selection --------------------------------
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+ESC
+BOX -5 -5 15 5
+CMD ROTATE
+CLICKUCS 0 0
+CMD C
+EXPECT LOG "copy mode on"
+CMD 90
+ESC
+CMD UCS
+CMD W
+EXPECT LINES 2
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+EXPECT LINEXYZ 1 0 0 0 0 0 -10
+CHECK ALL
+
+# --- Tilted UCS: text in the selection is refused by name; the line still rotates -----------------
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 10 0
+ESC
+CMD TEXT
+CLICKUCS 2 0
+CMD 1
+CMD 0
+CMD HI
+ESC
+BOX -5 -5 15 5
+EXPECT SELECTED 2
+CMD ROTATE
+CLICKUCS 0 0
+CMD 90
+ESC
+CMD UCS
+CMD W
+EXPECT LOG "entity(ies) excluded"
+EXPECT LINEXYZ 0 0 0 0 0 0 -10
+CHECK ALL

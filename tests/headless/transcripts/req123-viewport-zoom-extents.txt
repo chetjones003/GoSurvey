@@ -1,0 +1,116 @@
+# REQ-123 / GitHub #100 — ZOOM EXTENTS through an activated paper-space viewport.
+#
+# ## The defect
+#
+# A floating viewport's view is `modelCenterX/Y` + `scaleModelPerPaperIn`, and its aspect is the
+# aspect of its own RECTANGLE ON THE SHEET. `ProcessPendingViewportZoom` wrote none of those: it
+# computed the model extents and framed them onto `st.viewportPanX/Y/Zoom` — the SHEET camera —
+# using the window's aspect. So zoom-extents inside a viewport left the viewport exactly as it was
+# and zoomed the paper layout around it instead, which is what #100 reports.
+#
+# ## Why this one IS transcript-testable when no other zoom behaviour is
+#
+# TASK-113 DEBT-1: `ProcessPendingViewportZoom` early-returns on `fbW <= 0` and the driver models no
+# framebuffer, so every zoom whose camera is the WINDOW's is unreachable here. This case is not:
+# the viewport's aspect comes from paper inches and its framing is stored on the viewport, so the
+# computation never touches a pixel. It is handled above that guard for exactly this reason.
+#
+# ## The numbers, worked by hand so a wrong answer cannot look plausible
+#
+# Viewport rect 8in x 4in  -> aspect 2.
+# Model geometry 0,0 -> 100,20  -> extents 100 wide x 20 tall, centre (50, 10).
+#
+#   denom      = 2 * (1 - 0.08)          = 1.84        (REQ-122's margin)
+#   needHalfH  = max(20/1.84, 100/(2*1.84))
+#              = max(10.8696, 27.1739)   = 27.1739     <- WIDTH binds at this aspect
+#   scale      = 2 * 27.1739 / 4in       = 13.5870 model units per paper inch
+#
+# If the sheet's aspect were used instead of the viewport's, `needHalfH` changes and so does the
+# scale — which is why the rect is deliberately NOT square.
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,20
+ESC
+EXPECT LINES 1
+
+SPACE PAPER
+VIEWPORT 1 1 9 5
+CMD MSPACE
+EXPECT LOG Floating model space
+
+# The framing before: AddViewportRect's defaults, whatever they are — asserted only as "not the
+# answer", by the fact that the assertion after ZE differs.
+CMD ZOOMEXTENTS
+EXPECT LOG Zoom extents applied in viewport
+EXPECT VPFRAME 50 10 13.5870
+
+# ---------------------------------------------------------------------------
+# The sheet camera must NOT have moved. This is the actual bug: before the fix, ZE wrote the sheet
+# camera and left the viewport alone — the exact opposite of both assertions here.
+# ---------------------------------------------------------------------------
+CHECK ALL
+
+# ---------------------------------------------------------------------------
+# A second viewport on the same layout, a different shape, and the SELECTED one is the one framed.
+# Issue #100: "the behavior is consistent when multiple viewports exist".
+# ---------------------------------------------------------------------------
+CMD PSPACE
+VIEWPORT 1 6 5 10
+CMD MSPACE
+CMD ZOOMEXTENTS
+
+# 4in x 4in -> aspect 1. needHalfH = max(20/1.84, 100/(1*1.84)) = 54.3478; scale = 2*54.3478/4 =
+# 27.1739. Same geometry, same command, a different viewport — so a different answer, which is what
+# "constrained to the active viewport's dimensions" means.
+EXPECT VPFRAME 50 10 27.1739
+
+# The first viewport is untouched by the second's zoom. Re-enter it and assert its framing survived.
+CMD PSPACE
+VPSELECT 0
+CMD MSPACE
+EXPECT VPFRAME 50 10 13.5870
+
+# ---------------------------------------------------------------------------
+# Frozen layers are not "content visible through that viewport" (D-2026-08-26-e). A layer frozen in
+# the viewport must not drag the framing out to reach geometry the user cannot see there.
+#
+# A second line 5000 units away, on its own layer. With FAR visible the extents span 0..5100 and the
+# framing changes completely; with FAR frozen in this viewport the framing must be the ORIGINAL one,
+# byte for byte, because nothing visible through it moved.
+# ---------------------------------------------------------------------------
+CMD PSPACE
+SPACE MODEL
+CLAYER FAR
+CMD LINE
+CMD 5000,5000
+CMD 5100,5020
+ESC
+EXPECT LINES 2
+
+SPACE PAPER
+VPSELECT 0
+CMD MSPACE
+
+# FAR is visible: the extents now span both lines, so the framing MUST move. Asserted as "not the
+# original" by asserting the new value — a test that only checked the frozen case would pass even if
+# the filter excluded everything.
+CMD ZOOMEXTENTS
+EXPECT LOG Zoom extents applied in viewport
+
+# extents 0..5100 x 0..5020, centre (2550, 2510); aspect 2:
+#   needHalfH = max(5020/1.84, 5100/(2*1.84)) = max(2728.26, 1385.87) = 2728.26  <- HEIGHT binds now
+#   scale     = 2 * 2728.26 / 4in = 1364.13
+EXPECT VPFRAME 2550 2510 1364.130
+
+# Now freeze FAR in this viewport and reframe. The far line is still in the drawing and still in
+# every other viewport; it is simply not visible through this one.
+CMD PSPACE
+VPFREEZE FAR
+CMD MSPACE
+CMD ZOOMEXTENTS
+EXPECT VPFRAME 50 10 13.5870
+CHECK ALL
+
