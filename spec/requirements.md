@@ -12715,6 +12715,19 @@ capability that does not exist. They are recorded here rather than quietly dropp
   see REQ-402. `/analyze` stays non-blocking as described above until the triage work tracked
   under REQ-402 clears the existing backlog.
 
+  2026-10-10 — **two queries excluded; the blocking check could not actually complete without
+  this.** `cpp/overrun-write` and `cpp/invalid-pointer-deref` (both global taint-tracking
+  configurations) never finished on this codebase: confirmed hung past 11+ hours in a local
+  manual run, and the CI job itself stalled at the identical point (181/183 queries) and was
+  killed after ~2 hours on a prior attempt — reproducible across environments, not a one-off
+  fluke. `paths-ignore` in `.github/codeql/codeql-config.yml` does not fix this: it filters
+  REPORTED alert locations, not what the dataflow evaluator traces through, and the vendored
+  `third_party/libredwg` C sources (large pointer/array-heavy structs) are the likely source of
+  the combinatorial blowup even though their findings are already hidden from the report. Added
+  `query-filters: exclude` for both query ids in the config. This is a scope reduction of the
+  `cpp` query suite, not a disabling of REQ-402's blocking behavior — every other query in
+  `security-and-quality` still runs and still gates the PR.
+
 ### REQ-402 — PR gating checks: build/test, lint, and security on every pull request
 
 - Purpose: a pull request into `master` or `beta` must prove itself — compiles, passes the test
