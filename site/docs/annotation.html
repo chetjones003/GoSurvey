@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Annotation — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Annotation.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/annotation.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html" aria-current="page">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Annotation</h1>
+    <h1>Annotation</h1>
+<p>Text, multiline text, dimensions, and text styles. Survey point labels are covered in
+<a href="survey-points.html">Survey Points</a>.</p>
+<hr>
+<h2>TEXT</h2>
+<p><strong>Ribbon:</strong> Annotate → Text <strong>Command:</strong> <code>TEXT</code></p>
+<p>Single-line text at an insertion point.</p>
+<pre><code>TEXT — pick insertion, then height / rotation / string on command line (defaults from plot scale).
+TEXT: Insertion — click or X,Y | ESC cancel
+TEXT: Height — Enter for plot-scale default | ESC cancel
+TEXT: Rotation ° CW from north — decimal/DMS or Enter=0 | ESC cancel
+TEXT: Enter content | ESC cancel
+</code></pre>
+<ol>
+<li><strong>Insertion</strong> — click or type <code>X,Y</code>.</li>
+<li><strong>Height</strong> — type a model height, or press <strong>Enter</strong> to use the plot-scale default.</li>
+<li><strong>Rotation</strong> — degrees clockwise from north, decimal or DMS. <strong>Enter</strong> gives 0.</li>
+<li><strong>Content</strong> — type the text and press Enter.</li>
+</ol>
+<h3>The plot-scale default height</h3>
+<p>New TEXT and MTEXT get their model height from two things:</p>
+<pre><code>model height = default text height (inches on the sheet) × model units per plotted inch
+</code></pre>
+<ul>
+<li><strong>Default text height (in)</strong> — Properties panel → General, with nothing selected.</li>
+<li><strong>Model units per plotted inch</strong> — the annotation-scale dropdown on the status bar, or
+<code>PLOTSCALE</code> / <code>PSCALE</code>.</li>
+</ul>
+<p>So at <code>1&quot; = 50&#39;</code> with a 0.10 in default height, new text is 5 model units tall — and it plots at
+0.10 in regardless of scale. See <a href="plotting.html">Plotting</a>.</p>
+<hr>
+<h2>MTEXT (<code>MT</code>)</h2>
+<p><strong>Ribbon:</strong> Annotate → Mtext <strong>Command:</strong> <code>MTEXT</code>, <code>MT</code></p>
+<p>Multiline text inside a frame, edited <strong>on the drawing</strong> in a WYSIWYG editor.</p>
+<pre><code>MTEXT: First corner | ESC cancel
+MTEXT: Opposite corner | ESC cancel
+MTEXT: Edit in drawing box — Ctrl+Enter reformats | Save to place | Esc cancel
+</code></pre>
+<ol>
+<li><strong>Two corners</strong> define the frame.</li>
+<li>The rich-text editor opens <strong>in place</strong> on the drawing.</li>
+<li>Type. <strong>Enter</strong> breaks a line; <strong>Ctrl+Enter</strong> reformats; <strong>Save</strong> places the text; <strong>Esc</strong>
+cancels.</li>
+</ol>
+<p><strong>Double-click an existing MTEXT</strong> to reopen the editor on it.</p>
+<h3>The Text Formatting toolbar</h3>
+<p>Above the editing box:</p>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Font</strong></td>
+<td>Font for the selection, or for what you type next</td>
+</tr>
+<tr>
+<td><strong>Height</strong></td>
+<td>Text height</td>
+</tr>
+<tr>
+<td><strong>B / I / U</strong></td>
+<td>Bold, italic, underline</td>
+</tr>
+<tr>
+<td><strong>Colour</strong></td>
+<td>Text colour</td>
+</tr>
+<tr>
+<td><strong>Justification</strong></td>
+<td>Top/Middle/Bottom × Left/Center/Right — nine positions</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p>Select characters first to apply a font, colour, or B/I/U to <strong>just them</strong>. With no selection, the
+setting applies to what you type next.</p>
+</blockquote>
+<p>Two optional rows are toggled from <strong>Options ▸ Editor Settings</strong>: <strong>Show Options Row</strong> and
+<strong>Show Ruler</strong>.</p>
+<h3>The Options menu</h3>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Shortcut</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Import Text…</strong></td>
+<td>—</td>
+<td>Inserts the contents of a text file at the caret</td>
+</tr>
+<tr>
+<td><strong>Find and Replace…</strong></td>
+<td><code>Ctrl+R</code></td>
+<td>Within the MTEXT being edited</td>
+</tr>
+<tr>
+<td><strong>Change Case ▸ UPPERCASE / lowercase</strong></td>
+<td>—</td>
+<td>Applies to the selection</td>
+</tr>
+<tr>
+<td><strong>All CAPS</strong></td>
+<td>—</td>
+<td>Type new ASCII in all capitals</td>
+</tr>
+<tr>
+<td><strong>Autocorrect cAPS Lock</strong></td>
+<td>—</td>
+<td>Fixes a word typed with Caps Lock inverted — <code>hELLO</code> becomes <code>Hello</code></td>
+</tr>
+<tr>
+<td><strong>Character Set ▸</strong></td>
+<td>—</td>
+<td>Choose the character set</td>
+</tr>
+<tr>
+<td><strong>Remove Formatting ▸ From selected text / From the whole MTEXT</strong></td>
+<td>—</td>
+<td>Strips styling</td>
+</tr>
+<tr>
+<td><strong>Editor Settings ▸ Show Options Row / Show Ruler</strong></td>
+<td>—</td>
+<td>Editor chrome</td>
+</tr>
+<tr>
+<td><strong>Help</strong></td>
+<td><code>F1</code></td>
+<td>—</td>
+</tr>
+</tbody></table>
+<h3>Items present but not functional</h3>
+<p>These appear on the Options menu and do nothing yet — the editor says so when you use them:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Message</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Insert Field…</strong> (<code>Ctrl+F</code>)</td>
+<td><em>Fields are not supported yet</em></td>
+</tr>
+<tr>
+<td><strong>Background Mask…</strong></td>
+<td><em>Background masking is not supported yet</em></td>
+</tr>
+<tr>
+<td><strong>Paragraph…</strong>, <strong>Paragraph Alignment</strong>, <strong>Bullets and Lists</strong>, <strong>Columns</strong>, <strong>Combine Paragraphs</strong></td>
+<td><em>Paragraph and column properties are not stored yet</em></td>
+</tr>
+</tbody></table>
+<h3>Editing keys</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Enter</code></td>
+<td>New line</td>
+</tr>
+<tr>
+<td><code>Ctrl+Enter</code></td>
+<td>Reformat</td>
+</tr>
+<tr>
+<td><code>Ctrl+Z</code> / <code>Ctrl+Y</code></td>
+<td>Undo / redo <strong>inside the text box</strong></td>
+</tr>
+<tr>
+<td><code>Ctrl+C</code> / <code>Ctrl+X</code></td>
+<td>Copy / cut <strong>inside the text box</strong></td>
+</tr>
+<tr>
+<td><code>Esc</code></td>
+<td>Cancel the edit</td>
+</tr>
+</tbody></table>
+<h3>Grips</h3>
+<p>A selected MTEXT shows grips you can drag to move it or resize its frame. <code>Esc</code> during a drag
+cancels it.</p>
+<hr>
+<h2>Text styles</h2>
+<p><strong>Ribbon:</strong> Annotate → <strong>Text style</strong> flyout <strong>Command:</strong> <code>STYLE</code>, <code>ST</code>, <code>DDSTYLE</code></p>
+<p>A named text style bundles a font and its effects, so all your annotation matches.</p>
+<h3>The ribbon flyout</h3>
+<p>Click the style name on the Annotate section for a grid of <strong>thumbnail previews</strong> — each card
+renders <code>AaBb123</code> in that style. Click a card to make it current. <strong>Manage Text Styles…</strong> at the
+bottom opens the full dialog.</p>
+<h3>The Text Style dialog</h3>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/05-text-style.png" alt="Text Style manager" loading="lazy"></p>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Styles:</strong></td>
+<td>The list of styles, with <strong>All styles</strong> filtering</td>
+</tr>
+<tr>
+<td><strong>Font</strong></td>
+<td>Font Name (<code>(default)</code> unless set), <strong>Use Big Font</strong>, Font Style (Regular / Bold / Italic / Bold Italic)</td>
+</tr>
+<tr>
+<td><strong>Size</strong></td>
+<td>Height, <strong>Annotative</strong></td>
+</tr>
+<tr>
+<td><strong>Effects</strong></td>
+<td>Backwards, Oblique Angle</td>
+</tr>
+<tr>
+<td><strong>Preview</strong></td>
+<td>Live <code>AaBb12</code> sample</td>
+</tr>
+<tr>
+<td><strong>Buttons</strong></td>
+<td><strong>New…</strong>, <strong>Set Current</strong>, <strong>Apply</strong>, <strong>Delete</strong>, <strong>Cancel</strong>, <strong>Help</strong></td>
+</tr>
+</tbody></table>
+<p>Rules the dialog enforces:</p>
+<ul>
+<li><code>Standard</code> <strong>cannot be deleted</strong>.</li>
+<li>A style <strong>in use by existing text cannot be deleted</strong> — <em>&quot;Style is in use by existing text —
+cannot delete.&quot;</em></li>
+<li>Names must be unique — <em>&quot;A style with that name already exists.&quot;</em></li>
+</ul>
+<h3>Fonts</h3>
+<p>GoSurvey ships a large set of <strong>SHX</strong> fonts (<code>romans.shx</code>, <code>GENISO.shx</code>, symbol fonts, and more) in
+<code>resources/fonts</code>, and can also use system TrueType fonts.</p>
+<hr>
+<h2>Dimensions</h2>
+<p>Three dimension commands. All of them are created from picks and carry their own extension lines
+and text.</p>
+<h3>DIMALIGNED (<code>DAL</code>)</h3>
+<p><strong>Ribbon:</strong> Inquiry → Aligned</p>
+<p>Measures the true distance between two points, parallel to the line joining them.</p>
+<pre><code>DIMALIGNED — extension 1, extension 2, then offset (point away from measured line). ESC cancels.
+</code></pre>
+<ol>
+<li><strong>First extension point</strong></li>
+<li><strong>Second extension point</strong> — accepts <code>@dx,dy</code> from the first</li>
+<li><strong>Dimension line position</strong> — pick a point away from the measured line</li>
+</ol>
+<h3>DIMLINEAR (<code>DLI</code>)</h3>
+<p><strong>Ribbon:</strong> Inquiry → Linear</p>
+<p>Measures the <strong>horizontal or vertical</strong> component between two points.</p>
+<pre><code>DIMLINEAR — ortho distance in X or Y between extension points; third pick sets dimension line
+</code></pre>
+<ol>
+<li><strong>First extension point</strong></li>
+<li><strong>Second extension point</strong></li>
+<li><strong>Dimension line position</strong> — moving the cursor chooses the orientation. Typing <strong><code>H</code></strong> locks it
+horizontal and <strong><code>V</code></strong> locks it vertical; moving the cursor again unlocks.</li>
+</ol>
+<h3>DIMANGULAR (<code>DAN</code>)</h3>
+<p><strong>Ribbon:</strong> — <strong>Command:</strong> <code>DIMANGULAR</code>, <code>DAN</code></p>
+<p>Measures the angle between two rays from a vertex. The text is degrees, minutes, and seconds.</p>
+<pre><code>DIMANGULAR: Vertex | X,Y | ESC cancel
+DIMANGULAR: First ray point | X,Y | @ from vertex | ESC
+DIMANGULAR: Second ray point | X,Y | @ from vertex | ESC
+DIMANGULAR: Arc radius (bisector) | click | X,Y | @ from vertex | ESC
+</code></pre>
+<ol>
+<li><strong>Vertex</strong></li>
+<li><strong>First ray point</strong></li>
+<li><strong>Second ray point</strong></li>
+<li><strong>Arc position</strong> — sets the radius of the dimension arc along the bisector</li>
+</ol>
+<h3>Editing dimensions</h3>
+<p>Select a dimension and drag its grips to move the dimension line or the text. Properties shows its
+layer, colour, and geometry.</p>
+<blockquote>
+<p><strong>DXF note</strong> — aligned dimensions are written to DXF as <strong>exploded lines plus text</strong>, not as
+associative <code>DIMENSION</code> entities. They will look right in another CAD program but will not be
+live dimensions there. See <a href="import-and-export.html">Import and Export</a>.</p>
+</blockquote>
+<hr>
+<h2>Annotation scale</h2>
+<p>The status-bar plot-scale dropdown (and <code>PLOTSCALE</code> / <code>PSCALE</code>) sets <strong>model units per plotted
+inch</strong>. Changing it:</p>
+<ul>
+<li>changes the model height new TEXT and MTEXT are created at;</li>
+<li>repositions <strong>survey point labels</strong>, which are laid out in plotted inches around their point.</li>
+</ul>
+<p>Existing text is not resized. See <a href="plotting.html">Plotting</a>.</p>
+<hr>
+<h2>Related</h2>
+<p><a href="properties.html">Properties</a> · <a href="layers.html">Layers</a> · <a href="survey-points.html">Survey Points</a> · <a href="plotting.html">Plotting</a> · <a href="drawing-tools.html">Drawing Tools</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="drafting-aids.html">&larr; Drafting Aids</a><a class="doc-pager-link next" href="layers.html">Layers &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

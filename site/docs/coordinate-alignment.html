@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coordinate Alignment — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Coordinate Alignment.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/coordinate-alignment.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html" aria-current="page">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Coordinate Alignment</h1>
+    <h1>Coordinate Alignment — ALIGN</h1>
+<p><strong>Command:</strong> <code>ALIGN</code>, <code>AL</code></p>
+<p>ALIGN computes and applies a <strong>2D Helmert (similarity) transformation</strong> — scale, rotation, and
+translation — from source→destination control-point pairs. This is the standard least-squares
+four-parameter adjustment used to move a drawing from local coordinates onto a real-world
+coordinate system.</p>
+<hr>
+<h2>When to use it</h2>
+<ul>
+<li>A drawing was drafted in <strong>assumed or local coordinates</strong> and you now have state-plane values for
+known points.</li>
+<li>A <strong>traced or scanned</strong> plan needs to be fitted to control.</li>
+<li>Two datasets that should agree do not, and you have common points in both.</li>
+</ul>
+<hr>
+<h2>Workflow</h2>
+<h3>1. Start the command</h3>
+<pre><code>ALIGN
+</code></pre>
+<ul>
+<li><strong>With objects already selected</strong>, ALIGN uses that selection and skips to step 2:
+<code>ALIGN — N CAD, M survey point(s). Pick SOURCE survey point 1 in drawing (snap to it).</code></li>
+<li><strong>With nothing selected</strong>, ALIGN asks you to window-select what to transform:
+<code>ALIGN — window-select entities to transform, then press Enter. ESC cancels.</code>
+Press <strong>Enter</strong> to confirm.</li>
+<li>Selecting nothing and pressing Enter transforms <strong>everything</strong>:
+<code>ALIGN — no selection; all geometry will be transformed.</code></li>
+</ul>
+<h3>2. Pick control-point pairs</h3>
+<p>For each pair:</p>
+<ol>
+<li><strong>Source</strong> — click, or type <code>X,Y</code>, at the point in its <em>current</em> drawing position. Use object
+snap so you land exactly on the existing survey marker.</li>
+<li><strong>Destination</strong> — click, or type, the real-world coordinates that point should have.</li>
+</ol>
+<p>Repeat for as many pairs as you have.</p>
+<table>
+<thead>
+<tr>
+<th>Pairs</th>
+<th>Fit</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>1</strong></td>
+<td>Translation only</td>
+</tr>
+<tr>
+<td><strong>2 or more</strong></td>
+<td>Full Helmert — scale, rotation, and translation, least-squares</td>
+</tr>
+</tbody></table>
+<h3>3. Solve</h3>
+<p>Press <strong>Enter</strong>. The <strong>Align results</strong> window opens with the computed parameters and the per-pair
+residuals.</p>
+<h3>4. Review and remove outliers</h3>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Pair</strong></td>
+<td>Sequential pair number</td>
+</tr>
+<tr>
+<td><strong>Src X</strong> / <strong>Src Y</strong></td>
+<td>Source coordinates, pre-transform drawing space</td>
+</tr>
+<tr>
+<td><strong>Dst X</strong> / <strong>Dst Y</strong></td>
+<td>Destination real-world coordinates</td>
+</tr>
+<tr>
+<td><strong>Resid</strong></td>
+<td>Point error — the distance from the predicted destination to the actual one after the transformation</td>
+</tr>
+</tbody></table>
+<p><strong>Point error (RMS)</strong> is the root-mean-square of the per-pair residuals: the average distance by
+which each source maps away from its intended destination. Lower is a better fit.</p>
+<p>Click the <strong><code>-</code></strong> button on any row to remove that pair. <strong>The solution updates live</strong>, so you can
+watch the RMS fall as you drop an outlier. This is the review step — use it before applying.</p>
+<h3>5. Apply</h3>
+<p>Two choices:</p>
+<table>
+<thead>
+<tr>
+<th>Button state</th>
+<th>What is applied</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Apply Scale</strong> — checkbox ticked</td>
+<td>The full Helmert, including the computed scale factor</td>
+</tr>
+<tr>
+<td><strong>Apply</strong> — checkbox unticked</td>
+<td>Rotation and translation only, with scale forced to 1.0. The translation is re-derived from the centroids so the solution stays least-squares optimal</td>
+</tr>
+</tbody></table>
+<p><strong>Which to choose.</strong> If your drawing is at true scale and only misplaced or misrotated, apply
+without scale — a computed scale of 0.9997 in that case is measurement noise, and applying it
+distorts good geometry. If the drawing was traced, digitised, or drawn to an unknown scale, apply
+the scale.</p>
+<h3>6. Report</h3>
+<p>A transformation report is added automatically to the <strong>Reports</strong> tab of the Properties panel, with
+all parameters and the per-pair point errors.</p>
+<hr>
+<h2>Control-point tagging</h2>
+<p>After applying, ALIGN tags the survey points it acted on so the drawing records what happened:</p>
+<table>
+<thead>
+<tr>
+<th>Points</th>
+<th>Tag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Source</strong> points — those you snapped to as ALIGN sources</td>
+<td><code> ADJ</code> appended to the description</td>
+<td>These were <strong>adjusted</strong> by the transformation</td>
+</tr>
+<tr>
+<td><strong>Destination</strong> points — those at the real-world coordinates</td>
+<td><code> CON</code> appended to the description</td>
+<td>These are <strong>control</strong> points, held fixed</td>
+</tr>
+</tbody></table>
+<p><strong>Destination points are restored to the exact destination values after the transform.</strong> They do
+not drift by the residual. Control stays control.</p>
+<hr>
+<h2>Example — local drawing onto state plane</h2>
+<p>You have a boundary drawn on assumed coordinates and GPS values for two monuments.</p>
+<ol>
+<li>Snap-select the boundary linework and the survey points, or select nothing to move everything.</li>
+<li><code>AL</code></li>
+<li><strong>Source 1</strong> — snap to monument point 1 in the drawing.
+<strong>Destination 1</strong> — type <code>1543268.25,483112.90</code></li>
+<li><strong>Source 2</strong> — snap to monument point 2.
+<strong>Destination 2</strong> — type <code>1544011.60,482780.44</code></li>
+<li><strong>Enter.</strong> The results window shows the parameters and two residuals.</li>
+<li>Read the point error. If it is a hundredth of a foot, you are fine. If it is two feet, one of
+the four coordinates is wrong — check before applying.</li>
+<li>Untick <strong>Apply Scale</strong> (the drawing is at true scale) and press <strong>Apply</strong>.</li>
+<li><code>ZE</code> to reframe. The status readout now reports state-plane coordinates.</li>
+<li>Open <strong>Reports</strong> and confirm the transformation record.</li>
+</ol>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>The residual on one pair is far larger than the rest</td>
+<td>A mis-snapped source, or a typo in a destination</td>
+<td>Press <strong><code>-</code></strong> on that row and watch the RMS; then check that pair</td>
+</tr>
+<tr>
+<td>The drawing came out slightly the wrong size</td>
+<td>Scale was applied when it should not have been</td>
+<td>Undo, then re-apply with <strong>Apply Scale</strong> unticked</td>
+</tr>
+<tr>
+<td>Only translation happened</td>
+<td>Only one pair was given</td>
+<td>Add a second pair for rotation and scale</td>
+</tr>
+<tr>
+<td>Nothing moved</td>
+<td>Nothing was selected and Enter was not pressed to confirm the empty selection</td>
+<td>Re-run; either select first, or press Enter at the selection prompt</td>
+</tr>
+<tr>
+<td>A destination point drifted</td>
+<td>It should not — destinations are restored exactly</td>
+<td>Check you picked it as a <em>destination</em>, not as a second source</td>
+</tr>
+<tr>
+<td>Sources are missing the <code> ADJ</code> tag</td>
+<td>The pick was a coordinate, not a snap onto an existing survey point</td>
+<td>Tagging only applies to points ALIGN actually snapped to</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="survey-points.html">Survey Points</a> · <a href="coordinate-input.html">Coordinate Input</a> · <a href="object-snaps.html">Object Snaps</a> · <a href="traverse-editor.html">Traverse Editor</a> · <a href="import-and-export.html">Import and Export</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="traverse-editor.html">&larr; Traverse Editor</a><a class="doc-pager-link next" href="inquiry-commands.html">Inquiry Commands &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drafting Aids — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Drafting Aids.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/drafting-aids.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html" aria-current="page">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Drafting Aids</h1>
+    <h1>Drafting Aids</h1>
+<p>Ortho, grid, dynamic input, the work plane, and the aids that are present but not finished.</p>
+<hr>
+<h2>Ortho — <code>F8</code></h2>
+<p><strong>Toggle:</strong> <code>F8</code>, or the status-bar <strong>ORTHO</strong> button.</p>
+<p>Constrains picks and rubber-band previews to <strong>horizontal or vertical</strong> from the current anchor.
+Which of the two you get follows the cursor: move mostly sideways and you get horizontal, mostly up
+or down and you get vertical.</p>
+<p>Ortho affects:</p>
+<ul>
+<li>draw commands (LINE, POLYLINE, RECT and the rest),</li>
+<li><strong>grip drags</strong> — the dragged point is constrained to the horizontal or vertical line through the
+grip start,</li>
+<li>the TRIM trim-line,</li>
+<li>typed distances: with Ortho on and <strong>no bearing lock</strong>, a bare number is a distance along the
+horizontal or vertical toward the cursor.</li>
+</ul>
+<p><strong>An object snap always beats Ortho.</strong> If the cursor snaps to something, the constraint is skipped —
+the same rule in draw commands and grip drags, so the two never disagree.</p>
+<p><code>F8</code> works even while the command line has keyboard focus, because it is a mode key rather than a
+character.</p>
+<hr>
+<h2>Grid</h2>
+<p><strong>Toggle:</strong> the status-bar <strong>GRID</strong> button.</p>
+<p>A minor grid follows the view and rescales as you zoom. It is a <strong>visual reference only</strong> — there
+is no snap-to-grid, and the grid spacing is not user-configurable.</p>
+<hr>
+<h2>Dynamic input</h2>
+<p>While a command expects a <strong>coordinate point</strong>, two live fields follow the crosshair showing the
+current <strong>world</strong> X and Y at the display precision from <code>UNITS</code>. The active field is highlighted.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Type</td>
+<td>Locks the active field to what you type</td>
+</tr>
+<tr>
+<td><code>Tab</code></td>
+<td>Moves between the X and Y fields</td>
+</tr>
+<tr>
+<td><code>Enter</code></td>
+<td>Commits the point</td>
+</tr>
+<tr>
+<td>Click in the viewport</td>
+<td>Also commits the point</td>
+</tr>
+</tbody></table>
+<p>Prompts that expect a bearing, angle, distance, option, or command name show a <strong>single</strong> field.</p>
+<hr>
+<h2>Elevation and the work plane — <code>ELEV</code> / <code>UCS</code></h2>
+<p><strong>Command:</strong> <code>ELEV</code>, <code>UCS</code></p>
+<p>Sets the Z that new geometry is drawn at. The status bar always reports the current plane:</p>
+<table>
+<thead>
+<tr>
+<th>Readout</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>UCS: World</code></td>
+<td>New geometry lands on the world XY plane, Z = 0</td>
+</tr>
+<tr>
+<td><code>UCS: Elev 125.400</code></td>
+<td>New geometry lands at Z = 125.400</td>
+</tr>
+</tbody></table>
+<h3>Usage</h3>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ELEV 125.4</code></td>
+<td>Sets the elevation in one line</td>
+</tr>
+<tr>
+<td><code>ELEV</code> then a value</td>
+<td>Prompted form</td>
+</tr>
+<tr>
+<td><code>ELEV</code> then blank <strong>Enter</strong></td>
+<td>Keeps the current value — <code>Elevation unchanged (125.4000).</code></td>
+</tr>
+<tr>
+<td><code>ELEV W</code> or <code>UCS W</code></td>
+<td>Back to world — <code>UCS = World — new geometry is drawn on the world XY plane.</code></td>
+</tr>
+</tbody></table>
+<p>Non-numeric input answers <code>ELEV — usage: ELEV &lt;elevation&gt;, or ELEV W for world.</code></p>
+<blockquote>
+<p><strong>Why the readout matters.</strong> With a raised work plane, geometry you draw is not at Z = 0 and
+nothing in a plan view says so. The status bar is the one place that tells you. If new linework
+refuses to snap to older linework, check this field first.</p>
+</blockquote>
+<hr>
+<h2>Bearing lock</h2>
+<p>Not a mode toggle but the main drafting aid for survey work: <code>A &lt;bearing&gt;</code> and <code>2P</code> in LINE and
+POLYLINE lock the direction so you can enter a distance. Full detail in <a href="coordinate-input.html">Coordinate Input</a>.</p>
+<hr>
+<h2>Object snap</h2>
+<p><code>F3</code> and the <strong>OSNAP</strong> button. See <a href="object-snaps.html">Object Snaps</a>.</p>
+<hr>
+<h2>Aids that do not work yet</h2>
+<p>Be aware of these — the controls exist and respond, but nothing happens in the drawing.</p>
+<table>
+<thead>
+<tr>
+<th>Aid</th>
+<th>State</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>POLAR</strong> (status bar)</td>
+<td>The button toggles and lights up, but <strong>polar tracking is not implemented</strong>. Its tooltip says <em>&quot;Polar tracking (UI only for now)&quot;</em></td>
+</tr>
+<tr>
+<td><strong>Object snap tracking</strong></td>
+<td>Not present</td>
+</tr>
+<tr>
+<td><strong>Temporary tracking points</strong></td>
+<td>Not present</td>
+</tr>
+<tr>
+<td><strong>Snap-to-grid</strong></td>
+<td>Not present — the grid is display only</td>
+</tr>
+<tr>
+<td><strong>Parametric constraints</strong></td>
+<td>Not present</td>
+</tr>
+<tr>
+<td><strong>Construction geometry</strong> (XLINE / RAY)</td>
+<td>Not present</td>
+</tr>
+</tbody></table>
+<p>See <a href="known-limitations.html">Known Limitations</a>.</p>
+<hr>
+<h2>Related</h2>
+<p><a href="coordinate-input.html">Coordinate Input</a> · <a href="object-snaps.html">Object Snaps</a> · <a href="drawing-tools.html">Drawing Tools</a> · <a href="views-and-navigation.html">Views and Navigation</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="coordinate-input.html">&larr; Coordinate Input</a><a class="doc-pager-link next" href="annotation.html">Annotation &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

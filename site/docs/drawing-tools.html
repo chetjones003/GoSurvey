@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drawing Tools — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Drawing Tools.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/drawing-tools.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html" aria-current="page">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Drawing Tools</h1>
+    <h1>Drawing Tools</h1>
+<p>All drawing commands work the same way at the top level:</p>
+<ol>
+<li>Start the command — click a <strong>Draw</strong> ribbon button, or type its name and press <strong>Enter</strong>.</li>
+<li>Answer each prompt by <strong>clicking in the drawing</strong> or <strong>typing a value</strong>.</li>
+<li><strong>Esc</strong> cancels. Most commands stay active for repeated use until you press Esc.</li>
+</ol>
+<p>Everything you may type at a point prompt is listed in <a href="coordinate-input.html">Coordinate Input</a>. What the cursor snaps
+to is in <a href="object-snaps.html">Object Snaps</a>. Ortho and the work-plane elevation are in <a href="drafting-aids.html">Drafting Aids</a>.</p>
+<p>New geometry is created on the <strong>current layer</strong> (ribbon, top right) with the current colour,
+linetype, lineweight, and transparency from <strong>Properties → General</strong>, and at the current
+<strong>elevation</strong> shown as <code>UCS:</code> on the status bar.</p>
+<hr>
+<h2>LINE (<code>L</code>)</h2>
+<p><strong>Ribbon:</strong> Draw → Line <strong>Command:</strong> <code>LINE</code>, <code>L</code></p>
+<p>Draws one or more straight segments. Each segment is a separate object.</p>
+<h3>Workflow</h3>
+<pre><code>Command: LINE
+LINE — specify first point (click or type X,Y / X Y). ESC to cancel.
+LINE: Next: click; X, Y; @dx,dy; [A]zimuth, [2P];
+</code></pre>
+<ol>
+<li><strong>First point</strong> — click, or type <code>X,Y</code>.</li>
+<li><strong>Next point</strong> — click, type <code>X,Y</code>, or type <code>@dx,dy</code> relative to the previous point.</li>
+<li>Repeat. <strong>Esc</strong> ends the command.</li>
+</ol>
+<h3>Bearing entry</h3>
+<p>This is the part that makes LINE useful for survey work. After the first point:</p>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>A &lt;bearing&gt;</code></td>
+<td>Locks the direction to that bearing. Example: <code>A 45</code> or <code>A 45d30m00s</code>.</td>
+</tr>
+<tr>
+<td><code>A</code> alone</td>
+<td>Enters bearing-lock mode; the next line you type is the bearing. Blank Enter cancels.</td>
+</tr>
+<tr>
+<td><code>A &lt;bearing&gt; +90</code></td>
+<td>Bearing plus a turn, in one line. <code>-45</code> also works.</td>
+</tr>
+<tr>
+<td><code>A</code> (while locked)</td>
+<td>Clears the lock.</td>
+</tr>
+<tr>
+<td><code>2P</code> or <code>AP</code> or <code>ANGLEPICK</code></td>
+<td>Pick two points to define the direction. Then <strong>Enter</strong> locks it, or type <code>+90</code> / <code>-45</code> to adjust before locking.</td>
+</tr>
+<tr>
+<td>A number, with a bearing locked</td>
+<td>Distance along the locked ray. A negative number runs backwards.</td>
+</tr>
+<tr>
+<td>A number, with <strong>Ortho</strong> on and no lock</td>
+<td>Distance along the horizontal or vertical toward the cursor.</td>
+</tr>
+</tbody></table>
+<p>Bearings are <strong>degrees clockwise from north</strong> and accept decimal degrees (<code>132.5</code>) or DMS
+(<code>132d30m00s</code>). While in <code>2P</code> pick mode, <strong>Esc</strong> cancels only the pick, not the whole command.</p>
+<h3>Prompts you will see</h3>
+<table>
+<thead>
+<tr>
+<th>Prompt line</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>LINE: First point — click or X,Y</code></td>
+<td>Waiting for the anchor</td>
+</tr>
+<tr>
+<td><code>LINE: Type bearing ° CW from N (decimal/DMS) | blank Enter cancels</code></td>
+<td>You typed <code>A</code> alone</td>
+</tr>
+<tr>
+<td><code>LINE bearing pick: First direction point — click | 2P started</code></td>
+<td>You typed <code>2P</code></td>
+</tr>
+<tr>
+<td><code>LINE bearing pick: Enter locks | +90/-45 adjust+lock</code></td>
+<td>Two direction points taken</td>
+</tr>
+<tr>
+<td><code>LINE (bearing lock): distance ± along ray | click on line | X,Y | @dx,dy | A clears</code></td>
+<td>Direction is locked</td>
+</tr>
+</tbody></table>
+<h3>Example — a bearing-and-distance leg</h3>
+<pre><code>LINE
+0,0                     ← start at the origin
+A 132d15m30s            ← lock the bearing S47°44&#39;30&quot;E, entered as 132°15&#39;30&quot; CW from north
+248.55                  ← run 248.55 units along it
+A 132d15m30s +90        ← turn 90° right
+100                     ← run 100 units
+Esc
+</code></pre>
+<h3>Common problems</h3>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Typing a number does nothing useful</td>
+<td>No bearing lock and Ortho is off, so a bare number has no direction</td>
+<td>Lock a bearing with <code>A</code>, or turn on Ortho (<code>F8</code>)</td>
+</tr>
+<tr>
+<td>The bearing came out backwards</td>
+<td>Bearings are clockwise from <strong>north</strong>, not counter-clockwise from east</td>
+<td><code>90</code> is due east, <code>180</code> due south</td>
+</tr>
+<tr>
+<td>Segments will not join into one object</td>
+<td>LINE makes separate segments by design</td>
+<td>Use <code>POLYLINE</code>, or draw with LINE and then <code>JOIN</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>POLYLINE (<code>PL</code>)</h2>
+<p><strong>Ribbon:</strong> Draw → Polyline <strong>Command:</strong> <code>POLYLINE</code>, <code>PL</code></p>
+<p>Like LINE, but the whole chain is <strong>one object</strong>.</p>
+<h3>Workflow</h3>
+<ol>
+<li><strong>First point</strong> — click or type.</li>
+<li><strong>Next point</strong> — as many as you need. Accepts everything LINE accepts, bearing lock included.</li>
+<li>Finish with one of:<ul>
+<li><code>CLOSE</code> or <code>CL</code> — adds a closing segment back to the first point and ends the polyline.</li>
+<li><code>END</code> — ends the polyline open.</li>
+<li><strong>Esc</strong> — ends the command.</li>
+</ul>
+</li>
+</ol>
+<h3>Prompts</h3>
+<pre><code>POLYLINE: First point — click or X,Y | CLOSE closes | ESC cancel
+POLYLINE: Next — click | X,Y | @dx,dy | A/2P | CLOSE / END | ESC
+POLYLINE (bearing lock): distance ± | click on ray | X,Y | A clears | CLOSE / END
+</code></pre>
+<h3>Notes</h3>
+<ul>
+<li>A <strong>closed</strong> polyline is what <code>HATCH</code> needs a boundary for, and what the <strong>Geometric center</strong>
+object snap targets.</li>
+<li>Polylines can be offset and joined; see <a href="modify-tools.html">Modify Tools</a>.</li>
+</ul>
+<hr>
+<h2>RECT (<code>RECTANG</code>, <code>RECTANGLE</code>)</h2>
+<p><strong>Ribbon:</strong> Draw → Rectangle <strong>Command:</strong> <code>RECT</code></p>
+<p>Two opposite corners. The result is stored as a <strong>closed polyline</strong>, so it hatches, offsets, and
+snaps like any other polyline.</p>
+<pre><code>RECT — pick the first corner (or type X,Y):
+</code></pre>
+<ol>
+<li><strong>First corner</strong> — click or type <code>X,Y</code>.</li>
+<li><strong>Opposite corner</strong> — click, type <code>X,Y</code>, or type <code>@dx,dy</code> for an exact size.</li>
+</ol>
+<p>If the two corners give a zero width or zero height, the log says
+<code>RECT — corners give a zero-width or zero-height rectangle; pick again.</code> and you pick again.</p>
+<p><strong>Example — a 200 × 150 rectangle from a known corner:</strong></p>
+<pre><code>RECT
+1000,2000
+@200,150
+</code></pre>
+<hr>
+<h2>CIRCLE (<code>C</code>)</h2>
+<p><strong>Ribbon:</strong> Draw → Circle <strong>Command:</strong> <code>CIRCLE</code>, <code>C</code></p>
+<p>Two construction methods.</p>
+<h3>Centre and radius (default)</h3>
+<ol>
+<li><strong>Centre</strong> — click or type <code>X,Y</code>.</li>
+<li><strong>Radius</strong> — click a point on the rim, type the radius, or type <code>D &lt;value&gt;</code> / <code>D&lt;value&gt;</code> for a
+diameter.</li>
+</ol>
+<pre><code>CIRCLE: Click or type center | Type 3P for three-point circle | ESC cancel
+CIRCLE: Click edge for radius | Type radius | D &lt;value&gt; or D&lt;value&gt; for diameter | ESC cancel
+</code></pre>
+<h3>Three-point (<code>3P</code>)</h3>
+<p>Type <code>3P</code> <strong>before</strong> picking the centre, then pick three points on the circle:</p>
+<pre><code>CIRCLE (3P): Point 1 of 3 — click or X,Y | ESC cancel
+CIRCLE (3P): Point 2 of 3 — click or X,Y | ESC cancel
+CIRCLE (3P): Point 3 of 3 — click or X,Y | ESC cancel
+</code></pre>
+<blockquote>
+<p><strong>Tip</strong> — with 3P, snap each pick. The circle is committed at the <strong>snapped</strong> point, not where
+the cursor happened to be, so a rim snap gives you exactly the circle through those three points.</p>
+</blockquote>
+<h3>Options</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Where</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>D &lt;value&gt;</code></td>
+<td>At the radius prompt</td>
+<td>Treats the value as a diameter</td>
+</tr>
+<tr>
+<td><code>3P</code></td>
+<td>At the centre prompt</td>
+<td>Switches to three-point construction</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>ARC</h2>
+<p><strong>Ribbon:</strong> Draw → Arc <strong>Command:</strong> <code>ARC</code></p>
+<p>Three-point arc only: <strong>start</strong>, a <strong>point on the arc</strong>, then the <strong>end</strong>.</p>
+<pre><code>ARC: Start point | ESC cancel
+ARC: Point on arc | ESC cancel
+ARC: End point | ESC cancel
+</code></pre>
+<p>There are no start/centre/angle variants. To build an arc from a centre and radius, draw a circle
+and trim it, or place the middle point with snaps.</p>
+<hr>
+<h2>ELLIPSE (<code>EL</code>)</h2>
+<p><strong>Ribbon:</strong> Draw → Ellipse <strong>Command:</strong> <code>ELLIPSE</code>, <code>EL</code></p>
+<ol>
+<li><strong>Centre</strong> — click or type.</li>
+<li><strong>Major-axis endpoint</strong> — click or type. This sets both the major radius and the rotation.</li>
+<li><strong>Ratio</strong> — type the minor/major ratio in the range <code>(0, 1]</code> on the command line. <strong>Enter alone
+uses 0.5.</strong></li>
+</ol>
+<pre><code>ELLIPSE: Center | ESC cancel
+ELLIPSE: Major axis end | ESC cancel
+ELLIPSE: Ratio (0-1] on command line | Enter = 0.5 | ESC cancel
+</code></pre>
+<p>A ratio of <code>1</code> gives a circle-shaped ellipse. Ellipses can be offset.</p>
+<hr>
+<h2>HATCH (<code>H</code>, <code>BHATCH</code>)</h2>
+<p><strong>Ribbon:</strong> Draw → Hatch <strong>Command:</strong> <code>HATCH</code>, <code>H</code>, <code>BHATCH</code></p>
+<p>Fills a closed area.</p>
+<pre><code>HATCH — pick an internal point inside a closed area (Esc to cancel).
+</code></pre>
+<p><strong>Pick a point inside the area you want filled.</strong> GoSurvey traces the boundary from the
+surrounding geometry and creates a filled region.</p>
+<h3>The Hatch ribbon section</h3>
+<p>While HATCH is running, a contextual <strong>Hatch</strong> section appears on the ribbon carrying the creation
+defaults:</p>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it sets</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Pattern</strong></td>
+<td>The hatch pattern, chosen from thumbnails. 83 patterns from the bundled <code>acadiso.pat</code> library — <code>SOLID</code>, the <code>ANSI31</code>–<code>ANSI38</code> family, <code>AR-*</code> architectural patterns, <code>EARTH</code>, <code>GRAVEL</code>, <code>NET</code>, and the rest</td>
+</tr>
+<tr>
+<td><strong>Colour</strong></td>
+<td>The fill colour</td>
+</tr>
+<tr>
+<td><strong>Transparency</strong></td>
+<td>0–100%</td>
+</tr>
+<tr>
+<td><strong>Layer</strong></td>
+<td>Layer for the new hatch</td>
+</tr>
+<tr>
+<td><strong>Angle</strong></td>
+<td>Pattern rotation in degrees</td>
+</tr>
+<tr>
+<td><strong>Scale</strong></td>
+<td>Pattern spacing multiplier</td>
+</tr>
+</tbody></table>
+<h3>Editing hatches after the fact</h3>
+<p>Select one or more hatches and the same ribbon section returns, titled <strong>Hatch (selected)</strong>. Now
+the controls edit the selected objects <strong>live</strong>, and each change is a single undo step (<code>Undo: Edit hatch</code>).</p>
+<h3>Common problems</h3>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Nothing fills</td>
+<td>The area is not actually closed — a gap between segments</td>
+<td>Zoom in and check the corners; <code>JOIN</code> the chain or redraw with <code>POLYLINE</code> / <code>RECT</code></td>
+</tr>
+<tr>
+<td>The pattern looks solid or invisible</td>
+<td>The pattern scale is far too small or too large for the drawing</td>
+<td>Adjust <strong>Scale</strong> in the Hatch ribbon section</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>PDFATTACH (<code>PA</code>)</h2>
+<p>Not geometry, but it lives on the Draw ribbon: attaches a PDF page as a snappable raster underlay.
+See <a href="pdf-underlays.html">PDF Underlays</a>.</p>
+<hr>
+<h2>What is not here</h2>
+<p>GoSurvey has no <code>SPLINE</code>, <code>POINT</code> (as a drawing command — use <code>CREATEPOINTS</code> for survey points),
+<code>BLOCK</code>/<code>INSERT</code>, <code>XLINE</code>, <code>RAY</code>, <code>DONUT</code>, <code>SOLID</code>, <code>REVCLOUD</code>, <code>WIPEOUT</code>, or <code>TABLE</code> command, and
+no <code>MIRROR</code> (the ribbon button exists but is disabled). See <a href="known-limitations.html">Known Limitations</a>.</p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="keyboard-shortcuts.html">&larr; Keyboard Shortcuts</a><a class="doc-pager-link next" href="modify-tools.html">Modify Tools &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

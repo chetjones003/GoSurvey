@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Properties — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Properties.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/properties.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html" aria-current="page">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Properties</h1>
+    <h1>Properties</h1>
+<p>The <strong>Properties</strong> panel is docked on the left of the window, sharing space with <strong>Reports</strong>. It
+shows and edits whatever is currently selected.</p>
+<hr>
+<h2>With nothing selected</h2>
+<p>The panel shows the settings that new objects will inherit:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>What it sets</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Layer</strong></td>
+<td>Same as the ribbon layer dropdown</td>
+</tr>
+<tr>
+<td><strong>Color</strong></td>
+<td>Colour for new geometry. <code>ByLayer</code>, a named colour from the palette, or a custom colour</td>
+</tr>
+<tr>
+<td><strong>Linetype</strong></td>
+<td>Linetype for new geometry</td>
+</tr>
+<tr>
+<td><strong>Lineweight</strong></td>
+<td>Lineweight for new geometry</td>
+</tr>
+<tr>
+<td><strong>Transparency</strong></td>
+<td>Transparency for new geometry</td>
+</tr>
+<tr>
+<td><strong>Current text style</strong></td>
+<td>The text style new TEXT and MTEXT will use</td>
+</tr>
+<tr>
+<td><strong>Default text height (in)</strong></td>
+<td>Height <strong>on the sheet, in inches</strong>. Combined with the plot scale to give the model height of new text — see <a href="annotation.html">Annotation</a></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>General section</h2>
+<p>Present for every selected object. The panel header reports what is selected — <code>Selected: 1 object(s)</code> — and names the type below it.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Layer</strong></td>
+<td>The object&#39;s layer</td>
+</tr>
+<tr>
+<td><strong>Layer list</strong></td>
+<td>A dropdown of the layers present in the drawing, for picking one into <strong>Layer</strong></td>
+</tr>
+<tr>
+<td><strong>Color</strong></td>
+<td><code>ByLayer</code>, the named colour palette, or a custom colour picker</td>
+</tr>
+<tr>
+<td><strong>Linetype</strong></td>
+<td>From the bundled linetype libraries</td>
+</tr>
+<tr>
+<td><strong>Lineweight</strong></td>
+<td>Standard lineweights</td>
+</tr>
+<tr>
+<td><strong>Transparency</strong></td>
+<td>0–100%</td>
+</tr>
+<tr>
+<td><strong>Plot style</strong></td>
+<td>Shown for reference</td>
+</tr>
+</tbody></table>
+<p>Set a value to <strong>ByLayer</strong> to hand control back to the object&#39;s layer (<a href="layers.html">Layers</a>).</p>
+<hr>
+<h2>Geometry by object type</h2>
+<h3>Line</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Start X · Start Y</td>
+<td>Editable — changing one moves that endpoint</td>
+</tr>
+<tr>
+<td>End X · End Y</td>
+<td>Editable</td>
+</tr>
+<tr>
+<td><strong>Derived:</strong> Length · Rotation rel. north</td>
+<td>Read-only. Rotation is shown in the angle format set in <code>UNITS</code>, e.g. <code>270°0&#39;0.0&quot;</code></td>
+</tr>
+</tbody></table>
+<h3>Circle</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Center X · Center Y · Center Z</td>
+<td>Editable</td>
+</tr>
+<tr>
+<td>Radius</td>
+<td>Editable</td>
+</tr>
+<tr>
+<td><strong>Derived:</strong> Diameter · Circumference · <strong>Area</strong></td>
+<td>Read-only, computed from the radius</td>
+</tr>
+</tbody></table>
+<p>This is the only place GoSurvey reports an area — there is no <code>AREA</code> command and no area for
+polylines.</p>
+<h3>Annotation — TEXT and MTEXT</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Insertion X / Y / Z</strong></td>
+<td>The insertion point</td>
+</tr>
+<tr>
+<td><strong>Content</strong></td>
+<td>The text itself</td>
+</tr>
+<tr>
+<td><strong>Rotation</strong></td>
+<td>Degrees clockwise from north</td>
+</tr>
+<tr>
+<td><strong>Height</strong></td>
+<td>Text height in model units</td>
+</tr>
+<tr>
+<td><strong>Box min X/Y</strong>, <strong>Box max X/Y</strong>, <strong>Box width</strong>, <strong>Box height</strong></td>
+<td>The MTEXT frame. Width and height are <em>Derived</em></td>
+</tr>
+<tr>
+<td><strong>Edit text X / Y / Z</strong></td>
+<td>Position of the editing box</td>
+</tr>
+</tbody></table>
+<h3>Dimensions</h3>
+<p><code>DIMALIGNED</code>, <code>DIMLINEAR</code>, and <code>DIMANGULAR</code> selections show their defining points and text
+placement.</p>
+<h3>Survey point</h3>
+<p>Selecting a survey marker shows <em>Survey — 1 point</em>:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Point ID</strong></td>
+<td>Must be a whole number. A duplicate is refused — <em>&quot;Properties — duplicate point ID …&quot;</em>; a non-integer gives <em>&quot;Properties — point ID must be a whole number.&quot;</em></td>
+</tr>
+<tr>
+<td><strong>Northing (Y)</strong> · <strong>Easting (X)</strong></td>
+<td>World coordinates</td>
+</tr>
+<tr>
+<td><strong>Label style</strong></td>
+<td>See below</td>
+</tr>
+<tr>
+<td><strong>Label color</strong></td>
+<td>Colour of the point&#39;s label</td>
+</tr>
+</tbody></table>
+<p><strong>Label styles:</strong></p>
+<ul>
+<li>None</li>
+<li>Point number only</li>
+<li>Point number and description</li>
+<li>Description only</li>
+<li>Point number and elevation</li>
+<li>Point number, elevation, and description</li>
+<li>Northing and easting</li>
+<li>Point number, northing, and easting</li>
+<li>Point number, northing, easting, and elevation</li>
+</ul>
+<p>Bulk editing of points is done in the Viewpoints table — the panel says
+<em>Bulk editing: VIEWPOINTS (VWPTS)</em>. See <a href="survey-points.html">Survey Points</a>.</p>
+<h3>PDF underlay</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>File name and page number</td>
+</tr>
+<tr>
+<td>Insert X · Insert Y</td>
+</tr>
+<tr>
+<td>Scale · Rotation (deg)</td>
+</tr>
+<tr>
+<td>Fade</td>
+</tr>
+<tr>
+<td><strong>Object Snap</strong> — Lines · Circles (per-underlay snap toggles)</td>
+</tr>
+</tbody></table>
+<p>Selecting several PDFs shows <em>&quot;N PDF underlays selected&quot;</em> with a bulk <strong>Fade</strong> control. See
+<a href="pdf-underlays.html">PDF Underlays</a>.</p>
+<h3>Hatch</h3>
+<p>Hatch pattern, colour, transparency, layer, angle, and scale are edited from the contextual
+<strong>Hatch (selected)</strong> ribbon section rather than this panel. See <a href="drawing-tools.html">Drawing Tools</a>.</p>
+<hr>
+<h2>Multiple selection</h2>
+<p><strong>Several objects of one type</strong> — the shared fields are shown. Where values differ the field reads
+<code>(mixed)</code> and the header says <em>Mixed — enter applies to all</em>. Typing a value applies it to every
+selected object.</p>
+<p><strong>A mixed-type selection</strong> — a summary is shown instead of editable geometry, for example
+<code>(Mixed: Line 4, Circle 2, Ann 1, PDF 0)</code>, along with the General section, which still applies to
+all of them.</p>
+<hr>
+<h2>Reports tab</h2>
+<p>The second tab of the same panel. Generated reports arrive here as tabs:</p>
+<ul>
+<li><strong>ALIGN</strong> transformation reports — parameters and per-pair point errors</li>
+<li><strong>Traverse</strong> results from the Traverse Editor</li>
+<li><strong>Exported points</strong> reports from <code>EXPORTPOINTS</code></li>
+</ul>
+<blockquote>
+<p><em>Exported CSV files and other generated reports will appear here as tabs.</em></p>
+</blockquote>
+<hr>
+<h2>Related</h2>
+<p><a href="layers.html">Layers</a> · <a href="object-selection.html">Object Selection</a> · <a href="annotation.html">Annotation</a> · <a href="survey-points.html">Survey Points</a> · <a href="pdf-underlays.html">PDF Underlays</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="layers.html">&larr; Layers</a><a class="doc-pager-link next" href="survey-points.html">Survey Points &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Object Selection — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Object Selection.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/object-selection.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html" aria-current="page">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Object Selection</h1>
+    <h1>Object Selection</h1>
+<hr>
+<h2>Selecting with nothing running</h2>
+<p>With no command active:</p>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Move the cursor over an object</strong></td>
+<td>It highlights, so you can see what you are about to pick</td>
+</tr>
+<tr>
+<td><strong>Click an object</strong></td>
+<td>Selects it. Grips appear and the Properties panel fills in</td>
+</tr>
+<tr>
+<td><strong>Click, then click again in empty space</strong></td>
+<td>The two clicks define a <strong>selection window</strong> over everything inside</td>
+</tr>
+<tr>
+<td><strong>Drag from empty space and release</strong></td>
+<td>Same window, as a drag instead of two clicks</td>
+</tr>
+<tr>
+<td><strong>Click empty space once and press Esc</strong></td>
+<td>Clears the selection (<code>Selection cleared.</code>)</td>
+</tr>
+</tbody></table>
+<p>Typing <code>SELECT</code> <strong>clears the current selection</strong> and prints a reminder of how to build a new one —
+<code>SELECT — click two corners for a window (default when no command is active).</code> It does not open a
+dialog, and it does not add a mode you were not already in.</p>
+<hr>
+<h2>Selecting during a command</h2>
+<p>Commands that need objects (MOVE, COPY, ROTATE, SCALE, DELETE, JOIN, ALIGN) behave the same way:</p>
+<ul>
+<li><strong>If objects are already selected when you start the command</strong>, it uses that selection and skips
+the selection step.</li>
+<li><strong>If nothing is selected</strong>, the command asks for a <strong>two-click window</strong> first.</li>
+</ul>
+<p>TRIM and OFFSET are different — they take individual picks as part of their own workflow rather
+than a window.</p>
+<hr>
+<h2>Selection cycling</h2>
+<p>When several objects overlap under the cursor, GoSurvey cannot know which one you meant. The
+<strong>Selection panel</strong> lists the candidates so you can pick the right one.</p>
+<ul>
+<li>Open it with the <strong>SEL</strong> button on the status bar.</li>
+<li>It lists each selected entity by type and index — <code>Line 3</code>, <code>Circle 12</code>, <code>MTEXT 2</code>,
+<code>PDF Underlay 1</code>.</li>
+<li>Toggle any entry to add or remove that object from the selection.</li>
+<li>Press <strong>SEL</strong> again to close the panel.</li>
+</ul>
+<hr>
+<h2>Grips</h2>
+<p>Selected objects show <strong>grips</strong> — small blue squares at their endpoints, centres, and midpoints.</p>
+<table>
+<thead>
+<tr>
+<th>Grip behaviour</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Drag</strong></td>
+<td>Moves that vertex or feature, editing the geometry directly</td>
+</tr>
+<tr>
+<td><strong>Snapping</strong></td>
+<td>Grips honour object snap, so you can drag one exactly onto another feature</td>
+</tr>
+<tr>
+<td><strong>Ortho</strong></td>
+<td>Constrains the drag to horizontal or vertical from the grip start — a snap still wins</td>
+</tr>
+<tr>
+<td><strong>Grips as snap targets</strong></td>
+<td>Grips of selected objects are themselves snappable, regardless of the OSNAP toggle, and they beat every geometry snap</td>
+</tr>
+<tr>
+<td><strong>Esc</strong></td>
+<td>Cancels the drag and restores the original position</td>
+</tr>
+</tbody></table>
+<p>Grip size is set in <strong>Settings → Selection → Grip size (px)</strong>, from 2 to 20 pixels.</p>
+<hr>
+<h2>QUICKSELECT (<code>QS</code>)</h2>
+<p><strong>Command:</strong> <code>QUICKSELECT</code>, <code>QS</code> <strong>Menu:</strong> Right-click ▸ Quick Select…</p>
+<p>Builds a selection by <strong>property</strong> instead of by picking. Useful when you want every line on one
+layer, or every survey point above a given elevation.</p>
+<pre><code>QUICKSELECT — filter entities by type and property.
+</code></pre>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/06-quick-select.png" alt="Quick Select" loading="lazy"></p>
+<h3>The dialog</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Choices</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Apply to:</strong></td>
+<td>Entire drawing, or Current selection</td>
+</tr>
+<tr>
+<td><strong>Object type:</strong></td>
+<td>Line, Polyline, Circle, Arc, Ellipse, Text, MText, Dim (Aligned), Dim (Linear), Dim (Angular), PDF Underlay, survey point</td>
+</tr>
+<tr>
+<td><strong>Properties:</strong></td>
+<td>The properties that apply to the chosen type — Layer, Color, ID, Elevation, Easting, Northing, Description, Closed, and so on</td>
+</tr>
+<tr>
+<td><strong>Operator:</strong></td>
+<td><code>= Equals</code>, <code>&lt;&gt; Not Equal</code>, <code>&gt; Greater Than</code>, <code>&lt; Less Than</code></td>
+</tr>
+<tr>
+<td><strong>Value:</strong></td>
+<td>A dropdown where the property has known values (the named colour palette, the layers present in the drawing, Yes/No) or a typed value otherwise</td>
+</tr>
+<tr>
+<td><strong>How to apply:</strong></td>
+<td>Include in new selection · Exclude from new selection · Append to current selection</td>
+</tr>
+</tbody></table>
+<p>Press <strong>Select All</strong> to apply, or <strong>Cancel</strong> to close without changing the selection.</p>
+<h3>Example — select every line on the <code>TOPO</code> layer</h3>
+<ol>
+<li><code>QS</code></li>
+<li><strong>Apply to:</strong> Entire drawing</li>
+<li><strong>Object type:</strong> Line</li>
+<li><strong>Properties:</strong> Layer · <strong>Operator:</strong> <code>= Equals</code> · <strong>Value:</strong> <code>TOPO</code></li>
+<li><strong>How to apply:</strong> Include in new selection</li>
+<li><strong>Select All</strong></li>
+</ol>
+<hr>
+<h2>Select similar</h2>
+<p>Right-click with something selected ▸ <strong>Select similar</strong>. Selects the other objects in the drawing
+that match what you have picked.</p>
+<hr>
+<h2>Object isolation</h2>
+<p>Useful when a drawing is too dense to work in.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Menu</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ISOLATEOBJECTS</code></td>
+<td><code>ISOLATE</code></td>
+<td>Right-click ▸ Isolate Objects ▸ Isolate Objects</td>
+<td>Hides everything <strong>except</strong> the selection</td>
+</tr>
+<tr>
+<td><code>HIDEOBJECTS</code></td>
+<td>—</td>
+<td>Right-click ▸ Isolate Objects ▸ Hide Objects</td>
+<td>Hides the selected objects</td>
+</tr>
+<tr>
+<td><code>UNISOLATEOBJECTS</code></td>
+<td><code>UNISOLATE</code></td>
+<td>Right-click ▸ Isolate Objects ▸ End Object Isolation</td>
+<td>Restores everything isolation hid</td>
+</tr>
+</tbody></table>
+<p>Isolation is a display state. It does not delete anything and it is not saved as a drawing edit.</p>
+<hr>
+<h2>The right-click menu</h2>
+<p>What right-click does depends on the context, and each context is configurable.</p>
+<h3>Contexts</h3>
+<table>
+<thead>
+<tr>
+<th>Context</th>
+<th>When</th>
+<th>Default behaviour</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Default Mode</strong></td>
+<td>No command, nothing selected</td>
+<td>Repeat the last command</td>
+</tr>
+<tr>
+<td><strong>Edit Mode</strong></td>
+<td>No command, objects selected</td>
+<td>Open the shortcut menu</td>
+</tr>
+<tr>
+<td><strong>Command Mode</strong></td>
+<td>A command is running</td>
+<td>Repeat / shortcut menu, per your setting</td>
+</tr>
+</tbody></table>
+<h3>Command Mode menu</h3>
+<p>Two items only:</p>
+<ul>
+<li><strong>Enter</strong> — same as pressing Enter at the current prompt.</li>
+<li><strong>Cancel</strong> — cancels the running command.</li>
+</ul>
+<h3>Default / Edit Mode menu</h3>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Repeat &lt;command&gt;</strong></td>
+<td>Re-runs the last command by name</td>
+</tr>
+<tr>
+<td><strong>Recent Input ▸</strong></td>
+<td>The same typed-command history the command bar dropdown shows, newest first. Choosing one re-submits it</td>
+</tr>
+<tr>
+<td><strong>Isolate Objects ▸</strong></td>
+<td>Isolate Objects · Hide Objects · End Object Isolation</td>
+</tr>
+<tr>
+<td><strong>Clipboard ▸</strong></td>
+<td>Cut · Copy · Paste · Paste at Original Coordinates</td>
+</tr>
+<tr>
+<td><strong>Basic Modify Tools ▸</strong></td>
+<td>Move · Copy Selection · Rotate · Scale · Erase · Offset · Trim · Join <em>(needs a selection)</em></td>
+</tr>
+<tr>
+<td><strong>Pan / Zoom / Free Orbit</strong></td>
+<td>Starts the matching navigation command</td>
+</tr>
+<tr>
+<td><strong>Quick Select…</strong></td>
+<td>Opens the Quick Select dialog</td>
+</tr>
+<tr>
+<td><strong>Options…</strong></td>
+<td>Opens the Options dialog</td>
+</tr>
+<tr>
+<td><strong>Select similar</strong></td>
+<td>Selects matching objects</td>
+</tr>
+<tr>
+<td><strong>Selection…</strong></td>
+<td>Opens the Selection panel</td>
+</tr>
+<tr>
+<td><strong>Clear selection</strong></td>
+<td>Deselects everything</td>
+</tr>
+</tbody></table>
+<h3>Time-sensitive right-click</h3>
+<p><strong>Settings → User Preferences → Right-click Customization…</strong> offers a <em>time-sensitive</em> mode:</p>
+<ul>
+<li><strong>Quick click</strong> = ENTER</li>
+<li><strong>Longer click</strong> (default 250 ms, configurable) = open the shortcut menu</li>
+</ul>
+<p>With time-sensitive mode on, the menu opens on release or when the hold time elapses, rather than
+on press. A selection still routes through Edit Mode.</p>
+<hr>
+<h2>Escape behaviour</h2>
+<p><code>Esc</code> walks back one layer at a time:</p>
+<ol>
+<li>If a modal such as the copy-duplicate dialog is open — cancels it.</li>
+<li>If the MTEXT editor is open — cancels the edit.</li>
+<li>If a grip drag is running — restores the original position.</li>
+<li>If a command is running — cancels the command (or, in <code>2P</code> bearing-pick mode, only the pick).</li>
+<li>Otherwise — clears the selection, closes the Create Points panel, and cancels any pending zoom.</li>
+</ol>
+<hr>
+<h2>Related</h2>
+<p><a href="object-snaps.html">Object Snaps</a> · <a href="modify-tools.html">Modify Tools</a> · <a href="properties.html">Properties</a> · <a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="modify-tools.html">&larr; Modify Tools</a><a class="doc-pager-link next" href="object-snaps.html">Object Snaps &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

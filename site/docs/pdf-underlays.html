@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Underlays — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: PDF Underlays.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/pdf-underlays.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html" aria-current="page">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>PDF Underlays</h1>
+    <h1>PDF Underlays</h1>
+<p><strong>Ribbon:</strong> Draw → PDF Attach <strong>Command:</strong> <code>PDFATTACH</code>, <code>PA</code></p>
+<p>Attaches a PDF page as a raster underlay you can <strong>snap to</strong>. This is how you trace a recorded
+plat, a utility as-built, or a GIS export without redrawing it first.</p>
+<hr>
+<h2>Attaching a PDF</h2>
+<pre><code>PDFATTACH — select PDF file and options in the dialog, then place the underlay.
+</code></pre>
+<p>The <strong>PDF Attach</strong> dialog:</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Controls</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>PDF File</strong></td>
+<td>Path and <strong>Browse…</strong></td>
+</tr>
+<tr>
+<td><strong>Page Selection</strong></td>
+<td>Thumbnails of every page — <code>%d page(s)</code>. Click the page you want</td>
+</tr>
+<tr>
+<td><strong>Placement</strong></td>
+<td><strong>Specify on screen</strong>, or type <strong>Insertion X:</strong>, <strong>Insertion Y:</strong>, <strong>Scale:</strong>, <strong>Rotation °:</strong></td>
+</tr>
+<tr>
+<td><strong>Snap Recognition</strong></td>
+<td>Which features to detect for snapping</td>
+</tr>
+<tr>
+<td><strong>Raster DPI:</strong></td>
+<td>Rasterisation resolution, 72–300</td>
+</tr>
+</tbody></table>
+<p>Then press <strong>Attach</strong>.</p>
+<ul>
+<li><strong>Specify on screen</strong> — <code>PDFATTACH — click in viewport to set insertion point. ESC to cancel.</code>
+Click to place, then set the scale.</li>
+<li><strong>Direct insert</strong> — enter the insertion point, scale, and rotation numerically and it is placed
+without a click.</li>
+</ul>
+<p>While the page is being converted the dialog shows <code>Rasterizing... </code> and the log says
+<code>PDFATTACH — rasterizing, please wait...</code>. On success: <code>PDFATTACH — underlay placed.</code></p>
+<h3>Raster DPI</h3>
+<p>Higher DPI means sharper geometry and more snap targets, at the cost of memory and rasterisation
+time. 150 is a reasonable default for a plan sheet; go to 300 for a dense GIS export where the
+lines are thin.</p>
+<hr>
+<h2>Background handling</h2>
+<p>Both light-background PDFs (white paper) and dark-background PDFs (CAD exports) work. The
+background is detected automatically and made transparent, so the underlay floats cleanly over your
+drawing at any opacity.</p>
+<p>The <strong>Background</strong> toggle on the PDF Underlay ribbon section switches this:</p>
+<table>
+<thead>
+<tr>
+<th>State</th>
+<th>Tooltip</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Background ON</strong></td>
+<td><em>lines visible, paper transparent. Click to show paper.</em></td>
+</tr>
+<tr>
+<td><strong>Background OFF</strong></td>
+<td><em>full raster image visible. Click to hide paper.</em></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>The PDF Underlay ribbon section</h2>
+<p>Appears when a PDF attachment is selected.</p>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Background</strong></td>
+<td>Toggles paper transparency, as above</td>
+</tr>
+<tr>
+<td><strong>Vectorize</strong></td>
+<td><em>Vectorize Lines — add PDF snap-line geometry as drawing entities on the current layer</em></td>
+</tr>
+<tr>
+<td><strong>Fade</strong></td>
+<td>0–100% opacity slider</td>
+</tr>
+<tr>
+<td><strong>Snap: L / C / T</strong></td>
+<td>Per-underlay snap toggles for <strong>L</strong>ines, <strong>C</strong>ircles, <strong>T</strong>ext</td>
+</tr>
+</tbody></table>
+<h3>Vectorize</h3>
+<p><strong>Vectorize</strong> converts the snap-lines GoSurvey detected in the raster into <strong>real drawing entities</strong>
+on the current layer. It is a bulk trace: instead of drawing over every line by hand, you get
+geometry you can then trim, join, and clean up with <code>OVERKILL</code>.</p>
+<p>Set the current layer before you press it — everything lands there.</p>
+<hr>
+<h2>Snapping to a PDF</h2>
+<p>Snap targets are found by analysing the <strong>rendered raster image</strong>, not the internal PDF path
+structure. This matters: GIS exports, scanned drawings, and dense CAD PDFs routinely contain path
+objects that do not correspond to any visible line. Reading the image is what makes snap land on
+what you can actually see.</p>
+<table>
+<thead>
+<tr>
+<th>Target</th>
+<th>How it is recognised</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Endpoints</strong></td>
+<td>Line ends and stroke terminals — one foreground neighbour in the raster topology</td>
+</tr>
+<tr>
+<td><strong>Corners</strong></td>
+<td>Bends and junctions where two lines meet at an angle — two non-opposite neighbours</td>
+</tr>
+<tr>
+<td><strong>Junctions</strong></td>
+<td>T-intersections and crossings — three or more neighbours</td>
+</tr>
+<tr>
+<td><strong>Midpoints</strong></td>
+<td>On detected PDF line segments</td>
+</tr>
+<tr>
+<td><strong>Perpendicular</strong></td>
+<td>On detected PDF line segments</td>
+</tr>
+</tbody></table>
+<p>Candidates are filtered through a visibility mask so only points in areas with visible content are
+offered, and a spatial grid keeps lookup fast even on PDFs with thousands of targets.</p>
+<p>Object snap must be on (<code>F3</code>) and the underlay&#39;s own <strong>Lines / Circles / Text</strong> toggles decide
+what it offers. See <a href="object-snaps.html">Object Snaps</a>.</p>
+<hr>
+<h2>Multiple underlays</h2>
+<p>Several PDFs can be attached at once. Each has independent position, scale, rotation, opacity, and
+snap toggles.</p>
+<p>Selecting several at once gives a bulk <strong>Fade</strong> control in the Properties panel:
+<em>&quot;N PDF underlays selected.&quot;</em></p>
+<hr>
+<h2>Properties</h2>
+<p>Select an underlay and the Properties panel shows:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>File name and page number</td>
+</tr>
+<tr>
+<td>Insert X · Insert Y</td>
+</tr>
+<tr>
+<td>Scale · Rotation (deg)</td>
+</tr>
+<tr>
+<td>Fade</td>
+</tr>
+<tr>
+<td>Object Snap — Lines · Circles</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>A tracing workflow</h2>
+<p><strong>Goal:</strong> get a recorded plat into a drawing at real-world coordinates.</p>
+<ol>
+<li><code>PA</code> and attach the plat PDF at, say, 200 DPI. Place it roughly.</li>
+<li>Set <strong>Fade</strong> so you can see your own linework against it.</li>
+<li>Turn <strong>OSNAP</strong> on (<code>F3</code>) and check the underlay&#39;s <strong>Lines</strong> snap toggle.</li>
+<li>Draw the boundary with <code>LINE</code> or <code>POLYLINE</code>, snapping to the PDF corners. Or press
+<strong>Vectorize</strong> to convert the detected lines in bulk, then clean up.</li>
+<li>Run <code>OVERKILL</code> to remove duplicates and merge collinear segments.</li>
+<li>If you have control coordinates for two monuments, run <code>ALIGN</code> to move the traced geometry onto
+state plane — see <a href="coordinate-alignment.html">Coordinate Alignment</a>.</li>
+<li>Delete or fade the underlay once you are done.</li>
+</ol>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Unable to open PDF.</code></td>
+<td>The file is corrupt, encrypted, or not a PDF</td>
+<td>Re-export it, or open and re-save it from a PDF reader</td>
+</tr>
+<tr>
+<td><code>PDFATTACH — failed to rasterize page.</code></td>
+<td>The page could not be rendered</td>
+<td>Try a lower <strong>Raster DPI</strong>, or a different page</td>
+</tr>
+<tr>
+<td>Nothing to snap to</td>
+<td>The underlay&#39;s <strong>Lines</strong> toggle is off, or OSNAP is off</td>
+<td>Check both; press <code>F3</code></td>
+</tr>
+<tr>
+<td>Snap targets are sparse or blobby</td>
+<td>The raster DPI is too low for the line weight</td>
+<td>Re-attach at a higher DPI</td>
+</tr>
+<tr>
+<td>The underlay hides the drawing</td>
+<td>Fade is at 0% and Background is on</td>
+<td>Raise <strong>Fade</strong>, or turn <strong>Background</strong> off</td>
+</tr>
+<tr>
+<td>The traced geometry is the wrong size</td>
+<td>The insertion scale was a guess</td>
+<td><code>SCALE</code> with <strong>R</strong> (reference length) across a known dimension, or <code>ALIGN</code> with control pairs</td>
+</tr>
+<tr>
+<td>Vectorize produced a mess of short segments</td>
+<td>Raster tracing always does, on a busy sheet</td>
+<td><code>OVERKILL</code>, then <code>JOIN</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="object-snaps.html">Object Snaps</a> · <a href="coordinate-alignment.html">Coordinate Alignment</a> · <a href="modify-tools.html">Modify Tools</a> · <a href="import-and-export.html">Import and Export</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="plotting.html">&larr; Plotting</a><a class="doc-pager-link next" href="import-and-export.html">Import and Export &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

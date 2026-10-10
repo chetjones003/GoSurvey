@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plotting — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Plotting.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/plotting.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html" aria-current="page">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Plotting</h1>
+    <h1>Plotting</h1>
+<p>GoSurvey plots to <strong>vector PDF</strong>. There is no Windows printer output — you produce a PDF and print
+or issue that.</p>
+<hr>
+<h2>Plot scale — the two different things called &quot;scale&quot;</h2>
+<p>These are easy to confuse, so be clear which one you mean.</p>
+<table>
+<thead>
+<tr>
+<th>Scale</th>
+<th>Set by</th>
+<th>Controls</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Annotation scale</strong> — model units per plotted inch</td>
+<td>Status-bar dropdown, or <code>PLOTSCALE</code> / <code>PSCALE</code></td>
+<td>The <strong>size things are created at</strong>: new text height, survey point marker size, survey label placement</td>
+</tr>
+<tr>
+<td><strong>Viewport scale</strong> — model units per paper inch</td>
+<td>Viewports window, per viewport</td>
+<td>How much model the <strong>viewport shows</strong> on the sheet</td>
+</tr>
+</tbody></table>
+<p>For a sheet to come out right, set them to the same value. At <code>1&quot; = 50&#39;</code>, the annotation scale is
+<code>50</code> and each viewport&#39;s <strong>Scale (model/in)</strong> is <code>50</code>.</p>
+<h3>PLOTSCALE (<code>PSCALE</code>)</h3>
+<pre><code>PSCALE 50
+Plot scale: 1 plotted inch = 50.000000 model units.
+</code></pre>
+<p>A bad value answers:
+<code>PLOTSCALE — usage: PLOTSCALE &lt;model_units_per_plotted_inch&gt; (example: 50 for 1&quot;=50&#39;).</code></p>
+<p>The status-bar dropdown offers the common presets.</p>
+<p><strong>Changing the plot scale repositions every survey point label</strong>, because labels are laid out in
+plotted inches around their point. This is deliberate: the sheet keeps looking the same at any
+scale. Existing text is <strong>not</strong> resized.</p>
+<h3>Text height</h3>
+<pre><code>model height = default text height (inches on the sheet) × model units per plotted inch
+</code></pre>
+<p><strong>Default text height (in)</strong> is in the Properties panel → General, with nothing selected. At
+<code>1&quot; = 50&#39;</code> with 0.10 in, new text is 5 model units tall and plots at 0.10 in. See <a href="annotation.html">Annotation</a>.</p>
+<hr>
+<h2>Plotting one layout</h2>
+<p><strong>Ribbon (Layout):</strong> Plot</p>
+<ol>
+<li>Switch to the layout you want. Plot is only available in paper space —
+<code>PLOT — switch to a paper layout first.</code></li>
+<li>Press <strong>Plot</strong>.</li>
+<li>Choose an output path. The default filename is the layout name plus <code>.pdf</code>.</li>
+<li>The log reports <code>PLOT — wrote 1 page(s) to &lt;path&gt;</code>.</li>
+</ol>
+<p>There is <strong>no typed <code>PLOT</code> command</strong> — use the ribbon button.</p>
+<hr>
+<h2>Batch plot</h2>
+<p><strong>Ribbon (Layout):</strong> Batch</p>
+<p>Plots several layouts into <strong>one multi-page PDF</strong>.</p>
+<ol>
+<li>Press <strong>Batch</strong>. The current layout is pre-ticked.</li>
+<li><em>Select layouts to plot (one page each, in order):</em> — tick the layouts you want.</li>
+<li>Press <strong>Plot to PDF…</strong> and choose an output path (default <code>plot.pdf</code>).</li>
+</ol>
+<p>Layouts are plotted in <strong>layout order</strong>, one page each, regardless of the order you ticked them.
+Reorder them first with <strong>Move or Copy…</strong> on the layout tab if the page order matters.</p>
+<p><strong>Plot to PDF…</strong> stays disabled until at least one layout is ticked.</p>
+<hr>
+<h2>What gets plotted</h2>
+<table>
+<thead>
+<tr>
+<th>Included</th>
+<th>Excluded</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Paper-space geometry and text on the layout</td>
+<td>Layers whose <strong>Plot</strong> flag is off</td>
+</tr>
+<tr>
+<td>Model geometry visible through each viewport, at that viewport&#39;s scale and framing</td>
+<td>Viewport borders, when the viewport&#39;s layer is not plottable</td>
+</tr>
+<tr>
+<td>Layer colours, linetypes, and lineweights</td>
+<td>Layers frozen in that viewport via <strong>VP Freeze</strong></td>
+</tr>
+<tr>
+<td>TrueType and SHX text</td>
+<td></td>
+</tr>
+</tbody></table>
+<p>Per-viewport layer freezing and colour overrides are honoured — a layer frozen in one viewport does
+not appear in that viewport&#39;s page.</p>
+<hr>
+<h2>Setting a sheet up</h2>
+<ol>
+<li><strong>Create a layout</strong> — the <strong>+</strong> button on the status bar, or <strong>☰ → New paper layout</strong>.</li>
+<li><strong>Right-click the tab ▸ Page Setup Manager…</strong> — choose the <strong>Paper size</strong> and
+<strong>Drawing orientation</strong>. The dialog reports the resulting plot size in inches.</li>
+<li><strong>Right-click the tab ▸ Viewports…</strong> — <strong>+ Add viewport</strong>, then set its <strong>X</strong>, <strong>Y</strong>, <strong>W</strong>,
+<strong>H</strong> in paper inches, its <strong>Center X / Center Y</strong> in model coordinates, and its
+<strong>Scale (model/in)</strong>.</li>
+<li>Put the viewport on a <strong>non-plottable layer</strong> if you do not want its border on the sheet.</li>
+<li><strong>Draw the border and titleblock</strong> in paper space, in paper inches.</li>
+<li>Set the <strong>annotation scale</strong> on the status bar to match the viewport scale, so text and point
+labels come out at the right size.</li>
+<li>Turn <strong>VPLOCK</strong> on so later panning cannot rescale the viewport.</li>
+<li><strong>Plot</strong>.</li>
+</ol>
+<hr>
+<h2>Messages</h2>
+<table>
+<thead>
+<tr>
+<th>Message</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>PLOT — wrote N page(s) to &lt;path&gt;</code></td>
+<td>Success</td>
+</tr>
+<tr>
+<td><code>PLOT — switch to a paper layout first.</code></td>
+<td>You are in model space</td>
+</tr>
+<tr>
+<td><code>PLOT — no layouts selected.</code></td>
+<td>Batch plot with nothing ticked</td>
+</tr>
+<tr>
+<td><code>PLOT — no plottable layouts.</code></td>
+<td>Every selected layout is excluded</td>
+</tr>
+<tr>
+<td><code>PLOT — no output path.</code></td>
+<td>The save dialog was cancelled</td>
+</tr>
+<tr>
+<td><code>PLOT — could not open output file: &lt;path&gt;</code></td>
+<td>The path is not writable, or the PDF is open elsewhere</td>
+</tr>
+<tr>
+<td><code>PLOT — could not create the PDF document.</code> / <code>PLOT — failed to write the PDF.</code></td>
+<td>The PDF could not be produced</td>
+</tr>
+<tr>
+<td><code>PLOT — note: could not embed TrueType font &#39;&lt;name&gt;&#39;; substituted …</code></td>
+<td>A font could not be embedded; a substitute was used. The PDF is still valid, but check the text</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>The <strong>Plot</strong> button is not on the ribbon</td>
+<td>You are in model space</td>
+<td>Switch to a paper layout</td>
+</tr>
+<tr>
+<td>Text is far too big or too small on the sheet</td>
+<td>Annotation scale does not match the viewport scale</td>
+<td>Set both to the same value, then recreate the text</td>
+</tr>
+<tr>
+<td>Survey point labels moved after I changed the plot scale</td>
+<td>Labels are placed in plotted inches, so they reposition by design</td>
+<td>Set the plot scale before you finish the sheet</td>
+</tr>
+<tr>
+<td>The viewport border shows on the PDF</td>
+<td>Its layer is plottable</td>
+<td>Move the viewport to a non-plottable layer</td>
+</tr>
+<tr>
+<td>A layer is missing from the PDF</td>
+<td>Its <strong>Plot</strong> flag is off, or it is VP-frozen in that viewport</td>
+<td>Check the Layer Manager, <strong>Plot</strong> and <strong>VP Freeze</strong> columns</td>
+</tr>
+<tr>
+<td>Fonts look wrong in the PDF</td>
+<td>The font could not be embedded and was substituted</td>
+<td>Read the log line naming the font; use a different text style</td>
+</tr>
+<tr>
+<td>Cannot write the PDF</td>
+<td>The file is open in a PDF reader</td>
+<td>Close it and plot again</td>
+</tr>
+<tr>
+<td>Batch pages came out in the wrong order</td>
+<td>Pages follow layout order, not tick order</td>
+<td>Reorder with <strong>Move or Copy…</strong> on the layout tabs</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="paper-space-and-layouts.html">Paper Space and Layouts</a> · <a href="layers.html">Layers</a> · <a href="annotation.html">Annotation</a> · <a href="survey-points.html">Survey Points</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="paper-space-and-layouts.html">&larr; Paper Space and Layouts</a><a class="doc-pager-link next" href="pdf-underlays.html">PDF Underlays &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

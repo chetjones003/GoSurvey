@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Command Line — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Command Line.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/command-line.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html" aria-current="page">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Command Line</h1>
+    <h1>Command Line</h1>
+<p>The command line is where GoSurvey talks to you and where you talk back. Read it. Every command
+states what it wants, what it did, and why it refused.</p>
+<hr>
+<h2>The two forms</h2>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>How to get it</th>
+<th>What it looks like</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Floating bar</strong> <em>(default)</em></td>
+<td>Default</td>
+<td>A translucent bar near the bottom of the viewport, with a fading history tail</td>
+</tr>
+<tr>
+<td><strong>Classic dock</strong></td>
+<td><strong>View → Classic command dock</strong></td>
+<td>A docked panel at the bottom of the window</td>
+</tr>
+</tbody></table>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>F2</code></td>
+<td>Toggle the full-height <strong>console</strong> view (floating bar only)</td>
+</tr>
+<tr>
+<td><code>Ctrl+9</code></td>
+<td>Hide and restore the bar (floating bar only)</td>
+</tr>
+</tbody></table>
+<p><code>Esc</code> never closes the console — it is reserved for cancelling commands.</p>
+<hr>
+<h2>Parts</h2>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>What it shows</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Log</strong></td>
+<td>Everything the program has said. In the floating bar the recent tail is fully opaque and <strong>fades when idle</strong>; <code>F2</code> shows the whole thing</td>
+</tr>
+<tr>
+<td><strong>Input</strong></td>
+<td>Where you type, with a green prompt</td>
+</tr>
+<tr>
+<td><strong>Hint line</strong></td>
+<td>What is valid at the current step. <code>[TOKEN]</code> markers are <strong>clickable links</strong> that submit that option</td>
+</tr>
+</tbody></table>
+<p><strong>Right-click the log ▸ Copy log to clipboard</strong> to take a session record away with you — useful
+when reporting a problem.</p>
+<hr>
+<h2>Entering commands</h2>
+<p><strong>Press Enter to submit from anywhere.</strong> You do not have to click into the input box first. This is
+the single most useful thing to know about the command line.</p>
+<p>Command names are <strong>not case-sensitive</strong>.</p>
+<h3>Autocomplete</h3>
+<p>Typing opens a suggestion popup <strong>at the crosshair</strong>, not at the command bar, so your eyes stay on
+the drawing.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>↑</code> / <code>↓</code></td>
+<td>Move the highlight</td>
+</tr>
+<tr>
+<td><code>Enter</code></td>
+<td>Run the highlighted command</td>
+</tr>
+<tr>
+<td><code>Tab</code></td>
+<td>Complete to the highlighted entry</td>
+</tr>
+<tr>
+<td>Click a row</td>
+<td>Run it directly</td>
+</tr>
+<tr>
+<td><code>Esc</code></td>
+<td>Dismiss the popup</td>
+</tr>
+</tbody></table>
+<p>Each row shows the command <strong>name in capitals</strong>, its icon, and a one-line description.</p>
+<p>Matching is <strong>prefix-based</strong> and ranked, so the obvious answer comes first:</p>
+<table>
+<thead>
+<tr>
+<th>Rank</th>
+<th>Match</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>The query is exactly the command name</td>
+</tr>
+<tr>
+<td>2</td>
+<td>The query is exactly an alias — this is why <code>l</code> lists <strong>LINE</strong> before <strong>LAYER</strong></td>
+</tr>
+<tr>
+<td>3</td>
+<td>The command name starts with the query</td>
+</tr>
+<tr>
+<td>4</td>
+<td>An alias starts with the query</td>
+</tr>
+</tbody></table>
+<p>So <code>e</code> lists ELLIPSE and EXPORTPOINTS — not REGEN or DELETE, which merely contain an <code>e</code>.</p>
+<h3>Fuzzy matching on submit</h3>
+<p>A submitted command that is not an exact name or alias is matched <strong>fuzzily</strong>. A strong match runs
+directly. Otherwise you get suggestions:</p>
+<pre><code>Unknown command. Did you mean: LINE, ALIGN, ELLIPSE?
+</code></pre>
+<p>With nothing close:</p>
+<pre><code>Unknown command. Type HELP.
+</code></pre>
+<h3>Command history</h3>
+<ul>
+<li><strong>Recent Input</strong> on the viewport right-click menu lists the commands you have typed, newest
+first. Choosing one re-submits it.</li>
+<li>The command bar has the same history dropdown. The two cannot disagree — they are the same list.</li>
+<li><strong>Right-click in the viewport</strong> repeats the last command (unless you have configured it
+otherwise — see <a href="object-selection.html">Object Selection</a>).</li>
+</ul>
+<hr>
+<h2>Answering prompts</h2>
+<p>Once a command is running, the input takes its arguments rather than command names.</p>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>X,Y</code> or <code>X Y</code></td>
+<td>An absolute point</td>
+</tr>
+<tr>
+<td><code>@dx,dy</code></td>
+<td>A point relative to the previous one</td>
+</tr>
+<tr>
+<td>A number</td>
+<td>A distance, radius, factor, or angle — depending on what is being asked</td>
+</tr>
+<tr>
+<td>A letter or word</td>
+<td>A command option: <code>D</code>, <code>3P</code>, <code>A</code>, <code>2P</code>, <code>R</code>, <code>C</code>, <code>L</code>, <code>T</code>, <code>H</code>, <code>V</code>, <code>CLOSE</code>, <code>END</code>, <code>W</code></td>
+</tr>
+<tr>
+<td>Blank <strong>Enter</strong></td>
+<td>Accept the default, or keep the current value at a system-variable prompt</td>
+</tr>
+<tr>
+<td><code>Esc</code></td>
+<td>Cancel</td>
+</tr>
+</tbody></table>
+<p>The hint line always names the options that are valid <strong>right now</strong>, and you can click them instead
+of typing.</p>
+<p>Full coordinate and angle syntax: <a href="coordinate-input.html">Coordinate Input</a></p>
+<hr>
+<h2>One-line command forms</h2>
+<p>Most commands prompt step by step. These also take everything on one line:</p>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>TRIMSTATE 1</code></td>
+<td>Set the TRIM mode</td>
+</tr>
+<tr>
+<td><code>ELEV 125.4</code> · <code>ELEV W</code></td>
+<td>Set the work-plane elevation, or return to world</td>
+</tr>
+<tr>
+<td><code>VS SHADED</code></td>
+<td>Set the visual style</td>
+</tr>
+<tr>
+<td><code>PSCALE 50</code></td>
+<td>Set the plot scale</td>
+</tr>
+<tr>
+<td><code>IMPORTMODEL &quot;C:\m.glb&quot; 0.0833 100 200 0</code></td>
+<td>Path, scale, insertion X Y Z</td>
+</tr>
+<tr>
+<td><code>BENCH 250000 900</code></td>
+<td>Benchmark segments and frames</td>
+</tr>
+</tbody></table>
+<p>Typing the bare command instead opens the prompt or a file dialog. A path containing spaces must be
+quoted.</p>
+<hr>
+<h2>Dynamic input</h2>
+<p>While a point is expected, two live fields follow the crosshair showing world X and Y. <code>Tab</code> moves
+between them, typing locks a field, <code>Enter</code> or a click commits. Prompts expecting a bearing, angle,
+distance, or option show a single field. See <a href="coordinate-input.html">Coordinate Input</a>.</p>
+<hr>
+<h2>Reading the log</h2>
+<p>Messages follow a consistent shape:</p>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>What is wanted</strong></td>
+<td><code>LINE — specify first point (click or type X,Y / X Y). ESC to cancel.</code></td>
+</tr>
+<tr>
+<td><strong>What happened</strong></td>
+<td><code>Imported tank.glb — 184320 triangles, 12 parts, scale 0.0833.</code></td>
+</tr>
+<tr>
+<td><strong>What did not happen, and why</strong></td>
+<td><code>SURFELEV — outside surface. No elevation at that point.</code></td>
+</tr>
+<tr>
+<td><strong>What was skipped</strong></td>
+<td><code>Not imported (geometry only): materials, animations, cameras.</code></td>
+</tr>
+<tr>
+<td><strong>A refusal, with the reason</strong></td>
+<td><code>ID — finish or cancel the active command first.</code></td>
+</tr>
+</tbody></table>
+<p>The program does not fail silently. If something you expected did not happen, the reason is in the
+log — press <code>F2</code> and scroll back.</p>
+<hr>
+<h2>HELP</h2>
+<p>Typing <code>HELP</code> prints a compact command list, plus notes on LINE bearing entry, ROTATE, SCALE,
+INVERSE, TRIM, OFFSET, ZOOM, and OVERKILL. It is a reminder, not a reference — this wiki is the
+reference.</p>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Typing does nothing</td>
+<td>The command bar is hidden</td>
+<td><code>Ctrl+9</code>, or <strong>View → Command line</strong></td>
+</tr>
+<tr>
+<td><code>F3</code> / <code>F8</code> do not fire while I type</td>
+<td>They should — they are mode keys and work during typing</td>
+<td>If they still do not, check that the window has focus</td>
+</tr>
+<tr>
+<td>A command reports <code>finish or cancel the active command first</code></td>
+<td>Another command is running</td>
+<td>Press <code>Esc</code> and retry</td>
+</tr>
+<tr>
+<td>The autocomplete popup blocks a click in the drawing</td>
+<td>Clicks that land on the popup are ignored by the viewport, by design</td>
+<td><code>Esc</code> to dismiss it</td>
+</tr>
+<tr>
+<td>The log scrolled past the message I needed</td>
+<td>The floating bar shows only a tail</td>
+<td><code>F2</code> for the full console</td>
+</tr>
+<tr>
+<td>I cannot find what a command wants</td>
+<td>The hint line under the input says, at every step</td>
+<td>Read it, and click the <code>[OPTION]</code> links</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="command-reference.html">Command Reference</a> · <a href="coordinate-input.html">Coordinate Input</a> · <a href="keyboard-shortcuts.html">Keyboard Shortcuts</a> · <a href="object-selection.html">Object Selection</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="settings-and-options.html">&larr; Settings and Options</a><a class="doc-pager-link next" href="workflows.html">Workflows &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

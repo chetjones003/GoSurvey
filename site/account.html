@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account — GoSurvey</title>
+<meta name="description" content="Manage your GoSurveyCAD account.">
+<link rel="icon" href="favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/account.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+/* ---------------- account shell: sidebar + content ---------------- */
+.acct-shell{
+  display:grid;gap:0;
+  grid-template-columns:16rem minmax(0,1fr);
+  min-height:calc(100vh - 3.75rem);
+}
+@media (max-width:52rem){ .acct-shell{grid-template-columns:1fr} }
+
+.acct-sidebar{
+  border-right:1px solid var(--rule);
+  padding:2rem 1.5rem;
+  display:flex;flex-direction:column;gap:1.75rem;
+}
+@media (max-width:52rem){ .acct-sidebar{border-right:0;border-bottom:1px solid var(--rule)} }
+
+.acct-who{display:flex;flex-direction:column;align-items:center;gap:.5rem;text-align:center}
+.acct-who img{width:3.5rem;height:3.5rem;border-radius:50%;background:var(--surface-2)}
+.acct-who .n{font-weight:600}
+.acct-who .e{color:var(--ink-3);font-size:.85rem;word-break:break-all}
+
+.acct-nav{display:flex;flex-direction:column;gap:.15rem}
+.acct-nav button{
+  font:inherit;text-align:left;color:var(--ink-2);background:none;border:0;
+  padding:.6rem .75rem;border-radius:2px;cursor:pointer;font-size:.92rem;
+}
+.acct-nav button:hover{background:var(--surface-2);color:var(--ink)}
+.acct-nav button[aria-current="true"]{background:var(--steel);color:#fff}
+
+.acct-content{padding:2rem clamp(1.25rem,4vw,2.5rem);max-width:60rem}
+.acct-content h1{font-size:var(--step-2);margin-bottom:1.5rem}
+.acct-section{display:none}
+.acct-section.is-active{display:block}
+
+/* ---------------- license cards ---------------- */
+.lic-grid{display:grid;gap:1.25rem;grid-template-columns:repeat(auto-fill,minmax(16rem,1fr));margin-bottom:2.5rem}
+.lic-card{
+  border:1px solid var(--rule);border-radius:3px;background:var(--surface);
+  box-shadow:var(--shadow);padding:1.25rem;display:flex;flex-direction:column;gap:.6rem;
+}
+.lic-chip{
+  align-self:flex-start;font-family:"IBM Plex Mono",monospace;font-size:.68rem;
+  letter-spacing:.1em;text-transform:uppercase;padding:.25rem .55rem;border-radius:2px;
+  background:var(--ok);color:#fff;
+}
+:root[data-theme="dark"] .lic-chip{color:#0f1317}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .lic-chip{color:#0f1317}}
+.lic-card h3{font-size:1.1rem}
+.lic-card .sub{color:var(--ink-3);font-size:.85rem}
+.lic-card dl{margin:.4rem 0 0;display:grid;grid-template-columns:auto 1fr;gap:.3rem .75rem;font-size:.85rem}
+.lic-card dt{color:var(--ink-3)}
+.lic-card dd{margin:0;color:var(--ink)}
+
+/* ---------------- profile form ---------------- */
+.field{display:flex;flex-direction:column;gap:.35rem;margin-bottom:1.1rem;max-width:26rem}
+.field label{font-size:.82rem;color:var(--ink-3)}
+.field input{
+  font:inherit;padding:.55rem .7rem;border:1px solid var(--rule-strong);border-radius:2px;
+  background:var(--surface);color:var(--ink);
+}
+.field input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.field .hint{font-size:.78rem;color:var(--ink-3)}
+.form-status{font-size:.85rem;margin-top:.5rem;min-height:1.2em}
+.form-status.ok{color:var(--ok)}
+.form-status.err{color:var(--accent)}
+
+.card-plain{
+  border:1px solid var(--rule);border-radius:3px;background:var(--surface);
+  padding:1.25rem;margin-bottom:1.5rem;
+}
+.card-plain h2{font-size:1.05rem;margin-bottom:1rem}
+
+.signed-out-box{padding:2rem 0}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="index.html#features" class="hide-sm">Features</a>
+      <a href="index.html#downloads">Download</a>
+      <a href="docs/index.html">Docs</a>
+      <a href="about.html">About</a>
+      <a href="contact.html">Contact</a>
+      <a href="account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div id="acct-signed-out" class="wrap signed-out-box">
+    <h1 style="font-size:var(--step-2);margin-bottom:1rem">Account</h1>
+    <p style="color:var(--ink-2);margin-bottom:1.5rem">Sign in to manage your GoSurveyCAD account.</p>
+    <a class="btn btn-primary" id="btn-login" href="#">Log in / Sign up</a>
+  </div>
+
+  <div id="acct-signed-in" class="acct-shell" hidden>
+    <aside class="acct-sidebar">
+      <div class="acct-who">
+        <img id="acct-avatar" src="" alt="">
+        <span class="n" id="acct-name-sb"></span>
+        <span class="e" id="acct-email-sb"></span>
+      </div>
+      <nav class="acct-nav" id="acct-nav">
+        <button type="button" data-section="main" aria-current="true">Main information</button>
+        <button type="button" data-section="profile">Profile and security</button>
+      </nav>
+      <a class="btn btn-ghost" id="btn-logout" href="#">Log out</a>
+    </aside>
+
+    <div class="acct-content">
+      <section class="acct-section is-active" id="section-main">
+        <h1>Main information</h1>
+
+        <div class="lic-grid">
+          <div class="lic-card">
+            <span class="lic-chip">Free</span>
+            <h3>GoSurveyCAD</h3>
+            <p class="sub">Free tier — no license purchased yet.</p>
+            <dl>
+              <dt>Plan</dt><dd>Free</dd>
+              <dt>Seats</dt><dd>1</dd>
+              <dt>Status</dt><dd>Active</dd>
+            </dl>
+          </div>
+        </div>
+
+        <div class="card-plain">
+          <h2>Recent licenses</h2>
+          <p style="color:var(--ink-3);font-size:.9rem">No licenses purchased yet.</p>
+        </div>
+      </section>
+
+      <section class="acct-section" id="section-profile">
+        <h1>Profile and security</h1>
+
+        <div class="card-plain">
+          <h2>Edit profile</h2>
+          <form id="profile-form">
+            <div class="field">
+              <label for="f-name">Display name</label>
+              <input type="text" id="f-name" autocomplete="name">
+            </div>
+            <div class="field">
+              <label for="f-email">Email</label>
+              <input type="email" id="f-email" autocomplete="email">
+              <span class="hint">Changing your email requires re-verifying it.</span>
+            </div>
+            <button type="submit" class="btn btn-primary">Save changes</button>
+            <p class="form-status" id="profile-status"></p>
+          </form>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+<script src="https://cdn.auth0.com/js/auth0-spa-js/2.1/auth0-spa-js.production.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  var AUTH0_DOMAIN = "dev-hqk2tndprbftps0k.us.auth0.com";
+  var AUTH0_CLIENT_ID = "lu69EJvaSIuInMtrm3UQ61le5KY3LUm1";
+  var AUTH0_AUDIENCE = "https://gosurveycad.com/gosurveycad-api";
+  var API_BASE = "https://gosurveycad.com/api";
+
+  var btnLogin = document.getElementById("btn-login");
+  var btnLogout = document.getElementById("btn-logout");
+  var signedOut = document.getElementById("acct-signed-out");
+  var signedIn = document.getElementById("acct-signed-in");
+  var avatar = document.getElementById("acct-avatar");
+  var nameSb = document.getElementById("acct-name-sb");
+  var emailSb = document.getElementById("acct-email-sb");
+  var nav = document.getElementById("acct-nav");
+  var fName = document.getElementById("f-name");
+  var fEmail = document.getElementById("f-email");
+  var profileForm = document.getElementById("profile-form");
+  var profileStatus = document.getElementById("profile-status");
+
+  var auth0Client = null;
+
+  nav.addEventListener("click", function(e){
+    var btn = e.target.closest("button[data-section]");
+    if (!btn) return;
+    [].forEach.call(nav.querySelectorAll("button"), function(b){ b.setAttribute("aria-current", "false"); });
+    btn.setAttribute("aria-current", "true");
+    [].forEach.call(document.querySelectorAll(".acct-section"), function(s){ s.classList.remove("is-active"); });
+    document.getElementById("section-" + btn.dataset.section).classList.add("is-active");
+  });
+
+  async function authedFetch(path, opts){
+    var token = await auth0Client.getTokenSilently();
+    opts = opts || {};
+    opts.headers = Object.assign({ Authorization: "Bearer " + token }, opts.headers || {});
+    return fetch(API_BASE + path, opts);
+  }
+
+  async function loadProfile(){
+    var res = await authedFetch("/profile");
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  async function init(){
+    auth0Client = await auth0.createAuth0Client({
+      domain: AUTH0_DOMAIN,
+      clientId: AUTH0_CLIENT_ID,
+      authorizationParams: {
+        redirect_uri: window.location.origin + "/account.html",
+        audience: AUTH0_AUDIENCE,
+      },
+    });
+
+    if (location.search.includes("code=") && location.search.includes("state=")) {
+      await auth0Client.handleRedirectCallback();
+      window.history.replaceState({}, document.title, "/account.html");
+    }
+
+    var authenticated = await auth0Client.isAuthenticated();
+    if (!authenticated) return;
+
+    signedOut.hidden = true;
+    signedIn.hidden = false;
+
+    var user = await auth0Client.getUser();
+    avatar.src = user.picture || "";
+    avatar.alt = user.name || "";
+    nameSb.textContent = user.name || user.email;
+    emailSb.textContent = user.email || "";
+    fName.value = user.name || "";
+    fEmail.value = user.email || "";
+
+    var profile = await loadProfile();
+    if (profile) {
+      fName.value = profile.name || fName.value;
+      fEmail.value = profile.email || fEmail.value;
+    }
+
+    // Ensure the D1 row exists (also syncs name/email on first login).
+    authedFetch("/me").catch(function(){});
+  }
+
+  profileForm.addEventListener("submit", async function(e){
+    e.preventDefault();
+    profileStatus.className = "form-status";
+    profileStatus.textContent = "Saving…";
+    try {
+      var res = await authedFetch("/profile", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: fName.value, email: fEmail.value }),
+      });
+      var body = await res.json();
+      if (!res.ok) throw new Error(body.error || "update failed");
+      nameSb.textContent = body.name || fName.value;
+      profileStatus.className = "form-status ok";
+      profileStatus.textContent = body.email && body.email !== emailSb.textContent
+        ? "Saved. Check your new email address to verify it."
+        : "Saved.";
+      if (body.email) emailSb.textContent = body.email;
+    } catch (err) {
+      profileStatus.className = "form-status err";
+      profileStatus.textContent = "Could not save changes. Try again.";
+    }
+  });
+
+  btnLogin.addEventListener("click", function(e){
+    e.preventDefault();
+    auth0Client.loginWithRedirect();
+  });
+
+  btnLogout.addEventListener("click", function(e){
+    e.preventDefault();
+    auth0Client.logout({ logoutParams: { returnTo: window.location.origin + "/account.html" } });
+  });
+
+  init();
+})();
+</script>
+
+</body>
+</html>

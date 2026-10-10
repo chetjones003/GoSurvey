@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Point Groups and Surfaces — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Point Groups and Surfaces.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/point-groups-and-surfaces.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html" aria-current="page">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Point Groups and Surfaces</h1>
+    <h1>Point Groups and Surfaces</h1>
+<p>A <strong>point group</strong> is a named rule that selects survey points. A <strong>surface</strong> is a TIN triangulated
+from one or more point groups. Groups feed surfaces, so build them in that order.</p>
+<hr>
+<h2>Point Groups</h2>
+<p><strong>Ribbon:</strong> Survey → Groups</p>
+<p>A group stores a <strong>rule</strong>, never a member list. Membership is recomputed from the current points
+every time it is asked for — so a point imported after the group was defined joins it with no edit,
+and a deleted point leaves nothing behind.</p>
+<h3>Creating a group</h3>
+<p>Press <strong>New point group</strong>. Give it a name — names are unique within the drawing, and an empty name
+is refused (<em>&quot;Point group name cannot be empty…&quot;</em>, <em>&quot;A point group named … already exists — rename
+refused.&quot;</em>).</p>
+<h3>The rule</h3>
+<blockquote>
+<p><strong>Include points matching ANY of:</strong></p>
+</blockquote>
+<p>The criteria combine as a <strong>union (OR)</strong>. A point joins the group if it matches <strong>any</strong> filled-in
+criterion.</p>
+<table>
+<thead>
+<tr>
+<th>Criterion</th>
+<th>What it matches</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Point numbers</strong></td>
+<td>Ranges and singles, e.g. <code>1-500, 1200, 1400-1450</code>. Reversed ranges are normalised</td>
+</tr>
+<tr>
+<td><strong>Description matches</strong></td>
+<td>Wildcard against the point&#39;s <strong>description</strong></td>
+</tr>
+<tr>
+<td><strong>Raw description matches</strong></td>
+<td>Wildcard against the point&#39;s <strong>raw field code</strong></td>
+</tr>
+<tr>
+<td><strong>Group picks</strong></td>
+<td>Points picked by hand in the drawing. Always members, whatever the other criteria say</td>
+</tr>
+</tbody></table>
+<p><strong>Wildcards</strong> are case-insensitive: <code>*</code> matches any run of characters including none, <code>?</code> matches
+exactly one, everything else is literal. Case-insensitivity is deliberate — field codes are typed
+in the field, and <code>eg</code> meaning something different from <code>EG</code> would be a trap.</p>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/08-point-groups.png" alt="Point Groups" loading="lazy"></p>
+<p><em>A group keyed on <strong>Raw description matches</strong> = <code>EG</code>, so office edits to the description cannot
+break it.</em></p>
+<blockquote>
+<p><strong>An empty rule matches nothing, not every point.</strong> The dialog says so:
+<em>&quot;No criteria set — this group contains 0 points.&quot;</em> Treating &quot;no filter&quot; as &quot;match everything&quot; is
+how a whole drawing ends up in a surface by accident.</p>
+</blockquote>
+<h3>Working with a group</h3>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Add selection</strong></td>
+<td>Adds the currently selected points to the group as explicit picks — <em>&quot;Added N point(s) to …&quot;</em></td>
+</tr>
+<tr>
+<td><strong>Clear picks</strong> / <strong>Clear group picks</strong></td>
+<td>Removes the explicit picks, leaving the rule criteria</td>
+</tr>
+<tr>
+<td><strong>Delete</strong></td>
+<td>Deletes the group</td>
+</tr>
+<tr>
+<td>Live count</td>
+<td>The dialog reports <code>Matches N of M points.</code> as you type</td>
+</tr>
+</tbody></table>
+<h3>Description versus raw description</h3>
+<p>This is the reason both fields exist.</p>
+<p>A crew codes a point <code>EG</code>. The office expands the description to <code>EXISTING GROUND — SW CORNER</code>. A
+group keyed on <strong>description</strong> stops matching. A group keyed on <strong>raw description</strong> keeps matching,
+because the raw code is never rewritten by an edit to the description.</p>
+<p><strong>Key surface-building groups on raw description.</strong></p>
+<p>Points saved before raw descriptions existed have an empty raw field; those fall back to the
+description rather than being skipped.</p>
+<hr>
+<h2>Surfaces</h2>
+<p><strong>Ribbon:</strong> Survey → Surfaces</p>
+<blockquote>
+<p><em>A surface is built from point groups — create one in Survey ▸ Groups first.</em></p>
+</blockquote>
+<p>A surface is a <strong>TIN</strong> — a triangulation of the points in the groups you choose.</p>
+<h3>Creating a surface</h3>
+<ol>
+<li>Open <strong>Surfaces</strong> and press <strong>New from group…</strong></li>
+<li>Name the surface. Names are unique; an empty name is refused.</li>
+<li>Under <strong>Build from point groups:</strong>, tick the groups to include. The dialog reports the total —
+<code>N point(s) selected.</code></li>
+<li>Press <strong>Create</strong>.</li>
+</ol>
+<p><strong>At least three points are required.</strong> With fewer, the dialog says
+<code>N point(s) selected — need at least 3.</code> and Create is unavailable.</p>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/09-surfaces.png" alt="Surfaces panel" loading="lazy"></p>
+<p><em>A surface built from the <code>Existing Ground</code> group — 500 points, 982 triangles, elevation 103.52 to
+136.62 — with the TIN drawn behind it.</em></p>
+<h3>The surface list</h3>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>%d points, %d triangles.</code></td>
+<td>What the surface was built from</td>
+</tr>
+<tr>
+<td><code>Elevation %.2f to %.2f (%.2f range).</code></td>
+<td>The elevation range covered</td>
+</tr>
+<tr>
+<td><strong>Built from:</strong></td>
+<td>The groups feeding it. A group that has since been deleted shows as <code>(missing)</code></td>
+</tr>
+<tr>
+<td><code>Not built.</code></td>
+<td>The surface exists but has never been triangulated</td>
+</tr>
+</tbody></table>
+<h3>Rebuilding</h3>
+<p><strong>Rebuild</strong> re-triangulates from the <strong>current</strong> points in the listed groups.</p>
+<blockquote>
+<p><em>Rebuilds from the current points in the groups above.</em></p>
+</blockquote>
+<p>Because groups are rules, importing more points that match a group and then pressing <strong>Rebuild</strong> is
+all it takes to bring a surface up to date. Nothing needs re-selecting.</p>
+<h3>Renaming and deleting</h3>
+<p><strong>Rename surface</strong> and <strong>Delete surface</strong> are on the right of the panel. Both are confirmed in the
+command log.</p>
+<h3>Displaying a surface</h3>
+<p>A surface is drawn as its <strong>triangle edges</strong> — a wireframe mesh over the points.</p>
+<blockquote>
+<p><strong>Visual style does not shade a TIN.</strong> Setting <strong>Visual style</strong> to <code>SHADED</code> has <strong>no effect on
+surfaces</strong>: they render as triangle edges in all three styles. <code>SHADED</code> fills <em>imported meshes</em>
+(<code>IMPORTMODEL</code>) and <em>hatches</em>, not TIN surfaces. Lit surfaces are a planned feature, not a
+current one — see <a href="known-limitations.html">Known Limitations</a>.</p>
+</blockquote>
+<p>To read a surface in three dimensions, <strong>orbit it</strong>. Type <code>ORBIT</code> (<code>3DO</code>) and drag: the elevation
+differences become obvious as the mesh tilts, which is the check that catches a bad shot or a spike
+in the triangulation. <code>SURFELEV</code> gives you the numbers.</p>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/11-surface-3d.png" alt="Orbited TIN surface" loading="lazy"></p>
+<p><em>The same surface after <code>ORBIT</code>. The ViewCube (top right) shows the view is no longer plan. This is
+a wireframe of triangle edges — no visual style fills it.</em></p>
+<p>See <a href="views-and-navigation.html">Views and Navigation</a>.</p>
+<hr>
+<h2>Reading elevations off a surface — <code>SURFELEV</code> (<code>SE</code>)</h2>
+<p><strong>Ribbon:</strong> Inquiry → Elev/Grade <strong>Command:</strong> <code>SURFELEV</code>, <code>SE</code></p>
+<pre><code>SURFELEV — pick a point for its surface elevation; pick a second for grade. ESC cancels.
+SURFELEV: Pick a point for its surface elevation | ESC cancel
+SURFELEV: Second point for grade | ESC stops after the elevation
+</code></pre>
+<ul>
+<li><strong>First pick</strong> — reports the interpolated elevation on <strong>every surface covering that point</strong>.</li>
+<li><strong>Second pick</strong> — reports the grade, slope, and distances between the two.</li>
+</ul>
+<p>A pick that falls <strong>outside</strong> a surface says so rather than extrapolating a number you should not
+trust.</p>
+<p>With no surfaces in the drawing the command refuses to start:
+<code>SURFELEV — there are no surfaces in the drawing. Build one from a point group first.</code></p>
+<hr>
+<h2>A worked example</h2>
+<p><strong>Goal:</strong> a ground surface from field shots, excluding the control points.</p>
+<ol>
+<li><strong>Survey → Groups → New point group.</strong> Name it <code>EG</code>.</li>
+<li>Set <strong>Raw description matches</strong> to <code>EG*</code>. The dialog reports how many points match.</li>
+<li><strong>Survey → Surfaces → New from group…</strong> Name it <code>Existing Ground</code>.</li>
+<li>Tick the <code>EG</code> group and press <strong>Create</strong>. The panel reports the point and triangle counts and
+the elevation range.</li>
+<li>Type <code>ORBIT</code> and drag to tilt the view — a 3/4 angle exposes spikes and bad shots that a plan
+view hides.</li>
+<li>Use <code>SURFELEV</code> to spot-check elevations against known shots.</li>
+</ol>
+<p>Later, after importing a second day of shots coded <code>EG</code>:</p>
+<ol start="7">
+<li><strong>Survey → Surfaces</strong>, select <code>Existing Ground</code>, press <strong>Rebuild</strong>. The new points are already
+in the group.</li>
+</ol>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>New from group…</code> is unavailable</td>
+<td>No point groups exist</td>
+<td>Create one first in <strong>Survey → Groups</strong></td>
+</tr>
+<tr>
+<td>A group matches 0 points</td>
+<td>Every criterion is empty, or the wildcard is wrong</td>
+<td>An empty rule matches nothing by design. Try <code>*EG*</code> rather than <code>EG</code></td>
+</tr>
+<tr>
+<td>A group stopped matching after description edits</td>
+<td>The rule is keyed on <strong>description</strong></td>
+<td>Key it on <strong>Raw description matches</strong></td>
+</tr>
+<tr>
+<td>Create is greyed out</td>
+<td>Fewer than three points selected</td>
+<td>Add more points or more groups</td>
+</tr>
+<tr>
+<td>The surface is stale after an import</td>
+<td>Surfaces are not rebuilt automatically</td>
+<td>Press <strong>Rebuild</strong></td>
+</tr>
+<tr>
+<td>A group shows <code>(missing)</code> under Built from</td>
+<td>The group was deleted after the surface was built</td>
+<td>Recreate the group, or rebuild from a different one</td>
+</tr>
+<tr>
+<td><code>SURFELEV</code> refuses to start</td>
+<td>No surfaces in the drawing</td>
+<td>Build one first</td>
+</tr>
+<tr>
+<td><code>SURFELEV</code> says a pick is off the surface</td>
+<td>The point is outside the TIN</td>
+<td>It will not extrapolate. Add shots, or pick inside</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="survey-points.html">Survey Points</a> · <a href="views-and-navigation.html">Views and Navigation</a> · <a href="inquiry-commands.html">Inquiry Commands</a> · <a href="traverse-editor.html">Traverse Editor</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="survey-points.html">&larr; Survey Points</a><a class="doc-pager-link next" href="traverse-editor.html">Traverse Editor &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

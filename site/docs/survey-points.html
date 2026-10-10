@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Survey Points — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Survey Points.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/survey-points.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html" aria-current="page">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Survey Points</h1>
+    <h1>Survey Points</h1>
+<p>Survey points are <strong>not ordinary CAD geometry</strong>. They live in their own database inside the
+drawing, each with an ID, coordinates, an elevation, a description, a layer, and a label style.
+Deleting a point removes its label with it; importing a DXF keeps them.</p>
+<p><strong>World X = Easting, World Y = Northing, World Z = Elevation.</strong></p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Alias</th>
+<th>What it opens</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>CREATEPOINTS</code></td>
+<td><code>CRTPTS</code></td>
+<td>The Create points panel</td>
+</tr>
+<tr>
+<td><code>VIEWPOINTS</code></td>
+<td><code>VWPTS</code></td>
+<td>The Viewpoints table</td>
+</tr>
+<tr>
+<td><code>IMPORTPOINTS</code></td>
+<td><code>IMPPTS</code></td>
+<td>CSV import</td>
+</tr>
+<tr>
+<td><code>EXPORTPOINTS</code></td>
+<td><code>EXPPTS</code></td>
+<td>CSV export</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>What a point holds</h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>ID</strong></td>
+<td>The point number. A whole number, unique in the drawing</td>
+</tr>
+<tr>
+<td><strong>Easting</strong> · <strong>Northing</strong> · <strong>Elevation</strong></td>
+<td>World coordinates</td>
+</tr>
+<tr>
+<td><strong>Description</strong></td>
+<td>The office description. Editable</td>
+</tr>
+<tr>
+<td><strong>Raw description</strong></td>
+<td>The field code exactly as the crew collected it. <strong>Never rewritten when you edit the description</strong> — so a point group keyed on the raw code keeps matching after the office edits the description</td>
+</tr>
+<tr>
+<td><strong>Layer</strong></td>
+<td>Per point</td>
+</tr>
+<tr>
+<td><strong>Label style</strong></td>
+<td>Which fields the on-drawing label shows</td>
+</tr>
+</tbody></table>
+<p>Points are drawn as a screen-facing <strong>X</strong> marker, sized from the plot scale so it stays readable at
+any zoom and any view orientation.</p>
+<hr>
+<h2>Creating points</h2>
+<p><strong>Ribbon:</strong> Survey → Points <strong>Command:</strong> <code>CREATEPOINTS</code>, <code>CRTPTS</code></p>
+<blockquote>
+<p><em>Click in the drawing to place points. Clicks on existing markers select them.</em></p>
+</blockquote>
+<p>The panel stays open and <strong>every click in the drawing places a point</strong> — there is no separate
+toggle to arm. Clicking an existing marker selects it rather than stacking a new point on it.</p>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/07-create-points.png" alt="Create points panel" loading="lazy"></p>
+<h3>Panel fields</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Next point ID</strong></td>
+<td>The number the next point gets. Increments as you place</td>
+</tr>
+<tr>
+<td><strong>Layer</strong></td>
+<td>Layer for new points</td>
+</tr>
+<tr>
+<td><strong>Description</strong></td>
+<td>Default description for new points</td>
+</tr>
+<tr>
+<td><strong>Elevation</strong></td>
+<td>Default elevation for new points</td>
+</tr>
+<tr>
+<td><strong>If ID exists</strong></td>
+<td>The duplicate-ID policy — see below</td>
+</tr>
+<tr>
+<td><strong>File</strong> · <strong>Save</strong> / <strong>Load</strong></td>
+<td>Save or load the point database as JSON (<code>gosurvey_points.json</code>)</td>
+</tr>
+</tbody></table>
+<h3>Duplicate-ID policy</h3>
+<p>Used when a new or moved point would collide with an existing ID:</p>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Notify (skip)</strong></td>
+<td>Leave the existing point alone and report it</td>
+</tr>
+<tr>
+<td><strong>Renumber (next free)</strong></td>
+<td>Give the incoming point the next unused number</td>
+</tr>
+<tr>
+<td><strong>Merge (update coords)</strong></td>
+<td>Keep the existing point, update its coordinates</td>
+</tr>
+<tr>
+<td><strong>Overwrite</strong></td>
+<td>Replace the existing point</td>
+</tr>
+</tbody></table>
+<p>The same policy applies when copying or moving points.</p>
+<p>Press <strong>Esc</strong> to close the panel — the log says <code>Selection cleared; CREATEPOINTS closed.</code></p>
+<hr>
+<h2>Viewing and editing points — <code>VIEWPOINTS</code> (<code>VWPTS</code>)</h2>
+<p>Opens <strong>Viewpoints — survey database</strong>, a table of every point with a footer count
+(<code>N point(s)</code>).</p>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/02-viewpoints.png" alt="Viewpoints table" loading="lazy"></p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Editable</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>ID</strong></td>
+<td>Yes — must be a whole number, and unique</td>
+</tr>
+<tr>
+<td><strong>Easting</strong></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><strong>Northing</strong></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><strong>Elev</strong></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><strong>Layer</strong></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><strong>Description</strong></td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><strong>Del</strong></td>
+<td>Deletes that row</td>
+</tr>
+</tbody></table>
+<p>Coordinates are shown and edited in <strong>world</strong> values.</p>
+<p>Rejected edits are reported: <code>VIEWPOINTS — ID must be a whole number (no spaces or extra text).</code>
+and <code>VIEWPOINTS — duplicate ID …</code>.</p>
+<p><strong>Save</strong> and <strong>Load</strong> write and read the whole database as JSON, defaulting to
+<code>gosurvey_points.json</code>.</p>
+<hr>
+<h2>Point labels</h2>
+<p>Each point can carry a label linked to it. The label follows the point when it moves, and is
+removed when the point is deleted.</p>
+<h3>Label styles</h3>
+<p>Set per point in the Properties panel:</p>
+<ul>
+<li>None</li>
+<li>Point number only</li>
+<li>Point number and description</li>
+<li>Description only</li>
+<li>Point number and elevation</li>
+<li>Point number, elevation, and description</li>
+<li>Northing and easting</li>
+<li>Point number, northing, and easting</li>
+<li>Point number, northing, easting, and elevation</li>
+</ul>
+<p>Labels using <code>{north}</code> and <code>{east}</code> placeholders display <strong>world</strong> coordinates.</p>
+<h3>Label templates and placement</h3>
+<p><strong>Settings → Drafting</strong> carries the point-display settings:</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What it controls</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Show point ID in viewport</strong></td>
+<td>Whether the number is drawn next to the marker</td>
+</tr>
+<tr>
+<td><strong>Coordinate display precision (decimals)</strong></td>
+<td>Decimals for survey-point coordinates and labels, independent of the general display precision</td>
+</tr>
+<tr>
+<td><strong>Cross span (plotted inches)</strong></td>
+<td>Horizontal span of the marker X <strong>on paper</strong>. World size = span × model units per plotted inch</td>
+</tr>
+<tr>
+<td><strong>Label center east of point (plotted in)</strong></td>
+<td>Label offset, in plotted inches</td>
+</tr>
+<tr>
+<td><strong>Label center north of point (plotted in)</strong></td>
+<td>Label offset, in plotted inches</td>
+</tr>
+<tr>
+<td><strong>Leader arrow</strong> — Color, Arrow half-width (px)</td>
+<td>The leader shown when a label is dragged away from its point</td>
+</tr>
+</tbody></table>
+<p>Each label style has an <strong>editable template</strong>. Press <strong>Edit Template</strong> to open the editor, which
+offers:</p>
+<ul>
+<li><strong>Insert attribute</strong> — Number, Northing, Easting, Elevation, Description</li>
+<li><strong>Formatting</strong> — Bold on/off, Italic on/off, colour tags</li>
+<li>Tags: <code>b</code>, <code>i</code>, <code>u</code>, <code>color:RRGGBB</code>, <code>/color</code></li>
+</ul>
+<p><strong>Apply to all points</strong> / <strong>Apply all templates to survey points</strong> pushes the edited templates onto
+the existing points.</p>
+<p>Because labels are positioned in <strong>plotted inches</strong>, changing the plot scale repositions every
+label so the sheet keeps looking the same. See <a href="plotting.html">Plotting</a>.</p>
+<hr>
+<h2>Importing points from CSV — <code>IMPORTPOINTS</code> (<code>IMPPTS</code>)</h2>
+<h3>The dialog</h3>
+<ol>
+<li><strong>Browse…</strong> to the CSV file.</li>
+<li><strong>Column order</strong> — pick the layout that matches the file:</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Preset</th>
+<th>Columns</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>P,N,E,Z,D</code></td>
+<td>Point ID, northing, easting, Z, description</td>
+</tr>
+<tr>
+<td><code>P,E,N,Z,D</code></td>
+<td>Point ID, easting, northing, Z, description</td>
+</tr>
+<tr>
+<td><code>N,E,Z</code></td>
+<td>Northing, easting, Z — <strong>IDs assigned on import</strong></td>
+</tr>
+<tr>
+<td><code>E,N,Z</code></td>
+<td>Easting, northing, Z — <strong>IDs assigned on import</strong></td>
+</tr>
+</tbody></table>
+<ol start="3">
+<li><strong>First row is header (skip)</strong> — tick if the file has a header line.</li>
+<li>Check the <strong>File preview</strong> and the <strong>Validation summary</strong>. <strong>Refresh preview</strong> re-reads the file.</li>
+<li><strong>Import</strong>. If some rows are bad you are asked to confirm:
+<em>Import N valid row(s) and skip M bad row(s)?</em></li>
+</ol>
+<p>Per-row problems are reported in the command log with the line number and reason — for example
+<code>E (easting) is not a valid number</code> or <code>duplicate ID …</code>. If the list is long, the log says
+<em>(Additional problem lines omitted from this list.)</em></p>
+<h3>Precision</h3>
+<p>CSV coordinates are <strong>world</strong> (state-plane) values. GoSurvey converts them into the drawing&#39;s
+internal frame in double precision before storing, so imported points land exactly on matching DXF
+geometry rather than a fraction of a foot away.</p>
+<h3>Getting points out of Civil 3D</h3>
+<p>Civil 3D COGO points are custom objects and are <strong>not</strong> written as standard DXF entities, so they
+cannot be recovered from a plain DXF. Export them from Civil 3D as a <strong>PNEZD or PENZD CSV</strong> and
+import that; use DXF for the linework. Either order works — see <a href="import-and-export.html">Import and Export</a>.</p>
+<hr>
+<h2>Exporting points to CSV — <code>EXPORTPOINTS</code> (<code>EXPPTS</code>)</h2>
+<ol>
+<li>Choose the output path (defaults to <code>points.csv</code>).</li>
+<li><strong>Column order</strong> — the same four presets.</li>
+<li><strong>Write header row</strong> — optional.</li>
+<li><strong>Export.</strong></li>
+</ol>
+<p>Export writes <strong>world</strong> coordinates and adds a tab to the <strong>Reports</strong> panel with a summary.</p>
+<p>Failures are reported plainly: <code>EXPORTPOINTS — could not write &lt;path&gt;</code> or
+<code>EXPORTPOINTS — no file path.</code></p>
+<hr>
+<h2>Points and DXF</h2>
+<ul>
+<li><strong>Export</strong> writes each point as a native <code>POINT</code> / <code>AcDbPoint</code> at world coordinates with its own
+layer and ByLayer colour, plus <code>$PDMODE</code> / <code>$PDSIZE</code> in the header so it displays as an X. Point
+identity — ID, label style, description — travels in <code>GOSURVEY</code> XDATA, so a GoSurvey DXF
+round-trips with full survey identity while any other reader still sees a valid POINT.</li>
+<li><strong>Import</strong> rebuilds a point from that XDATA. A <code>POINT</code> <strong>without</strong> it imports as a plain snappable
+cross marker.</li>
+<li><strong>Importing a DXF keeps the survey points already in the session</strong> and replaces only the CAD
+geometry. Reconstructed points are merged with the existing ones; a colliding ID prompts you to
+<strong>overwrite</strong> or <strong>offset</strong> the imported IDs.</li>
+</ul>
+<p>Full detail: <a href="import-and-export.html">Import and Export</a></p>
+<hr>
+<h2>Points in other commands</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Behaviour with points</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Object snap</strong></td>
+<td>The <strong>Survey point</strong> snap targets marker positions</td>
+</tr>
+<tr>
+<td><code>MOVE</code> / <code>COPY</code></td>
+<td>Points move with the selection; duplicate IDs trigger the policy dialog</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td>Deletes selected points <strong>and</strong> their labels in one step</td>
+</tr>
+<tr>
+<td><code>ALIGN</code></td>
+<td>Tags source points <code> ADJ</code> and destination points <code> CON</code> — see <a href="coordinate-alignment.html">Coordinate Alignment</a></td>
+</tr>
+<tr>
+<td><code>INVERSE</code></td>
+<td>Snap to two points for distance and bearing</td>
+</tr>
+<tr>
+<td><strong>Point groups</strong></td>
+<td>Rule-based selections of points — see <a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></td>
+</tr>
+<tr>
+<td><strong>Surfaces</strong></td>
+<td>TIN surfaces are triangulated from point groups</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Import brings in nothing</td>
+<td>Column order does not match the file, or every row failed validation</td>
+<td>Check the <strong>File preview</strong>, change <strong>Column order</strong>, tick <strong>First row is header</strong></td>
+</tr>
+<tr>
+<td>Points land far from the linework</td>
+<td>The CSV and the drawing are in different coordinate systems</td>
+<td>Use <code>ALIGN</code> with control pairs</td>
+</tr>
+<tr>
+<td>Point IDs collide after import</td>
+<td>Two sources numbered from 1</td>
+<td>Choose <strong>Renumber</strong> in the duplicate policy, or <strong>offset</strong> at the DXF merge prompt</td>
+</tr>
+<tr>
+<td>Labels overlap at some zoom levels</td>
+<td>Labels are placed in plotted inches, so their spacing follows the plot scale</td>
+<td>Set the plot scale you will actually plot at, then adjust the label offsets in Settings → Drafting</td>
+</tr>
+<tr>
+<td>A point group stopped matching after editing descriptions</td>
+<td>The group is keyed on <strong>description</strong>, not raw description</td>
+<td>Key the rule on <strong>Raw description matches</strong> instead</td>
+</tr>
+<tr>
+<td>Civil 3D points did not come through the DXF</td>
+<td>They are custom objects and are not in the DXF</td>
+<td>Export a PNEZD CSV from Civil 3D</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a> · <a href="coordinate-alignment.html">Coordinate Alignment</a> · <a href="traverse-editor.html">Traverse Editor</a> · <a href="import-and-export.html">Import and Export</a> · <a href="inquiry-commands.html">Inquiry Commands</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="properties.html">&larr; Properties</a><a class="doc-pager-link next" href="point-groups-and-surfaces.html">Point Groups and Surfaces &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

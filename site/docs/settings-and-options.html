@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings and Options — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Settings and Options.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/settings-and-options.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html" aria-current="page">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Settings and Options</h1>
+    <h1>Settings and Options</h1>
+<p><strong>View → Settings…</strong>, or right-click in the viewport ▸ <strong>Options…</strong></p>
+<p>The dialog has eleven tabs. <strong>Apply</strong> writes the settings to <code>gosurvey-user.json</code> beside the
+executable and confirms <code>Settings applied (gosurvey-user.json).</code>; a failure says
+<em>Error: failed to write gosurvey-user.json (check directory permissions).</em></p>
+<p>The top of the dialog reports the <strong>Current profile</strong> (<code>&lt;&lt;GoSurvey&gt;&gt;</code>) and the <strong>Current drawing</strong>.</p>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/12-options.png" alt="Options dialog" loading="lazy"></p>
+<blockquote>
+<p><strong>Drawing units</strong> are a separate dialog — <code>UNITS</code> / <code>UN</code> / <code>DDUNITS</code>. See the end of this page.</p>
+</blockquote>
+<hr>
+<h2>Files</h2>
+<p>Search paths, file locations, and the startup template.</p>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Startup template (.gs)</strong> — Custom .gs path</td>
+<td>The <code>.gs</code> new drawings start from</td>
+</tr>
+<tr>
+<td><strong>Browse</strong></td>
+<td>File dialog (Windows only in this build)</td>
+</tr>
+<tr>
+<td><strong>Clear path (use bundled)</strong></td>
+<td>Falls back to <code>resources/default-template.gs</code> beside the executable</td>
+</tr>
+<tr>
+<td><strong>Save startup preferences</strong></td>
+<td>Writes <code>gosurvey-user.json</code></td>
+</tr>
+</tbody></table>
+<p>The tab reports where the bundled template resolved to, or says it was not found. See
+<a href="files-and-drawings.html">Files and Drawings</a>.</p>
+<hr>
+<h2>Display</h2>
+<h3>Window elements</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Color theme</strong></td>
+<td>Dark</td>
+<td>Dark or Light</td>
+</tr>
+<tr>
+<td><strong>Display scroll bars in drawing window</strong></td>
+<td></td>
+<td>Scroll bars on the viewport</td>
+</tr>
+<tr>
+<td><strong>Use large buttons for Toolbars</strong></td>
+<td></td>
+<td>Larger ribbon buttons</td>
+</tr>
+<tr>
+<td><strong>Resize ribbon icons to standard sizes</strong></td>
+<td></td>
+<td>Normalises icon sizes</td>
+</tr>
+<tr>
+<td><strong>Show ToolTips</strong></td>
+<td>On</td>
+<td>Master tooltip switch</td>
+</tr>
+<tr>
+<td><strong>Show shortcut keys in ToolTips</strong></td>
+<td></td>
+<td>Only when tooltips are on</td>
+</tr>
+<tr>
+<td><strong>Show extended ToolTips</strong></td>
+<td></td>
+<td>Only when tooltips are on</td>
+</tr>
+<tr>
+<td><strong>Show rollover ToolTips</strong></td>
+<td></td>
+<td>Hover tooltips</td>
+</tr>
+<tr>
+<td><strong>Display File Tabs</strong></td>
+<td>On</td>
+<td>The drawing tab bar</td>
+</tr>
+</tbody></table>
+<h3>Layout elements</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Display Layout and Model tabs</strong></td>
+<td>The Model/layout tabs on the status bar</td>
+</tr>
+<tr>
+<td><strong>Display printable area</strong></td>
+<td>Shows the printable margin on a sheet</td>
+</tr>
+<tr>
+<td><strong>Display paper background</strong></td>
+<td>Draws the sheet</td>
+</tr>
+<tr>
+<td><strong>Display paper shadow</strong></td>
+<td>Only when the paper background is on</td>
+</tr>
+<tr>
+<td><strong>Show Page Setup Manager for new layouts</strong></td>
+<td>Opens Page Setup automatically for a new layout</td>
+</tr>
+<tr>
+<td><strong>Create viewport in new layouts</strong></td>
+<td>Adds a viewport to each new layout</td>
+</tr>
+</tbody></table>
+<h3>Display resolution</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Arc and circle smoothness</strong></td>
+<td>Tessellation of curves</td>
+</tr>
+<tr>
+<td><strong>Segments in a polyline curve</strong></td>
+<td><em>Hint for spline-fit polylines (not currently consumed; reserved).</em></td>
+</tr>
+<tr>
+<td><strong>Rendered object smoothness</strong></td>
+<td><em>Reserved for 3D pipeline.</em></td>
+</tr>
+<tr>
+<td><strong>Contour lines per surface</strong></td>
+<td><em>Reserved for 3D pipeline.</em></td>
+</tr>
+</tbody></table>
+<h3>Display performance</h3>
+<p><strong>Pan and zoom with raster &amp; OLE</strong>, <strong>Highlight raster image frame only</strong>, <strong>Apply solid fill</strong>,
+<strong>Show text boundary frame only</strong>, <strong>Draw true silhouettes for solids and surfaces</strong>.</p>
+<blockquote>
+<p>The dialog notes: <em>(GoSurvey is 2D-only; raster/OLE/3D options are placeholders.)</em></p>
+</blockquote>
+<h3>Crosshair</h3>
+<p><strong>Crosshair size</strong>, <strong>Crosshair details</strong>, <strong>Color</strong>, <strong>Line thickness (px)</strong>.</p>
+<h3>Zoom</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Range</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Wheel zoom factor</strong></td>
+<td><code>1.01x</code> to <code>3.00x</code> per notch</td>
+</tr>
+</tbody></table>
+<p>The tab also reports the current zoom and pan values.</p>
+<h3>Fade control</h3>
+<p><strong>Xref display</strong> — <em>(Reserved: fade is a placeholder; no fade pass is applied yet.)</em></p>
+<hr>
+<h2>Open and Save</h2>
+<p><em>File-format and recovery options.</em> <strong>No GoSurvey-specific controls in this section yet.</strong></p>
+<hr>
+<h2>Plot and Publish</h2>
+<p><em>Default plot settings.</em> <strong>No GoSurvey-specific controls in this section yet.</strong> Plot settings live
+per layout in the Page Setup Manager — see <a href="plotting.html">Plotting</a>.</p>
+<hr>
+<h2>System</h2>
+<h3>Graphics</h3>
+<p>Reports the video card, driver version, and virtual device as the driver names them.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Hardware Acceleration</strong></td>
+<td><em>Disable only if you are experiencing graphics issues or have an incompatible video card</em></td>
+</tr>
+<tr>
+<td><strong>Smooth line display</strong></td>
+<td><em>Removes the jagged effect on the display of diagonal lines and curved edges in 2D wireframe</em></td>
+</tr>
+<tr>
+<td><strong>Accelerated font display</strong></td>
+<td><em>Improves the display of TrueType fonts using GPU acceleration</em></td>
+</tr>
+<tr>
+<td><strong>Video Memory Caching Level</strong></td>
+<td><em>Higher = more video memory used for graphics cache</em></td>
+</tr>
+<tr>
+<td><strong>Prefer the integrated GPU (saves battery, slower)</strong></td>
+<td>Requests the integrated GPU. The tab reports whether the request took effect</td>
+</tr>
+</tbody></table>
+<p><strong>3D Display Settings</strong> — Fast shaded mode, Advanced material effects, Full shadow display,
+Per-pixel lighting (Phong). Marked as placeholders for future surface viewing.</p>
+<h3>General options</h3>
+<p><strong>Display OLE Text Size Dialog</strong>, <strong>Beep on error in user input</strong>, <strong>Allow long symbol names</strong>,
+<strong>Automatically check for certification update</strong>, <strong>Access online content when available</strong>,
+<strong>Store Links index in drawing file</strong>, <strong>Open tables in read-only mode</strong>.</p>
+<h3>Updates</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Check for updates on startup</strong></td>
+<td>On</td>
+<td>Turn off and GoSurvey makes no network requests at all</td>
+</tr>
+<tr>
+<td><strong>Include beta releases</strong></td>
+<td>Off</td>
+<td>Receive pre-release builds</td>
+</tr>
+</tbody></table>
+<p>The version is shown, along with any version you have chosen to skip.</p>
+<hr>
+<h2>User Preferences</h2>
+<h3>Right-click customization</h3>
+<blockquote>
+<p><em>Choose what right-click does with no selection, with a selection, and during a command — and
+whether a quick click means ENTER (time-sensitive right-click).</em></p>
+</blockquote>
+<p>Press <strong>Right-click Customization…</strong> to open the dialog. Three groups, each set to
+<strong>Repeat Last Command</strong> or <strong>Shortcut Menu</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>When it applies</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Default Mode</strong></td>
+<td>No command running, nothing selected</td>
+</tr>
+<tr>
+<td><strong>Edit Mode</strong></td>
+<td>No command running, objects selected</td>
+</tr>
+<tr>
+<td><strong>Command Mode</strong></td>
+<td>A command is running</td>
+</tr>
+</tbody></table>
+<p><strong>Time-sensitive right-click:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Turn on time-sensitive right-click</strong></td>
+<td>Quick click = ENTER; longer click = Shortcut Menu</td>
+</tr>
+<tr>
+<td><strong>Longer click duration</strong></td>
+<td>Milliseconds. Default 250</td>
+</tr>
+</tbody></table>
+<p><strong>Windows standard behavior</strong> is offered alongside. See <a href="object-selection.html">Object Selection</a>.</p>
+<h3>Label templates</h3>
+<p>Survey point label templates and the <strong>Apply all templates to survey points</strong> action — see
+<a href="survey-points.html">Survey Points</a>.</p>
+<h3>Text &amp; MTEXT screen size</h3>
+<p><strong>TEXT min px</strong> / <strong>TEXT max px</strong> and <strong>MTEXT min px</strong> / <strong>MTEXT max px</strong> — the on-screen size
+bounds text is drawn within, so annotation stays legible without becoming a wall at high zoom.</p>
+<h3>Dimensions</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Extension line px</strong>, <strong>Dimension line px</strong></td>
+<td>On-screen line weights</td>
+</tr>
+<tr>
+<td><strong>Arrow size scale</strong></td>
+<td><em>Multiplies arrow length derived from dimension text height (paper × plot scale)</em></td>
+</tr>
+<tr>
+<td><strong>Value text min px</strong> / <strong>max px</strong></td>
+<td>Screen-size bounds for dimension text</td>
+</tr>
+</tbody></table>
+<h3>Undo / Redo</h3>
+<blockquote>
+<p><em>Undo history is per drawing tab and cleared when the tab is closed.</em></p>
+</blockquote>
+<p><strong>History size (steps)</strong> — the maximum steps kept per tab. Older steps are discarded when the limit
+is reached. A history log is written to <code>%APPDATA%\GoSurvey\history.log</code>.</p>
+<hr>
+<h2>Drafting</h2>
+<p>The object-snap and survey-point display settings.</p>
+<h3>Object snap</h3>
+<blockquote>
+<p><em>Cursor snaps to drawing geometry when OSNAP is on (status bar or F3).</em></p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>What it controls</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Enable object snap</strong></td>
+<td>On</td>
+<td>Same switch as <code>F3</code> and the status-bar <strong>OSNAP</strong> button</td>
+</tr>
+<tr>
+<td><strong>Aperture (screen px)</strong></td>
+<td>14.0</td>
+<td>How near the cursor must be, in screen pixels, for a snap to be offered</td>
+</tr>
+<tr>
+<td><strong>Snap indicator half-size (px)</strong></td>
+<td>15.0</td>
+<td>Size of the snap glyph drawn at the candidate point</td>
+</tr>
+</tbody></table>
+<p>Then the eight snap types:</p>
+<p>Endpoint · Midpoint · Center (circle / ellipse center) · Perpendicular (when a reference point
+applies) · Survey point · Geometric center (closed polyline) · Intersection (objects that actually
+meet) · Apparent intersection (objects that only look like they meet)</p>
+<p>The same list is on the right-click menu of the status-bar <strong>OSNAP</strong> button. See <a href="object-snaps.html">Object Snaps</a>.</p>
+<h3>Survey point display</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Show point ID in viewport</strong></td>
+<td>Draws the number beside the marker</td>
+</tr>
+<tr>
+<td><strong>Coordinate display precision (decimals)</strong></td>
+<td>For survey-point coordinates and labels, independent of the general display precision</td>
+</tr>
+<tr>
+<td><strong>Cross span (plotted inches)</strong></td>
+<td><em>Horizontal span of the X on paper: world size = span × model units per plotted inch</em></td>
+</tr>
+<tr>
+<td><strong>Label center east of point (plotted in)</strong></td>
+<td>Label offset</td>
+</tr>
+<tr>
+<td><strong>Label center north of point (plotted in)</strong></td>
+<td>Label offset</td>
+</tr>
+<tr>
+<td><strong>Leader arrow</strong> — Color, Arrow half-width (px)</td>
+<td><em>Shown when the label is dragged away from its point</em></td>
+</tr>
+</tbody></table>
+<p>Plus the per-style <strong>label templates</strong> with an <strong>Edit Template</strong> editor. See <a href="survey-points.html">Survey Points</a>.</p>
+<hr>
+<h2>3D Modeling</h2>
+<p><em>GoSurvey is 2D; 3D options are reserved.</em> <strong>No GoSurvey-specific controls in this section yet.</strong></p>
+<blockquote>
+<p>This tab label predates the 3D work. Elevations, orbit, visual styles, TIN surfaces, and model
+import all work — they are just not configured from here.</p>
+</blockquote>
+<hr>
+<h2>Selection</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Grip size (px)</strong></td>
+<td>2 to 20. <em>Grips appear as blue squares on selected entities and can be snapped to</em></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Profiles</h2>
+<p><em>Saved option profiles. Current: <code>&lt;&lt;GoSurvey&gt;&gt;</code>.</em> <strong>No GoSurvey-specific controls in this section
+yet.</strong></p>
+<hr>
+<h2>AEC Editor</h2>
+<p><em>Civil/AEC-specific editor preferences.</em> <strong>No GoSurvey-specific controls in this section yet.</strong></p>
+<hr>
+<h2>Drawing Units — <code>UNITS</code></h2>
+<p>A separate dialog: <code>UNITS</code>, <code>UN</code>, or <code>DDUNITS</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Controls</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Length</strong></td>
+<td><strong>Type:</strong> <code>Decimal</code> (fixed — <em>GoSurvey works in decimal units (survey/civil norm). Other length formats are reserved.</em>) · <strong>Precision:</strong> <code>0.0</code> to <code>0.00000000</code></td>
+</tr>
+<tr>
+<td><strong>Angle</strong></td>
+<td><strong>Type:</strong> Decimal Degrees · Deg/Min/Sec · Surveyor&#39;s Units. <strong>Precision</strong> (decimals on the smallest unit). <strong>Clockwise</strong> and <strong>Base (0°)</strong>: North · East · South · West · Custom</td>
+</tr>
+<tr>
+<td><strong>Insertion scale</strong></td>
+<td><strong>Units to scale inserted content:</strong> Feet · Meters · Unitless. <em>Relabel only — saved to the drawing (.gs) and DXF <code>$INSUNITS</code>; geometry unchanged</em></td>
+</tr>
+<tr>
+<td><strong>Sample Output</strong></td>
+<td>A live preview of a coordinate and an angle in the chosen formats</td>
+</tr>
+</tbody></table>
+<p>Saved with <code>Drawing units saved (gosurvey-user.json).</code></p>
+<p><strong>Display precision and angle format are user preferences. Plot scale and insertion units are
+stored per drawing.</strong></p>
+<p>The angle <strong>entry</strong> convention — north is 0°, clockwise — never changes. These settings control
+<strong>display</strong> only. See <a href="coordinate-input.html">Coordinate Input</a>.</p>
+<hr>
+<h2>Where settings are stored</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>gosurvey-user.json</code> — beside the executable</td>
+<td>Display precision, angle format, startup template, update settings, and the rest of the Options dialog</td>
+</tr>
+<tr>
+<td>The <code>.gs</code> drawing</td>
+<td>Plot scale, insertion units, layers, text styles, layouts</td>
+</tr>
+<tr>
+<td><code>%APPDATA%\GoSurvey\history.log</code></td>
+<td>Undo history log</td>
+</tr>
+<tr>
+<td><code>resources/layouts/*.ini</code></td>
+<td>Saved panel layouts</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="files-and-drawings.html">Files and Drawings</a> · <a href="object-snaps.html">Object Snaps</a> · <a href="survey-points.html">Survey Points</a> · <a href="coordinate-input.html">Coordinate Input</a> · <a href="known-limitations.html">Known Limitations</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="files-and-drawings.html">&larr; Files and Drawings</a><a class="doc-pager-link next" href="command-line.html">Command Line &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

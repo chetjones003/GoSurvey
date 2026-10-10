@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Known Limitations — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Known Limitations.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/known-limitations.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html" aria-current="page">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Known Limitations</h1>
+    <h1>Known Limitations</h1>
+<p>Things that are visible in the interface but do not work yet, and things a CAD user might reasonably
+expect that GoSurvey does not have. This page exists so you find out here rather than halfway
+through a deadline.</p>
+<p>Current as of <strong>version 0.5.3</strong>.</p>
+<hr>
+<h2>Controls that respond but do nothing</h2>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Where</th>
+<th>State</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>MIRROR</strong></td>
+<td>Modify ribbon</td>
+<td>Button is <strong>disabled</strong>. <em>&quot;Mirror — flip selection across a mirror line (not implemented yet)&quot;</em></td>
+</tr>
+<tr>
+<td><strong>Poly VP</strong></td>
+<td>Layout ribbon</td>
+<td>Button is <strong>disabled</strong>. <em>&quot;Polygonal viewport — coming in a later increment&quot;</em></td>
+</tr>
+<tr>
+<td><strong>POLAR</strong></td>
+<td>Status bar</td>
+<td>Toggles and lights up; <strong>polar tracking is not implemented</strong>. <em>&quot;Polar tracking (UI only for now)&quot;</em></td>
+</tr>
+<tr>
+<td><strong>Layer On / Freeze / Lock</strong></td>
+<td>Layer Manager</td>
+<td>Stored and round-tripped, <strong>not enforced</strong>. <em>&quot;On / Freeze / Lock are stored for future visibility and editing rules; all layers still draw&quot;</em></td>
+</tr>
+<tr>
+<td><strong>Ctrl+X</strong></td>
+<td>Right-click ▸ Clipboard ▸ Cut</td>
+<td>The label is shown, but the key is only wired inside the MTEXT editor. Use the menu item</td>
+</tr>
+<tr>
+<td><strong>Insert Field…</strong> (<code>Ctrl+F</code>)</td>
+<td>MTEXT editor</td>
+<td><em>&quot;Fields are not supported yet&quot;</em></td>
+</tr>
+<tr>
+<td><strong>Background Mask…</strong></td>
+<td>MTEXT editor</td>
+<td><em>&quot;Background masking is not supported yet&quot;</em></td>
+</tr>
+<tr>
+<td><strong>Paragraph…</strong>, Paragraph Alignment, Bullets and Lists, Columns, Combine Paragraphs</td>
+<td>MTEXT editor</td>
+<td><em>&quot;Paragraph and column properties are not stored yet&quot;</em></td>
+</tr>
+<tr>
+<td><strong>Visual style <code>SHADED</code></strong> on a <strong>TIN surface</strong></td>
+<td>View ribbon / <code>VS SHADED</code></td>
+<td>The value is accepted and reported, but surfaces are drawn as <strong>triangle edges in all three styles</strong> — verified by capturing a TIN at <code>2D</code>, <code>HIDDEN</code>, and <code>SHADED</code> and finding the three frames pixel-identical. <code>SHADED</code> fills only <strong>imported meshes</strong> (<code>IMPORTMODEL</code>) and <strong>hatches</strong>. Lit surfaces are a planned feature</td>
+</tr>
+<tr>
+<td><strong>Xref display</strong> fade</td>
+<td>Settings → Display</td>
+<td><em>&quot;Reserved: fade is a placeholder; no fade pass is applied yet&quot;</em></td>
+</tr>
+<tr>
+<td><strong>Segments in a polyline curve</strong></td>
+<td>Settings → Display</td>
+<td><em>&quot;Hint for spline-fit polylines (not currently consumed; reserved)&quot;</em></td>
+</tr>
+<tr>
+<td><strong>Rendered object smoothness</strong>, <strong>Contour lines per surface</strong></td>
+<td>Settings → Display</td>
+<td><em>&quot;Reserved for 3D pipeline&quot;</em></td>
+</tr>
+<tr>
+<td>Raster/OLE and 3D display performance options</td>
+<td>Settings → Display</td>
+<td>Marked as placeholders</td>
+</tr>
+<tr>
+<td><strong>Import…</strong> page setups</td>
+<td>Page Setup Manager</td>
+<td><em>&quot;Import page setups from another drawing — coming in a later update&quot;</em></td>
+</tr>
+<tr>
+<td>Plotter selection and PDF options</td>
+<td>Page Setup Manager</td>
+<td><em>&quot;Plotter selection / PDF options arrive with PDF plotting (a later update)&quot;</em></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Settings tabs with no controls</h2>
+<p>These tabs exist for structure and are empty — <em>&quot;(No GoSurvey-specific controls in this section
+yet.)&quot;</em></p>
+<ul>
+<li><strong>Open and Save</strong> — file-format and recovery options</li>
+<li><strong>Plot and Publish</strong> — plot settings live per layout instead</li>
+<li><strong>3D Modeling</strong> — labelled <em>&quot;GoSurvey is 2D; 3D options are reserved.&quot;</em> The label predates the
+3D work; elevations, orbit, visual styles, TIN surfaces, and model import all work, they are just
+not configured here</li>
+<li><strong>Profiles</strong> — saved option profiles</li>
+<li><strong>AEC Editor</strong></li>
+</ul>
+<hr>
+<h2>Commands that do not exist</h2>
+<h3>Drawing</h3>
+<p><code>SPLINE</code> · <code>POINT</code> (as a drawing command — use <code>CREATEPOINTS</code>) · <code>XLINE</code> · <code>RAY</code> · <code>DONUT</code> ·
+<code>SOLID</code> · <code>REVCLOUD</code> · <code>WIPEOUT</code> · <code>TABLE</code> · <code>MLINE</code></p>
+<h3>Modifying</h3>
+<p><code>MIRROR</code> · <code>STRETCH</code> · <code>EXTEND</code> · <code>BREAK</code> · <code>FILLET</code> · <code>CHAMFER</code> · <code>ARRAY</code> · <code>EXPLODE</code> · <code>LENGTHEN</code> ·
+<code>ALIGN</code> exists but is the <strong>coordinate-transformation</strong> command, not AutoCAD&#39;s align</p>
+<h3>Blocks</h3>
+<p><code>BLOCK</code> · <code>INSERT</code> · <code>WBLOCK</code> · <code>ATTDEF</code> · block attributes · dynamic blocks · block libraries.
+<strong>There is no block support at all.</strong> DWG export writes geometry exploded for this reason.</p>
+<h3>Inquiry</h3>
+<p><code>AREA</code> · <code>DIST</code> · <code>LIST</code> · <code>MASSPROP</code>. The only area reported is a circle&#39;s, in the Properties panel.</p>
+<h3>View</h3>
+<p><code>ZOOM PREVIOUS</code> · named views · <code>VIEW</code> · <code>DVIEW</code> · multiple model-space viewports · isometric view
+presets</p>
+<h3>Other</h3>
+<p><code>XREF</code> / external references · <code>LAYOUT</code> command (layouts are managed from the status bar) ·
+<code>PURGE</code> · <code>AUDIT</code> · <code>RECOVER</code> · <code>SCRIPT</code> · <code>LISP</code> or any scripting</p>
+<hr>
+<h2>Features that are missing</h2>
+<table>
+<thead>
+<tr>
+<th>Missing</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Autosave, backup files, drawing recovery</strong></td>
+<td>Save deliberately with <code>Ctrl+S</code></td>
+</tr>
+<tr>
+<td><strong>Recent files list</strong></td>
+<td>Use File → Open</td>
+</tr>
+<tr>
+<td><strong>Customisable keyboard shortcuts or aliases</strong></td>
+<td>Fixed in the program. Right-click behaviour <em>is</em> configurable</td>
+</tr>
+<tr>
+<td><strong>Command macros or scripting</strong></td>
+<td>None</td>
+</tr>
+<tr>
+<td><strong>Printing to a Windows printer</strong></td>
+<td>Output is vector PDF only</td>
+</tr>
+<tr>
+<td><strong>Snap-to-grid</strong></td>
+<td>The grid is a visual reference only</td>
+</tr>
+<tr>
+<td><strong>Object snap tracking, temporary tracking points</strong></td>
+<td>Not present</td>
+</tr>
+<tr>
+<td><strong>Polar coordinate entry</strong> (<code>@100&lt;45</code>)</td>
+<td>Use bearing lock: <code>A 45</code> then the distance</td>
+</tr>
+<tr>
+<td><strong>Parametric constraints</strong></td>
+<td>Not present</td>
+</tr>
+<tr>
+<td><strong>Annotative scaling of existing text</strong></td>
+<td>Changing the plot scale does not resize existing text; it does reposition survey point labels</td>
+</tr>
+<tr>
+<td><strong>Coordinate system / projection library</strong></td>
+<td>Coordinates are unprojected numbers. Use <code>ALIGN</code> to fit to control</td>
+</tr>
+<tr>
+<td><strong>Unit conversion</strong></td>
+<td>The <code>UNITS</code> insertion setting is a <strong>relabel only</strong> — coordinates are never scaled</td>
+</tr>
+<tr>
+<td><strong>Native DWG reading</strong></td>
+<td>Planned; today DWG needs an external converter</td>
+</tr>
+<tr>
+<td><strong>Associative dimensions in DXF</strong></td>
+<td>Aligned dimensions export as exploded lines plus text</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Import and export gaps</h2>
+<table>
+<thead>
+<tr>
+<th>Gap</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Binary DXF</strong></td>
+<td>Not supported. <em>&quot;in AutoCAD use Save As → ASCII DXF&quot;</em></td>
+</tr>
+<tr>
+<td><strong>DXF paper space</strong></td>
+<td>Paper-space entities and title blocks are <strong>not imported</strong>. The log reports the count</td>
+</tr>
+<tr>
+<td><strong>Unsupported DXF entities</strong></td>
+<td>Reported as <code>N unsupported ENTITIES record(s)</code>, never silently dropped</td>
+</tr>
+<tr>
+<td><strong>DXF export coverage</strong></td>
+<td>Some entity types have no export branch yet and are absent from the file. The log names what was excluded</td>
+</tr>
+<tr>
+<td><strong>DWG export losses</strong></td>
+<td>Block definitions and inserts (written exploded), paper-space layouts beyond the first, elevations, block attributes, multileaders, tables, Civil 3D objects and proxies. The dialog lists these before writing</td>
+</tr>
+<tr>
+<td><strong>Civil 3D COGO points</strong></td>
+<td>Custom objects — <strong>not in a DXF at all</strong>. Use a PNEZD/PENZD CSV</td>
+</tr>
+<tr>
+<td><strong>Plant 3D drawings</strong></td>
+<td>Largely <code>AcPp*</code> custom objects requiring Autodesk&#39;s object enabler; unreachable by any third-party reader</td>
+</tr>
+<tr>
+<td><strong>Model import</strong></td>
+<td><code>IMPORTMODEL</code> brings in <strong>geometry only</strong>. Materials, animations, and cameras are named in the log as not imported</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Behaviour worth knowing</h2>
+<p>Not defects, but they surprise people:</p>
+<table>
+<thead>
+<tr>
+<th>Behaviour</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Open always uses a new tab</strong></td>
+<td>It never replaces what you are working on</td>
+</tr>
+<tr>
+<td><strong>DXF import keeps existing survey points</strong></td>
+<td>Only CAD geometry is replaced, so CSV-then-DXF and DXF-then-CSV both work</td>
+</tr>
+<tr>
+<td><strong>FBK import replaces the whole traverse</strong></td>
+<td>Commit or export first</td>
+</tr>
+<tr>
+<td><strong>An empty point-group rule matches nothing</strong></td>
+<td>Treating &quot;no filter&quot; as &quot;everything&quot; is how a whole drawing ends up in a surface by accident</td>
+</tr>
+<tr>
+<td><strong>Changing the plot scale moves every point label</strong></td>
+<td>Labels are laid out in plotted inches, so the sheet keeps looking the same at any scale</td>
+</tr>
+<tr>
+<td><strong>Surfaces are not rebuilt automatically</strong></td>
+<td>Press <strong>Rebuild</strong> after importing points</td>
+</tr>
+<tr>
+<td><strong>Previews follow the cursor; picks commit at the snapped point</strong></td>
+<td>Watch the snap glyph, not the rubber band</td>
+</tr>
+<tr>
+<td><strong>DELETE and ZOOMWINDOW ignore snaps</strong></td>
+<td>A nearby snap point would drag a window corner off target</td>
+</tr>
+<tr>
+<td><strong><code>PLOT</code> has no typed command</strong></td>
+<td>Use the Layout ribbon button</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Reporting</h2>
+<p>Something here out of date, or something missing that should be listed?
+<a href="https://github.com/chetjones003/GoSurvey/issues">Open an issue</a>.</p>
+<hr>
+<h2>Related</h2>
+<p><a href="troubleshooting.html">Troubleshooting</a> · <a href="faq.html">FAQ</a> · <a href="command-reference.html">Command Reference</a> · <a href="import-and-export.html">Import and Export</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="faq.html">&larr; FAQ</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

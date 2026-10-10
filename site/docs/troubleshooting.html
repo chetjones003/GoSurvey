@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Troubleshooting.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/troubleshooting.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html" aria-current="page">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Troubleshooting</h1>
+    <h1>Troubleshooting</h1>
+<p><strong>Read the command log first.</strong> GoSurvey states what it wants, what it did, and why it refused.
+Press <code>F2</code> for the full console and scroll back — most of the answers below are already in there.</p>
+<hr>
+<h2>Installation and startup</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><em>&quot;Windows protected your PC&quot;</em> on the installer</td>
+<td>The installer is not code-signed yet</td>
+<td><strong>More info → Run anyway</strong>, if you trust the release</td>
+</tr>
+<tr>
+<td>The program will not start — missing DLL</td>
+<td>The Visual C++ runtime is not installed</td>
+<td>Install the <a href="https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist">Visual C++ Redistributable for x64</a></td>
+</tr>
+<tr>
+<td>Startup hangs on <em>&quot;Checking for updates&quot;</em></td>
+<td>Slow or blocked network</td>
+<td>Press <strong>Continue without checking</strong>. Turn the check off in <strong>Settings → System</strong></td>
+</tr>
+<tr>
+<td>Graphics glitches, or the window is black</td>
+<td>Driver or GPU incompatibility</td>
+<td><strong>Settings → System</strong> — turn off <strong>Hardware Acceleration</strong>, or tick <strong>Prefer the integrated GPU</strong></td>
+</tr>
+<tr>
+<td>The bundled template was not found</td>
+<td><code>resources/</code> is missing beside the executable</td>
+<td>Reinstall. Resources resolve relative to the executable</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Files</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Opening a drawing did not replace the current one</td>
+<td><strong>Open</strong> always uses a new tab, by design</td>
+<td>Close the tab you no longer want</td>
+</tr>
+<tr>
+<td>Work was lost after a crash</td>
+<td>There is <strong>no autosave and no recovery</strong></td>
+<td><code>Ctrl+S</code> often</td>
+</tr>
+<tr>
+<td>A <code>.gs</code> will not open</td>
+<td>Truncated or hand-edited into invalid JSON</td>
+<td>The log names the parse error. A <code>.gs</code> is plain JSON — a text editor will show you where</td>
+</tr>
+<tr>
+<td>Preferences do not persist</td>
+<td><code>gosurvey-user.json</code> could not be written</td>
+<td><em>&quot;Error: failed to write gosurvey-user.json (check directory permissions)&quot;</em> — the folder beside the executable must be writable</td>
+</tr>
+<tr>
+<td>New drawings do not have my layers</td>
+<td>No startup template</td>
+<td><strong>Settings → Files → Startup template (.gs)</strong></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Drawing</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Typing a number does nothing useful</td>
+<td>No bearing lock, Ortho off — the command has no direction</td>
+<td>Lock a bearing with <code>A</code>, or press <code>F8</code></td>
+</tr>
+<tr>
+<td>A line went the wrong way</td>
+<td>Bearings are <strong>clockwise from north</strong>, not counter-clockwise from east</td>
+<td><code>90</code> is east, <code>180</code> south, <code>270</code> west</td>
+</tr>
+<tr>
+<td><code>@100&lt;45</code> does nothing</td>
+<td><strong>Polar coordinate entry is not supported</strong></td>
+<td>Use <code>A 45</code> then <code>100</code></td>
+</tr>
+<tr>
+<td><code>@100,50</code> is refused</td>
+<td>The prompt has no previous point</td>
+<td>Use absolute <code>X,Y</code> at a first point</td>
+</tr>
+<tr>
+<td>A hatch will not fill</td>
+<td>The boundary is not actually closed</td>
+<td>Zoom to the corners; <code>JOIN</code> the chain, or redraw with <code>POLYLINE</code> / <code>RECT</code></td>
+</tr>
+<tr>
+<td>A hatch pattern looks solid or invisible</td>
+<td>The pattern scale is far off for this drawing</td>
+<td>Adjust <strong>Scale</strong> in the Hatch ribbon section</td>
+</tr>
+<tr>
+<td>Segments will not join into one object</td>
+<td>LINE makes separate segments by design</td>
+<td>Use <code>POLYLINE</code>, or <code>JOIN</code> afterwards</td>
+</tr>
+<tr>
+<td>New geometry will not snap to old geometry</td>
+<td>The work plane is raised</td>
+<td>Check the status bar. <code>UCS: Elev …</code> means new geometry is not at Z 0. <code>ELEV W</code> to return to world</td>
+</tr>
+<tr>
+<td>MIRROR does nothing</td>
+<td>It is on the ribbon but <strong>not implemented</strong></td>
+<td>See <a href="known-limitations.html">Known Limitations</a></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Selection</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>The wrong object gets picked</td>
+<td>Several overlap under the cursor</td>
+<td>Use the <strong>SEL</strong> panel to toggle candidates</td>
+</tr>
+<tr>
+<td>A modify command asks for a window when I already selected</td>
+<td>Nothing was actually selected</td>
+<td>Selecting first skips the window step; check the highlight</td>
+</tr>
+<tr>
+<td>Quick Select returns nothing</td>
+<td>The value does not match exactly</td>
+<td>Use the dropdown values where offered; check the operator</td>
+</tr>
+<tr>
+<td>DELETE does nothing in paper space</td>
+<td>Paper-space DELETE needs a selection first</td>
+<td><code>DELETE — select paper object(s) or viewport(s) first.</code></td>
+</tr>
+<tr>
+<td>Objects disappeared</td>
+<td>Isolation is active</td>
+<td><code>UNISOLATEOBJECTS</code>, or right-click ▸ Isolate Objects ▸ End Object Isolation</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Snapping</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Nothing snaps</td>
+<td>OSNAP is off</td>
+<td><code>F3</code>, or the status-bar <strong>OSNAP</strong> button</td>
+</tr>
+<tr>
+<td>It never snaps to the feature I want</td>
+<td>That snap type is unticked</td>
+<td>Right-click <strong>OSNAP</strong> and tick it</td>
+</tr>
+<tr>
+<td>It keeps grabbing the wrong feature</td>
+<td>Two candidates are close, and the wrong one ranks higher</td>
+<td><strong>Shift + right-click</strong> for a one-shot override</td>
+</tr>
+<tr>
+<td>Perpendicular offers nothing</td>
+<td>No reference point in the running command</td>
+<td>Perpendicular needs a previous point to be perpendicular <em>from</em></td>
+</tr>
+<tr>
+<td>Lines that cross in plan give no intersection</td>
+<td>Different elevations — an <em>apparent</em> intersection, not a real one</td>
+<td>Enable <strong>Apparent intersection</strong>, or orbit to check</td>
+</tr>
+<tr>
+<td>The commit landed away from the preview</td>
+<td>Previews follow the cursor; picks commit at the <strong>snapped</strong> point</td>
+<td>Watch the snap glyph before you click</td>
+</tr>
+<tr>
+<td>PDF snap finds nothing</td>
+<td>The underlay&#39;s <strong>Lines</strong> toggle is off, or the raster DPI is too low</td>
+<td>Check the toggle; re-attach at a higher DPI</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Coordinates</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Typed coordinates land in the wrong place</td>
+<td>Typed values are always <strong>world</strong> coordinates</td>
+<td>Check the status-bar readout</td>
+</tr>
+<tr>
+<td>Imported geometry is miles from the points</td>
+<td>Different coordinate systems</td>
+<td><code>ALIGN</code> with control pairs</td>
+</tr>
+<tr>
+<td>The readout shows too few decimals</td>
+<td>Display precision</td>
+<td><code>UNITS</code> → <strong>Length → Precision</strong></td>
+</tr>
+<tr>
+<td>Bearings display in a format I do not use</td>
+<td>Display format</td>
+<td><code>UNITS</code> → <strong>Angle → Type</strong></td>
+</tr>
+<tr>
+<td>Points imported into a different county</td>
+<td>Northing and easting are swapped</td>
+<td>Re-import with the other column-order preset</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Survey calculations</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Traverse closure shows nothing</td>
+<td>Not marked as a closed loop</td>
+<td>Tick <strong>Closed Loop</strong> and recompute</td>
+</tr>
+<tr>
+<td>A summary field will not accept typing</td>
+<td>Summary rows are view-only</td>
+<td>Expand the leg and edit the observation set</td>
+</tr>
+<tr>
+<td>Vertical angles reduce wrongly</td>
+<td>The <strong>Zenith°</strong> checkbox does not match the instrument</td>
+<td>Checked = zenith (90° level); unchecked = elevation angle (0° level)</td>
+</tr>
+<tr>
+<td>A slope distance is ignored</td>
+<td>No vertical angle to reduce it with</td>
+<td>Enter the vertical angle</td>
+</tr>
+<tr>
+<td><code>Least squares unavailable</code></td>
+<td>Not enough redundancy, or degenerate geometry</td>
+<td>Add observations; check for a duplicated station</td>
+</tr>
+<tr>
+<td>Std dev of unit weight is far from 1</td>
+<td>The a-priori standard errors do not describe the observations</td>
+<td>Adjust <strong>Angle σ</strong>, <strong>Dist σ</strong>, <strong>Dist ppm</strong></td>
+</tr>
+<tr>
+<td>One residual is far larger than the rest</td>
+<td>A blunder in that observation</td>
+<td>Go back and check it — do not adjust it away</td>
+</tr>
+<tr>
+<td>ALIGN left the drawing slightly the wrong size</td>
+<td>Scale was applied when it should not have been</td>
+<td>Undo; re-apply with <strong>Apply Scale</strong> unticked</td>
+</tr>
+<tr>
+<td>A surface is stale after an import</td>
+<td>Surfaces are not rebuilt automatically</td>
+<td><strong>Survey → Surfaces → Rebuild</strong></td>
+</tr>
+<tr>
+<td><code>SURFELEV</code> says a pick is off the surface</td>
+<td>It is outside the TIN, and the program will not extrapolate</td>
+<td>Add shots, or pick inside</td>
+</tr>
+<tr>
+<td>A point group stopped matching</td>
+<td>The rule keys on <strong>description</strong>, which was edited</td>
+<td>Key it on <strong>Raw description matches</strong></td>
+</tr>
+<tr>
+<td>A point group matches 0 points</td>
+<td>An empty rule matches nothing, by design</td>
+<td>Fill in at least one criterion; try <code>*EG*</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Import</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>DXF import brings in nothing</td>
+<td>Binary DXF</td>
+<td><em>&quot;Binary DXF is not supported — in AutoCAD use Save As → ASCII DXF.&quot;</em></td>
+</tr>
+<tr>
+<td>DXF import brings in nothing, and the log mentions group 67</td>
+<td>The geometry is all in paper space, which is not imported</td>
+<td>Move it to model space in the source program</td>
+</tr>
+<tr>
+<td>CSV import brings in nothing</td>
+<td>The column order does not match</td>
+<td>Check the <strong>File preview</strong> and change <strong>Column order</strong></td>
+</tr>
+<tr>
+<td>Civil 3D points did not import</td>
+<td>They are custom objects, absent from the DXF</td>
+<td>Export a PNEZD CSV from Civil 3D</td>
+</tr>
+<tr>
+<td>Point IDs collided</td>
+<td>Two sources numbered from 1</td>
+<td>Choose <strong>Renumber</strong> in the duplicate policy, or <strong>offset</strong> at the DXF merge prompt</td>
+</tr>
+<tr>
+<td>DWG menu items are greyed out</td>
+<td>No converter installed</td>
+<td>Install the free ODA File Converter, or set <code>GOSURVEY_DWG_CONVERTER</code></td>
+</tr>
+<tr>
+<td>DWG conversion timed out</td>
+<td>A large file, or the converter could not start</td>
+<td>Check the path; try converting to DXF outside GoSurvey</td>
+</tr>
+<tr>
+<td><code>IMPORTMODEL</code> refuses the scale</td>
+<td>Zero or non-finite</td>
+<td>Give a non-zero finite number</td>
+</tr>
+<tr>
+<td>Part of an imported model is missing</td>
+<td>Only geometry is imported</td>
+<td>The log names what was skipped — <em>&quot;Not imported (geometry only): …&quot;</em></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Export</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Some entities are missing from the DXF</td>
+<td>Those types have no export branch yet</td>
+<td>Read the <code>DXF export — excluded …</code> log line; see <a href="known-limitations.html">Known Limitations</a></td>
+</tr>
+<tr>
+<td>Dimensions are not live in AutoCAD</td>
+<td>Aligned dimensions export as <strong>exploded lines plus text</strong></td>
+<td>Expected. Recreate them in the receiving program if they must be associative</td>
+</tr>
+<tr>
+<td>DWG export lost blocks and layouts</td>
+<td>Documented; the dialog warns before writing</td>
+<td>Use DXF where possible</td>
+</tr>
+<tr>
+<td><code>DXF export — could not open file for writing</code></td>
+<td>The path is not writable, or the file is open elsewhere</td>
+<td>Close it and retry</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Display</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>The drawing looks stale</td>
+<td>GPU cache</td>
+<td><code>REGEN</code> / <code>RE</code></td>
+</tr>
+<tr>
+<td>Zoom extents shows a huge empty area</td>
+<td>An entity at a wild coordinate</td>
+<td>The DXF import log prints both the full and the outlier-excluded bounding box — find and delete it</td>
+</tr>
+<tr>
+<td>A surface is a mess of triangle edges</td>
+<td>Surfaces are drawn as triangle edges in every visual style; <code>SHADED</code> does not fill them</td>
+<td>Expected. <code>ORBIT</code> to read the shape, <code>SURFELEV</code> for numbers</td>
+</tr>
+<tr>
+<td>Diagonal lines look jagged</td>
+<td>Line smoothing is off</td>
+<td><strong>Settings → System → Smooth line display</strong></td>
+</tr>
+<tr>
+<td>Panels are in the wrong place</td>
+<td>Layout drift</td>
+<td><strong>View → Reset layout</strong></td>
+</tr>
+<tr>
+<td>The command bar is gone</td>
+<td>Hidden</td>
+<td><code>Ctrl+9</code>, or <strong>View → Command line</strong></td>
+</tr>
+<tr>
+<td>Turning a layer <strong>On</strong> off changes nothing</td>
+<td>On/Freeze/Lock are stored but <strong>not enforced yet</strong></td>
+<td>Use <code>HIDEOBJECTS</code> / <code>ISOLATEOBJECTS</code>, or <strong>VP Freeze</strong> in a layout</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Performance</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>The display is slow on a large drawing</td>
+<td>Dense geometry or a big surface</td>
+<td>Isolate what you are working on; lower <strong>Arc and circle smoothness</strong></td>
+</tr>
+<tr>
+<td>A large model import takes minutes</td>
+<td>Expected, especially through the DWG converter</td>
+<td>The log warns before it starts</td>
+</tr>
+<tr>
+<td>The program feels slow on a laptop</td>
+<td>The integrated GPU is in use</td>
+<td><strong>Settings → System</strong> — untick <strong>Prefer the integrated GPU</strong></td>
+</tr>
+<tr>
+<td>Measuring frame performance</td>
+<td>—</td>
+<td><code>BENCH</code>, <code>BENCH SURFACE</code>, <code>BENCH MESH</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Commands</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>&lt;command&gt; — finish or cancel the active command first</code></td>
+<td>Another command is running</td>
+<td><code>Esc</code>, then retry</td>
+</tr>
+<tr>
+<td><code>Unknown command. Did you mean: …?</code></td>
+<td>Typo, or the command does not exist</td>
+<td>Pick a suggestion, or check <a href="command-reference.html">Command Reference</a></td>
+</tr>
+<tr>
+<td>A command runs but nothing happens</td>
+<td>Its precondition failed</td>
+<td>The log says which — read it</td>
+</tr>
+<tr>
+<td>I cannot find the PLOT command</td>
+<td><strong>There is no typed PLOT command</strong></td>
+<td>Use the Layout ribbon button in paper space</td>
+</tr>
+<tr>
+<td>The autocomplete popup blocks a click</td>
+<td>Clicks on the popup are ignored by the viewport, by design</td>
+<td><code>Esc</code> to dismiss it</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Plotting</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>The <strong>Plot</strong> button is not on the ribbon</td>
+<td>You are in model space</td>
+<td>Switch to a paper layout</td>
+</tr>
+<tr>
+<td>Text is far too big or small on the sheet</td>
+<td>Annotation scale does not match the viewport scale</td>
+<td>Set both to the same value, then recreate the text</td>
+</tr>
+<tr>
+<td>Point labels moved after a scale change</td>
+<td>Labels are placed in plotted inches, so they reposition by design</td>
+<td>Set the plot scale before finishing the sheet</td>
+</tr>
+<tr>
+<td>The viewport border prints</td>
+<td>Its layer is plottable</td>
+<td>Move the viewport to a non-plottable layer</td>
+</tr>
+<tr>
+<td>A layer is missing from the PDF</td>
+<td>Its <strong>Plot</strong> flag is off, or it is VP-frozen</td>
+<td>Check the Layer Manager</td>
+</tr>
+<tr>
+<td>Fonts look wrong in the PDF</td>
+<td>A font could not be embedded</td>
+<td>The log names it — <em>&quot;could not embed TrueType font &#39;…&#39;; substituted …&quot;</em>. Use a different text style</td>
+</tr>
+<tr>
+<td>Cannot write the PDF</td>
+<td>It is open in a reader</td>
+<td>Close it and plot again</td>
+</tr>
+<tr>
+<td>Batch pages are in the wrong order</td>
+<td>Pages follow <strong>layout order</strong>, not tick order</td>
+<td>Reorder with <strong>Move or Copy…</strong></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Still stuck</h2>
+<ol>
+<li>Press <code>F2</code> and read the log from the point where things went wrong.</li>
+<li><strong>Right-click the log ▸ Copy log to clipboard.</strong></li>
+<li><a href="https://github.com/chetjones003/GoSurvey/issues">Open an issue</a> with the log, the version from
+<strong>Settings → System</strong>, and what you were doing.</li>
+</ol>
+<hr>
+<h2>Related</h2>
+<p><a href="faq.html">FAQ</a> · <a href="known-limitations.html">Known Limitations</a> · <a href="command-line.html">Command Line</a> · <a href="workflows.html">Workflows</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="workflows.html">&larr; Workflows</a><a class="doc-pager-link next" href="faq.html">FAQ &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

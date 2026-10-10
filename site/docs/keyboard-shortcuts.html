@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keyboard Shortcuts — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Keyboard Shortcuts.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/keyboard-shortcuts.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html" aria-current="page">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Keyboard Shortcuts</h1>
+    <h1>Keyboard Shortcuts</h1>
+<p>Every key GoSurvey listens for.</p>
+<hr>
+<h2>Global</h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Enter</code></td>
+<td>Submit the command input</td>
+<td><strong>Works from anywhere</strong> — no need to click the command line first</td>
+</tr>
+<tr>
+<td><code>Esc</code></td>
+<td>Cancel</td>
+<td>Walks back one layer at a time — see below</td>
+</tr>
+<tr>
+<td><code>Ctrl+S</code></td>
+<td>Save</td>
+<td>Prompts for a path if the drawing has none</td>
+</tr>
+<tr>
+<td><code>Ctrl+Z</code></td>
+<td>Undo</td>
+<td>Not while typing in a text field</td>
+</tr>
+<tr>
+<td><code>Ctrl+Shift+Z</code></td>
+<td>Redo</td>
+<td></td>
+</tr>
+<tr>
+<td><code>Ctrl+Y</code></td>
+<td>Redo</td>
+<td>Alternative binding</td>
+</tr>
+<tr>
+<td><code>Ctrl+C</code></td>
+<td>Copy selection to the clipboard</td>
+<td>Not while typing</td>
+</tr>
+<tr>
+<td><code>Ctrl+V</code></td>
+<td>Paste from the clipboard at the cursor</td>
+<td>Not while typing</td>
+</tr>
+<tr>
+<td><code>Delete</code></td>
+<td>Start DELETE</td>
+<td>Erases the selection immediately if there is one; otherwise asks for a window. Not while typing</td>
+</tr>
+</tbody></table>
+<p><code>Ctrl+Z</code>, <code>Ctrl+Y</code>, <code>Ctrl+C</code>, <code>Ctrl+V</code>, and <code>Delete</code> are <strong>suppressed while a text field has
+focus</strong>, so they behave as ordinary text editing there.</p>
+<hr>
+<h2>Mode toggles</h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>F3</code></td>
+<td>Toggle <strong>object snap</strong></td>
+<td>Works <strong>even while typing in the command line</strong></td>
+</tr>
+<tr>
+<td><code>F8</code></td>
+<td>Toggle <strong>Ortho</strong></td>
+<td>Works <strong>even while typing in the command line</strong></td>
+</tr>
+</tbody></table>
+<p>These two are mode keys, not characters, so handling them during text input never interferes with
+typing a command.</p>
+<p>The status bar carries the same toggles, plus <strong>GRID</strong>, <strong>POLAR</strong> <em>(not yet functional)</em>,
+<strong>VPLOCK</strong>, and <strong>SEL</strong>.</p>
+<hr>
+<h2>Command line</h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Enter</code></td>
+<td>Submit; with the autocomplete popup open, run the highlighted command</td>
+</tr>
+<tr>
+<td><code>Tab</code></td>
+<td>Complete to the highlighted suggestion</td>
+</tr>
+<tr>
+<td><code>↑</code> / <code>↓</code></td>
+<td>Move the autocomplete highlight</td>
+</tr>
+<tr>
+<td><code>Esc</code></td>
+<td>Dismiss the autocomplete popup</td>
+</tr>
+<tr>
+<td><code>F2</code></td>
+<td>Toggle the full-height console (floating bar only)</td>
+</tr>
+<tr>
+<td><code>Ctrl+9</code></td>
+<td>Hide and restore the command bar (floating bar only)</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Dynamic input</h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Type</td>
+<td>Lock the active field to the typed value</td>
+</tr>
+<tr>
+<td><code>Tab</code></td>
+<td>Move between the X and Y fields</td>
+</tr>
+<tr>
+<td><code>Enter</code></td>
+<td>Commit the point</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>MTEXT editor</h2>
+<p>Active only while the in-drawing rich-text editor is open.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Enter</code></td>
+<td>New line</td>
+</tr>
+<tr>
+<td><code>Ctrl+Enter</code></td>
+<td>Reformat</td>
+</tr>
+<tr>
+<td><code>Ctrl+Z</code> / <code>Ctrl+Y</code></td>
+<td>Undo / redo <strong>inside the text box</strong></td>
+</tr>
+<tr>
+<td><code>Ctrl+C</code> / <code>Ctrl+X</code></td>
+<td>Copy / cut <strong>inside the text box</strong></td>
+</tr>
+<tr>
+<td><code>Ctrl+R</code></td>
+<td>Find and Replace</td>
+</tr>
+<tr>
+<td><code>Ctrl+F</code></td>
+<td>Insert Field — <em>not supported yet</em></td>
+</tr>
+<tr>
+<td><code>F1</code></td>
+<td>Help</td>
+</tr>
+<tr>
+<td><code>Esc</code></td>
+<td>Cancel the edit</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Mouse</h2>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Left click</strong></td>
+<td>Pick a point, or select an object</td>
+</tr>
+<tr>
+<td><strong>Left drag</strong> (from empty space)</td>
+<td>Selection window</td>
+</tr>
+<tr>
+<td><strong>Middle drag</strong></td>
+<td>Pan</td>
+</tr>
+<tr>
+<td><strong>Wheel</strong></td>
+<td>Zoom, cursor-centred</td>
+</tr>
+<tr>
+<td><strong>Right click</strong></td>
+<td>Repeat the last command, or open the shortcut menu — configurable</td>
+</tr>
+<tr>
+<td><strong>Shift + right click</strong></td>
+<td>One-shot object-snap override menu</td>
+</tr>
+<tr>
+<td><strong>Double-click a viewport</strong> <em>(paper space)</em></td>
+<td>Enter floating model space</td>
+</tr>
+<tr>
+<td><strong>Double-click MTEXT</strong></td>
+<td>Open the rich-text editor</td>
+</tr>
+<tr>
+<td><strong>Right-click the OSNAP button</strong></td>
+<td>Snap-type checklist</td>
+</tr>
+<tr>
+<td><strong>Right-click a layout tab</strong></td>
+<td>Rename · Move or Copy… · Page Setup Manager… · Viewports… · Delete</td>
+</tr>
+<tr>
+<td><strong>Right-click the command log</strong></td>
+<td>Copy log to clipboard</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>What <code>Esc</code> does, in order</h2>
+<p><code>Esc</code> cancels the innermost thing that is running:</p>
+<ol>
+<li>An open modal, such as the copy-duplicate dialog</li>
+<li>The MTEXT editor</li>
+<li>A grip drag — the original position is restored</li>
+<li>A <code>2P</code> bearing pick — cancels the pick only, not the whole LINE or POLYLINE</li>
+<li>The running command</li>
+<li>Otherwise — clears the selection, closes the Create Points panel, cancels a pending zoom</li>
+</ol>
+<hr>
+<h2>Command aliases</h2>
+<p>Typing a short alias is faster than any shortcut. The full list is in <a href="command-reference.html">Command Reference</a>; the
+ones worth memorising:</p>
+<table>
+<thead>
+<tr>
+<th>Alias</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>L</code></td>
+<td>LINE</td>
+</tr>
+<tr>
+<td><code>PL</code></td>
+<td>POLYLINE</td>
+</tr>
+<tr>
+<td><code>C</code></td>
+<td>CIRCLE</td>
+</tr>
+<tr>
+<td><code>M</code></td>
+<td>MOVE</td>
+</tr>
+<tr>
+<td><code>CP</code></td>
+<td>COPY</td>
+</tr>
+<tr>
+<td><code>RO</code></td>
+<td>ROTATE</td>
+</tr>
+<tr>
+<td><code>SC</code></td>
+<td>SCALE</td>
+</tr>
+<tr>
+<td><code>O</code></td>
+<td>OFFSET</td>
+</tr>
+<tr>
+<td><code>TR</code></td>
+<td>TRIM</td>
+</tr>
+<tr>
+<td><code>J</code></td>
+<td>JOIN</td>
+</tr>
+<tr>
+<td><code>DEL</code></td>
+<td>DELETE</td>
+</tr>
+<tr>
+<td><code>ZE</code></td>
+<td>ZOOMEXTENTS</td>
+</tr>
+<tr>
+<td><code>ZW</code></td>
+<td>ZOOMWINDOW</td>
+</tr>
+<tr>
+<td><code>RE</code></td>
+<td>REGEN</td>
+</tr>
+<tr>
+<td><code>LA</code></td>
+<td>LAYER</td>
+</tr>
+<tr>
+<td><code>UN</code></td>
+<td>UNITS</td>
+</tr>
+<tr>
+<td><code>INV</code></td>
+<td>INVERSE</td>
+</tr>
+<tr>
+<td><code>SE</code></td>
+<td>SURFELEV</td>
+</tr>
+<tr>
+<td><code>AL</code></td>
+<td>ALIGN</td>
+</tr>
+<tr>
+<td><code>QS</code></td>
+<td>QUICKSELECT</td>
+</tr>
+<tr>
+<td><code>OK</code></td>
+<td>OVERKILL</td>
+</tr>
+<tr>
+<td><code>CRTPTS</code></td>
+<td>CREATEPOINTS</td>
+</tr>
+<tr>
+<td><code>VWPTS</code></td>
+<td>VIEWPOINTS</td>
+</tr>
+<tr>
+<td><code>IMPPTS</code></td>
+<td>IMPORTPOINTS</td>
+</tr>
+<tr>
+<td><code>EXPPTS</code></td>
+<td>EXPORTPOINTS</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Not available</h2>
+<p>GoSurvey has <strong>no user-customisable keyboard shortcuts</strong>, no <code>.pgp</code>-style alias file, and no
+command macros. Aliases are fixed in the program.</p>
+<hr>
+<h2>Related</h2>
+<p><a href="command-line.html">Command Line</a> · <a href="command-reference.html">Command Reference</a> · <a href="object-selection.html">Object Selection</a> · <a href="object-snaps.html">Object Snaps</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="command-reference.html">&larr; Command Reference</a><a class="doc-pager-link next" href="drawing-tools.html">Drawing Tools &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Layers — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Layers.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/layers.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html" aria-current="page">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Layers</h1>
+    <h1>Layers</h1>
+<p>Layers group objects for display, for plotting, and for exchange with other CAD programs through
+DXF.</p>
+<hr>
+<h2>The current layer</h2>
+<p><strong>New geometry is created on the current layer</strong>, shown in the dropdown at the right-hand end of
+the ribbon. Change it there before you draw, or change an object&#39;s layer afterwards in
+<a href="properties.html">Properties</a>.</p>
+<p>The dropdown lists every layer present in the drawing.</p>
+<hr>
+<h2>Layer Manager</h2>
+<p><strong>Command:</strong> <code>LAYER</code>, <code>LA</code></p>
+<blockquote>
+<p><em>Layers group objects for display and DXF. New geometry uses the current layer from the ribbon
+(top right). Layer 0 cannot be renamed or deleted.</em></p>
+</blockquote>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/03-layer-manager.png" alt="Layer Manager" loading="lazy"></p>
+<p><em>The Layer Manager. <strong>VP Freeze</strong> and <strong>VP Color</strong> are greyed out here because this is model
+space — they act on the current viewport in a paper layout.</em></p>
+<h3>Creating a layer</h3>
+<p>Type a name in <strong>New layer name</strong> and press <strong>Add layer</strong>. The log confirms <code>Layer added: &lt;name&gt;</code>,
+or reports why it was refused.</p>
+<h3>The table</h3>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Name</strong></td>
+<td>The layer name. Editable, except for layer <code>0</code></td>
+</tr>
+<tr>
+<td><strong>On</strong></td>
+<td>Stored, <strong>not yet applied</strong> — see the note below</td>
+</tr>
+<tr>
+<td><strong>Freeze</strong></td>
+<td>Stored, <strong>not yet applied</strong></td>
+</tr>
+<tr>
+<td><strong>Lock</strong></td>
+<td>Stored, <strong>not yet applied</strong></td>
+</tr>
+<tr>
+<td><strong>Plot</strong></td>
+<td><strong>Working.</strong> When off, this layer&#39;s geometry — and any viewports on it — is excluded from plots</td>
+</tr>
+<tr>
+<td><strong>Current</strong></td>
+<td>Makes this the current layer for new geometry</td>
+</tr>
+<tr>
+<td><strong>Color</strong></td>
+<td>Layer colour, used by entities set to ByLayer</td>
+</tr>
+<tr>
+<td><strong>Linetype</strong></td>
+<td>Layer linetype, used by entities set to ByLayer</td>
+</tr>
+<tr>
+<td><strong>Lineweight</strong></td>
+<td>Layer lineweight, used by entities set to ByLayer</td>
+</tr>
+<tr>
+<td><strong>Transparency</strong></td>
+<td>Layer transparency, used by entities set to defaults</td>
+</tr>
+<tr>
+<td><strong>VP Freeze</strong></td>
+<td>Freezes this layer <strong>in the current viewport only</strong></td>
+</tr>
+<tr>
+<td><strong>VP Color</strong></td>
+<td>Overrides this layer&#39;s colour <strong>in the current viewport only</strong></td>
+</tr>
+<tr>
+<td><em>(last column)</em></td>
+<td>Delete the layer</td>
+</tr>
+</tbody></table>
+<p>The <strong>Name</strong> column and the header row stay put while you scroll.</p>
+<blockquote>
+<p><strong>On, Freeze, and Lock are recorded but not yet enforced.</strong> The dialog says so:
+<em>&quot;On / Freeze / Lock are stored for future visibility and editing rules; all layers still draw.&quot;</em>
+They round-trip through the drawing file and DXF, so setting them is not wasted — they just do
+not change what you see yet. To hide objects today, use <code>ISOLATEOBJECTS</code> / <code>HIDEOBJECTS</code>
+(<a href="object-selection.html">Object Selection</a>) or per-viewport <strong>VP Freeze</strong>.</p>
+</blockquote>
+<h3>Colour, linetype, lineweight, transparency</h3>
+<blockquote>
+<p><em>Colour, linetype, lineweight, and transparency apply to entities set to ByLayer / defaults.</em></p>
+</blockquote>
+<p>An object with an explicit colour keeps it. An object set to ByLayer follows its layer. Set an
+object back to ByLayer in the Properties panel to hand control back to the layer.</p>
+<p>Linetypes come from the bundled <code>acad.lin</code> and <code>acadiso.lin</code> libraries — <code>CONTINUOUS</code>, <code>BORDER</code>,
+<code>CENTER</code>, <code>DASHED</code>, <code>DASHDOT</code>, <code>DIVIDE</code>, <code>DOT</code>, <code>HIDDEN</code>, <code>PHANTOM</code>, their <code>2</code> and <code>X2</code> variants,
+the <code>ACAD_ISO*W100</code> family, and pattern linetypes such as <code>FENCELINE1</code>.</p>
+<h3>Rules</h3>
+<ul>
+<li><strong>Layer <code>0</code> cannot be renamed or deleted.</strong></li>
+<li>Renaming succeeds with <code>Layer renamed.</code> in the log; a rejected rename says why.</li>
+<li>The layer table is synchronised with the geometry every time the dialog is drawn, so a layer
+referenced by an object always appears.</li>
+</ul>
+<hr>
+<h2>Per-viewport layer control</h2>
+<p>In a paper-space layout, a layer can be frozen or recoloured <strong>in one viewport</strong> without affecting
+the others or the model.</p>
+<h3>From the Layer Manager</h3>
+<p>The <strong>VP Freeze</strong> and <strong>VP Color</strong> columns act on the <strong>current viewport</strong>. In model space, or when
+no single viewport is current, both columns are disabled.</p>
+<h3>From the drawing</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>VPFREEZE</code></td>
+<td><code>VPF</code></td>
+<td>Freezes the picked entities&#39; layers in the current viewport</td>
+</tr>
+<tr>
+<td><code>VPTHAW</code></td>
+<td><code>VPT</code></td>
+<td>Thaws the picked entities&#39; layers in the current viewport</td>
+</tr>
+</tbody></table>
+<p>Run the command, then pick objects. Every layer you touch is frozen or thawed in that viewport.
+This is the fast way to say &quot;not this, not in this view&quot; without hunting through the layer table.</p>
+<p>See <a href="paper-space-and-layouts.html">Paper Space and Layouts</a>.</p>
+<hr>
+<h2>Layers and file exchange</h2>
+<ul>
+<li><strong>DXF export</strong> writes a full <code>LAYER</code> table with plot-style pointers, ACI colours, and
+lineweights. Objects carry their layer.</li>
+<li><strong>DXF import</strong> creates the layers the file defines.</li>
+<li><strong>Survey points</strong> carry a per-point layer, set in the Create Points panel or the Viewpoints
+table, and exported as the POINT entity&#39;s layer.</li>
+</ul>
+<p>See <a href="import-and-export.html">Import and Export</a>.</p>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Turning a layer <strong>On</strong> off changes nothing</td>
+<td>On/Freeze/Lock are not enforced yet</td>
+<td>Use <code>HIDEOBJECTS</code> / <code>ISOLATEOBJECTS</code>, or <strong>VP Freeze</strong> in a layout</td>
+</tr>
+<tr>
+<td>Changing a layer&#39;s colour does not change an object</td>
+<td>The object has an explicit colour, not ByLayer</td>
+<td>Select it and set <strong>Color</strong> to ByLayer in Properties</td>
+</tr>
+<tr>
+<td>A layer will not plot</td>
+<td>Its <strong>Plot</strong> flag is off</td>
+<td>Tick <strong>Plot</strong> in the Layer Manager</td>
+</tr>
+<tr>
+<td>The sheet border is missing from a plot</td>
+<td>The border layer is not plottable</td>
+<td><em>(border omitted from plots if layer not plottable)</em> — tick <strong>Plot</strong> for that layer</td>
+</tr>
+<tr>
+<td><strong>VP Freeze</strong> is greyed out</td>
+<td>You are in model space, or no single viewport is current</td>
+<td>Switch to a layout and make one viewport current</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="properties.html">Properties</a> · <a href="object-selection.html">Object Selection</a> · <a href="paper-space-and-layouts.html">Paper Space and Layouts</a> · <a href="import-and-export.html">Import and Export</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="annotation.html">&larr; Annotation</a><a class="doc-pager-link next" href="properties.html">Properties &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FAQ — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: FAQ.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/faq.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html" aria-current="page">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>FAQ</h1>
+    <h1>FAQ</h1>
+<hr>
+<h3>How do I start a drawing?</h3>
+<p><strong>File → New.</strong> It opens in a new tab. To start from your own layers and styles, set a startup
+template in <strong>Settings → Files</strong> — see <a href="files-and-drawings.html">Files and Drawings</a>.</p>
+<h3>How do I draw a line?</h3>
+<p>Type <code>L</code> and press Enter, then click or type points. Press <code>Esc</code> to finish. See
+<a href="drawing-tools.html">Drawing Tools</a>.</p>
+<h3>How do I enter coordinates?</h3>
+<p>Type <code>X,Y</code> or <code>X Y</code> for absolute, <code>@dx,dy</code> for relative to the last point. <strong>Polar entry
+(<code>@100&lt;45</code>) is not supported</strong> — lock a bearing instead with <code>A 45</code>, then type the distance. See
+<a href="coordinate-input.html">Coordinate Input</a>.</p>
+<h3>How do I draw a line by bearing and distance?</h3>
+<p>After the first point:</p>
+<pre><code>A 132d15m30s
+248.55
+</code></pre>
+<p><code>A &lt;bearing&gt;</code> locks the direction, then a number is the distance along it. <code>2P</code> lets you pick the
+direction from two points instead, and <code>+90</code> turns off it. See <a href="coordinate-input.html">Coordinate Input</a>.</p>
+<h3>Which way do bearings go?</h3>
+<p><strong>North is 0°, and angles increase clockwise.</strong> East is 90°, south 180°, west 270°. That is how you
+<em>type</em> them, always. How they are <em>displayed</em> — decimal, DMS, or surveyor&#39;s — is set in <code>UNITS</code>.</p>
+<h3>How do I snap to an endpoint?</h3>
+<p>Press <code>F3</code> to turn OSNAP on. Right-click the status-bar <strong>OSNAP</strong> button and tick <strong>Endpoint</strong>. See
+<a href="object-snaps.html">Object Snaps</a>.</p>
+<h3>How do I snap to something buried under other geometry?</h3>
+<p><strong>Shift + right-click</strong> in the viewport. Choose a snap type, and you get a list of <em>every</em> snap of
+that type in the model, sorted by distance from your click.</p>
+<h3>How do I change layers?</h3>
+<p>Set the current layer in the dropdown at the right end of the ribbon before you draw. To change an
+existing object, select it and use <strong>Layer</strong> in the Properties panel. <code>LAYER</code> (<code>LA</code>) opens the Layer
+Manager. See <a href="layers.html">Layers</a>.</p>
+<h3>I turned a layer off and nothing happened. Why?</h3>
+<p>Layer <strong>On / Freeze / Lock are stored but not enforced yet</strong> — the Layer Manager says so. To hide
+things today, use <code>HIDEOBJECTS</code> / <code>ISOLATEOBJECTS</code>, or <strong>VP Freeze</strong> in a paper layout.</p>
+<h3>How do I undo?</h3>
+<p><code>Ctrl+Z</code>. Redo is <code>Ctrl+Shift+Z</code> or <code>Ctrl+Y</code>. The <strong>Edit</strong> menu names the step it will reverse.
+Undo history is <strong>per drawing tab</strong> and is cleared when the tab is closed.</p>
+<h3>How do I import survey points?</h3>
+<p><code>IMPORTPOINTS</code> (<code>IMPPTS</code>), pick the CSV, set <strong>Column order</strong> to match — <code>P,N,E,Z,D</code> is PNEZD.
+Check the preview before importing. See <a href="survey-points.html">Survey Points</a>.</p>
+<h3>How do I get Civil 3D points into GoSurvey?</h3>
+<p><strong>Export a PNEZD or PENZD CSV from Civil 3D and import that.</strong> Civil 3D COGO points are custom
+objects and are not written into a DXF at all, so no third-party program can read them from one.
+Use DXF for the linework.</p>
+<h3>Will importing a DXF wipe my survey points?</h3>
+<p>No. <strong>DXF import replaces the CAD geometry and keeps the survey points already in the session.</strong> So
+CSV-then-DXF and DXF-then-CSV both work. Colliding IDs prompt you to overwrite or offset.</p>
+<h3>How do I calculate an inverse?</h3>
+<p><code>INVERSE</code> (<code>INV</code>), then two picks. It reports ΔE, ΔN, horizontal distance, and bearing. Turn OSNAP
+on first so you land exactly on the points. See <a href="inquiry-commands.html">Inquiry Commands</a>.</p>
+<h3>How do I compute an area?</h3>
+<p><strong>You cannot, inside GoSurvey.</strong> The only area it reports is a circle&#39;s, in the Properties panel.
+Export the boundary or the points and compute it elsewhere.</p>
+<h3>How do I change units or precision?</h3>
+<p><code>UNITS</code> (<code>UN</code> / <code>DDUNITS</code>). Set <strong>Length → Precision</strong>, <strong>Angle → Type</strong>, and <strong>Insertion scale</strong>.
+Note that insertion scale is a <strong>label only</strong> — it never scales coordinates. See
+<a href="settings-and-options.html">Settings and Options</a>.</p>
+<h3>How do I set text size?</h3>
+<p>Two things multiply: <strong>Default text height (in)</strong> in Properties → General, and the <strong>annotation
+scale</strong> on the status bar. At <code>1&quot; = 50&#39;</code> with 0.10 in, new text is 5 model units tall and plots at
+0.10 in. Set the scale <em>before</em> placing text. See <a href="annotation.html">Annotation</a>.</p>
+<h3>How do I plot?</h3>
+<p>Switch to a paper layout, then press <strong>Plot</strong> on the Layout ribbon. <strong>There is no typed <code>PLOT</code>
+command.</strong> Output is a vector PDF — GoSurvey does not print to a Windows printer. See <a href="plotting.html">Plotting</a>.</p>
+<h3>How do I plot several sheets into one PDF?</h3>
+<p>Layout ribbon → <strong>Batch</strong>, tick the layouts, <strong>Plot to PDF…</strong>. Pages come out in layout order.</p>
+<h3>How do I export my drawing?</h3>
+<p><strong>File → Export DXF…</strong> for ASCII DXF (AC1032). <strong>File → Export DWG…</strong> goes through an external
+converter and is lossy — the dialog lists exactly what it drops. <code>EXPORTPOINTS</code> writes the points as
+CSV. See <a href="import-and-export.html">Import and Export</a>.</p>
+<h3>Why are the DWG menu items greyed out?</h3>
+<p>DWG needs an external converter. Install the free <strong>ODA File Converter</strong>, or set
+<code>GOSURVEY_DWG_CONVERTER</code> to <code>ODAFileConverter.exe</code> or <code>accoreconsole.exe</code>.</p>
+<h3>How do I trace a PDF?</h3>
+<p><code>PA</code> (PDFATTACH). Attach the page, then snap directly to it — snap targets are detected from the
+rendered image, so they land on what you can see. <strong>Vectorize</strong> converts the detected lines to real
+geometry in bulk. See <a href="pdf-underlays.html">PDF Underlays</a>.</p>
+<h3>How do I move a local drawing to state-plane coordinates?</h3>
+<p><code>ALIGN</code> (<code>AL</code>) with source→destination control pairs. One pair gives translation; two or more give a
+full Helmert fit. Review the residuals before applying, and untick <strong>Apply Scale</strong> if the drawing is
+already at true scale. See <a href="coordinate-alignment.html">Coordinate Alignment</a>.</p>
+<h3>How do I build a surface?</h3>
+<p>Create a <strong>point group</strong> first (<strong>Survey → Groups</strong>), then <strong>Survey → Surfaces → New from group…</strong>.
+Key the group on <strong>raw description</strong> so office edits do not break it. <strong>Rebuild</strong> picks up points
+imported later. See <a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a>.</p>
+<h3>Can I see elevations?</h3>
+<p>Yes. Run <code>ORBIT</code> (<code>3DO</code>) and drag to tilt the view. <code>SURFELEV</code> (<code>SE</code>) reads elevations and
+grades off a surface. <code>ELEV</code> sets the elevation new geometry is drawn at, shown on the status bar as
+<code>UCS: Elev …</code>.</p>
+<h3>Does GoSurvey have blocks?</h3>
+<p>No. There is no BLOCK, INSERT, or attribute support. DWG export writes geometry exploded.</p>
+<h3>Does GoSurvey have MIRROR?</h3>
+<p>The ribbon button exists but is <strong>disabled</strong> — it is not implemented. See <a href="known-limitations.html">Known Limitations</a>.</p>
+<h3>What does the POLAR button do?</h3>
+<p>Nothing yet. It toggles and lights up, but polar tracking is not implemented — its own tooltip says
+<em>&quot;Polar tracking (UI only for now)&quot;</em>.</p>
+<h3>Can I customise keyboard shortcuts?</h3>
+<p>No. Aliases and shortcuts are fixed. The <strong>right-click</strong> behaviour <em>is</em> configurable —
+<strong>Settings → User Preferences → Right-click Customization…</strong></p>
+<h3>Is there an autosave?</h3>
+<p><strong>No.</strong> There is no autosave, no backup file, and no drawing recovery. <code>Ctrl+S</code> often.</p>
+<h3>Can I open several drawings at once?</h3>
+<p>Yes — each is a tab, and each is completely independent: geometry, layers, points, layouts, plot
+scale, and undo history. The clipboard moves objects between them.</p>
+<h3>Will a new version open my old drawings?</h3>
+<p>Yes. GoSurvey opens drawings from any older version, converting as it loads, and does not modify the
+file until you save. If an update changes the file format, the update dialog tells you before you
+accept it.</p>
+<h3>How do I turn off update checks?</h3>
+<p><strong>Settings → System → Updates → Check for updates on startup.</strong> With it off, GoSurvey makes no
+network requests at all.</p>
+<h3>Where are my settings stored?</h3>
+<p><code>gosurvey-user.json</code>, beside the executable. Plot scale and insertion units are stored in the <code>.gs</code>
+drawing instead. The undo history log is at <code>%APPDATA%\GoSurvey\history.log</code>.</p>
+<h3>The program says something I do not understand. Where do I look?</h3>
+<p>Press <code>F2</code> for the full command console and scroll back. GoSurvey does not fail silently — the
+reason is in the log. If it still does not help, <strong>right-click the log ▸ Copy log to clipboard</strong> and
+<a href="https://github.com/chetjones003/GoSurvey/issues">open an issue</a>.</p>
+<hr>
+<h2>Related</h2>
+<p><a href="troubleshooting.html">Troubleshooting</a> · <a href="known-limitations.html">Known Limitations</a> · <a href="command-reference.html">Command Reference</a> · <a href="workflows.html">Workflows</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="troubleshooting.html">&larr; Troubleshooting</a><a class="doc-pager-link next" href="known-limitations.html">Known Limitations &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

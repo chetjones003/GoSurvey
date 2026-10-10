@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting Started — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Getting Started.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/getting-started.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html" aria-current="page">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Getting Started</h1>
+    <h1>Getting Started</h1>
+<h2>What GoSurvey is</h2>
+<p>GoSurvey is a Windows CAD program built around survey work. Alongside ordinary drafting
+(lines, arcs, text, dimensions, hatching, layers, sheets) it carries three things a general CAD
+program does not:</p>
+<ul>
+<li>a <strong>survey point database</strong> — numbered points with northing, easting, elevation, description,
+layer, and label style, kept separate from the linework;</li>
+<li><strong>raw-observation reduction</strong> — the Traverse Editor takes field angles and distances and
+computes coordinates and least-squares closure;</li>
+<li><strong>coordinate transformation</strong> — ALIGN fits a 2D Helmert transformation from control pairs, so a
+local-coordinate drawing can be moved onto state-plane.</li>
+</ul>
+<p>Drawings are saved as <code>.gs</code>. Exchange with other CAD is through <strong>DXF</strong> (built in) and <strong>DWG</strong>
+(through an external converter). Survey points move through <strong>CSV</strong> in PNEZD/PENZD order.</p>
+<hr>
+<h2>Install (Windows)</h2>
+<ol>
+<li>Open the <a href="https://github.com/chetjones003/GoSurvey/releases">Releases</a> page.</li>
+<li>Download the <strong><code>.exe</code> installer</strong> from the latest release.</li>
+<li>Run it. GoSurvey installs to <code>%ProgramFiles%\GoSurvey</code> and adds a Start Menu entry. A desktop
+shortcut is offered.</li>
+<li><strong>SmartScreen</strong> — the installer is not code-signed yet, so Windows may show <em>&quot;Windows protected
+your PC&quot;</em>. Choose <strong>More info → Run anyway</strong> if you trust the release.</li>
+</ol>
+<p><strong>If the program will not start with a missing-DLL error</strong>, install the
+<a href="https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist">Visual C++ Redistributable for x64</a>.</p>
+<h3>Updates</h3>
+<p>GoSurvey checks for a newer version <strong>each time it opens</strong>. A short <em>&quot;Checking for updates&quot;</em>
+dialog appears while it does; with no internet connection the check is skipped, and if it is slow
+you can press <strong>Continue without checking</strong>.</p>
+<p>Nothing downloads or installs on its own. When an update exists you choose <strong>Update Now</strong>,
+<strong>Remind Me Later</strong>, or <strong>Skip This Version</strong>. Choosing to update downloads the installer, verifies
+it against a SHA-256 published with the release, prompts you to save open drawings, then installs
+and reopens GoSurvey.</p>
+<p>Both update settings live in <strong>View → Settings… → System</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Check for updates on startup</td>
+<td>On</td>
+<td>Turn off and GoSurvey makes no network requests at all</td>
+</tr>
+<tr>
+<td>Include beta releases</td>
+<td>Off</td>
+<td>Turn on to receive pre-release builds</td>
+</tr>
+</tbody></table>
+<p>See <a href="files-and-drawings.html">Files and Drawings</a> for how drawing compatibility is handled across updates.</p>
+<hr>
+<h2>Starting the application</h2>
+<p>A splash screen appears while the program loads, then the main window opens with one empty drawing
+tab named <strong>Drawing 1</strong>.</p>
+<p>Take a moment with <a href="user-interface.html">User Interface</a> — the manual assumes you know where the ribbon, command line,
+Properties panel, and status bar are.</p>
+<hr>
+<h2>Creating a new drawing</h2>
+<p><strong>File → New</strong></p>
+<p>A new tab appears named <code>Drawing 2</code>, <code>Drawing 3</code>, and so on. Each tab is a <strong>completely independent
+document</strong>: its own geometry, layers, survey points, paper layouts, plot scale, and undo history.
+Switching tabs switches all of it.</p>
+<p>There is no &quot;new from template&quot; dialog. New drawings start from the bundled template
+(<code>resources/default-template.gs</code>) if one is present — see <strong>Settings → Files</strong>.</p>
+<h2>Opening an existing drawing</h2>
+<p><strong>File → Open</strong> → choose a <code>.gs</code> file.</p>
+<p>The drawing opens <strong>in a new tab</strong>, named after the file. Opening does not replace what you are
+working on.</p>
+<p>GoSurvey opens drawings saved by any older version, converting them as it loads. The file on disk
+is not modified until you save.</p>
+<p>To bring in a drawing that is <em>not</em> a <code>.gs</code> file, use <strong>File → Import DXF…</strong> or
+<strong>File → Import DWG…</strong> instead — see <a href="import-and-export.html">Import and Export</a>.</p>
+<h2>Saving</h2>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>How</th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Save</strong></td>
+<td><code>Ctrl+S</code> or <strong>File → Save</strong></td>
+<td>Writes to the current file path. If the drawing has never been saved, the Save-As dialog opens first.</td>
+</tr>
+<tr>
+<td><strong>Save As</strong></td>
+<td><strong>File → Save As…</strong></td>
+<td>Choose a new name and location. The drawing tab is renamed to the file stem, and later saves go to the new path.</td>
+</tr>
+</tbody></table>
+<p>There is no autosave and no automatic backup file. Save deliberately.</p>
+<h2>Closing</h2>
+<p><strong>File → Quit Application</strong>, or the window&#39;s close button.</p>
+<p>If <strong>any</strong> open tab has unsaved changes, a confirmation dialog appears before the program exits.
+If everything is saved, it closes immediately.</p>
+<hr>
+<h2>Your first drawing</h2>
+<ol>
+<li>Type <code>LINE</code> (or <code>L</code>) and press <strong>Enter</strong>.
+The log reads <code>LINE — specify first point (click or type X,Y / X Y). ESC to cancel.</code></li>
+<li>Type <code>0,0</code> and press <strong>Enter</strong>.</li>
+<li>Type <code>100,0</code> and press <strong>Enter</strong> — a segment appears.</li>
+<li>Type <code>@0,50</code> and press <strong>Enter</strong> — <code>@</code> means <em>relative to the last point</em>, so this goes 50 units
+north.</li>
+<li>Press <strong>Esc</strong> to end the command.</li>
+<li>Type <code>ZE</code> and press <strong>Enter</strong> to fit the drawing in view.</li>
+</ol>
+<p>You now have a two-segment line. Select it by clicking a segment; grips appear at the endpoints and
+the <strong>Properties</strong> panel on the left fills in with its layer, colour, and coordinates.</p>
+<p>Next: <a href="drawing-tools.html">Drawing Tools</a> · <a href="coordinate-input.html">Coordinate Input</a></p>
+<hr>
+<h2>Your first survey workflow</h2>
+<p><strong>Goal:</strong> get field points into a drawing, look at them, and measure between them.</p>
+<ol>
+<li><strong>Import the points.</strong> Type <code>IMPORTPOINTS</code> (or <code>IMPPTS</code>). In the dialog:<ul>
+<li><strong>Browse…</strong> to your CSV.</li>
+<li>Set <strong>Column order</strong> to match the file — <code>P,N,E,Z,D</code> is the common PNEZD order.</li>
+<li>Tick <strong>First row is header (skip)</strong> if the file has one.</li>
+<li>Check the <strong>File preview</strong> and <strong>Validation summary</strong>, then press <strong>Import</strong>.</li>
+</ul>
+</li>
+<li><strong>Frame them.</strong> Type <code>ZE</code>.</li>
+<li><strong>Look at the table.</strong> Type <code>VIEWPOINTS</code> (or <code>VWPTS</code>) to see and edit every point&#39;s ID,
+easting, northing, elevation, layer, and description.</li>
+<li><strong>Measure.</strong> Type <code>INVERSE</code> (or <code>INV</code>), then snap to two points. The log reports ΔE, ΔN,
+horizontal distance, and bearing.</li>
+<li><strong>Draw the boundary.</strong> Type <code>LINE</code>, and with <strong>OSNAP</strong> on (press <code>F3</code>), snap point-to-point
+around the parcel.</li>
+<li><strong>Save.</strong> <code>Ctrl+S</code>.</li>
+</ol>
+<p>Next: <a href="survey-points.html">Survey Points</a> · <a href="object-snaps.html">Object Snaps</a> · <a href="workflows.html">Workflows</a></p>
+<hr>
+<h2>Your first complete project</h2>
+<p>The full path — set up units, bring in points, reduce a traverse, draw and annotate, build a sheet,
+plot a PDF — is laid out step by step in <a href="workflows.html">Workflows</a>.</p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="index.html">&larr; Home</a><a class="doc-pager-link next" href="user-interface.html">User Interface &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

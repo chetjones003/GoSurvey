@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper Space and Layouts — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Paper Space and Layouts.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/paper-space-and-layouts.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html" aria-current="page">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Paper Space and Layouts</h1>
+    <h1>Paper Space and Layouts</h1>
+<p>A <strong>layout</strong> is a sheet. It has a paper size, an orientation, its own geometry drawn in paper
+inches, and <strong>viewports</strong> — windows onto model space at a chosen scale.</p>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/15-paper-layout.png" alt="Paper layout" loading="lazy"></p>
+<p><em>A paper layout. Note what changed: the ribbon has collapsed to the contextual <strong>Layout</strong> section
+(Rect VP, Poly VP — greyed out — Plot, Batch), the status bar reads <strong>PAPER</strong>, and <code>Layout1</code> is the
+active tab beside <code>Model</code>.</em></p>
+<hr>
+<h2>Spaces</h2>
+<table>
+<thead>
+<tr>
+<th>Space</th>
+<th>Status bar</th>
+<th>What you are editing</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Model</strong></td>
+<td><code>MODEL</code></td>
+<td>The drawing itself, in model units</td>
+</tr>
+<tr>
+<td><strong>Paper</strong></td>
+<td><code>PAPER</code></td>
+<td>The sheet: borders, titleblock text, viewport frames, in paper inches</td>
+</tr>
+<tr>
+<td><strong>Floating model space</strong></td>
+<td><code>FLOAT</code></td>
+<td>The model, seen and edited <em>through</em> a viewport</td>
+</tr>
+</tbody></table>
+<h3>Switching</h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Status bar <strong>MODEL / PAPER</strong> button</td>
+<td>Toggles between model and the current layout</td>
+</tr>
+<tr>
+<td>Status bar <strong>layout tabs</strong></td>
+<td>Switch directly to <code>Model</code> or any layout</td>
+</tr>
+<tr>
+<td><strong>☰</strong> hamburger menu</td>
+<td>Model space · every layout · New paper layout</td>
+</tr>
+<tr>
+<td><strong>+</strong> button</td>
+<td>Adds a layout</td>
+</tr>
+<tr>
+<td><strong>Double-click inside a viewport</strong></td>
+<td>Enter floating model space</td>
+</tr>
+<tr>
+<td>Click <strong>FLOAT</strong>, or press <code>Esc</code></td>
+<td>Leave floating model space</td>
+</tr>
+<tr>
+<td><code>MSPACE</code> / <code>MS</code></td>
+<td>Edit the model through the selected viewport</td>
+</tr>
+<tr>
+<td><code>PSPACE</code> / <code>PS</code></td>
+<td>Return to paper space</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Managing layouts</h2>
+<p><strong>Right-click a layout tab:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Rename</strong></td>
+<td>Inline text field</td>
+</tr>
+<tr>
+<td><strong>Move or Copy…</strong></td>
+<td>Reorder the layout, or duplicate it. Choose <strong>Before layout:</strong> (<code>(move to end)</code> is offered) and tick <strong>Create a copy</strong></td>
+</tr>
+<tr>
+<td><strong>Page Setup Manager…</strong></td>
+<td>Paper size, orientation, plot settings — below</td>
+</tr>
+<tr>
+<td><strong>Viewports…</strong></td>
+<td>The viewport list for this layout</td>
+</tr>
+<tr>
+<td><strong>Delete</strong></td>
+<td>Removes the layout</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Page Setup Manager</h2>
+<p>The per-layout sheet and plot settings.</p>
+<p><strong>Current layout:</strong> and <strong>Current page setup:</strong> are shown at the top.</p>
+<h3>Page setups</h3>
+<p>A named collection of settings. <strong>New…</strong>, <strong>Modify…</strong>, <strong>Set Current</strong>, and <strong>Import…</strong> (which
+reports <em>&quot;Import page setups from another drawing — coming in a later update.&quot;</em>).</p>
+<p>Creating one asks for a <strong>New page setup name</strong> and a <strong>Start with:</strong> template — <code>&lt;None&gt;</code>,
+<code>&lt;Previous plot&gt;</code>, <code>&lt;Default output device&gt;</code>, or an existing setup.</p>
+<p><strong>Display when creating a new layout</strong> controls whether this dialog opens automatically for new
+layouts; the same option is in <strong>Settings → Display → Show Page Setup Manager for new layouts</strong>.</p>
+<h3>Printer / plotter</h3>
+<pre><code>Plotter:  PDF (vector) — built in        Where:  File
+Device name:   GoSurvey PDF (DWG To PDF)
+</code></pre>
+<p>There is one output device: the built-in vector PDF writer. GoSurvey does not print to a Windows
+printer.</p>
+<blockquote>
+<p><em>Plotter selection / PDF options arrive with PDF plotting (a later update).</em></p>
+</blockquote>
+<h3>Paper size</h3>
+<table>
+<thead>
+<tr>
+<th>Preset</th>
+<th>Size (portrait)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ANSI A</td>
+<td>8.5&quot; × 11&quot;</td>
+</tr>
+<tr>
+<td><strong>ANSI B</strong></td>
+<td>11&quot; × 17&quot; <em>(default)</em></td>
+</tr>
+<tr>
+<td>ANSI C</td>
+<td>17&quot; × 22&quot;</td>
+</tr>
+<tr>
+<td>ANSI D</td>
+<td>22&quot; × 34&quot;</td>
+</tr>
+<tr>
+<td>ANSI E</td>
+<td>34&quot; × 44&quot;</td>
+</tr>
+<tr>
+<td>ARCH A</td>
+<td>9&quot; × 12&quot;</td>
+</tr>
+<tr>
+<td>ARCH B</td>
+<td>12&quot; × 18&quot;</td>
+</tr>
+<tr>
+<td>ARCH C</td>
+<td>18&quot; × 24&quot;</td>
+</tr>
+<tr>
+<td>ARCH D</td>
+<td>24&quot; × 36&quot;</td>
+</tr>
+<tr>
+<td>ARCH E</td>
+<td>36&quot; × 48&quot;</td>
+</tr>
+<tr>
+<td><strong>Custom</strong></td>
+<td>Enter width and height</td>
+</tr>
+</tbody></table>
+<p><strong>Drawing orientation</strong> — <strong>Portrait</strong> or <strong>Landscape</strong>. The presets are portrait sizes;
+orientation is applied per layout.</p>
+<p>The dialog reports the result: <code>Plot size: 17.00 x 11.00 inches (ANSI B (11&quot; x 17&quot;))</code>.</p>
+<h3>Plot area, scale, and offset</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>What to plot</strong> / <strong>Plot area</strong></td>
+<td>What part of the sheet is plotted</td>
+</tr>
+<tr>
+<td><strong>Plot scale</strong></td>
+<td>Sheet plot scale</td>
+</tr>
+<tr>
+<td><strong>Fit to paper</strong></td>
+<td>Scale to fit</td>
+</tr>
+<tr>
+<td><strong>Plot offset (inches)</strong> — X, Y</td>
+<td>Shifts the plot on the sheet</td>
+</tr>
+<tr>
+<td><strong>Center the plot</strong></td>
+<td>Centres it instead</td>
+</tr>
+<tr>
+<td><strong>Plot object lineweights</strong></td>
+<td>Honour lineweights</td>
+</tr>
+<tr>
+<td><strong>Plot transparency</strong></td>
+<td>Honour transparency</td>
+</tr>
+<tr>
+<td><strong>Plot paperspace last</strong></td>
+<td>Drawing order</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><em>Plot styles / options apply once PDF plotting lands (a later update).</em> Some of these controls
+are recorded but not yet acted on by the PDF writer.</p>
+</blockquote>
+<hr>
+<h2>Viewports</h2>
+<p>A viewport is a rectangular window on the sheet showing model space at a fixed scale.</p>
+<h3>Creating one</h3>
+<p><strong>Ribbon (Layout):</strong> Rect VP <strong>Command:</strong> <code>MVIEW</code>, <code>RECTVIEWPORT</code>, <code>RECTVP</code></p>
+<p>Two clicks define the rectangle.</p>
+<p><strong>Poly VP</strong> — polygonal viewports — is on the ribbon but <strong>disabled</strong>: <em>&quot;Polygonal viewport —
+coming in a later increment.&quot;</em></p>
+<h3>The Viewports window</h3>
+<p>Right-click a layout tab ▸ <strong>Viewports…</strong>, or the Viewports button.</p>
+<p>If you are in model space it says <em>Switch to a paper layout to manage its viewports.</em></p>
+<p>Per viewport:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>X</strong>, <strong>Y</strong></td>
+<td>Lower-left corner, paper inches, sheet origin at (0,0)</td>
+</tr>
+<tr>
+<td><strong>W</strong>, <strong>H</strong></td>
+<td>Size in paper inches</td>
+</tr>
+<tr>
+<td><strong>Center X</strong>, <strong>Center Y</strong></td>
+<td>The model point shown at the viewport centre</td>
+</tr>
+<tr>
+<td><strong>Scale (model/in)</strong></td>
+<td>Model units per paper inch — the AutoCAD viewport scale. <code>50</code> gives 1&quot; = 50&#39;</td>
+</tr>
+<tr>
+<td><strong>Layer</strong></td>
+<td>The viewport&#39;s own layer. <strong>If that layer is not plottable, the viewport border is omitted from plots</strong> — this is how you get a borderless viewport</td>
+</tr>
+</tbody></table>
+<p><strong>+ Add viewport</strong> and <strong>Delete viewport</strong> manage the list.</p>
+<h3>Editing the model through a viewport</h3>
+<p><strong>Double-click inside a viewport</strong> to enter floating model space. The status bar shows <strong>FLOAT</strong>,
+and the <strong>normal model ribbon returns</strong> so the draw and modify tools are available. Click <strong>FLOAT</strong>
+or press <code>Esc</code> to leave.</p>
+<h3>VPLOCK</h3>
+<p>The status-bar <strong>VPLOCK</strong> button decides what pan and zoom do while a viewport is being edited in
+place:</p>
+<table>
+<thead>
+<tr>
+<th>VPLOCK</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>ON</strong></td>
+<td>Pan and zoom always move the <strong>sheet</strong> — the viewport&#39;s model framing is protected</td>
+</tr>
+<tr>
+<td><strong>OFF</strong></td>
+<td>Pan and zoom adjust <strong>that viewport&#39;s</strong> model framing</td>
+</tr>
+</tbody></table>
+<p>Turn VPLOCK <strong>on</strong> once a viewport is framed and scaled the way you want it. It is the difference
+between nudging the sheet and silently rescaling a finished view.</p>
+<h3>Per-viewport layers</h3>
+<p>A layer can be frozen or recoloured in one viewport only:</p>
+<ul>
+<li>Layer Manager → <strong>VP Freeze</strong> and <strong>VP Color</strong> columns act on the <strong>current</strong> viewport.</li>
+<li><code>VPFREEZE</code> / <code>VPF</code> and <code>VPTHAW</code> / <code>VPT</code> freeze and thaw the picked entities&#39; layers in the
+current viewport.</li>
+</ul>
+<p>See <a href="layers.html">Layers</a>.</p>
+<hr>
+<h2>Drawing on the sheet</h2>
+<p>In paper space, draw and modify commands act on <strong>paper geometry</strong> measured in paper inches. This
+is where a border, a titleblock, and sheet notes belong.</p>
+<ul>
+<li>The clipboard moves objects between model and paper space at 1:1 raw coordinates — copy in model
+space, switch to the layout, and <strong>Paste</strong>. See <a href="modify-tools.html">Modify Tools</a>.</li>
+<li>Selecting, grips, hover highlighting, and the Properties panel all work on paper objects.</li>
+<li><code>DELETE</code> in paper space requires a selection first —
+<code>DELETE — select paper object(s) or viewport(s) first.</code></li>
+<li><code>ROTATE</code> likewise — <code>ROTATE — select paper object(s) first.</code></li>
+<li><code>ORBIT</code> refuses — a sheet is 2D.</li>
+</ul>
+<hr>
+<h2>Plotting a layout</h2>
+<p>Layout ribbon → <strong>Plot</strong> (single layout) or <strong>Batch</strong> (several into one PDF). See <a href="plotting.html">Plotting</a>.</p>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Draw tools have vanished from the ribbon</td>
+<td>You are in paper space, which shows the Layout section</td>
+<td>Switch to Model, or double-click into a viewport</td>
+</tr>
+<tr>
+<td>Zooming rescaled my viewport</td>
+<td>VPLOCK was off while editing in place</td>
+<td>Undo, turn <strong>VPLOCK</strong> on, and reframe with the Viewports window</td>
+</tr>
+<tr>
+<td>The viewport border prints</td>
+<td>Its layer is plottable</td>
+<td>Put the viewport on a non-plottable layer</td>
+</tr>
+<tr>
+<td>A layer I want hidden shows in one view</td>
+<td>Layer On/Freeze are not enforced yet</td>
+<td>Use <strong>VP Freeze</strong>, or <code>VPFREEZE</code></td>
+</tr>
+<tr>
+<td>DELETE does nothing on the sheet</td>
+<td>Paper-space DELETE needs a selection</td>
+<td>Select the objects or viewports first</td>
+</tr>
+<tr>
+<td>The sheet is the wrong size</td>
+<td>Page setup</td>
+<td>Right-click the layout tab ▸ <strong>Page Setup Manager…</strong></td>
+</tr>
+<tr>
+<td>Poly VP is greyed out</td>
+<td>Not implemented yet</td>
+<td>Use a rectangular viewport</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="plotting.html">Plotting</a> · <a href="layers.html">Layers</a> · <a href="views-and-navigation.html">Views and Navigation</a> · <a href="modify-tools.html">Modify Tools</a> · <a href="annotation.html">Annotation</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="views-and-navigation.html">&larr; Views and Navigation</a><a class="doc-pager-link next" href="plotting.html">Plotting &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

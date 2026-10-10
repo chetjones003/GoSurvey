@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files and Drawings — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Files and Drawings.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/files-and-drawings.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html" aria-current="page">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Files and Drawings</h1>
+    <h1>Files and Drawings</h1>
+<hr>
+<h2>The <code>.gs</code> drawing file</h2>
+<p>GoSurvey&#39;s native format. A <code>.gs</code> file is a <strong>single UTF-8 text file containing one JSON object</strong> —
+no binary wrapper, no compression, no encryption. Saved files are pretty-printed.</p>
+<p>One <code>.gs</code> file holds a complete workspace:</p>
+<ul>
+<li>CAD geometry — lines, polylines, circles, arcs, ellipses, hatches, meshes</li>
+<li>Annotations — text, MTEXT, dimensions</li>
+<li>The layer table with colours, linetypes, lineweights, and transparency</li>
+<li>The <strong>survey point database</strong>, including raw descriptions and label styles</li>
+<li><strong>Point groups</strong> and <strong>surfaces</strong></li>
+<li><strong>Paper layouts</strong>, their page setups, and their viewports</li>
+<li>Text styles, plot scale, and insertion units</li>
+<li>PDF underlay references</li>
+</ul>
+<p>Because it is plain JSON, a <code>.gs</code> file is diffable and greppable, which is useful when something
+goes wrong.</p>
+<hr>
+<h2>Drawing tabs</h2>
+<p>Multiple drawings are open at once as tabs above the viewport (<code>Drawing 1</code>, <code>Drawing 2</code>, <code>+</code>).</p>
+<p><strong>Each tab is a completely independent document.</strong> Geometry, layers, survey points, paper layouts,
+plot scale, and undo history are all per-tab. Switching tabs switches all of it.</p>
+<p>Tabs can be hidden with <strong>Settings → Display → Display File Tabs</strong>.</p>
+<hr>
+<h2>New, Open, Save</h2>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>How</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>New</strong></td>
+<td>File → New</td>
+<td>Opens an empty drawing <strong>in a new tab</strong>, named <code>Drawing N</code></td>
+</tr>
+<tr>
+<td><strong>Open</strong></td>
+<td>File → Open</td>
+<td>Opens a <code>.gs</code> <strong>in a new tab</strong>, named after the file. Does not replace what you are working on</td>
+</tr>
+<tr>
+<td><strong>Save</strong></td>
+<td><code>Ctrl+S</code>, File → Save</td>
+<td>Writes to the current path. With no path yet, the Save-As dialog opens first</td>
+</tr>
+<tr>
+<td><strong>Save As</strong></td>
+<td>File → Save As…</td>
+<td>New name and location; the tab is renamed to the file stem and later saves go to the new path</td>
+</tr>
+</tbody></table>
+<p>There is <strong>no autosave, no backup file, and no drawing recovery</strong>. Save deliberately, and save often.</p>
+<p>There is no recent-files list.</p>
+<hr>
+<h2>Closing and unsaved changes</h2>
+<p><strong>File → Quit Application</strong>, or the window close button.</p>
+<p>If any tab has unsaved changes, an <strong>Unsaved Changes</strong> dialog appears listing them:</p>
+<blockquote>
+<p><em>The following drawings have unsaved changes:</em></p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Save All &amp; Close</strong></td>
+<td>Saves every listed drawing, then exits</td>
+</tr>
+<tr>
+<td><strong>Close Without Saving</strong></td>
+<td>Discards the changes and exits</td>
+</tr>
+<tr>
+<td><strong>Cancel</strong></td>
+<td>Returns to the program</td>
+</tr>
+</tbody></table>
+<p>The same prompt appears when an update is about to install, so an update can never take unsaved
+work with it. Cancelling the save prompt cancels the update too — the verified installer stays on
+disk for the next offer.</p>
+<hr>
+<h2>Templates</h2>
+<p>New drawings start from a <strong>startup template</strong>.</p>
+<p><strong>Settings → Files:</strong></p>
+<blockquote>
+<p><em>Search paths, file locations, and startup template. GoSurvey loads a workspace .gs at startup;
+an empty Custom path uses the bundled <code>resources/default-template.gs</code> next to the executable.
+Preferences are saved in <code>gosurvey-user.json</code> beside the executable.</em></p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Startup template (.gs)</strong> — Custom .gs path</td>
+<td>Point at your own template</td>
+</tr>
+<tr>
+<td><strong>Browse</strong></td>
+<td>File dialog (Windows only in this build)</td>
+</tr>
+<tr>
+<td><strong>Clear path (use bundled)</strong></td>
+<td>Fall back to <code>resources/default-template.gs</code></td>
+</tr>
+<tr>
+<td><strong>Save startup preferences</strong></td>
+<td>Writes <code>gosurvey-user.json</code></td>
+</tr>
+</tbody></table>
+<p>The dialog reports where the bundled template resolved to, or says it could not be found.</p>
+<p><strong>To make your own template:</strong> set up a drawing with your standard layers, text styles, layouts,
+and page setups, save it as a <code>.gs</code>, and point the startup template at it.</p>
+<hr>
+<h2>Where files live</h2>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>%ProgramFiles%\GoSurvey</code></td>
+<td>The installed program</td>
+</tr>
+<tr>
+<td>Beside the executable</td>
+<td><code>gosurvey-user.json</code> — user preferences (display precision, angle format, startup template, update settings)</td>
+</tr>
+<tr>
+<td>Beside the executable — <code>resources/</code></td>
+<td><code>default-template.gs</code>, <code>fonts/</code>, <code>hatches/</code>, <code>icons/</code>, <code>layouts/</code>, <code>linetypes/</code></td>
+</tr>
+<tr>
+<td><code>%APPDATA%\GoSurvey</code></td>
+<td><code>history.log</code> — the undo history log</td>
+</tr>
+</tbody></table>
+<p>Resources are resolved <strong>relative to the executable</strong>.</p>
+<hr>
+<h2>Version compatibility</h2>
+<p>GoSurvey <strong>opens drawings saved by any older version</strong>, converting them as it loads. The file on
+disk is not modified until you save.</p>
+<p>Two cases are called out in the update dialog before you accept an update:</p>
+<ul>
+<li>If the update <strong>changes the drawing file format</strong>, you are told that drawings saved afterwards
+cannot be opened by the version you have now.</li>
+<li>In the rare case an update genuinely <strong>cannot open existing drawings</strong>, that appears as a
+prominent warning with an explanation, so you can back up first or decline.</li>
+</ul>
+<hr>
+<h2>Updates</h2>
+<p>GoSurvey checks for a newer version each time it opens. Nothing downloads or installs on its own.</p>
+<p><strong>Settings → System → Updates:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Check for updates on startup</strong></td>
+<td>On</td>
+<td>Turn it off and GoSurvey makes no network requests at all</td>
+</tr>
+<tr>
+<td><strong>Include beta releases</strong></td>
+<td>Off</td>
+<td>Turn on to receive pre-release builds</td>
+</tr>
+</tbody></table>
+<p>The dialog reports the current version, and any version you have chosen to skip.</p>
+<p>Choosing <strong>Update Now</strong> downloads the installer, verifies it against a SHA-256 published with the
+release, prompts you to save open drawings, then installs and reopens GoSurvey. The installer is
+not code-signed yet, so Windows will ask for permission.</p>
+<p>Betas are published more often and are less tested than stable releases. They are real working
+builds — they are also where problems get found.</p>
+<hr>
+<h2>Panel layouts</h2>
+<p>Separate from drawings: <strong>View → Layout ▸ Save current as…</strong> stores the arrangement of panels as a
+named <code>.ini</code> file, and <strong>Switch to</strong> recalls one. <strong>View → Reset layout</strong> restores the built-in
+arrangement.</p>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Opening a drawing did not replace the current one</td>
+<td>Open always uses a new tab, by design</td>
+<td>Close the tab you no longer want</td>
+</tr>
+<tr>
+<td>Work was lost after a crash</td>
+<td>There is no autosave or recovery</td>
+<td>Save often; <code>Ctrl+S</code> is cheap</td>
+</tr>
+<tr>
+<td>A <code>.gs</code> will not open</td>
+<td>It may be truncated or hand-edited into invalid JSON</td>
+<td>Check the log for the parse error; <code>.gs</code> is plain JSON, so a text editor can show you where</td>
+</tr>
+<tr>
+<td>New drawings do not have my layers</td>
+<td>No startup template is configured</td>
+<td>Settings → Files → <strong>Startup template (.gs)</strong></td>
+</tr>
+<tr>
+<td>Preferences do not stick</td>
+<td><code>gosurvey-user.json</code> could not be written</td>
+<td><em>&quot;Error: failed to write gosurvey-user.json (check directory permissions)&quot;</em> — the folder beside the executable needs to be writable</td>
+</tr>
+<tr>
+<td>An update prompt appeared mid-work</td>
+<td>The startup check found a newer version</td>
+<td><strong>Remind Me Later</strong>, or turn the check off in Settings → System</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="import-and-export.html">Import and Export</a> · <a href="settings-and-options.html">Settings and Options</a> · <a href="getting-started.html">Getting Started</a> · <a href="paper-space-and-layouts.html">Paper Space and Layouts</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="import-and-export.html">&larr; Import and Export</a><a class="doc-pager-link next" href="settings-and-options.html">Settings and Options &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

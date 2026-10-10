@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Views and Navigation — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Views and Navigation.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/views-and-navigation.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html" aria-current="page">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Views and Navigation</h1>
+    <h1>Views and Navigation</h1>
+<hr>
+<h2>Mouse navigation</h2>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Middle mouse drag</strong></td>
+<td>Pan</td>
+</tr>
+<tr>
+<td><strong>Mouse wheel</strong></td>
+<td>Zoom, smooth and cursor-centred</td>
+</tr>
+</tbody></table>
+<p>The wheel zoom factor is set in <strong>Settings → Display → Wheel zoom factor</strong>, from <code>1.01x</code> to <code>3.00x</code>
+per notch. The same page reports the current zoom and pan values.</p>
+<hr>
+<h2>Zoom commands</h2>
+<h3>ZOOMEXTENTS (<code>ZE</code>)</h3>
+<p><strong>Ribbon:</strong> View → Extents <strong>Command:</strong> <code>ZOOMEXTENTS</code>, <code>ZE</code></p>
+<p>Fits all drawing content — geometry, survey point markers, everything — in the view. The first
+thing to reach for after an import or a large edit.</p>
+<h3>ZOOMWINDOW (<code>ZW</code>)</h3>
+<p><strong>Ribbon:</strong> View → Window <strong>Command:</strong> <code>ZOOMWINDOW</code>, <code>ZW</code></p>
+<pre><code>ZOOM WINDOW: Two corners (unsnapped) — rubber previews fit area | ESC cancel
+</code></pre>
+<p>Two clicks define the rectangle to zoom to. The rubber-band preview shows the area that will fit.
+The corners use the <strong>unsnapped</strong> cursor, so a nearby snap point cannot pull one off target.</p>
+<p>Both zoom commands refuse to start while another command is running —
+<code>ZOOM EXTENTS — finish or cancel the active command first.</code></p>
+<p>There is no <code>ZOOM PREVIOUS</code>, no named views, and no <code>ZOOM</code> with a scale factor.</p>
+<hr>
+<h2>PAN (<code>P</code>)</h2>
+<p><strong>Command:</strong> <code>PAN</code>, <code>P</code> <strong>Menu:</strong> Right-click ▸ Pan</p>
+<pre><code>PAN — drag with the left mouse button. Press Esc, Enter, or right-click to exit.
+</code></pre>
+<p>A modal pan. Most of the time the middle-mouse drag is quicker — this command exists for when the
+middle button is not available.</p>
+<hr>
+<h2>ORBIT (<code>3DORBIT</code>, <code>3DO</code>)</h2>
+<p><strong>Command:</strong> <code>ORBIT</code>, <code>3DORBIT</code>, <code>3DO</code> <strong>Menu:</strong> Right-click ▸ Free Orbit</p>
+<pre><code>ORBIT — drag with the left mouse button to tumble. Press Esc, Enter, or right-click to exit.
+</code></pre>
+<p>Free-orbits the model view. <strong>Model space only</strong> — <code>ORBIT — model space only; a paper sheet is 2D.</code></p>
+<p>Orbit is how you check elevations. A plan view cannot show you that two lines which appear to cross
+are at different heights, or that a surface has a spike in it. Tumbling the view makes both
+obvious in seconds.</p>
+<hr>
+<h2>ViewCube</h2>
+<p>A cube in the corner of the viewport, <strong>model space only</strong>. Click a face to swing the view to that
+orientation:</p>
+<p><strong>TOP · BOTTOM · FRONT · BACK · LEFT · RIGHT</strong></p>
+<p>The view <strong>eases</strong> into place rather than jumping, so you keep your bearings. The cube also tracks
+the current view azimuth.</p>
+<p>To get back to plan view, click <strong>TOP</strong>.</p>
+<hr>
+<h2>Visual styles</h2>
+<p><strong>Ribbon:</strong> View → Visual style <strong>Command:</strong> <code>VISUALSTYLE</code>, <code>VS</code>, <code>VSCURRENT</code></p>
+<p>How the viewport draws.</p>
+<table>
+<thead>
+<tr>
+<th>Style</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>2D Wireframe</strong></td>
+<td>Every edge visible, no depth testing — the classic CAD view. Draw order decides what sits on top</td>
+</tr>
+<tr>
+<td><strong>Hidden</strong></td>
+<td>Depth testing on, so near geometry hides far geometry</td>
+</tr>
+<tr>
+<td><strong>Shaded</strong></td>
+<td>Depth testing on, <strong>plus</strong> lit fills for imported meshes and hatches</td>
+</tr>
+</tbody></table>
+<p><strong>What &quot;Shaded&quot; actually fills.</strong> Only two things: <strong>imported meshes</strong> (<code>IMPORTMODEL</code>) and
+<strong>hatches / filled regions</strong>. It does <strong>not</strong> fill TIN surfaces — those are drawn as triangle edges
+in all three styles, so switching styles on a surface changes nothing you can see. See
+<a href="known-limitations.html">Known Limitations</a>.</p>
+<p>On a purely 2D drawing the three styles also look alike, because nothing occludes anything.</p>
+<p>Usage:</p>
+<pre><code>VS SHADED
+VS 2D
+VISUALSTYLE            ← reports the current value and the options
+</code></pre>
+<p>A bare <code>VISUALSTYLE</code> answers <code>Visual style = 2D Wireframe. Usage: VS 2D | HIDDEN | SHADED.</code> and
+anything unrecognised answers <code>VISUALSTYLE — enter 2D, HIDDEN or SHADED.</code></p>
+<p>To read a <strong>TIN surface</strong> in three dimensions, use <code>ORBIT</code> — not the visual style. Tilting the view
+is what exposes elevation, spikes, and bad shots.</p>
+<hr>
+<h2>Elevation and the work plane</h2>
+<p><code>ELEV</code> / <code>UCS</code> sets the Z that new geometry is drawn at, reported on the status bar as <code>UCS: World</code>
+or <code>UCS: Elev &lt;z&gt;</code>. See <a href="drafting-aids.html">Drafting Aids</a>.</p>
+<hr>
+<h2>Model and paper space</h2>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Status bar <strong>MODEL / PAPER</strong> button</td>
+<td>Toggle between model space and the current layout</td>
+</tr>
+<tr>
+<td>Status bar layout tabs</td>
+<td>Switch directly to any layout</td>
+</tr>
+<tr>
+<td><strong>☰</strong> menu</td>
+<td>Model space · each layout · New paper layout</td>
+</tr>
+<tr>
+<td>Double-click a viewport</td>
+<td>Enter floating model space (<strong>FLOAT</strong>)</td>
+</tr>
+<tr>
+<td><code>MSPACE</code> / <code>MS</code>, <code>PSPACE</code> / <code>PS</code></td>
+<td>The same, from the command line</td>
+</tr>
+</tbody></table>
+<p>See <a href="paper-space-and-layouts.html">Paper Space and Layouts</a>.</p>
+<hr>
+<h2>REGEN (<code>RE</code>)</h2>
+<p><strong>Command:</strong> <code>REGEN</code>, <code>RE</code></p>
+<p>Regenerates the drawing and refreshes the GPU caches. Use it if the display looks stale after a
+large edit — geometry that should have disappeared but is still drawn, or an edit that has not
+shown up.</p>
+<hr>
+<h2>Isolating what you can see</h2>
+<p><code>ISOLATEOBJECTS</code>, <code>HIDEOBJECTS</code>, <code>UNISOLATEOBJECTS</code> temporarily reduce a dense drawing to what you
+are working on. <strong>VP Freeze</strong> does the same per viewport in a layout. See <a href="object-selection.html">Object Selection</a> and
+<a href="layers.html">Layers</a>.</p>
+<hr>
+<h2>Panel layouts</h2>
+<p><strong>View → Reset layout</strong> restores the built-in panel arrangement.</p>
+<p><strong>View → Layout ▸</strong> saves and recalls named panel layouts:</p>
+<ul>
+<li><strong>Save current as…</strong> — <em>Saves the current panel layout as a named .ini file.</em> Names may contain
+letters, digits, dash, and underscore</li>
+<li><strong>Switch to</strong> — pick from the saved layouts</li>
+</ul>
+<p>The log confirms <code>UI layout: saved as &quot;&lt;name&gt;&quot;</code> and <code>UI layout: switched to &quot;&lt;name&gt;&quot;</code>.</p>
+<hr>
+<h2>Display settings that affect the viewport</h2>
+<p><strong>Settings → Display</strong> (see <a href="settings-and-options.html">Settings and Options</a>):</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Color theme</strong></td>
+<td>Dark or Light</td>
+</tr>
+<tr>
+<td><strong>Wheel zoom factor</strong></td>
+<td>Zoom per wheel notch</td>
+</tr>
+<tr>
+<td><strong>Display scroll bars in drawing window</strong></td>
+<td>Scroll bars</td>
+</tr>
+<tr>
+<td><strong>Display printable area</strong>, <strong>Display paper background</strong>, <strong>Display paper shadow</strong></td>
+<td>Paper-space appearance</td>
+</tr>
+<tr>
+<td><strong>Smooth line display</strong></td>
+<td>Removes the jagged look on diagonal lines and curved edges</td>
+</tr>
+<tr>
+<td><strong>Accelerated font display</strong></td>
+<td>GPU-accelerated TrueType rendering</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Zoom extents shows a huge empty area</td>
+<td>Something is at a wild coordinate — often a stray point from a bad import</td>
+<td>Find and delete the outlier, then <code>ZE</code> again</td>
+</tr>
+<tr>
+<td>The drawing looks stale</td>
+<td>GPU cache</td>
+<td><code>REGEN</code> / <code>RE</code></td>
+</tr>
+<tr>
+<td>ORBIT will not start</td>
+<td>You are in a paper layout</td>
+<td>Switch to model space</td>
+</tr>
+<tr>
+<td>Lines that should cross do not connect</td>
+<td>They are at different elevations</td>
+<td>Orbit to check, and see <a href="object-snaps.html">Object Snaps</a> on apparent intersections</td>
+</tr>
+<tr>
+<td>A surface is a flat mess of triangle edges</td>
+<td>Surfaces render as edges in every style; <code>SHADED</code> does not fill them</td>
+<td>Expected. <code>ORBIT</code> to read the shape</td>
+</tr>
+<tr>
+<td>Panels are in the wrong place</td>
+<td>Layout drift</td>
+<td><strong>View → Reset layout</strong></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="drafting-aids.html">Drafting Aids</a> · <a href="paper-space-and-layouts.html">Paper Space and Layouts</a> · <a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a> · <a href="settings-and-options.html">Settings and Options</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="inquiry-commands.html">&larr; Inquiry Commands</a><a class="doc-pager-link next" href="paper-space-and-layouts.html">Paper Space and Layouts &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coordinate Input — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Coordinate Input.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/coordinate-input.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html" aria-current="page">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Coordinate Input</h1>
+    <h1>Coordinate Input</h1>
+<p>Everything you can type when GoSurvey asks for a point, a distance, or an angle.</p>
+<hr>
+<h2>The coordinate frame</h2>
+<table>
+<thead>
+<tr>
+<th>Axis</th>
+<th>Survey meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>X</strong></td>
+<td><strong>Easting</strong></td>
+</tr>
+<tr>
+<td><strong>Y</strong></td>
+<td><strong>Northing</strong></td>
+</tr>
+<tr>
+<td><strong>Z</strong></td>
+<td><strong>Elevation</strong></td>
+</tr>
+</tbody></table>
+<p>Coordinates you type and coordinates you read are <strong>world</strong> coordinates — the state-plane or
+project values, not any internal frame. The status-bar readout, dynamic input, Properties, the
+Viewpoints table, and every report all show world values.</p>
+<p>Large state-plane coordinates are handled at full precision. GoSurvey sets an internal local origin
+automatically when a drawing first sees big numbers, and does the subtraction in double precision
+before storing, so an imported CSV point lands exactly on the matching DXF geometry.</p>
+<hr>
+<h2>Point entry</h2>
+<p>At any prompt that asks for a point:</p>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Meaning</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>A click</strong></td>
+<td>The cursor position, snapped if a snap fires</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>X,Y</code></td>
+<td>Absolute world coordinates</td>
+<td><code>1543268.25,483112.90</code></td>
+</tr>
+<tr>
+<td><code>X Y</code></td>
+<td>Same, space separated</td>
+<td><code>1543268.25 483112.90</code></td>
+</tr>
+<tr>
+<td><code>@dx,dy</code></td>
+<td><strong>Relative</strong> to the previous point</td>
+<td><code>@100,0</code></td>
+</tr>
+<tr>
+<td><code>@dx dy</code></td>
+<td>Same, space separated</td>
+<td><code>@100 0</code></td>
+</tr>
+</tbody></table>
+<p>Relative entry is only accepted where a previous point exists to measure from — the second point of
+a LINE segment, the destination of a MOVE, the second extension line of a dimension. At a first
+point there is no anchor, so <code>@</code> is refused.</p>
+<blockquote>
+<p><strong>Polar coordinate entry (<code>@100&lt;45</code>) is not supported.</strong> To go a distance along a bearing, use
+the <strong>bearing lock</strong> described below.</p>
+</blockquote>
+<h3>Z and elevation</h3>
+<p>Point prompts take X and Y. The <strong>Z of new geometry</strong> comes from the current work plane, set with
+<code>ELEV</code> and shown on the status bar as <code>UCS: World</code> or <code>UCS: Elev &lt;z&gt;</code>. See <a href="drafting-aids.html">Drafting Aids</a>.</p>
+<hr>
+<h2>Angle and bearing entry</h2>
+<p><strong>North is 0°. Angles increase clockwise.</strong></p>
+<table>
+<thead>
+<tr>
+<th>Direction</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>North</td>
+<td><code>0</code></td>
+</tr>
+<tr>
+<td>East</td>
+<td><code>90</code></td>
+</tr>
+<tr>
+<td>South</td>
+<td><code>180</code></td>
+</tr>
+<tr>
+<td>West</td>
+<td><code>270</code></td>
+</tr>
+</tbody></table>
+<p>This entry convention is fixed. How angles are <strong>displayed</strong> — decimal degrees, DMS, or surveyor&#39;s
+bearings — is a separate setting in <code>UNITS</code>, and changing it does not change what you type.</p>
+<h3>Accepted formats</h3>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>132.5</code></td>
+<td>Decimal degrees</td>
+</tr>
+<tr>
+<td><code>132d30m00s</code></td>
+<td>Degrees, minutes, seconds</td>
+</tr>
+<tr>
+<td><code>132d30m</code></td>
+<td>Degrees and minutes; seconds default to 0</td>
+</tr>
+<tr>
+<td><code>132d</code></td>
+<td>Degrees only</td>
+</tr>
+<tr>
+<td><code>-45</code></td>
+<td>Negative, i.e. counter-clockwise</td>
+</tr>
+</tbody></table>
+<p>Angles are used by LINE and POLYLINE bearing lock, <code>ROTATE</code>, <code>ALIGN</code>, and TEXT rotation.</p>
+<hr>
+<h2>Bearing lock — distance and direction</h2>
+<p>The survey way to draw. Available in <strong>LINE</strong> and <strong>POLYLINE</strong> after the first point.</p>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>A &lt;bearing&gt;</code></td>
+<td>Lock the direction. <code>A 132d15m30s</code></td>
+</tr>
+<tr>
+<td><code>A</code> alone</td>
+<td>Enter bearing-lock mode; type the bearing on the next line. Blank Enter cancels</td>
+</tr>
+<tr>
+<td><code>A &lt;bearing&gt; +90</code></td>
+<td>Bearing plus a turn on one line. <code>-45</code> works too</td>
+</tr>
+<tr>
+<td><code>A</code> again</td>
+<td>Clears the lock</td>
+</tr>
+<tr>
+<td><code>2P</code> (or <code>AP</code>, <code>ANGLEPICK</code>)</td>
+<td>Define the direction by picking two points</td>
+</tr>
+<tr>
+<td><code>+90</code> / <code>-45</code> after a <code>2P</code> pick</td>
+<td>Adjust the picked direction, then lock</td>
+</tr>
+<tr>
+<td><strong>Enter</strong> after a <code>2P</code> pick</td>
+<td>Lock the picked direction unchanged</td>
+</tr>
+<tr>
+<td>A number, while locked</td>
+<td>Distance along the locked ray. Negative runs backwards</td>
+</tr>
+</tbody></table>
+<h3>Example — a traverse leg</h3>
+<pre><code>LINE
+1543268.25,483112.90
+A 132d15m30s
+248.55
+</code></pre>
+<h3>Example — turning off an existing line</h3>
+<pre><code>LINE
+(snap to the start point)
+2P                     ← pick two points along the existing line
+(click, click)
++90                    ← turn 90° right from that direction, and lock
+150                    ← run 150 units
+</code></pre>
+<hr>
+<h2>Distance entry</h2>
+<p>A bare number is interpreted as a <strong>distance</strong> when the command knows a direction:</p>
+<ul>
+<li><strong>With a bearing locked</strong> — distance along the locked ray. A negative value runs the other way.</li>
+<li><strong>With Ortho on and no lock</strong> — distance along the horizontal or vertical <strong>toward the cursor</strong>.</li>
+<li><strong>With neither</strong> — there is no direction, so a bare number does nothing useful. Lock a bearing or
+turn on Ortho.</li>
+</ul>
+<p>Distances are in <strong>model units</strong>, whatever unit your drawing is in. GoSurvey does not convert
+units; the <code>UNITS</code> insertion-units setting is a label only.</p>
+<hr>
+<h2>Dynamic input</h2>
+<p>While a command expects a <strong>coordinate point</strong>, two live fields follow the crosshair showing the
+current <strong>world</strong> X and Y at the configured display precision.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Type</strong></td>
+<td>Locks the active field to what you type</td>
+</tr>
+<tr>
+<td><strong>Tab</strong></td>
+<td>Moves between the X and Y fields</td>
+</tr>
+<tr>
+<td><strong>Enter</strong></td>
+<td>Commits the point</td>
+</tr>
+<tr>
+<td><strong>A click in the viewport</strong></td>
+<td>Also commits the point</td>
+</tr>
+</tbody></table>
+<p>Prompts that expect a bearing, angle, distance, option, or command name show a <strong>single</strong> field
+instead of two.</p>
+<hr>
+<h2>Display precision and format</h2>
+<p>Set in the <strong>Drawing Units</strong> dialog — type <code>UNITS</code>, <code>UN</code>, or <code>DDUNITS</code>.</p>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/04-drawing-units.png" alt="Drawing Units dialog" loading="lazy"></p>
+<p><em>Note the <strong>Sample Output</strong> box at the bottom: it previews a coordinate and an angle in the formats
+you have chosen, before you accept them.</em></p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Controls</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Length → Precision</strong></td>
+<td>Decimal places for coordinates, distances, and lengths across the status bar, Properties, dynamic input, and reports</td>
+</tr>
+<tr>
+<td><strong>Survey-point precision</strong></td>
+<td>An independent decimal count for survey-point coordinates and labels (Settings → Drafting)</td>
+</tr>
+<tr>
+<td><strong>Angle → Type</strong></td>
+<td>Decimal Degrees · Deg/Min/Sec · Surveyor&#39;s Units</td>
+</tr>
+<tr>
+<td><strong>Angle → Precision</strong></td>
+<td>Decimals on the smallest unit shown</td>
+</tr>
+<tr>
+<td><strong>Angle → Base (0°)</strong> and <strong>Clockwise</strong></td>
+<td>The direction base and sense used for <strong>display</strong></td>
+</tr>
+<tr>
+<td><strong>Insertion scale</strong></td>
+<td>Feet · Meters · Unitless. A <strong>relabel only</strong> — written to the <code>.gs</code> file and to DXF <code>$INSUNITS</code>; <strong>coordinates are never scaled</strong></td>
+</tr>
+</tbody></table>
+<p>Length <strong>Type</strong> is fixed at <code>Decimal</code> — GoSurvey works in decimal units, the survey and civil norm.
+The other length formats are reserved.</p>
+<p>The dialog shows a live <strong>Sample Output</strong> so you can see the effect before you accept it. Display
+precision and angle format are saved as user preferences (<code>gosurvey-user.json</code>); plot scale and
+insertion units are stored per drawing.</p>
+<hr>
+<h2>Coordinate readout</h2>
+<p>The status bar shows <code>X … Y … Z …</code> for the crosshair, plus the current work plane:</p>
+<ul>
+<li><code>UCS: World</code> — new geometry goes on the world XY plane (Z = 0).</li>
+<li><code>UCS: Elev 125.400</code> — new geometry goes at that elevation.</li>
+</ul>
+<p><code>ID</code> reports the coordinates of a picked point into the command log. <code>INVERSE</code> reports ΔE, ΔN,
+distance, and bearing between two picks. See <a href="inquiry-commands.html">Inquiry Commands</a>.</p>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>@100,50</code> is refused</td>
+<td>The prompt has no previous point to measure from</td>
+<td>Use absolute <code>X,Y</code> for the first point</td>
+</tr>
+<tr>
+<td><code>@100&lt;45</code> does nothing</td>
+<td>Polar entry is not supported</td>
+<td>Use <code>A 45</code> to lock the bearing, then <code>100</code></td>
+</tr>
+<tr>
+<td>The line went the wrong way</td>
+<td>Bearings are clockwise from north, not counter-clockwise from east</td>
+<td><code>90</code> is east; <code>270</code> is west</td>
+</tr>
+<tr>
+<td>Typed coordinates land in the wrong place</td>
+<td>Typed values are always <strong>world</strong> coordinates</td>
+<td>Check the status-bar readout; if the drawing was imported in local coordinates, use <code>ALIGN</code></td>
+</tr>
+<tr>
+<td>The readout shows too few decimals</td>
+<td>Display precision</td>
+<td><code>UNITS</code> → <strong>Length → Precision</strong></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="object-snaps.html">Object Snaps</a> · <a href="drafting-aids.html">Drafting Aids</a> · <a href="drawing-tools.html">Drawing Tools</a> · <a href="inquiry-commands.html">Inquiry Commands</a> · <a href="settings-and-options.html">Settings and Options</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="object-snaps.html">&larr; Object Snaps</a><a class="doc-pager-link next" href="drafting-aids.html">Drafting Aids &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

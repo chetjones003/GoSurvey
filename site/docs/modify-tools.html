@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modify Tools — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Modify Tools.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/modify-tools.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html" aria-current="page">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Modify Tools</h1>
+    <h1>Modify Tools</h1>
+<p>Editing commands live on the <strong>Modify</strong> ribbon section, in the right-click <strong>Basic Modify Tools</strong>
+submenu, and on the command line.</p>
+<p>Most modify commands begin with a <strong>two-click window selection</strong> if nothing is already selected. If
+you select objects first, the command uses that selection and skips straight to its own prompts.</p>
+<p>Every modify command pushes a single <strong>undo step</strong> — <code>Ctrl+Z</code> reverses the whole operation.</p>
+<hr>
+<h2>MOVE (<code>M</code>)</h2>
+<p><strong>Ribbon:</strong> Modify → Move <strong>Command:</strong> <code>MOVE</code>, <code>M</code></p>
+<pre><code>MOVE/COPY: Click opposite corners of selection window | ESC cancel
+MOVE/COPY: Base point — click or X,Y | ESC cancel
+MOVE/COPY: Second point — click or X,Y or @dx,dy from base | ESC cancel
+</code></pre>
+<ol>
+<li><strong>Select</strong> — click two opposite corners of a window, or have a selection already.</li>
+<li><strong>Base point</strong> — click or type <code>X,Y</code>. Snap to a corner or a survey point for an exact move.</li>
+<li><strong>Second point</strong> — click, type <code>X,Y</code>, or type <code>@dx,dy</code> for an exact displacement from the base.</li>
+</ol>
+<p><strong>Example — shift everything 5 feet east and 2 feet north:</strong></p>
+<pre><code>MOVE
+(window-select)
+0,0
+@5,2
+</code></pre>
+<p><strong>Duplicate survey-point IDs.</strong> If moving would land a survey point on an ID that already exists, a
+dialog asks what to do: <strong>skip</strong>, <strong>renumber</strong>, <strong>merge</strong>, or <strong>overwrite</strong>.</p>
+<hr>
+<h2>COPY (<code>CP</code>)</h2>
+<p><strong>Ribbon:</strong> Modify → Copy <strong>Command:</strong> <code>COPY</code>, <code>CP</code></p>
+<p>Identical to MOVE, but the originals stay put. Same prompts, same duplicate-ID dialog.</p>
+<blockquote>
+<p><code>COPY</code> duplicates objects <strong>inside the drawing</strong> by base and second point. It is not the
+clipboard — that is <code>Ctrl+C</code> / <code>Ctrl+V</code>, further down this page.</p>
+</blockquote>
+<hr>
+<h2>ROTATE (<code>RO</code>)</h2>
+<p><strong>Ribbon:</strong> Modify → Rotate <strong>Command:</strong> <code>ROTATE</code>, <code>RO</code></p>
+<pre><code>ROTATE: Window-select — click two corners | ESC cancel
+ROTATE: Base point — click or X,Y | ESC cancel
+ROTATE: ° clockwise / DMS | R ref | C copy | ESC (north=0° CW)
+</code></pre>
+<ol>
+<li><strong>Select</strong>, then <strong>base point</strong> (the pivot).</li>
+<li><strong>Angle</strong> — one of:</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>A number</td>
+<td>Rotate by that many degrees <strong>clockwise</strong>. DMS accepted (<code>45d30m00s</code>)</td>
+</tr>
+<tr>
+<td><code>R</code> or <code>REF</code> or <code>REFERENCE</code></td>
+<td>Reference mode: pick two points that define the <em>current</em> direction, then give the <em>new</em> direction</td>
+</tr>
+<tr>
+<td><code>C</code></td>
+<td>Toggles <strong>copy mode</strong> — the rotated result is a copy and the original stays</td>
+</tr>
+<tr>
+<td><code>P</code> (after a reference)</td>
+<td>Give the new direction by picking two points instead of typing it</td>
+</tr>
+</tbody></table>
+<h3>Reference mode prompts</h3>
+<pre><code>ROTATE ref: First point | C toggles copy | ESC cancel
+ROTATE ref: Second point | C toggles copy | ESC cancel
+ROTATE ref: New bearing ° from north (like props) | P two pts | C copy | ESC
+</code></pre>
+<p>Reference mode is the practical one for surveying: snap along an existing line to capture its
+bearing, then type the bearing you want it to have.</p>
+<hr>
+<h2>SCALE (<code>SC</code>)</h2>
+<p><strong>Ribbon:</strong> Modify → Scale <strong>Command:</strong> <code>SCALE</code>, <code>SC</code></p>
+<p>Uniform scaling about a base point.</p>
+<pre><code>SCALE: Window-select — click two corners | ESC cancel
+SCALE: Base point — click or X,Y | ESC cancel
+SCALE: Second point or type factor (&gt;0) — dist/base-ref | R = two-point ref length | ESC
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Input at the factor prompt</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>A number greater than 0</td>
+<td>Scale by that factor. <code>2</code> doubles, <code>0.5</code> halves</td>
+</tr>
+<tr>
+<td>A click</td>
+<td>Factor is the picked distance divided by the base reference distance</td>
+</tr>
+<tr>
+<td><code>R</code> or <code>REFERENCE</code></td>
+<td>Reference-length mode</td>
+</tr>
+<tr>
+<td><code>C</code></td>
+<td>Toggles copy mode</td>
+</tr>
+</tbody></table>
+<h3>Reference-length mode</h3>
+<pre><code>SCALE ref: First point of reference length | ESC cancel
+SCALE ref: Second point (reference length) | ESC cancel
+SCALE ref: Type new length (model units) or pick first point of new length | ESC
+SCALE ref: Second point of new length (preview) | ESC cancel
+</code></pre>
+<p>Pick two points across something whose real length you know, then type that real length. This is
+how you scale a traced or imported drawing to a known dimension.</p>
+<hr>
+<h2>OFFSET (<code>O</code>)</h2>
+<p><strong>Ribbon:</strong> Modify → Offset <strong>Command:</strong> <code>OFFSET</code>, <code>O</code></p>
+<p>Creates a parallel copy at a distance. Works on <strong>lines, circles, arcs, ellipses, and polylines</strong>.</p>
+<pre><code>OFFSET: Pick line, circle, arc, ellipse, or polyline | ESC cancel
+OFFSET: Type distance then pick side — or through-click (line / circle / arc) | ESC cancel
+OFFSET: Pick side of object (polyline/ellipse use closest edge) | ESC cancel
+</code></pre>
+<ol>
+<li><strong>Pick the object.</strong></li>
+<li>Either <strong>type a positive distance</strong> and then click the side to offset toward, or <strong>click a
+through-point</strong> the offset must pass through (lines, circles, and arcs only).</li>
+</ol>
+<p>Circles and arcs offset <strong>concentrically</strong>. Polylines and ellipses offset as a whole, using the
+closest edge to decide the side.</p>
+<hr>
+<h2>TRIM (<code>TR</code>)</h2>
+<p><strong>Ribbon:</strong> Modify → Trim <strong>Command:</strong> <code>TRIM</code>, <code>TR</code></p>
+<p>TRIM has <strong>two modes</strong>, controlled by the <code>TRIMSTATE</code> system variable.</p>
+<h3>TRIMSTATE</h3>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>TRIM starts by</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>0</code></td>
+<td>Asking you to <strong>draw a trim line</strong> — two clicks</td>
+<td>✔</td>
+</tr>
+<tr>
+<td><code>1</code></td>
+<td>Asking you to <strong>pick cutting edges</strong>, Civil 3D style</td>
+<td></td>
+</tr>
+</tbody></table>
+<p>Set it with <code>TRIMSTATE 1</code> on one line, or type <code>TRIMSTATE</code> alone for a prompt (blank Enter keeps the
+current value).</p>
+<h3>Mode 0 — draw the trim line</h3>
+<pre><code>TRIM: First point of the trim line | type T — pick cutting edges instead | ESC cancel
+TRIM: Second point — dashed = removed part (midpoint picks side) | Ortho | ESC
+</code></pre>
+<p>Draw a line across what you want cut. The <strong>dashed</strong> part of the preview is the part that will be
+removed — the midpoint of your trim line decides which side goes. Ortho applies.</p>
+<h3>Mode 1 — pick cutting edges</h3>
+<pre><code>TRIM: Pick cutting edges (hover highlights) | Enter | type L — draw the trim line | ESC cancel
+TRIM: Click segment near end to remove | Enter done | ESC cancel
+</code></pre>
+<ol>
+<li>Click the objects that act as cutting edges — hovering highlights them.</li>
+<li>Press <strong>Enter</strong>.</li>
+<li>Click each segment <strong>near the end you want removed</strong>.</li>
+<li>Press <strong>Enter</strong> when done.</li>
+</ol>
+<p>Typing <code>L</code> at the cutting-edge prompt switches to the draw-a-line mode; typing <code>T</code> at the trim-line
+prompt switches back.</p>
+<hr>
+<h2>JOIN (<code>J</code>)</h2>
+<p><strong>Ribbon:</strong> Modify → Join <strong>Command:</strong> <code>JOIN</code>, <code>J</code></p>
+<pre><code>JOIN — window-select lines/polylines that meet at endpoints. ESC cancels.
+JOIN: Window-select — click two corners | ESC cancel
+</code></pre>
+<p>Window-select collinear lines, or coaxial arcs and polylines, that <strong>meet at their endpoints</strong>.
+Touching chains merge into single objects.</p>
+<p>Objects that only cross, or that are near-but-not-touching, are not joined. Use <code>OVERKILL</code> for
+duplicate and overlapping cleanup instead.</p>
+<hr>
+<h2>DELETE (<code>DEL</code>)</h2>
+<p><strong>Ribbon:</strong> Modify → Erase <strong>Command:</strong> <code>DELETE</code>, <code>DEL</code> <strong>Key:</strong> <code>Delete</code></p>
+<p><strong>With objects already selected</strong>, DELETE erases them immediately — no prompt. Selected survey
+points are removed together with their linked labels.</p>
+<p><strong>With nothing selected</strong>, it asks for a window:</p>
+<pre><code>DELETE — click two corners to window-select objects to erase. ESC cancels.
+</code></pre>
+<p>Two clicks define a window over the geometry to remove. The window uses the <strong>unsnapped</strong> cursor
+position, so a nearby snap point cannot pull a corner off target.</p>
+<p>Pressing the <code>Delete</code> key with nothing else happening starts this command. In paper space, DELETE
+requires that you select the paper objects or viewports first —
+<code>DELETE — select paper object(s) or viewport(s) first.</code></p>
+<hr>
+<h2>OVERKILL (<code>OK</code>)</h2>
+<p><strong>Ribbon:</strong> — <strong>Command:</strong> <code>OVERKILL</code>, <code>OK</code></p>
+<p>Cleans the <strong>entire drawing</strong> in one pass. It takes no selection and asks nothing — run it and read
+the counts in the log.</p>
+<table>
+<thead>
+<tr>
+<th>Object type</th>
+<th>What is removed or merged</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Lines</strong></td>
+<td>Zero-length segments; exact duplicates; collinear overlapping or touching segments merged into the shortest covering segment</td>
+</tr>
+<tr>
+<td><strong>Circles</strong></td>
+<td>Exact duplicates — same centre and radius within tolerance</td>
+</tr>
+<tr>
+<td><strong>Arcs</strong></td>
+<td>Arcs whose underlying circle already exists as a full circle; exact duplicate arcs</td>
+</tr>
+<tr>
+<td><strong>Polylines</strong></td>
+<td>Zero-length (coincident) vertex steps</td>
+</tr>
+</tbody></table>
+<p><strong>Tolerance</strong> is derived from the drawing size: <code>1 × 10⁻⁴ × max(x-span, y-span)</code>. Removal counts
+are reported in the command log.</p>
+<blockquote>
+<p><strong>Tip</strong> — run <code>OVERKILL</code> after a DXF import or a long manual cleanup. Imported linework routinely
+carries stacked duplicates that are invisible until you try to trim or join.</p>
+</blockquote>
+<hr>
+<h2>Clipboard — Cut, Copy, Paste</h2>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Shortcut</th>
+<th>Menu</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Cut</strong></td>
+<td><em>(see note)</em></td>
+<td>Right-click ▸ Clipboard ▸ Cut</td>
+<td>—</td>
+</tr>
+<tr>
+<td><strong>Copy</strong></td>
+<td><code>Ctrl+C</code></td>
+<td>Edit ▸ Copy, ribbon Copy</td>
+<td>—</td>
+</tr>
+<tr>
+<td><strong>Paste</strong></td>
+<td><code>Ctrl+V</code></td>
+<td>Edit ▸ Paste, ribbon Paste</td>
+<td><code>PASTE</code></td>
+</tr>
+<tr>
+<td><strong>Paste at Original Coordinates</strong></td>
+<td>—</td>
+<td>Edit ▸ Paste at Original Coordinates</td>
+<td><code>PASTEORIG</code>, <code>PO</code></td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>Note on Cut</strong> — the menu item is labelled <code>Ctrl+X</code>, but that key is only wired inside the
+MTEXT text editor; in the drawing it does nothing. Use the menu item. Cut is copy followed by
+erase, so it works on an existing selection.</p>
+</blockquote>
+<ul>
+<li><strong>Paste</strong> places the copied objects at the cursor, with a live preview before you click:
+<code>PASTE: Click destination point | ESC cancel</code></li>
+<li><strong>Paste at Original Coordinates</strong> puts them back exactly where they were copied from — the right
+choice when moving objects between drawing tabs or between model and paper space.</li>
+</ul>
+<p>The clipboard carries geometry <strong>between model space and paper layouts</strong> at 1:1 raw coordinates,
+and between drawing tabs. Paper-space edits made this way are undoable.</p>
+<hr>
+<h2>Grips</h2>
+<p>Selected objects show <strong>grips</strong> — small blue squares at endpoints, centres, and midpoints. Drag one
+to edit the geometry directly.</p>
+<ul>
+<li>Grips honour <strong>object snap</strong>, so you can drag an endpoint onto another endpoint exactly.</li>
+<li><strong>Ortho</strong> constrains a grip drag to horizontal or vertical from the grip start — unless a snap
+fires, which wins.</li>
+<li><strong>Esc</strong> during a drag cancels it and restores the original position (<code>Grip edit canceled.</code>).</li>
+<li>Grip size is set in <strong>Settings → Selection → Grip size (px)</strong>.</li>
+</ul>
+<hr>
+<h2>Object isolation</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ISOLATEOBJECTS</code></td>
+<td><code>ISOLATE</code></td>
+<td>Hide everything except the current selection</td>
+</tr>
+<tr>
+<td><code>HIDEOBJECTS</code></td>
+<td>—</td>
+<td>Hide the selected objects</td>
+</tr>
+<tr>
+<td><code>UNISOLATEOBJECTS</code></td>
+<td><code>UNISOLATE</code></td>
+<td>Show everything that isolation hid</td>
+</tr>
+</tbody></table>
+<p>Also available from the viewport right-click menu under <strong>Isolate Objects</strong>.</p>
+<hr>
+<h2>ALIGN (<code>AL</code>)</h2>
+<p>Transforms objects onto a real-world coordinate system from control-point pairs. It is a survey
+tool rather than an ordinary edit, and has its own page: <a href="coordinate-alignment.html">Coordinate Alignment</a>.</p>
+<hr>
+<h2>Undo and Redo</h2>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Shortcut</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Undo</td>
+<td><code>Ctrl+Z</code></td>
+</tr>
+<tr>
+<td>Redo</td>
+<td><code>Ctrl+Shift+Z</code> or <code>Ctrl+Y</code></td>
+</tr>
+</tbody></table>
+<p>The <strong>Edit</strong> menu names the step: <em>Undo: Edit hatch</em>, <em>Undo: Import model</em>.</p>
+<p>Undo history is <strong>per drawing tab</strong> and is cleared when the tab is closed. The number of steps kept
+is set in <strong>Settings → User Preferences</strong>; a history log is written to
+<code>%APPDATA%\GoSurvey\history.log</code>.</p>
+<hr>
+<h2>Not implemented</h2>
+<p><strong>MIRROR</strong> appears on the Modify ribbon but is <strong>disabled</strong> — hovering it says <em>&quot;Mirror — flip
+selection across a mirror line (not implemented yet).&quot;</em> There is no STRETCH, EXTEND, BREAK, FILLET,
+CHAMFER, ARRAY, or EXPLODE command. See <a href="known-limitations.html">Known Limitations</a>.</p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="drawing-tools.html">&larr; Drawing Tools</a><a class="doc-pager-link next" href="object-selection.html">Object Selection &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

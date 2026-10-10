@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inquiry Commands — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Inquiry Commands.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/inquiry-commands.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html" aria-current="page">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Inquiry Commands</h1>
+    <h1>Inquiry Commands</h1>
+<p>Three commands that measure and report rather than change the drawing. Results go to the command
+log, so scroll it (or press <code>F2</code> for the console) to read them.</p>
+<hr>
+<h2>ID — identify a point</h2>
+<p><strong>Ribbon:</strong> Inquiry → ID Point <strong>Command:</strong> <code>ID</code></p>
+<pre><code>ID — specify point (click in drawing or type X,Y). UCS = World. ESC cancels.
+ID: Pick point (OSNAP when enabled) or type X,Y — logs UCS World | ESC cancel
+</code></pre>
+<p>Reports the coordinates of a point:</p>
+<pre><code>ID — UCS (World)  X = 1543268.250  Y = 483112.900  Z = 0.000
+</code></pre>
+<p>Coordinates are always in <strong>World</strong> — X is easting, Y is northing, Z is elevation — regardless of
+the current work plane. Decimals follow the <code>UNITS</code> display precision.</p>
+<p><strong>With object snap on</strong>, ID reports the snapped feature, which makes it the quick way to read off
+the exact coordinates of an endpoint, an intersection, or a survey point.</p>
+<p>If a command is already running, ID refuses:
+<code>ID — finish or cancel the active command first.</code></p>
+<hr>
+<h2>INVERSE — distance and bearing between two points</h2>
+<p><strong>Ribbon:</strong> Survey → Inverse <strong>Command:</strong> <code>INVERSE</code>, <code>INV</code></p>
+<p>The core COGO measurement: a survey leg between two points.</p>
+<pre><code>INVERSE — first point (World X=Easting, Y=Northing); then second.
+INVERSE: First point — pick or X,Y (Easting, Northing) | ESC cancel
+INVERSE: Second point — pick or X,Y / @ from first | ESC cancel
+</code></pre>
+<ol>
+<li><strong>First point</strong> — click (snapping to a survey point or endpoint) or type <code>X,Y</code>.</li>
+<li><strong>Second point</strong> — click, type <code>X,Y</code>, or type <code>@dx,dy</code> relative to the first.</li>
+</ol>
+<h3>The result</h3>
+<pre><code>INVERSE — ΔE = 743.350  ΔN = -332.460  horiz dist = 814.397  bearing = 114°08&#39;42&quot;
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>ΔE</strong></td>
+<td>Change in easting</td>
+</tr>
+<tr>
+<td><strong>ΔN</strong></td>
+<td>Change in northing</td>
+</tr>
+<tr>
+<td><strong>horiz dist</strong></td>
+<td>Horizontal distance between the two points</td>
+</tr>
+<tr>
+<td><strong>bearing</strong></td>
+<td>Direction, <strong>clockwise from north</strong></td>
+</tr>
+</tbody></table>
+<p>The bearing is reported in the format set in <code>UNITS</code> — decimal degrees, degrees/minutes/seconds, or
+surveyor&#39;s bearings. See <a href="coordinate-input.html">Coordinate Input</a>.</p>
+<p>If both picks land in the same place:
+<code>INVERSE — horizontal distance is zero; pick a different second point.</code></p>
+<blockquote>
+<p><strong>Tip</strong> — turn OSNAP on and set <strong>Survey point</strong> as a snap type before inversing between points.
+A pick a hundredth off is a hundredth of error in the reported distance.</p>
+</blockquote>
+<hr>
+<h2>SURFELEV — surface elevation and grade</h2>
+<p><strong>Ribbon:</strong> Inquiry → Elev/Grade <strong>Command:</strong> <code>SURFELEV</code>, <code>SE</code></p>
+<p>Reads elevations off TIN surfaces, and the grade between two locations.</p>
+<pre><code>SURFELEV — pick a point for its surface elevation; pick a second for grade. ESC cancels.
+SURFELEV: Pick a point for its surface elevation | ESC cancel
+SURFELEV: Second point for grade | ESC stops after the elevation
+</code></pre>
+<p>Requires at least one surface. Without one:
+<code>SURFELEV — there are no surfaces in the drawing. Build one from a point group first.</code>
+See <a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a>.</p>
+<h3>First pick — elevation</h3>
+<p>Reports the interpolated elevation on <strong>every surface that covers that point</strong>, one line each:</p>
+<pre><code>SURFELEV — Existing Ground: elevation 412.685
+SURFELEV — Proposed Grade: elevation 414.200
+</code></pre>
+<p>A pick outside every surface says so rather than extrapolating:</p>
+<pre><code>SURFELEV — outside surface. No elevation at that point.
+</code></pre>
+<h3>Second pick — grade</h3>
+<pre><code>SURFELEV — Existing Ground: grade -2.45%  slope 40.82:1  horiz 118.220  vert -2.896
+</code></pre>
+<p>or, when the two points are at the same elevation:</p>
+<pre><code>SURFELEV — Existing Ground: level (0.00%)  horiz 118.220  vert 0.000
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>grade</strong></td>
+<td>Rise over run as a percentage</td>
+</tr>
+<tr>
+<td><strong>slope</strong></td>
+<td>Run per unit of rise, as <code>N:1</code></td>
+</tr>
+<tr>
+<td><strong>horiz</strong></td>
+<td>Horizontal distance between the picks</td>
+</tr>
+<tr>
+<td><strong>vert</strong></td>
+<td>Elevation difference</td>
+</tr>
+</tbody></table>
+<p>Cases the command reports rather than guessing at:</p>
+<table>
+<thead>
+<tr>
+<th>Message</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>both picks are at the same location: horizontal distance 0. No grade.</code></td>
+<td>The two picks coincide</td>
+</tr>
+<tr>
+<td><code>&lt;surface&gt;: second point is outside this surface. No grade.</code></td>
+<td>The second pick left that surface</td>
+</tr>
+<tr>
+<td><code>outside surface at the first point; no grade to report.</code></td>
+<td>The first pick was already off the surface</td>
+</tr>
+</tbody></table>
+<p>Press <strong>Esc</strong> after the first pick to stop with just the elevation.</p>
+<hr>
+<h2>Related reporting</h2>
+<table>
+<thead>
+<tr>
+<th>Need</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Distance and bearing between two points</td>
+<td><code>INVERSE</code></td>
+</tr>
+<tr>
+<td>Exact coordinates of a feature</td>
+<td><code>ID</code></td>
+</tr>
+<tr>
+<td>Elevation and grade on a surface</td>
+<td><code>SURFELEV</code></td>
+</tr>
+<tr>
+<td>Traverse closure and residuals</td>
+<td><a href="traverse-editor.html">Traverse Editor</a></td>
+</tr>
+<tr>
+<td>Transformation parameters and point errors</td>
+<td><a href="coordinate-alignment.html">Coordinate Alignment</a></td>
+</tr>
+<tr>
+<td>A CSV of every point</td>
+<td><code>EXPORTPOINTS</code> — see <a href="survey-points.html">Survey Points</a></td>
+</tr>
+</tbody></table>
+<p>There is no <code>AREA</code>, <code>DIST</code>, <code>LIST</code>, or <code>MASSPROP</code> command. The only area GoSurvey reports is a
+<strong>circle&#39;s</strong>, shown under <em>Derived</em> in the Properties panel along with its diameter and
+circumference. A parcel area has to be computed outside the program — export the boundary or the
+points and compute there.</p>
+<hr>
+<h2>Related</h2>
+<p><a href="survey-points.html">Survey Points</a> · <a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a> · <a href="coordinate-input.html">Coordinate Input</a> · <a href="object-snaps.html">Object Snaps</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="coordinate-alignment.html">&larr; Coordinate Alignment</a><a class="doc-pager-link next" href="views-and-navigation.html">Views and Navigation &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

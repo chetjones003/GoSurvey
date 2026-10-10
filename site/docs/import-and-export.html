@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import and Export — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Import and Export.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/import-and-export.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html" aria-current="page">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Import and Export</h1>
+    <h1>Import and Export</h1>
+<table>
+<thead>
+<tr>
+<th>Format</th>
+<th>Import</th>
+<th>Export</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong><code>.gs</code></strong> — GoSurvey drawing</td>
+<td>✔</td>
+<td>✔</td>
+<td>File → Open / Save</td>
+</tr>
+<tr>
+<td><strong>DXF</strong> (ASCII)</td>
+<td>✔</td>
+<td>✔</td>
+<td>File → Import DXF… / Export DXF…</td>
+</tr>
+<tr>
+<td><strong>DWG</strong></td>
+<td>✔ <em>(converter)</em></td>
+<td>✔ <em>(converter)</em></td>
+<td>File → Import DWG… / Export DWG…</td>
+</tr>
+<tr>
+<td><strong>CSV</strong> — survey points</td>
+<td>✔</td>
+<td>✔</td>
+<td><code>IMPORTPOINTS</code> / <code>EXPORTPOINTS</code></td>
+</tr>
+<tr>
+<td><strong>JSON</strong> — survey point database</td>
+<td>✔</td>
+<td>✔</td>
+<td>Viewpoints / Create points panel</td>
+</tr>
+<tr>
+<td><strong>FBK</strong> — Autodesk Field Book</td>
+<td>✔</td>
+<td>—</td>
+<td>Traverse Editor → Import .fbk…</td>
+</tr>
+<tr>
+<td><strong>PDF</strong></td>
+<td>✔ <em>(as underlay)</em></td>
+<td>✔ <em>(as a plot)</em></td>
+<td><code>PDFATTACH</code> / Layout ribbon → Plot</td>
+</tr>
+<tr>
+<td><strong>glTF / GLB</strong></td>
+<td>✔</td>
+<td>—</td>
+<td><code>IMPORTMODEL</code></td>
+</tr>
+<tr>
+<td><strong>STL</strong></td>
+<td>✔</td>
+<td>—</td>
+<td><code>IMPORTMODEL</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>DXF</h2>
+<p>The main exchange route with AutoCAD, Civil 3D, and everything else.</p>
+<h3>Export — File → Export DXF…</h3>
+<p>Writes <strong>ASCII DXF tagged AC1032</strong> (AutoCAD 2018 class).</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>HEADER</strong></td>
+<td>Drawing limits, extents, system variables, <code>$HANDSEED</code>, <code>$INSUNITS</code> from the <code>UNITS</code> insertion-units setting, and — when survey points are present — <code>$PDMODE</code> / <code>$PDSIZE</code> so POINT entities display as an X</td>
+</tr>
+<tr>
+<td><strong>TABLES</strong></td>
+<td>LAYER (with plot-style pointers), VIEW, UCS, VPORT, APPID, DIMSTYLE, BLOCK_RECORD with canonical <code>*Model_Space</code> / <code>*Paper_Space</code> names</td>
+</tr>
+<tr>
+<td><strong>ENTITIES</strong></td>
+<td>Lines, circles, arcs, ellipses, polylines, text, mtext, aligned dimensions, with layers, ACI colours, lineweights, and model-space ownership</td>
+</tr>
+<tr>
+<td><strong>OBJECTS</strong></td>
+<td>A minimal named-object dictionary, so hosts like Civil 3D accept the file</td>
+</tr>
+</tbody></table>
+<p><strong>Survey points</strong> are written as native <code>POINT</code> / <code>AcDbPoint</code> entities at world coordinates, with
+per-point layer and ByLayer colour. Each carries its identity in <code>GOSURVEY</code> <strong>XDATA</strong> — point ID,
+label style, description — so a GoSurvey DXF round-trips with full survey identity, while any other
+DXF reader still sees a plain valid POINT.</p>
+<p>The log reports <code>DXF export — wrote &lt;path&gt;</code>. Anything excluded is stated:
+<code>DXF export — excluded …</code>.</p>
+<blockquote>
+<p><strong>Known gaps.</strong> Aligned dimensions are written as <strong>exploded lines plus text</strong>, not associative
+<code>DIMENSION</code> entities. Some entity types have no export branch yet and are silently absent — check
+the log line that reports exclusions, and see <a href="known-limitations.html">Known Limitations</a>.</p>
+</blockquote>
+<h3>Import — File → Import DXF…</h3>
+<p>Brings in model-space geometry: lines, circles, arcs, ellipses, polylines, and common annotations.</p>
+<table>
+<thead>
+<tr>
+<th>Behaviour</th>
+<th>Detail</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Paper space</strong></td>
+<td><code>N paper-space-only ENTITIES (group 67); layouts/title blocks not imported.</code></td>
+</tr>
+<tr>
+<td><strong>Unsupported types</strong></td>
+<td><code>N unsupported ENTITIES record(s).</code> — reported, never silently dropped</td>
+</tr>
+<tr>
+<td><strong>No ENTITIES section</strong></td>
+<td>Falls back to the <code>*MODEL_SPACE</code> block and says so</td>
+</tr>
+<tr>
+<td><strong>Large coordinates</strong></td>
+<td>State-plane values are imported at <strong>full precision</strong>; an internal local origin is set automatically</td>
+</tr>
+<tr>
+<td><strong>View</strong></td>
+<td>Zoom extents is applied after import</td>
+</tr>
+</tbody></table>
+<p>The log prints the imported bounding box, and a robust box that excludes outliers, so a stray
+entity at a wild coordinate is visible immediately.</p>
+<p><strong>Binary DXF is not supported</strong> — <code>Binary DXF is not supported — in AutoCAD use Save As → ASCII DXF.</code></p>
+<h3>Survey points on DXF import</h3>
+<table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>A <code>POINT</code> <strong>with</strong> GoSurvey XDATA</td>
+<td>Rebuilt as a survey point with ID, coordinates, elevation, description, layer, and label style; its label is re-linked</td>
+</tr>
+<tr>
+<td>A <code>POINT</code> <strong>without</strong> that XDATA — from another program</td>
+<td>Imported as a small snappable <strong>cross marker</strong>, unchanged</td>
+</tr>
+</tbody></table>
+<p><strong>Importing a DXF keeps the survey points already in the session.</strong> Only the CAD geometry is
+replaced. So importing CSV points then a DXF, or a DXF then points, both keep everything.</p>
+<p>Reconstructed points are <strong>merged</strong> with the existing ones. Non-colliding IDs are added directly; a
+colliding ID opens a prompt to <strong>overwrite</strong> the existing point or <strong>offset</strong> the imported IDs —
+<code>N imported survey point ID(s) conflict with existing points; choose overwrite or offset.</code></p>
+<h3>Civil 3D</h3>
+<p>Civil 3D <strong>COGO points are custom objects</strong> and are not written as standard DXF entities, so they
+cannot be recovered from a plain DXF, no matter which program reads it.</p>
+<p><strong>The route that works:</strong> export the points from Civil 3D as a <strong>PNEZD or PENZD CSV</strong> and use
+<code>IMPORTPOINTS</code>; use DXF for the linework. Either order is safe.</p>
+<p>The same applies to Plant 3D drawings, whose contents are largely <code>AcPp*</code> custom objects requiring
+Autodesk&#39;s object enabler. No third-party reader can reach them.</p>
+<hr>
+<h2>DWG</h2>
+<p><strong>File → Import DWG… / Export DWG…</strong></p>
+<p>DWG goes through an <strong>external converter</strong>. The menu items stay disabled until one is found:</p>
+<blockquote>
+<p><em>DWG needs a converter: install the free ODA File Converter, or set <code>GOSURVEY_DWG_CONVERTER</code> to
+ODAFileConverter.exe or accoreconsole.exe.</em></p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Converter</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>ODA File Converter</strong></td>
+<td>Free, from opendesign.com</td>
+</tr>
+<tr>
+<td><strong>accoreconsole.exe</strong></td>
+<td>Present on machines with AutoCAD installed</td>
+</tr>
+<tr>
+<td><strong><code>GOSURVEY_DWG_CONVERTER</code></strong></td>
+<td>Environment variable pointing at either executable</td>
+</tr>
+</tbody></table>
+<p>Hovering an enabled menu item shows which converter is in use.</p>
+<h3>Export warning</h3>
+<p>Because DWG is written <strong>through DXF</strong>, export is lossy, and GoSurvey says so before it writes:</p>
+<blockquote>
+<p><em>GoSurvey writes DWG through DXF, so this export drops:</em></p>
+<ul>
+<li>block definitions and inserts (geometry is written exploded)</li>
+<li>paper-space layouts beyond the first</li>
+<li>elevations, block attributes, multileaders and tables</li>
+<li>Civil 3D objects, proxies and anything else GoSurvey does not model</li>
+</ul>
+</blockquote>
+<p>If the target file already exists, the dialog escalates:
+<em>&quot;&lt;file&gt; already exists. Overwriting it will permanently discard the data listed above.&quot;</em> with an
+<strong>Overwrite</strong> button.</p>
+<p>Import is subject to the same modelling limits in reverse.</p>
+<p>Failures name the cause — a missing converter, a timeout, a file that is not a DWG
+(<code>is not a DWG file (no AC#### format tag)</code>), an empty output, or a converter exit code.</p>
+<blockquote>
+<p>Native DWG reading, with no converter, is planned.</p>
+</blockquote>
+<hr>
+<h2>Survey point CSV</h2>
+<p><code>IMPORTPOINTS</code> / <code>IMPPTS</code> and <code>EXPORTPOINTS</code> / <code>EXPPTS</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Preset</th>
+<th>Columns</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>P,N,E,Z,D</code></td>
+<td>Point ID, northing, easting, Z, description</td>
+</tr>
+<tr>
+<td><code>P,E,N,Z,D</code></td>
+<td>Point ID, easting, northing, Z, description</td>
+</tr>
+<tr>
+<td><code>N,E,Z</code></td>
+<td>Northing, easting, Z — IDs assigned on import</td>
+</tr>
+<tr>
+<td><code>E,N,Z</code></td>
+<td>Easting, northing, Z — IDs assigned on import</td>
+</tr>
+</tbody></table>
+<p>Import gives a live preview, a validation summary, an optional header-row skip, and a per-row
+problem report. Export offers the same presets plus an optional header row, and adds a tab to the
+<strong>Reports</strong> panel.</p>
+<p>CSV coordinates are <strong>world</strong> values, converted into the drawing&#39;s frame in double precision.</p>
+<p>Full detail: <a href="survey-points.html">Survey Points</a></p>
+<hr>
+<h2>Survey point JSON</h2>
+<p>The Create points panel and the Viewpoints table both have <strong>Save</strong> and <strong>Load</strong> buttons that write
+and read the whole point database as JSON, defaulting to <code>gosurvey_points.json</code>. Useful for moving
+a point set between drawings without going through CSV.</p>
+<hr>
+<h2>FBK — Autodesk Field Book</h2>
+<p><strong>Traverse Editor → Import .fbk…</strong></p>
+<blockquote>
+<p><em>Import an Autodesk Field Book (.fbk) raw data file. Replaces the current traverse with the
+imported stations, backsight and observations.</em></p>
+</blockquote>
+<p><strong>This replaces the current traverse.</strong> Sample files are in the repository under <code>samples/</code>.</p>
+<p>Full detail: <a href="traverse-editor.html">Traverse Editor</a></p>
+<hr>
+<h2>3D models — <code>IMPORTMODEL</code></h2>
+<p><strong>Command:</strong> <code>IMPORTMODEL</code>, <code>GLTF</code>, <code>IMPORT3D</code></p>
+<p>Imports a mesh as <strong>reference geometry</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>Extension</th>
+<th>Reader</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>.glb</code>, <code>.gltf</code></td>
+<td>Built in</td>
+</tr>
+<tr>
+<td><code>.stl</code></td>
+<td>Built in</td>
+</tr>
+<tr>
+<td><code>.dwg</code></td>
+<td>Through the DWG converter — extracts 3D solids as a mesh</td>
+</tr>
+</tbody></table>
+<h3>Usage</h3>
+<pre><code>IMPORTMODEL                                          ← file browser, unit scale 1 at 0,0,0
+IMPORTMODEL &quot;C:\models\tank.glb&quot; 0.0833 1000 2000 0  ← path, scale, insertion X Y Z
+</code></pre>
+<p>The bare form opens a file browser and states what it assumed:
+<em>IMPORTMODEL — unit scale 1, insertion 0,0,0. Use IMPORTMODEL &quot;&lt;path&gt;&quot; &lt;scale&gt; &lt;x&gt; &lt;y&gt; &lt;z&gt;
+to place it otherwise.</em></p>
+<p>A DWG import warns first — <em>Converting the DWG&#39;s 3D solids via &lt;converter&gt; — this can take a few
+minutes on a large model.</em></p>
+<p>On success:</p>
+<pre><code>Imported tank.glb — 184320 triangles, 12 parts, scale 0.0833.
+</code></pre>
+<p><strong>Anything not imported is named</strong>, never dropped in silence:</p>
+<pre><code>Not imported (geometry only): materials, animations, cameras.
+</code></pre>
+<p>The unit scale must be a non-zero finite number.</p>
+<p>Set the visual style to <strong>Shaded</strong> and use <code>ORBIT</code> to look at an imported model. See
+<a href="views-and-navigation.html">Views and Navigation</a>.</p>
+<hr>
+<h2>PDF</h2>
+<ul>
+<li><strong>In</strong> — as a snappable raster underlay, <code>PDFATTACH</code>. See <a href="pdf-underlays.html">PDF Underlays</a>.</li>
+<li><strong>Out</strong> — as a plotted sheet, from the Layout ribbon. See <a href="plotting.html">Plotting</a>.</li>
+</ul>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>DXF import brings in nothing</td>
+<td>Binary DXF, or the geometry is all in paper space</td>
+<td>Save as <strong>ASCII</strong> DXF; read the log for the paper-space count</td>
+</tr>
+<tr>
+<td>Imported geometry is miles from the survey points</td>
+<td>Different coordinate systems</td>
+<td><code>ALIGN</code> with control pairs</td>
+</tr>
+<tr>
+<td>Civil 3D points did not import</td>
+<td>They are custom objects, absent from the DXF</td>
+<td>Export a PNEZD CSV from Civil 3D</td>
+</tr>
+<tr>
+<td>DXF import wiped my points</td>
+<td>It should not — points are kept by design</td>
+<td>Check the log; if IDs collided you were prompted to overwrite or offset</td>
+</tr>
+<tr>
+<td>Some entities did not export</td>
+<td>The type has no export branch yet</td>
+<td>Read the <code>DXF export — excluded …</code> line; see <a href="known-limitations.html">Known Limitations</a></td>
+</tr>
+<tr>
+<td>DWG menu items are greyed out</td>
+<td>No converter found</td>
+<td>Install the ODA File Converter, or set <code>GOSURVEY_DWG_CONVERTER</code></td>
+</tr>
+<tr>
+<td>DWG export lost blocks and layouts</td>
+<td>Documented and warned about before writing</td>
+<td>Use DXF where the receiving program accepts it</td>
+</tr>
+<tr>
+<td><code>IMPORTMODEL</code> refuses the scale</td>
+<td>Zero or non-finite</td>
+<td>Give a non-zero finite number</td>
+</tr>
+<tr>
+<td>A DXF import zoomed out to nothing</td>
+<td>An outlier entity at a wild coordinate</td>
+<td>The log prints both the full and the outlier-excluded bounding box — find and delete it, then <code>ZE</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="survey-points.html">Survey Points</a> · <a href="files-and-drawings.html">Files and Drawings</a> · <a href="coordinate-alignment.html">Coordinate Alignment</a> · <a href="pdf-underlays.html">PDF Underlays</a> · <a href="traverse-editor.html">Traverse Editor</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="pdf-underlays.html">&larr; PDF Underlays</a><a class="doc-pager-link next" href="files-and-drawings.html">Files and Drawings &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

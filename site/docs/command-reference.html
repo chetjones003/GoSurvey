@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Command Reference — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Command Reference.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/command-reference.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html" aria-current="page">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Command Reference</h1>
+    <h1>Command Reference</h1>
+<p>Every command GoSurvey recognises at the command line, with its aliases and where it is documented
+in full.</p>
+<p>Command names are <strong>not case-sensitive</strong>. Typing is <strong>fuzzy</strong> — a partial or slightly wrong name
+still resolves, and an unrecognised entry answers <code>Unknown command. Did you mean: …?</code>. Type <code>HELP</code>
+for a compact list inside the program.</p>
+<hr>
+<h2>By category</h2>
+<h3>Draw</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>LINE</code></td>
+<td><code>L</code></td>
+<td>Draw line segments</td>
+<td><a href="drawing-tools.html">Drawing Tools</a></td>
+</tr>
+<tr>
+<td><code>POLYLINE</code></td>
+<td><code>PL</code></td>
+<td>Draw a connected polyline</td>
+<td><a href="drawing-tools.html">Drawing Tools</a></td>
+</tr>
+<tr>
+<td><code>RECT</code></td>
+<td><code>RECTANG</code>, <code>RECTANGLE</code></td>
+<td>Draw a rectangle from two opposite corners</td>
+<td><a href="drawing-tools.html">Drawing Tools</a></td>
+</tr>
+<tr>
+<td><code>CIRCLE</code></td>
+<td><code>C</code></td>
+<td>Draw a circle</td>
+<td><a href="drawing-tools.html">Drawing Tools</a></td>
+</tr>
+<tr>
+<td><code>ARC</code></td>
+<td>—</td>
+<td>Draw a three-point arc</td>
+<td><a href="drawing-tools.html">Drawing Tools</a></td>
+</tr>
+<tr>
+<td><code>ELLIPSE</code></td>
+<td><code>EL</code></td>
+<td>Draw an ellipse</td>
+<td><a href="drawing-tools.html">Drawing Tools</a></td>
+</tr>
+<tr>
+<td><code>HATCH</code></td>
+<td><code>H</code>, <code>BHATCH</code></td>
+<td>Fill a closed area by picking an internal point</td>
+<td><a href="drawing-tools.html">Drawing Tools</a></td>
+</tr>
+</tbody></table>
+<h3>Annotation</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>TEXT</code></td>
+<td>—</td>
+<td>Place single-line text</td>
+<td><a href="annotation.html">Annotation</a></td>
+</tr>
+<tr>
+<td><code>MTEXT</code></td>
+<td><code>MT</code></td>
+<td>Place multiline text</td>
+<td><a href="annotation.html">Annotation</a></td>
+</tr>
+<tr>
+<td><code>DIMALIGNED</code></td>
+<td><code>DAL</code></td>
+<td>Aligned dimension</td>
+<td><a href="annotation.html">Annotation</a></td>
+</tr>
+<tr>
+<td><code>DIMLINEAR</code></td>
+<td><code>DLI</code></td>
+<td>Linear (horizontal or vertical) dimension</td>
+<td><a href="annotation.html">Annotation</a></td>
+</tr>
+<tr>
+<td><code>DIMANGULAR</code></td>
+<td><code>DAN</code></td>
+<td>Angular dimension</td>
+<td><a href="annotation.html">Annotation</a></td>
+</tr>
+<tr>
+<td><code>STYLE</code></td>
+<td><code>ST</code>, <code>DDSTYLE</code></td>
+<td>Text style manager: create and edit named text styles</td>
+<td><a href="annotation.html">Annotation</a></td>
+</tr>
+</tbody></table>
+<h3>Modify</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>MOVE</code></td>
+<td><code>M</code></td>
+<td>Move objects</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+<tr>
+<td><code>COPY</code></td>
+<td><code>CP</code></td>
+<td>Copy objects</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+<tr>
+<td><code>ROTATE</code></td>
+<td><code>RO</code></td>
+<td>Rotate objects</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+<tr>
+<td><code>SCALE</code></td>
+<td><code>SC</code></td>
+<td>Scale objects</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>DEL</code></td>
+<td>Erase objects</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+<tr>
+<td><code>OFFSET</code></td>
+<td><code>O</code></td>
+<td>Offset at a distance</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+<tr>
+<td><code>TRIM</code></td>
+<td><code>TR</code></td>
+<td>Trim objects to an edge</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+<tr>
+<td><code>JOIN</code></td>
+<td><code>J</code></td>
+<td>Join collinear objects</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+<tr>
+<td><code>OVERKILL</code></td>
+<td><code>OK</code></td>
+<td>Remove duplicate geometry across the whole drawing</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+<tr>
+<td><code>ALIGN</code></td>
+<td><code>AL</code></td>
+<td>Fit and apply a coordinate transformation</td>
+<td><a href="coordinate-alignment.html">Coordinate Alignment</a></td>
+</tr>
+<tr>
+<td><code>PASTE</code></td>
+<td>—</td>
+<td>Paste from the clipboard at the cursor</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+<tr>
+<td><code>PASTEORIG</code></td>
+<td><code>PO</code></td>
+<td>Paste at the original coordinates</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+</tbody></table>
+<h3>Selection and visibility</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>SELECT</code></td>
+<td>—</td>
+<td>Build a selection set</td>
+<td><a href="object-selection.html">Object Selection</a></td>
+</tr>
+<tr>
+<td><code>QUICKSELECT</code></td>
+<td><code>QS</code></td>
+<td>Select by object properties</td>
+<td><a href="object-selection.html">Object Selection</a></td>
+</tr>
+<tr>
+<td><code>ISOLATEOBJECTS</code></td>
+<td><code>ISOLATE</code></td>
+<td>Hide everything except the selection</td>
+<td><a href="object-selection.html">Object Selection</a></td>
+</tr>
+<tr>
+<td><code>HIDEOBJECTS</code></td>
+<td>—</td>
+<td>Hide the selected objects</td>
+<td><a href="object-selection.html">Object Selection</a></td>
+</tr>
+<tr>
+<td><code>UNISOLATEOBJECTS</code></td>
+<td><code>UNISOLATE</code></td>
+<td>Show every object hidden by isolation</td>
+<td><a href="object-selection.html">Object Selection</a></td>
+</tr>
+</tbody></table>
+<h3>View and navigation</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ZOOMEXTENTS</code></td>
+<td><code>ZE</code></td>
+<td>Zoom to the drawing extents</td>
+<td><a href="views-and-navigation.html">Views and Navigation</a></td>
+</tr>
+<tr>
+<td><code>ZOOMWINDOW</code></td>
+<td><code>ZW</code></td>
+<td>Zoom to a window</td>
+<td><a href="views-and-navigation.html">Views and Navigation</a></td>
+</tr>
+<tr>
+<td><code>PAN</code></td>
+<td><code>P</code></td>
+<td>Pan the view by dragging with the left mouse button</td>
+<td><a href="views-and-navigation.html">Views and Navigation</a></td>
+</tr>
+<tr>
+<td><code>ORBIT</code></td>
+<td><code>3DORBIT</code>, <code>3DO</code></td>
+<td>Free-orbit the model view</td>
+<td><a href="views-and-navigation.html">Views and Navigation</a></td>
+</tr>
+<tr>
+<td><code>VISUALSTYLE</code></td>
+<td><code>VS</code>, <code>VSCURRENT</code></td>
+<td>Viewport visual style: <code>2D</code> / <code>HIDDEN</code> / <code>SHADED</code></td>
+<td><a href="views-and-navigation.html">Views and Navigation</a></td>
+</tr>
+<tr>
+<td><code>REGEN</code></td>
+<td><code>RE</code></td>
+<td>Regenerate the drawing</td>
+<td><a href="views-and-navigation.html">Views and Navigation</a></td>
+</tr>
+</tbody></table>
+<h3>Layers and properties</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>LAYER</code></td>
+<td><code>LA</code></td>
+<td>Open the Layer Manager</td>
+<td><a href="layers.html">Layers</a></td>
+</tr>
+<tr>
+<td><code>VPFREEZE</code></td>
+<td><code>VPF</code></td>
+<td>Freeze the picked entities layers in the current viewport</td>
+<td><a href="layers.html">Layers</a></td>
+</tr>
+<tr>
+<td><code>VPTHAW</code></td>
+<td><code>VPT</code></td>
+<td>Thaw the picked entities layers in the current viewport</td>
+<td><a href="layers.html">Layers</a></td>
+</tr>
+</tbody></table>
+<h3>Survey and COGO</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>CREATEPOINTS</code></td>
+<td><code>CRTPTS</code></td>
+<td>Create survey points</td>
+<td><a href="survey-points.html">Survey Points</a></td>
+</tr>
+<tr>
+<td><code>VIEWPOINTS</code></td>
+<td><code>VWPTS</code></td>
+<td>View and edit survey points in a table</td>
+<td><a href="survey-points.html">Survey Points</a></td>
+</tr>
+<tr>
+<td><code>IMPORTPOINTS</code></td>
+<td><code>IMPPTS</code></td>
+<td>Import survey points from CSV</td>
+<td><a href="survey-points.html">Survey Points</a></td>
+</tr>
+<tr>
+<td><code>EXPORTPOINTS</code></td>
+<td><code>EXPPTS</code></td>
+<td>Export survey points to CSV</td>
+<td><a href="survey-points.html">Survey Points</a></td>
+</tr>
+<tr>
+<td><code>INVERSE</code></td>
+<td><code>INV</code></td>
+<td>Inverse between two points</td>
+<td><a href="inquiry-commands.html">Inquiry Commands</a></td>
+</tr>
+<tr>
+<td><code>SURFELEV</code></td>
+<td><code>SE</code></td>
+<td>Surface elevation at a point; grade between two</td>
+<td><a href="inquiry-commands.html">Inquiry Commands</a></td>
+</tr>
+<tr>
+<td><code>ID</code></td>
+<td>—</td>
+<td>Identify point coordinates</td>
+<td><a href="inquiry-commands.html">Inquiry Commands</a></td>
+</tr>
+<tr>
+<td><code>ALIGN</code></td>
+<td><code>AL</code></td>
+<td>Coordinate transformation from control pairs</td>
+<td><a href="coordinate-alignment.html">Coordinate Alignment</a></td>
+</tr>
+</tbody></table>
+<h3>Paper space and plotting</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>MVIEW</code></td>
+<td><code>RECTVIEWPORT</code>, <code>RECTVP</code></td>
+<td>Rectangular paper-space viewport, two clicks</td>
+<td><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></td>
+</tr>
+<tr>
+<td><code>MSPACE</code></td>
+<td><code>MS</code></td>
+<td>Edit the model through the selected viewport</td>
+<td><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></td>
+</tr>
+<tr>
+<td><code>PSPACE</code></td>
+<td><code>PS</code></td>
+<td>Return to paper space from a floating viewport</td>
+<td><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>Plot</strong> and <strong>Batch plot</strong> have no typed command. Use the <strong>Layout ribbon</strong> buttons, which
+appear when a paper layout is active. See <a href="plotting.html">Plotting</a>.</p>
+</blockquote>
+<h3>Settings and utilities</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>UNITS</code></td>
+<td><code>UN</code>, <code>DDUNITS</code></td>
+<td>Drawing units: display precision and angle format</td>
+<td><a href="settings-and-options.html">Settings and Options</a></td>
+</tr>
+<tr>
+<td><code>PLOTSCALE</code></td>
+<td><code>PSCALE</code></td>
+<td>Set the plot scale (model units per plotted inch)</td>
+<td><a href="plotting.html">Plotting</a></td>
+</tr>
+<tr>
+<td><code>ELEV</code></td>
+<td><code>UCS</code></td>
+<td>Elevation new geometry is drawn at; <code>W</code> returns to world</td>
+<td><a href="drafting-aids.html">Drafting Aids</a></td>
+</tr>
+<tr>
+<td><code>TRIMSTATE</code></td>
+<td>—</td>
+<td>TRIM mode: <code>0</code> draw a line to trim (default), <code>1</code> pick cutting edges</td>
+<td><a href="modify-tools.html">Modify Tools</a></td>
+</tr>
+<tr>
+<td><code>HELP</code></td>
+<td>—</td>
+<td>Show the compact command list in the log</td>
+<td>—</td>
+</tr>
+</tbody></table>
+<h3>Import and reference geometry</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Description</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>PDFATTACH</code></td>
+<td><code>PA</code></td>
+<td>Attach a PDF underlay</td>
+<td><a href="pdf-underlays.html">PDF Underlays</a></td>
+</tr>
+<tr>
+<td><code>IMPORTMODEL</code></td>
+<td><code>GLTF</code>, <code>IMPORT3D</code></td>
+<td>Import a glTF/GLB/STL/DWG 3D model as reference geometry</td>
+<td><a href="import-and-export.html">Import and Export</a></td>
+</tr>
+</tbody></table>
+<h3>Diagnostics</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>BENCH</code></td>
+<td>—</td>
+<td>Frame-budget benchmark. <code>BENCH [segments] [frames]</code>, <code>BENCH SURFACE [points] [frames]</code>, <code>BENCH MESH [triangles] [frames]</code>. Intended for performance checking, not for drafting.</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Alphabetical index</h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Aliases</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ALIGN</code></td>
+<td><code>AL</code></td>
+</tr>
+<tr>
+<td><code>ARC</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>BENCH</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>CIRCLE</code></td>
+<td><code>C</code></td>
+</tr>
+<tr>
+<td><code>COPY</code></td>
+<td><code>CP</code></td>
+</tr>
+<tr>
+<td><code>CREATEPOINTS</code></td>
+<td><code>CRTPTS</code></td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>DEL</code></td>
+</tr>
+<tr>
+<td><code>DIMALIGNED</code></td>
+<td><code>DAL</code></td>
+</tr>
+<tr>
+<td><code>DIMANGULAR</code></td>
+<td><code>DAN</code></td>
+</tr>
+<tr>
+<td><code>DIMLINEAR</code></td>
+<td><code>DLI</code></td>
+</tr>
+<tr>
+<td><code>ELEV</code></td>
+<td><code>UCS</code></td>
+</tr>
+<tr>
+<td><code>ELLIPSE</code></td>
+<td><code>EL</code></td>
+</tr>
+<tr>
+<td><code>EXPORTPOINTS</code></td>
+<td><code>EXPPTS</code></td>
+</tr>
+<tr>
+<td><code>HATCH</code></td>
+<td><code>H</code>, <code>BHATCH</code></td>
+</tr>
+<tr>
+<td><code>HELP</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>HIDEOBJECTS</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>ID</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>IMPORTMODEL</code></td>
+<td><code>GLTF</code>, <code>IMPORT3D</code></td>
+</tr>
+<tr>
+<td><code>IMPORTPOINTS</code></td>
+<td><code>IMPPTS</code></td>
+</tr>
+<tr>
+<td><code>INVERSE</code></td>
+<td><code>INV</code></td>
+</tr>
+<tr>
+<td><code>ISOLATEOBJECTS</code></td>
+<td><code>ISOLATE</code></td>
+</tr>
+<tr>
+<td><code>JOIN</code></td>
+<td><code>J</code></td>
+</tr>
+<tr>
+<td><code>LAYER</code></td>
+<td><code>LA</code></td>
+</tr>
+<tr>
+<td><code>LINE</code></td>
+<td><code>L</code></td>
+</tr>
+<tr>
+<td><code>MOVE</code></td>
+<td><code>M</code></td>
+</tr>
+<tr>
+<td><code>MSPACE</code></td>
+<td><code>MS</code></td>
+</tr>
+<tr>
+<td><code>MTEXT</code></td>
+<td><code>MT</code></td>
+</tr>
+<tr>
+<td><code>MVIEW</code></td>
+<td><code>RECTVIEWPORT</code>, <code>RECTVP</code></td>
+</tr>
+<tr>
+<td><code>OFFSET</code></td>
+<td><code>O</code></td>
+</tr>
+<tr>
+<td><code>ORBIT</code></td>
+<td><code>3DORBIT</code>, <code>3DO</code></td>
+</tr>
+<tr>
+<td><code>OVERKILL</code></td>
+<td><code>OK</code></td>
+</tr>
+<tr>
+<td><code>PAN</code></td>
+<td><code>P</code></td>
+</tr>
+<tr>
+<td><code>PASTE</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>PASTEORIG</code></td>
+<td><code>PO</code></td>
+</tr>
+<tr>
+<td><code>PDFATTACH</code></td>
+<td><code>PA</code></td>
+</tr>
+<tr>
+<td><code>PLOTSCALE</code></td>
+<td><code>PSCALE</code></td>
+</tr>
+<tr>
+<td><code>POLYLINE</code></td>
+<td><code>PL</code></td>
+</tr>
+<tr>
+<td><code>PSPACE</code></td>
+<td><code>PS</code></td>
+</tr>
+<tr>
+<td><code>QUICKSELECT</code></td>
+<td><code>QS</code></td>
+</tr>
+<tr>
+<td><code>RECT</code></td>
+<td><code>RECTANG</code>, <code>RECTANGLE</code></td>
+</tr>
+<tr>
+<td><code>REGEN</code></td>
+<td><code>RE</code></td>
+</tr>
+<tr>
+<td><code>ROTATE</code></td>
+<td><code>RO</code></td>
+</tr>
+<tr>
+<td><code>SCALE</code></td>
+<td><code>SC</code></td>
+</tr>
+<tr>
+<td><code>SELECT</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>STYLE</code></td>
+<td><code>ST</code>, <code>DDSTYLE</code></td>
+</tr>
+<tr>
+<td><code>SURFELEV</code></td>
+<td><code>SE</code></td>
+</tr>
+<tr>
+<td><code>TEXT</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>TRIM</code></td>
+<td><code>TR</code></td>
+</tr>
+<tr>
+<td><code>TRIMSTATE</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>UNITS</code></td>
+<td><code>UN</code>, <code>DDUNITS</code></td>
+</tr>
+<tr>
+<td><code>UNISOLATEOBJECTS</code></td>
+<td><code>UNISOLATE</code></td>
+</tr>
+<tr>
+<td><code>VIEWPOINTS</code></td>
+<td><code>VWPTS</code></td>
+</tr>
+<tr>
+<td><code>VISUALSTYLE</code></td>
+<td><code>VS</code>, <code>VSCURRENT</code></td>
+</tr>
+<tr>
+<td><code>VPFREEZE</code></td>
+<td><code>VPF</code></td>
+</tr>
+<tr>
+<td><code>VPTHAW</code></td>
+<td><code>VPT</code></td>
+</tr>
+<tr>
+<td><code>ZOOMEXTENTS</code></td>
+<td><code>ZE</code></td>
+</tr>
+<tr>
+<td><code>ZOOMWINDOW</code></td>
+<td><code>ZW</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Commands that accept arguments on one line</h2>
+<p>Most commands prompt step by step. These also accept everything on a single line:</p>
+<table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>TRIMSTATE 1</code></td>
+<td>Sets the value without prompting</td>
+</tr>
+<tr>
+<td><code>ELEV 125.4</code></td>
+<td>Sets the work-plane elevation</td>
+</tr>
+<tr>
+<td><code>ELEV W</code> / <code>UCS W</code></td>
+<td>Returns to the world XY plane</td>
+</tr>
+<tr>
+<td><code>VS SHADED</code></td>
+<td>Sets the visual style (<code>2D</code>, <code>HIDDEN</code>, <code>SHADED</code>)</td>
+</tr>
+<tr>
+<td><code>PSCALE 50</code></td>
+<td>Sets the plot scale to 1 plotted inch = 50 model units</td>
+</tr>
+<tr>
+<td><code>IMPORTMODEL &quot;C:\path\model.glb&quot; 0.0833 100 200 0</code></td>
+<td>Path, unit scale, then insertion X Y Z</td>
+</tr>
+<tr>
+<td><code>BENCH 250000 900</code></td>
+<td>Segment count and frame count</td>
+</tr>
+</tbody></table>
+<p>Typing the bare command instead opens the prompt or a file dialog.</p>
+<hr>
+<h2>Features with no command</h2>
+<p>Some things are only reachable from the interface:</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>New / Open / Save / Save As</td>
+<td><strong>File</strong> menu, <code>Ctrl+S</code> for Save</td>
+</tr>
+<tr>
+<td>Import and Export DXF / DWG</td>
+<td><strong>File</strong> menu</td>
+</tr>
+<tr>
+<td>Undo / Redo</td>
+<td><code>Ctrl+Z</code> / <code>Ctrl+Shift+Z</code>, Edit menu, ribbon</td>
+</tr>
+<tr>
+<td>Copy / Paste to clipboard</td>
+<td><code>Ctrl+C</code> / <code>Ctrl+V</code>, Edit menu, ribbon</td>
+</tr>
+<tr>
+<td>Cut</td>
+<td>Right-click ▸ Clipboard ▸ Cut, <code>Ctrl+X</code></td>
+</tr>
+<tr>
+<td>Options</td>
+<td><strong>View → Settings…</strong></td>
+</tr>
+<tr>
+<td>Plot and Batch Plot</td>
+<td><strong>Layout ribbon</strong> in paper space</td>
+</tr>
+<tr>
+<td>Page Setup Manager, Viewports, Move or Copy layout</td>
+<td>Right-click a layout tab</td>
+</tr>
+<tr>
+<td>Traverse Editor</td>
+<td>Ribbon <strong>Survey → Traverse</strong></td>
+</tr>
+<tr>
+<td>Point Groups, Surfaces</td>
+<td>Ribbon <strong>Survey → Groups / Surfaces</strong></td>
+</tr>
+<tr>
+<td>Selection panel</td>
+<td>Status bar <strong>SEL</strong></td>
+</tr>
+<tr>
+<td>Select similar, Clear selection</td>
+<td>Right-click in the viewport with a selection</td>
+</tr>
+</tbody></table>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="user-interface.html">&larr; User Interface</a><a class="doc-pager-link next" href="keyboard-shortcuts.html">Keyboard Shortcuts &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

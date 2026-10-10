@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User Interface — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: User Interface.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/user-interface.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html" aria-current="page">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>User Interface</h1>
+    <h1>User Interface</h1>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/01-main-window.png" alt="GoSurvey main window" loading="lazy"></p>
+<p><em>The main window with a survey point set loaded: ribbon on top, Properties docked left, the
+floating command bar over the viewport, the ViewCube top right, and the status bar along the
+bottom.</em></p>
+<p>The window is laid out top to bottom: <strong>menu bar</strong>, <strong>ribbon</strong>, <strong>drawing tabs</strong>, <strong>drawing
+viewport</strong> (with the <strong>Properties / Reports</strong> panel docked left), <strong>command line</strong>, and the
+<strong>status bar</strong> across the bottom.</p>
+<hr>
+<h2>Menu bar</h2>
+<p>Only three menus. Almost everything else is on the ribbon or the command line.</p>
+<h3>File</h3>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Shortcut</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>New</strong></td>
+<td>—</td>
+<td>Opens a new empty drawing in a new tab</td>
+</tr>
+<tr>
+<td><strong>Open</strong></td>
+<td>—</td>
+<td>Opens a <code>.gs</code> drawing in a new tab</td>
+</tr>
+<tr>
+<td><strong>Save</strong></td>
+<td><code>Ctrl+S</code></td>
+<td>Saves to the current path; prompts for one if there is none</td>
+</tr>
+<tr>
+<td><strong>Save As…</strong></td>
+<td>—</td>
+<td>Saves under a new name and renames the tab</td>
+</tr>
+<tr>
+<td><strong>Import DXF…</strong></td>
+<td>—</td>
+<td>Replaces the CAD geometry from a DXF; keeps survey points (<a href="import-and-export.html">Import and Export</a>)</td>
+</tr>
+<tr>
+<td><strong>Export DXF…</strong></td>
+<td>—</td>
+<td>Writes an ASCII DXF (AC1032)</td>
+</tr>
+<tr>
+<td><strong>Import DWG…</strong></td>
+<td>—</td>
+<td>Needs an external converter; greyed out if none is installed</td>
+</tr>
+<tr>
+<td><strong>Export DWG…</strong></td>
+<td>—</td>
+<td>Needs an external converter; warns about what is lost first</td>
+</tr>
+<tr>
+<td><strong>Quit Application</strong></td>
+<td>—</td>
+<td>Prompts if any tab has unsaved changes</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>Note</strong> — the DWG items stay disabled until a converter is found. Hover them and the tooltip
+reads: <em>DWG needs a converter: install the free ODA File Converter, or set
+<code>GOSURVEY_DWG_CONVERTER</code> to ODAFileConverter.exe or accoreconsole.exe.</em></p>
+</blockquote>
+<h3>Edit</h3>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Shortcut</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Copy</strong></td>
+<td><code>Ctrl+C</code></td>
+</tr>
+<tr>
+<td><strong>Paste</strong></td>
+<td><code>Ctrl+V</code></td>
+</tr>
+<tr>
+<td><strong>Paste at Original Coordinates</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td><strong>Undo: &lt;last action&gt;</strong></td>
+<td><code>Ctrl+Z</code></td>
+</tr>
+<tr>
+<td><strong>Redo</strong></td>
+<td><code>Ctrl+Shift+Z</code></td>
+</tr>
+</tbody></table>
+<p>The Undo item names the action it will reverse, for example <em>Undo: Edit hatch</em>.</p>
+<h3>View</h3>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/14-view-menu.png" alt="View menu" loading="lazy"></p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Shortcut</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Reset layout</strong></td>
+<td>—</td>
+<td>Restores the built-in panel arrangement</td>
+</tr>
+<tr>
+<td><strong>Layout ▸ Save current as… / Switch to</strong></td>
+<td>—</td>
+<td>Saves and recalls named panel layouts as <code>.ini</code> files</td>
+</tr>
+<tr>
+<td><strong>Command line</strong></td>
+<td><code>Ctrl+9</code></td>
+<td>Shows and hides the floating command bar</td>
+</tr>
+<tr>
+<td><strong>Classic command dock</strong></td>
+<td>—</td>
+<td>Switches the command line between the floating bar and a docked panel</td>
+</tr>
+<tr>
+<td><strong>Settings…</strong></td>
+<td>—</td>
+<td>Opens the Options dialog (<a href="settings-and-options.html">Settings and Options</a>)</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Ribbon</h2>
+<p>Sections change with what you are doing. In model space you get:</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Contains</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Edit</strong></td>
+<td>Paste (large), Copy, Undo, Redo</td>
+</tr>
+<tr>
+<td><strong>Draw</strong></td>
+<td>Line, Circle, Polyline, Rectangle, Arc, Ellipse, Hatch, PDF Attach</td>
+</tr>
+<tr>
+<td><strong>Modify</strong></td>
+<td>Move (large), Copy, Rotate, Scale, Erase, Trim, Offset, Join, Mirror <em>(disabled)</em></td>
+</tr>
+<tr>
+<td><strong>Annotate</strong></td>
+<td>Text, Mtext, and the <strong>Text style</strong> flyout with thumbnail previews</td>
+</tr>
+<tr>
+<td><strong>Inquiry</strong></td>
+<td>Aligned dimension, Linear dimension, ID Point, Elev/Grade</td>
+</tr>
+<tr>
+<td><strong>Survey</strong></td>
+<td>Points (large), Inverse, Traverse, Surfaces, Groups</td>
+</tr>
+<tr>
+<td><strong>View</strong></td>
+<td>Zoom Extents, Zoom Window, and the <strong>Visual style</strong> dropdown</td>
+</tr>
+</tbody></table>
+<p><strong>In a paper layout</strong> the Draw/Modify/Annotate/Inquiry/Survey sections are replaced by a single
+<strong>Layout</strong> section: Rect VP, Poly VP <em>(disabled)</em>, Plot, Batch. Double-click into a viewport
+(floating model space) and the normal model ribbon comes back.</p>
+<p>Two sections appear only when they are relevant:</p>
+<ul>
+<li><strong>PDF Underlay</strong> — when a PDF attachment is selected: Background toggle, Vectorize, a Fade
+slider, and per-underlay snap toggles (<strong>L</strong>ines / <strong>C</strong>ircles / <strong>T</strong>ext).</li>
+<li><strong>Hatch</strong> — while HATCH is running, or when hatches are selected: pattern, colour, transparency,
+layer, angle, scale. With hatches selected the controls edit them live and undoably.</li>
+</ul>
+<p>On the far right is the <strong>Layers</strong> section, with the <strong>Current layer</strong> dropdown. New geometry is
+created on whatever layer is shown there.</p>
+<p><strong>Hover any ribbon button</strong> for a tooltip that says what it does and gives the command-line
+equivalent. Tooltips can be turned off in <strong>Settings → Display</strong>.</p>
+<hr>
+<h2>Drawing tabs</h2>
+<p>Above the viewport. Each tab is an independent document — geometry, layers, survey points, paper
+layouts, plot scale, and undo history are all per-tab. Switching tabs switches all of it.</p>
+<p>Tabs can be hidden with <strong>Settings → Display → Display File Tabs</strong>.</p>
+<hr>
+<h2>Drawing viewport</h2>
+<p>The drawing area. A CAD crosshair replaces the mouse pointer inside it.</p>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Middle mouse drag</strong></td>
+<td>Pan</td>
+</tr>
+<tr>
+<td><strong>Mouse wheel</strong></td>
+<td>Zoom, cursor-centred and smooth. The per-notch factor is set in <strong>Settings → Display</strong></td>
+</tr>
+<tr>
+<td><strong>Left click</strong></td>
+<td>Pick a point, or select an object</td>
+</tr>
+<tr>
+<td><strong>Right click</strong></td>
+<td>Repeat the last command, or open the shortcut menu — see <a href="object-selection.html">Object Selection</a></td>
+</tr>
+<tr>
+<td><strong>Shift + right click</strong></td>
+<td>One-shot object-snap override menu — see <a href="object-snaps.html">Object Snaps</a></td>
+</tr>
+<tr>
+<td><strong>Double-click a viewport</strong> <em>(paper space)</em></td>
+<td>Enter floating model space</td>
+</tr>
+<tr>
+<td><strong>Double-click an MTEXT</strong></td>
+<td>Open the in-drawing rich-text editor</td>
+</tr>
+</tbody></table>
+<p>A minor <strong>grid</strong> follows the view when GRID is on. While a command expects a point, <strong>dynamic
+input</strong> fields track the crosshair.</p>
+<h3>ViewCube</h3>
+<p>A cube in the corner of the viewport, <strong>model space only</strong> — a paper sheet is 2D and has no
+orientation to show. Click a face — <strong>TOP</strong>, <strong>BOTTOM</strong>, <strong>FRONT</strong>, <strong>BACK</strong>, <strong>LEFT</strong>, <strong>RIGHT</strong> —
+and the view eases to that orientation rather than jumping. See <a href="views-and-navigation.html">Views and Navigation</a>.</p>
+<hr>
+<h2>Properties / Reports panel</h2>
+<p>Docked on the left, two tabs.</p>
+<p><strong>Properties</strong> shows and edits the current selection:</p>
+<ul>
+<li><strong>General</strong> — layer, colour, linetype, lineweight, transparency, plot style. With nothing
+selected it shows the <strong>current text style</strong> and the <strong>default text height (in)</strong> used for new
+TEXT and MTEXT.</li>
+<li><strong>Geometry</strong> — fields for the selected object type: start and end X/Y for a line, centre and
+radius for a circle, insertion and rotation for annotation, and so on.</li>
+<li>Selecting several objects of one type shows the shared fields with <code>(mixed)</code> where they differ;
+typing a value applies it to all of them. A mixed-type selection shows a count summary instead.</li>
+<li>Selecting a <strong>survey point</strong> shows its ID, coordinates, elevation, description, layer, and label
+style. Bulk editing is done in <code>VIEWPOINTS</code>.</li>
+<li>Selecting a <strong>PDF underlay</strong> shows its file, page, insertion, scale, rotation, fade, and snap
+toggles.</li>
+</ul>
+<p><strong>Reports</strong> collects generated reports as tabs: ALIGN transformation reports, traverse results, and
+exported-point reports. They appear here automatically when the command that produces them runs.</p>
+<p>Full detail: <a href="properties.html">Properties</a></p>
+<hr>
+<h2>Command line</h2>
+<p>By default a <strong>floating bar</strong> near the bottom of the viewport, with:</p>
+<ul>
+<li>a <strong>log</strong> of everything the program has told you (it fades when idle),</li>
+<li>an <strong>input box</strong> with fuzzy autocomplete,</li>
+<li>a <strong>hint line</strong> showing what is valid at the current step, with clickable <code>[OPTION]</code> links.</li>
+</ul>
+<p><code>F2</code> opens the full-height console view. <code>Ctrl+9</code> hides and restores the bar. The classic docked
+panel is available from <strong>View → Classic command dock</strong>.</p>
+<p><strong>Pressing Enter submits the command input from anywhere</strong> — you never have to click into the box
+first.</p>
+<p>Full detail: <a href="command-line.html">Command Line</a></p>
+<hr>
+<h2>Status bar</h2>
+<p>Bottom of the window.</p>
+<h3>Left side</h3>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>☰ hamburger</strong></td>
+<td>Layouts and spaces menu: Model space, each paper layout, New paper layout</td>
+</tr>
+<tr>
+<td><strong>Model</strong> / layout tabs / <strong>+</strong></td>
+<td>Switch space; <strong>+</strong> adds a layout. <strong>Right-click a layout tab</strong> for Rename, Move or Copy…, Page Setup Manager…, Viewports…, Delete</td>
+</tr>
+<tr>
+<td><strong>X / Y / Z readout</strong></td>
+<td>Live crosshair coordinates at the display precision set in <code>UNITS</code></td>
+</tr>
+<tr>
+<td><strong>UCS: World</strong> / <strong>UCS: Elev &lt;z&gt;</strong></td>
+<td>The current work plane. Shows <code>World</code> on the world XY plane, otherwise the elevation new geometry will be drawn at</td>
+</tr>
+</tbody></table>
+<h3>Right side</h3>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>MODEL / PAPER / FLOAT</strong></td>
+<td>Current space. Click to toggle model against the current layout. <strong>FLOAT</strong> means you are editing the model through a viewport — click it, or press <code>Esc</code>, to leave</td>
+</tr>
+<tr>
+<td><strong>VPLOCK</strong></td>
+<td>Viewport zoom lock. ON = pan and zoom always move the sheet. OFF = while editing a viewport in place, pan and zoom adjust that viewport model framing</td>
+</tr>
+<tr>
+<td><strong>OSNAP</strong></td>
+<td>Object snap on and off (<code>F3</code>). <strong>Right-click it</strong> for the snap-type checklist</td>
+</tr>
+<tr>
+<td><strong>ORTHO</strong></td>
+<td>Ortho constraint on and off (<code>F8</code>)</td>
+</tr>
+<tr>
+<td><strong>GRID</strong></td>
+<td>Drawing grid on and off</td>
+</tr>
+<tr>
+<td><strong>POLAR</strong></td>
+<td>Polar tracking — <strong>the button toggles but has no effect yet</strong></td>
+</tr>
+<tr>
+<td><strong>Plot scale</strong></td>
+<td>Annotation-scale dropdown, e.g. <code>1&quot; = 50&#39;</code>. Same as <code>PLOTSCALE</code></td>
+</tr>
+<tr>
+<td><strong>SEL</strong></td>
+<td>Opens the Selection panel, which lists the selected entities so you can toggle each one</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Dialogs and panels</h2>
+<p>These open as separate windows.</p>
+<table>
+<thead>
+<tr>
+<th>Window</th>
+<th>Opened by</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Options</strong></td>
+<td>View → Settings…</td>
+</tr>
+<tr>
+<td><strong>Drawing Units</strong></td>
+<td><code>UNITS</code> / <code>UN</code> / <code>DDUNITS</code></td>
+</tr>
+<tr>
+<td><strong>Layer Manager</strong></td>
+<td><code>LAYER</code> / <code>LA</code></td>
+</tr>
+<tr>
+<td><strong>Text Style Manager</strong></td>
+<td><code>STYLE</code> / <code>ST</code> / <code>DDSTYLE</code>, or ribbon Text style flyout → <em>Manage Text Styles…</em></td>
+</tr>
+<tr>
+<td><strong>Create points</strong></td>
+<td><code>CREATEPOINTS</code> / <code>CRTPTS</code>, or ribbon Survey → Points</td>
+</tr>
+<tr>
+<td><strong>Viewpoints — survey database</strong></td>
+<td><code>VIEWPOINTS</code> / <code>VWPTS</code></td>
+</tr>
+<tr>
+<td><strong>Import points</strong> / <strong>Export points</strong></td>
+<td><code>IMPORTPOINTS</code> / <code>EXPORTPOINTS</code></td>
+</tr>
+<tr>
+<td><strong>Point Groups</strong></td>
+<td>Ribbon Survey → Groups</td>
+</tr>
+<tr>
+<td><strong>Surfaces</strong></td>
+<td>Ribbon Survey → Surfaces</td>
+</tr>
+<tr>
+<td><strong>Traverse Editor</strong></td>
+<td>Ribbon Survey → Traverse</td>
+</tr>
+<tr>
+<td><strong>Quick Select</strong></td>
+<td><code>QUICKSELECT</code> / <code>QS</code></td>
+</tr>
+<tr>
+<td><strong>Selection panel</strong></td>
+<td>Status bar <strong>SEL</strong></td>
+</tr>
+<tr>
+<td><strong>Align results</strong></td>
+<td>Automatically, once <code>ALIGN</code> has pairs</td>
+</tr>
+<tr>
+<td><strong>PDF Attach</strong></td>
+<td><code>PDFATTACH</code> / <code>PA</code></td>
+</tr>
+<tr>
+<td><strong>Page Setup Manager</strong>, <strong>Viewports</strong>, <strong>Move or Copy</strong></td>
+<td>Right-click a layout tab</td>
+</tr>
+<tr>
+<td><strong>Batch Plot</strong></td>
+<td>Layout ribbon → Batch</td>
+</tr>
+<tr>
+<td><strong>Right-click Customization</strong></td>
+<td>Settings → User Preferences</td>
+</tr>
+</tbody></table>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="getting-started.html">&larr; Getting Started</a><a class="doc-pager-link next" href="command-reference.html">Command Reference &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

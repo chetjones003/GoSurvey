@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Object Snaps — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Object Snaps.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/object-snaps.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html" aria-current="page">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Object Snaps</h1>
+    <h1>Object Snaps</h1>
+<p>Object snap (<strong>OSNAP</strong>) pulls the cursor onto exact features of existing geometry, so a picked
+point lands on a real endpoint or intersection instead of near it.</p>
+<hr>
+<h2>Turning snap on and off</h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong><code>F3</code></strong></td>
+<td>Toggles OSNAP. Works <strong>even while you are typing in the command line</strong>, because it is a mode key rather than a character</td>
+</tr>
+<tr>
+<td><strong>Status bar <code>OSNAP</code> button</strong></td>
+<td>Same toggle; the button is lit when snap is on</td>
+</tr>
+<tr>
+<td><strong>Settings → Drafting → Enable object snap</strong></td>
+<td>Same setting</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Choosing which snaps are active</h2>
+<p><strong>Right-click the <code>OSNAP</code> button</strong> on the status bar for a checklist, or open
+<strong>Settings → Drafting</strong>. Both edit the same eight toggles.</p>
+<p><img src="https://raw.githubusercontent.com/wiki/chetjones003/GoSurvey/images/13-options-drafting.png" alt="Object snap settings" loading="lazy"></p>
+<table>
+<thead>
+<tr>
+<th>Snap</th>
+<th>Snaps to</th>
+<th>Default</th>
+<th>Priority</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Endpoint</strong></td>
+<td>The ends of lines, arcs, polyline segments</td>
+<td><strong>On</strong></td>
+<td>Highest</td>
+</tr>
+<tr>
+<td><strong>Intersection</strong></td>
+<td>Points where two objects <strong>genuinely meet in 3D</strong> — their paths cross in plan <em>and</em> their elevations agree there</td>
+<td><strong>On</strong></td>
+<td>Highest</td>
+</tr>
+<tr>
+<td><strong>Center</strong></td>
+<td>The centre of a circle or ellipse</td>
+<td><strong>On</strong></td>
+<td>High</td>
+</tr>
+<tr>
+<td><strong>Survey point</strong></td>
+<td>The marker position of a survey point</td>
+<td><strong>On</strong></td>
+<td>High</td>
+</tr>
+<tr>
+<td><strong>Midpoint</strong></td>
+<td>The middle of a line or polyline segment</td>
+<td><strong>On</strong></td>
+<td>Medium</td>
+</tr>
+<tr>
+<td><strong>Geometric center</strong></td>
+<td>The centroid of a closed polyline</td>
+<td><strong>Off</strong></td>
+<td>Medium</td>
+</tr>
+<tr>
+<td><strong>Apparent intersection</strong></td>
+<td>Points where objects cross <strong>as seen in the current view</strong> but need not meet in space</td>
+<td><strong>Off</strong></td>
+<td>Medium</td>
+</tr>
+<tr>
+<td><strong>Perpendicular</strong></td>
+<td>The foot of a perpendicular from a reference point onto an object</td>
+<td><strong>On</strong></td>
+<td>Lowest</td>
+</tr>
+</tbody></table>
+<p><strong>Geometric center</strong> and <strong>Apparent intersection</strong> ship <strong>off</strong> — if you want either, tick it first.</p>
+<p>Two related settings live in <strong>Settings → Drafting</strong>: <strong>Aperture (screen px)</strong> (default 14.0), how
+near the cursor must be for a snap to be offered, and <strong>Snap indicator half-size (px)</strong> (default
+15.0), the size of the glyph drawn at the candidate.</p>
+<p>When two candidates are equally close, the higher-priority one wins. <strong>Grips of selected objects
+beat every geometry snap</strong> and work regardless of the OSNAP toggle; no glyph is drawn for them.</p>
+<h3>Intersection versus apparent intersection</h3>
+<p>This distinction matters as soon as a drawing has elevations.</p>
+<ul>
+<li><strong>Intersection</strong> is a real crossing: the two objects meet in space. This is as precise a feature
+as an endpoint, and is ranked as such.</li>
+<li><strong>Apparent intersection</strong> is a crossing <em>in the current view only</em>. Two lines at different
+elevations look like they cross in plan view; they do not touch. Where the two candidate points
+differ, the one nearer the camera is offered.</li>
+</ul>
+<p>A plan view cannot distinguish the two. Orbit the model (<code>ORBIT</code>) and the difference becomes
+obvious. If you are working in 3D and want only genuine intersections, turn <strong>Apparent
+intersection</strong> off.</p>
+<h3>Perpendicular</h3>
+<p>Perpendicular only fires when the running command supplies a <strong>reference point</strong> to be
+perpendicular <em>from</em> — the previous LINE point, the circle centre while sizing a radius, an earlier
+3-point pick, and so on. Without a reference there is nothing to be perpendicular to, and the snap
+offers nothing.</p>
+<hr>
+<h2>One-shot snap override</h2>
+<p><strong>Shift + right-click</strong> in the viewport opens the <em>Snap once — choose type</em> menu.</p>
+<ol>
+<li>Pick a snap type from the list. Only the types you have enabled appear, and <strong>Perpendicular</strong>
+appears only when the running command has a reference.</li>
+<li>The menu then lists <strong>every snap of that type in the model</strong>, sorted by distance from where you
+clicked — not just the ones near the cursor.</li>
+<li>Click one to use it for this single pick.</li>
+</ol>
+<p><strong>Back</strong> returns to the type list. If there are none, the menu says <em>&quot;No matching snaps in the
+current geometry.&quot;</em></p>
+<p>This is how you reach a snap that is buried under other geometry, or one that is off screen.</p>
+<hr>
+<h2>Snapping to PDF underlays</h2>
+<p>Object snap also works on attached PDFs. Snap targets are found by analysing the <strong>rendered raster
+image</strong> rather than the internal PDF path structure, so snap fires at the geometry you can actually
+see.</p>
+<table>
+<thead>
+<tr>
+<th>Target</th>
+<th>How it is recognised</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Endpoints</strong></td>
+<td>Line ends and stroke terminals — one foreground neighbour in the raster topology</td>
+</tr>
+<tr>
+<td><strong>Corners</strong></td>
+<td>Bends and junctions where two lines meet at an angle — two non-opposite neighbours</td>
+</tr>
+<tr>
+<td><strong>Junctions</strong></td>
+<td>T-intersections and crossings — three or more neighbours</td>
+</tr>
+<tr>
+<td><strong>Midpoints</strong></td>
+<td>On detected PDF line segments</td>
+</tr>
+<tr>
+<td><strong>Perpendicular</strong></td>
+<td>On detected PDF line segments</td>
+</tr>
+</tbody></table>
+<p>Candidates are filtered through a visibility mask, so only points in areas with visible content are
+offered.</p>
+<p>Each attachment has its own snap toggles — <strong>Lines</strong>, <strong>Circles</strong>, <strong>Text</strong> — on the PDF Underlay
+ribbon section and in the Properties panel. See <a href="pdf-underlays.html">PDF Underlays</a>.</p>
+<blockquote>
+<p><strong>Why raster-based</strong> — GIS exports, scanned drawings, and other dense PDFs routinely contain
+internal path objects that do not correspond to visible line geometry. Reading the rendered image
+is what makes snap land on what you see.</p>
+</blockquote>
+<hr>
+<h2>Snap and the commands that ignore it</h2>
+<p>A few operations deliberately use the <strong>unsnapped</strong> cursor, because a nearby snap point would drag
+a corner off target:</p>
+<ul>
+<li><code>DELETE</code> selection windows</li>
+<li><code>ZOOMWINDOW</code> corners</li>
+</ul>
+<hr>
+<h2>Preview versus commit</h2>
+<p>Rubber-band previews follow the <strong>cursor</strong>; the pick commits at the <strong>snapped point</strong>. These are
+not always the same place — hover just inside the rim of a circle with <strong>Center</strong> enabled and the
+preview shows the rim while the commit takes the centre.</p>
+<p>If a result lands somewhere unexpected, look at the snap glyph before you click: the glyph marks
+where the pick will actually go.</p>
+<hr>
+<h2>Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Cause</th>
+<th>Solution</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Nothing snaps</td>
+<td>OSNAP is off</td>
+<td>Press <code>F3</code>, or click the status-bar <strong>OSNAP</strong> button</td>
+</tr>
+<tr>
+<td>It snaps, but never to the feature I want</td>
+<td>That snap type is unticked</td>
+<td>Right-click <strong>OSNAP</strong> and tick it</td>
+</tr>
+<tr>
+<td>It keeps grabbing the wrong feature</td>
+<td>Two candidates are close and the wrong one has higher priority</td>
+<td>Use <strong>Shift + right-click</strong> for a one-shot override</td>
+</tr>
+<tr>
+<td>Perpendicular offers nothing</td>
+<td>The command has no reference point</td>
+<td>Perpendicular needs a previous point; start from one</td>
+</tr>
+<tr>
+<td>Lines that cross in plan will not give an intersection</td>
+<td>They are at different elevations, so it is an <em>apparent</em> intersection</td>
+<td>Enable <strong>Apparent intersection</strong>, or orbit to check the elevations</td>
+</tr>
+<tr>
+<td>A snap marker floats away from the geometry when I orbit</td>
+<td>Not a defect — the glyph is drawn at the snapped point&#39;s own elevation</td>
+<td>Confirm the elevation in the status-bar readout</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Related</h2>
+<p><a href="coordinate-input.html">Coordinate Input</a> · <a href="drafting-aids.html">Drafting Aids</a> · <a href="pdf-underlays.html">PDF Underlays</a> · <a href="object-selection.html">Object Selection</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="object-selection.html">&larr; Object Selection</a><a class="doc-pager-link next" href="coordinate-input.html">Coordinate Input &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>

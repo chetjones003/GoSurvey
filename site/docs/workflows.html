@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflows — GoSurvey Docs</title>
+<meta name="description" content="GoSurvey documentation: Workflows.">
+<link rel="icon" href="../favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/docs/workflows.html">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="../index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="../index.html#features" class="hide-sm">Features</a>
+      <a href="../index.html#downloads">Download</a>
+      <a href="index.html">Docs</a>
+      <a href="../about.html">About</a>
+      <a href="../contact.html">Contact</a>
+      <a href="../account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="doc-shell wrap">
+  <nav class="doc-nav" aria-label="Documentation">
+    <a class="doc-nav-home" href="index.html">GoSurvey Manual</a>
+    <div class="doc-nav-group">
+        <span class="doc-nav-head">Start</span>
+        <ul>
+        <li><a href="getting-started.html">Getting Started</a></li>
+        <li><a href="user-interface.html">User Interface</a></li>
+        <li><a href="command-reference.html">Command Reference</a></li>
+        <li><a href="keyboard-shortcuts.html">Keyboard Shortcuts</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Draw & Edit</span>
+        <ul>
+        <li><a href="drawing-tools.html">Drawing Tools</a></li>
+        <li><a href="modify-tools.html">Modify Tools</a></li>
+        <li><a href="object-selection.html">Object Selection</a></li>
+        <li><a href="object-snaps.html">Object Snaps</a></li>
+        <li><a href="coordinate-input.html">Coordinate Input</a></li>
+        <li><a href="drafting-aids.html">Drafting Aids</a></li>
+        <li><a href="annotation.html">Annotation</a></li>
+        <li><a href="layers.html">Layers</a></li>
+        <li><a href="properties.html">Properties</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Survey</span>
+        <ul>
+        <li><a href="survey-points.html">Survey Points</a></li>
+        <li><a href="point-groups-and-surfaces.html">Point Groups and Surfaces</a></li>
+        <li><a href="traverse-editor.html">Traverse Editor</a></li>
+        <li><a href="coordinate-alignment.html">Coordinate Alignment</a></li>
+        <li><a href="inquiry-commands.html">Inquiry Commands</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Output</span>
+        <ul>
+        <li><a href="views-and-navigation.html">Views and Navigation</a></li>
+        <li><a href="paper-space-and-layouts.html">Paper Space and Layouts</a></li>
+        <li><a href="plotting.html">Plotting</a></li>
+        <li><a href="pdf-underlays.html">PDF Underlays</a></li>
+        <li><a href="import-and-export.html">Import and Export</a></li>
+        <li><a href="files-and-drawings.html">Files and Drawings</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-group">
+        <span class="doc-nav-head">Reference</span>
+        <ul>
+        <li><a href="settings-and-options.html">Settings and Options</a></li>
+        <li><a href="command-line.html">Command Line</a></li>
+        <li><a href="workflows.html" aria-current="page">Workflows</a></li>
+        <li><a href="troubleshooting.html">Troubleshooting</a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="known-limitations.html">Known Limitations</a></li>
+        </ul>
+      </div>
+  </nav>
+  <article class="doc-content">
+    <h1>Workflows</h1>
+    <h1>Workflows</h1>
+<p>Start-to-finish tasks, using only what GoSurvey actually does.</p>
+<hr>
+<h2>1. Set up a new project drawing</h2>
+<p><strong>Goal:</strong> a drawing configured the way you work, saved as a template.</p>
+<p><strong>Prerequisites:</strong> none.</p>
+<ol>
+<li><strong>File → New.</strong></li>
+<li>Type <code>UNITS</code>. Set <strong>Length → Precision</strong> (3 decimals suits feet), <strong>Angle → Type</strong> to
+<code>Deg/Min/Sec</code> or <code>Surveyor&#39;s Units</code>, and <strong>Insertion scale</strong> to <code>Feet</code> or <code>Meters</code>. Press
+<strong>Apply</strong>.</li>
+<li>Type <code>LAYER</code>. Add the layers you use — <code>BOUNDARY</code>, <code>TOPO</code>, <code>TEXT</code>, <code>VPORTS</code>, and so on. Set each
+one&#39;s colour and linetype. Untick <strong>Plot</strong> for <code>VPORTS</code>, so viewport borders never plot.</li>
+<li>Type <code>STYLE</code>. Create the text styles you use and <strong>Set Current</strong> on the default one.</li>
+<li>Set the <strong>annotation scale</strong> on the status bar to the scale you usually plot at.</li>
+<li>In <strong>Properties → General</strong> with nothing selected, set <strong>Default text height (in)</strong> — 0.10 is a
+common choice.</li>
+<li><strong>File → Save As…</strong> and save it somewhere permanent, e.g. <code>Templates\project-template.gs</code>.</li>
+<li><strong>View → Settings… → Files → Startup template (.gs)</strong>, browse to that file, and press
+<strong>Save startup preferences</strong>.</li>
+</ol>
+<p><strong>Result:</strong> every new drawing starts with your layers, styles, and scale.</p>
+<hr>
+<h2>2. Import survey points from the field</h2>
+<p><strong>Goal:</strong> get a day&#39;s shots into a drawing.</p>
+<p><strong>Prerequisites:</strong> a CSV from the data collector.</p>
+<ol>
+<li>Type <code>IMPORTPOINTS</code> (or <code>IMPPTS</code>).</li>
+<li><strong>Browse…</strong> to the CSV.</li>
+<li>Set <strong>Column order</strong> to match — <code>P,N,E,Z,D</code> for PNEZD, <code>P,E,N,Z,D</code> for PENZD.</li>
+<li>Tick <strong>First row is header (skip)</strong> if there is a header.</li>
+<li>Read the <strong>File preview</strong>. Confirm the columns line up with the preset you chose.</li>
+<li>Read the <strong>Validation summary</strong>. Press <strong>Refresh preview</strong> after any change.</li>
+<li>Press <strong>Import</strong>. If some rows are bad, confirm
+<em>Import N valid row(s) and skip M bad row(s)?</em></li>
+<li>Read the command log for per-row problems — bad numbers and duplicate IDs are named with their
+line number.</li>
+<li>Type <code>ZE</code>.</li>
+<li>Type <code>VIEWPOINTS</code> and spot-check a few coordinates against the field notes.</li>
+</ol>
+<p><strong>Troubleshooting:</strong> if nothing imported, the column order is almost certainly wrong. Look at the
+preview — northing and easting swapped is the usual cause, and it puts points in a different county.</p>
+<hr>
+<h2>3. Reduce a traverse and commit the stations</h2>
+<p><strong>Goal:</strong> coordinates for a closed traverse, with closure documented.</p>
+<p><strong>Prerequisites:</strong> field observations, or an FBK file.</p>
+<ol>
+<li>Ribbon <strong>Survey → Traverse.</strong></li>
+<li><strong>Starting Station</strong> — enter the <strong>Start ID</strong>, northing, easting, elevation, and the
+<strong>Ref Bearing°</strong> of the backsight.</li>
+<li>Tick <strong>Closed Loop</strong>.</li>
+<li><strong>+ Add Leg</strong> for each leg. Expand it and enter the <strong>F1</strong> and <strong>F2</strong> horizontal and vertical
+angles and the distance. Set the <strong>Zenith°</strong> checkbox to match your instrument.
+<em>(Or press <strong>Import .fbk…</strong> and skip to step 6 — this replaces the current traverse.)</em></li>
+<li>Check the computed bearings and coordinates in the summary rows.</li>
+<li><strong>Calculate Closure…</strong> → <strong>Unadjusted</strong> tab. Read <strong>Linear misclosure</strong> and <strong>Precision: 1:N</strong>.</li>
+<li><strong>Least Squares</strong> tab. Set <strong>Angle σ (sec)</strong>, <strong>Dist σ (ft)</strong>, and <strong>Dist ppm</strong> to your
+instrument&#39;s real figures. Press <strong>Recompute</strong>.</li>
+<li>Check the <strong>Std dev of unit weight</strong> — near 1.0 means your stated errors match the observations.
+Scan the residuals; one much larger than the rest is a blunder to go and check.</li>
+<li><strong>Accept Least-Squares Result.</strong></li>
+<li><strong>Commit to Drawing.</strong> The stations become survey points.</li>
+<li>Open <strong>Reports</strong> in the left panel and confirm the traverse record.</li>
+</ol>
+<hr>
+<h2>4. Draw a boundary from points</h2>
+<p><strong>Goal:</strong> boundary linework snapped exactly to the corner monuments.</p>
+<p><strong>Prerequisites:</strong> the corner points are in the drawing.</p>
+<ol>
+<li>Press <code>F3</code> so <strong>OSNAP</strong> is on. Right-click <strong>OSNAP</strong> and make sure <strong>Survey point</strong> and
+<strong>Endpoint</strong> are ticked.</li>
+<li>Set the current layer to <code>BOUNDARY</code> on the ribbon.</li>
+<li>Type <code>PL</code> (POLYLINE).</li>
+<li>Click each corner in order, snapping to the survey point markers.</li>
+<li>Type <code>CLOSE</code> to close back to the first corner.</li>
+<li>Type <code>ZE</code>.</li>
+</ol>
+<p><strong>Alternative — from bearings and distances:</strong></p>
+<pre><code>PL
+(snap to the first corner)
+A 132d15m30s
+248.55
+A 222d15m30s
+150.00
+...
+CLOSE
+</code></pre>
+<p><strong>Troubleshooting:</strong> if the polyline will not close cleanly, <code>INVERSE</code> between the first and last
+corners to see the gap. A gap means an entered bearing or distance is wrong, not that the tool
+failed.</p>
+<hr>
+<h2>5. Bring in a recorded plat as a PDF and trace it</h2>
+<p><strong>Goal:</strong> get an old plat into the drawing at real coordinates.</p>
+<p><strong>Prerequisites:</strong> the plat as a PDF; state-plane coordinates for at least two monuments.</p>
+<ol>
+<li>Type <code>PA</code> (PDFATTACH).</li>
+<li><strong>Browse…</strong> to the PDF, pick the page from the thumbnails, set <strong>Raster DPI</strong> to 200, and
+<strong>Attach</strong>. Place it roughly.</li>
+<li>Select the underlay and set <strong>Fade</strong> so you can see your own linework over it.</li>
+<li>Press <code>F3</code> for OSNAP. Check the underlay&#39;s <strong>Lines</strong> snap toggle.</li>
+<li>Either draw over the boundary with <code>PL</code>, snapping to the PDF corners, or press <strong>Vectorize</strong> to
+convert the detected lines in bulk onto the current layer.</li>
+<li>Run <code>OVERKILL</code> to remove duplicates and merge collinear segments.</li>
+<li>Run <code>JOIN</code> on chains that should be single objects.</li>
+<li>Now fit it to control — see workflow 6.</li>
+</ol>
+<hr>
+<h2>6. Move a local drawing onto state plane</h2>
+<p><strong>Goal:</strong> transform an assumed-coordinate drawing to real-world coordinates.</p>
+<p><strong>Prerequisites:</strong> at least two points whose real coordinates you know.</p>
+<ol>
+<li>Select the geometry to transform, <strong>or</strong> select nothing to transform everything.</li>
+<li>Type <code>AL</code> (ALIGN).</li>
+<li>If nothing was selected, window-select and press <strong>Enter</strong> (or press Enter with an empty
+selection to move everything).</li>
+<li><strong>Source 1</strong> — snap to the first known point in the drawing.
+<strong>Destination 1</strong> — type its real coordinates, e.g. <code>1543268.25,483112.90</code></li>
+<li><strong>Source 2</strong> / <strong>Destination 2</strong> — repeat for the second point.</li>
+<li>Add more pairs if you have them. Press <strong>Enter</strong> to solve.</li>
+<li>In the results window, read the <strong>Resid</strong> column and the <strong>Point error (RMS)</strong>. Press <strong><code>-</code></strong> on
+any outlier and watch the RMS update.</li>
+<li><strong>Untick Apply Scale</strong> if the drawing is already at true scale, then press <strong>Apply</strong>. Tick it if
+the drawing was traced or digitised.</li>
+<li>Type <code>ZE</code>. The status readout now shows real-world coordinates.</li>
+<li>Check the <strong>Reports</strong> tab for the transformation record. Source points are now tagged <code> ADJ</code>
+and destinations <code> CON</code>.</li>
+</ol>
+<hr>
+<h2>7. Build a ground surface</h2>
+<p><strong>Goal:</strong> a TIN from field shots, kept up to date as more shots arrive.</p>
+<p><strong>Prerequisites:</strong> points in the drawing with field codes.</p>
+<ol>
+<li>Ribbon <strong>Survey → Groups → New point group.</strong> Name it <code>EG</code>.</li>
+<li>Set <strong>Raw description matches</strong> to <code>EG*</code>. Watch the live <code>Matches N of M points.</code> count.
+<em>(Use <strong>Raw description</strong>, not Description — office edits to descriptions will not break it.)</em></li>
+<li>Ribbon <strong>Survey → Surfaces → New from group…</strong> Name it <code>Existing Ground</code>.</li>
+<li>Tick the <code>EG</code> group. Confirm the point count is at least 3. Press <strong>Create</strong>.</li>
+<li>Read the reported point count, triangle count, and elevation range. An elevation range that is
+obviously wrong means a bad shot is in the group.</li>
+<li>Type <code>ORBIT</code> and drag to tilt the view. Elevation problems are obvious from a 3/4 angle and
+invisible in plan. (Visual style does not shade a TIN — see <a href="known-limitations.html">Known Limitations</a>.)</li>
+<li>Type <code>SE</code> (SURFELEV) and spot-check elevations against known shots.</li>
+</ol>
+<p><strong>Later, after importing more shots coded <code>EG</code>:</strong></p>
+<ol start="8">
+<li><strong>Survey → Surfaces</strong>, select the surface, press <strong>Rebuild</strong>. The new points are already in the
+group — nothing needs re-selecting.</li>
+</ol>
+<hr>
+<h2>8. Annotate a survey</h2>
+<p><strong>Goal:</strong> labelled points and sheet notes.</p>
+<ol>
+<li>Set the <strong>annotation scale</strong> on the status bar to the scale you will plot at. Do this <strong>first</strong> —
+it decides the size everything is created at.</li>
+<li>Select the points to label and set their <strong>Label style</strong> in the Properties panel.</li>
+<li><strong>Settings → Drafting</strong> — adjust <strong>Label center east/north of point (plotted in)</strong> so labels sit
+where you want them, and set <strong>Coordinate display precision</strong>.</li>
+<li>If a label lands on top of linework, drag it away. A leader arrow appears automatically.</li>
+<li>For notes, set the current layer to <code>TEXT</code>, then type <code>MT</code> (MTEXT), drag a frame, and type. Use
+the Text Formatting toolbar for fonts, sizes, and colours.</li>
+<li>For dimensions, use <code>DAL</code> (aligned) or <code>DLI</code> (linear). At the linear dimension-line prompt, <code>H</code>
+and <code>V</code> lock the orientation.</li>
+</ol>
+<hr>
+<h2>9. Build a plot sheet and produce a PDF</h2>
+<p><strong>Goal:</strong> an 11&quot; × 17&quot; sheet at 1&quot; = 50&#39;, plotted to PDF.</p>
+<ol>
+<li>Press <strong>+</strong> on the status bar to add a layout. Right-click its tab ▸ <strong>Rename</strong> and give it a
+name.</li>
+<li>Right-click the tab ▸ <strong>Page Setup Manager…</strong> Set <strong>Paper size</strong> to <code>ANSI B (11&quot; x 17&quot;)</code> and
+<strong>Drawing orientation</strong> to <code>Landscape</code>. Confirm the reported plot size.</li>
+<li>Right-click the tab ▸ <strong>Viewports… → + Add viewport.</strong> Set <strong>X</strong>, <strong>Y</strong>, <strong>W</strong>, <strong>H</strong> in paper
+inches, <strong>Center X / Center Y</strong> to the model point you want centred, and <strong>Scale (model/in)</strong> to
+<code>50</code>.</li>
+<li>Set the viewport&#39;s <strong>Layer</strong> to a <strong>non-plottable</strong> layer so its border does not print.</li>
+<li>Set the status-bar annotation scale to <code>1&quot; = 50&#39;</code> so text and labels are sized to match.</li>
+<li>Turn <strong>VPLOCK</strong> on so panning cannot rescale the viewport.</li>
+<li>In paper space, draw the border and titleblock with <code>RECT</code>, <code>LINE</code>, and <code>MTEXT</code> — all in paper
+inches.</li>
+<li>To fine-tune what the viewport shows, double-click into it (<strong>FLOAT</strong>), pan, then press <code>Esc</code>.
+Or set <strong>Center X / Center Y</strong> numerically, which is repeatable.</li>
+<li>Use <code>VPFREEZE</code> to hide layers you do not want in this view.</li>
+<li>Ribbon <strong>Layout → Plot</strong>. Choose an output path. The log reports
+<code>PLOT — wrote 1 page(s) to &lt;path&gt;</code>.</li>
+</ol>
+<p><strong>For a multi-page set:</strong> repeat for each sheet, then ribbon <strong>Layout → Batch</strong>, tick the layouts,
+and <strong>Plot to PDF…</strong>. Pages come out in <strong>layout order</strong> — reorder with <strong>Move or Copy…</strong> first if
+that matters.</p>
+<hr>
+<h2>10. Exchange with AutoCAD or Civil 3D</h2>
+<p><strong>Sending work out:</strong></p>
+<ol>
+<li><strong>File → Export DXF…</strong> for the linework.</li>
+<li><code>EXPORTPOINTS</code> for the survey points as a CSV — the reliable route into Civil 3D&#39;s point
+database.</li>
+<li>Tell the recipient the DXF is ASCII AC1032 and that dimensions are exploded.</li>
+</ol>
+<p><strong>Bringing work in:</strong></p>
+<ol>
+<li><strong>File → Import DXF…</strong> for the linework. Read the log — it names the paper-space entities and
+unsupported records it skipped.</li>
+<li><code>IMPORTPOINTS</code> for the points as CSV. <strong>Do this in either order</strong> — importing a DXF keeps the
+survey points already in the session.</li>
+<li>If IDs collide at the DXF merge, choose <strong>overwrite</strong> or <strong>offset</strong>.</li>
+<li><code>ZE</code>, then <code>OVERKILL</code> to clean up stacked duplicates from the import.</li>
+</ol>
+<p><strong>Civil 3D COGO points will not come through a DXF</strong> — they are custom objects. CSV is the route.</p>
+<hr>
+<h2>11. A complete small project</h2>
+<ol>
+<li>New drawing from your template (workflow 1).</li>
+<li><code>IMPORTPOINTS</code> — the field CSV (workflow 2).</li>
+<li>Traverse Editor — reduce and commit the control (workflow 3).</li>
+<li><code>ALIGN</code> — onto state plane if the work was local (workflow 6).</li>
+<li><code>PL</code> — boundary and linework from the points (workflow 4).</li>
+<li>Survey → Groups and Surfaces — a ground surface (workflow 7).</li>
+<li>Label points, add notes and dimensions (workflow 8).</li>
+<li><code>OVERKILL</code> — final cleanup.</li>
+<li>Build the layout and plot the PDF (workflow 9).</li>
+<li><code>EXPORTPOINTS</code> and <strong>Export DXF…</strong> for the client (workflow 10).</li>
+<li><code>Ctrl+S</code>.</li>
+</ol>
+<hr>
+<h2>Related</h2>
+<p><a href="getting-started.html">Getting Started</a> · <a href="survey-points.html">Survey Points</a> · <a href="traverse-editor.html">Traverse Editor</a> · <a href="coordinate-alignment.html">Coordinate Alignment</a> · <a href="plotting.html">Plotting</a> · <a href="troubleshooting.html">Troubleshooting</a></p>
+
+    <div class="doc-pager"><a class="doc-pager-link prev" href="command-line.html">&larr; Command Line</a><a class="doc-pager-link next" href="troubleshooting.html">Troubleshooting &rarr;</a></div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>
