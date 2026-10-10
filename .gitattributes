@@ -20,6 +20,7 @@ dev/issue       text eol=lf
 dev/pr          text eol=lf
 dev/win         text eol=lf
 dev/help        text eol=lf
+dev/codeql      text eol=lf
 dev/_common.sh  text eol=lf
 
 # --- Byte-compared test fixtures: must match what the code WRITES, not the platform ---

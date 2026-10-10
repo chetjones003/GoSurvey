@@ -31,6 +31,7 @@ with running the Windows tool directly, the Windows tool wins — fix the wrappe
 | `./dev/issue [...]` | yes — `gh.exe issue` | `gh issue <...>`; bare `./dev/issue` = `gh issue list` |
 | `./dev/pr [...]` | yes — `gh.exe pr` | `gh pr <...>`; bare `./dev/pr` = `gh pr list` |
 | `./dev/win <cmd>` | yes — `cmd.exe` | Escape hatch: run an arbitrary Windows command from the Windows repo root. `--ps <cmd>` runs it through PowerShell instead. Does **not** load the MSVC environment — use `./dev/build` for compiler work |
+| `./dev/codeql` | yes — `cmd.exe`, full rebuild | Local whole-codebase CodeQL analysis (REQ-402, issue #801), mirroring `codeql.yml`'s `cpp-security-and-quality` suite. Needs the CodeQL CLI at `%LOCALAPPDATA%\codeql-cli\codeql\codeql.exe` (one-time setup — see the script header). **Budget 1-3 hours**: CodeQL does whole-program analysis, so this always rebuilds everything from scratch under its tracer. Output: `codeql-results-filtered.sarif` (first-party only; `third_party/`/`build/`/`samples/` excluded, same as CI) |
 
 ### Canonical commands being wrapped
 
