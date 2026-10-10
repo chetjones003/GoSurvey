@@ -10973,6 +10973,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
                - **linking** the daylight line to its baseline or surface so it updates when they
                  change. Baked-only is deliberate for the first increment, per the Statement;
                - **intermediate slope breaks** (a bench or berm part-way down the slope).
+
+               2026-10-09 — **ribbon wiring (issue #802).** The Home ribbon's Create Design and
+               Create Ground Data "Grading" placeholders, greyed since the #762 audit, were wired
+               directly to this requirement's existing `GRADING` command (`StartGradingCommand`),
+               discovered only while scoping #802's follow-on work — a withdrawn REQ-403 had
+               proposed a parallel "grading object" design without first finding that this
+               requirement already covers exactly that ground. No change to this requirement's
+               Statement or Acceptance; see REQ-404 for the grading-GROUP surface this requirement's
+               own "deliberately NOT in this requirement" list named as the real follow-on.
 - Known limit: the outward projection advances in finite steps before bisecting the bracketed
                crossing, so ground detail finer than one step can hide a second crossing and the
                nearest one is reported. Stated here rather than discovered later; the step is chosen
@@ -13714,6 +13723,77 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-344 | Commands/UI/Render | accepted, slice 3 delivered (GitHub issue #479, D-2026-09-11-d, TASK-260). **A section-plane handle drag snaps.** It joins the dimension, entity and MTEXT grip drags in the snap gate's `midCmd` test — no `Kind` is active during one, because the plane is a view state — so the marker, the aperture and the cursor pull are the ordinary ones with no second code path. The snapped point almost never lies ON the drag axis (the axis is a line through the handle; a midpoint is out in the model), so the handle goes where that point **projects** onto the axis, which puts **the whole plane through the snapped point** exactly, to REQ-101's ±0.002 ft, because the plane is perpendicular to the axis it slides along. Applies to every draggable handle, not just Move: "make the plane reach that corner" is the same request as "cut at that midpoint". **No second distance test on whether to honour a snap** — `CadSnap::FindBest` answers only inside a pixel-derived aperture around a real feature, so a point reaching the drag is one the user is pointing at, and a further check would second-guess the snap system with a worse rule while rejecting the very case the feature exists for. The drag update **moved in the frame**, to after the snap is computed: reading the previous frame's snap leaves the plane one frame behind its own marker, visible at drag speed as the plane trailing the glyph it is locked to. **Handle symbols** replace six identical squares, which had made the user read the plane to work out which one flipped it: a diamond with a double-headed arrow **through the plane along the normal** for Move (the one handle whose travel leaves the plane, and the only symbol here that is not flat), back-to-back triangles along the normal for Flip, outward arrowheads at the section line's ends for the length pair, outward triangles on the u-parallel edges for the height pair — all built in the plane's own basis and sized from the rectangle's diagonal, so they lie on the plane and do not change with zoom; the hovered or grabbed one is drawn larger. Tests: `SubObjectSelectionTests` `[req344]` (4 cases — the plane landing exactly through a snapped point while the cursor is aimed elsewhere, no drift across four held frames, releasing the snap handing back to the cursor **measured from the original grab**, and a stretch snapping without touching the cut) inside `[sectionplanegrip]` (14 cases / 131 assertions). Full suite **1510/1510**, up from 1506. **Proven to bite:** ignoring the snapped point fails 3 of the 4 cases and 7 assertions. **A test fixture bug found on the way, worth recording:** the first stretch-snap case displaced its snapped point in world X/Y to get it "off the axis", but the plane's u is not a world axis — part of that displacement lay along u, and the test was then measuring its own arithmetic. Displacements are now stated in the plane's own basis. **Stated increments:** nothing automated sees the symbols — there is no GL context in the suite, so their geometry is unit-tested and their appearance is the user's check; and the section line still carries no direction arrows . **Fixed the same day (user report): the snapped placement was RELATIVE when it must be ABSOLUTE.** The projection is the distance the handle must travel, but the grab's own cursor parameter was subtracted from it, so the plane landed wrong by however far off-centre the click had been — "it looks like it is going to snap too far and then snaps too close". Every case missed it because every fixture aimed its grab ray straight at the handle, making that term exactly zero; `[req344]` now grabs off-centre by design and asserts three different grabs give an identical answer. Reinstated, it lands 2.25 ft out on a 2.25 ft off-centre grab | accepted |
 
 ---
+
+### REQ-404 — Grading groups and cut/fill volumes
+
+- Purpose:     combine several REQ-398 side-slope gradings into one proposed-ground surface so a
+               design can be judged by the cut/fill number it actually produces — the "larger and
+               more valuable follow-on" REQ-398 itself named as deliberately NOT included in its
+               own first increment, reusing REQ-073's existing volume engine rather than building a
+               second one
+- Priority:    should
+- Type:        functional
+- Statement:   A **grading group** is a named collection of REQ-398 side-slope gradings (each a
+               baseline feature line, a cut/fill slope pair, and a target surface, producing a
+               daylight line). GoSurvey builds one TIN surface (REQ-068) from the ground bounded by
+               each grading's baseline and its own daylight line, merged into a single
+               triangulation covering the group's union — a **graded design surface**, in the
+               terms REQ-398 itself used to describe this follow-on.
+
+               A grading group's surface is built the same way REQ-069 builds any surface, and
+               participates in surface machinery the same way: it is selectable as either side of a
+               REQ-073 surface-to-surface volume comparison (against an existing-ground surface, to
+               report cut/fill/net), it can be picked for REQ-074 spot elevation/grade, and it
+               appears in the REQ-075 Surface Manager. No new volume-computation code is written —
+               REQ-404's only new work is assembling the group surface from its member gradings'
+               baked output; REQ-073 does the rest.
+
+               Consistent with REQ-398's own "baked, not live" decision for the daylight line, a
+               grading group's surface is built **once from its members' current (baked) output**
+               and is rebuilt only when the group's membership changes or a member grading is
+               explicitly re-run — it does **not** silently track a later edit to a member's
+               baseline or target surface, for the same reason REQ-398 gives: linking the daylight
+               line to live edits was deliberately deferred, and a grading group surface cannot be
+               more live than the gradings it is built from.
+
+               A grading belongs to at most one grading group at a time; moving it between groups
+               removes its daylight-line output from the old group's surface and adds it to the new
+               one's, each rebuilding per the rule above.
+- Acceptance:
+  - a grading group containing one REQ-398 grading's baseline/daylight-line output produces a
+    surface whose triangulation covers the ground between them, within REQ-101 tolerance;
+  - a grading group of several non-overlapping gradings produces one merged surface covering their
+    union, with no triangulation gap at a shared edge between two adjoining gradings;
+  - running a REQ-073 volume comparison between a grading group's surface and an existing-ground
+    surface reports cut/fill/net using REQ-073's existing computation and reporting, with no
+    grading-specific volume logic;
+  - re-running a member grading (REQ-398, producing fresh baked output) and re-adding it to the
+    group rebuilds the group surface; merely editing the member's baseline or target surface
+    WITHOUT re-running REQ-398 does NOT change the group surface, matching REQ-398's baked-only
+    rule;
+  - moving a grading to a different group removes it from the first group's surface and adds it to
+    the second's, both surfaces rebuilding correctly;
+  - a grading group round-trips a `.gs` save/load byte-identically, including its membership list;
+  - a legacy `.gs` with no grading groups loads unchanged.
+- Owner-layer: Domain, Commands, UI, IO
+- Status:      proposed
+- Revisions:   2026-10-09 — initial. Scoped from issue #802 (the Home ribbon's "Grading" and
+               "Grading Creation Tools"/"Grading Tools" placeholders). **Superseded same day
+               (2026-10-09): an earlier version of this REQ, plus a companion REQ-403 "grading
+               object", was written without first finding that REQ-398 ("Side slope grading to a
+               surface: the daylight line", accepted 2026-10-05, `GRADING`/`grd` command) already
+               exists and already implements a baseline/slopes/surface-target grading computation —
+               discovered while researching an unrelated issue (#766). REQ-403 is WITHDRAWN
+               entirely: it duplicated REQ-398's "grading object" with a conflicting design (REQ-403
+               was dynamic/live-rebuilding; REQ-398 is explicitly baked/one-shot, by deliberate
+               decision). This REQ-404 is kept, rewritten to build on REQ-398's actual output rather
+               than REQ-403's withdrawn one, since it is exactly the follow-on REQ-398's own
+               Statement already named. The Home ribbon's "Grading" placeholder is wired directly to
+               the existing `GRADING` command (no new REQ needed for that — see REQ-398's own
+               revision note); REQ-404 covers only the grading-GROUP surface/volumes layer, which
+               remains unimplemented. Grading Optimization (Home → Explore/Optimize) stays tracked
+               separately (issue #813) and depends on REQ-404 landing first — there is no group
+               volume to optimize before then.
 
 ## Anti-requirements
 
