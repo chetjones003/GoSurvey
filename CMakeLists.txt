@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 cmake_policy(SET CMP0091 NEW)  # let CMAKE_MSVC_RUNTIME_LIBRARY (below) control /MD vs /MDd
-project(GoSurvey VERSION 0.7.2 LANGUAGES CXX C RC)
+project(GoSurvey VERSION 0.7.3 LANGUAGES CXX C RC)
 
 if(MSVC)
   # third_party/xerces-c/lib/win-x64/xerces-c_3.lib is vendored prebuilt against the Release DLL CRT

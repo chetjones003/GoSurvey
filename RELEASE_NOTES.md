@@ -16,6 +16,19 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.7.3
+
+- The Pipe Network ribbon button now starts a pipe run directly.
+- Feature Line ribbon buttons now start the Feature Line command.
+- Removed ribbon buttons for features that weren't implemented yet (Parcel, Assembly,
+  Intersections, Pond, Underground Storage, Channel).
+- Added a Survey Point Database grid panel for browsing and editing points in a table.
+- New LAYOUT, PAGESETUP, and VPSCALE commands for setting up paper space layouts and viewport
+  scale.
+- A line-endpoint grip now shows a Lengthen/Stretch hover menu, and the Perpendicular snap
+  override works correctly during a grip drag.
+- Fixed the command line sometimes running a different command than what was typed.
+
 ## 0.7.2
 
 **Extract Coordinates from a PDF — new**
