@@ -176,18 +176,12 @@ jobs:
         # per-target compile option (CMakeLists.txt's gosurvey_target_warnings), additive and
         # scoped to our own targets only. It does not fail the build unless paired with /WX,
         # which is deliberately NOT set — the existing codebase has never been triaged against it.
-        # GOSURVEY_BUILD_HEADLESS / GOSURVEY_BUILD_TESTS are OFF: this pipeline ships
-        # GoSurvey.exe only. The headless transcript driver, GsJsonDwgFixture, and the
-        # Catch2 suite are dev/test-only targets (see CMakeLists.txt) with no bearing on
-        # what the installer packages, so this configure never defines those targets in
-        # the first place rather than building and then discarding them.
+        # This pipeline ships GoSurvey.exe only.
         run: >
           cmake --preset ninja-release
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           -DGOSURVEY_ENABLE_ANALYZE=ON
-          -DGOSURVEY_BUILD_HEADLESS=OFF
-          -DGOSURVEY_BUILD_TESTS=OFF
           -DGOSURVEY_VERSION_SUFFIX="${{ steps.ver.outputs.suffix }}"
           -DGOSURVEY_VERSION_BUILD=${{ github.run_number }}
 

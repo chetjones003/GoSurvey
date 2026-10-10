@@ -11,7 +11,7 @@ _install/
 .cache/clangd/
 compile_commands.json
 
-# --- local CodeQL (dev/codeql, REQ-402/issue #801) ---
+# --- local CodeQL databases and reports ---
 /.codeql-db/
 /codeql-results.sarif
 /codeql-results-filtered.sarif
@@ -75,9 +75,6 @@ rules.ninja
 # --- Runtime / local config ---
 imgui.ini
 
-# --- dev/ WSL->Windows bridge scratch ---
-/.dev-win.*
-
 # --- OS ---
 .DS_Store
 Thumbs.db
@@ -93,14 +90,7 @@ desktop.ini
 # --- DevShell test scratch outputs (written at runtime by src/devshell) ---
 /issue124-roundtrip.json
 
-# REQ-336 — one-time unlock for pushing resources/whats-new.md (tools/approve-whats-new.ps1)
-.whats-new-push-unlock
-
-# Copied from resources/whats-new at Pages deploy (see .github/workflows/pages.yml).
-/site/img/features/
-# Screenshots and viewport captures land in the process CWD, which is the repo root when a devshell
-# test is run from here. They are evidence, not source: a handful are ~2 MB each and a `git add -A`
-# sweeps them straight into a commit (it did, once).
+# Screenshots and logs land in the process CWD when a debug session is run from the repo root.
 /devshell-*.bmp
 /repro-*.bmp
 /devshell-activity.log
