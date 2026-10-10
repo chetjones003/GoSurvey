@@ -10973,6 +10973,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
                - **linking** the daylight line to its baseline or surface so it updates when they
                  change. Baked-only is deliberate for the first increment, per the Statement;
                - **intermediate slope breaks** (a bench or berm part-way down the slope).
+
+               2026-10-09 — **ribbon wiring (issue #802).** The Home ribbon's Create Design and
+               Create Ground Data "Grading" placeholders, greyed since the #762 audit, were wired
+               directly to this requirement's existing `GRADING` command (`StartGradingCommand`),
+               discovered only while scoping #802's follow-on work — a withdrawn REQ-403 had
+               proposed a parallel "grading object" design without first finding that this
+               requirement already covers exactly that ground. No change to this requirement's
+               Statement or Acceptance; see REQ-404 for the grading-GROUP surface this requirement's
+               own "deliberately NOT in this requirement" list named as the real follow-on.
 - Known limit: the outward projection advances in finite steps before bisecting the bracketed
                crossing, so ground detail finer than one step can hide a second crossing and the
                nearest one is reported. Stated here rather than discovered later; the step is chosen
@@ -13715,118 +13724,76 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ---
 
-### REQ-403 — Grading object (footprint, criteria, projection)
-
-- Purpose:     slope a finished-ground surface away from a footprint shape to a target, replacing
-               the greyed Home → Create Design → "Grading" and Create Ground Data → "Grading"
-               ribbon placeholders (issue #802) with the feature Civil 3D calls Grading
-- Priority:    should
-- Type:        functional
-- Statement:   A **grading object** projects a **footprint** — a feature line (REQ-087), chosen
-               because GoSurvey already models feature lines as the "object a designer edits," the
-               same role Civil 3D requires of a grading footprint — outward under a **grading
-               criterion** until it reaches a **target**, producing:
-               - a **daylight line**: where the projection meets the target,
-               - **projection lines**: connecting each footprint vertex to its daylight point,
-               - a **face**: the triangulated strip between footprint and daylight line.
-
-               A grading criterion states a **slope or grade** and a **target type**:
-               - **surface** — project until the slope intersects an existing TIN surface (REQ-068);
-               - **absolute elevation** — project until reaching a stated elevation;
-               - **relative elevation** — project until reaching the footprint's own elevation plus
-                 a stated offset;
-               - **distance** — project a stated horizontal distance, independent of what (if
-                 anything) is underneath.
-
-               A grading object is a first-class entity: it selects, highlights, persists to
-               `.gs`, and is undoable in one step, like every other entity (REQ-076). Editing its
-               footprint (the feature line moves, or one of its elevations changes) or its
-               criterion re-projects the face with no user action — the same dynamic-rebuild
-               contract REQ-069 established for a surface reacting to its breaklines, reused here
-               rather than inventing a second one.
-
-               A footprint vertex at which the projection cannot reach its target (e.g. a surface
-               target with no terrain within the criterion's maximum search distance under that
-               vertex) leaves a **gap** in the face at that vertex and is reported, rather than
-               silently omitting the vertex or refusing the whole grading (REQ-201's "refuse the
-               whole operation" rule is for inputs that make the WHOLE result meaningless; one
-               unreachable vertex does not).
-- Acceptance:
-  - a closed rectangular footprint graded at a stated slope to an absolute elevation produces a
-    face whose daylight line is a parallel offset at the elevation implied by slope × projected
-    horizontal distance, within REQ-101 tolerance;
-  - the same footprint graded to a relative elevation offset produces a daylight line at
-    footprint-elevation + offset, independent of the footprint's absolute elevation;
-  - a footprint graded to a surface target produces a daylight line lying ON that surface
-    (interpolated elevation matches REQ-074's surface-pick elevation at each daylight point,
-    within tolerance);
-  - moving the footprint feature line, or editing one of its point elevations, re-projects the
-    face with no user action, the same frame-to-recompute behaviour REQ-069 requires of a surface
-    breakline edit;
-  - a vertex whose surface-target search finds no terrain is reported as a gap and does not stop
-    the rest of the footprint from grading;
-  - a grading object round-trips a `.gs` save/load byte-identically, including its footprint
-    reference, criterion, and target;
-  - deleting the footprint feature line removes or invalidates the grading object that depended on
-    it, rather than leaving it referencing nothing (mirrors REQ-069's breakline-deletion rule);
-  - a legacy `.gs` with no grading objects loads unchanged.
-- Owner-layer: Domain, Commands, UI, Renderer, IO
-- Status:      proposed
-- Revisions:   2026-10-09 — initial. Scoped from GitHub issue #802 (ribbon audit follow-up):
-               product decision was all three target types (surface, elevation, relative
-               elevation, distance) in v1, together with REQ-404's grading groups rather than as a
-               later follow-up. Grading Optimization (the Home → Explore/Optimize ribbon
-               placeholder) is explicitly OUT of this REQ's scope — it is an iterative cut/fill
-               balancing solver, architecturally unrelated to projecting one grading object, and
-               is tracked separately (issue #813). Transition and infill gradings (Civil 3D's
-               `CreateTransition` / `CreateGradingInfill`) are also out of scope for v1 — no
-               acceptance criterion above requires them, and they can be added once single-target
-               grading objects are proven.
-
 ### REQ-404 — Grading groups and cut/fill volumes
 
-- Purpose:     combine grading objects into one proposed-ground surface so a design can be judged
-               by the cut/fill number it actually produces, reusing REQ-073's existing volume
-               engine rather than building a second one
+- Purpose:     combine several REQ-398 side-slope gradings into one proposed-ground surface so a
+               design can be judged by the cut/fill number it actually produces — the "larger and
+               more valuable follow-on" REQ-398 itself named as deliberately NOT included in its
+               own first increment, reusing REQ-073's existing volume engine rather than building a
+               second one
 - Priority:    should
 - Type:        functional
-- Statement:   A **grading group** is a named collection of grading objects (REQ-403). GoSurvey
-               synthesizes a TIN surface (REQ-068) from the union of their faces, built and kept
-               current the same way REQ-069 builds and rebuilds any surface — adding or removing a
-               grading object from the group, or any edit that re-projects one of its member
-               faces, triggers a rebuild of the group surface with no user action, coalesced the
-               same way REQ-069 coalesces multiple edits into one rebuild.
+- Statement:   A **grading group** is a named collection of REQ-398 side-slope gradings (each a
+               baseline feature line, a cut/fill slope pair, and a target surface, producing a
+               daylight line). GoSurvey builds one TIN surface (REQ-068) from the ground bounded by
+               each grading's baseline and its own daylight line, merged into a single
+               triangulation covering the group's union — a **graded design surface**, in the
+               terms REQ-398 itself used to describe this follow-on.
 
-               The group surface is an ordinary surface wherever GoSurvey already has surface
-               machinery: it is selectable as either side of a REQ-073 surface-to-surface volume
-               comparison (against an existing-ground surface, to report cut/fill/net), it can be
-               picked for REQ-074 spot elevation/grade, and it appears in the REQ-075 Surface
-               Manager. No new volume-computation code is written — REQ-404's only new work is
-               building the group surface and keeping it current; REQ-073 does the rest.
+               A grading group's surface is built the same way REQ-069 builds any surface, and
+               participates in surface machinery the same way: it is selectable as either side of a
+               REQ-073 surface-to-surface volume comparison (against an existing-ground surface, to
+               report cut/fill/net), it can be picked for REQ-074 spot elevation/grade, and it
+               appears in the REQ-075 Surface Manager. No new volume-computation code is written —
+               REQ-404's only new work is assembling the group surface from its member gradings'
+               baked output; REQ-073 does the rest.
 
-               A grading object belongs to at most one grading group at a time; moving it between
-               groups removes its face from the old group's surface and adds it to the new one's,
-               both rebuilding per the dynamic-rebuild rule above.
+               Consistent with REQ-398's own "baked, not live" decision for the daylight line, a
+               grading group's surface is built **once from its members' current (baked) output**
+               and is rebuilt only when the group's membership changes or a member grading is
+               explicitly re-run — it does **not** silently track a later edit to a member's
+               baseline or target surface, for the same reason REQ-398 gives: linking the daylight
+               line to live edits was deliberately deferred, and a grading group surface cannot be
+               more live than the gradings it is built from.
+
+               A grading belongs to at most one grading group at a time; moving it between groups
+               removes its daylight-line output from the old group's surface and adds it to the new
+               one's, each rebuilding per the rule above.
 - Acceptance:
-  - a grading group containing one grading object's face produces a surface whose triangulation
-    matches that face, within REQ-101 tolerance;
-  - a grading group of several non-overlapping grading objects produces one merged surface
-    covering their union, with no triangulation gap at a shared edge between two adjoining faces;
+  - a grading group containing one REQ-398 grading's baseline/daylight-line output produces a
+    surface whose triangulation covers the ground between them, within REQ-101 tolerance;
+  - a grading group of several non-overlapping gradings produces one merged surface covering their
+    union, with no triangulation gap at a shared edge between two adjoining gradings;
   - running a REQ-073 volume comparison between a grading group's surface and an existing-ground
     surface reports cut/fill/net using REQ-073's existing computation and reporting, with no
     grading-specific volume logic;
-  - re-projecting a member grading object (footprint edit, criterion change) rebuilds the group
-    surface and, if a REQ-073 Volume Dashboard has that surface selected, recomputes the dashboard
-    with no user action — mirroring REQ-073's own stated rebuild-reaction behaviour;
-  - moving a grading object to a different group removes it from the first group's surface and
-    adds it to the second's, both surfaces rebuilding correctly;
+  - re-running a member grading (REQ-398, producing fresh baked output) and re-adding it to the
+    group rebuilds the group surface; merely editing the member's baseline or target surface
+    WITHOUT re-running REQ-398 does NOT change the group surface, matching REQ-398's baked-only
+    rule;
+  - moving a grading to a different group removes it from the first group's surface and adds it to
+    the second's, both surfaces rebuilding correctly;
   - a grading group round-trips a `.gs` save/load byte-identically, including its membership list;
   - a legacy `.gs` with no grading groups loads unchanged.
 - Owner-layer: Domain, Commands, UI, IO
 - Status:      proposed
-- Revisions:   2026-10-09 — initial. Scoped from issue #802 together with REQ-403; shipped in the
-               same product decision rather than as a later follow-up, specifically BECAUSE it
-               reuses REQ-073's volume engine rather than requiring new compute code.
+- Revisions:   2026-10-09 — initial. Scoped from issue #802 (the Home ribbon's "Grading" and
+               "Grading Creation Tools"/"Grading Tools" placeholders). **Superseded same day
+               (2026-10-09): an earlier version of this REQ, plus a companion REQ-403 "grading
+               object", was written without first finding that REQ-398 ("Side slope grading to a
+               surface: the daylight line", accepted 2026-10-05, `GRADING`/`grd` command) already
+               exists and already implements a baseline/slopes/surface-target grading computation —
+               discovered while researching an unrelated issue (#766). REQ-403 is WITHDRAWN
+               entirely: it duplicated REQ-398's "grading object" with a conflicting design (REQ-403
+               was dynamic/live-rebuilding; REQ-398 is explicitly baked/one-shot, by deliberate
+               decision). This REQ-404 is kept, rewritten to build on REQ-398's actual output rather
+               than REQ-403's withdrawn one, since it is exactly the follow-on REQ-398's own
+               Statement already named. The Home ribbon's "Grading" placeholder is wired directly to
+               the existing `GRADING` command (no new REQ needed for that — see REQ-398's own
+               revision note); REQ-404 covers only the grading-GROUP surface/volumes layer, which
+               remains unimplemented. Grading Optimization (Home → Explore/Optimize) stays tracked
+               separately (issue #813) and depends on REQ-404 landing first — there is no group
+               volume to optimize before then.
 
 ## Anti-requirements
 
