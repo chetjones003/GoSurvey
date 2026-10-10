@@ -13715,6 +13715,119 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ---
 
+### REQ-403 — Grading object (footprint, criteria, projection)
+
+- Purpose:     slope a finished-ground surface away from a footprint shape to a target, replacing
+               the greyed Home → Create Design → "Grading" and Create Ground Data → "Grading"
+               ribbon placeholders (issue #802) with the feature Civil 3D calls Grading
+- Priority:    should
+- Type:        functional
+- Statement:   A **grading object** projects a **footprint** — a feature line (REQ-087), chosen
+               because GoSurvey already models feature lines as the "object a designer edits," the
+               same role Civil 3D requires of a grading footprint — outward under a **grading
+               criterion** until it reaches a **target**, producing:
+               - a **daylight line**: where the projection meets the target,
+               - **projection lines**: connecting each footprint vertex to its daylight point,
+               - a **face**: the triangulated strip between footprint and daylight line.
+
+               A grading criterion states a **slope or grade** and a **target type**:
+               - **surface** — project until the slope intersects an existing TIN surface (REQ-068);
+               - **absolute elevation** — project until reaching a stated elevation;
+               - **relative elevation** — project until reaching the footprint's own elevation plus
+                 a stated offset;
+               - **distance** — project a stated horizontal distance, independent of what (if
+                 anything) is underneath.
+
+               A grading object is a first-class entity: it selects, highlights, persists to
+               `.gs`, and is undoable in one step, like every other entity (REQ-076). Editing its
+               footprint (the feature line moves, or one of its elevations changes) or its
+               criterion re-projects the face with no user action — the same dynamic-rebuild
+               contract REQ-069 established for a surface reacting to its breaklines, reused here
+               rather than inventing a second one.
+
+               A footprint vertex at which the projection cannot reach its target (e.g. a surface
+               target with no terrain within the criterion's maximum search distance under that
+               vertex) leaves a **gap** in the face at that vertex and is reported, rather than
+               silently omitting the vertex or refusing the whole grading (REQ-201's "refuse the
+               whole operation" rule is for inputs that make the WHOLE result meaningless; one
+               unreachable vertex does not).
+- Acceptance:
+  - a closed rectangular footprint graded at a stated slope to an absolute elevation produces a
+    face whose daylight line is a parallel offset at the elevation implied by slope × projected
+    horizontal distance, within REQ-101 tolerance;
+  - the same footprint graded to a relative elevation offset produces a daylight line at
+    footprint-elevation + offset, independent of the footprint's absolute elevation;
+  - a footprint graded to a surface target produces a daylight line lying ON that surface
+    (interpolated elevation matches REQ-074's surface-pick elevation at each daylight point,
+    within tolerance);
+  - moving the footprint feature line, or editing one of its point elevations, re-projects the
+    face with no user action, the same frame-to-recompute behaviour REQ-069 requires of a surface
+    breakline edit;
+  - a vertex whose surface-target search finds no terrain is reported as a gap and does not stop
+    the rest of the footprint from grading;
+  - a grading object round-trips a `.gs` save/load byte-identically, including its footprint
+    reference, criterion, and target;
+  - deleting the footprint feature line removes or invalidates the grading object that depended on
+    it, rather than leaving it referencing nothing (mirrors REQ-069's breakline-deletion rule);
+  - a legacy `.gs` with no grading objects loads unchanged.
+- Owner-layer: Domain, Commands, UI, Renderer, IO
+- Status:      proposed
+- Revisions:   2026-10-09 — initial. Scoped from GitHub issue #802 (ribbon audit follow-up):
+               product decision was all three target types (surface, elevation, relative
+               elevation, distance) in v1, together with REQ-404's grading groups rather than as a
+               later follow-up. Grading Optimization (the Home → Explore/Optimize ribbon
+               placeholder) is explicitly OUT of this REQ's scope — it is an iterative cut/fill
+               balancing solver, architecturally unrelated to projecting one grading object, and
+               is tracked separately (issue #813). Transition and infill gradings (Civil 3D's
+               `CreateTransition` / `CreateGradingInfill`) are also out of scope for v1 — no
+               acceptance criterion above requires them, and they can be added once single-target
+               grading objects are proven.
+
+### REQ-404 — Grading groups and cut/fill volumes
+
+- Purpose:     combine grading objects into one proposed-ground surface so a design can be judged
+               by the cut/fill number it actually produces, reusing REQ-073's existing volume
+               engine rather than building a second one
+- Priority:    should
+- Type:        functional
+- Statement:   A **grading group** is a named collection of grading objects (REQ-403). GoSurvey
+               synthesizes a TIN surface (REQ-068) from the union of their faces, built and kept
+               current the same way REQ-069 builds and rebuilds any surface — adding or removing a
+               grading object from the group, or any edit that re-projects one of its member
+               faces, triggers a rebuild of the group surface with no user action, coalesced the
+               same way REQ-069 coalesces multiple edits into one rebuild.
+
+               The group surface is an ordinary surface wherever GoSurvey already has surface
+               machinery: it is selectable as either side of a REQ-073 surface-to-surface volume
+               comparison (against an existing-ground surface, to report cut/fill/net), it can be
+               picked for REQ-074 spot elevation/grade, and it appears in the REQ-075 Surface
+               Manager. No new volume-computation code is written — REQ-404's only new work is
+               building the group surface and keeping it current; REQ-073 does the rest.
+
+               A grading object belongs to at most one grading group at a time; moving it between
+               groups removes its face from the old group's surface and adds it to the new one's,
+               both rebuilding per the dynamic-rebuild rule above.
+- Acceptance:
+  - a grading group containing one grading object's face produces a surface whose triangulation
+    matches that face, within REQ-101 tolerance;
+  - a grading group of several non-overlapping grading objects produces one merged surface
+    covering their union, with no triangulation gap at a shared edge between two adjoining faces;
+  - running a REQ-073 volume comparison between a grading group's surface and an existing-ground
+    surface reports cut/fill/net using REQ-073's existing computation and reporting, with no
+    grading-specific volume logic;
+  - re-projecting a member grading object (footprint edit, criterion change) rebuilds the group
+    surface and, if a REQ-073 Volume Dashboard has that surface selected, recomputes the dashboard
+    with no user action — mirroring REQ-073's own stated rebuild-reaction behaviour;
+  - moving a grading object to a different group removes it from the first group's surface and
+    adds it to the second's, both surfaces rebuilding correctly;
+  - a grading group round-trips a `.gs` save/load byte-identically, including its membership list;
+  - a legacy `.gs` with no grading groups loads unchanged.
+- Owner-layer: Domain, Commands, UI, IO
+- Status:      proposed
+- Revisions:   2026-10-09 — initial. Scoped from issue #802 together with REQ-403; shipped in the
+               same product decision rather than as a later follow-up, specifically BECAUSE it
+               reuses REQ-073's volume engine rather than requiring new compute code.
+
 ## Anti-requirements
 
 > Optional but valuable: things the project deliberately will **not** require.
