@@ -1,0 +1,222 @@
+# TASK-195 — Booleans: sphere ∩ cylinder (issue #242, REQ-314 B2b-2 continued)
+
+## Requirement authority
+
+- **REQ-314** increment B2b-2 (ADR-046, D-2026-09-02-i, D-2026-09-03-a). Continues the plan in
+  `workshop/tasks/TASK-186-issue147-boolean-b2b2-procedural-curve.md`.
+- **Issue #242**, first checklist item: *"Sphere ∩ cylinder — a drilled hole through a sphere, a
+  spherical seat on a pipe."*
+- Constraints: REQ-101 (±0.01 ft), REQ-201 (a failed Boolean leaves both operands untouched and is
+  reported by name), REQ-300 (in-tree kernel), REQ-100 profile (d).
+
+## What exists
+
+`TryBooleanCurved` (`src/util/brep.cpp`) recognises cylinder×cylinder (Steinmetz, branch-pipe,
+coaxial), cylinder×box, and sphere×box. **There is no sphere×cylinder branch at all** — every
+sphere×cylinder pair falls through to `Fail(Problem::BooleanCurvedFace)`.
+
+The B2b-2 machinery from the branch-pipe slices is in place and reusable:
+`CurveKind::Intersection` edges, `MarchIntersectionCurve` / `SettleOntoIntersection`, `IsectStrip`
++ `IntegrateCylinderFaceNumeric` (numerical integration of a **cylinder** face bounded by a
+procedural curve), `.gs` `kGsFormatVersion` 3.
+
+## The geometry — two distinct sub-cases
+
+Cylinder radius `r`, sphere radius `Rs`, `r < Rs`.
+
+### (1) Axis through the sphere centre — **the intersection is two circles, not a quartic**
+
+`x²+y²=r²` and `x²+y²+z²=Rs²` ⟹ `z = ±√(Rs²−r²)`. Two plane circles of radius `r`. The result of
+each operation is closed-form and uses only `CurveKind::Arc`:
+
+| op | result |
+|---|---|
+| INTERSECT | a cylindrical mid-band capped by two spherical caps — a "ball with its sides milled flat off"… no: a barrel with spherical ends |
+| SUBTRACT (sphere − cyl) | a sphere with a clean cylindrical hole straight through it (genus 1) |
+| SUBTRACT (cyl − sphere) | a cylinder with a spherical bite from its middle (two stubs, or a waisted piece) |
+| UNION | a sphere with a cylindrical boss out each side |
+
+This is the common real case ("drill a hole through the middle of a ball", "spherical-nosed pin")
+and carries none of B2b-2's risk. It is a **B2b-1-style** closed-form recogniser.
+
+### (2) Axis offset from the sphere centre — **a genuine quartic**
+
+The cylinder axis parallel to a sphere diameter but displaced by `d` (`0 < d`, `d + r < Rs` for a
+clean hole). `x²+y²=r²` with centre `(d,0)`; on the sphere `z² = Rs² − (x²+y²+2dx… )` — a quartic
+loop. This is the case that needs `CurveKind::Intersection` and a **numerically-integrated sphere
+face** (new — A2 only did cylinder faces; `IntegrateFace`'s `Sphere` branch has no
+intersection-edge path). Skew axis is a third, harder case.
+
+## Proposed slicing
+
+- **Slice A (this task) — centred sphere ∩ cylinder, all three ops, closed-form.**
+  `ClassifyCylinder` + `ClassifySphere`, detect the axis passing within `1e-7·scale` of the sphere
+  centre and `r < Rs` and the cylinder clear of nothing (it always crosses cleanly when centred).
+  New builders `BuildSphereCylinder{Intersection,Subtract,Union}` following the Steinmetz builders'
+  shape (arcs + sphere caps + cylinder band; `Surface::inward` for the bored wall in SUBTRACT).
+  Volumes checked closed-form: spherical cap `πh²(3Rs−h)/3`, cylinder band `πr²·2√(Rs²−r²)`, etc.
+  `.gs`: **no version bump** — arcs and primitive faces only.
+- **Slice B — offset-axis sphere ∩ cylinder (the quartic), INTERSECT then SUBTRACT then UNION.**
+  Adds the intersection-edge branch to `IntegrateFace`'s `Sphere` case (an `IsectStrip`-analogue
+  over the sphere's `v`/latitude at each `u`/longitude) and a `BuildSphereCylinderOffset…` family.
+  `.gs` stays v3.
+- **Slice C — skew axis.** Deferred; the hardest marching case, shared with the cylinder-cylinder
+  skew slice.
+
+## Open question for the user
+
+**Take Slice A (centred, closed-form) first, or go straight to Slice B (the offset quartic)?**
+
+Slice A mirrors the project's established phasing — B2b-1 (ellipse, closed-form) preceded B2b-2
+(quartic); the Steinmetz coda (closed-form) preceded the branch-pipe quartic. It ships the common
+"hole through the middle of a ball" case with low risk and leaves the quartic marching for a
+follow-up. Recommend **Slice A first**.
+
+## Test approach
+
+`BrepTests` per op: volume vs the closed-form value (cap + band formulae) on-axis, on a tilted
+survey-magnitude frame, and after `Translate`; topology (genus for the bored cases); reversed
+operand order; the non-recognised configs still refused by name. A headless `.gs` round-trip is
+deferred pending a `CYLINDER` axis option (same note as the branch-pipe slices).
+
+## Status
+
+**Decision (user, this session): Slice A first — centred, closed-form.**
+
+**Slice A / INTERSECT — implemented.** `src/util/brep.cpp`:
+
+- `BuildSphereCylinderIntersection(fr, r, Rs, ...)` — a cylindrical band (`z ∈ [−h, h]`,
+  `h = √(Rs²−r²)`) capped by the two spherical zones the cylinder encloses. 6 vertices, 10 edges,
+  6 faces; band winding ported from `BuildCoaxialStack`, cap winding from `BuildSphericalCap` (top
+  cap direct, bottom cap the top loop reflected through `z = 0`). Every edge a `CurveKind::Arc`,
+  every face closed-form — **no `.gs` version bump**.
+- `TryBooleanSphereCylinder(S, C, op, ...)` — recognises the centred case: sphere centre on the
+  cylinder axis line (`1e-7·scale`), `r < Rs`, and **both cylinder caps clear of the sphere**
+  (`along ≥ Rs` and `length − along ≥ Rs`, else the result would keep a flat disk piece). Only
+  `INTERSECT` is `*handled`; `SUBTRACT` / `UNION` and every offset/skew config fall through to the
+  existing `BooleanCurvedFace` refusal.
+- Wired into `TryBooleanCurved` after the cylinder×box branches.
+
+Tests — `BrepTests` "Curved B2b-2 first pair: sphere INTERSECT cylinder": closed-form volume
+`2πr²h + 2·π(Rs−h)²(2Rs+h)/3` and area `4πrh + 4πRs(Rs−h)` to 1e-12; `RequireWindingMatchesNormals`
+on the tessellation; a tilted survey-magnitude frame + `Translate` to 1e-9; reversed operand order;
+`SUBTRACT`/`UNION` refused; an offset axis refused; a cap-inside-sphere config refused. Full suite
+green.
+
+**Slice B / `d < r` pole-covered SUBTRACT + UNION — implemented (issue #242, feat/issue242-sphere-cyl-polecovered-sub-union).**
+New `AddOffsetKeptZone` (the `d < r` counterpart of `AddOffsetKeptHemispheres`): no pole vertices,
+one kept sub-arc of each of the `u = 0` / `u = π` meridians, two zone faces with full pole-to-pole
+`v` metadata so `IntegrateFace` / the tessellator take the "hemisphere minus every lens bite" path
+(here two bites = a polar cap at each pole → the equatorial zone). `BuildSphereCylinderOffsetSubtractSphere`
+/ `...Union` branch `d < r → AddOffsetKeptZone` (bore / boss code unchanged — the loop half-edge
+windings match); `BuildCylinderSphereOffsetStub`'s dimple becomes a full inward polar cap
+(`u` 0→2π, `v` loop→±π/2) when `d < r`. `d > r` guards dropped from all three. `TryBooleanSphereCylinder`
+now routes every offset op regardless of `d ≷ r`. Counts: `sphere−cyl` 4v/8e/4f χ=0 (genus 1),
+stub 4v/6e/4f χ=2, `sphere∪cyl` 8v/14e/8f. Volumes vs the 1400×1400 plug integral (3e-3), winding,
+full suite green (1116). Only skew axis left on the sphere∩cylinder item.
+
+**Slice B / `d < r` pole-covered INTERSECT — implemented (issue #242, feat/issue242-sphere-cyl-polecovered-intersect).**
+`MakeOffsetScaffold` relaxed to `d > 0`, `d + r < Rs`, `|d − r| > tiny` — the same four-edge quartic
+scaffold serves `d > r` and `d < r` (the loop is closed at every longitude in both). For `d < r` the
+cylinder swallows each sphere pole, so `BuildSphereCylinderOffsetIntersection`'s two cap faces become
+full **polar caps** (`u` 0→2π, `v` loop→±π/2) instead of longitude-limited lens patches.
+`MakeSphereIsectStrip` forces the latitude scan to the pole when a face's own `v` span reaches it;
+`SphereStripAt` returns a one-root strip that runs off the pole end. `BuildSphereCylinderOffsetSubtractSphere`
+/ `...Union` gained explicit `d > r` guards (their kept sphere still assumes a pole). `TryBooleanSphereCylinder`
+routes `d < r` to INTERSECT only; `d ≈ r` tangency and `d < r` SUBTRACT/UNION refused. 4v/6e/4f χ=2,
+volume vs a 1400×1400 plug integral (3e-3), tilted frame. Full suite green (1116 ctest). No `.gs` bump.
+Still open: `d < r` SUBTRACT/UNION, skew axis.
+
+**Slice A / SUBTRACT + UNION — implemented (issue #242, feat/issue242-sphere-cylinder-subtract-union).**
+`src/util/brep.cpp`:
+
+- `BuildSphereCylinderSubtractSphere(fr, r, Rs, ...)` — `sphere − cylinder`, the clean drilled ball
+  (genus 1). Kept spherical surface is the equatorial zone `|z| ≤ h`; the bore is an inward cylinder
+  wall `z ∈ [−h, h]`. Zone seams are sphere meridians, bore seams the straight `±x` segments.
+  4v/8e/4f, χ = 0. Volume `(4/3)πRs³ − barrel`, area `4πh(Rs+r)`.
+- `BuildCylinderSphereStub` + `BuildCylinderSphereSubtract(fr, r, Rs, zBot, zTop, out, ...)` —
+  `cylinder − sphere`, two disjoint stubs, each a short cylinder with a flat outer cap and an inward
+  spherical dimple (the sphere's polar cap) on the inner end. 5v/8e/5f, χ = 2 per stub. `out` gets
+  two solids.
+- `BuildSphereCylinderUnion(fr, r, Rs, zBot, zTop, ...)` — `sphere ∪ cylinder`, the ball with a
+  solid cylindrical boss out each side. Equatorial zone + two outward cylinder bands + two flat
+  caps. 8v/14e/8f, χ = 2. Volume `sphere + cyl − barrel`.
+- `TryBooleanSphereCylinder` gained a `sphereIsMinuend` parameter (the SUBTRACT direction) and now
+  `*handled`s all three operations for the centred pair. Every face closed-form — **no `.gs` bump**.
+
+Tests — `BrepTests` "sphere INTERSECT cylinder …" case, new sections: `sphere − cylinder` (counts,
+χ = 0, closed-form volume/area, tessellated-volume, tilted survey frame + `Translate`);
+`cylinder − sphere` (two stubs, per-stub counts/χ/volume/area); `sphere ∪ cylinder` (counts, χ = 2,
+volume/area, tessellation winding, reversed operand order). Full suite green (1114 ctest cases).
+
+**Slice B / INTERSECT — implemented (issue #242, feat/issue242-sphere-cylinder-offset-quartic).**
+The offset-axis quartic, sub-case `r < d` (cylinder axis misses the pole) and `d + r < Rs` (clears
+the equator) and both caps clear the sphere — a clean through-plug. `src/util/brep.cpp`:
+
+- **Sphere numeric integration** (new — A2 only did cylinder faces). `SphereIsectStrip` /
+  `MakeSphereIsectStrip` / `SphereStripAt` — the `v`/latitude analogue of `IsectStrip`: at each
+  longitude `u`, bisect the quartic for the two latitude crossings. `IntegrateSphereFaceNumeric`
+  integrates over `u` with the graded Gauss rule, the per-`u` latitude integrals identical to
+  `SphericalFaceIntegrals`'. `IntegrateFace`'s `Sphere` branch routes an Intersection-bounded face
+  there. The tessellator's `Sphere` branch gained the matching per-`u` `v`-band grid.
+- `BuildSphereCylinderOffsetIntersection(fr, r, Rs, d, ...)` — the plug: two cylinder wall
+  half-bands + two lens-shaped sphere caps, bounded by four `CurveKind::Intersection` half-edges
+  (`z² = Rs² − d² − r² − 2dr cos φ`). 4v/6e/4f, χ = 2. `.gs` stays v3 (Intersection edges already
+  serialise).
+- `TryBooleanSphereCylinder` gained the offset branch: `INTERSECT` only, guarded to the sub-case
+  above; every other offset/skew config still falls through to `BooleanCurvedFace`.
+
+Tests — `BrepTests` "sphere INTERSECT cylinder with an offset axis (the quartic)": counts / χ /
+Intersection-edge count; volume vs a 1400×1400 numerical plug reference (2e-3); tessellation winding
++ tessellated volume; tilted survey frame + `Translate`; reversed operand order; SUBTRACT / UNION of
+the offset pair refused; the `d ≤ r` sub-case still refused. Full suite green (1115 ctest cases).
+
+**Slice B / SUBTRACT + UNION — implemented (issue #242, feat/issue242-sphere-cylinder-offset-subtract-union).**
+Same sub-case as the offset INTERSECT (`r < d`, `d + r < Rs`, both caps clear the sphere past the
+`φ = π` loop height `zP`). `src/util/brep.cpp`:
+
+- `MakeOffsetScaffold` factored out of `BuildSphereCylinderOffsetIntersection` — the shared cSurf /
+  sSurf frames, the four loop vertices `u0/uP/l0/lP` and the four `CurveKind::Intersection` half-
+  edges. The INTERSECT builder now consumes it too (no behaviour change).
+- `BuildSphereCylinderOffsetSubtractSphere(fr, r, Rs, d, ...)` — `sphere − cylinder`, an off-centre
+  hole drilled clean through: the kept sphere is **two lens-bitten hemispheres** (u 0→π and π→2π in
+  a frame whose xAxis points at the cylinder axis, full pole-to-pole v span), the bore an **inward**
+  cylinder wall between the two quartic loops. 6v / 10e (4 procedural) / 4f, χ = 0.
+- `BuildSphereCylinderOffsetUnion(fr, r, Rs, d, zBot, zTop, ...)` — `sphere ∪ cylinder`, the ball
+  with an off-centre boss out each side: the same two hemispheres + two **outward** cylinder bosses
+  (loop → flat cap) + two planar end caps. 10v / 16e (4 procedural) / 8f, χ = 2.
+- **Sphere numeric integration — "hemisphere minus lens bite".** `SphereStripsAt` returns *every*
+  latitude interval inside the cylinder at a longitude (a hemisphere face has two lens bites, one
+  near each pole). `IntegrateSphereFaceNumeric` sums them. `IntegrateFace`'s `Sphere` branch: a
+  full-v-span face = analytic hemisphere − numeric bite (mirrors the cylinder `!inOuter` branch); a
+  narrow-v-span face (the INTERSECT plug's lens) = the bite directly.
+- Tessellator `Sphere` branch: a full-v-span isect face draws the full hemisphere grid and drops
+  any quad whose centre lands in a bite (ragged at grid resolution, well inside REQ-101).
+- `TryBooleanSphereCylinder`'s offset branch now `*handled`s INTERSECT, UNION and
+  `sphere − cylinder`; `cylinder − sphere` offset and the `d ≤ r` case still fall through unhandled.
+  `.gs` stays at `kGsFormatVersion` 3 (Intersection edges already serialise).
+
+Tests — `BrepTests` "sphere INTERSECT cylinder with an offset axis (the quartic)", new sections:
+`sphere − cylinder` (6/10/4, χ = 0, 4 Intersection edges, volume `(4/3)πRs³ − vref` vs the
+1400×1400 plug reference to 2e-3, tessellated volume + winding, tilted survey frame + `Translate`,
+repeated call); `sphere ∪ cylinder` (10/16/8, χ = 2, volume `(4/3)πRs³ + πr²·L − vref`, reversed
+operand order); `cylinder − sphere` offset still refused. Full suite green (1115 ctest cases).
+
+**Slice B / `cylinder − sphere` (cylinder minuend) — implemented
+(feat/issue242-cylinder-sphere-offset-subtract).** Same sub-case guard. `src/util/brep.cpp`:
+
+- `BuildCylinderSphereOffsetStub(fr, r, Rs, d, zFlat, sideSign, ...)` — one disjoint stub: a short
+  cylinder with a flat plane cap and, on its inner end, an **inward** lens-shaped sphere dimple (the
+  patch the cylinder encloses that side) bounded by one quartic loop. 4v / 6e (2 procedural) / 4f,
+  χ = 2. Outer winding mirrors the offset UNION boss; the dimple is the offset INTERSECT cap
+  reversed + `inward`. Reuses `IntegrateSphereFaceNumeric` and the tessellator's lens path unchanged.
+- `BuildCylinderSphereOffsetSubtract(...)` — calls the stub builder twice, pushes two solids.
+- `TryBooleanSphereCylinder`'s offset branch now also `*handled`s `op == Subtract && !sphereIsMinuend`;
+  doc-comment + block comment refreshed. `.gs` unchanged (retired anyway — D-2026-09-03-h).
+
+Tests — the former "cylinder − sphere offset still refused" section replaced with the real case: two
+stubs, per-stub 4/6/4, χ = 2, 2 Intersection edges; total volume `πr²·L − vref` vs the 1400×1400
+plug reference (3e-3); summed tessellated volume; tilted survey frame + `Translate`; a
+cap-inside-sphere config still refused. Full suite green (1115 ctest cases).
+
+**Next:** the `d ≤ r` pole-covered sub-case; then Slice C (skew axis).

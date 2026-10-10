@@ -1,0 +1,303 @@
+# GitHub issue #400 increment 1 / REQ-305 acceptance 10-11 — ARRAY resolves picks through the
+# active UCS plane instead of raw world XY.
+#
+# Rectangular: columns run along the active UCS X axis, rows along the active UCS Y axis, and a
+# fully 3D (tilted) UCS moves later grid cells along a real 3D grid (translation-only, so it has no
+# arbitrary-axis-rotation gap).
+#
+# Polar: rotation is about the active UCS Z axis, but restricted to a UCS whose Z axis stays
+# parallel to world Z (D-2026-09-04-g's arbitrary-axis-rotation gap) — an in-plane rotated/translated
+# UCS works; a UCS tilted out of horizontal (UCS X 90 below) is refused by name.
+#
+# Regression guard (REQ-305 acceptance 10): the World-UCS scenario at the top must match
+# regression-87-array.txt's own rectangular/polar numbers exactly.
+
+NEW
+
+# --- Regression: World UCS / plan view is untouched ----------------------------------------------
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+CMD ARRAY
+CMD r
+CMD 3
+CMD 20
+CMD 2
+CMD 15
+CMD
+EXPECT LOG "6 total instance(s) (3 x 2)"
+EXPECT LINES 6
+EXPECT LINEXYZ 1 20 0 0 30 0 0
+EXPECT LINEXYZ 5 40 15 0 50 15 0
+CHECK ALL
+
+# --- Rectangular under a UCS rotated 90 degrees about Z --------------------------------------------
+# UCS X now points along world +Y, and UCS Y along world -X. A 3x1 rectangular array with column
+# spacing 10 must therefore step along world Y, not world X.
+NEW
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 5 0
+ESC
+CMD UCS
+CMD Z
+EXPECT LOG "Specify rotation angle about Z axis"
+CMD 90
+BOX -1 -1 6 1
+EXPECT SELECTED 1
+CMD ARRAY
+CMD r
+CMD 3
+CLICKUCS 10 0
+CMD 1
+CMD 0
+CMD
+EXPECT LOG "3 total instance(s) (3 x 1)"
+EXPECT LINES 3
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 0 5 0 0
+EXPECT LINEXYZ 1 0 10 0 5 10 0
+EXPECT LINEXYZ 2 0 20 0 5 20 0
+
+# --- Rectangular under a UCS tilted 90 degrees about X (a vertical work plane) --------------------
+# UCS +Y now points along world +Z: a "row" spacing of 10 in this UCS must move the copies up in
+# world Z, not world Y (REQ-305 acceptance 10's 3D-grid claim).
+NEW
+CMD UCS
+CMD X
+EXPECT LOG "Specify rotation angle about X axis"
+CMD 90
+CMD LINE
+CLICKUCS 0 0
+CLICKUCS 5 0
+ESC
+BOX -1 -1 6 1
+EXPECT SELECTED 1
+CMD ARRAY
+CMD r
+CMD 1
+CMD 0
+CMD 2
+CLICKUCS 0 10
+CMD
+EXPECT LOG "2 total instance(s) (1 x 2)"
+EXPECT LINES 2
+CMD UCS
+CMD W
+EXPECT LINEXYZ 0 0 0 0 5 0 0
+EXPECT LINEXYZ 1 0 0 10 5 0 10
+
+# --- Polar under a UCS rotated + translated within the horizontal plane --------------------------
+# The UCS Z axis stays world Z, so polar rotation (about world Z through the picked centre) is
+# unaffected by the UCS's own rotation — this exercises center-pick-through-the-UCS-plane, not a
+# change in the rotation math itself.
+NEW
+CMD UCS
+CMD Z
+CMD 30
+CMD CIRCLE
+CLICKUCS 10 0
+CMD 2
+ESC
+BOX 5 -5 15 5
+EXPECT SELECTED 1
+CMD ARRAY
+CMD p
+CLICKUCS 0 0
+CMD 4
+CMD 360
+CMD y
+EXPECT LOG "4 total instance(s) (polar)"
+EXPECT CIRCLES 4
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- Polar under a UCS tilted out of horizontal now WORKS (REQ-328 superseded the old refusal) ----
+# "UCS X 90" sends UCS +Z to world (0,-1,0) (see req312-arbitrary-plane-curves.txt's own worked
+# example). The circle sits at UCS (10,0) = world (10,0,0), on the tilted work plane, with normal
+# (0,-1,0). Rotating 90 degrees (n=4, full turn) about that tilted axis through the UCS origin sends
+# world (10,0,0) to world (0,0,10) — computed by hand via Rodrigues' rotation, not asserted against
+# whatever the implementation happens to produce.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 10 0
+CMD 2
+ESC
+BOX 5 -5 15 5
+EXPECT SELECTED 1
+CMD ARRAY
+CMD p
+CLICKUCS 0 0
+CMD 4
+CMD 360
+CMD y
+EXPECT LOG "4 total instance(s) (polar)"
+EXPECT CIRCLES 4
+EXPECT CIRCLEXYZ 1 0 0 10 2 0 -1 0
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- Polar under a tilted axis still refuses Annotation (no stored plane normal, REQ-328 item 2) --
+# The circle in the same selection still arrays correctly; only the text is excluded, by name.
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 10 0
+CMD 2
+ESC
+CMD TEXT
+CLICKUCS 10 0
+CMD 1
+CMD 0
+CMD HELLO
+ESC
+BOX 5 -5 15 5
+EXPECT SELECTED 2
+CMD ARRAY
+CMD p
+CLICKUCS 0 0
+CMD 4
+CMD 360
+CMD y
+EXPECT LOG "1 entity(ies) excluded"
+EXPECT LOG "4 total instance(s) (polar)"
+EXPECT CIRCLES 4
+CMD UCS
+CMD W
+
+# --- Polar under a tilted axis also rotates a Line correctly (REQ-328) -----------------------------
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD LINE
+CLICKUCS 10 0
+CLICKUCS 10 5
+ESC
+BOX 5 -5 15 10
+EXPECT SELECTED 1
+CMD ARRAY
+CMD p
+CLICKUCS 0 0
+CMD 4
+CMD 360
+CMD y
+EXPECT LOG "4 total instance(s) (polar)"
+EXPECT LINES 4
+# Same Rodrigues computation as the circle case above (axis (0,-1,0) through the origin, 90 deg):
+# UCS (10,0) -> world (10,0,0) -> rotated (0,0,10); UCS (10,5) -> world (10,0,5) -> rotated (-5,0,10).
+EXPECT LINEXYZ 1 0 0 10 -5 0 10
+CMD UCS
+CMD W
+
+# --- GitHub issue #400 increment 4: the INTERACTIVE (picked) fill angle is measured in the UCS
+# plane, not world XY -----------------------------------------------------------------------------
+# User report (2026-09-08): in a FRONT UCS, picking the polar fill angle put every copy on top of
+# the original. Cause: the pick's sweep angle was `atan2(worldY - centreY, worldX - centreX)`, and
+# on any non-plan work plane the world-Y term is near-constant across the plane, so the angle
+# collapsed to ~0 and the step angle was zero. The angle must come from the pick's position in the
+# work plane's own local X/Y.
+#
+# Regression guard: World UCS, fill angle PICKED (not typed) at (0,10) = straight up = 90 degrees.
+NEW
+CMD CIRCLE
+CMD 10,0
+CMD 1
+ESC
+BOX 5 -5 15 5
+EXPECT SELECTED 1
+CMD ARRAY
+CMD p
+CMD 0,0
+CMD 3
+CLICKUCS 0 10
+CMD y
+EXPECT LOG "3 total instance(s) (polar)"
+EXPECT CIRCLES 3
+# 90 deg fill, n=3, partial arc => step 45 deg about world Z through the origin.
+# (10,0) -> 45 deg -> (7.07107, 7.07107); -> 90 deg -> (0,10).
+EXPECT CIRCLEXYZ 1 7.07107 7.07107 0 1 0 0 1
+EXPECT CIRCLEXYZ 2 0 10 0 1 0 0 1
+CHECK ALL
+
+# Tilted UCS (X 90): work plane is world XZ, UCS +Z -> world (0,-1,0). Circle at UCS (10,0) =
+# world (10,0,0). Fill angle PICKED at UCS (0,10) => 90 deg in the plane; n=3 => step 45 deg about
+# the axis (0,-1,0) through the origin. Rodrigues: (10,0,0) -> 45 deg -> (7.07107, 0, 7.07107);
+# -> 90 deg -> (0,0,10). Plane normal is parallel to the axis, so it is unchanged: (0,-1,0).
+# Before the fix this picked angle came out ~0 and all three circles coincided at (10,0,0).
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 10 0
+CMD 1
+ESC
+BOX 5 -5 15 5
+EXPECT SELECTED 1
+CMD ARRAY
+CMD p
+CLICKUCS 0 0
+CMD 3
+CLICKUCS 0 10
+CMD y
+EXPECT LOG "3 total instance(s) (polar)"
+EXPECT CIRCLES 3
+EXPECT CIRCLEXYZ 1 7.07107 0 7.07107 1 0 -1 0
+EXPECT CIRCLEXYZ 2 0 0 10 1 0 -1 0
+CMD UCS
+CMD W
+CHECK ALL
+
+# Increment 4: polar ROTATE-ITEMS = NO under a tilted UCS, with the selection OFF the work-plane
+# elevation. The array anchor's Z must be the geometry's real elevation (its 3D bounds centre), not
+# the work-plane elevation - otherwise the no-rotate path rotates the anchor at an inflated radius
+# and every copy flies outward (the user's 2026-09-08 report: preview correct, commit wrong).
+#
+# UCS X 90 => work plane world y=0, axis (0,-1,0) through the origin. Circle at UCS (0,10) =
+# world (0,0,10); centre at UCS (0,0) = world origin. n=3, fill angle picked at UCS (0,10) = 90 deg
+# => step 45 deg. no-rotate here == rotate-items (anchor coincides with the circle centre):
+# world (0,0,10) -> 45 deg -> (-7.07107, 0, 7.07107) -> 90 deg -> (-10, 0, 0).
+# Before the fix the anchor Z was 0 (== the axis), the per-copy delta was 0, and all three circles
+# stayed at (0,0,10).
+NEW
+CMD UCS
+CMD X
+CMD 90
+CMD CIRCLE
+CLICKUCS 0 10
+CMD 1
+ESC
+# A throwaway line drawn on the work-plane elevation (UCS z=0) leaves the last resolved cursor Z at
+# 0 - so `CadCommitElevation` alone would put the array anchor at Z 0 while the selected circle is
+# at Z 10. The fix reads the circle's own 3D bounds centre instead.
+CMD LINE
+CLICKUCS -20 0
+CLICKUCS -25 0
+ESC
+BOX -5 -5 5 5
+EXPECT SELECTED 1
+CMD ARRAY
+CMD p
+CLICKUCS 0 0
+CMD 3
+CLICKUCS 0 10
+CMD n
+EXPECT LOG "3 total instance(s) (polar)"
+EXPECT CIRCLES 3
+EXPECT CIRCLEXYZ 1 -7.07107 0 7.07107 1 0 -1 0
+EXPECT CIRCLEXYZ 2 -10 0 0 1 0 -1 0
+CMD UCS
+CMD W
+CHECK ALL

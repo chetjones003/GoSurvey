@@ -1,0 +1,111 @@
+# REQ-204 `dxf-export-stable` oracle: DXF export -> import -> export is stable.
+#
+# ## Registered DISABLED
+#
+# This transcript FAILS today, on purpose, and is registered with `DISABLED TRUE` in CMakeLists.txt
+# rather than deleted or wrapped in WILL_FAIL. That is the same call TASK-056 made for
+# `headless.gs-roundtrip.compare` while issues #56 and #57 were open: an oracle that has found a
+# real defect is evidence, and deleting it to get a green suite would throw the evidence away.
+# WILL_FAIL would be worse still — it would go green the moment the failure changed into a
+# DIFFERENT failure. Re-enable it when #63 (ARC/ELLIPSE dropped) is closed — #64 (LWPOLYLINE
+# shattered) was fixed on 2026-08-21 by TASK-083 and is now held by
+# `regression-64-dxf-polyline-identity.txt`, which is this file with the arc taken out so that one
+# open defect does not keep the other's regression test off the suite.
+#
+# ## What each half can and cannot catch
+#
+# REQ-204's table glosses this invariant as "an entity type silently dropped by an exporter with no
+# branch for it". Export -> import -> export does NOT catch that, and the distinction decides the
+# shape of this file. With A = export(D0), D1 = import(A), B = export(D1):
+#
+#   | defect                                  | where it shows          | caught by A vs B? |
+#   |-----------------------------------------|-------------------------|-------------------|
+#   | exporter has no branch for a type       | absent from A, D1 and B | NO — A == B       |
+#   | exporter writes it, importer drops it   | in A, absent from D1/B  | yes — A != B      |
+#
+# An entity dropped before it ever reaches the file is invisible to a comparison BETWEEN files,
+# because it is missing from both of them. Catching it needs the DOCUMENT compared across the round
+# trip, which is what `EXPECT <QUANTITY> <n>` does. So the oracle has two halves that test different
+# things, and both are needed:
+#
+#   1. SURVIVAL  — entity counts before export vs after import.
+#   2. STABILITY — `EXPECT SAMEFILE` on the two exports.
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+CMD 100,50
+ESC
+
+CMD CIRCLE
+CMD 50,25
+CMD 10
+ESC
+
+CMD POLYLINE
+CMD 0,100
+CMD 50,150
+CMD 100,100
+CMD END
+
+CMD ARC
+PICK 0 0
+PICK 20 20
+PICK 40 0
+ESC
+
+CHECK ALL
+EXPECT LINES 2
+EXPECT CIRCLES 1
+EXPECT POLYLINES 1
+EXPECT ARCS 1
+
+EXPORT DXF %OUT%/dxfstable-a.dxf
+
+# ---------------------------------------------------------------------------
+# Half 1 — SURVIVAL. Every entity that went in comes back out.
+#
+# FAILS TODAY on the first of the two defects below. The second is fixed; its description is kept
+# because it is the record of what this oracle found.
+#
+#   - ARCS 1 -> 0. `src/io/DxfIo.cpp`'s writer has branches for LINE, CIRCLE, POINT, LWPOLYLINE,
+#     MTEXT and HATCH/SOLID, and mentions `userArcs` NOWHERE in the export path. The exported file
+#     contains no ARC record at all. `userEllipses` is missing the same way — measured separately:
+#     a drawing holding one ellipse and nothing else exports a DXF containing ZERO entities of any
+#     kind. This is REQ-204's "entity type silently dropped by an exporter with no branch for it",
+#     found by the oracle written to find it.
+#
+#   - POLYLINES 1 -> 0, LINES 2 -> 4 — FIXED 2026-08-21 (issue #64, TASK-083). The polyline WAS
+#     exported (the file holds one LWPOLYLINE) and the IMPORTER read it back as loose segments:
+#     "DXF import — 4 line segment(s)". So a drawing that survived a DXF round trip lost polyline
+#     identity — the geometry all still there, and every polyline in it shattered into unrelated
+#     lines. `ParseEntityRegion` had no polyline sink; it now has one.
+# ---------------------------------------------------------------------------
+
+NEW
+IMPORT DXF %OUT%/dxfstable-a.dxf
+CHECK ALL
+
+EXPECT LINES 2
+EXPECT CIRCLES 1
+EXPECT POLYLINES 1
+EXPECT ARCS 1
+
+# ---------------------------------------------------------------------------
+# Half 2 — STABILITY. A second export of the imported document must match the first byte for byte.
+#
+# This half USED to fail (7194 vs 7367 bytes, first difference at byte 243), on the LWPOLYLINE
+# asymmetry above: A held one LWPOLYLINE, B held the two LINEs the importer turned it into. Both
+# that and a second asymmetry underneath it — $EXTMIN/$EXTMAX swept without polylines and written
+# in the LOCAL frame while entities are written in WORLD — are fixed, and are pinned by
+# `regression-64-dxf-polyline-identity.txt`. The ARC loss stays invisible here for exactly the
+# reason the table at the top gives: absent from both files.
+#
+# `EXPORT` is deterministic, so this comparison is meaningful: DxfIo writes no timestamp, and
+# `$HANDSEED` is derived from entity counts rather than from a clock.
+# ---------------------------------------------------------------------------
+
+EXPORT DXF %OUT%/dxfstable-b.dxf
+EXPECT SAMEFILE %OUT%/dxfstable-a.dxf %OUT%/dxfstable-b.dxf

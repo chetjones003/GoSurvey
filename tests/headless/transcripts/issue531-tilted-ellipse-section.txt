@@ -1,0 +1,91 @@
+# GitHub issue #531 — a tilted cut of a cylinder or cone is drawn, as an ELLIPSE standing in the
+# cut plane.
+#
+# Before: `SECTION` refused it — "this cut is an ellipse, which a section outline cannot hold yet" —
+# because a polyline holds only lines and circular arcs, and `ELLIPSE` could only lie flat. The
+# ellipse entity now carries the plane it lies in (the rule REQ-312 gave arcs and circles), so the
+# cut a surveyor makes through a pipe on a slant is drawn instead of refused.
+#
+# The cylinder is tall enough that a 45-degree cut through its middle stays between the caps; a cut
+# that runs off an end is an elliptical arc plus a chord, and keeps its own refusal (#516).
+
+NEW
+
+# --- the cut that was refused ---------------------------------------------------------------------
+CMD CYLINDER 0,0,-100 30 200
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT ELLIPSES 1
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+ESC
+CHECK ALL
+
+# One undo step takes it away, and the solid is untouched throughout.
+CMD UNDO
+EXPECT ELLIPSES 0
+EXPECT SOLIDS 1
+CMD REDO
+EXPECT ELLIPSES 1
+CHECK ALL
+
+# --- it survives the drawing's own file ------------------------------------------------------------
+SAVEAS %OUT%/issue531-tilted.gs
+OPEN %OUT%/issue531-tilted.gs
+EXPECT ELLIPSES 1
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- and DXF, which states an ellipse's plane in group 210 -----------------------------------------
+# The cut plane is z = y, so the normal is (0, -0.707107, 0.707107) and the major axis runs down the
+# slope: 30 across in Y and 30 in Z, which is 42.426 long — r / cos 45.
+EXPORT DXF %OUT%/issue531-tilted.dxf
+EXPECT FILECONTAINS %OUT%/issue531-tilted.dxf "AcDbEllipse"
+EXPECT FILECONTAINS %OUT%/issue531-tilted.dxf "-0.707107"
+NEW
+IMPORT DXF %OUT%/issue531-tilted.dxf
+EXPECT ELLIPSES 1
+EXPORT DXF %OUT%/issue531-tilted2.dxf
+EXPECT FILECONTAINS %OUT%/issue531-tilted2.dxf "-0.707107"
+CHECK ALL
+
+# --- a cut that crosses an end cap is still refused, by its own name --------------------------------
+NEW
+CMD CYLINDER 0,0,-25 30 50
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A tilted cut that crosses the end of a cylinder or cone is not supported yet."
+ESC
+EXPECT ELLIPSES 0
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL
+
+# --- a flat ellipse is untouched: the common case must not move ------------------------------------
+NEW
+CMD ELLIPSE
+PICK 0 0
+PICK 40 0
+CMD 0.5
+EXPECT ELLIPSES 1
+SAVEAS %OUT%/issue531-flat.gs
+OPEN %OUT%/issue531-flat.gs
+EXPECT ELLIPSES 1
+EXPORT DXF %OUT%/issue531-flat.dxf
+EXPECT FILECONTAINS %OUT%/issue531-flat.dxf "AcDbEllipse"
+NEW
+IMPORT DXF %OUT%/issue531-flat.dxf
+EXPECT ELLIPSES 1
+CHECK ALL

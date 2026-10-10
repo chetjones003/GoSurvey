@@ -1,0 +1,514 @@
+#include "commands/PaperSpace.hpp"
+#include "util/cadblock.hpp"
+#include "util/brep.hpp"
+#include "util/ucs.hpp"
+
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+#include <algorithm>
+#include <cmath>
+
+TEST_CASE("Block geometry is stored relative to a baked base point", "[issue124][block]") {
+  CadBlockDefinition def;
+  def.name = "TREE";
+  def.baseX = 100.f;
+  def.baseY = 200.f;
+  def.content.lines = {98.f, 200.f, 0.f, 102.f, 200.f, 0.f};
+  CadBlockBakeBasePoint(&def);
+  REQUIRE(def.baseX == 0.f);
+  REQUIRE(def.baseY == 0.f);
+  REQUIRE(def.content.lines.size() >= 6);
+  CHECK(def.content.lines[0] == Catch::Approx(-2.f));
+  CHECK(def.content.lines[1] == Catch::Approx(0.f));
+  CHECK(def.content.lines[3] == Catch::Approx(2.f));
+}
+
+TEST_CASE("Two references share one definition and keep independent transforms", "[issue124][block]") {
+  std::vector<CadBlockDefinition> defs(1);
+  defs[0].name = "TREE";
+  defs[0].content.lines = {-1.f, 0.f, 0.f, 1.f, 0.f, 0.f};
+  CadBlockRef a;
+  a.defName = "TREE";
+  a.xf.x = 10.f;
+  a.xf.y = 20.f;
+  CadBlockRef b = a;
+  b.xf.x = 50.f;
+  b.xf.sx = 2.f;
+  std::vector<CadBlockWorldSeg> sa;
+  std::vector<CadBlockWorldSeg> sb;
+  CadBlockCollectWorldLines(defs, a, EntityAttributes{}, &sa);
+  CadBlockCollectWorldLines(defs, b, EntityAttributes{}, &sb);
+  REQUIRE_FALSE(sa.empty());
+  REQUIRE_FALSE(sb.empty());
+  CHECK(sa[0].x0 == Catch::Approx(9.f));
+  CHECK(sb[0].x0 == Catch::Approx(48.f));
+}
+
+TEST_CASE("Circular nested blocks are refused", "[issue124][block]") {
+  std::vector<CadBlockDefinition> defs(2);
+  defs[0].name = "A";
+  defs[1].name = "B";
+  CadBlockNested n;
+  n.defName = "A";
+  defs[1].content.nested.push_back(n);
+  CHECK(CadBlockWouldCycle(defs, "A", "B"));
+  CHECK(CadBlockWouldCycle(defs, "A", "A"));
+  CHECK_FALSE(CadBlockWouldCycle(defs, "B", "A"));
+}
+
+TEST_CASE("Inch-to-foot insert scale is 1/12", "[issue124][block]") {
+  CHECK(CadBlockUnitsScale("inches", "feet") == Catch::Approx(1.f / 12.f));
+}
+
+TEST_CASE("Unitless block units insert without conversion", "[issue475][block][units]") {
+  CHECK(CadBlockUnitsScale("unitless", "feet") == Catch::Approx(1.f));
+  CHECK(CadBlockUnitsScale("unitless", "inches") == Catch::Approx(1.f));
+}
+
+TEST_CASE("ByBlock color resolves from the insert", "[issue124][block]") {
+  EntityAttributes prim;
+  prim.color = "ByBlock";
+  EntityAttributes insert;
+  insert.color = "1";
+  const EntityAttributes r = CadBlockResolveAttr(prim, insert);
+  CHECK(r.color == "1");
+}
+
+TEST_CASE("Layer-0 ByLayer content follows the insert's layer and colour", "[issue564][block]") {
+  EntityAttributes prim;  // layer "0", ByLayer — how a library part is drawn
+  EntityAttributes insert;
+  insert.layer = "FITTINGS";
+  insert.color = "3";
+  const EntityAttributes r = CadBlockResolveAttr(prim, insert);
+  CHECK(r.layer == "FITTINGS");
+  CHECK(r.color == "3");
+}
+
+TEST_CASE("Content on its own layer keeps its layer and ByLayer colour", "[issue564][block]") {
+  EntityAttributes prim;
+  prim.layer = "BOLTS";
+  EntityAttributes insert;
+  insert.layer = "FITTINGS";
+  insert.color = "3";
+  const EntityAttributes r = CadBlockResolveAttr(prim, insert);
+  CHECK(r.layer == "BOLTS");
+  CHECK(r.color == "ByLayer");
+}
+
+TEST_CASE("Mirror of a reference flips insertion across the axis", "[issue124][block]") {
+  CadBlockRef r;
+  r.xf.x = 4.f;
+  r.xf.y = 1.f;
+  CadBlockMirror(&r, 0.f, 0.f, 0.f, 10.f);
+  CHECK(r.xf.x == Catch::Approx(-4.f));
+  CHECK(r.xf.sx < 0.f);
+}
+
+TEST_CASE("XYZ insertion and 3D scale apply to collected segments", "[issue124][block]") {
+  std::vector<CadBlockDefinition> defs(1);
+  defs[0].name = "POST";
+  defs[0].content.lines = {0.f, 0.f, 0.f, 0.f, 0.f, 2.f};
+  CadBlockRef r;
+  r.defName = "POST";
+  r.xf.x = 1.f;
+  r.xf.y = 2.f;
+  r.xf.z = 10.f;
+  r.xf.sz = 3.f;
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE_FALSE(segs.empty());
+  CHECK(segs[0].z0 == Catch::Approx(10.f));
+  CHECK(segs[0].z1 == Catch::Approx(16.f));
+}
+
+TEST_CASE("Attribute values differ per reference", "[issue124][block]") {
+  CadBlockDefinition def;
+  def.name = "MH";
+  CadBlockAttrDef ad;
+  ad.tag = "ID";
+  ad.defaultValue = "0";
+  def.attrDefs.push_back(ad);
+  CadBlockRef a;
+  a.defName = "MH";
+  CadBlockRef b = a;
+  CadBlockAttrSet(&a, "ID", "A1");
+  CadBlockAttrSet(&b, "ID", "B2");
+  CHECK(CadBlockAttrGet(a, def, "ID") == "A1");
+  CHECK(CadBlockAttrGet(b, def, "ID") == "B2");
+}
+
+TEST_CASE("Visibility state hides unmatched primitives", "[issue124][block]") {
+  std::vector<CadBlockDefinition> defs(1);
+  defs[0].name = "GATE";
+  defs[0].content.lines = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+  defs[0].content.lineVis = {"OPEN", "SHUT"};
+  CadBlockRef r;
+  r.defName = "GATE";
+  r.visState = "OPEN";
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+}
+
+TEST_CASE("Linear stretch dynamic grip updates block geometry (issue #618 inc4)", "[issue618][inc4][block]") {
+  CadBlockDefinition def;
+  def.name = "PANEL";
+  def.content.lines = {0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockParameter p;
+  p.name = "Width";
+  p.kind = CadBlockParamKind::Linear;
+  p.value = 2.f;
+  p.minValue = 0.f;
+  p.maxValue = 10.f;
+  def.parameters.push_back(p);
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  def.actions.push_back(stretch);
+  REQUIRE(CadBlockHasLinearStretchDyn(def));
+  CHECK(CadBlockDynGripCount(def) == 2);
+
+  CadBlockRef r;
+  r.defName = def.name;
+  r.paramState = def.parameters;
+  std::vector<CadBlockDefinition> defs;
+  defs.push_back(def);
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  CHECK(segs[0].x1 == Catch::Approx(4.f).margin(0.01f));
+
+  float gx = 0.f;
+  float gy = 0.f;
+  REQUIRE(CadBlockDynGripWorld(def, r, 1, &gx, &gy, nullptr));
+  CadBlockApplyDynGripDrag(&r, def, 1, gx + 2.f, gy);
+  segs.clear();
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  CHECK(segs[0].x1 == Catch::Approx(8.f).margin(0.01f));
+}
+
+TEST_CASE("dynamicAnonymous instance geometry is not re-stretched by GoSurvey actions (issue #618 inc2)",
+          "[issue618][block]") {
+  CadBlockDefinition def;
+  def.name = "*U7";
+  def.dynamicAnonymous = true;
+  def.content.lines = {0.f, 0.f, 0.f, 5.f, 0.f, 0.f};
+  def.content.lineAttrs.push_back(EntityAttributes{});
+  CadBlockAction stretch;
+  stretch.kind = CadBlockActionKind::Stretch;
+  stretch.paramName = "Width";
+  stretch.originX = 0.f;
+  stretch.originY = 0.f;
+  stretch.dirX = 1.f;
+  stretch.dirY = 0.f;
+  stretch.threshold = -1.f;
+  def.actions.push_back(stretch);
+  CadBlockParameter p;
+  p.name = "Width";
+  p.value = 10.f;
+  def.parameters.push_back(p);
+
+  CadBlockRef r;
+  r.defName = def.name;
+  r.paramState.push_back(p);
+  std::vector<CadBlockDefinition> defs;
+  defs.push_back(def);
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 1);
+  const float span = std::hypot(segs[0].x1 - segs[0].x0, segs[0].y1 - segs[0].y0);
+  CHECK(span == Catch::Approx(5.f).margin(0.001f));
+}
+
+TEST_CASE("Matchline dynamics stretch the negative end and flip labels", "[issue124][block]") {
+  CadBlockDefinition def;
+  def.name = "_matchline_NORTHING";
+  def.content.lines = {0.f, -2.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 2.f, 0.f};
+  CadBlockAttrDef sheet;
+  sheet.tag = "N#";
+  sheet.localX = 0.2f;
+  sheet.localY = -0.5f;
+  def.attrDefs.push_back(sheet);
+  CadBlockAttrDef north;
+  north.tag = "NORTHING";
+  north.localX = 0.2f;
+  north.localY = 0.4f;
+  def.attrDefs.push_back(north);
+  CadBlockAuthorMatchlineDynamics(&def);
+  REQUIRE(CadBlockHasMatchlineDyn(def));
+  CHECK(CadBlockDynGripCount(def) == kCadBlockDynGripCount);
+  CHECK(CadBlockDynGripShapeOf(1) == CadBlockDynGripShape::StretchArrow);
+  CHECK(CadBlockDynGripShapeOf(4) == CadBlockDynGripShape::OffsetTriangle);
+  CHECK(CadBlockDynGripShapeOf(3) == CadBlockDynGripShape::FlipArrow);
+  CHECK(CadBlockDynGripShownOnInsert(0));
+  CHECK(CadBlockDynGripShownOnInsert(3));
+
+  CadBlockRef r;
+  r.defName = def.name;
+  std::vector<CadBlockDefinition> defs;
+  defs.push_back(def);
+  std::vector<CadBlockWorldSeg> segs;
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  REQUIRE(segs.size() == 2);
+  float yMin = 0.f, yMax = 0.f;
+  CadBlockLineYExtent(def, &yMin, &yMax);
+  CHECK(yMin == Catch::Approx(-2.f));
+
+  CadBlockParamSet(&r, "DistNeg", 1.f);
+  segs.clear();
+  CadBlockCollectWorldLines(defs, r, EntityAttributes{}, &segs);
+  float minY = 1.e9f;
+  for (const CadBlockWorldSeg& s : segs)
+    minY = std::min(minY, std::min(s.y0, s.y1));
+  CHECK(minY == Catch::Approx(-3.f));
+
+  std::vector<CadAnnotation> annsAtStretch;
+  CadBlockCollectWorldAnnotations(defs, r, &annsAtStretch);
+  bool sheetStayed = false;
+  for (const CadAnnotation& a : annsAtStretch) {
+    if (std::fabs(a.insY + 0.5f) < 0.02f)
+      sheetStayed = true;
+  }
+  CHECK(sheetStayed);
+
+  CadBlockParamSet(&r, "Flip", 1.f);
+  std::vector<CadAnnotation> anns;
+  CadBlockCollectWorldAnnotations(defs, r, &anns);
+  REQUIRE(anns.size() >= 2);
+  bool sawFlippedSheet = false;
+  for (const CadAnnotation& a : anns) {
+    if (a.insX < 0.f)
+      sawFlippedSheet = true;
+  }
+  CHECK(sawFlippedSheet);
+}
+
+TEST_CASE("annotation overlay is active for a drawing that only has block INSERTs", "[issue124][block]") {
+  CHECK_FALSE(CadNeedsAnnotationOverlay(0, 0, 0, false, false));
+  CHECK(CadNeedsAnnotationOverlay(0, 0, 1, false, false));
+  CHECK(CadNeedsAnnotationOverlay(1, 0, 0, false, false));
+}
+
+TEST_CASE("CadBlockCollectWorldSolids applies INSERT transform to block solids", "[issue475][block][solid]") {
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 2.0, 2.0, 4.0, &box, &why));
+
+  std::vector<CadBlockDefinition> defs(1);
+  defs[0].name = "FLANGE";
+  defs[0].content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+
+  CadBlockRef r;
+  r.defName = "FLANGE";
+  r.xf.x = 10.f;
+  r.xf.y = 20.f;
+  r.xf.z = 5.f;
+
+  std::vector<CadBlockWorldSolid> ws;
+  CadBlockCollectWorldSolids(defs, r, EntityAttributes{}, &ws);
+  REQUIRE(ws.size() == 1);
+  REQUIRE(ws[0].solid);
+  const brep::Bounds bb = brep::ComputeBounds(*ws[0].solid);
+  REQUIRE(bb.valid);
+  CHECK(bb.mn.z == Catch::Approx(5.0).margin(0.05));
+  CHECK(bb.mx.z == Catch::Approx(9.0).margin(0.05));
+  CHECK(bb.mn.x == Catch::Approx(9.0).margin(0.05));
+  CHECK(bb.mx.x == Catch::Approx(11.0).margin(0.05));
+}
+
+TEST_CASE("CadBlockBakeBasePoint shifts solid content by the base point", "[issue475][block][solid][bedit]") {
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 2.0, 2.0, 2.0, &box, &why));
+
+  CadBlockDefinition def;
+  def.name = "FIT";
+  def.baseX = 1.f;
+  def.baseY = 2.f;
+  def.baseZ = 3.f;
+  def.content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+  CadBlockBakeBasePoint(&def);
+  REQUIRE(def.baseX == 0.f);
+  REQUIRE(def.baseY == 0.f);
+  REQUIRE(def.baseZ == 0.f);
+  REQUIRE(def.content.solids.size() == 1);
+  const brep::Bounds b = brep::ComputeBounds(*def.content.solids[0]);
+  REQUIRE(b.valid);
+  CHECK(b.mn.z == Catch::Approx(-3.0).margin(0.05));
+  CHECK(b.mx.z == Catch::Approx(-1.0).margin(0.05));
+}
+
+TEST_CASE("CadBlockSnapInsertToConnection coincides ports and anti-aligns normals", "[issue475][block][connector]") {
+  CadBlockConnection src;
+  src.x = 0.f;
+  src.y = 0.f;
+  src.z = 2.f;
+  src.nx = 0.f;
+  src.ny = 0.f;
+  src.nz = 1.f;
+
+  CadBlockXform xf;
+  xf.sx = xf.sy = xf.sz = 1.f;
+  CadBlockSnapInsertToConnection(src, 10.f, 20.f, 5.f, 0.f, 0.f, 1.f, &xf);
+
+  float wx = 0.f;
+  float wy = 0.f;
+  float wz = 0.f;
+  CadBlockXformPoint(xf, src.x, src.y, src.z, &wx, &wy, &wz);
+  CHECK(wx == Catch::Approx(10.f).margin(0.002));
+  CHECK(wy == Catch::Approx(20.f).margin(0.002));
+  CHECK(wz == Catch::Approx(5.f).margin(0.002));
+
+  float dx = 0.f;
+  float dy = 0.f;
+  float dz = 0.f;
+  CadBlockXformDirection(xf, src.nx, src.ny, src.nz, &dx, &dy, &dz);
+  const float dot = dx * 0.f + dy * 0.f + dz * 1.f;
+  CHECK(dot == Catch::Approx(-1.f).margin(0.01));
+}
+
+TEST_CASE("CadBlockBakeBasePoint shifts connection points", "[issue475][block][connector]") {
+  CadBlockDefinition def;
+  def.name = "FIT";
+  def.baseX = 1.f;
+  def.baseY = 2.f;
+  def.baseZ = 3.f;
+  CadBlockConnection c;
+  c.name = "P1";
+  c.x = 4.f;
+  c.y = 5.f;
+  c.z = 6.f;
+  def.connections.push_back(c);
+  CadBlockBakeBasePoint(&def);
+  REQUIRE(def.connections.size() == 1);
+  CHECK(def.connections[0].x == Catch::Approx(3.f));
+  CHECK(def.connections[0].y == Catch::Approx(3.f));
+  CHECK(def.connections[0].z == Catch::Approx(3.f));
+}
+
+TEST_CASE("CadBlockSetLocalZAxis orients local +Z to the target normal", "[issue475][block][orient]") {
+  CadBlockXform xf;
+  CadBlockSetLocalZAxis(&xf, 1.f, 0.f, 0.f);
+  float wx = 0.f, wy = 0.f, wz = 0.f;
+  CadBlockXformPoint(xf, 0.f, 0.f, 1.f, &wx, &wy, &wz);
+  CHECK(wx == Catch::Approx(1.f).margin(1e-3));
+  CHECK(std::fabs(wy) < 1e-3f);
+  CHECK(std::fabs(wz) < 1e-3f);
+
+  CadBlockXform up;
+  CadBlockSetLocalZAxis(&up, 0.f, 0.f, 1.f);
+  CadBlockXformPoint(up, 0.f, 0.f, 1.f, &wx, &wy, &wz);
+  CHECK(std::fabs(wx) < 1e-3f);
+  CHECK(std::fabs(wy) < 1e-3f);
+  CHECK(wz == Catch::Approx(1.f).margin(1e-3));
+}
+
+TEST_CASE("CadBlockCollectWorldSolids refuses non-uniform scale on solids", "[issue475][block][solid]") {
+  ucs::Ucs frame;
+  brep::Solid box;
+  brep::Problem why = brep::Problem::Ok;
+  REQUIRE(brep::MakeBox(frame, 1.0, 1.0, 1.0, &box, &why));
+
+  std::vector<CadBlockDefinition> defs(1);
+  defs[0].name = "SOL";
+  defs[0].content.solids.push_back(std::make_shared<const brep::Solid>(std::move(box)));
+
+  CadBlockRef r;
+  r.defName = "SOL";
+  r.xf.sx = 2.f;
+  r.xf.sy = 1.f;
+
+  std::vector<CadBlockWorldSolid> ws;
+  CadBlockCollectWorldSolids(defs, r, EntityAttributes{}, &ws);
+  CHECK(ws.empty());
+}
+
+TEST_CASE("CadBlockResolveMode matches target, falls back to default, and is null when legacy",
+          "[issue496][block][connector]") {
+  CadBlockConnection legacy;
+  CHECK(CadBlockResolveMode(legacy, CadConnectionModeTarget::PipeEnd) == nullptr);
+
+  CadBlockConnection conn;
+  CadBlockConnectionMode pipeMode;
+  pipeMode.name = "pipe";
+  pipeMode.target = CadConnectionModeTarget::PipeEnd;
+  pipeMode.engagementLength = 0.25f;
+  conn.modes.push_back(pipeMode);
+
+  CadBlockConnectionMode flangeMode;
+  flangeMode.name = "flange";
+  flangeMode.target = CadConnectionModeTarget::FlangeFace;
+  flangeMode.isDefault = true;
+  conn.modes.push_back(flangeMode);
+
+  const CadBlockConnectionMode* pm = CadBlockResolveMode(conn, CadConnectionModeTarget::PipeEnd);
+  REQUIRE(pm != nullptr);
+  CHECK(pm->name == "pipe");
+
+  const CadBlockConnectionMode* fm = CadBlockResolveMode(conn, CadConnectionModeTarget::FlangeFace);
+  REQUIRE(fm != nullptr);
+  CHECK(fm->name == "flange");
+
+  // No mode targets GenericPort explicitly, so the default (FlangeFace) applies.
+  const CadBlockConnectionMode* gm = CadBlockResolveMode(conn, CadConnectionModeTarget::GenericPort);
+  REQUIRE(gm != nullptr);
+  CHECK(gm->name == "flange");
+}
+
+TEST_CASE("CadBlockClassifyPortTarget distinguishes flange faces from generic ports",
+          "[issue496][block][connector]") {
+  CHECK(CadBlockClassifyPortTarget(CadPipePartType::Flange) == CadConnectionModeTarget::FlangeFace);
+  CHECK(CadBlockClassifyPortTarget(CadPipePartType::Elbow90) == CadConnectionModeTarget::GenericPort);
+  CHECK(CadBlockClassifyPortTarget(CadPipePartType::None) == CadConnectionModeTarget::GenericPort);
+}
+
+TEST_CASE("CadBlockApplyConnectionModeOffset slides the fitting along its port normal",
+          "[issue496][block][connector]") {
+  CadBlockConnection src;
+  src.x = 0.f;
+  src.y = 0.f;
+  src.z = 0.f;
+  src.nx = 0.f;
+  src.ny = 0.f;
+  src.nz = 1.f;
+
+  CadBlockXform xf;
+  xf.sx = xf.sy = xf.sz = 1.f;
+  CadBlockSnapInsertToConnection(src, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, &xf);
+
+  CadBlockConnectionMode mode;
+  mode.engagementLength = 1.5f;
+  CadBlockApplyConnectionModeOffset(src, &mode, &xf);
+
+  // src's normal anti-aligns with the target normal (0,0,1), so the fitting's world-space
+  // connection normal now points toward -Z; the offset should push it further in that direction.
+  CHECK(xf.z == Catch::Approx(-1.5f).margin(0.01));
+
+  // A legacy (nullptr) mode must be a no-op.
+  CadBlockXform noModeXf;
+  noModeXf.sx = noModeXf.sy = noModeXf.sz = 1.f;
+  CadBlockSnapInsertToConnection(src, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, &noModeXf);
+  CadBlockApplyConnectionModeOffset(src, nullptr, &noModeXf);
+  CHECK(noModeXf.z == Catch::Approx(0.f).margin(0.001));
+}
+
+TEST_CASE("Annotative block ref scales insert for layout viewport draw (issue #622)", "[block][issue622]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 20.f;
+  CadBlockRef ref;
+  ref.annotative = true;
+  ref.xf.sx = 2.f;
+  ref.xf.sy = 2.f;
+  const CadBlockRef out = CadBlockRefForViewportDraw(ref, vp, 40.f);
+  REQUIRE(out.xf.sx == Catch::Approx(1.f));
+  REQUIRE(out.xf.sy == Catch::Approx(1.f));
+}

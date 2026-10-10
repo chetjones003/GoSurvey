@@ -1,0 +1,107 @@
+# Issue #94 — a DXF round trip must not walk the drawing.
+#
+# `$EXTMIN`/`$EXTMAX` are written at six decimals. The importer took the document origin from those
+# ROUNDED values and then `RebaseDrawingToLocalOrigin` re-derived it from the UNROUNDED geometry.
+# The ~5e-7 disagreement cleared the `< 1e-9` no-op guard in `ApplyDocumentOriginRebase`, so
+# `ShiftAllStorageBy` moved every stored coordinate through `float` and re-rounded it.
+#
+# ## Why this is a ratchet and not a one-time normalization
+#
+# That distinction is the whole reason this is a defect rather than a spec question, and it was
+# measured rather than assumed. `.gs` load has the same mechanism and it CONVERGES — issue #61 /
+# BUG-019 established that the rebase is legitimate normalization, bounded and non-lossy, and
+# REQ-079 was amended (D-2026-08-17-a) to compare the SECOND and THIRD saves with an idempotence
+# condition. The obvious move was to amend REQ-204 the same way.
+#
+# It does not converge here. Six successive cycles on this drawing, before the fix:
+#
+#     cycle | $EXTMIN.y  | $EXTMAX.y  | view centre Y
+#     ------+------------+------------+--------------
+#       1   | -8.500002  | 158.500000 | 74.999999
+#       2   | -8.500004  | 158.499998 | 74.999997
+#       3   | -8.500006  | 158.499996 | 74.999995
+#       4   | -8.500008  | 158.499994 | 74.999993
+#       5   | -8.500010  | 158.499992 | 74.999991
+#       6   | -8.500012  | 158.499990 | 74.999989
+#
+# Exactly -2e-6 every cycle, linear, no sign of settling. REQ-079's own idempotence condition exists
+# to catch precisely this — "geometry drifting further on every open/save cycle" — so the B-vs-C
+# amendment would NOT have fixed it. The oracle would still have failed.
+#
+# ## Why THIS geometry
+#
+# The drift is not caused by any one entity type. Stable before the fix: lines alone; lines + ARC;
+# lines + POLYLINE; lines + CIRCLE. The deciding variable is the MAGNITUDE OF THE RESULTING ORIGIN
+# against float32 spacing. Lines + ARC centre the origin near 25, where float32 spacing is 2^-19
+# (~1.9e-6) and the value is a fixed point. Adding the POLYLINE lifts maxY to 150, moving the centre
+# near 75, where spacing is 2^-17 (~7.6e-6) — coarse enough that each rebase loses enough to move the
+# next computed centre again, and the cycle re-enters.
+#
+# So this transcript needs ALL FOUR entity kinds together. Drop any one of them and it passes
+# against the unfixed code, which is what makes it a weak test rather than a strong one.
+#
+# ## The fix this pins
+#
+# `.gs` load only normalizes above `kLargeCoordinateRebaseThreshold` (100000.0). DXF import had no
+# such gate and rebased on EVERY import, re-rounding every float even for a drawing spanning 150
+# units where local storage buys no precision whatsoever. Two loaders, one mechanism, one gated and
+# one not. DXF is now gated the same way, so a small drawing keeps origin (0,0) and nothing is
+# re-rounded. `regression-94a-dxf-origin-large-coord.txt` pins the other half — that the rebase
+# still fires for the state-plane data it exists for.
+#
+# Fails before the fix at the first SAMEFILE (a vs b differ at byte 265).
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+CMD 100,50
+ESC
+
+CMD CIRCLE
+CMD 50,25
+CMD 10
+ESC
+
+# Lifts maxY to 150 and so moves the origin into the coarser float32 band — see the header.
+CMD POLYLINE
+CMD 0,100
+CMD 50,150
+CMD 100,100
+CMD END
+
+CMD ARC
+PICK 0 0
+PICK 20 20
+PICK 40 0
+ESC
+
+CHECK ALL
+EXPECT LINES 2
+EXPECT CIRCLES 1
+EXPECT POLYLINES 1
+EXPECT ARCS 1
+
+EXPORT DXF %OUT%/r94-a.dxf
+
+NEW
+IMPORT DXF %OUT%/r94-a.dxf
+CHECK ALL
+EXPECT LINES 2
+EXPECT CIRCLES 1
+EXPECT POLYLINES 1
+EXPECT ARCS 1
+EXPORT DXF %OUT%/r94-b.dxf
+
+# The first cycle must already be a fixed point. This is stronger than REQ-079's `.gs` rule, and it
+# holds because a small drawing now never normalizes at all rather than normalizing once.
+EXPECT SAMEFILE %OUT%/r94-a.dxf %OUT%/r94-b.dxf
+
+NEW
+IMPORT DXF %OUT%/r94-b.dxf
+EXPORT DXF %OUT%/r94-c.dxf
+
+# A third cycle, because a ratchet of -2e-6 per cycle is exactly what a single comparison can miss
+# if the first two happen to round the same way.
+EXPECT SAMEFILE %OUT%/r94-b.dxf %OUT%/r94-c.dxf

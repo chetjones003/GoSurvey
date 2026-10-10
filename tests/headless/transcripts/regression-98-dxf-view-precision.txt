@@ -1,0 +1,75 @@
+# Issue #98 — a DXF export -> import -> export cycle is a fixed point on the FIRST cycle, even when
+# the drawing's coordinates are not exact at six decimals.
+#
+# ## The defect
+#
+# Every number in a GoSurvey DXF is written by `std::to_string`, which rounds to six decimals. A
+# re-imported coordinate is therefore that six-decimal text read back, so a drawing that has been
+# through a round trip holds floats that differ very slightly from the ones that were exported —
+# `0.0000015` goes out as `0.000002` and comes back as `0.000002`.
+#
+# The ENTITY text is stable under that (both cycles write `0.000002`), and so are $EXTMIN/$EXTMAX.
+# The header VIEW was not, because it is DERIVED from the extents and the derivation amplifies:
+#
+#     vViewH = max(1.0, max(width, height) * 1.1 + 1.0)
+#
+# Two runs whose raw extents differ by less than half of the last written decimal round to the SAME
+# $EXTMIN/$EXTMAX and still land on different sixth decimals after `* 1.1 + 1.0`. That is the whole
+# bug: `$VPORT` group 40 came out `124.603335` on the first export and `124.603334` on the second,
+# with every other byte in the two 7154-byte files identical. Group 12 (view centre X) can move the
+# same way — a five-entity variant of this drawing showed `50.277779` vs `50.277780`.
+#
+# ## Why the first cycle, and not the second
+#
+# This is the residual named DEBT-1 in `workshop/tasks/TASK-116-issue94-dxf-origin-rebase-threshold.md`
+# and it CONVERGES: the third export is byte-identical to the second, because by then the extents are
+# being computed from coordinates that already survive the six-decimal round trip unchanged.
+#
+# So it could have been accepted the way REQ-079 accepts `.gs` normalization — amend the invariant
+# to compare the SECOND and THIRD exports (decision D-2026-08-17-a did exactly that for `.gs`, after
+# issue #61). It was not. The extents are now snapped to the precision they are written at BEFORE
+# anything is derived from them, so the view a file states is exactly the view a reader derives from
+# the extents that same file states, and the first export is already a fixed point. See
+# D-2026-08-26-h — REQ-204's stability invariant is left exactly as written.
+#
+# ## What this pins
+#
+# The FIRST-cycle comparison. A second-vs-third comparison would have passed against the unfixed
+# code and is kept here only as the convergence check it always was.
+#
+# Fails before the fix at the first SAMEFILE (a vs b differ at byte 4428, same 7154-byte length).
+
+NEW
+
+# Coordinates deliberately NOT exact at six decimals — this is the reproducer from issue #98.
+# `0.0000015` is the important one: below ~16 the float spacing is finer than 1e-6, so the written
+# text does not identify the float it came from and the re-imported value genuinely differs.
+CMD LINE
+CMD 0.0000015,0.0000025
+CMD 100.3333337,0
+CMD 100,50.1234567
+ESC
+
+CHECK ALL
+EXPECT LINES 2
+
+EXPORT DXF %OUT%/r98-a.dxf
+
+NEW
+IMPORT DXF %OUT%/r98-a.dxf
+CHECK ALL
+EXPECT LINES 2
+EXPORT DXF %OUT%/r98-b.dxf
+
+# The bug, and the acceptance condition of the issue: the FIRST cycle is already a fixed point, with
+# no idempotence carve-out of the kind REQ-079 needed for `.gs`.
+EXPECT SAMEFILE %OUT%/r98-a.dxf %OUT%/r98-b.dxf
+
+NEW
+IMPORT DXF %OUT%/r98-b.dxf
+EXPORT DXF %OUT%/r98-c.dxf
+
+# Convergence. This held BEFORE the fix too — it is the half of the behaviour that was never broken,
+# kept so that a future regression which reintroduces a per-cycle ratchet (issue #94's failure mode)
+# is caught here as well as in `regression-94-dxf-origin-no-drift.txt`.
+EXPECT SAMEFILE %OUT%/r98-b.dxf %OUT%/r98-c.dxf

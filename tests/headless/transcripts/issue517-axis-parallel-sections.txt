@@ -1,0 +1,115 @@
+# GitHub issue #517 — a vertical cut through a cylinder or cone: the section a surveyor draws through
+# a pipe, culvert or manhole.
+#
+# Before: SECTION and SLICE took only a cut straight across a cylinder or cone (a circle). A plane
+# containing the axis was refused, though its outline is all straight lines: a rectangle for a
+# cylinder, a trapezoid for a cone, a triangle for a cone that comes to a point.
+#
+# The solids sit at survey easting E 2,196,000 (REQ-101) and straddle z = 0. Typed coordinates are
+# two-dimensional outside 3DPOLY, so the section plane is the UCS turned 90 degrees about X: the world
+# XZ plane, which passes through each solid's axis. BrepTests [issue517] holds the corners to
+# +/-0.002 ft; EXPECT POLYVERT compares to 0.01.
+
+NEW
+
+# --- a cylinder: a 60 x 50 rectangle -----------------------------------------------------------
+CMD CYLINDER 2196000,0,-25 30 50
+CMD UCS
+CMD X
+CMD 90
+BOX 2195700 -300 2196300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 141371.669412 15079.6447372 4 6 4
+EXPECT POLYVERT 0 0 2195970 0 -25
+EXPECT POLYVERT 0 1 2196030 0 -25
+EXPECT POLYVERT 0 2 2196030 0 25
+EXPECT POLYVERT 0 3 2195970 0 25
+CHECK ALL
+
+# One undo step takes the whole outline away and leaves the solid as it was.
+CMD UNDO
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 141371.669412 15079.6447372 4 6 4
+CMD REDO
+EXPECT POLYLINES 1
+CHECK ALL
+
+# --- a cone: a trapezoid, and a pointed cone: a triangle ----------------------------------------
+NEW
+CMD CONE 2196000,0,-25 30 15 50
+CMD UCS
+CMD X
+CMD 90
+BOX 2195700 -300 2196300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT POLYVERT 0 0 2195970 0 -25
+EXPECT POLYVERT 0 1 2196030 0 -25
+EXPECT POLYVERT 0 2 2196015 0 25
+EXPECT POLYVERT 0 3 2195985 0 25
+CHECK ALL
+
+NEW
+CMD CONE 2196000,0,-25 30 0 50
+CMD UCS
+CMD X
+CMD 90
+BOX 2195700 -300 2196300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT POLYVERT 0 0 2195970 0 -25
+EXPECT POLYVERT 0 1 2196030 0 -25
+EXPECT POLYVERT 0 2 2196000 0 25
+CHECK ALL
+
+# --- SLICE makes the same cut: two half-cylinders, one undo step ----------------------------------
+NEW
+CMD CYLINDER 2196000,0,-25 30 50
+BOX 2195700 -300 2196300 300
+CMD SLICE
+CMD 2196000,-50,0
+CMD 2196000,50,0
+CMD 2196000,0,10
+CMD B
+EXPECT LOG "SLICE — 1 solid(s) cut into 2 piece(s)."
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 0 70685.834706 10539.8163398 4 6 4
+EXPECT SOLIDPROPS 1 70685.834706 10539.8163398 4 6 4
+CHECK ALL
+CMD UNDO
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 141371.669412 15079.6447372 4 6 4
+CMD REDO
+EXPECT SOLIDS 2
+
+# The pieces survive .gs: the partial side face keeps its span.
+SAVEAS %OUT%/issue517.gs
+OPEN %OUT%/issue517.gs
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 0 70685.834706 10539.8163398 4 6 4
+EXPECT SOLIDPROPS 1 70685.834706 10539.8163398 4 6 4
+CHECK ALL
+
+# --- a cone cut parallel to its axis but off it is a hyperbola: refused by that name --------------
+NEW
+CMD CONE 2196000,10,-25 30 15 50
+CMD UCS
+CMD X
+CMD 90
+BOX 2195700 -300 2196300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A cut parallel to a cone's axis but not through it is a hyperbola, which is not supported yet."
+ESC
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CHECK ALL

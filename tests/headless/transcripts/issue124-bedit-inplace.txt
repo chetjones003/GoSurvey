@@ -1,0 +1,65 @@
+# REQ-107 / ADR-043 — BEDIT edits a block definition IN PLACE, isolated from model space,
+# with a Save / Don't Save / Cancel prompt on close. The model-store swap means every ordinary
+# draw command edits the block; closing restores the drawing that was stashed on enter.
+
+NEW
+CMD MKLINE 0,0, 10,0
+CMD SELLINE
+CMD BLOCK TREE, 0, 0, CONVERT
+EXPECT LOG "BLOCK — created"
+
+# a plain model line that must be HIDDEN while a block-edit session is open (isolation)
+CMD MKLINE 5,5, 6,6
+EXPECT LINES 1
+
+# BEDIT is model-space only
+CMD BLOCKPAPER
+CMD BEDIT TREE
+EXPECT LOG "switch to model space"
+CMD BLOCKMODEL
+
+# enter the session: the viewport now shows ONLY the block's own geometry
+CMD BEDIT TREE
+EXPECT LOG "editing"
+EXPECT LINES 1
+EXPECT SELECTED 0
+
+# draw a second segment straight into the definition with an ordinary command,
+# and a third with BEDITADD — both must survive the Save
+CMD MKLINE 0,1, 0,-1
+EXPECT LINES 2
+CMD BEDITADD LINE, 2, 0, 2, 3
+EXPECT LINES 3
+
+# a dirty close asks first and changes nothing
+CMD BCLOSE
+EXPECT LOG "unsaved changes"
+EXPECT LINES 3
+
+# Save: fold the edits into the definition and restore the stashed drawing
+CMD BCLOSE SAVE
+EXPECT LOG "BCLOSE — closed"
+EXPECT LINES 1
+
+# the saved definition now carries all three segments — explode one INSERT to prove it
+CMD SELBLOCK
+CMD EXPLODE
+EXPECT LINES 4
+
+CMD UNDO
+EXPECT LINES 1
+
+# re-open and DISCARD an edit — the definition is left exactly as the last Save left it
+CMD BEDIT TREE
+EXPECT LINES 3
+CMD MKLINE 9,9, 9,8
+EXPECT LINES 4
+CMD BCLOSE DISCARD
+EXPECT LOG "discarded"
+EXPECT LINES 1
+
+CMD BEDIT TREE
+EXPECT LINES 3
+# a clean session closes with no prompt
+CMD BCLOSE
+EXPECT LINES 1

@@ -1,0 +1,198 @@
+# REQ-318 increment 2 (D-2026-09-04-a, GitHub issue #148 criteria 1 and 2) — selecting a solid's
+# FACE, EDGE or VERTEX, and the rule that keeps that selection out of the whole-entity one.
+#
+# What this can drive, and what it cannot. The sub-object click's MEANING lives in
+# `SubmitSubObjectPick` in the command layer, deliberately: the clear-the-other-selection rule, the
+# Shift toggle and the clear-on-miss are behaviour, and behaviour left inline in `CadUi.cpp` is
+# reachable only by hand — the shape of defect TASK-099 found five times over. The SUBOBJECT verb
+# calls that function; it does not re-implement it. What stays in the GUI and is therefore NOT
+# covered here is exactly one decision: that `Ctrl` is the key that asks for a sub-object.
+#
+# The tolerances are stated on every pick. In the GUI they are screen-derived (REQ-318 item 5) from
+# the cursor aperture and the viewport height in pixels, neither of which a transcript has; left to
+# the default they come out around 3 units on this box, which is wider than the box's own half-width
+# and swallows the whole precedence rule. Stating them makes each case say which geometry it is
+# actually distinguishing.
+#
+# THE BOX. `CMD BOX 0,0 20 10 8` builds a box centred on (0,0) with its base at z = 0: x from -10 to
+# +10, y from -5 to +5, z from 0 to 8. So (0,0,8) is the middle of the top face, (0,5,8) is the
+# middle of a top edge, and (10,5,8) is a corner. Confirmed against the shipped kernel rather than
+# assumed — every coordinate below was probed before it was asserted.
+
+# --- Criterion 1: a face, an edge and a vertex are each individually selectable -------------------
+
+NEW
+CMD BOX 0,0 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+VIEWANGLES -45 35
+
+# The middle of the top face — 5 units from the nearest edge, 0.5 tolerance, so nothing else is in
+# range and precedence has nothing to argue about.
+SUBOBJECT 0 0 8 0.5 0.5
+EXPECT SUBOBJECTS 1
+EXPECT SUBOBJECTFACES 1
+EXPECT LOG "Selected face"
+
+# The middle of a top edge. Every point of an edge is also a point of the two faces that meet there,
+# so this is precedence doing its job rather than proximity: the edge is nearer, and it wins.
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTS 1
+EXPECT SUBOBJECTEDGES 1
+EXPECT SUBOBJECTFACES 0
+
+# A corner. Every vertex lies on three edges and three faces, so a nearest-wins rule alone would
+# make it unpickable — REQ-318 item 3 is what makes this case possible at all.
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 10 5 8 0.5 0.5
+EXPECT SUBOBJECTS 1
+EXPECT SUBOBJECTVERTICES 1
+EXPECT SUBOBJECTEDGES 0
+EXPECT SUBOBJECTFACES 0
+
+# The same corner with the vertex tolerance ZEROED: that kind is never reported, so the edge behind
+# it takes the pick (REQ-318 item 5). The pair is what proves the vertex above was chosen by the
+# precedence rule and not because nothing else was in range.
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 10 5 8 0 0.5
+EXPECT SUBOBJECTVERTICES 0
+EXPECT SUBOBJECTEDGES 1
+
+# Both zeroed, on a MID-EDGE point: the face behind the edge is all that is left.
+#
+# A mid-edge point and not the corner above, and the reason is worth recording. Aimed at the exact
+# CORNER with both tolerances zero, the pick reports nothing at all — the corner sits on the
+# silhouette from this camera, so the ray meets the triangles that share it tangentially and the
+# triangle test does not take it. That is correct: a vertex is a point of zero extent, and the
+# vertex TOLERANCE is what makes a corner pickable at all rather than a lucky triangle hit. A
+# mid-edge point is on the face's interior, so it exercises "the kind below takes it" without also
+# depending on grazing geometry.
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 0 5 8 0 0
+EXPECT SUBOBJECTVERTICES 0
+EXPECT SUBOBJECTEDGES 0
+EXPECT SUBOBJECTFACES 1
+
+# --- The picks accumulate, and Shift removes -----------------------------------------------------
+
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 0 0 8 0.5 0.5
+SUBOBJECT 0 0 0 0.5 0.5
+EXPECT SUBOBJECTFACES 2
+# The same face again, plain: a no-op, not a duplicate.
+SUBOBJECT 0 0 8 0.5 0.5
+EXPECT SUBOBJECTFACES 2
+# Shift on one that IS selected removes just it.
+SUBOBJECT 0 0 8 0.5 0.5 SHIFT
+EXPECT SUBOBJECTFACES 1
+EXPECT LOG "Deselected face"
+
+# --- Criterion 2: the two selections never both hold anything ------------------------------------
+# A fence is an entity selection and clears the sub-object one; a sub-object pick clears the entity
+# one. Driven here through the shared paths; the plain-CLICK half of the same rule lives in the
+# viewport's own handler, which has no headless equivalent (see CLICK's note in the driver).
+
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 0 0 8 0.5 0.5
+EXPECT SUBOBJECTS 1
+EXPECT SELECTED 0
+# A crossing fence over the whole box selects the SOLID and drops the sub-object.
+BOX -20 -20 20 20
+EXPECT SELECTED 1
+EXPECT SUBOBJECTS 0
+# And back the other way.
+SUBOBJECT 0 0 8 0.5 0.5
+EXPECT SUBOBJECTS 1
+EXPECT SELECTED 0
+
+# --- A pick that hits nothing clears, and says which happened (REQ-201) ---------------------------
+
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 500 500 500 0.5 0.5
+EXPECT SUBOBJECTS 0
+EXPECT LOG "No solid face, edge or vertex under the cursor"
+# With something selected, the same miss reports the CLEARING rather than the absence — two
+# different events that would otherwise look identical in the log.
+SUBOBJECT 0 0 8 0.5 0.5
+EXPECT SUBOBJECTS 1
+SUBOBJECT 500 500 500 0.5 0.5
+EXPECT SUBOBJECTS 0
+EXPECT LOG "Sub-object selection cleared"
+
+# --- Two solids: the NEARER one's sub-object wins ------------------------------------------------
+# `solidpick::PickSubObject` sees one solid at a time, so its occlusion rule cannot reach across
+# solids — TASK-189 recorded that as DEBT-1 and named this caller as where it is closed. Two boxes
+# on the same sight line, and the pick must take the one in front.
+#
+# Boxes at x = 0 and x = 60, viewed from azimuth 0 (looking along -Y, so screen X is world X and the
+# two are side by side rather than in line) would not test it. Azimuth 90 puts the eye on the +X
+# side, so the far box is directly behind the near one.
+
+NEW
+CMD BOX 0,0 20 10 8
+CMD BOX 60,0 20 10 8
+EXPECT SOLIDS 2
+VIEWANGLES 90 0
+# Aimed at the NEAR box's +X face centre. Solid 2 (index 1) sits behind it on this sight line.
+SUBOBJECT 10 0 4 0.5 0.5
+EXPECT SUBOBJECTS 1
+EXPECT LOG "of solid 1"
+
+# --- Solid indices shift under an erase, and the pick keeps naming the right one -------------------
+# ADR-049 pairs the index with the solid's IDENTITY precisely because indices move. What this case
+# asserts is the visible half of that: after the first box is erased the second one IS solid 1, and
+# the pick says so.
+#
+# The other half — an EXISTING sub-object reference surviving that shift with its index repaired —
+# is not reachable from here, and the reason is the mutual-exclusion rule itself: erasing a solid
+# needs it selected, and selecting it clears the sub-object selection first. So the repair is
+# covered by `SubObjectSelectionTests` instead, which can mutate `cadSolids` directly. Recorded
+# rather than left as an apparent gap.
+
+NEW
+CMD BOX 0,0 20 10 8
+CMD BOX 60,0 20 10 8
+EXPECT SOLIDS 2
+VIEWANGLES -45 35
+# Select a face of the SECOND box (index 1).
+SUBOBJECT 70 0 8 0.5 0.5
+EXPECT SUBOBJECTS 1
+EXPECT LOG "of solid 2"
+# Now erase the FIRST box. The fence clears the sub-object selection on the way (that is the rule
+# above), so re-pick after the erase and confirm the surviving solid is now solid 1.
+BOX -20 -20 20 20
+EXPECT SELECTED 1
+CMD DELETE
+EXPECT SOLIDS 1
+SUBOBJECT 70 0 8 0.5 0.5
+EXPECT SUBOBJECTS 1
+EXPECT LOG "of solid 1"
+
+# --- Erasing the solid a sub-object belongs to leaves nothing dangling ----------------------------
+
+NEW
+CMD BOX 0,0 20 10 8
+VIEWANGLES -45 35
+SUBOBJECT 0 0 8 0.5 0.5
+EXPECT SUBOBJECTS 1
+BOX -20 -20 20 20
+CMD DELETE
+EXPECT SOLIDS 0
+EXPECT SUBOBJECTS 0
+
+CHECK ALL

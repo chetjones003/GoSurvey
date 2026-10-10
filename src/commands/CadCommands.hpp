@@ -8298,6 +8298,16 @@ struct CommandSuggestion {
 /// Ranked fuzzy matches with descriptions, for the nanoCAD-style command picker.
 std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query, int maxResults);
 
+/// What the command line should actually run for \p typedText, decided fresh against the text
+/// itself rather than a suggestion computed on an earlier keystroke (GitHub issue #766: the UI's
+/// persisted autocomplete highlight could survive from an unrelated earlier query, so typing the
+/// exact alias ERASE ran DRAWINGSETTINGS, RENAME ran SURFACERENAME, and TABLE ran VOLTABLE). A
+/// single-token \p typedText that exactly names a command or alias always resolves to that
+/// command — FuzzyCommandSuggestions ranks an exact match first — so an exact name never loses to
+/// a stale or merely-similar suggestion. A multi-token line (a command plus its arguments) and an
+/// unrecognized single token are both returned unchanged.
+std::string ResolveCommandLineSubmission(const std::string& typedText);
+
 /// REQ-121 rule (3): THE prompt every object-selection step shows, in the command line and in the
 /// dynamic cursor text alike. One string, reused verbatim — not a per-command sentence that happens
 /// to mean the same thing, which is what produced "click two corners to window-select objects" in
