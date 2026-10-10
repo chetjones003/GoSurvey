@@ -4330,8 +4330,16 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                   "##CdGrading", "c3d_grading", "Grading"),
               col("##CdAlignment", "c3d_alignment", "Alignment", "##CdProfile", "c3d_profile", "Profile",
                   "##CdCorridor", "c3d_corridor", "Corridor"),
-              col("##CdIntersections", "c3d_intersections", "Intersections", "##CdAssembly", "c3d_assembly",
-                  "Assembly", "##CdPipeNetwork", "c3d_pipenet", "Pipe Network"),
+              columnOfButtons({
+                  rowBtn("##CdIntersections", -1, "c3d_intersections", "Intersections", true,
+                         "Intersections — not implemented yet.", compact),
+                  rowBtn("##CdAssembly", -1, "c3d_assembly", "Assembly", true, "Assembly — not implemented yet.",
+                         compact),
+                  // Pipe Network — GoSurvey's own pipe-routing model already covers this: see the
+                  // Modeling tab's Pipe Run (PIPERUN), not a Civil3D-style network object (issue #802).
+                  rowBtn("##CdPipeNetwork", -1, "c3d_pipenet", "Pipe Network", false,
+                         "Pipe Network — use Pipe Run on the Modeling tab.\nCommand bar: PIPERUN", compact),
+              }),
               col("##CdPond", "c3d_pond", "Pond", "##CdUgStorage", "c3d_ugstorage", "Underground Storage",
                   "##CdChannel", "c3d_channel", "Channel"),
           };
@@ -4343,7 +4351,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float mw = ribbonlayout::MeasureRibbonSection(medSpec).size.x + 8.f;
         ribbonSpecs.push_back({w, mw, [&, buildSpec]() {
           const ribbonlayout::RibbonSectionSpec spec = buildSpec(curCompact);
-          drawRibbonSectionSpec("RibbonSecCreateDesign", "Create Design", spec, nullptr);
+          drawRibbonSectionSpec("RibbonSecCreateDesign", "Create Design", spec, [&](const std::string& id) {
+            if (id == "##CdPipeNetwork") {
+              CancelActiveCommand(cmd, log);
+              StartPipeRunAtCurrentSize(cmd, log);
+            }
+          });
         }, "Create Design", RibbonIconKind::Nyi, "c3d_alignment"});
       }
 
