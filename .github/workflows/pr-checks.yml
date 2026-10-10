@@ -146,7 +146,11 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $dir
 
       - name: Configure (compile_commands.json only, no build)
-        run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        # GOSURVEY_USE_PCH=OFF: this step deliberately never builds, so no cmake_pch.cxx.pch
+        # is ever produced. Leaving PCH on left compile_commands.json referencing a .pch that
+        # does not exist, failing clang-tidy on ANY PCH-covered file with a PCH-not-found
+        # compiler error (unrelated to the file's own content) rather than a real finding.
+        run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGOSURVEY_USE_PCH=OFF
 
       - name: clang-tidy (files changed in this PR only)
         shell: pwsh
