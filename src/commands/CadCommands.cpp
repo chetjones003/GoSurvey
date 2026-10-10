@@ -30790,32 +30790,32 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
 
         // Pick canonical direction from the longest member
         int best = members[0];
-        float bestLen = 0.f;
+        double bestLen = 0.0;
         for (int idx : members) {
-          const float dx = segs[idx].x1 - segs[idx].x0, dy = segs[idx].y1 - segs[idx].y0;
-          const float l = std::sqrt(dx * dx + dy * dy);
+          const double dx = segs[idx].x1 - segs[idx].x0, dy = segs[idx].y1 - segs[idx].y0;
+          const double l = std::sqrt(dx * dx + dy * dy);
           if (l > bestLen) { bestLen = l; best = idx; }
         }
-        const float dxb = segs[best].x1 - segs[best].x0;
-        const float dyb = segs[best].y1 - segs[best].y0;
-        const float lb  = std::sqrt(dxb * dxb + dyb * dyb);
-        if (lb < 1e-12f) { nRemoved += static_cast<int>(members.size()); continue; }
-        const float ux = dxb / lb, uy = dyb / lb;
-        const float ox = segs[best].x0, oy = segs[best].y0;
+        const double dxb = segs[best].x1 - segs[best].x0;
+        const double dyb = segs[best].y1 - segs[best].y0;
+        const double lb  = std::sqrt(dxb * dxb + dyb * dyb);
+        if (lb < 1e-12) { nRemoved += static_cast<int>(members.size()); continue; }
+        const double ux = dxb / lb, uy = dyb / lb;
+        const double ox = segs[best].x0, oy = segs[best].y0;
 
         // Project each member's endpoints onto the canonical axis
-        struct Iv { float t0, t1; int idx; };
+        struct Iv { double t0, t1; int idx; };
         std::vector<Iv> ivs;
         ivs.reserve(members.size());
         for (int idx : members) {
-          const float ta = (segs[idx].x0 - ox) * ux + (segs[idx].y0 - oy) * uy;
-          const float tb = (segs[idx].x1 - ox) * ux + (segs[idx].y1 - oy) * uy;
+          const double ta = (segs[idx].x0 - ox) * ux + (segs[idx].y0 - oy) * uy;
+          const double tb = (segs[idx].x1 - ox) * ux + (segs[idx].y1 - oy) * uy;
           ivs.push_back({ std::min(ta, tb), std::max(ta, tb), idx });
         }
         std::sort(ivs.begin(), ivs.end(), [](const Iv& a, const Iv& b) { return a.t0 < b.t0; });
 
         // Sweep through intervals and merge overlapping/touching ones
-        struct Mv { float t0, t1; int idx; }; // idx carries representative attrs
+        struct Mv { double t0, t1; int idx; }; // idx carries representative attrs
         std::vector<Mv> merged;
         merged.reserve(ivs.size());
         for (const auto& iv : ivs) {
@@ -30836,11 +30836,11 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
           // is what guarantees it - so the representative's profile describes the merged span too.
           {
             const LSeg& r = segs[static_cast<size_t>(m.idx)];
-            const float ra = (r.x0 - ox) * ux + (r.y0 - oy) * uy;
-            const float rb = (r.x1 - ox) * ux + (r.y1 - oy) * uy;
-            const float span = rb - ra;
-            auto zAt = [&](float t) {
-              const float f = (std::fabs(span) > 1e-9f) ? ((t - ra) / span) : 0.f;
+            const double ra = (r.x0 - ox) * ux + (r.y0 - oy) * uy;
+            const double rb = (r.x1 - ox) * ux + (r.y1 - oy) * uy;
+            const double span = rb - ra;
+            auto zAt = [&](double t) {
+              const double f = (std::fabs(span) > 1e-9) ? ((t - ra) / span) : 0.0;
               return r.z0 + (r.z1 - r.z0) * f;
             };
             nl.z0 = zAt(m.t0);
@@ -30895,8 +30895,8 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
         if (dead[j]) continue;
         // Z participates: two circles sharing a centre in plan but sitting at different
         // elevations are distinct objects in 3D, not duplicates (REQ-057).
-        const float dx = cs[j].cx - cs[i].cx, dy = cs[j].cy - cs[i].cy, dz = cs[j].z - cs[i].z;
-        const float dr = cs[j].r  - cs[i].r;
+        const double dx = cs[j].cx - cs[i].cx, dy = cs[j].cy - cs[i].cy, dz = cs[j].z - cs[i].z;
+        const double dr = cs[j].r  - cs[i].r;
         // Two circles sharing a centre and a radius but lying in different planes are distinct
         // objects, not duplicates (REQ-312) - the same reasoning Z already gets just above.
         if (cs[j].nx != cs[i].nx || cs[j].ny != cs[i].ny || cs[j].nz != cs[i].nz) continue;
@@ -30933,9 +30933,9 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       if (dead[i]) continue;
       const CadArc& a = st.userArcs[i];
       for (size_t c = 0; c < nC; ++c) {
-        const float dx = a.cx - st.userCirclesCxCyZR[c * 4];
-        const float dy = a.cy - st.userCirclesCxCyZR[c * 4 + 1];
-        const float dr = a.r  - st.userCirclesCxCyZR[c * 4 + 3];
+        const double dx = a.cx - st.userCirclesCxCyZR[c * 4];
+        const double dy = a.cy - st.userCirclesCxCyZR[c * 4 + 1];
+        const double dr = a.r  - st.userCirclesCxCyZR[c * 4 + 3];
         if (dx * dx + dy * dy < tolSq && dr * dr < tolSq) { dead[i] = true; ++nRemoved; break; }
       }
     }
@@ -30956,7 +30956,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       for (size_t j = i + 1; j < nA; ++j) {
         if (dead[j]) continue;
         const CadArc& b = st.userArcs[j];
-        const float dxC = a.cx - b.cx, dyC = a.cy - b.cy, drR = a.r - b.r;
+        const double dxC = a.cx - b.cx, dyC = a.cy - b.cy, drR = a.r - b.r;
         if (dxC * dxC + dyC * dyC >= tolSq || drR * drR >= tolSq) continue;
         const float dStart = std::fabs(aStart - normAngle(b.startRad));
         const float dSweep = std::fabs(a.sweepRad - b.sweepRad);
@@ -30993,7 +30993,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
 
     for (int pi = nP - 1; pi >= 0; --pi) {
       const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
       if (v1 - v0 < 2) { polyToErase.push_back(pi); continue; }
 
       const bool closed = static_cast<size_t>(pi) < st.userPolylineClosed.size() &&
@@ -31032,18 +31032,18 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       const int nNew  = static_cast<int>(clean.size());
       const int delta = nNew - (v1 - v0);
       st.userPolylineVerts.erase(
-          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0 * 3),
-          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1 * 3));
+          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
 
       std::vector<float> newV;
-      newV.reserve(static_cast<size_t>(nNew * 3));
+      newV.reserve(static_cast<size_t>(nNew) * 3);
       for (const auto& p : clean) { newV.push_back(p.x); newV.push_back(p.y); newV.push_back(p.z); }
       st.userPolylineVerts.insert(
-          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0 * 3),
+          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
           newV.begin(), newV.end());
 
       // Adjust all offsets after pi by the vertex delta
-      for (size_t oi = static_cast<size_t>(pi + 1); oi < st.userPolylineOffsets.size(); ++oi)
+      for (size_t oi = static_cast<size_t>(pi) + 1; oi < st.userPolylineOffsets.size(); ++oi)
         st.userPolylineOffsets[oi] += delta;
     }
 
@@ -32437,9 +32437,9 @@ void RefreshSolidDisplayGeometry(AppCommandState& st) {
   // invariant 7, the lesson the surface cache already learned).
   static const EntityAttributes kDefaultSolidAttrs{};
   struct VisibleSolid {
-    const CadSolidTessellation* tess;
-    float rgba[4];
-    float lineweightMm;
+    const CadSolidTessellation* tess = nullptr;
+    float rgba[4] = {0.f, 0.f, 0.f, 0.f};
+    float lineweightMm = 0.f;
   };
   std::vector<VisibleSolid> visible;
   visible.reserve(st.cadSolids.size());
@@ -32788,7 +32788,11 @@ void CadCreateSolidPrimitive(AppCommandState& st, const std::string& verb, const
     char* end = nullptr;
     dims[i] = std::strtod(tok.c_str(), &end);
     if (tok.empty() || !end || *end != '\0' || !std::isfinite(dims[i])) {
-      log.push_back(verbUpper + " — \"" + tok + "\" is not a number.");
+      std::string msg = verbUpper;
+      msg += " — \"";
+      msg += tok;
+      msg += "\" is not a number.";
+      log.push_back(std::move(msg));
       return;
     }
   }
@@ -33033,6 +33037,7 @@ static void CadSectionSolidsByPlane(AppCommandState& st, const std::vector<int>&
         xyz.push_back(static_cast<float>(w.y));
         xyz.push_back(static_cast<float>(w.z));
       }
+      bulges.reserve(loop.segs.size());
       for (const brep::PathSeg& sg : loop.segs)
         bulges.push_back(static_cast<float>(std::tan(sg.sweep * 0.25)));
 
@@ -34742,6 +34747,7 @@ void CommitBoolean(AppCommandState& st, CadBooleanOp op, const std::vector<int>&
 
   auto grab = [&](const std::vector<int>& v) {
     std::vector<brep::Solid> s;
+    s.reserve(v.size());
     for (int i : v)
       s.push_back(*st.cadSolids[static_cast<size_t>(i)]);
     return s;
@@ -35106,7 +35112,7 @@ static void CommitSlice(AppCommandState& st, brep::SliceKeep keep, std::vector<s
 
 namespace {
 
-enum class PressPullTargetKind {
+enum class PressPullTargetKind : std::uint8_t {
   None,     ///< Nothing eligible is selected.
   TooMany,  ///< More than one eligible face or shape is selected.
   Face,     ///< Exactly one solid FACE, from the REQ-318 sub-object selection.
@@ -35494,7 +35500,7 @@ bool CadCommitSolidEdit(AppCommandState& st, const SelectedSubObject& ref, brep:
 /// The live solid behind \p ref, or null when the reference no longer names one.
 CadSolidPtr CadLiveSolidFor(const AppCommandState& st, const SelectedSubObject& ref,
                             solidpick::Kind want) {
-  const CadSolidPtr sp = ref.owner.lock();
+  CadSolidPtr sp = ref.owner.lock();
   if (ref.kind != want || !sp || ref.index < 0 || ref.solidIndex < 0 ||
       static_cast<size_t>(ref.solidIndex) >= st.cadSolids.size() ||
       st.cadSolids[static_cast<size_t>(ref.solidIndex)] != sp)
@@ -36575,7 +36581,11 @@ bool HandleSolidTextInput(const std::string& lineIn, AppCommandState& st, std::v
     }
     double v = 0.0;
     if (!parseNumber(rest, &v)) {
-      log.push_back(verb + " — \"" + rest + "\" is not a number.");
+      std::string msg = verb;
+      msg += " — \"";
+      msg += rest;
+      msg += "\" is not a number.";
+      log.push_back(std::move(msg));
       log.push_back(CadSolidPromptText(st));
       return true;
     }
@@ -43526,8 +43536,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
             ApplyElevValue(st, ez, log);
             return;
           }
-        } catch (...) {
-          // Not a number — fall through to the message below rather than silently ignoring it.
+        } catch (...) { // NOLINT(bugprone-empty-catch) - not a number; falls through to the usage message below
         }
         log.push_back("ELEV — usage: ELEV <elevation>, or ELEV W for world.");
         return;
@@ -46228,7 +46237,8 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
   using T  = SelectedEntity::Type;
 
   float numVal = 0.f;
-  try { numVal = std::stof(cmd.qsValueBuf); } catch (...) {}
+  try { numVal = std::stof(cmd.qsValueBuf); } catch (...) { // NOLINT(bugprone-empty-catch) - non-numeric input; numVal stays 0, string comparison below still applies
+  }
   const std::string strVal = cmd.qsValueBuf;
 
   auto matchStr = [&](const std::string& prop) -> bool {
@@ -46320,7 +46330,7 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
       return false;
     }
     case QP::Length: {
-      float len = 0.f;
+      double len = 0.0;
       if (e.type == T::LineSeg) {
         const size_t k = (size_t)e.index * 6;
         if (k + 4 < cmd.userLinesFlat.size())
@@ -46342,7 +46352,7 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
       return matchNum(len);
     }
     case QP::Radius: {
-      float r = 0.f;
+      double r = 0.0;
       if (e.type == T::Circle) {
         const size_t k = (size_t)e.index * 4;
         if (k + 3 < cmd.userCirclesCxCyZR.size()) r = cmd.userCirclesCxCyZR[k + 3];
