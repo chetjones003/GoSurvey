@@ -4317,31 +4317,33 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         auto buildSpec = [&](bool compact) {
           ribbonlayout::RibbonSectionSpec spec;
           spec.groupGapX = 4.f;
-          auto col = [&](const char* id1, const char* ic1, const char* l1, const char* id2, const char* ic2,
-                         const char* l2, const char* id3, const char* ic3, const char* l3) {
+          auto col2 = [&](const char* id1, const char* ic1, const char* l1, const char* id2, const char* ic2,
+                          const char* l2) {
+            return columnOfButtons({
+                rowBtn(id1, -1, ic1, l1, true, (std::string(l1) + " — not implemented yet.").c_str(), compact),
+                rowBtn(id2, -1, ic2, l2, true, (std::string(l2) + " — not implemented yet.").c_str(), compact),
+            });
+          };
+          auto col3 = [&](const char* id1, const char* ic1, const char* l1, const char* id2, const char* ic2,
+                          const char* l2, const char* id3, const char* ic3, const char* l3) {
             return columnOfButtons({
                 rowBtn(id1, -1, ic1, l1, true, (std::string(l1) + " — not implemented yet.").c_str(), compact),
                 rowBtn(id2, -1, ic2, l2, true, (std::string(l2) + " — not implemented yet.").c_str(), compact),
                 rowBtn(id3, -1, ic3, l3, true, (std::string(l3) + " — not implemented yet.").c_str(), compact),
             });
           };
+          // Parcel, Assembly, Intersections, Pond, Underground Storage, and Channel were removed
+          // (issue #802) — not planned for implementation, so no placeholder button either.
           spec.groups = {
-              col("##CdParcel", "c3d_parcel", "Parcel", "##CdFeatureLine", "c3d_featureline", "Feature Line",
-                  "##CdGrading", "c3d_grading", "Grading"),
-              col("##CdAlignment", "c3d_alignment", "Alignment", "##CdProfile", "c3d_profile", "Profile",
-                  "##CdCorridor", "c3d_corridor", "Corridor"),
+              col2("##CdFeatureLine", "c3d_featureline", "Feature Line", "##CdGrading", "c3d_grading", "Grading"),
+              col3("##CdAlignment", "c3d_alignment", "Alignment", "##CdProfile", "c3d_profile", "Profile",
+                   "##CdCorridor", "c3d_corridor", "Corridor"),
               columnOfButtons({
-                  rowBtn("##CdIntersections", -1, "c3d_intersections", "Intersections", true,
-                         "Intersections — not implemented yet.", compact),
-                  rowBtn("##CdAssembly", -1, "c3d_assembly", "Assembly", true, "Assembly — not implemented yet.",
-                         compact),
                   // Pipe Network — GoSurvey's own pipe-routing model already covers this: see the
                   // Modeling tab's Pipe Run (PIPERUN), not a Civil3D-style network object (issue #802).
                   rowBtn("##CdPipeNetwork", -1, "c3d_pipenet", "Pipe Network", false,
                          "Pipe Network — use Pipe Run on the Modeling tab.\nCommand bar: PIPERUN", compact),
               }),
-              col("##CdPond", "c3d_pond", "Pond", "##CdUgStorage", "c3d_ugstorage", "Underground Storage",
-                  "##CdChannel", "c3d_channel", "Channel"),
           };
           return spec;
         };
