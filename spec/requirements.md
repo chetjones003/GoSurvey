@@ -12715,7 +12715,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: should
 - Type: quality
 - Statement: `.github/workflows/pr-checks.yml` triggers on `pull_request` into `master` and
-  `beta` — the SAME check set on both branches, no asymmetry:
+  `beta` with the same job list:
 
   | Job | Tool | Blocking? | Scope |
   |---|---|---|---|
@@ -12724,7 +12724,17 @@ capability that does not exist. They are recorded here rather than quietly dropp
   | `lint / msvc-analyze (report-only)` | MSVC `/analyze` | no (see REQ-324) | whole build, annotations only |
   | `security / gitleaks` | `gitleaks/gitleaks-action` | yes | PR diff |
   | `security / dependency-scan` | Trivy filesystem scan (no lockfile exists for `third_party/`'s vendored deps — D-2026-08-31-b — so this is a source-composition/CVE scan, not a manifest audit) | yes (CRITICAL/HIGH) | whole tree |
-  | CodeQL (`codeql.yml`, REQ-324) | `cpp` security-and-quality query suite | yes (error-severity SARIF results) | whole build |
+
+  CodeQL (`codeql.yml`, REQ-324) is the one asymmetry: it triggers on `pull_request` into
+  `master` ONLY, not `beta`, and remains blocking there (error-severity SARIF results fail the
+  check). Unlike every other check above, CodeQL cannot be scoped to a PR's diff — it builds a
+  whole-program database from the entire compiled codebase and runs dataflow queries across it,
+  the same cost regardless of how small the change is — which measured at 1-3 hours per run on
+  this codebase during REQ-402's own rollout. Gating that onto every `beta` PR (the frequent,
+  small-increment branch) would have blocked routine development; gating the comparatively rare
+  `beta`→`master` release PRs is the chosen compromise. It also still runs on a manual dispatch
+  and could be pointed back at `beta` later if its runtime improves or an incremental mode
+  becomes available.
 
   clang-tidy and `/analyze` are deliberately NOT both blocking against the whole codebase: neither
   has ever been triaged against GoSurvey's existing code, so clang-tidy is scoped to only the
@@ -12764,7 +12774,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
     on its own findings;
   - `lint / clang-tidy` does not fail a PR solely for pre-existing findings in files the PR did
     not touch;
-  - `codeql.yml` triggers on `pull_request` (master/beta) in addition to manual dispatch, and
+  - `codeql.yml` triggers on `pull_request` into `master` only (not `beta`) in addition to manual dispatch, and
     fails when its SARIF output contains an error-severity result;
   - a beta-targeted dispatch of `release.yml` uses the plain `project(VERSION)` value with no
     appended suffix as the published version string;

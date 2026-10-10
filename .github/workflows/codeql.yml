@@ -11,11 +11,16 @@
 
 name: codeql
 
-# REQ-402 (2026-10-09): re-enabled on pull_request into master/beta, as a blocking check —
-# see "Fail on error-severity findings" below. Still available via manual dispatch too.
+# REQ-402 (2026-10-09): re-enabled on pull_request into master only, as a blocking check — see
+# "Fail on error-severity findings" below. NOT run on beta PRs: CodeQL is whole-program analysis
+# (it builds a database from the entire compiled codebase and runs dataflow queries across it —
+# unlike clang-tidy, there is no way to scope it to just a diff), so it runs ~1-3 hours per PR on
+# this codebase. Gating every beta PR on that was blocking routine development; gating the
+# smaller, less frequent master release PRs is the compromise. Still available via manual
+# dispatch too.
 on:
   pull_request:
-    branches: [master, beta]
+    branches: [master]
   workflow_dispatch:
 
 concurrency:
