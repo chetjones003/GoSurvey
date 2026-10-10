@@ -12701,7 +12701,88 @@ capability that does not exist. They are recorded here rather than quietly dropp
     manifest, publish steps) is unchanged.
 - Owner-layer: Build/Platform
 - Status: accepted (2026-09-06)
-- Revisions: 2026-09-06 — initial.
+- Revisions: 2026-09-06 — initial. 2026-10-09 (D-2026-10-09-a, REQ-402): CodeQL's trigger was
+  restored to `pull_request` (master/beta) and made blocking via a SARIF error-severity check —
+  see REQ-402. `/analyze` stays non-blocking as described above until the triage work tracked
+  under REQ-402 clears the existing backlog.
+
+### REQ-402 — PR gating checks: build/test, lint, and security on every pull request
+
+- Purpose: a pull request into `master` or `beta` must prove itself — compiles, passes the test
+  suite, is free of new lint findings in its own changed lines, and is free of newly-introduced
+  secrets or error-severity static-analysis/CVE findings — before a human reviews it, with each
+  check clearly separated so a failure is attributable at a glance.
+- Priority: should
+- Type: quality
+- Statement: `.github/workflows/pr-checks.yml` triggers on `pull_request` into `master` and
+  `beta` with the same job list:
+
+  | Job | Tool | Blocking? | Scope |
+  |---|---|---|---|
+  | `build / test` | `cmake --preset ninja-release` + `ctest` (REQ-203/REQ-300 suite) | yes | whole build |
+  | `lint / clang-tidy` | `clang-tidy.exe` run directly against PR-changed files, config in `.clang-tidy` | yes | changed files only |
+  | `lint / msvc-analyze (report-only)` | MSVC `/analyze` | no (see REQ-324) | whole build, annotations only |
+  | `security / gitleaks` | `gitleaks/gitleaks-action` | yes | PR diff |
+  | `security / dependency-scan` | Trivy filesystem scan (no lockfile exists for `third_party/`'s vendored deps — D-2026-08-31-b — so this is a source-composition/CVE scan, not a manifest audit) | yes (CRITICAL/HIGH) | whole tree |
+
+  CodeQL (`codeql.yml`, REQ-324) is the one asymmetry: it triggers on `pull_request` into
+  `master` ONLY, not `beta`, and remains blocking there (error-severity SARIF results fail the
+  check). Unlike every other check above, CodeQL cannot be scoped to a PR's diff — it builds a
+  whole-program database from the entire compiled codebase and runs dataflow queries across it,
+  the same cost regardless of how small the change is — which measured at 1-3 hours per run on
+  this codebase during REQ-402's own rollout. Gating that onto every `beta` PR (the frequent,
+  small-increment branch) would have blocked routine development; gating the comparatively rare
+  `beta`→`master` release PRs is the chosen compromise. It also still runs on a manual dispatch
+  and could be pointed back at `beta` later if its runtime improves or an incremental mode
+  becomes available.
+
+  clang-tidy and `/analyze` are deliberately NOT both blocking against the whole codebase: neither
+  has ever been triaged against GoSurvey's existing code, so clang-tidy is scoped to only the
+  files a PR actually changes (safe to block immediately), while `/analyze` stays report-only
+  until a separate triage pass clears its backlog across the whole codebase — at which point it
+  can be paired with `/WX` and promoted to blocking (tracked as follow-up work, not part of this
+  requirement's acceptance).
+
+  Beta release versioning (ADR-029/REQ-202) changed alongside this: `release.yml`'s beta channel
+  no longer auto-appends a `-beta.<run number>` suffix to `project(VERSION)`. The target beta
+  version (e.g. 0.7.1 vs 0.8.0) is a deliberate choice, not a running counter, so it is decided in
+  conversation and committed as a plain `project(VERSION)` bump before the release workflow is
+  dispatched against `beta` — the same mechanism `master` already used. The rolling
+  `channel-beta` prerelease (tag, asset replacement) is otherwise unchanged.
+
+  Code signing (ADR-029, decision-log D5) is scaffolded but NOT wired in: SignPath Foundation
+  (signpath.org) was chosen as the free signing provider for an OSS project, but their
+  application requires the project to already be independently findable (a Google search for the
+  project name, a homepage beyond the bare repo), which GoSurvey does not yet have. The signing
+  step in `release.yml` documents the exact drop-in change (secrets required, action to use) and
+  stays a no-op until the SignPath application is actually submitted and approved — a separate,
+  future decision, not part of this requirement's acceptance.
+
+  `build / test` is the first CI job that ever actually builds the project with
+  `GOSURVEY_BUILD_TESTS=ON` and runs `ctest` (`release.yml` always builds with it OFF — it ships
+  `GoSurvey.exe` only). Standing it up surfaced 18 pre-existing failures across several unrelated
+  subsystems (DWG export, REQ-377/383 point visibility, one Brep test, one headless regression),
+  none caused by this requirement's work. They are excluded from the `ctest` run by exact test
+  name (not by disabling the whole check) and tracked in issue #801 for a dedicated fix pass; any
+  OTHER test failing still blocks immediately. A test is removed from the exclude list in the same
+  PR that actually fixes it.
+- Acceptance:
+  - `pr-checks.yml` triggers on `pull_request` targeting `master` and `beta`, both with an
+    identical job list;
+  - `build / test`, `lint / clang-tidy`, `security / gitleaks`, and `security / dependency-scan`
+    each fail the PR's checks when they find a problem; `lint / msvc-analyze` never fails the PR
+    on its own findings;
+  - `lint / clang-tidy` does not fail a PR solely for pre-existing findings in files the PR did
+    not touch;
+  - `codeql.yml` triggers on `pull_request` into `master` only (not `beta`) in addition to manual dispatch, and
+    fails when its SARIF output contains an error-severity result;
+  - a beta-targeted dispatch of `release.yml` uses the plain `project(VERSION)` value with no
+    appended suffix as the published version string;
+  - `release.yml`'s "Sign the installer" step remains a documented no-op; no signing secrets are
+    referenced in a way that would fail the workflow if absent.
+- Owner-layer: Build/Platform
+- Status: accepted (2026-10-09)
+- Revisions: 2026-10-09 — initial (D-2026-10-09-a).
 
   2026-09-22 — **a polyline that lies in ONE plane exports as one `LWPOLYLINE` in that plane**
   (D-2026-09-22-a, ADR-053 amendment (f), TASK-274, GitHub issue #521). Increment 4 above splits a

@@ -10,6 +10,11 @@ cmake_install.cmake
 _install/
 .cache/clangd/
 compile_commands.json
+
+# --- local CodeQL (dev/codeql, REQ-402/issue #801) ---
+/.codeql-db/
+/codeql-results.sarif
+/codeql-results-filtered.sarif
 gosurvey_imgui.ini
 
 # --- Installer ---

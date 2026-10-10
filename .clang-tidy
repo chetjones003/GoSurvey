@@ -1,0 +1,27 @@
+# clang-tidy config for GoSurvey PR checks (REQ-402).
+#
+# Enforced only against files CHANGED in a PR (.github/workflows/pr-checks.yml diffs against
+# the PR base and runs clang-tidy.exe directly, not a container action) — never against the
+# whole, untriaged codebase. That is what makes it safe to run as a blocking check from day one.
+#
+# Checks are deliberately conservative: bug-finding and correctness checks are on;
+# style/naming checks are off, since this codebase has its own established conventions
+# (spec/coding-standards.md) that do not match clang-tidy's defaults, and a style check
+# flagging every pre-existing identifier style choice on a touched line would be noise,
+# not signal.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-branch-clone,
+  clang-analyzer-*,
+  performance-*,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-pro-type-member-init,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-default-member-init
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '^(src|include)/'
+FormatStyle: none
