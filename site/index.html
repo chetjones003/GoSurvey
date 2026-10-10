@@ -53,8 +53,7 @@
       </svg>
     </div>
     <nav class="nav">
-      <a href="#features" class="hide-sm">Features</a>
-      <a href="#downloads">Download</a>
+      <a href="download.html">Download</a>
       <a href="docs/index.html">Docs</a>
       <a href="about.html">About</a>
       <a href="contact.html">Contact</a>
@@ -69,286 +68,133 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div>
-        <h1>Get to work&hellip;<br>that&rsquo;s it</h1>
+        <div class="hero-wordmark">
+          <div class="hero-badge">GS</div>
+          <div>
+            <div class="hero-badge-name">GoSurvey</div>
+            <div class="hero-badge-tag">Native Windows survey &amp; civil CAD</div>
+          </div>
+        </div>
+
+        <h1>Get to work&hellip;<br><span class="accent-text">that&rsquo;s it</span></h1>
         <p class="lede">
           A fast, modern CAD platform built for surveyors — bearings and distances,
-          traverse adjustment, points, surfaces, and plottable sheets.
+          traverse adjustment, points, surfaces, and PDF viewing/editing.
         </p>
         <div class="hero-cta">
-          <a class="btn btn-primary" href="#downloads">Download for Windows</a>
+          <a class="btn btn-primary" href="download.html">Download for Windows</a>
           <a class="btn btn-ghost" href="https://github.com/chetjones003/GoSurvey/wiki">Read the manual</a>
         </div>
-      </div>
-      <figure class="shot" style="margin:0">
-        <img src="img/01-main-window.png" alt="The GoSurvey start screen with recent drawings, the ribbon, and the status bar." width="2560" height="1528">
-        <figcaption>The start screen — recent drawings, ribbon, and status bar.</figcaption>
-      </figure>
-    </div>
-  </section>
 
-  <section id="features" style="background:var(--surface-2)">
-    <div class="wrap">
-      <div class="sec-head">
-        <span class="label">Key features</span>
-        <h2>Projects, maps, PDFs, clouds, piping, and 3D — built for the whole job.</h2>
-        <p>Six highlights from What&rsquo;s New 0.7.0 — swipe, arrow keys, or the controls below.</p>
-      </div>
+        <div class="hero-workflows">
+          <span class="label">Five core workflows</span>
+          <p>Linework &middot; Geolocation &middot; Surfaces &middot; Point Clouds &middot; Alignments</p>
+        </div>
 
-      <div class="feature-frame" id="feature-carousel">
-        <div class="feature-body">
-          <div class="feature-copy" id="feature-carousel-copy" aria-live="polite">
-            <article class="feature-copy-panel is-active" data-slide="0">
-              <h3>Projects</h3>
-              <p class="slide-lede">One place for every drawing, point file, PDF, and cloud on the job — shared survey points across tabs, pack when ready to send.</p>
-              <ul>
-                <li>Shared survey point database across project drawings</li>
-                <li>Recent Projects on the start screen</li>
-                <li>Pack and email the whole project</li>
-              </ul>
-            </article>
-            <article class="feature-copy-panel" data-slide="1">
-              <h3>Coordinate systems and maps</h3>
-              <p class="slide-lede">Real survey zones, USGS aerial under your linework, and captured map areas that stay with the file.</p>
-              <ul>
-                <li>Coordinate system for the project or drawing</li>
-                <li>USGS aerial underlay aligned to your zone</li>
-                <li>Capture map areas into the drawing</li>
-              </ul>
-            </article>
-            <article class="feature-copy-panel" data-slide="2">
-              <h3>Built-in PDF viewer</h3>
-              <p class="slide-lede">Open plan sheets in GoSurvey — markup, measure, compare revisions, split pages.</p>
-              <ul>
-                <li>PDFVIEW in a dedicated, dockable window</li>
-                <li>Annotate, measure, and highlight changes</li>
-                <li>Attach PDFs to a project</li>
-              </ul>
-            </article>
-            <article class="feature-copy-panel" data-slide="3">
-              <h3>Point clouds</h3>
-              <p class="slide-lede">Attach scan and LIDAR data beside your linework for context and as-built checks.</p>
-              <ul>
-                <li>E57 and other formats; density, color, clipping</li>
-                <li>Clearance and as-built comparison</li>
-                <li>Cloud paths tracked when you pack a job</li>
-              </ul>
-            </article>
-            <article class="feature-copy-panel" data-slide="4">
-              <h3>Piping and fittings</h3>
-              <p class="slide-lede">Route pipe runs with library fittings and export geometry with your drawing.</p>
-              <ul>
-                <li>PIPERUN with size and elevation</li>
-                <li>Fittings from the built-in library</li>
-                <li>Move and copy runs like other objects</li>
-              </ul>
-            </article>
-            <article class="feature-copy-panel" data-slide="5">
-              <h3>Surfaces, grading, and 3D</h3>
-              <p class="slide-lede">TIN surfaces, drape linework, grade to daylight, pads and solids on real ground.</p>
-              <ul>
-                <li>TIN surfaces, volumes, contours, styles</li>
-                <li>DRAPE and PADSOLID for pads</li>
-                <li>GRADING side slopes to daylight</li>
-              </ul>
-            </article>
-          </div>
-
-          <div class="feature-media-wrap">
-            <button type="button" class="feature-edge prev" id="feature-carousel-prev"
-                    aria-controls="feature-carousel-viewport" aria-label="Previous feature">&#8249;</button>
-            <div class="feature-media-stage" id="feature-carousel-viewport" tabindex="0"
-                 role="region" aria-roledescription="carousel" aria-label="Key feature screenshots">
-              <div class="feature-media-cards" id="feature-carousel-track">
-                <figure class="feature-media-card shot is-active" data-slide="0">
-                  <img src="img/features/projects.png" alt="Recent Projects and the project workspace with shared survey points." loading="eager" width="2560" height="1528">
-                </figure>
-                <figure class="feature-media-card shot is-next" data-slide="1">
-                  <img src="img/features/maps.png" alt="Drawing with coordinate zone and USGS aerial map underlay." loading="lazy" width="2560" height="1528">
-                </figure>
-                <figure class="feature-media-card shot is-far" data-slide="2">
-                  <img src="img/features/pdf-viewer.png" alt="PDF viewer with markup and measure tools on a plan sheet." loading="lazy" width="2560" height="1528">
-                </figure>
-                <figure class="feature-media-card shot is-far" data-slide="3">
-                  <img src="img/features/point-clouds.png" alt="Point cloud displayed with linework in the model view." loading="lazy" width="2560" height="1528">
-                </figure>
-                <figure class="feature-media-card shot is-far" data-slide="4">
-                  <img src="img/features/piping.png" alt="Pipe run with fittings from the library in 3D or plan view." loading="lazy" width="2560" height="1528">
-                </figure>
-                <figure class="feature-media-card shot is-prev" data-slide="5">
-                  <img src="img/features/surfaces-3d.png" alt="TIN surface, grading daylight line, or pad solid on existing ground." loading="lazy" width="2560" height="1528">
-                </figure>
+        <div class="hero-feat-grid">
+          <span class="label">Core features</span>
+          <div class="hero-feats">
+            <div class="hero-feat">
+              <span class="hero-feat-ico" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
+              </span>
+              <div>
+                <h3>Point cloud import</h3>
+                <p>E57 and LAS scans, colorized and ready to trace</p>
               </div>
             </div>
-            <button type="button" class="feature-edge next" id="feature-carousel-next"
-                    aria-controls="feature-carousel-viewport" aria-label="Next feature">&#8250;</button>
+            <div class="hero-feat">
+              <span class="hero-feat-ico" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="M2 16l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+              </span>
+              <div>
+                <h3>Surfaces &amp; grading</h3>
+                <p>Build TIN surfaces straight from survey points</p>
+              </div>
+            </div>
+            <div class="hero-feat">
+              <span class="hero-feat-ico" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20c0-5 4-7 8-9s8-4 8-9"/><circle cx="4" cy="20" r="1.6" fill="currentColor" stroke="none"/><circle cx="20" cy="2" r="1.6" fill="currentColor" stroke="none"/></svg>
+              </span>
+              <div>
+                <h3>Alignments &amp; corridors</h3>
+                <p>Profile views and corridor design built in</p>
+              </div>
+            </div>
+            <div class="hero-feat">
+              <span class="hero-feat-ico" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-6-3.46a2 2 0 0 0-2 0l-6 3.46A2 2 0 0 0 5 8v8a2 2 0 0 0 1 1.73l6 3.46a2 2 0 0 0 2 0l6-3.46A2 2 0 0 0 21 16Z"/><path d="M3.27 6.96 12 12l8.73-5.04M12 22.08V12"/></svg>
+              </span>
+              <div>
+                <h3>3D modeling</h3>
+                <p>Solids, pipe runs, and fittings in true 3D</p>
+              </div>
+            </div>
+            <div class="hero-feat">
+              <span class="hero-feat-ico" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 6-9 12-9 12s-9-6-9-12a9 9 0 0 1 18 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+              </span>
+              <div>
+                <h3>Geolocation</h3>
+                <p>Drawings pinned to real coordinates and maps</p>
+              </div>
+            </div>
+            <div class="hero-feat">
+              <span class="hero-feat-ico" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
+              </span>
+              <div>
+                <h3>Native DWG/DXF</h3>
+                <p>Open and save real AutoCAD files, no converter</p>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="feature-nav">
-          <span class="feature-status" id="feature-carousel-status" aria-live="polite">1 / 6</span>
-          <div class="feature-dots" id="feature-carousel-dots" role="tablist" aria-label="Choose a feature"></div>
+        <div class="hero-formats">
+          <span class="label">Supported formats</span>
+          <div class="hero-format-pills">
+            <span>DWG</span><span>DXF</span><span>E57</span><span>LAS / LAZ</span><span>PDF</span><span>CSV</span>
+          </div>
         </div>
+      </div>
+      <div class="hero-stack" aria-hidden="false">
+        <img class="hero-stack-img hero-stack-back" src="img/hero-pdf-viewer.png" alt="GoSurvey PDF viewer showing a civil grading plan with annotation and measure tools." width="2560" height="1528" loading="eager">
+        <img class="hero-stack-img hero-stack-mid" src="img/hero-site-plan.png" alt="GoSurvey showing a geolocated site plan over aerial imagery." width="2000" height="1194" loading="eager">
+        <img class="hero-stack-img hero-stack-front" src="img/hero-point-cloud.png" alt="GoSurvey showing a colorized scanned point cloud of an industrial facility." width="2000" height="1194" loading="eager">
       </div>
     </div>
   </section>
 
-  <section id="downloads">
+  <section id="contribute" style="background:var(--surface-2)">
     <div class="wrap">
       <div class="sec-head">
-        <span class="label">Download</span>
-        <h2>Windows x64. Free to install.</h2>
+        <span class="label">Contribute</span>
+        <h2>GoSurvey is built mainly by me and whoever is kind enough to contribute.</h2>
         <p>
-          Once installed, GoSurvey checks for new versions itself and asks before installing anything.
-          Choose your channel in <span class="mono">Settings → System → Updates</span>.
+          It is open source free to use software and as such is depended upon by the help of others.
+          Feel free to help contribute in command implementation, file-format compatibility, testing,
+          documentation, UI/UX, website design, issue triage, or simply by giving me input and feedback.
+        </p>
+        <p>
+          Currently this project is funded solely by my own means. If you feel the need or want to
+          donate please reach out to me for now &mdash; I am working on adding ways to contribute
+          financially.
         </p>
       </div>
-
-      <div id="release-stable" class="tb">
-        <div class="tb-head">
-          <h3>Stable</h3>
-          <span class="chip chip-stable">Recommended</span>
-          <p class="blurb">Tested releases. This is the one to install if you are doing real work.</p>
-        </div>
-        <div class="tb-cells">
-          <div class="cell"><div class="label">Version</div><div class="val" data-f="version">—</div></div>
-          <div class="cell"><div class="label">Released</div><div class="val" data-f="date">—</div></div>
-          <div class="cell"><div class="label">Size</div><div class="val" data-f="size">—</div></div>
-          <div class="cell"><div class="label">Requires</div><div class="val">Windows x64</div></div>
-        </div>
-        <div class="tb-foot">
-          <a class="btn btn-primary" data-f="dl" href="https://github.com/chetjones003/GoSurvey/releases/latest">Download installer</a>
-          <a class="btn btn-ghost" data-f="notes" href="https://github.com/chetjones003/GoSurvey/releases/latest">Release notes</a>
-          <p class="note">Windows may warn that the publisher is unrecognised — the installer is not code-signed yet. Choose <strong>More info → Run anyway</strong>. A SHA-256 checksum is published with every release.</p>
-        </div>
+      <div class="hero-format-pills">
+        <span>Commands</span><span>File formats</span><span>Testing</span><span>Documentation</span>
+        <span>UI/UX</span><span>Website</span><span>Issue triage</span><span>Feedback</span>
       </div>
-
-      <div id="release-beta" class="tb">
-        <div class="tb-head">
-          <h3>Beta</h3>
-          <span class="chip chip-beta">Preview</span>
-          <p class="blurb">The next release, published as it is built. Real working builds, but this is where problems are still being found — keep backups of drawings you care about.</p>
-        </div>
-        <div class="tb-cells">
-          <div class="cell"><div class="label">Version</div><div class="val" data-f="version">—</div></div>
-          <div class="cell"><div class="label">Released</div><div class="val" data-f="date">—</div></div>
-          <div class="cell"><div class="label">Size</div><div class="val" data-f="size">—</div></div>
-          <div class="cell"><div class="label">Requires</div><div class="val">Windows x64</div></div>
-        </div>
-        <div class="tb-foot">
-          <a class="btn btn-ghost" data-f="dl" href="https://github.com/chetjones003/GoSurvey/releases/tag/channel-beta">Download installer</a>
-          <a class="btn btn-ghost" data-f="notes" href="https://github.com/chetjones003/GoSurvey/releases/tag/channel-beta">Release notes</a>
-          <p class="note">Already running GoSurvey? Turn on <em>Include beta releases</em> in Settings instead of downloading by hand.</p>
-        </div>
-      </div>
-
-      <p class="dl-fallback" id="beta-none" hidden>
-        No beta build is published at the moment — the stable release above is the current one.
-      </p>
-
-      <p class="dl-fallback" id="dl-note" hidden>
-        Live release details could not be loaded just now.
-        <a href="https://github.com/chetjones003/GoSurvey/releases">Browse all releases on GitHub →</a>
-      </p>
-    </div>
-  </section>
-
-  <section style="background:var(--surface-2)">
-    <div class="wrap">
-      <div class="sec-head">
-        <span class="label">Getting started</span>
-        <h2>Installed and drawing in a few minutes.</h2>
-      </div>
-      <div class="steps">
-        <div class="step">
-          <span class="label">First</span>
-          <h3>Install</h3>
-          <p>Download the installer above and run it. GoSurvey installs to Program Files and adds a Start Menu entry. If it will not start, install the Microsoft Visual C++ Redistributable for x64.</p>
-        </div>
-        <div class="step">
-          <span class="label">Then</span>
-          <h3>Set your units</h3>
-          <p>Run <span class="mono">UNITS</span> once and pick the precision and bearing format you work in — surveyor&#39;s bearings, DMS or decimal. Every readout and label follows it.</p>
-        </div>
-        <div class="step">
-          <span class="label">Then</span>
-          <h3>Bring in your data</h3>
-          <p>Import points from a PNEZD CSV, linework from DXF, or raw observations from an FBK file into the Traverse Editor. Either order keeps your points.</p>
-        </div>
+      <div class="hero-cta" style="margin-top:1.75rem">
+        <a class="btn btn-primary" href="https://github.com/chetjones003/GoSurvey">Browse the repo</a>
+        <a class="btn btn-ghost" href="https://github.com/chetjones003/GoSurvey/issues">Open issues</a>
+        <a class="btn btn-ghost" href="contact.html">Contact me</a>
       </div>
     </div>
   </section>
 
 </main>
-
-<div id="install-modal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="install-modal-title">
-  <div class="modal" id="install-modal-panel">
-    <div class="modal-head">
-      <h2 id="install-modal-title">Before you install</h2>
-      <button type="button" class="modal-close" id="install-modal-close" aria-label="Close">&times;</button>
-    </div>
-    <div class="modal-body">
-      <p class="modal-lede">GoSurvey is free to install, but your browser or Windows may flag the download because the installer is not code-signed yet. Those warnings are normal — follow the steps below and you can install safely.</p>
-      <ol class="modal-steps">
-        <li>
-          <span class="num">1</span>
-          <div>
-            <strong>Download the installer</strong>
-            <p>Click <em>Continue download</em> below. Your browser saves a file named like <span class="mono">GoSurvey-…-Installer.exe</span>.</p>
-          </div>
-        </li>
-        <li>
-          <span class="num">2</span>
-          <div>
-            <strong>If your browser blocks or removes the download</strong>
-            <p>Chrome and Edge often flag an unsigned <span class="mono">.exe</span> with <em>This file isn&rsquo;t commonly downloaded</em> and may discard it. Press <span class="mono">Ctrl+J</span> to open Downloads, find the file, and choose <strong>Keep</strong> or <strong>Keep anyway</strong>. If it was removed, open <a href="https://github.com/chetjones003/GoSurvey/releases/latest" rel="noopener">the release on GitHub</a>, download <span class="mono">GoSurvey-…-Installer.exe</span> from Assets, and choose <strong>Keep</strong> when the browser warns again.</p>
-          </div>
-        </li>
-        <li>
-          <span class="num">3</span>
-          <div>
-            <strong>If SmartScreen appears when you run the installer</strong>
-            <p>Windows may show <em>Windows protected your PC</em> or say the publisher is unrecognised. Click <strong>More info</strong>, then <strong>Run anyway</strong>.</p>
-          </div>
-        </li>
-        <li>
-          <span class="num">4</span>
-          <div>
-            <strong>If the downloaded file is still blocked</strong>
-            <p>Right-click the <span class="mono">.exe</span>, choose <strong>Properties</strong>, check <strong>Unblock</strong> at the bottom, click OK, then run it again.</p>
-          </div>
-        </li>
-        <li>
-          <span class="num">5</span>
-          <div>
-            <strong>Approve the installer</strong>
-            <p>Follow the setup wizard. Windows may ask for permission to install to Program Files — choose Yes. GoSurvey adds a Start Menu entry when finished.</p>
-          </div>
-        </li>
-        <li>
-          <span class="num">6</span>
-          <div>
-            <strong>If GoSurvey will not start</strong>
-            <p>Install the <a href="https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist" rel="noopener">Microsoft Visual C++ Redistributable (x64)</a>, then run GoSurvey again.</p>
-          </div>
-        </li>
-      </ol>
-      <p class="modal-callout">
-        Every release publishes a SHA-256 checksum on GitHub so you can verify the file was not
-        altered in transit. The checksum proves integrity; it does not remove the SmartScreen prompt.
-      </p>
-    </div>
-    <div class="modal-foot">
-      <label class="modal-ack" for="install-modal-ack">
-        <input type="checkbox" id="install-modal-ack">
-        I have read the install instructions above.
-      </label>
-      <button type="button" class="btn btn-primary" id="install-modal-continue" disabled>Continue download</button>
-      <button type="button" class="btn-modal-secondary" id="install-modal-cancel">Not now</button>
-      <p class="note">Need help after installing? See <a href="https://github.com/chetjones003/GoSurvey/wiki">the manual</a>
-        or <a href="https://github.com/chetjones003/GoSurvey/issues">report an issue</a>.</p>
-    </div>
-  </div>
-</div>
 
 <footer>
   <div class="wrap">
@@ -485,337 +331,6 @@
 
   // No initial paint: the readout keeps the zeroed reading it ships with until the pointer
   // moves, and the traverse stays out of sight until someone clicks for it.
-})();
-</script>
-
-<script>
-(function(){
-  "use strict";
-  var REPO = "chetjones003/GoSurvey";
-
-  function fmtSize(bytes){
-    if(!bytes) return "—";
-    return (bytes/1048576).toFixed(1) + " MB";
-  }
-  function fmtDate(iso){
-    if(!iso) return "—";
-    var d = new Date(iso);
-    if(isNaN(d)) return "—";
-    return d.toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"});
-  }
-  function set(root, field, text){
-    var el = root.querySelector('[data-f="'+field+'"]');
-    if(el) el.textContent = text;
-  }
-
-  // Version comes from the INSTALLER FILENAME, which carries it for both channels
-  // (GoSurvey-0.5.0-Installer.exe, GoSurvey-0.5.0-beta.16-Installer.exe).
-  //
-  // The published latest.json manifest would be the more direct source, but GitHub serves
-  // release assets with no Access-Control-Allow-Origin header, so a browser blocks that fetch
-  // — verified against the live release. The tag is no good either: the rolling beta's tag is
-  // literally "channel-beta". The filename is the one source that is correct for both and
-  // needs no extra request.
-  function versionFrom(release, installer){
-    if(installer){
-      var m = /^GoSurvey-(.+)-Installer\.exe$/i.exec(installer.name);
-      if(m) return m[1];
-    }
-    var t = (release.tag_name||"").replace(/^v/,"");
-    if(/^\d+\.\d+\.\d+/.test(t)) return t;
-    var n = /(\d+\.\d+\.\d+(?:-[\w.]+)?)/.exec(release.name||"");
-    return n ? n[1] : "—";
-  }
-
-  function fill(elId, release){
-    var root = document.getElementById(elId);
-    if(!root || !release) return false;
-
-    var installer = (release.assets||[]).filter(function(a){
-      return /Installer\.exe$/i.test(a.name);
-    })[0];
-
-    set(root,"version", versionFrom(release, installer));
-
-    // Date comes from the INSTALLER ASSET, not the release, for the same reason the version
-    // does. The beta is a ROLLING release: every build replaces the assets on the one
-    // `channel-beta` tag, and GitHub leaves that release's `published_at` at whenever it was
-    // first published. So the beta block showed a date that never moved — it read 16 Aug while
-    // serving a build made on the 17th. The asset's `updated_at` is rewritten each upload and is
-    // the only field that tracks the build actually being offered.
-    //
-    // Stable is unaffected either way: each stable release gets its own fresh tag, so its
-    // `published_at` and its asset's `updated_at` are the same moment (verified on v0.5.0). The
-    // fallbacks are for a release with no installer attached, which is a broken publish anyway.
-    set(root,"date", fmtDate((installer && installer.updated_at) ||
-                             release.published_at || release.created_at));
-
-    var notes = root.querySelector('[data-f="notes"]');
-    if(notes && release.html_url) notes.href = release.html_url;
-
-    if(installer){
-      set(root,"size", fmtSize(installer.size));
-      var dl = root.querySelector('[data-f="dl"]');
-      if(dl){
-        dl.href = installer.browser_download_url;
-        dl.innerHTML = 'Download installer <small>' + fmtSize(installer.size) + '</small>';
-      }
-    }
-    return true;
-  }
-
-  function api(path){
-    return fetch("https://api.github.com/repos/"+REPO+path,{
-      headers:{"Accept":"application/vnd.github+json"}
-    }).then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
-  }
-
-  Promise.all([
-    api("/releases/latest"),
-    api("/releases/tags/channel-beta")
-  ]).then(function(res){
-    var okStable = fill("release-stable",res[0]);
-    var okBeta   = fill("release-beta",res[1]);
-
-    // A block of em dashes tells the reader nothing. Each missing case gets its own honest
-    // explanation instead.
-    if(okStable && !okBeta){
-      // There is genuinely no beta right now — the rolling prerelease can be absent between
-      // cycles, or deleted deliberately. Hide the empty block rather than show a dead one.
-      var beta = document.getElementById("release-beta");
-      var none = document.getElementById("beta-none");
-      if(beta) beta.hidden = true;
-      if(none) none.hidden = false;
-    } else if(!okStable && !okBeta){
-      // Both failed: almost always GitHub's 60/hour unauthenticated rate limit, which is a
-      // normal state for a public page rather than an error worth alarming over.
-      var n = document.getElementById("dl-note");
-      if(n) n.hidden = false;
-    }
-  });
-})();
-</script>
-
-<script>
-/* ---------------------------------------------------------------------------
-   Key-features carousel — copy stays visible; 3D parallax on screenshots.
---------------------------------------------------------------------------- */
-(function(){
-  "use strict";
-
-  var root = document.getElementById("feature-carousel");
-  var viewport = document.getElementById("feature-carousel-viewport");
-  var cards = [].slice.call(document.querySelectorAll("#feature-carousel-track .feature-media-card"));
-  var copyPanels = [].slice.call(document.querySelectorAll("#feature-carousel-copy .feature-copy-panel"));
-  var btnPrev = document.getElementById("feature-carousel-prev");
-  var btnNext = document.getElementById("feature-carousel-next");
-  var status = document.getElementById("feature-carousel-status");
-  var dotsHost = document.getElementById("feature-carousel-dots");
-  if(!root || !viewport || !cards.length || !copyPanels.length || !btnPrev || !btnNext || !status || !dotsHost) return;
-
-  var count = cards.length;
-  var index = 0;
-  var dotButtons = [];
-  var animating = false;
-  var dirTimer = null;
-
-  cards.forEach(function(card, i){
-    var dot = document.createElement("button");
-    dot.type = "button";
-    dot.className = "feature-dot";
-    dot.setAttribute("role", "tab");
-    dot.setAttribute("aria-label", "Feature " + (i + 1));
-    dot.setAttribute("aria-controls", "feature-carousel-viewport");
-    dot.addEventListener("click", function(){ go(i); });
-    dotsHost.appendChild(dot);
-    dotButtons.push(dot);
-  });
-
-  function rel(i){
-    var d = i - index;
-    if(d > count / 2) d -= count;
-    if(d < -count / 2) d += count;
-    return d;
-  }
-
-  var cardStates = ["is-active", "is-prev", "is-next", "is-far"];
-
-  function cardClass(d){
-    if(d === 0) return "is-active";
-    if(d === -1) return "is-prev";
-    if(d === 1) return "is-next";
-    return "is-far";
-  }
-
-  function setDirection(forward){
-    root.classList.remove("is-forward", "is-back");
-    if(forward) root.classList.add("is-forward");
-    else root.classList.add("is-back");
-    if(dirTimer) window.clearTimeout(dirTimer);
-    dirTimer = window.setTimeout(function(){
-      root.classList.remove("is-forward", "is-back");
-    }, 720);
-  }
-
-  function paint(){
-    cards.forEach(function(card, i){
-      var d = rel(i);
-      var nextState = cardClass(d);
-      cardStates.forEach(function(st){ card.classList.remove(st); });
-      card.classList.add(nextState);
-      card.setAttribute("aria-hidden", d === 0 ? "false" : "true");
-    });
-    copyPanels.forEach(function(panel, i){
-      panel.classList.toggle("is-active", i === index);
-    });
-    status.textContent = (index + 1) + " / " + count;
-    dotButtons.forEach(function(dot, i){
-      dot.setAttribute("aria-selected", i === index ? "true" : "false");
-      dot.setAttribute("aria-current", i === index ? "true" : "false");
-    });
-  }
-
-  function go(i){
-    if(animating) return;
-    var next = ((i % count) + count) % count;
-    if(next === index) return;
-    var forward = next === (index + 1) % count ||
-      (index === count - 1 && next === 0);
-    var backward = next === (index - 1 + count) % count ||
-      (index === 0 && next === count - 1);
-    if(forward) setDirection(true);
-    else if(backward) setDirection(false);
-    else setDirection(next > index);
-    animating = true;
-
-    function apply(){
-      index = next;
-      paint();
-      window.setTimeout(function(){ animating = false; }, 900);
-    }
-
-    void viewport.offsetWidth;
-    requestAnimationFrame(function(){ requestAnimationFrame(apply); });
-  }
-
-  btnPrev.addEventListener("click", function(){ go(index - 1); });
-  btnNext.addEventListener("click", function(){ go(index + 1); });
-
-  viewport.addEventListener("keydown", function(e){
-    if(e.key === "ArrowLeft"){ e.preventDefault(); go(index - 1); }
-    else if(e.key === "ArrowRight"){ e.preventDefault(); go(index + 1); }
-  });
-
-  var dragStartX = null;
-  viewport.addEventListener("pointerdown", function(e){
-    if(e.pointerType === "mouse" && e.button !== 0) return;
-    dragStartX = e.clientX;
-    viewport.setPointerCapture(e.pointerId);
-  });
-  viewport.addEventListener("pointerup", function(e){
-    if(dragStartX === null) return;
-    var dx = e.clientX - dragStartX;
-    dragStartX = null;
-    if(Math.abs(dx) < 48) return;
-    if(dx < 0) go(index + 1);
-    else go(index - 1);
-  });
-  viewport.addEventListener("pointercancel", function(){ dragStartX = null; });
-
-  paint();
-})();
-</script>
-
-<script>
-/* ---------------------------------------------------------------------------
-   Install help modal. Shown before any download starts so users see SmartScreen
-   guidance while they still have context — not after they are already stuck.
---------------------------------------------------------------------------- */
-(function(){
-  "use strict";
-
-  var modal = document.getElementById("install-modal");
-  var panel = document.getElementById("install-modal-panel");
-  var btnContinue = document.getElementById("install-modal-continue");
-  var btnCancel = document.getElementById("install-modal-cancel");
-  var btnClose = document.getElementById("install-modal-close");
-  var chkAck = document.getElementById("install-modal-ack");
-  if(!modal || !panel || !btnContinue || !chkAck || !btnClose) return;
-
-  var pendingUrl = "";
-  var lastFocus = null;
-
-  function syncContinue(){
-    btnContinue.disabled = !chkAck.checked;
-  }
-
-  function resetModal(){
-    chkAck.checked = false;
-    syncContinue();
-  }
-
-  function openModal(url){
-    pendingUrl = url || "";
-    lastFocus = document.activeElement;
-    resetModal();
-    modal.hidden = false;
-    document.body.style.overflow = "hidden";
-    // Opening used to land on the footer checkbox, which scrolled the panel to the bottom.
-    panel.scrollTop = 0;
-    btnClose.focus({preventScroll:true});
-  }
-
-  function closeModal(){
-    modal.hidden = true;
-    document.body.style.overflow = "";
-    panel.scrollTop = 0;
-    pendingUrl = "";
-    resetModal();
-    if(lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
-  }
-
-  function triggerDownload(url){
-    if(!url) return;
-    // Cross-origin (GitHub release assets): the download attribute is ignored, but
-    // navigation still starts the browser's save dialog without leaving the help page.
-    var a = document.createElement("a");
-    a.href = url;
-    a.rel = "noopener";
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  }
-
-  document.addEventListener("click", function(e){
-    var dl = e.target.closest('[data-f="dl"]');
-    if(!dl || dl.hidden) return;
-    var href = dl.getAttribute("href");
-    if(!href || href.charAt(0) === "#") return;
-    e.preventDefault();
-    openModal(href);
-  });
-
-  chkAck.addEventListener("change", syncContinue);
-
-  btnContinue.addEventListener("click", function(){
-    if(btnContinue.disabled) return;
-    var url = pendingUrl;
-    closeModal();
-    triggerDownload(url);
-  });
-
-  btnCancel.addEventListener("click", closeModal);
-  btnClose.addEventListener("click", closeModal);
-
-  modal.addEventListener("click", function(e){
-    if(e.target === modal) closeModal();
-  });
-
-  document.addEventListener("keydown", function(e){
-    if(modal.hidden) return;
-    if(e.key === "Escape") closeModal();
-  });
 })();
 </script>
 

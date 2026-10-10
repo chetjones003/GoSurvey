@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download — GoSurvey</title>
+<meta name="description" content="Download GoSurvey for Windows x64. Free to install, stable and beta channels, release notes and checksums.">
+<link rel="icon" href="favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/download.html">
+
+<meta property="og:title" content="Download GoSurvey">
+<meta property="og:description" content="Windows x64. Free to install. Stable and beta channels.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="img/features/projects.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+.page-head{padding:clamp(2.5rem,6vw,4rem) 0 0}
+.page-head h1{font-size:var(--step-3);margin-bottom:.75rem}
+.page-head p{color:var(--ink-2);max-width:60ch}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="download.html">Download</a>
+      <a href="docs/index.html">Docs</a>
+      <a href="about.html">About</a>
+      <a href="contact.html">Contact</a>
+      <a href="account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <div class="wrap page-head">
+    <h1>Download GoSurvey</h1>
+    <p>Windows x64. Free to install. Once installed, GoSurvey checks for new versions itself and asks before installing anything — choose your channel in <span class="mono">Settings → System → Updates</span>.</p>
+  </div>
+
+  <section id="downloads">
+    <div class="wrap">
+      <div id="release-stable" class="tb">
+        <div class="tb-head">
+          <h3>Stable</h3>
+          <span class="chip chip-stable">Recommended</span>
+          <p class="blurb">Tested releases. This is the one to install if you are doing real work.</p>
+        </div>
+        <div class="tb-cells">
+          <div class="cell"><div class="label">Version</div><div class="val" data-f="version">—</div></div>
+          <div class="cell"><div class="label">Released</div><div class="val" data-f="date">—</div></div>
+          <div class="cell"><div class="label">Size</div><div class="val" data-f="size">—</div></div>
+          <div class="cell"><div class="label">Requires</div><div class="val">Windows x64</div></div>
+        </div>
+        <div class="tb-foot">
+          <a class="btn btn-primary" data-f="dl" href="https://github.com/chetjones003/GoSurvey/releases/latest">Download installer</a>
+          <a class="btn btn-ghost" data-f="notes" href="https://github.com/chetjones003/GoSurvey/releases/latest">Release notes</a>
+          <p class="note">Windows may warn that the publisher is unrecognised — the installer is not code-signed yet. Choose <strong>More info → Run anyway</strong>. A SHA-256 checksum is published with every release.</p>
+        </div>
+      </div>
+
+      <div id="release-beta" class="tb">
+        <div class="tb-head">
+          <h3>Beta</h3>
+          <span class="chip chip-beta">Preview</span>
+          <p class="blurb">The next release, published as it is built. Real working builds, but this is where problems are still being found — keep backups of drawings you care about.</p>
+        </div>
+        <div class="tb-cells">
+          <div class="cell"><div class="label">Version</div><div class="val" data-f="version">—</div></div>
+          <div class="cell"><div class="label">Released</div><div class="val" data-f="date">—</div></div>
+          <div class="cell"><div class="label">Size</div><div class="val" data-f="size">—</div></div>
+          <div class="cell"><div class="label">Requires</div><div class="val">Windows x64</div></div>
+        </div>
+        <div class="tb-foot">
+          <a class="btn btn-ghost" data-f="dl" href="https://github.com/chetjones003/GoSurvey/releases/tag/channel-beta">Download installer</a>
+          <a class="btn btn-ghost" data-f="notes" href="https://github.com/chetjones003/GoSurvey/releases/tag/channel-beta">Release notes</a>
+          <p class="note">Already running GoSurvey? Turn on <em>Include beta releases</em> in Settings instead of downloading by hand.</p>
+        </div>
+      </div>
+
+      <p class="dl-fallback" id="beta-none" hidden>
+        No beta build is published at the moment — the stable release above is the current one.
+      </p>
+
+      <p class="dl-fallback" id="dl-note" hidden>
+        Live release details could not be loaded just now.
+        <a href="https://github.com/chetjones003/GoSurvey/releases">Browse all releases on GitHub →</a>
+      </p>
+    </div>
+  </section>
+
+  <section style="background:var(--surface-2)">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="label">Getting started</span>
+        <h2>Installed and drawing in a few minutes.</h2>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <span class="label">First</span>
+          <h3>Install</h3>
+          <p>Download the installer above and run it. GoSurvey installs to Program Files and adds a Start Menu entry. If it will not start, install the Microsoft Visual C++ Redistributable for x64.</p>
+        </div>
+        <div class="step">
+          <span class="label">Then</span>
+          <h3>Set your units</h3>
+          <p>Run <span class="mono">UNITS</span> once and pick the precision and bearing format you work in — surveyor&#39;s bearings, DMS or decimal. Every readout and label follows it.</p>
+        </div>
+        <div class="step">
+          <span class="label">Then</span>
+          <h3>Bring in your data</h3>
+          <p>Import points from a PNEZD CSV, linework from DXF, or raw observations from an FBK file into the Traverse Editor. Either order keeps your points.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div id="install-modal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="install-modal-title">
+  <div class="modal" id="install-modal-panel">
+    <div class="modal-head">
+      <h2 id="install-modal-title">Before you install</h2>
+      <button type="button" class="modal-close" id="install-modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-lede">GoSurvey is free to install, but your browser or Windows may flag the download because the installer is not code-signed yet. Those warnings are normal — follow the steps below and you can install safely.</p>
+      <ol class="modal-steps">
+        <li>
+          <span class="num">1</span>
+          <div>
+            <strong>Download the installer</strong>
+            <p>Click <em>Continue download</em> below. Your browser saves a file named like <span class="mono">GoSurvey-…-Installer.exe</span>.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num">2</span>
+          <div>
+            <strong>If your browser blocks or removes the download</strong>
+            <p>Chrome and Edge often flag an unsigned <span class="mono">.exe</span> with <em>This file isn&rsquo;t commonly downloaded</em> and may discard it. Press <span class="mono">Ctrl+J</span> to open Downloads, find the file, and choose <strong>Keep</strong> or <strong>Keep anyway</strong>. If it was removed, open <a href="https://github.com/chetjones003/GoSurvey/releases/latest" rel="noopener">the release on GitHub</a>, download <span class="mono">GoSurvey-…-Installer.exe</span> from Assets, and choose <strong>Keep</strong> when the browser warns again.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num">3</span>
+          <div>
+            <strong>If SmartScreen appears when you run the installer</strong>
+            <p>Windows may show <em>Windows protected your PC</em> or say the publisher is unrecognised. Click <strong>More info</strong>, then <strong>Run anyway</strong>.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num">4</span>
+          <div>
+            <strong>If the downloaded file is still blocked</strong>
+            <p>Right-click the <span class="mono">.exe</span>, choose <strong>Properties</strong>, check <strong>Unblock</strong> at the bottom, click OK, then run it again.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num">5</span>
+          <div>
+            <strong>Approve the installer</strong>
+            <p>Follow the setup wizard. Windows may ask for permission to install to Program Files — choose Yes. GoSurvey adds a Start Menu entry when finished.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num">6</span>
+          <div>
+            <strong>If GoSurvey will not start</strong>
+            <p>Install the <a href="https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist" rel="noopener">Microsoft Visual C++ Redistributable (x64)</a>, then run GoSurvey again.</p>
+          </div>
+        </li>
+      </ol>
+      <p class="modal-callout">
+        Every release publishes a SHA-256 checksum on GitHub so you can verify the file was not
+        altered in transit. The checksum proves integrity; it does not remove the SmartScreen prompt.
+      </p>
+    </div>
+    <div class="modal-foot">
+      <label class="modal-ack" for="install-modal-ack">
+        <input type="checkbox" id="install-modal-ack">
+        I have read the install instructions above.
+      </label>
+      <button type="button" class="btn btn-primary" id="install-modal-continue" disabled>Continue download</button>
+      <button type="button" class="btn-modal-secondary" id="install-modal-cancel">Not now</button>
+      <p class="note">Need help after installing? See <a href="https://github.com/chetjones003/GoSurvey/wiki">the manual</a>
+        or <a href="https://github.com/chetjones003/GoSurvey/issues">report an issue</a>.</p>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+  var REPO = "chetjones003/GoSurvey";
+
+  function fmtSize(bytes){
+    if(!bytes) return "—";
+    return (bytes/1048576).toFixed(1) + " MB";
+  }
+  function fmtDate(iso){
+    if(!iso) return "—";
+    var d = new Date(iso);
+    if(isNaN(d)) return "—";
+    return d.toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"});
+  }
+  function set(root, field, text){
+    var el = root.querySelector('[data-f="'+field+'"]');
+    if(el) el.textContent = text;
+  }
+
+  function versionFrom(release, installer){
+    if(installer){
+      var m = /^GoSurvey-(.+)-Installer\.exe$/i.exec(installer.name);
+      if(m) return m[1];
+    }
+    var t = (release.tag_name||"").replace(/^v/,"");
+    if(/^\d+\.\d+\.\d+/.test(t)) return t;
+    var n = /(\d+\.\d+\.\d+(?:-[\w.]+)?)/.exec(release.name||"");
+    return n ? n[1] : "—";
+  }
+
+  function fill(elId, release){
+    var root = document.getElementById(elId);
+    if(!root || !release) return false;
+
+    var installer = (release.assets||[]).filter(function(a){
+      return /Installer\.exe$/i.test(a.name);
+    })[0];
+
+    set(root,"version", versionFrom(release, installer));
+    set(root,"date", fmtDate((installer && installer.updated_at) ||
+                             release.published_at || release.created_at));
+
+    var notes = root.querySelector('[data-f="notes"]');
+    if(notes && release.html_url) notes.href = release.html_url;
+
+    if(installer){
+      set(root,"size", fmtSize(installer.size));
+      var dl = root.querySelector('[data-f="dl"]');
+      if(dl){
+        dl.href = installer.browser_download_url;
+        dl.innerHTML = 'Download installer <small>' + fmtSize(installer.size) + '</small>';
+      }
+    }
+    return true;
+  }
+
+  function api(path){
+    return fetch("https://api.github.com/repos/"+REPO+path,{
+      headers:{"Accept":"application/vnd.github+json"}
+    }).then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+  }
+
+  Promise.all([
+    api("/releases/latest"),
+    api("/releases/tags/channel-beta")
+  ]).then(function(res){
+    var okStable = fill("release-stable",res[0]);
+    var okBeta   = fill("release-beta",res[1]);
+
+    if(okStable && !okBeta){
+      var beta = document.getElementById("release-beta");
+      var none = document.getElementById("beta-none");
+      if(beta) beta.hidden = true;
+      if(none) none.hidden = false;
+    } else if(!okStable && !okBeta){
+      var n = document.getElementById("dl-note");
+      if(n) n.hidden = false;
+    }
+  });
+})();
+</script>
+
+<script>
+(function(){
+  "use strict";
+
+  var modal = document.getElementById("install-modal");
+  var panel = document.getElementById("install-modal-panel");
+  var btnContinue = document.getElementById("install-modal-continue");
+  var btnCancel = document.getElementById("install-modal-cancel");
+  var btnClose = document.getElementById("install-modal-close");
+  var chkAck = document.getElementById("install-modal-ack");
+  if(!modal || !panel || !btnContinue || !chkAck || !btnClose) return;
+
+  var pendingUrl = "";
+  var lastFocus = null;
+
+  function syncContinue(){
+    btnContinue.disabled = !chkAck.checked;
+  }
+
+  function resetModal(){
+    chkAck.checked = false;
+    syncContinue();
+  }
+
+  function openModal(url){
+    pendingUrl = url || "";
+    lastFocus = document.activeElement;
+    resetModal();
+    modal.hidden = false;
+    document.body.style.overflow = "hidden";
+    panel.scrollTop = 0;
+    btnClose.focus({preventScroll:true});
+  }
+
+  function closeModal(){
+    modal.hidden = true;
+    document.body.style.overflow = "";
+    panel.scrollTop = 0;
+    pendingUrl = "";
+    resetModal();
+    if(lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
+  }
+
+  function triggerDownload(url){
+    if(!url) return;
+    var a = document.createElement("a");
+    a.href = url;
+    a.rel = "noopener";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  document.addEventListener("click", function(e){
+    var dl = e.target.closest('[data-f="dl"]');
+    if(!dl || dl.hidden) return;
+    var href = dl.getAttribute("href");
+    if(!href || href.charAt(0) === "#") return;
+    e.preventDefault();
+    openModal(href);
+  });
+
+  chkAck.addEventListener("change", syncContinue);
+
+  btnContinue.addEventListener("click", function(){
+    if(btnContinue.disabled) return;
+    var url = pendingUrl;
+    closeModal();
+    triggerDownload(url);
+  });
+
+  btnCancel.addEventListener("click", closeModal);
+  btnClose.addEventListener("click", closeModal);
+
+  modal.addEventListener("click", function(e){
+    if(e.target === modal) closeModal();
+  });
+
+  document.addEventListener("keydown", function(e){
+    if(modal.hidden) return;
+    if(e.key === "Escape") closeModal();
+  });
+})();
+</script>
+
+</body>
+</html>

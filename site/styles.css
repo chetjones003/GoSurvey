@@ -76,6 +76,11 @@ body{
   font-size:var(--step-0);
   line-height:1.6;
   -webkit-font-smoothing:antialiased;
+  /* The hero screenshot stack is intentionally scaled past its grid column on
+     desktop (see .hero-stack) so it reads bigger without resizing the column
+     itself; clip at the page level so that bleed can never add a horizontal
+     scrollbar. */
+  overflow-x:clip;
 }
 h1,h2,h3{
   font-family:"IBM Plex Sans Condensed","IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
@@ -90,7 +95,7 @@ a{color:inherit}
 img{max-width:100%;display:block}
 :focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:2px}
 
-.wrap{width:min(100% - 2.5rem,74rem);margin-inline:auto}
+.wrap{width:min(100% - 1rem,74rem);margin-inline:auto}
 .mono{font-family:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace}
 .tnum{font-variant-numeric:tabular-nums}
 
@@ -127,13 +132,126 @@ img{max-width:100%;display:block}
 .nav a:hover{color:var(--ink)}
 @media (max-width:44rem){.nav a.hide-sm{display:none}}
 
-/* ---------------- hero ---------------- */
-.hero{padding:clamp(3rem,7vw,6rem) 0 clamp(3rem,6vw,5.5rem)}
-.hero-grid{display:grid;gap:2.5rem}
-@media (min-width:60rem){.hero-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);align-items:center;gap:4rem}}
-.hero h1{font-size:var(--step-4);font-weight:700;letter-spacing:-.025em}
-.hero .lede{font-size:var(--step-1);color:var(--ink-2);max-width:34ch;margin-top:1.15rem}
-.hero-cta{display:flex;flex-wrap:wrap;gap:.75rem;margin-top:2rem;align-items:center}
+/* ---------------- hero ----------------
+   Sized to fit inside one screen on a typical laptop/desktop viewport (no
+   scroll needed to see the CTA and the screenshot stack): the masthead is
+   3.75rem tall, so the hero targets the rest of that 100vh and every internal
+   gap/font scales off BOTH vw and vh via clamp() so a short window shrinks
+   the whole block instead of just clipping it. */
+.hero{
+  min-height:calc(100vh - 3.75rem);
+  min-height:calc(100svh - 3.75rem);
+  display:flex;align-items:center;
+  padding:clamp(1.25rem,4vh,3rem) 0;
+  box-sizing:border-box;
+}
+.hero-grid{display:grid;gap:clamp(1.5rem,3vw,3rem)}
+@media (min-width:60rem){.hero-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:center;gap:clamp(2rem,4vw,4rem)}}
+.hero h1{font-size:clamp(2rem,1.3rem + 2.2vw + 1.5vh,3.6rem);font-weight:700;letter-spacing:-.025em}
+.hero .accent-text{color:var(--steel)}
+.hero .lede{font-size:clamp(.92rem,.85rem + .3vw,1.05rem);color:var(--ink-2);max-width:50ch;margin-top:.9rem}
+.hero-cta{display:flex;flex-wrap:wrap;gap:.65rem;margin-top:clamp(.9rem,2.4vh,1.4rem);align-items:center}
+
+.hero-wordmark{display:flex;align-items:center;gap:.65rem;margin-bottom:clamp(.6rem,2vh,1rem)}
+.hero-badge{
+  width:2.3rem;height:2.3rem;border-radius:.6rem;flex:none;
+  background:linear-gradient(135deg,var(--steel),color-mix(in srgb,var(--steel) 70%,#000));
+  color:var(--surface);display:flex;align-items:center;justify-content:center;
+  font-weight:800;font-size:.9rem;letter-spacing:-.01em;
+  font-family:"IBM Plex Sans Condensed",sans-serif;
+}
+.hero-badge-name{font-weight:700;font-size:.95rem;letter-spacing:-.01em}
+.hero-badge-tag{font-size:.72rem;color:var(--ink-3);font-weight:500}
+
+.hero-workflows{margin-top:clamp(.7rem,2vh,1.1rem)}
+.hero-workflows p{margin-top:.4rem;font-size:.82rem;color:var(--ink-2);font-weight:500}
+
+.hero-feat-grid{margin-top:clamp(.7rem,2vh,1.1rem)}
+.hero-feats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.65rem 1.25rem;margin-top:.6rem}
+.hero-feat{display:flex;gap:.6rem}
+.hero-feat-ico{
+  width:1.85rem;height:1.85rem;border-radius:.5rem;flex:none;
+  display:flex;align-items:center;justify-content:center;
+  background:color-mix(in srgb,var(--steel) 14%,transparent);
+  border:1px solid color-mix(in srgb,var(--steel) 32%,transparent);
+  color:var(--steel);
+}
+.hero-feat-ico svg{width:15px;height:15px}
+.hero-feat h3{font-size:.84rem;font-weight:600;color:var(--ink);margin:0}
+.hero-feat p{font-size:.76rem;color:var(--ink-3);line-height:1.45;margin-top:.15rem}
+
+.hero-formats{margin-top:clamp(.7rem,2vh,1.1rem)}
+.hero-format-pills{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.55rem}
+.hero-format-pills span{
+  padding:.3rem .65rem;border-radius:.4rem;font-size:.72rem;font-weight:600;
+  background:var(--surface-2);border:1px solid var(--rule);color:var(--ink-2);
+}
+
+/* Hero screenshot stack: three real app screenshots tilted in shared 3D space,
+   front-to-back depth sold by rotation plus stacked, offset drop shadows rather
+   than a single flat shadow. Positions are in % of the stack's own box so the
+   whole composition scales as one unit at any viewport width. Width is capped
+   with clamp() (not a bare %) so the stack shrinks on a short viewport instead
+   of forcing the hero taller than the screen. */
+.hero-stack{
+  position:relative;width:100%;max-width:clamp(20rem,52vh,38rem);
+  margin-inline:auto;aspect-ratio:4/3.3;
+  perspective:1400px;perspective-origin:64% 38%;
+}
+/* Sized by widening the grid COLUMN itself, not a transform: scale() on a
+   perspective()'d element forces the browser to rasterize the 3D-transformed
+   image at its pre-scale size and then blow that bitmap up, which is what
+   made the screenshots look soft. Growing the actual layout box keeps every
+   image rendered crisp at its real on-screen size. */
+@media (min-width:60rem){
+  .hero-stack{max-width:none;margin-inline:0}
+  .hero-grid{grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr)}
+}
+.hero-stack-img{
+  position:absolute;display:block;width:57%;height:auto;
+  border-radius:.6rem;
+  border:1px solid color-mix(in srgb,var(--ink) 12%,transparent);
+  transform-style:preserve-3d;
+  transform:rotateX(9deg) rotateY(-16deg) rotateZ(1.6deg);
+}
+.hero-stack-back{
+  top:0;right:0;width:47%;z-index:1;
+  box-shadow:
+    4% 6% 3% -2% rgba(0,0,0,.4),
+    8% 11% 6% -3% rgba(0,0,0,.3);
+}
+.hero-stack-mid{
+  top:15%;left:0;width:58%;z-index:2;
+  box-shadow:
+    5% 8% 4% -2% rgba(0,0,0,.45),
+    10% 14% 8% -3% rgba(0,0,0,.35),
+    16% 21% 13% -4% rgba(0,0,0,.25);
+}
+.hero-stack-front{
+  bottom:6%;right:-1%;width:57%;z-index:3;
+  transform:rotateX(9deg) rotateY(-16deg) rotateZ(1.8deg);
+  box-shadow:
+    -5% 8% 4% -2% rgba(0,0,0,.45),
+    -10% 14% 8% -3% rgba(0,0,0,.35),
+    -16% 21% 13% -4% rgba(0,0,0,.25);
+}
+@media (max-width:36rem){
+  .hero-stack-img{transform:none}
+  .hero-stack-front{transform:none}
+}
+
+/* Below the breakpoint where hero-grid stacks to one column, the hero no
+   longer tries to fit one viewport — it reads top to bottom like the rest of
+   the page instead of cramming every line to avoid a scrollbar. Phone width
+   also drops the feature grid to one column and trims the badge/CTA further. */
+@media (max-width:60rem){
+  .hero{min-height:0;display:block;padding:clamp(2rem,6vw,3rem) 0}
+}
+@media (max-width:26rem){
+  .hero-feats{grid-template-columns:1fr}
+  .hero-cta .btn{width:100%;justify-content:center}
+  .hero-cta{flex-direction:column;align-items:stretch}
+}
 
 /* Live readout — first item in the masthead, ahead of the wordmark.
    The masthead is sticky, so the reading follows you down the page without needing its own
@@ -217,165 +335,6 @@ section{padding:clamp(3.5rem,7vw,6.5rem) 0}
 .sec-head h2{font-size:var(--step-3)}
 .sec-head p{color:var(--ink-2);font-size:var(--step-1);max-width:50ch}
 
-/* ---------------- feature carousel (copy + 3D media) ---------------- */
-#features{padding-bottom:clamp(4.5rem,9vw,7.5rem)}
-#features .sec-head{margin-bottom:clamp(1.25rem,2.5vw,1.75rem)}
-#features .sec-head h2{font-size:var(--step-2);max-width:28ch}
-#features .sec-head p{font-size:.95rem;max-width:46ch}
-.feature-frame{
-  border:1px solid var(--rule);background:var(--surface);
-  box-shadow:var(--shadow);border-radius:3px;overflow:hidden;
-}
-.feature-body{
-  display:grid;gap:1.15rem;
-  padding:clamp(1.15rem,2.2vw,1.65rem);
-  overflow:hidden;
-}
-@media (min-width:50rem){
-  .feature-body{
-    grid-template-columns:minmax(0,36%) minmax(0,64%);
-    gap:clamp(1.75rem,3.5vw,2.75rem);
-    padding:clamp(1.25rem,2.5vw,1.85rem) clamp(1.35rem,2.8vw,2rem);
-    align-items:center;
-  }
-}
-.feature-copy{
-  position:relative;min-height:9.5rem;align-self:center;
-  min-width:0;overflow:hidden;overflow:clip;
-  z-index:2;padding-right:.15rem;
-}
-.feature-copy-panel{
-  position:absolute;top:0;left:0;width:100%;margin:0;
-  opacity:0;visibility:hidden;
-  transform:translate3d(0,12px,0);
-  transition:opacity .45s ease,transform .55s cubic-bezier(.22,1,.36,1),visibility 0s .55s;
-}
-.feature-copy-panel.is-active{
-  position:relative;opacity:1;visibility:visible;transform:translate3d(0,0,0);
-  transition:opacity .5s ease .05s,transform .6s cubic-bezier(.22,1,.36,1),visibility 0s;
-}
-.feature-frame.is-forward .feature-copy-panel.is-active{
-  animation:feature-copy-in-fwd .65s cubic-bezier(.22,1,.36,1) both;
-}
-.feature-frame.is-back .feature-copy-panel.is-active{
-  animation:feature-copy-in-back .65s cubic-bezier(.22,1,.36,1) both;
-}
-@keyframes feature-copy-in-fwd{
-  from{opacity:0;transform:translate3d(10px,0,0)}
-  to{opacity:1;transform:translate3d(0,0,0)}
-}
-@keyframes feature-copy-in-back{
-  from{opacity:0;transform:translate3d(-10px,0,0)}
-  to{opacity:1;transform:translate3d(0,0,0)}
-}
-.feature-copy-panel h3{font-size:clamp(1.1rem,.95rem + .35vw,1.35rem);letter-spacing:-.012em}
-.feature-copy-panel .slide-lede{
-  color:var(--ink-2);font-size:.88rem;line-height:1.5;margin:.45rem 0 0;
-}
-.feature-copy-panel ul{
-  margin:.55rem 0 0;padding-left:1rem;color:var(--ink-3);font-size:.8rem;line-height:1.4;
-  display:flex;flex-direction:column;gap:.15rem;
-}
-.feature-media-wrap{
-  position:relative;min-width:0;
-  padding:0 clamp(2.35rem,4vw,3rem);
-  overflow:hidden;overflow:clip;z-index:1;
-}
-.feature-media-stage{
-  position:relative;height:clamp(11rem,26vw,19rem);
-  perspective:1300px;perspective-origin:62% 50%;
-  outline:none;border-radius:3px;
-  overflow:hidden;overflow:clip;
-}
-.feature-media-stage:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.feature-media-cards{
-  position:absolute;inset:0;transform-style:preserve-3d;
-}
-.feature-media-card{
-  position:absolute;inset:0;margin:0;display:flex;align-items:center;justify-content:center;
-  pointer-events:none;z-index:1;
-  transition:opacity .55s ease,filter .55s ease;
-}
-.feature-media-card .shot{
-  width:min(88%,100%);margin:0;overflow:hidden;
-  transform:translate3d(0,0,-180px) scale(.55);
-  opacity:0;
-  transition:transform .85s cubic-bezier(.22,1,.36,1),opacity .55s ease,box-shadow .55s ease;
-  transform-origin:62% 50%;backface-visibility:hidden;
-  will-change:transform,opacity;
-}
-/* Captions on peeking 3D cards strip-read as ghost text beside the nav arrow — alt text is enough. */
-#feature-carousel .feature-media-card .shot figcaption{display:none !important}
-.feature-media-card.is-active{z-index:4;opacity:1;filter:none}
-.feature-media-card.is-active .shot{
-  transform:translate3d(0,0,0) rotateY(0deg) scale(1);
-  transform-origin:50% 50%;
-  opacity:1;
-  box-shadow:0 16px 40px rgba(18,22,26,.16);
-}
-.feature-media-card.is-prev{z-index:2;opacity:1;filter:brightness(.92) saturate(.95)}
-.feature-media-card.is-prev .shot{
-  transform:translate3d(-22%,0,-70px) rotateY(28deg) scale(.82);
-  transform-origin:78% 50%;
-  opacity:.7;
-}
-.feature-media-card.is-next{z-index:2;opacity:1;filter:brightness(.92) saturate(.95)}
-.feature-media-card.is-next .shot{
-  transform:translate3d(18%,0,-70px) rotateY(-26deg) scale(.8);
-  transform-origin:22% 50%;
-  opacity:.55;
-}
-.feature-media-card.is-far{z-index:1;opacity:1;pointer-events:none;filter:none}
-.feature-media-card.is-far .shot{
-  transform:translate3d(0,0,-220px) scale(.5);
-  opacity:0;
-}
-.feature-edge{
-  position:absolute;top:50%;z-index:6;
-  width:2.75rem;height:2.75rem;margin-top:-1.375rem;
-  display:grid;place-items:center;
-  font-size:1.55rem;line-height:1;
-  color:var(--ink);background:color-mix(in srgb,var(--surface) 88%,transparent);
-  border:1px solid var(--rule-strong);border-radius:50%;cursor:pointer;
-  backdrop-filter:blur(8px);box-shadow:var(--shadow);
-  transition:transform .2s ease,border-color .15s,color .15s,background .15s;
-}
-.feature-edge:hover{
-  transform:scale(1.07);border-color:var(--accent);color:var(--accent);
-}
-.feature-edge.prev{left:0}
-.feature-edge.next{right:0}
-@media (max-width:49.99rem){
-  .feature-body{grid-template-columns:1fr}
-  .feature-media-wrap{order:-1;padding:0 2.5rem}
-  .feature-media-stage{height:clamp(10rem,52vw,14rem)}
-  .feature-media-card.is-prev,.feature-media-card.is-next{opacity:0}
-  .feature-copy-panel ul{display:none}
-}
-.feature-nav{
-  display:flex;flex-wrap:wrap;align-items:center;justify-content:center;
-  gap:.65rem 1rem;padding:.75rem 1rem;
-  border-top:1px solid var(--rule);
-  background:color-mix(in srgb,var(--surface-2) 45%,var(--surface));
-}
-.feature-nav-btn{
-  font:inherit;color:var(--ink);background:transparent;
-  border:1px solid var(--rule-strong);border-radius:2px;
-  padding:.45rem .85rem;font-weight:600;font-size:.85rem;cursor:pointer;
-  transition:background .15s,border-color .15s,color .15s;
-}
-.feature-nav-btn:hover{border-color:var(--accent);color:var(--accent)}
-.feature-dots{display:flex;flex-wrap:wrap;gap:.45rem;justify-content:center}
-.feature-dot{
-  width:.5rem;height:.5rem;border-radius:50%;padding:0;border:1px solid var(--rule-strong);
-  background:var(--surface-2);cursor:pointer;
-  transition:background .25s ease,border-color .25s ease,transform .3s cubic-bezier(.22,1,.36,1);
-}
-.feature-dot[aria-current="true"]{background:var(--accent);border-color:var(--accent);transform:scale(1.2)}
-.feature-status{
-  font-family:"IBM Plex Mono",monospace;font-size:.68rem;letter-spacing:.08em;
-  text-transform:uppercase;color:var(--ink-3);font-variant-numeric:tabular-nums;
-}
 /* ---------------- downloads: drawing title block ----------------
    A plat's title block is a bordered grid of labelled cells in the corner of
    the sheet. Reusing it here is not ornament: each cell holds one real fact
@@ -519,16 +478,5 @@ footer a{color:var(--ink-2)}
 footer .right{margin-left:auto;display:flex;gap:1.5rem}
 
 @media (prefers-reduced-motion:reduce){
-  *:not(#feature-carousel):not(#feature-carousel *){animation-duration:.01ms !important;transition-duration:.01ms !important}
-}
-/* Carousel motion is intentional on the marketing page — keep durations above the RM clamp. */
-#feature-carousel .feature-media-card .shot{
-  transition:transform .85s cubic-bezier(.22,1,.36,1),opacity .55s ease,box-shadow .55s ease !important;
-}
-#feature-carousel .feature-copy-panel{
-  transition:opacity .5s ease,transform .6s cubic-bezier(.22,1,.36,1),visibility 0s !important;
-}
-#feature-carousel.is-forward .feature-copy-panel.is-active,
-#feature-carousel.is-back .feature-copy-panel.is-active{
-  animation-duration:.65s !important;
+  *{animation-duration:.01ms !important;transition-duration:.01ms !important}
 }
