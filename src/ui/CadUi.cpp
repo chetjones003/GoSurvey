@@ -4287,8 +4287,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
               columnOfButtons({
                   rowBtn("##CgdPoints", (int)RibbonIconKind::SurveyPoint, nullptr, "Points", false,
                          "Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS", compact),
-                  rowBtn("##CgdFeatureLine", -1, "c3d_featureline", "Feature Line", true,
-                         "Feature Line — not implemented yet.", compact),
+                  rowBtn("##CgdFeatureLine", -1, "c3d_featureline", "Feature Line", false,
+                         "Feature Line — named 3D design linework.\nCommand bar: FEATURELINE", compact),
                   rowBtn("##CgdTraverse", (int)RibbonIconKind::Traverse, nullptr, "Traverse", false,
                          "Traverse Editor — raw observations, Face 1/Face 2, least-squares closure.\nCommand bar: TRAVERSE",
                          compact),
@@ -4308,6 +4308,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           drawRibbonSectionSpec("RibbonSecGroundData", "Create Ground Data", spec, [&](const std::string& id) {
             if (id == "##CgdPoints") StartCreatePointsCommand(cmd, log);
             else if (id == "##CgdTraverse") StartTraverseEditorCommand(cmd, log);
+            else if (id == "##CgdFeatureLine") {
+              CancelActiveCommand(cmd, log);
+              StartFeatureLineCommand(cmd, "", log);
+            }
           });
         }, "Create Ground Data", RibbonIconKind::SurveyPoint});
       }
@@ -4317,13 +4321,6 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         auto buildSpec = [&](bool compact) {
           ribbonlayout::RibbonSectionSpec spec;
           spec.groupGapX = 4.f;
-          auto col2 = [&](const char* id1, const char* ic1, const char* l1, const char* id2, const char* ic2,
-                          const char* l2) {
-            return columnOfButtons({
-                rowBtn(id1, -1, ic1, l1, true, (std::string(l1) + " — not implemented yet.").c_str(), compact),
-                rowBtn(id2, -1, ic2, l2, true, (std::string(l2) + " — not implemented yet.").c_str(), compact),
-            });
-          };
           auto col3 = [&](const char* id1, const char* ic1, const char* l1, const char* id2, const char* ic2,
                           const char* l2, const char* id3, const char* ic3, const char* l3) {
             return columnOfButtons({
@@ -4335,7 +4332,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           // Parcel, Assembly, Intersections, Pond, Underground Storage, and Channel were removed
           // (issue #802) — not planned for implementation, so no placeholder button either.
           spec.groups = {
-              col2("##CdFeatureLine", "c3d_featureline", "Feature Line", "##CdGrading", "c3d_grading", "Grading"),
+              columnOfButtons({
+                  rowBtn("##CdFeatureLine", -1, "c3d_featureline", "Feature Line", false,
+                         "Feature Line — named 3D design linework.\nCommand bar: FEATURELINE", compact),
+                  rowBtn("##CdGrading", -1, "c3d_grading", "Grading", true, "Grading — not implemented yet.",
+                         compact),
+              }),
               col3("##CdAlignment", "c3d_alignment", "Alignment", "##CdProfile", "c3d_profile", "Profile",
                    "##CdCorridor", "c3d_corridor", "Corridor"),
               columnOfButtons({
@@ -4357,6 +4359,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
             if (id == "##CdPipeNetwork") {
               CancelActiveCommand(cmd, log);
               StartPipeRunAtCurrentSize(cmd, log);
+            } else if (id == "##CdFeatureLine") {
+              CancelActiveCommand(cmd, log);
+              StartFeatureLineCommand(cmd, "", log);
             }
           });
         }, "Create Design", RibbonIconKind::Nyi, "c3d_alignment"});
