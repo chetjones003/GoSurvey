@@ -6743,7 +6743,7 @@ const CmdEntry kRegistry[] = {
     {"stretch", "s", "Crossing/window-select, then move only the vertices inside the box"},
     {"fillet", "f", "Round a corner between two curves with a tangent arc (Radius/Trim)"},
     {"chamfer", "cha", "Connect two curves with a straight bevel (Distance/Angle/Trim)"},
-    {"delete", "del", "Erase objects"},
+    {"delete", "del, erase", "Erase objects"},
     {"chprop", "", "Change the color, layer, linetype or lineweight of selected objects"},
     {"matchprop", "ma, painter", "Copy one object's layer, color, linetype and lineweight onto others"},
     {"laymcur", "", "Make the layer of a picked object current"},
@@ -6933,76 +6933,6 @@ int FuzzySubsequenceScore(std::string_view query, std::string_view cand) {
     return -1;
   score += static_cast<int>(50 - cand.size());
   return score;
-}
-
-bool TryStrongFuzzyDispatch(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  std::string line = StringUtil::trimCopy(lineIn);
-  if (line.empty())
-    return false;
-  std::vector<std::string> tokens;
-  std::istringstream iss(line);
-  std::string tok;
-  while (iss >> tok)
-    tokens.push_back(StringUtil::toLowerAsciiCopy(tok));
-  if (tokens.empty())
-    return false;
-
-  std::unordered_map<std::string, int> bestPerPrimary;
-  for (const std::string& t : tokens) {
-    for (const CmdEntry& e : kRegistry) {
-      const std::string prim = StringUtil::toLowerAsciiCopy(std::string(e.primary));
-      auto considerCand = [&](const std::string& candLower) {
-        const int sc = FuzzySubsequenceScore(t, candLower);
-        if (sc < 0)
-          return;
-        auto it = bestPerPrimary.find(prim);
-        if (it == bestPerPrimary.end() || sc > it->second)
-          bestPerPrimary[prim] = sc;
-      };
-      considerCand(prim);
-      if (e.aliases[0] == '\0')
-        continue;
-      std::istringstream als(std::string(e.aliases));
-      std::string a;
-      while (std::getline(als, a, ',')) {
-        a = StringUtil::trimCopy(a);
-        if (a.empty())
-          continue;
-        considerCand(StringUtil::toLowerAsciiCopy(a));
-      }
-    }
-  }
-
-  std::vector<std::pair<int, std::string>> ranked;
-  ranked.reserve(bestPerPrimary.size());
-  for (const auto& kv : bestPerPrimary)
-    ranked.push_back({kv.second, kv.first});
-  std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) {
-    if (a.first != b.first)
-      return a.first > b.first;
-    return a.second < b.second;
-  });
-  if (ranked.empty())
-    return false;
-
-  const int bestSc = ranked[0].first;
-  const int secondSc = ranked.size() > 1 ? ranked[1].first : -1;
-
-  size_t maxTokLen = 0;
-  for (const auto& t : tokens)
-    maxTokLen = std::max(maxTokLen, t.size());
-
-  const bool shortQuery = (tokens.size() == 1 && maxTokLen <= 2);
-  const int minScore = shortQuery ? 72 : 45;
-  const int margin = shortQuery ? 48 : 22;
-  if (bestSc < minScore)
-    return false;
-  if (secondSc >= 0 && bestSc - secondSc < margin)
-    return false;
-
-  DispatchByPrimary(ranked[0].second, st, log);
-  log.push_back("Matched \"" + ranked[0].second + "\" from fuzzy command match.");
-  return true;
 }
 
 static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
@@ -45233,10 +45163,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   // which words are command names — which is the whole basis of that message.
   if (const CmdEntry* e = FindRegistryEntry(low)) {
     DispatchByPrimary(StringUtil::toLowerAsciiCopy(e->primary), st, log);
-    return;
-  }
-
-  if (TryStrongFuzzyDispatch(line, st, log)) {
     return;
   }
 

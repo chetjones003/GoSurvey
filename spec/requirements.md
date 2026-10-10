@@ -12270,6 +12270,45 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-09 — initial (D-2026-10-09-b, issue #751/#753 follow-up V3).
 
+### REQ-405 — Command-line name resolution never silently runs a different command (GitHub issue #766, follow-up to #751/#753 N2/E5)
+- Purpose: issue #753's audit (N2/E5) found that the command line's "strong fuzzy" matcher ran a
+  DIFFERENT command than the one typed, with no confirmation and no warning logged first: `ERASE`
+  opened Drawing Settings (a subsequence match against `editdrawingsettings`, `DELETE`'s actual
+  command), `RENAME` ran `SURFACERENAME`, and `TABLE` ran `VOLTABLE`. Each of those three typed
+  words is a plausible, real-sounding command name — not a typo a user would expect to be
+  "corrected" — so silently substituting a different command is a wrong-action risk (an unwanted
+  erase-adjacent dialog, a destructive rename, a report insert) rather than a convenience.
+- Priority: must
+- Type: functional
+- Decision: D-2026-10-10-a — a line that does not exactly match a registered command name or alias
+  (case-insensitive) is NEVER auto-dispatched to a different command. It is only ever: (1) dispatched,
+  when it is an exact name/alias match; or (2) met with a "Did you mean: ..." suggestion list (the
+  existing prefix/subsequence-ranked `FuzzyCommandMatches`), which the user must retype or otherwise
+  explicitly choose — never auto-run. The command-bar autocomplete popup (prefix-only suggestions,
+  already requiring an explicit Enter/click on a highlighted row) is unaffected; this closes the
+  separate, un-confirmed `TryStrongFuzzyDispatch` subsequence-match auto-run path that acted before
+  logging anything.
+- Statement:
+  1. The command-line submit path resolves a typed line to a command ONLY through an exact
+     case-insensitive match of the registry's primary name or one of its comma-separated aliases.
+  2. `ERASE` is registered as an alias of `DELETE` (AutoCAD/nanoCAD parity), so it now runs DELETE
+     directly as an exact-match alias rather than falling through to any fuzzy path.
+  3. When a typed line matches no primary name or alias exactly, no command runs. The existing
+     ranked "Did you mean: A, B, C?" hint (or "Unknown command. Type HELP." when nothing is close)
+     is logged instead, and the user must type one of the suggested names themselves.
+  4. This governs the *typed-line* resolution only. It does not change the command-bar's live
+     autocomplete popup (REQ-040-adjacent), which already requires the user to see and pick/confirm
+     a highlighted suggestion before Enter submits it.
+- Acceptance:
+  - `[req405]` tests: typing `ERASE` with one or more objects selected runs DELETE (objects removed,
+    undoable) and never opens Drawing Settings; typing `RENAME` alone runs neither SURFACERENAME nor
+    any other command and instead logs a "Did you mean" hint or "Unknown command"; typing `TABLE`
+    alone likewise runs no command and never runs VOLTABLE; an exact alias (e.g. `DEL`, `ERASE`)
+    still dispatches DELETE directly.
+- Owner-layer: Commands (`CadCommands.cpp`)
+- Status: accepted
+- Revisions: 2026-10-10 — initial (D-2026-10-10-a, GitHub issue #766, follow-up to #751/#753 N2/E5).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
