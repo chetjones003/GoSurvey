@@ -1,0 +1,49 @@
+# Issue #72 — the DXF exporter must not reference a LAYER it never defines.
+#
+# Before writing the LAYER table, `ExportDxfFile_Impl` collects every layer name the file will
+# mention. That sweep visited `userLineAttrs`, `userCircleAttrs`, `cadAnnotationAttrs`,
+# `surveyPoints` and `drawingLayerTable` — and neither `userPolylineAttrs` nor
+# `cadFilledRegionAttrs`. A polyline and a hatch were therefore the two entities that could write a
+# group-8 layer reference the LAYER table did not define, which is an invalid file, written with no
+# warning and no log line.
+#
+# Same omission as #71, in a different sweep, from the same cause: REQ-053 gave the exporter a
+# LWPOLYLINE branch and none of the book-keeping around it, and the HATCH branch was added the same
+# way. Filed by TASK-083 as OBS-2 and left for this task.
+#
+# WHY THE FIXTURE IS AN IMPORTED FILE rather than a drawing built by commands: `drawingLayerTable`
+# is swept, so any layer the user created in this session is named by that row and the defect stays
+# masked. It only surfaces for a layer that arrived on an imported entity without a LAYER table row
+# of its own — which is exactly what files written by other software look like. Building the
+# drawing with CMD would test the masked path and pass either way.
+#
+# Fails before the fix:
+#   EXPECT LAYERSDEFINED -> 2 layer(s) referenced by an entity but absent from the LAYER table:
+#                           GHOST, GHOST2 (1 defined, 3 referenced)
+#
+# GHOST2 (the hatch) is NOT named in issue #72, which reports only the polyline. It is the same
+# defect in the same sweep and is fixed here with it.
+
+NEW
+
+# An LWPOLYLINE on GHOST and a solid HATCH on GHOST2, in a file with no TABLES section at all.
+IMPORT DXF %DATA%/ghost-layer-entities.dxf
+CHECK ALL
+EXPECT POLYLINES 1
+
+# Vacuity guard, in the spirit of EXPECT DIFFERENTFILE: if the import dropped the hatch, the
+# GHOST2 half of this oracle would be checking nothing while still reporting success.
+EXPECT LOG "DXF import"
+
+EXPORT DXF %OUT%/ghost-out.dxf
+
+# The assertion: every layer an entity names has an AcDbLayerTableRecord in the same file.
+EXPECT LAYERSDEFINED %OUT%/ghost-out.dxf
+
+# And the file still round-trips — the added LAYER rows must not have disturbed anything else.
+NEW
+IMPORT DXF %OUT%/ghost-out.dxf
+CHECK ALL
+EXPECT POLYLINES 1
+EXPORT DXF %OUT%/ghost-out-b.dxf
+EXPECT SAMEFILE %OUT%/ghost-out.dxf %OUT%/ghost-out-b.dxf

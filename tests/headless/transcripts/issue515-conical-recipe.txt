@@ -1,0 +1,191 @@
+# GitHub issue #515 (D-2026-09-16-c, TASK-261) — a cylinder or cone cuts the same way however it
+# was made.
+#
+# SECTION and SLICE cut a curved solid only when it is described as a CYLINDER or CONE. EXTRUDE,
+# REVOLVE and LOFT built exactly those shapes and described them as nothing, so the identical solid
+# sectioned when made by CYLINDER and was refused when made by EXTRUDE. Each block below makes the
+# same shape twice — by the primitive command and by the feature command — and asserts the two now
+# give the same answer, through the commands a user types.
+#
+# BrepTests `[issue515]` proves the kernel half (slice piece volumes, section loops, orientation,
+# survey magnitude, the look-alikes that must NOT be described). This file proves the document half:
+# the kind the user sees, the cut through SECTION and SLICE, and that the description survives .gs.
+
+NEW
+
+# --- EXTRUDE of a circle against CYLINDER --------------------------------------------------------
+#
+# Both r 30, 50 tall, from z = -25 to z = 25, so the WORLD plane z = 0 crosses both at mid-height
+# (typed coordinates are two-dimensional outside 3DPOLY, so the UCS stays World and the solids move
+# instead). The primitive at the origin, the extrusion at x = 200.
+
+CMD CYLINDER 0,0,-25 30 50
+CMD ELEV
+CMD -25
+ESC
+CMD CIRCLE
+CMD 200,0
+CMD 30
+ESC
+CMD ELEV
+CMD 0
+ESC
+BOX 160 -40 240 40
+EXPECT SELECTED 1
+CMD EXTRUDE 50
+EXPECT SOLIDS 2
+EXPECT SOLIDKIND 0 Cylinder
+EXPECT SOLIDKIND 1 Cylinder
+EXPECT SOLIDPROPS 1 141371.6694115545 15079.644737231007 4 6 4
+
+
+# SECTION across the axis at z = 0: before #515 the extrusion was refused with "flat faces only".
+CMD SELECT
+ESC
+BOX 160 -40 240 40
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+ESC
+CMD SELECT
+ESC
+BOX -40 -40 40 40
+CMD SECTION
+CMD UCS
+EXPECT POLYLINES 2
+ESC
+
+# SLICE both at z = 0, keeping both halves: the same four pieces, pairwise equal.
+CMD SELECT
+ESC
+BOX -40 -40 240 40
+# the window also takes the source circle and the two section outlines; SLICE uses the solids
+CMD SLICE
+CMD 0,0
+CMD 10,0
+CMD 0,10
+CMD B
+EXPECT LOG "SLICE — 2 solid(s) cut into 4 piece(s)."
+EXPECT SOLIDS 4
+# Each half: pi*30^2*25 = 70685.83470577035, area 2*pi*30^2 + 2*pi*30*25 = 10367.255756846318.
+EXPECT SOLIDPROPS 0 70685.83470577035 10367.255756846318 4 6 4
+EXPECT SOLIDPROPS 1 70685.83470577035 10367.255756846318 4 6 4
+EXPECT SOLIDPROPS 2 70685.83470577035 10367.255756846318 4 6 4
+EXPECT SOLIDPROPS 3 70685.83470577035 10367.255756846318 4 6 4
+CMD SOLIDLIST
+CHECK ALL
+
+# --- REVOLVE of a rectangle about one edge, and LOFT of two coaxial circles, against CONE ------
+NEW
+
+CMD POLYLINE
+CMD 0,0
+CMD 4,0
+CMD 4,10
+CMD 0,10
+CMD CLOSE
+ESC
+BOX -1 -1 5 11
+CMD REVOLVE
+CLICK 0 0
+CLICK 0 10
+CMD 360
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Cylinder
+# The creation message names what the solid is, as SOLIDLIST does (code review on #515). This is the
+# only solid in the drawing so far, so the line can only be REVOLVE's.
+EXPECT LOG "Cylinder created — volume 502.6548"
+
+# Two coaxial circles, r 6 at z -5 and r 3 at z 5: the frustum CONE 300,0,-5 6 3 10 builds.
+CMD ELEV
+CMD -5
+ESC
+CMD CIRCLE
+CMD 300,0
+CMD 6
+ESC
+CMD ELEV
+CMD 5
+ESC
+CMD CIRCLE
+CMD 300,0
+CMD 3
+ESC
+CMD ELEV
+CMD 0
+ESC
+CMD SELECT
+ESC
+BOX 290 -10 310 10
+EXPECT SELECTED 2
+CMD LOFT
+EXPECT SOLIDS 2
+EXPECT SOLIDKIND 1 Cone
+# Before the CONE primitive below exists, so this line can only be LOFT's.
+EXPECT LOG "Cone created — volume 659.7345"
+CMD CONE 500,0,-5 6 3 10
+EXPECT SOLIDKIND 2 Cone
+# The same volume and topology as the primitive — built as one, not approximated by a ribbon.
+EXPECT SOLIDPROPS 1 659.7344572538566 436.5644160081826 4 6 4
+EXPECT SOLIDPROPS 2 659.7344572538566 436.5644160081826 4 6 4
+
+# SECTION across the lofted cone at z = 0: a circle of r 4.5, not a refusal.
+CMD SELECT
+ESC
+BOX 290 -10 310 10
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+ESC
+
+# --- the description survives .gs ---------------------------------------------------------------
+SAVEAS %OUT%/issue515.gs
+OPEN %OUT%/issue515.gs
+EXPECT SOLIDKIND 0 Cylinder
+EXPECT SOLIDKIND 1 Cone
+
+# --- a look-alike is NOT described: two circles that do not share an axis -----------------------
+NEW
+CMD ELEV
+CMD -4
+ESC
+CMD CIRCLE
+CMD 0,0
+CMD 5
+ESC
+CMD ELEV
+CMD 4
+ESC
+CMD CIRCLE
+CMD 2,0
+CMD 5
+ESC
+CMD ELEV
+CMD 0
+ESC
+BOX -8 -8 10 8
+EXPECT SELECTED 2
+CMD LOFT
+EXPECT SOLIDS 1
+EXPECT SOLIDKIND 0 Solid
+CMD SELECT
+ESC
+BOX -8 -8 10 8
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — The cut crosses a curved face of this solid, which is not supported yet."
+
+# --- and a rectangle still extrudes to a plain Solid ---------------------------------------------
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD 20,0
+CMD 20,12
+CMD 0,12
+CMD CLOSE
+ESC
+BOX -2 -2 22 14
+CMD EXTRUDE 5
+EXPECT SOLIDKIND 0 Solid
+CHECK ALL

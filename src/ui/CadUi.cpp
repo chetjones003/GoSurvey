@@ -11400,10 +11400,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   static int  s_cmdSel = 0;
   static bool s_cmdDismissed = false;
   static std::string s_cmdLastQuery;
-  // Highlighted suggestion persisted across the Enter frame: a single-line InputText with EnterReturnsTrue
-  // deactivates itself when Enter is pressed, so on that frame the list isn't rebuilt (inputActive is false).
-  // We capture the highlight while the list is open and consume it on submit.
-  static bool s_cmdSugVisible = false;
+  // Highlight shown in the autocomplete popup while it's open (used for display only — e.g. the
+  // at-crosshair dynamic-cursor text via QueryCommandBarFuzzyPrimary). What Enter actually runs is
+  // resolved fresh from the committed text at submit time (ResolveCommandLineSubmission), not from
+  // this persisted value, so a stale highlight from an earlier query can never run instead of what
+  // was just typed (issue #766).
   static std::string s_cmdHighlight;
   static bool s_cmdScrollToSel = false;  // request: scroll the keyboard-selected row into view
   // Suggestions persisted from the frame they were built. Clicking a row deactivates the command
@@ -11502,7 +11503,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     while (!query.empty() && std::isspace(static_cast<unsigned char>(query.back())))  query.pop_back();
     if (query != s_cmdLastQuery) {
       s_cmdLastQuery = query; s_cmdSel = 0; s_cmdDismissed = false;
-      s_cmdSugVisible = false; s_cmdHighlight.clear();
+      s_cmdHighlight.clear();
     }
 
     const bool singleToken = query.find_first_of(" \t") == std::string::npos;
@@ -11541,7 +11542,6 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       g_cmdSuggestComplete = cmdSug[s_cmdSel].name;
       for (char& ch : g_cmdSuggestComplete) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
       cmdShowSug = true;
-      s_cmdSugVisible = true;
       s_cmdHighlight  = g_cmdSuggestComplete;
       s_cmdFuzzyPrimaryFrame = s_cmdHighlight;
     } else {
@@ -11550,18 +11550,23 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       // Clear the persisted highlight only when the user is actively in the field with no list (e.g. a
       // full/multi-token command). On the Enter frame the input is already inactive, so the highlight
       // survives to be consumed by the submit branch below.
-      if (inputActive) { s_cmdSugVisible = false; s_cmdHighlight.clear(); }
+      if (inputActive) { s_cmdHighlight.clear(); }
     }
 
     if (exec) {
-      // Enter with the list open runs the highlighted command. The list state is read from the persisted
-      // s_cmd* values because Enter deactivates the input, so cmdShowSug/cmdSug are already empty this frame.
-      if (exec && s_cmdSugVisible && !s_cmdHighlight.empty())
-        std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s", s_cmdHighlight.c_str());
+      // Resolve fresh against what was actually typed, right here, rather than trusting the
+      // persisted s_cmdHighlight: Enter deactivates the input on this very frame, so the suggestion
+      // block above (gated on inputActive) never re-ran for the final committed text, and the old
+      // highlight could still be left over from an earlier, unrelated query. That staleness is issue
+      // #766 -- ERASE ran DRAWINGSETTINGS, RENAME ran SURFACERENAME, TABLE ran VOLTABLE, none of them
+      // anything the typed word is even a prefix of. ResolveCommandLineSubmission always ranks an
+      // exact command-name or alias match first, so an exact, correctly-typed command never loses to
+      // a stale suggestion.
+      std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s",
+                    ResolveCommandLineSubmission(cmdBuf).c_str());
       s_cmdDismissed = true;
       s_cmdLastQuery.clear();
       cmdShowSug = false;
-      s_cmdSugVisible = false;
       s_cmdHighlight.clear();
       DevShell_OnCommand(cmdBuf);
       UiSubmitCommandLine(cmdBuf, cmdBufSize, cmd, log);

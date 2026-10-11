@@ -1,0 +1,49 @@
+# Issue 02 — OVERKILL and JOIN reached into model space from a paper sheet.
+#
+# Run from a layout, OVERKILL ignored the sheet's duplicates (the only geometry on screen, and the
+# reason the user ran it), rewrote every model line's elevation in a space that was not visible, and
+# reported "nothing to clean up" — which was accurate about neither.
+#
+# The drawing commands have routed by space since issue #84 (a polyline drawn on a sheet belongs to
+# the SHEET). The editing commands were never given the same treatment. This asserts the refusal,
+# and — the part that actually matters — that the model geometry is untouched afterwards.
+
+NEW
+CMD ELEV 286.715
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+CMD LINE
+CMD 0,50
+CMD 100,50
+ESC
+EXPECT LINES 2
+EXPECT ELEVATION LINE 0 286.715
+
+SPACE PAPER
+
+# --- OVERKILL refuses rather than silently rewriting a space you cannot see --------------------
+CMD OVERKILL
+EXPECT LOG "not available in paper space"
+
+# --- JOIN too: a MODEL selection survives the switch, which is what made it reachable ----------
+CMD JOIN
+EXPECT LOG "not available in paper space"
+
+SPACE MODEL
+
+# The whole point: the model drawing is exactly as it was. Before the guard, OVERKILL alone would
+# have left both of these at 0 while claiming it had done nothing.
+EXPECT LINES 2
+EXPECT ELEVATION LINE 0 286.715
+EXPECT ELEVATION LINE 1 286.715
+EXPECT VERTEX LINE 0 0 0 0 286.715
+EXPECT VERTEX LINE 1 1 100 50 286.715
+
+# And it still works where it IS available.
+CMD OVERKILL
+EXPECT LINES 2
+EXPECT ELEVATION LINE 0 286.715
+
+CHECK ALL

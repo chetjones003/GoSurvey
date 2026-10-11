@@ -1,0 +1,77 @@
+# GitHub issue #520 — SECTION of a sphere (a circle) and of a torus cut square to its axis (a ring).
+#
+# Before: SECTION and SLICE refused every cut of a sphere or a torus with "This release slices solids
+# with flat faces only". A sphere's section is a circle and a torus cut square to its axis is two
+# concentric circles, both of which the outline can hold — the second needed SECTION to be able to
+# draw a section that is more than one outline (D-2026-09-18-a).
+#
+# Section planes are the UCS's, which passes through the world origin, so each solid is placed with
+# its centre there. A ring section is two closed polylines, outer and hole, in ONE undo step.
+
+NEW
+
+# --- the issue's own repro: a sphere sections as a circle -----------------------------------------
+CMD SPHERE 0,0 30
+BOX -100 -100 100 100
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+EXPECT POLYLINES 1
+EXPECT SOLIDS 1
+CHECK ALL
+CMD UNDO
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+
+# --- SLICE cuts the sphere into two caps ----------------------------------------------------------
+CMD SELECT
+ESC
+BOX -100 -100 100 100
+CMD SLICE
+CMD 0,0,0
+CMD 10,0,0
+CMD 0,10,0
+CMD B
+EXPECT LOG "SLICE — 1 solid(s) cut into 2 piece(s)."
+EXPECT SOLIDS 2
+EXPECT SOLIDPROPS 0 56548.6677646 8482.30016469 3 4 3
+EXPECT SOLIDPROPS 1 56548.6677646 8482.30016469 3 4 3
+CHECK ALL
+CMD UNDO
+EXPECT SOLIDS 1
+
+# --- a torus cut square to its axis: a ring, two polylines, one undo step -------------------------
+NEW
+CMD TORUS 0,0 20 5
+BOX -100 -100 100 100
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 2 section outlines created. The solid is unchanged."
+EXPECT POLYLINES 2
+EXPECT SOLIDS 1
+CHECK ALL
+
+# One undo step removes BOTH outlines: the ring is one section, not two commands.
+CMD UNDO
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CMD REDO
+EXPECT POLYLINES 2
+CHECK ALL
+
+# --- a torus cut at any other angle says what kind of cut it is ------------------------------------
+NEW
+CMD TORUS 0,0 20 5
+CMD UCS
+CMD X
+CMD 45
+BOX -300 -300 300 300
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — A cut of a torus that is not square to its axis is a curve this release cannot hold."
+ESC
+EXPECT POLYLINES 0
+EXPECT SOLIDS 1
+CMD UCS
+CMD W
+CHECK ALL

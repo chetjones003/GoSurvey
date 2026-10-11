@@ -45284,6 +45284,19 @@ std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query,
   return out;
 }
 
+std::string ResolveCommandLineSubmission(const std::string& typedText) {
+  const std::string trimmed = StringUtil::trimCopy(typedText);
+  if (trimmed.empty() || trimmed.find_first_of(" \t") != std::string::npos)
+    return typedText;
+  const auto top = FuzzyCommandSuggestions(trimmed, 1);
+  if (top.empty())
+    return typedText;
+  std::string resolved = top[0].name;
+  for (char& ch : resolved)
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  return resolved;
+}
+
 const char* CircleCommandFooterHint(const AppCommandState& st) {
   if (st.active != AppCommandState::Kind::Circle)
     return "";

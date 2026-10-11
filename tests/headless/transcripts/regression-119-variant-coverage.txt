@@ -1,0 +1,133 @@
+# REQ-119 increment 2 (GitHub issue #81) — every token the marked-up prompts now offer is
+# ACCEPTED by the command showing that prompt, in that state.
+#
+# Increment 1's transcript (regression-119-variant-token-accepted) pinned the three prompts the
+# mechanism itself touched. This one pins the coverage pass: ~30 prompt strings across both hint
+# families gained `[TOKEN]` markup, and each token here is submitted in the state whose prompt
+# offers it. A token that stops being accepted fails HERE rather than becoming a link that looks
+# actionable and silently does nothing — which is strictly worse than plain text, because plain
+# text does not invite the click.
+#
+# ## The exclusion this file exists to defend
+#
+# CIRCLE's radius prompt says "D <value> or D<value> for diameter". D is a VALUE PREFIX, not a
+# submittable token: bare "d" is refused by ParseRadiusOrDiameter, because ParseOneFloat("")
+# fails on the empty remainder. It is therefore deliberately NOT marked up — marking it would
+# manufacture exactly the dead link REQ-119 exists to remove. The refusal is asserted live at the
+# bottom of this file, so a later well-meaning markup pass fails the build instead of shipping it.
+
+NEW
+
+# Two lines to give the modify commands something to select.
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+CMD LINE
+CMD 0,50
+CMD 100,50
+ESC
+EXPECT LINES 2
+
+# ---------------------------------------------------------------------------------------------
+# CIRCLE — [3P] at the centre prompt.
+# ---------------------------------------------------------------------------------------------
+CMD CIRCLE
+CMD 3p
+EXPECT LOG "Three-point circle — specify first point."
+ESC
+
+# ---------------------------------------------------------------------------------------------
+# ROTATE — [R]eference and [C]opy. Needs a selection first.
+# ---------------------------------------------------------------------------------------------
+BOX -10 -10 110 60
+EXPECT SELECTED 2
+
+CMD ROTATE
+CMD 50,25
+CMD c
+EXPECT LOG "ROTATE — copy mode on (original kept)."
+CMD c
+EXPECT LOG "ROTATE — copy mode off."
+CMD r
+EXPECT LOG "ROTATE"
+ESC
+
+# ---------------------------------------------------------------------------------------------
+# SCALE — [R]eference.
+# ---------------------------------------------------------------------------------------------
+BOX -10 -10 110 60
+CMD SCALE
+CMD 50,25
+CMD r
+EXPECT LOG "SCALE"
+ESC
+
+# ---------------------------------------------------------------------------------------------
+# TRIM — [L] draws the trim line; [T] goes back to picking cutting edges.
+# ---------------------------------------------------------------------------------------------
+CMD TRIM
+CMD l
+EXPECT LOG "TRIM"
+CMD t
+EXPECT LOG "TRIM"
+ESC
+
+# ---------------------------------------------------------------------------------------------
+# POLYLINE — [A] bearing, and [CLOSE] / [END] finishing. (REQ-118 kept both keywords working.)
+# ---------------------------------------------------------------------------------------------
+CMD POLYLINE
+CMD 200,0
+CMD 210,0
+CMD a
+EXPECT LOG "bearing"
+CMD
+ESC
+
+CMD POLYLINE
+CMD 300,0
+CMD 310,0
+CMD 310,10
+CMD close
+EXPECT LOG "POLYLINE closed."
+CHECK ALL
+
+CMD POLYLINE
+CMD 400,0
+CMD 410,0
+CMD end
+EXPECT LOG "POLYLINE complete."
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# FEATURELINE — bare [E] arms the next point as an elevation point.
+# ---------------------------------------------------------------------------------------------
+CMD FEATURELINE
+CMD e
+EXPECT LOG "next point will be an elevation point"
+ESC
+
+# ---------------------------------------------------------------------------------------------
+# ELEV — [W]orld resets the work plane to Z 0.
+# ---------------------------------------------------------------------------------------------
+CMD ELEV
+CMD w
+EXPECT LOG "World"
+
+# ---------------------------------------------------------------------------------------------
+# THE EXCLUSION — CIRCLE's D is a value prefix. Bare "d" must STAY refused.
+# If a future markup pass adds [D] to that prompt, this assertion is what stops it.
+# ---------------------------------------------------------------------------------------------
+CMD CIRCLE
+CMD 600,600
+CMD d
+EXPECT LOG "Expected diameter after D"
+ESC
+
+# And the prefix form it actually wants still works, so the refusal above is about the BARE
+# token and not about D being broken.
+CMD CIRCLE
+CMD 700,700
+CMD d40
+EXPECT CIRCLES 1
+CHECK ALL

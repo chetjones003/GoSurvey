@@ -1,0 +1,47 @@
+# REQ-203 smoke transcript: draw the three primitives through the command line and count them.
+#
+# Happy path, typed input only — no PICK — so a failure here means the command layer broke rather
+# than a snap having moved a point.
+#
+# Note the terminators, which are not interchangeable and were each read out of the code rather than
+# assumed (the first two drafts of this file guessed, and the driver caught both):
+#   LINE     — bare Enter ends the CHAIN but restarts LINE (CadCommands.cpp:11904); ESC exits.
+#   POLYLINE — END commits, CLOSE commits closed; bare Enter does nothing.
+#   CIRCLE   — commits on the radius, then PROMPTS AGAIN for another circle.
+#
+# The general rule, and the one that bites: a command stays active after committing and repeats
+# until ESC. So every command below is followed by ESC — without it the next `CMD <name>` is eaten
+# by the previous command as an unparseable point, which is exactly what happened here: `POLYLINE`
+# was consumed by a still-live CIRCLE and two extra circles appeared from the polyline's vertices.
+
+NEW
+
+# --- LINE: two segments, then ESC to leave the command --------------------------------------
+CMD LINE
+CMD 0,0
+CMD 100,0
+CMD 100,50
+ESC
+EXPECT LINES 2
+
+# --- CIRCLE: centre then radius -------------------------------------------------------------
+CMD CIRCLE
+CMD 50,25
+CMD 10
+ESC
+EXPECT CIRCLES 1
+
+# --- POLYLINE: three vertices, committed with END ---------------------------------------------
+CMD POLYLINE
+CMD 0,100
+CMD 50,150
+CMD 100,100
+CMD END
+EXPECT POLYLINES 1
+EXPECT CIRCLES 1
+
+# The line count must not have moved while drawing the other two.
+EXPECT LINES 2
+
+# Invariants run after every step already; assert once more explicitly at the end.
+CHECK ALL

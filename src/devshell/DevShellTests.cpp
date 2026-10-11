@@ -257,12 +257,62 @@ void DevShell_RegisterUiTests(ImGuiTestEngine* engine, AppCommandState* cmd)
   ImGuiTest* typed = IM_REGISTER_TEST(engine, "gosurvey", "command-line-line");
   typed->TestFunc = [](ImGuiTestContext* ctx) {
     IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
     IM_CHECK(RefCommandBar(ctx));
     ctx->ItemClick("GoSurveyCmdPanel/##CommandLineInput");
     ctx->KeyCharsReplaceEnter("LINE");
     ctx->Yield();
     IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::Line);
     IM_CHECK(CancelToIdle(ctx));
+  };
+
+  // GitHub issue #766 (findings N2/E5 of the #751 paper-space audit): the command-line autocomplete
+  // popup could submit a HIGHLIGHTED SUGGESTION left over from an earlier, unrelated query instead
+  // of the command the user had actually finished typing — ERASE ran DRAWINGSETTINGS, RENAME ran
+  // SURFACERENAME, TABLE ran VOLTABLE. Reproduced through the REAL command-bar widget
+  // (ProcessCommandLineSubmit alone can't see it — the defect is in which text DrawCommandLinePanel
+  // writes into cmdBuf before that call, not in the dispatcher). Each case first types an unrelated
+  // query to leave a stale highlight, clears the field, then types the real command.
+  ImGuiTest* fuzzyExact = IM_REGISTER_TEST(engine, "gosurvey", "req766-fuzzy-exact-wins");
+  fuzzyExact->TestFunc = [](ImGuiTestContext* ctx) {
+    IM_CHECK(CancelToIdle(ctx));
+    IM_CHECK(OpenFreshDrawing(ctx));
+    IM_CHECK(RefCommandBar(ctx));
+    std::vector<std::string>* log = DevShell_CommandLog();
+    IM_CHECK_NO_RET(log != nullptr);
+
+    // ERASE is an exact alias of DELETE (registry: {"delete", "del, erase", ...}) and must run
+    // DELETE even after an unrelated query ("drawingsettings") left a different highlight behind.
+    ctx->ItemClick("GoSurveyCmdPanel/##CommandLineInput");
+    ctx->KeyChars("drawingsettings");
+    ctx->Yield();
+    ctx->KeyCharsReplace("");
+    ctx->Yield();
+    ctx->KeyCharsReplaceEnter("ERASE");
+    ctx->Yield();
+    IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::Delete);
+    IM_CHECK(CancelToIdle(ctx));
+
+    // RENAME and TABLE name no top-level command at all (RENAME is only a sub-verb of LAYER;
+    // TABLE/VOLTABLE is a sub-verb of the volume-report command) — typing them bare must never
+    // silently run SURFACERENAME or VOLTABLE, and must leave the command line idle with an
+    // "unknown command" style report rather than a success message.
+    for (const char* word : {"RENAME", "TABLE"}) {
+      ctx->ItemClick("GoSurveyCmdPanel/##CommandLineInput");
+      ctx->KeyChars("voltable");
+      ctx->Yield();
+      ctx->KeyCharsReplace("");
+      ctx->Yield();
+      const size_t before = log->size();
+      ctx->KeyCharsReplaceEnter(word);
+      ctx->Yield();
+      IM_CHECK_EQ(s_cmd->active, AppCommandState::Kind::None);
+      IM_CHECK_NO_RET(log->size() > before);
+      const std::string& last = log->back();
+      IM_CHECK_NO_RET(last.find("Renamed surface") == std::string::npos);
+      IM_CHECK_NO_RET(last.find("Unknown command") != std::string::npos ||
+                      last.find("Did you mean") != std::string::npos);
+    }
   };
 
 

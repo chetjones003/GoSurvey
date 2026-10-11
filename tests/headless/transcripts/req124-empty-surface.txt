@@ -1,0 +1,20 @@
+# REQ-124 — a named surface may exist with no triangulation.
+
+NEW
+
+CMD SURFACECREATE Empty
+EXPECT SURFACES 1
+CMD SURFACELIST
+EXPECT LOG "Surface "Empty""
+EXPECT LOG "not built"
+
+CMD SURFELEV
+PICK 0 0
+EXPECT LOG "outside surface"
+ESC
+
+CMD SURFACESTATS Empty
+EXPECT LOG "not built"
+
+CMD SURFACEDELETE Empty
+EXPECT SURFACES 0

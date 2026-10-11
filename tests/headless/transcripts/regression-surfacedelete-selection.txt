@@ -1,0 +1,58 @@
+# Deleting a surface must not leave the selection pointing at it.
+#
+# Found while writing the Phase 7 drape transcript: a BOX selection also picks the SURFACE, and
+# SURFACEDELETE erased it without touching `st.selection`, so `CHECK ALL` tripped the document
+# invariant:
+#
+#   selection-in-range: selection[5] type=10 index=0 but only 0 of that type exist
+#
+# `ESC` is no help — it cancels the active command, not the selection.
+#
+# The dangling entry is the visible half. The silent half is worse: with two surfaces, deleting the
+# FIRST leaves a selection entry still saying "surface 1" while `cadSurfaces` has compacted, so the
+# entry now names whichever surface moved into that slot — the next command would act on a surface
+# the user never picked. Both are pinned below.
+
+OPEN samples/surface-demo.dwg
+CMD SURFACECREATE Test EG, Existing Ground
+CMD SURFACEREBUILD Test EG
+EXPECT SURFACES 1
+
+# Select everything, which includes the surface, then delete it.
+BOX -500 -500 500 500
+CMD SURFACEDELETE Test EG
+EXPECT SURFACES 0
+# Before the fix this CHECK failed: the selection still named a surface that was gone.
+CHECK ALL
+
+# --- the silent half: a LATER surface must not be renamed by the compaction ------------------------
+NEW
+OPEN samples/surface-demo.dwg
+CMD SURFACECREATE First, Existing Ground
+CMD SURFACECREATE Second, Existing Ground
+CMD SURFACEREBUILD First
+CMD SURFACEREBUILD Second
+EXPECT SURFACES 2
+
+# With both selected, delete the FIRST. The entry for the second must follow it down a slot, not keep
+# an index that now names something else.
+BOX -500 -500 500 500
+CMD SURFACEDELETE First
+EXPECT SURFACES 1
+CHECK ALL
+
+# The survivor is still the one it always was, and is still the one selected.
+CMD SURFACELIST
+EXPECT LOG "Surface "Second""
+CMD SURFACEDELETE Second
+EXPECT SURFACES 0
+CHECK ALL
+
+# --- deleting a surface nothing has selected is unchanged -------------------------------------------
+NEW
+OPEN samples/surface-demo.dwg
+CMD SURFACECREATE Test EG, Existing Ground
+CMD SURFACEREBUILD Test EG
+CMD SURFACEDELETE Test EG
+EXPECT SURFACES 0
+CHECK ALL

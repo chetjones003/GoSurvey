@@ -1,0 +1,57 @@
+# REQ-103 step 4 (TASK-099 F5) — BREAK on a Circle must not leave the selection pointing at the
+# wrong object.
+#
+# ApplyBreakToCircle is the only path in BREAK that ERASES: a Circle has no arc-shaped hole to
+# mutate into, so the circle is removed from `userCirclesCxCyZR` / `userCircleAttrs` and an Arc is
+# appended instead. That erase compacts the circle stores, so every circle after the broken one
+# moves down one index — and every SelectedEntity still holding a higher circle index silently
+# becomes a reference to a DIFFERENT circle, or to no circle at all.
+#
+# ExecuteDeleteSelection clears the selection after exactly this compaction, for exactly this
+# reason. BREAK did not, and BREAK does not clear the selection when it starts, so the two could
+# overlap: select some circles, break one of them, and the selection is now lying about what is
+# selected. Nothing in the drawing looks wrong until the next command acts on that selection.
+#
+# The check below is deliberately about the SELECTION, not the geometry — the geometry of the
+# circle-to-arc conversion is already pinned by break-circle-and-closed-polyline.txt (T6).
+#
+# C1 = centre (0,0) r 10   -> circle index 0
+# C2 = centre (100,0) r 10 -> circle index 1
+# Both are selected; C1 (the LOWER index, so breaking it shifts C2) is broken.
+
+NEW
+
+CMD CIRCLE
+CMD 0,0
+CMD 10
+ESC
+
+CMD CIRCLE
+CMD 100,0
+CMD 10
+ESC
+
+CHECK ALL
+EXPECT CIRCLES 2
+EXPECT ARCS 0
+
+# Select both circles with a crossing box that touches each of them.
+BOX -20 -20 120 20
+EXPECT SELECTED 2
+
+# Break C1 at (10,0) then (0,10) — a quarter wedge, the same angles T6 uses.
+CMD BREAK
+CLICK 10 0
+CLICK 0 10
+
+EXPECT LOG "circle converted to an arc"
+EXPECT CIRCLES 1
+EXPECT ARCS 1
+CHECK ALL
+
+# The point of this transcript. Before TASK-099 this was still 2, and the second entry named
+# circle index 1 in a store that now holds one circle.
+EXPECT SELECTED 0
+
+ESC
+CHECK ALL

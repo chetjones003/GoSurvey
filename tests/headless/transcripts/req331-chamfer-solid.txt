@@ -1,0 +1,346 @@
+# REQ-331 (D-2026-09-08-f, ADR-046 amendment (k), GitHub issue #148 acceptance 5 and 6) — CHAMFER on
+# a solid EDGE.
+#
+# Slice 7, the last of the seven #148's own pre-implementation survey listed. Paired with the REQ-318
+# sub-object selection exactly as FILLET is: Ctrl+click names the edges, CHAMFER bevels them. The same
+# verb the 2D chamfer uses — the two cannot be confused, because this path is taken ONLY when the
+# sub-object selection holds solid edges and nothing else, which the 2D flow has never been able to
+# reach. The last block of the first half asserts that.
+#
+# The numbers are the closed forms REQ-331 states, written before the implementation. One edge of a
+# 20 x 10 x 8 box at d = 2: volume 1560 (a triangular prism `L d^2/2 = 40` removed) and area
+# 796 + 40*sqrt(2) — each adjacent face losing a strip `d L`, EACH END FACE losing the same
+# triangular cross-section `d^2/2` the prism has, and the bevel adding `L d sqrt(2)`.
+
+# --- One edge of a box -----------------------------------------------------------------------------
+# x in [-10,10], y in [-5,5], z in [0,8]. The top-back edge runs along X at y = 5, z = 8.
+
+NEW
+# Orbited, and this is not cosmetic: in PLAN view a ray aimed at a top edge also passes through the
+# bottom edge directly under it, and which one the pick returns is then a depth-order detail rather
+# than something the transcript states. The fillet's transcript records the same trap catching it.
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+
+CMD CHAMFER 2
+EXPECT SOLIDS 1
+# volume 1560, area 796 + 40*sqrt(2), and the topology delta of ADR-046 amendment (k)(1) — which is
+# the FILLET's delta exactly: V+2, E+3, F+1, so 8/12/6 becomes 10/15/7. Only the kinds differ.
+EXPECT SOLIDPROPS 0 1560 852.5685424949 10 15 7
+EXPECT LOG "bevelled at distance"
+
+# Cleared for the fillet's reason: a chamfer changes the TOPOLOGY, so the selected edge is gone and
+# every index after it has shifted.
+EXPECT SUBOBJECTS 0
+
+# --- One Ctrl+Z, one step -------------------------------------------------------------------------
+
+UNDO
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- Refused, with the solid untouched (issue #148 acceptance 6) -----------------------------------
+# Every chamfer refusal is a PRE-check, so "untouched" is true because nothing was built rather than
+# because something was rolled back.
+
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+# 8 is the exact height of the shorter adjacent face. At the limit the face does not thin, it
+# vanishes — so equality is refused, not just anything above it.
+CMD CHAMFER 8
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CMD CHAMFER 100
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CMD CHAMFER 0
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CMD CHAMFER banana
+EXPECT LOG "is not a number"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# The selection survives every refusal: nothing happened, so there is nothing to re-pick.
+EXPECT SUBOBJECTEDGES 1
+
+# --- A PARTIAL corner is refused BY NAME ------------------------------------------------------------
+# With only two of a corner's three edges, the bevel would have to run off onto an edge staying
+# sharp — a setback blend, and its own construction. The refusal names which case it is.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT -10 0 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 2
+CMD CHAMFER 2
+EXPECT LOG "select all three"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- Two edges that share NOTHING are one operation --------------------------------------------------
+# The opposite top edges. Twice the prism comes off, and the topology delta applies twice:
+# volume 1600 - 80, area 712 + 80*sqrt(2).
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+SUBOBJECT 0 -5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 2
+CMD CHAMFER 2
+EXPECT SOLIDPROPS 0 1520 825.1370849898 12 18 8
+UNDO
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# --- A chamfered solid survives a .gs round-trip ------------------------------------------------------
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+CMD CHAMFER 2
+SAVEAS %OUT%/chamfer-solid.gs
+NEW
+EXPECT SOLIDS 0
+OPEN %OUT%/chamfer-solid.gs
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1560 852.5685424949 10 15 7
+
+# --- With nothing selected, CHAMFER is still the 2D command it always was ------------------------------
+# The whole safety of reusing the verb rests on this.
+
+NEW
+EXPECT SUBOBJECTS 0
+CMD CHAMFER
+EXPECT LOG "select first object"
+
+
+# --- REQ-331 increment 2: a CORNER, where the three bevels meet at a POINT ----------------------------
+# The sharpest divergence from the fillet, and it goes the easy way. Three planes in general position
+# meet at exactly one point, where three cylinders do not — which is precisely why FILLET has to close
+# its corner with a spherical octant. So this corner adds one vertex, three edges and NO face.
+#
+# 6 originals + 3 bevels = 9 faces. Volume 1600 - (76 - 8 + 2) = 1530 by inclusion-exclusion over the
+# three wedges; area 734 + 67*sqrt(2), the three bevels being 40, 20 and 16 sqrt(2)-units of rectangle
+# less one 3*sqrt(2) V-notch each. Euler holds: 14 - 21 + 9 = 2.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+SUBOBJECT -10 0 8 0.5 0.5
+SUBOBJECT -10 5 4 0.5 0.5
+EXPECT SUBOBJECTEDGES 3
+CMD CHAMFER 2
+EXPECT LOG "bevelled at distance"
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 1530 828.7523086790 14 21 9
+EXPECT SUBOBJECTS 0
+UNDO
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+
+# --- The PROMPTED form: a bare CHAMFER asks for the distance ------------------------------------------
+# The trap TASK-219 found for FILLET: printing usage and stopping entered no command state, so the
+# next keystroke went to the IDLE command line. A bare CHAMFER now asks, and answering applies.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+CMD CHAMFER
+EXPECT LOG "Specify chamfer distance"
+# The selection is still there: asking for a distance must not consume what it is about to bevel.
+EXPECT SUBOBJECTEDGES 1
+CMD 2
+EXPECT SOLIDPROPS 0 1560 852.5685424949 10 15 7
+EXPECT SUBOBJECTS 0
+
+# ESC at the prompt must clear the waiting state, or the NEXT line typed - whatever it is - would be
+# read as a distance.
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+CMD CHAMFER
+EXPECT LOG "Specify chamfer distance"
+ESC
+CMD CIRCLE
+EXPECT LOG "CIRCLE"
+ESC
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+# A bad answer, and a REFUSED one, both leave the prompt up. Ending the command on either would drop
+# the user back at the idle command line.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.5 0.5
+CMD CHAMFER
+CMD banana
+EXPECT LOG "must be a number"
+# Still asking, and still holding the edge it is about to bevel.
+EXPECT SUBOBJECTEDGES 1
+CMD 8
+EXPECT LOG "too large"
+EXPECT LOG "different distance"
+EXPECT SUBOBJECTEDGES 1
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+CMD 2
+EXPECT SOLIDPROPS 0 1560 852.5685424949 10 15 7
+
+# --- Edges can be gathered WHILE the CHAMFER command is running ------------------------------------
+# Type CHAMFER first (which, with nothing selected, opens the 2D command), then Ctrl+click the edges.
+# SUBOBJECT is the headless equivalent of that Ctrl+click; what is asserted is that a distance typed
+# afterwards bevels the gathered edges rather than being read by the 2D flow.
+#
+# This is also where TASK-221 DEBT-1 is discharged: the sub-object pre-highlight now reaches CHAMFER
+# too, which that task deliberately deferred until a solid chamfer existed. The highlight itself is
+# not assertable here (no headless verb drives a modifier-held cursor) — the gathering is.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+# Nothing selected, so this is the 2D command.
+CMD CHAMFER
+EXPECT LOG "select first object"
+SUBOBJECT 0 5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 1
+EXPECT LOG "solid edge(s) selected"
+# A second edge that shares no corner with the first.
+SUBOBJECT 0 -5 8 0.5 0.5
+EXPECT SUBOBJECTEDGES 2
+CMD 2
+EXPECT SOLIDPROPS 0 1520 825.1370849898 12 18 8
+EXPECT SUBOBJECTS 0
+
+# --- All twelve edges: the bevelled box, against the closed forms -------------------------------------
+# Volume 1344 and area 368 + 232*sqrt(2), with 6 rectangles + 12 hexagons and no corner faces.
+# The `1120` inner-box-plus-slabs term and the `368` planar-face total are the IDENTICAL constants in
+# REQ-323's rounded box `1120 + 344*pi/3` and `368 + 120*pi` — two independent operations landing on
+# the same decomposition.
+
+#
+# **Two camera angles, and that is load-bearing rather than tidy.** A SUBOBJECT pick is a camera RAY
+# through the given world point, so naming a point on an OCCLUDED face does not miss — it silently
+# resolves to whatever the ray reaches first. A first draft of this block listed all twelve from one
+# angle and quietly got nine: `0 -5 0` (the bottom-front edge, on the far side from a 135/20 camera)
+# was resolving to the front-left VERTICAL edge, which another line had already named. The count is
+# what caught it. From 135/20 the visible faces are x=-10, y=5 and z=8, which between them bound the
+# first nine; the remaining three all lie on x=10, y=-5 and z=0, so the camera is moved to the
+# opposite octant to reach them.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.1 0.1
+SUBOBJECT 0 -5 8 0.1 0.1
+SUBOBJECT 0 5 0 0.1 0.1
+SUBOBJECT -10 0 8 0.1 0.1
+SUBOBJECT 10 0 8 0.1 0.1
+SUBOBJECT -10 0 0 0.1 0.1
+SUBOBJECT -10 5 4 0.1 0.1
+SUBOBJECT -10 -5 4 0.1 0.1
+SUBOBJECT 10 5 4 0.1 0.1
+EXPECT SUBOBJECTEDGES 9
+VIEWANGLES -45 -20
+SUBOBJECT 0 -5 0 0.1 0.1
+SUBOBJECT 10 0 0 0.1 0.1
+SUBOBJECT 10 -5 4 0.1 0.1
+EXPECT SUBOBJECTEDGES 12
+CMD CHAMFER 2
+EXPECT SOLIDPROPS 0 1344 696.0975464706 32 48 18
+EXPECT SUBOBJECTS 0
+UNDO
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+
+
+# --- The request has to fit ITSELF, not just each edge of it (REQ-331 item 4 as amended) --------------
+# D-2026-09-08-g, ADR-046 amendment (l). The precondition used to be measured one edge at a time
+# against the ORIGINAL solid, so two requested chamfers running into each other went straight through and
+# produced a self-intersecting solid that Validate — which is topological — happily accepted. Found
+# by /code-review high on TASK-222.
+#
+# The top face is 10 wide and each blend sets back into it, so two opposite 20-long top edges collide
+# for any value above 5 and touch at exactly 5.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.1 0.1
+SUBOBJECT 0 -5 8 0.1 0.1
+EXPECT SUBOBJECTEDGES 2
+CMD CHAMFER 6
+EXPECT LOG "would run into each other"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# Equality is refused too, for the reason the original per-face check already gave: at the limit the
+# face does not thin, it vanishes.
+CMD CHAMFER 5
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# The selection survives, and the largest value that DOES fit is still accepted — the new check must
+# not have quietly shrunk the envelope.
+EXPECT SUBOBJECTEDGES 2
+CMD CHAMFER 4.9
+EXPECT SUBOBJECTS 0
+
+# An edge too short for the corners at BOTH its ends. The vertical is 8 long and each corner runs the
+# blend along it before the blend begins, so at 5 the two corners want 10 of the 8 available. This is
+# a different statement from the one above, and it gets its own sentence.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT -10 5 4 0.1 0.1
+SUBOBJECT 0 5 8 0.1 0.1
+SUBOBJECT -10 0 8 0.1 0.1
+SUBOBJECT 0 5 0 0.1 0.1
+SUBOBJECT -10 0 0 0.1 0.1
+EXPECT SUBOBJECTEDGES 5
+CMD CHAMFER 5
+EXPECT LOG "too short to bevel at both of its corners"
+EXPECT SOLIDPROPS 0 1600 880 8 12 6
+# 3 fits: the two corners want 6 of the 8.
+CMD CHAMFER 3
+EXPECT SUBOBJECTS 0
+
+
+# --- A REFUSED value is not an UNPARSED one (TASK-224) -----------------------------------------------
+# The kernel declining a distance used to be followed by "Could not parse CHAMFER input — see command
+# hints.", which contradicted the sentence printed one line above it: the input parsed perfectly well,
+# and the kernel refused it by name. `HandleCHAMFERText`'s return value was being read as "did the
+# command advance" when the only thing the caller does with it is decide whether to add that trailer,
+# so it now means "was this input UNDERSTOOD" instead.
+#
+# NOLOG rather than LOG, because the defect is a line that should NOT be there and no positive
+# assertion can catch a message being wrongly present.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.1 0.1
+CMD CHAMFER
+CMD 8
+EXPECT LOG "too large"
+EXPECT LOG "different distance"
+EXPECT NOLOG "Could not parse"
+# Still asking, still holding the edge, and the value that fits still applies.
+EXPECT SUBOBJECTEDGES 1
+CMD 2
+EXPECT SUBOBJECTS 0
+
+# A genuinely unparsed token still gets the trailer, because that is the case it is FOR: it names the
+# running command and tells the user how to leave it. Only the false half was removed.
+
+NEW
+VIEWANGLES 135 20
+CMD BOX 0,0 20 10 8
+SUBOBJECT 0 5 8 0.1 0.1
+CMD CHAMFER
+CMD CIRCLE
+EXPECT LOG "CHAMFER is still running"
+EXPECT LOG "Press Esc"
+
+CHECK ALL

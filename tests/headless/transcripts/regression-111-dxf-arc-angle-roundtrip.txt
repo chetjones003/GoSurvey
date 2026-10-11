@@ -1,0 +1,95 @@
+# Issue #111 — a DXF export -> import -> export cycle is a fixed point on the FIRST cycle for a
+# drawing containing ARCs.
+#
+# ## The defect
+#
+# `CadArc` holds a start and a sweep as `float` RADIANS. A DXF ARC states a start and an END in
+# DEGREES, rounded to six decimals like every other number GoSurvey writes. Both conversions lose
+# information, and the writer was emitting angles the reader could not hold:
+#
+#   1. A DXF arc always runs counter-clockwise from group 50 to group 51, so an arc stored with a
+#      NEGATIVE sweep is written from `startRad + sweepRad` — a DOUBLE sum of two floats, a value no
+#      `CadArc` can hold. The reader stored the nearest float instead, and the next export stated
+#      that float's angle rather than the one in the file.
+#   2. The reader derives the sweep as `group 51 - group 50`, a difference of two INDEPENDENTLY
+#      rounded angles. That lands up to 1e-6 deg from the sweep the writer held — and above ~8.4 deg
+#      of sweep, 1e-6 deg is WIDER than the `float` spacing of the stored radian value, so it lands
+#      on a different float.
+#
+# The header carried it further: `$EXTMIN`/`$EXTMAX` were swept from the arc in MEMORY while the
+# entity records described the arc the reader would rebuild, so a one-ulp angle moved the extents,
+# the extents moved the `$VPORT` view, and five lines of the file changed for one arc.
+#
+# Measured on the unfixed writer over 2,000,000 random arcs — five sweep-magnitude bands, both
+# winding directions — **1,479,444 were not a fixed point on the first cycle**, and 6,436 had still
+# not settled after three. So this was not a rare corner: roughly three arcs in four.
+#
+# ## What this pins
+#
+# The FIRST-cycle comparison, for four arcs chosen to cover what the probe showed matters: winding
+# direction, and sweep magnitude either side of the ~8.4 deg crossover where the `float` spacing of
+# the stored angle passes the six-decimal text grid.
+#
+# Coordinates are kept above ~16 deliberately. Below that, `float` spacing is finer than the sixth
+# decimal and the CENTRE and RADIUS stop surviving the round trip too — a different defect (#98),
+# fixed separately, which would otherwise fail this transcript for an unrelated reason.
+#
+# Fails before the fix at the first SAMEFILE — a vs b differ at byte 249, both 7652 bytes. The
+# issue's own single-arc reproducer fails the same way at byte 265 of 6959, where the five differing
+# lines are visible one per cause: groups 50 and 51, `$EXTMIN` x, and `$VPORT` groups 12 and 40.
+
+NEW
+
+# The arc from the issue: three picks that wind CLOCKWISE, so it is stored with a negative sweep and
+# takes the `startRad + sweepRad` path — defect (1).
+CMD ARC
+PICK 20.3333333 30.6666667
+PICK 40.1111111 50.9999999
+PICK 60.7777777 30.1234567
+ESC
+
+# Counter-clockwise: positive sweep, so only defect (2) is in play.
+CMD ARC
+PICK 120.7777777 30.1234567
+PICK 100.1111111 50.9999999
+PICK 80.3333333 30.6666667
+ESC
+
+# A wide sweep, well above the ~8.4 deg crossover.
+CMD ARC
+PICK 200.1234567 20.7654321
+PICK 180.9999999 60.1111111
+PICK 220.5555555 40.4444449
+ESC
+
+# A shallow sweep — three nearly-collinear picks — below the crossover, where the text grid is the
+# coarser of the two and the rounding runs the other way.
+CMD ARC
+PICK 300.1234567 20.0000001
+PICK 340.5000000 20.9999999
+PICK 380.7777777 20.1234567
+ESC
+
+CHECK ALL
+EXPECT ARCS 4
+
+EXPORT DXF %OUT%/r111-a.dxf
+
+NEW
+IMPORT DXF %OUT%/r111-a.dxf
+CHECK ALL
+EXPECT ARCS 4
+EXPORT DXF %OUT%/r111-b.dxf
+
+# The defect, and the acceptance condition of the issue: the FIRST cycle is already a fixed point.
+EXPECT SAMEFILE %OUT%/r111-a.dxf %OUT%/r111-b.dxf
+
+NEW
+IMPORT DXF %OUT%/r111-b.dxf
+CHECK ALL
+EXPECT ARCS 4
+EXPORT DXF %OUT%/r111-c.dxf
+
+# A third cycle. The unfixed writer did not always settle even here — 6,436 of 2,000,000 arcs were
+# still moving after three cycles — so this is a real check, not a formality.
+EXPECT SAMEFILE %OUT%/r111-b.dxf %OUT%/r111-c.dxf

@@ -1,0 +1,106 @@
+# Issue #80 / REQ-303 — POLYLINE finishes without typing CLOSE or END: clicking the polyline's own
+# start point closes it, and a blank Enter finishes it open. Both funnel through the same
+# CommitPolylineDraft TASK-107 already made paper-space-aware, so the paper-space half at the bottom
+# needs no separate implementation — only a check that it actually works.
+#
+# Fails before the fix:
+#   step "CLICK 100 0" (model, 2 segments)   -> CLICK: the active command (Polyline) takes no
+#                                                model-space viewport click in its current phase
+#                                                [no — it DOES take clicks; the point is the OLD
+#                                                click-on-start-point added vertex #4 instead of
+#                                                closing, so "EXPECT LOG POLYLINE closed." fails and
+#                                                EXPECT POLYLINES stays wrong for the rest of the file]
+#   step "CMD" (blank, Enter-to-end)         -> no handler for blank Enter during POLYLINE existed at
+#                                                all; the line was silently swallowed by the generic
+#                                                "not a command" path and the draft stayed open.
+
+NEW
+CMD POLYLINE
+
+# --- click-close, attempted too early (0 segments — just the start point) --------------------------
+CMD 0,0
+CLICK 0 0
+EXPECT LOG "POLYLINE CLOSE — need at least one segment after the start point."
+EXPECT POLYLINES 0
+
+# --- click-close, attempted too early (1 segment — 2 vertices, below the 3-vertex minimum) ---------
+CMD 100,0
+CLICK 0 0
+EXPECT LOG "POLYLINE CLOSE — need at least three vertices."
+EXPECT POLYLINES 0
+
+# --- one more vertex reaches the minimum; clicking the start point now closes ----------------------
+CMD 100,50
+CLICK 0 0
+EXPECT LOG "POLYLINE closed."
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT PAPERPOLYLINES 0
+
+# --- Enter-to-end, attempted too early (0 segments) -------------------------------------------------
+CMD POLYLINE
+CMD 200,0
+CMD
+EXPECT LOG "POLYLINE END — need at least one segment after the start point."
+EXPECT POLYLINES 1
+
+# --- one segment is enough for an OPEN finish; blank Enter exits the command -----------------------
+CMD 260,0
+CMD
+EXPECT LOG "POLYLINE complete."
+CHECK ALL
+EXPECT POLYLINES 2
+
+# --- CLOSE/END keywords are unaffected — same command, typed instead of clicked/blank Enter --------
+CMD POLYLINE
+CMD 300,0
+CMD 360,0
+CMD 360,40
+CMD CLOSE
+EXPECT LOG "POLYLINE closed."
+EXPECT POLYLINES 3
+
+# --- 3DPOLY shares this state machine (polylineDraft3d only changes the label/Z handling), so the
+# same click-close and Enter-end paths apply with no extra code — checked here rather than assumed.
+CMD 3DPOLY
+CMD 0,500,10
+CMD 50,500,20
+CLICK 0 500
+EXPECT LOG "POLYLINE CLOSE — need at least three vertices."
+CMD 50,540,30
+CLICK 0 500
+EXPECT LOG "POLYLINE closed."
+EXPECT POLYLINES 4
+
+CMD 3DPOLY
+CMD 100,500,5
+CMD 150,500,15
+CMD
+EXPECT LOG "POLYLINE complete."
+EXPECT POLYLINES 5
+
+# --- paper space: both interactions funnel through the same CommitPolylineDraft TASK-107 already
+# made paper-aware, so this is free by construction — checked, not assumed. -------------------------
+LAYOUT NEW
+
+CMD POLYLINE
+CMD 1,1
+CMD 5,1
+CMD 5,4
+CLICK 1 1
+EXPECT LOG "POLYLINE closed."
+CHECK ALL
+EXPECT POLYLINES 5
+EXPECT PAPERPOLYLINES 1
+
+CMD POLYLINE
+CMD 8,1
+CMD 12,1
+CMD
+EXPECT LOG "POLYLINE complete."
+EXPECT POLYLINES 5
+EXPECT PAPERPOLYLINES 2
+
+LAYOUT MODEL
+EXPECT POLYLINES 5
+EXPECT PAPERPOLYLINES 2
