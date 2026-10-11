@@ -12213,6 +12213,29 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted.
 - Revisions: 2026-10-10 — initial (D-2026-10-10-a). 2026-10-10 — accepted.
 
+### REQ-401 — Traverse Editor: reduce ground distances to grid using the drawing's projection (GitHub issue #828)
+
+- Purpose: the Traverse Editor computes station coordinates from field-measured (ground) distances with no option to reduce them to grid distances. A user with a projection set in Drawing Settings (e.g. MGA56/GDA2020, reported via Reddit) has no way to apply that projection's scale factor inside the traverse editor itself, and must correct distances by hand before entering them.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-11-b.
+- Depends on: REQ-358 (drawing coordinate system), REQ-360 (Transformation tab — grid scale factor at a reference point, sea-level factor).
+- Statement:
+  1. **Option, not automatic.** The Traverse Editor has an **"Apply scale factor"** checkbox, off by default. Turning it on does not change any traverse whose checkbox is left off — existing traverses and drawings are unaffected.
+  2. **Factor choice.** While the checkbox is on, the user picks which factor to apply: **Combined** (the Transformation tab's k = k_grid · k_sea at its reference point — grid scale factor times the elevation/sea-level factor, when sea-level reduction is enabled there) or **Grid only** (k_grid alone, ignoring elevation/sea-level reduction even if the Transformation tab has it enabled).
+  3. **Source of the factor.** The factor is read from the active drawing's Drawing Settings (REQ-358 zone, REQ-360 Transformation tab reference point) — never entered or guessed independently inside the traverse editor.
+  4. **Where it applies.** Each leg's reduced horizontal distance (after slope/zenith reduction, REQ-012) is multiplied by the chosen factor before it is used to compute that leg's easting/northing increment, the running coordinates, the closure perimeter and linear closure, and the distances handed to the least-squares adjustment (REQ-015). The original (ground) horizontal distance is still available for display; turning the option off reproduces exactly the distances/coordinates from before this requirement.
+  5. **Not geolocated / not resolvable.** If the drawing has no coordinate system (REQ-358 "No Datum, No Projection"), or the Transformation tab's reference point cannot be resolved to a grid scale factor (REQ-360's own error cases — e.g. point outside the projection's domain), the checkbox is usable but applying it reports the reason and the traverse computes as if the option were off (factor 1.0) until the drawing settings are fixed.
+- Acceptance:
+  - `[req401]` test: checkbox off (default) produces identical computed distances/coordinates/closure to today, for a traverse that is otherwise unchanged.
+  - `[req401]` test: checkbox on + Combined, with a drawing whose Transformation tab resolves a known k, scales every leg's computed horizontal distance (and therefore ΔE/ΔN and closure perimeter) by exactly that k.
+  - `[req401]` test: checkbox on + Grid only uses k_grid alone, differing from Combined when the Transformation tab's sea-level factor is enabled and not 1.
+  - `[req401]` test: a drawing with no coordinate system reports the reason and leaves distances unscaled (factor 1.0).
+  - `[req401]` test: the least-squares adjustment (REQ-015) operates on the scaled distances when the option is on.
+- Owner-layer: Domain (`src/traverse/TraverseCalc.hpp`/`.cpp`), Commands (`src/commands/CadCommands_Geo.cpp`, resolving the factor from `DrawingSettings`/`ResolveDrawingTransform`), UI (`src/ui/CadUi_TraverseEditor.cpp`).
+- Status: accepted.
+- Revisions: 2026-10-11 — initial (D-2026-10-11-b). 2026-10-11 — accepted.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

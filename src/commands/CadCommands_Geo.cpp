@@ -238,6 +238,21 @@ geo::GeoResult GridToDrawingWorld(const DrawingSettings& s, int drawingInsUnits,
   return r;
 }
 
+std::string ResolveTraverseScaleFactor(const AppCommandState& st, TraverseData::ScaleFactorKind kind,
+                                       double* factorOut) {
+  *factorOut = 1.0;
+  // withTransform=true unconditionally (unlike DrawingWorldToGrid): REQ-401 wants the Transformation
+  // tab's factor whether or not "Apply transform settings" is itself turned on, same as the tab's
+  // own readouts (ResolveDrawingTransform's comment on checked.transform.apply).
+  const DrawingTransformFactors f = ResolveDrawingTransform(st.drawingSettings, st.drawingInsUnits, true);
+  if (!f.ok)
+    return f.error;
+  if (!f.transformOk)
+    return f.transformError;
+  *factorOut = kind == TraverseData::ScaleFactorKind::GridOnly ? f.gridFactor : f.combined;
+  return {};
+}
+
 geo::GeoResult DrawingPointToGrid(const AppCommandState& st, double localX, double localY) {
   // world = local + origin, in double (REQ-101).
   return DrawingWorldToGrid(st.drawingSettings, st.drawingInsUnits, localX + st.worldDocumentOriginX,

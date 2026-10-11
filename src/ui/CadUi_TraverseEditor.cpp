@@ -378,6 +378,21 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     if (!cmd.showTraverseEditorWindow)
         return;
 
+    // REQ-401: resolve the scale factor every frame (cheap — one CS-MAP lookup, only while the
+    // option is on) so a Drawing Settings change made elsewhere is picked up without a stale
+    // cached factor. Only forces a recompute when the resolved number actually changes.
+    TraverseData& tdPre = cmd.traverseData;
+    std::string scaleFactorError;
+    if (tdPre.applyScaleFactor) {
+        double factor = 1.0;
+        scaleFactorError = ResolveTraverseScaleFactor(cmd, tdPre.scaleFactorKind, &factor);
+        const double resolved = scaleFactorError.empty() ? factor : 1.0;
+        if (resolved != tdPre.scaleFactor) {
+            tdPre.scaleFactor = resolved;
+            cmd.traverseDataDirty = true;
+        }
+    }
+
     // Recompute when inputs change.
     if (cmd.traverseDataDirty) {
         ComputeTraverse(cmd.traverseData);
@@ -485,6 +500,33 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     ImGui::SameLine(0, 24);
     CheckboxCol("Closed Loop##trv", &td.isClosedLoop,
                 "Report closure error back to the starting station.");
+
+    // ---- Scale factor (REQ-401, GitHub issue #828) ----
+    ImGui::SameLine(0, 24);
+    CheckboxCol("Scale Factor##trv", &td.applyScaleFactor,
+                "Reduce each leg's horizontal distance from ground to grid using the active\n"
+                "drawing's coordinate system (Drawing Settings > Transformation tab).\n"
+                "Off by default; existing traverses are unaffected unless turned on.");
+    if (td.applyScaleFactor) {
+        ImGui::SameLine();
+        LabeledCol("Factor##trv_sf", 150.f, [&] {
+            int kind = static_cast<int>(td.scaleFactorKind);
+            if (ImGui::Combo("##trv_sf_kind", &kind, "Combined\0Grid only\0")) {
+                td.scaleFactorKind = static_cast<TraverseData::ScaleFactorKind>(kind);
+                cmd.traverseDataDirty = true;
+            }
+        });
+        ItemHelpTooltip(
+            "Combined: grid scale factor x elevation/sea-level factor, as resolved by the\n"
+            "Transformation tab's reference point.\n"
+            "Grid only: the map-projection grid scale factor alone, ignoring elevation/sea-level\n"
+            "reduction even if the Transformation tab has it enabled.");
+        ImGui::SameLine();
+        if (!scaleFactorError.empty())
+            ImGui::TextColored(ImVec4(1.f, 0.55f, 0.3f, 1.f), "(%s)", scaleFactorError.c_str());
+        else
+            ImGui::Text("k = %.6f", td.scaleFactor);
+    }
 
     ImGui::SeparatorText("Legs");
 

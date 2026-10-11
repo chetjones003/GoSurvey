@@ -255,3 +255,55 @@ TEST_CASE("Face averaging tolerates a missing face", "[engine][REQ-011]") {
     // Zenith ~90° => horizontal distance ~ slope distance.
     CHECK(td.legs[0].computedHorizDist == Approx(100.0).margin(1e-3));
 }
+
+// REQ-401: the scale-factor option is off by default and must not change anything when left off.
+TEST_CASE("Scale factor off reproduces unscaled coordinates", "[engine][REQ-401]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.startBearingDeg = 0.0;
+    td.hasStartBearing = true;
+
+    TraverseLeg leg;
+    leg.stationId = 2;
+    leg.hasHorizAngle = true; leg.horizAngleDeg = 90.0;
+    leg.hasHorizDist = true;  leg.horizDist = 100.0;
+    td.legs.push_back(leg);
+
+    REQUIRE_FALSE(td.applyScaleFactor);  // default
+    ComputeTraverse(td);
+    REQUIRE(td.legs[0].computed);
+    CHECK(td.legs[0].computedHorizDist == Approx(100.0).margin(1e-9));
+    CHECK(td.legs[0].computedGroundHorizDist == Approx(100.0).margin(1e-9));
+    CHECK(td.legs[0].computedEasting == Approx(100.0).margin(1e-9));
+    CHECK(td.closurePerimeter == Approx(100.0).margin(1e-9));
+}
+
+// REQ-401: turning the option on scales the leg's ground distance into every downstream quantity.
+TEST_CASE("Scale factor on scales distance, coordinates, and perimeter", "[engine][REQ-401]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.startBearingDeg = 0.0;
+    td.hasStartBearing = true;
+    td.applyScaleFactor = true;
+    td.scaleFactor = 0.9996;  // a typical UTM-like central-meridian grid factor
+
+    TraverseLeg leg;
+    leg.stationId = 2;
+    leg.hasHorizAngle = true; leg.horizAngleDeg = 90.0;
+    leg.hasHorizDist = true;  leg.horizDist = 1000.0;
+    td.legs.push_back(leg);
+
+    ComputeTraverse(td);
+    REQUIRE(td.legs[0].computed);
+    CHECK(td.legs[0].computedGroundHorizDist == Approx(1000.0).margin(1e-9));
+    CHECK(td.legs[0].computedHorizDist == Approx(999.6).margin(1e-6));
+    CHECK(td.legs[0].computedEasting == Approx(999.6).margin(1e-6));
+    CHECK(td.closurePerimeter == Approx(999.6).margin(1e-6));
+}
+
+// REQ-401: Combined vs Grid-only is purely a UI-side choice of which number is fed into
+// scaleFactor — ComputeTraverse itself only ever sees the resolved multiplier.
+TEST_CASE("Scale factor kind defaults to Combined", "[engine][REQ-401]") {
+    TraverseData td;
+    CHECK(td.scaleFactorKind == TraverseData::ScaleFactorKind::Combined);
+}
