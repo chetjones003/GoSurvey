@@ -77,8 +77,17 @@ jobs:
           else { sccache --show-stats }
 
   # ---------------------------------------------------------------------------
-  # lint / clang-tidy — scoped to files the PR actually touched, so pre-existing,
-  # untouched-file findings never block an unrelated PR. New file config: .clang-tidy.
+  # lint / clang-tidy — scoped to LINES the PR actually changed (via clang-tidy's own
+  # -line-filter), not whole files. (Amended 2026-10-11, issue #824 follow-up: the original
+  # whole-file scoping still left a PR on the hook for every pre-existing warning anywhere in
+  # any file it touched — on a file the size of CadCommands.hpp that is tens of thousands of
+  # unrelated, untriaged warnings, which made the check unpassable for any PR touching that file
+  # regardless of what the PR itself changed. PR #829 hit this: 0 findings on its own diff, ~95
+  # pre-existing ones elsewhere in the same files.) HeaderFilterRegex below means a .cpp's
+  # included headers are analyzed too, so the SAME combined line-filter (one {name, lines} entry
+  # per changed file) is reused for every clang-tidy invocation in this job, not just the one
+  # where that header is the direct target — otherwise a header's own genuinely-new lines would
+  # only be checked when it happens to be the file passed on the command line.
   #
   # Runs natively on windows-latest rather than via a container action (e.g.
   # ZedThree/clang-tidy-review): GitHub Actions container actions require a Linux runner,
@@ -118,7 +127,7 @@ jobs:
         # compiler error (unrelated to the file's own content) rather than a real finding.
         run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGOSURVEY_USE_PCH=OFF
 
-      - name: clang-tidy (files changed in this PR only)
+      - name: clang-tidy (lines changed in this PR only)
         shell: pwsh
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -143,7 +152,41 @@ jobs:
             Write-Host "No changed C/C++ files to lint."
             exit 0
           }
-          Write-Host "Linting:`n$($changed -join "`n")"
+          Write-Host "Linting (changed lines only):`n$($changed -join "`n")"
+
+          # One combined {name, lines} entry per changed file, reused for every invocation below
+          # (see the job header comment for why: a header's diagnostics can surface while a
+          # DIFFERENT .cpp is the file clang-tidy was invoked on). "name" uses backslashes because
+          # clang-tidy's line-filter matches the diagnostic's file path as the compiler reports it,
+          # which on this MSVC/Windows runner is a backslash-separated absolute path — a
+          # forward-slash "name" (git's own path spelling) never matches that suffix at all.
+          $filterEntries = @()
+          foreach ($file in $changed) {
+            $hunkStarts = git diff -U0 "$env:BASE_SHA" HEAD -- $file |
+              Select-String -Pattern '^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@'
+            $ranges = @()
+            foreach ($m in $hunkStarts) {
+              $start = [int]$m.Matches[0].Groups[1].Value
+              $countGroup = $m.Matches[0].Groups[2]
+              $count = if ($countGroup.Success) { [int]$countGroup.Value } else { 1 }
+              if ($count -eq 0) { continue }  # pure deletion: no new lines in this hunk to check
+              $ranges += "[$start,$($start + $count - 1)]"
+            }
+            if ($ranges.Count -eq 0) { continue }  # file touched only by deletions; nothing new to lint
+            # Two backslashes, not one: this string is embedded directly into JSON text below, and
+            # JSON requires a literal backslash to be written as \\ — a single backslash here would
+            # make the JSON invalid (a Windows path backslash followed by certain letters, e.g. the
+            # "\u" in "CadCommands.hpp", parses as a bad unicode escape, not a path separator).
+            $name = $file -replace '/', '\\'
+            $filterEntries += "{`"name`":`"$name`",`"lines`":[$($ranges -join ',')]}"
+          }
+
+          if ($filterEntries.Count -eq 0) {
+            Write-Host "No added/modified lines in any changed C/C++ file (deletions only)."
+            exit 0
+          }
+          $lineFilter = "[$($filterEntries -join ',')]"
+          Write-Host "Line filter:`n$lineFilter"
 
           $failed = $false
           foreach ($file in $changed) {
@@ -151,11 +194,13 @@ jobs:
             # warnings otherwise); .clang-tidy's own WarningsAsErrors stays '' since that field
             # would apply even on a plain `clang-tidy` invocation outside this workflow (e.g. a
             # local editor integration), where warnings-not-errors is the more useful default.
-            & $clangTidy --config-file=.clang-tidy --warnings-as-errors=* -p build $file
+            # -line-filter restricts which diagnostics clang-tidy even emits (not a post-filter on
+            # the exit code), so this also cuts the run time and log size on a large header.
+            & $clangTidy --config-file=.clang-tidy --warnings-as-errors=* "-line-filter=$lineFilter" -p build $file
             if ($LASTEXITCODE -ne 0) { $failed = $true }
           }
           if ($failed) {
-            Write-Host "::error::clang-tidy found issue(s) in changed files."
+            Write-Host "::error::clang-tidy found issue(s) on lines changed by this PR."
             exit 1
           }
 

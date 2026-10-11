@@ -437,7 +437,9 @@ static void DrawAccountsSignIn(AppCommandState& cmd) {
 
   ImGui::TextWrapped(
       "Sign in with Google, Microsoft, or an email and password to identify this account. "
-      "Nothing in GoSurvey is currently gated on signing in.");
+      "Nothing in GoSurvey is currently gated on signing in.%s",
+      cmd.authOptedOut ? " You previously chose not to sign in at launch; signing in here "
+                          "clears that choice." : "");
   ImGui::Spacing();
   ImGui::BeginDisabled(cmd.authBusy);
   if (ImGui::Button(cmd.authInteractiveBusy ? "Waiting for browser..." : "Sign In",

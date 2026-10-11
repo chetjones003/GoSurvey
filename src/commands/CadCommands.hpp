@@ -3310,6 +3310,8 @@ struct AppCommandState {
                                             ///< for the "Waiting for browser..." button label
   std::string authEmail;                ///< display only; the accounts-worker is the trust boundary
   std::string authError;                ///< set only after a user-initiated sign-in attempt fails
+  /// REQ-091 (amended 2026-10-11, issue #824): set by the launch gate's "Don't Sign In" button.
+  bool        authDeclineRequested = false;
   bool        authSignInRequested  = false;  ///< set by the Settings panel's Sign In button
   bool        authSignOutRequested = false;  ///< set by a Sign Out button (Settings, Start screen, or
                                              ///< the menu-bar account dropdown — REQ-091 amendment)
@@ -3328,10 +3330,16 @@ struct AppCommandState {
   std::string wikiScrollToCommand;  ///< lowercase primary; scroll to matching ## heading once
   bool        appWindowFocused = true;               ///< GLFW focused; auto-open What's New waits for this
   /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
-  /// launch until this is true. Set true on a successful sign-in (interactive or silent) OR when
-  /// there is no internet connectivity at all (same offline exception REQ-077's update gate
-  /// uses) — never re-checked mid-session, so signing out later does not reopen the gate.
+  /// launch until this is true. Set true on a successful sign-in (interactive or silent), on
+  /// Don't Sign In, OR when there is no internet connectivity at all (same offline exception
+  /// REQ-077's update gate uses) — never re-checked mid-session, so signing out later does not
+  /// reopen the gate.
   bool        authGateResolved = false;
+  /// REQ-091 (amended 2026-10-11, D-2026-10-11-a, issue #824): the user chose "Don't Sign In" at
+  /// the launch gate. Persisted in gosurvey-user.json; checked before the gate would otherwise
+  /// open, so it never reappears once set. Cleared by a successful sign-in from Settings (the
+  /// only remaining way to opt back in).
+  bool        authOptedOut = false;
   std::vector<SelectedEntity> trimCutters;
   /// Draft endpoints while TRIM \p L waits for second point (rubber band). First shot completes trim and clears TRIM.
   float trimCutInfP1x = 0.f, trimCutInfP1y = 0.f, trimCutInfP2x = 0.f, trimCutInfP2y = 0.f;
