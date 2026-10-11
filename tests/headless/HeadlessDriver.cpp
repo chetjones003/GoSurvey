@@ -39,6 +39,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <algorithm>
 #include <array>
@@ -360,7 +361,9 @@ bool ExtractedContoursMatchDisplay(const AppCommandState& st) {
   for (size_t p = 0; p < plCount; ++p) {
     const int b = st.userPolylineOffsets[p];
     const int e = st.userPolylineOffsets[p + 1];
-    const auto vx = [&](int v, int c) { return st.userPolylineVerts[static_cast<size_t>(v) * 3 + c]; };
+    const auto vx = [&](int v, int c) {
+      return static_cast<float>(st.userPolylineVerts[static_cast<size_t>(v) * 3 + c]);
+    };
     for (int v = b; v + 1 < e; ++v)
       baked.push_back(canon(vx(v, 0), vx(v, 1), vx(v, 2), vx(v + 1, 0), vx(v + 1, 1), vx(v + 1, 2)));
     // A closed polyline's closing segment is implied, exactly as the display buffer's is.
@@ -2399,8 +2402,10 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       double gy1 = 0.;
       double gx2 = 0.;
       double gy2 = 0.;
-      CadCoord::WorldFromLocal(run.st, run.st.userLinesFlat[base], run.st.userLinesFlat[base + 1], &gx1, &gy1);
-      CadCoord::WorldFromLocal(run.st, run.st.userLinesFlat[base + 3], run.st.userLinesFlat[base + 4], &gx2, &gy2);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userLinesFlat[base]),
+                                static_cast<float>(run.st.userLinesFlat[base + 1]), &gx1, &gy1);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userLinesFlat[base + 3]),
+                                static_cast<float>(run.st.userLinesFlat[base + 4]), &gx2, &gy2);
       const double got[6] = {gx1, gy1, static_cast<double>(run.st.userLinesFlat[base + 2]),
                              gx2, gy2, static_cast<double>(run.st.userLinesFlat[base + 5])};
       const char* names[6] = {"x1", "y1", "z1", "x2", "y2", "z2"};
@@ -2432,12 +2437,12 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
       if (vi < 0 || vi >= (v1 - v0)) {
         Fail(run, "expect", "EXPECT POLYBULGE: vertex index out of range for that polyline", sourceLine);
         return false;
       }
-      const size_t gv = static_cast<size_t>(v0 + vi);
+      const size_t gv = static_cast<size_t>(v0) + static_cast<size_t>(vi);
       const double got = gv < run.st.userPolylineVertsBulge.size()
                              ? static_cast<double>(run.st.userPolylineVertsBulge[gv])
                              : 0.0;
@@ -2466,7 +2471,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
       if (vi < 0 || vi >= (v1 - v0)) {
         Fail(run, "expect", "EXPECT POLYVERT: vertex index out of range for that polyline", sourceLine);
         return false;
@@ -2477,7 +2482,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       double gx = 0., gy = 0.;
-      CadCoord::WorldFromLocal(run.st, run.st.userPolylineVerts[gv], run.st.userPolylineVerts[gv + 1], &gx, &gy);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userPolylineVerts[gv]),
+                                static_cast<float>(run.st.userPolylineVerts[gv + 1]), &gx, &gy);
       const double got[3] = {gx, gy, static_cast<double>(run.st.userPolylineVerts[gv + 2])};
       const char* names[3] = {"x", "y", "z"};
       for (int k = 0; k < 3; ++k) {
@@ -2536,7 +2542,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
       long got = 0;
       for (int vi = v0; vi < v1; ++vi)
         if (static_cast<size_t>(vi) < run.st.userPolylineVertsBulge.size() &&
@@ -2574,8 +2580,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       }
       double gcx = 0.;
       double gcy = 0.;
-      CadCoord::WorldFromLocal(run.st, run.st.userCirclesCxCyZR[base], run.st.userCirclesCxCyZR[base + 1], &gcx,
-                               &gcy);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userCirclesCxCyZR[base]),
+                               static_cast<float>(run.st.userCirclesCxCyZR[base + 1]), &gcx, &gcy);
       float nx = 0.f;
       float ny = 0.f;
       float nz = 1.f;
@@ -2676,8 +2682,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         if (aix < 0)
           continue;
         const CadAnnotation& a = run.st.cadAnnotations[static_cast<size_t>(aix)];
-        const float dx = a.boxMinX - p.easting;
-        const float dy = 0.5f * (a.boxMinY + a.boxMaxY) - p.northing;
+        const float dx = a.boxMinX - static_cast<float>(p.easting);
+        const float dy = 0.5f * (a.boxMinY + a.boxMaxY) - static_cast<float>(p.northing);
         const float w = a.boxMaxX - a.boxMinX;
         ++labels;
         if (dx < 0.f) {
@@ -3001,11 +3007,16 @@ int RunTranscriptMain(int argc, char** argv);
 int FuzzMain(int argc, char** argv, const char* exePath);
 
 int main(int argc, char** argv) {
-  if (argc >= 2 && std::string(argv[1]) == "fuzz")
-    return FuzzMain(argc, argv, argv[0]);
-  if (argc >= 3 && std::string(argv[1]) == "run")
-    return RunTranscriptMain(argc, argv);
-  return Usage();
+  try {
+    if (argc >= 2 && std::string(argv[1]) == "fuzz")
+      return FuzzMain(argc, argv, argv[0]);
+    if (argc >= 3 && std::string(argv[1]) == "run")
+      return RunTranscriptMain(argc, argv);
+    return Usage();
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "unhandled exception: %s\n", e.what());
+    return 1;
+  }
 }
 
 namespace {

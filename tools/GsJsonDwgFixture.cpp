@@ -14,6 +14,7 @@
 #include <imgui.h>
 
 #include <cstdio>
+#include <exception>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -80,12 +81,17 @@ static int FromDwg(const char* inDwg, const char* outJson) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 4)
+  try {
+    if (argc != 4)
+      return Usage();
+    const std::string mode = argv[1];
+    if (mode == "to-dwg")
+      return ToDwg(argv[2], argv[3]);
+    if (mode == "from-dwg")
+      return FromDwg(argv[2], argv[3]);
     return Usage();
-  const std::string mode = argv[1];
-  if (mode == "to-dwg")
-    return ToDwg(argv[2], argv[3]);
-  if (mode == "from-dwg")
-    return FromDwg(argv[2], argv[3]);
-  return Usage();
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "unhandled exception: %s\n", e.what());
+    return 1;
+  }
 }
