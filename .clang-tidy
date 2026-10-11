@@ -14,6 +14,14 @@ Checks: >
   bugprone-*,
   -bugprone-easily-swappable-parameters,
   -bugprone-branch-clone,
+  # Catch2's CHECK/REQUIRE expand to `Catch::Decomposer() <= lhs == rhs` so it can capture both
+  # operands for the failure message (catch_amalgamated.hpp INTERNAL_CATCH_TEST) -- a real chained
+  # comparison never appears in the user's code, only in the macro's own decomposition. With
+  # --warnings-as-errors=* (.github/workflows/pr-checks.yml) that false positive fires on every
+  # single CHECK/REQUIRE in any touched test file, which both fails PRs that touch tests/ for no
+  # real bug and makes the job print thousands of diagnostics (each with ~7 lines of macro-expansion
+  # notes), turning a few-minute lint into a near-hour one.
+  -bugprone-chained-comparison,
   clang-analyzer-*,
   performance-*,
   cppcoreguidelines-slicing,
