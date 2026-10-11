@@ -485,12 +485,13 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
 
 /* ---------------- studies ---------------- */
 .studies-grid{
-  display:grid;gap:1.75rem;margin-top:2.5rem;
-  grid-template-columns:repeat(auto-fill,minmax(17rem,1fr));
+  display:grid;gap:1.5rem;margin-top:2.5rem;
+  grid-template-columns:repeat(auto-fill,minmax(15rem,17rem));
+  justify-content:start;
 }
 .study-card{
-  display:flex;flex-direction:column;
-  background:var(--surface);border:1px solid var(--rule);border-radius:.85rem;
+  display:flex;flex-direction:column;width:17rem;
+  background:var(--surface);border:1px solid var(--rule);border-radius:.7rem;
   overflow:hidden;text-decoration:none;color:inherit;
   box-shadow:var(--shadow);
   transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
@@ -510,15 +511,15 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
   }
 }
 .study-thumb{
-  aspect-ratio:4/5.17;width:100%;object-fit:cover;object-position:top center;
+  height:9.5rem;width:100%;object-fit:cover;object-position:top center;
   background:var(--surface-2);border-bottom:1px solid var(--rule);display:block;
 }
-.study-body{padding:1.1rem 1.25rem 1.3rem;display:flex;flex-direction:column;gap:.5rem;flex:1}
-.study-meta{font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
-.study-card h3{font-size:1.05rem;line-height:1.35;margin:0}
-.study-card p{color:var(--ink-2);font-size:.88rem;line-height:1.55;margin:0;flex:1}
+.study-body{padding:.9rem 1rem 1.1rem;display:flex;flex-direction:column;gap:.4rem;flex:1}
+.study-meta{font-size:.66rem;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.study-card h3{font-size:.95rem;line-height:1.3;margin:0}
+.study-card p{color:var(--ink-2);font-size:.8rem;line-height:1.5;margin:0;flex:1}
 .study-cta{
-  margin-top:.4rem;font-size:.82rem;font-weight:600;color:var(--accent);
+  margin-top:.3rem;font-size:.76rem;font-weight:600;color:var(--accent);
   display:inline-flex;align-items:center;gap:.3rem;
 }
 .study-card:hover .study-cta,.study-card:focus-visible .study-cta{text-decoration:underline}
