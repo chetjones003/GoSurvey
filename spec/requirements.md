@@ -3931,14 +3931,25 @@ requirements is a planning failure, not a sign of rigor.
   authority over. The gate below governs SESSION ACCESS, which is a different thing.
 
   **Launch gate (added 2026-08-23, D-2026-08-23-d, reverses this requirement's original
-  "no application feature is gated" condition):** every launch, until the user is signed
-  in, a modal window blocks the rest of the application — no drawing can be opened or
-  started. It offers only Sign In; there is no dismiss, skip, or close. The one
-  exception: when there is no internet connectivity at all, the gate is skipped entirely
-  and the application opens normally, signed out — the same offline exception REQ-077's
-  update-check gate uses, and for the same reason (a surveyor with no signal must not be
-  locked out of a program that has nothing to reach). The gate is resolved once per
-  launch and is not re-imposed if the user signs out later in the same session.
+  "no application feature is gated" condition; amended 2026-10-11, D-2026-10-11-a,
+  GitHub issue #824):** on a launch with no valid stored session and network reachable,
+  a modal window presents a **choice**, not a demand: **Sign In** (opens the system
+  browser to Auth0, as above) or **Don't Sign In** (declines; see below). Unlike the
+  original 2026-08-23 shape, this is not a one-way block — declining is a real, equal
+  option, because signing in does not unlock any feature today (the scope note above
+  still holds) and a no-escape prompt at every launch was found to cost new-user trust
+  for no offsetting benefit (issue #824).
+
+  Choosing **Don't Sign In** permanently opts out: the choice is persisted
+  (`gosurvey-user.json`, same shape as `updateSkippedVersion`/`whatsNewDismissedVersion`)
+  and the launch gate is not shown again on any future launch, with no "every so often"
+  re-nag. The only way back in is the existing Settings ▸ Account "Sign In" entry point
+  (unchanged by this amendment); a successful sign-in there clears the opt-out flag. The
+  offline exception is unchanged: when there is no internet connectivity at all, the gate
+  is skipped entirely and the application opens normally, signed out — the same offline
+  exception REQ-077's update-check gate uses. The gate is resolved once per launch (by
+  Sign In, Don't Sign In, a valid stored session, or no connectivity) and is not
+  re-imposed if the user signs out later in the same session.
 - Acceptance:
   - clicking "Sign In" opens the system browser to Auth0 Universal Login showing all
     three configured options: Google, Microsoft, and email/username/password;
@@ -3954,14 +3965,23 @@ requirements is a planning failure, not a sign of rigor.
   - no individual command or feature is separately gated or blocked by sign-in state or
     tier beyond the launch gate itself (mechanism only, per the scope note above);
   - REQ-080's anonymous telemetry ping is unchanged by this requirement;
-  - **(added 2026-08-23)** on launch, with network reachable and no valid stored
-    session, a modal blocks all other interaction until Sign In succeeds — no close
-    button, no click-away dismissal;
+  - **(added 2026-08-23, amended 2026-10-11 D-2026-10-11-a)** on launch, with network
+    reachable and no valid stored session, a modal blocks all other interaction until
+    the user picks **Sign In** or **Don't Sign In** — no close button, no click-away
+    dismissal, but both buttons are real choices, not just one;
   - **(added 2026-08-23)** on launch, with `HasInternetConnectivity()` reporting no
     route to the internet, the modal does not appear at all and the application opens
     normally;
   - **(added 2026-08-23)** signing out from the Settings panel later in the same
     session does not reopen the launch gate.
+  - **(added 2026-10-11, D-2026-10-11-a, issue #824)** clicking **Don't Sign In**
+    closes the gate for this launch and persists the opt-out; no subsequent launch
+    shows the gate again (checked before the gate would otherwise open), regardless of
+    connectivity or stored-session state, until a sign-in succeeds from Settings;
+  - **(added 2026-10-11)** a successful sign-in from Settings ▸ Account clears a
+    previously-set opt-out, so a later sign-out returns to ordinary signed-out
+    behavior (gate stays closed for the rest of that session, per the existing rule
+    above) rather than silently restoring the permanent opt-out.
   - **(added 2026-09-01, D-2026-09-01-a, issue #182)** while signed in, a **Sign Out**
     control is available on the Start-screen "Connect" card and from a dropdown on the
     far-right menu-bar email; each performs the same sign-out as Settings ▸ Account;
@@ -3982,6 +4002,10 @@ requirements is a planning failure, not a sign of rigor.
                dropdown (Account Details + Sign Out) plus a read-only Account Details
                placeholder window (D-2026-09-01-a, GitHub issue #182). No new identity
                or sign-out mechanism; reuses existing request flags.
+               2026-10-11 — the launch gate becomes a dismissible choice: Sign In or
+               permanently Don't Sign In (D-2026-10-11-a, GitHub issue #824), reversing
+               the 2026-08-23 "no dismiss, skip, or close" condition. Identity/PKCE/
+               Credential-Manager mechanism and REQ-092 unchanged.
 
 ### REQ-092 — License-tier lookup endpoint
 - Purpose: give the application a place to learn a signed-in user's entitlement, ahead

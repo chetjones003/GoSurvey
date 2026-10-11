@@ -213,6 +213,10 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   if (s.contains("whatsNewDismissedVersion") && s["whatsNewDismissedVersion"].is_string())
     st.whatsNewDismissedVersion = s["whatsNewDismissedVersion"].get<std::string>();
 
+  // REQ-091 (amended 2026-10-11, D-2026-10-11-a) — "Don't Sign In" at the launch gate, persisted
+  // so the gate never reappears once chosen.
+  b("authOptedOut", &st.authOptedOut);
+
   // --- Undo/Redo ---
   if (s.contains("undoHistoryMaxSize") && s["undoHistoryMaxSize"].is_number_integer())
     st.undoHistoryMaxSize = std::clamp(s["undoHistoryMaxSize"].get<int>(), 1, 200);
@@ -443,6 +447,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["updateUseBetaChannel"] = st.updatePrefs.useBetaChannel;
   s["updateSkippedVersion"] = st.updatePrefs.skippedVersion;
   s["whatsNewDismissedVersion"] = st.whatsNewDismissedVersion;
+  s["authOptedOut"] = st.authOptedOut;  // REQ-091 amended, D-2026-10-11-a
 
   // Right-click behavior
   s["rightClickRepeatLastCommand"] = st.rightClickRepeatLastCommand;

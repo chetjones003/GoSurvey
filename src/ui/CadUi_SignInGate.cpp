@@ -1,6 +1,7 @@
-// REQ-091 (amended 2026-08-23) — the launch-time sign-in gate. Every launch, until the user is
-// signed in or there is no internet at all to sign in with, this modal blocks the rest of the
-// application.
+// REQ-091 (amended 2026-10-11, D-2026-10-11-a, issue #824) — the launch-time sign-in gate. Every
+// launch, until the user signs in, declines (Don't Sign In, permanent), or there is no internet
+// at all to sign in with, this modal blocks the rest of the application. Once declined, the
+// `cmd.authOptedOut` prefs flag skips this entirely on every future launch.
 
 #include "CadUi.hpp"
 
@@ -109,8 +110,12 @@ void DrawSignInGateBody(AppCommandState& cmd) {
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.88f, 0.92f, 0.97f, 1.f));
   ImGui::SetCursorPosX(ImGui::GetCursorPosX() + kSidePad);
   ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + contentW - kSidePad * 2.f);
+  // REQ-091 amended (D-2026-10-11-a, issue #824): framed as a real choice, not a demand — nothing
+  // in GoSurvey is gated on sign-in today, so declining is a legitimate, permanent option.
   ImGui::TextWrapped(
-      "Sign in with Google, Microsoft, or an email and password to continue.");
+      "Sign in with Google, Microsoft, or an email and password to create an account for future "
+      "cloud-sync features. Or continue without an account — you can sign in later from "
+      "Settings any time.");
   ImGui::PopTextWrapPos();
   ImGui::PopStyleColor();
 
@@ -122,6 +127,13 @@ void DrawSignInGateBody(AppCommandState& cmd) {
   if (AccentButton(cmd.authInteractiveBusy ? "Waiting for browser…" : "Sign In", true,
                    ImVec2(kBtnW, 0.f)))
     cmd.authSignInRequested = true;
+  ImGui::EndDisabled();
+
+  ImGui::Spacing();
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (contentW - kBtnW) * 0.5f);
+  ImGui::BeginDisabled(cmd.authBusy);
+  if (AccentButton("Don't Sign In", false, ImVec2(kBtnW, 0.f)))
+    cmd.authDeclineRequested = true;
   ImGui::EndDisabled();
 
   if (!cmd.authError.empty()) {
@@ -167,7 +179,7 @@ void DrawSignInGate(AppCommandState& cmd) {
   const float scale     = LerpFloat(0.84f, 1.f, scaleEase);
   const float yLift     = LerpFloat(kDropFromY, 0.f, EaseOutBounce(dropPhase));
 
-  const ImVec2 animSize(kSignInSize.x * scale, 380.f * scale);
+  const ImVec2 animSize(kSignInSize.x * scale, 430.f * scale);
   const ImVec2 center   = ImGui::GetMainViewport()->GetCenter();
   ImGui::SetNextWindowSize(animSize, ImGuiCond_Always);
   ImGui::SetNextWindowPos(ImVec2(center.x, center.y + yLift), ImGuiCond_Always, ImVec2(0.5f, 0.5f));

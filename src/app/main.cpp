@@ -524,8 +524,15 @@ int main()
   // and it failed" (REQ-201: shown, not swallowed) — both complete through the same poll below.
   std::unique_ptr<auth::AuthTask> authTask;
   bool                            authLastAttemptInteractive = false;
-  authTask     = auth::BeginSilentRefresh();
-  cmd.authBusy = true;
+  // REQ-091 (amended 2026-10-11, D-2026-10-11-a, issue #824): a permanent "Don't Sign In" means
+  // no auth network activity at all on launch, not just a hidden gate — the user declined sign-in
+  // entirely until they explicitly opt back in from Settings.
+  if (!cmd.authOptedOut) {
+    authTask     = auth::BeginSilentRefresh();
+    cmd.authBusy = true;
+  } else {
+    cmd.authGateResolved = true;
+  }
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
   cmdLog.push_back("Regenerating model.");
@@ -745,6 +752,16 @@ int main()
         cmd.authError.clear();
       }
     }
+    // REQ-091 (amended 2026-10-11, D-2026-10-11-a, issue #824): "Don't Sign In" at the launch
+    // gate. Persisted immediately (same shape as What's New's dismiss-on-close), not deferred to
+    // the normal exit save, so the choice survives even if the session never exits cleanly.
+    if (cmd.authDeclineRequested)
+    {
+      cmd.authDeclineRequested = false;
+      cmd.authOptedOut         = true;
+      cmd.authGateResolved     = true;
+      (void)SaveUserStartupPrefs(cmd);
+    }
     if (authTask && authTask->done.load(std::memory_order_acquire))
     {
       cmd.authBusy            = false;
@@ -760,6 +777,13 @@ int main()
       // while online, which is what leaves the gate open to show the blocking prompt.
       if (authTask->ok || authTask->skippedNoNetwork)
         cmd.authGateResolved = true;
+      // A successful sign-in (from Settings, after a prior "Don't Sign In") clears the opt-out —
+      // REQ-091 amended: the user is back in, so the permanent decline no longer applies.
+      if (authTask->ok && cmd.authOptedOut)
+      {
+        cmd.authOptedOut = false;
+        (void)SaveUserStartupPrefs(cmd);
+      }
       authTask.reset();
     }
     // REQ-080 (amended, D-2026-08-23-e): fires exactly once per launch, right after the auth
