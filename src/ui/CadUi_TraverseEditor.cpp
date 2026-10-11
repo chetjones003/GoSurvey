@@ -260,13 +260,20 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
     if (!cmd.traverseLsaComputed)
         recompute();
 
+    // Active drawing's linear unit abbreviation (issue #831): labels below reflect this
+    // instead of hardcoding "ft". The underlying values are unit-agnostic doubles —
+    // whatever unit the project's legs were entered in.
+    const char* distUnit = CadDrawingInsUnitsAbbrev(cmd.drawingInsUnits);
+    char sigmaSdLabel[48];
+    std::snprintf(sigmaSdLabel, sizeof(sigmaSdLabel), "Dist \xcf\x83 (%s)##lsa_sd", distUnit);
+
     // ---- A-priori standard errors (weights) ----
     ImGui::SeparatorText("A-priori Standard Errors");
     bool wChanged = false;
     ImGui::SetNextItemWidth(120.f);
     wChanged |= ImGui::InputDouble("Angle \xcf\x83 (sec)##lsa_sa", &cmd.traverseLsaWeights.sigmaAngleSec, 0., 0., "%.2f");
     ImGui::SameLine(0, 16); ImGui::SetNextItemWidth(120.f);
-    wChanged |= ImGui::InputDouble("Dist \xcf\x83 (ft)##lsa_sd", &cmd.traverseLsaWeights.sigmaDistConstFt, 0., 0., "%.4f");
+    wChanged |= ImGui::InputDouble(sigmaSdLabel, &cmd.traverseLsaWeights.sigmaDistConstFt, 0., 0., "%.4f");
     ImGui::SameLine(0, 16); ImGui::SetNextItemWidth(120.f);
     wChanged |= ImGui::InputDouble("Dist ppm##lsa_ppm", &cmd.traverseLsaWeights.sigmaDistPpm, 0., 0., "%.2f");
     ImGui::SameLine(0, 16);
@@ -349,8 +356,10 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
                                                          ImGuiTableFlags_ScrollY)) {
                 ImGui::TableSetupColumn("From");
                 ImGui::TableSetupColumn("To");
+                char distResidLabel[32];
+                std::snprintf(distResidLabel, sizeof(distResidLabel), "Dist resid (%s)", distUnit);
                 ImGui::TableSetupColumn("Angle resid (sec)");
-                ImGui::TableSetupColumn("Dist resid (ft)");
+                ImGui::TableSetupColumn(distResidLabel);
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
                 ImGui::TableHeadersRow();
                 ImGui::PopStyleColor();
@@ -439,6 +448,19 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
 
     // ---- Starting station header ----
     ImGui::SeparatorText("Starting Station");
+    // Unit indicator (issue #831): the editor gave no clue which unit entered/displayed
+    // distances were in, so this makes the active drawing's linear unit explicit.
+    {
+        int unitSel = 2;  // Feet, matching kDrawingUnitNames' fallback default (REQ-357).
+        for (int i = 0; i < kDrawingUnitCount; ++i)
+            if (kDrawingUnitCodes[i] == cmd.drawingInsUnits) unitSel = i;
+        ImGui::SameLine();
+        ImGui::TextDisabled("(Units: %s)", kDrawingUnitNames[unitSel]);
+        ItemHelpTooltip(
+            "Distances entered and shown in this editor (H.Dist, S.Dist, perimeter,\n"
+            "misclosure, closure analysis) use the active drawing's linear unit,\n"
+            "set in Drawing Settings or the UNITS command.");
+    }
 
     const float colGap = 14.f;
 
