@@ -7698,6 +7698,17 @@ struct DrawingTransformFactors {
 /// zone's unit. Fails, with the reason, exactly when DrawingPointToGrid would.
 [[nodiscard]] geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing);
 
+// --- Traverse Editor scale factor (REQ-401, GitHub issue #828; CadCommands_Geo.cpp) ---------------
+/// Resolves the ground→grid multiplier the Traverse Editor applies when its "Apply scale factor"
+/// option is on: Combined = the Transformation tab's k = k_grid · k_sea at its reference point;
+/// GridOnly = k_grid alone. Reuses \ref ResolveDrawingTransform rather than a second computation.
+/// \p factorOut is left at 1.0 and a non-empty reason is returned when the drawing has no
+/// coordinate system (REQ-358) or the Transformation tab's reference point cannot be resolved
+/// (REQ-360's own failure cases).
+[[nodiscard]] std::string ResolveTraverseScaleFactor(const AppCommandState& st,
+                                                     TraverseData::ScaleFactorKind kind,
+                                                     double* factorOut);
+
 /// WGS 84 latitude/longitude ↔ a LOCAL drawing point (REQ-363 item 3, ADR-064 (b)): the same chain as
 /// \ref DrawingPointToGrid / \ref GridToDrawingPoint plus the datum path to WGS 84, with the zone, the
 /// datum paths and the REQ-360 transformation resolved ONCE by \ref Open, so an online map can place
