@@ -1,0 +1,86 @@
+# REQ-354 / D-2026-09-28-j (GitHub issue #564 section 5) — the same boxes in MOVE, COPY and PIPERUN,
+# and the Z box (issue #564 Q3: shown whenever the view is not plan to the current UCS).
+#
+# The section's acceptance names these commands: "In MOVE (and LINE, COPY, PIPERUN, …), typing @
+# visibly switches the boxes to ΔX/ΔY". A typed Z is read at every point prompt (D-2026-09-28-j).
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+
+# --- MOVE, plan view: two boxes, `@` → ΔX ΔY from the base point ------------------------------------
+CMD MOVE
+EXPECT DYNLABELS X Y
+DYN 0,0
+DYNKEY ENTER
+EXPECT DYNLABELS X Y
+DYN @
+EXPECT DYNLABELS @ ΔX ΔY
+DYN 5,5
+DYNKEY ENTER
+EXPECT LINEXYZ 0 5 5 0 15 5 0
+ESC
+
+# --- COPY, orbited: a Z box appears, and `@` makes it ΔZ --------------------------------------------
+VIEWANGLES -45 35
+BOX -1 -1 21 11
+CMD COPY
+EXPECT DYNLABELS X Y Z
+DYN 5,5,0
+DYNKEY ENTER
+DYN @
+EXPECT DYNLABELS @ ΔX ΔY ΔZ
+DYN 0,0,3
+DYNKEY ENTER
+EXPECT LINEXYZ 1 5 5 3 15 5 3
+ESC
+
+# --- a typed Z at LINE, which used to drop it silently ----------------------------------------------
+CMD LINE
+EXPECT DYNLABELS X Y Z
+DYN 0,20,4
+DYNKEY ENTER
+DYN 10,20,4
+DYNKEY ENTER
+EXPECT LINEXYZ 2 0 20 4 10 20 4
+ESC
+
+# Back in plan view the Z box goes away again; `x,y,` still asks for one rather than dropping it.
+VIEWANGLES 0 90
+CMD LINE
+EXPECT DYNLABELS X Y
+DYN 0,30,
+EXPECT DYNLABELS X Y Z
+DYN 2
+DYNKEY ENTER
+DYN @10,0
+DYNKEY ENTER
+# A relative point with no dz lands on the work plane exactly as before this change; what matters
+# here is that the Z typed for the first point does not ride along into the second.
+EXPECT LINEXYZ 3 0 30 2 10 30 0
+ESC
+
+# --- PIPERUN: point prompts get the same boxes (it had a single field), and `@` is relative to the
+# last vertex (it had no relative entry at all) --------------------------------------------------------
+CMD PIPERUN
+CMD 4in
+# The wall typed rather than a bare Enter: on beta a blank Enter at this prompt is swallowed by
+# ProcessCommandLineSubmit's blank-line block (fixed on the Pipe Fittings palette branch, REQ-350).
+CMD 0.237
+EXPECT DYNLABELS X Y
+DYN 0,50
+DYNKEY ENTER
+EXPECT DYNLABELS @ Distance < Angle
+DYN @
+EXPECT DYNLABELS @ ΔX ΔY
+DYN 20,0
+DYNKEY ENTER
+EXPECT NOLOG "PIPERUN —"
+DYN 12
+DYNKEY ENTER
+EXPECT NOLOG "PIPERUN —"
+ESC

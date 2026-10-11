@@ -1,0 +1,519 @@
+# issue #373 — JOIN of two non-coplanar-looking 3D polylines dropped a vertical/near-vertical run,
+# and FILLET could not touch two lines whose endpoints are not both at world Z=0.
+#
+# JOIN's edge walk only ever compared X/Y at each endpoint and always wrote 0 for the joined
+# polyline's own Z, so two 3D polylines sharing a plan location at different elevations fused onto
+# the wrong endpoint and every vertex landed on Z=0. FILLET's two-line solve was pure 2D throughout
+# (FilletCurve, SolveFilletCenter, the arc it built) so a picked line's own Z was silently ignored.
+#
+# LINE's own typed input has no X,Y,Z form (3DPOLY does; a plain LINE silently drops a third field —
+# a separate, pre-existing, documented limitation, not part of this fix). ELEV changed BETWEEN two
+# picks of the same LINE is what builds a true 3D line segment here instead.
+
+# ── 1. JOIN of two 3D polylines preserves every vertex's Z ─────────────────────────────────────
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 0,0,10
+CMD END
+CMD 3DPOLY
+CMD 0,0,10
+CMD 10,0,10
+CMD END
+
+CHECK ALL
+EXPECT POLYLINES 2
+
+CMD JOIN
+CLICK -5 -5
+CLICK 15 5
+EXPECT SELECTED 2
+CMD
+EXPECT LOG JOIN — created 1 polyline(s).
+CHECK ALL
+EXPECT POLYLINES 1
+# All three vertices survive with their own Z — nothing collapses to 0.
+EXPECT POLYVERT 0 0 0 0 0
+EXPECT POLYVERT 0 1 0 0 10
+EXPECT POLYVERT 0 2 10 0 10
+
+# ── 2. A vertical run sharing a plan position at a DIFFERENT elevation is NOT fused to it ────────
+NEW
+CMD ELEV 0
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD ELEV 5
+CMD LINE
+CMD 0,0
+CMD 0,-10
+ESC
+CMD ELEV 0
+
+CMD JOIN
+CLICK -5 -12
+CLICK 12 5
+EXPECT SELECTED 2
+CMD
+# The two lines never actually touch (Z 0 vs Z 5 at the shared plan XY) — nothing merges.
+EXPECT LOG JOIN — nothing merged: the selected objects' endpoints do not connect.
+EXPECT LINES 2
+EXPECT POLYLINES 0
+
+# ── 3. FILLET of two parallel 3D lines connects them with a semicircle, in 3D ───────────────────
+# Line 2 is drawn flat, then MOVEd up by Z=5 as a rigid whole (a plain LINE's own typed input has no
+# X,Y,Z form — only 3DPOLY does) — two lines this way are still exactly coplanar (any two parallel
+# lines are), so this exercises the plane build, the projected 2D solve and the 3D semicircle special
+# case end to end, with hand-computable expected numbers.
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 0,3
+CMD 10,3
+ESC
+CHECK ALL
+EXPECT LINES 2
+
+BOX -1 2 11 4
+CMD MOVE
+CMD 0,0
+CMD @0,0,5
+ESC
+CHECK ALL
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+EXPECT LINEXYZ 1 0 3 5 10 3 5
+
+CMD FILLET
+CLICK 1 0
+CLICK 9 3
+EXPECT LOG FILLET — parallel 3D lines connected by a semicircle (radius set by the gap between them, not the current FILLET radius).
+CHECK ALL
+EXPECT LINES 2
+EXPECT ARCS 1
+# Line 1 anchors the semicircle at its own (unmoved) start; line 2's near end already sits exactly at
+# the tangent point, so neither line's stored endpoints change.
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+EXPECT LINEXYZ 1 0 3 5 10 3 5
+EXPECT ARCPOINTS 0 0 0 0 0 3 5
+
+# ── 4. Two genuinely skew (non-coplanar) 3D lines are refused, not guessed at ───────────────────
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 0,5
+CMD 0,15
+ESC
+CHECK ALL
+EXPECT LINES 2
+
+BOX -1 4 1 16
+CMD MOVE
+CMD 0,0
+CMD @0,0,5
+ESC
+CHECK ALL
+EXPECT LINEXYZ 0 0 0 0 10 0 0
+EXPECT LINEXYZ 1 0 5 5 0 15 5
+
+CMD FILLET
+CLICK 5 0
+CLICK 0 10
+EXPECT LOG FILLET — the two lines do not share a plane (non-coplanar 3D lines are not supported); refused.
+CHECK ALL
+EXPECT LINES 2
+EXPECT ARCS 0
+
+# ── 5. FILLET's own pick now accepts the camera ray (plumbing smoke test) ───────────────────────
+# Real report: in an orbited/ortho view, hovering visibly over a vertical line and getting "no
+# object at pick", because FILLET's click handler never received the camera ray PickClosestCadEntity
+# already knows how to use — it only ever got the click's flattened work-plane X/Y. FILLET now takes
+# an optional ray and CLICK's own Z form aims one, the same way CadResolveSolidPick's ray already
+# does. This checks the new parameter is actually wired end to end (CadUi.cpp -> SubmitViewportPick
+# -> SubmitViewportPickImpl -> HandleFilletViewportPick -> PickClosestCadEntity) and does not
+# regress an ordinary flat pick once the view is orbited. It cannot reproduce the exact screen-ray
+# mismatch itself — that needs a live GUI pass (a scripted CLICK aims its ray at the exact 3D point
+# named, sidestepping the screen-to-workplane projection the real bug is in).
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 10,0
+CMD 10,10
+ESC
+VIEWANGLES -45 35
+CHECK ALL
+EXPECT LINES 2
+
+CMD FILLET
+CLICK 5 0 0
+EXPECT LOG FILLET — select second object:
+CLICK 10 5 0
+EXPECT LOG FILLET — corner filleted.
+CHECK ALL
+EXPECT LINES 2
+EXPECT ARCS 1
+
+# ── 6. FILLET on two separate 3D POLYLINES (3DPOLY), not just plain Lines ───────────────────────
+# Real report: two 3DPOLY entities meeting at a tilted corner still said "no valid tangent arc
+# exists for that radius" after the Line/Line fix above — because the 3D solve only recognised
+# LineSeg entities, so a Polyline's end segment still fell through to the legacy 2D-only path and
+# had its own Z silently dropped, same as the original JOIN bug. A tilted-plane 45-degree corner,
+# drawn as two separate open 3DPOLY entities.
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CHECK ALL
+EXPECT POLYLINES 2
+
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+EXPECT LOG FILLET — 3D corner filleted.
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
+# Both polylines were trimmed back off the corner by the fillet radius, in 3D. The two lines meet
+# at 45 degrees, not 90, so the tangent length is r/tan(22.5 deg) from the corner, not simply r —
+# hand-verified via the offset-line-intersection construction FilletCandidateCenters itself uses.
+EXPECT POLYVERT 0 1 4.4142 0 4.4142
+EXPECT POLYVERT 1 0 5.8284 0 5.0000
+EXPECT ARCPOINTS 0 4.4142 0 4.4142 5.8284 0 5.0000
+
+# ── 7. Radius too large is refused for a 3D polyline pair too ──────────────────────────────────
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 20
+CLICK 2 0
+CLICK 10 0
+EXPECT LOG FILLET — radius 20.000000 is too large for the selected objects; refused.
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 0
+
+# ── 8. The camera-ray pick fixes a real report: small-radius fillet rounding the WRONG side ─────
+# A pick projected exactly onto its own line cannot tell two valid tangent arcs apart — it is
+# equidistant from both candidates, so the "nearest to pick" tie-break falls back to iteration
+# order, and could round the OUTSIDE of the corner instead of the inside. A right-angle corner
+# (vertical then horizontal, same shape as the report's screenshot) with an orbited view and a CLICK
+# Z that lands slightly OFF each line, toward the interior of the corner, is what a real screen
+# click naturally provides — this is what the ray-plane intersection now recovers.
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 0,0,10
+CMD END
+CMD 3DPOLY
+CMD 0,0,10
+CMD 10,0,10
+CMD END
+VIEWANGLES -45 35
+CHECK ALL
+EXPECT POLYLINES 2
+
+CMD FILLET
+CMD R
+CMD 0.25
+CLICK 0.1 0 5
+EXPECT LOG FILLET — select second object:
+CLICK 5 0 9.9
+EXPECT LOG FILLET — 3D corner filleted.
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
+# The INSIDE tangent arc — both trims land toward the corner's interior, not the outside.
+EXPECT POLYVERT 0 1 0 0 9.75
+EXPECT POLYVERT 1 0 0.25 0 10
+EXPECT ARCPOINTS 0 0 0 9.75 0.25 0 10
+
+# ── 9. REQ-325 / ADR-053 increment 1 — JOIN accepts a coplanar TILTED arc ────────────────────────
+# Real report: FILLET (issue #373's 3D fix) built a genuinely tilted arc between two 3D polylines,
+# and JOIN refused it outright ("tilted arc ignored: cannot fold a non-planar arc into a polyline").
+# Same 45-degree corner as scenario 6 — Line/Polyline, arc, Line/Polyline all lie in the Y=0 plane —
+# now folded into ONE polyline instead of being left as three separate objects.
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
+
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+EXPECT SELECTED 3
+CMD
+EXPECT LOG JOIN — created 1 polyline(s).
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+EXPECT LINES 0
+# The tilted arc's own two tangent-point ends survive as ordinary polyline vertices, in 3D, exactly
+# where the fillet put them — the walk direction is whichever way the Eulerian path happened to run.
+EXPECT POLYVERT 0 0 15 0 5
+EXPECT POLYVERT 0 1 5.8284 0 5.0000
+EXPECT POLYVERT 0 2 4.4142 0 4.4142
+EXPECT POLYVERT 0 3 0 0 0
+
+# ── 10. JOIN still refuses a tilted arc that is NOT coplanar with what it would join to ──────────
+# Same tilted arc as scenario 9, but its second neighbor is swapped for a 3D polyline that shares the
+# arc's own endpoint yet heads off in Y (out of the arc's Y=0 plane) instead of staying in it — JOIN
+# must refuse by name, not silently guess a plane or drop the arc.
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CMD DELETE
+BOX 11 -1 13 1
+CMD
+CMD 3DPOLY
+CMD 4.414214,0,4.414214
+CMD 4.414214,5,4.414214
+CMD END
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
+
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+EXPECT SELECTED 3
+CMD
+EXPECT LOG JOIN — skipped a group: a tilted arc does not share a plane with the edges it would be joined to.
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
+
+# ── 11. REQ-325 / ADR-053 increment 2 — pick and render see the TRUE tilted curve ────────────────
+# Real report follow-on: a curved segment's own bulge is a flat-2D-only construction, so a picked
+# polyline containing a tilted arc (from JOIN, scenario 9) either could not be hit at all or was
+# tested against the wrong (flattened) points. PICKAT drives PickClosestCadEntity directly — no
+# screen/ray plumbing in the headless driver, so this is the plan-view (no-ray) flattened-metric
+# path, but that path now samples the tilted arc's TRUE 3D shape rather than a flat approximation.
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+CMD
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+# A point roughly on the curved segment's own XY footprint (between the two known tangent points)
+# picks the polyline; a point far from all of it picks nothing.
+EXPECT PICKAT 5.1 0 1.0 POLYLINE
+EXPECT PICKAT 100 100 0.5 NONE
+
+# ── 12. REQ-325 / ADR-053 increment 4 — DXF export splits a tilted segment into a real ARC ───────
+# Same joined tilted-arc polyline as scenario 9. DXF's LWPOLYLINE has one shared elevation/normal
+# for the WHOLE entity — no per-segment plane slot — so the tilted segment is written as a separate
+# ARC entity instead of a flattened-wrong bulge, and re-importing reproduces the exact geometry
+# (now two objects again, re-JOINable, not the original one polyline).
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+CMD
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+
+EXPORT DXF %OUT%/req325-split.dxf
+NEW
+IMPORT DXF %OUT%/req325-split.dxf
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT ARCS 1
+EXPECT LINES 0
+EXPECT ARCPOINTS 0 4.4142 0 4.4142 5.8284 0 5.0000
+
+# ── 13. A flat-only polyline (no tilt anywhere) exports as ONE LWPOLYLINE, unchanged ─────────────
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD ARC
+CMD CANGLE 90
+CMD 10,0
+CMD LINE
+CMD 20,0
+CMD END
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 1
+
+EXPORT DXF %OUT%/req325-flat.dxf
+NEW
+IMPORT DXF %OUT%/req325-flat.dxf
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+EXPECT POLYARCS 0 1
+
+# ── 14. DWG round trip: flat bulge survives; a tilted segment degrades to straight, not corrupt ──
+# DWG's own LWPOLYLINE writer has no tilted-ARC export path to split a tilted segment onto (unlike
+# DXF), so — a real, separate, named gap, not silently produced — a tilted segment is written
+# straight (bulge 0) rather than flattened wrong. A flat curved segment round-trips exactly.
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD ARC
+CMD CANGLE 90
+CMD 10,0
+CMD LINE
+CMD 20,0
+CMD END
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 1
+
+SAVEAS %OUT%/req325-flat.dwg
+NEW
+OPEN %OUT%/req325-flat.dwg
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 1
+
+NEW
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+CMD
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+
+SAVEAS %OUT%/req325-tilted.dwg
+NEW
+OPEN %OUT%/req325-tilted.dwg
+CHECK ALL
+EXPECT POLYLINES 1
+
+# ── 15. SWEEP accepts a joined polyline path containing a tilted curved segment ──────────────────
+# Real report: SWEEP silently refused (never reached the solid-build step) with a joined tilted-arc
+# polyline as the path. SweepPathFromSelection (REQ-315) predates REQ-325 and, for ANY bulge segment
+# spanning different Z, always refused outright ("not a planar arc") and otherwise hardcoded a flat
+# +Z normal — never consulting the per-vertex normal REQ-325 added. Same joined-corner geometry as
+# scenario 9, swept with a small circular profile.
+NEW
+CMD CIRCLE
+CLICK 0 0
+CLICK 0.17 0
+ESC
+CMD 3DPOLY
+CMD 0,0,0
+CMD 5,0,5
+CMD END
+CMD 3DPOLY
+CMD 5,0,5
+CMD 15,0,5
+CMD END
+CMD FILLET
+CMD R
+CMD 2
+CLICK 2 0
+CLICK 10 0
+ESC
+CMD JOIN
+CLICK -5 -5
+CLICK 20 10
+CMD
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+EXPECT CIRCLES 1
+
+CMD SWEEP
+CLICK 0 0
+CLICK 8 3
+CMD
+CHECK ALL
+EXPECT SOLIDS 1

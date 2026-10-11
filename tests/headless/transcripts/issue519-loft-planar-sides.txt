@@ -1,0 +1,69 @@
+# GitHub issue #519 — a LOFT between similar parallel polygons has flat sides, stored as flat faces.
+#
+# Before: a 60 x 60 square lofted to a 30 x 30 square builds a square frustum whose four sides are
+# flat, but they were stored as freeform (NURBS) faces. SECTION refused every cut ("flat faces
+# only") and SECTIONPLANE refused the sides ("that is a freeform face"). The same frustum made by
+# PYRAMID worked. Now the sides are stored as the flat faces they are.
+
+NEW
+CMD ELEV
+CMD -25
+ESC
+CMD POLYLINE
+CMD -30,-30
+CMD 30,-30
+CMD 30,30
+CMD -30,30
+CMD CLOSE
+ESC
+CMD ELEV
+CMD 25
+ESC
+CMD POLYLINE
+CMD -15,-15
+CMD 15,-15
+CMD 15,15
+CMD -15,15
+CMD CLOSE
+ESC
+CMD ELEV
+CMD 0
+ESC
+BOX -40 -40 40 40
+CMD LOFT
+EXPECT SOLIDS 1
+EXPECT SOLIDPROPS 0 105000 13896.27586 8 12 6
+
+# --- SECTION at z = 0: the 45 x 45 square ----------------------------------------------------------
+CMD SELECT
+ESC
+BOX -100 -100 100 100
+CMD SECTION
+CMD UCS
+EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
+# The two profile polylines stay, plus the section outline.
+EXPECT POLYLINES 3
+EXPECT SOLIDS 1
+EXPECT POLYVERT 2 0 22.5 -22.5 0
+EXPECT POLYVERT 2 1 22.5 22.5 0
+EXPECT POLYVERT 2 2 -22.5 22.5 0
+EXPECT POLYVERT 2 3 -22.5 -22.5 0
+CHECK ALL
+CMD UNDO
+EXPECT POLYLINES 2
+EXPECT SOLIDS 1
+
+# --- SECTIONPLANE accepts a side face ---------------------------------------------------------------
+# The +x side runs from x 30 at z -25 to x 15 at z 25, so it passes x 22.5 at z 0. Its outward normal
+# is (50, 0, 15) / |(50, 0, 15)|.
+CMD SELECT
+ESC
+CMD SECTIONPLANE
+EXPECT ACTIVE SECTIONPLANE
+CLICK 22.5 0 0
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+EXPECT SECTIONCLIPNORMAL 0.957826 0 0.287348
+EXPECT ACTIVE NONE
+EXPECT SOLIDS 1
+CHECK ALL

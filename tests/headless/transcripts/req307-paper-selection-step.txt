@@ -1,0 +1,56 @@
+# REQ-307 / GitHub #106 — paper-space MOVE/COPY/DELETE open a real selection step (accumulate
+# until Enter, REQ-121-style treatment) when they start with NOTHING selected, instead of refusing
+# outright. Pick-first (act on whatever is already selected) stays the fast path and is unchanged —
+# nothing here exercises it, since the headless driver has no verb that populates
+# st.selectedPaperEntities/selectedViewports the way a real click or box-select would (the ambient
+# paper click block CLICK/BOX cannot reach — see ViewportClickRouteFor's own note that pure paper
+# space has its own click block, not routed through it).
+#
+# What IS exercised here, through the real command dispatch (`CMD DELETE`/`CMD MOVE`/`CMD COPY` —
+# the same `primary == "delete"` etc. text dispatch the GUI's typed command line uses) and the real
+# blank-Enter dispatch (`CMD` — ProcessCommandLineSubmit's own blank-line branch, not the raw
+# viewport ImGui::IsKeyPressed(Enter) check CadUi.cpp also has for mouse-only entry):
+#
+#   1. Starting DELETE/MOVE/COPY in paper space with nothing selected no longer answers the OLD
+#      refusal ("select paper object(s) or viewport(s) first." / "select object(s) first.") — it
+#      opens the selection step and echoes the same "click objects or drag a selection window
+#      (Enter when done)..." wording model-space's own MOVE/COPY/DELETE use for the identical phase.
+#   2. Enter with nothing selected is REQ-201's stated refusal ("Nothing selected...") and does NOT
+#      crash or silently no-op — proven by asserting the exact log line a second time after it.
+#   3. Nothing is deleted and no viewport/entity count changes — the step opened but never received
+#      a selection, so DELETE/MOVE/COPY never actually acted on anything.
+#
+# Each command gets its own NEW + LAYOUT NEW: ESC (CancelActiveCommand) does not reach these two new
+# flags at all (it early-returns when st.active == None, which paper's ambient commands never
+# change), so a headless transcript has no way to reset mid-file — only NEW does.
+
+NEW
+LAYOUT NEW
+
+CMD DELETE
+EXPECT LOG DELETE — click objects or drag a selection window (Enter when done) to erase them.
+
+CMD
+EXPECT LOG Nothing selected — click objects or drag a selection window, then press Enter.
+
+# Still nothing selected, still nothing to delete — the step stayed open rather than exiting.
+CMD
+EXPECT LOG Nothing selected — click objects or drag a selection window, then press Enter.
+
+NEW
+LAYOUT NEW
+
+CMD MOVE
+EXPECT LOG MOVE — click objects or drag a selection window (Enter when done), then base point and destination.
+
+CMD
+EXPECT LOG Nothing selected — click objects or drag a selection window, then press Enter.
+
+NEW
+LAYOUT NEW
+
+CMD COPY
+EXPECT LOG COPY — click objects or drag a selection window (Enter when done), then base point and destination.
+
+CMD
+EXPECT LOG Nothing selected — click objects or drag a selection window, then press Enter.

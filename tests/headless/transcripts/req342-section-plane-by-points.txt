@@ -1,0 +1,77 @@
+# REQ-342 (2026-09-18 revision) — SECTIONPLANE takes a section LINE as well as a face.
+#
+# Reported from the real app, against AutoCAD: "i have not selected a face but have instead selected
+# a different part, for this instance it is the mid point of this torus. once i have placed the
+# sectionplane it cut off what was on that side of the plane just like we would want it to do. ours
+# currently can only do sectionplanes off of a face of an object."
+#
+# AutoCAD's own prompt asks for both in one breath: "Select face or any point to locate section
+# line", then "Specify through point". The plane then STANDS on that line, square to the work plane.
+# That is the only way to aim a plane at a sphere or a torus, which have no flat face at all.
+#
+# The face form is unchanged and is still what the command offers first (req342-section-plane).
+
+NEW
+
+# --- a torus: two points in empty space make a plane standing on that line -------------------------
+CMD TORUS 0,0 20 5
+EXPECT SOLIDS 1
+CMD SECTIONPLANE
+EXPECT LOG "SECTIONPLANE — select a flat face, or a point to start a section line. ESC cancels."
+EXPECT ACTIVE SECTIONPLANE
+EXPECT SECTIONCLIP OFF
+
+CLICK 40 -40 0
+EXPECT LOG "SECTIONPLANE — specify the through point of the section line. ESC cancels."
+EXPECT ACTIVE SECTIONPLANE
+EXPECT SECTIONCLIP OFF
+
+CLICK 40 40 0
+EXPECT LOG "SECTIONPLANE — plane placed on the section line."
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPFRAME FACE
+# The line runs along +Y, so the plane faces across it, along +X, and stands up the work plane's Z.
+EXPECT SECTIONCLIPNORMAL 1 0 0
+EXPECT SECTIONCLIPOFFSET 0
+EXPECT SECTIONCLIPFLIP OFF
+EXPECT ACTIVE NONE
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- clicking the torus itself takes the point ON it, as the report asked --------------------------
+# The top of the tube at x = 20 and at x = -20: the line runs along X, so the plane faces along Y.
+CMD SECTIONPLANE
+CLICK 20 0 5
+EXPECT LOG "SECTIONPLANE — specify the through point of the section line. ESC cancels."
+CLICK -20 0 5
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPNORMAL 0 1 0
+EXPECT ACTIVE NONE
+CHECK ALL
+
+# --- typed points work too, so the command is drivable without a mouse ----------------------------
+NEW
+CMD SPHERE 0,0 30
+CMD SECTIONPLANE
+CMD 0,0
+EXPECT LOG "SECTIONPLANE — specify the through point of the section line. ESC cancels."
+CMD 10,10
+EXPECT SECTIONCLIP ON
+EXPECT SECTIONCLIPNORMAL 0.7071067812 -0.7071067812 0
+EXPECT ACTIVE NONE
+EXPECT SOLIDS 1
+CHECK ALL
+
+# --- two points in the same place name no plane, and the command stays open -----------------------
+CMD SECTIONPLANE
+CMD 5,5
+CMD 5,5
+EXPECT LOG "SECTIONPLANE — the two points are in the same place; a section line needs two."
+EXPECT ACTIVE SECTIONPLANE
+ESC
+EXPECT LOG "SECTIONPLANE canceled — no plane was placed."
+EXPECT ACTIVE NONE
+# ESC leaves the plane the run before it placed exactly where it was.
+EXPECT SECTIONCLIP ON
+EXPECT SOLIDS 1
+CHECK ALL

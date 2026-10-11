@@ -1,0 +1,56 @@
+# Issue #86 — CIRCLE, ARC and ELLIPSE drawn while a paper layout is active must commit to that
+# layout's paperCircles/paperArcs/paperEllipses stores, not to the model store (REQ-039 acceptance
+# conditions (5) and (6)), the same routing TASK-107 already gave POLYLINE for issue #84.
+#
+# CommitCircle, CommitArcThreePoints and FinishEllipseFromRatio had no ActivePaperGeometryTarget
+# branch anywhere in their bodies, unlike their sibling CommitRectangle/CommitPolylineDraft. So each
+# shape drawn on a sheet appeared on the paper canvas at draw time (the paper view also draws model
+# geometry) but landed in the MODEL store and reappeared in model space the moment the user switched
+# back to the Model tab.
+#
+# Fails before the fix:
+#   step "EXPECT CIRCLES 0" after the paper CIRCLE   -> CIRCLES: expected 0, got 1
+#   step "EXPECT PAPERCIRCLES 1"                      -> PAPERCIRCLES: expected 1, got 0
+#   step "EXPECT ARCS 0" after the paper ARC          -> ARCS: expected 0, got 1
+#   step "EXPECT PAPERARCS 1"                         -> PAPERARCS: expected 1, got 0
+#   step "EXPECT ELLIPSES 0" after the paper ELLIPSE  -> ELLIPSES: expected 0, got 1
+#   step "EXPECT PAPERELLIPSES 1"                     -> PAPERELLIPSES: expected 1, got 0
+
+NEW
+LAYOUT NEW
+
+CMD CIRCLE
+CMD 3,3
+CMD 1
+EXPECT LOG "Circle complete."
+ESC
+CHECK ALL
+EXPECT CIRCLES 0
+EXPECT PAPERCIRCLES 1
+
+CMD ARC
+CLICK 5 0
+CLICK 6 1
+CLICK 7 0
+EXPECT LOG "ARC complete."
+CHECK ALL
+EXPECT ARCS 0
+EXPECT PAPERARCS 1
+
+CMD ELLIPSE
+CLICK 0 5
+CLICK 2 5
+CMD 0.5
+EXPECT LOG "ELLIPSE complete."
+CHECK ALL
+EXPECT ELLIPSES 0
+EXPECT PAPERELLIPSES 1
+
+# Switching back to model space must not have moved anything there either.
+LAYOUT MODEL
+EXPECT CIRCLES 0
+EXPECT ARCS 0
+EXPECT ELLIPSES 0
+EXPECT PAPERCIRCLES 1
+EXPECT PAPERARCS 1
+EXPECT PAPERELLIPSES 1

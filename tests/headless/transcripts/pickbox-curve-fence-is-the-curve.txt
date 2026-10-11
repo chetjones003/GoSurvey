@@ -1,0 +1,257 @@
+# A window/crossing fence must test a CURVE against the curve it draws, not against a box drawn
+# round it (user report with screenshots, 2026-09-03: an orbited view, a small crossing box sitting
+# in empty space clear of a circle, and the circle selects).
+#
+# The defect: ComputeSelectionFromRect tested a circle, an arc and an ellipse by an AXIS-ALIGNED
+# BOX. That box is wrong in two directions at once, and both are user-visible:
+#
+#   * it reaches PAST the curve  - a circle's box is its enclosing world square, whose corners sit
+#     sqrt(2)*r from the centre, so ~41% of the box lies outside the circle;
+#   * it is SOLID - a circle, an arc and an ellipse are curves with nothing inside them, but a box
+#     crossing-hits on any overlap, so a fence floating in the empty middle selected them too.
+#
+# Under an orbited camera the circle went through that box path at every angle (the plan-view path
+# had already been given the real circumference test - `CircleIntersectsAABB`); arcs and ellipses
+# went through it in EVERY view, plan included. Polylines with arc segments already test the arc
+# they draw (REQ-316 / ADR-047, `ChainHitsRect`), so the rule this asserts is the project's own.
+#
+# Every MISS below is paired with a HIT at the same view angle, because a fence that selects
+# NOTHING would pass every miss on its own. Each case takes a fresh drawing (NEW): a box selection
+# ACCUMULATES into the current selection, so a miss run after a hit cannot be told from a hit.
+
+# --- CIRCLE, plan view: the control. These already passed; they are here so the orbited cases
+# --- below are compared against a stated answer rather than against nothing. --------------------
+# Circle: centre (0,0), radius 100.
+
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 100
+ESC
+EXPECT CIRCLES 1
+# Diagonally off the rim, inside the enclosing square's corner: |(75,75)| = 106 > 100, so the whole
+# box lies OUTSIDE the circle. This is the shape of the reported false hit.
+BOX 75 75 85 85
+EXPECT SELECTED 0
+
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 100
+ESC
+# Floating in the empty middle: a circle is a curve, not a disc.
+BOX -10 -10 10 10
+EXPECT SELECTED 0
+
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 100
+ESC
+# Straddling the rim at (100,0) - this one MUST select, in every view below as well.
+BOX 95 -5 105 5
+EXPECT SELECTED 1
+
+# --- CIRCLE, orbited: the reported defect ------------------------------------------------------
+# Off plan view the fence leaves the analytic circumference test and becomes a camera projection
+# (REQ-058). Orthographic projection is affine, so a point outside the circle projects outside the
+# projected ellipse - the answers below are the SAME as the plan-view answers above, at any angle.
+
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 100
+ESC
+VIEWANGLES -45 35
+BOX 75 75 85 85
+EXPECT SELECTED 0
+
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 100
+ESC
+VIEWANGLES -45 35
+BOX -10 -10 10 10
+EXPECT SELECTED 0
+
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 100
+ESC
+VIEWANGLES -45 35
+BOX 95 -5 105 5
+EXPECT SELECTED 1
+
+# A second orientation, so it is not one lucky angle.
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 100
+ESC
+VIEWANGLES 120 20
+BOX 75 75 85 85
+EXPECT SELECTED 0
+
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 100
+ESC
+VIEWANGLES 120 20
+BOX 95 -5 105 5
+EXPECT SELECTED 1
+
+# --- CIRCLE, window mode: a window box still needs the WHOLE circle inside it -------------------
+# Azimuth 0 keeps screen X parallel to world X, so the rectangle these two drag corners span is
+# unambiguously larger than the projected circle - the assertion is about the window RULE, not
+# about which diagonal of a rotated view happens to be the wider one.
+
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 100
+ESC
+VIEWANGLES 0 35
+BOX -400 -400 400 400 WINDOW
+EXPECT SELECTED 1
+
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 100
+ESC
+VIEWANGLES 0 35
+# Covers most of the circle but not all of it: a window box selects nothing it does not enclose.
+BOX -400 -400 50 400 WINDOW
+EXPECT SELECTED 0
+
+# --- ARC: the same defect, and this one is visible in PLAN VIEW too ----------------------------
+# A three-point arc through (-100,0), (0,100), (100,0): the upper half of a circle of radius 100.
+# Its bounding box is x in [-100,100], y in [0,100]. A box at (-90,5)-(-80,15) sits inside that
+# bounding box and roughly 30 units clear of the arc, which at x = -90 has passed y = 43.6.
+
+NEW
+CMD ARC
+PICK -100 0
+PICK 0 100
+PICK 100 0
+ESC
+EXPECT ARCS 1
+BOX -90 5 -80 15
+EXPECT SELECTED 0
+
+NEW
+CMD ARC
+PICK -100 0
+PICK 0 100
+PICK 100 0
+ESC
+# Under the arc's own span, in the empty region the bounding box covers.
+BOX -10 5 10 15
+EXPECT SELECTED 0
+
+NEW
+CMD ARC
+PICK -100 0
+PICK 0 100
+PICK 100 0
+ESC
+# Straddling the crown at (0,100) - MUST select.
+BOX -10 95 10 105
+EXPECT SELECTED 1
+
+NEW
+CMD ARC
+PICK -100 0
+PICK 0 100
+PICK 100 0
+ESC
+VIEWANGLES -45 35
+BOX -90 5 -80 15
+EXPECT SELECTED 0
+
+NEW
+CMD ARC
+PICK -100 0
+PICK 0 100
+PICK 100 0
+ESC
+VIEWANGLES -45 35
+BOX -10 95 10 105
+EXPECT SELECTED 1
+
+# --- ELLIPSE: same again -----------------------------------------------------------------------
+# Centre (0,0), semi-major 100 along +X, ratio 0.3 -> semi-minor 30. Bounding box y in [-30,30].
+# At x = 90 the curve has come down to y = 30*sqrt(1-0.81) = 13.1, so a box at y in [20,28] is
+# inside the bounding box and outside the ellipse.
+
+NEW
+CMD ELLIPSE
+PICK 0 0
+PICK 100 0
+CMD 0.3
+EXPECT ELLIPSES 1
+BOX 85 20 95 28
+EXPECT SELECTED 0
+
+NEW
+CMD ELLIPSE
+PICK 0 0
+PICK 100 0
+CMD 0.3
+# The hollow middle again.
+BOX -10 -5 10 5
+EXPECT SELECTED 0
+
+NEW
+CMD ELLIPSE
+PICK 0 0
+PICK 100 0
+CMD 0.3
+# Straddling the minor-axis end at (0,30) - MUST select.
+BOX -10 25 10 35
+EXPECT SELECTED 1
+
+NEW
+CMD ELLIPSE
+PICK 0 0
+PICK 100 0
+CMD 0.3
+VIEWANGLES -45 35
+BOX 85 20 95 28
+EXPECT SELECTED 0
+
+NEW
+CMD ELLIPSE
+PICK 0 0
+PICK 100 0
+CMD 0.3
+VIEWANGLES -45 35
+BOX -10 25 10 35
+EXPECT SELECTED 1
+
+# --- A LINE in the same drawing is untouched by any of this ------------------------------------
+# The line path was already exact (projected endpoint-wise); it is asserted here so a change to the
+# shared fence code cannot quietly trade one entity type's correctness for another's.
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+VIEWANGLES -45 35
+BOX 40 -5 60 5
+EXPECT SELECTED 1
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+VIEWANGLES -45 35
+BOX 40 20 60 30
+EXPECT SELECTED 0
+
+CHECK ALL

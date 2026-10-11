@@ -1,0 +1,123 @@
+# REQ-103 step 4 (TASK-101) — BREAK's live preview shows the material that will be removed.
+#
+# Between the two picks, BREAK now draws the span the click would delete plus a marker at each
+# break point. The span is the part that can be silently wrong: on a CLOSED entity, which side
+# disappears depends on click order, and a preview that guesses the other side is worse than none —
+# it tells the user confidently that the wrong half is about to go.
+#
+# `DUMP BREAKSPAN <x> <y>` asks the preview what it would remove with the cursor at (x,y), without
+# committing anything. Every length below is hand-computed first and stated here, then asserted.
+# The cursor is resolved onto the entity by the same ClosestPointOnEntity the second pick commits,
+# so the span previewed is the span removed.
+#
+# What this transcript CANNOT see is how the span is painted, and that is where the first attempt
+# failed: the geometry was correct and reached the viewport batch, but it went into the shared
+# transform-preview batch — translucent (alpha 0.55) at ordinary line width — and a removal preview
+# is the one preview drawn directly ON TOP of the object it describes, so it washed out against the
+# full-opacity line underneath and read as nothing at all. It now has its own opaque, heavier
+# channel. Appearance is a visual check; only the geometry below is machine-checkable.
+
+NEW
+
+# --- 1. Line: the span between the two break points, ordering irrelevant. ---
+#
+# L = (0,0)-(100,0). Break point 1 at (20,0). Cursor at (70,0) -> break point 2 (70,0).
+# Removed = 1 segment, (20,0)->(70,0), length 50.
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+CHECK ALL
+EXPECT LINES 1
+
+CMD BREAK
+CLICK 20 0
+EXPECT LOG "specify second break point"
+DUMP BREAKSPAN 70 0
+EXPECT LOG "breakspan: 1 segments, from 20.000,0.000 to 70.000,0.000, length 50.000"
+
+# Clicking the far side first must preview the same span — an open entity orders its two break
+# points by position, not by click order (ApplyBreakToLine).
+ESC
+CMD BREAK
+CLICK 70 0
+DUMP BREAKSPAN 20 0
+EXPECT LOG "from 70.000,0.000 to 20.000,0.000, length 50.000"
+ESC
+CHECK ALL
+
+# --- 2. Circle: click order DOES decide which side goes. ---
+#
+# C = centre (300,0) r 10, circumference 2*pi*10 = 62.832.
+# Break point 1 at (310,0) = theta 0; cursor (300,10) -> break point 2 = theta pi/2.
+# CircleBreakStartSweep keeps the arc running COUNTERCLOCKWISE from point 2 back to point 1, i.e.
+# three quarters — so what goes is the quarter from theta 0 to theta pi/2: 10 * pi/2 = 15.708.
+CMD CIRCLE
+CMD 300,0
+CMD 10
+ESC
+CHECK ALL
+EXPECT CIRCLES 1
+
+CMD BREAK
+CLICK 310 0
+DUMP BREAKSPAN 300 10
+EXPECT LOG "from 310.000,0.000 to 300.000,10.000, length 15.70"
+ESC
+
+# The same two points in the opposite order remove the OTHER three quarters:
+# 62.832 - 15.708 = 47.124 true, previewed as 47.11 because the span is tessellated the way the
+# renderer tessellates committed arcs (a chord polygon is fractionally shorter than its arc). The
+# length is asserted to one decimal for that reason — what matters here is 47.1 rather than 15.7.
+# If the preview ignored click order the two dumps would read alike.
+CMD BREAK
+CLICK 300 10
+DUMP BREAKSPAN 310 0
+EXPECT LOG "from 300.000,10.000 to 310.000,0.000, length 47.1"
+ESC
+CHECK ALL
+
+# --- 3. Closed polyline: the complement of the span the commit keeps. ---
+#
+# P = (700,0)-(710,0)-(710,10)-(700,10), CLOSEd. Edge lengths 10 each, ring length 40; vertex
+# parameters v0=0, v1=10, v2=20, v3=30.
+# Break point 1 = (710,5), the midpoint of edge v1->v2, parameter 15.
+# Break point 2 = (700,5), the midpoint of the closing edge v3->v0, parameter 35.
+# break-circle-and-closed-polyline.txt (T8) pins what the commit KEEPS: walking forward from point
+# 2 wraps through v0 and v1 to point 1, the 20-unit span [(700,5),(700,0),(710,0),(710,5)].
+# So the preview must show the complement — forward from point 1 through v2 and v3 to point 2:
+# (710,5)->(710,10)->(700,10)->(700,5), 3 segments, 5 + 10 + 5 = 20.
+CMD POLYLINE
+CLICK 700 0
+CLICK 710 0
+CLICK 710 10
+CLICK 700 10
+CMD CLOSE
+CHECK ALL
+
+CMD BREAK
+CLICK 710 5
+DUMP BREAKSPAN 700 5
+EXPECT LOG "breakspan: 3 segments, from 710.000,5.000 to 700.000,5.000, length 20.000"
+ESC
+CHECK ALL
+
+# --- 4. "Break at point": a repeated pick removes nothing, and the preview must say so. ---
+#
+# Same circle, both break points at (310,0). The commit opens the circle at that point with nothing
+# removed, so the previewed span has zero length — the two markers still show where the cut lands.
+CMD BREAK
+CLICK 310 0
+DUMP BREAKSPAN 310 0
+EXPECT LOG "from 310.000,0.000 to 310.000,0.000, length 0.000"
+# Both markers are still emitted (2 segments each) — with nothing to remove, they are the whole of
+# what the user sees, so a zero-length span must not take them down with it.
+EXPECT LOG "breakmarkers: 4 segments"
+ESC
+CHECK ALL
+
+# Nothing above committed a break: every BREAK was escaped at its second point.
+EXPECT LINES 1
+EXPECT CIRCLES 1
+EXPECT POLYLINES 1
+EXPECT ARCS 0

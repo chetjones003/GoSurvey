@@ -1,0 +1,100 @@
+# Issue #71 — every handle in an exported DXF is unique, and $HANDSEED exceeds them all.
+#
+# `ExportDxfFile_Impl` reserves a block of entity handles by COUNTING the entities it is about to
+# write:
+#
+#     entityHandleCount = nSeg + nCirc + surveyPoints.size()   (+ annotations, in the loop below)
+#
+# Lines, circles, survey points and annotations. Polylines were not counted — the LWPOLYLINE branch
+# was added by REQ-053 without updating this sum — and neither were filled regions, whose HATCH
+# branch arrived the same way earlier. The OBJECTS section's four handles derive from that sum, and
+# $HANDSEED from those, so the running `entHandle++` walks straight through the OBJECTS block and
+# every uncounted entity is written with a handle some OBJECTS record also owns.
+#
+# A handle is the identity a DXF uses for every internal reference — group 330 ownership, dictionary
+# entries, XDATA links. Duplicating them is not cosmetic.
+#
+# WHY THIS IS NOT A ROUND-TRIP CHECK: the collision is DETERMINISTIC. `dxf-export-stable` exports
+# the same drawing twice and compares, and both passes collide identically, so it reports success on
+# a file AutoCAD would reject. A differential oracle cannot see a defect that reproduces identically
+# on both sides. EXPECT HANDLESUNIQUE reads the WRITTEN FILE instead.
+#
+# Fails before the fix, in both parts:
+#   part 1 (six rectangles) -> 4 handle(s) used more than once: 1000, 1001, 1002, 1003
+#                              (37 handles, 33 distinct)
+#   part 2 (polyline+hatch) -> 2 handle(s) used more than once: 1000, 1001
+#
+# Issue #71's own listing says FIVE duplicates (1000-1004). That count includes the leading `1004`,
+# which is $HANDSEED's value in the HEADER — a declared ceiling, not a handle any record owns. This
+# verb pulls it out and checks it separately, so it reports four. The defect is identical either
+# way; only the tally differs. $HANDSEED = 1004 while handle 1005 is in use is the second half, and
+# it fails on its own once the duplicates are gone.
+
+NEW
+
+# PART 1 — the reproducer from issue #71. Six rectangles and nothing else; RECT stores a 4-vertex
+# closed polyline (REQ-053), so this drawing is six uncounted entities and no counted ones.
+CMD RECT
+CMD 0,0
+CMD 10,10
+CMD RECT
+CMD 20,0
+CMD 30,10
+CMD RECT
+CMD 40,0
+CMD 50,10
+CMD RECT
+CMD 60,0
+CMD 70,10
+CMD RECT
+CMD 80,0
+CMD 90,10
+CMD RECT
+CMD 100,0
+CMD 110,10
+ESC
+
+CHECK ALL
+EXPECT POLYLINES 6
+EXPORT DXF %OUT%/h71-rects.dxf
+EXPECT HANDLESUNIQUE %OUT%/h71-rects.dxf
+
+# A drawing that also holds COUNTED entities, so the fix cannot pass by counting the wrong thing:
+# two lines and a circle raise entityHandleCount above zero while the polylines still have to be
+# added to it.
+CMD LINE
+CMD 200,0
+CMD 300,0
+CMD 300,100
+ESC
+CMD CIRCLE
+CMD 250,50
+CMD 20
+ESC
+
+CHECK ALL
+EXPECT LINES 2
+EXPECT CIRCLES 1
+EXPECT POLYLINES 6
+EXPORT DXF %OUT%/h71-mixed.dxf
+EXPECT HANDLESUNIQUE %OUT%/h71-mixed.dxf
+
+# PART 2 — filled regions. Not named in issue #71, and the worse case of the two: a document with
+# no lines, circles, survey points or annotations has entityHandleCount == 0, so objDictRoot lands
+# on the first entity handle and EVERY entity in the file collides. The fixture is the #72 one,
+# which holds exactly one polyline and one solid hatch.
+NEW
+IMPORT DXF %DATA%/ghost-layer-entities.dxf
+CHECK ALL
+EXPECT POLYLINES 1
+EXPORT DXF %OUT%/h71-hatch.dxf
+EXPECT HANDLESUNIQUE %OUT%/h71-hatch.dxf
+
+# And the corrected count must not have broken the round trip: what goes out still comes back, and
+# re-exports to the same bytes.
+NEW
+IMPORT DXF %OUT%/h71-hatch.dxf
+CHECK ALL
+EXPECT POLYLINES 1
+EXPORT DXF %OUT%/h71-hatch-b.dxf
+EXPECT SAMEFILE %OUT%/h71-hatch.dxf %OUT%/h71-hatch-b.dxf

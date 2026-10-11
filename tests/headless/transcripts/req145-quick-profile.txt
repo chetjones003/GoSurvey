@@ -1,0 +1,14 @@
+# REQ-145 — Quick Profile along two plan points (no alignments).
+
+NEW
+
+CMD SURFACECREATEGRID G1, 0, 0, 5, 5, 2, 2, 0, 10, 0, 10
+CMD QUICKPROFILE G1, 0, 0, 5, 0
+EXPECT LOG "on surface"
+CMD QUICKPROFILE G1, 100, 100, 110, 100
+EXPECT LOG "outside"
+CMD QUICKPROFILE G1, 1, 1, 1, 1
+EXPECT LOG "non-zero length"
+CMD QUICKPROFILE Missing, 0, 0, 5, 0
+EXPECT LOG "no surface"
+CHECK ALL

@@ -1,0 +1,107 @@
+# REQ-312 (GitHub #145, Phase 2 of #120) - arcs and circles in arbitrary planes.
+#
+# What this transcript is FOR: proving that CIRCLE and ARC draw on the ACTIVE WORK PLANE rather than
+# on the world XY plane, and that the plane they landed in is recorded. Counting entities cannot say
+# either thing - a circle drawn on a wall and a circle lying flat both count as one circle - and the
+# command log only echoes what was typed. So the assertions here are `EXPECT CIRCLEXYZ`, which reads
+# the stored plane NORMAL, and `EXPECT ARCPOINTS`, which resolves where an arc's ends actually are
+# through the same parametrisation the renderer uses.
+#
+# Every case below fails hard against the pre-REQ-312 code, not marginally:
+#   - the vertical-plane circle is REFUSED outright ("radius too small"), because its rim pick is
+#     displaced purely in Z and the old radius was the XY distance;
+#   - the vertical-plane arc is refused as COLLINEAR, because its three picks project to one line;
+#   - the 45-degree circle comes out with a radius short by cos(45), a 29% error;
+#   - the 3P circle lands at a centre 1.77 ft off, with the wrong radius.
+#
+# Picks use CLICKUCS, which states a click in the plane the user is drawing on. CLICK cannot express
+# one at all on a tilted plane - see its comment in HeadlessDriver.cpp.
+
+NEW
+
+# --- Baseline: on the WCS nothing about this is new -------------------------------------------------
+# CLICKUCS under the WCS is exactly CLICK, and a flat circle keeps the world +Z normal every circle
+# had before this requirement existed.
+CMD CIRCLE
+CLICKUCS 0 0
+CLICKUCS 10 0
+ESC
+EXPECT CIRCLES 1
+EXPECT CIRCLEXYZ 0 0 0 0 10 0 0 1
+
+# --- A vertical work plane: UCS X 90 --------------------------------------------------------------
+# Rotating 90 degrees about the UCS X axis sends UCS +Y to world +Z and UCS +Z to world -Y. The work
+# plane is now the world plane y = 0 - a wall - and its normal is (0, -1, 0).
+CMD UCS
+CMD X
+EXPECT LOG "Specify rotation angle about X axis"
+CMD 90
+
+# Centre at UCS (100, 0) = world (100, 0, 0); rim at UCS (100, 20) = world (100, 0, 20).
+# The two picks differ ONLY in world Z, so the old XY radius was 0 and the circle was refused.
+CMD CIRCLE
+CLICKUCS 100 0
+CLICKUCS 100 20
+ESC
+EXPECT CIRCLES 2
+EXPECT CIRCLEXYZ 1 100 0 0 20 0 -1 0
+
+# An arc on the same wall. In UCS coordinates the three picks are (210,0), (200,10) and (190,0):
+# a half circle of radius 10 about UCS (200, 0). In WORLD they are (210,0,0), (200,0,10), (190,0,0)
+# - three points on one straight line as far as the XY projection is concerned, which is why the old
+# code called them collinear and refused.
+CMD ARC
+CLICKUCS 210 0
+CLICKUCS 200 10
+CLICKUCS 190 0
+EXPECT ARCS 1
+EXPECT ARCPOINTS 0 210 0 0 190 0 0
+
+# --- A 45-degree work plane -------------------------------------------------------------------------
+# From the wall, rotate -45 degrees about X: UCS +Z becomes (0, -0.7071, 0.7071).
+CMD UCS
+CMD X
+CMD -45
+
+# Centre UCS (300, 0) = world (300, 0, 0). Rim UCS (300, 10) = world (300, 7.0711, 7.0711).
+# The true radius is 10; its XY projection is 7.07, so the old code was short by cos(45).
+CMD CIRCLE
+CLICKUCS 300 0
+CLICKUCS 300 10
+ESC
+EXPECT CIRCLES 3
+EXPECT CIRCLEXYZ 2 300 0 0 10 0 -0.7071068 0.7071068
+
+# CIRCLE 3P on the same tilted plane: UCS (405,0), (400,5), (395,0) - radius 5 about UCS (400, 0).
+# Solved in the XY projection instead, those three points give a centre 1.77 ft low and r = 5.30.
+CMD CIRCLE
+CMD 3P
+CLICKUCS 405 0
+CLICKUCS 400 5
+CLICKUCS 395 0
+ESC
+EXPECT CIRCLES 4
+EXPECT CIRCLEXYZ 3 400 0 0 5 0 -0.7071068 0.7071068
+
+# --- A UCS never moves geometry ---------------------------------------------------------------------
+# Back to World. Every curve above is still exactly where it was drawn, in the plane it was drawn in.
+# This is the REQ-154 rule applied to the new field: changing the frame must not rewrite a normal any
+# more than it rewrites a coordinate.
+CMD UCS
+CMD W
+EXPECT LOG "UCS = World"
+EXPECT CIRCLES 4
+EXPECT CIRCLEXYZ 0 0 0 0 10 0 0 1
+EXPECT CIRCLEXYZ 1 100 0 0 20 0 -1 0
+EXPECT CIRCLEXYZ 2 300 0 0 10 0 -0.7071068 0.7071068
+EXPECT CIRCLEXYZ 3 400 0 0 5 0 -0.7071068 0.7071068
+EXPECT ARCPOINTS 0 210 0 0 190 0 0
+
+# --- And a circle drawn back on the WCS is flat again ------------------------------------------------
+# The plane is a property of the CURVE, not a mode the drawing is left in.
+CMD CIRCLE
+CLICKUCS 500 0
+CLICKUCS 510 0
+ESC
+EXPECT CIRCLES 5
+EXPECT CIRCLEXYZ 4 500 0 0 10 0 0 1
