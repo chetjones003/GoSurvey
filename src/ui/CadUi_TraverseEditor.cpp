@@ -490,6 +490,7 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     });
     ItemHelpTooltip(
         "Reference orientation at the start station (° CW from N).\n"
+        "Accepts decimal degrees or DdMmSs (e.g. 45d30m10s).\n"
         "This is the azimuth of the backsight direction (or any reference mark)\n"
         "that the instrument was zeroed on. The forward bearing of the first leg\n"
         "= this value + the first row's H.Angle.\n"
