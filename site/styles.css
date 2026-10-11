@@ -315,6 +315,8 @@ img{max-width:100%;display:block}
 .btn-ghost{border-color:var(--rule-strong);color:var(--ink)}
 .btn-ghost:hover{border-color:var(--ink-3);background:var(--surface-2)}
 .btn small{font-weight:400;opacity:.8;font-size:.82em}
+.btn-bmc{background:#ffdd00;color:#12161a;border-color:#ffdd00}
+.btn-bmc:hover{background:#ffd000;border-color:#ffd000}
 
 .shot{
   border:1px solid var(--rule);
