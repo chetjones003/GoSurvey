@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -115,7 +116,7 @@ struct TraverseData {
 
     /// REQ-401: which drawing-settings scale factor the UI resolves into \ref scaleFactor when
     /// \ref applyScaleFactor is on. Not interpreted by ComputeTraverse itself.
-    enum class ScaleFactorKind { Combined = 0, GridOnly = 1 };
+    enum class ScaleFactorKind : std::uint8_t { Combined = 0, GridOnly = 1 };
     /// REQ-401: off by default — leaves every distance/coordinate exactly as before this option
     /// existed. When on, each leg's ground horizontal distance is multiplied by \ref scaleFactor
     /// before it drives coordinates, closure, and the least-squares adjustment.
