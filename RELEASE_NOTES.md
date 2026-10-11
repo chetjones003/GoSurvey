@@ -16,6 +16,12 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.7.4
+
+- Fixed a second case of the command line running a different command than what was typed.
+- The sign-in prompt at launch is now a real choice: sign in now, or choose "Don't Sign In" to
+  skip it for good. You can still sign in later any time from Settings.
+
 ## 0.7.3
 
 - The Pipe Network ribbon button now starts a pipe run directly.
