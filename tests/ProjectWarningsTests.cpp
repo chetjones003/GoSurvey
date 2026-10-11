@@ -514,15 +514,37 @@ TEST_CASE("req383 two standalone drawings and the same project are never checked
   st.drawingTabs[1].projectUid = 7;  // same project, same zone, same unit
   CHECK(CheckClipboardPaste(st).verdict == PasteCheck::Verdict::Ok);
 
-  st.drawingTabs[1].projectUid = 0;  // both standalone, even with a zone and unit mismatch
-  st.clipboard.srcProjectUid = 0;
+  st.drawingTabs[1].projectUid = 0;  // both standalone, a zone mismatch alone is still unchecked:
+  st.clipboard.srcProjectUid = 0;    // no coordinate-system concept applies outside a Project
   st.clipboard.srcZone = "TX83-CF";
   st.drawingSettings.zoneCode = "TX83-NF";
-  st.clipboard.srcMetersPerUnit = 1.0;
   CHECK(CheckClipboardPaste(st).verdict == PasteCheck::Verdict::Ok);
   std::vector<std::string> log;
   StartPasteCommand(st, log);
   CHECK(st.active == AppCommandState::Kind::Paste);  // exactly as before projects existed
+}
+
+TEST_CASE("req383 two standalone drawings with a unit mismatch still warn and offer convert (issue #831)",
+          "[req383]") {
+  // issue #831 follow-up: unlike a zone mismatch, a UNIT mismatch between two drawings with no
+  // Project at all now warns and offers convert too, replicating how AutoCAD scales pasted
+  // content by INSUNITS — but it is never silent (D-2026-10-11-c).
+  TempDir d("paste-units-standalone");
+  AppCommandState st;
+  PasteSetup(st, d.path);
+  st.drawingTabs[1].projectUid = 0;  // both standalone
+  st.clipboard.srcProjectUid = 0;
+  st.clipboard.srcZone = "";
+  st.drawingSettings.zoneCode = "";
+  st.clipboard.srcMetersPerUnit = 1.0;  // copied from a metre drawing; PasteSetup's dest is feet
+  const PasteCheck pc = CheckClipboardPaste(st);
+  CHECK(pc.verdict == PasteCheck::Verdict::Warn);
+  CHECK(pc.text.find("unit") != std::string::npos);
+
+  std::vector<std::string> log;
+  StartPasteCommand(st, log);
+  CHECK(st.pastePrompt.active);
+  CHECK_FALSE(st.pastePrompt.block);  // a warning, not a block — convert is offered, not forced
 }
 
 TEST_CASE("req383 copying records where the objects came from", "[req383]") {

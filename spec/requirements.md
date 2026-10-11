@@ -11496,7 +11496,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
        into a drawing of a *different project* warns. A paste where either drawing is in a project and
        the coordinate systems differ is **blocked**: the user may **convert** the pasted objects or
        cancel (D-2026-10-07-a); differing units warn, and the same convert is offered. A paste between
-       two standalone drawings is unchanged.
+       two standalone drawings (neither in a Project) still warns and offers convert on a **unit**
+       mismatch alone — replicating how AutoCAD scales pasted/inserted content by the source and
+       destination drawings' `INSUNITS` — but never checks or blocks on coordinate system, since no
+       zone concept is attached to a standalone drawing pairing (D-2026-10-11-c, GitHub issue #831).
        Survey points are not carried by Copy/Paste today, so no point number can collide through paste (issue #782).
      - **Convert pasted content (3).** The copied objects are transformed into the destination
        drawing's coordinate system and units with the SAME one similarity transform as Add Drawing
@@ -11526,6 +11529,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P9: clause 7 added
   (D-2026-10-05-k). 2026-10-07 — clause 7: convert for pasted content (D-2026-10-07-a, issue #722).
+  2026-10-11 — clause 7: a unit (not coordinate-system) mismatch between two standalone drawings now
+  also warns and offers convert (D-2026-10-11-c, GitHub issue #831).
 
 ### REQ-384 — AutoCAD annotation context objects DWG interop (GitHub issue #688)
 

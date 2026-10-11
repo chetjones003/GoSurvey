@@ -1670,6 +1670,20 @@ inline constexpr const char* kDrawingUnitNames[kDrawingUnitCount] = {"Unitless",
                                                                      "Millimeters"};
 inline constexpr int kDrawingUnitCodes[kDrawingUnitCount] = {0, 1, 2, 6, 4};
 
+/// Abbreviation for a drawing's INSUNITS code, parallel to \ref kDrawingUnitCodes (issue #831):
+/// unit-aware readouts (e.g. the Traverse Editor) label distances with the active drawing's
+/// linear unit instead of hardcoding "ft". Falls back to "ft" for an unrecognized code.
+[[nodiscard]] inline const char* CadDrawingInsUnitsAbbrev(int code) {
+  switch (code) {
+    case 0: return "";    // Unitless
+    case 1: return "in";
+    case 2: return "ft";
+    case 6: return "m";
+    case 4: return "mm";
+    default: return "ft";
+  }
+}
+
 [[nodiscard]] inline bool CadBlockHasMatchlineDyn(const CadBlockDefinition& def) {
   for (const CadBlockParameter& p : def.parameters) {
     if (CadBlockEqCi(p.name, "DistNeg"))
