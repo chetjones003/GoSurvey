@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studies — GoSurvey</title>
+<meta name="description" content="Technical white papers behind GoSurvey features — worked math, proofs against independent references, and the tests that back them.">
+<link rel="icon" href="favicon.ico">
+<link rel="canonical" href="https://gosurveycad.com/studies.html">
+
+<meta property="og:title" content="Studies — GoSurvey">
+<meta property="og:description" content="Technical white papers behind GoSurvey features — worked math, proofs against independent references, and the tests that back them.">
+<meta property="og:type" content="website">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css?v=9c2e7f14">
+<style>
+.page-head{padding:clamp(2.5rem,6vw,4rem) 0 0}
+.page-head h1{font-size:var(--step-3);margin-bottom:.75rem}
+.page-head p{color:var(--ink-2);max-width:60ch}
+.studies-sec{padding:0 0 clamp(3rem,7vw,5rem)}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="index.html">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="download.html">Download</a>
+      <a href="docs/index.html">Docs</a>
+      <a href="studies.html">Studies</a>
+      <a href="about.html">About</a>
+      <a href="contact.html">Contact</a>
+      <a href="account.html">Account</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap page-head">
+    <h1>Studies</h1>
+    <p>Short technical white papers behind specific GoSurvey features — the governing formulas, worked examples checked against independent references (NGS datasheets, hand arithmetic), and the automated tests that keep the claims honest. Each one ties back to a numbered requirement and a pull request in the open-source repository.</p>
+  </div>
+
+  <div class="wrap studies-sec">
+    <div class="studies-grid">
+
+      <div class="study-card">
+        <a class="study-link" href="studies/pdfs/req401-traverse-scale-factor.pdf" target="_blank" rel="noopener">
+          <img class="study-thumb" src="img/studies/req401-traverse-scale-factor.jpg" alt="First page of the Ground-to-Grid Scale Factor white paper" loading="lazy" width="900" height="1164">
+          <div class="study-body">
+            <span class="study-meta">REQ-401 &middot; Oct 2026</span>
+            <h3>Ground-to-Grid Scale Factor in the Traverse Editor</h3>
+            <p>Proof of the math behind reducing field (ground) distances to grid distances using a drawing's set projection — worked by hand, checked against an NGS datasheet, and verified by the test suite.</p>
+            <span class="study-cta">Read the paper
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
+            </span>
+          </div>
+        </a>
+        <a class="study-issue" href="https://github.com/chetjones003/GoSurvey/issues/828" target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 5v3.3M8 10.6h.01" stroke-linecap="round"/></svg>
+          GitHub issue #828
+        </a>
+      </div>
+
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+</body>
+</html>
