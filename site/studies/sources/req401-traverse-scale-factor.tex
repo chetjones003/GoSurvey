@@ -1,0 +1,282 @@
+\documentclass[11pt]{article}
+\usepackage[letterpaper,margin=1.1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[round,authoryear]{natbib}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=black,citecolor=black,urlcolor=black,
+  pdftitle={Ground-to-Grid Scale Factor in the GoSurvey Traverse Editor},
+  pdfauthor={Chet Jones}}
+\usepackage{enumitem}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55\baselineskip}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\title{\textbf{Ground-to-Grid Scale Factor in the\\GoSurvey Traverse Editor}}
+\author{Chet Jones \\ \small GoSurvey Project}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+\begin{center}
+\small REQ-401 \quad\textbar\quad GitHub Issue \#828 \quad\textbar\quad Pull Request \#833
+\end{center}
+\vspace{1em}
+
+\begin{abstract}
+\noindent GoSurvey's Traverse Editor reduces field-measured slope distances to
+horizontal distances, but prior to this change it had no facility for
+reducing those horizontal (ground) distances to grid distances under a map
+projection. This note derives the governing formulas from standard survey
+references, works two examples by hand --- one with an assumed scale
+factor and one against a published National Geodetic Survey (NGS)
+datasheet --- and compares each hand result against the value the software
+actually computes. It also documents the automated test suite that keeps
+the implementation honest going forward.
+\end{abstract}
+
+\section{What problem this fixes}
+
+A field survey measures \emph{ground distances}: the actual taped or
+electronic-distance-measurement (EDM) distance along the earth's curved,
+elevated surface. A map projection --- for example MGA56/GDA2020, or a
+U.S.\ State Plane Coordinate zone --- represents the earth on a flat
+\emph{grid}, which necessarily stretches or shrinks distances by a small,
+position-dependent factor $k$ \citep{snyder1987}. A traverse closed and
+reported in ground distances will not agree with coordinates taken from the
+grid unless every distance is first reduced by $k$ \citep{ghilaniwolf2015}.
+GoSurvey's Traverse Editor computed only ground distances; this change adds
+an option to reduce them to grid before they drive coordinates, closure,
+and the least-squares adjustment.
+
+\section{The governing formulas}
+
+GoSurvey already computes the projection's point scale factor
+$k_{\mathrm{grid}}$ through its CS-MAP--based projection engine, and an
+elevation (sea-level) reduction factor for the Drawing Settings
+Transformation tab. The elevation factor is the standard ratio of the
+ellipsoid radius to the ellipsoid radius plus the station's elevation above
+it,
+\begin{equation}
+k_{\mathrm{sea}} \;=\; \frac{R}{R + h},
+\label{eq:sea}
+\end{equation}
+as defined for the U.S.\ State Plane Coordinate System by
+\citet{stem1990} and reproduced in standard surveying texts
+\citep{ghilaniwolf2015}. The present change reuses that existing pair of
+factors rather than introducing a second calculation:
+\begin{align}
+k_{\mathrm{combined}} &= k_{\mathrm{grid}} \cdot k_{\mathrm{sea}},
+  \label{eq:combined}\\
+k_{\mathrm{grid\text{-}only}} &= k_{\mathrm{grid}}.
+  \label{eq:gridonly}
+\end{align}
+Equation~\ref{eq:combined}, the product of the grid (projection) scale
+factor and the elevation factor, is the \emph{combined factor} of
+\citet{ghilaniwolf2015} and \citet{stem1990} --- the standard quantity for
+reducing a ground distance measured at elevation to its equivalent grid
+distance.
+
+For each traverse leg, the slope distance is first reduced to a horizontal
+(ground) distance $d_{\mathrm{ground}}$ by the usual trigonometric leveling
+relation \citep{ghilaniwolf2015}. This change inserts one multiplication
+before that distance is used for anything else:
+\begin{align}
+d_{\mathrm{grid}} &= d_{\mathrm{ground}} \cdot k, \\
+\Delta E &= d_{\mathrm{grid}} \cdot \sin(\mathrm{bearing}), \qquad
+\Delta N = d_{\mathrm{grid}} \cdot \cos(\mathrm{bearing}),
+\end{align}
+where $k$ is $k_{\mathrm{combined}}$ or $k_{\mathrm{grid\text{-}only}}$ by
+the user's choice, and $k = 1$ when the option is left off. The grid
+distances $d_{\mathrm{grid}}$ are summed for the closure perimeter and
+linear closure, and are the observations handed to the weighted
+least-squares traverse adjustment, following the standard treatment of
+\citet{ghilani2017}.
+
+\emph{Implementation.} \texttt{src/traverse/TraverseCalc.cpp}, function
+\texttt{ComputeTraverse}; the multiplier is resolved by
+\texttt{src/commands/CadCommands\_Geo.cpp}, function
+\texttt{ResolveTraverseScaleFactor}.
+
+\section{Worked example A: a single leg under a known factor}
+\label{sec:exa}
+
+A representative central-meridian grid factor, $k = 0.9996$, applied to a
+due-east (bearing $90^{\circ}$) leg measured at $1000.0000$~ft on the
+ground:
+
+\begin{center}
+\begin{tabular}{@{}llr@{}}
+\toprule
+Quantity & Formula & Value \\
+\midrule
+Ground distance $d_{\mathrm{ground}}$ & measured & $1000.0000$ ft \\
+Scale factor $k$ & chosen (grid-only or combined) & $0.9996$ \\
+Grid distance $d_{\mathrm{grid}}$ & $d_{\mathrm{ground}} \cdot k$ & $999.6000$ ft \\
+$\Delta E$ & $d_{\mathrm{grid}} \sin 90^{\circ}$ & $999.6000$ ft \\
+$\Delta N$ & $d_{\mathrm{grid}} \cos 90^{\circ}$ & $0.0000$ ft \\
+Perimeter contribution & $d_{\mathrm{grid}}$ & $999.6000$ ft \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This hand result is verified by the test suite: \texttt{tests/TraverseTests.cpp},
+\emph{``Scale factor on scales distance, coordinates, and perimeter''}
+asserts \texttt{computedHorizDist}, \texttt{computedEasting}, and
+\texttt{closurePerimeter} all equal $999.6$ for this input, while
+\texttt{computedGroundHorizDist} stays $1000.0$, the unscaled value
+preserved for display. A sibling test with the option left off (the
+default) shows the output is identical to what the software produced
+before this change.
+
+\section{Worked example B: a real projection, checked against an NGS datasheet}
+\label{sec:exb}
+
+This example checks GoSurvey's own $k_{\mathrm{grid}}$ at a real,
+independently published station rather than an assumed value. The station
+is NGS datasheet PID AG9976, ``UNIV OF TEXAS TOWER SEC,'' Travis County,
+Texas, on the Texas State Plane Coordinate System, Central Zone
+\citep{ngsAG9976}. The datasheet publishes its own computed scale factor
+for this station:
+\begin{quote}
+NGS AG9976, SPC TX-C: $E = 10{,}077{,}391.26$ ftUS, $N = 3{,}115{,}243.14$
+ftUS, published scale factor $= 0.99995905$.
+\end{quote}
+GoSurvey resolves this coordinate through its projection engine
+(\texttt{geo::GridScaleFactor}) and through
+\texttt{ResolveTraverseScaleFactor}, the function the Traverse Editor
+calls, and obtains:
+
+\begin{center}
+\begin{tabular}{@{}L{0.46\textwidth}L{0.18\textwidth}L{0.22\textwidth}@{}}
+\toprule
+Source & $k_{\mathrm{grid\text{-}only}}$ & Agreement \\
+\midrule
+NGS datasheet (published) & $0.99995905$ & reference \\
+\texttt{geo::GridScaleFactor} (direct) & matches to $\le 10^{-8}$ & within $10^{-8}$ \\
+\texttt{ResolveTraverseScaleFactor}, Grid only & $0.9999590531$ & within $10^{-7}$ \\
+\texttt{ResolveTraverseScaleFactor}, Combined, sea level off & $0.9999590531$ & identical to grid-only \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{Elevation (sea-level) reduction, combined factor}
+
+Turning on the Transformation tab's sea-level option with an elevation
+$h = 1000$ ft above an ellipsoid radius $R = 20{,}906{,}000$ ft
+($R \approx 6{,}372{,}161.54$ m, converting by the U.S.\ survey foot),
+Equation~\ref{eq:sea} gives
+\begin{equation}
+k_{\mathrm{sea}} = \frac{6{,}372{,}161.544\text{ m}}
+{6{,}372{,}161.544\text{ m} + 304.8006\text{ m}} = 0.9999521691.
+\end{equation}
+GoSurvey computes, through \texttt{geo::SeaLevelScaleFactor} and then the
+combined path of \texttt{ResolveTraverseScaleFactor}:
+
+\begin{center}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Quantity & Hand formula & GoSurvey computed \\
+\midrule
+$k_{\mathrm{sea}}$ & $0.9999521691$ & $0.9999521691$ \\
+$k_{\mathrm{grid}}$ (unchanged by elevation) & --- & $0.9999590531$ \\
+$k_{\mathrm{combined}} = k_{\mathrm{grid}} \cdot k_{\mathrm{sea}}$ & $0.9999112247$ & $0.9999112242$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The hand-computed $k_{\mathrm{sea}}$ matches GoSurvey's figure to nine
+decimal places, and the hand-computed $k_{\mathrm{combined}}$ matches to
+six decimal places (the small residual is rounding in the hand conversion
+of $R$ to meters above). $k_{\mathrm{combined}}$ differs from
+$k_{\mathrm{grid\text{-}only}}$ exactly because elevation reduction is now
+included, confirming that ``Combined'' and ``Grid only'' genuinely produce
+two different, individually correct numbers rather than one option doing
+nothing.
+
+This is verified by \texttt{tests/TransformationTests.cpp}, test case
+\texttt{"ResolveTraverseScaleFactor resolves Combined/GridOnly and reports
+why it can't"}, which reuses the same AG9976 fixture as the pre-existing
+REQ-360 datasheet test.
+
+\section{The refusal path}
+
+A drawing with no coordinate system assigned --- the default, ``No Datum,
+No Projection'' --- must not silently apply an arbitrary number.
+\texttt{ResolveTraverseScaleFactor} returns a non-empty reason string and
+leaves the factor at exactly $1.0$ for a drawing with an empty
+\texttt{zoneCode}. The Traverse Editor shows this reason next to the
+checkbox and computes as if the option were off until the drawing's
+coordinate system is fixed.
+
+\section{The default (off) path is unchanged}
+
+The same $1000.0000$~ft, bearing $90^{\circ}$ leg from
+Section~\ref{sec:exa}, with the option left off (its default state),
+produces \texttt{computedHorizDist}, \texttt{computedGroundHorizDist},
+\texttt{computedEasting}, and \texttt{closurePerimeter} all equal to
+$1000.0000$~ft, exactly what \texttt{ComputeTraverse} produced before this
+change, since $d_{\mathrm{grid}} = d_{\mathrm{ground}} \cdot 1.0 =
+d_{\mathrm{ground}}$ whenever the option is off.
+
+\section{Automated test summary}
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{0.27\textwidth}L{0.37\textwidth}L{0.28\textwidth}@{}}
+\toprule
+File & Test case & What it proves \\
+\midrule
+\texttt{TraverseTests.cpp} &
+  Scale factor off reproduces unscaled coordinates &
+  $k=1$ default path is a no-op \\[0.3em]
+\texttt{TraverseTests.cpp} &
+  Scale factor on scales distance, coordinates, and perimeter &
+  $d_{\mathrm{grid}}=d_{\mathrm{ground}}k$ propagates to $\Delta E$, easting, perimeter \\[0.3em]
+\texttt{TraverseTests.cpp} &
+  Scale factor kind defaults to Combined &
+  safe default \\[0.3em]
+\texttt{TransformationTests.cpp} &
+  ResolveTraverseScaleFactor resolves Combined/GridOnly, reports why it can't &
+  no-projection refusal; grid-only matches NGS to $10^{-8}$; combined equals grid-only with sea level off, differs with it on \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+All four cases pass under both the \texttt{GoSurveyTests} and
+\texttt{GoSurveySnapTests} executables (Catch2, MSVC release build). The
+source is PR~\#833, branch \texttt{feat/req401-traverse-scale-factor},
+requirement \texttt{REQ-401} in \texttt{spec/requirements.md}.
+
+\begin{thebibliography}{9}
+
+\bibitem[Ghilani, 2017]{ghilani2017}
+Ghilani, C.~D. (2017). \emph{Adjustment Computations: Spatial Data
+Analysis}, 6th ed. Hoboken, NJ: John Wiley \& Sons.
+
+\bibitem[Ghilani and Wolf, 2015]{ghilaniwolf2015}
+Ghilani, C.~D., and Wolf, P.~R. (2015). \emph{Elementary Surveying: An
+Introduction to Geomatics}, 14th ed. Boston: Pearson.
+
+\bibitem[NGS, 2026]{ngsAG9976}
+National Geodetic Survey (retrieved 2026). \emph{NGS Data Sheet}, PID
+AG9976, ``UNIV OF TEXAS TOWER SEC.'' Silver Spring, MD: NOAA National
+Geodetic Survey. \url{https://www.ngs.noaa.gov/}
+
+\bibitem[Snyder, 1987]{snyder1987}
+Snyder, J.~P. (1987). \emph{Map Projections --- A Working Manual}. U.S.\
+Geological Survey Professional Paper 1395. Washington, DC: U.S.\
+Government Printing Office.
+
+\bibitem[Stem, 1990]{stem1990}
+Stem, J.~E. (1990). \emph{State Plane Coordinate System of 1983}. NOAA
+Manual NOS NGS~5. Rockville, MD: National Geodetic Survey.
+
+\end{thebibliography}
+
+\end{document}
