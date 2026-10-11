@@ -114,8 +114,8 @@ void DrawSignInGateBody(AppCommandState& cmd) {
   // in GoSurvey is gated on sign-in today, so declining is a legitimate, permanent option.
   ImGui::TextWrapped(
       "Sign in with Google, Microsoft, or an email and password to create an account for future "
-      "cloud-sync features. Or continue without an account — you can sign in later from "
-      "Settings any time.");
+      "cloud-sync features. If you choose to not sign in, you will not be asked to sign in "
+      "again in the future — you can still sign in later from Settings any time.");
   ImGui::PopTextWrapPos();
   ImGui::PopStyleColor();
 
@@ -159,7 +159,11 @@ void DrawSignInGate(AppCommandState& cmd) {
   if (signInOpenAnimStart < 0.0)
     signInOpenAnimStart = ImGui::GetTime();
 
-  constexpr ImVec2 kSignInSize(480.f, 0.f);
+  // Widened from the original 480x380 (D-2026-10-11-a, issue #824): the opt-in/opt-out wording
+  // plus the second "Don't Sign In" button no longer fit the old size — a narrower window wrapped
+  // the body text onto enough lines to push the second button below the window, which showed as
+  // an (unwanted — this is a fixed, non-scrolling card) scrollbar rather than a clipped button.
+  constexpr ImVec2 kSignInSize(560.f, 0.f);
   const float      rawAnimT = static_cast<float>(
       (ImGui::GetTime() - signInOpenAnimStart) / kSignInOpenAnimSec);
   const float animT = (std::min)(1.f, (std::max)(0.f, rawAnimT));
@@ -179,7 +183,7 @@ void DrawSignInGate(AppCommandState& cmd) {
   const float scale     = LerpFloat(0.84f, 1.f, scaleEase);
   const float yLift     = LerpFloat(kDropFromY, 0.f, EaseOutBounce(dropPhase));
 
-  const ImVec2 animSize(kSignInSize.x * scale, 430.f * scale);
+  const ImVec2 animSize(kSignInSize.x * scale, 460.f * scale);
   const ImVec2 center   = ImGui::GetMainViewport()->GetCenter();
   ImGui::SetNextWindowSize(animSize, ImGuiCond_Always);
   ImGui::SetNextWindowPos(ImVec2(center.x, center.y + yLift), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -199,7 +203,8 @@ void DrawSignInGate(AppCommandState& cmd) {
 
   const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
-                                 ImGuiWindowFlags_NoSavedSettings;
+                                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
+                                 ImGuiWindowFlags_NoScrollWithMouse;
 
   if (!ImGui::BeginPopupModal(kPopupId, nullptr, flags)) {
     ImGui::PopStyleColor(8);
