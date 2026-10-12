@@ -12263,6 +12263,27 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted.
 - Revisions: 2026-10-11 — initial (D-2026-10-11-c). 2026-10-11 — accepted.
 
+### REQ-403 — Traverse Editor: save and reload traverse data (GitHub issue #834)
+
+- Purpose: the Traverse Editor (`TraverseData`) has no file format to save its working state and reload it later. Closing the editor, the drawing, or the project loses all raw measurement sets, legs, a-priori weights, and closure settings — the only inputs are live editing and `FbkImport` (one-way field-book import), with no round-trip save/load.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-12-a.
+- Depends on: REQ-379 (project tracked files, #696 P6) for the project-tracking half of clause 3.
+- Statement:
+  1. **Standalone file format.** A traverse saves to its own file, extension `.gstrav`, holding at minimum: the starting station (id, easting, northing, elevation, reference bearing), every leg's inputs (`TraverseLeg`, including its raw `TraverseMeasSet` observations), the `useFace1Face2`/`isClosedLoop`/`applyScaleFactor`/`scaleFactorKind` options, and the a-priori LSA weights (`LsaWeights`: angle σ, dist σ, dist ppm). Computed/derived fields (legs' computed coordinates, closure results, the LSA adjustment) are not stored — they are deterministic functions of the saved inputs and weights, recomputed on load, so a reopened traverse shows the same closure it showed when saved without duplicating derived state that could drift from its inputs.
+  2. **Save / Load / Reload actions.** The Traverse Editor gets **Save…**, **Save** (to the last-used path, once one exists), and **Load…** buttons alongside the existing **Import .fbk…** button. Load replaces the current in-editor traverse the same way an FBK import does today. A failed load leaves the current traverse untouched and reports why (REQ-201).
+  3. **Project tracking, not duplication.** When the active drawing belongs to an open GoSurvey Project (#696) and the saved `.gstrav` file lies inside that project's folder, it is automatically tracked in the project's file list (`projfiles::TrackFile`, the same mechanism already used for PDFs and point clouds) so it travels with Pack Project / Turnover. A standalone (non-project) drawing saves and loads the file exactly the same way, just untracked. The `.gstrav` file is never embedded or duplicated inside `.gsproj` itself — the project records only its relative path, as it does for every other tracked file kind.
+  4. **Round-trip fidelity.** Save then Load of the same traverse reproduces identical computed closure and (once the adjustment is run) identical least-squares results, for both an open and a closed-loop traverse, with and without raw observation sets.
+- Acceptance:
+  - `[req403]` test: a traverse with legs, raw observation sets, non-default LSA weights, and closure options round-trips through Save/Load with every input field identical.
+  - `[req403]` test: loading a `.gstrav` file recomputes the same closure (REQ-014) the traverse showed before it was saved.
+  - `[req403]` test: a malformed or unreadable `.gstrav` file fails Load with a reported reason and leaves the current traverse unchanged.
+  - `[req403]` manual: saving from a drawing open inside a GoSurvey Project, with the file placed inside the project folder, adds it to that project's tracked file list; saving from a standalone drawing does not require or create a project.
+- Owner-layer: Domain (`src/traverse/TraverseIo.hpp`/`.cpp`), Commands (`src/commands/ProjectFiles.cpp`, tracking), UI (`src/ui/CadUi_TraverseEditor.cpp`), Platform (`src/platform/WinFileDialogs.hpp`/`.cpp`, `.gstrav` file picker).
+- Status: accepted.
+- Revisions: 2026-10-12 — initial (D-2026-10-12-a). 2026-10-12 — accepted.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

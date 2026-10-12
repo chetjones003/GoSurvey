@@ -5524,6 +5524,9 @@ struct AppCommandState {
   TraverseData traverseData;
   /// When true, traverseData must be recomputed before the next panel draw.
   bool traverseDataDirty = true;
+  /// REQ-403 (#834): last path saved/loaded via the Traverse Editor, "" until one exists. Plain
+  /// "Save" writes here again without reprompting; "Save As…" always prompts and updates it.
+  std::string traverseFilePath;
 
   /// Closure-analysis window (unadjusted vs least-squares, REQ-014).
   bool        showTraverseClosureWindow = false;

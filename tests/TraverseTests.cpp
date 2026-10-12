@@ -8,8 +8,11 @@
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
 #include "traverse/FbkImport.hpp"
+#include "traverse/TraverseIo.hpp"
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 using Catch::Approx;
@@ -413,4 +416,213 @@ TEST_CASE("Scale factor on scales distance, coordinates, and perimeter", "[engin
 TEST_CASE("Scale factor kind defaults to Combined", "[engine][REQ-401]") {
     TraverseData td;
     CHECK(td.scaleFactorKind == TraverseData::ScaleFactorKind::Combined);
+}
+
+// ---- REQ-403 (#834): Save/Load round-trip ----
+
+namespace {
+
+std::filesystem::path TraverseIoTestDir() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "gosurvey-traverseio";
+    std::filesystem::create_directories(dir);
+    return dir;
+}
+
+// A closed-loop traverse with raw observation sets and non-default weights, exercising every
+// field TraverseIo::Save/Load must round-trip.
+TraverseData MakeRoundTripFixture() {
+    TraverseData td;
+    td.startStationId = 5;
+    td.startEasting = 1000.25;
+    td.startNorthing = 2000.5;
+    td.startElevation = 123.75;
+    td.startBearingBuf = "45d30m10s";
+    TraverseParseAngle(td.startBearingBuf, &td.startBearingDeg);
+    td.hasStartBearing = true;
+    td.useFace1Face2 = true;
+    td.isClosedLoop = true;
+    td.applyScaleFactor = true;
+    td.scaleFactorKind = TraverseData::ScaleFactorKind::GridOnly;
+    td.scaleFactor = 0.99987;
+
+    TraverseLeg leg;
+    leg.stationId = 6;
+    leg.description = "FH set";
+    leg.horizAngleBuf = "90d00m00s";
+    leg.horizAngleDeg = 90.0;
+    leg.hasHorizAngle = true;
+    leg.backsightCircleDeg = 12.5;
+    leg.hasBacksightCircle = true;
+    leg.hasHorizDist = true;
+    leg.horizDist = 150.0;
+    leg.vertAngleBuf = "89d59m00s";
+    leg.vertAngleDeg = 89.9833;
+    leg.isZenithAngle = true;
+    leg.hasVertAngle = true;
+    leg.hasFace1 = true;
+    leg.hasFace2 = true;
+
+    TraverseMeasSet s1;
+    s1.setNo = 1;
+    s1.hasF1 = true; s1.f1HzDec = 90.0001; s1.f1VaDec = 89.98; s1.f1Sd = 150.01;
+    s1.hasF2 = true; s1.f2HzDec = 270.0002; s1.f2VaDec = 270.02; s1.f2Sd = 150.02;
+    leg.rawSets.push_back(s1);
+    TraverseMeasSet s2;
+    s2.setNo = 2;
+    s2.hasF1 = true; s2.f1HzDec = 89.9998; s2.f1VaDec = 89.99; s2.f1Sd = 149.99;
+    leg.rawSets.push_back(s2);
+
+    td.legs.push_back(leg);
+    ComputeTraverse(td);
+    return td;
+}
+
+LsaWeights MakeRoundTripWeights() {
+    LsaWeights w;
+    w.sigmaAngleSec = 3.5;
+    w.sigmaDistConstFt = 0.015;
+    w.sigmaDistPpm = 4.0;
+    return w;
+}
+
+}  // namespace
+
+TEST_CASE("TraverseIo: save/load round-trips every input field", "[io][REQ-403]") {
+    const TraverseData original = MakeRoundTripFixture();
+    const LsaWeights originalWeights = MakeRoundTripWeights();
+    const std::string path = (TraverseIoTestDir() / "roundtrip.gstrav").string();
+
+    std::string saveErr;
+    REQUIRE(traverseio::Save(path, original, originalWeights, saveErr));
+    CHECK(saveErr.empty());
+
+    TraverseData loaded;
+    LsaWeights loadedWeights;
+    std::string loadErr;
+    REQUIRE(traverseio::Load(path, loaded, loadedWeights, loadErr));
+    CHECK(loadErr.empty());
+
+    CHECK(loaded.startStationId == original.startStationId);
+    CHECK(loaded.startEasting == Approx(original.startEasting));
+    CHECK(loaded.startNorthing == Approx(original.startNorthing));
+    CHECK(loaded.startElevation == Approx(original.startElevation));
+    CHECK(loaded.startBearingBuf == original.startBearingBuf);
+    CHECK(loaded.startBearingDeg == Approx(original.startBearingDeg));
+    CHECK(loaded.hasStartBearing == original.hasStartBearing);
+    CHECK(loaded.useFace1Face2 == original.useFace1Face2);
+    CHECK(loaded.isClosedLoop == original.isClosedLoop);
+    CHECK(loaded.applyScaleFactor == original.applyScaleFactor);
+    CHECK(loaded.scaleFactorKind == original.scaleFactorKind);
+    CHECK(loaded.scaleFactor == Approx(original.scaleFactor));
+
+    REQUIRE(loaded.legs.size() == original.legs.size());
+    const TraverseLeg& a = original.legs[0];
+    const TraverseLeg& b = loaded.legs[0];
+    CHECK(b.stationId == a.stationId);
+    CHECK(b.description == a.description);
+    CHECK(b.horizAngleDeg == Approx(a.horizAngleDeg));
+    CHECK(b.backsightCircleDeg == Approx(a.backsightCircleDeg));
+    CHECK(b.hasBacksightCircle == a.hasBacksightCircle);
+    CHECK(b.vertAngleDeg == Approx(a.vertAngleDeg));
+    REQUIRE(b.rawSets.size() == a.rawSets.size());
+    for (size_t i = 0; i < a.rawSets.size(); ++i) {
+        CHECK(b.rawSets[i].setNo == a.rawSets[i].setNo);
+        CHECK(b.rawSets[i].hasF1 == a.rawSets[i].hasF1);
+        CHECK(b.rawSets[i].f1HzDec == Approx(a.rawSets[i].f1HzDec));
+        CHECK(b.rawSets[i].hasF2 == a.rawSets[i].hasF2);
+        CHECK(b.rawSets[i].f2HzDec == Approx(a.rawSets[i].f2HzDec));
+    }
+
+    CHECK(loadedWeights.sigmaAngleSec == Approx(originalWeights.sigmaAngleSec));
+    CHECK(loadedWeights.sigmaDistConstFt == Approx(originalWeights.sigmaDistConstFt));
+    CHECK(loadedWeights.sigmaDistPpm == Approx(originalWeights.sigmaDistPpm));
+}
+
+// REQ-403 clause 4: a reloaded traverse recomputes to the same closure it had when saved.
+TEST_CASE("TraverseIo: reload reproduces the saved closure", "[io][REQ-403]") {
+    TraverseData original = MakeRoundTripFixture();
+    const double savedClosureLinear = original.closureLinear;
+    const double savedPerimeter = original.closurePerimeter;
+    const std::string path = (TraverseIoTestDir() / "closure.gstrav").string();
+
+    std::string err;
+    LsaWeights weights = MakeRoundTripWeights();
+    REQUIRE(traverseio::Save(path, original, weights, err));
+
+    TraverseData loaded;
+    LsaWeights loadedWeights;
+    REQUIRE(traverseio::Load(path, loaded, loadedWeights, err));
+    ComputeTraverse(loaded);  // the UI always recomputes after a load (traverseDataDirty).
+
+    CHECK(loaded.closureLinear == Approx(savedClosureLinear).margin(1e-9));
+    CHECK(loaded.closurePerimeter == Approx(savedPerimeter).margin(1e-9));
+}
+
+TEST_CASE("TraverseIo: an open-loop traverse with no raw sets round-trips too", "[io][REQ-403]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.startBearingDeg = 0.0;
+    td.hasStartBearing = true;
+    td.isClosedLoop = false;
+
+    TraverseLeg leg;
+    leg.stationId = 2;
+    leg.hasHorizAngle = true; leg.horizAngleDeg = 90.0;
+    leg.hasHorizDist = true;  leg.horizDist = 100.0;
+    td.legs.push_back(leg);
+    ComputeTraverse(td);
+
+    const std::string path = (TraverseIoTestDir() / "openloop.gstrav").string();
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(traverseio::Save(path, td, weights, err));
+
+    TraverseData loaded;
+    LsaWeights loadedWeights;
+    REQUIRE(traverseio::Load(path, loaded, loadedWeights, err));
+    REQUIRE(loaded.legs.size() == 1);
+    CHECK(loaded.legs[0].rawSets.empty());
+    CHECK(loaded.isClosedLoop == false);
+}
+
+TEST_CASE("TraverseIo: a malformed file fails Load and leaves the traverse untouched", "[io][REQ-403]") {
+    const std::filesystem::path path = TraverseIoTestDir() / "malformed.gstrav";
+    {
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        f << "{ this is not valid json";
+    }
+
+    TraverseData td = MakeRoundTripFixture();
+    const TraverseData before = td;
+    LsaWeights weights = MakeRoundTripWeights();
+    const LsaWeights weightsBefore = weights;
+
+    std::string err;
+    CHECK_FALSE(traverseio::Load(path.string(), td, weights, err));
+    CHECK_FALSE(err.empty());
+    CHECK(td.legs.size() == before.legs.size());
+    CHECK(td.startStationId == before.startStationId);
+    CHECK(weights.sigmaAngleSec == Approx(weightsBefore.sigmaAngleSec));
+}
+
+TEST_CASE("TraverseIo: a file with the wrong format tag is refused", "[io][REQ-403]") {
+    const std::filesystem::path path = TraverseIoTestDir() / "wrongformat.gstrav";
+    {
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        f << R"({"format":"gspack","version":1})";
+    }
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(traverseio::Load(path.string(), td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseIo: a missing file fails Load with a reason", "[io][REQ-403]") {
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(traverseio::Load((TraverseIoTestDir() / "does-not-exist.gstrav").string(), td, weights, err));
+    CHECK_FALSE(err.empty());
 }
