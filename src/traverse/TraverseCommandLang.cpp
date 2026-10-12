@@ -16,84 +16,33 @@ std::string Fmt(double v, int prec = 6) {
     return buf;
 }
 
-// Quotes a value if it contains whitespace; backslash-escapes embedded quotes.
-std::string QuoteIfNeeded(const std::string& s) {
-    bool needsQuote = s.empty();
-    if (!needsQuote)
-        for (char c : s)
-            if (std::isspace(static_cast<unsigned char>(c))) { needsQuote = true; break; }
-    if (!needsQuote)
-        return s;
-    std::string out = "\"";
-    for (char c : s) {
-        if (c == '"' || c == '\\') out += '\\';
-        out += c;
-    }
-    out += '"';
-    return out;
-}
-
-// Splits a line into whitespace-separated tokens, treating a double-quoted run
-// (with \" / \\ escapes) as a single token with the quotes stripped.
-std::vector<std::string> Tokenize(const std::string& line) {
-    std::vector<std::string> toks;
-    std::string cur;
-    bool inQuotes = false;
-    bool any = false;
-    for (size_t i = 0; i < line.size(); ++i) {
-        const char c = line[i];
-        if (inQuotes && c == '\\' && i + 1 < line.size() && (line[i + 1] == '"' || line[i + 1] == '\\')) {
-            cur += line[i + 1];
-            ++i;
-            continue;
-        }
-        if (c == '"') {
-            inQuotes = !inQuotes;
-            any = true;
-            continue;
-        }
-        if (!inQuotes && std::isspace(static_cast<unsigned char>(c))) {
-            if (any) { toks.push_back(cur); cur.clear(); any = false; }
-            continue;
-        }
-        cur += c;
-        any = true;
-    }
-    if (any) toks.push_back(cur);
-    return toks;
-}
-
 std::string ToUpper(std::string s) {
     for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return s;
 }
-std::string ToLower(std::string s) {
-    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
+
+std::vector<std::string> Tokenize(const std::string& line) {
+    std::vector<std::string> toks;
+    std::istringstream ss(line);
+    std::string t;
+    while (ss >> t) toks.push_back(t);
+    return toks;
 }
 
-using KvMap = std::unordered_map<std::string, std::string>;
-
-bool GetNum(const KvMap& kv, const char* key, double* out) {
-    const auto it = kv.find(key);
-    if (it == kv.end() || it->second.empty()) return false;
+bool ParseIntTok(const std::string& s, int* out) {
     char* ep = nullptr;
-    const double v = std::strtod(it->second.c_str(), &ep);
-    if (ep == it->second.c_str()) return false;
-    *out = v;
+    const long v = std::strtol(s.c_str(), &ep, 10);
+    if (ep == s.c_str()) return false;
+    *out = static_cast<int>(v);
     return true;
 }
 
-bool GetBool(const KvMap& kv, const char* key, bool def) {
-    const auto it = kv.find(key);
-    if (it == kv.end()) return def;
-    const std::string v = ToLower(it->second);
-    return (v == "on" || v == "yes" || v == "true" || v == "1");
-}
-
-std::string GetStr(const KvMap& kv, const char* key, const std::string& def = {}) {
-    const auto it = kv.find(key);
-    return (it == kv.end()) ? def : it->second;
+bool ParseDoubleTok(const std::string& s, double* out) {
+    char* ep = nullptr;
+    const double v = std::strtod(s.c_str(), &ep);
+    if (ep == s.c_str()) return false;
+    *out = v;
+    return true;
 }
 
 }  // namespace
@@ -102,39 +51,44 @@ std::string Serialize(const TraverseData& td, const LsaWeights& weights) {
     std::ostringstream out;
     out << "# GoSurvey Traverse Command (GSTC) \xe2\x80\x94 edit and re-apply.\n";
 
-    out << "STATION id=" << td.startStationId
-        << " e=" << Fmt(td.startEasting)
-        << " n=" << Fmt(td.startNorthing)
-        << " z=" << Fmt(td.startElevation);
+    out << "STATION " << td.startStationId
+        << " " << Fmt(td.startEasting)
+        << " " << Fmt(td.startNorthing)
+        << " " << Fmt(td.startElevation) << "\n";
     if (td.hasStartBearing)
-        out << " bearing=" << Fmt(td.startBearingDeg);
-    out << "\n";
+        out << "BEARING " << Fmt(td.startBearingDeg) << "\n";
 
-    out << "LOOP closed=" << (td.isClosedLoop ? "on" : "off") << "\n";
-
-    out << "SCALE apply=" << (td.applyScaleFactor ? "on" : "off")
-        << " kind=" << (td.scaleFactorKind == TraverseData::ScaleFactorKind::GridOnly ? "grid" : "combined")
+    out << "LOOP " << (td.isClosedLoop ? "ON" : "OFF") << "\n";
+    out << "SCALE " << (td.applyScaleFactor ? "ON" : "OFF")
+        << " " << (td.scaleFactorKind == TraverseData::ScaleFactorKind::GridOnly ? "GRID" : "COMBINED")
+        << "\n";
+    out << "ERRORS " << Fmt(weights.sigmaAngleSec, 3)
+        << " " << Fmt(weights.sigmaDistConstFt, 4)
+        << " " << Fmt(weights.sigmaDistPpm, 3)
         << "\n";
 
-    out << "ERRORS angle=" << Fmt(weights.sigmaAngleSec, 3)
-        << " dist=" << Fmt(weights.sigmaDistConstFt, 4)
-        << " ppm=" << Fmt(weights.sigmaDistPpm, 3)
-        << "\n\n";
+    for (size_t i = 0; i < td.legs.size(); ++i) {
+        const TraverseLeg& leg = td.legs[i];
+        const int at = (i == 0) ? td.startStationId : td.legs[i - 1].stationId;
+        const int to = leg.stationId;
 
-    for (const auto& leg : td.legs) {
-        out << "LEG stn=" << leg.stationId;
-        if (!leg.description.empty())
-            out << " desc=" << QuoteIfNeeded(leg.description);
-        if (leg.hasHorizAngle)
-            out << " angle=" << Fmt(leg.horizAngleDeg);
+        out << "\nSTN " << at << " " << to << "\n";
+
+        if (leg.hasHorizAngle) {
+            const std::string from = (i == 0) ? "REF"
+                                               : std::to_string((i == 1) ? td.startStationId
+                                                                          : td.legs[i - 2].stationId);
+            out << "HANG " << from << " " << at << " " << to << " " << Fmt(leg.horizAngleDeg) << "\n";
+        }
         if (leg.hasHorizDist)
-            out << " hdist=" << Fmt(leg.horizDist);
+            out << "HDIST " << at << " " << to << " " << Fmt(leg.horizDist) << "\n";
         if (leg.hasSlopeDist)
-            out << " sdist=" << Fmt(leg.slopeDist);
+            out << "SDIST " << at << " " << to << " " << Fmt(leg.slopeDist) << "\n";
         if (leg.hasVertAngle)
-            out << " vangle=" << Fmt(leg.vertAngleDeg);
-        out << " zenith=" << (leg.isZenithAngle ? "on" : "off");
-        out << "\n";
+            out << "VANG " << at << " " << to << " " << Fmt(leg.vertAngleDeg)
+                << " " << (leg.isZenithAngle ? "ZENITH" : "ELEV") << "\n";
+        if (!leg.description.empty())
+            out << "DESC " << at << " " << to << " " << leg.description << "\n";
     }
     return out.str();
 }
@@ -144,7 +98,15 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
     newTd.hasStartBearing = false;
     LsaWeights newWeights;
     bool sawStation = false;
-    bool sawAnyLeg = false;
+
+    std::vector<TraverseLeg> newLegs;
+    std::unordered_map<int, size_t> toIndex;  // TO station -> index in newLegs
+
+    // The station occupied for the leg at newLegs[idx] — the previous leg's TO,
+    // or the start station for the first leg.
+    auto expectedAt = [&](size_t idx) -> int {
+        return (idx == 0) ? newTd.startStationId : newLegs[idx - 1].stationId;
+    };
 
     std::istringstream in(text);
     std::string line;
@@ -159,74 +121,139 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
 
         const auto toks = Tokenize(line);
         if (toks.empty()) continue;
-
         const std::string directive = ToUpper(toks[0]);
 
-        KvMap kv;
-        for (size_t i = 1; i < toks.size(); ++i) {
-            const size_t eq = toks[i].find('=');
-            if (eq == std::string::npos) {
-                errorMsg = "line " + std::to_string(lineNo) + ": expected key=value, got \"" + toks[i] + "\"";
-                return false;
-            }
-            kv[ToLower(toks[i].substr(0, eq))] = toks[i].substr(eq + 1);
-        }
+        auto fail = [&](const std::string& msg) -> bool {
+            errorMsg = "line " + std::to_string(lineNo) + ": " + msg;
+            return false;
+        };
 
-        double num = 0.0;
         if (directive == "STATION") {
-            if (GetNum(kv, "id", &num)) newTd.startStationId = static_cast<int>(num);
-            if (GetNum(kv, "e", &num)) newTd.startEasting = num;
-            if (GetNum(kv, "n", &num)) newTd.startNorthing = num;
-            if (GetNum(kv, "z", &num)) newTd.startElevation = num;
-            if (GetNum(kv, "bearing", &num)) {
-                newTd.startBearingDeg = num;
-                newTd.hasStartBearing = true;
-                newTd.startBearingBuf = TraverseFormatBearing(num);
-            }
+            int id = 0;
+            double e, n, z;
+            if (toks.size() < 5 || !ParseIntTok(toks[1], &id) || !ParseDoubleTok(toks[2], &e) ||
+                !ParseDoubleTok(toks[3], &n) || !ParseDoubleTok(toks[4], &z))
+                return fail("expected STATION <id> <e> <n> <z>");
+            newTd.startStationId = id;
+            newTd.startEasting = e;
+            newTd.startNorthing = n;
+            newTd.startElevation = z;
             sawStation = true;
+        } else if (directive == "BEARING") {
+            double deg;
+            if (toks.size() < 2 || !ParseDoubleTok(toks[1], &deg))
+                return fail("expected BEARING <deg>");
+            newTd.startBearingDeg = deg;
+            newTd.hasStartBearing = true;
+            newTd.startBearingBuf = TraverseFormatBearing(deg);
         } else if (directive == "LOOP") {
-            newTd.isClosedLoop = GetBool(kv, "closed", newTd.isClosedLoop);
+            if (toks.size() < 2) return fail("expected LOOP ON|OFF");
+            newTd.isClosedLoop = (ToUpper(toks[1]) == "ON");
         } else if (directive == "SCALE") {
-            newTd.applyScaleFactor = GetBool(kv, "apply", newTd.applyScaleFactor);
-            const std::string kind = ToLower(GetStr(kv, "kind", "combined"));
-            newTd.scaleFactorKind = (kind == "grid") ? TraverseData::ScaleFactorKind::GridOnly
+            if (toks.size() < 2) return fail("expected SCALE ON|OFF [COMBINED|GRID]");
+            newTd.applyScaleFactor = (ToUpper(toks[1]) == "ON");
+            const std::string kind = (toks.size() >= 3) ? ToUpper(toks[2]) : "COMBINED";
+            newTd.scaleFactorKind = (kind == "GRID") ? TraverseData::ScaleFactorKind::GridOnly
                                                       : TraverseData::ScaleFactorKind::Combined;
         } else if (directive == "ERRORS") {
-            if (GetNum(kv, "angle", &num)) newWeights.sigmaAngleSec = num;
-            if (GetNum(kv, "dist", &num)) newWeights.sigmaDistConstFt = num;
-            if (GetNum(kv, "ppm", &num)) newWeights.sigmaDistPpm = num;
-        } else if (directive == "LEG") {
+            double a, d, p;
+            if (toks.size() < 4 || !ParseDoubleTok(toks[1], &a) || !ParseDoubleTok(toks[2], &d) ||
+                !ParseDoubleTok(toks[3], &p))
+                return fail("expected ERRORS <angle-arcsec> <dist-const> <dist-ppm>");
+            newWeights.sigmaAngleSec = a;
+            newWeights.sigmaDistConstFt = d;
+            newWeights.sigmaDistPpm = p;
+        } else if (directive == "STN") {
+            int at, to;
+            if (toks.size() < 3 || !ParseIntTok(toks[1], &at) || !ParseIntTok(toks[2], &to))
+                return fail("expected STN <at> <to>");
+            if (toIndex.count(to))
+                return fail("station " + std::to_string(to) + " already declared with STN");
+            const int expected = expectedAt(newLegs.size());
+            if (at != expected)
+                return fail("AT " + std::to_string(at) + " doesn't continue the traverse chain (expected " +
+                            std::to_string(expected) + ")");
             TraverseLeg leg;
-            if (GetNum(kv, "stn", &num)) leg.stationId = static_cast<int>(num);
-            else {
-                errorMsg = "line " + std::to_string(lineNo) + ": LEG requires stn=<id>";
-                return false;
-            }
-            leg.description = GetStr(kv, "desc");
-            leg.isZenithAngle = GetBool(kv, "zenith", true);
-            if (GetNum(kv, "angle", &num)) {
-                leg.horizAngleDeg = num;
+            leg.stationId = to;
+            leg.isZenithAngle = true;
+            newLegs.push_back(std::move(leg));
+            toIndex[to] = newLegs.size() - 1;
+        } else if (directive == "HANG" || directive == "HDIST" || directive == "SDIST" ||
+                   directive == "VANG" || directive == "DESC") {
+            // All five share the same <at> <to> addressing, at a different token offset
+            // for HANG (which carries <from> first).
+            const size_t atPos = (directive == "HANG") ? 2 : 1;
+            const size_t toPos = atPos + 1;
+            if (toks.size() <= toPos)
+                return fail("expected " + directive + " ... <at> <to> ...");
+            int at, to;
+            if (!ParseIntTok(toks[atPos], &at) || !ParseIntTok(toks[toPos], &to))
+                return fail(directive + ": <at>/<to> must be integers");
+
+            const auto it = toIndex.find(to);
+            if (it == toIndex.end())
+                return fail("station " + std::to_string(to) + " not declared (use STN " +
+                            std::to_string(at) + " " + std::to_string(to) + " first)");
+            const size_t idx = it->second;
+            if (at != expectedAt(idx))
+                return fail("AT " + std::to_string(at) + " doesn't match station " +
+                            std::to_string(expectedAt(idx)) + " occupied for the leg to station " +
+                            std::to_string(to));
+
+            TraverseLeg& leg = newLegs[idx];
+            if (directive == "HANG") {
+                // toks[1] is FROM: unconstrained for the first leg (no modeled backsight
+                // station — the literal REF is round-tripped there), otherwise must equal
+                // the station occupied by the previous leg.
+                if (idx > 0) {
+                    int from;
+                    if (!ParseIntTok(toks[1], &from))
+                        return fail("HANG: <from> must be an integer after the first leg");
+                    if (from != expectedAt(idx - 1))
+                        return fail("FROM " + std::to_string(from) + " doesn't match station " +
+                                    std::to_string(expectedAt(idx - 1)) + " occupied for the previous leg");
+                }
+                double ang;
+                if (toks.size() < 5 || !ParseDoubleTok(toks[4], &ang))
+                    return fail("expected HANG <from> <at> <to> <angle-deg>");
+                leg.horizAngleDeg = ang;
                 leg.hasHorizAngle = true;
-                leg.horizAngleBuf = Fmt(num);
-            }
-            if (GetNum(kv, "hdist", &num)) {
-                leg.horizDist = num;
-                leg.hasHorizDist = (num > 0.0);
-            }
-            if (GetNum(kv, "sdist", &num)) {
-                leg.slopeDist = num;
-                leg.hasSlopeDist = (num > 0.0);
-            }
-            if (GetNum(kv, "vangle", &num)) {
-                leg.vertAngleDeg = num;
+                leg.horizAngleBuf = Fmt(ang);
+            } else if (directive == "HDIST") {
+                double dist;
+                if (toks.size() < 4 || !ParseDoubleTok(toks[3], &dist))
+                    return fail("expected HDIST <at> <to> <dist>");
+                leg.horizDist = dist;
+                leg.hasHorizDist = (dist > 0.0);
+            } else if (directive == "SDIST") {
+                double dist;
+                if (toks.size() < 4 || !ParseDoubleTok(toks[3], &dist))
+                    return fail("expected SDIST <at> <to> <dist>");
+                leg.slopeDist = dist;
+                leg.hasSlopeDist = (dist > 0.0);
+            } else if (directive == "VANG") {
+                double ang;
+                if (toks.size() < 4 || !ParseDoubleTok(toks[3], &ang))
+                    return fail("expected VANG <at> <to> <angle-deg> [ZENITH|ELEV]");
+                leg.vertAngleDeg = ang;
                 leg.hasVertAngle = true;
-                leg.vertAngleBuf = Fmt(num);
+                leg.vertAngleBuf = Fmt(ang);
+                leg.isZenithAngle = (toks.size() < 5) || (ToUpper(toks[4]) != "ELEV");
+            } else {  // DESC — everything after the <to> token, verbatim.
+                auto isSpace = [](char c) { return std::isspace(static_cast<unsigned char>(c)); };
+                auto skipToken = [&](size_t p) -> size_t {
+                    while (p < line.size() && isSpace(line[p])) ++p;
+                    while (p < line.size() && !isSpace(line[p])) ++p;
+                    return p;
+                };
+                size_t pos = skipToken(0);       // past DESC
+                pos = skipToken(pos);            // past <at>
+                pos = skipToken(pos);            // past <to>
+                while (pos < line.size() && isSpace(line[pos])) ++pos;
+                leg.description = (pos < line.size()) ? line.substr(pos) : "";
             }
-            newTd.legs.push_back(std::move(leg));
-            sawAnyLeg = true;
         } else {
-            errorMsg = "line " + std::to_string(lineNo) + ": unknown directive \"" + toks[0] + "\"";
-            return false;
+            return fail("unknown directive \"" + toks[0] + "\"");
         }
     }
 
@@ -234,8 +261,8 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
         errorMsg = "missing STATION directive";
         return false;
     }
-    (void)sawAnyLeg;  // a traverse with zero legs is valid (just the start station).
 
+    newTd.legs = std::move(newLegs);
     td = std::move(newTd);
     weights = newWeights;
     errorMsg.clear();

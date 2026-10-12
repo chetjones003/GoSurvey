@@ -746,9 +746,10 @@ TEST_CASE("TraverseCommandLang: comments and blank lines are ignored", "[travers
     const std::string text =
         "# a leading comment\n"
         "\n"
-        "STATION id=5 e=100 n=200 z=10\n"
+        "STATION 5 100 200 10\n"
         "   # an indented comment\n"
-        "LEG stn=6 angle=90 hdist=50\n";
+        "STN 5 6\n"
+        "HANG REF 5 6 90\n";
 
     TraverseData td;
     LsaWeights weights;
@@ -759,10 +760,11 @@ TEST_CASE("TraverseCommandLang: comments and blank lines are ignored", "[travers
     CHECK(td.legs[0].stationId == 6);
 }
 
-TEST_CASE("TraverseCommandLang: a quoted description with spaces round-trips", "[traverse][REQ-404]") {
+TEST_CASE("TraverseCommandLang: DESC takes the rest of the line verbatim", "[traverse][REQ-404]") {
     const std::string text =
-        "STATION id=1 e=0 n=0 z=0\n"
-        "LEG stn=2 desc=\"Manhole 1\" angle=10 hdist=20\n";
+        "STATION 1 0 0 0\n"
+        "STN 1 2\n"
+        "DESC 1 2 Manhole 1\n";
 
     TraverseData td;
     LsaWeights weights;
@@ -772,10 +774,44 @@ TEST_CASE("TraverseCommandLang: a quoted description with spaces round-trips", "
     CHECK(td.legs[0].description == "Manhole 1");
 }
 
-TEST_CASE("TraverseCommandLang: Parse rejects a LEG missing stn=", "[traverse][REQ-404]") {
+TEST_CASE("TraverseCommandLang: HANG's FROM for leg 2+ must match the previous leg's station", "[traverse][REQ-404]") {
+    const std::string good =
+        "STATION 1 0 0 0\n"
+        "STN 1 2\n"
+        "HANG REF 1 2 90\n"
+        "STN 2 3\n"
+        "HANG 1 2 3 180\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK(travcmd::Parse(good, td, weights, err));
+
+    const std::string bad =
+        "STATION 1 0 0 0\n"
+        "STN 1 2\n"
+        "HANG REF 1 2 90\n"
+        "STN 2 3\n"
+        "HANG 99 2 3 180\n";  // wrong FROM — should have been 1
+    CHECK_FALSE(travcmd::Parse(bad, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseCommandLang: Parse rejects an observation line for an undeclared station", "[traverse][REQ-404]") {
     const std::string text =
-        "STATION id=1 e=0 n=0 z=0\n"
-        "LEG angle=10 hdist=20\n";
+        "STATION 1 0 0 0\n"
+        "HDIST 1 2 50\n";  // no STN 1 2 first
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseCommandLang: Parse rejects a STN whose AT breaks the chain", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION 1 0 0 0\n"
+        "STN 99 2\n";  // should be AT 1 (the start station) for the first leg
 
     TraverseData td;
     LsaWeights weights;
@@ -786,8 +822,8 @@ TEST_CASE("TraverseCommandLang: Parse rejects a LEG missing stn=", "[traverse][R
 
 TEST_CASE("TraverseCommandLang: Parse rejects an unknown directive", "[traverse][REQ-404]") {
     const std::string text =
-        "STATION id=1 e=0 n=0 z=0\n"
-        "BOGUS foo=1\n";
+        "STATION 1 0 0 0\n"
+        "BOGUS 1\n";
 
     TraverseData td;
     LsaWeights weights;
@@ -797,7 +833,7 @@ TEST_CASE("TraverseCommandLang: Parse rejects an unknown directive", "[traverse]
 }
 
 TEST_CASE("TraverseCommandLang: Parse rejects text with no STATION directive", "[traverse][REQ-404]") {
-    const std::string text = "LEG stn=2 angle=10 hdist=20\n";
+    const std::string text = "STN 1 2\n";
 
     TraverseData td;
     LsaWeights weights;
@@ -806,14 +842,21 @@ TEST_CASE("TraverseCommandLang: Parse rejects text with no STATION directive", "
     CHECK_FALSE(err.empty());
 }
 
-TEST_CASE("TraverseCommandLang: a malformed token (no '=') is reported with its line number", "[traverse][REQ-404]") {
+TEST_CASE("TraverseCommandLang: a malformed token is reported with its line number", "[traverse][REQ-404]") {
     const std::string text =
-        "STATION id=1 e=0 n=0 z=0\n"
-        "LEG stn=2 garbage\n";
+        "STATION 1 0 0 0\n"
+        "STN 1 garbage\n";
 
     TraverseData td;
     LsaWeights weights;
     std::string err;
     CHECK_FALSE(travcmd::Parse(text, td, weights, err));
     CHECK(err.find("line 2") != std::string::npos);
+}
+
+TEST_CASE("TraverseCommandLang: no '=' anywhere in generated text", "[traverse][REQ-404]") {
+    const TraverseData td = MakeCommandLangFixture();
+    const LsaWeights weights = MakeRoundTripWeights();
+    const std::string text = travcmd::Serialize(td, weights);
+    CHECK(text.find('=') == std::string::npos);
 }
