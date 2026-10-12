@@ -10,6 +10,7 @@
 #include "traverse/FbkImport.hpp"
 #include "traverse/TraverseIo.hpp"
 #include "traverse/TraverseCommandLang.hpp"
+#include "traverse/StarNetImport.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -999,4 +1000,218 @@ TEST_CASE("Least squares: PRISM/POLE error loosens a leg's distance weight", "[l
     // A leg the solver trusts much less should absorb MORE of the misclosure.
     CHECK(std::abs(rLoose.residuals[0].distResidualFt) > std::abs(rBase.residuals[0].distResidualFt));
     CHECK(rLoose.adjClosureLinear < 1e-3);  // still closes.
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #846 (Phase B) — MicroSurvey STAR*NET .dat import. Grammar
+// verified against the STAR*NET v10 Reference Manual (Chapter 5) before
+// implementing; see StarNetImport.hpp for exactly what's supported and what's
+// a defined gap.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::filesystem::path StarNetTestDir() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "gosurvey-starnet";
+    std::filesystem::create_directories(dir);
+    return dir;
+}
+
+std::string WriteStarNetFixture(const std::string& name, const std::string& content) {
+    const std::filesystem::path path = StarNetTestDir() / name;
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f << content;
+    f.close();
+    return path.string();
+}
+
+}  // namespace
+
+TEST_CASE("StarNetImport: closed-loop traverse from the sample fixture", "[starnet][REQ-406]") {
+    const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/closed_loop_trav.dat";
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    CHECK(err.empty());
+
+    REQUIRE(td.legs.size() == 3);
+    CHECK(td.isClosedLoop);
+    CHECK(td.hasStartBearing);
+    CHECK(td.startBearingDeg == Approx(270.0).margin(1e-6));  // azimuth 7->5, due west.
+    CHECK(td.startEasting == Approx(5100.0));
+    CHECK(td.startNorthing == Approx(5000.0));
+
+    CHECK(td.legs[0].horizAngleDeg == Approx(100.0));
+    CHECK(td.legs[0].horizDist == Approx(150.25));
+    CHECK_FALSE(td.legs[0].hasTsWeights);
+
+    CHECK(td.legs[1].horizAngleDeg == Approx(240.0));
+    CHECK(td.legs[1].horizDist == Approx(200.10));
+
+    CHECK(td.legs[2].horizAngleDeg == Approx(78.0 + 50.0 / 60.0).margin(1e-6));
+    CHECK(td.legs[2].horizDist == Approx(175.0));
+    REQUIRE(td.legs[2].hasTsWeights);
+    CHECK(td.legs[2].tsWeights.sigmaAngleSec == Approx(3.5));
+    CHECK(td.legs[2].tsWeights.sigmaDistConstFt == Approx(0.0100));
+
+    // The closing leg's station id must equal the start station id (same monument).
+    CHECK(td.legs[2].stationId == td.startStationId);
+
+    ComputeTraverse(td);
+    LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(r.ok);
+    CHECK(std::isfinite(r.refStdDev));
+}
+
+TEST_CASE("StarNetImport: a fixed bearing TB (N..W form) resolves without any C records", "[starnet][REQ-406]") {
+    const std::string text =
+        "TB N75-00-00W 'no coordinates needed\n"
+        "T 1 90-00-00 100.00\n"
+        "T 2 90-00-00 100.00\n"
+        "TE 3\n";
+    const std::string path = WriteStarNetFixture("bearing_tb.dat", text);
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    CHECK(td.hasStartBearing);
+    CHECK(td.startBearingDeg == Approx(360.0 - 75.0).margin(1e-6));
+    REQUIRE(td.legs.size() == 2);
+    CHECK_FALSE(td.isClosedLoop);  // TE's station ("3") != the first occupied ("1").
+}
+
+TEST_CASE("StarNetImport: a \"B=\" packed-azimuth TB is recognized", "[starnet][REQ-406]") {
+    const std::string text =
+        "TB B=44.1135\n"
+        "T 1 90-00-00 100.00\n"
+        "T 2 90-00-00 100.00\n"
+        "TE 1\n";
+    const std::string path = WriteStarNetFixture("packed_tb.dat", text);
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    CHECK(td.hasStartBearing);
+    CHECK(td.startBearingDeg == Approx(44.0 + 11.0 / 60.0 + 35.0 / 3600.0).margin(1e-6));
+    CHECK(td.isClosedLoop);
+}
+
+TEST_CASE("StarNetImport: comments and blank lines are ignored", "[starnet][REQ-406]") {
+    const std::string text =
+        "# a comment\n"
+        "\n"
+        "TB 1\n"
+        "T 1 90-00-00 100.00 # inline comment\n"
+        "T 2 90-00-00 100.00\n"
+        "TE 3\n";
+    const std::string path = WriteStarNetFixture("comments.dat", text);
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    REQUIRE(td.legs.size() == 2);
+}
+
+TEST_CASE("StarNetImport: an unsupported record type is reported, not dropped", "[starnet][REQ-406]") {
+    const std::string text =
+        "TB 1\n"
+        "A 1-2-3 45-00-00\n"  // a general network angle — out of scope.
+        "T 1 90-00-00 100.00\n"
+        "TE 2\n";
+    const std::string path = WriteStarNetFixture("unsupported_record.dat", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(StarNetImport(path.c_str(), td, err));
+    CHECK(err.find("unsupported") != std::string::npos);
+}
+
+TEST_CASE("StarNetImport: an unsupported inline option is reported", "[starnet][REQ-406]") {
+    const std::string text =
+        ".UNITS Meters\n"
+        "TB 1\n"
+        "T 1 90-00-00 100.00\n"
+        "TE 2\n";
+    const std::string path = WriteStarNetFixture("unsupported_option.dat", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(StarNetImport(path.c_str(), td, err));
+    CHECK(err.find(".ORDER") != std::string::npos);
+}
+
+TEST_CASE("StarNetImport: a second TB (interconnected traverses) is rejected", "[starnet][REQ-406]") {
+    const std::string text =
+        "TB 1\n"
+        "T 1 90-00-00 100.00\n"
+        "TE 2\n"
+        "TB 2\n"
+        "T 2 90-00-00 100.00\n"
+        "TE 3\n";
+    const std::string path = WriteStarNetFixture("second_tb.dat", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(StarNetImport(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("StarNetImport: a TE with a closing angle is rejected", "[starnet][REQ-406]") {
+    const std::string text =
+        "TB 1\n"
+        "T 1 90-00-00 100.00\n"
+        "TE 2 125-13-26 24\n";
+    const std::string path = WriteStarNetFixture("te_closing_angle.dat", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(StarNetImport(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("StarNetImport: a 3D-looking T line is rejected", "[starnet][REQ-406]") {
+    const std::string text =
+        "TB 1\n"
+        "T 1 90-00-00 100.00 85-00-00\n"  // angle, dist, zenith — 3D, out of scope.
+        "TE 2\n";
+    const std::string path = WriteStarNetFixture("threed_t.dat", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(StarNetImport(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("StarNetImport: no TB...TE traverse is reported", "[starnet][REQ-406]") {
+    const std::string text = "C 1 1000 1000\n";
+    const std::string path = WriteStarNetFixture("no_traverse.dat", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(StarNetImport(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("StarNetImport: a missing file fails with a reason", "[starnet][REQ-406]") {
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(StarNetImport((StarNetTestDir() / "does-not-exist.dat").string().c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("StarNetImport: .ORDER EN changes coordinate interpretation", "[starnet][REQ-406]") {
+    const std::string text =
+        ".ORDER EN\n"
+        "C 1 5100.0000 5000.0000\n"  // E then N under .ORDER EN.
+        "C 2 5000.0000 5000.0000\n"
+        "TB 2\n"
+        "T 1 90-00-00 100.00\n"
+        "TE 3\n";
+    const std::string path = WriteStarNetFixture("order_en.dat", text);
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    CHECK(td.startEasting == Approx(5100.0));
+    CHECK(td.startNorthing == Approx(5000.0));
 }

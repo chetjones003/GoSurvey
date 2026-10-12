@@ -111,6 +111,8 @@ bool BrowseSaveFilePdfUtf8(char* utf8Out, size_t utf8Cap, const char*) {
 
 bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
+bool BrowseOpenFileStarNetUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
+
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
 bool BrowseOpenFileE57Utf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }

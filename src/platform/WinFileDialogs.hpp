@@ -42,6 +42,9 @@ bool BrowseSaveFilePdfUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNam
 /// Autodesk Field Book raw-data file (*.fbk).
 bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap);
 
+/// MicroSurvey STAR*NET data file for import (issue #846, Phase B).
+bool BrowseOpenFileStarNetUtf8(char* utf8Out, size_t utf8Cap);
+
 /// REQ-403 (#834): a Traverse Editor save file (`.gstrav`) to load.
 bool BrowseOpenFileGstravUtf8(char* utf8Out, size_t utf8Cap);
 
