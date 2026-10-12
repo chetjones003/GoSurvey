@@ -1,9 +1,17 @@
 # Deploying the marketing site (Cloudflare Pages)
 
-The marketing site in `site/` is no longer published via GitHub Pages. It's deployed by hand
-with `wrangler`, the same CLI already used for the telemetry and accounts Workers
-(see `docs/cloudflare-telemetry-setup.md`), to Cloudflare Pages, and served at
-**gosurveycad.com**.
+The marketing site lives in its own private repo, **chetjones003/gosurveycad-site**, not in
+this repo. It was moved out so that anything the site references — including the admin
+dashboard's hidden subdomain — isn't visible in GoSurvey's public git history. Clone it
+separately to work on it:
+
+```bash
+git clone https://github.com/chetjones003/gosurveycad-site.git
+```
+
+It's deployed by hand with `wrangler`, the same CLI already used for the telemetry and
+accounts Workers (see `docs/cloudflare-telemetry-setup.md`), to Cloudflare Pages, and served
+at **gosurveycad.com**.
 
 | | |
 |---|---|
@@ -44,13 +52,14 @@ records for you automatically since it now manages the zone.
 
 ## Deploying
 
-From the repo root, whenever `site/` changes:
+From the `gosurveycad-site` repo root, whenever the site changes:
 
 ```bash
-# Keep the feature screenshots in sync first (same PNGs as the in-app What's New billboard)
-cp resources/whats-new/*.png site/img/features/
+# Keep the feature screenshots in sync first (same PNGs as the in-app What's New billboard,
+# copied by hand from this GoSurvey repo's resources/whats-new/ since the two repos are separate)
+cp /path/to/GoSurvey/resources/whats-new/*.png img/features/
 
-npx wrangler pages deploy site --project-name=gosurveycad-site
+npx wrangler pages deploy . --project-name=gosurveycad-site
 ```
 
 That's it — no GitHub Actions workflow runs this; it was removed along with GitHub Pages

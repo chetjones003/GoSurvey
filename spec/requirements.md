@@ -12241,6 +12241,28 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted.
 - Revisions: 2026-10-11 — initial (D-2026-10-11-b). 2026-10-11 — accepted.
 
+### REQ-402 — Owner-only admin dashboard for the Cloudflare backend
+
+- Purpose: the operator (Chet) currently reads telemetry via `wrangler`/`stats.mjs` on his own machine and has no view at all into the accounts worker's D1 data or into Workers request/error logs. A single web dashboard, reachable by no one but him, replaces that local-only workflow.
+- Priority: should
+- Type: functional / infrastructure
+- Decision: D-2026-10-11-c.
+- Depends on: REQ-080 (telemetry), REQ-091/REQ-092 (accounts).
+- Statement:
+  1. **Surface.** One new Worker (`admin-api`, under `tools/admin-worker/`) serves a small HTML dashboard and the JSON endpoints it calls. It is bound to both existing D1 databases (`gosurvey-telemetry`, `gosurveycad-db`) as read-only data sources — it never writes to either.
+  2. **Content.** The dashboard shows: (a) telemetry summary — installs, 7/30-day active installs, version & channel breakdown; (b) a browsable, filterable list of `startup_reports` and `crash_reports` rows with a detail view of the full report text; (c) an accounts list from `gosurveycad-db` (email, name, created/updated); (d) a link out to Cloudflare's own Workers Logs/Analytics for live request/error logs — those live in Cloudflare's system, not D1, and are not mirrored locally.
+  3. **Reachability.** The dashboard is served at an unlinked subdomain (`admin.gosurveycad.com`) — no page on the public site links to it, and it is excluded from `sitemap.xml`/`robots.txt`.
+  4. **Access control.** The subdomain is gated by Cloudflare Access (not a password baked into the Worker code) restricted to the operator's own identity. A request that Access rejects never reaches the Worker.
+  5. **No new PII exposure.** The dashboard must not expose anything beyond what REQ-080/REQ-091/REQ-092 already collect — it is a read surface over existing data, not a new collection point.
+- Acceptance:
+  - `[req402]` manual: a request to `admin.gosurveycad.com` without a valid Cloudflare Access session is rejected before reaching the Worker.
+  - `[req402]` manual: the operator, authenticated via Cloudflare Access, sees telemetry summary numbers matching `stats.mjs`'s own query results for the same period.
+  - `[req402]` manual: startup/crash reports and the accounts list are each browsable and match a direct D1 query.
+  - `[req402]` manual: `admin.gosurveycad.com` is absent from `sitemap.xml`, `robots.txt`, and every page of the public site's navigation.
+- Owner-layer: Infrastructure (`tools/admin-worker/`), Operations (Cloudflare Access policy, DNS — configured in the Cloudflare dashboard/account, not in this repo's build).
+- Status: accepted.
+- Revisions: 2026-10-11 — initial (D-2026-10-11-c). 2026-10-11 — accepted.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
