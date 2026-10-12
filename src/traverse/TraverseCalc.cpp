@@ -339,6 +339,7 @@ void ComputeTraverse(TraverseData& td) {
         double hd = 0.0;
         double dz = 0.0;
         bool hasHD = false;
+        bool hasVA = false;  // a vertical angle was resolved for this leg
 
         // Resolve the active vertical angle (F1/F2 or single)
         auto resolveVA = [&](double* vaOut) -> bool {
@@ -366,6 +367,7 @@ void ComputeTraverse(TraverseData& td) {
             // Compute dz from vertical angle if available
             double va = 0.0;
             if (resolveVA(&va)) {
+                hasVA = true;
                 if (leg.isZenithAngle) {
                     const double sinZ = std::sin(va * kDeg2Rad);
                     dz = (std::abs(sinZ) > 1e-10) ? hd * std::cos(va * kDeg2Rad) / sinZ : 0.0;
@@ -379,6 +381,7 @@ void ComputeTraverse(TraverseData& td) {
                 leg.errorMsg = "Slope distance requires vertical angle";
                 break;
             }
+            hasVA = true;  // slope distances always carry a vertical angle
             hd = TraverseReduceToHoriz(leg.slopeDist, va, leg.isZenithAngle);
             dz = TraverseReduceToVert(leg.slopeDist, va, leg.isZenithAngle);
             hasHD = true;
@@ -387,6 +390,16 @@ void ComputeTraverse(TraverseData& td) {
         if (!hasHD || hd < 0.0) {
             leg.errorMsg = "Horizontal or slope distance required";
             break;
+        }
+
+        // --- Earth curvature + atmospheric refraction (issue #826) ---
+        // Combined correction C = (1 - k) * hd^2 / (2R), added to the trig dZ.
+        // hd is the horizontal distance resolved above, for both the entered-HD
+        // and slope-distance paths. Applied only when a vertical angle was
+        // resolved: legs with no vertical observation keep legacy flat behavior.
+        if (td.applyCurvRefCorr && hasVA) {
+            constexpr double kEarthRadiusM = 6371000.0;  // mean earth radius
+            dz += (1.0 - td.refractionCoeff) * hd * hd / (2.0 * kEarthRadiusM);
         }
 
         // --- Coordinate increments ---

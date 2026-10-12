@@ -523,6 +523,25 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     ImGui::SameLine(0, 24);
     CheckboxCol("Closed Loop##trv", &td.isClosedLoop,
                 "Report closure error back to the starting station.");
+    ImGui::SameLine(0, 24);
+    CheckboxCol("Curv + Refr##trv", &td.applyCurvRefCorr,
+                "Apply the combined earth curvature + atmospheric refraction correction\n"
+                "C = (1 - k) * D^2 / (2R) to each leg's elevation difference (#826).\n"
+                "Off = plain trigonometry (previous behavior).");
+    ImGui::SameLine(0, 24);
+    LabeledCol("Refr k", 90.f, [&] {
+        ImGui::BeginDisabled(!td.applyCurvRefCorr);
+        if (ImGui::InputDouble("##trv_k", &td.refractionCoeff, 0.0, 0.0, "%.3f"))
+            cmd.traverseDataDirty = true;
+        ImGui::EndDisabled();
+    });
+    ItemHelpTooltip("Refraction coefficient k (typical range -2 to +2).\n"
+                    "0.14 = average atmospheric conditions (default).");
+    if (td.applyCurvRefCorr && (td.refractionCoeff < -2.0 || td.refractionCoeff > 2.0)) {
+        ImGui::SameLine(0, 8);
+        ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.0f, 1.0f),
+                           "k outside the typical -2..+2 range");
+    }
 
     // ---- Scale factor (REQ-401, GitHub issue #828) ----
     ImGui::SameLine(0, 24);
