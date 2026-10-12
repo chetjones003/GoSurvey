@@ -164,88 +164,196 @@ const DASHBOARD_HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="robots" content="noindex, nofollow">
 <title>GoSurveyCAD admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root { color-scheme: dark; }
-  body { font-family: system-ui, sans-serif; background: #15181c; color: #e4e6eb; margin: 0; padding: 2rem; }
-  h1 { font-size: 1.2rem; margin: 0 0 1.5rem; }
-  h2 { font-size: 1rem; color: #9aa4b2; margin: 2rem 0 0.5rem; }
-  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
-  th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid #2a2f36; }
-  th { color: #9aa4b2; font-weight: 600; }
-  .stats { display: flex; gap: 2rem; }
-  .stat { background: #1c2026; border-radius: 6px; padding: 0.75rem 1.25rem; }
-  .stat .n { font-size: 1.6rem; font-weight: 700; display: block; }
-  .stat .label { font-size: 0.75rem; color: #9aa4b2; }
-  .report { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.75rem; max-width: 60ch; overflow: hidden; text-overflow: ellipsis; }
-  a { color: #6cb6ff; }
-  .tabs { margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem; }
-  .tabs button { background: #1c2026; color: #e4e6eb; border: 1px solid #2a2f36; padding: 0.4rem 0.9rem; cursor: pointer; }
-  .tabs button.active { background: #2a2f36; }
-  .live { font-size: 0.75rem; color: #6ad68a; margin-left: auto; }
-  .live .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #6ad68a; margin-right: 0.35rem; animation: pulse 2s infinite; }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-  section { display: none; }
-  section.active { display: block; }
-  .chart-wrap { background: #1c2026; border-radius: 6px; padding: 1rem; margin: 0.5rem 0 1.5rem; position: relative; }
-  .chart-wrap svg { display: block; width: 100%; height: 160px; cursor: crosshair; }
-  .chart-legend { display: flex; align-items: center; gap: 1.25rem; font-size: 0.75rem; color: #9aa4b2; margin-top: 0.5rem; }
-  .chart-legend span.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 0.35rem; }
-  .range-btns { margin-left: auto; display: flex; gap: 0.25rem; }
-  .range-btns button { background: #15181c; color: #9aa4b2; border: 1px solid #2a2f36; padding: 0.15rem 0.5rem; font-size: 0.75rem; cursor: pointer; border-radius: 3px; }
-  .range-btns button.active { background: #2a2f36; color: #e4e6eb; }
-  .chart-tip { position: absolute; pointer-events: none; background: #0d0f12; border: 1px solid #2a2f36; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.7rem; white-space: nowrap; display: none; }
-  th[data-sort] { cursor: pointer; user-select: none; }
-  th[data-sort]:after { content: ""; margin-left: 0.3rem; opacity: 0.4; }
-  th[data-sort="asc"]:after { content: "\\2191"; opacity: 1; }
-  th[data-sort="desc"]:after { content: "\\2193"; opacity: 1; }
+  /* Palette lifted straight from gosurveycad.com's styles.css -- same tokens, same dark-mode
+     rule, so this page looks like a room in the same house as the marketing site. */
+  :root{
+    --paper:#f2f4f6; --surface:#ffffff; --surface-2:#e8ecf0;
+    --ink:#12161a; --ink-2:#3d4753; --ink-3:#69747f;
+    --rule:#c9d2da; --rule-strong:#9aa7b3;
+    --accent:#c2551b; --accent-ink:#ffffff; --steel:#2f4f6b; --ok:#1f7a4d;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#0f1317; --surface:#161b21; --surface-2:#1e252c;
+      --ink:#e8edf2; --ink-2:#b3bfca; --ink-3:#8492a0;
+      --rule:#2b343d; --rule-strong:#41505d;
+      --accent:#f0803c; --accent-ink:#12161a; --steel:#7fa8cc; --ok:#4cc38a;
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--paper);color:var(--ink)}
+  body{font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;font-size:14px;line-height:1.5}
+  a{color:var(--accent);text-decoration:none}
+  .mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+  .app{display:flex;min-height:100vh}
+
+  .sidebar{width:220px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--rule);
+    display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+  .brand{display:flex;align-items:baseline;gap:.5rem;padding:1.25rem 1.1rem;border-bottom:1px solid var(--rule);
+    font-family:"IBM Plex Sans Condensed",sans-serif;font-weight:700;font-size:1.05rem}
+  .brand .tick{color:var(--accent)}
+  .nav{padding:.75rem;flex:1}
+  .nav-item{display:block;padding:.5rem .65rem;border-radius:7px;color:var(--ink-2);font-size:.83rem;
+    cursor:pointer;margin-bottom:2px}
+  .nav-item:hover{background:var(--surface-2);color:var(--ink)}
+  .nav-item.active{background:var(--surface-2);color:var(--ink);font-weight:600}
+  .sidebar-foot{padding:.9rem;border-top:1px solid var(--rule);font-size:.7rem;color:var(--ink-3)}
+  .live{display:flex;align-items:center;gap:.4rem;margin-bottom:.4rem}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent);
+    animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  .main{flex:1;min-width:0}
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:1rem 1.5rem;
+    background:color-mix(in srgb, var(--paper) 88%, transparent);backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--rule);position:sticky;top:0;z-index:5}
+  .page-title{margin:0;font-family:"IBM Plex Sans Condensed",sans-serif;font-size:1.1rem;font-weight:700}
+  .page-sub{margin:.15rem 0 0;color:var(--ink-3);font-size:.78rem}
+  .content{padding:1.5rem;max-width:1200px}
+  section{display:none}
+  section.active{display:block}
+
+  .kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.9rem;margin-bottom:1rem}
+  .kpi{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:.95rem 1.15rem}
+  .kpi-label{font-size:.66rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+  .kpi-value{font-family:"IBM Plex Sans Condensed",sans-serif;font-size:1.75rem;font-weight:700;margin-top:.3rem}
+
+  .card{background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:1rem;margin-bottom:1rem}
+  .card-head{display:flex;align-items:center;gap:1rem;margin-bottom:.8rem}
+  .card-head h3{margin:0;font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-2)}
+  .card-head a{font-size:.75rem}
+  .push{margin-left:auto}
+
+  .chart{display:block;width:100%;height:170px;cursor:crosshair}
+  .chart-wrap{position:relative}
+  .chart-legend{display:flex;align-items:center;gap:1.1rem;font-size:.75rem;color:var(--ink-3);margin-top:.6rem}
+  .chart-legend .swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:.35rem}
+  .chart-tip{display:none;position:absolute;pointer-events:none;background:var(--ink);color:var(--paper);
+    font-size:.72rem;padding:.3rem .55rem;border-radius:6px;white-space:nowrap;z-index:5}
+  .range-btns{display:flex;gap:.25rem}
+  .range-btns button{background:var(--surface);color:var(--ink-3);border:1px solid var(--rule);
+    padding:.15rem .55rem;font-size:.72rem;cursor:pointer;border-radius:999px}
+  .range-btns button.active{background:var(--steel);color:#fff;border-color:var(--steel)}
+
+  .bar-row{display:grid;grid-template-columns:110px 1fr 36px;align-items:center;gap:.6rem;
+    font-size:.78rem;margin-bottom:.5rem}
+  .bar-row:last-child{margin-bottom:0}
+  .bar-label{font-family:"IBM Plex Mono",monospace;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bar-track{height:7px;background:var(--surface-2);border-radius:999px;overflow:hidden}
+  .bar-fill{height:100%;background:var(--accent)}
+  .bar-fill.alt{background:var(--steel)}
+  .bar-val{text-align:right;font-family:"IBM Plex Mono",monospace;font-weight:600}
+
+  .table-wrap{overflow:auto;max-height:70vh}
+  table{width:100%;border-collapse:collapse;font-size:.8rem}
+  th{text-align:left;padding:.5rem .65rem;font-size:.66rem;font-weight:600;letter-spacing:.05em;
+    text-transform:uppercase;color:var(--ink-3);border-bottom:1px solid var(--rule);
+    background:var(--surface-2);white-space:nowrap;position:sticky;top:0;cursor:pointer;user-select:none}
+  th:after{content:"";margin-left:.3rem;opacity:.4}
+  th[data-sort="asc"]:after{content:"\\2191";opacity:1}
+  th[data-sort="desc"]:after{content:"\\2193";opacity:1}
+  td{padding:.45rem .65rem;border-bottom:1px solid var(--rule);color:var(--ink-2);white-space:nowrap;vertical-align:middle}
+  tbody tr:hover{background:var(--surface-2)}
+  .report{white-space:pre-wrap;font-family:"IBM Plex Mono",monospace;font-size:.72rem;max-width:60ch;
+    overflow:hidden;text-overflow:ellipsis}
+  .badge{display:inline-flex;align-items:center;padding:.1rem .5rem;border-radius:999px;font-size:.64rem;
+    font-weight:700;letter-spacing:.02em;text-transform:uppercase;border:1px solid var(--rule)}
+  .badge.install{color:var(--ok);border-color:var(--ok)}
+  .badge.active{color:var(--steel);border-color:var(--steel)}
+  .badge.tier-free{color:var(--ink-3)}
+  .badge.tier-pro, .badge.tier-paid{color:var(--accent);border-color:var(--accent)}
 </style>
 </head>
 <body>
-<h1>GoSurveyCAD admin</h1>
-<div class="tabs">
-  <button data-tab="telemetry" class="active">Telemetry</button>
-  <button data-tab="startup">Startup failures</button>
-  <button data-tab="crash">Crash reports</button>
-  <button data-tab="accounts">Accounts</button>
-  <span class="live"><span class="dot"></span>Live &mdash; refreshes every <span id="refresh-secs"></span>s</span>
-</div>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><span class="tick">&bull;</span>GoSurveyCAD admin</div>
+    <nav class="nav">
+      <div class="nav-item active" data-tab="telemetry">Telemetry</div>
+      <div class="nav-item" data-tab="startup">Startup failures</div>
+      <div class="nav-item" data-tab="crash">Crash reports</div>
+      <div class="nav-item" data-tab="accounts">Accounts</div>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="live"><span class="dot"></span>Live &mdash; every <span id="refresh-secs"></span>s</div>
+      <div class="mono">gosurvey-telemetry</div>
+      <div class="mono">gosurvey-accounts</div>
+    </div>
+  </aside>
 
-<section id="telemetry" class="active">
-  <div class="stats" id="telemetry-stats"></div>
-  <h2>Installs &amp; active installs per day</h2>
-  <div class="chart-wrap">
-    <svg id="telemetry-chart" viewBox="0 0 600 160" preserveAspectRatio="none"></svg>
-    <div class="chart-tip" id="chart-tip"></div>
-    <div class="chart-legend">
-      <span><span class="swatch" style="background:#6cb6ff"></span>Installs</span>
-      <span><span class="swatch" style="background:#6ad68a"></span>Active</span>
-      <div class="range-btns" id="chart-range">
-        <button data-days="7">7d</button>
-        <button data-days="14">14d</button>
-        <button data-days="30" class="active">30d</button>
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1 class="page-title" id="page-title">Telemetry</h1>
+        <p class="page-sub" id="page-sub">Installs, active usage, versions and channels</p>
       </div>
     </div>
-  </div>
-  <h2>Versions (30d)</h2>
-  <table id="telemetry-versions"></table>
-  <h2>Channels (30d)</h2>
-  <table id="telemetry-channels"></table>
-</section>
 
-<section id="startup">
-  <h2>Startup failure reports <a href="https://dash.cloudflare.com" target="_blank">(live Workers Logs &rarr;)</a></h2>
-  <table id="startup-table"></table>
-</section>
+    <div class="content">
+      <section id="telemetry" class="active">
+        <div class="kpi-grid" id="telemetry-stats"></div>
 
-<section id="crash">
-  <h2>Crash reports <a href="https://dash.cloudflare.com" target="_blank">(live Workers Logs &rarr;)</a></h2>
-  <table id="crash-table"></table>
-</section>
+        <div class="card">
+          <div class="card-head">
+            <h3>Installs &amp; active installs per day</h3>
+            <div class="range-btns push" id="chart-range">
+              <button data-days="7">7d</button>
+              <button data-days="14">14d</button>
+              <button data-days="30" class="active">30d</button>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <svg id="telemetry-chart" class="chart" viewBox="0 0 600 170" preserveAspectRatio="none"></svg>
+            <div class="chart-tip" id="chart-tip"></div>
+          </div>
+          <div class="chart-legend">
+            <span><span class="swatch" style="background:var(--accent)"></span>Installs</span>
+            <span><span class="swatch" style="background:var(--steel)"></span>Active</span>
+          </div>
+        </div>
 
-<section id="accounts">
-  <h2>Accounts</h2>
-  <table id="accounts-table"></table>
-</section>
+        <div class="card">
+          <div class="card-head"><h3>Versions (30d)</h3></div>
+          <div id="telemetry-versions"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>Channels (30d)</h3></div>
+          <div id="telemetry-channels"></div>
+        </div>
+      </section>
+
+      <section id="startup">
+        <div class="card">
+          <div class="card-head">
+            <h3>Startup failure reports</h3>
+            <a class="push" href="https://dash.cloudflare.com" target="_blank">Live Workers Logs &rarr;</a>
+          </div>
+          <div class="table-wrap"><table id="startup-table"></table></div>
+        </div>
+      </section>
+
+      <section id="crash">
+        <div class="card">
+          <div class="card-head">
+            <h3>Crash reports</h3>
+            <a class="push" href="https://dash.cloudflare.com" target="_blank">Live Workers Logs &rarr;</a>
+          </div>
+          <div class="table-wrap"><table id="crash-table"></table></div>
+        </div>
+      </section>
+
+      <section id="accounts">
+        <div class="card">
+          <div class="card-head"><h3>Accounts</h3></div>
+          <div class="table-wrap"><table id="accounts-table"></table></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
 
 <script>
 function el(tag, attrs, text) {
@@ -307,6 +415,28 @@ function svgEl(tag, attrs) {
   return e;
 }
 
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// Horizontal bar-list breakdown (label / proportional bar / value), styled after the existing
+// Go admin dashboard's .bar-row. Bars are relative to the largest value in the set.
+function renderBarList(container, labelKey, valueKey, rows, alt) {
+  container.innerHTML = "";
+  const max = Math.max(1, ...rows.map(r => r[valueKey]));
+  for (const row of rows) {
+    const pct = Math.round((row[valueKey] / max) * 100);
+    const line = el("div", { class: "bar-row" });
+    line.appendChild(el("span", { class: "bar-label" }, String(row[labelKey])));
+    const track = el("div", { class: "bar-track" });
+    track.appendChild(el("div", { class: "bar-fill" + (alt ? " alt" : ""), style: "width:" + pct + "%" }));
+    line.appendChild(track);
+    line.appendChild(el("span", { class: "bar-val" }, String(row[valueKey])));
+    container.appendChild(line);
+  }
+  if (!rows.length) container.appendChild(el("div", { class: "bar-row" }, "No data yet"));
+}
+
 // Renders two day-keyed series as line charts sharing one y-scale, zero-filled over rangeDays
 // days, with a hover crosshair + tooltip reading out both values for the nearest day.
 function renderDailyChart(svg, tip, seriesA, seriesB, colorA, colorB, rangeDays) {
@@ -335,7 +465,7 @@ function renderDailyChart(svg, tip, seriesA, seriesB, colorA, colorB, rangeDays)
   svg.appendChild(svgEl("path", { d: pathFor(valsA), fill: "none", stroke: colorA, "stroke-width": "2" }));
   svg.appendChild(svgEl("path", { d: pathFor(valsB), fill: "none", stroke: colorB, "stroke-width": "2" }));
 
-  const crosshair = svgEl("line", { x1: 0, y1: 0, x2: 0, y2: H, stroke: "#3a4049", "stroke-width": "1", visibility: "hidden" });
+  const crosshair = svgEl("line", { x1: 0, y1: 0, x2: 0, y2: H, stroke: cssVar("--rule-strong"), "stroke-width": "1", visibility: "hidden" });
   svg.appendChild(crosshair);
 
   svg.addEventListener("mousemove", (ev) => {
@@ -366,19 +496,19 @@ async function loadTelemetry() {
   const stats = document.getElementById("telemetry-stats");
   stats.innerHTML = "";
   const add = (label, n) => {
-    const d = el("div", { class: "stat" });
-    d.appendChild(el("span", { class: "n" }, String(n)));
-    d.appendChild(el("span", { class: "label" }, label));
+    const d = el("div", { class: "kpi" });
+    d.appendChild(el("div", { class: "kpi-label" }, label));
+    d.appendChild(el("div", { class: "kpi-value" }, String(n)));
     stats.appendChild(d);
   };
   add("Installs (all time)", summary.installs);
   add("Active (7d)", summary.active7d);
   add("Active (30d)", summary.active30d);
-  renderTable(document.getElementById("telemetry-versions"), ["version", "users"], summary.byVersion);
-  renderTable(document.getElementById("telemetry-channels"), ["channel", "users"], summary.byChannel);
+  renderBarList(document.getElementById("telemetry-versions"), "version", "users", summary.byVersion, false);
+  renderBarList(document.getElementById("telemetry-channels"), "channel", "users", summary.byChannel, true);
   renderDailyChart(
     document.getElementById("telemetry-chart"), document.getElementById("chart-tip"),
-    daily.installs, daily.active, "#6cb6ff", "#6ad68a", chartRangeDays
+    daily.installs, daily.active, cssVar("--accent"), cssVar("--steel"), chartRangeDays
   );
 }
 
@@ -406,12 +536,22 @@ async function loadAccounts() {
   await loadReports("/api/accounts", "accounts-table", ["email", "tier", "created_at"]);
 }
 
-for (const btn of document.querySelectorAll(".tabs button")) {
-  btn.addEventListener("click", () => {
-    for (const b of document.querySelectorAll(".tabs button")) b.classList.remove("active");
+const PAGE_INFO = {
+  telemetry: ["Telemetry", "Installs, active usage, versions and channels"],
+  startup: ["Startup failures", "Silent diagnostics sent before the startup error dialog"],
+  crash: ["Crash reports", "Runtime crash diagnostics from the desktop client"],
+  accounts: ["Accounts", "Signed-in users, read from gosurvey-accounts"],
+};
+
+for (const item of document.querySelectorAll(".nav-item")) {
+  item.addEventListener("click", () => {
+    for (const b of document.querySelectorAll(".nav-item")) b.classList.remove("active");
     for (const s of document.querySelectorAll("section")) s.classList.remove("active");
-    btn.classList.add("active");
-    document.getElementById(btn.dataset.tab).classList.add("active");
+    item.classList.add("active");
+    document.getElementById(item.dataset.tab).classList.add("active");
+    const [title, sub] = PAGE_INFO[item.dataset.tab];
+    document.getElementById("page-title").textContent = title;
+    document.getElementById("page-sub").textContent = sub;
   });
 }
 
