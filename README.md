@@ -78,13 +78,4 @@ It is open source free to use software and as such is depended upon by the help 
 
 Currently this project is funded solely by my own means. If you'd like to support development financially, you can buy me a coffee.
 
-- Commands
-- File formats
-- Testing
-- Documentation
-- UI/UX
-- Website
-- Issue triage
-- Feedback
-
 **[Browse the repo](https://github.com/chetjones003/GoSurvey)** · **[Open issues](https://github.com/chetjones003/GoSurvey/issues)** · **[Contact me](mailto:chetjones003@gmail.com)** · **[☕ Buy me a coffee](https://buymeacoffee.com/gosurveycad)**
