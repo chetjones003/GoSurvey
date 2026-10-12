@@ -141,7 +141,7 @@ bool ParseStarNetBearingOrAzimuth(std::string tok, double* degOut) {
     return false;
 }
 
-struct KnownPt { double n = 0.0, e = 0.0; bool has = false; };
+struct KnownPt { double n = 0.0, e = 0.0, z = 0.0; bool has = false, hasZ = false; };
 
 }  // namespace
 
@@ -161,7 +161,6 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
     std::string backsightTok;       // TB's raw token, resolved once the traverse closes/ends.
     bool haveBacksightTok = false;
     std::string firstOccupied;      // name given by the first T line.
-    std::string prevOccupied;       // name given by the most recent T line.
     bool havePrevOccupied = false;
 
     struct PendingLeg {
@@ -218,6 +217,15 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
             kp.n = orderEN ? b : a;
             kp.e = orderEN ? a : b;
             kp.has = true;
+            // A 3rd numeric token is an elevation (3D-looking C line) — captured for
+            // TraverseData::startElevation even though this importer's traverse legs
+            // stay 2D; a 4th-plus token is a std error or fixity symbol, out of scope
+            // here (see StarNetImport.hpp), but doesn't itself make the line unreadable.
+            double z;
+            if (toks.size() > 4 && ParseDoubleTok(toks[4], &z)) {
+                kp.z = z;
+                kp.hasZ = true;
+            }
             knownPts[toks[1]] = kp;
             continue;
         }
@@ -288,7 +296,6 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
                 legs.push_back(std::move(leg));
             }
             pending.push_back(pl);
-            prevOccupied = pl.atName;
             havePrevOccupied = true;
             continue;
         }
@@ -357,6 +364,7 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
         if (it != knownPts.end() && it->second.has) {
             td.startNorthing = it->second.n;
             td.startEasting = it->second.e;
+            if (it->second.hasZ) td.startElevation = it->second.z;
         }
     }
 

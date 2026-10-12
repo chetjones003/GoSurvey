@@ -1215,3 +1215,18 @@ TEST_CASE("StarNetImport: .ORDER EN changes coordinate interpretation", "[starne
     CHECK(td.startEasting == Approx(5100.0));
     CHECK(td.startNorthing == Approx(5000.0));
 }
+
+TEST_CASE("StarNetImport: a C line's elevation sets the start elevation", "[starnet][REQ-406]") {
+    const std::string text =
+        "C 1 5000.0000 5000.0000 123.4500\n"
+        "C 2 5000.0000 5100.0000\n"
+        "TB 2\n"
+        "T 1 90-00-00 100.00\n"
+        "TE 2\n";
+    const std::string path = WriteStarNetFixture("elevation.dat", text);
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    CHECK(td.startElevation == Approx(123.45));
+}
